@@ -23,12 +23,8 @@ class PSVAE(nn.Module):
         """
         Encoder
         """
-        assert encoder.input_dim == decoder.output_dim
-        assert encoder.output_dim == decoder.input_dim
         latent_dim = unsupervised_latent_dim + supervised_latent_dim
-        assert encoder.output_dim == latent_dim
 
-        self.input_dim = encoder.input_dim
         self.latent_dim = latent_dim
         self.unsupervised_latent_dim = unsupervised_latent_dim
         self.supervised_latent_dim = supervised_latent_dim
