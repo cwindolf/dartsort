@@ -26,10 +26,11 @@ class DiagLinear(nn.Module):
         self.reset_parameters()
 
     def reset_parameters(self) -> None:
-        nn.init.kaiming_uniform_(self.weight, a=math.sqrt(5))
+        # for diagonal matrix, fan_in = 1. so, this is Kaiming.
+        nn.init.uniform_(self.weight, -1., 1.)
         if self.bias is not None:
-            fan_in, _ = nn.init._calculate_fan_in_and_fan_out(self.weight)
-            bound = 1 / math.sqrt(fan_in) if fan_in > 0 else 0
+            # maintaining this init as it is in nn.Linear
+            bound = 1 / math.sqrt(self.features)
             nn.init.uniform_(self.bias, -bound, bound)
 
     def forward(self, input: torch.Tensor) -> torch.Tensor:
