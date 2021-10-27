@@ -23,8 +23,9 @@ class PSVAE(nn.Module):
         """
         Encoder
         """
-        latent_dim = unsupervised_latent_dim + supervised_latent_dim
+        super(PSVAE, self).__init__()
 
+        latent_dim = unsupervised_latent_dim + supervised_latent_dim
         self.latent_dim = latent_dim
         self.unsupervised_latent_dim = unsupervised_latent_dim
         self.supervised_latent_dim = supervised_latent_dim
