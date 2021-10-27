@@ -20,9 +20,6 @@ class PSVAE(nn.Module):
         unsupervised_latent_dim,
         alpha=1.0,
     ):
-        """
-        Encoder
-        """
         super(PSVAE, self).__init__()
 
         latent_dim = unsupervised_latent_dim + supervised_latent_dim
@@ -74,10 +71,9 @@ class PSVAE(nn.Module):
         #      like, supervised have their own mean?
         # -KL divergence to iid standard normal
         # 1312.6114 appendix B
-        # note, -DKL is in ELBO which we want to maximize
-        # here we are minimizing, so take just DKL
-        # we omit the factor of 1/2 here and in the reconstruction
-        # error
+        # note, -DKL is in ELBO, which we want to maximize.
+        # here, we are minimizing, so take just DKL.
+        # we omit the factor of 1/2 here and in errors below
         dkl = torch.mean((mu.pow(2) + logvar.exp() - 1 - logvar).sum(axis=1))
 
         # reconstruction error -- conditioned gaussian log likelihood
