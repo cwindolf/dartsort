@@ -101,4 +101,9 @@ class PSVAE(nn.Module):
         #      unsupervised latents index-code mutual information?
 
         loss = dkl + mse_recon + self.alpha * mse_labels
-        return loss
+        loss_dict = {
+            "dkl": dkl,
+            "mse_recon": mse_recon,
+            "mse_labels": mse_labels,
+        }
+        return loss, loss_dict
