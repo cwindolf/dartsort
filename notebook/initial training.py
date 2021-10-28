@@ -21,6 +21,8 @@ import numpy as np
 import torch
 from torch import nn
 import h5py
+from torch.utils.tensorboard import SummaryWriter
+import time
 
 # %%
 from spike_psvae.psvae import PSVAE
@@ -65,15 +67,15 @@ n_latents = n_sup_latents + n_unsup_latents
 vanilla_enc = nn.Sequential(
     nn.Flatten(),
     nn.Linear(in_dim, hidden_dim),
-    # nn.BatchNorm1d(hidden_dim),
+    nn.BatchNorm1d(hidden_dim),
     nn.LeakyReLU(),
     nn.Linear(hidden_dim, n_latents),
-    # nn.BatchNorm1d(n_latents),
+    nn.BatchNorm1d(n_latents),
     nn.LeakyReLU(),
 )
 vanilla_dec = nn.Sequential(
     nn.Linear(n_latents, hidden_dim),
-    # nn.BatchNorm1d(hidden_dim),
+    nn.BatchNorm1d(hidden_dim),
     nn.LeakyReLU(),
     nn.Linear(hidden_dim, in_dim),
     # no output activation for now. data range is not standard
@@ -84,31 +86,78 @@ vanilla_dec = nn.Sequential(
 )
 
 # %%
-psvae = PSVAE(vanilla_enc, vanilla_dec, n_sup_latents, n_unsup_latents).to(device)
+psvae = PSVAE(vanilla_enc, vanilla_dec, n_sup_latents, n_unsup_latents)
 optimizer = torch.optim.Adam(psvae.parameters(), lr=1e-3)
 
 # %%
 batch_size = 8
-loader = torch.utils.data.DataLoader(dataset, batch_size=batch_size, shuffle=False)
+loader = torch.utils.data.DataLoader(dataset, batch_size=batch_size, shuffle=True)
 
 # %%
-for batch_idx, (x, y) in enumerate(loader):
-    # print(x.shape, y.shape)
-    x = x.to(device)
-    y = y.to(device)
-    
-    optimizer.zero_grad()
-    
-    recon_x, y_hat, mu, logvar = psvae(x)
-    # print(recon_x.shape, y_hat.shape, mu.shape, logvar.shape)
-    loss = psvae.loss(x, y, recon_x, y_hat, mu, logvar)
-    loss_ = loss.item()
-    
-    loss.backward()
-    optimizer.step()
-    
-    if not batch_idx % 100:
-        print(loss_)
-    
+writer = SummaryWriter(
+    log_dir="/mnt/3TB/charlie/features/runs/morestats",
+    # comment="initial",
+)
+# _, (x, y) = next(enumerate(loader))
+# writer.add_graph(psvae, x)
+
+# %%
+psvae.to(device)
+
+# %%
+global_step = 0
+n_epochs = 50
+for e in range(n_epochs):
+    tic = time.time()
+    for batch_idx, (x, y) in enumerate(loader):
+        # print(x.shape, y.shape)
+        x = x.to(device)
+        y = y.to(device)
+
+        optimizer.zero_grad()
+
+        recon_x, y_hat, mu, logvar = psvae(x)
+        loss, loss_dict = psvae.loss(x, y, recon_x, y_hat, mu, logvar)
+
+        loss.backward()
+        optimizer.step()
+
+        if not batch_idx % 1000:
+            print(e, batch_idx, loss.item(), flush=True)
+
+
+            # -- Losses
+            writer.add_scalar("Loss/loss", loss.cpu(), global_step)
+            for k, v in loss_dict.items():
+                writer.add_scalar(f"Loss/{k}", v.cpu(), global_step)
+                
+            # -- Images
+            x_ = x.cpu()
+            recon_x_ = recon_x.cpu()
+            im = torch.hstack((x_, recon_x_, x_ - recon_x_))
+            im = im - im.min()
+            im *= 255. / im.max()
+            writer.add_images(
+                "x,recon_x,residual",
+                im.to(torch.uint8).view(*im.shape, 1),
+                global_step,
+                dataformats="NHWC",
+            )
+            
+            # -- Stats
+            y_hat_ = y_hat.cpu()
+            y_ = y.cpu()
+            y_mses = (y_hat_ - y_).pow(2).mean(axis=0)
+            for y_key, y_mse in zip(y_keys, y_mses):
+                writer.add_scalar(f"Stat/{y_key}_mse", y_mse, global_step)
+            
+            if np.isnan(loss.item()):
+                break
+        
+        global_step += 1
+    print("epoch", e, "took", (time.time() - tic) / 60, "min")
+
+# %%
+print("done")
 
 # %%
