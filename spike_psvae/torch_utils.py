@@ -15,8 +15,7 @@ class SpikeHDF5Dataset(Dataset):
                 axis=1,
             )
         )
-
-        self.len = len(self.ys[0])
+        self.len = self.ys.shape[0]
 
     def __len__(self):
         return self.len

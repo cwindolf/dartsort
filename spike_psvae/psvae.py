@@ -48,8 +48,8 @@ class PSVAE(nn.Module):
 
     def split(self, z):
         # TODO diagonal matrix multiply?
-        zs = z[: self.supervised_latent_dim]
-        zu = z[self.supervised_latent_dim :]
+        zs = z[:, : self.supervised_latent_dim]
+        zu = z[:, self.supervised_latent_dim :]
         return zs, zu
 
     def decode(self, z):
@@ -57,14 +57,29 @@ class PSVAE(nn.Module):
         return self.decoder(z)
 
     def forward(self, x):
+        # print("forward x.shape", x.shape)
         mu, logvar = self.encode(x)
+        # print("forward mu.shape", mu.shape, "logvar.shape", logvar.shape)
         z = self.reparametrize(mu, logvar)
+        # print("forward z.shape", z.shape)
         zs, zu = self.split(z)
+        # print("forward zs.shape", zs.shape, "zu.shape", zu.shape)
         y_hat = self.diag_y_hat(zs)
+        # print("forward y_hat.shape", y_hat.shape)
         recon_x = self.decode(z)
+        # print("forward recon_x.shape", recon_x.shape)
         return recon_x, y_hat, mu, logvar
 
     def loss(self, x, y, recon_x, y_hat, mu, logvar):
+        # print(
+        #    "loss \n\t- x.shape", x.shape,
+        #    "\n\t- y.shape", y.shape,
+        #     "\n\t- recon_x.shape",
+        #     recon_x.shape,
+        #     "\n\t- y_hat.shape", y_hat.shape,
+        #     "\n\t- mu.shape", mu.shape,
+        #     "\n\t- logvar.shape", logvar.shape,
+        # )
         # mean over batches, sum over data dims
 
         # TODO is the distribution of latents different in PSVAE?
