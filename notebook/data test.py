@@ -147,3 +147,69 @@ with h5py.File("/mnt/3TB/charlie/features/wfs_locs.h5", "r") as h5:
     plt.show()
 
 # %%
+y = np.load(f"{pos}/results_y_merged.npy")[good_times]
+
+# %%
+y.min(), y.max()
+
+# %%
+y
+
+# %%
+z = np.load(f"{pos}/results_z_merged.npy")[good_times]
+
+# %%
+z.min(), z.max()
+
+# %%
+z
+
+# %%
+x = np.load(f"{pos}/results_x_merged.npy")[good_times]
+
+# %%
+x.min(), x.max()
+
+# %%
+# add y_rel -- geom is np2, we can use max channel's location
+cm = np.load("/home/charlie/spikes_localization_registration/channels_maps/np2_channel_map.npy")
+max_channels = np.load(f"{pos}/results_max_channels.npy")[good_times]
+cm.min(axis=0), cm.max(axis=0), max_channels.min(), max_channels.max()
+
+# %%
+zc = cm[max_channels.astype(int)]
+
+# %%
+plt.hist(z - zc[:, 1], bins=128, log=True)
+plt.show()
+
+# %%
+with h5py.File("/mnt/3TB/charlie/features/wfs_locs.h5", "r+") as h5:
+    h5.create_dataset("z_rel", data=z - zc[:, 1])
+
+# %%
+# see waveform range
+mins = np.full((121, 20), np.inf)
+maxs = np.full((121, 20), -np.inf)
+with h5py.File("/mnt/3TB/charlie/features/wfs_locs.h5", "r") as h5:
+    xs = h5["denoised_waveforms"]
+    for ix in trange(0, xs.shape[0], 1000):
+        x_ = xs[ix:min(ix + 1000, xs.shape[0])]
+        min_ = x_.min(axis=0)
+        max_ = x_.max(axis=0)
+        mins = np.minimum(min_, mins)
+        maxs = np.maximum(max_, maxs)
+
+# %%
+mins.min(), mins.max()
+
+# %%
+maxs.min(), maxs.max()
+
+# %%
+plt.imshow(mins); plt.colorbar()
+
+# %%
+plt.imshow(maxs); plt.colorbar()
+
+# %%
