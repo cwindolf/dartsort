@@ -47,7 +47,6 @@ class PSVAE(nn.Module):
         return z
 
     def split(self, z):
-        # TODO diagonal matrix multiply?
         zs = z[:, : self.supervised_latent_dim]
         zu = z[:, self.supervised_latent_dim :]
         return zs, zu
@@ -82,8 +81,6 @@ class PSVAE(nn.Module):
         # )
         # mean over batches, sum over data dims
 
-        # TODO is the distribution of latents different in PSVAE?
-        #      like, supervised have their own mean?
         # -KL divergence to iid standard normal
         # 1312.6114 appendix B
         # note, -DKL is in ELBO, which we want to maximize.
