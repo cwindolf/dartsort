@@ -12,22 +12,24 @@ from spike_psvae import stacks
 
 ap = argparse.ArgumentParser()
 
-ap.add_argument("input_h5", default="/mnt/3TB/charlie/features/wfs_locs.h5")
-ap.add_argument("alpha", default=1.0)
+ap.add_argument("--input_h5", default="/mnt/3TB/charlie/features/wfs_locs.h5", required=False)
+ap.add_argument("--alpha", default=1.0, required=False)
 ap.add_argument(
-    "supervised_keys",
+    "--supervised_keys",
     default=["alpha", "x", "y", "z_rel"],
+    required=False,
     type=lambda x: x.split(","),
 )
 ap.add_argument(
-    "hidden_dims",
+    "--hidden_dims",
     default=[512],
+    required=False,
     type=lambda x: list(map(int, x.split(","))),
 )
-ap.add_argument("unsupervised_latents", default=10)
-ap.add_argument("log_interval", default=1000)
-ap.add_argument("batch_size", default=8)
-ap.add_argument("run_name", required=True, type=str)
+ap.add_argument("--unsupervised_latents", default=10, required=False)
+ap.add_argument("--log_interval", default=1000, required=False)
+ap.add_argument("--batch_size", default=8, required=False)
+ap.add_argument("--run_name", type=str)
 
 args = ap.parse_args()
 
@@ -48,8 +50,9 @@ print(device)
 
 # vanilla encoders and decoders
 n_latents = len(args.supervised_keys) + args.unsupervised_latents
-encoder = stacks.linear_encoder(in_dim, *args.hidden_dims, n_latents)
-decoder = stacks.linear_decoder(n_latents, *args.hidden_dims[::-1], in_shape)
+print(in_dim, *args.hidden_dims, n_latents)
+encoder = stacks.linear_encoder(in_dim, args.hidden_dims, n_latents)
+decoder = stacks.linear_decoder(n_latents, args.hidden_dims[::-1], in_shape)
 
 # %%
 psvae = PSVAE(

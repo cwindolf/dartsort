@@ -16,7 +16,7 @@ def linear_module(in_dim, out_dim, batchnorm=True):
         )
 
 
-def linear_encoder(in_dim, *hidden_dims, n_latents, batchnorm=True):
+def linear_encoder(in_dim, hidden_dims, n_latents, batchnorm=True):
     adims = [in_dim, *hidden_dims]
     bdims = [*hidden_dims, n_latents]
     return nn.Sequential(
@@ -28,7 +28,7 @@ def linear_encoder(in_dim, *hidden_dims, n_latents, batchnorm=True):
     )
 
 
-def linear_decoder(n_latents, *hidden_dims, out_shape, batchnorm=True):
+def linear_decoder(n_latents, hidden_dims, out_shape, batchnorm=True):
     out_dim = np.prod(out_shape)
     adims = [n_latents, *hidden_dims]
     bdims = [*hidden_dims, out_dim]
