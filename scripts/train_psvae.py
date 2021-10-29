@@ -6,7 +6,7 @@ import torch
 from torch.utils.tensorboard import SummaryWriter
 
 from spike_psvae.psvae import PSVAE
-from spike_psvae.torch_utils import SpikeHDF5Dataset
+from spike_psvae.torch_utils import SpikeHDF5Dataset, ContiguousRandomBatchSampler
 from spike_psvae import stacks
 
 
@@ -70,8 +70,8 @@ dataset = SpikeHDF5Dataset(
 loader = torch.utils.data.DataLoader(
     dataset,
     batch_size=args.batch_size,
-    shuffle=True,
     num_workers=args.num_data_workers,
+    batch_sampler=ContiguousRandomBatchSampler(dataset, args.batch_size)
 )
 
 # %%
