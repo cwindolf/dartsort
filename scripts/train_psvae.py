@@ -64,7 +64,10 @@ dataset = SpikeHDF5Dataset(
     args.supervised_keys,
 )
 loader = torch.utils.data.DataLoader(
-    dataset, batch_size=args.batch_size, shuffle=True
+    dataset,
+    batch_size=args.batch_size,
+    shuffle=True,
+    num_workers=1,
 )
 
 # %%
@@ -75,6 +78,7 @@ writer = SummaryWriter(
 psvae.to(device)
 global_step = 0
 n_epochs = 50
+log_tic = time.time()
 for e in range(n_epochs):
     tic = time.time()
     for batch_idx, (x, y) in enumerate(loader):
@@ -91,7 +95,18 @@ for e in range(n_epochs):
         optimizer.step()
 
         if not batch_idx % args.log_interval:
-            print(e, batch_idx, loss.item(), flush=True)
+            gsps = (time.time() - log_tic) / args.log_interval
+            print(
+                "Epoch",
+                e,
+                "batch",
+                batch_idx,
+                "loss",
+                loss.item(),
+                "global steps per sec",
+                gsps,
+                flush=True,
+            )
 
             # -- Losses
             writer.add_scalar("Loss/loss", loss.cpu(), global_step)
