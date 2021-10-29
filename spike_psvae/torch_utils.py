@@ -12,7 +12,7 @@ class ContiguousRandomBatchSampler(Sampler):
         self.generator = torch.Generator()
         self.generator.manual_seed(seed)
         self.start_inds = batch_size * torch.arange(
-            len(data_source) // batch_size
+            self.N // batch_size
         )
 
     def __iter__(self):
@@ -20,7 +20,7 @@ class ContiguousRandomBatchSampler(Sampler):
             range(
                 self.start_inds[si], self.start_inds[si] + self.batch_size
             )
-            for si in torch.randperm(self.N, generator=self.generator)
+            for si in torch.randperm(self.N // self.batch_size, generator=self.generator)
         )
 
 
@@ -34,8 +34,7 @@ class SpikeHDF5Dataset(Dataset):
                 axis=1,
             )
         )
-
-        self.len = len(self.ys[0])
+        self.len = len(self.ys)
 
     def __len__(self):
         return self.len
