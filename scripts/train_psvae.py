@@ -69,7 +69,6 @@ dataset = SpikeHDF5Dataset(
 )
 loader = torch.utils.data.DataLoader(
     dataset,
-    batch_size=args.batch_size,
     num_workers=args.num_data_workers,
     batch_sampler=ContiguousRandomBatchSampler(dataset, args.batch_size)
 )
