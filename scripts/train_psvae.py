@@ -13,7 +13,7 @@ from spike_psvae import stacks
 ap = argparse.ArgumentParser()
 
 ap.add_argument("--input_h5", default="/mnt/3TB/charlie/features/wfs_locs.h5", required=False)
-ap.add_argument("--alpha", default=1.0, required=False)
+ap.add_argument("--alpha", type=float, default=1.0, required=False)
 ap.add_argument(
     "--supervised_keys",
     default=["alpha", "x", "y", "z_rel"],
@@ -26,11 +26,11 @@ ap.add_argument(
     required=False,
     type=lambda x: list(map(int, x.split(","))),
 )
-ap.add_argument("--unsupervised_latents", default=10, required=False)
-ap.add_argument("--log_interval", default=1000, required=False)
-ap.add_argument("--batch_size", default=8, required=False)
+ap.add_argument("--unsupervised_latents", type=int, default=10, required=False)
+ap.add_argument("--log_interval", type=int, default=1000, required=False)
+ap.add_argument("--batch_size", type=int, default=8, required=False)
 ap.add_argument("--run_name", type=str)
-ap.add_argument("--num_data_workers", default=1)
+ap.add_argument("--num_data_workers", default=1, type=int)
 
 args = ap.parse_args()
 
@@ -99,7 +99,7 @@ for e in range(n_epochs):
         optimizer.step()
 
         if not batch_idx % args.log_interval:
-            gsps = (time.time() - log_tic) / args.log_interval
+            gsps = args.log_interval / (time.time() - log_tic)
             print(
                 "Epoch",
                 e,
