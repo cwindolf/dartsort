@@ -30,6 +30,7 @@ ap.add_argument("--unsupervised_latents", default=10, required=False)
 ap.add_argument("--log_interval", default=1000, required=False)
 ap.add_argument("--batch_size", default=8, required=False)
 ap.add_argument("--run_name", type=str)
+ap.add_argument("--num_data_workers", default=1)
 
 args = ap.parse_args()
 
@@ -70,7 +71,7 @@ loader = torch.utils.data.DataLoader(
     dataset,
     batch_size=args.batch_size,
     shuffle=True,
-    num_workers=1,
+    num_workers=args.num_data_workers,
 )
 
 # %%
