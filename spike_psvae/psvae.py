@@ -4,7 +4,6 @@
 # github.com/pytorch/examples/blob/master/vae/main.py
 
 import torch
-import torch.utils.data
 from torch import nn
 from torch.nn import functional as F
 
