@@ -30,7 +30,7 @@ ap.add_argument("--unsupervised_latents", type=int, default=10, required=False)
 ap.add_argument("--log_interval", type=int, default=1000, required=False)
 ap.add_argument("--batch_size", type=int, default=8, required=False)
 ap.add_argument("--run_name", type=str)
-ap.add_argument("--num_data_workers", default=1, type=int)
+ap.add_argument("--num_data_workers", default=0, type=int)
 
 args = ap.parse_args()
 
