@@ -11,16 +11,14 @@ class ContiguousRandomBatchSampler(Sampler):
         self.batch_size = batch_size
         self.generator = torch.Generator()
         self.generator.manual_seed(seed)
-        self.start_inds = batch_size * torch.arange(
-            self.N // batch_size
-        )
+        self.start_inds = batch_size * torch.arange(self.N // batch_size)
 
     def __iter__(self):
         yield from (
-            range(
-                self.start_inds[si], self.start_inds[si] + self.batch_size
+            range(self.start_inds[si], self.start_inds[si] + self.batch_size)
+            for si in torch.randperm(
+                self.N // self.batch_size, generator=self.generator
             )
-            for si in torch.randperm(self.N // self.batch_size, generator=self.generator)
         )
 
 
