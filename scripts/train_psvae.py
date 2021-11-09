@@ -120,7 +120,7 @@ for e in range(n_epochs):
             x_ = x.cpu()
             recon_x_ = recon_x.cpu()
             im = torch.hstack((x_, recon_x_, x_ - recon_x_))
-            im = im - im.min()
+            im -= im.min()
             im *= 255.0 / im.max()
             writer.add_images(
                 "x,recon_x,residual",
@@ -138,7 +138,7 @@ for e in range(n_epochs):
 
             if np.isnan(loss.item()):
                 break
-            
+
             log_tic = time.time()
 
         global_step += 1
