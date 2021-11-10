@@ -4,7 +4,6 @@ from matplotlib import colors, cm
 import numpy as np
 import torch
 import torch.nn.functional as F
-from torchvision.utils import make_grid
 
 
 @torch.no_grad()
