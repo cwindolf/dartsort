@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 # ---
 # jupyter:
 #   jupytext:
@@ -19,7 +20,7 @@
 # %%
 import h5py
 import numpy as np
-from spike_psvae import vis_utils, point_source_centering, localization
+from spike_psvae import vis_utils, point_source_centering, localization, waveform_utils
 import torch
 import matplotlib.pyplot as plt
 from scipy import linalg
@@ -109,9 +110,6 @@ plt.show()
 vis_utils.labeledmosaic([batch, reloc, batch - reloc], ["original", "relocated", "difference"], pad=2, cbar=True)
 
 # %%
-plt.hist(x, bins=128); plt.hist(z, bins=128);
-
-# %%
 fig, (aa, ab, ac) = plt.subplots(3, 1, figsize=(6,6), sharex=True)
 aa.plot(bx, ".", ms=5, label="x")
 aa.plot(bz, ".", ms=5, label="z")
@@ -132,7 +130,6 @@ bx = torch.tensor(x[:])
 by = torch.tensor(y[:])
 bz = torch.tensor(z[:])
 bmaxchan = torch.LongTensor(maxchans[:])
-print(bmaxchan)
 balpha = torch.tensor(alpha[:])
 reloc, r, q = point_source_centering.relocate_simple(batch, geom, bmaxchan, bx, by, bz, balpha)
 
@@ -150,34 +147,47 @@ vals = np.square(vals)
 
 # %%
 t = np.load("/Users/charlie/Downloads/spt_yass_templates.npy")
+good = np.flatnonzero(t.ptp(1).ptp(1))
+t = t[good]
 
 # %%
 t.shape
 
 # %%
-g[:, 0].min(), g[:, 0].max()
-
-# %%
-g[:, 1].min(), g[:, 1].max()
-
-# %%
-g = geom.copy()
-print(g.shape)
-plt.figure(figsize=(1, 5))
-plt.scatter(g[:, 0], g[:, 1], s=1);
-plt.colorbar()
-plt.xlabel("x")
-plt.ylabel("z")
-
-# %%
 # xt, yt, zt, alphat = localization.localize_waveforms(t, geom, n_workers=1)
-good = np.flatnonzero(t.ptp(1).ptp(1))
-xt, yt, zt, alphat = localization.localize_waveforms(t[good], geom, n_workers=1)
+
 
 # %%
-plt.scatter(xt, zt, s=1)
+t[:16].shape
 
 # %%
+bt, maxchant = waveform_utils.get_local_waveforms(t[rg.choice(t.shape[0], size=16)], 10)
+xt, yt, zt, alphat = localization.localize_waveforms(bt, geom, maxchans=maxchant, n_workers=1)
+zt_rel = zt - geom[maxchant, 1]
+ptpt = bt.ptp(1)
+reloct, rt, qt = point_source_centering.relocate_simple(bt, geom, maxchant, xt, yt, zt_rel, alphat)
+
+# %%
+xt, yt, zt, alphat
+
+# %%
+vis_utils.labeledmosaic(
+    [torch.as_tensor(bt), reloct, torch.as_tensor(bt) - reloct],
+    ["original", "relocated", "difference"],
+    pad=2, cbar=True)
+
+# %%
+fig, axes = plt.subplots(3, 3, figsize=(6, 6), sharex=True, sharey=True)
+for qq, pp, rr, ax, x_, y_, z_, alpha_, gg in zip(qt, ptpt, rt, axes.flat, xt, yt, zt_rel, alphat, "abcdefghijklmnopqrstuv"):
+#     ax.plot(pp - qq, color="k", label="difference");
+    # TODO add locs to title
+    ax.plot(pp, color="b", label="observed ptp");
+    ax.plot(qq, color="g", label="ptp predicted from localization");
+    ax.set_title(f"{gg}: (x,y,z,α)=({x_:.2f},{y_:.2f},{z_:.2f},{alpha_:.2f})", fontsize=6)
+#     ax.plot(rr, color="r", label="standard location ptp");
+# TODO separate plot with post-reloc ptp and standard loc ptp
+axes[0, -1].legend();
+plt.show()
 
 # %%
 # TODO pca temporal vectors, then their spatial loadings

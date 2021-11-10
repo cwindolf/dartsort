@@ -5,7 +5,7 @@ Can we remove the effect of location "analytically"?
 TODO: Not sure how much of this code assumes NP2 geom specific stuff.
 """
 import torch
-from .localization import get_local_geom
+from .waveform_utils import get_local_geom
 
 
 def point_source_ptp(local_geom, x, y, z, alpha):
@@ -44,5 +44,5 @@ def relocate_simple(wf, geom, maxchan, x, y, z_rel, alpha):
     )
     r = stereotypical_ptp(local_geom)
     q = point_source_ptp(local_geom, x, y, z_rel, alpha)
-    wf_ = wf * (r.view(B, C) / q).unsqueeze(1)
+    wf_ = torch.as_tensor(wf) * (r.view(B, C) / q).unsqueeze(1)
     return wf_, r, q

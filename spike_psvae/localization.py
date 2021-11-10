@@ -3,33 +3,11 @@ from scipy.optimize import least_squares
 from tqdm.auto import trange, tqdm
 from joblib import Parallel, delayed
 
+from .waveform_utils import get_local_geom
+
 # (x_low, y_low, z_low, alpha_low), (x_high, y_high, z_high, alpha_high)
 BOUNDS = (-100, 0, -100, 0), (132, 250, 100, 10000)
 Y0, ALPHA0 = 21.0, 1000.0
-
-
-def get_local_geom(geom, maxchan, channel_radius, return_z_maxchan=False):
-    """
-    Gets `2 * channel_radius` chans near maxchan. Deals with the boundary.
-    """
-    # Deal with the boundary
-    low = maxchan - channel_radius
-    high = maxchan + channel_radius
-    if low < 0:
-        low = 0
-        high = 2 * channel_radius
-    if high > geom.shape[0]:
-        high = geom.shape[0]
-        low = geom.shape[0] - 2 * channel_radius
-
-    # Extract geometry and relativize z around the max channel
-    local_geom = geom[low:high].copy()
-    z_maxchan = geom[maxchan, 1]
-    local_geom[:, 1] -= z_maxchan
-
-    if return_z_maxchan:
-        return local_geom, z_maxchan
-    return local_geom
 
 
 def localize_ptp(ptp, maxchan, geom):
