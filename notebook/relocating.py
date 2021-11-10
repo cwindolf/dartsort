@@ -19,7 +19,7 @@
 # %%
 import h5py
 import numpy as np
-from spike_psvae import vis_utils, point_source_centering
+from spike_psvae import vis_utils, point_source_centering, localization
 import torch
 import matplotlib.pyplot as plt
 from scipy import linalg
@@ -108,14 +108,17 @@ ptp = mx.values - mn.values
 fig, axes = plt.subplots(4, 4, figsize=(6, 6), sharex=True, sharey=True)
 for qq, pp, rr, ax in zip(q, ptp, r, axes.flat):
 #     ax.plot(pp - qq, color="k", label="difference");
+    # TODO add locs to title
     ax.plot(pp, color="b", label="observed ptp");
     ax.plot(qq, color="g", label="ptp predicted from localization");
-    ax.plot(rr, color="r", label="standard location ptp");
+#     ax.plot(rr, color="r", label="standard location ptp");
+# TODO separate plot with post-reloc ptp and standard loc ptp
 axes.flat[3].legend();
 plt.show()
 
 # %%
-vis_utils.labeledmosaic([batch, reloc, batch - reloc], ["original", "relocated", "difference"], pad=2, cbar=False)
+# TODO lineplots
+vis_utils.labeledmosaic([batch, reloc, batch - reloc], ["original", "relocated", "difference"], pad=2, cbar=True)
 
 # %%
 plt.hist(x, bins=128); plt.hist(z, bins=128);
@@ -158,3 +161,40 @@ vals = np.square(vals)
 (np.cumsum(vals) / np.sum(vals) < 0.95).sum()
 
 # %%
+t = np.load("/Users/charlie/Downloads/spt_yass_templates.npy")
+
+# %%
+t.shape
+
+# %%
+g[:, 0].min(), g[:, 0].max()
+
+# %%
+g[:, 1].min(), g[:, 1].max()
+
+# %%
+g = geom.copy()
+print(g.shape)
+plt.figure(figsize=(1, 5))
+plt.scatter(g[:, 0], g[:, 1], s=1);
+plt.colorbar()
+plt.xlabel("x")
+plt.ylabel("z")
+
+# %%
+# xt, yt, zt, alphat = localization.localize_waveforms(t, geom, n_workers=1)
+good = np.flatnonzero(t.ptp(1).ptp(1))
+xt, yt, zt, alphat = localization.localize_waveforms(t[good], geom, n_workers=1)
+
+# %%
+ppp.argmin(axis=0)
+
+# %%
+t[29].max(), t[29].min()
+
+# %%
+
+# %%
+
+# %%
+# TODO pca temporal vectors, then their spatial loadings

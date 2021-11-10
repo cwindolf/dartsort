@@ -47,6 +47,7 @@ def relocate_simple(wf, geom, maxchan, x, y, z_rel, alpha):
     """r is the result of stereotypical_ptp"""
     B, T, C = wf.shape
     assert C % 2 == 0
+    geom = geom.copy()
     local_geom = torch.stack(
         [geom[mc - 10 : mc + 10] for mc in maxchan],
         axis=0,
