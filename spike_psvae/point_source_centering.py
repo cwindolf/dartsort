@@ -11,13 +11,14 @@ def point_source_ptp(local_geom, x, y, z, alpha):
     B, C, _ = local_geom.shape
     shanks = local_geom.shape[1] // 2
     zspacing = torch.abs(local_geom[0, 2, 1] - local_geom[0, 0, 1])
-    print("x", torch.as_tensor(x).shape)
-    print("z", torch.as_tensor(z).shape)
+    # print("x", torch.as_tensor(x).shape)
+    # print("z", torch.as_tensor(z).shape)
     xz = torch.stack([x, z + shanks * zspacing / 2], axis=-1)
-    print("xz", xz.shape)
+    # print("xz", xz, xz.shape)
+    # print("local_geom", local_geom)
     geom_rel = local_geom.view(B, C, 2) - xz.view(-1, 1, 2)
-    print("geom_rel", geom_rel.shape)
-    print("y", torch.as_tensor(y).shape)
+    # print("geom_rel", geom_rel.shape)
+    # print("y", torch.as_tensor(y).shape)
     dists = torch.sqrt(
         torch.sum(
             torch.as_tensor(y * y).view(-1, 1, 1)
@@ -25,10 +26,10 @@ def point_source_ptp(local_geom, x, y, z, alpha):
             dim=2,
         )
     )
-    print("dists", dists.shape)
-    print("alpha", torch.as_tensor(alpha).view(-1, 1).shape)
+    # print("dists", dists.shape)
+    # print("alpha", torch.as_tensor(alpha).view(-1, 1).shape)
     ptp = torch.squeeze(torch.as_tensor(alpha).view(-1, 1) / dists)
-    print("ptp", ptp.shape)
+    # print("ptp", ptp.shape)
     return ptp
 
 
@@ -36,7 +37,7 @@ def stereotypical_ptp(local_geom, y=15.0, alpha=150.0):
     assert local_geom.shape[1] % 2 == 0
     xspacing = torch.abs(local_geom[0, 1, 0] - local_geom[0, 0, 0])
     x = xspacing / 2
-    print("xspacing", xspacing)
+    # print("xspacing", xspacing)
     z = 0
     r = point_source_ptp(local_geom, x, y, z, alpha)
     return r
@@ -50,12 +51,13 @@ def relocate_simple(wf, geom, maxchan, x, y, z_rel, alpha):
         [geom[mc - 10 : mc + 10] for mc in maxchan],
         axis=0,
     )
-    print("local_geom", local_geom.shape)
+    local_geom -= torch.min(local_geom, dim=1, keepdim=True).values
+    # print("local_geom", local_geom.shape)
     # p = wf.max(dim=1) - wf.min(dim=1)
-    print("STEREO")
+    # print("STEREO")
     r = stereotypical_ptp(local_geom)
-    print("QQQ")
+    # print("QQQ")
     q = point_source_ptp(local_geom, x, y, z_rel, alpha)
-    print(wf.shape, r.shape, q.shape, (r.view(B, C) / q).shape)
+    # print(wf.shape, r.shape, q.shape, (r.view(B, C) / q).shape)
     wf_ = wf * (r.view(B, C) / q).unsqueeze(1)
-    return wf_
+    return wf_, r, q

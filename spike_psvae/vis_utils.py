@@ -1,4 +1,6 @@
 import matplotlib.pyplot as plt
+from mpl_toolkits.axes_grid1 import make_axes_locatable
+from matplotlib import colors, cm
 import numpy as np
 import torch
 import torch.nn.functional as F
@@ -19,15 +21,18 @@ def mosaic(xs, pad=0, padval=255):
     grid = grid.permute(0, 2, 1, 3).reshape(
         (H + 2 * pad) * nrows, B * (W + 2 * pad), 1
     )
+    grid = grid[pad:-pad, pad:-pad, :]
     return grid
 
 
-def labeledmosaic(xs, rowlabels, pad=0, padval=255, ax=None):
+def labeledmosaic(xs, rowlabels, pad=0, padval=255, ax=None, cbar=True):
+    vmin = min(x.min() for x in xs)
+    vmax = max(x.max() for x in xs)
     B, H, W = xs[0].shape
     grid = mosaic(xs, pad=pad, padval=padval).numpy()
-    grid = np.pad(grid, [(0, 0), (12, 0), (0, 0)], constant_values=padval)
+    grid = np.pad(grid, [(0, 0), (20, 0), (0, 0)], constant_values=padval)
     ax = ax or plt.gca()
-    ax.imshow(
+    im = ax.imshow(
         np.broadcast_to(grid, (*grid.shape[:2], 3)),
         interpolation="nearest",
     )
@@ -35,10 +40,19 @@ def labeledmosaic(xs, rowlabels, pad=0, padval=255, ax=None):
 
     for i, label in enumerate(rowlabels):
         ax.text(
-            6,
+            8,
             i * (H + 2 * pad) + H / 2 + pad,
             label,
             rotation="vertical",
             ha="center",
             va="center",
         )
+
+    if cbar:
+        norm = colors.Normalize(vmin=vmin, vmax=vmax)
+        divider = make_axes_locatable(ax)
+        cax = divider.append_axes('right', size='4%', pad=0.05)
+        cbar = plt.colorbar(cm.ScalarMappable(norm, "gray"), cax)
+        ticks = [x for x in range(-50, 50, 5) if vmin <= x <= vmax]
+        cbar.set_ticks(ticks)
+        cbar.ax.set_yticklabels(ticks, fontsize=8)

@@ -23,9 +23,11 @@ from spike_psvae import vis_utils, point_source_centering
 import torch
 import matplotlib.pyplot as plt
 from scipy import linalg
+import numpy as np
 
 # %%
 plt.rc("figure", dpi=200)
+rg = np.random.default_rng(0)
 
 # %%
 with h5py.File("../data/wfs_locs_tiny.h5") as f:
@@ -71,25 +73,67 @@ wfs[0].shape
 geom = torch.tensor(geom)
 
 # %%
-batch = torch.tensor(wfs[:16])
-bx = torch.tensor(x[:16])
-by = torch.tensor(y[:16])
-bz = torch.tensor(z[:16])
-bmaxchan = torch.LongTensor(maxchans[:16])
-print(bmaxchan)
-balpha = torch.tensor(alpha[:16])
-reloc = point_source_centering.relocate_simple(batch, geom, bmaxchan, bx, by, bz, balpha)
+# batch = torch.tensor(wfs[15:16])
+# bx = torch.tensor(x[15:16])
+# by = torch.tensor(y[15:16])
+# bz = torch.tensor(z[15:16])
+# bmaxchan = torch.LongTensor(maxchans[15:16])
+# balpha = torch.tensor(alpha[15:16])
+
+# inds = rg.choice(len(good), size=16, replace=False)
+inds = np.arange(16)
+batch = torch.tensor(wfs[inds])
+bx = torch.tensor(x[inds])
+by = torch.tensor(y[inds])
+bz = torch.tensor(z[inds])
+bmaxchan = torch.LongTensor(maxchans[inds])
+balpha = torch.tensor(alpha[inds])
+reloc, r, q = point_source_centering.relocate_simple(batch, geom, bmaxchan, bx, by, bz, balpha)
 
 # %%
-vis_utils.labeledmosaic([batch, reloc, torch.abs(batch - reloc)], ["original", "relocated", "|resid|"], pad=2)
+bx, by, bz, balpha
 
 # %%
-plt.plot(bx, ".", ms=5, label="x")
-plt.plot(by, ".", ms=5, label="y")
-plt.plot(bz, ".", ms=5, label="z")
-plt.plot(balpha, ".", ms=5, label="alpha")
-plt.legend()
+q.shape, r.shape
+
+# %%
+# plt.plot(r.t())
+# plt.show()
+# plt.plot(q.t())
+# plt.show()
+mx = torch.max(batch, dim=1)
+mn = torch.min(batch, dim=1)
+ptp = mx.values - mn.values
+# plt.plot(ptp.t())
+fig, axes = plt.subplots(4, 4, figsize=(6, 6), sharex=True, sharey=True)
+for qq, pp, rr, ax in zip(q, ptp, r, axes.flat):
+#     ax.plot(pp - qq, color="k", label="difference");
+    ax.plot(pp, color="b", label="observed ptp");
+    ax.plot(qq, color="g", label="ptp predicted from localization");
+    ax.plot(rr, color="r", label="standard location ptp");
+axes.flat[3].legend();
 plt.show()
+
+# %%
+vis_utils.labeledmosaic([batch, reloc, batch - reloc], ["original", "relocated", "difference"], pad=2, cbar=False)
+
+# %%
+plt.hist(x, bins=128); plt.hist(z, bins=128);
+
+# %%
+fig, (aa, ab, ac) = plt.subplots(3, 1, figsize=(6,6), sharex=True)
+aa.plot(bx, ".", ms=5, label="x")
+aa.plot(bz, ".", ms=5, label="z")
+aa.legend()
+ab.plot(by, ".", ms=5, label="y")
+ab.legend()
+ac.plot(balpha, ".", ms=5, label="alpha")
+ac.legend()
+plt.show()
+
+# %%
+
+# %%
 
 # %%
 batch = torch.tensor(wfs[:])
@@ -99,14 +143,18 @@ bz = torch.tensor(z[:])
 bmaxchan = torch.LongTensor(maxchans[:])
 print(bmaxchan)
 balpha = torch.tensor(alpha[:])
-reloc = point_source_centering.relocate_simple(batch, geom, bmaxchan, bx, by, bz, balpha)
+reloc, r, q = point_source_centering.relocate_simple(batch, geom, bmaxchan, bx, by, bz, balpha)
+
+# %%
 
 # %%
 vals = linalg.svdvals(batch.numpy().reshape(614, -1))
+vals = np.square(vals)
 (np.cumsum(vals) / np.sum(vals) < 0.95).sum()
 
 # %%
 vals = linalg.svdvals(reloc.numpy().reshape(614, -1))
+vals = np.square(vals)
 (np.cumsum(vals) / np.sum(vals) < 0.95).sum()
 
 # %%
