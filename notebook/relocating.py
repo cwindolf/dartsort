@@ -61,18 +61,6 @@ geom = np.load("../data/np2_channel_map.npy")
 geom.shape
 
 # %%
-geom[1, 0] - geom[0, 0]
-
-# %%
-geom[2, 1] - geom[0, 1]
-
-# %%
-wfs[0].shape
-
-# %%
-geom = torch.tensor(geom)
-
-# %%
 # batch = torch.tensor(wfs[15:16])
 # bx = torch.tensor(x[15:16])
 # by = torch.tensor(y[15:16])
@@ -187,12 +175,7 @@ good = np.flatnonzero(t.ptp(1).ptp(1))
 xt, yt, zt, alphat = localization.localize_waveforms(t[good], geom, n_workers=1)
 
 # %%
-ppp.argmin(axis=0)
-
-# %%
-t[29].max(), t[29].min()
-
-# %%
+plt.scatter(xt, zt, s=1)
 
 # %%
 

@@ -8,6 +8,30 @@ BOUNDS = (-100, 0, -100, 0), (132, 250, 100, 10000)
 Y0, ALPHA0 = 21.0, 1000.0
 
 
+def get_local_geom(geom, maxchan, channel_radius, return_z_maxchan=False):
+    """
+    Gets `2 * channel_radius` chans near maxchan. Deals with the boundary.
+    """
+    # Deal with the boundary
+    low = maxchan - channel_radius
+    high = maxchan + channel_radius
+    if low < 0:
+        low = 0
+        high = 2 * channel_radius
+    if high > geom.shape[0]:
+        high = geom.shape[0]
+        low = geom.shape[0] - 2 * channel_radius
+
+    # Extract geometry and relativize z around the max channel
+    local_geom = geom[low:high].copy()
+    z_maxchan = geom[maxchan, 1]
+    local_geom[:, 1] -= z_maxchan
+
+    if return_z_maxchan:
+        return local_geom, z_maxchan
+    return local_geom
+
+
 def localize_ptp(ptp, maxchan, geom):
     """Find the localization result for a single ptp vector
 
@@ -17,25 +41,13 @@ def localize_ptp(ptp, maxchan, geom):
     """
     channel_radius = ptp.shape[0] // 2
     # local_geom is 2*channel_radius, 2
-    low = maxchan - channel_radius
-    high = maxchan + channel_radius
-    if low < 0:
-        low = 0
-        high = 2 * channel_radius
-    if high > geom.shape[0]:
-        high = geom.shape[0]
-        low = geom.shape[0] - 2 * channel_radius
-    local_geom = geom[low:high].copy()
-    z_maxchan = geom[maxchan, 1]
-    local_geom[:, 1] -= z_maxchan
-    # print(local_geom.shape)
-    # print(maxchan, local_geom)
+    local_geom, z_maxchan = get_local_geom(
+        geom, maxchan, channel_radius, return_z_maxchan=True
+    )
 
     # initialize x, z with CoM
     ptp_p = ptp / ptp.sum()
-    # print("ptpsummin", ptp.sum(), ptp.min())
     xcom, zcom = (ptp_p[:, None] * local_geom).sum(axis=0)
-    # print(local_geom.min(axis=0), local_geom.max(axis=0), [xcom, zcom])
 
     def residual(loc):
         x, y, z, alpha = loc
