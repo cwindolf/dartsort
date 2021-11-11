@@ -1,13 +1,38 @@
+from joblib import Parallel, delayed
 import numpy as np
 from scipy.optimize import least_squares
 from tqdm.auto import trange, tqdm
-from joblib import Parallel, delayed
 
 from .waveform_utils import get_local_geom
 
 # (x_low, y_low, z_low, alpha_low), (x_high, y_high, z_high, alpha_high)
 BOUNDS = (-100, 0, -100, 0), (132, 250, 100, 10000)
 Y0, ALPHA0 = 21.0, 1000.0
+
+
+def check_shapes(waveforms, maxchans, channel_radius, geom):
+    N, T, C = waveforms.shape
+    C_, d = geom.shape
+    assert d == 2
+
+    if C == 2 * channel_radius:
+        print(f"Waveforms are already trimmed to {C} channels.")
+        if maxchans is None:
+            # we will need maxchans later to determine local geometries
+            raise ValueError(
+                "maxchans can't be None when waveform channels < geom channels"
+            )
+    elif C == C_:
+        print(
+            f"Waveforms are on all {C} channels. "
+            f"Trimming with radius {channel_radius}."
+        )
+    else:
+        raise ValueError(
+            f"Not sure what to do with waveforms.shape={waveforms.shape}."
+        )
+
+    return N, T, C
 
 
 def localize_ptp(ptp, maxchan, geom):
@@ -33,6 +58,8 @@ def localize_ptp(ptp, maxchan, geom):
         dists = np.sqrt((y ** 2 + sq_dxz).sum(axis=1))
         return ptp - alpha / dists
 
+    # def jacobian(loc):
+
     result = least_squares(
         residual,
         x0=[xcom, Y0, zcom, ALPHA0],
@@ -51,6 +78,7 @@ def localize_waveforms(
     maxchans=None,
     channel_radius=10,
     n_workers=1,
+    _not_helper=True,
 ):
     """Localize a bunch of waveforms
 
@@ -58,31 +86,32 @@ def localize_waveforms(
     C can be 384 (or geom.shape[0]). If the latter, the 2 * channel_radius
     bits will be extracted.
     """
-    N, T, C = waveforms.shape
-    C_, d = geom.shape
-    assert d == 2
+    if _not_helper:
+        N, T, C = check_shapes(waveforms, maxchans, channel_radius, geom)
+    else:
+        N, T, C = waveforms.shape
+
+    # I have them stored as floats and keep forgetting to int them.
+    maxchans = maxchans.astype(int)
+
+    # handle pbars
+    xrange = trange if _not_helper else lambda a, desc: range(a)
+    xqdm = tqdm if _not_helper else lambda a, total, desc: a
 
     # -- get N x (2 * channel_radius) array of PTPs
     if C == 2 * channel_radius:
-        print(f"Waveforms are already trimmed to {C} channels.")
         ptps = waveforms.ptp(axis=1)
+    else:
+        # we need maxchans to extract the local waveform
+        ptps_full = waveforms.ptp(axis=1)
         if maxchans is None:
-            raise ValueError(
-                "maxchans can't be None when waveform channels < geom channels"
-            )
-    elif C == C_:
-        print(
-            f"Waveforms are on all {C} channels. "
-            f"Trimming with radius {channel_radius}."
-        )
-        if maxchans is None:
-            ptps_full = waveforms.ptp(axis=1)
             maxchans = np.argmax(ptps_full, axis=1)
             bad = np.flatnonzero(ptps_full.ptp(1) == 0)
             if bad:
                 raise ValueError(f"Some waveforms were all zero: {bad}.")
+
         ptps = np.empty((N, 2 * channel_radius), dtype=waveforms.dtype)
-        for n in trange(N, desc="extracting channels"):
+        for n in xrange(N, desc="extracting channels"):
             low = maxchans[n] - channel_radius
             high = maxchans[n] + channel_radius
             if low < 0:
@@ -93,10 +122,6 @@ def localize_waveforms(
                 low = C - 2 * channel_radius
             ptps[n] = ptps_full[n, low:high]
         del ptps_full
-    else:
-        raise ValueError(
-            f"Not sure what to do with waveforms.shape={waveforms.shape}."
-        )
 
     # -- run the least squares
     xs = np.empty(N)
@@ -107,7 +132,7 @@ def localize_waveforms(
         for n, (x, y, z, alpha) in enumerate(
             pool(
                 delayed(localize_ptp)(ptp, maxchan, geom)
-                for ptp, maxchan in tqdm(
+                for ptp, maxchan in xqdm(
                     zip(ptps, maxchans), total=N, desc="lsq"
                 )
             )
@@ -116,5 +141,54 @@ def localize_waveforms(
             ys[n] = y
             zs[n] = z
             alphas[n] = alpha
+
+    return xs, ys, zs, alphas
+
+
+def localize_waveforms_batched(
+    waveforms,
+    geom,
+    maxchans=None,
+    channel_radius=10,
+    n_workers=1,
+    batch_size=128,
+):
+    """A helper for running the above on hdf5 datasets or similar"""
+    N, T, C = check_shapes(waveforms, maxchans, channel_radius, geom)
+    xs = np.empty(N)
+    ys = np.empty(N)
+    zs = np.empty(N)
+    alphas = np.empty(N)
+
+    starts = list(range(0, N, batch_size))
+    ends = [min(start + batch_size, N) for start in starts]
+
+    def maxchan_batch(start, end):
+        if maxchans is None:
+            return None
+        else:
+            return maxchans[start:end]
+
+    with Parallel(n_workers) as pool:
+        for batch_idx, (x, y, z, alpha) in enumerate(
+            pool(
+                delayed(localize_waveforms)(
+                    waveforms[start:end],
+                    geom,
+                    maxchans=maxchan_batch(start, end),
+                    channel_radius=channel_radius,
+                    _not_helper=False,
+                )
+                for start, end in tqdm(
+                    zip(starts, ends), total=len(starts), desc="loc batches"
+                )
+            )
+        ):
+            start = starts[batch_idx]
+            end = ends[batch_idx]
+            xs[start:end] = x
+            ys[start:end] = y
+            zs[start:end] = z
+            alphas[start:end] = alpha
 
     return xs, ys, zs, alphas
