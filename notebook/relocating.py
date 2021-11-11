@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 # ---
 # jupyter:
 #   jupytext:
@@ -5,9 +6,9 @@
 #       extension: .py
 #       format_name: percent
 #       format_version: '1.3'
-#       jupytext_version: 1.13.0
+#       jupytext_version: 1.13.1
 #   kernelspec:
-#     display_name: Python 3 (ipykernel)
+#     display_name: Python 3
 #     language: python
 #     name: python3
 # ---
@@ -19,29 +20,41 @@
 # %%
 import h5py
 import numpy as np
-from spike_psvae import vis_utils, point_source_centering
+from spike_psvae import vis_utils, point_source_centering, localization, waveform_utils
 import torch
 import matplotlib.pyplot as plt
 from scipy import linalg
+import numpy as np
 
 # %%
 plt.rc("figure", dpi=200)
+rg = np.random.default_rng(0)
 
 # %%
-with h5py.File("../data/wfs_locs.h5") as f:
+with h5py.File("../data/wfs_locs_tiny.h5") as f:
     y = f["y"][:]
-    maxchans = f["max_channels"][:]
-    good = np.flatnonzero((y >= 1) & (maxchans > 10))[:10000]
-    print(len(good))
+    good = np.flatnonzero(y >= 1)
     y = y[good]
-    maxchans = maxchans[good]
     wfs = f["denoised_waveforms"][good]
     x = f["x"][good]
     z = f["z_rel"][good]
     z_abs = f["z"][good]
     alpha = f["alpha"][good]
     max_ptp = f["max_ptp"][good]
+    maxchans = f["max_channels"][good]
 
+# %%
+z = lambda a, b: range(a)
+
+# %%
+z(1, b=2)
+
+# %%
+xs, ys, zs, alphas = localization.localize_waveforms_batched(wfs, geom, maxchans=maxchans)
+z_rels = waveform_utils.relativize_z(zs, maxchans, geom)
+
+# %%
+(xs - x).max()
 
 # %%
 plt.plot(x, z_abs, "k.", ms=1);
@@ -62,40 +75,73 @@ geom = np.load("../data/np2_channel_map.npy")
 geom.shape
 
 # %%
-geom[1, 0] - geom[0, 0]
+# batch = torch.tensor(wfs[15:16])
+# bx = torch.tensor(x[15:16])
+# by = torch.tensor(y[15:16])
+# bz = torch.tensor(z[15:16])
+# bmaxchan = torch.LongTensor(maxchans[15:16])
+# balpha = torch.tensor(alpha[15:16])
+
+# inds = rg.choice(len(good), size=16, replace=False)
+inds = np.arange(16)
+batch = torch.tensor(wfs[inds])
+bx = torch.tensor(xs[inds])
+by = torch.tensor(ys[inds])
+bz = torch.tensor(z_rels[inds])
+bmaxchan = torch.LongTensor(maxchans[inds])
+balpha = torch.tensor(alphas[inds])
+reloc, r, q = point_source_centering.relocate_simple(batch, geom, bmaxchan, bx, by, bz, balpha)
 
 # %%
-geom[2, 1] - geom[0, 1]
+bx, by, bz, balpha
 
 # %%
-wfs[0].shape
+q.shape, r.shape
 
 # %%
-geom = torch.tensor(geom)
-
-# %%
-batch = torch.tensor(wfs[:16])
-bx = torch.tensor(x[:16])
-by = torch.tensor(y[:16])
-bz = torch.tensor(z[:16])
-bmaxchan = torch.LongTensor(maxchans[:16])
-print(bmaxchan)
-balpha = torch.tensor(alpha[:16])
-reloc = point_source_centering.relocate_simple(batch, geom, bmaxchan, bx, by, bz, balpha)
-
-# %%
-vis_utils.labeledmosaic([batch, reloc, torch.abs(batch - reloc)], ["original", "relocated", "|resid|"], pad=2)
-
-# %%
-plt.plot(bx, ".", ms=5, label="x")
-plt.plot(by, ".", ms=5, label="y")
-plt.plot(bz, ".", ms=5, label="z")
-plt.plot(balpha, ".", ms=5, label="alpha")
-plt.legend()
+fig, axes = vis_utils.vis_ptps([batch.numpy().ptp(1), q.numpy()], ["observed ptp", "predicted ptp"], "bg")
+plt.show()
+fig, axes = vis_utils.vis_ptps([reloc.numpy().ptp(1), r.numpy()], ["relocated ptp", "standard ptp"], "kr")
 plt.show()
 
 # %%
-maxchans[0], maxchans[4447], maxchans[4448], maxchans[4449]
+# plt.plot(r.t())
+# plt.show()
+# plt.plot(q.t())
+# plt.show()
+mx = torch.max(batch, dim=1)
+mn = torch.min(batch, dim=1)
+ptp = mx.values - mn.values
+# plt.plot(ptp.t())
+fig, axes = plt.subplots(4, 4, figsize=(6, 6), sharex=True, sharey=True)
+for qq, pp, rr, ax in zip(q, ptp, r, axes.flat):
+#     ax.plot(pp - qq, color="k", label="difference");
+    # TODO add locs to title
+    ax.plot(pp, color="b", label="observed ptp");
+    ax.plot(qq, color="g", label="ptp predicted from localization");
+#     ax.plot(rr, color="r", label="standard location ptp");
+# TODO separate plot with post-reloc ptp and standard loc ptp
+axes.flat[3].legend();
+plt.show()
+
+# %%
+# TODO lineplots
+vis_utils.labeledmosaic([batch, reloc, batch - reloc], ["original", "relocated", "difference"], pad=2, cbar=True)
+
+# %%
+fig, (aa, ab, ac) = plt.subplots(3, 1, figsize=(6,6), sharex=True)
+aa.plot(bx, ".", ms=5, label="x")
+aa.plot(bz, ".", ms=5, label="z")
+aa.legend()
+ab.plot(by, ".", ms=5, label="y")
+ab.legend()
+ac.plot(balpha, ".", ms=5, label="alpha")
+ac.legend()
+plt.show()
+
+# %%
+
+# %%
 
 # %%
 batch = torch.tensor(wfs[:])
@@ -103,50 +149,100 @@ bx = torch.tensor(x[:])
 by = torch.tensor(y[:])
 bz = torch.tensor(z[:])
 bmaxchan = torch.LongTensor(maxchans[:])
-print(bmaxchan)
 balpha = torch.tensor(alpha[:])
-reloc = point_source_centering.relocate_simple(batch, geom, bmaxchan, bx, by, bz, balpha)
+reloc, r, q = point_source_centering.relocate_simple(batch, geom, bmaxchan, bx, by, bz, balpha)
 
 # %%
-vals = linalg.svdvals(batch.numpy().reshape(10000, -1))
+
+# %%
+vals = linalg.svdvals(batch.numpy().reshape(614, -1))
+vals = np.square(vals)
 (np.cumsum(vals) / np.sum(vals) < 0.95).sum()
 
 # %%
-vals = linalg.svdvals(reloc.numpy().reshape(10000, -1))
-(np.cumsum(vals) / np.sum(vals) < 0.90).sum()
+vals = linalg.svdvals(reloc.numpy().reshape(614, -1))
+vals = np.square(vals)
+(np.cumsum(vals) / np.sum(vals) < 0.95).sum()
 
 # %%
-np.arange(35).reshape(5, 7).mean(axis=1).shape
+t = np.load("/Users/charlie/Downloads/spt_yass_templates.npy")
+good = np.flatnonzero(t.ptp(1).ptp(1))
+t = t[good]
+
+# %%
+t.shape
+
+# %%
+# xt, yt, zt, alphat = localization.localize_waveforms(t, geom, n_workers=1)
 
 
 # %%
-def nf(x):
-    x = x.numpy().reshape(10000, -1)
-    x -= x.mean(axis=1, keepdims=True)
-    eigs = np.square(linalg.svdvals(x))
-    return eigs
-
+t[:16].shape
 
 # %%
-eigs_n = nf(batch)
+bt, maxchant = waveform_utils.get_local_waveforms(t[rg.choice(t.shape[0], size=16)], 10)
+xt, yt, zt, alphat = localization.localize_waveforms(bt, geom, maxchans=maxchant, n_workers=1)
+zt_rel = zt - geom[maxchant, 1]
+ptpt = bt.ptp(1)
+reloct, rt, qt = point_source_centering.relocate_simple(bt, geom, maxchant, xt, yt, zt_rel, alphat)
 
 # %%
-eigs_y = nf(reloc)
+xt, yt, zt, alphat
 
 # %%
-(np.cumsum(eigs_n) / eigs_n.sum() < 0.95).sum()
+vis_utils.labeledmosaic(
+    [torch.as_tensor(bt), reloct, torch.as_tensor(bt) - reloct],
+    ["original", "relocated", "difference"],
+    pad=2, cbar=True)
 
 # %%
-(np.cumsum(eigs_y) / eigs_y.sum() < 0.95).sum()
+fig, axes = plt.subplots(4, 4, figsize=(6, 6), sharex=True, sharey=True)
+for qq, pp, rr, ax, x_, y_, z_, alpha_, gg in zip(qt, ptpt, rt, axes.flat, xt, yt, zt_rel, alphat, "abcdefghijklmnopqrstuv"):
+#     ax.plot(pp - qq, color="k", label="difference");
+    # TODO add locs to title
+    ax.plot(pp, color="b", label="observed ptp");
+    ax.plot(qq, color="g", label="ptp predicted from localization");
+#     ax.set_title(f"{gg}: (x,y,z,α)=({x_:.2f},{y_:.2f},{z_:.2f},{alpha_:.2f})", fontsize=6)
+    ax.set_title(f"{gg}", fontsize=6)
+#     ax.plot(rr, color="r", label="standard location ptp");
+# TODO separate plot with post-reloc ptp and standard loc ptp
+axes[0, -1].legend();
+plt.show()
+
+# %%
+fig, axes = plt.subplots(4, 4, figsize=(6, 6), sharex=True, sharey=True)
+
+reloc_ptps = reloct.numpy().ptp(1)
+
+for qq, pp, rr, ax, x_, y_, z_, alpha_, gg in zip(qt, reloc_ptps, rt, axes.flat, xt, yt, zt_rel, alphat, "abcdefghijklmnopqrstuv"):
+#     ax.plot(pp - qq, color="k", label="difference");
+    # TODO add locs to title
+    ax.plot(pp, color="k", label="relocated ptp");
+#     ax.plot(qq, color="g", label="ptp predicted from localization");
+#     ax.set_title(f"{gg}: (x,y,z,α)=({x_:.2f},{y_:.2f},{z_:.2f},{alpha_:.2f})", fontsize=6)
+    ax.set_title(f"{gg}", fontsize=6)
+    ax.plot(rr, color="r", label="standard location ptp");
+# TODO separate plot with post-reloc ptp and standard loc ptp
+axes[0, -1].legend();
+plt.show()
+
+# %%
+ptps = np.array([np.array(ptp) for ptp in [reloc_ptps, rt]])
+
+# %%
+ptps.shape
+
+# %%
+fig, axes = vis_utils.vis_ptps([ptpt, qt], ["observed ptp", "predicted ptp"], "bg")
+plt.show()
+
+# %%
+fig, axes = vis_utils.vis_ptps([reloc_ptps, rt], ["relocated ptp", "standard ptp"], "kr")
+plt.show()
 
 # %%
 
 # %%
-plt.plot(np.log(eigs_n)[:100])
-plt.plot(np.log(eigs_y)[:100])
 
 # %%
-plt.plot(np.cumsum(eigs_n)[:100] / eigs_n.sum())
-plt.plot(np.cumsum(eigs_y)[:100] / eigs_y.sum())
-
-# %%
+# TODO pca temporal vectors, then their spatial loadings
