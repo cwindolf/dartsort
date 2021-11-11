@@ -44,6 +44,19 @@ with h5py.File("../data/wfs_locs_tiny.h5") as f:
     maxchans = f["max_channels"][good]
 
 # %%
+z = lambda a, b: range(a)
+
+# %%
+z(1, b=2)
+
+# %%
+xs, ys, zs, alphas = localization.localize_waveforms_batched(wfs, geom, maxchans=maxchans)
+z_rels = waveform_utils.relativize_z(zs, maxchans, geom)
+
+# %%
+(xs - x).max()
+
+# %%
 plt.plot(x, z_abs, "k.", ms=1);
 
 # %%
@@ -72,11 +85,11 @@ geom.shape
 # inds = rg.choice(len(good), size=16, replace=False)
 inds = np.arange(16)
 batch = torch.tensor(wfs[inds])
-bx = torch.tensor(x[inds])
-by = torch.tensor(y[inds])
-bz = torch.tensor(z[inds])
+bx = torch.tensor(xs[inds])
+by = torch.tensor(ys[inds])
+bz = torch.tensor(z_rels[inds])
 bmaxchan = torch.LongTensor(maxchans[inds])
-balpha = torch.tensor(alpha[inds])
+balpha = torch.tensor(alphas[inds])
 reloc, r, q = point_source_centering.relocate_simple(batch, geom, bmaxchan, bx, by, bz, balpha)
 
 # %%
@@ -84,6 +97,12 @@ bx, by, bz, balpha
 
 # %%
 q.shape, r.shape
+
+# %%
+fig, axes = vis_utils.vis_ptps([batch.numpy().ptp(1), q.numpy()], ["observed ptp", "predicted ptp"], "bg")
+plt.show()
+fig, axes = vis_utils.vis_ptps([reloc.numpy().ptp(1), r.numpy()], ["relocated ptp", "standard ptp"], "kr")
+plt.show()
 
 # %%
 # plt.plot(r.t())
@@ -177,17 +196,53 @@ vis_utils.labeledmosaic(
     pad=2, cbar=True)
 
 # %%
-fig, axes = plt.subplots(3, 3, figsize=(6, 6), sharex=True, sharey=True)
+fig, axes = plt.subplots(4, 4, figsize=(6, 6), sharex=True, sharey=True)
 for qq, pp, rr, ax, x_, y_, z_, alpha_, gg in zip(qt, ptpt, rt, axes.flat, xt, yt, zt_rel, alphat, "abcdefghijklmnopqrstuv"):
 #     ax.plot(pp - qq, color="k", label="difference");
     # TODO add locs to title
     ax.plot(pp, color="b", label="observed ptp");
     ax.plot(qq, color="g", label="ptp predicted from localization");
-    ax.set_title(f"{gg}: (x,y,z,α)=({x_:.2f},{y_:.2f},{z_:.2f},{alpha_:.2f})", fontsize=6)
+#     ax.set_title(f"{gg}: (x,y,z,α)=({x_:.2f},{y_:.2f},{z_:.2f},{alpha_:.2f})", fontsize=6)
+    ax.set_title(f"{gg}", fontsize=6)
 #     ax.plot(rr, color="r", label="standard location ptp");
 # TODO separate plot with post-reloc ptp and standard loc ptp
 axes[0, -1].legend();
 plt.show()
+
+# %%
+fig, axes = plt.subplots(4, 4, figsize=(6, 6), sharex=True, sharey=True)
+
+reloc_ptps = reloct.numpy().ptp(1)
+
+for qq, pp, rr, ax, x_, y_, z_, alpha_, gg in zip(qt, reloc_ptps, rt, axes.flat, xt, yt, zt_rel, alphat, "abcdefghijklmnopqrstuv"):
+#     ax.plot(pp - qq, color="k", label="difference");
+    # TODO add locs to title
+    ax.plot(pp, color="k", label="relocated ptp");
+#     ax.plot(qq, color="g", label="ptp predicted from localization");
+#     ax.set_title(f"{gg}: (x,y,z,α)=({x_:.2f},{y_:.2f},{z_:.2f},{alpha_:.2f})", fontsize=6)
+    ax.set_title(f"{gg}", fontsize=6)
+    ax.plot(rr, color="r", label="standard location ptp");
+# TODO separate plot with post-reloc ptp and standard loc ptp
+axes[0, -1].legend();
+plt.show()
+
+# %%
+ptps = np.array([np.array(ptp) for ptp in [reloc_ptps, rt]])
+
+# %%
+ptps.shape
+
+# %%
+fig, axes = vis_utils.vis_ptps([ptpt, qt], ["observed ptp", "predicted ptp"], "bg")
+plt.show()
+
+# %%
+fig, axes = vis_utils.vis_ptps([reloc_ptps, rt], ["relocated ptp", "standard ptp"], "kr")
+plt.show()
+
+# %%
+
+# %%
 
 # %%
 # TODO pca temporal vectors, then their spatial loadings

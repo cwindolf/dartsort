@@ -65,3 +65,49 @@ def labeledmosaic(xs, rowlabels, pad=0, padval=255, ax=None, cbar=True):
         ticks = [x for x in range(-50, 50, 5) if vmin <= x <= vmax]
         cbar.set_ticks(ticks)
         cbar.ax.set_yticklabels(ticks, fontsize=8)
+
+
+def vis_ptps(
+    ptps,
+    labels,
+    colors,
+    subplots_kwargs=dict(sharex=True, sharey=True, figsize=(5, 5)),
+    codes="abcdefghijklmnopqrstuvwxyz",
+):
+    ptps = np.array([np.array(ptp) for ptp in ptps])
+    K, N, C = ptps.shape
+    assert len(labels) == K == len(colors)
+    n = int(np.sqrt(N))
+
+    fig, axes = plt.subplots(n, n, **subplots_kwargs)
+    handles = {}
+    for k, (ptp, label, color) in enumerate(zip(ptps, labels, colors)):
+        for j in range(n * n):
+            ax = axes.flat[j]
+            ptp_left = ptp[j, ::2]
+            ptp_right = ptp[j, 1::2]
+            handles[k], = ax.plot(ptp_left, c=color, label=label)
+            ax.plot(ptp_right, "--", c=color)
+            ax.text(
+                0.1,
+                0.9,
+                codes[j],
+                horizontalalignment="center",
+                verticalalignment="center",
+                transform=ax.transAxes,
+            )
+
+    plt.figlegend(
+        handles=list(handles.values()),
+        labels=labels,
+        loc="upper center",
+        frameon=False,
+        fancybox=False,
+        borderpad=0,
+        borderaxespad=0,
+        ncol=len(handles),
+    )
+    plt.tight_layout(pad=0.5)
+    for ax in axes.flat:
+        ax.set_box_aspect(1.)
+    return fig, axes
