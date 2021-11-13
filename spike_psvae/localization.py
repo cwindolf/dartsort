@@ -35,7 +35,7 @@ def check_shapes(waveforms, maxchans, channel_radius, geom):
     return N, T, C
 
 
-def localize_ptp(ptp, maxchan, geom):
+def localize_ptp(ptp, maxchan, geom, jac=False):
     """Find the localization result for a single ptp vector
 
     ptp : np.array (2 * channel_radius,)
@@ -58,10 +58,24 @@ def localize_ptp(ptp, maxchan, geom):
         dists = np.sqrt((y ** 2 + sq_dxz).sum(axis=1))
         return ptp - alpha / dists
 
-    # def jacobian(loc):
+    jacobian = "2-point"
+    if jac:
+        def jacobian(loc):
+            x, y, z, alpha = loc
+            dxz = np.array(((x, z),)) - local_geom
+            sq_dxz = np.square(dxz)
+            sqdists = (y ** 2 + sq_dxz).sum(axis=1)
+            d12 = np.sqrt(sqdists)
+            inv_d32 = 1. / (sqdists * d12)
+            ddx = alpha * dxz[:, 0] * inv_d32
+            ddy = alpha * y * inv_d32
+            ddz = alpha * dxz[:, 1] * inv_d32
+            dda = -1. / d12
+            return np.stack((ddx, ddy, ddz, dda), axis=1)
 
     result = least_squares(
         residual,
+        jac=jacobian,
         x0=[xcom, Y0, zcom, ALPHA0],
         bounds=BOUNDS,
     )
@@ -78,6 +92,7 @@ def localize_waveforms(
     maxchans=None,
     channel_radius=10,
     n_workers=1,
+    jac=False,
     _not_helper=True,
 ):
     """Localize a bunch of waveforms
@@ -131,7 +146,7 @@ def localize_waveforms(
     with Parallel(n_workers) as pool:
         for n, (x, y, z, alpha) in enumerate(
             pool(
-                delayed(localize_ptp)(ptp, maxchan, geom)
+                delayed(localize_ptp)(ptp, maxchan, geom, jac=jac)
                 for ptp, maxchan in xqdm(
                     zip(ptps, maxchans), total=N, desc="lsq"
                 )
@@ -151,6 +166,7 @@ def localize_waveforms_batched(
     maxchans=None,
     channel_radius=10,
     n_workers=1,
+    jac=False,
     batch_size=128,
 ):
     """A helper for running the above on hdf5 datasets or similar"""
@@ -177,6 +193,7 @@ def localize_waveforms_batched(
                     geom,
                     maxchans=maxchan_batch(start, end),
                     channel_radius=channel_radius,
+                    jac=jac,
                     _not_helper=False,
                 )
                 for start, end in tqdm(

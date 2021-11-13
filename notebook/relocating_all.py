@@ -19,7 +19,7 @@
 # %%
 import h5py
 import numpy as np
-from spike_psvae import vis_utils, point_source_centering
+from spike_psvae import vis_utils, point_source_centering, localization, waveform_utils
 import torch
 import matplotlib.pyplot as plt
 from scipy import linalg
@@ -28,26 +28,46 @@ from scipy import linalg
 plt.rc("figure", dpi=200)
 
 # %%
-with h5py.File("../data/wfs_locs.h5") as f:
-    y = f["y"][:]
-    maxchans = f["max_channels"][:]
-    good = np.flatnonzero((y >= 1) & (maxchans > 10))[:10000]
-    print(len(good))
-    y = y[good]
-    maxchans = maxchans[good]
-    wfs = f["denoised_waveforms"][good]
-    x = f["x"][good]
-    z = f["z_rel"][good]
-    z_abs = f["z"][good]
-    alpha = f["alpha"][good]
-    max_ptp = f["max_ptp"][good]
+f = h5py.File("../data/wfs_locs.h5", "r")
+maxchans = f["max_channels"][:]
+y = f["y"][:]
+maxchans = maxchans[:]
+wfs = f["denoised_waveforms"]
+x = f["x"][:]
+z = f["z_rel"][:]
+z_abs = f["z"][:]
+alpha = f["alpha"][:]
+max_ptp = f["max_ptp"][:]
+geom = f["geom"][:]
 
 
 # %%
-plt.plot(x, z_abs, "k.", ms=1);
+del f
 
 # %%
-plt.hist(y, bins=128);
+xs, ys, zs, alphas = localization.localize_waveforms_batched(wfs, geom, maxchans=maxchans, batch_size=1024, n_workers=8, jac=True)
+
+# %%
+
+# %%
+# zcom
+plt.plot(xs, zs, "k.", ms=1);
+
+# %%
+# 0
+
+# %%
+# jac
+plt.plot(xs, zs, "k.", ms=1, label="mine");
+plt.plot(x, z_abs, "b.", ms=1, label="yours");
+
+# %%
+# orig
+plt.plot(xs, zs, "k.", ms=1, label="mine");
+plt.plot(x, z_abs, "b.", ms=1, label="yours");
+
+# %%
+# plt.hist(y, bins=128);
 plt.axvline(15, color="r");
 
 # %%
