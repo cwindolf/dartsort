@@ -6,6 +6,7 @@ from torch.utils.data import Dataset, Sampler
 
 class ContiguousRandomBatchSampler(Sampler):
     def __init__(self, data_source, batch_size):
+        # TODO this is copied code, not written to be reproducible yet.
         seed = int(torch.empty((), dtype=torch.int64).random_().item())
         self.N = len(data_source)
         self.batch_size = batch_size
@@ -38,4 +39,4 @@ class SpikeHDF5Dataset(Dataset):
         return self.len
 
     def __getitem__(self, idx):
-        return (torch.tensor(self.x[idx], dtype=torch.float), self.ys[idx])
+        return torch.tensor(self.x[idx], dtype=torch.float), self.ys[idx]
