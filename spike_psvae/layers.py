@@ -1,7 +1,19 @@
 import math
-
 import torch
 from torch import nn
+from typing import Tuple, Sequence
+
+
+class Permute(nn.Module):
+    __constants__ = ["dims"]
+    dims: Tuple[int]
+
+    def __init__(self, dims: Sequence[int]) -> None:
+        self.dims = tuple(dims)
+
+    def forward(self, input: torch.Tensor) -> torch.Tensor:
+        return torch.permute(input, self.dims)
+
 
 # modified from github.com/pytorch/pytorch/blob/master/torch/nn/modules/linear.py#L44-L48  # noqa
 # see also https://github.com/themattinthehatt/behavenet/blob/1cb36a655b78307efecca18d6cd9632566bc9308/behavenet/models/base.py#L70  # noqa

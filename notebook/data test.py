@@ -123,6 +123,9 @@ with h5py.File("/mnt/3TB/charlie/features/wfs_locs.h5", "w") as h5:
 good_times.shape[0]
 
 # %%
+glob.glob(f"{wfs}/wfs_batch_*.npy")
+
+# %%
 with h5py.File("/mnt/3TB/charlie/features/wfs_locs.h5", "r+") as h5:
     if "denoised_waveforms" in h5:
         del h5["denoised_waveforms"]
