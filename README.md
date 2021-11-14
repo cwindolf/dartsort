@@ -26,4 +26,4 @@ JUPYTERLAB_WORKSPACES_DIR=.jupyter/lab/workspaces jupyter lab --no-browser --ip=
  - Test localization gives same result
  - Tensor PCA for recentered waveforms
  - Train conv VAEs
- - More consistent geom?
+ - More consistent geom? 18/22 channel version? Should not matter for now.
