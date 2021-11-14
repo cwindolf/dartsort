@@ -3,7 +3,7 @@ import numpy as np
 from scipy.optimize import least_squares
 from tqdm.auto import trange, tqdm
 
-from .waveform_utils import get_local_geom
+from .waveform_utils import get_local_geom, get_local_chans
 
 # (x_low, y_low, z_low, alpha_low), (x_high, y_high, z_high, alpha_high)
 BOUNDS = (-100, 0, -100, 0), (132, 250, 100, 10000)
@@ -35,7 +35,7 @@ def check_shapes(waveforms, maxchans, channel_radius, geom):
     return N, T, C
 
 
-def localize_ptp(ptp, maxchan, geom):
+def localize_ptp(ptp, maxchan, geom, jac=False):
     """Find the localization result for a single ptp vector
 
     ptp : np.array (2 * channel_radius,)
@@ -45,7 +45,7 @@ def localize_ptp(ptp, maxchan, geom):
     channel_radius = ptp.shape[0] // 2
     # local_geom is 2*channel_radius, 2
     local_geom, z_maxchan = get_local_geom(
-        geom, maxchan, channel_radius, return_z_maxchan=True
+        geom, maxchan, channel_radius, ptp, return_z_maxchan=True
     )
 
     # initialize x, z with CoM
@@ -58,10 +58,24 @@ def localize_ptp(ptp, maxchan, geom):
         dists = np.sqrt((y ** 2 + sq_dxz).sum(axis=1))
         return ptp - alpha / dists
 
-    # def jacobian(loc):
+    jacobian = "2-point"
+    if jac:
+        def jacobian(loc):
+            x, y, z, alpha = loc
+            dxz = np.array(((x, z),)) - local_geom
+            sq_dxz = np.square(dxz)
+            sqdists = (y ** 2 + sq_dxz).sum(axis=1)
+            d12 = np.sqrt(sqdists)
+            inv_d32 = 1. / (sqdists * d12)
+            ddx = alpha * dxz[:, 0] * inv_d32
+            ddy = alpha * y * inv_d32
+            ddz = alpha * dxz[:, 1] * inv_d32
+            dda = -1. / d12
+            return np.stack((ddx, ddy, ddz, dda), axis=1)
 
     result = least_squares(
         residual,
+        jac=jacobian,
         x0=[xcom, Y0, zcom, ALPHA0],
         bounds=BOUNDS,
     )
@@ -78,6 +92,7 @@ def localize_waveforms(
     maxchans=None,
     channel_radius=10,
     n_workers=1,
+    jac=False,
     _not_helper=True,
 ):
     """Localize a bunch of waveforms
@@ -112,14 +127,7 @@ def localize_waveforms(
 
         ptps = np.empty((N, 2 * channel_radius), dtype=waveforms.dtype)
         for n in xrange(N, desc="extracting channels"):
-            low = maxchans[n] - channel_radius
-            high = maxchans[n] + channel_radius
-            if low < 0:
-                low = 0
-                high = 2 * channel_radius
-            if high > C:
-                high = C
-                low = C - 2 * channel_radius
+            low, high = get_local_chans(geom, maxchans[n], channel_radius, ptps_full[n])
             ptps[n] = ptps_full[n, low:high]
         del ptps_full
 
@@ -131,7 +139,7 @@ def localize_waveforms(
     with Parallel(n_workers) as pool:
         for n, (x, y, z, alpha) in enumerate(
             pool(
-                delayed(localize_ptp)(ptp, maxchan, geom)
+                delayed(localize_ptp)(ptp, maxchan, geom, jac=jac)
                 for ptp, maxchan in xqdm(
                     zip(ptps, maxchans), total=N, desc="lsq"
                 )
@@ -151,6 +159,7 @@ def localize_waveforms_batched(
     maxchans=None,
     channel_radius=10,
     n_workers=1,
+    jac=False,
     batch_size=128,
 ):
     """A helper for running the above on hdf5 datasets or similar"""
@@ -177,6 +186,7 @@ def localize_waveforms_batched(
                     geom,
                     maxchans=maxchan_batch(start, end),
                     channel_radius=channel_radius,
+                    jac=jac,
                     _not_helper=False,
                 )
                 for start, end in tqdm(

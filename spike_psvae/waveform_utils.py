@@ -3,27 +3,55 @@ import numpy as np
 
 def relativize_z(z_abs, maxchans, geom):
     """Take absolute z coords -> relative to max channel z."""
-    # z_rels = np.empty_like(z_abs)
-    # for j, (z, mc) in enumerate(zip(z_abs, maxchans)):
-    #     z_rels[j] = z - geom[mc, 1]
     return z_abs - geom[maxchans.astype(int), 1]
 
 
-def get_local_geom(geom, maxchan, channel_radius, return_z_maxchan=False):
+def get_local_chans(geom, maxchan, channel_radius, ptp):
+    """Gets indices of channels around the maxchan
     """
-    Gets `2 * channel_radius` chans near maxchan. Deals with the boundary.
-    """
-    # Deal with the boundary
+    G, d = geom.shape
+    assert d == 2
+    assert ptp.ndim == 1
+    C = ptp.shape[0]
+    
+    # Deal with edge cases
     low = maxchan - channel_radius
     high = maxchan + channel_radius
     if low < 0:
         low = 0
         high = 2 * channel_radius
+        return low, high
     if high > geom.shape[0]:
         high = geom.shape[0]
         low = geom.shape[0] - 2 * channel_radius
+        return low, high
+    
+    # -- See if we are going "up" or "down"
+    # how to compute depends on ptp shape
+    if C == G:
+        # here we can use the original logic
+        up = ptp[maxchan + 2] > ptp[maxchan - 2]
+    elif C == 2 * channel_radius:
+        # here we need to figure things out...
+        local_maxchan = ptp.argmax()
+        # local_maxchan should not push this out of bounds...
+        up = ptp[local_maxchan + 2] > ptp[local_maxchan - 2]
+    else:
+        raise ValueError(
+            f"Not sure how to get local geom when ptp has {C} channels"
+        )
+    
+    odd = maxchan % 2
+    low += 2 * up - odd
+    high += 2 * up - odd
+    
+    return low, high
 
-    # Extract geometry and relativize z around the max channel
+
+def get_local_geom(geom, maxchan, channel_radius, ptp, return_z_maxchan=False):
+    """Gets geometry of `2 * channel_radius` chans near maxchan
+    """
+    low, high = get_local_chans(geom, maxchan, channel_radius, ptp)
     local_geom = geom[low:high].copy()
     z_maxchan = geom[maxchan, 1]
     local_geom[:, 1] -= z_maxchan
