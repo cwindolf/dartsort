@@ -3,7 +3,7 @@ import numpy as np
 from scipy.optimize import least_squares
 from tqdm.auto import trange, tqdm
 
-from .waveform_utils import get_local_geom
+from .waveform_utils import get_local_geom, get_local_chans
 
 # (x_low, y_low, z_low, alpha_low), (x_high, y_high, z_high, alpha_high)
 BOUNDS = (-100, 0, -100, 0), (132, 250, 100, 10000)
@@ -45,7 +45,7 @@ def localize_ptp(ptp, maxchan, geom, jac=False):
     channel_radius = ptp.shape[0] // 2
     # local_geom is 2*channel_radius, 2
     local_geom, z_maxchan = get_local_geom(
-        geom, maxchan, channel_radius, return_z_maxchan=True
+        geom, maxchan, channel_radius, ptp, return_z_maxchan=True
     )
 
     # initialize x, z with CoM
@@ -127,14 +127,7 @@ def localize_waveforms(
 
         ptps = np.empty((N, 2 * channel_radius), dtype=waveforms.dtype)
         for n in xrange(N, desc="extracting channels"):
-            low = maxchans[n] - channel_radius
-            high = maxchans[n] + channel_radius
-            if low < 0:
-                low = 0
-                high = 2 * channel_radius
-            if high > C:
-                high = C
-                low = C - 2 * channel_radius
+            low, high = get_local_chans(geom, maxchans[n], channel_radius, ptps_full[n])
             ptps[n] = ptps_full[n, low:high]
         del ptps_full
 
