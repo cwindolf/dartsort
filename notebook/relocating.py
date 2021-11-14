@@ -50,7 +50,7 @@ z = lambda a, b: range(a)
 z(1, b=2)
 
 # %%
-xs, ys, zs, alphas = localization.localize_waveforms_batched(wfs, geom, maxchans=maxchans)
+xs, ys, zs, alphas = localization.localize_waveforms(wfs, geom, maxchans=maxchans)
 z_rels = waveform_utils.relativize_z(zs, maxchans, geom)
 
 # %%
