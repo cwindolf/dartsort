@@ -29,7 +29,7 @@ def linear_encoder(in_dim, hidden_dims, n_latents, batchnorm=True):
         *[
             linear_module(a, b, batchnorm=batchnorm)
             for a, b in zip(adims, bdims)
-        ]
+        ],
     )
 
 
@@ -42,7 +42,7 @@ def linear_decoder(n_latents, hidden_dims, out_shape, batchnorm=True):
             linear_module(a, b, batchnorm=batchnorm)
             for a, b in zip(adims, bdims)
         ],
-        nn.Unflatten(1, out_shape)
+        nn.Unflatten(1, out_shape),
     )
 
 
@@ -52,11 +52,11 @@ def linear_decoder(n_latents, hidden_dims, out_shape, batchnorm=True):
 # channels). this will go into a linear layer to get to the latent shape.
 
 
-def convolutional_module(in_channels, out_channels, kernel_size, batchnorm=True):
-    conv = nn.Conv2d(
-        in_channels, out_channels, kernel_size, padding="valid"
-    )
-    
+def convolutional_module(
+    in_channels, out_channels, kernel_size, batchnorm=True
+):
+    conv = nn.Conv2d(in_channels, out_channels, kernel_size, padding="valid")
+
     if batchnorm:
         return nn.Sequential(
             conv,
@@ -67,12 +67,14 @@ def convolutional_module(in_channels, out_channels, kernel_size, batchnorm=True)
         return nn.Sequential(conv, nn.LeakyReLU())
 
 
-def convtranspose_module(in_channels, out_channels, kernel_size, batchnorm=True):
+def convtranspose_module(
+    in_channels, out_channels, kernel_size, batchnorm=True
+):
     # this padding corresponds to valid convs on the way in
     deconv = nn.ConvTranspose2d(
         in_channels, out_channels, kernel_size, padding=kernel_size // 2
     )
-    
+
     if batchnorm:
         return nn.Sequential(
             deconv,
@@ -94,7 +96,7 @@ def convolutional_encoder(
     T, C = in_shape
     assert C % 2 == 0
     channel_radius = C // 2
-    
+
     # -- more shape logic for the hidden layers
     in_channels = [2, *channels]
     out_channels = channels[:-1]
@@ -111,9 +113,9 @@ def convolutional_encoder(
         Permute(0, 3, 1, 2),
         # conv modules
         *[
-            convolutional_module(inc, outc, k, batchnorm=batchnorm)
-            for inc, outc in zip(in_channels, out_channels, kernel_sizes)
-        ]
+            convolutional_module(inc, outc, ks, batchnorm=batchnorm)
+            for inc, outc, ks in zip(in_channels, out_channels, kernel_sizes)
+        ],
         # time collapse conv?
         # flatten and linear module for latents
         nn.Flatten(),
@@ -121,6 +123,7 @@ def convolutional_encoder(
             last_h * last_w * last_c, n_latents, batchnorm=batchnorm
         ),
     )
+
 
 def convolutional_decoder(
     n_latents, channels, kernel_sizes, out_shape, batchnorm=True
@@ -130,7 +133,7 @@ def convolutional_decoder(
     T, C = out_shape
     assert C % 2 == 0
     channel_radius = C // 2
-    
+
     first_h = T - sum(k - 1 for k in kernel_sizes)
     first_w = channel_radius - sum(k - 1 for k in kernel_sizes)
     first_c = channels[0]
@@ -138,7 +141,7 @@ def convolutional_decoder(
 
     in_channels = channels
     out_channels = [*channels[:-1], 2]
-    
+
     return nn.Sequential(
         linear_module(
             n_latents, first_h * first_w * first_c, batchnorm=batchnorm
@@ -146,8 +149,8 @@ def convolutional_decoder(
         nn.Unflatten(1, (first_c, first_h, first_w)),
         # deconv modules
         *[
-            convtranspose_module(inc, outc, k, batchnorm=batchnorm)
-            for inc, outc in zip(in_channels, out_channels, kernel_sizes)
+            convtranspose_module(inc, outc, ks, batchnorm=batchnorm)
+            for inc, outc, ks in zip(in_channels, out_channels, kernel_sizes)
         ],
         Permute(0, 2, 3, 1),
         nn.Flatten(2),

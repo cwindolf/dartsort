@@ -7,13 +7,12 @@ def relativize_z(z_abs, maxchans, geom):
 
 
 def get_local_chans(geom, maxchan, channel_radius, ptp):
-    """Gets indices of channels around the maxchan
-    """
+    """Gets indices of channels around the maxchan"""
     G, d = geom.shape
     assert d == 2
     assert ptp.ndim == 1
     C = ptp.shape[0]
-    
+
     # Deal with edge cases
     low = maxchan - channel_radius
     high = maxchan + channel_radius
@@ -25,7 +24,7 @@ def get_local_chans(geom, maxchan, channel_radius, ptp):
         high = geom.shape[0]
         low = geom.shape[0] - 2 * channel_radius
         return low, high
-    
+
     # -- See if we are going "up" or "down"
     # how to compute depends on ptp shape
     if C == G:
@@ -40,17 +39,16 @@ def get_local_chans(geom, maxchan, channel_radius, ptp):
         raise ValueError(
             f"Not sure how to get local geom when ptp has {C} channels"
         )
-    
+
     odd = maxchan % 2
     low += 2 * up - odd
     high += 2 * up - odd
-    
+
     return low, high
 
 
 def get_local_geom(geom, maxchan, channel_radius, ptp, return_z_maxchan=False):
-    """Gets geometry of `2 * channel_radius` chans near maxchan
-    """
+    """Gets geometry of `2 * channel_radius` chans near maxchan"""
     low, high = get_local_chans(geom, maxchan, channel_radius, ptp)
     local_geom = geom[low:high].copy()
     z_maxchan = geom[maxchan, 1]
@@ -62,8 +60,7 @@ def get_local_geom(geom, maxchan, channel_radius, ptp, return_z_maxchan=False):
 
 
 def get_local_waveforms(waveforms, channel_radius, maxchans=None):
-    """NxTxCfull -> NxTx(2*channel radius). So, takes a batch.
-    """
+    """NxTxCfull -> NxTx(2*channel radius). So, takes a batch."""
     N, T, Cfull = waveforms.shape
 
     compute_maxchans = maxchans is None

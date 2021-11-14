@@ -60,17 +60,18 @@ def localize_ptp(ptp, maxchan, geom, jac=False):
 
     jacobian = "2-point"
     if jac:
+
         def jacobian(loc):
             x, y, z, alpha = loc
             dxz = np.array(((x, z),)) - local_geom
             sq_dxz = np.square(dxz)
             sqdists = (y ** 2 + sq_dxz).sum(axis=1)
             d12 = np.sqrt(sqdists)
-            inv_d32 = 1. / (sqdists * d12)
+            inv_d32 = 1.0 / (sqdists * d12)
             ddx = alpha * dxz[:, 0] * inv_d32
             ddy = alpha * y * inv_d32
             ddz = alpha * dxz[:, 1] * inv_d32
-            dda = -1. / d12
+            dda = -1.0 / d12
             return np.stack((ddx, ddy, ddz, dda), axis=1)
 
     result = least_squares(
@@ -127,7 +128,9 @@ def localize_waveforms(
 
         ptps = np.empty((N, 2 * channel_radius), dtype=waveforms.dtype)
         for n in xrange(N, desc="extracting channels"):
-            low, high = get_local_chans(geom, maxchans[n], channel_radius, ptps_full[n])
+            low, high = get_local_chans(
+                geom, maxchans[n], channel_radius, ptps_full[n]
+            )
             ptps[n] = ptps_full[n, low:high]
         del ptps_full
 
