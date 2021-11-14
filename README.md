@@ -20,3 +20,10 @@ Then serve:
 mkdir -p .jupter/lab/workspaces
 JUPYTERLAB_WORKSPACES_DIR=.jupyter/lab/workspaces jupyter lab --no-browser --ip=0.0.0.0
 ```
+
+### To do:
+
+ - Test localization gives same result
+ - Tensor PCA for recentered waveforms
+ - Train conv VAEs
+ - More consistent geom?
