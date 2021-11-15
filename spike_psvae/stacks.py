@@ -101,8 +101,8 @@ def convolutional_encoder(
     channel_radius = C // 2
 
     # -- more shape logic for the hidden layers
-    in_channels = [2, *channels]
-    out_channels = channels[:-1]
+    in_channels = [2, *channels[:-1]]
+    out_channels = channels[1:]
     # output shape of last layer under valid padding and unit stride
     last_h = T - sum(k - 1 for k in kernel_sizes)
     last_w = channel_radius - sum(k - 1 for k in kernel_sizes)
@@ -142,8 +142,8 @@ def convolutional_decoder(
     first_c = channels[0]
     assert first_w > 0  # you have too many layers for your kernel size
 
-    in_channels = channels
-    out_channels = [*channels[:-1], 2]
+    in_channels = channels[:-1]
+    out_channels = [*channels[1:], 2]
 
     return nn.Sequential(
         linear_module(
