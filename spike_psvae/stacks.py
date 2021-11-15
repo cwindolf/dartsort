@@ -70,9 +70,8 @@ def convolutional_module(
 def convtranspose_module(
     in_channels, out_channels, kernel_size, batchnorm=True
 ):
-    # this padding corresponds to valid convs on the way in
     deconv = nn.ConvTranspose2d(
-        in_channels, out_channels, kernel_size, padding=kernel_size // 2
+        in_channels, out_channels, kernel_size
     )
 
     if batchnorm:
@@ -98,13 +97,14 @@ def convolutional_encoder(
     channel_radius = C // 2
 
     # -- more shape logic for the hidden layers
-    in_channels = [2, *channels]
-    out_channels = channels[:-1]
+    in_channels = [2, *channels[:-1]]
+    out_channels = channels
     # output shape of last layer under valid padding and unit stride
     last_h = T - sum(k - 1 for k in kernel_sizes)
     last_w = channel_radius - sum(k - 1 for k in kernel_sizes)
     last_c = out_channels[-1]
     assert last_w > 0  # you have too many layers for your kernel size
+    print("encoder", last_c, last_h, last_w)
 
     return nn.Sequential(
         # BTC -> BTchannel_radius2
@@ -128,6 +128,7 @@ def convolutional_encoder(
 def convolutional_decoder(
     n_latents, channels, kernel_sizes, out_shape, batchnorm=True
 ):
+    print("cd", channels, kernel_sizes, channels[0])
     # -- "transposed" shape logic to the above
     assert len(out_shape) == 2
     T, C = out_shape
@@ -140,7 +141,7 @@ def convolutional_decoder(
     assert first_w > 0  # you have too many layers for your kernel size
 
     in_channels = channels
-    out_channels = [*channels[:-1], 2]
+    out_channels = [*channels[1:], 2]
 
     return nn.Sequential(
         linear_module(
