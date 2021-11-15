@@ -33,6 +33,7 @@ ap.add_argument("--unsupervised_latents", type=int, default=10, required=False)
 ap.add_argument("--log_interval", type=int, default=1000, required=False)
 ap.add_argument("--batch_size", type=int, default=8, required=False)
 ap.add_argument("--run_name", type=str)
+ap.add_argument("--batchnorm", type=bool, default=True, required=False)
 ap.add_argument("--num_data_workers", default=0, type=int)
 
 args = ap.parse_args()
@@ -52,12 +53,13 @@ print(device)
 
 
 # vanilla encoders and decoders
-n_latents = len(args.supervised_keys) + args.unsupervised_latents
+supervised_latents = len(args.supervised_keys)
+n_latents = supervised_latents + args.unsupervised_latents
 encoder, decoder = stacks.netspec(args.netspec, in_shape)
 
 # %%
 psvae = PSVAE(
-    encoder, decoder, len(args.supervised_keys), args.unsupervised_latents
+    encoder, decoder, supervised_latents, args.unsupervised_latents
 )
 optimizer = torch.optim.Adam(psvae.parameters(), lr=1e-3)
 

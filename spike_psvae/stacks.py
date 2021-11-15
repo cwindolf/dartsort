@@ -163,25 +163,37 @@ def convolutional_decoder(
 # -- command line arg helper
 
 
-def netspec(spec, in_shape, final_hidden_dim):
+def netspec(spec, in_shape, final_hidden_dim, batchnorm):
     in_dim = np.prod(in_shape)
 
     if spec.startswith("linear"):
         hidden_dims = list(map(int, spec.split(":")[1]))
         final_hidden_dim = int(spec.split(":")[2])
 
-        encoder = linear_encoder(in_dim, hidden_dims, final_hidden_dim)
-        decoder = linear_decoder(final_hidden_dim, hidden_dims[::-1], in_shape)
+        encoder = linear_encoder(
+            in_dim, hidden_dims, final_hidden_dim, batchnorm=batchnorm
+        )
+        decoder = linear_decoder(
+            final_hidden_dim, hidden_dims[::-1], in_shape, batchnorm=batchnorm
+        )
     elif spec.startswith("conv"):
         channels = list(map(int, spec.split(":")[1]))
         kernel_sizes = list(map(int, spec.split(":")[2]))
         final_hidden_dim = int(spec.split(":")[3])
 
         encoder = convolutional_encoder(
-            in_shape, channels, kernel_sizes, final_hidden_dim
+            in_shape,
+            channels,
+            kernel_sizes,
+            final_hidden_dim,
+            batchnorm=batchnorm,
         )
         decoder = convolutional_decoder(
-            final_hidden_dim, channels[::-1], kernel_sizes[::-1], in_shape
+            final_hidden_dim,
+            channels[::-1],
+            kernel_sizes[::-1],
+            in_shape,
+            batchnorm=batchnorm,
         )
 
     return encoder, decoder
