@@ -24,6 +24,8 @@ JUPYTERLAB_WORKSPACES_DIR=.jupyter/lab/workspaces jupyter lab --no-browser --ip=
 ### To do:
 
  - Test localization gives same result
+    - Similar but not the same, same problems with y. Maybe here is matching ptps a little better.
  - Tensor PCA for recentered waveforms
  - Train conv VAEs
  - More consistent geom? 18/22 channel version? Should not matter for now.
+ - 40% of y are <0.1, trying out excluding those from net training
