@@ -25,10 +25,46 @@ from tqdm.auto import trange, tqdm
 # %ll -h /mnt/3TB/charlie/features
 
 # %%
-# %ll -h /mnt/3TB/charlie/features/denoised_wfs_ps_vae | head -5
+# %ll -h /mnt/3TB/charlie/features/denoised_wfs_ps_vae | head
 
 # %%
-# %ll /mnt/3TB/charlie/features/position_results_files_charlie_merged
+# %ll /mnt/3TB/charlie/features/latest_positions_charlie
+
+# %%
+with h5py.File("../data/wfs_locs.h5", "r") as orig:
+    print(orig.keys())
+    geom = orig["geom"]
+
+# %%
+pos = "/mnt/3TB/charlie/features/latest_positions_charlie"
+with h5py.File("../data/wfs_locs_b.h5", "w") as h5:
+    for f in glob.glob(f"{pos}/*.npy"):
+        dset = f.split("/")[-1].split(".npy")[0]
+        print(dset)
+        x = np.load(f)
+        print(x.shape)
+        print(x[:10])
+        h5.create_dataset(dset, data=x)
+
+# %%
+wfs = "/mnt/3TB/charlie/features/denoised_wfs_ps_vae"
+
+# %%
+x.shape[0], np.load(f"{wfs}/wfs_batch_000004.npy").shape
+
+# %%
+with h5py.File("../data/wfs_locs_b.h5", "r+") as h5:
+    dwf = h5.create_dataset("denoised_waveforms", shape=(x.shape[0], 121, 20), dtype=np.float64)
+    start_ix = 0
+    for f in tqdm(sorted(glob.glob(f"{wfs}/wfs_batch_*.npy"))):
+        batch = np.load(f)
+        b, _, __ = batch.shape
+        dwf[start_ix:start_ix + b] = batch
+        start_ix += b
+
+# %%
+
+# %%
 
 # %%
 pos = "/mnt/3TB/charlie/features/position_results_files_charlie_merged"
@@ -121,9 +157,6 @@ with h5py.File("/mnt/3TB/charlie/features/wfs_locs.h5", "w") as h5:
 
 # %%
 good_times.shape[0]
-
-# %%
-glob.glob(f"{wfs}/wfs_batch_*.npy")
 
 # %%
 with h5py.File("/mnt/3TB/charlie/features/wfs_locs.h5", "r+") as h5:

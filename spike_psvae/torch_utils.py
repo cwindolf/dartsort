@@ -24,7 +24,7 @@ class ContiguousRandomBatchSampler(Sampler):
 
 
 class SpikeHDF5Dataset(Dataset):
-    def __init__(self, h5_path, x, ys):
+    def __init__(self, h5_path, x, ys, y_min=None):
         self.h5 = h5py.File(h5_path, "r")
         self.x = self.h5[x]
         self.ys = torch.tensor(
@@ -35,8 +35,16 @@ class SpikeHDF5Dataset(Dataset):
         )
         self.len = len(self.ys)
 
+        self.y_min = y_min
+        if y_min is not None and "y" in ys:
+            self.good_inds = np.flatnonzero(self.h5["y"][:])
+            self.len = len(self.good_inds)
+
     def __len__(self):
         return self.len
 
     def __getitem__(self, idx):
+        if self.y_min is not None:
+            idx = self.good_inds[idx]
+
         return torch.tensor(self.x[idx], dtype=torch.float), self.ys[idx]
