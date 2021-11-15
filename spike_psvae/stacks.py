@@ -9,21 +9,24 @@ from .layers import Permute
 
 def linear_module(in_dim, out_dim, batchnorm=True):
     if batchnorm:
-        return nn.Sequential(
+        seq = nn.Sequential(
             nn.Linear(in_dim, out_dim),
             nn.BatchNorm1d(out_dim),
             nn.LeakyReLU(),
         )
     else:
-        return nn.Sequential(
+        seq = nn.Sequential(
             nn.Linear(in_dim, out_dim),
             nn.LeakyReLU(),
         )
+    seq.output_dim = out_dim
+
+    return seq
 
 
-def linear_encoder(in_dim, hidden_dims, n_latents, batchnorm=True):
+def linear_encoder(in_dim, hidden_dims, final_hidden_dim, batchnorm=True):
     adims = [in_dim, *hidden_dims]
-    bdims = [*hidden_dims, n_latents]
+    bdims = [*hidden_dims, final_hidden_dim]
     return nn.Sequential(
         nn.Flatten(),
         *[
@@ -33,9 +36,9 @@ def linear_encoder(in_dim, hidden_dims, n_latents, batchnorm=True):
     )
 
 
-def linear_decoder(n_latents, hidden_dims, out_shape, batchnorm=True):
+def linear_decoder(final_hidden_dim, hidden_dims, out_shape, batchnorm=True):
     out_dim = np.prod(out_shape)
-    adims = [n_latents, *hidden_dims]
+    adims = [final_hidden_dim, *hidden_dims]
     bdims = [*hidden_dims, out_dim]
     return nn.Sequential(
         *[
@@ -86,7 +89,7 @@ def convtranspose_module(
 
 
 def convolutional_encoder(
-    in_shape, channels, kernel_sizes, n_latents, batchnorm=True
+    in_shape, channels, kernel_sizes, final_hidden_dim, batchnorm=True
 ):
     # -- input shape logic
     # data should come in as T x channels. But, our probes have
@@ -120,13 +123,13 @@ def convolutional_encoder(
         # flatten and linear module for latents
         nn.Flatten(),
         linear_module(
-            last_h * last_w * last_c, n_latents, batchnorm=batchnorm
+            last_h * last_w * last_c, final_hidden_dim, batchnorm=batchnorm
         ),
     )
 
 
 def convolutional_decoder(
-    n_latents, channels, kernel_sizes, out_shape, batchnorm=True
+    final_hidden_dim, channels, kernel_sizes, out_shape, batchnorm=True
 ):
     # -- "transposed" shape logic to the above
     assert len(out_shape) == 2
@@ -144,7 +147,7 @@ def convolutional_decoder(
 
     return nn.Sequential(
         linear_module(
-            n_latents, first_h * first_w * first_c, batchnorm=batchnorm
+            final_hidden_dim, first_h * first_w * first_c, batchnorm=batchnorm
         ),
         nn.Unflatten(1, (first_c, first_h, first_w)),
         # deconv modules
@@ -160,21 +163,25 @@ def convolutional_decoder(
 # -- command line arg helper
 
 
-def netspec(spec, in_shape, n_latents):
+def netspec(spec, in_shape, final_hidden_dim):
     in_dim = np.prod(in_shape)
 
     if spec.startswith("linear"):
         hidden_dims = list(map(int, spec.split(":")[1]))
-        encoder = linear_encoder(in_dim, hidden_dims, n_latents)
-        decoder = linear_decoder(n_latents, hidden_dims[::-1], in_shape)
+        final_hidden_dim = int(spec.split(":")[2])
+
+        encoder = linear_encoder(in_dim, hidden_dims, final_hidden_dim)
+        decoder = linear_decoder(final_hidden_dim, hidden_dims[::-1], in_shape)
     elif spec.startswith("conv"):
         channels = list(map(int, spec.split(":")[1]))
         kernel_sizes = list(map(int, spec.split(":")[2]))
+        final_hidden_dim = int(spec.split(":")[3])
+
         encoder = convolutional_encoder(
-            in_shape, channels, kernel_sizes, n_latents
+            in_shape, channels, kernel_sizes, final_hidden_dim
         )
         decoder = convolutional_decoder(
-            n_latents, channels[::-1], kernel_sizes[::-1], in_shape
+            final_hidden_dim, channels[::-1], kernel_sizes[::-1], in_shape
         )
 
     return encoder, decoder

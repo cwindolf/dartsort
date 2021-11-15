@@ -26,7 +26,7 @@ ap.add_argument(
 ap.add_argument("--y_min", default=None, required=False, type=float)
 ap.add_argument(
     "--netspec",
-    default="linear:512,512",
+    default="linear:512,512:256",
     required=False,
 )
 ap.add_argument("--unsupervised_latents", type=int, default=10, required=False)
@@ -53,7 +53,7 @@ print(device)
 
 # vanilla encoders and decoders
 n_latents = len(args.supervised_keys) + args.unsupervised_latents
-encoder, decoder = stacks.netspec(args.netspec, in_shape, n_latents)
+encoder, decoder = stacks.netspec(args.netspec, in_shape)
 
 # %%
 psvae = PSVAE(
