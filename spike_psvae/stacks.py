@@ -181,7 +181,7 @@ def convb_encoder(
     channel_radius = C // 2
 
     # -- more shape logic for the hidden layers
-    in_channels = [2, *channels[:-1]]
+    in_channels = [1, *channels[:-1]]
     out_channels = channels
     # output shape of last layer under valid padding and unit stride
     last_h = T - sum(k - 1 for k in kernel_sizes)
@@ -223,7 +223,7 @@ def convb_decoder(
     print("dec", first_h, first_w, first_c, first_h * first_w * first_c)
 
     in_channels = channels
-    out_channels = [*channels[1:], 2]
+    out_channels = [*channels[1:], 1]
 
     return nn.Sequential(
         linear_module(
