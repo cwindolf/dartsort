@@ -15,7 +15,7 @@ from spike_psvae import stacks
 
 ap = argparse.ArgumentParser()
 
-ap.add_argument("--input_h5", default="data/wfs_locs.h5", required=False)
+ap.add_argument("--input_h5", default="data/wfs_locs_b.h5", required=False)
 ap.add_argument("--alpha", type=float, default=1.0, required=False)
 ap.add_argument(
     "--supervised_keys",
