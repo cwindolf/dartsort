@@ -163,7 +163,7 @@ def convolutional_decoder(
 # -- command line arg helper
 
 
-def netspec(spec, in_shape, final_hidden_dim, batchnorm):
+def netspec(spec, in_shape, batchnorm):
     in_dim = np.prod(in_shape)
 
     if spec.startswith("linear"):
