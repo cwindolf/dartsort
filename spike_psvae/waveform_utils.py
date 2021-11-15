@@ -12,6 +12,7 @@ def get_local_chans(geom, maxchan, channel_radius, ptp):
     assert d == 2
     assert ptp.ndim == 1
     C = ptp.shape[0]
+    maxchan = int(maxchan)
 
     # Deal with edge cases
     low = maxchan - channel_radius
@@ -43,7 +44,7 @@ def get_local_chans(geom, maxchan, channel_radius, ptp):
     odd = maxchan % 2
     low += 2 * up - odd
     high += 2 * up - odd
-
+    
     return low, high
 
 
@@ -51,7 +52,7 @@ def get_local_geom(geom, maxchan, channel_radius, ptp, return_z_maxchan=False):
     """Gets geometry of `2 * channel_radius` chans near maxchan"""
     low, high = get_local_chans(geom, maxchan, channel_radius, ptp)
     local_geom = geom[low:high].copy()
-    z_maxchan = geom[maxchan, 1]
+    z_maxchan = geom[int(maxchan), 1]
     local_geom[:, 1] -= z_maxchan
 
     if return_z_maxchan:

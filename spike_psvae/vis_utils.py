@@ -11,7 +11,7 @@ def mosaic(xs, pad=0, padval=255):
     assert all(x.shape == xs[0].shape for x in xs)
     nrows = len(xs)
     B, H, W = xs[0].shape
-    grid = torch.stack(xs, dim=0)  # nrowsBHW
+    grid = torch.stack(list(map(torch.as_tensor, xs)), dim=0)  # nrowsBHW
     grid -= grid.min()
     grid *= 255.0 / grid.max()
     grid = grid.to(torch.uint8)
