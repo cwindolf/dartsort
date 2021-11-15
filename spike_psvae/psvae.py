@@ -54,7 +54,8 @@ class PSVAE(nn.Module):
 
     def decode(self, z):
         # TODO might need to add an activation?
-        return self.decoder(z)
+        decoder_input = self.fc_decoder(z)
+        return self.decoder(decoder_input)
 
     def forward(self, x):
         # print("forward x.shape", x.shape)
