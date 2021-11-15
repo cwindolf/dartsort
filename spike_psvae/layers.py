@@ -8,11 +8,15 @@ class Permute(nn.Module):
     __constants__ = ["dims"]
     dims: Tuple[int]
 
-    def __init__(self, dims: Sequence[int]) -> None:
+    def __init__(self, *dims: int) -> None:
+        super(Permute, self).__init__()
         self.dims = tuple(dims)
 
     def forward(self, input: torch.Tensor) -> torch.Tensor:
         return torch.permute(input, self.dims)
+
+    def extra_repr(self) -> str:
+        return ", ".join(map(str, self.dims))
 
 
 # modified from github.com/pytorch/pytorch/blob/master/torch/nn/modules/linear.py#L44-L48  # noqa
