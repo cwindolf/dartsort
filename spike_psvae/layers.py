@@ -15,6 +15,9 @@ class Permute(nn.Module):
     def forward(self, input: torch.Tensor) -> torch.Tensor:
         return torch.permute(input, self.dims)
 
+    def extra_repr(self) -> str:
+        return ", ".join(map(str, self.dims))
+
 
 # modified from github.com/pytorch/pytorch/blob/master/torch/nn/modules/linear.py#L44-L48  # noqa
 # see also https://github.com/themattinthehatt/behavenet/blob/1cb36a655b78307efecca18d6cd9632566bc9308/behavenet/models/base.py#L70  # noqa
