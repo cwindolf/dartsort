@@ -6,7 +6,10 @@ import torch
 from torch.utils.tensorboard import SummaryWriter
 
 from spike_psvae.psvae import PSVAE
-from spike_psvae.torch_utils import SpikeHDF5Dataset, ContiguousRandomBatchSampler
+from spike_psvae.torch_utils import (
+    SpikeHDF5Dataset,
+    ContiguousRandomBatchSampler,
+)
 from spike_psvae import stacks
 
 
@@ -20,11 +23,11 @@ ap.add_argument(
     required=False,
     type=lambda x: x.split(","),
 )
+ap.add_argument("--y_min", default=None, required=False, type=float)
 ap.add_argument(
-    "--hidden_dims",
-    default=[512],
+    "--netspec",
+    default="linear:512,512",
     required=False,
-    type=lambda x: list(map(int, x.split(","))),
 )
 ap.add_argument("--unsupervised_latents", type=int, default=10, required=False)
 ap.add_argument("--log_interval", type=int, default=1000, required=False)
@@ -40,9 +43,8 @@ with h5py.File(args.input_h5, "r") as f:
     for k in f.keys():
         print(k.ljust(20), f[k].dtype, f[k].shape)
     N, in_w, in_chan = f["denoised_waveforms"].shape
-    in_shape = (in_w, in_chan)
-    in_dim = in_w * in_chan
-    print("x dim:", in_dim)
+    in_shape = in_w, in_chan
+    print("x shape:", in_shape)
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(device)
@@ -51,9 +53,7 @@ print(device)
 
 # vanilla encoders and decoders
 n_latents = len(args.supervised_keys) + args.unsupervised_latents
-print(in_dim, *args.hidden_dims, n_latents)
-encoder = stacks.linear_encoder(in_dim, args.hidden_dims, n_latents)
-decoder = stacks.linear_decoder(n_latents, args.hidden_dims[::-1], in_shape)
+encoder, decoder = stacks.netspec(args.netspec, in_shape, n_latents)
 
 # %%
 psvae = PSVAE(
@@ -70,7 +70,7 @@ dataset = SpikeHDF5Dataset(
 loader = torch.utils.data.DataLoader(
     dataset,
     num_workers=args.num_data_workers,
-    batch_sampler=ContiguousRandomBatchSampler(dataset, args.batch_size)
+    batch_sampler=ContiguousRandomBatchSampler(dataset, args.batch_size),
 )
 
 # %%
@@ -85,7 +85,6 @@ log_tic = time.time()
 for e in range(n_epochs):
     tic = time.time()
     for batch_idx, (x, y) in enumerate(loader):
-        # print(x.shape, y.shape)
         x = x.to(device)
         y = y.to(device)
 
@@ -100,14 +99,8 @@ for e in range(n_epochs):
         if not batch_idx % args.log_interval:
             gsps = args.log_interval / (time.time() - log_tic)
             print(
-                "Epoch",
-                e,
-                "batch",
-                batch_idx,
-                "loss",
-                loss.item(),
-                "global steps per sec",
-                gsps,
+                f"Epoch {e}, batch {batch_idx}. Loss {loss.item()}, "
+                f"Global steps per sec: {gsps}",
                 flush=True,
             )
 

@@ -155,3 +155,26 @@ def convolutional_decoder(
         Permute(0, 2, 3, 1),
         nn.Flatten(2),
     )
+
+
+# -- command line arg helper
+
+
+def netspec(spec, in_shape, n_latents):
+    in_dim = np.prod(in_shape)
+
+    if spec.startswith("linear"):
+        hidden_dims = list(map(int, spec.split(":")[1]))
+        encoder = linear_encoder(in_dim, hidden_dims, n_latents)
+        decoder = linear_decoder(n_latents, hidden_dims[::-1], in_shape)
+    elif spec.startswith("conv"):
+        channels = list(map(int, spec.split(":")[1]))
+        kernel_sizes = list(map(int, spec.split(":")[2]))
+        encoder = convolutional_encoder(
+            in_shape, channels, kernel_sizes, n_latents
+        )
+        decoder = convolutional_decoder(
+            n_latents, channels[::-1], kernel_sizes[::-1], in_shape
+        )
+
+    return encoder, decoder
