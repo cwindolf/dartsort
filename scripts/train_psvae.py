@@ -61,6 +61,7 @@ encoder, decoder = stacks.netspec(args.netspec, in_shape)
 psvae = PSVAE(
     encoder, decoder, supervised_latents, args.unsupervised_latents
 )
+print(psvae)
 optimizer = torch.optim.Adam(psvae.parameters(), lr=1e-3)
 
 # %%
