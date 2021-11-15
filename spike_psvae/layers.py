@@ -1,7 +1,7 @@
 import math
 import torch
 from torch import nn
-from typing import Tuple, Sequence
+from typing import Tuple
 
 
 class Permute(nn.Module):
@@ -17,6 +17,29 @@ class Permute(nn.Module):
 
     def extra_repr(self) -> str:
         return ", ".join(map(str, self.dims))
+
+
+class Squeeze(nn.Module):
+    def __init__(self) -> None:
+        super(Squeeze, self).__init__()
+
+    def forward(self, input: torch.Tensor) -> torch.Tensor:
+        return torch.squeeze(input)
+
+
+class Unsqueeze(nn.Module):
+    __constants__ = ["dim"]
+    dim: int
+
+    def __init__(self, dim: int) -> None:
+        super(Unsqueeze, self).__init__()
+        self.dim = dim
+
+    def forward(self, input: torch.Tensor) -> torch.Tensor:
+        return torch.unsqueeze(input, self.dim)
+
+    def extra_repr(self) -> str:
+        return str(self.dim)
 
 
 # modified from github.com/pytorch/pytorch/blob/master/torch/nn/modules/linear.py#L44-L48  # noqa
@@ -43,7 +66,7 @@ class DiagLinear(nn.Module):
 
     def reset_parameters(self) -> None:
         # for diagonal matrix, fan_in = 1. so, this is Kaiming.
-        nn.init.uniform_(self.weight, -1., 1.)
+        nn.init.uniform_(self.weight, -1.0, 1.0)
         if self.bias is not None:
             # maintaining this init as it is in nn.Linear
             bound = 1 / math.sqrt(self.features)

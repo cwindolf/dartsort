@@ -1,7 +1,7 @@
 import numpy as np
 from torch import nn
 
-from .layers import Permute
+from .layers import Permute, Squeeze, Unsqueeze
 
 
 # -- linear / mlp with batch normalization and leaky relu
@@ -56,9 +56,11 @@ def linear_decoder(final_hidden_dim, hidden_dims, out_shape, batchnorm=True):
 
 
 def convolutional_module(
-    in_channels, out_channels, kernel_size, batchnorm=True
+    in_channels, out_channels, kernel_size, *, stride=1, batchnorm=True
 ):
-    conv = nn.Conv2d(in_channels, out_channels, kernel_size, padding="valid")
+    conv = nn.Conv2d(
+        in_channels, out_channels, kernel_size, stride=stride, padding="valid"
+    )
 
     if batchnorm:
         return nn.Sequential(
@@ -71,11 +73,11 @@ def convolutional_module(
 
 
 def convtranspose_module(
-    in_channels, out_channels, kernel_size, batchnorm=True
+    in_channels, out_channels, kernel_size, *, stride=1, batchnorm=True
 ):
     # this padding corresponds to valid convs on the way in
     deconv = nn.ConvTranspose2d(
-        in_channels, out_channels, kernel_size
+        in_channels, out_channels, kernel_size, stride=stride
     )
 
     if batchnorm:
@@ -162,6 +164,81 @@ def convolutional_decoder(
     )
 
 
+# -- another convolutional idea
+# let's not put x on the channels.
+
+
+def convb_encoder(
+    in_shape, channels, kernel_sizes, final_hidden_dim, batchnorm=True
+):
+    # -- input shape logic
+    # data should come in as T x channels. But, our probes have
+    # two columns of electrodes, and we will treat this "2" as the
+    # color/channel dimension on the input for convolutions.
+    assert len(in_shape) == 2
+    T, C = in_shape
+    assert C % 2 == 0
+    channel_radius = C // 2
+
+    # -- more shape logic for the hidden layers
+    in_channels = [2, *channels[:-1]]
+    out_channels = channels
+    # output shape of last layer under valid padding and unit stride
+    last_h = T - sum(k - 1 for k in kernel_sizes)
+    last_w = channel_radius - sum(k - 1 for k in kernel_sizes)
+    last_c = out_channels[-1]
+    assert last_w > 0  # you have too many layers for your kernel size
+    print("enc", last_h, last_w, last_c, last_h * last_w * last_c)
+
+    return nn.Sequential(
+        # BTC -> B1TC
+        Unsqueeze(1),
+        # conv modules
+        *[
+            convolutional_module(inc, outc, ks, batchnorm=batchnorm)
+            for inc, outc, ks in zip(in_channels, out_channels, kernel_sizes)
+        ],
+        # time collapse conv?
+        # flatten and linear module for latents
+        nn.Flatten(),
+        linear_module(
+            last_h * last_w * last_c, final_hidden_dim, batchnorm=batchnorm
+        ),
+    )
+
+
+def convb_decoder(
+    final_hidden_dim, channels, kernel_sizes, out_shape, batchnorm=True
+):
+    # -- "transposed" shape logic to the above
+    assert len(out_shape) == 2
+    T, C = out_shape
+    assert C % 2 == 0
+    channel_radius = C // 2
+
+    first_h = T - sum(k - 1 for k in kernel_sizes)
+    first_w = channel_radius - sum(k - 1 for k in kernel_sizes)
+    first_c = channels[0]
+    assert first_w > 0  # you have too many layers for your kernel size
+    print("dec", first_h, first_w, first_c, first_h * first_w * first_c)
+
+    in_channels = channels
+    out_channels = [*channels[1:], 2]
+
+    return nn.Sequential(
+        linear_module(
+            final_hidden_dim, first_h * first_w * first_c, batchnorm=batchnorm
+        ),
+        nn.Unflatten(1, (first_c, first_h, first_w)),
+        # deconv modules
+        *[
+            convtranspose_module(inc, outc, ks, batchnorm=batchnorm)
+            for inc, outc, ks in zip(in_channels, out_channels, kernel_sizes)
+        ],
+        Squeeze(),
+    )
+
+
 # -- command line arg helper
 
 
@@ -191,6 +268,25 @@ def netspec(spec, in_shape, batchnorm):
             batchnorm=batchnorm,
         )
         decoder = convolutional_decoder(
+            final_hidden_dim,
+            channels[::-1],
+            kernel_sizes[::-1],
+            in_shape,
+            batchnorm=batchnorm,
+        )
+    elif spec.startswith("convb"):
+        channels = list(map(int, spec.split(":")[1].split(",")))
+        kernel_sizes = list(map(int, spec.split(":")[2].split(",")))
+        final_hidden_dim = int(spec.split(":")[3])
+
+        encoder = convb_encoder(
+            in_shape,
+            channels,
+            kernel_sizes,
+            final_hidden_dim,
+            batchnorm=batchnorm,
+        )
+        decoder = convb_decoder(
             final_hidden_dim,
             channels[::-1],
             kernel_sizes[::-1],
