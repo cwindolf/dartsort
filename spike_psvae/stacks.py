@@ -166,6 +166,7 @@ def convolutional_decoder(
 
 # -- another convolutional idea
 # let's not put x on the channels.
+# instead, stride 2 on the first conv's width dim. use even ks.
 
 
 def convb_encoder(
@@ -187,7 +188,7 @@ def convb_encoder(
     out_channels = channels
     # output shape of last layer under valid padding and unit stride
     last_h = T - sum(k - 1 for k in kernel_sizes)
-    last_w = ((C - kernel_sizes[0]) // 2 - 1) - sum(
+    last_w = ((C - kernel_sizes[0]) // 2 + 1) - sum(
         k - 1 for k in kernel_sizes[1:]
     )
     last_c = out_channels[-1]
@@ -228,7 +229,7 @@ def convb_decoder(
     T, C = out_shape
 
     first_h = T - sum(k - 1 for k in kernel_sizes)
-    first_w = ((C - kernel_sizes[-1]) // 2 - 1) - sum(
+    first_w = ((C - kernel_sizes[-1]) // 2 + 1) - sum(
         k - 1 for k in kernel_sizes[:-1]
     )
     first_c = channels[0]
