@@ -8,7 +8,8 @@ class Permute(nn.Module):
     __constants__ = ["dims"]
     dims: Tuple[int]
 
-    def __init__(self, dims: Sequence[int]) -> None:
+    def __init__(self, *dims: int) -> None:
+        super(Permute, self).__init__()
         self.dims = tuple(dims)
 
     def forward(self, input: torch.Tensor) -> torch.Tensor:
