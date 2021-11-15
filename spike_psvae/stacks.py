@@ -193,7 +193,7 @@ def convb_encoder(
     last_c = out_channels[-1]
     assert last_w > 0  # you have too many layers for your kernel size
     print("enc", last_h, last_w, last_c, last_h * last_w * last_c)
-    strides = [(1, 2), *([1] * len(channels) - 1)]
+    strides = [(1, 2), *([1] * (len(channels) - 1))]
 
     return nn.Sequential(
         # BTC -> B1TC
@@ -237,7 +237,7 @@ def convb_decoder(
 
     in_channels = channels
     out_channels = [*channels[1:], 1]
-    strides = [*([1] * len(channels) - 1), (1, 2)]
+    strides = [*([1] * (len(channels) - 1)), (1, 2)]
 
     return nn.Sequential(
         linear_module(
