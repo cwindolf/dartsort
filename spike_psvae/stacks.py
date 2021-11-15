@@ -169,7 +169,11 @@ def convolutional_decoder(
 
 
 def convb_encoder(
-    in_shape, channels, kernel_sizes, final_hidden_dim, batchnorm=True
+    in_shape,
+    channels,
+    kernel_sizes,
+    final_hidden_dim,
+    batchnorm=True,
 ):
     # -- input shape logic
     # data should come in as T x channels. But, our probes have
@@ -177,26 +181,31 @@ def convb_encoder(
     # color/channel dimension on the input for convolutions.
     assert len(in_shape) == 2
     T, C = in_shape
-    assert C % 2 == 0
-    channel_radius = C // 2
 
     # -- more shape logic for the hidden layers
     in_channels = [1, *channels[:-1]]
     out_channels = channels
     # output shape of last layer under valid padding and unit stride
     last_h = T - sum(k - 1 for k in kernel_sizes)
-    last_w = channel_radius - sum(k - 1 for k in kernel_sizes)
+    last_w = ((C - kernel_sizes[0]) // 2 - 1) - sum(
+        k - 1 for k in kernel_sizes[1:]
+    )
     last_c = out_channels[-1]
     assert last_w > 0  # you have too many layers for your kernel size
     print("enc", last_h, last_w, last_c, last_h * last_w * last_c)
+    strides = [(1, 2), *([1] * len(channels) - 1)]
 
     return nn.Sequential(
         # BTC -> B1TC
         Unsqueeze(1),
         # conv modules
         *[
-            convolutional_module(inc, outc, ks, batchnorm=batchnorm)
-            for inc, outc, ks in zip(in_channels, out_channels, kernel_sizes)
+            convolutional_module(
+                inc, outc, ks, stride=stride, batchnorm=batchnorm
+            )
+            for inc, outc, ks, stride in zip(
+                in_channels, out_channels, kernel_sizes, strides
+            )
         ],
         # time collapse conv?
         # flatten and linear module for latents
@@ -208,22 +217,27 @@ def convb_encoder(
 
 
 def convb_decoder(
-    final_hidden_dim, channels, kernel_sizes, out_shape, batchnorm=True
+    final_hidden_dim,
+    channels,
+    kernel_sizes,
+    out_shape,
+    batchnorm=True,
 ):
     # -- "transposed" shape logic to the above
     assert len(out_shape) == 2
     T, C = out_shape
-    assert C % 2 == 0
-    channel_radius = C // 2
 
     first_h = T - sum(k - 1 for k in kernel_sizes)
-    first_w = channel_radius - sum(k - 1 for k in kernel_sizes)
+    first_w = ((C - kernel_sizes[-1]) // 2 - 1) - sum(
+        k - 1 for k in kernel_sizes[:-1]
+    )
     first_c = channels[0]
     assert first_w > 0  # you have too many layers for your kernel size
     print("dec", first_h, first_w, first_c, first_h * first_w * first_c)
 
     in_channels = channels
     out_channels = [*channels[1:], 1]
+    strides = [*([1] * len(channels) - 1), (1, 2)]
 
     return nn.Sequential(
         linear_module(
@@ -232,8 +246,12 @@ def convb_decoder(
         nn.Unflatten(1, (first_c, first_h, first_w)),
         # deconv modules
         *[
-            convtranspose_module(inc, outc, ks, batchnorm=batchnorm)
-            for inc, outc, ks in zip(in_channels, out_channels, kernel_sizes)
+            convtranspose_module(
+                inc, outc, ks, stride=stride, batchnorm=batchnorm
+            )
+            for inc, outc, ks, stride in zip(
+                in_channels, out_channels, kernel_sizes, strides
+            )
         ],
         Squeeze(),
     )
