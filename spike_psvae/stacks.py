@@ -75,7 +75,7 @@ def convtranspose_module(
 ):
     # this padding corresponds to valid convs on the way in
     deconv = nn.ConvTranspose2d(
-        in_channels, out_channels, kernel_size, padding=kernel_size // 2
+        in_channels, out_channels, kernel_size
     )
 
     if batchnorm:
