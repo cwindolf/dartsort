@@ -30,9 +30,11 @@ class PSVAE(nn.Module):
 
         self.encoder = encoder
         self.decoder = decoder
+        self.final_hidden_dim = self.encoder[-1].output_dim
 
-        self.fc_mu = nn.Linear(latent_dim, latent_dim)
-        self.fc_logvar = nn.Linear(latent_dim, latent_dim)
+        self.fc_mu = nn.Linear(self.final_hidden_dim, latent_dim)
+        self.fc_logvar = nn.Linear(self.final_hidden_dim, latent_dim)
+        self.fc_decoder = nn.Linear(latent_dim, self.final_hidden_dim)
         self.diag_y_hat = layers.DiagLinear(supervised_latent_dim)
 
     def encode(self, x):
