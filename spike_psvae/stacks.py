@@ -245,7 +245,7 @@ def convb_decoder(
 def netspec(spec, in_shape, batchnorm):
     in_dim = np.prod(in_shape)
 
-    if spec.startswith("linear"):
+    if spec.startswith("linear:"):
         hidden_dims = list(map(int, spec.split(":")[1].split(",")))
         final_hidden_dim = int(spec.split(":")[2].split(","))
 
@@ -255,7 +255,7 @@ def netspec(spec, in_shape, batchnorm):
         decoder = linear_decoder(
             final_hidden_dim, hidden_dims[::-1], in_shape, batchnorm=batchnorm
         )
-    elif spec.startswith("conv"):
+    elif spec.startswith("conv:"):
         channels = list(map(int, spec.split(":")[1].split(",")))
         kernel_sizes = list(map(int, spec.split(":")[2].split(",")))
         final_hidden_dim = int(spec.split(":")[3])
@@ -274,7 +274,7 @@ def netspec(spec, in_shape, batchnorm):
             in_shape,
             batchnorm=batchnorm,
         )
-    elif spec.startswith("convb"):
+    elif spec.startswith("convb:"):
         channels = list(map(int, spec.split(":")[1].split(",")))
         kernel_sizes = list(map(int, spec.split(":")[2].split(",")))
         final_hidden_dim = int(spec.split(":")[3])
