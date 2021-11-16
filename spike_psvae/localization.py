@@ -7,6 +7,7 @@ from .waveform_utils import get_local_geom, get_local_chans
 
 # (x_low, y_low, z_low, alpha_low), (x_high, y_high, z_high, alpha_high)
 BOUNDS = (-100, 0, -100, 0), (132, 250, 100, 10000)
+# how to initialize y, alpha?
 Y0, ALPHA0 = 21.0, 1000.0
 
 
@@ -35,7 +36,7 @@ def check_shapes(waveforms, maxchans, channel_radius, geom):
     return N, T, C
 
 
-def localize_ptp(ptp, maxchan, geom, jac=False):
+def localize_ptp(ptp, maxchan, geom, jac=False, return_z_rel=False):
     """Find the localization result for a single ptp vector
 
     ptp : np.array (2 * channel_radius,)
@@ -60,7 +61,6 @@ def localize_ptp(ptp, maxchan, geom, jac=False):
 
     jacobian = "2-point"
     if jac:
-
         def jacobian(loc):
             x, y, z, alpha = loc
             dxz = np.array(((x, z),)) - local_geom
@@ -82,9 +82,10 @@ def localize_ptp(ptp, maxchan, geom, jac=False):
     )
 
     # convert to absolute positions
-    x, y, z, alpha = result.x
-    z_abs = z + z_maxchan
-    return x, y, z_abs, alpha
+    x, y, z_rel, alpha = result.x
+    z_abs = z_rel + z_maxchan
+    
+    return x, y, z_rel, z_abs, alpha
 
 
 def localize_waveforms(
@@ -108,7 +109,8 @@ def localize_waveforms(
         N, T, C = waveforms.shape
 
     # I have them stored as floats and keep forgetting to int them.
-    maxchans = maxchans.astype(int)
+    if maxchans is not None:
+        maxchans = maxchans.astype(int)
 
     # handle pbars
     xrange = trange if _not_helper else lambda a, desc: range(a)
@@ -137,10 +139,11 @@ def localize_waveforms(
     # -- run the least squares
     xs = np.empty(N)
     ys = np.empty(N)
-    zs = np.empty(N)
+    z_rels = np.empty(N)
+    z_abss = np.empty(N)
     alphas = np.empty(N)
     with Parallel(n_workers) as pool:
-        for n, (x, y, z, alpha) in enumerate(
+        for n, (x, y, z_rel, z_abs, alpha) in enumerate(
             pool(
                 delayed(localize_ptp)(ptp, maxchan, geom, jac=jac)
                 for ptp, maxchan in xqdm(
@@ -150,10 +153,11 @@ def localize_waveforms(
         ):
             xs[n] = x
             ys[n] = y
-            zs[n] = z
+            z_rels[n] = z_rel
+            z_abss[n] = z_abs
             alphas[n] = alpha
 
-    return xs, ys, zs, alphas
+    return xs, ys, z_rels, z_abss, alphas
 
 
 def localize_waveforms_batched(
@@ -169,7 +173,8 @@ def localize_waveforms_batched(
     N, T, C = check_shapes(waveforms, maxchans, channel_radius, geom)
     xs = np.empty(N)
     ys = np.empty(N)
-    zs = np.empty(N)
+    z_rels = np.empty(N)
+    z_abss = np.empty(N)
     alphas = np.empty(N)
 
     starts = list(range(0, N, batch_size))
@@ -201,7 +206,8 @@ def localize_waveforms_batched(
             end = ends[batch_idx]
             xs[start:end] = x
             ys[start:end] = y
-            zs[start:end] = z
+            z_rels[start:end] = z_rel
+            z_abss[start:end] = z_abs
             alphas[start:end] = alpha
 
-    return xs, ys, zs, alphas
+    return xs, ys, z_rels, z_abss, alphas
