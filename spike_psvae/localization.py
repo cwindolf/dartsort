@@ -137,7 +137,10 @@ def localize_waveforms(
             if bad:
                 raise ValueError(f"Some waveforms were all zero: {bad}.")
 
-        ptps = np.empty((N, 2 * channel_radius), dtype=waveforms.dtype)
+        ptps = np.empty(
+            (N, 2 * channel_radius + 2 * (geomkind == "standard")),
+            dtype=waveforms.dtype,
+        )
         for n in xrange(N, desc="extracting channels"):
             low, high = get_local_chans(
                 geom,
