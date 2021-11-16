@@ -60,26 +60,20 @@ def get_local_geom(geom, maxchan, channel_radius, ptp, return_z_maxchan=False):
     return local_geom
 
 
-def get_local_waveforms(waveforms, channel_radius, maxchans=None):
+def get_local_waveforms(waveforms, channel_radius, geom, maxchans=None):
     """NxTxCfull -> NxTx(2*channel radius). So, takes a batch."""
     N, T, Cfull = waveforms.shape
 
     compute_maxchans = maxchans is None
+    ptps = waveforms.ptp(1)
     if compute_maxchans:
-        maxchans = waveforms.ptp(1).argmax(1)
+        maxchans = ptps.argmax(1)
 
     local_waveforms = np.empty(
         (N, T, 2 * channel_radius), dtype=waveforms.dtype
     )
     for n in range(N):
-        low = maxchans[n] - channel_radius
-        high = maxchans[n] + channel_radius
-        if low < 0:
-            low = 0
-            high = 2 * channel_radius
-        if high > Cfull:
-            high = Cfull
-            low = Cfull - 2 * channel_radius
+        low, high = get_local_chans(geom, maxchans[n], channel_radius, ptps[n])
         local_waveforms[n] = waveforms[n, :, low:high]
 
     if compute_maxchans:
