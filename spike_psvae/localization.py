@@ -45,7 +45,7 @@ def localize_ptp(
     maxchan : int
     geom : np.array (total_channels, 2)
     """
-    channel_radius = ptp.shape[0] // 2
+    channel_radius = ptp.shape[0] // 2 - (geomkind == "standard")
     # local_geom is 2*channel_radius, 2
     local_geom, z_maxchan = get_local_geom(
         geom,
