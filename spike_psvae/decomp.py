@@ -6,8 +6,8 @@ from tqdm.auto import trange
 def cumparafac(wfs, max_rank=100):
     errors = []
     for rank in trange(1, max_rank):
-        cptensor, _ = parafac(wfs, rank)
-        rec = np.einsum("l,il,jl,kl->ijk", cptensor.weights, *cptensor.factors)
+        weights, factors = parafac(wfs, rank)
+        rec = np.einsum("l,il,jl,kl->ijk", weights, *factors)
         mse = np.square(wfs - rec).sum(axis=(1, 2)).mean()
         errors.append(mse)
     return errors
