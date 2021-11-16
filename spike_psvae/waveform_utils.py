@@ -87,7 +87,7 @@ def get_local_geom(
     return_z_maxchan=False,
     geomkind="updown",
 ):
-    """Gets geometry of `2 * channel_radius` chans near maxchan"""
+    """Gets the geometry of some neighborhood of chans near maxchan"""
     low, high = get_local_chans(
         geom, maxchan, channel_radius, ptp=ptp, geomkind=geomkind
     )
@@ -112,7 +112,8 @@ def get_local_waveforms(
         maxchans = ptps.argmax(1)
 
     local_waveforms = np.empty(
-        (N, T, 2 * channel_radius), dtype=waveforms.dtype
+        (N, T, 2 * channel_radius + 2 * (geomkind == "standard")),
+        dtype=waveforms.dtype,
     )
     for n in range(N):
         low, high = get_local_chans(
