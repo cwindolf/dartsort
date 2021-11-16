@@ -91,7 +91,7 @@ def convtranspose_module(
 
 
 def convolutional_encoder(
-    in_shape, channels, kernel_sizes, final_hidden_dim, batchnorm=True
+    in_shape, channels, kernel_sizes, final_hidden_dims, batchnorm=True
 ):
     # -- input shape logic
     # data should come in as T x channels. But, our probes have
@@ -111,6 +111,9 @@ def convolutional_encoder(
     last_c = out_channels[-1]
     assert last_w > 0  # you have too many layers for your kernel size
     print("enc", last_h, last_w, last_c, last_h * last_w * last_c)
+    # final mlp shapes
+    in_dims = [last_h * last_w * last_c, *final_hidden_dims[:-1]]
+    out_dims = final_hidden_dims
 
     return nn.Sequential(
         # BTC -> BTchannel_radius2
@@ -125,14 +128,17 @@ def convolutional_encoder(
         # time collapse conv?
         # flatten and linear module for latents
         nn.Flatten(),
-        linear_module(
-            last_h * last_w * last_c, final_hidden_dim, batchnorm=batchnorm
-        ),
+        *[
+            linear_module(
+                ind, outd, batchnorm=batchnorm
+            )
+            for ind, outd in zip(in_dims, out_dims)
+        ],
     )
 
 
 def convolutional_decoder(
-    final_hidden_dim, channels, kernel_sizes, out_shape, batchnorm=True
+    final_hidden_dims, channels, kernel_sizes, out_shape, batchnorm=True
 ):
     # -- "transposed" shape logic to the above
     assert len(out_shape) == 2
@@ -146,13 +152,18 @@ def convolutional_decoder(
     assert first_w > 0  # you have too many layers for your kernel size
     print("dec", first_h, first_w, first_c, first_h * first_w * first_c)
 
+    in_dims = final_hidden_dims
+    out_dims = [final_hidden_dims[1:], first_h * first_w * first_c]
     in_channels = channels
     out_channels = [*channels[1:], 2]
 
     return nn.Sequential(
-        linear_module(
-            final_hidden_dim, first_h * first_w * first_c, batchnorm=batchnorm
-        ),
+        *[
+            linear_module(
+                ind, outd, batchnorm=batchnorm
+            )
+            for ind, outd in zip(in_dims, out_dims)
+        ],
         nn.Unflatten(1, (first_c, first_h, first_w)),
         # deconv modules
         *[
@@ -173,7 +184,7 @@ def convb_encoder(
     in_shape,
     channels,
     kernel_sizes,
-    final_hidden_dim,
+    final_hidden_dims,
     batchnorm=True,
 ):
     # -- input shape logic
@@ -195,6 +206,9 @@ def convb_encoder(
     assert last_w > 0  # you have too many layers for your kernel size
     print("enc", last_h, last_w, last_c, last_h * last_w * last_c)
     strides = [(1, 2), *([1] * (len(channels) - 1))]
+    # final mlp shapes
+    in_dims = [last_h * last_w * last_c, *final_hidden_dims[:-1]]
+    out_dims = final_hidden_dims
 
     return nn.Sequential(
         # BTC -> B1TC
@@ -211,14 +225,17 @@ def convb_encoder(
         # time collapse conv?
         # flatten and linear module for latents
         nn.Flatten(),
-        linear_module(
-            last_h * last_w * last_c, final_hidden_dim, batchnorm=batchnorm
-        ),
+        *[
+            linear_module(
+                ind, outd, batchnorm=batchnorm
+            )
+            for ind, outd in zip(in_dims, out_dims)
+        ],
     )
 
 
 def convb_decoder(
-    final_hidden_dim,
+    final_hidden_dims,
     channels,
     kernel_sizes,
     out_shape,
@@ -236,14 +253,19 @@ def convb_decoder(
     assert first_w > 0  # you have too many layers for your kernel size
     print("dec", first_h, first_w, first_c, first_h * first_w * first_c)
 
+    in_dims = final_hidden_dims
+    out_dims = [final_hidden_dims[1:], first_h * first_w * first_c]
     in_channels = channels
     out_channels = [*channels[1:], 1]
     strides = [*([1] * (len(channels) - 1)), (1, 2)]
 
     return nn.Sequential(
-        linear_module(
-            final_hidden_dim, first_h * first_w * first_c, batchnorm=batchnorm
-        ),
+        *[
+            linear_module(
+                ind, outd, batchnorm=batchnorm
+            )
+            for ind, outd in zip(in_dims, out_dims)
+        ],
         nn.Unflatten(1, (first_c, first_h, first_w)),
         # deconv modules
         *[
@@ -277,17 +299,17 @@ def netspec(spec, in_shape, batchnorm):
     elif spec.startswith("conv:"):
         channels = list(map(int, spec.split(":")[1].split(",")))
         kernel_sizes = list(map(int, spec.split(":")[2].split(",")))
-        final_hidden_dim = int(spec.split(":")[3])
+        final_hidden_dims = int(spec.split(":")[3].split(","))
 
         encoder = convolutional_encoder(
             in_shape,
             channels,
             kernel_sizes,
-            final_hidden_dim,
+            final_hidden_dims,
             batchnorm=batchnorm,
         )
         decoder = convolutional_decoder(
-            final_hidden_dim,
+            final_hidden_dim[::-1],
             channels[::-1],
             kernel_sizes[::-1],
             in_shape,
@@ -296,17 +318,17 @@ def netspec(spec, in_shape, batchnorm):
     elif spec.startswith("convb:"):
         channels = list(map(int, spec.split(":")[1].split(",")))
         kernel_sizes = list(map(int, spec.split(":")[2].split(",")))
-        final_hidden_dim = int(spec.split(":")[3])
+        final_hidden_dims = int(spec.split(":")[3].split(","))
 
         encoder = convb_encoder(
             in_shape,
             channels,
             kernel_sizes,
-            final_hidden_dim,
+            final_hidden_dims,
             batchnorm=batchnorm,
         )
         decoder = convb_decoder(
-            final_hidden_dim,
+            final_hidden_dims[::-1],
             channels[::-1],
             kernel_sizes[::-1],
             in_shape,
