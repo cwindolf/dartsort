@@ -12,8 +12,11 @@ def point_source_ptp(local_geom, x, y, z, alpha):
     # figure out geometry
     local_geom = torch.as_tensor(local_geom)
     B, C, _ = local_geom.shape
-    xz = torch.stack([torch.as_tensor(x), torch.as_tensor(z)], axis=-1)
-    geom_rel = local_geom.view(B, C, 2) - xz.view(-1, 1, 2)
+    xz = torch.stack(
+        [torch.as_tensor(x), torch.broadcast_to(torch.as_tensor(z), x.shape)],
+        axis=-1,
+    )
+    geom_rel = local_geom - xz.view(-1, 1, 2)
     dists = torch.sqrt(
         torch.sum(
             torch.as_tensor(y * y).view(-1, 1, 1)
@@ -27,8 +30,7 @@ def point_source_ptp(local_geom, x, y, z, alpha):
 
 def stereotypical_ptp(local_geom, y=15.0, alpha=150.0):
     assert local_geom.shape[1] % 2 == 0
-    xspacing = torch.abs(local_geom[0, 1, 0] - local_geom[0, 0, 0])
-    x = xspacing / 2
+    x = local_geom[:, :, 0].mean(1)
     r = point_source_ptp(local_geom, x, y, 0, alpha)
     return r
 

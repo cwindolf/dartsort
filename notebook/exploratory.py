@@ -19,6 +19,7 @@
 # %%
 import numpy as np
 import matplotlib.pyplot as plt
+import scipy.linalg as la
 import h5py
 
 # %%
@@ -149,8 +150,47 @@ plt.show()
 # %% [markdown]
 # ### does recentring help PCA?
 
-# %%
+# %% [markdown]
+# let's try on templates first
 
 # %%
+wfs = np.load("../data/spt_yass_templates.npy")
+maxchans = wfs.ptp(1).argmax(1)
+local_wfs = waveform_utils.get_local_waveforms(wfs, 10, geom, maxchans)
+x, y, z_rel, z_abs, alpha = localization.localize_waveforms(wfs, geom, jac=False)
+reloc, r, q = point_source_centering.relocate_simple(local_wfs, geom, maxchans, x, y, z_rel, alpha)
+reloc = reloc.numpy(); r = r.numpy(); q = q.numpy()
+
+# %%
+fig, axes = vis_utils.vis_ptps([local_wfs.ptp(1)[:16], q[:16]], ["observed ptp", "predicted ptp"], "bg")
+plt.show()
+fig, axes = vis_utils.vis_ptps([reloc.ptp(1)[:16], r[:16]], ["relocated ptp", "standard ptp"], "kr")
+plt.show()
+
+# %%
+fig, (aa, ab) = plt.subplots(2, 1, sharex=False)
+aa.hist(np.square(local_wfs.ptp(1) - q).mean(axis=1), bins=32);
+aa.set_title("||wf - pred||")
+ab.hist(np.square(reloc.ptp(1) - r).mean(axis=1), bins=32);
+ab.set_title("||reloc - std||")
+plt.tight_layout()
+
+
+# %%
+def pca_rank_plot(wfs, ax=None, q=0.95, c="bk"):
+    s = la.svdvals(wfs.reshape(wfs.shape[0], -1))
+    ax = ax or plt.gca()
+    sqs = np.square(s)
+    seq = np.cumsum(sqs) / np.sum(sqs)
+    rank = np.flatnonzero(seq >= q)[0]
+    ax.plot(seq, c=c[0])
+    ax.axvline(rank, color=c[1])
+    plt.xticks(list(range(0, len(s), 50))  + [rank])
+    plt.xlim([-5, len(s) + 5])
+
+
+# %%
+pca_rank_plot(local_wfs)
+pca_rank_plot(reloc, c="rk")
 
 # %%
