@@ -19,8 +19,7 @@ def point_source_ptp(local_geom, x, y, z, alpha):
     geom_rel = local_geom - xz.view(-1, 1, 2)
     dists = torch.sqrt(
         torch.sum(
-            torch.as_tensor(y * y).view(-1, 1, 1)
-            + torch.square(geom_rel),
+            torch.as_tensor(y * y).view(-1, 1, 1) + torch.square(geom_rel),
             dim=2,
         )
     )
@@ -30,12 +29,17 @@ def point_source_ptp(local_geom, x, y, z, alpha):
 
 def stereotypical_ptp(local_geom, y=15.0, alpha=150.0):
     assert local_geom.shape[1] % 2 == 0
+    # Center of xz... could spell trouble for spikes on the edge of the probe,
+    # where this is not the maxchan's Z coord.
     x = local_geom[:, :, 0].mean(1)
-    r = point_source_ptp(local_geom, x, y, 0, alpha)
+    z = local_geom[:, :, 1].mean(1)
+    r = point_source_ptp(local_geom, x, y, z, alpha)
     return r
 
 
-def relocate_simple(wf, geom, maxchan, x, y, z_rel, alpha, channel_radius=10):
+def relocate_simple(
+    wf, geom, maxchan, x, y, z_rel, alpha, channel_radius=10, geomkind="updown"
+):
     """r is the result of stereotypical_ptp"""
     B, T, C = wf.shape
     geom = geom.copy()
@@ -43,7 +47,9 @@ def relocate_simple(wf, geom, maxchan, x, y, z_rel, alpha, channel_radius=10):
     local_geom = torch.stack(
         [
             torch.as_tensor(
-                get_local_geom(geom, maxchan[n], channel_radius, ptp[n])
+                get_local_geom(
+                    geom, maxchan[n], channel_radius, ptp[n], geomkind=geomkind
+                )
             )
             for n in range(B)
         ],
