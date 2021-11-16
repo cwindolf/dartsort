@@ -53,6 +53,8 @@ def get_local_chans_standard(geom, maxchan, channel_radius):
     G, d = geom.shape
     assert d == 2
     maxchan = int(maxchan)
+    if maxchan % 2:
+        maxchan = maxchan - 1
 
     # Deal with edge cases
     low = maxchan - channel_radius
