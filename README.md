@@ -29,6 +29,10 @@ JUPYTERLAB_WORKSPACES_DIR=.jupyter/lab/workspaces jupyter lab --no-browser --ip=
  - Train conv VAEs
  - More consistent geom? 18/22 channel version? Should not matter for now.
     - For PCA experiments, we *need* a standard geometry.
- - 40% of y are <0.1, trying out excluding those from net training
  - Overfit [PS]VAE to templates
     - See if relative to bottom helps learning
+
+### Notes and questions
+
+ - 40% of y are <0.1, to be excluded from net training?
+ - Relocating to xz center could be tough for spikes on the edge of the probe, where the maxchan Z is far from the center of the local geom.
