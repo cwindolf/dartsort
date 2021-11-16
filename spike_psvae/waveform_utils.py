@@ -1,7 +1,7 @@
 import numpy as np
 
 
-def relativize_z(z_abs, maxchans, geom):
+def relativize_z(z_abs, maxchans, geom, origin="maxchan"):
     """Take absolute z coords -> relative to max channel z."""
     return z_abs - geom[maxchans.astype(int), 1]
 
@@ -44,7 +44,7 @@ def get_local_chans(geom, maxchan, channel_radius, ptp):
     odd = maxchan % 2
     low += 2 * up - odd
     high += 2 * up - odd
-    
+
     return low, high
 
 
