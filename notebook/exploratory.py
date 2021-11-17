@@ -21,9 +21,10 @@ import numpy as np
 import matplotlib.pyplot as plt
 import scipy.linalg as la
 import h5py
+from tensorly.decomposition import parafac
 
 # %%
-from spike_psvae import waveform_utils, point_source_centering, localization, vis_utils
+from spike_psvae import waveform_utils, point_source_centering, localization, vis_utils, decomp
 
 # %%
 plt.rc("figure", dpi=200)
@@ -83,6 +84,12 @@ plt.hist(y_, bins=128)
 plt.show()
 plt.hist(np.log1p(y_), bins=128)
 plt.show()
+
+# %%
+plt.hist(alpha[y < 0.1], bins=32);
+plt.xlabel("alpha")
+plt.ylabel("frequency")
+plt.title("histogram of alpha when y==0")
 
 # %%
 plt.hist(alpha, bins=128)
@@ -156,15 +163,35 @@ plt.show()
 # %%
 wfs = np.load("../data/spt_yass_templates.npy")
 maxchans = wfs.ptp(1).argmax(1)
-local_wfs = waveform_utils.get_local_waveforms(wfs, 10, geom, maxchans)
-x, y, z_rel, z_abs, alpha = localization.localize_waveforms(wfs, geom, jac=False)
-reloc, r, q = point_source_centering.relocate_simple(local_wfs, geom, maxchans, x, y, z_rel, alpha)
+local_wfs = waveform_utils.get_local_waveforms(wfs, 10, geom, maxchans, geomkind="standard")
+x, y, z_rel, z_abs, alpha = localization.localize_waveforms(wfs, geom, jac=False, geomkind="standard")
+reloc, r, q = point_source_centering.relocate_simple(local_wfs, geom, maxchans, x, y, z_rel, alpha, geomkind="standard")
 reloc = reloc.numpy(); r = r.numpy(); q = q.numpy()
 
 # %%
-fig, axes = vis_utils.vis_ptps([local_wfs.ptp(1)[:16], q[:16]], ["observed ptp", "predicted ptp"], "bg")
+plt.hist(y, bins=32);
+
+# %%
+bigy = np.flatnonzero(y >= 1)
+away = np.flatnonzero((maxchans >= 12) & (maxchans < 371))
+
+# %%
+maxptp = wfs.ptp(1).max(1)
+print(maxptp.min())
+plt.hist(maxptp, bins=32);
+big = np.flatnonzero(maxptp > 4)
+
+# %%
+vis_utils.labeledmosaic(
+    [local_wfs[big[:16]], reloc[big[:16]]], #, local_wfs[:16] - reloc[:16]],
+    ["original", "relocated"], #, "residual"],
+    pad=2,
+)
+
+# %%
+fig, axes = vis_utils.vis_ptps([local_wfs.ptp(1)[big[:16]], q[big[:16]]], ["observed ptp", "predicted ptp"], "bg")
 plt.show()
-fig, axes = vis_utils.vis_ptps([reloc.ptp(1)[:16], r[:16]], ["relocated ptp", "standard ptp"], "kr")
+fig, axes = vis_utils.vis_ptps([reloc.ptp(1)[big[:16]], r[big[:16]]], ["relocated ptp", "standard ptp"], "kr")
 plt.show()
 
 # %%
@@ -177,20 +204,175 @@ plt.tight_layout()
 
 
 # %%
-def pca_rank_plot(wfs, ax=None, q=0.95, c="bk"):
-    s = la.svdvals(wfs.reshape(wfs.shape[0], -1))
+def pca_rank_plot(wfs, ax=None, q=0.95, c="bk", name=None):
+    wfs = wfs.reshape(wfs.shape[0], -1)
+    wfs = wfs - wfs.mean(axis=1, keepdims=True)
+    s = la.svdvals(wfs)
     ax = ax or plt.gca()
     sqs = np.square(s)
     seq = np.cumsum(sqs) / np.sum(sqs)
     rank = np.flatnonzero(seq >= q)[0]
-    ax.plot(seq, c=c[0])
+    ax.axhline(q, color="gray", zorder=-1)
+    ax.plot(seq, c=c[0], label=name)
     ax.axvline(rank, color=c[1])
-    plt.xticks(list(range(0, len(s), 50))  + [rank])
     plt.xlim([-5, len(s) + 5])
+    return rank
 
 
 # %%
-pca_rank_plot(local_wfs)
-pca_rank_plot(reloc, c="rk")
+well_model = np.flatnonzero((np.square(local_wfs.ptp(1) - q).mean(axis=1)) < 2)
+well_reloc = np.flatnonzero((np.square(reloc.ptp(1) - r).mean(axis=1)) < 2)
+
+# %%
+rank0 = pca_rank_plot(local_wfs, name="original")
+rank1 = pca_rank_plot(reloc, c="rk", name="relocated")
+plt.xticks(list(range(0, local_wfs.shape[0], 50)) + [rank0, rank1]);
+plt.yticks(list(plt.yticks()[0]) + [0.95])
+plt.ylim(0.5, 1.0)
+plt.title("pca: does relocating help?")
+plt.ylabel("proportion of variance captured")
+plt.xlabel("number of components")
+plt.legend(fancybox=False)
+
+# %%
+np.arange(35).reshape(5, 7).mean(axis=0)
+
+
+# %%
+def pca_resid_plot(wfs, ax=None, q=0.95, c="bk", name=None, dup=False):
+    wfs = wfs.reshape(wfs.shape[0], -1)
+    wfs = wfs - wfs.mean(axis=0, keepdims=True)
+    s = la.svdvals(wfs)
+    v = np.square(s) / wfs.shape[0]
+    ax = ax or plt.gca()
+    sqs = np.square(s)
+    totvar = np.square(wfs).mean(0).sum()
+    print(totvar)
+    residvar = np.concatenate(([totvar], totvar - np.cumsum(v)))
+    print(np.cumsum(v)[:5])
+    print(np.cumsum(v)[-5:])
+    if dup:
+        ax.plot(np.array([totvar, totvar, totvar, totvar, *residvar[:50]][:50]) / (wfs.shape[1]), marker=".", c=c[0], label=name)
+    else:
+        ax.plot(np.array(residvar[:50]) / (wfs.shape[1]), marker=".", c=c[0], label=name)
+
+
+# %%
+pca_resid_plot(local_wfs[:, :, 2:-2], name="original")
+pca_resid_plot(reloc[:, :, 2:-2], c="rk", name="relocated", dup=True)
+plt.title("pca: does relocating help?")
+plt.ylabel("residual variance (s.u.)")
+plt.xlabel("number of components (really starts at 0 this time)")
+plt.legend(fancybox=False)
+
+# %%
+pca_resid_plot(local_wfs[:, :, 2:-2], name="original")
+pca_resid_plot(reloc[:, :, 2:-2], c="rk", name="relocated", dup=True)
+plt.title("pca: does relocating help?")
+plt.ylabel("residual variance (s.u.)")
+plt.xlabel("number of components (really starts at 0 this time)")
+plt.semilogy()
+plt.legend(fancybox=False)
+
+
+# %%
+def parafac_rank_plot(wfs, ax=None, q=0.95, c="bk", name=None):
+    wfs = wfs - wfs.mean(axis=0, keepdims=True)
+    seq = decomp.cumparafac(wfs, 50)
+    seq = np.array(seq)
+    seq /= np.square(wfs).sum(axis=(1,2)).mean()
+    rank = np.flatnonzero(seq >= q)[0]
+    ax.axhline(q, color="gray", zorder=-1)
+    ax.plot(seq, c=c[0], label=name)
+    ax.axvline(rank, color=c[1])
+    plt.xlim([-5, len(seq) + 5])
+    return rank
+
+
+# %%
+seq0 = decomp.cumparafac(local_wfs - local_wfs.mean(axis=0, keepdims=True), 50)
+seq1 = decomp.cumparafac(reloc - reloc.mean(axis=0, keepdims=True), 50)
+
+# %%
+seq0 = np.array(seq0); seq1 = np.array(seq1)
+
+# %%
+seq0
+
+# %%
+n0, n1
+
+# %%
+mwfs = local_wfs - local_wfs.mean(axis=0, keepdims=True)
+n0 = np.square(mwfs).mean(axis=0).sum()
+v0 = (n0 - seq0) / n0
+mreloc = reloc - reloc.mean(axis=0, keepdims=True)
+n1 = np.square(mreloc).mean(axis=0).sum()
+v1 = (n1 - seq1) / n1
+
+# %%
+plt.plot(np.array([n0, *seq0]) / (121 * 22), marker=".", color="b")
+plt.plot(np.array([n1, n1, n1, n1, n1, *seq1][:50]) / (121 * 22), marker=".", color="r")
+plt.title("parafac: does relocating help?")
+plt.ylabel("residual variance (s.u.)")
+plt.xlabel("number of components (really starts at 0 this time)")
+
+# %%
+plt.plot(np.array([n0, *seq0]) / (121 * 22), marker=".", color="b")
+plt.plot(np.array([n1, n1, n1, n1, n1, *seq1][:50]) / (121 * 22), marker=".", color="r")
+plt.title("parafac: does relocating help?")
+plt.semilogy()
+plt.ylabel("residual variance (s.u.)")
+plt.xlabel("number of components (really starts at 0 this time)")
+
+
+# %% [markdown]
+# ### images of 5 component PCA and PARAFAC reconstructions, with and without relocating, for the same 16 waveforms
+
+# %%
+def recon_plot(wfs, k=5, label="original"):
+    means = wfs.mean(axis=0, keepdims=True)
+    wfs = wfs # - means
+    ogshape = wfs.shape
+    
+    inds = np.random.default_rng(2).choice(wfs.shape[0], size=16, replace=False)
+    batch = wfs[inds] # + means
+    
+    # k component PCA reconstruction
+    U, s, Vh = la.svd(wfs.reshape(wfs.shape[0], -1), full_matrices=False)
+    pca = (U[inds, :k] @ np.diag(s[:k]) @ Vh[:k, :]).reshape((16, *ogshape[1:])) # + means
+    
+    # k component Parafac reconstruction
+    weights, factors = parafac(wfs, k)
+    print(weights, factors[0].shape)
+    pfac = np.einsum("n,in,jn,kn->ijk", weights, factors[0][inds], factors[1], factors[2]) # + means
+    
+    vis_utils.labeledmosaic(
+        [batch, pca, pfac],
+        [label, "pca recon", "parafac recon"],
+        pad=2,
+    )
+
+
+# %%
+recon_plot(local_wfs[:, :, 2:-2])
+plt.suptitle("original spikes, reconstruction with 5 components", fontsize=8)
+
+# %%
+recon_plot(local_wfs[:, :, 2:-2], k=1)
+plt.suptitle("original spikes, reconstruction with 1 component", fontsize=8)
+
+# %%
+recon_plot(reloc[:, :, 2:-2], label="reloc")
+plt.suptitle("relocated spikes, reconstruction with 5 components", fontsize=8)
+
+# %%
+recon_plot(reloc[:, :, 2:-2], label="reloc", k=1)
+plt.suptitle("relocated spikes, reconstruction with 1 component", fontsize=8)
+
+# %% [markdown]
+# ### does this relocation remove correlations with the localization features?
+
+# %%
 
 # %%
