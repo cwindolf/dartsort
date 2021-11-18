@@ -169,21 +169,8 @@ reloc, r, q = point_source_centering.relocate_simple(local_wfs, geom, maxchans, 
 reloc = reloc.numpy(); r = r.numpy(); q = q.numpy()
 
 # %%
-plt.hist(y, bins=32);
-
-# %%
-bigy = np.flatnonzero(y >= 1)
-away = np.flatnonzero((maxchans >= 12) & (maxchans < 371))
-
-# %%
-maxptp = wfs.ptp(1).max(1)
-print(maxptp.min())
-plt.hist(maxptp, bins=32);
-big = np.flatnonzero(maxptp > 4)
-
-# %%
 vis_utils.labeledmosaic(
-    [local_wfs[big[:16]], reloc[big[:16]]], #, local_wfs[:16] - reloc[:16]],
+    [local_wfs[:16], reloc[:16]], #, local_wfs[:16] - reloc[:16]],
     ["original", "relocated"], #, "residual"],
     pad=2,
 )
@@ -330,22 +317,22 @@ plt.xlabel("number of components (really starts at 0 this time)")
 # ### images of 5 component PCA and PARAFAC reconstructions, with and without relocating, for the same 16 waveforms
 
 # %%
-def recon_plot(wfs, k=5, label="original"):
+def recon_plot(wfs, k=5, addmean=True, label="original"):
     means = wfs.mean(axis=0, keepdims=True)
-    wfs = wfs # - means
+    wfs = wfs - means
+    cmeans = int(addmean) * means
     ogshape = wfs.shape
     
     inds = np.random.default_rng(2).choice(wfs.shape[0], size=16, replace=False)
-    batch = wfs[inds] # + means
+    batch = wfs[inds] + cmeans
     
     # k component PCA reconstruction
     U, s, Vh = la.svd(wfs.reshape(wfs.shape[0], -1), full_matrices=False)
-    pca = (U[inds, :k] @ np.diag(s[:k]) @ Vh[:k, :]).reshape((16, *ogshape[1:])) # + means
+    pca = (U[inds, :k] @ np.diag(s[:k]) @ Vh[:k, :]).reshape((16, *ogshape[1:])) + cmeans
     
     # k component Parafac reconstruction
     weights, factors = parafac(wfs, k)
-    print(weights, factors[0].shape)
-    pfac = np.einsum("n,in,jn,kn->ijk", weights, factors[0][inds], factors[1], factors[2]) # + means
+    pfac = np.einsum("n,in,jn,kn->ijk", weights, factors[0][inds], *factors[1:]) + cmeans
     
     vis_utils.labeledmosaic(
         [batch, pca, pfac],
@@ -363,15 +350,23 @@ recon_plot(local_wfs[:, :, 2:-2], k=1)
 plt.suptitle("original spikes, reconstruction with 1 component", fontsize=8)
 
 # %%
-recon_plot(reloc[:, :, 2:-2], label="reloc")
+recon_plot(reloc[:, :, 2:-2], label="reloc", addmean=False)
 plt.suptitle("relocated spikes, reconstruction with 5 components", fontsize=8)
 
 # %%
 recon_plot(reloc[:, :, 2:-2], label="reloc", k=1)
 plt.suptitle("relocated spikes, reconstruction with 1 component", fontsize=8)
 
-# %% [markdown]
+# %%
+
+# %%
+
+# %%
+
+# %% [markdown] tags=[]
 # ### does this relocation remove correlations with the localization features?
+
+# %%
 
 # %%
 
