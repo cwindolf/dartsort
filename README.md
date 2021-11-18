@@ -23,14 +23,21 @@ JUPYTERLAB_WORKSPACES_DIR=.jupyter/lab/workspaces jupyter lab --no-browser --ip=
 
 ### To do:
 
- - Test localization gives same result
+ - [x] Test localization gives same result
     - Similar but not the same, same problems with y. Maybe here is matching ptps a little better.
- - Tensor PCA for recentered waveforms
- - Train conv VAEs
- - More consistent geom? 18/22 channel version? Should not matter for now.
-    - For PCA experiments, we *need* a standard geometry.
- - Overfit [PS]VAE to templates
-    - See if relative to bottom helps learning
+ - [x] Tensor PCA for recentered waveforms
+ - [ ] Train conv VAEs
+    - Architecture code is here, but not learning well yet...
+ - [x] More consistent geom? 18/22 channel version? Should not matter for now.
+    - This is `geomkind="standard"` in the code. It puts the max channel z at the center, and then `channel_radius // 2` shanks above and below, for an odd number of shanks and `2 * channel_radius + 2` channels. The original geometry, which is called `geomkind="updown"` in the code, shifts `2 * channel_radius` channels up or down depending on how the ptp looks.
+ - [ ] Overfit [PS]VAE to templates
+    - [ ] See if standard geom and z relative to bottom helps learning
+ - Movies of PCA/Parafac features over time, do they drift?
+    - If we still see wiggles in the clusters after re-locating, are the wiggles strongest during periods of large probe motion?
+ - [ ] Get the denoiser / detection code running here, we'll need to ingest more data.
+ - [ ] NPUltra standard geom.
+ - [ ] Data augmentation
+    - [ ]Spikes on the edge of the probe are outliers (maxchan is not near center) -- least squares doesn't care, but a neural net does. Maybe the pipeline can extract extra channels, and the data loader can randomly slide a window around.
 
 ### Notes and questions
 
