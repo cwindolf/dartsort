@@ -69,6 +69,12 @@ out = np.setdiff1d(np.arange(wfs.shape[0]), rid)
 with h5py.File("../data/spt_yasstemplates_culled.h5", "w") as h5:
     h5.create_dataset("waveforms", data=wfs[out])
     h5.create_dataset("geom", data=geom)
+    h5.create_dataset("maxchans", data=maxchans[out])
+
+# %%
+with h5py.File("../data/spt_yasstemplates.h5", "w") as h5:
+    h5.create_dataset("waveforms", data=wfs)
+    h5.create_dataset("geom", data=geom)
     h5.create_dataset("maxchans", data=maxchans)
 
 # %%
