@@ -6,6 +6,11 @@ import torch
 import torch.nn.functional as F
 
 
+def normbatch(batch):
+    batch = batch - batch.min(axis=(1, 2), keepdims=True)
+    return batch / batch.max(axis=(1, 2), keepdims=True)
+
+
 @torch.no_grad()
 def mosaic(xs, pad=0, padval=255):
     assert all(x.shape == xs[0].shape for x in xs)
@@ -24,7 +29,11 @@ def mosaic(xs, pad=0, padval=255):
     return grid
 
 
-def labeledmosaic(xs, rowlabels, pad=0, padval=255, ax=None, cbar=True):
+def labeledmosaic(xs, rowlabels, pad=0, padval=255, ax=None, cbar=True, separate_norm=False, collabels="abcdefghijklmnopqrstuvwxyz"):
+    if separate_norm:
+        assert not cbar
+        xs = [normbatch(x) for x in xs]
+
     vmin = min(x.min() for x in xs)
     vmax = max(x.max() for x in xs)
     B, H, W = xs[0].shape
@@ -51,7 +60,7 @@ def labeledmosaic(xs, rowlabels, pad=0, padval=255, ax=None, cbar=True):
         ax.text(
             20 + b * (W + 2 * pad) + W / 2,
             4,
-            "abcdefghijklmnopqrstuvwxyz"[b],
+            collabels[b],
             ha="center",
             va="center",
             fontsize=8,
