@@ -31,8 +31,8 @@ def stereotypical_ptp(local_geom, y=15.0, alpha=150.0):
     assert local_geom.shape[1] % 2 == 0
     # Center of xz... could spell trouble for spikes on the edge of the probe,
     # where this is not the maxchan's Z coord.
-    x = local_geom[:, :, 0].mean(1)
-    z = local_geom[:, :, 1].mean(1)
+    x = local_geom[:, :, 0].mean(axis=1)
+    z = local_geom[:, :, 1].mean(axis=1)
     r = point_source_ptp(local_geom, x, y, z, alpha)
     return r
 

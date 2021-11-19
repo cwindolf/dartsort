@@ -39,6 +39,10 @@ JUPYTERLAB_WORKSPACES_DIR=.jupyter/lab/workspaces jupyter lab --no-browser --ip=
  - [ ] Data augmentation
     - [ ]Spikes on the edge of the probe are outliers (maxchan is not near center) -- least squares doesn't care, but a neural net does. Maybe the pipeline can extract extra channels, and the data loader can randomly slide a window around.
 
+### Known bugs
+
+ - [ ] This thing with updown -> standard, then the predicted PTP is flipped. What??
+
 ### Notes and questions
 
  - 40% of y are <0.1, to be excluded from net training?
