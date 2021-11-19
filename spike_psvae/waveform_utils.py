@@ -45,6 +45,8 @@ def get_local_chans_updown(geom, maxchan, channel_radius, ptp):
     assert ptp.ndim == 1
     C = ptp.shape[0]
     maxchan = int(maxchan)
+    if maxchan % 2:
+        maxchan = maxchan - 1
 
     # Deal with edge cases
     low = maxchan - channel_radius
@@ -73,9 +75,8 @@ def get_local_chans_updown(geom, maxchan, channel_radius, ptp):
             f"Not sure how to get local geom when ptp has {C} channels"
         )
 
-    odd = maxchan % 2
-    low += 2 * up - odd
-    high += 2 * up - odd
+    low += 2 * up
+    high += 2 * up
 
     return low, high
 
@@ -153,6 +154,7 @@ def get_local_waveforms(
         low, high = get_local_chans(
             geom, maxchans[n], channel_radius, ptps[n], geomkind=geomkind
         )
+        print(low, high)
         local_waveforms[n] = waveforms[n, :, low:high]
 
     if compute_maxchans:
@@ -179,7 +181,7 @@ def as_standard_local(waveforms, maxchans, geom, channel_radius=8):
         )
 
         for n, up in enumerate(
-            updown_decision(geom, maxchan, channel_radius, ptp)
+            updown_decision(geom, maxchan, channel_radius + 2, ptp)
             for maxchan, ptp in zip(maxchans, waveforms.ptp(1))
         ):
             # what goes up must come down
@@ -187,6 +189,6 @@ def as_standard_local(waveforms, maxchans, geom, channel_radius=8):
                 local_waveforms[n] = waveforms[n, :, :-2]
             else:
                 local_waveforms[n] = waveforms[n, :, 2:]
-            return local_waveforms
+        return local_waveforms
     else:
         raise ValueError("Not sure how to convert to standard local.")

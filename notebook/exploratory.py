@@ -105,13 +105,14 @@ plt.show()
 # %%
 # get a batch
 with h5py.File(h5_path, "r+") as h5:
-    good = np.flatnonzero(h5["y"][:] > 0.1)
+    good = np.flatnonzero(h5["y"][:] < 1e-8)
     bwf = h5["denoised_waveforms"][good[:16]]
-    balpha = h5["alpha"][good[:16]]
-    bx = h5["x"][good[:16]]
-    by = h5["y"][good[:16]]
-    bz = h5["z_rel"][good[:16]]
     bmaxchan = h5["max_channels"][good[:16]]
+    # balpha = h5["alpha"][good[:16]]
+    # bx = h5["x"][good[:16]]
+    # by = h5["y"][good[:16]]
+    # bz = h5["z_rel"][good[:16]]
+    bx, by, bz, _, balpha = localization.localize_waveforms(bwf, geom, bmaxchan)
 
 # %%
 reloc, r, q = point_source_centering.relocate_simple(bwf, geom, bmaxchan, bx, by, bz, balpha)
@@ -126,19 +127,26 @@ bx[2], by[2], bz[2], balpha[2]
 reloc.min(), reloc.max()
 
 # %%
+
+# %%
 vis_utils.labeledmosaic(
     [bwf, reloc, bwf - reloc],
     ["original", "relocated", "residual"],
     pad=2,
+    separate_norm=True,
+    cbar=False
 )
 
 # %%
 (np.abs(y) < 0.01).mean()
 
 # %%
-fig, axes = vis_utils.vis_ptps([bwf.ptp(1), q], ["observed ptp", "predicted ptp"], "bg")
+by.max()
+
+# %%
+fig, axes = vis_utils.vis_ptps([bwf.ptp(1), q], ["observed ptp", "predicted ptp"], "bg", subplots_kwargs=dict(sharex=True, figsize=(5, 5)))
 plt.show()
-fig, axes = vis_utils.vis_ptps([reloc.ptp(1), r], ["relocated ptp", "standard ptp"], "kr")
+fig, axes = vis_utils.vis_ptps([reloc.ptp(1), r], ["relocated ptp", "standard ptp"], "kr", subplots_kwargs=dict(sharex=True, figsize=(5, 5)))
 plt.show()
 
 # %%
