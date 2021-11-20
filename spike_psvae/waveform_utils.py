@@ -154,7 +154,6 @@ def get_local_waveforms(
         low, high = get_local_chans(
             geom, maxchans[n], channel_radius, ptps[n], geomkind=geomkind
         )
-        print(low, high)
         local_waveforms[n] = waveforms[n, :, low:high]
 
     if compute_maxchans:

@@ -13,11 +13,14 @@
 #     name: python3
 # ---
 
-# %%
+# %% [markdown]
+# (Please ignore the code, could not figure out how to hide it in this PDF.)
+
+# %% tags=[]
 # %load_ext autoreload
 # %autoreload 2
 
-# %%
+# %% tags=[]
 import h5py
 import numpy as np
 from spike_psvae import (
@@ -29,15 +32,15 @@ import numpy as np
 from tensorly.decomposition import parafac
 from joblib import Memory
 
-# %%
+# %% tags=[]
 mem = Memory("/tmp/reloc")
 
-# %%
+# %% tags=[]
 plt.rc("figure", dpi=200)
 rg = np.random.default_rng(0)
 
 
-# %%
+# %% tags=[]
 def relocation_analysis(waveforms, maxchans, geom, name, K=40, channel_radius=8, do_pfac=True, seed=0):
     # -- localize in standard form
     # std_wfs = waveform_utils.as_standard_local(
@@ -91,6 +94,7 @@ def relocation_analysis(waveforms, maxchans, geom, name, K=40, channel_radius=8,
         mses = sses / np.prod(wfs.shape[1:])
         n0 = np.square(mwfs).mean()
         ax = ax or plt.gca()
+        mses = np.concatenate(([n0], mses))
         if pad4:
             ax.plot([n0, n0, n0, n0, *mses][:K], marker=".", c=c[0], label=name)
         else:
@@ -179,28 +183,43 @@ def relocation_analysis(waveforms, maxchans, geom, name, K=40, channel_radius=8,
 
 
 
-# %% jupyter={"outputs_hidden": true} tags=[]
+# %% [markdown]
+# # Relocating, PCA and Parafac
+#
+# This is a huge pile of figures showing the effect of the simple point source relocation on PCA and Parafac. So, does it help these models reconstruct the data? Yes. It does. At least a little bit.
+#
+# Below, the same set of figures is shown for 3 data sets. First, ~170 nice NP2 templates. Next, the same templates, but with 10 or so weird looking ones removed. Finally, 10,000 denoised spikes from an NP2 probe.
+
+# %% [markdown]
+# # All Templates
+
+# %% tags=[]
 with h5py.File("../data/spt_yasstemplates.h5") as h5:
     wfs = h5["waveforms"][:]
     geom = h5["geom"][:]
     maxchans = h5["maxchans"][:]
     relocation_analysis(wfs, maxchans, geom, "All Templates", K=30)
 
-# %% jupyter={"outputs_hidden": true} tags=[]
+# %% [markdown]
+# # Culled Templates
+
+# %% tags=[]
 with h5py.File("../data/spt_yasstemplates_culled.h5") as h5:
     wfs = h5["waveforms"][:]
     geom = h5["geom"][:]
     maxchans = h5["maxchans"][:]
     relocation_analysis(wfs, maxchans, geom, "Culled Templates", K=30)
 
+# %% [markdown]
+# # 10,000 denoised NP2 waveforms
+#
+# (I did not run Parafac on these because I didn't want to wait around.)
+
 # %%
 with h5py.File("../data/wfs_locs_b.h5") as h5:
-    wfs = h5["denoised_waveforms"][:100]
+    wfs = h5["denoised_waveforms"][:10_000]
     geom = h5["geom"][:]
-    maxchans = h5["max_channels"][:100]
-    plt.figure(figsize=(6, 4))
-    vis_utils.labeledmosaic([wfs[:16], wfs[16:32]], ["a", "b"], pad=2)
-    plt.show()
+    maxchans = h5["max_channels"][:10_000]
     relocation_analysis(wfs, maxchans, geom, "10k Denoised NP2 Waveforms", do_pfac=False, K=30)
 
 # %%
