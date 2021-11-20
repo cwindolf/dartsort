@@ -41,7 +41,7 @@ rg = np.random.default_rng(0)
 
 
 # %% tags=[]
-def relocation_analysis(waveforms, maxchans, geom, name, K=40, channel_radius=8, do_pfac=True, seed=0):
+def relocation_analysis(waveforms, maxchans, geom, name, K=40, channel_radius=8, do_pfac=True, seed=0, relocate_dims="xyza"):
     # -- localize in standard form
     # std_wfs = waveform_utils.as_standard_local(
     #     waveforms, maxchans, geom, channel_radius=channel_radius
@@ -68,7 +68,7 @@ def relocation_analysis(waveforms, maxchans, geom, name, K=40, channel_radius=8,
     
     # -- relocated versions
     reloc, r, q = point_source_centering.relocate_simple(
-        std_wfs, geom, maxchans, x, y, z_rel, alpha, channel_radius=channel_radius, geomkind=geomkind
+        std_wfs, geom, maxchans, x, y, z_rel, alpha, channel_radius=channel_radius, geomkind=geomkind, relocate_dims=relocate_dims
     )
     reloc = reloc.numpy(); r = r.numpy(); q = q.numpy()
     
@@ -198,7 +198,7 @@ with h5py.File("../data/spt_yasstemplates.h5") as h5:
     wfs = h5["waveforms"][:]
     geom = h5["geom"][:]
     maxchans = h5["maxchans"][:]
-    relocation_analysis(wfs, maxchans, geom, "All Templates", K=30)
+    relocation_analysis(wfs, maxchans, geom, "All Templates, Just Y/Z/alpha", K=30, relocate_dims="ya")
 
 # %% [markdown]
 # # Culled Templates
@@ -220,6 +220,6 @@ with h5py.File("../data/wfs_locs_b.h5") as h5:
     wfs = h5["denoised_waveforms"][:10_000]
     geom = h5["geom"][:]
     maxchans = h5["max_channels"][:10_000]
-    relocation_analysis(wfs, maxchans, geom, "10k Denoised NP2 Waveforms", do_pfac=False, K=30)
+    relocation_analysis(wfs, maxchans, geom, "10k Denoised NP2, Just Y/Z/alpha", do_pfac=False, K=30, relocate_dims="yza")
 
 # %%
