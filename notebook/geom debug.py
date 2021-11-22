@@ -19,7 +19,7 @@
 # %%
 import numpy as np
 import matplotlib.pyplot as plt
-from spike_psvae import vis_utils, waveform_utils
+from spike_psvae import vis_utils, waveform_utils, localization, point_source_centering
 import h5py
 
 # %%
@@ -63,13 +63,24 @@ vis_utils.labeledmosaic(
 )
 
 # %%
-fig, axes = vis_utils.vis_ptps([std_wfs.ptp(1)[inds], q[inds]], ["observed ptp", "predicted ptp"], "bg")
-plt.suptitle(f"{name}: PTP predictions", fontsize=8)
-plt.tight_layout(pad=0.25)
-plt.show()
-fig, axes = vis_utils.vis_ptps([reloc.ptp(1)[inds], r[inds]], ["relocated ptp", "standard ptp"], "kr")
-plt.suptitle(f"{name}: Relocated PTPs", fontsize=8)
-plt.tight_layout(pad=0.25)
-plt.show()
+std_x, std_y, std_z_rel, std_z_abs, std_alpha = localization.localize_waveforms(std_wfs, geom, maxchans, channel_radius=8, jac=False, geomkind="standard")
+std_reloc, std_r, std_q = point_source_centering.relocate_simple(std_wfs, geom, maxchans, std_x, std_y, std_z_rel, std_alpha, channel_radius=8, geomkind="standard")
+
+ud_x, ud_y, ud_z_rel, ud_z_abs, ud_alpha = localization.localize_waveforms(ud_wfs, geom, maxchans, jac=False, geomkind="updown")
+ud_reloc, ud_r, ud_q = point_source_centering.relocate_simple(ud_wfs, geom, maxchans, ud_x, ud_y, ud_z_rel, ud_alpha, geomkind="updown")
+
+uds_x, uds_y, uds_z_rel, uds_z_abs, uds_alpha = localization.localize_waveforms(uds_wfs, geom, maxchans, channel_radius=8, jac=False, geomkind="standard")
+uds_reloc, uds_r, uds_q = point_source_centering.relocate_simple(uds_wfs, geom, maxchans, uds_x, uds_y, uds_z_rel, uds_alpha, channel_radius=8, geomkind="standard")
+
+# %%
+vis_utils.vis_ptps([std_wfs.ptp(1), std_q], ["std", "pred"], "kr");
+
+# %%
+vis_utils.vis_ptps([ud_wfs.ptp(1), ud_q], ["ud", "pred"], "kr");
+
+# %%
+vis_utils.vis_ptps([uds_wfs.ptp(1), uds_q], ["uds", "pred"], "kr");
+
+# %%
 
 # %%
