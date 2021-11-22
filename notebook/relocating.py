@@ -6,243 +6,220 @@
 #       extension: .py
 #       format_name: percent
 #       format_version: '1.3'
-#       jupytext_version: 1.13.1
+#       jupytext_version: 1.13.0
 #   kernelspec:
-#     display_name: Python 3
+#     display_name: Python 3 (ipykernel)
 #     language: python
 #     name: python3
 # ---
 
-# %%
+# %% [markdown]
+# (Please ignore the code, could not figure out how to hide it in this PDF.)
+
+# %% tags=[]
 # %load_ext autoreload
 # %autoreload 2
 
-# %%
+# %% tags=[]
 import h5py
 import numpy as np
-from spike_psvae import vis_utils, point_source_centering, localization, waveform_utils
-import torch
+from spike_psvae import (
+    vis_utils, point_source_centering, localization, waveform_utils, decomp
+)
 import matplotlib.pyplot as plt
-from scipy import linalg
+import scipy.linalg as la
 import numpy as np
+from tensorly.decomposition import parafac
+from joblib import Memory
 
-# %%
+# %% tags=[]
+mem = Memory("/tmp/reloc")
+
+# %% tags=[]
 plt.rc("figure", dpi=200)
 rg = np.random.default_rng(0)
 
-# %%
-with h5py.File("../data/wfs_locs_tiny.h5") as f:
-    y = f["y"][:]
-    good = np.flatnonzero(y >= 1)
-    y = y[good]
-    wfs = f["denoised_waveforms"][good]
-    x = f["x"][good]
-    z = f["z_rel"][good]
-    z_abs = f["z"][good]
-    alpha = f["alpha"][good]
-    max_ptp = f["max_ptp"][good]
-    maxchans = f["max_channels"][good]
+
+# %% tags=[]
+def relocation_analysis(waveforms, maxchans, geom, name, K=40, channel_radius=8, do_pfac=True, seed=0, relocate_dims="xyza"):
+    # -- localize in standard form
+    # std_wfs = waveform_utils.as_standard_local(
+    #     waveforms, maxchans, geom, channel_radius=channel_radius
+    # )
+    geomkind = "standard"
+    if waveforms.shape[2] == 4 + 2 * channel_radius:
+        geomkind = "updown"
+        channel_radius += 2
+        std_wfs = waveforms
+    else:
+        std_wfs = waveform_utils.get_local_waveforms(
+            waveforms, channel_radius, geom, maxchans=maxchans, geomkind=geomkind
+        )
+    
+    plt.figure(figsize=(6, 4))
+    vis_utils.labeledmosaic([std_wfs[:16], std_wfs[16:32]], ["0-15", "16-32"], pad=2)
+    plt.suptitle(f"{name}: 32 waveforms", fontsize=8)
+    plt.tight_layout(pad=0.25)
+    plt.show()
+    
+    x, y, z_rel, z_abs, alpha = localization.localize_waveforms(
+        wfs, geom, maxchans=maxchans, jac=False, geomkind=geomkind
+    )
+    
+    # -- relocated versions
+    reloc, r, q = point_source_centering.relocate_simple(
+        std_wfs, geom, maxchans, x, y, z_rel, alpha, channel_radius=channel_radius, geomkind=geomkind, relocate_dims=relocate_dims
+    )
+    reloc = reloc.numpy(); r = r.numpy(); q = q.numpy()
+    
+    # -- factor analysis
+    # PCA
+    def pca_resid_plot(wfs, ax=None, q=0.95, c="bk", name=None, pad4=False):
+        wfs = wfs.reshape(wfs.shape[0], -1)
+        wfs = wfs - wfs.mean(axis=0, keepdims=True)
+        v = np.square(la.svdvals(wfs)[:K]) / np.prod(wfs.shape)
+        ax = ax or plt.gca()
+        totvar = np.square(wfs).mean()
+        residvar = np.concatenate(([totvar], totvar - np.cumsum(v)))
+        if pad4:
+            ax.plot([totvar, totvar, totvar, totvar, *residvar][:K], marker=".", c=c[0], label=name)
+        else:
+            ax.plot(residvar[:50], marker=".", c=c[0], label=name)
+    
+    # Parafac
+    cumparafac = mem.cache(decomp.cumparafac)
+    def pfac_resid_plot(wfs, ax=None, q=0.95, c="bk", name=None, pad4=False):
+        mwfs = wfs - wfs.mean(axis=0, keepdims=True)
+        sses = cumparafac(mwfs, K)
+        mses = sses / np.prod(wfs.shape[1:])
+        n0 = np.square(mwfs).mean()
+        ax = ax or plt.gca()
+        mses = np.concatenate(([n0], mses))
+        if pad4:
+            ax.plot([n0, n0, n0, n0, *mses][:K], marker=".", c=c[0], label=name)
+        else:
+            ax.plot(mses, marker=".", c=c[0], label=name)
+            
+    # -- Plots
+    # the ones we will show
+    inds = np.random.default_rng(seed).choice(std_wfs.shape[0], size=16)
+    
+    
+    # Relocation x PTPs
+    fig, axes = vis_utils.vis_ptps([std_wfs.ptp(1)[inds], q[inds]], ["observed ptp", "predicted ptp"], "bg")
+    plt.suptitle(f"{name}: PTP predictions", fontsize=8)
+    plt.tight_layout(pad=0.25)
+    plt.show()
+    fig, axes = vis_utils.vis_ptps([reloc.ptp(1)[inds], r[inds]], ["relocated ptp", "standard ptp"], "kr")
+    plt.suptitle(f"{name}: Relocated PTPs", fontsize=8)
+    plt.tight_layout(pad=0.25)
+    plt.show()
+    
+    # PCA resid
+    def a(semilogy=False):
+        plt.figure(figsize=(6, 4))
+        pca_resid_plot(std_wfs, name="original")
+        pca_resid_plot(reloc, c="rk", name="relocated", pad4=True)
+        if semilogy: plt.semilogy()
+        plt.title(f"{name}: does relocating help PCA?")
+        plt.ylabel("residual variance (s.u.)")
+        plt.xlabel("number of components (0=full data)")
+        plt.legend(fancybox=False)
+        plt.show()
+    a(); a(1)
+    
+    # Parafac
+    if do_pfac:
+        def b(semilogy=False):
+            plt.figure(figsize=(6, 4))
+            pfac_resid_plot(std_wfs, name="original")
+            pfac_resid_plot(reloc, c="rk", name="relocated", pad4=True)
+            if semilogy: plt.semilogy()
+            plt.title(f"{name}: does relocating help Parafac?")
+            plt.ylabel("residual variance (s.u.)")
+            plt.xlabel("number of components (0=full data)")
+            plt.show()
+        b(); b(1)
+        
+    # -- low rank models + residuals
+    def modelplot(wfs, model="PCA", flavor="original", add_center=True, k=1):
+        mean = wfs.mean(axis=0, keepdims=True)
+        mwfs = wfs - mean
+        
+        if model == "PCA":
+            U, s, Vh = la.svd(mwfs.reshape(mwfs.shape[0], -1), full_matrices=False)
+            recon = (U[inds, :k] @ np.diag(s[:k]) @ Vh[:k]).reshape(16, *mwfs.shape[1:])
+        elif model == "Parafac":
+            weights, factors = parafac(mwfs, k)
+            recon = np.einsum("l,il,jl,kl->ijk", weights, factors[0][inds], *factors[1:])
+        else:
+            assert False
+        
+        batch = mwfs[inds]
+        if add_center:
+            batch += mean
+            recon += mean
+        
+        plt.figure(figsize=(6, 4))
+        vis_utils.labeledmosaic(
+            [batch, recon, batch - recon],
+            [flavor, f"{model} recon", "residual"],
+            pad=2,
+        )
+        plt.suptitle(f"{name}: {model}({k}) - {flavor} data", fontsize=8)
+        plt.tight_layout(pad=0.25)
+        plt.show()
+    
+    modelplot(std_wfs)
+    modelplot(reloc, flavor="relocated")
+    modelplot(std_wfs, k=5)
+    modelplot(reloc, flavor="relocated", k=5)
+    
+    if do_pfac:
+        modelplot(std_wfs, model="Parafac")
+        modelplot(reloc, model="Parafac", flavor="relocated")
+        modelplot(std_wfs, model="Parafac", k=5)
+        modelplot(reloc, model="Parafac", flavor="relocated", k=5)
+
+
+
+# %% [markdown]
+# # Relocating, PCA and Parafac
+#
+# This is a huge pile of figures showing the effect of the simple point source relocation on PCA and Parafac. So, does it help these models reconstruct the data? Yes. It does. At least a little bit.
+#
+# Below, the same set of figures is shown for 3 data sets. First, ~170 nice NP2 templates. Next, the same templates, but with 10 or so weird looking ones removed. Finally, 10,000 denoised spikes from an NP2 probe.
+
+# %% [markdown]
+# # All Templates
+
+# %% tags=[]
+with h5py.File("../data/spt_yasstemplates.h5") as h5:
+    wfs = h5["waveforms"][:]
+    geom = h5["geom"][:]
+    maxchans = h5["maxchans"][:]
+    relocation_analysis(wfs, maxchans, geom, "All Templates, Just Y/Z/alpha", K=30, relocate_dims="ya")
+
+# %% [markdown]
+# # Culled Templates
+
+# %% tags=[]
+with h5py.File("../data/spt_yasstemplates_culled.h5") as h5:
+    wfs = h5["waveforms"][:]
+    geom = h5["geom"][:]
+    maxchans = h5["maxchans"][:]
+    relocation_analysis(wfs, maxchans, geom, "Culled Templates", K=30)
+
+# %% [markdown]
+# # 10,000 denoised NP2 waveforms
+#
+# (I did not run Parafac on these because I didn't want to wait around.)
 
 # %%
-z = lambda a, b: range(a)
+with h5py.File("../data/wfs_locs_b.h5") as h5:
+    wfs = h5["denoised_waveforms"][:10_000]
+    geom = h5["geom"][:]
+    maxchans = h5["max_channels"][:10_000]
+    relocation_analysis(wfs, maxchans, geom, "10k Denoised NP2, Just Y/Z/alpha", do_pfac=False, K=30, relocate_dims="yza")
 
 # %%
-z(1, b=2)
-
-# %%
-xs, ys, zs, alphas = localization.localize_waveforms(wfs, geom, maxchans=maxchans)
-z_rels = waveform_utils.relativize_z(zs, maxchans, geom)
-
-# %%
-(xs - x).max()
-
-# %%
-plt.plot(x, z_abs, "k.", ms=1);
-
-# %%
-plt.hist(y, bins=128);
-plt.axvline(15, color="r");
-
-# %%
-plt.hist(alpha, bins=128);
-plt.axvline(175, color="r");
-
-# %%
-np.corrcoef(y, alpha)[1, 0]
-
-# %%
-geom = np.load("../data/np2_channel_map.npy")
-geom.shape
-
-# %%
-# batch = torch.tensor(wfs[15:16])
-# bx = torch.tensor(x[15:16])
-# by = torch.tensor(y[15:16])
-# bz = torch.tensor(z[15:16])
-# bmaxchan = torch.LongTensor(maxchans[15:16])
-# balpha = torch.tensor(alpha[15:16])
-
-# inds = rg.choice(len(good), size=16, replace=False)
-inds = np.arange(16)
-batch = torch.tensor(wfs[inds])
-bx = torch.tensor(xs[inds])
-by = torch.tensor(ys[inds])
-bz = torch.tensor(z_rels[inds])
-bmaxchan = torch.LongTensor(maxchans[inds])
-balpha = torch.tensor(alphas[inds])
-reloc, r, q = point_source_centering.relocate_simple(batch, geom, bmaxchan, bx, by, bz, balpha)
-
-# %%
-bx, by, bz, balpha
-
-# %%
-q.shape, r.shape
-
-# %%
-fig, axes = vis_utils.vis_ptps([batch.numpy().ptp(1), q.numpy()], ["observed ptp", "predicted ptp"], "bg")
-plt.show()
-fig, axes = vis_utils.vis_ptps([reloc.numpy().ptp(1), r.numpy()], ["relocated ptp", "standard ptp"], "kr")
-plt.show()
-
-# %%
-# plt.plot(r.t())
-# plt.show()
-# plt.plot(q.t())
-# plt.show()
-mx = torch.max(batch, dim=1)
-mn = torch.min(batch, dim=1)
-ptp = mx.values - mn.values
-# plt.plot(ptp.t())
-fig, axes = plt.subplots(4, 4, figsize=(6, 6), sharex=True, sharey=True)
-for qq, pp, rr, ax in zip(q, ptp, r, axes.flat):
-#     ax.plot(pp - qq, color="k", label="difference");
-    # TODO add locs to title
-    ax.plot(pp, color="b", label="observed ptp");
-    ax.plot(qq, color="g", label="ptp predicted from localization");
-#     ax.plot(rr, color="r", label="standard location ptp");
-# TODO separate plot with post-reloc ptp and standard loc ptp
-axes.flat[3].legend();
-plt.show()
-
-# %%
-# TODO lineplots
-vis_utils.labeledmosaic([batch, reloc, batch - reloc], ["original", "relocated", "difference"], pad=2, cbar=True)
-
-# %%
-fig, (aa, ab, ac) = plt.subplots(3, 1, figsize=(6,6), sharex=True)
-aa.plot(bx, ".", ms=5, label="x")
-aa.plot(bz, ".", ms=5, label="z")
-aa.legend()
-ab.plot(by, ".", ms=5, label="y")
-ab.legend()
-ac.plot(balpha, ".", ms=5, label="alpha")
-ac.legend()
-plt.show()
-
-# %%
-
-# %%
-
-# %%
-batch = torch.tensor(wfs[:])
-bx = torch.tensor(x[:])
-by = torch.tensor(y[:])
-bz = torch.tensor(z[:])
-bmaxchan = torch.LongTensor(maxchans[:])
-balpha = torch.tensor(alpha[:])
-reloc, r, q = point_source_centering.relocate_simple(batch, geom, bmaxchan, bx, by, bz, balpha)
-
-# %%
-
-# %%
-vals = linalg.svdvals(batch.numpy().reshape(614, -1))
-vals = np.square(vals)
-(np.cumsum(vals) / np.sum(vals) < 0.95).sum()
-
-# %%
-vals = linalg.svdvals(reloc.numpy().reshape(614, -1))
-vals = np.square(vals)
-(np.cumsum(vals) / np.sum(vals) < 0.95).sum()
-
-# %%
-t = np.load("/Users/charlie/Downloads/spt_yass_templates.npy")
-good = np.flatnonzero(t.ptp(1).ptp(1))
-t = t[good]
-
-# %%
-t.shape
-
-# %%
-# xt, yt, zt, alphat = localization.localize_waveforms(t, geom, n_workers=1)
-
-
-# %%
-t[:16].shape
-
-# %%
-bt, maxchant = waveform_utils.get_local_waveforms(t[rg.choice(t.shape[0], size=16)], 10)
-xt, yt, zt, alphat = localization.localize_waveforms(bt, geom, maxchans=maxchant, n_workers=1)
-zt_rel = zt - geom[maxchant, 1]
-ptpt = bt.ptp(1)
-reloct, rt, qt = point_source_centering.relocate_simple(bt, geom, maxchant, xt, yt, zt_rel, alphat)
-
-# %%
-xt, yt, zt, alphat
-
-# %%
-vis_utils.labeledmosaic(
-    [torch.as_tensor(bt), reloct, torch.as_tensor(bt) - reloct],
-    ["original", "relocated", "difference"],
-    pad=2, cbar=True)
-
-# %%
-fig, axes = plt.subplots(4, 4, figsize=(6, 6), sharex=True, sharey=True)
-for qq, pp, rr, ax, x_, y_, z_, alpha_, gg in zip(qt, ptpt, rt, axes.flat, xt, yt, zt_rel, alphat, "abcdefghijklmnopqrstuv"):
-#     ax.plot(pp - qq, color="k", label="difference");
-    # TODO add locs to title
-    ax.plot(pp, color="b", label="observed ptp");
-    ax.plot(qq, color="g", label="ptp predicted from localization");
-#     ax.set_title(f"{gg}: (x,y,z,α)=({x_:.2f},{y_:.2f},{z_:.2f},{alpha_:.2f})", fontsize=6)
-    ax.set_title(f"{gg}", fontsize=6)
-#     ax.plot(rr, color="r", label="standard location ptp");
-# TODO separate plot with post-reloc ptp and standard loc ptp
-axes[0, -1].legend();
-plt.show()
-
-# %%
-fig, axes = plt.subplots(4, 4, figsize=(6, 6), sharex=True, sharey=True)
-
-reloc_ptps = reloct.numpy().ptp(1)
-
-for qq, pp, rr, ax, x_, y_, z_, alpha_, gg in zip(qt, reloc_ptps, rt, axes.flat, xt, yt, zt_rel, alphat, "abcdefghijklmnopqrstuv"):
-#     ax.plot(pp - qq, color="k", label="difference");
-    # TODO add locs to title
-    ax.plot(pp, color="k", label="relocated ptp");
-#     ax.plot(qq, color="g", label="ptp predicted from localization");
-#     ax.set_title(f"{gg}: (x,y,z,α)=({x_:.2f},{y_:.2f},{z_:.2f},{alpha_:.2f})", fontsize=6)
-    ax.set_title(f"{gg}", fontsize=6)
-    ax.plot(rr, color="r", label="standard location ptp");
-# TODO separate plot with post-reloc ptp and standard loc ptp
-axes[0, -1].legend();
-plt.show()
-
-# %%
-ptps = np.array([np.array(ptp) for ptp in [reloc_ptps, rt]])
-
-# %%
-ptps.shape
-
-# %%
-fig, axes = vis_utils.vis_ptps([ptpt, qt], ["observed ptp", "predicted ptp"], "bg")
-plt.show()
-
-# %%
-fig, axes = vis_utils.vis_ptps([reloc_ptps, rt], ["relocated ptp", "standard ptp"], "kr")
-plt.show()
-
-# %%
-
-# %%
-
-# %%
-# TODO pca temporal vectors, then their spatial loadings
