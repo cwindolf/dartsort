@@ -44,7 +44,7 @@ JUPYTERLAB_WORKSPACES_DIR=.jupyter/lab/workspaces jupyter lab --no-browser --ip=
  - [ ] Get the denoiser / detection code running here, we'll need to ingest more data.
  - [ ] NPUltra standard geom.
  - [ ] Data augmentation
-    - [ ]Spikes on the edge of the probe are outliers (maxchan is not near center) -- least squares doesn't care, but a neural net does. Maybe the pipeline can extract extra channels, and the data loader can randomly slide a window around.
+    - [ ] Spikes on the edge of the probe are outliers (maxchan is not near center) -- least squares doesn't care, but a neural net does. Maybe the pipeline can extract extra channels, and the data loader can randomly slide a window around. 
 
 *Working on:*
 
@@ -52,11 +52,13 @@ JUPYTERLAB_WORKSPACES_DIR=.jupyter/lab/workspaces jupyter lab --no-browser --ip=
     - Architecture code is here, but not learning well yet...
     - [ ] Overfit [PS]VAE to templates
        - [ ] See if standard geom and z relative to bottom helps learning
+    - [ ] Add in $\beta$ and all that, and figure out hyperparameter search. Hyperopt?
  - [ ] Movies of PCA/Parafac features over time, do they drift?
     - If we still see wiggles in the clusters after re-locating, are the wiggles strongest during periods of large probe motion?
- - [ ] Heatmap vis cropping: can do this by using a non-constant dt - eg, show us samples at something like [[-2:0.1:-1] [-2:0.02:-1] [1:0.1:2]] ms in matlab notation, or something like this (dt changes per spike?)
+ - [ ] Heatmap vis cropping: can do this by using a non-constant dt - eg, show us samples at something like `[[-2:0.1:-1] [-2:0.02:-1] [1:0.1:2]]` ms in matlab notation, or something like this (dt changes per spike?)
  - [ ] Relocate by interpolation / shift on Z rather than scaling by ptps
  - [ ] Clustering / final performance metrics
+    - What is the minimum viable clustering that will produce a meaningful result? And, how best to compare them?
 
 
 ### Known bugs
