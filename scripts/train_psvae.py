@@ -49,10 +49,13 @@ args = ap.parse_args()
 
 
 print("data from", args.input_h5)
+print("netspec:", args.netspec)
 with h5py.File(args.input_h5, "r") as f:
     for k in f.keys():
         print(k.ljust(20), f[k].dtype, f[k].shape)
     N, in_w, in_chan = f[args.waveforms_key].shape
+    if args.localize:
+        in_chan = 20
     in_shape = in_w, in_chan
     print("x shape:", in_shape)
 
@@ -80,19 +83,25 @@ if not args.localize:
         args.supervised_keys,
         y_min=args.y_min,
     )
+    loader = torch.utils.data.DataLoader(
+        dataset,
+        num_workers=args.num_data_workers,
+        batch_sampler=ContiguousRandomBatchSampler(dataset, args.batch_size),
+    )
 else:
     with h5py.File(args.input_h5, "r") as f:
         dataset = LocalizingHDF5Dataset(
-            f[args.waveforms_key],
-            f["geom"],
+            f[args.waveforms_key][:],
+            f["geom"][:],
             args.supervised_keys,
             y_min=args.y_min,
         )
-loader = torch.utils.data.DataLoader(
-    dataset,
-    num_workers=args.num_data_workers,
-    batch_sampler=ContiguousRandomBatchSampler(dataset, args.batch_size),
-)
+    loader = torch.utils.data.DataLoader(
+        dataset,
+        num_workers=args.num_data_workers,
+        batch_size=args.batch_size,
+        shuffle=True,
+    )
 
 # %%
 writer = SummaryWriter(

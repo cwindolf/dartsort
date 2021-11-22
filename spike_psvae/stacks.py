@@ -153,7 +153,7 @@ def convolutional_decoder(
     print("dec", first_h, first_w, first_c, first_h * first_w * first_c)
 
     in_dims = final_hidden_dims
-    out_dims = [final_hidden_dims[1:], first_h * first_w * first_c]
+    out_dims = [*final_hidden_dims[1:], first_h * first_w * first_c]
     in_channels = channels
     out_channels = [*channels[1:], 2]
 
@@ -254,7 +254,7 @@ def convb_decoder(
     print("dec", first_h, first_w, first_c, first_h * first_w * first_c)
 
     in_dims = final_hidden_dims
-    out_dims = [final_hidden_dims[1:], first_h * first_w * first_c]
+    out_dims = [*final_hidden_dims[1:], first_h * first_w * first_c]
     in_channels = channels
     out_channels = [*channels[1:], 1]
     strides = [*([1] * (len(channels) - 1)), (1, 2)]
@@ -288,7 +288,7 @@ def netspec(spec, in_shape, batchnorm):
 
     if spec.startswith("linear:"):
         hidden_dims = list(map(int, spec.split(":")[1].split(",")))
-        final_hidden_dim = int(spec.split(":")[2].split(","))
+        final_hidden_dim = int(spec.split(":")[2])
 
         encoder = linear_encoder(
             in_dim, hidden_dims, final_hidden_dim, batchnorm=batchnorm
@@ -299,7 +299,7 @@ def netspec(spec, in_shape, batchnorm):
     elif spec.startswith("conv:"):
         channels = list(map(int, spec.split(":")[1].split(",")))
         kernel_sizes = list(map(int, spec.split(":")[2].split(",")))
-        final_hidden_dims = int(spec.split(":")[3].split(","))
+        final_hidden_dims = list(map(int, spec.split(":")[3].split(",")))
 
         encoder = convolutional_encoder(
             in_shape,
@@ -318,7 +318,7 @@ def netspec(spec, in_shape, batchnorm):
     elif spec.startswith("convb:"):
         channels = list(map(int, spec.split(":")[1].split(",")))
         kernel_sizes = list(map(int, spec.split(":")[2].split(",")))
-        final_hidden_dims = int(spec.split(":")[3].split(","))
+        final_hidden_dims = list(map(int, spec.split(":")[3].split(",")))
 
         encoder = convb_encoder(
             in_shape,
