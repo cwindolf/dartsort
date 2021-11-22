@@ -11,12 +11,21 @@ BOUNDS = (-100, 0, -100, 0), (132, 250, 100, 10000)
 Y0, ALPHA0 = 21.0, 1000.0
 
 
-def check_shapes(waveforms, maxchans, channel_radius, geom):
+def check_shapes(waveforms, maxchans, channel_radius, geom, geomkind):
     N, T, C = waveforms.shape
     C_, d = geom.shape
     assert d == 2
 
     if C == 2 * channel_radius:
+        assert geomkind == "updown"
+        print(f"Waveforms are already trimmed to {C} channels.")
+        if maxchans is None:
+            # we will need maxchans later to determine local geometries
+            raise ValueError(
+                "maxchans can't be None when waveform channels < geom channels"
+            )
+    elif C == 2 * channel_radius + 2:
+        assert geomkind == "standard"
         print(f"Waveforms are already trimmed to {C} channels.")
         if maxchans is None:
             # we will need maxchans later to determine local geometries
@@ -113,7 +122,7 @@ def localize_waveforms(
     bits will be extracted.
     """
     if _not_helper:
-        N, T, C = check_shapes(waveforms, maxchans, channel_radius, geom)
+        N, T, C = check_shapes(waveforms, maxchans, channel_radius, geom, geomkind)
     else:
         N, T, C = waveforms.shape
 
@@ -125,8 +134,8 @@ def localize_waveforms(
     xrange = trange if _not_helper else lambda a, desc: range(a)
     xqdm = tqdm if _not_helper else lambda a, total, desc: a
 
-    # -- get N x (2 * channel_radius) array of PTPs
-    if C == 2 * channel_radius:
+    # -- get N x local_neighborhood_size array of PTPs
+    if C in (2 * channel_radius, 2 * channel_radius + 2):
         ptps = waveforms.ptp(axis=1)
     else:
         # we need maxchans to extract the local waveform
@@ -189,7 +198,7 @@ def localize_waveforms_batched(
     batch_size=128,
 ):
     """A helper for running the above on hdf5 datasets or similar"""
-    N, T, C = check_shapes(waveforms, maxchans, channel_radius, geom)
+    N, T, C = check_shapes(waveforms, maxchans, channel_radius, geom, geomkind)
     xs = np.empty(N)
     ys = np.empty(N)
     z_rels = np.empty(N)
