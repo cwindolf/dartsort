@@ -21,6 +21,7 @@ mkdir -p .jupter/lab/workspaces
 JUPYTERLAB_WORKSPACES_DIR=.jupyter/lab/workspaces jupyter lab --no-browser --ip=0.0.0.0
 ```
 
+
 ### To do:
 
 *Done for now:*
@@ -56,6 +57,12 @@ JUPYTERLAB_WORKSPACES_DIR=.jupyter/lab/workspaces jupyter lab --no-browser --ip=
  - [ ] Heatmap vis cropping: can do this by using a non-constant dt - eg, show us samples at something like [[-2:0.1:-1] [-2:0.02:-1] [1:0.1:2]] ms in matlab notation, or something like this (dt changes per spike?)
  - [ ] Relocate by interpolation / shift on Z rather than scaling by ptps
  - [ ] Clustering / final performance metrics
+
+
+### Known bugs
+
+ - [ ] This thing with updown -> standard, then the predicted PTP is flipped. What??
+
 
 ### Notes and questions
 

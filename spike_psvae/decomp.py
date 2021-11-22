@@ -10,4 +10,4 @@ def cumparafac(wfs, max_rank=100):
         rec = np.einsum("l,il,jl,kl->ijk", weights, *factors)
         mse = np.square(wfs - rec).sum(axis=(1, 2)).mean()
         errors.append(mse)
-    return errors
+    return np.array(errors)

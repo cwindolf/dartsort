@@ -105,13 +105,14 @@ plt.show()
 # %%
 # get a batch
 with h5py.File(h5_path, "r+") as h5:
-    good = np.flatnonzero(h5["y"][:] > 0.1)
+    good = np.flatnonzero(h5["y"][:] < 1e-8)
     bwf = h5["denoised_waveforms"][good[:16]]
-    balpha = h5["alpha"][good[:16]]
-    bx = h5["x"][good[:16]]
-    by = h5["y"][good[:16]]
-    bz = h5["z_rel"][good[:16]]
     bmaxchan = h5["max_channels"][good[:16]]
+    # balpha = h5["alpha"][good[:16]]
+    # bx = h5["x"][good[:16]]
+    # by = h5["y"][good[:16]]
+    # bz = h5["z_rel"][good[:16]]
+    bx, by, bz, _, balpha = localization.localize_waveforms(bwf, geom, bmaxchan)
 
 # %%
 reloc, r, q = point_source_centering.relocate_simple(bwf, geom, bmaxchan, bx, by, bz, balpha)
@@ -126,19 +127,26 @@ bx[2], by[2], bz[2], balpha[2]
 reloc.min(), reloc.max()
 
 # %%
+
+# %%
 vis_utils.labeledmosaic(
     [bwf, reloc, bwf - reloc],
     ["original", "relocated", "residual"],
     pad=2,
+    separate_norm=True,
+    cbar=False
 )
 
 # %%
 (np.abs(y) < 0.01).mean()
 
 # %%
-fig, axes = vis_utils.vis_ptps([bwf.ptp(1), q], ["observed ptp", "predicted ptp"], "bg")
+by.max()
+
+# %%
+fig, axes = vis_utils.vis_ptps([bwf.ptp(1), q], ["observed ptp", "predicted ptp"], "bg", subplots_kwargs=dict(sharex=True, figsize=(5, 5)))
 plt.show()
-fig, axes = vis_utils.vis_ptps([reloc.ptp(1), r], ["relocated ptp", "standard ptp"], "kr")
+fig, axes = vis_utils.vis_ptps([reloc.ptp(1), r], ["relocated ptp", "standard ptp"], "kr", subplots_kwargs=dict(sharex=True, figsize=(5, 5)))
 plt.show()
 
 # %%
@@ -169,21 +177,8 @@ reloc, r, q = point_source_centering.relocate_simple(local_wfs, geom, maxchans, 
 reloc = reloc.numpy(); r = r.numpy(); q = q.numpy()
 
 # %%
-plt.hist(y, bins=32);
-
-# %%
-bigy = np.flatnonzero(y >= 1)
-away = np.flatnonzero((maxchans >= 12) & (maxchans < 371))
-
-# %%
-maxptp = wfs.ptp(1).max(1)
-print(maxptp.min())
-plt.hist(maxptp, bins=32);
-big = np.flatnonzero(maxptp > 4)
-
-# %%
 vis_utils.labeledmosaic(
-    [local_wfs[big[:16]], reloc[big[:16]]], #, local_wfs[:16] - reloc[:16]],
+    [local_wfs[:16], reloc[:16]], #, local_wfs[:16] - reloc[:16]],
     ["original", "relocated"], #, "residual"],
     pad=2,
 )
@@ -330,22 +325,22 @@ plt.xlabel("number of components (really starts at 0 this time)")
 # ### images of 5 component PCA and PARAFAC reconstructions, with and without relocating, for the same 16 waveforms
 
 # %%
-def recon_plot(wfs, k=5, label="original"):
+def recon_plot(wfs, k=5, addmean=True, label="original"):
     means = wfs.mean(axis=0, keepdims=True)
-    wfs = wfs # - means
+    wfs = wfs - means
+    cmeans = int(addmean) * means
     ogshape = wfs.shape
     
     inds = np.random.default_rng(2).choice(wfs.shape[0], size=16, replace=False)
-    batch = wfs[inds] # + means
+    batch = wfs[inds] + cmeans
     
     # k component PCA reconstruction
     U, s, Vh = la.svd(wfs.reshape(wfs.shape[0], -1), full_matrices=False)
-    pca = (U[inds, :k] @ np.diag(s[:k]) @ Vh[:k, :]).reshape((16, *ogshape[1:])) # + means
+    pca = (U[inds, :k] @ np.diag(s[:k]) @ Vh[:k, :]).reshape((16, *ogshape[1:])) + cmeans
     
     # k component Parafac reconstruction
     weights, factors = parafac(wfs, k)
-    print(weights, factors[0].shape)
-    pfac = np.einsum("n,in,jn,kn->ijk", weights, factors[0][inds], factors[1], factors[2]) # + means
+    pfac = np.einsum("n,in,jn,kn->ijk", weights, factors[0][inds], *factors[1:]) + cmeans
     
     vis_utils.labeledmosaic(
         [batch, pca, pfac],
@@ -363,15 +358,23 @@ recon_plot(local_wfs[:, :, 2:-2], k=1)
 plt.suptitle("original spikes, reconstruction with 1 component", fontsize=8)
 
 # %%
-recon_plot(reloc[:, :, 2:-2], label="reloc")
+recon_plot(reloc[:, :, 2:-2], label="reloc", addmean=False)
 plt.suptitle("relocated spikes, reconstruction with 5 components", fontsize=8)
 
 # %%
 recon_plot(reloc[:, :, 2:-2], label="reloc", k=1)
 plt.suptitle("relocated spikes, reconstruction with 1 component", fontsize=8)
 
-# %% [markdown]
+# %%
+
+# %%
+
+# %%
+
+# %% [markdown] tags=[]
 # ### does this relocation remove correlations with the localization features?
+
+# %%
 
 # %%
 
