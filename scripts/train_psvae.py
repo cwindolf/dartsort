@@ -6,7 +6,7 @@ import torch
 from torch.utils.tensorboard import SummaryWriter
 
 from spike_psvae.psvae import PSVAE
-from spike_psvae.torch_utils import (
+from spike_psvae.data_utils import (
     SpikeHDF5Dataset,
     ContiguousRandomBatchSampler,
 )
