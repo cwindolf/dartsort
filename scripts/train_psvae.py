@@ -3,12 +3,14 @@ import h5py
 import numpy as np
 import time
 import torch
+from pathlib import Path
 from torch.utils.tensorboard import SummaryWriter
 
 from spike_psvae.psvae import PSVAE
 from spike_psvae.data_utils import (
     SpikeHDF5Dataset,
     ContiguousRandomBatchSampler,
+    LocalizingHDF5Dataset,
 )
 from spike_psvae import stacks
 
@@ -16,6 +18,9 @@ from spike_psvae import stacks
 ap = argparse.ArgumentParser()
 
 ap.add_argument("--input_h5", default="data/wfs_locs_b.h5", required=False)
+ap.add_argument(
+    "--waveforms_key", default="denoised_waveforms", required=False
+)
 ap.add_argument("--alpha", type=float, default=1.0, required=False)
 ap.add_argument(
     "--supervised_keys",
@@ -35,6 +40,10 @@ ap.add_argument("--batch_size", type=int, default=8, required=False)
 ap.add_argument("--run_name", type=str)
 ap.add_argument("--nobatchnorm", action="store_true")
 ap.add_argument("--num_data_workers", default=0, type=int)
+ap.add_argument("--localize", action="store_true")
+ap.add_argument(
+    "--rundir", default=Path("/mnt/3TB/charlie/features/runs"), type=Path
+)
 
 args = ap.parse_args()
 
@@ -43,7 +52,7 @@ print("data from", args.input_h5)
 with h5py.File(args.input_h5, "r") as f:
     for k in f.keys():
         print(k.ljust(20), f[k].dtype, f[k].shape)
-    N, in_w, in_chan = f["denoised_waveforms"].shape
+    N, in_w, in_chan = f[args.waveforms_key].shape
     in_shape = in_w, in_chan
     print("x shape:", in_shape)
 
@@ -58,18 +67,27 @@ n_latents = supervised_latents + args.unsupervised_latents
 encoder, decoder = stacks.netspec(args.netspec, in_shape, not args.nobatchnorm)
 
 # %%
-psvae = PSVAE(
-    encoder, decoder, supervised_latents, args.unsupervised_latents
-)
+psvae = PSVAE(encoder, decoder, supervised_latents, args.unsupervised_latents)
 print(psvae)
 optimizer = torch.optim.Adam(psvae.parameters(), lr=1e-3)
 
 # %%
-dataset = SpikeHDF5Dataset(
-    args.input_h5,
-    "denoised_waveforms",
-    args.supervised_keys,
-)
+# data / batching managers
+if not args.localize:
+    dataset = SpikeHDF5Dataset(
+        args.input_h5,
+        args.waveforms_key,
+        args.supervised_keys,
+        y_min=args.y_min,
+    )
+else:
+    with h5py.File(args.input_h5, "r") as f:
+        dataset = LocalizingHDF5Dataset(
+            f[args.waveforms_key],
+            f["geom"],
+            args.supervised_keys,
+            y_min=args.y_min,
+        )
 loader = torch.utils.data.DataLoader(
     dataset,
     num_workers=args.num_data_workers,
@@ -78,7 +96,7 @@ loader = torch.utils.data.DataLoader(
 
 # %%
 writer = SummaryWriter(
-    log_dir=f"/mnt/3TB/charlie/features/runs/{args.run_name}",
+    log_dir=args.rundir / args.run_name,
 )
 
 psvae.to(device)
