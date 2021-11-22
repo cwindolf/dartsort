@@ -26,7 +26,7 @@ import time
 
 # %%
 from spike_psvae.psvae import PSVAE
-from spike_psvae.torch_utils import SpikeHDF5Dataset
+from spike_psvae.data_utils import SpikeHDF5Dataset
 
 # %%
 input_h5 = "/mnt/3TB/charlie/features/wfs_locs.h5"
