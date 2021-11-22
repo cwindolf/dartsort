@@ -17,9 +17,9 @@ def updown_decision(geom, maxchan, channel_radius, ptp):
     # Deal with edge cases
     low = maxchan - channel_radius
     high = maxchan + channel_radius
-    if low < 0:
+    if low <= 0:
         return True
-    if high > geom.shape[0]:
+    if high >= geom.shape[0]:
         return False
 
     if C == G:
@@ -34,6 +34,7 @@ def updown_decision(geom, maxchan, channel_radius, ptp):
         raise ValueError(
             f"Not sure how to get local geom when ptp has {C} channels"
         )
+    # print(maxchan, up, local_maxchan, ptp[local_maxchan + 2] > ptp[local_maxchan - 2])
 
     return up
 
@@ -45,17 +46,15 @@ def get_local_chans_updown(geom, maxchan, channel_radius, ptp):
     assert ptp.ndim == 1
     C = ptp.shape[0]
     maxchan = int(maxchan)
-    if maxchan % 2:
-        maxchan = maxchan - 1
 
     # Deal with edge cases
     low = maxchan - channel_radius
     high = maxchan + channel_radius
-    if low < 0:
+    if low <= 0:
         low = 0
         high = 2 * channel_radius
         return low, high
-    if high > geom.shape[0]:
+    if high >= geom.shape[0]:
         high = geom.shape[0]
         low = geom.shape[0] - 2 * channel_radius
         return low, high
@@ -74,9 +73,11 @@ def get_local_chans_updown(geom, maxchan, channel_radius, ptp):
         raise ValueError(
             f"Not sure how to get local geom when ptp has {C} channels"
         )
+        
+    # print(maxchan, up)
 
-    low += 2 * up
-    high += 2 * up
+    low += 2 * up - (maxchan % 2)
+    high += 2 * up - (maxchan % 2)
 
     return low, high
 
