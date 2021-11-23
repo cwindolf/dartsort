@@ -199,7 +199,7 @@ with h5py.File("../data/spt_yasstemplates.h5") as h5:
     wfs = h5["waveforms"][:]
     geom = h5["geom"][:]
     maxchans = h5["maxchans"][:]
-    relocation_analysis(wfs, maxchans, geom, "All Templates, Just Y/Z/alpha", K=30, do_pfac=False)
+    relocation_analysis(wfs, maxchans, geom, "All Templates, Just Y/Z/alpha", K=30, do_pfac=False, relocate_dims="yza")
 
 # %% [markdown] jp-MarkdownHeadingCollapsed=true tags=[]
 # # Culled Templates
