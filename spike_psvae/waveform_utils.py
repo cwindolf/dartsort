@@ -32,7 +32,8 @@ def updown_decision(geom, maxchan, channel_radius, ptp):
         up = ptp[local_maxchan + 2] > ptp[local_maxchan - 2]
     else:
         raise ValueError(
-            f"Not sure how to get local geom when ptp has {C} channels"
+            f"Not sure how to get local geom when ptp has {C} channels "
+            f"and channel_radius={channel_radius}"
         )
     # print(maxchan, up, local_maxchan, ptp[local_maxchan + 2] > ptp[local_maxchan - 2])
 
