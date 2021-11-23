@@ -2,6 +2,8 @@
 
 Can we remove the effect of location "analytically"?
 
+IDK why I did this torch instead of np but easy to change. uhh
+
 TODO: Not sure how much of this code assumes NP2 geom specific stuff.
 """
 import torch
@@ -50,12 +52,47 @@ def relocate_simple(
     channel_radius=10,
     geomkind="updown",
     relocate_dims="xyza",
+    interp_xz=False,
 ):
-    """'Relocate' waveforms according to the point source model
-    
-    This computes the PTP predicted for a waveform from the point source model,
-    divides the waveform by that PTP, and multiplies it by the predicted PTP at a
-    "standard" location.
+    """Shift waveforms according to the point source model
+
+    This computes the PTP predicted for a waveform from the point
+    source model, divides the waveform by that PTP, and multiplies
+    it by the predicted PTP at a "standard" location.
+
+    Optionally (if `interp_xz`), any relocation done on x/z dims will
+    be performed by shifting the image rather than multiplying by
+    PTPs.
+
+    Arguments
+    ---------
+    waveforms : array-like (batches, time, local channels)
+    geom : array-like (global channels, 2)
+        XZ coords
+    maxchan : integer array-like (batches,)
+        Max channel in global channel space, not local.
+    x, y, z_rel, alpha : array-likes, all (batches,)
+        Localizations for this batch of spikes
+    channel_radius : int
+    geomkind : str, "updown" or "standard"
+    relocate_dims : str
+        Should be a string containing some or all of the characters "xyza"
+        These are the dimensions that will be relocated. For example,
+        if you set it to "yza", then the localization for `x` will be used
+        when constructing the target/stereotpyical PTP, so that nothing
+        will happen to your `waveforms` along the x dimension
+    interp_xz : bool
+        Rather than shifting X/Z by means of PTPs, use image interpolation
+        instead. Might preserve more info. Y/alpha cannot be handled this
+        way.
+
+    Returns
+    -------
+    waveforms_relocated, r, q : array-likes
+        waveforms_relocated is your relocated waveforms, `r` is the "target"
+        PTP (what the point source model predicts at standard locations for
+        the `relocate_dims`), `q` is the ptp that the point source model
+        predicts from the localizations you supplied here.
     """
     B, T, C = waveforms.shape
     geom = geom.copy()
@@ -71,24 +108,34 @@ def relocate_simple(
         ],
         axis=0,
     )
-    
-    # ptp of "standard location" spike
+
+    # who are we moving? set the standard locs accordingly
+    # if we are interpolating for x/z shift, then we don't want
+    # to touch those with the PTP rescaling. so, put them into
+    # these kwargs to set them as origins for the target PTP.
     stereo_kwargs = {}
     if len(relocate_dims) < 4:
         assert len(relocate_dims) > 0
-        if "x" not in relocate_dims:
+        if interp_xz or "x" not in relocate_dims:
             stereo_kwargs["x"] = x
         if "y" not in relocate_dims:
             stereo_kwargs["y"] = y
-        if "z" not in relocate_dims:
+        if interp_xz or "z" not in relocate_dims:
             stereo_kwargs["z"] = z_rel
         if "a" not in relocate_dims:
             stereo_kwargs["alpha"] = alpha
     r = stereotypical_ptp(local_geom, **stereo_kwargs)
-    
+
     # ptp predicted from this localization (x,y,z,alpha)
     q = point_source_ptp(local_geom, x, y, z_rel, alpha)
-    
-    # relocate and return
-    waveforms_relocated = torch.as_tensor(waveforms) * (r.view(B, C) / q).unsqueeze(1)
+
+    # relocate by PTP rescaling
+    waveforms_relocated = torch.as_tensor(waveforms) * (
+        r.view(B, C) / q
+    ).unsqueeze(1)
+
+    # deal with interp x/z
+    if interp_xz:
+        raise NotImplementedError
+
     return waveforms_relocated, r, q
