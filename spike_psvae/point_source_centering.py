@@ -7,6 +7,7 @@ IDK why I did this torch instead of np but easy to change. uhh
 TODO: Not sure how much of this code assumes NP2 geom specific stuff.
 """
 import torch
+from scipy import ndimage
 from .waveform_utils import get_local_geom
 
 
@@ -29,14 +30,12 @@ def point_source_ptp(local_geom, x, y, z, alpha):
     return ptp
 
 
-def stereotypical_ptp(local_geom, x=None, y=15.0, z=None, alpha=150.0):
+def stereotypical_ptp(local_geom, x=None, y=15.0, z=0.0, alpha=150.0):
     assert local_geom.shape[1] % 2 == 0
     # Center of xz... could spell trouble for spikes on the edge of the probe,
     # where this is not the maxchan's Z coord.
     if x is None:
         x = local_geom[:, :, 0].mean(axis=1)
-    if z is None:
-        z = local_geom[:, :, 1].mean(axis=1)
     r = point_source_ptp(local_geom, x, y, z, alpha)
     return r
 
@@ -136,6 +135,16 @@ def relocate_simple(
 
     # deal with interp x/z
     if interp_xz:
-        raise NotImplementedError
+        dx = dz = 0
+        if "x" in relocate_dims:
+            cx = local_geom[:, :, 0].mean(axis=1)
+            dx = cx - x
+        if "z" in relocate_dims:
+            dz = -z_rel
+        waveforms_relocated = ndimage.shift(
+            waveforms_relocated.reshape(B, T, C // 2, 2),
+            (0, 0, dz, dx),
+            order=1,
+        ).reshape(B, T, C)
 
     return waveforms_relocated, r, q
