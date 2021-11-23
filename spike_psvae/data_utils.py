@@ -39,7 +39,7 @@ class SpikeHDF5Dataset(Dataset):
         self.len = len(self.ys)
 
         self.y_min = y_min
-        if y_min is not None and "y" in ys:
+        if y_min is not None and "y" in supkeys:
             self.good_inds = np.flatnonzero(self.h5["y"][:] > y_min)
             self.len = len(self.good_inds)
 
@@ -91,7 +91,7 @@ class LocalizingHDF5Dataset(Dataset):
             self.len = (repeat_to_min_length // self.len + 1) * self.len
 
         self.y_min = y_min
-        if y_min is not None and "y" in ys:
+        if y_min is not None and "y" in supkeys:
             self.good_inds = np.flatnonzero(ys > y_min)
             self.len = len(self.good_inds)
 
