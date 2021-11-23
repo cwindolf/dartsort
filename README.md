@@ -50,6 +50,11 @@ JUPYTERLAB_WORKSPACES_DIR=.jupyter/lab/workspaces jupyter lab --no-browser --ip=
 
  - [ ] Train conv VAEs
     - Architecture code is here, but not learning well yet...
+    - [ ] Learning stability: data processing, etc
+       - [ ] Probably should normalize input data somehow so that we don't have to lean on batchnorm so much. I think it is interfering with learning and we shouldn't need it...
+       - [ ] Same for supervised keys -- they are not very Gaussian, might interfere with the DKL.
+       - [ ] PCA preprocessing
+       - [ ] Scale the loss to standard units? Would correspond to like a N(0,n) or something?
     - [ ] Overfit [PS]VAE to templates
        - [ ] See if standard geom and z relative to bottom helps learning
     - [ ] Add in $\beta$ and all that, and figure out hyperparameter search. Hyperopt?
