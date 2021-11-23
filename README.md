@@ -61,9 +61,9 @@ JUPYTERLAB_WORKSPACES_DIR=.jupyter/lab/workspaces jupyter lab --no-browser --ip=
     - What is the minimum viable clustering that will produce a meaningful result? And, how best to compare them?
 
 
-### Known bugs
+### Bug tracker
 
- - [ ] This thing with updown -> standard, then the predicted PTP is flipped. What??
+ - [x] This thing with updown -> standard, then the predicted PTP is flipped. What??
 
 
 ### Notes and questions
