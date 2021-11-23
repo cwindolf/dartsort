@@ -63,7 +63,7 @@ def relocation_analysis(waveforms, maxchans, geom, name, K=40, channel_radius=8,
     plt.show()
     
     x, y, z_rel, z_abs, alpha = localization.localize_waveforms(
-        wfs, geom, maxchans=maxchans, jac=False, geomkind=geomkind
+        std_wfs, geom, maxchans=maxchans, jac=False, geomkind=geomkind, channel_radius=channel_radius
     )
     
     # -- relocated versions
@@ -102,7 +102,8 @@ def relocation_analysis(waveforms, maxchans, geom, name, K=40, channel_radius=8,
             
     # -- Plots
     # the ones we will show
-    inds = np.random.default_rng(seed).choice(std_wfs.shape[0], size=16)
+    # inds = np.random.default_rng(seed).choice(std_wfs.shape[0], size=16)
+    inds = np.arange(16)
     
     
     # Relocation x PTPs

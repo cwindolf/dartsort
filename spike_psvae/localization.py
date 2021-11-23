@@ -39,7 +39,8 @@ def check_shapes(waveforms, maxchans, channel_radius, geom, geomkind):
         )
     else:
         raise ValueError(
-            f"Not sure what to do with waveforms.shape={waveforms.shape}."
+            f"Not sure what to do with waveforms.shape={waveforms.shape} "
+            f"and channel_radius={channel_radius} in geomkind {geomkind}"
         )
 
     return N, T, C

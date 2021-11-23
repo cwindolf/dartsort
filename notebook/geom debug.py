@@ -81,6 +81,30 @@ vis_utils.vis_ptps([ud_wfs.ptp(1), ud_q], ["ud", "pred"], "kr");
 # %%
 vis_utils.vis_ptps([uds_wfs.ptp(1), uds_q], ["uds", "pred"], "kr");
 
+# %% [markdown]
+# "real" data
+
 # %%
+with h5py.File("../data/wfs_locs_b.h5") as h5:
+    rud_wfs = h5["denoised_waveforms"][:16]
+    rgeom = h5["geom"][:]
+    rmaxchans = h5["max_channels"][:16]
+
+# %%
+ruds_wfs = waveform_utils.as_standard_local(rud_wfs, rmaxchans, rgeom)
+print(ruds_wfs.shape)
+
+# %%
+rud_x, rud_y, rud_z_rel, rud_z_abs, rud_alpha = localization.localize_waveforms(rud_wfs, geom, maxchans, jac=False, geomkind="updown")
+rud_reloc, rud_r, rud_q = point_source_centering.relocate_simple(rud_wfs, geom, maxchans, rud_x, rud_y, rud_z_rel, rud_alpha, geomkind="updown")
+
+ruds_x, ruds_y, ruds_z_rel, ruds_z_abs, ruds_alpha = localization.localize_waveforms(ruds_wfs, geom, maxchans, channel_radius=8, jac=False, geomkind="standard")
+ruds_reloc, ruds_r, ruds_q = point_source_centering.relocate_simple(ruds_wfs, geom, maxchans, ruds_x, ruds_y, ruds_z_rel, ruds_alpha, channel_radius=8, geomkind="standard")
+
+# %%
+vis_utils.vis_ptps([rud_wfs.ptp(1), rud_q], ["rud", "pred"], "kr");
+
+# %%
+vis_utils.vis_ptps([ruds_wfs.ptp(1), ruds_q], ["ruds", "pred"], "kr");
 
 # %%
