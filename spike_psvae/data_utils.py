@@ -4,6 +4,7 @@ import torch
 from torch.utils.data import Dataset, Sampler
 
 from .localization import localize_waveforms_batched
+from .waveform_utils import get_local_waveforms
 
 
 class ContiguousRandomBatchSampler(Sampler):
@@ -26,12 +27,12 @@ class ContiguousRandomBatchSampler(Sampler):
 
 
 class SpikeHDF5Dataset(Dataset):
-    def __init__(self, h5_path, x, ys, y_min=None):
+    def __init__(self, h5_path, x, supkeys, y_min=None):
         self.h5 = h5py.File(h5_path, "r")
         self.x = self.h5[x]
         self.ys = torch.tensor(
             np.stack(
-                [self.h5[y][:].astype(np.float32) for y in ys],
+                [self.h5[y][:].astype(np.float32) for y in supkeys],
                 axis=1,
             )
         )
@@ -57,12 +58,17 @@ class LocalizingHDF5Dataset(Dataset):
         self,
         waveforms,
         geom,
-        ys,
+        supkeys,
         y_min=None,
         channel_radius=10,
+        repeat_to_min_length=500_000,
         geomkind="updown",
     ):
-        self.x = torch.as_tensor(waveforms, dtype=torch.float)
+        local_wfs, maxchans = get_local_waveforms(
+            waveforms, channel_radius, geom, maxchans=None, geomkind=geomkind
+        )
+        self.x = torch.as_tensor(local_wfs, dtype=torch.float)
+        print("loc, x shape", self.x.shape)
         xs, ys, z_rels, z_abss, alphas = localize_waveforms_batched(
             waveforms,
             geom,
@@ -76,11 +82,13 @@ class LocalizingHDF5Dataset(Dataset):
         data = dict(x=xs, y=ys, z_rel=z_rels, z_abs=z_abss, alpha=alphas)
         self.ys = torch.tensor(
             np.stack(
-                [data[y][:].astype(np.float32) for y in ys],
+                [data[y][:].astype(np.float32) for y in supkeys],
                 axis=1,
             )
         )
-        self.len = len(self.ys)
+        self.len = self.real_len = len(self.ys)
+        if self.len < repeat_to_min_length:
+            self.len = (repeat_to_min_length // self.len + 1) * self.len
 
         self.y_min = y_min
         if y_min is not None and "y" in ys:
@@ -91,6 +99,7 @@ class LocalizingHDF5Dataset(Dataset):
         return self.len
 
     def __getitem__(self, idx):
+        idx = idx % self.real_len
         if self.y_min is not None:
             idx = self.good_inds[idx]
 

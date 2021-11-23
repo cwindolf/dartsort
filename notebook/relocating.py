@@ -43,18 +43,18 @@ rg = np.random.default_rng(0)
 # %% tags=[]
 def relocation_analysis(waveforms, maxchans, geom, name, K=40, channel_radius=8, do_pfac=True, seed=0, relocate_dims="xyza"):
     # -- localize in standard form
-    # std_wfs = waveform_utils.as_standard_local(
-    #     waveforms, maxchans, geom, channel_radius=channel_radius
-    # )
+    std_wfs = waveform_utils.as_standard_local(
+        waveforms, maxchans, geom, channel_radius=channel_radius
+    )
     geomkind = "standard"
-    if waveforms.shape[2] == 4 + 2 * channel_radius:
-        geomkind = "updown"
-        channel_radius += 2
-        std_wfs = waveforms
-    else:
-        std_wfs = waveform_utils.get_local_waveforms(
-            waveforms, channel_radius, geom, maxchans=maxchans, geomkind=geomkind
-        )
+    # if waveforms.shape[2] == 4 + 2 * channel_radius:
+    #     geomkind = "updown"
+    #     channel_radius += 2
+    #     std_wfs = waveforms
+    # else:
+    #     std_wfs = waveform_utils.get_local_waveforms(
+    #         waveforms, channel_radius, geom, maxchans=maxchans, geomkind=geomkind
+    #     )
     
     plt.figure(figsize=(6, 4))
     vis_utils.labeledmosaic([std_wfs[:16], std_wfs[16:32]], ["0-15", "16-32"], pad=2)
@@ -63,7 +63,7 @@ def relocation_analysis(waveforms, maxchans, geom, name, K=40, channel_radius=8,
     plt.show()
     
     x, y, z_rel, z_abs, alpha = localization.localize_waveforms(
-        wfs, geom, maxchans=maxchans, jac=False, geomkind=geomkind
+        std_wfs, geom, maxchans=maxchans, jac=False, geomkind=geomkind, channel_radius=channel_radius
     )
     
     # -- relocated versions
@@ -102,7 +102,8 @@ def relocation_analysis(waveforms, maxchans, geom, name, K=40, channel_radius=8,
             
     # -- Plots
     # the ones we will show
-    inds = np.random.default_rng(seed).choice(std_wfs.shape[0], size=16)
+    # inds = np.random.default_rng(seed).choice(std_wfs.shape[0], size=16)
+    inds = np.arange(16)
     
     
     # Relocation x PTPs
@@ -190,7 +191,7 @@ def relocation_analysis(waveforms, maxchans, geom, name, K=40, channel_radius=8,
 #
 # Below, the same set of figures is shown for 3 data sets. First, ~170 nice NP2 templates. Next, the same templates, but with 10 or so weird looking ones removed. Finally, 10,000 denoised spikes from an NP2 probe.
 
-# %% [markdown]
+# %% [markdown] tags=[]
 # # All Templates
 
 # %% tags=[]
@@ -198,9 +199,9 @@ with h5py.File("../data/spt_yasstemplates.h5") as h5:
     wfs = h5["waveforms"][:]
     geom = h5["geom"][:]
     maxchans = h5["maxchans"][:]
-    relocation_analysis(wfs, maxchans, geom, "All Templates, Just Y/Z/alpha", K=30, relocate_dims="ya")
+    relocation_analysis(wfs, maxchans, geom, "All Templates, Just Y/Z/alpha", K=30, do_pfac=False)
 
-# %% [markdown]
+# %% [markdown] jp-MarkdownHeadingCollapsed=true tags=[]
 # # Culled Templates
 
 # %% tags=[]
@@ -217,9 +218,9 @@ with h5py.File("../data/spt_yasstemplates_culled.h5") as h5:
 
 # %%
 with h5py.File("../data/wfs_locs_b.h5") as h5:
-    wfs = h5["denoised_waveforms"][:10_000]
+    wfs = h5["denoised_waveforms"][:10_00]
     geom = h5["geom"][:]
-    maxchans = h5["max_channels"][:10_000]
-    relocation_analysis(wfs, maxchans, geom, "10k Denoised NP2, Just Y/Z/alpha", do_pfac=False, K=30, relocate_dims="yza")
+    maxchans = h5["max_channels"][:10_00]
+    relocation_analysis(wfs, maxchans, geom, "10k Denoised NP2, Just Y/Z/alpha", do_pfac=False, K=30)
 
 # %%
