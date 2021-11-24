@@ -6,9 +6,11 @@ IDK why I did this torch instead of np but easy to change. uhh
 
 TODO: Not sure how much of this code assumes NP2 geom specific stuff.
 """
-import torch
 from scipy import ndimage
+import torch
+
 from .waveform_utils import get_local_geom
+from .torch_utils import translate
 
 
 def point_source_ptp(local_geom, x, y, z, alpha):
@@ -135,16 +137,27 @@ def relocate_simple(
 
     # deal with interp x/z
     if interp_xz:
+        # get the shifts in pixel units
         dx = dz = 0
         if "x" in relocate_dims:
             cx = local_geom[:, :, 0].mean(axis=1)
-            dx = cx - x
+            hx = local_geom[0, 1, 0] - local_geom[0, 0, 0]
+            dx = (cx - x) / hx
         if "z" in relocate_dims:
-            dz = -z_rel
-        waveforms_relocated = ndimage.shift(
+            hz = local_geom[0, 2, 1] - local_geom[0, 0, 1]
+            dz = -z_rel / hz
+        shifts = torch.stack(
+            (
+                torch.as_tensor(dx).broadcast_to(B),
+                torch.as_tensor(dz).broadcast_to(B),
+            ),
+            dim=1,
+        )
+
+        # apply shifts
+        waveforms_relocated = translate(
             waveforms_relocated.reshape(B, T, C // 2, 2),
-            (0, 0, dz, dx),
-            order=1,
+            shifts,
         ).reshape(B, T, C)
 
     return waveforms_relocated, r, q
