@@ -64,6 +64,7 @@ JUPYTERLAB_WORKSPACES_DIR=.jupyter/lab/workspaces jupyter lab --no-browser --ip=
  - [ ] Relocate by interpolation / shift on Z rather than scaling by ptps
  - [ ] Clustering / final performance metrics
     - What is the minimum viable clustering that will produce a meaningful result? And, how best to compare them?
+ - [ ] Downsample NPUltra and see if nonlinear interpolation helps upsample
 
 
 ### Bug tracker
