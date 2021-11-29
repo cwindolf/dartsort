@@ -26,34 +26,65 @@ class ContiguousRandomBatchSampler(Sampler):
         )
 
 
-class SpikeHDF5Dataset(Dataset):
-    def __init__(self, h5_path, x, supkeys, y_min=None):
-        self.h5 = h5py.File(h5_path, "r")
-        self.x = self.h5[x]
-        self.ys = torch.tensor(
-            np.stack(
-                [self.h5[y][:].astype(np.float32) for y in supkeys],
-                axis=1,
-            )
-        )
-        self.len = len(self.ys)
-
-        self.y_min = y_min
-        if y_min is not None and "y" in supkeys:
-            self.good_inds = np.flatnonzero(self.h5["y"][:] > y_min)
-            self.len = len(self.good_inds)
+class SpikeDataset(Dataset):
+    def __init__(
+        self, waveforms, ys, good_inds=None, minimum=None, maximum=None
+    ):
+        self.waveforms = waveforms
+        self.ys = ys
+        self.good_inds = good_inds
+        self.len = len(ys) if good_inds is None else len(good_inds)
+        self.minimum = minimum
+        self.half_dminmax = None
+        if maximum is not None:
+            self.half_dminmax = (maximum - minimum) / 2.0
 
     def __len__(self):
         return self.len
 
     def __getitem__(self, idx):
-        if self.y_min is not None:
+        if self.good_inds is not None:
             idx = self.good_inds[idx]
 
-        return torch.tensor(self.x[idx], dtype=torch.float), self.ys[idx]
+        bx = torch.as_tensor(self.x[idx], dtype=torch.float)
+        by = self.ys[idx]
+
+        if self.minimum is not None:
+            bx = bx - self.minimum
+            bx /= self.half_dminmax
+            bx -= 1.0
+
+        return bx, by
 
 
-class LocalizingHDF5Dataset(Dataset):
+class SpikeHDF5Dataset(SpikeDataset):
+    def __init__(self, h5_path, x, supkeys, y_min=None, standardize=True):
+        self.h5 = h5py.File(h5_path, "r")
+        x = self.h5[x]
+        sups = torch.tensor(
+            np.stack(
+                [self.h5[key][:].astype(np.float32) for key in supkeys],
+                axis=1,
+            )
+        )
+
+        self.y_min = y_min
+        good_inds = None
+        if y_min is not None and "y" in supkeys:
+            good_inds = np.flatnonzero(self.h5["y"][:] > y_min)
+
+        mins = maxs = None
+        if standardize:
+            assert "minimum" in self.h5
+            mins = self.h5["minimum"]
+            maxs = self.h5["maximum"]
+
+        super().__init__(
+            x, sups, good_inds=good_inds, minimum=mins, maximum=maxs
+        )
+
+
+class LocalizingHDF5Dataset(SpikeDataset):
     def __init__(
         self,
         waveforms,
@@ -62,12 +93,12 @@ class LocalizingHDF5Dataset(Dataset):
         y_min=None,
         channel_radius=10,
         repeat_to_min_length=500_000,
+        standardize=True,
         geomkind="updown",
     ):
         local_wfs, maxchans = get_local_waveforms(
             waveforms, channel_radius, geom, maxchans=None, geomkind=geomkind
         )
-        self.x = torch.as_tensor(local_wfs, dtype=torch.float)
         print("loc, x shape", self.x.shape)
         xs, ys, z_rels, z_abss, alphas = localize_waveforms_batched(
             waveforms,
@@ -79,28 +110,36 @@ class LocalizingHDF5Dataset(Dataset):
             geomkind=geomkind,
             batch_size=512,
         )
-        data = dict(x=xs, y=ys, z_rel=z_rels, z_abs=z_abss, alpha=alphas)
-        self.ys = torch.tensor(
+        xs = torch.as_tensor(xs, dtype=torch.float)
+        data = dict(y=ys, z_rel=z_rels, z_abs=z_abss, alpha=alphas)
+        sups = torch.tensor(
             np.stack(
-                [data[y][:].astype(np.float32) for y in supkeys],
+                [data[key][:].astype(np.float32) for key in supkeys],
                 axis=1,
             )
         )
-        self.len = self.real_len = len(self.ys)
-        if self.len < repeat_to_min_length:
-            self.len = (repeat_to_min_length // self.len + 1) * self.len
-
-        self.y_min = y_min
+        self.real_len = len(self.sups)
+        good_inds = None
         if y_min is not None and "y" in supkeys:
-            self.good_inds = np.flatnonzero(ys > y_min)
-            self.len = len(self.good_inds)
+            good_inds = np.flatnonzero(ys > y_min)
+            self.real_len = len(good_inds)
+        len_ = max(
+            self.real_len, (repeat_to_min_length // self.len + 1) * self.len
+        )
+
+        mins = maxs = None
+        if standardize:
+            mins = xs.min(dim=0)
+            maxs = xs.max(dim=0)
+
+        super().__init__(
+            xs, sups, good_inds=good_inds, minimum=mins, maximum=maxs
+        )
+        self.len = len_
 
     def __len__(self):
         return self.len
 
     def __getitem__(self, idx):
         idx = idx % self.real_len
-        if self.y_min is not None:
-            idx = self.good_inds[idx]
-
-        return self.x[idx], self.ys[idx]
+        return super().__getitem__(idx)

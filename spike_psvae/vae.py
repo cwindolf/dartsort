@@ -72,13 +72,7 @@ class VAE(nn.Module):
         # we make the "variational assumption" that p(x | z) has std=1
         # so that the only relevant term is the mse (after omitting the
         # half as above)
-        mse_recon_full = F.mse_loss(x, recon_x, reduction="none")
-        mse_recon = torch.mean(
-            torch.sum(
-                mse_recon_full,
-                axis=tuple(range(1, mse_recon_full.ndim)),
-            )
-        )
+        mse_recon = F.mse_loss(x, recon_x)
 
         loss = dkl + mse_recon
         loss_dict = {
