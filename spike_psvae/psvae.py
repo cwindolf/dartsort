@@ -88,28 +88,16 @@ class PSVAE(nn.Module):
         # note, -DKL is in ELBO, which we want to maximize.
         # here, we are minimizing, so take just DKL.
         # we omit the factor of 1/2 here and in errors below
-        dkl = torch.mean((mu.pow(2) + logvar.exp() - 1 - logvar).sum(axis=1))
+        dkl = torch.mean(mu.pow(2) + logvar.exp() - 1.0 - logvar)
 
         # reconstruction error -- conditioned gaussian log likelihood
         # we make the "variational assumption" that p(x | z) has std=1
         # so that the only relevant term is the mse (after omitting the
         # half as above)
-        mse_recon_full = F.mse_loss(x, recon_x, reduction="none")
-        mse_recon = torch.mean(
-            torch.sum(
-                mse_recon_full,
-                axis=tuple(range(1, mse_recon_full.ndim)),
-            )
-        )
+        mse_recon = F.mse_loss(x, recon_x)
 
         # supervised loss
-        mse_labels_full = F.mse_loss(y, y_hat, reduction="none")
-        mse_labels = torch.mean(
-            torch.sum(
-                mse_labels_full,
-                axis=tuple(range(1, mse_labels_full.ndim)),
-            )
-        )
+        mse_labels = F.mse_loss(y, y_hat)
 
         # TODO total correlation? beta annealing?
         #      unsupervised latents index-code mutual information?
