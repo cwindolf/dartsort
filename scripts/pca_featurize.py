@@ -3,7 +3,7 @@ import h5py
 from sklearn.decomposition import IncrementalPCA
 from tqdm.auto import trange
 
-from . import localization, point_source_centering
+from spike_psvae import localization, point_source_centering
 
 
 ap = argparse.ArgumentParser()
@@ -26,10 +26,10 @@ K = args.n_components
 ipca_orig = IncrementalPCA(n_components=K)
 ipca_reloc = IncrementalPCA(n_components=K)
 
-input_h5 = h5py.File(args.input_h5, "r")
+input_h5 = h5py.File(args.input_h5, "r+")
 waveforms = input_h5[args.input_dataset]
 relocated_waveforms = input_h5.create_dataset_like(
-    args.input_dataset + "_relocated", args.input_dataset
+    args.input_dataset + "_relocated", waveforms
 )
 spike_index = input_h5["spike_index"][:]
 maxchans_key = None
