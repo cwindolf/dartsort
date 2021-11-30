@@ -19,7 +19,7 @@
 # %%
 import numpy as np
 import matplotlib.pyplot as plt
-from spike_psvae import vis_utils, waveform_utils
+from spike_psvae import vis_utils, waveform_utils, localization
 import h5py
 
 # %%
@@ -76,5 +76,21 @@ with h5py.File("../data/spt_yasstemplates.h5", "w") as h5:
     h5.create_dataset("waveforms", data=wfs)
     h5.create_dataset("geom", data=geom)
     h5.create_dataset("maxchans", data=maxchans)
+
+# %%
+xs, ys, z_rels, z_abss, alphas = localization.localize_waveforms(local_wfs, geom, maxchans, geomkind="standard")
+
+# %%
+(ys < 0.01).mean()
+
+# %%
+smally = np.flatnonzero(ys < 0.01)
+outout = np.setdiff1d(out, smally)
+
+# %%
+with h5py.File("../data/spt_yasstemplates_culled_ymin0.01.h5", "w") as h5:
+    h5.create_dataset("waveforms", data=wfs[outout])
+    h5.create_dataset("geom", data=geom)
+    h5.create_dataset("maxchans", data=maxchans[outout])
 
 # %%
