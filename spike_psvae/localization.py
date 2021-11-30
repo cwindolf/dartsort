@@ -121,6 +121,10 @@ def localize_waveforms(
     waveforms is N x T x C, where C can be either 2 * channel_radius, or
     C can be 384 (or geom.shape[0]). If the latter, the 2 * channel_radius
     bits will be extracted.
+
+    Returns
+    -------
+    xs, ys, z_rels, z_abss, alphas
     """
     if _not_helper:
         N, T, C = check_shapes(waveforms, maxchans, channel_radius, geom, geomkind)
