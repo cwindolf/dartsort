@@ -309,7 +309,7 @@ def netspec(spec, in_shape, batchnorm):
             batchnorm=batchnorm,
         )
         decoder = convolutional_decoder(
-            final_hidden_dim[::-1],
+            final_hidden_dims[::-1],
             channels[::-1],
             kernel_sizes[::-1],
             in_shape,
