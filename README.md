@@ -62,6 +62,9 @@ JUPYTERLAB_WORKSPACES_DIR=.jupyter/lab/workspaces jupyter lab --no-browser --ip=
     - If we still see wiggles in the clusters after re-locating, are the wiggles strongest during periods of large probe motion?
  - [ ] Heatmap vis cropping: can do this by using a non-constant dt - eg, show us samples at something like `[[-2:0.1:-1] [-2:0.02:-1] [1:0.1:2]]` ms in matlab notation, or something like this (dt changes per spike?)
  - [ ] Relocate by interpolation / shift on Z rather than scaling by ptps
+    - [x] Torch code to do image translation
+    - [ ] How to deal with the boundary? Zeros? Or, could use the waveform on the edge and do PTP rescaling?
+    - [ ] Grab larger local waveforms to avoid boundary problems when possible? Integrate relocation into the localization/denoising pipeline?
  - [ ] Clustering / final performance metrics
     - What is the minimum viable clustering that will produce a meaningful result? And, how best to compare them?
  - [ ] Downsample NPUltra and see if nonlinear interpolation helps upsample
