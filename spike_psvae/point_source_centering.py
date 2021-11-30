@@ -6,7 +6,7 @@ IDK why I did this torch instead of np but easy to change. uhh
 
 TODO: Not sure how much of this code assumes NP2 geom specific stuff.
 """
-from scipy import ndimage
+# from scipy import ndimage
 import torch
 
 from .waveform_utils import get_local_geom
