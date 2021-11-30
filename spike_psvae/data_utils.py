@@ -46,7 +46,7 @@ class SpikeDataset(Dataset):
         if self.good_inds is not None:
             idx = self.good_inds[idx]
 
-        bx = torch.as_tensor(self.x[idx], dtype=torch.float)
+        bx = torch.as_tensor(self.waveforms[idx], dtype=torch.float)
         by = self.ys[idx]
 
         if self.minimum is not None:
@@ -99,7 +99,7 @@ class LocalizingHDF5Dataset(SpikeDataset):
         local_wfs, maxchans = get_local_waveforms(
             waveforms, channel_radius, geom, maxchans=None, geomkind=geomkind
         )
-        print("loc, x shape", self.x.shape)
+        local_wfs = torch.as_tensor(local_wfs, dtype=torch.float32)
         xs, ys, z_rels, z_abss, alphas = localize_waveforms_batched(
             waveforms,
             geom,
@@ -110,30 +110,30 @@ class LocalizingHDF5Dataset(SpikeDataset):
             geomkind=geomkind,
             batch_size=512,
         )
-        xs = torch.as_tensor(xs, dtype=torch.float)
-        data = dict(y=ys, z_rel=z_rels, z_abs=z_abss, alpha=alphas)
+        data = dict(x=xs, y=ys, z_rel=z_rels, z_abs=z_abss, alpha=alphas)
         sups = torch.tensor(
             np.stack(
                 [data[key][:].astype(np.float32) for key in supkeys],
                 axis=1,
             )
         )
-        self.real_len = len(self.sups)
+        self.real_len = len(sups)
         good_inds = None
         if y_min is not None and "y" in supkeys:
             good_inds = np.flatnonzero(ys > y_min)
             self.real_len = len(good_inds)
         len_ = max(
-            self.real_len, (repeat_to_min_length // self.len + 1) * self.len
+            self.real_len, (repeat_to_min_length // len(sups) + 1) * len(sups)
         )
 
         mins = maxs = None
         if standardize:
-            mins = xs.min(dim=0)
-            maxs = xs.max(dim=0)
+            mins = local_wfs.min(dim=0).values
+            maxs = local_wfs.max(dim=0).values
+            print("mins shape", mins.shape)
 
         super().__init__(
-            xs, sups, good_inds=good_inds, minimum=mins, maximum=maxs
+            local_wfs, sups, good_inds=good_inds, minimum=mins, maximum=maxs
         )
         self.len = len_
 
