@@ -87,8 +87,9 @@ class PSVAE(nn.Module):
         # 1312.6114 appendix B
         # note, -DKL is in ELBO, which we want to maximize.
         # here, we are minimizing, so take just DKL.
-        # we omit the factor of 1/2 here and in errors below
-        dkl = torch.mean(mu.pow(2) + logvar.exp() - 1.0 - logvar)
+        # we omit the factor of 1/2 here and in errors below,
+        # and we omit the 1.
+        dkl = torch.mean(mu.pow(2) + logvar.exp() - logvar)
 
         # reconstruction error -- conditioned gaussian log likelihood
         # we make the "variational assumption" that p(x | z) has std=1
