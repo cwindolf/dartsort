@@ -143,8 +143,11 @@ for e in range(n_epochs):
                 writer.add_scalar(f"Loss/{k}", v.cpu(), global_step)
 
             # -- Images
-            x_ = dataset.unnormalize(x.cpu())
-            recon_x_ = dataset.unnormalize(recon_x.cpu())
+            x_ = x.cpu()
+            recon_x_ = recon_x.cpu()
+            if not args.nostandardize:
+                x_ = dataset.unnormalize(x_)
+                recon_x_ = dataset.unnormalize(recon_x_)
             im = torch.hstack((x_, recon_x_, x_ - recon_x_))
             im -= im.min()
             im *= 255.0 / im.max()
@@ -164,7 +167,9 @@ for e in range(n_epochs):
 
             # -- Histograms
             writer.add_histogram("Latent/mu", mu.cpu().view(-1), global_step)
-            writer.add_histogram("Latent/logvar", logvar.cpu().view(-1), global_step)
+            writer.add_histogram(
+                "Latent/logvar", logvar.cpu().view(-1), global_step
+            )
 
             if np.isnan(loss.item()):
                 break
