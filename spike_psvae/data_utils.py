@@ -41,13 +41,13 @@ class SpikeDataset(Dataset):
 
     def __len__(self):
         return self.len
-    
+
     def normalize(self, input):
         input = input - self.minimum
         input /= self.half_dminmax
         input -= 1.0
         return input
-    
+
     def unnormalize(self, input):
         input = input + 1.0
         input *= self.half_dminmax

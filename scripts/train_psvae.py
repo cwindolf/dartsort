@@ -41,6 +41,7 @@ ap.add_argument("--run_name", type=str)
 ap.add_argument("--nobatchnorm", action="store_true")
 ap.add_argument("--num_data_workers", default=0, type=int)
 ap.add_argument("--localize", action="store_true")
+ap.add_argument("--nostandardize", action="store_true")
 ap.add_argument(
     "--rundir", default=Path("/mnt/3TB/charlie/features/runs"), type=Path
 )
@@ -82,6 +83,7 @@ if not args.localize:
         args.waveforms_key,
         args.supervised_keys,
         y_min=args.y_min,
+        standardize=not args.nostandardize,
     )
     loader = torch.utils.data.DataLoader(
         dataset,
@@ -95,6 +97,7 @@ else:
             f["geom"][:],
             args.supervised_keys,
             y_min=args.y_min,
+            standardize=not args.nostandardize,
         )
     loader = torch.utils.data.DataLoader(
         dataset,
