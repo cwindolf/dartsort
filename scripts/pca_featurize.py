@@ -1,5 +1,6 @@
 import argparse
 import h5py
+import numpy as np
 from sklearn.decomposition import IncrementalPCA
 from tqdm.auto import trange
 
@@ -60,12 +61,14 @@ output_h5.create_dataset("z_rel", data=z_rels)
 output_h5.create_dataset("z_abs", data=z_abss)
 output_h5.create_dataset("alpha", data=alphas)
 output_h5.create_dataset("spike_index", data=spike_index)
+maxptp = output_h5.create_dataset("maxptp", shape=xs.shape, dtype=np.float64)
 
-for b in trange(N // batch_size, desc="relocate/pca"):
+for b in trange(N // batch_size, desc="fit"):
     start = b * batch_size
     end = min(N, (b + 1) * batch_size)
 
     wfs_orig = waveforms[start:end]
+    maxptp[start:end] = wfs_orig.ptp(1).ptp(1)
     B, _, _ = wfs_orig.shape
     wfs_reloc, r, q = point_source_centering.relocate_simple(
         wfs_orig,
@@ -85,8 +88,18 @@ for b in trange(N // batch_size, desc="relocate/pca"):
     ipca_orig.partial_fit(wfs_orig.reshape(B, -1))
     ipca_reloc.partial_fit(wfs_reloc.reshape(B, -1))
 
-loadings_orig = ipca_orig.transform(waveforms)
-loadings_reloc = ipca_reloc.transform(relocated_waveforms)
+loadings_orig = np.empty((N, K))
+loadings_reloc = np.empty((N, K))
+for b in trange(N // batch_size, desc="project"):
+    start = b * batch_size
+    end = min(N, (b + 1) * batch_size)
+
+    wfs_orig = waveforms[start:end].reshape(end - start, -1)
+    wfs_reloc = relocated_waveforms[start:end].reshape(end - start, -1)
+    
+    loadings_orig[start:end] = ipca_orig.transform(wfs_orig)
+    loadings_reloc[start:end] = ipca_reloc.transform(wfs_reloc)
+    
 output_h5.create_dataset("loadings_orig", data=loadings_orig)
 output_h5.create_dataset(
     "pcs_orig", data=ipca_orig.components_.reshape(K, T, C)
