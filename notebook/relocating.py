@@ -68,7 +68,7 @@ def relocation_analysis(waveforms, maxchans, geom, name, K=40, channel_radius=8,
     
     # -- relocated versions
     reloc, r, q = point_source_centering.relocate_simple(
-        std_wfs, geom, maxchans, x, y, z_rel, alpha, channel_radius=channel_radius, geomkind=geomkind, relocate_dims=relocate_dims
+        std_wfs, geom, maxchans, x, y, z_rel, alpha, channel_radius=channel_radius, geomkind=geomkind, relocate_dims=relocate_dims, interp_xz=True
     )
     reloc = reloc.numpy(); r = r.numpy(); q = q.numpy()
     

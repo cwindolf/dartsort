@@ -72,7 +72,7 @@ encoder, decoder = stacks.netspec(args.netspec, in_shape, not args.nobatchnorm)
 # %%
 psvae = PSVAE(encoder, decoder, supervised_latents, args.unsupervised_latents)
 print(psvae)
-optimizer = torch.optim.Adam(psvae.parameters(), lr=1e-3)
+optimizer = torch.optim.RAdam(psvae.parameters(), lr=1e-3)
 
 # %%
 # data / batching managers
@@ -140,8 +140,8 @@ for e in range(n_epochs):
                 writer.add_scalar(f"Loss/{k}", v.cpu(), global_step)
 
             # -- Images
-            x_ = x.cpu()
-            recon_x_ = recon_x.cpu()
+            x_ = dataset.unnormalize(x.cpu())
+            recon_x_ = dataset.unnormalize(recon_x.cpu())
             im = torch.hstack((x_, recon_x_, x_ - recon_x_))
             im -= im.min()
             im *= 255.0 / im.max()
@@ -158,6 +158,10 @@ for e in range(n_epochs):
             y_mses = (y_hat_ - y_).pow(2).mean(axis=0)
             for y_key, y_mse in zip(args.supervised_keys, y_mses):
                 writer.add_scalar(f"Stat/{y_key}_mse", y_mse, global_step)
+
+            # -- Histograms
+            writer.add_histogram("Latent/mu", mu.cpu().view(-1), global_step)
+            writer.add_histogram("Latent/logvar", logvar.cpu().view(-1), global_step)
 
             if np.isnan(loss.item()):
                 break

@@ -41,6 +41,18 @@ class SpikeDataset(Dataset):
 
     def __len__(self):
         return self.len
+    
+    def normalize(self, input):
+        input = input - self.minimum
+        input /= self.half_dminmax
+        input -= 1.0
+        return input
+    
+    def unnormalize(self, input):
+        input = input + 1.0
+        input *= self.half_dminmax
+        input += self.minimum
+        return input
 
     def __getitem__(self, idx):
         if self.good_inds is not None:
@@ -50,9 +62,7 @@ class SpikeDataset(Dataset):
         by = self.ys[idx]
 
         if self.minimum is not None:
-            bx = bx - self.minimum
-            bx /= self.half_dminmax
-            bx -= 1.0
+            bx = self.normalize(bx)
 
         return bx, by
 
