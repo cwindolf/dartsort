@@ -6,6 +6,20 @@ import torch
 import torch.nn.functional as F
 
 
+class MidpointNormalize(colors.Normalize):
+    # class from the mpl docs:
+    # https://matplotlib.org/users/colormapnorms.html
+
+    def __init__(self, vmin=None, vmax=None, midpoint=0.0, clip=False):
+        self.midpoint = midpoint
+        super().__init__(vmin, vmax, clip)
+
+    def __call__(self, value, clip=None):
+        x, y = [self.vmin, self.midpoint, self.vmax], [0, 0.5, 1]
+        out = np.ma.masked_array(np.interp(value, x, y))
+        return out
+
+
 def normbatch(batch):
     batch = batch - batch.min(axis=(1, 2), keepdims=True)
     return batch / batch.max(axis=(1, 2), keepdims=True)
