@@ -45,12 +45,13 @@ def stereotypical_ptp(local_geom, x=None, y=15.0, z=0.0, alpha=150.0):
 def relocate_simple(
     waveforms,
     geom,
-    maxchan,
+    maxchans,
     x,
     y,
     z_rel,
     alpha,
     channel_radius=10,
+    firstchans=None,
     geomkind="updown",
     relocate_dims="xyza",
     interp_xz=False,
@@ -70,7 +71,7 @@ def relocate_simple(
     waveforms : array-like (batches, time, local channels)
     geom : array-like (global channels, 2)
         XZ coords
-    maxchan : integer array-like (batches,)
+    maxchans : integer array-like (batches,)
         Max channel in global channel space, not local.
     x, y, z_rel, alpha : array-likes, all (batches,)
         Localizations for this batch of spikes
@@ -102,7 +103,12 @@ def relocate_simple(
         [
             torch.as_tensor(
                 get_local_geom(
-                    geom, maxchan[n], channel_radius, ptp[n], geomkind=geomkind
+                    geom,
+                    maxchans[n],
+                    channel_radius,
+                    ptp[n],
+                    firstchan=firstchans[n],
+                    geomkind=geomkind,
                 )
             )
             for n in range(B)

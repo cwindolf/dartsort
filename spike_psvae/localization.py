@@ -1,3 +1,4 @@
+from itertools import repeat
 from joblib import Parallel, delayed
 import numpy as np
 from scipy.optimize import least_squares
@@ -11,18 +12,25 @@ BOUNDS = (-100, 0, -100, 0), (132, 250, 100, 10000)
 Y0, ALPHA0 = 21.0, 1000.0
 
 
-def check_shapes(waveforms, maxchans, channel_radius, geom, geomkind):
+def check_shapes(
+    waveforms, maxchans, channel_radius, geom, firstchans, geomkind
+):
     N, T, C = waveforms.shape
     C_, d = geom.shape
     assert d == 2
 
     if C == 2 * channel_radius:
-        assert geomkind == "updown"
+        assert geomkind in ("updown", "firstchan")
         print(f"Waveforms are already trimmed to {C} channels.")
-        if maxchans is None:
+        if geomkind == "updown" and maxchans is None:
             # we will need maxchans later to determine local geometries
             raise ValueError(
-                "maxchans can't be None when waveform channels < geom channels"
+                "maxchans can't be None when geomkind==updown and "
+                "waveform channels < geom channels"
+            )
+        if geomkind == "firstchan" and firstchans is None:
+            raise ValueError(
+                "firstchans can't be None when geomkind==firstchans"
             )
     elif C == 2 * channel_radius + 2:
         assert geomkind == "standard"
@@ -47,7 +55,13 @@ def check_shapes(waveforms, maxchans, channel_radius, geom, geomkind):
 
 
 def localize_ptp(
-    ptp, maxchan, geom, jac=False, return_z_rel=False, geomkind="updown"
+    ptp,
+    maxchan,
+    geom,
+    jac=False,
+    return_z_rel=False,
+    firstchan=None,
+    geomkind="updown",
 ):
     """Find the localization result for a single ptp vector
 
@@ -63,6 +77,7 @@ def localize_ptp(
         channel_radius,
         ptp,
         return_z_maxchan=True,
+        firstchan=firstchan,
         geomkind=geomkind,
     )
 
@@ -113,6 +128,7 @@ def localize_waveforms(
     channel_radius=10,
     n_workers=1,
     jac=False,
+    firstchans=None,
     geomkind="updown",
     _not_helper=True,
 ):
@@ -127,7 +143,9 @@ def localize_waveforms(
     xs, ys, z_rels, z_abss, alphas
     """
     if _not_helper:
-        N, T, C = check_shapes(waveforms, maxchans, channel_radius, geom, geomkind)
+        N, T, C = check_shapes(
+            waveforms, maxchans, channel_radius, geom, firstchans, geomkind
+        )
     else:
         N, T, C = waveforms.shape
 
@@ -161,10 +179,14 @@ def localize_waveforms(
                 maxchans[n],
                 channel_radius,
                 ptps_full[n],
+                firstchan=firstchans[n],
                 geomkind=geomkind,
             )
             ptps[n] = ptps_full[n, low:high]
         del ptps_full
+
+    if firstchans is None:
+        firstchans = repeat(None)
 
     # -- run the least squares
     xs = np.empty(N)
@@ -176,10 +198,15 @@ def localize_waveforms(
         for n, (x, y, z_rel, z_abs, alpha) in enumerate(
             pool(
                 delayed(localize_ptp)(
-                    ptp, maxchan, geom, jac=jac, geomkind=geomkind
+                    ptp,
+                    maxchan,
+                    geom,
+                    jac=jac,
+                    firstchan=firstchan,
+                    geomkind=geomkind,
                 )
-                for ptp, maxchan in xqdm(
-                    zip(ptps, maxchans), total=N, desc="lsq"
+                for ptp, maxchan, firstchan in xqdm(
+                    zip(ptps, maxchans, firstchans), total=N, desc="lsq"
                 )
             )
         ):
@@ -199,11 +226,14 @@ def localize_waveforms_batched(
     channel_radius=10,
     n_workers=1,
     jac=False,
+    firstchans=None,
     geomkind="updown",
     batch_size=128,
 ):
     """A helper for running the above on hdf5 datasets or similar"""
-    N, T, C = check_shapes(waveforms, maxchans, channel_radius, geom, geomkind)
+    N, T, C = check_shapes(
+        waveforms, maxchans, channel_radius, geom, firstchans, geomkind
+    )
     xs = np.empty(N)
     ys = np.empty(N)
     z_rels = np.empty(N)
@@ -219,6 +249,12 @@ def localize_waveforms_batched(
         else:
             return maxchans[start:end]
 
+    def firstchan_batch(start, end):
+        if firstchans is None:
+            return None
+        else:
+            return firstchans[start:end]
+
     with Parallel(n_workers) as pool:
         for batch_idx, (x, y, z_rel, z_abs, alpha) in enumerate(
             pool(
@@ -229,6 +265,7 @@ def localize_waveforms_batched(
                     channel_radius=channel_radius,
                     jac=jac,
                     geomkind=geomkind,
+                    firstchans=firstchan_batch(start, end),
                     _not_helper=False,
                 )
                 for start, end in tqdm(
