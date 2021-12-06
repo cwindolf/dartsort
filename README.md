@@ -38,6 +38,7 @@ JUPYTERLAB_WORKSPACES_DIR=.jupyter/lab/workspaces jupyter lab --no-browser --ip=
     - [ ] Run on NPUltra...
  - [x] More consistent geom? 18/22 channel version? Should not matter for now.
     - This is `geomkind="standard"` in the code. It puts the max channel z at the center, and then `channel_radius // 2` shanks above and below, for an odd number of shanks and `2 * channel_radius + 2` channels. The original geometry, which is called `geomkind="updown"` in the code, shifts `2 * channel_radius` channels up or down depending on how the ptp looks.
+ - [x] Destriping reg
 
 *Low priority:*
 
@@ -45,22 +46,22 @@ JUPYTERLAB_WORKSPACES_DIR=.jupyter/lab/workspaces jupyter lab --no-browser --ip=
  - [ ] NPUltra standard geom.
  - [ ] Data augmentation
     - [ ] Spikes on the edge of the probe are outliers (maxchan is not near center) -- least squares doesn't care, but a neural net does. Maybe the pipeline can extract extra channels, and the data loader can randomly slide a window around. 
+ - [ ] Heatmap vis cropping: can do this by using a non-constant dt - eg, show us samples at something like `[[-2:0.1:-1] [-2:0.02:-1] [1:0.1:2]]` ms in matlab notation, or something like this (dt changes per spike?)
 
 *Working on:*
 
  - [ ] Train conv VAEs
     - Architecture code is here, but not learning well yet...
     - [ ] Learning stability: data processing, etc
-       - [ ] Probably should normalize input data somehow so that we don't have to lean on batchnorm so much. I think it is interfering with learning and we shouldn't need it...
+       - [x] Probably should normalize input data somehow so that we don't have to lean on batchnorm so much. I think it is interfering with learning and we shouldn't need it...
        - [ ] Same for supervised keys -- they are not very Gaussian, might interfere with the DKL.
        - [ ] PCA preprocessing
-       - [ ] Scale the loss to standard units? Would correspond to like a N(0,n) or something?
-    - [ ] Overfit [PS]VAE to templates
+       - [x] Scale the loss to standard units? Would correspond to like a N(0,n) or something
+    - [x] Overfit [PS]VAE to templates
        - [ ] See if standard geom and z relative to bottom helps learning
     - [ ] Add in $\beta$ and all that, and figure out hyperparameter search. Hyperopt?
- - [ ] Movies of PCA/Parafac features over time, do they drift?
-    - If we still see wiggles in the clusters after re-locating, are the wiggles strongest during periods of large probe motion?
- - [ ] Heatmap vis cropping: can do this by using a non-constant dt - eg, show us samples at something like `[[-2:0.1:-1] [-2:0.02:-1] [1:0.1:2]]` ms in matlab notation, or something like this (dt changes per spike?)
+ - [x] Movies of PCA/Parafac features over time, do they drift?
+    - [ ] If we still see wiggles in the clusters after re-locating, are the wiggles strongest during periods of large probe motion?
  - [ ] Relocate by interpolation / shift on Z rather than scaling by ptps
     - [x] Torch code to do image translation
     - [ ] How to deal with the boundary? Zeros? Or, could use the waveform on the edge and do PTP rescaling?
@@ -68,7 +69,24 @@ JUPYTERLAB_WORKSPACES_DIR=.jupyter/lab/workspaces jupyter lab --no-browser --ip=
  - [ ] Clustering / final performance metrics
     - What is the minimum viable clustering that will produce a meaningful result? And, how best to compare them?
  - [ ] Downsample NPUltra and see if nonlinear interpolation helps upsample
+ - [ ] Figure out what is up with ICP
 
+### To do the week of Dec 6
+
+ - [ ] Full analysis
+   - [ ] Displacement maps
+   - [ ] Datoviz movies
+      - at some point soon it will also be useful to see the multi-column version of this, with different columns showing z on the y axis and x,y,alpha,pc1,pc2 on the x axis in different columns (with z post-registration and the pcs post-relocation)
+      - in the vids, pls reduce the excess black space...  also, might be useful to add y labels at some point so we can know which z values we're looking at?
+         - does that mean we switch to 2d marker?
+   - [ ] Plot PCs. can we see the unrelocated pca basis next to the relocated pca basis?  curious how these are different
+   - [ ] Scatter pair plots: zrel and PCS, zrel and PTP, est displacement for spike vs PCS+PTP
+   - [ ] Generalized correlation scores for above
+   - [ ] How many units does isosplit discover?
+
+ - [ ] Get denoised (single channel) id1 np1 waveforms
+
+ - [ ] Show kilosort labels
 
 ### Bug tracker
 

@@ -35,7 +35,6 @@ def updown_decision(geom, maxchan, channel_radius, ptp):
             f"Not sure how to get local geom when ptp has {C} channels "
             f"and channel_radius={channel_radius}"
         )
-    # print(maxchan, up, local_maxchan, ptp[local_maxchan + 2] > ptp[local_maxchan - 2])
 
     return up
 
@@ -74,8 +73,6 @@ def get_local_chans_updown(geom, maxchan, channel_radius, ptp):
         raise ValueError(
             f"Not sure how to get local geom when ptp has {C} channels"
         )
-        
-    # print(maxchan, up)
 
     low += 2 * up - (maxchan % 2)
     high += 2 * up - (maxchan % 2)
@@ -104,14 +101,31 @@ def get_local_chans_standard(geom, maxchan, channel_radius):
     return low, high
 
 
+def get_local_chans_firstchan(geom, firstchan, channel_radius):
+    """Gets indices of channels around the maxchan"""
+    G, d = geom.shape
+    assert d == 2
+
+    # Deal with edge cases
+    low = firstchan
+    high = firstchan + 2 * channel_radius
+    assert low >= 0
+    assert high <= G
+
+    return low, high
+
+
 def get_local_chans(
-    geom, maxchan, channel_radius, ptp=None, geomkind="updown"
+    geom, maxchan, channel_radius, ptp=None, firstchan=None, geomkind="updown"
 ):
     if geomkind == "updown":
         assert ptp is not None
         return get_local_chans_updown(geom, maxchan, channel_radius, ptp)
     elif geomkind == "standard":
         return get_local_chans_standard(geom, maxchan, channel_radius)
+    elif geomkind == "firstchan":
+        assert firstchan is not None
+        return get_local_chans_firstchan(geom, firstchan, channel_radius)
     else:
         raise ValueError(f"Unknown geomkind={geomkind}")
 
@@ -121,12 +135,18 @@ def get_local_geom(
     maxchan,
     channel_radius,
     ptp=None,
+    firstchan=None,
     return_z_maxchan=False,
     geomkind="updown",
 ):
     """Gets the geometry of some neighborhood of chans near maxchan"""
     low, high = get_local_chans(
-        geom, maxchan, channel_radius, ptp=ptp, geomkind=geomkind
+        geom,
+        maxchan,
+        channel_radius,
+        ptp=ptp,
+        firstchan=firstchan,
+        geomkind=geomkind,
     )
     local_geom = geom[low:high].copy()
     z_maxchan = geom[int(maxchan), 1]
@@ -138,7 +158,12 @@ def get_local_geom(
 
 
 def get_local_waveforms(
-    waveforms, channel_radius, geom, maxchans=None, geomkind="updown"
+    waveforms,
+    channel_radius,
+    geom,
+    maxchans=None,
+    firstchans=None,
+    geomkind="updown",
 ):
     """NxTxCfull -> NxTx(2*channel radius). So, takes a batch."""
     N, T, Cfull = waveforms.shape
@@ -154,7 +179,12 @@ def get_local_waveforms(
     )
     for n in range(N):
         low, high = get_local_chans(
-            geom, maxchans[n], channel_radius, ptps[n], geomkind=geomkind
+            geom,
+            maxchans[n],
+            channel_radius,
+            ptps[n],
+            firstchans=firstchans,
+            geomkind=geomkind,
         )
         local_waveforms[n] = waveforms[n, :, low:high]
 
