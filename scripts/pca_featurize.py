@@ -29,9 +29,12 @@ ipca_reloc = IncrementalPCA(n_components=K)
 
 input_h5 = h5py.File(args.input_h5, "r+")
 waveforms = input_h5[args.input_dataset]
-relocated_waveforms = input_h5.create_dataset_like(
-    args.input_dataset + "_relocated", waveforms
-)
+if args.input_dataset + "_relocated" not in input_h5:
+    relocated_waveforms = input_h5.create_dataset_like(
+        args.input_dataset + "_relocated", waveforms
+    )
+else:
+    relocated_waveforms = input_h5[args.input_dataset + "_relocated"]
 spike_index = input_h5["spike_index"][:]
 maxchans_key = None
 if args.maxchans_key in input_h5:
