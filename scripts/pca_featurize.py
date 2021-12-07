@@ -43,6 +43,11 @@ geom = input_h5["geom"][:]
 N, T, C = waveforms.shape
 assert C < geom.shape[0]
 geomkind = "standard" if (C // 2) % 2 else "updown"
+firstchans = None
+if "first_channels" in input_h5:
+    firstchans = input_h5["first_channels"]
+    geomkind = "firstchan"
+
 channel_radius = C // 2
 print(N, T, C)
 xs, ys, z_rels, z_abss, alphas = localization.localize_waveforms_batched(
@@ -52,6 +57,7 @@ xs, ys, z_rels, z_abss, alphas = localization.localize_waveforms_batched(
     channel_radius=channel_radius,
     n_workers=args.n_workers,
     jac=False,
+    firstchans=firstchans,
     geomkind=geomkind,
     batch_size=1024,
 )
@@ -82,6 +88,7 @@ for b in trange(N // batch_size, desc="fit"):
         z_rels[start:end],
         alphas[start:end],
         channel_radius=channel_radius,
+        firstchans=firstchans[start:end] if firstchans else None,
         geomkind=geomkind,
         relocate_dims=args.relocate_dims,
         interp_xz=False,
@@ -99,10 +106,10 @@ for b in trange(N // batch_size, desc="project"):
 
     wfs_orig = waveforms[start:end].reshape(end - start, -1)
     wfs_reloc = relocated_waveforms[start:end].reshape(end - start, -1)
-    
+
     loadings_orig[start:end] = ipca_orig.transform(wfs_orig)
     loadings_reloc[start:end] = ipca_reloc.transform(wfs_reloc)
-    
+
 output_h5.create_dataset("loadings_orig", data=loadings_orig)
 output_h5.create_dataset(
     "pcs_orig", data=ipca_orig.components_.reshape(K, T, C)
