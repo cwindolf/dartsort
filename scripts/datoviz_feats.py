@@ -40,7 +40,7 @@ with h5py.File(args.input_h5, "r") as input_h5:
     x = input_h5["x"][:]
     y = input_h5["y"][:]
     # z_rel = input_h5["z_rel"][:]
-    z_abs = input_h5["z"][:] if "z" in input_h5 else input_h5["z_abs"][:]
+    z_abs = input_h5["z_reg"][:] if "z_reg" in input_h5 else input_h5["z_abs"][:]
     alpha = input_h5["alpha"][:]
 print("data is loaded", flush=True)
 times = spike_index[:, 0] / 30000
