@@ -15,6 +15,8 @@ ap = argparse.ArgumentParser()
 
 ap.add_argument("input_h5")
 ap.add_argument("--dispmap", default=None, required=False)
+ap.add_argument("--zreg", default=None, required=False)
+ap.add_argument("--locs", default=None, required=False)
 
 args = ap.parse_args()
 
@@ -42,6 +44,9 @@ with h5py.File(args.input_h5, "r") as input_h5:
     alpha = input_h5["alpha"][:]
 print("data is loaded", flush=True)
 times = spike_index[:, 0] / 30000
+
+if args.zreg:
+    z_abs = np.load(args.zreg)
 
 if args.dispmap:
     dispmap = np.load(args.dispmap)
@@ -88,19 +93,21 @@ if args.dispmap:
 
 
 # print(times.min(), times.max())
-z_abs = reg.register_nonrigid(
-    maxptp,
-    z_abs,
-    spike_index[:, 0] / fs,
-    robust_sigma=1,
-    batch_size=1,
-    step_size=1,
-    disp=100,
-    n_windows=30,
-    n_iter=1,
-    widthmul=0.25,
-)
-np.save("zlast.npy", z_abs)
+# z_abs -= z_abs.min()
+# z_abs = reg.register_nonrigid(
+#     maxptp,
+#     z_abs,
+#     spike_index[:, 0] / fs,
+#     robust_sigma=1,
+#     batch_size=1,
+#     step_size=1,
+#     disp=100,
+#     n_windows=30,
+#     n_iter=1,
+#     widthmul=0.25,
+# )
+# np.save("zlast1.npy", z_abs)
+# z_abs = np.load("zlast0.npy")
 # p = np.load()
 # z_abs = z_abs - interp1d(np.arange(len(p)), p, kind="nearest", fill_value="extrapolate")(times)
 # tshift = np.load("data/np2_pcbme_20.npy")
@@ -120,14 +127,25 @@ R, dd, tt = lib.faster(maxptp, z_abs.copy(), times)
 cuts.plot(R)
 plt.show()
 
+
+
 # -- process times
 times_s = (spike_index[:, 0] // (20 * fs)).astype(int)
+plt.hist(times_s, bins=np.arange(times_s.max() + 1)); plt.show()
 assert np.all(times_s[:-1] <= times_s[1:])
 at_0 = np.flatnonzero(times_s == 0)
 
 big = range(len(maxptp))
 if not np.all(maxptp >= 6):
     big = np.flatnonzero(maxptp >= 6)
+
+
+a0, a1 = np.searchsorted(times_s[big], [30, 30 + 1])
+b0, b1 = np.searchsorted(times_s[big], [29, 29 + 1])
+plt.hist(z_abs[big][a0:a1], bins=256)
+plt.hist(z_abs[big][b0:b1], bins=256)
+plt.show()
+
 
 # -- process colors
 ptpmin = maxptp.min()
@@ -179,19 +197,27 @@ panel_orig_a.link_to(panel_reloc_b)
 # the visuals at time 0
 vis_orig_a = panel_orig_a.visual("point")
 vis_orig_a.data("pos", pos_orig_a[at_0])
+vis_orig_a.data("ms", np.array([2.5] * len(at_0)))
 vis_orig_a.data("color", colors[at_0])
+# vis_orig_a.data("ec", np.ones_like(colors[at_0]))
 
 vis_orig_b = panel_orig_b.visual("point")
 vis_orig_b.data("pos", pos_orig_b[at_0])
+vis_orig_b.data("ms", np.array([2.5] * len(at_0)))
 vis_orig_b.data("color", colors[at_0])
+# vis_orig_b.data("ec", np.ones_like(colors[at_0]))
 
 vis_reloc_a = panel_reloc_a.visual("point")
 vis_reloc_a.data("pos", pos_reloc_a[at_0])
+vis_reloc_a.data("ms", np.array([2.5] * len(at_0)))
 vis_reloc_a.data("color", colors[at_0])
+# vis_reloc_a.data("ec", np.ones_like(colors[at_0]))
 
 vis_reloc_b = panel_reloc_b.visual("point")
 vis_reloc_b.data("pos", pos_reloc_b[at_0])
+vis_reloc_b.data("ms", np.array([2.5] * len(at_0)))
 vis_reloc_b.data("color", colors[at_0])
+# vis_reloc_b.data("ec", np.ones_like(colors[at_0]))
 
 
 # geom visuals
@@ -215,20 +241,57 @@ vis_reloc_b.data("color", colors[at_0])
 # slider
 gui = c.gui("hi")
 slider_t0 = gui.control(
-    "slider_int", "t (10s)", vmin=0, vmax=times_s.max(), value=0
+    "slider_int", "t (20s)", vmin=0, vmax=times_s.max(), value=0
 )
+
+maxz = np.ceil(z_abs.max())
+zz = np.zeros(3).reshape(1, -1)
+zzz = zz + np.array([[0, maxz, 0]])
+xx = np.array([[0, 0, x.min()]])
+xxx = np.array([[0, 0, x.max()]])
+
+minlo0 = loadings_orig[:, 0].min()
+r_minlo0 = np.array([[minlo0, 0, 0]])
+minlo1 = loadings_orig[:, 1].min()
+r_minlo1 = np.array([[minlo1, 0, 0]])
+minro0 = loadings_reloc[:, 0].min()
+r_minro0 = np.array([[minro0, 0, 0]])
+minro1 = loadings_reloc[:, 1].min()
+r_minro1 = np.array([[minro1, 0, 0]])
+maxlo0 = loadings_orig[:, 0].max()
+r_maxlo0 = np.array([[maxlo0, 0, 0]])
+maxlo1 = loadings_orig[:, 1].max()
+r_maxlo1 = np.array([[maxlo1, 0, 0]])
+maxro0 = loadings_reloc[:, 0].max()
+r_maxro0 = np.array([[maxro0, 0, 0]])
+maxro1 = loadings_reloc[:, 1].max()
+r_maxro1 = np.array([[maxro1, 0, 0]])
+
+p_o0 = np.r_[zz, zzz, xx, xxx, r_minlo0, r_maxlo0]
+p_o1 = np.r_[zz, zzz, xx, xxx, r_minlo1, r_maxlo1]
+p_r0 = np.r_[zz, zzz, xx, xxx, r_minlo0, r_maxro0]
+p_r1 = np.r_[zz, zzz, xx, xxx, r_minlo1, r_maxro1]
+
+cc = np.zeros((6, 4))
 
 
 def change_t0(t0):
-    t0, t1 = np.searchsorted(times_s, [t0, t0 + 1])
-    vis_orig_a.data("pos", pos_orig_a[t0:t1])
-    vis_orig_a.data("color", colors[t0:t1])
-    vis_orig_b.data("pos", pos_orig_b[t0:t1])
-    vis_orig_b.data("color", colors[t0:t1])
-    vis_reloc_a.data("pos", pos_reloc_a[t0:t1])
-    vis_reloc_a.data("color", colors[t0:t1])
-    vis_reloc_b.data("pos", pos_reloc_b[t0:t1])
-    vis_reloc_b.data("color", colors[t0:t1])
+
+    s0, s1 = np.searchsorted(times_s[big], [t0, t0 + 1])
+    print(t0, s0, s1)
+    vis_orig_a.data("pos", np.r_[p_o0, pos_orig_a[s0:s1]])
+    vis_orig_a.data("color", np.r_[cc, colors[s0:s1]])
+    vis_orig_b.data("pos", np.r_[p_o1, pos_orig_b[s0:s1]])
+    vis_orig_b.data("color", np.r_[cc, colors[s0:s1]])
+    vis_reloc_a.data("pos", np.r_[p_r0, pos_reloc_a[s0:s1]])
+    vis_reloc_a.data("color", np.r_[cc, colors[s0:s1]])
+    vis_reloc_b.data("pos", np.r_[p_r1, pos_reloc_b[s0:s1]])
+    vis_reloc_b.data("color", np.r_[cc, colors[s0:s1]])
+    # if t0 == 30:
+    #     plt.scatter(pos_orig_a[s0:s1][:, 1], pos_orig_a[s0:s1][:, 0], s=1)
+    #     _s0, _s1 = np.searchsorted(times_s[big], [t0 - 1, t0])
+    #     plt.scatter(pos_orig_a[_s0:_s1][:, 1], pos_orig_a[_s0:_s1][:, 0], s=1)
+    #     plt.show()
 
 
 slider_t0.connect(change_t0)
