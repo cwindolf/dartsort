@@ -2,7 +2,7 @@ import argparse
 import h5py
 import numpy as np
 
-from isosplit5 import isosplit5
+from isosplit import isosplit
 
 
 if __name__ == "__main__":
@@ -24,7 +24,7 @@ if __name__ == "__main__":
     feats = np.c_[x, y, z, alpha, pcs]
 
     print("Running clustering...")
-    labels = isosplit5(feats)
+    labels = isosplit(feats)
 
     with h5py.File(args.feats_h5, "r+") as f:
         f.create_dataset(args.key, data=labels)
