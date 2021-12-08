@@ -1,9 +1,11 @@
 import matplotlib.pyplot as plt
 from mpl_toolkits.axes_grid1 import make_axes_locatable
 from matplotlib import colors, cm
+import seaborn as sns
 import numpy as np
 import torch
 import torch.nn.functional as F
+sns.set_style("white")
 
 
 class MidpointNormalize(colors.Normalize):
@@ -134,4 +136,45 @@ def vis_ptps(
     plt.tight_layout(pad=0.5)
     for ax in axes.flat:
         ax.set_box_aspect(1.)
+    return fig, axes
+
+
+def traceplot(waveform, axes, label="", c="k", alpha=1, strip=True, lw=1):
+    assert (waveform.shape[1],) == axes.shape
+    for ax, wf in zip(axes, waveform.T):
+        line, = ax.plot(wf, color=c, label=label, alpha=alpha, lw=lw)
+        if strip:
+            sns.despine(ax=ax, bottom=True, left=True)
+        ax.set_xticks([])
+        ax.grid(color="gray")
+        ax.set_axisbelow(True)
+    return line
+
+
+def pca_tracevis(pcs, wfs, title=None, cut=4, strip=False):
+    pal = sns.color_palette(n_colors=len(pcs))
+    
+    if cut > 0:
+        pcs = pcs[:, :, cut:-cut]
+        wfs = wfs[:, :, cut:-cut]
+    
+    fig, axes = plt.subplots(2, pcs.shape[2], sharey="row", sharex=True)
+    
+    handles = []
+    labels = []
+    for i in range(len(pcs)):
+        l = traceplot(pcs[i], axes[0], c=pal[i], strip=strip)
+        handles.append(l)
+        labels.append(f"pc {i + 1}")
+    
+    for wf in wfs:
+        l = traceplot(wf, axes[1], alpha=0.5, strip=strip)
+    
+        
+    if title:
+        fig.suptitle(title)
+    
+    fig.legend(handles + [l], labels + ["random wfs"], fancybox=False, facecolor="w")
+    fig.tight_layout(pad=0.25)
+    
     return fig, axes
