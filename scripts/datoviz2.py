@@ -33,7 +33,10 @@ def marker(panel, times, xs, ys, zs, colors, title, dt=10.0, sz=5, pad=5):
     text.data("color", np.array([[0, 0, 0, 255]], dtype=np.uint8))
     # secret sauce here
     text.data(
-        "pos", np.array([[(xs.min() + xs.max()) / 2, ys.max() - 5 * pad, zs.max() + 1]])
+        "pos",
+        np.array(
+            [[(xs.min() + xs.max()) / 2, ys.max() - 5 * pad, zs.max() + 1]]
+        ),
     )
 
     def callback(t):
