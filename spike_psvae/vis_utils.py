@@ -86,8 +86,9 @@ def labeledmosaic(xs, rowlabels, pad=0, padval=255, ax=None, cbar=True, separate
         cax = divider.append_axes("right", size="4%", pad=0.05)
         cbar = plt.colorbar(cm.ScalarMappable(norm, "gray"), cax)
         ticks = [x for x in range(-50, 50, 5) if vmin <= x <= vmax]
-        cbar.set_ticks(ticks)
-        cbar.ax.set_yticklabels(ticks, fontsize=8)
+        if len(ticks) > 1:
+            cbar.set_ticks(ticks)
+            cbar.ax.set_yticklabels(ticks, fontsize=8)
 
 
 def vis_ptps(
