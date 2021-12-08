@@ -75,10 +75,11 @@ JUPYTERLAB_WORKSPACES_DIR=.jupyter/lab/workspaces jupyter lab --no-browser --ip=
 
  - [ ] Full analysis
    - [ ] Displacement maps
-   - [ ] Datoviz movies
+   - [x] Datoviz movies
       - at some point soon it will also be useful to see the multi-column version of this, with different columns showing z on the y axis and x,y,alpha,pc1,pc2 on the x axis in different columns (with z post-registration and the pcs post-relocation)
       - in the vids, pls reduce the excess black space...  also, might be useful to add y labels at some point so we can know which z values we're looking at?
          - does that mean we switch to 2d marker?
+      - for the z-splits, probably useful to add the channel locations (in, say, orange) to the xy panel of the datoviz vid.  could maybe add these at (0,z) for the other panels?
    - [ ] Plot PCs. can we see the unrelocated pca basis next to the relocated pca basis?  curious how these are different
    - [ ] Scatter pair plots: zrel and PCS, zrel and PTP, est displacement for spike vs PCS+PTP
    - [ ] Generalized correlation scores for above
@@ -87,6 +88,17 @@ JUPYTERLAB_WORKSPACES_DIR=.jupyter/lab/workspaces jupyter lab --no-browser --ip=
  - [ ] Get denoised (single channel) id1 np1 waveforms
 
  - [ ] Show kilosort labels
+
+
+Analysis [input: denoised wfs]
+ - Relocation: show PTPs, targets, etc before/after, and waveforms before/after
+ - PCA before/after relocation
+    - show PC waveforms
+ - Datoviz movie
+ - GCS z_disp vs PCs
+ - Isosplit (after discard y=0)
+    - How many units before/after reloc?
+    - GCS PCs vs z_disp for each unit
 
 ### Bug tracker
 

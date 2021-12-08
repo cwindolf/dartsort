@@ -96,11 +96,11 @@ if __name__ == "__main__":
     # remove outliers for vis
     mask = np.ones(len(x), dtype=bool)
     for data in [data_orig, data_reloc]:
-        for v in data.values():
-            print(len(v))
+        for k, v in data.items():
+            if k == "alpha":
+                continue
             mask &= np.abs(zscore(v)) <= 5
     mask = np.flatnonzero(mask)
-    print(mask)
     for data in [data_orig, data_reloc]:
         for k, v in data.items():
             data[k] = v[mask]
