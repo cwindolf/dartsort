@@ -53,13 +53,13 @@ for fcfn in sorted(glob(f"{root}/first_chan_*.npy")):
     if not wf_.shape[0]:
         continue
         
-    
-    if times_[0] < 50:
-        print(np.load(locfn).shape, times_.shape)
-        times_ = times_[1:]
-    if times_[-1] > 30000000 - 121:
-        print(np.load(locfn).shape, times_.shape)
-        times_ = times_[:-1]
+    if wf_.shape[0] != times_.shape[0]:
+        if times_[0] < 50:
+            print(np.load(wffn).shape, np.load(locfn).shape, times_.shape, np.load(fcfn).shape, np.load(mcfn).shape)
+            times_ = times_[1:]
+        elif times_[-1] > 30000000 - 121:
+            print(np.load(wffn).shape, np.load(locfn).shape, times_.shape, np.load(fcfn).shape, np.load(mcfn).shape)
+            times_ = times_[:-1]
         
     all_times.extend(times_)
 
@@ -134,11 +134,12 @@ with h5py.File("../data/wfs_locs_c.h5", "w") as out:
         
         if not wfs.shape[0]:
             continue
-
-        if ts[0] < 50:
-            ts = ts[1:]
-        if ts[-1] > 30000000 - 121:
-            ts = ts[:-1]
+            
+        if wf_.shape[0] != times_.shape[0]:
+            if ts[0] < 50:
+                ts = ts[1:]
+            elif ts[-1] > 30000000 - 121:
+                ts = ts[:-1]
         
         for t, loc, wf in zip(ts, locs, wfs):
             n = sort_dest[index]
@@ -157,15 +158,16 @@ with h5py.File("../data/wfs_locs_c.h5", "w") as out:
 # ### check result
 
 # %%
-with h5py.File("../data/feats_c_xyza.h5", "r") as f:
+with h5py.File("../data/wfs_locs_c.h5", "r") as f:
     spike_index = f["spike_index"][:]
-    # maxchans = f["max_channels"][:]
+    maxchans = f["max_channels"][:]
     # firstchans = f["first_channels"][:]
     x = f["x"][:]
     y = f["y"][:]
-    z = f["z_abs"][:]
+    z = f["z"][:]
     alpha = f["alpha"][:]
     ptp = f["maxptp"][:]
+    geom = f["geom"][:]
     print((ptp == 0).sum(), np.flatnonzero(ptp == 0))
     print(ptp.dtype)
     print(alpha[np.flatnonzero(ptp == 0)])
@@ -175,7 +177,7 @@ with h5py.File("../data/feats_c_xyza.h5", "r") as f:
     
     # check everyone looks normal
     # plt.scatter(firstchans, maxchans, s=1); plt.show()
-    plt.scatter(x, z, s=1); plt.show()
+    plt.scatter(x, z, s=1, c=np.abs(zrel) >= 32); plt.show()
     plt.hist(x, bins=128); plt.title("x"); plt.show()
     plt.hist(y, bins=128); plt.title("y"); plt.show()
     plt.hist(z, bins=128); plt.title("z"); plt.show()
@@ -183,38 +185,52 @@ with h5py.File("../data/feats_c_xyza.h5", "r") as f:
     plt.hist(alpha, bins=128); plt.title("alpha"); plt.show()
 
 # %%
-pct = 100 * (np.abs(zrel) >= 32).mean()
-print(f"{pct:0.2f}%")
-print(f"{100-pct:0.2f}%")
-zrel = waveform_utils.relativize_z(z, maxchans, geom)
-plt.hist(zrel, bins=np.arange(np.floor(zrel.min()), np.ceil(zrel.max())), label=f"<32 micron ({100-pct:0.2f}%)")
-plt.hist(zrel[np.abs(zrel) >= 32], bins=np.arange(np.floor(zrel.min()), np.ceil(zrel.max())), color="r", label=f">=32 micron ({pct:0.2f}%)")
-plt.xlabel("localized z relative to max channel z")
-plt.ylabel("frequency (log scale)")
-plt.legend(fancybox=False)
-plt.title("do we need to relocate by more than one Z unit often? (no)")
-plt.show()
+# zrel = waveform_utils.relativize_z(z, maxchans, geom)
+# pct = 100 * (np.abs(zrel) >= 32).mean()
+# print(f"{pct:0.2f}%")
+# print(f"{100-pct:0.2f}%")
+# plt.hist(zrel, bins=np.arange(np.floor(zrel.min()), np.ceil(zrel.max())), label=f"<32 micron ({100-pct:0.2f}%)", log=True)
+# plt.hist(zrel[np.abs(zrel) >= 32], bins=np.arange(np.floor(zrel.min()), np.ceil(zrel.max())), color="r", label=f">=32 micron ({pct:0.2f}%)", log=True)
+# plt.xlabel("localized z relative to max channel z")
+# plt.ylabel("frequency (log scale)")
+# plt.legend(fancybox=False)
+# plt.title("do we need to relocate by more than one Z unit often? (no)")
+# plt.show()
 
 # %%
-with h5py.File("../data/wfs_locs_c.h5", "r+") as f:
-    z = f["z"][:]
-    geom = f["geom"][:]
-    maxchans = f["max_channels"][:]
-    zrel = waveform_utils.relativize_z(z, maxchans, geom)
-    f.create_dataset("z_rel", data=zrel)
+# with h5py.File("../data/feats_c_xyza.h5") as f:
+#     zrel = f["z_rel"][:]
+#     pct = 100 * (np.abs(zrel) >= 32).mean()
+#     print(f"{pct:0.2f}%")
+#     print(f"{100-pct:0.2f}%")
+#     plt.hist(zrel, bins=np.arange(np.floor(zrel.min()), np.ceil(zrel.max())), label=f"<32 micron ({100-pct:0.2f}%)", log=False)
+#     plt.hist(zrel[np.abs(zrel) >= 32], bins=np.arange(np.floor(zrel.min()), np.ceil(zrel.max())), color="r", label=f">=32 micron ({pct:0.2f}%)", log=False)
+#     plt.xlabel("localized z relative to max channel z")
+#     plt.ylabel("frequency")
+#     plt.legend(fancybox=False)
+#     plt.title("do we need to relocate by more than one Z unit often? (no)")
+#     plt.show()
 
 # %%
-pct = 100 * (np.abs(zrel) >= 32).mean()
-print(f"{pct:0.2f}%")
-print(f"{100-pct:0.2f}%")
-zrel = waveform_utils.relativize_z(z, maxchans, geom)
-plt.hist(zrel, bins=np.arange(np.floor(zrel.min()), np.ceil(zrel.max())), log=True, label=f"<32 micron ({100-pct:0.2f}%)")
-plt.hist(zrel[np.abs(zrel) >= 32], bins=np.arange(np.floor(zrel.min()), np.ceil(zrel.max())), log=True, color="r", label=f">=32 micron ({pct:0.2f}%)")
-plt.xlabel("localized z relative to max channel z")
-plt.ylabel("frequency (log scale)")
-plt.legend(fancybox=False)
-plt.title("do we need to relocate by more than one Z unit often? (no)")
-plt.show()
+# with h5py.File("../data/wfs_locs_c.h5", "r+") as f:
+#     z = f["z"][:]
+#     geom = f["geom"][:]
+#     maxchans = f["max_channels"][:]
+#     zrel = waveform_utils.relativize_z(z, maxchans, geom)
+#     f.create_dataset("z_rel", data=zrel)
+
+# %%
+# pct = 100 * (np.abs(zrel) >= 32).mean()
+# print(f"{pct:0.2f}%")
+# print(f"{100-pct:0.2f}%")
+# zrel = waveform_utils.relativize_z(z, maxchans, geom)
+# plt.hist(zrel, bins=np.arange(np.floor(zrel.min()), np.ceil(zrel.max())), log=True, label=f"<32 micron ({100-pct:0.2f}%)")
+# plt.hist(zrel[np.abs(zrel) >= 32], bins=np.arange(np.floor(zrel.min()), np.ceil(zrel.max())), log=True, color="r", label=f">=32 micron ({pct:0.2f}%)")
+# plt.xlabel("localized z relative to max channel z")
+# plt.ylabel("frequency (log scale)")
+# plt.legend(fancybox=False)
+# plt.title("do we need to relocate by more than one Z unit often? (no)")
+# plt.show()
 
 # %%
 
@@ -238,24 +254,28 @@ plt.hist(amps, bins=128);
 plt.plot(times, depths, "k.", ms=0.1, alpha=0.1);
 
 # %%
-regres = reg.register_nonrigid(amps, depths, times, robust_sigma=1, disp=100, destripe=False, n_windows=[5, 30], widthmul=0.25, denoise_sigma=0.075)
+regres = reg.register_nonrigid(amps, depths, times, robust_sigma=1, disp=100, destripe=False, n_windows=[30], widthmul=0.25, denoise_sigma=0.075)
 
 # %%
 z_reg, total_shift = regres
 
 # %%
-plt.imshow(total_shift, aspect=0.5 * 1000 / 2500)
-
-# %%
-plt.plot(times, z_reg, "k.", ms=0.1, alpha=0.1)
-
-# %%
 R, dd, tt = lib.faster(amps, z_reg, times)
-cuts.plot(R, aspect=0.5)
+cuts.plot(R)
 
 # %%
 for featfn in ["feats_c_xyza", "feats_c_yza"]:
     with h5py.File(f"../data/{featfn}.h5", "r+") as f:
         f.create_dataset("z_reg", data=z_reg)
+
+# %%
+with h5py.File("../data/feats_b.h5") as f:
+    print((f["y"][:] < 1e-10).mean())
+    print(f["y"].shape)
+
+# %%
+with h5py.File("../data/feats_c_yza.h5") as f:
+    print((f["y"][:] < 1e-10).mean())
+    print(f["y"].shape)
 
 # %%
