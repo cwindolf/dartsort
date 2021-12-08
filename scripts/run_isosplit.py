@@ -36,13 +36,13 @@ if __name__ == "__main__":
     print("Running clustering on original ...")
     labels_orig = isosplit(feats_orig, K_init=1000)
     print("Got", labels_orig.max() + 1, "clusters")
-    labels_orig_full = np.full(-1, size=N, dtype=np.int32)
+    labels_orig_full = np.full(N, -1, dtype=np.int32)
     labels_orig_full[good] = labels_orig
 
     print("Running clustering on relocated ...")
     labels_reloc = isosplit(feats_reloc, K_init=1000)
     print("Got", labels_reloc.max() + 1, "clusters")
-    labels_reloc_full = np.full(-1, size=N, dtype=np.int32)
+    labels_reloc_full = np.full(N, -1, dtype=np.int32)
     labels_reloc_full[good] = labels_reloc
 
     with h5py.File(args.feats_h5, "r+") as f:
