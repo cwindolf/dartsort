@@ -3,6 +3,7 @@
 **/*.ipynb
 .DS_Store
 data/*.h5
+data/*.npy
 data/spt*
 logs/*.log
 
