@@ -47,6 +47,7 @@ firstchans = None
 if "first_channels" in input_h5:
     firstchans = input_h5["first_channels"]
     geomkind = "firstchan"
+print("geomkind is", geomkind)
 
 channel_radius = C // 2
 print(N, T, C)
