@@ -90,6 +90,12 @@ JUPYTERLAB_WORKSPACES_DIR=.jupyter/lab/workspaces jupyter lab --no-browser --ip=
  - [ ] Show kilosort labels
 
 
+PCA diagnostic
+ - to debug this, can you show this as a 20-panel fig (one per channel), with the first couple PCs shown in one fig and some sample denoised + relocated spikes shown in another fig? (edited) 
+ - basically want to see some of the raw data that's going into the PCA and then the output of the PCA on the same scale, to make sure things look reasonable on each channel
+ - and as always, would also be useful to see the original data next to the PCA projections and residuals
+
+
 Analysis [input: denoised wfs]
  - Relocation: show PTPs, targets, etc before/after, and waveforms before/after
  - PCA before/after relocation
@@ -103,6 +109,7 @@ Analysis [input: denoised wfs]
 ### Bug tracker
 
  - [x] This thing with updown -> standard, then the predicted PTP is flipped. What??
+ - [ ] Duplicate spikes. They have the same time in the spike index, but they can have different channels there. However, the `max_channels` value is the same. See indices 55, 56 in single channel NP2.
 
 
 ### Notes and questions
