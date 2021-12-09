@@ -29,12 +29,6 @@ ipca_reloc = IncrementalPCA(n_components=K)
 
 input_h5 = h5py.File(args.input_h5, "r+")
 waveforms = input_h5[args.input_dataset]
-if args.input_dataset + "_relocated" not in input_h5:
-    relocated_waveforms = input_h5.create_dataset_like(
-        args.input_dataset + "_relocated", waveforms
-    )
-else:
-    relocated_waveforms = input_h5[args.input_dataset + "_relocated"]
 spike_index = input_h5["spike_index"][:]
 maxchans_key = None
 if args.maxchans_key in input_h5:
@@ -94,7 +88,6 @@ for b in trange(N // batch_size, desc="fit"):
         relocate_dims=args.relocate_dims,
         interp_xz=False,
     )
-    relocated_waveforms[start:end] = wfs_reloc
 
     ipca_orig.partial_fit(wfs_orig.reshape(B, -1))
     ipca_reloc.partial_fit(wfs_reloc.reshape(B, -1))
@@ -105,8 +98,25 @@ for b in trange(N // batch_size, desc="project"):
     start = b * batch_size
     end = min(N, (b + 1) * batch_size)
 
-    wfs_orig = waveforms[start:end].reshape(end - start, -1)
-    wfs_reloc = relocated_waveforms[start:end].reshape(end - start, -1)
+    wfs_orig = waveforms[start:end]
+    maxptp[start:end] = wfs_orig.ptp(1).ptp(1)
+    B, _, _ = wfs_orig.shape
+    wfs_reloc, r, q = point_source_centering.relocate_simple(
+        wfs_orig,
+        geom,
+        maxchans[start:end],
+        xs[start:end],
+        ys[start:end],
+        z_rels[start:end],
+        alphas[start:end],
+        channel_radius=channel_radius,
+        firstchans=firstchans[start:end] if firstchans else None,
+        geomkind=geomkind,
+        relocate_dims=args.relocate_dims,
+        interp_xz=False,
+    )
+    wfs_orig = wfs_orig.reshape(end - start, -1)
+    wfs_reloc = wfs_reloc.reshape(end - start, -1)
 
     loadings_orig[start:end] = ipca_orig.transform(wfs_orig)
     loadings_reloc[start:end] = ipca_reloc.transform(wfs_reloc)
