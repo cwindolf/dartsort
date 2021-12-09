@@ -9,42 +9,45 @@ from scipy.stats import zscore
 import datoviz
 
 
-def marker(panel, times, xs, ys, zs, colors, title, dt=10.0, sz=5, pad=5):
-    xypad = np.array(
-        [
-            [xs.min() - pad, ys.min() - 10 * pad, zs.min() - 10],
-            [xs.max() + pad, ys.max() + 10 * pad, zs.min() - 10],
-        ]
-    )
-    cpad = np.zeros((2, 4))
-    pos = np.c_[xs, ys, zs]
-    lo, hi = np.searchsorted(times, [0, dt])
+class MarkerVis:
+    def __init__(
+        self, panel, times, xs, ys, zs, colors, title, dt=10.0, sz=5, pad=5
+    ):
+        self.xypad = np.array(
+            [
+                [xs.min() - pad, ys.min() - 10 * pad, zs.min() - 10],
+                [xs.max() + pad, ys.max() + 10 * pad, zs.min() - 10],
+            ]
+        )
+        self.cpad = np.zeros((2, 4))
+        self.pos = np.c_[xs, ys, zs]
+        self.colors = colors
+        self.times = times
+        self.dt = dt
 
-    vis = panel.visual("point")
-    vis.data("pos", np.r_[xypad, pos[lo:hi]])
-    vis.data("color", np.r_[cpad, colors[lo:hi]])
-    vis.data("ms", np.array([sz] * (2 + hi - lo)))
+        lo, hi = np.searchsorted(times, [0, dt])
+        self.vis = panel.visual("point")
+        self.vis.data("pos", np.r_[self.xypad, self.pos[lo:hi]])
+        self.vis.data("color", np.r_[self.cpad, colors[lo:hi]])
+        self.vis.data("ms", np.array([sz] * (2 + hi - lo)))
 
-    text = panel.visual("text")
-    # If you don't like it, imagine how i feel. See link [1] in __doc__
-    glyph = np.array([ord(i) - 32 for i in title], dtype=np.uint16)
-    text.data("glyph", glyph)
-    text.data("length", np.array([len(title)], dtype=np.uint32))
-    text.data("color", np.array([[0, 0, 0, 255]], dtype=np.uint8))
-    # secret sauce here
-    text.data(
-        "pos",
-        np.array(
-            [[(xs.min() + xs.max()) / 2, ys.max() - 5 * pad, zs.max() + 1]]
-        ),
-    )
+        text = panel.visual("text")
+        # If you don't like it, imagine how i feel. See link [1] in __doc__
+        glyph = np.array([ord(i) - 32 for i in title], dtype=np.uint16)
+        text.data("glyph", glyph)
+        text.data("length", np.array([len(title)], dtype=np.uint32))
+        text.data("color", np.array([[0, 0, 0, 255]], dtype=np.uint8))
+        text.data(
+            "pos",
+            np.array(
+                [[(xs.min() + xs.max()) / 2, ys.max() - 5 * pad, zs.max() + 1]]
+            ),
+        )
 
-    def callback(t):
-        lo, hi = np.searchsorted(times, [t, t + dt])
-        vis.data("pos", np.r_[xypad, pos[lo:hi]])
-        vis.data("color", np.r_[cpad, colors[lo:hi]])
-
-    return callback
+    def change_t(self, t):
+        lo, hi = np.searchsorted(times, [t, t + self.dt])
+        self.vis.data("pos", np.r_[self.xypad, self.pos[lo:hi]])
+        self.vis.data("color", np.r_[self.cpad, self.colors[lo:hi]])
 
 
 if __name__ == "__main__":
@@ -63,7 +66,7 @@ if __name__ == "__main__":
         y = f["y"][:][big]
         z = f["z_reg"][:][big]
         alpha = f["alpha"][:][big]
-        times = f["spike_index"][:, 0][big] / 30_000
+        times = f["spike_index"][:, 0][big] / 30000
 
         loadings_orig = f["loadings_orig"][:][big]
         loadings_reloc = f["loadings_reloc"][:][big]
@@ -118,13 +121,14 @@ if __name__ == "__main__":
 
     # run all the vis
     prevpanel = None
-    callbacks = []
+    viss = []
     for r, data in enumerate([data_orig, data_reloc]):
         for c, (k, v) in enumerate(data.items()):
             panel = scene.panel(r, c, controller="axes")
 
-            callback = marker(panel, times, v, z, maxptp, colors, k)
-            callbacks.append(callback)
+            viss.append(
+                MarkerVis(panel, times, v, z, maxptp, colors, k)
+            )
 
             if prevpanel is not None:
                 prevpanel.link_to(panel)
@@ -140,12 +144,12 @@ if __name__ == "__main__":
         value=0,
     )
 
-    def changet(t):
-        for callback in callbacks:
-            callback(t)
+    def change_t(t):
+        for vis in viss:
+            vis.change_t(t)
 
-    slider_t0.connect(changet)
-    changet(0)
+    slider_t0.connect(change_t)
+    change_t(0)
 
     # alright...
     datoviz.run()
