@@ -11,7 +11,18 @@ import datoviz
 
 class MarkerVis:
     def __init__(
-        self, panel, times, xs, ys, zs, colors, title, dt=10.0, sz=5, pad=5
+        self,
+        panel,
+        times,
+        xs,
+        ys,
+        zs,
+        colors,
+        title,
+        dt=10.0,
+        sz=5,
+        pad=5,
+        dark=False,
     ):
         self.xypad = np.array(
             [
@@ -37,7 +48,12 @@ class MarkerVis:
         glyph = np.array([ord(i) - 32 for i in title], dtype=np.uint16)
         text.data("glyph", glyph)
         text.data("length", np.array([len(title)], dtype=np.uint32))
-        text.data("color", np.array([[0, 0, 0, 255]], dtype=np.uint8))
+        textcolor = (
+            np.array([[255, 255, 255, 255]], dtype=np.uint8)
+            if dark
+            else np.array([[0, 0, 0, 255]], dtype=np.uint8)
+        )
+        text.data("color", textcolor)
         text.data(
             "pos",
             np.array(
@@ -57,6 +73,9 @@ if __name__ == "__main__":
     # args
     ap = argparse.ArgumentParser()
     ap.add_argument("input_h5")
+    ap.add_argument("which", choices=["orig", "yza", "xyza"])
+    ap.add_argument("--labels", action="store_true")
+    ap.add_argument("--controller", default="axes")
     args = ap.parse_args()
 
     # load big spikes
@@ -65,97 +84,83 @@ if __name__ == "__main__":
         big = np.flatnonzero(maxptp >= 6)
         if "good_mask" in f:
             big = np.intersect1d(big, np.flatnonzero(f["good_mask"][:]))
-
         maxptp = maxptp[big]
 
-        x = f["x"][:][big]
-        y = f["y"][:][big]
         z = f["z_reg"][:][big]
-        alpha = f["alpha"][:][big]
         times = (
             f["times"][:][big]
             if "times" in f
             else f["spike_index"][:, 0][big] / 30000
         )
+        loadings = f[f"loadings_{args.which}"][:][big]
+        loadings /= np.std(loadings, axis=0) / 16
 
-        loadings_orig = f["loadings_orig"][:][big]
-        loadings_reloc = f["loadings_yza"][:][big]
+        data = dict(
+            x=f["x"][:][big],
+            y=f["y"][:][big],
+            alpha=f["alpha"][:][big],
+            pc1=loadings[:, 0],
+            pc2=loadings[:, 1],
+            pc3=loadings[:, 2],
+        )
 
-        # clust = False
-        # if "labels_orig" in f:
-        #     clust = True
-        #     labels_orig = f["labels_orig"][:][big]
-        #     labels_yza = f["labels_yza"][:][big]
-        #     labels_xyza = f["labels_xyza"][:][big]
-        #     print(labels_orig)
-        #     print(labels_orig.min())
-
-    # standardize pca loadings
-    stds_orig = np.std(loadings_orig, axis=0)
-    loadings_orig /= stds_orig / 16
-    stds_reloc = np.std(loadings_reloc, axis=0)
-    loadings_reloc /= stds_reloc / 16
+        if args.labels:
+            labels = f[f"labels_{args.which}"][:][big]
 
     # set up vis
     canvas = datoviz.canvas(show_fps=False)
-    scene = canvas.scene(rows=2, cols=6)
-
-    # data in a friendly format for vis
-    data_orig = dict(
-        x=x,
-        y=y,
-        alpha=alpha,
-        pc1=loadings_orig[:, 0],
-        pc2=loadings_orig[:, 1],
-        pc3=loadings_orig[:, 2],
-    )
-    data_reloc = dict(
-        x=x,
-        y=y,
-        alpha=alpha,
-        pc1=loadings_reloc[:, 0],
-        pc2=loadings_reloc[:, 1],
-        pc3=loadings_reloc[:, 2],
-    )
+    scene = canvas.scene(rows=1, cols=6)
 
     # remove outliers for vis
-    mask = np.ones(len(x), dtype=bool)
-    for data in [data_orig, data_reloc]:
-        for k, v in data.items():
-            if k == "alpha":
-                continue
-            mask &= np.abs(zscore(v)) <= 5
+    mask = np.ones(len(z), dtype=bool)
+    for k, v in data.items():
+        if k == "alpha":
+            continue
+        mask &= np.abs(zscore(v)) <= 5
     mask = np.flatnonzero(mask)
-    for data in [data_orig, data_reloc]:
-        for k, v in data.items():
-            data[k] = v[mask]
+    for k, v in data.items():
+        data[k] = v[mask]
     z = z[mask]
     maxptp = maxptp[mask]
 
     # process colors
-    ptpmin = maxptp.min()
-    ptpmax = maxptp.max()
-    cmap = "viridis"
-    # if "labels" in args.colkey:
-    #     cmap = "rainbow"
-    colors = datoviz.colormap(maxptp, vmin=ptpmin, vmax=ptpmax, cmap=cmap)
+    if args.labels:
+        labels = labels[mask].astype(float)
+        labels /= labels.max()
+        colors = datoviz.colormap(labels, vmin=0.0, vmax=1.0, cmap="rainbow")
+    else:
+        ptpmin = maxptp.min()
+        ptpmax = maxptp.max()
+        colors = datoviz.colormap(
+            maxptp, vmin=ptpmin, vmax=ptpmax, cmap="viridis"
+        )
     colors[:, 3] = 127
 
     # run all the vis
     prevpanel = None
     viss = []
-    for r, data in enumerate([data_orig, data_reloc]):
-        for c, (k, v) in enumerate(data.items()):
-            panel = scene.panel(r, c, controller="axes")
+    for c, (k, v) in enumerate(data.items()):
+        panel = scene.panel(0, c, controller=args.controller)
 
-            viss.append(MarkerVis(panel, times, v, z, maxptp, colors, k))
+        viss.append(
+            MarkerVis(
+                panel,
+                times,
+                v,
+                z,
+                maxptp,
+                colors,
+                k,
+                dark=args.controller == "panzoom",
+            )
+        )
 
-            if prevpanel is not None:
-                prevpanel.link_to(panel)
-            prevpanel = panel
+        if prevpanel is not None:
+            prevpanel.link_to(panel)
+        prevpanel = panel
 
     # GUI and callbacks
-    gui = canvas.gui("hi")
+    gui = canvas.gui(f"hi -- {args.which}")
     slider_t0 = gui.control(
         "slider_int",
         "t (10s)",
@@ -170,23 +175,6 @@ if __name__ == "__main__":
 
     slider_t0.connect(change_t)
     change_t(0)
-
-    # if clust:
-    #     slider_c = gui.control(
-    #         "slider_int",
-    #         "1-ptp, 2-noreloc, 3-yza, 4-xyza",
-    #         vmin=1,
-    #         vmax=4,
-    #         value=0,
-    #     )
-
-    #     def change_c(c):
-    #         for vis in viss:
-    #             vis.colors = all_colors[c - 1]
-    #             vis.change_t()
-
-    #     slider_c.connect(change_c)
-    #     change_c(1)
 
     # alright...
     datoviz.run()
