@@ -62,7 +62,7 @@ spike_index_np2 = extract.spike_train_to_index(spike_train_np2, templates_np2)
 geom_np2 = np.load("/mnt/3TB/charlie/NP2/np2_channel_map.npy")
 
 # %%
-raw_np2_test, denoised_np2_test, inds_np2_test, fcs_np2_test = extract.get_denoised_waveforms("/media/peter/2TB/NP1/standardized.bin", spike_index_np2[:5000], geom_np2, batch_size=512, transposed_raw=False, dtype=np.float32, ghost_channel=True)
+raw_np2_test, denoised_np2_test, inds_np2_test, fcs_np2_test = extract.get_denoised_waveforms("/media/peter/2TB/NP1/standardized.bin", spike_index_np2[:5000], geom_np2, dtype=np.float32, ghost_channel=True, pad_for_denoiser=10)
 
 # %%
 raw_np2_test.shape, denoised_np2_test.shape
@@ -72,9 +72,6 @@ vis_utils.labeledmosaic(raw_np2_test[:100].reshape(5, 20, 121, 20), rowlabels="a
 
 # %%
 vis_utils.labeledmosaic(denoised_np2_test[:100].reshape(5, 20, 121, 20), rowlabels="abcde", pad=1)
-
-# %%
-templates_np2.shape
 
 # %%
 local_templates_np2, template_maxchans_np2 = waveform_utils.get_local_waveforms(templates_np2, 10, geom_np2)
@@ -91,22 +88,20 @@ for i in range(10):
 # plt.legend();
 plt.show()
 
-# %% tags=[]
-
-for i in range(100):
-    plt.figure(figsize = (10, 1.5))
-    plt.plot(raw_np2_test[i, :82, :].T.flatten(), 'blue')
-    plt.plot(denoised_np2_test[i, :82, :].T.flatten(), 'orange')
-    for j in range(19):
-        plt.axvline(82 + 82*j, color = 'black')
-    plt.show()
-
 # %%
-denoised_np1, indices_np1, firstchans_np1 = extract.get_denoised_waveforms("/media/peter/2TB/NP1/standardized.bin", spike_index_np1[760000:], geom_np1, batch_size=512)s
+raw_np1, denoised_np1, indices_np1, firstchans_np1 = extract.get_denoised_waveforms(
+    "/media/peter/2TB/NP1/standardized.bin", spike_index_np1, geom_np1,
+)
 
 # %%
 
 # %%
-denoised_np2, indices_np2, firstchans_np2 = extract.get_denoised_waveforms("/media/peter/2TB/NP1/standardized.bin", spike_index_np2, geom_np2, batch_size=512, threshold=10.0)
+
+# %%
+
+# %%
+raw_np2, denoised_np2, indices_np2, firstchans_np2 = extract.get_denoised_waveforms(
+    "/media/peter/2TB/NP1/standardized.bin", spike_index_np2, geom_np2, ghost_channel=True, pad_for_denoiser=10
+)
 
 # %%

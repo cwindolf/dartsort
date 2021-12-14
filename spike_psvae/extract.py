@@ -103,7 +103,7 @@ def get_denoised_waveforms(
     def get_batch(start, end):
         times = read_times[start:end]
         maxchans = spike_index[start:end, 1]
-        inds = np.arange(start, end)
+        inds = good[start:end]
         waveforms = np.stack(
             [standardized[t : t + T] for t in times],
             axis=0,
