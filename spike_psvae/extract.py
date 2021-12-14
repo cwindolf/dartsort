@@ -49,7 +49,10 @@ def spike_train_to_index(spike_train, templates):
     template_maxchans = template_ptps.argmax(1)
 
     cluster_ids = spike_train[:, 1]
-    template_offsets = templates[np.arange(n_templates), :, template_maxchans].argmin(1)
+    template_offsets = np.argmin(
+        templates[np.arange(n_templates), :, template_maxchans],
+        axis=1,
+    )
     spike_offsets = template_offsets[cluster_ids] - 42
     start_times = spike_train[:, 0] + spike_offsets
 
@@ -63,6 +66,7 @@ def get_denoised_waveforms(
     spike_index,
     geom,
     channel_radius=10,
+    pad_for_denoiser=0,
     denoiser_weights_path="../pretrained/single_chan_denoiser.pt",
     T=121,
     threshold=6.0,
@@ -70,19 +74,12 @@ def get_denoised_waveforms(
     geomkind="updown",
     batch_size=128,
     device=None,
-    transposed_raw=False,
     ghost_channel=False,
 ):
-    num_channels = geom.shape[0] + ghost_channel
+    num_channels = geom.shape[0]
     standardized = np.memmap(standardized_bin, dtype=dtype, mode="r")
-    if transposed_raw:
-        standardized = standardized.reshape(num_channels, -1)
-        standardized = standardized.T
-    else:
-        standardized = standardized.reshape(-1, num_channels)
-        
-    if ghost_channel:
-        standardized = standardized[:, :-1]
+    standardized = standardized.reshape(-1, num_channels + ghost_channel)
+    standardized = standardized[:, :num_channels]
 
     # load denoiser
     denoiser = SingleChanDenoiser()
@@ -113,7 +110,7 @@ def get_denoised_waveforms(
         )
         waveforms_trimmed, firstchans = waveform_utils.get_local_waveforms(
             waveforms,
-            channel_radius,
+            channel_radius + 2 * pad_for_denoiser,
             geom,
             maxchans=maxchans,
             geomkind=geomkind,
@@ -140,22 +137,34 @@ def get_denoised_waveforms(
     count = 0  # how many spikes have exceeded the threshold?
     indices = np.empty(max_n_spikes, dtype=int)
     firstchans = np.empty(max_n_spikes, dtype=int)
-    
+
     # main loop
     for i in trange(max_n_spikes // batch_size + 1):
         start = i * batch_size
         end = min(max_n_spikes, (i + 1) * batch_size)
-        batch_wfs, batch_inds, batch_firstchans = get_batch(start, end)       
+        batch_wfs, batch_inds, batch_firstchans = get_batch(start, end)
         batch_wfs_ = torch.as_tensor(
             batch_wfs.transpose(0, 2, 1), device=device
         )
-        
+
         n_batch = batch_wfs.shape[0]
         if n_batch:
             denoised_batch = denoiser(batch_wfs_.reshape(-1, T)).cpu().numpy()
-            denoised_batch = denoised_batch.reshape(n_batch, C, T).transpose(0, 2, 1)
-            denoised_ptps = denoised_batch.ptp(1).max(1)
-            big = denoised_ptps > threshold
+            denoised_batch = denoised_batch.reshape(n_batch, C, T)
+            denoised_batch = denoised_batch.transpose(0, 2, 1)
+
+            if pad_for_denoiser:
+                denoised_ptps = denoised_batch.ptp(1)
+                denoised_maxchans = denoised_ptps.argmax(1)
+                low = np.maximum(0, denoised_maxchans - channel_radius)
+                low = np.minimum(2 * pad_for_denoiser, low)
+                denoised_batch = np.stack(
+                    [denoised_batch[i, low[i]:low[i] + C] for i in range(n_batch)],  # noqa
+                    axis=0,
+                )
+                batch_firstchans += low
+
+            big = denoised_batch.ptp(1).max(1) > threshold
             n_big = big.sum()
             if n_big:
                 raw_waveforms[count : count + n_big] = batch_wfs[big]
