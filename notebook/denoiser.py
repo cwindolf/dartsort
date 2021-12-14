@@ -20,6 +20,7 @@
 import numpy as np
 from spike_psvae import extract, vis_utils, waveform_utils
 import matplotlib.pyplot as plt
+import h5py
 
 # %%
 plt.rc("figure", dpi=200)
@@ -94,6 +95,20 @@ raw_np1, denoised_np1, indices_np1, firstchans_np1 = extract.get_denoised_wavefo
 )
 
 # %%
+selected_train_np1 = spike_train_np1[indices_np1]
+selected_index_np1 = spike_index_np1[indices_np1]
+with h5py.File("../data/yass_np1.h5", "w") as np1h5:
+    np1h5.create_dataset("spike_index", data=selected_index_np1)
+    np1h5.create_dataset("spike_train", data=selected_train_np1)
+    np1h5.create_dataset("templates", data=templates_np1)
+    np1h5.create_dataset("geom", data=geom_np1)
+    np1h5.create_dataset("raw_waveforms", data=raw_np1)
+    np1h5.create_dataset("denoised_waveforms", data=denoised_np1)
+    np1h5.create_dataset("first_channels", data=firstchans_np1)
+    np1h5.create_dataset("selection_indices", data=indices_np1)
+    
+    for k in np1h5:
+        print(k, np1h5[k].shape, np1h5[k].dtype)
 
 # %%
 
