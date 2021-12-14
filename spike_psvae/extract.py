@@ -57,6 +57,7 @@ def spike_train_to_index(spike_train, templates):
     return spike_index
 
 
+@torch.no_grad()
 def get_denoised_waveforms(
     standardized_bin,
     spike_index,
@@ -94,9 +95,11 @@ def get_denoised_waveforms(
 
     # helper function for data loading
     def get_batch(start, end):
-        times, maxchans = spike_index[start:end].T
-        waveforms = np.array(
-            [standardized[s:t] for s, t in zip(times, times[1:])]
+        times = read_times[start:end]
+        maxchans = spike_index[start:end, 1]
+        waveforms = np.stack(
+            [standardized[t : t + T] for t in times],
+            axis=0,
         )
         waveforms_trimmed = waveform_utils.get_local_waveforms(
             waveforms,
@@ -111,19 +114,23 @@ def get_denoised_waveforms(
     # we probably won't find this many spikes that cross the threshold,
     # but we can use it to allocate storage
     max_n_spikes = len(spike_index)
+    C = 2 * channel_radius + 2 * (geomkind == "standard")
     denoised_waveforms = np.empty(
-        (max_n_spikes, T, 2 * channel_radius + 2 * (geomkind == "standard")),
+        (max_n_spikes, T, C),
         dtype=dtype,
     )
     count = 0  # how many spikes have exceeded the threshold?
     for i in trange(max_n_spikes // batch_size + 1):
         start = i * batch_size
         end = min(max_n_spikes, (i + 1) * batch_size)
-        batch = torch.as_tensor(get_batch(start, end), device=device)
+        batch = torch.as_tensor(
+            get_batch(start, end).transpose(0, 2, 1), device=device
+        )
         n_batch = batch.shape[0]
-        denoised_batch = denoiser(batch)
-        denoised_waveforms[count : count + n_batch] = denoised_batch
-        count += n_batch
+        if n_batch:
+            denoised_batch = denoiser(batch.reshape(-1, T)).cpu().numpy()
+            denoised_waveforms[count : count + n_batch] = denoised_batch.reshape(n_batch, C, T).transpose(0, 2, 1)
+            count += n_batch
     # trim the places we did not fill
     denoised_waveforms = denoised_waveforms[:count]
 
