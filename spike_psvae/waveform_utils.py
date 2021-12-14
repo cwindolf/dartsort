@@ -6,6 +6,10 @@ def relativize_z(z_abs, maxchans, geom):
     return z_abs - geom[maxchans.astype(int), 1]
 
 
+def maxchan_from_firstchan(firstchan, wf):
+    return firstchan + wf.ptp(0).argmax()
+
+
 def updown_decision(geom, maxchan, channel_radius, ptp):
     """Gets indices of channels around the maxchan"""
     G, d = geom.shape
