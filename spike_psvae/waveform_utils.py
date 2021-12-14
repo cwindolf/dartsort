@@ -183,7 +183,7 @@ def get_local_waveforms(
             maxchans[n],
             channel_radius,
             ptps[n],
-            firstchan=firstchans[n],
+            firstchan=None if firstchans is None else firstchans[n],
             geomkind=geomkind,
         )
         local_waveforms[n] = waveforms[n, :, low:high]
