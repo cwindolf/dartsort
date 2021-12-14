@@ -103,14 +103,14 @@ def get_denoised_waveforms(
     def get_batch(start, end):
         times = read_times[start:end]
         maxchans = spike_index[start:end, 1]
-        inds = np.arange(start, end)
+        inds = good[start:end]
         waveforms = np.stack(
             [standardized[t : t + T] for t in times],
             axis=0,
         )
         waveforms_trimmed, firstchans = waveform_utils.get_local_waveforms(
             waveforms,
-            channel_radius + 2 * pad_for_denoiser,
+            channel_radius + pad_for_denoiser,
             geom,
             maxchans=maxchans,
             geomkind=geomkind,
@@ -150,7 +150,7 @@ def get_denoised_waveforms(
         n_batch = batch_wfs.shape[0]
         if n_batch:
             denoised_batch = denoiser(batch_wfs_.reshape(-1, T)).cpu().numpy()
-            denoised_batch = denoised_batch.reshape(n_batch, C, T)
+            denoised_batch = denoised_batch.reshape(n_batch, C + 2 * pad_for_denoiser, T)
             denoised_batch = denoised_batch.transpose(0, 2, 1)
 
             if pad_for_denoiser:
@@ -158,8 +158,12 @@ def get_denoised_waveforms(
                 denoised_maxchans = denoised_ptps.argmax(1)
                 low = np.maximum(0, denoised_maxchans - channel_radius)
                 low = np.minimum(2 * pad_for_denoiser, low)
+                batch_wfs = np.stack(
+                    [batch_wfs[i, :, low[i]:low[i] + C] for i in range(n_batch)],
+                    axis=0,
+                )
                 denoised_batch = np.stack(
-                    [denoised_batch[i, low[i]:low[i] + C] for i in range(n_batch)],  # noqa
+                    [denoised_batch[i, :, low[i]:low[i] + C] for i in range(n_batch)],  # noqa
                     axis=0,
                 )
                 batch_firstchans += low
