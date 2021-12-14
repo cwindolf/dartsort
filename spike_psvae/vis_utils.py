@@ -5,7 +5,12 @@ import seaborn as sns
 import numpy as np
 import torch
 import torch.nn.functional as F
-sns.set_style("white")
+import pandas as pd
+
+from . import statistics
+
+
+sns.set_style("ticks")
 
 
 class MidpointNormalize(colors.Normalize):
@@ -45,7 +50,16 @@ def mosaic(xs, pad=0, padval=255):
     return grid
 
 
-def labeledmosaic(xs, rowlabels, pad=0, padval=255, ax=None, cbar=True, separate_norm=False, collabels="abcdefghijklmnopqrstuvwxyz"):
+def labeledmosaic(
+    xs,
+    rowlabels,
+    pad=0,
+    padval=255,
+    ax=None,
+    cbar=True,
+    separate_norm=False,
+    collabels="abcdefghijklmnopqrstuvwxyz",
+):
     if separate_norm:
         assert not cbar
         xs = [normbatch(x) for x in xs]
@@ -107,13 +121,14 @@ def vis_ptps(
 
     fig, axes = plt.subplots(n, n, **subplots_kwargs)
     handles = {}
+    dhandles = {}
     for k, (ptp, label, color) in enumerate(zip(ptps, labels, colors)):
         for j in range(n * n):
             ax = axes.flat[j]
             ptp_left = ptp[j, ::2]
             ptp_right = ptp[j, 1::2]
-            handles[k], = ax.plot(ptp_left, c=color, label=label)
-            ax.plot(ptp_right, "--", c=color)
+            (handles[k],) = ax.plot(ptp_left, c=color, label=label)
+            (dhandles[k],) = ax.plot(ptp_right, "--", c=color)
             ax.text(
                 0.1,
                 0.9,
@@ -123,26 +138,38 @@ def vis_ptps(
                 transform=ax.transAxes,
             )
 
-    plt.figlegend(
-        handles=list(handles.values()),
-        labels=labels,
-        loc="upper center",
-        frameon=False,
-        fancybox=False,
-        borderpad=0,
-        borderaxespad=0,
-        ncol=len(handles),
-    )
+    if K == 1:
+        plt.figlegend(
+            handles=list(handles.values()) + list(dhandles.values()),
+            labels=[label + ", left channels", label + ", right channels"],
+            loc="upper center",
+            frameon=False,
+            fancybox=False,
+            borderpad=0,
+            borderaxespad=0,
+            ncol=2,
+        )
+    else:
+        plt.figlegend(
+            handles=list(handles.values()),
+            labels=labels,
+            loc="upper center",
+            frameon=False,
+            fancybox=False,
+            borderpad=0,
+            borderaxespad=0,
+            ncol=len(handles),
+        )
     plt.tight_layout(pad=0.5)
     for ax in axes.flat:
-        ax.set_box_aspect(1.)
+        ax.set_box_aspect(1.0)
     return fig, axes
 
 
 def traceplot(waveform, axes, label="", c="k", alpha=1, strip=True, lw=1):
     assert (waveform.shape[1],) == axes.shape
     for ax, wf in zip(axes, waveform.T):
-        line, = ax.plot(wf, color=c, label=label, alpha=alpha, lw=lw)
+        (line,) = ax.plot(wf, color=c, label=label, alpha=alpha, lw=lw)
         if strip:
             sns.despine(ax=ax, bottom=True, left=True)
         ax.set_xticks([])
@@ -153,28 +180,86 @@ def traceplot(waveform, axes, label="", c="k", alpha=1, strip=True, lw=1):
 
 def pca_tracevis(pcs, wfs, title=None, cut=4, strip=False):
     pal = sns.color_palette(n_colors=len(pcs))
-    
+
     if cut > 0:
         pcs = pcs[:, :, cut:-cut]
         wfs = wfs[:, :, cut:-cut]
-    
+
     fig, axes = plt.subplots(2, pcs.shape[2], sharey="row", sharex=True)
-    
+
     handles = []
     labels = []
     for i in range(len(pcs)):
         l = traceplot(pcs[i], axes[0], c=pal[i], strip=strip)
         handles.append(l)
         labels.append(f"pc {i + 1}")
-    
+
     for wf in wfs:
         l = traceplot(wf, axes[1], alpha=0.5, strip=strip)
-    
-        
+
     if title:
         fig.suptitle(title)
-    
-    fig.legend(handles + [l], labels + ["random wfs"], fancybox=False, facecolor="w")
+
+    fig.legend(
+        handles + [l], labels + ["random wfs"], fancybox=False, facecolor="w"
+    )
     fig.tight_layout(pad=0.25)
-    
+
     return fig, axes
+
+
+def lcorrs(disp, y, alpha, pcs, maxptp, plotmask):
+    df = pd.DataFrame(
+        dict(
+            disp=disp,
+            y=y,
+            alpha=alpha,
+            pc1=pcs[:, 0],
+            pc2=pcs[:, 1],
+            pc3=pcs[:, 2],
+            maxptp=maxptp,
+        )
+    )
+
+    grid = sns.pairplot(
+        data=df[plotmask].sample(frac=0.1),
+        x_vars=["pc1", "pc2", "pc3"],
+        y_vars=["disp", "y", "alpha"],
+        hue="maxptp",
+    )
+
+    for i, xv in enumerate(["pc1", "pc2", "pc3"]):
+        for j, yv in enumerate(["disp", "y", "alpha"]):
+            sp = statistics.spearmanr(df[yv].values, df[xv].values).correlation
+            gcs = statistics.gcs(df[yv].values, df[xv].values)
+            grid.axes[j, i].set_title(f"Spear: {sp:0.2f}, GCS: {gcs:0.2f}")
+
+    return grid
+
+
+def gcsboxes(disp, pcs, labels):
+    good = np.flatnonzero(labels >= 0)
+    disp = disp[good]
+    pcs = pcs[good]
+    labels = labels[good]
+    Kmax = labels.max() + 1
+    gcss = [[]] * pcs.shape[1]
+    for k in range(Kmax):
+        clust = np.flatnonzero(labels == k)
+        for j, pc in enumerate(pcs.T):
+            gcss[j].append(statistics.gcs(disp[clust], pc[clust]))
+    plt.boxplot(np.array(gcss).T)
+
+
+def spearmanrboxes(disp, pcs, labels):
+    good = np.flatnonzero(labels >= 0)
+    disp = disp[good]
+    pcs = pcs[good]
+    labels = labels[good]
+    Kmax = labels.max() + 1
+    spearmanrs = [[]] * pcs.shape[1]
+    for k in range(Kmax):
+        clust = np.flatnonzero(labels == k)
+        for j, pc in enumerate(pcs.T):
+            spearmanrs[j].append(statistics.spearmanr(disp[clust], pc[clust]).correlation)
+    plt.boxplot(np.array(spearmanrs).T)
