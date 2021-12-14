@@ -54,13 +54,13 @@ plt.rc("figure", dpi=200)
 
 # %%
 # single channel denoised data
-original_h5 = "../data/wfs_locs_b.h5"
+original_h5 = "../data/wfs_locs_c.h5"
 
 # %%
 # we will write some waveforms data here
 # this one will just have features, cluster ids, lightweight stuff
 # that can be rsyncd to local for datoviz
-feats_h5 = "../data/story_feats_b.h5"
+feats_h5 = "../data/story_feats_c.h5"
 
 
 # %% [markdown]
@@ -147,9 +147,11 @@ aa.set_xlabel("time", labelpad=-12)
 ab.set_xlabel("time", labelpad=-12)
 aa.set_title("unregistered")
 ab.set_title("registered")
-fig.suptitle("raster of localizations after single chan denoising")
+fig.suptitle("raster of localizations after multi chan denoising")
 plt.tight_layout(pad=1)
 plt.show()
+
+# %%
 
 # %%
 z_disp = z_reg - (z_abss - z_abss.min())
@@ -467,6 +469,7 @@ good = np.setdiff1d(good, np.flatnonzero(loadings_orig[:, 0] == 0))
 good = np.setdiff1d(good, np.flatnonzero(loadings_yza[:, 0] == 0))
 good = np.setdiff1d(good, np.flatnonzero(loadings_xyza[:, 0] == 0))
 
+# fixed in multi chan code I think
 # this handles some bug with duplicated spikes, see the bug tracker
 # with h5py.File(original_h5, "r") as orig_f:
 #     _, unique_inds = np.unique(orig_f["spike_index"][:, 0], return_index=True)
@@ -478,15 +481,14 @@ feats_yza = np.ascontiguousarray(np.c_[xs, ys, z_reg, alphas, loadings_yza[:, :3
 feats_xyza = np.ascontiguousarray(np.c_[xs, ys, z_reg, alphas, loadings_xyza[:, :3]][good]).T
 
 # %%
-N - len(unique_inds), (N - len(unique_inds)) / N
-
-# %%
 shuffle = rg().permutation(len(good))
 invshuf = np.empty_like(shuffle)
 for i, j in enumerate(shuffle):
     invshuf[j] = i
 
 # %%
+good_mask = np.zeros(N, dtype=bool)
+good_mask[good] = 1
 plot = (maxptp >= 6) & good_mask
 
 # %%
@@ -541,7 +543,8 @@ plt.show()
 # %%
 with h5py.File(feats_h5, "r+") as feats_f:
     for k in ["good_mask", "labels_orig", "labels_yza", "labels_xyza"]:
-        del feats_f[k]
+        if k in feats_f:
+            del feats_f[k]
     good_mask = np.zeros(N, dtype=bool)
     good_mask[good] = 1
     feats_f.create_dataset("good_mask", data=good_mask)
@@ -621,5 +624,7 @@ ac.set_title("XYZa")
 
 fig.suptitle("SpearmanR(drift, pc loading) within (unrelocated) clusters")
 plt.show();
+
+# %%
 
 # %%
