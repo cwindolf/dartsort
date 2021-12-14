@@ -48,8 +48,9 @@ def spike_train_to_index(spike_train, templates):
     template_maxchans = template_ptps.argmax(1)
 
     cluster_ids = spike_train[:, 1]
-    offsets = templates[cluster_ids, :, template_maxchans].argmin(1) - 42
-    start_times = spike_train[:, 0] + offsets
+    template_offsets = templates[:, :, template_maxchans].argmin(1) - 42
+    spike_offsets = template_offsets[cluster_ids]
+    start_times = spike_train[:, 0] + spike_offsets
 
     spike_index = np.c_[start_times, template_maxchans[cluster_ids]]
     return spike_index
