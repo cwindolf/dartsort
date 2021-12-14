@@ -18,7 +18,11 @@
 
 # %%
 import numpy as np
-from spike_psvae import extract
+from spike_psvae import extract, vis_utils
+import matplotlib.pyplot as plt
+
+# %%
+plt.rc("figure", dpi=200)
 
 # %%
 spike_train_np1 = np.load("/media/peter/2TB/NP1/final_sps_final.npy")
@@ -27,6 +31,15 @@ spike_index_np1 = extract.spike_train_to_index(spike_train_np1, templates_np1)
 
 # %%
 geom_np1 = np.load("/media/peter/2TB/NP1/geom_np1.npy")
+
+# %%
+denoised_np1_test = extract.get_denoised_waveforms("/media/peter/2TB/NP1/standardized.bin", spike_index_np1[:9], geom_np1, batch_size=512)
+
+# %%
+vis_utils.labeledmosaic(denoised_np1_test.reshape(3, 3, 121, 20), rowlabels="abc", pad=1)
+
+# %% [markdown]
+# looks good
 
 # %%
 denoised_np1 = extract.get_denoised_waveforms("/media/peter/2TB/NP1/standardized.bin", spike_index_np1, geom_np1, batch_size=512)
