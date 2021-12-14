@@ -44,12 +44,13 @@ def spike_train_to_index(spike_train, templates):
     Output times are min PTP times, output max chans are KS
     template max chans.
     """
+    n_templates = templates.shape[0]
     template_ptps = templates.ptp(1)
     template_maxchans = template_ptps.argmax(1)
 
     cluster_ids = spike_train[:, 1]
-    template_offsets = templates[:, :, template_maxchans].argmin(1) - 42
-    spike_offsets = template_offsets[cluster_ids]
+    template_offsets = templates[np.arange(n_templates), :, template_maxchans].argmin(1)
+    spike_offsets = template_offsets[cluster_ids] - 42
     start_times = spike_train[:, 0] + spike_offsets
 
     spike_index = np.c_[start_times, template_maxchans[cluster_ids]]
