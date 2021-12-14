@@ -19,7 +19,10 @@ def updown_decision(geom, maxchan, channel_radius, ptp):
     high = maxchan + channel_radius
     if low <= 0:
         return True
-    if high >= geom.shape[0]:
+    # low and high should be  - (maxchan % 2) above,
+    # but adding that now would break compatibility.
+    # so, the limit has been lowered here as a hack.
+    if high >= geom.shape[0] - 1:
         return False
 
     if C == G:
@@ -54,7 +57,10 @@ def get_local_chans_updown(geom, maxchan, channel_radius, ptp):
         low = 0
         high = 2 * channel_radius
         return low, high
-    if high >= geom.shape[0]:
+    # low and high should be  - (maxchan % 2) above,
+    # but adding that now would break compatibility.
+    # so, the limit has been lowered here as a hack.
+    if high >= geom.shape[0] - 1:
         high = geom.shape[0]
         low = geom.shape[0] - 2 * channel_radius
         return low, high
@@ -164,6 +170,7 @@ def get_local_waveforms(
     maxchans=None,
     firstchans=None,
     geomkind="updown",
+    compute_firstchans=False,
 ):
     """NxTxCfull -> NxTx(2*channel radius). So, takes a batch."""
     N, T, Cfull = waveforms.shape
@@ -177,6 +184,7 @@ def get_local_waveforms(
         (N, T, 2 * channel_radius + 2 * (geomkind == "standard")),
         dtype=waveforms.dtype,
     )
+    lows = []
     for n in range(N):
         low, high = get_local_chans(
             geom,
@@ -187,9 +195,12 @@ def get_local_waveforms(
             geomkind=geomkind,
         )
         local_waveforms[n] = waveforms[n, :, low:high]
+        lows.append(low)
 
     if compute_maxchans:
         return local_waveforms, maxchans
+    if compute_firstchans:
+        return local_waveforms, np.array(lows)
     return local_waveforms
 
 
