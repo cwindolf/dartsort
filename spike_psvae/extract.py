@@ -70,10 +70,19 @@ def get_denoised_waveforms(
     geomkind="updown",
     batch_size=128,
     device=None,
+    transposed_raw=False,
+    ghost_channel=False,
 ):
-    num_channels = geom.shape[0]
+    num_channels = geom.shape[0] + ghost_channel
     standardized = np.memmap(standardized_bin, dtype=dtype, mode="r")
-    standardized = standardized.reshape(-1, num_channels)
+    if transposed_raw:
+        standardized = standardized.reshape(num_channels, -1)
+        standardized = standardized.T
+    else:
+        standardized = standardized.reshape(-1, num_channels)
+        
+    if ghost_channel:
+        standardized = standardized[:, :-1]
 
     # load denoiser
     denoiser = SingleChanDenoiser()
@@ -97,41 +106,68 @@ def get_denoised_waveforms(
     def get_batch(start, end):
         times = read_times[start:end]
         maxchans = spike_index[start:end, 1]
+        inds = np.arange(start, end)
         waveforms = np.stack(
             [standardized[t : t + T] for t in times],
             axis=0,
         )
-        waveforms_trimmed = waveform_utils.get_local_waveforms(
+        waveforms_trimmed, firstchans = waveform_utils.get_local_waveforms(
             waveforms,
             channel_radius,
             geom,
             maxchans=maxchans,
             geomkind=geomkind,
+            compute_firstchans=True,
         )
-        maxptps = waveforms_trimmed.ptp(1).max(1)
-        return waveforms_trimmed[maxptps > threshold]
+        # maxptps = waveforms_trimmed.ptp(1).max(1)
+        # big = maxptps > threshold
+        # return waveforms_trimmed[big], inds[big], firstchans[big]
+        return waveforms_trimmed, inds, firstchans
 
+    # -- initialize variables for main loop
     # we probably won't find this many spikes that cross the threshold,
     # but we can use it to allocate storage
     max_n_spikes = len(spike_index)
     C = 2 * channel_radius + 2 * (geomkind == "standard")
+    raw_waveforms = np.empty(
+        (max_n_spikes, T, C),
+        dtype=dtype,
+    )
     denoised_waveforms = np.empty(
         (max_n_spikes, T, C),
         dtype=dtype,
     )
     count = 0  # how many spikes have exceeded the threshold?
+    indices = np.empty(max_n_spikes, dtype=int)
+    firstchans = np.empty(max_n_spikes, dtype=int)
+    
+    # main loop
     for i in trange(max_n_spikes // batch_size + 1):
         start = i * batch_size
         end = min(max_n_spikes, (i + 1) * batch_size)
-        batch = torch.as_tensor(
-            get_batch(start, end).transpose(0, 2, 1), device=device
+        batch_wfs, batch_inds, batch_firstchans = get_batch(start, end)       
+        batch_wfs_ = torch.as_tensor(
+            batch_wfs.transpose(0, 2, 1), device=device
         )
-        n_batch = batch.shape[0]
+        
+        n_batch = batch_wfs.shape[0]
         if n_batch:
-            denoised_batch = denoiser(batch.reshape(-1, T)).cpu().numpy()
-            denoised_waveforms[count : count + n_batch] = denoised_batch.reshape(n_batch, C, T).transpose(0, 2, 1)
-            count += n_batch
-    # trim the places we did not fill
-    denoised_waveforms = denoised_waveforms[:count]
+            denoised_batch = denoiser(batch_wfs_.reshape(-1, T)).cpu().numpy()
+            denoised_batch = denoised_batch.reshape(n_batch, C, T).transpose(0, 2, 1)
+            denoised_ptps = denoised_batch.ptp(1).max(1)
+            big = denoised_ptps > threshold
+            n_big = big.sum()
+            if n_big:
+                raw_waveforms[count : count + n_big] = batch_wfs[big]
+                denoised_waveforms[count : count + n_big] = denoised_batch[big]
+                indices[count : count + n_big] = batch_inds[big]
+                firstchans[count : count + n_big] = batch_firstchans[big]
+                count += n_big
 
-    return denoised_waveforms
+    # trim the places we did not fill
+    raw_waveforms = raw_waveforms[:count]
+    denoised_waveforms = denoised_waveforms[:count]
+    indices = indices[:count]
+    firstchans = firstchans[:count]
+
+    return raw_waveforms, denoised_waveforms, indices, firstchans
