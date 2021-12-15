@@ -45,34 +45,42 @@ print("geomkind is", geomkind)
 
 channel_radius = C // 2
 print(N, T, C)
-xs, ys, z_rels, z_abss, alphas = localization.localize_waveforms_batched(
-    waveforms,
-    geom,
-    maxchans=maxchans,
-    channel_radius=channel_radius,
-    n_workers=args.n_workers,
-    jac=False,
-    firstchans=firstchans,
-    geomkind=geomkind,
-    batch_size=1024,
-)
+if "x" not in input_h5:
+    xs, ys, z_rels, z_abss, alphas = localization.localize_waveforms_batched(
+        waveforms,
+        geom,
+        maxchans=maxchans,
+        channel_radius=channel_radius,
+        n_workers=args.n_workers,
+        jac=False,
+        firstchans=firstchans,
+        geomkind=geomkind,
+        batch_size=1024,
+    )
+else:
+    xs = input_h5["x"][:]
+    ys = input_h5["x"][:]
+    z_rels = input_h5["z_rel"][:]
+    z_abss = input_h5["z_abs"][:]
+    alphas = input_h5["alpha"][:]
 
-output_h5 = h5py.File(args.output_h5, "w-")
-output_h5.create_dataset("geom", data=geom)
-output_h5.create_dataset("x", data=xs)
-output_h5.create_dataset("y", data=ys)
-output_h5.create_dataset("z_rel", data=z_rels)
-output_h5.create_dataset("z_abs", data=z_abss)
-output_h5.create_dataset("alpha", data=alphas)
-output_h5.create_dataset("spike_index", data=spike_index)
-maxptp = output_h5.create_dataset("maxptp", shape=xs.shape, dtype=np.float64)
+if args.output_h5 != args.input_h5:
+    output_h5 = h5py.File(args.output_h5, "w-")
+    output_h5.create_dataset("geom", data=geom)
+    output_h5.create_dataset("x", data=xs)
+    output_h5.create_dataset("y", data=ys)
+    output_h5.create_dataset("z_rel", data=z_rels)
+    output_h5.create_dataset("z_abs", data=z_abss)
+    output_h5.create_dataset("alpha", data=alphas)
+    output_h5.create_dataset("spike_index", data=spike_index)
+else:
+    output_h5 = input_h5
 
 for b in trange(N // batch_size, desc="fit"):
     start = b * batch_size
     end = min(N, (b + 1) * batch_size)
 
     wfs_orig = waveforms[start:end]
-    maxptp[start:end] = wfs_orig.ptp(1).ptp(1)
     B, _, _ = wfs_orig.shape
     wfs_reloc, r, q = point_source_centering.relocate_simple(
         wfs_orig,
@@ -99,7 +107,6 @@ for b in trange(N // batch_size, desc="project"):
     end = min(N, (b + 1) * batch_size)
 
     wfs_orig = waveforms[start:end]
-    maxptp[start:end] = wfs_orig.ptp(1).ptp(1)
     B, _, _ = wfs_orig.shape
     wfs_reloc, r, q = point_source_centering.relocate_simple(
         wfs_orig,
@@ -121,11 +128,12 @@ for b in trange(N // batch_size, desc="project"):
     loadings_orig[start:end] = ipca_orig.transform(wfs_orig)
     loadings_reloc[start:end] = ipca_reloc.transform(wfs_reloc)
 
-output_h5.create_dataset("loadings_orig", data=loadings_orig)
+if "loadings_orig" not in output_h5:
+    output_h5.create_dataset("loadings_orig", data=loadings_orig)
+    output_h5.create_dataset(
+        "pcs_orig", data=ipca_orig.components_.reshape(K, T, C)
+    )
+output_h5.create_dataset(f"loadings_{args.relocate_dims}", data=loadings_reloc)
 output_h5.create_dataset(
-    "pcs_orig", data=ipca_orig.components_.reshape(K, T, C)
-)
-output_h5.create_dataset("loadings_reloc", data=loadings_reloc)
-output_h5.create_dataset(
-    "pcs_reloc", data=ipca_reloc.components_.reshape(K, T, C)
+    f"pcs_{args.relocate_dims}", data=ipca_reloc.components_.reshape(K, T, C)
 )
