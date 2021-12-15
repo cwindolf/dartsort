@@ -68,7 +68,7 @@ def get_denoised_waveforms(
     channel_radius=10,
     denoiser_weights_path="../pretrained/single_chan_denoiser.pt",
     T=121,
-    threshold=6.0,
+    threshold=0,
     dtype=np.float32,
     geomkind="updown",
     batch_size=128,
@@ -98,6 +98,7 @@ def get_denoised_waveforms(
 
     # helper function for data loading
     def get_batch(start, end):
+        nonlocal standardized
         times = read_times[start:end]
         maxchans = spike_index[start:end, 1]
         inds = good[start:end]
@@ -134,6 +135,13 @@ def get_denoised_waveforms(
 
     # main loop
     for i in trange(max_n_spikes // batch_size + 1):
+        # numpy memmaps fill up some kind of cache, this is just to deal with that
+        # so memory usage does not explode
+        if not i % 500:
+            del standardized
+            standardized = np.memmap(standardized_bin, dtype=dtype, mode="r")
+            standardized = standardized.reshape(-1, num_channels)
+
         start = i * batch_size
         end = min(max_n_spikes, (i + 1) * batch_size)
         batch_wfs, batch_inds, batch_firstchans = get_batch(start, end)
@@ -144,6 +152,7 @@ def get_denoised_waveforms(
         n_batch = batch_wfs.shape[0]
         if n_batch:
             denoised_batch = denoiser(batch_wfs_.reshape(-1, T)).cpu().numpy()
+            denoised_batch = denoised_batch.reshape(n_batch, C, T)
             denoised_batch = denoised_batch.transpose(0, 2, 1)
             
             big = range(n_batch)
