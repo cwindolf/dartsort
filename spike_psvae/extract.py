@@ -103,7 +103,7 @@ def get_denoised_waveforms(
         maxchans = spike_index[start:end, 1]
         inds = good[start:end]
         waveforms = np.stack(
-            [standardized[t : t + T] for t in times],
+            [standardized[t : t + T] + 0 for t in times],
             axis=0,
         )
         waveforms_trimmed, firstchans = waveform_utils.get_local_waveforms(
@@ -135,13 +135,6 @@ def get_denoised_waveforms(
 
     # main loop
     for i in trange(max_n_spikes // batch_size + 1):
-        # numpy memmaps fill up some kind of cache, this is just to deal with that
-        # so memory usage does not explode
-        if not i % 500:
-            del standardized
-            standardized = np.memmap(standardized_bin, dtype=dtype, mode="r")
-            standardized = standardized.reshape(-1, num_channels)
-
         start = i * batch_size
         end = min(max_n_spikes, (i + 1) * batch_size)
         batch_wfs, batch_inds, batch_firstchans = get_batch(start, end)
