@@ -29,9 +29,6 @@ from npx import lib, cuts, reg
 # %%
 plt.rc("figure", dpi=200)
 
-# %%
-dest = "../data/ks_np2_all.h5"
-
 # %% [markdown]
 # <!-- ### test np2 -->
 
@@ -76,7 +73,7 @@ for i in range(100):
 geom_np2 = np.load("/mnt/3TB/charlie/NP2/np2_channel_map.npy")
 
 # %%
-raw_np2_test, denoised_np2_test, inds_np2_test, fcs_np2_test = extract.get_denoised_waveforms("/mnt/3TB/charlie/NP2/standardized.bin", spike_index_np2[:5000], geom_np2, dtype=np.float32, threshold=8.0, device="cpu")
+raw_np2_test, denoised_np2_test, inds_np2_test, fcs_np2_test = extract.get_denoised_waveforms("/mnt/3TB/charlie/NP2/standardized.bin", spike_index_np2[:5000], geom_np2, dtype=np.float32, threshold=0, device="cpu")
 
 # %%
 mc2t = raw_np2_test[:100].ptp(1).argmax(1)
@@ -105,7 +102,7 @@ vis_utils.labeledmosaic(local_templates_np2[:100].reshape(5, 20, 121, 20), rowla
 
 # %%
 raw_np2, denoised_np2, indices_np2, firstchans_np2 = extract.get_denoised_waveforms(
-    "/mnt/3TB/charlie/NP2/standardized.bin", spike_index_np2, geom_np2, threshold=6., device="cpu"
+    "/mnt/3TB/charlie/NP2/standardized.bin", spike_index_np2, geom_np2, threshold=0
 )
 
 # %%
@@ -184,6 +181,9 @@ with h5py.File("../data/ks_np2.h5", "r+") as np2h5:
         print(k, np2h5[k].shape, np2h5[k].dtype)
 
 # %%
+maxptps_np2.min()
+
+# %%
 with h5py.File("../data/ks_np2.h5", "r+") as np2h5:
     R, _, _ = lib.faster(np2h5["maxptp"][:], np2h5["z_abs"][:], np2h5["spike_index"][:, 0] / 30000)
 
@@ -215,19 +215,42 @@ with h5py.File("../data/ks_np2.h5", "r") as np2h5:
     Rreg, _, _ = lib.faster(np2h5["maxptp"][:], z_reg, np2h5["spike_index"][:, 0] / 30000)
     cuts.plot(Rreg)
 
-# %%
+# %% [markdown]
+# ## cull data
+#
+# we'll pick: 
 
 # %%
+with h5py.File("../data/ks_np2.h5") as h5:
+    for k in h5:
+        print(k, h5[k].dtype, h5[k].shape)
 
 # %%
-randcm = plt.cm.colors.ListedColormap(
-  plt.cm.rainbow(
-    np.random.default_rng(0).permutation(np.linspace(0, 1, 256))
-  )
-)
+with h5py.File("../data/ks_np2.h5", "r") as h5:
+    templates = h5["templates"][:]
+    tptps = templates.ptp(1).max(1)
+    big_units = np.flatnonzero(tptps >= 8)
+    print(len(big_units))
+    cluster_ids = h5["spike_train"][:, 1]
+    is_big_unit = np.flatnonzero(np.isin(cluster_ids, big_units))
+    print(is_big_unit.shape)
+    print(h5["y"][:][is_big_unit].min(), (h5["y"][:][is_big_unit] < 0.0001).mean())
+    big_y = np.flatnonzero(h5["y"][:] > 1e-4)
+    keepers = np.intersect1d(is_big_unit, big_y)
 
 # %%
-with h5py.File("../data/ks_np2.h5", "r+") as np2h5:
-    plt.scatter(np2h5["spike_index"][:, 0] / 30000, np2h5["z_abs"][:], c=np2h5["spike_train"][:,1], cmap=randcm, s=1)
+len(keepers)
+
+# %%
+_, bucounts = np.unique(cluster_ids[is_big_unit], return_counts=True)
+_, kecounts = np.unique(cluster_ids[keepers], return_counts=True)
+plt.bar(list(map(str, big_units)), bucounts, label="before removing spikes with small y")
+plt.bar(list(map(str, big_units)), kecounts, label="after removing spikes with small y")
+plt.gca().set_xticklabels([""] * len(big_units))
+plt.xlabel("KS unit ID (units with ptp >= 8)")
+plt.ylabel("number of spikes in unit")
+plt.semilogy()
+plt.legend()
+plt.title("Removing small y does not seem to disproportionately affect certain units", fontsize=8);
 
 # %%
