@@ -7,7 +7,10 @@ from tqdm.auto import trange, tqdm
 from .waveform_utils import get_local_geom, get_local_chans
 
 # (x_low, y_low, z_low, alpha_low), (x_high, y_high, z_high, alpha_high)
-BOUNDS = (-100, 0, -100, 0), (132, 250, 100, 10000)
+BOUNDS_NP1 = (-150, 0, -150, 0), (209, 250, 150, 10000)
+BOUNDS_NP2 = (-100, 0, -100, 0), (132, 250, 100, 10000)
+BOUNDS = {385: BOUNDS_NP1, 384: BOUNDS_NP2}
+
 # how to initialize y, alpha?
 Y0, ALPHA0 = 21.0, 1000.0
 
@@ -111,7 +114,7 @@ def localize_ptp(
         residual,
         jac=jacobian,
         x0=[xcom, Y0, zcom, ALPHA0],
-        bounds=BOUNDS,
+        bounds=BOUNDS[geom.shape[0]],
     )
 
     # convert to absolute positions
@@ -254,6 +257,7 @@ def localize_waveforms_batched(
             return None
         else:
             return firstchans[start:end]
+    print("hi")
 
     with Parallel(n_workers) as pool:
         for batch_idx, (x, y, z_rel, z_abs, alpha) in enumerate(
