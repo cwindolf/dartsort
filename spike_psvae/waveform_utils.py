@@ -132,7 +132,7 @@ def get_local_chans_firstchanstandard(geom, firstchan, channel_radius):
 
     # Deal with edge cases
     low = firstchan
-    high = firstchan + 2 * channel_radius + 1
+    high = firstchan + 2 * channel_radius + 2
     assert low >= 0
     assert high <= G
 
