@@ -73,6 +73,7 @@ def get_denoised_waveforms(
     geomkind="updown",
     batch_size=128,
     device=None,
+    inmem=True,
 ):
     num_channels = geom.shape[0]
     standardized = np.memmap(standardized_bin, dtype=dtype, mode="r")
@@ -98,7 +99,6 @@ def get_denoised_waveforms(
 
     # helper function for data loading
     def get_batch(start, end):
-        nonlocal standardized
         times = read_times[start:end]
         maxchans = spike_index[start:end, 1]
         inds = good[start:end]
@@ -121,14 +121,20 @@ def get_denoised_waveforms(
     # but we can use it to allocate storage
     max_n_spikes = len(spike_index)
     C = 2 * channel_radius + 2 * (geomkind == "standard")
-    raw_waveforms = np.empty(
-        (max_n_spikes, T, C),
-        dtype=dtype,
-    )
-    denoised_waveforms = np.empty(
-        (max_n_spikes, T, C),
-        dtype=dtype,
-    )
+    if inmem:
+        raw_waveforms = np.empty(
+            (max_n_spikes, T, C),
+            dtype=dtype,
+        )
+        denoised_waveforms = np.empty(
+            (max_n_spikes, T, C),
+            dtype=dtype,
+        )
+    else:
+        print("Working out of core. Clear the temp files when you're done.")
+        temp = h5py.File("___tmp.h5", "w")
+        raw_waveforms = temp.create_dataset(name="raw", shape=(1, T, C), maxshape=(max_n_spikes, T, C), dtype=dtype)
+        denoised_waveforms = temp.create_dataset(name="denoised", shape=(1, T, C), maxshape=(max_n_spikes, T, C), dtype=dtype)
     count = 0  # how many spikes have exceeded the threshold?
     indices = np.empty(max_n_spikes, dtype=int)
     firstchans = np.empty(max_n_spikes, dtype=int)
@@ -153,8 +159,11 @@ def get_denoised_waveforms(
             if threshold > 0:
                 big = denoised_batch.ptp(1).max(1) > threshold
                 n_big = big.sum()
-
+            
             if n_big:
+                if not inmem:
+                    raw_waveforms.resize(count + n_big, axis=0)
+                    denoised_waveforms.resize(count + n_big, axis=0)
                 raw_waveforms[count : count + n_big] = batch_wfs[big]
                 denoised_waveforms[count : count + n_big] = denoised_batch[big]
                 indices[count : count + n_big] = batch_inds[big]
@@ -162,9 +171,10 @@ def get_denoised_waveforms(
                 count += n_big
 
     # trim the places we did not fill
-    raw_waveforms = raw_waveforms[:count]
-    denoised_waveforms = denoised_waveforms[:count]
+    if inmem:
+        raw_waveforms = raw_waveforms[:count]
+        denoised_waveforms = denoised_waveforms[:count]
     indices = indices[:count]
     firstchans = firstchans[:count]
-
+    
     return raw_waveforms, denoised_waveforms, indices, firstchans
