@@ -57,6 +57,9 @@ if __name__ == "__main__":
     # args
     ap = argparse.ArgumentParser()
     ap.add_argument("input_h5")
+    ap.add_argument("which", choices=["yza", "xyza"])
+    ap.add_argument("--labels", action="store_true")
+    ap.add_argument("--spikelabels", action="store_true")
     args = ap.parse_args()
 
     # load big spikes
@@ -79,7 +82,7 @@ if __name__ == "__main__":
         )
 
         loadings_orig = f["loadings_orig"][:][big]
-        loadings_reloc = f["loadings_yza"][:][big]
+        loadings_reloc = f[f"loadings_{args.which}"][:][big]
 
         # clust = False
         # if "labels_orig" in f:
@@ -89,6 +92,12 @@ if __name__ == "__main__":
         #     labels_xyza = f["labels_xyza"][:][big]
         #     print(labels_orig)
         #     print(labels_orig.min())
+
+        if args.spikelabels:
+            print("spike labels")
+            labels = f["spike_train"][:, 1][big]
+        elif args.labels:
+            labels = f[f"labels_{args.which}"][:][big]
 
     # standardize pca loadings
     stds_orig = np.std(loadings_orig, axis=0)
@@ -131,14 +140,37 @@ if __name__ == "__main__":
             data[k] = v[mask]
     z = z[mask]
     maxptp = maxptp[mask]
+    times = times[mask]
+    if args.labels or args.spikelabels:
+        labels = labels[mask]
+
+    # sort if nec
+    if not (times[:-1] <= times[1:]).all():
+        print("Sorting")
+        order = np.argsort(times)
+        times = times[order]
+        for data in [data_orig, data_reloc]:
+            for k in data.keys():
+                data[k] = data[k][order]
+        labels = labels[order]
+        maxptp = maxptp[order]
+        z = z[order]
 
     # process colors
-    ptpmin = maxptp.min()
-    ptpmax = maxptp.max()
-    cmap = "viridis"
-    # if "labels" in args.colkey:
-    #     cmap = "rainbow"
-    colors = datoviz.colormap(maxptp, vmin=ptpmin, vmax=ptpmax, cmap=cmap)
+
+    if args.labels or args.spikelabels:
+        labels = labels.astype(float)
+        print("Unique labels", np.unique(labels).shape)
+        labels /= labels.max()
+        colors = datoviz.colormap(
+            labels, vmin=0.0, vmax=1.0, cmap="glasbey_hv"
+        )
+    else:
+        ptpmin = maxptp.min()
+        ptpmax = maxptp.max()
+        colors = datoviz.colormap(
+            maxptp, vmin=ptpmin, vmax=ptpmax, cmap="viridis"
+        )
     colors[:, 3] = 127
 
     # run all the vis
@@ -155,7 +187,7 @@ if __name__ == "__main__":
             prevpanel = panel
 
     # GUI and callbacks
-    gui = canvas.gui("hi")
+    gui = canvas.gui(f"hi: orig / {args.which}")
     slider_t0 = gui.control(
         "slider_int",
         "t (10s)",
