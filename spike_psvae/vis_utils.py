@@ -116,6 +116,7 @@ def labeledmosaic(
 
 
 def plot_ptp(ptp, axes, label, color, codes):
+    c = ptp.shape[1] // 2 - 1
     for j, ax in enumerate(axes.flat):
         ptp_left = ptp[j, ::2]
         ptp_right = ptp[j, 1::2]
@@ -129,6 +130,7 @@ def plot_ptp(ptp, axes, label, color, codes):
             verticalalignment="center",
             transform=ax.transAxes,
         )
+        ax.set_xticks([0, c])
     return handle, dhandle
 
 
@@ -190,7 +192,6 @@ def locrelocplots(h5, wf_key="denoised_waveforms", seed=0, threshold=6.0):
         geomkind = "firstchanstandard" if "first_channels" in h5 else "standard"
     else:
         geomkind = "firstchan" if "first_channels" in h5 else "updown"
-    print(h5["max_channels"][inds], h5["first_channels"][inds], h5["max_channels"][inds] - h5["first_channels"][inds])
 
     wfs_reloc_yza, stereo_ptp_yza, pred_ptp = relocate_simple(
         wfs,
