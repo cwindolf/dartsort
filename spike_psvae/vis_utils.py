@@ -1,6 +1,7 @@
 import matplotlib.pyplot as plt
 from mpl_toolkits.axes_grid1 import make_axes_locatable
 from matplotlib import colors, cm
+import scipy.linalg as la
 import seaborn as sns
 import numpy as np
 import torch
@@ -118,8 +119,8 @@ def plot_ptp(ptp, axes, label, color, codes):
     for j, ax in enumerate(axes.flat):
         ptp_left = ptp[j, ::2]
         ptp_right = ptp[j, 1::2]
-        handle, = ax.plot(ptp_left, c=color, label=label)
-        dhandle, = ax.plot(ptp_right, "--", c=color)
+        (handle,) = ax.plot(ptp_left, c=color, label=label)
+        (dhandle,) = ax.plot(ptp_right, "--", c=color)
         ax.text(
             0.1,
             0.9,
@@ -179,7 +180,6 @@ def vis_ptps(
 
 def locrelocplots(h5, wf_key="denoised_waveforms", seed=0, threshold=6.0):
     rg = np.random.default_rng(seed)
-    N = len(h5[wf_key])
     big = np.flatnonzero(h5["maxptp"][:] > threshold)
     inds = rg.choice(big, size=8)
     inds.sort()
@@ -258,7 +258,7 @@ def locrelocplots(h5, wf_key="denoised_waveforms", seed=0, threshold=6.0):
         borderaxespad=0,
         ncol=3,
     )
-    fig.suptitle("PTP before after relocation (yzα, xyzα)", y=0.95)
+    fig.suptitle("PTP before and after relocation (yzα, xyzα)", y=0.95)
     # plt.tight_layout(pad=0.1)
     for ax in axes.flat:
         ax.set_box_aspect(1.0)
@@ -267,7 +267,7 @@ def locrelocplots(h5, wf_key="denoised_waveforms", seed=0, threshold=6.0):
 def pca_resid_plot(wfs, ax=None, c="b", name=None, pad=0, K=25):
     wfs = wfs.reshape(wfs.shape[0], -1)
     wfs = wfs - wfs.mean(axis=0, keepdims=True)
-    v = np.square(la.svdvals(wfs)[:K - pad]) / np.prod(wfs.shape)
+    v = np.square(la.svdvals(wfs)[: K - pad]) / np.prod(wfs.shape)
     ax = ax or plt.gca()
     totvar = np.square(wfs).mean()
     residvar = np.concatenate(([totvar], totvar - np.cumsum(v)))
@@ -277,22 +277,46 @@ def pca_resid_plot(wfs, ax=None, c="b", name=None, pad=0, K=25):
         ax.plot(residvar[:50], marker=".", c=c, label=name)
 
 
-def reloc_pcaresidplot(h5, wf_key="denoised_waveforms", B=50_000, seed=0, threshold=6.0):
-    inds = 
-    batch_wfs = h5[wf_key]
-    fig = plt.figure()
-    pca_resid_plot(batch_wfs, name="No relocation", c="k")
-    pca_resid_plot(batch_wfs_yza, name="YZa relocated", c="b", pad=3)
-    pca_resid_plot(batch_wfs_xyza, name="XYZA relocated", c="g", pad=4)
-    plt.semilogy()
-    yt = [0.5, 0.1, 0.01]
-    plt.yticks(yt, list(map(str, yt)))
-    plt.legend(fancybox=False)
-    plt.ylabel("PCA remaining variance (s.u.)")
-    plt.xlabel("number of factors")
-    plt.title("Does relocation help PCA?")
-    plt.show()
+def reloc_pcaresidplot(
+    h5, wf_key="denoised_waveforms", B=50_000, seed=0, threshold=6.0, ax=None
+):
+    rg = np.random.default_rng(seed)
+    big = np.flatnonzero(h5["maxptp"][:] > threshold)
+    inds = rg.choice(big, size=8)
+    inds.sort()
 
+    wfs = h5[wf_key][inds]
+    wfs_yza, q_hat_yza, p_hat = relocate_simple(
+        wfs,
+        h5["geom"][:],
+        h5["max_channels"][inds],
+        h5["x"][inds],
+        h5["y"][inds],
+        h5["z_rel"][inds],
+        h5["alpha"][inds],
+        relocate_dims="yza",
+    )
+    wfs_xyza, q_hat_xyza, p_hat_ = relocate_simple(
+        wfs,
+        h5["geom"][:],
+        h5["max_channels"][inds],
+        h5["x"][inds],
+        h5["y"][inds],
+        h5["z_rel"][inds],
+        h5["alpha"][inds],
+        relocate_dims="xyza",
+    )
+
+    ax = ax or plt.gca()
+    pca_resid_plot(wfs, ax=ax, name="Unrelocated", c="k")
+    pca_resid_plot(wfs_yza, ax=ax, name="yzα relocated", c=darkgreen, pad=3)
+    pca_resid_plot(wfs_xyza, ax=ax, name="xyzα relocated", c=darkpurple, pad=4)
+    ax.semilogy()
+    yt = [0.5, 0.1, 0.01]
+    ax.set_yticks(yt, list(map(str, yt)))
+    ax.legend(fancybox=False, frameon=False)
+    ax.set_ylabel("PCA remaining variance (s.u.)")
+    ax.set_xlabel("number of factors")
 
 
 def traceplot(waveform, axes, label="", c="k", alpha=1, strip=True, lw=1):
