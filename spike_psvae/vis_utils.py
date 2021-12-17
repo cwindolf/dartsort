@@ -185,6 +185,12 @@ def locrelocplots(h5, wf_key="denoised_waveforms", seed=0, threshold=6.0):
     inds.sort()
     wfs = h5[wf_key][inds]
     orig_ptp = wfs.ptp(1)
+    _, _, C = wfs.shape
+    if (C // 2) % 2:
+        geomkind = "firstchanstandard" if "first_channels" in h5 else "standard"
+    else:
+        geomkind = "firstchan" if "first_channels" in h5 else "updown"
+    print(h5["max_channels"][inds], h5["first_channels"][inds], h5["max_channels"][inds] - h5["first_channels"][inds])
 
     wfs_reloc_yza, stereo_ptp_yza, pred_ptp = relocate_simple(
         wfs,
@@ -194,11 +200,11 @@ def locrelocplots(h5, wf_key="denoised_waveforms", seed=0, threshold=6.0):
         h5["y"][inds],
         h5["z_rel"][inds],
         h5["alpha"][inds],
-        channel_radius=10,
+        channel_radius=(C // 2) - (C // 2) % 2,
         firstchans=h5["first_channels"][inds]
         if "first_channels" in h5
         else None,
-        geomkind="firstchan" if "first_channels" in h5 else "updown",
+        geomkind=geomkind,
         relocate_dims="yza",
     )
     wfs_reloc_yza = wfs_reloc_yza.numpy()
@@ -213,11 +219,11 @@ def locrelocplots(h5, wf_key="denoised_waveforms", seed=0, threshold=6.0):
         h5["y"][inds],
         h5["z_rel"][inds],
         h5["alpha"][inds],
-        channel_radius=10,
+        channel_radius=(C // 2) - (C // 2) % 2,
         firstchans=h5["first_channels"][inds]
         if "first_channels" in h5
         else None,
-        geomkind="firstchan" if "first_channels" in h5 else "updown",
+        geomkind=geomkind,
         relocate_dims="xyza",
     )
     wfs_reloc_xyza = wfs_reloc_xyza.numpy()
