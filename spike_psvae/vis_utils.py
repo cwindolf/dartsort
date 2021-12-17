@@ -118,8 +118,8 @@ def plot_ptp(ptp, axes, label, color, codes):
     for j, ax in enumerate(axes.flat):
         ptp_left = ptp[j, ::2]
         ptp_right = ptp[j, 1::2]
-        handle = ax.plot(ptp_left, c=color, label=label)
-        dhandle = ax.plot(ptp_right, "--", c=color)
+        handle, = ax.plot(ptp_left, c=color, label=label)
+        dhandle, = ax.plot(ptp_right, "--", c=color)
         ax.text(
             0.1,
             0.9,
@@ -128,7 +128,7 @@ def plot_ptp(ptp, axes, label, color, codes):
             verticalalignment="center",
             transform=ax.transAxes,
         )
-        return handle, dhandle
+    return handle, dhandle
 
 
 def vis_ptps(
@@ -177,10 +177,11 @@ def vis_ptps(
     return fig, axes
 
 
-def locrelocplots(h5, wf_key="denoised_waveforms", seed=0):
+def locrelocplots(h5, wf_key="denoised_waveforms", seed=0, threshold=6.0):
     rg = np.random.default_rng(seed)
     N = len(h5[wf_key])
-    inds = rg.choice(N, size=8)
+    big = np.flatnonzero(h5["maxptp"][:] > threshold)
+    inds = rg.choice(big, size=8)
     inds.sort()
     wfs = h5[wf_key][inds]
     orig_ptp = wfs.ptp(1)
@@ -228,9 +229,9 @@ def locrelocplots(h5, wf_key="denoised_waveforms", seed=0):
     yza_ptp = wfs_reloc_yza.ptp(1)
     xyza_ptp = wfs_reloc_xyza.ptp(1)
 
-    codes = "abcdefgh"
+    codes = "abcdefghij"
     fig, axes = plt.subplots(
-        5, 3 * 2, figsize=(6, 4), sharex=True, sharey=True
+        4, 3 * 2, figsize=(6, 4), sharex=True, sharey=True
     )
     la = "observed ptp"
     laa = "predicted ptp"
@@ -245,16 +246,22 @@ def locrelocplots(h5, wf_key="denoised_waveforms", seed=0):
     hc, _ = plot_ptp(xyza_ptp, axes[:, 4:], lc, darkpurple, codes)
     hcc, _ = plot_ptp(stereo_ptp_xyza, axes[:, 4:], lcc, lightpurple, codes)
 
-    fig.figlegend(
-        handles=[ha, hb, hc, haa, hbb, hcc],
-        labels=[la, lb, lc, laa, lbb, lcc],
-        loc="upper center",
+    fig.legend(
+        # handles=[ha, hb, hc, haa, hbb, hcc],
+        handles=[ha, haa, hb, hbb, hc, hcc],
+        # labels=[la, lb, lc, laa, lbb, lcc],
+        labels=[la, laa, lb, lbb, lc, lcc],
+        loc="lower center",
         frameon=False,
         fancybox=False,
         borderpad=0,
         borderaxespad=0,
         ncol=3,
     )
+    fig.suptitle("PTP before after relocation (yzα, xyzα)", y=0.95)
+    # plt.tight_layout(pad=0.1)
+    for ax in axes.flat:
+        ax.set_box_aspect(1.0)
 
 
 def pca_resid_plot(wfs, ax=None, c="b", name=None, pad=0, K=25):
