@@ -71,10 +71,13 @@ def get_denoised_waveforms(
     threshold=0,
     dtype=np.float32,
     geomkind="updown",
+    pad_for_denoiser=0,
     batch_size=128,
     device=None,
     inmem=True,
 ):
+    assert "firstchan" not in geomkind
+
     num_channels = geom.shape[0]
     standardized = np.memmap(standardized_bin, dtype=dtype, mode="r")
     standardized = standardized.reshape(-1, num_channels)
@@ -108,7 +111,7 @@ def get_denoised_waveforms(
         )
         waveforms_trimmed, firstchans = waveform_utils.get_local_waveforms(
             waveforms,
-            channel_radius,
+            channel_radius + pad_for_denoiser,
             geom,
             maxchans=maxchans,
             geomkind=geomkind,
@@ -149,26 +152,51 @@ def get_denoised_waveforms(
         )
 
         n_batch = batch_wfs.shape[0]
-        if n_batch:
-            denoised_batch = denoiser(batch_wfs_.reshape(-1, T)).cpu().numpy()
-            denoised_batch = denoised_batch.reshape(n_batch, C, T)
-            denoised_batch = denoised_batch.transpose(0, 2, 1)
+        if not n_batch:
+            continue
+        
+        denoised_batch = denoiser(batch_wfs_.reshape(-1, T)).cpu().numpy()
+        denoised_batch = denoised_batch.reshape(n_batch, C + 2 * pad_for_denoiser, T)
+        denoised_batch = denoised_batch.transpose(0, 2, 1)
+
+        big = range(n_batch)
+        n_big = n_batch
+        if threshold > 0:
+            big = denoised_batch.ptp(1).max(1) > threshold
+            n_big = big.sum()
+
+        if not n_big:
+            continue
+        
+        batch_wfs = batch_wfs[big]
+        denoised_batch = denoised_batch[big]
+        batch_inds = batch_inds[big]
+        batch_firstchans = batch_firstchans[big]
             
-            big = range(n_batch)
-            n_big = n_batch
-            if threshold > 0:
-                big = denoised_batch.ptp(1).max(1) > threshold
-                n_big = big.sum()
-            
-            if n_big:
-                if not inmem:
-                    raw_waveforms.resize(count + n_big, axis=0)
-                    denoised_waveforms.resize(count + n_big, axis=0)
-                raw_waveforms[count : count + n_big] = batch_wfs[big]
-                denoised_waveforms[count : count + n_big] = denoised_batch[big]
-                indices[count : count + n_big] = batch_inds[big]
-                firstchans[count : count + n_big] = batch_firstchans[big]
-                count += n_big
+        if pad_for_denoiser:
+            denoised_maxchans = denoised_batch.ptp(1).argmax(1)
+            denoised_maxchans -= denoised_maxchans % 2
+            low = np.maximum(0, denoised_maxchans - channel_radius)
+            low = np.minimum(2 * pad_for_denoiser, low)
+            batch_wfs = np.stack(
+                [batch_wfs[i, :, low[i]:low[i] + C] for i in range(n_batch)],
+                axis=0,
+            )
+            denoised_batch = np.stack(
+                [denoised_batch[i, :, low[i]:low[i] + C] for i in range(n_batch)],  # noqa
+                axis=0,
+            )
+            batch_firstchans += low
+
+        if not inmem:
+            raw_waveforms.resize(count + n_big, axis=0)
+            denoised_waveforms.resize(count + n_big, axis=0)
+
+        raw_waveforms[count : count + n_big] = batch_wfs
+        denoised_waveforms[count : count + n_big] = denoised_batch
+        indices[count : count + n_big] = batch_inds
+        firstchans[count : count + n_big] = batch_firstchans
+        count += n_big
 
     # trim the places we did not fill
     if inmem:
