@@ -57,26 +57,26 @@ geom_np1 = np.load("/media/peter/2TB/NP1/geom_np1.npy")
 rg = np.random.default_rng(0)
 
 # %%
-raw_np1_test, denoised_np1_test, inds_np1_test, fcs_np1_test = extract.get_denoised_waveforms("/media/peter/2TB/NP1/standardized.bin", spike_index_np1[rg.choice(1530553, 1000, replace=False)], geom_np1, batch_size=128, threshold=6)
+raw_np1_test, denoised_np1_test, inds_np1_test, fcs_np1_test = extract.get_denoised_waveforms("/media/peter/2TB/NP1/standardized.bin", spike_index_np1[rg.choice(1530553, 1000, replace=False)], geom_np1, batch_size=128, threshold=6, geomkind="standard", channel_radius=8)
 
 # %%
 raw_np1_test.shape
 
 # %%
-vis_utils.labeledmosaic(raw_np1_test[:100].reshape(5, 20, 121, 20), rowlabels="ab", pad=1)
+vis_utils.labeledmosaic(raw_np1_test[:100].reshape(5, 20, 121, 18), rowlabels="ab", pad=1)
 
 # %%
 m1 = raw_np1_test[:100].ptp(1).argmax(1)
 raw_np1_test[np.arange(100), :, m1].argmin(1)
 
 # %%
-vis_utils.labeledmosaic(denoised_np1_test[:100].reshape(5, 20, 121, 20), rowlabels="ab", pad=1)
+vis_utils.labeledmosaic(denoised_np1_test[:100].reshape(5, 20, 121, 18), rowlabels="ab", pad=1)
 
 # %%
-# fig, axes = plt.subplots(10, 16, sharey="row", sharex=True, figsize=(10, 10))
-for i in range(10):
-    vis_utils.traceplot(raw_np1_test[i, :80, 2:-2], c="b", axes=axes[i], label="raw", strip=True)
-    vis_utils.traceplot(denoised_np1_test[i, :80, 2:-2], c="g", axes=axes[i], label="denoised", strip=True)
+fig, axes = plt.subplots(5, 18, sharey="row", sharex=True, figsize=(10, 10))
+for i in range(5):
+    vis_utils.traceplot(raw_np1_test[i, :80, :], c="b", axes=axes[i], label="raw", strip=True)
+    vis_utils.traceplot(denoised_np1_test[i, :80, :], c="g", axes=axes[i], label="denoised", strip=True)
     axes[i, 0].set_ylabel(f"spike {i}")
 # plt.legend();
 plt.show()
@@ -84,60 +84,32 @@ plt.show()
 # %% [markdown]
 # <!-- ### test np2 -->
 
-# %%
-raw_np1_1, denoised_np1_1, indices_np1_1, firstchans_np1_1 = extract.get_denoised_waveforms(
-    "/media/peter/2TB/NP1/standardized.bin", spike_index_np1[:len(spike_index_np1) // 2], geom_np1, threshold=0, device="cuda"
+# %% tags=[]
+raw_np1, denoised_np1, indices_np1, firstchans_np1 = extract.get_denoised_waveforms(
+    "/media/peter/2TB/NP1/standardized.bin", spike_index_np1, geom_np1, threshold=0, device="cpu", inmem=False, geomkind="standard", channel_radius=8, pad_for_denoiser=8,
 )
 
 # %%
-np.savez("a.npz", raw=raw_np1_1, dn=denoised_np1_1, ix=indices_np1_1, fc=firstchans_np1_1)
-
-# %%
-raw_np1_2, denoised_np1_2, indices_np1_2, firstchans_np1_2 = extract.get_denoised_waveforms(
-    "/media/peter/2TB/NP1/standardized.bin", spike_index_np1[len(spike_index_np1) // 2:], geom_np1, threshold=0, device="cuda"
-)
-
-# %%
-np.savez("b.npz", raw=raw_np1_2, dn=denoised_np1_2, ix=indices_np1_2, fc=firstchans_np1_2)
-
-# %%
-spike_index_np1.shape
-
-# %%
-# selected_train_np1 = spike_train_np1[indices_np1]
-# selected_index_np1 = spike_index_np1[indices_np1]
+selected_train_np1 = spike_train_np1[indices_np1]
+selected_index_np1 = spike_index_np1[indices_np1]
 with h5py.File("../data/yass_np1.h5", "w") as np1h5:
-    np1h5.create_dataset("spike_index", data=spike_index_np1)
-    np1h5.create_dataset("spike_train", data=spike_train_np1)
+    np1h5.create_dataset("spike_index", data=selected_index_np1)
+    np1h5.create_dataset("spike_train", data=selected_train_np1)
     np1h5.create_dataset("templates", data=templates_np1)
     np1h5.create_dataset("geom", data=geom_np1)
-    # np1h5.create_dataset("raw_waveforms", data=raw_np1)
-    # np1h5.create_dataset("denoised_waveforms", data=denoised_np1)
-    # np1h5.create_dataset("first_channels", data=firstchans_np1)
-    # np1h5.create_dataset("selection_indices", data=indices_np1)
+    np1h5.create_dataset("raw_waveforms", data=raw_np1)
+    np1h5.create_dataset("denoised_waveforms", data=denoised_np1)
+    np1h5.create_dataset("first_channels", data=firstchans_np1)
+    np1h5.create_dataset("selection_indices", data=indices_np1)
     
     for k in np1h5:
         print(k, np1h5[k].shape, np1h5[k].dtype)
 
 # %%
-with h5py.File("../data/yass_np1.h5", "r+") as np1h5:
-    with np.load("a.npz") as af, np.load("b.npz") as bf:
-        np1h5.create_dataset("raw_waveforms", data=np.concatenate([af["raw"], bf["raw"]]))
+# %reset -f
 
 # %%
-with h5py.File("../data/yass_np1.h5", "r+") as np1h5:
-    with np.load("a.npz") as af, np.load("b.npz") as bf:
-        np1h5.create_dataset("denoised_waveforms", data=np.concatenate([af["dn"], bf["dn"]]))
-
-# %%
-with h5py.File("../data/yass_np1.h5", "r+") as np1h5:
-    with np.load("a.npz") as af, np.load("b.npz") as bf:
-        np1h5.create_dataset("first_channels", data=np.concatenate([af["fc"], bf["fc"]]))
-
-# %%
-with h5py.File("../data/yass_np1.h5", "r+") as np1h5:
-    for k in np1h5:
-        print(k, np1h5[k].shape, np1h5[k].dtype)
+# %rm ___tmp.h5
 
 # %% [markdown]
 # ## add maxchans
@@ -150,6 +122,7 @@ with h5py.File("../data/yass_np1.h5", "r+") as np1h5:
         maxchans.append(waveform_utils.maxchan_from_firstchan(fc, wf))
     maxchans = np.array(maxchans)
     np1h5.create_dataset("max_channels", data=maxchans)
+    np1h5["spike_index"][:, 1] = maxchans
     
     for k in np1h5:
         print(k, np1h5[k].shape, np1h5[k].dtype)
@@ -166,11 +139,11 @@ with h5py.File("../data/yass_np1.h5", "r+") as np1h5:
         np1h5["denoised_waveforms"],
         np1h5["geom"][:],
         maxchans=np1h5["max_channels"][:],
-        channel_radius=10,
-        n_workers=10,
+        channel_radius=8,
+        n_workers=5,
         jac=False,
         firstchans=np1h5["first_channels"][:],
-        geomkind="firstchan",
+        geomkind="firstchanstandard",
         batch_size=128,
     )
     
@@ -196,6 +169,7 @@ with h5py.File("../data/yass_np1.h5", "r+") as np1h5:
         print(k, np1h5[k].shape, np1h5[k].dtype)
 
 # %%
+print("hi")
 
 # %%
 with h5py.File("../data/yass_np1.h5", "r+") as np1h5:
