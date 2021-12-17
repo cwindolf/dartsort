@@ -33,15 +33,19 @@ def check_shapes(
             )
         if geomkind == "firstchan" and firstchans is None:
             raise ValueError(
-                "firstchans can't be None when geomkind==firstchans"
+                "firstchans can't be None when geomkind==firstchan"
             )
     elif C == 2 * channel_radius + 2:
-        assert geomkind == "standard"
+        assert geomkind in ("standard", "firstchanstandard")
         print(f"Waveforms are already trimmed to {C} channels.")
         if maxchans is None:
             # we will need maxchans later to determine local geometries
             raise ValueError(
                 "maxchans can't be None when waveform channels < geom channels"
+            )
+        if geomkind == "firstchanstandard" and firstchans is None:
+            raise ValueError(
+                "firstchans can't be None when geomkind==firstchanstandard"
             )
     elif C == C_:
         print(

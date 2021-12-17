@@ -107,7 +107,7 @@ def relocate_simple(
                     maxchans[n],
                     channel_radius,
                     ptp[n],
-                    firstchan=firstchans[n] if firstchans is not None else None,
+                    firstchan=firstchans[n] if firstchans is not None else None,  # noqa
                     geomkind=geomkind,
                 )
             )
