@@ -125,6 +125,20 @@ def get_local_chans_firstchan(geom, firstchan, channel_radius):
     return low, high
 
 
+def get_local_chans_firstchanstandard(geom, firstchan, channel_radius):
+    """Gets indices of channels around the maxchan"""
+    G, d = geom.shape
+    assert d == 2
+
+    # Deal with edge cases
+    low = firstchan
+    high = firstchan + 2 * channel_radius + 1
+    assert low >= 0
+    assert high <= G
+
+    return low, high
+
+
 def get_local_chans(
     geom, maxchan, channel_radius, ptp=None, firstchan=None, geomkind="updown"
 ):
@@ -136,6 +150,11 @@ def get_local_chans(
     elif geomkind == "firstchan":
         assert firstchan is not None
         return get_local_chans_firstchan(geom, firstchan, channel_radius)
+    elif geomkind == "firstchanstandard":
+        assert firstchan is not None
+        return get_local_chans_firstchanstandard(
+            geom, firstchan, channel_radius
+        )
     else:
         raise ValueError(f"Unknown geomkind={geomkind}")
 
@@ -185,7 +204,7 @@ def get_local_waveforms(
         maxchans = ptps.argmax(1)
 
     local_waveforms = np.empty(
-        (N, T, 2 * channel_radius + 2 * (geomkind == "standard")),
+        (N, T, 2 * channel_radius + 2 * ("standard" in geomkind)),
         dtype=waveforms.dtype,
     )
     lows = []
