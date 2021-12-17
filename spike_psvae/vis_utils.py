@@ -8,9 +8,16 @@ import torch.nn.functional as F
 import pandas as pd
 
 from . import statistics
+from .point_source_centering import relocate_simple
 
 
 sns.set_style("ticks")
+
+
+darkpurple = plt.cm.Purples(0.99)
+lightpurple = plt.cm.Purples(0.5)
+darkgreen = plt.cm.Greens(0.99)
+lightgreen = plt.cm.Greens(0.5)
 
 
 class MidpointNormalize(colors.Normalize):
@@ -107,6 +114,23 @@ def labeledmosaic(
             cbar.ax.set_yticklabels(ticks, fontsize=8)
 
 
+def plot_ptp(ptp, axes, label, color, codes):
+    for j, ax in enumerate(axes.flat):
+        ptp_left = ptp[j, ::2]
+        ptp_right = ptp[j, 1::2]
+        handle = ax.plot(ptp_left, c=color, label=label)
+        dhandle = ax.plot(ptp_right, "--", c=color)
+        ax.text(
+            0.1,
+            0.9,
+            codes[j],
+            horizontalalignment="center",
+            verticalalignment="center",
+            transform=ax.transAxes,
+        )
+        return handle, dhandle
+
+
 def vis_ptps(
     ptps,
     labels,
@@ -123,20 +147,7 @@ def vis_ptps(
     handles = {}
     dhandles = {}
     for k, (ptp, label, color) in enumerate(zip(ptps, labels, colors)):
-        for j in range(n * n):
-            ax = axes.flat[j]
-            ptp_left = ptp[j, ::2]
-            ptp_right = ptp[j, 1::2]
-            (handles[k],) = ax.plot(ptp_left, c=color, label=label)
-            (dhandles[k],) = ax.plot(ptp_right, "--", c=color)
-            ax.text(
-                0.1,
-                0.9,
-                codes[j],
-                horizontalalignment="center",
-                verticalalignment="center",
-                transform=ax.transAxes,
-            )
+        handles[k], dhandles[k] = plot_ptp(ptp, axes, label, color, codes)
 
     if K == 1:
         plt.figlegend(
@@ -164,6 +175,86 @@ def vis_ptps(
     for ax in axes.flat:
         ax.set_box_aspect(1.0)
     return fig, axes
+
+
+def locrelocplots(h5, wf_key="denoised_waveforms", seed=0):
+    rg = np.random.default_rng(seed)
+    N = len(h5[wf_key])
+    inds = rg.choice(N, size=8)
+    inds.sort()
+    wfs = h5[wf_key][inds]
+    orig_ptp = wfs.ptp(1)
+
+    wfs_reloc_yza, stereo_ptp_yza, pred_ptp = relocate_simple(
+        wfs,
+        h5["geom"][:],
+        h5["max_channels"][inds],
+        h5["x"][inds],
+        h5["y"][inds],
+        h5["z_rel"][inds],
+        h5["alpha"][inds],
+        channel_radius=10,
+        firstchans=h5["first_channels"][inds]
+        if "first_channels" in h5
+        else None,
+        geomkind="firstchan" if "first_channels" in h5 else "updown",
+        relocate_dims="yza",
+    )
+    wfs_reloc_yza = wfs_reloc_yza.numpy()
+    stereo_ptp_yza = stereo_ptp_yza.numpy()
+    pred_ptp = pred_ptp.numpy()
+
+    wfs_reloc_xyza, stereo_ptp_xyza, pred_ptp_ = relocate_simple(
+        wfs,
+        h5["geom"][:],
+        h5["max_channels"][inds],
+        h5["x"][inds],
+        h5["y"][inds],
+        h5["z_rel"][inds],
+        h5["alpha"][inds],
+        channel_radius=10,
+        firstchans=h5["first_channels"][inds]
+        if "first_channels" in h5
+        else None,
+        geomkind="firstchan" if "first_channels" in h5 else "updown",
+        relocate_dims="xyza",
+    )
+    wfs_reloc_xyza = wfs_reloc_xyza.numpy()
+    stereo_ptp_xyza = stereo_ptp_xyza.numpy()
+    pred_ptp_ = pred_ptp_.numpy()
+
+    assert np.all(pred_ptp_ == pred_ptp)
+
+    yza_ptp = wfs_reloc_yza.ptp(1)
+    xyza_ptp = wfs_reloc_xyza.ptp(1)
+
+    codes = "abcdefgh"
+    fig, axes = plt.subplots(
+        5, 3 * 2, figsize=(6, 4), sharex=True, sharey=True
+    )
+    la = "observed ptp"
+    laa = "predicted ptp"
+    lb = "yza relocated ptp"
+    lbb = "yza standard ptp"
+    lc = "xyza relocated ptp"
+    lcc = "xyza standard ptp"
+    ha, _ = plot_ptp(orig_ptp, axes[:, :2], la, "black", codes)
+    haa, _ = plot_ptp(pred_ptp, axes[:, :2], laa, "silver", codes)
+    hb, _ = plot_ptp(yza_ptp, axes[:, 2:4], lb, darkgreen, codes)
+    hbb, _ = plot_ptp(stereo_ptp_yza, axes[:, 2:4], lbb, lightgreen, codes)
+    hc, _ = plot_ptp(xyza_ptp, axes[:, 4:], lc, darkpurple, codes)
+    hcc, _ = plot_ptp(stereo_ptp_xyza, axes[:, 4:], lcc, lightpurple, codes)
+
+    fig.figlegend(
+        handles=[ha, hb, hc, haa, hbb, hcc],
+        labels=[la, lb, lc, laa, lbb, lcc],
+        loc="upper center",
+        frameon=False,
+        fancybox=False,
+        borderpad=0,
+        borderaxespad=0,
+        ncol=3,
+    )
 
 
 def traceplot(waveform, axes, label="", c="k", alpha=1, strip=True, lw=1):
@@ -261,5 +352,7 @@ def spearmanrboxes(disp, pcs, labels):
     for k in range(Kmax):
         clust = np.flatnonzero(labels == k)
         for j, pc in enumerate(pcs.T):
-            spearmanrs[j].append(statistics.spearmanr(disp[clust], pc[clust]).correlation)
+            spearmanrs[j].append(
+                statistics.spearmanr(disp[clust], pc[clust]).correlation
+            )
     plt.boxplot(np.array(spearmanrs).T)
