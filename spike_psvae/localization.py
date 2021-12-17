@@ -76,7 +76,7 @@ def localize_ptp(
     maxchan : int
     geom : np.array (total_channels, 2)
     """
-    channel_radius = ptp.shape[0] // 2 - (geomkind == "standard")
+    channel_radius = ptp.shape[0] // 2 - ("standard" in geomkind)
     # local_geom is 2*channel_radius, 2
     local_geom, z_maxchan = get_local_geom(
         geom,
@@ -177,7 +177,7 @@ def localize_waveforms(
                 raise ValueError(f"Some waveforms were all zero: {bad}.")
 
         ptps = np.empty(
-            (N, 2 * channel_radius + 2 * (geomkind == "standard")),
+            (N, 2 * channel_radius + 2 * ("standard" in geomkind)),
             dtype=waveforms.dtype,
         )
         for n in xrange(N, desc="extracting channels"):
