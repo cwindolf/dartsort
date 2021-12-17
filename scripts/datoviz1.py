@@ -65,6 +65,7 @@ class MarkerVis:
         if t is None:
             t = self.t
         lo, hi = np.searchsorted(times, [t, t + self.dt])
+        print(lo, hi, hi - lo)
         self.vis.data("pos", np.r_[self.xypad, self.pos[lo:hi]])
         self.vis.data("color", np.r_[self.cpad, self.colors[lo:hi]])
 
@@ -75,41 +76,56 @@ if __name__ == "__main__":
     ap.add_argument("input_h5")
     ap.add_argument("which", choices=["orig", "yza", "xyza"])
     ap.add_argument("--labels", action="store_true")
+    ap.add_argument("--spikelabels", action="store_true")
     ap.add_argument("--controller", default="axes")
+    ap.add_argument("--nopca", action="store_true")
+    ap.add_argument("--threshold", type=float, default=6.0)
+
     args = ap.parse_args()
 
     # load big spikes
     with h5py.File(args.input_h5, "r") as f:
         maxptp = f["maxptp"][:]
-        big = np.flatnonzero(maxptp >= 6)
+        big = np.flatnonzero(maxptp >= args.threshold)
         if "good_mask" in f:
             big = np.intersect1d(big, np.flatnonzero(f["good_mask"][:]))
         maxptp = maxptp[big]
+        show_pca = not args.nopca and "loadings_orig" in f
 
-        z = f["z_reg"][:][big]
+        z = f["z_reg"][:][big] if "z_reg" in f else f["z_abs"][:][big]
         times = (
             f["times"][:][big]
             if "times" in f
             else f["spike_index"][:, 0][big] / 30000
         )
-        loadings = f[f"loadings_{args.which}"][:][big]
-        loadings /= np.std(loadings, axis=0) / 16
 
-        data = dict(
-            x=f["x"][:][big],
-            y=f["y"][:][big],
-            alpha=f["alpha"][:][big],
-            pc1=loadings[:, 0],
-            pc2=loadings[:, 1],
-            pc3=loadings[:, 2],
-        )
+        if show_pca:
+            loadings = f[f"loadings_{args.which}"][:][big]
+            loadings /= np.std(loadings, axis=0) / 16
+            data = dict(
+                x=f["x"][:][big],
+                y=f["y"][:][big],
+                alpha=f["alpha"][:][big],
+                pc1=loadings[:, 0],
+                pc2=loadings[:, 1],
+                pc3=loadings[:, 2],
+            )
+        else:
+            data = dict(
+                x=f["x"][:][big],
+                y=f["y"][:][big],
+                alpha=f["alpha"][:][big],
+            )
 
-        if args.labels:
+        if args.spikelabels:
+            print("spike labels")
+            labels = f["spike_train"][:, 1][big]
+        elif args.labels:
             labels = f[f"labels_{args.which}"][:][big]
 
     # set up vis
     canvas = datoviz.canvas(show_fps=False)
-    scene = canvas.scene(rows=1, cols=6)
+    scene = canvas.scene(rows=1, cols=len(data))
 
     # remove outliers for vis
     mask = np.ones(len(z), dtype=bool)
@@ -122,12 +138,29 @@ if __name__ == "__main__":
         data[k] = v[mask]
     z = z[mask]
     maxptp = maxptp[mask]
+    times = times[mask]
+    if args.labels or args.spikelabels:
+        labels = labels[mask]
+
+    # sort if nec
+    if not (times[:-1] <= times[1:]).all():
+        print("Sorting")
+        order = np.argsort(times)
+        times = times[order]
+        for k in data.keys():
+            data[k] = data[k][order]
+        labels = labels[order]
+        maxptp = maxptp[order]
+        z = z[order]
 
     # process colors
-    if args.labels:
-        labels = labels[mask].astype(float)
+    if args.labels or args.spikelabels:
+        labels = labels.astype(float)
+        print("Unique labels", np.unique(labels).shape)
         labels /= labels.max()
-        colors = datoviz.colormap(labels, vmin=0.0, vmax=1.0, cmap="rainbow")
+        colors = datoviz.colormap(
+            labels, vmin=0.0, vmax=1.0, cmap="glasbey_hv"
+        )
     else:
         ptpmin = maxptp.min()
         ptpmax = maxptp.max()
