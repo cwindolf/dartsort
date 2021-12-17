@@ -257,6 +257,37 @@ def locrelocplots(h5, wf_key="denoised_waveforms", seed=0):
     )
 
 
+def pca_resid_plot(wfs, ax=None, c="b", name=None, pad=0, K=25):
+    wfs = wfs.reshape(wfs.shape[0], -1)
+    wfs = wfs - wfs.mean(axis=0, keepdims=True)
+    v = np.square(la.svdvals(wfs)[:K - pad]) / np.prod(wfs.shape)
+    ax = ax or plt.gca()
+    totvar = np.square(wfs).mean()
+    residvar = np.concatenate(([totvar], totvar - np.cumsum(v)))
+    if pad:
+        ax.plot(([totvar] * pad + [*residvar]), marker=".", c=c, label=name)
+    else:
+        ax.plot(residvar[:50], marker=".", c=c, label=name)
+
+
+def reloc_pcaresidplot(h5, wf_key="denoised_waveforms", B=50_000, seed=0, threshold=6.0):
+    inds = 
+    batch_wfs = h5[wf_key]
+    fig = plt.figure()
+    pca_resid_plot(batch_wfs, name="No relocation", c="k")
+    pca_resid_plot(batch_wfs_yza, name="YZa relocated", c="b", pad=3)
+    pca_resid_plot(batch_wfs_xyza, name="XYZA relocated", c="g", pad=4)
+    plt.semilogy()
+    yt = [0.5, 0.1, 0.01]
+    plt.yticks(yt, list(map(str, yt)))
+    plt.legend(fancybox=False)
+    plt.ylabel("PCA remaining variance (s.u.)")
+    plt.xlabel("number of factors")
+    plt.title("Does relocation help PCA?")
+    plt.show()
+
+
+
 def traceplot(waveform, axes, label="", c="k", alpha=1, strip=True, lw=1):
     assert (waveform.shape[1],) == axes.shape
     for ax, wf in zip(axes, waveform.T):
