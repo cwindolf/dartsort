@@ -110,6 +110,9 @@ with h5py.File(original_h5, "r") as orig_f:
     with timer("maxptp"):
         maxptp = orig_f["denoised_waveforms"][:].ptp(1).ptp(1)
 
+# %%
+help(np.array)
+
 # %% tags=[]
 with timer("registration"):
     z_reg, dispmap = reg.register_nonrigid(
@@ -260,7 +263,7 @@ vis_utils.labeledmosaic(
 # ### test: PCA error on a batch of data
 
 # %%
-def pca_resid_plot(wfs, ax=None, q=0.95, c="b", name=None, pad=0, K=25):
+def pca_resid_plot(wfs, ax=None, c="b", name=None, pad=0, K=25):
     wfs = wfs.reshape(wfs.shape[0], -1)
     wfs = wfs - wfs.mean(axis=0, keepdims=True)
     v = np.square(la.svdvals(wfs)[:K - pad]) / np.prod(wfs.shape)
