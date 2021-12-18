@@ -54,6 +54,12 @@ spike_index_np1.shape
 geom_np1 = np.load("/media/peter/2TB/NP1/geom_np1.npy")
 
 # %%
+geom_np1[:20]
+
+# %%
+plt.plot(geom_np1[:20, 0], geom_np1[:20, 1], lw=0.1)
+
+# %%
 rg = np.random.default_rng(0)
 
 # %%
@@ -206,5 +212,113 @@ with h5py.File("../data/yass_np1.h5", "r+") as np1h5:
 with h5py.File("../data/yass_np1.h5", "r") as np1h5:
     Rreg, _, _ = lib.faster(np1h5["maxptp"][:], z_reg, np1h5["spike_index"][:, 0] / 30000)
     cuts.plot(Rreg)
+
+# %%
+with h5py.File("../data/yass_np1.h5", "r") as h5:
+    y = h5["y"][:]
+    big_y = y > 1e-4
+big_y_inds = np.flatnonzero(big_y)
+
+# %%
+big_y.mean()
+
+# %%
+with h5py.File("../data/yass_np1.h5", "r") as h5:
+    N, T, C = h5["denoised_waveforms"].shape
+    print(T, C, flush=True)
+        
+    with h5py.File(f"../data/yass_np1_nzy.h5", "w") as out:
+        # non per-spike data
+        for k in ["geom", "templates"]:
+            print(k, flush=True)
+            out.create_dataset(k, data=h5[k][:])
+
+        # small datasets can just be sliced directly
+        for k in (k for k in h5.keys() if h5[k].shape in ((N,), (N, 2))):
+            print(k, flush=True)
+            out.create_dataset(k, data=h5[k][:][big_y_inds])
+
+        # spikes in a for loop
+        print("spikes", flush=True)
+        wfs = out.create_dataset("denoised_waveforms", shape=(len(big_y_inds), T, C))
+        in_dnwf = h5["denoised_waveforms"]
+        for i, j in tqdm(enumerate(big_y_inds), total=len(big_y_inds)):
+            wfs[i] = in_dnwf[j]
+
+# %%
+with h5py.File("../data/yass_np1_nzy.h5", "r") as h5:
+    vis_utils.locrelocplots(h5, seed=1)
+
+# %%
+
+# %%
+
+# %%
+
+# %%
+
+# %%
+
+# %%
+rg = np.random.default_rng(1)
+
+# %%
+q = rg.normal(size=(10000000, 3))
+
+# %%
+q[:5]
+
+# %%
+qq = np.cumsum(q, axis=1)
+
+# %%
+qq[:5]
+
+# %%
+
+# %%
+b1 = qq[:, 0]
+b2 = qq[:, 1]
+b3 = qq[:, 2]
+
+# %%
+qqm = (b1 <= 0) & (b2 <= 0) & (b3 >= 0)
+
+# %%
+1/16
+
+# %%
+qqm.mean()
+
+# %%
+(np.pi / 2 - np.arctan(np.sqrt(2))) * 3 / (8 * np.pi)
+
+# %%
+a = (b1 <= 0) & (b2 <= 0)
+b = (b2 <= 0) & (b3 >= 0)
+a.mean() * b.mean() * 2, (a & b).mean()
+
+# %%
+((qq[:,0] <= 0) & (qq[:,1] <= 0)).mean()
+
+# %%
+3/8
+
+# %%
+((qq[:,1] <= 0) & (qq[:,2] >= 0)).mean()
+
+# %%
+np.arctan(np.sqrt(2)) / (2*np.pi)
+
+# %%
+ix = (b2 <= 0) & (b3 >= 0)
+plt.scatter(b2[ix], b3[ix] - b2[ix], marker=".", s=1)
+plt.gca().set_aspect(1)
+
+# %%
+((np.pi / 2) - np.arctan(np.sqrt(2))) / (2 * np.pi)
+
+# %%
+((np.pi / 2) - np.arctan(np.sqrt(2))) * 3 / (8 * np.pi)
 
 # %%
