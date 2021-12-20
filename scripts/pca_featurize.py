@@ -133,7 +133,13 @@ if "loadings_orig" not in output_h5:
     output_h5.create_dataset(
         "pcs_orig", data=ipca_orig.components_.reshape(K, T, C)
     )
+    output_h5.create_dataset(
+        "mean_orig", data=ipca_orig.mean_.reshape(T, C)
+    )
 output_h5.create_dataset(f"loadings_{args.relocate_dims}", data=loadings_reloc)
 output_h5.create_dataset(
     f"pcs_{args.relocate_dims}", data=ipca_reloc.components_.reshape(K, T, C)
+)
+output_h5.create_dataset(
+    f"mean_{args.relocate_dims}", data=ipca_reloc.mean_.reshape(T, C)
 )
