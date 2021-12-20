@@ -102,7 +102,7 @@ for b in trange(N // batch_size, desc="fit"):
 
 loadings_orig = np.empty((N, K))
 loadings_reloc = np.empty((N, K))
-for b in trange(N // batch_size, desc="project"):
+for b in trange((N + 1) // batch_size, desc="project"):
     start = b * batch_size
     end = min(N, (b + 1) * batch_size)
 
