@@ -15,7 +15,6 @@ def gcs(x, y):
 
 
 def gcsorig(Y, Z):
-    print("hi")
     if Z.shape[0] < 3:
         return 0
     if len(Z.shape) == 1:

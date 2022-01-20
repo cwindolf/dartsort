@@ -76,7 +76,7 @@ if args.output_h5 != args.input_h5:
 else:
     output_h5 = input_h5
 
-for b in trange(N // batch_size, desc="fit"):
+for b in trange((N + 1) // batch_size, desc="fit"):
     start = b * batch_size
     end = min(N, (b + 1) * batch_size)
 

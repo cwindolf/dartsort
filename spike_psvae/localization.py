@@ -66,7 +66,6 @@ def localize_ptp(
     maxchan,
     geom,
     jac=False,
-    return_z_rel=False,
     firstchan=None,
     geomkind="updown",
 ):
