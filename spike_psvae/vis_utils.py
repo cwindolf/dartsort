@@ -352,9 +352,7 @@ def pca_invert_plot(
     ax = ax or plt.gca()
     totvar = v[0]
     if pad:
-        ax.plot(
-            ([totvar] * pad + v), marker=".", ms=4, c=c, label=name
-        )
+        ax.plot(([totvar] * pad + v), marker=".", ms=4, c=c, label=name)
     else:
         ax.plot(v[:K], marker=".", ms=4, c=c, label=name)
 
@@ -455,7 +453,11 @@ def reloc_pcaresidplot(
         ax.set_title(name)
 
 
-def traceplot(waveform, axes, label="", c="k", alpha=1, strip=True, lw=1):
+def traceplot(waveform, axes=None, label="", c="k", alpha=1, strip=True, lw=1):
+    if axes is None:
+        fig, axes = plt.subplots(
+            1, waveform.shape[1], sharex=True, sharey="row", figsize=(2 * waveform.shape[1], 2)
+        )
     assert (waveform.shape[1],) == axes.shape
     for ax, wf in zip(axes, waveform.T):
         (line,) = ax.plot(wf, color=c, label=label, alpha=alpha, lw=lw)
@@ -944,6 +946,7 @@ def cluster_scatter(
     ax=None,
     n_std=1.0,
     zlim=None,
+    alpha=0.05,
 ):
     ax = ax or plt.gca()
     # scatter and collect gaussian info
@@ -957,7 +960,7 @@ def cluster_scatter(
         covs[k] = np.cov(xk, yk)
 
         color = colorcet.glasbey_hv[k % 256]
-        ax.scatter(xk, yk, s=1, color=color, alpha=0.05)
+        ax.scatter(xk, yk, s=1, color=color, alpha=alpha)
 
     xlow = np.inf
     xhigh = -np.inf
