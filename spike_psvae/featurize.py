@@ -4,7 +4,9 @@ from scipy import sparse
 from . import localization, point_source_centering
 
 
-def featurize(waveforms, maxchans, geom, k=3, relocate_dims="yza", return_recons=False):
+def featurize(
+    waveforms, maxchans, geom, k=3, relocate_dims="yza", return_recons=False
+):
     xs, ys, z_rels, z_abss, alphas = localization.localize_waveforms(
         waveforms, geom, maxchans, channel_radius=8, geomkind="standard"
     )
@@ -20,7 +22,6 @@ def featurize(waveforms, maxchans, geom, k=3, relocate_dims="yza", return_recons
         geomkind="standard",
         relocate_dims=relocate_dims,
     )
-    print(q.shape, p.shape)
     relocs = relocs.numpy()
     means = relocs.mean(axis=0, keepdims=True)
     relocs -= means
@@ -31,7 +32,7 @@ def featurize(waveforms, maxchans, geom, k=3, relocate_dims="yza", return_recons
     )
     # standardized loadings
     loadings = np.sqrt(n - 1) * u
-    features = np.c_[xs, ys, z_rels, alphas, loadings]
+    features = np.c_[xs, ys, z_abss, alphas, loadings]
 
     if not return_recons:
         return features

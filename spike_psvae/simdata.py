@@ -32,22 +32,24 @@ def simdata(
     x_noise=3,
     z_noise=5,
     y_noise=1.5,
+    maxchan_pad=5,
     # clustering params
     n_clusters=20,
     spikes_per_cluster=100,
     # waveform params
-    template_channel_radius=8,
+    channel_range=(0, 100),
+    template_channel_radius=20,
     output_channel_radius=8,
     geomkind="standard",
     # other
     seed=0,
 ):
     assert geomkind == "standard"
-    assert template_channel_radius == output_channel_radius
 
     rg = np.random.default_rng(seed)
     Nt, T, C = templates.shape
     noise_T = noise_segment.shape[0]
+    full_C = channel_range[1] - channel_range[0]
     rad_dif = template_channel_radius - output_channel_radius
 
     # -- mean localization features for each cluster
@@ -55,11 +57,12 @@ def simdata(
     mean_y = rg.gamma(y_shape, y_scale, size=n_clusters)
     mean_z_rel = rg.normal(scale=z_rel_scale, size=n_clusters)
     mean_alpha = rg.gamma(alpha_shape, alpha_scale, size=n_clusters)
-    cluster_maxchans = rg.integers(
-        template_channel_radius,
-        C - template_channel_radius - 1,
+    cluster_chan_offsets = rg.integers(
+        0,
+        full_C - 2 * (template_channel_radius + 1),
         size=n_clusters,
     )
+    cluster_chan_offsets -= cluster_chan_offsets % 2
 
     # -- add noise to generate localizations -- clusters x n_per_cluster
     size = (spikes_per_cluster, n_clusters)
@@ -72,11 +75,12 @@ def simdata(
     # -- localize and cull templates
     nonzero = np.flatnonzero(templates.ptp(1).ptp(1) > 0)
     templates = templates[nonzero]
-    loc_templates, tmaxchans = get_local_waveforms(
+    loc_templates, tmaxchans, tfirstchans = get_local_waveforms(
         templates,
         template_channel_radius,
         geom,
         geomkind=geomkind,
+        compute_firstchans=True,
     )
     loc_ptp = loc_templates.ptp(1)
     txs, tys, tz_rels, tz_abss, talphas = localize_waveforms(
@@ -97,12 +101,14 @@ def simdata(
 
     # choose good templates by point source error, SVD error, y, and max ptp
     ps_err = np.square(loc_ptp - loc_pred_ptp).mean(axis=1)
-    svd_recons = np.array([svd_recon(locwf) for locwf in loc_templates])
+    svd_recons = np.array(
+        [svd_recon(locwf, rank=2) for locwf in loc_templates]
+    )
     svd_err = np.square(loc_templates - svd_recons).mean(axis=(1, 2))
-    cull = ps_err < np.median(ps_err)
-    cull &= svd_err < np.median(svd_err)
-    cull &= tys > 1
-    cull &= loc_ptp.max(1) > np.percentile(loc_ptp.max(1), 25)
+    cull = ps_err < np.percentile(ps_err, 60)
+    cull &= svd_err < np.percentile(svd_err, 60)
+    cull &= tys > 0.2
+    cull &= loc_ptp.max(1) > np.percentile(loc_ptp.max(1), 30)
     # remove templates near the edge of the probe
     cull &= np.isin(
         loc_ptp.argmax(1),
@@ -114,6 +120,7 @@ def simdata(
     print("units:", nonzero[choice])
     choice_loc_templates = loc_templates[choice]
     tmaxchans = tmaxchans[choice]
+    tfirstchans = tfirstchans[choice]
     txs = txs[choice]
     tz_rels = tz_rels[choice]
 
@@ -132,9 +139,22 @@ def simdata(
     # denoiser.to(device)
 
     # -- create cluster data
+    waveform = np.zeros((T, full_C), dtype=np.float32)
     cluster_ids = np.empty(n_clusters * spikes_per_cluster, dtype=int)
-    noised_waveforms = np.empty(
-        (n_clusters * spikes_per_cluster, T, loc_chans),
+    full_shifted_templates = np.empty(
+        (n_clusters * spikes_per_cluster, T, full_C),
+        dtype=np.float32,
+    )
+    loc_shifted_templates = np.empty(
+        (n_clusters * spikes_per_cluster, T, 2 * (output_channel_radius + 1)),
+        dtype=np.float32,
+    )
+    full_noised_waveforms = np.empty(
+        (n_clusters * spikes_per_cluster, T, full_C),
+        dtype=np.float32,
+    )
+    full_denoised_waveforms = np.empty(
+        (n_clusters * spikes_per_cluster, T, full_C),
         dtype=np.float32,
     )
     denoised_waveforms = np.empty(
@@ -142,13 +162,14 @@ def simdata(
         dtype=np.float32,
     )
     maxchans = np.empty(n_clusters * spikes_per_cluster, dtype=int)
+    z_abss = np.empty(n_clusters * spikes_per_cluster)
     for c in trange(n_clusters, desc="Clusters"):
         twf = choice_loc_templates[c]
-        # tmc = tmaxchans[c]
-        tmc = cluster_maxchans[c]
         tx = txs[c]
         tzr = tz_rels[c]
-        loc_tmc = twf.ptp(0).argmax()
+        tmc = tmaxchans[c]
+        # loc_tmc = twf.ptp(0).argmax()
+        startchan = cluster_chan_offsets[c]
 
         for j in range(spikes_per_cluster):
             # target localizations
@@ -169,34 +190,69 @@ def simdata(
                 channel_radius=template_channel_radius,
                 geomkind=geomkind,
             )
+            shifted_mc = shifted_twf.ptp(0).argmax()
+
+            # write to waveform
+            waveform[:] = 0.0
+            waveform[:, startchan : startchan + loc_chans] = shifted_twf
 
             # noise segment
             nt0 = rg.integers(0, noise_T - T)
-            nc0 = rg.integers(0, C - loc_chans)
-            noise = noise_segment[nt0 : nt0 + T, nc0 : nc0 + loc_chans]
+            nc0 = rg.integers(0, C - full_C)
+            noise = noise_segment[nt0 : nt0 + T, nc0 : nc0 + full_C]
 
             # denoise and extract smaller neighborhood around denoised maxchan
-            noised_wf = torch.as_tensor(shifted_twf + noise, dtype=torch.float)
-            denoised_wf = denoiser(noised_wf.T).T.cpu().numpy()
-            # dmc = rad_dif + denoised_wf.ptp(0)[rad_dif + 1:-rad_dif - 1].argmax()
-            dmc = loc_tmc
-            out_mc = tmc + dmc - loc_tmc
+            noised_wf = torch.as_tensor(waveform + noise, dtype=torch.float)
+            full_denoised_wf = denoiser(noised_wf.T).T.cpu().numpy()
+
+            # re-center at new max channel
+            # dmc = rad_dif + denoised_wf.ptp(0)[rad_dif + 1:-rad_dif - 1].argmax()  # noqa
+            # keep template max channel
+            # dmc = loc_tmc
+            # shifted template max channel
+            dmc = shifted_mc
+            out_mc = startchan + dmc
+
             dmc -= dmc % 2  # TODO: for PCA, maybe want to keep it to one side?
-            denoised_wf = denoised_wf[
+            denoised_wf = full_denoised_wf[
                 :,
-                dmc - output_channel_radius : dmc + output_channel_radius + 2,
+                startchan
+                + rad_dif : startchan
+                + rad_dif
+                + 2 * (output_channel_radius + 1),
             ]
 
             # save
-            noised_waveforms[c * spikes_per_cluster + j] = noised_wf
-            denoised_waveforms[c * spikes_per_cluster + j] = denoised_wf
-            cluster_ids[c * spikes_per_cluster + j] = c
-            maxchans[c * spikes_per_cluster + j] = out_mc
+            ix = c * spikes_per_cluster + j
+            full_shifted_templates[ix] = waveform
+            loc_shifted_templates[ix] = waveform[
+                :,
+                startchan
+                + rad_dif : startchan
+                + rad_dif
+                + 2 * (output_channel_radius + 1),
+            ]
+            full_noised_waveforms[ix] = noised_wf
+            full_denoised_waveforms[ix] = full_denoised_wf  # noqa
+            denoised_waveforms[ix] = denoised_wf
+            cluster_ids[ix] = c
+            maxchans[ix] = out_mc
+            z_abss[ix] = geom[out_mc, 1] + z_rel
 
     return (
         choice_loc_templates,
-        noised_waveforms,
+        full_shifted_templates,
+        loc_shifted_templates,
+        full_noised_waveforms,
+        full_denoised_waveforms,
         denoised_waveforms,
         cluster_ids,
         maxchans,
+        np.c_[
+            xs.ravel(order="F"),
+            ys.ravel(order="F"),
+            z_rels.ravel(order="F"),
+            z_abss.ravel(order="F"),
+            alphas.ravel(order="F"),
+        ],
     )

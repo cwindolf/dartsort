@@ -244,6 +244,8 @@ def get_local_waveforms(
         local_waveforms[n] = waveforms[n, :, low:high]
         lows.append(low)
 
+    if compute_maxchans and compute_firstchans:
+        return local_waveforms, maxchans, np.array(lows)
     if compute_maxchans:
         return local_waveforms, maxchans
     if compute_firstchans:
