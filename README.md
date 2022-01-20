@@ -106,6 +106,15 @@ Analysis [input: denoised wfs]
     - How many units before/after reloc?
     - GCS PCs vs z_disp for each unit
 
+## Winter time todos
+
+ - [ ] PTP slider in datoviz
+ - [ ] Nice repro ephys datasets
+ - [ ] For clustering: X registration. Is independent from Z enough (Z then X)? Or, maybe we need to chunk on Z and do it nonrigid.
+ - [ ] Subtraction
+ - [ ] Simulate cluster dataset and run stuff there.
+
+
 ### Bug tracker
 
  - [x] This thing with updown -> standard, then the predicted PTP is flipped. What??

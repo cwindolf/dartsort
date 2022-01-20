@@ -1,38 +1,10 @@
 import numpy as np
 import h5py
 import torch
-from torch import nn
-from tqdm.auto import tqdm, trange
+from tqdm.auto import trange
 
 from . import waveform_utils
-
-
-class SingleChanDenoiser(nn.Module):
-    """Cleaned up a little. Why is conv3 here and commented out in forward?"""
-
-    def __init__(
-        self, n_filters=[16, 8, 4], filter_sizes=[5, 11, 21], spike_size=121
-    ):
-        super(SingleChanDenoiser, self).__init__()
-        feat1, feat2, feat3 = n_filters
-        size1, size2, size3 = filter_sizes
-        self.conv1 = nn.Sequential(nn.Conv1d(1, feat1, size1), nn.ReLU())
-        self.conv2 = nn.Sequential(nn.Conv1d(feat1, feat2, size2), nn.ReLU())
-        self.conv3 = nn.Sequential(nn.Conv1d(feat2, feat3, size3), nn.ReLU())
-        n_input_feat = feat2 * (spike_size - size1 - size2 + 2)
-        self.out = nn.Linear(n_input_feat, spike_size)
-
-    def forward(self, x):
-        x = x[:, None]
-        x = self.conv1(x)
-        x = self.conv2(x)
-        # x = self.conv3(x)
-        x = x.view(x.shape[0], -1)
-        return self.out(x)
-
-    def load(self, fname_model):
-        checkpoint = torch.load(fname_model, map_location="cpu")
-        self.load_state_dict(checkpoint)
+from .denoise import SingleChanDenoiser
 
 
 def spike_train_to_index(spike_train, templates):
@@ -66,7 +38,6 @@ def get_denoised_waveforms(
     spike_index,
     geom,
     channel_radius=10,
-    denoiser_weights_path="../pretrained/single_chan_denoiser.pt",
     T=121,
     threshold=0,
     dtype=np.float32,
@@ -84,7 +55,7 @@ def get_denoised_waveforms(
 
     # load denoiser
     denoiser = SingleChanDenoiser()
-    denoiser.load(denoiser_weights_path)
+    denoiser.load()
     if device is None:
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     else:
@@ -136,8 +107,18 @@ def get_denoised_waveforms(
     else:
         print("Working out of core. Clear the temp files when you're done.")
         temp = h5py.File("___tmp.h5", "w")
-        raw_waveforms = temp.create_dataset(name="raw", shape=(1, T, C), maxshape=(max_n_spikes, T, C), dtype=dtype)
-        denoised_waveforms = temp.create_dataset(name="denoised", shape=(1, T, C), maxshape=(max_n_spikes, T, C), dtype=dtype)
+        raw_waveforms = temp.create_dataset(
+            name="raw",
+            shape=(1, T, C),
+            maxshape=(max_n_spikes, T, C),
+            dtype=dtype,
+        )
+        denoised_waveforms = temp.create_dataset(
+            name="denoised",
+            shape=(1, T, C),
+            maxshape=(max_n_spikes, T, C),
+            dtype=dtype,
+        )
     count = 0  # how many spikes have exceeded the threshold?
     indices = np.empty(max_n_spikes, dtype=int)
     firstchans = np.empty(max_n_spikes, dtype=int)
@@ -154,9 +135,11 @@ def get_denoised_waveforms(
         n_batch = batch_wfs.shape[0]
         if not n_batch:
             continue
-        
+
         denoised_batch = denoiser(batch_wfs_.reshape(-1, T)).cpu().numpy()
-        denoised_batch = denoised_batch.reshape(n_batch, C + 2 * pad_for_denoiser, T)
+        denoised_batch = denoised_batch.reshape(
+            n_batch, C + 2 * pad_for_denoiser, T
+        )
         denoised_batch = denoised_batch.transpose(0, 2, 1)
 
         big = range(n_batch)
@@ -167,23 +150,26 @@ def get_denoised_waveforms(
 
         if not n_big:
             continue
-        
+
         batch_wfs = batch_wfs[big]
         denoised_batch = denoised_batch[big]
         batch_inds = batch_inds[big]
         batch_firstchans = batch_firstchans[big]
-            
+
         if pad_for_denoiser:
             denoised_maxchans = denoised_batch.ptp(1).argmax(1)
             denoised_maxchans -= denoised_maxchans % 2
             low = np.maximum(0, denoised_maxchans - channel_radius)
             low = np.minimum(2 * pad_for_denoiser, low)
             batch_wfs = np.stack(
-                [batch_wfs[i, :, low[i]:low[i] + C] for i in range(n_batch)],
+                [batch_wfs[i, :, low[i] : low[i] + C] for i in range(n_batch)],
                 axis=0,
             )
             denoised_batch = np.stack(
-                [denoised_batch[i, :, low[i]:low[i] + C] for i in range(n_batch)],  # noqa
+                [
+                    denoised_batch[i, :, low[i] : low[i] + C]
+                    for i in range(n_batch)
+                ],  # noqa
                 axis=0,
             )
             batch_firstchans += low
@@ -204,5 +190,5 @@ def get_denoised_waveforms(
         denoised_waveforms = denoised_waveforms[:count]
     indices = indices[:count]
     firstchans = firstchans[:count]
-    
+
     return raw_waveforms, denoised_waveforms, indices, firstchans

@@ -1,14 +1,19 @@
 import matplotlib.pyplot as plt
 from mpl_toolkits.axes_grid1 import make_axes_locatable
-from matplotlib import colors, cm
+from matplotlib import colors, cm, ticker
 import scipy.linalg as la
+from scipy import signal
 import seaborn as sns
 import numpy as np
 import torch
 import torch.nn.functional as F
 import pandas as pd
+import colorcet
+from matplotlib.patches import Ellipse
+import matplotlib.transforms as transforms
+from tqdm.auto import trange, tqdm
 
-from . import statistics
+from . import statistics, waveform_utils, localization, point_source_centering
 from .point_source_centering import relocate_simple
 
 
@@ -16,8 +21,10 @@ sns.set_style("ticks")
 
 
 darkpurple = plt.cm.Purples(0.99)
+purple = plt.cm.Purples(0.75)
 lightpurple = plt.cm.Purples(0.5)
 darkgreen = plt.cm.Greens(0.99)
+green = plt.cm.Greens(0.75)
 lightgreen = plt.cm.Greens(0.5)
 
 
@@ -41,13 +48,14 @@ def normbatch(batch):
 
 
 @torch.no_grad()
-def mosaic(xs, pad=0, padval=255):
+def mosaic(xs, pad=0, padval=255, vmin=np.inf, vmax=-np.inf):
     assert all(x.shape == xs[0].shape for x in xs)
     nrows = len(xs)
     B, H, W = xs[0].shape
     grid = torch.stack(list(map(torch.as_tensor, xs)), dim=0)  # nrowsBHW
-    grid -= grid.min()
-    grid *= 255.0 / grid.max()
+    vmin = min(grid.min(), vmin)
+    grid -= vmin
+    grid *= 255.0 / max(grid.max(), vmax - vmin)
     grid = grid.to(torch.uint8)
     if pad > 0:
         grid = F.pad(grid, (pad, pad, pad, pad), value=padval)
@@ -60,23 +68,40 @@ def mosaic(xs, pad=0, padval=255):
 
 def labeledmosaic(
     xs,
-    rowlabels,
-    pad=0,
+    rowlabels=None,
+    pad=1,
     padval=255,
     ax=None,
     cbar=True,
     separate_norm=False,
     collabels="abcdefghijklmnopqrstuvwxyz",
+    vmin=None,
+    vmax=None,
 ):
+    if rowlabels is None:
+        rowlabels = range(1, len(xs) + 1)
+
     if separate_norm:
         assert not cbar
         xs = [normbatch(x) for x in xs]
 
-    vmin = min(x.min() for x in xs)
-    vmax = max(x.max() for x in xs)
+    if vmin is None:
+        gvmin = np.inf
+        vmin = min(x.min() for x in xs)
+    else:
+        gvmin = vmin
+        assert all((x >= vmin).all() for x in xs)
+
+    if vmax is None:
+        gvmax = -np.inf
+        vmax = max(x.max() for x in xs)
+    else:
+        gvmax = vmax
+        assert all((x <= vmax).all() for x in xs)
+
     B, H, W = xs[0].shape
-    grid = mosaic(xs, pad=pad, padval=padval).numpy()
-    grid = np.pad(grid, [(14, 0), (20, 0), (0, 0)], constant_values=padval)
+    grid = mosaic(xs, pad=pad, padval=padval, vmin=gvmin, vmax=gvmax).numpy()
+    grid = np.pad(grid, [(14, 0), (24, 0), (0, 0)], constant_values=padval)
     ax = ax or plt.gca()
     ax.imshow(
         np.broadcast_to(grid, (*grid.shape[:2], 3)),
@@ -96,7 +121,7 @@ def labeledmosaic(
 
     for b in range(B):
         ax.text(
-            20 + b * (W + 2 * pad) + W / 2,
+            24 + b * (W + 2 * pad) + W / 2,
             4,
             collabels[b],
             ha="center",
@@ -180,7 +205,9 @@ def vis_ptps(
     return fig, axes
 
 
-def locrelocplots(h5, wf_key="denoised_waveforms", seed=0, threshold=6.0):
+def locrelocplots(
+    h5, wf_key="denoised_waveforms", name="", seed=0, threshold=6.0
+):
     rg = np.random.default_rng(seed)
     big = np.flatnonzero(h5["maxptp"][:] > threshold)
     inds = rg.choice(big, size=8)
@@ -189,7 +216,9 @@ def locrelocplots(h5, wf_key="denoised_waveforms", seed=0, threshold=6.0):
     orig_ptp = wfs.ptp(1)
     _, _, C = wfs.shape
     if (C // 2) % 2:
-        geomkind = "firstchanstandard" if "first_channels" in h5 else "standard"
+        geomkind = (
+            "firstchanstandard" if "first_channels" in h5 else "standard"
+        )
     else:
         geomkind = "firstchan" if "first_channels" in h5 else "updown"
 
@@ -242,10 +271,10 @@ def locrelocplots(h5, wf_key="denoised_waveforms", seed=0, threshold=6.0):
     )
     la = "observed ptp"
     laa = "predicted ptp"
-    lb = "yza relocated ptp"
-    lbb = "yza standard ptp"
-    lc = "xyza relocated ptp"
-    lcc = "xyza standard ptp"
+    lb = "$yz\\alpha$ relocated ptp"
+    lbb = "$yz\\alpha$ standard ptp"
+    lc = "$xyz\\alpha$ relocated ptp"
+    lcc = "$xyz\\alpha$ standard ptp"
     ha, _ = plot_ptp(orig_ptp, axes[:, :2], la, "black", codes)
     haa, _ = plot_ptp(pred_ptp, axes[:, :2], laa, "silver", codes)
     hb, _ = plot_ptp(yza_ptp, axes[:, 2:4], lb, darkgreen, codes)
@@ -265,10 +294,15 @@ def locrelocplots(h5, wf_key="denoised_waveforms", seed=0, threshold=6.0):
         borderaxespad=0,
         ncol=3,
     )
-    fig.suptitle("PTP before and after relocation (yzα, xyzα)", y=0.95)
+    fig.suptitle(
+        f"{name} PTPs before/after relocation ($yz\\alpha$, $xyz\\alpha$)",
+        y=0.95,
+    )
     # plt.tight_layout(pad=0.1)
     for ax in axes.flat:
         ax.set_box_aspect(1.0)
+
+    return fig, axes
 
 
 def pca_resid_plot(wfs, ax=None, c="b", name=None, pad=0, K=25):
@@ -279,51 +313,146 @@ def pca_resid_plot(wfs, ax=None, c="b", name=None, pad=0, K=25):
     totvar = np.square(wfs).mean()
     residvar = np.concatenate(([totvar], totvar - np.cumsum(v)))
     if pad:
-        ax.plot(([totvar] * pad + [*residvar]), marker=".", c=c, label=name)
+        ax.plot(
+            ([totvar] * pad + [*residvar]), marker=".", ms=4, c=c, label=name
+        )
     else:
-        ax.plot(residvar[:50], marker=".", c=c, label=name)
+        ax.plot(residvar[:50], marker=".", ms=4, c=c, label=name)
+
+
+def pca_invert_plot(
+    wfs_orig, wfs, q, p, ax=None, c="b", name=None, pad=0, K=25
+):
+    # apply PCA to relocated wfs
+    wfshape = wfs.shape
+    wfs = wfs.reshape(wfs.shape[0], -1)
+    means = wfs.mean(axis=0, keepdims=True)
+    cwfs = wfs - means
+    U, s, Vh = la.svd(cwfs, full_matrices=False)
+    # print(wfs.shape, q.shape, p.shape)
+
+    # for each k, get error in unrelocated space
+    invert = (p / q)[:, None, :]
+    recon = np.empty_like(wfs)
+    recon[:] = means
+    v = []
+    for k in trange(K - pad):
+        # pca reconstruction
+        if k > 0:
+            recon += U[:, k][:, None] @ (s[k] * Vh[k][None, :])
+
+        # invert relocation
+        recon_ = recon.reshape(wfshape) * invert
+
+        # compute error
+        err = np.square(wfs_orig - recon_).mean()
+        v.append(err)
+
+    # plot
+    ax = ax or plt.gca()
+    totvar = v[0]
+    if pad:
+        ax.plot(
+            ([totvar] * pad + v), marker=".", ms=4, c=c, label=name
+        )
+    else:
+        ax.plot(v[:K], marker=".", ms=4, c=c, label=name)
 
 
 def reloc_pcaresidplot(
-    h5, wf_key="denoised_waveforms", B=50_000, seed=0, threshold=6.0, ax=None
+    h5,
+    wf_key="denoised_waveforms",
+    name="",
+    B=50_000,
+    seed=0,
+    threshold=6.0,
+    ax=None,
+    nolabel=False,
+    kind="resid",
 ):
     rg = np.random.default_rng(seed)
     big = np.flatnonzero(h5["maxptp"][:] > threshold)
-    inds = rg.choice(big, size=8)
+    inds = rg.choice(big, size=B, replace=False)
     inds.sort()
 
     wfs = h5[wf_key][inds]
     wfs_yza, q_hat_yza, p_hat = relocate_simple(
         wfs,
         h5["geom"][:],
-        h5["max_channels"][inds],
-        h5["x"][inds],
-        h5["y"][inds],
-        h5["z_rel"][inds],
-        h5["alpha"][inds],
+        h5["max_channels"][:][inds],
+        h5["x"][:][inds],
+        h5["y"][:][inds],
+        h5["z_rel"][:][inds],
+        h5["alpha"][:][inds],
         relocate_dims="yza",
+        geomkind="firstchanstandard",
+        firstchans=h5["first_channels"][:][inds],
+        channel_radius=8,
     )
     wfs_xyza, q_hat_xyza, p_hat_ = relocate_simple(
         wfs,
         h5["geom"][:],
-        h5["max_channels"][inds],
-        h5["x"][inds],
-        h5["y"][inds],
-        h5["z_rel"][inds],
-        h5["alpha"][inds],
+        h5["max_channels"][:][inds],
+        h5["x"][:][inds],
+        h5["y"][:][inds],
+        h5["z_rel"][:][inds],
+        h5["alpha"][:][inds],
         relocate_dims="xyza",
+        geomkind="firstchanstandard",
+        firstchans=h5["first_channels"][:][inds],
+        channel_radius=8,
     )
 
     ax = ax or plt.gca()
-    pca_resid_plot(wfs, ax=ax, name="Unrelocated", c="k")
-    pca_resid_plot(wfs_yza, ax=ax, name="yzα relocated", c=darkgreen, pad=3)
-    pca_resid_plot(wfs_xyza, ax=ax, name="xyzα relocated", c=darkpurple, pad=4)
+    if kind == "resid":
+        pca_resid_plot(wfs, ax=ax, name="Unrelocated", c="k")
+        pca_resid_plot(
+            wfs_yza, ax=ax, name="$yz\\alpha$ relocated", c=green, pad=3
+        )
+        pca_resid_plot(
+            wfs_xyza, ax=ax, name="$xyz\\alpha$ relocated", c=purple, pad=4
+        )
+    elif kind == "invert":
+        pca_invert_plot(
+            wfs,
+            wfs,
+            np.ones((B, wfs.shape[-1])),
+            np.ones((B, wfs.shape[-1])),
+            ax=ax,
+            name="Unrelocated",
+            c="k",
+        )
+        pca_invert_plot(
+            wfs,
+            wfs_yza,
+            q_hat_yza.numpy(),
+            p_hat.numpy(),
+            ax=ax,
+            name="$yz\\alpha$ relocated",
+            c=green,
+            pad=3,
+        )
+        pca_invert_plot(
+            wfs,
+            wfs_xyza,
+            q_hat_xyza.numpy(),
+            p_hat.numpy(),
+            ax=ax,
+            name="$xyz\\alpha$ relocated",
+            c=purple,
+            pad=4,
+        )
+    else:
+        raise ValueError
     ax.semilogy()
-    yt = [0.5, 0.1, 0.01]
+    yt = [0.5, 0.1]
     ax.set_yticks(yt, list(map(str, yt)))
     ax.legend(fancybox=False, frameon=False)
-    ax.set_ylabel("PCA remaining variance (s.u.)")
-    ax.set_xlabel("number of factors")
+    if not nolabel:
+        ax.set_ylabel("PCA remaining variance (s.u.)")
+        ax.set_xlabel("number of factors")
+    if name:
+        ax.set_title(name)
 
 
 def traceplot(waveform, axes, label="", c="k", alpha=1, strip=True, lw=1):
@@ -336,6 +465,112 @@ def traceplot(waveform, axes, label="", c="k", alpha=1, strip=True, lw=1):
         ax.grid(color="gray")
         ax.set_axisbelow(True)
     return line
+
+
+def pcarecontrace(
+    h5, wf_key="denoised_waveforms", B=3, K=10, seed=0, threshold=6.0
+):
+    rg = np.random.default_rng(seed)
+    big = np.flatnonzero(h5["maxptp"][:] > threshold)
+    inds = rg.choice(big, size=B, replace=False)
+    inds.sort()
+
+    fig, axes = plt.subplots(3 * B, 16, sharex=True, sharey="row")
+
+    wfs = h5[wf_key][inds]
+    wfs_yza, q_hat_yza, p_hat = relocate_simple(
+        wfs,
+        h5["geom"][:],
+        h5["max_channels"][:][inds],
+        h5["x"][:][inds],
+        h5["y"][:][inds],
+        h5["z_rel"][:][inds],
+        h5["alpha"][:][inds],
+        relocate_dims="yza",
+        geomkind="firstchanstandard",
+        firstchans=h5["first_channels"][:][inds],
+        channel_radius=8,
+    )
+    wfs_xyza, q_hat_xyza, p_hat_ = relocate_simple(
+        wfs,
+        h5["geom"][:],
+        h5["max_channels"][:][inds],
+        h5["x"][:][inds],
+        h5["y"][:][inds],
+        h5["z_rel"][:][inds],
+        h5["alpha"][:][inds],
+        relocate_dims="xyza",
+        geomkind="firstchanstandard",
+        firstchans=h5["first_channels"][:][inds],
+        channel_radius=8,
+    )
+
+    ls = h5["loadings_orig"][inds, :K]
+    ls_yza = h5["loadings_yza"][inds, :K]
+    ls_xyza = h5["loadings_xyza"][inds, :K]
+
+    recons = np.einsum("ijk,li->ljk", h5["pcs_orig"][:K], ls)
+    recons_yza = np.einsum("ijk,li->ljk", h5["pcs_orig"][:K], ls)
+    recons_xyza = np.einsum("ijk,li->ljk", h5["pcs_orig"][:K], ls)
+
+    recons = (
+        np.einsum("ijk,li->ljk", h5["pcs_orig"][:K], ls)
+        + h5["mean_orig"][:][None, :, :]
+    )  # noqa
+    recons_yza = (
+        np.einsum("ijk,li->ljk", h5["pcs_orig"][:K], ls_yza)
+        + h5["mean_yza"][:][None, :, :]
+    )  # noqa
+    recons_xyza = (
+        np.einsum("ijk,li->ljk", h5["pcs_orig"][:K], ls_xyza)
+        + h5["mean_xyza"][:][None, :, :]
+    )  # noqa
+
+    labs = "abcdefghijklmnopqrstuvwxyz"
+    for i in range(B):
+        traceplot(
+            wfs[i, :, 1:-1],
+            axes[3 * i],
+            label=f"{labs[i]} orig.",
+            c="black",
+            strip=False,
+        )  # noqa
+        traceplot(
+            recons[i, :, 1:-1],
+            axes[3 * i],
+            label=f"{labs[i]} recon.",
+            c="silver",
+            strip=False,
+        )  # noqa
+        traceplot(
+            wfs_yza[i, :, 1:-1],
+            axes[3 * i + 1],
+            label=f"{labs[i]} $yz\\alpha$",
+            c=darkgreen,
+            strip=False,
+        )  # noqa
+        traceplot(
+            recons_yza[i, :, 1:-1],
+            axes[3 * i + 1],
+            label=f"{labs[i]} $yz\\alpha$ recon.",
+            c=lightgreen,
+            strip=False,
+        )  # noqa
+        traceplot(
+            wfs_xyza[i, :, 1:-1],
+            axes[3 * i + 2],
+            label=f"{labs[i]} $xyz\\alpha$",
+            c=darkpurple,
+            strip=False,
+        )  # noqa
+        traceplot(
+            recons_xyza[i, :, 1:-1],
+            axes[3 * i + 2],
+            label=f"{labs[i]} $xyz\\alpha$ recon.",
+            c=lightpurple,
+            strip=False,
+        )  # noqa
+    fig.tight_layout(pad=0)
 
 
 def pca_tracevis(pcs, wfs, title=None, cut=4, strip=False):
@@ -368,7 +603,7 @@ def pca_tracevis(pcs, wfs, title=None, cut=4, strip=False):
     return fig, axes
 
 
-def lcorrs(disp, y, alpha, pcs, maxptp, plotmask):
+def lcorrs(disp, y, alpha, pcs, maxptp, plotmask=None, kind="scatter"):
     df = pd.DataFrame(
         dict(
             disp=disp,
@@ -380,12 +615,16 @@ def lcorrs(disp, y, alpha, pcs, maxptp, plotmask):
             maxptp=maxptp,
         )
     )
+    if plotmask:
+        df = df[plotmask]
 
     grid = sns.pairplot(
-        data=df[plotmask].sample(frac=0.1),
+        data=df.sample(frac=0.1),
         x_vars=["pc1", "pc2", "pc3"],
         y_vars=["disp", "y", "alpha"],
         hue="maxptp",
+        kind=kind,
+        plot_kws=dict(alpha=0.5),
     )
 
     for i, xv in enumerate(["pc1", "pc2", "pc3"]):
@@ -397,31 +636,486 @@ def lcorrs(disp, y, alpha, pcs, maxptp, plotmask):
     return grid
 
 
-def gcsboxes(disp, pcs, labels):
+def gcsboxes(disp, pcs, labels, ax=None, color=None):
     good = np.flatnonzero(labels >= 0)
     disp = disp[good]
     pcs = pcs[good]
     labels = labels[good]
-    Kmax = labels.max() + 1
     gcss = [[]] * pcs.shape[1]
-    for k in range(Kmax):
+    df = pd.DataFrame(columns=["pc", "gcs"])
+    for k in np.unique(labels):
         clust = np.flatnonzero(labels == k)
         for j, pc in enumerate(pcs.T):
-            gcss[j].append(statistics.gcs(disp[clust], pc[clust]))
-    plt.boxplot(np.array(gcss).T)
+            gcs = statistics.gcsorig(disp[clust], pc[clust])
+            gcss[j].append(gcs)
+            df = df.append({"pc": j, "gcs": gcs}, ignore_index=True)
+    ax = ax or plt.gca()
+    # ax.violinplot(
+    #     np.array(gcss).T,
+    #     showextrema=False,
+    #     showmedians=True,
+    #     quantiles=[[0.05, 0.95]] * pcs.shape[1],
+    #     bw_method="silverman",
+    # )
+    g = sns.stripplot(
+        x="pc",
+        y="gcs",
+        data=df,
+        ax=ax,
+        size=2,
+        alpha=0.5,
+        color=color,
+    )
+    g.set(xlabel=None, ylabel=None)
 
 
-def spearmanrboxes(disp, pcs, labels):
+def spearmanrboxes(disp, pcs, labels, ax=None, color=None):
     good = np.flatnonzero(labels >= 0)
     disp = disp[good]
     pcs = pcs[good]
     labels = labels[good]
-    Kmax = labels.max() + 1
     spearmanrs = [[]] * pcs.shape[1]
-    for k in range(Kmax):
+    df = pd.DataFrame(columns=["pc", "r"])
+    for k in np.unique(labels):
         clust = np.flatnonzero(labels == k)
         for j, pc in enumerate(pcs.T):
-            spearmanrs[j].append(
-                statistics.spearmanr(disp[clust], pc[clust]).correlation
+            r = statistics.spearmanr(disp[clust], pc[clust]).correlation
+            spearmanrs[j].append(r)
+            df = df.append({"pc": j, "r": r}, ignore_index=True)
+    ax = ax or plt.gca()
+    # ax.violinplot(
+    #     np.array(spearmanrs).T,
+    #     showextrema=False,
+    #     showmedians=True,
+    #     quantiles=[[0.05, 0.95]] * pcs.shape[1],
+    #     bw_method="silverman",
+    # )
+    g = sns.stripplot(
+        x="pc",
+        y="r",
+        data=df,
+        ax=ax,
+        size=2,
+        alpha=0.5,
+        color=color,
+    )
+    g.set(xlabel=None, ylabel=None)
+
+
+def trendline(times, values, mf=21):
+    T0 = int(np.floor(times.min()))
+    T = int(np.ceil(times.max()))
+    out = []
+    tdomain = []
+    for t in range(T0, T):
+        mask = np.flatnonzero((t <= times) & (times < t + 1))
+        if len(mask):
+            out.append(values[mask].mean())
+            tdomain.append(t)
+    out = signal.medfilt(np.array(out), mf)
+    return np.array(tdomain), out
+
+
+def get_unit_ix(h5, which, unit, by):
+    times = h5["spike_index"][:, 0] / 30000
+    ids = h5["spike_train"][:, 1]
+
+    if by == "ptp":
+        template_maxptps = h5["templates"][:].ptp(1).ptp(1)
+        top = np.argsort(template_maxptps)[::-1][unit]
+    elif by == "count":
+        ids = h5["spike_train"][:, 1]
+        _, counts = np.unique(ids, return_counts=True)
+        top = np.argsort(counts)[::-1][unit]
+        print(counts[top])
+    elif by == "counttrend":
+        template_maxptps = h5["templates"][:].ptp(1).ptp(1)
+        psfits = template_psfit(h5)
+        uncollided = psfits < np.median(psfits)
+        thebig = np.flatnonzero(uncollided)
+        T = int(np.ceil(times.max()))
+        counts = np.empty(h5["templates"].shape[0])
+        counts[:] = np.inf
+        temp = np.empty(h5["templates"].shape[0])
+        temp[:] = np.inf
+        for t in range(100, T - 100, 2):
+            ix = np.flatnonzero((t <= times) & (times < (t + 5)))
+            vals, tcounts = np.unique(ids[ix], return_counts=True)
+            temp[vals] = tcounts
+            counts = np.minimum(counts, temp)
+            temp[:] = np.inf
+        top = np.argsort(counts)[::-1]
+        top = top[np.flatnonzero(counts[top] < np.inf)[0] :]
+        top = top[np.isin(top, thebig)]
+        top = top[unit]
+    else:
+        raise ValueError(f"not sure how to rank units by {by}")
+
+    return top, ids == top
+
+
+def scatter_loadings(
+    h5,
+    which="orig",
+    unit=0,
+    style="-",
+    cm=plt.cm.Greys,
+    pc=0,
+    ax=None,
+    by="counttrend",
+):
+    times = h5["spike_index"][:, 0] / 30000
+    gtimes = (100 <= times) & (times < 900)
+    loadings = h5[f"loadings_{which}"][:, pc]
+    loadings /= loadings.std()
+
+    top, where = get_unit_ix(h5, which, unit, by)
+
+    ax = ax or plt.gca()
+
+    where = np.flatnonzero(where & gtimes)
+    # color = cm((top_K + k) / (2 * top_K) - 0.01)
+    ts = times[where]
+    ls = loadings[where]
+    ax.scatter(
+        ts,
+        ls,
+        color=cm(0.5),
+        alpha=0.1,
+        s=1,
+    )
+    tt, trend = trendline(ts, ls)
+    (l,) = ax.plot(
+        tt, trend, lw=1, color=cm(0.9), linestyle=style, label=f"pc {pc}"
+    )
+    ax.set_xlim([tt[0], tt[-1]])
+    ax.yaxis.set_major_locator(ticker.MaxNLocator(2, integer=True))
+    # ax.set_yticks([])
+
+    return (
+        trend.min() - 0.5 * trend.std(),
+        trend.max() + 0.5 * trend.std(),
+        l,
+        top,
+    )
+
+
+def loadings_vs_disp(h5, unit, p, name="", by="count"):
+    fig, axes = plt.subplot_mosaic(
+        "a\na\nb\nb\nc\nc\nd", sharex=True, figsize=(2.75, 4)
+    )
+    aa = axes["a"]
+    ab = axes["b"]
+    ac = axes["c"]
+    ad = axes["d"]
+
+    styles = ["-", "--", "-.", ":"]
+    lines = []
+
+    for ax, which, cmap in zip(
+        [aa, ab, ac],
+        ["orig", "yza", "xyza"],
+        [plt.cm.Greys, plt.cm.Greens, plt.cm.Purples],
+    ):
+        mn, mx = np.inf, -np.inf
+        for pc in range(4):
+            lo, hi, line, top = scatter_loadings(
+                h5,
+                unit=unit,
+                pc=pc,
+                cm=cmap,
+                which=which,
+                ax=ax,
+                style=styles[pc],
+                by=by,
             )
-    plt.boxplot(np.array(spearmanrs).T)
+            mn = min(lo, mn)
+            mx = max(hi, mx)
+            if which == "orig":
+                lines.append(line)
+        ax.set_ylim([mn, mx])
+
+    fig.legend(
+        lines,
+        [f"PC{j + 1}" for j in range(4)],
+        loc=[0.19, 0.895],
+        frameon=False,
+        ncol=4,
+        columnspacing=2,
+        fontsize=6,
+    )
+
+    aa.set_ylabel("orig.\\ loadings")
+    ab.set_ylabel("$yz\\alpha$ loadings")
+    ac.set_ylabel("$xyz\\alpha$ loadings")
+
+    ad.plot(np.arange(100, 900), p[100:-100])
+    ad.set_ylabel("disp.")
+    ad.set_xlabel("time", labelpad=-10)
+    ad.set_box_aspect()
+    ad.set_xticks([100, 900])
+    ad.set_yticks([])
+    fig.suptitle(f"{name} unit {top} PC loadings", y=0.95)
+
+    # fig.tight_layout(pad=0.05)
+
+
+def pairplot_loadings(h5, unit, which, name="", by="counttrend"):
+    top, ix = get_unit_ix(h5, which, unit, by)
+    ix = np.flatnonzero(ix)
+    meandisp = h5["z_abs"][:].mean() - h5["z_reg"][:].mean()
+    z_disp = np.abs(h5["z_abs"][:][ix] - h5["z_reg"][:][ix] - meandisp)
+    ys = h5["y"][:][ix]
+    alphas = h5["alpha"][:][ix]
+    loadings = h5[f"loadings_{which}"][:][ix]
+    maxptp = h5["maxptp"][:][ix]
+
+    grid = lcorrs(z_disp, ys, alphas, loadings, maxptp, kind="scatter")
+
+    return top, grid
+
+
+def template_psfit(h5):
+    templates = h5["templates"][:]
+    nztemplates = templates.ptp(1).ptp(1) > 0
+
+    twfs, maxchans = waveform_utils.get_local_waveforms(
+        templates[nztemplates],
+        8,
+        h5["geom"][:],
+        maxchans=None,
+        geomkind="standard",
+    )
+    x, y, z_rel, z_abs, alpha = localization.localize_waveforms(
+        twfs,
+        h5["geom"][:],
+        maxchans=maxchans,
+        channel_radius=8,
+        geomkind="standard",
+    )
+    ptp, ptp_hat = point_source_centering.ptp_fit(
+        twfs,
+        h5["geom"][:],
+        maxchans,
+        x,
+        y,
+        z_rel,
+        alpha,
+        channel_radius=8,
+        geomkind="standard",
+    )
+
+    res = np.empty(templates.shape[0])
+    res[:] = np.inf
+    res[nztemplates] = np.square(ptp - ptp_hat).mean(axis=1)
+
+    return res
+
+
+def plot_template_psfit(h5):
+    psfits = template_psfit(h5)
+    plt.hist(psfits[psfits < np.inf], bins=128)
+
+
+def uncolboxes(h5, which="orig", kind="gcs", ax=None):
+    psfits = template_psfit(h5)
+    good = np.flatnonzero(psfits < np.median(psfits[psfits < np.inf]))
+    ids = h5["spike_train"][:, 1]
+    whichinds = np.isin(ids, good)
+    uncolids = ids[whichinds]
+    uniqs, counts = np.unique(uncolids, return_counts=True)
+    newgood = uniqs[counts > 1000]
+    whichinds = np.isin(ids, newgood)
+    ids = ids[whichinds]
+    pcs = h5[f"loadings_{which}"][:][whichinds, :5]
+    disp = np.abs(h5["z_reg"][:][whichinds] - h5["z_abs"][:][whichinds])
+    color = {"orig": "k", "yza": darkgreen, "xyza": darkpurple}[which]
+
+    if kind == "gcs":
+        gcsboxes(disp, pcs, ids, ax=ax, color=color)
+    elif kind == "spear":
+        spearmanrboxes(disp, pcs, ids, ax=ax, color=color)
+
+
+def cluster_scatter(
+    xs,
+    ys,
+    ids,
+    ax=None,
+    n_std=1.0,
+    zlim=None,
+):
+    ax = ax or plt.gca()
+    # scatter and collect gaussian info
+    means = {}
+    covs = {}
+    for k in np.unique(ids):
+        where = np.flatnonzero(ids == k)
+        xk = xs[where]
+        yk = ys[where]
+        means[k] = xk.mean(), yk.mean()
+        covs[k] = np.cov(xk, yk)
+
+        color = colorcet.glasbey_hv[k % 256]
+        ax.scatter(xk, yk, s=1, color=color, alpha=0.05)
+
+    xlow = np.inf
+    xhigh = -np.inf
+    ylow = np.inf
+    yhigh = -np.inf
+    for k in means.keys():
+        mean_x, mean_y = means[k]
+        cov = covs[k]
+        vx, vy = cov[0, 0], cov[1, 1]
+        rho = cov[0, 1] / np.sqrt(vx * vy)
+        color = colorcet.glasbey_hv[k % 256]
+        ell = Ellipse(
+            (0, 0),
+            width=2 * np.sqrt(1 + rho),
+            height=2 * np.sqrt(1 - rho),
+            facecolor=(0, 0, 0, 0),
+            edgecolor=color,
+            linewidth=1,
+        )
+        transform = (
+            transforms.Affine2D()
+            .rotate_deg(45)
+            .scale(n_std * np.sqrt(vx), n_std * np.sqrt(vy))
+            .translate(mean_x, mean_y)
+        )
+        ell.set_transform(transform + ax.transData)
+        ax.add_patch(ell)
+
+        if zlim is None or zlim[0] < mean_y < zlim[1]:
+            xlow = min(xlow, mean_x - (n_std + 0.1) * np.sqrt(vx))
+            xhigh = max(xhigh, mean_x + (n_std + 0.1) * np.sqrt(vx))
+            ylow = min(ylow, mean_y - (n_std + 0.2) * np.sqrt(vy))
+            yhigh = max(yhigh, mean_y + (n_std + 0.2) * np.sqrt(vy))
+
+    return xlow, xhigh, ylow, yhigh
+
+
+def sortedclust_pcvis(h5, name, zlims=None, top_K=50):
+    ids = h5["spike_train"][:, 1].astype(int)
+    uniqs, counts = np.unique(ids, return_counts=True)
+    threshold = max(1000, np.sort(counts)[::-1][:top_K][-1])
+    good = uniqs[np.flatnonzero(counts > threshold)]
+
+    whichspikes = np.isin(ids, good)
+    ids = ids[whichspikes]
+    z = h5["z_reg"][:][whichspikes]
+
+    fig, axes = plt.subplots(4, 3, sharey=True, figsize=(8.5, 11))
+
+    k2txt = {"x": "$x$", "y": "$y$", "alpha": "$\\alpha$"}
+    which2txt = {
+        "orig": "orig.\\",
+        "yza": "$yz\\alpha$",
+        "xyza": "$xyz\\alpha$",
+    }
+
+    for ax, k in zip(axes[0, :], ["x", "y", "alpha"]):
+        horz = h5[k][:][whichspikes]
+        xlow, xhigh, ylow, yhigh = cluster_scatter(
+            horz, z, ids, ax=ax, zlim=zlims
+        )
+        ax.set_xlim([xlow, xhigh])
+        if zlims is not None:
+            ax.set_ylim(zlims)
+        else:
+            ax.set_ylim([ylow, yhigh])
+        ax.set_xlabel(k2txt[k])
+
+    for which, axs in zip(["orig", "yza", "xyza"], axes[1:]):
+        loadings = h5[f"loadings_{which}"][:, :3]
+        loadings /= np.std(loadings, axis=0, keepdims=True)
+        loadings = loadings[whichspikes]
+        for i in range(3):
+            xlow, xhigh, ylow, yhigh = cluster_scatter(
+                loadings[:, i], z, ids, ax=axs[i], zlim=zlims
+            )
+            axs[i].set_xlim([xlow, xhigh])
+            if zlims is not None:
+                axs[i].set_ylim(zlims)
+            else:
+                axs[i].set_ylim([ylow, yhigh])
+            axs[i].set_xlabel(which2txt[which] + " pc " + str(i + 1))
+
+    for ax in axes[:, 0]:
+        ax.set_ylabel("$z$")
+
+    fig.suptitle(
+        f"{name}: Spike sorter clusters visualized in the PCA spaces", y=1
+    )
+    plt.tight_layout(pad=0.5)
+
+
+def relocclusts(
+    name,
+    x,
+    y,
+    z,
+    alpha,
+    pcs_orig,
+    pcs_yza,
+    pcs_xyza,
+    cs,
+    aris,
+    zlims=None,
+):
+    fig, axes = plt.subplots(6, 3, sharey=True, figsize=(8.5, 11))
+    ario = aris["orig"]
+    ariy = aris["yza"]
+    arix = aris["xyza"]
+    co = cs["orig"]
+    cy = cs["yza"]
+    cx = cs["xyza"]
+
+    k2txt = {"x": "$x$", "y": "$y$", "alpha": "$\\alpha$"}
+    which2txt = {
+        "orig": "Unrelocated",
+        "yza": "$yz\\alpha$",
+        "xyza": "$xyz\\alpha$",
+    }
+
+    for j, (which, pcs, c, ari) in enumerate(
+        zip(
+            ["orig", "yza", "xyza"],
+            [pcs_orig, pcs_yza, pcs_xyza],
+            [co, cy, cx],
+            [ario, ariy, arix],
+        )
+    ):
+        axes[2 * j, 1].set_title(
+            which2txt[which]
+            + f" {len(np.unique(c))} clusters, "
+            + f" ARI to sorter: {ari:0.2f}",
+            fontsize=10,
+        )
+        for ax, k, v in zip(axes[2 * j], ["x", "y", "alpha"], [x, y, alpha]):
+            xlow, xhigh, ylow, yhigh = cluster_scatter(
+                v, z, c, ax=ax, zlim=zlims
+            )
+            ax.set_xlabel(k2txt[k])
+            ax.set_xlim([xlow, xhigh])
+            if zlims is not None:
+                ax.set_ylim(zlims)
+            else:
+                ax.set_ylim([ylow, yhigh])
+
+        for ax, k, v in zip(axes[2 * j + 1], range(1, 4), pcs.T):
+            xlow, xhigh, ylow, yhigh = cluster_scatter(
+                v, z, c, ax=ax, zlim=zlims
+            )
+            ax.set_xlabel(f"pc{k}")
+            ax.set_xlim([xlow, xhigh])
+            if zlims is not None:
+                ax.set_ylim(zlims)
+            else:
+                ax.set_ylim([ylow, yhigh])
+
+    for ax in axes[:, 0]:
+        ax.set_ylabel("$z$")
+
+    fig.suptitle(f"{name}: ISO-SPLIT clusters by feature", y=1)
+    plt.tight_layout(pad=0.1)

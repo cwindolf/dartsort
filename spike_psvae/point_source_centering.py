@@ -11,6 +11,7 @@ import torch
 
 from .waveform_utils import get_local_geom
 from .torch_utils import translate
+from .localization import localize_ptp
 
 
 def point_source_ptp(local_geom, x, y, z, alpha):
@@ -40,6 +41,81 @@ def stereotypical_ptp(local_geom, x=None, y=15.0, z=0.0, alpha=150.0):
         x = local_geom[:, :, 0].mean(axis=1)
     r = point_source_ptp(local_geom, x, y, z, alpha)
     return r
+
+
+def ptp_fit(
+    waveforms,
+    geom,
+    maxchans,
+    x,
+    y,
+    z_rel,
+    alpha,
+    channel_radius=10,
+    firstchans=None,
+    geomkind="updown",
+):
+    B, T, C = waveforms.shape
+    geom = geom.copy()
+    ptp = waveforms.ptp(axis=1)
+    local_geom = torch.stack(
+        [
+            torch.as_tensor(
+                get_local_geom(
+                    geom,
+                    maxchans[n],
+                    channel_radius,
+                    ptp[n],
+                    firstchan=firstchans[n]
+                    if firstchans is not None
+                    else None,  # noqa
+                    geomkind=geomkind,
+                )
+            )
+            for n in range(B)
+        ],
+        axis=0,
+    )
+
+    # ptp predicted from this localization (x,y,z,alpha)
+    q = point_source_ptp(local_geom, x, y, z_rel, alpha)
+
+    return ptp, q.numpy()
+
+
+def shift(
+    waveform,
+    maxchan,
+    geom,
+    dx=0,
+    dz=0,
+    y1=None,
+    alpha1=None,
+    channel_radius=10,
+    firstchan=None,
+    geomkind="updown",
+):
+    ptp = waveform.ptp(0)
+    x0, y0, z_rel0, z_abs0, alpha0 = localize_ptp(
+        ptp, maxchan, geom, firstchan=firstchan, geomkind=geomkind
+    )
+    local_geom = get_local_geom(
+        geom,
+        maxchan,
+        channel_radius,
+        ptp,
+        firstchan=firstchan,
+        geomkind=geomkind,
+    )
+    x1 = x0 + dx
+    z1 = z_rel0 + dz
+    if y1 is None:
+        y1 = y0
+    if alpha1 is None:
+        alpha1 = alpha0
+    qtq = point_source_ptp([local_geom], x1, y1, z1, alpha1)
+    shifted = waveform * (qtq.numpy() / ptp)[None, :]
+    return shifted, qtq
 
 
 def relocate_simple(
@@ -107,7 +183,9 @@ def relocate_simple(
                     maxchans[n],
                     channel_radius,
                     ptp[n],
-                    firstchan=firstchans[n] if firstchans is not None else None,  # noqa
+                    firstchan=firstchans[n]
+                    if firstchans is not None
+                    else None,  # noqa
                     geomkind=geomkind,
                 )
             )

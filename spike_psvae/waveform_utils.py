@@ -10,6 +10,30 @@ def maxchan_from_firstchan(firstchan, wf):
     return firstchan + wf.ptp(0).argmax()
 
 
+def temporal_align(waveforms, offset=42):
+    N, T, C = waveforms.shape
+    maxchans = waveforms.ptp(1).argmax(1)
+    offsets = waveforms[np.arange(N), :, maxchans].argmin(1)
+    rolls = offset - offsets
+    out = np.empty_like(waveforms)
+    pads = [(0, 0), (0, 0)]
+    for i, roll in enumerate(rolls):
+        if roll > 0:
+            pads[0] = (roll, 0)
+            start, end = 0, T
+        elif roll < 0:
+            pads[0] = (0, -roll)
+            start, end = -roll, T - roll
+        else:
+            out[i] = waveforms[i]
+            continue
+
+        pwf = np.pad(waveforms[i], pads, mode="linear_ramp")
+        out[i] = pwf[start:end, :]
+
+    return out
+
+
 def updown_decision(geom, maxchan, channel_radius, ptp):
     """Gets indices of channels around the maxchan"""
     G, d = geom.shape
