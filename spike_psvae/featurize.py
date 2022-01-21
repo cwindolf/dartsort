@@ -5,7 +5,13 @@ from . import localization, point_source_centering
 
 
 def featurize(
-    waveforms, maxchans, geom, k=3, relocate_dims="yza", return_recons=False
+    waveforms,
+    maxchans,
+    geom,
+    k=3,
+    relocate_dims="yza",
+    return_recons=False,
+    return_rel=False,
 ):
     xs, ys, z_rels, z_abss, alphas = localization.localize_waveforms(
         waveforms, geom, maxchans, channel_radius=8, geomkind="standard"
@@ -33,6 +39,9 @@ def featurize(
     # standardized loadings
     loadings = np.sqrt(n - 1) * u
     features = np.c_[xs, ys, z_abss, alphas, loadings]
+
+    if return_rel:
+        return features, z_rels
 
     if not return_recons:
         return features
