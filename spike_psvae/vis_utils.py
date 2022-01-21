@@ -971,11 +971,12 @@ def cluster_scatter(
         cov = covs[k]
         vx, vy = cov[0, 0], cov[1, 1]
         rho = cov[0, 1] / np.sqrt(vx * vy)
+
         color = colorcet.glasbey_hv[k % 256]
         ell = Ellipse(
             (0, 0),
             width=2 * np.sqrt(1 + rho),
-            height=2 * np.sqrt(1 - rho),
+            height=2 * np.sqrt(max(0, 1 - rho)),
             facecolor=(0, 0, 0, 0),
             edgecolor=color,
             linewidth=1,

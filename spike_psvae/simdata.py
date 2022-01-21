@@ -51,6 +51,7 @@ def simdata(
     noise_T = noise_segment.shape[0]
     full_C = channel_range[1] - channel_range[0]
     rad_dif = template_channel_radius - output_channel_radius
+    # dz = geom[2, 1] - geom[0, 1]
 
     # -- mean localization features for each cluster
     mean_x = rg.uniform(*xlims, size=n_clusters)
@@ -163,15 +164,19 @@ def simdata(
     )
     maxchans = np.empty(n_clusters * spikes_per_cluster, dtype=int)
     z_abss = np.empty(n_clusters * spikes_per_cluster)
+    out_z_rels = np.empty(n_clusters * spikes_per_cluster)
     for c in trange(n_clusters, desc="Clusters"):
         twf = choice_loc_templates[c]
         tx = txs[c]
         tzr = tz_rels[c]
         tmc = tmaxchans[c]
-        # loc_tmc = twf.ptp(0).argmax()
+        loc_tmc = twf.ptp(0).argmax()
         startchan = cluster_chan_offsets[c]
+        mc0 = startchan + loc_tmc
+        # print(tmc, loc_tmc)
 
         for j in range(spikes_per_cluster):
+            # print(j, "-" * 20)
             # target localizations
             x = xs[j, c]
             y = ys[j, c]
@@ -190,6 +195,8 @@ def simdata(
                 channel_radius=template_channel_radius,
                 geomkind=geomkind,
             )
+            # print("tzr", tzr, "z_rel", z_rel)
+            # print("tx", tx, "x", x)
             shifted_mc = shifted_twf.ptp(0).argmax()
 
             # write to waveform
@@ -212,32 +219,30 @@ def simdata(
             # shifted template max channel
             dmc = shifted_mc
             out_mc = startchan + dmc
+            out_start = out_mc - out_mc % 2 - output_channel_radius
+            out_end = out_mc - out_mc % 2 + output_channel_radius + 2
+            # dmc -= dmc % 2
+            # mcdif = dmc - loc_tmc + loc_tmc % 1
+            # print(startchan + loc_tmc, out_mc, )
 
-            dmc -= dmc % 2  # TODO: for PCA, maybe want to keep it to one side?
-            denoised_wf = full_denoised_wf[
-                :,
-                startchan
-                + rad_dif : startchan
-                + rad_dif
-                + 2 * (output_channel_radius + 1),
-            ]
+            # TODO: for PCA, maybe want to keep it to one side?
+            # dmc -= dmc % 2
+            # print(loc_shifted_templates.shape, out_end - out_start)
 
             # save
             ix = c * spikes_per_cluster + j
             full_shifted_templates[ix] = waveform
-            loc_shifted_templates[ix] = waveform[
-                :,
-                startchan
-                + rad_dif : startchan
-                + rad_dif
-                + 2 * (output_channel_radius + 1),
-            ]
+            loc_shifted_templates[ix] = waveform[:, out_start:out_end]
             full_noised_waveforms[ix] = noised_wf
             full_denoised_waveforms[ix] = full_denoised_wf  # noqa
-            denoised_waveforms[ix] = denoised_wf
+            denoised_waveforms[ix] = full_denoised_wf[:, out_start:out_end]
             cluster_ids[ix] = c
             maxchans[ix] = out_mc
-            z_abss[ix] = geom[out_mc, 1] + z_rel
+            # print("mc0,mc1", mc0, out_mc)
+            z_abss[ix] = geom[mc0, 1] + z_rel
+            out_z_rels[ix] = z_abss[ix] - geom[out_mc, 1]
+            # print("z_abs", z_abss[ix], "z_rel - tzr", z_rel - tzr)
+            # print("out_z_rel", out_z_rels[ix], "z mc0,mc1", geom[mc0, 1], geom[out_mc, 1])
 
     return (
         choice_loc_templates,
@@ -251,7 +256,7 @@ def simdata(
         np.c_[
             xs.ravel(order="F"),
             ys.ravel(order="F"),
-            z_rels.ravel(order="F"),
+            out_z_rels.ravel(order="F"),
             z_abss.ravel(order="F"),
             alphas.ravel(order="F"),
         ],
