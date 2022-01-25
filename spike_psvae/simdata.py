@@ -8,12 +8,84 @@ from .point_source_centering import ptp_fit, shift
 from .waveform_utils import get_local_waveforms, temporal_align
 from .denoise import SingleChanDenoiser
 
-from . import vis_utils
-
 
 def svd_recon(x, rank=1):
     u, s, vh = la.svd(x, full_matrices=False)
     return u[:, :rank] @ np.diag(s[:rank]) @ vh[:rank]
+
+
+def cull_templates(
+    templates, geom, n, rg=None, seed=0, channel_radius=20, geomkind="standard"
+):
+    if rg is None:
+        rg = np.random.default_rng(seed)
+
+    nonzero = np.flatnonzero(templates.ptp(1).ptp(1) > 0)
+    templates = templates[nonzero]
+    loc_templates, tmaxchans, tfirstchans = get_local_waveforms(
+        templates,
+        channel_radius,
+        geom,
+        geomkind=geomkind,
+        compute_firstchans=True,
+    )
+    loc_ptp = loc_templates.ptp(1)
+    txs, tys, tz_rels, tz_abss, talphas = localize_waveforms(
+        loc_templates,
+        geom,
+        maxchans=tmaxchans,
+        channel_radius=channel_radius,
+        geomkind=geomkind,
+        # jac=True,
+    )
+    _, loc_pred_ptp = ptp_fit(
+        templates,
+        geom,
+        tmaxchans,
+        *(txs, tys, tz_rels, talphas),
+        channel_radius=channel_radius,
+        geomkind=geomkind
+    )
+
+    # choose good templates by point source error, SVD error, y, and max ptp
+    point_source_err = np.square(loc_ptp - loc_pred_ptp).mean(axis=1)
+    svd_recons = np.array(
+        [svd_recon(locwf, rank=2) for locwf in loc_templates]
+    )
+    svd_err = np.square(loc_templates - svd_recons).mean(axis=(1, 2))
+    cull = point_source_err < np.percentile(point_source_err, 60)
+    cull &= svd_err < np.percentile(svd_err, 60)
+    cull &= tys > 0.2
+    cull &= loc_ptp.max(1) > np.percentile(loc_ptp.max(1), 30)
+    # remove templates at the edge of the probe
+    cull &= np.isin(
+        loc_ptp.argmax(1),
+        (channel_radius, channel_radius + 1),
+    )
+
+    # choose our templates
+    choice = rg.choice(np.flatnonzero(cull), size=n, replace=False)
+    units = nonzero[choice]
+    print("template units:", units)
+    choice_loc_templates = loc_templates[choice]
+    tmaxchans = tmaxchans[choice]
+    tfirstchans = tfirstchans[choice]
+    txs = txs[choice]
+    tys = tys[choice]
+    tz_rels = tz_rels[choice]
+    talphas = talphas[choice]
+
+    return (
+        units,
+        choice_loc_templates,
+        tmaxchans,
+        tfirstchans,
+        txs,
+        tys,
+        tz_rels,
+        talphas,
+        point_source_err[choice],
+    )
 
 
 @torch.inference_mode()
@@ -23,6 +95,7 @@ def simdata(
     geom,
     noise_segment,
     # generating params
+    centers="simulate",
     alpha_shape=3,
     alpha_scale=65,
     y_shape=4,
@@ -50,14 +123,48 @@ def simdata(
     Nt, T, C = templates.shape
     noise_T = noise_segment.shape[0]
     full_C = channel_range[1] - channel_range[0]
-    rad_dif = template_channel_radius - output_channel_radius
+    # rad_dif = template_channel_radius - output_channel_radius
     # dz = geom[2, 1] - geom[0, 1]
 
+    # -- localize and cull templates
+    (
+        units,
+        choice_loc_templates,
+        tmaxchans,
+        tfirstchans,
+        txs,
+        tys,
+        tz_rels,
+        talphas,
+        pserrs,
+    ) = cull_templates(
+        templates,
+        geom,
+        n_clusters,
+        channel_radius=template_channel_radius,
+        geomkind=geomkind,
+        # rg=rg,
+    )
+
+    # temporal alignment (not subpixel)
+    choice_loc_templates = temporal_align(choice_loc_templates)
+    loc_chans = choice_loc_templates.shape[2]
+
     # -- mean localization features for each cluster
-    mean_x = rg.uniform(*xlims, size=n_clusters)
-    mean_y = rg.gamma(y_shape, y_scale, size=n_clusters)
-    mean_z_rel = rg.normal(scale=z_rel_scale, size=n_clusters)
-    mean_alpha = rg.gamma(alpha_shape, alpha_scale, size=n_clusters)
+    if centers == "original":
+        mean_x = txs
+        mean_y = tys
+        mean_z_rel = tz_rels
+        mean_alpha = talphas
+    elif centers == "simulate":
+        mean_x = rg.uniform(*xlims, size=n_clusters)
+        mean_y = rg.gamma(y_shape, y_scale, size=n_clusters)
+        mean_z_rel = rg.normal(scale=z_rel_scale, size=n_clusters)
+        mean_alpha = rg.gamma(alpha_shape, alpha_scale, size=n_clusters)
+    else:
+        raise ValueError
+
+    # pick random z offsets
     cluster_chan_offsets = rg.integers(
         0,
         full_C - 2 * (template_channel_radius + 1),
@@ -72,62 +179,6 @@ def simdata(
     z_rels = mean_z_rel + rg.normal(scale=z_noise, size=size)
     # scale mixture of gamma
     alphas = rg.gamma(alpha_shape, scale=mean_alpha / alpha_shape, size=size)
-
-    # -- localize and cull templates
-    nonzero = np.flatnonzero(templates.ptp(1).ptp(1) > 0)
-    templates = templates[nonzero]
-    loc_templates, tmaxchans, tfirstchans = get_local_waveforms(
-        templates,
-        template_channel_radius,
-        geom,
-        geomkind=geomkind,
-        compute_firstchans=True,
-    )
-    loc_ptp = loc_templates.ptp(1)
-    txs, tys, tz_rels, tz_abss, talphas = localize_waveforms(
-        loc_templates,
-        geom,
-        maxchans=tmaxchans,
-        channel_radius=template_channel_radius,
-        geomkind=geomkind,
-    )
-    _, loc_pred_ptp = ptp_fit(
-        templates,
-        geom,
-        tmaxchans,
-        *(txs, tys, tz_rels, talphas),
-        channel_radius=template_channel_radius,
-        geomkind=geomkind
-    )
-
-    # choose good templates by point source error, SVD error, y, and max ptp
-    ps_err = np.square(loc_ptp - loc_pred_ptp).mean(axis=1)
-    svd_recons = np.array(
-        [svd_recon(locwf, rank=2) for locwf in loc_templates]
-    )
-    svd_err = np.square(loc_templates - svd_recons).mean(axis=(1, 2))
-    cull = ps_err < np.percentile(ps_err, 60)
-    cull &= svd_err < np.percentile(svd_err, 60)
-    cull &= tys > 0.2
-    cull &= loc_ptp.max(1) > np.percentile(loc_ptp.max(1), 30)
-    # remove templates near the edge of the probe
-    cull &= np.isin(
-        loc_ptp.argmax(1),
-        (template_channel_radius, template_channel_radius + 1),
-    )
-
-    # choose our templates
-    choice = rg.choice(np.flatnonzero(cull), size=n_clusters, replace=False)
-    print("units:", nonzero[choice])
-    choice_loc_templates = loc_templates[choice]
-    tmaxchans = tmaxchans[choice]
-    tfirstchans = tfirstchans[choice]
-    txs = txs[choice]
-    tz_rels = tz_rels[choice]
-
-    # temporal alignment (not subpixel)
-    choice_loc_templates = temporal_align(choice_loc_templates)
-    loc_chans = choice_loc_templates.shape[2]
 
     # -- load denoiser
     denoiser = SingleChanDenoiser()
@@ -260,4 +311,5 @@ def simdata(
             z_abss.ravel(order="F"),
             alphas.ravel(order="F"),
         ],
+        pserrs,
     )

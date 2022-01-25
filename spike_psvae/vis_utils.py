@@ -165,6 +165,7 @@ def vis_ptps(
     colors,
     subplots_kwargs=dict(sharex=True, sharey=True, figsize=(5, 5)),
     codes="abcdefghijklmnopqrstuvwxyz",
+    legloc="upper center",
 ):
     ptps = np.array([np.array(ptp) for ptp in ptps])
     K, N, C = ptps.shape
@@ -181,7 +182,7 @@ def vis_ptps(
         plt.figlegend(
             handles=list(handles.values()) + list(dhandles.values()),
             labels=[label + ", left channels", label + ", right channels"],
-            loc="upper center",
+            loc=legloc,
             frameon=False,
             fancybox=False,
             borderpad=0,
@@ -192,7 +193,7 @@ def vis_ptps(
         plt.figlegend(
             handles=list(handles.values()),
             labels=labels,
-            loc="upper center",
+            loc=legloc,
             frameon=False,
             fancybox=False,
             borderpad=0,
@@ -943,11 +944,22 @@ def cluster_scatter(
     xs,
     ys,
     ids,
+    c=None,
+    do_ellipse=True,
     ax=None,
     n_std=1.0,
     zlim=None,
     alpha=0.05,
 ):
+    cm = np.array(colorcet.glasbey_hv)
+    c_ids = ids
+    if c is not None:
+        cm = np.array(colorcet.bmy)
+        c_ids = c - c.min()
+        c_ids /= c_ids.max() / 255
+        c_ids = c_ids.astype(int)
+        print(c_ids)
+
     ax = ax or plt.gca()
     # scatter and collect gaussian info
     means = {}
@@ -958,9 +970,8 @@ def cluster_scatter(
         yk = ys[where]
         means[k] = xk.mean(), yk.mean()
         covs[k] = np.cov(xk, yk)
-
-        color = colorcet.glasbey_hv[k % 256]
-        ax.scatter(xk, yk, s=1, color=color, alpha=alpha)
+        color = cm[c_ids[where] % 256]
+        ax.scatter(xk, yk, s=1, c=color, alpha=alpha)
 
     xlow = np.inf
     xhigh = -np.inf
@@ -972,23 +983,24 @@ def cluster_scatter(
         vx, vy = cov[0, 0], cov[1, 1]
         rho = cov[0, 1] / np.sqrt(vx * vy)
 
-        color = colorcet.glasbey_hv[k % 256]
-        ell = Ellipse(
-            (0, 0),
-            width=2 * np.sqrt(1 + rho),
-            height=2 * np.sqrt(max(0, 1 - rho)),
-            facecolor=(0, 0, 0, 0),
-            edgecolor=color,
-            linewidth=1,
-        )
-        transform = (
-            transforms.Affine2D()
-            .rotate_deg(45)
-            .scale(n_std * np.sqrt(vx), n_std * np.sqrt(vy))
-            .translate(mean_x, mean_y)
-        )
-        ell.set_transform(transform + ax.transData)
-        ax.add_patch(ell)
+        if do_ellipse and c is None:
+            color = cm[c_ids[np.flatnonzero(ids == k)[0]] % 256]
+            ell = Ellipse(
+                (0, 0),
+                width=2 * np.sqrt(1 + rho),
+                height=2 * np.sqrt(max(0, 1 - rho)),
+                facecolor=(0, 0, 0, 0),
+                edgecolor=color,
+                linewidth=1,
+            )
+            transform = (
+                transforms.Affine2D()
+                .rotate_deg(45)
+                .scale(n_std * np.sqrt(vx), n_std * np.sqrt(vy))
+                .translate(mean_x, mean_y)
+            )
+            ell.set_transform(transform + ax.transData)
+            ax.add_patch(ell)
 
         if zlim is None or zlim[0] < mean_y < zlim[1]:
             xlow = min(xlow, mean_x - (n_std + 0.1) * np.sqrt(vx))

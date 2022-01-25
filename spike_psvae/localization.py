@@ -93,9 +93,11 @@ def localize_ptp(
 
     def residual(loc):
         x, y, z, alpha = loc
-        sq_dxz = np.square(local_geom - np.array(((x, z),)))
-        dists = np.sqrt((y ** 2 + sq_dxz).sum(axis=1))
-        return ptp - alpha / dists
+        return ptp - alpha / np.sqrt(
+            np.square(x - local_geom[:, 0])
+            + np.square(z - local_geom[:, 1])
+            + np.square(y)
+        )
 
     jacobian = "2-point"
     if jac:
@@ -125,6 +127,78 @@ def localize_ptp(
     z_abs = z_rel + z_maxchan
 
     return x, y, z_rel, z_abs, alpha
+
+
+def localize_ptps(
+    ptps,
+    geom,
+    maxchans,
+    channel_radius=10,
+    n_workers=None,
+    jac=False,
+    firstchans=None,
+    geomkind="updown",
+    _not_helper=True,
+):
+    """Localize a bunch of waveforms
+
+    waveforms is N x T x C, where C can be either 2 * channel_radius, or
+    C can be 384 (or geom.shape[0]). If the latter, the 2 * channel_radius
+    bits will be extracted.
+
+    Returns
+    -------
+    xs, ys, z_rels, z_abss, alphas
+    """
+    if _not_helper:
+        N, _, C = check_shapes(
+            ptps[:, None, :],
+            maxchans,
+            channel_radius,
+            geom,
+            firstchans,
+            geomkind,
+        )
+    else:
+        N, C = ptps.shape
+
+    # I have them stored as floats and keep forgetting to int them.
+    maxchans = maxchans.astype(int)
+    if firstchans is None:
+        firstchans = repeat(None)
+
+    # handle pbars
+    xqdm = tqdm if _not_helper else lambda a, total, desc: a
+
+    # -- run the least squares
+    xs = np.empty(N)
+    ys = np.empty(N)
+    z_rels = np.empty(N)
+    z_abss = np.empty(N)
+    alphas = np.empty(N)
+    with Parallel(n_workers) as pool:
+        for n, (x, y, z_rel, z_abs, alpha) in enumerate(
+            pool(
+                delayed(localize_ptp)(
+                    ptp,
+                    maxchan,
+                    geom,
+                    jac=jac,
+                    firstchan=firstchan,
+                    geomkind=geomkind,
+                )
+                for ptp, maxchan, firstchan in xqdm(
+                    zip(ptps, maxchans, firstchans), total=N, desc="lsq"
+                )
+            )
+        ):
+            xs[n] = x
+            ys[n] = y
+            z_rels[n] = z_rel
+            z_abss[n] = z_abs
+            alphas[n] = alpha
+
+    return xs, ys, z_rels, z_abss, alphas
 
 
 def localize_waveforms(
@@ -260,7 +334,6 @@ def localize_waveforms_batched(
             return None
         else:
             return firstchans[start:end]
-    print("hi")
 
     with Parallel(n_workers) as pool:
         for batch_idx, (x, y, z_rel, z_abs, alpha) in enumerate(
