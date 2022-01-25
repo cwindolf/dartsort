@@ -1,0 +1,585 @@
+% this is a XeLaTeX preamble.
+\documentclass[
+  12pt,
+]{article}
+\usepackage{lmodern}
+\usepackage{multicol}
+\usepackage{changepage}
+\usepackage{nicefrac}
+\setlength\columnsep{24pt}
+\usepackage{amssymb,amsmath}
+\usepackage[top=1in,bottom=1in,headheight=15pt]{geometry}
+\setlength{\emergencystretch}{3em} % prevent overfull lines
+\frenchspacing
+% \overfullrule=10pt
+\usepackage{placeins}
+
+
+\usepackage{unicode-math}
+\defaultfontfeatures{Scale=MatchLowercase}
+\defaultfontfeatures[\rmfamily]{Ligatures=TeX,Scale=1}
+
+\usepackage[]{microtype}
+\UseMicrotypeSet[protrusion]{basicmath} % disable protrusion for tt fonts
+
+% -- extra packages
+\usepackage{eucal}
+\usepackage{nicefrac}
+\usepackage{mathtools}
+\usepackage[italicdiff]{physics}
+% \usepackage{minted}
+% \newenvironment{julia}{\VerbatimEnvironment\begin{minted}[breaklines,escapeinside=||,mathescape=true,linenos,numbersep=3pt,gobble=2,fontsize=\footnotesize,framesep=2mm]{julia}}{\end{minted}}
+
+% -- for pandoc-theorem
+\usepackage{amsthm}
+\theoremstyle{plain}
+\newtheorem{theorem}{Theorem}[section]
+
+\theoremstyle{definition}
+\newtheorem{definition}{Definition}[section]
+\newtheorem{proposition}{Proposition}[section]
+\newtheorem{claim}{Claim}[section]
+
+\theoremstyle{remark}
+\newtheorem{lemma}{Lemma}[section]
+\newtheorem{note}{Note}[section]
+\newtheorem{example}{Example}[section]
+\newtheorem{assumption}{Assumption}[section]
+
+% less indentation of subitems
+\usepackage{enumitem}
+\newlist{alphenum}{enumerate}{10}
+\setlist[alphenum]{label=\alph*.}
+\newlist{romenum}{enumerate}{10}
+\setlist[romenum]{label=\roman*.}
+
+\usepackage{fancyhdr}
+\pagestyle{fancy}
+\renewcommand{\headrulewidth}{0pt}
+\lhead{Charlie Windolf}
+\rhead{Spike sorting and registration}
+
+\usepackage{polyglossia}
+ \setmainlanguage[variant=american]{english}
+
+% cases looking weird with this font
+\makeatletter
+\def\env@cases{%
+  \let\@ifnextchar\new@ifnextchar
+  \left\lbrace
+  \def\arraystretch{1.2}%
+  \array{l@{\quad}l@{}}% Formerly @{}l@{\quad}l@{}
+}
+\makeatother
+
+% -- big change! this is the best macro I ever found.
+\def\[#1\]{%
+  \begin{align}#1\end{align}%
+}
+
+% -- shorthands
+\newcommand{\1}[1]{\mathbb{1}_{{#1}}}
+\newcommand{\schol}[1]{{\scriptstyle\color{gray}({#1})}}
+\usepackage{float}
+
+% -- delimeters
+\DeclarePairedDelimiter\ceil{\lceil}{\rceil}
+\DeclarePairedDelimiter\floor{\lfloor}{\rfloor}
+\DeclareMathOperator*{\argmax}{arg\,max}
+\DeclareMathOperator*{\argmin}{arg\,min}
+
+
+% -- symbols
+\newcommand{\ind}{\mathbin{{\perp\!\!\!\perp}}}
+\newcommand{\iid}{\text{iid}}
+\newcommand{\eqd}{\overset{d}{=}}
+\newcommand{\toinp}{\to_P}
+\newcommand{\toas}{\to_{\text{a.s.}}}
+\newcommand{\weakto}{\Rightarrow}
+\newcommand{\upto}{\nearrow}
+\newcommand{\downto}{\searrow}
+\let\nil\varnothing
+\AtBeginDocument{
+  % to do this after unicode-math has done its work
+  \renewcommand{\setminus}{\mathbin{\backslash}}%
+}
+
+% -- bbs and cals
+\newcommand{\todo}[1][]{\begin{center}\par\medskip\par{\Huge\bf TODO}\par\medskip\par\textit{{#1}}\par\medskip\par\end{center}}
+\newcommand{\TODO}{\todo}
+\newcommand{\bbR}{{\mathbb{R}}}
+\newcommand{\bbP}{{\mathbb{P}}}
+\newcommand{\bbQ}{{\mathbb{Q}}}
+\newcommand{\bbZ}{{\mathbb{Z}}}
+\newcommand{\bbN}{{\mathbb{N}}}
+\newcommand{\calA}{{\mathcal{A}}}
+\newcommand{\calB}{{\mathcal{B}}}
+\newcommand{\calC}{{\mathcal{C}}}
+\newcommand{\calF}{{\mathcal{F}}}
+\newcommand{\calG}{{\mathcal{G}}}
+\newcommand{\calL}{{\mathcal{L}}}
+\newcommand{\calM}{{\mathcal{M}}}
+\newcommand{\calP}{{\mathcal{P}}}
+\newcommand{\calS}{{\mathcal{S}}}
+\newcommand{\calT}{{\mathcal{T}}}
+\newcommand{\calX}{{\mathcal{X}}}
+\newcommand{\calY}{{\mathcal{Y}}}
+\newcommand{\eps}{\epsilon}
+\newcommand{\Xbar}{\widebar{X}}
+\newcommand{\Ybar}{\widebar{Y}}
+\newcommand{\xbar}{\widebar{x}}
+
+% -- distributions
+\let\dist\thicksim
+\newcommand{\distiid}{\thicksim_{\text{iid}}}
+\DeclareMathOperator{\Bin}{Binomial}
+\DeclareMathOperator{\Exp}{Exponential}
+\DeclareMathOperator{\Po}{Poisson}
+\DeclareMathOperator{\Ber}{Bernoulli}
+\DeclareMathOperator{\Unif}{Uniform}
+
+% -- common operators
+\renewcommand{\var}{\operatorname{var}}
+\newcommand{\cov}{\operatorname{cov}}
+\newcommand{\E}{E\qty}
+\renewcommand{\P}{P\qty}
+\newcommand{\cbrt}[1]{\sqrt[3]{#1}}
+\newcommand{\sumin}{\sum_{i=1}^n}
+\newcommand{\sumjn}{\sum_{j=1}^n}
+\newcommand{\sumkn}{\sum_{k=1}^n}
+
+% -- applied
+\newcommand{\JS}{{\mathrm{JS}}}
+\newcommand{\MSE}{{\mathrm{MSE}}}
+\newcommand{\dkl}{{D_{\mathrm{KL}}}}
+\newcommand{\MSR}{{\mathrm{MSR}}}
+\newcommand{\SSE}{{\mathrm{SSE}}}
+\newcommand{\SSR}{{\mathrm{SSR}}}
+% \def\mid{\,\middle\vert\,}
+\newcommand{\bb}{\mathbf{b}}
+\newcommand{\bc}{\mathbf{c}}
+\newcommand{\bg}{\mathbf{g}}
+\newcommand{\bq}{\mathbf{q}}
+\newcommand{\bp}{\mathbf{p}}
+\newcommand{\bu}{\mathbf{u}}
+\newcommand{\bX}{\mathbf{X}}
+\newcommand{\bx}{\mathbf{x}}
+\newcommand{\by}{\mathbf{y}}
+\newcommand{\tbX}{\tilde{\mathbf{X}}}
+\newcommand{\bY}{\mathbf{Y}}
+\newcommand{\bH}{\mathbf{H}}
+\newcommand{\bW}{\mathbf{W}}
+\newcommand{\tbH}{\tilde{\mathbf{H}}}
+\newcommand{\hb}{\hat{\beta}}
+
+\makeatletter
+\newcommand*{\toccontents}{\@starttoc{toc}}
+\makeatother
+
+\newcommand{\GP}{GP}
+
+\usepackage{titling}
+\setlength{\droptitle}{-6em} 
+\usepackage{hyperref}
+\usepackage{cleveref}
+
+\begin{document}
+
+\author{Charlie Windolf}
+\title{Towards a drift- and localization-invariant featurization for spike clustering}
+\maketitle
+
+\begin{abstract}
+Using the point-source model recently propsed by Boussard et. al. \cite{boussard}, we propose a simple means of preprocessing spike waveforms which may enable downstream featurization and clustering steps both to be more robust to drift and to better make use of the localization and brightness information inferred by that point source model. Briefly, a spike's waveform is adjusted such that it appears to have arrived from a neuron in a stereotypical location relative to the spike's maximum channel, in order to remove the effect of the spike's true localization from the waveform, and to make the waveform robust to perturbations in its relative $z$ position. We study the effect of this preprocessing on PCA featurization and clustering.
+\end{abstract}
+
+\vspace{1em}
+
+\section{Introduction}
+
+Featurization and clustering of spike data collected from multi-electrode array recordings \cite{Jun2017,Steinmetz2021} are central steps in the process of spike sorting. These featurizations have included characteristics of spikes (e.g., peak-to-peak amplitude and width), wavelet features, or most commonly principal components of spike waveforms, and clustering methods have varied from hand-tracing clusters in feature space to Gaussian mixture models and density- or graph-based clustering methods \cite{quiroga}. This diversity is maintained in the current generation of spike sorters: YASS \cite{yass} uses a ``divide-and-cluster'' approach, recursively determining principal components features and fitting Dirichlet process Gaussian mixture models; Kilosort \cite{kilosort}, on the other hand, integrates the clustering into its template matching deconvolution step using templates extracted by means of an SVD model of spike waveforms.
+
+A persistent issue in spike sorting is drift: this could imply either physical motion of the probe, or nonstationarity in the properties of the waveforms emitted by a single neuron over time. These processes can cause both false merges and false splits in the spike sorting process. Varol et. al. \cite{icassp} proposed a method for addressing gross motion of the multi-electrode array, especially along its longer axis, was proposed. This decentralized registration method can capture large scale motion with timescales in the seconds, but it cannot entirely describe the fine sub-channel motion present in each spike. Further, that method does not model motion orthogonal to the array plane or changes in the characteristic voltage of a neuron's spike activity.
+
+In a recent work, Boussard et. al. \cite{boussard} propose to determine the location of the neuron which emitted a spike by modeling that neuron as a point source. This method is able to localize the spike both horizontally ($x$) and on the long axis ($z$) of the array and also to estimate its distance $y$ from the array plane and the source brightness $\alpha$. Inspection of this model leads to a simple means of ``relocating'' or ``point-source standardizing'' a spike waveform on $C$ channels, such that (according to the point-source model) the spike appears to have been emitted at a stereotypical location.
+
+We propose to incorporate this relocation step as a preprocessing before using PCA for spike featurization. This paper is organized to communicate the effectiveness of this preprocessing and featurization for clustering on two example datasets. First, data and methods will be described in detail, followed by discussion; however, this paper has been constructed as a means of conveying its appendix, which contains a series of full-page visualizations breaking down various implications of the point-source standardization. The main text will consistently reference relevant figures in the appendix.
+
+
+\section{Data}
+
+Two datasets, a Neuropixels 1 and a Neuropixels 2 dataset, both in mouse, were used to conduct these tests. The NP2 dataset was divided into three anatomical regions (cortex, hippocampus, and thalamus); see Fig.~\ref{fig:anat} for rasters, mean projections, and anatomical divisions in both datasets.
+
+For baseline comparisons, spike trains and templates were extracted for the NP1 dataset with YASS, and for the NP2 dataset with Kilosort. Spike waveforms were extraced according to these spike trains so that they correspond to YASS/Kilosort labels. To extract a waveform, first 121 samples were read on 34 channels centered around the spike's template's maximum channel. This 34 channel waveform was denoised channelwise by a neural network denoiser. After denoising, an 18 channel neighborhood was extracted around the resulting max channel, such that the channel with maximum $z$ lies on one of the two vertically centered channels; see Fig.~\ref{fig:geom}.
+
+\section{Methods}
+
+\subsection{Point source localization}
+
+Given a $T\times C$ waveform $\bW$, where each channel $c$ has an associated coordinate $\bg\in\bbR^3$, we can compute the waveform's peak-to-peak amplitude vector $\bp\in\bbR^C$ by \[
+\bp_c=\max_t W_{tc} - \min_t W_{tc}.
+\]
+Now, the point source model predicts that a neuron at location $(x,y,z)$ with brightness $\alpha$ would emit a peak-to-peak amplitude
+\[
+\hat{\bp}_c(x,y,z,\alpha)=\frac{\alpha}{\norm{\bg_c - (x,y,z)}_2}.
+\]
+To ``localize'' a spike, Boussard et. al. \cite{boussard} solve the least squares problem \[
+(\hat{x},\hat{y},\hat{z},\hat{\alpha})=\min_{x,y,z,\alpha}\norm{\bp - \hat{\bp}}_2^2.
+\]
+This leads to the predicted PTP $\hat{\bp}=\hat{\bp}(\hat{x},\hat{y},\hat{z},\hat{\alpha})$.
+
+\subsection{Point source triaging}
+
+Note that the error in the least squares problem above can be used as a proxy for collision detection: collided spikes tend to have peak-to-peak amplitudes that diverge from the unimodal shape implied by the point source model. Neurons close to the probe or with geometries that break the point-source assumption could be falsely triaged by this method, though, so care must be taken. This triaging method was used to remove the worst-modeled 10\% of spikes before clustering by ISO-SPLIT below.
+
+\subsection{Point source relocation}
+
+Since the $z$ coordinate is localized in a sub-channel manner by the point source model, and since the point source model determines parameters of interest for clustering $x,y,\alpha$, one clustering strategy would be to learn additional features which do not share information with these localiztion features. The point source model suggests a method for doing so.
+
+Indeed, consider the peak-to-peak amplitude vector $\bq$ of a unit in a stereotyped location $(x_0,y_0,z_0)$ relative to the local geometry on which a given spike waveform $\bW$ with PTP $\bp$ was extracted, and with a typical brightness $\alpha_0$. Let \[
+\bW'_{tc}=\bW_{tc}\frac{\bq_c}{\bp_c}
+\]
+be the ``relocated'' waveform. Under the point source model and in the absence of noise, $\bW'$ is a spike with the same characteristics as $\bW$ apart from its point source parameters. Now, if this relocation operation were applied to all spikes in a dataset, in principle the variation of these spikes due to neuron location and brightness would be explained away, leaving only other sources of variance behind for downstream featurization and clustering, as desired. 
+
+Note, we can apply this relocation operation to all of the localization parameters, or by picking $z_0=\hat{z}$ we can choose for instance not to relocate the spike's $z$ position. In practice, we do want to relocate $z$, since this will help with the drift along the probe's long axis, but we may not want to relocate $x$, since sources to the side of the probe will have very weak signals on the other side. Relocating $x$ to a central location would then magnify that noisy signal. So, below, we will consider two different relocation strategies: either relocating all point source parameters ($xyz\alpha$) or skipping $x$ ($yz\alpha$).
+
+\subsection{PCA and clustering}
+
+PCA was fit to all spikes (after removing some spikes which were poorly localized with $y\approx0$) incrementally in each region. Then, after point source triaging, the remaining spikes in each region were clustered with ISO-SPLIT, the nonparametric clustering method from MountainSort \cite{mountainsort}.
+
+
+\section{Discussion of figures}
+
+Since most visualizations are full-page, all of them have been moved to the appendix. Here, we will present some summary and discussion of those figures; details on what the figures actually show is contained in their captions below.
+
+\subsection{Relocation and PCA}
+
+The effect of the three different relocation strategies (no relocation, $yz\alpha$, $xyz\alpha$) on randomly chosen waveforms' peak-to-peak amplitudes is shown in Fig.~\ref{fig:ptps} for each of the four datasets. Looking at those figures, it is not apparent that the $xyz\alpha$ method is adding noise, but Fig.~\ref{fig:pcaerr} shows clearly that the $yz\alpha$-relocated spikes are better modeled by PCA than the $xyz\alpha$-relocated spikes. Both methods improve the PCA error, indicating that they are removing a substantial source of variation to a greater extent than any penalty paid by amplifying noise. The first few resulting principal components are displayed in Fig.~\ref{fig:pcims}.
+
+\subsection{Correlation of PC loadings with drift and localization}
+
+Figs.~\cref{fig:traces,fig:pairs,figs:strips} get at the question of whether relocation increases invariance to drift and localization from different perspectives. The results are very inconclusive, and certainly we can see some cases where there is clearly a direct relation between a PC loading and the drift: for instance, in the NP2 Cortex page of Fig.~\ref{fig:traces}, units 23 and 11 both show clear covariation with the estimated displacement in both $yz\alpha$ and $xyz\alpha$ relocated PC loadings, possibly to a greater extent than with no relocation. However, unit 64 on the same page shows less covariation after relocation. Similar stories from both angles can be observed in the other pages of Fig.~\ref{fig:traces}.
+
+Fig.~\ref{fig:pairs} shows scatter plots of PC loadings versus localization features of interest, including the absolute estimated displacement, and it shows some nonparametric correlation coefficients to summarize each scatter plot. As in Fig.~\ref{fig:traces}, we see cases where structure appears after relocation and correlation coefficients increase, and we also see the reverse.
+
+Fig.~\ref{fig:strips} is meant to cleanly capture this information by showing the distribution of the correlation coefficients in Fig.~\ref{fig:pairs} before and after relocation. If relocation were doing its job, these distributions should concentrate around 0 after relocation. This is clearly not the case, and it would be hard to argue that there is a significant difference made in these plots by the relocation.
+
+\subsection{Clustering}
+
+First, we show the YASS/Kilosort clusters for some selected units in the feature spaces before and after relocation in Fig.~\ref{fig:sorted}. It would seem that there is some evidence in these plots that cluster shapes become slightly more uniform after relocation, with some very elongated clusters in the PCA space being flattened out (maybe due to the relocation in $y$ or $\alpha$ for close or bright units).
+
+In Fig.~\ref{fig:isosplit}, the result of ISO-SPLIT on triaged spikes is displayed. This clustering method is not working well yet, and clearly more care needs to be taken. However, within each dataset, it may have some use as a relative measure. Also shown are the number of clusters found and the adjusted rand index between the ISO-SPLIT clustering and the YASS/Kilosort clusters, both of which can also be useful relative measures. Again, here, the story is mixed: in some cases relocation increases the number of units detected and the RAND score, and in some cases it does not.
+
+
+\section{Conclusions and future work}
+
+Clearly these experiments have been inconclusive. In the creation of this writeup, some immediate limitations became clear that should be addressed:
+\begin{itemize}
+\item Spikes localized with $y\approx0$ are still present, and it is unclear how they affect the analysis or what their cause is.
+\item The single-channel denoiser may be leading to poor collision removal and localization; this analysis will be run with a multi-channel denoiser when possible.
+\item The clustering at present is very bad, except maybe in hippocampus. Some divide and conquer strategy should be used to make the analysis more meaningful.
+\item It's not clear whether the YASS/Kilosort units are very meaningful. Very nice units should be hand-selected for the analyses e.g. in Fig.~\ref{fig:traces} rather than the automatic selection done currently.
+\end{itemize}
+
+Also, it would be great to investigate nonlinear features, and to compare the relocation strategy with something like PS-VAE. The infrastructure for both of these ideas is present, so this is another next step.
+
+\bibliographystyle{ieeetr}
+\bibliography{pcapaper}
+
+\appendix
+\pagenumbering{gobble}
+
+\pagebreak
+
+\section{Figures: Probe geometry and data summaries}
+
+\begin{figure}[hbtp]
+\begin{center}
+\includegraphics[clip]{../figs/geometry.pdf}
+\end{center}
+\caption{Local geometry}
+\label{fig:geom}
+\end{figure}
+
+\begin{figure}
+\begin{center}
+\includegraphics[trim={0cm 0cm 0cm 0cm}, clip, scale=0.9]{../figs/np1_regions.pdf}
+
+\vspace{-10pt}
+
+\includegraphics[trim={0cm 1cm 0cm 0cm}, clip, scale=0.9]{../figs/np2_regions.pdf}
+\end{center}
+\caption{Rasters, histograms of registered depths, and mean projections for NP1 and NP2 data. The division of NP2 data into anatomical regions is shown.}
+\label{fig:anat}
+\end{figure}
+
+\FloatBarrier
+\newpage
+
+\section{Figures: Basics of relocation and PCA}
+
+\begin{figure}[H]
+\begin{adjustwidth*}{-1.6in}{-1.6in}
+\begin{center}
+
+\includegraphics[width=4in, trim={1cm 0 1cm 0}, clip]{../figs/ctx_ptpreloc.pdf}
+\includegraphics[width=4in, trim={1cm 0 1.5cm 0}, clip]{../figs/hc_ptpreloc.pdf}
+
+\bigskip
+
+
+\includegraphics[width=4in, trim={1cm 0 1cm 0}, clip]{../figs/th_ptpreloc.pdf}
+\includegraphics[width=4in, trim={1cm 0 1.5cm 0}, clip]{../figs/np1_ptpreloc.pdf}
+\end{center}
+\end{adjustwidth*}
+\caption{Peak-to-peak traces for 8 randomly chosen waveforms in each region, shown together with $yz\alpha$ and $xyz\alpha$ relocated versions, as well as the predicted and target PTPs. Dashed and solid lines in the same color depict the same waveform's peak-to-peak trace on the left and right 9 channels of the 18 channel neighborhoods from Fig.~\ref{fig:geom}.}
+\label{fig:ptps}
+\end{figure}
+
+
+\begin{figure}
+\begin{center}
+\includegraphics{../figs/pcaerr.pdf}
+\caption{Unexplained variance of PCA models (per channel and per sample) as a function of the number of components over the four regions. The error traces for relocated data are offset by the number of features used for relocation (4 for $xyz\alpha$, 3 for $yz\alpha$). PCA errors were estimated on 50,000 randomly chosen spike waveforms from each region, enough for negligible variance.}
+\label{fig:pcaerr}
+\end{center}
+\end{figure}
+
+\begin{figure}
+\begin{center}
+\includegraphics[scale=1.25]{../figs/pcims.pdf}
+\caption{Heatmap visualizations of regions of interest of the top 5 principal components in each region and for each relocation strategy (none, $yz\alpha$, $xyz\alpha$).}
+\label{fig:pcaims}
+\end{center}
+\end{figure}
+
+\FloatBarrier
+\newpage
+\section{Figures: Correlations of loadings with localization and drift}
+
+\begin{figure}[H]
+\caption{The following four pages show the relationship between PCA loadings and estimated displacement. Each page shows four YASS/Kilosort units in a brain region (cortex, hippocampus, thalamus, NP1).
+\\
+The units were chosen from the set of units whose YASS/Kilosort template's PTP was well-modeled by the point source model (lower-than-median point-source MSE), and the units were selected by order of minimum firing rate across all 5 second intervals. This criterion excluded units which gradually appear due to drift over long timescales, or which appear and disappear frequently due to the zig zag drift in the NP2 data.
+\\
+In each of the panels, scatter plots of the top 4 principal components' standardized loadings are shown against time. Since these scatter plots are impossible to inspect (even with colors), a trend line of the mean loading per time bin followed by a median filter is shown to give an idea of the central tendency. The scatter plot dots are not so useful but are left in to give a sense of the spread.}
+\label{fig:traces}
+\end{figure}
+
+
+\begin{figure}[hbtp]
+\begin{adjustwidth*}{-1.6in}{-1.6in}
+\begin{center}
+\includegraphics[width=4in,clip]{../figs/ctx_ldisp_0.png}
+\includegraphics[width=4in,clip]{../figs/ctx_ldisp_1.png}
+
+\includegraphics[width=4in,clip]{../figs/ctx_ldisp_2.png}
+\includegraphics[width=4in,clip]{../figs/ctx_ldisp_3.png}
+\end{center}
+\end{adjustwidth*}
+\end{figure}
+
+\begin{figure}[hbtp]
+\begin{adjustwidth*}{-1.6in}{-1.6in}
+\begin{center}
+\includegraphics[width=4in,clip]{../figs/hc_ldisp_0.png}
+\includegraphics[width=4in,clip]{../figs/hc_ldisp_1.png}
+
+\includegraphics[width=4in,clip]{../figs/hc_ldisp_2.png}
+\includegraphics[width=4in,clip]{../figs/hc_ldisp_3.png}
+\end{center}
+\end{adjustwidth*}
+\end{figure}
+
+\begin{figure}[hbtp]
+\begin{adjustwidth*}{-1.6in}{-1.6in}
+\begin{center}
+\includegraphics[width=4in,clip]{../figs/th_ldisp_0.png}
+\includegraphics[width=4in,clip]{../figs/th_ldisp_1.png}
+
+\includegraphics[width=4in,clip]{../figs/th_ldisp_2.png}
+\includegraphics[width=4in,clip]{../figs/th_ldisp_3.png}
+\end{center}
+\end{adjustwidth*}
+\end{figure}
+
+\begin{figure}[hbtp]
+\begin{adjustwidth*}{-1.6in}{-1.6in}
+\begin{center}
+\includegraphics[width=4in,clip]{../figs/np1_ldisp_0.png}
+\includegraphics[width=4in,clip]{../figs/np1_ldisp_1.png}
+
+\includegraphics[width=4in,clip]{../figs/np1_ldisp_2.png}
+\includegraphics[width=4in,clip]{../figs/np1_ldisp_3.png}
+\end{center}
+\end{adjustwidth*}
+\end{figure}
+
+\FloatBarrier
+
+\begin{figure}
+\caption{The next four pages give another view into the relation between the PC loadings, the drift, $y$, and $\alpha$. Each page corresponds to a dataset and has two columns, each of which describes a unit. The three rows are for the three relocations (none, $yz\alpha$, $xyz\alpha$). Each figure shows scatter plots of PC loadings vs. displacement, $y$, and $\alpha$, and shows the Spearman's $r$ and generalized correlation score for the plotted data. Units were selected as in Fig.~\ref{fig:traces}.}
+\label{fig:pairs}
+\end{figure}
+
+
+\begin{figure}[hbtp]
+\begin{adjustwidth*}{-1.6in}{-1.6in}
+\begin{center}
+\includegraphics[width=3.5in,clip]{../figs/ctx_pair_orig_0.pdf}
+\includegraphics[width=3.5in,clip]{../figs/ctx_pair_orig_1.pdf}
+
+\medskip
+
+\includegraphics[width=3.5in,clip]{../figs/ctx_pair_yza_0.pdf}
+\includegraphics[width=3.5in,clip]{../figs/ctx_pair_yza_1.pdf}
+
+\medskip
+
+\includegraphics[width=3.5in,clip]{../figs/ctx_pair_xyza_0.pdf}
+\includegraphics[width=3.5in,clip]{../figs/ctx_pair_xyza_1.pdf}
+\end{center}
+\end{adjustwidth*}
+\end{figure}
+
+\begin{figure}[hbtp]
+\begin{adjustwidth*}{-1.6in}{-1.6in}
+\begin{center}
+\includegraphics[width=3.5in,clip]{../figs/hc_pair_orig_0.pdf}
+\includegraphics[width=3.5in,clip]{../figs/hc_pair_orig_1.pdf}
+
+\medskip
+
+\includegraphics[width=3.5in,clip]{../figs/hc_pair_yza_0.pdf}
+\includegraphics[width=3.5in,clip]{../figs/hc_pair_yza_1.pdf}
+
+\medskip
+
+\includegraphics[width=3.5in,clip]{../figs/hc_pair_xyza_0.pdf}
+\includegraphics[width=3.5in,clip]{../figs/hc_pair_xyza_1.pdf}
+\end{center}
+\end{adjustwidth*}
+\end{figure}
+
+\begin{figure}[hbtp]
+\begin{adjustwidth*}{-1.6in}{-1.6in}
+\begin{center}
+\includegraphics[width=3.5in,clip]{../figs/th_pair_orig_0.pdf}
+\includegraphics[width=3.5in,clip]{../figs/th_pair_orig_1.pdf}
+
+\medskip
+
+\includegraphics[width=3.5in,clip]{../figs/th_pair_yza_0.pdf}
+\includegraphics[width=3.5in,clip]{../figs/th_pair_yza_1.pdf}
+
+\medskip
+
+\includegraphics[width=3.5in,clip]{../figs/th_pair_xyza_0.pdf}
+\includegraphics[width=3.5in,clip]{../figs/th_pair_xyza_1.pdf}
+\end{center}
+\end{adjustwidth*}
+\end{figure}
+
+\begin{figure}[hbtp]
+\begin{adjustwidth*}{-1.6in}{-1.6in}
+\begin{center}
+\includegraphics[width=3.5in,clip]{../figs/np1_pair_orig_0.pdf}
+\includegraphics[width=3.5in,clip]{../figs/np1_pair_orig_1.pdf}
+
+\medskip
+
+\includegraphics[width=3.5in,clip]{../figs/np1_pair_yza_0.pdf}
+\includegraphics[width=3.5in,clip]{../figs/np1_pair_yza_1.pdf}
+
+\medskip
+
+\includegraphics[width=3.5in,clip]{../figs/np1_pair_xyza_0.pdf}
+\includegraphics[width=3.5in,clip]{../figs/np1_pair_xyza_1.pdf}
+\end{center}
+\end{adjustwidth*}
+\end{figure}
+
+\FloatBarrier
+
+\begin{figure}[hbtp]
+\begin{adjustwidth*}{-1.6in}{-1.6in}
+\begin{center}
+\includegraphics[width=4in,clip]{../figs/ctx_box.pdf}
+\includegraphics[width=4in,clip]{../figs/hc_box.pdf}
+
+\includegraphics[width=4in,clip]{../figs/th_box.pdf}
+\includegraphics[width=4in,clip]{../figs/np1_box.pdf}
+\end{center}
+\end{adjustwidth*}
+\caption{Strip plots of correlation coefficients of PC loadings with estimated displacement, before and after relocation. Each dot shows the correlation coefficient of PC loading with drift for a given YASS/Kilosort unit, chosen from a set of units which are well-modeled by the point source model and which fired at least 1000 times during the recording. If relocation were increasing robustness to drift, the relocated strip plots should be tighter than the original plots.}
+\label{fig:strips}
+\end{figure}
+
+\FloatBarrier
+\pagebreak
+\section{Figures: Cluster visualizations}
+
+\begin{figure}[H]
+\caption{The next four pages visualize the YASS/Kilosort clusters in the PCA spaces before and after relocation. In each plot, the vertical axis is $z$. The top row has $x,y,\alpha$ on the horizontal axes; the next three rows of plots show the top 3 PCs' loadings for each relocation strategy (none, $yz\alpha$, $xyz\alpha$). For easier visualization, only the top 50 units by spike count are shown.}
+\label{fig:sorted}
+\end{figure}
+
+\begin{figure}[hbtp]
+\vspace{-0.75in}
+\begin{adjustwidth*}{-2in}{-2in}\begin{center}
+\includegraphics[width=8in]{../figs/ctx_sorted.png}
+\end{center}\end{adjustwidth*}
+\end{figure}
+\begin{figure}[hbtp]
+\vspace{-0.75in}
+\begin{adjustwidth*}{-2in}{-2in}\begin{center}
+\includegraphics[width=8in]{../figs/th_sorted.png}
+\end{center}\end{adjustwidth*}
+\end{figure}
+\begin{figure}[hbtp]
+\vspace{-0.75in}
+\begin{adjustwidth*}{-2in}{-2in}\begin{center}
+\includegraphics[width=8in]{../figs/hc_sorted.png}
+\end{center}\end{adjustwidth*}
+\end{figure}
+\begin{figure}[hbtp]
+\vspace{-0.75in}
+\begin{adjustwidth*}{-2in}{-2in}\begin{center}
+\includegraphics[width=8in]{../figs/np1_sorted.png}
+\end{center}\end{adjustwidth*}
+\end{figure}
+
+\FloatBarrier
+\pagebreak
+
+\begin{figure}[H]
+\caption{The next four pages show the effect of relocation on a very naive ISO-SPLIT clustering. Data were triaged by throwing away the 10\% of spikes with worst point-source fit before clustering. Each clustering displays its adjusted rand index (ARI) to the clusters inferred by YASS/Kilosort.}
+\label{fig:isosplit}
+\end{figure}
+
+\begin{figure}[hbtp]
+\vspace{-0.75in}
+\begin{adjustwidth*}{-2in}{-2in}\begin{center}
+\includegraphics[width=8in]{../figs/ctx_relocclust.png}
+\end{center}\end{adjustwidth*}
+\end{figure}
+\begin{figure}[hbtp]
+\vspace{-0.75in}
+\begin{adjustwidth*}{-2in}{-2in}\begin{center}
+\includegraphics[width=8in]{../figs/th_relocclust.png}
+\end{center}\end{adjustwidth*}
+\end{figure}
+\begin{figure}[hbtp]
+\vspace{-0.75in}
+\begin{adjustwidth*}{-2in}{-2in}\begin{center}
+\includegraphics[width=8in]{../figs/hc_relocclust.png}
+\end{center}\end{adjustwidth*}
+\end{figure}
+\begin{figure}[hbtp]
+\vspace{-0.75in}
+\begin{adjustwidth*}{-2in}{-2in}\begin{center}
+\includegraphics[width=8in]{../figs/np1_relocclust.png}
+\end{center}\end{adjustwidth*}
+\end{figure}
+
+\end{document}

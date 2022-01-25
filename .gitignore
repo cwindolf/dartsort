@@ -7,6 +7,32 @@ data/*.npy
 data/spt*
 logs/*.log
 **/*.c
+notebook/.stan/*
+figs/*
+
+## Core latex/pdflatex auxiliary files:
+*.aux
+*.lof
+*.log
+*.lot
+*.fls
+*.out
+*.toc
+*.fmt
+*.fot
+*.cb
+*.cb2
+.*.lb
+
+## Bibliography auxiliary files (bibtex/biblatex/biber):
+*.bbl
+*.bcf
+*.blg
+*-blx.aux
+*-blx.bib
+*.run.xml
+
+*.pdf
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
