@@ -6,6 +6,7 @@ data/*.h5
 data/*.npy
 data/spt*
 logs/*.log
+**/*.c
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
