@@ -2,6 +2,32 @@ import numpy as np
 from scipy import sparse
 
 from . import localization, point_source_centering
+from . import up_down
+
+
+def isotonic_ptp(ptps, central=False):
+    if central:
+        return np.array(
+            [
+                np.c_[
+                    up_down.central_up_down_isotonic_regression(ptp[::2]),
+                    up_down.central_up_down_isotonic_regression(ptp[1::2]),
+                ].ravel()
+                for ptp in ptps
+            ],
+            dtype=ptps.dtype
+        )
+    else:
+        return np.array(
+            [
+                np.c_[
+                    up_down.up_down_isotonic_regression(ptp[::2]),
+                    up_down.up_down_isotonic_regression(ptp[1::2]),
+                ].ravel()
+                for ptp in ptps
+            ],
+            dtype=ptps.dtype
+        )
 
 
 def featurize(
@@ -9,12 +35,19 @@ def featurize(
     maxchans,
     geom,
     k=3,
+    iso_ptp=False,
     relocate_dims="yza",
     return_recons=False,
     return_rel=False,
 ):
-    xs, ys, z_rels, z_abss, alphas = localization.localize_waveforms(
-        waveforms, geom, maxchans, channel_radius=8, geomkind="standard"
+    ptps = waveforms.ptp(1)
+
+    if iso_ptp:
+        print("iso!")
+        ptps = isotonic_ptp(ptps, central=False)
+
+    xs, ys, z_rels, z_abss, alphas = localization.localize_ptps(
+        ptps, geom, maxchans, channel_radius=8, geomkind="standard"
     )
     relocs, q, p = point_source_centering.relocate_simple(
         waveforms,

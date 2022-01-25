@@ -8,6 +8,7 @@ TODO: Not sure how much of this code assumes NP2 geom specific stuff.
 """
 # from scipy import ndimage
 import torch
+import numpy as np
 
 from .waveform_utils import get_local_geom
 from .torch_utils import translate
@@ -16,7 +17,7 @@ from .localization import localize_ptp
 
 def point_source_ptp(local_geom, x, y, z, alpha):
     # figure out geometry
-    local_geom = torch.as_tensor(local_geom)
+    local_geom = torch.as_tensor(np.array(local_geom))
     B, C, _ = local_geom.shape
     xz = torch.stack(
         [torch.as_tensor(x), torch.broadcast_to(torch.as_tensor(z), x.shape)],
@@ -24,10 +25,8 @@ def point_source_ptp(local_geom, x, y, z, alpha):
     )
     geom_rel = local_geom - xz.view(-1, 1, 2)
     dists = torch.sqrt(
-        torch.sum(
-            torch.as_tensor(y * y).view(-1, 1, 1) + torch.square(geom_rel),
-            dim=2,
-        )
+        torch.as_tensor(y * y).view(-1, 1)
+        + torch.square(geom_rel).sum(dim=2),
     )
     ptp = torch.squeeze(torch.as_tensor(alpha).view(-1, 1) / dists)
     return ptp
@@ -113,8 +112,9 @@ def shift(
         y1 = y0
     if alpha1 is None:
         alpha1 = alpha0
+    ptp0 = point_source_ptp([local_geom], x0, y0, z_rel0, alpha0)
     qtq = point_source_ptp([local_geom], x1, y1, z1, alpha1)
-    shifted = waveform * (qtq.numpy() / ptp)[None, :]
+    shifted = waveform * (qtq.numpy() / ptp0.numpy())[None, :]
     return shifted, qtq
 
 
