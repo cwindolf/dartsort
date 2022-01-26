@@ -71,9 +71,15 @@ def localize_ptp(
 ):
     """Find the localization result for a single ptp vector
 
+    Arguments
+    ---------
     ptp : np.array (2 * channel_radius,)
     maxchan : int
     geom : np.array (total_channels, 2)
+
+    Returns
+    -------
+    x, y, z_rel, z_abs, alpha
     """
     channel_radius = ptp.shape[0] // 2 - ("standard" in geomkind)
     # local_geom is 2*channel_radius, 2
