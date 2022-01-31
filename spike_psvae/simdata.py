@@ -15,7 +15,17 @@ def svd_recon(x, rank=1):
 
 
 def cull_templates(
-    templates, geom, n, rg=None, seed=0, channel_radius=20, geomkind="standard"
+    templates,
+    geom,
+    n,
+    y_min=0.2,
+    rg=None,
+    seed=0,
+    channel_radius=20,
+    geomkind="standard",
+    pserr_pctile=50,
+    svderr_pctile=50,
+    ptp_pctile=0,
 ):
     if rg is None:
         rg = np.random.default_rng(seed)
@@ -53,10 +63,14 @@ def cull_templates(
         [svd_recon(locwf, rank=2) for locwf in loc_templates]
     )
     svd_err = np.square(loc_templates - svd_recons).mean(axis=(1, 2))
-    cull = point_source_err < np.percentile(point_source_err, 60)
-    cull &= svd_err < np.percentile(svd_err, 60)
-    cull &= tys > 0.2
-    cull &= loc_ptp.max(1) > np.percentile(loc_ptp.max(1), 30)
+    cull = point_source_err < np.percentile(point_source_err, pserr_pctile)
+    cull &= svd_err < np.percentile(svd_err, svderr_pctile)
+    if y_min > 0:
+        cull &= tys > y_min
+    elif y_min < 0:
+        cull &= tys < -y_min
+    if ptp_pctile > 0:
+        cull &= loc_ptp.max(1) > np.percentile(loc_ptp.max(1), ptp_pctile)
     # remove templates at the edge of the probe
     cull &= np.isin(
         loc_ptp.argmax(1),
