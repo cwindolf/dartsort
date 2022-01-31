@@ -140,22 +140,27 @@ def labeledmosaic(
             cbar.ax.set_yticklabels(ticks, fontsize=8)
 
 
-def plot_ptp(ptp, axes, label, color, codes):
-    c = ptp.shape[1] // 2 - 1
-    for j, ax in enumerate(axes.flat):
-        ptp_left = ptp[j, ::2]
-        ptp_right = ptp[j, 1::2]
-        (handle,) = ax.plot(ptp_left, c=color, label=label)
-        (dhandle,) = ax.plot(ptp_right, "--", c=color)
+def plot_single_ptp(ptp, ax, label, color, code):
+    ptp_left = ptp[::2]
+    ptp_right = ptp[1::2]
+    (handle,) = ax.plot(ptp_left, c=color, label=label)
+    (dhandle,) = ax.plot(ptp_right, "--", c=color)
+    if code:
         ax.text(
             0.1,
             0.9,
-            codes[j],
+            code,
             horizontalalignment="center",
             verticalalignment="center",
             transform=ax.transAxes,
         )
-        ax.set_xticks([0, c])
+    ax.set_xticks([0, ptp.shape[0] // 2 - 1])
+    return handle, dhandle
+
+
+def plot_ptp(ptp, axes, label, color, codes):
+    for j, ax in enumerate(axes.flat):
+        handle, dhandle = plot_single_ptp(ptp[j], ax, label, color, codes[j])
     return handle, dhandle
 
 
