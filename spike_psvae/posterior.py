@@ -68,7 +68,7 @@ def sample(ptp, local_geom, sigma=0.1):
     with NamedTemporaryFile(mode="w", prefix="post", suffix=".json") as f:
         with open(f.name, "w") as tmp:
             tojson(tmp, C=C, ptp=ptp, gx=local_geom[:, 0], gz=local_geom[:, 1])
-        res = model.sample(f.name)
+        res = model.sample(f.name, show_progress=False)
         summary = res.summary().loc[["lp__", "x", "y", "z", "alpha"]]
         x = res.stan_variable("x")
         y = res.stan_variable("y")
