@@ -61,6 +61,14 @@ def check_shapes(
     return N, T, C
 
 
+def ptp_at(x, y, z, alpha, local_geom):
+    return alpha / np.sqrt(
+        np.square(x - local_geom[:, 0])
+        + np.square(z - local_geom[:, 1])
+        + np.square(y)
+    )
+
+
 def localize_ptp(
     ptp,
     maxchan,
@@ -98,12 +106,7 @@ def localize_ptp(
     xcom, zcom = (ptp_p[:, None] * local_geom).sum(axis=0)
 
     def residual(loc):
-        x, y, z, alpha = loc
-        return ptp - alpha / np.sqrt(
-            np.square(x - local_geom[:, 0])
-            + np.square(z - local_geom[:, 1])
-            + np.square(y)
-        )
+        return ptp - ptp_at(*loc, local_geom)
 
     jacobian = "2-point"
     if jac:
