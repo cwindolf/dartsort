@@ -1,3 +1,6 @@
+import numpy as np
+import numpy.linalg as la
+from sklearn.decomposition import PCA
 import torch
 from torch import nn
 
@@ -28,3 +31,81 @@ class SingleChanDenoiser(nn.Module):
     def load(self, fname_model="../pretrained/single_chan_denoiser.pt"):
         checkpoint = torch.load(fname_model, map_location="cpu")
         self.load_state_dict(checkpoint)
+
+
+def fit_temporal_pca(waveforms, n_train=10_000, k=3, seed=0):
+    # extract training set
+    rg = np.random.default_rng(seed)
+    train_ix = rg.choice(len(waveforms), replace=False, size=n_train)
+    train_ix.sort()
+
+    # get temporal components
+    u, s, vh = la.svd(waveforms[train_ix], full_matrices=False)
+    temporal_wfs = u[:, :, :k].reshape(u.shape[0], u.shape[1] * k)
+
+    # fit PCA
+    pca_temporal = PCA(k)
+    pca_temporal.fit(temporal_wfs)
+
+    return pca_temporal
+
+
+def apply_temporal_pca(pca_temporal, waveforms):
+    n, t, c = waveforms.shape
+    k = pca_temporal.n_components_
+    u, s, vh = la.svd(waveforms, full_matrices=False)
+    u = pca_temporal.transform(u[:, :, :k].reshape(n, t * k))
+    u = pca_temporal.inverse_transform(u).reshape(n, t, k)
+    return u @ (s[:, :k, None] * vh[:, :k])
+
+
+def enforce_decrease(waveform):
+    n_chan = waveform.shape[1]
+    wf = waveform.copy()
+
+    max_chan = wf.ptp(0).argmax()
+
+    max_chan_even = max_chan - max_chan % 2
+    for i in range(4, max_chan_even, 2):
+        if (
+            wf[:, max_chan_even - i - 2].ptp()
+            > wf[:, max_chan_even - i].ptp()
+        ):
+            wf[:, max_chan_even - i - 2] = (
+                wf[:, max_chan_even - i - 2]
+                * wf[:, max_chan_even - i].ptp()
+                / wf[:, max_chan_even - i - 2].ptp()
+            )
+    for i in range(4, n_chan - max_chan_even - 2, 2):
+        if (
+            wf[:, max_chan_even + i + 2].ptp()
+            > wf[:, max_chan_even + i].ptp()
+        ):
+            wf[:, max_chan_even + i + 2] = (
+                wf[:, max_chan_even + i + 2]
+                * wf[:, max_chan_even + i].ptp()
+                / wf[:, max_chan_even + i + 2].ptp()
+            )
+
+    max_chan_odd = max_chan - max_chan % 2 + 1
+    for i in range(4, max_chan_odd, 2):
+        if (
+            wf[:, max_chan_odd - i - 2].ptp()
+            > wf[:, max_chan_odd - i].ptp()
+        ):
+            wf[:, max_chan_odd - i - 2] = (
+                wf[:, max_chan_odd - i - 2]
+                * wf[:, max_chan_odd - i].ptp()
+                / wf[:, max_chan_odd - i - 2].ptp()
+            )
+    for i in range(4, n_chan - max_chan_odd - 1, 2):
+        if (
+            wf[:, max_chan_odd + i + 2].ptp()
+            > wf[:, max_chan_odd + i].ptp()
+        ):
+            wf[:, max_chan_odd + i + 2] = (
+                wf[:, max_chan_odd + i + 2]
+                * wf[:, max_chan_odd + i].ptp()
+                / wf[:, max_chan_odd + i + 2].ptp()
+            )
+    return wf
