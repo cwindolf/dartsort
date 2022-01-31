@@ -6,27 +6,27 @@ from tempfile import NamedTemporaryFile
 
 
 model_code = """
-data {
+data {{
     int<lower=0> C;
     vector[C] ptp;
     vector[C] gx;
     vector[C] gz;
-}
-parameters {
+}}
+parameters {{
     real<lower=-100, upper=132> x;
     real<lower=0, upper=250> y;
     real<lower=-100, upper=100> z;
     real<lower=0> alpha;
-}
-transformed parameters {
+}}
+transformed parameters {{
     vector[C] pred_ptp = alpha ./ sqrt(
         square(gx - x) + square(gz - z) + square(y)
     );
-}
-model {
+}}
+model {{
     // alpha ~ gamma(3, 1./50.); // alpha prior for posterity
     ptp - pred_ptp ~ normal(0, {sigma});
-}
+}}
 """
 
 
@@ -34,10 +34,11 @@ def stanc(name, code, workdir=".stan"):
     Path(workdir).mkdir(exist_ok=True)
     path = Path(workdir) / f"{name}.stan"
     # try to avoid stan recompilation if possible
-    overwrite = False
-    with open(path, "r") as f:
-        if f.read() == code:
-            overwrite = True
+    overwrite = True
+    if path.exists():
+        with open(path, "r") as f:
+            if f.read() == code:
+                overwrite = False
     if overwrite:
         with open(path, "w") as f:
             f.write(code)
@@ -64,8 +65,9 @@ def sample(ptp, local_geom, sigma=0.1):
     model = stanc(model_name, model_code.format(sigma=sigma))
     C = ptp.shape[0]
 
-    with NamedTemporaryFile(prefix="post", suffix=".json") as f:
-        tojson(f, C=C, ptp=ptp, gx=local_geom[:, 0], gz=local_geom[:, 1])
+    with NamedTemporaryFile(mode="w", prefix="post", suffix=".json") as f:
+        with open(f.name, "w") as tmp:
+            tojson(tmp, C=C, ptp=ptp, gx=local_geom[:, 0], gz=local_geom[:, 1])
         res = model.sample(f.name)
         summary = res.summary().loc[["lp__", "x", "y", "z", "alpha"]]
         x = res.stan_variable("x")
