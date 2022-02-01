@@ -36,7 +36,6 @@ class SingleChanDenoiser(nn.Module):
 def fit_temporal_pca(
     waveforms, n_train=10_000, n_temporal_wfs=3, pca_rank=3, seed=0
 ):
-    print("baby")
     # extract training set
     rg = np.random.default_rng(seed)
     train_ix = rg.choice(len(waveforms), replace=False, size=n_train)
