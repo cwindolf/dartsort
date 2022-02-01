@@ -28,12 +28,15 @@ class SingleChanDenoiser(nn.Module):
         x = x.view(x.shape[0], -1)
         return self.out(x)
 
-    def load(self, fname_model="../pretrained/single_chan_denoiser.pt"):
+    def load(self, fname_model=f"../pretrained/single_chan_denoiser.pt"):
         checkpoint = torch.load(fname_model, map_location="cpu")
         self.load_state_dict(checkpoint)
 
 
-def fit_temporal_pca(waveforms, n_train=10_000, k=3, seed=0):
+def fit_temporal_pca(
+    waveforms, n_train=10_000, n_temporal_wfs=3, pca_rank=3, seed=0
+):
+    print("baby")
     # extract training set
     rg = np.random.default_rng(seed)
     train_ix = rg.choice(len(waveforms), replace=False, size=n_train)
@@ -41,22 +44,27 @@ def fit_temporal_pca(waveforms, n_train=10_000, k=3, seed=0):
 
     # get temporal components
     u, s, vh = la.svd(waveforms[train_ix], full_matrices=False)
-    temporal_wfs = u[:, :, :k].reshape(u.shape[0], u.shape[1] * k)
 
-    # fit PCA
-    pca_temporal = PCA(k)
-    pca_temporal.fit(temporal_wfs)
+    # fit PCAs
+    pca_temporal = [
+        PCA(pca_rank).fit(u[:, :, k]) for k in range(n_temporal_wfs)
+    ]
 
     return pca_temporal
 
 
 def apply_temporal_pca(pca_temporal, waveforms):
     n, t, c = waveforms.shape
-    k = pca_temporal.n_components_
+    n_temporal_wfs = len(pca_temporal)
     u, s, vh = la.svd(waveforms, full_matrices=False)
-    u = pca_temporal.transform(u[:, :, :k].reshape(n, t * k))
-    u = pca_temporal.inverse_transform(u).reshape(n, t, k)
-    return u @ (s[:, :k, None] * vh[:, :k])
+    u = np.stack(
+        [
+            pca.inverse_transform(pca.transform(u[:, :, k]))
+            for k, pca in enumerate(pca_temporal)
+        ],
+        axis=-1,
+    )
+    return u @ (s[:, :n_temporal_wfs, None] * vh[:, :n_temporal_wfs])
 
 
 def enforce_decrease(waveform):
@@ -67,20 +75,14 @@ def enforce_decrease(waveform):
 
     max_chan_even = max_chan - max_chan % 2
     for i in range(4, max_chan_even, 2):
-        if (
-            wf[:, max_chan_even - i - 2].ptp()
-            > wf[:, max_chan_even - i].ptp()
-        ):
+        if wf[:, max_chan_even - i - 2].ptp() > wf[:, max_chan_even - i].ptp():
             wf[:, max_chan_even - i - 2] = (
                 wf[:, max_chan_even - i - 2]
                 * wf[:, max_chan_even - i].ptp()
                 / wf[:, max_chan_even - i - 2].ptp()
             )
     for i in range(4, n_chan - max_chan_even - 2, 2):
-        if (
-            wf[:, max_chan_even + i + 2].ptp()
-            > wf[:, max_chan_even + i].ptp()
-        ):
+        if wf[:, max_chan_even + i + 2].ptp() > wf[:, max_chan_even + i].ptp():
             wf[:, max_chan_even + i + 2] = (
                 wf[:, max_chan_even + i + 2]
                 * wf[:, max_chan_even + i].ptp()
@@ -89,20 +91,14 @@ def enforce_decrease(waveform):
 
     max_chan_odd = max_chan - max_chan % 2 + 1
     for i in range(4, max_chan_odd, 2):
-        if (
-            wf[:, max_chan_odd - i - 2].ptp()
-            > wf[:, max_chan_odd - i].ptp()
-        ):
+        if wf[:, max_chan_odd - i - 2].ptp() > wf[:, max_chan_odd - i].ptp():
             wf[:, max_chan_odd - i - 2] = (
                 wf[:, max_chan_odd - i - 2]
                 * wf[:, max_chan_odd - i].ptp()
                 / wf[:, max_chan_odd - i - 2].ptp()
             )
     for i in range(4, n_chan - max_chan_odd - 1, 2):
-        if (
-            wf[:, max_chan_odd + i + 2].ptp()
-            > wf[:, max_chan_odd + i].ptp()
-        ):
+        if wf[:, max_chan_odd + i + 2].ptp() > wf[:, max_chan_odd + i].ptp():
             wf[:, max_chan_odd + i + 2] = (
                 wf[:, max_chan_odd + i + 2]
                 * wf[:, max_chan_odd + i].ptp()
