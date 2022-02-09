@@ -5,6 +5,7 @@
 data/*.h5
 data/*.npy
 data/spt*
+data/*/
 logs/*.log
 **/*.c
 notebook/.stan/*
