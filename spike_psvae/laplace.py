@@ -51,6 +51,27 @@ def point_source_post_lpdf_hessian_xy(
     return H.numpy()
 
 
+def point_source_post_lpdf_hessian_xy_polar(
+    r0, theta0, z0, alpha0, ptp, lgeom, ptp_sigma=0.1
+):
+    z0 = torch.tensor(z0)
+    alpha0 = torch.tensor(alpha0)
+    ptp = torch.tensor(ptp)
+    lgeom = torch.tensor(lgeom)
+
+    def closure(rtheta):
+        r, theta = rtheta
+        x = r * torch.cos(theta)
+        y = r * torch.sin(theta)
+        return point_source_post_lpdf(
+            x, y, z0, alpha0, ptp, lgeom, ptp_sigma=ptp_sigma
+        )
+
+    H = hessian(closure, torch.tensor([r0, theta0]))
+
+    return H.numpy()
+
+
 def point_source_post_lpdf_hessian_xyza(
     x0, y0, z0, alpha0, ptp, lgeom, ptp_sigma=0.1
 ):
@@ -93,6 +114,40 @@ def laplace_approx_samples(
         new_samples = new_samples[new_samples[:, 1] > 0]
         x_samples.append(new_samples[:, 0])
         y_samples.append(new_samples[:, 1])
+
+    return np.hstack(x_samples)[:n_samples], np.hstack(y_samples)[:n_samples]
+
+
+def laplace_approx_samples_polar(
+    x0,
+    y0,
+    z0,
+    alpha0,
+    ptp,
+    lgeom,
+    ptp_sigma=0.1,
+    n_samples=4000,
+    seed=0,
+):
+    """Sample x,y from our truncated Laplace approx"""
+    r0 = np.sqrt(x0 ** 2 + y0 ** 2)
+    theta0 = np.arctan2(y0, x0)
+    print(x0, y0, r0, theta0)
+    H = point_source_post_lpdf_hessian_xy_polar(
+        r0, theta0, z0, alpha0, ptp, lgeom, ptp_sigma=ptp_sigma
+    )
+
+    rg = np.random.default_rng(seed)
+    x_samples = []
+    y_samples = []
+    while sum(len(s) for s in x_samples) < n_samples:
+        new_samples = rg.multivariate_normal(
+            [r0, theta0], -la.inv(H), size=1000
+        )
+        x = new_samples[:, 0] * np.cos(new_samples[:, 1])
+        y = new_samples[:, 0] * np.sin(new_samples[:, 1])
+        x_samples.append(x[y > 0])
+        y_samples.append(y[y > 0])
 
     return np.hstack(x_samples)[:n_samples], np.hstack(y_samples)[:n_samples]
 
