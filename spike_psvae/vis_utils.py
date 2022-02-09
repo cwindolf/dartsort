@@ -66,6 +66,21 @@ def mosaic(xs, pad=0, padval=255, vmin=np.inf, vmax=-np.inf):
     return grid
 
 
+def tukey_scatter(x, y, iqrs=1.5, ax=None, **kwargs):
+    ax = ax or plt.gca()
+    x_25, x_75 = np.percentile(x, [25, 75])
+    x_iqr = x_75 - x_25
+    y_25, y_75 = np.percentile(x, [25, 75])
+    y_iqr = y_75 - y_25
+    inliers = np.flatnonzero(
+        (x_25 - iqrs * x_iqr < x)
+        & (x < x_75 + iqrs * x_iqr)
+        & (y_25 - iqrs * y_iqr < y)
+        & (y < y_75 + iqrs * y_iqr)
+    )
+    return ax.scatter(x[inliers], y[inliers], **kwargs)
+
+
 def labeledmosaic(
     xs,
     rowlabels=None,
@@ -311,44 +326,54 @@ def locrelocplots(
     return fig, axes
 
 
-def pca_resid_plot(wfs, ax=None, c="b", name=None, pad=0, K=25):
+def pca_resid_plot(wfs, ax=None, c="b", name=None, pad=1, K=25):
     wfs = wfs.reshape(wfs.shape[0], -1)
     wfs = wfs - wfs.mean(axis=0, keepdims=True)
     v = np.square(la.svdvals(wfs)[: K - pad]) / np.prod(wfs.shape)
     ax = ax or plt.gca()
     totvar = np.square(wfs).mean()
-    residvar = np.concatenate(([totvar], totvar - np.cumsum(v)))
-    if pad:
-        ax.plot(
-            ([totvar] * pad + [*residvar]), marker=".", ms=4, c=c, label=name
-        )
-    else:
-        ax.plot(residvar[:50], marker=".", ms=4, c=c, label=name)
+    residvar = totvar - np.cumsum(v)
+    ax.plot(
+        ([totvar] * pad + [*residvar]), marker=".", ms=4, c=c, label=name
+    )
 
 
 def pca_invert_plot(
-    wfs_orig, wfs, q, p, ax=None, c="b", name=None, pad=0, K=25
+    wfs_orig, wfs, q=None, p=None, ax=None, c="b", name=None, pad=0, K=25
 ):
     # apply PCA to relocated wfs
     wfshape = wfs.shape
     wfs = wfs.reshape(wfs.shape[0], -1)
+    print("wfs", wfs.shape)
     means = wfs.mean(axis=0, keepdims=True)
+    print(means.shape)
     cwfs = wfs - means
+    print(np.square(cwfs).mean())
     U, s, Vh = la.svd(cwfs, full_matrices=False)
+    # if pad == 0:
+    #     tv = np.square(cwfs).mean()
+    #     v = np.square(s[:K]) / np.prod(wfs.shape)
+    #     plt.plot(np.r_[[tv], tv - np.cumsum(v)], color="silver")
     # print(wfs.shape, q.shape, p.shape)
 
     # for each k, get error in unrelocated space
-    invert = (p / q)[:, None, :]
-    recon = np.empty_like(wfs)
+    if q is not None:
+        invert = (p / q)[:, None, :]
+    recon = np.empty_like(wfs, dtype=np.float64)
+    print("recon", recon.shape)
     recon[:] = means
     v = []
     for k in trange(K - pad):
         # pca reconstruction
         if k > 0:
-            recon += U[:, k][:, None] @ (s[k] * Vh[k][None, :])
+            # recon += U[:, k, None] * (s[k] * Vh[None, k, :])
+            recon = means + U[:, :k] @ (np.diag(s[:k]) @ Vh[:k])
 
         # invert relocation
-        recon_ = recon.reshape(wfshape) * invert
+        if q is not None:
+            recon_ = recon.reshape(wfshape) * invert
+        else:
+            recon_ = recon.reshape(wfshape)
 
         # compute error
         err = np.square(wfs_orig - recon_).mean()
@@ -361,6 +386,7 @@ def pca_invert_plot(
         ax.plot(([totvar] * pad + v), marker=".", ms=4, c=c, label=name)
     else:
         ax.plot(v[:K], marker=".", ms=4, c=c, label=name)
+    return v
 
 
 def reloc_pcaresidplot(
@@ -406,6 +432,8 @@ def reloc_pcaresidplot(
         firstchans=h5["first_channels"][:][inds],
         channel_radius=8,
     )
+    wfs_yza, q_hat_yza, p_hat = map(lambda x: x.cpu().numpy(), (wfs_yza, q_hat_yza, p_hat))
+    wfs_xyza, q_hat_xyza, p_hat_ = map(lambda x: x.cpu().numpy(), (wfs_xyza, q_hat_xyza, p_hat_))
 
     ax = ax or plt.gca()
     if kind == "resid":
@@ -429,8 +457,8 @@ def reloc_pcaresidplot(
         pca_invert_plot(
             wfs,
             wfs_yza,
-            q_hat_yza.numpy(),
-            p_hat.numpy(),
+            q_hat_yza,
+            p_hat,
             ax=ax,
             name="$yz\\alpha$ relocated",
             c=green,
@@ -439,8 +467,8 @@ def reloc_pcaresidplot(
         pca_invert_plot(
             wfs,
             wfs_xyza,
-            q_hat_xyza.numpy(),
-            p_hat.numpy(),
+            q_hat_xyza,
+            p_hat,
             ax=ax,
             name="$xyz\\alpha$ relocated",
             c=purple,
