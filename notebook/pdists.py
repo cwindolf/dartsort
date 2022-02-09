@@ -123,6 +123,32 @@ noise_segment = np.load("../data/ten_np2_seconds.npy")
 )
 
 # %%
+denoised_waveforms.shape
+
+# %%
+wfs_denoised = denoised_waveforms + 0
+
+# %%
+from sklearn.decomposition import PCA
+
+# %%
+n_, t_, c_ = wfs_denoised.shape
+u, s, vh = np.linalg.svd(wfs_denoised)
+temporal_wfs = u[:, :, :3].reshape(n_, t_ * 3)
+
+pca_temporal = PCA(3)
+pca_temporal.fit(temporal_wfs)
+
+temp_pcs = pca_temporal.transform(temporal_wfs)
+pca_temporal_reconstructed = pca_temporal.inverse_transform(temp_pcs)
+pca_temporal_reconstructed = pca_temporal_reconstructed.reshape(n_, t_, 3)
+
+wfs_reconstructed = np.zeros(wfs_denoised.shape)
+for i in range(wfs_denoised.shape[0]):
+    u, s, vh = np.linalg.svd(wfs_denoised[i], False)
+    wfs_reconstructed[i] = np.matmul(pca_temporal_reconstructed[i], s[:3, None] * vh[:3])
+
+# %%
 ix = rg().choice(denoised_waveforms.shape[0], size=16, replace=False)
 # ix = [18, 19, 20, 21]
 ptps = denoised_waveforms[ix].ptp(1)

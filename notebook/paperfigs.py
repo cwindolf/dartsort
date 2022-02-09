@@ -308,7 +308,7 @@ for k, v in h5s.items():
         plt.savefig(f"../figs/{fns[k]}_ldisp_{unit}.png", dpi=300, bbox_inches="tight")
         plt.show()
 
-# %% jupyter={"outputs_hidden": true} tags=[]
+# %% tags=[]
 for k, v in h5s.items():
     for unit in range(2):
         for which in ["orig", "yza", "xyza"]:
@@ -761,7 +761,7 @@ def simmov(ix=None, spike_ix=None, shiftdim="z", xtitle="", pc=0):
     return camera
 
 
-# %% jupyter={"outputs_hidden": true} tags=[]
+# %% tags=[]
 c = simmov(ix=units[0], shiftdim="a", xtitle="-- cortex template 151", pc=3)
 anim = c.animate()
 HTML(anim.to_html5_video())

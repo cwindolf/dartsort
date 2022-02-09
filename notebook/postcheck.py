@@ -62,7 +62,7 @@ def tojson(path, **kwargs):
 
 
 # %%
-big_y = True
+big_y = False
 threshy = 0.5
 
 # %%
@@ -163,18 +163,17 @@ for u in range(len(choice_units)):
         ),
     )
     print("unit", choice_units[u])
-    # display(res.summary().loc[["lp__", "x", "y", "z", "alpha"]])
-    # xs.append(res.stan_variable("x"))
-    # mxs.append(xs[-1].mean())
-    # ys.append(res.stan_variable("y"))    
-    # mys.append(ys[-1].mean())
-    # z_rels.append(res.stan_variable("z"))   
-    # mzrs.append(z_rels[-1].mean())
-    # alphas.append(res.stan_variable("alpha"))   
-    # mas.append(alphas[-1].mean())
-    # units.append(np.full(xs[-1].shape, u))
+    display(res.summary().loc[["lp__", "x", "y", "z", "alpha"]])
+    xs.append(res.stan_variable("x"))
+    mxs.append(xs[-1].mean())
+    ys.append(res.stan_variable("y"))    
+    mys.append(ys[-1].mean())
+    z_rels.append(res.stan_variable("z"))   
+    mzrs.append(z_rels[-1].mean())
+    alphas.append(res.stan_variable("alpha"))   
+    mas.append(alphas[-1].mean())
+    units.append(np.full(xs[-1].shape, u))
     
-    display(res.stan
 
 
 
@@ -225,7 +224,7 @@ plt.show()
 # %%
 vis_utils.traceplot(choice_loc_templates[0])
 
-# %%
+# %% tags=[] jupyter={"outputs_hidden": true}
 # mos = """\
 # xab
 # xcd
@@ -266,7 +265,162 @@ for u in range(len(choice_loc_templates)):
     fig.savefig(postfigdir / f"u{choice_units[u]}.png")
 
 # %%
-big_y
+import matplotlib
+
+# %%
+choice_loc_templates.shape
+
+# %%
+plt.rc("figure", dpi=300)
+
+# %%
+# mos = """\
+# xab
+# xcd
+# """
+# mos = "xabc"
+# sckw = dict(s=2, color="k", alpha=0.1)
+fig, axes = plt.subplots(4, 3, figsize=(6, 4), gridspec_kw=dict(height_ratios=[2.5, 3, 3, 3], hspace=0.15, wspace=0.3))
+axes = axes.T
+
+for i, (u, c) in enumerate(zip([29, 1, 26], ["y", "orange", "crimson"])):
+    axes[i, 0].imshow(choice_loc_templates[u, 20:82])
+    axes[i, 0].set_yticks([])
+    axes[i, 0].set_xticks([])
+    pos = axes[i, 0].get_position()
+    pos.y0 = pos.y0 - 0.025
+    axes[i, 0].set_position(pos)
+    
+    axes[i,1+ 0].scatter(ys[units == u], xs[units == u], s=0.1, alpha=0.2, color="k")
+    axes[i,1+ 1].scatter(ys[units == u], z_rels[units == u], s=0.1, alpha=0.2, color="k") 
+    hc = axes[i,1+ 2].scatter(ys[units == u], alphas[units == u], s=0.1, alpha=0.2, color="k")  
+    
+    # for k in "abc":
+    #     axes[k].set_aspect("equal")
+    print(u)
+    
+    axes[i,1+ 0].scatter([tys[u]], [txs[u]], c="blue", s=s)
+    axes[i,1+ 1].scatter([tys[u]], [tz_rels[u]], c="blue", s=s)
+    ha = axes[i,1+ 2].scatter([tys[u]], [talphas[u]], c="blue", s=s, label="LS")
+    
+    axes[i,1+ 0].scatter([mys[u]], [mxs[u]], c="limegreen", s=s)
+    axes[i,1+ 1].scatter([mys[u]], [mzrs[u]], c="limegreen", s=s)
+    hb = axes[i,1+ 2].scatter([mys[u]], [mas[u]], c="limegreen", s=s, label="Post. mean")
+    
+#     axes["c"].legend(loc="upper center", bbox_to_anchor=(1, 1))
+hc = matplotlib.lines.Line2D([0], [0], marker='o', color='k', markersize=1, linestyle="None")
+plt.figlegend(
+    handles=[hc, ha, hb],
+    labels=["Stan samples", "Mode", "Post. mean"],
+    loc=[0.1, 0.0],
+    frameon=False,
+    fancybox=False,
+    borderpad=0,
+    borderaxespad=0,
+    ncol=3,
+    
+)
+
+for ax in axes[:, 1:].flat:
+    ax.get_yaxis().set_major_locator(matplotlib.ticker.MaxNLocator(nbins=3, steps=[1, 2, 5]))
+
+for ax in axes[:, :-1].flat:
+    ax.set_xticks([])
+    
+axes[0, 1+0].set_ylabel("$x$")
+axes[0, 1+1].set_ylabel("$z$")
+axes[0, 1+2].set_ylabel("$\\alpha$")
+for ax in axes[:, -1]:
+    ax.set_xlabel("$y$")
+
+for ax, u in zip(axes[:,0], [29, 1, 26]):
+    ax.set_title(f"template {choice_units[u]}")
+
+    # locstr = tuple(float(f"{q:0.1f}") for q in (txs[u],tys[u],tz_rels[u],talphas[u]))
+    # fig.suptitle(f"KS unit {choice_units[u]} posterior. LS loc (x,y,z,a)={locstr}")
+# fig.tight_layout()
+    
+    # fig.savefig(postfigdir / f"u{choice_units[u]}.png")
+
+# %%
+from spike_psvae import posterior
+
+# %%
+# mos = """\
+# xab
+# xcd
+# """
+# mos = "xabc"
+# sckw = dict(s=2, color="k", alpha=0.1)
+fig, axes = plt.subplots(4, 3, figsize=(6, 4), gridspec_kw=dict(height_ratios=[2.5, 3, 3, 3], hspace=0.15, wspace=0.3))
+axes = axes.T
+
+for i, (u, c) in enumerate(zip([29, 1, 26], ["y", "orange", "crimson"])):
+    axes[i, 0].imshow(choice_loc_templates[u, 20:82])
+    axes[i, 0].set_yticks([])
+    axes[i, 0].set_xticks([])
+    pos = axes[i, 0].get_position()
+    pos.y0 = pos.y0 - 0.025
+    axes[i, 0].set_position(pos)
+    
+    ptp = choice_loc_templates[u].ptp(0)
+    summary, x, y, z, alpha = posterior.sample(ptp, lgeoms[u], logbarrier=True)
+    
+    axes[i,1+ 0].scatter(y, x, s=0.1, alpha=0.2, color="k")
+    axes[i,1+ 1].scatter(y, z, s=0.1, alpha=0.2, color="k") 
+    hc = axes[i,1+ 2].scatter(y, alpha, s=0.1, alpha=0.2, color="k")  
+    
+    # for k in "abc":
+    #     axes[k].set_aspect("equal")
+    print(u)
+    
+#     axes[i,1+ 0].scatter([tys[u]], [txs[u]], c="blue", s=s)
+#     axes[i,1+ 1].scatter([tys[u]], [tz_rels[u]], c="blue", s=s)
+#     ha = axes[i,1+ 2].scatter([tys[u]], [talphas[u]], c="blue", s=s, label="LS")
+    
+#     axes[i,1+ 0].scatter([mys[u]], [mxs[u]], c="limegreen", s=s)
+#     axes[i,1+ 1].scatter([mys[u]], [mzrs[u]], c="limegreen", s=s)
+#     hb = axes[i,1+ 2].scatter([mys[u]], [mas[u]], c="limegreen", s=s, label="Post. mean")
+    
+#     axes["c"].legend(loc="upper center", bbox_to_anchor=(1, 1))
+# hc = matplotlib.lines.Line2D([0], [0], marker='o', color='k', markersize=1, linestyle="None")
+# plt.figlegend(
+#     handles=[hc, ha, hb],
+#     labels=["Stan samples", "Mode", "Post. mean"],
+#     loc=[0.1, 0.025],
+#     frameon=False,
+#     fancybox=False,
+#     borderpad=0,
+#     borderaxespad=0,
+#     ncol=3,
+    
+# )
+
+for ax in axes[:, 1:].flat:
+    ax.get_yaxis().set_major_locator(matplotlib.ticker.MaxNLocator(nbins=3, steps=[1, 2, 5]))
+
+for ax in axes[:, :-1].flat:
+    ax.set_xticks([])
+    
+axes[0, 1+0].set_ylabel("x")
+axes[0, 1+1].set_ylabel("z")
+axes[0, 1+2].set_ylabel("alpha")
+
+for ax, u in zip(axes[:,0], [29, 1, 26]):
+    ax.set_title(f"template {choice_units[u]}")
+
+    # locstr = tuple(float(f"{q:0.1f}") for q in (txs[u],tys[u],tz_rels[u],talphas[u]))
+    # fig.suptitle(f"KS unit {choice_units[u]} posterior. LS loc (x,y,z,a)={locstr}")
+# fig.tight_layout()
+    
+    # fig.savefig(postfigdir / f"u{choice_units[u]}.png")
+
+# %%
+
+# %%
+
+# %% [markdown]
+# # big_y
 
 # %%
 # mos = """\
@@ -277,7 +431,8 @@ mos = "xabc"
 sckw = dict(s=2, color="k", alpha=0.1)
 for u in range(len(choice_loc_templates)):
     ptp = choice_loc_templates[u].ptp(0)
-    lap_xs, lap_ys = laplace.laplace_approx_samples(txs[u], tys[u], tz_rels[u], talphas[u], ptp, lgeoms[u])
+    lap_xs, lap_ys = laplace.laplace_approx_samples_polar(txs[u], tys[u], tz_rels[u], talphas[u], ptp, lgeoms[u])
+    olap_xs, olap_ys = laplace.laplace_approx_samples(txs[u], tys[u], tz_rels[u], talphas[u], ptp, lgeoms[u])
     
     fig, (a0, aa, ab) = plt.subplots(1, 3)
     
@@ -298,10 +453,12 @@ for u in range(len(choice_loc_templates)):
     aa.scatter(xs[units == u], ys[units == u], s=2, alpha=0.1)
     aa.scatter([txs[u]], [tys[u]], c="k", s=5)
     aa.scatter([mxs[u]], [mys[u]], c="r", s=5)
+    aa.scatter([lap_xs.mean()], [lap_ys.mean()], c="g", label="polar Laplace", s=5)
+    aa.scatter([olap_xs.mean()], [olap_ys.mean()], c="g", marker="x", label="orig. Laplace", s=5)
     
     
-    aa.set_title("stan posterior samples over torch log posterior", size=8)
-    ab.set_title("laplace approx samples", size=8)
+    aa.set_title("stan samples", size=8)
+    ab.set_title("polar laplace samples", size=8)
     aa.set_ylabel("y")
     aa.set_xlabel("x")
     ab.set_xlabel("x")
@@ -309,7 +466,8 @@ for u in range(len(choice_loc_templates)):
     ab.scatter(lap_xs, lap_ys, s=1, alpha=0.1, label="samples")
     ab.scatter([txs[u]], [tys[u]], c="k", label="LS", s=5)
     ab.scatter([mxs[u]], [mys[u]], c="r", label="Stan", s=5)
-    ab.scatter([lap_xs.mean()], [lap_ys.mean()], c="g", label="Laplace", s=5)
+    ab.scatter([lap_xs.mean()], [lap_ys.mean()], c="g", label="polar Laplace", s=5)
+    ab.scatter([olap_xs.mean()], [olap_ys.mean()], c="g", marker="x", label="orig. Laplace", s=5)
     
     plt.suptitle(f"unit {choice_units[u]}")
     

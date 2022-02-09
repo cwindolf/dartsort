@@ -148,26 +148,26 @@ def stan_diagnostic(
 # %%
 small_y = ctx_h5["y"][:] < 0.5
 big_y = ctx_h5["y"][:] > 4
-small_ptp = ctx_h5["maxptp"][:] < 4
 big_ptp = ctx_h5["maxptp"][:] > 6
+good = (16 < ctx_h5["max_channels"][:]) & (ctx_h5["max_channels"][:] < 360)
 units = ctx_h5["spike_train"][:, 1]
 
-# %%
-ix = rg().choice(np.flatnonzero(small_y & small_ptp), replace=False, size=20)
+# %% tags=[]
+ix = rg().choice(np.flatnonzero(good & small_y & big_ptp), replace=False, size=20)
 for i in ix:
     fig = stan_diagnostic(
-        f"[small y+ptp] unit {units[i]} spike {i} --",
+        f"[small y] unit {units[i]} spike {i} --",
         ctx_h5["denoised_waveforms"][i],
         ctx_h5["first_channels"][i],
         ctx_h5["max_channels"][i],
     )
-    fig.savefig(figdir / f"smallyptp_{i}.png")
+    fig.savefig(figdir / f"smally_{i}.png")
 
 # %%
-ix = rg().choice(np.flatnonzero(big_y & big_ptp), replace=False, size=20)
+ix = rg().choice(np.flatnonzero(good & big_y & big_ptp), replace=False, size=20)
 for i in ix:
     fig = stan_diagnostic(
-        f"[big y+ptp] unit {units[i]} spike {i} --",
+        f"[big y] unit {units[i]} spike {i} --",
         ctx_h5["denoised_waveforms"][i],
         ctx_h5["first_channels"][i],
         ctx_h5["max_channels"][i],
