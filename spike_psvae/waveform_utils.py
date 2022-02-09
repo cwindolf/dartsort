@@ -119,12 +119,11 @@ def get_local_chans_standard(geom, maxchan, channel_radius):
     G, d = geom.shape
     assert d == 2
     maxchan = int(maxchan)
-    if maxchan % 2:
-        maxchan = maxchan - 1
+    maxchan_idx = maxchan - maxchan % 2
 
     # Deal with edge cases
-    low = maxchan - channel_radius
-    high = maxchan + channel_radius + 2
+    low = maxchan_idx - channel_radius
+    high = maxchan_idx + channel_radius + 2
     if low < 0:
         low = 0
         high = 2 * channel_radius + 2
