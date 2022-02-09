@@ -25,6 +25,7 @@ transformed parameters {{
 }}
 model {{
     // alpha ~ gamma(3, 1./50.); // alpha prior for posterity
+    {logbarrier}target += -log1p(y / max(ptp)) / 50.0;
     ptp - pred_ptp ~ normal(0, {sigma});
 }}
 """
@@ -58,11 +59,12 @@ def tojson(file, **kwargs):
     ujson.dump(out, file)
 
 
-def sample(ptp, local_geom, sigma=0.1):
+def sample(ptp, local_geom, sigma=0.1, logbarrier=False):
     assert local_geom.shape == (*ptp.shape, 2)
 
     model_name = f"lsq_sigma{sigma:0.2f}.stan"
-    model = stanc(model_name, model_code.format(sigma=sigma))
+    lb = "" if logbarrier else "// "
+    model = stanc(model_name, model_code.format(sigma=sigma, logbarrier=lb))
     C = ptp.shape[0]
 
     with NamedTemporaryFile(mode="w", prefix="post", suffix=".json") as f:
