@@ -87,9 +87,10 @@ def subtraction_batch(
             extract_channels,
             device,
         )
-        subtracted_wfs.append(subwfs)
-        spike_index.append(spind)
-        firstchans.append(fcs)
+        if len(spind):
+            subtracted_wfs.append(subwfs)
+            spike_index.append(spind)
+            firstchans.append(fcs)
     subtracted_wfs = np.concatenate(subtracted_wfs, axis=0)
     spike_index = np.concatenate(spike_index, axis=0)
     firstchans = np.concatenate(firstchans, axis=0)
