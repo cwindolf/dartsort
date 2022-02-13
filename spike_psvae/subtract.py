@@ -6,7 +6,7 @@ from collections import namedtuple
 from ibllib.io.spikeglx import _geometry_from_meta, read_meta_data
 from joblib import Parallel, delayed
 from pathlib import Path
-from scipy.spatial import pdist, squareform
+from scipy.spatial.distance import pdist, squareform
 from sklearn.decomposition import PCA
 from tqdm.auto import trange
 
@@ -38,7 +38,7 @@ def subtraction_batch(
     s_start,
     batch_len_samples,
     T_samples,
-    output_h5,
+    standardized_bin,
     thresholds,
     tpca_rank,
     trough_offset,
@@ -54,19 +54,20 @@ def subtraction_batch(
     denoiser.load()
     denoiser.to(device)
 
-    # load current residual with buffer
+    # load raw data with buffer
     buffer = spike_length_samples
     load_start = max(0, s_start - buffer)
-    load_end = min(T_samples, s_start + batch_len_samples + buffer)
-    with h5py.File(output_h5, "r", libver="latest", swmr=True) as h5:
-        residual = h5["residual"][load_start:load_end]
+    load_end = min(T_samples, s_end + buffer)
+    residual = read_data(
+        standardized_bin, np.float32, s_start, s_end, len(channel_index)
+    )
 
     # 0 padding if we were at the edge of the data
     pad_left = pad_right = 0
     if load_start == 0:
         pad_left = buffer
     if load_end == T_samples:
-        pad_right = buffer
+        pad_right = buffer - (T_samples - s_end)
     if pad_left != 0 or pad_right != 0:
         residual = np.pad(residual, [(pad_left, pad_right), (0, 0)])
 
@@ -143,6 +144,7 @@ def subtraction(
     n_jobs=1,
     device=None,
 ):
+    standardized_bin = Path(standardized_bin)
     output_h5 = Path(output_h5)
     out_h5 = h5py.File(output_h5, "w", libver="latest")
     batch_len_samples = n_sec_chunk * sampling_rate
@@ -157,7 +159,7 @@ def subtraction(
 
     # if no geometry is supplied, try to load it from meta file
     if geom is None:
-        metas = list(output_h5.parent.glob("*.meta"))
+        metas = list(standardized_bin.parent.glob("*.meta"))
         if metas:
             assert len(metas) == 1
             header = _geometry_from_meta(read_meta_data(metas[0]))
@@ -167,22 +169,19 @@ def subtraction(
                 "Either pass `geom` or put meta file in folder with binary."
             )
 
-    # copy standardized bin to output_h5 to initialize residuals
-    with np.memmap(standardized_bin, "r", dtype=np.float32) as std:
-        T_samples, n_channels = std.shape
-        residual = out_h5.create_dataset(
-            "residual", shape=std.shape, dtype=std.dtype
-        )
-        for s_start in trange(
-            0, T_samples, batch_len_samples, desc="Init residual"
-        ):
-            s_end = min(T_samples, s_start + batch_len_samples)
-            residual[s_start:s_end] = std[s_start:s_end]
+    # figure out length of data
+    std = np.memmap(standardized_bin, mode="r", dtype=np.float32)
+    std = std.reshape(-1, geom.shape[0])
+    T_samples, n_channels = std.shape
+    del std
 
     # compute helper data structures
     channel_index = make_channel_index(geom, spatial_radius, steps=2)
 
     # initialize resizable output datasets for waveforms etc
+    residual = out_h5.create_dataset(
+        "residual", shape=(T_samples, n_channels), dtype=np.float32
+    )
     subtracted_wfs = out_h5.create_dataset(
         "subtracted_waveforms",
         chunks=(1024, spike_length_samples, extract_channels),
@@ -210,7 +209,7 @@ def subtraction(
             s_start,
             batch_len_samples,
             T_samples,
-            output_h5,
+            standardized_bin,
             thresholds,
             tpca_rank,
             trough_offset,
@@ -445,3 +444,19 @@ def make_channel_index(geom, radius, steps=1):
         channel_index[current, : ch_idx.shape[0]] = ch_idx
 
     return channel_index
+
+
+# -- data loading helpers
+
+
+def read_data(bin_file, dtype, s_start, s_end, n_channels):
+    offset = s_start * dtype.itemsize * n_channels
+    with open(bin_file, "rb") as fin:
+        data = np.fromfile(
+            fin,
+            dtype=dtype,
+            count=(s_end - s_start) * n_channels,
+            offset=offset,
+        )
+    data = data.reshape(-1, n_channels)
+    return data
