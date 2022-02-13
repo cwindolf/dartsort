@@ -200,7 +200,6 @@ def subtraction(
     spike_index = out_h5.create_dataset(
         "spike_index", chunks=(1024, 2), maxshape=(None, 2), dtype=np.int64
     )
-    out_h5.swmr_mode = True
 
     # now run subtraction in parallel
     N = 0  # how many have we detected so far?
