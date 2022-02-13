@@ -40,9 +40,11 @@ def voltage_threshold(recording, threshold, order=5):
     for c in range(C):
         single_chan_rec = recording[:, c]
         index = argrelmin(single_chan_rec, order=order)[0]
-        index = index[single_chan_rec[index] < -threshold]
-        spike_index.append((index, np.full(len(index), c)))
-        energy.append(np.abs(single_chan_rec[index]))
+        which = np.flatnonzero(single_chan_rec[index] < -threshold)
+        if which.size:
+            index = index[which]
+            spike_index.append((index, np.full(len(index), c)))
+            energy.append(np.abs(single_chan_rec[index]))
 
     spike_index = np.concatenate(spike_index, axis=0)
     energy = np.array(energy, dtype=np.float32)
