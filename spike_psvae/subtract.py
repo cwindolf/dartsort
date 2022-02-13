@@ -185,20 +185,30 @@ def subtraction(
     subtracted_wfs = out_h5.create_dataset(
         "subtracted_waveforms",
         chunks=(1024, spike_length_samples, extract_channels),
+        shape=(1, spike_length_samples, extract_channels),
         maxshape=(None, spike_length_samples, extract_channels),
         dtype=np.float32,
     )
     cleaned_wfs = out_h5.create_dataset(
         "cleaned_waveforms",
         chunks=(1024, spike_length_samples, extract_channels),
+        shape=(1, spike_length_samples, extract_channels),
         maxshape=(None, spike_length_samples, extract_channels),
         dtype=np.float32,
     )
     firstchans = out_h5.create_dataset(
-        "first_channels", chunks=(1024,), maxshape=(None,), dtype=np.int32
+        "first_channels",
+        chunks=(1024,),
+        shape=(1,),
+        maxshape=(None,),
+        dtype=np.int32,
     )
     spike_index = out_h5.create_dataset(
-        "spike_index", chunks=(1024, 2), maxshape=(None, 2), dtype=np.int64
+        "spike_index",
+        chunks=(1024, 2),
+        shape=(1, 2),
+        maxshape=(None, 2),
+        dtype=np.int64,
     )
 
     # now run subtraction in parallel
