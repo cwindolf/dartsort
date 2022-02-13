@@ -459,7 +459,7 @@ def make_channel_index(geom, radius, steps=1):
 
 
 def read_data(bin_file, dtype, s_start, s_end, n_channels):
-    offset = s_start * dtype.itemsize * n_channels
+    offset = s_start * np.dtype(dtype).itemsize * n_channels
     with open(bin_file, "rb") as fin:
         data = np.fromfile(
             fin,
