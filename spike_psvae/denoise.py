@@ -1,8 +1,14 @@
 import numpy as np
 import numpy.linalg as la
-from sklearn.decomposition import PCA
 import torch
+
+from pathlib import Path
+from sklearn.decomposition import PCA
 from torch import nn
+
+pretrained_path = (
+    Path(__file__).parent.parent / "pretrained/single_chan_denoiser.pt"
+)
 
 
 class SingleChanDenoiser(nn.Module):
@@ -28,7 +34,7 @@ class SingleChanDenoiser(nn.Module):
         x = x.view(x.shape[0], -1)
         return self.out(x)
 
-    def load(self, fname_model=f"../pretrained/single_chan_denoiser.pt"):
+    def load(self, fname_model=pretrained_path):
         checkpoint = torch.load(fname_model, map_location="cpu")
         self.load_state_dict(checkpoint)
 
