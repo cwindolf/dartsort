@@ -8,8 +8,8 @@ from .waveform_utils import get_local_geom, get_local_chans
 
 # (x_low, y_low, z_low, alpha_low), (x_high, y_high, z_high, alpha_high)
 BOUNDS_NP1 = (-150, 0, -150, 0), (209, 250, 150, 10000)
-BOUNDS_NP2 = (-100, 0, -100, 0), (132, 250, 100, 10000)
-BOUNDS = {385: BOUNDS_NP1, 384: BOUNDS_NP2}
+BOUNDS_NP2 = (-100, 1e-4, -100, 0), (132, 250, 100, 20000)
+BOUNDS = {20: BOUNDS_NP1, 15: BOUNDS_NP2}
 
 # how to initialize y, alpha?
 Y0, ALPHA0 = 21.0, 1000.0
@@ -74,6 +74,7 @@ def localize_ptp(
     maxchan,
     geom,
     jac=False,
+    logbarrier=True,
     firstchan=None,
     geomkind="updown",
 ):
@@ -89,6 +90,9 @@ def localize_ptp(
     -------
     x, y, z_rel, z_abs, alpha
     """
+    if logbarrier:
+        assert not jac
+
     channel_radius = ptp.shape[0] // 2 - ("standard" in geomkind)
     # local_geom is 2*channel_radius, 2
     local_geom, z_maxchan = get_local_geom(
@@ -104,9 +108,17 @@ def localize_ptp(
     # initialize x, z with CoM
     ptp_p = ptp / ptp.sum()
     xcom, zcom = (ptp_p[:, None] * local_geom).sum(axis=0)
+    maxptp = ptp.max()
 
-    def residual(loc):
-        return ptp - ptp_at(*loc, local_geom)
+    if logbarrier:
+        # TODO: can we break this up over components like before?
+        def residual(loc):
+            phat = ptp_at(*loc, local_geom)
+            logpenalty = np.log1p(np.log1p(maxptp * loc[1]) / 50.0)
+            return (ptp - phat).sum() - logpenalty
+    else:
+        def residual(loc):
+            return ptp - ptp_at(*loc, local_geom)
 
     jacobian = "2-point"
     if jac:
@@ -128,7 +140,7 @@ def localize_ptp(
         residual,
         jac=jacobian,
         x0=[xcom, Y0, zcom, ALPHA0],
-        bounds=BOUNDS[geom.shape[0]],
+        bounds=BOUNDS[int(geom[0, 2] - geom[0, 0])],
     )
 
     # convert to absolute positions
@@ -145,6 +157,7 @@ def localize_ptps(
     channel_radius=10,
     n_workers=None,
     jac=False,
+    logbarrier=True,
     firstchans=None,
     geomkind="updown",
     _not_helper=True,
@@ -159,6 +172,9 @@ def localize_ptps(
     -------
     xs, ys, z_rels, z_abss, alphas
     """
+    if logbarrier:
+        assert not jac
+
     if _not_helper:
         N, _, C = check_shapes(
             ptps[:, None, :],
@@ -217,6 +233,7 @@ def localize_waveforms(
     channel_radius=10,
     n_workers=1,
     jac=False,
+    logbarrier=True,
     firstchans=None,
     geomkind="updown",
     _not_helper=True,
@@ -231,6 +248,9 @@ def localize_waveforms(
     -------
     xs, ys, z_rels, z_abss, alphas
     """
+    if logbarrier:
+        assert not jac
+
     if _not_helper:
         N, T, C = check_shapes(
             waveforms, maxchans, channel_radius, geom, firstchans, geomkind
@@ -315,11 +335,15 @@ def localize_waveforms_batched(
     channel_radius=10,
     n_workers=1,
     jac=False,
+    logbarrier=True,
     firstchans=None,
     geomkind="updown",
     batch_size=128,
 ):
     """A helper for running the above on hdf5 datasets or similar"""
+    if logbarrier:
+        assert not jac
+
     N, T, C = check_shapes(
         waveforms, maxchans, channel_radius, geom, firstchans, geomkind
     )
