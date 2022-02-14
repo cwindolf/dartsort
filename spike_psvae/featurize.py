@@ -61,7 +61,7 @@ def relativize_waveforms(wfs, firstchans, z, geom, feat_chans=18):
         stdwfs[i] = wf[:, low:high]
         maxchans[i] = firstchans[i] + stdwfs[i].ptp(0).argmax()
 
-    return stdwfs, firstchans_std, maxchans, z_rel
+    return stdwfs, firstchans_std, maxchans, z_rel, chans_down
 
 
 def featurize(
