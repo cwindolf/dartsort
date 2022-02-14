@@ -11,18 +11,18 @@ def detect_and_deduplicate(
     spike_index, energy = voltage_threshold(recording, threshold)
 
     # move to gpu
-    # spike_index = torch.from_numpy(spike_index)
-    # energy = torch.from_numpy(energy)
-    # spike_index = spike_index.to(device)
-    # energy = energy.to(device)
+    spike_index = torch.from_numpy(spike_index)
+    energy = torch.from_numpy(energy)
+    spike_index = spike_index.to(device)
+    energy = energy.to(device)
 
     # deduplicate
-    # spike_index_dedup, energy_dedup = deduplicate_gpu(
-    spike_index_dedup, energy_dedup = deduplicate(
+    spike_index_dedup, energy_dedup = deduplicate_gpu(
+    # spike_index_dedup, energy_dedup = deduplicate(
         spike_index, energy, recording.shape, channel_index
     )
-    # spike_index_dedup = spike_index_dedup.cpu().numpy()
-    # energy_dedup = energy_dedup.cpu().numpy()
+    spike_index_dedup = spike_index_dedup.cpu().numpy()
+    energy_dedup = energy_dedup.cpu().numpy()
 
     # update times wrt buffer size, remove spikes in buffer
     spike_index_dedup[:, 0] -= buffer_size
