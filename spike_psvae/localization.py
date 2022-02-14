@@ -9,7 +9,7 @@ from .waveform_utils import get_local_geom, get_local_chans
 # (x_low, y_low, z_low, alpha_low), (x_high, y_high, z_high, alpha_high)
 BOUNDS_NP1 = (-150, 0, -150, 0), (209, 250, 150, 10000)
 BOUNDS_NP2 = (-100, 0, -100, 0), (132, 250, 100, 10000)
-BOUNDS = {385: BOUNDS_NP1, 384: BOUNDS_NP2}
+BOUNDS = {20: BOUNDS_NP1, 15: BOUNDS_NP2}
 
 # how to initialize y, alpha?
 Y0, ALPHA0 = 21.0, 1000.0
@@ -140,7 +140,7 @@ def localize_ptp(
         residual,
         jac=jacobian,
         x0=[xcom, Y0, zcom, ALPHA0],
-        bounds=BOUNDS[geom.shape[0]],
+        bounds=BOUNDS[int(geom[0, 2] - geom[0, 0])],
     )
 
     # convert to absolute positions
