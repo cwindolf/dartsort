@@ -4,32 +4,34 @@ from sklearn.decomposition import PCA
 from tqdm.auto import trange
 
 from . import localization, point_source_centering
-from . import up_down
 
 
-def isotonic_ptp(ptps, central=False):
-    if central:
-        return np.array(
-            [
-                np.c_[
-                    up_down.central_up_down_isotonic_regression(ptp[::2]),
-                    up_down.central_up_down_isotonic_regression(ptp[1::2]),
-                ].ravel()
-                for ptp in ptps
-            ],
-            dtype=ptps.dtype,
-        )
-    else:
-        return np.array(
-            [
-                np.c_[
-                    up_down.up_down_isotonic_regression(ptp[::2]),
-                    up_down.up_down_isotonic_regression(ptp[1::2]),
-                ].ravel()
-                for ptp in ptps
-            ],
-            dtype=ptps.dtype,
-        )
+# from . import up_down
+
+
+# def isotonic_ptp(ptps, central=False):
+#     if central:
+#         return np.array(
+#             [
+#                 np.c_[
+#                     up_down.central_up_down_isotonic_regression(ptp[::2]),
+#                     up_down.central_up_down_isotonic_regression(ptp[1::2]),
+#                 ].ravel()
+#                 for ptp in ptps
+#             ],
+#             dtype=ptps.dtype,
+#         )
+#     else:
+#         return np.array(
+#             [
+#                 np.c_[
+#                     up_down.up_down_isotonic_regression(ptp[::2]),
+#                     up_down.up_down_isotonic_regression(ptp[1::2]),
+#                 ].ravel()
+#                 for ptp in ptps
+#             ],
+#             dtype=ptps.dtype,
+#         )
 
 
 def featurize(
