@@ -61,15 +61,21 @@ def deduplicate(spike_index, energy, channel_index, max_window=5.):
     # we need neighbors
     kdt = KDTree(spike_index)
     # edges = kdt.query_pairs(r=5., p=1., )
+    
+    # get spatiotemporal neighbors by constructing a sparse distance
+    # matrix where l1 dist < max_window, and using the LIL rows data
+    # structure which holds the list of nonzero inds for each row
     Ds = kdt.sparse_distance_matrix(kdt, 5., p=1)
     rows = Ds.tolil().rows
     max_neighbs = max(map(len, rows))
+
     # spike neighbor index
     neighb_index = np.full(
         (len(spike_index), max_neighbs), len(spike_index)
     )
     for i, row in enumerate(rows):
         neighb_index[i, :len(row)] = row
+
     # do the max pool
     max_energy = -1e-8 + np.max(
         np.r_[energy, [0]][neighb_index],
