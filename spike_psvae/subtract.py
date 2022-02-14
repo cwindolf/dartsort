@@ -1,3 +1,4 @@
+import gc
 import h5py
 import numpy as np
 import torch
@@ -46,36 +47,40 @@ def subtraction_batch(
     spike_length_samples,
     extract_channels,
     device,
+    start_sample,
+    end_sample,
 ):
-    s_end = min(T_samples, s_start + batch_len_samples)
-
     # load denoiser (load here so that we load only once per batch)
     denoiser = denoise.SingleChanDenoiser()
     denoiser.load()
     denoiser.to(device)
 
     # load raw data with buffer
+    s_end = min(end_sample, s_start + batch_len_samples)
     buffer = spike_length_samples
-    load_start = max(0, s_start - buffer)
-    load_end = min(T_samples, s_end + buffer)
+    n_channels = len(channel_index)
+    load_start = max(start_sample, s_start - buffer)
+    load_end = min(end_sample, s_end + buffer)
     residual = read_data(
-        standardized_bin, np.float32, s_start, s_end, len(channel_index)
+        standardized_bin, np.float32, load_start, load_end, n_channels
     )
 
     # 0 padding if we were at the edge of the data
     pad_left = pad_right = 0
-    if load_start == 0:
+    if load_start == start_sample:
         pad_left = buffer
-    if load_end == T_samples:
-        pad_right = buffer - (T_samples - s_end)
+    if load_end == end_sample:
+        pad_right = buffer - (end_sample - s_end)
     if pad_left != 0 or pad_right != 0:
         residual = np.pad(residual, [(pad_left, pad_right), (0, 0)])
+    assert residual.shape == (2 * buffer + s_end - s_start, n_channels)
 
     # main subtraction loop
     subtracted_wfs = []
     spike_index = []
     firstchans = []
     for threshold in thresholds:
+        old_resid = residual.copy()
         subwfs, spind, fcs = detect_and_subtract(
             residual,
             threshold,
@@ -86,8 +91,10 @@ def subtraction_batch(
             spike_length_samples,
             extract_channels,
             device,
+            buffer,
         )
         if len(spind):
+            assert (np.abs(residual - old_resid) > 0).any()
             subtracted_wfs.append(subwfs)
             spike_index.append(spind)
             firstchans.append(fcs)
@@ -100,9 +107,13 @@ def subtraction_batch(
     subtracted_wfs = subtracted_wfs[sort]
     spike_index = spike_index[sort]
     firstchans = firstchans[sort]
-
-    # strip buffer from residual
-    residual = residual[buffer:-buffer]
+    
+    # get rid of too early spikes if we're in the first batch
+    if s_start == start_sample:
+        bad = np.flatnonzero(spike_index[:, 0] < trough_offset)
+        np.delete(spike_index, bad, axis=0)
+        np.delete(firstchans, bad, axis=0)
+        np.delete(subtracted_wfs, bad, axis=0)
 
     # get cleaned waveforms
     cleaned_wfs = batch_cleaned_waveforms(
@@ -113,10 +124,16 @@ def subtraction_batch(
         denoiser,
         tpca_rank,
         trough_offset,
+        buffer,
     )
+    
+    # strip buffer from residual
+    residual = residual[buffer:-buffer]
 
     # time relative to batch start
     spike_index[:, 0] += s_start
+    
+    gc.collect()
 
     return SubtractionBatchResult(
         N_new=len(spike_index),
@@ -137,6 +154,8 @@ def subtraction(
     spatial_radius=70,
     tpca_rank=7,
     n_sec_chunk=1,
+    t_start=0,
+    t_end=None,
     sampling_rate=30_000,
     thresholds=[12, 10, 8, 6, 5, 4],
     extract_channels=40,
@@ -169,19 +188,27 @@ def subtraction(
             raise ValueError(
                 "Either pass `geom` or put meta file in folder with binary."
             )
+    n_channels = geom.shape[0]
 
     # figure out length of data
-    std = np.memmap(standardized_bin, mode="r", dtype=np.float32)
-    std = std.reshape(-1, geom.shape[0])
-    T_samples, n_channels = std.shape
-    del std
+    std_size = standardized_bin.stat().st_size
+    assert not std_size % np.dtype(np.float32).itemsize
+    std_size = std_size // np.dtype(np.float32).itemsize
+    assert not std_size % n_channels
+    T_samples = std_size // n_channels
+    
+    # time logic -- what region are we going to load
+    T_sec = T_samples / sampling_rate
+    assert t_start >= 0 and (t_end is None or t_end <= T_sec)
+    start_sample = int(np.floor(t_start * sampling_rate))
+    end_sample = T_samples if t_end is None else int(np.floor(t_end * sampling_rate))
 
     # compute helper data structures
     channel_index = make_channel_index(geom, spatial_radius, steps=2)
 
     # initialize resizable output datasets for waveforms etc
     residual = out_h5.create_dataset(
-        "residual", shape=(T_samples, n_channels), dtype=np.float32
+        "residual", shape=(end_sample - start_sample, n_channels), dtype=np.float32
     )
     subtracted_wfs = out_h5.create_dataset(
         "subtracted_waveforms",
@@ -211,6 +238,9 @@ def subtraction(
         maxshape=(None, 2),
         dtype=np.int64,
     )
+    out_h5.create_dataset("geom", data=geom)
+    out_h5.create_dataset("start_sample", data=start_sample)
+    out_h5.create_dataset("end_sample", data=end_sample)
 
     # now run subtraction in parallel
     N = 0  # how many have we detected so far?
@@ -227,9 +257,11 @@ def subtraction(
             spike_length_samples,
             extract_channels,
             device,
+            start_sample,
+            end_sample,
         )
         for s_start in trange(
-            0, T_samples, batch_len_samples, desc="Subtracting batches"
+            start_sample, end_sample, batch_len_samples, desc="Subtracting batches"
         )
     ):
         # grow arrays as necessary
@@ -245,6 +277,10 @@ def subtraction(
         cleaned_wfs[N : N + N_new] = result.cleaned_wfs
         firstchans[N : N + N_new] = result.firstchans
         spike_index[N : N + N_new] = result.spike_index
+        
+        out_h5.flush()
+        del result
+        gc.collect()
 
         N += N_new
 
@@ -253,14 +289,19 @@ def subtraction(
 
 
 @torch.inference_mode()
-def full_denoising(waveforms, tpca_rank, denoiser=None):
+def full_denoising(waveforms, tpca_rank, device=None, denoiser=None, batch_size=512):
     N, T, C = waveforms.shape
 
     # Apply NN denoiser (skip if None)
     waveforms = waveforms.transpose(0, 2, 1).reshape(N * C, T)
     if denoiser is not None:
-        waveforms = denoiser(torch.tensor(waveforms, device=denoiser.device))
-        waveforms = waveforms.cpu().numpy()
+        wfs = torch.tensor(waveforms)
+        for bs in range(0, N * C, batch_size):
+            be = min(bs + batch_size, N * C)
+            waveforms[bs:be] = denoiser(wfs[bs:be].to(device)).cpu().numpy()
+        del wfs
+        torch.cuda.empty_cache()
+        gc.collect()
 
     # Temporal PCA while we are still transposed
     tpca = PCA(tpca_rank)
@@ -285,8 +326,10 @@ def detect_and_subtract(
     spike_length_samples,
     extract_channels,
     device,
+    buffer,
 ):
     """This subtracts from raw in place, leaving the residual behind"""
+    n_channels = len(channel_index)
     spike_index, energy = voltage_detect.detect_and_deduplicate(
         raw, threshold, channel_index, spike_length_samples, device
     )
@@ -309,22 +352,28 @@ def detect_and_subtract(
     # extraction loop
     for i in range(len(spike_index)):
         t, mc = spike_index[i]
+
+        # what will be the first extracted channel?
         mc_idx = mc - mc % 2
         fc = mc_idx - chans_down
+        fc = max(fc, 0)
+        fc = min(fc, n_channels - extract_channels)
 
         subtracted_wfs[i] = raw[
-            t - trough_offset : t - trough_offset + spike_length_samples,
+            t - trough_offset + buffer : t - trough_offset + spike_length_samples + buffer,
             fc : fc + extract_channels,
         ]
         firstchans[i] = fc
 
     # denoising
-    subtracted_wfs = full_denoising(subtracted_wfs, tpca_rank, denoiser)
+    subtracted_wfs = full_denoising(
+        subtracted_wfs, tpca_rank, device, denoiser
+    )
 
     # the actual subtraction
     for wf, (t, mc), fc in zip(subtracted_wfs, spike_index, firstchans):
         raw[
-            t - trough_offset : t - trough_offset + spike_length_samples,
+            t - trough_offset + buffer : t - trough_offset + spike_length_samples + buffer,
             fc : fc + extract_channels,
         ] -= wf
 
@@ -339,6 +388,7 @@ def batch_cleaned_waveforms(
     denoiser,
     tpca_rank,
     trough_offset,
+    buffer,
 ):
     N, T, C = subtracted_wfs.shape
 
@@ -346,7 +396,8 @@ def batch_cleaned_waveforms(
     cleaned_waveforms = subtracted_wfs.copy()
     for n, ((t, mc), fc) in enumerate(zip(spike_index, firstchans)):
         cleaned_waveforms[n] += residual[
-            t - trough_offset : t - trough_offset + T, fc : fc + C
+            t - trough_offset + buffer : t - trough_offset + T + buffer,
+            fc : fc + C,
         ]
 
     # Denoise and return
