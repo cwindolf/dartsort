@@ -64,7 +64,6 @@ def subtraction_batch(
     residual = read_data(
         standardized_bin, np.float32, load_start, load_end, n_channels
     )
-    print("load", residual.mean(), residual.std())
 
     # 0 padding if we were at the edge of the data
     pad_left = pad_right = 0
@@ -94,7 +93,6 @@ def subtraction_batch(
             device,
             buffer,
         )
-        print("thresh", threshold, residual.mean(), residual.std())
         
         if len(spind):
             assert (np.abs(residual - old_resid) > 0).any()
