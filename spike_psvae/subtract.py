@@ -110,11 +110,21 @@ def subtraction_batch(
     firstchans = firstchans[sort]
     
     # get rid of too early spikes if we're in the first batch
+    # or too late ones in the last
     if s_start == start_sample:
         ix = np.searchsorted(spike_index[:, 0], trough_offset, side="right")
         spike_index = spike_index[ix:]
         firstchans = firstchans[ix:]
         subtracted_wfs = subtracted_wfs[ix:]
+    if load_end == end_sample:
+        ix = np.searchsorted(
+            spike_index[:, 0],
+            end_sample - spike_length_samples + trough_offset,
+            side="right",
+        )
+        spike_index = spike_index[:ix]
+        firstchans = firstchans[:ix]
+        subtracted_wfs = subtracted_wfs[:ix]
 
     # get cleaned waveforms
     cleaned_wfs = batch_cleaned_waveforms(
