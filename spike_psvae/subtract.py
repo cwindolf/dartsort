@@ -64,6 +64,7 @@ def subtraction_batch(
     residual = read_data(
         standardized_bin, np.float32, load_start, load_end, n_channels
     )
+    print("load", residual.mean(), residual.std())
 
     # 0 padding if we were at the edge of the data
     pad_left = pad_right = 0
@@ -93,6 +94,8 @@ def subtraction_batch(
             device,
             buffer,
         )
+        print("thresh", threshold, residual.mean(), residual.std())
+        
         if len(spind):
             assert (np.abs(residual - old_resid) > 0).any()
             subtracted_wfs.append(subwfs)
@@ -244,6 +247,9 @@ def subtraction(
 
     # now run subtraction in parallel
     N = 0  # how many have we detected so far?
+    # TODO: joblib parallel doesn't yield intermediate results
+    #       need to break the processing in batches so that memory
+    #       does not explode
     for result in Parallel(n_jobs)(
         delayed(subtraction_batch)(
             s_start,
@@ -272,7 +278,7 @@ def subtraction(
         spike_index.resize(N + N_new, axis=0)
 
         # write results
-        residual[result.s_start : result.s_end] = result.residual
+        residual[result.s_start - start_sample : result.s_end - start_sample] = result.residual
         subtracted_wfs[N : N + N_new] = result.subtracted_wfs
         cleaned_wfs[N : N + N_new] = result.cleaned_wfs
         firstchans[N : N + N_new] = result.firstchans
