@@ -4,32 +4,64 @@ from sklearn.decomposition import PCA
 from tqdm.auto import trange
 
 from . import localization, point_source_centering
-from . import up_down
 
 
-def isotonic_ptp(ptps, central=False):
-    if central:
-        return np.array(
-            [
-                np.c_[
-                    up_down.central_up_down_isotonic_regression(ptp[::2]),
-                    up_down.central_up_down_isotonic_regression(ptp[1::2]),
-                ].ravel()
-                for ptp in ptps
-            ],
-            dtype=ptps.dtype,
-        )
-    else:
-        return np.array(
-            [
-                np.c_[
-                    up_down.up_down_isotonic_regression(ptp[::2]),
-                    up_down.up_down_isotonic_regression(ptp[1::2]),
-                ].ravel()
-                for ptp in ptps
-            ],
-            dtype=ptps.dtype,
-        )
+# from . import up_down
+
+
+# def isotonic_ptp(ptps, central=False):
+#     if central:
+#         return np.array(
+#             [
+#                 np.c_[
+#                     up_down.central_up_down_isotonic_regression(ptp[::2]),
+#                     up_down.central_up_down_isotonic_regression(ptp[1::2]),
+#                 ].ravel()
+#                 for ptp in ptps
+#             ],
+#             dtype=ptps.dtype,
+#         )
+#     else:
+#         return np.array(
+#             [
+#                 np.c_[
+#                     up_down.up_down_isotonic_regression(ptp[::2]),
+#                     up_down.up_down_isotonic_regression(ptp[1::2]),
+#                 ].ravel()
+#                 for ptp in ptps
+#             ],
+#             dtype=ptps.dtype,
+#         )
+
+
+def relativize_waveforms(wfs, firstchans, z, geom, feat_chans=18):
+    chans_down = feat_chans // 2
+    chans_down -= chans_down % 2
+
+    stdwfs = np.zeros(
+        (wfs.shape[0], wfs.shape[1], feat_chans), dtype=wfs.dtype
+    )
+
+    firstchans_std = firstchans.copy().astype(int)
+    maxchans = np.zeros(firstchans.shape, dtype=int)
+    z_rel = np.zeros_like(z)
+    for i in range(wfs.shape[0]):
+        wf = wfs[i]
+        mcrel = wf.ptp(0).argmax()
+        mcrix = mcrel - mcrel % 2
+        z_rel[i] = z[i] - geom[firstchans[i] + mcrel, 1]
+
+        low, high = mcrix - chans_down, mcrix + feat_chans - chans_down
+        if low < 0:
+            low, high = 0, wfs.shape[2] - 2
+        if high > wfs.shape[2]:
+            low, high = 2, wfs.shape[2]
+
+        firstchans_std[i] += low
+        stdwfs[i] = wf[:, low:high]
+        maxchans[i] = firstchans[i] + stdwfs[i].ptp(0).argmax()
+
+    return stdwfs, firstchans_std, maxchans, z_rel, chans_down
 
 
 def featurize(
