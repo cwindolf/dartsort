@@ -37,6 +37,7 @@ class SingleChanDenoiser(nn.Module):
     def load(self, fname_model=pretrained_path):
         checkpoint = torch.load(fname_model, map_location="cpu")
         self.load_state_dict(checkpoint)
+        return self
 
 
 def temporal_align(waveforms, maxchans=None, offset=42):
