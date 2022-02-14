@@ -110,10 +110,10 @@ def subtraction_batch(
     
     # get rid of too early spikes if we're in the first batch
     if s_start == start_sample:
-        bad = np.flatnonzero(spike_index[:, 0] < trough_offset)
-        np.delete(spike_index, bad, axis=0)
-        np.delete(firstchans, bad, axis=0)
-        np.delete(subtracted_wfs, bad, axis=0)
+        ix = np.searchsorted(spike_index[:, 0], trough_offset, side="right")
+        spike_index = spike_index[ix:]
+        firstchans = firstchans[ix:]
+        subtracted_wfs = subtracted_wfs[ix:]
 
     # get cleaned waveforms
     cleaned_wfs = batch_cleaned_waveforms(
