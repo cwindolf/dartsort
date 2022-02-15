@@ -1,10 +1,14 @@
 import numpy as np
-import numpy.linalg as la
+
+# import numpy.linalg as la
 import torch
 
 from pathlib import Path
-from sklearn.decomposition import PCA
+
+# from sklearn.decomposition import PCA
 from torch import nn
+from tqdm.auto import trange
+
 
 pretrained_path = (
     Path(__file__).parent.parent / "pretrained/single_chan_denoiser.pt"
@@ -63,6 +67,7 @@ def temporal_align(waveforms, maxchans=None, offset=42):
         out[i] = pwf[start:end, :]
 
     return out, rolls
+
 
 def invert_temporal_align(aligned, rolls):
     T = aligned.shape[1]
@@ -123,3 +128,27 @@ def enforce_decrease(waveform, in_place=False):
             )
 
     return wf
+
+
+@torch.inference_mode()
+def cleaned_waveforms(waveforms, spike_index, firstchans, residual):
+    C = waveforms.shape[2]
+    denoiser = SingleChanDenoiser().load()
+    cleaned = np.empty_like(waveforms)
+    for ix in trange(len(spike_index), desc="Cleaning and denoising"):
+        t, mc = spike_index[ix]
+        if t + 79 > residual.shape[0]:
+            raise ValueError("Spike time outside range")
+
+        fc = firstchans[ix]
+        cleaned[ix] = (
+            denoiser(
+                torch.as_tensor(
+                    residual[t - 42 : t + 79, fc : fc + C] + waveforms[ix],
+                    dtype=torch.float,
+                )
+            )
+            .numpy()
+            .T
+        )
+    return cleaned
