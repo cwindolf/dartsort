@@ -5,7 +5,7 @@ import torch
 
 from pathlib import Path
 
-# from sklearn.decomposition import PCA
+from sklearn.decomposition import PCA
 from torch import nn
 from tqdm.auto import trange
 
@@ -131,24 +131,33 @@ def enforce_decrease(waveform, in_place=False):
 
 
 @torch.inference_mode()
-def cleaned_waveforms(waveforms, spike_index, firstchans, residual):
-    C = waveforms.shape[2]
+def cleaned_waveforms(
+    waveforms, spike_index, firstchans, residual, s_start=0, tpca_rank=7
+):
+    N, T, C = waveforms.shape
     denoiser = SingleChanDenoiser().load()
-    cleaned = np.empty_like(waveforms)
+    cleaned = np.empty(N, C, T, dtype=waveforms.dtype)
     for ix in trange(len(spike_index), desc="Cleaning and denoising"):
         t, mc = spike_index[ix]
+        fc = firstchans[ix]
+        t = t - s_start
+
         if t + 79 > residual.shape[0]:
             raise ValueError("Spike time outside range")
 
-        fc = firstchans[ix]
-        cleaned[ix] = (
-            denoiser(
-                torch.as_tensor(
-                    residual[t - 42 : t + 79, fc : fc + C] + waveforms[ix],
-                    dtype=torch.float,
-                )
+        cleaned[ix] = denoiser(
+            torch.as_tensor(
+                (residual[t - 42 : t + 79, fc : fc + C] + waveforms[ix]).T,
+                dtype=torch.float,
             )
-            .numpy()
-            .T
-        )
+        ).numpy()
+
+    tpca = PCA(tpca_rank)
+    cleaned = cleaned.reshape(N * C, T)
+    cleaned = tpca.inverse_transform(tpca.fit_transform(cleaned))
+    cleaned = cleaned.reshape(N, C, T).transpose(0, 2, 1)
+
+    for i in range(N):
+        enforce_decrease(cleaned[i], in_place=True)
+
     return cleaned
