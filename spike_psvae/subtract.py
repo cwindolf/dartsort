@@ -117,10 +117,10 @@ def subtraction_batch(
         firstchans = firstchans[ix:]
         subtracted_wfs = subtracted_wfs[ix:]
     if load_end == end_sample:
-        ix = np.searchsorted(
+        ix = -1 + np.searchsorted(
             spike_index[:, 0],
-            end_sample - spike_length_samples + trough_offset,
-            side="right",
+            s_end - s_start - spike_length_samples + trough_offset,
+            side="left",
         )
         spike_index = spike_index[:ix]
         firstchans = firstchans[:ix]
@@ -164,7 +164,7 @@ def subtraction(
     geom=None,
     spatial_radius=70,
     tpca_rank=7,
-    n_sec_chunk=1,
+    n_sec_chunk=2,
     t_start=0,
     t_end=None,
     sampling_rate=30_000,

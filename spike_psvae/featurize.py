@@ -56,9 +56,9 @@ def relativize_waveforms(wfs, firstchans, z, geom, feat_chans=18):
 
         low, high = mcrix - chans_down, mcrix + feat_chans - chans_down
         if low < 0:
-            low, high = 0, wfs.shape[2] - 2
+            low, high = 0, feat_chans
         if high > wfs.shape[2]:
-            low, high = 2, wfs.shape[2]
+            low, high = wfs.shape[2] - feat_chans, wfs.shape[2]
 
         firstchans_std[i] += low
         stdwfs[i] = wf[:, low:high]

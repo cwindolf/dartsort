@@ -109,6 +109,9 @@ def localize_ptp(
     ptp_p = ptp / ptp.sum()
     xcom, zcom = (ptp_p[:, None] * local_geom).sum(axis=0)
     maxptp = ptp.max()
+    print(xcom, Y0, zcom, ALPHA0)
+    print(BOUNDS[int(geom[2, 1] - geom[0, 1])])
+    print(local_geom)
 
     if logbarrier:
         # TODO: can we break this up over components like before?
@@ -140,7 +143,7 @@ def localize_ptp(
         residual,
         jac=jacobian,
         x0=[xcom, Y0, zcom, ALPHA0],
-        bounds=BOUNDS[int(geom[0, 2] - geom[0, 0])],
+        bounds=BOUNDS[int(geom[2, 1] - geom[0, 1])],
     )
 
     # convert to absolute positions
