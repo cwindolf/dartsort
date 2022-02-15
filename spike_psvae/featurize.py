@@ -44,12 +44,15 @@ def relativize_waveforms(wfs, firstchans, z, geom, feat_chans=18):
 
     firstchans_std = firstchans.copy().astype(int)
     maxchans = np.zeros(firstchans.shape, dtype=int)
-    z_rel = np.zeros_like(z)
+    if z is not None:
+        z_rel = np.zeros_like(z)
+
     for i in range(wfs.shape[0]):
         wf = wfs[i]
         mcrel = wf.ptp(0).argmax()
         mcrix = mcrel - mcrel % 2
-        z_rel[i] = z[i] - geom[firstchans[i] + mcrel, 1]
+        if z is not None:
+            z_rel[i] = z[i] - geom[firstchans[i] + mcrel, 1]
 
         low, high = mcrix - chans_down, mcrix + feat_chans - chans_down
         if low < 0:
@@ -61,7 +64,10 @@ def relativize_waveforms(wfs, firstchans, z, geom, feat_chans=18):
         stdwfs[i] = wf[:, low:high]
         maxchans[i] = firstchans[i] + stdwfs[i].ptp(0).argmax()
 
-    return stdwfs, firstchans_std, maxchans, z_rel, chans_down
+    if z is not None:
+        return stdwfs, firstchans_std, maxchans, z_rel, chans_down
+    else:
+        return stdwfs, firstchans_std, maxchans, chans_down
 
 
 def featurize(
