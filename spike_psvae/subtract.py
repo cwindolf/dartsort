@@ -293,8 +293,12 @@ def subtraction(
 
 
 @torch.inference_mode()
-def full_denoising(waveforms, tpca_rank, device=None, denoiser=None, batch_size=512):
+def full_denoising(waveforms, tpca_rank, maxchans, device=None, denoiser=None, batch_size=512, align=False):
     N, T, C = waveforms.shape
+    
+    # temporal align
+    if align:
+        waveforms, rolls = denoise.temporal_align(waveforms, maxchans=maxchans)
 
     # Apply NN denoiser (skip if None)
     waveforms = waveforms.transpose(0, 2, 1).reshape(N * C, T)
@@ -316,6 +320,10 @@ def full_denoising(waveforms, tpca_rank, device=None, denoiser=None, batch_size=
     waveforms = waveforms.reshape(N, C, T).transpose(0, 2, 1)
     for wf in waveforms:
         denoise.enforce_decrease(wf, in_place=True)
+    
+    # un-temporal align
+    if align:
+        waveforms = denoise.invert_temporal_align(waveforms, rolls)
 
     return waveforms
 
@@ -371,7 +379,7 @@ def detect_and_subtract(
 
     # denoising
     subtracted_wfs = full_denoising(
-        subtracted_wfs, tpca_rank, device, denoiser
+        subtracted_wfs, tpca_rank, spike_index[:, 1] - firstchans, device, denoiser
     )
 
     # the actual subtraction
@@ -405,7 +413,7 @@ def batch_cleaned_waveforms(
         ]
 
     # Denoise and return
-    return full_denoising(cleaned_waveforms, tpca_rank, denoiser)
+    return full_denoising(cleaned_waveforms, tpca_rank, spike_index[:, 1] - firstchans, denoiser)
 
 
 # -- channels / geometry helpers
