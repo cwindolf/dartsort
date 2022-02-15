@@ -67,6 +67,7 @@ def temporal_align(waveforms, maxchans=None, offset=42):
 
     return out, rolls
 
+
 def invert_temporal_align(aligned, rolls):
     T = aligned.shape[1]
     out = np.empty_like(aligned)
