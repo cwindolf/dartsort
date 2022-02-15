@@ -67,6 +67,26 @@ def temporal_align(waveforms, maxchans=None, offset=42):
 
     return out, rolls
 
+def invert_temporal_align(aligned, rolls):
+    T = aligned.shape[1]
+    out = np.empty_like(aligned)
+    pads = [(0, 0), (0, 0)]
+    for i, roll in enumerate(-rolls):
+        if roll > 0:
+            pads[0] = (roll, 0)
+            start, end = 0, T
+        elif roll < 0:
+            pads[0] = (0, -roll)
+            start, end = -roll, T - roll
+        else:
+            out[i] = aligned[i]
+            continue
+
+        pwf = np.pad(aligned[i], pads, mode="linear_ramp")
+        out[i] = pwf[start:end, :]
+
+    return out
+
 
 def enforce_decrease(waveform, in_place=False):
     n_chan = waveform.shape[1]

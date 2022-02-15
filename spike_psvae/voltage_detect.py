@@ -11,18 +11,18 @@ def detect_and_deduplicate(
     spike_index, energy = voltage_threshold(recording, threshold)
 
     # move to gpu
-    # spike_index = torch.from_numpy(spike_index)
-    # energy = torch.from_numpy(energy)
-    # spike_index = spike_index.to(device)
-    # energy = energy.to(device)
+    spike_index = torch.from_numpy(spike_index)
+    energy = torch.from_numpy(energy)
+    spike_index = spike_index.to(device)
+    energy = energy.to(device)
 
     # deduplicate
-    # spike_index_dedup, energy_dedup = deduplicate_gpu(
-    spike_index_dedup, energy_dedup = deduplicate(
+    spike_index_dedup, energy_dedup = deduplicate_gpu(
+    # spike_index_dedup, energy_dedup = deduplicate(
         spike_index, energy, recording.shape, channel_index
     )
-    # spike_index_dedup = spike_index_dedup.cpu().numpy()
-    # energy_dedup = energy_dedup.cpu().numpy()
+    spike_index_dedup = spike_index_dedup.cpu().numpy()
+    energy_dedup = energy_dedup.cpu().numpy()
 
     # update times wrt buffer size, remove spikes in buffer
     spike_index_dedup[:, 0] -= buffer_size
@@ -61,15 +61,21 @@ def deduplicate(spike_index, energy, channel_index, max_window=5.):
     # we need neighbors
     kdt = KDTree(spike_index)
     # edges = kdt.query_pairs(r=5., p=1., )
+    
+    # get spatiotemporal neighbors by constructing a sparse distance
+    # matrix where l1 dist < max_window, and using the LIL rows data
+    # structure which holds the list of nonzero inds for each row
     Ds = kdt.sparse_distance_matrix(kdt, 5., p=1)
     rows = Ds.tolil().rows
     max_neighbs = max(map(len, rows))
+
     # spike neighbor index
     neighb_index = np.full(
         (len(spike_index), max_neighbs), len(spike_index)
     )
     for i, row in enumerate(rows):
         neighb_index[i, :len(row)] = row
+
     # do the max pool
     max_energy = -1e-8 + np.max(
         np.r_[energy, [0]][neighb_index],
