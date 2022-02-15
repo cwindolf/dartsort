@@ -136,7 +136,7 @@ def cleaned_waveforms(
 ):
     N, T, C = waveforms.shape
     denoiser = SingleChanDenoiser().load()
-    cleaned = np.empty(N, C, T, dtype=waveforms.dtype)
+    cleaned = np.empty((N, C, T), dtype=waveforms.dtype)
     for ix in trange(len(spike_index), desc="Cleaning and denoising"):
         t, mc = spike_index[ix]
         fc = firstchans[ix]
