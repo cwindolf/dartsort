@@ -133,7 +133,7 @@ def enforce_decrease(waveform, in_place=False):
 def cleaned_waveforms(
     waveforms, spike_index, firstchans, residual, s_start=0, tpca_rank=7
 ):
-    N, T, C = waveforms.shape[2]
+    N, T, C = waveforms.shape
     denoiser = SingleChanDenoiser().load()
     cleaned = np.empty(N, C, T, dtype=waveforms.dtype)
     for ix in trange(len(spike_index), desc="Cleaning and denoising"):
