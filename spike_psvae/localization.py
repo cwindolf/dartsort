@@ -1,18 +1,18 @@
 from itertools import repeat
 from joblib import Parallel, delayed
 import numpy as np
-from scipy.optimize import least_squares
+from scipy.optimize import least_squares, minimize
 from tqdm.auto import trange, tqdm
-
+import scipy
 from .waveform_utils import get_local_geom, get_local_chans
 
 # (x_low, y_low, z_low, alpha_low), (x_high, y_high, z_high, alpha_high)
-BOUNDS_NP1 = (-150, 0, -150, 0), (209, 250, 150, 10000)
+BOUNDS_NP1 = (-100, 1e-4, -100, 0), (132, 250, 100, 20000)
 BOUNDS_NP2 = (-100, 1e-4, -100, 0), (132, 250, 100, 20000)
 BOUNDS = {20: BOUNDS_NP1, 15: BOUNDS_NP2}
 
 # how to initialize y, alpha?
-Y0, ALPHA0 = 21.0, 1000.0
+Y0, ALPHA0 = 20.0, 1000.0
 
 
 def check_shapes(
@@ -92,7 +92,7 @@ def localize_ptp(
     """
     if logbarrier:
         assert not jac
-
+    # print(scipy.__version__)
     channel_radius = ptp.shape[0] // 2 - ("standard" in geomkind)
     # local_geom is 2*channel_radius, 2
     local_geom, z_maxchan = get_local_geom(
@@ -106,25 +106,27 @@ def localize_ptp(
     )
 
     # initialize x, z with CoM
+    ptp = ptp.astype(float)
+    local_geom = local_geom.astype(float)
     ptp_p = ptp / ptp.sum()
     xcom, zcom = (ptp_p[:, None] * local_geom).sum(axis=0)
     maxptp = ptp.max()
-    print(xcom, Y0, zcom, ALPHA0)
-    print(BOUNDS[int(geom[2, 1] - geom[0, 1])])
-    print(local_geom)
 
     if logbarrier:
-        # TODO: can we break this up over components like before?
         def residual(loc):
-            phat = ptp_at(*loc, local_geom)
-            logpenalty = np.log1p(np.log1p(maxptp * loc[1]) / 50.0)
-            return (ptp - phat).sum() - logpenalty
+            x, y, z, alpha = loc
+            phat = ptp_at(x, y, z, alpha, local_geom)
+            
+            qhat = ptp_at(x, y, z, ALPHA0, local_geom)
+            logpenalty = np.log(1 + np.log(1 + maxptp * y) / 50)
+            sse = np.square(ptp - ptp_at(x, y, z, alpha, local_geom)).sum()
+            return sse - logpenalty # / len(ptp)
     else:
         def residual(loc):
             return ptp - ptp_at(*loc, local_geom)
 
     jacobian = "2-point"
-    if jac:
+    if jac and not logbarrier:
 
         def jacobian(loc):
             x, y, z, alpha = loc
@@ -139,9 +141,18 @@ def localize_ptp(
             dda = -1.0 / d12
             return np.stack((ddx, ddy, ddz, dda), axis=1)
 
+    # if logbarrier:
+    #     result = minimize(
+    #         residual,
+    #         # jac=jacobian,
+    #         x0=[xcom, Y0, zcom, ALPHA0],
+    #         bounds=list(zip(*BOUNDS[int(geom[2, 1] - geom[0, 1])])),
+    #         # options=dict(disp=True)
+    #     )
+        
     result = least_squares(
         residual,
-        jac=jacobian,
+        # jac=jacobian,
         x0=[xcom, Y0, zcom, ALPHA0],
         bounds=BOUNDS[int(geom[2, 1] - geom[0, 1])],
     )
@@ -214,6 +225,7 @@ def localize_ptps(
                     jac=jac,
                     firstchan=firstchan,
                     geomkind=geomkind,
+                    logbarrier=logbarrier,
                 )
                 for ptp, maxchan, firstchan in xqdm(
                     zip(ptps, maxchans, firstchans), total=N, desc="lsq"
@@ -316,6 +328,7 @@ def localize_waveforms(
                     jac=jac,
                     firstchan=firstchan,
                     geomkind=geomkind,
+                    logbarrier=logbarrier,
                 )
                 for ptp, maxchan, firstchan in xqdm(
                     zip(ptps, maxchans, firstchans), total=N, desc="lsq"
@@ -382,6 +395,7 @@ def localize_waveforms_batched(
                     jac=jac,
                     geomkind=geomkind,
                     firstchans=firstchan_batch(start, end),
+                    logbarrier=logbarrier,
                     _not_helper=False,
                 )
                 for start, end in tqdm(
