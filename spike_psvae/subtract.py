@@ -50,6 +50,7 @@ def subtraction_batch(
     device,
     start_sample,
     end_sample,
+    do_clean,
 ):
     # load denoiser (load here so that we load only once per batch)
     denoiser = denoise.SingleChanDenoiser()
@@ -128,16 +129,18 @@ def subtraction_batch(
         subtracted_wfs = subtracted_wfs[:ix]
 
     # get cleaned waveforms
-    cleaned_wfs = batch_cleaned_waveforms(
-        residual,
-        subtracted_wfs,
-        spike_index,
-        firstchans,
-        denoiser,
-        tpca_rank,
-        trough_offset,
-        buffer,
-    )
+    cleaned_wfs = None
+    if do_clean:
+        cleaned_wfs = batch_cleaned_waveforms(
+            residual,
+            subtracted_wfs,
+            spike_index,
+            firstchans,
+            denoiser,
+            tpca_rank,
+            trough_offset,
+            buffer,
+        )
 
     # strip buffer from residual
     residual = residual[buffer:-buffer]
@@ -175,6 +178,7 @@ def subtraction(
     trough_offset=42,
     n_jobs=1,
     device=None,
+    do_clean=False,
 ):
     standardized_bin = Path(standardized_bin)
     output_h5 = Path(output_h5)
@@ -233,13 +237,14 @@ def subtraction(
         maxshape=(None, spike_length_samples, extract_channels),
         dtype=np.float32,
     )
-    cleaned_wfs = out_h5.create_dataset(
-        "cleaned_waveforms",
-        chunks=(1024, spike_length_samples, extract_channels),
-        shape=(1, spike_length_samples, extract_channels),
-        maxshape=(None, spike_length_samples, extract_channels),
-        dtype=np.float32,
-    )
+    if do_clean:
+        cleaned_wfs = out_h5.create_dataset(
+            "cleaned_waveforms",
+            chunks=(1024, spike_length_samples, extract_channels),
+            shape=(1, spike_length_samples, extract_channels),
+            maxshape=(None, spike_length_samples, extract_channels),
+            dtype=np.float32,
+        )
     firstchans = out_h5.create_dataset(
         "first_channels",
         chunks=(1024,),
@@ -283,13 +288,15 @@ def subtraction(
                     device,
                     start_sample,
                     end_sample,
+                    do_clean,
                 )
-                for s_start in batch
+                for s_start in tqdm(batch, desc="Chunks", leave=False)
             ):
                 # grow arrays as necessary
                 N_new = result.N_new
                 subtracted_wfs.resize(N + N_new, axis=0)
-                cleaned_wfs.resize(N + N_new, axis=0)
+                if do_clean:
+                    cleaned_wfs.resize(N + N_new, axis=0)
                 firstchans.resize(N + N_new, axis=0)
                 spike_index.resize(N + N_new, axis=0)
 
@@ -298,7 +305,8 @@ def subtraction(
                     result.s_start - start_sample : result.s_end - start_sample
                 ] = result.residual
                 subtracted_wfs[N : N + N_new] = result.subtracted_wfs
-                cleaned_wfs[N : N + N_new] = result.cleaned_wfs
+                if do_clean:
+                    cleaned_wfs[N : N + N_new] = result.cleaned_wfs
                 firstchans[N : N + N_new] = result.firstchans
                 spike_index[N : N + N_new] = result.spike_index
 
