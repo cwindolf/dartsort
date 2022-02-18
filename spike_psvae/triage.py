@@ -16,15 +16,20 @@ def weighted_knn_triage(
 
     return idx_keep1
 
+
 def coarse_split(
-    xyzp, feats, scales=[1, 10, 1, 15, 30, 10, 10, 10],
+    xyzp,
+    feats,
+    scales=[1, 10, 1, 15, 30, 10, 10, 10],
 ):
     vecs = np.c_[xyzp, feats] @ np.diag(scales)
     tree = KDTree(vecs)
     dist, ind = tree.query(vecs, k=6)
     dist = np.mean(dist, 1)
     print(dist.mean() + 6 * dist.std(), dist.mean(), dist.std())
-    W = tree.sparse_distance_matrix(tree, max_distance=dist.mean() + 6 * dist.std())
+    W = tree.sparse_distance_matrix(
+        tree, max_distance=dist.mean() + 6 * dist.std()
+    )
     G = nx.convert_matrix.from_scipy_sparse_matrix(W)
     components = list(nx.algorithms.components.connected_components(G))
     print(len(components), flush=True)
