@@ -6,12 +6,10 @@ IDK why I did this torch instead of np but easy to change. uhh
 
 TODO: Not sure how much of this code assumes NP2 geom specific stuff.
 """
-# from scipy import ndimage
 import torch
 import numpy as np
 
 from .waveform_utils import get_local_geom
-from .torch_utils import translate
 from .localization import localize_ptp
 
 
@@ -25,8 +23,7 @@ def point_source_ptp(local_geom, x, y, z, alpha):
     )
     geom_rel = local_geom - xz.view(-1, 1, 2)
     dists = torch.sqrt(
-        torch.as_tensor(y * y).view(-1, 1)
-        + torch.square(geom_rel).sum(dim=2),
+        torch.as_tensor(y * y).view(-1, 1) + torch.square(geom_rel).sum(dim=2),
     )
     ptp = torch.squeeze(torch.as_tensor(alpha).view(-1, 1) / dists)
     return ptp
@@ -45,14 +42,12 @@ def stereotypical_ptp(local_geom, x=None, y=15.0, z=0.0, alpha=150.0):
 def ptp_fit(
     waveforms,
     geom,
+    firstchans,
     maxchans,
     x,
     y,
     z_rel,
     alpha,
-    channel_radius=10,
-    firstchans=None,
-    geomkind="updown",
 ):
     B, T, C = waveforms.shape
     geom = geom.copy()
@@ -60,16 +55,7 @@ def ptp_fit(
     local_geom = torch.stack(
         [
             torch.as_tensor(
-                get_local_geom(
-                    geom,
-                    maxchans[n],
-                    channel_radius,
-                    ptp[n],
-                    firstchan=firstchans[n]
-                    if firstchans is not None
-                    else None,  # noqa
-                    geomkind=geomkind,
-                )
+                get_local_geom(geom, firstchans[n], maxchans[n], C)
             )
             for n in range(B)
         ],
@@ -84,28 +70,21 @@ def ptp_fit(
 
 def shift(
     waveform,
+    firstchan,
     maxchan,
     geom,
     dx=0,
     dz=0,
     y1=None,
     alpha1=None,
-    channel_radius=10,
-    firstchan=None,
-    geomkind="updown",
+    logbarrier=True,
 ):
     ptp = waveform.ptp(0)
+    n_channels = ptp.shape[1]
     x0, y0, z_rel0, z_abs0, alpha0 = localize_ptp(
-        ptp, maxchan, geom, firstchan=firstchan, geomkind=geomkind
+        ptp, firstchan, maxchan, geom, logbarrier=logbarrier
     )
-    local_geom = get_local_geom(
-        geom,
-        maxchan,
-        channel_radius,
-        ptp,
-        firstchan=firstchan,
-        geomkind=geomkind,
-    )
+    local_geom = get_local_geom(geom, firstchan, maxchan, n_channels)
     x1 = x0 + dx
     z1 = z_rel0 + dz
     if y1 is None:
@@ -121,16 +100,13 @@ def shift(
 def relocate_simple(
     waveforms,
     geom,
+    firstchans,
     maxchans,
     x,
     y,
     z_rel,
     alpha,
-    channel_radius=10,
-    firstchans=None,
-    geomkind="updown",
     relocate_dims="xyza",
-    interp_xz=False,
 ):
     """Shift waveforms according to the point source model
 
@@ -174,20 +150,10 @@ def relocate_simple(
     """
     B, T, C = waveforms.shape
     geom = geom.copy()
-    ptp = waveforms.ptp(axis=1)
     local_geom = torch.stack(
         [
             torch.as_tensor(
-                get_local_geom(
-                    geom,
-                    maxchans[n],
-                    channel_radius,
-                    ptp[n],
-                    firstchan=firstchans[n]
-                    if firstchans is not None
-                    else None,  # noqa
-                    geomkind=geomkind,
-                )
+                get_local_geom(geom, firstchans[n], maxchans[n], C)
             )
             for n in range(B)
         ],
@@ -201,11 +167,11 @@ def relocate_simple(
     stereo_kwargs = {}
     if len(relocate_dims) < 4:
         assert len(relocate_dims) > 0
-        if interp_xz or "x" not in relocate_dims:
+        if "x" not in relocate_dims:
             stereo_kwargs["x"] = x
         if "y" not in relocate_dims:
             stereo_kwargs["y"] = y
-        if interp_xz or "z" not in relocate_dims:
+        if "z" not in relocate_dims:
             stereo_kwargs["z"] = z_rel
         if "a" not in relocate_dims:
             stereo_kwargs["alpha"] = alpha
@@ -218,30 +184,5 @@ def relocate_simple(
     waveforms_relocated = torch.as_tensor(waveforms) * (
         r.view(B, C) / q
     ).unsqueeze(1)
-
-    # deal with interp x/z
-    if interp_xz:
-        # get the shifts in pixel units
-        dx = dz = 0
-        if "x" in relocate_dims:
-            cx = local_geom[:, :, 0].mean(axis=1)
-            hx = local_geom[0, 1, 0] - local_geom[0, 0, 0]
-            dx = (cx - x) / hx
-        if "z" in relocate_dims:
-            hz = local_geom[0, 2, 1] - local_geom[0, 0, 1]
-            dz = -z_rel / hz
-        shifts = torch.stack(
-            (
-                torch.as_tensor(dx).broadcast_to(B),
-                torch.as_tensor(dz).broadcast_to(B),
-            ),
-            dim=1,
-        )
-
-        # apply shifts
-        waveforms_relocated = translate(
-            waveforms_relocated.reshape(B, T, C // 2, 2),
-            shifts,
-        ).reshape(B, T, C)
 
     return waveforms_relocated, r, q

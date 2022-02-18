@@ -34,172 +34,30 @@ def temporal_align(waveforms, offset=42):
     return out
 
 
-def updown_decision(geom, maxchan, channel_radius, ptp):
+def get_local_chans(geom, firstchan, n_channels):
     """Gets indices of channels around the maxchan"""
     G, d = geom.shape
     assert d == 2
-    assert ptp.ndim == 1
-    C = ptp.shape[0]
-    maxchan = int(maxchan)
-
-    # Deal with edge cases
-    low = maxchan - channel_radius
-    high = maxchan + channel_radius
-    if low <= 0:
-        return True
-    # low and high should be  - (maxchan % 2) above,
-    # but adding that now would break compatibility.
-    # so, the limit has been lowered here as a hack.
-    if high >= geom.shape[0] - 1:
-        return False
-
-    if C == G:
-        # here we can use the original logic
-        up = ptp[maxchan + 2] > ptp[maxchan - 2]
-    elif C == 2 * channel_radius:
-        # here we need to figure things out...
-        local_maxchan = ptp.argmax()
-        # local_maxchan should not push this out of bounds...
-        up = ptp[local_maxchan + 2] > ptp[local_maxchan - 2]
-    else:
-        raise ValueError(
-            f"Not sure how to get local geom when ptp has {C} channels "
-            f"and channel_radius={channel_radius}"
-        )
-
-    return up
-
-
-def get_local_chans_updown(geom, maxchan, channel_radius, ptp):
-    """Gets indices of channels around the maxchan"""
-    G, d = geom.shape
-    assert d == 2
-    assert ptp.ndim == 1
-    C = ptp.shape[0]
-    maxchan = int(maxchan)
-
-    # Deal with edge cases
-    low = maxchan - channel_radius
-    high = maxchan + channel_radius
-    if low <= 0:
-        low = 0
-        high = 2 * channel_radius
-        return low, high
-    # low and high should be  - (maxchan % 2) above,
-    # but adding that now would break compatibility.
-    # so, the limit has been lowered here as a hack.
-    if high >= geom.shape[0] - 1:
-        high = geom.shape[0]
-        low = geom.shape[0] - 2 * channel_radius
-        return low, high
-
-    # -- See if we are going "up" or "down"
-    # how to compute depends on ptp shape
-    if C == G:
-        # here we can use the original logic
-        up = ptp[maxchan + 2] > ptp[maxchan - 2]
-    elif C == 2 * channel_radius:
-        # here we need to figure things out...
-        local_maxchan = ptp.argmax()
-        # local_maxchan should not push this out of bounds...
-        up = ptp[local_maxchan + 2] > ptp[local_maxchan - 2]
-    else:
-        raise ValueError(
-            f"Not sure how to get local geom when ptp has {C} channels"
-        )
-
-    low += 2 * up - (maxchan % 2)
-    high += 2 * up - (maxchan % 2)
-
-    return low, high
-
-
-def get_local_chans_standard(geom, maxchan, channel_radius):
-    """Gets indices of channels around the maxchan"""
-    G, d = geom.shape
-    assert d == 2
-    maxchan = int(maxchan)
-    maxchan_idx = maxchan - maxchan % 2
-
-    # Deal with edge cases
-    low = maxchan_idx - channel_radius
-    high = maxchan_idx + channel_radius + 2
-    if low < 0:
-        low = 0
-        high = 2 * channel_radius + 2
-    if high > geom.shape[0]:
-        high = geom.shape[0]
-        low = geom.shape[0] - 2 * channel_radius - 2
-
-    return low, high
-
-
-def get_local_chans_firstchan(geom, firstchan, channel_radius):
-    """Gets indices of channels around the maxchan"""
-    G, d = geom.shape
-    assert d == 2
+    assert not n_channels % 2
 
     # Deal with edge cases
     low = firstchan
-    high = firstchan + 2 * channel_radius
+    high = firstchan + n_channels
     assert low >= 0
     assert high <= G
 
     return low, high
-
-
-def get_local_chans_firstchanstandard(geom, firstchan, channel_radius):
-    """Gets indices of channels around the maxchan"""
-    G, d = geom.shape
-    assert d == 2
-
-    # Deal with edge cases
-    low = firstchan
-    high = firstchan + 2 * channel_radius + 2
-    assert low >= 0
-    assert high <= G
-
-    return low, high
-
-
-def get_local_chans(
-    geom, maxchan, channel_radius, ptp=None, firstchan=None, geomkind="updown"
-):
-    if geomkind == "updown":
-        assert ptp is not None
-        return get_local_chans_updown(geom, maxchan, channel_radius, ptp)
-    elif geomkind == "standard":
-        return get_local_chans_standard(geom, maxchan, channel_radius)
-    elif geomkind == "firstchan":
-        assert firstchan is not None
-        return get_local_chans_firstchan(geom, firstchan, channel_radius)
-    elif geomkind == "firstchanstandard":
-        assert firstchan is not None
-        return get_local_chans_firstchanstandard(
-            geom, firstchan, channel_radius
-        )
-    else:
-        raise ValueError(f"Unknown geomkind={geomkind}")
 
 
 def get_local_geom(
     geom,
+    firstchan,
     maxchan,
-    channel_radius,
-    ptp=None,
-    firstchan=None,
+    n_channels,
     return_z_maxchan=False,
-    geomkind="updown",
 ):
     """Gets the geometry of some neighborhood of chans near maxchan"""
-    low, high = get_local_chans(
-        geom,
-        maxchan,
-        channel_radius,
-        ptp=ptp,
-        firstchan=firstchan,
-        geomkind=geomkind,
-    )
+    low, high = get_local_chans(geom, firstchan, n_channels)
     local_geom = geom[low:high].copy()
     z_maxchan = geom[int(maxchan), 1]
     local_geom[:, 1] -= z_maxchan
@@ -209,76 +67,45 @@ def get_local_geom(
     return local_geom
 
 
-def get_local_waveforms(
-    waveforms,
-    channel_radius,
-    geom,
-    maxchans=None,
-    firstchans=None,
-    geomkind="updown",
-    compute_firstchans=False,
+def relativize_waveforms(
+    wfs, firstchans_orig, z, geom, maxchans_orig=None, feat_chans=18
 ):
-    """NxTxCfull -> NxTx(2*channel radius). So, takes a batch."""
-    N, T, Cfull = waveforms.shape
+    """
+    Extract fewer channels.
+    """
+    chans_down = feat_chans // 2
+    chans_down -= chans_down % 2
 
-    compute_maxchans = maxchans is None
-    ptps = waveforms.ptp(1)
-    if compute_maxchans:
-        maxchans = ptps.argmax(1)
-
-    local_waveforms = np.empty(
-        (N, T, 2 * channel_radius + 2 * ("standard" in geomkind)),
-        dtype=waveforms.dtype,
+    stdwfs = np.zeros(
+        (wfs.shape[0], wfs.shape[1], feat_chans), dtype=wfs.dtype
     )
-    lows = []
-    for n in range(N):
-        low, high = get_local_chans(
-            geom,
-            maxchans[n],
-            channel_radius,
-            ptps[n],
-            firstchan=None if firstchans is None else firstchans[n],
-            geomkind=geomkind,
-        )
-        local_waveforms[n] = waveforms[n, :, low:high]
-        lows.append(low)
 
-    if compute_maxchans and compute_firstchans:
-        return local_waveforms, maxchans, np.array(lows)
-    if compute_maxchans:
-        return local_waveforms, maxchans
-    if compute_firstchans:
-        return local_waveforms, np.array(lows)
-    return local_waveforms
+    firstchans_std = firstchans_orig.copy().astype(int)
+    maxchans_std = np.zeros(firstchans_orig.shape, dtype=int)
+    if z is not None:
+        z_rel = np.zeros_like(z)
 
+    for i in range(wfs.shape[0]):
+        wf = wfs[i]
+        if maxchans_orig is None:
+            mcrel = wf.ptp(0).argmax()
+        else:
+            mcrel = maxchans_orig[i] - firstchans_orig[i]
+        mcrix = mcrel - mcrel % 2
+        if z is not None:
+            z_rel[i] = z[i] - geom[firstchans_orig[i] + mcrel, 1]
 
-def as_standard_local(waveforms, maxchans, geom, channel_radius=8):
-    if waveforms.shape[2] == geom.shape[0]:
-        local_waveforms = get_local_waveforms(
-            waveforms, channel_radius, geom, maxchans, geomkind="standard"
-        )
-        return local_waveforms
-    elif waveforms.shape[2] == 2 + 2 * channel_radius:
-        return waveforms
-    elif waveforms.shape[2] == 4 + 2 * channel_radius:
-        print(
-            f"Lossy conversion from 'updown' geom on {waveforms.shape[2]} "
-            f"chans to 'standard' geom on {2 * channel_radius + 2} chans."
-        )
-        local_waveforms = np.empty(
-            (*waveforms.shape[:2], 2 + 2 * channel_radius),
-            dtype=waveforms.dtype,
-        )
+        low, high = mcrix - chans_down, mcrix + feat_chans - chans_down
+        if low < 0:
+            low, high = 0, feat_chans
+        if high > wfs.shape[2]:
+            low, high = wfs.shape[2] - feat_chans, wfs.shape[2]
 
-        for n, up in enumerate(
-            updown_decision(geom, maxchan, channel_radius + 2, ptp)
-            for maxchan, ptp in zip(maxchans, waveforms.ptp(1))
-        ):
-            # what goes up must come down
-            if up:
-                local_waveforms[n] = waveforms[n, :, :-2]
-            else:
-                local_waveforms[n] = waveforms[n, :, 2:]
-        return local_waveforms
+        firstchans_std[i] += low
+        stdwfs[i] = wf[:, low:high]
+        maxchans_std[i] = firstchans_std[i] + stdwfs[i].ptp(0).argmax()
+
+    if z is not None:
+        return stdwfs, firstchans_std, maxchans_std, z_rel, chans_down
     else:
-        raise ValueError("Not sure how to convert to standard local.")
+        return stdwfs, firstchans_std, maxchans_std, chans_down
