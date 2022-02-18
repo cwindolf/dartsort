@@ -2,6 +2,7 @@ import gc
 import h5py
 import numpy as np
 import torch
+import itertools
 
 from collections import namedtuple
 from ibllib.io.spikeglx import _geometry_from_meta, read_meta_data
@@ -9,7 +10,7 @@ from joblib import Parallel, delayed
 from pathlib import Path
 from scipy.spatial.distance import pdist, squareform
 from sklearn.decomposition import PCA
-from tqdm.auto import trange
+from tqdm.auto import tqdm
 
 from . import denoise, voltage_detect
 
@@ -93,7 +94,7 @@ def subtraction_batch(
             device,
             buffer,
         )
-        
+
         if len(spind):
             assert (np.abs(residual - old_resid) > 0).any()
             subtracted_wfs.append(subwfs)
@@ -108,7 +109,7 @@ def subtraction_batch(
     subtracted_wfs = subtracted_wfs[sort]
     spike_index = spike_index[sort]
     firstchans = firstchans[sort]
-    
+
     # get rid of too early spikes if we're in the first batch
     # or too late ones in the last
     if s_start == start_sample:
@@ -137,13 +138,13 @@ def subtraction_batch(
         trough_offset,
         buffer,
     )
-    
+
     # strip buffer from residual
     residual = residual[buffer:-buffer]
 
     # time relative to batch start
     spike_index[:, 0] += s_start
-    
+
     gc.collect()
 
     return SubtractionBatchResult(
@@ -164,7 +165,7 @@ def subtraction(
     geom=None,
     spatial_radius=70,
     tpca_rank=7,
-    n_sec_chunk=2,
+    n_sec_chunk=1,
     t_start=0,
     t_end=None,
     sampling_rate=30_000,
@@ -207,19 +208,23 @@ def subtraction(
     std_size = std_size // np.dtype(np.float32).itemsize
     assert not std_size % n_channels
     T_samples = std_size // n_channels
-    
+
     # time logic -- what region are we going to load
     T_sec = T_samples / sampling_rate
     assert t_start >= 0 and (t_end is None or t_end <= T_sec)
     start_sample = int(np.floor(t_start * sampling_rate))
-    end_sample = T_samples if t_end is None else int(np.floor(t_end * sampling_rate))
+    end_sample = (
+        T_samples if t_end is None else int(np.floor(t_end * sampling_rate))
+    )
 
     # compute helper data structures
     channel_index = make_channel_index(geom, spatial_radius, steps=2)
 
     # initialize resizable output datasets for waveforms etc
     residual = out_h5.create_dataset(
-        "residual", shape=(end_sample - start_sample, n_channels), dtype=np.float32
+        "residual",
+        shape=(end_sample - start_sample, n_channels),
+        dtype=np.float32,
     )
     subtracted_wfs = out_h5.create_dataset(
         "subtracted_waveforms",
@@ -255,57 +260,70 @@ def subtraction(
 
     # now run subtraction in parallel
     N = 0  # how many have we detected so far?
-    # TODO: joblib parallel doesn't yield intermediate results
-    #       need to break the processing in batches so that memory
-    #       does not explode
-    for result in Parallel(n_jobs)(
-        delayed(subtraction_batch)(
-            s_start,
-            batch_len_samples,
-            T_samples,
-            standardized_bin,
-            thresholds,
-            tpca_rank,
-            trough_offset,
-            channel_index,
-            spike_length_samples,
-            extract_channels,
-            device,
-            start_sample,
-            end_sample,
-        )
-        for s_start in trange(
-            start_sample, end_sample, batch_len_samples, desc="Subtracting batches"
-        )
-    ):
-        # grow arrays as necessary
-        N_new = result.N_new
-        subtracted_wfs.resize(N + N_new, axis=0)
-        cleaned_wfs.resize(N + N_new, axis=0)
-        firstchans.resize(N + N_new, axis=0)
-        spike_index.resize(N + N_new, axis=0)
+    jobs = range(
+        start_sample,
+        end_sample,
+        batch_len_samples,
+    )
+    job_batches = list(grouper(int(np.ceil(50 / n_jobs) * n_jobs), jobs))
+    with Parallel(n_jobs) as pool:
+        for batch in tqdm(job_batches, desc="Long batches"):
+            for result in pool(
+                delayed(subtraction_batch)(
+                    s_start,
+                    batch_len_samples,
+                    T_samples,
+                    standardized_bin,
+                    thresholds,
+                    tpca_rank,
+                    trough_offset,
+                    channel_index,
+                    spike_length_samples,
+                    extract_channels,
+                    device,
+                    start_sample,
+                    end_sample,
+                )
+                for s_start in batch
+            ):
+                # grow arrays as necessary
+                N_new = result.N_new
+                subtracted_wfs.resize(N + N_new, axis=0)
+                cleaned_wfs.resize(N + N_new, axis=0)
+                firstchans.resize(N + N_new, axis=0)
+                spike_index.resize(N + N_new, axis=0)
 
-        # write results
-        residual[result.s_start - start_sample : result.s_end - start_sample] = result.residual
-        subtracted_wfs[N : N + N_new] = result.subtracted_wfs
-        cleaned_wfs[N : N + N_new] = result.cleaned_wfs
-        firstchans[N : N + N_new] = result.firstchans
-        spike_index[N : N + N_new] = result.spike_index
-        
-        out_h5.flush()
-        del result
-        gc.collect()
+                # write results
+                residual[
+                    result.s_start - start_sample : result.s_end - start_sample
+                ] = result.residual
+                subtracted_wfs[N : N + N_new] = result.subtracted_wfs
+                cleaned_wfs[N : N + N_new] = result.cleaned_wfs
+                firstchans[N : N + N_new] = result.firstchans
+                spike_index[N : N + N_new] = result.spike_index
 
-        N += N_new
+                out_h5.flush()
+                del result
+                gc.collect()
+
+                N += N_new
 
 
 # -- denoising / detection helpers
 
 
 @torch.inference_mode()
-def full_denoising(waveforms, tpca_rank, maxchans, device=None, denoiser=None, batch_size=512, align=False):
+def full_denoising(
+    waveforms,
+    tpca_rank,
+    maxchans,
+    device=None,
+    denoiser=None,
+    batch_size=512,
+    align=False,
+):
     N, T, C = waveforms.shape
-    
+
     # temporal align
     if align:
         waveforms, rolls = denoise.temporal_align(waveforms, maxchans=maxchans)
@@ -330,7 +348,7 @@ def full_denoising(waveforms, tpca_rank, maxchans, device=None, denoiser=None, b
     waveforms = waveforms.reshape(N, C, T).transpose(0, 2, 1)
     for wf in waveforms:
         denoise.enforce_decrease(wf, in_place=True)
-    
+
     # un-temporal align
     if align:
         waveforms = denoise.invert_temporal_align(waveforms, rolls)
@@ -382,20 +400,34 @@ def detect_and_subtract(
         fc = min(fc, n_channels - extract_channels)
 
         subtracted_wfs[i] = raw[
-            t - trough_offset + buffer : t - trough_offset + spike_length_samples + buffer,
+            t
+            - trough_offset
+            + buffer : t
+            - trough_offset
+            + spike_length_samples
+            + buffer,
             fc : fc + extract_channels,
         ]
         firstchans[i] = fc
 
     # denoising
     subtracted_wfs = full_denoising(
-        subtracted_wfs, tpca_rank, spike_index[:, 1] - firstchans, device, denoiser
+        subtracted_wfs,
+        tpca_rank,
+        spike_index[:, 1] - firstchans,
+        device,
+        denoiser,
     )
 
     # the actual subtraction
     for wf, (t, mc), fc in zip(subtracted_wfs, spike_index, firstchans):
         raw[
-            t - trough_offset + buffer : t - trough_offset + spike_length_samples + buffer,
+            t
+            - trough_offset
+            + buffer : t
+            - trough_offset
+            + spike_length_samples
+            + buffer,
             fc : fc + extract_channels,
         ] -= wf
 
@@ -423,7 +455,9 @@ def batch_cleaned_waveforms(
         ]
 
     # Denoise and return
-    return full_denoising(cleaned_waveforms, tpca_rank, spike_index[:, 1] - firstchans, denoiser)
+    return full_denoising(
+        cleaned_waveforms, tpca_rank, spike_index[:, 1] - firstchans, denoiser
+    )
 
 
 # -- channels / geometry helpers
@@ -543,3 +577,15 @@ def read_data(bin_file, dtype, s_start, s_end, n_channels):
         )
     data = data.reshape(-1, n_channels)
     return data
+
+
+# -- utils
+
+
+def grouper(n, iterable):
+    it = iter(iterable)
+    while True:
+        chunk = tuple(itertools.islice(it, n))
+        if not chunk:
+            return
+        yield chunk
