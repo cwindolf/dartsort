@@ -317,6 +317,24 @@ def subtraction(
                 N += N_new
 
 
+# -- you may want to clean waveforms after the fact
+
+
+def clean_waveforms(h5, tpca_rank=7, trough_offset=42):
+    denoiser = denoise.SingleChanDenoiser().load()
+    cleaned_wfs = batch_cleaned_waveforms(
+        h5["residual"],
+        h5["subtracted_waveforms"],
+        h5["spike_index"][:],
+        h5["firstchans"][:],
+        denoiser,
+        tpca_rank,
+        trough_offset,
+        0,
+    )
+    h5.create_dataset("cleaned_waveforms", data=cleaned_wfs)
+
+
 # -- denoising / detection helpers
 
 
@@ -455,7 +473,7 @@ def batch_cleaned_waveforms(
     N, T, C = subtracted_wfs.shape
 
     # Add residuals to subtracted wfs
-    cleaned_waveforms = subtracted_wfs.copy()
+    cleaned_waveforms = np.zeros(subtracted_wfs.shape, subtracted_wfs.dtype)
     for n, ((t, mc), fc) in enumerate(zip(spike_index, firstchans)):
         cleaned_waveforms[n] += residual[
             t - trough_offset + buffer : t - trough_offset + T + buffer,

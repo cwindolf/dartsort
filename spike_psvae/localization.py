@@ -102,8 +102,6 @@ def localize_ptps(
     firstchans,
     maxchans,
     n_workers=None,
-    jac=False,
-    logbarrier=True,
     _not_helper=True,
 ):
     """Localize a bunch of waveforms
@@ -116,9 +114,6 @@ def localize_ptps(
     -------
     xs, ys, z_rels, z_abss, alphas
     """
-    if logbarrier:
-        assert not jac
-
     if _not_helper:
         N, _, C = check_shapes(
             ptps[:, None, :],
@@ -149,8 +144,6 @@ def localize_ptps(
                     firstchan,
                     maxchan,
                     geom,
-                    jac=jac,
-                    logbarrier=logbarrier,
                 )
                 for ptp, maxchan, firstchan in xqdm(
                     zip(ptps, maxchans, firstchans), total=N, desc="lsq"
@@ -172,8 +165,6 @@ def localize_waveforms(
     firstchans,
     maxchans,
     n_workers=1,
-    jac=False,
-    logbarrier=True,
     _not_helper=True,
 ):
     """Localize a bunch of waveforms
@@ -186,9 +177,6 @@ def localize_waveforms(
     -------
     xs, ys, z_rels, z_abss, alphas
     """
-    if logbarrier:
-        assert not jac
-
     if _not_helper:
         N, T, C = check_shapes(waveforms, maxchans, geom, firstchans)
     else:
@@ -214,8 +202,6 @@ def localize_waveforms(
                     firstchan,
                     maxchan,
                     geom,
-                    jac=jac,
-                    logbarrier=logbarrier,
                 )
                 for ptp, maxchan, firstchan in xqdm(
                     zip(ptps, maxchans, firstchans), total=N, desc="lsq"
@@ -237,14 +223,9 @@ def localize_waveforms_batched(
     firstchans,
     maxchans,
     n_workers=1,
-    jac=False,
-    logbarrier=True,
     batch_size=128,
 ):
     """A helper for running the above on hdf5 datasets or similar"""
-    if logbarrier:
-        assert not jac
-
     N, T, C = check_shapes(waveforms, maxchans, geom, firstchans)
     xs = np.empty(N)
     ys = np.empty(N)
@@ -263,8 +244,6 @@ def localize_waveforms_batched(
                     geom,
                     firstchans,
                     maxchans,
-                    jac=jac,
-                    logbarrier=logbarrier,
                     _not_helper=False,
                 )
                 for start, end in tqdm(
