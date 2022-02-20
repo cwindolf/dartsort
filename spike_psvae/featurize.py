@@ -2,6 +2,7 @@ import numpy as np
 
 from sklearn.decomposition import PCA
 from tqdm.auto import trange
+from joblib import Parallel, delayed
 
 from .waveform_utils import relativize_waveforms  # noqa
 from .point_source_centering import relocate_simple
@@ -120,3 +121,55 @@ def relocated_ae(
     )
 
     return feats, err
+
+
+def relocated_ae_batched(
+    waveforms,
+    firstchans,
+    maxchans,
+    geom,
+    x,
+    y,
+    z_rel,
+    alpha,
+    relocate_dims="xyza",
+    rank=10,
+    B_updates=2,
+    batch_size=50000,
+    n_jobs=1,
+):
+    N, T, C = waveforms.shape
+
+    # we should be able to store features in memory:
+    # 5 million spikes x 10 features x 4 bytes is like .2 gig
+    features = np.empty((N, rank))
+    errors = np.empty(N // batch_size + 1)
+
+    @delayed
+    def job(bs):
+        be = min(bs + batch_size, N)
+        feats, err = relocated_ae(
+            waveforms[bs:be],
+            firstchans[bs:be],
+            maxchans[bs:be],
+            geom,
+            x[bs:be],
+            y[bs:be],
+            z_rel[bs:be],
+            alpha[bs:be],
+            relocate_dims="xyza",
+            rank=rank,
+            B_updates=B_updates,
+            pbar=False,
+        )
+        return bs, be, feats, err
+
+    i = 0
+    for bs, be, feats, err in Parallel(n_jobs)(
+        job(bs) for bs in trange(0, N, batch_size, desc="Feature batches")
+    ):
+        features[bs:be] = feats
+        errors[i] = err
+        i += 1
+
+    return features, errors
