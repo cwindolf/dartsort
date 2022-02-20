@@ -51,7 +51,7 @@ def localize_ptp(
     -------
     x, y, z_rel, z_abs, alpha
     """
-    n_channels = ptp.shape[1]
+    n_channels = ptp.size
     local_geom, z_maxchan = get_local_geom(
         geom,
         firstchan,
