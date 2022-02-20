@@ -1,5 +1,7 @@
 """
 Clean, localize, register.
+
+Operates on the HDF5 output of scripts/subtract.py
 """
 import argparse
 import h5py
@@ -36,7 +38,11 @@ class timer:
 with timer("cleaning"):
     with h5py.File(args.subtracted_h5, "r+") as f:
         if args.overwrite:
-            for k in ("cleaned_waveforms", "cleaned_max_channels", "cleaned_first_channels"):
+            for k in (
+                "cleaned_waveforms",
+                "cleaned_max_channels",
+                "cleaned_first_channels",
+            ):
                 if k in f:
                     del f[k]
         doclean = True
@@ -57,7 +63,11 @@ with timer("localization"):
         maxptp = []
         for bs in range(0, N, 1024):
             be = min(bs + 1024, N)
-            maxptp.append(f["cleaned_waveforms"][bs:be][np.arange(be - bs), :, crelmcs[bs:be]].max(1))
+            maxptp.append(
+                f["cleaned_waveforms"][bs:be][
+                    np.arange(be - bs), :, crelmcs[bs:be]
+                ].max(1)
+            )
         maxptp = np.concatenate(maxptp).astype(float)
         times = (f["spike_index"][:, 0] - f["start_sample"][()]) / 30000
         x, y, z_rel, z_abs, alpha = localization.localize_waveforms_batched(
