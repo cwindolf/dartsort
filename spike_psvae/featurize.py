@@ -1,3 +1,4 @@
+import itertools
 import numpy as np
 
 from sklearn.decomposition import PCA
@@ -20,7 +21,7 @@ def pca_reload(
     N, T, C = original_waveforms.shape
     assert relocated_waveforms.shape == (N, T, C)
     assert orig_ptps.shape == standard_ptps.shape == (N, C)
-    xrange = trange if pbar else range
+    xrange = trange if pbar else lambda *args, **kwargs: range(*args)
 
     destandardization = (orig_ptps / standard_ptps)[:, None, :]
 
@@ -146,12 +147,11 @@ def relocated_ae_batched(
     errors = np.empty(N // batch_size + 1)
 
     @delayed
-    def job(bs):
-        be = min(bs + batch_size, N)
+    def job(bs, be, wfs, fcs, mcs):
         feats, err = relocated_ae(
-            waveforms[bs:be],
-            firstchans[bs:be],
-            maxchans[bs:be],
+            wfs,
+            fcs,
+            mcs,
             geom,
             x[bs:be],
             y[bs:be],
@@ -165,11 +165,27 @@ def relocated_ae_batched(
         return bs, be, feats, err
 
     i = 0
-    for bs, be, feats, err in Parallel(n_jobs)(
-        job(bs) for bs in trange(0, N, batch_size, desc="Feature batches")
-    ):
-        features[bs:be] = feats
-        errors[i] = err
-        i += 1
+    for batch in grouper(n_jobs, trange(0, N, batch_size, desc="Feature batches")):
+        for bs, be, feats, err in Parallel(n_jobs, mmap_mode="r+")(
+            job(
+                bs,
+                min(bs + batch_size, N), 
+                waveforms[bs:min(bs + batch_size, N)],
+                firstchans[bs:min(bs + batch_size, N)],
+                maxchans[bs:min(bs + batch_size, N)],
+            ) for bs in batch
+        ):
+            features[bs:be] = feats
+            errors[i] = err
+            i += 1
 
     return features, errors
+
+
+def grouper(n, iterable):
+    it = iter(iterable)
+    while True:
+        chunk = tuple(itertools.islice(it, n))
+        if not chunk:
+            return
+        yield chunk
