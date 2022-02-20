@@ -10,9 +10,9 @@ from joblib import Parallel, delayed
 from pathlib import Path
 from scipy.spatial.distance import pdist, squareform
 from sklearn.decomposition import PCA
-from tqdm.auto import tqdm
+from tqdm.auto import tqdm, trange
 
-from . import denoise, voltage_detect
+from . import denoise, voltage_detect, waveform_utils
 
 
 # -- subtraction routines
@@ -320,19 +320,56 @@ def subtraction(
 # -- you may want to clean waveforms after the fact
 
 
-def clean_waveforms(h5, tpca_rank=7, trough_offset=42):
+def clean_waveforms(h5_path, tpca_rank=7, num_channels=20, trough_offset=42, batch_size=25000, n_workers=1):
     denoiser = denoise.SingleChanDenoiser().load()
-    cleaned_wfs = batch_cleaned_waveforms(
-        h5["residual"],
-        h5["subtracted_waveforms"],
-        h5["spike_index"][:],
-        h5["firstchans"][:],
-        denoiser,
-        tpca_rank,
-        trough_offset,
-        0,
-    )
-    h5.create_dataset("cleaned_waveforms", data=cleaned_wfs)
+    
+    @delayed
+    def job(bs):
+        with h5py.File(h5_path, "r", swmr=True) as h5:
+            be = min(N, bs + batch_size)
+            cleaned_batch = batch_cleaned_waveforms(
+                h5["residual"],
+                h5["subtracted_waveforms"][bs:be],
+                h5["spike_index"][bs:be] - [[h5["start_sample"][()], 0]],
+                h5["first_channels"][bs:be],
+                denoiser,
+                tpca_rank,
+                trough_offset,
+                0,
+            )
+            cleaned_batch, firstchans_std, maxchans_std, chans_down = waveform_utils.relativize_waveforms(
+                cleaned_batch, h5["first_channels"][bs:be], None, h5["geom"][:], feat_chans=num_channels
+            )
+            return bs, be, cleaned_batch, firstchans_std, maxchans_std
+
+    with h5py.File(h5_path, "r+") as oh5:
+        N, T, C = oh5["subtracted_waveforms"].shape
+        cleaned_wfs = oh5.create_dataset(
+            "cleaned_waveforms",
+            shape=(N, T, num_channels),
+            dtype=oh5["subtracted_waveforms"].dtype,
+        )
+        cmaxchans = oh5.create_dataset(
+            "cleaned_max_channels",
+            shape=N,
+            dtype=np.int32,
+        )
+        cfirstchans = oh5.create_dataset(
+            "cleaned_first_channels",
+            shape=N,
+            dtype=np.int32,
+        )
+        oh5.swmr_mode = True
+        
+        jobs = range(0, N, batch_size)
+        job_batches = list(grouper(n_workers, jobs))
+        with Parallel(n_workers) as pool:
+            for batch in tqdm(job_batches, desc="Cleaning batches"):
+                for res in pool(job(bs) for bs in batch):
+                    bs, be, cleaned_batch, firstchans_std, maxchans_std = res
+                    cleaned_wfs[bs:be] = cleaned_batch
+                    cfirstchans[bs:be] = firstchans_std
+                    cmaxchans[bs:be] = maxchans_std
 
 
 # -- denoising / detection helpers
