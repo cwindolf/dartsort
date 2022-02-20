@@ -4,6 +4,7 @@ from sklearn.decomposition import PCA
 from tqdm.auto import trange
 
 from .waveform_utils import relativize_waveforms  # noqa
+from .point_source_centering import relocate_simple
 
 
 def pca_reload(
@@ -12,11 +13,13 @@ def pca_reload(
     orig_ptps,
     standard_ptps,
     rank=10,
-    B_updates=0,
+    B_updates=2,
+    pbar=True,
 ):
     N, T, C = original_waveforms.shape
     assert relocated_waveforms.shape == (N, T, C)
     assert orig_ptps.shape == standard_ptps.shape == (N, C)
+    xrange = trange if pbar else range
 
     destandardization = (orig_ptps / standard_ptps)[:, None, :]
 
@@ -32,7 +35,7 @@ def pca_reload(
     # re-compute the loadings to minimize loss in original space
     reloadings = np.zeros((N, rank))
     err = 0.0
-    for n in trange(N):
+    for n in xrange(N):
         A = (
             (destandardization[n, None, :, :] * pca_basis)
             .reshape(rank, T * C)
@@ -44,14 +47,14 @@ def pca_reload(
         err += resid
     err = err / (N * T * C)
 
-    for _ in trange(B_updates, desc="B updates"):
+    for _ in xrange(B_updates, desc="B updates"):
         # update B
         # flat view
         B = pca_basis.reshape(rank, T * C)
         W = decentered_original_waveforms.reshape(N, T * C)
         for c in range(C):
             A = destandardization[:, 0, c, None] * reloadings
-            for t in range(T):
+            for t in xrange(T):
                 i = t * C + c
                 res, *_ = np.linalg.lstsq(A, W[:, i], rcond=None)
                 B[:, i] = res
@@ -59,7 +62,7 @@ def pca_reload(
         # re-update reloadings
         reloadings = np.zeros((N, rank))
         err = 0.0
-        for n in trange(N):
+        for n in xrange(N):
             A = (
                 (destandardization[n, None, :, :] * pca_basis)
                 .reshape(rank, T * C)
@@ -72,3 +75,48 @@ def pca_reload(
         err = err / (N * T * C)
 
     return reloadings, err
+
+
+def relocated_ae(
+    waveforms,
+    firstchans,
+    maxchans,
+    geom,
+    x,
+    y,
+    z_rel,
+    alpha,
+    relocate_dims="xyza",
+    rank=10,
+    B_updates=2,
+    pbar=True,
+):
+    # -- compute the relocation
+    waveforms_reloc, std_ptp, pred_ptp = relocate_simple(
+        waveforms,
+        geom,
+        firstchans,
+        maxchans,
+        x,
+        y,
+        z_rel,
+        alpha,
+        relocate_dims=relocate_dims,
+    )
+    # torch -> numpy
+    waveforms_reloc = waveforms_reloc.cpu().numpy()
+    std_ptp = std_ptp.cpu().numpy()
+    pred_ptp = pred_ptp.cpu().numpy()
+
+    # -- get the features
+    feats, err = pca_reload(
+        waveforms,
+        waveforms_reloc,
+        pred_ptp,
+        std_ptp,
+        rank=rank,
+        B_updates=B_updates,
+        pbar=pbar,
+    )
+
+    return feats, err
