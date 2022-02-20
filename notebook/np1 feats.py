@@ -385,6 +385,19 @@ def regline(x, y, ax=None, yx=True):
         fontsize=6,
     )
 
+# %%
+
+
+ox, oy, ozr, oza, oa = localization.localize_waveforms(
+    standardwfs[ds.stem][show],
+    f["geom"][:],
+    maxchans[ds.stem][show],
+    channel_radius=chans_down,
+    n_workers=1,
+    firstchans=firstchans[ds.stem][show],
+    geomkind="firstchanstandard",
+    logbarrier=False,
+)
 
 # %% tags=[]
 olocs = {}
