@@ -59,6 +59,9 @@ maxchans = {}
 
 for ds in root.glob("*.h5"):
     print(ds.stem)
+    if "500" in ds.stem:
+        print("bye")
+        continue
     with h5py.File(ds, "r") as f:
         cleaned = denoise.cleaned_waveforms(
             f["subtracted_waveforms"],
@@ -79,6 +82,35 @@ for ds in root.glob("*.h5"):
         maxchans[ds.stem] = maxchans_std
         print(chans_down)
 
+
+# %%
+for ds in root.glob("*.h5"):
+    print(ds.stem)
+    if "500" in ds.stem:
+        print("bye")
+        continue
+    with h5py.File(ds, "r") as f:
+        wfs = f["subtracted_waveforms"]
+        print(wfs.shape)
+        show = rg().choice(f["spike_index"].shape[0], size=16, replace=False)
+        show.sort()
+        cwfs = standardwfs[ds.stem]
+        fcs = f["first_channels"][:]
+        cfcs = firstchans[ds.stem]
+        mcs = f["spike_index"][:, 1]
+        cmcs = maxchans[ds.stem]
+        print((cfcs - fcs).min(), (cfcs - fcs).max())
+        print((cmcs - mcs).min(), (cmcs - mcs).max())
+        
+
+        fig, axes = plt.subplots(4, 4)
+        vis_utils.plot_ptp(wfs[show].ptp(1), axes, "", "k", "abcdefghijklmnop")
+        crelptps = []
+        for ix in show:
+            fcrel = cfcs[ix] - fcs[ix]
+            print(fcrel, cfcs[ix], fcs[ix])
+            crelptps.append(np.pad(cwfs[ix].ptp(0), (fcrel, 22 - fcrel)))
+        vis_utils.plot_ptp(crelptps, axes, "", "purple", "abcdefghijklmnop")
 
 # %%
 for ds in root.glob("*.h5"):
