@@ -59,7 +59,7 @@ maxchans = {}
 
 for ds in root.glob("*.h5"):
     print(ds.stem)
-    if "500" in ds.stem:
+    if "p7_t_2000" not in ds.stem:
         print("bye")
         continue
     with h5py.File(ds, "r") as f:
@@ -86,7 +86,7 @@ for ds in root.glob("*.h5"):
 # %%
 for ds in root.glob("*.h5"):
     print(ds.stem)
-    if "500" in ds.stem:
+    if "p7_t_2000" not in ds.stem:
         print("bye")
         continue
     with h5py.File(ds, "r") as f:
@@ -114,6 +114,9 @@ for ds in root.glob("*.h5"):
 
 # %%
 for ds in root.glob("*.h5"):
+    if "p7_t_2000" not in ds.stem:
+        print("bye")
+        continue
     with h5py.File(ds, "r") as f:
         show = rg().choice(f["spike_index"].shape[0], size=8, replace=False)
         fig, axes = plt.subplots(4, 2)
@@ -154,7 +157,7 @@ def ptp_at(x, y, z, alpha, local_geom):
     )
 
 
-# %% tags=[] jupyter={"outputs_hidden": true}
+# %% tags=[]
 locs = {}
 for ds in root.glob("*.h5"):
     with h5py.File(ds, "r") as f:

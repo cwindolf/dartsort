@@ -15,6 +15,7 @@ ap = argparse.ArgumentParser()
 ap.add_argument("subtracted_h5")
 ap.add_argument("out_npz")
 ap.add_argument("--n_jobs", type=int, default=1)
+ap.add_argument("--n_channels", type=int, default=20)
 ap.add_argument("--overwrite", action="store_true")
 
 args = ap.parse_args()
@@ -51,7 +52,7 @@ with timer("cleaning"):
             doclean = False
 
     if doclean:
-        subtract.clean_waveforms(args.subtracted_h5, n_workers=args.n_jobs)
+        subtract.clean_waveforms(args.subtracted_h5, n_workers=args.n_jobs, num_channels=args.n_channels)
 
 
 # -- localize

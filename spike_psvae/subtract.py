@@ -477,7 +477,7 @@ def clean_waveforms(
     tpca_rank=7,
     num_channels=20,
     trough_offset=42,
-    batch_size=25000,
+    batch_size=50000,
     n_workers=1,
 ):
     denoiser = denoise.SingleChanDenoiser().load()
@@ -486,15 +486,24 @@ def clean_waveforms(
     def job(bs):
         with h5py.File(h5_path, "r", swmr=True) as h5:
             be = min(N, bs + batch_size)
-            cleaned_batch = batch_cleaned_waveforms(
-                h5["residual"],
+            # cleaned_batch = batch_cleaned_waveforms(
+            #     h5["residual"],
+            #     h5["subtracted_waveforms"][bs:be],
+            #     h5["spike_index"][bs:be] - [[h5["start_sample"][()], 0]],
+            #     h5["first_channels"][bs:be],
+            #     denoiser,
+            #     tpca_rank,
+            #     trough_offset,
+            #     0,
+            # )
+            
+            cleaned_batch = denoise.cleaned_waveforms(
                 h5["subtracted_waveforms"][bs:be],
-                h5["spike_index"][bs:be] - [[h5["start_sample"][()], 0]],
+                h5["spike_index"][bs:be],
                 h5["first_channels"][bs:be],
-                denoiser,
-                tpca_rank,
-                trough_offset,
-                0,
+                h5["residual"],
+                s_start=h5["start_sample"][()],
+                pbar=False,
             )
 
             (

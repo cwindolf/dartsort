@@ -132,12 +132,13 @@ def enforce_decrease(waveform, in_place=False):
 
 @torch.inference_mode()
 def cleaned_waveforms(
-    waveforms, spike_index, firstchans, residual, s_start=0, tpca_rank=7
+    waveforms, spike_index, firstchans, residual, s_start=0, tpca_rank=7, pbar=True
 ):
     N, T, C = waveforms.shape
     denoiser = SingleChanDenoiser().load()
     cleaned = np.empty((N, C, T), dtype=waveforms.dtype)
-    for ix in trange(len(spike_index), desc="Cleaning and denoising"):
+    ixs = trange(len(spike_index), desc="Cleaning and denoising") if pbar else range(len(spike_index))
+    for ix in ixs:
         t, mc = spike_index[ix]
         fc = firstchans[ix]
         t = t - s_start
