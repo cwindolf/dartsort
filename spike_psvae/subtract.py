@@ -317,106 +317,7 @@ def subtraction(
                 N += N_new
 
 
-# -- you may want to clean waveforms after the fact
-
-
-def clean_waveforms(h5_path, tpca_rank=7, num_channels=20, trough_offset=42, batch_size=25000, n_workers=1):
-    denoiser = denoise.SingleChanDenoiser().load()
-    
-    @delayed
-    def job(bs):
-        with h5py.File(h5_path, "r", swmr=True) as h5:
-            be = min(N, bs + batch_size)
-            cleaned_batch = batch_cleaned_waveforms(
-                h5["residual"],
-                h5["subtracted_waveforms"][bs:be],
-                h5["spike_index"][bs:be] - [[h5["start_sample"][()], 0]],
-                h5["first_channels"][bs:be],
-                denoiser,
-                tpca_rank,
-                trough_offset,
-                0,
-            )
-            cleaned_batch, firstchans_std, maxchans_std, chans_down = waveform_utils.relativize_waveforms(
-                cleaned_batch, h5["first_channels"][bs:be], None, h5["geom"][:], feat_chans=num_channels
-            )
-            return bs, be, cleaned_batch, firstchans_std, maxchans_std
-
-    with h5py.File(h5_path, "r+") as oh5:
-        N, T, C = oh5["subtracted_waveforms"].shape
-        cleaned_wfs = oh5.create_dataset(
-            "cleaned_waveforms",
-            shape=(N, T, num_channels),
-            dtype=oh5["subtracted_waveforms"].dtype,
-        )
-        cmaxchans = oh5.create_dataset(
-            "cleaned_max_channels",
-            shape=N,
-            dtype=np.int32,
-        )
-        cfirstchans = oh5.create_dataset(
-            "cleaned_first_channels",
-            shape=N,
-            dtype=np.int32,
-        )
-        oh5.swmr_mode = True
-        
-        jobs = range(0, N, batch_size)
-        job_batches = list(grouper(n_workers, jobs))
-        with Parallel(n_workers) as pool:
-            for batch in tqdm(job_batches, desc="Cleaning batches"):
-                for res in pool(job(bs) for bs in batch):
-                    bs, be, cleaned_batch, firstchans_std, maxchans_std = res
-                    cleaned_wfs[bs:be] = cleaned_batch
-                    cfirstchans[bs:be] = firstchans_std
-                    cmaxchans[bs:be] = maxchans_std
-
-
 # -- denoising / detection helpers
-
-
-@torch.inference_mode()
-def full_denoising(
-    waveforms,
-    tpca_rank,
-    maxchans,
-    device=None,
-    denoiser=None,
-    batch_size=512,
-    align=False,
-):
-    N, T, C = waveforms.shape
-
-    # temporal align
-    if align:
-        waveforms, rolls = denoise.temporal_align(waveforms, maxchans=maxchans)
-
-    # Apply NN denoiser (skip if None)
-    waveforms = waveforms.transpose(0, 2, 1).reshape(N * C, T)
-    if denoiser is not None:
-        wfs = torch.tensor(waveforms)
-        for bs in range(0, N * C, batch_size):
-            be = min(bs + batch_size, N * C)
-            waveforms[bs:be] = denoiser(wfs[bs:be].to(device)).cpu().numpy()
-        del wfs
-        torch.cuda.empty_cache()
-        gc.collect()
-
-    # Temporal PCA while we are still transposed
-    tpca = PCA(tpca_rank)
-    waveforms = tpca.fit_transform(waveforms)
-    waveforms = tpca.inverse_transform(waveforms)
-
-    # Un-transpose, enforce temporal decrease
-    waveforms = waveforms.reshape(N, C, T).transpose(0, 2, 1)
-    for wf in waveforms:
-        denoise.enforce_decrease(wf, in_place=True)
-
-    # un-temporal align
-    if align:
-        waveforms = denoise.invert_temporal_align(waveforms, rolls)
-
-    return waveforms
 
 
 def detect_and_subtract(
@@ -497,6 +398,50 @@ def detect_and_subtract(
     return subtracted_wfs, spike_index, firstchans
 
 
+@torch.inference_mode()
+def full_denoising(
+    waveforms,
+    tpca_rank,
+    maxchans,
+    device=None,
+    denoiser=None,
+    batch_size=512,
+    align=False,
+):
+    N, T, C = waveforms.shape
+
+    # temporal align
+    if align:
+        waveforms, rolls = denoise.temporal_align(waveforms, maxchans=maxchans)
+
+    # Apply NN denoiser (skip if None)
+    waveforms = waveforms.transpose(0, 2, 1).reshape(N * C, T)
+    if denoiser is not None:
+        wfs = torch.tensor(waveforms)
+        for bs in range(0, N * C, batch_size):
+            be = min(bs + batch_size, N * C)
+            waveforms[bs:be] = denoiser(wfs[bs:be].to(device)).cpu().numpy()
+        del wfs
+        torch.cuda.empty_cache()
+        gc.collect()
+
+    # Temporal PCA while we are still transposed
+    tpca = PCA(tpca_rank)
+    waveforms = tpca.fit_transform(waveforms)
+    waveforms = tpca.inverse_transform(waveforms)
+
+    # Un-transpose, enforce temporal decrease
+    waveforms = waveforms.reshape(N, C, T).transpose(0, 2, 1)
+    for wf in waveforms:
+        denoise.enforce_decrease(wf, in_place=True)
+
+    # un-temporal align
+    if align:
+        waveforms = denoise.invert_temporal_align(waveforms, rolls)
+
+    return waveforms
+
+
 def batch_cleaned_waveforms(
     residual,
     subtracted_wfs,
@@ -521,6 +466,78 @@ def batch_cleaned_waveforms(
     return full_denoising(
         cleaned_waveforms, tpca_rank, spike_index[:, 1] - firstchans, denoiser
     )
+
+
+# -- you may want to clean waveforms after the fact
+
+
+def clean_waveforms(
+    h5_path,
+    tpca_rank=7,
+    num_channels=20,
+    trough_offset=42,
+    batch_size=25000,
+    n_workers=1,
+):
+    denoiser = denoise.SingleChanDenoiser().load()
+
+    @delayed
+    def job(bs):
+        with h5py.File(h5_path, "r", swmr=True) as h5:
+            be = min(N, bs + batch_size)
+            cleaned_batch = batch_cleaned_waveforms(
+                h5["residual"][bs:be],
+                h5["subtracted_waveforms"][bs:be],
+                h5["spike_index"][bs:be] - [[h5["start_sample"][()], 0]],
+                h5["first_channels"][bs:be],
+                denoiser,
+                tpca_rank,
+                trough_offset,
+                0,
+            )
+
+            (
+                cleaned_batch,
+                firstchans_std,
+                maxchans_std,
+                chans_down,
+            ) = waveform_utils.relativize_waveforms(
+                cleaned_batch,
+                h5["first_channels"][bs:be],
+                None,
+                h5["geom"][:],
+                feat_chans=num_channels,
+            )
+            return bs, be, cleaned_batch, firstchans_std, maxchans_std
+
+    with h5py.File(h5_path, "r+") as oh5:
+        N, T, C = oh5["subtracted_waveforms"].shape
+        cleaned_wfs = oh5.create_dataset(
+            "cleaned_waveforms",
+            shape=(N, T, num_channels),
+            dtype=oh5["subtracted_waveforms"].dtype,
+        )
+        cmaxchans = oh5.create_dataset(
+            "cleaned_max_channels",
+            shape=N,
+            dtype=np.int32,
+        )
+        cfirstchans = oh5.create_dataset(
+            "cleaned_first_channels",
+            shape=N,
+            dtype=np.int32,
+        )
+        oh5.swmr_mode = True
+
+        jobs = range(0, N, batch_size)
+        job_batches = list(grouper(n_workers, jobs))
+        with Parallel(n_workers) as pool:
+            for batch in tqdm(job_batches, desc="Cleaning batches"):
+                for res in pool(job(bs) for bs in batch):
+                    bs, be, cleaned_batch, firstchans_std, maxchans_std = res
+                    cleaned_wfs[bs:be] = cleaned_batch
+                    cfirstchans[bs:be] = firstchans_std
+                    cmaxchans[bs:be] = maxchans_std
 
 
 # -- channels / geometry helpers
