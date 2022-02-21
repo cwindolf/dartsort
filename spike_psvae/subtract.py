@@ -457,6 +457,7 @@ def batch_cleaned_waveforms(
     # Add residuals to subtracted wfs
     cleaned_waveforms = np.zeros(subtracted_wfs.shape, subtracted_wfs.dtype)
     for n, ((t, mc), fc) in enumerate(zip(spike_index, firstchans)):
+        cleaned_waveforms[n] += subtracted_wfs[n]
         cleaned_waveforms[n] += residual[
             t - trough_offset + buffer : t - trough_offset + T + buffer,
             fc : fc + C,
@@ -486,7 +487,7 @@ def clean_waveforms(
         with h5py.File(h5_path, "r", swmr=True) as h5:
             be = min(N, bs + batch_size)
             cleaned_batch = batch_cleaned_waveforms(
-                h5["residual"][bs:be],
+                h5["residual"],
                 h5["subtracted_waveforms"][bs:be],
                 h5["spike_index"][bs:be] - [[h5["start_sample"][()], 0]],
                 h5["first_channels"][bs:be],
@@ -529,15 +530,13 @@ def clean_waveforms(
         )
         oh5.swmr_mode = True
 
-        jobs = range(0, N, batch_size)
-        job_batches = list(grouper(n_workers, jobs))
-        with Parallel(n_workers) as pool:
-            for batch in tqdm(job_batches, desc="Cleaning batches"):
-                for res in pool(job(bs) for bs in batch):
-                    bs, be, cleaned_batch, firstchans_std, maxchans_std = res
-                    cleaned_wfs[bs:be] = cleaned_batch
-                    cfirstchans[bs:be] = firstchans_std
-                    cmaxchans[bs:be] = maxchans_std
+        jobs = trange(0, N, batch_size, desc="Cleaning batches")
+        for batch in grouper(n_workers, jobs):
+            for res in Parallel(n_workers)(job(bs) for bs in batch):
+                bs, be, cleaned_batch, firstchans_std, maxchans_std = res
+                cleaned_wfs[bs:be] = cleaned_batch
+                cfirstchans[bs:be] = firstchans_std
+                cmaxchans[bs:be] = maxchans_std
 
 
 # -- channels / geometry helpers
