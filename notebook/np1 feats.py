@@ -160,20 +160,24 @@ def ptp_at(x, y, z, alpha, local_geom):
 # %% tags=[]
 locs = {}
 for ds in root.glob("*.h5"):
+    if "p7_t_2000" not in ds.stem:
+        print("bye")
+        continue
     with h5py.File(ds, "r") as f:
         geom = f["geom"][:]
         maxptps = standardwfs[ds.stem].ptp(1).ptp(1)
+        plt.figure()
+        plt.hist(maxptps, bins=100)
+        plt.show()
+        
         show = rg().choice(maxptps.shape[0], size=8, replace=False)
         
         locs = localization.localize_waveforms(
             standardwfs[ds.stem][show],
             f["geom"][:],
+            firstchans[ds.stem][show],
             maxchans[ds.stem][show],
-            channel_radius=chans_down,
             n_workers=1,
-            firstchans=firstchans[ds.stem][show],
-            geomkind="firstchanstandard",
-            logbarrier=True,
         )
         print(locs[2].mean(), locs[2].std())
         locs = np.array(list(zip(*locs)))
@@ -184,12 +188,10 @@ for ds in root.glob("*.h5"):
             print("-" * 80)
             local_geom, z_maxchan = waveform_utils.get_local_geom(
                 geom,
+                fc,
                 mc,
-                chans_down,
-                ptp,
+                ptp.shape[0],
                 return_z_maxchan=True,
-                firstchan=fc,
-                geomkind="firstchanstandard",
             )
 
             ptp = ptp.astype(float)
@@ -420,51 +422,38 @@ def regline(x, y, ax=None, yx=True):
         fontsize=6,
     )
 
-# %%
-
-
-ox, oy, ozr, oza, oa = localization.localize_waveforms(
-    standardwfs[ds.stem][show],
-    f["geom"][:],
-    maxchans[ds.stem][show],
-    channel_radius=chans_down,
-    n_workers=1,
-    firstchans=firstchans[ds.stem][show],
-    geomkind="firstchanstandard",
-    logbarrier=False,
-)
 
 # %% tags=[]
 olocs = {}
 locs = {}
 for ds in root.glob("*.h5"):
+    if "p7_t_2000" not in ds.stem:
+        print("bye")
+        continue
     with h5py.File(ds, "r") as f:
         maxptps = standardwfs[ds.stem].ptp(1).ptp(1).astype(float)
         show = rg().choice(np.flatnonzero(maxptps > 6), size=8, replace=False)
         show = slice(None)
         
-        ox, oy, ozr, oza, oa = localization.localize_waveforms(
-            standardwfs[ds.stem][show],
-            f["geom"][:],
-            maxchans[ds.stem][show],
-            channel_radius=chans_down,
-            n_workers=15,
-            firstchans=firstchans[ds.stem][show],
-            geomkind="firstchanstandard",
-            logbarrier=False,
-        )
-        olocs[ds.stem] = np.c_[ox, oy, ozr, oza, oa]
+        # ox, oy, ozr, oza, oa = localization.localize_waveforms(
+        #     standardwfs[ds.stem][show],
+        #     f["geom"][:],
+        #     maxchans[ds.stem][show],
+        #     channel_radius=chans_down,
+        #     n_workers=15,
+        #     firstchans=firstchans[ds.stem][show],
+        #     geomkind="firstchanstandard",
+        #     logbarrier=False,
+        # )
+        # olocs[ds.stem] = np.c_[ox, oy, ozr, oza, oa]
         # ox, oy, ozr, oza, oa = olocs[ds.stem].T
         
         x, y, zr, za, a = localization.localize_waveforms(
             standardwfs[ds.stem][show],
             f["geom"][:],
+            firstchans[ds.stem][show],
             maxchans[ds.stem][show],
-            channel_radius=chans_down,
             n_workers=15,
-            firstchans=firstchans[ds.stem][show],
-            geomkind="firstchanstandard",
-            logbarrier=True,
         )
         print(y.min())
         print(zr.mean(), zr.std())
