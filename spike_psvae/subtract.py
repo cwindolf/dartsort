@@ -477,15 +477,21 @@ def clean_waveforms(
     tpca_rank=7,
     num_channels=20,
     trough_offset=42,
-    batch_size=50000,
+    batch_len_s=10,
     n_workers=1,
 ):
     denoiser = denoise.SingleChanDenoiser().load()
 
     @delayed
-    def job(bs):
+    def job(s_start):
         with h5py.File(h5_path, "r", swmr=True) as h5:
-            be = min(N, bs + batch_size)
+            s_end = s_start + batch_len_s * 30000
+            t = h5["spike_index"][:, 0]
+
+            # NB times are sorted
+            which = np.flatnonzero((t >= s_start) & (t < s_end))
+            bs = which[0]
+            be = which[-1] + 1
             # cleaned_batch = batch_cleaned_waveforms(
             #     h5["residual"],
             #     h5["subtracted_waveforms"][bs:be],
@@ -518,6 +524,10 @@ def clean_waveforms(
                 h5["geom"][:],
                 feat_chans=num_channels,
             )
+            # print("m>f", (maxchans_std >= firstchans_std).all())
+            # print("m=f+a", np.abs(maxchans_std - (firstchans_std + cleaned_batch.ptp(1).argmax(1))).max())
+            # print(cleaned_batch.shape, be - bs)
+            # print("mc", cleaned_batch[np.arange(be - bs), :, maxchans_std - firstchans_std]
             return bs, be, cleaned_batch, firstchans_std, maxchans_std
 
     with h5py.File(h5_path, "r+") as oh5:
@@ -539,7 +549,7 @@ def clean_waveforms(
         )
         oh5.swmr_mode = True
 
-        jobs = trange(0, N, batch_size, desc="Cleaning batches")
+        jobs = trange(oh5["start_sample"][()], oh5["end_sample"][()], batch_len_s * 30000, desc="Cleaning batches")
         for batch in grouper(n_workers, jobs):
             for res in Parallel(n_workers)(job(bs) for bs in batch):
                 bs, be, cleaned_batch, firstchans_std, maxchans_std = res
