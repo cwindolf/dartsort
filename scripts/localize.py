@@ -67,7 +67,7 @@ with timer("localization"):
             maxptp.append(
                 f["cleaned_waveforms"][bs:be][
                     np.arange(be - bs), :, crelmcs[bs:be]
-                ].max(1)
+                ].ptp(1)
             )
         maxptp = np.concatenate(maxptp).astype(float)
         times = (f["spike_index"][:, 0] - f["start_sample"][()]) / 30000
