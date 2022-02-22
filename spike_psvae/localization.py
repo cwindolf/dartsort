@@ -102,7 +102,7 @@ def localize_ptps(
     firstchans,
     maxchans,
     n_workers=None,
-    _not_helper=True,
+    pbar=True,
 ):
     """Localize a bunch of waveforms
 
@@ -114,7 +114,7 @@ def localize_ptps(
     -------
     xs, ys, z_rels, z_abss, alphas
     """
-    if _not_helper:
+    if pbar:
         N, _, C = check_shapes(
             ptps[:, None, :],
             maxchans,
@@ -128,7 +128,7 @@ def localize_ptps(
     firstchans = firstchans.astype(int)
 
     # handle pbars
-    xqdm = tqdm if _not_helper else lambda a, total, desc: a
+    xqdm = tqdm if pbar else lambda a, total, desc: a
 
     # -- run the least squares
     xs = np.empty(N)
@@ -165,7 +165,7 @@ def localize_waveforms(
     firstchans,
     maxchans,
     n_workers=1,
-    _not_helper=True,
+    pbar=True,
 ):
     """Localize a bunch of waveforms
 
@@ -177,7 +177,10 @@ def localize_waveforms(
     -------
     xs, ys, z_rels, z_abss, alphas
     """
-    if _not_helper:
+    # if not running with a progress bar, probably being called by
+    # `localize_waveforms_batched`, so let's skip the shape checks
+    # which have already been done.
+    if pbar:
         N, T, C = check_shapes(waveforms, maxchans, geom, firstchans)
     else:
         N, T, C = waveforms.shape
@@ -185,7 +188,7 @@ def localize_waveforms(
     maxchans = maxchans.astype(int)
 
     # handle pbars
-    xqdm = tqdm if _not_helper else lambda a, total, desc: a
+    xqdm = tqdm if pbar else lambda a, total, desc: a
 
     # -- run the least squares
     ptps = waveforms.ptp(1)
@@ -242,9 +245,9 @@ def localize_waveforms_batched(
                 delayed(localize_waveforms)(
                     waveforms[start:end],
                     geom,
-                    firstchans,
-                    maxchans,
-                    _not_helper=False,
+                    firstchans[start:end],
+                    maxchans[start:end],
+                    pbar=False,
                 )
                 for start, end in tqdm(
                     zip(starts, ends), total=len(starts), desc="loc batches"
