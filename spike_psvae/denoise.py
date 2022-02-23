@@ -93,38 +93,39 @@ def invert_temporal_align(aligned, rolls):
 def enforce_decrease(waveform, in_place=False):
     n_chan = waveform.shape[1]
     wf = waveform if in_place else waveform.copy()
-    max_chan = wf.ptp(0).argmax()
+    ptp = wf.ptp(0)
+    max_chan = ptp.argmax()
 
     max_chan_even = max_chan - max_chan % 2
     for i in range(4, max_chan_even, 2):
-        if wf[:, max_chan_even - i - 2].ptp() > wf[:, max_chan_even - i].ptp():
+        if ptp[max_chan_even - i - 2] > ptp[max_chan_even - i]:
             wf[:, max_chan_even - i - 2] = (
                 wf[:, max_chan_even - i - 2]
-                * wf[:, max_chan_even - i].ptp()
-                / wf[:, max_chan_even - i - 2].ptp()
+                * ptp[max_chan_even - i]
+                / ptp[max_chan_even - i - 2]
             )
     for i in range(4, n_chan - max_chan_even - 2, 2):
-        if wf[:, max_chan_even + i + 2].ptp() > wf[:, max_chan_even + i].ptp():
+        if ptp[max_chan_even + i + 2] > ptp[max_chan_even + i]:
             wf[:, max_chan_even + i + 2] = (
                 wf[:, max_chan_even + i + 2]
-                * wf[:, max_chan_even + i].ptp()
-                / wf[:, max_chan_even + i + 2].ptp()
+                * ptp[max_chan_even + i]
+                / ptp[max_chan_even + i + 2]
             )
 
     max_chan_odd = max_chan - max_chan % 2 + 1
     for i in range(4, max_chan_odd, 2):
-        if wf[:, max_chan_odd - i - 2].ptp() > wf[:, max_chan_odd - i].ptp():
+        if ptp[max_chan_odd - i - 2] > ptp[max_chan_odd - i]:
             wf[:, max_chan_odd - i - 2] = (
                 wf[:, max_chan_odd - i - 2]
-                * wf[:, max_chan_odd - i].ptp()
-                / wf[:, max_chan_odd - i - 2].ptp()
+                * ptp[max_chan_odd - i]
+                / ptp[max_chan_odd - i - 2]
             )
     for i in range(4, n_chan - max_chan_odd - 1, 2):
-        if wf[:, max_chan_odd + i + 2].ptp() > wf[:, max_chan_odd + i].ptp():
+        if ptp[max_chan_odd + i + 2] > ptp[max_chan_odd + i]:
             wf[:, max_chan_odd + i + 2] = (
                 wf[:, max_chan_odd + i + 2]
-                * wf[:, max_chan_odd + i].ptp()
-                / wf[:, max_chan_odd + i + 2].ptp()
+                * ptp[max_chan_odd + i]
+                / ptp[max_chan_odd + i + 2]
             )
 
     return wf
