@@ -90,44 +90,47 @@ def invert_temporal_align(aligned, rolls):
     return out
 
 
-def enforce_decrease(waveform, in_place=False):
+def enforce_decrease_new(waveform, in_place=False):
     n_chan = waveform.shape[1]
     wf = waveform if in_place else waveform.copy()
     ptp = wf.ptp(0)
     max_chan = ptp.argmax()
 
     max_chan_even = max_chan - max_chan % 2
-    for i in range(4, max_chan_even, 2):
-        if ptp[max_chan_even - i - 2] > ptp[max_chan_even - i]:
-            wf[:, max_chan_even - i - 2] = (
-                wf[:, max_chan_even - i - 2]
-                * ptp[max_chan_even - i]
-                / ptp[max_chan_even - i - 2]
-            )
-    for i in range(4, n_chan - max_chan_even - 2, 2):
-        if ptp[max_chan_even + i + 2] > ptp[max_chan_even + i]:
-            wf[:, max_chan_even + i + 2] = (
-                wf[:, max_chan_even + i + 2]
-                * ptp[max_chan_even + i]
-                / ptp[max_chan_even + i + 2]
-            )
+    max_chan_odd = max_chan_even + 1    
+    
+    len_reg = (max_chan_even-2)//2
+    regularizer = np.zeros(len_reg)
+    max_ptp = ptp[max_chan_even-2]
+    for i in range(len_reg):
+        max_ptp = min(max_ptp, ptp[max_chan_even-4-2*i])
+        regularizer[len_reg-i-1] = ptp[max_chan_even-4-2*i]/max_ptp
+    wf[:, np.arange(0,max_chan_even-2, 2)] /= regularizer
+    
+    len_reg = (n_chan -1- max_chan_even-2)//2
+    regularizer = np.zeros(len_reg)
+    max_ptp = ptp[max_chan_even+2]
+    for i in range(len_reg):
+        max_ptp = min(max_ptp, ptp[max_chan_even+4+2*i])
+        regularizer[i] = ptp[max_chan_even+4+2*i]/max_ptp
+    wf[:, np.arange(max_chan_even+4,n_chan, 2)] /= regularizer
 
-    max_chan_odd = max_chan - max_chan % 2 + 1
-    for i in range(4, max_chan_odd, 2):
-        if ptp[max_chan_odd - i - 2] > ptp[max_chan_odd - i]:
-            wf[:, max_chan_odd - i - 2] = (
-                wf[:, max_chan_odd - i - 2]
-                * ptp[max_chan_odd - i]
-                / ptp[max_chan_odd - i - 2]
-            )
-    for i in range(4, n_chan - max_chan_odd - 1, 2):
-        if ptp[max_chan_odd + i + 2] > ptp[max_chan_odd + i]:
-            wf[:, max_chan_odd + i + 2] = (
-                wf[:, max_chan_odd + i + 2]
-                * ptp[max_chan_odd + i]
-                / ptp[max_chan_odd + i + 2]
-            )
-
+    len_reg = (max_chan_odd-2)//2
+    regularizer = np.zeros(len_reg)
+    max_ptp = ptp[max_chan_odd-2]
+    for i in range(len_reg):
+        max_ptp = min(max_ptp, ptp[max_chan_odd-4-2*i])
+        regularizer[len_reg-i-1] = ptp[max_chan_odd-4-2*i]/max_ptp
+    wf[:, np.arange(1,max_chan_odd-2, 2)] /= regularizer
+    
+    len_reg = (n_chan -1- max_chan_odd-2)//2
+    regularizer = np.zeros(len_reg)
+    max_ptp = ptp[max_chan_odd+2]
+    for i in range(len_reg):
+        max_ptp = min(max_ptp, ptp[max_chan_odd+4+2*i])
+        regularizer[i] = ptp[max_chan_odd+4+2*i]/max_ptp
+    wf[:, np.arange(max_chan_odd+4,n_chan, 2)] /= regularizer
+    
     return wf
 
 
