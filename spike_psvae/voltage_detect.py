@@ -11,7 +11,7 @@ def detect_and_deduplicate(
     spike_index, energy = voltage_threshold(recording, threshold)
 
     # deduplicate
-    spike_index_dedup, energy_dedup = deduplicate_gpu(
+    spike_index_dedup, energy_dedup = deduplicate_torch(
     # spike_index_dedup, energy_dedup = deduplicate_sp(
         spike_index, energy, recording.shape, channel_index, #device=device
     )
@@ -67,7 +67,7 @@ def deduplicate(spike_index, energy, channel_index, max_window=5.):
 
 
 @torch.no_grad()
-def deduplicate_gpu(
+def deduplicate_torch(
     spike_index,
     energy,
     recording_shape,
@@ -95,10 +95,10 @@ def deduplicate_gpu(
 
     # get spatial max
     max_energy = F.pad(max_energy, (0, 1))
-    max_energy = torch.max(max_energy[:, channel_index], 2)[0] - 1e-8
+    max_energy = torch.max(max_energy[:, channel_index], 2)[0]
 
     # deduplicated spikes: temporal and spatial local max
-    which = torch.nonzero(energy_torch >= max_energy[times, chans]).cpu().numpy()[:, 0]
+    which = torch.nonzero(energy_torch >= max_energy[times, chans] - 1e-8).cpu().numpy()[:, 0]
     energy_dedup = energy[which]
     spike_index_dedup = spike_index[which]
 
