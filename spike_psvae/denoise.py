@@ -90,7 +90,7 @@ def invert_temporal_align(aligned, rolls):
     return out
 
 
-def enforce_decrease_new(waveform, in_place=False):
+def enforce_decrease(waveform, in_place=False):
     n_chan = waveform.shape[1]
     wf = waveform if in_place else waveform.copy()
     ptp = wf.ptp(0)
