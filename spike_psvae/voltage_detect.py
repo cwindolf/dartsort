@@ -1,3 +1,16 @@
+"""
+GPU implementation notes:
+A second of data uses
+    30,000 * 400 * 4 ~= 48 MB
+A typical GPU might have 8GB memory, say 6 are free.
+That means we can keep like 100 batches of data at a time.
+The channel index can have like ~30/40 neighbors per channel,
+so the spatial max pooling operations below are heavy.
+If we want to run 10 threads, each can keep 10 copies of the
+data. So let's batch up the spatial max pool to limit the memory
+consumption by 4x. Thus we batch up into batches of length
+    30000 / (channel_index.shape[1] / 4)
+"""
 import numpy as np
 import torch
 from scipy.signal import argrelmin
@@ -172,9 +185,18 @@ def torch_voltage_detect_dedup(
             stride=1,
             padding=[5, 0],
         )[0, 0]
+
         # -- spatial max pool with channel index
-        max_energies = F.pad(max_energies, (0, 1))
-        max_energies = torch.max(max_energies[:, channel_index], 2)[0]
+        # batch size heuristic, see __doc__
+        max_neighbs = channel_index.shape[1]
+        batch_size = np.ceil(T / (max_neighbs / 4))
+        for bs in range(0, T, batch_size):
+            be = min(T, bs + batch_size)
+            max_energies[bs:be] = torch.max(
+                F.pad(max_energies[bs:be], (0, 1))[:, channel_index],
+                2
+            )[0]
+
         # -- deduplication
         dedup = torch.nonzero(
             energies >= max_energies[times, chans] - 1e-8
