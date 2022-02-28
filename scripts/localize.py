@@ -101,10 +101,12 @@ with timer("registration"):
         disp=100,
         denoise_sigma=0.1,
         destripe=False,
-        n_windows=[5, 30, 60],
+        n_windows=[5, 10],
         n_iter=1,
-        widthmul=0.25,
+        widthmul=0.5,
     )
+    dispmap = dispmap - p_rigid[None, :]
+    dispmap -= dispmap.mean()
 
 with timer("save"):
     np.savez(
@@ -114,4 +116,5 @@ with timer("save"):
         maxptp=maxptp,
         z_rigid_reg=z_rigid_reg,
         z_reg=z_reg,
+        dispmap=dispmap,
     )
