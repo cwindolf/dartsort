@@ -58,13 +58,14 @@ with timer("cleaning"):
             num_channels=args.n_channels,
         )
 
-    if "cleaned_first_channels" in f:
-        cfirstchans = f["cleaned_first_channels"][:]
-        cmaxchans = f["cleaned_max_channels"][:]
-    else:
-        cfirstchans = f["first_channels"][:]
-        cmaxchans = f["spike_index"][:, 1]
-    crelmcs = cfirstchans - cmaxchans
+    with h5py.File(args.subtracted_h5, "r+") as f:
+        if "cleaned_first_channels" in f:
+            cfirstchans = f["cleaned_first_channels"][:]
+            cmaxchans = f["cleaned_max_channels"][:]
+        else:
+            cfirstchans = f["first_channels"][:]
+            cmaxchans = f["spike_index"][:, 1]
+        crelmcs = cfirstchans - cmaxchans
 
 
 # -- localize
