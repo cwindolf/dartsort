@@ -528,8 +528,12 @@ def full_denoising(
         gc.collect()
 
     # Temporal PCA while we are still transposed
+<<<<<<< HEAD
     if tpca is not None:
         waveforms = tpca.transform(waveforms)
+=======
+    waveforms = tpca.inverse_transform(tpca.transform(waveforms))
+>>>>>>> 53952b8039b1ee078a82c989460ff65502a8cac1
 
     # Un-transpose, enforce temporal decrease
     waveforms = waveforms.reshape(N, C, T).transpose(0, 2, 1)
