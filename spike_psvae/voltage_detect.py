@@ -8,13 +8,16 @@ The channel index can have like ~30/40 neighbors per channel,
 so the spatial max pooling operations below are heavy.
 If we want to run 10 threads, each can keep 10 copies of the
 data. So let's batch up the spatial max pool to limit the memory
-consumption by 4x. Thus we batch up into batches of length
-    30000 / (channel_index.shape[1] / 4)
+consumption by MAXCOPYx. Thus we batch up into batches of length
+    30000 / (channel_index.shape[1] / MAXCOPY)
 """
 import numpy as np
 import torch
 from scipy.signal import argrelmin
 import torch.nn.functional as F
+
+
+MAXCOPY = 8
 
 
 def detect_and_deduplicate(
@@ -174,6 +177,8 @@ def torch_voltage_detect_dedup(
     # -- deduplication
     # We deduplicate if the channel index is provided.
     if channel_index is not None:
+        channel_index = torch.tensor(channel_index, device=device, dtype=torch.long)
+
         # -- temporal max pool
         # still not sure why we can't just use `max_energies` instead of making
         # this sparsely populated array, but it leads to a different result.
@@ -189,7 +194,7 @@ def torch_voltage_detect_dedup(
         # -- spatial max pool with channel index
         # batch size heuristic, see __doc__
         max_neighbs = channel_index.shape[1]
-        batch_size = np.ceil(T / (max_neighbs / 4))
+        batch_size = int(np.ceil(T / (max_neighbs / MAXCOPY)))
         for bs in range(0, T, batch_size):
             be = min(T, bs + batch_size)
             max_energies[bs:be] = torch.max(

@@ -30,15 +30,30 @@ plt.rc("figure", dpi=200)
 rg = lambda: np.random.default_rng(0)
 
 # %%
-subh5 = h5py.File("/mnt/3TB/charlie/subtracted_datasets/churchlandlab_CSHL049_p7_t_2000_2010.h5", "r")
+# subh5 = h5py.File("/mnt/3TB/charlie/subtracted_datasets/churchlandlab_CSHL049_p7_t_2000_2010.h5", "r")
+subh5 = h5py.File("/mnt/3TB/charlie/subtracted_datasets/zigzag_np2_t_250_300.h5", "r")
+
 firstchans = subh5["first_channels"][:]
 spike_index = subh5["spike_index"][:]
+maxchans = spike_index[:, 1]
 geom = subh5["geom"][:]
 wfs = subh5["subtracted_waveforms"]
 cwfs = subh5["cleaned_waveforms"]
 residual = subh5["residual"]
-cfirstchans = subh5["cleaned_first_channels"][:]
-cmaxchans = subh5["cleaned_max_channels"][:]
+
+feat_chans = 20
+if "cleaned_first_channels" in subh5:
+    cfirstchans = subh5["first_channels"][:]
+    cmaxchans = subh5["spike_index"][:, 1]
+    feat_chans = cwfs.shape[-1]
+else:
+    cwfs, cfirstchans, cmaxchans, chans_down = waveform_utils.relativize_waveforms(
+        cwfs,
+        firstchans,
+        None,
+        geom,
+        feat_chans=feat_chans,
+    )
 
 # relativize time
 spike_index[:, 0] -= subh5["start_sample"][()]
@@ -53,12 +68,11 @@ subh5["residual"].shape
 subh5["end_sample"][()] - subh5["start_sample"][()]
 
 # %%
-maxchans = spike_index[:, 1]
-
-# %%
 raw = np.memmap(
-    "/mnt/3TB/charlie/.one/openalyx.internationalbrainlab.org/churchlandlab/Subjects/CSHL049/2020-01-08/001/raw_ephys_data/probe00/_spikeglx_ephysData_g0_t0.imec.ap.normalized.bin",
+    # "/mnt/3TB/charlie/.one/openalyx.internationalbrainlab.org/churchlandlab/Subjects/CSHL049/2020-01-08/001/raw_ephys_data/probe00/_spikeglx_ephysData_g0_t0.imec.ap.normalized.bin",
+    "/mnt/3TB/charlie/NP2/standardized.bin",
     dtype=np.float32,
+    mode="r",
 )
 raw = raw.reshape(-1, 384)
 raw = raw[subh5["start_sample"][()]:subh5["end_sample"][()]]
@@ -101,7 +115,7 @@ stdwfs, firstchans_std, maxchans_std, chans_down = waveform_utils.relativize_wav
     subh5["first_channels"][:],
     None,
     subh5["geom"][:],
-    feat_chans=18,
+    feat_chans=feat_chans,
 )
 
 # %%
@@ -122,24 +136,24 @@ plt.hist(cptp - sptp, bins=20)
 plt.show()
 
 # %%
-plt.hist(cptp);
+plt.hist(cptp, bins=100);
 
 # %%
-plt.hist(sptp);
+plt.hist(sptp, bins=100);
 
 # %%
 fig, axes = plt.subplots(4, 4)
 vis_utils.plot_ptp(wfs[show].ptp(1), axes, "", "k", "abcdefghijklmnop")
 crelptps = []
-# srelptps = []
+srelptps = []
 
 for ix in show:
     fcrel = cfirstchans[ix] - firstchans[ix]
     print(fcrel, cfirstchans[ix], firstchans[ix])
-    crelptps.append(np.pad(cwfs[ix].ptp(0), (fcrel, 22 - fcrel)))
-    # srelptps.append(np.pad(stdwfs[ix].ptp(0), (fcrel, 22 - fcrel)))
+    crelptps.append(np.pad(cwfs[ix].ptp(0), (fcrel, (40 - feat_chans) - fcrel)))
+    srelptps.append(np.pad(stdwfs[ix].ptp(0), (fcrel, (40 - feat_chans) - fcrel)))
 vis_utils.plot_ptp(crelptps, axes, "", "purple", "abcdefghijklmnop")
-# vis_utils.plot_ptp(srelptps, axes, "", "green", "abcdefghijklmnop")
+vis_utils.plot_ptp(srelptps, axes, "", "green", "abcdefghijklmnop")
 
 # %%
 crelptps = []
@@ -250,32 +264,101 @@ for ix in show:
     plt.show()
 
 # %%
-locs = np.load("/mnt/3TB/charlie/ibl_feats/churchlandlab_CSHL049_p7_t_2000_2010_locs.npz")
+
+# %%
+# locs = np.load("/mnt/3TB/charlie/ibl_feats/churchlandlab_CSHL049_p7_t_1500_2500_locs.npz")
+locs = np.load("/mnt/3TB/charlie/subtracted_datasets/zigzag_np2_t_250_300_locs.npz")
+
 list(locs.keys())
+
+# %%
+plt.figure(figsize=(10, 8))
+maxptps = locs["maxptp"]
+# which = maxptps > 5
+which = slice(None)
+maxptps = maxptps[which]
+nmaxptps = 0.25 + 0.74 * (maxptps - maxptps.min()) / (maxptps.max() - maxptps.min())
+# print(which.sum())
+x = locs["locs"][which, 0]
+y = locs["locs"][which, 1]
+a = locs["locs"][which, 4]
+za = locs["locs"][which, 3]
+zr = locs["z_reg"][which]
+t = locs["t"][which]
+
+z_rigid_reg, p_rigid = reg.register_rigid(
+    maxptps,
+    za + 0,
+    t,
+    robust_sigma=0,
+    disp=400,
+    denoise_sigma=0.1,
+    destripe=False,
+)
+z_reg, dispmap = reg.register_nonrigid(
+    maxptps,
+    z_rigid_reg,
+    t,
+    robust_sigma=1,
+    rigid_disp=200,
+    disp=100,
+    denoise_sigma=0.1,
+    destripe=False,
+    n_windows=[5, 30],#, 60],
+    n_iter=1,
+    widthmul=0.5,
+)
+D = p_rigid[None, :] + dispmap
+D -= D.mean()
+plt.figure(figsize=(6, 5))
+plt.imshow(D, aspect=0.2, cmap=plt.cm.bwr)
+plt.colorbar()
+
+# moves = (zr - za) - (zr - za).mean()
+# moves = np.abs(moves)
+# moves /= moves.max()
+# moves = 0.25 + 0.74 * moves
+# plt.scatter(t, za, s=0.1, alpha=moves, c=(zr - za) - (zr - za).mean(), cmap=plt.cm.seismic)
+# plt.colorbar()
+# plt.show()
+
+# %%
+v = max(D.max(), -D.min())
+plt.figure(figsize=(6, 5))
+plt.imshow(D, aspect=0.2, cmap=plt.cm.bwr, vmin=-v, vmax=v)
+plt.colorbar()
+
+# %%
+plt.hist((zr - za) - (zr - za).mean(), bins=128);
 
 
 # %%
-def plotlocs(x, y, z_reg, alpha, maxptps, geom, which=slice(None)):
+
+# %%
+def plotlocs(x, y, z, alpha, maxptps, geom, which=slice(None)):
     maxptps = maxptps[which]
     nmaxptps = 0.25 + 0.74 * (maxptps - maxptps.min()) / (maxptps.max() - maxptps.min())
+    cmaxptps = np.clip(maxptps, 3, 13)
 
     x = x[which]
     y = y[which]
     alpha = alpha[which]
-    z_reg = z_reg[which]
-    
+    z = z[which]
+    cm = plt.cm.viridis
     fig, (aa, ab, ac) = plt.subplots(1, 3, sharey=True, figsize=(8, 8))
-    aa.scatter(x, z_reg, s=0.1, alpha=nmaxptps, c=maxptps, cmap=cm)
+    aa.scatter(x, z, s=0.1, alpha=nmaxptps, c=cmaxptps, cmap=cm)
     aa.scatter(geom[:, 0], geom[:, 1], color="orange", s=1)
-    ab.scatter(np.log(y), z_reg, s=0.1, alpha=nmaxptps, c=maxptps, cmap=cm)
-    ac.scatter(np.log(alpha), z_reg, s=0.1, alpha=nmaxptps, c=maxptps, cmap=cm)
+    logy = np.log(y)
+    ab.scatter(logy, z, s=0.1, alpha=nmaxptps, c=cmaxptps, cmap=cm)
+    loga = np.log(alpha)
+    ac.scatter(loga, z, s=0.1, alpha=nmaxptps, c=cmaxptps, cmap=cm)
     aa.set_ylabel("z")
     aa.set_xlabel("x")
     ab.set_xlabel("$\\log y$")
     ac.set_xlabel("$\\log \\alpha$")
-    aa.set_xlim([11 - 50, 59 + 50])
-    ab.set_xlim([-1, 5])
-    ac.set_xlim([2.5, 6.1])
+    aa.set_xlim(np.percentile(x, [0, 100]))
+    ab.set_xlim(np.percentile(logy, [0, 100]))
+    ac.set_xlim(np.percentile(loga, [0, 100]))
     aa.set_ylim([0 - 10, geom[:, 1].max() + 10])
     plt.show()
 
@@ -297,7 +380,7 @@ plt.figure()
 plt.hist(maxptps, bins=100)
 plt.show()
 
-plotlocs(x, y, za, a, maxptps, geom)
+plotlocs(x, y, z_reg, a, maxptps, geom)
 
 # %%
 sx, sy, szr, sza, sa = localization.localize_waveforms(
@@ -319,6 +402,8 @@ sz_reg, _ = reg.register_nonrigid(
     szrr,
     t,
 )
+
+# %%
 
 # %%
 plotlocs(sx, sy, sz_reg, sa, stdwfs.ptp(1).max(1), geom)
