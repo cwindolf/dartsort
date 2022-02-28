@@ -236,6 +236,9 @@ def subtraction(
             T_samples,
             sampling_rate,
             channel_index,
+            thresholds,
+            standardized_dtype=np.float32,
+            n_sec_chunk_pca=10,
             rank=tpca_rank,
             random_seed=random_seed,
         )
@@ -350,7 +353,6 @@ def train_pca(
     standardized_dtype=np.float32,
     n_sec_chunk_pca=10,
     rank=7,
-    threshold=6,
     random_seed=0,
 ):
     s_start = len_recording_samples // 2 - sampling_rate * n_sec_chunk_pca // 2
