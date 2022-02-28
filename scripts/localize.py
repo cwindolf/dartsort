@@ -89,6 +89,7 @@ with timer("localization"):
             cfirstchans,
             cmaxchans,
             n_workers=args.n_jobs,
+            n_channels=args.n_channels,
         )
 
 
