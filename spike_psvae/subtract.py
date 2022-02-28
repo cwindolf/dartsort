@@ -285,7 +285,7 @@ def subtraction(
         batch_len_samples,
     )
     job_batches = list(grouper(int(np.ceil(50 / n_jobs) * n_jobs), jobs))
-    with Parallel(n_jobs) as pool:
+    with Parallel(n_jobs, require="sharedmem" if "cuda" in device.type else None) as pool:
         for batch in tqdm(job_batches, desc="Long batches"):
             for result in pool(
                 delayed(subtraction_batch)(
@@ -496,7 +496,7 @@ def full_denoising(
     maxchans,
     device=None,
     denoiser=None,
-    batch_size=512,
+    batch_size=1024,
     align=False,
 ):
     N, T, C = waveforms.shape
@@ -508,11 +508,9 @@ def full_denoising(
     # Apply NN denoiser (skip if None)
     waveforms = waveforms.transpose(0, 2, 1).reshape(N * C, T)
     if denoiser is not None:
-        wfs = torch.tensor(waveforms)
         for bs in range(0, N * C, batch_size):
             be = min(bs + batch_size, N * C)
-            waveforms[bs:be] = denoiser(wfs[bs:be].to(device)).cpu().numpy()
-        del wfs
+            waveforms[bs:be] = denoiser(torch.tensor(waveforms[bs:be], device=device, dtype=torch.float)).cpu().numpy()
         torch.cuda.empty_cache()
         gc.collect()
 
