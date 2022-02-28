@@ -370,7 +370,7 @@ def train_pca(
     spike_index, _ = voltage_detect.detect_and_deduplicate(
         data, threshold, channel_index, 0, "cpu"
     )
-    spike_index = spike_index[spike_index[:, 0] > 42 & spike_index[:, 0] < s_end - s_start - 79]
+    spike_index = spike_index[(spike_index[:, 0] > 42) & (spike_index[:, 0] < s_end - s_start - 79)]
 
     # load WFs
     waveforms, _ = read_waveforms(
@@ -528,7 +528,7 @@ def full_denoising(
         gc.collect()
 
     # Temporal PCA while we are still transposed
-    waveforms = tpca.transform(waveforms)
+    waveforms = tpca.inverse_transform(tpca.transform(waveforms))
 
     # Un-transpose, enforce temporal decrease
     waveforms = waveforms.reshape(N, C, T).transpose(0, 2, 1)
