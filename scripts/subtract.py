@@ -29,7 +29,10 @@ args = ap.parse_args()
 geom = None
 if args.geom is not None:
     from ibllib.ephys import neuropixel
-    print(f"Using the typical {args.geom} geometry. Will try to load from .meta if --geom is not set")
+    print(
+        f"Using the typical {args.geom} geometry. "
+        "Will try to load from .meta if --geom is not set"
+    )
     ch = neuropixel.dense_layout(version=int(args.geom[-1]))
     geom = np.c_[ch["x"], ch["y"]]
 
