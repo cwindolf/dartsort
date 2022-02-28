@@ -42,7 +42,7 @@ def subtraction_batch(
     T_samples,
     standardized_bin,
     thresholds,
-    tpca_rank,
+    tpca,
     trough_offset,
     channel_index,
     spike_length_samples,
@@ -86,7 +86,7 @@ def subtraction_batch(
         subwfs, spind, fcs = detect_and_subtract(
             residual,
             threshold,
-            tpca_rank,
+            tpca,
             denoiser,
             trough_offset,
             channel_index,
@@ -137,7 +137,7 @@ def subtraction_batch(
             spike_index,
             firstchans,
             denoiser,
-            tpca_rank,
+            tpca,
             trough_offset,
             buffer,
         )
@@ -179,6 +179,7 @@ def subtraction(
     n_jobs=1,
     device=None,
     do_clean=False,
+    random_seed=0,
 ):
     standardized_bin = Path(standardized_bin)
     output_h5 = Path(output_h5)
@@ -223,6 +224,19 @@ def subtraction(
 
     # compute helper data structures
     channel_index = make_channel_index(geom, spatial_radius, steps=2)
+
+    # pre-fit temporal PCA
+    tpca = train_pca(
+        standardized_bin,
+        spike_length_samples,
+        extract_channels,
+        geom,
+        T_samples,
+        sampling_rate,
+        channel_index,
+        rank=tpca_rank,
+        random_seed=random_seed,
+    )
 
     # initialize resizable output datasets for waveforms etc
     residual = out_h5.create_dataset(
@@ -280,7 +294,7 @@ def subtraction(
                     T_samples,
                     standardized_bin,
                     thresholds,
-                    tpca_rank,
+                    tpca,
                     trough_offset,
                     channel_index,
                     spike_length_samples,
@@ -317,13 +331,71 @@ def subtraction(
                 N += N_new
 
 
+# -- temporal PCA
+
+
+def train_pca(
+    standardized_bin,
+    spike_length_samples,
+    extract_channels,
+    geom,
+    len_recording_samples,
+    sampling_rate,
+    channel_index,
+    standardized_dtype=np.float32,
+    n_sec_chunk_pca=10,
+    rank=7,
+    threshold=6,
+    random_seed=0,
+):
+    s_start = len_recording_samples // 2 - sampling_rate * n_sec_chunk_pca // 2
+    s_end = len_recording_samples // 2 + sampling_rate * n_sec_chunk_pca // 2
+    if s_start < 0 or s_end > len_recording_samples:
+        raise ValueError(
+            f"n_sec_chunk_pca={n_sec_chunk_pca} was too big for this data."
+        )
+
+    data = read_data(
+        standardized_bin,
+        standardized_dtype,
+        s_start,
+        s_end,
+        n_channels=len(channel_index),
+    )
+    # would need to batch this for GPU if it's too slow
+    spike_index, energy = voltage_detect.detect_and_deduplicate(
+        data, threshold, channel_index, 0, "cpu"
+    )
+
+    # load WFs
+    waveforms, firstchans = read_waveforms(
+        data,
+        spike_index,
+        spike_length_samples,
+        extract_channels,
+    )
+    N, T, C = waveforms.shape
+
+    # NN denoise
+    with torch.no_grad():
+        denoiser = denoise.SingleChanDenoiser().load()
+        waveforms = waveforms.transpose(0, 2, 1).reshape(N * C, T)
+        waveforms = denoiser(torch.as_tensor(waveforms)).numpy()
+
+    # fit TPCA
+    tpca = PCA(rank, random_state=random_seed)
+    tpca.fit(waveforms)
+
+    return tpca
+
+
 # -- denoising / detection helpers
 
 
 def detect_and_subtract(
     raw,
     threshold,
-    tpca_rank,
+    tpca,
     denoiser,
     trough_offset,
     channel_index,
@@ -333,51 +405,25 @@ def detect_and_subtract(
     buffer,
 ):
     """This subtracts from raw in place, leaving the residual behind"""
-    n_channels = len(channel_index)
     spike_index, energy = voltage_detect.detect_and_deduplicate(
         raw, threshold, channel_index, spike_length_samples, device
     )
-    # it would be nice to go in order but we would need to fit the
-    # TPCA to something other than the subtracted waveforms (could
-    # probably just fit it to denoised raw)
+    # it would be nice to go in order, but we would need to
+    # combine the reading and subtraction steps together
     # subtraction_order = np.argsort(energy)[::-1]
-
-    # how many channels down from max channel?
-    chans_down = extract_channels // 2
-    chans_down -= chans_down % 2
-
-    # allocate output storage
-    subtracted_wfs = np.empty(
-        (len(spike_index), spike_length_samples, extract_channels),
-        dtype=raw.dtype,
+    subtracted_wfs, firstchans = read_waveforms(
+        raw,
+        spike_index,
+        spike_length_samples,
+        extract_channels,
+        trough_offset=trough_offset,
+        buffer=buffer,
     )
-    firstchans = np.empty(len(spike_index), dtype=np.int32)
-
-    # extraction loop
-    for i in range(len(spike_index)):
-        t, mc = spike_index[i]
-
-        # what will be the first extracted channel?
-        mc_idx = mc - mc % 2
-        fc = mc_idx - chans_down
-        fc = max(fc, 0)
-        fc = min(fc, n_channels - extract_channels)
-
-        subtracted_wfs[i] = raw[
-            t
-            - trough_offset
-            + buffer : t
-            - trough_offset
-            + spike_length_samples
-            + buffer,
-            fc : fc + extract_channels,
-        ]
-        firstchans[i] = fc
 
     # denoising
     subtracted_wfs = full_denoising(
         subtracted_wfs,
-        tpca_rank,
+        tpca,
         spike_index[:, 1] - firstchans,
         device,
         denoiser,
@@ -398,10 +444,55 @@ def detect_and_subtract(
     return subtracted_wfs, spike_index, firstchans
 
 
+def read_waveforms(
+    recording,
+    spike_index,
+    spike_length_samples,
+    extract_channels,
+    trough_offset=42,
+    buffer=0,
+):
+    n_channels = recording.shape[1]
+
+    # how many channels down from max channel?
+    chans_down = extract_channels // 2
+    chans_down -= chans_down % 2
+
+    # allocate output storage
+    waveforms = np.empty(
+        (len(spike_index), spike_length_samples, extract_channels),
+        dtype=recording.dtype,
+    )
+    firstchans = np.empty(len(spike_index), dtype=np.int32)
+
+    # extraction loop
+    for i in range(len(spike_index)):
+        t, mc = spike_index[i]
+
+        # what will be the first extracted channel?
+        mc_idx = mc - mc % 2
+        fc = mc_idx - chans_down
+        fc = max(fc, 0)
+        fc = min(fc, n_channels - extract_channels)
+
+        waveforms[i] = recording[
+            t
+            - trough_offset
+            + buffer : t
+            - trough_offset
+            + spike_length_samples
+            + buffer,
+            fc : fc + extract_channels,
+        ]
+        firstchans[i] = fc
+
+    return waveforms, firstchans
+
+
 @torch.inference_mode()
 def full_denoising(
     waveforms,
-    tpca_rank,
+    tpca,
     maxchans,
     device=None,
     denoiser=None,
@@ -426,9 +517,7 @@ def full_denoising(
         gc.collect()
 
     # Temporal PCA while we are still transposed
-    tpca = PCA(tpca_rank)
-    waveforms = tpca.fit_transform(waveforms)
-    waveforms = tpca.inverse_transform(waveforms)
+    waveforms = tpca.transform(waveforms)
 
     # Un-transpose, enforce temporal decrease
     waveforms = waveforms.reshape(N, C, T).transpose(0, 2, 1)
@@ -448,7 +537,7 @@ def batch_cleaned_waveforms(
     spike_index,
     firstchans,
     denoiser,
-    tpca_rank,
+    tpca,
     trough_offset,
     buffer,
 ):
@@ -465,7 +554,7 @@ def batch_cleaned_waveforms(
 
     # Denoise and return
     return full_denoising(
-        cleaned_waveforms, tpca_rank, spike_index[:, 1] - firstchans, denoiser
+        cleaned_waveforms, tpca, spike_index[:, 1] - firstchans, denoiser
     )
 
 
@@ -502,7 +591,7 @@ def clean_waveforms(
             #     trough_offset,
             #     0,
             # )
-            
+
             cleaned_batch = denoise.cleaned_waveforms(
                 h5["subtracted_waveforms"][bs:be],
                 h5["spike_index"][bs:be],
@@ -549,7 +638,12 @@ def clean_waveforms(
         )
         oh5.swmr_mode = True
 
-        jobs = trange(oh5["start_sample"][()], oh5["end_sample"][()], batch_len_s * 30000, desc="Cleaning batches")
+        jobs = trange(
+            oh5["start_sample"][()],
+            oh5["end_sample"][()],
+            batch_len_s * 30000,
+            desc="Cleaning batches",
+        )
         for batch in grouper(n_workers, jobs):
             for res in Parallel(n_workers)(job(bs) for bs in batch):
                 bs, be, cleaned_batch, firstchans_std, maxchans_std = res
