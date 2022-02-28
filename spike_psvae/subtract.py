@@ -1,6 +1,7 @@
 import gc
 import h5py
 import numpy as np
+import time
 import torch
 import itertools
 
@@ -226,17 +227,18 @@ def subtraction(
     channel_index = make_channel_index(geom, spatial_radius, steps=2)
 
     # pre-fit temporal PCA
-    tpca = train_pca(
-        standardized_bin,
-        spike_length_samples,
-        extract_channels,
-        geom,
-        T_samples,
-        sampling_rate,
-        channel_index,
-        rank=tpca_rank,
-        random_seed=random_seed,
-    )
+    with timer("training tpca"):
+        tpca = train_pca(
+            standardized_bin,
+            spike_length_samples,
+            extract_channels,
+            geom,
+            T_samples,
+            sampling_rate,
+            channel_index,
+            rank=tpca_rank,
+            random_seed=random_seed,
+        )
 
     # initialize resizable output datasets for waveforms etc
     residual = out_h5.create_dataset(
@@ -285,7 +287,9 @@ def subtraction(
         batch_len_samples,
     )
     job_batches = list(grouper(int(np.ceil(50 / n_jobs) * n_jobs), jobs))
-    with Parallel(n_jobs, require="sharedmem" if "cuda" in device.type else None) as pool:
+    with Parallel(
+        n_jobs, require="sharedmem" if "cuda" in device.type else None
+    ) as pool:
         for batch in tqdm(job_batches, desc="Long batches"):
             for result in pool(
                 delayed(subtraction_batch)(
@@ -510,7 +514,15 @@ def full_denoising(
     if denoiser is not None:
         for bs in range(0, N * C, batch_size):
             be = min(bs + batch_size, N * C)
-            waveforms[bs:be] = denoiser(torch.tensor(waveforms[bs:be], device=device, dtype=torch.float)).cpu().numpy()
+            waveforms[bs:be] = (
+                denoiser(
+                    torch.tensor(
+                        waveforms[bs:be], device=device, dtype=torch.float
+                    )
+                )
+                .cpu()
+                .numpy()
+            )
         torch.cuda.empty_cache()
         gc.collect()
 
@@ -779,3 +791,16 @@ def grouper(n, iterable):
         if not chunk:
             return
         yield chunk
+
+
+class timer:
+    def __init__(self, name="timer"):
+        self.name = name
+
+    def __enter__(self):
+        self.start = time.time()
+        return self
+
+    def __exit__(self, *args):
+        self.t = time.time() - self.start
+        print(self.name, "took", self.t, "s")
