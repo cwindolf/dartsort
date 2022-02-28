@@ -2,7 +2,7 @@ from joblib import Parallel, delayed
 import numpy as np
 from scipy.optimize import minimize
 from tqdm.auto import tqdm
-from .waveform_utils import get_local_geom
+from .waveform_utils import get_local_geom, relativize_waveforms
 
 # (x_low, y_low, z_low, alpha_low), (x_high, y_high, z_high, alpha_high)
 # BOUNDS_NP1 = (-100, 1e-4, -100, 0), (132, 250, 100, 20000)
@@ -165,6 +165,7 @@ def localize_waveforms(
     firstchans,
     maxchans,
     n_workers=1,
+    n_channels=None,
     pbar=True,
 ):
     """Localize a bunch of waveforms
@@ -184,40 +185,27 @@ def localize_waveforms(
         N, T, C = check_shapes(waveforms, maxchans, geom, firstchans)
     else:
         N, T, C = waveforms.shape
-
     maxchans = maxchans.astype(int)
 
-    # handle pbars
-    xqdm = tqdm if pbar else lambda a, total, desc: a
+    if n_channels is not None and n_channels < C:
+        waveforms, firstchans, maxchans, _ = relativize_waveforms(
+            waveforms,
+            firstchans,
+            None,
+            geom,
+            maxchans_orig=None,
+            feat_chans=n_channels,
+        )
 
-    # -- run the least squares
     ptps = waveforms.ptp(1)
-    xs = np.empty(N)
-    ys = np.empty(N)
-    z_rels = np.empty(N)
-    z_abss = np.empty(N)
-    alphas = np.empty(N)
-    with Parallel(n_workers) as pool:
-        for n, (x, y, z_rel, z_abs, alpha) in enumerate(
-            pool(
-                delayed(localize_ptp)(
-                    ptp,
-                    firstchan,
-                    maxchan,
-                    geom,
-                )
-                for ptp, maxchan, firstchan in xqdm(
-                    zip(ptps, maxchans, firstchans), total=N, desc="lsq"
-                )
-            )
-        ):
-            xs[n] = x
-            ys[n] = y
-            z_rels[n] = z_rel
-            z_abss[n] = z_abs
-            alphas[n] = alpha
-
-    return xs, ys, z_rels, z_abss, alphas
+    return localize_ptps(
+        ptps,
+        geom,
+        firstchans,
+        maxchans,
+        n_workers=n_workers,
+        pbar=pbar,
+    )
 
 
 def localize_waveforms_batched(
@@ -227,6 +215,7 @@ def localize_waveforms_batched(
     maxchans,
     n_workers=1,
     batch_size=128,
+    n_channels=None,
 ):
     """A helper for running the above on hdf5 datasets or similar"""
     N, T, C = check_shapes(waveforms, maxchans, geom, firstchans)
@@ -248,6 +237,7 @@ def localize_waveforms_batched(
                     firstchans[start:end],
                     maxchans[start:end],
                     pbar=False,
+                    n_channels=n_channels,
                 )
                 for start, end in tqdm(
                     zip(starts, ends), total=len(starts), desc="loc batches"
