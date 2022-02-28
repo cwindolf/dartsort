@@ -385,7 +385,7 @@ def train_pca(
 
     # fit TPCA
     tpca = PCA(rank, random_state=random_seed)
-    tpca.fit(waveforms)
+    tpca.fit(waveforms.transpose(0, 2, 1).reshape(N * C, T))
 
     return tpca
 
@@ -525,7 +525,7 @@ def full_denoising(
 
     # Temporal PCA while we are still transposed
     if tpca is not None:
-        waveforms = tpca.transform(waveforms)
+        waveforms = tpca.inverse_transform(tpca.transform(waveforms))
 
     # Un-transpose, enforce temporal decrease
     waveforms = waveforms.reshape(N, C, T).transpose(0, 2, 1)
