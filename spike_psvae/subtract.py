@@ -346,6 +346,7 @@ def train_pca(
     len_recording_samples,
     sampling_rate,
     channel_index,
+    thresholds,
     standardized_dtype=np.float32,
     n_sec_chunk_pca=10,
     rank=7,
@@ -359,26 +360,26 @@ def train_pca(
             f"n_sec_chunk_pca={n_sec_chunk_pca} was too big for this data."
         )
 
-    data = read_data(
-        standardized_bin,
-        standardized_dtype,
+    # do a mini-subtraction with no PCA, just NN denoise and enforce_decrease
+    sub_result = subtraction_batch(
         s_start,
-        s_end,
-        n_channels=len(channel_index),
-    )
-    # would need to batch this for GPU if it's too slow
-    spike_index, energy = voltage_detect.detect_and_deduplicate(
-        data, threshold, channel_index, 0, "cpu"
-    )
-
-    # load WFs
-    waveforms, firstchans = read_waveforms(
-        data,
-        spike_index,
+        s_end - s_start,
+        len_recording_samples,
+        standardized_bin,
+        thresholds,
+        None,
+        42,
+        channel_index,
         spike_length_samples,
         extract_channels,
+        "cpu",
+        s_start,
+        s_end,
+        False,
     )
+    waveforms = sub_result.subtracted_wfs
     N, T, C = waveforms.shape
+    print("Fitting PCA on", N, "waveforms from mini-subtraction")
 
     # NN denoise
     with torch.no_grad():
@@ -427,8 +428,8 @@ def detect_and_subtract(
     # denoising
     subtracted_wfs = full_denoising(
         subtracted_wfs,
-        tpca,
         spike_index[:, 1] - firstchans,
+        tpca,
         device,
         denoiser,
     )
@@ -496,8 +497,8 @@ def read_waveforms(
 @torch.inference_mode()
 def full_denoising(
     waveforms,
-    tpca,
     maxchans,
+    tpca=None,
     device=None,
     denoiser=None,
     batch_size=1024,
@@ -527,7 +528,8 @@ def full_denoising(
         gc.collect()
 
     # Temporal PCA while we are still transposed
-    waveforms = tpca.transform(waveforms)
+    if tpca is not None:
+        waveforms = tpca.transform(waveforms)
 
     # Un-transpose, enforce temporal decrease
     waveforms = waveforms.reshape(N, C, T).transpose(0, 2, 1)
@@ -564,7 +566,7 @@ def batch_cleaned_waveforms(
 
     # Denoise and return
     return full_denoising(
-        cleaned_waveforms, tpca, spike_index[:, 1] - firstchans, denoiser
+        cleaned_waveforms, spike_index[:, 1] - firstchans, tpca, denoiser
     )
 
 
@@ -579,8 +581,6 @@ def clean_waveforms(
     batch_len_s=10,
     n_workers=1,
 ):
-    denoiser = denoise.SingleChanDenoiser().load()
-
     @delayed
     def job(s_start):
         with h5py.File(h5_path, "r", swmr=True) as h5:
