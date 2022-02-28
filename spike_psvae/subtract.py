@@ -383,12 +383,6 @@ def train_pca(
     N, T, C = waveforms.shape
     print("Fitting PCA on", N, "waveforms from mini-subtraction")
 
-    # NN denoise
-    with torch.no_grad():
-        denoiser = denoise.SingleChanDenoiser().load()
-        waveforms = waveforms.transpose(0, 2, 1).reshape(N * C, T)
-        waveforms = denoiser(torch.as_tensor(waveforms)).numpy()
-
     # fit TPCA
     tpca = PCA(rank, random_state=random_seed)
     tpca.fit(waveforms)
