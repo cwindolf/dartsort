@@ -52,14 +52,25 @@ with timer("cleaning"):
             doclean = False
 
     if doclean:
-        subtract.clean_waveforms(args.subtracted_h5, n_workers=args.n_jobs, num_channels=args.n_channels)
+        subtract.clean_waveforms(
+            args.subtracted_h5,
+            n_workers=args.n_jobs,
+            num_channels=args.n_channels,
+        )
+
+    if "cleaned_first_channels" in f:
+        cfirstchans = f["cleaned_first_channels"][:]
+        cmaxchans = f["cleaned_max_channels"][:]
+    else:
+        cfirstchans = f["firstchans"][:]
+        cmaxchans = f["spike_index"][:, 1]
+    crelmcs = cfirstchans - cmaxchans
 
 
 # -- localize
 
 with timer("localization"):
     with h5py.File(args.subtracted_h5, "r") as f:
-        crelmcs = f["cleaned_max_channels"][:] - f["cleaned_first_channels"][:]
         N = len(f["spike_index"])
         maxptp = []
         for bs in range(0, N, 1024):
@@ -74,8 +85,8 @@ with timer("localization"):
         x, y, z_rel, z_abs, alpha = localization.localize_waveforms_batched(
             f["cleaned_waveforms"],
             f["geom"][:],
-            f["cleaned_first_channels"][:],
-            f["cleaned_max_channels"][:],
+            cfirstchans,
+            cmaxchans,
             n_workers=args.n_jobs,
         )
 
