@@ -19,9 +19,9 @@ class MarkerVis:
         zs,
         colors,
         title,
-        dt=10.0,
+        dt=20.0,
         sz=5,
-        pad=5,
+        pad=0.1,
         dark=False,
     ):
         self.xypad = np.array(
@@ -57,7 +57,7 @@ class MarkerVis:
         text.data(
             "pos",
             np.array(
-                [[(xs.min() + xs.max()) / 2, ys.max() - 5 * pad, zs.max() + 1]]
+                [[(xs.min() + xs.max()) / 2, ys.max() - 50, zs.max() + 1]]
             ),
         )
 
@@ -65,7 +65,7 @@ class MarkerVis:
         if t is None:
             t = self.t
         lo, hi = np.searchsorted(times, [t, t + self.dt])
-        print(lo, hi, hi - lo)
+        # print(lo, hi, hi - lo)
         self.vis.data("pos", np.r_[self.xypad, self.pos[lo:hi]])
         self.vis.data("color", np.r_[self.cpad, self.colors[lo:hi]])
 
@@ -104,8 +104,8 @@ if __name__ == "__main__":
             loadings /= np.std(loadings, axis=0) / 16
             data = dict(
                 x=f["x"][:][big],
-                y=f["y"][:][big],
-                alpha=f["alpha"][:][big],
+                logy=np.log(f["y"][:][big]),
+                logalpha=np.log(f["alpha"][:][big]),
                 pc1=loadings[:, 0],
                 pc2=loadings[:, 1],
                 pc3=loadings[:, 2],
@@ -113,8 +113,8 @@ if __name__ == "__main__":
         else:
             data = dict(
                 x=f["x"][:][big],
-                y=f["y"][:][big],
-                alpha=f["alpha"][:][big],
+                logy=np.log(f["y"][:][big]),
+                logalpha=np.log(f["alpha"][:][big]),
             )
 
         if args.spikelabels:
@@ -165,9 +165,12 @@ if __name__ == "__main__":
         ptpmin = maxptp.min()
         ptpmax = maxptp.max()
         colors = datoviz.colormap(
-            maxptp, vmin=ptpmin, vmax=ptpmax, cmap="viridis"
+            np.minimum(maxptp, 13), vmin=3, vmax=13, cmap="viridis"
         )
-    colors[:, 3] = 127
+    tp = (maxptp - maxptp.min()) / (maxptp.max() - maxptp.min())
+    tp = 0.25 + 0.74 * tp
+    tp = np.floor(255 * tp).astype(int)
+    colors[:, 3] = tp
 
     # run all the vis
     prevpanel = None
@@ -196,9 +199,9 @@ if __name__ == "__main__":
     gui = canvas.gui(f"hi -- {args.which}")
     slider_t0 = gui.control(
         "slider_int",
-        "t (10s)",
+        "t (20s)",
         vmin=0,
-        vmax=int(np.ceil(times.max())) // 10,
+        vmax=int(np.ceil(times.max())) // 20,
         value=0,
     )
 
@@ -208,6 +211,30 @@ if __name__ == "__main__":
 
     slider_t0.connect(change_t)
     change_t(0)
+
+    triage_button = gui.control("button", "triage")
+    triage_label = gui.control("label", "")
+    triages = ["none", "density"]
+    triage_ix = -1
+
+    def change_triage(_):
+        global triage_ix
+        triage_ix = (triage_ix + 1) % len(triages)
+        triage_label.set(triages[triage_ix])
+    triage_button.connect(change_triage)
+    change_triage(...)
+
+    reg_button = gui.control("button", "reg")
+    reg_label = gui.control("label", "")
+    regs = ["off", "on"]
+    reg_ix = -1
+
+    def change_reg(_):
+        global reg_ix
+        reg_ix = (reg_ix + 1) % len(regs)
+        reg_label.set(regs[reg_ix])
+    reg_button.connect(change_reg)
+    change_reg(...)
 
     # alright...
     datoviz.run()
