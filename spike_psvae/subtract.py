@@ -667,42 +667,23 @@ def clean_waveforms(
 
 def n_steps_neigh_channels(neighbors_matrix, steps):
     """Compute a neighbors matrix by considering neighbors of neighbors
+
     Parameters
     ----------
     neighbors_matrix: numpy.ndarray
         Neighbors matrix
     steps: int
         Number of steps to still consider channels as neighbors
+
     Returns
     -------
     numpy.ndarray (n_channels, n_channels)
         Symmetric boolean matrix with the i, j as True if the ith and jth
         channels are considered neighbors
     """
-    C = neighbors_matrix.shape[0]
-
-    # each channel is its own neighbor (diagonal of trues)
-    output = np.eye(C, dtype="bool")
-
-    # for every step
-    for _ in range(steps):
-
-        # go trough every channel
-        for current in range(C):
-            # neighbors of the current channel
-            neighbors_current = output[current]
-            # get the neighbors of all the neighbors of the current channel
-            neighbors_of_neighbors = neighbors_matrix[neighbors_current]
-            # sub over rows and convert to bool, this will turn to true entries
-            # where at least one of the neighbors has each channel as its
-            # neighbor
-            is_neighbor_of_neighbor = np.sum(
-                neighbors_of_neighbors, axis=0
-            ).astype("bool")
-            # set the channels that are neighbors to true
-            output[current][is_neighbor_of_neighbor] = True
-
-    return output
+    # Compute neighbors of neighbors via matrix powers
+    output = np.eye(neighbors_matrix.shape[0]) + neighbors_matrix
+    return np.linalg.matrix_power(output, steps) > 0
 
 
 def order_channels_by_distance(reference, channels, geom):
