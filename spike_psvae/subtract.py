@@ -367,12 +367,13 @@ def train_pca(
         n_channels=len(channel_index),
     )
     # would need to batch this for GPU if it's too slow
-    spike_index, energy = voltage_detect.detect_and_deduplicate(
+    spike_index, _ = voltage_detect.detect_and_deduplicate(
         data, threshold, channel_index, 0, "cpu"
     )
+    spike_index = spike_index[spike_index[:, 0] > 42 & spike_index[:, 0] < s_end - s_start - 79]
 
     # load WFs
-    waveforms, firstchans = read_waveforms(
+    waveforms, _ = read_waveforms(
         data,
         spike_index,
         spike_length_samples,
