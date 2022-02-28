@@ -62,7 +62,7 @@ with timer("cleaning"):
         cfirstchans = f["cleaned_first_channels"][:]
         cmaxchans = f["cleaned_max_channels"][:]
     else:
-        cfirstchans = f["firstchans"][:]
+        cfirstchans = f["first_channels"][:]
         cmaxchans = f["spike_index"][:, 1]
     crelmcs = cfirstchans - cmaxchans
 
