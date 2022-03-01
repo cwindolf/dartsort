@@ -10,7 +10,7 @@ from spike_psvae import subtract
 ap = argparse.ArgumentParser()
 
 ap.add_argument("standardized_bin")
-ap.add_argument("output_h5")
+ap.add_argument("out_folder")
 ap.add_argument("--geom", default=None, choices=["np1", "np2"])
 ap.add_argument("--tpca_rank", type=int, default=7)
 ap.add_argument("--clean", action="store_true")
@@ -45,7 +45,7 @@ if args.nogpu:
 
 subtract.subtraction(
     args.standardized_bin,
-    args.output_h5,
+    args.out_folder,
     geom=geom,
     n_sec_chunk=args.n_sec_chunk,
     tpca_rank=args.tpca_rank,
