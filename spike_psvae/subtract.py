@@ -152,19 +152,19 @@ def subtraction_batch(
     spike_index[:, 0] += s_start
 
     # write temp files
+    if batch_data_folder is None:
+        return subtracted_wfs
+
     N_new = len(spike_index)
     np.save(batch_data_folder / f"{batch_id:08d}_res.npy", residual)
     np.save(batch_data_folder / f"{batch_id:08d}_sub.npy", subtracted_wfs)
     np.save(batch_data_folder / f"{batch_id:08d}_fc.npy", firstchans)
     np.save(batch_data_folder / f"{batch_id:08d}_si.npy", spike_index)
+
     clean_file = None
     if do_clean:
         clean_file = batch_data_folder / f"{batch_id:08d}_clean.npy"
         np.save(clean_file, cleaned_wfs)
-        del cleaned_wfs
-
-    del residual, subtracted_wfs, firstchans, spike_index
-    gc.collect()
 
     return SubtractionBatchResult(
         N_new=N_new,
@@ -198,7 +198,7 @@ def subtraction(
     random_seed=0,
 ):
     standardized_bin = Path(standardized_bin)
-    stem = standardized_bin.stem()
+    stem = standardized_bin.stem
     batch_len_samples = n_sec_chunk * sampling_rate
 
     # prepare output dir
@@ -275,13 +275,13 @@ def subtraction(
 
     # now run subtraction in parallel
     N_spikes = 0  # how many have we detected so far?
-    jobs = enumerate(
+    jobs = list(enumerate(
         range(
             start_sample,
             end_sample,
             batch_len_samples,
         )
-    )
+    ))
     batch_results = []
     with Parallel(
         n_jobs, require="sharedmem" if "cuda" in device.type else None
@@ -317,23 +317,23 @@ def subtraction(
         mode="w+",
         shape=(T_samples, n_channels),
     )
-    subtracted_wfs = out_h5.create_dataset(
+    subtracted_wfs = output_h5.create_dataset(
         "subtracted_waveforms",
         shape=(N_spikes, spike_length_samples, extract_channels),
         dtype=np.float32,
     )
-    firstchans = out_h5.create_dataset(
+    firstchans = output_h5.create_dataset(
         "first_channels",
         shape=(N_spikes,),
         dtype=np.int32,
     )
-    spike_index = out_h5.create_dataset(
+    spike_index = output_h5.create_dataset(
         "spike_index",
         shape=(N_spikes, 2),
         dtype=np.int64,
     )
     if do_clean:
-        cleaned_wfs = out_h5.create_dataset(
+        cleaned_wfs = output_h5.create_dataset(
             "cleaned_waveforms",
             shape=(N_spikes, spike_length_samples, extract_channels),
             dtype=np.float32,
@@ -341,13 +341,13 @@ def subtraction(
     n = 0
     for result in tqdm(batch_results, desc="Gather results"):
         N_new = result.N_new
-        start_sample, end_sample = result.start_sample, result.end_sample
-        residual[start_sample:end_sample] = np.memmap(result.residual)
-        subtracted_wfs[n:n + N_new] = np.memmap(result.subtracted_wfs)
-        firstchans[n:n + N_new] = np.memmap(result.firstchans)
-        spike_index[n:n + N_new] = np.memmap(result.spike_index)
+        s_start, s_end = result.s_start, result.s_end
+        residual[s_start:s_end] = np.load(result.residual)
+        subtracted_wfs[n:n + N_new] = np.load(result.subtracted_wfs)
+        firstchans[n:n + N_new] = np.load(result.firstchans)
+        spike_index[n:n + N_new] = np.load(result.spike_index)
         if do_clean:
-            cleaned_wfs[n:n + N_new] = np.memmap(result.cleaned_wfs)
+            cleaned_wfs[n:n + N_new] = np.load(result.cleaned_wfs)
         n += N_new
 
 # -- temporal PCA
@@ -375,7 +375,9 @@ def train_pca(
         )
 
     # do a mini-subtraction with no PCA, just NN denoise and enforce_decrease
-    sub_result = subtraction_batch(
+    waveforms = subtraction_batch(
+        0,
+        None,
         s_start,
         s_end - s_start,
         len_recording_samples,
@@ -391,7 +393,6 @@ def train_pca(
         s_end,
         False,
     )
-    waveforms = sub_result.subtracted_wfs
     N, T, C = waveforms.shape
     print("Fitting PCA on", N, "waveforms from mini-subtraction")
 
