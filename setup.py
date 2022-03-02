@@ -3,7 +3,10 @@ from setuptools import setup
 
 try:
     from Cython.Build import cythonize
-    ext_modules = cythonize("spike_psvae/jisotonic5.pyx")
+
+    ext_modules = cythonize(
+        ["spike_psvae/jisotonic5.pyx", "spike_psvae/ibme_fast_raster.pyx"]
+    )
 except ImportError:
     ext_modules = None
 
