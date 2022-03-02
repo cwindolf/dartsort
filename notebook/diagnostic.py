@@ -31,29 +31,33 @@ rg = lambda: np.random.default_rng(0)
 
 # %%
 # subh5 = h5py.File("/mnt/3TB/charlie/subtracted_datasets/churchlandlab_CSHL049_p7_t_2000_2010.h5", "r")
-subh5 = h5py.File("/mnt/3TB/charlie/subtracted_datasets/zigzag_np2_t_250_300.h5", "r")
-
+subh5 = h5py.File("/mnt/3TB/charlie/subtracted_datasets/subtraction_standardized_t_250_300.h5", "r")
 firstchans = subh5["first_channels"][:]
 spike_index = subh5["spike_index"][:]
 maxchans = spike_index[:, 1]
 geom = subh5["geom"][:]
 wfs = subh5["subtracted_waveforms"]
 cwfs = subh5["cleaned_waveforms"]
-residual = subh5["residual"]
+residual = np.memmap("/mnt/3TB/charlie/subtracted_datasets/residual_standardized_t_250_300.bin", dtype=np.float32)
+residual = residual.reshape(-1, geom.shape[0])
+feat_chans = cwfs.shape[2]
+cfirstchans = firstchans
+cmaxchans = maxchans
 
-feat_chans = 20
-if "cleaned_first_channels" in subh5:
-    cfirstchans = subh5["first_channels"][:]
-    cmaxchans = subh5["spike_index"][:, 1]
-    feat_chans = cwfs.shape[-1]
-else:
-    cwfs, cfirstchans, cmaxchans, chans_down = waveform_utils.relativize_waveforms(
-        cwfs,
-        firstchans,
-        None,
-        geom,
-        feat_chans=feat_chans,
-    )
+
+# feat_chans = 20
+# if "cleaned_first_channels" in subh5:
+#     cfirstchans = subh5["first_channels"][:]
+#     cmaxchans = subh5["spike_index"][:, 1]
+#     feat_chans = cwfs.shape[-1]
+# else:
+#     cwfs, cfirstchans, cmaxchans, chans_down = waveform_utils.relativize_waveforms(
+#         cwfs,
+#         firstchans,
+#         None,
+#         geom,
+#         feat_chans=feat_chans,
+#     )
 
 # relativize time
 spike_index[:, 0] -= subh5["start_sample"][()]
@@ -62,7 +66,7 @@ spike_index[:, 0] -= subh5["start_sample"][()]
 (spike_index[1:, 0] >= spike_index[:-1, 0]).all()
 
 # %%
-subh5["residual"].shape
+residual.shape
 
 # %%
 subh5["end_sample"][()] - subh5["start_sample"][()]
@@ -107,7 +111,7 @@ cleaned = denoise.cleaned_waveforms(
     subh5["subtracted_waveforms"],
     subh5["spike_index"][:],
     subh5["first_channels"][:],
-    subh5["residual"],
+    residual,
     s_start=subh5["start_sample"][()]
 )
 stdwfs, firstchans_std, maxchans_std, chans_down = waveform_utils.relativize_waveforms(
@@ -156,8 +160,12 @@ vis_utils.plot_ptp(crelptps, axes, "", "purple", "abcdefghijklmnop")
 vis_utils.plot_ptp(srelptps, axes, "", "green", "abcdefghijklmnop")
 
 # %%
+wfs.shape, cwfs.shape, stdwfs.shape
+
+# %%
 crelptps = []
 for ix in show:
+    print(ix)
     fcrel = cfirstchans[ix] - firstchans[ix]
     
     fig = plt.figure(figsize=(20, 2.5))
@@ -260,6 +268,7 @@ def subfig(ix):
 
 # %%
 for ix in show:
+    print(ix)
     subfig(ix)
     plt.show()
 
@@ -267,7 +276,7 @@ for ix in show:
 
 # %%
 # locs = np.load("/mnt/3TB/charlie/ibl_feats/churchlandlab_CSHL049_p7_t_1500_2500_locs.npz")
-locs = np.load("/mnt/3TB/charlie/subtracted_datasets/zigzag_np2_t_250_300_locs.npz")
+locs = np.load("/mnt/3TB/charlie/subtracted_datasets/locs_standardized_t_250_300.h5.npz")
 
 list(locs.keys())
 
