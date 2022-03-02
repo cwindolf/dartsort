@@ -118,27 +118,27 @@ def subtraction_batch(*args):
     spike_index = spike_index[sort]
     firstchans = firstchans[sort]
 
-    # get rid of too early spikes if we're in the first batch
-    # or too late ones in the last
+    # get rid of spikes in the buffer
+    # also, get rid of spikes too close to the beginning/end
+    # of the recording if we are in the first or last batch
+    spike_time_min = 0
     if s_start == start_sample:
-        ix = np.searchsorted(spike_index[:, 0], trough_offset, side="right")
-        spike_index = spike_index[ix:]
-        firstchans = firstchans[ix:]
-        subtracted_wfs = subtracted_wfs[ix:]
+        spike_time_min = trough_offset
+    spike_time_max = s_end - s_start - 2 * buffer
     if load_end == end_sample:
-        ix = -1 + np.searchsorted(
-            spike_index[:, 0],
-            s_end - s_start - spike_length_samples + trough_offset,
-            side="left",
-        )
-        spike_index = spike_index[:ix]
-        firstchans = firstchans[:ix]
-        subtracted_wfs = subtracted_wfs[:ix]
+        spike_time_max -= spike_length_samples - trough_offset
+    minix = np.searchsorted(spike_index[:, 0], spike_time_min, side="right")
+    maxix = -1 + np.searchsorted(
+        spike_index[:, 0], spike_time_max, side="left"
+    )
+    spike_index = spike_index[minix:maxix]
+    firstchans = firstchans[minix:maxix]
+    subtracted_wfs = subtracted_wfs[minix:maxix]
 
     # get cleaned waveforms
     cleaned_wfs = None
     if do_clean:
-        cleaned_wfs, f = read_waveforms(
+        cleaned_wfs, _ = read_waveforms(
             residual,
             spike_index,
             spike_length_samples,
@@ -146,7 +146,7 @@ def subtraction_batch(*args):
             trough_offset=trough_offset,
             buffer=buffer,
         )
-        assert (f == firstchans).all()
+        # assert (f == firstchans).all()
         cleaned_wfs = full_denoising(
             cleaned_wfs + subtracted_wfs,
             spike_index[:, 1] - firstchans,
@@ -155,7 +155,7 @@ def subtraction_batch(*args):
             denoiser=denoiser,
         )
 
-    # strip buffer from residual
+    # strip buffer from residual and remove spikes in buffer
     residual = residual[buffer:-buffer]
 
     # time relative to batch start
@@ -267,7 +267,12 @@ def subtraction(
     end_sample = (
         T_samples if t_end is None else int(np.floor(t_end * sampling_rate))
     )
-    print("Running subtraction on ", T_sec, "seconds long recording with thresholds", thresholds)
+    print(
+        "Running subtraction on ",
+        T_sec,
+        "seconds long recording with thresholds",
+        thresholds,
+    )
 
     # compute helper data structures
     channel_index = make_channel_index(geom, spatial_radius, steps=2)
@@ -431,9 +436,7 @@ def train_pca(
     s_start = len_recording_samples // 2 - sampling_rate * n_sec_pca // 2
     s_end = len_recording_samples // 2 + sampling_rate * n_sec_pca // 2
     if s_start < 0 or s_end > len_recording_samples:
-        raise ValueError(
-            f"n_sec_pca={n_sec_pca} was too big for this data."
-        )
+        raise ValueError(f"n_sec_pca={n_sec_pca} was too big for this data.")
 
     # do a mini-subtraction with no PCA, just NN denoise and enforce_decrease
     waveforms = subtraction_batch(
