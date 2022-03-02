@@ -447,4 +447,3 @@ bz_reg, _ = reg.register_nonrigid(
 plotlocs(bx, by, bz_reg, ba, cwfs[:].ptp(1).max(1), geom)
 
 # %%
-# 

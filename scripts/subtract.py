@@ -11,6 +11,7 @@ ap = argparse.ArgumentParser()
 
 ap.add_argument("standardized_bin")
 ap.add_argument("out_folder")
+ap.add_argument("--thresholds", default=[12, 10, 8, 6, 5, 4], type=lambda x: list(map(int, x.split(","))))
 ap.add_argument("--geom", default=None, choices=["np1", "np2"])
 ap.add_argument("--tpca_rank", type=int, default=7)
 ap.add_argument("--n_sec_chunk", type=int, default=1)
@@ -19,6 +20,7 @@ ap.add_argument("--t_end", type=int, default=None)
 ap.add_argument("--n_jobs", type=int, default=1)
 ap.add_argument("--nogpu", action="store_true")
 ap.add_argument("--noclean", action="store_true")
+ap.add_argument("--n_sec_pca", type=int, default=10)
 
 args = ap.parse_args()
 
@@ -47,10 +49,12 @@ subtract.subtraction(
     args.standardized_bin,
     args.out_folder,
     geom=geom,
+    thresholds=args.thresholds,
     n_sec_chunk=args.n_sec_chunk,
     tpca_rank=args.tpca_rank,
     n_jobs=args.n_jobs,
     t_start=args.t_start,
     t_end=args.t_end,
     do_clean=not args.noclean,
+    n_sec_pca=args.n_sec_pca,
 )
