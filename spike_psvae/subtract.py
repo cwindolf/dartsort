@@ -360,6 +360,10 @@ def subtraction(
         if do_clean:
             cleaned_wfs[n:n + N_new] = np.load(result.cleaned_wfs)
         n += N_new
+    
+    print("Done, results written to:")
+    print(residual_bin)
+    print(out_h5)
 
 # -- temporal PCA
 
