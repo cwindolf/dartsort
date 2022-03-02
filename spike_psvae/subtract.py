@@ -66,7 +66,7 @@ def subtraction_batch(*args):
 
     # load raw data with buffer
     s_end = min(end_sample, s_start + batch_len_samples)
-    buffer = spike_length_samples
+    buffer = 2 * spike_length_samples
     n_channels = len(channel_index)
     load_start = max(start_sample, s_start - buffer)
     load_end = min(end_sample, s_end + buffer)
@@ -480,11 +480,14 @@ def detect_and_subtract(
     spike_length_samples,
     extract_channels,
     device,
-    buffer,
 ):
     """This subtracts from raw in place, leaving the residual behind"""
     spike_index, energy = voltage_detect.detect_and_deduplicate(
-        raw, threshold, channel_index, spike_length_samples, device
+        raw[spike_length_samples:-spike_length_samples],
+        threshold,
+        channel_index,
+        spike_length_samples,
+        device,
     )
     # it would be nice to go in order, but we would need to
     # combine the reading and subtraction steps together
@@ -495,7 +498,7 @@ def detect_and_subtract(
         spike_length_samples,
         extract_channels,
         trough_offset=trough_offset,
-        buffer=buffer,
+        buffer=2 * spike_length_samples,
     )
 
     # denoising
@@ -512,10 +515,10 @@ def detect_and_subtract(
         raw[
             t
             - trough_offset
-            + buffer : t
+            + 2 * spike_length_samples : t
             - trough_offset
             + spike_length_samples
-            + buffer,
+            + 2 * spike_length_samples,
             fc : fc + extract_channels,
         ] -= wf
 
