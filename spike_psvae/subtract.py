@@ -134,15 +134,21 @@ def subtraction_batch(
     # get cleaned waveforms
     cleaned_wfs = None
     if do_clean:
-        cleaned_wfs = batch_cleaned_waveforms(
+        cleaned_wfs, f = read_waveforms(
             residual,
-            subtracted_wfs,
             spike_index,
-            firstchans,
-            denoiser,
-            tpca,
-            trough_offset,
-            buffer,
+            spike_length_samples,
+            extract_channels,
+            trough_offset=trough_offset,
+            buffer=buffer,
+        )
+        assert (f == firstchans).all()
+        cleaned_wfs = full_denoising(
+            cleaned_wfs + subtracted_wfs,
+            spike_index[:, 1] - firstchans,
+            tpca=tpca,
+            device=device,
+            denoiser=denoiser,
         )
 
     # strip buffer from residual
@@ -194,7 +200,7 @@ def subtraction(
     trough_offset=42,
     n_jobs=1,
     device=None,
-    do_clean=False,
+    do_clean=True,
     random_seed=0,
 ):
     standardized_bin = Path(standardized_bin)
@@ -210,6 +216,13 @@ def subtraction(
     residual_bin = out_folder / f"residual_{stem}_t_{t_start}_{t_end}.bin"
     if residual_bin.exists():
         print("Output residual exists, it will be overwritten.")
+    try:
+        h5py.File(out_h5, "w")
+    except BlockingIOError as e:
+        raise ValueError(
+            f"Output HDF5 {out_h5} is currently in use by another program. "
+            "Maybe a Jupyter notebook that's still running?"
+        ) from e
 
     # pick device if it's None
     if device is None:
@@ -272,6 +285,9 @@ def subtraction(
     output_h5.create_dataset("geom", data=geom)
     output_h5.create_dataset("start_sample", data=start_sample)
     output_h5.create_dataset("end_sample", data=end_sample)
+    output_h5.create_dataset("tpca_mean", data=tpca.mean_)
+    output_h5.create_dataset("tpca_components", data=tpca.components_)
+    
 
     # now run subtraction in parallel
     N_spikes = 0  # how many have we detected so far?
@@ -311,12 +327,7 @@ def subtraction(
             batch_results.append(result)
 
     # -- gather results
-    residual = np.memmap(
-        residual_bin,
-        dtype=np.float32,
-        mode="w+",
-        shape=(T_samples, n_channels),
-    )
+    residual = open(residual_bin, mode="wb")
     subtracted_wfs = output_h5.create_dataset(
         "subtracted_waveforms",
         shape=(N_spikes, spike_length_samples, extract_channels),
@@ -342,7 +353,7 @@ def subtraction(
     for result in tqdm(batch_results, desc="Gather results"):
         N_new = result.N_new
         s_start, s_end = result.s_start, result.s_end
-        residual[s_start:s_end] = np.load(result.residual)
+        np.load(result.residual).tofile(residual)
         subtracted_wfs[n:n + N_new] = np.load(result.subtracted_wfs)
         firstchans[n:n + N_new] = np.load(result.firstchans)
         spike_index[n:n + N_new] = np.load(result.spike_index)
@@ -524,6 +535,7 @@ def full_denoising(
     if denoiser is not None:
         for bs in range(0, N * C, batch_size):
             be = min(bs + batch_size, N * C)
+            o = waveforms[bs:be].copy()
             waveforms[bs:be] = (
                 denoiser(
                     torch.tensor(
@@ -533,8 +545,6 @@ def full_denoising(
                 .cpu()
                 .numpy()
             )
-        torch.cuda.empty_cache()
-        gc.collect()
 
     # Temporal PCA while we are still transposed
     if tpca is not None:
@@ -550,33 +560,6 @@ def full_denoising(
         waveforms = denoise.invert_temporal_align(waveforms, rolls)
 
     return waveforms
-
-
-def batch_cleaned_waveforms(
-    residual,
-    subtracted_wfs,
-    spike_index,
-    firstchans,
-    denoiser,
-    tpca,
-    trough_offset,
-    buffer,
-):
-    N, T, C = subtracted_wfs.shape
-
-    # Add residuals to subtracted wfs
-    cleaned_waveforms = np.zeros(subtracted_wfs.shape, subtracted_wfs.dtype)
-    for n, ((t, mc), fc) in enumerate(zip(spike_index, firstchans)):
-        cleaned_waveforms[n] += subtracted_wfs[n]
-        cleaned_waveforms[n] += residual[
-            t - trough_offset + buffer : t - trough_offset + T + buffer,
-            fc : fc + C,
-        ]
-
-    # Denoise and return
-    return full_denoising(
-        cleaned_waveforms, spike_index[:, 1] - firstchans, tpca, denoiser
-    )
 
 
 # -- you may want to clean waveforms after the fact
