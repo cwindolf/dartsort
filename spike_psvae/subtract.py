@@ -1,13 +1,12 @@
-import gc
 import h5py
 import numpy as np
 import time
 import torch
 import itertools
+import multiprocessing
 
 from collections import namedtuple
 from ibllib.io.spikeglx import _geometry_from_meta, read_meta_data
-from joblib import Parallel, delayed
 from pathlib import Path
 from scipy.spatial.distance import pdist, squareform
 from sklearn.decomposition import PCA
@@ -33,28 +32,33 @@ SubtractionBatchResult = namedtuple(
         "cleaned_wfs",
         "firstchans",
         "spike_index",
+        "batch_id",
     ],
 )
 
 
-def subtraction_batch(
-    batch_id,
-    batch_data_folder,
-    s_start,
-    batch_len_samples,
-    T_samples,
-    standardized_bin,
-    thresholds,
-    tpca,
-    trough_offset,
-    channel_index,
-    spike_length_samples,
-    extract_channels,
-    device,
-    start_sample,
-    end_sample,
-    do_clean,
-):
+def subtraction_batch(*args):
+    if len(args) == 1:
+        args = args[0]
+    (
+        batch_id,
+        batch_data_folder,
+        s_start,
+        batch_len_samples,
+        T_samples,
+        standardized_bin,
+        thresholds,
+        tpca,
+        trough_offset,
+        channel_index,
+        spike_length_samples,
+        extract_channels,
+        device,
+        start_sample,
+        end_sample,
+        do_clean,
+    ) = args
+
     # load denoiser (load here so that we load only once per batch)
     denoiser = denoise.SingleChanDenoiser()
     denoiser.load()
@@ -85,7 +89,7 @@ def subtraction_batch(
     spike_index = []
     firstchans = []
     for threshold in thresholds:
-        old_resid = residual.copy()
+        # old_resid = residual.copy()
         subwfs, spind, fcs = detect_and_subtract(
             residual,
             threshold,
@@ -100,7 +104,7 @@ def subtraction_batch(
         )
 
         if len(spind):
-            assert (np.abs(residual - old_resid) > 0).any()
+            # assert (np.abs(residual - old_resid) > 0).any()
             subtracted_wfs.append(subwfs)
             spike_index.append(spind)
             firstchans.append(fcs)
@@ -172,7 +176,7 @@ def subtraction_batch(
         clean_file = batch_data_folder / f"{batch_id:08d}_clean.npy"
         np.save(clean_file, cleaned_wfs)
 
-    return SubtractionBatchResult(
+    res = SubtractionBatchResult(
         N_new=N_new,
         s_start=s_start,
         s_end=s_end,
@@ -181,7 +185,10 @@ def subtraction_batch(
         cleaned_wfs=clean_file,
         firstchans=batch_data_folder / f"{batch_id:08d}_fc.npy",
         spike_index=batch_data_folder / f"{batch_id:08d}_si.npy",
+        batch_id=batch_id,
     )
+
+    return res
 
 
 def subtraction(
@@ -191,6 +198,7 @@ def subtraction(
     spatial_radius=70,
     tpca_rank=7,
     n_sec_chunk=1,
+    n_sec_pca=10,
     t_start=0,
     t_end=None,
     sampling_rate=30_000,
@@ -259,6 +267,7 @@ def subtraction(
     end_sample = (
         T_samples if t_end is None else int(np.floor(t_end * sampling_rate))
     )
+    print("Running subtraction on ", T_sec, "seconds long recording with thresholds", thresholds)
 
     # compute helper data structures
     channel_index = make_channel_index(geom, spatial_radius, steps=2)
@@ -275,95 +284,132 @@ def subtraction(
             channel_index,
             thresholds,
             standardized_dtype=np.float32,
-            n_sec_chunk_pca=10,
+            n_sec_pca=n_sec_pca,
             rank=tpca_rank,
             random_seed=random_seed,
         )
 
-    # initialize resizable output datasets for waveforms etc
+    # parallel batches
+    jobs = list(
+        enumerate(
+            range(
+                start_sample,
+                end_sample,
+                batch_len_samples,
+            )
+        )
+    )
+    n_batches = len(jobs)
+
+    # -- initialize storage
+    # residual binary file
+    residual = open(residual_bin, mode="wb")
+
+    # everybody else in hdf5
     output_h5 = h5py.File(out_h5, "w")
     output_h5.create_dataset("geom", data=geom)
     output_h5.create_dataset("start_sample", data=start_sample)
     output_h5.create_dataset("end_sample", data=end_sample)
     output_h5.create_dataset("tpca_mean", data=tpca.mean_)
     output_h5.create_dataset("tpca_components", data=tpca.components_)
-    
 
-    # now run subtraction in parallel
-    N_spikes = 0  # how many have we detected so far?
-    jobs = list(enumerate(
-        range(
-            start_sample,
-            end_sample,
-            batch_len_samples,
-        )
-    ))
-    batch_results = []
-    with Parallel(
-        n_jobs, require="sharedmem" if "cuda" in device.type else None
-    ) as pool:
-        for result in pool(
-            delayed(subtraction_batch)(
-                batch_id,
-                batch_data_folder,
-                s_start,
-                batch_len_samples,
-                T_samples,
-                standardized_bin,
-                thresholds,
-                tpca,
-                trough_offset,
-                channel_index,
-                spike_length_samples,
-                extract_channels,
-                device,
-                start_sample,
-                end_sample,
-                do_clean,
-            )
-            for batch_id, s_start in tqdm(jobs, desc="Batches")
-        ):
-            N_spikes += result.N_new
-            batch_results.append(result)
-
-    # -- gather results
-    residual = open(residual_bin, mode="wb")
+    # resizable datasets so we don't fill up space
     subtracted_wfs = output_h5.create_dataset(
         "subtracted_waveforms",
-        shape=(N_spikes, spike_length_samples, extract_channels),
+        shape=(1, spike_length_samples, extract_channels),
+        chunks=(4096, spike_length_samples, extract_channels),
+        maxshape=(None, spike_length_samples, extract_channels),
         dtype=np.float32,
     )
     firstchans = output_h5.create_dataset(
         "first_channels",
-        shape=(N_spikes,),
+        shape=(1,),
+        chunks=(4096,),
+        maxshape=(None,),
         dtype=np.int32,
     )
     spike_index = output_h5.create_dataset(
         "spike_index",
-        shape=(N_spikes, 2),
+        shape=(1, 2),
+        chunks=(4096, 2),
+        maxshape=(None, 2),
         dtype=np.int64,
     )
     if do_clean:
         cleaned_wfs = output_h5.create_dataset(
             "cleaned_waveforms",
-            shape=(N_spikes, spike_length_samples, extract_channels),
+            shape=(1, spike_length_samples, extract_channels),
+            chunks=(4096, spike_length_samples, extract_channels),
+            maxshape=(None, spike_length_samples, extract_channels),
             dtype=np.float32,
         )
-    n = 0
-    for result in tqdm(batch_results, desc="Gather results"):
-        N_new = result.N_new
-        s_start, s_end = result.s_start, result.s_end
-        np.load(result.residual).tofile(residual)
-        subtracted_wfs[n:n + N_new] = np.load(result.subtracted_wfs)
-        firstchans[n:n + N_new] = np.load(result.firstchans)
-        spike_index[n:n + N_new] = np.load(result.spike_index)
-        if do_clean:
-            cleaned_wfs[n:n + N_new] = np.load(result.cleaned_wfs)
-        n += N_new
-    
-    print("Done, results written to:")
+
+    # now run subtraction in parallel
+    N = 0
+    jobs = (
+        (
+            batch_id,
+            batch_data_folder,
+            s_start,
+            batch_len_samples,
+            T_samples,
+            standardized_bin,
+            thresholds,
+            tpca,
+            trough_offset,
+            channel_index,
+            spike_length_samples,
+            extract_channels,
+            device,
+            start_sample,
+            end_sample,
+            do_clean,
+        )
+        for batch_id, s_start in jobs
+    )
+
+    with multiprocessing.pool.ThreadPool(n_jobs) as pool:
+        for result in tqdm(
+            pool.imap(subtraction_batch, jobs), total=n_batches, desc="Batches"
+        ):
+            N_new = result.N_new
+
+            # write new residual
+            np.load(result.residual).tofile(residual_bin)
+
+            # grow arrays as necessary
+            subtracted_wfs.resize(N + N_new, axis=0)
+            if do_clean:
+                cleaned_wfs.resize(N + N_new, axis=0)
+            firstchans.resize(N + N_new, axis=0)
+            spike_index.resize(N + N_new, axis=0)
+
+            # write results
+            subtracted_wfs[N : N + N_new] = np.load(result.subtracted_wfs)
+            if do_clean:
+                cleaned_wfs[N : N + N_new] = np.load(result.cleaned_wfs)
+            firstchans[N : N + N_new] = np.load(result.firstchans)
+            spike_index[N : N + N_new] = np.load(result.spike_index)
+
+            # delete original files
+            Path(result.residual).unlink()
+            Path(result.subtracted_wfs).unlink()
+            if do_clean:
+                Path(result.cleaned_wfs).unlink()
+            Path(result.firstchans).unlink()
+            Path(result.spike_index).unlink()
+
+            # update my state
+            N += N_new
+
+    # -- done!
+    residual.close()
+    output_h5.close()
+    print("Done. Detected", N, "spikes")
+    print("Results written to:")
     print(residual_bin)
     print(out_h5)
+
 
 # -- temporal PCA
 
@@ -378,15 +424,15 @@ def train_pca(
     channel_index,
     thresholds,
     standardized_dtype=np.float32,
-    n_sec_chunk_pca=10,
+    n_sec_pca=10,
     rank=7,
     random_seed=0,
 ):
-    s_start = len_recording_samples // 2 - sampling_rate * n_sec_chunk_pca // 2
-    s_end = len_recording_samples // 2 + sampling_rate * n_sec_chunk_pca // 2
+    s_start = len_recording_samples // 2 - sampling_rate * n_sec_pca // 2
+    s_end = len_recording_samples // 2 + sampling_rate * n_sec_pca // 2
     if s_start < 0 or s_end > len_recording_samples:
         raise ValueError(
-            f"n_sec_chunk_pca={n_sec_chunk_pca} was too big for this data."
+            f"n_sec_pca={n_sec_pca} was too big for this data."
         )
 
     # do a mini-subtraction with no PCA, just NN denoise and enforce_decrease

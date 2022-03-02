@@ -92,8 +92,15 @@ def deduplicate_torch(
     )[0, 0]
 
     # get spatial max
-    max_energy = F.pad(max_energy, (0, 1))
-    max_energy = torch.max(max_energy[:, channel_index], 2)[0]
+    T = recording_shape[0]
+    max_neighbs = channel_index.shape[1]
+    batch_size = int(np.ceil(T / (max_neighbs / MAXCOPY)))
+    for bs in range(0, T, batch_size):
+        be = min(T, bs + batch_size)
+        max_energy[bs:be] = torch.max(
+            F.pad(max_energy[bs:be], (0, 1))[:, channel_index],
+            2
+        )[0]
 
     # deduplicated spikes: temporal and spatial local max
     which = (
