@@ -128,15 +128,11 @@ def subtraction_batch(*args):
     spike_time_max = s_end - s_start - 2 * buffer
     if load_end == end_sample:
         spike_time_max -= spike_length_samples - trough_offset
-        print("End batch")
-        print(s_start, load_end, load_end - s_start, spike_time_max)
 
     minix = np.searchsorted(spike_index[:, 0], spike_time_min, side="right")
     maxix = -1 + np.searchsorted(
         spike_index[:, 0], spike_time_max, side="left"
     )
-    print(batch_id)
-    print(0, minix, maxix, len(spike_index))
     spike_index = spike_index[minix:maxix]
     firstchans = firstchans[minix:maxix]
     subtracted_wfs = subtracted_wfs[minix:maxix]
