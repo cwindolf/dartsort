@@ -8,7 +8,7 @@ import h5py
 import time
 import numpy as np
 from tqdm.auto import trange
-from spike_psvae import subtract, localization
+from spike_psvae import localization, ibme
 
 ap = argparse.ArgumentParser()
 
@@ -37,7 +37,9 @@ class timer:
 
 with h5py.File(args.subtracted_h5, "r+") as f:
     if "cleaned_waveforms" not in f:
-        raise ValueError("Input H5 should contain cleaned waveforms from subtraction")
+        raise ValueError(
+            "Input H5 should contain cleaned waveforms from subtraction"
+        )
 
     if "cleaned_first_channels" in f:
         cfirstchans = f["cleaned_first_channels"][:]
@@ -75,32 +77,28 @@ with timer("localization"):
 
 # -- register
 
-try:
-    from npx import reg
-    with timer("registration"):
-        z_reg, dispmap = reg.register_nonrigid(
-            maxptp,
-            z_abs,
-            times,
-            robust_sigma=1,
-            rigid_disp=200,
-            disp=100,
-            denoise_sigma=0.1,
-            destripe=False,
-            n_windows=[5, 10],
-            n_iter=1,
-            widthmul=0.5,
-        )
-        dispmap -= dispmap.mean()
+with timer("registration"):
+    z_reg, dispmap = ibme.register_nonrigid(
+        maxptp,
+        z_abs,
+        times,
+        robust_sigma=1,
+        rigid_disp=200,
+        disp=100,
+        denoise_sigma=0.1,
+        destripe=False,
+        n_windows=[5, 10],
+        n_iter=1,
+        widthmul=0.5,
+    )
+    dispmap -= dispmap.mean()
 
-    with timer("save"):
-        np.savez(
-            args.out_npz,
-            locs=np.c_[x, y, z_rel, z_abs, alpha],
-            t=times,
-            maxptp=maxptp,
-            z_reg=z_reg,
-            dispmap=dispmap,
-        )
-except ImportError:
-    print("Sorry I need to install the registration in this repo will do that soon")
+with timer("save"):
+    np.savez(
+        args.out_npz,
+        locs=np.c_[x, y, z_rel, z_abs, alpha],
+        t=times,
+        maxptp=maxptp,
+        z_reg=z_reg,
+        dispmap=dispmap,
+    )
