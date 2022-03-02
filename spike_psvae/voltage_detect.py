@@ -43,13 +43,8 @@ def detect_and_deduplicate(
             channel_index,  # device=device
         )
 
-    # update times wrt buffer size, remove spikes in buffer
+    # update times wrt buffer size
     spike_index[:, 0] -= buffer_size
-    tidx = (spike_index[:, 0] >= 0) & (
-        spike_index[:, 0] < recording.shape[0] - 2 * buffer_size
-    )
-    spike_index = spike_index[tidx]
-    energy = energy[tidx]
 
     return spike_index, energy
 
