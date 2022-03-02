@@ -30,15 +30,21 @@ plt.rc("figure", dpi=200)
 rg = lambda: np.random.default_rng(0)
 
 # %%
+sub_h5_path = "/mnt/3TB/charlie/subtracted_datasets/subtraction__spikeglx_ephysData_g0_t0.imec.ap.normalized_t_250_300.h5"
+res_bin_path = "/mnt/3TB/charlie/subtracted_datasets/residual__spikeglx_ephysData_g0_t0.imec.ap.normalized_t_250_300.bin"
+raw_bin_path = "/mnt/3TB/charlie/.one/openalyx.internationalbrainlab.org/churchlandlab/Subjects/CSHL049/2020-01-08/001/raw_ephys_data/probe00/_spikeglx_ephysData_g0_t0.imec.ap.normalized.bin"
+loc_npz_path = "/mnt/3TB/charlie/subtracted_datasets/"
+
+# %%
 # subh5 = h5py.File("/mnt/3TB/charlie/subtracted_datasets/churchlandlab_CSHL049_p7_t_2000_2010.h5", "r")
-subh5 = h5py.File("/mnt/3TB/charlie/subtracted_datasets/subtraction_standardized_t_250_300.h5", "r")
+subh5 = h5py.File(sub_h5_path, "r")
 firstchans = subh5["first_channels"][:]
 spike_index = subh5["spike_index"][:]
 maxchans = spike_index[:, 1]
 geom = subh5["geom"][:]
 wfs = subh5["subtracted_waveforms"]
 cwfs = subh5["cleaned_waveforms"]
-residual = np.memmap("/mnt/3TB/charlie/subtracted_datasets/residual_standardized_t_250_300.bin", dtype=np.float32)
+residual = np.memmap(res_bin_path, dtype=np.float32)
 residual = residual.reshape(-1, geom.shape[0])
 feat_chans = cwfs.shape[2]
 cfirstchans = firstchans
@@ -73,8 +79,7 @@ subh5["end_sample"][()] - subh5["start_sample"][()]
 
 # %%
 raw = np.memmap(
-    # "/mnt/3TB/charlie/.one/openalyx.internationalbrainlab.org/churchlandlab/Subjects/CSHL049/2020-01-08/001/raw_ephys_data/probe00/_spikeglx_ephysData_g0_t0.imec.ap.normalized.bin",
-    "/mnt/3TB/charlie/NP2/standardized.bin",
+    raw_bin_path,
     dtype=np.float32,
     mode="r",
 )
