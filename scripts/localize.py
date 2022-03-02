@@ -35,7 +35,7 @@ class timer:
 
 # -- clean wfs if nec
 
-with h5py.File(args.subtracted_h5, "r+") as f:
+with h5py.File(args.subtracted_h5, "r") as f:
     if "cleaned_waveforms" not in f:
         raise ValueError(
             "Input H5 should contain cleaned waveforms from subtraction"
