@@ -81,7 +81,9 @@ def subtraction_batch(*args):
     if load_end == end_sample:
         pad_right = buffer - (end_sample - s_end)
     if pad_left != 0 or pad_right != 0:
-        residual = np.pad(residual, [(pad_left, pad_right), (0, 0)])
+        residual = np.pad(
+            residual, [(pad_left, pad_right), (0, 0)], mode="edge"
+        )
     assert residual.shape == (2 * buffer + s_end - s_start, n_channels)
 
     # main subtraction loop
@@ -100,7 +102,6 @@ def subtraction_batch(*args):
             spike_length_samples,
             extract_channels,
             device,
-            buffer,
         )
 
         if len(spind):
