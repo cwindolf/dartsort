@@ -7,6 +7,7 @@ import argparse
 import h5py
 import time
 import numpy as np
+from tqdm.auto import trange
 from spike_psvae import subtract, localization
 
 ap = argparse.ArgumentParser()
@@ -50,11 +51,11 @@ with h5py.File(args.subtracted_h5, "r+") as f:
 # -- localize
 
 with timer("localization"):
-    with h5py.File(args.subtracted_h5, "r") as f:
+    with h5py.File(args.subtracted_h5, "r", libver="latest") as f:
         N = len(f["spike_index"])
         maxptp = []
-        for bs in range(0, N, 1024):
-            be = min(bs + 1024, N)
+        for bs in trange(0, N, 4096, desc="Grabbing max PTP"):
+            be = min(bs + 4096, N)
             maxptp.append(
                 f["cleaned_waveforms"][bs:be][
                     np.arange(be - bs), :, crelmcs[bs:be]
