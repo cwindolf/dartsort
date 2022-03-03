@@ -101,10 +101,9 @@ def relocate_simple(
     waveforms,
     geom,
     firstchans,
-    maxchans,
     x,
     y,
-    z_rel,
+    z_abs,
     alpha,
     relocate_dims="xyza",
 ):
@@ -123,8 +122,6 @@ def relocate_simple(
     waveforms : array-like (batches, time, local channels)
     geom : array-like (global channels, 2)
         XZ coords
-    maxchans : integer array-like (batches,)
-        Max channel in global channel space, not local.
     x, y, z_rel, alpha : array-likes, all (batches,)
         Localizations for this batch of spikes
     channel_radius : int
@@ -150,15 +147,8 @@ def relocate_simple(
     """
     B, T, C = waveforms.shape
     geom = geom.copy()
-    local_geom = torch.stack(
-        [
-            torch.as_tensor(
-                get_local_geom(geom, firstchans[n], maxchans[n], C)
-            )
-            for n in range(B)
-        ],
-        axis=0,
-    )
+    ix = firstchans[:, None] + np.arange(C)[None, :]
+    local_geom = torch.as_tensor(geom[ix])
 
     # who are we moving? set the standard locs accordingly
     # if we are interpolating for x/z shift, then we don't want
@@ -172,13 +162,13 @@ def relocate_simple(
         if "y" not in relocate_dims:
             stereo_kwargs["y"] = y
         if "z" not in relocate_dims:
-            stereo_kwargs["z"] = z_rel
+            stereo_kwargs["z"] = z_abs
         if "a" not in relocate_dims:
             stereo_kwargs["alpha"] = alpha
     r = stereotypical_ptp(local_geom, **stereo_kwargs)
 
     # ptp predicted from this localization (x,y,z,alpha)
-    q = point_source_ptp(local_geom, x, y, z_rel, alpha)
+    q = point_source_ptp(local_geom, x, y, z_abs, alpha)
 
     # relocate by PTP rescaling
     waveforms_relocated = torch.as_tensor(waveforms) * (
