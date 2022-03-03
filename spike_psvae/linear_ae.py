@@ -57,7 +57,7 @@ class LinearRelocAE(BaseEstimator, TransformerMixin):
         self,
         n_components,
         geom,
-        n_channels=20,
+        n_channels=18,
         relocate_dims="xyza",
         fit_n_waveforms=50_000,
         B_updates=2,
@@ -93,6 +93,7 @@ class LinearRelocAE(BaseEstimator, TransformerMixin):
             choice = self.rg.choice(
                 N, replace=False, size=self.fit_n_waveforms
             )
+            choice.sort()
             N = self.fit_n_waveforms
 
         # trim to our subset
@@ -112,6 +113,7 @@ class LinearRelocAE(BaseEstimator, TransformerMixin):
                 self.geom,
                 feat_chans=self.n_channels,
             )
+            C = self.n_channels
 
         # -- relocated waveforms and the transformations to get them
         relocated_waveforms, r, q = relocate_simple(
@@ -216,6 +218,7 @@ class LinearRelocAE(BaseEstimator, TransformerMixin):
                     self.geom,
                     feat_chans=self.n_channels,
                 )
+                C = self.n_channels
 
             # relocate
             relocated_waveforms, r, q = relocate_simple(
@@ -237,7 +240,7 @@ class LinearRelocAE(BaseEstimator, TransformerMixin):
 
             # rank 0 model
             unrelocated_means = self.mean_[None, :, :] * destandardization
-            decentered_waveforms = waveforms - unrelocated_means
+            decentered_waveforms = batch_wfs - unrelocated_means
 
             # solve least squares problems to determine the features
             for n in range(be - bs):
