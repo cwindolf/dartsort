@@ -59,7 +59,7 @@ class LinearRelocAE(BaseEstimator, TransformerMixin):
         geom,
         n_channels=18,
         relocate_dims="xyza",
-        fit_n_waveforms=50_000,
+        fit_n_waveforms=100_000,
         B_updates=2,
         random_seed=None,
     ):
@@ -71,7 +71,7 @@ class LinearRelocAE(BaseEstimator, TransformerMixin):
         self.B_updates = B_updates
         self.rg = np.random.default_rng(random_seed)
 
-    def fit(self, waveforms, x, y, z, alpha, firstchans):
+    def fit(self, waveforms, x, y, z, alpha, firstchans, maxchans):
         """
         waveforms : N x T x C
         x, y, z, alpha : N float
@@ -103,6 +103,7 @@ class LinearRelocAE(BaseEstimator, TransformerMixin):
         z = z[choice]
         alpha = alpha[choice]
         firstchans = firstchans[choice]
+        maxchans = maxchans[choice]
 
         # trim to n_channels if necessary
         if C > self.n_channels:
@@ -120,6 +121,7 @@ class LinearRelocAE(BaseEstimator, TransformerMixin):
             waveforms,
             self.geom,
             firstchans,
+            maxchans,
             x,
             y,
             z,
@@ -132,7 +134,7 @@ class LinearRelocAE(BaseEstimator, TransformerMixin):
         q = q.cpu().numpy()
 
         # Nx1xC transformation to invert the relocation
-        destandardization = (r / q)[:, None, :]
+        destandardization = (q / r)[:, None, :]
 
         # -- initialize B with PCA in relocated space
         reloc_pca = PCA(self.n_components)
@@ -155,8 +157,8 @@ class LinearRelocAE(BaseEstimator, TransformerMixin):
                 .T
             )
             b = decentered_waveforms[n].reshape(T * C)
-            x, resid, *_ = np.linalg.lstsq(A, b, rcond=None)
-            features[n] = x
+            feat, resid, *_ = np.linalg.lstsq(A, b, rcond=None)
+            features[n] = feat
             err += resid
             errors[n] = resid / (T * C)
         err = err / (N * T * C)
@@ -184,8 +186,8 @@ class LinearRelocAE(BaseEstimator, TransformerMixin):
                     .T
                 )
                 b = decentered_waveforms[n].reshape(T * C)
-                x, resid, *_ = np.linalg.lstsq(A, b, rcond=None)
-                features[n] = x
+                feat, resid, *_ = np.linalg.lstsq(A, b, rcond=None)
+                features[n] = feat
                 err += resid
                 errors[n] = resid / (T * C)
             err = err / (N * T * C)
@@ -197,9 +199,9 @@ class LinearRelocAE(BaseEstimator, TransformerMixin):
         return self
 
     def transform(
-        self, waveforms, x, y, z, alpha, firstchans, return_error=False
+        self, waveforms, x, y, z, alpha, firstchans, maxchans, return_error=False
     ):
-        N, T, C = waveforms.shape
+        N, T, C_ = waveforms.shape
         features = np.zeros((N, self.n_components))
         errors = np.zeros(N)
 
@@ -208,10 +210,12 @@ class LinearRelocAE(BaseEstimator, TransformerMixin):
             be = min(N, bs + self.fit_n_waveforms)
             batch_wfs = waveforms[bs:be]
             batch_fcs = firstchans[bs:be]
+            batch_mcs = maxchans[bs:be]
 
             # trim to n_channels if necessary
-            if C > self.n_channels:
-                batch_wfs, batch_fcs, *_ = relativize_waveforms(
+            C = C_
+            if C_ > self.n_channels:
+                batch_wfs, batch_fcs, batch_mcs, _ = relativize_waveforms(
                     batch_wfs,
                     batch_fcs,
                     None,
@@ -219,12 +223,14 @@ class LinearRelocAE(BaseEstimator, TransformerMixin):
                     feat_chans=self.n_channels,
                 )
                 C = self.n_channels
+            print(bs, batch_wfs.shape)
 
             # relocate
             relocated_waveforms, r, q = relocate_simple(
                 batch_wfs,
                 self.geom,
                 batch_fcs,
+                batch_mcs,
                 x[bs:be],
                 y[bs:be],
                 z[bs:be],
@@ -236,7 +242,7 @@ class LinearRelocAE(BaseEstimator, TransformerMixin):
             q = q.cpu().numpy()
 
             # Nx1xC transformation to invert the relocation
-            destandardization = (r / q)[:, None, :]
+            destandardization = (q / r)[:, None, :]
 
             # rank 0 model
             unrelocated_means = self.mean_[None, :, :] * destandardization
@@ -250,8 +256,8 @@ class LinearRelocAE(BaseEstimator, TransformerMixin):
                     .T
                 )
                 b = decentered_waveforms[n].reshape(T * C)
-                x, resid, *_ = np.linalg.lstsq(A, b, rcond=None)
-                features[bs + n] = x
+                feat, resid, *_ = np.linalg.lstsq(A, b, rcond=None)
+                features[bs + n] = feat
                 errors[bs + n] = resid / (T * C)
 
         if return_error:

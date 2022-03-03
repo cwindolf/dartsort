@@ -14,16 +14,11 @@ from .localization import localize_ptp
 
 
 def point_source_ptp(local_geom, x, y, z, alpha):
-    # figure out geometry
-    local_geom = torch.as_tensor(np.array(local_geom))
-    B, C, _ = local_geom.shape
-    xz = torch.stack(
-        [torch.as_tensor(x), torch.broadcast_to(torch.as_tensor(z), x.shape)],
-        axis=-1,
-    )
-    geom_rel = local_geom - xz.view(-1, 1, 2)
+    local_geom = torch.as_tensor(local_geom)
     dists = torch.sqrt(
-        torch.as_tensor(y * y).view(-1, 1) + torch.square(geom_rel).sum(dim=2),
+        torch.as_tensor(y * y).view(-1, 1)
+        + torch.square(local_geom[:, :, 0] - torch.as_tensor(x).view(-1, 1))
+        + torch.square(local_geom[:, :, 1] - torch.as_tensor(z).view(-1, 1))
     )
     ptp = torch.squeeze(torch.as_tensor(alpha).view(-1, 1) / dists)
     return ptp
@@ -101,6 +96,7 @@ def relocate_simple(
     waveforms,
     geom,
     firstchans,
+    maxchans,
     x,
     y,
     z_abs,
@@ -149,7 +145,10 @@ def relocate_simple(
     geom = geom.copy()
     ix = firstchans[:, None] + np.arange(C)[None, :]
     local_geom = torch.as_tensor(geom[ix])
-
+    z_mc = geom[maxchans, 1]
+    local_geom[:, :, 1] -= z_mc[:, None]
+    z_rel = z_abs - z_mc
+    
     # who are we moving? set the standard locs accordingly
     # if we are interpolating for x/z shift, then we don't want
     # to touch those with the PTP rescaling. so, put them into
@@ -168,7 +167,7 @@ def relocate_simple(
     r = stereotypical_ptp(local_geom, **stereo_kwargs)
 
     # ptp predicted from this localization (x,y,z,alpha)
-    q = point_source_ptp(local_geom, x, y, z_abs, alpha)
+    q = point_source_ptp(local_geom, x, y, z_rel, alpha)
 
     # relocate by PTP rescaling
     waveforms_relocated = torch.as_tensor(waveforms) * (
