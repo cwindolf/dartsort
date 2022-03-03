@@ -50,7 +50,7 @@ with timer("localization"):
         maxptp = featurize.maxptp_batched(
             f["cleaned_waveforms"],
             f["first_channels"][:],
-            f["max_channels"][:],
+            f["spike_index"][:, 1],
             n_workers=args.n_jobs,
         )
         times = (f["spike_index"][:, 0] - f["start_sample"][()]) / 30000
@@ -58,7 +58,7 @@ with timer("localization"):
             f["cleaned_waveforms"],
             f["geom"][:],
             f["first_channels"][:],
-            f["max_channels"][:],
+            f["spike_index"][:, 1],
             n_workers=args.n_jobs,
             n_channels=args.n_channels,
         )

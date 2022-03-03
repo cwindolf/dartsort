@@ -33,7 +33,7 @@ rg = lambda: np.random.default_rng(0)
 sub_h5_path = "/mnt/3TB/charlie/subtracted_datasets/subtraction__spikeglx_ephysData_g0_t0.imec.ap.normalized_t_250_300.h5"
 res_bin_path = "/mnt/3TB/charlie/subtracted_datasets/residual__spikeglx_ephysData_g0_t0.imec.ap.normalized_t_250_300.bin"
 raw_bin_path = "/mnt/3TB/charlie/.one/openalyx.internationalbrainlab.org/churchlandlab/Subjects/CSHL049/2020-01-08/001/raw_ephys_data/probe00/_spikeglx_ephysData_g0_t0.imec.ap.normalized.bin"
-loc_npz_path = "/mnt/3TB/charlie/subtracted_datasets/"
+loc_npz_path = "/mnt/3TB/charlie/subtracted_datasets/locs__spikeglx_ephysData_g0_t0.imec.ap.normalized_t_250_300.npz"
 
 # %%
 # subh5 = h5py.File("/mnt/3TB/charlie/subtracted_datasets/churchlandlab_CSHL049_p7_t_2000_2010.h5", "r")
@@ -281,7 +281,8 @@ for ix in show:
 
 # %%
 # locs = np.load("/mnt/3TB/charlie/ibl_feats/churchlandlab_CSHL049_p7_t_1500_2500_locs.npz")
-locs = np.load("/mnt/3TB/charlie/subtracted_datasets/locs_standardized_t_250_300.h5.npz")
+# locs = np.load("/mnt/3TB/charlie/subtracted_datasets/locs_standardized_t_250_300.h5.npz")
+locs = np.load(loc_npz_path)
 
 list(locs.keys())
 
@@ -339,7 +340,7 @@ plt.colorbar()
 # %%
 v = max(D.max(), -D.min())
 plt.figure(figsize=(6, 5))
-plt.imshow(D, aspect=0.2, cmap=plt.cm.bwr, vmin=-v, vmax=v)
+plt.imshow(D, aspect=D.shape[1] / D.shape[0], cmap=plt.cm.bwr, vmin=-v, vmax=v)
 plt.colorbar()
 
 # %%
@@ -397,58 +398,6 @@ plt.show()
 plotlocs(x, y, z_reg, a, maxptps, geom)
 
 # %%
-sx, sy, szr, sza, sa = localization.localize_waveforms(
-stdwfs,
-geom,
-firstchans_std,
-maxchans_std,
-n_workers=1,
-)
-
-# %%
-szrr, _ = reg.register_rigid(
-    stdwfs.ptp(1).max(1).astype(float),
-    sza,
-    t,
-)
-sz_reg, _ = reg.register_nonrigid(
-    stdwfs.ptp(1).max(1).astype(float),
-    szrr,
-    t,
-)
-
-# %%
-
-# %%
-plotlocs(sx, sy, sz_reg, sa, stdwfs.ptp(1).max(1), geom)
-
-# %%
-
-# %%
-np.abs(firstchans_std - cfirstchans).max()
-
-# %%
-bx, by, bzr, bza, ba = localization.localize_waveforms_batched(
-    cwfs,
-    geom,
-    cfirstchans,
-    cmaxchans,
-    n_workers=10,
-)
-
-# %% tags=[]
-bzrr, _ = reg.register_rigid(
-    cwfs[:].ptp(1).max(1).astype(float),
-    bza,
-    t,
-)
-bz_reg, _ = reg.register_nonrigid(
-    cwfs[:].ptp(1).max(1).astype(float),
-    bzrr,
-    t,
-)
-
-# %%
-plotlocs(bx, by, bz_reg, ba, cwfs[:].ptp(1).max(1), geom)
+plotlocs(x, y, z_reg, a, maxptps, geom[geom[:, 1]<1500], which=(z_reg < 1500))
 
 # %%
