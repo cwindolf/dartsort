@@ -2,7 +2,7 @@ import itertools
 import numpy as np
 
 from sklearn.decomposition import PCA
-from tqdm.auto import trange
+from tqdm.auto import trange, tqdm
 from joblib import Parallel, delayed
 
 from .waveform_utils import relativize_waveforms  # noqa
@@ -47,6 +47,7 @@ def pca_reload(
         x, resid, *_ = np.linalg.lstsq(A, b, rcond=None)
         reloadings[n] = x
         err += resid
+        errors[n] = resid / (T * C)
     err = err / (N * T * C)
 
     for _ in xrange(B_updates, desc="B updates"):
@@ -74,6 +75,7 @@ def pca_reload(
             x, resid, *_ = np.linalg.lstsq(A, b, rcond=None)
             reloadings[n] = x
             err += resid
+            errors[n] = resid / (T * C)
         err = err / (N * T * C)
 
     return reloadings, err
@@ -165,21 +167,62 @@ def relocated_ae_batched(
         return bs, be, feats, err
 
     i = 0
-    for batch in grouper(n_jobs, trange(0, N, batch_size, desc="Feature batches")):
+    for batch in grouper(
+        n_jobs, trange(0, N, batch_size, desc="Feature batches")
+    ):
         for bs, be, feats, err in Parallel(n_jobs, mmap_mode="r+")(
             job(
                 bs,
-                min(bs + batch_size, N), 
-                waveforms[bs:min(bs + batch_size, N)],
-                firstchans[bs:min(bs + batch_size, N)],
-                maxchans[bs:min(bs + batch_size, N)],
-            ) for bs in batch
+                min(bs + batch_size, N),
+                waveforms[bs : min(bs + batch_size, N)],
+                firstchans[bs : min(bs + batch_size, N)],
+                maxchans[bs : min(bs + batch_size, N)],
+            )
+            for bs in batch
         ):
             features[bs:be] = feats
             errors[i] = err
             i += 1
 
     return features, errors
+
+
+def maxptp_batched(
+    waveforms,
+    firstchans,
+    maxchans,
+    n_workers=1,
+    batch_size=4096,
+):
+    """A helper for running the above on hdf5 datasets or similar"""
+    N = len(firstchans)
+    starts = list(range(0, N, batch_size))
+    ends = [min(start + batch_size, N) for start in starts]
+
+    def getmaxptp(wfs, fcs, mcs):
+        n = len(wfs)
+        return wfs[np.arange(n), :, mcs - fcs].ptp(1)
+
+    jobs = (
+        delayed(getmaxptp)(
+            waveforms[start:end],
+            firstchans[start:end],
+            maxchans[start:end],
+        )
+        for start, end in tqdm(
+            zip(starts, ends), total=len(starts), desc="loc batches"
+        )
+    )
+
+    maxptp = np.empty(N)
+    with Parallel(n_workers) as pool:
+        for batch in grouper(10 * n_workers, jobs):
+            for batch_idx, res in enumerate(pool(jobs)):
+                start = starts[batch_idx]
+                end = ends[batch_idx]
+                maxptp[start:end] = res
+
+    return maxptp
 
 
 def grouper(n, iterable):
