@@ -45,13 +45,14 @@ with timer("featurize"):
         with np.load(args.locs_npz) as locs_f:
             waveforms = h5["cleaned_waveforms"]
             firstchans = h5["first_channels"][:]
+            maxchans = h5["spike_index"][:, 1]
             geom = h5["geom"][:]
             x, y, z_rel, z_abs, alpha = locs_f["locs"].T
 
             ae = LinearRelocAE(args.rank, geom)
-            ae.fit(waveforms, x, y, z_abs, alpha, firstchans)
+            ae.fit(waveforms, x, y, z_abs, alpha, firstchans, maxchans)
             features, errors = ae.transform(
-                waveforms, x, y, z_abs, alpha, firstchans, return_error=True
+                waveforms, x, y, z_abs, alpha, firstchans, maxchans, return_error=True
             )
 
 with timer("save"):

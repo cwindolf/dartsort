@@ -5,7 +5,7 @@
 #       extension: .py
 #       format_name: percent
 #       format_version: '1.3'
-#       jupytext_version: 1.13.3
+#       jupytext_version: 1.13.0
 #   kernelspec:
 #     display_name: Python 3 (ipykernel)
 #     language: python
@@ -22,7 +22,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 
 # %%
-from spike_psvae import denoise, vis_utils, waveform_utils, localization
+from spike_psvae import denoise, vis_utils, waveform_utils, localization, point_source_centering, linear_ae
 from npx import reg
 
 # %%
@@ -34,6 +34,7 @@ sub_h5_path = "/mnt/3TB/charlie/subtracted_datasets/subtraction__spikeglx_ephysD
 res_bin_path = "/mnt/3TB/charlie/subtracted_datasets/residual__spikeglx_ephysData_g0_t0.imec.ap.normalized_t_250_300.bin"
 raw_bin_path = "/mnt/3TB/charlie/.one/openalyx.internationalbrainlab.org/churchlandlab/Subjects/CSHL049/2020-01-08/001/raw_ephys_data/probe00/_spikeglx_ephysData_g0_t0.imec.ap.normalized.bin"
 loc_npz_path = "/mnt/3TB/charlie/subtracted_datasets/locs__spikeglx_ephysData_g0_t0.imec.ap.normalized_t_250_300.npz"
+feat_npz_path = "/mnt/3TB/charlie/subtracted_datasets/feats__spikeglx_ephysData_g0_t0.imec.ap.normalized_t_250_300.npz"
 
 # %%
 # subh5 = h5py.File("/mnt/3TB/charlie/subtracted_datasets/churchlandlab_CSHL049_p7_t_2000_2010.h5", "r")
@@ -350,7 +351,7 @@ plt.hist((zr - za) - (zr - za).mean(), bins=128);
 # %%
 
 # %%
-def plotlocs(x, y, z, alpha, maxptps, geom, which=slice(None)):
+def plotlocs(x, y, z, alpha, maxptps, geom, feats=None, which=slice(None)):
     maxptps = maxptps[which]
     nmaxptps = 0.25 + 0.74 * (maxptps - maxptps.min()) / (maxptps.max() - maxptps.min())
     cmaxptps = np.clip(maxptps, 3, 13)
@@ -360,7 +361,10 @@ def plotlocs(x, y, z, alpha, maxptps, geom, which=slice(None)):
     alpha = alpha[which]
     z = z[which]
     cm = plt.cm.viridis
-    fig, (aa, ab, ac) = plt.subplots(1, 3, sharey=True, figsize=(8, 8))
+    if feats is not None:
+        nfeats = feats.shape[1]
+    fig, axes = plt.subplots(1, 3 + nfeats, sharey=True, figsize=(8, 8))
+    aa, ab, ac = axes[:3]
     aa.scatter(x, z, s=0.1, alpha=nmaxptps, c=cmaxptps, cmap=cm)
     aa.scatter(geom[:, 0], geom[:, 1], color="orange", s=1)
     logy = np.log(y)
@@ -374,6 +378,12 @@ def plotlocs(x, y, z, alpha, maxptps, geom, which=slice(None)):
     aa.set_xlim(np.percentile(x, [0, 100]))
     ab.set_xlim(np.percentile(logy, [0, 100]))
     ac.set_xlim(np.percentile(loga, [0, 100]))
+    
+    if feats is not None:
+        for ax, f in zip(axes[3:], feats.T):
+            ax.scatter(f, z, s=0.1, alpha=nmaxptps, c=cmaxptps, cmap=cm)
+            ax.set_xlim(np.percentile(f, [0.1, 99.9]))
+    
     aa.set_ylim([0 - 10, geom[:, 1].max() + 10])
     plt.show()
 
@@ -399,5 +409,33 @@ plotlocs(x, y, z_reg, a, maxptps, geom)
 
 # %%
 plotlocs(x, y, z_reg, a, maxptps, geom[geom[:, 1]<1500], which=(z_reg < 1500))
+
+# %%
+zr
+
+# %%
+cwfreloc, r, q = point_source_centering.relocate_simple(
+    cwfs[show],
+    geom,
+    firstchans[show],
+    maxchans[show],
+    x[show],
+    y[show],
+    locs["locs"][show, 3],
+    a[show],
+    relocate_dims="xyza",
+)
+fig, axes = plt.subplots(4, 8)
+vis_utils.plot_ptp(cwfs[show].ptp(1), axes[:, :4], "", "k", "abcdefghijklmnop")
+vis_utils.plot_ptp(q.numpy(), axes[:, :4], "", "silver", "abcdefghijklmnop")
+vis_utils.plot_ptp(cwfreloc.numpy().ptp(1), axes[:, 4:], "", "darkgreen", "abcdefghijklmnop")
+vis_utils.plot_ptp(r.numpy(), axes[:, 4:], "", "lightgreen", "abcdefghijklmnop")
+
+# %%
+feats = np.load(feat_npz_path)
+print(list(feats.keys()))
+
+# %%
+plotlocs(x, y, z_reg, a, maxptps, geom, feats=feats["features"][:, :3])
 
 # %%
