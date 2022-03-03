@@ -1,3 +1,4 @@
+import itertools
 from joblib import Parallel, delayed
 import numpy as np
 from scipy.optimize import minimize
@@ -227,29 +228,38 @@ def localize_waveforms_batched(
 
     starts = list(range(0, N, batch_size))
     ends = [min(start + batch_size, N) for start in starts]
+    jobs = (
+        delayed(localize_waveforms)(
+            waveforms[start:end],
+            geom,
+            firstchans[start:end],
+            maxchans[start:end],
+            pbar=False,
+            n_channels=n_channels,
+        )
+        for start, end in tqdm(
+            zip(starts, ends), total=len(starts), desc="loc batches"
+        )
+    )
 
     with Parallel(n_workers) as pool:
-        for batch_idx, (x, y, z_rel, z_abs, alpha) in enumerate(
-            pool(
-                delayed(localize_waveforms)(
-                    waveforms[start:end],
-                    geom,
-                    firstchans[start:end],
-                    maxchans[start:end],
-                    pbar=False,
-                    n_channels=n_channels,
-                )
-                for start, end in tqdm(
-                    zip(starts, ends), total=len(starts), desc="loc batches"
-                )
-            )
-        ):
-            start = starts[batch_idx]
-            end = ends[batch_idx]
-            xs[start:end] = x
-            ys[start:end] = y
-            z_rels[start:end] = z_rel
-            z_abss[start:end] = z_abs
-            alphas[start:end] = alpha
+        for batch in grouper(10 * n_workers, jobs):
+            for batch_idx, (x, y, zr, za, alpha) in enumerate(pool(jobs)):
+                start = starts[batch_idx]
+                end = ends[batch_idx]
+                xs[start:end] = x
+                ys[start:end] = y
+                z_rels[start:end] = zr
+                z_abss[start:end] = za
+                alphas[start:end] = alpha
 
     return xs, ys, z_rels, z_abss, alphas
+
+
+def grouper(n, iterable):
+    it = iter(iterable)
+    while True:
+        chunk = tuple(itertools.islice(it, n))
+        if not chunk:
+            return
+        yield chunk
