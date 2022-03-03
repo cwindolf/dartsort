@@ -45,23 +45,13 @@ with h5py.File(args.subtracted_h5, "r") as f:
 # -- localize
 
 with timer("localization"):
-    with h5py.File(args.subtracted_h5, "r", libver="latest") as f:
-        N = len(f["spike_index"])
-        maxptp = featurize.maxptp_batched(
-            f["cleaned_waveforms"],
-            f["first_channels"][:],
-            f["max_channels"][:],
-            n_workers=args.n_jobs,
-        )
-        times = (f["spike_index"][:, 0] - f["start_sample"][()]) / 30000
-        x, y, z_rel, z_abs, alpha = localization.localize_waveforms_batched(
-            f["cleaned_waveforms"],
-            f["geom"][:],
-            f["first_channels"][:],
-            f["max_channels"][:],
-            n_workers=args.n_jobs,
-            n_channels=args.n_channels,
-        )
+    N = len(f["spike_index"])
+    maxptp, x, y, z_rel, z_abs, alpha = localization.localize_h5(
+        args.subtracted_h5,
+        wfs_key="cleaned_waveforms",
+        n_workers=args.n_jobs,
+    )
+    times = (f["spike_index"][:, 0] - f["start_sample"][()]) / 30000
 
 
 # -- register
