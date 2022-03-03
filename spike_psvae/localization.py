@@ -267,7 +267,8 @@ def grouper(n, iterable):
         yield chunk
 
 
-def _loc_worker(start, end):
+def _loc_worker(start_end):
+    start, end = start_end
     wfs = _loc_worker.wfs[start:end]
     fcs = _loc_worker.firstchans[start:end]
     mcs = _loc_worker.maxchans[start:end]
@@ -305,7 +306,7 @@ def localize_h5(
     h5_path,
     geom_key="geom",
     wfs_key="cleaned_waveforms",
-    firstchans_key="firstchans",
+    firstchans_key="first_channels",
     spike_index_key="spike_index",
     n_workers=1,
     batch_size=4096,
@@ -327,7 +328,7 @@ def localize_h5(
     with multiprocessing.Pool(
         n_workers,
         initializer=_proc_init,
-        init_args=(
+        initargs=(
             h5_path,
             geom_key,
             wfs_key,
@@ -335,9 +336,11 @@ def localize_h5(
             spike_index_key,
         ),
     ) as pool:
-        for bs, be, maxptp, x, y, zr, za, alpha in pool.imap(
-            _loc_worker,
-            zip(tqdm(starts, desc="Localize batches"), ends)
+        for bs, be, maxptp, x, y, zr, za, alpha in tqdm(
+            pool.imap(_loc_worker, zip(starts, ends)),
+            desc="Localize batches",
+            total=len(starts),
+            smoothing=0,
         ):
             maxptps[bs:be] = maxptp
             xs[bs:be] = x
@@ -346,4 +349,4 @@ def localize_h5(
             z_abss[bs:be] = za
             alphas[bs:be] = alpha
 
-    return maxptps, xs, ys, z_rels, alphas
+    return maxptps, xs, ys, z_rels, z_abss, alphas

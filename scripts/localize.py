@@ -45,13 +45,13 @@ with h5py.File(args.subtracted_h5, "r") as f:
 # -- localize
 
 with timer("localization"):
-    N = len(f["spike_index"])
     maxptp, x, y, z_rel, z_abs, alpha = localization.localize_h5(
         args.subtracted_h5,
         wfs_key="cleaned_waveforms",
         n_workers=args.n_jobs,
     )
-    times = (f["spike_index"][:, 0] - f["start_sample"][()]) / 30000
+    with h5py.File(args.subtracted_h5, "r") as f:
+        times = (f["spike_index"][:, 0] - f["start_sample"][()]) / 30000
 
 
 # -- register
