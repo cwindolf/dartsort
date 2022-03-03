@@ -1,6 +1,8 @@
 import itertools
 from joblib import Parallel, delayed
 import numpy as np
+import multiprocessing
+import h5py
 from scipy.optimize import minimize
 from tqdm.auto import tqdm
 from .waveform_utils import get_local_geom, relativize_waveforms
@@ -263,3 +265,85 @@ def grouper(n, iterable):
         if not chunk:
             return
         yield chunk
+
+
+def _loc_worker(start, end):
+    wfs = _loc_worker.wfs[start:end]
+    fcs = _loc_worker.firstchans[start:end]
+    mcs = _loc_worker.maxchans[start:end]
+
+    ptps = wfs.ptp(1)
+    maxptps = ptps.ptp(1)
+
+    x, y, zr, za, alpha = localize_ptps(
+        ptps,
+        _loc_worker.geom,
+        fcs,
+        mcs,
+        n_workers=1,
+        pbar=False,
+    )
+
+    return start, end, maxptps, x, y, zr, za, alpha
+
+
+def _proc_init(
+    h5_path,
+    geom_key,
+    wfs_key,
+    firstchans_key,
+    spike_index_key,
+):
+    h5 = h5py.File(h5_path, "r")
+    _loc_worker.geom = h5[geom_key]
+    _loc_worker.wfs = h5[wfs_key]
+    _loc_worker.firstchans = h5[firstchans_key][:]
+    _loc_worker.maxchans = h5[spike_index_key][:, 1]
+
+
+def localize_h5(
+    h5_path,
+    geom_key="geom",
+    wfs_key="cleaned_waveforms",
+    firstchans_key="firstchans",
+    spike_index_key="spike_index",
+    n_workers=1,
+    batch_size=4096,
+):
+    """Localize and compute max ptp in parallel"""
+    with h5py.File(h5_path, "r") as f:
+        N = len(f[spike_index_key])
+
+    maxptps = np.empty(N)
+    xs = np.empty(N)
+    ys = np.empty(N)
+    z_rels = np.empty(N)
+    z_abss = np.empty(N)
+    alphas = np.empty(N)
+
+    starts = list(range(0, N, batch_size))
+    ends = [min(start + batch_size, N) for start in starts]
+
+    with multiprocessing.Pool(
+        n_workers,
+        initializer=_proc_init,
+        init_args=(
+            h5_path,
+            geom_key,
+            wfs_key,
+            firstchans_key,
+            spike_index_key,
+        ),
+    ) as pool:
+        for bs, be, maxptp, x, y, zr, za, alpha in pool.imap(
+            _loc_worker,
+            zip(tqdm(starts, desc="Localize batches"), ends)
+        ):
+            maxptps[bs:be] = maxptp
+            xs[bs:be] = x
+            ys[bs:be] = y
+            z_rels[bs:be] = zr
+            z_abss[bs:be] = za
+            alphas[bs:be] = alpha
+
+    return maxptps, xs, ys, z_rels, alphas
