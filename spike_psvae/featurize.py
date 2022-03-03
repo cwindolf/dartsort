@@ -192,30 +192,27 @@ def maxptp_batched(
     firstchans,
     maxchans,
     n_workers=1,
-    batch_size=4096,
+    batch_size=1024,
 ):
     """A helper for running the above on hdf5 datasets or similar"""
     N = len(firstchans)
     starts = list(range(0, N, batch_size))
     ends = [min(start + batch_size, N) for start in starts]
 
-    def getmaxptp(wfs, fcs, mcs):
-        n = len(wfs)
-        return wfs[np.arange(n), :, mcs - fcs].ptp(1)
+    @delayed
+    def getmaxptp(start, end):
+        mcrels = maxchans[start:end] - firstchans[start:end]
+        return waveforms[start:end][np.arange(end - start), :, mcrels].ptp(1)
 
     jobs = (
-        delayed(getmaxptp)(
-            waveforms[start:end],
-            firstchans[start:end],
-            maxchans[start:end],
-        )
+        getmaxptp(start, end)
         for start, end in tqdm(
-            zip(starts, ends), total=len(starts), desc="loc batches"
+            zip(starts, ends), total=len(starts), desc="ptp batches"
         )
     )
 
     maxptp = np.empty(N)
-    with Parallel(n_workers) as pool:
+    with Parallel(n_workers, require="sharedmem") as pool:
         for batch in grouper(10 * n_workers, jobs):
             for batch_idx, res in enumerate(pool(jobs)):
                 start = starts[batch_idx]
