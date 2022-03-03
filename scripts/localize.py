@@ -8,7 +8,7 @@ import h5py
 import time
 import numpy as np
 from tqdm.auto import trange
-from spike_psvae import localization, ibme
+from spike_psvae import featurize, localization, ibme
 
 ap = argparse.ArgumentParser()
 
@@ -41,35 +41,24 @@ with h5py.File(args.subtracted_h5, "r") as f:
             "Input H5 should contain cleaned waveforms from subtraction"
         )
 
-    if "cleaned_first_channels" in f:
-        cfirstchans = f["cleaned_first_channels"][:]
-        cmaxchans = f["cleaned_max_channels"][:]
-    else:
-        cfirstchans = f["first_channels"][:]
-        cmaxchans = f["spike_index"][:, 1]
-    crelmcs = cfirstchans - cmaxchans
-
 
 # -- localize
 
 with timer("localization"):
     with h5py.File(args.subtracted_h5, "r", libver="latest") as f:
         N = len(f["spike_index"])
-        maxptp = []
-        for bs in trange(0, N, 4096, desc="Grabbing max PTP"):
-            be = min(bs + 4096, N)
-            maxptp.append(
-                f["cleaned_waveforms"][bs:be][
-                    np.arange(be - bs), :, crelmcs[bs:be]
-                ].ptp(1)
-            )
-        maxptp = np.concatenate(maxptp).astype(float)
+        maxptp = featurize.maxptp_batched(
+            f["cleaned_waveforms"],
+            f["first_channels"][:],
+            f["max_channels"][:],
+            n_workers=args.n_jobs,
+        )
         times = (f["spike_index"][:, 0] - f["start_sample"][()]) / 30000
         x, y, z_rel, z_abs, alpha = localization.localize_waveforms_batched(
             f["cleaned_waveforms"],
             f["geom"][:],
-            cfirstchans,
-            cmaxchans,
+            f["first_channels"][:],
+            f["max_channels"][:],
             n_workers=args.n_jobs,
             n_channels=args.n_channels,
         )
