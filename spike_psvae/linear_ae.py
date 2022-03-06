@@ -70,6 +70,7 @@ class LinearRelocAE(BaseEstimator, TransformerMixin):
         self.fit_n_waveforms = fit_n_waveforms
         self.B_updates = B_updates
         self.rg = np.random.default_rng(random_seed)
+        self.random_seed = random_seed
 
     def fit(self, waveforms, x, y, z, alpha, firstchans, maxchans):
         """
