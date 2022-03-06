@@ -593,7 +593,6 @@ def full_denoising(
     if denoiser is not None:
         for bs in range(0, N * C, batch_size):
             be = min(bs + batch_size, N * C)
-            o = waveforms[bs:be].copy()
             waveforms[bs:be] = (
                 denoiser(
                     torch.tensor(
@@ -610,8 +609,10 @@ def full_denoising(
 
     # Un-transpose, enforce temporal decrease
     waveforms = waveforms.reshape(N, C, T).transpose(0, 2, 1)
-    for wf in waveforms:
-        denoise.enforce_decrease(wf, in_place=True)
+    for i in range(N):
+        denoise.enforce_decrease(
+            waveforms[i], max_chan=maxchans[i], in_place=True
+        )
 
     # un-temporal align
     if align:
