@@ -148,7 +148,7 @@ def relocate_simple(
     z_mc = geom[maxchans, 1]
     local_geom[:, :, 1] -= z_mc[:, None]
     z_rel = z_abs - z_mc
-    
+
     # who are we moving? set the standard locs accordingly
     # if we are interpolating for x/z shift, then we don't want
     # to touch those with the PTP rescaling. so, put them into
@@ -175,3 +175,45 @@ def relocate_simple(
     ).unsqueeze(1)
 
     return waveforms_relocated, r, q
+
+
+def relocating_ptps(
+    waveforms,
+    geom,
+    firstchans,
+    maxchans,
+    x,
+    y,
+    z_abs,
+    alpha,
+    relocate_dims="xyza",
+):
+    B, T, C = waveforms.shape
+    geom = geom.copy()
+    ix = firstchans[:, None] + np.arange(C)[None, :]
+    local_geom = torch.as_tensor(geom[ix])
+    z_mc = geom[maxchans, 1]
+    local_geom[:, :, 1] -= z_mc[:, None]
+    z_rel = z_abs - z_mc
+
+    # who are we moving? set the standard locs accordingly
+    # if we are interpolating for x/z shift, then we don't want
+    # to touch those with the PTP rescaling. so, put them into
+    # these kwargs to set them as origins for the target PTP.
+    stereo_kwargs = {}
+    if len(relocate_dims) < 4:
+        assert len(relocate_dims) > 0
+        if "x" not in relocate_dims:
+            stereo_kwargs["x"] = x
+        if "y" not in relocate_dims:
+            stereo_kwargs["y"] = y
+        if "z" not in relocate_dims:
+            stereo_kwargs["z"] = z_abs
+        if "a" not in relocate_dims:
+            stereo_kwargs["alpha"] = alpha
+    r = stereotypical_ptp(local_geom, **stereo_kwargs)
+
+    # ptp predicted from this localization (x,y,z,alpha)
+    q = point_source_ptp(local_geom, x, y, z_rel, alpha)
+
+    return r, q

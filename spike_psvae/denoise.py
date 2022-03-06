@@ -90,11 +90,12 @@ def invert_temporal_align(aligned, rolls):
     return out
 
 
-def enforce_decrease(waveform, in_place=False):
+def enforce_decrease(waveform, max_chan=None, in_place=False):
     n_chan = waveform.shape[1]
     wf = waveform if in_place else waveform.copy()
     ptp = wf.ptp(0)
-    max_chan = ptp.argmax()
+    if max_chan is None:
+        max_chan = ptp.argmax()
 
     max_chan_even = max_chan - max_chan % 2
     max_chan_odd = max_chan_even + 1    

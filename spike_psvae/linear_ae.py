@@ -3,7 +3,7 @@ from sklearn.base import BaseEstimator, TransformerMixin
 from sklearn.decomposition import PCA
 from tqdm.auto import trange
 
-from .point_source_centering import relocate_simple
+from .point_source_centering import relocate_simple, relocating_ptps
 from .waveform_utils import relativize_waveforms
 
 
@@ -200,7 +200,15 @@ class LinearRelocAE(BaseEstimator, TransformerMixin):
         return self
 
     def transform(
-        self, waveforms, x, y, z, alpha, firstchans, maxchans, return_error=False
+        self,
+        waveforms,
+        x,
+        y,
+        z,
+        alpha,
+        firstchans,
+        maxchans,
+        return_error=False,
     ):
         N, T, C_ = waveforms.shape
         features = np.zeros((N, self.n_components))
@@ -265,3 +273,34 @@ class LinearRelocAE(BaseEstimator, TransformerMixin):
             return features, errors
 
         return features
+
+    def inverse_transform(
+        self,
+        features,
+        x,
+        y,
+        z,
+        alpha,
+        firstchans,
+        maxchans,
+    ):
+        # inverse relocation
+        r, q = relocating_ptps(
+            self.geom,
+            firstchans,
+            maxchans,
+            x,
+            y,
+            z,
+            alpha,
+            relocate_dims=self.relocate_dims,
+        )
+        # those are torch but we want numpy
+        r = r.cpu().numpy()
+        q = q.cpu().numpy()
+        destandardization = (q / r)[:, None, :]
+
+        return destandardization * (
+            self.mean_[None, :, :]
+            + np.tensordot(features, self.B_, axes=1)
+        )
