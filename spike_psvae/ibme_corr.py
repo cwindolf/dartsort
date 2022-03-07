@@ -6,11 +6,41 @@ from scipy import sparse
 from tqdm.auto import trange
 
 
+def register_rigid(
+    raster,
+    mincorr=0.7,
+    disp=None,
+    batch_size=32,
+    step_size=1,
+):
+    """Rigid correlation subsampled registration
+
+    Arguments
+    ---------
+    raster : array (D, T)
+    mincorr : float
+        Correlation threshold
+    disp : int, optional
+        Maximum displacement during pairwise displacement estimates.
+        If `None`, half of the depth domain's length will be used.
+    batch_size, step_size : int
+        See `calc_corr_decent`
+    Returns: p, array (T,)
+    """
+    D, C = calc_corr_decent(
+        raster,
+        disp=disp,
+        batch_size=batch_size,
+        step_size=step_size,
+    )
+    p = psolvecorr(D, C, mincorr=mincorr)
+    return p
+
+
 def online_register_rigid(
     raster,
-    geom,
-    batch_length=50_000,
-    time_downsample_factor=5,
+    batch_length=10000,
+    time_downsample_factor=1,
     mincorr=0.7,
     disp=None,
     csd=False,
