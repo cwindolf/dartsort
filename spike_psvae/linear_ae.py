@@ -114,10 +114,12 @@ class LinearRelocAE(BaseEstimator, TransformerMixin):
                 None,
                 self.geom,
                 feat_chans=self.n_channels,
+                maxchans_orig=maxchans,
             )
             C = self.n_channels
 
         # -- relocated waveforms and the transformations to get them
+        print("hi")
         relocated_waveforms, r, q = relocate_simple(
             waveforms,
             self.geom,
@@ -230,6 +232,7 @@ class LinearRelocAE(BaseEstimator, TransformerMixin):
                     None,
                     self.geom,
                     feat_chans=self.n_channels,
+                    maxchans_orig=batch_mcs,
                 )
                 C = self.n_channels
             print(bs, batch_wfs.shape)
@@ -293,6 +296,7 @@ class LinearRelocAE(BaseEstimator, TransformerMixin):
             y,
             z,
             alpha,
+            self.n_channels,
             relocate_dims=self.relocate_dims,
         )
         # those are torch but we want numpy
