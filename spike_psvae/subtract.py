@@ -57,6 +57,7 @@ def subtraction_batch(*args):
         start_sample,
         end_sample,
         do_clean,
+        probe,
     ) = args
 
     # load denoiser (load here so that we load only once per batch)
@@ -95,6 +96,7 @@ def subtraction_batch(*args):
         subwfs, spind, fcs = detect_and_subtract(
             residual,
             threshold,
+            probe,
             tpca,
             denoiser,
             trough_offset,
@@ -152,6 +154,7 @@ def subtraction_batch(*args):
         cleaned_wfs = full_denoising(
             cleaned_wfs + subtracted_wfs,
             spike_index[:, 1] - firstchans,
+            probe,
             tpca=tpca,
             device=device,
             denoiser=denoiser,
@@ -254,6 +257,14 @@ def subtraction(
                 "Either pass `geom` or put meta file in folder with binary."
             )
     n_channels = geom.shape[0]
+    ncol = np.unique(geom[:, 0]).size
+    if ncol == 2:
+        probe = "np2"
+    elif ncol == 4:
+        probe = "np1"
+    else:
+        assert False
+    print("Probe type", probe)
 
     # figure out length of data
     std_size = standardized_bin.stat().st_size
@@ -286,6 +297,7 @@ def subtraction(
             spike_length_samples,
             extract_channels,
             geom,
+            probe,
             T_samples,
             sampling_rate,
             channel_index,
@@ -371,6 +383,7 @@ def subtraction(
             start_sample,
             end_sample,
             do_clean,
+            probe,
         )
         for batch_id, s_start in jobs
     )
@@ -426,6 +439,7 @@ def train_pca(
     spike_length_samples,
     extract_channels,
     geom,
+    probe,
     len_recording_samples,
     sampling_rate,
     channel_index,
@@ -458,6 +472,7 @@ def train_pca(
         s_start,
         s_end,
         False,
+        probe,
     )
     N, T, C = waveforms.shape
     print("Fitting PCA on", N, "waveforms from mini-subtraction")
@@ -475,6 +490,7 @@ def train_pca(
 def detect_and_subtract(
     raw,
     threshold,
+    probe,
     tpca,
     denoiser,
     trough_offset,
@@ -491,6 +507,9 @@ def detect_and_subtract(
         spike_length_samples,
         device,
     )
+    if not len(spike_index):
+        return [], [], []
+
     # it would be nice to go in order, but we would need to
     # combine the reading and subtraction steps together
     # subtraction_order = np.argsort(energy)[::-1]
@@ -507,6 +526,7 @@ def detect_and_subtract(
     subtracted_wfs = full_denoising(
         subtracted_wfs,
         spike_index[:, 1] - firstchans,
+        probe,
         tpca,
         device,
         denoiser,
@@ -576,6 +596,7 @@ def read_waveforms(
 def full_denoising(
     waveforms,
     maxchans,
+    probe,
     tpca=None,
     device=None,
     denoiser=None,
@@ -609,8 +630,12 @@ def full_denoising(
 
     # Un-transpose, enforce temporal decrease
     waveforms = waveforms.reshape(N, C, T).transpose(0, 2, 1)
+    if probe == "np1":
+        enforce_decrease = denoise.enforce_decrease_np1
+    elif probe == "np2":
+        enforce_decrease = denoise.enforce_decrease
     for i in range(N):
-        denoise.enforce_decrease(
+        enforce_decrease(
             waveforms[i], max_chan=maxchans[i], in_place=True
         )
 
