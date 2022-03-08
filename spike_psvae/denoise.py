@@ -98,55 +98,167 @@ def enforce_decrease(waveform, max_chan=None, in_place=False):
         max_chan = ptp.argmax()
 
     max_chan_even = max_chan - max_chan % 2
-    max_chan_odd = max_chan_even + 1    
-    
+    max_chan_odd = max_chan_even + 1
+
     len_reg = (max_chan_even - 2) // 2
     if len_reg > 0:
         regularizer = np.zeros(len_reg)
-        max_ptp = ptp[max_chan_even-2]
+        max_ptp = ptp[max_chan_even - 2]
         for i in range(len_reg):
-            max_ptp = min(max_ptp, ptp[max_chan_even-4-2*i])
-            regularizer[len_reg-i-1] = ptp[max_chan_even-4-2*i]/max_ptp
-        wf[:, np.arange(0,max_chan_even-2, 2)] /= regularizer
-    
-    len_reg = (n_chan -1- max_chan_even-2)//2
-    if len_reg > 0:
-        regularizer = np.zeros(len_reg)
-        max_ptp = ptp[max_chan_even+2]
-        for i in range(len_reg):
-            max_ptp = min(max_ptp, ptp[max_chan_even+4+2*i])
-            regularizer[i] = ptp[max_chan_even+4+2*i]/max_ptp
-        wf[:, np.arange(max_chan_even+4,n_chan, 2)] /= regularizer
+            max_ptp = min(max_ptp, ptp[max_chan_even - 4 - 2 * i])
+            regularizer[len_reg - i - 1] = (
+                ptp[max_chan_even - 4 - 2 * i] / max_ptp
+            )
+        wf[:, np.arange(0, max_chan_even - 2, 2)] /= regularizer
 
-    len_reg = (max_chan_odd-2)//2
+    len_reg = (n_chan - 1 - max_chan_even - 2) // 2
     if len_reg > 0:
         regularizer = np.zeros(len_reg)
-        max_ptp = ptp[max_chan_odd-2]
+        max_ptp = ptp[max_chan_even + 2]
         for i in range(len_reg):
-            max_ptp = min(max_ptp, ptp[max_chan_odd-4-2*i])
-            regularizer[len_reg-i-1] = ptp[max_chan_odd-4-2*i]/max_ptp
-        wf[:, np.arange(1,max_chan_odd-2, 2)] /= regularizer
-    
-    len_reg = (n_chan -1- max_chan_odd-2)//2
+            max_ptp = min(max_ptp, ptp[max_chan_even + 4 + 2 * i])
+            regularizer[i] = ptp[max_chan_even + 4 + 2 * i] / max_ptp
+        wf[:, np.arange(max_chan_even + 4, n_chan, 2)] /= regularizer
+
+    len_reg = (max_chan_odd - 2) // 2
     if len_reg > 0:
         regularizer = np.zeros(len_reg)
-        max_ptp = ptp[max_chan_odd+2]
+        max_ptp = ptp[max_chan_odd - 2]
         for i in range(len_reg):
-            max_ptp = min(max_ptp, ptp[max_chan_odd+4+2*i])
-            regularizer[i] = ptp[max_chan_odd+4+2*i]/max_ptp
-        wf[:, np.arange(max_chan_odd+4,n_chan, 2)] /= regularizer
-    
+            max_ptp = min(max_ptp, ptp[max_chan_odd - 4 - 2 * i])
+            regularizer[len_reg - i - 1] = (
+                ptp[max_chan_odd - 4 - 2 * i] / max_ptp
+            )
+        wf[:, np.arange(1, max_chan_odd - 2, 2)] /= regularizer
+
+    len_reg = (n_chan - 1 - max_chan_odd - 2) // 2
+    if len_reg > 0:
+        regularizer = np.zeros(len_reg)
+        max_ptp = ptp[max_chan_odd + 2]
+        for i in range(len_reg):
+            max_ptp = min(max_ptp, ptp[max_chan_odd + 4 + 2 * i])
+            regularizer[i] = ptp[max_chan_odd + 4 + 2 * i] / max_ptp
+        wf[:, np.arange(max_chan_odd + 4, n_chan, 2)] /= regularizer
+
+    return wf
+
+
+def enforce_decrease_np1(waveform, max_chan=None, in_place=False):
+    n_chan = waveform.shape[1]
+    wf = waveform if in_place else waveform.copy()
+    ptp = wf.ptp(0)
+    if max_chan is None:
+        max_chan = ptp[16:28].argmax() + 16
+
+    max_chan_a = max_chan - max_chan % 4
+    for i in range(4, max_chan_a, 4):
+        if (
+            wf[:, max_chan_a - i - 4].ptp()
+            > wf[:, max_chan_a - i].ptp()
+        ):
+            wf[:, max_chan_a - i - 4] = (
+                wf[:, max_chan_a - i - 4]
+                * wf[:, max_chan_a - i].ptp()
+                / wf[:, max_chan_a - i - 4].ptp()
+            )
+    for i in range(4, n_chan - max_chan_a - 4, 4):
+        if (
+            wf[:, max_chan_a + i + 4].ptp()
+            > wf[:, max_chan_a + i].ptp()
+        ):
+            wf[:, max_chan_a + i + 4] = (
+                wf[:, max_chan_a + i + 4]
+                * wf[:, max_chan_a + i].ptp()
+                / wf[:, max_chan_a + i + 4].ptp()
+            )
+
+    max_chan_b = max_chan - max_chan % 4 + 1
+    for i in range(4, max_chan_b, 4):
+        if (
+            wf[:, max_chan_b - i - 4].ptp()
+            > wf[:, max_chan_b - i].ptp()
+        ):
+            wf[:, max_chan_b - i - 4] = (
+                wf[:, max_chan_b - i - 4]
+                * wf[:, max_chan_b - i].ptp()
+                / wf[:, max_chan_b - i - 4].ptp()
+            )
+    for i in range(4, n_chan - max_chan_b - 3, 4):
+        if (
+            wf[:, max_chan_b + i + 4].ptp()
+            > wf[:, max_chan_b + i].ptp()
+        ):
+            wf[:, max_chan_b + i + 4] = (
+                wf[:, max_chan_b + i + 4]
+                * wf[:, max_chan_b + i].ptp()
+                / wf[:, max_chan_b + i + 4].ptp()
+            )
+
+    max_chan_c = max_chan - max_chan % 4 + 2
+    for i in range(4, max_chan_c, 4):
+        if (
+            wf[:, max_chan_c - i - 4].ptp()
+            > wf[:, max_chan_c - i].ptp()
+        ):
+            wf[:, max_chan_c - i - 4] = (
+                wf[:, max_chan_c - i - 4]
+                * wf[:, max_chan_c - i].ptp()
+                / wf[:, max_chan_c - i - 4].ptp()
+            )
+    for i in range(4, n_chan - max_chan_c - 2, 4):
+        if (
+            wf[:, max_chan_c + i + 4].ptp()
+            > wf[:, max_chan_c + i].ptp()
+        ):
+            wf[:, max_chan_c + i + 4] = (
+                wf[:, max_chan_c + i + 4]
+                * wf[:, max_chan_c + i].ptp()
+                / wf[:, max_chan_c + i + 4].ptp()
+            )
+
+    max_chan_d = max_chan - max_chan % 4 + 3
+    for i in range(4, max_chan_d, 4):
+        if (
+            wf[:, max_chan_d - i - 4].ptp()
+            > wf[:, max_chan_d - i].ptp()
+        ):
+            wf[:, max_chan_d - i - 4] = (
+                wf[:, max_chan_d - i - 4]
+                * wf[:, max_chan_d - i].ptp()
+                / wf[:, max_chan_d - i - 4].ptp()
+            )
+    for i in range(4, n_chan - max_chan_d - 3, 4):
+        if (
+            wf[:, max_chan_d + i + 4].ptp()
+            > wf[:, max_chan_d + i].ptp()
+        ):
+            wf[:, max_chan_d + i + 4] = (
+                wf[:, max_chan_d + i + 4]
+                * wf[:, max_chan_d + i].ptp()
+                / wf[:, max_chan_d + i + 4].ptp()
+            )
+
     return wf
 
 
 @torch.inference_mode()
 def cleaned_waveforms(
-    waveforms, spike_index, firstchans, residual, s_start=0, tpca_rank=7, pbar=True
+    waveforms,
+    spike_index,
+    firstchans,
+    residual,
+    s_start=0,
+    tpca_rank=7,
+    pbar=True,
 ):
     N, T, C = waveforms.shape
     denoiser = SingleChanDenoiser().load()
     cleaned = np.empty((N, C, T), dtype=waveforms.dtype)
-    ixs = trange(len(spike_index), desc="Cleaning and denoising") if pbar else range(len(spike_index))
+    ixs = (
+        trange(len(spike_index), desc="Cleaning and denoising")
+        if pbar
+        else range(len(spike_index))
+    )
     for ix in ixs:
         t, mc = spike_index[ix]
         fc = firstchans[ix]
