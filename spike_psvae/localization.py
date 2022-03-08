@@ -1,4 +1,5 @@
 import itertools
+from itertools import repeat
 from joblib import Parallel, delayed
 import numpy as np
 import multiprocessing
@@ -41,6 +42,7 @@ def localize_ptp(
     firstchan,
     maxchan,
     geom,
+    min_ptp=None,
 ):
     """Find the localization result for a single ptp vector
 
@@ -69,6 +71,13 @@ def localize_ptp(
     ptp_p = ptp / ptp.sum()
     xcom, zcom = (ptp_p[:, None] * local_geom).sum(axis=0)
     maxptp = ptp.max()
+
+    # exclude channels with low PTP
+    if min_ptp is not None:
+        where = np.flatnonzero(ptp >= min_ptp)
+        assert where.size >= 4
+        ptp = ptp[where]
+        local_geom = local_geom[where]
 
     def ptp_at(x, y, z, alpha):
         return alpha / np.sqrt(
@@ -104,6 +113,7 @@ def localize_ptps(
     geom,
     firstchans,
     maxchans,
+    min_ptp=None,
     n_workers=None,
     pbar=True,
 ):
@@ -147,6 +157,7 @@ def localize_ptps(
                     firstchan,
                     maxchan,
                     geom,
+                    min_ptp,
                 )
                 for ptp, maxchan, firstchan in xqdm(
                     zip(ptps, maxchans, firstchans), total=N, desc="lsq"
@@ -167,6 +178,7 @@ def localize_waveforms(
     geom,
     firstchans,
     maxchans,
+    min_ptp=None,
     n_workers=1,
     n_channels=None,
     pbar=True,
@@ -206,6 +218,7 @@ def localize_waveforms(
         geom,
         firstchans,
         maxchans,
+        min_ptp=min_ptp,
         n_workers=n_workers,
         pbar=pbar,
     )
@@ -216,6 +229,7 @@ def localize_waveforms_batched(
     geom,
     firstchans,
     maxchans,
+    min_ptp=None,
     n_workers=1,
     batch_size=128,
     n_channels=None,
@@ -236,6 +250,7 @@ def localize_waveforms_batched(
             geom,
             firstchans[start:end],
             maxchans[start:end],
+            min_ptp=min_ptp,
             pbar=False,
             n_channels=n_channels,
         )
@@ -267,8 +282,8 @@ def grouper(n, iterable):
         yield chunk
 
 
-def _loc_worker(start_end):
-    start, end = start_end
+def _loc_worker(start_end_minptp):
+    start, end, min_ptp = start_end_minptp
     wfs = _loc_worker.wfs[start:end]
     fcs = _loc_worker.firstchans[start:end]
     mcs = _loc_worker.maxchans[start:end]
@@ -281,6 +296,7 @@ def _loc_worker(start_end):
         _loc_worker.geom,
         fcs,
         mcs,
+        min_ptp=min_ptp,
         n_workers=1,
         pbar=False,
     )
@@ -308,6 +324,7 @@ def localize_h5(
     wfs_key="cleaned_waveforms",
     firstchans_key="first_channels",
     spike_index_key="spike_index",
+    min_ptp=None,
     n_workers=1,
     batch_size=4096,
 ):
@@ -337,7 +354,7 @@ def localize_h5(
         ),
     ) as pool:
         for bs, be, maxptp, x, y, zr, za, alpha in tqdm(
-            pool.imap(_loc_worker, zip(starts, ends)),
+            pool.imap(_loc_worker, zip(starts, ends, repeat(min_ptp))),
             desc="Localize batches",
             total=len(starts),
             smoothing=0,
