@@ -7,8 +7,7 @@ import argparse
 import h5py
 import time
 import numpy as np
-from tqdm.auto import trange
-from spike_psvae import featurize, localization, ibme
+from spike_psvae import localization, ibme
 
 ap = argparse.ArgumentParser()
 
@@ -16,6 +15,7 @@ ap.add_argument("subtracted_h5")
 ap.add_argument("out_npz")
 ap.add_argument("--n_jobs", type=int, default=1)
 ap.add_argument("--n_channels", type=int, default=20)
+ap.add_argument("--min_ptp", type=float, default=None)
 
 args = ap.parse_args()
 
@@ -49,6 +49,7 @@ with timer("localization"):
         args.subtracted_h5,
         wfs_key="cleaned_waveforms",
         n_workers=args.n_jobs,
+        min_ptp=args.min_ptp,
     )
     with h5py.File(args.subtracted_h5, "r") as f:
         times = (f["spike_index"][:, 0] - f["start_sample"][()]) / 30000
