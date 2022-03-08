@@ -3,7 +3,7 @@
 import numpy as np
 import pywt
 import torch
-from scipy import sparse, ndimage
+from scipy import sparse
 from scipy.stats import zscore, norm
 from scipy.interpolate import interp1d, RectBivariateSpline
 from skimage.restoration import denoise_nl_means, estimate_sigma
