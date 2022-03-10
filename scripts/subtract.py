@@ -11,16 +11,20 @@ ap = argparse.ArgumentParser()
 
 ap.add_argument("standardized_bin")
 ap.add_argument("out_folder")
-ap.add_argument("--thresholds", default=[12, 10, 8, 6, 5, 4], type=lambda x: list(map(int, x.split(","))))
+ap.add_argument(
+    "--thresholds",
+    default=[12, 10, 8, 6, 5, 4],
+    type=lambda x: list(map(int, x.split(","))),
+)
 ap.add_argument("--geom", default=None, choices=["np1", "np2"])
-ap.add_argument("--tpca_rank", type=int, default=7)
+ap.add_argument("--tpca_rank", type=int, default=8)
 ap.add_argument("--n_sec_chunk", type=int, default=1)
 ap.add_argument("--t_start", type=int, default=0)
 ap.add_argument("--t_end", type=int, default=None)
 ap.add_argument("--n_jobs", type=int, default=1)
 ap.add_argument("--nogpu", action="store_true")
 ap.add_argument("--noclean", action="store_true")
-ap.add_argument("--n_sec_pca", type=int, default=10)
+ap.add_argument("--n_sec_pca", type=int, default=20)
 
 args = ap.parse_args()
 
