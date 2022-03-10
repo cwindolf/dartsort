@@ -16,7 +16,7 @@ ap.add_argument(
     default=[12, 10, 8, 6, 5, 4],
     type=lambda x: list(map(int, x.split(","))),
 )
-ap.add_argument("--geom", default=None, type="str")
+ap.add_argument("--geom", default=None, type=str)
 ap.add_argument("--tpca_rank", type=int, default=8)
 ap.add_argument("--n_sec_chunk", type=int, default=1)
 ap.add_argument("--t_start", type=int, default=0)
