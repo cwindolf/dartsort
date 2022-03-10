@@ -49,7 +49,7 @@ def online_register_rigid(
     T = raster.shape[1]
 
     # -- initialize
-    raster0 = raster[0:batch_length:time_downsample_factor]
+    raster0 = raster[:, 0:batch_length:time_downsample_factor]
     D00, C00 = calc_corr_decent(
         raster0,
         disp=disp,
@@ -61,7 +61,7 @@ def online_register_rigid(
     ps = [p0]
     for bs in trange(batch_length, T, batch_length, desc="batches"):
         be = min(T, bs + batch_length)
-        raster1 = raster[bs:be:time_downsample_factor]
+        raster1 = raster[:, bs:be:time_downsample_factor]
         D01, C01 = calc_corr_decent_pair(raster0, raster1, disp=disp)
         D11, C11 = calc_corr_decent(
             raster1,
