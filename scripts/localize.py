@@ -71,6 +71,7 @@ with timer("registration"):
         n_iter=1,
         widthmul=0.5,
     )
+    z_reg -= (z_reg - z_abs).mean()
     dispmap -= dispmap.mean()
 
 with timer("save"):
