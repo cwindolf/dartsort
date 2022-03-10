@@ -247,7 +247,7 @@ def subtraction(
 
     # if no geometry is supplied, try to load it from meta file
     if geom is None:
-        metas = list(standardized_bin.parent.glob("*.meta"))
+        metas = list(standardized_bin.parent.glob("*.ap.meta"))
         if metas:
             assert len(metas) == 1
             header = _geometry_from_meta(read_meta_data(metas[0]))
