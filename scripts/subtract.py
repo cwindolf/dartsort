@@ -16,7 +16,7 @@ ap.add_argument(
     default=[12, 10, 8, 6, 5, 4],
     type=lambda x: list(map(int, x.split(","))),
 )
-ap.add_argument("--geom", default=None, choices=["np1", "np2"])
+ap.add_argument("--geom", default=None, type="str")
 ap.add_argument("--tpca_rank", type=int, default=8)
 ap.add_argument("--n_sec_chunk", type=int, default=1)
 ap.add_argument("--t_start", type=int, default=0)
@@ -33,7 +33,12 @@ args = ap.parse_args()
 
 
 geom = None
-if args.geom is not None:
+if args.geom is None:
+    print(
+        "Will try to load geometry from a .meta file in "
+        "the same directory as the binary."
+    )
+elif args.geom in ["np1", "np2"]:
     from ibllib.ephys import neuropixel
     print(
         f"Using the typical {args.geom} geometry. "
@@ -41,6 +46,12 @@ if args.geom is not None:
     )
     ch = neuropixel.dense_layout(version=int(args.geom[-1]))
     geom = np.c_[ch["x"], ch["y"]]
+elif os.path.isfile(args.geom) and args.geom.endswith(".npy"):
+    print("Will load geometry array from", args.geom)
+    geom = np.load(args.geom)
+    assert geom.ndim == 2 and geom.shape[1] == 2
+else:
+    raise ValueError("Not sure what to do with --geom", args.geom)
 
 
 # -- run subtraction
