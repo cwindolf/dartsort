@@ -178,7 +178,6 @@ def relocate_simple(
 
 
 def relocating_ptps(
-    waveforms,
     geom,
     firstchans,
     maxchans,
@@ -186,11 +185,11 @@ def relocating_ptps(
     y,
     z_abs,
     alpha,
+    nchans,
     relocate_dims="xyza",
 ):
-    B, T, C = waveforms.shape
     geom = geom.copy()
-    ix = firstchans[:, None] + np.arange(C)[None, :]
+    ix = firstchans[:, None] + np.arange(nchans)[None, :]
     local_geom = torch.as_tensor(geom[ix])
     z_mc = geom[maxchans, 1]
     local_geom[:, :, 1] -= z_mc[:, None]
