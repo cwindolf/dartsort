@@ -173,6 +173,72 @@ def plot_single_ptp(ptp, ax, label, color, code):
     return handle, dhandle
 
 
+def plotlocs(
+    x,
+    y,
+    z,
+    alpha,
+    maxptps,
+    geom,
+    feats=None,
+    which=slice(None),
+    clip=True,
+    suptitle=None,
+    figsize=(8, 8),
+    gs=1,
+):
+    maxptps = maxptps[which]
+    nmaxptps = 0.1
+    cmaxptps = maxptps
+    if clip:
+        nmaxptps = 0.25 + 0.74 * (maxptps - maxptps.min()) / (
+            maxptps.max() - maxptps.min()
+        )
+        cmaxptps = np.clip(maxptps, 3, 13)
+
+    x = x[which]
+    y = y[which]
+    alpha = alpha[which]
+    z = z[which]
+    print(np.isnan(z).any())
+
+    cm = plt.cm.viridis
+
+    nfeats = 0
+    if feats is not None:
+        nfeats = feats.shape[1]
+
+    fig, axes = plt.subplots(
+        1, 3 + nfeats - (alpha is None), sharey=True, figsize=figsize
+    )
+    axes[0].scatter(x, z, s=0.1, alpha=nmaxptps, c=cmaxptps, cmap=cm)
+    axes[0].scatter(geom[:, 0], geom[:, 1], color="orange", marker="s", s=gs)
+    logy = np.log(y)
+    axes[1].scatter(logy, z, s=0.1, alpha=nmaxptps, c=cmaxptps, cmap=cm)
+    axes[0].set_ylabel("z")
+    axes[0].set_xlabel("x")
+    axes[1].set_xlabel("$\\log y$")
+    axes[0].set_xlim(np.percentile(x, [0, 100]) + [-10, 10])
+    axes[1].set_xlim(np.percentile(logy, [0, 100]))
+    # axes[1]set_xlim([-0.5, 6])
+    if alpha is not None:
+        loga = np.log(alpha)
+        axes[2].scatter(loga, z, s=0.1, alpha=nmaxptps, c=cmaxptps, cmap=cm)
+        axes[2].set_xlabel("$\\log \\alpha$")
+        axes[2].set_xlim(np.percentile(loga, [0, 100]))
+
+    if suptitle:
+        fig.suptitle(suptitle, y=0.92)
+
+    if feats is not None:
+        for ax, f in zip(axes[3:], feats.T):
+            ax.scatter(f, z, s=0.1, alpha=nmaxptps, c=cmaxptps, cmap=cm)
+            ax.set_xlim(np.percentile(f, [0, 100]))
+
+    axes[0].set_ylim([z.min() - 10, z.max() + 10])
+    plt.show()
+
+
 def plot_ptp(ptp, axes, label, color, codes):
     for j, ax in enumerate(axes.flat):
         handle, dhandle = plot_single_ptp(ptp[j], ax, label, color, codes[j])
@@ -333,9 +399,7 @@ def pca_resid_plot(wfs, ax=None, c="b", name=None, pad=1, K=25):
     ax = ax or plt.gca()
     totvar = np.square(wfs).mean()
     residvar = totvar - np.cumsum(v)
-    ax.plot(
-        ([totvar] * pad + [*residvar]), marker=".", ms=4, c=c, label=name
-    )
+    ax.plot(([totvar] * pad + [*residvar]), marker=".", ms=4, c=c, label=name)
 
 
 def pca_invert_plot(
@@ -432,8 +496,12 @@ def reloc_pcaresidplot(
         firstchans=h5["first_channels"][:][inds],
         channel_radius=8,
     )
-    wfs_yza, q_hat_yza, p_hat = map(lambda x: x.cpu().numpy(), (wfs_yza, q_hat_yza, p_hat))
-    wfs_xyza, q_hat_xyza, p_hat_ = map(lambda x: x.cpu().numpy(), (wfs_xyza, q_hat_xyza, p_hat_))
+    wfs_yza, q_hat_yza, p_hat = map(
+        lambda x: x.cpu().numpy(), (wfs_yza, q_hat_yza, p_hat)
+    )
+    wfs_xyza, q_hat_xyza, p_hat_ = map(
+        lambda x: x.cpu().numpy(), (wfs_xyza, q_hat_xyza, p_hat_)
+    )
 
     ax = ax or plt.gca()
     if kind == "resid":
@@ -490,7 +558,11 @@ def reloc_pcaresidplot(
 def traceplot(waveform, axes=None, label="", c="k", alpha=1, strip=True, lw=1):
     if axes is None:
         fig, axes = plt.subplots(
-            1, waveform.shape[1], sharex=True, sharey="row", figsize=(2 * waveform.shape[1], 2)
+            1,
+            waveform.shape[1],
+            sharex=True,
+            sharey="row",
+            figsize=(2 * waveform.shape[1], 2),
         )
     assert (waveform.shape[1],) == axes.shape
     for ax, wf in zip(axes, waveform.T):
