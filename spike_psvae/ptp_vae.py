@@ -19,8 +19,8 @@ class PTPVAE(nn.Module):
         super(PTPVAE, self).__init__()
         self.variational = variational
         self.analytical_alpha = analytical_alpha
-        self.latent_dim = 3 + analytical_alpha
-        self.local_geom = local_geom
+        self.latent_dim = 3 + (1 - analytical_alpha)
+        self.local_geom = nn.Parameter(data=torch.tensor(local_geom, requires_grad=False), requires_grad=False)
 
         self.encoder = encoder
 
@@ -33,10 +33,16 @@ class PTPVAE(nn.Module):
         return torch.sqrt(
             # B x 1
             torch.exp(2 * log_y)[:, None]
+            + 0.01
             # 1 x C - B x 1 = B x C
             + torch.square(self.local_geom[None, :, 0] - x[:, None])
             + torch.square(self.local_geom[None, :, 1] - z[:, None])
         )
+
+    def localize(self, x):
+        mu, logvar = self.encode(x)
+        x, log_y, z = mu.T
+        return x, log_y, z
 
     def encode(self, x):
         h = self.encoder(x)
@@ -51,10 +57,10 @@ class PTPVAE(nn.Module):
         z = mu + eps * std
         return z
 
-    def decode(self, x, z):
+    def decode(self, input_ptp, z):
         x, log_y, z = z.T
-        q = self.dists(x, log_y, z)
-        alpha = (x * q).sum(1) / torch.square(q).sum(1)
+        q = 1 / self.dists(x, log_y, z)
+        alpha = (input_ptp * q).sum(1) / torch.square(q).sum(1)
         return alpha[:, None] * q
 
     def forward(self, x):
@@ -70,7 +76,7 @@ class PTPVAE(nn.Module):
         # print("forward recon_x.shape", recon_x.shape)
         return recon_x, mu, logvar
 
-    def loss(self, x, y, recon_x, y_hat, mu, logvar):
+    def loss(self, x, recon_x, mu, logvar):
         # mean over batches, sum over data dims
 
         # reconstruction error -- conditioned gaussian log likelihood
