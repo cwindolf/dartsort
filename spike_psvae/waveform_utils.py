@@ -109,3 +109,39 @@ def relativize_waveforms(
         return stdwfs, firstchans_std, maxchans_std, z_rel, chans_down
     else:
         return stdwfs, firstchans_std, maxchans_std, chans_down
+
+def relativize_waveforms_np1(
+    wfs, firstchans_orig, geom, maxchans_orig, feat_chans=20
+):
+    """
+    Extract fewer channels.
+    """
+    chans_down = feat_chans // 2
+    chans_down -= chans_down % 4
+
+    stdwfs = np.zeros(
+        (wfs.shape[0], wfs.shape[1], feat_chans), dtype=wfs.dtype
+    )
+
+    firstchans_std = firstchans_orig.copy().astype(int)
+    maxchans_std = np.zeros(firstchans_orig.shape, dtype=int)
+
+    for i in range(wfs.shape[0]):
+        wf = wfs[i]
+        if maxchans_orig is None:
+            mcrel = wf.ptp(0).argmax()
+        else:
+            mcrel = maxchans_orig[i] - firstchans_orig[i]
+        mcrix = mcrel - mcrel % 4
+
+        low, high = mcrix - chans_down, mcrix + feat_chans - chans_down
+        if low < 0:
+            low, high = 0, feat_chans
+        if high > wfs.shape[2]:
+            low, high = wfs.shape[2] - feat_chans, wfs.shape[2]
+
+        firstchans_std[i] += low
+        stdwfs[i] = wf[:, low:high]
+
+    return stdwfs, firstchans_std, chans_down
+    
