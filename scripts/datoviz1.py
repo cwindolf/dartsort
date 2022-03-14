@@ -19,6 +19,7 @@ class MarkerVis:
         zs,
         colors,
         title,
+        geom_xyz=None,
         dt=20.0,
         sz=5,
         pad=0.1,
@@ -60,6 +61,12 @@ class MarkerVis:
                 [[(xs.min() + xs.max()) / 2, ys.max() - 50, zs.max() + 1]]
             ),
         )
+
+        if geom_xyz is not None:
+            gvis = panel.visual("point")
+            gvis.data("pos", geom_xyz)
+            gvis.data("color", np.array([[255, 127, 127, 255]], dtype=np.uint8))
+            gvis.data("ms", np.array([sz] * (1 + hi - lo)))
 
     def change_t(self, t=None):
         if t is None:
@@ -123,6 +130,9 @@ if __name__ == "__main__":
         elif args.labels:
             labels = f[f"labels_{args.which}"][:][big]
 
+        geom = f["geom"][:]
+        geom_xz_ = np.c_[geom, np.zeros_like(geom[:, 0])]
+
     # set up vis
     canvas = datoviz.canvas(show_fps=False)
     scene = canvas.scene(rows=1, cols=len(data))
@@ -168,7 +178,7 @@ if __name__ == "__main__":
             np.minimum(maxptp, 13), vmin=3, vmax=13, cmap="viridis"
         )
     tp = (maxptp - maxptp.min()) / (maxptp.max() - maxptp.min())
-    tp = 0.25 + 0.74 * tp
+    tp = 0.4 + 0.59 * tp
     tp = np.floor(255 * tp).astype(int)
     colors[:, 3] = tp
 
@@ -188,6 +198,7 @@ if __name__ == "__main__":
                 colors,
                 k,
                 dark=args.controller == "panzoom",
+                geom_xyz=geom_xz_ if k == "x" else None,
             )
         )
 
