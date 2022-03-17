@@ -64,7 +64,7 @@ def deduplicate_torch(
     energy,
     recording_shape,
     channel_index,
-    max_window=5,
+    max_window=7,
 ):
     spike_index_torch = torch.tensor(spike_index)
     energy_torch = torch.tensor(energy)
@@ -111,7 +111,7 @@ def deduplicate_torch(
 
 @torch.no_grad()
 def torch_voltage_detect_dedup(
-    recording, threshold, order=5, channel_index=None, device=None
+    recording, threshold, order=5, max_window=7, channel_index=None, device=None
 ):
     """Voltage thresholding detection and deduplication
 
@@ -188,9 +188,9 @@ def torch_voltage_detect_dedup(
         max_energies[times, chans] = energies
         max_energies = F.max_pool2d(
             max_energies[None, None],
-            kernel_size=[2 * 5 + 1, 1],
+            kernel_size=[2 * max_window + 1, 1],
             stride=1,
-            padding=[5, 0],
+            padding=[max_window, 0],
         )[0, 0]
 
         # -- spatial max pool with channel index
