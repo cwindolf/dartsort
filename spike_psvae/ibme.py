@@ -179,6 +179,8 @@ def register_nonrigid(
     n_iter=1,
     widthmul=0.5,
 ):
+    origmean = depths.mean()
+
     # set origin to min z
     depths = depths - depths.min()
 
@@ -246,6 +248,10 @@ def register_nonrigid(
 
         # update displacement map
         total_shift[:, :] = compose_shifts_in_orig_domain(total_shift, dispmap)
+
+    # back to original coordinates
+    depths -= (depths.mean() - origmean)
+    total_shift -= total_shift.mean()
 
     return depths, total_shift
 
