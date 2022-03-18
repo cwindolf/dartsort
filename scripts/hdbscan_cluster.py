@@ -318,10 +318,10 @@ def main():
 
                 ax = ax_ptp_z
                 zs_cluster = features[:num_spikes][:,1][np.where(clusterer_to_be_plotted.labels_ ==cluster_id)]
-                ax.scatter(ptps_cluster, zs_cluster);
-                ax.set_title(f"ptps vs. zs");
-                ax.set_xlabel("ptps");
-                ax.set_ylabel("zs");
+                ax.scatter(zs_cluster, ptps_cluster);
+                ax.set_title(f"zs vs. ptps");
+                ax.set_xlabel("zs");
+                ax.set_ylabel("ptps");
 
                 ax = ax_scatter_xz
                 xs, zs, ids = features[:,0], features[:,1], clusterer_to_be_plotted.labels_
