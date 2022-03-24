@@ -8,11 +8,11 @@ def channel_index_subset(geom, channel_index, n_channels=None, radius=None):
     pgeom = np.pad(geom, [(0, 1), (0, 0)], constant_values=-2 * geom.max())
     for c in range(len(geom)):
         dists = cdist([geom[c]], pgeom[channel_index[c]]).ravel()
-        sort = np.sort(dists)
         if n_channels is not None:
+            sort = np.sort(dists)
             subset[c] = dists <= sort[n_channels]
         elif radius is not None:
-            subset[c] = radius
+            subset[c] = dists <= radius
         else:
             subset[c] = True
     return subset
