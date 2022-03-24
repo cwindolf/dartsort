@@ -32,6 +32,7 @@ def subtraction(
     dedup_spatial_radius=70,
     n_jobs=1,
     device=None,
+    save_residual=True,
     do_clean=True,
     do_localize=True,
     loc_workers=4,
@@ -48,9 +49,10 @@ def subtraction(
     batch_data_folder = out_folder / f"batches_{stem}"
     batch_data_folder.mkdir(exist_ok=True)
     out_h5 = out_folder / f"subtraction_{stem}_t_{t_start}_{t_end}.h5"
-    residual_bin = out_folder / f"residual_{stem}_t_{t_start}_{t_end}.bin"
-    if residual_bin.exists():
-        print("Output residual exists, it will be overwritten.")
+    if save_residual:
+        residual_bin = out_folder / f"residual_{stem}_t_{t_start}_{t_end}.bin"
+        if residual_bin.exists():
+            print("Output residual exists, it will be overwritten.")
     try:
         h5py.File(out_h5, "w")
     except BlockingIOError as e:
@@ -143,7 +145,8 @@ def subtraction(
 
     # -- initialize storage
     # residual binary file
-    residual = open(residual_bin, mode="wb")
+    if save_residual:
+        residual = open(residual_bin, mode="wb")
 
     # everybody else in hdf5
     with h5py.File(out_h5, "w") as output_h5:
@@ -233,7 +236,8 @@ def subtraction(
                 N_new = result.N_new
 
                 # write new residual
-                np.load(result.residual).tofile(residual)
+                if save_residual:
+                    np.load(result.residual).tofile(residual)
 
                 # grow arrays as necessary
                 subtracted_wfs.resize(N + N_new, axis=0)
@@ -267,10 +271,12 @@ def subtraction(
                 N += N_new
 
     # -- done!
-    residual.close()
+    if save_residual:
+        residual.close()
     print("Done. Detected", N, "spikes")
     print("Results written to:")
-    print(residual_bin)
+    if save_residual:
+        print(residual_bin)
     print(out_h5)
 
 
