@@ -32,15 +32,20 @@ def detect_and_deduplicate(
             order=5,
             device=device,
         )
-        spike_index = np.c_[times.cpu().numpy(), chans.cpu().numpy()]
-        energy = energy.cpu().numpy()
+        if times:
+            spike_index = np.c_[times.cpu().numpy(), chans.cpu().numpy()]
+            energy = energy.cpu().numpy()
+        else:
+            return [], []
     else:
         spike_index, energy = voltage_threshold(recording, threshold)
+        if not len(spike_index):
+            return [], []
         spike_index, energy = deduplicate_torch(
             spike_index,
             energy,
             recording.shape,
-            channel_index,  # device=device
+            channel_index,
         )
 
     # update times wrt buffer size
@@ -93,8 +98,7 @@ def deduplicate_torch(
     for bs in range(0, T, batch_size):
         be = min(T, bs + batch_size)
         max_energy[bs:be] = torch.max(
-            F.pad(max_energy[bs:be], (0, 1))[:, channel_index],
-            2
+            F.pad(max_energy[bs:be], (0, 1))[:, channel_index], 2
         )[0]
 
     # deduplicated spikes: temporal and spatial local max
@@ -111,7 +115,12 @@ def deduplicate_torch(
 
 @torch.no_grad()
 def torch_voltage_detect_dedup(
-    recording, threshold, order=5, max_window=7, channel_index=None, device=None
+    recording,
+    threshold,
+    order=5,
+    max_window=7,
+    channel_index=None,
+    device=None,
 ):
     """Voltage thresholding detection and deduplication
 
@@ -157,6 +166,8 @@ def torch_voltage_detect_dedup(
     # voltage threshold
     max_energies_at_inds = max_energies.view(-1)[window_max_inds]
     which = torch.nonzero(max_energies_at_inds > threshold).squeeze()
+    if not which.size():
+        return [], [], []
 
     # -- unravel the spike index
     # (right now the indices are into flattened recording)
@@ -171,6 +182,8 @@ def torch_voltage_detect_dedup(
     compat_times = torch.nonzero(
         (0 < times) & (times < recording.shape[0] - 1)
     ).squeeze()
+    if not len(compat_times):
+        return [], [], []
     times = times[compat_times]
     res_inds = which[compat_times]
     chans = window_max_inds[res_inds] % C
@@ -179,7 +192,9 @@ def torch_voltage_detect_dedup(
     # -- deduplication
     # We deduplicate if the channel index is provided.
     if channel_index is not None:
-        channel_index = torch.tensor(channel_index, device=device, dtype=torch.long)
+        channel_index = torch.tensor(
+            channel_index, device=device, dtype=torch.long
+        )
 
         # -- temporal max pool
         # still not sure why we can't just use `max_energies` instead of making
@@ -200,14 +215,15 @@ def torch_voltage_detect_dedup(
         for bs in range(0, T, batch_size):
             be = min(T, bs + batch_size)
             max_energies[bs:be] = torch.max(
-                F.pad(max_energies[bs:be], (0, 1))[:, channel_index],
-                2
+                F.pad(max_energies[bs:be], (0, 1))[:, channel_index], 2
             )[0]
 
         # -- deduplication
         dedup = torch.nonzero(
             energies >= max_energies[times, chans] - 1e-8
         ).squeeze()
+        if not len(dedup):
+            return [], [], []
         times = times[dedup]
         chans = chans[dedup]
         energies = energies[dedup]
