@@ -256,7 +256,6 @@ def subtraction(
                 Path(result.subtracted_wfs).unlink()
                 if do_clean:
                     Path(result.cleaned_wfs).unlink()
-                Path(result.firstchans).unlink()
                 Path(result.spike_index).unlink()
                 if do_localize:
                     Path(result.localizations).unlink()
@@ -294,7 +293,7 @@ SubtractionBatchResult = namedtuple(
 
 
 # Parallelism helper
-def _subtraction_batch(*args):
+def _subtraction_batch(args):
     return subtraction_batch(*args)
 
 
@@ -368,12 +367,16 @@ def subtraction_batch(
         )
 
         if len(spind):
-            assert np.all(spike_index[:-1, 0] <= spike_index[1:, 0])
             subtracted_wfs.append(subwfs)
             spike_index.append(spind)
 
     subtracted_wfs = np.concatenate(subtracted_wfs, axis=0)
     spike_index = np.concatenate(spike_index, axis=0)
+    
+    # sort so time increases
+    sort = np.argsort(spike_index[:, 0])
+    subtracted_wfs = subtracted_wfs[sort]
+    spike_index = spike_index[sort]
 
     # get rid of spikes in the buffer
     # also, get rid of spikes too close to the beginning/end
@@ -395,7 +398,7 @@ def subtraction_batch(
     # get cleaned waveforms
     cleaned_wfs = None
     if do_clean:
-        cleaned_wfs, _ = read_waveforms(
+        cleaned_wfs = read_waveforms(
             residual,
             spike_index,
             spike_length_samples,
@@ -403,7 +406,6 @@ def subtraction_batch(
             trough_offset=trough_offset,
             buffer=buffer,
         )
-        # assert (f == firstchans).all()
         cleaned_wfs = full_denoising(
             cleaned_wfs + subtracted_wfs,
             spike_index[:, 1],
@@ -444,7 +446,7 @@ def subtraction_batch(
             spike_index[:, 1],
             extract_channel_index,
             n_workers=loc_workers,
-            pbar=True,
+            pbar=False,
         )
         localizations_file = batch_data_folder / f"{batch_id:08d}_loc.npy"
         np.save(localizations_file, np.c_[xs, ys, z_abss, alphas, z_rels])
@@ -571,7 +573,7 @@ def detect_and_subtract(
     # times relative to trough + buffer
     time_range = np.arange(
         2 * spike_length_samples - trough_offset,
-        spike_length_samples - trough_offset,
+        3 * spike_length_samples - trough_offset,
     )
     time_ix = spike_index[:, 0, None] + time_range[None, :]
     chan_ix = extract_channel_index[spike_index[:, 1]]
@@ -581,10 +583,11 @@ def detect_and_subtract(
     waveforms = full_denoising(
         waveforms,
         spike_index[:, 1],
+        extract_channel_index,
         radial_parents,
-        tpca,
-        device,
-        denoiser,
+        tpca=tpca,
+        device=device,
+        denoiser=denoiser,
     )
 
     # -- the actual subtraction
@@ -613,20 +616,21 @@ def full_denoising(
     batch_size=1024,
     align=False,
 ):
+    num_channels = len(extract_channel_index)
     N, T, C = waveforms.shape
     assert not align  # still working on that
 
     # in new pipeline, some channels are off the edge of the probe
     # those are filled with NaNs, which will blow up PCA. so, here
     # we grab just the non-NaN channels.
-    in_probe_channel_index = extract_channel_index < C
+    in_probe_channel_index = extract_channel_index < num_channels
     in_probe_index = in_probe_channel_index[maxchans]
     waveforms = waveforms.transpose(0, 2, 1)
     wfs_in_probe = waveforms[in_probe_index]
 
     # Apply NN denoiser (skip if None)
     if denoiser is not None:
-        for bs in range(0, N * C, batch_size):
+        for bs in range(0, wfs_in_probe.shape[0], batch_size):
             be = min(bs + batch_size, N * C)
             wfs_in_probe[bs:be] = (
                 denoiser(
@@ -768,10 +772,11 @@ def make_channel_index(geom, radius, steps=1, distance_order=True, p=2):
 
 
 def read_geom_from_meta(bin_file):
-    meta = Path(bin_file.stem + ".meta")
-    if meta.exists():
-        header = _geometry_from_meta(read_meta_data(meta))
-        geom = np.c_[header["x"], header["y"]]
+    meta = Path(bin_file.parent) / (bin_file.stem + ".meta")
+    if not meta.exists():
+        raise ValueError("Expected", meta, "to exist.")
+    header = _geometry_from_meta(read_meta_data(meta))
+    geom = np.c_[header["x"], header["y"]]
     return geom
 
 
