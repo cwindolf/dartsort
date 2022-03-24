@@ -126,6 +126,7 @@ def subtraction(
                 n_sec_pca=n_sec_pca,
                 rank=tpca_rank,
                 random_seed=random_seed,
+                device=device,
             )
 
     # parallel batches
@@ -227,6 +228,7 @@ def subtraction(
                 pool.imap(_subtraction_batch, jobs),
                 total=n_batches,
                 desc="Batches",
+                smoothing=0,
             ):
                 N_new = result.N_new
 
@@ -452,7 +454,7 @@ def subtraction_batch(
         np.save(localizations_file, np.c_[xs, ys, z_abss, alphas, z_rels])
 
         maxptps_file = batch_data_folder / f"{batch_id:08d}_maxptp.npy"
-        np.save(maxptps_file, locptps.max(1))
+        np.save(maxptps_file, np.nanmax(locptps, axis=1))
 
     res = SubtractionBatchResult(
         N_new=N_new,
@@ -487,35 +489,43 @@ def train_pca(
     n_sec_pca=10,
     rank=7,
     random_seed=0,
+    device="cpu",
 ):
-    s_start = len_recording_samples // 2 - sampling_rate * n_sec_pca // 2
-    s_end = len_recording_samples // 2 + sampling_rate * n_sec_pca // 2
-    if s_start < 0 or s_end > len_recording_samples:
-        raise ValueError(f"n_sec_pca={n_sec_pca} was too big for this data.")
+    n_seconds = len_recording_samples // sampling_rate
+    starts = sampling_rate * np.random.default_rng(random_seed).choice(
+        n_seconds, size=min(n_sec_pca, n_seconds), replace=False
+    )
 
     # do a mini-subtraction with no PCA, just NN denoise and enforce_decrease
-    spike_index, waveforms = subtraction_batch(
-        0,
-        None,
-        s_start,
-        s_end - s_start,
-        len_recording_samples,
-        standardized_bin,
-        thresholds,
-        None,
-        42,
-        dedup_channel_index,
-        spike_length_samples,
-        extract_channel_index,
-        "cpu",
-        s_start,
-        s_end,
-        False,
-        radial_parents,
-        False,
-        None,
-        None,
-    )
+    spike_index = []
+    waveforms = []
+    for s_start in tqdm(starts, "PCA training subtraction"):
+        spind, wfs = subtraction_batch(
+            0,
+            None,
+            s_start,
+            sampling_rate,
+            len_recording_samples,
+            standardized_bin,
+            thresholds,
+            None,
+            42,
+            dedup_channel_index,
+            spike_length_samples,
+            extract_channel_index,
+            device,
+            0,
+            len_recording_samples,
+            False,
+            radial_parents,
+            False,
+            None,
+            None,
+        )
+        spike_index.append(spind)
+        waveforms.append(wfs)
+    spike_index = np.concatenate(spike_index, axis=0)
+    waveforms = np.concatenate(waveforms, axis=0)
     N, T, C = waveforms.shape
     print("Fitting PCA on", N, "waveforms from mini-subtraction")
 

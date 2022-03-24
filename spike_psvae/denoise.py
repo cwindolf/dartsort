@@ -249,7 +249,7 @@ def make_shells(geom, n_jumps=1):
 
 
 def make_radial_order_parents(
-    geom, channel_index, n_jumps_per_growth=1, n_jumps_parent=3
+    geom, channel_index, n_jumps_per_growth=1, n_jumps_parent=2
 ):
     """Pre-computes a helper data structure for enforce_decrease_shells
 
