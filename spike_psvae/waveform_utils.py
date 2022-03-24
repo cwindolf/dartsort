@@ -1,4 +1,22 @@
 import numpy as np
+from scipy.spatial.distance import cdist
+
+
+
+def channel_index_subset(geom, channel_index, n_channels=None, radius=None):
+    subset = np.empty(shape=channel_index.shape, dtype=bool)
+    pgeom = np.pad(geom, [(0, 1), (0, 0)], constant_values=-2 * geom.max())
+    for c in range(len(geom)):
+        dists = cdist([geom[c]], pgeom[channel_index[c]]).ravel()
+        sort = np.sort(dists)
+        if n_channels is not None:
+            subset[c] = dists <= sort[n_channels]
+        elif radius is not None:
+            subset[c] = radius
+        else:
+            subset[c] = True
+    return subset
+
 
 
 def relativize_z(z_abs, maxchans, geom):

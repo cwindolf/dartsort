@@ -5,7 +5,7 @@ import multiprocessing
 import h5py
 from scipy.optimize import minimize
 from tqdm.auto import tqdm
-from .waveform_utils import get_local_geom, relativize_waveforms
+from .waveform_utils import get_local_geom, relativize_waveforms, channel_index_subset
 
 # (x_low, y_low, z_low, alpha_low), (x_high, y_high, z_high, alpha_high)
 # BOUNDS_NP1 = (-100, 1e-4, -100, 0), (132, 250, 100, 20000)
@@ -94,6 +94,8 @@ def localize_ptps_index(
     geom,
     maxchans,
     channel_index,
+    n_channels=None,
+    radius=100,
     n_workers=None,
     pbar=True,
 ):
@@ -107,9 +109,12 @@ def localize_ptps_index(
     -------
     xs, ys, z_rels, z_abss, alphas
     """
-    N = maxchans.shape[0]
+    N, C = ptps.shape
     maxchans = maxchans.astype(int)
+
     local_geoms = np.pad(geom, [(0, 1), (0, 0)])[channel_index[maxchans]]
+    local_geoms[:, :, 1] -= geom[maxchans, 1][:, None]
+    subset = channel_index_subset(geom, channel_index, n_channels=n_channels, radius=radius)
 
     # handle pbars
     xqdm = tqdm if pbar else lambda a, total, desc: a
@@ -123,11 +128,11 @@ def localize_ptps_index(
         for n, (x, y, z_rel, alpha) in enumerate(
             pool(
                 delayed(localize_ptp_index)(
-                    ptp,
-                    local_geom,
+                    ptp[subset[mc]],
+                    local_geom[subset[mc]],
                 )
-                for ptp, local_geom in xqdm(
-                    zip(ptps, local_geoms), total=N, desc="lsq"
+                for ptp, mc, local_geom in xqdm(
+                    zip(ptps, maxchans, local_geoms), total=N, desc="lsq"
                 )
             )
         ):
