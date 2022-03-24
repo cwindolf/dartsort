@@ -109,7 +109,7 @@ def localize_ptps_index(
     """
     N = maxchans.shape[0]
     maxchans = maxchans.astype(int)
-    local_geoms = geom[channel_index[maxchans]]
+    local_geoms = np.pad(geom, [(0, 1), (0, 0)])[channel_index[maxchans]]
 
     # handle pbars
     xqdm = tqdm if pbar else lambda a, total, desc: a
@@ -120,16 +120,14 @@ def localize_ptps_index(
     z_rels = np.empty(N)
     alphas = np.empty(N)
     with Parallel(n_workers) as pool:
-        for n, (x, y, z_rel, z_abs, alpha) in enumerate(
+        for n, (x, y, z_rel, alpha) in enumerate(
             pool(
-                delayed(localize_ptp)(
+                delayed(localize_ptp_index)(
                     ptp,
-                    firstchan,
-                    maxchan,
-                    geom,
+                    local_geom,
                 )
-                for ptp, maxchan, firstchan in xqdm(
-                    zip(ptps, maxchans, local_geoms), total=N, desc="lsq"
+                for ptp, local_geom in xqdm(
+                    zip(ptps, local_geoms), total=N, desc="lsq"
                 )
             )
         ):

@@ -32,7 +32,7 @@ def detect_and_deduplicate(
             order=5,
             device=device,
         )
-        if times:
+        if len(times):
             spike_index = np.c_[times.cpu().numpy(), chans.cpu().numpy()]
             energy = energy.cpu().numpy()
         else:
