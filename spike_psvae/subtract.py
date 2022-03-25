@@ -2,7 +2,6 @@ import h5py
 import numpy as np
 import time
 import torch
-import itertools
 import multiprocessing
 
 from collections import namedtuple
@@ -10,7 +9,7 @@ from ibllib.io.spikeglx import _geometry_from_meta, read_meta_data
 from pathlib import Path
 from scipy.spatial.distance import pdist, squareform
 from sklearn.decomposition import PCA
-from tqdm.auto import tqdm, trange
+from tqdm.auto import tqdm
 
 from . import denoise, voltage_detect, localization
 
@@ -38,7 +37,48 @@ def subtraction(
     loc_workers=4,
     random_seed=0,
 ):
-    """Subtraction-based waveform extraction"""
+    """Subtraction-based waveform extraction
+
+    Runs subtraction pipeline, and optionally also the localization.
+
+    Loads data from a binary file (standardized_bin), and loads geometry
+    from the associated meta file if `geom=None`.
+
+    Results are saved to `out_folder` in the following format:
+     - residual_[dataset name]_[time region].bin
+        - a binary file like the input binary
+     - subtraction_[dataset name]_[time region].h5
+        - An HDF5 file containing all of the resulting data.
+          In detail, if N is the number of discovered waveforms,
+          n_channels is the number of channels in the probe,
+          T is `spike_len_samples`, C is the number of channels
+          of the extracted waveforms (determined from `extract_box_radius`),
+          then this HDF5 file contains the following datasets:
+
+            geom : (n_channels, 2)
+            start_sample : scalar
+            end_sample : scalar
+                First and last sample of time region considered
+                (controlled by arguments `t_start`, `t_end`)
+            channel_index : (n_channels, C)
+                Array of channel indices. channel_index[c] contains the
+                channels that a waveform with max channel `c` was extracted
+                on.
+            tpca_mean, tpca_components : arrays
+                The fitted temporal PCA parameters.
+            spike_index : (N, 2)
+                The columns are (sample, max channel)
+            subtracted_waveforms : (N, T, C)
+                Waveforms that were subtracted
+            cleaned_waveforms : (N, T, C)
+                Final denoised waveforms, only computed/saved if
+                `do_clean=True`
+            localizations : (N, 5)
+                Only computed/saved if `do_localize=True`
+                The columsn are: x, y, z, alpha, z relative to max channel
+            maxptps : (N,)
+                Only computed/saved if `do_localize=True`
+    """
     standardized_bin = Path(standardized_bin)
     stem = standardized_bin.stem
     batch_len_samples = n_sec_chunk * sampling_rate
@@ -198,6 +238,19 @@ def subtraction(
                 dtype=np.float32,
             )
 
+        # if we're on GPU, we can't use processes, since each process will
+        # have it's own torch runtime and those will use all the memory
+        Pool = multiprocessing.Pool
+        if device.type == "cuda":
+            Pool = multiprocessing.pool.ThreadPool
+        else:
+            if loc_workers > 1:
+                print(
+                    "Setting number of localization workers to 1. (Since "
+                    "you're on CPU, use a large n_jobs for parallelism.)"
+                )
+                loc_workers = 1
+
         # now run subtraction in parallel
         N = 0
         jobs = (
@@ -206,7 +259,6 @@ def subtraction(
                 batch_data_folder,
                 s_start,
                 batch_len_samples,
-                T_samples,
                 standardized_bin,
                 thresholds,
                 tpca,
@@ -226,7 +278,7 @@ def subtraction(
             for batch_id, s_start in jobs
         )
 
-        with multiprocessing.pool.ThreadPool(n_jobs) as pool:
+        with Pool(n_jobs) as pool:
             for result in tqdm(
                 pool.imap(_subtraction_batch, jobs),
                 total=n_batches,
@@ -279,10 +331,13 @@ def subtraction(
         print(residual_bin)
     print(out_h5)
 
+    return out_h5
+
 
 # -- subtraction routines
 
 
+# the return type for `subtraction_batch` below
 SubtractionBatchResult = namedtuple(
     "SubtractionBatchResult",
     [
@@ -310,7 +365,6 @@ def subtraction_batch(
     batch_data_folder,
     s_start,
     batch_len_samples,
-    T_samples,
     standardized_bin,
     thresholds,
     tpca,
@@ -327,7 +381,58 @@ def subtraction_batch(
     loc_workers,
     geom,
 ):
-    """Runs subtraction on a batch"""
+    """Runs subtraction on a batch
+
+    This function handles the logic of loading data from disk
+    (padding it with a buffer where necessary), running the loop
+    over thresholds for `detect_and_subtract`, handling spikes
+    that were in the buffer, and applying the denoising pipeline.
+
+    Arguments
+    ---------
+    batch_id : int
+        Used when naming temporary batch result files saved to
+        `batch_data_folder`. (Not used otherwise -- in particular
+        this does not determine what data is loaded or processed.)
+    batch_data_folder : string
+        Where temporary results are being stored
+    s_start : int
+        The batch's starting time in samples
+    batch_len_samples : int
+        The length of a batch in samples
+    standardized_bin : int
+        The path to the standardized binary file
+    thresholds : list of int
+        Voltage thresholds for subtraction
+    tpca : sklearn PCA object or None
+        A pre-trained temporal PCA (or None in which case no PCA
+        is applied)
+    trough_offset : int
+        42 in practice, the alignment of the max channel's trough
+        in the extracted waveforms
+    dedup_channel_index : int array (num_channels, num_neighbors)
+        Spatial neighbor structure for deduplication
+    spike_length_samples : int
+        121 in practice, temporal length of extracted waveforms
+    extract_channel_index : int array (num_channels, extract_channels)
+        Channel neighborhoods for extracted waveforms
+    device : string or torch.device
+    start_sample, end_sample : int
+        Temporal boundary of the region of the recording being
+        considered (in samples)
+    radial_parents
+        Helper data structure for enforce_decrease
+    do_localize : bool
+        Should we run localization?
+    loc_workers : int
+        on how many threads?
+    geom : array
+        The probe geometry
+
+    Returns
+    -------
+    res : SubtractionBatchResult
+    """
 
     # load denoiser (load here so that we load only once per batch)
     denoiser = denoise.SingleChanDenoiser()
@@ -380,7 +485,7 @@ def subtraction_batch(
 
     subtracted_wfs = np.concatenate(subtracted_wfs, axis=0)
     spike_index = np.concatenate(spike_index, axis=0)
-    
+
     # sort so time increases
     sort = np.argsort(spike_index[:, 0])
     subtracted_wfs = subtracted_wfs[sort]
@@ -427,13 +532,15 @@ def subtraction_batch(
     # strip buffer from residual and remove spikes in buffer
     residual = residual[buffer:-buffer]
 
-    # write temp files
+    # if caller passes None for the output folder, just return
+    # the results now (eg this is used by train_pca)
     if batch_data_folder is None:
         return spike_index, subtracted_wfs
 
     # time relative to batch start
     spike_index[:, 0] += s_start
 
+    # save the results to disk to avoid memory issues
     N_new = len(spike_index)
     np.save(batch_data_folder / f"{batch_id:08d}_res.npy", residual)
     np.save(batch_data_folder / f"{batch_id:08d}_sub.npy", subtracted_wfs)
@@ -497,6 +604,12 @@ def train_pca(
     random_seed=0,
     device="cpu",
 ):
+    """Pre-train temporal PCA
+
+    Extracts several random seconds of data by subtraction
+    with no PCA, and trains a temporal PCA on the resulting
+    waveforms.
+    """
     n_seconds = len_recording_samples // sampling_rate
     starts = sampling_rate * np.random.default_rng(random_seed).choice(
         n_seconds, size=min(n_sec_pca, n_seconds), replace=False
@@ -511,7 +624,6 @@ def train_pca(
             None,
             s_start,
             sampling_rate,
-            len_recording_samples,
             standardized_bin,
             thresholds,
             None,
@@ -632,6 +744,8 @@ def full_denoising(
     batch_size=1024,
     align=False,
 ):
+    """Denoising pipeline: neural net denoise, temporal PCA, enforce_decrease
+    """
     num_channels = len(extract_channel_index)
     N, T, C = waveforms.shape
     assert not align  # still working on that
@@ -683,6 +797,8 @@ def read_waveforms(
     trough_offset=42,
     buffer=0,
 ):
+    """Load waveforms from an array in memory
+    """
     # pad with NaN to fill resulting waveforms with NaN when
     # channel is outside probe
     padded_recording = np.pad(
@@ -797,6 +913,7 @@ def read_geom_from_meta(bin_file):
 
 
 def read_data(bin_file, dtype, s_start, s_end, n_channels):
+    """Read a chunk of a binary file"""
     offset = s_start * np.dtype(dtype).itemsize * n_channels
     with open(bin_file, "rb") as fin:
         data = np.fromfile(
@@ -810,15 +927,6 @@ def read_data(bin_file, dtype, s_start, s_end, n_channels):
 
 
 # -- utils
-
-
-def grouper(n, iterable):
-    it = iter(iterable)
-    while True:
-        chunk = tuple(itertools.islice(it, n))
-        if not chunk:
-            return
-        yield chunk
 
 
 class timer:

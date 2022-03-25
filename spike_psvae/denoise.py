@@ -289,6 +289,10 @@ def make_radial_order_parents(
             for new_chan in new_shell:
                 parents = np.intersect1d(shells[new_chan], already_seen)
                 parents_rel = np.flatnonzero(np.isin(neighbors, parents))
+                if not len(parents_rel):
+                    # this can happen for some strange geometries
+                    # in that case, let's just bail.
+                    continue
                 channel_parents.append(
                     (np.flatnonzero(neighbors == new_chan).item(), parents_rel)
                 )
