@@ -14,6 +14,7 @@ consumption by MAXCOPYx. Thus we batch up into batches of length
 import numpy as np
 import torch
 from scipy.signal import argrelmin
+from torch import nn
 import torch.nn.functional as F
 
 
@@ -26,6 +27,8 @@ def get_detections_and_waveforms(
     channel_index,
     buffer_size,
     nn_detector=None,
+    nn_denoiser=None,
+    spike_length_samples=121,
     device="cpu",
 ):
     """Wrapper for CPU/GPU and NN/voltage detection
@@ -50,9 +53,165 @@ def get_detections_and_waveforms(
             device="cpu",
         )
     else:
-        raise NotImplementedError
+        assert nn_denoiser is not None
+        spike_index, _ = nn_detect_and_deduplicate(
+            recording,
+            voltage_threshold,
+            channel_index,
+            buffer_size,
+            nn_detector,
+            nn_denoiser,
+            spike_length_samples=121,
+            device="cpu",
+        )
 
     return spike_index
+
+
+# -- nn detection
+
+
+class Detect(nn.Module):
+    def __init__(self, channel_index, n_filters=[16, 8, 8], spike_size=4):
+        super(Detect, self).__init__()
+
+        self.spike_size = spike_size
+        self.channel_index = channel_index
+        n_neigh = self.channel_index.shape[1]
+        feat1, feat2, feat3 = n_filters
+
+        self.temporal_filter1 = nn.Sequential(
+            nn.Conv2d(
+                in_channels=1,
+                out_channels=feat1,
+                kernel_size=[spike_size, 1],
+                stride=1,
+                padding=[(self.spike_size - 1) // 2, 0],
+            ),
+            nn.ReLU(),
+        )
+        self.temporal_filter2 = nn.Sequential(
+            nn.Conv2d(feat1, feat2, [1, 1], 1, 0),
+            nn.ReLU(),
+        )
+        self.out = nn.Linear(feat2 * n_neigh, 1)
+
+    def forward(self, x):
+        x = x[:, None]
+        x = self.temporal_filter1(x)
+        x = self.temporal_filter2(x)[:, :, 0]
+        x = x.reshape(x.shape[0], -1)
+        x = self.out(x)
+        return torch.sigmoid(x)
+
+    def forward_recording(self, recording_tensor):
+        x = recording_tensor[None, None]
+        x = self.temporal_filter1(x)
+        x = self.temporal_filter2(x)
+
+        zero_buff = torch.zeros([1, x.shape[1], x.shape[2], 1]).to(x.device)
+        x = torch.cat((x, zero_buff), 3)[0]
+        x = x[:, :, self.channel_index].permute(1, 2, 0, 3)
+        x = self.out(
+            x.reshape(
+                recording_tensor.shape[0] * recording_tensor.shape[1], -1
+            )
+        )
+        x = x.reshape(recording_tensor.shape[0], recording_tensor.shape[1])
+
+        return x
+
+    def get_spike_times(
+        self,
+        recording_tensor,
+        max_window=7,
+        threshold=0.5,
+        buffer=None,
+    ):
+        probs = self.forward_recording(recording_tensor)
+        maxpool = torch.nn.MaxPool2d(
+            kernel_size=[max_window, 1],
+            stride=1,
+            padding=[(max_window - 1) // 2, 0],
+        )
+        temporal_max = maxpool(probs[None])[0] - 1e-8
+
+        spike_index_torch = torch.nonzero(
+            (probs >= temporal_max)
+            & (probs > np.log(threshold / (1 - threshold)))
+        )
+
+        # remove edge spikes
+        if buffer is None:
+            buffer = self.spike_size // 2
+
+        spike_index_torch = spike_index_torch[
+            (spike_index_torch[:, 0] > buffer)
+            & (spike_index_torch[:, 0] < recording_tensor.shape[0] - buffer)
+        ]
+
+        return spike_index_torch
+
+    def load(self, fname_model):
+        checkpoint = torch.load(fname_model, map_location="cpu")
+        self.load_state_dict(checkpoint)
+        return self
+
+
+def nn_detect_and_deduplicate(
+    recording,
+    energy_threshold,
+    channel_index,
+    buffer_size,
+    nn_detector,
+    nn_denoiser,
+    spike_length_samples=121,
+    trough_offset=42,
+    device="cpu",
+):
+    # detect in batches
+    T = recording.shape[0]
+    max_neighbs = channel_index.shape[1]
+    batch_size = int(np.ceil(T / (max_neighbs / MAXCOPY)))
+    spike_inds = []
+    recording_torch = torch.as_tensor(recording, device=device)
+    for bs in range(0, T, batch_size):
+        be = min(T, bs + batch_size)
+        spike_index_batch = nn_detector.get_spike_times(
+            recording_torch[bs:be],
+            voltage_threshold=voltage_threshold,
+            buffer=buffer_size,
+        )
+        spike_inds.append(spike_index_batch)
+    spike_index_torch = torch.cat(spike_inds)
+
+    # get energies as PTP of max channel traces
+    trange = torch.arange(-trough_offset, spike_length_samples - trough_offset)
+    tix = spike_index_torch[:, 0, None] + trange[None, :]
+    maxchantraces = recording_torch[tix, spike_index_torch[:, 1]]
+    maxchantraces = nn_denoiser(maxchantraces)
+    energy = maxchantraces.max(1) - maxchantraces.min(1)
+    del maxchantraces
+
+    # threshold
+    spike_index_torch = spike_index_torch[energy > energy_threshold]
+
+    # deduplicate
+    spike_index_dedup, energy_dedup = deduplicate_torch(
+        spike_index_torch,
+        energy,
+        recording.shape,
+        channel_index,
+        max_window=7,
+    )
+
+    # de-buffer for caller
+    spike_index_dedup[:, 0] -= buffer_size
+
+    return spike_index_dedup, energy_dedup
+
+
+# -- voltage detection
 
 
 def voltage_detect_and_deduplicate(
@@ -185,9 +344,7 @@ def torch_voltage_detect_dedup(
         device = "cuda" if torch.cuda.is_available() else "cpu"
 
     # -- torch argrelmin
-    recording = torch.as_tensor(
-        recording, device=device, dtype=torch.float
-    )
+    recording = torch.as_tensor(recording, device=device, dtype=torch.float)
     max_energies, inds = F.max_pool2d_with_indices(
         -recording[None, None],
         kernel_size=[2 * 5 + 1, 1],
