@@ -25,6 +25,7 @@ def subtraction(
     t_end=None,
     sampling_rate=30_000,
     thresholds=[12, 10, 8, 6, 5, 4],
+    nn_detect=False,
     extract_box_radius=200,
     spike_length_samples=121,
     trough_offset=42,
@@ -117,6 +118,19 @@ def subtraction(
                 "Either pass `geom` or put meta file in folder with binary."
             )
     n_channels = geom.shape[0]
+
+    # figure out if we will use a NN detector, and if so which
+    nn_detector_path = None
+    if nn_detect:
+        ncols = len(np.unique(geom[:, 0]))
+        probe = {
+            4: "np1",
+            2: "np2",
+        }[ncols]
+        nn_detector_path = (
+            Path(__file__).parent.parent / f"pretrained/detect_{probe}.pt"
+        )
+        print("Using pretrained detector for", probe, "from", nn_detector_path)
 
     # figure out length of data
     std_size = standardized_bin.stat().st_size
@@ -278,7 +292,11 @@ def subtraction(
             for batch_id, s_start in jobs
         )
 
-        with Pool(n_jobs) as pool:
+        with Pool(
+            n_jobs,
+            initalizer=_subtraction_batch_init,
+            initargs=(device, nn_detector_path),
+        ) as pool:
             for result in tqdm(
                 pool.imap(_subtraction_batch, jobs),
                 total=n_batches,
@@ -355,9 +373,24 @@ SubtractionBatchResult = namedtuple(
 )
 
 
-# Parallelism helper
+# Parallelism helpers
 def _subtraction_batch(args):
     return subtraction_batch(*args)
+
+
+def _subtraction_batch_init(device, nn_detector_path):
+    """Thread/process initializer -- loads up neural nets"""
+    denoiser = denoise.SingleChanDenoiser()
+    denoiser.load()
+    denoiser.to(device)
+    subtraction_batch.denoiser = denoiser
+
+    detector = None
+    if nn_detector_path:
+        detector = detect.Detect()
+        detector.load(nn_detector_path)
+        detector.to(device)
+    subtraction_batch.denoiser = denoiser
 
 
 def subtraction_batch(
@@ -434,10 +467,9 @@ def subtraction_batch(
     res : SubtractionBatchResult
     """
 
-    # load denoiser (load here so that we load only once per batch)
-    denoiser = denoise.SingleChanDenoiser()
-    denoiser.load()
-    denoiser.to(device)
+    # load neural nets (they were set by the thread initializer)
+    denoiser = subtraction_batch.denoiser
+    detector = subtraction_batch.detector
 
     # load raw data with buffer
     s_end = min(end_sample, s_start + batch_len_samples)
@@ -471,12 +503,13 @@ def subtraction_batch(
             threshold,
             radial_parents,
             tpca,
-            denoiser,
-            trough_offset,
             dedup_channel_index,
-            spike_length_samples,
             extract_channel_index,
-            device,
+            detector=detector,
+            denoiser=denoiser,
+            trough_offset=trough_offset,
+            spike_length_samples=spike_length_samples,
+            device=device,
         )
 
         if len(spind):
@@ -666,12 +699,13 @@ def detect_and_subtract(
     threshold,
     radial_parents,
     tpca,
-    denoiser,
-    trough_offset,
     dedup_channel_index,
-    spike_length_samples,
     extract_channel_index,
-    device,
+    detector=None,
+    denoiser=None,
+    trough_offset=42,
+    spike_length_samples=121,
+    device="cpu",
 ):
     """Detect and subtract
 
@@ -691,15 +725,14 @@ def detect_and_subtract(
         dedup_channel_index,
         spike_length_samples,
         nn_detector=None,
+        nn_denoiser=denoiser,
         device=device,
     )
     if not len(spike_index):
         return [], raw, []
 
     # -- read waveforms
-    padded_raw = np.pad(
-        raw, [(0, 0), (0, 1)], constant_values=np.nan
-    )
+    padded_raw = np.pad(raw, [(0, 0), (0, 1)], constant_values=np.nan)
     # times relative to trough + buffer
     time_range = np.arange(
         2 * spike_length_samples - trough_offset,
@@ -746,8 +779,7 @@ def full_denoising(
     batch_size=1024,
     align=False,
 ):
-    """Denoising pipeline: neural net denoise, temporal PCA, enforce_decrease
-    """
+    """Denoising pipeline: neural net denoise, temporal PCA, enforce_decrease"""
     num_channels = len(extract_channel_index)
     N, T, C = waveforms.shape
     assert not align  # still working on that
@@ -806,8 +838,7 @@ def read_waveforms(
     trough_offset=42,
     buffer=0,
 ):
-    """Load waveforms from an array in memory
-    """
+    """Load waveforms from an array in memory"""
     # pad with NaN to fill resulting waveforms with NaN when
     # channel is outside probe
     padded_recording = np.pad(
