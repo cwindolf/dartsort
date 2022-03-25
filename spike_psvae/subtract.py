@@ -707,9 +707,7 @@ def detect_and_subtract(
     )
     time_ix = spike_index[:, 0, None] + time_range[None, :]
     chan_ix = extract_channel_index[spike_index[:, 1]]
-    waveforms = torch.tensor(padded_raw, device=device)[
-        time_ix[:, :, None], chan_ix[:, None, :]
-    ]
+    waveforms = padded_raw[time_ix[:, :, None], chan_ix[:, None, :]]
 
     # -- denoising
     waveforms = full_denoising(
