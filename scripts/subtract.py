@@ -24,16 +24,19 @@ g = ap.add_argument_group("Data input/output")
 g.add_argument("standardized_bin")
 g.add_argument("out_folder")
 
-g = ap.add_argument_group("Subtraction configuration")
+g = ap.add_argument_group("Pipeline configuration")
 g.add_argument("--geom", default=None, type=str)
+g.add_argument("--noclean", action="store_true")
+g.add_argument("--nolocalize", action="store_true")
+g.add_argument("--noresidual", action="store_true")
+
+g = ap.add_argument_group("Subtraction configuration")
 g.add_argument(
     "--thresholds",
     default=[12, 10, 8, 6, 5, 4],
     type=lambda x: list(map(int, x.split(","))),
 )
-g.add_argument("--noclean", action="store_true")
-g.add_argument("--nolocalize", action="store_true")
-g.add_argument("--noresidual", action="store_true")
+g.add_argument("--nonndetect", action="store_true")
 
 g = ap.add_argument_group("Time range: use the whole dataset, or a subset?")
 g.add_argument("--t_start", type=int, default=0)
@@ -71,6 +74,7 @@ if args.geom is None:
     )
 elif args.geom in ["np1", "np2"]:
     from ibllib.ephys import neuropixel
+
     print(
         f"Using the typical {args.geom} geometry. "
         "Will try to load from .meta if --geom is not set"
@@ -96,6 +100,7 @@ sub_h5 = subtract.subtraction(
     args.out_folder,
     geom=geom,
     thresholds=args.thresholds,
+    nn_detect=not args.nonndetect,
     n_sec_chunk=args.n_sec_chunk,
     tpca_rank=args.tpca_rank,
     n_jobs=args.n_jobs,
