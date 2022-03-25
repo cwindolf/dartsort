@@ -112,7 +112,7 @@ sub_h5 = subtract.subtraction(
 # -- registration
 
 if not args.nolocalize and not args.noregister:
-    with h5py.File(sub_h5, "w") as h5:
+    with h5py.File(sub_h5, "r+") as h5:
         samples = h5["spike_index"][:, 0] - h5["start_sample"][()]
         z_abs = h5["localizations"][:, 2]
         maxptps = h5["maxptps"]
