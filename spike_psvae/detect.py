@@ -20,7 +20,7 @@ import torch.nn.functional as F
 MAXCOPY = 8
 
 
-def get_detections_and_waveforms(
+def detect_and_deduplicate(
     recording,
     threshold,
     channel_index,
@@ -47,7 +47,7 @@ def get_detections_and_waveforms(
             threshold,
             channel_index,
             buffer_size,
-            device="cpu",
+            device=device,
         )
     else:
         raise NotImplementedError
