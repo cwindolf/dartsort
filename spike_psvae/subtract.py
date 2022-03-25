@@ -11,7 +11,7 @@ from scipy.spatial.distance import pdist, squareform
 from sklearn.decomposition import PCA
 from tqdm.auto import tqdm
 
-from . import denoise, voltage_detect, localization
+from . import denoise, detect, localization
 
 
 def subtraction(
@@ -684,15 +684,17 @@ def detect_and_subtract(
     -------
     waveforms, subtracted_raw, spike_index
     """
-    spike_index, energy = voltage_detect.detect_and_deduplicate(
+    device = torch.device(device)
+    spike_index = detect.detect_and_deduplicate(
         raw[spike_length_samples:-spike_length_samples],
         threshold,
         dedup_channel_index,
         spike_length_samples,
-        device,
+        nn_detector=None,
+        device=device,
     )
     if not len(spike_index):
-        return [], [], []
+        return [], raw, []
 
     # -- read waveforms
     padded_raw = np.pad(
@@ -705,7 +707,9 @@ def detect_and_subtract(
     )
     time_ix = spike_index[:, 0, None] + time_range[None, :]
     chan_ix = extract_channel_index[spike_index[:, 1]]
-    waveforms = padded_raw[time_ix[:, :, None], chan_ix[:, None, :]]
+    waveforms = torch.tensor(padded_raw, device=device)[
+        time_ix[:, :, None], chan_ix[:, None, :]
+    ]
 
     # -- denoising
     waveforms = full_denoising(
@@ -760,17 +764,24 @@ def full_denoising(
 
     # Apply NN denoiser (skip if None)
     if denoiser is not None:
+        results = []
         for bs in range(0, wfs_in_probe.shape[0], batch_size):
             be = min(bs + batch_size, N * C)
-            wfs_in_probe[bs:be] = (
+            results.append(
                 denoiser(
-                    torch.tensor(
+                    torch.as_tensor(
                         wfs_in_probe[bs:be], device=device, dtype=torch.float
                     )
                 )
                 .cpu()
                 .numpy()
             )
+        wfs_in_probe = np.concatenate(results, axis=0)
+        del results
+
+    # everyone to numpy now, if we were torch
+    if torch.is_tensor(waveforms):
+        waveforms = np.array(waveforms.cpu())
 
     # Temporal PCA while we are still transposed
     if tpca is not None:
