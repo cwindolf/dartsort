@@ -20,12 +20,50 @@ import torch.nn.functional as F
 MAXCOPY = 8
 
 
-def detect_and_deduplicate(
-    recording, threshold, channel_index, buffer_size, device
+def get_detections_and_waveforms(
+    recording,
+    threshold,
+    channel_index,
+    buffer_size,
+    nn_detector=None,
+    device="cpu",
 ):
+    """Wrapper for CPU/GPU and NN/voltage detection
 
+    Handles device logic and extracts waveforms on the current device
+    for the caller.
+
+    Returns
+    -------
+    spike_index : (N spikes, 2)
+        int numpy array
+    recording
+        Either the original recording, or a torch version if we're
+        on GPU.
+    """
+    if nn_detector is None:
+        spike_index, _ = voltage_detect_and_deduplicate(
+            recording,
+            threshold,
+            channel_index,
+            buffer_size,
+            device="cpu",
+        )
+    else:
+        raise NotImplementedError
+
+    return spike_index
+
+
+def voltage_detect_and_deduplicate(
+    recording,
+    threshold,
+    channel_index,
+    buffer_size,
+    device="cpu",
+):
     if torch.device(device).type == "cuda":
-        times, chans, energy = torch_voltage_detect_dedup(
+        times, chans, energy, rec = torch_voltage_detect_dedup(
             recording,
             threshold,
             channel_index=channel_index,
@@ -71,8 +109,8 @@ def deduplicate_torch(
     channel_index,
     max_window=7,
 ):
-    spike_index_torch = torch.tensor(spike_index)
-    energy_torch = torch.tensor(energy)
+    spike_index_torch = torch.as_tensor(spike_index)
+    energy_torch = torch.as_tensor(energy)
     times = spike_index_torch[:, 0]
     chans = spike_index_torch[:, 1]
 
@@ -147,11 +185,11 @@ def torch_voltage_detect_dedup(
         device = "cuda" if torch.cuda.is_available() else "cpu"
 
     # -- torch argrelmin
-    neg_recording = torch.as_tensor(
-        -recording, device=device, dtype=torch.float
+    recording = torch.as_tensor(
+        recording, device=device, dtype=torch.float
     )
     max_energies, inds = F.max_pool2d_with_indices(
-        neg_recording[None, None],
+        -recording[None, None],
         kernel_size=[2 * 5 + 1, 1],
         stride=1,
         padding=[5, 0],
@@ -228,4 +266,4 @@ def torch_voltage_detect_dedup(
         chans = chans[dedup]
         energies = energies[dedup]
 
-    return times, chans, energies
+    return times, chans, energies, recording
