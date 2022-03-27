@@ -300,12 +300,12 @@ def main():
         pbar = tqdm(np.unique(clusterer.labels_))
         for cluster_id in pbar:
             if cluster_id != -1:
-                if cluster_id in matched_units_1:
-                    cmp = cmp_1
-                    save_dir_cluster = save_dir_path + '/match_geq_10_l_50'
                 if cluster_id in matched_units_5:
                     cmp = cmp_5
                     save_dir_cluster = save_dir_path + '/match_geq_50'
+                elif cluster_id in matched_units_1:
+                    cmp = cmp_1
+                    save_dir_cluster = save_dir_path + '/match_geq_10_l_50'
                 else:
                     cmp = None
                     save_dir_cluster = save_dir_path + '/match_l_10'
