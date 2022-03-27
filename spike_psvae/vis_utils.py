@@ -12,6 +12,7 @@ import colorcet
 from matplotlib.patches import Ellipse
 import matplotlib.transforms as transforms
 from tqdm.auto import trange, tqdm
+from itertools import repeat
 
 from . import statistics, waveform_utils, localization, point_source_centering
 from .point_source_centering import relocate_simple
@@ -155,7 +156,7 @@ def labeledmosaic(
             cbar.ax.set_yticklabels(ticks, fontsize=8)
 
 
-def plot_single_ptp(ptp, ax, label, color, code):
+def plot_single_ptp_np2(ptp, ax, label, color, code):
     ptp_left = ptp[::2]
     ptp_right = ptp[1::2]
     (handle,) = ax.plot(ptp_left, c=color, label=label)
@@ -173,27 +174,83 @@ def plot_single_ptp(ptp, ax, label, color, code):
     return handle, dhandle
 
 
-def plotlocs(
-    x,
-    y,
-    z,
-    alpha,
-    maxptps,
-    geom,
-    feats=None,
-    which=slice(None),
-    clip=True,
-    suptitle=None,
-    figsize=(8, 8),
-    gs=1,
-):
+def plot_single_ptp_np1(ptp, ax, label, color, code):
+    ptp_a = ptp[::4]
+    ptp_b = ptp[1::4]
+    ptp_c = ptp[2::4]
+    ptp_d = ptp[3::4]
+    (handle,) = ax.plot(ptp_a, c=color, label=label)
+    (dhandle,) = ax.plot(ptp_b, c=color)
+    (handle,) = ax.plot(ptp_c, c=color, label=label)
+    (dhandle,) = ax.plot(ptp_d, c=color)
+    if code:
+        ax.text(
+            0.1,
+            0.9,
+            code,
+            horizontalalignment="center",
+            verticalalignment="center",
+            transform=ax.transAxes,
+        )
+    ax.set_xticks([0, ptp.shape[0] // 4 - 1])
+    return handle, dhandle
+
+
+def regline(x, y, ax=None, **kwargs):
+    ax = ax or plt.gca()
+    b = ((x - x.mean()) * (y - y.mean())).sum() / np.square(x - x.mean()).sum()
+    a = y.mean() - b * x.mean()
+    x0, x1 = ax.get_xlim()
+    r = np.corrcoef(x, y)[0, 1]
+    ax.plot([x0, x1], [a + b * x0, a + b * x1], lw=1, color="red")
+    ax.text(
+        kwargs.get("rloc", 0.9),
+        0.9,
+        f"$\\rho={r:.2f}$",
+        horizontalalignment="right",
+        verticalalignment="center",
+        transform=ax.transAxes,
+        fontsize=6,
+        color="red",
+    )
+
+def corr_scatter(xs, ys, xlabels, ylabels, colors, alphas, suptitle=None, grid=True, rloc=0.9, axes=None):
+    nxs = xs.shape[1]
+    nys = ys.shape[1] if grid else 1
+    if axes is None:
+        fig, axes = plt.subplots(nys, nxs, sharey="row" if grid else False, sharex="col", figsize=(6, 6) if grid else (7, 3))
+    
+    if grid:
+        for i in range(nxs):
+            for j in range(nys):
+                axes[j, i].scatter(xs[:, i], ys[:, j], c=colors, alpha=alphas, s=0.1, cmap=plt.cm.viridis)
+                if i == 0:
+                    axes[j, i].set_ylabel(ylabels[j])
+                if j == nys - 1:
+                    axes[j, i].set_xlabel(xlabels[i])
+                axes[j, i].set_box_aspect(1)
+                regline(xs[:, i], ys[:, j], ax=axes[j, i], rloc=rloc)
+        if suptitle:
+            fig.suptitle(suptitle)
+    else:
+        for i in range(nxs):
+            axes[i].scatter(xs[:, i], ys[:, i], c=colors, alpha=alphas, s=0.1, cmap=plt.cm.viridis)
+            axes[i].set_ylabel(ylabels[i])
+            axes[i].set_xlabel(xlabels[i])
+            axes[i].set_box_aspect(1)
+            regline(xs[:, i], ys[:, i], ax=axes[i], rloc=rloc)
+        if suptitle:
+            fig.suptitle(suptitle, y=0.95)
+    plt.tight_layout()
+
+
+
+def plotlocs(x, y, z, alpha, maxptps, geom, feats=None, xlim=None, ylim=None, alim=None, zlim=None, which=slice(None), clip=True, suptitle=None, figsize=(8,8), gs=1, cm=plt.cm.viridis):
     maxptps = maxptps[which]
     nmaxptps = 0.1
     cmaxptps = maxptps
     if clip:
-        nmaxptps = 0.25 + 0.74 * (maxptps - maxptps.min()) / (
-            maxptps.max() - maxptps.min()
-        )
+        nmaxptps = 0.25 + 0.74 * (maxptps - maxptps.min()) / (maxptps.max() - maxptps.min())
         cmaxptps = np.clip(maxptps, 3, 13)
 
     x = x[which]
@@ -201,61 +258,69 @@ def plotlocs(
     alpha = alpha[which]
     z = z[which]
     print(np.isnan(z).any())
-
-    cm = plt.cm.viridis
-
+    
     nfeats = 0
     if feats is not None:
         nfeats = feats.shape[1]
 
-    fig, axes = plt.subplots(
-        1, 3 + nfeats - (alpha is None), sharey=True, figsize=figsize
-    )
-    axes[0].scatter(x, z, s=0.1, alpha=nmaxptps, c=cmaxptps, cmap=cm)
-    axes[0].scatter(geom[:, 0], geom[:, 1], color="orange", marker="s", s=gs)
+    fig, axes = plt.subplots(1, 3 + nfeats, sharey=True, figsize=figsize)
+    aa, ab, ac = axes[:3]
+    aa.scatter(x, z, s=0.1, alpha=nmaxptps, c=cmaxptps, cmap=cm)
+    aa.scatter(geom[:, 0], geom[:, 1], color="orange", marker="s", s=gs)
     logy = np.log(y)
-    axes[1].scatter(logy, z, s=0.1, alpha=nmaxptps, c=cmaxptps, cmap=cm)
-    axes[0].set_ylabel("z")
-    axes[0].set_xlabel("x")
-    axes[1].set_xlabel("$\\log y$")
-    axes[0].set_xlim(np.percentile(x, [0, 100]) + [-10, 10])
-    axes[1].set_xlim(np.percentile(logy, [0, 100]))
-    # axes[1]set_xlim([-0.5, 6])
-    if alpha is not None:
-        loga = np.log(alpha)
-        axes[2].scatter(loga, z, s=0.1, alpha=nmaxptps, c=cmaxptps, cmap=cm)
-        axes[2].set_xlabel("$\\log \\alpha$")
-        axes[2].set_xlim(np.percentile(loga, [0, 100]))
-
+    ab.scatter(logy, z, s=0.1, alpha=nmaxptps, c=cmaxptps, cmap=cm)
+    loga = np.log(alpha)
+    ac.scatter(loga, z, s=0.1, alpha=nmaxptps, c=cmaxptps, cmap=cm)
+    aa.set_ylabel("z")
+    aa.set_xlabel("x")
+    ab.set_xlabel("$\\log y$")
+    ac.set_xlabel("$\\log \\alpha$")
+    if xlim is None:
+        aa.set_xlim(np.percentile(x, [0, 100]) + [-10, 10])
+    else:
+        aa.set_xlim(xlim)
+    if ylim is None:
+        ab.set_xlim(np.percentile(logy, [0, 100]))
+    else:
+        ab.set_xlim(ylim)
+    # ab.set_xlim([-0.5, 6])
+    if alim is None:
+        ac.set_xlim(np.percentile(loga, [0, 100]))
+    else:
+        ac.set_xlim(alim)
+    
     if suptitle:
-        fig.suptitle(suptitle, y=0.92)
-
+        fig.suptitle(suptitle, y=0.95)
+    
     if feats is not None:
         for ax, f in zip(axes[3:], feats.T):
-            ax.scatter(f, z, s=0.1, alpha=nmaxptps, c=cmaxptps, cmap=cm)
+            ax.scatter(f[which], z, s=0.1, alpha=nmaxptps, c=cmaxptps, cmap=cm)
             ax.set_xlim(np.percentile(f, [0, 100]))
-
-    axes[0].set_ylim([z.min() - 10, z.max() + 10])
-    plt.show()
+    
+    if zlim is None:
+        aa.set_ylim([z.min() - 10, z.max() + 10])
+    else:
+        aa.set_ylim(zlim)
 
 
 def plot_ptp(ptp, axes, label, color, codes):
     for j, ax in enumerate(axes.flat):
-        handle, dhandle = plot_single_ptp(ptp[j], ax, label, color, codes[j])
+        handle, dhandle = plot_single_ptp_np1(ptp[j], ax, label, color, codes[j])
     return handle, dhandle
 
 
 def vis_ptps(
     ptps,
-    labels,
-    colors,
+    labels=repeat(""),
+    colors=repeat("black"),
     subplots_kwargs=dict(sharex=True, sharey=True, figsize=(5, 5)),
     codes="abcdefghijklmnopqrstuvwxyz",
     legloc="upper center",
+    legend=True,
 ):
     ptps = np.array([np.array(ptp) for ptp in ptps])
     K, N, C = ptps.shape
-    assert len(labels) == K == len(colors)
+    #assert len(labels) == K == len(colors)
     n = int(np.sqrt(N))
 
     fig, axes = plt.subplots(n, n, **subplots_kwargs)
@@ -264,28 +329,29 @@ def vis_ptps(
     for k, (ptp, label, color) in enumerate(zip(ptps, labels, colors)):
         handles[k], dhandles[k] = plot_ptp(ptp, axes, label, color, codes)
 
-    if K == 1:
-        plt.figlegend(
-            handles=list(handles.values()) + list(dhandles.values()),
-            labels=[label + ", left channels", label + ", right channels"],
-            loc=legloc,
-            frameon=False,
-            fancybox=False,
-            borderpad=0,
-            borderaxespad=0,
-            ncol=2,
-        )
-    else:
-        plt.figlegend(
-            handles=list(handles.values()),
-            labels=labels,
-            loc=legloc,
-            frameon=False,
-            fancybox=False,
-            borderpad=0,
-            borderaxespad=0,
-            ncol=len(handles),
-        )
+    if legend:
+        if K == 1:
+            plt.figlegend(
+                handles=list(handles.values()) + list(dhandles.values()),
+                labels=[label + ", left channels", label + ", right channels"],
+                loc=legloc,
+                frameon=False,
+                fancybox=False,
+                borderpad=0,
+                borderaxespad=0,
+                ncol=2,
+            )
+        else:
+            plt.figlegend(
+                handles=list(handles.values()),
+                labels=labels,
+                loc=legloc,
+                frameon=False,
+                fancybox=False,
+                borderpad=0,
+                borderaxespad=0,
+                ncol=len(handles),
+            )
     plt.tight_layout(pad=0.5)
     for ax in axes.flat:
         ax.set_box_aspect(1.0)
