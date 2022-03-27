@@ -78,7 +78,7 @@ def main():
 
     ap.add_argument("--loc_features_path")
     ap.add_argument("--geom")
-    ap.add_argument("--out_folder", type=str, default='clustering_results2')
+    ap.add_argument("--out_folder", type=str, default='clustering_results')
     ap.add_argument("--triage_quantile", type=int, default=75)
     ap.add_argument("--do_infer_ptp", action='store_true')
     ap.add_argument("--num_spikes_cluster", type=int, default=None)
