@@ -287,6 +287,15 @@ fig = plt.figure(figsize=(36,36))
 plot_agreement_matrix(sorting_comparison, figure=fig)
 plt.title("Agreement matrix");
 
+# %%
+# isis_list = []
+# for cluster_id in np.unique(clusterer.labels_):
+#     spike_train = triaged_spike_index[:,0][:num_spikes][clusterer_to_be_plotted.labels_==cluster_id]
+#     spike_train_diff = np.diff(spike_train)/30000 
+#     spike_train_diff = spike_train_diff[np.where(spike_train_diff < 0.01)]
+#     spike_train_diff = spike_train_diff*1000
+#     isis_list.append(np.histogram(spike_train_diff, bins=np.arange(11)))
+
 # %% [markdown]
 # ## Plot a specific cluster
 
@@ -435,3 +444,5 @@ ax.set_ylim(ax_denoised.get_ylim())
 ax.set_xlabel("x")
 plt.tight_layout()
 plt.show()
+
+# %%
