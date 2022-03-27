@@ -2,7 +2,7 @@ import h5py
 import numpy as np
 import time
 import torch
-import multiprocessing
+import concurrent.futures
 
 from collections import namedtuple
 from ibllib.io.spikeglx import _geometry_from_meta, read_meta_data
@@ -131,6 +131,8 @@ def subtraction(
             Path(__file__).parent.parent / f"pretrained/detect_{probe}.pt"
         )
         print("Using pretrained detector for", probe, "from", nn_detector_path)
+    else:
+        print("Using voltage detection")
 
     # figure out length of data
     std_size = standardized_bin.stat().st_size
@@ -157,6 +159,9 @@ def subtraction(
     dedup_channel_index = make_channel_index(
         geom, dedup_spatial_radius, steps=2
     )
+    nn_channel_index = make_channel_index(
+        geom, dedup_spatial_radius, steps=1
+    )
     extract_channel_index = make_channel_index(
         geom, extract_box_radius, distance_order=False, p=1
     )
@@ -178,6 +183,8 @@ def subtraction(
                 sampling_rate,
                 dedup_channel_index,
                 thresholds,
+                nn_detector_path,
+                nn_channel_index,
                 standardized_dtype=np.float32,
                 n_sec_pca=n_sec_pca,
                 rank=tpca_rank,
@@ -254,9 +261,8 @@ def subtraction(
 
         # if we're on GPU, we can't use processes, since each process will
         # have it's own torch runtime and those will use all the memory
-        Pool = multiprocessing.Pool
         if device.type == "cuda":
-            Pool = multiprocessing.pool.ThreadPool
+            Pool = concurrent.futures.ThreadPoolExecutor
         else:
             if loc_workers > 1:
                 print(
@@ -264,6 +270,7 @@ def subtraction(
                     "you're on CPU, use a large n_jobs for parallelism.)"
                 )
                 loc_workers = 1
+            Pool = concurrent.futures.ProcessPoolExecutor
 
         # now run subtraction in parallel
         N = 0
@@ -294,11 +301,11 @@ def subtraction(
 
         with Pool(
             n_jobs,
-            initalizer=_subtraction_batch_init,
-            initargs=(device, nn_detector_path),
+            initializer=_subtraction_batch_init,
+            initargs=(device, nn_detector_path, nn_channel_index),
         ) as pool:
             for result in tqdm(
-                pool.imap(_subtraction_batch, jobs),
+                pool.map(_subtraction_batch, jobs),
                 total=n_batches,
                 desc="Batches",
                 smoothing=0,
@@ -375,22 +382,21 @@ SubtractionBatchResult = namedtuple(
 
 # Parallelism helpers
 def _subtraction_batch(args):
-    return subtraction_batch(*args)
+    return subtraction_batch(*args, _subtraction_batch.denoiser, _subtraction_batch.detector)
 
-
-def _subtraction_batch_init(device, nn_detector_path):
+def _subtraction_batch_init(device, nn_detector_path, nn_channel_index):
     """Thread/process initializer -- loads up neural nets"""
     denoiser = denoise.SingleChanDenoiser()
     denoiser.load()
     denoiser.to(device)
-    subtraction_batch.denoiser = denoiser
+    _subtraction_batch.denoiser = denoiser
 
     detector = None
     if nn_detector_path:
-        detector = detect.Detect()
+        detector = detect.Detect(nn_channel_index)
         detector.load(nn_detector_path)
         detector.to(device)
-    subtraction_batch.denoiser = denoiser
+    _subtraction_batch.detector = detector
 
 
 def subtraction_batch(
@@ -413,6 +419,8 @@ def subtraction_batch(
     do_localize,
     loc_workers,
     geom,
+    denoiser,
+    detector,
 ):
     """Runs subtraction on a batch
 
@@ -461,16 +469,12 @@ def subtraction_batch(
         on how many threads?
     geom : array
         The probe geometry
+    denoiser, detector : torch nns or None
 
     Returns
     -------
     res : SubtractionBatchResult
     """
-
-    # load neural nets (they were set by the thread initializer)
-    denoiser = subtraction_batch.denoiser
-    detector = subtraction_batch.detector
-
     # load raw data with buffer
     s_end = min(end_sample, s_start + batch_len_samples)
     buffer = 2 * spike_length_samples
@@ -492,12 +496,11 @@ def subtraction_batch(
             residual, [(pad_left, pad_right), (0, 0)], mode="edge"
         )
     assert residual.shape == (2 * buffer + s_end - s_start, n_channels)
-
+    
     # main subtraction loop
     subtracted_wfs = []
     spike_index = []
     for threshold in thresholds:
-        # old_resid = residual.copy()
         subwfs, residual, spind = detect_and_subtract(
             residual,
             threshold,
@@ -511,7 +514,6 @@ def subtraction_batch(
             spike_length_samples=spike_length_samples,
             device=device,
         )
-
         if len(spind):
             subtracted_wfs.append(subwfs)
             spike_index.append(spind)
@@ -631,6 +633,8 @@ def train_pca(
     sampling_rate,
     dedup_channel_index,
     thresholds,
+    nn_detector_path,
+    nn_channel_index,
     standardized_dtype=np.float32,
     n_sec_pca=10,
     rank=7,
@@ -647,6 +651,12 @@ def train_pca(
     starts = sampling_rate * np.random.default_rng(random_seed).choice(
         n_seconds, size=min(n_sec_pca, n_seconds), replace=False
     )
+    
+    detector = None
+    if nn_detector_path:
+        detector = detect.Detect(nn_channel_index)
+        detector.load(nn_detector_path)
+        detector.to(device)
 
     # do a mini-subtraction with no PCA, just NN denoise and enforce_decrease
     spike_index = []
@@ -672,6 +682,8 @@ def train_pca(
             False,
             None,
             None,
+            denoise.SingleChanDenoiser().load().to(device),
+            detector,
         )
         spike_index.append(spind)
         waveforms.append(wfs)
@@ -703,6 +715,7 @@ def detect_and_subtract(
     extract_channel_index,
     detector=None,
     denoiser=None,
+    nn_switch_threshold=4,
     trough_offset=42,
     spike_length_samples=121,
     device="cpu",
@@ -720,17 +733,18 @@ def detect_and_subtract(
     """
     device = torch.device(device)
     spike_index = detect.detect_and_deduplicate(
-        raw[spike_length_samples:-spike_length_samples],
+        raw[spike_length_samples:-spike_length_samples].copy(),
         threshold,
         dedup_channel_index,
         spike_length_samples,
-        nn_detector=None,
-        nn_denoiser=denoiser,
+        nn_detector=detector if threshold <= nn_switch_threshold else None,
+        nn_denoiser=denoiser if threshold <= nn_switch_threshold else None,
         device=device,
     )
+    # print(threshold, len(spike_index), flush=True)
     if not len(spike_index):
         return [], raw, []
-
+    
     # -- read waveforms
     padded_raw = np.pad(raw, [(0, 0), (0, 1)], constant_values=np.nan)
     # times relative to trough + buffer
@@ -752,6 +766,9 @@ def detect_and_subtract(
         device=device,
         denoiser=denoiser,
     )
+    
+    if device.type == "cuda":
+        torch.cuda.empty_cache()
 
     # -- the actual subtraction
     # have to use subtract.at since -= will only subtract once in the overlaps,
