@@ -78,7 +78,7 @@ def main():
 
     ap.add_argument("--loc_features_path")
     ap.add_argument("--geom")
-    ap.add_argument("--out_folder", type=str, default='clustering_results')
+    ap.add_argument("--out_folder", type=str, default='clustering_results2')
     ap.add_argument("--triage_quantile", type=int, default=75)
     ap.add_argument("--do_infer_ptp", action='store_true')
     ap.add_argument("--num_spikes_cluster", type=int, default=None)
@@ -196,47 +196,47 @@ def main():
         
     pickle.dump(clusterer, open(save_dir_path + '/clusterer', 'wb'))
     
+    import matplotlib.pyplot as plt
+    from matplotlib import cm
+
+    vir = cm.get_cmap('viridis')
+    triaged_log_ptp = triaged_maxptps.copy()
+    triaged_log_ptp[triaged_log_ptp >= 27.5] = 27.5
+    triaged_log_ptp = np.log(triaged_log_ptp+1)
+    triaged_log_ptp[triaged_log_ptp<=1.25] = 1.25
+    triaged_ptp_rescaled = (triaged_log_ptp - triaged_log_ptp.min())/(triaged_log_ptp.max() - triaged_log_ptp.min())
+    color_arr = vir(triaged_ptp_rescaled)
+    color_arr[:, 3] = triaged_ptp_rescaled
+
+    cluster_centers = []
+    for label in np.unique(clusterer.labels_):
+        if label != -1:
+            cluster_centers.append(clusterer.weighted_cluster_centroid(label))
+    cluster_centers = np.asarray(cluster_centers)
+
+    # ## Define colors
+    unique_colors = ['#e6194b', '#4363d8', '#f58231', '#911eb4', '#46f0f0', '#f032e6', '#008080', '#e6beff', '#9a6324', '#800000', '#aaffc3', '#808000', '#000075', '#000000']
+
+    cluster_color_dict = {}
+    for cluster_id in np.unique(clusterer.labels_):
+        cluster_color_dict[cluster_id] = unique_colors[cluster_id % len(unique_colors)]
+    cluster_color_dict[-1] = '#808080' #set outlier color to grey
+
+    ##### plot array scatter #####
+    fig = plot_array_scatter(clusterer, geom_array, triaged_x, triaged_z, triaged_maxptps, cluster_color_dict, color_arr)
+    fig.suptitle(f'x,z,scaled_logptp features, {num_spikes} datapoints');
+    plt.close(fig)
+    fig.savefig(save_dir_path + '/array_full_scatter.png')
+
+    ##### plot clusterer self-agreement #####
+    fig = plot_self_agreement(clusterer, triaged_spike_index)
+    plt.title("Agreement matrix")
+    plt.close(fig)
+    fig.savefig(save_dir_path + '/agreement_matrix.png')
+    
     if args.do_save_figures:
         if args.no_verbose:
-            print("saving figures...")
-        import matplotlib.pyplot as plt
-        from matplotlib import cm
-        
-        vir = cm.get_cmap('viridis')
-        triaged_log_ptp = triaged_maxptps.copy()
-        triaged_log_ptp[triaged_log_ptp >= 27.5] = 27.5
-        triaged_log_ptp = np.log(triaged_log_ptp+1)
-        triaged_log_ptp[triaged_log_ptp<=1.25] = 1.25
-        triaged_ptp_rescaled = (triaged_log_ptp - triaged_log_ptp.min())/(triaged_log_ptp.max() - triaged_log_ptp.min())
-        color_arr = vir(triaged_ptp_rescaled)
-        color_arr[:, 3] = triaged_ptp_rescaled
-        
-        cluster_centers = []
-        for label in np.unique(clusterer.labels_):
-            if label != -1:
-                cluster_centers.append(clusterer.weighted_cluster_centroid(label))
-        cluster_centers = np.asarray(cluster_centers)
-
-        # ## Define colors
-        unique_colors = ['#e6194b', '#4363d8', '#f58231', '#911eb4', '#46f0f0', '#f032e6', '#008080', '#e6beff', '#9a6324', '#800000', '#aaffc3', '#808000', '#000075', '#000000']
-        
-        cluster_color_dict = {}
-        for cluster_id in np.unique(clusterer.labels_):
-            cluster_color_dict[cluster_id] = unique_colors[cluster_id % len(unique_colors)]
-        cluster_color_dict[-1] = '#808080' #set outlier color to grey
-        
-        ##### plot array scatter #####
-        fig = plot_array_scatter(clusterer, geom_array, triaged_x, triaged_z, triaged_maxptps, cluster_color_dict, color_arr)
-        fig.suptitle(f'x,z,scaled_logptp features, {num_spikes} datapoints');
-        plt.close(fig)
-        fig.savefig(save_dir_path + '/array_full_scatter.png')
-        
-        ##### plot clusterer self-agreement #####
-        fig = plot_self_agreement(clusterer, triaged_spike_index)
-        plt.title("Agreement matrix")
-        plt.close(fig)
-        fig.savefig(save_dir_path + '/agreement_matrix.png')
-        
+            print("saving waveform figures...")
         ##### plot individual cluster summaries #####
         wfs_localized = np.load(data_dir+'denoised_wfs.npy') #np.memmap(data_dir+'denoised_waveforms.npy', dtype='float32', shape=(290025, 121, 40))
         wfs_localized = wfs_localized[results_localization[:, 4]!=0]
