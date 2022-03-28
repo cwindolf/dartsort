@@ -21,7 +21,7 @@ def channel_index_subset(geom, channel_index, n_channels=None, radius=None):
     for c in range(len(geom)):
         if n_channels is not None:
             low = max(0, c - n_channels // 2)
-            low = min(n_channels - n_channels, low)
+            low = min(len(geom) - n_channels, low)
             high = min(len(geom), low + n_channels)
             subset[c] = (low <= channel_index[c]) & (channel_index[c] < high)
         elif radius is not None:
