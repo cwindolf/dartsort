@@ -510,15 +510,10 @@ def plot_single_unit_summary(cluster_id, clusterer, geom_array, num_spikes_plot,
     
     return fig
 
-
-def plot_agreement_venn(cluster_id, cmp, sorting1, sorting2, geom_array, num_channels, num_spikes_plot, triaged_firstchans_cluster, triaged_mcs_abs_cluster, kilo_spike_depths, kilo_spike_clusters, raw_bin_file, delta_frames = 12):
+def compute_spiketrain_agreement(st_1, st_2, delta_frames=12):
     #create figure for each match
-    lab_st1 = cluster_id
-    lab_st2 = cmp.get_best_unit_match1(cluster_id)
-    st_1 = sorting1.get_unit_spike_train(lab_st1)
-    mapped_st = sorting2.get_unit_spike_train(lab_st2)
-    times_concat = np.concatenate((st_1, mapped_st))
-    membership = np.concatenate((np.ones(st_1.shape) * 1, np.ones(mapped_st.shape) * 2))
+    times_concat = np.concatenate((st_1, st_2))
+    membership = np.concatenate((np.ones(st_1.shape) * 1, np.ones(st_2.shape) * 2))
     indices = times_concat.argsort()
     times_concat_sorted = times_concat[indices]
     membership_sorted = membership[indices]
@@ -530,14 +525,23 @@ def plot_agreement_venn(cluster_id, cmp, sorting1, sorting2, geom_array, num_cha
         times_matched = times_concat_sorted[inds2]
         # # find and label closest spikes
         ind_st1 = np.array([np.abs(st_1 - tm).argmin() for tm in times_matched])
-        ind_st2 = np.array([np.abs(mapped_st - tm).argmin() for tm in times_matched])
+        ind_st2 = np.array([np.abs(st_2 - tm).argmin() for tm in times_matched])
         not_match_ind_st1 = np.ones(st_1.shape[0], bool)
         not_match_ind_st1[ind_st1] = False
         not_match_ind_st1 = np.where(not_match_ind_st1)[0]
-        not_match_ind_st2 = np.ones(mapped_st.shape[0], bool)
+        not_match_ind_st2 = np.ones(st_2.shape[0], bool)
         not_match_ind_st2[ind_st2] = False
         not_match_ind_st2 = np.where(not_match_ind_st2)[0]
-    
+        
+    return st_1, st_2, ind_st1, ind_st2, not_match_ind_st1, not_match_ind_st2
+
+
+def plot_agreement_venn(cluster_id, cmp, sorting1, sorting2, geom_array, num_channels, num_spikes_plot, triaged_firstchans_cluster, triaged_mcs_abs_cluster, kilo_spike_depths, kilo_spike_clusters, raw_bin_file, delta_frames = 12):
+    lab_st1 = cluster_id
+    lab_st2 = cmp.get_best_unit_match1(cluster_id)
+    st_1 = sorting1.get_unit_spike_train(lab_st1)
+    st_2 = sorting2.get_unit_spike_train(lab_st2)
+    st_1, st_2, ind_st1, ind_st2, not_match_ind_st1, not_match_ind_st2 = compute_spiketrain_agreement(st_1, st_2, delta_frames)
     fig = plt.figure(figsize=(24,12))
     grid = (1, 3)
     ax_venn = plt.subplot2grid(grid, (0, 2))
@@ -572,7 +576,7 @@ def plot_agreement_venn(cluster_id, cmp, sorting1, sorting2, geom_array, num_cha
             spike_depths = kilo_spike_depths[np.where(kilo_spike_clusters==lab_st2)]
             mcs_abs_cluster = np.asarray([np.argmin(np.abs(spike_depth - geom_array[:,1])) for spike_depth in spike_depths])
             first_chans_cluster = (mcs_abs_cluster - 20).clip(min=0)
-            spike_times = mapped_st[indices_match]
+            spike_times = st_2[indices_match]
             plot_raw_waveforms_unit_geom(geom_array, num_channels, first_chans_cluster, mcs_abs_cluster, spike_times=spike_times, bin_file=raw_bin_file, x_geom_scale = 1/20, 
                                          y_geom_scale = 1/10, waveform_scale = .15, spikes_plot = num_spikes_plot, waveform_shape=(30,70), num_rows=3, 
                                          alpha=.1, h_shift=h_shift, do_mean=False, ax=ax_venn, color=color)
