@@ -715,7 +715,7 @@ def detect_and_subtract(
     extract_channel_index,
     detector=None,
     denoiser=None,
-    nn_switch_threshold=4,
+    nn_switch_threshold=5,
     trough_offset=42,
     spike_length_samples=121,
     device="cpu",
