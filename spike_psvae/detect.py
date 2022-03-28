@@ -56,14 +56,17 @@ def detect_and_deduplicate(
         assert nn_denoiser is not None
         spike_index, _ = nn_detect_and_deduplicate(
             recording,
-            voltage_threshold,
+            threshold,
             channel_index,
             buffer_size,
             nn_detector,
             nn_denoiser,
             spike_length_samples=121,
-            device="cpu",
+            device=device,
         )
+
+    if torch.is_tensor(spike_index):
+        spike_index = spike_index.cpu().numpy()
 
     return spike_index
 
@@ -72,7 +75,7 @@ def detect_and_deduplicate(
 
 
 class Detect(nn.Module):
-    def __init__(self, channel_index, n_filters=[16, 8, 8], spike_size=4):
+    def __init__(self, channel_index, n_filters=[16, 8, 8], spike_size=121):
         super(Detect, self).__init__()
 
         self.spike_size = spike_size
@@ -126,7 +129,6 @@ class Detect(nn.Module):
         recording_tensor,
         max_window=7,
         threshold=0.5,
-        buffer=None,
     ):
         probs = self.forward_recording(recording_tensor)
         maxpool = torch.nn.MaxPool2d(
@@ -141,15 +143,6 @@ class Detect(nn.Module):
             & (probs > np.log(threshold / (1 - threshold)))
         )
 
-        # remove edge spikes
-        if buffer is None:
-            buffer = self.spike_size // 2
-
-        spike_index_torch = spike_index_torch[
-            (spike_index_torch[:, 0] > buffer)
-            & (spike_index_torch[:, 0] < recording_tensor.shape[0] - buffer)
-        ]
-
         return spike_index_torch
 
     def load(self, fname_model):
@@ -158,6 +151,7 @@ class Detect(nn.Module):
         return self
 
 
+@torch.no_grad()
 def nn_detect_and_deduplicate(
     recording,
     energy_threshold,
@@ -167,34 +161,45 @@ def nn_detect_and_deduplicate(
     nn_denoiser,
     spike_length_samples=121,
     trough_offset=42,
+    trough_search=4,
     device="cpu",
 ):
     # detect in batches
     T = recording.shape[0]
     max_neighbs = channel_index.shape[1]
-    batch_size = int(np.ceil(T / (max_neighbs / MAXCOPY)))
+    batch_size = int(np.ceil(T / (32 * max_neighbs / MAXCOPY)))
     spike_inds = []
     recording_torch = torch.as_tensor(recording, device=device)
     for bs in range(0, T, batch_size):
         be = min(T, bs + batch_size)
         spike_index_batch = nn_detector.get_spike_times(
             recording_torch[bs:be],
-            voltage_threshold=voltage_threshold,
-            buffer=buffer_size,
         )
+        spike_index_batch[:, 0] += bs
         spike_inds.append(spike_index_batch)
     spike_index_torch = torch.cat(spike_inds)
+    
+    # correct for detector/denoiser offset
+    search_tix = spike_index_torch[:, 0, None] + torch.arange(0, 2 * trough_search + 1, device=spike_index_torch.device)
+    search_traces = F.pad(recording_torch, (0, 0, trough_search, trough_search))[
+        search_tix, spike_index_torch[:, 1, None]   
+    ]
+    shifts = search_traces.argmin(1) - (trough_search + 1)
+    spike_index_torch[:, 0] += shifts
+    del search_traces, shifts, search_tix
+    # this could in theory lead to duplicates
+    spike_index_torch = torch.unique(spike_index_torch, dim=0)
 
-    # get energies as PTP of max channel traces
-    trange = torch.arange(-trough_offset, spike_length_samples - trough_offset)
-    tix = spike_index_torch[:, 0, None] + trange[None, :]
-    maxchantraces = recording_torch[tix, spike_index_torch[:, 1]]
-    maxchantraces = nn_denoiser(maxchantraces)
-    energy = maxchantraces.max(1) - maxchantraces.min(1)
-    del maxchantraces
+    # get energies just by voltage at detection
+    energy = torch.abs(recording_torch[spike_index_torch[:, 0], spike_index_torch[:, 1]])
 
     # threshold
-    spike_index_torch = spike_index_torch[energy > energy_threshold]
+    which = energy > energy_threshold
+    if not which.any():
+        return [], []
+    spike_index_torch = spike_index_torch[which]
+    energy = energy[which]
+    # print("after", energy.shape, energy.min(), energy.mean(), energy.max())
 
     # deduplicate
     spike_index_dedup, energy_dedup = deduplicate_torch(
@@ -203,7 +208,9 @@ def nn_detect_and_deduplicate(
         recording.shape,
         channel_index,
         max_window=7,
+        device=device,
     )
+    # print("dedup", len(spike_index_dedup))
 
     # de-buffer for caller
     spike_index_dedup[:, 0] -= buffer_size
@@ -222,7 +229,7 @@ def voltage_detect_and_deduplicate(
     device="cpu",
 ):
     if torch.device(device).type == "cuda":
-        times, chans, energy, rec = torch_voltage_detect_dedup(
+        times, chans, energy = torch_voltage_detect_dedup(
             recording,
             threshold,
             channel_index=channel_index,
@@ -243,6 +250,7 @@ def voltage_detect_and_deduplicate(
             energy,
             recording.shape,
             channel_index,
+            device=device,
         )
 
     # update times wrt buffer size
@@ -267,9 +275,10 @@ def deduplicate_torch(
     recording_shape,
     channel_index,
     max_window=7,
+    device="cpu",
 ):
-    spike_index_torch = torch.as_tensor(spike_index)
-    energy_torch = torch.as_tensor(energy)
+    spike_index_torch = torch.as_tensor(spike_index, device=device)
+    energy_torch = torch.as_tensor(energy, device=device)
     times = spike_index_torch[:, 0]
     chans = spike_index_torch[:, 1]
 
@@ -277,6 +286,7 @@ def deduplicate_torch(
     energy_train = torch.zeros(
         recording_shape,
         dtype=energy_torch.dtype,
+        device=device,
     )
     energy_train[times, chans] = energy_torch
 
@@ -344,9 +354,9 @@ def torch_voltage_detect_dedup(
         device = "cuda" if torch.cuda.is_available() else "cpu"
 
     # -- torch argrelmin
-    recording = torch.as_tensor(recording, device=device, dtype=torch.float)
+    neg_recording = torch.as_tensor(recording, device=device, dtype=torch.float)
     max_energies, inds = F.max_pool2d_with_indices(
-        -recording[None, None],
+        neg_recording[None, None],
         kernel_size=[2 * 5 + 1, 1],
         stride=1,
         padding=[5, 0],
@@ -423,4 +433,4 @@ def torch_voltage_detect_dedup(
         chans = chans[dedup]
         energies = energies[dedup]
 
-    return times, chans, energies, recording
+    return times, chans, energies
