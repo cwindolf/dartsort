@@ -10,7 +10,7 @@ ap = argparse.ArgumentParser()
 
 ap.add_argument("sub_h5")
 ap.add_argument("out_folder")
-ap.add_argument("--nowfs", action="store_true")
+ap.add_argument("--wfs", action="store_true")
 
 args = ap.parse_args()
 
@@ -21,7 +21,7 @@ out_folder.mkdir(exist_ok=True)
 sub = h5py.File(args.sub_h5, "r")
 
 firstchans = sub["first_channels"][:]
-if not args.nowfs:
+if args.wfs:
     rwfs, firstchans, _ = waveform_utils.relativize_waveforms_np1(
         sub["cleaned_waveforms"][:],
         firstchans,
@@ -45,6 +45,9 @@ np.save(
         sub["spike_index"][:, 1],
     ],
 )
-np.save(out_folder / "z_reg.npy", locs["z_reg"])
+np.save(out_folder / "z_reg.npy", sub["z_reg"][:])
 np.save(out_folder / "np1_channel_map.npy", sub["geom"][:])
 np.save(out_folder / "spike_index.npy", sub["spike_index"][:])
+
+for f in out_folder.glob("*.npy"):
+    print(f, np.load(out_folder / f).shape)

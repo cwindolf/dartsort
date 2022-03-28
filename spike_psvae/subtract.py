@@ -480,11 +480,11 @@ def subtraction_batch(
     do_localize,
     loc_workers,
     geom,
-    denoiser,
-    detector,
     probe,
     loc_n_chans,
     loc_radius,
+    denoiser,
+    detector,
 ):
     """Runs subtraction on a batch
 
@@ -625,6 +625,7 @@ def subtraction_batch(
             spike_index[:, 1],
             extract_channel_index,
             radial_parents,
+            probe=probe,
             tpca=tpca,
             device=device,
             denoiser=denoiser,
@@ -750,11 +751,11 @@ def train_pca(
             False,
             None,
             None,
-            denoise.SingleChanDenoiser().load().to(device),
-            detector,
             probe,
             None,
             None,
+            denoise.SingleChanDenoiser().load().to(device),
+            detector,
         )
         spike_index.append(spind)
         waveforms.append(wfs)
@@ -914,15 +915,16 @@ def full_denoising(
 
     # enforce decrease
     if radial_parents is None and probe is not None:
+        rel_maxchans = maxchans - extract_channel_index[maxchans, 0]
         if probe == "np1":
             for i in range(N):
                 denoise.enforce_decrease_np1(
-                    waveforms[i], max_chan=maxchans[i], in_place=True
+                    waveforms[i], max_chan=rel_maxchans[i], in_place=True
                 )
         elif probe == "np2":
             for i in range(N):
                 denoise.enforce_decrease_np1(
-                    waveforms[i], max_chan=maxchans[i], in_place=True
+                    waveforms[i], max_chan=rel_maxchans[i], in_place=True
                 )
         else:
             assert False
