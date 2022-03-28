@@ -11,7 +11,7 @@ from scipy.spatial.distance import pdist, squareform
 from sklearn.decomposition import PCA
 from tqdm.auto import tqdm
 
-from . import denoise, detect, localization
+from . import denoise, detect, localize_index
 
 
 def subtraction(
@@ -26,15 +26,20 @@ def subtraction(
     sampling_rate=30_000,
     thresholds=[12, 10, 8, 6, 5, 4],
     nn_detect=False,
+    neighborhood_kind="firstchan",
     extract_box_radius=200,
+    extract_firstchan_n_channels=40,
     spike_length_samples=121,
     trough_offset=42,
     dedup_spatial_radius=70,
+    enforce_decrease_kind="columns",
     n_jobs=1,
     device=None,
     save_residual=True,
     do_clean=True,
     do_localize=True,
+    localize_radius=100,
+    localize_firstchan_n_channels=20,
     loc_workers=4,
     random_seed=0,
 ):
@@ -80,6 +85,15 @@ def subtraction(
             maxptps : (N,)
                 Only computed/saved if `do_localize=True`
     """
+    if neighborhood_kind not in ("firstchan", "box"):
+        raise ValueError(
+            "Neighborhood kind", neighborhood_kind, "not understood."
+        )
+    if enforce_decrease_kind not in ("columns", "radial"):
+        raise ValueError(
+            "Enforce decrease method", enforce_decrease_kind, "not understood."
+        )
+
     standardized_bin = Path(standardized_bin)
     stem = standardized_bin.stem
     batch_len_samples = n_sec_chunk * sampling_rate
@@ -118,15 +132,15 @@ def subtraction(
                 "Either pass `geom` or put meta file in folder with binary."
             )
     n_channels = geom.shape[0]
+    ncols = len(np.unique(geom[:, 0]))
+    # TODO: read this from meta.
+    # right now it's just used to load NN detector and pick the enforce
+    # decrease method if enforce_decrease_kind=="columns"
+    probe = {4: "np1", 2: "np2"}.get(ncols, None)
 
     # figure out if we will use a NN detector, and if so which
     nn_detector_path = None
     if nn_detect:
-        ncols = len(np.unique(geom[:, 0]))
-        probe = {
-            4: "np1",
-            2: "np2",
-        }[ncols]
         nn_detector_path = (
             Path(__file__).parent.parent / f"pretrained/detect_{probe}.pt"
         )
@@ -156,18 +170,43 @@ def subtraction(
     )
 
     # compute helper data structures
+    # channel indexes for extraction, NN detection, deduplication
     dedup_channel_index = make_channel_index(
         geom, dedup_spatial_radius, steps=2
     )
-    nn_channel_index = make_channel_index(
-        geom, dedup_spatial_radius, steps=1
-    )
-    extract_channel_index = make_channel_index(
-        geom, extract_box_radius, distance_order=False, p=1
-    )
-    radial_parents = denoise.make_radial_order_parents(
-        geom, extract_channel_index, n_jumps_per_growth=1, n_jumps_parent=3
-    )
+    nn_channel_index = make_channel_index(geom, dedup_spatial_radius, steps=1)
+    if neighborhood_kind == "box":
+        extract_channel_index = make_channel_index(
+            geom, extract_box_radius, distance_order=False, p=1
+        )
+        # use radius-based localization neighborhood
+        loc_n_chans = None
+        loc_radius = localize_radius
+    elif neighborhood_kind == "firstchan":
+        extract_channel_index = []
+        for c in range(n_channels):
+            low = max(0, c - extract_firstchan_n_channels // 2)
+            low = min(n_channels - extract_firstchan_n_channels, low)
+            extract_channel_index.append(
+                np.arange(low, low + extract_firstchan_n_channels)
+            )
+        extract_channel_index = np.array(extract_channel_index)
+
+        # use old firstchan style localization neighborhood
+        loc_n_chans = localize_firstchan_n_channels
+        loc_radius = None
+    else:
+        assert False
+
+    # helper data structure for radial enforce decrease
+    if enforce_decrease_kind == "radial":
+        radial_parents = denoise.make_radial_order_parents(
+            geom, extract_channel_index, n_jumps_per_growth=1, n_jumps_parent=3
+        )
+    elif enforce_decrease_kind == "columns":
+        radial_parents = None
+    else:
+        assert False
 
     # pre-fit temporal PCA
     tpca = None
@@ -185,6 +224,7 @@ def subtraction(
                 thresholds,
                 nn_detector_path,
                 nn_channel_index,
+                probe=probe,
                 standardized_dtype=np.float32,
                 n_sec_pca=n_sec_pca,
                 rank=tpca_rank,
@@ -235,6 +275,14 @@ def subtraction(
             maxshape=(None, 2),
             dtype=np.int64,
         )
+        if neighborhood_kind == "firstchan":
+            firstchans = output_h5.create_dataset(
+                "first_channels",
+                shape=(1,),
+                chunks=(4096,),
+                maxshape=(None,),
+                dtype=np.int64,
+            )
         if do_clean:
             cleaned_wfs = output_h5.create_dataset(
                 "cleaned_waveforms",
@@ -295,6 +343,9 @@ def subtraction(
                 do_localize,
                 loc_workers,
                 geom,
+                probe,
+                loc_n_chans,
+                loc_radius,
             )
             for batch_id, s_start in jobs
         )
@@ -324,6 +375,8 @@ def subtraction(
                 if do_localize:
                     locs.resize(N + N_new, axis=0)
                     maxptps.resize(N + N_new, axis=0)
+                if neighborhood_kind == "firstchan":
+                    firstchans.resize(N + N_new, axis=0)
 
                 # write results
                 subtracted_wfs[N : N + N_new] = np.load(result.subtracted_wfs)
@@ -333,6 +386,11 @@ def subtraction(
                 if do_localize:
                     locs[N : N + N_new] = np.load(result.localizations)
                     maxptps[N : N + N_new] = np.load(result.maxptps)
+                if neighborhood_kind == "firstchan":
+                    firstchans[N : N + N_new] = extract_channel_index[
+                        np.load(result.spike_index)[:, 1],
+                        0,
+                    ]
 
                 # delete original files
                 Path(result.residual).unlink()
@@ -382,7 +440,10 @@ SubtractionBatchResult = namedtuple(
 
 # Parallelism helpers
 def _subtraction_batch(args):
-    return subtraction_batch(*args, _subtraction_batch.denoiser, _subtraction_batch.detector)
+    return subtraction_batch(
+        *args, _subtraction_batch.denoiser, _subtraction_batch.detector
+    )
+
 
 def _subtraction_batch_init(device, nn_detector_path, nn_channel_index):
     """Thread/process initializer -- loads up neural nets"""
@@ -421,6 +482,9 @@ def subtraction_batch(
     geom,
     denoiser,
     detector,
+    probe,
+    loc_n_chans,
+    loc_radius,
 ):
     """Runs subtraction on a batch
 
@@ -470,6 +534,7 @@ def subtraction_batch(
     geom : array
         The probe geometry
     denoiser, detector : torch nns or None
+    probe : string or None
 
     Returns
     -------
@@ -496,7 +561,7 @@ def subtraction_batch(
             residual, [(pad_left, pad_right), (0, 0)], mode="edge"
         )
     assert residual.shape == (2 * buffer + s_end - s_start, n_channels)
-    
+
     # main subtraction loop
     subtracted_wfs = []
     spike_index = []
@@ -513,6 +578,7 @@ def subtraction_batch(
             trough_offset=trough_offset,
             spike_length_samples=spike_length_samples,
             device=device,
+            probe=probe,
         )
         if len(spind):
             subtracted_wfs.append(subwfs)
@@ -590,17 +656,18 @@ def subtraction_batch(
     if do_localize:
         locwfs = cleaned_wfs if do_clean else subtracted_wfs
         locptps = locwfs.ptp(1)
-        xs, ys, z_rels, z_abss, alphas = localization.localize_ptps_index(
+        xs, ys, z_rels, z_abss, alphas = localize_index.localize_ptps_index(
             locptps,
             geom,
             spike_index[:, 1],
             extract_channel_index,
+            n_channels=loc_n_chans,
+            radius=loc_radius,
             n_workers=loc_workers,
             pbar=False,
         )
         localizations_file = batch_data_folder / f"{batch_id:08d}_loc.npy"
         np.save(localizations_file, np.c_[xs, ys, z_abss, alphas, z_rels])
-
         maxptps_file = batch_data_folder / f"{batch_id:08d}_maxptp.npy"
         np.save(maxptps_file, np.nanmax(locptps, axis=1))
 
@@ -635,6 +702,7 @@ def train_pca(
     thresholds,
     nn_detector_path,
     nn_channel_index,
+    probe=None,
     standardized_dtype=np.float32,
     n_sec_pca=10,
     rank=7,
@@ -651,7 +719,7 @@ def train_pca(
     starts = sampling_rate * np.random.default_rng(random_seed).choice(
         n_seconds, size=min(n_sec_pca, n_seconds), replace=False
     )
-    
+
     detector = None
     if nn_detector_path:
         detector = detect.Detect(nn_channel_index)
@@ -684,6 +752,9 @@ def train_pca(
             None,
             denoise.SingleChanDenoiser().load().to(device),
             detector,
+            probe,
+            None,
+            None,
         )
         spike_index.append(spind)
         waveforms.append(wfs)
@@ -719,6 +790,7 @@ def detect_and_subtract(
     trough_offset=42,
     spike_length_samples=121,
     device="cpu",
+    probe=None,
 ):
     """Detect and subtract
 
@@ -744,7 +816,7 @@ def detect_and_subtract(
     # print(threshold, len(spike_index), flush=True)
     if not len(spike_index):
         return [], raw, []
-    
+
     # -- read waveforms
     padded_raw = np.pad(raw, [(0, 0), (0, 1)], constant_values=np.nan)
     # times relative to trough + buffer
@@ -762,11 +834,12 @@ def detect_and_subtract(
         spike_index[:, 1],
         extract_channel_index,
         radial_parents,
+        probe=probe,
         tpca=tpca,
         device=device,
         denoiser=denoiser,
     )
-    
+
     if device.type == "cuda":
         torch.cuda.empty_cache()
 
@@ -790,6 +863,7 @@ def full_denoising(
     maxchans,
     extract_channel_index,
     radial_parents,
+    probe=None,
     tpca=None,
     device=None,
     denoiser=None,
@@ -839,10 +913,25 @@ def full_denoising(
     waveforms = waveforms.transpose(0, 2, 1)
 
     # enforce decrease
-    # TODO
-    denoise.enforce_decrease_shells(
-        waveforms, maxchans, radial_parents, in_place=True
-    )
+    if radial_parents is None and probe is not None:
+        if probe == "np1":
+            for i in range(N):
+                denoise.enforce_decrease_np1(
+                    waveforms[i], max_chan=maxchans[i], in_place=True
+                )
+        elif probe == "np2":
+            for i in range(N):
+                denoise.enforce_decrease_np1(
+                    waveforms[i], max_chan=maxchans[i], in_place=True
+                )
+        else:
+            assert False
+    elif radial_parents is not None:
+        denoise.enforce_decrease_shells(
+            waveforms, maxchans, radial_parents, in_place=True
+        )
+    else:
+        assert False
 
     return waveforms
 
