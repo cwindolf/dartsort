@@ -354,7 +354,7 @@ def torch_voltage_detect_dedup(
         device = "cuda" if torch.cuda.is_available() else "cpu"
 
     # -- torch argrelmin
-    neg_recording = torch.as_tensor(recording, device=device, dtype=torch.float)
+    neg_recording = torch.as_tensor(-recording, device=device, dtype=torch.float)
     max_energies, inds = F.max_pool2d_with_indices(
         neg_recording[None, None],
         kernel_size=[2 * 5 + 1, 1],
