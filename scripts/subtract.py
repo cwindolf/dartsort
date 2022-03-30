@@ -36,7 +36,13 @@ g.add_argument(
     default=[12, 10, 8, 6, 5, 4],
     type=lambda x: list(map(int, x.split(","))),
 )
-g.add_argument("--nonndetect", action="store_true")
+g.add_argument("--nndetect", action="store_true")
+g.add_argument(
+    "--neighborhood_kind", default="firstchan", choices=["firstchan", "box"]
+)
+g.add_argument(
+    "--enforce_decrease_kind", default="columns", choices=["columns", "radial"]
+)
 
 g = ap.add_argument_group("Time range: use the whole dataset, or a subset?")
 g.add_argument("--t_start", type=int, default=0)
@@ -98,9 +104,11 @@ if args.nogpu:
 sub_h5 = subtract.subtraction(
     args.standardized_bin,
     args.out_folder,
+    neighborhood_kind=args.neighborhood_kind,
+    enforce_decrease_kind=args.enforce_decrease_kind,
     geom=geom,
     thresholds=args.thresholds,
-    nn_detect=not args.nonndetect,
+    nn_detect=args.nndetect,
     n_sec_chunk=args.n_sec_chunk,
     tpca_rank=args.tpca_rank,
     n_jobs=args.n_jobs,

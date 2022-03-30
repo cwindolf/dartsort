@@ -114,7 +114,9 @@ def localize_ptps_index(
 
     local_geoms = np.pad(geom, [(0, 1), (0, 0)])[channel_index[maxchans]]
     local_geoms[:, :, 1] -= geom[maxchans, 1][:, None]
-    subset = channel_index_subset(geom, channel_index, n_channels=n_channels, radius=radius)
+    subset = channel_index_subset(
+        geom, channel_index, n_channels=n_channels, radius=radius
+    )
 
     # handle pbars
     xqdm = tqdm if pbar else lambda a, total, desc: a
