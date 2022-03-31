@@ -122,7 +122,7 @@ def main():
     triaged_x, triaged_y, triaged_z, triaged_alpha, triaged_maxptps, _, ptp_filter, idx_keep = run_weighted_triage(x, y, z, alpha, maxptps, threshold=args.triage_quantile) #pcs is None here
     triaged_spike_index = spike_index[ptp_filter][idx_keep]
     triaged_mcs_abs = spike_index[:,1][ptp_filter][idx_keep]
-    
+
     #can infer ptp
     do_infer_ptp = args.do_infer_ptp
     if do_infer_ptp:
@@ -138,8 +138,7 @@ def main():
     filename = data_dir + "subtraction_1min_standardized_t_0_None.h5"
     with h5py.File(filename, "r") as f:
         print("Keys: %s" % f.keys())
-        a_group_key = list(f.keys())[2]
-        firstchans = np.asarray(list(f[a_group_key]))
+        firstchans = np.asarray(list(f["first_channels"]))
     triaged_firstchans = firstchans[ptp_filter][idx_keep]
 
     # ## Create feature set for clustering
@@ -186,6 +185,12 @@ def main():
     save_dir_path = args.out_folder + '/' + data_name + '_' + str(num_spikes) + 'hdbscan_' + 'min_cluster_size' + str(clusterer.min_cluster_size) + '_' + 'min_samples' + str(clusterer.min_samples)
     if not os.path.exists(save_dir_path):
         os.makedirs(save_dir_path)
+        
+    #save triaged indices
+    mask = np.ones(spike_index[:,1].size, dtype=bool)
+    mask[ptp_filter[0][idx_keep]] = False
+    triaged_indices = np.where(mask)[0]
+    np.save(save_dir_path + '/triaged_indices', triaged_indices)
     
     #save cluster indices
     if not os.path.exists(save_dir_path + '/cluster_indices'):
@@ -238,19 +243,14 @@ def main():
         if args.no_verbose:
             print("saving waveform figures...")
         ##### plot individual cluster summaries #####
-        wfs_localized = np.load(data_dir+'denoised_wfs.npy') #np.memmap(data_dir+'denoised_waveforms.npy', dtype='float32', shape=(290025, 121, 40))
-        wfs_localized = wfs_localized[results_localization[:, 4]!=0]
-        triaged_wfs_localized = wfs_localized[ptp_filter][idx_keep][:num_spikes]
-        del wfs_localized
-        wfs_subtracted = np.load(data_dir+'subtracted_wfs.npy')
-        wfs_subtracted = wfs_subtracted[results_localization[:, 4]!=0]
-        triaged_wfs_subtracted = wfs_subtracted[ptp_filter][idx_keep][:num_spikes]
-        del wfs_subtracted
+        wfs_localized = np.load(data_dir+'denoised_wfs.npy', mmap_mode='r') #np.memmap(data_dir+'denoised_waveforms.npy', dtype='float32', shape=(290025, 121, 40))
+        wfs_subtracted = np.load(data_dir+'subtracted_wfs.npy', mmap_mode='r')
+        non_triaged_idxs = ptp_filter[0][idx_keep]
         
         for cluster_id in np.unique(clusterer.labels_):
             if cluster_id != -1:
                 fig = plot_single_unit_summary(cluster_id, clusterer, geom_array, args.num_spikes_plot, args.num_rows_plot, triaged_x, triaged_z, triaged_maxptps, 
-                                               triaged_firstchans, triaged_mcs_abs, triaged_spike_index, triaged_wfs_localized, triaged_wfs_subtracted, cluster_color_dict, 
+                                               triaged_firstchans, triaged_mcs_abs, triaged_spike_index, non_triaged_idxs, wfs_localized, wfs_subtracted, cluster_color_dict, 
                                                color_arr, raw_data_bin, residual_data_bin)
 
                 save_z_int = int(cluster_centers[cluster_id][1])
