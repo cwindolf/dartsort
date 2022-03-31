@@ -23,7 +23,7 @@ import os
 import scipy
 import argparse
 import hdbscan
-from spike_psvae.cluster_viz import plot_array_scatter, plot_self_agreement, plot_single_unit_summary, plot_agreement_venn_kilo
+from spike_psvae.cluster_viz import plot_array_scatter, plot_self_agreement, plot_single_unit_summary, plot_agreement_venn
 import h5py
 from scipy.spatial import cKDTree
 import pickle
@@ -321,8 +321,19 @@ def main():
                 # plot agreement with kilosort
                 if cmp is not None:
                     num_channels = wfs_localized.shape[2]
-                    fig = plot_agreement_venn_kilo(cluster_id, cmp, sorting_hdbl_t, sorting_kilo, geom_array, num_channels, args.num_spikes_plot, triaged_firstchans[clusterer.labels_ == cluster_id], 
-                                              triaged_mcs_abs[clusterer.labels_ == cluster_id], kilo_spike_depths, kilo_spike_clusters, raw_data_bin, delta_frames=12)
+                    cluster_id_match = cmp.get_best_unit_match1(cluster_id)
+                    sorting1 = sorting_hdbl_t
+                    sorting2 = sorting_kilo
+                    sorting1_name = "hdb"
+                    sorting2_name = "ks"
+                    firstchans_cluster_sorting1 = triaged_firstchans[clusterer.labels_ == cluster_id]
+                    mcs_abs_cluster_sorting1 = triaged_mcs_abs[clusterer.labels_ == cluster_id]
+                    spike_depths = kilo_spike_depths[np.where(kilo_spike_clusters==cluster_id_match)]
+                    mcs_abs_cluster_sorting2 = np.asarray([np.argmin(np.abs(spike_depth - geom_array[:,1])) for spike_depth in spike_depths])
+                    firstchans_cluster_sorting2 = (mcs_abs_cluster_sorting2 - 20).clip(min=0)
+
+                    fig = plot_agreement_venn(cluster_id, cluster_id_match, cmp, sorting1, sorting2, sorting1_name, sorting2_name, geom_array, num_channels, args.num_spikes_plot, firstchans_cluster_sorting1, 
+                                              mcs_abs_cluster_sorting1, firstchans_cluster_sorting2, mcs_abs_cluster_sorting2, raw_data_bin, delta_frames = 12)
                     plt.close(fig)
                     fig.savefig(save_dir_cluster + f'/Z{save_str}_cluster{cluster_id}_agreement.png')
 
