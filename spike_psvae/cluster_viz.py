@@ -17,7 +17,7 @@ from spikeinterface.widgets import plot_agreement_matrix
 from tqdm import tqdm
 from matplotlib_venn import venn3, venn3_circles, venn2
 import seaborn as sns
-
+import matplotlib.gridspec as gridspec
 
 def read_waveforms(spike_times, bin_file, geom_array, n_times=None, channels=None, dtype=np.dtype('float32')):
     '''
@@ -53,7 +53,7 @@ def read_waveforms(spike_times, bin_file, geom_array, n_times=None, channels=Non
                 wfs[ctr] = wf.reshape(
                     n_times, n_channels)[:,channels]
             except:
-                print(f"skipped {ctr, spike}")
+                # print(f"skipped {ctr, spike}")
                 skipped_idx.append(ctr)
     wfs=np.delete(wfs, skipped_idx, axis=0)
     fin.close()
@@ -470,16 +470,16 @@ def plot_single_unit_summary(cluster_id, clusterer, geom_array, num_spikes_plot,
     ptps_cluster = features[:,2][np.where(clusterer_to_be_plotted.labels_ ==cluster_id)]
     spike_train_s = triaged_spike_index[:,0][clusterer_to_be_plotted.labels_==cluster_id] / 30000
     ax.plot(spike_train_s, ptps_cluster)
-    ax.set_title(f"ptps over time");
-    ax.set_ylabel("ptp");
+    ax.set_title(f"scaled ptps over time");
+    ax.set_ylabel("scaled ptp");
     ax.set_xlabel("seconds");
 
     ax = ax_ptp_z
     zs_cluster = features[:,1][np.where(clusterer_to_be_plotted.labels_ ==cluster_id)]
     ax.scatter(zs_cluster, ptps_cluster);
-    ax.set_title(f"zs vs. ptps");
+    ax.set_title(f"zs vs. scaled ptps");
     ax.set_xlabel("zs");
-    ax.set_ylabel("ptps");
+    ax.set_ylabel("scaled ptps");
 
     ax = ax_scatter_xz
     xs, zs, ids = features[:,0], features[:,1], clusterer_to_be_plotted.labels_
@@ -671,9 +671,8 @@ def compute_shifted_similarity(template1, template2, shifts=[0]):
         curr_similarities.append(similarity)
     return np.min(curr_similarities), shifts[np.argmin(curr_similarities)]
 
-def get_unit_similarities(cluster_id, st_1, closest_clusters, sorting, geom_array, raw_data_bin, num_channels_similarity=10, num_close_clusters=30, shifts_align=[0], order_by ='similarity',
+def get_unit_similarities(cluster_id, st_1, closest_clusters, sorting, geom_array, raw_data_bin, num_channels_similarity=20, num_close_clusters=30, shifts_align=[0], order_by ='similarity',
                           normalize_agreement_by="both"):
-    firing_rate = len(st_1) / 60 #in seconds
     waveforms1 = read_waveforms(st_1, raw_data_bin, geom_array, n_times=121)[0]
     template1 = np.mean(waveforms1, axis=0)
     original_template = np.copy(template1)
@@ -725,7 +724,7 @@ def get_unit_similarities(cluster_id, st_1, closest_clusters, sorting, geom_arra
     
     return original_template, closest_clusters, similarities, agreements, templates, shifts
 
-def plot_unit_similarity_heatmaps(cluster_id, st_1, closest_clusters, sorting, geom_array, raw_data_bin, num_channels_similarity=10, num_close_clusters_plot=10, num_close_clusters=30,
+def plot_unit_similarity_heatmaps(cluster_id, st_1, closest_clusters, sorting, geom_array, raw_data_bin, num_channels_similarity=20, num_close_clusters_plot=10, num_close_clusters=30,
                                   shifts_align=[0], order_by ='similarity', normalize_agreement_by="both", ax_similarity=None, ax_agreement=None):
     if ax_similarity is None:
         plt.figure(figsize=(15,5))
@@ -756,65 +755,168 @@ def plot_unit_similarity_heatmaps(cluster_id, st_1, closest_clusters, sorting, g
 
 
 
-# def plot_unit_similarity_summary(cluster_id, closest_clusters, sorting1, sorting2, geom_array, raw_data_bin, num_channels_similarity=20, um_close_clusters_plot=10, num_close_clusters=30, shifts_align = np.arange(-3,4),
-#                                  order_by ='similarity', normalize_agreement_by="both")
-#     fig = plt.figure(figsize=(24, 12))
-#     gs = gridspec.GridSpec(4,3)
-#     gs.update(hspace=0.75)
-#     ax_sim = plt.subplot(gs[0,:2])
-#     ax_agree  = plt.subplot(gs[1,:2])
-#     ax_isi = plt.subplot(gs[2,:2])
-#     ax_raw_wf = plt.subplot(gs[:4,2])
-#     ax_raw_wf_flat = plt.subplot(gs[3, :2])
+def plot_unit_similarities(cluster_id, closest_clusters, sorting1, sorting2, geom_array, raw_data_bin, recoring_duration, num_channels=40, num_spikes_plot=100, num_channels_similarity=20, 
+                           num_close_clusters_plot=10, num_close_clusters=30, shifts_align = np.arange(-3,4), order_by ='similarity', normalize_agreement_by="both", denoised_waveforms=None, 
+                           cluster_labels=None, non_triaged_idxs=None, triaged_mcs_abs=None, triaged_firstchans=None):
+    do_denoised_waveform = denoised_waveforms is not None and cluster_labels is not None and non_triaged_idxs is not None and triaged_mcs_abs is not None and triaged_firstchans is not None
+    fig = plt.figure(figsize=(24, 12))
+    if do_denoised_waveform:
+        gs = gridspec.GridSpec(4,4)
+    else:
+        gs = gridspec.GridSpec(4,3)
+    gs.update(hspace=0.75)
+    ax_sim = plt.subplot(gs[0,:2])
+    ax_agree  = plt.subplot(gs[1,:2])
+    ax_isi = plt.subplot(gs[2,:2])
+    ax_raw_wf = plt.subplot(gs[:4,2])
+    ax_raw_wf_flat = plt.subplot(gs[3, :2])
+    if do_denoised_waveform:
+        ax_denoised_wf = plt.subplot(gs[:4,3])
 
-#     st_1 = sorting1.get_unit_spike_train(cluster_id)
-#     firing_rate = len(st_1) / 60 #in seconds
+    st_1 = sorting1.get_unit_spike_train(cluster_id)
+    firing_rate = len(st_1) / recoring_duration #in seconds
 
-#     #compute similarity to closest kilosort clusters
-#     _, _, original_template, closest_clusters, similarities, agreements, templates, shifts = plot_unit_similarity_heatmaps(cluster_id, st_1, closest_clusters, sorting2, geom_array, raw_data_bin, 
-#                                                                                                                            num_channels_similarity=num_channels_similarity, 
-#                                                                                                                            num_close_clusters_plot=num_close_clusters_plot, num_close_clusters=num_close_clusters,
-#                                                                                                                            ax_similarity=ax_sim, ax_agreement=ax_agree, shifts_align=shifts_align,
-#                                                                                                                            order_by=order_by, normalize_agreement_by=normalize_agreement_by)
+    #compute similarity to closest kilosort clusters
+    _, _, original_template, closest_clusters, similarities, agreements, templates, shifts = plot_unit_similarity_heatmaps(cluster_id, st_1, closest_clusters, sorting2, geom_array, raw_data_bin, 
+                                                                                                                           num_channels_similarity=num_channels_similarity, 
+                                                                                                                           num_close_clusters_plot=num_close_clusters_plot, num_close_clusters=num_close_clusters,
+                                                                                                                           ax_similarity=ax_sim, ax_agreement=ax_agree, shifts_align=shifts_align,
+                                                                                                                           order_by=order_by, normalize_agreement_by=normalize_agreement_by)
 
-#     max_ptp_channel = np.argmax(original_template.ptp(0))
-#     max_ptp = np.max(original_template.ptp(0))
+    max_ptp_channel = np.argmax(original_template.ptp(0))
+    max_ptp = np.max(original_template.ptp(0))
 
-#     plot_isi_distribution(st_1, ax=ax_isi);
+    plot_isi_distribution(st_1, ax=ax_isi);
 
-#     most_similar_cluster = closest_clusters[0]
-#     most_similar_shift = shifts[0]
-#     h_shifts = [.2,.8]
-#     t_shifts = [0, most_similar_shift]
-#     colors = [('blue','darkblue'), ('red','darkred')]
-#     cluster_ids_plot = [cluster_id, most_similar_cluster]
-#     sortings_plot = [sorting1, sorting2]
-#     for cluster_id_plot, color, sorting_plot, h_shift, t_shift in zip(cluster_ids_plot, colors, sortings_plot, h_shifts, t_shifts):
-#         spike_times = sorting_plot.get_unit_spike_train(cluster_id_plot) + t_shift
-#         mcs_abs_cluster = np.zeros(len(spike_times)).astype('int') + max_ptp_channel
-#         first_chans_cluster = (mcs_abs_cluster - 20).clip(min=0)
-#         waveform_scale = 2/max_ptp
-#         plot_raw_waveforms_unit_geom(geom_array, num_channels, first_chans_cluster, mcs_abs_cluster, spike_times=spike_times, bin_file=raw_data_bin, x_geom_scale = 1/15, 
-#                                      y_geom_scale = 1/10, waveform_scale = waveform_scale, spikes_plot = num_spikes_plot, waveform_shape=(30,70), num_rows=3, 
-#                                      alpha=.2, h_shift=h_shift, do_mean=False, ax=ax_raw_wf, color=color[0])
-#         plot_raw_waveforms_unit_geom(geom_array, num_channels, first_chans_cluster, mcs_abs_cluster, spike_times=spike_times, bin_file=raw_data_bin, x_geom_scale = 1/15, 
-#                                      y_geom_scale = 1/10, waveform_scale = waveform_scale, spikes_plot = num_spikes_plot, waveform_shape=(30,70), num_rows=3, 
-#                                      alpha=1, h_shift=h_shift, do_mean=True, ax=ax_raw_wf, color=color[1])
+    most_similar_cluster = closest_clusters[0]
+    most_similar_shift = shifts[0]
+    h_shifts = [.2,.8]
+    t_shifts = [0, most_similar_shift]
+    colors = [('blue','darkblue'), ('red','darkred')]
+    cluster_ids_plot = [cluster_id, most_similar_cluster]
+    sortings_plot = [sorting1, sorting2]
+    for cluster_id_plot, color, sorting_plot, h_shift, t_shift in zip(cluster_ids_plot, colors, sortings_plot, h_shifts, t_shifts):
+        spike_times = sorting_plot.get_unit_spike_train(cluster_id_plot) + t_shift
+        mcs_abs_cluster = np.zeros(len(spike_times)).astype('int') + max_ptp_channel
+        first_chans_cluster = (mcs_abs_cluster - 20).clip(min=0)
+        waveform_scale = 2/max_ptp
+        plot_raw_waveforms_unit_geom(geom_array, num_channels, first_chans_cluster, mcs_abs_cluster, spike_times=spike_times, bin_file=raw_data_bin, x_geom_scale = 1/15, 
+                                     y_geom_scale = 1/10, waveform_scale = waveform_scale, spikes_plot = num_spikes_plot, waveform_shape=(30,70), num_rows=3, 
+                                     alpha=.2, h_shift=h_shift, do_mean=False, ax=ax_raw_wf, color=color[0])
+        plot_raw_waveforms_unit_geom(geom_array, num_channels, first_chans_cluster, mcs_abs_cluster, spike_times=spike_times, bin_file=raw_data_bin, x_geom_scale = 1/15, 
+                                     y_geom_scale = 1/10, waveform_scale = waveform_scale, spikes_plot = num_spikes_plot, waveform_shape=(30,70), num_rows=3, 
+                                     alpha=1, h_shift=h_shift, do_mean=True, ax=ax_raw_wf, color=color[1])
+        
+        if do_denoised_waveform:
+            mcs_abs_cluster = triaged_mcs_abs[cluster_labels==cluster_id_plot]
+            first_chans_cluster = triaged_firstchans[cluster_labels==cluster_id_plot]
+            waveforms = denoised_waveforms[non_triaged_idxs[cluster_labels==cluster_id_plot]]
+            plot_waveforms_unit_geom(geom_array, num_channels, first_chans_cluster, mcs_abs_cluster, waveforms, x_geom_scale = 1/15, 
+                                     y_geom_scale = 1/10, waveform_scale = waveform_scale, spikes_plot = num_spikes_plot, waveform_shape=(30,70), num_rows=3, 
+                                     alpha=.2, h_shift=h_shift, do_mean=False, ax=ax_denoised_wf, color=color[0])
+            plot_waveforms_unit_geom(geom_array, num_channels, first_chans_cluster, mcs_abs_cluster, waveforms, x_geom_scale = 1/15, 
+                                     y_geom_scale = 1/10, waveform_scale = waveform_scale, spikes_plot = num_spikes_plot, waveform_shape=(30,70), num_rows=3, 
+                                     alpha=1, h_shift=h_shift, do_mean=True, ax=ax_denoised_wf, color=color[1])
+            
+    ax_raw_wf.set_title(f"cluster {cluster_id}/cluster {most_similar_cluster} raw, shift {most_similar_shift}")
+    if do_denoised_waveform:
+        ax_denoised_wf.set_title(f"cluster {cluster_id}/cluster {most_similar_cluster} denoised, shift {most_similar_shift}")
+    channel_range = (max(max_ptp_channel-num_channels_similarity//2,0),max_ptp_channel+num_channels_similarity//2)
+    template1 = original_template[:,channel_range[0]:channel_range[1]]
+    most_similar_template = templates[0]
+    if most_similar_shift == 0:
+        most_similar_template_flattened = most_similar_template.T.flatten()
+    elif most_similar_shift < 0:
+        most_similar_template_flattened = np.pad(most_similar_template.T.flatten(),((-most_similar_shift,0)), mode='constant')[:most_similar_shift]
+    else:    
+        most_similar_template_flattened = np.pad(most_similar_template.T.flatten(),((0,most_similar_shift)), mode='constant')[most_similar_shift:]
+    ax_raw_wf_flat.plot(template1.T.flatten(),color='blue')
+    ax_raw_wf_flat.plot(most_similar_template_flattened,color='red')
+    ax_raw_wf_flat.set_title(f"cluster {cluster_id}/cluster {most_similar_cluster} templates flat, shift {most_similar_shift}")
+    fig.suptitle(f"cluster {cluster_id}, firing rate: {'%.1f' % round(firing_rate,2)} Hz, max ptp: {'%.1f' % round(max_ptp,2)}");
+    return fig
 
-#     ax_raw_wf.set_title(f"cluster {cluster_id}/cluster {most_similar_cluster} raw, shift {most_similar_shift}")
+# def plot_unit_similarities_summary(cluster_id, closest_clusters, sorting1, sorting2, geom_array, raw_data_bin, recoring_duration, num_channels=40, num_spikes_plot=100, num_channels_similarity=20, 
+#                                    num_close_clusters_plot=10, num_close_clusters=30, shifts_align = np.arange(-3,4), order_by ='similarity', normalize_agreement_by="both", denoised_waveforms=None, 
+#                                    cluster_labels=None, non_triaged_idxs=None, triaged_mcs_abs=None, triaged_firstchans=None):
 
+#     # ###Kilosort
+#     cluster_ids_all = sorting1.get_unit_ids()
+#     cluster_ids_list = [cluster_ids_all[i * n:(i + 1) * n] for i in range((len(cluster_ids_all) + n - 1) // n )] 
+#     for subset_id, cluster_ids in enumerate(cluster_ids_list):
+#     np.random.seed(0)
+#     cluster_ids = np.random.choice(sorting_kilo.get_unit_ids(), 50)
+#     num_clusters = len(cluster_ids)
+#     fig = plt.figure(figsize=(32, 3*num_clusters))
+#     gs = gridspec.GridSpec(num_clusters,9)
+#     gs.update(hspace=0.5)
+#     num_close_clusters_plot = 10
+#     for i, cluster_id in enumerate(tqdm(cluster_ids)):
+#         matplotlib.rcParams.update({'font.size': 10})
+#         ax_cid = plt.subplot(gs[i,0])
+#         ax_fr = plt.subplot(gs[i,1])
+#         ax_maxptp = plt.subplot(gs[i,2])
+#         ax_cos = plt.subplot(gs[i,3:5])
+#         ax_agree  = plt.subplot(gs[i,5:7])
+#         ax_isi = plt.subplot(gs[i,7:9])
 
-#     channel_range = (max(max_ptp_channel-num_channels_similarity//2,0),max_ptp_channel+num_channels_similarity//2)
-#     template1 = original_template[:,channel_range[0]:channel_range[1]]
-#     most_similar_template = templates[0]
-#     if most_similar_shift == 0:
-#         most_similar_template_flattened = most_similar_template.T.flatten()
-#     elif most_similar_shift < 0:
-#         most_similar_template_flattened = np.pad(most_similar_template.T.flatten(),((-most_similar_shift,0)), mode='constant')[:most_similar_shift]
-#     else:    
-#         most_similar_template_flattened = np.pad(most_similar_template.T.flatten(),((0,most_similar_shift)), mode='constant')[most_similar_shift:]
-#     ax_raw_wf_flat.plot(template1.T.flatten(),color='blue')
-#     ax_raw_wf_flat.plot(most_similar_template_flattened,color='red')
-#     ax_raw_wf_flat.set_title(f"cluster {cluster_id}/cluster {most_similar_cluster} templates flat, shift {most_similar_shift}")
+#         st_1 = sorting_kilo.get_unit_spike_train(cluster_id)
+#         firing_rate = len(st_1) / recording_duration #in seconds
+#         waveforms1 = read_waveforms(st_1, raw_data_bin, geom_array, n_times=121)[0]
+#         template1 = np.mean(waveforms1, axis=0)
+#         max_ptp_channel = np.argmax(template1.ptp(0))
+#         max_ptp = np.max(template1.ptp(0))
+#         channel_range = (max(max_ptp_channel-num_channels_cosine//2,0),max_ptp_channel+num_channels_cosine//2)
+#         template1 = template1[:,channel_range[0]:channel_range[1]]
+
+#         #compute K closest clsuters
+#         curr_cluster_depth = kilo_cluster_depth_means[cluster_id]
+#         dist_to_other_cluster_dict = {cluster_id:abs(mean_depth-curr_cluster_depth) for (cluster_id,mean_depth) in kilo_cluster_depth_means.items()}
+#         closest_clusters = [y[0] for y in sorted(dist_to_other_cluster_dict.items(), key = lambda x: x[1])[1:1+num_close_clusters]]
+
+#         similarities = []
+#         agreements = []
+#         for closest_cluster in closest_clusters:
+#             st_2 = sorting_kilo.get_unit_spike_train(closest_cluster)
+#             waveforms2 = read_waveforms(st_2, raw_data_bin, geom_array, n_times=121)[0]
+#             template2 = np.mean(waveforms2, axis=0)[:,channel_range[0]:channel_range[1]]
+#             # similarity = sklearn.metrics.pairwise.cosine_similarity(np.expand_dims(template1.flatten(),0), np.expand_dims(template2.flatten(),0))
+#             # similarities.append(similarity[0][0])
+#             similarity = np.max(np.abs(template1 - template2))
+#             similarities.append(similarity)
+#             ind_st1, ind_st2, not_match_ind_st1, not_match_ind_st2 = compute_spiketrain_agreement(st_1, st_2, delta_frames=12)
+#             agreement = len(ind_st1) / (len(st_1) + len(st_2) - len(ind_st1))
+#             agreements.append(agreement)
+
+#         agreements = np.asarray(agreements).round(2)
+#         similarities = np.asarray(similarities).round(2)
+#         closest_clusters = np.asarray(closest_clusters)
+#         # most_similar_idxs = np.flip(np.argsort(similarities))
+#         most_similar_idxs = np.argsort(similarities)
+#         agreements = agreements[most_similar_idxs]
+#         similarities = similarities[most_similar_idxs]
+#         closest_clusters = closest_clusters[most_similar_idxs]
+
+#         y_axis_labels = [f"Unit {cluster_id}"]
+#         x_axis_labels = closest_clusters
+#         g = sns.heatmap(np.expand_dims(similarities,0), vmin=0, vmax=max(similarities), cmap='RdYlGn_r', annot=np.expand_dims(similarities,0),xticklabels=x_axis_labels, yticklabels=y_axis_labels, ax=ax_cos,cbar=False)
+#         ax_cos.set_title("Cosine Similarity");
+#         g = sns.heatmap(np.expand_dims(agreements,0), vmin=0, vmax=1, cmap='RdYlGn', annot=np.expand_dims(agreements,0),xticklabels=x_axis_labels, yticklabels=y_axis_labels, ax=ax_agree,cbar=False)
+#         ax_agree.set_title("Agreement");
+
+#         plot_isi_distribution(st_1, ax=ax_isi);
+#         matplotlib.rcParams.update({'font.size': 22})
+
+#         ax_cid.text(0.15, 0.45, f"Unit id: {cluster_id}")
+#         ax_cid.set_xticks([])
+#         ax_cid.set_yticks([])
+
+#         ax_fr.text(0.15, 0.45, f"FR: {'%.1f' % round(firing_rate,2)} Hz")
+#         ax_fr.set_xticks([])
+#         ax_fr.set_yticks([])
+
+#         ax_maxptp.text(0.1, 0.45, f"max ptp: {'%.1f' % round(max_ptp,2)}")
+#         ax_maxptp.set_xticks([])
+#         ax_maxptp.set_yticks([])
 #     plt.close(fig)
-#     return fig
+#     fig.savefig(f"kilosort_cluster_summaries_norm.png")
