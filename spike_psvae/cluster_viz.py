@@ -18,6 +18,7 @@ from tqdm import tqdm
 from matplotlib_venn import venn3, venn3_circles, venn2
 import seaborn as sns
 import matplotlib.gridspec as gridspec
+matplotlib.rcParams.update({'font.size': 10})
 
 def read_waveforms(spike_times, bin_file, geom_array, n_times=None, channels=None, dtype=np.dtype('float32')):
     '''
@@ -363,25 +364,24 @@ def plot_venn_agreement(cluster_id_1, cluster_id_2, match_ind, not_match_ind_st1
     sets = ['10','11','01']
     return ax
 
-def plot_array_scatter(clusterer, geom_array, triaged_x, triaged_z, triaged_maxptps, cluster_color_dict, color_arr):
+def plot_array_scatter(labels, geom_array, triaged_x, triaged_z, triaged_maxptps, cluster_color_dict, color_arr, min_cluster_size, min_samples, z_cutoff = (-50,3900),figsize=(18, 36)):
     #recompute cluster centers for new labels    
-    clusterer_to_be_plotted = clusterer
-    fig, axes = plt.subplots(1, 3, sharey=True, figsize=(16, 24), dpi=300)
+    # fig, axes = plt.subplots(1, 3, sharey=True, figsize=(18, 12))
+    fig, axes = plt.subplots(1, 3, sharey=True, figsize=figsize, dpi=300)
 
-    matplotlib.rcParams.update({'font.size': 12})
-    z_cutoff = (-50,3900)
-    xs, zs, ids = triaged_x, triaged_z, clusterer_to_be_plotted.labels_
+    # matplotlib.rcParams.update({'font.size': 12})
+    xs, zs, ids = triaged_x, triaged_z, labels
     axes[0].set_ylim(z_cutoff)
     cluster_scatter(xs, zs, ids, ax=axes[0], excluded_ids=set([-1]), s=20, alpha=.05, color_dict=cluster_color_dict)
     axes[0].scatter(geom_array[:, 0], geom_array[:, 1], s=20, c='orange', marker = "s")
-    axes[0].set_title(f"min_cluster_size {clusterer_to_be_plotted.min_cluster_size}, min_samples {clusterer_to_be_plotted.min_samples}");
+    axes[0].set_title(f"min_cluster_size {min_cluster_size}, min_samples {min_samples}");
     axes[0].set_ylabel("z");
     axes[0].set_xlabel("x");
 
-    ys, zs, ids = triaged_maxptps, triaged_z, clusterer_to_be_plotted.labels_
+    ys, zs, ids = triaged_maxptps, triaged_z, labels
     axes[1].set_ylim(z_cutoff)
     cluster_scatter(ys, zs, ids, ax=axes[1], excluded_ids=set([-1]), s=20, alpha=.05, color_dict=cluster_color_dict)
-    axes[1].set_title(f"min_cluster_size {clusterer_to_be_plotted.min_cluster_size}, min_samples {clusterer_to_be_plotted.min_samples}");
+    axes[1].set_title(f"min_cluster_size {min_cluster_size}, min_samples {min_samples}");
     axes[1].set_xlabel("scaled ptp");
 
     axes[2].scatter(xs, zs, s=20, c=color_arr, alpha=.1)
