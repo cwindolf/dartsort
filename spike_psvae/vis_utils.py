@@ -257,7 +257,6 @@ def plotlocs(x, y, z, alpha, maxptps, geom, feats=None, xlim=None, ylim=None, al
     y = y[which]
     alpha = alpha[which]
     z = z[which]
-    print(np.isnan(z).any())
     
     nfeats = 0
     if feats is not None:
@@ -301,6 +300,8 @@ def plotlocs(x, y, z, alpha, maxptps, geom, feats=None, xlim=None, ylim=None, al
         aa.set_ylim([z.min() - 10, z.max() + 10])
     else:
         aa.set_ylim(zlim)
+    
+    return fig
 
 
 def plot_ptp(ptp, axes, label, color, codes):
