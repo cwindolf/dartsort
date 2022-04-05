@@ -83,8 +83,11 @@ def cluster_scatter(xs, ys, ids, ax=None, n_std=2.0, excluded_ids=set(), s=1, al
     for k in means.keys():
         mean_x, mean_y = means[k]
         cov = covs[k]
-        vx, vy = cov[0, 0], cov[1, 1]
-        rho = cov[0, 1] / np.sqrt(vx * vy)
+        with np.errstate(invalid='ignore'):
+            vx, vy = cov[0, 0], cov[1, 1]
+            rho = cov[0, 1] / np.sqrt(vx * vy)
+        if not np.isfinite([vx, vy, rho]).all():
+            continue
         color = color_dict[k]
         ell = Ellipse(
             (0, 0),
@@ -389,6 +392,33 @@ def plot_array_scatter(clusterer, geom_array, triaged_x, triaged_z, triaged_maxp
     axes[2].set_ylim(z_cutoff)
     axes[2].set_title("ptps");
     return fig
+
+def plot_array_scatter(labels, geom_array, x, z, maxptps, cluster_color_dict, color_arr):
+    #recompute cluster centers for new labels    
+    # clusterer_to_be_plotted = clusterer
+    fig, axes = plt.subplots(1, 3, sharey=True, figsize=(16, 24), dpi=300)
+
+    matplotlib.rcParams.update({'font.size': 12})
+    z_cutoff = (-50,3900)
+    # xs, zs, ids = triaged_x, triaged_z, clusterer_to_be_plotted.labels_
+    axes[0].set_ylim(z_cutoff)
+    cluster_scatter(x, z, labels, ax=axes[0], excluded_ids=set([-1]), s=20, alpha=.05, color_dict=cluster_color_dict)
+    axes[0].scatter(geom_array[:, 0], geom_array[:, 1], s=20, c='orange', marker = "s")
+    # axes[0].set_title(f"min_cluster_size {clusterer_to_be_plotted.min_cluster_size}, min_samples {clusterer_to_be_plotted.min_samples}");
+    axes[0].set_ylabel("z");
+    axes[0].set_xlabel("x");
+
+    axes[1].set_ylim(z_cutoff)
+    cluster_scatter(maxptps, z, labels, ax=axes[1], excluded_ids=set([-1]), s=20, alpha=.05, color_dict=cluster_color_dict)
+    # axes[1].set_title(f"min_cluster_size {clusterer_to_be_plotted.min_cluster_size}, min_samples {clusterer_to_be_plotted.min_samples}");
+    axes[1].set_xlabel("scaled ptp");
+
+    axes[2].scatter(x, z, s=20, c=color_arr, alpha=.1)
+    axes[2].scatter(geom_array[:, 0], geom_array[:, 1], s=20, c='orange', marker = "s")
+    axes[2].set_ylim(z_cutoff)
+    axes[2].set_title("ptps");
+    return fig
+
 
 def plot_self_agreement(clusterer, triaged_spike_index, fig=None):
     matplotlib.rcParams.update({'font.size': 22})
