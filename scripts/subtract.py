@@ -37,6 +37,7 @@ g.add_argument(
     type=lambda x: list(map(int, x.split(","))),
 )
 g.add_argument("--nndetect", action="store_true")
+g.add_argument("--dndetect", action="store_true")
 g.add_argument(
     "--neighborhood_kind", default="firstchan", choices=["firstchan", "box"]
 )
@@ -109,6 +110,7 @@ sub_h5 = subtract.subtraction(
     geom=geom,
     thresholds=args.thresholds,
     nn_detect=args.nndetect,
+    denoise_detect=args.dndetect,
     n_sec_chunk=args.n_sec_chunk,
     tpca_rank=args.tpca_rank,
     n_jobs=args.n_jobs,

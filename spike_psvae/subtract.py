@@ -26,6 +26,7 @@ def subtraction(
     sampling_rate=30_000,
     thresholds=[12, 10, 8, 6, 5, 4],
     nn_detect=False,
+    denoise_detect=False,
     neighborhood_kind="firstchan",
     extract_box_radius=200,
     extract_firstchan_n_channels=40,
@@ -145,6 +146,8 @@ def subtraction(
             Path(__file__).parent.parent / f"pretrained/detect_{probe}.pt"
         )
         print("Using pretrained detector for", probe, "from", nn_detector_path)
+    elif denoise_detect:
+        print("Using denoising NN detection")
     else:
         print("Using voltage detection")
 
@@ -223,6 +226,7 @@ def subtraction(
                 dedup_channel_index,
                 thresholds,
                 nn_detector_path,
+                denoise_detect,
                 nn_channel_index,
                 probe=probe,
                 standardized_dtype=np.float32,
@@ -353,7 +357,7 @@ def subtraction(
         with Pool(
             n_jobs,
             initializer=_subtraction_batch_init,
-            initargs=(device, nn_detector_path, nn_channel_index),
+            initargs=(device, nn_detector_path, nn_channel_index, denoise_detect),
         ) as pool:
             for result in tqdm(
                 pool.map(_subtraction_batch, jobs),
@@ -441,11 +445,14 @@ SubtractionBatchResult = namedtuple(
 # Parallelism helpers
 def _subtraction_batch(args):
     return subtraction_batch(
-        *args, _subtraction_batch.denoiser, _subtraction_batch.detector
+        *args,
+        _subtraction_batch.denoiser,
+        _subtraction_batch.detector,
+        _subtraction_batch.dn_detector
     )
 
 
-def _subtraction_batch_init(device, nn_detector_path, nn_channel_index):
+def _subtraction_batch_init(device, nn_detector_path, nn_channel_index, denoise_detect):
     """Thread/process initializer -- loads up neural nets"""
     denoiser = denoise.SingleChanDenoiser()
     denoiser.load()
@@ -458,6 +465,12 @@ def _subtraction_batch_init(device, nn_detector_path, nn_channel_index):
         detector.load(nn_detector_path)
         detector.to(device)
     _subtraction_batch.detector = detector
+    
+    dn_detector = None
+    if denoise_detect:
+        dn_detector = detect.DenoiserDetect(denoiser)
+        dn_detector.to(device)
+    _subtraction_batch.dn_detector = dn_detector
 
 
 def subtraction_batch(
@@ -485,6 +498,7 @@ def subtraction_batch(
     loc_radius,
     denoiser,
     detector,
+    dn_detector,
 ):
     """Runs subtraction on a batch
 
@@ -575,6 +589,7 @@ def subtraction_batch(
             extract_channel_index,
             detector=detector,
             denoiser=denoiser,
+            denoiser_detector=dn_detector,
             trough_offset=trough_offset,
             spike_length_samples=spike_length_samples,
             device=device,
@@ -702,6 +717,7 @@ def train_pca(
     dedup_channel_index,
     thresholds,
     nn_detector_path,
+    denoise_detect,
     nn_channel_index,
     probe=None,
     standardized_dtype=np.float32,
@@ -721,11 +737,18 @@ def train_pca(
         n_seconds, size=min(n_sec_pca, n_seconds), replace=False
     )
 
+    denoiser = denoise.SingleChanDenoiser().load().to(device)
+    
     detector = None
     if nn_detector_path:
         detector = detect.Detect(nn_channel_index)
         detector.load(nn_detector_path)
         detector.to(device)
+    
+    dn_detector = None
+    if denoise_detect:
+        dn_detector = detect.DenoiserDetect(denoiser)
+        dn_detector.to(device)
 
     # do a mini-subtraction with no PCA, just NN denoise and enforce_decrease
     spike_index = []
@@ -754,8 +777,9 @@ def train_pca(
             probe,
             None,
             None,
-            denoise.SingleChanDenoiser().load().to(device),
+            denoiser,
             detector,
+            dn_detector,
         )
         spike_index.append(spind)
         waveforms.append(wfs)
@@ -787,6 +811,7 @@ def detect_and_subtract(
     extract_channel_index,
     detector=None,
     denoiser=None,
+    denoiser_detector=None,
     nn_switch_threshold=4,
     trough_offset=42,
     spike_length_samples=121,
@@ -805,14 +830,26 @@ def detect_and_subtract(
     waveforms, subtracted_raw, spike_index
     """
     device = torch.device(device)
+    
+    kwargs = dict(nn_detector=None, nn_denoiser=None, denoiser_detector=None)
+    kwargs["denoiser_detector"] = denoiser_detector
+    if detector is not None and threshold <= nn_switch_threshold:
+        kwargs["nn_detector"] = detector
+        kwargs["nn_denoiser"] = denoiser
+        
+    start = spike_length_samples
+    end = -spike_length_samples
+    if denoiser_detector is not None:
+        start = start - 42
+        end = end + 79
+    
     spike_index = detect.detect_and_deduplicate(
-        raw[spike_length_samples:-spike_length_samples].copy(),
+        raw[start:end].copy(),
         threshold,
         dedup_channel_index,
         spike_length_samples,
-        nn_detector=detector if threshold <= nn_switch_threshold else None,
-        nn_denoiser=denoiser if threshold <= nn_switch_threshold else None,
         device=device,
+        **kwargs,
     )
     # print(threshold, len(spike_index), flush=True)
     if not len(spike_index):
