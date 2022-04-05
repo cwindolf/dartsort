@@ -1,22 +1,19 @@
 import numpy as np
 import matplotlib.pyplot as plt
 import colorcet as cc
-from scipy.spatial import cdist
-from spikeinterface.numpyextractors import NumpySorting
+from scipy.spatial.distance import cdist
+from spikeinterface import NumpySorting
 from spikeinterface.toolkit import compute_correlograms
 
 import matplotlib.transforms as transforms
 from matplotlib.patches import Ellipse
 
 
-ccolors = cc.glasbey
-
-
 def get_ccolor(k):
     if k == -1:
         return "#808080"
     else:
-        return ccolors[k % len(ccolors)]
+        return cc.glasbey[k % len(cc.glasbey)]
 
 
 def cluster_scatter(
@@ -31,13 +28,13 @@ def cluster_scatter(
         xk = xs[where]
         yk = ys[where]
         color = get_ccolor(k)
-        ax.scatter(xk, yk, s=s, color=color, alpha=alpha)
+        ax.scatter(xk, yk, s=s, color=color, alpha=alpha, marker=".")
         if k not in excluded_ids:
             x_mean, y_mean = xk.mean(), yk.mean()
             xycov = np.cov(xk, yk)
             means[k] = x_mean, y_mean
             covs[k] = xycov
-            ax.annotate(str(k), (x_mean, y_mean))
+            ax.annotate(str(k), (x_mean, y_mean), size=s)
 
     for k in means.keys():
         mean_x, mean_y = means[k]
@@ -79,17 +76,17 @@ def array_scatter(
 ):
     fig = None
     if axes is None:
-        fig, axes = plt.subplots(1, 3, sharey=True, figsize=(5, 8))
+        fig, axes = plt.subplots(1, 3, sharey=True, figsize=(15, 15))
 
     cluster_scatter(
         x,
         z,
         labels,
         ax=axes[0],
-        s=20,
+        s=10,
         alpha=0.05,
     )
-    axes[0].scatter(*geom.T, c="orange", marker="s")
+    axes[0].scatter(*geom.T, c="orange", marker="s", s=10)
     axes[0].set_ylabel("z")
     axes[0].set_xlabel("x")
 
@@ -98,15 +95,18 @@ def array_scatter(
         z,
         labels,
         ax=axes[1],
-        s=20,
+        s=10,
         alpha=0.05,
     )
-    axes[1].set_xlabel("scaled ptp")
-
-    axes[2].scatter(x, z, c=plt.cm.viridis(np.clip(maxptp, 3, 15)), alpha=0.1)
-    axes[2].scatter(*geom.T, c="orange", marker="s")
+    axes[1].set_xlabel("maxptp")
+    axes[2].scatter(x, z, c=np.clip(maxptp, 3, 15), alpha=0.1, marker=".", cmap=plt.cm.viridis)
+    axes[2].scatter(*geom.T, c="orange", marker="s", s=10)
     axes[2].set_title("ptps")
     axes[0].set_ylim(zlim)
+    
+    if fig is not None:
+        plt.tight_layout()
+    
     return fig
 
 
@@ -118,7 +118,7 @@ def plot_waveforms_geom(
     channel_index,
     spike_index,
     maxptps,
-    waveforms=None,
+    all_waveforms=None,
     raw_bin=None,
     residual_bin=None,
     spikes_plot=100,
@@ -130,87 +130,105 @@ def plot_waveforms_geom(
     ax=None,
 ):
     ax = ax or plt.gca()
-    rg = np.random.default_rng(0)
-
-    assert not h_shift
-    assert not do_mean
-
+    
     # what channels will we plot?
     vals, counts = np.unique(
-        spike_index[np.flatnonzero(labels == main_cluster_id), 1]
+        spike_index[np.flatnonzero(labels == main_cluster_id), 1],
+        return_counts=True,
     )
     z_uniq, z_ids = np.unique(geom[:, 1], return_inverse=True)
     mcid = z_ids[vals[counts.argmax()]]
     channels_plot = np.flatnonzero((z_ids >= mcid - 3) & (z_ids <= mcid + 3))
+
+    # how to scale things?
+    all_max_ptp = maxptps[
+        np.isin(labels, (*clusters_to_plot, main_cluster_id))
+    ].max()
+    scale = (z_uniq[1] - z_uniq[0]) / max(7, all_max_ptp)
+
+    times_plot = np.arange(t_range[0] - 42, t_range[1] - 42).astype(float)
+    x_uniq = np.unique(geom[:, 0])
+    times_plot *= (x_uniq[1] - x_uniq[0]) / np.abs(times_plot).max()
 
     # scatter the channels
     ax.scatter(*geom[channels_plot].T, c="orange", marker="s")
     for c in channels_plot:
         ax.annotate(c, (geom[c, 0], geom[c, 1]))
 
-    # indexing / plotting helpers
-    t_range = np.arange(42 - t_range[0], 42 + t_range[1])
-    times_plot = t_range - 42
-    x_uniq = np.unique(geom[:, 0])
-    times_plot *= 0.5 * (x_uniq[1] - x_uniq[0]) / np.abs(times_plot).max()
-    which_chans_loc = np.isin(channel_index, channels_plot)
+    if raw_bin:
+        raw_data = np.memmap(raw_bin, dtype=np.float32)
+        raw_data = raw_data.reshape(-1, 384)
 
-    # how to scale things?
-    all_max_ptp = maxptps[
-        np.isin(labels, (*clusters_to_plot, main_cluster_id))
-    ].max()
-    scale = 0.5 * (z_uniq[1] - z_uniq[0]) / max(7, all_max_ptp)
+    if residual_bin:
+        res_data = np.memmap(residual_bin, dtype=np.float32)
+        res_data = res_data.reshape(-1, 384)
 
-    # loop over clusters and plot waveforms
-    for cid in (*clusters_to_plot, main_cluster_id):
-        # masks and indices for these wfs
-        in_cluster = labels == cid
-        which = np.flatnonzero(in_cluster)
-        choices = rg.choice(which, size=spikes_plot, replace=False)
-        choices.sort()
+    for j, cluster_id in enumerate(clusters_to_plot):
+        color = get_ccolor(cluster_id)
+        in_cluster = np.flatnonzero(labels == cluster_id)
+        num_plot_cluster = min(len(in_cluster), spikes_plot)
+        some_in_cluster = np.random.default_rng(0).choice(
+            in_cluster, replace=False, size=num_plot_cluster
+        )
+        some_in_cluster.sort()
 
-        # indexing tools
-        time_ix = spike_index[choices, 0, None] + t_range[None, :]
-        chan_ix = channels_plot[None, :]
-
-        # get waveforms
-        if raw_bin is not None:
-            raw_data = np.memmap(raw_bin, dtype=np.float32)
-            raw_data = raw_data.reshape(-1, 384)
-            waveforms = raw_data[time_ix, chan_ix]
-        else:
-            assert waveforms is not None
-            waveforms = waveforms[
-                choices,
-                t_range[0] : t_range[1],
-                which_chans_loc[spike_index[choices, 1]],
-            ]
-
-        # add residual?
-        if residual_bin is not None:
-            res_data = np.memmap(residual_bin, dtype=np.float32)
-            res_data = res_data.reshape(-1, 384)
-            waveforms = waveforms + res_data[time_ix, chan_ix]
-
-        # scale
-        waveforms *= scale
-
-        # add geom locations
-        waveforms += geom[channels_plot, 1][None, None, :]
-        times = times_plot[:, None] + geom[channels_plot, 0][None, :]
-        times = np.broadcast_to(times[None, ...], waveforms.shape)
-
-        # plot
-        ax.plot(
-            *(
-                l
-                for x in zip(
-                    waveforms.transpose(0, 2, 1), times.transpose(0, 2, 1)
+        if raw_bin:
+            spike_times = spike_index[some_in_cluster][:, 0]
+            waveforms = []
+            for t in spike_times:
+                waveforms.append(
+                    raw_data[t - 42 : t + 79, channels_plot].copy()
                 )
-                for l in x
-            ),
+            waveforms = np.asarray(waveforms)
+        else:
+            waveforms = all_waveforms[some_in_cluster]
+
+        if residual_bin:
+            spike_times = spike_index[some_in_cluster][:, 0]
+            residuals = []
+            for t in spike_times:
+                residuals.append(
+                    res_data[t - 42 : t + 79, channels_plot].copy()
+                )
+            residuals = np.asarray(residuals)
+        if do_mean:
+            waveforms = np.expand_dims(np.mean(waveforms, axis=0), 0)
+
+        vertical_lines = set()
+        draw_lines = []
+        for i in range(num_plot_cluster):
+            if raw_bin:
+                wf_chans = channels_plot
+            else:
+                wf_chans = channel_index[spike_index[some_in_cluster[i], 1]]
+
+            for k, channel in enumerate(channels_plot):
+                if channel in wf_chans:
+                    trace = waveforms[
+                        i,
+                        t_range[0] : t_range[1],
+                        np.flatnonzero(np.isin(wf_chans, channel))[0],
+                    ]
+                else:
+                    continue
+                if residual_bin:
+                    trace += residuals[
+                        i, t_range[0] : t_range[1], k
+                    ]
+
+                waveform = trace * scale
+                draw_lines.append(
+                    geom[channel, 0] + times_plot
+                )
+                draw_lines.append(waveform + geom[channel, 1])
+                max_vert_line = geom[channel, 0]
+                if max_vert_line not in vertical_lines:
+                    vertical_lines.add(max_vert_line)
+                    ax.axvline(max_vert_line, linestyle="--")
+        ax.plot(
+            *draw_lines,
             alpha=alpha,
-            color=get_ccolor(cid),
+            c=color,
         )
 
 
@@ -246,11 +264,15 @@ def single_unit_summary(
         for l in np.setdiff1d(np.unique(labels), [-1])
     ]
     closest_clusters = np.argsort(
-        cdist([cluster_centers[cluster_id]], cluster_centers)
+        cdist([cluster_centers[cluster_id]], cluster_centers)[0]
     )[1 : 3]
 
-    fig, axes = plt.subplot_mosaic(single_unit_mosaic)
-
+    fig, axes = plt.subplot_mosaic(single_unit_mosaic, figsize=(15, 10))
+    axes["a"].get_shared_y_axes().join(axes["a"], axes["b"])
+    axes["a"].get_shared_y_axes().join(axes["a"], axes["c"])
+    axes["p"].get_shared_y_axes().join(axes["p"], axes["q"])
+    axes["p"].get_shared_y_axes().join(axes["p"], axes["r"])
+    
     # -- waveform plots
     for ax, w, raw, res in zip(
         "abc",
@@ -266,7 +288,7 @@ def single_unit_summary(
             channel_index,
             spike_index,
             maxptps,
-            waveforms=w,
+            all_waveforms=w,
             raw_bin=raw,
             residual_bin=res,
             spikes_plot=spikes_plot,
@@ -274,6 +296,8 @@ def single_unit_summary(
             alpha=0.1,
             ax=axes[ax],
         )
+    axes["b"].set_yticks([])
+    axes["c"].set_yticks([])
 
     # -- scatter plots
     in_shown_clusters = np.flatnonzero(
@@ -281,14 +305,16 @@ def single_unit_summary(
     )
     zlim = (z[in_shown_clusters].min(), z[in_shown_clusters].max())
     array_scatter(
-        labels,
+        labels[in_shown_clusters],
         geom,
-        x,
-        z,
-        maxptps,
+        x[in_shown_clusters],
+        z[in_shown_clusters],
+        maxptps[in_shown_clusters],
         zlim=zlim,
         axes=[axes["p"], axes["q"], axes["r"]],
     )
+    axes["q"].set_yticks([])
+    axes["r"].set_yticks([])
 
     # -- this unit stats
     in_main_cluster = np.flatnonzero(labels == cluster_id)
@@ -316,7 +342,7 @@ def single_unit_summary(
         in_other = np.flatnonzero(labels == unit)
         sorting = NumpySorting.from_times_labels(
             times_list=np.r_[s_cluster, spike_index[in_other, 0]],
-            labels_list=np.c_[
+            labels_list=np.r_[
                 np.zeros(len(s_cluster), dtype=int),
                 np.ones(len(in_other), dtype=int),
             ],
@@ -329,3 +355,5 @@ def single_unit_summary(
         axes[ax].set_xticks(bins[1:])
         axes[ax].set_xlabel("lag (ms)")
         axes[ax].set_title(f"cross corellogram {cluster_id} <-> {unit}")
+    
+    return fig
