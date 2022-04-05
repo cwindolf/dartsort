@@ -16,6 +16,7 @@ import torch
 from scipy.signal import argrelmin
 from torch import nn
 import torch.nn.functional as F
+from copy import deepcopy
 
 
 MAXCOPY = 8
@@ -65,9 +66,18 @@ def detect_and_deduplicate(
             device=device,
         )
     elif denoiser_detector is not None:
-        spike_index, _ = denoiser_detect_dedup(
-
+        times, chans, _ = denoiser_detect_dedup(
+            recording,
+            threshold,
+            denoiser_detector,
+            channel_index=channel_index,
+            device=device,
         )
+        if len(times):
+            spike_index = np.c_[times.cpu().numpy(), chans.cpu().numpy()]
+            spike_index[:, 0] -= buffer_size
+        else:
+            return [], []
 
     if torch.is_tensor(spike_index):
         spike_index = spike_index.cpu().numpy()
@@ -464,11 +474,20 @@ class PeakToPeak(nn.Module):
             - torch.min(input, dim=self.dim)[0]
         )
 
+# a torch debugging classic
+# class Shape(nn.Module):
+#     def __init__(self, name):
+#         super(Shape, self).__init__()
+#         self.name = name
+#     def forward(self, input):
+#         print(self.name, input.shape)
+#         return input
+    
 
 class DenoiserDetect(nn.Module):
-    def __init__(self, denoiser, output_t_range=(20, 70)):
-        self.denoiser = denoiser
-
+    def __init__(self, denoiser, output_t_range=(25, 60)):
+        super(DenoiserDetect, self).__init__()
+        denoiser = deepcopy(denoiser)
         # -- turn the denoiser into a convolutional net
         # convert linear head into a convolutional layer
         # we just grab a portion of the denoiser output since not all
@@ -476,12 +495,12 @@ class DenoiserDetect(nn.Module):
         t0, t1 = output_t_range
         kernel_size = (
             denoiser.out.out_features
-            - denoiser.conv1.kernel_size
-            - denoiser.conv2.kernel_size
+            - denoiser.conv1[0].kernel_size[0]
+            - denoiser.conv2[0].kernel_size[0]
             + 2
         )
         self.conv_linear = nn.Conv1d(
-            in_channels=denoiser.conv2.out_channels,
+            in_channels=denoiser.conv2[0].out_channels,
             out_channels=t1 - t0,
             kernel_size=kernel_size,
         )
@@ -489,27 +508,35 @@ class DenoiserDetect(nn.Module):
         W = denoiser.out.weight
         W = W.reshape(
             denoiser.out.out_features,
-            denoiser.conv2.out_channels,
+            denoiser.conv2[0].out_channels,
             kernel_size,
         )
         # outc x inc x kernel size
-        self.conv_linear.weight[:] = W[t0:t1]
+        with torch.no_grad():
+            self.conv_linear.weight[:] = W[t0:t1].detach()
+            self.conv_linear.bias[:] = denoiser.out.bias[t0:t1].detach()
 
         # feedforward convolutional arch with PTP head
         self.ff = nn.Sequential(
-            self.denoiser.conv1,
-            self.denoiser.conv2,
+            # Shape("in"),
+            denoiser.conv1,
+            # Shape("after conv1"),
+            denoiser.conv2,
             # self.denoiser.conv3,  # denoiser conv3 is unused...
+            # Shape("after conv2"),
             self.conv_linear,
+            # Shape("after fake conv"),
             PeakToPeak(1),
+            # Shape("after ptp"),
         )
 
     def forward(self, input):
         return self.ff(input)
 
     def forward_recording(self, recording_tensor):
-        # just adds C dim. so we have Dx1xT, depth on the batch dim
-        return self.ff(recording_tensor[:, None, :])
+        # input is DxT
+        # just adds C dim. so we have Tx1xD, depth on the batch dim
+        return self.ff(recording_tensor.T[:, None, :]).T
 
 
 @torch.no_grad()
