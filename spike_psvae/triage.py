@@ -17,6 +17,49 @@ def weighted_knn_triage(
     return idx_keep1
 
 
+def run_weighted_triage(x, y, z, alpha, maxptps, pcs=None, 
+                        scales=(1,10,1,15,30,10),
+                        threshold=100, ptp_threshold=3, c=1):
+    ptp_filter = np.flatnonzero(maxptps>ptp_threshold)
+    x = x[ptp_filter]
+    y = y[ptp_filter]
+    z = z[ptp_filter]
+    alpha = alpha[ptp_filter]
+    maxptps = maxptps[ptp_filter]
+    if pcs is not None:
+        pcs = pcs[ptp_filter]
+        feats = np.c_[scales[0]*x,
+                      scales[1]*np.log(y),
+                      scales[2]*z,
+                      scales[3]*np.log(alpha),
+                      scales[4]*np.log(maxptps),
+                      scales[5]*pcs[:,:3]]
+    else:
+        feats = np.c_[scales[0]*x,
+                      scales[1]*np.log(y),
+                      scales[2]*z,
+                      scales[3]*np.log(alpha),
+                      scales[4]*np.log(maxptps)]
+    
+    tree = KDTree(feats)
+    dist, ind = tree.query(feats, k=6)
+    dist = dist[:,1:]
+    dist = np.sum(c*np.log(dist) + np.log(1/(scales[4]*np.log(maxptps)))[:,None], 1)
+    idx_keep = dist <= np.percentile(dist, threshold)
+    
+    triaged_x = x[idx_keep]
+    triaged_y = y[idx_keep]
+    triaged_z = z[idx_keep]
+    triaged_alpha = alpha[idx_keep]
+    triaged_maxptps = maxptps[idx_keep]
+    triaged_pcs = None
+    if pcs is not None:
+        triaged_pcs = pcs[idx_keep]
+        
+    
+    return triaged_x, triaged_y, triaged_z, triaged_alpha, triaged_maxptps, triaged_pcs, ptp_filter, idx_keep
+
+
 def coarse_split(
     xyzp,
     feats,
