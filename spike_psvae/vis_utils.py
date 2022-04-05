@@ -214,16 +214,41 @@ def regline(x, y, ax=None, **kwargs):
         color="red",
     )
 
-def corr_scatter(xs, ys, xlabels, ylabels, colors, alphas, suptitle=None, grid=True, rloc=0.9, axes=None):
+
+def corr_scatter(
+    xs,
+    ys,
+    xlabels,
+    ylabels,
+    colors,
+    alphas,
+    suptitle=None,
+    grid=True,
+    rloc=0.9,
+    axes=None,
+):
     nxs = xs.shape[1]
     nys = ys.shape[1] if grid else 1
     if axes is None:
-        fig, axes = plt.subplots(nys, nxs, sharey="row" if grid else False, sharex="col", figsize=(6, 6) if grid else (7, 3))
-    
+        fig, axes = plt.subplots(
+            nys,
+            nxs,
+            sharey="row" if grid else False,
+            sharex="col",
+            figsize=(6, 6) if grid else (7, 3),
+        )
+
     if grid:
         for i in range(nxs):
             for j in range(nys):
-                axes[j, i].scatter(xs[:, i], ys[:, j], c=colors, alpha=alphas, s=0.1, cmap=plt.cm.viridis)
+                axes[j, i].scatter(
+                    xs[:, i],
+                    ys[:, j],
+                    c=colors,
+                    alpha=alphas,
+                    s=0.1,
+                    cmap=plt.cm.viridis,
+                )
                 if i == 0:
                     axes[j, i].set_ylabel(ylabels[j])
                 if j == nys - 1:
@@ -234,7 +259,14 @@ def corr_scatter(xs, ys, xlabels, ylabels, colors, alphas, suptitle=None, grid=T
             fig.suptitle(suptitle)
     else:
         for i in range(nxs):
-            axes[i].scatter(xs[:, i], ys[:, i], c=colors, alpha=alphas, s=0.1, cmap=plt.cm.viridis)
+            axes[i].scatter(
+                xs[:, i],
+                ys[:, i],
+                c=colors,
+                alpha=alphas,
+                s=0.1,
+                cmap=plt.cm.viridis,
+            )
             axes[i].set_ylabel(ylabels[i])
             axes[i].set_xlabel(xlabels[i])
             axes[i].set_box_aspect(1)
@@ -244,21 +276,56 @@ def corr_scatter(xs, ys, xlabels, ylabels, colors, alphas, suptitle=None, grid=T
     plt.tight_layout()
 
 
+def plotlocs(
+    x,
+    y,
+    z,
+    alpha,
+    maxptps,
+    geom,
+    feats=None,
+    xlim=None,
+    ylim=None,
+    alim=None,
+    zlim=None,
+    which=slice(None),
+    clip=True,
+    suptitle=None,
+    figsize=(8, 8),
+    gs=1,
+    cm=plt.cm.viridis,
+):
+    """Localization scatter plot
 
-def plotlocs(x, y, z, alpha, maxptps, geom, feats=None, xlim=None, ylim=None, alim=None, zlim=None, which=slice(None), clip=True, suptitle=None, figsize=(8,8), gs=1, cm=plt.cm.viridis):
+    Plots localizations (x, z, log y, log alpha) against the probe geometry,
+    using max PTP to color the points.
+
+    Arguments
+    ---------
+    x, y, z, alpha, maxptps : 1D np arrays of the same shape
+    geom : n_channels x 2
+    feats : optional, additional features to scatter
+    *lim: optional axes lims if the default looks weird
+    which : anything which can index x,y,z,alpha
+        A subset of spikes to plot
+    clip : bool
+        If true (default), clip maxptps to the range 3-13 when coloring
+        spikes
+    """
     maxptps = maxptps[which]
     nmaxptps = 0.1
     cmaxptps = maxptps
     if clip:
-        nmaxptps = 0.25 + 0.74 * (maxptps - maxptps.min()) / (maxptps.max() - maxptps.min())
+        nmaxptps = 0.25 + 0.74 * (maxptps - maxptps.min()) / (
+            maxptps.max() - maxptps.min()
+        )
         cmaxptps = np.clip(maxptps, 3, 13)
 
     x = x[which]
     y = y[which]
     alpha = alpha[which]
     z = z[which]
-    print(np.isnan(z).any())
-    
+
     nfeats = 0
     if feats is not None:
         nfeats = feats.shape[1]
@@ -288,15 +355,15 @@ def plotlocs(x, y, z, alpha, maxptps, geom, feats=None, xlim=None, ylim=None, al
         ac.set_xlim(np.percentile(loga, [0, 100]))
     else:
         ac.set_xlim(alim)
-    
+
     if suptitle:
         fig.suptitle(suptitle, y=0.95)
-    
+
     if feats is not None:
         for ax, f in zip(axes[3:], feats.T):
             ax.scatter(f[which], z, s=0.1, alpha=nmaxptps, c=cmaxptps, cmap=cm)
             ax.set_xlim(np.percentile(f, [0, 100]))
-    
+
     if zlim is None:
         aa.set_ylim([z.min() - 10, z.max() + 10])
     else:
@@ -305,7 +372,9 @@ def plotlocs(x, y, z, alpha, maxptps, geom, feats=None, xlim=None, ylim=None, al
 
 def plot_ptp(ptp, axes, label, color, codes):
     for j, ax in enumerate(axes.flat):
-        handle, dhandle = plot_single_ptp_np1(ptp[j], ax, label, color, codes[j])
+        handle, dhandle = plot_single_ptp_np1(
+            ptp[j], ax, label, color, codes[j]
+        )
     return handle, dhandle
 
 
@@ -320,7 +389,7 @@ def vis_ptps(
 ):
     ptps = np.array([np.array(ptp) for ptp in ptps])
     K, N, C = ptps.shape
-    #assert len(labels) == K == len(colors)
+    # assert len(labels) == K == len(colors)
     n = int(np.sqrt(N))
 
     fig, axes = plt.subplots(n, n, **subplots_kwargs)
