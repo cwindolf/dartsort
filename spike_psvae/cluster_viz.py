@@ -374,8 +374,8 @@ def plot_array_scatter(labels, geom_array, triaged_x, triaged_z, triaged_maxptps
     axes[0].set_ylim(z_cutoff)
     cluster_scatter(xs, zs, ids, ax=axes[0], excluded_ids=set([-1]), s=20, alpha=.05, color_dict=cluster_color_dict)
     axes[0].scatter(geom_array[:, 0], geom_array[:, 1], s=20, c='orange', marker = "s")
-    for channel_id, channel in enumerate(geom_array):
-        axes[0].annotate(str(channel_id), (channel[0], channel[1]))
+    # for channel_id, channel in enumerate(geom_array):
+    #     axes[0].annotate(str(channel_id), (channel[0], channel[1]))
     axes[0].set_title(f"min_cluster_size {min_cluster_size}, min_samples {min_samples}");
     axes[0].set_ylabel("z");
     axes[0].set_xlabel("x");
