@@ -33,7 +33,7 @@ def kronsolve(D, robust_sigma=0):
     return p
 
 
-def decentrigid(raster, robust_sigma=0, batch_size=1, step_size=1, disp=400):
+def decentrigid(raster, robust_sigma=0, batch_size=1, step_size=1, disp=400, pbar=True):
     # this is not implemented but would be done by the stride.
     assert step_size == 1
     T = raster.shape[1]
@@ -44,6 +44,7 @@ def decentrigid(raster, robust_sigma=0, batch_size=1, step_size=1, disp=400):
         else torch.device("cpu")
     )
     # print("possdisp", possible_displacement.shape)
+    xrange = trange if pbar else range
 
     with torch.no_grad():
         raster = torch.as_tensor(raster.T, dtype=torch.float32, device=device)
@@ -58,7 +59,7 @@ def decentrigid(raster, robust_sigma=0, batch_size=1, step_size=1, disp=400):
         ).to(device)
         c2d.weight[:, 0] = raster
         displacement = np.empty((T, T))
-        for i in trange(T // batch_size):
+        for i in xrange(T // batch_size):
             res = c2d(raster[i * batch_size : (i + 1) * batch_size, None])[
                 :, :, 0, :
             ]
@@ -233,6 +234,7 @@ def register_nonrigid(
                 batch_size=batch_size,
                 step_size=step_size,
                 disp=min(scale, disp) if pyramid else disp,
+                pbar=False,
             )
             ps[k] = p
 

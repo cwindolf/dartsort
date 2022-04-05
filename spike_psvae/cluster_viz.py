@@ -17,7 +17,8 @@ from spikeinterface.widgets import plot_agreement_matrix
 from tqdm import tqdm
 from matplotlib_venn import venn3, venn3_circles, venn2
 import seaborn as sns
-
+import matplotlib.gridspec as gridspec
+matplotlib.rcParams.update({'font.size': 10})
 
 def read_waveforms(spike_times, bin_file, geom_array, n_times=None, channels=None, dtype=np.dtype('float32')):
     '''
@@ -53,7 +54,7 @@ def read_waveforms(spike_times, bin_file, geom_array, n_times=None, channels=Non
                 wfs[ctr] = wf.reshape(
                     n_times, n_channels)[:,channels]
             except:
-                print(f"skipped {ctr, spike}")
+                # print(f"skipped {ctr, spike}")
                 skipped_idx.append(ctr)
     wfs=np.delete(wfs, skipped_idx, axis=0)
     fin.close()
@@ -83,8 +84,11 @@ def cluster_scatter(xs, ys, ids, ax=None, n_std=2.0, excluded_ids=set(), s=1, al
     for k in means.keys():
         mean_x, mean_y = means[k]
         cov = covs[k]
-        vx, vy = cov[0, 0], cov[1, 1]
-        rho = cov[0, 1] / np.sqrt(vx * vy)
+        with np.errstate(invalid='ignore'):
+            vx, vy = cov[0, 0], cov[1, 1]
+            rho = cov[0, 1] / np.sqrt(vx * vy)
+        if not np.isfinite([vx, vy, rho]).all():
+            continue
         color = color_dict[k]
         ell = Ellipse(
             (0, 0),
@@ -103,7 +107,7 @@ def cluster_scatter(xs, ys, ids, ax=None, n_std=2.0, excluded_ids=set(), s=1, al
         ell.set_transform(transform + ax.transData)
         ax.add_patch(ell)
         
-def plot_waveforms_geom(main_cluster_id, clusterer_to_be_plotted, clusters_to_plot, geom_array, non_triage_indices, wfs, 
+def plot_waveforms_geom(main_cluster_id, labels, clusters_to_plot, geom_array, non_triage_indices, wfs, 
                         triaged_firstchans, triaged_mcs_abs, triaged_spike_index=None, bin_file=None, residual_bin_file=None, x_geom_scale = 1/15, 
                         y_geom_scale = 1/10, waveform_scale = .15, spikes_plot = 200, waveform_shape=(30,90), num_rows=3, 
                         alpha=.1, h_shift=.5, raw=False, add_residuals=False, do_mean=False, ax=None, color_dict=None):    
@@ -114,8 +118,8 @@ def plot_waveforms_geom(main_cluster_id, clusterer_to_be_plotted, clusters_to_pl
         ax = plt.gca()    
     geom_scale = [x_geom_scale, y_geom_scale]
     geom_plot = geom_array*geom_scale
-    first_chans_cluster = triaged_firstchans[clusterer_to_be_plotted.labels_==main_cluster_id]
-    mcs_abs_cluster = triaged_mcs_abs[clusterer_to_be_plotted.labels_==main_cluster_id]
+    first_chans_cluster = triaged_firstchans[labels==main_cluster_id]
+    mcs_abs_cluster = triaged_mcs_abs[labels==main_cluster_id]
     mcs_ab_channels_unique = np.unique(mcs_abs_cluster, return_counts=True)
     mc_ab_mode_cluster = int(mcs_ab_channels_unique[0][np.argmax(mcs_ab_channels_unique[1])])
     z_mc_ab = geom_array[mc_ab_mode_cluster][1]
@@ -157,11 +161,11 @@ def plot_waveforms_geom(main_cluster_id, clusterer_to_be_plotted, clusters_to_pl
         ax.annotate(channel, (geom_array[channel][0]*geom_scale[0], geom_array[channel][1]*geom_scale[1]))
     for j, cluster_id in enumerate(clusters_to_plot):
         color = color_dict[cluster_id]
-        first_chans_cluster = triaged_firstchans[clusterer_to_be_plotted.labels_==cluster_id]
+        first_chans_cluster = triaged_firstchans[labels==cluster_id]
         if raw:
             num_channels = wfs.shape[2]
             if triaged_spike_index is not None and bin_file is not None:
-                spike_times = triaged_spike_index[clusterer_to_be_plotted.labels_==cluster_id][:,0]
+                spike_times = triaged_spike_index[labels==cluster_id][:,0]
                 waveforms_read = read_waveforms(spike_times, bin_file, geom_array, n_times=121)[0]
                 waveforms = []
                 for i, waveform in enumerate(waveforms_read):
@@ -170,10 +174,10 @@ def plot_waveforms_geom(main_cluster_id, clusterer_to_be_plotted, clusters_to_pl
             else:
                 raise ValueError("Need to specify spike_index and bin_file")
         else:
-            waveforms = wfs[non_triage_indices[clusterer_to_be_plotted.labels_==cluster_id]]
+            waveforms = wfs[non_triage_indices[labels==cluster_id]]
         if add_residuals:
             if triaged_spike_index is not None and residual_bin_file is not None:
-                spike_times = triaged_spike_index[clusterer_to_be_plotted.labels_==cluster_id][:,0]
+                spike_times = triaged_spike_index[labels==cluster_id][:,0]
                 residuals_read = read_waveforms(spike_times, residual_bin_file, geom_array, n_times=121)[0]
                 num_channels = waveforms.shape[2]
                 residuals = []
@@ -363,25 +367,26 @@ def plot_venn_agreement(cluster_id_1, cluster_id_2, match_ind, not_match_ind_st1
     sets = ['10','11','01']
     return ax
 
-def plot_array_scatter(clusterer, geom_array, triaged_x, triaged_z, triaged_maxptps, cluster_color_dict, color_arr):
+def plot_array_scatter(labels, geom_array, triaged_x, triaged_z, triaged_maxptps, cluster_color_dict, color_arr, min_cluster_size, min_samples, z_cutoff = (-50,3900),figsize=(18, 36)):
     #recompute cluster centers for new labels    
-    clusterer_to_be_plotted = clusterer
-    fig, axes = plt.subplots(1, 3, sharey=True, figsize=(16, 24), dpi=300)
+    # fig, axes = plt.subplots(1, 3, sharey=True, figsize=(18, 12))
+    fig, axes = plt.subplots(1, 3, sharey=True, figsize=figsize, dpi=300)
 
-    matplotlib.rcParams.update({'font.size': 12})
-    z_cutoff = (-50,3900)
-    xs, zs, ids = triaged_x, triaged_z, clusterer_to_be_plotted.labels_
+    # matplotlib.rcParams.update({'font.size': 12})
+    xs, zs, ids = triaged_x, triaged_z, labels
     axes[0].set_ylim(z_cutoff)
     cluster_scatter(xs, zs, ids, ax=axes[0], excluded_ids=set([-1]), s=20, alpha=.05, color_dict=cluster_color_dict)
     axes[0].scatter(geom_array[:, 0], geom_array[:, 1], s=20, c='orange', marker = "s")
-    axes[0].set_title(f"min_cluster_size {clusterer_to_be_plotted.min_cluster_size}, min_samples {clusterer_to_be_plotted.min_samples}");
+    # for channel_id, channel in enumerate(geom_array):
+    #     axes[0].annotate(str(channel_id), (channel[0], channel[1]))
+    axes[0].set_title(f"min_cluster_size {min_cluster_size}, min_samples {min_samples}");
     axes[0].set_ylabel("z");
     axes[0].set_xlabel("x");
 
-    ys, zs, ids = triaged_maxptps, triaged_z, clusterer_to_be_plotted.labels_
+    ys, zs, ids = triaged_maxptps, triaged_z, labels
     axes[1].set_ylim(z_cutoff)
     cluster_scatter(ys, zs, ids, ax=axes[1], excluded_ids=set([-1]), s=20, alpha=.05, color_dict=cluster_color_dict)
-    axes[1].set_title(f"min_cluster_size {clusterer_to_be_plotted.min_cluster_size}, min_samples {clusterer_to_be_plotted.min_samples}");
+    axes[1].set_title(f"min_cluster_size {min_cluster_size}, min_samples {min_samples}");
     axes[1].set_xlabel("scaled ptp");
 
     axes[2].scatter(xs, zs, s=20, c=color_arr, alpha=.1)
@@ -390,13 +395,39 @@ def plot_array_scatter(clusterer, geom_array, triaged_x, triaged_z, triaged_maxp
     axes[2].set_title("ptps");
     return fig
 
-def plot_self_agreement(clusterer, triaged_spike_index, fig=None):
+def plot_array_scatter(labels, geom_array, x, z, maxptps, cluster_color_dict, color_arr):
+    #recompute cluster centers for new labels    
+    # clusterer_to_be_plotted = clusterer
+    fig, axes = plt.subplots(1, 3, sharey=True, figsize=(16, 24), dpi=300)
+
+    matplotlib.rcParams.update({'font.size': 12})
+    z_cutoff = (-50,3900)
+    # xs, zs, ids = triaged_x, triaged_z, clusterer_to_be_plotted.labels_
+    axes[0].set_ylim(z_cutoff)
+    cluster_scatter(x, z, labels, ax=axes[0], excluded_ids=set([-1]), s=20, alpha=.05, color_dict=cluster_color_dict)
+    axes[0].scatter(geom_array[:, 0], geom_array[:, 1], s=20, c='orange', marker = "s")
+    # axes[0].set_title(f"min_cluster_size {clusterer_to_be_plotted.min_cluster_size}, min_samples {clusterer_to_be_plotted.min_samples}");
+    axes[0].set_ylabel("z");
+    axes[0].set_xlabel("x");
+
+    axes[1].set_ylim(z_cutoff)
+    cluster_scatter(maxptps, z, labels, ax=axes[1], excluded_ids=set([-1]), s=20, alpha=.05, color_dict=cluster_color_dict)
+    # axes[1].set_title(f"min_cluster_size {clusterer_to_be_plotted.min_cluster_size}, min_samples {clusterer_to_be_plotted.min_samples}");
+    axes[1].set_xlabel("scaled ptp");
+
+    axes[2].scatter(x, z, s=20, c=color_arr, alpha=.1)
+    axes[2].scatter(geom_array[:, 0], geom_array[:, 1], s=20, c='orange', marker = "s")
+    axes[2].set_ylim(z_cutoff)
+    axes[2].set_title("ptps");
+    return fig
+
+
+def plot_self_agreement(labels, triaged_spike_index, fig=None):
     matplotlib.rcParams.update({'font.size': 22})
-    clusterer_to_be_plotted = clusterer
     indices_list = []
     labels_list = []
-    for cluster_id in np.unique(clusterer_to_be_plotted.labels_):
-        label_ids = np.where(clusterer_to_be_plotted.labels_==cluster_id)
+    for cluster_id in np.unique(labels):
+        label_ids = np.where(labels==cluster_id)
         indices = triaged_spike_index[label_ids][:,0]
         num_labels = label_ids[0].shape[0]
         indices_list.append(indices)
@@ -424,24 +455,17 @@ def plot_isi_distribution(spike_train, ax=None):
     ax.set_xlim([-1, 10])
     return ax
     
-def plot_single_unit_summary(cluster_id, clusterer, geom_array, num_spikes_plot, num_rows_plot, triaged_x, triaged_z, triaged_maxptps, triaged_firstchans, triaged_mcs_abs, 
+def plot_single_unit_summary(cluster_id, labels, cluster_centers, geom_array, num_spikes_plot, num_rows_plot, triaged_x, triaged_z, triaged_maxptps, triaged_firstchans, triaged_mcs_abs, 
                              triaged_spike_index, non_triage_indices, wfs_localized, wfs_subtracted, cluster_color_dict, color_arr, raw_bin_file, residual_bin_file):
-    clusterer_to_be_plotted = clusterer
-    #recompute cluster centers for new labels
-    cluster_centers = []
-    for label in np.unique(clusterer.labels_):
-        if label != -1:
-            cluster_centers.append(clusterer.weighted_cluster_centroid(label))
-    cluster_centers = np.asarray(cluster_centers)
-    
     curr_cluster_center = cluster_centers[cluster_id]
+    label_indices = np.where(labels ==cluster_id)
     num_close_clusters = 2
     dist_other_clusters = np.linalg.norm(curr_cluster_center[:2] - cluster_centers[:,:2], axis=1)
     closest_clusters = np.argsort(dist_other_clusters)[1:num_close_clusters + 1]
     closest_clusters_dist = dist_other_clusters[closest_clusters]
     scales = (1,10,1,15,30) #predefined scales for each feature
     features = np.concatenate((np.expand_dims(triaged_x,1), np.expand_dims(triaged_z,1), np.expand_dims(np.log(triaged_maxptps)*scales[4],1)), axis=1)
-    all_cluster_features_close = features[np.where((clusterer_to_be_plotted.labels_ == cluster_id) | (clusterer_to_be_plotted.labels_ == closest_clusters[0]) | (clusterer_to_be_plotted.labels_ == closest_clusters[1]))]
+    all_cluster_features_close = features[np.where((labels == cluster_id) | (labels == closest_clusters[0]) | (labels == closest_clusters[1]))]
 
     #buffers for range of scatter plots
     z_buffer = 5
@@ -467,22 +491,22 @@ def plot_single_unit_summary(cluster_id, clusterer, geom_array, num_spikes_plot,
     ax_scatter_xzptp = plt.subplot2grid(grid, (0, 5), rowspan=3)
 
     ax = ax_ptp
-    ptps_cluster = features[:,2][np.where(clusterer_to_be_plotted.labels_ ==cluster_id)]
-    spike_train_s = triaged_spike_index[:,0][clusterer_to_be_plotted.labels_==cluster_id] / 30000
+    ptps_cluster = features[:,2][label_indices]
+    spike_train_s = triaged_spike_index[:,0][label_indices] / 30000
     ax.plot(spike_train_s, ptps_cluster)
-    ax.set_title(f"ptps over time");
-    ax.set_ylabel("ptp");
+    ax.set_title(f"scaled ptps over time");
+    ax.set_ylabel("scaled ptp");
     ax.set_xlabel("seconds");
 
     ax = ax_ptp_z
-    zs_cluster = features[:,1][np.where(clusterer_to_be_plotted.labels_ ==cluster_id)]
+    zs_cluster = features[:,1][label_indices]
     ax.scatter(zs_cluster, ptps_cluster);
-    ax.set_title(f"zs vs. ptps");
+    ax.set_title(f"zs vs. scaled ptps");
     ax.set_xlabel("zs");
-    ax.set_ylabel("ptps");
+    ax.set_ylabel("scaled ptps");
 
     ax = ax_scatter_xz
-    xs, zs, ids = features[:,0], features[:,1], clusterer_to_be_plotted.labels_
+    xs, zs, ids = features[:,0], features[:,1], labels
     cluster_scatter(xs, zs, ids, ax=ax, excluded_ids=set([-1]), s=100, alpha=.3, color_dict=cluster_color_dict)
     ax.scatter(geom_array[:, 0], geom_array[:, 1], s=100, c='orange', marker = "s")
     ax.set_title(f"x vs. z");
@@ -492,7 +516,7 @@ def plot_single_unit_summary(cluster_id, clusterer, geom_array, num_spikes_plot,
     ax.set_xlim(x_cutoff)
 
     ax = ax_scatter_sptpz
-    ys, zs, ids = features[:,2], features[:,1], clusterer_to_be_plotted.labels_
+    ys, zs, ids = features[:,2], features[:,1], labels
     cluster_scatter(ys, zs, ids, ax=ax, excluded_ids=set([-1]), s=100, alpha=.3, color_dict=cluster_color_dict)
     ax.set_title(f"scaled ptp vs. z");
     ax.set_xlabel("scaled ptp");
@@ -516,7 +540,7 @@ def plot_single_unit_summary(cluster_id, clusterer, geom_array, num_spikes_plot,
     num_rows = num_rows_plot
 
     ax = ax_isi
-    spike_train = triaged_spike_index[:,0][clusterer_to_be_plotted.labels_==cluster_id]
+    spike_train = triaged_spike_index[:,0][label_indices]
     ax.set_xlabel('ms')
     spike_train_diff = np.diff(spike_train)/30000 
     spike_train_diff = spike_train_diff[np.where(spike_train_diff < 0.01)]
@@ -528,7 +552,7 @@ def plot_single_unit_summary(cluster_id, clusterer, geom_array, num_spikes_plot,
 
     axes = [ax_xcorr1, ax_xcorr2]
     for i, cluster_isi_id in enumerate(closest_clusters):
-        spike_train_2 = triaged_spike_index[:,0][clusterer_to_be_plotted.labels_==cluster_isi_id]
+        spike_train_2 = triaged_spike_index[:,0][labels==cluster_isi_id]
         sorting = spikeinterface.numpyextractors.NumpySorting.from_times_labels(times_list=np.concatenate((spike_train,spike_train_2)), 
                                                                                 labels_list=np.concatenate((np.zeros(spike_train.shape[0]).astype('int'), np.zeros(spike_train_2.shape[0]).astype('int')+1)), 
                                                                                 sampling_frequency=30000)
@@ -544,12 +568,12 @@ def plot_single_unit_summary(cluster_id, clusterer, geom_array, num_spikes_plot,
 
     max_ptps = []
     for cluster_id_ptp in clusters_plot:
-        max_ptps.append(np.max(triaged_maxptps[clusterer_to_be_plotted.labels_==cluster_id_ptp]))
+        max_ptps.append(np.max(triaged_maxptps[labels==cluster_id_ptp]))
     max_ptp = np.max(max_ptps)
     waveform_scale = 2/max_ptp
 
     ax = ax_denoised
-    plot_waveforms_geom(cluster_id, clusterer_to_be_plotted, clusters_plot, geom_array, non_triage_indices, wfs_localized, triaged_firstchans, 
+    plot_waveforms_geom(cluster_id, labels, clusters_plot, geom_array, non_triage_indices, wfs_localized, triaged_firstchans, 
                         triaged_mcs_abs, x_geom_scale=x_geom_scale, y_geom_scale=y_geom_scale, waveform_scale=waveform_scale, spikes_plot=spikes_plot, 
                         waveform_shape=waveform_shape,  h_shift=0, ax=ax, alpha=.1, num_rows=num_rows, do_mean=False, color_dict=cluster_color_dict)
     ax.set_title("denoised waveforms");
@@ -558,7 +582,7 @@ def plot_single_unit_summary(cluster_id, clusterer, geom_array, num_spikes_plot,
     ax.set_yticks([])
 
     ax = ax_raw
-    plot_waveforms_geom(cluster_id, clusterer_to_be_plotted, clusters_plot, geom_array, non_triage_indices, wfs_subtracted, triaged_firstchans, 
+    plot_waveforms_geom(cluster_id, labels, clusters_plot, geom_array, non_triage_indices, wfs_subtracted, triaged_firstchans, 
                         triaged_mcs_abs, triaged_spike_index=triaged_spike_index, bin_file=raw_bin_file, x_geom_scale=x_geom_scale, y_geom_scale=y_geom_scale, 
                         waveform_scale=waveform_scale, spikes_plot=spikes_plot, waveform_shape=waveform_shape, h_shift=0, ax=ax, alpha=.1, num_rows=num_rows, raw=True, do_mean=False, color_dict=cluster_color_dict)
     ax.set_title("raw waveforms")
@@ -568,7 +592,7 @@ def plot_single_unit_summary(cluster_id, clusterer, geom_array, num_spikes_plot,
     ax.set_ylabel("z")
 
     ax = ax_cleaned
-    plot_waveforms_geom(cluster_id, clusterer_to_be_plotted, clusters_plot, geom_array, non_triage_indices, wfs_subtracted, triaged_firstchans, 
+    plot_waveforms_geom(cluster_id, labels, clusters_plot, geom_array, non_triage_indices, wfs_subtracted, triaged_firstchans, 
                         triaged_mcs_abs, triaged_spike_index=triaged_spike_index, residual_bin_file=residual_bin_file, x_geom_scale=x_geom_scale, 
                         y_geom_scale=y_geom_scale, waveform_scale=waveform_scale, spikes_plot=spikes_plot, waveform_shape=waveform_shape, h_shift=0, ax=ax,alpha=.1, num_rows=num_rows, 
                         do_mean=False, add_residuals=True, color_dict=cluster_color_dict)
@@ -671,9 +695,8 @@ def compute_shifted_similarity(template1, template2, shifts=[0]):
         curr_similarities.append(similarity)
     return np.min(curr_similarities), shifts[np.argmin(curr_similarities)]
 
-def get_unit_similarities(cluster_id, st_1, closest_clusters, sorting, geom_array, raw_data_bin, num_channels_similarity=10, num_close_clusters=30, shifts_align=[0], order_by ='similarity',
+def get_unit_similarities(cluster_id, st_1, closest_clusters, sorting, geom_array, raw_data_bin, num_channels_similarity=20, num_close_clusters=30, shifts_align=[0], order_by ='similarity',
                           normalize_agreement_by="both"):
-    firing_rate = len(st_1) / 60 #in seconds
     waveforms1 = read_waveforms(st_1, raw_data_bin, geom_array, n_times=121)[0]
     template1 = np.mean(waveforms1, axis=0)
     original_template = np.copy(template1)
@@ -725,7 +748,7 @@ def get_unit_similarities(cluster_id, st_1, closest_clusters, sorting, geom_arra
     
     return original_template, closest_clusters, similarities, agreements, templates, shifts
 
-def plot_unit_similarity_heatmaps(cluster_id, st_1, closest_clusters, sorting, geom_array, raw_data_bin, num_channels_similarity=10, num_close_clusters_plot=10, num_close_clusters=30,
+def plot_unit_similarity_heatmaps(cluster_id, st_1, closest_clusters, sorting, geom_array, raw_data_bin, num_channels_similarity=20, num_close_clusters_plot=10, num_close_clusters=30,
                                   shifts_align=[0], order_by ='similarity', normalize_agreement_by="both", ax_similarity=None, ax_agreement=None):
     if ax_similarity is None:
         plt.figure(figsize=(15,5))
@@ -756,65 +779,169 @@ def plot_unit_similarity_heatmaps(cluster_id, st_1, closest_clusters, sorting, g
 
 
 
-# def plot_unit_similarity_summary(cluster_id, closest_clusters, sorting1, sorting2, geom_array, raw_data_bin, num_channels_similarity=20, um_close_clusters_plot=10, num_close_clusters=30, shifts_align = np.arange(-3,4),
-#                                  order_by ='similarity', normalize_agreement_by="both")
-#     fig = plt.figure(figsize=(24, 12))
-#     gs = gridspec.GridSpec(4,3)
-#     gs.update(hspace=0.75)
-#     ax_sim = plt.subplot(gs[0,:2])
-#     ax_agree  = plt.subplot(gs[1,:2])
-#     ax_isi = plt.subplot(gs[2,:2])
-#     ax_raw_wf = plt.subplot(gs[:4,2])
-#     ax_raw_wf_flat = plt.subplot(gs[3, :2])
+def plot_unit_similarities(cluster_id, closest_clusters, sorting1, sorting2, geom_array, raw_data_bin, recoring_duration, num_channels=40, num_spikes_plot=100, num_channels_similarity=20, 
+                           num_close_clusters_plot=10, num_close_clusters=30, shifts_align = np.arange(-3,4), order_by ='similarity', normalize_agreement_by="both", denoised_waveforms=None, 
+                           cluster_labels=None, non_triaged_idxs=None, triaged_mcs_abs=None, triaged_firstchans=None):
+    do_denoised_waveform = denoised_waveforms is not None and cluster_labels is not None and non_triaged_idxs is not None and triaged_mcs_abs is not None and triaged_firstchans is not None
+    fig = plt.figure(figsize=(24, 12))
+    if do_denoised_waveform:
+        gs = gridspec.GridSpec(4,4)
+    else:
+        gs = gridspec.GridSpec(4,3)
+    gs.update(hspace=0.75)
+    ax_sim = plt.subplot(gs[0,:2])
+    ax_agree  = plt.subplot(gs[1,:2])
+    ax_isi = plt.subplot(gs[2,:2])
+    ax_raw_wf = plt.subplot(gs[:4,2])
+    ax_raw_wf_flat = plt.subplot(gs[3, :2])
+    if do_denoised_waveform:
+        ax_denoised_wf = plt.subplot(gs[:4,3])
 
-#     st_1 = sorting1.get_unit_spike_train(cluster_id)
-#     firing_rate = len(st_1) / 60 #in seconds
+    st_1 = sorting1.get_unit_spike_train(cluster_id)
+    firing_rate = len(st_1) / recoring_duration #in seconds
 
-#     #compute similarity to closest kilosort clusters
-#     _, _, original_template, closest_clusters, similarities, agreements, templates, shifts = plot_unit_similarity_heatmaps(cluster_id, st_1, closest_clusters, sorting2, geom_array, raw_data_bin, 
-#                                                                                                                            num_channels_similarity=num_channels_similarity, 
-#                                                                                                                            num_close_clusters_plot=num_close_clusters_plot, num_close_clusters=num_close_clusters,
-#                                                                                                                            ax_similarity=ax_sim, ax_agreement=ax_agree, shifts_align=shifts_align,
-#                                                                                                                            order_by=order_by, normalize_agreement_by=normalize_agreement_by)
+    #compute similarity to closest kilosort clusters
+    _, _, original_template, closest_clusters, similarities, agreements, templates, shifts = plot_unit_similarity_heatmaps(cluster_id, st_1, closest_clusters, sorting2, geom_array, raw_data_bin, 
+                                                                                                                           num_channels_similarity=num_channels_similarity, 
+                                                                                                                           num_close_clusters_plot=num_close_clusters_plot, num_close_clusters=num_close_clusters,
+                                                                                                                           ax_similarity=ax_sim, ax_agreement=ax_agree, shifts_align=shifts_align,
+                                                                                                                           order_by=order_by, normalize_agreement_by=normalize_agreement_by)
 
-#     max_ptp_channel = np.argmax(original_template.ptp(0))
-#     max_ptp = np.max(original_template.ptp(0))
+    max_ptp_channel = np.argmax(original_template.ptp(0))
+    max_ptp = np.max(original_template.ptp(0))
 
-#     plot_isi_distribution(st_1, ax=ax_isi);
+    plot_isi_distribution(st_1, ax=ax_isi);
 
-#     most_similar_cluster = closest_clusters[0]
-#     most_similar_shift = shifts[0]
-#     h_shifts = [.2,.8]
-#     t_shifts = [0, most_similar_shift]
-#     colors = [('blue','darkblue'), ('red','darkred')]
-#     cluster_ids_plot = [cluster_id, most_similar_cluster]
-#     sortings_plot = [sorting1, sorting2]
-#     for cluster_id_plot, color, sorting_plot, h_shift, t_shift in zip(cluster_ids_plot, colors, sortings_plot, h_shifts, t_shifts):
-#         spike_times = sorting_plot.get_unit_spike_train(cluster_id_plot) + t_shift
-#         mcs_abs_cluster = np.zeros(len(spike_times)).astype('int') + max_ptp_channel
-#         first_chans_cluster = (mcs_abs_cluster - 20).clip(min=0)
-#         waveform_scale = 2/max_ptp
-#         plot_raw_waveforms_unit_geom(geom_array, num_channels, first_chans_cluster, mcs_abs_cluster, spike_times=spike_times, bin_file=raw_data_bin, x_geom_scale = 1/15, 
-#                                      y_geom_scale = 1/10, waveform_scale = waveform_scale, spikes_plot = num_spikes_plot, waveform_shape=(30,70), num_rows=3, 
-#                                      alpha=.2, h_shift=h_shift, do_mean=False, ax=ax_raw_wf, color=color[0])
-#         plot_raw_waveforms_unit_geom(geom_array, num_channels, first_chans_cluster, mcs_abs_cluster, spike_times=spike_times, bin_file=raw_data_bin, x_geom_scale = 1/15, 
-#                                      y_geom_scale = 1/10, waveform_scale = waveform_scale, spikes_plot = num_spikes_plot, waveform_shape=(30,70), num_rows=3, 
-#                                      alpha=1, h_shift=h_shift, do_mean=True, ax=ax_raw_wf, color=color[1])
+    most_similar_cluster = closest_clusters[0]
+    most_similar_shift = shifts[0]
+    h_shifts = [.2,.8]
+    t_shifts = [0, most_similar_shift]
+    colors = [('blue','darkblue'), ('red','darkred')]
+    cluster_ids_plot = [cluster_id, most_similar_cluster]
+    sortings_plot = [sorting1, sorting2]
+    for cluster_id_plot, color, sorting_plot, h_shift, t_shift in zip(cluster_ids_plot, colors, sortings_plot, h_shifts, t_shifts):
+        spike_times = sorting_plot.get_unit_spike_train(cluster_id_plot) + t_shift
+        mcs_abs_cluster = np.zeros(len(spike_times)).astype('int') + max_ptp_channel
+        first_chans_cluster = (mcs_abs_cluster - 20).clip(min=0)
+        waveform_scale = 2/max_ptp
+        # waveform_scale = 1/25
+        plot_raw_waveforms_unit_geom(geom_array, num_channels, first_chans_cluster, mcs_abs_cluster, spike_times=spike_times, bin_file=raw_data_bin, x_geom_scale = 1/15, 
+                                     y_geom_scale = 1/10, waveform_scale = waveform_scale, spikes_plot = num_spikes_plot, waveform_shape=(30,70), num_rows=3, 
+                                     alpha=.2, h_shift=h_shift, do_mean=False, ax=ax_raw_wf, color=color[0])
+        plot_raw_waveforms_unit_geom(geom_array, num_channels, first_chans_cluster, mcs_abs_cluster, spike_times=spike_times, bin_file=raw_data_bin, x_geom_scale = 1/15, 
+                                     y_geom_scale = 1/10, waveform_scale = waveform_scale, spikes_plot = num_spikes_plot, waveform_shape=(30,70), num_rows=3, 
+                                     alpha=1, h_shift=h_shift, do_mean=True, ax=ax_raw_wf, color=color[1])
+        
+        if do_denoised_waveform:
+            mcs_abs_cluster = triaged_mcs_abs[cluster_labels==cluster_id_plot]
+            first_chans_cluster = triaged_firstchans[cluster_labels==cluster_id_plot]
+            waveforms = denoised_waveforms[non_triaged_idxs[cluster_labels==cluster_id_plot]]
+            plot_waveforms_unit_geom(geom_array, num_channels, first_chans_cluster, mcs_abs_cluster, waveforms, x_geom_scale = 1/15, 
+                                     y_geom_scale = 1/10, waveform_scale = waveform_scale, spikes_plot = num_spikes_plot, waveform_shape=(30,70), num_rows=3, 
+                                     alpha=.2, h_shift=h_shift, do_mean=False, ax=ax_denoised_wf, color=color[0])
+            plot_waveforms_unit_geom(geom_array, num_channels, first_chans_cluster, mcs_abs_cluster, waveforms, x_geom_scale = 1/15, 
+                                     y_geom_scale = 1/10, waveform_scale = waveform_scale, spikes_plot = num_spikes_plot, waveform_shape=(30,70), num_rows=3, 
+                                     alpha=1, h_shift=h_shift, do_mean=True, ax=ax_denoised_wf, color=color[1])
+            
+    ax_raw_wf.set_title(f"cluster {cluster_id}/cluster {most_similar_cluster} raw, shift {most_similar_shift}")
+    if do_denoised_waveform:
+        ax_denoised_wf.set_title(f"cluster {cluster_id}/cluster {most_similar_cluster} denoised, shift {most_similar_shift}")
+    channel_range = (max(max_ptp_channel-num_channels_similarity//2,0),max_ptp_channel+num_channels_similarity//2)
+    template1 = original_template[:,channel_range[0]:channel_range[1]]
+    most_similar_template = templates[0]
+    if most_similar_shift == 0:
+        most_similar_template_flattened = most_similar_template.T.flatten()
+    elif most_similar_shift < 0:
+        most_similar_template_flattened = np.pad(most_similar_template.T.flatten(),((-most_similar_shift,0)), mode='constant')[:most_similar_shift]
+    else:    
+        most_similar_template_flattened = np.pad(most_similar_template.T.flatten(),((0,most_similar_shift)), mode='constant')[most_similar_shift:]
+    ax_raw_wf_flat.plot(template1.T.flatten(),color='blue')
+    ax_raw_wf_flat.plot(most_similar_template_flattened,color='red')
+    ax_raw_wf_flat.set_title(f"cluster {cluster_id}/cluster {most_similar_cluster} templates flat, shift {most_similar_shift}")
+    fig.suptitle(f"cluster {cluster_id}, firing rate: {'%.1f' % round(firing_rate,2)} Hz, max ptp: {'%.1f' % round(max_ptp,2)}");
+    return fig
 
-#     ax_raw_wf.set_title(f"cluster {cluster_id}/cluster {most_similar_cluster} raw, shift {most_similar_shift}")
+# def plot_unit_similarities_summary(cluster_id, closest_clusters, sorting1, sorting2, geom_array, raw_data_bin, recoring_duration, num_channels=40, num_spikes_plot=100, num_channels_similarity=20, 
+#                                    num_close_clusters_plot=10, num_close_clusters=30, shifts_align = np.arange(-3,4), order_by ='similarity', normalize_agreement_by="both", denoised_waveforms=None, 
+#                                    cluster_labels=None, non_triaged_idxs=None, triaged_mcs_abs=None, triaged_firstchans=None):
 
+#     # ###Kilosort
+#     cluster_ids_all = sorting1.get_unit_ids()
+#     cluster_ids_list = [cluster_ids_all[i * n:(i + 1) * n] for i in range((len(cluster_ids_all) + n - 1) // n )] 
+#     for subset_id, cluster_ids in enumerate(cluster_ids_list):
+#     np.random.seed(0)
+#     cluster_ids = np.random.choice(sorting_kilo.get_unit_ids(), 50)
+#     num_clusters = len(cluster_ids)
+#     fig = plt.figure(figsize=(32, 3*num_clusters))
+#     gs = gridspec.GridSpec(num_clusters,9)
+#     gs.update(hspace=0.5)
+#     num_close_clusters_plot = 10
+#     for i, cluster_id in enumerate(tqdm(cluster_ids)):
+#         matplotlib.rcParams.update({'font.size': 10})
+#         ax_cid = plt.subplot(gs[i,0])
+#         ax_fr = plt.subplot(gs[i,1])
+#         ax_maxptp = plt.subplot(gs[i,2])
+#         ax_cos = plt.subplot(gs[i,3:5])
+#         ax_agree  = plt.subplot(gs[i,5:7])
+#         ax_isi = plt.subplot(gs[i,7:9])
 
-#     channel_range = (max(max_ptp_channel-num_channels_similarity//2,0),max_ptp_channel+num_channels_similarity//2)
-#     template1 = original_template[:,channel_range[0]:channel_range[1]]
-#     most_similar_template = templates[0]
-#     if most_similar_shift == 0:
-#         most_similar_template_flattened = most_similar_template.T.flatten()
-#     elif most_similar_shift < 0:
-#         most_similar_template_flattened = np.pad(most_similar_template.T.flatten(),((-most_similar_shift,0)), mode='constant')[:most_similar_shift]
-#     else:    
-#         most_similar_template_flattened = np.pad(most_similar_template.T.flatten(),((0,most_similar_shift)), mode='constant')[most_similar_shift:]
-#     ax_raw_wf_flat.plot(template1.T.flatten(),color='blue')
-#     ax_raw_wf_flat.plot(most_similar_template_flattened,color='red')
-#     ax_raw_wf_flat.set_title(f"cluster {cluster_id}/cluster {most_similar_cluster} templates flat, shift {most_similar_shift}")
+#         st_1 = sorting_kilo.get_unit_spike_train(cluster_id)
+#         firing_rate = len(st_1) / recording_duration #in seconds
+#         waveforms1 = read_waveforms(st_1, raw_data_bin, geom_array, n_times=121)[0]
+#         template1 = np.mean(waveforms1, axis=0)
+#         max_ptp_channel = np.argmax(template1.ptp(0))
+#         max_ptp = np.max(template1.ptp(0))
+#         channel_range = (max(max_ptp_channel-num_channels_cosine//2,0),max_ptp_channel+num_channels_cosine//2)
+#         template1 = template1[:,channel_range[0]:channel_range[1]]
+
+#         #compute K closest clsuters
+#         curr_cluster_depth = kilo_cluster_depth_means[cluster_id]
+#         dist_to_other_cluster_dict = {cluster_id:abs(mean_depth-curr_cluster_depth) for (cluster_id,mean_depth) in kilo_cluster_depth_means.items()}
+#         closest_clusters = [y[0] for y in sorted(dist_to_other_cluster_dict.items(), key = lambda x: x[1])[1:1+num_close_clusters]]
+
+#         similarities = []
+#         agreements = []
+#         for closest_cluster in closest_clusters:
+#             st_2 = sorting_kilo.get_unit_spike_train(closest_cluster)
+#             waveforms2 = read_waveforms(st_2, raw_data_bin, geom_array, n_times=121)[0]
+#             template2 = np.mean(waveforms2, axis=0)[:,channel_range[0]:channel_range[1]]
+#             # similarity = sklearn.metrics.pairwise.cosine_similarity(np.expand_dims(template1.flatten(),0), np.expand_dims(template2.flatten(),0))
+#             # similarities.append(similarity[0][0])
+#             similarity = np.max(np.abs(template1 - template2))
+#             similarities.append(similarity)
+#             ind_st1, ind_st2, not_match_ind_st1, not_match_ind_st2 = compute_spiketrain_agreement(st_1, st_2, delta_frames=12)
+#             agreement = len(ind_st1) / (len(st_1) + len(st_2) - len(ind_st1))
+#             agreements.append(agreement)
+
+#         agreements = np.asarray(agreements).round(2)
+#         similarities = np.asarray(similarities).round(2)
+#         closest_clusters = np.asarray(closest_clusters)
+#         # most_similar_idxs = np.flip(np.argsort(similarities))
+#         most_similar_idxs = np.argsort(similarities)
+#         agreements = agreements[most_similar_idxs]
+#         similarities = similarities[most_similar_idxs]
+#         closest_clusters = closest_clusters[most_similar_idxs]
+
+#         y_axis_labels = [f"Unit {cluster_id}"]
+#         x_axis_labels = closest_clusters
+#         g = sns.heatmap(np.expand_dims(similarities,0), vmin=0, vmax=max(similarities), cmap='RdYlGn_r', annot=np.expand_dims(similarities,0),xticklabels=x_axis_labels, yticklabels=y_axis_labels, ax=ax_cos,cbar=False)
+#         ax_cos.set_title("Cosine Similarity");
+#         g = sns.heatmap(np.expand_dims(agreements,0), vmin=0, vmax=1, cmap='RdYlGn', annot=np.expand_dims(agreements,0),xticklabels=x_axis_labels, yticklabels=y_axis_labels, ax=ax_agree,cbar=False)
+#         ax_agree.set_title("Agreement");
+
+#         plot_isi_distribution(st_1, ax=ax_isi);
+#         matplotlib.rcParams.update({'font.size': 22})
+
+#         ax_cid.text(0.15, 0.45, f"Unit id: {cluster_id}")
+#         ax_cid.set_xticks([])
+#         ax_cid.set_yticks([])
+
+#         ax_fr.text(0.15, 0.45, f"FR: {'%.1f' % round(firing_rate,2)} Hz")
+#         ax_fr.set_xticks([])
+#         ax_fr.set_yticks([])
+
+#         ax_maxptp.text(0.1, 0.45, f"max ptp: {'%.1f' % round(max_ptp,2)}")
+#         ax_maxptp.set_xticks([])
+#         ax_maxptp.set_yticks([])
 #     plt.close(fig)
-#     return fig
+#     fig.savefig(f"kilosort_cluster_summaries_norm.png")

@@ -325,7 +325,6 @@ def plotlocs(
     y = y[which]
     alpha = alpha[which]
     z = z[which]
-
     nfeats = 0
     if feats is not None:
         nfeats = feats.shape[1]
@@ -368,6 +367,8 @@ def plotlocs(
         aa.set_ylim([z.min() - 10, z.max() + 10])
     else:
         aa.set_ylim(zlim)
+    
+    return fig
 
 
 def plot_ptp(ptp, axes, label, color, codes):
