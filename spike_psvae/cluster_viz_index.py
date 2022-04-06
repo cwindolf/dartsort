@@ -4,6 +4,8 @@ import colorcet as cc
 from scipy.spatial.distance import cdist
 from spikeinterface import NumpySorting
 from spikeinterface.toolkit import compute_correlograms
+from spikeinterface.comparison import compare_two_sorters
+from matplotlib_venn import venn2
 
 import matplotlib.transforms as transforms
 from matplotlib.patches import Ellipse
@@ -99,20 +101,27 @@ def array_scatter(
         alpha=0.05,
     )
     axes[1].set_xlabel("maxptp")
-    axes[2].scatter(x, z, c=np.clip(maxptp, 3, 15), alpha=0.1, marker=".", cmap=plt.cm.viridis)
+    axes[2].scatter(
+        x,
+        z,
+        c=np.clip(maxptp, 3, 15),
+        alpha=0.1,
+        marker=".",
+        cmap=plt.cm.viridis,
+    )
     axes[2].scatter(*geom.T, c="orange", marker="s", s=10)
     axes[2].set_title("ptps")
     axes[0].set_ylim(zlim)
-    
+
     if fig is not None:
         plt.tight_layout()
-    
+
     return fig
 
 
 def plot_waveforms_geom(
     main_cluster_id,
-    clusters_to_plot,
+    neighbor_clusters,
     labels,
     geom,
     channel_index,
@@ -128,9 +137,10 @@ def plot_waveforms_geom(
     h_shift=0,
     do_mean=False,
     ax=None,
+    colors=None,
 ):
     ax = ax or plt.gca()
-    
+
     # what channels will we plot?
     vals, counts = np.unique(
         spike_index[np.flatnonzero(labels == main_cluster_id), 1],
@@ -142,7 +152,7 @@ def plot_waveforms_geom(
 
     # how to scale things?
     all_max_ptp = maxptps[
-        np.isin(labels, (*clusters_to_plot, main_cluster_id))
+        np.isin(labels, (*neighbor_clusters, main_cluster_id))
     ].max()
     scale = (z_uniq[1] - z_uniq[0]) / max(7, all_max_ptp)
 
@@ -163,8 +173,11 @@ def plot_waveforms_geom(
         res_data = np.memmap(residual_bin, dtype=np.float32)
         res_data = res_data.reshape(-1, 384)
 
-    for j, cluster_id in enumerate(clusters_to_plot):
-        color = get_ccolor(cluster_id)
+    for j, cluster_id in enumerate((main_cluster_id, *neighbor_clusters)):
+        if colors is None:
+            color = get_ccolor(cluster_id)
+        else:
+            color = colors[j]
         in_cluster = np.flatnonzero(labels == cluster_id)
         num_plot_cluster = min(len(in_cluster), spikes_plot)
         some_in_cluster = np.random.default_rng(0).choice(
@@ -212,14 +225,10 @@ def plot_waveforms_geom(
                 else:
                     continue
                 if residual_bin:
-                    trace += residuals[
-                        i, t_range[0] : t_range[1], k
-                    ]
+                    trace += residuals[i, t_range[0] : t_range[1], k]
 
                 waveform = trace * scale
-                draw_lines.append(
-                    geom[channel, 0] + times_plot
-                )
+                draw_lines.append(geom[channel, 0] + times_plot)
                 draw_lines.append(waveform + geom[channel, 1])
                 max_vert_line = geom[channel, 0]
                 if max_vert_line not in vertical_lines:
@@ -265,14 +274,14 @@ def single_unit_summary(
     ]
     closest_clusters = np.argsort(
         cdist([cluster_centers[cluster_id]], cluster_centers)[0]
-    )[1 : 3]
+    )[1:3]
 
     fig, axes = plt.subplot_mosaic(single_unit_mosaic, figsize=(15, 10))
     axes["a"].get_shared_y_axes().join(axes["a"], axes["b"])
     axes["a"].get_shared_y_axes().join(axes["a"], axes["c"])
     axes["p"].get_shared_y_axes().join(axes["p"], axes["q"])
     axes["p"].get_shared_y_axes().join(axes["p"], axes["r"])
-    
+
     # -- waveform plots
     for ax, w, raw, res in zip(
         "abc",
@@ -355,5 +364,176 @@ def single_unit_summary(
         axes[ax].set_xticks(bins[1:])
         axes[ax].set_xlabel("lag (ms)")
         axes[ax].set_title(f"cross corellogram {cluster_id} <-> {unit}")
-    
+
     return fig
+
+
+def plot_agreement_venn(
+    cluster_id1,
+    geom,
+    channel_index,
+    spike_index1,
+    spike_index2,
+    name1,
+    name2,
+    raw_bin,
+    maxptps1,
+    maxptps2,
+    match_score=0.5,
+    spikes_plot=100,
+    delta_frames=12,
+):
+    # make spikeinterface objects
+    sorting1 = NumpySorting(
+        times_list=spike_index1[:, 0],
+        labels_list=spike_index1[:, 1],
+        sampling_frequency=30000,
+    )
+    sorting2 = NumpySorting(
+        times_list=spike_index2[:, 0],
+        labels_list=spike_index2[:, 1],
+        sampling_frequency=30000,
+    )
+    comp = compare_two_sorters(
+        sorting1,
+        sorting2,
+        sorting1_name=name1,
+        sorting2_name=name2,
+        match_score=0.5,
+    )
+
+    # get best match
+    match2 = comp.get_best_unit_match1(cluster_id1)
+    if not (match2 and match2 > -1):
+        print("match2", match2)
+        return
+    match_frac = comp.get_agreement_fraction(cluster_id1, match2)
+
+    (
+        ind_st1,
+        ind_st2,
+        not_match_ind_st1,
+        not_match_ind_st2,
+    ) = compute_spiketrain_agreement(cluster_id1, match2, delta_frames)
+    fig = plt.figure(figsize=(24, 12))
+    grid = (1, 3)
+    ax_venn = plt.subplot2grid(grid, (0, 0))
+    ax_sorting1 = plt.subplot2grid(grid, (0, 1))
+    ax_sorting2 = plt.subplot2grid(grid, (0, 2))
+
+    subsets = [len(not_match_ind_st1), len(not_match_ind_st2), len(ind_st1)]
+    v = venn2(
+        subsets=subsets,
+        set_labels=["unit{}".format(cluster_id1), "unit{}".format(match2)],
+        ax=ax_venn,
+    )
+    v.get_patch_by_id("10").set_color("red")
+    v.get_patch_by_id("01").set_color("blue")
+    v.get_patch_by_id("11").set_color("goldenrod")
+    ax_venn.set_title(
+        f"{name1}{cluster_id1} + {name2}{match2}, "
+        f"{match_frac.round(2)*100}% agreement"
+    )
+
+    # fig, axes = plt.subplots(1, 2, sharey=True, figsize=(12,12))
+    n_match_1 = len(ind_st1)
+    n_unmatch_1 = len(not_match_ind_st1)
+    match_unmatch_labels = np.r_[
+        np.zeros(n_match_1, dtype=int),
+        np.ones(n_unmatch_1, dtype=int),
+    ]
+    match_unmatch_spike_index = np.r_[
+        spike_index1[ind_st1],
+        spike_index1[not_match_ind_st1],
+    ]
+    match_unmatch_maxptps = np.r_[
+        maxptps1[ind_st1],
+        maxptps1[not_match_ind_st1],
+    ]
+
+    plot_waveforms_geom(
+        0,
+        [1],
+        match_unmatch_labels,
+        geom,
+        channel_index,
+        match_unmatch_spike_index,
+        match_unmatch_maxptps,
+        raw_bin=raw_bin,
+        spikes_plot=spikes_plot,
+        num_rows=3,
+        ax=ax_sorting1,
+        colors=["goldenrod", "red"],
+    )
+
+    n_match_2 = len(ind_st2)
+    n_unmatch_2 = len(not_match_ind_st2)
+    match_unmatch_labels = np.r_[
+        np.zeros(n_match_2, dtype=int),
+        np.ones(n_unmatch_2, dtype=int),
+    ]
+    match_unmatch_spike_index = np.r_[
+        spike_index2[ind_st2],
+        spike_index2[not_match_ind_st2],
+    ]
+    match_unmatch_maxptps = np.r_[
+        maxptps2[ind_st2],
+        maxptps2[not_match_ind_st2],
+    ]
+
+    plot_waveforms_geom(
+        0,
+        [1],
+        match_unmatch_labels,
+        geom,
+        channel_index,
+        match_unmatch_spike_index,
+        match_unmatch_maxptps,
+        raw_bin=raw_bin,
+        spikes_plot=spikes_plot,
+        num_rows=3,
+        ax=ax_sorting1,
+        colors=["goldenrod", "blue"],
+    )
+
+    return fig
+
+
+def compute_spiketrain_agreement(st_1, st_2, delta_frames=12):
+    # create figure for each match
+    times_concat = np.concatenate((st_1, st_2))
+    membership = np.concatenate(
+        (np.ones(st_1.shape) * 1, np.ones(st_2.shape) * 2)
+    )
+    indices = times_concat.argsort()
+    times_concat_sorted = times_concat[indices]
+    membership_sorted = membership[indices]
+    diffs = times_concat_sorted[1:] - times_concat_sorted[:-1]
+    inds = np.where(
+        (diffs <= delta_frames)
+        & (membership_sorted[:-1] != membership_sorted[1:])
+    )[0]
+    if len(inds) > 0:
+        inds2 = inds[np.where(inds[:-1] + 1 != inds[1:])[0]] + 1
+        inds2 = np.concatenate((inds2, [inds[-1]]))
+        times_matched = times_concat_sorted[inds2]
+        # # find and label closest spikes
+        ind_st1 = np.array(
+            [np.abs(st_1 - tm).argmin() for tm in times_matched]
+        )
+        ind_st2 = np.array(
+            [np.abs(st_2 - tm).argmin() for tm in times_matched]
+        )
+        not_match_ind_st1 = np.ones(st_1.shape[0], bool)
+        not_match_ind_st1[ind_st1] = False
+        not_match_ind_st1 = np.where(not_match_ind_st1)[0]
+        not_match_ind_st2 = np.ones(st_2.shape[0], bool)
+        not_match_ind_st2[ind_st2] = False
+        not_match_ind_st2 = np.where(not_match_ind_st2)[0]
+    else:
+        ind_st1 = np.asarray([]).astype("int")
+        ind_st2 = np.asarray([]).astype("int")
+        not_match_ind_st1 = np.asarray([]).astype("int")
+        not_match_ind_st2 = np.asarray([]).astype("int")
+
+    return ind_st1, ind_st2, not_match_ind_st1, not_match_ind_st2
