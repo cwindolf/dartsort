@@ -6,7 +6,6 @@ from matplotlib.patches import Ellipse
 import matplotlib.transforms as transforms
 from matplotlib import cm
 matplotlib.use('Agg')
-import os
 from matplotlib_venn import venn3, venn3_circles, venn2
 plt.rcParams['axes.xmargin'] = 0
 plt.rcParams['axes.ymargin'] = 0
@@ -19,47 +18,9 @@ from matplotlib_venn import venn3, venn3_circles, venn2
 import seaborn as sns
 import matplotlib.gridspec as gridspec
 matplotlib.rcParams.update({'font.size': 10})
-
-def read_waveforms(spike_times, bin_file, geom_array, n_times=None, channels=None, dtype=np.dtype('float32')):
-    '''
-    read waveforms from recording
-    n_times : waveform temporal length 
-    channels : channels to read from 
-    '''
-    # n_times needs to be odd
-    if n_times % 2 == 0:
-        n_times += 1
-
-    # read all channels
-    if channels is None:
-        channels = np.arange(geom_array.shape[0])
-        
-    # ***** LOAD RAW RECORDING *****
-    wfs = np.zeros((len(spike_times), n_times, len(channels)),
-                   'float32')
-
-    skipped_idx = []
-    n_channels = len(channels)
-    total_size = n_times*n_channels
-    # spike_times are the centers of waveforms
-    spike_times_shifted = spike_times - n_times//2
-    offsets = spike_times_shifted.astype('int64')*dtype.itemsize*n_channels
-    with open(bin_file, "rb") as fin:
-        for ctr, spike in enumerate(spike_times_shifted):
-            try:
-                fin.seek(offsets[ctr], os.SEEK_SET)
-                wf = np.fromfile(fin,
-                                 dtype=dtype,
-                                 count=total_size)
-                wfs[ctr] = wf.reshape(
-                    n_times, n_channels)[:,channels]
-            except:
-                # print(f"skipped {ctr, spike}")
-                skipped_idx.append(ctr)
-    wfs=np.delete(wfs, skipped_idx, axis=0)
-    fin.close()
-
-    return wfs, skipped_idx
+from spike_psvae.cluster_utils import make_sorting_from_labels_frames, compute_cluster_centers, relabel_by_depth, run_weighted_triage, remove_duplicate_units, read_waveforms
+from spike_psvae.cluster_utils import get_agreement_indices, compute_spiketrain_agreement, get_unit_similarities, compute_shifted_similarity 
+from spike_psvae.cluster_utils import get_closest_clusters_kilosort, get_closest_clusters_hdbscan
 
 def cluster_scatter(xs, ys, ids, ax=None, n_std=2.0, excluded_ids=set(), s=1, alpha=.5, color_dict=None):
     if color_dict is None:
@@ -320,35 +281,7 @@ def plot_waveforms_unit_geom(geom_array, num_channels, first_chans_cluster, mcs_
                 waveform = waveforms[i, waveform_shape[0]:waveform_shape[1],k].T.flatten()*waveform_scale
                 # print(np.abs(waveform).max(), channel)
                 ax.plot(np.linspace(channel_position[0]-.75+h_shift, channel_position[0]+.5+h_shift, waveform.shape[0]), waveform + channel_position[1], alpha = alpha, c = color)    
-                
-def get_agreement_indices(cluster_id_1, cluster_id_2, sorting1, sorting2, delta_frames=12):
-    lab_st1 = cluster_id_1
-    lab_st2 = cluster_id_2
-    st_1 = sorting1.get_unit_spike_train(lab_st1)
-    mapped_st = sorting2.get_unit_spike_train(lab_st2)
-    times_concat = np.concatenate((st_1, mapped_st))
-    membership = np.concatenate((np.ones(st_1.shape) * 1, np.ones(mapped_st.shape) * 2))
-    indices = times_concat.argsort()
-    times_concat_sorted = times_concat[indices]
-    membership_sorted = membership[indices]
-    diffs = times_concat_sorted[1:] - times_concat_sorted[:-1]
-    inds = np.where((diffs <= delta_frames) & (membership_sorted[:-1] != membership_sorted[1:]))[0]
-
-    if len(inds) > 0:
-        inds2 = inds[np.where(inds[:-1] + 1 != inds[1:])[0]] + 1
-        inds2 = np.concatenate((inds2, [inds[-1]]))
-        times_matched = times_concat_sorted[inds2]
-        # # find and label closest spikes
-        ind_st1 = np.array([np.abs(st_1 - tm).argmin() for tm in times_matched])
-        ind_st2 = np.array([np.abs(mapped_st - tm).argmin() for tm in times_matched])
-        not_match_ind_st1 = np.ones(st_1.shape[0], bool)
-        not_match_ind_st1[ind_st1] = False
-        not_match_ind_st1 = np.where(not_match_ind_st1)[0]
-        not_match_ind_st2 = np.ones(mapped_st.shape[0], bool)
-        not_match_ind_st2[ind_st2] = False
-        not_match_ind_st2 = np.where(not_match_ind_st2)[0]
-        
-    return ind_st1, ind_st2, not_match_ind_st1, not_match_ind_st2, st_1, mapped_st
+            
 
 def plot_venn_agreement(cluster_id_1, cluster_id_2, match_ind, not_match_ind_st1, not_match_ind_st2, ax=None):
     if ax is None:
@@ -393,7 +326,7 @@ def plot_array_scatter(labels, geom_array, triaged_x, triaged_z, triaged_maxptps
     return fig
 
 def plot_self_agreement(labels, triaged_spike_index, fig=None):
-    matplotlib.rcParams.update({'font.size': 22})
+    # matplotlib.rcParams.update({'font.size': 22})
     indices_list = []
     labels_list = []
     for cluster_id in np.unique(labels):
@@ -425,26 +358,25 @@ def plot_isi_distribution(spike_train, ax=None):
     ax.set_xlim([-1, 10])
     return ax
     
-def plot_single_unit_summary(cluster_id, labels, cluster_centers, geom_array, num_spikes_plot, num_rows_plot, triaged_x, triaged_z, triaged_maxptps, triaged_firstchans, triaged_mcs_abs, 
-                             triaged_spike_index, non_triage_indices, wfs_localized, wfs_subtracted, cluster_color_dict, color_arr, raw_bin_file, residual_bin_file):
-    curr_cluster_center = cluster_centers[cluster_id]
+def plot_single_unit_summary(cluster_id, labels, cluster_centers, geom_array, num_spikes_plot, num_rows_plot, triaged_x, triaged_z, triaged_maxptps, 
+                             triaged_firstchans, triaged_mcs_abs, triaged_spike_index, non_triage_indices, wfs_localized, wfs_subtracted, cluster_color_dict, color_arr, 
+                             raw_bin_file, residual_bin_file):
+    matplotlib.rcParams.update({'font.size': 30})
     label_indices = np.where(labels ==cluster_id)
-    num_close_clusters = 2
-    dist_other_clusters = np.linalg.norm(curr_cluster_center[:2] - cluster_centers[:,:2], axis=1)
-    closest_clusters = np.argsort(dist_other_clusters)[1:num_close_clusters + 1]
-    closest_clusters_dist = dist_other_clusters[closest_clusters]
-    scales = (1,10,1,15,30) #predefined scales for each feature
-    features = np.concatenate((np.expand_dims(triaged_x,1), np.expand_dims(triaged_z,1), np.expand_dims(np.log(triaged_maxptps)*scales[4],1)), axis=1)
+    
+    closest_clusters = get_closest_clusters_hdbscan(cluster_id, cluster_centers, num_close_clusters=2)
+    # scales = (1,10,1,15,30) #predefined scales for each feature
+    features = np.concatenate((np.expand_dims(triaged_x,1), np.expand_dims(triaged_z,1), np.expand_dims(np.log(triaged_maxptps),1)), axis=1)
     all_cluster_features_close = features[np.where((labels == cluster_id) | (labels == closest_clusters[0]) | (labels == closest_clusters[1]))]
 
     #buffers for range of scatter plots
     z_buffer = 5
     x_buffer = 5
-    scaled_ptp_cutoff = 2.5
+    ptp_cutoff = .5
 
     z_cutoff = (np.min(all_cluster_features_close[:,1] - z_buffer), np.max(all_cluster_features_close[:,1] + z_buffer))
     x_cutoff = (np.min(all_cluster_features_close[:,0] - x_buffer), np.max(all_cluster_features_close[:,0] + x_buffer))
-    scaled_ptps_cutoff = (np.min(all_cluster_features_close[:,2] - scaled_ptp_cutoff), np.max(all_cluster_features_close[:,2] + scaled_ptp_cutoff))
+    ptps_cutoff = (np.min(all_cluster_features_close[:,2] - ptp_cutoff), np.max(all_cluster_features_close[:,2] + ptp_cutoff))
 
     fig = plt.figure(figsize=(24+18*3, 36))
     grid = (6, 6)
@@ -464,16 +396,14 @@ def plot_single_unit_summary(cluster_id, labels, cluster_centers, geom_array, nu
     ptps_cluster = features[:,2][label_indices]
     spike_train_s = triaged_spike_index[:,0][label_indices] / 30000
     ax.plot(spike_train_s, ptps_cluster)
-    ax.set_title(f"scaled ptps over time");
-    ax.set_ylabel("scaled ptp");
+    ax.set_ylabel("ptp");
     ax.set_xlabel("seconds");
 
     ax = ax_ptp_z
     zs_cluster = features[:,1][label_indices]
     ax.scatter(zs_cluster, ptps_cluster);
-    ax.set_title(f"zs vs. scaled ptps");
     ax.set_xlabel("zs");
-    ax.set_ylabel("scaled ptps");
+    ax.set_ylabel("ptps");
 
     ax = ax_scatter_xz
     xs, zs, ids = features[:,0], features[:,1], labels
@@ -488,11 +418,11 @@ def plot_single_unit_summary(cluster_id, labels, cluster_centers, geom_array, nu
     ax = ax_scatter_sptpz
     ys, zs, ids = features[:,2], features[:,1], labels
     cluster_scatter(ys, zs, ids, ax=ax, excluded_ids=set([-1]), s=100, alpha=.3, color_dict=cluster_color_dict)
-    ax.set_title(f"scaled ptp vs. z");
-    ax.set_xlabel("scaled ptp");
+    ax.set_title(f"ptp vs. z");
+    ax.set_xlabel("ptp");
     ax.set_yticks([])
     ax.set_ylim(z_cutoff)
-    ax.set_xlim(scaled_ptps_cutoff)
+    ax.set_xlim(ptps_cutoff)
 
     ax = ax_scatter_xzptp
     ax.scatter(xs, zs, s=100, c=color_arr, alpha=.3)
@@ -531,7 +461,7 @@ def plot_single_unit_summary(cluster_id, labels, cluster_centers, geom_array, nu
         axes[i].bar(bins[1:], correlograms[0][1], width=bin_ms, align='center')
         axes[i].set_xticks(bins[1:])
         axes[i].set_xlabel('lag (ms)')
-        axes[i].set_title(f'cluster_{cluster_id}_cluster_{cluster_isi_id}_xcorrelogram.png')
+        axes[i].set_title(f'{cluster_id}_{cluster_isi_id}_xcorrelogram.png', pad=20)
 
     clusters_plot = np.concatenate((closest_clusters, [cluster_id]))
     # clusters_plot = [cluster_id]
@@ -571,39 +501,9 @@ def plot_single_unit_summary(cluster_id, labels, cluster_centers, geom_array, nu
     ax.set_xlim(ax_denoised.get_xlim())
     ax.set_ylim(ax_denoised.get_ylim())
     ax.set_xlabel("x")
+    matplotlib.rcParams.update({'font.size': 10})
     
     return fig
-
-def compute_spiketrain_agreement(st_1, st_2, delta_frames=12):
-    #create figure for each match
-    times_concat = np.concatenate((st_1, st_2))
-    membership = np.concatenate((np.ones(st_1.shape) * 1, np.ones(st_2.shape) * 2))
-    indices = times_concat.argsort()
-    times_concat_sorted = times_concat[indices]
-    membership_sorted = membership[indices]
-    diffs = times_concat_sorted[1:] - times_concat_sorted[:-1]
-    inds = np.where((diffs <= delta_frames) & (membership_sorted[:-1] != membership_sorted[1:]))[0]
-    if len(inds) > 0:
-        inds2 = inds[np.where(inds[:-1] + 1 != inds[1:])[0]] + 1
-        inds2 = np.concatenate((inds2, [inds[-1]]))
-        times_matched = times_concat_sorted[inds2]
-        # # find and label closest spikes
-        ind_st1 = np.array([np.abs(st_1 - tm).argmin() for tm in times_matched])
-        ind_st2 = np.array([np.abs(st_2 - tm).argmin() for tm in times_matched])
-        not_match_ind_st1 = np.ones(st_1.shape[0], bool)
-        not_match_ind_st1[ind_st1] = False
-        not_match_ind_st1 = np.where(not_match_ind_st1)[0]
-        not_match_ind_st2 = np.ones(st_2.shape[0], bool)
-        not_match_ind_st2[ind_st2] = False
-        not_match_ind_st2 = np.where(not_match_ind_st2)[0]
-    else:
-        ind_st1 = np.asarray([]).astype('int')
-        ind_st2 = np.asarray([]).astype('int')
-        not_match_ind_st1 = np.asarray([]).astype('int')
-        not_match_ind_st2 = np.asarray([]).astype('int')
-        
-    return ind_st1, ind_st2, not_match_ind_st1, not_match_ind_st2
-
 
 def plot_agreement_venn(cluster_id, cluster_id_match, cmp, sorting1, sorting2, sorting1_name, sorting2_name, geom_array, num_channels, num_spikes_plot, firstchans_cluster_sorting1, mcs_abs_cluster_sorting1, 
                         firstchans_cluster_sorting2, mcs_abs_cluster_sorting2, raw_bin_file, delta_frames = 12):
@@ -651,72 +551,6 @@ def plot_agreement_venn(cluster_id, cluster_id_match, cmp, sorting1, sorting2, s
                                          alpha=.1, h_shift=h_shift, do_mean=False, ax=ax_sorting2, color=color)
     return fig
 
-def compute_shifted_similarity(template1, template2, shifts=[0]):
-    curr_similarities = []
-    for shift in shifts:
-        if shift == 0:
-            similarity = np.max(np.abs(template1 - template2))
-        elif shift < 0:
-            template2_shifted_flattened = np.pad(template2.T.flatten(),((-shift,0)), mode='constant')[:shift]
-            similarity = np.max(np.abs(template1.T.flatten() - template2_shifted_flattened))
-        else:    
-            template2_shifted_flattened = np.pad(template2.T.flatten(),((0,shift)), mode='constant')[shift:]
-            similarity = np.max(np.abs(template1.T.flatten() - template2_shifted_flattened))
-        curr_similarities.append(similarity)
-    return np.min(curr_similarities), shifts[np.argmin(curr_similarities)]
-
-def get_unit_similarities(cluster_id, st_1, closest_clusters, sorting, geom_array, raw_data_bin, num_channels_similarity=20, num_close_clusters=30, shifts_align=[0], order_by ='similarity',
-                          normalize_agreement_by="both"):
-    waveforms1 = read_waveforms(st_1, raw_data_bin, geom_array, n_times=121)[0]
-    template1 = np.mean(waveforms1, axis=0)
-    original_template = np.copy(template1)
-    max_ptp_channel = np.argmax(template1.ptp(0))
-    max_ptp = np.max(template1.ptp(0))
-    channel_range = (max(max_ptp_channel-num_channels_similarity//2,0),max_ptp_channel+num_channels_similarity//2)
-    template1 = template1[:,channel_range[0]:channel_range[1]]
-
-    similarities = []
-    agreements = []
-    templates = []
-    shifts = []
-    for closest_cluster in closest_clusters:
-        st_2 = sorting.get_unit_spike_train(closest_cluster)
-        waveforms2 = read_waveforms(st_2, raw_data_bin, geom_array, n_times=121)[0]
-        template2 = np.mean(waveforms2, axis=0)[:,channel_range[0]:channel_range[1]]
-        similarity, shift = compute_shifted_similarity(template1, template2, shifts_align)
-        shifts.append(shift)
-        similarities.append(similarity)
-        # similarities.append(similarity[0][0])
-        ind_st1, ind_st2, not_match_ind_st1, not_match_ind_st2 = compute_spiketrain_agreement(st_1, st_2, delta_frames=12)
-        if normalize_agreement_by == "both":
-            agreement = len(ind_st1) / (len(st_1) + len(st_2) - len(ind_st1))
-        elif normalize_agreement_by == "first":
-            agreement = len(ind_st1) / len(st_1)
-        elif normalize_agreement_by == "second":
-            agreement = len(ind_st1) / len(st_2)
-        else:
-            raise ValueError("normalize_agreement_by must be both, first, or second")
-        agreements.append(agreement)
-        templates.append(template2)
-    agreements = np.asarray(agreements).round(2)
-    similarities = np.asarray(similarities).round(2)
-    closest_clusters = np.asarray(closest_clusters)
-    shifts = np.asarray(shifts)
-    templates = np.asarray(templates)
-    
-    #compute most similar units (with template similarity or spike train agreement)
-    if order_by == 'similarity':
-        most_similar_idxs = np.argsort(similarities) #np.flip(np.argsort(similarities))
-    elif order_by == 'agreement':
-        most_similar_idxs = np.flip(np.argsort(agreements))
-        
-    agreements = agreements[most_similar_idxs]
-    similarities = similarities[most_similar_idxs]
-    closest_clusters = closest_clusters[most_similar_idxs]
-    templates = templates[most_similar_idxs]
-    shifts = shifts[most_similar_idxs]
-    
-    return original_template, closest_clusters, similarities, agreements, templates, shifts
 
 def plot_unit_similarity_heatmaps(cluster_id, st_1, closest_clusters, sorting, geom_array, raw_data_bin, num_channels_similarity=20, num_close_clusters_plot=10, num_close_clusters=30,
                                   shifts_align=[0], order_by ='similarity', normalize_agreement_by="both", ax_similarity=None, ax_agreement=None):
