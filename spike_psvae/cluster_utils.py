@@ -24,7 +24,7 @@ def read_waveforms(spike_times, bin_file, geom_array, n_times=None, channels=Non
                    'float32')
 
     skipped_idx = []
-    n_channels = len(channels)
+    n_channels = geom_array.shape[0] #len(channels)
     total_size = n_times*n_channels
     # spike_times are the centers of waveforms
     spike_times_shifted = spike_times - n_times//2
