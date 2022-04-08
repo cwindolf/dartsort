@@ -1,7 +1,9 @@
+import time
 import numpy as np
 from scipy import sparse
 from sklearn.base import BaseEstimator, TransformerMixin
 from sklearn.decomposition import PCA
+from sklearn.impute import KNNImputer
 from tqdm.auto import trange
 
 from .point_source_centering import relocate_index, relocating_ptps_index
@@ -71,12 +73,22 @@ class LinearRelocAE(BaseEstimator, TransformerMixin):
         self.n_channels = n_channels
         self.geom = geom
         self.channel_index = channel_index
-        self.channel_subset = channel_index_subset(
-            geom, channel_index, n_channels=n_channels
-        )
-        self.sub_channel_index = self.channel_index[
-            self.channel_subset
-        ].reshape(len(channel_index), n_channels)
+        C = channel_index.shape[1]
+        if C > self.n_channels:
+            channel_subset = channel_index_subset(
+                geom, channel_index, n_channels=n_channels
+            )
+            sub_channel_index = []
+            for mask in channel_subset:
+                s = np.flatnonzero(mask)
+                s = list(s) + [C] * (self.n_channels - len(s))
+                sub_channel_index.append(s)
+            self.sub_channel_index = np.array(sub_channel_index)
+        else:
+            self.sub_channel_index = np.broadcast_to(
+                np.arange(C)[None, :],
+                channel_index.shape,
+            )
         self.relocate_dims = relocate_dims
         self.fit_n_waveforms = fit_n_waveforms
         self.B_updates = B_updates
@@ -110,7 +122,10 @@ class LinearRelocAE(BaseEstimator, TransformerMixin):
             N = self.fit_n_waveforms
 
         # trim to our subset
-        waveforms = waveforms[choice]
+        wfs = []
+        for i in range(0, len(choice), 1000):
+            wfs.append(waveforms[choice[i:i + 1000]])
+        waveforms = np.concatenate(wfs, axis=0)
         x = x[choice]
         y = y[choice]
         z = z[choice]
@@ -123,53 +138,51 @@ class LinearRelocAE(BaseEstimator, TransformerMixin):
 
         # trim to n_channels if necessary
         if C > self.n_channels:
-            channel_subset = []
-            for mask in self.channel_subset:
-                s = np.flatnonzero(mask)
-                s = list(s) + [C] * (self.n_channels - len(s))
-                channel_subset.append(s)
-            channel_subset = np.array(channel_subset)
             waveforms = np.pad(
                 waveforms, [(0, 0), (0, 0), (0, 1)], constant_values=np.nan
             )
             waveforms = waveforms[
                 np.arange(N)[:, None, None],
                 np.arange(T)[None, :, None],
-                channel_subset[maxchans][:, None, :],
+                self.sub_channel_index[maxchans][:, None, :],
             ]
 
         # initial mask: what channels are active / in probe
         S = (~np.isnan(waveforms)).astype(waveforms.dtype)
 
         # -- relocated waveforms and the transformations to get them
-        relocated_waveforms, r, q = relocate_index(
-            waveforms,
-            self.geom,
-            self.sub_channel_index,
-            maxchans,
-            x,
-            y,
-            z,
-            alpha,
-            relocate_dims=self.relocate_dims,
-        )
-        # those are torch but we want numpy
-        relocated_waveforms = relocated_waveforms.cpu().numpy()
-        r = r.cpu().numpy()
-        q = q.cpu().numpy()
+        with timer("Relocating"):
+            relocated_waveforms, r, q = relocate_index(
+                waveforms,
+                self.geom,
+                self.sub_channel_index,
+                maxchans,
+                x,
+                y,
+                z,
+                alpha,
+                relocate_dims=self.relocate_dims,
+            )
+            # those are torch but we want numpy
+            relocated_waveforms = relocated_waveforms.cpu().numpy()
+            r = r.cpu().numpy()
+            q = q.cpu().numpy()
 
-        # Nx1xC transformation to invert the relocation
-        destandardization = (q / r)[:, None, :]
-        destandardization[np.isnan(destandardization)] = 0
-        S = np.broadcast_to(destandardization, (relocated_waveforms.shape))
+            # Nx1xC transformation to invert the relocation
+            destandardization = (q / r)[:, None, :]
+            destandardization[np.isnan(destandardization)] = 0
+            S = np.broadcast_to(destandardization, (relocated_waveforms.shape))
 
         # -- initialize B with PCA in relocated space
-        reloc_pca = PCA(self.n_components)
-        reloc_pca.fit(relocated_waveforms.reshape(N, T * C))
-        B = reloc_pca.components_.reshape(self.n_components, T, C)
+        with timer("PCA initialization"):
+            reloc_pca = PCA(self.n_components)
+            pca_train_data = KNNImputer(copy=False).fit_transform(relocated_waveforms.reshape(N, T * self.n_channels))
+            reloc_pca.fit(pca_train_data)
+            B = reloc_pca.components_
+            B = B.T.reshape(T, self.n_channels, self.n_components)
 
         # rank 0 model
-        relocated_mean = reloc_pca.mean_.reshape(T, C)
+        relocated_mean = reloc_pca.mean_.reshape(T, self.n_channels)
         # unrelocated_means = relocated_mean[None, :, :] * destandardization
         # decentered_waveforms = waveforms - unrelocated_means
         centered_relocated = relocated_waveforms - relocated_mean[None]
@@ -198,18 +211,10 @@ class LinearRelocAE(BaseEstimator, TransformerMixin):
         features = np.zeros((N, self.n_components))
         errors = np.zeros(N)
 
-        if C > self.n_channels:
-            channel_subset = []
-            for mask in self.channel_subset:
-                s = np.flatnonzero(mask)
-                s = list(s) + [C] * (self.n_channels - len(s))
-                channel_subset.append(s)
-            channel_subset = np.array(channel_subset)
-
         # do this in batches in case a huge input has been passed
         Fs = []
-        for bs in range(0, N, self.fit_n_waveforms):
-            be = min(N, bs + self.fit_n_waveforms)
+        for bs in range(0, N, 1000):
+            be = min(N, bs + 1000)
             batch_wfs = waveforms[bs:be]
             batch_mcs = maxchans[bs:be]
 
@@ -304,17 +309,17 @@ def update_F(S, W_prime, B, L=None):
     assert T == T_ == T__
     if L is not None:
         assert L.shape[0] == N
-
+        
     # construct problem
     y = (S * W_prime).T.ravel()
     dvS = sparse.dia_matrix((S.ravel(), 0), shape=(N * T * C, N * T * C))
-    X = dvS @ sparse.kron(sparse.eye(N), B)
+    X = dvS @ sparse.kron(sparse.eye(N), B.reshape(T * C, K))
 
-    A = sparse.kron(L.T, sparse.eye(K))
     XTX = X.T @ X
     nyTX = -y.T @ X
 
     if L is not None:
+        A = sparse.kron(L.T, sparse.eye(K))
         zeros = sparse.dok_matrix((4 * K, 4 * K))
         coefts = sparse.bmat(
             [
@@ -330,20 +335,21 @@ def update_F(S, W_prime, B, L=None):
                 [sparse.dok_matrix((4 * K, 1))],
             ],
             format="csc",
-        )
+        ).toarray()[:, 0]
     else:
         coefts = XTX.tocsc()
-        targ = nyTX.tocsc()
+        targ = nyTX
 
     res_lsmr = sparse.linalg.lsmr(
         coefts,
-        targ.toarray()[:, 0],
+        targ,
         atol=1e-6 / (N * T * C),
         btol=1e-6 / (N * T * C),
     )
 
     # check good convergence
-    assert res_lsmr[1] in (0, 1, 4)
+    if res_lsmr[1] not in (0, 1, 4):
+        print("Convergence value in F update was", res_lsmr[1])
     F = res_lsmr[0][: K * N].reshape(K, N)
 
     return F
@@ -358,19 +364,32 @@ def update_B(S, W_prime, F):
 
     y = (S * W_prime).T.ravel()
     dvS = sparse.dia_matrix((S.ravel(), 0), shape=(N * T * C, N * T * C))
-    X = dvS @ sparse.kron(F.T, sparse.eye(K))
+    X = dvS @ sparse.kron(F.T, sparse.eye(T * C))
     XTX = X.T @ X
     nyTX = -y.T @ X
 
     res_lsmr = sparse.linalg.lsmr(
         XTX,
-        nyTX.toarray()[:, 0],
+        nyTX,
         atol=1e-6 / (N * T * C),
         btol=1e-6 / (N * T * C),
     )
 
     # check good convergence
-    assert res_lsmr[1] in (0, 1, 4)
+    if res_lsmr[1] not in (0, 1, 4):
+        print("Convergence value in B update was", res_lsmr[1])
     B = res_lsmr[0].reshape(T, C, K)
 
     return B
+
+class timer:
+    def __init__(self, name="timer"):
+        self.name = name
+ 
+    def __enter__(self):
+        self.start = time.time()
+        return self
+ 
+    def __exit__(self, *args):
+        self.t = time.time() - self.start
+        print(self.name, "took", self.t, "s")
