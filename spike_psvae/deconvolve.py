@@ -739,15 +739,14 @@ def deconvolution(spike_index,
         
         # get templates
         print('computing templates')
-#         template_path = os.path.join(output_directory, 'templates.npy')
-#         if not os.path.exists(template_path):
-#             templates = get_templates(standardized_bin, 
-#                                       spike_index, cluster_labels, geom)
-#             # save templates
-#             np.save(template_path, templates)
-#         else:
-#             templates = np.load(template_path)
-        templates = np.load('/media/peter/2TB/hyundong/repro_ephys_spike_sorting/spike_psvae_modified/clustering_results/templates.npy')
+        template_path = os.path.join(output_directory, 'templates.npy')
+        if not os.path.exists(template_path):
+            templates = get_templates(standardized_bin, 
+                                      spike_index, cluster_labels, geom)
+            # save templates
+            np.save(template_path, templates)
+        else:
+            templates = np.load(template_path)
         
         deconv_dir = os.path.join(output_directory, 'deconv_tmp')
         if not os.path.exists(deconv_dir):
