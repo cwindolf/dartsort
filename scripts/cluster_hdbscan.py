@@ -23,53 +23,17 @@ import os
 import scipy
 import argparse
 import hdbscan
-from spike_psvae.cluster_viz import plot_array_scatter, plot_self_agreement, plot_single_unit_summary
+from spike_psvae.cluster_viz import cluster_scatter, plot_waveforms_geom, plot_raw_waveforms_unit_geom, plot_venn_agreement
+from spike_psvae.cluster_viz import plot_array_scatter, plot_self_agreement, plot_single_unit_summary, plot_agreement_venn, plot_isi_distribution, plot_waveforms_unit_geom, plot_unit_similarities
+from spike_psvae.cluster_viz import plot_unit_similarity_heatmaps
+from spike_psvae.cluster_utils import make_sorting_from_labels_frames, compute_cluster_centers, relabel_by_depth, run_weighted_triage, remove_duplicate_units
+from spike_psvae.cluster_utils import get_agreement_indices, compute_spiketrain_agreement, get_unit_similarities, compute_shifted_similarity, read_waveforms
+from spike_psvae.cluster_utils import get_closest_clusters_hdbscan, get_closest_clusters_kilosort, get_closest_clusters_hdbscan_kilosort, get_closest_clusters_kilosort_hdbscan
+from joblib import Parallel, delayed
+from tqdm import tqdm
 import h5py
 from scipy.spatial import cKDTree
 import pickle
-#Helper functions
-def run_weighted_triage(x, y, z, alpha, maxptps, pcs=None, 
-                        scales=(1,10,1,15,30,10),
-                        threshold=100, ptp_threshold=3, c=1):
-    
-    ptp_filter = np.where(maxptps>ptp_threshold)
-    x = x[ptp_filter]
-    y = y[ptp_filter]
-    z = z[ptp_filter]
-    alpha = alpha[ptp_filter]
-    maxptps = maxptps[ptp_filter]
-    if pcs is not None:
-        pcs = pcs[ptp_filter]
-        feats = np.c_[scales[0]*x,
-                      scales[1]*np.log(y),
-                      scales[2]*z,
-                      scales[3]*np.log(alpha),
-                      scales[4]*np.log(maxptps),
-                      scales[5]*pcs[:,:3]]
-    else:
-        feats = np.c_[scales[0]*x,
-                      scales[1]*np.log(y),
-                      scales[2]*z,
-                      scales[3]*np.log(alpha),
-                      scales[4]*np.log(maxptps)]
-    
-    tree = cKDTree(feats)
-    dist, ind = tree.query(feats, k=6)
-    dist = dist[:,1:]
-    dist = np.sum(c*np.log(dist) + np.log(1/(scales[4]*np.log(maxptps)))[:,None], 1)
-    idx_keep = dist <= np.percentile(dist, threshold)
-    
-    triaged_x = x[idx_keep]
-    triaged_y = y[idx_keep]
-    triaged_z = z[idx_keep]
-    triaged_alpha = alpha[idx_keep]
-    triaged_maxptps = maxptps[idx_keep]
-    triaged_pcs = None
-    if pcs is not None:
-        triaged_pcs = pcs[idx_keep]
-        
-    
-    return triaged_x, triaged_y, triaged_z, triaged_alpha, triaged_maxptps, triaged_pcs, ptp_filter, idx_keep
 
 
 def main():
@@ -80,6 +44,7 @@ def main():
     ap.add_argument("--geom")
     ap.add_argument("--out_folder", type=str, default='clustering_results')
     ap.add_argument("--triage_quantile", type=int, default=75)
+    ap.add_argument("--ptp_threshold", type=int, default=3)
     ap.add_argument("--do_infer_ptp", action='store_true')
     ap.add_argument("--num_spikes_cluster", type=int, default=None)
     ap.add_argument("--min_cluster_size", type=int, default=25)
@@ -90,6 +55,7 @@ def main():
     ap.add_argument("--residual_data_bin", type=str, default=None)
     ap.add_argument("--num_spikes_plot", type=int, default=100)
     ap.add_argument("--num_rows_plot", type=int, default=3)
+    ap.add_argument("--num_cpus_plot", type=int, default=12)
     
     args = ap.parse_args()
 
@@ -119,9 +85,11 @@ def main():
     maxptps = results_localization[:, 4]
     
     #perform triaging 
-    triaged_x, triaged_y, triaged_z, triaged_alpha, triaged_maxptps, _, ptp_filter, idx_keep = run_weighted_triage(x, y, z, alpha, maxptps, threshold=args.triage_quantile) #pcs is None here
+    triaged_x, triaged_y, triaged_z, triaged_alpha, triaged_maxptps, _, ptp_filter, idx_keep = run_weighted_triage(x, y, z, alpha, maxptps, threshold=args.triage_quantile, 
+                                                                                                                   ptp_threshold=args.ptp_threshold, ptp_weighting=True) #pcs None
     triaged_spike_index = spike_index[ptp_filter][idx_keep]
     triaged_mcs_abs = spike_index[:,1][ptp_filter][idx_keep]
+    non_triaged_idxs = ptp_filter[0][idx_keep]
 
     #can infer ptp
     do_infer_ptp = args.do_infer_ptp
@@ -167,20 +135,18 @@ def main():
     clusterer.fit(features)
     if args.no_verbose:
         print(clusterer)
-    cluster_centers = []
-    for label in np.unique(clusterer.labels_):
-        if label != -1:
-            cluster_centers.append(clusterer.weighted_cluster_centroid(label))
-    cluster_centers = np.asarray(cluster_centers)
-    
+
+    #compute cluster centers
+    cluster_centers = compute_cluster_centers(clusterer)
+
     #re-label each cluster by z-depth
-    labels_depth = np.argsort(-cluster_centers[:,1])
-    label_to_id = {}
-    for i, label in enumerate(labels_depth):
-        label_to_id[label] = i
-    label_to_id[-1] = -1
-    new_labels = np.vectorize(label_to_id.get)(clusterer.labels_) 
-    clusterer.labels_ = new_labels
+    clusterer = relabel_by_depth(clusterer, cluster_centers)
+
+    #remove duplicate units by spike_times_agreement and ptp
+    clusterer = remove_duplicate_units(clusterer, triaged_spike_index[:,0], triaged_maxptps)
+
+    #re-compute cluster centers
+    cluster_centers = compute_cluster_centers(clusterer)
 
     save_dir_path = args.out_folder + '/' + data_name + '_' + str(num_spikes) + 'hdbscan_' + 'min_cluster_size' + str(clusterer.min_cluster_size) + '_' + 'min_samples' + str(clusterer.min_samples)
     if not os.path.exists(save_dir_path):
@@ -213,12 +179,6 @@ def main():
     color_arr = vir(triaged_ptp_rescaled)
     color_arr[:, 3] = triaged_ptp_rescaled
 
-    cluster_centers = []
-    for label in np.unique(clusterer.labels_):
-        if label != -1:
-            cluster_centers.append(clusterer.weighted_cluster_centroid(label))
-    cluster_centers = np.asarray(cluster_centers)
-
     # ## Define colors
     unique_colors = ['#e6194b', '#4363d8', '#f58231', '#911eb4', '#46f0f0', '#f032e6', '#008080', '#e6beff', '#9a6324', '#800000', '#aaffc3', '#808000', '#000075', '#000000']
 
@@ -228,13 +188,14 @@ def main():
     cluster_color_dict[-1] = '#808080' #set outlier color to grey
 
     ##### plot array scatter #####
-    fig = plot_array_scatter(clusterer, geom_array, triaged_x, triaged_z, triaged_maxptps, cluster_color_dict, color_arr)
+    fig = plot_array_scatter(clusterer.labels_, geom_array, triaged_x, triaged_z, triaged_maxptps, cluster_color_dict, color_arr, 
+                             min_cluster_size=clusterer.min_cluster_size, min_samples=clusterer.min_samples, z_cutoff=(0, 3900))
     fig.suptitle(f'x,z,scaled_logptp features, {num_spikes} datapoints');
     plt.close(fig)
     fig.savefig(save_dir_path + '/array_full_scatter.png')
 
     ##### plot clusterer self-agreement #####
-    fig = plot_self_agreement(clusterer, triaged_spike_index)
+    fig = plot_self_agreement(clusterer.labels_, triaged_spike_index)
     plt.title("Agreement matrix")
     plt.close(fig)
     fig.savefig(save_dir_path + '/agreement_matrix.png')
@@ -245,18 +206,39 @@ def main():
         ##### plot individual cluster summaries #####
         wfs_localized = np.load(data_dir+'denoised_wfs.npy', mmap_mode='r') #np.memmap(data_dir+'denoised_waveforms.npy', dtype='float32', shape=(290025, 121, 40))
         wfs_subtracted = np.load(data_dir+'subtracted_wfs.npy', mmap_mode='r')
-        non_triaged_idxs = ptp_filter[0][idx_keep]
         
-        for cluster_id in np.unique(clusterer.labels_):
-            if cluster_id != -1:
-                fig = plot_single_unit_summary(cluster_id, clusterer, geom_array, args.num_spikes_plot, args.num_rows_plot, triaged_x, triaged_z, triaged_maxptps, 
-                                               triaged_firstchans, triaged_mcs_abs, triaged_spike_index, non_triaged_idxs, wfs_localized, wfs_subtracted, cluster_color_dict, 
-                                               color_arr, raw_data_bin, residual_data_bin)
-
-                save_z_int = int(cluster_centers[cluster_id][1])
-                save_str = str(save_z_int).zfill(4)
-                plt.close(fig)
-                fig.savefig(save_dir_path + f"/Z{save_str}_cluster{cluster_id}.png")
+        def job(cluster_id):
+            fig = plot_single_unit_summary(
+                cluster_id,
+                clusterer.labels_,
+                cluster_centers,
+                geom_array,
+                args.num_spikes_plot,
+                args.num_rows_plot,
+                triaged_x,
+                triaged_z,
+                triaged_maxptps,
+                triaged_firstchans,
+                triaged_mcs_abs,
+                triaged_spike_index,
+                non_triaged_idxs,
+                wfs_localized,
+                wfs_subtracted,
+                cluster_color_dict,
+                color_arr,
+                raw_data_bin,
+                residual_data_bin,
+            )
+            save_z_int = int(cluster_centers.loc[cluster_id][1])
+            save_str = str(save_z_int).zfill(4)
+            fig.savefig(save_dir_path + f"/Z{save_str}_cluster{cluster_id}.png")
+            plt.close(fig)
+        with Parallel(
+            args.num_cpus_plot,
+        ) as p:
+            unit_ids = np.setdiff1d(np.unique(clusterer.labels_), [-1])
+            for res in p(delayed(job)(u) for u in  tqdm(unit_ids)):
+                pass
 
 if __name__ == "__main__":
     main()
