@@ -621,6 +621,9 @@ class MatchPursuit_objectiveUpsample(object):
         # loop over each assigned segment
         for batch_id, fname_out in zip(batch_ids, fnames_out):
 
+            if os.path.exists(fname_out):
+                break
+
             # load pairwise conv filter only once per core:
             self.pairwise_conv = np.load(os.path.join(self.deconv_dir, "pairwise_conv.npy"), allow_pickle=True)
                 
@@ -695,9 +698,14 @@ class MatchPursuit_objectiveUpsample(object):
             self.dec_spike_train = self.dec_spike_train[idx]
 
             # find spikes inside data block, i.e. outside buffers
+            if pad_right > 0: # end of the recording (TODO: need to check)
+                subtract_t = self.buffer + self.n_time
+            else:
+                subtract_t = self.buffer
+            
             idx = np.where(np.logical_and(
                 self.dec_spike_train[:,0] >= self.buffer,
-                self.dec_spike_train[:,0]< self.data.shape[0] - self.buffer))[0]
+                self.dec_spike_train[:,0]< self.data.shape[0] - subtract_t))[0]
             self.dec_spike_train = self.dec_spike_train[idx]
 
             # offset spikes to start of index
@@ -735,18 +743,31 @@ def deconvolution(spike_index,
             threshold: threshold for deconvolution
         """
         
+        if not os.path.exists(output_directory):
+            os.makedirs(output_directory)
+        
         geom = np.load(geom_path)
         
         # get templates
-        print('computing templates')
         template_path = os.path.join(output_directory, 'templates.npy')
         if not os.path.exists(template_path):
+            print('computing templates')
             templates = get_templates(standardized_bin, 
                                       spike_index, cluster_labels, geom)
             # save templates
             np.save(template_path, templates)
         else:
             templates = np.load(template_path)
+
+        fname_spike_train = os.path.join(output_directory, 'spike_train.npy')
+        fname_templates_up = os.path.join(output_directory, 'templates_up.npy')
+        fname_spike_train_up = os.path.join(output_directory, 'spike_train_up.npy')
+        
+        if (os.path.exists(template_path) and 
+            os.path.exists(fname_spike_train) and 
+            os.path.exists(fname_templates_up) and 
+            os.path.exists(fname_spike_train_up)):
+            return (fname_templates_up,fname_spike_train_up,template_path,fname_spike_train)
         
         deconv_dir = os.path.join(output_directory, 'deconv_tmp')
         if not os.path.exists(deconv_dir):
@@ -804,24 +825,22 @@ def deconvolution(spike_index,
         spike_train[:, 1] = np.int32(spike_train[:, 1]/max_upsample)
         spike_train[:, 0] += shift
         # save
-        fname_spike_train = os.path.join(output_directory, 'spike_train.npy')
         np.save(fname_spike_train, spike_train)
         
         # get upsampled templates and mapping for computing residual
         (templates_up,
          deconv_id_sparse_temp_map) = mp_object.get_sparse_upsampled_templates()
-
-        fname_templates_up = os.path.join(output_directory, 'templates_up.npy')
         np.save(fname_templates_up,
                 templates_up.transpose(2,0,1))
 
         # get upsampled spike train
-        fname_spike_train_up = os.path.join(output_directory, 'spike_train_up.npy')
         spike_train_up = np.copy(res)
         spike_train_up[:, 1] = deconv_id_sparse_temp_map[
                     spike_train_up[:, 1]]
         spike_train_up[:, 0] += shift
         np.save(fname_spike_train_up, spike_train_up)
+        
+        return (fname_templates_up,fname_spike_train_up,template_path,fname_spike_train)
 
 def read_waveforms(spike_times, bin_file, geom_array, n_times=121, channels=None, dtype=np.dtype('float32')):
     '''
