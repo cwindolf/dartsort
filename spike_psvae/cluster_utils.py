@@ -74,24 +74,25 @@ def get_unit_similarities(cluster_id, st_1, closest_clusters, sorting, geom_arra
     templates = []
     shifts = []
     for closest_cluster in closest_clusters:
-        st_2 = sorting.get_unit_spike_train(closest_cluster)
-        waveforms2 = read_waveforms(st_2, raw_data_bin, geom_array, n_times=121)[0]
-        template2 = np.mean(waveforms2, axis=0)[:,channel_range[0]:channel_range[1]]
-        similarity, shift = compute_shifted_similarity(template1, template2, shifts_align)
-        shifts.append(shift)
-        similarities.append(similarity)
-        # similarities.append(similarity[0][0])
-        ind_st1, ind_st2, not_match_ind_st1, not_match_ind_st2 = compute_spiketrain_agreement(st_1, st_2, delta_frames=12)
-        if normalize_agreement_by == "both":
-            agreement = len(ind_st1) / (len(st_1) + len(st_2) - len(ind_st1))
-        elif normalize_agreement_by == "first":
-            agreement = len(ind_st1) / len(st_1)
-        elif normalize_agreement_by == "second":
-            agreement = len(ind_st1) / len(st_2)
-        else:
-            raise ValueError("normalize_agreement_by must be both, first, or second")
-        agreements.append(agreement)
-        templates.append(template2)
+        if closest_cluster in sorting.get_unit_ids():
+            st_2 = sorting.get_unit_spike_train(closest_cluster)
+            waveforms2 = read_waveforms(st_2, raw_data_bin, geom_array, n_times=121)[0]
+            template2 = np.mean(waveforms2, axis=0)[:,channel_range[0]:channel_range[1]]
+            similarity, shift = compute_shifted_similarity(template1, template2, shifts_align)
+            shifts.append(shift)
+            similarities.append(similarity)
+            # similarities.append(similarity[0][0])
+            ind_st1, ind_st2, not_match_ind_st1, not_match_ind_st2 = compute_spiketrain_agreement(st_1, st_2, delta_frames=12)
+            if normalize_agreement_by == "both":
+                agreement = len(ind_st1) / (len(st_1) + len(st_2) - len(ind_st1))
+            elif normalize_agreement_by == "first":
+                agreement = len(ind_st1) / len(st_1)
+            elif normalize_agreement_by == "second":
+                agreement = len(ind_st1) / len(st_2)
+            else:
+                raise ValueError("normalize_agreement_by must be both, first, or second")
+            agreements.append(agreement)
+            templates.append(template2)
     agreements = np.asarray(agreements).round(2)
     similarities = np.asarray(similarities).round(2)
     closest_clusters = np.asarray(closest_clusters)
@@ -185,7 +186,13 @@ def remove_duplicate_units(clusterer, spike_frames, maxptps):
     for remove_id in remove_ids:
         remove_id_indices = np.where(clusterer.labels_ == remove_id)
         clusterer.labels_[remove_id_indices] = -1
-    return clusterer
+    
+    #make sequential
+    for i, label in enumerate(np.setdiff1d(np.unique(clusterer.labels_), [-1])):
+        label_indices = np.where(clusterer.labels_ == label)
+        clusterer.labels_[label_indices] = i 
+
+    return clusterer, remove_ids
 
 def get_closest_clusters_hdbscan(cluster_id, cluster_centers, num_close_clusters=2):
     curr_cluster_center = cluster_centers.loc[cluster_id].to_numpy()
@@ -224,7 +231,8 @@ def compute_cluster_centers(clusterer):
 
 def relabel_by_depth(clusterer, cluster_centers):
     #re-label each cluster by z-depth
-    labels_depth = np.argsort(-cluster_centers.iloc[:,1].to_numpy())
+    indices_depth = np.argsort(-cluster_centers.iloc[:,1].to_numpy())
+    labels_depth = cluster_centers.index[indices_depth]
     label_to_id = {}
     for i, label in enumerate(labels_depth):
         label_to_id[label] = i
