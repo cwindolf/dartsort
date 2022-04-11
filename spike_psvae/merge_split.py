@@ -52,7 +52,7 @@ def run_LDA_split(wfs_unit_denoised, n_channels=10, n_times=121):
     if np.unique(arr).shape[0]<=2:
         arr[-1] = np.unique(arr)[0]-1
         arr[0] = np.unique(arr)[-1]+1
-    lda_comps = lda_model.fit_transform(wfs_unit_denoised.reshape((-1, n_times*10)), arr)
+    lda_comps = lda_model.fit_transform(wfs_unit_denoised.reshape((-1, n_times*n_channels)), arr)
     lda_clusterer = hdbscan.HDBSCAN(min_cluster_size=25, min_samples=25)
     lda_clusterer.fit(lda_comps)
     return lda_clusterer.labels_
@@ -66,7 +66,7 @@ def split_individual_cluster(standardized_path, spike_index_unit, x_unit, z_unit
     mc = min(384 - n_channels_half, mc)
     
     pca_model = PCA(2)
-    wfs_unit = read_waveforms(spike_index_unit[:, 0]+18, standardized_path, geom_array, n_times=121, channels = np.arange(mc-n_channels_half, mc+n_channels_half))[0]
+    wfs_unit = read_waveforms(spike_index_unit[:, 0], standardized_path, geom_array, n_times=121, channels = np.arange(mc-n_channels_half, mc+n_channels_half))[0]
     wfs_unit_denoised = denoise_wf_nn_tmp_single_channel(wfs_unit, denoiser, device)
     if true_mc<n_channels_half:
         pcs = pca_model.fit_transform(wfs_unit_denoised[:, :, true_mc])
@@ -74,7 +74,7 @@ def split_individual_cluster(standardized_path, spike_index_unit, x_unit, z_unit
         true_mc = true_mc - 374
         pcs = pca_model.fit_transform(wfs_unit_denoised[:, :, true_mc])
     else:
-        pcs = pca_model.fit_transform(wfs_unit_denoised[:, :, 5])
+        pcs = pca_model.fit_transform(wfs_unit_denoised[:, :, n_channels//2])
 
     alpha1 = (x_unit.max() - x_unit.min())/(pcs[:, 0].max()-pcs[:, 0].min())
     alpha2 = (x_unit.max() - x_unit.min())/(pcs[:, 1].max()-pcs[:, 1].min())
@@ -204,11 +204,11 @@ def get_diptest_value(standardized_path, geom_array, spike_index, labels, unit_a
     n_wfs_max = int(min(500, min(n_spikes_templates[unit_a], n_spikes_templates[unit_b]))) 
     # print(n_spikes_templates[unit_a], n_spikes_templates[unit_b])
     if unit_b == unit_shifted:
-        spike_index_unit_a = spike_index[labels == unit_a, 0]+18 #denoiser offset ## SHIFT BASED ON TEMPLATES ARGMIN PN MAX PTP TEMPLATE
-        spike_index_unit_b = spike_index[labels == unit_b, 0]+18+two_units_shift #denoiser offset
+        spike_index_unit_a = spike_index[labels == unit_a, 0] #denoiser offset ## SHIFT BASED ON TEMPLATES ARGMIN PN MAX PTP TEMPLATE
+        spike_index_unit_b = spike_index[labels == unit_b, 0]+two_units_shift #denoiser offset
     else:
-        spike_index_unit_a = spike_index[labels == unit_a, 0]+18+two_units_shift #denoiser offset ## SHIFT BASED ON TEMPLATES ARGMIN PN MAX PTP TEMPLATE
-        spike_index_unit_b = spike_index[labels == unit_b, 0]+18 #denoiser offset
+        spike_index_unit_a = spike_index[labels == unit_a, 0]+two_units_shift #denoiser offset ## SHIFT BASED ON TEMPLATES ARGMIN PN MAX PTP TEMPLATE
+        spike_index_unit_b = spike_index[labels == unit_b, 0] #denoiser offset
     idx = np.random.choice(np.arange(spike_index_unit_a.shape[0]), n_wfs_max, replace = False)
     spike_times_unit_a = spike_index_unit_a[idx]
     idx = np.random.choice(np.arange(spike_index_unit_b.shape[0]), n_wfs_max, replace = False)
