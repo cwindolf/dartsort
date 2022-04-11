@@ -195,7 +195,7 @@ def main():
     fig.savefig(save_dir_path + '/array_full_scatter.png')
 
     ##### plot clusterer self-agreement #####
-    fig = plot_self_agreement(clusterer.labels_, triaged_spike_index)
+    fig = plot_self_agreement(clusterer.labels_, triaged_spike_index[:,0])
     plt.title("Agreement matrix")
     plt.close(fig)
     fig.savefig(save_dir_path + '/agreement_matrix.png')
@@ -220,7 +220,7 @@ def main():
                 triaged_maxptps,
                 triaged_firstchans,
                 triaged_mcs_abs,
-                triaged_spike_index,
+                triaged_spike_index[:,0],
                 non_triaged_idxs,
                 wfs_localized,
                 wfs_subtracted,

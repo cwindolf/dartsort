@@ -69,7 +69,7 @@ def cluster_scatter(xs, ys, ids, ax=None, n_std=2.0, excluded_ids=set(), s=1, al
         ax.add_patch(ell)
         
 def plot_waveforms_geom(main_cluster_id, labels, clusters_to_plot, geom_array, non_triage_indices, wfs, 
-                        triaged_firstchans, triaged_mcs_abs, triaged_spike_index=None, bin_file=None, residual_bin_file=None, x_geom_scale = 1/15, 
+                        triaged_firstchans, triaged_mcs_abs, triaged_spike_frames=None, bin_file=None, residual_bin_file=None, x_geom_scale = 1/15, 
                         y_geom_scale = 1/10, waveform_scale = .15, spikes_plot = 200, waveform_shape=(30,90), num_rows=3, 
                         alpha=.1, h_shift=.5, raw=False, add_residuals=False, do_mean=False, ax=None, color_dict=None):    
     if color_dict is None:
@@ -125,8 +125,8 @@ def plot_waveforms_geom(main_cluster_id, labels, clusters_to_plot, geom_array, n
         first_chans_cluster = triaged_firstchans[labels==cluster_id]
         if raw:
             num_channels = wfs.shape[2]
-            if triaged_spike_index is not None and bin_file is not None:
-                spike_times = triaged_spike_index[labels==cluster_id][:,0]
+            if triaged_spike_frames is not None and bin_file is not None:
+                spike_times = triaged_spike_frames[labels==cluster_id]
                 waveforms_read = read_waveforms(spike_times, bin_file, geom_array, n_times=121)[0]
                 waveforms = []
                 for i, waveform in enumerate(waveforms_read):
@@ -137,8 +137,8 @@ def plot_waveforms_geom(main_cluster_id, labels, clusters_to_plot, geom_array, n
         else:
             waveforms = wfs[non_triage_indices[labels==cluster_id]]
         if add_residuals:
-            if triaged_spike_index is not None and residual_bin_file is not None:
-                spike_times = triaged_spike_index[labels==cluster_id][:,0]
+            if triaged_spike_frames is not None and residual_bin_file is not None:
+                spike_times = triaged_spike_frames[labels==cluster_id]
                 residuals_read = read_waveforms(spike_times, residual_bin_file, geom_array, n_times=121)[0]
                 num_channels = waveforms.shape[2]
                 residuals = []
@@ -355,13 +355,13 @@ def plot_array_scatter(labels, geom_array, triaged_x, triaged_z, triaged_maxptps
 #     return fig
 
 
-def plot_self_agreement(labels, triaged_spike_index, fig=None):
+def plot_self_agreement(labels, triaged_spike_frames, fig=None):
     # matplotlib.rcParams.update({'font.size': 22})
     indices_list = []
     labels_list = []
     for cluster_id in np.unique(labels):
         label_ids = np.where(labels==cluster_id)
-        indices = triaged_spike_index[label_ids][:,0]
+        indices = triaged_spike_frames[label_ids]
         num_labels = label_ids[0].shape[0]
         indices_list.append(indices)
         labels_list.append((np.zeros(num_labels) + cluster_id).astype('int'))
@@ -389,9 +389,9 @@ def plot_isi_distribution(spike_train, ax=None):
     return ax
     
 def plot_single_unit_summary(cluster_id, labels, cluster_centers, geom_array, num_spikes_plot, num_rows_plot, triaged_x, triaged_z, triaged_maxptps, 
-                             triaged_firstchans, triaged_mcs_abs, triaged_spike_index, non_triage_indices, wfs_localized, wfs_subtracted, cluster_color_dict, color_arr, 
+                             triaged_firstchans, triaged_mcs_abs, triaged_spike_frames, non_triage_indices, wfs_localized, wfs_subtracted, cluster_color_dict, color_arr, 
                              raw_bin_file, residual_bin_file):
-    matplotlib.rcParams.update({'font.size': 30})
+    # matplotlib.rcParams.update({'font.size': 30})
     label_indices = np.where(labels ==cluster_id)
     
     closest_clusters = get_closest_clusters_hdbscan(cluster_id, cluster_centers, num_close_clusters=2)
@@ -424,7 +424,7 @@ def plot_single_unit_summary(cluster_id, labels, cluster_centers, geom_array, nu
 
     ax = ax_ptp
     ptps_cluster = features[:,2][label_indices]
-    spike_train_s = triaged_spike_index[:,0][label_indices] / 30000
+    spike_train_s = triaged_spike_frames[label_indices] / 30000
     ax.plot(spike_train_s, ptps_cluster)
     ax.set_ylabel("ptp");
     ax.set_xlabel("seconds");
@@ -470,7 +470,7 @@ def plot_single_unit_summary(cluster_id, labels, cluster_centers, geom_array, nu
     num_rows = num_rows_plot
 
     ax = ax_isi
-    spike_train = triaged_spike_index[:,0][label_indices]
+    spike_train = triaged_spike_frames[label_indices]
     ax.set_xlabel('ms')
     spike_train_diff = np.diff(spike_train)/30000 
     spike_train_diff = spike_train_diff[np.where(spike_train_diff < 0.01)]
@@ -482,7 +482,7 @@ def plot_single_unit_summary(cluster_id, labels, cluster_centers, geom_array, nu
 
     axes = [ax_xcorr1, ax_xcorr2]
     for i, cluster_isi_id in enumerate(closest_clusters):
-        spike_train_2 = triaged_spike_index[:,0][labels==cluster_isi_id]
+        spike_train_2 = triaged_spike_frames[labels==cluster_isi_id]
         sorting = spikeinterface.numpyextractors.NumpySorting.from_times_labels(times_list=np.concatenate((spike_train,spike_train_2)), 
                                                                                 labels_list=np.concatenate((np.zeros(spike_train.shape[0]).astype('int'), np.zeros(spike_train_2.shape[0]).astype('int')+1)), 
                                                                                 sampling_frequency=30000)
@@ -513,7 +513,7 @@ def plot_single_unit_summary(cluster_id, labels, cluster_centers, geom_array, nu
 
     ax = ax_raw
     plot_waveforms_geom(cluster_id, labels, clusters_plot, geom_array, non_triage_indices, wfs_subtracted, triaged_firstchans, 
-                        triaged_mcs_abs, triaged_spike_index=triaged_spike_index, bin_file=raw_bin_file, x_geom_scale=x_geom_scale, y_geom_scale=y_geom_scale, 
+                        triaged_mcs_abs, triaged_spike_frames=triaged_spike_frames, bin_file=raw_bin_file, x_geom_scale=x_geom_scale, y_geom_scale=y_geom_scale, 
                         waveform_scale=waveform_scale, spikes_plot=spikes_plot, waveform_shape=waveform_shape, h_shift=0, ax=ax, alpha=.1, num_rows=num_rows, raw=True, do_mean=False, color_dict=cluster_color_dict)
     ax.set_title("raw waveforms")
     ax.set_xlim(ax_denoised.get_xlim())
@@ -523,7 +523,7 @@ def plot_single_unit_summary(cluster_id, labels, cluster_centers, geom_array, nu
 
     ax = ax_cleaned
     plot_waveforms_geom(cluster_id, labels, clusters_plot, geom_array, non_triage_indices, wfs_subtracted, triaged_firstchans, 
-                        triaged_mcs_abs, triaged_spike_index=triaged_spike_index, residual_bin_file=residual_bin_file, x_geom_scale=x_geom_scale, 
+                        triaged_mcs_abs, triaged_spike_frames=triaged_spike_frames, residual_bin_file=residual_bin_file, x_geom_scale=x_geom_scale, 
                         y_geom_scale=y_geom_scale, waveform_scale=waveform_scale, spikes_plot=spikes_plot, waveform_shape=waveform_shape, h_shift=0, ax=ax,alpha=.1, num_rows=num_rows, 
                         do_mean=False, add_residuals=True, color_dict=cluster_color_dict)
     ax.set_title("collision-cleaned waveforms")
@@ -531,7 +531,7 @@ def plot_single_unit_summary(cluster_id, labels, cluster_centers, geom_array, nu
     ax.set_xlim(ax_denoised.get_xlim())
     ax.set_ylim(ax_denoised.get_ylim())
     ax.set_xlabel("x")
-    matplotlib.rcParams.update({'font.size': 10})
+    # matplotlib.rcParams.update({'font.size': 10})
     
     return fig
 
