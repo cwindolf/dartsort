@@ -201,7 +201,7 @@ def main():
     fig.savefig(save_dir_path + '/array_full_scatter.png')
 
     ##### plot clusterer self-agreement #####
-    fig = plot_self_agreement(clusterer.labels_, triaged_spike_index)
+    fig = plot_self_agreement(clusterer.labels_, triaged_spike_index[:,0])
     plt.title("Agreement matrix")
     plt.close(fig)
     fig.savefig(save_dir_path + '/agreement_matrix.png')
@@ -256,7 +256,7 @@ def main():
 #                 triaged_maxptps,
 #                 triaged_firstchans,
 #                 triaged_mcs_abs,
-#                 triaged_spike_index,
+#                 triaged_spike_index[:,0],
 #                 non_triaged_idxs,
 #                 wfs_localized,
 #                 wfs_subtracted,
@@ -300,8 +300,8 @@ def main():
                 spike_depths = kilo_spike_depths[np.where(kilo_spike_clusters==cluster_id_match)]
                 mcs_abs_cluster_sorting2 = np.asarray([np.argmin(np.abs(spike_depth - geom_array[:,1])) for spike_depth in spike_depths])
                 firstchans_cluster_sorting2 = (mcs_abs_cluster_sorting2 - 20).clip(min=0)
-                fig = plot_agreement_venn(cluster_id, cluster_id_match, cmp, sorting1, sorting2, sorting1_name, sorting2_name, geom_array, num_channels, args.num_spikes_plot, firstchans_cluster_sorting1, 
-                                          mcs_abs_cluster_sorting1, firstchans_cluster_sorting2, mcs_abs_cluster_sorting2, raw_data_bin, delta_frames = 12)
+                fig = plot_agreement_venn(cluster_id, cluster_id_match, cmp, sorting1, sorting2, sorting1_name, sorting2_name, geom_array, num_channels, args.num_spikes_plot,
+                                          firstchans_cluster_sorting1, mcs_abs_cluster_sorting1, firstchans_cluster_sorting2, mcs_abs_cluster_sorting2, raw_data_bin, delta_frames = 12)
                 save_z_int = int(cluster_centers.loc[cluster_id][1])
                 save_str = str(save_z_int).zfill(4)
                 plt.close(fig)
