@@ -136,7 +136,7 @@ def merge_clusters(spike_index, labels, x, z, ptps, geom_array, denoiser, device
                     labels_new[idx] = n_clusters
     return labels_new
     
-def split_clusters(standardized_path, spike_index, labels, x, z, ptps, geom_array, denoiser, device):
+def split_clusters(standardized_path, spike_index, labels, x, z, ptps, geom_array, denoiser, device, n_channels):
     labels_new = labels.copy()
     labels_original = labels.copy()
 
@@ -144,7 +144,7 @@ def split_clusters(standardized_path, spike_index, labels, x, z, ptps, geom_arra
     for unit in (np.unique(labels)[1:]):
         spike_index_unit = spike_index[labels == unit]
         x_unit, z_unit, ptps_unit = x[labels == unit], z[labels == unit], ptps[labels == unit]
-        is_split, unit_new_labels = split_individual_cluster(standardized_path, spike_index_unit, x_unit, z_unit, ptps_unit, geom_array, denoiser, device)
+        is_split, unit_new_labels = split_individual_cluster(standardized_path, spike_index_unit, x_unit, z_unit, ptps_unit, geom_array, denoiser, device, n_channels)
         if is_split:
             for new_label in np.unique(unit_new_labels):
                 if new_label == -1:
@@ -201,7 +201,8 @@ def get_diptest_value(standardized_path, geom_array, spike_index, labels, unit_a
     # ALIGN BASED ON MAX PTP TEMPLATE MC 
     n_channels_half = n_channels//2
 
-    n_wfs_max = int(min(250, min(n_spikes_templates[unit_a], n_spikes_templates[unit_b]))) 
+    n_wfs_max = int(min(500, min(n_spikes_templates[unit_a], n_spikes_templates[unit_b]))) 
+    # print(n_spikes_templates[unit_a], n_spikes_templates[unit_b])
     if unit_b == unit_shifted:
         spike_index_unit_a = spike_index[labels == unit_a, 0]+18 #denoiser offset ## SHIFT BASED ON TEMPLATES ARGMIN PN MAX PTP TEMPLATE
         spike_index_unit_b = spike_index[labels == unit_b, 0]+18+two_units_shift #denoiser offset
@@ -216,8 +217,8 @@ def get_diptest_value(standardized_path, geom_array, spike_index, labels, unit_a
     mc = max(n_channels_half, mc)
     wfs_a = read_waveforms(spike_times_unit_a, standardized_path, geom_array, n_times=n_times, channels = np.arange(mc-n_channels_half,mc+n_channels_half))[0]
     wfs_b = read_waveforms(spike_times_unit_b, standardized_path, geom_array, n_times=n_times, channels = np.arange(mc-n_channels_half,mc+n_channels_half))[0]
-    wfs_a = denoise_wf_nn_tmp_single_channel(wfs_a, denoiser, device)
-    wfs_b = denoise_wf_nn_tmp_single_channel(wfs_b, denoiser, device)
+    # wfs_a = denoise_wf_nn_tmp_single_channel(wfs_a, denoiser, device)
+    # wfs_b = denoise_wf_nn_tmp_single_channel(wfs_b, denoiser, device)
 
     wfs_diptest = np.concatenate((wfs_a, wfs_b)).reshape((-1, n_channels*n_times))
     labels_diptest = np.zeros(wfs_a.shape[0]+wfs_b.shape[0])
@@ -230,7 +231,7 @@ def get_diptest_value(standardized_path, geom_array, spike_index, labels, unit_a
     return value_dpt
 
     
-def get_merged(standardized_path, geom_array, n_templates, spike_index, labels, x, z, denoiser, device, n_temp = 5, distance_threshold = 2., threshold_diptest = 1.25):
+def get_merged(standardized_path, geom_array, n_templates, spike_index, labels, x, z, denoiser, device, n_channels=10, n_temp = 5, distance_threshold = 2., threshold_diptest = 1.25):
      
     templates = get_templates(standardized_path, geom_array, n_templates, spike_index, labels)
     n_spikes_templates = get_n_spikes_templates(n_templates, labels)
@@ -262,7 +263,7 @@ def get_merged(standardized_path, geom_array, n_templates, spike_index, labels, 
                         two_units_shift = templates[unit_bis_reference, :, mc].argmin() - templates[unit_reference, :, mc].argmin()
                         unit_shifted = unit_bis_reference
                     dpt_val = get_diptest_value(standardized_path, geom_array, spike_index, labels_updated, unit_reference, unit_bis_reference, 
-                                                n_spikes_templates, mc, two_units_shift, unit_shifted, denoiser, device)
+                                                n_spikes_templates, mc, two_units_shift, unit_shifted, denoiser, device, n_channels)
                     if dpt_val<threshold_diptest and np.abs(two_units_shift)<4:
                         to_be_merged.append(unit_bis_reference)
                         if unit_shifted == unit_bis_reference:
