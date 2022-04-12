@@ -10,6 +10,7 @@ from skimage.restoration import denoise_nl_means, estimate_sigma
 from tqdm.auto import trange, tqdm
 
 from .ibme_fast_raster import raster as _raster
+from .ibme_corr import register_rigid as decentrigid_corr
 
 
 def kronsolve(D, robust_sigma=0):
@@ -33,7 +34,9 @@ def kronsolve(D, robust_sigma=0):
     return p
 
 
-def decentrigid(raster, robust_sigma=0, batch_size=1, step_size=1, disp=400, pbar=True):
+def decentrigid(
+    raster, robust_sigma=0, batch_size=1, step_size=1, disp=400, pbar=True
+):
     # this is not implemented but would be done by the stride.
     assert step_size == 1
     T = raster.shape[1]
@@ -47,7 +50,7 @@ def decentrigid(raster, robust_sigma=0, batch_size=1, step_size=1, disp=400, pba
     xrange = trange if pbar else range
 
     with torch.no_grad():
-        raster = torch.as_tensor(raster.T, dtype=torch.float32, device=device)
+        raster = torch.as_tensor(raster, dtype=torch.float32, device=device).T
         raster = raster[:, None, :]
         c2d = torch.nn.Conv2d(
             in_channels=1,
@@ -84,6 +87,7 @@ def register_rigid(
     step_size=1,
     disp=400,
     denoise_sigma=0.1,
+    corr_threshold=0,
     destripe=False,
 ):
     depths_reg = depths
@@ -91,13 +95,22 @@ def register_rigid(
         amps, depths_reg, times, sigma=denoise_sigma, destripe=destripe
     )
 
-    D, p = decentrigid(
-        raster,
-        robust_sigma=robust_sigma,
-        batch_size=batch_size,
-        step_size=step_size,
-        disp=disp,
-    )
+    if corr_threshold > 0:
+        p = decentrigid_corr(
+            raster,
+            mincorr=corr_threshold,
+            disp=disp,
+            batch_size=batch_size,
+            step_size=step_size,
+        )
+    else:
+        D, p = decentrigid(
+            raster,
+            robust_sigma=robust_sigma,
+            batch_size=batch_size,
+            step_size=step_size,
+            disp=disp,
+        )
     warps = interp1d(tt + 0.5, p, fill_value="extrapolate")(times)
     depths_reg = depths_reg - warps
     depths_reg -= depths_reg.min()
@@ -165,6 +178,7 @@ def warp_nonrigid(depths, times, dispmap, depth_domain=None, time_domain=None):
     return depths - lerp(depths, times, grid=False)
 
 
+@torch.no_grad()
 def register_nonrigid(
     amps,
     depths,
@@ -173,17 +187,25 @@ def register_nonrigid(
     batch_size=1,
     step_size=1,
     rigid_disp=400,
-    disp=400,
+    disp=800,
     denoise_sigma=0.1,
+    corr_threshold=0,
+    rigid_init=True,
     destripe=False,
     n_windows=10,
-    n_iter=1,
     widthmul=0.5,
+    device=None,
 ):
-    origmean = depths.mean()
+    if isinstance(n_windows, int):
+        n_windows = [n_windows]
+    if device is None:
+        device = (
+            torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        )
+    offset = depths.min()
 
     # set origin to min z
-    depths = depths - depths.min()
+    depths = depths - offset
 
     # initialize displacement map
     D = 1 + int(np.floor(depths.max()))
@@ -191,23 +213,20 @@ def register_nonrigid(
     total_shift = np.zeros((D, T))
 
     # first pass of rigid registration
-    depths, p = register_rigid(
-        amps,
-        depths,
-        times,
-        robust_sigma=robust_sigma,
-        batch_size=batch_size,
-        step_size=step_size,
-        disp=rigid_disp,
-        denoise_sigma=denoise_sigma,
-        destripe=destripe,
-    )
-    total_shift[:, :] = p[None, :]
-
-    pyramid = True
-    if not isinstance(n_windows, list):
-        n_windows = [n_windows] * n_iter
-        pyramid = False
+    if rigid_init:
+        depths, p = register_rigid(
+            amps,
+            depths,
+            times,
+            robust_sigma=robust_sigma,
+            corr_threshold=corr_threshold,
+            batch_size=batch_size,
+            step_size=step_size,
+            disp=rigid_disp,
+            denoise_sigma=denoise_sigma,
+            destripe=destripe,
+        )
+        total_shift[:, :] = p[None, :]
 
     for nwin in tqdm(n_windows):
         raster, dd, tt = fast_raster(
@@ -220,22 +239,33 @@ def register_nonrigid(
         space = D // (nwin + 1)
         locs = np.linspace(space, D - space, nwin)
         scale = widthmul * D / nwin
-        scale = scale - scale % 2
         for k, loc in enumerate(locs):
             windows[k, :] = norm.pdf(np.arange(D), loc=loc, scale=scale)
         windows /= windows.sum(axis=0, keepdims=True)
 
+        windows_ = torch.as_tensor(windows, dtype=torch.float, device=device)
+        raster_ = torch.as_tensor(raster, dtype=torch.float, device=device)
+
         # estimate each window's displacement
         ps = np.empty((nwin, T))
-        for k, window in enumerate(tqdm(windows, desc="windows")):
-            D, p = decentrigid(
-                (window[:, None] * raster).astype(np.float32).copy(),
-                robust_sigma=robust_sigma,
-                batch_size=batch_size,
-                step_size=step_size,
-                disp=min(scale, disp) if pyramid else disp,
-                pbar=False,
-            )
+        for k, window in enumerate(tqdm(windows_, desc="windows")):
+            if corr_threshold > 0:
+                p = decentrigid_corr(
+                    window[:, None] * raster_,
+                    mincorr=corr_threshold,
+                    disp=min(25, int(np.ceil(disp / nwin))),
+                    batch_size=batch_size,
+                    step_size=step_size,
+                )
+            else:
+                _, p = decentrigid(
+                    window[:, None] * raster_,
+                    robust_sigma=robust_sigma,
+                    batch_size=batch_size,
+                    step_size=step_size,
+                    disp=min(25, int(np.ceil(disp / nwin))),
+                    pbar=False,
+                )
             ps[k] = p
 
         # warp depths
@@ -244,16 +274,13 @@ def register_nonrigid(
             depths, times, dispmap, depth_domain=dd, time_domain=tt
         )
         depths -= depths.min()
-        raster, dd, tt = fast_raster(
-            amps, depths, times, sigma=denoise_sigma, destripe=destripe
-        )
 
         # update displacement map
         total_shift[:, :] = compose_shifts_in_orig_domain(total_shift, dispmap)
 
     # back to original coordinates
-    depths -= (depths.mean() - origmean)
-    total_shift -= total_shift.mean()
+    depths -= depths.min()
+    depths += offset
 
     return depths, total_shift
 
