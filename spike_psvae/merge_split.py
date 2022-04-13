@@ -12,16 +12,16 @@ from scipy.spatial.distance import cdist
 from tqdm import notebook
 from tqdm.auto import tqdm
 
-def align_templates(labels, templates, triaged_spike_index):
+def align_templates(labels, templates, triaged_spike_index, align_id=42):
     list_argmin = np.zeros(templates.shape[0])
     for i in range(templates.shape[0]):
         list_argmin[i] = templates[i, :, templates[i].ptp(0).argmax()].argmin()
-    idx_not_aligned = np.where(list_argmin!=60)[0]
+    idx_not_aligned = np.where(list_argmin!=align_id)[0]
 
     for unit in idx_not_aligned:
         mc = templates[unit].ptp(0).argmax()
         offset = templates[unit, :, mc].argmin()
-        triaged_spike_index[labels == unit, 0] += offset-60
+        triaged_spike_index[labels == unit, 0] += offset-align_id
 
     idx_sorted = triaged_spike_index[:, 0].argsort()
     triaged_spike_index = triaged_spike_index[idx_sorted]
