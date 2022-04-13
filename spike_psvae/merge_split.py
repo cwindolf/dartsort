@@ -12,16 +12,16 @@ from scipy.spatial.distance import cdist
 from tqdm import notebook
 from tqdm.auto import tqdm
 
-def align_templates(labels, templates, triaged_spike_index, align_id=42):
+def align_templates(labels, templates, triaged_spike_index, align_sample=42):
     list_argmin = np.zeros(templates.shape[0])
     for i in range(templates.shape[0]):
         list_argmin[i] = templates[i, :, templates[i].ptp(0).argmax()].argmin()
-    idx_not_aligned = np.where(list_argmin!=align_id)[0]
+    idx_not_aligned = np.where(list_argmin!=align_sample)[0]
 
     for unit in idx_not_aligned:
         mc = templates[unit].ptp(0).argmax()
         offset = templates[unit, :, mc].argmin()
-        triaged_spike_index[labels == unit, 0] += offset-align_id
+        triaged_spike_index[labels == unit, 0] += offset-align_sample
 
     idx_sorted = triaged_spike_index[:, 0].argsort()
     triaged_spike_index = triaged_spike_index[idx_sorted]
@@ -231,13 +231,13 @@ def get_diptest_value(standardized_path, geom_array, spike_index, labels, unit_a
     return value_dpt
 
     
-def get_merged(standardized_path, geom_array, n_templates, spike_index, labels, x, z, denoiser, device, n_channels=10, n_temp = 5, distance_threshold = 2., threshold_diptest = 1.25):
+def get_merged(standardized_path, geom_array, n_templates, spike_index, labels, x, z, denoiser, device, n_channels=10, n_temp = 5, distance_threshold = 4.0, threshold_diptest = 1.25):
      
     templates = get_templates(standardized_path, geom_array, n_templates, spike_index, labels)
     n_spikes_templates = get_n_spikes_templates(n_templates, labels)
     x_z_templates = get_x_z_templates(n_templates, labels, x, z)
     print("GET PROPOSED PAIRS")
-    dist_argsort, dist_template = get_proposed_pairs(n_templates, templates, x_z_templates, n_temp = 20)
+    dist_argsort, dist_template = get_proposed_pairs(n_templates, templates, x_z_templates, n_temp)
     
     labels_updated = labels.copy()
     reference_units = np.unique(labels)[1:]
