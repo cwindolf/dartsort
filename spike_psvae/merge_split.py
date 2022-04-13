@@ -46,7 +46,7 @@ def denoise_wf_nn_tmp_single_channel(wf, denoiser, device):
 
     return denoised_wf
 
-def run_LDA_split(wfs_unit_denoised, n_channels=10, n_times=121):
+def run_LDA_split(wfs_unit_denoised, n_channels = 10, n_times=121):
     lda_model = LDA(n_components = 2)
     arr = wfs_unit_denoised.ptp(1).argmax(1)
     if np.unique(arr).shape[0]<=2:
@@ -58,23 +58,23 @@ def run_LDA_split(wfs_unit_denoised, n_channels=10, n_times=121):
     return lda_clusterer.labels_
 
 def split_individual_cluster(standardized_path, spike_index_unit, x_unit, z_unit, ptps_unit, geom_array, denoiser, device, n_channels = 10):
+    total_channels = geom_array.shape[0]
     n_channels_half = n_channels//2
     labels_unit = -1*np.ones(spike_index_unit.shape[0])
     is_split = False
     true_mc = int(np.median(spike_index_unit[:, 1]))
     mc = max(n_channels_half, true_mc)
-    mc = min(384 - n_channels_half, mc)
-    
+    mc = min(total_channels - n_channels_half, mc)
     pca_model = PCA(2)
     wfs_unit = read_waveforms(spike_index_unit[:, 0], standardized_path, geom_array, n_times=121, channels = np.arange(mc-n_channels_half, mc+n_channels_half))[0]
     wfs_unit_denoised = denoise_wf_nn_tmp_single_channel(wfs_unit, denoiser, device)
     if true_mc<n_channels_half:
         pcs = pca_model.fit_transform(wfs_unit_denoised[:, :, true_mc])
-    if true_mc>384-n_channels_half:
-        true_mc = true_mc - 374
+    if true_mc>total_channels-n_channels_half:
+        true_mc = true_mc - (total_channels-n_channels)
         pcs = pca_model.fit_transform(wfs_unit_denoised[:, :, true_mc])
     else:
-        pcs = pca_model.fit_transform(wfs_unit_denoised[:, :, n_channels//2])
+        pcs = pca_model.fit_transform(wfs_unit_denoised[:, :, n_channels_half])
 
     alpha1 = (x_unit.max() - x_unit.min())/(pcs[:, 0].max()-pcs[:, 0].min())
     alpha2 = (x_unit.max() - x_unit.min())/(pcs[:, 1].max()-pcs[:, 1].min())
@@ -124,7 +124,7 @@ def merge_clusters(spike_index, labels, x, z, ptps, geom_array, denoiser, device
     for unit in tqdm(np.unique(labels)[1:]):
         spike_index_unit = spike_index[labels == unit]
         x_unit, z_unit, ptps_unit = x[labels == unit], z[labels == unit], ptps[labels == unit]
-        is_split, unit_new_labels = split_individual_cluster(spike_index_unit, x_unit, z_unit, ptps_unit, geom_array, denoiser, device)
+        is_split, unit_new_labels = split_individual_cluster(spike_index_unit, x_unit, z_unit, ptps_unit, geom_array, denoiser, device, n_channels)
         if is_split:
             for new_label in np.unique(unit_new_labels):
                 if new_label == -1:
@@ -136,7 +136,7 @@ def merge_clusters(spike_index, labels, x, z, ptps, geom_array, denoiser, device
                     labels_new[idx] = n_clusters
     return labels_new
     
-def split_clusters(standardized_path, spike_index, labels, x, z, ptps, geom_array, denoiser, device, n_channels):
+def split_clusters(standardized_path, spike_index, labels, x, z, ptps, geom_array, denoiser, device, n_channels=10):
     labels_new = labels.copy()
     labels_original = labels.copy()
 
@@ -171,14 +171,14 @@ def get_n_spikes_templates(n_templates, labels):
 
 def get_templates(standardized_path, geom_array, n_templates, spike_index, labels, max_spikes=250, n_times=121):
     templates = np.zeros((n_templates, n_times, geom_array.shape[0]))
-    for unit in range(n_templates):
+    for unit in tqdm(range(n_templates)):
         spike_times_unit = spike_index[labels==unit, 0]
         if spike_times_unit.shape[0]>max_spikes:
             idx = np.random.choice(np.arange(spike_times_unit.shape[0]), max_spikes, replace = False)
         else:
             idx = np.arange(spike_times_unit.shape[0])
 
-        wfs_unit = read_waveforms(spike_times_unit[idx], standardized_path, geom_array, n_times=n_times)[0]
+        wfs_unit = read_waveforms(spike_times_unit[idx], standardized_path, geom_array, n_times)[0]
         templates[unit] = wfs_unit.mean(0)
     return templates
 
@@ -196,13 +196,12 @@ def get_proposed_pairs(n_templates, templates, x_z_templates, n_temp = 20, n_cha
             dist_template[i, j] = compute_shifted_similarity(temp_a, temp_b)[0]
     return dist_argsort, dist_template
         
-def get_diptest_value(standardized_path, geom_array, spike_index, labels, unit_a, unit_b, n_spikes_templates, mc, two_units_shift, unit_shifted, denoiser, device, n_channels=10, n_times=121):
+def get_diptest_value(standardized_path, geom_array, spike_index, labels, unit_a, unit_b, n_spikes_templates, mc, two_units_shift, unit_shifted, denoiser, device, n_channels = 10, n_times=121):
 
     # ALIGN BASED ON MAX PTP TEMPLATE MC 
     n_channels_half = n_channels//2
 
     n_wfs_max = int(min(500, min(n_spikes_templates[unit_a], n_spikes_templates[unit_b]))) 
-    # print(n_spikes_templates[unit_a], n_spikes_templates[unit_b])
     if unit_b == unit_shifted:
         spike_index_unit_a = spike_index[labels == unit_a, 0] #denoiser offset ## SHIFT BASED ON TEMPLATES ARGMIN PN MAX PTP TEMPLATE
         spike_index_unit_b = spike_index[labels == unit_b, 0]+two_units_shift #denoiser offset
@@ -215,11 +214,10 @@ def get_diptest_value(standardized_path, geom_array, spike_index, labels, unit_a
     spike_times_unit_b = spike_index_unit_b[idx]
     mc = min(384-n_channels_half, mc)
     mc = max(n_channels_half, mc)
-    wfs_a = read_waveforms(spike_times_unit_a, standardized_path, geom_array, n_times=n_times, channels = np.arange(mc-n_channels_half,mc+n_channels_half))[0]
-    wfs_b = read_waveforms(spike_times_unit_b, standardized_path, geom_array, n_times=n_times, channels = np.arange(mc-n_channels_half,mc+n_channels_half))[0]
-    # wfs_a = denoise_wf_nn_tmp_single_channel(wfs_a, denoiser, device)
-    # wfs_b = denoise_wf_nn_tmp_single_channel(wfs_b, denoiser, device)
-
+    wfs_a = read_waveforms(spike_times_unit_a, standardized_path, geom_array, n_times, channels = np.arange(mc-n_channels_half,mc+n_channels_half))[0]
+    wfs_b = read_waveforms(spike_times_unit_b, standardized_path, geom_array, n_times, channels = np.arange(mc-n_channels_half,mc+n_channels_half))[0]
+    wfs_a = denoise_wf_nn_tmp_single_channel(wfs_a, denoiser, device)
+    wfs_b = denoise_wf_nn_tmp_single_channel(wfs_b, denoiser, device)
     wfs_diptest = np.concatenate((wfs_a, wfs_b)).reshape((-1, n_channels*n_times))
     labels_diptest = np.zeros(wfs_a.shape[0]+wfs_b.shape[0])
     labels_diptest[:wfs_a.shape[0]] = 1
@@ -231,18 +229,18 @@ def get_diptest_value(standardized_path, geom_array, spike_index, labels, unit_a
     return value_dpt
 
     
-def get_merged(standardized_path, geom_array, n_templates, spike_index, labels, x, z, denoiser, device, n_channels=10, n_temp = 5, distance_threshold = 4.0, threshold_diptest = 1.25):
+def get_merged(standardized_path, geom_array, n_templates, spike_index, labels, x, z, denoiser, device, n_channels=10, n_temp = 10, distance_threshold = 3., threshold_diptest = 1.):
      
     templates = get_templates(standardized_path, geom_array, n_templates, spike_index, labels)
     n_spikes_templates = get_n_spikes_templates(n_templates, labels)
     x_z_templates = get_x_z_templates(n_templates, labels, x, z)
     print("GET PROPOSED PAIRS")
-    dist_argsort, dist_template = get_proposed_pairs(n_templates, templates, x_z_templates, n_temp)
+    dist_argsort, dist_template = get_proposed_pairs(n_templates, templates, x_z_templates, n_temp = n_temp)
     
     labels_updated = labels.copy()
     reference_units = np.unique(labels)[1:]
     
-    for unit in tqdm(range(n_templates)):
+    for unit in tqdm(range(n_templates)): #tqdm
         unit_reference = reference_units[unit]
         to_be_merged = [unit_reference]
         merge_shifts = [0]
@@ -262,8 +260,7 @@ def get_merged(standardized_path, geom_array, n_templates, spike_index, labels, 
                         mc = templates[unit_reference].ptp(0).argmax()
                         two_units_shift = templates[unit_bis_reference, :, mc].argmin() - templates[unit_reference, :, mc].argmin()
                         unit_shifted = unit_bis_reference
-                    dpt_val = get_diptest_value(standardized_path, geom_array, spike_index, labels_updated, unit_reference, unit_bis_reference, 
-                                                n_spikes_templates, mc, two_units_shift, unit_shifted, denoiser, device, n_channels)
+                    dpt_val = get_diptest_value(standardized_path, geom_array, spike_index, labels_updated, unit_reference, unit_bis_reference, n_spikes_templates, mc, two_units_shift,unit_shifted, denoiser, device, n_channels)
                     if dpt_val<threshold_diptest and np.abs(two_units_shift)<4:
                         to_be_merged.append(unit_bis_reference)
                         if unit_shifted == unit_bis_reference:
