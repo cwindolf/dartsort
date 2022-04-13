@@ -5,7 +5,7 @@ from spikeinterface.comparison import compare_two_sorters
 import os
 import pandas
 
-def read_waveforms(spike_times, bin_file, geom_array, n_times=None, channels=None, dtype=np.dtype('float32')):
+def read_waveforms(spike_times, bin_file, geom_array, n_times=121, offset_denoiser = 42, channels=None, dtype=np.dtype('float32')):
     '''
     read waveforms from recording
     n_times : waveform temporal length 
@@ -27,7 +27,7 @@ def read_waveforms(spike_times, bin_file, geom_array, n_times=None, channels=Non
     n_channels = geom_array.shape[0] #len(channels)
     total_size = n_times*n_channels
     # spike_times are the centers of waveforms
-    spike_times_shifted = spike_times - n_times//2
+    spike_times_shifted = spike_times - (offset_denoiser) #n_times//2
     offsets = spike_times_shifted.astype('int64')*dtype.itemsize*n_channels
     with open(bin_file, "rb") as fin:
         for ctr, spike in enumerate(spike_times_shifted):
@@ -39,6 +39,7 @@ def read_waveforms(spike_times, bin_file, geom_array, n_times=None, channels=Non
                 wfs[ctr] = wf.reshape(
                     n_times, n_channels)[:,channels]
             except:
+                print(f"skipped {ctr, spike}")
                 skipped_idx.append(ctr)
     wfs=np.delete(wfs, skipped_idx, axis=0)
     fin.close()
