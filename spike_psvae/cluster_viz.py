@@ -607,7 +607,7 @@ def plot_unit_similarity_heatmaps(cluster_id, st_1, closest_clusters, sorting, g
     g = sns.heatmap(np.expand_dims(similarities,0), vmin=0, vmax=max(similarities), cmap='RdYlGn_r', annot=np.expand_dims(similarities,0),xticklabels=x_axis_labels, yticklabels=y_axis_labels, ax=ax_similarity,cbar=False)
     ax_similarity.set_title("Max Abs Norm Similarity");
     g = sns.heatmap(np.expand_dims(agreements,0), vmin=0, vmax=1, cmap='RdYlGn', annot=np.expand_dims(agreements,0),xticklabels=x_axis_labels, yticklabels=y_axis_labels, ax=ax_agreement,cbar=False)
-    ax_agreement.set_title("Agreement");
+    ax_agreement.set_title(f"Agreement (normalized by {normalize_agreement_by})");
     
     return ax_similarity, ax_agreement, original_template, closest_clusters, similarities, agreements, templates, shifts
 
@@ -637,7 +637,8 @@ def plot_unit_similarities(cluster_id, closest_clusters, sorting1, sorting2, geo
     #compute similarity to closest kilosort clusters
     _, _, original_template, closest_clusters, similarities, agreements, templates, shifts = plot_unit_similarity_heatmaps(cluster_id, st_1, closest_clusters, sorting2, geom_array, raw_data_bin, 
                                                                                                                            num_channels_similarity=num_channels_similarity, 
-                                                                                                                           num_close_clusters_plot=num_close_clusters_plot, num_close_clusters=num_close_clusters,
+                                                                                                                           num_close_clusters_plot=num_close_clusters_plot, 
+                                                                                                                           num_close_clusters=num_close_clusters,
                                                                                                                            ax_similarity=ax_sim, ax_agreement=ax_agree, shifts_align=shifts_align,
                                                                                                                            order_by=order_by, normalize_agreement_by=normalize_agreement_by)
 
