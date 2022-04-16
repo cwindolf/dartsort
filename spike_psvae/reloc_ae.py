@@ -1,36 +1,39 @@
-# helpful code references:
-# github.com/AntixK/PyTorch-VAE/
-# github.com/themattinthehatt/behavenet/blob/master/behavenet/models/vaes.py
-# github.com/pytorch/examples/blob/master/vae/main.py
-
+"""Deep version of linear_ae[_index].py
+"""
 import torch
 from torch import nn
 from torch.nn import functional as F
 
 
-class PTPVAE(nn.Module):
+class RelocAE(nn.Module):
     def __init__(
         self,
         encoder,
+        decoder,
         local_geom,
+        latent_dim=1,
+        analytical_alpha=True,
         variational=False,
         dipole=False,
     ):
-        super(PTPVAE, self).__init__()
+        super(RelocAE, self).__init__()
         self.variational = variational
         self.dipole = dipole
 
-        self.latent_dim = 3
+        self.latent_dim = latent_dim
         self.local_geom = nn.Parameter(
             data=torch.tensor(local_geom, requires_grad=False),
             requires_grad=False,
         )
 
         self.encoder = encoder
+        self.decoder = decoder
 
         if variational:
-            self.fc_mu = nn.Linear(self.latent_dim, self.latent_dim)
-            self.fc_logvar = nn.Linear(self.latent_dim, self.latent_dim)
+            self.fc_mu = nn.Linear(latent_dim, latent_dim)
+            self.fc_logvar = nn.Linear(latent_dim, latent_dim)
+
+    # -- structured decoder
 
     def dists(self, x, log_y, z):
         # B x C
@@ -63,10 +66,28 @@ class PTPVAE(nn.Module):
         )
         return X, beta
 
-    def localize(self, x):
-        mu, logvar = self.encode(x)
-        x, log_y, z = mu.T
-        return x, log_y, z
+    def decode(self, features, loc):
+        x, log_y, z = loc.T
+
+        # BK -> BTC
+        unrelocated_output_wf = self.decoder(features)
+        # BTC -> BC
+        output_ptp = (
+            torch.max(unrelocated_output_wf, dim=1)[0]
+            - torch.min(unrelocated_output_wf, dim=1)[0]
+        )
+
+        if self.dipole:
+            X, beta = self.dipole_x_beta(output_ptp, x, log_y, z)
+            target_ptp = torch.einsum("bck,bk->bc", X, beta)
+        else:
+            q = 1 / self.dists(x, log_y, z)
+            alpha = (output_ptp * q).sum(1) / torch.square(q).sum(1)
+            target_ptp = alpha[:, None] * q
+
+        return unrelocated_output_wf * (target_ptp / output_ptp)[:, None, :]
+
+    # -- forward pass
 
     def encode(self, x):
         h = self.encoder(x)
@@ -75,49 +96,21 @@ class PTPVAE(nn.Module):
         else:
             return h, None
 
-    def encode_with_alpha(self, input_ptp):
-        h = self.encoder(input_ptp)
-        mu = self.fc_mu(h) if self.variational else h
-        x, log_y, z = mu.T
-
-        if self.dipole:
-            X, beta = self.dipole_x_beta(input_ptp, x, log_y, z)
-            alpha = torch.square(beta).sum(axis=1) ** 0.5
-        else:
-            q = 1 / self.dists(x, log_y, z)
-            alpha = (input_ptp * q).sum(1) / torch.square(q).sum(1)
-
-        return x, torch.exp(log_y), z, alpha
-
     def reparametrize(self, mu, logvar):
         std = torch.exp(0.5 * logvar)
         eps = torch.randn_like(std)
-        z = mu + eps * std
-        return z
+        return mu + eps * std
 
-    def decode(self, input_ptp, z):
-        x, log_y, z = z.T
-
-        if self.dipole:
-            X, beta = self.dipole_x_beta(input_ptp, x, log_y, z)
-            return torch.einsum("bck,bk->bc", X, beta)
-        else:
-            q = 1 / self.dists(x, log_y, z)
-            alpha = (input_ptp * q).sum(1) / torch.square(q).sum(1)
-            return alpha[:, None] * q
-
-    def forward(self, x):
-        # print("forward x.shape", x.shape)
+    def forward(self, x, loc):
         mu, logvar = self.encode(x)
-        # print("forward mu.shape", mu.shape, "logvar.shape", logvar.shape)
         if logvar is not None:
             z = self.reparametrize(mu, logvar)
         else:
             z = mu
-        # print("forward z.shape", z.shape)
-        recon_x = self.decode(x, z)
-        # print("forward recon_x.shape", recon_x.shape)
+        recon_x = self.decode(z, loc)
         return recon_x, mu, logvar
+
+    # -- training
 
     def loss(self, x, recon_x, mu, logvar):
         # mean over batches, sum over data dims
