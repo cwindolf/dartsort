@@ -260,11 +260,11 @@ def get_diptest_value(residual_path, waveforms, first_chans, geom_array, spike_i
     elif two_units_shift<0:
         if unit_shifted == unit_a:
             for i in range(wfs_a_bis.shape[0]):
-                first_chan = int(mc - first_chan_a[i] - 5)
+                first_chan = int(mc - first_chan_a[i] - n_channels_half)
                 first_chan = max(0, int(first_chan))
                 first_chan = min(wfs_a.shape[2]-n_channels, int(first_chan))
                 wfs_a_bis[i, -two_units_shift:] = wfs_a[i, :two_units_shift, first_chan:first_chan+n_channels]
-                first_chan = int(mc - first_chan_b[i] - 5)
+                first_chan = int(mc - first_chan_b[i] - n_channels_half)
                 first_chan = max(0, int(first_chan))
                 first_chan = min(wfs_b.shape[2]-n_channels, int(first_chan))
                 wfs_b_bis[i, :] = wfs_b[i, :, first_chan:first_chan+n_channels]
@@ -273,11 +273,11 @@ def get_diptest_value(residual_path, waveforms, first_chans, geom_array, spike_i
 
         else:
             for i in range(wfs_a_bis.shape[0]):
-                first_chan = int(mc - first_chan_a[i] - 5)
+                first_chan = int(mc - first_chan_a[i] - n_channels_half)
                 first_chan = max(0, int(first_chan))
                 first_chan = min(wfs_a.shape[2]-n_channels, int(first_chan))
                 wfs_a_bis[i] = wfs_a[i, :, first_chan:first_chan+n_channels]
-                first_chan = int(mc - first_chan_b[i] - 5)
+                first_chan = int(mc - first_chan_b[i] - n_channels_half)
                 first_chan = max(0, int(first_chan))
                 first_chan = min(wfs_b.shape[2]-n_channels, int(first_chan))
                 wfs_b_bis[i, -two_units_shift:] = wfs_b[i, :two_units_shift, first_chan:first_chan+n_channels]
@@ -285,11 +285,11 @@ def get_diptest_value(residual_path, waveforms, first_chans, geom_array, spike_i
             wfs_b_bis += read_waveforms(spike_times_unit_b+two_units_shift, residual_path, geom_array, n_times=n_times, channels = np.arange(mc-n_channels_half,mc+n_channels_half))[0]
     else:
         for i in range(wfs_a_bis.shape[0]):
-            first_chan = int(mc - first_chan_a[i] - 5)
+            first_chan = int(mc - first_chan_a[i] - n_channels_half)
             first_chan = max(0, int(first_chan))
             first_chan = min(wfs_a.shape[2]-n_channels, int(first_chan))
             wfs_a_bis[i] = wfs_a[i, :, first_chan:first_chan+n_channels]
-            first_chan = int(mc - first_chan_b[i] - 5)
+            first_chan = int(mc - first_chan_b[i] - n_channels_half)
             first_chan = max(0, int(first_chan))
             first_chan = min(wfs_b.shape[2]-n_channels, int(first_chan))
             wfs_b_bis[i, :] = wfs_b[i, :, first_chan:first_chan+n_channels]
