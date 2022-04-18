@@ -28,6 +28,7 @@ def read_waveforms(spike_times, bin_file, geom_array, n_times=121, offset_denois
     total_size = n_times*n_channels
     # spike_times are the centers of waveforms
     spike_times_shifted = spike_times - (offset_denoiser) #n_times//2
+    # print(spike_times, spike_times_shifted)
     offsets = spike_times_shifted.astype('int64')*dtype.itemsize*n_channels
     with open(bin_file, "rb") as fin:
         for ctr, spike in enumerate(spike_times_shifted):
@@ -289,15 +290,15 @@ def run_weighted_triage(x, y, z, alpha, maxptps, pcs=None, scales=(1,10,1,15,30,
     return triaged_x, triaged_y, triaged_z, triaged_alpha, triaged_maxptps, triaged_pcs, ptp_filter, idx_keep
 
 def make_sorting_from_labels_frames(labels, spike_frames, sampling_frequency=30000):
-    times_list = []
-    labels_list = []
-    for cluster_id in np.unique(labels):
-        spike_train = spike_frames[np.where(labels==cluster_id)]
-        times_list.append(spike_train)
-        labels_list.append(np.zeros(spike_train.shape[0])+cluster_id)
-    times_array = np.concatenate(times_list).astype('int')
-    labels_array = np.concatenate(labels_list).astype('int')
-    sorting = spikeinterface.numpyextractors.NumpySorting.from_times_labels(times_list=times_array, 
-                                                                            labels_list=labels_array, 
+    # times_list = []
+    # labels_list = []
+    # for cluster_id in np.unique(labels):
+    #     spike_train = spike_frames[np.where(labels==cluster_id)]
+    #     times_list.append(spike_train)
+    #     labels_list.append(np.zeros(spike_train.shape[0])+cluster_id)
+    # times_array = np.concatenate(times_list).astype('int')
+    # labels_array = np.concatenate(labels_list).astype('int')
+    sorting = spikeinterface.numpyextractors.NumpySorting.from_times_labels(times_list=spike_frames, 
+                                                                            labels_list=labels, 
                                                                             sampling_frequency=sampling_frequency)  
     return sorting

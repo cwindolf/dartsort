@@ -19,8 +19,9 @@ def weighted_knn_triage(
 
 def run_weighted_triage(x, y, z, alpha, maxptps, pcs=None, 
                         scales=(1,10,1,15,30,10),
-                        threshold=100, ptp_threshold=3, c=1):
-    ptp_filter = np.flatnonzero(maxptps>ptp_threshold)
+                        threshold=100, ptp_threshold=3, c=1, mask=None):
+    ptp_filter = maxptps>ptp_threshold
+    ptp_filter = np.flatnonzero(ptp_filter)
     x = x[ptp_filter]
     y = y[ptp_filter]
     z = z[ptp_filter]
