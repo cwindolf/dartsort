@@ -298,7 +298,7 @@ def make_sorting_from_labels_frames(labels, spike_frames, sampling_frequency=300
     #     labels_list.append(np.zeros(spike_train.shape[0])+cluster_id)
     # times_array = np.concatenate(times_list).astype('int')
     # labels_array = np.concatenate(labels_list).astype('int')
-    sorting = spikeinterface.numpyextractors.NumpySorting.from_times_labels(times_list=spike_frames, 
-                                                                            labels_list=labels, 
+    sorting = spikeinterface.numpyextractors.NumpySorting.from_times_labels(times_list=spike_frames.astype('int'), 
+                                                                            labels_list=labels.astype('int'), 
                                                                             sampling_frequency=sampling_frequency)  
     return sorting
