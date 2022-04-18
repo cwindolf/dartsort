@@ -220,13 +220,13 @@ def get_diptest_value(residual_path, waveforms, first_chans, geom_array, spike_i
     idx = np.random.choice(np.arange(spike_times_unit_a.shape[0]), n_wfs_max, replace = False)
     spike_times_unit_a = spike_times_unit_a[idx]
     wfs_a = waveforms[labels == unit_a][idx]
-    first_chan_a = triaged_first_chan[labels == unit_a][idx]
+    first_chan_a = first_chans[labels == unit_a][idx]
     
     spike_times_unit_b = spike_index[labels == unit_b, 0]
     idx = np.random.choice(np.arange(spike_times_unit_b.shape[0]), n_wfs_max, replace = False)
     spike_times_unit_b = spike_times_unit_b[idx]
     wfs_b = waveforms[labels == unit_b][idx]
-    first_chan_b = triaged_first_chan[labels == unit_b][idx]
+    first_chan_b = first_chans[labels == unit_b][idx]
     
     wfs_a_bis = np.zeros((wfs_a.shape[0], n_times, n_channels))
     wfs_b_bis = np.zeros((wfs_b.shape[0], n_times, n_channels))
