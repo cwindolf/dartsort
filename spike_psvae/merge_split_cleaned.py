@@ -14,7 +14,7 @@ from tqdm import notebook
 from tqdm.auto import tqdm
 
 # %%
-def align_templates(labels, templates, triaged_spike_index, denoiser_offset = 42):
+def align_templates(labels, templates, wfs, triaged_spike_index, denoiser_offset=42):
     list_argmin = np.zeros(templates.shape[0])
     for i in range(templates.shape[0]):
         list_argmin[i] = templates[i, :, templates[i].ptp(0).argmax()].argmin()
@@ -23,14 +23,19 @@ def align_templates(labels, templates, triaged_spike_index, denoiser_offset = 42
     for unit in idx_not_aligned:
         mc = templates[unit].ptp(0).argmax()
         offset = templates[unit, :, mc].argmin()
-        triaged_spike_index[labels == unit, 0] += offset-denoiser_offset
+        shift = offset-denoiser_offset
+        triaged_spike_index[labels == unit, 0] += shift
+        if shift>0:
+            wfs[labels == unit, :-shift] = wfs[labels == unit, shift:]
+            wfs[labels == unit, -shift:] = 0
+        elif shift<0:
+            wfs[labels == unit, -shift:] = wfs[labels == unit, :shift]
+            wfs[labels == unit, :-shift] = 0
 
     idx_sorted = triaged_spike_index[:, 0].argsort()
     triaged_spike_index = triaged_spike_index[idx_sorted]
     
     return triaged_spike_index, idx_sorted
-
-
 # %%
 def denoise_wf_nn_tmp_single_channel(wf, denoiser, device):
     denoiser = denoiser.to(device)
