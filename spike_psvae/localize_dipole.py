@@ -1,8 +1,8 @@
 import numpy as np
 from joblib import Parallel, delayed
-from spike_psvae.waveform_utils import get_local_geom
 from scipy.optimize import minimize
 from tqdm.auto import tqdm
+from .waveform_utils import get_local_geom
 
 BOUNDS_NP1 = [(-100, 132), (1e-4, 250), (-100, 100)]
 BOUNDS = {20: BOUNDS_NP1, 15: BOUNDS_NP1}
@@ -88,8 +88,10 @@ def localize_ptp(
     ]
     X = duv / np.square(duv).sum(axis=1, keepdims=True)
     beta = np.linalg.solve(X.T @ X, X.T @ ptp)
-    balpha = np.linalg.norm(beta)
-    return bx, by, bz_rel, geom[maxchan, 1] + bz_rel, balpha
+    # print(X)
+    # print(beta)
+    # print(X @ beta)
+    return bx, by, bz_rel, geom[maxchan, 1] + bz_rel, beta, X @ beta
 
 
 def localize_ptps(
@@ -124,9 +126,10 @@ def localize_ptps(
     ys = np.empty(N)
     z_rels = np.empty(N)
     z_abss = np.empty(N)
-    alphas = np.empty(N)
+    betas = np.empty((N, 3))
+    ptp_fits = np.empty(ptps.shape)
     with Parallel(n_workers) as pool:
-        for n, (x, y, z_rel, z_abs, alpha) in enumerate(
+        for n, (x, y, z_rel, z_abs, beta, pred) in enumerate(
             pool(
                 delayed(localize_ptp)(
                     ptp,
@@ -143,6 +146,7 @@ def localize_ptps(
             ys[n] = y
             z_rels[n] = z_rel
             z_abss[n] = z_abs
-            alphas[n] = alpha
+            betas[n] = beta
+            ptp_fits[n] = pred
 
-    return xs, ys, z_rels, z_abss, alphas
+    return xs, ys, z_rels, z_abss, betas, ptp_fits
