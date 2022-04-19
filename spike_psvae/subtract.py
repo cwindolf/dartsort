@@ -304,7 +304,7 @@ def subtraction(
         jobs = (
             (batch_id, start)
             for batch_id, start in jobs
-            if start > last_sample
+            if start >= last_sample
         )
 
         # residual binary file -- append if we're resuming
