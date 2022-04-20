@@ -214,7 +214,7 @@ def nn_detect_and_deduplicate(
     # threshold
     which = energy > energy_threshold
     if not which.any():
-        return np.array([]), np.array([])
+        return torch.tensor([]), torch.tensor([])
     spike_index_torch = spike_index_torch[which]
     energy = energy[which]
     # print("after", energy.shape, energy.min(), energy.mean(), energy.max())
@@ -393,7 +393,7 @@ def torch_voltage_detect_dedup(
     max_energies_at_inds = max_energies.view(-1)[window_max_inds]
     which = torch.nonzero(max_energies_at_inds > threshold).squeeze()
     if not which.numel():
-        return np.array([]), np.array([]), np.array([])
+        return torch.tensor([]), torch.tensor([]), torch.tensor([])
 
     # -- unravel the spike index
     # (right now the indices are into flattened recording)
@@ -409,7 +409,7 @@ def torch_voltage_detect_dedup(
         (0 < times) & (times < recording.shape[0] - 1)
     ).squeeze()
     if not compat_times.numel():
-        return np.array([]), np.array([]), np.array([])
+        return torch.tensor([]), torch.tensor([]), torch.tensor([])
     times = times[compat_times]
     res_inds = which[compat_times]
     chans = window_max_inds[res_inds] % C
@@ -449,7 +449,7 @@ def torch_voltage_detect_dedup(
             energies >= max_energies[times, chans] - 1e-8
         ).squeeze()
         if not dedup.numel():
-            return np.array([]), np.array([]), np.array([])
+            return torch.tensor([]), torch.tensor([]), torch.tensor([])
         times = times[dedup]
         chans = chans[dedup]
         energies = energies[dedup]
@@ -594,7 +594,7 @@ def denoiser_detect_dedup(
     max_energies_at_inds = max_energies.view(-1)[window_max_inds]
     which = torch.nonzero(max_energies_at_inds > ptp_threshold).squeeze()
     if not which.numel():
-        return np.array([]), np.array([]), np.array([])
+        return torch.tensor([]), torch.tensor([]), torch.tensor([])
 
     # -- unravel the spike index
     # (right now the indices are into flattened recording)
@@ -610,7 +610,7 @@ def denoiser_detect_dedup(
         (0 < times) & (times < recording.shape[0] - 1)
     ).squeeze()
     if not compat_times.numel():
-        return np.array([]), np.array([]), np.array([])
+        return torch.tensor([]), torch.tensor([]), torch.tensor([])
     times = times[compat_times]
     res_inds = which[compat_times]
     chans = window_max_inds[res_inds] % C
@@ -650,7 +650,7 @@ def denoiser_detect_dedup(
             energies >= max_energies[times, chans] - 1e-8
         ).squeeze()
         if not dedup.numel():
-            return np.array([]), np.array([]), np.array([])
+            return torch.tensor([]), torch.tensor([]), torch.tensor([])
         times = times[dedup]
         chans = chans[dedup]
         energies = energies[dedup]
