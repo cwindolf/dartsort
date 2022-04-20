@@ -86,7 +86,7 @@ def localize_ptp_index(
     bx, by, bz_rel = result.x
     q = ptp_at(bx, by, bz_rel, 1.0)
     balpha = (ptp * q).sum() / np.square(q).sum()
-    return bx, by, bz_rel, balpha
+    return bx, by, bz_rel, balpha, balpha * q
 
 
 def localize_ptps_index(
@@ -126,8 +126,9 @@ def localize_ptps_index(
     ys = np.empty(N)
     z_rels = np.empty(N)
     alphas = np.empty(N)
+    ptp_fits = np.empty_like(ptps)
     with Parallel(n_workers) as pool:
-        for n, (x, y, z_rel, alpha) in enumerate(
+        for n, (x, y, z_rel, alpha, pred) in enumerate(
             pool(
                 delayed(localize_ptp_index)(
                     ptp[subset[mc]],
@@ -142,9 +143,10 @@ def localize_ptps_index(
             ys[n] = y
             z_rels[n] = z_rel
             alphas[n] = alpha
+            ptp_fits[n] = pred
 
     z_abss = z_rels + geom[maxchans, 1]
-    return xs, ys, z_rels, z_abss, alphas
+    return xs, ys, z_rels, z_abss, alphas, ptp_fits
 
 
 def localize_ptp(
@@ -207,7 +209,7 @@ def localize_ptp(
     bx, by, bz_rel = result.x
     q = ptp_at(bx, by, bz_rel, 1.0)
     balpha = (ptp * q).sum() / np.square(q).sum()
-    return bx, by, bz_rel, geom[maxchan, 1] + bz_rel, balpha
+    return bx, by, bz_rel, geom[maxchan, 1] + bz_rel, balpha, balpha * q
 
 
 def localize_ptps(
@@ -250,8 +252,9 @@ def localize_ptps(
     z_rels = np.empty(N)
     z_abss = np.empty(N)
     alphas = np.empty(N)
+    ptp_fits = np.empty_like(ptps)
     with Parallel(n_workers) as pool:
-        for n, (x, y, z_rel, z_abs, alpha) in enumerate(
+        for n, (x, y, z_rel, z_abs, alpha, pred) in enumerate(
             pool(
                 delayed(localize_ptp)(
                     ptp,
@@ -269,8 +272,9 @@ def localize_ptps(
             z_rels[n] = z_rel
             z_abss[n] = z_abs
             alphas[n] = alpha
+            ptp_fits[n] = pred
 
-    return xs, ys, z_rels, z_abss, alphas
+    return xs, ys, z_rels, z_abss, alphas, ptp_fits
 
 
 def localize_waveforms(
