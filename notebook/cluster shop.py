@@ -367,42 +367,38 @@ matched_units_kilo_1 = cmp_kilo_1.get_matching()[0].index.to_numpy()[np.where(cm
 unmatched_units_kilo_1 = cmp_kilo_1.get_matching()[0].index.to_numpy()[np.where(cmp_kilo_1.get_matching()[0].to_numpy() == -1.)]
 
 # %%
-gudir = Path(output_dir / "good_unit_kilo_comparison2")
+gudir = Path(output_dir / "kilo_comparison")
 gudir.mkdir(exist_ok=True)
 
-venndir = Path(output_dir / "venn_agreement")
-venndir.mkdir(exist_ok=True)
 num_channels = 40
 
 for good_kilo_sort_cluster in tqdm(good_kilo_sort_clusters):
+    num_spikes = len(sorting_kilo.get_unit_spike_train(cluster_id_match))
     cluster_id_match = good_kilo_sort_cluster
     cluster_id = int(cmp_kilo_1.get_best_unit_match1(cluster_id_match))
-    if cluster_id == -1:
-        continue
-    
-    depth = int(kilo_cluster_depth_means[cluster_id_match])
-    save_str = str(depth).zfill(4)
-    sorting1 = sorting_hdbl_t
-    sorting2 = sorting_kilo
-    sorting1_name = "hdb"
-    sorting2_name = "kilo"
-    firstchans_cluster_sorting1 = firstchans[labels == cluster_id]
-    mcs_abs_cluster_sorting1 = spike_index[labels == cluster_id, 1]
-    spike_depths = kilo_spike_depths[np.where(kilo_spike_clusters == cluster_id_match)]
-    mcs_abs_cluster_sorting2 = np.asarray([np.argmin(np.abs(spike_depth - geom_array[:,1])) for spike_depth in spike_depths])
-    firstchans_cluster_sorting2 = (mcs_abs_cluster_sorting2 - 20).clip(min=0)
+    if cluster_id != -1:
+        depth = int(kilo_cluster_depth_means[cluster_id_match])
+        save_str = str(depth).zfill(4)
+        sorting1 = sorting_hdbl_t
+        sorting2 = sorting_kilo
+        sorting1_name = "hdb"
+        sorting2_name = "kilo"
+        firstchans_cluster_sorting1 = firstchans[labels == cluster_id]
+        mcs_abs_cluster_sorting1 = spike_index[labels == cluster_id, 1]
+        spike_depths = kilo_spike_depths[np.where(kilo_spike_clusters == cluster_id_match)]
+        mcs_abs_cluster_sorting2 = np.asarray([np.argmin(np.abs(spike_depth - geom_array[:,1])) for spike_depth in spike_depths])
+        firstchans_cluster_sorting2 = (mcs_abs_cluster_sorting2 - 20).clip(min=0)
 
-    fig = cluster_viz.plot_agreement_venn(
-        cluster_id, cluster_id_match, cmp_1, sorting1, sorting2, sorting1_name, sorting2_name,
-        geom_array, num_channels, 200, firstchans_cluster_sorting1, mcs_abs_cluster_sorting1, 
-        firstchans_cluster_sorting2, mcs_abs_cluster_sorting2, raw_data_bin, delta_frames = 12, alpha=.2
-    )
-    fig.savefig(venndir / f"Z{save_str}_{cluster_id_match}_{cluster_id}_comparison.png", bbox_inches="tight")
-    plt.close(fig)
-    
-    # else:
-    num_spikes = len(sorting_kilo.get_unit_spike_train(cluster_id_match))
-    print(f"skipped {cluster_id_match} with {num_spikes} spikes")
+        fig = cluster_viz.plot_agreement_venn(
+            cluster_id, cluster_id_match, cmp_1, sorting1, sorting2, sorting1_name, sorting2_name,
+            geom_array, num_channels, 200, firstchans_cluster_sorting1, mcs_abs_cluster_sorting1, 
+            firstchans_cluster_sorting2, mcs_abs_cluster_sorting2, raw_data_bin, delta_frames = 12, alpha=.2
+        )
+        fig.savefig(gudir / f"Z{save_str}_{cluster_id_match}_{cluster_id}_comparison.png", bbox_inches="tight")
+        plt.close(fig)
+    else:
+        print(f"skipped {cluster_id_match} with {num_spikes} spikes")
+
     if num_spikes > 0:
         #plot specific kilosort example
         num_close_clusters = 50
@@ -434,70 +430,5 @@ len(spike_index), idx_keep_full.size
 
 # %%
 np.unique(labels).size
-
-
-# %%
-def job(good_kilo_sort_cluster):
-    cluster_id_match = good_kilo_sort_cluster
-    cluster_id = int(cmp_kilo_1.get_best_unit_match1(cluster_id_match))
-    if cluster_id == -1:
-        return
-    
-    depth = int(kilo_cluster_depth_means[cluster_id_match])
-    save_str = str(depth).zfill(4)
-    sorting1 = sorting_hdbl_t
-    sorting2 = sorting_kilo
-    sorting1_name = "hdb"
-    sorting2_name = "kilo"
-    firstchans_cluster_sorting1 = firstchans[labels == cluster_id]
-    mcs_abs_cluster_sorting1 = spike_index[labels == cluster_id, 1]
-    spike_depths = kilo_spike_depths[np.where(kilo_spike_clusters == cluster_id_match)]
-    mcs_abs_cluster_sorting2 = np.asarray([np.argmin(np.abs(spike_depth - geom_array[:,1])) for spike_depth in spike_depths])
-    firstchans_cluster_sorting2 = (mcs_abs_cluster_sorting2 - 20).clip(min=0)
-
-    fig = cluster_viz.plot_agreement_venn(
-        cluster_id, cluster_id_match, cmp_1, sorting1, sorting2, sorting1_name, sorting2_name,
-        geom_array, num_channels, 200, firstchans_cluster_sorting1, mcs_abs_cluster_sorting1, 
-        firstchans_cluster_sorting2, mcs_abs_cluster_sorting2, raw_data_bin, delta_frames = 12, alpha=.2
-    )
-    fig.savefig(venndir / f"Z{save_str}_{cluster_id_match}_{cluster_id}_comparison.png", bbox_inches="tight")
-    plt.close(fig)
-    
-    # else:
-    num_spikes = len(sorting_kilo.get_unit_spike_train(cluster_id_match))
-    print(f"skipped {cluster_id_match} with {num_spikes} spikes")
-    if num_spikes > 0:
-        #plot specific kilosort example
-        num_close_clusters = 50
-        num_close_clusters_plot=10
-        num_channels_similarity = 20
-        shifts_align=np.arange(-8,9)
-
-        st_1 = sorting_kilo.get_unit_spike_train(cluster_id_match)
-
-        #compute K closest hdbscan clsuters
-        closest_clusters = cluster_utils.get_closest_clusters_kilosort_hdbscan(
-            cluster_id_match, kilo_cluster_depth_means, cluster_centers, num_close_clusters)
-
-        num_close_clusters = 50
-        num_close_clusters_plot=10
-        num_channels_similarity = 20
-        fig = cluster_viz.plot_unit_similarities(
-            cluster_id_match, closest_clusters, sorting_kilo, 
-            sorting_hdbl_t, geom_array, raw_data_bin, end_time - start_time, 
-            num_channels, 200, num_channels_similarity=num_channels_similarity, 
-            num_close_clusters_plot=num_close_clusters_plot,
-            num_close_clusters=num_close_clusters,
-            shifts_align = shifts_align, order_by ='similarity', normalize_agreement_by="both")
-        fig.savefig(gudir / f"Z{save_str}_{cluster_id_match}_summary.png", bbox_inches="tight")
-        plt.close(fig)
-
-
-with loky.ProcessPoolExecutor(
-    12,
-) as p:
-    units = np.setdiff1d(np.unique(clusterer.labels_), [-1])
-    for res in tqdm(p.map(job, good_kilo_sort_clusters), total=len(good_kilo_sort_clusters)):
-        pass
 
 # %%
