@@ -1,8 +1,10 @@
+import concurrent.futures
+import contextlib
 import h5py
 import numpy as np
+import signal
 import time
 import torch
-import concurrent.futures
 
 from collections import namedtuple
 from ibllib.io.spikeglx import _geometry_from_meta, read_meta_data
@@ -42,6 +44,7 @@ def subtraction(
     localize_radius=100,
     localize_firstchan_n_channels=20,
     loc_workers=4,
+    overwrite=False,
     random_seed=0,
 ):
     """Subtraction-based waveform extraction
@@ -107,23 +110,20 @@ def subtraction(
     out_h5 = out_folder / f"subtraction_{stem}_t_{t_start}_{t_end}.h5"
     if save_residual:
         residual_bin = out_folder / f"residual_{stem}_t_{t_start}_{t_end}.bin"
-        if residual_bin.exists():
-            print("Output residual exists, it will be overwritten.")
     try:
-        h5py.File(out_h5, "w")
+        if out_h5.exists():
+            with h5py.File(out_h5, "r+") as d:
+                pass
+            del d
     except BlockingIOError as e:
         raise ValueError(
             f"Output HDF5 {out_h5} is currently in use by another program. "
             "Maybe a Jupyter notebook that's still running?"
         ) from e
 
-    # pick device if it's None
+    # pick device if it's not supplied
     if device is None:
-        device = (
-            torch.device("cuda")
-            if torch.cuda.is_available()
-            else torch.device("cpu")
-        )
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     # if no geometry is supplied, try to load it from meta file
     if geom is None:
@@ -134,6 +134,7 @@ def subtraction(
             )
     n_channels = geom.shape[0]
     ncols = len(np.unique(geom[:, 0]))
+
     # TODO: read this from meta.
     # right now it's just used to load NN detector and pick the enforce
     # decrease method if enforce_decrease_kind=="columns"
@@ -146,10 +147,13 @@ def subtraction(
             Path(__file__).parent.parent / f"pretrained/detect_{probe}.pt"
         )
         print("Using pretrained detector for", probe, "from", nn_detector_path)
+        detection_kind = "voltage->NN"
     elif denoise_detect:
         print("Using denoising NN detection")
+        detection_kind = "denoised PTP"
     else:
         print("Using voltage detection")
+        detection_kind = "voltage"
 
     # figure out length of data
     std_size = standardized_bin.stat().st_size
@@ -165,11 +169,11 @@ def subtraction(
     end_sample = (
         T_samples if t_end is None else int(np.floor(t_end * sampling_rate))
     )
+    portion_len_s = (end_sample - start_sample) / 30000
     print(
-        "Running subtraction on ",
-        T_sec,
-        "seconds long recording with thresholds",
-        thresholds,
+        f"Running subtraction. Total recording length is {T_sec:0.2f} "
+        f"s, running on portion of length {portion_len_s:0.2f} s. "
+        f"Using {detection_kind} detection with thresholds: {thresholds}."
     )
 
     # compute helper data structures
@@ -214,27 +218,53 @@ def subtraction(
     # pre-fit temporal PCA
     tpca = None
     if n_sec_pca is not None:
-        with timer("Training TPCA"):
-            tpca = train_pca(
-                standardized_bin,
-                spike_length_samples,
-                extract_channel_index,
-                geom,
-                radial_parents,
-                T_samples,
-                sampling_rate,
-                dedup_channel_index,
-                thresholds,
-                nn_detector_path,
-                denoise_detect,
-                nn_channel_index,
-                probe=probe,
-                standardized_dtype=np.float32,
-                n_sec_pca=n_sec_pca,
-                rank=tpca_rank,
-                random_seed=random_seed,
-                device=device,
+        # try to load old TPCA if it's around
+        if not overwrite and out_h5.exists():
+            with h5py.File(out_h5, "r") as output_h5:
+                if "tpca_mean" in output_h5:
+                    tpca_mean = output_h5["tpca_mean"][:]
+                    tpca_components = output_h5["tpca_components"][:]
+                    print("Loading TPCA from h5")
+                    tpca = PCA(tpca_components.shape[0])
+                    tpca.mean_ = tpca_mean
+                    tpca.components_ = tpca_components
+
+        # otherwise, train it
+        if tpca is None:
+            with timer("Training TPCA"):
+                tpca = train_pca(
+                    standardized_bin,
+                    spike_length_samples,
+                    extract_channel_index,
+                    geom,
+                    radial_parents,
+                    T_samples,
+                    sampling_rate,
+                    dedup_channel_index,
+                    thresholds,
+                    nn_detector_path,
+                    denoise_detect,
+                    nn_channel_index,
+                    probe=probe,
+                    standardized_dtype=np.float32,
+                    n_sec_pca=n_sec_pca,
+                    rank=tpca_rank,
+                    random_seed=random_seed,
+                    device=device,
+                )
+
+    # if we're on GPU, we can't use processes, since each process will
+    # have it's own torch runtime and those will use all the memory
+    if device.type == "cuda":
+        Pool = concurrent.futures.ThreadPoolExecutor
+    else:
+        if loc_workers > 1:
+            print(
+                "Setting number of localization workers to 1. (Since "
+                "you're on CPU, use a large n_jobs for parallelism.)"
             )
+            loc_workers = 1
+        Pool = concurrent.futures.ThreadPoolExecutor
 
     # parallel batches
     jobs = list(
@@ -249,83 +279,43 @@ def subtraction(
     n_batches = len(jobs)
 
     # -- initialize storage
-    # residual binary file
-    if save_residual:
-        residual = open(residual_bin, mode="wb")
-
-    # everybody else in hdf5
-    with h5py.File(out_h5, "w") as output_h5:
-        output_h5.create_dataset("geom", data=geom)
-        output_h5.create_dataset("start_sample", data=start_sample)
-        output_h5.create_dataset("end_sample", data=end_sample)
-        output_h5.create_dataset("channel_index", data=extract_channel_index)
-        if tpca is not None:
-            output_h5.create_dataset("tpca_mean", data=tpca.mean_)
-            output_h5.create_dataset("tpca_components", data=tpca.components_)
-
-        # resizable datasets so we don't fill up space
-        extract_channels = extract_channel_index.shape[1]
-        subtracted_wfs = output_h5.create_dataset(
-            "subtracted_waveforms",
-            shape=(1, spike_length_samples, extract_channels),
-            chunks=(4096, spike_length_samples, extract_channels),
-            maxshape=(None, spike_length_samples, extract_channels),
-            dtype=np.float32,
-        )
-        spike_index = output_h5.create_dataset(
-            "spike_index",
-            shape=(1, 2),
-            chunks=(4096, 2),
-            maxshape=(None, 2),
-            dtype=np.int64,
-        )
+    with get_output_h5(
+        out_h5,
+        start_sample,
+        end_sample,
+        geom,
+        extract_channel_index,
+        tpca,
+        neighborhood_kind,
+        spike_length_samples,
+        do_clean=do_clean,
+        do_localize=do_localize,
+        overwrite=overwrite,
+    ) as (output_h5, last_sample):
+        subtracted_wfs = output_h5["subtracted_waveforms"]
+        spike_index = output_h5["spike_index"]
         if neighborhood_kind == "firstchan":
-            firstchans = output_h5.create_dataset(
-                "first_channels",
-                shape=(1,),
-                chunks=(4096,),
-                maxshape=(None,),
-                dtype=np.int64,
-            )
+            firstchans = output_h5["first_channels"]
         if do_clean:
-            cleaned_wfs = output_h5.create_dataset(
-                "cleaned_waveforms",
-                shape=(1, spike_length_samples, extract_channels),
-                chunks=(4096, spike_length_samples, extract_channels),
-                maxshape=(None, spike_length_samples, extract_channels),
-                dtype=np.float32,
-            )
+            cleaned_wfs = output_h5["cleaned_waveforms"]
         if do_localize:
-            locs = output_h5.create_dataset(
-                "localizations",
-                shape=(1, 5),
-                chunks=(4096, 5),
-                maxshape=(None, 5),
-                dtype=np.float32,
-            )
-            maxptps = output_h5.create_dataset(
-                "maxptps",
-                shape=(1,),
-                chunks=(4096,),
-                maxshape=(None,),
-                dtype=np.float32,
-            )
+            locs = output_h5["localizations"]
+            maxptps = output_h5["maxptps"]
+        N = len(spike_index)
 
-        # if we're on GPU, we can't use processes, since each process will
-        # have it's own torch runtime and those will use all the memory
-        if device.type == "cuda":
-            Pool = concurrent.futures.ThreadPoolExecutor
-        else:
-            if loc_workers > 1:
-                print(
-                    "Setting number of localization workers to 1. (Since "
-                    "you're on CPU, use a large n_jobs for parallelism.)"
-                )
-                loc_workers = 1
-            Pool = concurrent.futures.ProcessPoolExecutor
+        # if we're resuming, filter out jobs we already did
+        jobs = (
+            (batch_id, start)
+            for batch_id, start in jobs
+            if start >= last_sample
+        )
+
+        # residual binary file -- append if we're resuming
+        if save_residual:
+            residual_mode = "ab" if last_sample > 0 else "ab"
+            residual = open(residual_bin, mode=residual_mode)
 
         # now run subtraction in parallel
-        N = 0
         jobs = (
             (
                 batch_id,
@@ -357,7 +347,12 @@ def subtraction(
         with Pool(
             n_jobs,
             initializer=_subtraction_batch_init,
-            initargs=(device, nn_detector_path, nn_channel_index, denoise_detect),
+            initargs=(
+                device,
+                nn_detector_path,
+                nn_channel_index,
+                denoise_detect,
+            ),
         ) as pool:
             for result in tqdm(
                 pool.map(_subtraction_batch, jobs),
@@ -365,51 +360,53 @@ def subtraction(
                 desc="Batches",
                 smoothing=0,
             ):
-                N_new = result.N_new
+                with noint:
+                    N_new = result.N_new
 
-                # write new residual
-                if save_residual:
-                    np.load(result.residual).tofile(residual)
+                    # write new residual
+                    if save_residual:
+                        np.load(result.residual).tofile(residual)
 
-                # grow arrays as necessary
-                subtracted_wfs.resize(N + N_new, axis=0)
-                if do_clean:
-                    cleaned_wfs.resize(N + N_new, axis=0)
-                spike_index.resize(N + N_new, axis=0)
-                if do_localize:
-                    locs.resize(N + N_new, axis=0)
-                    maxptps.resize(N + N_new, axis=0)
-                if neighborhood_kind == "firstchan":
-                    firstchans.resize(N + N_new, axis=0)
+                    # grow arrays as necessary
+                    subtracted_wfs.resize(N + N_new, axis=0)
+                    if do_clean:
+                        cleaned_wfs.resize(N + N_new, axis=0)
+                    spike_index.resize(N + N_new, axis=0)
+                    if do_localize:
+                        locs.resize(N + N_new, axis=0)
+                        maxptps.resize(N + N_new, axis=0)
+                    if neighborhood_kind == "firstchan":
+                        firstchans.resize(N + N_new, axis=0)
 
-                # write results
-                subtracted_wfs[N : N + N_new] = np.load(result.subtracted_wfs)
-                if do_clean:
-                    cleaned_wfs[N : N + N_new] = np.load(result.cleaned_wfs)
-                spike_index[N : N + N_new] = np.load(result.spike_index)
-                if do_localize:
-                    locs[N : N + N_new] = np.load(result.localizations)
-                    maxptps[N : N + N_new] = np.load(result.maxptps)
-                if neighborhood_kind == "firstchan":
-                    firstchans[N : N + N_new] = extract_channel_index[
-                        np.load(result.spike_index)[:, 1],
-                        0,
-                    ]
+                    # write results
+                    subtracted_wfs[N:] = np.load(result.subtracted_wfs)
+                    if do_clean:
+                        cleaned_wfs[N:] = np.load(result.cleaned_wfs)
+                    spike_index[N:] = np.load(result.spike_index)
+                    if do_localize:
+                        locs[N:] = np.load(result.localizations)
+                        maxptps[N:] = np.load(result.maxptps)
+                    if neighborhood_kind == "firstchan":
+                        firstchans[N:] = extract_channel_index[
+                            np.load(result.spike_index)[:, 1],
+                            0,
+                        ]
 
-                # delete original files
-                Path(result.residual).unlink()
-                Path(result.subtracted_wfs).unlink()
-                if do_clean:
-                    Path(result.cleaned_wfs).unlink()
-                Path(result.spike_index).unlink()
-                if do_localize:
-                    Path(result.localizations).unlink()
-                    Path(result.maxptps).unlink()
+                    # delete original files
+                    Path(result.residual).unlink()
+                    Path(result.subtracted_wfs).unlink()
+                    if do_clean:
+                        Path(result.cleaned_wfs).unlink()
+                    Path(result.spike_index).unlink()
+                    if do_localize:
+                        Path(result.localizations).unlink()
+                        Path(result.maxptps).unlink()
 
-                # update my state
-                N += N_new
+                    # update spike count
+                    N += N_new
 
     # -- done!
+    batch_data_folder.rmdir()
     if save_residual:
         residual.close()
     print("Done. Detected", N, "spikes")
@@ -417,7 +414,6 @@ def subtraction(
     if save_residual:
         print(residual_bin)
     print(out_h5)
-
     return out_h5
 
 
@@ -448,11 +444,13 @@ def _subtraction_batch(args):
         *args,
         _subtraction_batch.denoiser,
         _subtraction_batch.detector,
-        _subtraction_batch.dn_detector
+        _subtraction_batch.dn_detector,
     )
 
 
-def _subtraction_batch_init(device, nn_detector_path, nn_channel_index, denoise_detect):
+def _subtraction_batch_init(
+    device, nn_detector_path, nn_channel_index, denoise_detect
+):
     """Thread/process initializer -- loads up neural nets"""
     denoiser = denoise.SingleChanDenoiser()
     denoiser.load()
@@ -465,7 +463,7 @@ def _subtraction_batch_init(device, nn_detector_path, nn_channel_index, denoise_
         detector.load(nn_detector_path)
         detector.to(device)
     _subtraction_batch.detector = detector
-    
+
     dn_detector = None
     if denoise_detect:
         dn_detector = detect.DenoiserDetect(denoiser)
@@ -738,13 +736,13 @@ def train_pca(
     )
 
     denoiser = denoise.SingleChanDenoiser().load().to(device)
-    
+
     detector = None
     if nn_detector_path:
         detector = detect.Detect(nn_channel_index)
         detector.load(nn_detector_path)
         detector.to(device)
-    
+
     dn_detector = None
     if denoise_detect:
         dn_detector = detect.DenoiserDetect(denoiser)
@@ -830,19 +828,19 @@ def detect_and_subtract(
     waveforms, subtracted_raw, spike_index
     """
     device = torch.device(device)
-    
+
     kwargs = dict(nn_detector=None, nn_denoiser=None, denoiser_detector=None)
     kwargs["denoiser_detector"] = denoiser_detector
     if detector is not None and threshold <= nn_switch_threshold:
         kwargs["nn_detector"] = detector
         kwargs["nn_denoiser"] = denoiser
-        
+
     start = spike_length_samples
     end = -spike_length_samples
     if denoiser_detector is not None:
         start = start - 42
         end = end + 79
-    
+
     spike_index = detect.detect_and_deduplicate(
         raw[start:end].copy(),
         threshold,
@@ -878,9 +876,6 @@ def detect_and_subtract(
         denoiser=denoiser,
     )
 
-    if device.type == "cuda":
-        torch.cuda.empty_cache()
-
     # -- the actual subtraction
     # have to use subtract.at since -= will only subtract once in the overlaps,
     # subtract.at will subtract multiple times where waveforms overlap
@@ -895,7 +890,7 @@ def detect_and_subtract(
     return waveforms, subtracted_raw, spike_index
 
 
-@torch.inference_mode()
+@torch.no_grad()
 def full_denoising(
     waveforms,
     maxchans,
@@ -999,6 +994,107 @@ def read_waveforms(
     waveforms = padded_recording[time_ix[:, :, None], chan_ix[:, None, :]]
 
     return waveforms
+
+
+# -- HDF5 initialization / resuming old job logic
+
+
+@contextlib.contextmanager
+def get_output_h5(
+    out_h5,
+    start_sample,
+    end_sample,
+    geom,
+    extract_channel_index,
+    tpca,
+    neighborhood_kind,
+    spike_length_samples,
+    do_clean=True,
+    do_localize=True,
+    overwrite=False,
+    chunk_len=4096,
+):
+    h5_exists = Path(out_h5).exists()
+    last_sample = 0
+    if h5_exists and not overwrite:
+        output_h5 = h5py.File(out_h5, "r+")
+        h5_exists = True
+        if len(output_h5["spike_index"]) > 0:
+            last_sample = output_h5["spike_index"][-1, 0]
+    else:
+        output_h5 = h5py.File(out_h5, "w")
+
+        # initialize datasets
+        output_h5.create_dataset("geom", data=geom)
+        output_h5.create_dataset("start_sample", data=start_sample)
+        output_h5.create_dataset("end_sample", data=end_sample)
+        output_h5.create_dataset("channel_index", data=extract_channel_index)
+        if tpca is not None:
+            output_h5.create_dataset("tpca_mean", data=tpca.mean_)
+            output_h5.create_dataset("tpca_components", data=tpca.components_)
+
+        # resizable datasets so we don't fill up space
+        extract_channels = extract_channel_index.shape[1]
+        output_h5.create_dataset(
+            "subtracted_waveforms",
+            shape=(0, spike_length_samples, extract_channels),
+            chunks=(chunk_len, spike_length_samples, extract_channels),
+            maxshape=(None, spike_length_samples, extract_channels),
+            dtype=np.float32,
+        )
+        output_h5.create_dataset(
+            "spike_index",
+            shape=(0, 2),
+            chunks=(chunk_len, 2),
+            maxshape=(None, 2),
+            dtype=np.int64,
+        )
+        if neighborhood_kind == "firstchan":
+            output_h5.create_dataset(
+                "first_channels",
+                shape=(0,),
+                chunks=(chunk_len,),
+                maxshape=(None,),
+                dtype=np.int64,
+            )
+        if do_clean:
+            output_h5.create_dataset(
+                "cleaned_waveforms",
+                shape=(0, spike_length_samples, extract_channels),
+                chunks=(chunk_len, spike_length_samples, extract_channels),
+                maxshape=(None, spike_length_samples, extract_channels),
+                dtype=np.float32,
+            )
+        if do_localize:
+            output_h5.create_dataset(
+                "localizations",
+                shape=(0, 5),
+                chunks=(chunk_len, 5),
+                maxshape=(None, 5),
+                dtype=np.float32,
+            )
+            output_h5.create_dataset(
+                "maxptps",
+                shape=(0,),
+                chunks=(chunk_len,),
+                maxshape=(None,),
+                dtype=np.float32,
+            )
+
+    done_percent = (
+        100 * (last_sample - start_sample) / (end_sample - start_sample)
+    )
+    if h5_exists and not overwrite:
+        print(f"Resuming previous job, which was {done_percent:.0f}% done")
+    elif h5_exists and overwrite:
+        print("Overwriting previous results.")
+        last_sample = 0
+    else:
+        print("No previous output found, starting from scratch.")
+
+    yield output_h5, last_sample
+
+    output_h5.close()
 
 
 # -- channels / geometry helpers
@@ -1125,3 +1221,24 @@ class timer:
     def __exit__(self, *args):
         self.t = time.time() - self.start
         print(self.name, "took", self.t, "s")
+
+
+class _noint:
+    def handler(self, *sig):
+        if self.sig:
+            signal.signal(signal.SIGINT, self.old_handler)
+            sig, self.sig = self.sig, None
+            self.old_handler(*sig)
+        self.sig = sig
+
+    def __enter__(self):
+        self.old_handler = signal.signal(signal.SIGINT, self.handler)
+        self.sig = None
+
+    def __exit__(self, type, value, traceback):
+        signal.signal(signal.SIGINT, self.old_handler)
+        if self.sig:
+            self.old_handler(*self.sig)
+
+
+noint = _noint()
