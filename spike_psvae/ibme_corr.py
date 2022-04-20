@@ -12,6 +12,7 @@ def register_rigid(
     disp=None,
     batch_size=32,
     step_size=1,
+    pbar=True,
 ):
     """Rigid correlation subsampled registration
 
@@ -32,6 +33,7 @@ def register_rigid(
         disp=disp,
         batch_size=batch_size,
         step_size=step_size,
+        pbar=pbar,
     )
     p = psolvecorr(D, C, mincorr=mincorr)
     return p
@@ -123,7 +125,7 @@ def psolvecorr(D, C, mincorr=0.7):
     p, *_ = sparse.linalg.lsqr(M - N, D[I, J])
     return p
 
-
+@torch.no_grad()
 def calc_corr_decent(
     raster, disp=None, batch_size=32, step_size=1, device=None, pbar=True
 ):
@@ -173,11 +175,11 @@ def calc_corr_decent(
     possible_displacement = np.arange(-disp, disp + step_size, step_size)
 
     # process raster into the tensors we need for conv2ds below
-    raster = torch.tensor(
-        raster.T, dtype=torch.float32, device=device, requires_grad=False
-    )
+    raster = torch.as_tensor(
+        raster, dtype=torch.float32, device=device
+    ).T
     # normalize over depth for normalized (uncentered) xcorrs
-    raster /= torch.sqrt((raster ** 2).sum(dim=1, keepdim=True))
+    raster = raster / torch.sqrt((raster ** 2).sum(dim=1, keepdim=True))
     # conv weights
     image = raster[:, None, None, :]  # T11D - NCHW
     weights = image  # T11D - OIHW
@@ -197,10 +199,8 @@ def calc_corr_decent(
         D[i:i + batch_size] = best_disp
         C[i:i + batch_size] = max_corr.cpu()
 
-    # free GPU memory (except torch drivers... happens when process ends)
     del raster, corr, batch, max_corr, best_disp_inds, image, weights
     gc.collect()
-    torch.cuda.empty_cache()
 
     return D, C
 
