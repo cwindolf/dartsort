@@ -39,7 +39,7 @@ def read_waveforms(spike_times, bin_file, geom_array, n_times=121, offset_denois
                                  count=total_size)
                 wfs[ctr] = wf.reshape(
                     n_times, n_channels)[:,channels]
-            except:
+            except ValueError:
                 print(f"skipped {ctr, spike}")
                 skipped_idx.append(ctr)
     wfs=np.delete(wfs, skipped_idx, axis=0)
