@@ -23,6 +23,7 @@ ap = argparse.ArgumentParser(__doc__)
 g = ap.add_argument_group("Data input/output")
 g.add_argument("standardized_bin")
 g.add_argument("out_folder")
+g.add_argument("--overwrite", action="store_true")
 
 g = ap.add_argument_group("Pipeline configuration")
 g.add_argument("--geom", default=None, type=str)
@@ -44,6 +45,9 @@ g.add_argument(
 g.add_argument(
     "--enforce_decrease_kind", default="columns", choices=["columns", "radial"]
 )
+g.add_argument(
+    "--extract_box_radius", default=200, type=int
+)
 
 g = ap.add_argument_group("Time range: use the whole dataset, or a subset?")
 g.add_argument("--t_start", type=int, default=0)
@@ -57,7 +61,7 @@ g = ap.add_argument_group("Registration")
 g.add_argument("--noregister", action="store_true")
 g.add_argument(
     "--n_windows",
-    default=[5, 10, 20],
+    default=[10],
     type=lambda x: list(map(int, x.split(","))),
 )
 
@@ -66,6 +70,10 @@ g.add_argument("--n_sec_chunk", type=int, default=1)
 g.add_argument("--n_jobs", type=int, default=1)
 g.add_argument("--n_loc_workers", type=int, default=4)
 g.add_argument("--nogpu", action="store_true")
+
+ap.add_argument(
+    "--localize_radius", default=100, type=int
+)
 
 args = ap.parse_args()
 
@@ -106,6 +114,7 @@ sub_h5 = subtract.subtraction(
     args.standardized_bin,
     args.out_folder,
     neighborhood_kind=args.neighborhood_kind,
+    extract_box_radius=args.extract_box_radius,
     enforce_decrease_kind=args.enforce_decrease_kind,
     geom=geom,
     thresholds=args.thresholds,
@@ -121,6 +130,8 @@ sub_h5 = subtract.subtraction(
     do_localize=not args.nolocalize,
     save_residual=not args.noresidual,
     loc_workers=args.n_loc_workers,
+    localize_radius=args.localize_radius,
+    overwrite=args.overwrite,
 )
 
 
@@ -136,12 +147,12 @@ if not args.nolocalize and not args.noregister:
             maxptps,
             z_abs,
             samples / 30000,
-            robust_sigma=1,
-            rigid_disp=200,
-            disp=100,
+            robust_sigma=0.5,
+            disp=200,
             denoise_sigma=0.1,
+            rigid_init=False,
             n_windows=args.n_windows,
-            widthmul=0.5,
+            widthmul=1.0,
         )
         z_reg -= (z_reg - z_abs).mean()
         dispmap -= dispmap.mean()
