@@ -890,7 +890,7 @@ def detect_and_subtract(
     return waveforms, subtracted_raw, spike_index
 
 
-@torch.inference_mode()
+@torch.no_grad()
 def full_denoising(
     waveforms,
     maxchans,
