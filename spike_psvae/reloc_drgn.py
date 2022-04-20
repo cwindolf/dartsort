@@ -1,36 +1,42 @@
-# helpful code references:
-# github.com/AntixK/PyTorch-VAE/
-# github.com/themattinthehatt/behavenet/blob/master/behavenet/models/vaes.py
-# github.com/pytorch/examples/blob/master/vae/main.py
-
+"""Where PTPVAE and RelocAE meet... or should I say join?
+"""
 import torch
 from torch import nn
 from torch.nn import functional as F
 
 
-class PTPVAE(nn.Module):
+class RelocDRGN(nn.Module):
     def __init__(
         self,
         encoder,
+        decoder,
         local_geom,
+        latent_dim=1,
+        analytical_alpha=True,
         variational=False,
         dipole=False,
     ):
-        super(PTPVAE, self).__init__()
+        super(RelocDRGN, self).__init__()
         self.variational = variational
         self.dipole = dipole
 
-        self.latent_dim = 3
+        self.latent_dim = latent_dim
+        self.full_latent_dim = 3 + latent_dim
         self.local_geom = nn.Parameter(
             data=torch.tensor(local_geom, requires_grad=False),
             requires_grad=False,
         )
 
         self.encoder = encoder
+        self.decoder = decoder
 
         if variational:
-            self.fc_mu = nn.Linear(self.latent_dim, self.latent_dim)
-            self.fc_logvar = nn.Linear(self.latent_dim, self.latent_dim)
+            self.fc_mu = nn.Linear(self.full_latent_dim, self.full_latent_dim)
+            self.fc_logvar = nn.Linear(
+                self.full_latent_dim, self.full_latent_dim
+            )
+
+    # -- structured decoder
 
     def dists(self, x, log_y, z):
         # B x C
@@ -43,13 +49,13 @@ class PTPVAE(nn.Module):
             + torch.square(self.local_geom[None, :, 1] - z[:, None])
         )
 
-    def dipole_x_beta(self, input_ptp, x, log_y, z):
+    def dipole_x_beta(self, ptp, x, log_y, z):
         # B x C x 3
         duv = torch.stack(
             [
                 x[:, None] - self.local_geom[None, :, 0],
                 torch.broadcast_to(
-                    torch.exp(2 * log_y)[:, None], input_ptp.shape
+                    torch.exp(2 * log_y)[:, None], ptp.shape
                 ),
                 z[:, None] - self.local_geom[None, :, 1],
             ],
@@ -59,14 +65,32 @@ class PTPVAE(nn.Module):
         X = duv / (torch.square(duv).sum(axis=2, keepdim=True) + 0.01)
         beta = torch.linalg.solve(
             torch.einsum("bci,bcj->bij", X, X),
-            torch.einsum("bck,bc->bk", X, input_ptp),
+            torch.einsum("bck,bc->bk", X, ptp),
         )
         return X, beta
 
-    def localize(self, x):
-        mu, logvar = self.encode(x)
-        x, log_y, z = mu.T
-        return x, log_y, z
+    def decode(self, features, loc):
+        x, log_y, z = loc.T
+
+        # BK -> BTC
+        unrelocated_output_wf = self.decoder(features)
+        # BTC -> BC
+        output_ptp = (
+            torch.max(unrelocated_output_wf, dim=1)[0]
+            - torch.min(unrelocated_output_wf, dim=1)[0]
+        )
+
+        if self.dipole:
+            X, beta = self.dipole_x_beta(output_ptp, x, log_y, z)
+            target_ptp = torch.einsum("bck,bk->bc", X, beta)
+        else:
+            q = 1 / self.dists(x, log_y, z)
+            alpha = (output_ptp * q).sum(1) / torch.square(q).sum(1)
+            target_ptp = alpha[:, None] * q
+
+        return unrelocated_output_wf * (target_ptp / output_ptp)[:, None, :]
+
+    # -- forward pass
 
     def encode(self, x):
         h = self.encoder(x)
@@ -75,49 +99,23 @@ class PTPVAE(nn.Module):
         else:
             return h, None
 
-    def encode_with_alpha(self, input_ptp):
-        h = self.encoder(input_ptp)
-        mu = self.fc_mu(h) if self.variational else h
-        x, log_y, z = mu.T
-
-        if self.dipole:
-            X, beta = self.dipole_x_beta(input_ptp, x, log_y, z)
-            alpha = torch.square(beta).sum(axis=1) ** 0.5
-        else:
-            q = 1 / self.dists(x, log_y, z)
-            alpha = (input_ptp * q).sum(1) / torch.square(q).sum(1)
-
-        return x, torch.exp(log_y), z, alpha
-
     def reparametrize(self, mu, logvar):
         std = torch.exp(0.5 * logvar)
         eps = torch.randn_like(std)
-        z = mu + eps * std
-        return z
-
-    def decode(self, input_ptp, z):
-        x, log_y, z = z.T
-
-        if self.dipole:
-            X, beta = self.dipole_x_beta(input_ptp, x, log_y, z)
-            return torch.einsum("bck,bk->bc", X, beta)
-        else:
-            q = 1 / self.dists(x, log_y, z)
-            alpha = (input_ptp * q).sum(1) / torch.square(q).sum(1)
-            return alpha[:, None] * q
+        return mu + eps * std
 
     def forward(self, x):
-        # print("forward x.shape", x.shape)
         mu, logvar = self.encode(x)
-        # print("forward mu.shape", mu.shape, "logvar.shape", logvar.shape)
         if logvar is not None:
             z = self.reparametrize(mu, logvar)
         else:
             z = mu
-        # print("forward z.shape", z.shape)
-        recon_x = self.decode(x, z)
-        # print("forward recon_x.shape", recon_x.shape)
+        loc = z[:3]
+        features = z[3:]
+        recon_x = self.decode(features, loc)
         return recon_x, mu, logvar
+
+    # -- training
 
     def loss(self, x, recon_x, mu, logvar):
         # mean over batches, sum over data dims

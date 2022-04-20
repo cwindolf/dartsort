@@ -1,3 +1,4 @@
+# %%
 import time
 import numpy as np
 from scipy import sparse
@@ -7,10 +8,12 @@ from sklearn.impute import SimpleImputer
 from tqdm.auto import trange
 import warnings
 
+# %%
 from .point_source_centering import relocate_index, relocating_ptps_index
 from .waveform_utils import channel_index_subset
 
 
+# %%
 class LinearRelocAE(BaseEstimator, TransformerMixin):
     r"""Linear "relocated" autoencoder
 
@@ -340,6 +343,7 @@ class LinearRelocAE(BaseEstimator, TransformerMixin):
         )
 
 
+# %%
 def update_F(S, W_prime, B, L=None):
     T, C, K = B.shape
     N, T_, C_ = S.shape
@@ -420,6 +424,7 @@ def update_F(S, W_prime, B, L=None):
     return F
 
 
+# %%
 def update_B(S, W_prime, F):
     K, N = F.shape
     N_, T, C = S.shape
@@ -458,6 +463,7 @@ def update_B(S, W_prime, F):
     return B
 
 
+# %%
 class timer:
     def __init__(self, name="timer"):
         self.name = name
