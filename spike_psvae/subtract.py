@@ -169,10 +169,10 @@ def subtraction(
     end_sample = (
         T_samples if t_end is None else int(np.floor(t_end * sampling_rate))
     )
-    portion_len_s = (start_sample - end_sample) / 30000
+    portion_len_s = (end_sample - start_sample) / 30000
     print(
         f"Running subtraction. Total recording length is {T_sec:0.2f} "
-        f"s, running on portion of length {portion_len_s:0.2f} s."
+        f"s, running on portion of length {portion_len_s:0.2f} s. "
         f"Using {detection_kind} detection with thresholds: {thresholds}."
     )
 
