@@ -11,11 +11,14 @@ import matplotlib.transforms as transforms
 from matplotlib.patches import Ellipse
 
 
+ccolors = cc.glasbey[:31]
+
+
 def get_ccolor(k):
     if k == -1:
         return "#808080"
     else:
-        return cc.glasbey[k % len(cc.glasbey)]
+        return ccolors[k % len(ccolors)]
 
 
 def cluster_scatter(
@@ -173,7 +176,7 @@ def plot_waveforms_geom(
         res_data = np.memmap(residual_bin, dtype=np.float32)
         res_data = res_data.reshape(-1, 384)
 
-    for j, cluster_id in enumerate((main_cluster_id, *neighbor_clusters)):
+    for j, cluster_id in reversed(list(enumerate((main_cluster_id, *neighbor_clusters)))):
         if colors is None:
             color = get_ccolor(cluster_id)
         else:
@@ -374,6 +377,8 @@ def plot_agreement_venn(
     channel_index,
     spike_index1,
     spike_index2,
+    labels1,
+    labels2,
     name1,
     name2,
     raw_bin,
@@ -384,14 +389,14 @@ def plot_agreement_venn(
     delta_frames=12,
 ):
     # make spikeinterface objects
-    sorting1 = NumpySorting(
+    sorting1 = NumpySorting.from_times_labels(
         times_list=spike_index1[:, 0],
-        labels_list=spike_index1[:, 1],
+        labels_list=labels1,
         sampling_frequency=30000,
     )
-    sorting2 = NumpySorting(
+    sorting2 = NumpySorting.from_times_labels(
         times_list=spike_index2[:, 0],
-        labels_list=spike_index2[:, 1],
+        labels_list=labels2,
         sampling_frequency=30000,
     )
     comp = compare_two_sorters(
@@ -405,35 +410,39 @@ def plot_agreement_venn(
     # get best match
     match2 = comp.get_best_unit_match1(cluster_id1)
     if not (match2 and match2 > -1):
-        print("match2", match2)
         return
     match_frac = comp.get_agreement_fraction(cluster_id1, match2)
-
+    
+    st1 = sorting1.get_unit_spike_train(cluster_id1)
+    st2 = sorting2.get_unit_spike_train(match2)
     (
         ind_st1,
         ind_st2,
         not_match_ind_st1,
         not_match_ind_st2,
-    ) = compute_spiketrain_agreement(cluster_id1, match2, delta_frames)
-    fig = plt.figure(figsize=(24, 12))
-    grid = (1, 3)
-    ax_venn = plt.subplot2grid(grid, (0, 0))
-    ax_sorting1 = plt.subplot2grid(grid, (0, 1))
-    ax_sorting2 = plt.subplot2grid(grid, (0, 2))
+    ) = compute_spiketrain_agreement(
+        st1,
+        st2,
+        delta_frames,
+    )
+    fig, axes = plt.subplots(1, 3, figsize=(8, 5))
 
     subsets = [len(not_match_ind_st1), len(not_match_ind_st2), len(ind_st1)]
     v = venn2(
         subsets=subsets,
         set_labels=["unit{}".format(cluster_id1), "unit{}".format(match2)],
-        ax=ax_venn,
+        ax=axes[0],
     )
     v.get_patch_by_id("10").set_color("red")
     v.get_patch_by_id("01").set_color("blue")
     v.get_patch_by_id("11").set_color("goldenrod")
-    ax_venn.set_title(
-        f"{name1}{cluster_id1} + {name2}{match2}, "
+    axes[0].set_title(
+        #f"{name1}{cluster_id1} + {name2}{match2}, "
         f"{match_frac.round(2)*100}% agreement"
     )
+        
+    which1 = np.flatnonzero(labels1 == cluster_id1)
+    which2 = np.flatnonzero(labels2 == match2)
 
     # fig, axes = plt.subplots(1, 2, sharey=True, figsize=(12,12))
     n_match_1 = len(ind_st1)
@@ -443,12 +452,12 @@ def plot_agreement_venn(
         np.ones(n_unmatch_1, dtype=int),
     ]
     match_unmatch_spike_index = np.r_[
-        spike_index1[ind_st1],
-        spike_index1[not_match_ind_st1],
+        spike_index1[which1[ind_st1]],
+        spike_index1[which1[not_match_ind_st1]],
     ]
     match_unmatch_maxptps = np.r_[
-        maxptps1[ind_st1],
-        maxptps1[not_match_ind_st1],
+        maxptps1[which1[ind_st1]],
+        maxptps1[which1[not_match_ind_st1]],
     ]
 
     plot_waveforms_geom(
@@ -462,7 +471,7 @@ def plot_agreement_venn(
         raw_bin=raw_bin,
         spikes_plot=spikes_plot,
         num_rows=3,
-        ax=ax_sorting1,
+        ax=axes[1],
         colors=["goldenrod", "red"],
     )
 
@@ -473,12 +482,12 @@ def plot_agreement_venn(
         np.ones(n_unmatch_2, dtype=int),
     ]
     match_unmatch_spike_index = np.r_[
-        spike_index2[ind_st2],
-        spike_index2[not_match_ind_st2],
+        spike_index2[which2[ind_st2]],
+        spike_index2[which2[not_match_ind_st2]],
     ]
     match_unmatch_maxptps = np.r_[
-        maxptps2[ind_st2],
-        maxptps2[not_match_ind_st2],
+        maxptps2[which2[ind_st2]],
+        maxptps2[which2[not_match_ind_st2]],
     ]
 
     plot_waveforms_geom(
@@ -492,7 +501,7 @@ def plot_agreement_venn(
         raw_bin=raw_bin,
         spikes_plot=spikes_plot,
         num_rows=3,
-        ax=ax_sorting1,
+        ax=axes[2],
         colors=["goldenrod", "blue"],
     )
 

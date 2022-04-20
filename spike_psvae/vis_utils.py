@@ -373,7 +373,7 @@ def plotlocs(
 
 def plot_ptp(ptp, axes, label, color, codes):
     for j, ax in enumerate(axes.flat):
-        handle, dhandle = plot_single_ptp_np1(
+        handle, dhandle = plot_single_ptp_np2(
             ptp[j], ax, label, color, codes[j]
         )
     return handle, dhandle
