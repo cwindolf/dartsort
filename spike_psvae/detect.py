@@ -392,7 +392,7 @@ def torch_voltage_detect_dedup(
     # voltage threshold
     max_energies_at_inds = max_energies.view(-1)[window_max_inds]
     which = torch.nonzero(max_energies_at_inds > threshold).squeeze()
-    if not which.size():
+    if not which.numel():
         return np.array([]), np.array([]), np.array([])
 
     # -- unravel the spike index
@@ -408,7 +408,7 @@ def torch_voltage_detect_dedup(
     compat_times = torch.nonzero(
         (0 < times) & (times < recording.shape[0] - 1)
     ).squeeze()
-    if not len(compat_times):
+    if not compat_times.numel():
         return np.array([]), np.array([]), np.array([])
     times = times[compat_times]
     res_inds = which[compat_times]
@@ -448,7 +448,7 @@ def torch_voltage_detect_dedup(
         dedup = torch.nonzero(
             energies >= max_energies[times, chans] - 1e-8
         ).squeeze()
-        if not len(dedup):
+        if not dedup.numel():
             return np.array([]), np.array([]), np.array([])
         times = times[dedup]
         chans = chans[dedup]
@@ -482,7 +482,7 @@ class PeakToPeak(nn.Module):
 #     def forward(self, input):
 #         print(self.name, input.shape)
 #         return input
-    
+
 
 class DenoiserDetect(nn.Module):
     def __init__(self, denoiser, output_t_range=(25, 60)):
