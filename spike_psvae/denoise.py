@@ -332,7 +332,7 @@ def enforce_decrease_shells(
     )
 
 
-@torch.inference_mode()
+@torch.no_grad()
 def cleaned_waveforms(
     waveforms,
     spike_index,
