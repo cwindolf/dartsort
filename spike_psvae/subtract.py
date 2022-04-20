@@ -147,10 +147,13 @@ def subtraction(
             Path(__file__).parent.parent / f"pretrained/detect_{probe}.pt"
         )
         print("Using pretrained detector for", probe, "from", nn_detector_path)
+        detection_kind = "voltage->NN"
     elif denoise_detect:
         print("Using denoising NN detection")
+        detection_kind = "denoised PTP"
     else:
         print("Using voltage detection")
+        detection_kind = "voltage"
 
     # figure out length of data
     std_size = standardized_bin.stat().st_size
@@ -166,11 +169,11 @@ def subtraction(
     end_sample = (
         T_samples if t_end is None else int(np.floor(t_end * sampling_rate))
     )
+    portion_len_s = (start_sample - end_sample) / 30000
     print(
-        "Running subtraction on ",
-        T_sec,
-        "seconds long recording with thresholds",
-        thresholds,
+        f"Running subtraction. Total recording length is {T_sec:0.2f} "
+        f"s, running on portion of length {portion_len_s:0.2f} s."
+        f"Using {detection_kind} detection with thresholds: {thresholds}."
     )
 
     # compute helper data structures
@@ -219,8 +222,8 @@ def subtraction(
         if not overwrite and out_h5.exists():
             with h5py.File(out_h5, "r") as output_h5:
                 if "tpca_mean" in output_h5:
-                    tpca_mean = output_h5["tpca_mean"]
-                    tpca_components = output_h5["tpca_components"]
+                    tpca_mean = output_h5["tpca_mean"][:]
+                    tpca_components = output_h5["tpca_components"][:]
                     print("Loading TPCA from h5")
                     tpca = PCA(tpca_components.shape[0])
                     tpca.mean_ = tpca_mean
@@ -872,9 +875,6 @@ def detect_and_subtract(
         device=device,
         denoiser=denoiser,
     )
-
-    if device.type == "cuda":
-        torch.cuda.empty_cache()
 
     # -- the actual subtraction
     # have to use subtract.at since -= will only subtract once in the overlaps,
