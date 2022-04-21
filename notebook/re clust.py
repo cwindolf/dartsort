@@ -304,9 +304,9 @@ for ds in sorted(res_dir.glob("*")):
     print(res_bin, raw_bin)
     
     
-    (fig_dir / stem / "singleunit").mkdir(exist_ok=True)
-    for figpath in (fig_dir / stem / "singleunit").glob("*"):
-        figpath.unlink()
+    # (fig_dir / stem / "singleunit").mkdir(exist_ok=True)
+    # for figpath in (fig_dir / stem / "singleunit").glob("*"):
+    #     figpath.unlink()
     
     # d = 
     
@@ -325,6 +325,8 @@ for ds in sorted(res_dir.glob("*")):
     idx_keep = keepers[stem]
     
     def job(unit):
+        if (fig_dir / stem / "singleunit" / f"unit_{unit:03d}.png").exists():
+            return
         x, y, z, a = job.xyza
         ci = job.ci
         maxptps = job.maxptps
@@ -334,27 +336,27 @@ for ds in sorted(res_dir.glob("*")):
         spike_index = job.spike_index
         subwf = job.subwf
         cwf = job.cwf
-        try:
-            fig = single_unit_summary(
-                unit,
-                clusterer,
-                labels,
-                geom,
-                idx_keep,
-                x,
-                z,
-                maxptps,
-                ci,
-                spike_index,
-                cwf,
-                subwf,
-                raw_bin,
-                res_bin,
-            )
-            fig.savefig(fig_dir / stem / "singleunit" / f"unit_{unit:03d}.png", transparent=False, pad_inches=0)
-            plt.close(fig)
-        except ValueError:
-            pass
+        # try:
+        fig = single_unit_summary(
+            unit,
+            clusterer,
+            labels,
+            geom,
+            idx_keep,
+            x,
+            z,
+            maxptps,
+            ci,
+            spike_index,
+            cwf,
+            subwf,
+            raw_bin,
+            res_bin,
+        )
+        fig.savefig(fig_dir / stem / "singleunit" / f"unit_{unit:03d}.png", transparent=False, pad_inches=0)
+        plt.close(fig)
+        # except ValueError:
+            # pass
             
     def pinit(h5):
         d = h5py.File(h5, "r")
@@ -382,49 +384,96 @@ for ds in sorted(res_dir.glob("*")):
 # %%
 
 # %%
-pairs = [("CSH_ZAD_026_dnd", "CSH_ZAD_026_fc")]
+
+# %%
+raw_bin
+
+# %%
+snip_dir
+
+# %%
+from joblib import Parallel, delayed
+
+# %%
+pairs = [
+    ("CSH_ZAD_026", "CSH_ZAD_026_dnd", "CSH_ZAD_026_fc"),
+    ("CSH_ZAD_026", "CSH_ZAD_026_fc", "CSH_ZAD_026_dnd"),
+]
+
+with h5py.File(next((res_dir / "CSH_ZAD_026_fc").glob("*.h5"))) as f:
+    ci = f["channel_index"][:]
 
 for pair in pairs:
+    ds, stem1, stem2 = pair
+    print(stem1, stem2)
     
+    h51 = next((res_dir / stem1).glob("*.h5"))
+    h52 = next((res_dir / stem2).glob("*.h5"))
     
-    h51 = next(ds.glob("*.h5"))
-    res_bin1 = next(ds.glob("residual*.bin"))
+    out_dir = fig_dir / stem1 / f"venn_vs_{stem2}"
+    out_dir.mkdir(exist_ok=True)
+               
+    raw_bin = next(snip_dir.glob(f"{ds}*.ap.bin"))
+    print(raw_bin)
     
-    with h5py.File(h5) as d:
+    with h5py.File(h51) as d:
         # x, y, z, alpha = d["localizations"][:, :4].T
         maxptps1 = d["maxptps"][:]
         geom = d["geom"][:]
-        z_reg = d["z_reg"][:]
-        labels = d["labels"][:]
+        labels1 = d["labels"][:]
+        spike_index1 = d["spike_index"][:]
+               
+    with h5py.File(h52) as d:
+        # x, y, z, alpha = d["localizations"][:, :4].T
+        maxptps2 = d["maxptps"][:]
+        geom = d["geom"][:]
+        labels2 = d["labels"][:]
+        spike_index2 = d["spike_index"][:]
     
     
-    fig = plot_agreement_venn(
-        cluster_id1,
-        geom,
-        channel_index,
-        spike_index1,
-        spike_index2,
-        name1,
-        name2,
-        raw_bin,
-        maxptps1,
-        maxptps2,
-        match_score=0.5,
-        spikes_plot=100,
-        delta_frames=12,
-    )
-    plt.show()
+    def job(unit):
+        fig = plot_agreement_venn(
+            unit,
+            geom,
+            ci,
+            spike_index1,
+            spike_index2,
+            labels1,
+            labels2,
+            stem1,
+            stem2,
+            raw_bin,
+            maxptps1,
+            maxptps2,
+        )
+        if fig is not None:
+            fig.savefig(out_dir / f"unit_{unit:03d}.png", transparent=False, pad_inches=0)
+            plt.close(fig)
 
+    with Parallel(
+        12,
+    ) as p:
+        units = np.setdiff1d(np.unique(labels1), [-1])
+        for res in p(delayed(job)(u) for u in tqdm(units)):
+            pass
 
 # %%
+# %matplotlib inline
 
 # %%
+import time
 
 # %%
+np.arange(35).reshape(5, 7)[m].reshape(5, 3)
 
 # %%
+m = np.c_[np.zeros((5, 4), dtype=bool), np.ones((5, 3), dtype=bool)]
+m
 
 # %%
+import numpy as np
+from scipy import sparse
+
 
 # %%
 def test_spsolve(N):
@@ -511,7 +560,7 @@ def test_lsmr(N):
 
 
 # %%
-def test_lsmr_dense(N):
+def test_cg(N):
     rg = np.random.default_rng()
     T = 121
     C = 20
@@ -537,7 +586,7 @@ def test_lsmr_dense(N):
             [A, zeros],
         ],
         format="csc",
-    ).toarray()
+    )
     
     targ = sparse.bmat(
         [
@@ -548,18 +597,78 @@ def test_lsmr_dense(N):
     )
     
     tic = time.time()
-    res_lsmr = sparse.linalg.lsmr(coefts, targ.toarray()[:, 0], atol=1e-6 / (N * T * C),  btol=1e-6 / (N * T * C))
+    res_lsmr = sparse.linalg.cg(coefts, targ.toarray()[:, 0], tol=1e-6 / (N * T * C))
     return time.time() - tic
 
 
 # %%
-spsolves = [test_spsolve(N) for N in [1000, 2000, 3000, 4000, 5000, 6000, 7000, 8000, 9000, 10000]]
+def test_cgs(N):
+    rg = np.random.default_rng()
+    T = 121
+    C = 20
+    K = 3
+    S = rg.normal(size=(T*C, N))
+    W = rg.normal(size=(T*C, N))
+    B = rg.normal(size=(T*C, K))
+    L = rg.normal(size=(N, 4))
+    
+    # construct problem
+    y = (S * W).T.ravel()
+    dvS = sparse.dia_matrix((S.ravel(), 0), shape=(N*T*C,N*T*C))
+    X = dvS @ sparse.kron(sparse.eye(N), B)
+
+    A = sparse.kron(L.T, sparse.eye(K))
+    XTX = X.T @ X
+    nyTX = -y.T @ X
+    
+    zeros = sparse.dok_matrix((4 * K, 4 * K))
+    coefts = sparse.bmat(
+        [
+            [XTX, A.T],
+            [A, zeros],
+        ],
+        format="csc",
+    )
+    
+    targ = sparse.bmat(
+        [
+            [nyTX[:, None]],
+            [sparse.dok_matrix((4*K,1))],
+        ],
+        format="csc",
+    )
+    
+    tic = time.time()
+    D = sparse.dia_matrix((1/sparse.linalg.norm(XTX, axis=1), 0), coefts.shape)
+    res_lsmr = sparse.linalg.cgs(coefts, targ.toarray()[:, 0], tol=1e-6 / (N * T * C), M=D)
+    return time.time() - tic
+
 
 # %%
-lsmrs = [test_lsmr(N) for N in [1000, 2000, 3000, 4000, 5000, 6000, 7000, 8000, 9000, 10000, 20000, 50000]]
 
 # %%
-lsmrdenses = [test_lsmr_dense(N) for N in [1000, 2000, 3000, 4000, 5000, 6000, 7000, 8000, 9000, 10000, 20000]]
+
+# %%
+
+# %%
+
+# %%
+from tqdm import tqdm
+
+# %%
+spsolves = [test_spsolve(N) for N in tqdm([1000, 2000, 3000, 4000, 5000, 6000, 7000, 8000, 9000, 10000])]
+
+# %%
+cgs = [test_cg(N) for N in tqdm([1000, 2000, 3000, 4000, 5000, 6000, 7000, 8000, 9000, 10000])]
+
+# %%
+cgss = [test_cgs(N) for N in tqdm([1000, 2000, 3000, 4000, 5000, 6000, 7000, 8000, 9000, 10000])]
+
+# %%
+lsmrs = [test_lsmr(N) for N in tqdm([1000, 2000, 3000, 4000, 5000, 6000, 7000, 8000, 9000, 10000])]#, 20000, 50000])]
+
+# %%
+# lsmrdenses = [test_lsmr_dense(N) for N in [1000, 2000, 3000, 4000, 5000, 6000, 7000, 8000, 9000, 10000, 20000]]
 
 # %%
 # %matplotlib inline
@@ -567,8 +676,10 @@ lsmrdenses = [test_lsmr_dense(N) for N in [1000, 2000, 3000, 4000, 5000, 6000, 7
 # %%
 plt.figure()
 plt.plot([1000, 2000, 3000, 4000, 5000, 6000, 7000, 8000, 9000, 10000], spsolves, label="spsolve")
-plt.plot([1000, 2000, 3000, 4000, 5000, 6000, 7000, 8000, 9000, 10000, 20000, 50000], lsmrs, label="lsmr")
-plt.plot([1000, 2000, 3000, 4000, 5000, 6000, 7000, 8000, 9000, 10000, 20000], lsmrdenses, label="lsmr (dense)")
+plt.plot([1000, 2000, 3000, 4000, 5000, 6000, 7000, 8000, 9000, 10000], cgs, label="cg")
+plt.plot([1000, 2000, 3000, 4000, 5000, 6000, 7000, 8000, 9000, 10000], cgss, label="cgs")
+plt.plot([1000, 2000, 3000, 4000, 5000, 6000, 7000, 8000, 9000, 10000], lsmrs, label="lsmr")
+# plt.plot([1000, 2000, 3000, 4000, 5000, 6000, 7000, 8000, 9000, 10000, 20000], lsmrdenses, label="lsmr (dense)")
 # plt.loglog()
 plt.legend()
 plt.ylabel("wall time in solver")
@@ -668,7 +779,6 @@ F__ = res_spsolve[:N * K].reshape(N, K).T
 tic = time.time()
 
 # %%
-res_lsmr = sparse.linalg.lsmr(coefts, targ.toarray()[:, 0], atol=1e-6 / (N * T * C),  btol=1e-6 / (N * T * C))
 
 # %%
 print("took", time.time() - tic, "seconds")
