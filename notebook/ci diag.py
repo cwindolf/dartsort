@@ -38,7 +38,7 @@ rg = lambda: np.random.default_rng(0)
 # %ll -h /mnt/3TB/charlie/subtracted_datasets/CSHL049/
 
 # %%
-dsdir = Path("/mnt/3TB/charlie/subtracted_datasets/CSHL049/")
+dsdir = Path("/mnt/3TB/charlie/subtracted_datasets/CSHL049_dnd/")
 openalyx = Path("/mnt/3TB/charlie/.one/openalyx.internationalbrainlab.org/")
 
 sub_h5_path = dsdir / "subtraction__spikeglx_ephysData_g0_t0.imec.ap.normalized_t_250_350.h5"
@@ -57,6 +57,7 @@ cwfs = subh5["cleaned_waveforms"]
 locs = subh5["localizations"][:]
 maxptps = subh5["maxptps"][:]
 z_reg = subh5["z_reg"][:]
+dispmap = subh5["dispmap"]
 
 residual = np.memmap(res_bin_path, dtype=np.float32)
 residual = residual.reshape(-1, geom.shape[0])
@@ -118,6 +119,9 @@ d.load("../pretrained/detect_np1.pt")
 # %%
 dn = denoise.SingleChanDenoiser()
 dn.load()
+
+# %%
+dn.conv1[0].kernel_size
 
 # %%
 import torch
@@ -228,6 +232,44 @@ plt.colorbar(c)
 plt.legend(loc="upper center", bbox_to_anchor=[0.5, 1.15])
 
 # %%
+
+# %%
+eci = []
+for c in range(384):
+    low = max(0, c - 40 // 2)
+    low = min(384 - 40, low)
+    eci.append(
+        np.arange(low, low + 40)
+    )
+eci = np.array(eci)
+
+# %%
+eci
+
+# %%
+n_channels=20
+
+# %% tags=[]
+subset = np.empty(shape=eci.shape, dtype=bool)
+pgeom = np.pad(geom, [(0, 1), (0, 0)], constant_values=-2 * geom.max())
+for c in range(len(geom)):
+    if n_channels is not None:
+        print(c, c - n_channels // 2)
+        low = max(0, c - n_channels // 2)
+        low = min(len(geom) - n_channels, low)
+        high = min(len(geom), low + n_channels)
+        print(c, low, high)
+        subset[c] = (low <= eci[c]) & (eci[c] < high)
+    elif radius is not None:
+        dists = cdist([geom[c]], pgeom[eci[c]]).ravel()
+        subset[c] = dists <= radius
+    else:
+        subset[c] = True
+
+# %%
+subset.sum(axis=1)
+
+# %%
 plt.figure(figsize=(8, 8))
 c = plt.imshow(snip[400:1000].T, cmap=plt.cm.viridis, aspect=3, interpolation="none")
 # plt.scatter(*si[:][v > 4].T, s=1, c="r", label="nn detect ptp>4")
@@ -268,11 +310,45 @@ plt.colorbar(c)
 plt.legend(loc="upper center", bbox_to_anchor=[0.5, 1.15])
 
 # %%
-# 
+snip[400:1000].shape
+
+# %%
+dtdn = detect.DenoiserDetect(dn)
+
+# %%
+dtdn.to("cuda")
+
+# %%
+import os; os.environ["CUDA_LAUNCH_BLOCKING"]="1"
+
+# %%
+ptp = dtdn.forward_recording(torch.as_tensor(snip[400:1000].copy(), device="cuda"))
+
+# %%
+ptp.shape
+
+# %%
+ptp = ptp.detach().cpu().numpy()
+
+# %%
+plt.imshow(ptp.T)
+plt.colorbar()
 
 # %%
 
 # %%
+sia, _ = detect.voltage_detect_and_deduplicate(snip[400:1000].copy(), 4, ddci, 0)
+sib, _ = detect.nn_detect_and_deduplicate(snip[400:1000].copy(), 4, ddci, 0, d, dn)
+t, c, _ = detect.denoiser_detect_dedup(snip[400 - 42:1000 + 78].copy(), 3, dtdn, channel_index=ddci)
+sic = np.c_[t.cpu().numpy(), c.cpu().numpy()]
+
+plt.figure(figsize=(8, 8))
+c = plt.imshow(snip[400:1000].T, cmap=plt.cm.viridis, aspect=3, interpolation="none")
+plt.scatter(*sib.T, s=5, c="magenta", label="deduplicated nn detections, trough aligned, threshold 2", marker="x")
+plt.scatter(*sia.T, s=1, c=plt.cm.Reds(0.9), label="deduplicated voltage detect threshold 2")
+plt.scatter(*sic.T, s=1, c=plt.cm.Blues(0.9), label="denoiser-detect PTP threshold 2")
+plt.colorbar(c)
+plt.legend(loc="upper center", bbox_to_anchor=[0.5, 1.15])
 
 # %%
 
@@ -395,16 +471,13 @@ z_rel = locs[:, 4]
 times = spike_index[:, 0] / 30000
 
 # %%
-maxptps = np.nanmax(cwfs[:].ptp(1), axis=1)
-
-# %%
 cm = plt.cm.viridis
 plt.figure()
 plt.hist(maxptps, bins=100)
 plt.show()
 which = slice(None)
 
-vis_utils.plotlocs(x, y, z_abs, alpha, maxptps, geom, which=which, suptitle="CSHL049")
+vis_utils.plotlocs(x, y, z_abs, alpha, maxptps, geom, which=maxptps > 3, suptitle="CSHL049")
 
 # %%
 vis_utils.plotlocs(x, y, z_abs, alpha, maxptps, geom, which=z_abs > 2800, suptitle="CSHL049")
@@ -413,7 +486,7 @@ vis_utils.plotlocs(x, y, z_abs, alpha, maxptps, geom, which=z_abs > 2800, suptit
 vis_utils.plotlocs(x, y, z_reg, alpha, maxptps, geom, suptitle="CSHL049")
 
 # %%
-vis_utils.plotlocs(x, y, z_reg, alpha, maxptps, geom, which=z_reg > 2800, suptitle="CSHL049")
+vis_utils.plotlocs(x, y, z_reg, alpha, maxptps, geom, which=z_reg > 2800, suptitle="CSHL049 (NN detect trough threshold 3)")
 
 # %%
 subset.sum(axis=1)
