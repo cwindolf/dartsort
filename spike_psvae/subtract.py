@@ -39,6 +39,7 @@ def subtraction(
     n_jobs=1,
     device=None,
     save_residual=True,
+    save_waveforms=True,
     do_clean=True,
     do_localize=True,
     localize_radius=100,
@@ -112,9 +113,9 @@ def subtraction(
         residual_bin = out_folder / f"residual_{stem}_t_{t_start}_{t_end}.bin"
     try:
         if out_h5.exists():
-            with h5py.File(out_h5, "r+") as d:
+            with h5py.File(out_h5, "r+") as _d:
                 pass
-            del d
+            del _d
     except BlockingIOError as e:
         raise ValueError(
             f"Output HDF5 {out_h5} is currently in use by another program. "
@@ -288,16 +289,19 @@ def subtraction(
         tpca,
         neighborhood_kind,
         spike_length_samples,
+        save_waveforms=save_waveforms,
         do_clean=do_clean,
         do_localize=do_localize,
         overwrite=overwrite,
     ) as (output_h5, last_sample):
-        subtracted_wfs = output_h5["subtracted_waveforms"]
+
         spike_index = output_h5["spike_index"]
         if neighborhood_kind == "firstchan":
             firstchans = output_h5["first_channels"]
-        if do_clean:
-            cleaned_wfs = output_h5["cleaned_waveforms"]
+        if save_waveforms:
+            subtracted_wfs = output_h5["subtracted_waveforms"]
+            if do_clean:
+                cleaned_wfs = output_h5["cleaned_waveforms"]
         if do_localize:
             locs = output_h5["localizations"]
             maxptps = output_h5["maxptps"]
@@ -368,9 +372,10 @@ def subtraction(
                         np.load(result.residual).tofile(residual)
 
                     # grow arrays as necessary
-                    subtracted_wfs.resize(N + N_new, axis=0)
-                    if do_clean:
-                        cleaned_wfs.resize(N + N_new, axis=0)
+                    if save_waveforms:
+                        subtracted_wfs.resize(N + N_new, axis=0)
+                        if do_clean:
+                            cleaned_wfs.resize(N + N_new, axis=0)
                     spike_index.resize(N + N_new, axis=0)
                     if do_localize:
                         locs.resize(N + N_new, axis=0)
@@ -379,9 +384,10 @@ def subtraction(
                         firstchans.resize(N + N_new, axis=0)
 
                     # write results
-                    subtracted_wfs[N:] = np.load(result.subtracted_wfs)
-                    if do_clean:
-                        cleaned_wfs[N:] = np.load(result.cleaned_wfs)
+                    if save_waveforms:
+                        subtracted_wfs[N:] = np.load(result.subtracted_wfs)
+                        if do_clean:
+                            cleaned_wfs[N:] = np.load(result.cleaned_wfs)
                     spike_index[N:] = np.load(result.spike_index)
                     if do_localize:
                         locs[N:] = np.load(result.localizations)
