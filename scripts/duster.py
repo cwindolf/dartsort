@@ -43,7 +43,11 @@ assert raw_data_bin.exists()
 residual_data_bin = Path(args.residual_data_bin)
 assert residual_data_bin.exists()
 sub_h5 = Path(args.sub_h5)
-sub_h5.exists()
+assert sub_h5.exists()
+
+print(raw_data_bin)
+print(residual_data_bin)
+
 
 # %%
 # raw_data_bin = Path("/mnt/3TB/charlie/re_snips/CSH_ZAD_026_snip.ap.bin")
@@ -158,7 +162,7 @@ templates = merge_split_cleaned.get_templates(
 # %%
 shifted_full_spike_index = spike_index.copy()
 shifted_full_spike_index[idx_keep_full] = shifted_triaged_spike_index
-
+print(shifted_full_spike_index[:, 0].min(), shifted_full_spike_index[:, 0].max())
 # %%
 # split
 h5 = h5py.File(sub_h5, "r")
@@ -276,8 +280,9 @@ shifted_full_spike_index[idx_keep_full] = shifted_triaged_spike_index
 
 # save
 np.save(output_dir / "labels.npy", labels)
-cluster_centers.to_hdf(output_dir / "cluster_centers.h5", key="c", mode="w")
-pickle.dump(clusterer, output_dir / "clusterer.pickle")
+cluster_centers.to_csv(output_dir / "cluster_centers.csv")
+with open(output_dir / "clusterer.pickle", "w") as jar:
+    pickle.dump(clusterer, jar)
 np.svae(output_dir / "aligned_spike_index.npy", shifted_full_spike_index)
 np.save(output_dir / "templates.npy", templates)
 np.save(output_dir / "template_shifts.npy", template_shifts)
