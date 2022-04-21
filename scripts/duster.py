@@ -25,6 +25,7 @@ ap.add_argument("raw_data_bin")
 ap.add_argument("residual_data_bin")
 ap.add_argument("sub_h5")
 ap.add_argument("output_dir")
+ap.add_argument("--inmem", action="store_true")
 
 args = ap.parse_args()
 
@@ -160,22 +161,25 @@ shifted_full_spike_index[idx_keep_full] = shifted_triaged_spike_index
 
 # %%
 # split
-with h5py.File(sub_h5, "r") as h5:
-    labels_split = merge_split_cleaned.split_clusters(
-        residual_data_bin,
-        h5["subtracted_waveforms"],
-        firstchans,
-        shifted_full_spike_index,
-        template_maxchans,
-        template_shifts,
-        labels,
-        x,
-        z_reg,
-        maxptps,
-        geom_array,
-        denoiser,
-        device,
-    )
+h5 = h5py.File(sub_h5, "r"):
+sub_wf = h5["subtracted_waveforms"]
+if args.inmem:
+    sub_wf = sub_wf[:]
+labels_split = merge_split_cleaned.split_clusters(
+    residual_data_bin,
+    ,
+    firstchans,
+    shifted_full_spike_index,
+    template_maxchans,
+    template_shifts,
+    labels,
+    x,
+    z_reg,
+    maxptps,
+    geom_array,
+    denoiser,
+    device,
+)
 
 # %%
 # re-order again
@@ -221,26 +225,25 @@ shifted_full_spike_index[idx_keep_full] = shifted_triaged_spike_index
 
 # %%
 # merge
-with h5py.File(sub_h5, "r") as h5:
-    labels_merged = merge_split_cleaned.get_merged(
-        residual_data_bin,
-        h5["subtracted_waveforms"],
-        firstchans,
-        geom_array,
-        templates,
-        template_shifts,
-        len(templates),
-        shifted_full_spike_index,
-        labels,
-        x,
-        z_reg,
-        denoiser,
-        device,
-        distance_threshold=1.0,
-        threshold_diptest=0.5,
-        rank_pca=8,
-        nn_denoise=True,
-    )
+labels_merged = merge_split_cleaned.get_merged(
+    residual_data_bin,
+    sub_wf,
+    firstchans,
+    geom_array,
+    templates,
+    template_shifts,
+    len(templates),
+    shifted_full_spike_index,
+    labels,
+    x,
+    z_reg,
+    denoiser,
+    device,
+    distance_threshold=1.0,
+    threshold_diptest=0.5,
+    rank_pca=8,
+    nn_denoise=True,
+)
 
 # %%
 # re-order again
