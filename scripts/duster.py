@@ -273,7 +273,7 @@ shifted_full_spike_index[idx_keep_full] = shifted_triaged_spike_index
 
 # save
 np.save(output_dir / "labels.npy", labels)
-cluster_centers.to_h5f(output_dir / "cluster_centers.h5")
+cluster_centers.to_hdf(output_dir / "cluster_centers.h5")
 pickle.dump(clusterer, output_dir / "clusterer.pickle")
 np.svae(output_dir / "aligned_spike_index.npy", shifted_full_spike_index)
 np.save(output_dir / "templates.npy", templates)
