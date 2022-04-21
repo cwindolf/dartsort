@@ -161,13 +161,13 @@ shifted_full_spike_index[idx_keep_full] = shifted_triaged_spike_index
 
 # %%
 # split
-h5 = h5py.File(sub_h5, "r"):
+h5 = h5py.File(sub_h5, "r")
 sub_wf = h5["subtracted_waveforms"]
 if args.inmem:
     sub_wf = sub_wf[:]
 labels_split = merge_split_cleaned.split_clusters(
     residual_data_bin,
-    ,
+    sub_wf,
     firstchans,
     shifted_full_spike_index,
     template_maxchans,
@@ -276,7 +276,7 @@ shifted_full_spike_index[idx_keep_full] = shifted_triaged_spike_index
 
 # save
 np.save(output_dir / "labels.npy", labels)
-cluster_centers.to_hdf(output_dir / "cluster_centers.h5")
+cluster_centers.to_hdf(output_dir / "cluster_centers.h5", key="c", mode="w")
 pickle.dump(clusterer, output_dir / "clusterer.pickle")
 np.svae(output_dir / "aligned_spike_index.npy", shifted_full_spike_index)
 np.save(output_dir / "templates.npy", templates)
