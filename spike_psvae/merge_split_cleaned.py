@@ -34,7 +34,7 @@ def align_templates(
 
     idx_sorted = triaged_spike_index[:, 0].argsort()
     triaged_spike_index = triaged_spike_index[idx_sorted]
-
+    
     return triaged_spike_index, idx_sorted
 
 
@@ -54,7 +54,6 @@ def align_spikes_by_templates(
     for unit in idx_not_aligned:
         shift = template_shifts[unit]
         shifted_spike_index[labels == unit, 0] += shift
-
     return template_shifts, template_maxchans, shifted_spike_index
 
 
@@ -134,14 +133,15 @@ def split_individual_cluster(
             wfs_unit[i] = waveforms_unit[
                 i, :, mc_new - n_channels_half : mc_new + n_channels_half
             ]
-
-    wfs_unit += read_waveforms(
+    readwfs, skipped = read_waveforms(
         spike_index_unit[:, 0],
         residual_path,
         geom_array,
         n_times=121,
         channels=np.arange(mc - n_channels_half, mc + n_channels_half),
-    )[0]
+    )
+    # print(wfs_unit.shape, readwfs.shape, skipped)
+    wfs_unit += readwfs
     wfs_unit_denoised = denoise_wf_nn_tmp_single_channel(
         wfs_unit, denoiser, device
     )
