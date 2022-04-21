@@ -38,12 +38,13 @@ min_cluster_size = 25
 min_samples = 25
 
 # %%
-raw_data_bin = Path("/mnt/3TB/charlie/re_snips_5min/CSH_ZAD_026_snip.ap.bin")
+# raw_data_bin = Path("/mnt/3TB/charlie/re_snips_5min/CSH_ZAD_026_snip.ap.bin")
+raw_data_bin = Path("/mnt/3TB/charlie/re_snips/ibl_witten_27_snip.ap.bin")
 assert raw_data_bin.exists()
-residual_data_bin = Path("/mnt/3TB/charlie/re_5min_res/CSH_ZAD_026_dnd/residual_CSH_ZAD_026_snip.ap_t_0_None.bin")
+residual_data_bin = Path("/mnt/3TB/charlie/shake_res/re_snips_dndres/residual_ibl_witten_27_snip.ap_t_0_None.bin")
 assert residual_data_bin.exists()
-sub_h5 = Path("/mnt/3TB/charlie/re_5min_res/CSH_ZAD_026_dnd/subtraction_CSH_ZAD_026_snip.ap_t_0_None.h5")
-sub_h5.exists()
+sub_h5 = Path("/mnt/3TB/charlie/shake_res/re_snips_dndres/subtraction_ibl_witten_27_snip.ap_t_0_None.h5")
+assert sub_h5.exists()
 
 # %%
 # raw_data_bin = Path("/mnt/3TB/charlie/re_snips/CSH_ZAD_026_snip.ap.bin")
@@ -54,8 +55,9 @@ sub_h5.exists()
 # sub_h5.exists()
 
 # %%
-output_dir = Path("/mnt/3TB/charlie/dnd_pyks_5min/")
-output_dir.mkdir(exist_ok=True)
+# output_dir = Path("/mnt/3TB/charlie/dnd_pyks_5min/")
+# output_dir.mkdir(exist_ok=True)
+output_dir = None
 
 # %%
 with h5py.File(sub_h5, "r") as h5:
@@ -160,14 +162,15 @@ labels = np.full(x.shape, -1)
 labels[idx_keep_full] = clusterer.labels_
 
 # %%
-z_cutoff = [0, 500, 1000, 1500, 2000, 2500, 3000, 3500, 4000]
-for za, zb in zip(z_cutoff, z_cutoff[1:]):
-    fig = cluster_viz_index.array_scatter(
-            clusterer.labels_, geom_array, tx, tz, tmaxptps, 
-            zlim=(za, zb),
-    )
-    fig.savefig(output_dir / f"B_pre_split_full_scatter_{za}_{zb}", dpi=200)
-    plt.close(fig)
+if output_dir is not None:
+    z_cutoff = [0, 500, 1000, 1500, 2000, 2500, 3000, 3500, 4000]
+    for za, zb in zip(z_cutoff, z_cutoff[1:]):
+        fig = cluster_viz_index.array_scatter(
+                clusterer.labels_, geom_array, tx, tz, tmaxptps, 
+                zlim=(za, zb),
+        )
+        fig.savefig(output_dir / f"B_pre_split_full_scatter_{za}_{zb}", dpi=200)
+        plt.close(fig)
 
 # %%
 denoiser = denoise.SingleChanDenoiser().load()
@@ -215,14 +218,15 @@ labels = np.full(x.shape, -1)
 labels[idx_keep_full] = clusterer.labels_
 
 # %%
-z_cutoff = [0, 500, 1000, 1500, 2000, 2500, 3000, 3500, 4000]
-for za, zb in zip(z_cutoff, z_cutoff[1:]):
-    fig = cluster_viz_index.array_scatter(
-            clusterer.labels_, geom_array, tx, tz, tmaxptps, 
-            zlim=(za, zb),
-    )
-    fig.savefig(output_dir / f"C_after_split_full_scatter_{za}_{zb}", dpi=200)
-    plt.close(fig)
+if output_dir is not None:
+    z_cutoff = [0, 500, 1000, 1500, 2000, 2500, 3000, 3500, 4000]
+    for za, zb in zip(z_cutoff, z_cutoff[1:]):
+        fig = cluster_viz_index.array_scatter(
+                clusterer.labels_, geom_array, tx, tz, tmaxptps, 
+                zlim=(za, zb),
+        )
+        fig.savefig(output_dir / f"C_after_split_full_scatter_{za}_{zb}", dpi=200)
+        plt.close(fig)
 
 # %%
 # get templates
@@ -266,22 +270,36 @@ cluster_centers = cluster_utils.compute_cluster_centers(clusterer)
 clusterer = cluster_utils.relabel_by_depth(clusterer, cluster_centers)
 labels = np.full(x.shape, -1)
 labels[idx_keep_full] = clusterer.labels_
+cluster_centers = cluster_utils.compute_cluster_centers(clusterer)
 
 # %%
-cluster_centers = cluster_utils.compute_cluster_centers(clusterer)
+# get templates
+templates = merge_split_cleaned.get_templates(
+    raw_data_bin, geom_array, clusterer.labels_.max()+1, spike_index[idx_keep_full], clusterer.labels_
+)
+
+template_shifts, template_maxchans, shifted_triaged_spike_index = merge_split_cleaned.align_spikes_by_templates(
+    clusterer.labels_, templates, spike_index[idx_keep_full]
+)
+shifted_full_spike_index = spike_index.copy()
+shifted_full_spike_index[idx_keep_full] = shifted_triaged_spike_index
+
+# %%
+cluster_centers
 
 # %% [markdown]
 # ## plots
 
 # %%
-z_cutoff = [0, 500, 1000, 1500, 2000, 2500, 3000, 3500, 4000]
-for za, zb in zip(z_cutoff, z_cutoff[1:]):
-    fig = cluster_viz_index.array_scatter(
-            clusterer.labels_, geom_array, tx, tz, tmaxptps, 
-            zlim=(za - 50, zb + 50),
-    )
-    fig.savefig(output_dir / f"AAA_final_full_scatter_{za}_{zb}", dpi=200)
-    plt.close(fig)
+if output_dir is not None:
+    z_cutoff = [0, 500, 1000, 1500, 2000, 2500, 3000, 3500, 4000]
+    for za, zb in zip(z_cutoff, z_cutoff[1:]):
+        fig = cluster_viz_index.array_scatter(
+                clusterer.labels_, geom_array, tx, tz, tmaxptps, 
+                zlim=(za - 50, zb + 50),
+        )
+        fig.savefig(output_dir / f"AAA_final_full_scatter_{za}_{zb}", dpi=200)
+        plt.close(fig)
 
 # %%
 triaged_log_ptp = tmaxptps.copy()
