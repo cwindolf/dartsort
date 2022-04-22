@@ -5,6 +5,7 @@ import torch.multiprocessing as mp
 from scipy.signal import argrelmin
 from sklearn.decomposition import PCA
 from sklearn.discriminant_analysis import LinearDiscriminantAnalysis as LDA
+from sklearn.cross_decomposition import CCA
 import scipy.optimize as optim_ls
 import hdbscan
 from spike_psvae.cluster_utils import (
@@ -79,17 +80,30 @@ def denoise_wf_nn_tmp_single_channel(wf, denoiser, device):
 
 # %%
 def run_LDA_split(wfs_unit_denoised, n_channels=10, n_times=121):
-    lda_model = LDA(n_components=2)
     arr = wfs_unit_denoised.ptp(1).argmax(1)
-    if np.unique(arr).shape[0] <= 2:
-        arr[-1] = np.unique(arr)[0] - 1
-        arr[0] = np.unique(arr)[-1] + 1
+    ncomp = 2
+    if np.unique(arr).shape[0] < 2:
+        return np.zeros(len(arr), dtype=int)
+    elif np.unique(arr).shape[0] == 2:
+        ncomp = 1
+    lda_model = LDA(n_components=ncomp)
     lda_comps = lda_model.fit_transform(
         wfs_unit_denoised.reshape((-1, n_times * n_channels)), arr
     )
     lda_clusterer = hdbscan.HDBSCAN(min_cluster_size=25, min_samples=25)
     lda_clusterer.fit(lda_comps)
     return lda_clusterer.labels_
+
+
+def run_CCA_split(wfs, x, z, maxptp,):
+    cca = CCA(n_components=2)
+    cca_embed, _ = cca.fit_transform(
+        wfs.reshape(wfs.shape[0], -1),
+        np.c_[tx[twhich], tz[twhich], 30 * np.log(tmaxptps[twhich])],
+    )
+    cca_hdb = hdbscan.HDBSCAN(min_cluster_size=25, min_samples=25)
+    cca_hdb.fit(cca_embed)
+    return cca_hdb.labels_
 
 
 # %%
@@ -189,6 +203,7 @@ def split_individual_cluster(
         cmp = 0
         for new_unit_id in np.unique(labels_rec_hdbscan)[1:]:
             wfs_new_unit = wfs_unit_denoised[labels_rec_hdbscan == new_unit_id]
+            # LinAlgError
             lda_labels = run_LDA_split(wfs_new_unit)
             if np.unique(lda_labels).shape[0] == 1:
                 labels_unit[labels_rec_hdbscan == new_unit_id] = cmp
