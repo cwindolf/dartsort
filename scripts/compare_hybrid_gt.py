@@ -92,6 +92,9 @@ gt_template_depths = gt_template_locs[3]
 argsort = np.argsort(gt_spike_train[:, 0])
 gt_spike_train = gt_spike_train[argsort]
 gt_spike_index = gt_spike_index[argsort]
+# TODO: return trough times in simulator
+gt_spike_train[:, 0] += 42
+gt_spike_index[:, 0] += 42
 
 # create kilosort SpikeInterface sorting
 sorting_gt = cluster_utils.make_sorting_from_labels_frames(
