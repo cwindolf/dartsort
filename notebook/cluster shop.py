@@ -47,6 +47,10 @@ sub_h5 = Path("/mnt/3TB/charlie/shake_res/re_snips_dndres/subtraction_ibl_witten
 assert sub_h5.exists()
 
 # %%
+print(raw_data_bin)
+print(residual_data_bin)
+
+# %%
 # raw_data_bin = Path("/mnt/3TB/charlie/re_snips/CSH_ZAD_026_snip.ap.bin")
 # assert raw_data_bin.exists()
 # residual_data_bin = Path("/mnt/3TB/charlie/re_snip_res/CSH_ZAD_026_fc/residual_CSH_ZAD_026_snip.ap_t_0_None.bin")
@@ -189,6 +193,10 @@ template_shifts, template_maxchans, shifted_triaged_spike_index = merge_split_cl
 # %%
 shifted_full_spike_index = spike_index.copy()
 shifted_full_spike_index[idx_keep_full] = shifted_triaged_spike_index
+
+
+# %%
+print(shifted_full_spike_index[:, 0].min(), shifted_full_spike_index[:, 0].max())
 
 # %%
 # split
