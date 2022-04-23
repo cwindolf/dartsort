@@ -88,6 +88,11 @@ gt_template_locs = localization.localize_ptps_index(
 )
 gt_template_depths = gt_template_locs[3]
 
+# sort gt train
+argsort = np.argsort(gt_spike_train[:, 0])
+gt_spike_train = gt_spike_train[argsort]
+gt_spike_index = gt_spike_index[argsort]
+
 # create kilosort SpikeInterface sorting
 sorting_gt = cluster_utils.make_sorting_from_labels_frames(
     gt_spike_train[:, 1], gt_spike_train[:, 0]
