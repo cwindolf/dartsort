@@ -119,7 +119,7 @@ def plot_waveforms_geom(main_cluster_id, labels, clusters_to_plot, geom_array, n
 
     for i, channel in enumerate(channels_plot):
         ax.scatter(geom_array[channel][0]*geom_scale[0], geom_array[channel][1]*geom_scale[1], s=100, c='orange', marker = "s")
-        ax.annotate(channel, (geom_array[channel][0]*geom_scale[0], geom_array[channel][1]*geom_scale[1]))
+        # ax.annotate(channel, (geom_array[channel][0]*geom_scale[0], geom_array[channel][1]*geom_scale[1]))
     for j, cluster_id in enumerate(clusters_to_plot):
         color = color_dict[cluster_id]
         first_chans_cluster = triaged_firstchans[labels==cluster_id]
@@ -135,7 +135,7 @@ def plot_waveforms_geom(main_cluster_id, labels, clusters_to_plot, geom_array, n
             else:
                 raise ValueError("Need to specify spike_index and bin_file")
         else:
-            waveforms = wfs[non_triage_indices[labels==cluster_id]]
+            waveforms = wfs[np.unique(non_triage_indices[labels==cluster_id])]
         if add_residuals:
             if triaged_spike_frames is not None and residual_bin_file is not None:
                 spike_times = triaged_spike_frames[labels==cluster_id]
@@ -207,7 +207,7 @@ def plot_raw_waveforms_unit_geom(geom_array, num_channels, first_chans_cluster, 
     channels_plot = np.sort(channels_plot)
     for i, channel in enumerate(channels_plot):
         ax.scatter(geom_array[channel][0]*geom_scale[0], geom_array[channel][1]*geom_scale[1], s=100, c='orange', marker = "s")
-        ax.annotate(channel, (geom_array[channel][0]*geom_scale[0], geom_array[channel][1]*geom_scale[1]))
+        # ax.annotate(channel, (geom_array[channel][0]*geom_scale[0], geom_array[channel][1]*geom_scale[1]))
         waveforms_read = read_waveforms(spike_times, bin_file, geom_array, n_times=121)[0]
         waveforms = []
         for i, waveform in enumerate(waveforms_read):
