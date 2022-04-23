@@ -168,3 +168,17 @@ for e in range(n_epochs):
         plt.show()
 
 # %%
+      
+x, log_y, zz = ae.localize(ptps_)
+x = x.cpu().detach().numpy()
+log_y = log_y.cpu().detach().numpy()
+y = np.exp(log_y)
+zr = zz.cpu().detach().numpy()
+z_abs = zr - cgeom[0,1] + zfc
+plt.figure()
+vis_utils.plotlocs(x, y, z_abs, None, maxptp, pgeom)
+
+# %%
+vis_utils.plotlocs(ox - geom[:,0].mean(), oy, oza, None, maxptp, pgeom)
+
+# %%
