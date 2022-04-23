@@ -72,13 +72,16 @@ def shift(
     dz=0,
     y1=None,
     alpha1=None,
-    logbarrier=True,
+    loc0=None,
 ):
     ptp = waveform.ptp(0)
     n_channels = ptp.shape[1]
-    x0, y0, z_rel0, z_abs0, alpha0 = localize_ptp(
-        ptp, firstchan, maxchan, geom, logbarrier=logbarrier
-    )
+    if loc0 is None:
+        x0, y0, z_rel0, z_abs0, alpha0 = localize_ptp(
+            ptp, firstchan, maxchan, geom
+        )
+    else:
+        x0, y0, z_rel0, z_abs0, alpha0 = loc0
     local_geom = get_local_geom(geom, firstchan, maxchan, n_channels)
     x1 = x0 + dx
     z1 = z_rel0 + dz
