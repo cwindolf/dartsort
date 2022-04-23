@@ -60,8 +60,8 @@ with h5py.File(sub_h5, "r") as h5:
     #     # end_sample += offset_min * 60 * 30000
     channel_index = h5["channel_index"][:]
 #     z_reg = h5["z_reg"][:]
-hdb_spike_index = hybrid_res_dir / subject / "aligned_spike_index.npy"
-hdb_labels = hybrid_res_dir / subject / "labels.npy"
+hdb_spike_index = np.load(hybrid_res_dir / subject / "aligned_spike_index.npy")
+hdb_labels = np.load(hybrid_res_dir / subject / "labels.npy")
 cluster_centers = pd.read_csv(hybrid_res_dir / subject / "cluster_centers.csv")
 nontriaged = np.flatnonzero(hdb_labels >= 0)
 hdb_spike_train = np.c_[
