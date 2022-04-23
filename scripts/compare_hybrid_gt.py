@@ -81,7 +81,7 @@ gt_template_locs = localization.localize_ptps_index(
     templates.ptp(1),
     geom_array,
     gt_template_maxchans,
-    np.concatenate([np.arange(len(geom_array))] * len(geom_array), axis=0),
+    np.stack([np.arange(len(geom_array))] * len(geom_array), axis=0),
     n_channels=20,
     n_workers=None,
     pbar=True,
