@@ -139,23 +139,34 @@ sub_h5 = subtract.subtraction(
 
 if not args.nolocalize and not args.noregister:
     with h5py.File(sub_h5, "r+") as h5:
-        samples = h5["spike_index"][:, 0] - h5["start_sample"][()]
-        z_abs = h5["localizations"][:, 2]
-        maxptps = h5["maxptps"]
+        do_reg = True
+        if "z_reg" in h5 and not args.overwrite:
+            print(
+                "Resumed run already had registered z. Set --overwrite if you "
+                "want to re-run registration."
+            )
+            do_reg = False
+        elif "z_reg" in h5 and args.overwrite:
+            del h5["z_reg"]
+            del h5["dispmap"]
+        
+        if do_reg:
+            samples = h5["spike_index"][:, 0] - h5["start_sample"][()]
+            z_abs = h5["localizations"][:, 2]
+            maxptps = h5["maxptps"]
 
-        z_reg, dispmap = ibme.register_nonrigid(
-            maxptps,
-            z_abs,
-            samples / 30000,
-            robust_sigma=0.5,
-            disp=200,
-            denoise_sigma=0.1,
-            rigid_init=False,
-            n_windows=args.n_windows,
-            widthmul=1.0,
-        )
-        z_reg -= (z_reg - z_abs).mean()
-        dispmap -= dispmap.mean()
-
-        h5.create_dataset("z_reg", data=z_reg)
-        h5.create_dataset("dispmap", data=dispmap)
+            z_reg, dispmap = ibme.register_nonrigid(
+                maxptps,
+                z_abs,
+                samples / 30000,
+                robust_sigma=0.5,
+                disp=200,
+                denoise_sigma=0.1,
+                rigid_init=False,
+                n_windows=args.n_windows,
+                widthmul=1.0,
+            )
+            z_reg -= (z_reg - z_abs).mean()
+            dispmap -= dispmap.mean()
+            h5.create_dataset("z_reg", data=z_reg)
+            h5.create_dataset("dispmap", data=dispmap)
