@@ -1017,6 +1017,7 @@ def get_output_h5(
     spike_length_samples,
     do_clean=True,
     do_localize=True,
+    save_waveforms=True,
     overwrite=False,
     chunk_len=4096,
 ):
@@ -1028,6 +1029,8 @@ def get_output_h5(
         if len(output_h5["spike_index"]) > 0:
             last_sample = output_h5["spike_index"][-1, 0]
     else:
+        if overwrite:
+            print("Overwriting previous results, if any.")
         output_h5 = h5py.File(out_h5, "w")
 
         # initialize datasets
@@ -1041,13 +1044,14 @@ def get_output_h5(
 
         # resizable datasets so we don't fill up space
         extract_channels = extract_channel_index.shape[1]
-        output_h5.create_dataset(
-            "subtracted_waveforms",
-            shape=(0, spike_length_samples, extract_channels),
-            chunks=(chunk_len, spike_length_samples, extract_channels),
-            maxshape=(None, spike_length_samples, extract_channels),
-            dtype=np.float32,
-        )
+        if save_waveforms:
+            output_h5.create_dataset(
+                "subtracted_waveforms",
+                shape=(0, spike_length_samples, extract_channels),
+                chunks=(chunk_len, spike_length_samples, extract_channels),
+                maxshape=(None, spike_length_samples, extract_channels),
+                dtype=np.float32,
+            )
         output_h5.create_dataset(
             "spike_index",
             shape=(0, 2),
@@ -1063,7 +1067,7 @@ def get_output_h5(
                 maxshape=(None,),
                 dtype=np.int64,
             )
-        if do_clean:
+        if save_waveforms and do_clean:
             output_h5.create_dataset(
                 "cleaned_waveforms",
                 shape=(0, spike_length_samples, extract_channels),
