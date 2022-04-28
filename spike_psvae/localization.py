@@ -39,6 +39,7 @@ def ptp_at(x, y, z, alpha, local_geom):
 def localize_ptp_index(
     ptp,
     local_geom,
+    logbarrier=True,
 ):
     """Find the localization result for a single ptp vector
 
@@ -73,7 +74,7 @@ def localize_ptp_index(
         alpha = (q * ptp / maxptp).sum() / (q * q).sum()
         return (
             np.square(ptp / maxptp - ptp_at(x, y, z, alpha)).mean()
-            - np.log1p(10.0 * y) / 10000.0
+            - (np.log1p(10.0 * y) / 10000.0 if logbarrier else 0)
         )
 
     result = minimize(
@@ -98,6 +99,7 @@ def localize_ptps_index(
     radius=100,
     n_workers=None,
     pbar=True,
+    logbarrier=True,
 ):
     """Localize a bunch of waveforms
 
@@ -133,6 +135,7 @@ def localize_ptps_index(
                 delayed(localize_ptp_index)(
                     ptp[subset[mc]],
                     local_geom[subset[mc]],
+                    logbarrier=logbarrier,
                 )
                 for ptp, mc, local_geom in xqdm(
                     zip(ptps, maxchans, local_geoms), total=N, desc="lsq"
