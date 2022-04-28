@@ -389,7 +389,8 @@ def hybrid_recording(
     cluster_chan_offsets -= cluster_chan_offsets % 4
 
     # pick point process params
-    n_spikes = rg.poisson(lam=mean_spike_rate * t_total_s, size=n_clusters)
+    spike_rates = rg.gamma(65, scale=mean_spike_rate / 64, size=n_clusters)
+    n_spikes = rg.poisson(lam=spike_rates * t_total_s, size=n_clusters)
 
     # choose clusters
     choices = np.flatnonzero(
