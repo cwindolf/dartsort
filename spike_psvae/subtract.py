@@ -41,7 +41,7 @@ def subtraction(
     save_residual=True,
     save_waveforms=True,
     do_clean=True,
-    do_localize=True,
+    localization_kind="logbarrier",
     localize_radius=100,
     localize_firstchan_n_channels=20,
     loc_workers=4,
@@ -85,10 +85,11 @@ def subtraction(
                 Final denoised waveforms, only computed/saved if
                 `do_clean=True`
             localizations : (N, 5)
-                Only computed/saved if `do_localize=True`
+                Only computed/saved if `localization_kind` is `"logbarrier"`
+                or `"original"`
                 The columsn are: x, y, z, alpha, z relative to max channel
             maxptps : (N,)
-                Only computed/saved if `do_localize=True`
+                Only computed/saved if `localization_kind="logbarrier"`
     """
     if neighborhood_kind not in ("firstchan", "box"):
         raise ValueError(
@@ -207,6 +208,7 @@ def subtraction(
         assert False
 
     # helper data structure for radial enforce decrease
+    do_enforce_decrease = True
     if enforce_decrease_kind == "radial":
         radial_parents = denoise.make_radial_order_parents(
             geom, extract_channel_index, n_jumps_per_growth=1, n_jumps_parent=3
@@ -214,7 +216,16 @@ def subtraction(
     elif enforce_decrease_kind == "columns":
         radial_parents = None
     else:
-        assert False
+        print("Skipping enforce decrease.")
+        do_enforce_decrease = False
+
+    # check localization arg
+    if localization_kind in ("original", "logbarrier"):
+        print("Using", localization_kind, "localization")
+        do_localize = True
+    else:
+        print("No localization")
+        do_localize = False
 
     # pre-fit temporal PCA
     tpca = None
@@ -246,6 +257,7 @@ def subtraction(
                     nn_detector_path,
                     denoise_detect,
                     nn_channel_index,
+                    do_enforce_decrease=do_enforce_decrease,
                     probe=probe,
                     standardized_dtype=np.float32,
                     n_sec_pca=n_sec_pca,
@@ -302,7 +314,7 @@ def subtraction(
             subtracted_wfs = output_h5["subtracted_waveforms"]
             if do_clean:
                 cleaned_wfs = output_h5["cleaned_waveforms"]
-        if do_localize:
+        if localization_kind in ("original", "logbarrier"):
             locs = output_h5["localizations"]
             maxptps = output_h5["maxptps"]
         N = len(spike_index)
@@ -338,9 +350,10 @@ def subtraction(
                 end_sample,
                 do_clean,
                 radial_parents,
-                do_localize,
+                localization_kind,
                 loc_workers,
                 geom,
+                do_enforce_decrease,
                 probe,
                 loc_n_chans,
                 loc_radius,
@@ -494,9 +507,10 @@ def subtraction_batch(
     end_sample,
     do_clean,
     radial_parents,
-    do_localize,
+    localization_kind,
     loc_workers,
     geom,
+    do_enforce_decrease,
     probe,
     loc_n_chans,
     loc_radius,
@@ -545,8 +559,8 @@ def subtraction_batch(
         considered (in samples)
     radial_parents
         Helper data structure for enforce_decrease
-    do_localize : bool
-        Should we run localization?
+    localization_kind : str
+        How should we run localization?
     loc_workers : int
         on how many threads?
     geom : array
@@ -597,6 +611,7 @@ def subtraction_batch(
             trough_offset=trough_offset,
             spike_length_samples=spike_length_samples,
             device=device,
+            do_enforce_decrease=do_enforce_decrease,
             probe=probe,
         )
         if len(spind):
@@ -644,6 +659,7 @@ def subtraction_batch(
             spike_index[:, 1],
             extract_channel_index,
             radial_parents,
+            do_enforce_decrease=do_enforce_decrease,
             probe=probe,
             tpca=tpca,
             device=device,
@@ -673,7 +689,7 @@ def subtraction_batch(
         np.save(clean_file, cleaned_wfs)
 
     localizations_file = maxptps_file = None
-    if do_localize:
+    if localization_kind in ("original", "logbarrier"):
         locwfs = cleaned_wfs if do_clean else subtracted_wfs
         locptps = locwfs.ptp(1)
         xs, ys, z_rels, z_abss, alphas = localize_index.localize_ptps_index(
@@ -685,6 +701,7 @@ def subtraction_batch(
             radius=loc_radius,
             n_workers=loc_workers,
             pbar=False,
+            logbarrier=localization_kind == "logbarrier",
         )
         localizations_file = batch_data_folder / f"{batch_id:08d}_loc.npy"
         np.save(localizations_file, np.c_[xs, ys, z_abss, alphas, z_rels])
@@ -723,6 +740,7 @@ def train_pca(
     nn_detector_path,
     denoise_detect,
     nn_channel_index,
+    do_enforce_decrease=True,
     probe=None,
     standardized_dtype=np.float32,
     n_sec_pca=10,
@@ -820,6 +838,7 @@ def detect_and_subtract(
     trough_offset=42,
     spike_length_samples=121,
     device="cpu",
+    do_enforce_decrease=True,
     probe=None,
 ):
     """Detect and subtract
@@ -876,6 +895,7 @@ def detect_and_subtract(
         spike_index[:, 1],
         extract_channel_index,
         radial_parents,
+        do_enforce_decrease=do_enforce_decrease,
         probe=probe,
         tpca=tpca,
         device=device,
@@ -901,7 +921,8 @@ def full_denoising(
     waveforms,
     maxchans,
     extract_channel_index,
-    radial_parents,
+    radial_parents=None,
+    do_enforce_decrease=True,
     probe=None,
     tpca=None,
     device=None,
@@ -961,7 +982,7 @@ def full_denoising(
                 )
         elif probe == "np2":
             for i in range(N):
-                denoise.enforce_decrease_np1(
+                denoise.enforce_decrease(
                     waveforms[i], max_chan=rel_maxchans[i], in_place=True
                 )
         else:
@@ -971,7 +992,8 @@ def full_denoising(
             waveforms, maxchans, radial_parents, in_place=True
         )
     else:
-        assert False
+        # no enforce decrease
+        pass
 
     return waveforms
 
@@ -1016,7 +1038,7 @@ def get_output_h5(
     neighborhood_kind,
     spike_length_samples,
     do_clean=True,
-    do_localize=True,
+    localization_kind="logbarrier",
     save_waveforms=True,
     overwrite=False,
     chunk_len=4096,
