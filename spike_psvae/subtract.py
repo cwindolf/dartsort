@@ -114,9 +114,9 @@ def subtraction(
         residual_bin = out_folder / f"residual_{stem}_t_{t_start}_{t_end}.bin"
     try:
         if out_h5.exists():
-            with h5py.File(out_h5, "r+") as _d:
+            with h5py.File(out_h5, "r+") as _:
                 pass
-            del _d
+            del _
     except BlockingIOError as e:
         raise ValueError(
             f"Output HDF5 {out_h5} is currently in use by another program. "
@@ -192,14 +192,9 @@ def subtraction(
         loc_n_chans = None
         loc_radius = localize_radius
     elif neighborhood_kind == "firstchan":
-        extract_channel_index = []
-        for c in range(n_channels):
-            low = max(0, c - extract_firstchan_n_channels // 2)
-            low = min(n_channels - extract_firstchan_n_channels, low)
-            extract_channel_index.append(
-                np.arange(low, low + extract_firstchan_n_channels)
-            )
-        extract_channel_index = np.array(extract_channel_index)
+        extract_channel_index = make_contiguous_channel_index(
+            n_channels, n_neighbors=extract_firstchan_n_channels
+        )
 
         # use old firstchan style localization neighborhood
         loc_n_chans = localize_firstchan_n_channels
@@ -237,10 +232,13 @@ def subtraction(
                 if "tpca_mean" in output_h5:
                     tpca_mean = output_h5["tpca_mean"][:]
                     tpca_components = output_h5["tpca_components"][:]
-                    print("Loading TPCA from h5")
-                    tpca = PCA(tpca_components.shape[0])
-                    tpca.mean_ = tpca_mean
-                    tpca.components_ = tpca_components
+                    if (tpca_mean == 0).all():
+                        print("H5 exists but TPCA params == 0. Will redo it.")
+                    else:
+                        print("Loading TPCA from h5")
+                        tpca = PCA(tpca_components.shape[0])
+                        tpca.mean_ = tpca_mean
+                        tpca.components_ = tpca_components
 
         # otherwise, train it
         if tpca is None:
@@ -1177,6 +1175,17 @@ def order_channels_by_distance(reference, channels, geom):
     coord_others = geom[channels]
     idx = np.argsort(np.sum(np.square(coord_others - coord_main), axis=1))
     return channels[idx], idx
+
+
+def make_contiguous_channel_index(n_channels, n_neighbors=40):
+    channel_index = []
+    for c in range(n_channels):
+        low = max(0, c - n_neighbors // 2)
+        low = min(n_channels - n_neighbors, low)
+        channel_index.append(np.arange(low, low + n_neighbors))
+    channel_index = np.array(channel_index)
+
+    return channel_index
 
 
 def make_channel_index(geom, radius, steps=1, distance_order=True, p=2):
