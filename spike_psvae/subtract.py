@@ -95,7 +95,7 @@ def subtraction(
         raise ValueError(
             "Neighborhood kind", neighborhood_kind, "not understood."
         )
-    if enforce_decrease_kind not in ("columns", "radial"):
+    if enforce_decrease_kind not in ("columns", "radial", "none"):
         raise ValueError(
             "Enforce decrease method", enforce_decrease_kind, "not understood."
         )
@@ -209,12 +209,13 @@ def subtraction(
 
     # helper data structure for radial enforce decrease
     do_enforce_decrease = True
+    radial_parents = None
     if enforce_decrease_kind == "radial":
         radial_parents = denoise.make_radial_order_parents(
             geom, extract_channel_index, n_jumps_per_growth=1, n_jumps_parent=3
         )
     elif enforce_decrease_kind == "columns":
-        radial_parents = None
+        pass
     else:
         print("Skipping enforce decrease.")
         do_enforce_decrease = False
@@ -796,6 +797,7 @@ def train_pca(
             False,
             None,
             None,
+            do_enforce_decrease,
             probe,
             None,
             None,
@@ -1038,7 +1040,7 @@ def get_output_h5(
     neighborhood_kind,
     spike_length_samples,
     do_clean=True,
-    localization_kind="logbarrier",
+    do_localize=True,
     save_waveforms=True,
     overwrite=False,
     chunk_len=4096,
