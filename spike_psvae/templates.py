@@ -152,6 +152,8 @@ def get_templates(
             + (1 - lerp) * cleaned_template
         )
 
+    return templates, snrs
+
 
 def get_unit_waveforms(
     unit, spike_train, waveform_extractor, subtracted_waveforms=None
