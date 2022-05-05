@@ -249,13 +249,22 @@ def make_shells(geom, n_jumps=1):
 
 
 def make_radial_order_parents(
-    geom, channel_index, n_jumps_per_growth=1, n_jumps_parent=2
+    geom, channel_index, n_jumps_per_growth=1, n_jumps_parent=3
 ):
-    """Pre-computes a helper data structure for enforce_decrease_shells
-
-    channel_index should be distance ordered
-    """
+    """Pre-computes a helper data structure for enforce_decrease_shells"""
     n_channels = len(channel_index)
+
+    # ensure channel index is distance ordered
+    dist_sort = np.array(
+        [
+            np.argsort(
+                np.linalg.norm(
+                    geom[c][None, :] - geom[channel_index[c]], axis=1
+                )
+            )
+            for c in range(len(geom))
+        ]
+    )
 
     # which channels should we consider as possible parents for each channel?
     shells = make_shells(geom, n_jumps=n_jumps_parent)
