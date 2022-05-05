@@ -1,10 +1,13 @@
+import multiprocessing
 import numpy as np
 import torch
 
 from collections import namedtuple
 from multiprocessing.pool import Pool
-from spike_psvae import denoise, localize_index, subtract
+from pathlib import Path
+from tqdm import tqdm
 
+from . import denoise, localize_index, subtract
 
 def grab_and_localize(
     spike_index,
@@ -20,14 +23,30 @@ def grab_and_localize(
 ):
     if device is None:
         device = "cuda" if torch.cuda.is_available() else "cpu"
+        
+    # -- figure out length of recording
+    # TODO make this a function in subtract
+    std_size = Path(binary_file).stat().st_size
+    assert not std_size % np.dtype(np.float32).itemsize
+    std_size = std_size // np.dtype(np.float32).itemsize
+    assert not std_size % len(geom)
+    len_data_samples = std_size // len(geom)
 
     # -- make channel index
     channel_index = subtract.make_channel_index(
         geom, loc_radius, distance_order=False, p=1
     )
+    # channel_index = subtract.make_contiguous_channel_index(len(geom), 10)
 
     # -- construct pool and job arguments, and run jobs
     localizations = np.empty((spike_index.shape[0], 5))
+    maxptp = np.empty(spike_index.shape[0])
+    starts = range(
+        0,
+        spike_index[:, 0].max(),
+        chunk_size,
+    )
+    ctx = multiprocessing.get_context('spawn')
     with Pool(
         n_jobs,
         initializer=_job_init,
@@ -41,12 +60,20 @@ def grab_and_localize(
             chunk_size,
             spike_index,
             binary_file,
+            len_data_samples,
         ),
+        context=ctx,
     ) as pool:
-        for result in pool.imap(_job, range(0, spike_index[:, 0].max())):
+        for result in tqdm(
+            pool.imap(_job, starts),
+            desc="grab and localize",
+            smoothing=0,
+            total=len(starts),
+        ):
             localizations[result.indices] = result.localizations
+            maxptp[result.indices] = result.maxptp
 
-    return localizations
+    return localizations, maxptp
 
 
 JobResult = namedtuple(
@@ -54,6 +81,7 @@ JobResult = namedtuple(
     [
         "indices",
         "localizations",
+        "maxptp",
     ],
 )
 
@@ -73,15 +101,16 @@ def _job(batch_start):
     rec = subtract.read_data(
         p.binary_file,
         np.float32,
-        batch_start,
-        batch_start + p.chunk_size,
+        max(0, batch_start - 42),
+        min(p.len_data_samples, batch_start + p.chunk_size + 79),
         len(p.geom),
     )
     waveforms = subtract.read_waveforms(
         rec,
         spike_index,
+        spike_length_samples=121,
         extract_channel_index=p.channel_index,
-        buffer=-batch_start,
+        buffer=-batch_start + 42 * (batch_start > 0),
     )
 
     # -- denoise
@@ -103,7 +132,7 @@ def _job(batch_start):
         ptps, p.geom, spike_index[:, 1], p.channel_index, pbar=False
     )
 
-    return JobResult(which, np.c_[x, y, z_rel, z_abs, alpha])
+    return JobResult(which, np.c_[x, y, z_rel, z_abs, alpha], np.nanmax(ptps, axis=1))
 
 
 JobData = namedtuple(
@@ -118,6 +147,7 @@ JobData = namedtuple(
         "spike_index",
         "binary_file",
         "device",
+        "len_data_samples",
     ],
 )
 
@@ -132,6 +162,7 @@ def _job_init(
     chunk_size,
     spike_index,
     binary_file,
+    len_data_samples,
 ):
     denoiser = radial_parents = None
     if nn_denoise:
@@ -150,4 +181,5 @@ def _job_init(
         spike_index,
         binary_file,
         device,
+        len_data_samples,
     )
