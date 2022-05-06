@@ -1,6 +1,9 @@
 import numpy as np
 from pathlib import Path
+from tempfile import TemporaryDirectory
 import spikeinterface.full as si
+from tqdm.auto import tqdm
+from sklearn.decomposition import PCA
 
 from . import denoise
 
@@ -8,19 +11,20 @@ from . import denoise
 def get_templates(
     spike_train,
     geom,
-    cache_dir,
     raw_binary_file,
     residual_binary_file,
     subtracted_waveforms,
     n_templates=None,
     max_spikes_per_unit=500,
-    tpca=None,
+    do_tpca=True,
     reducer=np.mean,
     snr_threshold=10 * np.sqrt(200),
     n_jobs=20,
     spike_length_samples=121,
     trough_offset=42,
     sampling_frequency=30_000,
+    return_raw_cleaned=False,
+    tpca_rank=8,
 ):
     """Get denoised templates
 
@@ -38,8 +42,6 @@ def get_templates(
         First column is spike trough time (samples), second column
         is cluster ID.
     geom : np.array (n_channels, 2)
-    cache_dir : string or Path
-        Waveforms will be cached by spikeinterface here.
     raw_binary_file, residual_binary_file : string or Path
     subtracted_waveforms : array, memmap, or h5 dataset
     n_templates : None or int
@@ -47,10 +49,6 @@ def get_templates(
     max_spikes_per_unit : int
         If a unit spikes more than this, this many will be sampled
         uniformly (separately for raw + cleaned wfs)
-    tpca : None or sklearn transformer
-        If None, no temporal PCA is applied to collision-cleaned
-        waveforms before computing templates. If supplied, that's
-        what it's used for.
     reducer : e.g. np.mean or np.median
     snr_threshold : float
         Below this number, a weighted combo of raw and cleaned
@@ -61,6 +59,8 @@ def get_templates(
     templates : np.array (n_templates, spike_length_samples, geom.shape[0])
     snrs : np.array (n_templates,)
         The snrs of the original raw templates.
+    if return_raw_cleaned, also returns raw_templates and cleaned_templates,
+    both arrays like templates.
     """
     # -- initialize output
     if n_templates is None:
@@ -68,89 +68,119 @@ def get_templates(
     templates = np.zeros((n_templates, spike_length_samples, len(geom)))
     snrs = np.zeros(n_templates)
 
+    if return_raw_cleaned:
+        raw_templates = np.zeros_like(templates)
+        cleaned_templates = np.zeros_like(templates)
+
     # -- enforce decrease helpers
     full_channel_index = np.array([np.arange(len(geom))] * len(geom))
     radial_parents = denoise.make_radial_order_parents(
         geom, full_channel_index
     )
 
+    # -- triaged spike train
+    spike_train = spike_train[spike_train[:, 1] >= 0]
+    units = np.unique(spike_train[:, 1])
+
     # -- get waveform extractor
     # this will sample random waveforms from the raw/residual for us
-    raw_we = get_waveform_extractor(
-        raw_binary_file,
-        spike_train,
-        geom,
-        cache_dir,
-        max_spikes_per_unit=max_spikes_per_unit,
-        n_jobs=n_jobs,
-        spike_length_samples=spike_length_samples,
-        trough_offset=trough_offset,
-        sampling_frequency=sampling_frequency,
-    )
-    res_we = get_waveform_extractor(
-        residual_binary_file,
-        spike_train,
-        geom,
-        cache_dir,
-        max_spikes_per_unit=max_spikes_per_unit,
-        n_jobs=n_jobs,
-        spike_length_samples=spike_length_samples,
-        trough_offset=trough_offset,
-        sampling_frequency=sampling_frequency,
-    )
+    with TemporaryDirectory(prefix="si_deconv") as cache_dir:
+        cache_dir = Path(cache_dir)
 
-    # -- main loop to make templates
-    units = np.unique(spike_train[:, 1])
-    for unit in units[units >= 0]:
-        # get raw template
-        raw_wfs = get_unit_waveforms(unit, spike_train, raw_we)
-        denoise.enforce_decrease_shells(
-            raw_wfs,
-            raw_wfs.ptp(1).argmax(1),
-            radial_parents,
-            in_place=True,
+        raw_we = get_waveform_extractor(
+            raw_binary_file,
+            spike_train,
+            geom,
+            cache_dir / "raw",
+            max_spikes_per_unit=max_spikes_per_unit,
+            n_jobs=n_jobs,
+            spike_length_samples=spike_length_samples,
+            trough_offset=trough_offset,
+            sampling_frequency=sampling_frequency,
         )
-        raw_template = reducer(raw_wfs, axis=0)
-        raw_ptp = raw_template.ptp(0).max()
-        snr = raw_ptp * len(raw_wfs)
-        snrs[unit] = snr
-
-        if snr > snr_threshold:
-            templates[unit] = raw_template
-            continue
-
-        # load cleaned waveforms
-        # NOTE: we can't control the random seed for spikeinterface
-        #       WEs, so these will not be the same waveforms, unless
-        #       this unit has fewer than `max_spikes_per_unit` spikes
-        cleaned_wfs = get_unit_waveforms(
-            unit, spike_train, res_we, subtracted_waveforms
+        res_we = get_waveform_extractor(
+            residual_binary_file,
+            spike_train,
+            geom,
+            cache_dir / "res",
+            max_spikes_per_unit=max_spikes_per_unit,
+            n_jobs=n_jobs,
+            spike_length_samples=spike_length_samples,
+            trough_offset=trough_offset,
+            sampling_frequency=sampling_frequency,
         )
 
-        # enforce decrease for both, using raw maxchan
-        denoise.enforce_decrease_shells(
-            cleaned_wfs,
-            raw_wfs.ptp(1).argmax(1),
-            radial_parents,
-            in_place=True,
-        )
-
-        # apply TPCA to cleaned ones
-        if tpca is not None:
-            cleaned_wfs = tpca.fit_transform(
-                cleaned_wfs.reshape(len(cleaned_wfs), -1)
+        # create cleaned waveforms and apply tpca if requested
+        cleaned_wfs = {
+            unit: get_unit_waveforms(
+                unit, spike_train, res_we, subtracted_waveforms
             )
-            cleaned_wfs = tpca.inverse_transform(cleaned_wfs).reshape(
-                raw_wfs.shape
+            for unit in tqdm(units, desc="tpca cleaned wfs")
+        }
+        if do_tpca:
+            tpca = PCA(tpca_rank)
+            tpca.fit(
+                np.concatenate(list(cleaned_wfs.values())).reshape(
+                    -1, spike_length_samples * len(geom)
+                )
             )
-        cleaned_template = reducer(cleaned_wfs, axis=0)
+            cleaned_wfs = {
+                u: tpca.inverse_transform(tpca.transform(x))
+                for u, x in cleaned_wfs.items()
+            }
 
-        # SNR-weighted combination to create the template
-        lerp = snr / snr_threshold
-        templates[unit] = (
-            (lerp) * raw_template
-            + (1 - lerp) * cleaned_template
-        )
+        # -- main loop to make templates
+        for unit in tqdm(units, desc="Denoised templates"):
+            # get raw template
+            raw_wfs = get_unit_waveforms(unit, spike_train, raw_we)
+            raw_maxchans = raw_wfs.ptp(1).argmax(1)
+            denoise.enforce_decrease_shells(
+                raw_wfs,
+                raw_maxchans,
+                radial_parents,
+                in_place=True,
+            )
+            raw_template = reducer(raw_wfs, axis=0)
+            raw_ptp = raw_template.ptp(0).max()
+            snr = raw_ptp * len(raw_wfs)
+            snrs[unit] = snr
+
+            if return_raw_cleaned:
+                raw_templates[unit] = raw_template
+
+            if snr > snr_threshold:
+                templates[unit] = raw_template
+                continue
+
+            # load cleaned waveforms
+            cleaned_wfs = cleaned_wfs[unit]
+
+            # enforce decrease for both, using raw maxchan
+            denoise.enforce_decrease_shells(
+                cleaned_wfs,
+                raw_maxchans,
+                radial_parents,
+                in_place=True,
+            )
+
+            # apply TPCA to cleaned ones
+            if tpca is not None:
+                cleaned_wfs = tpca.fit_transform(
+                    cleaned_wfs.reshape(len(cleaned_wfs), -1)
+                )
+                cleaned_wfs = tpca.inverse_transform(cleaned_wfs).reshape(
+                    raw_wfs.shape
+                )
+            cleaned_template = reducer(cleaned_wfs, axis=0)
+
+            if return_raw_cleaned:
+                cleaned_templates[unit] = cleaned_template
+
+            # SNR-weighted combination to create the template
+            lerp = snr / snr_threshold
+            templates[unit] = (lerp) * raw_template + (
+                1 - lerp
+            ) * cleaned_template
 
     return templates, snrs
 
