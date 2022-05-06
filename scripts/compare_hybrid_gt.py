@@ -110,16 +110,6 @@ cmp_1 = cluster_utils.compare_two_sorters(
     sorting_gt,
     sorting1_name="ours",
     sorting2_name="hybrid_gt",
-    match_score=0.1,
-)
-matched_units_1 = cmp_1.get_matching()[0].index.to_numpy()[
-    np.where(cmp_1.get_matching()[0] >= 0)
-]
-unmatched_units_1 = cmp_1.get_matching()[0].index.to_numpy()[
-    np.where(cmp_1.get_matching()[0] < 0)
-]
-matches_kilos_1 = cmp_1.get_best_unit_match1(matched_units_1).values.astype(
-    int
 )
 
 cmp_gt_1 = cluster_utils.compare_two_sorters(
@@ -127,14 +117,7 @@ cmp_gt_1 = cluster_utils.compare_two_sorters(
     sorting_hdbl_t,
     sorting1_name="hybrid_gt",
     sorting2_name="ours",
-    match_score=0.1,
 )
-matched_units_gt_1 = cmp_gt_1.get_matching()[0].index.to_numpy()[
-    np.where(cmp_gt_1.get_matching()[0].to_numpy() >= 0)
-]
-unmatched_units_gt_1 = cmp_gt_1.get_matching()[0].index.to_numpy()[
-    np.where(cmp_gt_1.get_matching()[0].to_numpy() < 0)
-]
 
 # %%
 num_channels = 40
