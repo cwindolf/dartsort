@@ -182,6 +182,9 @@ def get_templates(
                 1 - lerp
             ) * cleaned_template
 
+    if return_raw_cleaned:
+        return templates, snrs, raw_templates, cleaned_templates
+
     return templates, snrs
 
 
