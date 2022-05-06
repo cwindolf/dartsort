@@ -141,7 +141,7 @@ sub_h5 = subtract.subtraction(
 
 # -- registration
 
-if not args.nolocalize and not args.noregister:
+if (args.localization_kind != "none") and (not args.noregister):
     with h5py.File(sub_h5, "r+") as h5:
         do_reg = True
         if "z_reg" in h5 and not args.overwrite:
