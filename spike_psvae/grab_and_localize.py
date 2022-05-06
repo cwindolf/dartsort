@@ -9,6 +9,7 @@ from tqdm import tqdm
 
 from . import denoise, localize_index, subtract
 
+
 def grab_and_localize(
     spike_index,
     binary_file,
@@ -23,7 +24,7 @@ def grab_and_localize(
 ):
     if device is None:
         device = "cuda" if torch.cuda.is_available() else "cpu"
-        
+
     # -- figure out length of recording
     # TODO make this a function in subtract
     std_size = Path(binary_file).stat().st_size
@@ -46,7 +47,7 @@ def grab_and_localize(
         spike_index[:, 0].max(),
         chunk_size,
     )
-    ctx = multiprocessing.get_context('spawn')
+    ctx = multiprocessing.get_context("spawn")
     with Pool(
         n_jobs,
         initializer=_job_init,
@@ -132,7 +133,9 @@ def _job(batch_start):
         ptps, p.geom, spike_index[:, 1], p.channel_index, pbar=False
     )
 
-    return JobResult(which, np.c_[x, y, z_rel, z_abs, alpha], np.nanmax(ptps, axis=1))
+    return JobResult(
+        which, np.c_[x, y, z_rel, z_abs, alpha], np.nanmax(ptps, axis=1)
+    )
 
 
 JobData = namedtuple(

@@ -205,13 +205,14 @@ def regline(x, y, ax=None, **kwargs):
     ax.plot([x0, x1], [a + b * x0, a + b * x1], lw=1, color="red")
     ax.text(
         kwargs.get("rloc", 0.9),
-        0.9,
+        0.8,
         f"$\\rho={r:.2f}$",
         horizontalalignment="right",
         verticalalignment="center",
         transform=ax.transAxes,
         fontsize=6,
         color="red",
+        backgroundcolor=[1, 1, 1, 0.75],
     )
 
 
@@ -226,6 +227,7 @@ def corr_scatter(
     grid=True,
     rloc=0.9,
     axes=None,
+    do_aspect=True,
 ):
     nxs = xs.shape[1]
     nys = ys.shape[1] if grid else 1
@@ -250,10 +252,11 @@ def corr_scatter(
                     cmap=plt.cm.viridis,
                 )
                 if i == 0:
-                    axes[j, i].set_ylabel(ylabels[j])
+                    axes[j, i].set_ylabel(ylabels[j], fontsize=8)
                 if j == nys - 1:
-                    axes[j, i].set_xlabel(xlabels[i])
-                axes[j, i].set_box_aspect(1)
+                    axes[j, i].set_xlabel(xlabels[i], fontsize=8)
+                if do_aspect:
+                    axes[j, i].set_box_aspect(1)
                 regline(xs[:, i], ys[:, j], ax=axes[j, i], rloc=rloc)
         if suptitle:
             fig.suptitle(suptitle)
@@ -267,8 +270,8 @@ def corr_scatter(
                 s=0.1,
                 cmap=plt.cm.viridis,
             )
-            axes[i].set_ylabel(ylabels[i])
-            axes[i].set_xlabel(xlabels[i])
+            axes[i].set_ylabel(ylabels[i], fontsize=8)
+            axes[i].set_xlabel(xlabels[i], fontsize=8)
             axes[i].set_box_aspect(1)
             regline(xs[:, i], ys[:, i], ax=axes[i], rloc=rloc)
         if suptitle:
@@ -369,6 +372,51 @@ def plotlocs(
         aa.set_ylim(zlim)
     
     return fig
+
+
+def gplot(
+    waveform,
+    maxchan,
+    channel_index,
+    geom,
+    yscale=None,
+    xscale=0.9,
+    trough=42,
+    ax=None,
+    color="k",
+    lw=1,
+    pad=0.1,
+    label=None
+):
+    """Scale is in units of inter-channel Z dists
+    """
+    if ax is None:
+        ax = plt.gca()
+    
+    if yscale is None:
+        yscale = 1 / waveform.ptp(0).max()
+        
+    gscalex = geom[1, 0] - geom[0, 0]
+    gscaley = geom[2, 1] - geom[0, 1]
+    waveform = yscale * gscaley * waveform
+    
+    domain = (xscale * gscalex / waveform.shape[0]) * np.arange(
+        -trough,
+        -trough + waveform.shape[0],
+    )
+    
+    lines = []
+    ext = (np.inf, -np.inf)
+    for trace, chan in zip(waveform.T, channel_index[maxchan]):
+        lines.append(domain + geom[chan, 0])
+        trace = trace + geom[chan, 1]
+        ext = (min(ext[0], trace.min()), max(ext[1], trace.max()))
+        lines.append(trace)
+    
+    p = ax.plot(*lines, color=color, lw=lw, label=label)
+    ax.set_ylim([ext[0] - pad * gscaley, ext[1] + pad * gscaley])
+    
+    return p
 
 
 def plot_ptp(ptp, axes, label, color, codes):
