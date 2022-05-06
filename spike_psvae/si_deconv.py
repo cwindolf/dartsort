@@ -15,6 +15,9 @@ default_method_kwargs = {
         threshold=4,
         n_shifts=10,
     ),
+    "tridesclous": dict(
+        threshold=4,
+    ),
 }
 
 
@@ -43,6 +46,8 @@ def si_deconv(
         dtype=standardized_dtype,
         time_axis=0,
         is_filtered=True,
+        gain_to_uV=1,
+        offset_to_uV=0,
     )
     recording.set_channel_locations(geom)
 

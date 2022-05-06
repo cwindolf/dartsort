@@ -19,6 +19,7 @@ def kronsolve(D, robust_sigma=0):
 
     if robust_sigma > 0:
         Dz = zscore(D, axis=1)
+        Dz[~np.isfinite(Dz)] = 0
         S = (np.abs(Dz) < robust_sigma).astype(D.dtype)
 
     _1 = np.ones((T, 1))

@@ -353,6 +353,7 @@ def hybrid_recording(
     # clustering params
     n_clusters=40,
     # other
+    do_noise=True,
     seed=0,
     rate_spread=10,
 ):
@@ -398,10 +399,13 @@ def hybrid_recording(
         n_channels - 2 * (write_n_channels // 2 + 1),
         size=n_clusters,
     )
-    cluster_chan_offsets -= cluster_chan_offsets % 4
+    # cluster_chan_offsets -= cluster_chan_offsets % 4
 
     # pick point process params
-    spike_rates = rg.gamma(rate_spread, scale=mean_spike_rate / rate_spread, size=n_clusters)
+    if isinstance(mean_spike_rate, list):
+        spike_rates = rg.uniform(low=mean_spike_rate[0], high=mean_spike_rate[1], size=n_clusters)
+    else:
+        spike_rates = rg.gamma(rate_spread, scale=mean_spike_rate / rate_spread, size=n_clusters)
     n_spikes = rg.poisson(lam=spike_rates * t_total_s, size=n_clusters)
 
     # -- generate spike train
@@ -418,34 +422,38 @@ def hybrid_recording(
                 break
         spike_trains.append(np.c_[spike_train, [i] * n_spikes[i]])
         spike_indices.append(
-            np.c_[spike_train, [template_maxchans[i]] * n_spikes[i]]
+            np.c_[spike_train, [cluster_chan_offsets[i]] * n_spikes[i]]
         )
         write_template0 = templates[i]
         write_template0 = write_template0[:, write_channel_index[template_maxchans[i]]]
-        waveforms.append(
-            [
-                shift(
-                    write_template0,
-                    write_channel_index[template_maxchans[i], 0],
-                    template_maxchans[i],
-                    geom,
-                    dx=rg.normal(scale=x_noise),
-                    dz=rg.normal(z_noise),
-                    y1=np.abs(ty[i] + rg.normal(scale=y_noise)),
-                    alpha1=rg.gamma(
-                        alpha_shape, scale=talpha[i] / (alpha_shape - 1)
-                    ),
-                    loc0=(
-                        tx[i],
-                        ty[i],
-                        tz_rel[i],
-                        tz_abs[i],
-                        talpha[i],
-                    ),
-                )[0]
-                for _ in range(n_spikes[i])
-            ]
-        )
+        if do_noise:
+            waveforms.append(
+                [
+                    shift(
+                        write_template0,
+                        write_channel_index[template_maxchans[i], 0],
+                        template_maxchans[i],
+                        geom,
+                        dx=rg.normal(scale=x_noise),
+                        dz=rg.normal(z_noise),
+                        y1=np.abs(ty[i] + rg.normal(scale=y_noise)),
+                        alpha1=rg.gamma(
+                            alpha_shape, scale=talpha[i] / (alpha_shape - 1)
+                        ),
+                        loc0=(
+                            tx[i],
+                            ty[i],
+                            tz_rel[i],
+                            tz_abs[i],
+                            talpha[i],
+                        ),
+                    )[0]
+                    for _ in range(n_spikes[i])
+                ]
+            )
+        else:
+            
+            waveforms.append([write_template0] * n_spikes[i])
     spike_train = np.concatenate(spike_trains, axis=0)
     spike_index = np.concatenate(spike_indices, axis=0)
     waveforms = np.concatenate(waveforms, axis=0)

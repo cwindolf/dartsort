@@ -73,7 +73,7 @@ def convolutional_module(
 
 
 def convtranspose_module(
-    in_channels, out_channels, kernel_size, *, stride=1, batchnorm=True
+    in_channels, out_channels, kernel_size, *, stride=1, batchnorm=True, activation=True
 ):
     # this padding corresponds to valid convs on the way in
     deconv = nn.ConvTranspose2d(
@@ -84,10 +84,13 @@ def convtranspose_module(
         return nn.Sequential(
             deconv,
             nn.BatchNorm2d(out_channels),
-            nn.LeakyReLU(),
+            *((nn.LeakyReLU(),) if activation else ()),
         )
     else:
-        return nn.Sequential(deconv, nn.LeakyReLU())
+        return nn.Sequential(
+            deconv,
+            *((nn.LeakyReLU(),) if activation else ()),
+        )
 
 
 def convolutional_encoder(
@@ -299,11 +302,10 @@ def convc_encoder(
     out_channels = channels
     # output shape of last layer under valid padding and unit stride
     last_h = T - sum(k[0] - 1 for k in kernel_sizes)
-    last_w = T - sum(k[1] - 1 for k in kernel_sizes)
+    last_w = C - sum(k[1] - 1 for k in kernel_sizes)
     last_c = out_channels[-1]
     assert last_w > 0  # you have too many layers for your kernel size
     print("enc", last_h, last_w, last_c, last_h * last_w * last_c)
-    strides = [(1, 2), *([1] * (len(channels) - 1))]
     # final mlp shapes
     in_dims = [last_h * last_w * last_c, *final_hidden_dims[:-1]]
     out_dims = final_hidden_dims
@@ -314,10 +316,10 @@ def convc_encoder(
         # conv modules
         *[
             convolutional_module(
-                inc, outc, ks, stride=stride, batchnorm=batchnorm
+                inc, outc, ks, batchnorm=batchnorm
             )
-            for inc, outc, ks, stride in zip(
-                in_channels, out_channels, kernel_sizes, strides
+            for inc, outc, ks in zip(
+                in_channels, out_channels, kernel_sizes
             )
         ],
         # time collapse conv?
@@ -325,9 +327,9 @@ def convc_encoder(
         nn.Flatten(),
         *[
             linear_module(
-                ind, outd, batchnorm=batchnorm, activation=i < len(in_dims)
+                ind, outd, batchnorm=batchnorm, activation=i < len(in_dims) - 1
             )
-            for i, (ind, outd) in zip(in_dims, out_dims)
+            for i, (ind, outd) in enumerate(zip(in_dims, out_dims))
         ],
     )
 
@@ -344,7 +346,7 @@ def convc_decoder(
     T, C = out_shape
 
     first_h = T - sum(k[0] - 1 for k in kernel_sizes)
-    first_w = T - sum(k[1] - 1 for k in kernel_sizes)
+    first_w = C - sum(k[1] - 1 for k in kernel_sizes)
     first_c = channels[0]
     assert first_w > 0  # you have too many layers for your kernel size
     print("dec", first_h, first_w, first_c, first_h * first_w * first_c)
@@ -353,7 +355,6 @@ def convc_decoder(
     out_dims = [*final_hidden_dims[1:], first_h * first_w * first_c]
     in_channels = channels
     out_channels = [*channels[1:], 1]
-    strides = [*([1] * (len(channels) - 1)), (1, 2)]
 
     return nn.Sequential(
         *[
@@ -366,11 +367,11 @@ def convc_decoder(
         # deconv modules
         *[
             convtranspose_module(
-                inc, outc, ks, stride=stride, batchnorm=batchnorm
+                inc, outc, ks, batchnorm=batchnorm, activation=i < len(in_channels) - 1
             )
-            for inc, outc, ks, stride in zip(
-                in_channels, out_channels, kernel_sizes, strides
-            )
+            for i, (inc, outc, ks) in enumerate(zip(
+                in_channels, out_channels, kernel_sizes
+            ))
         ],
         Squeeze(),
     )

@@ -165,12 +165,6 @@ cmp_gt_1.agreement_scores.values.max()
 cmp_gt_1.agreement_scores.values[25,190]
 
 # %%
-cmp_gt_1.get
-
-# %%
-cmp_gt_1.get_best_unit_match1(25)
-
-# %%
 num_channels = 40
 
 for gt_unit in tqdm(np.unique(gt_spike_train[:, 1])):
