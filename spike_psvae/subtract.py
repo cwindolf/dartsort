@@ -382,6 +382,7 @@ def subtraction(
                     # write new residual
                     if save_residual:
                         np.load(result.residual).tofile(residual)
+                    Path(result.residual).unlink()
 
                     # skip if nothing new
                     if not N_new:
@@ -415,7 +416,6 @@ def subtraction(
                         ]
 
                     # delete original files
-                    Path(result.residual).unlink()
                     Path(result.subtracted_wfs).unlink()
                     if do_clean:
                         Path(result.cleaned_wfs).unlink()
@@ -428,7 +428,6 @@ def subtraction(
                     N += N_new
 
     # -- done!
-    batch_data_folder.rmdir()
     if save_residual:
         residual.close()
     print("Done. Detected", N, "spikes")
@@ -436,6 +435,10 @@ def subtraction(
     if save_residual:
         print(residual_bin)
     print(out_h5)
+    try:
+        batch_data_folder.rmdir()
+    except OSError as e:
+        print(e)
     return out_h5
 
 
@@ -627,7 +630,7 @@ def subtraction_batch(
 
     # return early if there were no spikes
     if not spike_index:
-        SubtractionBatchResult(
+        return SubtractionBatchResult(
             N_new=0,
             s_start=s_start,
             s_end=s_end,
