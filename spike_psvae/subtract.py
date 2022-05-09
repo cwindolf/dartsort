@@ -645,25 +645,27 @@ def subtraction_batch(
     # get cleaned waveforms
     cleaned_wfs = None
     if do_clean:
-        cleaned_wfs = read_waveforms(
-            residual,
-            spike_index,
-            spike_length_samples,
-            extract_channel_index,
-            trough_offset=trough_offset,
-            buffer=buffer,
-        )
-        cleaned_wfs = full_denoising(
-            cleaned_wfs + subtracted_wfs,
-            spike_index[:, 1],
-            extract_channel_index,
-            radial_parents,
-            do_enforce_decrease=do_enforce_decrease,
-            probe=probe,
-            tpca=tpca,
-            device=device,
-            denoiser=denoiser,
-        )
+        cleaned_wfs = subtracted_wfs
+        if spike_index.size:
+            cleaned_wfs = read_waveforms(
+                residual,
+                spike_index,
+                spike_length_samples,
+                extract_channel_index,
+                trough_offset=trough_offset,
+                buffer=buffer,
+            )
+            cleaned_wfs = full_denoising(
+                cleaned_wfs + subtracted_wfs,
+                spike_index[:, 1],
+                extract_channel_index,
+                radial_parents,
+                do_enforce_decrease=do_enforce_decrease,
+                probe=probe,
+                tpca=tpca,
+                device=device,
+                denoiser=denoiser,
+            )
 
     # strip buffer from residual and remove spikes in buffer
     residual = residual[buffer:-buffer]
