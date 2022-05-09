@@ -4,6 +4,7 @@ from tempfile import TemporaryDirectory
 import spikeinterface.full as si
 from tqdm.auto import tqdm
 from sklearn.decomposition import PCA
+import gc
 
 from . import denoise
 
@@ -14,17 +15,20 @@ def get_templates(
     raw_binary_file,
     residual_binary_file,
     subtracted_waveforms,
+    subtracted_max_channels,
+    extract_channel_index,
     n_templates=None,
     max_spikes_per_unit=500,
     do_tpca=True,
     reducer=np.mean,
-    snr_threshold=10 * np.sqrt(200),
-    n_jobs=20,
+    snr_threshold=7.5 * np.sqrt(100),
+    n_jobs=30,
     spike_length_samples=121,
     trough_offset=42,
     sampling_frequency=30_000,
     return_raw_cleaned=False,
     tpca_rank=8,
+    cache_dir=None,
 ):
     """Get denoised templates
 
@@ -84,9 +88,12 @@ def get_templates(
 
     # -- get waveform extractor
     # this will sample random waveforms from the raw/residual for us
-    with TemporaryDirectory(prefix="si_deconv") as cache_dir:
+    with TemporaryDirectory(prefix="si_deconv") as tempdir:
+        if cache_dir is None:
+            cache_dir = tempdir
         cache_dir = Path(cache_dir)
 
+        print("Load raw waveforms")
         raw_we = get_waveform_extractor(
             raw_binary_file,
             spike_train,
@@ -98,6 +105,7 @@ def get_templates(
             trough_offset=trough_offset,
             sampling_frequency=sampling_frequency,
         )
+        print("Load residual waveforms")
         res_we = get_waveform_extractor(
             residual_binary_file,
             spike_train,
@@ -111,23 +119,24 @@ def get_templates(
         )
 
         # create cleaned waveforms and apply tpca if requested
-        cleaned_wfs = {
-            unit: get_unit_waveforms(
-                unit, spike_train, res_we, subtracted_waveforms
-            )
-            for unit in tqdm(units, desc="tpca cleaned wfs")
-        }
+        tpca = None
         if do_tpca:
-            tpca = PCA(tpca_rank)
-            tpca.fit(
-                np.concatenate(list(cleaned_wfs.values())).reshape(
-                    -1, spike_length_samples * len(geom)
+            cleaned_waveforms = {
+                unit: pca_on_axis(
+                    get_unit_waveforms(
+                        unit,
+                        spike_train,
+                        res_we,
+                        subtracted_waveforms,
+                        subtracted_max_channels,
+                        extract_channel_index,
+                    ),
+                    axis=1,
+                    rank=tpca_rank,
                 )
-            )
-            cleaned_wfs = {
-                u: tpca.inverse_transform(tpca.transform(x))
-                for u, x in cleaned_wfs.items()
+                for unit in tqdm(units, desc="tpca cleaned wfs")
             }
+        print("done", flush=True)
 
         # -- main loop to make templates
         for unit in tqdm(units, desc="Denoised templates"):
@@ -142,7 +151,7 @@ def get_templates(
             )
             raw_template = reducer(raw_wfs, axis=0)
             raw_ptp = raw_template.ptp(0).max()
-            snr = raw_ptp * len(raw_wfs)
+            snr = raw_ptp * np.sqrt(len(raw_wfs))
             snrs[unit] = snr
 
             if return_raw_cleaned:
@@ -153,7 +162,17 @@ def get_templates(
                 continue
 
             # load cleaned waveforms
-            cleaned_wfs = cleaned_wfs[unit]
+            if do_tpca:
+                cleaned_wfs = cleaned_waveforms[unit]
+            else:
+                cleaned_wfs = get_unit_waveforms(
+                    unit,
+                    spike_train,
+                    res_we,
+                    subtracted_waveforms,
+                    subtracted_max_channels,
+                    extract_channel_index,
+                )
 
             # enforce decrease for both, using raw maxchan
             denoise.enforce_decrease_shells(
@@ -188,13 +207,33 @@ def get_templates(
     return templates, snrs
 
 
+def pca_on_axis(X, axis=-1, rank=8):
+    axis = list(range(X.ndim))[axis]
+    pca = PCA(rank)
+    X = np.moveaxis(X, axis, -1)
+    shape = X.shape
+    X = X.reshape(-1, shape[-1])
+    X = pca.fit_transform(X)
+    X = pca.inverse_transform(X)
+    X = X.reshape(shape)
+    X = np.moveaxis(X, -1, axis)
+    return X
+
+
 def get_unit_waveforms(
-    unit, spike_train, waveform_extractor, subtracted_waveforms=None
+    unit,
+    spike_train,
+    waveform_extractor,
+    subtracted_waveforms=None,
+    maxchans=None,
+    channel_index=None,
 ):
     """Handle loading raw vs. collision-cleaned waveforms"""
     waveforms, indices = waveform_extractor.get_waveforms(
         unit, with_index=True
     )
+    # spikeinterface gave us a read-only memmap
+    waveforms = waveforms.copy()
 
     if subtracted_waveforms is not None:
         # which waveforms were sampled by the waveform extractor?
@@ -202,7 +241,11 @@ def get_unit_waveforms(
         unit_selected = unit_which[indices["spike_index"]]
 
         # add in the subtracted wfs to make collision-cleaned wfs
-        waveforms += subtracted_waveforms[unit_selected]
+        waveforms[
+            np.arange(waveforms.shape[0])[:, None, None],
+            np.arange(waveforms.shape[1])[None, :, None],
+            channel_index[maxchans[unit_selected]][:, None, :],
+        ] += subtracted_waveforms[unit_selected]
 
     return waveforms
 
@@ -267,7 +310,7 @@ def get_waveform_extractor(
         recording,
         sorting,
         wf_cache_dir,
-        overwrite=True,
+        # overwrite=True,
         ms_before=ms_before,
         ms_after=ms_after,
         max_spikes_per_unit=max_spikes_per_unit,
@@ -275,6 +318,7 @@ def get_waveform_extractor(
         chunk_size=sampling_frequency,
         progress_bar=True,
         return_scaled=False,
+        load_if_exists=True,
     )
 
     # check assumptions on what this thing does
