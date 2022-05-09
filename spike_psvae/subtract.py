@@ -383,6 +383,10 @@ def subtraction(
                     if save_residual:
                         np.load(result.residual).tofile(residual)
 
+                    # skip if nothing new
+                    if not N_new:
+                        continue
+
                     # grow arrays as necessary
                     if save_waveforms:
                         subtracted_wfs.resize(N + N_new, axis=0)
@@ -617,6 +621,25 @@ def subtraction_batch(
             subtracted_wfs.append(subwfs)
             spike_index.append(spind)
 
+    # strip buffer from residual and remove spikes in buffer
+    residual = residual[buffer:-buffer]
+    np.save(batch_data_folder / f"{batch_id:08d}_res.npy", residual)
+
+    # return early if there were no spikes
+    if not spike_index:
+        SubtractionBatchResult(
+            N_new=0,
+            s_start=s_start,
+            s_end=s_end,
+            residual=batch_data_folder / f"{batch_id:08d}_res.npy",
+            subtracted_wfs=None,
+            cleaned_wfs=None,
+            spike_index=None,
+            batch_id=batch_id,
+            localizations=None,
+            maxptps=None,
+        )
+
     subtracted_wfs = np.concatenate(subtracted_wfs, axis=0)
     spike_index = np.concatenate(spike_index, axis=0)
 
@@ -636,7 +659,7 @@ def subtraction_batch(
         spike_time_max -= spike_length_samples - trough_offset
 
     minix = np.searchsorted(spike_index[:, 0], spike_time_min, side="right")
-    maxix = -1 + np.searchsorted(
+    maxix = np.searchsorted(
         spike_index[:, 0], spike_time_max, side="left"
     )
     spike_index = spike_index[minix:maxix]
@@ -667,9 +690,6 @@ def subtraction_batch(
                 denoiser=denoiser,
             )
 
-    # strip buffer from residual and remove spikes in buffer
-    residual = residual[buffer:-buffer]
-
     # if caller passes None for the output folder, just return
     # the results now (eg this is used by train_pca)
     if batch_data_folder is None:
@@ -680,7 +700,6 @@ def subtraction_batch(
 
     # save the results to disk to avoid memory issues
     N_new = len(spike_index)
-    np.save(batch_data_folder / f"{batch_id:08d}_res.npy", residual)
     np.save(batch_data_folder / f"{batch_id:08d}_sub.npy", subtracted_wfs)
     np.save(batch_data_folder / f"{batch_id:08d}_si.npy", spike_index)
 
@@ -946,10 +965,12 @@ def full_denoising(
     wfs_in_probe = waveforms[in_probe_index]
 
     # Apply NN denoiser (skip if None)
+    print("A", wfs_in_probe.shape)
     if denoiser is not None:
         results = []
         for bs in range(0, wfs_in_probe.shape[0], batch_size):
             be = min(bs + batch_size, N * C)
+            print("B", bs, be, wfs_in_probe[bs:be].shape)
             results.append(
                 denoiser(
                     torch.as_tensor(
@@ -959,6 +980,8 @@ def full_denoising(
                 .cpu()
                 .numpy()
             )
+            print("C", results[-1].shape)
+        print([r.shape for r in results])
         wfs_in_probe = np.concatenate(results, axis=0)
         del results
 
