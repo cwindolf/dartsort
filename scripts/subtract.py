@@ -40,7 +40,9 @@ g.add_argument(
 g.add_argument("--nndetect", action="store_true")
 g.add_argument("--dndetect", action="store_true")
 g.add_argument(
-    "--neighborhood_kind", default="firstchan", choices=["firstchan", "box"]
+    "--neighborhood_kind",
+    default="firstchan",
+    choices=["firstchan", "box", "circle"],
 )
 g.add_argument(
     "--enforce_decrease_kind",

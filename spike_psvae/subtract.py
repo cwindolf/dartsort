@@ -92,7 +92,7 @@ def subtraction(
             maxptps : (N,)
                 Only computed/saved if `localization_kind="logbarrier"`
     """
-    if neighborhood_kind not in ("firstchan", "box"):
+    if neighborhood_kind not in ("firstchan", "box", "circle"):
         raise ValueError(
             "Neighborhood kind", neighborhood_kind, "not understood."
         )
@@ -188,6 +188,13 @@ def subtraction(
     if neighborhood_kind == "box":
         extract_channel_index = make_channel_index(
             geom, extract_box_radius, distance_order=False, p=box_norm_p
+        )
+        # use radius-based localization neighborhood
+        loc_n_chans = None
+        loc_radius = localize_radius
+    elif neighborhood_kind == "circle":
+        extract_channel_index = make_channel_index(
+            geom, extract_box_radius, distance_order=False, p=2
         )
         # use radius-based localization neighborhood
         loc_n_chans = None
