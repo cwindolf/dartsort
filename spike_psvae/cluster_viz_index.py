@@ -10,7 +10,6 @@ from matplotlib_venn import venn2
 import matplotlib.transforms as transforms
 from matplotlib.patches import Ellipse
 
-
 ccolors = cc.glasbey[:31]
 
 
@@ -127,7 +126,7 @@ def array_scatter(
     if fig is not None:
         plt.tight_layout()
 
-    return fig
+    return fig, axes
 
 
 def plot_waveforms_geom(
@@ -231,8 +230,8 @@ def plot_waveforms_geom(
                     trace = waveforms[
                         i,
                         t_range[0] : t_range[1],
-                        np.flatnonzero(np.isin(wf_chans, channel))[0],
-                    ]
+                       np.flatnonzero(np.isin(wf_chans, channel))[0],
+                    ] 
                 else:
                     continue
                 if residual_bin:
