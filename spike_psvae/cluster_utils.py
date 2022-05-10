@@ -196,6 +196,41 @@ def remove_duplicate_units(clusterer, spike_frames, maxptps):
 
     return clusterer, remove_ids
 
+def remove_duplicate_spikes(clusterer, spike_frames, maxptps, frames_dedup=20):
+    #normalize agreement by smaller unit and then remove only the spikes with agreement
+    sorting = make_sorting_from_labels_frames(clusterer.labels_, spike_frames)
+    #remove duplicates
+    cmp_self = compare_two_sorters(sorting, sorting, match_score=.1, chance_score=.1)
+    removed_cluster_ids = set()
+    remove_spikes = []
+    for cluster_id in sorting.get_unit_ids():
+        possible_matches = cmp_self.possible_match_12[cluster_id]
+        # possible_matches[possible_matches!=cluster_id])
+        if len(possible_matches) == 2:
+            st_1 = sorting.get_unit_spike_train(possible_matches[0])
+            st_2 = sorting.get_unit_spike_train(possible_matches[1])
+            sts = [st_1, st_2]
+            ind_st1, ind_st2, not_match_ind_st1, not_match_ind_st2 = compute_spiketrain_agreement(st_1, st_2, delta_frames=frames_dedup)
+            indices_agreement = [ind_st1, ind_st2]
+            mean_ptp_matches = [np.mean(maxptps[clusterer.labels_==cluster_id]) for cluster_id in possible_matches]
+            remove_cluster_id = possible_matches[np.argmin(mean_ptp_matches)]
+            remove_spike_indices = indices_agreement[np.argmin(mean_ptp_matches)]
+            if remove_cluster_id not in removed_cluster_ids:
+                remove_spikes.append((remove_cluster_id, remove_spike_indices))
+                removed_cluster_ids.add(remove_cluster_id)
+    remove_indices_list = []
+    for cluster_id, spike_indices in remove_spikes:
+        remove_indices = np.where(clusterer.labels_ == cluster_id)[0][spike_indices]
+        clusterer.labels_[remove_indices] = -1
+        remove_indices_list.append(remove_indices)
+    
+    #make sequential
+    for i, label in enumerate(np.setdiff1d(np.unique(clusterer.labels_), [-1])):
+        label_indices = np.where(clusterer.labels_ == label)
+        clusterer.labels_[label_indices] = i 
+
+    return clusterer, remove_indices_list, remove_spikes
+
 def get_closest_clusters_hdbscan(cluster_id, cluster_centers, num_close_clusters=2):
     curr_cluster_center = cluster_centers.loc[cluster_id].to_numpy()
     dist_other_clusters = np.linalg.norm(curr_cluster_center[:2] - cluster_centers.iloc[:,:2].to_numpy(), axis=1)
@@ -242,52 +277,6 @@ def relabel_by_depth(clusterer, cluster_centers):
     new_labels = np.vectorize(label_to_id.get)(clusterer.labels_) 
     clusterer.labels_ = new_labels
     return clusterer
-
-def run_weighted_triage(x, y, z, alpha, maxptps, pcs=None, scales=(1,10,1,15,30,10),threshold=100, ptp_threshold=3, c=1, ptp_weighting=True):
-    ptp_filter = np.where(maxptps>ptp_threshold)
-    x = x[ptp_filter]
-    y = y[ptp_filter]
-    z = z[ptp_filter]
-    alpha = alpha[ptp_filter]
-    maxptps = maxptps[ptp_filter]
-    if pcs is not None:
-        pcs = pcs[ptp_filter]
-        feats = np.c_[scales[0]*x,
-                      # scales[1]*np.log(y),
-                      scales[2]*z,
-                      # scales[3]*np.log(alpha),
-                      # scales[4]*np.log(maxptps),
-                      scales[5]*pcs[:,:3]]
-    else:
-        feats = np.c_[scales[0]*x,
-                      # scales[1]*np.log(y),
-                      scales[2]*z,
-                      # scales[3]*np.log(alpha),
-                      scales[4]*np.log(maxptps)]
-    
-    tree = cKDTree(feats)
-    dist, ind = tree.query(feats, k=6)
-    dist = dist[:,1:]
-    # dist = np.sum((c*np.log(dist)),1)
-    # print(dist)
-    if ptp_weighting:
-        dist = np.sum(c*np.log(dist) + np.log(1/(scales[4]*np.log(maxptps)))[:,None], 1)
-    else:
-        dist = np.sum((c*np.log(dist)),1)
-        
-    idx_keep = dist <= np.percentile(dist, threshold)
-    
-    triaged_x = x[idx_keep]
-    triaged_y = y[idx_keep]
-    triaged_z = z[idx_keep]
-    triaged_alpha = alpha[idx_keep]
-    triaged_maxptps = maxptps[idx_keep]
-    triaged_pcs = None
-    if pcs is not None:
-        triaged_pcs = pcs[idx_keep]
-        
-    
-    return triaged_x, triaged_y, triaged_z, triaged_alpha, triaged_maxptps, triaged_pcs, ptp_filter, idx_keep
 
 def make_sorting_from_labels_frames(labels, spike_frames, sampling_frequency=30000):
     # times_list = []
