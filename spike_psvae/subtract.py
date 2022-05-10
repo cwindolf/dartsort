@@ -32,6 +32,7 @@ def subtraction(
     neighborhood_kind="firstchan",
     extract_box_radius=200,
     extract_firstchan_n_channels=40,
+    box_norm_p=np.inf,
     spike_length_samples=121,
     trough_offset=42,
     dedup_spatial_radius=70,
@@ -186,7 +187,7 @@ def subtraction(
     nn_channel_index = make_channel_index(geom, dedup_spatial_radius, steps=1)
     if neighborhood_kind == "box":
         extract_channel_index = make_channel_index(
-            geom, extract_box_radius, distance_order=False, p=1
+            geom, extract_box_radius, distance_order=False, p=box_norm_p
         )
         # use radius-based localization neighborhood
         loc_n_chans = None
