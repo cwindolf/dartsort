@@ -988,12 +988,12 @@ def full_denoising(
     wfs_in_probe = waveforms[in_probe_index]
 
     # Apply NN denoiser (skip if None)
-    print("A", wfs_in_probe.shape)
+#     print("A", wfs_in_probe.shape)
     if denoiser is not None:
         results = []
         for bs in range(0, wfs_in_probe.shape[0], batch_size):
             be = min(bs + batch_size, N * C)
-            print("B", bs, be, wfs_in_probe[bs:be].shape)
+#             print("B", bs, be, wfs_in_probe[bs:be].shape)
             results.append(
                 denoiser(
                     torch.as_tensor(
@@ -1003,8 +1003,8 @@ def full_denoising(
                 .cpu()
                 .numpy()
             )
-            print("C", results[-1].shape)
-        print([r.shape for r in results])
+#             print("C", results[-1].shape)
+#         print([r.shape for r in results])
         wfs_in_probe = np.concatenate(results, axis=0)
         del results
 
