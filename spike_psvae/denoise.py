@@ -374,3 +374,23 @@ def cleaned_waveforms(
         enforce_decrease(cleaned[i], in_place=True)
 
     return cleaned
+
+
+# %%
+def denoise_wf_nn_tmp_single_channel(wf, denoiser, device):
+    denoiser = denoiser.to(device)
+    n_data, n_times, n_chans = wf.shape
+    if wf.shape[0] > 0:
+        wf_reshaped = wf.transpose(0, 2, 1).reshape(-1, n_times)
+        wf_torch = torch.FloatTensor(wf_reshaped).to(device)
+        denoised_wf = denoiser(wf_torch).data
+        denoised_wf = denoised_wf.reshape(n_data, n_chans, n_times)
+        denoised_wf = denoised_wf.cpu().data.numpy().transpose(0, 2, 1)
+
+        del wf_torch
+    else:
+        denoised_wf = np.zeros(
+            (wf.shape[0], wf.shape[1] * wf.shape[2]), "float32"
+        )
+
+    return denoised_wf
