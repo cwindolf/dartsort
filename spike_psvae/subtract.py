@@ -91,6 +91,10 @@ def subtraction(
                 The columsn are: x, y, z, alpha, z relative to max channel
             maxptps : (N,)
                 Only computed/saved if `localization_kind="logbarrier"`
+
+    Returns
+    -------
+    out_h5 : path to output hdf5 file
     """
     if neighborhood_kind not in ("firstchan", "box", "circle"):
         raise ValueError(
@@ -633,8 +637,9 @@ def subtraction_batch(
             spike_index.append(spind)
 
     # strip buffer from residual and remove spikes in buffer
-    residual = residual[buffer:-buffer]
-    np.save(batch_data_folder / f"{batch_id:08d}_res.npy", residual)
+    if batch_data_folder is not None:
+        residual = residual[buffer:-buffer]
+        np.save(batch_data_folder / f"{batch_id:08d}_res.npy", residual)
 
     # return early if there were no spikes
     if batch_data_folder is None and not spike_index:
