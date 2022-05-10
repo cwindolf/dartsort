@@ -32,6 +32,7 @@ def subtraction(
     neighborhood_kind="firstchan",
     extract_box_radius=200,
     extract_firstchan_n_channels=40,
+    box_norm_p=np.inf,
     spike_length_samples=121,
     trough_offset=42,
     dedup_spatial_radius=70,
@@ -91,7 +92,7 @@ def subtraction(
             maxptps : (N,)
                 Only computed/saved if `localization_kind="logbarrier"`
     """
-    if neighborhood_kind not in ("firstchan", "box"):
+    if neighborhood_kind not in ("firstchan", "box", "circle"):
         raise ValueError(
             "Neighborhood kind", neighborhood_kind, "not understood."
         )
@@ -186,7 +187,14 @@ def subtraction(
     nn_channel_index = make_channel_index(geom, dedup_spatial_radius, steps=1)
     if neighborhood_kind == "box":
         extract_channel_index = make_channel_index(
-            geom, extract_box_radius, distance_order=False, p=1
+            geom, extract_box_radius, distance_order=False, p=box_norm_p
+        )
+        # use radius-based localization neighborhood
+        loc_n_chans = None
+        loc_radius = localize_radius
+    elif neighborhood_kind == "circle":
+        extract_channel_index = make_channel_index(
+            geom, extract_box_radius, distance_order=False, p=2
         )
         # use radius-based localization neighborhood
         loc_n_chans = None
@@ -629,7 +637,9 @@ def subtraction_batch(
     np.save(batch_data_folder / f"{batch_id:08d}_res.npy", residual)
 
     # return early if there were no spikes
-    if not spike_index:
+    if batch_data_folder is None and not spike_index:
+        return spike_index, subtracted_wfs
+    elif not spike_index:
         return SubtractionBatchResult(
             N_new=0,
             s_start=s_start,
@@ -668,6 +678,11 @@ def subtraction_batch(
     spike_index = spike_index[minix:maxix]
     subtracted_wfs = subtracted_wfs[minix:maxix]
 
+    # if caller passes None for the output folder, just return
+    # the results now (eg this is used by train_pca)
+    if batch_data_folder is None:
+        return spike_index, subtracted_wfs
+
     # get cleaned waveforms
     cleaned_wfs = None
     if do_clean:
@@ -692,11 +707,6 @@ def subtraction_batch(
                 device=device,
                 denoiser=denoiser,
             )
-
-    # if caller passes None for the output folder, just return
-    # the results now (eg this is used by train_pca)
-    if batch_data_folder is None:
-        return spike_index, subtracted_wfs
 
     # time relative to batch start
     spike_index[:, 0] += s_start
@@ -829,8 +839,18 @@ def train_pca(
         )
         spike_index.append(spind)
         waveforms.append(wfs)
-    spike_index = np.concatenate(spike_index, axis=0)
-    waveforms = np.concatenate(waveforms, axis=0)
+
+    try:
+        spike_index = np.concatenate(spike_index, axis=0)
+        waveforms = np.concatenate(waveforms, axis=0)
+    except ValueError as e:
+        raise ValueError(
+            f"No waveforms found in the whole {n_sec_pca} training "
+            "batches for TPCA, so we could not train it. Maybe you "
+            "can increase n_sec_pca, but also maybe there are data "
+            "issues?"
+        ) from e
+
     N, T, C = waveforms.shape
     print("Fitting PCA on", N, "waveforms from mini-subtraction")
 
@@ -968,12 +988,12 @@ def full_denoising(
     wfs_in_probe = waveforms[in_probe_index]
 
     # Apply NN denoiser (skip if None)
-    print("A", wfs_in_probe.shape)
+#     print("A", wfs_in_probe.shape)
     if denoiser is not None:
         results = []
         for bs in range(0, wfs_in_probe.shape[0], batch_size):
             be = min(bs + batch_size, N * C)
-            print("B", bs, be, wfs_in_probe[bs:be].shape)
+#             print("B", bs, be, wfs_in_probe[bs:be].shape)
             results.append(
                 denoiser(
                     torch.as_tensor(
@@ -983,8 +1003,8 @@ def full_denoising(
                 .cpu()
                 .numpy()
             )
-            print("C", results[-1].shape)
-        print([r.shape for r in results])
+#             print("C", results[-1].shape)
+#         print([r.shape for r in results])
         wfs_in_probe = np.concatenate(results, axis=0)
         del results
 
