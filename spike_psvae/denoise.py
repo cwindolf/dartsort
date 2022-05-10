@@ -10,6 +10,8 @@ from sklearn.decomposition import PCA
 from torch import nn
 from tqdm.auto import trange
 
+from .denoise_temporal_decrease import _enforce_temporal_decrease
+
 
 pretrained_path = (
     Path(__file__).parent.parent / "pretrained/single_chan_denoiser.pt"
@@ -249,13 +251,22 @@ def make_shells(geom, n_jumps=1):
 
 
 def make_radial_order_parents(
-    geom, channel_index, n_jumps_per_growth=1, n_jumps_parent=2
+    geom, channel_index, n_jumps_per_growth=1, n_jumps_parent=3
 ):
-    """Pre-computes a helper data structure for enforce_decrease_shells
-
-    channel_index should be distance ordered
-    """
+    """Pre-computes a helper data structure for enforce_decrease_shells"""
     n_channels = len(channel_index)
+
+    # ensure channel index is distance ordered
+    dist_sort = np.array(
+        [
+            np.argsort(
+                np.linalg.norm(
+                    geom[c][None, :] - geom[channel_index[c]], axis=1
+                )
+            )
+            for c in range(len(geom))
+        ]
+    )
 
     # which channels should we consider as possible parents for each channel?
     shells = make_shells(geom, n_jumps=n_jumps_parent)
@@ -332,7 +343,47 @@ def enforce_decrease_shells(
     )
 
 
-@torch.inference_mode()
+def enforce_temporal_decrease(
+    waveforms,
+    left=True,
+    right=True,
+    trough_offset=42,
+    center_radius=50,
+    in_place=False,
+):
+    """Enforce monotonicity of abs values at the edges
+
+    Finds the peaks to the left and right of the trough, and
+    makes sure we decrease to either side of those.
+    """
+    N, T, C = waveforms.shape
+    waveforms = waveforms.transpose(0, 2, 1).reshape(N * C, T)
+
+    if not in_place:
+        waveforms = waveforms.copy()
+
+    if left and center_radius < trough_offset:
+        # probably not good to do this in a data-driven way
+        # because of collisions
+        # left_peaks = waveforms[:, :trough_offset].argmax(1)
+        left_peaks = np.full(N, trough_offset - center_radius)
+        _enforce_temporal_decrease(
+            waveforms[:, ::-1],
+            T - left_peaks,
+        )
+
+    if right and center_radius < (T - trough_offset):
+        # right_peaks = waveforms[:, trough_offset:].argmax(1)
+        right_peaks = np.full(N, trough_offset + center_radius)
+        _enforce_temporal_decrease(
+            waveforms,
+            right_peaks,
+        )
+
+    return waveforms
+
+
+@torch.no_grad()
 def cleaned_waveforms(
     waveforms,
     spike_index,
@@ -374,3 +425,23 @@ def cleaned_waveforms(
         enforce_decrease(cleaned[i], in_place=True)
 
     return cleaned
+
+
+# %%
+def denoise_wf_nn_tmp_single_channel(wf, denoiser, device):
+    denoiser = denoiser.to(device)
+    n_data, n_times, n_chans = wf.shape
+    if wf.shape[0] > 0:
+        wf_reshaped = wf.transpose(0, 2, 1).reshape(-1, n_times)
+        wf_torch = torch.FloatTensor(wf_reshaped).to(device)
+        denoised_wf = denoiser(wf_torch).data
+        denoised_wf = denoised_wf.reshape(n_data, n_chans, n_times)
+        denoised_wf = denoised_wf.cpu().data.numpy().transpose(0, 2, 1)
+
+        del wf_torch
+    else:
+        denoised_wf = np.zeros(
+            (wf.shape[0], wf.shape[1] * wf.shape[2]), "float32"
+        )
+
+    return denoised_wf

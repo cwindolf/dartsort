@@ -1,12 +1,14 @@
 import numpy as np
 import scipy.linalg as la
 import torch
-from tqdm.auto import trange
+from tqdm.auto import trange, tqdm
 
 from .localization import localize_waveforms
 from .point_source_centering import ptp_fit, shift
-from .waveform_utils import get_local_waveforms, temporal_align
+# from .waveform_utils import get_local_waveforms, temporal_align
 from .denoise import SingleChanDenoiser
+
+from spike_psvae import localize_index
 
 
 def svd_recon(x, rank=1):
@@ -102,7 +104,7 @@ def cull_templates(
     )
 
 
-@torch.inference_mode()
+@torch.no_grad()
 def simdata(
     output_h5,
     templates,
@@ -327,3 +329,144 @@ def simdata(
         ],
         pserrs,
     )
+
+
+@torch.no_grad()
+def hybrid_recording(
+    input_bin,
+    templates,
+    geom,
+    loc_channel_index,
+    write_channel_index,
+    # generating params
+    alpha_shape=3,
+    alpha_scale=65,
+    y_shape=4,
+    y_scale=5,
+    xlims=(-50, 82),
+    z_rel_scale=15,
+    x_noise=3,
+    z_noise=5,
+    y_noise=1.5,
+    maxchan_pad=5,
+    mean_spike_rate=3,
+    # clustering params
+    n_clusters=40,
+    # other
+    do_noise=True,
+    seed=0,
+    rate_spread=10,
+):
+    rg = np.random.default_rng(seed)
+    Nt, T, n_channels = templates.shape
+    assert geom.shape == (n_channels, 2)
+    write_n_channels = write_channel_index.shape[1]
+
+    # load raw data
+    raw = np.fromfile(input_bin, dtype=np.float32)
+    raw = raw.reshape(-1, 384)
+    t_total = raw.shape[0]
+    t_total_s = t_total / 30000
+
+    # choose clusters
+    template_ptps = templates.ptp(1)
+    template_maxchans = template_ptps.argmax(1)
+    choices = np.flatnonzero(
+        (write_n_channels // 2 < template_maxchans)
+        & (template_maxchans < (n_channels - write_n_channels // 2))
+    )
+    choices = rg.choice(choices, replace=False, size=n_clusters)
+    choices.sort()
+    templates = templates[choices]
+    template_ptps = template_ptps[choices]
+    template_maxchans = template_maxchans[choices]
+
+    # localize templates
+    template_ptps_loc = template_ptps[
+        np.arange(n_clusters)[:, None],
+        loc_channel_index[template_maxchans],
+    ]
+    tx, ty, tz_rel, tz_abs, talpha = localize_index.localize_ptps_index(
+        template_ptps_loc,
+        geom,
+        template_maxchans,
+        loc_channel_index,
+    )
+
+    # pick random z offsets
+    cluster_chan_offsets = rg.integers(
+        0,
+        n_channels - 2 * (write_n_channels // 2 + 1),
+        size=n_clusters,
+    )
+    # cluster_chan_offsets -= cluster_chan_offsets % 4
+
+    # pick point process params
+    if isinstance(mean_spike_rate, list):
+        spike_rates = rg.uniform(low=mean_spike_rate[0], high=mean_spike_rate[1], size=n_clusters)
+    else:
+        spike_rates = rg.gamma(rate_spread, scale=mean_spike_rate / rate_spread, size=n_clusters)
+    n_spikes = rg.poisson(lam=spike_rates * t_total_s, size=n_clusters)
+
+    # -- generate spike train
+    spike_trains = []
+    spike_indices = []
+    waveforms = []
+    for i, unit in enumerate(tqdm(choices)):
+        while True:
+            spike_train = rg.choice(
+                t_total - T, size=n_spikes[i], replace=False
+            )
+            # be refractory
+            if (np.abs(np.diff(spike_train)) > 40).all():
+                break
+        spike_trains.append(np.c_[spike_train, [i] * n_spikes[i]])
+        spike_indices.append(
+            np.c_[spike_train, [cluster_chan_offsets[i]] * n_spikes[i]]
+        )
+        write_template0 = templates[i]
+        write_template0 = write_template0[:, write_channel_index[template_maxchans[i]]]
+        if do_noise:
+            waveforms.append(
+                [
+                    shift(
+                        write_template0,
+                        write_channel_index[template_maxchans[i], 0],
+                        template_maxchans[i],
+                        geom,
+                        dx=rg.normal(scale=x_noise),
+                        dz=rg.normal(z_noise),
+                        y1=np.abs(ty[i] + rg.normal(scale=y_noise)),
+                        alpha1=rg.gamma(
+                            alpha_shape, scale=talpha[i] / (alpha_shape - 1)
+                        ),
+                        loc0=(
+                            tx[i],
+                            ty[i],
+                            tz_rel[i],
+                            tz_abs[i],
+                            talpha[i],
+                        ),
+                    )[0]
+                    for _ in range(n_spikes[i])
+                ]
+            )
+        else:
+            
+            waveforms.append([write_template0] * n_spikes[i])
+    spike_train = np.concatenate(spike_trains, axis=0)
+    spike_index = np.concatenate(spike_indices, axis=0)
+    waveforms = np.concatenate(waveforms, axis=0)
+    print(spike_train.shape, spike_index.shape, waveforms.shape)
+
+    # now we np.add.at and return
+    time_range = np.arange(T)
+    time_ix = spike_train[:, 0, None] + time_range[None, :]
+    chan_ix = write_channel_index[spike_index[:, 1]]
+    np.add.at(
+        raw,
+        (time_ix[:, :, None], chan_ix[:, None, :]),
+        waveforms,
+    )
+
+    return raw, spike_train, spike_index, waveforms, choices, templates
