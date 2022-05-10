@@ -22,7 +22,7 @@ def ptp_at(x, y, z, alpha, local_geom):
     )
 
 
-def localize_ptp_index(ptp, local_geom):
+def localize_ptp_index(ptp, local_geom, logbarrier=True):
     """Find the localization result for a single ptp vector
 
     Arguments
@@ -56,7 +56,7 @@ def localize_ptp_index(ptp, local_geom):
         alpha = (q * ptp / maxptp).sum() / (q * q).sum()
         return (
             np.square(ptp / maxptp - ptp_at(x, y, z, alpha)).mean()
-            - np.log1p(10.0 * y) / 10000.0
+            - (np.log1p(10.0 * y) / 10000.0 if logbarrier else 0)
         )
 
     result = minimize(
@@ -78,9 +78,10 @@ def localize_ptps_index(
     maxchans,
     channel_index,
     n_channels=None,
-    radius=100,
+    radius=None,
     n_workers=None,
     pbar=True,
+    logbarrier=True,
 ):
     """Localize a bunch of waveforms
 
@@ -97,9 +98,12 @@ def localize_ptps_index(
 
     local_geoms = np.pad(geom, [(0, 1), (0, 0)])[channel_index[maxchans]]
     local_geoms[:, :, 1] -= geom[maxchans, 1][:, None]
-    subset = channel_index_subset(
-        geom, channel_index, n_channels=n_channels, radius=radius
-    )
+    if n_channels is not None or radius is not None:
+        subset = channel_index_subset(
+            geom, channel_index, n_channels=n_channels, radius=radius
+        )
+    else:
+        subset = [slice(None)] * len(geom)
 
     # handle pbars
     xqdm = tqdm if pbar else lambda a, total, desc: a
@@ -115,6 +119,7 @@ def localize_ptps_index(
                 delayed(localize_ptp_index)(
                     ptp[subset[mc]],
                     local_geom[subset[mc]],
+                    logbarrier=logbarrier,
                 )
                 for ptp, mc, local_geom in xqdm(
                     zip(ptps, maxchans, local_geoms), total=N, desc="lsq"

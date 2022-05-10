@@ -251,6 +251,7 @@ def get_merged(standardized_path, geom_array, n_templates, spike_index, labels, 
                 unit_bis = dist_argsort[unit, j]
                 unit_bis_reference = reference_units[unit_bis]
                 if unit_reference != unit_bis_reference:
+                    print(unit_reference, unit_bis_reference)
 #                     ALIGN BASED ON MAX PTP TEMPLATE MC 
                     if templates[unit_reference].ptp(0).max() < templates[unit_bis_reference].ptp(0).max():
                         mc = templates[unit_bis_reference].ptp(0).argmax()
