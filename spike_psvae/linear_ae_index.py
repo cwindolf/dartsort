@@ -5,6 +5,7 @@ from sklearn.base import BaseEstimator, TransformerMixin
 from sklearn.decomposition import PCA
 from sklearn.impute import SimpleImputer
 from tqdm.auto import trange
+import cvxpy as cp
 import warnings
 
 from .point_source_centering import relocate_index, relocating_ptps_index
@@ -70,12 +71,14 @@ class LinearRelocAE(BaseEstimator, TransformerMixin):
         initialization="pca",
         B_updates=5,
         random_seed=0,
+        unrelocated_loss=False,
     ):
         assert len(geom) == len(channel_index)
         self.n_components = n_components
         self.geom = geom
         self.channel_index = channel_index
         self.initialization = initialization
+        self.unrelocated_loss = unrelocated_loss
         C = channel_index.shape[1]
         channel_subset = channel_index_subset(
             geom,
@@ -162,7 +165,7 @@ class LinearRelocAE(BaseEstimator, TransformerMixin):
 
         L = None
         if self.decorrelated:
-            L = np.c_[x, np.log(y), z, np.log(alpha)]
+            L = np.c_[x, np.log(y), z  - self.geom[maxchans, 1], np.log(alpha)]
 
         # trim to n_channels if necessary
         if C > self.n_channels:
@@ -207,6 +210,8 @@ class LinearRelocAE(BaseEstimator, TransformerMixin):
             # Nx1xC transformation to invert the relocation
             destandardization = (q / r)[:, None, :]
             destandardization[np.isnan(destandardization)] = 0
+            if self.unrelocated_loss:
+                destandardization[destandardization > 0] = 1
             S = np.broadcast_to(destandardization, (relocated_waveforms.shape))
 
         # -- initialize B with PCA in relocated space
@@ -286,16 +291,18 @@ class LinearRelocAE(BaseEstimator, TransformerMixin):
 
             L = None
             if self.decorrelated:
-                L = np.C[
+                L = np.c_[
                     x[bs:be],
                     np.log(y[bs:be]),
-                    z[bs:be],
+                    z[bs:be] - self.geom[maxchans[bs:be], 1],
                     np.log(alpha[bs:be]),
                 ]
 
             # Nx1xC transformation to invert the relocation
             destandardization = (q / r)[:, None, :]
             destandardization[np.isnan(destandardization)] = 0
+            if self.unrelocated_loss:
+                destandardization[destandardization > 0] = 1
             S = np.broadcast_to(destandardization, (relocated_waveforms.shape))
 
             centered_relocated = relocated_waveforms - self.mean_[None]
@@ -349,12 +356,26 @@ def update_F(S, W_prime, B, L=None):
     assert T == T_ == T__
     if L is not None:
         assert L.shape[0] == N
+        
+    # S = S.reshape(N, T * C).T
+    # W = W_prime.reshape(N, T * C).T
+    
+        
+    # F = cp.Variable((K, N))
+    # cost = cp.sum_squares(cp.multiply(S, (W - B.reshape(T * C, K) @ F)))
+    # constraints = []
+    # if L is not None:
+    #     print("constrained")
+    #     constraints = [N * K * 4 * F @ L == 0]
+    # prob = cp.Problem(cp.Minimize(cost), constraints)
+    # prob.solve(verbose=True)
+    # return F.value
 
     with timer("construct"):
         # construct problem
-        y = (S * W_prime).T.ravel(order="F")
+        y = (S * W_prime).ravel(order="C")
         dvS = sparse.dia_matrix(
-            (S.ravel(order="F"), 0), shape=(N * T * C, N * T * C)
+            (S.ravel(order="C"), 0), shape=(N * T * C, N * T * C)
         )
         X = dvS @ sparse.kron(sparse.eye(N), B.reshape(T * C, K))
 
@@ -363,22 +384,34 @@ def update_F(S, W_prime, B, L=None):
 
         if L is not None:
             A = sparse.kron(L.T, sparse.eye(K))
-            zeros = sparse.dok_matrix((4 * K, 4 * K))
-            coefts = sparse.bmat(
-                [
-                    [XTX, A.T],
-                    [A, zeros],
-                ],
-                format="csc",
-            )
+#             zeros = sparse.dok_matrix((4 * K, 4 * K))
+#             coefts = sparse.bmat(
+#                 [
+#                     [XTX, A.T],
+#                     [A, zeros],
+#                 ],
+#                 format="csc",
+#             )
 
-            targ = sparse.bmat(
-                [
-                    [nyTX[:, None]],
-                    [sparse.dok_matrix((4 * K, 1))],
-                ],
-                format="csc",
-            ).toarray()[:, 0]
+#             targ = sparse.bmat(
+#                 [
+#                     [nyTX[:, None]],
+#                     [sparse.dok_matrix((4 * K, 1))],
+#                 ],
+#                 format="csc",
+#             ).toarray()[:, 0]
+            print(A.toarray().shape)
+            u, s, vh = np.linalg.svd(A.toarray())
+            print("usv", u.shape, s.shape, vh.shape)
+            print(XTX.shape, A.shape, nyTX.shape)
+            span = vh[:8]
+            ker = vh[8:]
+            print("span, ker", span.shape, ker.shape)
+            Ps = span.T @ np.linalg.pinv(span @ span.T) @ span
+            Pk = ker.T @ np.linalg.pinv(ker @ ker.T) @ ker
+            ALinv = Pk @ np.linalg.inv( (XTX @ Pk + Ps) )
+            F = ALinv @ nyTX
+            return F.reshape(K, N)
         else:
             coefts = XTX
             targ = nyTX
@@ -386,23 +419,39 @@ def update_F(S, W_prime, B, L=None):
         # preconditioning really helps a lot! both with cond issues and speed
         # simple diagonal preconditioner, see
         # https://stanford.edu/group/SOL/software/lsmr/
-        D = sparse.linalg.norm(coefts, axis=1)
-        D[D == 0] = 1
-        D = sparse.dia_matrix((1 / D, 0), shape=coefts.shape)
+#         D = sparse.linalg.norm(coefts, axis=1)
+#         D[D == 0] = 1
+#         D = sparse.dia_matrix((1 / D, 0), shape=coefts.shape)
 
-    with timer("F lsmr"):
-        res_lsmr = sparse.linalg.lsmr(
-            coefts @ D,
-            targ,
-            atol=1e-6 / (N * K),
-            btol=1e-6 / (N * K),
-        )
+#     with timer("F lsmr"):
+#         # res_lsmr = sparse.linalg.lsmr(
+#         #     coefts @ D,
+#         #     targ,
+#         #     atol=1e-6 / (N * K + 4 * K * (L is not None)),
+#         #     btol=1e-6 / (N * K + 4 * K * (L is not None)),
+#         #     maxiter=100 * (N * K + 4 * K * (L is not None)),
+#         # )
+#         res_lsmr = sparse.linalg.gcrotmk(
+#             coefts @ D,
+#             targ,
+#             tol=1e-6 / (N * K + 4 * K * (L is not None)),
+#             # btol=1e-6 / (N * K + 4 * K * (L is not None)),
+#             maxiter=100 * (N * K + 4 * K * (L is not None)),
+#         )
+#         # res = sparse.linalg.minres(
+#         #     coefts @ D,
+#         #     targ,
+#         #     tol=1e-6 / (N * K + 4 * K * (L is not None)),
+#         #     # btol=1e-6 / (N * K + 4 * K * (L is not None)),
+#         #     maxiter=100 * (N * K + 4 * K * (L is not None)),
+#         # )
+#         # res_lsmr = (res[0], 0)
 
-    # check good convergence
-    if res_lsmr[1] not in (0, 1, 4):
-        warnings.warn(f"Convergence value in F update was {res_lsmr[1]}")
-    F = D @ res_lsmr[0]
-    F = F[: K * N].reshape(N, K).T
+#     # check good convergence
+#     if res_lsmr[1] not in (0, 1, 4):
+#         warnings.warn(f"Convergence value in F update was {res_lsmr[1]}")
+#     F = D @ res_lsmr[0]
+#     F = F[: K * N].reshape(N, K).T
 
     #     res_cg = sparse.linalg.cg(
     #         coefts,
@@ -427,9 +476,9 @@ def update_B(S, W_prime, F):
     assert N == N_ == N__
     assert T == T_ and C == C_
 
-    y = (S * W_prime).T.ravel(order="F")
+    y = (S * W_prime).ravel(order="C")
     dvS = sparse.dia_matrix(
-        (S.ravel(order="F"), 0), shape=(N * T * C, N * T * C)
+        (S.ravel(order="C"), 0), shape=(N * T * C, N * T * C)
     )
     X = dvS @ sparse.kron(F.T, sparse.eye(T * C))
     XTX = X.T @ X
@@ -450,7 +499,7 @@ def update_B(S, W_prime, F):
     # check good convergence
     if res_lsmr[1] not in (0, 1, 4):
         warnings.warn(f"Convergence value in B update was {res_lsmr[1]}")
-    B = (D @ res_lsmr[0]).reshape(T * C, K)
+    B = (D @ res_lsmr[0]).reshape(K, T * C).T
     B /= np.linalg.norm(B, axis=0, keepdims=True)
     B = B.reshape(T, C, K)
     # B = res_lsmr[0].reshape(T, C, K)
