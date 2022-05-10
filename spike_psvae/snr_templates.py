@@ -13,13 +13,15 @@ def get_templates(
     geom,
     raw_binary_file,
     residual_binary_file,
-    subtracted_waveforms,
-    subtracted_max_channels,
-    extract_channel_index,
+    subtracted_waveforms=None,
+    subtracted_max_channels=None,
+    extract_channel_index=None,
     n_templates=None,
     max_spikes_per_unit=500,
     do_tpca=True,
     do_enforce_decrease=True,
+    do_temporal_decrease=True,
+    do_collision_clean=False,
     reducer=np.mean,
     snr_threshold=5.0 * np.sqrt(200),
     n_jobs=30,
@@ -113,9 +115,10 @@ def get_templates(
 
         if return_extra:
             extra["original_raw"][unit] = original_raw_template
-    
-        ogmax = raw_wfs.ptp(1).max(1)
+
         raw_maxchans = np.full(len(raw_wfs), raw_maxchan)
+        if do_temporal_decrease:
+            denoise.enforce_temporal_decrease(raw_wfs, in_place=True)
         if do_enforce_decrease:
             denoise.enforce_decrease_shells(
                 raw_wfs,
@@ -123,7 +126,6 @@ def get_templates(
                 radial_parents,
                 in_place=True,
             )
-        newmax = raw_wfs.ptp(1).max(1)
         raw_templates[unit] = reducer(raw_wfs, axis=0)
         raw_ptp = raw_templates[unit].ptp(0).max()
         snr = raw_ptp * np.sqrt(len(raw_wfs))
@@ -134,23 +136,28 @@ def get_templates(
             continue
 
         # load cleaned waveforms
-        cleaned_wfs = get_waveforms(
-            unit,
-            spike_train,
-            residual_binary_file,
-            len(geom),
-            subtracted_waveforms=subtracted_waveforms,
-            maxchans=subtracted_max_channels,
-            channel_index=extract_channel_index,
-            max_spikes_per_unit=max_spikes_per_unit,
-            trough_offset=trough_offset,
-            spike_length_samples=spike_length_samples,
-        )
-        
+        if do_collision_clean:
+            cleaned_wfs = get_waveforms(
+                unit,
+                spike_train,
+                residual_binary_file,
+                len(geom),
+                subtracted_waveforms=subtracted_waveforms,
+                maxchans=subtracted_max_channels,
+                channel_index=extract_channel_index,
+                max_spikes_per_unit=max_spikes_per_unit,
+                trough_offset=trough_offset,
+                spike_length_samples=spike_length_samples,
+            )
+        else:
+            cleaned_wfs = raw_wfs
+
         if return_extra:
             extra["original_cc"][unit] = reducer(cleaned_wfs, axis=0)
 
         # enforce decrease for both, using raw maxchan
+        if do_temporal_decrease:
+            denoise.enforce_temporal_decrease(cleaned_wfs, in_place=True)
         if do_enforce_decrease:
             denoise.enforce_decrease_shells(
                 cleaned_wfs,
@@ -162,19 +169,29 @@ def get_templates(
 
     if do_tpca:
         maxchans = cleaned_templates.ptp(1).argmax(1)
-        pca_fit_traces = np.pad(cleaned_templates, [(0, 0), (0, 0), (0, 1)], constant_values=np.nan)[
+        pca_fit_traces = np.pad(
+            cleaned_templates, [(0, 0), (0, 0), (0, 1)], constant_values=np.nan
+        )[
             np.arange(cleaned_templates.shape[0])[:, None, None],
             np.arange(cleaned_templates.shape[1])[None, :, None],
-            tpca_channel_index[maxchans][:, None, :]
+            tpca_channel_index[maxchans][:, None, :],
         ]
-        pca_fit_traces = pca_fit_traces.transpose(0, 2, 1).reshape(-1, spike_length_samples)
+        pca_fit_traces = pca_fit_traces.transpose(0, 2, 1).reshape(
+            -1, spike_length_samples
+        )
         which = ~(np.isnan(pca_fit_traces).all(axis=1))
         tpca = PCA(tpca_rank)
         tpca.fit(pca_fit_traces[which])
-        cleaned_templates = cleaned_templates.transpose(0, 2, 1).reshape(-1, spike_length_samples)
-        cleaned_templates = tpca.inverse_transform(tpca.transform(cleaned_templates))
-        cleaned_templates = cleaned_templates.reshape(-1, len(geom), spike_length_samples).transpose(0, 2, 1)
-        
+        cleaned_templates = cleaned_templates.transpose(0, 2, 1).reshape(
+            -1, spike_length_samples
+        )
+        cleaned_templates = tpca.inverse_transform(
+            tpca.transform(cleaned_templates)
+        )
+        cleaned_templates = cleaned_templates.reshape(
+            -1, len(geom), spike_length_samples
+        ).transpose(0, 2, 1)
+
     # SNR-weighted combination to create the template
     lerp = np.minimum(1.0, snrs / snr_threshold)[:, None, None]
     templates = lerp * raw_templates + (1 - lerp) * cleaned_templates
