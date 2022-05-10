@@ -1,3 +1,8 @@
+# %%
+# %load_ext autoreload
+# %autoreload 2
+
+# %%
 import h5py
 import numpy as np
 import matplotlib.pyplot as plt
@@ -5,6 +10,9 @@ from pathlib import Path
 from tqdm.auto import tqdm
 import pandas as pd
 import argparse
+import spikeinterface.comparison as sc
+from spikeinterface.extractors import NumpySorting
+import spikeinterface.widgets as sw
 
 # %%
 from spike_psvae import (
@@ -18,14 +26,12 @@ from spike_psvae import (
     localization,
 )
 
-ap = argparse.ArgumentParser()
+# ap = argparse.ArgumentParser()
+# ap.add_argument("subject")
+# args = ap.parse_args()
+# subject = args.subject
 
-ap.add_argument("subject")
-
-args = ap.parse_args()
-
-# subject = "SWC_054"
-subject = args.subject
+subject = "SWC_054"
 
 hybrid_bin_dir = Path("/mnt/3TB/charlie/hybrid_1min_output/")
 hybrid_res_dir = Path("/mnt/3TB/charlie/hybrid_1min_res/")
@@ -41,6 +47,15 @@ hybrid_gt_h5 = hybrid_bin_dir / f"{subject}_gt.h5"
 output_dir = hybrid_res_dir / subject / "gt_comparison"
 output_dir.mkdir(exist_ok=True)
 
+# %%
+sub_h5
+
+# %%
+hybrid_res_dir / subject / "aligned_spike_index.npy"
+
+# %%
+# %ll {{hybrid_res_dir /subject}}
+
 # %% tags=[]
 # load features
 with h5py.File(sub_h5, "r") as h5:
@@ -48,7 +63,7 @@ with h5py.File(sub_h5, "r") as h5:
     end_sample = h5["end_sample"][()]
     start_sample = h5["start_sample"][()]
     #     print(start_sample, end_sample)
-    #     spike_index = h5["spike_index"][:]
+    o_spike_index = h5["spike_index"][:]
     #     # x, y, z, alpha, z_rel = h5["localizations"][:].T
     #     maxptps = h5["maxptps"][:]
     #     z_abs = h5["z_reg"][:]
@@ -61,7 +76,11 @@ with h5py.File(sub_h5, "r") as h5:
     channel_index = h5["channel_index"][:]
 #     z_reg = h5["z_reg"][:]
 hdb_spike_index = np.load(hybrid_res_dir / subject / "aligned_spike_index.npy")
+print("al", hdb_spike_index.shape)
+hdb_spike_index = o_spike_index
+print("unal", hdb_spike_index.shape)
 hdb_labels = np.load(hybrid_res_dir / subject / "labels.npy")
+print("lab", hdb_labels.shape)
 cluster_centers = pd.read_csv(hybrid_res_dir / subject / "cluster_centers.csv")
 nontriaged = np.flatnonzero(hdb_labels >= 0)
 hdb_spike_train = np.c_[
@@ -96,45 +115,54 @@ gt_spike_index = gt_spike_index[argsort]
 gt_spike_train[:, 0] += 42
 gt_spike_index[:, 0] += 42
 
-# create kilosort SpikeInterface sorting
-sorting_gt = cluster_utils.make_sorting_from_labels_frames(
-    gt_spike_train[:, 1], gt_spike_train[:, 0]
-)
-# create hdbscan/localization SpikeInterface sorting (with triage)
-sorting_hdbl_t = cluster_utils.make_sorting_from_labels_frames(
-    hdb_spike_train[:, 1], hdb_spike_train[:, 0]
-)
+# %%
+hdb_units, hdb_counts = np.unique(hdb_spike_train[:, 1], return_counts=True)
+plt.hist(hdb_counts, bins=32);
 
-cmp_1 = cluster_utils.compare_two_sorters(
-    sorting_hdbl_t,
+# %%
+gt_units, gt_counts = np.unique(gt_spike_train[:, 1], return_counts=True)
+plt.hist(gt_counts, bins=32);
+
+# %%
+print("gt", gt_spike_train[:10])
+sorting_gt = NumpySorting.from_times_labels(
+    times_list=gt_spike_train[:, 0],
+    labels_list=gt_spike_train[:, 1],
+    sampling_frequency=30_000,
+)
+print("hdb", hdb_spike_train[:10])
+sorting_hdb = NumpySorting.from_times_labels(
+    times_list=hdb_spike_train[:, 0],
+    labels_list=hdb_spike_train[:, 1],
+    sampling_frequency=30_000,
+)
+cmp_1 = sc.compare_two_sorters(
+    sorting_hdb,
     sorting_gt,
     sorting1_name="ours",
     sorting2_name="hybrid_gt",
-    match_score=0.1,
+    verbose=True
 )
-matched_units_1 = cmp_1.get_matching()[0].index.to_numpy()[
-    np.where(cmp_1.get_matching()[0] >= 0)
-]
-unmatched_units_1 = cmp_1.get_matching()[0].index.to_numpy()[
-    np.where(cmp_1.get_matching()[0] < 0)
-]
-matches_kilos_1 = cmp_1.get_best_unit_match1(matched_units_1).values.astype(
-    int
-)
-
-cmp_gt_1 = cluster_utils.compare_two_sorters(
+cmp_gt_1 = sc.compare_two_sorters(
     sorting_gt,
-    sorting_hdbl_t,
+    sorting_hdb,
     sorting1_name="hybrid_gt",
     sorting2_name="ours",
-    match_score=0.1,
+    verbose=True
 )
-matched_units_gt_1 = cmp_gt_1.get_matching()[0].index.to_numpy()[
-    np.where(cmp_gt_1.get_matching()[0].to_numpy() >= 0)
-]
-unmatched_units_gt_1 = cmp_gt_1.get_matching()[0].index.to_numpy()[
-    np.where(cmp_gt_1.get_matching()[0].to_numpy() < 0)
-]
+
+# %%
+sorting_hdb.get_unit_spike_train(-1)
+
+# %%
+fig = plt.figure(figsize=(80, 80))
+sw.plot_agreement_matrix(cmp_gt_1, figure=fig, ordered=True)
+
+# %%
+cmp_gt_1.agreement_scores.values.max()
+
+# %%
+cmp_gt_1.agreement_scores.values[25,190]
 
 # %%
 num_channels = 40
@@ -147,7 +175,7 @@ for gt_unit in tqdm(np.unique(gt_spike_train[:, 1])):
             cluster_id,
             gt_unit,
             cmp_1,
-            sorting_hdbl_t,
+            sorting_hdb,
             sorting_gt,
             "hdb",
             "hybrid_gt",
@@ -200,7 +228,7 @@ for gt_unit in tqdm(np.unique(gt_spike_train[:, 1])):
             gt_unit,
             closest_clusters,
             sorting_gt,
-            sorting_hdbl_t,
+            sorting_hdb,
             geom_array,
             raw_data_bin,
             recording_length,
@@ -218,3 +246,5 @@ for gt_unit in tqdm(np.unique(gt_spike_train[:, 1])):
             bbox_inches="tight",
         )
         plt.close(fig)
+
+# %%

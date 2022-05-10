@@ -31,7 +31,9 @@ def subtraction(
     denoise_detect=False,
     neighborhood_kind="firstchan",
     extract_box_radius=200,
-    extract_firstchan_n_channels=40,    spike_length_samples=121,
+    extract_firstchan_n_channels=40,
+    box_norm_p=np.inf,
+    spike_length_samples=121,
     trough_offset=42,
     dedup_spatial_radius=70,
     enforce_decrease_kind="columns",
@@ -40,7 +42,7 @@ def subtraction(
     save_residual=True,
     save_waveforms=True,
     do_clean=True,
-    do_localize=True,
+    localization_kind="logbarrier",
     localize_radius=100,
     localize_firstchan_n_channels=20,
     loc_workers=4,
@@ -84,16 +86,17 @@ def subtraction(
                 Final denoised waveforms, only computed/saved if
                 `do_clean=True`
             localizations : (N, 5)
-                Only computed/saved if `do_localize=True`
+                Only computed/saved if `localization_kind` is `"logbarrier"`
+                or `"original"`
                 The columsn are: x, y, z, alpha, z relative to max channel
             maxptps : (N,)
-                Only computed/saved if `do_localize=True`
+                Only computed/saved if `localization_kind="logbarrier"`
     """
     if neighborhood_kind not in ("firstchan", "box"):
         raise ValueError(
             "Neighborhood kind", neighborhood_kind, "not understood."
         )
-    if enforce_decrease_kind not in ("columns", "radial"):
+    if enforce_decrease_kind not in ("columns", "radial", "none"):
         raise ValueError(
             "Enforce decrease method", enforce_decrease_kind, "not understood."
         )
@@ -112,9 +115,9 @@ def subtraction(
         residual_bin = out_folder / f"residual_{stem}_t_{t_start}_{t_end}.bin"
     try:
         if out_h5.exists():
-            with h5py.File(out_h5, "r+") as _d:
+            with h5py.File(out_h5, "r+") as _:
                 pass
-            del _d
+            del _
     except BlockingIOError as e:
         raise ValueError(
             f"Output HDF5 {out_h5} is currently in use by another program. "
@@ -184,20 +187,15 @@ def subtraction(
     nn_channel_index = make_channel_index(geom, dedup_spatial_radius, steps=1)
     if neighborhood_kind == "box":
         extract_channel_index = make_channel_index(
-            geom, extract_box_radius, distance_order=False, p=1
+            geom, extract_box_radius, distance_order=False, p=box_norm_p
         )
         # use radius-based localization neighborhood
         loc_n_chans = None
         loc_radius = localize_radius
     elif neighborhood_kind == "firstchan":
-        extract_channel_index = []
-        for c in range(n_channels):
-            low = max(0, c - extract_firstchan_n_channels // 2)
-            low = min(n_channels - extract_firstchan_n_channels, low)
-            extract_channel_index.append(
-                np.arange(low, low + extract_firstchan_n_channels)
-            )
-        extract_channel_index = np.array(extract_channel_index)
+        extract_channel_index = make_contiguous_channel_index(
+            n_channels, n_neighbors=extract_firstchan_n_channels
+        )
 
         # use old firstchan style localization neighborhood
         loc_n_chans = localize_firstchan_n_channels
@@ -206,14 +204,25 @@ def subtraction(
         assert False
 
     # helper data structure for radial enforce decrease
+    do_enforce_decrease = True
+    radial_parents = None
     if enforce_decrease_kind == "radial":
         radial_parents = denoise.make_radial_order_parents(
             geom, extract_channel_index, n_jumps_per_growth=1, n_jumps_parent=3
         )
     elif enforce_decrease_kind == "columns":
-        radial_parents = None
+        pass
     else:
-        assert False
+        print("Skipping enforce decrease.")
+        do_enforce_decrease = False
+
+    # check localization arg
+    if localization_kind in ("original", "logbarrier"):
+        print("Using", localization_kind, "localization")
+        do_localize = True
+    else:
+        print("No localization")
+        do_localize = False
 
     # pre-fit temporal PCA
     tpca = None
@@ -224,10 +233,13 @@ def subtraction(
                 if "tpca_mean" in output_h5:
                     tpca_mean = output_h5["tpca_mean"][:]
                     tpca_components = output_h5["tpca_components"][:]
-                    print("Loading TPCA from h5")
-                    tpca = PCA(tpca_components.shape[0])
-                    tpca.mean_ = tpca_mean
-                    tpca.components_ = tpca_components
+                    if (tpca_mean == 0).all():
+                        print("H5 exists but TPCA params == 0. Will redo it.")
+                    else:
+                        print("Loading TPCA from h5")
+                        tpca = PCA(tpca_components.shape[0])
+                        tpca.mean_ = tpca_mean
+                        tpca.components_ = tpca_components
 
         # otherwise, train it
         if tpca is None:
@@ -245,6 +257,7 @@ def subtraction(
                     nn_detector_path,
                     denoise_detect,
                     nn_channel_index,
+                    do_enforce_decrease=do_enforce_decrease,
                     probe=probe,
                     standardized_dtype=np.float32,
                     n_sec_pca=n_sec_pca,
@@ -301,7 +314,7 @@ def subtraction(
             subtracted_wfs = output_h5["subtracted_waveforms"]
             if do_clean:
                 cleaned_wfs = output_h5["cleaned_waveforms"]
-        if do_localize:
+        if localization_kind in ("original", "logbarrier"):
             locs = output_h5["localizations"]
             maxptps = output_h5["maxptps"]
         N = len(spike_index)
@@ -337,9 +350,10 @@ def subtraction(
                 end_sample,
                 do_clean,
                 radial_parents,
-                do_localize,
+                localization_kind,
                 loc_workers,
                 geom,
+                do_enforce_decrease,
                 probe,
                 loc_n_chans,
                 loc_radius,
@@ -369,6 +383,11 @@ def subtraction(
                     # write new residual
                     if save_residual:
                         np.load(result.residual).tofile(residual)
+                    Path(result.residual).unlink()
+
+                    # skip if nothing new
+                    if not N_new:
+                        continue
 
                     # grow arrays as necessary
                     if save_waveforms:
@@ -398,7 +417,6 @@ def subtraction(
                         ]
 
                     # delete original files
-                    Path(result.residual).unlink()
                     Path(result.subtracted_wfs).unlink()
                     if do_clean:
                         Path(result.cleaned_wfs).unlink()
@@ -411,7 +429,6 @@ def subtraction(
                     N += N_new
 
     # -- done!
-    batch_data_folder.rmdir()
     if save_residual:
         residual.close()
     print("Done. Detected", N, "spikes")
@@ -419,6 +436,10 @@ def subtraction(
     if save_residual:
         print(residual_bin)
     print(out_h5)
+    try:
+        batch_data_folder.rmdir()
+    except OSError as e:
+        print(e)
     return out_h5
 
 
@@ -493,9 +514,10 @@ def subtraction_batch(
     end_sample,
     do_clean,
     radial_parents,
-    do_localize,
+    localization_kind,
     loc_workers,
     geom,
+    do_enforce_decrease,
     probe,
     loc_n_chans,
     loc_radius,
@@ -544,8 +566,8 @@ def subtraction_batch(
         considered (in samples)
     radial_parents
         Helper data structure for enforce_decrease
-    do_localize : bool
-        Should we run localization?
+    localization_kind : str
+        How should we run localization?
     loc_workers : int
         on how many threads?
     geom : array
@@ -596,11 +618,31 @@ def subtraction_batch(
             trough_offset=trough_offset,
             spike_length_samples=spike_length_samples,
             device=device,
+            do_enforce_decrease=do_enforce_decrease,
             probe=probe,
         )
         if len(spind):
             subtracted_wfs.append(subwfs)
             spike_index.append(spind)
+
+    # strip buffer from residual and remove spikes in buffer
+    residual = residual[buffer:-buffer]
+    np.save(batch_data_folder / f"{batch_id:08d}_res.npy", residual)
+
+    # return early if there were no spikes
+    if not spike_index:
+        return SubtractionBatchResult(
+            N_new=0,
+            s_start=s_start,
+            s_end=s_end,
+            residual=batch_data_folder / f"{batch_id:08d}_res.npy",
+            subtracted_wfs=None,
+            cleaned_wfs=None,
+            spike_index=None,
+            batch_id=batch_id,
+            localizations=None,
+            maxptps=None,
+        )
 
     subtracted_wfs = np.concatenate(subtracted_wfs, axis=0)
     spike_index = np.concatenate(spike_index, axis=0)
@@ -621,7 +663,7 @@ def subtraction_batch(
         spike_time_max -= spike_length_samples - trough_offset
 
     minix = np.searchsorted(spike_index[:, 0], spike_time_min, side="right")
-    maxix = -1 + np.searchsorted(
+    maxix = np.searchsorted(
         spike_index[:, 0], spike_time_max, side="left"
     )
     spike_index = spike_index[minix:maxix]
@@ -630,27 +672,27 @@ def subtraction_batch(
     # get cleaned waveforms
     cleaned_wfs = None
     if do_clean:
-        cleaned_wfs = read_waveforms(
-            residual,
-            spike_index,
-            spike_length_samples,
-            extract_channel_index,
-            trough_offset=trough_offset,
-            buffer=buffer,
-        )
-        cleaned_wfs = full_denoising(
-            cleaned_wfs + subtracted_wfs,
-            spike_index[:, 1],
-            extract_channel_index,
-            radial_parents,
-            probe=probe,
-            tpca=tpca,
-            device=device,
-            denoiser=denoiser,
-        )
-
-    # strip buffer from residual and remove spikes in buffer
-    residual = residual[buffer:-buffer]
+        cleaned_wfs = subtracted_wfs
+        if spike_index.size:
+            cleaned_wfs = read_waveforms(
+                residual,
+                spike_index,
+                spike_length_samples,
+                extract_channel_index,
+                trough_offset=trough_offset,
+                buffer=buffer,
+            )
+            cleaned_wfs = full_denoising(
+                cleaned_wfs + subtracted_wfs,
+                spike_index[:, 1],
+                extract_channel_index,
+                radial_parents,
+                do_enforce_decrease=do_enforce_decrease,
+                probe=probe,
+                tpca=tpca,
+                device=device,
+                denoiser=denoiser,
+            )
 
     # if caller passes None for the output folder, just return
     # the results now (eg this is used by train_pca)
@@ -662,7 +704,6 @@ def subtraction_batch(
 
     # save the results to disk to avoid memory issues
     N_new = len(spike_index)
-    np.save(batch_data_folder / f"{batch_id:08d}_res.npy", residual)
     np.save(batch_data_folder / f"{batch_id:08d}_sub.npy", subtracted_wfs)
     np.save(batch_data_folder / f"{batch_id:08d}_si.npy", spike_index)
 
@@ -672,7 +713,7 @@ def subtraction_batch(
         np.save(clean_file, cleaned_wfs)
 
     localizations_file = maxptps_file = None
-    if do_localize:
+    if localization_kind in ("original", "logbarrier"):
         locwfs = cleaned_wfs if do_clean else subtracted_wfs
         locptps = locwfs.ptp(1)
         xs, ys, z_rels, z_abss, alphas = localize_index.localize_ptps_index(
@@ -684,6 +725,7 @@ def subtraction_batch(
             radius=loc_radius,
             n_workers=loc_workers,
             pbar=False,
+            logbarrier=localization_kind == "logbarrier",
         )
         localizations_file = batch_data_folder / f"{batch_id:08d}_loc.npy"
         np.save(localizations_file, np.c_[xs, ys, z_abss, alphas, z_rels])
@@ -722,6 +764,7 @@ def train_pca(
     nn_detector_path,
     denoise_detect,
     nn_channel_index,
+    do_enforce_decrease=True,
     probe=None,
     standardized_dtype=np.float32,
     n_sec_pca=10,
@@ -777,6 +820,7 @@ def train_pca(
             False,
             None,
             None,
+            do_enforce_decrease,
             probe,
             None,
             None,
@@ -819,6 +863,7 @@ def detect_and_subtract(
     trough_offset=42,
     spike_length_samples=121,
     device="cpu",
+    do_enforce_decrease=True,
     probe=None,
 ):
     """Detect and subtract
@@ -875,6 +920,7 @@ def detect_and_subtract(
         spike_index[:, 1],
         extract_channel_index,
         radial_parents,
+        do_enforce_decrease=do_enforce_decrease,
         probe=probe,
         tpca=tpca,
         device=device,
@@ -900,7 +946,8 @@ def full_denoising(
     waveforms,
     maxchans,
     extract_channel_index,
-    radial_parents,
+    radial_parents=None,
+    do_enforce_decrease=True,
     probe=None,
     tpca=None,
     device=None,
@@ -922,10 +969,12 @@ def full_denoising(
     wfs_in_probe = waveforms[in_probe_index]
 
     # Apply NN denoiser (skip if None)
+    print("A", wfs_in_probe.shape)
     if denoiser is not None:
         results = []
         for bs in range(0, wfs_in_probe.shape[0], batch_size):
             be = min(bs + batch_size, N * C)
+            print("B", bs, be, wfs_in_probe[bs:be].shape)
             results.append(
                 denoiser(
                     torch.as_tensor(
@@ -935,6 +984,8 @@ def full_denoising(
                 .cpu()
                 .numpy()
             )
+            print("C", results[-1].shape)
+        print([r.shape for r in results])
         wfs_in_probe = np.concatenate(results, axis=0)
         del results
 
@@ -960,7 +1011,7 @@ def full_denoising(
                 )
         elif probe == "np2":
             for i in range(N):
-                denoise.enforce_decrease_np1(
+                denoise.enforce_decrease(
                     waveforms[i], max_chan=rel_maxchans[i], in_place=True
                 )
         else:
@@ -970,7 +1021,8 @@ def full_denoising(
             waveforms, maxchans, radial_parents, in_place=True
         )
     else:
-        assert False
+        # no enforce decrease
+        pass
 
     return waveforms
 
@@ -1016,6 +1068,7 @@ def get_output_h5(
     spike_length_samples,
     do_clean=True,
     do_localize=True,
+    save_waveforms=True,
     overwrite=False,
     chunk_len=4096,
 ):
@@ -1027,6 +1080,8 @@ def get_output_h5(
         if len(output_h5["spike_index"]) > 0:
             last_sample = output_h5["spike_index"][-1, 0]
     else:
+        if overwrite:
+            print("Overwriting previous results, if any.")
         output_h5 = h5py.File(out_h5, "w")
 
         # initialize datasets
@@ -1040,13 +1095,14 @@ def get_output_h5(
 
         # resizable datasets so we don't fill up space
         extract_channels = extract_channel_index.shape[1]
-        output_h5.create_dataset(
-            "subtracted_waveforms",
-            shape=(0, spike_length_samples, extract_channels),
-            chunks=(chunk_len, spike_length_samples, extract_channels),
-            maxshape=(None, spike_length_samples, extract_channels),
-            dtype=np.float32,
-        )
+        if save_waveforms:
+            output_h5.create_dataset(
+                "subtracted_waveforms",
+                shape=(0, spike_length_samples, extract_channels),
+                chunks=(chunk_len, spike_length_samples, extract_channels),
+                maxshape=(None, spike_length_samples, extract_channels),
+                dtype=np.float32,
+            )
         output_h5.create_dataset(
             "spike_index",
             shape=(0, 2),
@@ -1062,7 +1118,7 @@ def get_output_h5(
                 maxshape=(None,),
                 dtype=np.int64,
             )
-        if do_clean:
+        if save_waveforms and do_clean:
             output_h5.create_dataset(
                 "cleaned_waveforms",
                 shape=(0, spike_length_samples, extract_channels),
@@ -1148,6 +1204,17 @@ def order_channels_by_distance(reference, channels, geom):
     coord_others = geom[channels]
     idx = np.argsort(np.sum(np.square(coord_others - coord_main), axis=1))
     return channels[idx], idx
+
+
+def make_contiguous_channel_index(n_channels, n_neighbors=40):
+    channel_index = []
+    for c in range(n_channels):
+        low = max(0, c - n_neighbors // 2)
+        low = min(n_channels - n_neighbors, low)
+        channel_index.append(np.arange(low, low + n_neighbors))
+    channel_index = np.array(channel_index)
+
+    return channel_index
 
 
 def make_channel_index(geom, radius, steps=1, distance_order=True, p=2):

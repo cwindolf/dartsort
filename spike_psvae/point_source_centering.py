@@ -75,7 +75,7 @@ def shift(
     loc0=None,
 ):
     ptp = waveform.ptp(0)
-    n_channels = ptp.shape[1]
+    n_channels = ptp.shape[0]
     if loc0 is None:
         x0, y0, z_rel0, z_abs0, alpha0 = localize_ptp(
             ptp, firstchan, maxchan, geom

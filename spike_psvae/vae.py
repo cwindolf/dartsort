@@ -14,6 +14,8 @@ class VAE(nn.Module):
         encoder,
         decoder,
         latent_dim,
+        beta=1.0,
+        variational=True,
     ):
         super(VAE, self).__init__()
 
@@ -21,13 +23,19 @@ class VAE(nn.Module):
 
         self.encoder = encoder
         self.decoder = decoder
+        self.variational = variational
+        self.beta = beta
 
-        self.fc_mu = nn.Linear(latent_dim, latent_dim)
-        self.fc_logvar = nn.Linear(latent_dim, latent_dim)
+        if self.variational:
+            self.fc_mu = nn.Linear(latent_dim, latent_dim)
+            self.fc_logvar = nn.Linear(latent_dim, latent_dim)
 
     def encode(self, x):
         h = self.encoder(x)
-        return self.fc_mu(h), self.fc_logvar(h)
+        if self.variational:
+            return self.fc_mu(h), self.fc_logvar(h)
+        else:
+            return h, None
 
     def reparametrize(self, mu, logvar):
         std = torch.exp(0.5 * logvar)
@@ -43,13 +51,16 @@ class VAE(nn.Module):
         # print("forward x.shape", x.shape)
         mu, logvar = self.encode(x)
         # print("forward mu.shape", mu.shape, "logvar.shape", logvar.shape)
-        z = self.reparametrize(mu, logvar)
+        if self.variational:
+            z = self.reparametrize(mu, logvar)
+        else:
+            z = mu
         # print("forward z.shape", z.shape)
         recon_x = self.decode(z)
         # print("forward recon_x.shape", recon_x.shape)
         return recon_x, mu, logvar
 
-    def loss(self, x, y, recon_x, y_hat, mu, logvar):
+    def loss(self, x, recon_x, mu, logvar):
         # print(
         #    "loss \n\t- x.shape", x.shape,
         #    "\n\t- y.shape", y.shape,
@@ -66,7 +77,9 @@ class VAE(nn.Module):
         # note, -DKL is in ELBO, which we want to maximize.
         # here, we are minimizing, so take just DKL.
         # we omit the factor of 1/2 here and in errors below
-        dkl = torch.mean((mu.pow(2) + logvar.exp() - 1 - logvar).sum(axis=1))
+        dkl = 0
+        if self.variational:
+            dkl = torch.mean((mu.pow(2) + logvar.exp() - 1 - logvar).sum(axis=1))
 
         # reconstruction error -- conditioned gaussian log likelihood
         # we make the "variational assumption" that p(x | z) has std=1
@@ -74,7 +87,7 @@ class VAE(nn.Module):
         # half as above)
         mse_recon = F.mse_loss(x, recon_x)
 
-        loss = dkl + mse_recon
+        loss = self.beta * dkl + mse_recon
         loss_dict = {
             "dkl": dkl,
             "mse_recon": mse_recon,

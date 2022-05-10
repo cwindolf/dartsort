@@ -7,17 +7,17 @@ from .layers import Permute, Squeeze, Unsqueeze
 # -- linear / mlp with batch normalization and leaky relu
 
 
-def linear_module(in_dim, out_dim, batchnorm=True):
+def linear_module(in_dim, out_dim, batchnorm=True, activation=True):
     if batchnorm:
         seq = nn.Sequential(
             nn.Linear(in_dim, out_dim),
             nn.BatchNorm1d(out_dim),
-            nn.LeakyReLU(),
+            *((nn.LeakyReLU(),) if activation else ()),
         )
     else:
         seq = nn.Sequential(
             nn.Linear(in_dim, out_dim),
-            nn.LeakyReLU(),
+            *((nn.LeakyReLU(),) if activation else ()),
         )
     seq.output_dim = out_dim
 
@@ -73,7 +73,7 @@ def convolutional_module(
 
 
 def convtranspose_module(
-    in_channels, out_channels, kernel_size, *, stride=1, batchnorm=True
+    in_channels, out_channels, kernel_size, *, stride=1, batchnorm=True, activation=True
 ):
     # this padding corresponds to valid convs on the way in
     deconv = nn.ConvTranspose2d(
@@ -84,10 +84,13 @@ def convtranspose_module(
         return nn.Sequential(
             deconv,
             nn.BatchNorm2d(out_channels),
-            nn.LeakyReLU(),
+            *((nn.LeakyReLU(),) if activation else ()),
         )
     else:
-        return nn.Sequential(deconv, nn.LeakyReLU())
+        return nn.Sequential(
+            deconv,
+            *((nn.LeakyReLU(),) if activation else ()),
+        )
 
 
 def convolutional_encoder(
@@ -275,6 +278,100 @@ def convb_decoder(
             for inc, outc, ks, stride in zip(
                 in_channels, out_channels, kernel_sizes, strides
             )
+        ],
+        Squeeze(),
+    )
+
+
+def convc_encoder(
+    in_shape,
+    channels,
+    kernel_sizes,
+    final_hidden_dims,
+    batchnorm=True,
+):
+    # -- input shape logic
+    # data should come in as T x channels. But, our probes have
+    # two columns of electrodes, and we will treat this "2" as the
+    # color/channel dimension on the input for convolutions.
+    assert len(in_shape) == 2
+    T, C = in_shape
+
+    # -- more shape logic for the hidden layers
+    in_channels = [1, *channels[:-1]]
+    out_channels = channels
+    # output shape of last layer under valid padding and unit stride
+    last_h = T - sum(k[0] - 1 for k in kernel_sizes)
+    last_w = C - sum(k[1] - 1 for k in kernel_sizes)
+    last_c = out_channels[-1]
+    assert last_w > 0  # you have too many layers for your kernel size
+    print("enc", last_h, last_w, last_c, last_h * last_w * last_c)
+    # final mlp shapes
+    in_dims = [last_h * last_w * last_c, *final_hidden_dims[:-1]]
+    out_dims = final_hidden_dims
+
+    return nn.Sequential(
+        # BTC -> B1TC
+        Unsqueeze(1),
+        # conv modules
+        *[
+            convolutional_module(
+                inc, outc, ks, batchnorm=batchnorm
+            )
+            for inc, outc, ks in zip(
+                in_channels, out_channels, kernel_sizes
+            )
+        ],
+        # time collapse conv?
+        # flatten and linear module for latents
+        nn.Flatten(),
+        *[
+            linear_module(
+                ind, outd, batchnorm=batchnorm, activation=i < len(in_dims) - 1
+            )
+            for i, (ind, outd) in enumerate(zip(in_dims, out_dims))
+        ],
+    )
+
+
+def convc_decoder(
+    final_hidden_dims,
+    channels,
+    kernel_sizes,
+    out_shape,
+    batchnorm=True,
+):
+    # -- "transposed" shape logic to the above
+    assert len(out_shape) == 2
+    T, C = out_shape
+
+    first_h = T - sum(k[0] - 1 for k in kernel_sizes)
+    first_w = C - sum(k[1] - 1 for k in kernel_sizes)
+    first_c = channels[0]
+    assert first_w > 0  # you have too many layers for your kernel size
+    print("dec", first_h, first_w, first_c, first_h * first_w * first_c)
+
+    in_dims = final_hidden_dims
+    out_dims = [*final_hidden_dims[1:], first_h * first_w * first_c]
+    in_channels = channels
+    out_channels = [*channels[1:], 1]
+
+    return nn.Sequential(
+        *[
+            linear_module(
+                ind, outd, batchnorm=batchnorm
+            )
+            for ind, outd in zip(in_dims, out_dims)
+        ],
+        nn.Unflatten(1, (first_c, first_h, first_w)),
+        # deconv modules
+        *[
+            convtranspose_module(
+                inc, outc, ks, batchnorm=batchnorm, activation=i < len(in_channels) - 1
+            )
+            for i, (inc, outc, ks) in enumerate(zip(
+                in_channels, out_channels, kernel_sizes
+            ))
         ],
         Squeeze(),
     )
