@@ -385,8 +385,10 @@ def gplot(
     ax=None,
     color="k",
     lw=1,
+    ls="-",
     pad=0.1,
-    label=None
+    label=None,
+    vline=False,
 ):
     """Scale is in units of inter-channel Z dists
     """
@@ -396,7 +398,7 @@ def gplot(
     if yscale is None:
         yscale = 1 / waveform.ptp(0).max()
         
-    gscalex = geom[1, 0] - geom[0, 0]
+    gscalex = np.abs(geom[1, 0] - geom[0, 0])
     gscaley = geom[2, 1] - geom[0, 1]
     waveform = yscale * gscaley * waveform
     
@@ -412,8 +414,10 @@ def gplot(
         trace = trace + geom[chan, 1]
         ext = (min(ext[0], trace.min()), max(ext[1], trace.max()))
         lines.append(trace)
+        if vline:
+            ax.axvline(domain[trough] + geom[chan, 0], c="silver", lw=1)
     
-    p = ax.plot(*lines, color=color, lw=lw, label=label)
+    p = ax.plot(*lines, color=color, lw=lw, label=label, ls=ls)
     ax.set_ylim([ext[0] - pad * gscaley, ext[1] + pad * gscaley])
     
     return p
