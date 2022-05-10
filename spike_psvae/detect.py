@@ -77,7 +77,7 @@ def detect_and_deduplicate(
             spike_index = np.c_[times.cpu().numpy(), chans.cpu().numpy()]
             spike_index[:, 0] -= buffer_size
         else:
-            return [], []
+            return np.array([]), np.array([])
 
     if torch.is_tensor(spike_index):
         spike_index = spike_index.cpu().numpy()
@@ -214,7 +214,7 @@ def nn_detect_and_deduplicate(
     # threshold
     which = energy > energy_threshold
     if not which.any():
-        return [], []
+        return torch.tensor([]), torch.tensor([])
     spike_index_torch = spike_index_torch[which]
     energy = energy[which]
     # print("after", energy.shape, energy.min(), energy.mean(), energy.max())
@@ -254,15 +254,15 @@ def voltage_detect_and_deduplicate(
             order=5,
             device=device,
         )
-        if len(times):
+        if times.numel():
             spike_index = np.c_[times.cpu().numpy(), chans.cpu().numpy()]
             energy = energy.cpu().numpy()
         else:
-            return [], []
+            return np.array([]), np.array([])
     else:
         spike_index, energy = voltage_threshold(recording, threshold)
         if not len(spike_index):
-            return [], []
+            return np.array([]), np.array([])
         spike_index, energy = deduplicate_torch(
             spike_index,
             energy,
@@ -392,8 +392,8 @@ def torch_voltage_detect_dedup(
     # voltage threshold
     max_energies_at_inds = max_energies.view(-1)[window_max_inds]
     which = torch.nonzero(max_energies_at_inds > threshold).squeeze()
-    if not which.size():
-        return [], [], []
+    if not which.numel():
+        return torch.tensor([]), torch.tensor([]), torch.tensor([])
 
     # -- unravel the spike index
     # (right now the indices are into flattened recording)
@@ -408,8 +408,8 @@ def torch_voltage_detect_dedup(
     compat_times = torch.nonzero(
         (0 < times) & (times < recording.shape[0] - 1)
     ).squeeze()
-    if not len(compat_times):
-        return [], [], []
+    if not compat_times.numel():
+        return torch.tensor([]), torch.tensor([]), torch.tensor([])
     times = times[compat_times]
     res_inds = which[compat_times]
     chans = window_max_inds[res_inds] % C
@@ -448,8 +448,8 @@ def torch_voltage_detect_dedup(
         dedup = torch.nonzero(
             energies >= max_energies[times, chans] - 1e-8
         ).squeeze()
-        if not len(dedup):
-            return [], [], []
+        if not dedup.numel():
+            return torch.tensor([]), torch.tensor([]), torch.tensor([])
         times = times[dedup]
         chans = chans[dedup]
         energies = energies[dedup]
@@ -482,7 +482,7 @@ class PeakToPeak(nn.Module):
 #     def forward(self, input):
 #         print(self.name, input.shape)
 #         return input
-    
+
 
 class DenoiserDetect(nn.Module):
     def __init__(self, denoiser, output_t_range=(25, 60)):
@@ -593,8 +593,8 @@ def denoiser_detect_dedup(
     # voltage threshold
     max_energies_at_inds = max_energies.view(-1)[window_max_inds]
     which = torch.nonzero(max_energies_at_inds > ptp_threshold).squeeze()
-    if not which.size():
-        return [], [], []
+    if not which.numel():
+        return torch.tensor([]), torch.tensor([]), torch.tensor([])
 
     # -- unravel the spike index
     # (right now the indices are into flattened recording)
@@ -609,8 +609,8 @@ def denoiser_detect_dedup(
     compat_times = torch.nonzero(
         (0 < times) & (times < recording.shape[0] - 1)
     ).squeeze()
-    if not len(compat_times):
-        return [], [], []
+    if not compat_times.numel():
+        return torch.tensor([]), torch.tensor([]), torch.tensor([])
     times = times[compat_times]
     res_inds = which[compat_times]
     chans = window_max_inds[res_inds] % C
@@ -649,8 +649,8 @@ def denoiser_detect_dedup(
         dedup = torch.nonzero(
             energies >= max_energies[times, chans] - 1e-8
         ).squeeze()
-        if not len(dedup):
-            return [], [], []
+        if not dedup.numel():
+            return torch.tensor([]), torch.tensor([]), torch.tensor([])
         times = times[dedup]
         chans = chans[dedup]
         energies = energies[dedup]

@@ -10,7 +10,6 @@ from matplotlib_venn import venn2
 import matplotlib.transforms as transforms
 from matplotlib.patches import Ellipse
 
-
 ccolors = cc.glasbey[:31]
 
 
@@ -41,7 +40,7 @@ def cluster_scatter(
             covs[k] = xycov
             ax.annotate(str(k), (x_mean, y_mean), size=s)
 
-    for k in means.keys():
+    for k in covs.keys():
         mean_x, mean_y = means[k]
         cov = covs[k]
 
@@ -78,10 +77,14 @@ def array_scatter(
     maxptp,
     zlim=(-50, 3900),
     axes=None,
+    do_ellipse=True,
+    alpha=0.05,
 ):
     fig = None
     if axes is None:
         fig, axes = plt.subplots(1, 3, sharey=True, figsize=(15, 15))
+        
+    excluded_ids = {-1} if do_ellipse else np.unique(labels)
 
     cluster_scatter(
         x,
@@ -89,7 +92,8 @@ def array_scatter(
         labels,
         ax=axes[0],
         s=10,
-        alpha=0.05,
+        alpha=alpha,
+        excluded_ids=excluded_ids,
     )
     axes[0].scatter(*geom.T, c="orange", marker="s", s=10)
     axes[0].set_ylabel("z")
@@ -101,7 +105,8 @@ def array_scatter(
         labels,
         ax=axes[1],
         s=10,
-        alpha=0.05,
+        alpha=alpha,
+        excluded_ids=excluded_ids,
     )
     axes[1].set_xlabel("maxptp")
     axes[2].scatter(
@@ -113,13 +118,15 @@ def array_scatter(
         cmap=plt.cm.viridis,
     )
     axes[2].scatter(*geom.T, c="orange", marker="s", s=10)
-    axes[2].set_title("ptps")
+    # axes[2].set_title("ptps")
     axes[0].set_ylim(zlim)
+    axes[1].set_ylim(zlim)
+    axes[2].set_ylim(zlim)
 
     if fig is not None:
         plt.tight_layout()
 
-    return fig
+    return fig, axes
 
 
 def plot_waveforms_geom(
@@ -223,8 +230,8 @@ def plot_waveforms_geom(
                     trace = waveforms[
                         i,
                         t_range[0] : t_range[1],
-                        np.flatnonzero(np.isin(wf_chans, channel))[0],
-                    ]
+                       np.flatnonzero(np.isin(wf_chans, channel))[0],
+                    ] 
                 else:
                     continue
                 if residual_bin:
