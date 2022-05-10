@@ -235,7 +235,6 @@ class LinearRelocAE(BaseEstimator, TransformerMixin):
                     maxchans_orig=batch_mcs,
                 )
                 C = self.n_channels
-            print(bs, batch_wfs.shape)
 
             # relocate
             relocated_waveforms, r, q = relocate_simple(
@@ -250,8 +249,8 @@ class LinearRelocAE(BaseEstimator, TransformerMixin):
                 relocate_dims=self.relocate_dims,
             )
             relocated_waveforms = relocated_waveforms.cpu().numpy()
-            r = r.cpu().numpy()
-            q = q.cpu().numpy()
+            r = np.atleast_2d(r.cpu().numpy())
+            q = np.atleast_2d(q.cpu().numpy())
 
             # Nx1xC transformation to invert the relocation
             destandardization = (q / r)[:, None, :]
@@ -300,8 +299,8 @@ class LinearRelocAE(BaseEstimator, TransformerMixin):
             relocate_dims=self.relocate_dims,
         )
         # those are torch but we want numpy
-        r = r.cpu().numpy()
-        q = q.cpu().numpy()
+        r = np.atleast_2d(r.cpu().numpy())
+        q = np.atleast_2d(q.cpu().numpy())
         destandardization = (q / r)[:, None, :]
 
         return destandardization * (
