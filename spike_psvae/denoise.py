@@ -366,7 +366,7 @@ def enforce_temporal_decrease(
         # probably not good to do this in a data-driven way
         # because of collisions
         # left_peaks = waveforms[:, :trough_offset].argmax(1)
-        left_peaks = np.full(trough_offset - center_radius)
+        left_peaks = np.full(N, trough_offset - center_radius)
         _enforce_temporal_decrease(
             waveforms[:, ::-1],
             T - left_peaks,
@@ -374,7 +374,7 @@ def enforce_temporal_decrease(
 
     if right and center_radius < (T - trough_offset):
         # right_peaks = waveforms[:, trough_offset:].argmax(1)
-        right_peaks = np.full(trough_offset + center_radius)
+        right_peaks = np.full(N, trough_offset + center_radius)
         _enforce_temporal_decrease(
             waveforms,
             right_peaks,
