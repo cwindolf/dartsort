@@ -10,7 +10,9 @@ from sklearn.decomposition import PCA
 from torch import nn
 from tqdm.auto import trange
 
-from .denoise_temporal_decrease import _enforce_temporal_decrease
+from .denoise_temporal_decrease import (
+    _enforce_temporal_decrease_right, _enforce_temporal_decrease_left
+)
 
 
 pretrained_path = (
@@ -256,18 +258,6 @@ def make_radial_order_parents(
     """Pre-computes a helper data structure for enforce_decrease_shells"""
     n_channels = len(channel_index)
 
-    # ensure channel index is distance ordered
-    dist_sort = np.array(
-        [
-            np.argsort(
-                np.linalg.norm(
-                    geom[c][None, :] - geom[channel_index[c]], axis=1
-                )
-            )
-            for c in range(len(geom))
-        ]
-    )
-
     # which channels should we consider as possible parents for each channel?
     shells = make_shells(geom, n_jumps=n_jumps_parent)
 
@@ -345,10 +335,9 @@ def enforce_decrease_shells(
 
 def enforce_temporal_decrease(
     waveforms,
-    left=True,
-    right=True,
+    left=20,
+    right=100,
     trough_offset=42,
-    center_radius=50,
     in_place=False,
 ):
     """Enforce monotonicity of abs values at the edges
@@ -362,23 +351,23 @@ def enforce_temporal_decrease(
     if not in_place:
         waveforms = waveforms.copy()
 
-    if left and center_radius < trough_offset:
-        # probably not good to do this in a data-driven way
+    if left > 0:
+        # not good to do this in a data-driven way
         # because of collisions
         # left_peaks = waveforms[:, :trough_offset].argmax(1)
-        left_peaks = np.full(N, trough_offset - center_radius)
-        _enforce_temporal_decrease(
-            waveforms[:, ::-1],
-            T - left_peaks,
+        left_peaks = np.full(N * C, left)
+        _enforce_temporal_decrease_left(
+            waveforms, left_peaks
         )
 
-    if right and center_radius < (T - trough_offset):
+    if right is not None and (right < T):
         # right_peaks = waveforms[:, trough_offset:].argmax(1)
-        right_peaks = np.full(N, trough_offset + center_radius)
-        _enforce_temporal_decrease(
-            waveforms,
-            right_peaks,
+        right_peaks = np.full(N * C, right)
+        _enforce_temporal_decrease_right(
+            waveforms, right_peaks
         )
+    
+    waveforms = waveforms.reshape(N, C, T).transpose(0, 2, 1)
 
     return waveforms
 
