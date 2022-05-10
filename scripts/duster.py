@@ -26,6 +26,7 @@ ap.add_argument("residual_data_bin")
 ap.add_argument("sub_h5")
 ap.add_argument("output_dir")
 ap.add_argument("--inmem", action="store_true")
+ap.add_argument("--doplot", action="store_true")
 
 args = ap.parse_args()
 
@@ -47,7 +48,6 @@ assert sub_h5.exists()
 
 print(raw_data_bin)
 print(residual_data_bin)
-
 
 # %%
 # raw_data_bin = Path("/mnt/3TB/charlie/re_snips/CSH_ZAD_026_snip.ap.bin")
@@ -118,6 +118,7 @@ clusterer, duplicate_ids = cluster_utils.remove_duplicate_units(
 )
 cluster_centers = cluster_utils.compute_cluster_centers(clusterer)
 clusterer = cluster_utils.relabel_by_depth(clusterer, cluster_centers)
+cluster_centers = cluster_utils.compute_cluster_centers(clusterer)
 
 # labels in full index space (not triaged)
 labels = np.full(x.shape, -1)
@@ -163,6 +164,28 @@ templates = merge_split_cleaned.get_templates(
 shifted_full_spike_index = spike_index.copy()
 shifted_full_spike_index[idx_keep_full] = shifted_triaged_spike_index
 print(shifted_full_spike_index[:, 0].min(), shifted_full_spike_index[:, 0].max())
+shifted_templates = merge_split_cleaned.get_templates(
+    raw_data_bin,
+    geom_array,
+    clusterer.labels_.max() + 1,
+    shifted_full_spike_index[idx_keep_full],
+    clusterer.labels_,
+)
+
+# save
+print("Save pre merge/split...")
+np.save(output_dir / "pre_merge_split_labels.npy", labels)
+cluster_centers.to_csv(output_dir / "pre_merge_split_cluster_centers.csv")
+with open(output_dir / "pre_merge_split_clusterer.pickle", "wb") as jar:
+    pickle.dump(clusterer, jar)
+np.save(output_dir / "pre_merge_split_aligned_spike_index.npy", shifted_full_spike_index)
+np.save(output_dir / "pre_merge_split_templates.npy", templates)
+np.save(output_dir / "pre_merge_split_aligned_templates.npy", shifted_templates)
+np.save(output_dir / "pre_merge_split_template_shifts.npy", template_shifts)
+np.save(output_dir / "pre_merge_split_template_maxchans.npy", template_maxchans)
+
+
+
 # %%
 # split
 h5 = h5py.File(sub_h5, "r")
@@ -192,6 +215,7 @@ cluster_centers = cluster_utils.compute_cluster_centers(clusterer)
 clusterer = cluster_utils.relabel_by_depth(clusterer, cluster_centers)
 labels = np.full(x.shape, -1)
 labels[idx_keep_full] = clusterer.labels_
+cluster_centers = cluster_utils.compute_cluster_centers(clusterer)
 
 # %%
 z_cutoff = [0, 500, 1000, 1500, 2000, 2500, 3000, 3500, 4000]
@@ -256,6 +280,7 @@ cluster_centers = cluster_utils.compute_cluster_centers(clusterer)
 clusterer = cluster_utils.relabel_by_depth(clusterer, cluster_centers)
 labels = np.full(x.shape, -1)
 labels[idx_keep_full] = clusterer.labels_
+cluster_centers = cluster_utils.compute_cluster_centers(clusterer)
 
 # %%
 # final templates
@@ -276,15 +301,24 @@ templates = merge_split_cleaned.get_templates(
 )
 shifted_full_spike_index = spike_index.copy()
 shifted_full_spike_index[idx_keep_full] = shifted_triaged_spike_index
+shifted_templates = merge_split_cleaned.get_templates(
+    raw_data_bin,
+    geom_array,
+    clusterer.labels_.max() + 1,
+    shifted_full_spike_index[idx_keep_full],
+    clusterer.labels_,
+)
 
 
 # save
+print("Save final...")
 np.save(output_dir / "labels.npy", labels)
 cluster_centers.to_csv(output_dir / "cluster_centers.csv")
-with open(output_dir / "clusterer.pickle", "w") as jar:
+with open(output_dir / "clusterer.pickle", "wb") as jar:
     pickle.dump(clusterer, jar)
-np.svae(output_dir / "aligned_spike_index.npy", shifted_full_spike_index)
+np.save(output_dir / "aligned_spike_index.npy", shifted_full_spike_index)
 np.save(output_dir / "templates.npy", templates)
+np.save(output_dir / "aligned_templates.npy", shifted_templates)
 np.save(output_dir / "template_shifts.npy", template_shifts)
 np.save(output_dir / "template_maxchans.npy", template_maxchans)
 
@@ -349,40 +383,60 @@ sudir.mkdir(exist_ok=True)
 
 # plot cluster summary
 
+if args.doplot:
+    def job(cluster_id):
+        if (sudir / f"unit_{cluster_id:03d}.png").exists():
+            return
+        with h5py.File(sub_h5, "r") as d:
+            # fig = cluster_viz.plot_single_unit_summary(
+            #     cluster_id,
+            #     clusterer.labels_,
+            #     cluster_centers,
+            #     geom_array,
+            #     200,
+            #     3,
+            #     tx,
+            #     tz,
+            #     tmaxptps,
+            #     firstchans[idx_keep_full],
+            #     spike_index[idx_keep_full, 1],
+            #     spike_index[idx_keep_full, 0],
+            #     idx_keep_full,
+            #     d["cleaned_waveforms"],
+            #     d["subtracted_waveforms"],
+            #     cluster_color_dict,
+            #     color_arr,
+            #     raw_data_bin,
+            #     residual_data_bin,
+            # )
+            fig = cluster_viz_index.single_unit_summary(
+                cluster_id,
+                clusterer,
+                labels,
+                geom_array,
+                idx_keep_full,
+                x,
+                z,
+                maxptps,
+                channel_index,
+                spike_index,
+                d["cleaned_waveforms"],
+                d["subtracted_waveforms"],
+                raw_data_bin,
+                residual_data_bin,
+                spikes_plot=100,
+                num_rows=3,
+            )
+            fig.savefig(sudir / f"unit_{cluster_id:03d}.png")
+            plt.close(fig)
 
-def job(cluster_id):
-    if (sudir / f"unit_{cluster_id:03d}.png").exists():
-        return
-    with h5py.File(sub_h5, "r") as d:
-        fig = cluster_viz.plot_single_unit_summary(
-            cluster_id,
-            clusterer.labels_,
-            cluster_centers,
-            geom_array,
-            200,
-            3,
-            tx,
-            tz,
-            tmaxptps,
-            firstchans[idx_keep_full],
-            spike_index[idx_keep_full, 1],
-            spike_index[idx_keep_full, 0],
-            idx_keep_full,
-            d["cleaned_waveforms"],
-            d["subtracted_waveforms"],
-            cluster_color_dict,
-            color_arr,
-            raw_data_bin,
-            residual_data_bin,
-        )
-        fig.savefig(sudir / f"unit_{cluster_id:03d}.png")
-        plt.close(fig)
 
-
-i = 0
-with loky.ProcessPoolExecutor(
-    12,
-) as p:
-    units = np.setdiff1d(np.unique(clusterer.labels_), [-1])
-    for res in tqdm(p.map(job, units), total=len(units)):
-        pass
+    i = 0
+    with loky.ProcessPoolExecutor(
+        12,
+    ) as p:
+        units = np.setdiff1d(np.unique(clusterer.labels_), [-1])
+        for res in tqdm(p.map(job, units), total=len(units)):
+            pass
+else:
+    print("No single unit figs, bye.")
