@@ -5,7 +5,7 @@ import spikeinterface.full as si
 from tqdm.auto import tqdm
 from sklearn.decomposition import PCA
 
-from . import denoise
+from . import denoise, subtract
 
 
 def get_templates(
@@ -19,15 +19,18 @@ def get_templates(
     n_templates=None,
     max_spikes_per_unit=500,
     do_tpca=True,
+    do_enforce_decrease=True,
     reducer=np.mean,
-    snr_threshold=7.5 * np.sqrt(100),
+    snr_threshold=5.0 * np.sqrt(200),
     n_jobs=30,
     spike_length_samples=121,
     trough_offset=42,
     sampling_frequency=30_000,
     return_raw_cleaned=False,
     tpca_rank=8,
+    tpca_radius=200,
     cache_dir=None,
+    return_extra=False,
 ):
     """Get denoised templates
 
@@ -74,12 +77,22 @@ def get_templates(
     if return_raw_cleaned:
         raw_templates = np.zeros_like(templates)
         cleaned_templates = np.zeros_like(templates)
+    if return_extra:
+        extra = dict(
+            original_raw=np.zeros_like(templates),
+            original_cc=np.zeros_like(templates),
+        )
 
-    # -- enforce decrease helpers
-    full_channel_index = np.array([np.arange(len(geom))] * len(geom))
-    radial_parents = denoise.make_radial_order_parents(
-        geom, full_channel_index
-    )
+    # -- helper data structures
+    if do_enforce_decrease:
+        full_channel_index = np.array([np.arange(len(geom))] * len(geom))
+        radial_parents = denoise.make_radial_order_parents(
+            geom, full_channel_index
+        )
+    if do_tpca:
+        tpca_channel_index = subtract.make_channel_index(
+            geom, tpca_radius, steps=1, distance_order=False, p=1
+        )
 
     # -- main loop to make templates
     units = np.unique(spike_train[:, 1])
@@ -95,23 +108,29 @@ def get_templates(
             trough_offset=trough_offset,
             spike_length_samples=spike_length_samples,
         )
-        raw_maxchans = raw_wfs.ptp(1).argmax(1)
-        denoise.enforce_decrease_shells(
-            raw_wfs,
-            raw_maxchans,
-            radial_parents,
-            in_place=True,
-        )
-        raw_template = reducer(raw_wfs, axis=0)
-        raw_ptp = raw_template.ptp(0).max()
+        original_raw_template = reducer(raw_wfs, axis=0)
+        raw_maxchan = original_raw_template.ptp(0).argmax()
+
+        if return_extra:
+            extra["original_raw"][unit] = original_raw_template
+    
+        ogmax = raw_wfs.ptp(1).max(1)
+        raw_maxchans = np.full(len(raw_wfs), raw_maxchan)
+        if do_enforce_decrease:
+            denoise.enforce_decrease_shells(
+                raw_wfs,
+                raw_maxchans,
+                radial_parents,
+                in_place=True,
+            )
+        newmax = raw_wfs.ptp(1).max(1)
+        raw_templates[unit] = reducer(raw_wfs, axis=0)
+        raw_ptp = raw_templates[unit].ptp(0).max()
         snr = raw_ptp * np.sqrt(len(raw_wfs))
         snrs[unit] = snr
 
-        if return_raw_cleaned:
-            raw_templates[unit] = raw_template
-
         if snr > snr_threshold:
-            templates[unit] = raw_template
+            templates[unit] = raw_templates[unit]
             continue
 
         # load cleaned waveforms
@@ -127,29 +146,43 @@ def get_templates(
             trough_offset=trough_offset,
             spike_length_samples=spike_length_samples,
         )
-
-        if do_tpca:
-            cleaned_wfs = pca_on_axis(cleaned_wfs, axis=1)
+        
+        if return_extra:
+            extra["original_cc"][unit] = reducer(cleaned_wfs, axis=0)
 
         # enforce decrease for both, using raw maxchan
-        denoise.enforce_decrease_shells(
-            cleaned_wfs,
-            raw_maxchans,
-            radial_parents,
-            in_place=True,
-        )
-        cleaned_template = reducer(cleaned_wfs, axis=0)
+        if do_enforce_decrease:
+            denoise.enforce_decrease_shells(
+                cleaned_wfs,
+                raw_maxchans,
+                radial_parents,
+                in_place=True,
+            )
+        cleaned_templates[unit] = reducer(cleaned_wfs, axis=0)
 
-        if return_raw_cleaned:
-            cleaned_templates[unit] = cleaned_template
-
-        # SNR-weighted combination to create the template
-        lerp = snr / snr_threshold
-        templates[unit] = (lerp) * raw_template + (
-            1 - lerp
-        ) * cleaned_template
+    if do_tpca:
+        maxchans = cleaned_templates.ptp(1).argmax(1)
+        pca_fit_traces = np.pad(cleaned_templates, [(0, 0), (0, 0), (0, 1)], constant_values=np.nan)[
+            np.arange(cleaned_templates.shape[0])[:, None, None],
+            np.arange(cleaned_templates.shape[1])[None, :, None],
+            tpca_channel_index[maxchans][:, None, :]
+        ]
+        pca_fit_traces = pca_fit_traces.transpose(0, 2, 1).reshape(-1, spike_length_samples)
+        which = ~(np.isnan(pca_fit_traces).all(axis=1))
+        tpca = PCA(tpca_rank)
+        tpca.fit(pca_fit_traces[which])
+        cleaned_templates = cleaned_templates.transpose(0, 2, 1).reshape(-1, spike_length_samples)
+        cleaned_templates = tpca.inverse_transform(tpca.transform(cleaned_templates))
+        cleaned_templates = cleaned_templates.reshape(-1, len(geom), spike_length_samples).transpose(0, 2, 1)
+        
+    # SNR-weighted combination to create the template
+    lerp = np.minimum(1.0, snrs / snr_threshold)[:, None, None]
+    templates = lerp * raw_templates + (1 - lerp) * cleaned_templates
 
     if return_raw_cleaned:
+        if return_extra:
+            return templates, snrs, raw_templates, cleaned_templates, extra
+
         return templates, snrs, raw_templates, cleaned_templates
 
     return templates, snrs
@@ -186,14 +219,26 @@ def get_waveforms(
     which = np.flatnonzero(spike_train[:, 1] == unit)
     N = min(max_spikes_per_unit, len(which))
     choices = rg.choice(which, replace=False, size=N)
+    choices.sort()
 
     # load from binary
-    mmap = np.memmap(binary_file, dtype=np.float32, mode="r")
-    mmap = mmap.reshape(-1, n_channels)
-    time_ix = spike_train[choices[:, 0]] + np.arange(
-        -trough_offset, spike_length_samples - trough_offset
+    # mmap = np.memmap(binary_file, dtype=np.float32, mode="r")
+    # mmap = mmap.reshape(-1, n_channels)
+    # time_ix = spike_train[choices, 0, None] + np.arange(
+    #     -trough_offset, spike_length_samples - trough_offset
+    # )
+    # waveforms = mmap[time_ix]
+    waveforms = np.empty(
+        (N, spike_length_samples, n_channels), dtype=np.float32
     )
-    waveforms = mmap[time_ix]
+    for ix, choice in enumerate(choices):
+        start = spike_train[choice, 0] - trough_offset
+        waveforms[ix] = np.fromfile(
+            binary_file,
+            np.float32,
+            count=spike_length_samples * n_channels,
+            offset=np.dtype(np.float32).itemsize * start * n_channels,
+        ).reshape(spike_length_samples, n_channels)
 
     # add in subtracted waveforms
     if subtracted_waveforms is not None:
