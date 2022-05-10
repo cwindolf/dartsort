@@ -69,10 +69,15 @@ def run_LDA_split(wfs, max_channels, n_channels=10, n_times=121):
         # ncomp = 1 #this doesn't work with hdbscan yet
         max_channels[-1] = np.unique(max_channels)[0]-1
         max_channels[0] = np.unique(max_channels)[-1]+1
-    lda_model = LDA(n_components=ncomp)
-    lda_comps = lda_model.fit_transform(
-        wfs.reshape((-1, n_times * n_channels)), max_channels
-    )
+    try:
+        lda_model = LDA(n_components=ncomp)
+        lda_comps = lda_model.fit_transform(
+            wfs.reshape((-1, n_times * n_channels)), max_channels
+        )
+    except np.linalg.LinAlgError:
+        nmc = np.unique(max_channels).shape[0]
+        print("SVD error, skipping this one. N maxchans was", nmc, "n data", len(wfs))
+        return np.zeros(len(max_channels), dtype=int)
     lda_clusterer = hdbscan.HDBSCAN(min_cluster_size=25, min_samples=25)
     lda_clusterer.fit(lda_comps)
     return lda_clusterer.labels_
@@ -109,36 +114,53 @@ def split_individual_cluster(
     pca_n_channels,
 ):
     total_channels = geom_array.shape[0]
+    N, T, wf_chans = waveforms_unit.shape
     n_channels_half = n_channels // 2
-    labels_unit = -1 * np.ones(spike_index_unit.shape[0])
-    
-    mc = max(n_channels_half, true_mc) #ex. n_channels_half=5, max(5, 2) or max(5,200)
-    mc = min(total_channels - n_channels_half, mc) #ex. total_channels-n_channels_half=379, min(379, 382) or min(379,22)
-    
-    wfs_unit = np.zeros(
-        (waveforms_unit.shape[0], waveforms_unit.shape[1], n_channels)
-    )
-    
-    #subtracted waveforms
-    for i in range(wfs_unit.shape[0]):
-        if mc == n_channels_half:
-            wfs_unit[i] = waveforms_unit[i, :, :n_channels]
-        elif mc == total_channels - n_channels_half:
-            wfs_unit[i] = waveforms_unit[
-                i, :, waveforms_unit.shape[2] - n_channels :
-            ]
-        else:
-            mc_new = int(mc - first_chans_unit[i])
-            wfs_unit[i] = waveforms_unit[
-                i, :, mc_new - n_channels_half : mc_new + n_channels_half
-            ]
 
-    #make collision-cleaned waveforms by adding residual
+    labels_unit = np.full(spike_index_unit.shape[0], -1)
+    is_split = False
+    
+    # get waveforms on n_channels chans around the template max chan
+    # TODO: residual is not being read on the same chans.
+    low = np.maximum(
+        0,
+        (true_mc - n_channels_half) - first_chans_unit
+    )
+    low = np.minimum(low, wf_chans - n_channels)
+    chan_ix = np.arange(n_channels)
+    wfs_unit = waveforms_unit[
+        np.arange(len(waveforms_unit))[:, None, None],
+        np.arange(T)[None, :, None],
+        low[:, None, None] + chan_ix[None, None, :]
+    ]
+
+    mc = max(n_channels_half, true_mc)
+    mc = min(total_channels - n_channels_half, mc)
+    assert mc - n_channels_half >= 0
+    assert mc + n_channels_half <= total_channels
+
+    # wfs_unit = waveforms_unit[:, :, mc - n_channels_half : mc + n_channels_half]
+    # wfs_unit = np.zeros(
+    #     (waveforms_unit.shape[0], waveforms_unit.shape[1], n_channels)
+    # )
+    # for i in range(wfs_unit.shape[0]):
+    #     if mc == n_channels_half:
+    #         wfs_unit[i] = waveforms_unit[i, :, :n_channels]
+    #     elif mc == total_channels - n_channels_half:
+    #         wfs_unit[i] = waveforms_unit[
+    #             i, :, waveforms_unit.shape[2] - n_channels :
+    #         ]
+    #     else:
+    #         mc_new = int(mc - first_chans_unit[i])
+    #         wfs_unit[i] = waveforms_unit[
+    #             i, :, mc_new - n_channels_half : mc_new + n_channels_half
+    #         ]
+    
     readwfs, skipped = read_waveforms(
         spike_index_unit[:, 0],
         residual_path,
         geom_array,
-        n_times=121,
+        n_times=T,
         channels=np.arange(mc - n_channels_half, mc + n_channels_half),
     )
     wfs_unit += readwfs
@@ -302,8 +324,7 @@ def split_clusters(
 ):
     labels_new = labels.copy()
     labels_original = labels.copy()
-
-    n_clusters = labels.max()
+    cur_max_label = labels.max()
     for unit in tqdm(np.setdiff1d(np.unique(labels), [-1])):
         print(f"splitting unit {unit}")
         in_unit = np.flatnonzero(labels == unit)
@@ -340,11 +361,11 @@ def split_clusters(
                     ]
                     labels_new[idx] = new_label
                 elif new_label > 0:
-                    n_clusters += 1
+                    cur_max_label += 1
                     idx = np.flatnonzero(labels_original == unit)[
                         unit_new_labels == new_label
                     ]
-                    labels_new[idx] = n_clusters
+                    labels_new[idx] = cur_max_label
     return labels_new
 
 

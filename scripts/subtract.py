@@ -28,8 +28,8 @@ g.add_argument("--overwrite", action="store_true")
 g = ap.add_argument_group("Pipeline configuration")
 g.add_argument("--geom", default=None, type=str)
 g.add_argument("--noclean", action="store_true")
-g.add_argument("--nolocalize", action="store_true")
 g.add_argument("--noresidual", action="store_true")
+g.add_argument("--notpca", action="store_true")
 
 g = ap.add_argument_group("Subtraction configuration")
 g.add_argument(
@@ -43,11 +43,11 @@ g.add_argument(
     "--neighborhood_kind", default="firstchan", choices=["firstchan", "box"]
 )
 g.add_argument(
-    "--enforce_decrease_kind", default="columns", choices=["columns", "radial"]
+    "--enforce_decrease_kind",
+    default="columns",
+    choices=["columns", "radial", "none"],
 )
-g.add_argument(
-    "--extract_box_radius", default=200, type=int
-)
+g.add_argument("--extract_box_radius", default=200, type=int)
 
 g = ap.add_argument_group("Time range: use the whole dataset, or a subset?")
 g.add_argument("--t_start", type=int, default=0)
@@ -71,9 +71,13 @@ g.add_argument("--n_jobs", type=int, default=1)
 g.add_argument("--n_loc_workers", type=int, default=4)
 g.add_argument("--nogpu", action="store_true")
 
-ap.add_argument(
-    "--localize_radius", default=100, type=int
+g = ap.add_argument_group("Localization")
+g.add_argument(
+    "--localization_kind",
+    default="logbarrier",
+    choices=["logbarrier", "original", "none"],
 )
+g.add_argument("--localize_radius", default=100, type=int)
 
 args = ap.parse_args()
 
@@ -126,8 +130,8 @@ sub_h5 = subtract.subtraction(
     t_start=args.t_start,
     t_end=args.t_end,
     do_clean=not args.noclean,
-    n_sec_pca=args.n_sec_pca,
-    do_localize=not args.nolocalize,
+    n_sec_pca=args.n_sec_pca if not args.notpca else None,
+    localization_kind=args.localization_kind,
     save_residual=not args.noresidual,
     loc_workers=args.n_loc_workers,
     localize_radius=args.localize_radius,
@@ -137,25 +141,36 @@ sub_h5 = subtract.subtraction(
 
 # -- registration
 
-if not args.nolocalize and not args.noregister:
+if (args.localization_kind != "none") and (not args.noregister):
     with h5py.File(sub_h5, "r+") as h5:
-        samples = h5["spike_index"][:, 0] - h5["start_sample"][()]
-        z_abs = h5["localizations"][:, 2]
-        maxptps = h5["maxptps"]
+        do_reg = True
+        if "z_reg" in h5 and not args.overwrite:
+            print(
+                "Resumed run already had registered z. Set --overwrite if you "
+                "want to re-run registration."
+            )
+            do_reg = False
+        elif "z_reg" in h5 and args.overwrite:
+            del h5["z_reg"]
+            del h5["dispmap"]
 
-        z_reg, dispmap = ibme.register_nonrigid(
-            maxptps,
-            z_abs,
-            samples / 30000,
-            robust_sigma=0.5,
-            disp=200,
-            denoise_sigma=0.1,
-            rigid_init=False,
-            n_windows=args.n_windows,
-            widthmul=1.0,
-        )
-        z_reg -= (z_reg - z_abs).mean()
-        dispmap -= dispmap.mean()
+        if do_reg:
+            samples = h5["spike_index"][:, 0] - h5["start_sample"][()]
+            z_abs = h5["localizations"][:, 2]
+            maxptps = h5["maxptps"]
 
-        h5.create_dataset("z_reg", data=z_reg)
-        h5.create_dataset("dispmap", data=dispmap)
+            z_reg, dispmap = ibme.register_nonrigid(
+                maxptps,
+                z_abs,
+                samples / 30000,
+                robust_sigma=0.5,
+                disp=200,
+                denoise_sigma=0.1,
+                rigid_init=False,
+                n_windows=args.n_windows,
+                widthmul=1.0,
+            )
+            z_reg -= (z_reg - z_abs).mean()
+            dispmap -= dispmap.mean()
+            h5.create_dataset("z_reg", data=z_reg)
+            h5.create_dataset("dispmap", data=dispmap)
