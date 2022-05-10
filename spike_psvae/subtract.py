@@ -637,7 +637,9 @@ def subtraction_batch(
     np.save(batch_data_folder / f"{batch_id:08d}_res.npy", residual)
 
     # return early if there were no spikes
-    if not spike_index:
+    if batch_data_folder is None and not spike_index:
+        return spike_index, subtracted_wfs
+    elif not spike_index:
         return SubtractionBatchResult(
             N_new=0,
             s_start=s_start,
@@ -676,6 +678,11 @@ def subtraction_batch(
     spike_index = spike_index[minix:maxix]
     subtracted_wfs = subtracted_wfs[minix:maxix]
 
+    # if caller passes None for the output folder, just return
+    # the results now (eg this is used by train_pca)
+    if batch_data_folder is None:
+        return spike_index, subtracted_wfs
+
     # get cleaned waveforms
     cleaned_wfs = None
     if do_clean:
@@ -700,11 +707,6 @@ def subtraction_batch(
                 device=device,
                 denoiser=denoiser,
             )
-
-    # if caller passes None for the output folder, just return
-    # the results now (eg this is used by train_pca)
-    if batch_data_folder is None:
-        return spike_index, subtracted_wfs
 
     # time relative to batch start
     spike_index[:, 0] += s_start
@@ -837,8 +839,18 @@ def train_pca(
         )
         spike_index.append(spind)
         waveforms.append(wfs)
-    spike_index = np.concatenate(spike_index, axis=0)
-    waveforms = np.concatenate(waveforms, axis=0)
+
+    try:
+        spike_index = np.concatenate(spike_index, axis=0)
+        waveforms = np.concatenate(waveforms, axis=0)
+    except ValueError as e:
+        raise ValueError(
+            f"No waveforms found in the whole {n_sec_pca} training "
+            "batches for TPCA, so we could not train it. Maybe you "
+            "can increase n_sec_pca, but also maybe there are data "
+            "issues?"
+        ) from e
+
     N, T, C = waveforms.shape
     print("Fitting PCA on", N, "waveforms from mini-subtraction")
 
