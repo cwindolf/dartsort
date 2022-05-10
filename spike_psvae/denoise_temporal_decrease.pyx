@@ -14,7 +14,7 @@ ctypedef fused floating:
 @cython.wraparound(False)
 def _enforce_temporal_decrease(
     floating[:,:] temporal_traces,
-    const int[:] peak_times,
+    const long[:] peak_times,
 ):
     cdef Py_ssize_t M = temporal_traces.shape[0]
     cdef Py_ssize_t T = temporal_traces.shape[1]
