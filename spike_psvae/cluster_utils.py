@@ -14,17 +14,17 @@ def read_waveforms(spike_times, bin_file, geom_array, n_times=121, offset_denois
     # n_times needs to be odd
     if n_times % 2 == 0:
         n_times += 1
-    n_channels = geom_array.shape[0] #len(channels)
 
     # read all channels
     if channels is None:
-        channels = range(n_channels)
+        channels = np.arange(geom_array.shape[0])
         
     # ***** LOAD RAW RECORDING *****
     wfs = np.zeros((len(spike_times), n_times, len(channels)),
                    'float32')
 
     skipped_idx = []
+    n_channels = geom_array.shape[0] #len(channels)
     total_size = n_times*n_channels
     # spike_times are the centers of waveforms
     spike_times_shifted = spike_times - (offset_denoiser) #n_times//2
@@ -42,8 +42,8 @@ def read_waveforms(spike_times, bin_file, geom_array, n_times=121, offset_denois
             except ValueError:
                 print(f"skipped {ctr, spike}")
                 skipped_idx.append(ctr)
-    if skipped_idx:
-        wfs = np.delete(wfs, skipped_idx, axis=0)
+    wfs=np.delete(wfs, skipped_idx, axis=0)
+    fin.close()
 
     return wfs, skipped_idx
 
@@ -216,10 +216,10 @@ def remove_duplicate_spikes(clusterer, spike_frames, maxptps, frames_dedup=20):
             remove_cluster_id = possible_matches[np.argmin(mean_ptp_matches)]
             remove_spike_indices = indices_agreement[np.argmin(mean_ptp_matches)]
             if remove_cluster_id not in removed_cluster_ids:
-                remove_spikes.append((remove_cluster_id, remove_spike_indices))
+                remove_spikes.append((remove_cluster_id, possible_matches, remove_spike_indices))
                 removed_cluster_ids.add(remove_cluster_id)
     remove_indices_list = []
-    for cluster_id, spike_indices in remove_spikes:
+    for cluster_id, _, spike_indices in remove_spikes:
         remove_indices = np.where(clusterer.labels_ == cluster_id)[0][spike_indices]
         clusterer.labels_[remove_indices] = -1
         remove_indices_list.append(remove_indices)
