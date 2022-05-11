@@ -200,7 +200,7 @@ def get_templates(
 
     # SNR-weighted combination to create the template
     if snr_by_channel:
-        lerp = np.minimum(1.0, snrs / snr_threshold)[:, None, :]
+        lerp = np.minimum(1.0, snr_by_channel / snr_threshold)[:, None, :]
     else:
         lerp = np.minimum(1.0, snrs / snr_threshold)[:, None, None]
     templates = lerp * raw_templates + (1 - lerp) * cleaned_templates
