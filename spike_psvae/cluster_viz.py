@@ -591,8 +591,8 @@ def plot_unit_similarity_heatmaps(cluster_id, st_1, closest_clusters, sorting, g
 
 
 def plot_unit_similarities(cluster_id, closest_clusters, sorting1, sorting2, geom, raw_data_bin, recoring_duration, num_channels=40, num_spikes_plot=100, num_channels_similarity=20, 
-                           num_close_clusters_plot=10, num_close_clusters=30, shifts_align = np.arange(-3,4), order_by ='similarity', normalize_agreement_by="both", denoised_waveforms=None, 
-                           cluster_labels=None, non_triaged_idxs=None, triaged_mcs_abs=None, triaged_firstchans=None):
+                           num_close_clusters_plot=10, num_close_clusters=30, shifts_align = np.arange(-3,4), order_by ='similarity', normalize_agreement_by="both",
+                           denoised_waveforms=None, cluster_labels=None, non_triaged_idxs=None, triaged_mcs_abs=None, triaged_firstchans=None):
     do_denoised_waveform = denoised_waveforms is not None and cluster_labels is not None and non_triaged_idxs is not None and triaged_mcs_abs is not None and triaged_firstchans is not None
     fig = plt.figure(figsize=(24, 12))
     if do_denoised_waveform:
@@ -621,12 +621,14 @@ def plot_unit_similarities(cluster_id, closest_clusters, sorting1, sorting2, geo
 
     max_ptp_channel = np.argmax(original_template.ptp(0))
     max_ptp = np.max(original_template.ptp(0))
+    z_uniq, z_ids = np.unique(geom[:, 1], return_inverse=True)
+    scale = (z_uniq[1] - z_uniq[0]) / max(7, max_ptp)
 
     plot_isi_distribution(st_1, ax=ax_isi);
 
     most_similar_cluster = closest_clusters[0]
     most_similar_shift = shifts[0]
-    h_shifts = [.2,.8]
+    h_shifts = [-5,5]
     t_shifts = [0, most_similar_shift]
     colors = [('blue','darkblue'), ('red','darkred')]
     cluster_ids_plot = [cluster_id, most_similar_cluster]
@@ -635,25 +637,24 @@ def plot_unit_similarities(cluster_id, closest_clusters, sorting1, sorting2, geo
         spike_times = sorting_plot.get_unit_spike_train(cluster_id_plot) + t_shift
         mcs_abs_cluster = np.zeros(len(spike_times)).astype('int') + max_ptp_channel
         first_chans_cluster = (mcs_abs_cluster - 20).clip(min=0)
-        waveform_scale = 2/max_ptp
-        # waveform_scale = 1/25
-        plot_raw_waveforms_unit_geom(geom, num_channels, first_chans_cluster, mcs_abs_cluster, spike_times=spike_times, bin_file=raw_data_bin, x_geom_scale = 1/15, 
-                                     y_geom_scale = 1/10, waveform_scale = waveform_scale, spikes_plot = num_spikes_plot, waveform_shape=(30,70), num_rows=3, 
-                                     alpha=.2, h_shift=h_shift, do_mean=False, ax=ax_raw_wf, color=color[0])
-        plot_raw_waveforms_unit_geom(geom, num_channels, first_chans_cluster, mcs_abs_cluster, spike_times=spike_times, bin_file=raw_data_bin, x_geom_scale = 1/15, 
-                                     y_geom_scale = 1/10, waveform_scale = waveform_scale, spikes_plot = num_spikes_plot, waveform_shape=(30,70), num_rows=3, 
-                                     alpha=1, h_shift=h_shift, do_mean=True, ax=ax_raw_wf, color=color[1])
         
-        if do_denoised_waveform:
-            mcs_abs_cluster = triaged_mcs_abs[cluster_labels==cluster_id_plot]
-            first_chans_cluster = triaged_firstchans[cluster_labels==cluster_id_plot]
-            waveforms = denoised_waveforms[non_triaged_idxs[cluster_labels==cluster_id_plot]]
-            plot_waveforms_unit_geom(geom, num_channels, first_chans_cluster, mcs_abs_cluster, waveforms, x_geom_scale = 1/15, 
-                                     y_geom_scale = 1/10, waveform_scale = waveform_scale, spikes_plot = num_spikes_plot, waveform_shape=(30,70), num_rows=3, 
-                                     alpha=.2, h_shift=h_shift, do_mean=False, ax=ax_denoised_wf, color=color[0])
-            plot_waveforms_unit_geom(geom, num_channels, first_chans_cluster, mcs_abs_cluster, waveforms, x_geom_scale = 1/15, 
-                                     y_geom_scale = 1/10, waveform_scale = waveform_scale, spikes_plot = num_spikes_plot, waveform_shape=(30,70), num_rows=3, 
-                                     alpha=1, h_shift=h_shift, do_mean=True, ax=ax_denoised_wf, color=color[1])
+        # waveform_scale = 1/25
+        
+        plot_waveforms_geom_unit(geom, first_chans_cluster, mcs_abs_cluster, spike_times, max_ptps_cluster=None, raw_bin=raw_data_bin, num_spikes_plot=num_spikes_plot,
+                                 num_channels=num_channels, alpha=.1, h_shift=h_shift, scale=scale, ax=ax_raw_wf, color=color[0])    
+        plot_waveforms_geom_unit(geom, first_chans_cluster, mcs_abs_cluster, spike_times, max_ptps_cluster=None, raw_bin=raw_data_bin, num_spikes_plot=num_spikes_plot,
+                                 num_channels=num_channels, alpha=.1, h_shift=h_shift, scale=scale, do_mean=True, ax=ax_raw_wf, color=color[1])   
+        
+        # if do_denoised_waveform:
+        #     mcs_abs_cluster = triaged_mcs_abs[cluster_labels==cluster_id_plot]
+        #     first_chans_cluster = triaged_firstchans[cluster_labels==cluster_id_plot]
+        #     waveforms = denoised_waveforms[non_triaged_idxs[cluster_labels==cluster_id_plot]]
+        #     plot_waveforms_unit_geom(geom, num_channels, first_chans_cluster, mcs_abs_cluster, waveforms, x_geom_scale = 1/15, 
+        #                              y_geom_scale = 1/10, waveform_scale = waveform_scale, spikes_plot = num_spikes_plot, waveform_shape=(30,70), num_rows=3, 
+        #                              alpha=.2, h_shift=h_shift, do_mean=False, ax=ax_denoised_wf, color=color[0])
+        #     plot_waveforms_unit_geom(geom, num_channels, first_chans_cluster, mcs_abs_cluster, waveforms, x_geom_scale = 1/15, 
+        #                              y_geom_scale = 1/10, waveform_scale = waveform_scale, spikes_plot = num_spikes_plot, waveform_shape=(30,70), num_rows=3, 
+        #                              alpha=1, h_shift=h_shift, do_mean=True, ax=ax_denoised_wf, color=color[1])
             
     ax_raw_wf.set_title(f"cluster {cluster_id}/cluster {most_similar_cluster} raw, shift {most_similar_shift}")
     if do_denoised_waveform:
