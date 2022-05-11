@@ -318,10 +318,14 @@ def plot_venn_agreement(cluster_id_1, cluster_id_2, match_ind, not_match_ind_st1
     lab_st1 = cluster_id_1
     lab_st2 = cluster_id_2
     subsets = [len(not_match_ind_st1), len(not_match_ind_st2), len(match_ind)]
+    print(subsets)
     v = venn2(subsets = subsets, set_labels = ['unit{}'.format(lab_st1),  'unit{}'.format(lab_st2)], ax=ax)
-    v.get_patch_by_id('10').set_color('red')
-    v.get_patch_by_id('01').set_color('blue')
-    v.get_patch_by_id('11').set_color('goldenrod')
+    if len(not_match_ind_st1)>0:
+        v.get_patch_by_id('10').set_color('red')
+    if len(not_match_ind_st2)>0:
+        v.get_patch_by_id('01').set_color('blue')
+    if len(match_ind)>0:
+        v.get_patch_by_id('11').set_color('goldenrod')
     sets = ['10','11','01']
     return ax
 
@@ -522,9 +526,12 @@ def plot_agreement_venn(cluster_id_1, cluster_id_2, st_1, st_2, firstchans_clust
 
     subsets = [len(not_match_ind_st1), len(not_match_ind_st2), len(ind_st1)]
     v = venn2(subsets = subsets, set_labels = ['unit{}'.format(lab_st1),  'unit{}'.format(lab_st2)], ax=ax_venn)
-    v.get_patch_by_id('10').set_color('red')
-    v.get_patch_by_id('01').set_color('blue')
-    v.get_patch_by_id('11').set_color('goldenrod')
+    if len(not_match_ind_st1)>0:
+        v.get_patch_by_id('10').set_color('red')
+    if len(not_match_ind_st2)>0:
+        v.get_patch_by_id('01').set_color('blue')
+    if len(ind_st1)>0:
+        v.get_patch_by_id('11').set_color('goldenrod')
     ax_venn.set_title(f'{sorting1_name}{lab_st1} + {sorting2_name}{lab_st2}, {np.round(agreement, 2)*100}% agreement')
     sets = ['10','11','01']
 
