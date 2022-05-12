@@ -24,6 +24,7 @@ def get_templates(
     do_collision_clean=False,
     reducer=np.mean,
     snr_threshold=5.0 * np.sqrt(200),
+    snr_by_channel=True,
     n_jobs=30,
     spike_length_samples=121,
     trough_offset=42,
@@ -74,6 +75,8 @@ def get_templates(
     if n_templates is None:
         n_templates = spike_train[:, 1].max() + 1
     templates = np.zeros((n_templates, spike_length_samples, len(geom)))
+    if snr_by_channel:
+        snrs_by_chan = np.zeros((n_templates, len(geom)))
     snrs = np.zeros(n_templates)
 
     if return_raw_cleaned:
@@ -84,6 +87,8 @@ def get_templates(
             original_raw=np.zeros_like(templates),
             original_cc=np.zeros_like(templates),
         )
+        if snr_by_channel:
+            extra["snr_by_channel"] = snrs_by_chan
 
     # -- helper data structures
     if do_enforce_decrease:
@@ -118,6 +123,7 @@ def get_templates(
 
         raw_maxchans = np.full(len(raw_wfs), raw_maxchan)
         if do_temporal_decrease:
+            print("TD")
             denoise.enforce_temporal_decrease(raw_wfs, in_place=True)
         if do_enforce_decrease:
             denoise.enforce_decrease_shells(
@@ -127,11 +133,12 @@ def get_templates(
                 in_place=True,
             )
         raw_templates[unit] = reducer(raw_wfs, axis=0)
-        raw_ptp = raw_templates[unit].ptp(0).max()
-        snr = raw_ptp * np.sqrt(len(raw_wfs))
-        snrs[unit] = snr
+        raw_ptp = raw_templates[unit].ptp(0)
+        if snr_by_channel:
+            snrs_by_chan[unit] = raw_ptp * np.sqrt(len(raw_wfs))
+        snrs[unit] = snrs_by_chan[unit].max()
 
-        if snr > snr_threshold:
+        if not snr_by_channel and snrs[unit] > snr_threshold:
             templates[unit] = raw_templates[unit]
             continue
 
@@ -193,7 +200,10 @@ def get_templates(
         ).transpose(0, 2, 1)
 
     # SNR-weighted combination to create the template
-    lerp = np.minimum(1.0, snrs / snr_threshold)[:, None, None]
+    if snr_by_channel:
+        lerp = np.minimum(1.0, snrs_by_chan / snr_threshold)[:, None, :]
+    else:
+        lerp = np.minimum(1.0, snrs / snr_threshold)[:, None, None]
     templates = lerp * raw_templates + (1 - lerp) * cleaned_templates
 
     if return_raw_cleaned:
@@ -245,6 +255,7 @@ def get_waveforms(
     #     -trough_offset, spike_length_samples - trough_offset
     # )
     # waveforms = mmap[time_ix]
+    # this way is faster than memmap
     waveforms = np.empty(
         (N, spike_length_samples, n_channels), dtype=np.float32
     )
