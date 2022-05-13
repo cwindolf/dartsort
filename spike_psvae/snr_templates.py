@@ -123,6 +123,7 @@ def get_templates(
 
         raw_maxchans = np.full(len(raw_wfs), raw_maxchan)
         if do_temporal_decrease:
+            print("TD")
             denoise.enforce_temporal_decrease(raw_wfs, in_place=True)
         if do_enforce_decrease:
             denoise.enforce_decrease_shells(
@@ -134,8 +135,8 @@ def get_templates(
         raw_templates[unit] = reducer(raw_wfs, axis=0)
         raw_ptp = raw_templates[unit].ptp(0)
         if snr_by_channel:
-            snrs_by_chan = raw_ptp * np.sqrt(len(raw_wfs))
-        snrs[unit] = snrs_by_chan.max()
+            snrs_by_chan[unit] = raw_ptp * np.sqrt(len(raw_wfs))
+        snrs[unit] = snrs_by_chan[unit].max()
 
         if not snr_by_channel and snrs[unit] > snr_threshold:
             templates[unit] = raw_templates[unit]
@@ -200,7 +201,7 @@ def get_templates(
 
     # SNR-weighted combination to create the template
     if snr_by_channel:
-        lerp = np.minimum(1.0, snrs / snr_threshold)[:, None, :]
+        lerp = np.minimum(1.0, snrs_by_chan / snr_threshold)[:, None, :]
     else:
         lerp = np.minimum(1.0, snrs / snr_threshold)[:, None, None]
     templates = lerp * raw_templates + (1 - lerp) * cleaned_templates
