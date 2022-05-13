@@ -66,14 +66,12 @@ def align_spikes_by_templates(
     return template_shifts, template_maxchans, shifted_spike_index, idx_not_aligned
 
 # %%
-def run_LDA_split(wfs, max_channels):
+def run_LDA_split(wfs, max_channels, threshold_diptest=.5):
     ncomp = 2
     if np.unique(max_channels).shape[0] < 2:
         return np.zeros(len(max_channels), dtype=int)
     elif np.unique(max_channels).shape[0] == 2:
-        # ncomp = 1 #this doesn't work with hdbscan yet FIX THIS
-        max_channels[-1] = np.unique(max_channels)[0]-1
-        max_channels[0] = np.unique(max_channels)[-1]+1
+        ncomp = 1
     try:
         lda_model = LDA(n_components=ncomp)
         lda_comps = lda_model.fit_transform(
@@ -83,9 +81,31 @@ def run_LDA_split(wfs, max_channels):
         nmc = np.unique(max_channels).shape[0]
         print("SVD error, skipping this one. N maxchans was", nmc, "n data", len(wfs))
         return np.zeros(len(max_channels), dtype=int)
-    lda_clusterer = hdbscan.HDBSCAN(min_cluster_size=25, min_samples=25)
-    lda_clusterer.fit(lda_comps)
-    return lda_clusterer.labels_
+    
+    if ncomp == 2:
+        lda_clusterer = hdbscan.HDBSCAN(min_cluster_size=25, min_samples=25)
+        lda_clusterer.fit(lda_comps)
+        labels = lda_clusterer.labels_
+    else:
+        value_dpt, cut_value = isocut(lda_comps[:,0])
+        print("dip test", value_dpt, cut_value)
+        if value_dpt < threshold_diptest:
+            labels = np.zeros(len(max_channels), dtype=int)
+            print(labels)
+        else:
+            labels = np.zeros(len(max_channels), dtype=int)
+            labels[np.where(lda_comps[:,0] > cut_value)] = 1   
+            
+        # print(np.unique(labels, return_counts=True))
+        # # print(wfs.shape)
+        # # barf
+        # for i, label in enumerate(labels[:1000]):
+        #     if label == 0:
+        #         plt.plot(wfs[i].T.flatten(),color='blue', alpha=.1)
+        #     else:
+        #         plt.plot(wfs[i].T.flatten(), color='red',alpha=.1)
+        # print(labels)
+    return labels
 
 # deprecated
 def run_CCA_split(wfs, x, z, maxptp,):
@@ -115,6 +135,7 @@ def split_individual_cluster(
     n_channels,
     pca_n_channels,
     nn_denoise,
+    threshold_diptest,
 ):
     total_channels = geom_array.shape[0]
     N, T, wf_chans = waveforms_unit.shape
@@ -240,7 +261,7 @@ def split_individual_cluster(
             #get max_channels for new unit
             max_channels = wfs_unit[labels_rec_hdbscan == new_unit_id].ptp(1).argmax(1)
             #lda split
-            lda_labels = run_LDA_split(tpca_wfs_new_unit, max_channels)
+            lda_labels = run_LDA_split(tpca_wfs_new_unit, max_channels, threshold_diptest)
             if np.unique(lda_labels).shape[0] == 1:
                 labels_unit[labels_rec_hdbscan == new_unit_id] = cmp
                 cmp += 1
@@ -261,7 +282,7 @@ def split_individual_cluster(
                         ] = -1
     else:
         #not split by herdingspikes, run LDA split.
-        lda_labels = run_LDA_split(tpca_wf_units, max_channels_all)
+        lda_labels = run_LDA_split(tpca_wf_units, max_channels_all, threshold_diptest)
         if np.unique(lda_labels).shape[0] > 1:
             is_split = True
             labels_unit = lda_labels
@@ -321,11 +342,12 @@ def split_clusters(
     n_channels=10,
     pca_n_channels=4,
     nn_denoise=False,
+    threshold_diptest=.5,
 ):
     labels_new = labels.copy()
     labels_original = labels.copy()
     cur_max_label = labels.max()
-    for unit in tqdm(np.setdiff1d(np.unique(labels), [-1])):
+    for unit in tqdm(np.setdiff1d(np.unique(labels), [-1])): #216
         print(f"splitting unit {unit}")
         in_unit = np.flatnonzero(labels == unit)
         spike_index_unit = spike_index[in_unit]
@@ -333,6 +355,7 @@ def split_clusters(
         waveforms_unit = load_aligned_waveforms(
             waveforms, labels, unit, template_shift
         )
+        # print("max channels unit", np.unique(waveforms_unit.ptp(1).argmax(1))
 
         first_chans_unit = first_chans[in_unit]
         x_unit, z_unit = x[in_unit], z[in_unit]
@@ -351,6 +374,7 @@ def split_clusters(
             n_channels,
             pca_n_channels,
             nn_denoise,
+            threshold_diptest,
         )
         if is_split:
             for new_label in np.unique(unit_new_labels):

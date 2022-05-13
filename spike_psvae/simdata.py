@@ -452,7 +452,6 @@ def hybrid_recording(
                 ]
             )
         else:
-            
             waveforms.append([write_template0] * n_spikes[i])
     spike_train = np.concatenate(spike_trains, axis=0)
     spike_index = np.concatenate(spike_indices, axis=0)

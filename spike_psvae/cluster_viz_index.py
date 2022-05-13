@@ -40,7 +40,7 @@ def cluster_scatter(
             covs[k] = xycov
             ax.annotate(str(k), (x_mean, y_mean), size=s)
 
-    for k in covs.keys():
+    for k in means.keys():
         mean_x, mean_y = means[k]
         cov = covs[k]
 
@@ -77,14 +77,10 @@ def array_scatter(
     maxptp,
     zlim=(-50, 3900),
     axes=None,
-    do_ellipse=True,
-    alpha=0.05,
 ):
     fig = None
     if axes is None:
         fig, axes = plt.subplots(1, 3, sharey=True, figsize=(15, 15))
-        
-    excluded_ids = {-1} if do_ellipse else np.unique(labels)
 
     cluster_scatter(
         x,
@@ -92,8 +88,7 @@ def array_scatter(
         labels,
         ax=axes[0],
         s=10,
-        alpha=alpha,
-        excluded_ids=excluded_ids,
+        alpha=0.05,
     )
     axes[0].scatter(*geom.T, c="orange", marker="s", s=10)
     axes[0].set_ylabel("z")
@@ -105,8 +100,7 @@ def array_scatter(
         labels,
         ax=axes[1],
         s=10,
-        alpha=alpha,
-        excluded_ids=excluded_ids,
+        alpha=0.05,
     )
     axes[1].set_xlabel("maxptp")
     axes[2].scatter(
@@ -118,10 +112,8 @@ def array_scatter(
         cmap=plt.cm.viridis,
     )
     axes[2].scatter(*geom.T, c="orange", marker="s", s=10)
-    # axes[2].set_title("ptps")
+    axes[2].set_title("ptps")
     axes[0].set_ylim(zlim)
-    axes[1].set_ylim(zlim)
-    axes[2].set_ylim(zlim)
 
     if fig is not None:
         plt.tight_layout()
