@@ -13,6 +13,7 @@ def register_rigid(
     batch_size=32,
     step_size=1,
     pbar=True,
+    return_D_C=False,
 ):
     """Rigid correlation subsampled registration
 
@@ -36,6 +37,8 @@ def register_rigid(
         pbar=pbar,
     )
     p = psolvecorr(D, C, mincorr=mincorr)
+    if return_D_C:
+        return p, D, C
     return p
 
 
@@ -174,35 +177,113 @@ def calc_corr_decent(
     # range of displacements
     possible_displacement = np.arange(-disp, disp + step_size, step_size)
 
-    # process raster into the tensors we need for conv2ds below
+    # process raster into the tensors we need for conv below
     raster = torch.as_tensor(
         raster, dtype=torch.float32, device=device
     ).T
-    # normalize over depth for normalized (uncentered) xcorrs
-    raster = raster / torch.sqrt((raster ** 2).sum(dim=1, keepdim=True))
-    # conv weights
-    image = raster[:, None, None, :]  # T11D - NCHW
-    weights = image  # T11D - OIHW
 
     D = np.empty((T, T), dtype=np.float32)
     C = np.empty((T, T), dtype=np.float32)
     xrange = trange if pbar else range
     for i in xrange(0, T, batch_size):
-        batch = image[i:i + batch_size]
-        corr = F.conv2d(  # BT1P
-            batch,  # B11D
-            weights,
-            padding=[0, possible_displacement.size // 2],
+        corr = normxcorr(
+            raster,
+            raster[i: i + batch_size],
+            max_displacement=disp,
         )
-        max_corr, best_disp_inds = torch.max(corr[:, :, 0, :], dim=2)
+        # batch = image[i:i + batch_size]
+        # corr = F.conv2d(  # BT1P
+        #     batch,  # B11D
+        #     weights,
+        #     padding=[0, possible_displacement.size // 2],
+        # )
+        max_corr, best_disp_inds = torch.max(corr, dim=2)
         best_disp = possible_displacement[best_disp_inds.cpu()]
         D[i:i + batch_size] = best_disp
         C[i:i + batch_size] = max_corr.cpu()
-
-    del raster, corr, batch, max_corr, best_disp_inds, image, weights
-    gc.collect()
+        gc.collect()
+        torch.cuda.empty_cache()
 
     return D, C
+
+def normxcorr(template, x, max_displacement=None):
+    """normxcorr: Normalized cross-correlation
+
+    Returns the cross-correlation of `template` and `x` at spatial lags
+    determined by `mode`. Useful for estimating the location of `template`
+    within `x`.
+
+    Arguments
+    ---------
+    template : tensor, shape (num_templates, length)
+        The reference template signal
+    x : tensor, 1d shape (length,) or 2d shape (num_inputs, length)
+        The signal in which to find `template`
+    max_displacement : int, optional
+        How far to look? if unset, we'll use half the length
+    assume_centered : bool
+        Avoid a copy if your data is centered already.
+
+    Returns
+    -------
+    corr : tensor
+    """
+    template = torch.as_tensor(template)
+    x = torch.atleast_2d(torch.as_tensor(x))
+    assert x.device == template.device
+    num_templates, length = template.shape
+    num_inputs, length_ = template.shape
+    assert length == length_
+
+    if max_displacement is None:
+        max_displacement = length // 2
+
+    ones = torch.ones((1, 1, length), dtype=x.dtype, device=x.device)
+    N = F.conv1d(
+        ones,  # 11T
+        ones,  # 11T
+        padding=max_displacement,
+    )
+    # 1QT
+    Et = F.conv1d(
+        ones,  # 11T
+        template[:, None, :],  # Q1T
+        padding=max_displacement,
+    ) / N
+    # B1T
+    Ex = F.conv1d(
+        x[:, None, :],  # B1T
+        ones,  # 11T
+        padding=max_displacement,
+    ) / N
+    
+    # compute numerator, BQT
+    cov = F.conv1d(
+        x[:, None, :],  # B1T
+        template[:, None, :],  # Q1T
+        padding=max_displacement,
+    )
+    var_template = (F.conv1d(
+        ones,  # 11T
+        torch.square(template)[:, None, :],  # Q1T
+        padding=max_displacement,
+    ) / N - torch.square(Et))
+    
+    # B1T
+    var_x = (F.conv1d(
+        torch.square(x)[:, None, :],  # B1T
+        ones,  # 11T
+        padding=max_displacement,
+    ) / N - torch.square(Ex))
+    
+    V = var_x * var_template
+
+    corr = (cov / N - Ex * Et) / torch.sqrt(V)
+    corr[~torch.isfinite(corr)] = 0
+
+    return corr
+
+
 
 
 def calc_corr_decent_pair(
@@ -298,3 +379,5 @@ def calc_corr_decent_pair(
     torch.cuda.empty_cache()
 
     return D, C
+
+
