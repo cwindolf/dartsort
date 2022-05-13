@@ -88,22 +88,25 @@ def register_rigid(
     step_size=1,
     disp=400,
     denoise_sigma=0.1,
-    corr_threshold=0,
+    corr_threshold=None,
     destripe=False,
+    return_extra=False
 ):
     depths_reg = depths
     raster, dd, tt = fast_raster(
         amps, depths_reg, times, sigma=denoise_sigma, destripe=destripe
     )
 
-    if corr_threshold > 0:
-        p = decentrigid_corr(
+    if corr_threshold is not None:
+        p, D, C = decentrigid_corr(
             raster,
             mincorr=corr_threshold,
             disp=disp,
             batch_size=batch_size,
             step_size=step_size,
+            return_D_C=True,
         )
+        extra = dict(D=D, C=C)
     else:
         D, p = decentrigid(
             raster,
@@ -112,9 +115,14 @@ def register_rigid(
             step_size=step_size,
             disp=disp,
         )
+        extra = dict(D=D)
     warps = interp1d(tt + 0.5, p, fill_value="extrapolate")(times)
     depths_reg = depths_reg - warps
     depths_reg -= depths_reg.min()
+
+    if return_extra:
+        return depths_reg, p, extra
+
     return depths_reg, p
 
 
