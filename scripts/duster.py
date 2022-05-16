@@ -145,7 +145,7 @@ labels_original = labels.copy()
 # %%
 z_cutoff = [0, 500, 1000, 1500, 2000, 2500, 3000, 3500, 4000]
 for za, zb in zip(z_cutoff, z_cutoff[1:]):
-    fig = cluster_viz_index.array_scatter(
+    fig, _ = cluster_viz_index.array_scatter(
         clusterer.labels_,
         geom,
         tx,
@@ -247,7 +247,7 @@ labels[idx_keep_full] = clusterer.labels_
 # %%
 z_cutoff = [0, 500, 1000, 1500, 2000, 2500, 3000, 3500, 4000]
 for za, zb in zip(z_cutoff, z_cutoff[1:]):
-    fig = cluster_viz_index.array_scatter(
+    fig, _ = cluster_viz_index.array_scatter(
         clusterer.labels_,
         geom,
         tx,
@@ -272,6 +272,7 @@ templates = merge_split_cleaned.get_templates(
     template_shifts,
     template_maxchans,
     shifted_triaged_spike_index,
+    idx_not_aligned,
 ) = merge_split_cleaned.align_spikes_by_templates(
     clusterer.labels_, templates, spike_index[idx_keep_full]
 )
@@ -354,7 +355,7 @@ np.save(output_dir / "template_maxchans.npy", template_maxchans)
 # %%
 z_cutoff = [0, 500, 1000, 1500, 2000, 2500, 3000, 3500, 4000]
 for za, zb in zip(z_cutoff, z_cutoff[1:]):
-    fig = cluster_viz_index.array_scatter(
+    fig, _ = cluster_viz_index.array_scatter(
         clusterer.labels_,
         geom,
         tx,
