@@ -155,14 +155,14 @@ def split_individual_cluster(
     
     #get n_channels of waveforms for each unit with the unit max channel and the firstchan for each spike
     for i in range(wfs_unit.shape[0]):
-        if mc == n_channels_half:
+        mc_new = int(mc - first_chans_unit[i])
+        if mc_new <= n_channels_half:
             wfs_unit[i] = waveforms_unit[i, :, :n_channels]
-        elif mc == total_channels - n_channels_half:
+        elif mc_new >= waveforms_unit.shape[2] - n_channels_half:
             wfs_unit[i] = waveforms_unit[
                 i, :, waveforms_unit.shape[2] - n_channels :
             ]
         else:
-            mc_new = int(mc - first_chans_unit[i])
             wfs_unit[i] = waveforms_unit[
                 i, :, mc_new - n_channels_half : mc_new + n_channels_half
             ]
