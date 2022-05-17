@@ -7,6 +7,7 @@ from tqdm import tqdm
 import h5py
 from spike_psvae.subtract import read_data
 from pathlib import Path
+from spike_psvae import snr_templates
 
 # ********************************************************
 # ********************************************************
@@ -721,6 +722,8 @@ def deconvolution(spike_index,
                   cluster_labels,
                   output_directory,
                   standardized_bin,
+                  residual_bin,
+                  template_spike_train,
                   geom_path,
                   threshold=50,
                   max_upsample=8,
@@ -752,8 +755,21 @@ def deconvolution(spike_index,
         template_path = os.path.join(output_directory, 'templates.npy')
         if not os.path.exists(template_path):
             print('computing templates')
-            templates = get_templates(standardized_bin, 
-                                      spike_index, cluster_labels, geom)
+            templates, snrs, raw_templates, cleaned_templates = snr_templates.get_templates(
+                template_spike_train[:],
+                geom,
+                standardized_bin,
+                residual_bin,
+                do_tpca=True,
+                return_raw_cleaned=True,
+                do_collision_clean=False,
+                do_enforce_decrease=True,
+                tpca_radius=100,
+                tpca_rank=3,
+                snr_threshold=5.0 * np.sqrt(100),
+            ) 
+#             templates = get_templates(standardized_bin, 
+#                                       spike_index, cluster_labels, geom)
             # save templates
             np.save(template_path, templates)
         else:
@@ -883,24 +899,24 @@ def read_waveforms(spike_times, bin_file, geom_array, n_times=121, channels=None
 
     return wfs, skipped_idx
 
-def get_templates(standardized_bin, spike_index, labels, geom,
-                  n_times=121, n_samples=250):
+# def get_templates(standardized_bin, spike_index, labels, geom,
+#                   n_times=121, n_samples=250):
     
-    n_chans = geom.shape[0]
+#     n_chans = geom.shape[0]
     
-    unique_labels = np.unique(labels)
-    n_templates = unique_labels.shape[0]
-    if -1 in unique_labels:
-        n_templates -= 1
+#     unique_labels = np.unique(labels)
+#     n_templates = unique_labels.shape[0]
+#     if -1 in unique_labels:
+#         n_templates -= 1
     
-    templates = np.zeros((n_templates, n_times, n_chans))
-    for unit in range(n_templates):
-        spike_times_unit = spike_index[labels==unit, 0]
-        if spike_times_unit.shape[0]>n_samples:
-            idx = np.random.choice(np.arange(spike_times_unit.shape[0]), n_samples, replace = False)
-        else:
-            idx = np.arange(spike_times_unit.shape[0])
-        wfs_unit = read_waveforms(spike_times_unit[idx], 
-                                  standardized_bin, geom, n_times=n_times)[0]
-        templates[unit] = wfs_unit.mean(0)
-    return templates
+#     templates = np.zeros((n_templates, n_times, n_chans))
+#     for unit in range(n_templates):
+#         spike_times_unit = spike_index[labels==unit, 0]
+#         if spike_times_unit.shape[0]>n_samples:
+#             idx = np.random.choice(np.arange(spike_times_unit.shape[0]), n_samples, replace = False)
+#         else:
+#             idx = np.arange(spike_times_unit.shape[0])
+#         wfs_unit = read_waveforms(spike_times_unit[idx], 
+#                                   standardized_bin, geom, n_times=n_times)[0]
+#         templates[unit] = wfs_unit.mean(0)
+#     return templates
