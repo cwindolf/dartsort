@@ -28,45 +28,47 @@ def cluster_scatter(
     means = {}
     covs = {}
     for k in np.unique(ids):
-        where = np.flatnonzero(ids == k)
-        xk = xs[where]
-        yk = ys[where]
-        color = get_ccolor(k)
-        ax.scatter(xk, yk, s=s, color=color, alpha=alpha, marker=".")
-        if k not in excluded_ids:
-            x_mean, y_mean = xk.mean(), yk.mean()
-            xycov = np.cov(xk, yk)
-            means[k] = x_mean, y_mean
-            covs[k] = xycov
-            ax.annotate(str(k), (x_mean, y_mean), size=s)
+        if (ids == k).sum() > 0:
+            where = np.flatnonzero(ids == k)
+            xk = xs[where]
+            yk = ys[where]
+            color = get_ccolor(k)
+            ax.scatter(xk, yk, s=s, color=color, alpha=alpha, marker=".")
+            if k not in excluded_ids:
+                x_mean, y_mean = xk.mean(), yk.mean()
+                xycov = np.cov(xk, yk)
+                means[k] = x_mean, y_mean
+                covs[k] = xycov
+                ax.annotate(str(k), (x_mean, y_mean), size=s)
 
     for k in means.keys():
-        mean_x, mean_y = means[k]
-        cov = covs[k]
+        if (ids == k).sum() > 0:
+            mean_x, mean_y = means[k]
+            cov = covs[k]
 
-        with np.errstate(invalid="ignore"):
-            vx, vy = cov[0, 0], cov[1, 1]
-            rho = cov[0, 1] / np.sqrt(vx * vy)
-        if not np.isfinite([vx, vy, rho]).all():
-            continue
+            with np.errstate(invalid="ignore"):
+                vx, vy = cov[0, 0], cov[1, 1]
+                rho = cov[0, 1] / np.sqrt(vx * vy)
+            if not np.isfinite([vx, vy, rho]).all():
+                continue
 
-        color = get_ccolor(k)
-        ell = Ellipse(
-            (0, 0),
-            width=2 * np.sqrt(1 + rho),
-            height=2 * np.sqrt(1 - rho),
-            facecolor=(0, 0, 0, 0),
-            edgecolor=color,
-            linewidth=1,
-        )
-        transform = (
-            transforms.Affine2D()
-            .rotate_deg(45)
-            .scale(n_std * np.sqrt(vx), n_std * np.sqrt(vy))
-            .translate(mean_x, mean_y)
-        )
-        ell.set_transform(transform + ax.transData)
-        ax.add_patch(ell)
+            color = get_ccolor(k)
+            ell = Ellipse(
+                (0, 0),
+                width=2 * np.sqrt(1 + rho),
+                height=2 * np.sqrt(1 - rho),
+                facecolor=(0, 0, 0, 0),
+                edgecolor=color,
+                linewidth=1,
+            )
+            transform = (
+                transforms.Affine2D()
+                .rotate_deg(45)
+                .scale(n_std * np.sqrt(vx), n_std * np.sqrt(vy))
+                .translate(mean_x, mean_y)
+            )
+            ell.set_transform(transform + ax.transData)
+            ax.add_patch(ell)
 
 
 def array_scatter(
