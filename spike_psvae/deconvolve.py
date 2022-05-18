@@ -3,7 +3,7 @@ import scipy
 import time, os
 import parmap
 import copy
-from tqdm import tqdm
+from tqdm.auto import tqdm
 import h5py
 from spike_psvae.subtract import read_data
 from pathlib import Path
@@ -57,7 +57,7 @@ def parallel_conv_filter(data_in,
     
         pairwise_conv_array.append(pairwise_conv)
         
-    np.save(deconv_dir+'/temp_temp_chunk_'+str(proc_index), np.asarray(pairwise_conv_array, dtype=object))
+    np.save(deconv_dir+'/temp_temp_chunk_'+str(proc_index), np.asarray(pairwise_conv_array))
 
 
 class MatchPursuit_objectiveUpsample(object):
@@ -253,40 +253,40 @@ class MatchPursuit_objectiveUpsample(object):
         """Compresses the templates using SVD and upsample temporal compoents."""
         
         fname = os.path.join(self.deconv_dir, "svd.npz")
-        if os.path.exists(fname)==False:
-            self.temporal, self.singular, self.spatial = np.linalg.svd(
-                np.transpose(self.temps, (2, 0, 1)))
-            # Keep only the strongest components
-            self.temporal = self.temporal[:, :, :self.approx_rank]
-            self.singular = self.singular[:, :self.approx_rank]
-            self.spatial = self.spatial[:, :self.approx_rank, :]
-            # Upsample the temporal components of the SVD
-            # in effect, upsampling the reconstruction of the
-            # templates.
-            if self.up_factor == 1:
-                # No upsampling is needed.
-                temporal_up = self.temporal
-            else:
-                temporal_up = scipy.signal.resample(
-                        self.temporal, self.n_time * self.up_factor, axis=1)
-                idx = np.arange(0, self.n_time * self.up_factor, self.up_factor) + np.arange(self.up_factor)[:, None]
-                temporal_up = np.reshape(
-                        temporal_up[:, idx, :], [-1, self.n_time, self.approx_rank]).astype(np.float32)
-
-            self.temporal = np.flip(self.temporal, axis=1)
-            temporal_up = np.flip(temporal_up, axis=1)
-
-            np.savez(fname,
-                     temporal_up = temporal_up,
-                     temporal = self.temporal, 
-                     singular = self.singular,
-                     spatial = self.spatial)
+#         if os.path.exists(fname)==False:
+        self.temporal, self.singular, self.spatial = np.linalg.svd(
+            np.transpose(self.temps, (2, 0, 1)))
+        # Keep only the strongest components
+        self.temporal = self.temporal[:, :, :self.approx_rank]
+        self.singular = self.singular[:, :self.approx_rank]
+        self.spatial = self.spatial[:, :self.approx_rank, :]
+        # Upsample the temporal components of the SVD
+        # in effect, upsampling the reconstruction of the
+        # templates.
+        if self.up_factor == 1:
+            # No upsampling is needed.
+            temporal_up = self.temporal
         else:
-            data = np.load(fname)
-            self.temporal_up = data['temporal_up']
-            self.temporal = data['temporal']
-            self.singular = data['singular']
-            self.spatial = data['spatial']
+            temporal_up = scipy.signal.resample(
+                    self.temporal, self.n_time * self.up_factor, axis=1)
+            idx = np.arange(0, self.n_time * self.up_factor, self.up_factor) + np.arange(self.up_factor)[:, None]
+            temporal_up = np.reshape(
+                    temporal_up[:, idx, :], [-1, self.n_time, self.approx_rank]).astype(np.float32)
+
+        self.temporal = np.flip(self.temporal, axis=1)
+        temporal_up = np.flip(temporal_up, axis=1)
+
+        np.savez(fname,
+                 temporal_up = temporal_up,
+                 temporal = self.temporal, 
+                 singular = self.singular,
+                 spatial = self.spatial)
+#         else:
+#             data = np.load(fname)
+#             self.temporal_up = data['temporal_up']
+#             self.temporal = data['temporal']
+#             self.singular = data['singular']
+#             self.spatial = data['spatial']
 
 
     # Cat: TODO: Parallelize this function
@@ -309,7 +309,7 @@ class MatchPursuit_objectiveUpsample(object):
         else:
             units = np.unique(self.up_up_map)
 
-            for k in range(len(units)):
+            for k in tqdm(range(len(units))):
                 parallel_conv_filter( 
                             [k,[units[k]]],
                             self.n_time,
@@ -347,8 +347,8 @@ class MatchPursuit_objectiveUpsample(object):
     def pairwise_filter_conv(self):
         """Computes pairwise convolution of templates using SVD approximation."""
 
-        if os.path.exists(os.path.join(self.deconv_dir, "pairwise_conv.npy")) == False:   
-            self.pairwise_filter_conv_parallel()
+#         if os.path.exists(os.path.join(self.deconv_dir, "pairwise_conv.npy")) == False:   
+        self.pairwise_filter_conv_parallel()
             
     def get_sparse_upsampled_templates(self):
         """Returns the fully upsampled sparse version of the original templates.
@@ -363,57 +363,57 @@ class MatchPursuit_objectiveUpsample(object):
         """
         
         fname = os.path.join(self.deconv_dir, "sparse_templates.npy")
-        if os.path.exists(fname)==False:
-            down_sample_idx = np.arange(
-                    0, self.n_time * self.up_factor, self.up_factor)
-            down_sample_idx = down_sample_idx + np.arange(
-                    0, self.up_factor)[:, None]
-            result = []
-            
-            # Reordering the upsampling. This is done because we upsampled the time
-            # reversed temporal components of the SVD reconstruction of the
-            # templates. This means That the time-reveresed 10x upsampled indices
-            # respectively correspond to [0, 9, 8, ..., 1] of the 10x upsampled of
-            # the original templates.
-            all_temps = []
-            reorder_idx = np.append(
-                    np.arange(0, 1),
-                    np.arange(self.up_factor - 1, 0, -1))
+#         if os.path.exists(fname)==False:
+        down_sample_idx = np.arange(
+                0, self.n_time * self.up_factor, self.up_factor)
+        down_sample_idx = down_sample_idx + np.arange(
+                0, self.up_factor)[:, None]
+        result = []
 
-            # Sequentialize the number of up_up_map. For instance,
-            # [0, 0, 0, 0, 4, 4, 4, 4, ...] turns to [0, 0, 0, 0, 1, 1, 1, 1, ...].
-            deconv_id_sparse_temp_map = []
-            tot_temps_so_far = 0
-            
-                            
-            for i in range(self.orig_n_unit):
-                up_temps = scipy.signal.resample(
-                        self.temps[:, :, i],
-                        self.n_time * self.up_factor)[down_sample_idx, :]
-                up_temps = up_temps.transpose([1, 2, 0])
-                #up_temps = up_temps[:, :, reorder_idx]
-                skip = self.up_factor // self.unit_up_factor[i]
-                keep_upsample_idx = np.arange(0, self.up_factor, skip).astype(np.int32)
-                deconv_id_sparse_temp_map.append(np.arange(
-                        self.unit_up_factor[i]).repeat(skip) + tot_temps_so_far)
-                tot_temps_so_far += self.unit_up_factor[i]
-                all_temps.append(up_temps[:, :, keep_upsample_idx])
+        # Reordering the upsampling. This is done because we upsampled the time
+        # reversed temporal components of the SVD reconstruction of the
+        # templates. This means That the time-reveresed 10x upsampled indices
+        # respectively correspond to [0, 9, 8, ..., 1] of the 10x upsampled of
+        # the original templates.
+        all_temps = []
+        reorder_idx = np.append(
+                np.arange(0, 1),
+                np.arange(self.up_factor - 1, 0, -1))
+
+        # Sequentialize the number of up_up_map. For instance,
+        # [0, 0, 0, 0, 4, 4, 4, 4, ...] turns to [0, 0, 0, 0, 1, 1, 1, 1, ...].
+        deconv_id_sparse_temp_map = []
+        tot_temps_so_far = 0
 
 
-            deconv_id_sparse_temp_map = np.concatenate(
-                                    deconv_id_sparse_temp_map, axis=0)
-                
-            all_temps = np.concatenate(all_temps, axis=2)
-            
-            np.save(fname, all_temps)
-            np.save(os.path.split(fname)[0]+'/deconv_id_sparse_temp_map.npy',
-                                                    deconv_id_sparse_temp_map)
+        for i in range(self.orig_n_unit):
+            up_temps = scipy.signal.resample(
+                    self.temps[:, :, i],
+                    self.n_time * self.up_factor)[down_sample_idx, :]
+            up_temps = up_temps.transpose([1, 2, 0])
+            #up_temps = up_temps[:, :, reorder_idx]
+            skip = self.up_factor // self.unit_up_factor[i]
+            keep_upsample_idx = np.arange(0, self.up_factor, skip).astype(np.int32)
+            deconv_id_sparse_temp_map.append(np.arange(
+                    self.unit_up_factor[i]).repeat(skip) + tot_temps_so_far)
+            tot_temps_so_far += self.unit_up_factor[i]
+            all_temps.append(up_temps[:, :, keep_upsample_idx])
+
+
+        deconv_id_sparse_temp_map = np.concatenate(
+                                deconv_id_sparse_temp_map, axis=0)
+
+        all_temps = np.concatenate(all_temps, axis=2)
+
+        np.save(fname, all_temps)
+        np.save(os.path.split(fname)[0]+'/deconv_id_sparse_temp_map.npy',
+                                                deconv_id_sparse_temp_map)
         
-        else:
+#         else:
                         
-            all_temps = np.load(fname)
-            deconv_id_sparse_temp_map = np.load(os.path.split(fname)[0]+
-                                            '/deconv_id_sparse_temp_map.npy')
+#             all_temps = np.load(fname)
+#             deconv_id_sparse_temp_map = np.load(os.path.split(fname)[0]+
+#                                             '/deconv_id_sparse_temp_map.npy')
         
         return all_temps, deconv_id_sparse_temp_map
         
@@ -622,8 +622,8 @@ class MatchPursuit_objectiveUpsample(object):
         # loop over each assigned segment
         for batch_id, fname_out in zip(batch_ids, fnames_out):
 
-            if os.path.exists(fname_out):
-                break
+#             if os.path.exists(fname_out):
+#                 break
 
             # load pairwise conv filter only once per core:
             self.pairwise_conv = np.load(os.path.join(self.deconv_dir, "pairwise_conv.npy"), allow_pickle=True)
@@ -730,6 +730,7 @@ def deconvolution(spike_index,
                   vis_su_threshold=1.0,
                   approx_rank=5,
                   multi_processing=False,
+                  cleaned_temps=True,
                   n_processors=1,
                   sampling_rate=30000,
                   deconv_max_iters=1000,
@@ -753,9 +754,11 @@ def deconvolution(spike_index,
         
         # get templates
         template_path = os.path.join(output_directory, 'templates.npy')
-        if not os.path.exists(template_path):
-            print('computing templates')
-            templates, snrs, raw_templates, cleaned_templates = snr_templates.get_templates(
+        print(template_path)
+#         if not os.path.exists(template_path):
+        print('computing templates')
+        if cleaned_temps:
+            templates, snrs, _, _ = snr_templates.get_templates(
                 template_spike_train[:],
                 geom,
                 standardized_bin,
@@ -763,27 +766,35 @@ def deconvolution(spike_index,
                 do_tpca=True,
                 return_raw_cleaned=True,
                 do_collision_clean=False,
-                do_enforce_decrease=True,
+                do_enforce_decrease=False,
+                do_temporal_decrease=False,
                 tpca_radius=100,
                 tpca_rank=3,
                 snr_threshold=5.0 * np.sqrt(100),
-            ) 
-#             templates = get_templates(standardized_bin, 
-#                                       spike_index, cluster_labels, geom)
-            # save templates
-            np.save(template_path, templates)
+                trough_offset=60
+            )
+            print("templates dtype", templates.dtype)
         else:
-            templates = np.load(template_path)
+            templates = get_templates(standardized_bin, 
+                                      spike_index, cluster_labels, geom) #.astype(np.float32)
+            print("templates dtype", templates.dtype)
+
+#         print(templates.dtype)
+#         print(templates.shape)
+            # save templates
+        np.save(template_path, templates)
+#         else:
+#             templates = np.load(template_path)
 
         fname_spike_train = os.path.join(output_directory, 'spike_train.npy')
         fname_templates_up = os.path.join(output_directory, 'templates_up.npy')
         fname_spike_train_up = os.path.join(output_directory, 'spike_train_up.npy')
         
-        if (os.path.exists(template_path) and 
-            os.path.exists(fname_spike_train) and 
-            os.path.exists(fname_templates_up) and 
-            os.path.exists(fname_spike_train_up)):
-            return (fname_templates_up,fname_spike_train_up,template_path,fname_spike_train)
+#         if (os.path.exists(template_path) and 
+#             os.path.exists(fname_spike_train) and 
+#             os.path.exists(fname_templates_up) and 
+#             os.path.exists(fname_spike_train_up)):
+#             return (fname_templates_up,fname_spike_train_up,template_path,fname_spike_train)
         
         deconv_dir = os.path.join(output_directory, 'deconv_tmp')
         if not os.path.exists(deconv_dir):
@@ -899,24 +910,24 @@ def read_waveforms(spike_times, bin_file, geom_array, n_times=121, channels=None
 
     return wfs, skipped_idx
 
-# def get_templates(standardized_bin, spike_index, labels, geom,
-#                   n_times=121, n_samples=250):
+def get_templates(standardized_bin, spike_index, labels, geom,
+                  n_times=121, n_samples=250):
     
-#     n_chans = geom.shape[0]
+    n_chans = geom.shape[0]
     
-#     unique_labels = np.unique(labels)
-#     n_templates = unique_labels.shape[0]
-#     if -1 in unique_labels:
-#         n_templates -= 1
+    unique_labels = np.unique(labels)
+    n_templates = unique_labels.shape[0]
+    if -1 in unique_labels:
+        n_templates -= 1
     
-#     templates = np.zeros((n_templates, n_times, n_chans))
-#     for unit in range(n_templates):
-#         spike_times_unit = spike_index[labels==unit, 0]
-#         if spike_times_unit.shape[0]>n_samples:
-#             idx = np.random.choice(np.arange(spike_times_unit.shape[0]), n_samples, replace = False)
-#         else:
-#             idx = np.arange(spike_times_unit.shape[0])
-#         wfs_unit = read_waveforms(spike_times_unit[idx], 
-#                                   standardized_bin, geom, n_times=n_times)[0]
-#         templates[unit] = wfs_unit.mean(0)
-#     return templates
+    templates = np.zeros((n_templates, n_times, n_chans))
+    for unit in range(n_templates):
+        spike_times_unit = spike_index[labels==unit, 0]
+        if spike_times_unit.shape[0]>n_samples:
+            idx = np.random.choice(np.arange(spike_times_unit.shape[0]), n_samples, replace = False)
+        else:
+            idx = np.arange(spike_times_unit.shape[0])
+        wfs_unit = read_waveforms(spike_times_unit[idx], 
+                                  standardized_bin, geom, n_times=n_times)[0]
+        templates[unit] = wfs_unit.mean(0)
+    return templates
