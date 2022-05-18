@@ -3,17 +3,19 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 from scipy import sparse
+from scipy.stats import zscore
 from tqdm.auto import trange
 
 
-def register_rigid(
+def register_raster_rigid(
     raster,
-    mincorr=0.7,
+    mincorr=0.0,
     disp=None,
-    batch_size=32,
-    step_size=1,
+    robust_sigma=0.0,
+    normalized=True,
+    batch_size=8,
+    device=None,
     pbar=True,
-    return_D_C=False,
 ):
     """Rigid correlation subsampled registration
 
@@ -32,84 +34,16 @@ def register_rigid(
     D, C = calc_corr_decent(
         raster,
         disp=disp,
+        normalized=normalized,
         batch_size=batch_size,
-        step_size=step_size,
+        device=device,
         pbar=pbar,
     )
-    p = psolvecorr(D, C, mincorr=mincorr)
-    if return_D_C:
-        return p, D, C
-    return p
+    p = psolvecorr(D, C, mincorr=mincorr, robust_sigma=robust_sigma)
+    return p, D, C
 
 
-def online_register_rigid(
-    raster,
-    batch_length=10000,
-    time_downsample_factor=1,
-    mincorr=0.7,
-    disp=None,
-    csd=False,
-    channels=slice(None),
-):
-    T = raster.shape[1]
-
-    # -- initialize
-    raster0 = raster[:, 0:batch_length:time_downsample_factor]
-    D00, C00 = calc_corr_decent(
-        raster0,
-        disp=disp,
-        pbar=False,
-    )
-    p0 = psolvecorr(D00, C00, mincorr=mincorr)
-
-    # -- loop
-    ps = [p0]
-    for bs in trange(batch_length, T, batch_length, desc="batches"):
-        be = min(T, bs + batch_length)
-        raster1 = raster[:, bs:be:time_downsample_factor]
-        D01, C01 = calc_corr_decent_pair(raster0, raster1, disp=disp)
-        D11, C11 = calc_corr_decent(
-            raster1,
-            disp=disp,
-            pbar=False,
-        )
-        p1 = psolveonline(D01, C01, D11, C11, p0, mincorr)
-        ps.append(p1)
-
-        # update loop variables
-        raster0 = raster1
-        D00 = D11
-        C00 = C11
-        p0 = p1
-
-    p = np.concatenate(ps)
-    return p
-
-
-def psolveonline(D01, C01, D11, C11, p0, mincorr):
-    # subsample where corr > mincorr
-    i0, j0 = np.nonzero(C01 >= mincorr)
-    n0 = i0.shape[0]
-    t1 = D01.shape[1]
-    i1, j1 = np.nonzero(C11 >= mincorr)
-    n1 = i1.shape[0]
-    assert t1 == D11.shape[0]
-
-    # construct Kroneckers
-    ones0 = np.ones(n0)
-    ones1 = np.ones(n1)
-    U = sparse.coo_matrix((ones1, (range(n1), i1)), shape=(n1, t1))
-    V = sparse.coo_matrix((ones1, (range(n1), j1)), shape=(n1, t1))
-    W = sparse.coo_matrix((ones0, (range(n0), j0)), shape=(n0, t1))
-
-    # build lsqr problem
-    A = sparse.vstack([U - V, W]).tocsc()
-    b = np.concatenate([D11[i1, j1], -(D01 - p0[:, None])[i0, j0]])
-    p1, *_ = sparse.linalg.lsmr(A, b)
-    return p1
-
-
-def psolvecorr(D, C, mincorr=0.7):
+def psolvecorr(D, C, mincorr=0.0, robust_sigma=0, robust_iter=20):
     """Solve for rigid displacement given pairwise disps + corrs"""
     T = D.shape[0]
     assert (T, T) == D.shape == C.shape
@@ -123,9 +57,18 @@ def psolvecorr(D, C, mincorr=0.7):
     ones = np.ones(n_sampled)
     M = sparse.csr_matrix((ones, (range(n_sampled), I)), shape=(n_sampled, T))
     N = sparse.csr_matrix((ones, (range(n_sampled), J)), shape=(n_sampled, T))
+    A = M - N
+    V = D[I, J]
 
     # solve sparse least squares problem
-    p, *_ = sparse.linalg.lsqr(M - N, D[I, J])
+    if robust_sigma is not None and robust_sigma > 0:
+        idx = slice(None)
+        for _ in trange(robust_iter, desc="robust lsqr"):
+            p, *_ = sparse.linalg.lsqr(A[idx], V[idx])
+            idx = np.nonzero(np.abs(zscore(A @ p - V)) <= robust_sigma)
+    else:
+        p, *_ = sparse.linalg.lsqr(A, V)
+
     return p
 
 
@@ -193,6 +136,10 @@ def calc_corr_decent(
     # process raster into the tensors we need for conv below
     # note the transpose from DxT to TxD (batches on first dimension)
     raster = torch.as_tensor(raster, dtype=torch.float32, device=device).T
+    if not normalized:
+        # if we're not doing full normxcorr, we still want to keep
+        # the outputs between 0 and 1
+        raster /= torch.sqrt((raster ** 2).sum(dim=1, keepdim=True))
 
     D = np.empty((T, T), dtype=np.float32)
     C = np.empty((T, T), dtype=np.float32)
@@ -265,7 +212,8 @@ def normxcorr(template, x, padding=None):
     Ex = F.conv1d(x[:, None, :], ones, padding=padding) / N
 
     # compute covariance
-    cov = F.conv1d(x[:, None, :], template[:, None, :], padding=padding) / N
+    corr = F.conv1d(x[:, None, :], template[:, None, :], padding=padding) / N
+    corr -= Ex * Et
 
     # compute variances for denominator, using var X = E[X^2] - (EX)^2
     var_template = F.conv1d(
@@ -276,10 +224,13 @@ def normxcorr(template, x, padding=None):
     ) / N - torch.square(Ex)
 
     # now find the final normxcorr and get rid of NaNs in zero-variance areas
-    corr = (cov - Ex * Et) / torch.sqrt(var_x * var_template)
+    corr /= torch.sqrt(var_x * var_template)
     corr[~torch.isfinite(corr)] = 0
 
     return corr
+
+
+# -- online methods: not exposed in `ibme` API yet
 
 
 def calc_corr_decent_pair(
@@ -375,3 +326,70 @@ def calc_corr_decent_pair(
     torch.cuda.empty_cache()
 
     return D, C
+
+
+def psolveonline(D01, C01, D11, C11, p0, mincorr):
+    # subsample where corr > mincorr
+    i0, j0 = np.nonzero(C01 >= mincorr)
+    n0 = i0.shape[0]
+    t1 = D01.shape[1]
+    i1, j1 = np.nonzero(C11 >= mincorr)
+    n1 = i1.shape[0]
+    assert t1 == D11.shape[0]
+
+    # construct Kroneckers
+    ones0 = np.ones(n0)
+    ones1 = np.ones(n1)
+    U = sparse.coo_matrix((ones1, (range(n1), i1)), shape=(n1, t1))
+    V = sparse.coo_matrix((ones1, (range(n1), j1)), shape=(n1, t1))
+    W = sparse.coo_matrix((ones0, (range(n0), j0)), shape=(n0, t1))
+
+    # build lsqr problem
+    A = sparse.vstack([U - V, W]).tocsc()
+    b = np.concatenate([D11[i1, j1], -(D01 - p0[:, None])[i0, j0]])
+    p1, *_ = sparse.linalg.lsmr(A, b)
+    return p1
+
+
+def online_register_rigid(
+    raster,
+    batch_length=10000,
+    time_downsample_factor=1,
+    mincorr=0.7,
+    disp=None,
+    csd=False,
+    channels=slice(None),
+):
+    T = raster.shape[1]
+
+    # -- initialize
+    raster0 = raster[:, 0:batch_length:time_downsample_factor]
+    D00, C00 = calc_corr_decent(
+        raster0,
+        disp=disp,
+        pbar=False,
+    )
+    p0 = psolvecorr(D00, C00, mincorr=mincorr)
+
+    # -- loop
+    ps = [p0]
+    for bs in trange(batch_length, T, batch_length, desc="batches"):
+        be = min(T, bs + batch_length)
+        raster1 = raster[:, bs:be:time_downsample_factor]
+        D01, C01 = calc_corr_decent_pair(raster0, raster1, disp=disp)
+        D11, C11 = calc_corr_decent(
+            raster1,
+            disp=disp,
+            pbar=False,
+        )
+        p1 = psolveonline(D01, C01, D11, C11, p0, mincorr)
+        ps.append(p1)
+
+        # update loop variables
+        raster0 = raster1
+        D00 = D11
+        C00 = C11
+        p0 = p1
+
+    p = np.concatenate(ps)
+    return p
