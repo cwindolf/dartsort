@@ -5,7 +5,7 @@ import torch
 from collections import namedtuple
 from multiprocessing.pool import Pool
 from pathlib import Path
-from tqdm import tqdm
+from tqdm.auto import tqdm
 
 from . import denoise, localize_index, subtract
 
@@ -88,7 +88,7 @@ JobResult = namedtuple(
 
 
 def _job(batch_start):
-    # this is set by _job_init below in the worker
+    # p is set by _job_init below
     p = _job.data
 
     # -- which spikes?
