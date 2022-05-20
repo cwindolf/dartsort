@@ -27,7 +27,7 @@ def register_raster_rigid(
     disp : int, optional
         Maximum displacement during pairwise displacement estimates.
         If `None`, half of the depth domain's length will be used.
-    batch_size, step_size : int
+    batch_size : int
         See `calc_corr_decent`
     Returns: p, array (T,)
     """
