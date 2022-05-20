@@ -24,7 +24,6 @@ def register_rigid(
     normalized=True,
     destripe=False,
     batch_size=1,
-    step_size=1,
     return_extra=False,
 ):
     """1D rigid registration
@@ -100,7 +99,6 @@ def register_nonrigid(
     destripe=False,
     device=None,
     batch_size=1,
-    step_size=1,
 ):
     """1D nonrigid registration
 
@@ -167,7 +165,6 @@ def register_nonrigid(
             corr_threshold=corr_threshold,
             normalized=normalized,
             batch_size=batch_size,
-            step_size=step_size,
             disp=rigid_disp,
             denoise_sigma=denoise_sigma,
             destripe=destripe,
