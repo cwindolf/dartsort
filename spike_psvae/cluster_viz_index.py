@@ -28,7 +28,6 @@ def cluster_scatter(
     means = {}
     covs = {}
     for k in np.unique(ids):
-<<<<<<< HEAD
         where = np.flatnonzero(ids == k)
         xk = xs[where]
         yk = ys[where]
@@ -40,19 +39,6 @@ def cluster_scatter(
             means[k] = x_mean, y_mean
             covs[k] = xycov
             if annotate:
-=======
-        if (ids == k).sum() > 0:
-            where = np.flatnonzero(ids == k)
-            xk = xs[where]
-            yk = ys[where]
-            color = get_ccolor(k)
-            ax.scatter(xk, yk, s=s, color=color, alpha=alpha, marker=".")
-            if k not in excluded_ids:
-                x_mean, y_mean = xk.mean(), yk.mean()
-                xycov = np.cov(xk, yk)
-                means[k] = x_mean, y_mean
-                covs[k] = xycov
->>>>>>> c42a9fbc6a030b3cc53e92921ba237970f95a21a
                 ax.annotate(str(k), (x_mean, y_mean), size=s)
 
     for k in means.keys():
