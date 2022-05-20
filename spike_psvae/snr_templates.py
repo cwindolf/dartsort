@@ -259,14 +259,19 @@ def get_waveforms(
     waveforms = np.empty(
         (N, spike_length_samples, n_channels), dtype=np.float32
     )
+    skipped_idx = []
     for ix, choice in enumerate(choices):
-        start = spike_train[choice, 0] - trough_offset
-        waveforms[ix] = np.fromfile(
-            binary_file,
-            np.float32,
-            count=spike_length_samples * n_channels,
-            offset=np.dtype(np.float32).itemsize * start * n_channels,
-        ).reshape(spike_length_samples, n_channels)
+        try:
+            start = spike_train[choice, 0] - trough_offset
+            waveforms[ix] = np.fromfile(
+                binary_file,
+                np.float32,
+                count=spike_length_samples * n_channels,
+                offset=np.dtype(np.float32).itemsize * start * n_channels,
+            ).reshape(spike_length_samples, n_channels)
+        except:
+            skipped_idx.append(ix)
+    
 
     # add in subtracted waveforms
     if subtracted_waveforms is not None:
@@ -275,7 +280,7 @@ def get_waveforms(
             np.arange(waveforms.shape[1])[None, :, None],
             channel_index[maxchans[choices]][:, None, :],
         ] += subtracted_waveforms[choices]
-
+    waveforms = np.delete(waveforms, skipped_idx, axis = 0)
     return waveforms
 
 
