@@ -356,6 +356,7 @@ def hybrid_recording(
     do_noise=True,
     seed=0,
     rate_spread=10,
+    trough_offset=42,
 ):
     rg = np.random.default_rng(seed)
     Nt, T, n_channels = templates.shape
@@ -394,17 +395,17 @@ def hybrid_recording(
     )
 
     # pick random z offsets
-    cluster_chan_offsets = rg.integers(
-        0,
-        n_channels - 2 * (write_n_channels // 2 + 1),
+    new_maxchans = rg.integers(
+        (write_n_channels // 2 + 1),
+        n_channels - (write_n_channels // 2 + 1),
         size=n_clusters,
     )
-    # cluster_chan_offsets -= cluster_chan_offsets % 4
+    # new_maxchans -= new_maxchans % 4
 
     # pick point process params
-    if isinstance(mean_spike_rate, list):
+    try:
         spike_rates = rg.uniform(low=mean_spike_rate[0], high=mean_spike_rate[1], size=n_clusters)
-    else:
+    except TypeError:
         spike_rates = rg.gamma(rate_spread, scale=mean_spike_rate / rate_spread, size=n_clusters)
     n_spikes = rg.poisson(lam=spike_rates * t_total_s, size=n_clusters)
 
@@ -422,7 +423,7 @@ def hybrid_recording(
                 break
         spike_trains.append(np.c_[spike_train, [i] * n_spikes[i]])
         spike_indices.append(
-            np.c_[spike_train, [cluster_chan_offsets[i]] * n_spikes[i]]
+            np.c_[spike_train, [new_maxchans[i]] * n_spikes[i]]
         )
         write_template0 = templates[i]
         write_template0 = write_template0[:, write_channel_index[template_maxchans[i]]]
@@ -459,7 +460,7 @@ def hybrid_recording(
     print(spike_train.shape, spike_index.shape, waveforms.shape)
 
     # now we np.add.at and return
-    time_range = np.arange(T)
+    time_range = np.arange(-trough_offset, T - trough_offset)
     time_ix = spike_train[:, 0, None] + time_range[None, :]
     chan_ix = write_channel_index[spike_index[:, 1]]
     np.add.at(
@@ -467,5 +468,10 @@ def hybrid_recording(
         (time_ix[:, :, None], chan_ix[:, None, :]),
         waveforms,
     )
+    
+    # templates at offset chans
+    write_templates = np.zeros_like(templates)
+    for i, wt in enumerate(templates):
+        write_templates[i][:, write_channel_index[new_maxchans[i]]] = wt[:, write_channel_index[template_maxchans[i]]]
 
-    return raw, spike_train, spike_index, waveforms, choices, templates
+    return raw, spike_train, spike_index, waveforms, choices, write_templates, new_maxchans

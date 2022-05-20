@@ -165,12 +165,12 @@ if (args.localization_kind != "none") and (not args.noregister):
                 maxptps,
                 z_abs,
                 samples / 30000,
-                robust_sigma=0.5,
-                disp=200,
+                robust_sigma=1.0,
+                disp=200 * args.n_windows,
                 denoise_sigma=0.1,
                 rigid_init=False,
                 n_windows=args.n_windows,
-                widthmul=1.0,
+                widthmul=0.5,
             )
             z_reg -= (z_reg - z_abs).mean()
             dispmap -= dispmap.mean()

@@ -15,12 +15,8 @@ from .denoise_temporal_decrease import (
 )
 
 
-# pretrained_path = (
-#     Path(__file__).parent.parent / "pretrained/single_chan_denoiser.pt"
-# )
-
 pretrained_path = (
-    "/media/cat/julien/spikes_localization_registration/pretrained_denoiser/denoise.pt"
+    Path(__file__).parent.parent / "pretrained/single_chan_denoiser.pt"
 )
 
 
