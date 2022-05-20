@@ -21,9 +21,9 @@ def register_rigid(
     robust_sigma=0.0,
     denoise_sigma=0.1,
     corr_threshold=0.0,
+    normalized=True,
     destripe=False,
     batch_size=1,
-    step_size=1,
     return_extra=False,
 ):
     """1D rigid registration
@@ -67,7 +67,7 @@ def register_rigid(
         robust_sigma=robust_sigma,
         disp=disp,
         batch_size=batch_size,
-        step_size=step_size,
+        normalized=normalized,
     )
     extra = dict(D=D, C=C)
 
@@ -90,6 +90,7 @@ def register_nonrigid(
     robust_sigma=0.0,
     denoise_sigma=0.1,
     corr_threshold=0.0,
+    normalized=True,
     rigid_disp=400,
     disp=800,
     rigid_init=False,
@@ -98,7 +99,6 @@ def register_nonrigid(
     destripe=False,
     device=None,
     batch_size=1,
-    step_size=1,
 ):
     """1D nonrigid registration
 
@@ -163,8 +163,8 @@ def register_nonrigid(
             times,
             robust_sigma=robust_sigma,
             corr_threshold=corr_threshold,
+            normalized=normalized,
             batch_size=batch_size,
-            step_size=step_size,
             disp=rigid_disp,
             denoise_sigma=denoise_sigma,
             destripe=destripe,
@@ -179,11 +179,14 @@ def register_nonrigid(
 
         # gaussian windows
         windows = np.empty((nwin, D))
+        slices = []
         space = D // (nwin + 1)
         locs = np.linspace(space, D - space, nwin)
         scale = widthmul * D / nwin
         for k, loc in enumerate(locs):
             windows[k, :] = norm.pdf(np.arange(D), loc=loc, scale=scale)
+            domain_large_enough = np.flatnonzero(windows[k, :] > 1e-5)
+            slices.append(slice(domain_large_enough[0], domain_large_enough[-1]))
         windows /= windows.sum(axis=0, keepdims=True)
 
         # torch versions on device
@@ -194,12 +197,12 @@ def register_nonrigid(
         ps = np.empty((nwin, T))
         for k, window in enumerate(tqdm(windows_, desc="windows")):
             p, D, C = register_raster_rigid(
-                window[:, None] * raster_,
+                (window[:, None] * raster_)[slices[k]],
                 mincorr=corr_threshold,
+                normalized=normalized,
                 robust_sigma=robust_sigma,
                 disp=max(25, int(np.ceil(disp / nwin))),
                 batch_size=batch_size,
-                step_size=step_size,
                 pbar=False,
             )
             ps[k] = p
