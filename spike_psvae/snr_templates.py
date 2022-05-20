@@ -72,9 +72,12 @@ def get_templates(
     both arrays like templates.
     """
     # -- initialize output
+    print(n_templates)
     if n_templates is None:
         n_templates = spike_train[:, 1].max() + 1
+        print("hi0", n_templates)
     templates = np.zeros((n_templates, spike_length_samples, len(geom)))
+    print("hi", templates.shape, n_templates)
     if snr_by_channel:
         snrs_by_chan = np.zeros((n_templates, len(geom)))
     snrs = np.zeros(n_templates)
@@ -259,12 +262,18 @@ def get_waveforms(
     )
     for ix, choice in enumerate(choices):
         start = spike_train[choice, 0] - trough_offset
-        waveforms[ix] = np.fromfile(
-            binary_file,
-            np.float32,
-            count=spike_length_samples * n_channels,
-            offset=np.dtype(np.float32).itemsize * start * n_channels,
-        ).reshape(spike_length_samples, n_channels)
+        try:
+            waveforms[ix] = np.fromfile(
+                binary_file,
+                np.float32,
+                count=spike_length_samples * n_channels,
+                offset=np.dtype(np.float32).itemsize * start * n_channels,
+            ).reshape(spike_length_samples, n_channels)
+        except OSError as e:
+            raise ValueError(
+                f"Error trying to load spike with trough {spike_train[choice, 0]} "
+                f"and start {start}"
+            ) from e
 
     # add in subtracted waveforms
     if subtracted_waveforms is not None:
