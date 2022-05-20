@@ -21,7 +21,7 @@ def get_ccolor(k):
 
 
 def cluster_scatter(
-    xs, ys, ids, ax=None, n_std=2.0, excluded_ids={-1}, s=1, alpha=0.5
+    xs, ys, ids, ax=None, n_std=2.0, excluded_ids={-1}, s=1, alpha=0.5, annotate=True
 ):
     ax = ax or plt.gca()
     # scatter and collect gaussian info
@@ -38,7 +38,8 @@ def cluster_scatter(
             xycov = np.cov(xk, yk)
             means[k] = x_mean, y_mean
             covs[k] = xycov
-            ax.annotate(str(k), (x_mean, y_mean), size=s)
+            if annotate:
+                ax.annotate(str(k), (x_mean, y_mean), size=s)
 
     for k in means.keys():
         mean_x, mean_y = means[k]
@@ -77,6 +78,7 @@ def array_scatter(
     maxptp,
     zlim=(-50, 3900),
     axes=None,
+    annotate=True,
 ):
     fig = None
     if axes is None:
@@ -89,20 +91,22 @@ def array_scatter(
         ax=axes[0],
         s=10,
         alpha=0.05,
+        annotate=annotate,
     )
     axes[0].scatter(*geom.T, c="orange", marker="s", s=10)
     axes[0].set_ylabel("z")
     axes[0].set_xlabel("x")
 
     cluster_scatter(
-        maxptp,
+        np.log(maxptp),
         z,
         labels,
         ax=axes[1],
         s=10,
         alpha=0.05,
+        annotate=annotate,
     )
-    axes[1].set_xlabel("maxptp")
+    axes[1].set_xlabel("log maxptp")
     axes[2].scatter(
         x,
         z,
