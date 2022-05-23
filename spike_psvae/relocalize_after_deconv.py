@@ -172,17 +172,18 @@ def extract_deconv_wfs(
     fname_denoised = os.path.join(output_directory, "denoised_wfs.h5")
 
     merge_files_h5(
-        subtracted_waveforms_dir, fname_subtracted, "wfs", shape, delete=True
+        subtracted_waveforms_dir, fname_subtracted, "wfs", shape, channel_index=extract_channel_index, delete=True
     )
     merge_files_h5(
         collision_subtracted_waveforms_dir,
         fname_cleaned,
         "wfs",
         shape,
+        channel_index=extract_channel_index,
         delete=True,
     )
     merge_files_h5(
-        denoised_waveforms_dir, fname_denoised, "wfs", shape, delete=True
+        denoised_waveforms_dir, fname_denoised, "wfs", shape, channel_index=extract_channel_index, delete=True
     )
 
     return (
@@ -195,9 +196,11 @@ def extract_deconv_wfs(
 
 
 def merge_files_h5(
-    filtered_location, output_h5, dataset_name, shape, delete=False
+    filtered_location, output_h5, dataset_name, shape, channel_index=None, delete=False
 ):
     with h5py.File(output_h5, "w") as out:
+        if channel_index is not None:
+            out.create_dataset("channel_index", data=channel_index)
         wfs = out.create_dataset(dataset_name, shape=shape, dtype=np.float32)
         filenames = os.listdir(filtered_location)
         filenames_sorted = sorted(filenames)
