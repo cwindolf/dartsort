@@ -155,7 +155,7 @@ deconv_spike_index = np.load(os.path.join(output_directory, 'spike_index.npy'))
 print(f'number of deconv spikes: {deconv_spike_index.shape[0]}')
 
 relocalize_after_deconv.relocalize_extracted_wfs(denoised_wfs_h5, 
-    deconv_spike_train_up, deconv_spike_index, geom_array, output_directory
+    deconv_spike_train_up, deconv_spike_index, geom_array, output_directory)
 
 localization_results_path = os.path.join(output_directory, 'localization_results.npy')
 maxptpss = np.load(localization_results_path)[:, 4]
@@ -245,7 +245,7 @@ templates_geq_4 = merge_split_cleaned.get_templates(
 
 #take ptp > 4 before next step of deconv
 
-merged_labels = merge(spike_train_deconv[maxptps>4, 1], templates_geq_4, cleaned_wfs_h5, xs[maxptps>4], z_reg[maxptps>4], maxptps[maxptps>4])
+merged_labels = after_deconv_merge_split.merge(spike_train_deconv[maxptps>4, 1], templates_geq_4, cleaned_wfs_h5, xs[maxptps>4], z_reg[maxptps>4], maxptps[maxptps>4])
 
 
 # Additional Deconv
@@ -292,7 +292,7 @@ print(f'deconv templates shape: {deconv_templates_up.shape}')
 #Save all wfs in output_directory
 n_chans_to_extract = 40
 
-relocalize_after_deconv.extract_deconv_wfs(h5_subtract, 
+skipped_count = relocalize_after_deconv.extract_deconv_wfs(h5_subtract, 
     residual_path, geom_array, deconv_spike_train_up, 
     deconv_templates_up, output_directory,
     denoiser, device, n_chans_to_extract=n_chans_to_extract)
@@ -319,7 +319,7 @@ deconv_spike_index = np.load(os.path.join(output_directory, 'spike_index.npy'))
 print(f'number of deconv spikes: {deconv_spike_index.shape[0]}')
 
 relocalize_after_deconv.relocalize_extracted_wfs(denoised_wfs_h5, 
-    deconv_spike_train_up, deconv_spike_index, geom_array, output_directory
+    deconv_spike_train_up, deconv_spike_index, geom_array, output_directory)
 
 localization_results_path = os.path.join(output_directory, 'localization_results.npy')
 maxptpss = np.load(localization_results_path)[:, 4]
@@ -370,5 +370,3 @@ templates_after_deconv= merge_split_cleaned.get_templates(
     max_spikes=250,
     n_times=121,
 )
-
-
