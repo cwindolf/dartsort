@@ -14,7 +14,6 @@ from spike_psvae.cluster_utils import (
 )
 from isosplit import isocut
 from scipy.spatial.distance import cdist
-from tqdm import notebook
 from tqdm.auto import tqdm, trange
 import matplotlib.pyplot as plt
 from spike_psvae.denoise import denoise_wf_nn_tmp_single_channel
@@ -81,6 +80,10 @@ def run_LDA_split(wfs, max_channels, threshold_diptest=.5):
         nmc = np.unique(max_channels).shape[0]
         print("SVD error, skipping this one. N maxchans was", nmc, "n data", len(wfs))
         return np.zeros(len(max_channels), dtype=int)
+    except ValueError as e:
+        print("Some ValueError during LDA split. Ignoring it and not splitting.")
+        print("Here is the error message though", e, flush=True)
+        return np.zeros(len(max_channels), dtype=int)
     
     if ncomp == 2:
         lda_clusterer = hdbscan.HDBSCAN(min_cluster_size=25, min_samples=25)
@@ -88,10 +91,10 @@ def run_LDA_split(wfs, max_channels, threshold_diptest=.5):
         labels = lda_clusterer.labels_
     else:
         value_dpt, cut_value = isocut(lda_comps[:,0])
-        print("dip test", value_dpt, cut_value)
+        # print("dip test", value_dpt, cut_value)
         if value_dpt < threshold_diptest:
             labels = np.zeros(len(max_channels), dtype=int)
-            print(labels)
+            # print(labels)
         else:
             labels = np.zeros(len(max_channels), dtype=int)
             labels[np.where(lda_comps[:,0] > cut_value)] = 1   
@@ -136,6 +139,7 @@ def split_individual_cluster(
     pca_n_channels,
     nn_denoise,
     threshold_diptest,
+    min_size_split=25,
 ):
     total_channels = geom_array.shape[0]
     N, T, wf_chans = waveforms_unit.shape
@@ -144,6 +148,9 @@ def split_individual_cluster(
     labels_unit = np.full(spike_index_unit.shape[0], -1)
     is_split = False
     
+    if N < min_size_split:
+        return is_split, labels_unit * 0
+
     mc = max(n_channels_half, true_mc)
     mc = min(total_channels - n_channels_half, mc)
     assert mc - n_channels_half >= 0
@@ -219,7 +226,11 @@ def split_individual_cluster(
     
     #get 2D pc embedding of tpca embeddings
     pca_model = PCA(2)
-    pcs = pca_model.fit_transform(tpca_wf_units_mcs)
+    try:
+        pcs = pca_model.fit_transform(tpca_wf_units_mcs)
+    except ValueError:
+        print("ERR", tpca_wf_units_mcs.shape, flush=True)
+        raise
     
     #scale pc embeddings to X feature
     alpha1 = (x_unit.max() - x_unit.min()) / (
@@ -348,7 +359,7 @@ def split_clusters(
     labels_original = labels.copy()
     cur_max_label = labels.max()
     for unit in tqdm(np.setdiff1d(np.unique(labels), [-1])): #216
-        print(f"splitting unit {unit}")
+        # print(f"splitting unit {unit}")
         in_unit = np.flatnonzero(labels == unit)
         spike_index_unit = spike_index[in_unit]
         template_shift = template_shifts[unit]
