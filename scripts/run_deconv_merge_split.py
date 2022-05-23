@@ -281,6 +281,7 @@ merged_labels = after_deconv_merge_split.merge(
     xs[maxptps > 4],
     z_reg[maxptps > 4],
     maxptps[maxptps > 4],
+    firstchans[maxptps > 4],
 )
 
 
