@@ -16,7 +16,6 @@ from pathlib import Path
 
 from sklearn.discriminant_analysis import LinearDiscriminantAnalysis as LDA
 from isosplit import isocut
-import merge_split_cleaned
 
 from spike_psvae import cluster, merge_split_cleaned, cluster_viz_index, denoise, cluster_utils, triage, cluster_viz
 from spike_psvae.cluster_utils import read_waveforms, compare_two_sorters, make_sorting_from_labels_frames
@@ -32,13 +31,6 @@ from spike_psvae.cluster_utils import make_sorting_from_labels_frames, compute_c
 from spike_psvae.triage import run_weighted_triage
 from spike_psvae.cluster_utils import get_agreement_indices, compute_spiketrain_agreement, get_unit_similarities, compute_shifted_similarity, read_waveforms
 from spike_psvae.cluster_utils import get_closest_clusters_hdbscan, get_closest_clusters_kilosort, get_closest_clusters_hdbscan_kilosort, get_closest_clusters_kilosort_hdbscan
-
-n_chans_to_extract = 40
-n_chans_geom = geom_array.shape[0]
-h5_subtract # defined before 
-denoiser, device # defined before
-output_directory # defined before
-
 
 
 def extract_deconv_wfs(h5_subtract, residual_path, geom_array, deconv_spike_train_up, deconv_templates_up, output_directory, denoiser, device, batch_size=1024, n_chans_to_extract=40, rank_tpca=8):
