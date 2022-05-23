@@ -36,13 +36,25 @@ spike_index = np.load('spike_index_before_deconv.npy')
 labels = np.load('/labels_before_deconv.npy') #labels equal to -1 when spike not assigned
 standardized_path = 'standardized.bin'
 residual_path = 'subtraction _residuals.bin'
-standardized_dtype = 'float32'
 
-output_directory = 'cpu_deconv_localization_results' # output directory
+standardized_dtype = 'float32'
 geom_path = 'np1_channel_map.npy' # path to geom file
+
+# Save first deconv output
+output_directory = 'cpu_deconv_localization_results' # output directory
+if not os.path.exists(output_directory_final_deconv):
+    os.makedirs(output_directory_final_deconv)
+
 
 # h5 subtract from the first pass of detect/subtract
 h5_subtract = 'subtraction_localization_results.h5'
+
+
+# Save final deconv output
+output_directory_final_deconv = 'cpu_deconv_results_AFTER_SPLIT_MERGE'
+if not os.path.exists(output_directory_final_deconv):
+    os.makedirs(output_directory_final_deconv)
+
 
 fs = 30000
 # Run deconvolution
@@ -128,29 +140,14 @@ print(f'deconv templates shape: {deconv_templates_up.shape}')
 #Save all wfs in output_directory
 n_chans_to_extract = 40
 
-relocalize_after_deconv.extract_deconv_wfs(h5_subtract, 
+fname_spike_index, fname_spike_labels, fname_subtracted, cleaned_wfs_h5, denoised_wfs_h5 = relocalize_after_deconv.extract_deconv_wfs(h5_subtract, 
     residual_path, geom_array, deconv_spike_train_up, 
     deconv_templates_up, output_directory,
     denoiser, device, n_chans_to_extract=n_chans_to_extract)
 
-# Merge wfs in h5 fils
-shape = (n_spikes-skipped_count, 121, n_chans_to_extract)
-relocalize_after_deconv.merge_files_h5(subtracted_waveforms_dir, 
-               os.path.join(output_directory,'subtracted_wfs.h5'), 'wfs', shape, delete=True)
-relocalize_after_deconv.merge_files_h5(collision_subtracted_waveforms_dir, 
-               os.path.join(output_directory,'collision_subtracted_wfs.h5'), 'wfs', shape, delete=True)
-relocalize_after_deconv.merge_files_h5(denoised_waveforms_dir, 
-               os.path.join(output_directory,'denoised_wfs.h5'), 'wfs', shape, delete=True)
-
-
 # Relocalize Waveforms 
 
-denoised_wfs_h5 = h5py.File(os.path.join(output_directory,'denoised_wfs.h5')) #usd for split
-cleaned_wfs_h5 = h5py.File(os.path.join(output_directory,'collision_subtracted_wfs.h5')) #used for merge
-# denoised_wfs = denoised_wfs_h5["wfs"]
-# n_spikes = denoised_wfs.shape[0]
-
-deconv_spike_index = np.load(os.path.join(output_directory, 'spike_index.npy'))
+deconv_spike_index = np.load(fname_spike_index)
 # assert deconv_spike_index.shape[0] == n_spikes
 print(f'number of deconv spikes: {deconv_spike_index.shape[0]}')
 
@@ -259,23 +256,19 @@ spike_index_DAM[:, 0] = spt_deconv_after_merge[:, 0].copy()
 for i in range(templates_geq_4.shape[0]):
     spike_index_DAM[spt_deconv_after_merge[:, 1] == i, 1] = templates_geq_4[i].ptp(0).argmax()
 
-output_directory = 'cpu_deconv_results_AFTER_SPLIT_MERGE'
-if not os.path.exists(output_directory):
-    os.makedirs(output_directory)
-
 trough_offset = 42
 max_time = 5*60*30000
 which = (spt_deconv_after_merge[:, 0] > trough_offset) & (spt_deconv_after_merge[:, 0] < max_time - (121 - trough_offset))
 
 result_file_names = deconvolve.deconvolution(spike_index_DAM[which],spt_deconv_after_merge[which, 1], 
-                        output_directory, standardized_path, residual_path, spt_deconv_after_merge[which],
+                        output_directory_final_deconv, standardized_path, residual_path, spt_deconv_after_merge[which],
                          geom_path, multi_processing=False, cleaned_temps=True, n_processors=6, threshold=40)
 
 
 # Following steps are optional (compute residuals and relocalize )
 
 residual_path = residual.run_residual(result_file_names[0], result_file_names[1],
-                                      output_directory, standardized_path, geom_path)
+                                      output_directory_final_deconv, standardized_path, geom_path)
 
 
 
@@ -292,36 +285,22 @@ print(f'deconv templates shape: {deconv_templates_up.shape}')
 #Save all wfs in output_directory
 n_chans_to_extract = 40
 
-skipped_count = relocalize_after_deconv.extract_deconv_wfs(h5_subtract, 
+fname_spike_index, fname_spike_labels, fname_subtracted, cleaned_wfs_h5, denoised_wfs_h5 = relocalize_after_deconv.extract_deconv_wfs(h5_subtract, 
     residual_path, geom_array, deconv_spike_train_up, 
-    deconv_templates_up, output_directory,
+    deconv_templates_up, output_directory_final_deconv,
     denoiser, device, n_chans_to_extract=n_chans_to_extract)
-
-# Merge wfs in h5 fils
-shape = (n_spikes-skipped_count, 121, n_chans_to_extract)
-relocalize_after_deconv.merge_files_h5(subtracted_waveforms_dir, 
-               os.path.join(output_directory,'subtracted_wfs.h5'), 'wfs', shape, delete=True)
-relocalize_after_deconv.merge_files_h5(collision_subtracted_waveforms_dir, 
-               os.path.join(output_directory,'collision_subtracted_wfs.h5'), 'wfs', shape, delete=True)
-relocalize_after_deconv.merge_files_h5(denoised_waveforms_dir, 
-               os.path.join(output_directory,'denoised_wfs.h5'), 'wfs', shape, delete=True)
 
 
 # Relocalize Waveforms 
 
-denoised_wfs_h5 = h5py.File(os.path.join(output_directory,'denoised_wfs.h5')) #usd for split
-cleaned_wfs_h5 = h5py.File(os.path.join(output_directory,'collision_subtracted_wfs.h5')) #used for merge
-# denoised_wfs = denoised_wfs_h5["wfs"]
-# n_spikes = denoised_wfs.shape[0]
-
-deconv_spike_index = np.load(os.path.join(output_directory, 'spike_index.npy'))
+deconv_spike_index = np.load(fname_spike_index)
 # assert deconv_spike_index.shape[0] == n_spikes
 print(f'number of deconv spikes: {deconv_spike_index.shape[0]}')
 
 relocalize_after_deconv.relocalize_extracted_wfs(denoised_wfs_h5, 
-    deconv_spike_train_up, deconv_spike_index, geom_array, output_directory)
+    deconv_spike_train_up, deconv_spike_index, geom_array, output_directory_final_deconv)
 
-localization_results_path = os.path.join(output_directory, 'localization_results.npy')
+localization_results_path = os.path.join(output_directory_final_deconv, 'localization_results.npy')
 maxptpss = np.load(localization_results_path)[:, 4]
 z_absss = np.load(localization_results_path)[:, 1]
 times = deconv_spike_train_up[:,0].copy()/fs
@@ -343,8 +322,8 @@ z_reg, dispmap = ibme.register_nonrigid(
 )
 z_reg -= (z_reg - z_absss).mean()
 dispmap -= dispmap.mean()
-np.save(os.path.join(output_directory, 'z_reg.npy'), z_reg)
-np.save(os.path.join(output_directory, 'ptps.npy'), maxptpss)
+np.save(os.path.join(output_directory_final_deconv, 'z_reg.npy'), z_reg)
+np.save(os.path.join(output_directory_final_deconv, 'ptps.npy'), maxptpss)
 
 # # Check registration output
 # registered_raster, dd, tt = ibme.fast_raster(maxptpss, z_reg, times)
@@ -353,13 +332,13 @@ np.save(os.path.join(output_directory, 'ptps.npy'), maxptpss)
 
 # After Deconv Split Merge
 
-deconv_spike_index = np.load(os.path.join(output_directory, 'spike_index.npy'))
-z_abs = np.load(os.path.join(output_directory, 'localization_results.npy'))[:, 1]
-firstchans = np.load(os.path.join(output_directory, 'localization_results.npy'))[:, 5]
-maxptps = np.load(os.path.join(output_directory, 'localization_results.npy'))[:, 4]
-spike_train_deconv = np.load(os.path.join(output_directory, 'spike_train.npy'))
-xs = np.load(os.path.join(output_directory, 'localization_results.npy'))[:, 0]
-z_reg = np.load(os.path.join(output_directory, 'z_reg.npy'))
+deconv_spike_index = np.load(os.path.join(output_directory_final_deconv, 'spike_index.npy'))
+z_abs = np.load(os.path.join(output_directory_final_deconv, 'localization_results.npy'))[:, 1]
+firstchans = np.load(os.path.join(output_directory_final_deconv, 'localization_results.npy'))[:, 5]
+maxptps = np.load(os.path.join(output_directory_final_deconv, 'localization_results.npy'))[:, 4]
+spike_train_deconv = np.load(os.path.join(output_directory_final_deconv, 'spike_train.npy'))
+xs = np.load(os.path.join(output_directory_final_deconv, 'localization_results.npy'))[:, 0]
+z_reg = np.load(os.path.join(output_directory_final_deconv, 'z_reg.npy'))
 
 templates_after_deconv= merge_split_cleaned.get_templates(
     standardized_path,
