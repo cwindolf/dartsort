@@ -27,7 +27,7 @@ def register_raster_rigid(
     disp : int, optional
         Maximum displacement during pairwise displacement estimates.
         If `None`, half of the depth domain's length will be used.
-    batch_size, step_size : int
+    batch_size : int
         See `calc_corr_decent`
     Returns: p, array (T,)
     """
@@ -43,7 +43,7 @@ def register_raster_rigid(
     return p, D, C
 
 
-def psolvecorr(D, C, mincorr=0.0, robust_sigma=0, robust_iter=20):
+def psolvecorr(D, C, mincorr=0.0, robust_sigma=0, robust_iter=5):
     """Solve for rigid displacement given pairwise disps + corrs"""
     T = D.shape[0]
     assert (T, T) == D.shape == C.shape
@@ -65,7 +65,7 @@ def psolvecorr(D, C, mincorr=0.0, robust_sigma=0, robust_iter=20):
         idx = slice(None)
         for _ in trange(robust_iter, desc="robust lsqr"):
             p, *_ = sparse.linalg.lsqr(A[idx], V[idx])
-            idx = np.nonzero(np.abs(zscore(A @ p - V)) <= robust_sigma)
+            idx = np.flatnonzero(np.abs(zscore(A @ p - V)) <= robust_sigma)
     else:
         p, *_ = sparse.linalg.lsqr(A, V)
 
@@ -149,7 +149,7 @@ def calc_corr_decent(
             corr = normxcorr(
                 raster,
                 raster[i : i + batch_size],
-                max_displacement=possible_displacement.size // 2,
+                padding=possible_displacement.size // 2,
             )
         else:
             corr = F.conv1d(
