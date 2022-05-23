@@ -4,6 +4,8 @@ import spikeinterface
 from spikeinterface.comparison import compare_two_sorters
 import os
 import pandas
+import hdbscan
+from spike_psvae import triage
 
 def read_waveforms(spike_times, bin_file, geom_array, n_times=121, offset_denoiser = 42, channels=None, dtype=np.dtype('float32')):
     '''
@@ -196,7 +198,7 @@ def remove_duplicate_units(clusterer, spike_frames, maxptps):
 
     return clusterer, remove_ids
 
-def remove_duplicate_spikes(clusterer, spike_frames, maxptps, frames_dedup=20):
+def remove_duplicate_spikes(clusterer, spike_frames, maxptps, frames_dedup):
     #normalize agreement by smaller unit and then remove only the spikes with agreement
     sorting = make_sorting_from_labels_frames(clusterer.labels_, spike_frames)
     #remove duplicates
@@ -231,6 +233,129 @@ def remove_duplicate_spikes(clusterer, spike_frames, maxptps, frames_dedup=20):
 
     return clusterer, remove_indices_list, remove_spikes
 
+
+def perturb_features(x, z, logmaxptp_scaled, noise_scale):
+    x_p = x + np.random.normal(loc=0.0, scale=noise_scale)
+    z_p = z + np.random.normal(loc=0.0, scale=noise_scale)
+    log_maxptp_scaled_p = logmaxptp_scaled + np.random.normal(loc=0.0, scale=noise_scale) 
+    return x_p, z_p, log_maxptp_scaled_p
+
+def copy_spikes(x, z, maxptps, spike_index, scales=(1,1,30), num_duplicates_list=[0,1,2,3,4]):
+    true_spike_indices = []
+    new_x = []
+    new_z = []
+    new_maxptps = []
+    new_spike_index = []
+    new_spike_ids = []
+    num_bins = len(num_duplicates_list)
+    ptp_bins = np.histogram(maxptps, bins=num_bins)[1]
+    for spike_id in range(len(spike_index)):
+        maxptp_i = maxptps[spike_id]
+        x_i = x[spike_id]
+        z_i = z[spike_id]
+        new_x.append(x_i)
+        new_z.append(z_i)
+        new_maxptps.append(maxptp_i) 
+        new_spike_index.append(spike_index[spike_id])
+        #add a 1 to spike index to indicate real spike
+        true_spike_indices.append([True, spike_id])
+        ptp_bin_i = np.sort(ptp_bins[np.argsort(np.abs(maxptp_i - ptp_bins))[:2]])
+        duplicates_choice = np.sort(np.argsort(np.abs(maxptp_i - ptp_bins))[:2])
+        p = (maxptp_i - ptp_bin_i.min())/(ptp_bin_i - ptp_bin_i.min()).max()
+        num_duplicates = np.random.choice(duplicates_choice, p=[1-p, p])
+        for i in range(num_duplicates):
+            x_p, z_p, log_maxptp_scaled_p = perturb_features(x_i*scales[0], z_i*scales[1], np.log(maxptp_i)*scales[2], noise_scale=1)
+            new_x.append(x_p/scales[0])
+            new_z.append(z_p/scales[1])
+            new_maxptps.append(np.e**(log_maxptp_scaled_p/scales[2]))
+            new_spike_index.append(spike_index[spike_id])
+            #add a 0 to spike index to indicate copied spike
+            true_spike_indices.append([False, -1])
+    new_x = np.asarray(new_x)
+    new_z = np.asarray(new_z)
+    new_maxptps = np.asarray(new_maxptps)
+    new_spike_index = np.asarray(new_spike_index)
+    true_spike_indices = np.asarray(true_spike_indices)
+    return new_x, new_z, new_maxptps, new_spike_index, true_spike_indices
+    
+def cluster_spikes(x, z, maxptps, spike_index, min_cluster_size=25, min_samples=25, scales=(1,1,30), frames_dedup=12, triage_quantile=80, ptp_low_threshold=3, 
+                   ptp_high_threshold=6, do_copy_spikes=True):
+    
+    #copy high-ptp spikes
+    true_spike_indices = np.stack((np.ones(maxptps.shape[0], dtype=bool), np.arange(maxptps.shape[0])))
+    if do_copy_spikes:
+        x, z, maxptps, spike_index, true_spike_indices = copy_spikes(x, z, maxptps, spike_index, scales=scales, num_duplicates_list=[0,1,2,3,4])
+    
+    #triage low ptp spikes to improve density-based clustering
+    idx_keep, high_ptp_filter, low_ptp_filter = triage.run_weighted_triage_low_ptp(x, z, maxptps, scales=scales, threshold=triage_quantile, 
+                                                                                   ptp_low_threshold=ptp_low_threshold, ptp_high_threshold=ptp_high_threshold, c=1)
+    high_ptp_mask = np.zeros(maxptps.shape[0], dtype=bool)
+    high_ptp_mask[high_ptp_filter] = True
+    spike_ids = np.arange(maxptps.shape[0])
+    low_ptp_spike_ids = spike_ids[high_ptp_mask]
+    #low ptp spikes keep ids
+    keep_low_ptp_spike_ids = low_ptp_spike_ids[low_ptp_filter][idx_keep]
+    keep_high_ptp_mask = np.ones(maxptps.shape[0], dtype=bool)
+    keep_high_ptp_mask[high_ptp_filter] = False
+    #high ptp spikes keep ids
+    high_ptp_spike_ids = spike_ids[keep_high_ptp_mask]
+    #final indices keep
+    final_keep_indices = np.sort(np.concatenate((keep_low_ptp_spike_ids, high_ptp_spike_ids)))
+    x = x[final_keep_indices]
+    z = z[final_keep_indices]
+    maxptps = maxptps[final_keep_indices]
+    spike_index = spike_index[final_keep_indices]
+    true_spike_indices = true_spike_indices[final_keep_indices]
+        
+    #create feature set for clustering    
+    features = np.c_[x*scales[0], z*scales[1], np.log(maxptps) * scales[2]]
+        
+    # features = np.c_[tx*scales[0], tz*scales[2], all_pcs[:,0] * alpha1, all_pcs[:,1] * alpha2]
+    clusterer = hdbscan.HDBSCAN(min_cluster_size=min_cluster_size, min_samples=min_samples)
+    clusterer.fit(features)
+    
+    #remove copied spikes
+    clusterer.labels_ = clusterer.labels_[np.where(true_spike_indices[:,0])]
+    clusterer._raw_data = clusterer._raw_data[np.where(true_spike_indices[:,0])]
+    clusterer.probabilities_ = clusterer.probabilities_[np.where(true_spike_indices[:,0])]
+    maxptps = maxptps[np.where(true_spike_indices[:,0])]
+    x = x[np.where(true_spike_indices[:,0])]
+    z = z[np.where(true_spike_indices[:,0])]
+    spike_index = spike_index[np.where(true_spike_indices[:,0])]
+    original_spike_ids = true_spike_indices[np.where(true_spike_indices[:,0])][:,1]
+
+    # reorder by z
+    cluster_centers = compute_cluster_centers(clusterer)
+    clusterer = relabel_by_depth(clusterer, cluster_centers)
+    
+    #remove dups (from NN denoise) and reorder by z
+    clusterer, duplicate_indices, duplicate_spikes = remove_duplicate_spikes(clusterer, spike_index[:,0], maxptps, frames_dedup=frames_dedup)
+    cluster_centers = compute_cluster_centers(clusterer)
+    
+    return clusterer, cluster_centers, spike_index, x, z, maxptps, original_spike_ids
+
+def compute_cluster_centers(clusterer):
+    cluster_centers_data = []
+    cluster_ids = np.setdiff1d(np.unique(clusterer.labels_), [-1])
+    for label in cluster_ids:
+        cluster_centers_data.append(clusterer.weighted_cluster_centroid(label))
+    cluster_centers_data = np.asarray(cluster_centers_data)
+    cluster_centers = pandas.DataFrame(data=cluster_centers_data, index=cluster_ids)
+    return cluster_centers
+
+def relabel_by_depth(clusterer, cluster_centers):
+    #re-label each cluster by z-depth
+    indices_depth = np.argsort(-cluster_centers.iloc[:,1].to_numpy())
+    labels_depth = cluster_centers.index[indices_depth]
+    label_to_id = {}
+    for i, label in enumerate(labels_depth):
+        label_to_id[label] = i
+    label_to_id[-1] = -1
+    new_labels = np.vectorize(label_to_id.get)(clusterer.labels_) 
+    clusterer.labels_ = new_labels
+    return clusterer
+
+
 def get_closest_clusters_hdbscan(cluster_id, cluster_centers, num_close_clusters=2):
     curr_cluster_center = cluster_centers.loc[cluster_id].to_numpy()
     dist_other_clusters = np.linalg.norm(curr_cluster_center[:2] - cluster_centers.iloc[:,:2].to_numpy(), axis=1)
@@ -256,27 +381,6 @@ def get_closest_clusters_kilosort_hdbscan(cluster_id, kilo_cluster_depth_means, 
     closest_cluster_indices = np.argsort(np.abs(cluster_centers.iloc[:,1].to_numpy() - kilo_cluster_depth_means[cluster_id]))[:num_close_clusters]
     closest_clusters = cluster_centers.index[closest_cluster_indices]
     return closest_clusters
-        
-def compute_cluster_centers(clusterer):
-    cluster_centers_data = []
-    cluster_ids = np.setdiff1d(np.unique(clusterer.labels_), [-1])
-    for label in cluster_ids:
-        cluster_centers_data.append(clusterer.weighted_cluster_centroid(label))
-    cluster_centers_data = np.asarray(cluster_centers_data)
-    cluster_centers = pandas.DataFrame(data=cluster_centers_data, index=cluster_ids)
-    return cluster_centers
-
-def relabel_by_depth(clusterer, cluster_centers):
-    #re-label each cluster by z-depth
-    indices_depth = np.argsort(-cluster_centers.iloc[:,1].to_numpy())
-    labels_depth = cluster_centers.index[indices_depth]
-    label_to_id = {}
-    for i, label in enumerate(labels_depth):
-        label_to_id[label] = i
-    label_to_id[-1] = -1
-    new_labels = np.vectorize(label_to_id.get)(clusterer.labels_) 
-    clusterer.labels_ = new_labels
-    return clusterer
 
 def make_sorting_from_labels_frames(labels, spike_frames, sampling_frequency=30000):
     # times_list = []
