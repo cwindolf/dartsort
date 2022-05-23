@@ -44,7 +44,8 @@ for d in (base_outdir, first_outdir, second_outdir):
     d.mkdir(exist_ok=True)
 
 with h5py.File(h5_subtract) as h5:
-    fs = h5["fs"][()]
+    # fs = h5["fs"][()]
+    fs = 30_000
     geom_array = h5["geom"][:]
 geom_path = base_outdir / "geom.npy"
 np.save(geom_path, geom_array)
@@ -95,6 +96,8 @@ residual_path = residual.run_residual(
     first_outdir,
     standardized_path,
     geom_path,
+    multi_processing=True,
+    n_processors=6,
 )
 
 
@@ -323,6 +326,8 @@ residual_path = residual.run_residual(
     second_outdir,
     standardized_path,
     geom_path,
+    multi_processing=True,
+    n_processors=6,
 )
 
 

@@ -102,40 +102,27 @@ tpca.components_ = tpca_components
 
 # %%
 (
-    tx,
-    ty,
-    tz,
-    talpha,
-    tmaxptps,
-    _,
-    ptp_keep,
-    idx_keep,
-) = triage.run_weighted_triage(x, y, z_reg, alpha, maxptps, threshold=80)
-idx_keep_full = ptp_keep[idx_keep]
-
-# %%
-# this will cluster and relabel by depth
-features = np.c_[tx, tz, np.log(tmaxptps) * 30]
-clusterer = hdbscan.HDBSCAN(
-    min_cluster_size=min_cluster_size, min_samples=min_samples
-)
-clusterer.fit(features)
-
-# z order
-cluster_centers = cluster_utils.compute_cluster_centers(clusterer)
-clusterer = cluster_utils.relabel_by_depth(clusterer, cluster_centers)
-
-# remove dups and re z order
-(
     clusterer,
-    duplicate_indices,
-    duplicate_spikes,
-) = cluster_utils.remove_duplicate_spikes(
-    clusterer, spike_index[idx_keep_full, 0], tmaxptps, frames_dedup=12
+    cluster_centers,
+    tspike_index,
+    tx,
+    tz,
+    tmaxptps,
+    idx_keep_full,
+) = cluster_utils.cluster_spikes(
+    x,
+    z,
+    maxptps,
+    spike_index,
+    min_cluster_size=25,
+    min_samples=25,
+    scales=(1, 1, 30),
+    frames_dedup=12,
+    triage_quantile=80,
+    ptp_low_threshold=3,
+    ptp_high_threshold=6,
+    do_copy_spikes=True,
 )
-cluster_centers = cluster_utils.compute_cluster_centers(clusterer)
-clusterer = cluster_utils.relabel_by_depth(clusterer, cluster_centers)
-cluster_centers = cluster_utils.compute_cluster_centers(clusterer)
 
 # labels in full index space (not triaged)
 labels = np.full(x.shape, -1)
@@ -296,8 +283,8 @@ labels_merged = merge_split_cleaned.get_merged(
     denoiser,
     device,
     tpca,
-    distance_threshold=1.,
-    threshold_diptest=.5,
+    distance_threshold=1.0,
+    threshold_diptest=0.5,
     nn_denoise=False,
 )
 
@@ -411,9 +398,7 @@ if args.doplot:
     sudir = Path(output_dir / "singleunit")
     sudir.mkdir(exist_ok=True)
 
-
     # plot cluster summary
-
 
     def job(cluster_id):
         if (sudir / f"unit_{cluster_id:03d}.png").exists():
