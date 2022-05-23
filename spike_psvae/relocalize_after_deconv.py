@@ -127,9 +127,28 @@ def extract_deconv_wfs(h5_subtract, residual_path, geom_array, deconv_spike_trai
                 batch_denoised_wfs.astype(np.float32))
         batch_id += 1
 
-    np.save(os.path.join(output_directory, 'spike_index.npy'), deconv_spike_index)
-    np.save(os.path.join(output_directory, 'spike_labels.npy'), deconv_labels)
-    return skipped_count
+    fname_spike_index = os.path.join(output_directory, 'spike_index.npy')
+    fname_spike_labels = os.path.join(output_directory, 'spike_labels.npy')
+
+    np.save(fname_spike_index, deconv_spike_index)
+    np.save(fname_spike_labels, deconv_labels)
+
+    # Merge wfs in h5 fils
+    shape = (n_spikes-skipped_count, 121, n_chans_to_extract)
+
+    fname_subtracted = os.path.join(output_directory,'subtracted_wfs.h5')
+    fname_cleaned = os.path.join(output_directory,'collision_subtracted_wfs.h5')
+    fname_denoised = os.path.join(output_directory,'denoised_wfs.h5')
+
+    relocalize_after_deconv.merge_files_h5(subtracted_waveforms_dir, 
+                   fname_subtracted, 'wfs', shape, delete=True)
+    relocalize_after_deconv.merge_files_h5(collision_subtracted_waveforms_dir, 
+                   fname_cleaned, 'wfs', shape, delete=True)
+    relocalize_after_deconv.merge_files_h5(denoised_waveforms_dir, 
+                   fname_denoised 'wfs', shape, delete=True)
+
+
+    return fname_spike_index, fname_spike_labels, fname_subtracted, fname_cleaned, fname_denoised
 
 def merge_files_h5(filtered_location, output_h5, dataset_name, shape, delete=False):
     with h5py.File(output_h5, "w") as out:
