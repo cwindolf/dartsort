@@ -300,7 +300,6 @@ def subtraction(
             )
         )
     )
-    n_batches = len(jobs)
 
     # -- initialize storage
     with get_output_h5(
@@ -331,15 +330,16 @@ def subtraction(
         N = len(spike_index)
 
         # if we're resuming, filter out jobs we already did
-        jobs = (
+        jobs = [
             (batch_id, start)
             for batch_id, start in jobs
             if start >= last_sample
-        )
+        ]
+        n_batches = len(jobs)
 
         # residual binary file -- append if we're resuming
         if save_residual:
-            residual_mode = "ab" if last_sample > 0 else "ab"
+            residual_mode = "ab" if last_sample > 0 else "wb"
             residual = open(residual_bin, mode=residual_mode)
 
         # now run subtraction in parallel
