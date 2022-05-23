@@ -39,7 +39,7 @@ def cluster_scatter(
             means[k] = x_mean, y_mean
             covs[k] = xycov
             if annotate:
-                ax.annotate(str(k), (x_mean, y_mean), size=s)
+                ax.annotate(str(k), (x_mean, y_mean), size=6)
 
     for k in means.keys():
         if (ids == k).sum() > 0:
@@ -97,6 +97,7 @@ def array_scatter(
     axes[0].scatter(*geom.T, c="orange", marker="s", s=10)
     axes[0].set_ylabel("z")
     axes[0].set_xlabel("x")
+    axes[2].set_xlabel("x")
 
     cluster_scatter(
         np.log(maxptp),
@@ -112,13 +113,15 @@ def array_scatter(
         x,
         z,
         c=np.clip(maxptp, 3, 15),
-        alpha=0.1,
+        alpha=0.05,
+        s=10,
         marker=".",
         cmap=plt.cm.viridis,
     )
     axes[2].scatter(*geom.T, c="orange", marker="s", s=10)
-    axes[2].set_title("ptps")
     axes[0].set_ylim(zlim)
+    axes[2].set_ylim(zlim)
+    axes[1].set_ylim(zlim)
 
     if fig is not None:
         plt.tight_layout()
