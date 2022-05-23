@@ -149,9 +149,9 @@ for i, in_bin in enumerate(tqdm(in_bins)):
     subject = in_bin.stem.split(".")[0]
     out_bin = out_dir / f"{in_bin.stem}.bin"
     
-    seg_in = np.fromfile(in_bin, dtype=np.float32, count=1_000 * 384, offset=10 * 4 * 30_000 * 384)
+    seg_in = np.fromfile(in_bin, dtype=np.float32, count=1_000 * 384, offset=28 * 4 * 30_000 * 384)
     seg_in = seg_in.reshape(1_000, 384)
-    seg_out = np.fromfile(out_bin, dtype=np.float32, count=1_000 * 384, offset=10 * 4 * 30_000 * 384)
+    seg_out = np.fromfile(out_bin, dtype=np.float32, count=1_000 * 384, offset=28 * 4 * 30_000 * 384)
     seg_out = seg_out.reshape(1_000, 384)
     diff = seg_out - seg_in
     
@@ -183,8 +183,9 @@ for i, in_bin in enumerate(tqdm(in_bins)):
     axes["c"].set_xlabel("time (samples)")
     
     fig.savefig(vis_dir / "raw_data" / f"{subject}_raw_hybrid_diff.png", dpi=300, bbox_inches="tight")
+    plt.show()
     plt.close(fig)
-    # plt.show()
+
 
 
 # %% tags=[]
@@ -251,9 +252,6 @@ for i, in_bin in enumerate(tqdm(in_bins)):
     plt.close(fig)
 
 # %%
-out_bin
-
-# %%
 # make data for kilosort
 # S2V_AP = 2.34375e-06
 scaleproc = 200
@@ -269,7 +267,8 @@ for i, in_bin in enumerate(tqdm(in_bins)):
     # write int16 binary since KS needs that
     # using S2V_AP really helps preserve the dynamic range
     (np.fromfile(out_bin, dtype=np.float32) * scaleproc).astype(np.int16).tofile(ks_bin)
-    
+    import gc; gc.collect()
+
     # we need a chanMap
     chanMap = dict(
         chanMap=np.arange(1, 385, dtype=np.float64),
@@ -282,6 +281,9 @@ for i, in_bin in enumerate(tqdm(in_bins)):
         ycoords=geom[:, 1].astype(np.float64),
     )
     scipy.io.savemat(ks_chanmap, chanMap)
+
+
+# %%
 
 # %%
 for i, in_bin in enumerate(tqdm(in_bins)):
@@ -311,7 +313,7 @@ for i, in_bin in enumerate(tqdm(in_bins)):
         localization_kind="logbarrier",
         localize_radius=100,
         loc_workers=4,
-        overwrite=True,
+        # overwrite=True,
         random_seed=0,
     )
 
