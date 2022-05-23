@@ -129,7 +129,7 @@ def extract_deconv_wfs(h5_subtract, residual_path, geom_array, deconv_spike_trai
 
     np.save(os.path.join(output_directory, 'spike_index.npy'), deconv_spike_index)
     np.save(os.path.join(output_directory, 'spike_labels.npy'), deconv_labels)
-
+    return skipped_count
 
 def merge_files_h5(filtered_location, output_h5, dataset_name, shape, delete=False):
     with h5py.File(output_h5, "w") as out:

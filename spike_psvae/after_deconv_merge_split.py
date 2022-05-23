@@ -16,7 +16,6 @@ from pathlib import Path
 
 from sklearn.discriminant_analysis import LinearDiscriminantAnalysis as LDA
 from isosplit import isocut
-
 from spike_psvae import cluster, merge_split_cleaned, cluster_viz_index, denoise, cluster_utils, triage, cluster_viz
 from spike_psvae.cluster_utils import read_waveforms, compare_two_sorters, make_sorting_from_labels_frames
 from spike_psvae.cluster_viz import plot_agreement_venn, plot_unit_similarities
