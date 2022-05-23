@@ -1,59 +1,55 @@
+import argparse
 import numpy as np
-import os
 from pathlib import Path
+import h5py
 import torch
 from spike_psvae import (
     denoise,
-    subtract,
-    localization,
     ibme,
     residual,
     deconvolve,
-    cluster,
     merge_split_cleaned,
-    cluster_viz_index,
-    denoise,
-    cluster_utils,
-    triage,
-    cluster_viz,
     relocalize_after_deconv,
     after_deconv_merge_split,
 )
-import matplotlib.pyplot as plt
-from tqdm.auto import tqdm
+
+# import matplotlib.pyplot as plt
+# from tqdm.auto import tqdm
 
 
-spike_index = np.load("spike_index_before_deconv.npy")
-labels = np.load(
-    "/labels_before_deconv.npy"
-)  # labels equal to -1 when spike not assigned
-standardized_path = "standardized.bin"
-residual_path = "subtraction _residuals.bin"
+ap = argparse.ArgumentParser()
 
-standardized_dtype = "float32"
-geom_path = "np1_channel_map.npy"  # path to geom file
+ap.add_argument("spike_index_npy")
+ap.add_argument("labels_npy")
+ap.add_argument("standardized_path")
+ap.add_argument("subtraction_dir")
+ap.add_argument("output_directory")
 
-# Save first deconv output
-output_directory = "cpu_deconv_localization_results"  # output directory
-if not os.path.exists(output_directory_final_deconv):
-    os.makedirs(output_directory_final_deconv)
+args = ap.parse_args()
 
+spike_index = np.load(args.spike_index_npy)
+labels = np.load(args.labels_npy)
+assert len(spike_index) == len(labels)
 
-# h5 subtract from the first pass of detect/subtract
-h5_subtract = "subtraction_localization_results.h5"
+standardized_path = Path(args.standardized_path)
 
+sub_dir = Path(args.subtraction_dir)
+h5_subtract = next(sub_dir.glob("sub*.h5"))
+residual_path = next(sub_dir.glob("res*.bin"))
 
-# Save final deconv output
-output_directory_final_deconv = "cpu_deconv_results_AFTER_SPLIT_MERGE"
-if not os.path.exists(output_directory_final_deconv):
-    os.makedirs(output_directory_final_deconv)
+base_outdir = Path(args.output_directory)
+first_outdir = base_outdir / "first_deconv_results"
+second_outdir = base_outdir / "second_deconv_results"
+for d in (base_outdir, first_outdir, second_outdir):
+    d.mkdir(exist_ok=True)
 
+with h5py.File(h5_subtract) as h5:
+    fs = h5["fs"][()]
+    geom_array = h5["geom"][:]
+geom_path = base_outdir / "geom.npy"
+np.save(geom_path, geom_array)
 
-fs = 30000
 # Run deconvolution
-
-geom_array = np.load(geom_path)
-
 # get_templates reads so that templates have trough at 42
 templates_raw = merge_split_cleaned.get_templates(
     standardized_path,
@@ -80,7 +76,7 @@ template_spike_train = np.c_[
 result_file_names = deconvolve.deconvolution(
     spike_index[labels >= 0],
     labels[labels >= 0],
-    output_directory,
+    first_outdir,
     standardized_path,
     residual_path,
     template_spike_train,
@@ -90,34 +86,31 @@ result_file_names = deconvolve.deconvolution(
     n_processors=6,
     threshold=40,
 )
-
 print(result_file_names)
 
-
 # Compute residual
-
 residual_path = residual.run_residual(
     result_file_names[0],
     result_file_names[1],
-    output_directory,
+    first_outdir,
     standardized_path,
     geom_path,
 )
 
 
 """
-CODE TO CHECK RESIDUALS LOOK GOOD 
+CODE TO CHECK RESIDUALS LOOK GOOD
 
 start = 0
 viz_len = 1000
 n_chans = 384
-img = np.fromfile(standardized_path, 
-                  dtype=np.float32, 
-                  count=n_chans*viz_len, 
+img = np.fromfile(standardized_path,
+                  dtype=np.float32,
+                  count=n_chans*viz_len,
                   offset=4*start*n_chans).reshape((viz_len,n_chans))
-residual_img = np.fromfile(residual_path, 
-                  dtype=np.float32, 
-                  count=n_chans*viz_len, 
+residual_img = np.fromfile(residual_path,
+                  dtype=np.float32,
+                  count=n_chans*viz_len,
                            offset=4*start*n_chans).reshape((viz_len,n_chans))
 
 vmin = min(img.min(), residual_img.min())
@@ -133,7 +126,7 @@ plt.show()
 # Extract subtracted, collision-subtracted, denoised waveforms
 
 # load denoiser
-device = torch.device("cuda")
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 denoiser = denoise.SingleChanDenoiser()
 denoiser.load()
 denoiser.to(device)
@@ -145,10 +138,11 @@ n_spikes = deconv_spike_train_up.shape[0]
 print(f"number of deconv spikes: {n_spikes}")
 print(f"deconv templates shape: {deconv_templates_up.shape}")
 
-# 42/60 issue : deconvolve.read_waveforms used in this function reads at t-60:t+60
+# 42/60 issue :
+# deconvolve.read_waveforms used in this function reads at t-60:t+60
 # and pass wfs through denoising pipeline
 
-# Save all wfs in output_directory
+# Save all wfs in first_outdir
 n_chans_to_extract = 40
 
 (
@@ -163,7 +157,7 @@ n_chans_to_extract = 40
     geom_array,
     deconv_spike_train_up,
     deconv_templates_up,
-    output_directory,
+    first_outdir,
     denoiser,
     device,
     n_chans_to_extract=n_chans_to_extract,
@@ -180,12 +174,10 @@ relocalize_after_deconv.relocalize_extracted_wfs(
     deconv_spike_train_up,
     deconv_spike_index,
     geom_array,
-    output_directory,
+    first_outdir,
 )
 
-localization_results_path = os.path.join(
-    output_directory, "localization_results.npy"
-)
+localization_results_path = first_outdir / "localization_results.npy"
 maxptpss = np.load(localization_results_path)[:, 4]
 z_absss = np.load(localization_results_path)[:, 1]
 times = deconv_spike_train_up[:, 0].copy() / fs
@@ -198,7 +190,6 @@ times = deconv_spike_train_up[:, 0].copy() / fs
 
 
 # Register
-
 z_reg, dispmap = ibme.register_nonrigid(
     maxptpss,
     z_absss,
@@ -208,13 +199,13 @@ z_reg, dispmap = ibme.register_nonrigid(
     disp=100,
     denoise_sigma=0.1,
     destripe=False,
-    n_windows=[5, 10],
+    n_windows=10,
     widthmul=0.5,
 )
 z_reg -= (z_reg - z_absss).mean()
 dispmap -= dispmap.mean()
-np.save(os.path.join(output_directory, "z_reg.npy"), z_reg)
-np.save(os.path.join(output_directory, "ptps.npy"), maxptpss)
+np.save(first_outdir / "z_reg.npy", z_reg)
+np.save(first_outdir / "ptps.npy", maxptpss)
 
 # # Check registration output
 # registered_raster, dd, tt = ibme.fast_raster(maxptpss, z_reg, times)
@@ -223,19 +214,13 @@ np.save(os.path.join(output_directory, "ptps.npy"), maxptpss)
 
 # After Deconv Split Merge
 
-deconv_spike_index = np.load(os.path.join(output_directory, "spike_index.npy"))
-z_abs = np.load(os.path.join(output_directory, "localization_results.npy"))[
-    :, 1
-]
-firstchans = np.load(
-    os.path.join(output_directory, "localization_results.npy")
-)[:, 5]
-maxptps = np.load(os.path.join(output_directory, "localization_results.npy"))[
-    :, 4
-]
-spike_train_deconv = np.load(os.path.join(output_directory, "spike_train.npy"))
-xs = np.load(os.path.join(output_directory, "localization_results.npy"))[:, 0]
-z_reg = np.load(os.path.join(output_directory, "z_reg.npy"))
+deconv_spike_index = np.load(first_outdir / "spike_index.npy")
+z_abs = np.load(first_outdir / "localization_results.npy")[:, 1]
+firstchans = np.load(first_outdir / "localization_results.npy")[:, 5]
+maxptps = np.load(first_outdir / "localization_results.npy")[:, 4]
+spike_train_deconv = np.load(first_outdir / "spike_train.npy")
+xs = np.load(first_outdir / "localization_results.npy")[:, 0]
+z_reg = np.load(first_outdir / "z_reg.npy")
 
 templates_after_deconv = merge_split_cleaned.get_templates(
     standardized_path,
@@ -318,7 +303,7 @@ which = (spt_deconv_after_merge[:, 0] > trough_offset) & (
 result_file_names = deconvolve.deconvolution(
     spike_index_DAM[which],
     spt_deconv_after_merge[which, 1],
-    output_directory_final_deconv,
+    second_outdir,
     standardized_path,
     residual_path,
     spt_deconv_after_merge[which],
@@ -335,7 +320,7 @@ result_file_names = deconvolve.deconvolution(
 residual_path = residual.run_residual(
     result_file_names[0],
     result_file_names[1],
-    output_directory_final_deconv,
+    second_outdir,
     standardized_path,
     geom_path,
 )
@@ -351,7 +336,7 @@ print(f"deconv templates shape: {deconv_templates_up.shape}")
 # 42/60 issue : deconvolve.read_waveforms used in this function reads at t-60:t+60
 # and pass wfs through denoising pipeline
 
-# Save all wfs in output_directory
+# Save all wfs in first_outdir
 n_chans_to_extract = 40
 
 (
@@ -366,7 +351,7 @@ n_chans_to_extract = 40
     geom_array,
     deconv_spike_train_up,
     deconv_templates_up,
-    output_directory_final_deconv,
+    second_outdir,
     denoiser,
     device,
     n_chans_to_extract=n_chans_to_extract,
@@ -384,12 +369,10 @@ relocalize_after_deconv.relocalize_extracted_wfs(
     deconv_spike_train_up,
     deconv_spike_index,
     geom_array,
-    output_directory_final_deconv,
+    second_outdir,
 )
 
-localization_results_path = os.path.join(
-    output_directory_final_deconv, "localization_results.npy"
-)
+localization_results_path = second_outdir / "localization_results.npy"
 maxptpss = np.load(localization_results_path)[:, 4]
 z_absss = np.load(localization_results_path)[:, 1]
 times = deconv_spike_train_up[:, 0].copy() / fs
@@ -406,13 +389,13 @@ z_reg, dispmap = ibme.register_nonrigid(
     disp=100,
     denoise_sigma=0.1,
     destripe=False,
-    n_windows=[5, 10],
+    n_windows=10,
     widthmul=0.5,
 )
 z_reg -= (z_reg - z_absss).mean()
 dispmap -= dispmap.mean()
-np.save(os.path.join(output_directory_final_deconv, "z_reg.npy"), z_reg)
-np.save(os.path.join(output_directory_final_deconv, "ptps.npy"), maxptpss)
+np.save(second_outdir / "z_reg.npy", z_reg)
+np.save(second_outdir / "ptps.npy", maxptpss)
 
 # # Check registration output
 # registered_raster, dd, tt = ibme.fast_raster(maxptpss, z_reg, times)
@@ -421,25 +404,13 @@ np.save(os.path.join(output_directory_final_deconv, "ptps.npy"), maxptpss)
 
 # After Deconv Split Merge
 
-deconv_spike_index = np.load(
-    os.path.join(output_directory_final_deconv, "spike_index.npy")
-)
-z_abs = np.load(
-    os.path.join(output_directory_final_deconv, "localization_results.npy")
-)[:, 1]
-firstchans = np.load(
-    os.path.join(output_directory_final_deconv, "localization_results.npy")
-)[:, 5]
-maxptps = np.load(
-    os.path.join(output_directory_final_deconv, "localization_results.npy")
-)[:, 4]
-spike_train_deconv = np.load(
-    os.path.join(output_directory_final_deconv, "spike_train.npy")
-)
-xs = np.load(
-    os.path.join(output_directory_final_deconv, "localization_results.npy")
-)[:, 0]
-z_reg = np.load(os.path.join(output_directory_final_deconv, "z_reg.npy"))
+deconv_spike_index = np.load(second_outdir / "spike_index.npy")
+z_abs = np.load(second_outdir / "localization_results.npy")[:, 1]
+firstchans = np.load(second_outdir / "localization_results.npy")[:, 5]
+maxptps = np.load(second_outdir / "localization_results.npy")[:, 4]
+spike_train_deconv = np.load(second_outdir / "spike_train.npy")
+xs = np.load(second_outdir / "localization_results.npy")[:, 0]
+z_reg = np.load(second_outdir / "z_reg.npy")
 
 templates_after_deconv = merge_split_cleaned.get_templates(
     standardized_path,
