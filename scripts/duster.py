@@ -353,66 +353,67 @@ np.save(output_dir / "template_maxchans.npy", template_maxchans)
 
 
 # %%
-z_cutoff = [0, 500, 1000, 1500, 2000, 2500, 3000, 3500, 4000]
-for za, zb in zip(z_cutoff, z_cutoff[1:]):
-    fig, _ = cluster_viz_index.array_scatter(
-        clusterer.labels_,
-        geom,
-        tx,
-        tz,
-        tmaxptps,
-        zlim=(za - 50, zb + 50),
-    )
-    fig.savefig(output_dir / f"AAA_final_full_scatter_{za}_{zb}", dpi=200)
-    plt.close(fig)
-
-# %%
-triaged_log_ptp = tmaxptps.copy()
-triaged_log_ptp[triaged_log_ptp >= 27.5] = 27.5
-triaged_log_ptp = np.log(triaged_log_ptp + 1)
-triaged_log_ptp[triaged_log_ptp <= 1.25] = 1.25
-triaged_ptp_rescaled = (triaged_log_ptp - triaged_log_ptp.min()) / (
-    triaged_log_ptp.max() - triaged_log_ptp.min()
-)
-color_arr = plt.cm.viridis(triaged_ptp_rescaled)
-color_arr[:, 3] = triaged_ptp_rescaled
-
-# ## Define colors
-unique_colors = [
-    "#e6194b",
-    "#4363d8",
-    "#f58231",
-    "#911eb4",
-    "#46f0f0",
-    "#f032e6",
-    "#008080",
-    "#e6beff",
-    "#9a6324",
-    "#800000",
-    "#aaffc3",
-    "#808000",
-    "#000075",
-    "#000000",
-]
-
-cluster_color_dict = {}
-for cluster_id in np.unique(clusterer.labels_):
-    cluster_color_dict[cluster_id] = unique_colors[
-        cluster_id % len(unique_colors)
-    ]
-cluster_color_dict[-1] = "#808080"  # set outlier color to grey
-
-# %%
-cluster_centers.index
-
-# %%
-sudir = Path(output_dir / "singleunit")
-sudir.mkdir(exist_ok=True)
-
-
-# plot cluster summary
-
 if args.doplot:
+
+    z_cutoff = [0, 500, 1000, 1500, 2000, 2500, 3000, 3500, 4000]
+    for za, zb in zip(z_cutoff, z_cutoff[1:]):
+        fig, _ = cluster_viz_index.array_scatter(
+            clusterer.labels_,
+            geom,
+            tx,
+            tz,
+            tmaxptps,
+            zlim=(za - 50, zb + 50),
+        )
+        fig.savefig(output_dir / f"AAA_final_full_scatter_{za}_{zb}", dpi=200)
+        plt.close(fig)
+
+    # %%
+    triaged_log_ptp = tmaxptps.copy()
+    triaged_log_ptp[triaged_log_ptp >= 27.5] = 27.5
+    triaged_log_ptp = np.log(triaged_log_ptp + 1)
+    triaged_log_ptp[triaged_log_ptp <= 1.25] = 1.25
+    triaged_ptp_rescaled = (triaged_log_ptp - triaged_log_ptp.min()) / (
+        triaged_log_ptp.max() - triaged_log_ptp.min()
+    )
+    color_arr = plt.cm.viridis(triaged_ptp_rescaled)
+    color_arr[:, 3] = triaged_ptp_rescaled
+
+    # ## Define colors
+    unique_colors = [
+        "#e6194b",
+        "#4363d8",
+        "#f58231",
+        "#911eb4",
+        "#46f0f0",
+        "#f032e6",
+        "#008080",
+        "#e6beff",
+        "#9a6324",
+        "#800000",
+        "#aaffc3",
+        "#808000",
+        "#000075",
+        "#000000",
+    ]
+
+    cluster_color_dict = {}
+    for cluster_id in np.unique(clusterer.labels_):
+        cluster_color_dict[cluster_id] = unique_colors[
+            cluster_id % len(unique_colors)
+        ]
+    cluster_color_dict[-1] = "#808080"  # set outlier color to grey
+
+    # %%
+    cluster_centers.index
+
+    # %%
+    sudir = Path(output_dir / "singleunit")
+    sudir.mkdir(exist_ok=True)
+
+
+    # plot cluster summary
+
 
     def job(cluster_id):
         if (sudir / f"unit_{cluster_id:03d}.png").exists():
