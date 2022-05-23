@@ -17,9 +17,45 @@ def weighted_knn_triage(
     return idx_keep1
 
 
+
+def run_weighted_triage_low_ptp(x, z, maxptps, scales=(1,1,30),
+                                threshold=80, ptp_low_threshold=3, 
+                                ptp_high_threshold=6, c=1):
+    #only triage high ptp spikes
+    high_ptp_filter = maxptps<ptp_high_threshold
+    high_ptp_filter = np.flatnonzero(high_ptp_filter)
+    x = x[high_ptp_filter]
+    z = z[high_ptp_filter]
+    maxptps = maxptps[high_ptp_filter]
+    
+    #filter by low ptp
+    low_ptp_filter = maxptps>ptp_low_threshold
+    low_ptp_filter = np.flatnonzero(low_ptp_filter)
+    x = x[low_ptp_filter]
+    z = z[low_ptp_filter]
+    maxptps = maxptps[low_ptp_filter]
+    
+    feats = np.c_[scales[0]*x,
+                  scales[1]*z,
+                  scales[2]*np.log(maxptps)]
+    
+    tree = KDTree(feats)
+    dist, ind = tree.query(feats, k=6)
+    dist = dist[:,1:]
+    dist = np.sum(c*np.log(dist) + np.log(1/(scales[2]*np.log(maxptps)))[:,None], 1)
+    idx_keep = dist <= np.percentile(dist, threshold)
+    
+    triaged_x = x[idx_keep]
+    triaged_z = z[idx_keep]
+    triaged_maxptps = maxptps[idx_keep]
+    
+    return idx_keep, high_ptp_filter, low_ptp_filter
+
+
+
 def run_weighted_triage(x, y, z, alpha, maxptps, pcs=None, 
                         scales=(1,10,1,15,30,10),
-                        threshold=100, ptp_threshold=3, c=1, mask=None):
+                        threshold=80, ptp_threshold=3, c=1, mask=None):
     ptp_filter = maxptps>ptp_threshold
     ptp_filter = np.flatnonzero(ptp_filter)
     x = x[ptp_filter]
