@@ -19,6 +19,7 @@ def split(
     n_chans_split=10,
     min_cluster_size=25,
     min_samples=25,
+    pc_split_rank=5,
 ):
     cmp = labels_deconv.max() + 1
 
@@ -26,60 +27,63 @@ def split(
         which = np.flatnonzero(
             np.logical_and(maxptps > 4, labels_deconv == cluster_id)
         )
-        with h5py.File(path_denoised_wfs_h5, "r") as h5:
-            batch_wfs = np.empty(
-                (len(which), *h5["wfs"].shape[1:]), dtype=h5["wfs"].dtype
+        if len(which) > min_cluster_size:
+            with h5py.File(path_denoised_wfs_h5, "r") as h5:
+                batch_wfs = np.empty(
+                    (len(which), *h5["wfs"].shape[1:]), dtype=h5["wfs"].dtype
+                )
+                for batch_start in range(0, len(which), 1000):
+                    batch_wfs[batch_start : batch_start + batch_size] = h5[
+                        "wfs"
+                    ][which[batch_start : batch_start + batch_size]]
+
+            C = batch_wfs.shape[2]
+            if C < n_chans_split:
+                n_chans_split = C
+
+            maxchan = templates[cluster_id].ptp(0).argmax()
+            firstchan_maxchan = maxchan - firstchans[which]
+            firstchan_maxchan = np.maximum(
+                firstchan_maxchan, n_chans_split // 2
             )
-            for batch_start in range(0, len(which), 1000):
-                batch_wfs[batch_start : batch_start + batch_size] = h5["wfs"][
-                    which[batch_start : batch_start + batch_size]
-                ]
-
-        C = batch_wfs.shape[2]
-        if C < n_chans_split:
-            n_chans_split = C
-
-        maxchan = templates[cluster_id].ptp(0).argmax()
-        firstchan_maxchan = maxchan - firstchans[which]
-        firstchan_maxchan = np.maximum(firstchan_maxchan, n_chans_split // 2)
-        firstchan_maxchan = np.minimum(
-            firstchan_maxchan, C - n_chans_split // 2
-        )
-        firstchan_maxchan = firstchan_maxchan.astype("int")
-
-        if len(np.unique(firstchan_maxchan)) <= 1:
-            wfs_split = batch_wfs[
-                :,
-                :,
-                firstchan_maxchan[0]
-                - n_chans_split // 2 : firstchan_maxchan[0]
-                + n_chans_split // 2,
-            ]
-        else:
-            wfs_split = np.zeros(
-                (batch_wfs.shape[0], batch_wfs.shape[1], n_chans_split)
+            firstchan_maxchan = np.minimum(
+                firstchan_maxchan, C - n_chans_split // 2
             )
-            for j in range(batch_wfs.shape[0]):
-                wfs_split[j] = batch_wfs[
-                    j,
+            firstchan_maxchan = firstchan_maxchan.astype("int")
+
+            if len(np.unique(firstchan_maxchan)) <= 1:
+                wfs_split = batch_wfs[
                     :,
-                    firstchan_maxchan[j]
-                    - n_chans_split // 2 : firstchan_maxchan[j]
+                    :,
+                    firstchan_maxchan[0]
+                    - n_chans_split // 2 : firstchan_maxchan[0]
                     + n_chans_split // 2,
                 ]
+            else:
+                wfs_split = np.zeros(
+                    (batch_wfs.shape[0], batch_wfs.shape[1], n_chans_split)
+                )
+                for j in range(batch_wfs.shape[0]):
+                    wfs_split[j] = batch_wfs[
+                        j,
+                        :,
+                        firstchan_maxchan[j]
+                        - n_chans_split // 2 : firstchan_maxchan[j]
+                        + n_chans_split // 2,
+                    ]
 
-        pcs_cluster = PCA(8).fit_transform(
-            wfs_split.reshape(wfs_split.shape[0], -1)
-        )
-        clusterer = hdbscan.HDBSCAN(min_cluster_size=25, min_samples=25)
-        clusterer.fit(pcs_cluster)
+            pcs_cluster = PCA(pc_split_rank).fit_transform(
+                wfs_split.reshape(wfs_split.shape[0], -1)
+            )
+            clusterer = hdbscan.HDBSCAN(min_cluster_size=25, min_samples=25)
+            clusterer.fit(pcs_cluster)
 
-        if len(np.unique(clusterer.labels_)) > 1:
-            labels_deconv[which[clusterer.labels_ == -1]] = -1
-            for i in np.unique(clusterer.labels_)[2:]:
-                labels_deconv[which[clusterer.labels_ == i]] = cmp
-                print(labels_deconv.max())
-                cmp += 1
+            if len(np.unique(clusterer.labels_)) > 1:
+                labels_deconv[which[clusterer.labels_ == -1]] = -1
+                for i in np.unique(clusterer.labels_)[2:]:
+                    labels_deconv[which[clusterer.labels_ == i]] = cmp
+                    print(labels_deconv.max())
+                    cmp += 1
 
     return labels_deconv
 
