@@ -174,6 +174,7 @@ def extract_deconv_wfs(
     merge_files_h5(
         subtracted_waveforms_dir, fname_subtracted, "wfs", shape, channel_index=extract_channel_index, delete=True
     )
+    Path(fname_subtracted).unlink()
     merge_files_h5(
         collision_subtracted_waveforms_dir,
         fname_cleaned,
