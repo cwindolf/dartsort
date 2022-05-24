@@ -289,7 +289,7 @@ merged_labels = after_deconv_merge_split.merge(
 
 which = np.flatnonzero(np.logical_and(maxptps > 4, split_labels >= 0))
 spt_deconv_after_merge = spike_train_deconv[which]
-spt_deconv_after_merge[:, 1] = merged_labels[split_labels >= 0]
+spt_deconv_after_merge[:, 1] = merged_labels[split_labels[maxptps > 4] >= 0]
 
 spike_index_DAM = np.zeros(spt_deconv_after_merge.shape)
 spike_index_DAM[:, 0] = spt_deconv_after_merge[:, 0].copy()
