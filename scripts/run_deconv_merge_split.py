@@ -41,7 +41,10 @@ base_outdir = Path(args.output_directory)
 first_outdir = base_outdir / "first_deconv_results"
 second_outdir = base_outdir / "second_deconv_results"
 for d in (base_outdir, first_outdir, second_outdir):
-    d.mkdir(exist_ok=True)
+    d.mkdir(exist_ok=True, parents=True)
+
+print("will write to")
+print(first_outdir, second_outdir)
 
 with h5py.File(h5_subtract) as h5:
     # fs = h5["fs"][()]
@@ -49,6 +52,7 @@ with h5py.File(h5_subtract) as h5:
     geom_array = h5["geom"][:]
 geom_path = base_outdir / "geom.npy"
 np.save(geom_path, geom_array)
+
 
 # Run deconvolution
 # get_templates reads so that templates have trough at 42
@@ -79,7 +83,7 @@ result_file_names = deconvolve.deconvolution(
     labels[labels >= 0],
     first_outdir,
     standardized_path,
-    residual_path,
+    None,
     template_spike_train,
     geom_path,
     multi_processing=False,
@@ -99,7 +103,6 @@ residual_path = residual.run_residual(
     multi_processing=True,
     n_processors=6,
 )
-
 
 """
 CODE TO CHECK RESIDUALS LOOK GOOD
@@ -261,6 +264,8 @@ split_labels = after_deconv_merge_split.split(
     firstchans,
     denoised_wfs_h5,
 )
+Path(denoised_wfs_h5).unlink()
+del denoised_wfs_h5
 
 templates_geq_4 = merge_split_cleaned.get_templates(
     standardized_path,
@@ -283,6 +288,8 @@ merged_labels = after_deconv_merge_split.merge(
     maxptps[maxptps > 4],
     firstchans[maxptps > 4],
 )
+Path(cleaned_wfs_h5).unlink()
+del cleaned_wfs_h5
 
 
 # Additional Deconv
@@ -309,7 +316,7 @@ result_file_names = deconvolve.deconvolution(
     spt_deconv_after_merge[which, 1],
     second_outdir,
     standardized_path,
-    residual_path,
+    None,
     spt_deconv_after_merge[which],
     geom_path,
     multi_processing=False,
@@ -362,6 +369,8 @@ n_chans_to_extract = 40
     device,
     n_chans_to_extract=n_chans_to_extract,
 )
+Path(cleaned_wfs_h5).unlink()
+del cleaned_wfs_h5
 
 
 # Relocalize Waveforms
@@ -377,6 +386,8 @@ relocalize_after_deconv.relocalize_extracted_wfs(
     geom_array,
     second_outdir,
 )
+Path(denoised_wfs_h5).unlink()
+del denoised_wfs_h5
 
 localization_results_path = second_outdir / "localization_results.npy"
 maxptpss = np.load(localization_results_path)[:, 4]
@@ -403,6 +414,8 @@ dispmap -= dispmap.mean()
 np.save(second_outdir / "z_reg.npy", z_reg)
 np.save(second_outdir / "ptps.npy", maxptpss)
 
+print("second deconv done!")
+
 # # Check registration output
 # registered_raster, dd, tt = ibme.fast_raster(maxptpss, z_reg, times)
 # plt.figure(figsize=(16,12))
@@ -410,20 +423,21 @@ np.save(second_outdir / "ptps.npy", maxptpss)
 
 # After Deconv Split Merge
 
-deconv_spike_index = np.load(second_outdir / "spike_index.npy")
-z_abs = np.load(second_outdir / "localization_results.npy")[:, 1]
-firstchans = np.load(second_outdir / "localization_results.npy")[:, 5]
-maxptps = np.load(second_outdir / "localization_results.npy")[:, 4]
-spike_train_deconv = np.load(second_outdir / "spike_train.npy")
-xs = np.load(second_outdir / "localization_results.npy")[:, 0]
-z_reg = np.load(second_outdir / "z_reg.npy")
+# deconv_spike_index = np.load(second_outdir / "spike_index.npy")
+# z_abs = np.load(second_outdir / "localization_results.npy")[:, 1]
+# firstchans = np.load(second_outdir / "localization_results.npy")[:, 5]
+# maxptps = np.load(second_outdir / "localization_results.npy")[:, 4]
+# spike_train_deconv = np.load(second_outdir / "spike_train.npy")
+# xs = np.load(second_outdir / "localization_results.npy")[:, 0]
+# z_reg = np.load(second_outdir / "z_reg.npy")
 
-templates_after_deconv = merge_split_cleaned.get_templates(
-    standardized_path,
-    geom_array,
-    spike_train_deconv[:, 1].max() + 1,
-    deconv_spike_index,
-    spike_train_deconv[:, 1],
-    max_spikes=250,
-    n_times=121,
-)
+# templates_after_deconv = merge_split_cleaned.get_templates(
+#     standardized_path,
+#     geom_array,
+#     spike_train_deconv[:, 1].max() + 1,
+#     deconv_spike_index,
+#     spike_train_deconv[:, 1],
+#     max_spikes=250,
+#     n_times=121,
+# )
+
