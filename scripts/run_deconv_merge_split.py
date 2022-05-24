@@ -228,7 +228,7 @@ z_reg = np.load(first_outdir / "z_reg.npy")
 templates_after_deconv = merge_split_cleaned.get_templates(
     standardized_path,
     geom_array,
-    np.unique(spike_train_deconv[:, 1]).shape[0] - 1,
+    spike_train_deconv[:, 1].max() + 1,
     deconv_spike_index,
     spike_train_deconv[:, 1],
     max_spikes=250,
@@ -246,7 +246,7 @@ for i in range(templates_after_deconv.shape[0]):
 templates_after_deconv = merge_split_cleaned.get_templates(
     standardized_path,
     geom_array,
-    np.unique(spike_train_deconv[:, 1]).shape[0] - 1,
+    spike_train_deconv[:, 1].max() + 1,
     deconv_spike_index,
     spike_train_deconv[:, 1],
     max_spikes=250,
@@ -265,7 +265,7 @@ split_labels = after_deconv_merge_split.split(
 templates_geq_4 = merge_split_cleaned.get_templates(
     standardized_path,
     geom_array,
-    np.unique(spike_train_deconv[:, 1]).shape[0] - 1,
+    spike_train_deconv[:, 1].max() + 1,
     deconv_spike_index[maxptps > 4],
     spike_train_deconv[maxptps > 4, 1],
     max_spikes=250,
@@ -421,7 +421,7 @@ z_reg = np.load(second_outdir / "z_reg.npy")
 templates_after_deconv = merge_split_cleaned.get_templates(
     standardized_path,
     geom_array,
-    np.unique(spike_train_deconv[:, 1]).shape[0] - 1,
+    spike_train_deconv[:, 1].max() + 1,
     deconv_spike_index,
     spike_train_deconv[:, 1],
     max_spikes=250,
