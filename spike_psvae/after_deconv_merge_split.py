@@ -75,7 +75,7 @@ def split(
         clusterer.fit(pcs_cluster)
 
         if len(np.unique(clusterer.labels_)) > 1:
-            labels_deconv[which][clusterer.labels_ == -1] = -1
+            labels_deconv[which[clusterer.labels_ == -1]] = -1
             for i in np.unique(clusterer.labels_)[2:]:
                 labels_deconv[which[clusterer.labels_ == i]] = cmp
                 print(labels_deconv.max())
