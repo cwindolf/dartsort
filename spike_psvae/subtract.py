@@ -7,7 +7,13 @@ import time
 import torch
 
 from collections import namedtuple
-from ibllib.io.spikeglx import _geometry_from_meta, read_meta_data
+try:
+    from spikeglx import _geometry_from_meta, read_meta_data
+except ImportError:
+    try:
+        from ibllib.io.spikeglx import  _geometry_from_meta, read_meta_data
+    except ImportError:
+        raise ImportError("Can't find spikeglx...")
 from pathlib import Path
 from scipy.spatial.distance import pdist, squareform
 from sklearn.decomposition import PCA
