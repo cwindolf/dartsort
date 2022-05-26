@@ -29,20 +29,15 @@ def extract_deconv_wfs(
     subtracted_waveforms_dir = os.path.join(
         output_directory, "subtracted_waveforms"
     )
-    if not os.path.exists(subtracted_waveforms_dir):
-        os.makedirs(subtracted_waveforms_dir)
-
     collision_subtracted_waveforms_dir = os.path.join(
         output_directory, "collision_subtracted_waveforms"
     )
-    if not os.path.exists(collision_subtracted_waveforms_dir):
-        os.makedirs(collision_subtracted_waveforms_dir)
-
     denoised_waveforms_dir = os.path.join(
         output_directory, "denoised_waveforms"
     )
-    if not os.path.exists(denoised_waveforms_dir):
-        os.makedirs(denoised_waveforms_dir)
+    Path(subtracted_waveforms_dir).mkdir(exist_ok=True, parents=True)
+    Path(collision_subtracted_waveforms_dir).mkdir(exist_ok=True, parents=True)
+    Path(denoised_waveforms_dir).mkdir(exist_ok=True, parents=True)
 
     n_spikes = deconv_spike_train_up.shape[0]
     batch_id = 0
@@ -250,7 +245,7 @@ def relocalize_extracted_wfs(
         batch_mcs = deconv_spike_index[start:end, 1].copy()
         batch_fcs = extract_channel_index[batch_mcs][:, 0]
         xs, ys, z_rels, z_abss, alphas, _ = localization.localize_ptps(
-            ptps, geom_array, batch_fcs, batch_mcs, n_workers=n_workers
+            ptps, geom_array, batch_fcs, batch_mcs, n_workers=n_workers, pbar=False
         )
         xss.append(xs)
         yss.append(ys)
