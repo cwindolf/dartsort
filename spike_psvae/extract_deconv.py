@@ -27,9 +27,13 @@ def extract_deconv(
     device=None,
     trough_offset=42,
     overwrite=True,
+    scratch_dir=None,
 ):
     standardized_bin = Path(standardized_bin)
     output_directory = Path(output_directory)
+    scratch_dir = output_directory
+    if scratch_dir is not None:
+        scratch_dir = Path(scratch_dir)
 
     templates_up = np.load(templates_up_path)
     n_templates, spike_length_samples, n_chans = templates_up.shape
@@ -64,7 +68,7 @@ def extract_deconv(
     if overwrite:
         if out_h5.exists():
             out_h5.unlink()
-    temp_dir = output_directory / "temp_batch_results"
+    temp_dir = scratch_dir / "temp_batch_results"
     temp_dir.mkdir(exist_ok=True, parents=True)
 
     # are we resuming?
