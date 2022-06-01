@@ -87,6 +87,16 @@ def extract_deconv(
         n_chans, n_neighbors=n_channels_extract
     )
 
+    # templates on few channels
+    templates_loc = np.empty(
+        (n_templates, spike_length_samples, n_channels_extract),
+        dtype=templates_up.dtype,
+    )
+    for i in range(n_templates):
+        templates_loc[i] = templates_up[i][
+            :, channel_index[templates_up_maxchans[i]]
+        ]
+
     with h5py.File(out_h5, "a") as h5:
         if last_batch_end > 0:
             if save_cleaned_waveforms:
@@ -102,6 +112,7 @@ def extract_deconv(
                 "templates_up_maxchans", data=templates_up_maxchans
             )
             h5.create_dataset("channel_index", data=channel_index)
+            h5.create_dataset("templates_loc", data=templates_loc)
             h5.create_dataset("spike_train_up", data=spike_train_up)
             h5.create_dataset("spike_index_up", data=spike_index_up)
             h5.create_dataset(
@@ -153,6 +164,7 @@ def extract_deconv(
                 up_maxchans,
                 temp_dir,
                 T_samples,
+                templates_loc,
             ),
             context=ctx,
         ) as pool:
@@ -278,6 +290,7 @@ def _extract_deconv_worker(start_sample):
             waveforms,
             spike_index[:, 1],
             p.channel_index,
+            probe="np1",
             tpca=p.tpca,
             device=p.device,
             denoiser=p.denoiser,
@@ -331,6 +344,7 @@ def _extract_deconv_init(
     template_maxchans,
     temp_dir,
     T_samples,
+    templates_loc,
 ):
     with h5py.File(subtraction_h5) as h5:
         tpca_mean = h5["tpca_mean"][:]
@@ -343,16 +357,6 @@ def _extract_deconv_init(
     if device is None:
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     denoiser = denoise.SingleChanDenoiser().load().to(device)
-
-    Nt = templates_up.shape[0]
-    templates_loc = np.empty(
-        (Nt, spike_length_samples, channel_index.shape[1]),
-        dtype=templates_up.dtype,
-    )
-    for i in range(Nt):
-        templates_loc[i] = templates_up[i][
-            :, channel_index[template_maxchans[i]]
-        ]
 
     _extract_deconv_worker.geom = geom
     _extract_deconv_worker.tpca = tpca
