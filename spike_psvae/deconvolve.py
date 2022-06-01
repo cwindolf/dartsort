@@ -229,6 +229,7 @@ class MatchPursuit_objectiveUpsample(object):
             self.unit_up_factor[
                 self.unit_up_factor > max_upsample
             ] = max_upsample
+            self.unit_up_factor = np.maximum(1, self.unit_up_factor)
             self.up_up_map = np.zeros(
                 self.n_unit * self.up_factor, dtype=np.int32
             )
