@@ -21,7 +21,7 @@ def extract_deconv(
     save_cleaned_waveforms=True,
     save_denoised_waveforms=False,
     localize=True,
-    n_sec_chunk=4,
+    n_sec_chunk=1,
     n_jobs=1,
     sampling_rate=30_000,
     device=None,
@@ -82,6 +82,11 @@ def extract_deconv(
     up_maxchans = templates_up_maxchans[spike_train_up[:, 1]]
     spike_index_up = np.c_[spike_train_up[:, 0], up_maxchans]
 
+    # a firstchans-style channel index
+    channel_index = subtract.make_contiguous_channel_index(
+        n_chans, n_neighbors=n_channels_extract
+    )
+
     with h5py.File(out_h5, "a") as h5:
         if last_batch_end > 0:
             if save_cleaned_waveforms:
@@ -96,8 +101,13 @@ def extract_deconv(
             h5.create_dataset(
                 "templates_up_maxchans", data=templates_up_maxchans
             )
+            h5.create_dataset("channel_index", data=channel_index)
             h5.create_dataset("spike_train_up", data=spike_train_up)
             h5.create_dataset("spike_index_up", data=spike_index_up)
+            h5.create_dataset(
+                "first_channels",
+                data=channel_index[:, 0][spike_index_up[:, 1]],
+            )
             h5.create_dataset("last_batch_end", data=0)
 
             if save_cleaned_waveforms:
@@ -120,12 +130,8 @@ def extract_deconv(
                     "maxptps", shape=(n_spikes,), dtype=np.float64
                 )
 
-            # a firstchans-style channel index
-            channel_index = subtract.make_contiguous_channel_index(
-                n_chans, n_neighbors=n_channels_extract
-            )
-
         ctx = multiprocessing.get_context("spawn")
+        print("Initializing threads", end="")
         with Pool(
             n_jobs,
             initializer=_extract_deconv_init,
@@ -150,6 +156,7 @@ def extract_deconv(
             ),
             context=ctx,
         ) as pool:
+            print(" Ok.", flush=True)
             for result in tqdm(
                 pool.imap(_extract_deconv_worker, start_samples),
                 desc="extract deconv",
@@ -230,16 +237,18 @@ def _extract_deconv_worker(start_sample):
 
     # subtract templates in-place
     rel_times = np.arange(
-        -p.trough_offset, p.spike_length_samples - p.trough_offset
+        -start_sample + buffer_left + pad_left - p.trough_offset,
+        -start_sample
+        + buffer_left
+        + pad_left
+        + p.spike_length_samples
+        - p.trough_offset,
     )
-    time_ix = spike_index[:, 0, None] + rel_times[None, :]
-    for bs in range(0, len(spike_train[:, 1]), 4096):
-        be = min(len(spike_train[:, 1]), bs + 4096)
-        np.subtract.at(
-            resid,
-            (time_ix[bs:be, :, None], np.arange(len(p.geom))[None, None, :]),
-            p.templates_up[spike_train[bs:be, 1]],
-        )
+    for i in range(len(spike_index)):
+        resid[spike_index[i, 0] + rel_times] -= p.templates_up[
+            spike_train[i, 1]
+        ]
+
     if p.save_residual:
         np.save(
             p.temp_dir / f"resid_{batch_str}.npy",
@@ -364,3 +373,4 @@ def _extract_deconv_init(
     _extract_deconv_worker.temp_dir = temp_dir
     _extract_deconv_worker.T_samples = T_samples
     _extract_deconv_worker.batch_length = batch_length
+    print(".", end="", flush=True)
