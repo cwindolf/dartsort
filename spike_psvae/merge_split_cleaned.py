@@ -682,7 +682,7 @@ def get_diptest_value(
         )[0]
     
     # tpca = PCA(rank_pca)
-    wfs_diptest = np.concatenate((wfs_a, wfs_b))
+    wfs_diptest = np.concatenate((wfs_a_bis, wfs_b_bis))
 
     if nn_denoise:
         wfs_diptest = denoise_wf_nn_tmp_single_channel(
