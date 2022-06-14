@@ -106,7 +106,7 @@ def merge(
 ):
 
     """
-    labels, locations, maxptps, templates should be for spikes with ptp > 4 only
+    merge is applied on spikes with ptp > threshold_ptp only
     """
 
     labels_updated = labels.copy()
@@ -141,11 +141,7 @@ def merge(
                     mc_diff = np.abs(templates[unit_bis_reference].ptp(0).argmax() - templates[unit_reference].ptp(0).argmax())
                     ptp_diff = np.abs(templates[unit_bis_reference].ptp(0).max() - templates[unit_reference].ptp(0).max())
                     if mc_diff<3:
-                    # ALIGN BASED ON MAX PTP TEMPLATE MC
-#                     print("MCs")
-#                     print(templates[unit_reference].ptp(0).argmax())
-#                     print(templates[unit_bis_reference].ptp(0).argmax())
-                        
+                    # ALIGN BASED ON MAX PTP TEMPLATE MC                        
                         if (
                             templates[unit_reference].ptp(0).max()
                             < templates[unit_bis_reference].ptp(0).max()
@@ -246,10 +242,7 @@ def merge(
                         else:
                             idx = np.arange(len(which))
 
-    #                     print(firstchans[which[idx]])
                         firstchan_maxchan = mc - firstchans[which[idx]]
-    #                     firstchan_maxchan = 20*np.ones(len(idx))
-
 
                         firstchan_maxchan = np.maximum(
                             firstchan_maxchan, n_chan_merge // 2
@@ -358,10 +351,6 @@ def merge(
 
                         value_dpt, cut_calue = isocut(lda_comps[:, 0])
                         
-                        print("low N condition")
-                        print(n_wfs_max)
-                        print(mc_diff)
-                        print(ptp_diff)
                         if ~(n_wfs_max < 20 and (mc_diff > 0 or ptp_diff>1)):
                             if (
                                 value_dpt < threshold_diptest
@@ -373,41 +362,6 @@ def merge(
                                 else:
                                     merge_shifts.append(two_units_shift)
                                 is_merged = True
-
-                                print(n_wfs_max)
-
-                                plt.figure(figsize = (20, 2.5))
-                                for k in range(waveforms_ref.shape[0]):
-                                    plt.plot(waveforms_ref[k].T.flatten(), alpha = 0.05, c = 'blue')
-                                plt.show()
-
-                                plt.figure(figsize = (20, 2.5))
-                                for k in range(waveforms_ref_bis.shape[0]):
-                                    plt.plot(waveforms_ref_bis[k].T.flatten(), alpha = 0.05, c = 'blue')
-                                plt.show()
-
-                                plt.figure(figsize = (20, 2.5))
-                                color_array = ['red', 'blue']
-                                for k in range(wfs_diptest_plot.shape[0]):
-                                    plt.plot(wfs_diptest_plot[k].T.flatten(), alpha = 0.05, c = color_array[int(labels_diptest[k])])
-                                plt.show()
-
-                                plt.figure(figsize = (20, 2.5))
-                                for k in range(wfs_tpca_reconstruct.shape[0]):
-                                    plt.plot(wfs_tpca_reconstruct[k].flatten(), alpha = 0.05, c = color_array[int(labels_diptest[k])])
-                                plt.show()
-
-        #                         plt.figure(figsize = (20, 2.5))
-        #                         wfs_tpca = wfs_diptest.reshape(N, C, tpca.n_components)
-        #                         for k in range(wfs_tpca_reconstruct.shape[0]):
-        #                             plt.plot(wfs_tpca[k].flatten(), alpha = 0.05, c = color_array[int(labels_diptest[k])])
-        #                         plt.show()
-
-                                print(value_dpt)
-                                plt.figure()
-                                plt.hist(lda_comps[:, 0], bins = 25)
-                                plt.show()
-
 
             if is_merged:
                 n_total_spikes = 0
