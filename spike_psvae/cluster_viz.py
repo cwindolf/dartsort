@@ -90,10 +90,15 @@ def array_scatter(
     maxptp,
     zlim=(-50, 3900),
     axes=None,
+    do_ellipse=True,
 ):
     fig = None
     if axes is None:
         fig, axes = plt.subplots(1, 3, sharey=True, figsize=(15, 15))
+    
+    excluded_ids = {-1}
+    if not do_ellipse:
+        excluded_ids = np.unique(labels)
 
     cluster_scatter(
         x,
@@ -102,6 +107,7 @@ def array_scatter(
         ax=axes[0],
         s=10,
         alpha=0.05,
+        excluded_ids=excluded_ids,
     )
     axes[0].scatter(*geom.T, c="orange", marker="s", s=10)
     axes[0].set_ylabel("z")
@@ -114,6 +120,7 @@ def array_scatter(
         ax=axes[1],
         s=10,
         alpha=0.05,
+        excluded_ids=excluded_ids,
     )
     axes[1].set_xlabel("maxptp")
     axes[2].scatter(
@@ -571,7 +578,7 @@ def plot_agreement_venn_better(cluster_id_1, cluster_id_2, st_1, st_2, firstchan
     ax_wfs_shared_ks = fig.add_subplot(gs[3, :])
     ax_yass_temps = fig.add_subplot(gs[4, :])
     ax_ks_temps = fig.add_subplot(gs[5, :])
-
+    
     subsets = [len(not_match_ind_st1), len(not_match_ind_st2), len(ind_st1)]
     v = venn2(subsets = subsets, set_labels = ['unit{}'.format(lab_st1),  'unit{}'.format(lab_st2)], ax=ax_venn)
     if len(not_match_ind_st1)>0:
@@ -583,11 +590,47 @@ def plot_agreement_venn_better(cluster_id_1, cluster_id_2, st_1, st_2, firstchan
     ax_venn.set_title(f'{sorting1_name}{lab_st1} + {sorting2_name}{lab_st2}, {np.round(agreement, 2)*100}% agreement')
     sets = ['10','11','01']
 
+    
+    closest_clusters_hdb = get_closest_clusters_kilosort(cluster_id_1, hdb_cluster_depth_means, num_close_clusters=num_close_clusters)
+    closest_clusters_kilo = get_closest_clusters_kilosort(cluster_id_2, kilo_cluster_depth_means, num_close_clusters=num_close_clusters)    
+    
+    first_chan_yass_ks = np.median(firstchans_cluster_sorting1)+5
+    
+    some_in_cluster = np.random.choice((labels_yass == cluster_id_1).sum(), replace=False, size=min((labels_yass == cluster_id_1).sum(), num_spikes_plot))
+    waveforms_read = read_waveforms(spike_index_yass[labels_yass == cluster_id_1, 0][some_in_cluster], raw_bin, geom, n_times=121, channels = np.arange(first_chan_yass_ks, first_chan_yass_ks+20).astype('int'))[0]
+    temp1 = waveforms_read.mean(0)
+    ax_yass_temps.plot(temp1.T.flatten(), color = 'red')
+
+    for j in range(num_close_clusters):
+        some_in_cluster = np.random.choice((labels_yass == closest_clusters_hdb[j]).sum(), replace=False, size=min((labels_yass == closest_clusters_hdb[j]).sum(), num_spikes_plot))
+        waveforms_read = read_waveforms(spike_index_yass[labels_yass == closest_clusters_hdb[j], 0][some_in_cluster], raw_bin, geom, n_times=121, channels=np.arange(int(first_chan_yass_ks), int(first_chan_yass_ks)+20))[0]
+        ax_yass_temps.plot(waveforms_read.mean(0).T.flatten())
+    for i in range(20):
+        ax_yass_temps.axvline(121+121*i, c='black')
+    ax_yass_temps.set_title(f"{sorting1_name} close templates")
+                
+        
+    some_in_cluster = np.random.choice((labels_ks == cluster_id_2).sum(), replace=False, size=min((labels_ks == cluster_id_2).sum(), num_spikes_plot))
+    waveforms_read = read_waveforms(spike_index_ks[labels_ks == cluster_id_2, 0][some_in_cluster], raw_bin, geom, n_times=121, channels = np.arange(first_chan_yass_ks, first_chan_yass_ks+20).astype('int'))[0]
+    temp2 = waveforms_read.mean(0)
+    ax_ks_temps.plot(temp2.T.flatten(), color = 'blue')
+    
+    for j in range(num_close_clusters):
+        some_in_cluster = np.random.choice(list(range((labels_ks == closest_clusters_kilo[j]).sum())), replace=False, size=min((labels_ks == closest_clusters_kilo[j]).sum(), num_spikes_plot))
+        if len(some_in_cluster)>0:
+            waveforms_read = read_waveforms(spike_index_ks[labels_ks == closest_clusters_kilo[j], 0][some_in_cluster], raw_bin, geom, n_times=121, channels = np.arange(first_chan_yass_ks, first_chan_yass_ks+20).astype('int'))[0]
+            ax_ks_temps.plot(waveforms_read.mean(0).T.flatten())
+    for i in range(20):
+        ax_ks_temps.axvline(121+121*i, c='black')
+    ax_ks_temps.set_title(f"{sorting2_name} close templates")
+    
+    
     # fig, axes = plt.subplots(1, 2, sharey=True, figsize=(12,12))
     h_shifts = [-10,10]
     colors = ['goldenrod', 'red']
     indices = [ind_st1, not_match_ind_st1]
     cmp = 0
+    shared_mc1 = -1
     for indices_match, color, h_shift in zip(indices, colors, h_shifts):
         if len(indices_match) > 0:
             firstchans_cluster_sorting = firstchans_cluster_sorting1[indices_match]
@@ -596,15 +639,18 @@ def plot_agreement_venn_better(cluster_id_1, cluster_id_2, st_1, st_2, firstchan
             # geom, first_chans_cluster, mcs_abs_cluster, max_ptps_cluster, spike_times, 
             waveforms, first_chan_cluster = plot_waveforms_geom_unit_with_return(geom, firstchans_cluster_sorting, mcs_abs_cluster_sorting, spike_times, raw_bin=raw_bin, num_spikes_plot=num_spikes_plot,
                                      t_range=t_range, num_channels=num_channels, num_rows=num_rows, do_mean=False, scale=scale, h_shift=h_shift, alpha=alpha, ax=ax_sorting1, color=color)  
-            mc = waveforms.mean(0).ptp(0).argmax()
+            if shared_mc1 < 0:
+                shared_mc1 = waveforms.mean(0).ptp(0).argmax()
+            print('smc', shared_mc1, waveforms.mean(0).ptp(0).argmax())
             for i in range(min(len(waveforms), num_spikes_plot)):
-                ax_wfs_shared_yass.plot(waveforms[i, :, mc-5:mc+6].T.flatten(), alpha=alpha, color=color)
+                ax_wfs_shared_yass.plot(waveforms[i, :, shared_mc1-5:shared_mc1+6].T.flatten(), alpha=alpha, color=color)
             for i in range(10):
                 ax_wfs_shared_yass.axvline(121+121*i, c='black')
-            ax_templates.plot(waveforms[:, :, mc-5:mc+6].mean(0).T.flatten(), color=color)
+            ax_templates.plot(waveforms[:, :, shared_mc1-5:shared_mc1+6].mean(0).T.flatten(), color=color)
             cmp += 1
     colors = ['goldenrod', 'blue']
     indices = [ind_st2, not_match_ind_st2]
+    shared_mc2 = -1
     for indices_match, color, h_shift in zip(indices, colors, h_shifts):
         if len(indices_match) > 0:
             mcs_abs_cluster_sorting = mcs_abs_cluster_sorting2[indices_match]
@@ -613,45 +659,17 @@ def plot_agreement_venn_better(cluster_id_1, cluster_id_2, st_1, st_2, firstchan
             
             waveforms, first_chan_cluster = plot_waveforms_geom_unit_with_return(geom, firstchans_cluster_sorting, mcs_abs_cluster_sorting, spike_times, raw_bin=raw_bin, num_spikes_plot=num_spikes_plot,
                                      t_range=t_range, num_channels=num_channels, num_rows=num_rows, do_mean=False, scale=scale, h_shift=h_shift, alpha=alpha, ax=ax_sorting2, color=color) 
-            mc = waveforms.mean(0).ptp(0).argmax()
+            # mc = waveforms.mean(0).ptp(0).argmax()
+            if shared_mc2 < 0:
+                shared_mc2 = waveforms.mean(0).ptp(0).argmax()
+
             for i in range(min(len(waveforms), num_spikes_plot)):
-                ax_wfs_shared_ks.plot(waveforms[i, :, mc-5:mc+6].T.flatten(), alpha=alpha, color=color)
+                ax_wfs_shared_ks.plot(waveforms[i, :, shared_mc2-5:shared_mc2+6].T.flatten(), alpha=alpha, color=color)
             for i in range(10):
                 ax_wfs_shared_ks.axvline(121+121*i, c='black')
-    ax_templates.plot(waveforms[:, :, mc-5:mc+6].mean(0).T.flatten(), color=color)        
+            ax_templates.plot(waveforms[:, :, shared_mc2-5:shared_mc2+6].mean(0).T.flatten(), color=color)        
     for i in range(10):
         ax_templates.axvline(121+121*i, c='black')
-    
-    closest_clusters_hdb = get_closest_clusters_kilosort(cluster_id_1, hdb_cluster_depth_means, num_close_clusters=num_close_clusters)
-    closest_clusters_kilo = get_closest_clusters_kilosort(cluster_id_2, kilo_cluster_depth_means, num_close_clusters=num_close_clusters)    
-    
-    first_chan_yass_ks = np.median(firstchans_cluster_sorting1)+5
-    
-    some_in_cluster = np.random.choice(list(range((labels_yass == cluster_id_1).sum())), replace=False, size=min((labels_yass == cluster_id_1).sum(), num_spikes_plot))
-    waveforms_read = read_waveforms(spike_index_yass[labels_yass == cluster_id_1, 0][some_in_cluster], raw_bin, geom, n_times=121, channels = np.arange(first_chan_yass_ks, first_chan_yass_ks+20).astype('int'))[0]
-    ax_yass_temps.plot(waveforms_read.mean(0).T.flatten(), color = 'red')
-
-    for j in range(num_close_clusters):
-        some_in_cluster = np.random.choice(list(range((labels_yass == closest_clusters_hdb[j]).sum())), replace=False, size=min((labels_yass == closest_clusters_hdb[j]).sum(), num_spikes_plot))
-        waveforms_read = read_waveforms(spike_index_yass[labels_yass == closest_clusters_hdb[j], 0][some_in_cluster], raw_bin, geom, n_times=121, channels = np.arange(first_chan_yass_ks, first_chan_yass_ks+20).astype('int'))[0]
-        ax_yass_temps.plot(waveforms_read.mean(0).T.flatten())
-    for i in range(20):
-        ax_yass_temps.axvline(121+121*i, c='black')
-    ax_yass_temps.set_title("YASS close templates")
-                
-        
-    some_in_cluster = np.random.choice(list(range((labels_ks == cluster_id_2).sum())), replace=False, size=min((labels_ks == cluster_id_2).sum(), num_spikes_plot))
-    waveforms_read = read_waveforms(spike_index_ks[labels_ks == cluster_id_2][some_in_cluster], raw_bin, geom, n_times=121, channels = np.arange(first_chan_yass_ks, first_chan_yass_ks+20).astype('int'))[0]
-    ax_ks_temps.plot(waveforms_read.mean(0).T.flatten(), color = 'blue')
-    
-    for j in range(num_close_clusters):
-        some_in_cluster = np.random.choice(list(range((labels_ks == closest_clusters_kilo[j]).sum())), replace=False, size=min((labels_ks == closest_clusters_kilo[j]).sum(), num_spikes_plot))
-        if len(some_in_cluster)>0:
-            waveforms_read = read_waveforms(spike_index_ks[labels_ks == closest_clusters_kilo[j]][some_in_cluster], raw_bin, geom, n_times=121, channels = np.arange(first_chan_yass_ks, first_chan_yass_ks+20).astype('int'))[0]
-            ax_ks_temps.plot(waveforms_read.mean(0).T.flatten())
-    for i in range(20):
-        ax_ks_temps.axvline(121+121*i, c='black')
-    ax_ks_temps.set_title("KS close templates")
         
     return fig
 
