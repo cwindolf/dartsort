@@ -73,7 +73,7 @@ def detect_and_deduplicate(
             channel_index=channel_index,
             device=device,
         )
-        if len(times):
+        if times.numel():
             spike_index = np.c_[times.cpu().numpy(), chans.cpu().numpy()]
             spike_index[:, 0] -= buffer_size
         else:
