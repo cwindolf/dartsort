@@ -130,18 +130,19 @@ labels[idx_keep_full] = clusterer.labels_
 labels_original = labels.copy()
 
 # %%
-z_cutoff = [0, 500, 1000, 1500, 2000, 2500, 3000, 3500, 4000]
-for za, zb in zip(z_cutoff, z_cutoff[1:]):
-    fig, _ = cluster_viz_index.array_scatter(
-        clusterer.labels_,
-        geom,
-        tx,
-        tz,
-        tmaxptps,
-        zlim=(za, zb),
-    )
-    fig.savefig(output_dir / f"B_pre_split_full_scatter_{za}_{zb}", dpi=200)
-    plt.close(fig)
+if args.doplot:
+    z_cutoff = [0, 500, 1000, 1500, 2000, 2500, 3000, 3500, 4000]
+    for za, zb in zip(z_cutoff, z_cutoff[1:]):
+        fig, _ = cluster_viz_index.array_scatter(
+            clusterer.labels_,
+            geom,
+            tx,
+            tz,
+            tmaxptps,
+            zlim=(za, zb),
+        )
+        fig.savefig(output_dir / f"B_pre_split_full_scatter_{za}_{zb}", dpi=200)
+        plt.close(fig)
 
 # %%
 templates = merge_split_cleaned.get_templates(
@@ -232,18 +233,19 @@ labels = np.full(x.shape, -1)
 labels[idx_keep_full] = clusterer.labels_
 
 # %%
-z_cutoff = [0, 500, 1000, 1500, 2000, 2500, 3000, 3500, 4000]
-for za, zb in zip(z_cutoff, z_cutoff[1:]):
-    fig, _ = cluster_viz_index.array_scatter(
-        clusterer.labels_,
-        geom,
-        tx,
-        tz,
-        tmaxptps,
-        zlim=(za, zb),
-    )
-    fig.savefig(output_dir / f"C_after_split_full_scatter_{za}_{zb}", dpi=200)
-    plt.close(fig)
+if args.doplot:
+    z_cutoff = [0, 500, 1000, 1500, 2000, 2500, 3000, 3500, 4000]
+    for za, zb in zip(z_cutoff, z_cutoff[1:]):
+        fig, _ = cluster_viz_index.array_scatter(
+            clusterer.labels_,
+            geom,
+            tx,
+            tz,
+            tmaxptps,
+            zlim=(za, zb),
+        )
+        fig.savefig(output_dir / f"C_after_split_full_scatter_{za}_{zb}", dpi=200)
+        plt.close(fig)
 
 # %%
 # get templates
