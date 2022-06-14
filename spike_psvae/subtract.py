@@ -4,7 +4,6 @@ import numpy as np
 import signal
 import time
 import torch
-import os
 import multiprocessing
 
 from collections import namedtuple
@@ -511,9 +510,11 @@ def _subtraction_batch_init(
 
     if device.type == "cuda":
         if torch.cuda.device_count() > 1:
-            os.environ["CUDA_VISIBLE_DEVICES"] = str(rank % torch.cuda.device_count())
-            device = torch.device("cuda")
-            print(f"Worker {rank} using GPU rank % torch.cuda.device_count()")
+            device = torch.device("cuda", index=rank % torch.cuda.device_count())
+            print(
+                f"Worker {rank} using GPU {rank % torch.cuda.device_count()} "
+                f"out of {torch.cuda.device_count()} available."
+            )
 
     denoiser = None
     if do_nn_denoise:
