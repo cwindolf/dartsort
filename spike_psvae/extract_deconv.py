@@ -290,6 +290,11 @@ def _extract_deconv_worker(start_sample):
 
     # -- denoise them
     if p.save_denoised_waveforms or p.localize:
+        relative_batch_mcs = np.where(
+            p.channel_index[spike_index[:, 1]] - spike_index[:, 1][:, None] == 0
+        )[1]
+        waveforms = temporal_align(waveforms, relative_batch_mcs)
+
         waveforms = subtract.full_denoising(
             waveforms,
             spike_index[:, 1],
@@ -328,6 +333,28 @@ def _extract_deconv_worker(start_sample):
         p.temp_dir / f"maxptps_{batch_str}.npy",
         which_spikes,
     )
+
+def temporal_align(waveforms, maxchans, offset=42):
+    N, T, C = waveforms.shape
+    offsets = waveforms[np.arange(N), :, maxchans].argmin(1)
+    rolls = offset - offsets
+    out = np.empty_like(waveforms)
+    pads = [(0, 0), (0, 0)]
+    for i, roll in enumerate(rolls):
+        if roll > 0:
+            pads[0] = (roll, 0)
+            start, end = 0, T
+        elif roll < 0:
+            pads[0] = (0, -roll)
+            start, end = -roll, T - roll
+        else:
+            out[i] = waveforms[i]
+            continue
+
+        pwf = np.pad(waveforms[i], pads, mode="linear_ramp")
+        out[i] = pwf[start:end, :]
+
+    return out
 
 
 def _extract_deconv_init(
