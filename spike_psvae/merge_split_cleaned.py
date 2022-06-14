@@ -69,7 +69,7 @@ def align_spikes_by_templates(
 
 
 # %%
-def run_LDA_split(wfs, max_channels, threshold_diptest=0.5):
+def run_LDA_split(wfs, max_channels, threshold_diptest=1.0):
     ncomp = 2
     if np.unique(max_channels).shape[0] < 2:
         return np.zeros(len(max_channels), dtype=int)
@@ -157,7 +157,7 @@ def split_individual_cluster(
     n_channels,
     pca_n_channels,
     nn_denoise,
-    threshold_diptest,
+    threshold_diptest=1.0,
     min_size_split=25,
 ):
     total_channels = geom_array.shape[0]
@@ -393,7 +393,7 @@ def split_clusters(
     n_channels=10,
     pca_n_channels=4,
     nn_denoise=False,
-    threshold_diptest=0.5,
+    threshold_diptest=1.0,
 ):
     labels_new = labels.copy()
     labels_original = labels.copy()
@@ -772,7 +772,7 @@ def get_merged(
     n_channels=10,
     n_temp=10,
     distance_threshold=3.0,
-    threshold_diptest=0.75,
+    threshold_diptest=1.0,
     nn_denoise=False,
 ):
     n_spikes_templates = get_n_spikes_templates(n_templates, labels)
