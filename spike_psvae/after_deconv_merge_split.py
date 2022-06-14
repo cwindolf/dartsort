@@ -2,7 +2,7 @@ import h5py
 import hdbscan
 import numpy as np
 
-from isosplit import isocut
+from spike_psvae.isocut5 import isocut5 as isocut
 from sklearn.decomposition import PCA
 from sklearn.discriminant_analysis import LinearDiscriminantAnalysis as LDA
 from spike_psvae import merge_split_cleaned
@@ -20,7 +20,7 @@ def split(
     min_cluster_size=25,
     min_samples=25,
     pc_split_rank=5,
-    ptp_threshold = 4,
+    ptp_threshold=4,
 ):
     cmp = labels_deconv.max() + 1
 
