@@ -20,12 +20,13 @@ def split(
     min_cluster_size=25,
     min_samples=25,
     pc_split_rank=5,
+    ptp_threshold = 4,
 ):
     cmp = labels_deconv.max() + 1
 
     for cluster_id in tqdm(np.unique(labels_deconv)):
         which = np.flatnonzero(
-            np.logical_and(maxptps > 4, labels_deconv == cluster_id)
+            np.logical_and(maxptps > ptp_threshold, labels_deconv == cluster_id)
         )
         if len(which) > min_cluster_size:
             with h5py.File(path_denoised_wfs_h5, "r") as h5:
