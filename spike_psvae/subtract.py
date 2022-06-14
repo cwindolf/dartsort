@@ -115,6 +115,8 @@ def subtraction(
         raise ValueError(
             "Enforce decrease method", enforce_decrease_kind, "not understood."
         )
+    if peak_sign not in ("neg", "both"):
+        raise ValueError("peak_sign", peak_sign, "not understood.")
 
     standardized_bin = Path(standardized_bin)
     stem = standardized_bin.stem
