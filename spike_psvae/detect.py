@@ -27,6 +27,7 @@ def detect_and_deduplicate(
     threshold,
     channel_index,
     buffer_size,
+    peak_sign="neg",
     nn_detector=None,
     nn_denoiser=None,
     denoiser_detector=None,
@@ -52,6 +53,7 @@ def detect_and_deduplicate(
             threshold,
             channel_index,
             buffer_size,
+            peak_sign=peak_sign,
             device=device,
         )
     elif nn_detector is not None:
@@ -73,7 +75,7 @@ def detect_and_deduplicate(
             channel_index=channel_index,
             device=device,
         )
-        if len(times):
+        if times.numel():
             spike_index = np.c_[times.cpu().numpy(), chans.cpu().numpy()]
             spike_index[:, 0] -= buffer_size
         else:
@@ -245,6 +247,7 @@ def voltage_detect_and_deduplicate(
     channel_index,
     buffer_size,
     device="cpu",
+    peak_sign="neg",
 ):
     if torch.device(device).type == "cuda":
         times, chans, energy = torch_voltage_detect_dedup(
@@ -253,6 +256,7 @@ def voltage_detect_and_deduplicate(
             channel_index=channel_index,
             order=5,
             device=device,
+            peak_sign=peak_sign,
         )
         if times.numel():
             spike_index = np.c_[times.cpu().numpy(), chans.cpu().numpy()]
@@ -260,7 +264,7 @@ def voltage_detect_and_deduplicate(
         else:
             return np.array([]), np.array([])
     else:
-        spike_index, energy = voltage_threshold(recording, threshold)
+        spike_index, energy = voltage_threshold(recording, threshold, peak_sign=peak_sign)
         if not len(spike_index):
             return np.array([]), np.array([])
         spike_index, energy = deduplicate_torch(
@@ -277,8 +281,12 @@ def voltage_detect_and_deduplicate(
     return spike_index, energy
 
 
-def voltage_threshold(recording, threshold, order=5):
+def voltage_threshold(recording, threshold, peak_sign="neg", order=5):
     T, C = recording.shape
+    if peak_sign == "both":
+        recording = -np.abs(recording)
+    else:
+        assert peak_sign == "neg"
     ts, mcs = argrelmin(recording, axis=0, order=order)
     spike_index = np.c_[ts, mcs]
     energy = recording[ts, mcs]
@@ -342,6 +350,7 @@ def deduplicate_torch(
 def torch_voltage_detect_dedup(
     recording,
     threshold,
+    peak_sign="neg",
     order=5,
     max_window=7,
     channel_index=None,
@@ -373,9 +382,16 @@ def torch_voltage_detect_dedup(
         device = "cuda" if torch.cuda.is_available() else "cpu"
 
     # -- torch argrelmin
-    neg_recording = torch.as_tensor(
-        -recording, device=device, dtype=torch.float
-    )
+    if peak_sign == "neg":
+        neg_recording = torch.as_tensor(
+            -recording, device=device, dtype=torch.float
+        )
+    elif peak_sign == "both":
+        neg_recording = torch.as_tensor(
+            -np.abs(recording), device=device, dtype=torch.float
+        )
+    else:
+        assert False
     max_energies, inds = F.max_pool2d_with_indices(
         neg_recording[None, None],
         kernel_size=[2 * order + 1, 1],
