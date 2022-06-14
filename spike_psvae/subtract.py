@@ -1,17 +1,19 @@
-import concurrent.futures
 import contextlib
 import h5py
 import numpy as np
 import signal
 import time
 import torch
+import os
+import multiprocessing
 
 from collections import namedtuple
+
 try:
     from spikeglx import _geometry_from_meta, read_meta_data
 except ImportError:
     try:
-        from ibllib.io.spikeglx import  _geometry_from_meta, read_meta_data
+        from ibllib.io.spikeglx import _geometry_from_meta, read_meta_data
     except ImportError:
         raise ImportError("Can't find spikeglx...")
 from pathlib import Path
@@ -33,8 +35,10 @@ def subtraction(
     t_end=None,
     sampling_rate=30_000,
     thresholds=[12, 10, 8, 6, 5, 4],
+    peak_sign="neg",
     nn_detect=False,
     denoise_detect=False,
+    do_nn_denoise=True,
     neighborhood_kind="firstchan",
     extract_box_radius=200,
     extract_firstchan_n_channels=40,
@@ -101,6 +105,7 @@ def subtraction(
     Returns
     -------
     out_h5 : path to output hdf5 file
+    residual : path to residual if save_residual
     """
     if neighborhood_kind not in ("firstchan", "box", "circle"):
         raise ValueError(
@@ -110,6 +115,8 @@ def subtraction(
         raise ValueError(
             "Enforce decrease method", enforce_decrease_kind, "not understood."
         )
+    if peak_sign not in ("neg", "both"):
+        raise ValueError("peak_sign", peak_sign, "not understood.")
 
     standardized_bin = Path(standardized_bin)
     stem = standardized_bin.stem
@@ -169,20 +176,15 @@ def subtraction(
         detection_kind = "voltage"
 
     # figure out length of data
-    std_size = standardized_bin.stat().st_size
-    assert not std_size % np.dtype(np.float32).itemsize
-    std_size = std_size // np.dtype(np.float32).itemsize
-    assert not std_size % n_channels
-    T_samples = std_size // n_channels
-
-    # time logic -- what region are we going to load
-    T_sec = T_samples / sampling_rate
+    T_samples, T_sec = get_binary_length(
+        standardized_bin, n_channels, sampling_rate
+    )
     assert t_start >= 0 and (t_end is None or t_end <= T_sec)
     start_sample = int(np.floor(t_start * sampling_rate))
     end_sample = (
         T_samples if t_end is None else int(np.floor(t_end * sampling_rate))
     )
-    portion_len_s = (end_sample - start_sample) / 30000
+    portion_len_s = (end_sample - start_sample) / sampling_rate
     print(
         f"Running subtraction. Total recording length is {T_sec:0.2f} "
         f"s, running on portion of length {portion_len_s:0.2f} s. "
@@ -274,6 +276,8 @@ def subtraction(
                     nn_detector_path,
                     denoise_detect,
                     nn_channel_index,
+                    peak_sign=peak_sign,
+                    do_nn_denoise=do_nn_denoise,
                     do_enforce_decrease=do_enforce_decrease,
                     probe=probe,
                     standardized_dtype=np.float32,
@@ -286,7 +290,7 @@ def subtraction(
     # if we're on GPU, we can't use processes, since each process will
     # have it's own torch runtime and those will use all the memory
     if device.type == "cuda":
-        Pool = concurrent.futures.ThreadPoolExecutor
+        context_type = "spawn"
     else:
         if loc_workers > 1:
             print(
@@ -294,7 +298,7 @@ def subtraction(
                 "you're on CPU, use a large n_jobs for parallelism.)"
             )
             loc_workers = 1
-        Pool = concurrent.futures.ThreadPoolExecutor
+        context_type = "fork"
 
     # parallel batches
     jobs = list(
@@ -374,11 +378,17 @@ def subtraction(
                 probe,
                 loc_n_chans,
                 loc_radius,
+                peak_sign,
             )
             for batch_id, s_start in jobs
         )
 
-        with Pool(
+        context = multiprocessing.get_context(context_type)
+        manager = context.Manager()
+        id_queue = manager.Queue()
+        for id in range(n_jobs):
+            id_queue.put(id)
+        with context.Pool(
             n_jobs,
             initializer=_subtraction_batch_init,
             initargs=(
@@ -386,10 +396,12 @@ def subtraction(
                 nn_detector_path,
                 nn_channel_index,
                 denoise_detect,
+                do_nn_denoise,
+                id_queue,
             ),
         ) as pool:
             for result in tqdm(
-                pool.map(_subtraction_batch, jobs),
+                pool.imap(_subtraction_batch, jobs),
                 total=n_batches,
                 desc="Batches",
                 smoothing=0,
@@ -492,12 +504,22 @@ def _subtraction_batch(args):
 
 
 def _subtraction_batch_init(
-    device, nn_detector_path, nn_channel_index, denoise_detect
+    device, nn_detector_path, nn_channel_index, denoise_detect, do_nn_denoise, id_queue
 ):
     """Thread/process initializer -- loads up neural nets"""
-    denoiser = denoise.SingleChanDenoiser()
-    denoiser.load()
-    denoiser.to(device)
+    rank = id_queue.get()
+
+    if device.type == "cuda":
+        if torch.cuda.device_count() > 1:
+            os.environ["CUDA_VISIBLE_DEVICES"] = str(rank % torch.cuda.device_count())
+            device = torch.device("cuda")
+            print(f"Worker {rank} using GPU rank % torch.cuda.device_count()")
+
+    denoiser = None
+    if do_nn_denoise:
+        denoiser = denoise.SingleChanDenoiser()
+        denoiser.load()
+        denoiser.to(device)
     _subtraction_batch.denoiser = denoiser
 
     detector = None
@@ -541,6 +563,7 @@ def subtraction_batch(
     denoiser,
     detector,
     dn_detector,
+    peak_sign,
 ):
     """Runs subtraction on a batch
 
@@ -629,6 +652,7 @@ def subtraction_batch(
             tpca,
             dedup_channel_index,
             extract_channel_index,
+            peak_sign=peak_sign,
             detector=detector,
             denoiser=denoiser,
             denoiser_detector=dn_detector,
@@ -683,9 +707,7 @@ def subtraction_batch(
         spike_time_max -= spike_length_samples - trough_offset
 
     minix = np.searchsorted(spike_index[:, 0], spike_time_min, side="right")
-    maxix = np.searchsorted(
-        spike_index[:, 0], spike_time_max, side="left"
-    )
+    maxix = np.searchsorted(spike_index[:, 0], spike_time_max, side="left")
     spike_index = spike_index[minix:maxix]
     subtracted_wfs = subtracted_wfs[minix:maxix]
 
@@ -784,6 +806,8 @@ def train_pca(
     nn_detector_path,
     denoise_detect,
     nn_channel_index,
+    peak_sign="neg",
+    do_nn_denoise=True,
     do_enforce_decrease=True,
     probe=None,
     standardized_dtype=np.float32,
@@ -803,7 +827,9 @@ def train_pca(
         n_seconds, size=min(n_sec_pca, n_seconds), replace=False
     )
 
-    denoiser = denoise.SingleChanDenoiser().load().to(device)
+    denoiser = None
+    if do_nn_denoise:
+        denoiser = denoise.SingleChanDenoiser().load().to(device)
 
     detector = None
     if nn_detector_path:
@@ -813,6 +839,7 @@ def train_pca(
 
     dn_detector = None
     if denoise_detect:
+        assert do_nn_denoise
         dn_detector = detect.DenoiserDetect(denoiser)
         dn_detector.to(device)
 
@@ -847,6 +874,7 @@ def train_pca(
             denoiser,
             detector,
             dn_detector,
+            peak_sign,
         )
         spike_index.append(spind)
         waveforms.append(wfs)
@@ -886,6 +914,7 @@ def detect_and_subtract(
     tpca,
     dedup_channel_index,
     extract_channel_index,
+    peak_sign="neg",
     detector=None,
     denoiser=None,
     denoiser_detector=None,
@@ -927,10 +956,10 @@ def detect_and_subtract(
         dedup_channel_index,
         spike_length_samples,
         device=device,
+        peak_sign=peak_sign,
         **kwargs,
     )
-    # print(threshold, len(spike_index), flush=True)
-    if not len(spike_index):
+    if not spike_index.size:
         return [], raw, []
 
     # -- read waveforms
@@ -999,12 +1028,12 @@ def full_denoising(
     wfs_in_probe = waveforms[in_probe_index]
 
     # Apply NN denoiser (skip if None)
-#     print("A", wfs_in_probe.shape)
+    #     print("A", wfs_in_probe.shape)
     if denoiser is not None:
         results = []
         for bs in range(0, wfs_in_probe.shape[0], batch_size):
             be = min(bs + batch_size, N * C)
-#             print("B", bs, be, wfs_in_probe[bs:be].shape)
+            #             print("B", bs, be, wfs_in_probe[bs:be].shape)
             results.append(
                 denoiser(
                     torch.as_tensor(
@@ -1014,8 +1043,8 @@ def full_denoising(
                 .cpu()
                 .numpy()
             )
-#             print("C", results[-1].shape)
-#         print([r.shape for r in results])
+        #             print("C", results[-1].shape)
+        #         print([r.shape for r in results])
         wfs_in_probe = np.concatenate(results, axis=0)
         del results
 
@@ -1295,8 +1324,35 @@ def read_geom_from_meta(bin_file):
     return geom
 
 
+def get_binary_length(input_bin, n_channels, sampling_rate):
+    bin_size = Path(input_bin).stat().st_size
+    assert not bin_size % np.dtype(np.float32).itemsize
+    bin_size = bin_size // np.dtype(np.float32).itemsize
+    assert not bin_size % n_channels
+    T_samples = bin_size // n_channels
+    T_sec = T_samples / sampling_rate
+    return T_samples, T_sec
+
+
 def read_data(bin_file, dtype, s_start, s_end, n_channels):
-    """Read a chunk of a binary file"""
+    """Read a chunk of a binary file
+
+    Reads a temporal chunk on all channels.
+
+    Arguments
+    ---------
+    bin_file : string or Path
+    dtype : numpy datatype
+        The type of data stored in bin_file (and the output type)
+    s_start, s_end : int
+        Start and end samples of region to load
+    n_channels : int
+        Number of channels saved in this binary file.
+
+    Returns
+    -------
+    data : np.array of shape (s_end - s_start, n_channels)
+    """
     offset = s_start * np.dtype(dtype).itemsize * n_channels
     with open(bin_file, "rb") as fin:
         data = np.fromfile(
