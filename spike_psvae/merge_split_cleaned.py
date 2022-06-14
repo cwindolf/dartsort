@@ -1,23 +1,17 @@
 # %%
 import numpy as np
-import torch
-import torch.multiprocessing as mp
-from scipy.signal import argrelmin
 from sklearn.decomposition import PCA
 from sklearn.discriminant_analysis import LinearDiscriminantAnalysis as LDA
 from sklearn.cross_decomposition import CCA
-import scipy.optimize as optim_ls
 import hdbscan
 from spike_psvae.cluster_utils import (
     compute_shifted_similarity,
     read_waveforms,
 )
-from isosplit import isocut
+from spike_psvae.isocut5 import isocut5 as isocut
 from scipy.spatial.distance import cdist
 from tqdm.auto import tqdm, trange
-import matplotlib.pyplot as plt
 from spike_psvae.denoise import denoise_wf_nn_tmp_single_channel
-from sklearn.cluster import MeanShift
 
 # %%
 # deprecated
@@ -38,12 +32,16 @@ def align_templates(
 
     idx_sorted = triaged_spike_index[:, 0].argsort()
     triaged_spike_index = triaged_spike_index[idx_sorted]
-    
+
     return triaged_spike_index, idx_sorted
 
 
 def align_spikes_by_templates(
-    labels, templates, spike_index, trough_offset=42, shift_max=2,
+    labels,
+    templates,
+    spike_index,
+    trough_offset=42,
+    shift_max=2,
 ):
     list_argmin = np.zeros(templates.shape[0])
     template_maxchans = []
@@ -60,12 +58,18 @@ def align_spikes_by_templates(
         if abs(shift) <= shift_max:
             shifted_spike_index[labels == unit, 0] += shift
         else:
-            #zero out overly large shifts (denoiser issue)
+            # zero out overly large shifts (denoiser issue)
             template_shifts[unit] = 0
-    return template_shifts, template_maxchans, shifted_spike_index, idx_not_aligned
+    return (
+        template_shifts,
+        template_maxchans,
+        shifted_spike_index,
+        idx_not_aligned,
+    )
+
 
 # %%
-def run_LDA_split(wfs, max_channels, threshold_diptest=.5):
+def run_LDA_split(wfs, max_channels, threshold_diptest=0.5):
     ncomp = 2
     if np.unique(max_channels).shape[0] < 2:
         return np.zeros(len(max_channels), dtype=int)
@@ -78,27 +82,34 @@ def run_LDA_split(wfs, max_channels, threshold_diptest=.5):
         )
     except np.linalg.LinAlgError:
         nmc = np.unique(max_channels).shape[0]
-        print("SVD error, skipping this one. N maxchans was", nmc, "n data", len(wfs))
+        print(
+            "SVD error, skipping this one. N maxchans was",
+            nmc,
+            "n data",
+            len(wfs),
+        )
         return np.zeros(len(max_channels), dtype=int)
     except ValueError as e:
-        print("Some ValueError during LDA split. Ignoring it and not splitting.")
+        print(
+            "Some ValueError during LDA split. Ignoring it and not splitting."
+        )
         print("Here is the error message though", e, flush=True)
         return np.zeros(len(max_channels), dtype=int)
-    
+
     if ncomp == 2:
         lda_clusterer = hdbscan.HDBSCAN(min_cluster_size=25, min_samples=25)
         lda_clusterer.fit(lda_comps)
         labels = lda_clusterer.labels_
     else:
-        value_dpt, cut_value = isocut(lda_comps[:,0])
+        value_dpt, cut_value = isocut(lda_comps[:, 0])
         # print("dip test", value_dpt, cut_value)
         if value_dpt < threshold_diptest:
             labels = np.zeros(len(max_channels), dtype=int)
             # print(labels)
         else:
             labels = np.zeros(len(max_channels), dtype=int)
-            labels[np.where(lda_comps[:,0] > cut_value)] = 1   
-            
+            labels[np.where(lda_comps[:, 0] > cut_value)] = 1
+
         # print(np.unique(labels, return_counts=True))
         # # print(wfs.shape)
         # # barf
@@ -110,8 +121,14 @@ def run_LDA_split(wfs, max_channels, threshold_diptest=.5):
         # print(labels)
     return labels
 
+
 # deprecated
-def run_CCA_split(wfs, x, z, maxptp,):
+def run_CCA_split(
+    wfs,
+    x,
+    z,
+    maxptp,
+):
     cca = CCA(n_components=2)
     cca_embed, _ = cca.fit_transform(
         wfs.reshape(wfs.shape[0], -1),
@@ -121,7 +138,9 @@ def run_CCA_split(wfs, x, z, maxptp,):
     cca_hdb.fit(cca_embed)
     return cca_hdb.labels_
 
+
 # %%
+
 
 def split_individual_cluster(
     residual_path,
@@ -147,7 +166,7 @@ def split_individual_cluster(
 
     labels_unit = np.full(spike_index_unit.shape[0], -1)
     is_split = False
-    
+
     if N < min_size_split:
         return is_split, labels_unit * 0
 
@@ -159,8 +178,8 @@ def split_individual_cluster(
     wfs_unit = np.zeros(
         (waveforms_unit.shape[0], waveforms_unit.shape[1], n_channels)
     )
-    
-    #get n_channels of waveforms for each unit with the unit max channel and the firstchan for each spike
+
+    # get n_channels of waveforms for each unit with the unit max channel and the firstchan for each spike
     for i in range(wfs_unit.shape[0]):
         mc_new = int(mc - first_chans_unit[i])
         if mc_new <= n_channels_half:
@@ -173,8 +192,8 @@ def split_individual_cluster(
             wfs_unit[i] = waveforms_unit[
                 i, :, mc_new - n_channels_half : mc_new + n_channels_half
             ]
-    
-    #get n_channels worth of residuals
+
+    # get n_channels worth of residuals
     readwfs, skipped = read_waveforms(
         spike_index_unit[:, 0],
         residual_path,
@@ -182,65 +201,78 @@ def split_individual_cluster(
         n_times=T,
         channels=np.arange(mc - n_channels_half, mc + n_channels_half),
     )
-    
-    #create collision-cleaned waveforms by adding residual
+
+    # create collision-cleaned waveforms by adding residual
     wfs_unit += readwfs
-    
-    #denoise optional (False by default)
+
+    # denoise optional (False by default)
     if nn_denoise:
-        wfs_unit = denoise_wf_nn_tmp_single_channel(
-            wfs_unit, denoiser, device
-        )
-    
-    #get true_mc for each spike (only different than mc for edge spikes)
+        wfs_unit = denoise_wf_nn_tmp_single_channel(wfs_unit, denoiser, device)
+
+    # get true_mc for each spike (only different than mc for edge spikes)
     if true_mc < n_channels_half:
         true_mc = true_mc
     elif true_mc > total_channels - n_channels_half:
         true_mc = true_mc - (total_channels - n_channels)
     else:
         true_mc = n_channels_half
-        
-    #get tpca of wfs using pre-trained tpca
+
+    # get tpca of wfs using pre-trained tpca
     permuted_wfs_unit = wfs_unit.transpose(0, 2, 1)
-    tpca_wf_units = tpca.transform(permuted_wfs_unit.reshape(permuted_wfs_unit.shape[0]*permuted_wfs_unit.shape[1], -1))
+    tpca_wf_units = tpca.transform(
+        permuted_wfs_unit.reshape(
+            permuted_wfs_unit.shape[0] * permuted_wfs_unit.shape[1], -1
+        )
+    )
     tpca_wfs_inverse = tpca.inverse_transform(tpca_wf_units)
-    tpca_wfs_inverse = tpca_wfs_inverse.reshape(permuted_wfs_unit.shape[0], permuted_wfs_unit.shape[1], -1).transpose(0, 2, 1)
-    tpca_wf_units = tpca_wf_units.reshape(permuted_wfs_unit.shape[0], permuted_wfs_unit.shape[1], -1).transpose(0, 2, 1)
-    
-    #get waveforms on max channel and max ptps
+    tpca_wfs_inverse = tpca_wfs_inverse.reshape(
+        permuted_wfs_unit.shape[0], permuted_wfs_unit.shape[1], -1
+    ).transpose(0, 2, 1)
+    tpca_wf_units = tpca_wf_units.reshape(
+        permuted_wfs_unit.shape[0], permuted_wfs_unit.shape[1], -1
+    ).transpose(0, 2, 1)
+
+    # get waveforms on max channel and max ptps
     wf_units_mc = wfs_unit[:, :, true_mc]
     ptps_unit = wf_units_mc.ptp(1)
-    
-    #get tpca embeddings for pca_n_channels (edges handled differently)
-    channels_pca_before = true_mc-pca_n_channels//2
-    channels_pca_after = true_mc+pca_n_channels//2
+
+    # get tpca embeddings for pca_n_channels (edges handled differently)
+    channels_pca_before = true_mc - pca_n_channels // 2
+    channels_pca_after = true_mc + pca_n_channels // 2
     if channels_pca_before < 0:
         channels_pca_after = channels_pca_after + (-channels_pca_before)
         channels_pca_before = 0
     elif channels_pca_after > n_channels:
-        channels_pca_before = channels_pca_before + (n_channels-channels_pca_after)
+        channels_pca_before = channels_pca_before + (
+            n_channels - channels_pca_after
+        )
         channels_pca_after = n_channels
-    tpca_wf_units_mcs = tpca_wf_units[:, :, channels_pca_before:channels_pca_after]
+    tpca_wf_units_mcs = tpca_wf_units[
+        :, :, channels_pca_before:channels_pca_after
+    ]
     tpca_wf_units_mcs = tpca_wf_units_mcs.transpose(0, 2, 1)
-    tpca_wf_units_mcs = tpca_wf_units_mcs.reshape(tpca_wf_units_mcs.shape[0], tpca_wf_units_mcs.shape[1]*tpca_wf_units_mcs.shape[2])
-    
-    #get 2D pc embedding of tpca embeddings
+    tpca_wf_units_mcs = tpca_wf_units_mcs.reshape(
+        tpca_wf_units_mcs.shape[0],
+        tpca_wf_units_mcs.shape[1] * tpca_wf_units_mcs.shape[2],
+    )
+
+    # get 2D pc embedding of tpca embeddings
     pca_model = PCA(2)
     try:
         pcs = pca_model.fit_transform(tpca_wf_units_mcs)
     except ValueError:
         print("ERR", tpca_wf_units_mcs.shape, flush=True)
         raise
-    
-    #scale pc embeddings to X feature
+
+    # scale pc embeddings to X feature
     alpha1 = (x_unit.max() - x_unit.min()) / (
         pcs[:, 0].max() - pcs[:, 0].min()
     )
     alpha2 = (x_unit.max() - x_unit.min()) / (
         pcs[:, 1].max() - pcs[:, 1].min()
     )
-    
-    #create 5D feature set for clustering (herdingspikes)
+
+    # create 5D feature set for clustering (herdingspikes)
     features = np.concatenate(
         (
             np.expand_dims(x_unit, 1),
@@ -251,28 +283,34 @@ def split_individual_cluster(
         ),
         axis=1,
     )  # Use scales parameter
-    
-    #cluster using herding spikes (parameters could be adjusted)
+
+    # cluster using herding spikes (parameters could be adjusted)
     clusterer_herding = hdbscan.HDBSCAN(min_cluster_size=25, min_samples=25)
     clusterer_herding.fit(features)
     labels_rec_hdbscan = clusterer_herding.labels_
-    #check if cluster split by herdingspikes clustering
+    # check if cluster split by herdingspikes clustering
     if np.unique(labels_rec_hdbscan).shape[0] > 1:
         is_split = True
-        
-    #LDA split - split by clustering LDA embeddings: X,y = wfs,max_channels
+
+    # LDA split - split by clustering LDA embeddings: X,y = wfs,max_channels
     max_channels_all = wfs_unit.ptp(1).argmax(1)
     if is_split:
-        #split by herdingspikes, run LDA split on new clusters.
+        # split by herdingspikes, run LDA split on new clusters.
         labels_unit[labels_rec_hdbscan == -1] = -1
         label_max_temp = labels_rec_hdbscan.max()
         cmp = 0
         for new_unit_id in np.unique(labels_rec_hdbscan)[1:]:
-            tpca_wfs_new_unit = tpca_wf_units[labels_rec_hdbscan == new_unit_id]
-            #get max_channels for new unit
-            max_channels = wfs_unit[labels_rec_hdbscan == new_unit_id].ptp(1).argmax(1)
-            #lda split
-            lda_labels = run_LDA_split(tpca_wfs_new_unit, max_channels, threshold_diptest)
+            tpca_wfs_new_unit = tpca_wf_units[
+                labels_rec_hdbscan == new_unit_id
+            ]
+            # get max_channels for new unit
+            max_channels = (
+                wfs_unit[labels_rec_hdbscan == new_unit_id].ptp(1).argmax(1)
+            )
+            # lda split
+            lda_labels = run_LDA_split(
+                tpca_wfs_new_unit, max_channels, threshold_diptest
+            )
             if np.unique(lda_labels).shape[0] == 1:
                 labels_unit[labels_rec_hdbscan == new_unit_id] = cmp
                 cmp += 1
@@ -292,8 +330,10 @@ def split_individual_cluster(
                             ]
                         ] = -1
     else:
-        #not split by herdingspikes, run LDA split.
-        lda_labels = run_LDA_split(tpca_wf_units, max_channels_all, threshold_diptest)
+        # not split by herdingspikes, run LDA split.
+        lda_labels = run_LDA_split(
+            tpca_wf_units, max_channels_all, threshold_diptest
+        )
         if np.unique(lda_labels).shape[0] > 1:
             is_split = True
             labels_unit = lda_labels
@@ -353,12 +393,12 @@ def split_clusters(
     n_channels=10,
     pca_n_channels=4,
     nn_denoise=False,
-    threshold_diptest=.5,
+    threshold_diptest=0.5,
 ):
     labels_new = labels.copy()
     labels_original = labels.copy()
     cur_max_label = labels.max()
-    for unit in tqdm(np.setdiff1d(np.unique(labels), [-1])): #216
+    for unit in tqdm(np.setdiff1d(np.unique(labels), [-1])):  # 216
         # print(f"splitting unit {unit}")
         in_unit = np.flatnonzero(labels == unit)
         spike_index_unit = spike_index[in_unit]
@@ -499,7 +539,10 @@ def get_diptest_value(
     n_channels_half = n_channels // 2
 
     n_wfs_max = int(
-        min(max_spikes, min(n_spikes_templates[unit_a], n_spikes_templates[unit_b]))
+        min(
+            max_spikes,
+            min(n_spikes_templates[unit_a], n_spikes_templates[unit_b]),
+        )
     )
 
     mc = min(384 - n_channels_half, mc)
@@ -680,7 +723,7 @@ def get_diptest_value(
             n_times=n_times,
             channels=np.arange(mc - n_channels_half, mc + n_channels_half),
         )[0]
-    
+
     # tpca = PCA(rank_pca)
     wfs_diptest = np.concatenate((wfs_a, wfs_b))
 
@@ -697,7 +740,9 @@ def get_diptest_value(
     # )
     wfs_diptest = tpca.fit_transform(wfs_diptest)
     wfs_diptest = (
-        wfs_diptest.reshape(N, C, tpca.n_components).transpose(0, 2, 1).reshape((N, C * tpca.n_components))
+        wfs_diptest.reshape(N, C, tpca.n_components)
+        .transpose(0, 2, 1)
+        .reshape((N, C * tpca.n_components))
     )
     labels_diptest = np.zeros(wfs_a_bis.shape[0] + wfs_b_bis.shape[0])
     labels_diptest[: wfs_a_bis.shape[0]] = 1
@@ -826,6 +871,8 @@ def get_merged(
                 labels_updated[
                     labels_updated == unit_merged
                 ] = new_reference_unit
-                reference_units[reference_units == unit_merged] = new_reference_unit
+                reference_units[
+                    reference_units == unit_merged
+                ] = new_reference_unit
                 cmp += 1
     return labels_updated
