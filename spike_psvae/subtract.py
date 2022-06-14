@@ -35,6 +35,7 @@ def subtraction(
     t_end=None,
     sampling_rate=30_000,
     thresholds=[12, 10, 8, 6, 5, 4],
+    peak_sign="neg",
     nn_detect=False,
     denoise_detect=False,
     do_nn_denoise=True,
@@ -273,6 +274,7 @@ def subtraction(
                     nn_detector_path,
                     denoise_detect,
                     nn_channel_index,
+                    peak_sign=peak_sign,
                     do_nn_denoise=do_nn_denoise,
                     do_enforce_decrease=do_enforce_decrease,
                     probe=probe,
@@ -374,6 +376,7 @@ def subtraction(
                 probe,
                 loc_n_chans,
                 loc_radius,
+                peak_sign,
             )
             for batch_id, s_start in jobs
         )
@@ -396,7 +399,7 @@ def subtraction(
             ),
         ) as pool:
             for result in tqdm(
-                pool.map(_subtraction_batch, jobs),
+                pool.imap(_subtraction_batch, jobs),
                 total=n_batches,
                 desc="Batches",
                 smoothing=0,
@@ -558,6 +561,7 @@ def subtraction_batch(
     denoiser,
     detector,
     dn_detector,
+    peak_sign,
 ):
     """Runs subtraction on a batch
 
@@ -646,6 +650,7 @@ def subtraction_batch(
             tpca,
             dedup_channel_index,
             extract_channel_index,
+            peak_sign=peak_sign,
             detector=detector,
             denoiser=denoiser,
             denoiser_detector=dn_detector,
@@ -799,6 +804,7 @@ def train_pca(
     nn_detector_path,
     denoise_detect,
     nn_channel_index,
+    peak_sign="neg",
     do_nn_denoise=True,
     do_enforce_decrease=True,
     probe=None,
@@ -866,6 +872,7 @@ def train_pca(
             denoiser,
             detector,
             dn_detector,
+            peak_sign,
         )
         spike_index.append(spind)
         waveforms.append(wfs)
@@ -905,6 +912,7 @@ def detect_and_subtract(
     tpca,
     dedup_channel_index,
     extract_channel_index,
+    peak_sign="neg",
     detector=None,
     denoiser=None,
     denoiser_detector=None,
@@ -946,6 +954,7 @@ def detect_and_subtract(
         dedup_channel_index,
         spike_length_samples,
         device=device,
+        peak_sign=peak_sign,
         **kwargs,
     )
     if not spike_index.size:
