@@ -89,7 +89,7 @@ def split(
 
 
 def merge(
-    labels_ptp_geq_4_after_split,
+    labels,
     templates,
     path_cleaned_wfs_h5,
     xs,
@@ -102,19 +102,20 @@ def merge(
     distance_threshold=3.0,
     threshold_diptest=0.1,
     max_spikes=500,
+    threshold_ptp = 4,
 ):
 
     """
     labels, locations, maxptps, templates should be for spikes with ptp > 4 only
     """
 
-    labels_updated = labels_ptp_geq_4_after_split.copy()
+    labels_updated = labels.copy()
     n_templates = templates.shape[0]
     n_spikes_templates = merge_split_cleaned.get_n_spikes_templates(
-        n_templates, labels_ptp_geq_4_after_split
+        n_templates, labels
     )
     x_z_templates = merge_split_cleaned.get_x_z_templates(
-        n_templates, labels_ptp_geq_4_after_split, xs, z_reg
+        n_templates, labels, xs, z_reg
     )
     print("GET PROPOSED PAIRS")
     dist_argsort, dist_template = merge_split_cleaned.get_proposed_pairs(
@@ -122,7 +123,7 @@ def merge(
     )
 
     reference_units = np.setdiff1d(
-        np.unique(labels_ptp_geq_4_after_split), [-1]
+        np.unique(labels), [-1]
     )
 
     for unit in tqdm(range(n_templates)):
@@ -174,7 +175,7 @@ def merge(
                         )
                         which = np.flatnonzero(
                             np.logical_and(
-                                maxptps > 4, labels_updated == unit_reference
+                                maxptps > threshold_ptp, labels_updated == unit_reference
                             )
                         )
                         if len(which)>n_wfs_max:
@@ -233,7 +234,7 @@ def merge(
 
                         which = np.flatnonzero(
                             np.logical_and(
-                                maxptps > 4, labels_updated == unit_bis_reference
+                                maxptps > threshold_ptp, labels_updated == unit_bis_reference
                             )
                         )
 
