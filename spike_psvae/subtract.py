@@ -1,10 +1,11 @@
-import concurrent.futures
 import contextlib
 import h5py
 import numpy as np
 import signal
 import time
 import torch
+import os
+import multiprocessing
 
 from collections import namedtuple
 
@@ -285,7 +286,7 @@ def subtraction(
     # if we're on GPU, we can't use processes, since each process will
     # have it's own torch runtime and those will use all the memory
     if device.type == "cuda":
-        Pool = concurrent.futures.ThreadPoolExecutor
+        context_type = "spawn"
     else:
         if loc_workers > 1:
             print(
@@ -293,7 +294,7 @@ def subtraction(
                 "you're on CPU, use a large n_jobs for parallelism.)"
             )
             loc_workers = 1
-        Pool = concurrent.futures.ProcessPoolExecutor
+        context_type = "fork"
 
     # parallel batches
     jobs = list(
@@ -377,7 +378,12 @@ def subtraction(
             for batch_id, s_start in jobs
         )
 
-        with Pool(
+        context = multiprocessing.get_context(context_type)
+        manager = context.Manager()
+        id_queue = manager.Queue()
+        for id in range(n_jobs):
+            id_queue.put(id)
+        with context.Pool(
             n_jobs,
             initializer=_subtraction_batch_init,
             initargs=(
@@ -386,6 +392,7 @@ def subtraction(
                 nn_channel_index,
                 denoise_detect,
                 do_nn_denoise,
+                id_queue,
             ),
         ) as pool:
             for result in tqdm(
@@ -492,9 +499,17 @@ def _subtraction_batch(args):
 
 
 def _subtraction_batch_init(
-    device, nn_detector_path, nn_channel_index, denoise_detect, do_nn_denoise
+    device, nn_detector_path, nn_channel_index, denoise_detect, do_nn_denoise, id_queue
 ):
     """Thread/process initializer -- loads up neural nets"""
+    rank = id_queue.get()
+
+    if device.type == "cuda":
+        if torch.cuda.device_count() > 1:
+            os.environ["CUDA_VISIBLE_DEVICES"] = str(rank % torch.cuda.device_count())
+            device = torch.device("cuda")
+            print(f"Worker {rank} using GPU rank % torch.cuda.device_count()")
+
     denoiser = None
     if do_nn_denoise:
         denoiser = denoise.SingleChanDenoiser()
