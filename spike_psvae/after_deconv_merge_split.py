@@ -100,7 +100,7 @@ def merge(
     tpca=PCA(8),
     n_temp=10,
     distance_threshold=3.0,
-    threshold_diptest=0.25,
+    threshold_diptest=0.1,
     max_spikes=500,
 ):
 
@@ -137,206 +137,276 @@ def merge(
                 unit_bis = dist_argsort[unit, j]
                 unit_bis_reference = reference_units[unit_bis]
                 if unit_reference != unit_bis_reference:
+                    mc_diff = np.abs(templates[unit_bis_reference].ptp(0).argmax() - templates[unit_reference].ptp(0).argmax())
+                    ptp_diff = np.abs(templates[unit_bis_reference].ptp(0).max() - templates[unit_reference].ptp(0).max())
+                    if mc_diff<3:
                     # ALIGN BASED ON MAX PTP TEMPLATE MC
-                    if (
-                        templates[unit_reference].ptp(0).max()
-                        < templates[unit_bis_reference].ptp(0).max()
-                    ):
-                        mc = templates[unit_bis_reference].ptp(0).argmax()
-                        two_units_shift = (
-                            templates[unit_reference, :, mc].argmin()
-                            - templates[unit_bis_reference, :, mc].argmin()
-                        )
-                        unit_shifted = unit_reference
-                    else:
-                        mc = templates[unit_reference].ptp(0).argmax()
-                        two_units_shift = (
-                            templates[unit_bis_reference, :, mc].argmin()
-                            - templates[unit_reference, :, mc].argmin()
-                        )
-                        unit_shifted = unit_bis_reference
-
-                    n_wfs_max = int(
-                        min(
-                            max_spikes,
-                            min(
-                                n_spikes_templates[unit_reference],
-                                n_spikes_templates[unit_bis_reference],
-                            ),
-                        )
-                    )
-                    which = np.flatnonzero(
-                        np.logical_and(
-                            maxptps > 4, labels_updated == unit_reference
-                        )
-                    )
-                    idx = np.random.choice(
-                        np.arange(len(which)), n_wfs_max, replace=False
-                    )
-                    idx.sort()
-
-                    with h5py.File(path_cleaned_wfs_h5, "r") as h5:
-                        waveforms_ref = np.empty(
-                            (n_wfs_max, *h5["wfs"].shape[1:]),
-                            dtype=h5["wfs"].dtype,
-                        )
-                        waveforms_ref = h5["wfs"][which[idx]]
-
-                    C = waveforms_ref.shape[2]
-                    if C < n_chan_merge:
-                        n_chan_merge = C
-
-                    firstchan_maxchan = mc - firstchans[which[idx]]
-                    firstchan_maxchan = np.maximum(
-                        firstchan_maxchan, n_chan_merge // 2
-                    )
-                    firstchan_maxchan = np.minimum(
-                        firstchan_maxchan, C - n_chan_merge // 2
-                    )
-                    firstchan_maxchan = firstchan_maxchan.astype("int")
-
-                    if len(np.unique(firstchan_maxchan)) <= 1:
-                        wfs_merge_ref = waveforms_ref[
-                            :,
-                            :,
-                            firstchan_maxchan[0]
-                            - n_chan_merge // 2 : firstchan_maxchan[0]
-                            + n_chan_merge // 2,
-                        ]
-                    else:
-                        wfs_merge_ref = np.zeros(
-                            (
-                                waveforms_ref.shape[0],
-                                waveforms_ref.shape[1],
-                                n_chan_merge,
+#                     print("MCs")
+#                     print(templates[unit_reference].ptp(0).argmax())
+#                     print(templates[unit_bis_reference].ptp(0).argmax())
+                        
+                        if (
+                            templates[unit_reference].ptp(0).max()
+                            < templates[unit_bis_reference].ptp(0).max()
+                        ):
+                            mc = templates[unit_bis_reference].ptp(0).argmax()
+                            two_units_shift = (
+                                templates[unit_reference, :, mc].argmin()
+                                - templates[unit_bis_reference, :, mc].argmin()
                             )
-                        )
-                        for j in range(waveforms_ref.shape[0]):
-                            wfs_merge_ref[j] = waveforms_ref[
-                                j,
-                                :,
-                                firstchan_maxchan[j]
-                                - n_chan_merge // 2 : firstchan_maxchan[j]
-                                + n_chan_merge // 2,
-                            ]
-
-                    which = np.flatnonzero(
-                        np.logical_and(
-                            maxptps > 4, labels_updated == unit_bis_reference
-                        )
-                    )
-
-                    idx = np.random.choice(
-                        np.arange(len(which)), n_wfs_max, replace=False
-                    )
-                    idx.sort()
-
-                    firstchan_maxchan = mc - firstchans[which[idx]]
-                    firstchan_maxchan = np.maximum(
-                        firstchan_maxchan, n_chan_merge // 2
-                    )
-                    firstchan_maxchan = np.minimum(
-                        firstchan_maxchan, C - n_chan_merge // 2
-                    )
-                    firstchan_maxchan = firstchan_maxchan.astype("int")
-
-                    with h5py.File(path_cleaned_wfs_h5, "r") as h5:
-                        waveforms_ref_bis = np.empty(
-                            (n_wfs_max, *h5["wfs"].shape[1:]),
-                            dtype=h5["wfs"].dtype,
-                        )
-                        waveforms_ref_bis = h5["wfs"][which[idx]]
-
-                    if len(np.unique(firstchan_maxchan)) <= 1:
-                        wfs_merge_ref_bis = waveforms_ref_bis[
-                            :,
-                            :,
-                            firstchan_maxchan[0]
-                            - n_chan_merge // 2 : firstchan_maxchan[0]
-                            + n_chan_merge // 2,
-                        ]
-                    else:
-                        wfs_merge_ref_bis = np.zeros(
-                            (
-                                waveforms_ref_bis.shape[0],
-                                waveforms_ref_bis.shape[1],
-                                n_chan_merge,
-                            )
-                        )
-                        for j in range(waveforms_ref_bis.shape[0]):
-                            wfs_merge_ref_bis[j] = waveforms_ref_bis[
-                                j,
-                                :,
-                                firstchan_maxchan[j]
-                                - n_chan_merge // 2 : firstchan_maxchan[j]
-                                + n_chan_merge // 2,
-                            ]
-
-                    if unit_shifted == unit_reference and two_units_shift > 0:
-                        wfs_merge_ref = wfs_merge_ref[:, two_units_shift:, :]
-                        wfs_merge_ref_bis = wfs_merge_ref_bis[
-                            :, :-two_units_shift, :
-                        ]
-                    elif (
-                        unit_shifted == unit_reference and two_units_shift < 0
-                    ):
-                        wfs_merge_ref = wfs_merge_ref[:, :two_units_shift, :]
-                        wfs_merge_ref_bis = wfs_merge_ref_bis[
-                            :, -two_units_shift:, :
-                        ]
-                    elif (
-                        unit_shifted == unit_bis_reference
-                        and two_units_shift > 0
-                    ):
-                        wfs_merge_ref = wfs_merge_ref[:, :-two_units_shift, :]
-                        wfs_merge_ref_bis = wfs_merge_ref_bis[
-                            :, two_units_shift:, :
-                        ]
-                    elif (
-                        unit_shifted == unit_bis_reference
-                        and two_units_shift < 0
-                    ):
-                        wfs_merge_ref = wfs_merge_ref[:, -two_units_shift:, :]
-                        wfs_merge_ref_bis = wfs_merge_ref_bis[
-                            :, :two_units_shift, :
-                        ]
-
-                    wfs_diptest = np.concatenate(
-                        (wfs_merge_ref, wfs_merge_ref_bis)
-                    )
-                    N, T, C = wfs_diptest.shape
-                    wfs_diptest = wfs_diptest.transpose(0, 2, 1).reshape(
-                        N * C, T
-                    )
-
-                    wfs_diptest = tpca.fit_transform(wfs_diptest)
-                    wfs_diptest = (
-                        wfs_diptest.reshape(N, C, tpca.n_components)
-                        .transpose(0, 2, 1)
-                        .reshape((N, C * tpca.n_components))
-                    )
-
-                    labels_diptest = np.zeros(
-                        wfs_merge_ref.shape[0] + wfs_merge_ref_bis.shape[0]
-                    )
-                    labels_diptest[: wfs_merge_ref.shape[0]] = 1
-
-                    lda_model = LDA(n_components=1)
-                    lda_comps = lda_model.fit_transform(
-                        wfs_diptest, labels_diptest
-                    )
-                    value_dpt, cut_calue = isocut(lda_comps[:, 0])
-
-                    if (
-                        value_dpt < threshold_diptest
-                        and np.abs(two_units_shift) < 2
-                    ):
-                        to_be_merged.append(unit_bis_reference)
-                        if unit_shifted == unit_bis_reference:
-                            merge_shifts.append(-two_units_shift)
+                            unit_shifted = unit_reference
                         else:
-                            merge_shifts.append(two_units_shift)
-                        is_merged = True
+                            mc = templates[unit_reference].ptp(0).argmax()
+                            two_units_shift = (
+                                templates[unit_bis_reference, :, mc].argmin()
+                                - templates[unit_reference, :, mc].argmin()
+                            )
+                            unit_shifted = unit_bis_reference
+
+                        n_wfs_max = int(
+                            min(
+                                max_spikes,
+                                min(
+                                    n_spikes_templates[unit_reference],
+                                    n_spikes_templates[unit_bis_reference],
+                                ),
+                            )
+                        )
+                        which = np.flatnonzero(
+                            np.logical_and(
+                                maxptps > 4, labels_updated == unit_reference
+                            )
+                        )
+                        if len(which)>n_wfs_max:
+                            idx = np.random.choice(
+                                np.arange(len(which)), n_wfs_max, replace=False
+                            )
+                            idx.sort()
+                        else:
+                            idx = np.arange(len(which))
+
+                        with h5py.File(path_cleaned_wfs_h5, "r") as h5:
+                            waveforms_ref = np.empty(
+                                (n_wfs_max, *h5["wfs"].shape[1:]),
+                                dtype=h5["wfs"].dtype,
+                            )
+                            waveforms_ref = h5["wfs"][which[idx]]
+
+                        C = waveforms_ref.shape[2]
+                        if C < n_chan_merge:
+                            n_chan_merge = C
+                        firstchan_maxchan = mc - firstchans[which[idx]]
+
+                        firstchan_maxchan = np.maximum(
+                            firstchan_maxchan, n_chan_merge // 2
+                        )
+                        firstchan_maxchan = np.minimum(
+                            firstchan_maxchan, C - n_chan_merge // 2
+                        )
+
+                        firstchan_maxchan = firstchan_maxchan.astype("int")                     
+
+                        if len(np.unique(firstchan_maxchan)) <= 1:
+                            wfs_merge_ref = waveforms_ref[
+                                :,
+                                :,
+                                firstchan_maxchan[0]
+                                - n_chan_merge // 2 : firstchan_maxchan[0]
+                                + n_chan_merge // 2,
+                            ]
+                        else:
+                            wfs_merge_ref = np.zeros(
+                                (
+                                    waveforms_ref.shape[0],
+                                    waveforms_ref.shape[1],
+                                    n_chan_merge,
+                                )
+                            )
+                            for j in range(waveforms_ref.shape[0]):
+                                wfs_merge_ref[j] = waveforms_ref[
+                                    j,
+                                    :,
+                                    firstchan_maxchan[j]
+                                    - n_chan_merge // 2 : firstchan_maxchan[j]
+                                    + n_chan_merge // 2,
+                                ]
+
+                        which = np.flatnonzero(
+                            np.logical_and(
+                                maxptps > 4, labels_updated == unit_bis_reference
+                            )
+                        )
+
+                        if len(which)>n_wfs_max:
+                            idx = np.random.choice(
+                                np.arange(len(which)), n_wfs_max, replace=False
+                            )
+                            idx.sort()
+                        else:
+                            idx = np.arange(len(which))
+
+    #                     print(firstchans[which[idx]])
+                        firstchan_maxchan = mc - firstchans[which[idx]]
+    #                     firstchan_maxchan = 20*np.ones(len(idx))
+
+
+                        firstchan_maxchan = np.maximum(
+                            firstchan_maxchan, n_chan_merge // 2
+                        )
+                        firstchan_maxchan = np.minimum(
+                            firstchan_maxchan, C - n_chan_merge // 2
+                        )
+                        firstchan_maxchan = firstchan_maxchan.astype("int")
+
+                        with h5py.File(path_cleaned_wfs_h5, "r") as h5:
+                            waveforms_ref_bis = np.empty(
+                                (n_wfs_max, *h5["wfs"].shape[1:]),
+                                dtype=h5["wfs"].dtype,
+                            )
+                            waveforms_ref_bis = h5["wfs"][which[idx]]
+
+                        if len(np.unique(firstchan_maxchan)) <= 1:
+                            wfs_merge_ref_bis = waveforms_ref_bis[
+                                :,
+                                :,
+                                firstchan_maxchan[0]
+                                - n_chan_merge // 2 : firstchan_maxchan[0]
+                                + n_chan_merge // 2,
+                            ]
+                        else:
+                            wfs_merge_ref_bis = np.zeros(
+                                (
+                                    waveforms_ref_bis.shape[0],
+                                    waveforms_ref_bis.shape[1],
+                                    n_chan_merge,
+                                )
+                            )
+                            for j in range(waveforms_ref_bis.shape[0]):
+                                wfs_merge_ref_bis[j] = waveforms_ref_bis[
+                                    j,
+                                    :,
+                                    firstchan_maxchan[j]
+                                    - n_chan_merge // 2 : firstchan_maxchan[j]
+                                    + n_chan_merge // 2,
+                                ]
+
+                        if unit_shifted == unit_reference and two_units_shift > 0:
+                            wfs_merge_ref = wfs_merge_ref[:, two_units_shift:, :]
+                            wfs_merge_ref_bis = wfs_merge_ref_bis[
+                                :, :-two_units_shift, :
+                            ]
+                        elif (
+                            unit_shifted == unit_reference and two_units_shift < 0
+                        ):
+                            wfs_merge_ref = wfs_merge_ref[:, :two_units_shift, :]
+                            wfs_merge_ref_bis = wfs_merge_ref_bis[
+                                :, -two_units_shift:, :
+                            ]
+                        elif (
+                            unit_shifted == unit_bis_reference
+                            and two_units_shift > 0
+                        ):
+                            wfs_merge_ref = wfs_merge_ref[:, :-two_units_shift, :]
+                            wfs_merge_ref_bis = wfs_merge_ref_bis[
+                                :, two_units_shift:, :
+                            ]
+                        elif (
+                            unit_shifted == unit_bis_reference
+                            and two_units_shift < 0
+                        ):
+                            wfs_merge_ref = wfs_merge_ref[:, -two_units_shift:, :]
+                            wfs_merge_ref_bis = wfs_merge_ref_bis[
+                                :, :two_units_shift, :
+                            ]
+
+
+                        n_wfs_max = int(
+                            min(max_spikes, min(wfs_merge_ref.shape[0], wfs_merge_ref_bis.shape[0]))
+                        )
+
+                        idx_ref = np.random.choice(wfs_merge_ref.shape[0], n_wfs_max, replace = False)
+                        idx_ref_bis = np.random.choice(wfs_merge_ref_bis.shape[0], n_wfs_max, replace = False)
+
+                        wfs_diptest = np.concatenate(
+                            (wfs_merge_ref[idx_ref], wfs_merge_ref_bis[idx_ref_bis])
+                        )
+                        N, T, C = wfs_diptest.shape
+                        wfs_diptest_plot = wfs_diptest.copy()
+                        wfs_diptest = wfs_diptest.transpose(0, 2, 1).reshape(
+                            N * C, T
+                        )
+
+                        wfs_diptest = tpca.fit_transform(wfs_diptest)
+                        wfs_tpca_reconstruct = tpca.inverse_transform(wfs_diptest).reshape((N, C, T))
+                        wfs_diptest = (
+                            wfs_diptest.reshape(N, C, tpca.n_components)
+                            .transpose(0, 2, 1)
+                            .reshape((N, C * tpca.n_components))
+                        )
+
+                        labels_diptest = np.zeros(
+                            2*n_wfs_max
+                        )
+                        labels_diptest[:n_wfs_max] = 1
+
+                        lda_model = LDA(n_components=1)
+
+                        lda_comps = lda_model.fit_transform(
+                            wfs_diptest, labels_diptest
+                        )
+
+                        value_dpt, cut_calue = isocut(lda_comps[:, 0])
+                        
+                        print("low N condition")
+                        print(n_wfs_max)
+                        print(mc_diff)
+                        print(ptp_diff)
+                        if ~(n_wfs_max < 20 and (mc_diff > 0 or ptp_diff>1)):
+                            if (
+                                value_dpt < threshold_diptest
+                                and np.abs(two_units_shift) < 2
+                            ):
+                                to_be_merged.append(unit_bis_reference)
+                                if unit_shifted == unit_bis_reference:
+                                    merge_shifts.append(-two_units_shift)
+                                else:
+                                    merge_shifts.append(two_units_shift)
+                                is_merged = True
+
+                                print(n_wfs_max)
+
+                                plt.figure(figsize = (20, 2.5))
+                                for k in range(waveforms_ref.shape[0]):
+                                    plt.plot(waveforms_ref[k].T.flatten(), alpha = 0.05, c = 'blue')
+                                plt.show()
+
+                                plt.figure(figsize = (20, 2.5))
+                                for k in range(waveforms_ref_bis.shape[0]):
+                                    plt.plot(waveforms_ref_bis[k].T.flatten(), alpha = 0.05, c = 'blue')
+                                plt.show()
+
+                                plt.figure(figsize = (20, 2.5))
+                                color_array = ['red', 'blue']
+                                for k in range(wfs_diptest_plot.shape[0]):
+                                    plt.plot(wfs_diptest_plot[k].T.flatten(), alpha = 0.05, c = color_array[int(labels_diptest[k])])
+                                plt.show()
+
+                                plt.figure(figsize = (20, 2.5))
+                                for k in range(wfs_tpca_reconstruct.shape[0]):
+                                    plt.plot(wfs_tpca_reconstruct[k].flatten(), alpha = 0.05, c = color_array[int(labels_diptest[k])])
+                                plt.show()
+
+        #                         plt.figure(figsize = (20, 2.5))
+        #                         wfs_tpca = wfs_diptest.reshape(N, C, tpca.n_components)
+        #                         for k in range(wfs_tpca_reconstruct.shape[0]):
+        #                             plt.plot(wfs_tpca[k].flatten(), alpha = 0.05, c = color_array[int(labels_diptest[k])])
+        #                         plt.show()
+
+                                print(value_dpt)
+                                plt.figure()
+                                plt.hist(lda_comps[:, 0], bins = 25)
+                                plt.show()
+
 
             if is_merged:
                 n_total_spikes = 0
