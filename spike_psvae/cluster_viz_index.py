@@ -148,6 +148,7 @@ def plot_waveforms_geom(
     do_mean=False,
     ax=None,
     colors=None,
+    scale_mul=1,
 ):
     ax = ax or plt.gca()
 
@@ -164,7 +165,7 @@ def plot_waveforms_geom(
     all_max_ptp = maxptps[
         np.isin(labels, (*neighbor_clusters, main_cluster_id))
     ].max()
-    scale = (z_uniq[1] - z_uniq[0]) / max(7, all_max_ptp)
+    scale = scale_mul * (z_uniq[1] - z_uniq[0]) / max(7, all_max_ptp)
 
     times_plot = np.arange(t_range[0] - 42, t_range[1] - 42).astype(float)
     x_uniq = np.unique(geom[:, 0])
@@ -177,11 +178,11 @@ def plot_waveforms_geom(
 
     if raw_bin:
         raw_data = np.memmap(raw_bin, dtype=np.float32)
-        raw_data = raw_data.reshape(-1, 384)
+        raw_data = raw_data.reshape(-1, len(channel_index))
 
     if residual_bin:
         res_data = np.memmap(residual_bin, dtype=np.float32)
-        res_data = res_data.reshape(-1, 384)
+        res_data = res_data.reshape(-1, len(channel_index))
 
     for j, cluster_id in reversed(list(enumerate((main_cluster_id, *neighbor_clusters)))):
         if colors is None:
@@ -230,8 +231,8 @@ def plot_waveforms_geom(
                     trace = waveforms[
                         i,
                         t_range[0] : t_range[1],
-                       np.flatnonzero(np.isin(wf_chans, channel))[0],
-                    ] 
+                        np.flatnonzero(np.isin(wf_chans, channel))[0],
+                    ]
                 else:
                     continue
                 if residual_bin:
@@ -244,6 +245,7 @@ def plot_waveforms_geom(
                 if max_vert_line not in vertical_lines:
                     vertical_lines.add(max_vert_line)
                     ax.axvline(max_vert_line, linestyle="--")
+
         ax.plot(
             *draw_lines,
             alpha=alpha,
@@ -252,10 +254,10 @@ def plot_waveforms_geom(
 
 
 single_unit_mosaic = """\
-abcpqr
-abcpqr
-abcxy.
-abcijk
+abc.pppqqqqrrr
+abc.pppqqqqrrr
+abc.xxxxxyyyyy
+abc.ii..jj..kk
 """
 
 
@@ -276,28 +278,40 @@ def single_unit_summary(
     residual_bin,
     spikes_plot=100,
     num_rows=3,
+    alpha=0.1,
+    scale_mul=1,
 ):
     # 2 neighbor clusters
-    cluster_centers = [
+    cluster_centers = np.array([
         clusterer.weighted_cluster_centroid(l)
         for l in np.setdiff1d(np.unique(labels), [-1])
-    ]
+    ])
     closest_clusters = np.argsort(
         cdist([cluster_centers[cluster_id]], cluster_centers)[0]
     )[1:3]
 
-    fig, axes = plt.subplot_mosaic(single_unit_mosaic, figsize=(15, 10))
+    fig, axes = plt.subplot_mosaic(
+        single_unit_mosaic,
+        figsize=(15, 10),
+        gridspec_kw=dict(
+            hspace=0.5,
+            wspace=0.1,
+            width_ratios=[4, 4, 4, 1, 1, 1, 0.33, 0.167, 1, 1, 0.167, 0.33, 1, 1]
+        )
+    )
     axes["a"].get_shared_y_axes().join(axes["a"], axes["b"])
     axes["a"].get_shared_y_axes().join(axes["a"], axes["c"])
     axes["p"].get_shared_y_axes().join(axes["p"], axes["q"])
     axes["p"].get_shared_y_axes().join(axes["p"], axes["r"])
+    axes["x"].get_shared_y_axes().join(axes["x"], axes["y"])
 
     # -- waveform plots
-    for ax, w, raw, res in zip(
+    for ax, w, raw, res, title in zip(
         "abc",
         [None, wfs_subtracted, wfs_localized],
         [raw_bin, None, None],
         [None, residual_bin, None],
+        ["raw", "cleaned", "denoised"],
     ):
         plot_waveforms_geom(
             cluster_id,
@@ -312,9 +326,11 @@ def single_unit_summary(
             residual_bin=res,
             spikes_plot=spikes_plot,
             num_rows=num_rows,
-            alpha=0.1,
+            alpha=alpha,
             ax=axes[ax],
+            scale_mul=scale_mul,
         )
+        axes[ax].set_title(title)
     axes["b"].set_yticks([])
     axes["c"].set_yticks([])
 
@@ -349,12 +365,15 @@ def single_unit_summary(
 
     # ptp vs z plot
     axes["y"].scatter(z_cluster, maxptp_cluster)
-    axes["x"].set_xlabel("z")
-    axes["x"].set_ylabel("ptp")
+    axes["y"].set_xlabel("z")
+    # axes["y"].set_ylabel("ptp")
+    axes["y"].set_yticks([])
 
     # ISI plot
     isi_ms = 1000 * np.diff(t_cluster)
     axes["k"].hist(isi_ms, bins=np.arange(11))
+    axes["k"].set_xlabel("isi (ms)")
+    axes["k"].set_ylabel("count")
 
     # cross correlograms
     for ax, unit in zip("ij", closest_clusters):
@@ -371,9 +390,9 @@ def single_unit_summary(
             sorting, symmetrize=True, window_ms=10.0, bin_ms=1.0
         )
         axes[ax].bar(bins[1:], correlograms[0][1], width=1.0, align="center")
-        axes[ax].set_xticks(bins[1:])
+        axes[ax].set_xticks([bins[0], 0, bins[-1]])
         axes[ax].set_xlabel("lag (ms)")
-        axes[ax].set_title(f"cross corellogram {cluster_id} <-> {unit}")
+        axes[ax].set_title(f"ccg{cluster_id} <-> {unit}")
 
     return fig
 
