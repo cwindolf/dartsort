@@ -3,21 +3,18 @@ import argparse
 import h5py
 import numpy as np
 import matplotlib.pyplot as plt
-import hdbscan
 from pathlib import Path
 from joblib.externals import loky
-from tqdm.auto import tqdm, trange
+from tqdm.auto import tqdm
 import pickle
 from sklearn.decomposition import PCA
 
 from spike_psvae import (
-    cluster,
-    merge_split_cleaned,
+    pre_deconv_merge_split,
     cluster_viz_index,
     denoise,
     cluster_utils,
-    triage,
-    cluster_viz,
+    # cluster_viz,
 )
 
 ap = argparse.ArgumentParser()
@@ -114,14 +111,6 @@ tpca.components_ = tpca_components
     z,
     maxptps,
     spike_index,
-    min_cluster_size=25,
-    min_samples=25,
-    scales=(1, 1, 30),
-    frames_dedup=12,
-    triage_quantile=80,
-    ptp_low_threshold=3,
-    ptp_high_threshold=6,
-    do_copy_spikes=True,
 )
 
 # labels in full index space (not triaged)
@@ -130,21 +119,22 @@ labels[idx_keep_full] = clusterer.labels_
 labels_original = labels.copy()
 
 # %%
-z_cutoff = [0, 500, 1000, 1500, 2000, 2500, 3000, 3500, 4000]
-for za, zb in zip(z_cutoff, z_cutoff[1:]):
-    fig, _ = cluster_viz_index.array_scatter(
-        clusterer.labels_,
-        geom,
-        tx,
-        tz,
-        tmaxptps,
-        zlim=(za, zb),
-    )
-    fig.savefig(output_dir / f"B_pre_split_full_scatter_{za}_{zb}", dpi=200)
-    plt.close(fig)
+if args.doplot:
+    z_cutoff = [0, 500, 1000, 1500, 2000, 2500, 3000, 3500, 4000]
+    for za, zb in zip(z_cutoff, z_cutoff[1:]):
+        fig, _ = cluster_viz_index.array_scatter(
+            clusterer.labels_,
+            geom,
+            tx,
+            tz,
+            tmaxptps,
+            zlim=(za, zb),
+        )
+        fig.savefig(output_dir / f"B_pre_split_full_scatter_{za}_{zb}", dpi=200)
+        plt.close(fig)
 
 # %%
-templates = merge_split_cleaned.get_templates(
+templates = pre_deconv_merge_split.get_templates(
     raw_data_bin,
     geom,
     clusterer.labels_.max() + 1,
@@ -157,7 +147,7 @@ templates = merge_split_cleaned.get_templates(
     template_maxchans,
     shifted_triaged_spike_index,
     idx_not_aligned,
-) = merge_split_cleaned.align_spikes_by_templates(
+) = pre_deconv_merge_split.align_spikes_by_templates(
     clusterer.labels_, templates, spike_index[idx_keep_full]
 )
 
@@ -167,7 +157,7 @@ shifted_full_spike_index[idx_keep_full] = shifted_triaged_spike_index
 print(
     shifted_full_spike_index[:, 0].min(), shifted_full_spike_index[:, 0].max()
 )
-shifted_templates = merge_split_cleaned.get_templates(
+shifted_templates = pre_deconv_merge_split.get_templates(
     raw_data_bin,
     geom,
     clusterer.labels_.max() + 1,
@@ -201,7 +191,7 @@ h5 = h5py.File(sub_h5, "r")
 sub_wf = h5["subtracted_waveforms"]
 if args.inmem:
     sub_wf = sub_wf[:]
-labels_split = merge_split_cleaned.split_clusters(
+labels_split = pre_deconv_merge_split.split_clusters(
     residual_data_bin,
     sub_wf,
     firstchans,
@@ -216,10 +206,6 @@ labels_split = merge_split_cleaned.split_clusters(
     denoiser,
     device,
     tpca,
-    n_channels=10,
-    pca_n_channels=4,
-    nn_denoise=False,
-    threshold_diptest=0.5,
 )
 
 # %%
@@ -232,22 +218,23 @@ labels = np.full(x.shape, -1)
 labels[idx_keep_full] = clusterer.labels_
 
 # %%
-z_cutoff = [0, 500, 1000, 1500, 2000, 2500, 3000, 3500, 4000]
-for za, zb in zip(z_cutoff, z_cutoff[1:]):
-    fig, _ = cluster_viz_index.array_scatter(
-        clusterer.labels_,
-        geom,
-        tx,
-        tz,
-        tmaxptps,
-        zlim=(za, zb),
-    )
-    fig.savefig(output_dir / f"C_after_split_full_scatter_{za}_{zb}", dpi=200)
-    plt.close(fig)
+if args.doplot:
+    z_cutoff = [0, 500, 1000, 1500, 2000, 2500, 3000, 3500, 4000]
+    for za, zb in zip(z_cutoff, z_cutoff[1:]):
+        fig, _ = cluster_viz_index.array_scatter(
+            clusterer.labels_,
+            geom,
+            tx,
+            tz,
+            tmaxptps,
+            zlim=(za, zb),
+        )
+        fig.savefig(output_dir / f"C_after_split_full_scatter_{za}_{zb}", dpi=200)
+        plt.close(fig)
 
 # %%
 # get templates
-templates = merge_split_cleaned.get_templates(
+templates = pre_deconv_merge_split.get_templates(
     raw_data_bin,
     geom,
     clusterer.labels_.max() + 1,
@@ -260,7 +247,7 @@ templates = merge_split_cleaned.get_templates(
     template_maxchans,
     shifted_triaged_spike_index,
     idx_not_aligned,
-) = merge_split_cleaned.align_spikes_by_templates(
+) = pre_deconv_merge_split.align_spikes_by_templates(
     clusterer.labels_, templates, spike_index[idx_keep_full]
 )
 shifted_full_spike_index = spike_index.copy()
@@ -268,7 +255,7 @@ shifted_full_spike_index[idx_keep_full] = shifted_triaged_spike_index
 
 # %%
 # merge
-labels_merged = merge_split_cleaned.get_merged(
+labels_merged = pre_deconv_merge_split.get_merged(
     residual_data_bin,
     sub_wf,
     firstchans,
@@ -283,9 +270,6 @@ labels_merged = merge_split_cleaned.get_merged(
     denoiser,
     device,
     tpca,
-    distance_threshold=1.0,
-    threshold_diptest=0.5,
-    nn_denoise=False,
 )
 
 # %%
@@ -299,7 +283,7 @@ labels[idx_keep_full] = clusterer.labels_
 
 # %%
 # final templates
-templates = merge_split_cleaned.get_templates(
+templates = pre_deconv_merge_split.get_templates(
     raw_data_bin,
     geom,
     clusterer.labels_.max() + 1,
@@ -312,12 +296,12 @@ templates = merge_split_cleaned.get_templates(
     template_maxchans,
     shifted_triaged_spike_index,
     idx_not_aligned,
-) = merge_split_cleaned.align_spikes_by_templates(
+) = pre_deconv_merge_split.align_spikes_by_templates(
     clusterer.labels_, templates, spike_index[idx_keep_full]
 )
 shifted_full_spike_index = spike_index.copy()
 shifted_full_spike_index[idx_keep_full] = shifted_triaged_spike_index
-shifted_templates = merge_split_cleaned.get_templates(
+shifted_templates = pre_deconv_merge_split.get_templates(
     raw_data_bin,
     geom,
     clusterer.labels_.max() + 1,
