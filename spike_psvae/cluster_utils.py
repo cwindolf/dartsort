@@ -282,7 +282,7 @@ def cluster_spikes(x, z, maxptps, spike_index, min_cluster_size=25, min_samples=
                    ptp_high_threshold=6, do_copy_spikes=True):
     
     #copy high-ptp spikes
-    true_spike_indices = np.stack((np.ones(maxptps.shape[0], dtype=bool), np.arange(maxptps.shape[0])))
+    true_spike_indices = np.stack((np.ones(maxptps.shape[0], dtype=bool), np.arange(maxptps.shape[0])),axis=1)
     if do_copy_spikes:
         x, z, maxptps, spike_index, true_spike_indices = copy_spikes(x, z, maxptps, spike_index, scales=scales, num_duplicates_list=[0,1,2,3,4])
     

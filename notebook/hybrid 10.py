@@ -5,7 +5,7 @@
 #       extension: .py
 #       format_name: percent
 #       format_version: '1.3'
-#       jupytext_version: 1.13.0
+#       jupytext_version: 1.13.8
 #   kernelspec:
 #     display_name: Python 3 (ipykernel)
 #     language: python
@@ -29,6 +29,7 @@ from spikeinterface.extractors import NumpySorting
 import spikeinterface.widgets as sw
 from sklearn.decomposition import PCA
 from scipy.optimize import least_squares
+from scipy.spatial.distance import cdist
 
 # %%
 from scipy.spatial import KDTree
@@ -42,6 +43,8 @@ from IPython.display import display
 # %%
 import os
 os.environ["CUDA_VISIBLE_DEVICES"] = ""
+
+# %%
 
 # %%
 from spike_psvae import (
@@ -62,16 +65,25 @@ from spike_psvae import (
 # args = ap.parse_args()
 # subject = args.subject
 
-
-hybrid_bin_dir = Path("/mnt/3TB/charlie/hybrid_1min_output/")
-hybrid_res_dir = Path("/mnt/3TB/charlie/hybrid_1min_subtraction/")
-hybrid_ks_dir = Path("/mnt/3TB/charlie/hybrid_1min_kilosort/")
-hybrid_deconv_dir = Path("/mnt/3TB/charlie/hybrid_1min_deconv/")
+# hybrid_bin_dir = Path("/share/ctn/users/ciw2107/hybrid_5min/hybrid_5min_output/")
+# hybrid_res_dir = Path("/share/ctn/users/ciw2107/hybrid_5min/hybrid_5min_subtraction/")
+# hybrid_ks_dir = Path("/share/ctn/users/ciw2107/hybrid_5min/hybrid_5min_kilosort/")
+# hybrid_deconv_dir = Path("/share/ctn/users/ciw2107/hybrid_5min/hybrid_5min_deconv/")
+hybrid_raw_sub_dir = Path("/share/ctn/users/ciw2107/hybrid_1min/hybrid_1min_raw_res/")
+hybrid_bin_dir = Path("/share/ctn/users/ciw2107/hybrid_1min/hybrid_1min_output/")
+hybrid_res_dir = Path("/share/ctn/users/ciw2107/hybrid_1min/hybrid_1min_subtraction/")
+hybrid_ks_dir = Path("/share/ctn/users/ciw2107/hybrid_1min/hybrid_1min_kilosort/")
+hybrid_deconv_dir = Path("/share/ctn/users/ciw2107/hybrid_1min/hybrid_1min_deconv/")
+hybrid_bin_dir.exists(), hybrid_res_dir.exists(), hybrid_ks_dir.exists(), hybrid_deconv_dir.exists()
 
 
 # %%
-hybrid_fig_dir = Path("/mnt/3TB/charlie/figs/hybrid_figs/")
-hybrid_fig_dir.mkdir(exist_ok=True)
+# hybrid_fig_dir = Path("/share/ctn/users/ciw2107/hybrid_5min/figs/")
+hybrid_fig_dir = Path("/share/ctn/users/ciw2107/hybrid_1min/figs/")
+
+
+# hybrid_fig_dir.mkdir(exist_ok=True)
+hybrid_fig_dir.exists()
 
 # %%
 # %matplotlib inline
@@ -164,8 +176,9 @@ def unsorted_detection(gt_spike_index, spike_index, n_samples=12, n_channels=4):
 
 
 for subject in tqdm(subjects):
-    # if subject in ("SWC_054", "ZM_2241", "NYU-21", "SWC_060", "ZFM-01592"):
-    # continue
+    # if subject not in ("SWC_054", "ZM_2241", "NYU-21", "SWC_060", "ZFM-01592"):
+    if subject not in ("DY_018"):
+        continue
     print(subject)
     raw_data_bin = hybrid_bin_dir / f"{subject}.ap.bin"
     assert raw_data_bin.exists()
@@ -293,7 +306,7 @@ for subject in tqdm(subjects):
         enforce_decrease=True,
         tpca=tpca,
         chunk_size=30_000,
-        n_jobs=4,
+        n_jobs=10,
     )
     reloc_results[subject] = dict(
         gt_relocalizations=gt_relocalizations,
@@ -405,16 +418,45 @@ for subject in tqdm(subjects):
                 ksgood_det=ksgood_detected[gt_labels == unit].mean(),
             )
         )
+        
+        pmhdb_match_n_spikes = 0
+        if pmhdb_match > 0:
+            pmhdb_match_n_spikes = (pmhdb_spike_train[:, 1] == pmhdb_match).sum()
+        
+        hdb_match_n_spikes = 0
+        if hdb_match > 0:
+            hdb_match_n_spikes = (hdb_spike_train[:, 1] == hdb_match).sum()
+        
+        deconv_match_n_spikes = 0
+        if deconv_match > 0:
+            deconv_match_n_spikes = (deconv_spike_train[:, 1] == deconv_match).sum()
+        
+        ksall_match_n_spikes = 0
+        if ksall_match > 0:
+            ksall_match_n_spikes = (ksall_spike_train[:, 1] == ksall_match).sum()
 
         this_subject_gtunit_info_by_subjs.append(
             dict(
                 gt_ptp=gt_ptp,
                 unit=unit,
+                pmhdb_match=pmhdb_match,
+                pmhdb_acc=pmhdb_acc,
+                pmhdb_match_event_count=pmhdb_n_spikes,
+                pmhdb_match_n_spikes=pmhdb_match_n_spikes,
                 hdb_match=hdb_match,
                 hdb_acc=hdb_acc,
+                hdb_match_event_count=hdb_n_spikes,
+                hdb_match_n_spikes=hdb_match_n_spikes,
+                deconv_match=deconv_match,
+                deconv_acc=deconv_acc,
+                deconv_match_event_count=deconv_n_spikes,
+                deconv_match_n_spikes=deconv_match_n_spikes,
                 ksall_match=ksall_match,
                 ksall_acc=ksall_acc,
+                ksall_match_event_count=ksall_n_spikes,
+                ksall_match_n_spikes=ksall_match_n_spikes,
                 gt_firing_rate=gt_counts[i] / 60,
+                gt_n_spikes=gt_counts[i],
                 gt_x=tloc[0],
                 gt_y=tloc[1],
                 gt_z=tloc[3],
@@ -722,9 +764,6 @@ for k in tqdm(reloc_results.keys()):
     # display(ti)
 
 # %%
-# %ll {hybrid_res_dir}/CSHL049
-
-# %%
 for k in tqdm(reloc_results.keys()):
     rr = reloc_results[k]
     ti = pd.DataFrame.from_records(gtunit_info_by_subj[k])
@@ -780,10 +819,10 @@ for k in tqdm(reloc_results.keys()):
         ls,
         ["no match", "our match", "ks match", "both"],
         loc="lower center",
-        ncol=4, frameon=False, borderaxespad=-0.65)
+        ncol=4, frameon=False, borderaxespad=-10)
     
-    fig.suptitle(f"{k} template locs + final clustering localization", y=0.95)
-    fig.tight_layout()
+    fig.suptitle(f"{k} template locs + final clustering localization", y=1.01)
+    # fig.tight_layout()
     fig.savefig(hybrid_fig_dir / "matched_scatter" / f"{k}_B_hdb.png", dpi=300)#, bbox_extra_artists=[ea])
     plt.show()
     plt.close(fig)
@@ -791,16 +830,21 @@ for k in tqdm(reloc_results.keys()):
     # display(ti)
 
 # %%
+hybrid_res_dir
+
+# %%
 mos = """\
 abc
 def
+hij
+lmn
 """
 
 def vis_near_gt(subject, unit, dz=100):
     rr = reloc_results[subject]
     ti = pd.DataFrame.from_records(gtunit_info_by_subj[subject])
     
-    gt_x, gt_y, gt_z = ti[["gt_x", "gt_y", "gt_z"]].values[unit]
+    gt_x, gt_y, gt_z, gt_ptp = ti[["gt_x", "gt_y", "gt_z", "gt_ptp"]].values[unit]
     z_low = gt_z - dz
     z_high = gt_z + dz
     
@@ -808,6 +852,7 @@ def vis_near_gt(subject, unit, dz=100):
     umaxptp = rr["gt_remaxptp"]
     ulabels = rr["gt_spike_train"][:, 1]   
     
+    sub_h5 = next((hybrid_res_dir / subject).glob("sub*h5"))
     with h5py.File(sub_h5, "r") as h5:
         geom_array = h5["geom"][:]
         z_reg = h5["z_reg"][:]
@@ -816,22 +861,28 @@ def vis_near_gt(subject, unit, dz=100):
         locs = h5["localizations"][:][which]
         maxptps = h5["maxptps"][:][which]
     hdb_labels = np.load(hybrid_res_dir / subject / "labels.npy")[which]
+    pmhdb_labels = np.load(hybrid_res_dir / subject / "pre_merge_split_labels.npy")[which]
+    
+    deconv_x = np.load(hybrid_deconv_dir / subject / "localization_results.npy")[:, 0]
+    deconv_z = np.load(hybrid_deconv_dir / subject / "z_reg.npy")
+    deconv_ptp = np.load(hybrid_deconv_dir / subject / "ptps.npy")
+    deconv_labels = np.load(hybrid_deconv_dir / subject / "spike_train.npy")[:, 1]
 
-
+    deconv_match = ti["deconv_acc"].values > 0
     hdbmatch = ti["hdb_acc"].values > 0
     ksmatch = ti["ksall_acc"].values > 0
     match = np.zeros(hdbmatch.shape)
-    match[hdbmatch] = 1
+    match[deconv_match] = 1
     match[ksmatch] = 2
     match[ksmatch & hdbmatch] = 3
     colors = ["k", "b", "r", "purple"]
     
-    this_match = ti["hdb_match"].values[unit]
+    this_match = ti["deconv_match"].values[unit]
         
     fig, axes = plt.subplot_mosaic(
         mos,
         gridspec_kw=dict(wspace=0.05, hspace=0.15),
-        figsize=(6, 6),
+        figsize=(6, 11),
     )
     
     cluster_viz_index.array_scatter(
@@ -846,7 +897,7 @@ def vis_near_gt(subject, unit, dz=100):
     )
     
     cluster_viz_index.array_scatter(
-        hdb_labels,
+        pmhdb_labels,
         geom_array,
         locs[:, 0],
         z_reg,
@@ -856,76 +907,421 @@ def vis_near_gt(subject, unit, dz=100):
         axes=[axes[k] for k in "def"],
     )
     
-    hdbmatch = ti["hdb_acc"].values > 0
-    ksmatch = ti["ksall_acc"].values > 0
-    match = np.zeros(hdbmatch.shape)
-    match[hdbmatch] = 1
-    match[ksmatch] = 2
-    match[ksmatch & hdbmatch] = 3
-    whicht = (ti["gt_z"].values > z_low) & (ti["gt_z"].values < z_high)
-    colors = ["k", "b", "r", "purple"]
+    cluster_viz_index.array_scatter(
+        hdb_labels,
+        geom_array,
+        locs[:, 0],
+        z_reg,
+        maxptps,
+        annotate=True,
+        zlim=(z_low, z_high),
+        axes=[axes[k] for k in "hij"],
+    )
     
-    ls = []
-    for i in range(4):
-        these = (match == i) & whicht
-        for k in "acdf":
-            axes[k].scatter(
-                ti["gt_x"][these], ti["gt_z"][these], color=colors[i], marker="x", s=15
+    cluster_viz_index.array_scatter(
+        deconv_labels,
+        geom_array,
+        deconv_x,
+        deconv_z,
+        deconv_ptp,
+        annotate=True,
+        zlim=(z_low, z_high),
+        axes=[axes[k] for k in "lmn"],
+    )
+    
+    for axs, key, name in zip(
+        ["abc", "def", "hij", "lmn"],
+        ["deconv", "pmhdb", "hdb", "deconv"],
+        ["GT reloc", "HDBSCAN", "HDBSCAN+Split/Merge", "Deconv"],
+    ):
+        hdbmatch = ti[f"{key}_acc"].values > 0
+        hdbmatch_unit = int(ti[f"{key}_match"][unit])
+        ksmatch = ti["ksall_acc"].values > 0
+        match = np.zeros(hdbmatch.shape)
+        match[hdbmatch] = 1
+        match[ksmatch] = 2
+        match[ksmatch & hdbmatch] = 3
+        whicht = (ti["gt_z"].values > z_low) & (ti["gt_z"].values < z_high)
+        colors = ["k", "b", "r", "purple"]
+        
+        if hdbmatch[unit] and name != "GT reloc":
+            axes[axs[1]].set_title(f"{name}, matched by unit {hdbmatch_unit}")
+        elif name == "GT reloc":
+            axes[axs[1]].set_title(name)
+        else:
+            axes[axs[1]].set_title(f"{name}, unmatched")
+
+        ls = []
+        for i in range(4):
+            these = (match == i) & whicht
+            for k in (axs[0], axs[2]):
+                axes[k].scatter(
+                    ti["gt_x"][these], ti["gt_z"][these], color="w", marker=".", s=25
+                )
+                axes[k].scatter(
+                    ti["gt_x"][these], ti["gt_z"][these], color=colors[i], marker="x", s=15
+                )
+            l = axes[axs[1]].scatter(
+                np.log(ti["gt_ptp"][these]), ti["gt_z"][these], color="w", marker=".", s=25
             )
-        for k in "be":
-            l = axes[k].scatter(
+            l = axes[axs[1]].scatter(
                 np.log(ti["gt_ptp"][these]), ti["gt_z"][these], color=colors[i], marker="x", s=15
             )
-        ls.append(l)
+            ls.append(l)
     ea = plt.figlegend(
         ls,
         ["no match", "our match", "ks match", "both"],
         loc="lower center",
-        ncol=4, frameon=False, borderaxespad=0.75)
+        ncol=4, frameon=False, borderaxespad=1)
     
-    for ka, kb in ["ad", "be", "cf"]:
+    for ka, kb in ["ad", "be", "cf", "dh", "ei", "fj", "hl", "im", "jn"]:
         axes[ka].get_shared_x_axes().join(axes[ka], axes[kb])
         axes[ka].set_xticks([])
         axes[ka].set_xlabel("")
-    for k in "bcef":
+    for k in "bcefijmn":
         axes[k].set_yticks([])
-    axes["b"].set_title("GT re-localizations")
-    axes["e"].set_title("Our localization")
     matchstr = "unmatched in our sort"
     if this_match >= 0:
-        matchstr = f"our match: {this_match}"
+        matchstr = f"our deconv match: {int(this_match)}"
     fig.suptitle(f"{subject}: GT unit {unit}, {matchstr}", fontsize=MEDIUM_SIZE, y=0.95)
 
     we_matched = hdbmatch[unit]
     ks_matched = ksmatch[unit]
-    return fig, axes, we_matched, ks_matched
+    return fig, axes, we_matched, ks_matched, gt_ptp
+
 
 # %%
-vis_near_gt(k, 30)
+vis_near_gt("NYU-21", 31)
 
 # %%
-(hybrid_fig_dir / "match_scatter_zoom").mkdir(exist_ok=True)
-for k in tqdm(reloc_results.keys()):
+prefix
+
+# %%
+# %rm -rf {hybrid_fig_dir / "match_scatter_zoom"}/*
+
+# %%
+z = 18.47898102
+print(z)
+f"{z:05.2f}"
+
+# %%
+gtunit_info_by_subj["DY_018"][38]
+
+# %% tags=[]
+# (hybrid_fig_dir / "match_scatter_zoom").mkdir(exist_ok=True)
+(hybrid_fig_dir / "match_scatter_zoom_by_ptp_deconv").mkdir(exist_ok=True)
+# prefixes = ["0_nomatch_", "1_ksmatch", "1_ksmatch"
+def job(k):
+    # (hybrid_fig_dir / "match_scatter_zoom" / k).mkdir(exist_ok=True)
+    # (hybrid_fig_dir / "match_scatter_zoom_by_ptp_deconv" / k).mkdir(exist_ok=True)
     for unit in trange(len(gtunit_info_by_subj[k])):
-        fig, axes, we_matched, ks_matched = vis_near_gt(k, 30)
+        fig, axes, we_matched, ks_matched, gt_ptp = vis_near_gt(k, unit)
         prefix = "0_nomatch_"
         if ks_matched and not we_matched:
             prefix = "1_ksmatch"
         if not ks_matched and we_matched:
-            prefix = "2_bothmatch"
+            prefix = "2_ourmatch"
         if ks_matched and we_matched:
             prefix = "3_bothmatch"
-        (hybrid_fig_dir / "match_scatter_zoom" / k).mkdir(exist_ok=True)
-        fig.savefig(hybrid_fig_dir / "match_scatter_zoom" / k / f"{prefix}_{unit}.png", dpi=300)
+        # fig.savefig(hybrid_fig_dir / "match_scatter_zoom" / k / f"{prefix}_{unit}.png", dpi=300)
+        fig.savefig(hybrid_fig_dir / "match_scatter_zoom_by_ptp_deconv" / f"{prefix}_gtptp_{gt_ptp:05.2f}_{k}_{unit:02d}.png", dpi=300)
         plt.close(fig)
+    return k
+
+from joblib import Parallel, delayed
+
+jobs = []
+for k in tqdm(reloc_results.keys()):
+    jobs.append(delayed(job)(k))
+
+for res in Parallel(10)(tqdm(jobs)):
+    print(res)
+
+# %%
+# %ll {hybrid_bin_dir}
+
+# %%
+0
+
+# %%
+gtunit_info_by_subj["DY_018"][31]
+
+
+# %%
+def plot_venns(
+    subject,
+    gt_unit,
+    gt_spike_train,
+    gt_spike_index,
+    ks_spike_train,
+    ks_spike_index,
+    deconv_spike_train,
+    deconv_spike_index,
+    gt_template_locs,
+    ks_template_locs,
+    deconv_template_locs,
+    gt_cluster_fc,
+    gt_cluster_mc,
+    ks_cluster_fc,
+    ks_cluster_mc,
+    deconv_cluster_fc,
+    deconv_cluster_mc,
+    geom
+):
+    out_bin = hybrid_bin_dir / f"{subject}.ap.bin"
+    unit_info = gtunit_info_by_subj[subject][gt_unit]
+    gt_ptp = unit_info["gt_ptp"]
+
+    # get gt stuff
+    gt_loc = gt_template_locs[gt_unit]
+    unit_gt_spike_train = gt_spike_train[gt_spike_train[:, 1] == gt_unit, 0]
+    
+    # get ks stuff
+    ks_match = int(unit_info["ksall_match"])
+    print(ks_match)
+    ks_matched = ks_match >= 0
+    if not ks_matched:
+        print(gt_loc.shape, ks_template_locs.shape)
+        ks_match = np.argmin(cdist(gt_loc[None], ks_template_locs).squeeze())
+    
+    ks_str = f"KSall match {ks_match}"
+    if ks_matched:
+        ks_match_spike_train = ks_spike_train[ks_spike_train[:, 1] == ks_match, 0]
+    if ks_matched and not (hybrid_fig_dir / "gt_v_ks" / subject / f"gt{gt_unit}.png").exists():
+        fig = cluster_viz.plot_agreement_venn_better(
+            ks_match,
+            gt_unit,
+            ks_match_spike_train,
+            unit_gt_spike_train,
+            np.full(len(ks_match_spike_train), ks_cluster_fc[ks_match]),
+            np.full(len(ks_match_spike_train), ks_cluster_mc[ks_match]),
+            np.full(len(unit_gt_spike_train), gt_cluster_fc[gt_unit]),
+            np.full(len(unit_gt_spike_train), gt_cluster_mc[gt_unit]),
+            geom,
+            out_bin,
+            dict(zip(range(len(ks_template_locs[:, 2])), ks_template_locs[:, 2])),
+            dict(zip(range(len(gt_template_locs[:, 2])), gt_template_locs[:, 2])),
+            ks_spike_index,
+            gt_spike_index,
+            ks_spike_train[:, 1],
+            gt_spike_train[:, 1],
+            scale=7,
+            sorting1_name="KSall",
+            sorting2_name="GT",
+            num_channels=40,
+            num_spikes_plot=100,
+            t_range=(30, 90),
+            num_rows=3,
+            alpha=0.1,
+            delta_frames=12,
+            num_close_clusters=5,
+        )
+        fig.suptitle(f"GT unit {gt_unit}. {ks_str}")
+        # plt.show()
+        fig.savefig(hybrid_fig_dir / "gt_v_ks" / subject / f"gt{gt_unit}.png")
+        plt.close(fig)
+    
+    # get ks stuff
+    deconv_match = int(unit_info["deconv_match"])
+    print(deconv_match)
+    deconv_matched = deconv_match >= 0
+    if not deconv_matched:
+        print(gt_loc.shape, deconv_template_locs.shape)
+        deconv_match = np.argmin(cdist(gt_loc[None], deconv_template_locs).squeeze())
+        deconv_matched = False
+
+    
+    deconv_str = f"Deconv match {deconv_match}"
+    if deconv_matched:
+        deconv_match_spike_train = deconv_spike_train[deconv_spike_train[:, 1] == deconv_match, 0]
+    else:
+        deconv_match_spike_train = deconv_spike_train[deconv_spike_train[:, 1] == deconv_match, 0]
+        deconv_str = f"No deconv match. Using closest unit: {deconv_match}."
+    print("dcm", deconv_match)
+    print(len(deconv_match_spike_train))
+    print("gt", len(unit_gt_spike_train))
+    
+    if True or not (hybrid_fig_dir / "venn_by_ptp" / f"ptp{gt_ptp:05.2f}_{subject}_unit{gt_unit:02d}.png").exists():
+        print(deconv_matched, deconv_match, deconv_cluster_fc[deconv_match])
+        print("hi")
+        fig = cluster_viz.plot_agreement_venn_better(
+            deconv_match,
+            gt_unit,
+            deconv_match_spike_train,
+            unit_gt_spike_train,
+            np.full(max(1, len(deconv_match_spike_train)), deconv_cluster_fc[deconv_match]),
+            np.full(max(1, len(deconv_match_spike_train)), deconv_cluster_mc[deconv_match]),
+            np.full(max(1, len(unit_gt_spike_train)), gt_cluster_fc[gt_unit]),
+            np.full(max(1, len(unit_gt_spike_train)), gt_cluster_mc[gt_unit]),
+            geom,
+            out_bin,
+            dict(zip(range(len(deconv_template_locs[:, 2])), deconv_template_locs[:, 2])),
+            dict(zip(range(len(gt_template_locs[:, 2])), gt_template_locs[:, 2])),
+            deconv_spike_index,
+            gt_spike_index,
+            deconv_spike_train[:, 1],
+            gt_spike_train[:, 1],
+            scale=7,
+            sorting1_name="Deconv",
+            sorting2_name="GT",
+            num_channels=40,
+            num_spikes_plot=100,
+            t_range=(30, 90),
+            num_rows=3,
+            alpha=0.1,
+            delta_frames=12,
+            num_close_clusters=5,
+        )
+        fig.suptitle(f"GT unit {gt_unit}. {deconv_str}")
+        return deconv_match_spike_train, unit_gt_spike_train
+        plt.show()
+        # fig.savefig(hybrid_fig_dir / "gt_v_deconv" / subject / f"gt{gt_unit}.png")
+        # fig.savefig(hybrid_fig_dir / "venn_by_ptp" / f"ptp{gt_ptp:05.2f}_{subject}_unit{gt_unit:02d}.png")
+        # plt.close(fig)
+    
+    # deconv_match = unit_info["ks_match"]
+    # ks_which = np.flatnonzero(ks_spike_train[:, 1] == ks_match)
+    # deconv_which = np.flatnonzero(deconv_spike_train[:, 1] == deconv_match)
+    
+
+
+# %% tags=[]
+(hybrid_fig_dir / "gt_v_deconv").mkdir(exist_ok=True)
+(hybrid_fig_dir / "gt_v_ks").mkdir(exist_ok=True)
+(hybrid_fig_dir / "venn_by_ptp").mkdir(exist_ok=True)
+
+# prefixes = ["0_nomatch_", "1_ksmatch", "1_ksmatch"
+def job(subject):
+    geom = np.load(hybrid_deconv_dir / subject / "geom.npy")
+    
+    (hybrid_fig_dir / "gt_v_deconv" / subject).mkdir(exist_ok=True)
+    (hybrid_fig_dir / "gt_v_ks" / subject).mkdir(exist_ok=True)
+
+    ti = pd.DataFrame.from_records(gtunit_info_by_subj[subject])
+    gt_template_locs = ti[["gt_x", "gt_y", "gt_z"]].values
+    # gt_template_locs = np.c_[gt_x, gt_y, gt
+    print(gt_template_locs.shape)
+    with h5py.File(hybrid_bin_dir / f"{subject}_gt.h5", "r") as gt_h5:
+        gt_spike_train = gt_h5["spike_train"][:]
+        gt_spike_index = gt_h5["spike_index"][:]
+        gt_templates = gt_h5["templates"][:]
+        tmax = gt_spike_index[:,0].max()
+        gtwh = (gt_spike_index[:,0] > 60) & (gt_spike_index[:,0] < tmax - 60)
+        gt_spike_train = gt_spike_train[gtwh]
+        gt_spike_index = gt_spike_index[gtwh]
+        tmax = gt_spike_index[:,0].max()
+    gt_cluster_maxchans = gt_templates.ptp(1).argmax(1)
+    gt_cluster_firstchans = np.maximum(0, gt_cluster_maxchans - 10)
+    
+    ks_templates = np.load(hybrid_ks_dir / subject / "templates.npy")
+    ks_templates[~np.isfinite(ks_templates)] = 0
+    ks_labels = np.load(hybrid_ks_dir / subject / "spike_clusters.npy").astype(int).squeeze()
+    ks_samples = np.load(hybrid_ks_dir / subject / "spike_times.npy").astype(int).squeeze()
+    ks_tptp = ks_templates.ptp(1)
+    ks_cluster_maxchans = ks_tptp.argmax(1)
+    ks_cluster_firstchans = np.maximum(0, ks_cluster_maxchans - 10)
+    ks_template_locs = localize_index.localize_ptps_index(
+        ks_tptp,
+        geom,
+        ks_cluster_maxchans,
+        np.stack([np.arange(len(geom_array))] * len(geom_array), axis=0),
+        n_channels=20,
+        n_workers=None,
+        pbar=True,
+    )
+    ks_template_locs = np.c_[ks_template_locs[0], ks_template_locs[1], ks_template_locs[3]]
+    ks_spike_train = np.c_[ks_samples, ks_labels]
+    ks_spike_index = np.c_[ks_samples, ks_cluster_maxchans[ks_labels]]
+    kswh = (ks_samples > 60) & (ks_samples < tmax - 60)
+    ks_spike_train = ks_spike_train[kswh]
+    ks_spike_index = ks_spike_index[kswh]
+    print(ks_spike_train.shape, ks_spike_train.dtype)
+    
+    deconv_templates = np.load(hybrid_deconv_dir / subject / "templates.npy")
+    print("deconv", deconv_templates.shape)
+    deconv_samples, deconv_labels = np.load(hybrid_deconv_dir / subject / "spike_train.npy").T
+    print(deconv_labels.max())
+    deconv_tptp = deconv_templates.ptp(1)
+    deconv_cluster_maxchans = deconv_tptp.argmax(1)
+    deconv_cluster_firstchans = np.maximum(0, deconv_cluster_maxchans - 10)
+    deconv_template_locs = localize_index.localize_ptps_index(
+        deconv_tptp,
+        geom,
+        deconv_cluster_maxchans,
+        np.stack([np.arange(len(geom_array))] * len(geom_array), axis=0),
+        n_channels=20,
+        n_workers=None,
+        pbar=True,
+    )
+    deconv_template_locs = np.c_[deconv_template_locs[0], deconv_template_locs[1], deconv_template_locs[3]]
+    deconv_spike_train = np.c_[deconv_samples, deconv_labels]
+    deconv_spike_index = np.c_[deconv_samples, deconv_cluster_maxchans[deconv_labels]]
+    deconvwh = (deconv_samples > 60) & (deconv_samples < tmax - 60)
+    deconv_spike_train = deconv_spike_train[deconvwh]
+    deconv_spike_index = deconv_spike_index[deconvwh]
+    
+    # for unit in trange(len(gtunit_info_by_subj[subject])):
+    for unit in [18]:
+        return plot_venns(
+            subject,
+            unit,
+            gt_spike_train,
+            gt_spike_index,
+            ks_spike_train,
+            ks_spike_index,
+            deconv_spike_train,
+            deconv_spike_index,
+            gt_template_locs,
+            ks_template_locs,
+            deconv_template_locs,
+            gt_cluster_firstchans,
+            gt_cluster_maxchans,
+            ks_cluster_firstchans,
+            ks_cluster_maxchans,
+            deconv_cluster_firstchans,
+            deconv_cluster_maxchans,
+            geom,
+        )
+    return subject
+
+# from joblib import Parallel, delayed
+
+# # job(k)
+# jobs = []
+# for k in tqdm(reloc_results.keys()):
+#     jobs.append(delayed(job)(k))
+
+# for res in Parallel(1)(tqdm(jobs)):
+#     print(res)
+print("x", flush=True)
+fig = job("DY_018")
+print("z", flush=True)
+plt.show()
+
+
+# %%
+a, b = fig
+a.size, b.size
+
+# %%
+a.min(), a.max()
+
+# %%
+b.min(), b.max()
 
 # %%
 
 # %%
+np.isin(a, b).mean()
 
 # %%
+np.unique(fig).size
 
 # %%
+np.diff(fig)
+
+# %%
+1
 
 # %%
 
