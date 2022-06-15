@@ -336,6 +336,9 @@ def subtraction(
         if localization_kind in ("original", "logbarrier"):
             locs = output_h5["localizations"]
             maxptps = output_h5["maxptps"]
+            peak_heights = output_h5["peak_heights"]
+            trough_depths = output_h5["trough_depths"]
+            widths = output_h5["widths"]
         N = len(spike_index)
 
         # if we're resuming, filter out jobs we already did
@@ -426,6 +429,9 @@ def subtraction(
                     if do_localize:
                         locs.resize(N + N_new, axis=0)
                         maxptps.resize(N + N_new, axis=0)
+                        trough_depths.resize(N + N_new, axis=0)
+                        peak_heights.resize(N + N_new, axis=0)
+                        widths.resize(N + N_new, axis=0)
                     if neighborhood_kind == "firstchan":
                         firstchans.resize(N + N_new, axis=0)
 
@@ -438,6 +444,10 @@ def subtraction(
                     if do_localize:
                         locs[N:] = np.load(result.localizations)
                         maxptps[N:] = np.load(result.maxptps)
+                        trough_depths[N:] = np.load(result.trough_depths)
+                        peak_heights[N:] = np.load(result.peak_heights)
+                        widths[N:] = np.load(result.widths)
+
                     if neighborhood_kind == "firstchan":
                         firstchans[N:] = extract_channel_index[
                             np.load(result.spike_index)[:, 1],
@@ -488,6 +498,9 @@ SubtractionBatchResult = namedtuple(
         "batch_id",
         "localizations",
         "maxptps",
+        "trough_depths",
+        "peak_heights",
+        "widths",
     ],
 )
 
@@ -515,6 +528,8 @@ def _subtraction_batch_init(
                 f"Worker {rank} using GPU {rank % torch.cuda.device_count()} "
                 f"out of {torch.cuda.device_count()} available."
             )
+    else:
+        print(f"Worker {rank} init")
 
     denoiser = None
     if do_nn_denoise:
@@ -755,10 +770,18 @@ def subtraction_batch(
         clean_file = batch_data_folder / f"{batch_id:08d}_clean.npy"
         np.save(clean_file, cleaned_wfs)
 
-    localizations_file = maxptps_file = None
+    localizations_file = maxptps_file = peak_heights_file = trough_depths_file = widths_file = None
     if localization_kind in ("original", "logbarrier"):
         locwfs = cleaned_wfs if do_clean else subtracted_wfs
         locptps = locwfs.ptp(1)
+        maxchans = locptps.nanargmax(locptps, axis=1)
+        maxchan_traces = locwfs[np.arange(len(locwfs)), :, maxchans]
+        trough_depths = maxchan_traces.min(1)
+        peak_heights = maxchan_traces.max(1)
+        first_peaks = maxchan_traces[:, :trough_offset].argmax(1)
+        second_peaks = trough_offset + maxchan_traces[:, trough_offset].argmax(1)
+        widths = second_peaks - first_peaks
+
         xs, ys, z_rels, z_abss, alphas = localize_index.localize_ptps_index(
             locptps,
             geom,
@@ -774,6 +797,12 @@ def subtraction_batch(
         np.save(localizations_file, np.c_[xs, ys, z_abss, alphas, z_rels])
         maxptps_file = batch_data_folder / f"{batch_id:08d}_maxptp.npy"
         np.save(maxptps_file, np.nanmax(locptps, axis=1))
+        trough_depths_file = batch_data_folder / f"{batch_id:08d}_tdepth.npy"
+        np.save(trough_depths_file, trough_depths)
+        peak_heights_file = batch_data_folder / f"{batch_id:08d}_pheight.npy"
+        np.save(peak_heights_file, peak_heights)
+        widths_file = batch_data_folder / f"{batch_id:08d}_width.npy"
+        np.save(widths_file, widths)
 
     res = SubtractionBatchResult(
         N_new=N_new,
@@ -786,6 +815,9 @@ def subtraction_batch(
         batch_id=batch_id,
         localizations=localizations_file,
         maxptps=maxptps_file,
+        peak_heights=peak_heights_file,
+        trough_depths=trough_depths_file,
+        widths=widths_file,
     )
 
     return res
@@ -1196,6 +1228,27 @@ def get_output_h5(
             )
             output_h5.create_dataset(
                 "maxptps",
+                shape=(0,),
+                chunks=(chunk_len,),
+                maxshape=(None,),
+                dtype=np.float32,
+            )
+            output_h5.create_dataset(
+                "peak_heights",
+                shape=(0,),
+                chunks=(chunk_len,),
+                maxshape=(None,),
+                dtype=np.float32,
+            )
+            output_h5.create_dataset(
+                "trough_depths",
+                shape=(0,),
+                chunks=(chunk_len,),
+                maxshape=(None,),
+                dtype=np.float32,
+            )
+            output_h5.create_dataset(
+                "widths",
                 shape=(0,),
                 chunks=(chunk_len,),
                 maxshape=(None,),
