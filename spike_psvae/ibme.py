@@ -23,6 +23,7 @@ def register_rigid(
     corr_threshold=0.0,
     normalized=True,
     destripe=False,
+    max_dt=None,
     batch_size=1,
     return_extra=False,
 ):
@@ -68,6 +69,7 @@ def register_rigid(
         disp=disp,
         batch_size=batch_size,
         normalized=normalized,
+        max_dt=max_dt,
     )
     extra = dict(D=D, C=C)
 
@@ -96,6 +98,7 @@ def register_nonrigid(
     rigid_init=False,
     n_windows=10,
     widthmul=0.5,
+    max_dt=None,
     destripe=False,
     device=None,
     batch_size=1,
@@ -168,6 +171,7 @@ def register_nonrigid(
             disp=rigid_disp,
             denoise_sigma=denoise_sigma,
             destripe=destripe,
+            max_dt=max_dt,
         )
         total_shift[:, :] = p[None, :]
 
@@ -201,6 +205,7 @@ def register_nonrigid(
                 mincorr=corr_threshold,
                 normalized=normalized,
                 robust_sigma=robust_sigma,
+                max_dt=max_dt,
                 disp=max(25, int(np.ceil(disp / nwin))),
                 batch_size=batch_size,
                 pbar=False,
