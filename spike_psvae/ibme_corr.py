@@ -13,6 +13,7 @@ def register_raster_rigid(
     disp=None,
     robust_sigma=0.0,
     normalized=True,
+    max_dt=None,
     batch_size=8,
     device=None,
     pbar=True,
@@ -39,17 +40,19 @@ def register_raster_rigid(
         device=device,
         pbar=pbar,
     )
-    p = psolvecorr(D, C, mincorr=mincorr, robust_sigma=robust_sigma)
+    p = psolvecorr(D, C, mincorr=mincorr, robust_sigma=robust_sigma, max_dt=max_dt)
     return p, D, C
 
 
-def psolvecorr(D, C, mincorr=0.0, robust_sigma=0, robust_iter=5):
+def psolvecorr(D, C, mincorr=0.0, robust_sigma=0, robust_iter=5, max_dt=None):
     """Solve for rigid displacement given pairwise disps + corrs"""
     T = D.shape[0]
     assert (T, T) == D.shape == C.shape
 
     # subsample where corr > mincorr
     S = C >= mincorr
+    if max_dt is not None and max_dt > 0:
+        S *= np.linalg.toeplitz(np.r_[np.ones(max_dt), np.zeros(T - max_dt)])
     I, J = np.where(S == 1)
     n_sampled = I.shape[0]
 
