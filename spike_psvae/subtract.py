@@ -909,11 +909,11 @@ def train_pca(
             probe,
             None,
             None,
+            peak_sign,
+            nsync,
             denoiser,
             detector,
             dn_detector,
-            peak_sign,
-            nsync,
         )
         spike_index.append(spind)
         waveforms.append(wfs)
