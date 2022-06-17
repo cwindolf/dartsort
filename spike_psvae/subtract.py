@@ -46,6 +46,7 @@ def subtraction(
     trough_offset=42,
     dedup_spatial_radius=70,
     enforce_decrease_kind="columns",
+    nsync=0,
     n_jobs=1,
     device=None,
     save_residual=False,
@@ -176,7 +177,7 @@ def subtraction(
 
     # figure out length of data
     T_samples, T_sec = get_binary_length(
-        standardized_bin, n_channels, sampling_rate
+        standardized_bin, n_channels, sampling_rate, nsync=nsync
     )
     assert t_start >= 0 and (t_end is None or t_end <= T_sec)
     start_sample = int(np.floor(t_start * sampling_rate))
@@ -275,6 +276,7 @@ def subtraction(
                     nn_detector_path,
                     denoise_detect,
                     nn_channel_index,
+                    nsync=nsync,
                     peak_sign=peak_sign,
                     do_nn_denoise=do_nn_denoise,
                     do_enforce_decrease=do_enforce_decrease,
@@ -381,6 +383,7 @@ def subtraction(
                 loc_n_chans,
                 loc_radius,
                 peak_sign,
+                nsync,
             )
             for batch_id, s_start in jobs
         )
@@ -577,6 +580,7 @@ def subtraction_batch(
     loc_n_chans,
     loc_radius,
     peak_sign,
+    nsync,
     denoiser,
     detector,
     dn_detector,
@@ -642,7 +646,7 @@ def subtraction_batch(
     load_start = max(start_sample, s_start - buffer)
     load_end = min(end_sample, s_end + buffer)
     residual = read_data(
-        standardized_bin, np.float32, load_start, load_end, n_channels
+        standardized_bin, np.float32, load_start, load_end, n_channels, nsync
     )
 
     # 0 padding if we were at the edge of the data
@@ -846,6 +850,7 @@ def train_pca(
     standardized_dtype=np.float32,
     n_sec_pca=10,
     rank=7,
+    nsync=0,
     random_seed=0,
     device="cpu",
 ):
@@ -908,6 +913,7 @@ def train_pca(
             detector,
             dn_detector,
             peak_sign,
+            nsync,
         )
         spike_index.append(spind)
         waveforms.append(wfs)
@@ -1378,17 +1384,17 @@ def read_geom_from_meta(bin_file):
     return geom
 
 
-def get_binary_length(input_bin, n_channels, sampling_rate):
+def get_binary_length(input_bin, n_channels, sampling_rate, nsync=0):
     bin_size = Path(input_bin).stat().st_size
     assert not bin_size % np.dtype(np.float32).itemsize
     bin_size = bin_size // np.dtype(np.float32).itemsize
-    assert not bin_size % n_channels
-    T_samples = bin_size // n_channels
+    assert not bin_size % (nsync + n_channels)
+    T_samples = bin_size // (nsync + n_channels)
     T_sec = T_samples / sampling_rate
     return T_samples, T_sec
 
 
-def read_data(bin_file, dtype, s_start, s_end, n_channels):
+def read_data(bin_file, dtype, s_start, s_end, n_channels, nsync=0):
     """Read a chunk of a binary file
 
     Reads a temporal chunk on all channels.
@@ -1407,15 +1413,15 @@ def read_data(bin_file, dtype, s_start, s_end, n_channels):
     -------
     data : np.array of shape (s_end - s_start, n_channels)
     """
-    offset = s_start * np.dtype(dtype).itemsize * n_channels
+    offset = s_start * np.dtype(dtype).itemsize * (n_channels + nsync)
     with open(bin_file, "rb") as fin:
         data = np.fromfile(
             fin,
             dtype=dtype,
-            count=(s_end - s_start) * n_channels,
+            count=(s_end - s_start) * (n_channels + nsync),
             offset=offset,
         )
-    data = data.reshape(-1, n_channels)
+    data = data.reshape(-1, n_channels + nsync)[:, :n_channels]
     return data
 
 
