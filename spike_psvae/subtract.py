@@ -576,10 +576,10 @@ def subtraction_batch(
     probe,
     loc_n_chans,
     loc_radius,
+    peak_sign,
     denoiser,
     detector,
     dn_detector,
-    peak_sign,
 ):
     """Runs subtraction on a batch
 
@@ -774,12 +774,12 @@ def subtraction_batch(
     if localization_kind in ("original", "logbarrier"):
         locwfs = cleaned_wfs if do_clean else subtracted_wfs
         locptps = locwfs.ptp(1)
-        maxchans = locptps.nanargmax(locptps, axis=1)
+        maxchans = np.nanargmax(locptps, axis=1)
         maxchan_traces = locwfs[np.arange(len(locwfs)), :, maxchans]
         trough_depths = maxchan_traces.min(1)
         peak_heights = maxchan_traces.max(1)
         first_peaks = maxchan_traces[:, :trough_offset].argmax(1)
-        second_peaks = trough_offset + maxchan_traces[:, trough_offset].argmax(1)
+        second_peaks = trough_offset + maxchan_traces[:, trough_offset:].argmax(1)
         widths = second_peaks - first_peaks
 
         xs, ys, z_rels, z_abss, alphas = localize_index.localize_ptps_index(
