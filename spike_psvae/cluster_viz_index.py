@@ -94,7 +94,8 @@ def array_scatter(
         alpha=0.05,
         annotate=annotate,
     )
-    axes[0].scatter(*geom.T, c="orange", marker="s", s=10)
+    if geom is not None:
+        axes[0].scatter(*geom.T, c="orange", marker="s", s=10)
     axes[0].set_ylabel("z")
     axes[0].set_xlabel("x")
     axes[2].set_xlabel("x")
@@ -118,10 +119,12 @@ def array_scatter(
         marker=".",
         cmap=plt.cm.viridis,
     )
-    axes[2].scatter(*geom.T, c="orange", marker="s", s=10)
-    axes[0].set_ylim(zlim)
-    axes[2].set_ylim(zlim)
-    axes[1].set_ylim(zlim)
+    if geom is not None:
+        axes[2].scatter(*geom.T, c="orange", marker="s", s=10)
+    if zlim is not None:
+        axes[0].set_ylim(zlim)
+        axes[2].set_ylim(zlim)
+        axes[1].set_ylim(zlim)
 
     if fig is not None:
         plt.tight_layout()
