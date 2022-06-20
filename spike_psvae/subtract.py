@@ -1,10 +1,12 @@
 import contextlib
+import gc
 import h5py
 import numpy as np
 import signal
 import time
 import torch
 import multiprocessing
+from concurrent.futures import ProcessPoolExecutor
 
 from collections import namedtuple
 
@@ -144,6 +146,9 @@ def subtraction(
     # pick device if it's not supplied
     if device is None:
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        if device.type == "cuda":
+            torch.cuda._lazy_init()
+            torch.set_grad_enabled(False)
 
     # if no geometry is supplied, try to load it from meta file
     if geom is None:
@@ -262,7 +267,7 @@ def subtraction(
 
         # otherwise, train it
         if tpca is None:
-            with timer("Training TPCA"):
+            with timer("Training TPCA"), torch.no_grad():
                 tpca = train_pca(
                     standardized_bin,
                     spike_length_samples,
@@ -287,6 +292,11 @@ def subtraction(
                     random_seed=random_seed,
                     device=device,
                 )
+            
+            # try to free up some memory on GPU that might have been used above
+            if device.type == "cuda":
+                gc.collect()
+                torch.cuda.empty_cache()
 
     # if we're on GPU, we can't use processes, since each process will
     # have it's own torch runtime and those will use all the memory
@@ -393,8 +403,9 @@ def subtraction(
         id_queue = manager.Queue()
         for id in range(n_jobs):
             id_queue.put(id)
-        with context.Pool(
+        with ProcessPoolExecutor(
             n_jobs,
+            mp_context=context,
             initializer=_subtraction_batch_init,
             initargs=(
                 device,
@@ -406,7 +417,7 @@ def subtraction(
             ),
         ) as pool:
             for result in tqdm(
-                pool.imap(_subtraction_batch, jobs),
+                pool.map(_subtraction_batch, jobs),
                 total=n_batches,
                 desc="Batches",
                 smoothing=0,
@@ -524,6 +535,7 @@ def _subtraction_batch_init(
     """Thread/process initializer -- loads up neural nets"""
     rank = id_queue.get()
 
+    torch.set_grad_enabled(False)
     if device.type == "cuda":
         if torch.cuda.device_count() > 1:
             device = torch.device("cuda", index=rank % torch.cuda.device_count())
@@ -531,6 +543,7 @@ def _subtraction_batch_init(
                 f"Worker {rank} using GPU {rank % torch.cuda.device_count()} "
                 f"out of {torch.cuda.device_count()} available."
             )
+        torch.cuda._lazy_init()
     else:
         print(f"Worker {rank} init")
 
@@ -1171,6 +1184,7 @@ def get_output_h5(
     chunk_len=4096,
 ):
     h5_exists = Path(out_h5).exists()
+    print("h5_exists", h5_exists)
     last_sample = 0
     if h5_exists and not overwrite:
         output_h5 = h5py.File(out_h5, "r+")

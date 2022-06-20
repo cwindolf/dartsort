@@ -1,6 +1,7 @@
 """Localization with channel subsetting based on channel index
 """
-from joblib import Parallel, delayed
+# from joblib import Parallel, delayed
+from concurrent.futures import ProcessPoolExecutor as PoolExecutor
 import numpy as np
 from scipy.optimize import minimize
 from tqdm.auto import tqdm
@@ -8,7 +9,9 @@ from tqdm.auto import tqdm
 from .waveform_utils import channel_index_subset
 
 # box constraint on optimization x, y, z (z relative to max chan)
-BOUNDS = [(-100, 170), (1e-4, 250), (-100, 100)]
+# BOUNDS = [(-100, 170), (1e-4, 250), (-100, 100)]
+DX = 100
+DZ = 100
 
 # how to initialize y?
 Y0 = 20.0
@@ -62,7 +65,7 @@ def localize_ptp_index(ptp, local_geom, logbarrier=True):
     result = minimize(
         mse,
         x0=[xcom, Y0, zcom],
-        bounds=BOUNDS,
+        bounds=[(local_geom[:, 0].min() - DX, local_geom[:, 0].max() + DX), (1e-4, 250), (-DZ, DZ)],
     )
 
     # print(result)
@@ -71,6 +74,9 @@ def localize_ptp_index(ptp, local_geom, logbarrier=True):
     balpha = (ptp * q).sum() / np.square(q).sum()
     return bx, by, bz_rel, balpha
 
+
+def _localize_ptp_index(args):
+    return localize_ptp_index(*args)
 
 def localize_ptps_index(
     ptps,
@@ -113,18 +119,20 @@ def localize_ptps_index(
     ys = np.empty(N)
     z_rels = np.empty(N)
     alphas = np.empty(N)
-    with Parallel(n_workers) as pool:
-        for n, (x, y, z_rel, alpha) in enumerate(
-            pool(
-                delayed(localize_ptp_index)(
-                    ptp[subset[mc]],
-                    local_geom[subset[mc]],
-                    logbarrier=logbarrier,
-                )
-                for ptp, mc, local_geom in xqdm(
-                    zip(ptps, maxchans, local_geoms), total=N, desc="lsq"
-                )
+    with PoolExecutor(n_workers) as pool:
+        jobargs = (
+            (
+                ptp[subset[mc]],
+                local_geom[subset[mc]],
+                logbarrier,
             )
+            for ptp, mc, local_geom in xqdm(
+                zip(ptps, maxchans, local_geoms), total=N, desc="lsq"
+            )
+        )
+        
+        for n, (x, y, z_rel, alpha) in enumerate(
+            pool.map(_localize_ptp_index, jobargs)
         ):
             xs[n] = x
             ys[n] = y
