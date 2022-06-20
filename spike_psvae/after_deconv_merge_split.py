@@ -5,7 +5,7 @@ import numpy as np
 from spike_psvae.isocut5 import isocut5 as isocut
 from sklearn.decomposition import PCA
 from sklearn.discriminant_analysis import LinearDiscriminantAnalysis as LDA
-from spike_psvae import merge_split_cleaned
+from spike_psvae import pre_deconv_merge_split
 from tqdm.auto import tqdm
 
 
@@ -116,14 +116,14 @@ def merge(
 
     labels_updated = labels.copy()
     n_templates = templates.shape[0]
-    n_spikes_templates = merge_split_cleaned.get_n_spikes_templates(
+    n_spikes_templates = pre_deconv_merge_split.get_n_spikes_templates(
         n_templates, labels
     )
-    x_z_templates = merge_split_cleaned.get_x_z_templates(
+    x_z_templates = pre_deconv_merge_split.get_x_z_templates(
         n_templates, labels, xs, z_reg
     )
     print("GET PROPOSED PAIRS")
-    dist_argsort, dist_template = merge_split_cleaned.get_proposed_pairs(
+    dist_argsort, dist_template = pre_deconv_merge_split.get_proposed_pairs(
         n_templates, templates, x_z_templates, n_temp
     )
 
