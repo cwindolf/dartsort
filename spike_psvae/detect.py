@@ -413,7 +413,7 @@ def torch_voltage_detect_dedup(
 
     # -- unravel the spike index
     # (right now the indices are into flattened recording)
-    times = torch.floor_divide(window_max_inds, C)
+    times = torch.div(window_max_inds, C, rounding_mode="floor")
     times = times[which]
 
     # TODO
@@ -614,7 +614,7 @@ def denoiser_detect_dedup(
 
     # -- unravel the spike index
     # (right now the indices are into flattened recording)
-    times = torch.floor_divide(window_max_inds, C)
+    times = torch.div(window_max_inds, C, rounding_mode="floor")
     times = times[which]
 
     # TODO
