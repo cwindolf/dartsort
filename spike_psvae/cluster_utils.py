@@ -29,9 +29,9 @@ def read_waveforms(spike_times, bin_file, geom_array, n_times=121, offset_denois
     n_channels = geom_array.shape[0] #len(channels)
     total_size = n_times*n_channels
     # spike_times are the centers of waveforms
-    spike_times_shifted = spike_times - (offset_denoiser) #n_times//2
+    spike_times_shifted = spike_times - offset_denoiser #n_times//2
     # print(spike_times, spike_times_shifted)
-    offsets = spike_times_shifted.astype('int64')*dtype.itemsize*n_channels
+    offsets = spike_times_shifted.astype(int) * dtype.itemsize * n_channels
     with open(bin_file, "rb") as fin:
         for ctr, spike in enumerate(spike_times_shifted):
             try:
@@ -39,9 +39,8 @@ def read_waveforms(spike_times, bin_file, geom_array, n_times=121, offset_denois
                 wf = np.fromfile(fin,
                                  dtype=dtype,
                                  count=total_size)
-                wfs[ctr] = wf.reshape(
-                    n_times, n_channels)[:,channels]
-            except ValueError:
+                wfs[ctr] = wf.reshape(n_times, n_channels)[:,channels]
+            except OSError:
                 print(f"skipped {ctr, spike}")
                 skipped_idx.append(ctr)
     wfs=np.delete(wfs, skipped_idx, axis=0)
@@ -395,3 +394,11 @@ def make_sorting_from_labels_frames(labels, spike_frames, sampling_frequency=300
                                                                             labels_list=labels.astype('int'), 
                                                                             sampling_frequency=sampling_frequency)  
     return sorting
+
+
+def make_labels_contiguous(labels, in_place=False):
+    untriaged = np.flatnonzero(labels >= 0)
+    unique, contiguous = np.unique(labels[untriaged], return_inverse=True)
+    out = labels if in_place else labels.copy()
+    out[untriaged] = contiguous
+    return out
