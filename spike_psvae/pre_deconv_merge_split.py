@@ -100,8 +100,10 @@ def run_LDA_split(wfs, max_channels, threshold_diptest=1.0):
         lda_clusterer = hdbscan.HDBSCAN(min_cluster_size=25, min_samples=25)
         lda_clusterer.fit(lda_comps)
         labels = lda_clusterer.labels_
+        # print("lda no diptest", np.unique(labels))
     else:
         value_dpt, cut_value = isocut(lda_comps[:, 0])
+        # print("lda diptest", value_dpt)
         # print("dip test", value_dpt, cut_value)
         if value_dpt < threshold_diptest:
             labels = np.zeros(len(max_channels), dtype=int)
@@ -289,6 +291,7 @@ def split_individual_cluster(
     clusterer_herding.fit(features)
     labels_rec_hdbscan = clusterer_herding.labels_
     # check if cluster split by herdingspikes clustering
+    # print("herding", np.unique(labels_rec_hdbscan, return_counts=True))
     if np.unique(labels_rec_hdbscan).shape[0] > 1:
         is_split = True
 
@@ -311,6 +314,7 @@ def split_individual_cluster(
             lda_labels = run_LDA_split(
                 tpca_wfs_new_unit, max_channels, threshold_diptest
             )
+            # print("new unit", new_unit_id, "lda", np.unique(lda_labels))
             if np.unique(lda_labels).shape[0] == 1:
                 labels_unit[labels_rec_hdbscan == new_unit_id] = cmp
                 cmp += 1
@@ -399,6 +403,7 @@ def split_clusters(
     labels_original = labels.copy()
     cur_max_label = labels.max()
     for unit in tqdm(np.setdiff1d(np.unique(labels), [-1])):  # 216
+    # for unit in [412]:
         # print(f"splitting unit {unit}")
         in_unit = np.flatnonzero(labels == unit)
         spike_index_unit = spike_index[in_unit]
@@ -406,7 +411,7 @@ def split_clusters(
         waveforms_unit = load_aligned_waveforms(
             waveforms, labels, unit, template_shift
         )
-        # print("max channels unit", np.unique(waveforms_unit.ptp(1).argmax(1))
+        # print("max channels unit", np.unique(waveforms_unit.ptp(1).argmax(1)))
 
         first_chans_unit = first_chans[in_unit]
         x_unit, z_unit = x[in_unit], z[in_unit]
@@ -427,6 +432,7 @@ def split_clusters(
             nn_denoise,
             threshold_diptest,
         )
+        # print("final", is_split)
         if is_split:
             for new_label in np.unique(unit_new_labels):
                 if new_label == -1:
@@ -785,7 +791,7 @@ def get_merged(
     labels_updated = labels.copy()
     reference_units = np.setdiff1d(np.unique(labels), [-1])
 
-    for unit in tqdm(range(n_templates)):  # tqdm
+    for unit in tqdm(range(n_templates), desc="merge?"):
         unit_reference = reference_units[unit]
         to_be_merged = [unit_reference]
         merge_shifts = [0]
@@ -834,6 +840,7 @@ def get_merged(
                         n_channels,
                         nn_denoise=nn_denoise,
                     )
+                    # print(unit_reference, unit_bis_reference, dpt_val)
                     if (
                         dpt_val < threshold_diptest
                         and np.abs(two_units_shift) < 2
