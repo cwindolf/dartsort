@@ -278,7 +278,7 @@ def copy_spikes(x, z, maxptps, spike_index, scales=(1,1,30), num_duplicates_list
     return new_x, new_z, new_maxptps, new_spike_index, true_spike_indices
     
 def cluster_spikes(x, z, maxptps, spike_index, min_cluster_size=25, min_samples=25, scales=(1,1,30), frames_dedup=12, triage_quantile=80, ptp_low_threshold=3, 
-                   ptp_high_threshold=6, do_copy_spikes=True):
+                   ptp_high_threshold=6, do_copy_spikes=True, do_relabel_by_depth = True, do_remove_dups = True):
     
     #copy high-ptp spikes
     true_spike_indices = np.stack((np.ones(maxptps.shape[0], dtype=bool), np.arange(maxptps.shape[0])),axis=1)
@@ -286,25 +286,27 @@ def cluster_spikes(x, z, maxptps, spike_index, min_cluster_size=25, min_samples=
         x, z, maxptps, spike_index, true_spike_indices = copy_spikes(x, z, maxptps, spike_index, scales=scales, num_duplicates_list=[0,1,2,3,4])
     
     #triage low ptp spikes to improve density-based clustering
-    idx_keep, high_ptp_filter, low_ptp_filter = triage.run_weighted_triage_low_ptp(x, z, maxptps, scales=scales, threshold=triage_quantile, 
-                                                                                   ptp_low_threshold=ptp_low_threshold, ptp_high_threshold=ptp_high_threshold, c=1)
-    high_ptp_mask = np.zeros(maxptps.shape[0], dtype=bool)
-    high_ptp_mask[high_ptp_filter] = True
-    spike_ids = np.arange(maxptps.shape[0])
-    low_ptp_spike_ids = spike_ids[high_ptp_mask]
-    #low ptp spikes keep ids
-    keep_low_ptp_spike_ids = low_ptp_spike_ids[low_ptp_filter][idx_keep]
-    keep_high_ptp_mask = np.ones(maxptps.shape[0], dtype=bool)
-    keep_high_ptp_mask[high_ptp_filter] = False
-    #high ptp spikes keep ids
-    high_ptp_spike_ids = spike_ids[keep_high_ptp_mask]
-    #final indices keep
-    final_keep_indices = np.sort(np.concatenate((keep_low_ptp_spike_ids, high_ptp_spike_ids)))
-    x = x[final_keep_indices]
-    z = z[final_keep_indices]
-    maxptps = maxptps[final_keep_indices]
-    spike_index = spike_index[final_keep_indices]
-    true_spike_indices = true_spike_indices[final_keep_indices]
+    if triage_quantile<100:
+        idx_keep, high_ptp_filter, low_ptp_filter = triage.run_weighted_triage_low_ptp(x, z, maxptps, scales=scales, threshold=triage_quantile, 
+                                                                                       ptp_low_threshold=ptp_low_threshold, ptp_high_threshold=ptp_high_threshold, c=1)
+        high_ptp_mask = np.zeros(maxptps.shape[0], dtype=bool)
+        high_ptp_mask[high_ptp_filter] = True
+        spike_ids = np.arange(maxptps.shape[0])
+        low_ptp_spike_ids = spike_ids[high_ptp_mask]
+        #low ptp spikes keep ids
+        keep_low_ptp_spike_ids = low_ptp_spike_ids[low_ptp_filter][idx_keep]
+        keep_high_ptp_mask = np.ones(maxptps.shape[0], dtype=bool)
+        keep_high_ptp_mask[high_ptp_filter] = False
+        #high ptp spikes keep ids
+        high_ptp_spike_ids = spike_ids[keep_high_ptp_mask]
+        #final indices keep
+        final_keep_indices = np.sort(np.concatenate((keep_low_ptp_spike_ids, high_ptp_spike_ids)))
+        x = x[final_keep_indices]
+        z = z[final_keep_indices]
+        maxptps = maxptps[final_keep_indices]
+        spike_index = spike_index[final_keep_indices]
+        true_spike_indices = true_spike_indices[final_keep_indices]
+        
         
     #create feature set for clustering    
     features = np.c_[x*scales[0], z*scales[1], np.log(maxptps) * scales[2]]
@@ -324,12 +326,15 @@ def cluster_spikes(x, z, maxptps, spike_index, min_cluster_size=25, min_samples=
     original_spike_ids = true_spike_indices[np.where(true_spike_indices[:,0])][:,1]
 
     # reorder by z
-    cluster_centers = compute_cluster_centers(clusterer)
-    clusterer = relabel_by_depth(clusterer, cluster_centers)
-    
+    if do_relabel_by_depth:
+        cluster_centers = compute_cluster_centers(clusterer)
+        clusterer = relabel_by_depth(clusterer, cluster_centers)
+    else:
+        cluster_centers = compute_cluster_centers(clusterer)
     #remove dups (from NN denoise) and reorder by z
-    clusterer, duplicate_indices, duplicate_spikes = remove_duplicate_spikes(clusterer, spike_index[:,0], maxptps, frames_dedup=frames_dedup)
-    cluster_centers = compute_cluster_centers(clusterer)
+    if do_remove_dups:
+        clusterer, duplicate_indices, duplicate_spikes = remove_duplicate_spikes(clusterer, spike_index[:,0], maxptps, frames_dedup=frames_dedup)
+        cluster_centers = compute_cluster_centers(clusterer)
     
     return clusterer, cluster_centers, spike_index, x, z, maxptps, original_spike_ids
 
