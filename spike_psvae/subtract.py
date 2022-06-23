@@ -291,7 +291,7 @@ def subtraction(
     # if we're on GPU, we can't use processes, since each process will
     # have it's own torch runtime and those will use all the memory
     if device.type == "cuda":
-        context_type = "spawn"
+        pass
     else:
         if loc_workers > 1:
             print(
@@ -299,7 +299,6 @@ def subtraction(
                 "you're on CPU, use a large n_jobs for parallelism.)"
             )
             loc_workers = 1
-        context_type = "fork"
 
     # parallel batches
     jobs = list(
@@ -388,7 +387,7 @@ def subtraction(
             for batch_id, s_start in jobs
         )
 
-        context = multiprocessing.get_context(context_type)
+        context = multiprocessing.get_context("spawn")
         manager = context.Manager()
         id_queue = manager.Queue()
         for id in range(n_jobs):
@@ -531,8 +530,9 @@ def _subtraction_batch_init(
                 f"Worker {rank} using GPU {rank % torch.cuda.device_count()} "
                 f"out of {torch.cuda.device_count()} available."
             )
-    else:
-        print(f"Worker {rank} init")
+
+    time.sleep(rank)
+    print(f"Worker {rank} init", flush=True)
 
     denoiser = None
     if do_nn_denoise:
