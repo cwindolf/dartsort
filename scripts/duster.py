@@ -25,11 +25,16 @@ ap.add_argument("sub_h5")
 ap.add_argument("output_dir")
 ap.add_argument("--inmem", action="store_true")
 ap.add_argument("--doplot", action="store_true")
+ap.add_argument("--doscatter", action="store_true")
+ap.add_argument("--plotdir", type=str, default=None)
+ap.add_argument("--merge_dipscore", type=float, default=1.0)
 
 args = ap.parse_args()
 
+plotdir = Path(args.plotdir if args.plotdir else args.output_dir)
+
 # %%
-np.random.seed(0)
+np.random.seed(1)
 plt.rc("figure", dpi=200)
 
 # %%
@@ -62,7 +67,7 @@ output_dir.mkdir(exist_ok=True)
 
 # %%
 denoiser = denoise.SingleChanDenoiser().load()
-device = "cpu"
+device = "cuda"
 denoiser.to(device)
 
 # %% tags=[]
@@ -130,7 +135,7 @@ if args.doplot:
             tmaxptps,
             zlim=(za, zb),
         )
-        fig.savefig(output_dir / f"B_pre_split_full_scatter_{za}_{zb}", dpi=200)
+        fig.savefig(plotdir / f"B_pre_split_full_scatter_{za}_{zb}", dpi=200)
         plt.close(fig)
 
 # %%
@@ -229,7 +234,7 @@ if args.doplot:
             tmaxptps,
             zlim=(za, zb),
         )
-        fig.savefig(output_dir / f"C_after_split_full_scatter_{za}_{zb}", dpi=200)
+        fig.savefig(plotdir / f"C_after_split_full_scatter_{za}_{zb}", dpi=200)
         plt.close(fig)
 
 # %%
@@ -255,6 +260,7 @@ shifted_full_spike_index[idx_keep_full] = shifted_triaged_spike_index
 
 # %%
 # merge
+K_pre = labels.max() + 1
 labels_merged = pre_deconv_merge_split.get_merged(
     residual_data_bin,
     sub_wf,
@@ -270,7 +276,9 @@ labels_merged = pre_deconv_merge_split.get_merged(
     denoiser,
     device,
     tpca,
+    threshold_diptest=args.merge_dipscore,
 )
+print("pre->post merge", K_pre, labels_merged.max() + 1)
 
 # %%
 # re-order again
@@ -336,7 +344,7 @@ if args.doplot:
             tmaxptps,
             zlim=(za - 50, zb + 50),
         )
-        fig.savefig(output_dir / f"AAA_final_full_scatter_{za}_{zb}", dpi=200)
+        fig.savefig(plotdir / f"AAA_final_full_scatter_{za}_{zb}", dpi=200)
         plt.close(fig)
 
     # %%
@@ -379,7 +387,7 @@ if args.doplot:
     cluster_centers.index
 
     # %%
-    sudir = Path(output_dir / "singleunit")
+    sudir = Path(plotdir / "singleunit")
     sudir.mkdir(exist_ok=True)
 
     # plot cluster summary
