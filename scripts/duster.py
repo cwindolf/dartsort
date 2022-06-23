@@ -8,6 +8,7 @@ from joblib.externals import loky
 from tqdm.auto import tqdm
 import pickle
 from sklearn.decomposition import PCA
+import time
 
 from spike_psvae import (
     pre_deconv_merge_split,
@@ -23,6 +24,7 @@ ap.add_argument("raw_data_bin")
 ap.add_argument("residual_data_bin")
 ap.add_argument("sub_h5")
 ap.add_argument("output_dir")
+ap.add_argument("--tmpdir", action=Path, default=None)
 ap.add_argument("--inmem", action="store_true")
 ap.add_argument("--doplot", action="store_true")
 ap.add_argument("--doscatter", action="store_true")
@@ -52,6 +54,22 @@ assert sub_h5.exists()
 
 print(raw_data_bin)
 print(residual_data_bin)
+
+class timer:
+    def __init__(self, name="timer"):
+        self.name = name
+        print("start", name, "...")
+    def __enter__(self):
+        self.start = time.time()
+        return self
+    def __exit__(self, *args):
+        self.t = time.time() - self.start
+        print(self.name, "took", self.t, "s")
+
+if args.tmpdir is not None:
+    with timer("copying h5 to scratch")
+    shutil.copy(sub_h5, args.tmpdir / "sub.h5")
+    sub_h5 = args.tmpdir / "sub.h5"
 
 # %%
 # raw_data_bin = Path("/mnt/3TB/charlie/re_snips/CSH_ZAD_026_snip.ap.bin")
@@ -447,3 +465,7 @@ if args.doplot:
             pass
 else:
     print("No single unit figs, bye.")
+
+if args.tmpdir is not None:
+    print("Deleting scratch")
+    (args.tmpdir / "sub.h5").unlink()
