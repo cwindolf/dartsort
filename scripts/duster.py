@@ -116,6 +116,7 @@ tpca.components_ = tpca_components
     z,
     maxptps,
     spike_index,
+    split_big=True,
 )
 
 # labels in full index space (not triaged)
