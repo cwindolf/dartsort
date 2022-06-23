@@ -3,6 +3,7 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 from scipy import sparse
+import scipy.linalg as la
 from scipy.stats import zscore
 from tqdm.auto import trange
 
@@ -52,7 +53,7 @@ def psolvecorr(D, C, mincorr=0.0, robust_sigma=0, robust_iter=5, max_dt=None):
     # subsample where corr > mincorr
     S = C >= mincorr
     if max_dt is not None and max_dt > 0:
-        S *= np.linalg.toeplitz(np.r_[np.ones(max_dt), np.zeros(T - max_dt)])
+        S *= la.toeplitz(np.r_[np.ones(max_dt), np.zeros(T - max_dt)])
     I, J = np.where(S == 1)
     n_sampled = I.shape[0]
 
