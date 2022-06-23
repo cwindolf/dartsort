@@ -9,6 +9,7 @@ from tqdm.auto import tqdm
 import pickle
 from sklearn.decomposition import PCA
 import time
+import shutil
 
 from spike_psvae import (
     pre_deconv_merge_split,
@@ -55,20 +56,24 @@ assert sub_h5.exists()
 print(raw_data_bin)
 print(residual_data_bin)
 
+
 class timer:
     def __init__(self, name="timer"):
         self.name = name
         print("start", name, "...")
+
     def __enter__(self):
         self.start = time.time()
         return self
+
     def __exit__(self, *args):
         self.t = time.time() - self.start
         print(self.name, "took", self.t, "s")
 
+
 if args.tmpdir is not None:
-    with timer("copying h5 to scratch")
-    shutil.copy(sub_h5, args.tmpdir / "sub.h5")
+    with timer("copying h5 to scratch"):
+        shutil.copy(sub_h5, args.tmpdir / "sub.h5")
     sub_h5 = args.tmpdir / "sub.h5"
 
 # %%
