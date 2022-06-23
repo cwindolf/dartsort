@@ -1069,7 +1069,6 @@ def plot_agreement_venn_better(
             )
             if shared_mc1 < 0:
                 shared_mc1 = waveforms.mean(0).ptp(0).argmax()
-            print("smc", shared_mc1, waveforms.mean(0).ptp(0).argmax())
             for i in range(min(len(waveforms), num_spikes_plot)):
                 ax_wfs_shared_yass.plot(
                     waveforms[
@@ -1963,11 +1962,11 @@ def diagnostic_plots(
         size=min((labels_ks == cluster_id_2).sum(), num_spikes_plot),
     )
     waveforms_unit = read_waveforms(
-        spike_index_ks[labels_ks == cluster_id_2][some_in_cluster],
+        spike_index_ks[labels_ks == cluster_id_2, 0][some_in_cluster].astype(int),
         raw_bin,
         geom,
         n_times=121,
-        channels=np.arange(mc - 10, mc + 10).astype("int"),
+        channels=np.arange(mc - 10, mc + 10).astype(int),
     )[0]
     pcs_unit = pc_scatter.fit_transform(
         waveforms_unit.reshape(waveforms_unit.shape[0], -1)
@@ -1994,7 +1993,7 @@ def diagnostic_plots(
             ),
         )
         waveforms_unit_bis = read_waveforms(
-            spike_index_ks[labels_ks == closest_clusters_kilo[j]][
+            spike_index_ks[labels_ks == closest_clusters_kilo[j], 0][
                 some_in_cluster
             ],
             raw_bin,
