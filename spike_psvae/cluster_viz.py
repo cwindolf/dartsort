@@ -7,7 +7,7 @@ import matplotlib.transforms as transforms
 
 # matplotlib.use('Agg')
 from matplotlib_venn import venn2
-from spikeinterface.numpyextractors import NumpySorting
+from spikeinterface.extractors import NumpySorting
 from spikeinterface.toolkit import compute_correlograms
 from spikeinterface.comparison import compare_two_sorters
 from spikeinterface.widgets import plot_agreement_matrix
