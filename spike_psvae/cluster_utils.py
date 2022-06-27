@@ -56,6 +56,7 @@ def read_waveforms(
 
 
 def compute_shifted_similarity(template1, template2, shifts=[0]):
+    # TODO trim instead of padding, it can artificially increase this distance
     curr_similarities = []
     for shift in shifts:
         if shift == 0:
