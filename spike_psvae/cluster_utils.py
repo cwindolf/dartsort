@@ -354,14 +354,7 @@ def perturb_features(x, z, logmaxptp_scaled, noise_scale):
     return x_p, z_p, log_maxptp_scaled_p
 
 
-def copy_spikes(
-    x,
-    z,
-    maxptps,
-    spike_index,
-    scales=(1, 1, 30),
-    num_duplicates_list=[0, 1, 2, 3, 4],
-):
+def copy_spikes(x, z, maxptps, spike_index, scales=(1,1,30), num_duplicates_list=[0,1,2,3,4]):
     true_spike_indices = []
     new_x = []
     new_z = []
@@ -369,37 +362,29 @@ def copy_spikes(
     new_spike_index = []
     new_spike_ids = []
     num_bins = len(num_duplicates_list)
-    ptp_bins = np.histogram(maxptps, bins=num_bins)[1]
+    num_duplicates_array = np.asarray(num_duplicates_list)
+    ptp_bins = np.histogram(maxptps, bins=num_bins-1)[1]
     for spike_id in range(len(spike_index)):
         maxptp_i = maxptps[spike_id]
         x_i = x[spike_id]
         z_i = z[spike_id]
         new_x.append(x_i)
         new_z.append(z_i)
-        new_maxptps.append(maxptp_i)
+        new_maxptps.append(maxptp_i) 
         new_spike_index.append(spike_index[spike_id])
-        # add a 1 to spike index to indicate real spike
+        #add a 1 to spike index to indicate real spike
         true_spike_indices.append([True, spike_id])
-        ptp_bin_i = np.sort(
-            ptp_bins[np.argsort(np.abs(maxptp_i - ptp_bins))[:2]]
-        )
-        duplicates_choice = np.sort(
-            np.argsort(np.abs(maxptp_i - ptp_bins))[:2]
-        )
-        p = (maxptp_i - ptp_bin_i.min()) / (ptp_bin_i - ptp_bin_i.min()).max()
-        num_duplicates = np.random.choice(duplicates_choice, p=[1 - p, p])
+        ptp_bin_i = np.sort(ptp_bins[np.argsort(np.abs(maxptp_i - ptp_bins))[:2]])
+        duplicates_choice = num_duplicates_array[np.sort(np.argsort(np.abs(maxptp_i - ptp_bins))[:2])]
+        p = (maxptp_i - ptp_bin_i.min())/(ptp_bin_i - ptp_bin_i.min()).max()
+        num_duplicates = np.random.choice(duplicates_choice, p=[1-p, p])
         for i in range(num_duplicates):
-            x_p, z_p, log_maxptp_scaled_p = perturb_features(
-                x_i * scales[0],
-                z_i * scales[1],
-                np.log(maxptp_i) * scales[2],
-                noise_scale=1,
-            )
-            new_x.append(x_p / scales[0])
-            new_z.append(z_p / scales[1])
-            new_maxptps.append(np.e ** (log_maxptp_scaled_p / scales[2]))
+            x_p, z_p, log_maxptp_scaled_p = perturb_features(x_i*scales[0], z_i*scales[1], np.log(maxptp_i)*scales[2], noise_scale=1)
+            new_x.append(x_p/scales[0])
+            new_z.append(z_p/scales[1])
+            new_maxptps.append(np.e**(log_maxptp_scaled_p/scales[2]))
             new_spike_index.append(spike_index[spike_id])
-            # add a 0 to spike index to indicate copied spike
+            #add a 0 to spike index to indicate copied spike
             true_spike_indices.append([False, -1])
     new_x = np.asarray(new_x)
     new_z = np.asarray(new_z)
@@ -407,6 +392,7 @@ def copy_spikes(
     new_spike_index = np.asarray(new_spike_index)
     true_spike_indices = np.asarray(true_spike_indices)
     return new_x, new_z, new_maxptps, new_spike_index, true_spike_indices
+    
 
 
 def cluster_spikes(
@@ -425,15 +411,26 @@ def cluster_spikes(
     do_relabel_by_depth=True,
     do_remove_dups=True,
     split_big=False,
-    split_big_kw=dict(dx=40, dz=48, min_size_split=50),
-):
-
+    split_big_kw=dict(dx=40, dz=48, min_size_split=50), 
+    do_subsample=False):
+    
+    if do_subsample:
+        print(f"subsampling from {z.size} spikes")
+        n_spikes = 1000
+        selected_spike_indices = subsample_spikes(n_spikes=1000, spike_index=spike_index, method='uniform_locations', x=x, z=z)
+        x = x[selected_spike_indices]
+        z = z[selected_spike_indices]
+        maxptps = maxptps[selected_spike_indices]
+        spike_index = spike_index[selected_spike_indices]
+        print(f"{z.size} spikes")
+        
     # copy high-ptp spikes
     true_spike_indices = np.stack(
         (np.ones(maxptps.shape[0], dtype=bool), np.arange(maxptps.shape[0])),
         axis=1,
     )
     if do_copy_spikes:
+        print(f"copying {z.size} spikes")
         x, z, maxptps, spike_index, true_spike_indices = copy_spikes(
             x,
             z,
@@ -442,6 +439,7 @@ def cluster_spikes(
             scales=scales,
             num_duplicates_list=[0, 1, 2, 3, 4],
         )
+        print(f"{z.size} spikes")
 
     # triage low ptp spikes to improve density-based clustering
     if triage_quantile < 100:
@@ -715,3 +713,95 @@ def make_labels_contiguous(labels, in_place=False):
     out = labels if in_place else labels.copy()
     out[untriaged] = contiguous
     return out
+
+def subsample_spikes(n_spikes, spike_index, method='uniform', x=None, z=None, maxptps=None):
+    selected_spike_indices = []
+    if method == 'uniform':
+        for channel in range(384):
+            spike_indices_channel = np.where(spike_index[:,1] == channel)[0]
+            max_peaks = min(spike_indices_channel.size, n_spikes)
+            selected_spike_indices += [np.random.choice(spike_indices_channel, size=max_peaks, replace=False)]        
+    if method == 'uniform_locations':
+        n_bins = (50, 50)
+        assert x is not None
+        assert z is not None
+        xmin, xmax = np.min(x), np.max(x)
+        zmin, zmax = np.min(z), np.max(z)
+
+        x_grid = np.linspace(xmin, xmax, n_bins[0])
+        z_grid = np.linspace(zmin, zmax, n_bins[1])
+
+        x_idx = np.searchsorted(x_grid, x)
+        z_idx = np.searchsorted(z_grid, z)
+
+        for i in range(n_bins[0]):
+            for j in range(n_bins[1]):
+                spike_indices = np.where((x_idx == i) & (z_idx == j))[0]
+                max_peaks = min(spike_indices.size, n_spikes)
+                selected_spike_indices += [np.random.choice(spike_indices, size=max_peaks, replace=False)]
+                
+    if method == 'smart_sampling_amplitudes':
+        for channel in range(384):
+            spike_indices_channel = np.where(spike_index[:,1] == channel)[0]
+            sub_maxptps = maxptps[spike_indices_channel]  
+            valid_indices = get_valid_indices(params, snrs, n_bins=50)
+        selected_peaks += [peaks_indices[valid_indices]]
+                
+    selected_spike_indices = np.sort(np.concatenate(selected_spike_indices))
+    return selected_spike_indices
+
+# def reject_rate(x, d, a, target, n_bins):
+#             return (np.mean(n_bins*a*np.clip(1 - d*x, 0, 1)) - target)**2
+    
+# def get_valid_indices(maxptps, n_bins, n_spikes, exponent=1):
+#     assert n_bins is not None
+#     bins = np.linspace(maxptps.min(), maxptps.max(), n_bins)
+#     x, y = np.histogram(maxptps, bins=bins)
+#     histograms = {'probability' : x/x.sum(), 'maxptps' : y[1:]}
+#     indices = np.searchsorted(histograms['maxptps'], maxptps)
+
+#     probabilities = histograms['probability']
+#     z = probabilities[probabilities > 0]
+#     c = 1.0 / np.min(z)
+#     d = np.ones(len(probabilities))
+#     d[probabilities > 0] = 1. / (c * z)
+#     d = np.minimum(1, d)
+#     d /= np.sum(d)
+#     twist = np.sum(probabilities * d)
+#     factor = twist * c
+
+#     target_rejection = (1 - max(0, n_spikes/len(indices)))**exponent
+#     res = scipy.optimize.fmin(reject_rate, factor, args=(d, probabilities, target_rejection, n_bins), disp=False)
+#     rejection_curve = np.clip(1 - d*res[0], 0, 1)
+
+#     acceptation_threshold = rejection_curve[indices]
+#     valid_indices = acceptation_threshold < np.random.rand(len(indices))
+
+#     return valid_indices
+
+# def get_valid_indices(params, snrs, exponent=1, n_bins=None):
+#     if n_bins is None:
+#         n_bins = params['n_bins']
+#     bins = np.linspace(snrs.min(), snrs.max(), n_bins)
+#     x, y = np.histogram(snrs, bins=bins)
+#     histograms = {'probability' : x/x.sum(), 'snrs' : y[1:]}
+#     indices = np.searchsorted(histograms['snrs'], snrs)
+
+#     probabilities = histograms['probability']
+#     z = probabilities[probabilities > 0]
+#     c = 1.0 / np.min(z)
+#     d = np.ones(len(probabilities))
+#     d[probabilities > 0] = 1. / (c * z)
+#     d = np.minimum(1, d)
+#     d /= np.sum(d)
+#     twist = np.sum(probabilities * d)
+#     factor = twist * c
+
+#     target_rejection = (1 - max(0, params['n_peaks']/len(indices)))**exponent
+#     res = scipy.optimize.fmin(reject_rate, factor, args=(d, probabilities, target_rejection, n_bins), disp=False)
+#     rejection_curve = np.clip(1 - d*res[0], 0, 1)
+
+#     acceptation_threshold = rejection_curve[indices]
+#     valid_indices = acceptation_threshold < np.random.rand(len(indices))
+
+#     return valid_indices
