@@ -708,11 +708,13 @@ def make_sorting_from_labels_frames(
     return sorting
 
 
-def make_labels_contiguous(labels, in_place=False):
+def make_labels_contiguous(labels, in_place=False, return_unique=False):
     untriaged = np.flatnonzero(labels >= 0)
     unique, contiguous = np.unique(labels[untriaged], return_inverse=True)
     out = labels if in_place else labels.copy()
     out[untriaged] = contiguous
+    if return_unique:
+        return out, unique
     return out
 
 def subsample_spikes(n_spikes, spike_index, method='uniform', x=None, z=None, maxptps=None):
