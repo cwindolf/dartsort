@@ -9,7 +9,7 @@ def get_templates(
     spike_train,
     geom,
     raw_binary_file,
-    residual_binary_file,
+    residual_binary_file=None,
     subtracted_waveforms=None,
     subtracted_max_channels=None,
     extract_channel_index=None,
