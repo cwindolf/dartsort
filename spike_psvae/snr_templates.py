@@ -119,7 +119,6 @@ def get_templates(
 
         raw_maxchans = np.full(len(raw_wfs), raw_maxchan)
         if do_temporal_decrease:
-            print("TD")
             denoise.enforce_temporal_decrease(raw_wfs, in_place=True)
         if do_enforce_decrease:
             denoise.enforce_decrease_shells(
