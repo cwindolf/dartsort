@@ -76,9 +76,8 @@ def get_templates(
         snrs_by_chan = np.zeros((n_templates, len(geom)))
     snrs = np.zeros(n_templates)
 
-    if return_raw_cleaned:
-        raw_templates = np.zeros_like(templates)
-        cleaned_templates = np.zeros_like(templates)
+    raw_templates = np.zeros_like(templates)
+    cleaned_templates = np.zeros_like(templates)
     if return_extra:
         extra = dict(
             original_raw=np.zeros_like(templates),
