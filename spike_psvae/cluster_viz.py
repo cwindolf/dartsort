@@ -1585,6 +1585,7 @@ def diagnostic_plots(
     alpha=0.1,
     delta_frames=12,
     num_close_clusters=5,
+    tpca_rank=8,
 ):
     lab_st1 = cluster_id_1
     lab_st2 = cluster_id_2
@@ -1624,6 +1625,14 @@ def diagnostic_plots(
 
     plot_isi_distribution(st_1, ax=ax_isi_yass)
     plot_isi_distribution(st_2, ax=ax_isi_ks)
+
+    def apply_tpca(wfs_a, wfs_b):
+        wfs = np.r_[wfs_a.transpose(0, 2, 1), wfs_b.transpose(0, 2, 1)]
+        N, C, T = wfs.shape
+        tpca = PCA(tpca_rank)
+        wfs = tpca.fit_transform(wfs.reshape(-1, T))
+        wfs = wfs.reshape(N, C, tpca_rank).reshape(N, -1)
+        return wfs
 
     subsets = [len(not_match_ind_st1), len(not_match_ind_st2), len(ind_st1)]
     v = venn2(
@@ -1774,11 +1783,9 @@ def diagnostic_plots(
     lda_labels[: wfs_shared.shape[0]] = 1
     if wfs_lda_red.size and wfs_shared.size:
         lda_comps = LDA(n_components=1).fit_transform(
-            np.concatenate(
-                (
-                    wfs_shared.reshape(wfs_shared.shape[0], -1),
-                    wfs_lda_red.reshape(wfs_lda_red.shape[0], -1),
-                )
+            apply_tpca(
+                    wfs_shared,
+                    wfs_lda_red
             ),
             lda_labels,
         )
@@ -1796,11 +1803,9 @@ def diagnostic_plots(
         lda_labels = np.zeros(wfs_shared.shape[0] + wfs_lda_blue.shape[0])
         lda_labels[: wfs_shared.shape[0]] = 1
         lda_comps = LDA(n_components=1).fit_transform(
-            np.concatenate(
-                (
-                    wfs_shared.reshape(wfs_shared.shape[0], -1),
-                    wfs_lda_blue.reshape(wfs_lda_blue.shape[0], -1),
-                )
+            apply_tpca(
+                    wfs_shared,
+                    wfs_lda_blue
             ),
             lda_labels,
         )
@@ -1818,11 +1823,9 @@ def diagnostic_plots(
         lda_labels = np.zeros(wfs_lda_blue.shape[0] + wfs_lda_red.shape[0])
         lda_labels[: wfs_lda_blue.shape[0]] = 1
         lda_comps = LDA(n_components=1).fit_transform(
-            np.concatenate(
-                (
-                    wfs_lda_blue.reshape(wfs_lda_blue.shape[0], -1),
-                    wfs_lda_red.reshape(wfs_lda_red.shape[0], -1),
-                )
+            apply_tpca(
+                    wfs_lda_blue,
+                    wfs_lda_red
             ),
             lda_labels,
         )
@@ -1885,7 +1888,6 @@ def diagnostic_plots(
     )
 
     for j in range(2):
-
         ax_templates_yass.plot(
             templates_yass[
                 closest_clusters_hdb[j], :, mc - 5 : mc + 5
@@ -1915,12 +1917,9 @@ def diagnostic_plots(
         )
         lda_labels[: waveforms_unit.shape[0]] = 1
         lda_comps = LDA(n_components=1).fit_transform(
-            np.concatenate(
-                (
-                    waveforms_unit.reshape(waveforms_unit.shape[0], -1),
-                    waveforms_unit_bis.reshape(
-                        waveforms_unit_bis.shape[0], -1
-                    ),
+            apply_tpca(
+                    waveforms_unit,
+                    waveforms_unit_bis
                 )
             ),
             lda_labels,
@@ -2037,13 +2036,9 @@ def diagnostic_plots(
         )
         lda_labels[: waveforms_unit.shape[0]] = 1
         lda_comps = LDA(n_components=1).fit_transform(
-            np.concatenate(
-                (
-                    waveforms_unit.reshape(waveforms_unit.shape[0], -1),
-                    waveforms_unit_bis.reshape(
-                        waveforms_unit_bis.shape[0], -1
-                    ),
-                )
+            apply_tpca(
+                    waveforms_unit,
+                    waveforms_unit_bis
             ),
             lda_labels,
         )
