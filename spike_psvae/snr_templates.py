@@ -1,7 +1,4 @@
 import numpy as np
-from pathlib import Path
-from tempfile import TemporaryDirectory
-import spikeinterface.full as si
 from tqdm.auto import tqdm
 from sklearn.decomposition import PCA
 
