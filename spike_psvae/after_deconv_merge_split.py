@@ -6,7 +6,7 @@ from spike_psvae.isocut5 import isocut5 as isocut
 from sklearn.decomposition import PCA
 from sklearn.discriminant_analysis import LinearDiscriminantAnalysis as LDA
 from spike_psvae import pre_deconv_merge_split, cluster_utils
-from spike_psvae.deconvolution import read_waveforms
+from spike_psvae.deconvolve import read_waveforms
 from tqdm.auto import tqdm, trange
 
 
