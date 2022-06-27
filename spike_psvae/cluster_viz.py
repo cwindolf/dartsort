@@ -1638,9 +1638,11 @@ def diagnostic_plots(
     if len(ind_st1) > 0:
         v.get_patch_by_id("11").set_color("goldenrod")
     for text in v.subset_labels:
-        text.set_fontsize(6)
+        if text is not None:
+            text.set_fontsize(6)
     for text in v.set_labels:
-        text.set_fontsize(8)
+        if text is not None:
+            text.set_fontsize(8)
 
     ax_venn.set_title(f"{np.round(agreement, 2)*100}% agreement")
 
@@ -1654,12 +1656,22 @@ def diagnostic_plots(
     indices = [ind_st1, not_match_ind_st1]
     # FIX CHANNEL INDEX!!
     cmp = 0
+    wfs_shared = np.array([])
+    wfs_lda_red = np.array([])
+    if ind_st1.size:
+        u, c = np.unique(mcs_abs_cluster_sorting1[ind_st1], return_counts=True)
+        shared_mc = u[c.argmax()]
+    elif not_match_ind_st1.size:
+        u, c = np.unique(mcs_abs_cluster_sorting1[ind_st1], return_counts=True)
+        shared_mc = u[c.argmax()]
     for indices_match, color, h_shift in zip(indices, colors, h_shifts):
         if len(indices_match) > 0:
-            firstchans_cluster_sorting = firstchans_cluster_sorting1[
-                indices_match
-            ]
-            mcs_abs_cluster_sorting = mcs_abs_cluster_sorting1[indices_match]
+            # firstchans_cluster_sorting = firstchans_cluster_sorting1[
+            #     indices_match
+            # ]
+            # mcs_abs_cluster_sorting = mcs_abs_cluster_sorting1[indices_match]
+            mcs_abs_cluster_sorting = np.full(indices_match.shape, shared_mc)
+            firstchans_cluster_sorting = np.maximum(mcs_abs_cluster_sorting - 20, 0)
             spike_times = st_1[indices_match]
             # geom, first_chans_cluster, mcs_abs_cluster, max_ptps_cluster, spike_times,
             (
@@ -1682,10 +1694,12 @@ def diagnostic_plots(
                 ax=ax_sorting1,
                 color=color,
             )
-            mc = waveforms.mean(0).ptp(0).argmax()
+            mc = shared_mc - firstchans_cluster_sorting # waveforms.mean(0).ptp(0).argmax()
+            start = np.maximum(mc - 5, 0)
+            end = start + 11
             for i in range(min(len(waveforms), num_spikes_plot)):
                 ax_wfs_shared_yass.plot(
-                    waveforms[i, 15:-15, mc - 5 : mc + 6].T.flatten(),
+                    waveforms[i, 15:-15, start[i] : end[i]].T.flatten(),
                     alpha=alpha,
                     color=color,
                 )
@@ -1693,21 +1707,33 @@ def diagnostic_plots(
                 ax_wfs_shared_yass.axvline(91 + 91 * i, c="black")
             #             ax_templates.plot(waveforms[:, :, mc-5:mc+6].mean(0).T.flatten(), color=color)
             cmp += 1
+            # print("waveforms", waveforms.shape)
             if color == "goldenrod":
-                wfs_shared = waveforms[:, :, mc - 5 : mc + 6]
+                wfs_shared = np.stack([waveforms[i, :, start[i] : end[i]] for i in range(len(waveforms))], axis=0)
+                # print("shared", wfs_shared.shape, mc, flush=True)
             if color == "red":
-                wfs_lda_red = waveforms[:, :, mc - 5 : mc + 6]
+                wfs_lda_red = np.stack([waveforms[i, :, start[i] : end[i]] for i in range(len(waveforms))], axis=0)
+                # print("red", wfs_shared.shape, mc, flush=True)
 
     ax_wfs_shared_yass.set_xticks([])
 
     colors = ["goldenrod", "blue"]
     indices = [ind_st2, not_match_ind_st2]
+    wfs_lda_blue = np.array([])
+    if ind_st2.size:
+        u, c = np.unique(mcs_abs_cluster_sorting2[ind_st2], return_counts=True)
+        shared_mc = u[c.argmax()]
+    elif not_match_ind_st2.size:
+        u, c = np.unique(mcs_abs_cluster_sorting2[ind_st2], return_counts=True)
+        shared_mc = u[c.argmax()]
     for indices_match, color, h_shift in zip(indices, colors, h_shifts):
         if len(indices_match) > 0:
-            mcs_abs_cluster_sorting = mcs_abs_cluster_sorting2[indices_match]
-            firstchans_cluster_sorting = firstchans_cluster_sorting2[
-                indices_match
-            ]
+            mcs_abs_cluster_sorting = np.full(indices_match.shape, shared_mc)
+            firstchans_cluster_sorting = np.maximum(mcs_abs_cluster_sorting - 20, 0)
+            # mcs_abs_cluster_sorting = mcs_abs_cluster_sorting2[indices_match]
+            # firstchans_cluster_sorting = firstchans_cluster_sorting2[
+            #     indices_match
+            # ]
             spike_times = st_2[indices_match]
 
             (
@@ -1730,61 +1756,65 @@ def diagnostic_plots(
                 ax=ax_sorting2,
                 color=color,
             )
-            mc = waveforms.mean(0).ptp(0).argmax()
+            mc = shared_mc - firstchans_cluster_sorting # waveforms.mean(0).ptp(0).argmax()
+            start = np.maximum(mc - 5, 0)
+            end = start + 11
             for i in range(min(len(waveforms), num_spikes_plot)):
                 ax_wfs_shared_ks.plot(
-                    waveforms[i, 15:-15, mc - 5 : mc + 6].T.flatten(),
+                    waveforms[i, 15:-15, start[i] : end[i]].T.flatten(),
                     alpha=alpha,
                     color=color,
                 )
             for i in range(10):
                 ax_wfs_shared_ks.axvline(91 + 91 * i, c="black")
-        if color == "blue":
-            wfs_lda_blue = waveforms[:, :, mc - 5 : mc + 6]
+            if color == "blue":
+                wfs_lda_blue = np.stack([waveforms[i, :, start[i] : end[i]] for i in range(len(waveforms))], axis=0)
 
     lda_labels = np.zeros(wfs_shared.shape[0] + wfs_lda_red.shape[0])
     lda_labels[: wfs_shared.shape[0]] = 1
-    lda_comps = LDA(n_components=1).fit_transform(
-        np.concatenate(
-            (
-                wfs_shared.reshape(wfs_shared.shape[0], -1),
-                wfs_lda_red.reshape(wfs_lda_red.shape[0], -1),
-            )
-        ),
-        lda_labels,
-    )
-    ax_lda_red_yellow.hist(
-        lda_comps[: wfs_shared.shape[0], 0],
-        bins=25,
-        color="goldenrod",
-        alpha=0.5,
-    )
-    ax_lda_red_yellow.hist(
-        lda_comps[wfs_shared.shape[0] :, 0], bins=25, color="red", alpha=0.5
-    )
+    if wfs_lda_red.size and wfs_shared.size:
+        lda_comps = LDA(n_components=1).fit_transform(
+            np.concatenate(
+                (
+                    wfs_shared.reshape(wfs_shared.shape[0], -1),
+                    wfs_lda_red.reshape(wfs_lda_red.shape[0], -1),
+                )
+            ),
+            lda_labels,
+        )
+        ax_lda_red_yellow.hist(
+            lda_comps[: wfs_shared.shape[0], 0],
+            bins=25,
+            color="goldenrod",
+            alpha=0.5,
+        )
+        ax_lda_red_yellow.hist(
+            lda_comps[wfs_shared.shape[0] :, 0], bins=25, color="red", alpha=0.5
+        )
 
-    lda_labels = np.zeros(wfs_shared.shape[0] + wfs_lda_blue.shape[0])
-    lda_labels[: wfs_shared.shape[0]] = 1
-    lda_comps = LDA(n_components=1).fit_transform(
-        np.concatenate(
-            (
-                wfs_shared.reshape(wfs_shared.shape[0], -1),
-                wfs_lda_blue.reshape(wfs_lda_blue.shape[0], -1),
-            )
-        ),
-        lda_labels,
-    )
-    ax_lda_blue_yellow.hist(
-        lda_comps[: wfs_shared.shape[0], 0],
-        bins=25,
-        color="goldenrod",
-        alpha=0.5,
-    )
-    ax_lda_blue_yellow.hist(
-        lda_comps[wfs_shared.shape[0] :, 0], bins=25, color="blue", alpha=0.5
-    )
+    if wfs_lda_blue.size and wfs_shared.size:
+        lda_labels = np.zeros(wfs_shared.shape[0] + wfs_lda_blue.shape[0])
+        lda_labels[: wfs_shared.shape[0]] = 1
+        lda_comps = LDA(n_components=1).fit_transform(
+            np.concatenate(
+                (
+                    wfs_shared.reshape(wfs_shared.shape[0], -1),
+                    wfs_lda_blue.reshape(wfs_lda_blue.shape[0], -1),
+                )
+            ),
+            lda_labels,
+        )
+        ax_lda_blue_yellow.hist(
+            lda_comps[: wfs_shared.shape[0], 0],
+            bins=25,
+            color="goldenrod",
+            alpha=0.5,
+        )
+        ax_lda_blue_yellow.hist(
+            lda_comps[wfs_shared.shape[0] :, 0], bins=25, color="blue", alpha=0.5
+        )
 
-    if len(not_match_ind_st1) > 0 and len(not_match_ind_st2) > 0:
+    if len(not_match_ind_st1) > 0 and len(not_match_ind_st2) > 0 and wfs_lda_red.size and wfs_lda_blue.size:
         lda_labels = np.zeros(wfs_lda_blue.shape[0] + wfs_lda_red.shape[0])
         lda_labels[: wfs_lda_blue.shape[0]] = 1
         lda_comps = LDA(n_components=1).fit_transform(
