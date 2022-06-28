@@ -469,8 +469,7 @@ def subtraction(
 
                     if neighborhood_kind == "firstchan":
                         firstchans[N:] = extract_channel_index[
-                            np.load(result.spike_index)[:, 1],
-                            0,
+                            spike_index[N:, 1], 0
                         ]
 
                     # delete original files
@@ -482,6 +481,9 @@ def subtraction(
                     if do_localize:
                         Path(result.localizations).unlink()
                         Path(result.maxptps).unlink()
+                        Path(result.trough_depths).unlink()
+                        Path(result.peak_heights).unlink()
+                        Path(result.widths).unlink()
 
                     # update spike count
                     N += N_new
