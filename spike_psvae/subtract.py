@@ -149,6 +149,8 @@ def subtraction(
         if device.type == "cuda":
             torch.cuda._lazy_init()
             torch.set_grad_enabled(False)
+    else:
+        device = torch.device(device)
 
     # if no geometry is supplied, try to load it from meta file
     if geom is None:
@@ -380,7 +382,6 @@ def subtraction(
                 dedup_channel_index,
                 spike_length_samples,
                 extract_channel_index,
-                device,
                 start_sample,
                 end_sample,
                 do_clean,
@@ -398,6 +399,8 @@ def subtraction(
             for batch_id, s_start in jobs
         )
 
+        Executor = ProcessPoolExecutor if n_jobs else MockPoolExecutor
+        n_jobs = n_jobs or 1
         context = multiprocessing.get_context("spawn")
         manager = context.Manager()
         id_queue = manager.Queue()
@@ -433,7 +436,7 @@ def subtraction(
                     # skip if nothing new
                     if not N_new:
                         continue
-
+                        
                     # grow arrays as necessary
                     subtracted_tpca_projs.resize(N + N_new, axis=0)
                     if save_waveforms:
@@ -527,6 +530,7 @@ SubtractionBatchResult = namedtuple(
 def _subtraction_batch(args):
     return subtraction_batch(
         *args,
+        _subtraction_batch.device,
         _subtraction_batch.denoiser,
         _subtraction_batch.detector,
         _subtraction_batch.dn_detector,
@@ -548,6 +552,7 @@ def _subtraction_batch_init(
                 f"out of {torch.cuda.device_count()} available."
             )
         torch.cuda._lazy_init()
+    _subtraction_batch.device = device
 
     time.sleep(rank)
     print(f"Worker {rank} init", flush=True)
@@ -585,7 +590,6 @@ def subtraction_batch(
     dedup_channel_index,
     spike_length_samples,
     extract_channel_index,
-    device,
     start_sample,
     end_sample,
     do_clean,
@@ -599,6 +603,7 @@ def subtraction_batch(
     loc_radius,
     peak_sign,
     nsync,
+    device,
     denoiser,
     detector,
     dn_detector,
@@ -740,6 +745,8 @@ def subtraction_batch(
     # sort so time increases
     sort = np.argsort(spike_index[:, 0])
     subtracted_wfs = subtracted_wfs[sort]
+    if tpca is not None:
+        subtracted_tpca_projs = subtracted_tpca_projs[sort]
     spike_index = spike_index[sort]
 
     # get rid of spikes in the buffer
@@ -756,6 +763,8 @@ def subtraction_batch(
     maxix = np.searchsorted(spike_index[:, 0], spike_time_max, side="left")
     spike_index = spike_index[minix:maxix]
     subtracted_wfs = subtracted_wfs[minix:maxix]
+    if tpca is not None:
+        subtracted_tpca_projs = subtracted_tpca_projs[minix:maxix]
 
     # if caller passes None for the output folder, just return
     # the results now (eg this is used by train_pca)
@@ -925,7 +934,6 @@ def train_pca(
             dedup_channel_index,
             spike_length_samples,
             extract_channel_index,
-            device,
             0,
             len_recording_samples,
             False,
@@ -939,6 +947,7 @@ def train_pca(
             None,
             peak_sign,
             nsync,
+            device,
             denoiser,
             detector,
             dn_detector,
@@ -1097,12 +1106,10 @@ def full_denoising(
     wfs_in_probe = waveforms[in_probe_index]
 
     # Apply NN denoiser (skip if None)
-    #     print("A", wfs_in_probe.shape)
     if denoiser is not None:
         results = []
         for bs in range(0, wfs_in_probe.shape[0], batch_size):
             be = min(bs + batch_size, N * C)
-            #             print("B", bs, be, wfs_in_probe[bs:be].shape)
             results.append(
                 denoiser(
                     torch.as_tensor(
@@ -1112,8 +1119,6 @@ def full_denoising(
                 .cpu()
                 .numpy()
             )
-        #             print("C", results[-1].shape)
-        #         print([r.shape for r in results])
         wfs_in_probe = np.concatenate(results, axis=0)
         del results
 
@@ -1208,7 +1213,6 @@ def get_output_h5(
     chunk_len=4096,
 ):
     h5_exists = Path(out_h5).exists()
-    print("h5_exists", h5_exists)
     last_sample = 0
     if h5_exists and not overwrite:
         output_h5 = h5py.File(out_h5, "r+")
@@ -1312,14 +1316,16 @@ def get_output_h5(
     if h5_exists and not overwrite:
         print(f"Resuming previous job, which was {done_percent:.0f}% done")
     elif h5_exists and overwrite:
-        print("Overwriting previous results.")
         last_sample = 0
     else:
         print("No previous output found, starting from scratch.")
-
-    yield output_h5, last_sample
-
-    output_h5.close()
+    
+    # try/finally ensures we close `output_h5` if job is interrupted
+    # docs.python.org/3/library/contextlib.html#contextlib.contextmanager
+    try:
+        yield output_h5, last_sample
+    finally:
+        output_h5.close()
 
 
 # -- channels / geometry helpers
@@ -1471,6 +1477,14 @@ def read_data(bin_file, dtype, s_start, s_end, n_channels, nsync=0):
 
 
 # -- utils
+
+
+class MockPoolExecutor:
+    def __init__(n_jobs, mp_context=None, initializer=None, initargs=None):
+        initializer(initargs)
+    
+    def map(self, f, jobs):
+        return map(f, jobs)
 
 
 class timer:
