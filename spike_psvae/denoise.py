@@ -1,4 +1,5 @@
 import numpy as np
+import numba
 from scipy.spatial.distance import cdist
 
 # import numpy.linalg as la
@@ -307,6 +308,7 @@ def make_radial_order_parents(
     return radial_parents
 
 
+@numba.jit(nopython=True)
 def enforce_decrease_shells(
     waveforms, maxchans, radial_parents, in_place=False
 ):
@@ -366,7 +368,7 @@ def enforce_temporal_decrease(
         _enforce_temporal_decrease_right(
             waveforms, right_peaks
         )
-    
+
     waveforms = waveforms.reshape(N, C, T).transpose(0, 2, 1)
 
     return waveforms
