@@ -1,7 +1,6 @@
 """Localization with channel subsetting based on channel index
 """
-# from joblib import Parallel, delayed
-from concurrent.futures import ProcessPoolExecutor as PoolExecutor
+from joblib import Parallel, delayed
 import numpy as np
 from scipy.optimize import minimize
 from tqdm.auto import tqdm
@@ -75,9 +74,6 @@ def localize_ptp_index(ptp, local_geom, logbarrier=True):
     return bx, by, bz_rel, balpha
 
 
-def _localize_ptp_index(args):
-    return localize_ptp_index(*args)
-
 def localize_ptps_index(
     ptps,
     geom,
@@ -119,20 +115,18 @@ def localize_ptps_index(
     ys = np.empty(N)
     z_rels = np.empty(N)
     alphas = np.empty(N)
-    with PoolExecutor(n_workers) as pool:
-        jobargs = (
-            (
-                ptp[subset[mc]],
-                local_geom[subset[mc]],
-                logbarrier,
-            )
-            for ptp, mc, local_geom in xqdm(
-                zip(ptps, maxchans, local_geoms), total=N, desc="lsq"
-            )
-        )
-        
+    with Parallel(n_workers) as pool:
         for n, (x, y, z_rel, alpha) in enumerate(
-            pool.map(_localize_ptp_index, jobargs)
+            pool(
+                delayed(localize_ptp_index)(
+                    ptp[subset[mc]],
+                    local_geom[subset[mc]],
+                    logbarrier=logbarrier,
+                )
+                for ptp, mc, local_geom in xqdm(
+                    zip(ptps, maxchans, local_geoms), total=N, desc="lsq"
+                )
+            )
         ):
             xs[n] = x
             ys[n] = y
