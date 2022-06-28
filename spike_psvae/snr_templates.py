@@ -264,18 +264,21 @@ def get_waveforms(
                 count=spike_length_samples * n_channels,
                 offset=np.dtype(np.float32).itemsize * start * n_channels,
             ).reshape(spike_length_samples, n_channels)
-        except:
+        except OSError:
             skipped_idx.append(ix)
-    
 
     # add in subtracted waveforms
     if subtracted_waveforms is not None:
+        assert not skipped_idx
         waveforms[
             np.arange(waveforms.shape[0])[:, None, None],
             np.arange(waveforms.shape[1])[None, :, None],
             channel_index[maxchans[choices]][:, None, :],
         ] += subtracted_waveforms[choices]
-    waveforms = np.delete(waveforms, skipped_idx, axis = 0)
+
+    if skipped_idx:
+        waveforms = np.delete(waveforms, skipped_idx, axis=0)
+
     return waveforms
 
 
