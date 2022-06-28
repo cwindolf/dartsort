@@ -129,7 +129,7 @@ def check_merge(
     wfs_key="cleaned_waveforms",
 ):
     if unit_reference == unit_bis_reference:
-        return False
+        return False, -1, 0
 
     unit_mc = templates[unit_reference].ptp(0).argmax()
     unit_bis_mc = templates[unit_bis_reference].ptp(0).argmax()
@@ -385,10 +385,9 @@ def merge(
     template_troughs = template_mctraces.argmin(1)
     # pair_shifts[i, j] = template i trough time - template j trough time
     pair_shifts = template_troughs[:, None] - template_troughs[None, :]
-
-    for unit in trange(n_templates):
+    
+    for unit in trange(n_templates, desc="merge"):
         unit_reference = reference_units[unit]
-        assert unit == unit_reference  # I think these should be the same?
         to_be_merged = [unit_reference]
         merge_shifts = [0]
         is_merged = False
@@ -417,8 +416,9 @@ def merge(
                     wfs_key=wfs_key,
                 )
                 is_merged |= is_merged_bis
-                to_be_merged.append(unit_bis_reference)
-                merge_shifts.append(shift)
+                if is_merged_bis:
+                    to_be_merged.append(unit_bis_reference)
+                    merge_shifts.append(shift)
 
         if is_merged:
             n_total_spikes = 0
@@ -461,7 +461,7 @@ def clean_big_clusters(
     """This operates on spike_train in place."""
     n_temp_cleaned = 0
     cmp = templates.shape[0]
-    for unit in trange(templates.shape[0]):
+    for unit in trange(templates.shape[0], desc="clean big"):
         mc = templates[unit].ptp(0).argmax()
         template_mc_trace = templates[unit, :, mc]
         if template_mc_trace.ptp() > min_ptp:
@@ -508,7 +508,7 @@ def clean_big_clusters(
 def remove_oversplits(templates, spike_train, min_ptp=4.0, max_diff=2.0):
     """This will modify spike_train"""
     # remove oversplits according to max abs norm
-    for unit in trange(templates.shape[0] - 1):
+    for unit in trange(templates.shape[0] - 1, desc="max abs merge"):
         if templates[unit].ptp(0).max(0) >= min_ptp:
             max_vec = np.abs(
                 templates[unit, :, :] - templates[unit + 1 :]
