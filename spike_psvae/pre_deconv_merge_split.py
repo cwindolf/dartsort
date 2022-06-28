@@ -889,6 +889,7 @@ def get_merged(
 def ks_bimodal_pursuit(
     unit_features,
     tpca,
+    unit_rank=3,
     top_pc_init=True,
     aucsplit=0.85,
     min_size_split=50,
@@ -897,8 +898,13 @@ def ks_bimodal_pursuit(
     min_split_prop=0.05,
 ):
     """Adapted from PyKS"""
+    full = np.arange(len(unit_features))
+    empty = np.array([])
     if len(unit_features) < min_size_split:
-        return False, None, None
+        return False, full, empty
+
+    if unit_rank < unit_features.shape[1]:
+        unit_features = PCA(unit_rank).fit_transform(unit_features)
 
     if top_pc_init:
         # input should be centered so no problem with centered pca?
@@ -929,6 +935,9 @@ def ks_bimodal_pursuit(
 
     # TODO: move_to_config - maybe...
     for k in range(50):
+        if min(p, 1 - p) < min_split_prop:
+            break
+
         # for each spike, estimate its probability to come from either Gaussian cluster
         logp[:, 0] = np.log(s1) / 2 - ((x - mu1) ** 2) / (2 * s1) + np.log(p)
         logp[:, 1] = (
@@ -985,12 +994,14 @@ def ks_bimodal_pursuit(
 
     # these spikes are assigned to cluster 1
     ilow = rs[:, 0] > rs[:, 1]
+    # the smallest cluster has this proportion of all spikes
+    nremove = min(ilow.mean(), (~ilow).mean())
+    if nremove < min_split_prop:
+        return False, full, empty
 
     # the mean probability of spikes assigned to cluster 1/2
     plow = rs[ilow, 0].mean()
     phigh = rs[~ilow, 1].mean()
-    # the smallest cluster has this proportion of all spikes
-    nremove = min(ilow.mean(), (~ilow).mean())
 
     # now decide if the split would result in waveforms that are too similar
     # the reconstructed mean waveforms for putative cluster 1
@@ -1005,7 +1016,7 @@ def ks_bimodal_pursuit(
 
     # if the templates are correlated, and their amplitudes are similar, stop the split!!!
     if (cc[0, 1] > max_split_corr) and (r0 < min_amp_sim):
-        return False, None, None
+        return False, full, empty
 
     # finaly criteria to continue with the split: if the split piece is more than 5% of all
     # spikes, if the split piece is more than 300 spikes, and if the confidences for
@@ -1015,9 +1026,9 @@ def ks_bimodal_pursuit(
         and (min(plow, phigh) > aucsplit)
         # and (min(cp.sum(ilow), cp.sum(~ilow)) > 300)
     ):
-        return True, ilow, ~ilow
+        return True, np.flatnonzero(ilow), np.flatnonzero(~ilow)
 
-    return False, None, None
+    return False, full, empty
 
 
 def ks_maxchan_tpca_split(
@@ -1027,7 +1038,7 @@ def ks_maxchan_tpca_split(
     labels,
     tpca,
     recursive=True,
-    top_pc_init=True,
+    top_pc_init=False,
     aucsplit=0.85,
     min_size_split=50,
     max_split_corr=0.9,
@@ -1056,7 +1067,7 @@ def ks_maxchan_tpca_split(
     pbar = tqdm(total=len(labels_to_process), desc="KSMaxchan")
     while labels_to_process:
         cur_label = labels_to_process.pop()
-        in_unit = np.flatnonzero(labels == cur_label)
+        in_unit = np.flatnonzero(labels_new == cur_label)
         unit_features = maxchan_loadings[in_unit]
         is_split, group_a, group_b = ks_bimodal_pursuit(
             unit_features,
