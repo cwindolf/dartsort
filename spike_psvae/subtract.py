@@ -328,6 +328,7 @@ def subtraction(
     ) as (output_h5, last_sample):
 
         spike_index = output_h5["spike_index"]
+        subtracted_tpca_projs = output_h5["subtracted_tpca_projs"]
         if neighborhood_kind == "firstchan":
             firstchans = output_h5["first_channels"]
         if save_waveforms:
@@ -423,6 +424,7 @@ def subtraction(
                         continue
 
                     # grow arrays as necessary
+                    subtracted_tpca_projs.resize(N + N_new, axis=0)
                     if save_waveforms:
                         subtracted_wfs.resize(N + N_new, axis=0)
                         if do_clean:
@@ -438,6 +440,7 @@ def subtraction(
                         firstchans.resize(N + N_new, axis=0)
 
                     # write results
+                    subtracted_tpca_projs[N:] = np.load(result.subtracted_tpca_projs)
                     if save_waveforms:
                         subtracted_wfs[N:] = np.load(result.subtracted_wfs)
                         if do_clean:
@@ -457,6 +460,7 @@ def subtraction(
                         ]
 
                     # delete original files
+                    Path(result.subtracted_tpca_projs).unlink()
                     Path(result.subtracted_wfs).unlink()
                     if do_clean:
                         Path(result.cleaned_wfs).unlink()
@@ -495,6 +499,7 @@ SubtractionBatchResult = namedtuple(
         "s_end",
         "residual",
         "subtracted_wfs",
+        "subtracted_tpca_projs",
         "cleaned_wfs",
         "spike_index",
         "batch_id",
@@ -663,9 +668,12 @@ def subtraction_batch(
 
     # main subtraction loop
     subtracted_wfs = []
+    subtracted_tpca_projs = None
+    if tpca is not None:
+        subtracted_tpca_projs = []
     spike_index = []
     for threshold in thresholds:
-        subwfs, residual, spind = detect_and_subtract(
+        subwfs, subpcs, residual, spind = detect_and_subtract(
             residual,
             threshold,
             radial_parents,
@@ -684,6 +692,8 @@ def subtraction_batch(
         )
         if len(spind):
             subtracted_wfs.append(subwfs)
+            if tpca is not None:
+                subtracted_tpca_projs.append(subpcs)
             spike_index.append(spind)
 
     # strip buffer from residual and remove spikes in buffer
@@ -701,6 +711,7 @@ def subtraction_batch(
             s_end=s_end,
             residual=batch_data_folder / f"{batch_id:08d}_res.npy",
             subtracted_wfs=None,
+            subtracted_tpca_projs=None,
             cleaned_wfs=None,
             spike_index=None,
             batch_id=batch_id,
@@ -709,6 +720,8 @@ def subtraction_batch(
         )
 
     subtracted_wfs = np.concatenate(subtracted_wfs, axis=0)
+    if tpca is not None:
+        subtracted_tpca_projs = np.concatenate(subtracted_tpca_projs, axis=0)
     spike_index = np.concatenate(spike_index, axis=0)
 
     # sort so time increases
@@ -767,6 +780,7 @@ def subtraction_batch(
     # save the results to disk to avoid memory issues
     N_new = len(spike_index)
     np.save(batch_data_folder / f"{batch_id:08d}_sub.npy", subtracted_wfs)
+    np.save(batch_data_folder / f"{batch_id:08d}_subpc.npy", subtracted_tpca_projs)
     np.save(batch_data_folder / f"{batch_id:08d}_si.npy", spike_index)
 
     clean_file = None
@@ -814,6 +828,7 @@ def subtraction_batch(
         s_end=s_end,
         residual=batch_data_folder / f"{batch_id:08d}_res.npy",
         subtracted_wfs=batch_data_folder / f"{batch_id:08d}_sub.npy",
+        subtracted_tpca_projs=batch_data_folder / f"{batch_id:08d}_subpc.npy",
         cleaned_wfs=clean_file,
         spike_index=batch_data_folder / f"{batch_id:08d}_si.npy",
         batch_id=batch_id,
@@ -1013,7 +1028,7 @@ def detect_and_subtract(
     waveforms = padded_raw[time_ix[:, :, None], chan_ix[:, None, :]]
 
     # -- denoising
-    waveforms = full_denoising(
+    waveforms, tpca_proj = full_denoising(
         waveforms,
         spike_index[:, 1],
         extract_channel_index,
@@ -1023,6 +1038,7 @@ def detect_and_subtract(
         tpca=tpca,
         device=device,
         denoiser=denoiser,
+        return_tpca_embedding=True,
     )
 
     # -- the actual subtraction
@@ -1036,7 +1052,7 @@ def detect_and_subtract(
     # remove the NaN padding
     subtracted_raw = padded_raw[:, :-1]
 
-    return waveforms, subtracted_raw, spike_index
+    return waveforms, tpca_proj, subtracted_raw, spike_index
 
 
 @torch.no_grad()
@@ -1052,6 +1068,7 @@ def full_denoising(
     denoiser=None,
     batch_size=1024,
     align=False,
+    return_tpca_embedding=False,
 ):
     """Denoising pipeline: neural net denoise, temporal PCA, enforce_decrease"""
     num_channels = len(extract_channel_index)
@@ -1121,6 +1138,13 @@ def full_denoising(
     else:
         # no enforce decrease
         pass
+
+    if return_tpca_embedding and tpca is not None:
+        tpca_embeddings = np.empty((N, C, tpca.n_components), dtype=waveforms.dtype)
+        tpca_embeddings[in_probe_index] = tpca.transform(waveforms.transpose(0, 2, 1)[in_probe_index])
+        return waveforms, tpca_embeddings.transpose(0, 2, 1)
+    elif return_tpca_embedding:
+        return waveforms, None
 
     return waveforms
 
@@ -1193,6 +1217,13 @@ def get_output_h5(
 
         # resizable datasets so we don't fill up space
         extract_channels = extract_channel_index.shape[1]
+        output_h5.create_dataset(
+            "subtracted_tpca_projs",
+            shape=(0, tpca.components_.shape[0], extract_channels),
+            chunks=(chunk_len, tpca.components_.shape[0], extract_channels),
+            maxshape=(None, tpca.components_.shape[0], extract_channels),
+            dtype=np.float32,
+        )
         if save_waveforms:
             output_h5.create_dataset(
                 "subtracted_waveforms",
