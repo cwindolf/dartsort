@@ -74,9 +74,7 @@ def register_rigid(
     extra = dict(D=D, C=C)
 
     # return new interpolated depths for the caller
-    warps = interp1d(tt + 0.5, p, fill_value="extrapolate")(times)
-    depths_reg = depths - warps
-    depths_reg -= depths_reg.min()
+    depths_reg = warp_rigid(depths, times, tt, p)
 
     if return_extra:
         return depths_reg, p, extra
@@ -291,6 +289,13 @@ def warp_nonrigid(depths, times, dispmap, depth_domain=None, time_domain=None):
     )
 
     return depths - lerp(depths, times, grid=False)
+
+
+def warp_rigid(depths, times, time_domain, p):
+    warps = interp1d(time_domain + 0.5, p, fill_value="extrapolate")(times)
+    depths_reg = depths - warps
+    depths_reg -= depths_reg.min()
+    return depths_reg
 
 
 # -- code for making rasters
