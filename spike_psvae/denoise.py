@@ -308,7 +308,6 @@ def make_radial_order_parents(
     return radial_parents
 
 
-@numba.jit(nopython=True)
 def enforce_decrease_shells(
     waveforms, maxchans, radial_parents, in_place=False
 ):
@@ -317,7 +316,7 @@ def enforce_decrease_shells(
     assert maxchans.shape == (N,)
 
     # compute original ptps and allocate storage for decreasing ones
-    orig_ptps = waveforms.ptp(1)
+    orig_ptps = waveforms.ptp(axis=1)
     decreasing_ptps = orig_ptps.copy()
 
     # loop to enforce ptp decrease
