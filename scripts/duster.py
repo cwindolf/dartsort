@@ -237,6 +237,22 @@ labels_split = pre_deconv_merge_split.split_clusters(
     tpca,
 )
 
+# ks split
+labels_split = pre_deconv_merge_split.ks_maxchan_tpca_split(
+    h5["subtracted_tpca_projs"],
+    channel_index,
+    spike_index[:, 1],
+    labels_split,
+    tpca,
+    recursive=True,
+    top_pc_init=True,
+    aucsplit=0.85,
+    min_size_split=50,
+    max_split_corr=0.9,
+    min_amp_sim=0.2,
+    min_split_prop=0.05,
+)
+
 # %%
 # re-order again
 clusterer.labels_ = labels_split[idx_keep_full]
