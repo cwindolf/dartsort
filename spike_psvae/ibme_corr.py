@@ -4,6 +4,7 @@ import scipy.linalg as la
 import torch
 import torch.nn.functional as F
 from scipy import sparse
+import scipy.linalg as la
 from scipy.stats import zscore
 from tqdm.auto import trange
 

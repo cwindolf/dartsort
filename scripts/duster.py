@@ -8,6 +8,8 @@ from joblib.externals import loky
 from tqdm.auto import tqdm
 import pickle
 from sklearn.decomposition import PCA
+import time
+import shutil
 
 from spike_psvae import (
     pre_deconv_merge_split,
@@ -23,13 +25,19 @@ ap.add_argument("raw_data_bin")
 ap.add_argument("residual_data_bin")
 ap.add_argument("sub_h5")
 ap.add_argument("output_dir")
+ap.add_argument("--tmpdir", type=Path, default=None)
 ap.add_argument("--inmem", action="store_true")
 ap.add_argument("--doplot", action="store_true")
+ap.add_argument("--doscatter", action="store_true")
+ap.add_argument("--plotdir", type=str, default=None)
+ap.add_argument("--merge_dipscore", type=float, default=1.0)
 
 args = ap.parse_args()
 
+plotdir = Path(args.plotdir if args.plotdir else args.output_dir)
+
 # %%
-np.random.seed(0)
+np.random.seed(1)
 plt.rc("figure", dpi=200)
 
 # %%
@@ -48,6 +56,26 @@ assert sub_h5.exists()
 print(raw_data_bin)
 print(residual_data_bin)
 
+
+class timer:
+    def __init__(self, name="timer"):
+        self.name = name
+        print("start", name, "...")
+
+    def __enter__(self):
+        self.start = time.time()
+        return self
+
+    def __exit__(self, *args):
+        self.t = time.time() - self.start
+        print(self.name, "took", self.t, "s")
+
+
+if args.tmpdir is not None:
+    with timer("copying h5 to scratch"):
+        shutil.copy(sub_h5, args.tmpdir / "sub.h5")
+    sub_h5 = args.tmpdir / "sub.h5"
+
 # %%
 # raw_data_bin = Path("/mnt/3TB/charlie/re_snips/CSH_ZAD_026_snip.ap.bin")
 # assert raw_data_bin.exists()
@@ -62,7 +90,7 @@ output_dir.mkdir(exist_ok=True)
 
 # %%
 denoiser = denoise.SingleChanDenoiser().load()
-device = "cpu"
+device = "cuda"
 denoiser.to(device)
 
 # %% tags=[]
@@ -111,6 +139,7 @@ tpca.components_ = tpca_components
     z,
     maxptps,
     spike_index,
+    split_big=True,
 )
 
 # labels in full index space (not triaged)
@@ -130,7 +159,7 @@ if args.doplot:
             tmaxptps,
             zlim=(za, zb),
         )
-        fig.savefig(output_dir / f"B_pre_split_full_scatter_{za}_{zb}", dpi=200)
+        fig.savefig(plotdir / f"B_pre_split_full_scatter_{za}_{zb}", dpi=200)
         plt.close(fig)
 
 # %%
@@ -229,7 +258,7 @@ if args.doplot:
             tmaxptps,
             zlim=(za, zb),
         )
-        fig.savefig(output_dir / f"C_after_split_full_scatter_{za}_{zb}", dpi=200)
+        fig.savefig(plotdir / f"C_after_split_full_scatter_{za}_{zb}", dpi=200)
         plt.close(fig)
 
 # %%
@@ -255,6 +284,7 @@ shifted_full_spike_index[idx_keep_full] = shifted_triaged_spike_index
 
 # %%
 # merge
+K_pre = labels.max() + 1
 labels_merged = pre_deconv_merge_split.get_merged(
     residual_data_bin,
     sub_wf,
@@ -270,7 +300,9 @@ labels_merged = pre_deconv_merge_split.get_merged(
     denoiser,
     device,
     tpca,
+    threshold_diptest=args.merge_dipscore,
 )
+print("pre->post merge", K_pre, labels_merged.max() + 1)
 
 # %%
 # re-order again
@@ -336,7 +368,7 @@ if args.doplot:
             tmaxptps,
             zlim=(za - 50, zb + 50),
         )
-        fig.savefig(output_dir / f"AAA_final_full_scatter_{za}_{zb}", dpi=200)
+        fig.savefig(plotdir / f"AAA_final_full_scatter_{za}_{zb}", dpi=200)
         plt.close(fig)
 
     # %%
@@ -379,7 +411,7 @@ if args.doplot:
     cluster_centers.index
 
     # %%
-    sudir = Path(output_dir / "singleunit")
+    sudir = Path(plotdir / "singleunit")
     sudir.mkdir(exist_ok=True)
 
     # plot cluster summary
@@ -439,3 +471,7 @@ if args.doplot:
             pass
 else:
     print("No single unit figs, bye.")
+
+if args.tmpdir is not None:
+    print("Deleting scratch")
+    (args.tmpdir / "sub.h5").unlink()
