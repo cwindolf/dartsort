@@ -256,16 +256,7 @@ def subtraction(
         # try to load old TPCA if it's around
         if not overwrite and out_h5.exists():
             with h5py.File(out_h5, "r") as output_h5:
-                if "tpca_mean" in output_h5:
-                    tpca_mean = output_h5["tpca_mean"][:]
-                    tpca_components = output_h5["tpca_components"][:]
-                    if (tpca_mean == 0).all():
-                        print("H5 exists but TPCA params == 0. Will redo it.")
-                    else:
-                        print("Loading TPCA from h5")
-                        tpca = PCA(tpca_components.shape[0])
-                        tpca.mean_ = tpca_mean
-                        tpca.components_ = tpca_components
+                tpca = tpca_from_h5(output_h5)
 
         # otherwise, train it
         if tpca is None:
@@ -294,7 +285,7 @@ def subtraction(
                     random_seed=random_seed,
                     device=device,
                 )
-            
+
             # try to free up some memory on GPU that might have been used above
             if device.type == "cuda":
                 gc.collect()
@@ -436,7 +427,7 @@ def subtraction(
                     # skip if nothing new
                     if not N_new:
                         continue
-                        
+
                     # grow arrays as necessary
                     subtracted_tpca_projs.resize(N + N_new, axis=0)
                     if save_waveforms:
@@ -454,7 +445,9 @@ def subtraction(
                         firstchans.resize(N + N_new, axis=0)
 
                     # write results
-                    subtracted_tpca_projs[N:] = np.load(result.subtracted_tpca_projs)
+                    subtracted_tpca_projs[N:] = np.load(
+                        result.subtracted_tpca_projs
+                    )
                     if save_waveforms:
                         subtracted_wfs[N:] = np.load(result.subtracted_wfs)
                         if do_clean:
@@ -540,7 +533,12 @@ def _subtraction_batch(args):
 
 
 def _subtraction_batch_init(
-    device, nn_detector_path, nn_channel_index, denoise_detect, do_nn_denoise, id_queue
+    device,
+    nn_detector_path,
+    nn_channel_index,
+    denoise_detect,
+    do_nn_denoise,
+    id_queue,
 ):
     """Thread/process initializer -- loads up neural nets"""
     rank = id_queue.get()
@@ -548,7 +546,9 @@ def _subtraction_batch_init(
     torch.set_grad_enabled(False)
     if device.type == "cuda":
         if torch.cuda.device_count() > 1:
-            device = torch.device("cuda", index=rank % torch.cuda.device_count())
+            device = torch.device(
+                "cuda", index=rank % torch.cuda.device_count()
+            )
             print(
                 f"Worker {rank} using GPU {rank % torch.cuda.device_count()} "
                 f"out of {torch.cuda.device_count()} available."
@@ -804,7 +804,9 @@ def subtraction_batch(
     # save the results to disk to avoid memory issues
     N_new = len(spike_index)
     np.save(batch_data_folder / f"{batch_id:08d}_sub.npy", subtracted_wfs)
-    np.save(batch_data_folder / f"{batch_id:08d}_subpc.npy", subtracted_tpca_projs)
+    np.save(
+        batch_data_folder / f"{batch_id:08d}_subpc.npy", subtracted_tpca_projs
+    )
     np.save(batch_data_folder / f"{batch_id:08d}_si.npy", spike_index)
 
     clean_file = None
@@ -812,7 +814,9 @@ def subtraction_batch(
         clean_file = batch_data_folder / f"{batch_id:08d}_clean.npy"
         np.save(clean_file, cleaned_wfs)
 
-    localizations_file = maxptps_file = peak_heights_file = trough_depths_file = widths_file = None
+    localizations_file = (
+        maxptps_file
+    ) = peak_heights_file = trough_depths_file = widths_file = None
     if localization_kind in ("original", "logbarrier"):
         locwfs = cleaned_wfs if do_clean else subtracted_wfs
         locptps = locwfs.ptp(1)
@@ -821,7 +825,9 @@ def subtraction_batch(
         trough_depths = maxchan_traces.min(1)
         peak_heights = maxchan_traces.max(1)
         first_peaks = maxchan_traces[:, :trough_offset].argmax(1)
-        second_peaks = trough_offset + maxchan_traces[:, trough_offset:].argmax(1)
+        second_peaks = trough_offset + maxchan_traces[
+            :, trough_offset:
+        ].argmax(1)
         widths = second_peaks - first_peaks
 
         xs, ys, z_rels, z_abss, alphas = localize_index.localize_ptps_index(
@@ -1160,8 +1166,12 @@ def full_denoising(
         pass
 
     if return_tpca_embedding and tpca is not None:
-        tpca_embeddings = np.empty((N, C, tpca.n_components), dtype=waveforms.dtype)
-        tpca_embeddings[in_probe_index] = tpca.transform(waveforms.transpose(0, 2, 1)[in_probe_index])
+        tpca_embeddings = np.empty(
+            (N, C, tpca.n_components), dtype=waveforms.dtype
+        )
+        tpca_embeddings[in_probe_index] = tpca.transform(
+            waveforms.transpose(0, 2, 1)[in_probe_index]
+        )
         return waveforms, tpca_embeddings.transpose(0, 2, 1)
     elif return_tpca_embedding:
         return waveforms, None
@@ -1321,13 +1331,28 @@ def get_output_h5(
         last_sample = 0
     else:
         print("No previous output found, starting from scratch.")
-    
+
     # try/finally ensures we close `output_h5` if job is interrupted
     # docs.python.org/3/library/contextlib.html#contextlib.contextmanager
     try:
         yield output_h5, last_sample
     finally:
         output_h5.close()
+
+
+def tpca_from_h5(h5):
+    tpca = None
+    if "tpca_mean" in h5:
+        tpca_mean = h5["tpca_mean"][:]
+        tpca_components = h5["tpca_components"][:]
+        if (tpca_mean == 0).all():
+            print("H5 exists but TPCA params == 0, re-fit.")
+        else:
+            tpca = PCA(tpca_components.shape[0])
+            tpca.mean_ = tpca_mean
+            tpca.components_ = tpca_components
+            print("Loaded TPCA from h5")
+    return tpca
 
 
 # -- channels / geometry helpers
@@ -1482,9 +1507,11 @@ def read_data(bin_file, dtype, s_start, s_end, n_channels, nsync=0):
 
 
 class MockPoolExecutor:
+    """A helper class for turning off concurrency when debugging."""
+
     def __init__(n_jobs, mp_context=None, initializer=None, initargs=None):
         initializer(initargs)
-    
+
     def map(self, f, jobs):
         return map(f, jobs)
 
@@ -1503,6 +1530,8 @@ class timer:
 
 
 class _noint:
+    """A context manager that we use to avoid ending up in invalid states."""
+
     def handler(self, *sig):
         if self.sig:
             signal.signal(signal.SIGINT, self.old_handler)
