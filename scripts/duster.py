@@ -238,8 +238,12 @@ labels_split = pre_deconv_merge_split.split_clusters(
 )
 
 # ks split
+<<<<<<< HEAD
 print("before ks split", labels_split.max() + 1)
 labels_split = pre_deconv_merge_split.ks_maxchan_tpca_split(
+=======
+labels_split, split_map = pre_deconv_merge_split.ks_maxchan_tpca_split(
+>>>>>>> dd6f02d7458688cd91878ddeeb8135a16e2a20e6
     h5["subtracted_tpca_projs"],
     channel_index,
     spike_index[:, 1],
