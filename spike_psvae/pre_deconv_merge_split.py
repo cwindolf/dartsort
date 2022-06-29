@@ -1063,6 +1063,10 @@ def ks_maxchan_tpca_split(
             tpca_embeddings[bs:be], channel_index, maxchans[bs:be]
         )
 
+    # store what final labels each original label ends up with
+    # so that we can visualize and understand this step's output
+    child_to_parent = {i: i for i in labels_to_process}
+
     # loop to process splits
     pbar = tqdm(total=len(labels_to_process), desc="KSMaxchan")
     while labels_to_process:
@@ -1082,6 +1086,8 @@ def ks_maxchan_tpca_split(
 
         if is_split:
             labels_new[in_unit[group_b]] = next_label
+            # parent is cur_label's parent (which is itself if cur_label was not split)
+            child_to_parent[next_label] = child_to_parent[cur_label]
             next_label += 1
             if recursive:
                 labels_to_process += [cur_label, next_label]
@@ -1089,4 +1095,12 @@ def ks_maxchan_tpca_split(
 
         pbar.update()
 
-    return labels_new
+    # the parent to child mapping will be more useful for callers
+    parent_to_child = {}
+    for k, v in child_to_parent.items():
+        if k in parent_to_child:
+            parent_to_child[k].append(v)
+        else:
+            parent_to_child[k] = [v]
+
+    return labels_new, parent_to_child
