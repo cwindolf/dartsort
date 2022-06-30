@@ -898,7 +898,8 @@ def ks_bimodal_pursuit(
     min_split_prop=0.05,
 ):
     """Adapted from PyKS"""
-    full = np.arange(len(unit_features))
+    N = len(unit_features)
+    full = np.arange(N)
     empty = np.array([])
     if len(unit_features) < min_size_split:
         return False, full, empty
@@ -935,7 +936,7 @@ def ks_bimodal_pursuit(
 
     # TODO: move_to_config - maybe...
     for k in range(50):
-        if min(p, 1 - p) < min_split_prop:
+        if min(s1, s2) < 1e-6:
             break
 
         # for each spike, estimate its probability to come from either Gaussian cluster
@@ -955,7 +956,9 @@ def ks_bimodal_pursuit(
         logP[k] = pval.mean()
         # normalize so that probabilities sum to 1
         rs /= np.sum(rs, axis=1)[:, np.newaxis]
-
+        if rs.sum(0).min() < 1e-6:
+            break
+            
         # mean probability to be assigned to Gaussian 1
         p = rs[:, 0].mean()
         # new estimate of mean of cluster 1 (weighted by "responsibilities")
@@ -1008,14 +1011,14 @@ def ks_bimodal_pursuit(
     # c1 = cp.matmul(wPCA, cp.reshape((mean(clp0[ilow, :], 0), 3, -1), order='F'))
     c1 = tpca.inverse_transform(unit_features[ilow].mean())
     c2 = tpca.inverse_transform(unit_features[~ilow].mean())
-    cc = np.corrcoef(c1.ravel(), c2.ravel())  # correlation of mean waveforms
+    cc = np.corrcoef(c1.ravel(), c2.ravel())[0, 1]  # correlation of mean waveforms
     n1 = np.linalg.norm(c1)  # the amplitude estimate 1
     n2 = np.linalg.norm(c2)  # the amplitude estimate 2
 
     r0 = 2 * abs((n1 - n2) / (n1 + n2))
 
     # if the templates are correlated, and their amplitudes are similar, stop the split!!!
-    if (cc[0, 1] > max_split_corr) and (r0 < min_amp_sim):
+    if (cc > max_split_corr) and (r0 < min_amp_sim):
         return False, full, empty
 
     # finaly criteria to continue with the split: if the split piece is more than 5% of all
