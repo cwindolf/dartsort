@@ -518,14 +518,6 @@ def cluster_spikes(
         clusterer = relabel_by_depth(clusterer, cluster_centers)
     else:
         cluster_centers = compute_cluster_centers(clusterer)
-<<<<<<< HEAD
-    #remove dups (from NN denoise) and reorder by z
-    if do_remove_dups:
-        clusterer, duplicate_indices, duplicate_spikes = remove_duplicate_spikes(clusterer, spike_index[:,0], maxptps, frames_dedup=frames_dedup)
-        cluster_centers = compute_cluster_centers(clusterer)
-    
-    return clusterer, cluster_centers, spike_index, x, z, maxptps, original_spike_ids
-=======
     # remove dups (from NN denoise) and reorder by z
     if do_remove_dups:
         (
@@ -605,8 +597,6 @@ def split_big_clusters(
                     next_label += 1
 
     return labels_new
-
->>>>>>> 27164c2d1e4f91ddbe718ae0b5a137f2a80fe322
 
 def compute_cluster_centers(clusterer):
     cluster_centers_data = []
