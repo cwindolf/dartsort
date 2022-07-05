@@ -2059,7 +2059,7 @@ def diagnostic_plots(
         size=min((labels_ks == cluster_id_2).sum(), num_spikes_plot),
     )
     waveforms_unit = read_waveforms(
-        spike_index_ks[labels_ks == cluster_id_2, 0][some_in_cluster].astype(
+        spike_index_ks[labels_ks == cluster_id_2][some_in_cluster].astype(
             int
         ),
         raw_bin,
@@ -2092,7 +2092,7 @@ def diagnostic_plots(
             ),
         )
         waveforms_unit_bis = read_waveforms(
-            spike_index_ks[labels_ks == closest_clusters_kilo[j], 0][
+            spike_index_ks[labels_ks == closest_clusters_kilo[j]][
                 some_in_cluster
             ],
             raw_bin,
