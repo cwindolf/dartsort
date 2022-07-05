@@ -12,6 +12,7 @@ from spike_psvae.isocut5 import isocut5 as isocut
 from scipy.spatial.distance import cdist
 from tqdm.auto import tqdm, trange
 from spike_psvae.denoise import denoise_wf_nn_tmp_single_channel
+from spike_psvae import waveform_utils
 
 # %%
 # deprecated
@@ -92,16 +93,18 @@ def run_LDA_split(wfs, max_channels, threshold_diptest=1.0):
     except ValueError as e:
         print(
             "Some ValueError during LDA split. Ignoring it and not splitting."
+            f"Here is the error message though: {e}"
         )
-        print("Here is the error message though", e, flush=True)
         return np.zeros(len(max_channels), dtype=int)
 
     if ncomp == 2:
         lda_clusterer = hdbscan.HDBSCAN(min_cluster_size=25, min_samples=25)
         lda_clusterer.fit(lda_comps)
         labels = lda_clusterer.labels_
+        # print("lda no diptest", np.unique(labels))
     else:
         value_dpt, cut_value = isocut(lda_comps[:, 0])
+        # print("lda diptest", value_dpt)
         # print("dip test", value_dpt, cut_value)
         if value_dpt < threshold_diptest:
             labels = np.zeros(len(max_channels), dtype=int)
@@ -289,6 +292,7 @@ def split_individual_cluster(
     clusterer_herding.fit(features)
     labels_rec_hdbscan = clusterer_herding.labels_
     # check if cluster split by herdingspikes clustering
+    # print("herding", np.unique(labels_rec_hdbscan, return_counts=True))
     if np.unique(labels_rec_hdbscan).shape[0] > 1:
         is_split = True
 
@@ -311,6 +315,7 @@ def split_individual_cluster(
             lda_labels = run_LDA_split(
                 tpca_wfs_new_unit, max_channels, threshold_diptest
             )
+            # print("new unit", new_unit_id, "lda", np.unique(lda_labels))
             if np.unique(lda_labels).shape[0] == 1:
                 labels_unit[labels_rec_hdbscan == new_unit_id] = cmp
                 cmp += 1
@@ -399,6 +404,7 @@ def split_clusters(
     labels_original = labels.copy()
     cur_max_label = labels.max()
     for unit in tqdm(np.setdiff1d(np.unique(labels), [-1])):  # 216
+        # for unit in [412]:
         # print(f"splitting unit {unit}")
         in_unit = np.flatnonzero(labels == unit)
         spike_index_unit = spike_index[in_unit]
@@ -406,7 +412,7 @@ def split_clusters(
         waveforms_unit = load_aligned_waveforms(
             waveforms, labels, unit, template_shift
         )
-        # print("max channels unit", np.unique(waveforms_unit.ptp(1).argmax(1))
+        # print("max channels unit", np.unique(waveforms_unit.ptp(1).argmax(1)))
 
         first_chans_unit = first_chans[in_unit]
         x_unit, z_unit = x[in_unit], z[in_unit]
@@ -427,6 +433,7 @@ def split_clusters(
             nn_denoise,
             threshold_diptest,
         )
+        # print("final", is_split)
         if is_split:
             for new_label in np.unique(unit_new_labels):
                 if new_label == -1:
@@ -785,7 +792,7 @@ def get_merged(
     labels_updated = labels.copy()
     reference_units = np.setdiff1d(np.unique(labels), [-1])
 
-    for unit in tqdm(range(n_templates)):  # tqdm
+    for unit in tqdm(range(n_templates), desc="merge?"):
         unit_reference = reference_units[unit]
         to_be_merged = [unit_reference]
         merge_shifts = [0]
@@ -834,6 +841,7 @@ def get_merged(
                         n_channels,
                         nn_denoise=nn_denoise,
                     )
+                    # print(unit_reference, unit_bis_reference, dpt_val)
                     if (
                         dpt_val < threshold_diptest
                         and np.abs(two_units_shift) < 2
@@ -876,3 +884,226 @@ def get_merged(
                 ] = new_reference_unit
                 cmp += 1
     return labels_updated
+
+
+def ks_bimodal_pursuit(
+    unit_features,
+    tpca,
+    unit_rank=3,
+    top_pc_init=True,
+    aucsplit=0.85,
+    min_size_split=50,
+    max_split_corr=0.9,
+    min_amp_sim=0.2,
+    min_split_prop=0.05,
+):
+    """Adapted from PyKS"""
+    N = len(unit_features)
+    full = np.arange(N)
+    empty = np.array([])
+    if len(unit_features) < min_size_split:
+        return False, full, empty
+
+    if unit_rank < unit_features.shape[1]:
+        unit_features = PCA(unit_rank).fit_transform(unit_features)
+
+    if top_pc_init:
+        # input should be centered so no problem with centered pca?
+        w = PCA(1).fit(unit_features).components_.squeeze()
+    else:
+        # initialize with the mean of NOT drift-corrected trace
+        w = unit_features.mean(axis=0)
+        w /= np.linalg.norm(w)
+
+    # initial projections of waveform PCs onto 1D vector
+    x = unit_features @ w
+    x_mean = x.mean()
+    # initialize estimates of variance for the first
+    # and second gaussian in the mixture of 1D gaussians
+    s1 = x[x > x_mean].var()
+    s2 = x[x < x_mean].var()
+    # initialize the means as well
+    mu1 = x[x > x_mean].mean()
+    mu2 = x[x < x_mean].mean()
+    # and the probability that a spike is assigned to the first Gaussian
+    p = (x > x_mean).mean()
+
+    # initialize matrix of log probabilities that each spike is assigned to the first
+    # or second cluster
+    logp = np.zeros((x.shape[0], 2), order="F")
+    # do 50 pursuit iteration
+    logP = np.zeros(50)  # used to monitor the cost function
+
+    # TODO: move_to_config - maybe...
+    for k in range(50):
+        if min(s1, s2) < 1e-6:
+            break
+
+        # for each spike, estimate its probability to come from either Gaussian cluster
+        logp[:, 0] = np.log(s1) / 2 - ((x - mu1) ** 2) / (2 * s1) + np.log(p)
+        logp[:, 1] = (
+            np.log(s2) / 2 - ((x - mu2) ** 2) / (2 * s2) + np.log(1 - p)
+        )
+
+        lMax = logp.max(axis=1)
+        # subtract the max for floating point accuracy
+        logp = logp - lMax[:, np.newaxis]
+        rs = np.exp(logp)
+
+        # get the normalizer and add back the max
+        pval = np.log(np.sum(rs, axis=1)) + lMax
+        # this is the cost function: we can monitor its increase
+        logP[k] = pval.mean()
+        # normalize so that probabilities sum to 1
+        rs /= np.sum(rs, axis=1)[:, np.newaxis]
+        if rs.sum(0).min() < 1e-6:
+            break
+            
+        # mean probability to be assigned to Gaussian 1
+        p = rs[:, 0].mean()
+        # new estimate of mean of cluster 1 (weighted by "responsibilities")
+        mu1 = np.dot(rs[:, 0], x) / np.sum(rs[:, 0])
+        # new estimate of mean of cluster 2 (weighted by "responsibilities")
+        mu2 = np.dot(rs[:, 1], x) / np.sum(rs[:, 1])
+
+        # new estimates of variances
+        s1 = np.dot(rs[:, 0], (x - mu1) ** 2) / np.sum(rs[:, 0])
+        s2 = np.dot(rs[:, 1], (x - mu2) ** 2) / np.sum(rs[:, 1])
+
+        if (k >= 10) and (k % 2 == 0):
+            # starting at iteration 10, we start re-estimating the pursuit direction
+            # that is, given the Gaussian cluster assignments, and the mean and variances,
+            # we re-estimate w
+            # these equations follow from the model
+            StS = (
+                np.matmul(
+                    unit_features.T,
+                    unit_features
+                    * (rs[:, 0] / s1 + rs[:, 1] / s2)[:, np.newaxis],
+                )
+                / unit_features.shape[0]
+            )
+            StMu = (
+                np.dot(
+                    unit_features.T, rs[:, 0] * mu1 / s1 + rs[:, 1] * mu2 / s2
+                )
+                / unit_features.shape[0]
+            )
+
+            # this is the new estimate of the best pursuit direction
+            w = np.linalg.solve(StS.T, StMu)
+            w /= np.linalg.norm(w)
+            x = unit_features @ w
+
+    # these spikes are assigned to cluster 1
+    ilow = rs[:, 0] > rs[:, 1]
+    # the smallest cluster has this proportion of all spikes
+    nremove = min(ilow.mean(), (~ilow).mean())
+    if nremove < min_split_prop:
+        return False, full, empty
+
+    # the mean probability of spikes assigned to cluster 1/2
+    plow = rs[ilow, 0].mean()
+    phigh = rs[~ilow, 1].mean()
+
+    # now decide if the split would result in waveforms that are too similar
+    # the reconstructed mean waveforms for putative cluster 1
+    # c1 = cp.matmul(wPCA, cp.reshape((mean(clp0[ilow, :], 0), 3, -1), order='F'))
+    c1 = tpca.inverse_transform(unit_features[ilow].mean())
+    c2 = tpca.inverse_transform(unit_features[~ilow].mean())
+    cc = np.corrcoef(c1.ravel(), c2.ravel())[0, 1]  # correlation of mean waveforms
+    n1 = np.linalg.norm(c1)  # the amplitude estimate 1
+    n2 = np.linalg.norm(c2)  # the amplitude estimate 2
+
+    r0 = 2 * abs((n1 - n2) / (n1 + n2))
+
+    # if the templates are correlated, and their amplitudes are similar, stop the split!!!
+    if (cc > max_split_corr) and (r0 < min_amp_sim):
+        return False, full, empty
+
+    # finaly criteria to continue with the split: if the split piece is more than 5% of all
+    # spikes, if the split piece is more than 300 spikes, and if the confidences for
+    # assigning spikes to # both clusters exceeds a preset criterion ccsplit
+    if (
+        (nremove > min_split_prop)
+        and (min(plow, phigh) > aucsplit)
+        # and (min(cp.sum(ilow), cp.sum(~ilow)) > 300)
+    ):
+        return True, np.flatnonzero(ilow), np.flatnonzero(~ilow)
+
+    return False, full, empty
+
+
+def ks_maxchan_tpca_split(
+    tpca_embeddings,
+    channel_index,
+    maxchans,
+    labels,
+    tpca,
+    recursive=True,
+    top_pc_init=False,
+    aucsplit=0.85,
+    min_size_split=50,
+    max_split_corr=0.9,
+    min_amp_sim=0.2,
+    min_split_prop=0.05,
+):
+    """
+    If `recursive`, we will attempt to split the results of successful splits.
+    """
+    # initialize labels logic
+    labels_new = labels.copy()
+    next_label = labels_new.max() + 1
+    labels_to_process = list(np.setdiff1d(np.unique(labels_new), [-1]))
+
+    # load up maxchan TPCA loadings, batched in case of H5 dataset
+    # these are small enough to fit in memory for short recordings
+    N, P, C = tpca_embeddings.shape
+    maxchan_loadings = np.empty((N, P), dtype=tpca_embeddings.dtype)
+    for bs in range(0, N, 1000):
+        be = min(N, bs + 1000)
+        maxchan_loadings[bs:be] = waveform_utils.get_maxchan_traces(
+            tpca_embeddings[bs:be], channel_index, maxchans[bs:be]
+        )
+
+    # store what final labels each original label ends up with
+    # so that we can visualize and understand this step's output
+    child_to_parent = {i: i for i in labels_to_process}
+
+    # loop to process splits
+    pbar = tqdm(total=len(labels_to_process), desc="KSMaxchan")
+    while labels_to_process:
+        cur_label = labels_to_process.pop()
+        in_unit = np.flatnonzero(labels_new == cur_label)
+        unit_features = maxchan_loadings[in_unit]
+        is_split, group_a, group_b = ks_bimodal_pursuit(
+            unit_features,
+            tpca,
+            top_pc_init=top_pc_init,
+            aucsplit=aucsplit,
+            min_size_split=min_size_split,
+            max_split_corr=max_split_corr,
+            min_amp_sim=min_amp_sim,
+            min_split_prop=min_split_prop,
+        )
+
+        if is_split:
+            labels_new[in_unit[group_b]] = next_label
+            # parent is cur_label's parent (which is itself if cur_label was not split)
+            child_to_parent[next_label] = child_to_parent[cur_label]
+            next_label += 1
+            if recursive:
+                labels_to_process += [cur_label, next_label]
+                pbar.total += 2
+
+        pbar.update()
+
+    # the parent to child mapping will be more useful for callers
+    parent_to_child = {}
+    for k, v in child_to_parent.items():
+        if k in parent_to_child:
+            parent_to_child[k].append(v)
+        else:
+            parent_to_child[k] = [v]
+
+    return labels_new, parent_to_child

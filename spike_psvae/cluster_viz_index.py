@@ -35,9 +35,12 @@ def cluster_scatter(
         ax.scatter(xk, yk, s=s, color=color, alpha=alpha, marker=".")
         if k not in excluded_ids:
             x_mean, y_mean = xk.mean(), yk.mean()
-            xycov = np.cov(xk, yk)
             means[k] = x_mean, y_mean
-            covs[k] = xycov
+            if where.size > 2:
+                xycov = np.cov(xk, yk)
+                covs[k] = xycov
+            else:
+                covs[k] = np.zeros((2, 2))
             if annotate:
                 ax.annotate(str(k), (x_mean, y_mean), size=6)
 
@@ -46,12 +49,12 @@ def cluster_scatter(
             mean_x, mean_y = means[k]
             cov = covs[k]
 
-            with np.errstate(invalid="ignore"):
-                vx, vy = cov[0, 0], cov[1, 1]
-                rho = cov[0, 1] / np.sqrt(vx * vy)
-            if not np.isfinite([vx, vy, rho]).all():
+            if (cov <= 0).any():
                 continue
-
+            
+            vx, vy = cov[0, 0], cov[1, 1]
+            rho = np.minimum(1.0, cov[0, 1] / np.sqrt(vx * vy))
+            
             color = get_ccolor(k)
             ell = Ellipse(
                 (0, 0),
@@ -94,7 +97,8 @@ def array_scatter(
         alpha=0.05,
         annotate=annotate,
     )
-    axes[0].scatter(*geom.T, c="orange", marker="s", s=10)
+    if geom is not None:
+        axes[0].scatter(*geom.T, c="orange", marker="s", s=10)
     axes[0].set_ylabel("z")
     axes[0].set_xlabel("x")
     axes[2].set_xlabel("x")
@@ -118,10 +122,12 @@ def array_scatter(
         marker=".",
         cmap=plt.cm.viridis,
     )
-    axes[2].scatter(*geom.T, c="orange", marker="s", s=10)
-    axes[0].set_ylim(zlim)
-    axes[2].set_ylim(zlim)
-    axes[1].set_ylim(zlim)
+    if geom is not None:
+        axes[2].scatter(*geom.T, c="orange", marker="s", s=10)
+    if zlim is not None:
+        axes[0].set_ylim(zlim)
+        axes[2].set_ylim(zlim)
+        axes[1].set_ylim(zlim)
 
     if fig is not None:
         plt.tight_layout()

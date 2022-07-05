@@ -8,7 +8,9 @@ from tqdm.auto import tqdm
 from .waveform_utils import channel_index_subset
 
 # box constraint on optimization x, y, z (z relative to max chan)
-BOUNDS = [(-100, 170), (1e-4, 250), (-100, 100)]
+# BOUNDS = [(-100, 170), (1e-4, 250), (-100, 100)]
+DX = 100
+DZ = 100
 
 # how to initialize y?
 Y0 = 20.0
@@ -62,7 +64,7 @@ def localize_ptp_index(ptp, local_geom, logbarrier=True):
     result = minimize(
         mse,
         x0=[xcom, Y0, zcom],
-        bounds=BOUNDS,
+        bounds=[(local_geom[:, 0].min() - DX, local_geom[:, 0].max() + DX), (1e-4, 250), (-DZ, DZ)],
     )
 
     # print(result)
