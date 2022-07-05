@@ -4,10 +4,11 @@ import matplotlib.pyplot as plt
 import colorcet
 from matplotlib.patches import Ellipse
 import matplotlib.transforms as transforms
-
+from spike_psvae.isocut5 import isocut5 as isocut
+import scipy
 # matplotlib.use('Agg')
 from matplotlib_venn import venn2
-from spikeinterface.numpyextractors import NumpySorting
+# from spikeinterface.numpyextractors import NumpySorting
 from spikeinterface.toolkit import compute_correlograms
 from spikeinterface.comparison import compare_two_sorters
 from spikeinterface.widgets import plot_agreement_matrix
@@ -15,6 +16,7 @@ import seaborn as sns
 import matplotlib.gridspec as gridspec
 from sklearn.discriminant_analysis import LinearDiscriminantAnalysis as LDA
 from sklearn.decomposition import PCA
+from tqdm.auto import tqdm
 
 from spike_psvae.cluster_utils import (
     read_waveforms,
@@ -1596,7 +1598,7 @@ def diagnostic_plots(
         not_match_ind_st2,
     ) = compute_spiketrain_agreement(st_1, st_2, delta_frames)
     agreement = len(ind_st1) / (len(st_1) + len(st_2) - len(ind_st1))
-    fig = plt.figure(figsize=(12, 18))
+    fig = plt.figure(figsize=(12, 20))
 
     gs = fig.add_gridspec(8, 12, height_ratios=(5, 1, 2, 2, 2, 1, 2, 1))
 
@@ -1622,6 +1624,9 @@ def diagnostic_plots(
     ax_LDA1_ks = fig.add_subplot(gs[7, 3:6])
     ax_LDA2_ks = fig.add_subplot(gs[7, 6:9])
     ax_PCs_ks = fig.add_subplot(gs[7, 9:])
+    
+#     ax_test_split_ptp = fig.add_subplot(gs[8, 3:6])
+#     ax_test_split_temp_proj = fig.add_subplot(gs[8, 6:9])
 
     plot_isi_distribution(st_1, ax=ax_isi_yass)
     plot_isi_distribution(st_2, ax=ax_isi_ks)
@@ -1699,7 +1704,40 @@ def diagnostic_plots(
             if color == "red":
                 wfs_lda_red = waveforms[:, :, mc - 5 : mc + 6]
 
-    ax_wfs_shared_yass.set_xticks([])
+                
+    ## PTP/ template split
+#     waveforms_yass_to_split = np.concatenate((wfs_shared, wfs_lda_red))
+#     mc = templates_yass[cluster_id_1].ptp(0).argmax()
+    
+#     ptps = waveforms_yass_to_split[:, :, 5].ptp(1)
+#     value_dpt, cut_calue = isocut(ptps)
+    
+#     ax_test_split_ptp.hist(ptps, bins = 50)
+#     ax_test_split_ptp.set_title(str(value_dpt) + '\n' + str(cut_calue))
+    
+#     temp_unit = templates_yass[cluster_id_1, :, mc]
+#     norm_wfs = np.sqrt(np.square(waveforms_yass_to_split[:, :, 5]).sum(1))
+#     temp_proj = np.einsum('ij,j->i', waveforms_yass_to_split[:, :, 5], templates_yass[cluster_id_1, :, mc])/norm_wfs
+#     value_dpt, cut_calue = isocut(temp_proj)
+    
+#     ax_test_split_temp_proj.hist(temp_proj, bins = 50)
+#     ax_test_split_temp_proj.set_title(str(value_dpt) + '\n' + str(cut_calue))
+#     ax_wfs_shared_yass.set_xticks([])
+    
+#     wfs_mc = waveforms_yass_to_split[:, :, 5]
+#     wfs_mc = wfs_mc[wfs_mc.ptp(1).argsort()]
+#     lower = int(waveforms_yass_to_split.shape[0]*0.05)
+#     upper = int(waveforms_yass_to_split.shape[0]*0.95)
+#     max_diff = 0
+#     max_diff_N = 0
+#     for n in tqdm(np.arange(lower, upper)):
+#         temp_1 = np.mean(wfs_mc[:n], axis = 0)
+#         temp_2 = np.mean(wfs_mc[n:], axis = 0)
+#         if np.abs(temp_1-temp_2).max() > max_diff:
+#             max_diff = np.abs(temp_1-temp_2).max() 
+#             max_diff_N = n
+#     print(max_diff)
+#     print(max_diff_N)
 
     colors = ["goldenrod", "blue"]
     indices = [ind_st2, not_match_ind_st2]
@@ -1863,6 +1901,11 @@ def diagnostic_plots(
             ].T.flatten(),
             c=color_array_yass_close[j + 1],
         )
+        
+#         print("abs distance :")
+#         print(np.abs(templates_yass[closest_clusters_hdb[j], :, mc - 5 : mc + 5]-templates_yass[cluster_id_1, :, mc - 5 : mc + 5]).max())
+#         print("cosine distance :")
+#         print(scipy.spatial.distance.cosine(templates_yass[closest_clusters_hdb[j], :, mc - 5 : mc + 5].flatten(), templates_yass[cluster_id_1, :, mc - 5 : mc + 5].flatten()))
 
         some_in_cluster = np.random.choice(
             list(range((labels_yass == closest_clusters_hdb[j]).sum())),
@@ -1985,7 +2028,7 @@ def diagnostic_plots(
             ].T.flatten(),
             c=color_array_ks_close[j + 1],
         )
-
+       
         some_in_cluster = np.random.choice(
             list(range((labels_ks == closest_clusters_kilo[j]).sum())),
             replace=False,
