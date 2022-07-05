@@ -105,21 +105,6 @@ def get_templates_com(templates, geom, n_channels=12):
     return x_z_templates
 
 
-def get_templates_com(templates, geom, n_channels=12):
-    x_z_templates = np.zeros((n_templates, 2))
-    n_chan_half = n_channels // 2
-    n_chan_total = geom.shape[0]
-    for i in range(n_templates):
-        mc = templates[i].ptp(0).argmax()
-        mc = mc - mc % 2
-        mc = max(min(n_chan_total - n_chan_half, mc), n_chan_half)
-        x_z_templates[i] = (
-            templates[i].ptp(0)[mc - n_chan_half : mc + n_chan_half]
-            * geom[mc - n_chan_half : mc + n_chan_half]
-        ) / templates[i].ptp(0)[mc - n_chan_half : mc + n_chan_half].sum()
-    return x_z_templates
-
-
 def check_merge(
     unit_reference,
     unit_bis_reference,
