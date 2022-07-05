@@ -5,14 +5,13 @@ import numpy as np
 from spike_psvae.isocut5 import isocut5 as isocut
 from sklearn.decomposition import PCA
 from sklearn.discriminant_analysis import LinearDiscriminantAnalysis as LDA
-from spike_psvae import merge_split_cleaned
+from spike_psvae import pre_deconv_merge_split
 from tqdm.auto import tqdm
 
 
 def split(
     labels_deconv,
     templates,
-    maxptps,
     firstchans,
     path_denoised_wfs_h5,
     batch_size=1000,
@@ -26,10 +25,10 @@ def split(
     cmp = labels_deconv.max() + 1
 
     for cluster_id in tqdm(np.unique(labels_deconv)):
-        which = np.flatnonzero(
-            np.logical_and(
-                maxptps > ptp_threshold, labels_deconv == cluster_id
-            )
+        which = np.flatnonzero(labels_deconv == cluster_id
+#             np.logical_and(
+#                 labels_deconv == cluster_id, maxptps > ptp_threshold 
+#             )
         )
         if len(which) > min_cluster_size:
             with h5py.File(path_denoised_wfs_h5, "r") as h5:
@@ -92,22 +91,31 @@ def split(
 
     return labels_deconv
 
+def get_templates_com(templates, geom, n_channels=12):
+    x_z_templates = np.zeros((templates.shape[0], 2))
+    n_chan_half = n_channels//2
+    n_chan_total = geom.shape[0]
+    for i in range(templates.shape[0]):
+        mc = templates[i].ptp(0).argmax()
+        mc = mc-mc%2
+        mc = max(min(n_chan_total-n_chan_half, mc), n_chan_half)
+        x_z_templates[i, 0] = (templates[i].ptp(0)[mc-n_chan_half:mc+n_chan_half]*geom[mc-n_chan_half:mc+n_chan_half, 0]).sum()/templates[i].ptp(0)[mc-n_chan_half:mc+n_chan_half].sum()
+        x_z_templates[i, 1] = (templates[i].ptp(0)[mc-n_chan_half:mc+n_chan_half]*geom[mc-n_chan_half:mc+n_chan_half, 1]).sum()/templates[i].ptp(0)[mc-n_chan_half:mc+n_chan_half].sum()
+    return x_z_templates
+
 
 def merge(
     labels,
     templates,
     path_cleaned_wfs_h5,
-    xs,
-    z_reg,
-    maxptps,
     firstchans,
+    geom,
     n_chan_merge=10,
     tpca=PCA(8),
     n_temp=10,
     distance_threshold=3.0,
-    threshold_diptest=0.1,
+    threshold_diptest=1.,
     max_spikes=500,
-    threshold_ptp=4,
     wfs_key="cleaned_waveforms",
 ):
     """
@@ -116,14 +124,13 @@ def merge(
 
     labels_updated = labels.copy()
     n_templates = templates.shape[0]
-    n_spikes_templates = merge_split_cleaned.get_n_spikes_templates(
+    n_spikes_templates = pre_deconv_merge_split.get_n_spikes_templates(
         n_templates, labels
     )
-    x_z_templates = merge_split_cleaned.get_x_z_templates(
-        n_templates, labels, xs, z_reg
-    )
+    x_z_templates = get_templates_com(templates, geom)
+    
     print("GET PROPOSED PAIRS")
-    dist_argsort, dist_template = merge_split_cleaned.get_proposed_pairs(
+    dist_argsort, dist_template = pre_deconv_merge_split.get_proposed_pairs(
         n_templates, templates, x_z_templates, n_temp
     )
 
@@ -178,11 +185,11 @@ def merge(
                                 ),
                             )
                         )
-                        which = np.flatnonzero(
-                            np.logical_and(
-                                maxptps > threshold_ptp,
-                                labels_updated == unit_reference,
-                            )
+                        which = np.flatnonzero(labels_updated == unit_reference
+#                             np.logical_and(
+#                                 maxptps > threshold_ptp,
+#                                 labels_updated == unit_reference,
+#                             )
                         )
                         if len(which) > n_wfs_max:
                             idx = np.random.choice(
@@ -238,11 +245,11 @@ def merge(
                                     + n_chan_merge // 2,
                                 ]
 
-                        which = np.flatnonzero(
-                            np.logical_and(
-                                maxptps > threshold_ptp,
-                                labels_updated == unit_bis_reference,
-                            )
+                        which = np.flatnonzero(labels_updated == unit_bis_reference
+#                             np.logical_and(
+#                                 maxptps > threshold_ptp,
+#                                 labels_updated == unit_bis_reference,
+#                             )
                         )
 
                         if len(which) > n_wfs_max:
