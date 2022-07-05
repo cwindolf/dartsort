@@ -45,9 +45,10 @@ from spike_psvae import (
     cluster_viz,
     cluster_viz_index,
     deconvolve,
-    relocalize_after_deconv,
     extract_deconv,
     residual,
+    after_deconv_merge_split,
+    cluster_utils,
 )
 
 # %%
@@ -66,8 +67,8 @@ plt.rc('legend', fontsize=SMALL_SIZE)
 plt.rc('figure', titlesize=BIGGER_SIZE)
 
 # %%
-base_dir = Path("/share/ctn/users/ciw2107/hybrid_1min/")
-# base_dir = Path("/share/ctn/users/ciw2107/hybrid_5min/")
+# base_dir = Path("/share/ctn/users/ciw2107/hybrid_1min/")
+base_dir = Path("/share/ctn/users/ciw2107/hybrid_5min/")
 
 # %%
 in_dir = next(base_dir.glob("*input"))
@@ -125,8 +126,14 @@ with h5py.File(an_h5) as h5:
 write_channel_index = subtract.make_contiguous_channel_index(384)
 loc_channel_index = subtract.make_contiguous_channel_index(384, n_neighbors=20)
 
+# %%
+# %ll {sub_dir}/ZM_2241
+
 # %% [markdown] tags=[]
 # # make hybrid binary
+
+# %%
+1
 
 # %%
 for i, in_bin in enumerate(tqdm(in_bins)):
@@ -274,6 +281,9 @@ for i, in_bin in enumerate(tqdm(in_bins)):
     plt.show()
     plt.close(fig)
 
+# %% [markdown]
+# # KS export
+
 # %%
 # make data for kilosort
 # S2V_AP = 2.34375e-06
@@ -307,6 +317,9 @@ for i, in_bin in enumerate(tqdm(in_bins)):
 
 
 # %%
+
+# %% [markdown]
+# # subtraction
 
 # %%
 for i, in_bin in enumerate(tqdm(in_bins)):
@@ -344,6 +357,9 @@ for i, in_bin in enumerate(tqdm(in_bins)):
 import gc; gc.collect()
 import torch; torch.cuda.empty_cache()
 
+# %% [markdown]
+# # registration
+
 # %%
 for i, in_bin in enumerate(tqdm(in_bins)):
     subject = in_bin.stem.split(".")[0]
@@ -379,10 +395,28 @@ import gc; gc.collect()
 import torch; torch.cuda.empty_cache()
 
 # %%
+for i, in_bin in enumerate(tqdm(in_bins)):
+    subject = in_bin.stem.split(".")[0]
+    out_bin = out_dir / f"{in_bin.stem}.bin"
+    
+    subject_sub_dir = sub_dir / subject
+    subject_sub_h5 = next((sub_dir / subject).glob("sub*.h5"))
+    
+    with h5py.File(subject_sub_h5, "r+") as h5:
+        print(subject)
+        print("-" * len(subject))
+        for k in h5:
+            print(" - ", k, h5[k].shape)
+
+# %% [markdown]
+# # duster
 
 # %% tags=[]
 # cluster + deconv in one go for better cache behavior
-for i, in_bin in enumerate(tqdm(in_bins)):
+just_do_it = False
+just_do_it = True
+
+def job(in_bin):
     subject = in_bin.stem.split(".")[0]
     print(subject)
     # if subject != "SWC_054":
@@ -393,18 +427,38 @@ for i, in_bin in enumerate(tqdm(in_bins)):
     subject_sub_h5 = next(subject_sub_dir.glob("sub*.h5"))
     subject_res_bin = next(subject_sub_dir.glob("res*.bin"))
     (deconv_dir / subject).mkdir(exist_ok=True, parents=True)
+    clust_plotdir = vis_dir / f"{subject}_clust_merge_split"
+    clust_plotdir.mkdir(exist_ok=True)
     
-    if not (subject_sub_dir / "aligned_spike_index.npy").exists():
+    if just_do_it or not (subject_sub_dir / "aligned_spike_index.npy").exists():
+        # print("
         res = subprocess.run(
             [
-                "python", "../scripts/duster.py", out_bin, subject_res_bin, subject_sub_h5, subject_sub_dir,
-                "--inmem",
+                "python",
+                "../scripts/duster.py",
+                out_bin,
+                subject_res_bin,
+                subject_sub_h5,
+                subject_sub_dir,
+                # "--inmem",
+                "--merge_dipscore=0.5",
+                "--doplot",
+                f"--plotdir={clust_plotdir}"
             ]
         )
         print(subject, res.returncode)
         print(res)
     else:
         print(subject_sub_dir / "aligned_spike_index.npy", "exists, skipping", subject)
+    
+    return subject
+
+from joblib import Parallel, delayed
+for res in tqdm(Parallel(5)(delayed(job)(in_bin) for in_bin in in_bins)):
+    print(res)
+
+# for i, in_bin in enumerate(tqdm(in_bins)):
+    # job(in_bin)
 
     # res = subprocess.run(
     #     [
@@ -420,7 +474,12 @@ for i, in_bin in enumerate(tqdm(in_bins)):
 
 
 # %%
-1
+np.load("/share/ctn/users/ciw2107/hybrid_5min/hybrid_5min_subtraction/CSHL049/aligned_templates.npy").shape
+
+# %%
+
+# %%
+349
 
 # %%
 # # print helpful stuff for copypasting kilosort sbatch commands
@@ -443,13 +502,13 @@ for i, in_bin in enumerate(tqdm(in_bins)):
 #     )
 
 # %%
-# %ll /share/ctn/users/ciw2107/hybrid_5min/hybrid_5min_deconv/CSHL049/
+1
 
 # %%
 for i, in_bin in enumerate(tqdm(in_bins)):
     subject = in_bin.stem.split(".")[0]
     # if subject != "DY_018":
-    if subject != "NYU-12":
+    if subject not in ("CSHL051", "DY_018"):
         continue
     
     out_bin = out_dir / f"{in_bin.stem}.bin"
@@ -471,7 +530,12 @@ for i, in_bin in enumerate(tqdm(in_bins)):
         ds = se - ss
         print(ds, ss, se)
     
-    aligned_spike_index = np.load(sub_dir / subject / "aligned_spike_index.npy")
+    aligned_spike_index = Path(sub_dir / subject / "aligned_spike_index.npy")
+    if not aligned_spike_index.exists():
+        print("no asi, skip")
+        continue
+    aligned_spike_index = np.load(aligned_spike_index)
+    
     print("asi", aligned_spike_index[:, 0].min(), aligned_spike_index[:, 0].max())
     final_labels = np.load(sub_dir / subject / "labels.npy")
     which = (final_labels >= 0) & (aligned_spike_index[:, 0] > 70) & (aligned_spike_index[:,0] < (ds - 79))
@@ -516,7 +580,8 @@ tup[np.arange(len(tup)),:,tup.ptp(1).argmax(1)].argmin(1)
 for in_bin in in_bins:
     subject = in_bin.stem.split(".")[0]
     # if subject != "DY_018":
-    if subject != "NYU-12":
+
+    if subject not in ("CSHL051", "DY_018"):
         continue
     print(subject)
     
@@ -538,298 +603,85 @@ for in_bin in in_bins:
         subject_deconv_dir,
         out_bin,
         subtraction_h5=subject_sub_h5,
-        # save_denoised_waveforms=True,
-        n_channels_extract=40,
+        save_cleaned_waveforms=True,
+        save_denoised_waveforms=True,
+        n_channels_extract=20,
         n_jobs=13,
         # device="cpu",
         scratch_dir="/tmp/hibbb"
     )
 
 # %%
-with h5py.File(subject_deconv_dir / "deconv_results.h5") as f:
-    for k in f:
-        print(k, f[k].shape)
-
-# %%
-with h5py.File(subject_deconv_dir / "deconv_results.h5") as f:
-    cc = f["cleaned_waveforms"][:2048]
-    tu = f["templates_up"][:]
-    tl = f["templates_loc"][:]
-    # dd = f["denoised_waveforms"][:2048]
-
-# %%
-with h5py.File(subject_deconv_dir / "deconv_results.h5") as f:
-    tmc = f["templates_up_maxchans"][:]
-    ci = f["channel_index"][:]
-
-# %%
-ci
-
-# %%
-ccp = cc.ptp(1).max(1)
-# ddp = dd.ptp(1).max(1)
-tup = tu.ptp(1).max(1)
-tlp = tl.ptp(1).max(1)
-
-# %%
-ccp.min(), ccp.max()
-
-# %%
-# ddp.min(), ddp.max()
-
-# %%
-plt.hist(cc[np.arange(len(cc)),:,cc.ptp(1).argmax(1)].argmin(1), bins=np.arange(121));
-
-# %%
-# dd[np.arange(len(dd)),:,dd.ptp(1).argmax(1)].argmin(1)
-
-# %%
-(tup == tlp).all()
-
-# %%
-tlp.min(), tlp.max()
-
-# %%
-fig, (aa, ab, ac) = plt.subplots(1, 3, sharey=True)
-rr = np.memmap(out_bin, dtype=np.float32).reshape(-1,384)[:1000]
-re = np.memmap(subject_deconv_dir / "residual.bin", dtype=np.float32).reshape(-1,384)[:1000]
-aa.imshow(rr)
-ab.imshow(re)
-ac.imshow(rr - re)
-plt.show()
-
-# %%
-# fig, (aa, ab, ac) = plt.subplots(1, 3, sharey=True)
-# rr = np.memmap(out_bin, dtype=np.float32).reshape(-1,384)[29500:30500]
-# re = np.memmap(subject_deconv_dir / "residual.bin", dtype=np.float32).reshape(-1,384)[29500:30500]
-# aa.imshow(rr)
-# ab.imshow(re)
-# ac.imshow(rr - re)
-# aa.set_title("raw")
-# ab.set_title("resid")
-# ac.set_title("diff")
-# plt.show()
-
-# %%
-with h5py.File(subject_deconv_dir / "deconv_results.h5") as f:
-    locs = f["localizations"][:]
-    x = locs[:, 0]
-    z = locs[:, 3]
-    maxptps = f["maxptps"][:]
-    # nmaxptps = maxptps - maxptps.min()
-    # nmaxptps *= 0.74 / nmaxptps.max()
-    # nmaxptps += 0.25
-    # plt.figure(figsize=(5, 25))
-    # plt.scatter(x, z, c=maxptps, alpha=nmaxptps, s=1)
-    # plt.show()
-
-# %%
-plt.hist(maxptps,bins=32);
-
-# %%
-labels = np.load(subject_deconv_dir / "spike_train.npy")[:, 1]
-
-cluster_viz.array_scatter(
-    labels,
-    geom,
-    x,
-    z,
-    maxptps,
-    zlim=(-50, 3900),
-    axes=None,
-    # annotate=False,
-    do_ellipse=False,
-)
-
-# %%
-lold = np.load(subject_deconv_dir / "localization_results.npy")
-
-# %%
-labold = np.load(subject_deconv_dir / "spike_labels.npy")
-
-# %%
-# %ll {subject_deconv_dir}
-
-# %%
-lold.shape,labold.shape
-
-# %%
-cluster_viz.array_scatter(
-    labels[:len(labold)],
-    geom,
-    lold[:,0],
-    lold[:,1],
-    lold[:,4],
-    zlim=(-50, 3900),
-    axes=None,
-    # annotate=False,
-    do_ellipse=False,
-)
-
-# %%
-import torch
-
-def run_relocalize(
-    spike_train_npy, deconv_templates_up_npy, h5_subtract, residual_path,
-    output_directory, standardized_bin
-):
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    denoiser = denoise.SingleChanDenoiser()
-    denoiser.load()
-    denoiser.to(device)
-    output_directory = Path(output_directory)
-
-    with h5py.File(h5_subtract) as f:
-        geom_array = f["geom"][:]
-    np.save(output_directory / "geom.npy", geom_array)
-
-    deconv_spike_train_up = np.load(spike_train_npy)
-    deconv_templates_up = np.load(deconv_templates_up_npy)
-
-    n_spikes = deconv_spike_train_up.shape[0]
-    print(f"number of deconv spikes: {n_spikes}")
-    print(f"deconv templates shape: {deconv_templates_up.shape}")
-    
-    res_path = residual.run_residual(
-        deconv_templates_up_npy,
-        spike_train_npy,
-        output_directory,
-        standardized_bin,
-        output_directory / "geom.npy",
-    )
-
-    # 42/60 issue :
-    # deconvolve.read_waveforms used in this function reads at t-60:t+60
-    # and pass wfs through denoising pipeline
-
-    # Save all wfs in first_outdir
-    n_chans_to_extract = 40
-    
-    if True:#not ((output_directory / "denoised_wfs.h5").exists() and (output_directory / "collision_subtracted_wfs.h5").exists()):
-        (
-            fname_spike_index,
-            fname_spike_labels,
-            fname_subtracted,
-            cleaned_wfs_h5,
-            denoised_wfs_h5,
-        ) = relocalize_after_deconv.extract_deconv_wfs(
-            h5_subtract,
-            res_path,
-            geom_array,
-            deconv_spike_train_up,
-            deconv_templates_up,
-            output_directory,
-            denoiser,
-            device,
-            n_chans_to_extract=n_chans_to_extract,
-        )
-    else:
-        print("locs done, skip")
-        fname_spike_index = output_directory / "spike_index.npy"
-        fname_spike_labels = output_directory / "spike_labels.npy"
-        denoised_wfs_h5 = output_directory / "denoised_wfs.h5"
-        cleaned_wfs_h5 = output_directory / "collision_subtracted_wfs.h5"
-
-    # Relocalize Waveforms
-
-    deconv_spike_index = np.load(fname_spike_index)
-    # assert deconv_spike_index.shape[0] == n_spikes
-    print(f"number of deconv spikes: {deconv_spike_index.shape[0]}")
-    if True:#not (output_directory / "localization_results.npy").exists():
-        relocalize_after_deconv.relocalize_extracted_wfs(
-            denoised_wfs_h5,
-            deconv_spike_train_up,
-            deconv_spike_index,
-            geom_array,
-            output_directory,
-            n_workers=12,
-            batch_size=512,
-        )
-    else:
-        print("locs done, skip")
-
-    localization_results_path = output_directory / "localization_results.npy"
-    maxptpss = np.load(localization_results_path)[:, 4]
-    z_absss = np.load(localization_results_path)[:, 1]
-    times = deconv_spike_train_up[:, 0].copy() / 30000
-
-    # # Check localization results output
-    # raster, dd, tt = ibme.fast_raster(maxptpss, z_absss, times)
-    # plt.figure(figsize=(16,12))
-    # plt.imshow(raster, aspect='auto')
-
-    # Register
-    z_reg, dispmap = ibme.register_nonrigid(
-        maxptpss,
-        z_absss,
-        times,
-        robust_sigma=1,
-        rigid_disp=200,
-        disp=100,
-        denoise_sigma=0.1,
-        destripe=False,
-        n_windows=10,
-        widthmul=0.5,
-    )
-    z_reg -= (z_reg - z_absss).mean()
-    dispmap -= dispmap.mean()
-    np.save(output_directory / "z_reg.npy", z_reg)
-    np.save(output_directory / "ptps.npy", maxptpss)
-
+1
 
 # %%
 for in_bin in in_bins:
     subject = in_bin.stem.split(".")[0]
     # if subject != "DY_018":
-    # # if subject != "NYU-12":
-        # continue
+
+    if subject not in ("CSHL051", "DY_018"):
+        continue
+    print(subject)
     
     out_bin = out_dir / f"{in_bin.stem}.bin"
     subject_sub_h5 = next((sub_dir / subject).glob("sub*.h5"))
     subject_res_bin = next((sub_dir / subject).glob("res*.bin"))
     subject_deconv_dir = deconv_dir / subject
     subject_deconv_dir.mkdir(exist_ok=True, parents=True)
-    print("hi")
-    if (subject_deconv_dir / "denoised_wfs.h5").exists() and (subject_deconv_dir / "collision_subtracted_wfs.h5").exists():
-        print("wfs done")
-    if (subject_deconv_dir / "localization_results.npy").exists():
-        print("locs done")
-    if (subject_deconv_dir / "z_reg.npy").exists():
-        print("z_reg done")
-
-
-# %% tags=[]
-def job(in_bin):
-    subject = in_bin.stem.split(".")[0]
-    # if subject != "DY_018":
-    print("subject", flush=True)
-    if subject != "NYU-12":
-        return
-    print("run", flush=True)
-
-
-    out_bin = out_dir / f"{in_bin.stem}.bin"
-    subject_sub_h5 = next((sub_dir / subject).glob("sub*.h5"))
-    subject_res_bin = next((sub_dir / subject).glob("res*.bin"))
-    subject_deconv_dir = deconv_dir / subject
-    subject_deconv_dir.mkdir(exist_ok=True, parents=True)
-    # if (subject_deconv_dir / "z_reg.npy").exists():
-    #     print("done, skip")
-    #     return
-
-    run_relocalize(
-        subject_deconv_dir / "spike_train_up.npy",
-        subject_deconv_dir / "templates_up.npy",
-        subject_sub_h5,
-        None,
-        subject_deconv_dir,
-        out_bin,
-    )
-
     
-from joblib import Parallel, delayed
-with Parallel(1) as p:
-    res = list(p(delayed(job)(in_bin) for in_bin in tqdm(in_bins)))
+    with h5py.File(subject_deconv_dir / "deconv_results.h5") as f:
+        # for k in f:
+        #     print(k, f[k].shape)
+        maxptps = f["maxptps"][:]
+        firstchans = f["first_channels"][:]
+        x, y, z_rel, z_abs, alpha = f["localizations"][:].T
+    
+    spike_train_deconv = np.load(subject_deconv_dir / "spike_train.npy")
+    labels_deconv = spike_train_deconv[:, 1]
+    assert labels_deconv.shape == maxptps.shape
+    templates = np.load(subject_deconv_dir / "templates.npy")
+    assert templates.shape[0] == labels_deconv.max() + 1
+    
+    if not (subject_deconv_dir / "postdeconv_split_labels.npy").exists():
+        split_labels = after_deconv_merge_split.split(
+            labels_deconv,
+            templates,
+            maxptps,
+            firstchans,
+            subject_deconv_dir / "deconv_results.h5",
+            wfs_key="denoised_waveforms",
+        )
+        np.save(subject_deconv_dir / "postdeconv_split_labels.npy", split_labels)
+    else:
+        split_labels = np.load(subject_deconv_dir / "postdeconv_split_labels.npy")
+    
+    if not (subject_deconv_dir / "postdeconv_merge_labels.npy").exists():
+        # fill -- make split labels contiguous
+        split_labels = cluster_utils.make_labels_contiguous(split_labels)
+        
+        # get split templates
+        split_templates = deconvolve.get_templates(
+            out_bin,
+            spike_train_deconv,          # asks for spike index but only uses first axis
+            split_labels,
+            geom,
+            n_times=121,
+            n_samples=250,
+            trough_offset=42,
+        )
+
+        merge_labels = after_deconv_merge_split.merge(
+            split_labels,
+            split_templates,
+            subject_deconv_dir / "deconv_results.h5",
+            x,
+            z_abs,
+            maxptps,
+            firstchans,
+            wfs_key="cleaned_waveforms",
+        )
+        np.save(subject_deconv_dir / "postdeconv_merge_labels.npy", split_labels)
+    
 
 # %%
 1
@@ -873,35 +725,6 @@ for i, in_bin in enumerate(tqdm(in_bins)):
     )
     np.save(subject_sub_dir / "reassignments.npy", snrs)
 
-
-# %%
-# %ll {sub_dir / subject}
-
-# %%
-upsample 8 8
-unit_up_factor (265,)
-up_factor 8
-self.up_up_map (2120,)
-
-# %%
-u = np.unique(final_labels[final_labels >= 0])
-
-# %%
-u
-
-# %%
-u.size
-
-# %%
-1
-
-# %%
-for i, in_bin in enumerate(tqdm(in_bins)):
-    subject = in_bin.stem.split(".")[0]
-    print(subject, end=", ")
-
-# %%
-fname_templates_up
 
 # %%
 # 
