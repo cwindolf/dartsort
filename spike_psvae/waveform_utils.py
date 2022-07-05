@@ -32,6 +32,15 @@ def channel_index_subset(geom, channel_index, n_channels=None, radius=None):
     return subset
 
 
+def get_maxchan_traces(waveforms, channel_index, maxchans):
+    index_of_mc = np.argwhere(channel_index == np.arange(len(channel_index))[:, None])
+    assert (index_of_mc[:, 0] == np.arange(len(channel_index))).all()
+    index_of_mc = index_of_mc[:, 1]
+    rel_maxchans = index_of_mc[maxchans]
+    maxchan_traces = waveforms[np.arange(len(waveforms)), :, rel_maxchans]
+    return maxchan_traces
+
+
 def relativize_z(z_abs, maxchans, geom):
     """Take absolute z coords -> relative to max channel z."""
     return z_abs - geom[maxchans.astype(int), 1]

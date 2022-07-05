@@ -1,4 +1,5 @@
 import numpy as np
+import numba
 from scipy.spatial.distance import cdist
 
 # import numpy.linalg as la
@@ -315,7 +316,7 @@ def enforce_decrease_shells(
     assert maxchans.shape == (N,)
 
     # compute original ptps and allocate storage for decreasing ones
-    orig_ptps = waveforms.ptp(1)
+    orig_ptps = waveforms.ptp(axis=1)
     decreasing_ptps = orig_ptps.copy()
 
     # loop to enforce ptp decrease
@@ -366,7 +367,7 @@ def enforce_temporal_decrease(
         _enforce_temporal_decrease_right(
             waveforms, right_peaks
         )
-    
+
     waveforms = waveforms.reshape(N, C, T).transpose(0, 2, 1)
 
     return waveforms

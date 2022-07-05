@@ -1,7 +1,4 @@
 import numpy as np
-from pathlib import Path
-from tempfile import TemporaryDirectory
-import spikeinterface.full as si
 from tqdm.auto import tqdm
 from sklearn.decomposition import PCA
 
@@ -12,7 +9,7 @@ def get_templates(
     spike_train,
     geom,
     raw_binary_file,
-    residual_binary_file,
+    residual_binary_file=None,
     subtracted_waveforms=None,
     subtracted_max_channels=None,
     extract_channel_index=None,
@@ -79,9 +76,8 @@ def get_templates(
         snrs_by_chan = np.zeros((n_templates, len(geom)))
     snrs = np.zeros(n_templates)
 
-    if return_raw_cleaned:
-        raw_templates = np.zeros_like(templates)
-        cleaned_templates = np.zeros_like(templates)
+    raw_templates = np.zeros_like(templates)
+    cleaned_templates = np.zeros_like(templates)
     if return_extra:
         extra = dict(
             original_raw=np.zeros_like(templates),
@@ -123,7 +119,6 @@ def get_templates(
 
         raw_maxchans = np.full(len(raw_wfs), raw_maxchan)
         if do_temporal_decrease:
-            print("TD")
             denoise.enforce_temporal_decrease(raw_wfs, in_place=True)
         if do_enforce_decrease:
             denoise.enforce_decrease_shells(
@@ -269,18 +264,21 @@ def get_waveforms(
                 count=spike_length_samples * n_channels,
                 offset=np.dtype(np.float32).itemsize * start * n_channels,
             ).reshape(spike_length_samples, n_channels)
-        except:
+        except OSError:
             skipped_idx.append(ix)
-    
 
     # add in subtracted waveforms
     if subtracted_waveforms is not None:
+        assert not skipped_idx
         waveforms[
             np.arange(waveforms.shape[0])[:, None, None],
             np.arange(waveforms.shape[1])[None, :, None],
             channel_index[maxchans[choices]][:, None, :],
         ] += subtracted_waveforms[choices]
-    waveforms = np.delete(waveforms, skipped_idx, axis = 0)
+
+    if skipped_idx:
+        waveforms = np.delete(waveforms, skipped_idx, axis=0)
+
     return waveforms
 
 
