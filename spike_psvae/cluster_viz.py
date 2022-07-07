@@ -1940,7 +1940,6 @@ def diagnostic_plots(
             n_times=121,
             channels=np.arange(mc - 10, mc + 10).astype("int"),
         )[0]
-        # DO TPCA
         lda_labels = np.zeros(
             waveforms_unit_bis.shape[0] + waveforms_unit.shape[0]
         )
@@ -1950,31 +1949,22 @@ def diagnostic_plots(
             lda_labels,
         )
         if j == 0:
-            ax_LDA1_yass.hist(
-                lda_comps[: waveforms_unit.shape[0], 0],
-                bins=25,
-                color=color_array_yass_close[0],
-                alpha=0.5,
-            )
-            ax_LDA1_yass.hist(
-                lda_comps[waveforms_unit.shape[0] :, 0],
-                bins=25,
-                color=color_array_yass_close[j + 1],
-                alpha=0.5,
-            )
+            ax_LDA_yass = ax_LDA1_yass
         else:
-            ax_LDA2_yass.hist(
-                lda_comps[: waveforms_unit.shape[0], 0],
-                bins=25,
-                color=color_array_yass_close[0],
-                alpha=0.5,
-            )
-            ax_LDA2_yass.hist(
-                lda_comps[waveforms_unit.shape[0] :, 0],
-                bins=25,
-                color=color_array_yass_close[j + 1],
-                alpha=0.5,
-            )
+            ax_LDA_yass = ax_LDA2_yass
+            
+        ax_LDA_yass.hist(
+            lda_comps[: waveforms_unit.shape[0], 0],
+            bins=25,
+            color=color_array_yass_close[0],
+            alpha=0.5,
+        )
+        ax_LDA_yass.hist(
+            lda_comps[waveforms_unit.shape[0] :, 0],
+            bins=25,
+            color=color_array_yass_close[j + 1],
+            alpha=0.5,
+        )
 
     #         pcs_unit = pc_scatter.fit_transform(waveforms_unit_bis.reshape(waveforms_unit_bis.shape[0], -1))
     #         ax_PCs_yass.scatter(pcs_unit[:, 0], pcs_unit[:, 1], s=2, c=color_array_yass_close[j+1])
@@ -1990,8 +1980,11 @@ def diagnostic_plots(
     ax_LDA1_yass.set_xticks([])
     ax_LDA2_yass.set_xticks([])
 
-    ax_LDA1_yass.set_title("LDA: " + str(closest_clusters_hdb[0]))
-    ax_LDA2_yass.set_title("LDA: " + str(closest_clusters_hdb[1]))
+    t0 = templates_yass[cluster_id_1, :, mc - 5 : mc + 5].T.flatten()
+    t1 = templates_yass[closest_clusters_hdb[0], :, mc - 5 : mc + 5].T.flatten()
+    t2 = templates_yass[closest_clusters_hdb[1], :, mc - 5 : mc + 5].T.flatten()
+    ax_LDA1_yass.set_title(f"LDA: {closest_clusters_hdb[0]}, temp. dist {np.abs(t0 - t1).max():0.2f}")
+    ax_LDA2_yass.set_title(f"LDA: {closest_clusters_hdb[1]}, temp. dist {np.abs(t0 - t2).max():0.2f}")
     ax_PCs_yass.set_title("2 PCs")
 
     mc = templates_ks[cluster_id_2].ptp(0).argmax()
@@ -2099,8 +2092,11 @@ def diagnostic_plots(
     ax_LDA2_ks.set_xticks([])
     ax_PCs_ks.yaxis.tick_right()
 
-    ax_LDA1_ks.set_title("LDA: " + str(closest_clusters_kilo[0]))
-    ax_LDA2_ks.set_title("LDA: " + str(closest_clusters_kilo[1]))
+    t0 = templates_ks[cluster_id_2,  :, mc - 5 : mc + 5]
+    t1 = templates_ks[closest_clusters_kilo[0],  :, mc - 5 : mc + 5]
+    t2 = templates_ks[closest_clusters_kilo[1],  :, mc - 5 : mc + 5]
+    ax_LDA1_ks.set_title(f"LDA: {closest_clusters_kilo[0]}, temp. dist {np.abs(t0 - t1).max():0.2f}")
+    ax_LDA2_ks.set_title(f"LDA: {closest_clusters_kilo[1]}, temp. dist {np.abs(t0 - t2).max():0.2f}")
     ax_PCs_ks.set_title("2 PCs")
 
     for i in range(10):
