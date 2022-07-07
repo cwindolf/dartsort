@@ -499,7 +499,7 @@ def get_templates(
 
 # %%
 def get_proposed_pairs(
-    n_templates, templates, x_z_templates, n_temp=20, n_channels=10
+    n_templates, templates, x_z_templates, n_temp=20, n_channels=10, shifts=[0]
 ):
     n_channels_half = n_channels // 2
     dist = cdist(x_z_templates, x_z_templates)
@@ -515,7 +515,7 @@ def get_proposed_pairs(
                 :,
                 mc - n_channels_half : mc + n_channels_half,
             ]
-            dist_template[i, j] = compute_shifted_similarity(temp_a, temp_b)[0]
+            dist_template[i, j], best_shift = compute_shifted_similarity(temp_a, temp_b, shifts=shifts)
     return dist_argsort, dist_template
 
 
