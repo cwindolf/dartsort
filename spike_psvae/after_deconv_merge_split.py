@@ -515,9 +515,9 @@ def remove_oversplits(templates, spike_train, min_ptp=4.0, max_diff=2.0):
             ).max(1).max(1)
             if max_vec.min() < max_diff:
                 idx_units_to_change = unit + 1 + np.where(max_vec < max_diff)[0]
-                spike_train[
-                    np.isin(spike_train[:, 1], idx_units_to_change)
-                ] = unit
+                in_change = np.isin(spike_train[:, 1], idx_units_to_change)
+                assert in_change.shape == spike_train[:, 0].shape
+                spike_train[in_change, 1] = unit
                 templates[idx_units_to_change] = templates[unit]
 
     # make labels contiguous and get corresponding templates
