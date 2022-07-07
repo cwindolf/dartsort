@@ -295,11 +295,11 @@ def remove_duplicate_spikes(clusterer, spike_frames, maxptps, frames_dedup):
     sorting = make_sorting_from_labels_frames(clusterer.labels_, spike_frames)
     # remove duplicates
     cmp_self = compare_two_sorters(
-        sorting, sorting, match_score=0.1, chance_score=0.1
+        sorting, sorting, match_score=0.1, chance_score=0.1, verbose=True
     )
     removed_cluster_ids = set()
     remove_spikes = []
-    for cluster_id in sorting.get_unit_ids():
+    for cluster_id in tqdm(sorting.get_unit_ids(), desc="remove dups"):
         possible_matches = cmp_self.possible_match_12[cluster_id]
         # possible_matches[possible_matches!=cluster_id])
         if len(possible_matches) == 2:
@@ -483,7 +483,7 @@ def cluster_spikes(
 
     # features = np.c_[tx*scales[0], tz*scales[2], all_pcs[:,0] * alpha1, all_pcs[:,1] * alpha2]
     clusterer = hdbscan.HDBSCAN(
-        min_cluster_size=min_cluster_size, min_samples=min_samples
+        min_cluster_size=min_cluster_size, min_samples=min_samples, core_dist_n_jobs=-1
     )
     clusterer.fit(features)
 
@@ -503,24 +503,16 @@ def cluster_spikes(
         np.where(true_spike_indices[:, 0])
     ][:, 1]
 
-    if split_big:
-        clusterer.labels_ = split_big_clusters(
-            clusterer.labels_,
-            x,
-            z,
-            maxptps,
-            spike_index,
-            **split_big_kw,
-        )
-
     # reorder by z
     if do_relabel_by_depth:
+        print("relabel", flush=True)
         cluster_centers = compute_cluster_centers(clusterer)
         clusterer = relabel_by_depth(clusterer, cluster_centers)
     else:
         cluster_centers = compute_cluster_centers(clusterer)
     # remove dups (from NN denoise) and reorder by z
     if do_remove_dups:
+        print("dups", flush=True)
         (
             clusterer,
             duplicate_indices,
@@ -529,6 +521,19 @@ def cluster_spikes(
             clusterer, spike_index[:, 0], maxptps, frames_dedup=frames_dedup
         )
         cluster_centers = compute_cluster_centers(clusterer)
+
+    if split_big:
+        print("split big...")
+        clusterer.labels_ = split_big_clusters(
+            clusterer.labels_,
+            x,
+            z,
+            maxptps,
+            spike_index,
+            **split_big_kw,
+        )
+        print("done splitting big", flush=True)
+    print("done", flush=True)
 
     return (
         clusterer,
