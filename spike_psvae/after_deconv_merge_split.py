@@ -366,7 +366,7 @@ def merge(
     x_z_templates = get_templates_com(templates, geom)
     print("GET PROPOSED PAIRS")
     dist_argsort, dist_template = pre_deconv_merge_split.get_proposed_pairs(
-        n_templates, templates, x_z_templates, n_temp
+        n_templates, templates, x_z_templates, n_temp, shifts=[-2, -1, 0, 1, 2]
     )
     reference_units = np.setdiff1d(np.unique(labels), [-1])
 
@@ -376,7 +376,7 @@ def merge(
     template_troughs = template_mctraces.argmin(1)
     # pair_shifts[i, j] = template i trough time - template j trough time
     pair_shifts = template_troughs[:, None] - template_troughs[None, :]
-    
+
     for unit in trange(n_templates, desc="merge"):
         unit_reference = reference_units[unit]
         to_be_merged = [unit_reference]
@@ -387,7 +387,6 @@ def merge(
             unit_bis = dist_argsort[unit, j]
             unit_bis_reference = reference_units[unit_bis]
             if dist_template[unit, j] < distance_threshold:
-
                 is_merged_bis, unit_bis_reference, shift = check_merge(
                     unit_reference,
                     unit_bis_reference,
