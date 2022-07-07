@@ -70,7 +70,7 @@ class timer:
         self.t = time.time() - self.start
         print(self.name, "took", self.t, "s")
 
-
+print("cooking", flush=True)
 if args.tmpdir is not None:
     with timer("copying h5 to scratch"):
         shutil.copy(sub_h5, args.tmpdir / "sub.h5")
@@ -238,6 +238,7 @@ labels_split = pre_deconv_merge_split.split_clusters(
 )
 
 # ks split
+print("before ks split", labels_split.max() + 1)
 labels_split, split_map = pre_deconv_merge_split.ks_maxchan_tpca_split(
     h5["subtracted_tpca_projs"],
     channel_index,
@@ -252,6 +253,7 @@ labels_split, split_map = pre_deconv_merge_split.ks_maxchan_tpca_split(
     min_amp_sim=0.2,
     min_split_prop=0.05,
 )
+print("after ks split", labels_split.max() + 1)
 
 # %%
 # re-order again
