@@ -13,7 +13,6 @@ from tqdm.auto import tqdm, trange
 def split(
     labels_deconv,
     templates,
-    maxptps,
     firstchans,
     path_denoised_wfs_h5,
     batch_size=1000,
@@ -27,10 +26,10 @@ def split(
     cmp = labels_deconv.max() + 1
 
     for cluster_id in tqdm(np.unique(labels_deconv)):
-        which = np.flatnonzero(
-            np.logical_and(
-                maxptps > ptp_threshold, labels_deconv == cluster_id
-            )
+        which = np.flatnonzero(labels_deconv == cluster_id
+#             np.logical_and(
+#                 labels_deconv == cluster_id, maxptps > ptp_threshold 
+#             )
         )
         if len(which) > min_cluster_size:
             with h5py.File(path_denoised_wfs_h5, "r") as h5:
@@ -93,19 +92,16 @@ def split(
 
     return labels_deconv
 
-
 def get_templates_com(templates, geom, n_channels=12):
-    x_z_templates = np.zeros((n_templates, 2))
-    n_chan_half = n_channels // 2
+    x_z_templates = np.zeros((templates.shape[0], 2))
+    n_chan_half = n_channels//2
     n_chan_total = geom.shape[0]
-    for i in range(n_templates):
+    for i in range(templates.shape[0]):
         mc = templates[i].ptp(0).argmax()
-        mc = mc - mc % 2
-        mc = max(min(n_chan_total - n_chan_half, mc), n_chan_half)
-        x_z_templates[i] = (
-            templates[i].ptp(0)[mc - n_chan_half : mc + n_chan_half]
-            * geom[mc - n_chan_half : mc + n_chan_half]
-        ) / templates[i].ptp(0)[mc - n_chan_half : mc + n_chan_half].sum()
+        mc = mc-mc%2
+        mc = max(min(n_chan_total-n_chan_half, mc), n_chan_half)
+        x_z_templates[i, 0] = (templates[i].ptp(0)[mc-n_chan_half:mc+n_chan_half]*geom[mc-n_chan_half:mc+n_chan_half, 0]).sum()/templates[i].ptp(0)[mc-n_chan_half:mc+n_chan_half].sum()
+        x_z_templates[i, 1] = (templates[i].ptp(0)[mc-n_chan_half:mc+n_chan_half]*geom[mc-n_chan_half:mc+n_chan_half, 1]).sum()/templates[i].ptp(0)[mc-n_chan_half:mc+n_chan_half].sum()
     return x_z_templates
 
 
@@ -347,10 +343,8 @@ def merge(
     labels,
     templates,
     path_cleaned_wfs_h5,
-    xs,
-    z_reg,
-    maxptps,
     firstchans,
+    geom,
     n_chan_merge=10,
     tpca=PCA(8),
     n_temp=10,
@@ -358,7 +352,6 @@ def merge(
     always_merge_threshold=0.0,  # haven't picked a good default yet
     threshold_diptest=0.1,
     max_spikes=500,
-    threshold_ptp=4,
     wfs_key="cleaned_waveforms",
 ):
     """
@@ -370,9 +363,7 @@ def merge(
     n_spikes_templates = pre_deconv_merge_split.get_n_spikes_templates(
         n_templates, labels
     )
-    x_z_templates = pre_deconv_merge_split.get_x_z_templates(
-        n_templates, labels, xs, z_reg
-    )
+    x_z_templates = get_templates_com(templates, geom)
     print("GET PROPOSED PAIRS")
     dist_argsort, dist_template = pre_deconv_merge_split.get_proposed_pairs(
         n_templates, templates, x_z_templates, n_temp
@@ -396,6 +387,7 @@ def merge(
             unit_bis = dist_argsort[unit, j]
             unit_bis_reference = reference_units[unit_bis]
             if dist_template[unit, j] < distance_threshold:
+
                 is_merged_bis, unit_bis_reference, shift = check_merge(
                     unit_reference,
                     unit_bis_reference,

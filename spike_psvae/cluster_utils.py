@@ -395,7 +395,6 @@ def copy_spikes(x, z, maxptps, spike_index, scales=(1,1,30), num_duplicates_list
     return new_x, new_z, new_maxptps, new_spike_index, true_spike_indices
     
 
-
 def cluster_spikes(
     x,
     z,
@@ -603,7 +602,6 @@ def split_big_clusters(
                     next_label += 1
 
     return labels_new
-
 
 def compute_cluster_centers(clusterer):
     cluster_centers_data = []
