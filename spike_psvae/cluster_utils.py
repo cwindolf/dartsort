@@ -305,7 +305,6 @@ def remove_duplicate_spikes(clusterer, spike_frames, maxptps, frames_dedup):
         if len(possible_matches) == 2:
             st_1 = sorting.get_unit_spike_train(possible_matches[0])
             st_2 = sorting.get_unit_spike_train(possible_matches[1])
-            sts = [st_1, st_2]
             (
                 ind_st1,
                 ind_st2,
