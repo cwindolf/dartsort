@@ -83,10 +83,13 @@ def array_scatter(
     zlim=(-50, 3900),
     axes=None,
     annotate=True,
+    subplots_kw={},
 ):
     fig = None
     if axes is None:
-        fig, axes = plt.subplots(1, 3, sharey=True, figsize=(15, 15))
+        subkw = dict(sharey=True, figsize=(15, 15))
+        subkw.update(subplots_kw)
+        fig, axes = plt.subplots(1, 3, **subkw)
 
     cluster_scatter(
         x,
