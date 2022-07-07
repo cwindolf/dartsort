@@ -5,6 +5,7 @@ import torch
 import torch.nn.functional as F
 from scipy import sparse
 import scipy.linalg as la
+from scipy.optimize import minimize
 from scipy.stats import zscore
 from tqdm.auto import trange
 
@@ -46,6 +47,29 @@ def register_raster_rigid(
     return p, D, C
 
 
+def weighted_lsqr(Wij, Dij, I, J, T, p0):
+    W = sparse.csr_matrix((Wij, (I, J)), shape=(T, T))
+    WD = sparse.csr_matrix((Wij * Dij, (I, J)), shape=(T, T))
+    fixed_terms = (W @ WD).diagonal() - (WD @ W).diagonal()
+    diag_WW = (W @ W).diagonal()
+    Wsq = W.power(2)
+
+    def obj(p):
+        return 0.5 * np.square(Wij * (Dij - (p[I] - p[J]))).sum()
+
+    def jac(p):
+        return fixed_terms - 2 * (Wsq @ p) + 2 * p * diag_WW
+
+    res = minimize(
+        fun=obj, jac=jac, x0=p0, method="L-BFGS-B"
+    )
+    if not res.success:
+        print("Global displacement gradient descent had an error")
+    p = res.x
+
+    return p
+
+
 def psolvecorr(D, C, mincorr=0.0, robust_sigma=0, robust_iter=5, max_dt=None):
     """Solve for rigid displacement given pairwise disps + corrs"""
     T = D.shape[0]
@@ -60,6 +84,8 @@ def psolvecorr(D, C, mincorr=0.0, robust_sigma=0, robust_iter=5, max_dt=None):
     I, J = np.where(S == 1)
     n_sampled = I.shape[0]
 
+    p0 = D.mean(axis=1)
+
     # construct Kroneckers
     ones = np.ones(n_sampled)
     M = sparse.csr_matrix((ones, (range(n_sampled), I)), shape=(n_sampled, T))
@@ -71,10 +97,12 @@ def psolvecorr(D, C, mincorr=0.0, robust_sigma=0, robust_iter=5, max_dt=None):
     if robust_sigma is not None and robust_sigma > 0:
         idx = slice(None)
         for _ in trange(robust_iter, desc="robust lsqr"):
-            p, *_ = sparse.linalg.lsqr(A[idx], V[idx])
+            I_ = I[idx]
+            J_ = J[idx]
+            p = weighted_lsqr(S[I_, J_], D[I_, J_], I_, J_, T, p0)
             idx = np.flatnonzero(np.abs(zscore(A @ p - V)) <= robust_sigma)
     else:
-        p, *_ = sparse.linalg.lsqr(A, V)
+        p = weighted_lsqr(S[I, J], D[I, J], I, J, T, p0)
 
     return p
 
