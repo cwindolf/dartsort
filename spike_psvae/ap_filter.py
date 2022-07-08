@@ -8,7 +8,7 @@ from neurodsp.utils import rms
 from neurodsp import voltage
 from pathlib import Path
 
-from spike_psvae.subtract import get_binary_length, read_data
+from spike_psvae.spikeio import get_binary_length, read_data
 
 
 def run_preprocessing(
@@ -55,7 +55,7 @@ def run_preprocessing(
         the bandpass filter
     """
     assert standardize in (None, "none", "perchan", "global")
-    T_samples, T_seconds = get_binary_length(raw_bin, n_channels + extra_channels, fs)
+    T_samples, T_seconds = get_binary_length(raw_bin, n_channels + extra_channels, fs, dtype=in_dtype)
     print("T_samples", T_samples, "T_seconds", T_seconds)
 
     # preprocessed chunk factory
