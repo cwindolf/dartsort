@@ -3,11 +3,11 @@ from pathlib import Path
 import numpy as np
 
 
-def get_binary_length(input_bin, n_channels, sampling_rate, nsync=0):
+def get_binary_length(input_bin, n_channels, sampling_rate, nsync=0, dtype=np.float32):
     """How long is this binary file in samples and seconds?"""
     bin_size = Path(input_bin).stat().st_size
-    assert not bin_size % np.dtype(np.float32).itemsize
-    bin_size = bin_size // np.dtype(np.float32).itemsize
+    assert not bin_size % np.dtype(dtype).itemsize
+    bin_size = bin_size // np.dtype(dtype).itemsize
     assert not bin_size % (nsync + n_channels)
     T_samples = bin_size // (nsync + n_channels)
     T_sec = T_samples / sampling_rate
