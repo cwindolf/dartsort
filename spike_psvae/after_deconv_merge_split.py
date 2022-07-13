@@ -357,7 +357,7 @@ def merge(
     firstchans,
     geom,
     n_chan_merge=10,
-    tpca=PCA(8),
+    tpca=PCA(5),
     n_temp=10,
     distance_threshold=3.0,
     always_merge_threshold=0.0,  # haven't picked a good default yet
