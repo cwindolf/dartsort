@@ -9,6 +9,7 @@ import string
 import numpy as np
 import pandas as pd
 from scipy.spatial import KDTree
+import matplotlib.pyplot as plt
 
 from spikeinterface.extractors import NumpySorting
 from spikeinterface.comparison import compare_sorter_to_ground_truth
@@ -69,6 +70,7 @@ class Sorting:
         
         if self.templates is not None:
             self.template_ptps = self.templates.ptp(1)
+            self.template_maxptps = self.template_ptps.max(1)
             self.template_maxchans = self.template_ptps.argmax(1)
             self.template_locs = localize_index.localize_ptps_index(
                 self.template_ptps,
@@ -82,7 +84,7 @@ class Sorting:
             self.template_xzptp = np.c_[
                 self.template_locs[0],
                 self.template_locs[3],
-                self.template_ptps.max(1),
+                self.template_maxptps,
             ]
 
         if spike_maxchans is None:
@@ -148,7 +150,6 @@ class HybridComparison:
         self.unsorted_false_discovery_rate = fp / (tp + fp)
         self.unsorted_miss_rate = fn / num_gt
 
-
 # -- library
 
 
@@ -180,14 +181,14 @@ _na_avg_performance = pd.Series(
 # -- plotting helpers
 
 
-def plotgistic(x="gt_ptp", y=None, c="gt_firing_rate", title=None, cmap=plt.cm.plasma):
+def plotgistic(df, x="gt_ptp", y=None, c="gt_firing_rate", title=None, cmap=plt.cm.plasma):
     ylab = y
     xlab = x
     clab = c
-    y = unit_df[y].values
-    x = unit_df[x].values
+    y = df[y].values
+    x = df[x].values
     X = sm.add_constant(x)
-    c = unit_df[c].values
+    c = df[c].values
     
     def resids(beta):
         return y - 1 / (1 + np.exp(-X @ beta))
