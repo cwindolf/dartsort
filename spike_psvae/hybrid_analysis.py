@@ -14,6 +14,7 @@ import matplotlib.pyplot as plt
 from spikeinterface.extractors import NumpySorting
 from spikeinterface.comparison import compare_sorter_to_ground_truth
 
+from spike_psvae.spikeio import get_binary_length
 from spike_psvae.deconvolve import get_templates
 from spike_psvae import localize_index
 
@@ -36,12 +37,16 @@ class Sorting:
         spike_maxchans=None,
         spike_xzptp=None,
         unsorted=False,
+        fs=30_000,
     ):
         n_spikes_full = spike_labels.shape[0]
         assert spike_labels.shape == spike_times.shape == (n_spikes_full,)
+        T_samples, T_sec = get_binary_length(raw_bin, len(geom), fs)
 
         self.name = name
-        self.name_lo = name.lower().replace(string.whitespace + string.punctuation, "_")
+        self.name_lo = name.lower().replace(
+            string.whitespace + string.punctuation, "_"
+        )
 
         which = np.flatnonzero(spike_labels >= 0)
         which = which[np.argsort(spike_times[which])]
@@ -50,8 +55,13 @@ class Sorting:
         self.raw_bin = raw_bin
         self.spike_times = spike_times[which]
         self.spike_labels = spike_labels[which]
-        self.unit_labels, self.unit_spike_counts = np.unique(self.spike_labels, return_counts=True)
-        self.contiguous_labels = self.unit_labels.size == self.unit_labels.max() + 1
+        self.unit_labels, self.unit_spike_counts = np.unique(
+            self.spike_labels, return_counts=True
+        )
+        self.unit_firing_rates = self.unit_spike_counts / T_sec
+        self.contiguous_labels = (
+            self.unit_labels.size == self.unit_labels.max() + 1
+        )
 
         self.np_sorting = NumpySorting.from_times_labels(
             times_list=self.spike_times,
@@ -67,7 +77,7 @@ class Sorting:
                 self.spike_labels,
                 geom,
             )
-        
+
         if self.templates is not None:
             self.template_ptps = self.templates.ptp(1)
             self.template_maxptps = self.template_ptps.max(1)
@@ -89,7 +99,10 @@ class Sorting:
 
         if spike_maxchans is None:
             assert not unsorted
-            print("Sorting", name, "has no intrinsic maxchans. Using template maxchans.")
+            print(
+                f"Sorting {name} has no intrinsic maxchans. "
+                "Using template maxchans."
+            )
             self.spike_maxchans = self.template_maxchans[self.spike_labels]
         else:
             assert spike_maxchans.shape == (n_spikes_full,)
@@ -103,16 +116,19 @@ class Sorting:
         if spike_xzptp is not None:
             assert spike_xzptp.shape == (n_spikes_full, 3)
             self.spike_xzptp = spike_xzptp[which]
-            
+
+
 class HybridComparison:
     def __init__(self, gt_sorting, new_sorting):
         assert gt_sorting.contiguous_labels
-        
+
         self.gt_sorting = gt_sorting
         self.new_sorting = new_sorting
         self.unsorted = new_sorting.unsorted
-        
-        self.average_performance = self.weighted_average_performance = _na_avg_performance
+
+        self.average_performance = (
+            self.weighted_average_performance
+        ) = _na_avg_performance
         if not new_sorting.unsorted:
             self.gt_comparison = compare_sorter_to_ground_truth(
                 gt_sorting.np_sorting,
@@ -133,9 +149,9 @@ class HybridComparison:
             )
             # average metrics, weighting each unit by its spike count
             self.weighted_average_performance = (
-                (self.performance_by_unit * gt_sorting.unit_spike_counts[:, None]).sum(0)
-                / gt_sorting.unit_spike_counts.sum()
-            )
+                self.performance_by_unit
+                * gt_sorting.unit_spike_counts[:, None]
+            ).sum(0) / gt_sorting.unit_spike_counts.sum()
 
         # unsorted performance
         tp, fn, fp, num_gt = unsorted_confusion(
@@ -153,18 +169,22 @@ class HybridComparison:
 # -- library
 
 
-def unsorted_confusion(gt_spike_index, new_spike_index, n_samples=12, n_channels=4):
+def unsorted_confusion(
+    gt_spike_index, new_spike_index, n_samples=12, n_channels=4
+):
     cmul = n_samples / n_channels
     n_gt_spikes = len(gt_spike_index)
     n_new_spikes = len(gt_spike_index)
 
     gt_kdt = KDTree(np.c_[gt_spike_index[:, 0], gt_spike_index[:, 1] * cmul])
-    sorter_kdt = KDTree(np.c_[new_spike_index[:, 0], cmul * new_spike_index[:, 1]])
+    sorter_kdt = KDTree(
+        np.c_[new_spike_index[:, 0], cmul * new_spike_index[:, 1]]
+    )
     query = gt_kdt.query_ball_tree(sorter_kdt, n_samples + 0.1)
 
     # this is a boolean array of length n_gt_spikes
     detected = np.array([len(lst) > 0 for lst in query], dtype=bool)
-    
+
     # from the above, we can compute a couple of metrics
     true_positives = detected.sum()
     false_negatives = n_gt_spikes - true_positives
@@ -172,8 +192,15 @@ def unsorted_confusion(gt_spike_index, new_spike_index, n_samples=12, n_channels
 
     return true_positives, false_negatives, false_positives, n_gt_spikes
 
+
 _na_avg_performance = pd.Series(
-    index=["accuracy", "recall", "precision", "false_discovery_rate", "miss_rate"],
+    index=[
+        "accuracy",
+        "recall",
+        "precision",
+        "false_discovery_rate",
+        "miss_rate",
+    ],
     data=[np.nan] * 5,
 )
 
@@ -192,30 +219,35 @@ def plotgistic(df, x="gt_ptp", y=None, c="gt_firing_rate", title=None, cmap=plt.
     
     def resids(beta):
         return y - 1 / (1 + np.exp(-X @ beta))
+
     res = least_squares(resids, np.array([1, 1]))
     b = res.x
-    
+
     fig, ax = plt.subplots()
     sort = np.argsort(x)
     domain = np.linspace(x.min(), x.max())
-    l, = ax.plot(domain, 1 / (1 + np.exp(-sm.add_constant(domain) @ b)), color="k")
-    
+    (l,) = ax.plot(
+        domain, 1 / (1 + np.exp(-sm.add_constant(domain) @ b)), color="k"
+    )
+
     ax.set_ylim([-0.05, 1.05])
     ax.set_xlim([x.min() - 0.5, x.max() + 0.5])
 
     leg = ax.scatter(x, y, marker="x", c=c, cmap=cmap, alpha=0.75)
-    
+
     plt.ylabel(ylab)
     plt.xlabel(xlab)
     h, labs = leg.legend_elements(num=4)
     ax.legend(
-        (*h, l), (*labs, "logistic fit"),
-        title=clab, loc="center left",
+        (*h, l),
+        (*labs, "logistic fit"),
+        title=clab,
+        loc="center left",
         bbox_to_anchor=(1.0, 0.5),
         frameon=False,
     )
     if title:
         n_missed = (y < 1e-8).sum()
         plt.title(title + f" -- {n_missed} missed")
-    
+
     return fig, ax
