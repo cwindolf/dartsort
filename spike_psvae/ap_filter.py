@@ -62,8 +62,8 @@ def run_preprocessing(
     T_samples, T_seconds = get_binary_length(raw_bin, n_channels + extra_channels, fs, dtype=in_dtype)
     print("T_samples", T_samples, "T_seconds", T_seconds)
 
-    s_start = t_start * fs
-    s_end = t_end * fs if t_end is not None else T_samples
+    s_start = int(np.floor(t_start * fs))
+    s_end = int(np.floor(t_end * fs)) if t_end is not None else T_samples
     assert 0 <= s_start < s_end <= T_samples
 
     # preprocessed chunk factory
@@ -91,7 +91,7 @@ def run_preprocessing(
     if do_filter:
         rmss = []
         with open(out_bin, "wb") as out:
-            for i, s in enumerate(trange(0, T_samples, fs * chunk_seconds, desc="filter")):
+            for i, s in enumerate(trange(s_start, s_end, fs * chunk_seconds, desc="filter")):
                 chunk = get_chunk(s, min(T_samples, s + fs * chunk_seconds))
 
                 with noint:
@@ -100,7 +100,7 @@ def run_preprocessing(
 
                 if debug_imshow and not i % debug_imshow:
                     fig = plt.figure()
-                    plt.imshow(chunk.T, aspect=chunk.shape[1] / chunk.shape[0])
+                    plt.imshow(chunk.T, aspect=chunk.shape[0] / chunk.shape[1])
                     plt.show()
                     plt.close(fig)
 
@@ -253,7 +253,11 @@ def make_chunk_preprocessor(
 
         if lfp_destripe:
             chunk_shape = chunk.shape
-            chunk = voltage.destripe_lfp(chunk.T, fs).T
+            # chunk = voltage.destripe_lfp(chunk.T, fs).T
+            kwargs = {}
+            kwargs['butter_kwargs'] = {'N': 3, 'Wn': 4 / (12 * fs), 'btype': 'highpass'}
+            kwargs['k_filter'] = False
+            chunk = voltage.destripe(chunk.T, fs, **kwargs).T
             assert chunk.shape == (chunk_shape[0], n_channels)
 
         if resample_to is not None:

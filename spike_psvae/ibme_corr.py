@@ -84,8 +84,6 @@ def psolvecorr(D, C, mincorr=0.0, robust_sigma=0, robust_iter=5, max_dt=None):
     I, J = np.where(S == 1)
     n_sampled = I.shape[0]
 
-    p0 = D.mean(axis=1)
-
     # construct Kroneckers
     ones = np.ones(n_sampled)
     M = sparse.csr_matrix((ones, (range(n_sampled), I)), shape=(n_sampled, T))
@@ -97,12 +95,10 @@ def psolvecorr(D, C, mincorr=0.0, robust_sigma=0, robust_iter=5, max_dt=None):
     if robust_sigma is not None and robust_sigma > 0:
         idx = slice(None)
         for _ in trange(robust_iter, desc="robust lsqr"):
-            I_ = I[idx]
-            J_ = J[idx]
-            p = weighted_lsqr(S[I_, J_], D[I_, J_], I_, J_, T, p0)
+            p, *_ = sparse.linalg.lsqr(A[idx], V[idx])
             idx = np.flatnonzero(np.abs(zscore(A @ p - V)) <= robust_sigma)
     else:
-        p = weighted_lsqr(S[I, J], D[I, J], I, J, T, p0)
+        p, *_ = sparse.linalg.lsqr(A, V)
 
     return p
 
