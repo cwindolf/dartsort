@@ -7,6 +7,7 @@ from tqdm.auto import trange
 from neurodsp.utils import rms
 from neurodsp import voltage
 from pathlib import Path
+import matplotlib.pyplot as plt
 
 from spike_psvae.spikeio import get_binary_length, read_data
 
@@ -32,6 +33,9 @@ def run_preprocessing(
     in_dtype=np.int16,
     rmss=None,
     avg_depth=False,
+    t_start=0,
+    t_end=None,
+    debug_imshow=False,
 ):
     """Just preprocessing. For spike detection, use method below.
 
@@ -58,6 +62,10 @@ def run_preprocessing(
     T_samples, T_seconds = get_binary_length(raw_bin, n_channels + extra_channels, fs, dtype=in_dtype)
     print("T_samples", T_samples, "T_seconds", T_seconds)
 
+    s_start = t_start * fs
+    s_end = t_end * fs if t_end is not None else T_samples
+    assert 0 <= s_start < s_end <= T_samples
+
     # preprocessed chunk factory
     get_chunk = make_chunk_preprocessor(
         raw_bin,
@@ -83,11 +91,19 @@ def run_preprocessing(
     if do_filter:
         rmss = []
         with open(out_bin, "wb") as out:
-            for s in trange(0, T_samples, fs * chunk_seconds, desc="filter"):
+            for i, s in enumerate(trange(0, T_samples, fs * chunk_seconds, desc="filter")):
+                chunk = get_chunk(s, min(T_samples, s + fs * chunk_seconds))
+
                 with noint:
-                    chunk = get_chunk(s, min(T_samples, s + fs * chunk_seconds))
                     rmss.append(rms(chunk.T))
                     chunk.tofile(out)
+
+                if debug_imshow and not i % debug_imshow:
+                    fig = plt.figure()
+                    plt.imshow(chunk.T, aspect=chunk.shape[1] / chunk.shape[0])
+                    plt.show()
+                    plt.close(fig)
+
         rmss = np.r_[rmss]
 
     if standardize in (None, "none"):
@@ -235,15 +251,15 @@ def make_chunk_preprocessor(
         if pad_for_filter > 0:
             chunk = chunk[pad_for_filter:-pad_for_filter]
 
+        if lfp_destripe:
+            chunk_shape = chunk.shape
+            chunk = voltage.destripe_lfp(chunk.T, fs).T
+            assert chunk.shape == (chunk_shape[0], n_channels)
+
         if resample_to is not None:
             assert not fs % resample_to
             n_samples_out = chunk.shape[0] // (fs // resample_to)
             chunk = signal.resample(chunk, n_samples_out)
-
-        if lfp_destripe:
-            chunk_shape = chunk.shape
-            chunk = voltage.destripe_lfp(chunk.T, resample_to).T
-            assert chunk.shape == (chunk_shape[0], n_channels)
 
         if avg_depth:
             # average same depth channels
