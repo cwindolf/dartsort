@@ -5,11 +5,13 @@ data that would be used when making summary plots, and which compute
 some metrics etc in the constructor. They help make wrangling a bunch
 of sorts a little easier.
 """
-import string
+import re
 import numpy as np
 import pandas as pd
 from scipy.spatial import KDTree
 import matplotlib.pyplot as plt
+import statsmodels.api as sm
+from scipy.optimize import least_squares
 
 from spikeinterface.extractors import NumpySorting
 from spikeinterface.comparison import compare_sorter_to_ground_truth
@@ -44,9 +46,7 @@ class Sorting:
         T_samples, T_sec = get_binary_length(raw_bin, len(geom), fs)
 
         self.name = name
-        self.name_lo = name.lower().replace(
-            string.whitespace + string.punctuation, "_"
-        )
+        self.name_lo = re.sub('[^a-z0-9]+', '_', name.lower())
 
         which = np.flatnonzero(spike_labels >= 0)
         which = which[np.argsort(spike_times[which])]
@@ -142,11 +142,11 @@ class HybridComparison:
             )
 
             # matching units and accuracies
-            self.performance_by_unit = self.gt_comparison.get_performance()
+            self.performance_by_unit = self.gt_comparison.get_performance().astype(float)
             # average the metrics over units
             self.average_performance = self.gt_comparison.get_performance(
                 method="pooled_with_average"
-            )
+            ).astype(float)
             # average metrics, weighting each unit by its spike count
             self.weighted_average_performance = (
                 self.performance_by_unit
@@ -208,7 +208,7 @@ _na_avg_performance = pd.Series(
 # -- plotting helpers
 
 
-def plotgistic(df, x="gt_ptp", y=None, c="gt_firing_rate", title=None, cmap=plt.cm.plasma):
+def plotgistic(df, x="gt_ptp", y=None, c="gt_firing_rate", title=None, cmap=plt.cm.plasma, legend=True, ax=None):
     ylab = y
     xlab = x
     clab = c
@@ -220,10 +220,14 @@ def plotgistic(df, x="gt_ptp", y=None, c="gt_firing_rate", title=None, cmap=plt.
     def resids(beta):
         return y - 1 / (1 + np.exp(-X @ beta))
 
-    res = least_squares(resids, np.array([1, 1]))
+    res = least_squares(resids, np.array([1., 1]))
     b = res.x
 
-    fig, ax = plt.subplots()
+    if ax is None:
+        fig, ax = plt.subplots()
+    else:
+        fig = ax.figure
+
     sort = np.argsort(x)
     domain = np.linspace(x.min(), x.max())
     (l,) = ax.plot(
@@ -235,17 +239,18 @@ def plotgistic(df, x="gt_ptp", y=None, c="gt_firing_rate", title=None, cmap=plt.
 
     leg = ax.scatter(x, y, marker="x", c=c, cmap=cmap, alpha=0.75)
 
-    plt.ylabel(ylab)
-    plt.xlabel(xlab)
+    ax.set_ylabel(ylab)
+    ax.set_xlabel(xlab)
     h, labs = leg.legend_elements(num=4)
-    ax.legend(
-        (*h, l),
-        (*labs, "logistic fit"),
-        title=clab,
-        loc="center left",
-        bbox_to_anchor=(1.0, 0.5),
-        frameon=False,
-    )
+    if legend:
+        ax.legend(
+            (*h, l),
+            (*labs, "logistic fit"),
+            title=clab,
+            loc="center left",
+            bbox_to_anchor=(1.0, 0.5),
+            frameon=False,
+        )
     if title:
         n_missed = (y < 1e-8).sum()
         plt.title(title + f" -- {n_missed} missed")
