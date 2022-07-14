@@ -6,7 +6,7 @@ import pandas
 import hdbscan
 from spike_psvae import triage
 from tqdm.auto import tqdm
-
+import scipy
 
 def read_waveforms(
     spike_times,
@@ -412,16 +412,6 @@ def cluster_spikes(
     split_big=False,
     split_big_kw=dict(dx=40, dz=48, min_size_split=50), 
     do_subsample=False):
-    
-    if do_subsample:
-        print(f"subsampling from {z.size} spikes")
-        n_spikes = 1000
-        selected_spike_indices = subsample_spikes(n_spikes=1000, spike_index=spike_index, method='uniform_locations', x=x, z=z)
-        x = x[selected_spike_indices]
-        z = z[selected_spike_indices]
-        maxptps = maxptps[selected_spike_indices]
-        spike_index = spike_index[selected_spike_indices]
-        print(f"{z.size} spikes")
         
     # copy high-ptp spikes
     true_spike_indices = np.stack(
@@ -439,9 +429,22 @@ def cluster_spikes(
             num_duplicates_list=[0, 1, 2, 3, 4],
         )
         print(f"{z.size} spikes")
+        
+    if do_subsample:
+        print(f"subsampling from {z.size} spikes")
+        n_spikes = 2000
+        selected_spike_indices = subsample_spikes(n_spikes=n_spikes, spike_index=spike_index, 
+                                                  method='smart_sampling_amplitudes', x=x, z=z, maxptps=maxptps)
+        x = x[selected_spike_indices]
+        z = z[selected_spike_indices]
+        maxptps = maxptps[selected_spike_indices]
+        spike_index = spike_index[selected_spike_indices]
+        true_spike_indices = true_spike_indices[selected_spike_indices]
+        print(f"{z.size} spikes")
 
     # triage low ptp spikes to improve density-based clustering
     if triage_quantile < 100:
+        print(f"triaging from {z.size} spikes")
         (
             idx_keep,
             high_ptp_filter,
@@ -475,7 +478,7 @@ def cluster_spikes(
         maxptps = maxptps[final_keep_indices]
         spike_index = spike_index[final_keep_indices]
         true_spike_indices = true_spike_indices[final_keep_indices]
-
+        print(f"{z.size} spikes")
     # create feature set for clustering
     features = np.c_[x * scales[0], z * scales[1], np.log(maxptps) * scales[2]]
 
@@ -719,12 +722,16 @@ def make_labels_contiguous(labels, in_place=False, return_unique=False):
         return out, unique
     return out
 
-def subsample_spikes(n_spikes, spike_index, method='uniform', x=None, z=None, maxptps=None):
+def subsample_spikes(n_spikes, spike_index, method='uniform', x=None, z=None, maxptps=None, num_channels=384):
+    #can subsample with number of spikes (int) or percentage of spikes (0.0-1.0 float)
+    assert type(n_spikes) == int or type(n_spikes) == float
     selected_spike_indices = []
     if method == 'uniform':
-        for channel in range(384):
+        for channel in range(num_channels):
             spike_indices_channel = np.where(spike_index[:,1] == channel)[0]
-            max_peaks = min(spike_indices_channel.size, n_spikes)
+            if type(n_spikes) == float:
+                n_spikes_chan = int(n_spikes*len(spike_indices_channel))
+            max_peaks = min(spike_indices_channel.size, n_spikes_chan)
             selected_spike_indices += [np.random.choice(spike_indices_channel, size=max_peaks, replace=False)]        
     if method == 'uniform_locations':
         n_bins = (50, 50)
@@ -742,71 +749,50 @@ def subsample_spikes(n_spikes, spike_index, method='uniform', x=None, z=None, ma
         for i in range(n_bins[0]):
             for j in range(n_bins[1]):
                 spike_indices = np.where((x_idx == i) & (z_idx == j))[0]
-                max_peaks = min(spike_indices.size, n_spikes)
+                if type(n_spikes) == float:
+                    n_spikes_bin = int(n_spikes*len(spike_indices))
+                max_peaks = min(spike_indices.size, n_spikes_bin)
                 selected_spike_indices += [np.random.choice(spike_indices, size=max_peaks, replace=False)]
                 
     if method == 'smart_sampling_amplitudes':
-        for channel in range(384):
+        for channel in range(num_channels):
+            n_bins = 50
+            assert maxptps is not None
             spike_indices_channel = np.where(spike_index[:,1] == channel)[0]
             sub_maxptps = maxptps[spike_indices_channel]  
-            valid_indices = get_valid_indices(params, snrs, n_bins=50)
-        selected_peaks += [peaks_indices[valid_indices]]
+            if type(n_spikes) == float:
+                n_spikes_chan = int(n_spikes*len(spike_indices_channel))
+            valid_indices = get_valid_indices(sub_maxptps, n_bins=n_bins, n_spikes=n_spikes_chan)
+            selected_spike_indices += [spike_indices_channel[valid_indices]]
                 
     selected_spike_indices = np.sort(np.concatenate(selected_spike_indices))
     return selected_spike_indices
 
-# def reject_rate(x, d, a, target, n_bins):
-#             return (np.mean(n_bins*a*np.clip(1 - d*x, 0, 1)) - target)**2
+def reject_rate(x, d, a, target, n_bins):
+    return (np.mean(n_bins*a*np.clip(1 - d*x, 0, 1)) - target)**2
     
-# def get_valid_indices(maxptps, n_bins, n_spikes, exponent=1):
-#     assert n_bins is not None
-#     bins = np.linspace(maxptps.min(), maxptps.max(), n_bins)
-#     x, y = np.histogram(maxptps, bins=bins)
-#     histograms = {'probability' : x/x.sum(), 'maxptps' : y[1:]}
-#     indices = np.searchsorted(histograms['maxptps'], maxptps)
+def get_valid_indices(maxptps, n_bins, n_spikes, exponent=1):
+    assert n_bins is not None
+    bins = np.linspace(maxptps.min(), maxptps.max(), n_bins)
+    x, y = np.histogram(maxptps, bins=bins)
+    histograms = {'probability' : x/x.sum(), 'maxptps' : y[1:]}
+    indices = np.searchsorted(histograms['maxptps'], maxptps)
 
-#     probabilities = histograms['probability']
-#     z = probabilities[probabilities > 0]
-#     c = 1.0 / np.min(z)
-#     d = np.ones(len(probabilities))
-#     d[probabilities > 0] = 1. / (c * z)
-#     d = np.minimum(1, d)
-#     d /= np.sum(d)
-#     twist = np.sum(probabilities * d)
-#     factor = twist * c
+    probabilities = histograms['probability']
+    z = probabilities[probabilities > 0]
+    c = 1.0 / np.min(z)
+    d = np.ones(len(probabilities))
+    d[probabilities > 0] = 1. / (c * z)
+    d = np.minimum(1, d)
+    d /= np.sum(d)
+    twist = np.sum(probabilities * d)
+    factor = twist * c
 
-#     target_rejection = (1 - max(0, n_spikes/len(indices)))**exponent
-#     res = scipy.optimize.fmin(reject_rate, factor, args=(d, probabilities, target_rejection, n_bins), disp=False)
-#     rejection_curve = np.clip(1 - d*res[0], 0, 1)
+    target_rejection = (1 - max(0, n_spikes/len(indices)))**exponent
+    res = scipy.optimize.fmin(reject_rate, factor, args=(d, probabilities, target_rejection, n_bins), disp=False)
+    rejection_curve = np.clip(1 - d*res[0], 0, 1)
 
-#     acceptation_threshold = rejection_curve[indices]
-#     valid_indices = acceptation_threshold < np.random.rand(len(indices))
+    acceptation_threshold = rejection_curve[indices]
+    valid_indices = acceptation_threshold < np.random.rand(len(indices))
 
-#     return valid_indices
-
-# def get_valid_indices(params, snrs, exponent=1, n_bins=None):
-#     if n_bins is None:
-#         n_bins = params['n_bins']
-#     bins = np.linspace(snrs.min(), snrs.max(), n_bins)
-#     x, y = np.histogram(snrs, bins=bins)
-#     histograms = {'probability' : x/x.sum(), 'snrs' : y[1:]}
-#     indices = np.searchsorted(histograms['snrs'], snrs)
-
-#     probabilities = histograms['probability']
-#     z = probabilities[probabilities > 0]
-#     c = 1.0 / np.min(z)
-#     d = np.ones(len(probabilities))
-#     d[probabilities > 0] = 1. / (c * z)
-#     d = np.minimum(1, d)
-#     d /= np.sum(d)
-#     twist = np.sum(probabilities * d)
-#     factor = twist * c
-
-#     target_rejection = (1 - max(0, params['n_peaks']/len(indices)))**exponent
-#     res = scipy.optimize.fmin(reject_rate, factor, args=(d, probabilities, target_rejection, n_bins), disp=False)
-#     rejection_curve = np.clip(1 - d*res[0], 0, 1)
-
-#     acceptation_threshold = rejection_curve[indices]
-#     valid_indices = acceptation_threshold < np.random.rand(len(indices))
-
-#     return valid_indices
+    return valid_indices
