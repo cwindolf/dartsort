@@ -119,7 +119,7 @@ class Sorting:
 
     def get_unit_maxchans(self, unit):
         return self.spike_maxchans[self.spike_labels == unit]
-    
+
     @property
     def np_sorting(self):
         return NumpySorting.from_times_labels(
@@ -170,13 +170,13 @@ class HybridComparison:
                 match_score=0.1,
                 verbose=True,
             )
-            
+
             self.best_match_12 = gt_comparison.best_match_12.values.astype(int)
             self.gt_matched = self.best_match_12 >= 0
 
             # matching units and accuracies
-            self.performance_by_unit = (
-                gt_comparison.get_performance().astype(float)
+            self.performance_by_unit = gt_comparison.get_performance().astype(
+                float
             )
             # average the metrics over units
             self.average_performance = gt_comparison.get_performance(
@@ -200,17 +200,14 @@ class HybridComparison:
         self.unsorted_precision = tp / (tp + fp)
         self.unsorted_false_discovery_rate = fp / (tp + fp)
         self.unsorted_miss_rate = fn / num_gt
-    
+
     def get_best_new_match(self, gt_unit):
         return int(self.best_match_12[gt_unit])
-    
+
     def get_closest_new_unit(self, gt_unit):
         gt_loc = self.gt_sorting.template_xzptp[gt_unit]
         new_template_locs = self.new_sorting.template_xzptp
         return np.argmin(cdist(gt_loc[None], new_template_locs).squeeze())
-        
-
-
 
 
 # -- library
@@ -323,7 +320,7 @@ def make_diagnostic_plot(hybrid_comparison, gt_unit):
     if new_unit < 0:
         new_unit = hybrid_comparison.get_closest_new_unit(gt_unit)
         new_str = f"No {hybrid_comparison.new_sorting.name} match, using closest unit {new_unit}."
-    
+
     gt_np_sorting = hybrid_comparison.gt_sorting.np_sorting
     new_np_sorting = hybrid_comparison.new_sorting.np_sorting
     gt_spike_train = gt_np_sorting.get_unit_spike_train(gt_unit)
@@ -371,5 +368,37 @@ def make_diagnostic_plot(hybrid_comparison, gt_unit):
 
 def array_scatter_vs(scatter_comparison, vs_comparison):
     fig, axes = scatter_comparison.new_sorting.array_scatter()
+    scatter_match = scatter_comparison.gt_matched
+    vs_match = vs_comparison.gt_matched
+    match = scatter_match + 2 * vs_match
+    colors = ["k", "b", "r", "purple"]
 
+    gt_x, gt_z, gt_ptp = scatter_comparison.gt_sorting.template_xzptp.T
+    log_gt_ptp = np.log(gt_ptp)
 
+    ls = []
+    for i, c in enumerate(colors):
+        matchix = match == i
+        gtxix = gt_x[matchix]
+        gtzix = gt_z[matchix]
+        gtpix = log_gt_ptp[matchix]
+        axes[0].scatter(gtxix, gtzix, color=c, marker="x", s=15)
+        axes[2].scatter(gtxix, gtzix, color=c, marker="x", s=15)
+        l = axes[1].scatter(gtpix, gtzix, color=c, marker="x", s=15)
+        ls.append(l)
+
+    leg_artist = plt.figlegend(
+        ls,
+        [
+            "no match",
+            f"{scatter_comparison.new_sorting.name} match",
+            f"{vs_comparison.new_sorting.name} match",
+            "both",
+        ],
+        loc="lower center",
+        ncol=4,
+        frameon=False,
+        borderaxespad=-10,
+    )
+
+    return fig, axes, leg_artist
