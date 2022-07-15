@@ -12,6 +12,7 @@ from scipy.spatial import KDTree
 import matplotlib.pyplot as plt
 import statsmodels.api as sm
 from scipy.optimize import least_squares
+from scipy.spatial.distance import cdist
 
 from spikeinterface.extractors import NumpySorting
 from spikeinterface.comparison import compare_sorter_to_ground_truth
@@ -180,6 +181,15 @@ class HybridComparison:
         self.unsorted_precision = tp / (tp + fp)
         self.unsorted_false_discovery_rate = fp / (tp + fp)
         self.unsorted_miss_rate = fn / num_gt
+    
+    def get_best_new_match(self, gt_unit):
+        return int(self.gt_comparison.best_match_12[gt_unit])
+    
+    def get_closest_new_unit(self, gt_unit):
+        gt_loc = self.gt_sorting.template_xzptp[gt_unit]
+        new_template_locs = self.new_sorting.template_xzptp
+        return np.argmin(cdist(gt_loc[None], new_template_locs).squeeze())
+        
 
 
 # -- library
@@ -287,15 +297,20 @@ def plotgistic(
 
 
 def make_diagnostic_plot(hybrid_comparison, gt_unit):
-    new_unit = hybrid_comparison.gt_comparison.get_best_unit_match1(gt_unit)
+    new_unit = hybrid_comparison.get_best_new_match(gt_unit)
+    new_str = f"{hybrid_comparison.new_sorting.name} match {new_unit}"
+    if new_unit < 0:
+        new_unit = hybrid_comparison.get_closest_new_unit(gt_unit)
+        new_str = f"No {hybrid_comparison.new_sorting.name} match, using closest unit {new_unit}."
+    
     gt_np_sorting = hybrid_comparison.gt_sorting.np_sorting
     new_np_sorting = hybrid_comparison.new_sorting.np_sorting
     gt_spike_train = gt_np_sorting.get_unit_spike_train(gt_unit)
     new_spike_train = new_np_sorting.get_unit_spike_train(new_unit)
     gt_maxchans = hybrid_comparison.gt_sorting.get_unit_maxchans(gt_unit)
     new_maxchans = hybrid_comparison.new_sorting.get_unit_maxchans(new_unit)
-    gt_template_zs = hybrid_comparison.gt_sorting.template_locs[:, 2]
-    new_template_zs = hybrid_comparison.new_sorting.template_locs[:, 2]
+    gt_template_zs = hybrid_comparison.gt_sorting.template_locs[2]
+    new_template_zs = hybrid_comparison.new_sorting.template_locs[2]
 
     gt_ptp = hybrid_comparison.gt_sorting.template_maxptps[gt_unit]
 
@@ -328,7 +343,6 @@ def make_diagnostic_plot(hybrid_comparison, gt_unit):
         num_close_clusters=5,
     )
 
-    new_str = f"{hybrid_comparison.new_sorting.name} match {new_unit}"
     fig.suptitle(f"GT unit {gt_unit}. {new_str}")
 
     return fig, gt_ptp
