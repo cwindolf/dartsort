@@ -18,7 +18,7 @@ from spikeinterface.comparison import compare_sorter_to_ground_truth
 
 from spike_psvae.spikeio import get_binary_length
 from spike_psvae.deconvolve import get_templates
-from spike_psvae import localize_index, cluster_viz
+from spike_psvae import localize_index, cluster_viz, cluster_viz_index
 
 
 class Sorting:
@@ -46,6 +46,7 @@ class Sorting:
         T_samples, T_sec = get_binary_length(raw_bin, len(geom), fs)
 
         self.name = name
+        self.geom = geom
         self.name_lo = re.sub("[^a-z0-9]+", "_", name.lower())
 
         which = np.flatnonzero(spike_labels >= 0)
@@ -123,6 +124,18 @@ class Sorting:
     def get_unit_maxchans(self, unit):
         return self.spike_maxchans[self.spike_labels == unit]
 
+    def array_scatter(self):
+        fig, axes = cluster_viz_index.array_scatter(
+            self.spike_labels,
+            self.geom,
+            self.spike_xzptp[:, 0],
+            self.spike_xzptp[:, 1],
+            self.spike_xzptp[:, 2],
+            annotate=False,
+        )
+        axes[0].scatter(*self.geom.T, marker="s", s=2, color="orange")
+        return fig, axes
+
 
 class HybridComparison:
     """
@@ -180,6 +193,8 @@ class HybridComparison:
         self.unsorted_precision = tp / (tp + fp)
         self.unsorted_false_discovery_rate = fp / (tp + fp)
         self.unsorted_miss_rate = fn / num_gt
+
+
 
 
 # -- library
@@ -332,3 +347,9 @@ def make_diagnostic_plot(hybrid_comparison, gt_unit):
     fig.suptitle(f"GT unit {gt_unit}. {new_str}")
 
     return fig, gt_ptp
+
+
+def array_scatter_vs(scatter_comparison, vs_comparison):
+    fig, axes = scatter_comparison.new_sorting.array_scatter()
+
+
