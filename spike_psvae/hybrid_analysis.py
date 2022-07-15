@@ -18,7 +18,7 @@ from spikeinterface.comparison import compare_sorter_to_ground_truth
 
 from spike_psvae.spikeio import get_binary_length
 from spike_psvae.deconvolve import get_templates
-from spike_psvae import localize_index
+from spike_psvae import localize_index, cluster_viz
 
 
 class Sorting:
@@ -46,7 +46,7 @@ class Sorting:
         T_samples, T_sec = get_binary_length(raw_bin, len(geom), fs)
 
         self.name = name
-        self.name_lo = re.sub('[^a-z0-9]+', '_', name.lower())
+        self.name_lo = re.sub("[^a-z0-9]+", "_", name.lower())
 
         which = np.flatnonzero(spike_labels >= 0)
         which = which[np.argsort(spike_times[which])]
@@ -117,14 +117,27 @@ class Sorting:
             assert spike_xzptp.shape == (n_spikes_full, 3)
             self.spike_xzptp = spike_xzptp[which]
 
+    def get_unit_spike_train(self, unit):
+        return self.np_sorting.get_unit_spike_train(unit)
+
+    def get_unit_maxchans(self, unit):
+        return self.spike_maxchans[self.spike_labels == unit]
+
 
 class HybridComparison:
-    def __init__(self, gt_sorting, new_sorting):
+    """
+    An object which computes some hybrid metrics and stores references
+    to the ground truth and compared sortings, so that everything is
+    in one place for later plotting / analysis code.
+    """
+
+    def __init__(self, gt_sorting, new_sorting, geom):
         assert gt_sorting.contiguous_labels
 
         self.gt_sorting = gt_sorting
         self.new_sorting = new_sorting
         self.unsorted = new_sorting.unsorted
+        self.geom = geom
 
         self.average_performance = (
             self.weighted_average_performance
@@ -142,7 +155,9 @@ class HybridComparison:
             )
 
             # matching units and accuracies
-            self.performance_by_unit = self.gt_comparison.get_performance().astype(float)
+            self.performance_by_unit = (
+                self.gt_comparison.get_performance().astype(float)
+            )
             # average the metrics over units
             self.average_performance = self.gt_comparison.get_performance(
                 method="pooled_with_average"
@@ -165,6 +180,7 @@ class HybridComparison:
         self.unsorted_precision = tp / (tp + fp)
         self.unsorted_false_discovery_rate = fp / (tp + fp)
         self.unsorted_miss_rate = fn / num_gt
+
 
 # -- library
 
@@ -208,7 +224,17 @@ _na_avg_performance = pd.Series(
 # -- plotting helpers
 
 
-def plotgistic(df, x="gt_ptp", y=None, c="gt_firing_rate", title=None, cmap=plt.cm.plasma, legend=True, ax=None):
+def plotgistic(
+    df,
+    x="gt_ptp",
+    y=None,
+    c="gt_firing_rate",
+    title=None,
+    cmap=plt.cm.plasma,
+    legend=True,
+    ax=None,
+    ylim=[-0.05, 1.05],
+):
     ylab = y
     xlab = x
     clab = c
@@ -216,31 +242,27 @@ def plotgistic(df, x="gt_ptp", y=None, c="gt_firing_rate", title=None, cmap=plt.
     x = df[x].values
     X = sm.add_constant(x)
     c = df[c].values
-    
-    def resids(beta):
-        return y - 1 / (1 + np.exp(-X @ beta))
-
-    res = least_squares(resids, np.array([1., 1]))
-    b = res.x
 
     if ax is None:
         fig, ax = plt.subplots()
     else:
         fig = ax.figure
 
-    sort = np.argsort(x)
+    # fit the logistic function to the data
+    def resids(beta):
+        return y - 1 / (1 + np.exp(-X @ beta))
+
+    res = least_squares(resids, np.array([1.0, 1]))
+    b = res.x
+
+    # plot the logistic line
     domain = np.linspace(x.min(), x.max())
     (l,) = ax.plot(
         domain, 1 / (1 + np.exp(-sm.add_constant(domain) @ b)), color="k"
     )
 
-    ax.set_ylim([-0.05, 1.05])
-    ax.set_xlim([x.min() - 0.5, x.max() + 0.5])
-
+    # scatter with legend
     leg = ax.scatter(x, y, marker="x", c=c, cmap=cmap, alpha=0.75)
-
-    ax.set_ylabel(ylab)
-    ax.set_xlabel(xlab)
     h, labs = leg.legend_elements(num=4)
     if legend:
         ax.legend(
@@ -251,8 +273,62 @@ def plotgistic(df, x="gt_ptp", y=None, c="gt_firing_rate", title=None, cmap=plt.
             bbox_to_anchor=(1.0, 0.5),
             frameon=False,
         )
+
     if title:
         n_missed = (y < 1e-8).sum()
         plt.title(title + f" -- {n_missed} missed")
 
+    ax.set_ylim(ylim)
+    ax.set_xlim([x.min() - 0.5, x.max() + 0.5])
+    ax.set_ylabel(ylab)
+    ax.set_xlabel(xlab)
+
     return fig, ax
+
+
+def make_diagnostic_plot(hybrid_comparison, gt_unit):
+    new_unit = hybrid_comparison.gt_comparison.get_best_unit_match1(gt_unit)
+    gt_np_sorting = hybrid_comparison.gt_sorting.np_sorting
+    new_np_sorting = hybrid_comparison.new_sorting.np_sorting
+    gt_spike_train = gt_np_sorting.get_unit_spike_train(gt_unit)
+    new_spike_train = new_np_sorting.get_unit_spike_train(new_unit)
+    gt_maxchans = hybrid_comparison.gt_sorting.get_unit_maxchans(gt_unit)
+    new_maxchans = hybrid_comparison.new_sorting.get_unit_maxchans(new_unit)
+    gt_template_zs = hybrid_comparison.gt_sorting.template_locs[:, 2]
+    new_template_zs = hybrid_comparison.new_sorting.template_locs[:, 2]
+
+    gt_ptp = hybrid_comparison.gt_sorting.template_maxptps[gt_unit]
+
+    fig = cluster_viz.diagnostic_plots(
+        new_unit,
+        gt_unit,
+        new_spike_train,
+        gt_spike_train,
+        hybrid_comparison.new_sorting.templates,
+        hybrid_comparison.gt_sorting.templates,
+        new_maxchans,
+        gt_maxchans,
+        hybrid_comparison.geom,
+        hybrid_comparison.gt_sorting.raw_bin,
+        dict(enumerate(new_template_zs)),
+        dict(enumerate(gt_template_zs)),
+        hybrid_comparison.new_sorting.spike_index,
+        hybrid_comparison.gt_sorting.spike_index,
+        hybrid_comparison.new_sorting.spike_labels,
+        hybrid_comparison.gt_sorting.spike_labels,
+        scale=7,
+        sorting1_name=hybrid_comparison.new_sorting.name,
+        sorting2_name=hybrid_comparison.gt_sorting.name,
+        num_channels=40,
+        num_spikes_plot=100,
+        t_range=(30, 90),
+        num_rows=3,
+        alpha=0.1,
+        delta_frames=12,
+        num_close_clusters=5,
+    )
+
+    new_str = f"{hybrid_comparison.new_sorting.name} match {new_unit}"
+    fig.suptitle(f"GT unit {gt_unit}. {new_str}")
+
+    return fig, gt_ptp
