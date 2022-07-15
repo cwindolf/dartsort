@@ -189,7 +189,7 @@ class HybridComparison:
             ).sum(0) / gt_sorting.unit_spike_counts.sum()
 
         # unsorted performance
-        tp, fn, fp, num_gt = unsorted_confusion(
+        tp, fn, fp, num_gt, detected = unsorted_confusion(
             gt_sorting.spike_index, new_sorting.spike_index
         )
         # as in spikeinterface, the idea of a true negative does not make sense here
@@ -200,6 +200,12 @@ class HybridComparison:
         self.unsorted_precision = tp / (tp + fp)
         self.unsorted_false_discovery_rate = fp / (tp + fp)
         self.unsorted_miss_rate = fn / num_gt
+        self.unsorted_recall_by_unit = np.array(
+            [
+                detected[gt_sorting.spike_labels == u].mean()
+                for u in gt_sorting.unit_labels
+            ]
+        )
 
     def get_best_new_match(self, gt_unit):
         return int(self.best_match_12[gt_unit])
@@ -234,7 +240,13 @@ def unsorted_confusion(
     false_negatives = n_gt_spikes - true_positives
     false_positives = n_new_spikes - true_positives
 
-    return true_positives, false_negatives, false_positives, n_gt_spikes
+    return (
+        true_positives,
+        false_negatives,
+        false_positives,
+        n_gt_spikes,
+        detected,
+    )
 
 
 _na_avg_performance = pd.Series(
