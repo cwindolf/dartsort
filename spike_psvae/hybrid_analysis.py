@@ -128,7 +128,7 @@ class Sorting:
             sampling_frequency=self.fs,
         )
 
-    def array_scatter(self):
+    def array_scatter(self, zlim=(-50, 3900), axes=None):
         fig, axes = cluster_viz_index.array_scatter(
             self.spike_labels,
             self.geom,
@@ -136,6 +136,8 @@ class Sorting:
             self.spike_xzptp[:, 1],
             self.spike_xzptp[:, 2],
             annotate=False,
+            zlim=zlim,
+            axes=axes,
         )
         axes[0].scatter(*self.geom.T, marker="s", s=2, color="orange")
         return fig, axes
@@ -404,6 +406,59 @@ def array_scatter_vs(scatter_comparison, vs_comparison):
         [
             "no match",
             f"{scatter_comparison.new_sorting.name} match",
+            f"{vs_comparison.new_sorting.name} match",
+            "both",
+        ],
+        loc="lower center",
+        ncol=4,
+        frameon=False,
+        borderaxespad=-10,
+    )
+
+    return fig, axes, leg_artist
+
+
+def near_gt_scatter_vs(step_comparisons, vs_comparison, gt_unit, dz=100):
+    nrows = len(step_comparisons)
+    fig, axes = plt.subplots(
+        nrows=nrows,
+        ncols=3,
+        figsize=(6, 2 * nrows + 1),
+        gridspec_kw=dict(hspace=0.25),
+    )
+    gt_x, gt_z, gt_ptp = vs_comparison.gt_sorting.template_xzptp.T
+    log_gt_ptp = np.log(gt_ptp)
+    gt_unit_z = gt_z[gt_unit]
+    zlim = gt_unit_z - dz, gt_unit_z + dz
+    colors = ["k", "b", "r", "purple"]
+    vs_match = vs_comparison.gt_matched
+
+    for i, comp in enumerate(step_comparisons):
+        comp.new_sorting.array_scatter(zlim=zlim, axes=axes[i])
+
+        match = comp.gt_matched + 2 * vs_match
+        ls = []
+        for i, c in enumerate(colors):
+            matchix = match == i
+            gtxix = gt_x[matchix]
+            gtzix = gt_z[matchix]
+            gtpix = log_gt_ptp[matchix]
+            axes[i, 0].scatter(gtxix, gtzix, color=c, marker="x", s=15)
+            axes[i, 2].scatter(gtxix, gtzix, color=c, marker="x", s=15)
+            l = axes[i, 1].scatter(gtpix, gtzix, color=c, marker="x", s=15)
+            ls.append(l)
+
+        u = comp.best_match_12[gt_unit]
+        matchstr = "no match"
+        if u >= 0:
+            matchstr = f"matching unit {u}"
+        axes[i, 1].set_title(f"{comp.new_sorting.name}, {matchstr}", fontsize=10)
+
+    leg_artist = plt.figlegend(
+        ls,
+        [
+            "no match",
+            f"row sorter match",
             f"{vs_comparison.new_sorting.name} match",
             "both",
         ],
