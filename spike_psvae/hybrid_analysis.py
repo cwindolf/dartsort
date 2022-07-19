@@ -93,6 +93,11 @@ class Sorting:
                 self.template_locs[3],
                 self.template_maxptps,
             ]
+            self.template_feats = np.c_[
+                self.template_locs[0],
+                self.template_locs[3],
+                30 * np.log(self.template_maxptps),
+            ]
 
         if spike_maxchans is None:
             assert not unsorted
@@ -113,6 +118,10 @@ class Sorting:
         if spike_xzptp is not None:
             assert spike_xzptp.shape == (n_spikes_full, 3)
             self.spike_xzptp = spike_xzptp[which]
+            self.spike_feats = np.c_[
+                self.spike_xzptp[:, :2],
+                30 * np.log(self.spike_xzptp[:, 3]),
+            ]
 
     def get_unit_spike_train(self, unit):
         return self.spike_times[self.spike_labels == unit]
@@ -250,6 +259,16 @@ def unsorted_confusion(
         n_gt_spikes,
         detected,
     )
+
+
+def density_near_gt(hybrid_comparison, radius=50):
+    gt_feats = hybrid_comparison.gt_sorting.template_feats
+    new_spike_feats = hybrid_comparison.new_sorting.spike_feats
+    gt_kdt = KDTree(gt_feats)
+    new_kdt = KDTree(new_spike_feats)
+    query = gt_kdt.query_ball_tree(new_kdt, r=radius)
+    density = np.array([len(q) for q in query])
+    return density
 
 
 _na_avg_performance = pd.Series(
