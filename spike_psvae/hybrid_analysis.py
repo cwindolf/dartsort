@@ -128,7 +128,7 @@ class Sorting:
             sampling_frequency=self.fs,
         )
 
-    def array_scatter(self, zlim=(-50, 3900), axes=None):
+    def array_scatter(self, zlim=(-50, 3900), axes=None, do_ellipse=True):
         fig, axes = cluster_viz_index.array_scatter(
             self.spike_labels,
             self.geom,
@@ -138,6 +138,7 @@ class Sorting:
             annotate=False,
             zlim=zlim,
             axes=axes,
+            do_ellipse=do_ellipse
         )
         axes[0].scatter(*self.geom.T, marker="s", s=2, color="orange")
         return fig, axes
@@ -380,8 +381,8 @@ def make_diagnostic_plot(hybrid_comparison, gt_unit):
     return fig, gt_ptp
 
 
-def array_scatter_vs(scatter_comparison, vs_comparison):
-    fig, axes = scatter_comparison.new_sorting.array_scatter()
+def array_scatter_vs(scatter_comparison, vs_comparison, do_ellipse=True):
+    fig, axes = scatter_comparison.new_sorting.array_scatter(do_ellipse=do_ellipse)
     scatter_match = scatter_comparison.gt_matched
     vs_match = vs_comparison.gt_matched
     match = scatter_match + 2 * vs_match
@@ -429,6 +430,7 @@ def near_gt_scatter_vs(step_comparisons, vs_comparison, gt_unit, dz=100):
     gt_x, gt_z, gt_ptp = vs_comparison.gt_sorting.template_xzptp.T
     log_gt_ptp = np.log(gt_ptp)
     gt_unit_z = gt_z[gt_unit]
+    gt_unit_ptp = gt_ptp[gt_unit]
     zlim = gt_unit_z - dz, gt_unit_z + dz
     colors = ["k", "b", "r", "purple"]
     vs_match = vs_comparison.gt_matched
@@ -468,4 +470,4 @@ def near_gt_scatter_vs(step_comparisons, vs_comparison, gt_unit, dz=100):
         borderaxespad=-10,
     )
 
-    return fig, axes, leg_artist
+    return fig, axes, leg_artist, gt_unit_ptp
