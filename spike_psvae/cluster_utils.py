@@ -405,8 +405,10 @@ def cluster_spikes(
     scales=(1, 1, 30),
     frames_dedup=12,
     triage_quantile=80,
+    region_size=25,
+    bin_size=5,
     ptp_low_threshold=3,
-    ptp_high_threshold=6,
+    ptp_high_threshold=6, #deprecated
     do_copy_spikes=True,
     do_relabel_by_depth=True,
     do_remove_dups=True,
@@ -445,41 +447,48 @@ def cluster_spikes(
 
     # triage low ptp spikes to improve density-based clustering
     if triage_quantile < 100:
-        print(f"triaging from {z.size} spikes")
-        (
-            idx_keep,
-            high_ptp_filter,
-            low_ptp_filter,
-        ) = triage.run_weighted_triage_low_ptp(
-            x,
-            z,
-            maxptps,
-            scales=scales,
-            threshold=triage_quantile,
-            ptp_low_threshold=ptp_low_threshold,
-            ptp_high_threshold=ptp_high_threshold,
-            c=1,
-        )
-        high_ptp_mask = np.zeros(maxptps.shape[0], dtype=bool)
-        high_ptp_mask[high_ptp_filter] = True
-        spike_ids = np.arange(maxptps.shape[0])
-        low_ptp_spike_ids = spike_ids[high_ptp_mask]
-        # low ptp spikes keep ids
-        keep_low_ptp_spike_ids = low_ptp_spike_ids[low_ptp_filter][idx_keep]
-        keep_high_ptp_mask = np.ones(maxptps.shape[0], dtype=bool)
-        keep_high_ptp_mask[high_ptp_filter] = False
-        # high ptp spikes keep ids
-        high_ptp_spike_ids = spike_ids[keep_high_ptp_mask]
-        # final indices keep
-        final_keep_indices = np.sort(
-            np.concatenate((keep_low_ptp_spike_ids, high_ptp_spike_ids))
-        )
-        x = x[final_keep_indices]
-        z = z[final_keep_indices]
-        maxptps = maxptps[final_keep_indices]
-        spike_index = spike_index[final_keep_indices]
-        true_spike_indices = true_spike_indices[final_keep_indices]
+        # print(f"triaging from {z.size} spikes")
+        # (
+        #     idx_keep,
+        #     high_ptp_filter,
+        #     low_ptp_filter,
+        # ) = triage.run_weighted_triage_adaptive(
+        #     x, 
+        #     z, 
+        #     maxptps, 
+        #     scales=scales, 
+        #     threshold=triage_quantile, 
+        #     ptp_low_threshold=ptp_low_threshold, 
+        #     ptp_high_threshold=ptp_high_threshold, 
+        #     bin_size=bin_size, 
+        #     region_size=region_size
+        # )
+        # high_ptp_mask = np.zeros(maxptps.shape[0], dtype=bool)
+        # high_ptp_mask[high_ptp_filter] = True
+        # spike_ids = np.arange(maxptps.shape[0])
+        # low_ptp_spike_ids = spike_ids[high_ptp_mask]
+        # # low ptp spikes keep ids
+        # keep_low_ptp_spike_ids = low_ptp_spike_ids[low_ptp_filter][idx_keep]
+        # keep_high_ptp_mask = np.ones(maxptps.shape[0], dtype=bool)
+        # keep_high_ptp_mask[high_ptp_filter] = False
+        # # high ptp spikes keep ids
+        # high_ptp_spike_ids = spike_ids[keep_high_ptp_mask]
+        # # final indices keep
+        # final_keep_indices = np.sort(
+        #     np.concatenate((keep_low_ptp_spike_ids, high_ptp_spike_ids))
+        # )
+        # x = x[final_keep_indices]
+        # z = z[final_keep_indices]
+        # maxptps = maxptps[final_keep_indices]
+        # spike_index = spike_index[final_keep_indices]
+        # true_spike_indices = true_spike_indices[final_keep_indices]
+        x, z, maxptps, idx_keep, low_ptp_filter = triage.run_weighted_triage_adaptive(x, z, maxptps, scales=scales, threshold=triage_quantile, ptp_low_threshold=ptp_low_threshold, bin_size=bin_size, region_size=region_size)
+        spike_index = spike_index[low_ptp_filter][idx_keep]
+        true_spike_indices = true_spike_indices[low_ptp_filter][idx_keep]
         print(f"{z.size} spikes")
+        # barf
+        
+        
     # create feature set for clustering
     features = np.c_[x * scales[0], z * scales[1], np.log(maxptps) * scales[2]]
 
