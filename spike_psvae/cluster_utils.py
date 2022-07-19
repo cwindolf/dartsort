@@ -8,6 +8,7 @@ from spike_psvae import triage
 from tqdm.auto import tqdm
 import scipy
 
+
 def read_waveforms(
     spike_times,
     bin_file,
@@ -392,7 +393,7 @@ def copy_spikes(x, z, maxptps, spike_index, scales=(1,1,30), num_duplicates_list
     new_spike_index = np.asarray(new_spike_index)
     true_spike_indices = np.asarray(true_spike_indices)
     return new_x, new_z, new_maxptps, new_spike_index, true_spike_indices
-    
+
 
 def cluster_spikes(
     x,
@@ -410,9 +411,9 @@ def cluster_spikes(
     do_relabel_by_depth=True,
     do_remove_dups=True,
     split_big=False,
-    split_big_kw=dict(dx=40, dz=48, min_size_split=50), 
-    do_subsample=False):
-        
+    split_big_kw=dict(dx=40, dz=48, min_size_split=50),
+    do_subsample=False,
+):
     # copy high-ptp spikes
     true_spike_indices = np.stack(
         (np.ones(maxptps.shape[0], dtype=bool), np.arange(maxptps.shape[0])),
