@@ -497,11 +497,14 @@ def plot_isi_distribution(spike_train, ax=None):
     ax.set_xlabel("ms")
     spike_train_diff = np.diff(spike_train) / 30000
     spike_train_diff = spike_train_diff[np.where(spike_train_diff < 0.01)]
-    spike_train_diff = spike_train_diff * 1000  # convert to ms
-    ax.hist(spike_train_diff, bins=np.arange(11))
-    ax.set_xticks(range(11))
+    spike_train_diff = spike_train_diff * 1000  # convert 1/10 to ms
+    y, x, _ = ax.hist(spike_train_diff, bins=np.arange(0, 10.1, 0.5), density=True)
+    sns.ecdfplot(spike_train_diff, ax=ax)
+#     sns.distplot(spike_train_diff)
+
+    ax.set_xticks(np.arange(0, 11, 2.5))
     ax.set_title("isis")
-    ax.set_xlim([-1, 10])
+    ax.set_xlim([-0.01, 10.1])
     return ax
 
 
@@ -1585,7 +1588,7 @@ def diagnostic_plots(
     alpha=0.1,
     delta_frames=12,
     num_close_clusters=5,
-    tpca_rank=8,
+    tpca_rank=5,
 ):
     lab_st1 = cluster_id_1
     lab_st2 = cluster_id_2
@@ -1623,6 +1626,17 @@ def diagnostic_plots(
     ax_LDA2_ks = fig.add_subplot(gs[7, 6:9])
     ax_PCs_ks = fig.add_subplot(gs[7, 9:])
     
+    
+    list_ax_wfs_shared_ks = [0]
+    for cm_x in np.arange(0, 675, 10):
+        if cm_x>0:
+            if cm_x%60==0:
+                list_ax_wfs_shared_ks.append(cm_x+1)
+            else:
+                list_ax_wfs_shared_ks.append(cm_x)
+
+
+    ax_wfs_shared_yass.set_xticks(list_ax_wfs_shared_ks, minor=True)
 #     ax_test_split_ptp = fig.add_subplot(gs[8, 3:6])
 #     ax_test_split_temp_proj = fig.add_subplot(gs[8, 6:9])
 
@@ -1718,12 +1732,12 @@ def diagnostic_plots(
             end = start + 11
             for i in range(min(len(waveforms), num_spikes_plot)):
                 ax_wfs_shared_yass.plot(
-                    waveforms[i, 15:-15, start[i] : end[i]].T.flatten(),
+                    waveforms[i, 30:-30, start[i] : end[i]].T.flatten(),
                     alpha=alpha,
                     color=color,
                 )
             for i in range(10):
-                ax_wfs_shared_yass.axvline(91 + 91 * i, c="black")
+                ax_wfs_shared_yass.axvline(61 + 61 * i, c="black")
             #             ax_templates.plot(waveforms[:, :, mc-5:mc+6].mean(0).T.flatten(), color=color)
             cmp += 1
             # print("waveforms", waveforms.shape)
@@ -1735,6 +1749,7 @@ def diagnostic_plots(
                     ],
                     axis=0,
                 )
+                template_black = wfs_shared.mean(0)
                 # print("shared", wfs_shared.shape, mc, flush=True)
             if color == "red":
                 wfs_lda_red = np.stack(
@@ -1744,6 +1759,7 @@ def diagnostic_plots(
                     ],
                     axis=0,
                 )
+                template_red = wfs_lda_red.mean(0)
                 # print("red", wfs_shared.shape, mc, flush=True)
 
                 
@@ -1829,12 +1845,12 @@ def diagnostic_plots(
             end = start + 11
             for i in range(min(len(waveforms), num_spikes_plot)):
                 ax_wfs_shared_ks.plot(
-                    waveforms[i, 15:-15, start[i] : end[i]].T.flatten(),
+                    waveforms[i, 30:-30, start[i] : end[i]].T.flatten(),
                     alpha=alpha,
                     color=color,
                 )
             for i in range(10):
-                ax_wfs_shared_ks.axvline(91 + 91 * i, c="black")
+                ax_wfs_shared_ks.axvline(61 + 61 * i, c="black")
             if color == "blue":
                 wfs_lda_blue = np.stack(
                     [
@@ -1843,6 +1859,8 @@ def diagnostic_plots(
                     ],
                     axis=0,
                 )
+                template_blue = wfs_lda_blue.mean(0)
+
 
     lda_labels = np.zeros(wfs_shared.shape[0] + wfs_lda_red.shape[0])
     lda_labels[: wfs_shared.shape[0]] = 1
@@ -1909,7 +1927,9 @@ def diagnostic_plots(
             alpha=0.5,
         )
 
-    ax_wfs_shared_ks.set_xticks([])
+#     ax_wfs_shared_ks.set_xticks([])
+    ax_wfs_shared_ks.set_xticks(list_ax_wfs_shared_ks, minor=True)
+
 
     closest_clusters_hdb = get_closest_clusters_kilosort(
         cluster_id_1, hdb_cluster_depth_means, num_close_clusters=2
@@ -1927,12 +1947,22 @@ def diagnostic_plots(
         )
     )
 
+    ax_wfs_shared_yass.set_yticks(np.arange(templates_yass[cluster_id_1, :, mc].min() - 2, 
+                                      templates_yass[cluster_id_1, :, mc].max() + 2, 1), minor = True)
+
+    ax_wfs_shared_yass.grid(which='both')
+    
     color_array_yass_close = ["red", "cyan", "lime"]
     pc_scatter = PCA(2)
 
+    # CHANGE TO ADD RED / BLACK 
     ax_templates_yass.plot(
-        templates_yass[cluster_id_1, :, mc - 5 : mc + 5].T.flatten(),
-        c=color_array_yass_close[0],
+        template_black[30:-30].T.flatten(), c='black'
+#         templates_yass[cluster_id_1, 30:-30, mc_plot - 5 : mc_plot + 5].T.flatten(),
+#         c=color_array_yass_close[0],
+    )
+    ax_templates_yass.plot(
+        template_red[30:-30].T.flatten(), c='red'
     )
     some_in_cluster = np.random.choice(
         list(range((labels_yass == cluster_id_1).sum())),
@@ -1957,7 +1987,7 @@ def diagnostic_plots(
     for j in range(2):
         ax_templates_yass.plot(
             templates_yass[
-                closest_clusters_hdb[j], :, mc - 5 : mc + 5
+                closest_clusters_hdb[j], 11:61+11, mc - 6 : mc + 5
             ].T.flatten(),
             c=color_array_yass_close[j + 1],
         )
@@ -2014,7 +2044,7 @@ def diagnostic_plots(
     ax_PCs_yass.yaxis.tick_right()
 
     for i in range(10):
-        ax_templates_yass.axvline(121 + 121 * i, c="black")
+        ax_templates_yass.axvline(61 + 61 * i, c="black")
     ax_templates_yass.set_xticks([])
     ax_templates_yass.set_title(
         f"{sorting1_name} close Units: {closest_clusters_hdb[0]}, {closest_clusters_hdb[1]}"
@@ -2026,8 +2056,11 @@ def diagnostic_plots(
     t0 = templates_yass[cluster_id_1, :, mc - 5 : mc + 5].T.flatten()
     t1 = templates_yass[closest_clusters_hdb[0], :, mc - 5 : mc + 5].T.flatten()
     t2 = templates_yass[closest_clusters_hdb[1], :, mc - 5 : mc + 5].T.flatten()
-    ax_LDA1_yass.set_title(f"LDA: {closest_clusters_hdb[0]}, temp. dist {np.abs(t0 - t1).max():0.2f}")
-    ax_LDA2_yass.set_title(f"LDA: {closest_clusters_hdb[1]}, temp. dist {np.abs(t0 - t2).max():0.2f}")
+    try:
+        ax_LDA1_yass.set_title(f"LDA: {closest_clusters_hdb[0]}, temp. dist {np.abs(t0 - t1).max():0.2f}")
+        ax_LDA2_yass.set_title(f"LDA: {closest_clusters_hdb[1]}, temp. dist {np.abs(t0 - t2).max():0.2f}")
+    except:
+        print("problem neighbors")
     ax_PCs_yass.set_title("2 PCs")
 
     mc = templates_ks[cluster_id_2].ptp(0).argmax()
@@ -2038,20 +2071,28 @@ def diagnostic_plots(
             templates_ks[cluster_id_2, :, mc].max() + 2,
         )
     )
+    ax_wfs_shared_ks.set_yticks(np.arange(templates_ks[cluster_id_2, :, mc].min() - 2, 
+                                          templates_ks[cluster_id_2, :, mc].max() + 2, 1), minor=True)
+    ax_wfs_shared_ks.grid(which='both')
 
     color_array_ks_close = ["blue", "green", "magenta"]
     pc_scatter = PCA(2)
-
+    
+    # CHANGE TO ADD RED / BLACK 
     ax_templates_ks.plot(
-        templates_ks[cluster_id_2, :, mc - 5 : mc + 5].T.flatten(),
-        c=color_array_ks_close[0],
+        template_black[30:-30].T.flatten(), c='black'
+#         templates_ks[cluster_id_2, 30:-30, mc_plot - 5 : mc_plot + 5].T.flatten(),
+#         c=color_array_ks_close[0],
+    )
+    ax_templates_ks.plot(
+        template_blue[30:-30].T.flatten(), c='blue'
     )
     some_in_cluster = np.random.choice(
         list(range((labels_ks == cluster_id_2).sum())),
         replace=False,
         size=min((labels_ks == cluster_id_2).sum(), num_spikes_plot),
     )
-    load_times = spike_index_ks[labels_ks == cluster_id_2, 0][some_in_cluster]
+    load_times = spike_index_ks[labels_ks == cluster_id_2][some_in_cluster]
     waveforms_unit = read_waveforms(
         load_times,
         raw_bin,
@@ -2069,9 +2110,10 @@ def diagnostic_plots(
 
     for j in range(2):
 
+        
         ax_templates_ks.plot(
             templates_ks[
-                closest_clusters_kilo[j], :, mc - 5 : mc + 5
+                closest_clusters_kilo[j], 11:61+11, mc - 6 : mc + 5
             ].T.flatten(),
             c=color_array_ks_close[j + 1],
         )
@@ -2083,50 +2125,52 @@ def diagnostic_plots(
                 (labels_ks == closest_clusters_kilo[j]).sum(), num_spikes_plot
             ),
         )
-        waveforms_unit_bis = read_waveforms(
-            spike_index_ks[labels_ks == closest_clusters_kilo[j], 0][
-                some_in_cluster
-            ],
-            raw_bin,
-            geom,
-            n_times=121,
-            channels=np.arange(mc - 10, mc + 10).astype("int"),
-        )[0]
-        # DO TPCA
-        lda_labels = np.zeros(
-            waveforms_unit_bis.shape[0] + waveforms_unit.shape[0]
-        )
-        lda_labels[: waveforms_unit.shape[0]] = 1
-        lda_comps = LDA(n_components=1).fit_transform(
-            apply_tpca(waveforms_unit, waveforms_unit_bis),
-            lda_labels,
-        )
-        if j == 0:
-            ax_LDA1_ks.hist(
-                lda_comps[: waveforms_unit.shape[0], 0],
-                bins=25,
-                color=color_array_ks_close[0],
-                alpha=0.5,
+
+        if (labels_ks == closest_clusters_kilo[j]).sum() > 0:
+            waveforms_unit_bis = read_waveforms(
+                spike_index_ks[labels_ks == closest_clusters_kilo[j]][
+                    some_in_cluster
+                ],
+                raw_bin,
+                geom,
+                n_times=121,
+                channels=np.arange(mc - 10, mc + 10).astype("int"),
+            )[0]
+            # DO TPCA
+            lda_labels = np.zeros(
+                waveforms_unit_bis.shape[0] + waveforms_unit.shape[0]
             )
-            ax_LDA1_ks.hist(
-                lda_comps[waveforms_unit.shape[0] :, 0],
-                bins=25,
-                color=color_array_ks_close[j + 1],
-                alpha=0.5,
+            lda_labels[: waveforms_unit.shape[0]] = 1
+            lda_comps = LDA(n_components=1).fit_transform(
+                apply_tpca(waveforms_unit, waveforms_unit_bis),
+                lda_labels,
             )
-        else:
-            ax_LDA2_ks.hist(
-                lda_comps[: waveforms_unit.shape[0], 0],
-                bins=25,
-                color=color_array_ks_close[0],
-                alpha=0.5,
-            )
-            ax_LDA2_ks.hist(
-                lda_comps[waveforms_unit.shape[0] :, 0],
-                bins=25,
-                color=color_array_ks_close[j + 1],
-                alpha=0.5,
-            )
+            if j == 0:
+                ax_LDA1_ks.hist(
+                    lda_comps[: waveforms_unit.shape[0], 0],
+                    bins=25,
+                    color=color_array_ks_close[0],
+                    alpha=0.5,
+                )
+                ax_LDA1_ks.hist(
+                    lda_comps[waveforms_unit.shape[0] :, 0],
+                    bins=25,
+                    color=color_array_ks_close[j + 1],
+                    alpha=0.5,
+                )
+            else:
+                ax_LDA2_ks.hist(
+                    lda_comps[: waveforms_unit.shape[0], 0],
+                    bins=25,
+                    color=color_array_ks_close[0],
+                    alpha=0.5,
+                )
+                ax_LDA2_ks.hist(
+                    lda_comps[waveforms_unit.shape[0] :, 0],
+                    bins=25,
+                    color=color_array_ks_close[j + 1],
+                    alpha=0.5,
+                )
     #         if len(waveforms_unit_bis) > 2:
     #             pcs_unit = pc_scatter.fit_transform(waveforms_unit_bis.reshape(waveforms_unit_bis.shape[0], -1))
     #             ax_PCs_ks.scatter(pcs_unit[:, 0], pcs_unit[:, 1], s=2, c=color_array_ks_close[j+1])
@@ -2137,12 +2181,15 @@ def diagnostic_plots(
     t0 = templates_ks[cluster_id_2,  :, mc - 5 : mc + 5]
     t1 = templates_ks[closest_clusters_kilo[0],  :, mc - 5 : mc + 5]
     t2 = templates_ks[closest_clusters_kilo[1],  :, mc - 5 : mc + 5]
-    ax_LDA1_ks.set_title(f"LDA: {closest_clusters_kilo[0]}, temp. dist {np.abs(t0 - t1).max():0.2f}")
-    ax_LDA2_ks.set_title(f"LDA: {closest_clusters_kilo[1]}, temp. dist {np.abs(t0 - t2).max():0.2f}")
+    try:
+        ax_LDA1_ks.set_title(f"LDA: {closest_clusters_kilo[0]}, temp. dist {np.abs(t0 - t1).max():0.2f}")
+        ax_LDA2_ks.set_title(f"LDA: {closest_clusters_kilo[1]}, temp. dist {np.abs(t0 - t2).max():0.2f}")
+    except:
+        print("problem KS neighbors")
     ax_PCs_ks.set_title("2 PCs")
 
     for i in range(10):
-        ax_templates_ks.axvline(121 + 121 * i, c="black")
+        ax_templates_ks.axvline(61 + 61 * i, c="black")
     ax_templates_ks.set_xticks([])
     ax_templates_ks.set_title(
         f"{sorting2_name} close Units: {closest_clusters_kilo[0]}, {closest_clusters_kilo[1]}"
