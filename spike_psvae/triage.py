@@ -1,6 +1,8 @@
 import numpy as np
-from scipy.spatial import KDTree
+from sklearn.neighbors import KernelDensity
 import networkx as nx
+from scipy.spatial import KDTree
+import scipy
 
 
 def weighted_knn_triage(
@@ -15,8 +17,6 @@ def weighted_knn_triage(
     idx_keep1 = dist <= np.percentile(dist, percentile)
 
     return idx_keep1
-
-
 
 def run_weighted_triage_low_ptp(x, z, maxptps, scales=(1,1,30),
                                 threshold=80, ptp_low_threshold=3, 
@@ -50,6 +50,61 @@ def run_weighted_triage_low_ptp(x, z, maxptps, scales=(1,1,30),
     triaged_maxptps = maxptps[idx_keep]
     
     return idx_keep, high_ptp_filter, low_ptp_filter
+
+def run_weighted_triage_adaptive(x, z, maxptps, scales=(1,1,30),
+                                 threshold=80, ptp_low_threshold=3, 
+                                 bin_size=5, region_size=25):
+
+    #filter by low ptp
+    low_ptp_filter = maxptps>ptp_low_threshold
+    low_ptp_filter = np.flatnonzero(low_ptp_filter)
+    x = x[low_ptp_filter]
+    z = z[low_ptp_filter]
+    maxptps = maxptps[low_ptp_filter]
+
+    #get local distances
+    feats = np.c_[scales[0]*x,
+                  scales[1]*z,
+                  scales[2]*np.log(maxptps)]
+
+    tree = KDTree(feats)
+    dist, ind = tree.query(feats, k=6)
+    dist = dist[:,1:]
+    dist = np.mean(dist, 1)
+    
+    spike_region_dist = 1
+    if region_size is not None:
+        #bin spikes
+        min_z, max_z = np.min(z), np.max(z)
+        bins = np.arange(min_z, max_z, bin_size)
+        binned_z = np.digitize(z, bins, right=False)
+
+        #get mean distance in bin
+        binned_dist = []
+        spikes_in_bin_list = []
+        for bin_id in range(len(bins)):
+            spikes_in_bin = np.where(binned_z==bin_id)[0]
+            spikes_in_bin_list.append(len(spikes_in_bin))
+            if len(spikes_in_bin) == 0:
+                binned_mean_dist = np.max(dist)
+            else:
+                binned_mean_dist = np.mean(dist[np.where(binned_z==bin_id)])
+            binned_dist.append(binned_mean_dist)
+
+        #gaussian filter sigma=region_size/bin_size
+        region_dist = scipy.ndimage.gaussian_filter(binned_dist, sigma=region_size/bin_size,mode='constant')
+        spike_region_dist_func = scipy.interpolate.interp1d(bins, region_dist, fill_value="extrapolate")
+        spike_region_dist = spike_region_dist_func(z)
+    
+    true_dist = np.log(dist) - np.log(spike_region_dist) + np.log(1/(scales[2]*np.log(maxptps)))
+
+    idx_keep = true_dist <= np.percentile(true_dist, threshold)
+
+    triaged_x = x[idx_keep]
+    triaged_z = z[idx_keep]
+    triaged_maxptps = maxptps[idx_keep]
+    
+    return triaged_x, triaged_z, triaged_maxptps, idx_keep, low_ptp_filter
 
 
 
