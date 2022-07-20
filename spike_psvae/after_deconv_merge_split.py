@@ -114,7 +114,6 @@ def check_merge(
     templates,
     n_spikes_templates,
     path_cleaned_wfs_h5,
-    maxptps,
     labels_updated,
     firstchans,
     tpca,
@@ -160,12 +159,12 @@ def check_merge(
             ),
         )
     )
-    which = np.flatnonzero(
-        np.logical_and(
-            maxptps > ptp_threshold,
-            labels_updated == unit_reference,
-        )
-    )
+    which = np.flatnonzero(labels_updated == unit_reference)
+#         np.logical_and(
+#             maxptps > ptp_threshold,
+#             labels_updated == unit_reference,
+#         )
+#     )
 
     if len(which) < 2:
         return False, -1, 0
@@ -222,12 +221,12 @@ def check_merge(
                 + n_chan_merge // 2,
             ]
 
-    which = np.flatnonzero(
-        np.logical_and(
-            maxptps > ptp_threshold,
-            labels_updated == unit_bis_reference,
-        )
-    )
+    which = np.flatnonzero(labels_updated == unit_bis_reference)
+#         np.logical_and(
+#             maxptps > ptp_threshold,
+#             labels_updated == unit_bis_reference,
+#         )
+#     )
 
     if len(which) < 2:
         return False, -1, 0
@@ -351,9 +350,6 @@ def merge(
     labels,
     templates,
     path_cleaned_wfs_h5,
-    x,
-    z_abs,
-    maxptps,
     firstchans,
     geom,
     n_chan_merge=10,
@@ -408,7 +404,6 @@ def merge(
                     templates,
                     n_spikes_templates,
                     path_cleaned_wfs_h5,
-                    maxptps,
                     labels_updated,
                     firstchans,
                     tpca,
