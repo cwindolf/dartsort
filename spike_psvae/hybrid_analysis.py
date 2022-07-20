@@ -5,18 +5,21 @@ data that would be used when making summary plots, and which compute
 some metrics etc in the constructor. They help make wrangling a bunch
 of sorts a little easier.
 """
-import string
+import re
 import numpy as np
 import pandas as pd
 from scipy.spatial import KDTree
 import matplotlib.pyplot as plt
+import statsmodels.api as sm
+from scipy.optimize import least_squares
+from scipy.spatial.distance import cdist
 
 from spikeinterface.extractors import NumpySorting
 from spikeinterface.comparison import compare_sorter_to_ground_truth
 
 from spike_psvae.spikeio import get_binary_length
 from spike_psvae.deconvolve import get_templates
-from spike_psvae import localize_index
+from spike_psvae import localize_index, cluster_viz, cluster_viz_index
 
 
 class Sorting:
@@ -44,9 +47,9 @@ class Sorting:
         T_samples, T_sec = get_binary_length(raw_bin, len(geom), fs)
 
         self.name = name
-        self.name_lo = name.lower().replace(
-            string.whitespace + string.punctuation, "_"
-        )
+        self.geom = geom
+        self.name_lo = re.sub("[^a-z0-9]+", "_", name.lower())
+        self.fs = fs
 
         which = np.flatnonzero(spike_labels >= 0)
         which = which[np.argsort(spike_times[which])]
@@ -61,12 +64,6 @@ class Sorting:
         self.unit_firing_rates = self.unit_spike_counts / T_sec
         self.contiguous_labels = (
             self.unit_labels.size == self.unit_labels.max() + 1
-        )
-
-        self.np_sorting = NumpySorting.from_times_labels(
-            times_list=self.spike_times,
-            labels_list=self.spike_labels,
-            sampling_frequency=30_000,
         )
 
         self.templates = templates
@@ -96,6 +93,11 @@ class Sorting:
                 self.template_locs[3],
                 self.template_maxptps,
             ]
+            self.template_feats = np.c_[
+                self.template_locs[0],
+                self.template_locs[3],
+                30 * np.log(self.template_maxptps),
+            ]
 
         if spike_maxchans is None:
             assert not unsorted
@@ -116,21 +118,60 @@ class Sorting:
         if spike_xzptp is not None:
             assert spike_xzptp.shape == (n_spikes_full, 3)
             self.spike_xzptp = spike_xzptp[which]
+            self.spike_feats = np.c_[
+                self.spike_xzptp[:, :2],
+                30 * np.log(self.spike_xzptp[:, 3]),
+            ]
+
+    def get_unit_spike_train(self, unit):
+        return self.spike_times[self.spike_labels == unit]
+
+    def get_unit_maxchans(self, unit):
+        return self.spike_maxchans[self.spike_labels == unit]
+
+    @property
+    def np_sorting(self):
+        return NumpySorting.from_times_labels(
+            times_list=self.spike_times,
+            labels_list=self.spike_labels,
+            sampling_frequency=self.fs,
+        )
+
+    def array_scatter(self, zlim=(-50, 3900), axes=None):
+        fig, axes = cluster_viz_index.array_scatter(
+            self.spike_labels,
+            self.geom,
+            self.spike_xzptp[:, 0],
+            self.spike_xzptp[:, 1],
+            self.spike_xzptp[:, 2],
+            annotate=False,
+            zlim=zlim,
+            axes=axes,
+        )
+        axes[0].scatter(*self.geom.T, marker="s", s=2, color="orange")
+        return fig, axes
 
 
 class HybridComparison:
-    def __init__(self, gt_sorting, new_sorting):
+    """
+    An object which computes some hybrid metrics and stores references
+    to the ground truth and compared sortings, so that everything is
+    in one place for later plotting / analysis code.
+    """
+
+    def __init__(self, gt_sorting, new_sorting, geom):
         assert gt_sorting.contiguous_labels
 
         self.gt_sorting = gt_sorting
         self.new_sorting = new_sorting
         self.unsorted = new_sorting.unsorted
+        self.geom = geom
 
         self.average_performance = (
             self.weighted_average_performance
         ) = _na_avg_performance
         if not new_sorting.unsorted:
-            self.gt_comparison = compare_sorter_to_ground_truth(
+            gt_comparison = compare_sorter_to_ground_truth(
                 gt_sorting.np_sorting,
                 new_sorting.np_sorting,
                 gt_name=gt_sorting.name,
@@ -141,12 +182,17 @@ class HybridComparison:
                 verbose=True,
             )
 
+            self.best_match_12 = gt_comparison.best_match_12.values.astype(int)
+            self.gt_matched = self.best_match_12 >= 0
+
             # matching units and accuracies
-            self.performance_by_unit = self.gt_comparison.get_performance()
-            # average the metrics over units
-            self.average_performance = self.gt_comparison.get_performance(
-                method="pooled_with_average"
+            self.performance_by_unit = gt_comparison.get_performance().astype(
+                float
             )
+            # average the metrics over units
+            self.average_performance = gt_comparison.get_performance(
+                method="pooled_with_average"
+            ).astype(float)
             # average metrics, weighting each unit by its spike count
             self.weighted_average_performance = (
                 self.performance_by_unit
@@ -154,7 +200,7 @@ class HybridComparison:
             ).sum(0) / gt_sorting.unit_spike_counts.sum()
 
         # unsorted performance
-        tp, fn, fp, num_gt = unsorted_confusion(
+        tp, fn, fp, num_gt, detected = unsorted_confusion(
             gt_sorting.spike_index, new_sorting.spike_index
         )
         # as in spikeinterface, the idea of a true negative does not make sense here
@@ -165,6 +211,21 @@ class HybridComparison:
         self.unsorted_precision = tp / (tp + fp)
         self.unsorted_false_discovery_rate = fp / (tp + fp)
         self.unsorted_miss_rate = fn / num_gt
+        self.unsorted_recall_by_unit = np.array(
+            [
+                detected[gt_sorting.spike_labels == u].mean()
+                for u in gt_sorting.unit_labels
+            ]
+        )
+
+    def get_best_new_match(self, gt_unit):
+        return int(self.best_match_12[gt_unit])
+
+    def get_closest_new_unit(self, gt_unit):
+        gt_loc = self.gt_sorting.template_xzptp[gt_unit]
+        new_template_locs = self.new_sorting.template_xzptp
+        return np.argmin(cdist(gt_loc[None], new_template_locs).squeeze())
+
 
 # -- library
 
@@ -190,7 +251,23 @@ def unsorted_confusion(
     false_negatives = n_gt_spikes - true_positives
     false_positives = n_new_spikes - true_positives
 
-    return true_positives, false_negatives, false_positives, n_gt_spikes
+    return (
+        true_positives,
+        false_negatives,
+        false_positives,
+        n_gt_spikes,
+        detected,
+    )
+
+
+def density_near_gt(hybrid_comparison, radius=50):
+    gt_feats = hybrid_comparison.gt_sorting.template_feats
+    new_spike_feats = hybrid_comparison.new_sorting.spike_feats
+    gt_kdt = KDTree(gt_feats)
+    new_kdt = KDTree(new_spike_feats)
+    query = gt_kdt.query_ball_tree(new_kdt, r=radius)
+    density = np.array([len(q) for q in query])
+    return density
 
 
 _na_avg_performance = pd.Series(
@@ -208,7 +285,17 @@ _na_avg_performance = pd.Series(
 # -- plotting helpers
 
 
-def plotgistic(df, x="gt_ptp", y=None, c="gt_firing_rate", title=None, cmap=plt.cm.plasma):
+def plotgistic(
+    df,
+    x="gt_ptp",
+    y=None,
+    c="gt_firing_rate",
+    title=None,
+    cmap=plt.cm.plasma,
+    legend=True,
+    ax=None,
+    ylim=[-0.05, 1.05],
+):
     ylab = y
     xlab = x
     clab = c
@@ -216,38 +303,188 @@ def plotgistic(df, x="gt_ptp", y=None, c="gt_firing_rate", title=None, cmap=plt.
     x = df[x].values
     X = sm.add_constant(x)
     c = df[c].values
-    
+
+    if ax is None:
+        fig, ax = plt.subplots()
+    else:
+        fig = ax.figure
+
+    # fit the logistic function to the data
     def resids(beta):
         return y - 1 / (1 + np.exp(-X @ beta))
 
-    res = least_squares(resids, np.array([1, 1]))
+    res = least_squares(resids, np.array([1.0, 1]))
     b = res.x
 
-    fig, ax = plt.subplots()
-    sort = np.argsort(x)
+    # plot the logistic line
     domain = np.linspace(x.min(), x.max())
     (l,) = ax.plot(
         domain, 1 / (1 + np.exp(-sm.add_constant(domain) @ b)), color="k"
     )
 
-    ax.set_ylim([-0.05, 1.05])
-    ax.set_xlim([x.min() - 0.5, x.max() + 0.5])
-
+    # scatter with legend
     leg = ax.scatter(x, y, marker="x", c=c, cmap=cmap, alpha=0.75)
-
-    plt.ylabel(ylab)
-    plt.xlabel(xlab)
     h, labs = leg.legend_elements(num=4)
-    ax.legend(
-        (*h, l),
-        (*labs, "logistic fit"),
-        title=clab,
-        loc="center left",
-        bbox_to_anchor=(1.0, 0.5),
-        frameon=False,
-    )
+    if legend:
+        ax.legend(
+            (*h, l),
+            (*labs, "logistic fit"),
+            title=clab,
+            loc="center left",
+            bbox_to_anchor=(1.0, 0.5),
+            frameon=False,
+        )
+
     if title:
         n_missed = (y < 1e-8).sum()
         plt.title(title + f" -- {n_missed} missed")
 
+    ax.set_ylim(ylim)
+    ax.set_xlim([x.min() - 0.5, x.max() + 0.5])
+    ax.set_ylabel(ylab)
+    ax.set_xlabel(xlab)
+
     return fig, ax
+
+
+def make_diagnostic_plot(hybrid_comparison, gt_unit):
+    new_unit = hybrid_comparison.get_best_new_match(gt_unit)
+    new_str = f"{hybrid_comparison.new_sorting.name} match {new_unit}"
+    if new_unit < 0:
+        new_unit = hybrid_comparison.get_closest_new_unit(gt_unit)
+        new_str = f"No {hybrid_comparison.new_sorting.name} match, using closest unit {new_unit}."
+
+    gt_np_sorting = hybrid_comparison.gt_sorting.np_sorting
+    new_np_sorting = hybrid_comparison.new_sorting.np_sorting
+    gt_spike_train = gt_np_sorting.get_unit_spike_train(gt_unit)
+    new_spike_train = new_np_sorting.get_unit_spike_train(new_unit)
+    gt_maxchans = hybrid_comparison.gt_sorting.get_unit_maxchans(gt_unit)
+    new_maxchans = hybrid_comparison.new_sorting.get_unit_maxchans(new_unit)
+    gt_template_zs = hybrid_comparison.gt_sorting.template_locs[2]
+    new_template_zs = hybrid_comparison.new_sorting.template_locs[2]
+
+    gt_ptp = hybrid_comparison.gt_sorting.template_maxptps[gt_unit]
+
+    fig = cluster_viz.diagnostic_plots(
+        new_unit,
+        gt_unit,
+        new_spike_train,
+        gt_spike_train,
+        hybrid_comparison.new_sorting.templates,
+        hybrid_comparison.gt_sorting.templates,
+        new_maxchans,
+        gt_maxchans,
+        hybrid_comparison.geom,
+        hybrid_comparison.gt_sorting.raw_bin,
+        dict(enumerate(new_template_zs)),
+        dict(enumerate(gt_template_zs)),
+        hybrid_comparison.new_sorting.spike_index,
+        hybrid_comparison.gt_sorting.spike_index,
+        hybrid_comparison.new_sorting.spike_labels,
+        hybrid_comparison.gt_sorting.spike_labels,
+        scale=7,
+        sorting1_name=hybrid_comparison.new_sorting.name,
+        sorting2_name=hybrid_comparison.gt_sorting.name,
+        num_channels=40,
+        num_spikes_plot=100,
+        t_range=(30, 90),
+        num_rows=3,
+        alpha=0.1,
+        delta_frames=12,
+        num_close_clusters=5,
+    )
+
+    fig.suptitle(f"GT unit {gt_unit}. {new_str}")
+
+    return fig, gt_ptp
+
+
+def array_scatter_vs(scatter_comparison, vs_comparison):
+    fig, axes = scatter_comparison.new_sorting.array_scatter()
+    scatter_match = scatter_comparison.gt_matched
+    vs_match = vs_comparison.gt_matched
+    match = scatter_match + 2 * vs_match
+    colors = ["k", "b", "r", "purple"]
+
+    gt_x, gt_z, gt_ptp = scatter_comparison.gt_sorting.template_xzptp.T
+    log_gt_ptp = np.log(gt_ptp)
+
+    ls = []
+    for i, c in enumerate(colors):
+        matchix = match == i
+        gtxix = gt_x[matchix]
+        gtzix = gt_z[matchix]
+        gtpix = log_gt_ptp[matchix]
+        axes[0].scatter(gtxix, gtzix, color=c, marker="x", s=15)
+        axes[2].scatter(gtxix, gtzix, color=c, marker="x", s=15)
+        l = axes[1].scatter(gtpix, gtzix, color=c, marker="x", s=15)
+        ls.append(l)
+
+    leg_artist = plt.figlegend(
+        ls,
+        [
+            "no match",
+            f"{scatter_comparison.new_sorting.name} match",
+            f"{vs_comparison.new_sorting.name} match",
+            "both",
+        ],
+        loc="lower center",
+        ncol=4,
+        frameon=False,
+        borderaxespad=-10,
+    )
+
+    return fig, axes, leg_artist
+
+
+def near_gt_scatter_vs(step_comparisons, vs_comparison, gt_unit, dz=100):
+    nrows = len(step_comparisons)
+    fig, axes = plt.subplots(
+        nrows=nrows,
+        ncols=3,
+        figsize=(6, 2 * nrows + 1),
+        gridspec_kw=dict(hspace=0.25),
+    )
+    gt_x, gt_z, gt_ptp = vs_comparison.gt_sorting.template_xzptp.T
+    log_gt_ptp = np.log(gt_ptp)
+    gt_unit_z = gt_z[gt_unit]
+    zlim = gt_unit_z - dz, gt_unit_z + dz
+    colors = ["k", "b", "r", "purple"]
+    vs_match = vs_comparison.gt_matched
+
+    for i, comp in enumerate(step_comparisons):
+        comp.new_sorting.array_scatter(zlim=zlim, axes=axes[i])
+
+        match = comp.gt_matched + 2 * vs_match
+        ls = []
+        for i, c in enumerate(colors):
+            matchix = match == i
+            gtxix = gt_x[matchix]
+            gtzix = gt_z[matchix]
+            gtpix = log_gt_ptp[matchix]
+            axes[i, 0].scatter(gtxix, gtzix, color=c, marker="x", s=15)
+            axes[i, 2].scatter(gtxix, gtzix, color=c, marker="x", s=15)
+            l = axes[i, 1].scatter(gtpix, gtzix, color=c, marker="x", s=15)
+            ls.append(l)
+
+        u = comp.best_match_12[gt_unit]
+        matchstr = "no match"
+        if u >= 0:
+            matchstr = f"matching unit {u}"
+        axes[i, 1].set_title(f"{comp.new_sorting.name}, {matchstr}", fontsize=10)
+
+    leg_artist = plt.figlegend(
+        ls,
+        [
+            "no match",
+            f"row sorter match",
+            f"{vs_comparison.new_sorting.name} match",
+            "both",
+        ],
+        loc="lower center",
+        ncol=4,
+        frameon=False,
+        borderaxespad=-10,
+    )
+
+    return fig, axes, leg_artist
