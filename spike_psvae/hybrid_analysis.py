@@ -13,6 +13,7 @@ import matplotlib.pyplot as plt
 import statsmodels.api as sm
 from scipy.optimize import least_squares
 from scipy.spatial.distance import cdist
+import seaborn as sns
 
 from spikeinterface.extractors import NumpySorting
 from spikeinterface.comparison import compare_sorter_to_ground_truth
@@ -160,7 +161,7 @@ class HybridComparison:
     in one place for later plotting / analysis code.
     """
 
-    def __init__(self, gt_sorting, new_sorting, geom):
+    def __init__(self, gt_sorting, new_sorting, geom, match_score=0.1):
         assert gt_sorting.contiguous_labels
 
         self.gt_sorting = gt_sorting
@@ -177,12 +178,13 @@ class HybridComparison:
                 new_sorting.np_sorting,
                 gt_name=gt_sorting.name,
                 tested_name=new_sorting.name,
-                sampling_frequency=30_000,
+                sampling_frequency=gt_sorting.fs,
                 exhaustive_gt=False,
-                match_score=0.1,
+                match_score=match_score,
                 verbose=True,
             )
 
+            self.ordered_agreement = gt_comparison.get_ordered_agreement_scores()
             self.best_match_12 = gt_comparison.best_match_12.values.astype(int)
             self.gt_matched = self.best_match_12 >= 0
 
@@ -478,7 +480,7 @@ def near_gt_scatter_vs(step_comparisons, vs_comparison, gt_unit, dz=100):
         if u >= 0:
             matchstr = f"matching unit {u}"
         axes[i, 1].set_title(f"{comp.new_sorting.name}, {matchstr}", fontsize=8)
-        
+
         if i < nrows - 1:
             for ax in axes[i]:
                 ax.set_xlabel("")
@@ -501,3 +503,9 @@ def near_gt_scatter_vs(step_comparisons, vs_comparison, gt_unit, dz=100):
     )
 
     return fig, axes, leg_artist, gt_unit_ptp
+
+
+def plot_agreement_matrix(hybrid_comparison):
+    axes = sns.heatmap(hybrid_comparison.ordered_agreement, cmap=plt.cm.cubehelix)
+    plt.title(hybrid_comparison.new_sorting.name)
+    return axes
