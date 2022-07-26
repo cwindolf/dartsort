@@ -515,7 +515,10 @@ def plot_isi_distribution(spike_train, ax=None):
     y, x, _ = ax.hist(
         spike_train_diff, bins=np.arange(0, 10.1, 0.5), density=True
     )
-    sns.ecdfplot(spike_train_diff, ax=ax)
+    try:
+        sns.ecdfplot(spike_train_diff, ax=ax)
+    except KeyError as e:
+        print("Ignoring seaborn error", e)
     #     sns.distplot(spike_train_diff)
 
     ax.set_xticks(np.arange(0, 11, 2.5))
