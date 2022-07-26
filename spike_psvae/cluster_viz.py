@@ -2119,12 +2119,15 @@ def diagnostic_plots(
     pc_scatter = PCA(2)
 
     # CHANGE TO ADD RED / BLACK
-    ax_templates_ks.plot(
-        template_black[30:-30].T.flatten(),
-        c="black"
-        #         templates_ks[cluster_id_2, 30:-30, mc_plot - 5 : mc_plot + 5].T.flatten(),
-        #         c=color_array_ks_close[0],
-    )
+    if template_black is not None:
+        ax_templates_ks.plot(
+            template_black[30:-30].T.flatten(),
+            c="black"
+            #         templates_ks[cluster_id_2, 30:-30, mc_plot - 5 : mc_plot + 5].T.flatten(),
+            #         c=color_array_ks_close[0],
+        )
+    else:
+        print("again, no black template")
     if template_blue is not None:
         ax_templates_ks.plot(template_blue[30:-30].T.flatten(), c="blue")
     else:
