@@ -5,12 +5,11 @@ import colorcet
 from matplotlib.patches import Ellipse
 import matplotlib.transforms as transforms
 from spike_psvae.isocut5 import isocut5 as isocut
-import scipy
 
 # matplotlib.use('Agg')
 from matplotlib_venn import venn2
 from spikeinterface.extractors import NumpySorting
-from spikeinterface.toolkit import compute_correlograms
+from spikeinterface.postprocessing import compute_correlograms
 from spikeinterface.comparison import compare_two_sorters
 from spikeinterface.widgets import plot_agreement_matrix
 import seaborn as sns
