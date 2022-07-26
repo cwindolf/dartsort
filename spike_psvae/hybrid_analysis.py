@@ -120,7 +120,7 @@ class Sorting:
             self.spike_xzptp = spike_xzptp[which]
             self.spike_feats = np.c_[
                 self.spike_xzptp[:, :2],
-                30 * np.log(self.spike_xzptp[:, 3]),
+                30 * np.log(self.spike_xzptp[:, 2]),
             ]
 
     def get_unit_spike_train(self, unit):
@@ -393,6 +393,7 @@ def make_diagnostic_plot(hybrid_comparison, gt_unit):
         alpha=0.1,
         delta_frames=12,
         num_close_clusters=5,
+        tpca_rank=6,
     )
 
     fig.suptitle(f"GT unit {gt_unit}. {new_str}")
@@ -441,11 +442,14 @@ def array_scatter_vs(scatter_comparison, vs_comparison, do_ellipse=True):
 def near_gt_scatter_vs(step_comparisons, vs_comparison, gt_unit, dz=100):
     nrows = len(step_comparisons)
     fig, axes = plt.subplots(
-        nrows=nrows,
+        nrows=nrows + 1,
         ncols=3,
+        sharex="col",
+        sharey=True,
         figsize=(6, 2 * nrows + 1),
-        gridspec_kw=dict(hspace=0.25),
+        gridspec_kw=dict(hspace=0.25, wspace=0.0, height_ratios=[1] * nrows + [0.1]),
     )
+    print("z", axes.shape, flush=True)
     gt_x, gt_z, gt_ptp = vs_comparison.gt_sorting.template_xzptp.T
     log_gt_ptp = np.log(gt_ptp)
     gt_unit_z = gt_z[gt_unit]
@@ -459,8 +463,8 @@ def near_gt_scatter_vs(step_comparisons, vs_comparison, gt_unit, dz=100):
 
         match = comp.gt_matched + 2 * vs_match
         ls = []
-        for i, c in enumerate(colors):
-            matchix = match == i
+        for j, c in enumerate(colors):
+            matchix = match == j
             gtxix = gt_x[matchix]
             gtzix = gt_z[matchix]
             gtpix = log_gt_ptp[matchix]
@@ -473,7 +477,14 @@ def near_gt_scatter_vs(step_comparisons, vs_comparison, gt_unit, dz=100):
         matchstr = "no match"
         if u >= 0:
             matchstr = f"matching unit {u}"
-        axes[i, 1].set_title(f"{comp.new_sorting.name}, {matchstr}", fontsize=10)
+        axes[i, 1].set_title(f"{comp.new_sorting.name}, {matchstr}", fontsize=8)
+        
+        if i < nrows - 1:
+            for ax in axes[i]:
+                ax.set_xlabel("")
+
+    for ax in axes[-1]:
+        ax.set_axis_off()
 
     leg_artist = plt.figlegend(
         ls,
@@ -486,7 +497,7 @@ def near_gt_scatter_vs(step_comparisons, vs_comparison, gt_unit, dz=100):
         loc="lower center",
         ncol=4,
         frameon=False,
-        borderaxespad=-10,
+        borderaxespad=5,
     )
 
     return fig, axes, leg_artist, gt_unit_ptp
