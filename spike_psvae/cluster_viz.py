@@ -1709,6 +1709,7 @@ def diagnostic_plots(
         u, c = np.unique(mcs_abs_cluster_sorting1[ind_st1], return_counts=True)
         shared_mc = u[c.argmax()]
     template_red = None
+    template_black = None
     for indices_match, color, h_shift in zip(indices, colors, h_shifts):
         if len(indices_match) > 0:
             # firstchans_cluster_sorting = firstchans_cluster_sorting1[
@@ -1976,12 +1977,15 @@ def diagnostic_plots(
     pc_scatter = PCA(2)
 
     # CHANGE TO ADD RED / BLACK
-    ax_templates_yass.plot(
-        template_black[30:-30].T.flatten(),
-        c="black"
-        #         templates_yass[cluster_id_1, 30:-30, mc_plot - 5 : mc_plot + 5].T.flatten(),
-        #         c=color_array_yass_close[0],
-    )
+    if template_black is not None:
+        ax_templates_yass.plot(
+            template_black[30:-30].T.flatten(),
+            c="black"
+            #         templates_yass[cluster_id_1, 30:-30, mc_plot - 5 : mc_plot + 5].T.flatten(),
+            #         c=color_array_yass_close[0],
+        )
+    else:
+        print("No black template")
     if template_red is not None:
         ax_templates_yass.plot(template_red[30:-30].T.flatten(), c="red")
     else:
