@@ -44,7 +44,7 @@ def get_ccolor(k):
 
 
 def cluster_scatter(
-    xs, ys, ids, ax=None, n_std=2.0, excluded_ids={-1}, s=1, alpha=0.5
+    xs, ys, ids, ax=None, n_std=2.0, excluded_ids={-1}, s=1, alpha=0.5, do_ellipse=True
 ):
     ax = ax or plt.gca()
     # scatter and collect gaussian info
@@ -57,11 +57,15 @@ def cluster_scatter(
         color = get_ccolor(k)
         ax.scatter(xk, yk, s=s, color=color, alpha=alpha, marker=".")
         if k not in excluded_ids:
-            x_mean, y_mean = xk.mean(), yk.mean()
-            xycov = np.cov(xk, yk)
-            means[k] = x_mean, y_mean
-            covs[k] = xycov
             ax.annotate(str(k), (x_mean, y_mean))
+            if do_ellipse:
+                x_mean, y_mean = xk.mean(), yk.mean()
+                xycov = np.cov(xk, yk)
+                means[k] = x_mean, y_mean
+                covs[k] = xycov
+
+    if not do_ellipse:
+        return
 
     for k in means.keys():
         mean_x, mean_y = means[k]
@@ -118,6 +122,7 @@ def array_scatter(
         s=10,
         alpha=0.05,
         excluded_ids=excluded_ids,
+        do_ellipse=do_ellipse,
     )
     axes[0].scatter(*geom.T, c="orange", marker="s", s=10)
     axes[0].set_ylabel("z")
@@ -131,6 +136,7 @@ def array_scatter(
         s=10,
         alpha=0.05,
         excluded_ids=excluded_ids,
+        do_ellipse=do_ellipse,
     )
     axes[1].set_xlabel("maxptp")
     axes[2].scatter(
