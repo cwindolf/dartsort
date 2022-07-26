@@ -1820,6 +1820,7 @@ def diagnostic_plots(
     elif not_match_ind_st2.size:
         u, c = np.unique(mcs_abs_cluster_sorting2[ind_st2], return_counts=True)
         shared_mc = u[c.argmax()]
+    template_blue = None
     for indices_match, color, h_shift in zip(indices, colors, h_shifts):
         if len(indices_match) > 0:
             mcs_abs_cluster_sorting = np.full(indices_match.shape, shared_mc)
@@ -2116,7 +2117,10 @@ def diagnostic_plots(
         #         templates_ks[cluster_id_2, 30:-30, mc_plot - 5 : mc_plot + 5].T.flatten(),
         #         c=color_array_ks_close[0],
     )
-    ax_templates_ks.plot(template_blue[30:-30].T.flatten(), c="blue")
+    if template_blue is not None:
+        ax_templates_ks.plot(template_blue[30:-30].T.flatten(), c="blue")
+    else:
+        print("No blue template")
     some_in_cluster = np.random.choice(
         list(range((labels_ks == cluster_id_2).sum())),
         replace=False,
@@ -2217,8 +2221,8 @@ def diagnostic_plots(
         ax_LDA2_ks.set_title(
             f"LDA: {closest_clusters_kilo[1]}, temp. dist {np.abs(t0 - t2).max():0.2f}"
         )
-    except:
-        print("problem KS neighbors")
+    except Exception as e:
+        print("problem KS neighbors", e)
     ax_PCs_ks.set_title("2 PCs")
 
     for i in range(10):
