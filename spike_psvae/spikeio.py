@@ -91,6 +91,7 @@ def read_waveforms(
     spike_length_samples=121,
     trough_offset=42,
     dtype=np.float32,
+    fill_value=np.nan,
 ):
     """Read waveforms from binary file
 
@@ -166,6 +167,7 @@ def read_waveforms(
             ).reshape(spike_length_samples, n_channels)
 
             if load_subset:
+                wf = np.pad(wf, [(0, 0), (0, 1)], constant_values=fill_value)
                 wf = wf[:, channel_index[max_channels[spike_ix]]]
 
             waveforms[i] = wf
