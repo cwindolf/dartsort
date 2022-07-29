@@ -32,6 +32,50 @@ def channel_index_subset(geom, channel_index, n_channels=None, radius=None):
     return subset
 
 
+def get_channel_subset(waveforms, max_channels, channel_index_subset, fill_value=np.nan):
+    """You have waveforms on C channels, and you want them on fewer.
+
+    You can use a channel_index_subset obtained from the function `channel_index_subset`
+    above together with this function to do it.
+
+    E.g. you have waveforms on 40 channels extracted using `channel_index`, and you
+    want 10 channels in the end. You get:
+
+    ```
+    subset = channel_index_subset(geom, channel_index, n_channels=10)
+    ```
+
+    (The number of channels extracted at each max channel will be:
+    ```
+    n_chans_in_subset = subset.sum(axis=1)[max_channels]
+    ```
+    if you need these numbers.)
+
+    Then you can subset your waveforms with
+    ```
+    wfs_sub = get_channel_subset(wfs, maxchans, subset)
+    ```
+    """
+    N, T, C = waveforms.shape
+    n_channels, C_ = channel_index_subset.shape
+    assert C == C_
+
+    # convert to relative channel offsets
+    rel_sub_channel_index = np.tile(np.arange(C), (n_channels, 1))
+    rel_sub_channel_index[~channel_index_subset] = C
+
+    waveforms = np.pad(
+        waveforms, [(0, 0), (0, 0), (0, 1)], constant_values=fill_value
+    )
+
+    return waveforms[
+        np.arange(N)[:, None, None],
+        np.arange(T)[None, :, None],
+        rel_sub_channel_index[max_channels][:, None, :],
+    ]
+
+
+
 def get_maxchan_traces(waveforms, channel_index, maxchans):
     index_of_mc = np.argwhere(channel_index == np.arange(len(channel_index))[:, None])
     assert (index_of_mc[:, 0] == np.arange(len(channel_index))).all()
