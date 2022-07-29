@@ -116,6 +116,9 @@ def read_waveforms(
     spike_length_samples, trough_offset : int
     dtype : numpy dtype
         dtype stored in bin_file and returned from this function.
+    fill_value : any value of dtype
+        If a spike is loaded on a smaller channel neighborhood, this value
+        will fill in the blank space in the array.
 
     Returns
     -------
