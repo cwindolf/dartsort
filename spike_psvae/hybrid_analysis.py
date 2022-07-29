@@ -505,7 +505,6 @@ def near_gt_scatter_vs(step_comparisons, vs_comparison, gt_unit, dz=100):
     return fig, axes, leg_artist, gt_unit_ptp
 
 
-def plot_agreement_matrix(hybrid_comparison):
-    axes = sns.heatmap(hybrid_comparison.ordered_agreement, cmap=plt.cm.cubehelix)
-    plt.title(hybrid_comparison.new_sorting.name)
+def plot_agreement_matrix(hybrid_comparison, cmap=plt.cm.plasma):
+    axes = sns.heatmap(hybrid_comparison.ordered_agreement, cmap=cmap)
     return axes
