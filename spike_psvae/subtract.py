@@ -23,7 +23,7 @@ from sklearn.decomposition import PCA
 from tqdm.auto import tqdm
 
 from . import denoise, detect, localize_index
-from .spikeio import get_binary_length, read_data
+from .spikeio import get_binary_length, read_data, read_waveforms_in_memory
 
 
 def subtraction(
@@ -779,7 +779,7 @@ def subtraction_batch(
     if do_clean:
         cleaned_wfs = subtracted_wfs
         if spike_index.size:
-            cleaned_wfs = read_waveforms(
+            cleaned_wfs = read_waveforms_in_memory(
                 residual,
                 spike_index,
                 spike_length_samples,
@@ -1176,32 +1176,6 @@ def full_denoising(
         return waveforms, tpca_embeddings.transpose(0, 2, 1)
     elif return_tpca_embedding:
         return waveforms, None
-
-    return waveforms
-
-
-def read_waveforms(
-    recording,
-    spike_index,
-    spike_length_samples,
-    extract_channel_index,
-    trough_offset=42,
-    buffer=0,
-):
-    """Load waveforms from an array in memory"""
-    # pad with NaN to fill resulting waveforms with NaN when
-    # channel is outside probe
-    padded_recording = np.pad(
-        recording, [(0, 0), (0, 1)], constant_values=np.nan
-    )
-    # times relative to trough + buffer
-    time_range = np.arange(
-        buffer - trough_offset,
-        buffer + spike_length_samples - trough_offset,
-    )
-    time_ix = spike_index[:, 0, None] + time_range[None, :]
-    chan_ix = extract_channel_index[spike_index[:, 1]]
-    waveforms = padded_recording[time_ix[:, :, None], chan_ix[:, None, :]]
 
     return waveforms
 
