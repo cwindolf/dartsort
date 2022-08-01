@@ -60,9 +60,15 @@ def get_channel_subset(waveforms, max_channels, channel_index_subset, fill_value
     n_channels, C_ = channel_index_subset.shape
     assert C == C_
 
+    max_sub_chans = channel_index_subset.sum(axis=1).max()
+
     # convert to relative channel offsets
-    rel_sub_channel_index = np.tile(np.arange(C), (n_channels, 1))
-    rel_sub_channel_index[~channel_index_subset] = C
+    rel_sub_channel_index = []
+    for mask in channel_index_subset:
+        s = np.flatnonzero(mask)
+        s = list(s) + [C] * (max_sub_chans - len(s))
+        rel_sub_channel_index.append(s)
+    rel_sub_channel_index = np.array(rel_sub_channel_index)
 
     waveforms = np.pad(
         waveforms, [(0, 0), (0, 0), (0, 1)], constant_values=fill_value
@@ -73,7 +79,6 @@ def get_channel_subset(waveforms, max_channels, channel_index_subset, fill_value
         np.arange(T)[None, :, None],
         rel_sub_channel_index[max_channels][:, None, :],
     ]
-
 
 
 def get_maxchan_traces(waveforms, channel_index, maxchans):
