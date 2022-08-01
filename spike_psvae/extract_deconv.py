@@ -7,7 +7,7 @@ from multiprocessing.pool import Pool
 from pathlib import Path
 from tqdm.auto import tqdm
 from sklearn.decomposition import PCA
-from spike_psvae import denoise, subtract, localize_index
+from spike_psvae import denoise, subtract, localize_index, spikeio
 
 
 def extract_deconv(
@@ -276,7 +276,7 @@ def _extract_deconv_worker(start_sample):
     # -- load collision-cleaned waveforms
     if p.save_cleaned_waveforms or p.save_denoised_waveforms or p.localize:
         # initialize by reading from residual
-        waveforms = subtract.read_waveforms(
+        waveforms = spikeio.read_waveforms_in_memory(
             resid,
             spike_index,
             spike_length_samples=p.spike_length_samples,
@@ -291,7 +291,8 @@ def _extract_deconv_worker(start_sample):
     # -- denoise them
     if p.save_denoised_waveforms or p.localize:
         relative_batch_mcs = np.where(
-            p.channel_index[spike_index[:, 1]] - spike_index[:, 1][:, None] == 0
+            p.channel_index[spike_index[:, 1]] - spike_index[:, 1][:, None]
+            == 0
         )[1]
         waveforms = temporal_align(waveforms, relative_batch_mcs)
 
@@ -333,6 +334,7 @@ def _extract_deconv_worker(start_sample):
         p.temp_dir / f"maxptps_{batch_str}.npy",
         which_spikes,
     )
+
 
 def temporal_align(waveforms, maxchans, offset=42):
     N, T, C = waveforms.shape
