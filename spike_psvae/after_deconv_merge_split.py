@@ -7,6 +7,7 @@ from sklearn.decomposition import PCA
 from sklearn.discriminant_analysis import LinearDiscriminantAnalysis as LDA
 from spike_psvae import pre_deconv_merge_split, cluster_utils
 from spike_psvae.deconvolve import read_waveforms
+from spike_psvae.pyks_ccg import ccg_metrics
 from tqdm.auto import tqdm, trange
 
 
@@ -361,6 +362,11 @@ def merge(
     ptp_threshold=4.0,
     max_spikes=500,
     wfs_key="cleaned_waveforms",
+    isi_veto=False,
+    contam_ratio_threshold=0.2,
+    contam_alpha=0.05,
+    isi_nbins=500,
+    isi_bin_nsamples=30,
 ):
     """
     merge is applied on spikes with ptp > ptp_threshold only
@@ -413,6 +419,18 @@ def merge(
                     ptp_threshold=ptp_threshold,
                     wfs_key=wfs_key,
                 )
+
+                # check isi violation
+                if isi_veto and is_merged_bis:
+                    st1 = spike_index[labels == unit_reference, 0]
+                    st2 = spike_index[labels == unit_bis_reference, 0]
+                    contam_ratio, p_value = ccg_metrics(
+                        st1, st2, isi_nbins, isi_bin_nsamples
+                    )
+                    contam_ok = contam_ratio < contam_ratio_threshold
+                    contam_sig = p_value < contam_alpha
+                    is_merged_bis = contam_ok and contam_sig
+
                 is_merged |= is_merged_bis
                 if is_merged_bis:
                     to_be_merged.append(unit_bis_reference)
