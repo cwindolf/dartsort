@@ -1,6 +1,7 @@
 """A library for quickly reading spike data from .bin files."""
 from pathlib import Path
 import numpy as np
+from os import SEEK_SET
 
 
 def get_binary_length_samples(input_bin, n_channels, nsync=0, dtype=np.float32):
@@ -159,14 +160,14 @@ def read_waveforms(
     )
 
     load_times = trough_times - trough_offset
-    offsets = load_times.astype(np.int64) * dtype.itemsize * n_channels
+    offsets = load_times.astype(np.int64) * np.dtype(dtype).itemsize * n_channels
     with open(bin_file, "rb") as fin:
         for i, spike_ix in enumerate(kept_idx):
+            fin.seek(offsets[spike_ix], SEEK_SET)
             wf = np.fromfile(
                 fin,
                 dtype=dtype,
                 count=spike_length_samples * n_channels,
-                offset=offsets[spike_ix],
             ).reshape(spike_length_samples, n_channels)
 
             if load_subset:
@@ -176,5 +177,3 @@ def read_waveforms(
             waveforms[i] = wf
 
     return waveforms, skipped_idx
-
-# TODO: read_waveforms, read_maxchan_traces, read_local_waveforms
