@@ -280,7 +280,7 @@ def _extract_deconv_worker(start_sample):
             resid,
             spike_index,
             spike_length_samples=p.spike_length_samples,
-            extract_channel_index=p.channel_index,
+            channel_index=p.channel_index,
             buffer=-start_sample + buffer_left + pad_left,
         )
         # now add the templates
