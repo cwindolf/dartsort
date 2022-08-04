@@ -125,7 +125,7 @@ def check_merge(
     wfs_key="cleaned_waveforms",
 ):
     if unit_reference == unit_bis_reference:
-        return False, -1, 0
+        return False, unit_bis_reference, 0
 
     unit_mc = templates[unit_reference].ptp(0).argmax()
     unit_bis_mc = templates[unit_bis_reference].ptp(0).argmax()
@@ -137,7 +137,7 @@ def check_merge(
         - templates[unit_reference].ptp(0).max()
     )
     if mc_diff >= 3:
-        return False, -1, 0
+        return False, unit_bis_reference, 0
     # ALIGN BASED ON MAX PTP TEMPLATE MC
     # the template with the larger MC is not shifted, so
     # we set unit_shifted to be the unit with smaller ptp
@@ -168,7 +168,7 @@ def check_merge(
 #     )
 
     if len(which) < 2:
-        return False, -1, 0
+        return False, unit_bis_reference, 0
 
     if len(which) > n_wfs_max:
         idx = np.random.choice(
@@ -230,7 +230,7 @@ def check_merge(
 #     )
 
     if len(which) < 2:
-        return False, -1, 0
+        return False, unit_bis_reference, 0
 
     if len(which) > n_wfs_max:
         idx = np.random.choice(
@@ -344,7 +344,7 @@ def check_merge(
             )
             return True, unit_bis_reference, shift
 
-    return False, -1, 0
+    return False, unit_bis_reference, 0
 
 
 def merge(
