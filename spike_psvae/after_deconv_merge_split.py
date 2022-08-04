@@ -7,7 +7,7 @@ from sklearn.decomposition import PCA
 from sklearn.discriminant_analysis import LinearDiscriminantAnalysis as LDA
 from spike_psvae import pre_deconv_merge_split, cluster_utils
 from spike_psvae.deconvolve import read_waveforms
-from spike_psvae.pyks_ccg import ccg_metrics
+from spike_psvae.pyks_ccg import ccg_metrics, ccg
 from tqdm.auto import tqdm, trange
 
 
@@ -363,6 +363,7 @@ def merge(
     max_spikes=500,
     wfs_key="cleaned_waveforms",
     isi_veto=False,
+    spike_times=None,
     contam_ratio_threshold=0.2,
     contam_alpha=0.05,
     isi_nbins=500,
@@ -383,6 +384,7 @@ def merge(
         n_templates, templates, x_z_templates, n_temp, shifts=[-2, -1, 0, 1, 2]
     )
     reference_units = np.setdiff1d(np.unique(labels), [-1])
+    print(n_templates, reference_units.shape)
 
     # get template shifts
     template_mcs = templates.ptp(1).argmax(1)
@@ -421,15 +423,46 @@ def merge(
                 )
 
                 # check isi violation
+                if is_merged:
+                    print("will try", unit_reference, unit_bis_reference)
+                else:
+                    print("nope for", unit_reference, unit_bis_reference)
+
                 if isi_veto and is_merged_bis:
-                    st1 = spike_index[labels == unit_reference, 0]
-                    st2 = spike_index[labels == unit_bis_reference, 0]
+                    st1 = spike_times[labels == unit_reference]
+                    st2 = spike_times[labels == unit_bis_reference]
                     contam_ratio, p_value = ccg_metrics(
                         st1, st2, isi_nbins, isi_bin_nsamples
                     )
                     contam_ok = contam_ratio < contam_ratio_threshold
                     contam_sig = p_value < contam_alpha
                     is_merged_bis = contam_ok and contam_sig
+                    if not is_merged_bis:
+                        print("ISI prevented merge with", contam_ratio, p_value, st1.shape, st2.shape)
+                    else:
+                        print("ISI allowed merge with", contam_ratio, p_value, st1.shape, st2.shape)
+                    
+                    # ccg1 = ccg(st1, st1, 500, 30)
+                    # contam_ratio1, p_value1 = ccg_metrics(
+                    #     st1, st1, isi_nbins, isi_bin_nsamples
+                    # )
+                    # ccg2 = ccg(st2, st2, 500, 30)
+                    # contam_ratio2, p_value2 = ccg_metrics(
+                    #     st2, st2, isi_nbins, isi_bin_nsamples
+                    # )
+                    # ccg12 = ccg(st1, st2, 500, 30)
+                    # ccg1[isi_nbins] = ccg2[isi_nbins] = ccg12[isi_nbins] = 0
+                    # import matplotlib.pyplot as plt
+                    # fig, axes = plt.subplots(3, 1, figsize=(8, 12))
+                    # axes[0].step(np.arange(-isi_nbins, isi_nbins + 1), ccg1)
+                    # axes[0].set_title(f"{unit_reference} self-ccg. {contam_ratio1=}, {p_value1=}")
+                    # axes[1].step(np.arange(-isi_nbins, isi_nbins + 1), ccg2)
+                    # axes[1].set_title(f"{unit_bis_reference} self-ccg. {contam_ratio2=}, {p_value2=}")
+                    # axes[2].step(np.arange(-isi_nbins, isi_nbins + 1), ccg12)
+                    # axes[2].set_title(f"ccg {contam_ratio=}, {p_value=}")
+                    # axes[2].set_xlabel("1ms ccg bins")
+                    # plt.show()
+                    # plt.close(fig)
 
                 is_merged |= is_merged_bis
                 if is_merged_bis:

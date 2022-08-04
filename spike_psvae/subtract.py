@@ -392,16 +392,27 @@ def subtraction(
         )
 
         # no-threading/multiprocessing execution for debugging if n_jobs == 0
-        Executor = ProcessPoolExecutor if n_jobs else MockPoolExecutor
-        n_jobs = n_jobs or 1
+        Executor = ProcessPoolExecutor if n_jobs != 0 else MockPoolExecutor
 
         context = multiprocessing.get_context("spawn")
         manager = context.Manager()
         id_queue = manager.Queue()
         for id in range(n_jobs):
             id_queue.put(id)
+        print(dict( max_workers=n_jobs,
+            mp_context=context,
+            initializer=_subtraction_batch_init,
+            initargs=(
+                device,
+                nn_detector_path,
+                nn_channel_index,
+                denoise_detect,
+                do_nn_denoise,
+                id_queue,
+            )))
+
         with Executor(
-            n_jobs,
+            max_workers=n_jobs,
             mp_context=context,
             initializer=_subtraction_batch_init,
             initargs=(
@@ -750,7 +761,7 @@ def subtraction_batch(
 
     # return early if there were no spikes
     if batch_data_folder is None and not spike_index:
-        # this return is used by `train_pca`
+        # this return is used by `train_pca` as an early exit
         return spike_index, subtracted_wfs, residual_singlebuf
     elif not spike_index:
         return SubtractionBatchResult(
@@ -799,7 +810,7 @@ def subtraction_batch(
     # if caller passes None for the output folder, just return
     # the results now (eg this is used by train_pca)
     if batch_data_folder is None:
-        return spike_index, subtracted_wfs
+        return spike_index, subtracted_wfs, residual_singlebuf
 
     # get cleaned waveforms
     cleaned_wfs = None
@@ -1511,7 +1522,7 @@ def read_geom_from_meta(bin_file):
 class MockPoolExecutor:
     """A helper class for turning off concurrency when debugging."""
 
-    def __init__(n_jobs, mp_context=None, initializer=None, initargs=None):
+    def __init__(max_workers=None, mp_context=None, initializer=None, initargs=None):
         initializer(initargs)
 
     def map(self, f, jobs):
