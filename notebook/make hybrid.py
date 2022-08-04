@@ -13,6 +13,9 @@
 # ---
 
 # %%
+1
+
+# %%
 # %load_ext autoreload
 # %autoreload 2
 
@@ -27,6 +30,7 @@ import scipy.io
 import time
 import torch
 import shutil
+from sklearn.decomposition import PCA
 
 # %%
 # templates = np.load("/mnt/3TB/charlie/data/high_snr_templates.npy")
@@ -108,9 +112,6 @@ sub_dir = next(base_dir.glob("*subtraction"))
 sub_dir, sub_dir.exists()
 
 # %%
-# %ll {sub_dir}/CSHL051
-
-# %%
 ks_dir = next(base_dir.glob("*kilosort"))
 # ks_dir.mkdir(exist_ok=True)
 ks_dir, ks_dir.exists()
@@ -161,7 +162,7 @@ for meta in Path(in_dir).glob("*.meta"):
 
 
 # %% [markdown] tags=[]
-# # make hybrid binary
+# <!-- # make hybrid binary -->
 
 # %%
 1
@@ -381,10 +382,12 @@ for i, in_bin in enumerate(tqdm(in_bins)):
         localization_kind="logbarrier",
         localize_radius=100,
         loc_workers=3,
-        # overwrite=True,
+        overwrite=True,
         random_seed=0,
-        n_jobs=8,
+        n_jobs=2,
     )
+
+# %%
 
 # %%
 import gc; gc.collect()
@@ -471,7 +474,7 @@ Path("/local/duster").mkdir(exist_ok=True)
 for i, in_bin in enumerate(tqdm(in_bins)):
     subject = in_bin.stem.split(".")[0]
     print(subject, flush=True)
-    if subject not in ("DY_018",):
+    if subject not in ("DY_018", "CSHL051"):
         continue
     # if subject != "SWC_054":
         # continue
@@ -604,6 +607,9 @@ for i, in_bin in enumerate(tqdm(in_bins)):
 # %%
 # %rm -rf /local/deconv*
 
+# %%
+1 
+
 # %% tags=[]
 for in_bin in in_bins:
     subject = in_bin.stem.split(".")[0]
@@ -622,7 +628,10 @@ for in_bin in in_bins:
     deconv_scratch_dir = Path("/local/deconv")
     deconv_scratch_dir.mkdir(exist_ok=True)
     
-    if not (subject_deconv_dir / "deconv_results.h5").exists():
+    do_extract = True or not (subject_deconv_dir / "deconv_results.h5").exists()
+    # do_extract = not (subject_deconv_dir / "deconv_results.h5").exists()
+    
+    if do_extract:
         print("run extract")
         deconv_h5, deconv_residual_path = extract_deconv.extract_deconv(
             subject_deconv_dir / "templates_up.npy",
@@ -653,7 +662,8 @@ for in_bin in in_bins:
     templates = np.load(subject_deconv_dir / "templates.npy")
     assert templates.shape[0] == labels_deconv.max() + 1
     
-    do_split = not (subject_deconv_dir / "postdeconv_split_labels.npy").exists()
+    do_split = True or not (subject_deconv_dir / "postdeconv_split_labels.npy").exists()
+    # do_split = not (subject_deconv_dir / "postdeconv_split_labels.npy").exists()
     do_merge = True or not (subject_deconv_dir / "postdeconv_merge_labels.npy").exists()
     do_anything = do_split or do_merge
     
@@ -680,7 +690,9 @@ for in_bin in in_bins:
             firstchans,
             deconv_scratch_dir / "deconv_results.h5",
             wfs_key="denoised_waveforms",
+            pc_split_rank=6,
         )
+        split_sort = np.arange(len(split_labels))
         spike_train_split = spike_train_deconv.copy().astype(np.int64)
         spike_train_split[:, 1] = split_labels
         print("A", spike_train_split[:20], spike_train_split[-20:])
@@ -727,7 +739,9 @@ for in_bin in in_bins:
         # spike_index_dtype = np.dtype([('sample', np.int64), ('channel', np.int64)])
         spike_train_split = spike_train_split.astype(np.int64)
         # spike_train_split.view(spike_index_dtype).sort(order='sample')
-        spike_train_split = spike_train_split[np.argsort(spike_train_split[:, 0])]
+        reorder = np.argsort(spike_train_split[:, 0])
+        split_sort = split_sort[reorder]
+        spike_train_split = spike_train_split[reorder]
         print("D", spike_train_split[:20], spike_train_split[-20:])
         print((spike_train_split[1:,0] >= spike_train_split[:-1,0]).all())
         
@@ -764,9 +778,11 @@ for in_bin in in_bins:
         split_times, split_labels = spike_train_split.T
         np.save(subject_deconv_dir / "postdeconv_split_labels.npy", spike_train_split[:, 1])
         np.save(subject_deconv_dir / "postdeconv_split_times.npy", spike_train_split[:, 0])
+        np.save(subject_deconv_dir / "postdeconv_split_order.npy", split_sort)
     else:
         split_labels = np.load(subject_deconv_dir / "postdeconv_split_labels.npy")
         split_times = np.load(subject_deconv_dir / "postdeconv_split_times.npy")
+        split_sort = np.load(subject_deconv_dir / "postdeconv_split_order.npy")
     
     if do_merge:
         print("run merge")
@@ -796,6 +812,7 @@ for in_bin in in_bins:
         mcts = split_templates[np.arange(len(maxchans)), :, maxchans]
         print(mcts.argmin(1))
         
+        print("Just before merge...")
         print(split_labels.max(), np.unique(split_labels), np.unique(split_labels).size, split_templates.shape)
         
 
@@ -803,13 +820,18 @@ for in_bin in in_bins:
             split_labels,
             split_templates,
             deconv_scratch_dir / "deconv_results.h5",
-            x,
-            z_abs,
-            maxptps,
             firstchans,
             geom,
+            spike_times=split_times,
+            n_chan_merge=10,
             wfs_key="cleaned_waveforms",
+            tpca=PCA(6),
+            # isi_veto=True,
         )
+        
+        print("Just after merge...")
+        print(merge_labels.max(), np.unique(merge_labels), np.unique(merge_labels).size, split_templates.shape)
+        
 
         spike_train_merge = spike_train_split.copy()
         spike_train_merge[:, 1] = merge_labels
@@ -899,6 +921,9 @@ for i, in_bin in enumerate(tqdm(in_bins)):
     )
 
 # %%
+# %rm -rf {deconv_scratch_dir}/*
+
+# %%
 for in_bin in in_bins:
     subject = in_bin.stem.split(".")[0]
     # if subject != "DY_018":
@@ -943,17 +968,18 @@ for in_bin in in_bins:
         maxptps = f["maxptps"][:]
         firstchans = f["first_channels"][:]
         x, y, z_rel, z_abs, alpha = f["localizations"][:].T
+        print(f"deconv result shapes {maxptps.shape=} {x.shape=} {z_abs.shape=}")
     
     spike_train_deconv = np.load(subj_dc2_dir / "spike_train.npy")
     labels_deconv = spike_train_deconv[:, 1]
+    print(f"{spike_train_deconv.shape=}")
     assert labels_deconv.shape == maxptps.shape
     templates = np.load(subj_dc2_dir / "templates.npy")
     assert templates.shape[0] == labels_deconv.max() + 1
     assert spike_train_deconv[:, 0].shape == firstchans.shape
     
-    do_split = True or not (subj_dc2_dir / "postdeconv_split_labels.npy").exists()
-    do_merge = True or not (subj_dc2_dir / "postdeconv_merge_labels.npy").exists()
-    do_anything = do_split or do_merge
+    do_clean = True or not (subj_dc2_dir / "postdeconv_cleaned_labels.npy").exists()
+    do_anything = do_clean
     
     if do_anything:
         if not (deconv_scratch_dir / "deconv_results.h5").exists():
@@ -970,19 +996,16 @@ for in_bin in in_bins:
         else:
             print("Scratch bin already there")
     
-    if do_split:
-        print("run split")
-        split_labels = after_deconv_merge_split.split(
-            labels_deconv,
-            templates,
-            firstchans,
-            deconv_scratch_dir / "deconv_results.h5",
-            wfs_key="denoised_waveforms",
-        )
+    if do_clean:
+        print("run clean")
+        with h5py.File(deconv_scratch_dir / "deconv_results.h5") as h5:
+            print(f"{h5['maxptps'].shape=} {h5['localizations'].shape=}")
+        
+        split_labels = labels_deconv.copy()
         spike_train_split = spike_train_deconv.copy().astype(np.int64)
-        spike_train_split[:, 1] = split_labels
         print("A", spike_train_split[:20], spike_train_split[-20:])
         print((spike_train_split[1:,0] >= spike_train_split[:-1,0]).all())
+        print(f"{split_labels.shape=} {spike_train_split.shape=}")
         
         after_deconv_merge_split.clean_big_clusters(
             templates, spike_train_split, deconv_scratch_dir / "raw.bin", geom
@@ -990,14 +1013,8 @@ for in_bin in in_bins:
         spike_train_split[:, 1] = cluster_utils.make_labels_contiguous(spike_train_split[:, 1])
         print("B", spike_train_split[:20], spike_train_split[-20:])
         print((spike_train_split[1:,0] >= spike_train_split[:-1,0]).all())
-        
-        # split_templates = pre_deconv_merge_split.get_templates(
-        #     deconv_scratch_dir / "raw.bin",
-        #     geom,
-        #     split_labels.max() + 1,
-        #     spike_train_split,
-        #     spike_train_split[:, 1],
-        # )
+        print(f"{split_labels.shape=} {spike_train_split.shape=}")
+
         split_templates, snrs = snr_templates.get_templates(
             spike_train_split,
             geom,
@@ -1005,12 +1022,12 @@ for in_bin in in_bins:
             max_spikes_per_unit=250,
         )
         
-        
-        print("first temps")
+        # print("first temps")
         maxchans = split_templates.ptp(1).argmax(1)
         mcts = split_templates[np.arange(len(maxchans)), :, maxchans]
-        print(mcts.argmin(1))
+        # print(mcts.argmin(1))
         spike_train_split = spike_train_split.astype(np.int64)
+        print(f"{split_labels.shape=} {spike_train_split.shape=}")
         
         (
             template_shifts,
@@ -1020,14 +1037,16 @@ for in_bin in in_bins:
         ) = pre_deconv_merge_split.align_spikes_by_templates(
             spike_train_split[:, 1], split_templates, spike_train_split, shift_max=3
         )
-        print("C", spike_train_split[:20], spike_train_split[-20:])
-        print((spike_train_split[1:,0] >= spike_train_split[:-1,0]).all())
+        print(f"{split_labels.shape=} {spike_train_split.shape=}")
+        # print("C", spike_train_split[:20], spike_train_split[-20:])
+        # print((spike_train_split[1:,0] >= spike_train_split[:-1,0]).all())
         # spike_index_dtype = np.dtype([('sample', np.int64), ('channel', np.int64)])
         spike_train_split = spike_train_split.astype(np.int64)
         # spike_train_split.view(spike_index_dtype).sort(order='sample')
-        spike_train_split = spike_train_split[np.argsort(spike_train_split[:, 0])]
-        print("D", spike_train_split[:20], spike_train_split[-20:])
-        print((spike_train_split[1:,0] >= spike_train_split[:-1,0]).all())
+        split_sort = np.argsort(spike_train_split[:, 0])
+        spike_train_split = spike_train_split[split_sort]
+        # print("D", spike_train_split[:20], spike_train_split[-20:])
+        # print((spike_train_split[1:,0] >= spike_train_split[:-1,0]).all())
         
         print("shifts", template_shifts)
         
@@ -1039,6 +1058,7 @@ for in_bin in in_bins:
         )
         print("E", spike_train_split[:20], spike_train_split[-20:])
         print((spike_train_split[1:,0] >= spike_train_split[:-1,0]).all())
+        print(f"{split_labels.shape=} {spike_train_split.shape=}")
         
         print("second temps / before remove oversplit")
         maxchans = templates.ptp(1).argmax(1)
@@ -1049,6 +1069,7 @@ for in_bin in in_bins:
             templates, spike_train_split
         )
         print("F", spike_train_split[:20], spike_train_split[-20:])
+        print(f"{split_labels.shape=} {spike_train_split.shape=}")
         print((spike_train_split[1:,0] >= spike_train_split[:-1,0]).all())
         spike_train_split[:, 1] = cluster_utils.make_labels_contiguous(spike_train_split[:, 1])
         print("E", spike_train_split[:20], spike_train_split[-20:])
@@ -1057,77 +1078,13 @@ for in_bin in in_bins:
         print("after remove oversplit")
         maxchans = split_templates.ptp(1).argmax(1)
         mcts = split_templates[np.arange(len(maxchans)), :, maxchans]
+        print(f"{split_labels.shape=} {spike_train_split.shape=}")
         print(mcts.argmin(1))
         
         split_times, split_labels = spike_train_split.T
-        np.save(subj_dc2_dir / "postdeconv_split_labels.npy", spike_train_split[:, 1])
-        np.save(subj_dc2_dir / "postdeconv_split_times.npy", spike_train_split[:, 0])
-    else:
-        split_labels = np.load(subj_dc2_dir / "postdeconv_split_labels.npy")
-        split_times = np.load(subj_dc2_dir / "postdeconv_split_times.npy")
-    
-    if do_merge:
-        print("run merge")
-        # fill -- make split labels contiguous
-        split_labels = cluster_utils.make_labels_contiguous(split_labels, in_place=True)
-        spike_train_split = np.c_[split_times, split_labels]
-        
-        # get split templates
-        # split_templates = deconvolve.get_templates(
-        #     deconv_scratch_dir / "raw.bin",
-        #     spike_train_deconv,          # asks for spike index but only uses first axis
-        #     split_labels,
-        #     geom,
-        #     n_times=121,
-        #     n_samples=250,
-        #     trough_offset=42,
-        # )
-        
-        split_templates, snrs = snr_templates.get_templates(
-            spike_train_split,
-            geom,
-            deconv_scratch_dir / "raw.bin",
-            max_spikes_per_unit=250,
-        )
-        
-        maxchans = split_templates.ptp(1).argmax(1)
-        mcts = split_templates[np.arange(len(maxchans)), :, maxchans]
-        print(mcts.argmin(1))
-        
-        print(split_labels.max(), np.unique(split_labels), np.unique(split_labels).size, split_templates.shape)
-
-        merge_labels = after_deconv_merge_split.merge(
-            split_labels,
-            split_templates,
-            deconv_scratch_dir / "deconv_results.h5",
-            x,
-            z_abs,
-            maxptps,
-            firstchans,
-            geom,
-            wfs_key="cleaned_waveforms",
-        )
-
-        spike_train_merge = spike_train_split.copy()
-        spike_train_merge[:, 1] = merge_labels
-        
-        after_deconv_merge_split.clean_big_clusters(
-            templates, spike_train_merge, deconv_scratch_dir / "raw.bin", geom
-        )
-        
-        spike_train_merge[:, 1] = cluster_utils.make_labels_contiguous(spike_train_merge[:, 1])
-        templates, snrs = snr_templates.get_templates(
-            spike_train_merge,
-            geom,
-            deconv_scratch_dir / "raw.bin",
-            max_spikes_per_unit=250,
-        )
-        
-        spike_train_merge, merge_templates = after_deconv_merge_split.remove_oversplits(
-            templates, spike_train_merge
-        )
-        
-        np.save(subj_dc2_dir / "postdeconv_merge_labels.npy", spike_train_merge[:, 1])
+        np.save(subj_dc2_dir / "postdeconv_cleaned_labels.npy", spike_train_split[:, 1])
+        np.save(subj_dc2_dir / "postdeconv_cleaned_times.npy", spike_train_split[:, 0])
+        np.save(subj_dc2_dir / "postdeconv_cleaned_order.npy", split_sort)
     
     if do_anything:
         print("scratch h5 exists?", (deconv_scratch_dir / "deconv_results.h5").exists())

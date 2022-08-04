@@ -47,8 +47,7 @@ def ccg_metrics(st1, st2, nbins, tbin):
     p_values = np.zeros(10)
 
     for i in range(1, 11):
-
-        irange = np.arange(nbins - i, nbins + i + 1)
+        irange = range(nbins - i, nbins + i + 1)
 
         # for this central range of the CCG compute the mean CCG rate
         # as central value is set to 0, divide by 2*i
@@ -100,7 +99,7 @@ def ccg(st1, st2, nbins, tbin):
     return _ccg(st1, st2, nbins, tbin)
 
 
-@numba.jit(nopython=True, cache=False)
+@numba.jit(nopython=True)
 def _ccg(st1, st2, nbins, tbin):
     """JIT compiled ccg function for speed"""
     st1 = np.sort(
