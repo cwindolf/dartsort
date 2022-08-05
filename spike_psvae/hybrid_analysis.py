@@ -13,13 +13,15 @@ import matplotlib.pyplot as plt
 import statsmodels.api as sm
 from scipy.optimize import least_squares
 from scipy.spatial.distance import cdist
+import seaborn as sns
+from tqdm.auto import tqdm
 
 from spikeinterface.extractors import NumpySorting
 from spikeinterface.comparison import compare_sorter_to_ground_truth
 
 from spike_psvae.spikeio import get_binary_length
 from spike_psvae.deconvolve import get_templates
-from spike_psvae import localize_index, cluster_viz, cluster_viz_index
+from spike_psvae import localize_index, cluster_viz, cluster_viz_index, pyks_ccg
 
 
 class Sorting:
@@ -120,8 +122,17 @@ class Sorting:
             self.spike_xzptp = spike_xzptp[which]
             self.spike_feats = np.c_[
                 self.spike_xzptp[:, :2],
-                30 * np.log(self.spike_xzptp[:, 3]),
+                30 * np.log(self.spike_xzptp[:, 2]),
             ]
+        
+        if not self.unsorted:
+            self.contam_ratios = np.empty(self.unit_labels.shape)
+            self.contam_p_values = np.empty(self.unit_labels.shape)
+            for i in tqdm(self.unit_labels, desc="ccg"):
+                st = self.get_unit_spike_train(i)
+                self.contam_ratios[i], self.contam_p_values[i] = pyks_ccg.ccg_metrics(
+                    st, st, 500, self.fs / 1000
+                )
 
     def get_unit_spike_train(self, unit):
         return self.spike_times[self.spike_labels == unit]
@@ -137,7 +148,7 @@ class Sorting:
             sampling_frequency=self.fs,
         )
 
-    def array_scatter(self, zlim=(-50, 3900), axes=None):
+    def array_scatter(self, zlim=(-50, 3900), axes=None, do_ellipse=True):
         fig, axes = cluster_viz_index.array_scatter(
             self.spike_labels,
             self.geom,
@@ -147,6 +158,7 @@ class Sorting:
             annotate=False,
             zlim=zlim,
             axes=axes,
+            do_ellipse=do_ellipse
         )
         axes[0].scatter(*self.geom.T, marker="s", s=2, color="orange")
         return fig, axes
@@ -159,7 +171,7 @@ class HybridComparison:
     in one place for later plotting / analysis code.
     """
 
-    def __init__(self, gt_sorting, new_sorting, geom):
+    def __init__(self, gt_sorting, new_sorting, geom, match_score=0.1, dt_samples=5):
         assert gt_sorting.contiguous_labels
 
         self.gt_sorting = gt_sorting
@@ -176,12 +188,14 @@ class HybridComparison:
                 new_sorting.np_sorting,
                 gt_name=gt_sorting.name,
                 tested_name=new_sorting.name,
-                sampling_frequency=30_000,
+                sampling_frequency=gt_sorting.fs,
                 exhaustive_gt=False,
-                match_score=0.1,
+                match_score=match_score,
                 verbose=True,
+                delta_time=dt_samples / (gt_sorting.fs / 1000)
             )
 
+            self.ordered_agreement = gt_comparison.get_ordered_agreement_scores()
             self.best_match_12 = gt_comparison.best_match_12.values.astype(int)
             self.gt_matched = self.best_match_12 >= 0
 
@@ -201,7 +215,7 @@ class HybridComparison:
 
         # unsorted performance
         tp, fn, fp, num_gt, detected = unsorted_confusion(
-            gt_sorting.spike_index, new_sorting.spike_index
+            gt_sorting.spike_index, new_sorting.spike_index, n_samples=dt_samples
         )
         # as in spikeinterface, the idea of a true negative does not make sense here
         # accuracy with tn=0 is called threat score or critical success index, apparently
@@ -339,6 +353,9 @@ def plotgistic(
         n_missed = (y < 1e-8).sum()
         plt.title(title + f" -- {n_missed} missed")
 
+    if ylim is None:
+        dy = y.max() - y.min()
+        ylim = [y.min() - 0.05 * dy, y.max() + 0.05 * dy]
     ax.set_ylim(ylim)
     ax.set_xlim([x.min() - 0.5, x.max() + 0.5])
     ax.set_ylabel(ylab)
@@ -392,6 +409,7 @@ def make_diagnostic_plot(hybrid_comparison, gt_unit):
         alpha=0.1,
         delta_frames=12,
         num_close_clusters=5,
+        tpca_rank=6,
     )
 
     fig.suptitle(f"GT unit {gt_unit}. {new_str}")
@@ -399,8 +417,8 @@ def make_diagnostic_plot(hybrid_comparison, gt_unit):
     return fig, gt_ptp
 
 
-def array_scatter_vs(scatter_comparison, vs_comparison):
-    fig, axes = scatter_comparison.new_sorting.array_scatter()
+def array_scatter_vs(scatter_comparison, vs_comparison, do_ellipse=True):
+    fig, axes = scatter_comparison.new_sorting.array_scatter(do_ellipse=do_ellipse)
     scatter_match = scatter_comparison.gt_matched
     vs_match = vs_comparison.gt_matched
     match = scatter_match + 2 * vs_match
@@ -440,14 +458,18 @@ def array_scatter_vs(scatter_comparison, vs_comparison):
 def near_gt_scatter_vs(step_comparisons, vs_comparison, gt_unit, dz=100):
     nrows = len(step_comparisons)
     fig, axes = plt.subplots(
-        nrows=nrows,
+        nrows=nrows + 1,
         ncols=3,
+        sharex="col",
+        sharey=True,
         figsize=(6, 2 * nrows + 1),
-        gridspec_kw=dict(hspace=0.25),
+        gridspec_kw=dict(hspace=0.25, wspace=0.0, height_ratios=[1] * nrows + [0.1]),
     )
+    print("z", axes.shape, flush=True)
     gt_x, gt_z, gt_ptp = vs_comparison.gt_sorting.template_xzptp.T
     log_gt_ptp = np.log(gt_ptp)
     gt_unit_z = gt_z[gt_unit]
+    gt_unit_ptp = gt_ptp[gt_unit]
     zlim = gt_unit_z - dz, gt_unit_z + dz
     colors = ["k", "b", "r", "purple"]
     vs_match = vs_comparison.gt_matched
@@ -457,8 +479,8 @@ def near_gt_scatter_vs(step_comparisons, vs_comparison, gt_unit, dz=100):
 
         match = comp.gt_matched + 2 * vs_match
         ls = []
-        for i, c in enumerate(colors):
-            matchix = match == i
+        for j, c in enumerate(colors):
+            matchix = match == j
             gtxix = gt_x[matchix]
             gtzix = gt_z[matchix]
             gtpix = log_gt_ptp[matchix]
@@ -471,7 +493,14 @@ def near_gt_scatter_vs(step_comparisons, vs_comparison, gt_unit, dz=100):
         matchstr = "no match"
         if u >= 0:
             matchstr = f"matching unit {u}"
-        axes[i, 1].set_title(f"{comp.new_sorting.name}, {matchstr}", fontsize=10)
+        axes[i, 1].set_title(f"{comp.new_sorting.name}, {matchstr}", fontsize=8)
+
+        if i < nrows - 1:
+            for ax in axes[i]:
+                ax.set_xlabel("")
+
+    for ax in axes[-1]:
+        ax.set_axis_off()
 
     leg_artist = plt.figlegend(
         ls,
@@ -484,7 +513,12 @@ def near_gt_scatter_vs(step_comparisons, vs_comparison, gt_unit, dz=100):
         loc="lower center",
         ncol=4,
         frameon=False,
-        borderaxespad=-10,
+        borderaxespad=5,
     )
 
-    return fig, axes, leg_artist
+    return fig, axes, leg_artist, gt_unit_ptp
+
+
+def plot_agreement_matrix(hybrid_comparison, cmap=plt.cm.plasma):
+    axes = sns.heatmap(hybrid_comparison.ordered_agreement, cmap=cmap)
+    return axes
