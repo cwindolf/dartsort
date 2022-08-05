@@ -1091,6 +1091,7 @@ def full_denoising(
     waveforms,
     maxchans,
     extract_channel_index,
+#     extract_channel_index_ALL_TRUE_FALSE, #array of shape n_chan*n_chan st arr[i] is True for all channels in the radius of i (and False otherwise)
     radial_parents=None,
     do_enforce_decrease=True,
     probe=None,
@@ -1109,12 +1110,17 @@ def full_denoising(
     # in new pipeline, some channels are off the edge of the probe
     # those are filled with NaNs, which will blow up PCA. so, here
     # we grab just the non-NaN channels.
+        
+#     waveforms = waveforms.transpose(0, 2, 1)
+#     in_probe_index = extract_channel_index_ALL_TRUE_FALSE.astype(bool)[maxchans]
+#     wfs_in_probe = waveforms[in_probe_index] # waveforms only on channel 
+
     in_probe_channel_index = extract_channel_index < num_channels
     in_probe_index = in_probe_channel_index[maxchans]
     waveforms = waveforms.transpose(0, 2, 1)
     wfs_in_probe = waveforms[in_probe_index]
 
-    # Apply NN denoiser (skip if None)
+    # Apply NN denoiser (skip if None) #doesn't matter if wf on channels or everywhere
     if denoiser is not None:
         results = []
         for bs in range(0, wfs_in_probe.shape[0], batch_size):
@@ -1137,10 +1143,10 @@ def full_denoising(
 
     # Temporal PCA while we are still transposed
     if tpca is not None:
-        wfs_in_probe = tpca.inverse_transform(tpca.transform(wfs_in_probe))
+        wfs_in_probe = tpca.inverse_transform(tpca.transform(wfs_in_probe)) #tpca already fitted 
 
-    # back to original shape
-    waveforms[in_probe_index] = wfs_in_probe
+    # back to original shape #change only the indices that are in the index 
+    waveforms[in_probe_index] = wfs_in_probe # do everything on full wf but only transform the ones that matter 
     waveforms = waveforms.transpose(0, 2, 1)
 
     # enforce decrease
@@ -1171,7 +1177,7 @@ def full_denoising(
             (N, C, tpca.n_components), dtype=waveforms.dtype
         )
         tpca_embeddings[in_probe_index] = tpca.transform(
-            waveforms.transpose(0, 2, 1)[in_probe_index]
+            waveforms.transpose(0, 2, 1)[in_probe_index] #run tpca only on channels that matter! 
         )
         return waveforms, tpca_embeddings.transpose(0, 2, 1)
     elif return_tpca_embedding:
