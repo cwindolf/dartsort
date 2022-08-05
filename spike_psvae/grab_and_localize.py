@@ -7,7 +7,7 @@ from multiprocessing.pool import Pool
 from pathlib import Path
 from tqdm.auto import tqdm
 
-from . import denoise, localize_index, subtract
+from . import denoise, localize_index, subtract, spikeio
 
 
 def grab_and_localize(
@@ -99,18 +99,18 @@ def _job(batch_start):
     spike_index = p.spike_index[which]
 
     # -- load waveforms
-    rec = subtract.read_data(
+    rec = spikeio.read_data(
         p.binary_file,
         np.float32,
         max(0, batch_start - 42),
         min(p.len_data_samples, batch_start + p.chunk_size + 79),
         len(p.geom),
     )
-    waveforms = subtract.read_waveforms(
+    waveforms = spikeio.read_waveforms_in_memory(
         rec,
         spike_index,
         spike_length_samples=121,
-        extract_channel_index=p.channel_index,
+        channel_index=p.channel_index,
         buffer=-batch_start + 42 * (batch_start > 0),
     )
 
