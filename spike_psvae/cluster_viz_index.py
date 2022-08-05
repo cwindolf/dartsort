@@ -21,7 +21,7 @@ def get_ccolor(k):
 
 
 def cluster_scatter(
-    xs, ys, ids, ax=None, n_std=2.0, excluded_ids={-1}, s=1, alpha=0.5, annotate=True
+    xs, ys, ids, ax=None, n_std=2.0, excluded_ids={-1}, s=1, alpha=0.5, annotate=True, do_ellipse=True
 ):
     ax = ax or plt.gca()
     # scatter and collect gaussian info
@@ -34,15 +34,19 @@ def cluster_scatter(
         color = get_ccolor(k)
         ax.scatter(xk, yk, s=s, color=color, alpha=alpha, marker=".")
         if k not in excluded_ids:
-            x_mean, y_mean = xk.mean(), yk.mean()
-            means[k] = x_mean, y_mean
-            if where.size > 2:
-                xycov = np.cov(xk, yk)
-                covs[k] = xycov
-            else:
-                covs[k] = np.zeros((2, 2))
+            if do_ellipse:
+                x_mean, y_mean = xk.mean(), yk.mean()
+                means[k] = x_mean, y_mean
+                if where.size > 2:
+                    xycov = np.cov(xk, yk)
+                    covs[k] = xycov
+                else:
+                    covs[k] = np.zeros((2, 2))
             if annotate:
                 ax.annotate(str(k), (x_mean, y_mean), size=6)
+
+    if not do_ellipse:
+        return
 
     for k in means.keys():
         if (ids == k).sum() > 0:
@@ -84,6 +88,7 @@ def array_scatter(
     axes=None,
     annotate=True,
     subplots_kw={},
+    do_ellipse=True,
 ):
     fig = None
     if axes is None:
@@ -99,6 +104,7 @@ def array_scatter(
         s=10,
         alpha=0.05,
         annotate=annotate,
+        do_ellipse=do_ellipse,
     )
     if geom is not None:
         axes[0].scatter(*geom.T, c="orange", marker="s", s=10)
@@ -114,6 +120,7 @@ def array_scatter(
         s=10,
         alpha=0.05,
         annotate=annotate,
+        do_ellipse=do_ellipse,
     )
     axes[1].set_xlabel("log maxptp")
     axes[2].scatter(

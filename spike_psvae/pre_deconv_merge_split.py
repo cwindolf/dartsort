@@ -13,6 +13,7 @@ from scipy.spatial.distance import cdist
 from tqdm.auto import tqdm, trange
 from spike_psvae.denoise import denoise_wf_nn_tmp_single_channel
 from spike_psvae import waveform_utils
+from spike_psvae.pyks_ccg import ccg_metrics
 
 # %%
 # deprecated
@@ -515,7 +516,9 @@ def get_proposed_pairs(
                 :,
                 mc - n_channels_half : mc + n_channels_half,
             ]
-            dist_template[i, j], best_shift = compute_shifted_similarity(temp_a, temp_b, shifts=shifts)
+            dist_template[i, j], best_shift = compute_shifted_similarity(
+                temp_a, temp_b, shifts=shifts
+            )
     return dist_argsort, dist_template
 
 
@@ -537,11 +540,17 @@ def get_diptest_value(
     denoiser,
     device,
     tpca,
+    tpca_rank=5,
     n_channels=10,
     n_times=121,
     nn_denoise=False,
     max_spikes=250,
 ):
+    tpca_rank = (
+        tpca.n_components
+        if tpca_rank is None
+        else min(tpca.n_components, tpca_rank)
+    )
     # ALIGN BASED ON MAX PTP TEMPLATE MC
     n_channels_half = n_channels // 2
 
@@ -745,7 +754,7 @@ def get_diptest_value(
     # wfs_diptest = (
     #     wfs_diptest.reshape(N, C, T).transpose(0, 2, 1).reshape((N, C * T))
     # )
-    wfs_diptest = tpca.fit_transform(wfs_diptest)
+    wfs_diptest = tpca.fit_transform(wfs_diptest)[:, :tpca_rank]
     wfs_diptest = (
         wfs_diptest.reshape(N, C, tpca.n_components)
         .transpose(0, 2, 1)
@@ -781,6 +790,11 @@ def get_merged(
     distance_threshold=3.0,
     threshold_diptest=1.0,
     nn_denoise=False,
+    isi_veto=False,
+    contam_ratio_threshold=0.2,
+    contam_alpha=0.05,
+    isi_nbins=500,
+    isi_bin_nsamples=30,
 ):
     n_spikes_templates = get_n_spikes_templates(n_templates, labels)
     x_z_templates = get_x_z_templates(n_templates, labels, x, z)
@@ -842,10 +856,25 @@ def get_merged(
                         nn_denoise=nn_denoise,
                     )
                     # print(unit_reference, unit_bis_reference, dpt_val)
-                    if (
+                    is_merged = (
                         dpt_val < threshold_diptest
                         and np.abs(two_units_shift) < 2
-                    ):
+                    )
+
+                    # check isi violation
+                    isi_allows_merge = True
+                    if isi_veto and is_merged:
+                        st1 = spike_index[labels == unit_reference, 0]
+                        st2 = spike_index[labels == unit_bis_reference, 0]
+                        contam_ratio, p_value = ccg_metrics(
+                            st1, st2, isi_nbins, isi_bin_nsamples
+                        )
+                        contam_ok = contam_ratio < contam_ratio_threshold
+                        contam_sig = p_value < contam_alpha
+                        isi_allows_merge = contam_ok and contam_sig
+
+                    # apply merge
+                    if is_merged and isi_allows_merge:
                         to_be_merged.append(unit_bis_reference)
                         if unit_shifted == unit_bis_reference:
                             merge_shifts.append(-two_units_shift)
@@ -958,7 +987,7 @@ def ks_bimodal_pursuit(
         rs /= np.sum(rs, axis=1)[:, np.newaxis]
         if rs.sum(0).min() < 1e-6:
             break
-            
+
         # mean probability to be assigned to Gaussian 1
         p = rs[:, 0].mean()
         # new estimate of mean of cluster 1 (weighted by "responsibilities")
@@ -1011,7 +1040,9 @@ def ks_bimodal_pursuit(
     # c1 = cp.matmul(wPCA, cp.reshape((mean(clp0[ilow, :], 0), 3, -1), order='F'))
     c1 = tpca.inverse_transform(unit_features[ilow].mean())
     c2 = tpca.inverse_transform(unit_features[~ilow].mean())
-    cc = np.corrcoef(c1.ravel(), c2.ravel())[0, 1]  # correlation of mean waveforms
+    cc = np.corrcoef(c1.ravel(), c2.ravel())[
+        0, 1
+    ]  # correlation of mean waveforms
     n1 = np.linalg.norm(c1)  # the amplitude estimate 1
     n2 = np.linalg.norm(c2)  # the amplitude estimate 2
 
