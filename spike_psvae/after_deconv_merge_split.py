@@ -529,16 +529,16 @@ def clean_big_clusters(
             max_diff_N = 0
             for n in np.arange(lower, upper):
                 # Denoise templates?
-                temp_1 = np.mean(wfs_unit[:n], axis=0)
-                temp_2 = np.mean(wfs_unit[n:], axis=0)
+                temp_1 = np.median(wfs_unit[:n], axis=0)
+                temp_2 = np.median(wfs_unit[n:], axis=0)
                 diff = np.abs(temp_1 - temp_2).max()
                 if diff > max_diff:
                     max_diff = diff
                     max_diff_N = n
 
             if max_diff > split_diff:
-                temp_1 = np.mean(wfs_unit[:max_diff_N], axis=0)
-                temp_2 = np.mean(wfs_unit[max_diff_N:], axis=0)
+                temp_1 = np.median(wfs_unit[:max_diff_N], axis=0)
+                temp_2 = np.median(wfs_unit[max_diff_N:], axis=0)
                 n_temp_cleaned += 1
                 if (
                     np.abs(temp_1 - template_mc_trace).max()
