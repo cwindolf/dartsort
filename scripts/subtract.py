@@ -63,7 +63,7 @@ if __name__ == "__main__":
     g.add_argument("--noregister", action="store_true")
     g.add_argument(
         "--n_windows",
-        default=[10],
+        default=10,
         type=lambda x: list(map(int, x.split(","))),
     )
 
@@ -157,12 +157,13 @@ if __name__ == "__main__":
                     maxptps,
                     z_abs,
                     samples / 30000,
-                    robust_sigma=1.0,
+                    # robust_sigma=1.0,
+                    corr_threshold=0.6,
                     disp=200 * args.n_windows,
                     denoise_sigma=0.1,
                     rigid_init=False,
                     n_windows=args.n_windows,
-                    widthmul=0.5,
+                    widthmul=1.0,
                 )
                 z_reg -= (z_reg - z_abs).mean()
                 dispmap -= dispmap.mean()
