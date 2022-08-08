@@ -40,7 +40,7 @@ def localize_ptp_index(ptp, local_geom, logbarrier=True):
     # initialize x, z with CoM
     good = np.flatnonzero(~np.isnan(ptp))
     ptp = ptp[good].astype(float)
-    local_geom = local_geom[good].astype(float) #ptp has to be of the same size as local_geom which is of size channel index
+    local_geom = local_geom[good].astype(float)
     ptp_p = ptp / ptp.sum()
     xcom, zcom = (ptp_p[:, None] * local_geom).sum(axis=0)
     maxptp = ptp.max()
@@ -78,7 +78,7 @@ def localize_ptps_index(
     ptps,
     geom,
     maxchans,
-    channel_index_list, #list of np arrays with all channels corresponding to extract_channel_index
+    channel_index,
     n_channels=None,
     radius=None,
     n_workers=None,
@@ -95,17 +95,17 @@ def localize_ptps_index(
     -------
     xs, ys, z_rels, z_abss, alphas
     """
-    N, C = ptps.shape #C384 channels
+    N, C = ptps.shape
     maxchans = maxchans.astype(int)
 
-#     local_geoms = np.pad(geom, [(0, 1), (0, 0)])[channel_index[maxchans]] #384 is 00 -> array of all the local_geoms with [(0, 1), (0, 0)] as 384th chan
-#     local_geoms[:, :, 1] -= geom[maxchans, 1][:, None] #subtract max chan position
-#     if n_channels is not None or radius is not None:
-#         subset = channel_index_subset( #check what this function does
-#             geom, channel_index, n_channels=n_channels, radius=radius
-#         )
-#     else:
-#         subset = [slice(None)] * len(geom)
+    local_geoms = np.pad(geom, [(0, 1), (0, 0)])[channel_index[maxchans]]
+    local_geoms[:, :, 1] -= geom[maxchans, 1][:, None]
+    if n_channels is not None or radius is not None:
+        subset = channel_index_subset(
+            geom, channel_index, n_channels=n_channels, radius=radius
+        )
+    else:
+        subset = [slice(None)] * len(geom)
 
     # handle pbars
     xqdm = tqdm if pbar else lambda a, total, desc: a
@@ -119,12 +119,12 @@ def localize_ptps_index(
         for n, (x, y, z_rel, alpha) in enumerate(
             pool(
                 delayed(localize_ptp_index)(
-                    ptp[channel_index_list[mc]], #Take everything on the correct channels
-                    geom[channel_index_list[mc]], #local_geom, ptp have same shape
-                    logbarrier=logbarrier, #should be simpler if we do a loop 
+                    ptp[subset[mc]],
+                    local_geom[subset[mc]],
+                    logbarrier=logbarrier,
                 )
-                for ptp, mc in xqdm(
-                    zip(ptps, maxchans), total=N, desc="lsq"
+                for ptp, mc, local_geom in xqdm(
+                    zip(ptps, maxchans, local_geoms), total=N, desc="lsq"
                 )
             )
         ):
