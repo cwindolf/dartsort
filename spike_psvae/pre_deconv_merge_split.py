@@ -795,12 +795,13 @@ def get_merged(
     contam_alpha=0.05,
     isi_nbins=500,
     isi_bin_nsamples=30,
+    shifts=[-2, -1, 0, 1, 2],
 ):
     n_spikes_templates = get_n_spikes_templates(n_templates, labels)
     x_z_templates = get_x_z_templates(n_templates, labels, x, z)
     print("GET PROPOSED PAIRS")
     dist_argsort, dist_template = get_proposed_pairs(
-        n_templates, templates, x_z_templates, n_temp=n_temp
+        n_templates, templates, x_z_templates, n_temp=n_temp, shifts=shifts,
     )
 
     labels_updated = labels.copy()
