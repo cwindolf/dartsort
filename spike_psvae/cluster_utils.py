@@ -94,7 +94,7 @@ def get_unit_similarities(
     normalize_agreement_by="both",
 ):
     waveforms1 = read_waveforms(st_1, raw_data_bin, geom_array, n_times=121)[0]
-    template1 = np.mean(waveforms1, axis=0)
+    template1 = np.median(waveforms1, axis=0)
     original_template = np.copy(template1)
     max_ptp_channel = np.argmax(template1.ptp(0))
     max_ptp = np.max(template1.ptp(0))
@@ -114,7 +114,7 @@ def get_unit_similarities(
             waveforms2 = read_waveforms(
                 st_2, raw_data_bin, geom_array, n_times=121
             )[0]
-            template2 = np.mean(waveforms2, axis=0)[
+            template2 = np.median(waveforms2, axis=0)[
                 :, channel_range[0] : channel_range[1]
             ]
             similarity, shift = compute_shifted_similarity(

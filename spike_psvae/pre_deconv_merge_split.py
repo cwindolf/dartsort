@@ -494,7 +494,7 @@ def get_templates(
             geom_array,
             n_times=n_times,
         )[0]
-        templates[unit] = wfs_unit.mean(0)
+        templates[unit] = np.median(wfs_unit, axis=0)
     return templates
 
 

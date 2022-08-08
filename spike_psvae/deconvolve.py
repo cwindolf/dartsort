@@ -1098,5 +1098,5 @@ def get_templates(
             n_times=n_times,
             trough_offset=trough_offset,
         )[0]
-        templates[unit] = wfs_unit.mean(0)
+        templates[unit] = np.median(wfs_unit, axis=0)
     return templates
