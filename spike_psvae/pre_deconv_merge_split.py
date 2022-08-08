@@ -1107,16 +1107,20 @@ def ks_maxchan_tpca_split(
         cur_label = labels_to_process.pop()
         in_unit = np.flatnonzero(labels_new == cur_label)
         unit_features = maxchan_loadings[in_unit]
-        is_split, group_a, group_b = ks_bimodal_pursuit(
-            unit_features,
-            tpca,
-            top_pc_init=top_pc_init,
-            aucsplit=aucsplit,
-            min_size_split=min_size_split,
-            max_split_corr=max_split_corr,
-            min_amp_sim=min_amp_sim,
-            min_split_prop=min_split_prop,
-        )
+        try:
+            is_split, group_a, group_b = ks_bimodal_pursuit(
+                unit_features,
+                tpca,
+                top_pc_init=top_pc_init,
+                aucsplit=aucsplit,
+                min_size_split=min_size_split,
+                max_split_corr=max_split_corr,
+                min_amp_sim=min_amp_sim,
+                min_split_prop=min_split_prop,
+            )
+        except np.linalg.LinalgError as e:
+            print(cur_label, "had error", e)
+            is_split = False
 
         if is_split:
             labels_new[in_unit[group_b]] = next_label
