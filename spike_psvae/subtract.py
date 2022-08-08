@@ -6,7 +6,6 @@ import signal
 import time
 import torch
 import multiprocessing
-from collections import deque
 from concurrent.futures import ProcessPoolExecutor
 
 from collections import namedtuple
@@ -405,8 +404,8 @@ def subtraction(
         # no-threading/multiprocessing execution for debugging if n_jobs == 0
         Executor = ProcessPoolExecutor if n_jobs else MockPoolExecutor
         context = multiprocessing.get_context("spawn")
-        manager = context.Manager()
-        id_queue = manager.Queue()
+        manager = context.Manager() if n_jobs else None
+        id_queue = manager.Queue() if n_jobs else MockQueue()
 
         n_jobs = n_jobs or 1
         if n_jobs < 0:
@@ -1027,15 +1026,20 @@ def train_pca(
         residuals.append(residual_singlebuf)
 
     try:
+        # this can raise value error
         spike_index = np.concatenate(spike_indices, axis=0)
         waveforms = np.concatenate(waveforms, axis=0)
-    except ValueError as e:
+
+        # but we can also be here...
+        if waveforms.size == 0:
+            raise ValueError
+    except ValueError:
         raise ValueError(
             f"No waveforms found in the whole {n_sec_pca} training "
             "batches for TPCA, so we could not train it. Maybe you "
             "can increase n_sec_pca, but also maybe there are data "
-            "issues?"
-        ) from e
+            "or threshold issues?"
+        )
 
     N, T, C = waveforms.shape
     print("Fitting PCA on", N, "waveforms from mini-subtraction")
@@ -1553,6 +1557,15 @@ class MockPoolExecutor:
 
     def __exit__(self, exc_type, exc_val, exc_tb):
         return
+
+
+class MockQueue:
+    """Another helper class for turning off concurrency when debugging."""
+
+    def __init__(self):
+        self.q = []
+        self.put = self.q.append
+        self.get = lambda: self.q.pop(0)
 
 
 class timer:
