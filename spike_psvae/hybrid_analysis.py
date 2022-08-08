@@ -118,7 +118,11 @@ class Sorting:
 
         self.spike_xzptp = None
         if spike_xzptp is not None:
-            assert spike_xzptp.shape == (n_spikes_full, 3)
+            if not spike_xzptp.shape == (n_spikes_full, 3):
+                raise ValueError(
+                    "Not all data had the same shape. "
+                    f"{n_spikes_full=} {spike_labels.shape=} {spike_xzptp.shape=}"
+                )
             self.spike_xzptp = spike_xzptp[which]
             self.spike_feats = np.c_[
                 self.spike_xzptp[:, :2],
