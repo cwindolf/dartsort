@@ -4,7 +4,9 @@ import numpy as np
 from os import SEEK_SET
 
 
-def get_binary_length_samples(input_bin, n_channels, nsync=0, dtype=np.float32):
+def get_binary_length_samples(
+    input_bin, n_channels, nsync=0, dtype=np.float32
+):
     """How long is this binary file in samples?"""
     bin_size = Path(input_bin).stat().st_size
     assert not bin_size % np.dtype(dtype).itemsize
@@ -14,7 +16,9 @@ def get_binary_length_samples(input_bin, n_channels, nsync=0, dtype=np.float32):
     return T_samples
 
 
-def get_binary_length(input_bin, n_channels, sampling_rate, nsync=0, dtype=np.float32):
+def get_binary_length(
+    input_bin, n_channels, sampling_rate, nsync=0, dtype=np.float32
+):
     """How long is this binary file in samples and seconds?"""
     bin_size = Path(input_bin).stat().st_size
     assert not bin_size % np.dtype(dtype).itemsize
@@ -25,7 +29,9 @@ def get_binary_length(input_bin, n_channels, sampling_rate, nsync=0, dtype=np.fl
     return T_samples, T_sec
 
 
-def read_data(bin_file, dtype, s_start, s_end, n_channels, nsync=0, out_dtype=None):
+def read_data(
+    bin_file, dtype, s_start, s_end, n_channels, nsync=0, out_dtype=None
+):
     """Read a chunk of a binary file
 
     Reads a temporal chunk on all channels: so, this is for loading a
@@ -70,9 +76,7 @@ def read_waveforms_in_memory(
     """Load waveforms from an array in memory"""
     # pad with NaN to fill resulting waveforms with NaN when
     # channel is outside probe
-    padded_array = np.pad(
-        array, [(0, 0), (0, 1)], constant_values=np.nan
-    )
+    padded_array = np.pad(array, [(0, 0), (0, 1)], constant_values=np.nan)
     # times relative to trough + buffer
     time_range = np.arange(
         buffer - trough_offset,
@@ -91,6 +95,7 @@ def read_waveforms(
     n_channels,
     channel_index=None,
     max_channels=None,
+    channels=None,
     spike_length_samples=121,
     trough_offset=42,
     dtype=np.float32,
@@ -116,6 +121,9 @@ def read_waveforms(
     max_channels : None or int array
         The detection channels for the spikes, used to look up the
         channels subset to load in `channel_index`
+    channels : None or int array
+        Just read data on these channels. (Don't use this argument and
+        channel_index together.)
     spike_length_samples, trough_offset : int
     dtype : numpy dtype
         dtype stored in bin_file and returned from this function.
@@ -132,25 +140,32 @@ def read_waveforms(
     T_samples = get_binary_length_samples(bin_file, n_channels, dtype=dtype)
     N = trough_times.shape[0]
     load_channels = n_channels
-    load_subset = False
+    load_ci = load_chans = False
 
     if max_channels is not None:
         assert max_channels.shape == trough_times.shape
         if channel_index is None:
             raise ValueError(
-                "If loading a subset of channels, please supply "
-                "`channel_index`."
+                "If loading a subset of channels depending on the max "
+                "channel, please supply `channel_index`."
             )
+        if channels is None:
+            raise ValueError("Pass channel_index or channels, but not both.")
 
         load_channels = channel_index.shape[1]
-        load_subset = True
+        load_ci = True
+
+    if channels is not None:
+        channels = np.atleast_1d(channels)
+        assert channels.ndim == 1
+        load_channels = channels.size
+        load_chans = True
 
     # figure out which loads will be skipped in advance
     max_load_time = T_samples - spike_length_samples + trough_offset
     # this can be sped up with a searchsorted if times are sorted...
     skipped_idx = np.flatnonzero(
-        (trough_times < trough_offset)
-        | (trough_times > max_load_time)
+        (trough_times < trough_offset) | (trough_times > max_load_time)
     )
     kept_idx = np.setdiff1d(np.arange(N), skipped_idx)
     N_load = N - len(skipped_idx)
@@ -162,7 +177,9 @@ def read_waveforms(
     )
 
     load_times = trough_times - trough_offset
-    offsets = load_times.astype(np.int64) * np.dtype(dtype).itemsize * n_channels
+    offsets = (
+        load_times.astype(np.int64) * np.dtype(dtype).itemsize * n_channels
+    )
     with open(bin_file, "rb") as fin:
         for i, spike_ix in enumerate(kept_idx):
             fin.seek(offsets[spike_ix], SEEK_SET)
@@ -172,9 +189,11 @@ def read_waveforms(
                 count=spike_length_samples * n_channels,
             ).reshape(spike_length_samples, n_channels)
 
-            if load_subset:
+            if load_ci:
                 wf = np.pad(wf, [(0, 0), (0, 1)], constant_values=fill_value)
                 wf = wf[:, channel_index[max_channels[spike_ix]]]
+            elif load_chans:
+                wf = wf[:, channels]
 
             waveforms[i] = wf
 
