@@ -61,6 +61,8 @@ def subtraction(
     loc_workers=4,
     overwrite=False,
     random_seed=0,
+    binary_dtype=np.float32,
+    dtype=np.float32,
 ):
     """Subtraction-based waveform extraction
 
@@ -185,7 +187,11 @@ def subtraction(
 
     # figure out length of data
     T_samples, T_sec = get_binary_length(
-        standardized_bin, n_channels, sampling_rate, nsync=nsync
+        standardized_bin,
+        n_channels,
+        sampling_rate,
+        nsync=nsync,
+        dtype=binary_dtype,
     )
     assert t_start >= 0 and (t_end is None or t_end <= T_sec)
     start_sample = int(np.floor(t_start * sampling_rate))
@@ -280,11 +286,12 @@ def subtraction(
                     do_nn_denoise=do_nn_denoise,
                     do_enforce_decrease=do_enforce_decrease,
                     probe=probe,
-                    standardized_dtype=np.float32,
                     n_sec_pca=n_sec_pca,
                     rank=tpca_rank,
                     random_seed=random_seed,
                     device=device,
+                    binary_dtype=binary_dtype,
+                    dtype=dtype,
                 )
 
             # try to free up some memory on GPU that might have been used above
@@ -329,6 +336,7 @@ def subtraction(
         do_clean=do_clean,
         do_localize=do_localize,
         overwrite=overwrite,
+        dtype=dtype,
     ) as (output_h5, last_sample):
 
         spike_index = output_h5["spike_index"]
@@ -387,29 +395,24 @@ def subtraction(
                 loc_radius,
                 peak_sign,
                 nsync,
+                binary_dtype,
+                dtype,
             )
             for batch_id, s_start in jobs
         )
 
         # no-threading/multiprocessing execution for debugging if n_jobs == 0
-        Executor = ProcessPoolExecutor if n_jobs != 0 else MockPoolExecutor
-
+        Executor = ProcessPoolExecutor if n_jobs else MockPoolExecutor
         context = multiprocessing.get_context("spawn")
-        manager = context.Manager()
-        id_queue = manager.Queue()
+        manager = context.Manager() if n_jobs else None
+        id_queue = manager.Queue() if n_jobs else MockQueue()
+
+        n_jobs = n_jobs or 1
+        if n_jobs < 0:
+            n_jobs = multiprocessing.cpu_count() - 1
+
         for id in range(n_jobs):
             id_queue.put(id)
-        print(dict( max_workers=n_jobs,
-            mp_context=context,
-            initializer=_subtraction_batch_init,
-            initargs=(
-                device,
-                nn_detector_path,
-                nn_channel_index,
-                denoise_detect,
-                do_nn_denoise,
-                id_queue,
-            )))
 
         with Executor(
             max_workers=n_jobs,
@@ -619,6 +622,8 @@ def subtraction_batch(
     loc_radius,
     peak_sign,
     nsync,
+    binary_dtype,
+    dtype,
     device,
     denoiser,
     detector,
@@ -703,7 +708,13 @@ def subtraction_batch(
     load_start = max(start_sample, s_start - buffer)
     load_end = min(end_sample, s_end + buffer)
     residual = read_data(
-        standardized_bin, np.float32, load_start, load_end, n_channels, nsync
+        standardized_bin,
+        binary_dtype,
+        load_start,
+        load_end,
+        n_channels,
+        nsync,
+        out_dtype=dtype,
     )
 
     # 0 padding if we were at the edge of the data
@@ -934,13 +945,14 @@ def train_pca(
     do_nn_denoise=True,
     do_enforce_decrease=True,
     probe=None,
-    standardized_dtype=np.float32,
     n_sec_pca=10,
     rank=7,
     nsync=0,
     random_seed=0,
     device="cpu",
     trough_offset=42,
+    binary_dtype=np.float32,
+    dtype=np.float32,
 ):
     """Pre-train temporal PCA
 
@@ -1002,6 +1014,8 @@ def train_pca(
             None,
             peak_sign,
             nsync,
+            binary_dtype,
+            dtype,
             device,
             denoiser,
             detector,
@@ -1012,15 +1026,20 @@ def train_pca(
         residuals.append(residual_singlebuf)
 
     try:
+        # this can raise value error
         spike_index = np.concatenate(spike_indices, axis=0)
         waveforms = np.concatenate(waveforms, axis=0)
-    except ValueError as e:
+
+        # but we can also be here...
+        if waveforms.size == 0:
+            raise ValueError
+    except ValueError:
         raise ValueError(
             f"No waveforms found in the whole {n_sec_pca} training "
             "batches for TPCA, so we could not train it. Maybe you "
             "can increase n_sec_pca, but also maybe there are data "
-            "issues?"
-        ) from e
+            "or threshold issues?"
+        )
 
     N, T, C = waveforms.shape
     print("Fitting PCA on", N, "waveforms from mini-subtraction")
@@ -1120,7 +1139,7 @@ def detect_and_subtract(
         **kwargs,
     )
     if not spike_index.size:
-        return [], raw, []
+        return [], [], raw, []
 
     # -- read waveforms
     padded_raw = np.pad(raw, [(0, 0), (0, 1)], constant_values=np.nan)
@@ -1188,12 +1207,13 @@ def full_denoising(
     # in new pipeline, some channels are off the edge of the probe
     # those are filled with NaNs, which will blow up PCA. so, here
     # we grab just the non-NaN channels.
+
     in_probe_channel_index = extract_channel_index < num_channels
     in_probe_index = in_probe_channel_index[maxchans]
     waveforms = waveforms.transpose(0, 2, 1)
     wfs_in_probe = waveforms[in_probe_index]
 
-    # Apply NN denoiser (skip if None)
+    # Apply NN denoiser (skip if None) #doesn't matter if wf on channels or everywhere
     if denoiser is not None:
         results = []
         for bs in range(0, wfs_in_probe.shape[0], batch_size):
@@ -1249,6 +1269,7 @@ def full_denoising(
         tpca_embeddings = np.empty(
             (N, C, tpca.n_components), dtype=waveforms.dtype
         )
+        # run tpca only on channels that matter!
         tpca_embeddings[in_probe_index] = tpca.transform(
             waveforms.transpose(0, 2, 1)[in_probe_index]
         )
@@ -1277,6 +1298,7 @@ def get_output_h5(
     save_waveforms=True,
     overwrite=False,
     chunk_len=4096,
+    dtype=np.float32,
 ):
     h5_exists = Path(out_h5).exists()
     last_sample = 0
@@ -1306,7 +1328,7 @@ def get_output_h5(
             shape=(0, tpca.components_.shape[0], extract_channels),
             chunks=(chunk_len, tpca.components_.shape[0], extract_channels),
             maxshape=(None, tpca.components_.shape[0], extract_channels),
-            dtype=np.float32,
+            dtype=dtype,
         )
         if save_waveforms:
             output_h5.create_dataset(
@@ -1314,7 +1336,7 @@ def get_output_h5(
                 shape=(0, spike_length_samples, extract_channels),
                 chunks=(chunk_len, spike_length_samples, extract_channels),
                 maxshape=(None, spike_length_samples, extract_channels),
-                dtype=np.float32,
+                dtype=dtype,
             )
         output_h5.create_dataset(
             "spike_index",
@@ -1337,7 +1359,7 @@ def get_output_h5(
                 shape=(0, spike_length_samples, extract_channels),
                 chunks=(chunk_len, spike_length_samples, extract_channels),
                 maxshape=(None, spike_length_samples, extract_channels),
-                dtype=np.float32,
+                dtype=dtype,
             )
         if do_localize:
             output_h5.create_dataset(
@@ -1345,35 +1367,35 @@ def get_output_h5(
                 shape=(0, 5),
                 chunks=(chunk_len, 5),
                 maxshape=(None, 5),
-                dtype=np.float32,
+                dtype=dtype,
             )
             output_h5.create_dataset(
                 "maxptps",
                 shape=(0,),
                 chunks=(chunk_len,),
                 maxshape=(None,),
-                dtype=np.float32,
+                dtype=dtype,
             )
             output_h5.create_dataset(
                 "peak_heights",
                 shape=(0,),
                 chunks=(chunk_len,),
                 maxshape=(None,),
-                dtype=np.float32,
+                dtype=dtype,
             )
             output_h5.create_dataset(
                 "trough_depths",
                 shape=(0,),
                 chunks=(chunk_len,),
                 maxshape=(None,),
-                dtype=np.float32,
+                dtype=dtype,
             )
             output_h5.create_dataset(
                 "widths",
                 shape=(0,),
                 chunks=(chunk_len,),
                 maxshape=(None,),
-                dtype=np.float32,
+                dtype=dtype,
             )
 
     done_percent = (
@@ -1522,11 +1544,30 @@ def read_geom_from_meta(bin_file):
 class MockPoolExecutor:
     """A helper class for turning off concurrency when debugging."""
 
-    def __init__(max_workers=None, mp_context=None, initializer=None, initargs=None):
-        initializer(initargs)
+    def __init__(
+        self,
+        max_workers=None,
+        mp_context=None,
+        initializer=None,
+        initargs=None,
+    ):
+        initializer(*initargs)
+        self.map = map
 
-    def map(self, f, jobs):
-        return map(f, jobs)
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        return
+
+
+class MockQueue:
+    """Another helper class for turning off concurrency when debugging."""
+
+    def __init__(self):
+        self.q = []
+        self.put = self.q.append
+        self.get = lambda: self.q.pop(0)
 
 
 class timer:
