@@ -19,7 +19,7 @@ def get_templates(
     do_enforce_decrease=True,
     do_temporal_decrease=True,
     do_collision_clean=False,
-    reducer=np.mean,
+    reducer=np.median,
     snr_threshold=5.0 * np.sqrt(200),
     snr_by_channel=True,
     n_jobs=30,
