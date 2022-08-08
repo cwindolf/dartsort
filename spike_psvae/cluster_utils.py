@@ -1,59 +1,12 @@
 import numpy as np
 import spikeinterface
 from spikeinterface.comparison import compare_two_sorters
-import os
 import pandas
 import hdbscan
 from spike_psvae import triage
-from tqdm.auto import tqdm
+from spike_psvae.spikeio import read_waveforms
+from tqdm.auto import tqdm, trange
 import scipy
-
-
-def read_waveforms(
-    spike_times,
-    bin_file,
-    geom_array,
-    n_times=121,
-    offset_denoiser=42,
-    channels=None,
-    dtype=np.dtype("float32"),
-):
-    """
-    read waveforms from recording
-    n_times : waveform temporal length
-    channels : channels to read from
-    """
-    # n_times needs to be odd
-    if n_times % 2 == 0:
-        n_times += 1
-
-    # read all channels
-    if channels is None:
-        channels = np.arange(geom_array.shape[0])
-
-    # ***** LOAD RAW RECORDING *****
-    wfs = np.zeros((len(spike_times), n_times, len(channels)), "float32")
-
-    skipped_idx = []
-    n_channels = geom_array.shape[0]  # len(channels)
-    total_size = n_times * n_channels
-    # spike_times are the centers of waveforms
-    spike_times_shifted = spike_times - offset_denoiser  # n_times//2
-    # print(spike_times, spike_times_shifted)
-    offsets = spike_times_shifted.astype(int) * dtype.itemsize * n_channels
-    with open(bin_file, "rb") as fin:
-        for ctr, spike in enumerate(spike_times_shifted):
-            try:
-                fin.seek(offsets[ctr], os.SEEK_SET)
-                wf = np.fromfile(fin, dtype=dtype, count=total_size)
-                wfs[ctr] = wf.reshape(n_times, n_channels)[:, channels]
-            except OSError:
-                print(f"skipped {ctr, spike}")
-                skipped_idx.append(ctr)
-    wfs = np.delete(wfs, skipped_idx, axis=0)
-    fin.close()
-
-    return wfs, skipped_idx
 
 
 def compute_shifted_similarity(template1, template2, shifts=[0]):
@@ -93,7 +46,7 @@ def get_unit_similarities(
     order_by="similarity",
     normalize_agreement_by="both",
 ):
-    waveforms1 = read_waveforms(st_1, raw_data_bin, geom_array, n_times=121)[0]
+    waveforms1, _ = read_waveforms(st_1, raw_data_bin, geom_array.shape[0])
     template1 = np.median(waveforms1, axis=0)
     original_template = np.copy(template1)
     max_ptp_channel = np.argmax(template1.ptp(0))
@@ -111,9 +64,9 @@ def get_unit_similarities(
     for closest_cluster in closest_clusters:
         if closest_cluster in sorting.get_unit_ids():
             st_2 = sorting.get_unit_spike_train(closest_cluster)
-            waveforms2 = read_waveforms(
-                st_2, raw_data_bin, geom_array, n_times=121
-            )[0]
+            waveforms2, _ = read_waveforms(
+                st_2, raw_data_bin, geom_array.shape[0]
+            )
             template2 = np.median(waveforms2, axis=0)[
                 :, channel_range[0] : channel_range[1]
             ]
@@ -346,6 +299,62 @@ def remove_duplicate_spikes(clusterer, spike_frames, maxptps, frames_dedup):
     return clusterer, remove_indices_list, remove_spikes
 
 
+def remove_self_duplicates(
+    spike_times,
+    spike_labels,
+    binary_file,
+    n_channels,
+    shifted_templates,
+    frame_dedup=20,
+):
+    indices_to_remove = []
+    N = spike_labels.shape[0]
+
+    for unit in range(shifted_templates.shape[0]):
+        mc = shifted_templates[unit].ptp(0).argmax()
+        in_unit = np.flatnonzero(spike_labels == unit)
+
+        spike_times_unit = spike_times[in_unit]
+        violations = np.diff(spike_times_unit) < frame_dedup
+
+        if violations.any():
+            # we'll remove either an index in idx_to_remove,
+            # or that index + 1, depending on template agreement
+            first_viol_ix = np.flatnonzero(violations)
+            wfs_unit, _ = read_waveforms(
+                spike_times_unit, binary_file, n_channels, channels=[mc]
+            )
+            # reshape to NxT
+            wfs_unit = wfs_unit.squeeze()
+            template_mc = np.median(wfs_unit[:, :], axis=0)
+            template_argmin = template_mc.argmin()
+
+            # get subsets of wfs -- will we remove leading (wfs_1)
+            # or trailing (wfs_2) waveform in each case?
+            wfs_1 = wfs_unit[first_viol_ix[:]]
+            wfs_2 = wfs_unit[first_viol_ix[:] + 1]
+
+            # best aligned will have a 1 where wfs_1 was better
+            # aligned then wfs_2, so that first_viol_ix + best_aligned
+            # is the index of the waveforms to *remove!*
+            argmins_1 = wfs_1.argmin(axis=1)
+            argmins_2 = wfs_2.argmin(axis=1)
+            best_aligned = np.abs(argmins_1 - template_argmin) < (argmins_2 - template_argmin)
+
+            # it's possible that duplicates could arrive, so that we're
+            # not really removing *all* the violations.
+            # but it's better than nothing!
+            ix_remove_unit = np.unique(first_viol_ix + best_aligned)
+
+            # append and continue to next unit
+            indices_to_remove.extend(in_unit[ix_remove_unit])
+
+    indices_to_remove = np.array(indices_to_remove)
+    indices_to_keep = np.setdiff1d(np.arange(N), indices_to_remove)
+
+    return indices_to_keep, indices_to_remove
+
+
 def perturb_features(x, z, logmaxptp_scaled, noise_scale):
     x_p = x + np.random.normal(loc=0.0, scale=noise_scale)
     z_p = z + np.random.normal(loc=0.0, scale=noise_scale)
@@ -355,37 +364,52 @@ def perturb_features(x, z, logmaxptp_scaled, noise_scale):
     return x_p, z_p, log_maxptp_scaled_p
 
 
-def copy_spikes(x, z, maxptps, spike_index, scales=(1,1,30), num_duplicates_list=[0,1,2,3,4]):
+def copy_spikes(
+    x,
+    z,
+    maxptps,
+    spike_index,
+    scales=(1, 1, 30),
+    num_duplicates_list=[0, 1, 2, 3, 4],
+):
     true_spike_indices = []
     new_x = []
     new_z = []
     new_maxptps = []
     new_spike_index = []
-    new_spike_ids = []
     num_bins = len(num_duplicates_list)
     num_duplicates_array = np.asarray(num_duplicates_list)
-    ptp_bins = np.histogram(maxptps, bins=num_bins-1)[1]
+    ptp_bins = np.histogram(maxptps, bins=num_bins - 1)[1]
     for spike_id in range(len(spike_index)):
         maxptp_i = maxptps[spike_id]
         x_i = x[spike_id]
         z_i = z[spike_id]
         new_x.append(x_i)
         new_z.append(z_i)
-        new_maxptps.append(maxptp_i) 
+        new_maxptps.append(maxptp_i)
         new_spike_index.append(spike_index[spike_id])
-        #add a 1 to spike index to indicate real spike
+        # add a 1 to spike index to indicate real spike
         true_spike_indices.append([True, spike_id])
-        ptp_bin_i = np.sort(ptp_bins[np.argsort(np.abs(maxptp_i - ptp_bins))[:2]])
-        duplicates_choice = num_duplicates_array[np.sort(np.argsort(np.abs(maxptp_i - ptp_bins))[:2])]
-        p = (maxptp_i - ptp_bin_i.min())/(ptp_bin_i - ptp_bin_i.min()).max()
-        num_duplicates = np.random.choice(duplicates_choice, p=[1-p, p])
+        ptp_bin_i = np.sort(
+            ptp_bins[np.argsort(np.abs(maxptp_i - ptp_bins))[:2]]
+        )
+        duplicates_choice = num_duplicates_array[
+            np.sort(np.argsort(np.abs(maxptp_i - ptp_bins))[:2])
+        ]
+        p = (maxptp_i - ptp_bin_i.min()) / (ptp_bin_i - ptp_bin_i.min()).max()
+        num_duplicates = np.random.choice(duplicates_choice, p=[1 - p, p])
         for i in range(num_duplicates):
-            x_p, z_p, log_maxptp_scaled_p = perturb_features(x_i*scales[0], z_i*scales[1], np.log(maxptp_i)*scales[2], noise_scale=1)
-            new_x.append(x_p/scales[0])
-            new_z.append(z_p/scales[1])
-            new_maxptps.append(np.e**(log_maxptp_scaled_p/scales[2]))
+            x_p, z_p, log_maxptp_scaled_p = perturb_features(
+                x_i * scales[0],
+                z_i * scales[1],
+                np.log(maxptp_i) * scales[2],
+                noise_scale=1,
+            )
+            new_x.append(x_p / scales[0])
+            new_z.append(z_p / scales[1])
+            new_maxptps.append(np.e ** (log_maxptp_scaled_p / scales[2]))
             new_spike_index.append(spike_index[spike_id])
-            #add a 0 to spike index to indicate copied spike
+            # add a 0 to spike index to indicate copied spike
             true_spike_indices.append([False, -1])
     new_x = np.asarray(new_x)
     new_z = np.asarray(new_z)
@@ -408,7 +432,7 @@ def cluster_spikes(
     region_size=25,
     bin_size=5,
     ptp_low_threshold=3,
-    ptp_high_threshold=6, #deprecated
+    ptp_high_threshold=6,  # deprecated
     do_copy_spikes=True,
     do_relabel_by_depth=True,
     do_remove_dups=True,
@@ -432,12 +456,18 @@ def cluster_spikes(
             num_duplicates_list=[0, 1, 2, 3, 4],
         )
         print(f"{z.size} spikes")
-        
+
     if do_subsample:
         print(f"subsampling from {z.size} spikes")
         n_spikes = 2000
-        selected_spike_indices = subsample_spikes(n_spikes=n_spikes, spike_index=spike_index, 
-                                                  method='smart_sampling_amplitudes', x=x, z=z, maxptps=maxptps)
+        selected_spike_indices = subsample_spikes(
+            n_spikes=n_spikes,
+            spike_index=spike_index,
+            method="smart_sampling_amplitudes",
+            x=x,
+            z=z,
+            maxptps=maxptps,
+        )
         x = x[selected_spike_indices]
         z = z[selected_spike_indices]
         maxptps = maxptps[selected_spike_indices]
@@ -453,14 +483,14 @@ def cluster_spikes(
         #     high_ptp_filter,
         #     low_ptp_filter,
         # ) = triage.run_weighted_triage_adaptive(
-        #     x, 
-        #     z, 
-        #     maxptps, 
-        #     scales=scales, 
-        #     threshold=triage_quantile, 
-        #     ptp_low_threshold=ptp_low_threshold, 
-        #     ptp_high_threshold=ptp_high_threshold, 
-        #     bin_size=bin_size, 
+        #     x,
+        #     z,
+        #     maxptps,
+        #     scales=scales,
+        #     threshold=triage_quantile,
+        #     ptp_low_threshold=ptp_low_threshold,
+        #     ptp_high_threshold=ptp_high_threshold,
+        #     bin_size=bin_size,
         #     region_size=region_size
         # )
         # high_ptp_mask = np.zeros(maxptps.shape[0], dtype=bool)
@@ -482,19 +512,35 @@ def cluster_spikes(
         # maxptps = maxptps[final_keep_indices]
         # spike_index = spike_index[final_keep_indices]
         # true_spike_indices = true_spike_indices[final_keep_indices]
-        x, z, maxptps, idx_keep, low_ptp_filter = triage.run_weighted_triage_adaptive(x, z, maxptps, scales=scales, threshold=triage_quantile, ptp_low_threshold=ptp_low_threshold, bin_size=bin_size, region_size=region_size)
+        (
+            x,
+            z,
+            maxptps,
+            idx_keep,
+            low_ptp_filter,
+        ) = triage.run_weighted_triage_adaptive(
+            x,
+            z,
+            maxptps,
+            scales=scales,
+            threshold=triage_quantile,
+            ptp_low_threshold=ptp_low_threshold,
+            bin_size=bin_size,
+            region_size=region_size,
+        )
         spike_index = spike_index[low_ptp_filter][idx_keep]
         true_spike_indices = true_spike_indices[low_ptp_filter][idx_keep]
         print(f"{z.size} spikes")
         # barf
-        
-        
+
     # create feature set for clustering
     features = np.c_[x * scales[0], z * scales[1], np.log(maxptps) * scales[2]]
 
     # features = np.c_[tx*scales[0], tz*scales[2], all_pcs[:,0] * alpha1, all_pcs[:,1] * alpha2]
     clusterer = hdbscan.HDBSCAN(
-        min_cluster_size=min_cluster_size, min_samples=min_samples, core_dist_n_jobs=-1
+        min_cluster_size=min_cluster_size,
+        min_samples=min_samples,
+        core_dist_n_jobs=-1,
     )
     clusterer.fit(features)
 
@@ -608,6 +654,7 @@ def split_big_clusters(
                     next_label += 1
 
     return labels_new
+
 
 def compute_cluster_centers(clusterer):
     cluster_centers_data = []
@@ -726,18 +773,31 @@ def make_labels_contiguous(labels, in_place=False, return_unique=False):
         return out, unique
     return out
 
-def subsample_spikes(n_spikes, spike_index, method='uniform', x=None, z=None, maxptps=None, num_channels=384):
-    #can subsample with number of spikes (int) or percentage of spikes (0.0-1.0 float)
+
+def subsample_spikes(
+    n_spikes,
+    spike_index,
+    method="uniform",
+    x=None,
+    z=None,
+    maxptps=None,
+    num_channels=384,
+):
+    # can subsample with number of spikes (int) or percentage of spikes (0.0-1.0 float)
     assert type(n_spikes) == int or type(n_spikes) == float
     selected_spike_indices = []
-    if method == 'uniform':
+    if method == "uniform":
         for channel in range(num_channels):
-            spike_indices_channel = np.where(spike_index[:,1] == channel)[0]
+            spike_indices_channel = np.where(spike_index[:, 1] == channel)[0]
             if type(n_spikes) == float:
-                n_spikes_chan = int(n_spikes*len(spike_indices_channel))
+                n_spikes_chan = int(n_spikes * len(spike_indices_channel))
             max_peaks = min(spike_indices_channel.size, n_spikes_chan)
-            selected_spike_indices += [np.random.choice(spike_indices_channel, size=max_peaks, replace=False)]        
-    if method == 'uniform_locations':
+            selected_spike_indices += [
+                np.random.choice(
+                    spike_indices_channel, size=max_peaks, replace=False
+                )
+            ]
+    if method == "uniform_locations":
         n_bins = (50, 50)
         assert x is not None
         assert z is not None
@@ -754,47 +814,60 @@ def subsample_spikes(n_spikes, spike_index, method='uniform', x=None, z=None, ma
             for j in range(n_bins[1]):
                 spike_indices = np.where((x_idx == i) & (z_idx == j))[0]
                 if type(n_spikes) == float:
-                    n_spikes_bin = int(n_spikes*len(spike_indices))
+                    n_spikes_bin = int(n_spikes * len(spike_indices))
                 max_peaks = min(spike_indices.size, n_spikes_bin)
-                selected_spike_indices += [np.random.choice(spike_indices, size=max_peaks, replace=False)]
-                
-    if method == 'smart_sampling_amplitudes':
+                selected_spike_indices += [
+                    np.random.choice(
+                        spike_indices, size=max_peaks, replace=False
+                    )
+                ]
+
+    if method == "smart_sampling_amplitudes":
         for channel in range(num_channels):
             n_bins = 50
             assert maxptps is not None
-            spike_indices_channel = np.where(spike_index[:,1] == channel)[0]
-            sub_maxptps = maxptps[spike_indices_channel]  
+            spike_indices_channel = np.where(spike_index[:, 1] == channel)[0]
+            sub_maxptps = maxptps[spike_indices_channel]
             if type(n_spikes) == float:
-                n_spikes_chan = int(n_spikes*len(spike_indices_channel))
-            valid_indices = get_valid_indices(sub_maxptps, n_bins=n_bins, n_spikes=n_spikes_chan)
+                n_spikes_chan = int(n_spikes * len(spike_indices_channel))
+            valid_indices = get_valid_indices(
+                sub_maxptps, n_bins=n_bins, n_spikes=n_spikes_chan
+            )
             selected_spike_indices += [spike_indices_channel[valid_indices]]
-                
+
     selected_spike_indices = np.sort(np.concatenate(selected_spike_indices))
     return selected_spike_indices
 
+
 def reject_rate(x, d, a, target, n_bins):
-    return (np.mean(n_bins*a*np.clip(1 - d*x, 0, 1)) - target)**2
-    
+    return (np.mean(n_bins * a * np.clip(1 - d * x, 0, 1)) - target) ** 2
+
+
 def get_valid_indices(maxptps, n_bins, n_spikes, exponent=1):
     assert n_bins is not None
     bins = np.linspace(maxptps.min(), maxptps.max(), n_bins)
     x, y = np.histogram(maxptps, bins=bins)
-    histograms = {'probability' : x/x.sum(), 'maxptps' : y[1:]}
-    indices = np.searchsorted(histograms['maxptps'], maxptps)
+    histograms = {"probability": x / x.sum(), "maxptps": y[1:]}
+    indices = np.searchsorted(histograms["maxptps"], maxptps)
 
-    probabilities = histograms['probability']
+    probabilities = histograms["probability"]
     z = probabilities[probabilities > 0]
     c = 1.0 / np.min(z)
     d = np.ones(len(probabilities))
-    d[probabilities > 0] = 1. / (c * z)
+    d[probabilities > 0] = 1.0 / (c * z)
     d = np.minimum(1, d)
     d /= np.sum(d)
     twist = np.sum(probabilities * d)
     factor = twist * c
 
-    target_rejection = (1 - max(0, n_spikes/len(indices)))**exponent
-    res = scipy.optimize.fmin(reject_rate, factor, args=(d, probabilities, target_rejection, n_bins), disp=False)
-    rejection_curve = np.clip(1 - d*res[0], 0, 1)
+    target_rejection = (1 - max(0, n_spikes / len(indices))) ** exponent
+    res = scipy.optimize.fmin(
+        reject_rate,
+        factor,
+        args=(d, probabilities, target_rejection, n_bins),
+        disp=False,
+    )
+    rejection_curve = np.clip(1 - d * res[0], 0, 1)
 
     acceptation_threshold = rejection_curve[indices]
     valid_indices = acceptation_threshold < np.random.rand(len(indices))
