@@ -25,7 +25,7 @@ def get_binary_length(input_bin, n_channels, sampling_rate, nsync=0, dtype=np.fl
     return T_samples, T_sec
 
 
-def read_data(bin_file, dtype, s_start, s_end, n_channels, nsync=0):
+def read_data(bin_file, dtype, s_start, s_end, n_channels, nsync=0, out_dtype=None):
     """Read a chunk of a binary file
 
     Reads a temporal chunk on all channels: so, this is for loading a
@@ -45,6 +45,7 @@ def read_data(bin_file, dtype, s_start, s_end, n_channels, nsync=0):
     -------
     data : np.array of shape (s_end - s_start, n_channels)
     """
+    out_dtype = dtype if out_dtype is None else out_dtype
     offset = s_start * np.dtype(dtype).itemsize * (n_channels + nsync)
     with open(bin_file, "rb") as fin:
         data = np.fromfile(
@@ -54,6 +55,7 @@ def read_data(bin_file, dtype, s_start, s_end, n_channels, nsync=0):
             offset=offset,
         )
     data = data.reshape(-1, n_channels + nsync)[:, :n_channels]
+    data = data.astype(out_dtype)
     return data
 
 
