@@ -512,6 +512,7 @@ def plot_isi_distribution(spike_train, ax=None):
     spike_train_diff = np.diff(spike_train) / 30000
     spike_train_diff = spike_train_diff[np.where(spike_train_diff < 0.01)]
     spike_train_diff = spike_train_diff * 1000  # convert 1/10 to ms
+
     y, x, _ = ax.hist(
         spike_train_diff, bins=np.arange(0, 10.1, 0.5), density=True
     )
@@ -1170,6 +1171,8 @@ def plot_waveforms_geom_unit_with_return(
     first_chans_cluster,
     mcs_abs_cluster,
     spike_times,
+    z_ids, 
+    mcid,
     max_ptps_cluster=None,
     raw_bin=None,
     residual_bin=None,
@@ -1204,8 +1207,8 @@ def plot_waveforms_geom_unit_with_return(
         mcs_abs_cluster,
         return_counts=True,
     )
-    z_uniq, z_ids = np.unique(geom[:, 1], return_inverse=True)
-    mcid = z_ids[vals[counts.argmax()]]
+#     z_uniq, z_ids = np.unique(geom[:, 1], return_inverse=True)
+#     mcid = z_ids[vals[counts.argmax()]]
     channels_plot = np.flatnonzero(
         (z_ids >= mcid - num_rows) & (z_ids <= mcid + num_rows)
     )
@@ -1231,19 +1234,25 @@ def plot_waveforms_geom_unit_with_return(
 
     if raw_bin is not None:
         # raw data and spike times passed in
-        waveforms_read = read_waveforms(
-            spike_times, raw_bin, geom, n_times=121
-        )[0]
-        waveforms = []
-        for i, waveform in enumerate(waveforms_read):
-            waveforms.append(
-                waveform[
-                    :,
-                    int(first_chans_cluster[i]) : int(first_chans_cluster[i])
-                    + num_channels,
-                ].copy()
-            )
-        waveforms = np.asarray(waveforms)
+        if len(np.unique(first_chans_cluster))>1:
+            waveforms_read = read_waveforms(
+                spike_times, raw_bin, geom, n_times=121
+            )[0]
+            waveforms = []
+            for i, waveform in enumerate(waveforms_read):
+                waveforms.append(
+                    waveform[
+                        :,
+                        int(first_chans_cluster[i]) : int(first_chans_cluster[i])
+                        + num_channels,
+                    ].copy()
+                )
+            waveforms = np.asarray(waveforms)
+        else:
+            waveforms = read_waveforms(
+                spike_times, raw_bin, geom, channels = np.arange(first_chans_cluster[0], first_chans_cluster[0]+40), n_times=121
+            )[0]
+
     elif waveforms_cluster is None:
         # no raw data and no waveforms passed - bad!
         raise ValueError("need to input raw_bin or waveforms")
@@ -1595,6 +1604,8 @@ def diagnostic_plots(
     spike_index_ks,
     labels_yass,
     labels_ks,
+    closest_clusters_hdb,
+    closest_clusters_kilo,
     scale=7,
     sorting1_name="1",
     sorting2_name="2",
@@ -1699,6 +1710,14 @@ def diagnostic_plots(
     colors = ["goldenrod", "red"]
     indices = [ind_st1, not_match_ind_st1]
     # FIX CHANNEL INDEX!!
+    
+    vals, counts = np.unique(
+        mcs_abs_cluster_sorting1,
+        return_counts=True,
+    )
+    z_uniq, z_ids = np.unique(geom[:, 1], return_inverse=True)
+    mcid = z_ids[vals[counts.argmax()]]
+    
     cmp = 0
     wfs_shared = np.array([])
     wfs_lda_red = np.array([])
@@ -1717,6 +1736,7 @@ def diagnostic_plots(
             # ]
             # mcs_abs_cluster_sorting = mcs_abs_cluster_sorting1[indices_match]
             mcs_abs_cluster_sorting = np.full(indices_match.shape, shared_mc)
+#             print(mcs_abs_cluster_sorting)
             firstchans_cluster_sorting = np.maximum(
                 mcs_abs_cluster_sorting - 20, 0
             )
@@ -1730,6 +1750,8 @@ def diagnostic_plots(
                 firstchans_cluster_sorting,
                 mcs_abs_cluster_sorting,
                 spike_times,
+                z_ids, 
+                mcid,
                 raw_bin=raw_bin,
                 num_spikes_plot=num_spikes_plot,
                 t_range=t_range,
@@ -1816,13 +1838,8 @@ def diagnostic_plots(
     colors = ["goldenrod", "blue"]
     indices = [ind_st2, not_match_ind_st2]
     wfs_lda_blue = np.array([])
-    if ind_st2.size:
-        u, c = np.unique(mcs_abs_cluster_sorting2[ind_st2], return_counts=True)
-        shared_mc = u[c.argmax()]
-    elif not_match_ind_st2.size:
-        u, c = np.unique(mcs_abs_cluster_sorting2[ind_st2], return_counts=True)
-        shared_mc = u[c.argmax()]
     template_blue = None
+
     for indices_match, color, h_shift in zip(indices, colors, h_shifts):
         if len(indices_match) > 0:
             mcs_abs_cluster_sorting = np.full(indices_match.shape, shared_mc)
@@ -1843,6 +1860,8 @@ def diagnostic_plots(
                 firstchans_cluster_sorting,
                 mcs_abs_cluster_sorting,
                 spike_times,
+                z_ids, 
+                mcid,
                 raw_bin=raw_bin,
                 num_spikes_plot=num_spikes_plot,
                 t_range=t_range,
@@ -1946,13 +1965,6 @@ def diagnostic_plots(
     #     ax_wfs_shared_ks.set_xticks([])
     ax_wfs_shared_ks.set_xticks(list_ax_wfs_shared_ks, minor=True)
 
-    closest_clusters_hdb = get_closest_clusters_kilosort(
-        cluster_id_1, hdb_cluster_depth_means, num_close_clusters=2
-    )
-    closest_clusters_kilo = get_closest_clusters_kilosort(
-        cluster_id_2, kilo_cluster_depth_means, num_close_clusters=2
-    )
-
     mc = templates_yass[cluster_id_1].ptp(0).argmax()
 
     ax_wfs_shared_yass.set_ylim(
@@ -1971,9 +1983,8 @@ def diagnostic_plots(
         minor=True,
     )
 
-    ax_wfs_shared_yass.grid(which="both")
-
-    color_array_yass_close = ["red", "cyan", "lime"]
+    ax_wfs_shared_yass.grid(which="both")    
+    color_array_yass_close = ["red", "cyan", "lime", "fuchsia"]
     pc_scatter = PCA(2)
 
     # CHANGE TO ADD RED / BLACK
@@ -2013,7 +2024,7 @@ def diagnostic_plots(
     for j in range(2):
         ax_templates_yass.plot(
             templates_yass[
-                closest_clusters_hdb[j], 11 : 61 + 11, mc - 6 : mc + 5
+                closest_clusters_hdb[j], 11:61+11, shared_mc - 5 : shared_mc + 6
             ].T.flatten(),
             c=color_array_yass_close[j + 1],
         )
@@ -2073,7 +2084,7 @@ def diagnostic_plots(
         ax_templates_yass.axvline(61 + 61 * i, c="black")
     ax_templates_yass.set_xticks([])
     ax_templates_yass.set_title(
-        f"{sorting1_name} close Units: {closest_clusters_hdb[0]}, {closest_clusters_hdb[1]}"
+        f"{sorting1_name} close Units: {closest_clusters_hdb[0]}, {closest_clusters_hdb[1]}, {closest_clusters_hdb[2]}"
     )
 
     ax_LDA1_yass.set_xticks([])
@@ -2115,7 +2126,7 @@ def diagnostic_plots(
     )
     ax_wfs_shared_ks.grid(which="both")
 
-    color_array_ks_close = ["blue", "green", "magenta"]
+    color_array_ks_close = ["blue", "green", "magenta", "orange"]
     pc_scatter = PCA(2)
 
     # CHANGE TO ADD RED / BLACK
@@ -2137,13 +2148,13 @@ def diagnostic_plots(
         replace=False,
         size=min((labels_ks == cluster_id_2).sum(), num_spikes_plot),
     )
-    load_times = spike_index_ks[labels_ks == cluster_id_2, 0][some_in_cluster]
+    load_times = spike_index_ks[labels_ks == cluster_id_2][some_in_cluster].astype('int')
     waveforms_unit = read_waveforms(
         load_times,
         raw_bin,
         geom,
         n_times=121,
-        channels=np.arange(mc - 10, mc + 10).astype(int),
+        channels=np.arange(mc - 10, mc + 10).astype('int'),
     )[0]
     pcs_unit = pc_scatter.fit_transform(
         waveforms_unit.reshape(waveforms_unit.shape[0], -1)
@@ -2157,7 +2168,7 @@ def diagnostic_plots(
 
         ax_templates_ks.plot(
             templates_ks[
-                closest_clusters_kilo[j], 11 : 61 + 11, mc - 6 : mc + 5
+                closest_clusters_kilo[j], 11:61+11, shared_mc - 5 : shared_mc + 6
             ].T.flatten(),
             c=color_array_ks_close[j + 1],
         )
@@ -2243,7 +2254,7 @@ def diagnostic_plots(
         f"{sorting2_name} close Units: {closest_clusters_kilo[0]}, {closest_clusters_kilo[1]}"
     )
 
-    return fig
+    return np.round(agreement, 2)*100
 
 
 # def plot_unit_similarities_summary(cluster_id, closest_clusters, sorting1, sorting2, geom, raw_data_bin, recoring_duration, num_channels=40, num_spikes_plot=100, num_channels_similarity=20,

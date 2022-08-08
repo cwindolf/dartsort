@@ -125,7 +125,7 @@ def check_merge(
     wfs_key="cleaned_waveforms",
 ):
     if unit_reference == unit_bis_reference:
-        return False, -1, 0
+        return False, unit_bis_reference, 0
 
     unit_mc = templates[unit_reference].ptp(0).argmax()
     unit_bis_mc = templates[unit_bis_reference].ptp(0).argmax()
@@ -137,7 +137,7 @@ def check_merge(
         - templates[unit_reference].ptp(0).max()
     )
     if mc_diff >= 3:
-        return False, -1, 0
+        return False, unit_bis_reference, 0
     # ALIGN BASED ON MAX PTP TEMPLATE MC
     # the template with the larger MC is not shifted, so
     # we set unit_shifted to be the unit with smaller ptp
@@ -168,7 +168,7 @@ def check_merge(
 #     )
 
     if len(which) < 2:
-        return False, -1, 0
+        return False, unit_bis_reference, 0
 
     if len(which) > n_wfs_max:
         idx = np.random.choice(
@@ -230,7 +230,7 @@ def check_merge(
 #     )
 
     if len(which) < 2:
-        return False, -1, 0
+        return False, unit_bis_reference, 0
 
     if len(which) > n_wfs_max:
         idx = np.random.choice(
@@ -344,7 +344,7 @@ def check_merge(
             )
             return True, unit_bis_reference, shift
 
-    return False, -1, 0
+    return False, unit_bis_reference, 0
 
 
 def merge(
@@ -529,16 +529,16 @@ def clean_big_clusters(
             max_diff_N = 0
             for n in np.arange(lower, upper):
                 # Denoise templates?
-                temp_1 = np.mean(wfs_unit[:n], axis=0)
-                temp_2 = np.mean(wfs_unit[n:], axis=0)
+                temp_1 = np.median(wfs_unit[:n], axis=0)
+                temp_2 = np.median(wfs_unit[n:], axis=0)
                 diff = np.abs(temp_1 - temp_2).max()
                 if diff > max_diff:
                     max_diff = diff
                     max_diff_N = n
 
             if max_diff > split_diff:
-                temp_1 = np.mean(wfs_unit[:max_diff_N], axis=0)
-                temp_2 = np.mean(wfs_unit[max_diff_N:], axis=0)
+                temp_1 = np.median(wfs_unit[:max_diff_N], axis=0)
+                temp_2 = np.median(wfs_unit[max_diff_N:], axis=0)
                 n_temp_cleaned += 1
                 if (
                     np.abs(temp_1 - template_mc_trace).max()
