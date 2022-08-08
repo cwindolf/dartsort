@@ -281,6 +281,7 @@ def remove_duplicate_spikes(clusterer, spike_frames, maxptps, frames_dedup):
                     (remove_cluster_id, possible_matches, remove_spike_indices)
                 )
                 removed_cluster_ids.add(remove_cluster_id)
+
     remove_indices_list = []
     for cluster_id, _, spike_indices in remove_spikes:
         remove_indices = np.where(clusterer.labels_ == cluster_id)[0][
@@ -289,12 +290,8 @@ def remove_duplicate_spikes(clusterer, spike_frames, maxptps, frames_dedup):
         clusterer.labels_[remove_indices] = -1
         remove_indices_list.append(remove_indices)
 
-    # make sequential
-    for i, label in enumerate(
-        np.setdiff1d(np.unique(clusterer.labels_), [-1])
-    ):
-        label_indices = np.where(clusterer.labels_ == label)
-        clusterer.labels_[label_indices] = i
+    # make contiguous
+    clusterer.labels_ = make_labels_contiguous(clusterer.labels_)
 
     return clusterer, remove_indices_list, remove_spikes
 
@@ -304,35 +301,60 @@ def remove_self_duplicates(
     spike_labels,
     binary_file,
     n_channels,
-    shifted_templates,
     frame_dedup=20,
+    n_samples=250,
 ):
     indices_to_remove = []
     N = spike_labels.shape[0]
+    assert spike_times.shape == spike_labels.shape == (N,)
+    unit_labels = np.unique(spike_labels)
+    unit_labels = unit_labels[unit_labels >= 0]
 
-    for unit in range(shifted_templates.shape[0]):
-        mc = shifted_templates[unit].ptp(0).argmax()
+    for unit in tqdm(unit_labels, desc="Self violations"):
         in_unit = np.flatnonzero(spike_labels == unit)
 
         spike_times_unit = spike_times[in_unit]
         violations = np.diff(spike_times_unit) < frame_dedup
 
         if violations.any():
-            # we'll remove either an index in idx_to_remove,
+            # we'll remove either an index in first_viol_ix,
             # or that index + 1, depending on template agreement
             first_viol_ix = np.flatnonzero(violations)
-            wfs_unit, _ = read_waveforms(
-                spike_times_unit, binary_file, n_channels, channels=[mc]
+            all_viol_ix = np.concatenate(first_viol_ix, [first_viol_ix[-1] + 1])
+            unviol = np.setdiff1d(
+                np.arange(spike_times_unit.shape[0]),
+                all_viol_ix
             )
+
+            # load as many unviolated wfs as possible
+            if unviol.size > n_samples:
+                # we can compute template just from unviolated wfs
+                wfs_unit, _ = read_waveforms(
+                    spike_times_unit[unviol], binary_file, n_channels
+                )
+            else:
+                n_viol_load = min(all_viol_ix.size, n_samples - unviol.size)
+                load_ix = np.concatenate(
+                    unviol, np.random.choice(all_viol_ix, n_viol_load, replace=False)
+                )
+                wfs_unit, _ = read_waveforms(
+                    spike_times_unit[load_ix], binary_file, n_channels
+                )
+
             # reshape to NxT
-            wfs_unit = wfs_unit.squeeze()
-            template_mc = np.median(wfs_unit[:, :], axis=0)
+            template = np.median(wfs_unit, axis=0)
+            mc = template.ptp(0).argmax()
+            template_mc = template[:, mc]
             template_argmin = template_mc.argmin()
 
             # get subsets of wfs -- will we remove leading (wfs_1)
             # or trailing (wfs_2) waveform in each case?
-            wfs_1 = wfs_unit[first_viol_ix[:]]
-            wfs_2 = wfs_unit[first_viol_ix[:] + 1]
+            wfs_1 = read_waveforms(
+                spike_times_unit[first_viol_ix], binary_file, n_channels, channels=[mc]
+            )
+            wfs_2 = read_waveforms(
+                spike_times_unit[first_viol_ix + 1], binary_file, n_channels, channels=[mc]
+            )
 
             # best aligned will have a 1 where wfs_1 was better
             # aligned then wfs_2, so that first_viol_ix + best_aligned
@@ -577,6 +599,7 @@ def cluster_spikes(
         ) = remove_duplicate_spikes(
             clusterer, spike_index[:, 0], maxptps, frames_dedup=frames_dedup
         )
+
         cluster_centers = compute_cluster_centers(clusterer)
 
     if split_big:
