@@ -5,7 +5,7 @@ import parmap
 import copy
 from tqdm.auto import tqdm
 import h5py
-from spike_psvae.subtract import read_data
+from spike_psvae.spikeio import read_data, read_waveforms
 from pathlib import Path
 from spike_psvae import snr_templates
 
@@ -1019,52 +1019,6 @@ def deconvolution(
     )
 
 
-def read_waveforms(
-    spike_times,
-    bin_file,
-    geom_array,
-    n_times=121,
-    channels=None,
-    dtype=np.dtype("float32"),
-    trough_offset=42,
-):
-    """
-    read waveforms from recording
-    n_times : waveform temporal length
-    channels : channels to read from
-    """
-    # n_times needs to be odd
-    if n_times % 2 == 0:
-        n_times += 1
-
-    # read all channels
-    if channels is None:
-        channels = np.arange(geom_array.shape[0])
-
-    # ***** LOAD RAW RECORDING *****
-    wfs = np.zeros((len(spike_times), n_times, len(channels)), "float32")
-
-    skipped_idx = []
-    n_channels = len(channels)
-    total_size = n_times * n_channels
-    # spike_times are the centers of waveforms
-    spike_times_shifted = spike_times - trough_offset
-    offsets = spike_times_shifted.astype("int64") * dtype.itemsize * n_channels
-    with open(bin_file, "rb") as fin:
-        for ctr, spike in enumerate(spike_times_shifted):
-            try:
-                fin.seek(offsets[ctr], os.SEEK_SET)
-                wf = np.fromfile(fin, dtype=dtype, count=total_size)
-                wfs[ctr] = wf.reshape(n_times, n_channels)[:, channels]
-            except:
-                # print(f"skipped {ctr, spike}")
-                skipped_idx.append(ctr)
-    wfs = np.delete(wfs, skipped_idx, axis=0)
-    fin.close()
-
-    return wfs, skipped_idx
-
-
 def get_templates(
     standardized_bin,
     spike_index,
@@ -1082,21 +1036,22 @@ def get_templates(
     if -1 in unique_labels:
         n_templates -= 1
 
-    templates = np.zeros((n_templates, n_times, n_chans))
+    templates = np.empty((n_templates, n_times, n_chans))
     for unit in range(n_templates):
         spike_times_unit = spike_index[labels == unit, 0]
+        which = slice(None)
         if spike_times_unit.shape[0] > n_samples:
-            idx = np.random.choice(
-                np.arange(spike_times_unit.shape[0]), n_samples, replace=False
+            which = np.random.choice(
+                spike_times_unit.shape[0], n_samples, replace=False
             )
-        else:
-            idx = np.arange(spike_times_unit.shape[0])
-        wfs_unit = read_waveforms(
-            spike_times_unit[idx],
+
+        wfs_unit, skipped_idx = read_waveforms(
+            spike_times_unit[which],
             standardized_bin,
-            geom,
+            geom.shape[0],
             n_times=n_times,
             trough_offset=trough_offset,
-        )[0]
+        )
         templates[unit] = np.median(wfs_unit, axis=0)
+
     return templates
