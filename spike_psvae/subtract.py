@@ -445,39 +445,37 @@ def subtraction(
                     if not N_new:
                         continue
 
-                    # grow arrays as necessary
+                    # grow arrays as necessary and write results
                     subtracted_tpca_projs.resize(N + N_new, axis=0)
-                    if save_waveforms:
-                        subtracted_wfs.resize(N + N_new, axis=0)
-                        if do_clean:
-                            cleaned_wfs.resize(N + N_new, axis=0)
-                    spike_index.resize(N + N_new, axis=0)
-                    if do_localize:
-                        locs.resize(N + N_new, axis=0)
-                        maxptps.resize(N + N_new, axis=0)
-                        trough_depths.resize(N + N_new, axis=0)
-                        peak_heights.resize(N + N_new, axis=0)
-                        widths.resize(N + N_new, axis=0)
-                    if neighborhood_kind == "firstchan":
-                        firstchans.resize(N + N_new, axis=0)
-
-                    # write results
                     subtracted_tpca_projs[N:] = np.load(
                         result.subtracted_tpca_projs
                     )
+
                     if save_waveforms:
+                        subtracted_wfs.resize(N + N_new, axis=0)
                         subtracted_wfs[N:] = np.load(result.subtracted_wfs)
+
                         if do_clean:
+                            cleaned_wfs.resize(N + N_new, axis=0)
                             cleaned_wfs[N:] = np.load(result.cleaned_wfs)
+
+                    spike_index.resize(N + N_new, axis=0)
                     spike_index[N:] = np.load(result.spike_index)
+
                     if do_localize:
+                        locs.resize(N + N_new, axis=0)
                         locs[N:] = np.load(result.localizations)
+                        maxptps.resize(N + N_new, axis=0)
                         maxptps[N:] = np.load(result.maxptps)
+                        trough_depths.resize(N + N_new, axis=0)
                         trough_depths[N:] = np.load(result.trough_depths)
+                        peak_heights.resize(N + N_new, axis=0)
                         peak_heights[N:] = np.load(result.peak_heights)
+                        widths.resize(N + N_new, axis=0)
                         widths[N:] = np.load(result.widths)
 
                     if neighborhood_kind == "firstchan":
+                        firstchans.resize(N + N_new, axis=0)
                         firstchans[N:] = extract_channel_index[
                             spike_index[N:, 1], 0
                         ]
@@ -787,6 +785,9 @@ def subtraction_batch(
             batch_id=batch_id,
             localizations=None,
             maxptps=None,
+            peak_heights=None,
+            trough_depths=None,
+            widths=None,
         )
 
     subtracted_wfs = np.concatenate(subtracted_wfs, axis=0)
