@@ -320,7 +320,7 @@ def remove_self_duplicates(
             # we'll remove either an index in first_viol_ix,
             # or that index + 1, depending on template agreement
             first_viol_ix = np.flatnonzero(violations)
-            all_viol_ix = np.concatenate(first_viol_ix, [first_viol_ix[-1] + 1])
+            all_viol_ix = np.concatenate([first_viol_ix, [first_viol_ix[-1] + 1]])
             unviol = np.setdiff1d(
                 np.arange(spike_times_unit.shape[0]),
                 all_viol_ix
@@ -335,7 +335,7 @@ def remove_self_duplicates(
             else:
                 n_viol_load = min(all_viol_ix.size, n_samples - unviol.size)
                 load_ix = np.concatenate(
-                    unviol, np.random.choice(all_viol_ix, n_viol_load, replace=False)
+                    [unviol, np.random.choice(all_viol_ix, n_viol_load, replace=False)]
                 )
                 wfs_unit, _ = read_waveforms(
                     spike_times_unit[load_ix], binary_file, n_channels
@@ -349,10 +349,10 @@ def remove_self_duplicates(
 
             # get subsets of wfs -- will we remove leading (wfs_1)
             # or trailing (wfs_2) waveform in each case?
-            wfs_1 = read_waveforms(
+            wfs_1, _ = read_waveforms(
                 spike_times_unit[first_viol_ix], binary_file, n_channels, channels=[mc]
             )
-            wfs_2 = read_waveforms(
+            wfs_2, _ = read_waveforms(
                 spike_times_unit[first_viol_ix + 1], binary_file, n_channels, channels=[mc]
             )
 
