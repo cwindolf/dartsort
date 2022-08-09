@@ -167,6 +167,9 @@ for meta in Path(in_dir).glob("*.meta"):
 # %%
 1
 
+# %% [markdown]
+# # hybrid recording
+
 # %%
 for i, in_bin in enumerate(tqdm(in_bins)):
     subject = in_bin.stem.split(".")[0]
@@ -381,10 +384,10 @@ for i, in_bin in enumerate(tqdm(in_bins)):
         do_clean=True,
         localization_kind="logbarrier",
         localize_radius=100,
-        loc_workers=3,
+        loc_workers=2,
         overwrite=True,
         random_seed=0,
-        n_jobs=2,
+        n_jobs=8,
     )
 
 # %%
@@ -399,6 +402,10 @@ import torch; torch.cuda.empty_cache()
 # %%
 for i, in_bin in enumerate(tqdm(in_bins)):
     subject = in_bin.stem.split(".")[0]
+    
+    if subject not in ("DY_018", "CSHL051"):
+        continue
+        
     print(subject)
     out_bin = out_dir / f"{in_bin.stem}.bin"
     
@@ -439,6 +446,9 @@ for i, in_bin in enumerate(tqdm(in_bins)):
     subject = in_bin.stem.split(".")[0]
     out_bin = out_dir / f"{in_bin.stem}.bin"
     
+    if subject not in ("DY_018", "CSHL051"):
+        continue
+    
     subject_sub_dir = sub_dir / subject
     subject_sub_h5 = next((sub_dir / subject).glob("sub*.h5"))
     
@@ -456,11 +466,6 @@ for i, in_bin in enumerate(tqdm(in_bins)):
 
 # %%
 1
-
-# %%
-1
-
-# %%
 
 # %% tags=[]
 # cluster + deconv in one go for better cache behavior
@@ -489,28 +494,30 @@ for i, in_bin in enumerate(tqdm(in_bins)):
     
     if just_do_it or not (subject_sub_dir / "aligned_spike_index.npy").exists():
         # print("
+        import os
+        os.environ["PYTHONWARNINGS"] = "ignore"
         res = subprocess.run(
             [
                 "python",
+                "-W", "ignore",
                 "../scripts/duster.py",
                 out_bin,
                 subject_res_bin,
                 subject_sub_h5,
                 subject_sub_dir,
-                # "--inmem",
+                "--inmem",
                 "--merge_dipscore=0.5",
                 "--doplot",
                 f"--plotdir={clust_plotdir}",
                 "--tmpdir=/local/duster",
-            ]
+            ],
+            env=os.environ,
+            # stderr=subprocess.DEVNULL,
         )
         print(subject, res.returncode)
         print(res)
     else:
         print(subject_sub_dir / "aligned_spike_index.npy", "exists, skipping", subject)
-    
-
-
 
 # %%
 print(1)

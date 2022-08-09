@@ -59,6 +59,7 @@ from spike_psvae import (
     cluster_viz,
     cluster_viz_index,
     grab_and_localize,
+    pyks_ccg,
 )
 from spike_psvae.hybrid_analysis import (
     Sorting,
@@ -88,11 +89,11 @@ hybrid_bin_dir.exists(), hybrid_res_dir.exists(), hybrid_ks_dir.exists(), hybrid
 subjects = ("DY_018", "CSHL051")
 
 # %%
-hybrid_fig_dir = Path("/share/ctn/users/ciw2107/hybrid_5min/figs_7_19/")
+hybrid_fig_dir = Path("/share/ctn/users/ciw2107/hybrid_5min/figs_8_4_bugfix/")
 hybrid_fig_dir.mkdir(exist_ok=True)
 
 # %%
-# %rm {hybrid_fig_dir}/*
+# %rm -rf {hybrid_fig_dir}/*
 
 # %%
 # load gt sortings
@@ -139,6 +140,9 @@ for subject in tqdm(subjects):
         templates=gt_templates,
         # spike_xzptp=gt_xzptp,
     )
+
+# %%
+1
 
 # %% tags=[]
 hybrid_sortings = {}
@@ -286,7 +290,7 @@ for subject, subject_comparisons in hybrid_comparisons.items():
         if comparison.unsorted:
             continue
         df = comparison.performance_by_unit.copy()
-        df["Subject"] = "CSHL051"
+        df["Subject"] = subject
         df["Sort"] = sorter_name
         df["step"] = i
         df["sort_lo"] = comparison.new_sorting.name_lo
@@ -295,9 +299,54 @@ for subject, subject_comparisons in hybrid_comparisons.items():
         df["gt_firing_rate"] = comparison.gt_sorting.unit_firing_rates
         df["gt_local_detection_density"] = local_density
         df["unsorted_recall"] = comparison.unsorted_recall_by_unit
+        
         unit_dfs.append(df)
 unit_df = pd.concat(unit_dfs, ignore_index=True)
 unit_df
+
+# %%
+new_unit_dfs = []
+for subject, subject_comparisons in hybrid_comparisons.items():
+    local_density = density_near_gt(subject_comparisons["Detection"])
+    
+    sorting = comparison.gt_sorting
+    df = dict(
+        Subject=subject,
+        Sort=sorting.name,
+        step=-1,
+        sort_lo=sorting.name_lo,
+        unit_label=sorting.unit_labels,
+        contam_ratio=sorting.contam_ratios,
+        log10_contam_ratio_pluseneg10=np.log10(sorting.contam_ratios + 1e-10),
+        contam_p_value=sorting.contam_p_values,
+        template_ptp=sorting.template_xzptp[:, 2],
+    )
+    df = pd.DataFrame.from_dict(df)
+
+    new_unit_dfs.append(df)
+    
+    for i, (sorter_name, comparison) in enumerate(subject_comparisons.items()):
+        if comparison.unsorted:
+            continue
+        
+        sorting = comparison.new_sorting
+        df = dict(
+            Subject=subject,
+            Sort=sorting.name,
+            step=i,
+            sort_lo=sorting.name_lo,
+            unit_label=sorting.unit_labels,
+            contam_ratio=sorting.contam_ratios,
+            log10_contam_ratio_pluseneg10=np.log10(sorting.contam_ratios + 1e-10),
+            contam_p_value=sorting.contam_p_values,
+            template_ptp=sorting.template_xzptp[:, 2],
+        )
+        df = pd.DataFrame.from_dict(df)
+        
+        new_unit_dfs.append(df)
+
+new_unit_df = pd.concat(new_unit_dfs, ignore_index=True)
+new_unit_df
 
 # %%
 for subject in subjects:
@@ -389,6 +438,26 @@ for step, df in unit_df.groupby("step"):
     plt.show()
     plt.close(fig)
 
+# %%
+(hybrid_fig_dir / "single_unit_metrics").mkdir(exist_ok=True)
+
+for step, df in new_unit_df.groupby("step"):
+    # display(df)
+    sort = df["Sort"].values[0]
+    name_lo = df["sort_lo"].values[0]    
+
+    fig, (aa, ab) = plt.subplots(1, 2, sharey=False, figsize=(8, 4.5))
+    plotgistic(df, x="template_ptp", y="contam_ratio", c="contam_p_value", ax=aa, legend=False, ylim=None)
+    plotgistic(df, x="template_ptp", y="log10_contam_ratio_pluseneg10", c="contam_p_value", ax=ab, legend=True, ylim=None)
+    ab.axhline(np.log10(0.2 + 1e-10), color="g", ls=":", lw=1)
+    mean_contam_ratio = df["contam_ratio"].mean()
+    
+    fig.suptitle(f"Step {step}: {sort}.    {mean_contam_ratio=:0.2f}", y=0.925)
+    step = step if step >= 0 else "_gt"
+    fig.savefig(hybrid_fig_dir / "single_unit_metrics" / f"{step}_{name_lo}.png")
+    plt.show()
+    plt.close(fig)
+
 # %% tags=[]
 (hybrid_fig_dir / "array_scatter").mkdir(exist_ok=True)
 
@@ -419,9 +488,12 @@ outdir.mkdir(exist_ok=True)
 def job(hybrid_comparison, subject, gt_unit):
     import warnings
     with warnings.catch_warnings():
-        fig, gt_ptp = make_diagnostic_plot(hybrid_comparison, gt_unit)
-        fig.savefig(outdir / f"ptp{gt_ptp:05.2f}_{subject}_unit{gt_unit:02d}.png")
-        plt.close(fig)
+        try:
+            fig, gt_ptp = make_diagnostic_plot(hybrid_comparison, gt_unit)
+            fig.savefig(outdir / f"ptp{gt_ptp:05.2f}_{subject}_unit{gt_unit:02d}.png")
+            plt.close(fig)
+        except ValueError as e:
+            print(e)
 
 jobs = []
 for subject, comparisons in hybrid_comparisons.items():
@@ -458,7 +530,6 @@ for res in Parallel(8)(tqdm(jobs, total=len(jobs))):
 print(failed)
 
 # %% tags=[]
-sorting = "KSAll"
 outdir = hybrid_fig_dir / "zoom_scatter"
 outdir.mkdir(exist_ok=True)
 
@@ -506,18 +577,3 @@ for subject, comparisons in hybrid_comparisons.items():
             dpi=300,
         )
         plt.close(fig)
-
-# %%
-comp.unsorted
-
-# %%
-a = gt_comparison.get_ordered_agreement_scores()
-
-# %%
-axes = sns.heatmap(a, cmap=plt.cm.cubehelix)
-
-
-# %%
-
-# %%
-from spikeinterface.
