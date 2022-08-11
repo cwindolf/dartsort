@@ -21,7 +21,7 @@ from spikeinterface.comparison import compare_sorter_to_ground_truth
 
 from spike_psvae.spikeio import get_binary_length
 from spike_psvae.deconvolve import get_templates
-from spike_psvae import localize_index, cluster_viz, cluster_viz_index, pyks_ccg
+from spike_psvae import localize_index, cluster_viz, cluster_viz_index, pyks_ccg, cluster_utils
 
 
 class Sorting:
@@ -100,6 +100,7 @@ class Sorting:
                 self.template_locs[3],
                 30 * np.log(self.template_maxptps),
             ]
+            self.close_units_cosine = self.compute_closest_units_cosine()
 
         if spike_maxchans is None:
             assert not unsorted
@@ -166,6 +167,39 @@ class Sorting:
         )
         axes[0].scatter(*self.geom.T, marker="s", s=2, color="orange")
         return fig, axes
+    
+    def compute_closest_units_cosine(self):
+        n_num_close_clusters = 10
+        n_close_temp_cosine = 3
+
+        assert self.contiguous_labels
+        n_units = self.templates.shape[0]
+
+        close_clusters = np.zeros((n_units, n_num_close_clusters))
+        for i in range(n_units):
+            close_clusters[i] = cluster_utils.get_closest_clusters_kilosort(
+                i,
+                dict(zip(self.unit_labels, self.template_xzptp[:, 1])),
+                num_close_clusters=n_num_close_clusters,
+            )
+
+        close_clusters = close_clusters.astype("int")
+
+        close_templates_cosine = np.zeros((n_units, n_close_temp_cosine), dtype=int)
+        for i in tqdm(range(n_units)):
+            cos_dist = np.zeros(n_num_close_clusters)
+            vis_channels = np.flatnonzero(self.templates[i].ptp(0) >= 1.0)
+            for j in range(n_num_close_clusters):
+                idx = close_clusters[i, j]
+                cos_dist[j] = cdist(
+                    self.templates[i, :, vis_channels].T.flatten()[None, :],
+                    self.templates[idx, :, vis_channels].T.flatten()[None, :],
+                )
+            close_templates_cosine[i] = close_clusters[i][
+                cos_dist.argsort()[:n_close_temp_cosine]
+            ]
+
+        return close_templates_cosine
 
 
 class HybridComparison:
@@ -386,7 +420,7 @@ def make_diagnostic_plot(hybrid_comparison, gt_unit):
 
     gt_ptp = hybrid_comparison.gt_sorting.template_maxptps[gt_unit]
 
-    fig = cluster_viz.diagnostic_plots(
+    fig, agreement = cluster_viz.diagnostic_plots(
         new_unit,
         gt_unit,
         new_spike_train,
@@ -403,6 +437,8 @@ def make_diagnostic_plot(hybrid_comparison, gt_unit):
         hybrid_comparison.gt_sorting.spike_index,
         hybrid_comparison.new_sorting.spike_labels,
         hybrid_comparison.gt_sorting.spike_labels,
+        hybrid_comparison.new_sorting.close_units_cosine[new_unit],
+        hybrid_comparison.gt_sorting.close_units_cosine[gt_unit],
         scale=7,
         sorting1_name=hybrid_comparison.new_sorting.name,
         sorting2_name=hybrid_comparison.gt_sorting.name,
@@ -418,7 +454,7 @@ def make_diagnostic_plot(hybrid_comparison, gt_unit):
 
     fig.suptitle(f"GT unit {gt_unit}. {new_str}")
 
-    return fig, gt_ptp
+    return fig, gt_ptp, agreement
 
 
 def array_scatter_vs(scatter_comparison, vs_comparison, do_ellipse=True):
