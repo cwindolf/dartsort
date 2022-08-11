@@ -136,10 +136,11 @@ def compute_spiketrain_agreement(st_1, st_2, delta_frames=12):
     times_concat_sorted = times_concat[indices]
     membership_sorted = membership[indices]
     diffs = times_concat_sorted[1:] - times_concat_sorted[:-1]
-    inds = np.where(
+    inds = np.flatnonzero(
         (diffs <= delta_frames)
         & (membership_sorted[:-1] != membership_sorted[1:])
-    )[0]
+    )
+
     if len(inds) > 0:
         inds2 = inds[np.where(inds[:-1] + 1 != inds[1:])[0]] + 1
         inds2 = np.concatenate((inds2, [inds[-1]]))
@@ -158,10 +159,10 @@ def compute_spiketrain_agreement(st_1, st_2, delta_frames=12):
         not_match_ind_st2[ind_st2] = False
         not_match_ind_st2 = np.where(not_match_ind_st2)[0]
     else:
-        ind_st1 = np.asarray([]).astype("int")
-        ind_st2 = np.asarray([]).astype("int")
-        not_match_ind_st1 = np.asarray([]).astype("int")
-        not_match_ind_st2 = np.asarray([]).astype("int")
+        ind_st1 = np.array([], dtype=int)
+        ind_st2 = np.array([], dtype=int)
+        not_match_ind_st1 = np.arange(len(st_1))
+        not_match_ind_st2 = np.arange(len(st_2))
 
     return ind_st1, ind_st2, not_match_ind_st1, not_match_ind_st2
 
