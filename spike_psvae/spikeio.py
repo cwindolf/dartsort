@@ -85,7 +85,6 @@ def read_waveforms_in_memory(
     time_ix = spike_index[:, 0, None] + time_range[None, :]
     chan_ix = channel_index[spike_index[:, 1]]
     waveforms = padded_array[time_ix[:, :, None], chan_ix[:, None, :]]
-
     return waveforms
 
 
