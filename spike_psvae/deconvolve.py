@@ -869,6 +869,7 @@ def deconvolution(
     n_sec_chunk=1,
     verbose=False,
     trough_offset=42,
+    reducer=np.median,
 ):
     r"""Deconvolution.
     YASS deconvolution (cpu version) refactored: https://github.com/paninski-lab/yass/blob/yass-registration/src/yass/deconvolve/run_original.py
@@ -904,6 +905,7 @@ def deconvolution(
             tpca_rank=3,
             snr_threshold=5.0 * np.sqrt(100),
             trough_offset=trough_offset,
+            reducer=reducer,
         )
         print("templates dtype", templates.dtype)
     else:
@@ -913,6 +915,7 @@ def deconvolution(
             cluster_labels,
             geom,
             trough_offset=trough_offset,
+            reducer=reducer,
         )  # .astype(np.float32)
         print("templates dtype", templates.dtype)
 
@@ -1027,6 +1030,7 @@ def get_templates(
     n_times=121,
     n_samples=250,
     trough_offset=42,
+    reducer=np.median,
 ):
 
     n_chans = geom.shape[0]
@@ -1049,9 +1053,9 @@ def get_templates(
             spike_times_unit[which],
             standardized_bin,
             geom.shape[0],
-            n_times=n_times,
+            spike_length_samples=n_times,
             trough_offset=trough_offset,
         )
-        templates[unit] = np.median(wfs_unit, axis=0)
+        templates[unit] = reducer(wfs_unit, axis=0)
 
     return templates
