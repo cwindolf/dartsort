@@ -697,7 +697,7 @@ class MatchPursuit_objectiveUpsample(object):
         self.obj[unit_idx, time_idx[:, 1:-1]] = -np.inf
 
     def subtract_spike_train(self, spt):
-        """Substracts a spike train from the original spike_train."""
+        """Subtracts a spike train from the original spike_train."""
         present_units = np.unique(spt[:, 1])
         for i in present_units:
             conv_res_len = self.n_time * 2 - 1
