@@ -335,7 +335,10 @@ def check_merge(
     lda_comps = lda_model.fit_transform(wfs_diptest, labels_diptest)
     value_dpt, cut_calue = isocut(lda_comps[:, 0])
 
-    if ~(n_wfs_max < 20 and (mc_diff > 0 or ptp_diff > 1)):
+    # do we ever reach the second criterion?
+    # can we remove that or not clause?
+    # or, just throw away small
+    if n_wfs_max >= 20 or not (mc_diff > 0 or ptp_diff > 1):
         if value_dpt < threshold_diptest and np.abs(two_units_shift) < 2:
             shift = (
                 -two_units_shift
@@ -441,7 +444,7 @@ def merge(
                         print("ISI prevented merge with", contam_ratio, p_value, st1.shape, st2.shape)
                     else:
                         print("ISI allowed merge with", contam_ratio, p_value, st1.shape, st2.shape)
-                    
+
                     # ccg1 = ccg(st1, st1, 500, 30)
                     # contam_ratio1, p_value1 = ccg_metrics(
                     #     st1, st1, isi_nbins, isi_bin_nsamples
@@ -508,6 +511,13 @@ def clean_big_clusters(
     templates, spike_train, raw_bin, geom, min_ptp=6.0, split_diff=2.0
 ):
     """This operates on spike_train in place."""
+    # TODO:
+    # it's not possible to load all waveforms as is currently done
+    # rather, we should do something like, sort the ptps,
+    # then load N wfs above/below
+    # or, uniformly subsample e.g. 1000 spikes according to PTP,
+    # and use those...
+    # and, what should happen when there aren't many spikes?
     n_temp_cleaned = 0
     cmp = templates.shape[0]
     for unit in trange(templates.shape[0], desc="clean big"):
