@@ -18,8 +18,8 @@ from sklearn.discriminant_analysis import LinearDiscriminantAnalysis as LDA
 from sklearn.decomposition import PCA
 from tqdm.auto import tqdm
 
+from spike_psvae.spikeio import read_waveforms
 from spike_psvae.cluster_utils import (
-    read_waveforms,
     get_agreement_indices,
     compute_spiketrain_agreement,
     get_unit_similarities,
@@ -232,7 +232,7 @@ def plot_waveforms_geom_unit(
     if raw_bin is not None:
         # raw data and spike times passed in
         waveforms_read = read_waveforms(
-            spike_times, raw_bin, geom, n_times=121
+            spike_times, raw_bin, geom.shape[0], spike_length_samples=121
         )[0]
         waveforms = []
         for i, waveform in enumerate(waveforms_read):
@@ -253,7 +253,7 @@ def plot_waveforms_geom_unit(
         if residual_bin is not None:
             # add residuals
             residuals_read = read_waveforms(
-                spike_times, residual_bin, geom, n_times=121
+                spike_times, residual_bin, geom.shape[0], spike_length_samples=121
             )[0]
             residuals = []
             for i, residual in enumerate(residuals_read):
@@ -376,7 +376,7 @@ def plot_waveforms_geom(
         if raw_bin is not None:
             # raw data and spike times passed in
             waveforms_read = read_waveforms(
-                spike_times, raw_bin, geom, n_times=121
+                spike_times, raw_bin, geom.shape[0], spike_length_samples=121
             )[0]
             waveforms_in_cluster = []
             for i, waveform in enumerate(waveforms_read):
@@ -399,7 +399,7 @@ def plot_waveforms_geom(
             if residual_bin is not None:
                 # add residuals
                 residuals_read = read_waveforms(
-                    spike_times, residual_bin, geom, n_times=121
+                    spike_times, residual_bin, geom.shape[0], spike_length_samples=121
                 )[0]
                 residuals = []
                 for i, residual in enumerate(residuals_read):
@@ -981,8 +981,8 @@ def plot_agreement_venn_better(
     waveforms_read = read_waveforms(
         spike_index_yass[labels_yass == cluster_id_1, 0][some_in_cluster],
         raw_bin,
-        geom,
-        n_times=121,
+        geom.shape[0],
+        spike_length_samples=121,
         channels=np.arange(first_chan_yass_ks, first_chan_yass_ks + 20).astype(
             "int"
         ),
@@ -1003,8 +1003,8 @@ def plot_agreement_venn_better(
                 some_in_cluster
             ],
             raw_bin,
-            geom,
-            n_times=121,
+            geom.shape[0],
+            spike_length_samples=121,
             channels=np.arange(
                 int(first_chan_yass_ks), int(first_chan_yass_ks) + 20
             ),
@@ -1022,8 +1022,8 @@ def plot_agreement_venn_better(
     waveforms_read = read_waveforms(
         spike_index_ks[labels_ks == cluster_id_2, 0][some_in_cluster],
         raw_bin,
-        geom,
-        n_times=121,
+        geom.shape[0],
+        spike_length_samples=121,
         channels=np.arange(first_chan_yass_ks, first_chan_yass_ks + 20).astype(
             "int"
         ),
@@ -1045,8 +1045,8 @@ def plot_agreement_venn_better(
                     some_in_cluster
                 ],
                 raw_bin,
-                geom,
-                n_times=121,
+                geom.shape[0],
+                spike_length_samples=121,
                 channels=np.arange(
                     first_chan_yass_ks, first_chan_yass_ks + 20
                 ).astype("int"),
@@ -1236,7 +1236,7 @@ def plot_waveforms_geom_unit_with_return(
         # raw data and spike times passed in
         if len(np.unique(first_chans_cluster))>1:
             waveforms_read = read_waveforms(
-                spike_times, raw_bin, geom, n_times=121
+                spike_times, raw_bin, geom.shape[0], spike_length_samples=121
             )[0]
             waveforms = []
             for i, waveform in enumerate(waveforms_read):
@@ -1250,7 +1250,7 @@ def plot_waveforms_geom_unit_with_return(
             waveforms = np.asarray(waveforms)
         else:
             waveforms = read_waveforms(
-                spike_times, raw_bin, geom, channels = np.arange(first_chans_cluster[0], first_chans_cluster[0]+40), n_times=121
+                spike_times, raw_bin, geom.shape[0], channels = np.arange(first_chans_cluster[0], first_chans_cluster[0]+40), spike_length_samples=121
             )[0]
 
     elif waveforms_cluster is None:
@@ -1262,7 +1262,7 @@ def plot_waveforms_geom_unit_with_return(
         if residual_bin is not None:
             # add residuals
             residuals_read = read_waveforms(
-                spike_times, residual_bin, geom, n_times=121
+                spike_times, residual_bin, geom.shape[0], spike_length_samples=121
             )[0]
             residuals = []
             for i, residual in enumerate(residuals_read):
@@ -1618,6 +1618,10 @@ def diagnostic_plots(
     num_close_clusters=5,
     tpca_rank=5,
 ):
+    print(f"{st_1.shape=}, {st_2.shape=}")
+
+    if not st_1.size and not st_2.size:
+        raise ValueError("nothing in either spike train")
     lab_st1 = cluster_id_1
     lab_st2 = cluster_id_2
     (
@@ -1626,6 +1630,7 @@ def diagnostic_plots(
         not_match_ind_st1,
         not_match_ind_st2,
     ) = compute_spiketrain_agreement(st_1, st_2, delta_frames)
+    print(f"{ind_st1.shape=}, {ind_st2.shape=}, {not_match_ind_st1.shape=}, {not_match_ind_st2.shape=}")
     agreement = len(ind_st1) / (len(st_1) + len(st_2) - len(ind_st1))
     fig = plt.figure(figsize=(12, 20))
 
@@ -1725,8 +1730,13 @@ def diagnostic_plots(
         u, c = np.unique(mcs_abs_cluster_sorting1[ind_st1], return_counts=True)
         shared_mc = u[c.argmax()]
     elif not_match_ind_st1.size:
-        u, c = np.unique(mcs_abs_cluster_sorting1[ind_st1], return_counts=True)
+        u, c = np.unique(mcs_abs_cluster_sorting1[not_match_ind_st1], return_counts=True)
         shared_mc = u[c.argmax()]
+    elif not_match_ind_st2.size:
+        u, c = np.unique(mcs_abs_cluster_sorting2[not_match_ind_st2], return_counts=True)
+        shared_mc = u[c.argmax()]
+    else:
+        assert False
     template_red = None
     template_black = None
     for indices_match, color, h_shift in zip(indices, colors, h_shifts):
@@ -2009,8 +2019,8 @@ def diagnostic_plots(
     waveforms_unit = read_waveforms(
         spike_index_yass[labels_yass == cluster_id_1, 0][some_in_cluster],
         raw_bin,
-        geom,
-        n_times=121,
+        geom.shape[0],
+        spike_length_samples=121,
         channels=np.arange(mc - 10, mc + 10).astype("int"),
     )[0]
     pcs_unit = pc_scatter.fit_transform(
@@ -2046,8 +2056,8 @@ def diagnostic_plots(
                 some_in_cluster
             ],
             raw_bin,
-            geom,
-            n_times=121,
+            geom.shape[0],
+            spike_length_samples=121,
             channels=np.arange(mc - 10, mc + 10).astype("int"),
         )[0]
         lda_labels = np.zeros(
@@ -2148,12 +2158,12 @@ def diagnostic_plots(
         replace=False,
         size=min((labels_ks == cluster_id_2).sum(), num_spikes_plot),
     )
-    load_times = spike_index_ks[labels_ks == cluster_id_2][some_in_cluster].astype('int')
+    load_times = spike_index_ks[labels_ks == cluster_id_2, 0][some_in_cluster].astype('int')
     waveforms_unit = read_waveforms(
         load_times,
         raw_bin,
-        geom,
-        n_times=121,
+        geom.shape[0],
+        spike_length_samples=121,
         channels=np.arange(mc - 10, mc + 10).astype('int'),
     )[0]
     pcs_unit = pc_scatter.fit_transform(
@@ -2187,8 +2197,8 @@ def diagnostic_plots(
                     some_in_cluster
                 ],
                 raw_bin,
-                geom,
-                n_times=121,
+                geom.shape[0],
+                spike_length_samples=121,
                 channels=np.arange(mc - 10, mc + 10).astype("int"),
             )[0]
             # DO TPCA
@@ -2254,7 +2264,7 @@ def diagnostic_plots(
         f"{sorting2_name} close Units: {closest_clusters_kilo[0]}, {closest_clusters_kilo[1]}"
     )
 
-    return np.round(agreement, 2)*100
+    return fig, np.round(agreement, 2) * 100
 
 
 # def plot_unit_similarities_summary(cluster_id, closest_clusters, sorting1, sorting2, geom, raw_data_bin, recoring_duration, num_channels=40, num_spikes_plot=100, num_channels_similarity=20,
