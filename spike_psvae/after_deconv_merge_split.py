@@ -508,7 +508,16 @@ def merge(
 
 
 def clean_big_clusters(
-    templates, spike_train, raw_bin, geom, min_ptp=6.0, split_diff=2.0
+    templates,
+    spike_train,
+    ptps,
+    raw_bin,
+    geom,
+    min_ptp=6.0,
+    split_diff=2.0,
+    max_samples=500,
+    min_size_split=25,
+    seed=0,
 ):
     """This operates on spike_train in place."""
     # TODO:
@@ -519,47 +528,72 @@ def clean_big_clusters(
     # and use those...
     # and, what should happen when there aren't many spikes?
     n_temp_cleaned = 0
-    cmp = templates.shape[0]
+    next_label = templates.shape[0]
+    rg = np.random.default_rng(seed)
     for unit in trange(templates.shape[0], desc="clean big"):
         mc = templates[unit].ptp(0).argmax()
         template_mc_trace = templates[unit, :, mc]
-        if template_mc_trace.ptp() > min_ptp:
-            spikes_in_unit = np.flatnonzero(spike_train[:, 1] == unit)
-            spike_times_unit = spike_train[spikes_in_unit, 0]
-            wfs_unit = read_waveforms(
-                spike_times_unit, raw_bin, geom.shape[0], channels=[mc]
-            )[0][:, :, 0]
 
-            ptp_sort_idx = wfs_unit.ptp(1).argsort()
-            wfs_unit = wfs_unit[ptp_sort_idx]
-            lower = int(wfs_unit.shape[0] * 0.05)
-            upper = int(wfs_unit.shape[0] * 0.95)
+        if template_mc_trace.ptp() < min_ptp:
+            continue
 
-            max_diff = 0
-            max_diff_N = 0
-            for n in np.arange(lower, upper):
-                # Denoise templates?
-                temp_1 = np.median(wfs_unit[:n], axis=0)
-                temp_2 = np.median(wfs_unit[n:], axis=0)
-                diff = np.abs(temp_1 - temp_2).max()
-                if diff > max_diff:
-                    max_diff = diff
-                    max_diff_N = n
+        in_unit = np.flatnonzero(spike_train[:, 1] == unit)
+        if in_unit.size <= 2 * min_size_split:
+            # we won't split if smaller than this
+            continue
+        n_samples = min(max_samples, in_unit.size)
 
-            if max_diff > split_diff:
-                temp_1 = np.median(wfs_unit[:max_diff_N], axis=0)
-                temp_2 = np.median(wfs_unit[max_diff_N:], axis=0)
-                n_temp_cleaned += 1
-                if (
-                    np.abs(temp_1 - template_mc_trace).max()
-                    > np.abs(temp_2 - template_mc_trace).max()
-                ):
-                    which = spikes_in_unit[ptp_sort_idx[:max_diff_N]]
-                    spike_train[which] = cmp
-                else:
-                    which = spikes_in_unit[ptp_sort_idx[max_diff_N:]]
-                    spike_train[which] = cmp
-            cmp += 1
+        # pick random wfs
+        choices = rg.choice(in_unit.size, size=n_samples, replace=False)
+        spike_times_unit = spike_train[in_unit[choices], 0]
+        wfs_unit, skipped_idx = read_waveforms(
+            spike_times_unit, raw_bin, geom.shape[0], channels=[mc]
+        )
+        assert wfs_unit.shape[-1] == 1
+        assert not skipped_idx.size
+        wfs_unit = wfs_unit[:, :, 0]
+
+        # ptp order
+        ptps_unit = ptps[in_unit]
+        ptps_choice = ptps_unit[choices]
+        ptps_sort = np.argsort(ptps_choice)
+        wfs_sort = wfs_unit[ptps_sort]
+
+        lower = max(in_unit.size * 0.05, min_size_split)
+        upper = min(in_unit.size * 0.95, in_unit.size - min_size_split)
+        if lower >= upper:
+            continue
+
+        max_diff = 0
+        max_diff_ix = 0
+        for n in np.arange(lower, upper):
+            # Denoise templates?
+            temp_1 = np.median(wfs_sort[:n], axis=0)
+            temp_2 = np.median(wfs_sort[n:], axis=0)
+            diff = np.abs(temp_1 - temp_2).max()
+            if diff > max_diff:
+                max_diff = diff
+                max_diff_ix = n
+        max_diff_ptp = 0.5 * (ptps_sort[max_diff_ix] + ptps_sort[max_diff_ix - 1])
+
+        if max_diff < split_diff:
+            continue
+
+        which_a = in_unit[ptps_unit <= max_diff_ptp]
+        which_b = in_unit[ptps_unit > max_diff_ptp]
+
+        temp_a = np.median(wfs_unit[:max_diff_ix], axis=0)
+        temp_b = np.median(wfs_unit[max_diff_ix:], axis=0)
+        temp_diff_a = np.abs(temp_a - template_mc_trace).max()
+        temp_diff_b = np.abs(temp_b - template_mc_trace).max()
+
+        if temp_diff_a < temp_diff_b:
+            spike_train[which_b] = next_label
+        else:
+            spike_train[which_a] = next_label
+
+        n_temp_cleaned += 1
+        next_label += 1
 
     return n_temp_cleaned
 
