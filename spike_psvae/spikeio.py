@@ -141,6 +141,9 @@ def read_waveforms(
     N = trough_times.shape[0]
     load_channels = n_channels
     load_ci = load_chans = False
+    
+    bin_file = Path(bin_file)
+    assert bin_file.exists()
 
     if max_channels is not None:
         assert max_channels.shape == trough_times.shape
