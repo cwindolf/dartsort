@@ -201,8 +201,8 @@ def split_individual_cluster(
     readwfs, skipped = read_waveforms(
         spike_index_unit[:, 0],
         residual_path,
-        geom_array,
-        n_times=T,
+        geom_array.shape[0],
+        spike_length_samples=T,
         channels=np.arange(mc - n_channels_half, mc + n_channels_half),
     )
 
@@ -476,9 +476,9 @@ def get_templates(
     spike_index,
     labels,
     max_spikes=250,
-    n_times=121,
+    spike_length_samples=121,
 ):
-    templates = np.zeros((n_templates, n_times, geom_array.shape[0]))
+    templates = np.zeros((n_templates, spike_length_samples, geom_array.shape[0]))
     for unit in trange(n_templates, desc="get templates"):
         spike_times_unit = spike_index[labels == unit, 0]
         if spike_times_unit.shape[0] > max_spikes:
@@ -491,8 +491,8 @@ def get_templates(
         wfs_unit = read_waveforms(
             spike_times_unit[idx],
             standardized_path,
-            geom_array,
-            n_times=n_times,
+            geom_array.shape[0],
+            spike_length_samples=spike_length_samples,
         )[0]
         templates[unit] = np.median(wfs_unit, axis=0)
     return templates
@@ -618,15 +618,15 @@ def get_diptest_value(
             wfs_a_bis += read_waveforms(
                 spike_times_unit_a + two_units_shift,
                 residual_path,
-                geom_array,
-                n_times=n_times,
+                geom_array.shape[0],
+                spike_length_samples=n_times,
                 channels=np.arange(mc - n_channels_half, mc + n_channels_half),
             )[0]
             wfs_b_bis += read_waveforms(
                 spike_times_unit_b,
                 residual_path,
-                geom_array,
-                n_times=n_times,
+                geom_array.shape[0],
+                spike_length_samples=n_times,
                 channels=np.arange(mc - n_channels_half, mc + n_channels_half),
             )[0]
         else:
@@ -646,15 +646,15 @@ def get_diptest_value(
             wfs_a_bis += read_waveforms(
                 spike_times_unit_a,
                 residual_path,
-                geom_array,
-                n_times=n_times,
+                geom_array.shape[0],
+                spike_length_samples=n_times,
                 channels=np.arange(mc - n_channels_half, mc + n_channels_half),
             )[0]
             wfs_b_bis += read_waveforms(
                 spike_times_unit_b + two_units_shift,
                 residual_path,
-                geom_array,
-                n_times=n_times,
+                geom_array.shape[0],
+                spike_length_samples=n_times,
                 channels=np.arange(mc - n_channels_half, mc + n_channels_half),
             )[0]
     elif two_units_shift < 0:
@@ -675,15 +675,15 @@ def get_diptest_value(
             wfs_a_bis += read_waveforms(
                 spike_times_unit_a + two_units_shift,
                 residual_path,
-                geom_array,
-                n_times=n_times,
+                geom_array.shape[0],
+                spike_length_samples=n_times,
                 channels=np.arange(mc - n_channels_half, mc + n_channels_half),
             )[0]
             wfs_b_bis += read_waveforms(
                 spike_times_unit_b,
                 residual_path,
-                geom_array,
-                n_times=n_times,
+                geom_array.shape[0],
+                spike_length_samples=n_times,
                 channels=np.arange(mc - n_channels_half, mc + n_channels_half),
             )[0]
 
@@ -704,15 +704,15 @@ def get_diptest_value(
             wfs_a_bis += read_waveforms(
                 spike_times_unit_a,
                 residual_path,
-                geom_array,
-                n_times=n_times,
+                geom_array.shape[0],
+                spike_length_samples=n_times,
                 channels=np.arange(mc - n_channels_half, mc + n_channels_half),
             )[0]
             wfs_b_bis += read_waveforms(
                 spike_times_unit_b + two_units_shift,
                 residual_path,
-                geom_array,
-                n_times=n_times,
+                geom_array.shape[0],
+                spike_length_samples=n_times,
                 channels=np.arange(mc - n_channels_half, mc + n_channels_half),
             )[0]
     else:
@@ -728,15 +728,15 @@ def get_diptest_value(
         wfs_a_bis += read_waveforms(
             spike_times_unit_a,
             residual_path,
-            geom_array,
-            n_times=n_times,
+            geom_array.shape[0],
+            spike_length_samples=n_times,
             channels=np.arange(mc - n_channels_half, mc + n_channels_half),
         )[0]
         wfs_b_bis += read_waveforms(
             spike_times_unit_b,
             residual_path,
-            geom_array,
-            n_times=n_times,
+            geom_array.shape[0],
+            spike_length_samples=n_times,
             channels=np.arange(mc - n_channels_half, mc + n_channels_half),
         )[0]
 

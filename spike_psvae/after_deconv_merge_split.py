@@ -6,7 +6,7 @@ from spike_psvae.isocut5 import isocut5 as isocut
 from sklearn.decomposition import PCA
 from sklearn.discriminant_analysis import LinearDiscriminantAnalysis as LDA
 from spike_psvae import pre_deconv_merge_split, cluster_utils
-from spike_psvae.deconvolve import read_waveforms
+from spike_psvae.spikeio import read_waveforms
 from spike_psvae.pyks_ccg import ccg_metrics, ccg
 from tqdm.auto import tqdm, trange
 
@@ -527,7 +527,7 @@ def clean_big_clusters(
             spikes_in_unit = np.flatnonzero(spike_train[:, 1] == unit)
             spike_times_unit = spike_train[spikes_in_unit, 0]
             wfs_unit = read_waveforms(
-                spike_times_unit, raw_bin, geom, channels=[mc]
+                spike_times_unit, raw_bin, geom.shape[0], channels=[mc]
             )[0][:, :, 0]
 
             ptp_sort_idx = wfs_unit.ptp(1).argsort()
