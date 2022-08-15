@@ -8,6 +8,7 @@ import h5py
 from spike_psvae.spikeio import read_data, read_waveforms
 from pathlib import Path
 from spike_psvae import snr_templates
+import pickle
 
 # ********************************************************
 # ********************************************************
@@ -64,10 +65,8 @@ def parallel_conv_filter(
 
         pairwise_conv_array.append(pairwise_conv)
 
-    np.save(
-        deconv_dir + "/temp_temp_chunk_" + str(proc_index),
-        np.asarray(pairwise_conv_array),
-    )
+    with open(deconv_dir + "/temp_temp_chunk_" + str(proc_index), "wb") as f:
+        pickle.dump(pairwise_conv_array, f)
 
 
 class MatchPursuit_objectiveUpsample(object):
@@ -331,16 +330,9 @@ class MatchPursuit_objectiveUpsample(object):
             spatial=self.spatial,
         )
 
-    #         else:
-    #             data = np.load(fname)
-    #             self.temporal_up = data['temporal_up']
-    #             self.temporal = data['temporal']
-    #             self.singular = data['singular']
-    #             self.spatial = data['spatial']
 
     # Cat: TODO: Parallelize this function
     def pairwise_filter_conv_parallel(self):
-
         # Cat: TODO: this may still crash memory in some cases; can split into additional bits
         units = np.array_split(np.unique(self.up_up_map), self.n_processors)
         if self.multi_processing:
@@ -378,7 +370,8 @@ class MatchPursuit_objectiveUpsample(object):
             fname = os.path.join(
                 self.deconv_dir, "temp_temp_chunk_" + str(i) + ".npy"
             )
-            temp_pairwise_conv = np.load(fname, allow_pickle=True)
+            with open(fname, "rb") as f:
+                temp_pairwise_conv = pickle.load(fname)
             temp_array.extend(temp_pairwise_conv)
             os.remove(fname)
 
