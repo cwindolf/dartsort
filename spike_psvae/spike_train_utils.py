@@ -3,7 +3,9 @@ from tqdm.auto import tqdm
 from . import spikeio
 
 
-def make_labels_contiguous(labels, in_place=False, return_orig_unit_labels=False):
+def make_labels_contiguous(
+    labels, in_place=False, return_orig_unit_labels=False
+):
     """Remove empty units."""
     assert labels.ndim == 1
     out = labels if in_place else labels.copy()
@@ -42,9 +44,12 @@ def clean_align_and_get_templates(
     This will change the label space if there are empty units, or
     units with fewer than min_n_spikes spikes.
 
+    This will change the order of the spikes if realignment occurs
+
     Returns
     -------
     aligned_spike_train : np.array, same shape as spike_train
+    order : the argsort after aligning
     templates : of shape (aligned_spike_train[:, 1].max(), spike_len_samples, n_channels)
     """
     aligned_spike_train = spike_train.copy()
@@ -60,6 +65,10 @@ def clean_align_and_get_templates(
         # don't want to touch the triaged spikes
         too_small_units = too_small_units[too_small_units >= 0]
         too_small = np.isin(aligned_spike_train[:, 1], too_small_units)
+        print(
+            f"Spike train cleaning will remove {too_small_units.size} "
+            f"units with < {min_n_spikes} spikes"
+        )
         # mark these spikes as triaged
         # (rather than deleting, to keep the same shape for the spike train)
         aligned_spike_train[too_small, 1] = -1
@@ -126,4 +135,9 @@ def clean_align_and_get_templates(
             max_shift + shift : max_shift + shift + spike_length_samples
         ]
 
-    return aligned_spike_train, templates
+    # sort so that times are increasing, but keep track of the order
+    # so that the caller can handle bookkeeping
+    order = np.argsort(aligned_spike_train[:, 0])
+    aligned_spike_train = aligned_spike_train[order]
+
+    return aligned_spike_train, order, templates
