@@ -8,7 +8,6 @@ import h5py
 from spike_psvae.spikeio import read_data, read_waveforms
 from pathlib import Path
 from spike_psvae import snr_templates
-import pickle
 
 # ********************************************************
 # ********************************************************
@@ -65,8 +64,10 @@ def parallel_conv_filter(
 
         pairwise_conv_array.append(pairwise_conv)
 
-    with open(deconv_dir + "/temp_temp_chunk_" + str(proc_index) + ".pkl", "wb") as f:
-        pickle.dump(pairwise_conv_array, f)
+    np.save(
+        deconv_dir + "/temp_temp_chunk_" + str(proc_index) + ".npy",
+        np.asarray(pairwise_conv_array, dtype=object),
+    )
 
 
 class MatchPursuit_objectiveUpsample(object):
@@ -346,7 +347,7 @@ class MatchPursuit_objectiveUpsample(object):
                 self.vis_chan,
                 self.approx_rank,
                 self.deconv_dir,
-                processes=self.n_processors,
+                pm_processes=self.n_processors,
                 pm_pbar=True,
             )
         else:
@@ -368,11 +369,9 @@ class MatchPursuit_objectiveUpsample(object):
         temp_array = []
         for i in range(len(units)):
             fname = os.path.join(
-                self.deconv_dir, "temp_temp_chunk_" + str(i) + ".pkl"
+                self.deconv_dir, "temp_temp_chunk_" + str(i) + ".npy"
             )
-            with open(fname, "rb") as f:
-                temp_pairwise_conv = pickle.load(f)
-            temp_array.extend(temp_pairwise_conv)
+            temp_array.extend(np.load(fname, allow_pickle=True))
             os.remove(fname)
 
         # initialize empty list and fill only correct locations
@@ -509,7 +508,7 @@ class MatchPursuit_objectiveUpsample(object):
                 self.n_time,
                 self.up_factor,
                 down_sample_idx,
-                processes=self.n_processors,
+                pm_processes=self.n_processors,
                 pm_pbar=True,
             )
         else:
@@ -968,7 +967,7 @@ def deconvolution(
             parmap.starmap(
                 mp_object.run,
                 list(zip(batches_in, fnames_in)),
-                processes=n_processors,
+                pm_processes=n_processors,
                 pm_pbar=True,
             )
         else:
