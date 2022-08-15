@@ -20,9 +20,16 @@ from spikeinterface.extractors import NumpySorting
 from spikeinterface.comparison import compare_sorter_to_ground_truth
 
 from spike_psvae.spikeio import get_binary_length
+
 # from spike_psvae.snr_templates import get_templates
 from spike_psvae.deconvolve import get_templates
-from spike_psvae import localize_index, cluster_viz, cluster_viz_index, pyks_ccg, cluster_utils
+from spike_psvae import (
+    localize_index,
+    cluster_viz,
+    cluster_viz_index,
+    pyks_ccg,
+    cluster_utils,
+)
 
 
 class Sorting:
@@ -73,7 +80,9 @@ class Sorting:
             self.unit_labels.size == self.unit_labels.max() + 1
         )
         # Issue with localization of empty template
-        assert self.contiguous_labels, "Not having contiguous labels not supported for now."
+        assert (
+            self.contiguous_labels
+        ), "Not having contiguous labels not supported for now."
 
         self.templates = templates
         if templates is None and not unsorted:
@@ -88,7 +97,7 @@ class Sorting:
                 self.spike_times[:, None],
                 self.spike_labels,
                 geom,
-                n_samples = template_n_spikes,
+                n_samples=template_n_spikes,
             )
         if not unsorted:
             assert self.templates.shape[0] == self.unit_labels.max() + 1
@@ -106,7 +115,7 @@ class Sorting:
                 n_workers=None,
                 pbar=True,
             )
-            
+
             self.template_xzptp = np.c_[
                 self.template_locs[0],
                 self.template_locs[3],
@@ -146,15 +155,16 @@ class Sorting:
                 self.spike_xzptp[:, :2],
                 30 * np.log(self.spike_xzptp[:, 2]),
             ]
-        
+
         if not self.unsorted:
             self.contam_ratios = np.empty(self.unit_labels.shape)
             self.contam_p_values = np.empty(self.unit_labels.shape)
             for i in tqdm(self.unit_labels, desc="ccg"):
                 st = self.get_unit_spike_train(i)
-                self.contam_ratios[i], self.contam_p_values[i] = pyks_ccg.ccg_metrics(
-                    st, st, 500, self.fs / 1000
-                )
+                (
+                    self.contam_ratios[i],
+                    self.contam_p_values[i],
+                ) = pyks_ccg.ccg_metrics(st, st, 500, self.fs / 1000)
 
     def get_unit_spike_train(self, unit):
         return self.spike_times[self.spike_labels == unit]
@@ -170,24 +180,37 @@ class Sorting:
             sampling_frequency=self.fs,
         )
 
-    def array_scatter(self, zlim=(-50, 3900), axes=None, do_ellipse=True):
+    def array_scatter(
+        self,
+        zlim=(-50, 3900),
+        axes=None,
+        do_ellipse=True,
+        max_n_spikes=500_000,
+    ):
+        sample = slice(None)
+        pct_shown = 100
+        if self.n_spikes > max_n_spikes:
+            sample = np.random.default_rng(0).choice(
+                self.n_spikes, size=max_n_spikes, replace=False
+            )
+            pct_shown = np.round(100 * max_n_spikes / self.n_spikes)
+
         fig, axes = cluster_viz_index.array_scatter(
-            self.spike_labels,
+            self.spike_labels[sample],
             self.geom,
-            self.spike_xzptp[:, 0],
-            self.spike_xzptp[:, 1],
-            self.spike_xzptp[:, 2],
+            self.spike_xzptp[sample, 0],
+            self.spike_xzptp[sample, 1],
+            self.spike_xzptp[sample, 2],
             annotate=False,
             zlim=zlim,
             axes=axes,
-            do_ellipse=do_ellipse
+            do_ellipse=do_ellipse,
         )
         axes[0].scatter(*self.geom.T, marker="s", s=2, color="orange")
-        return fig, axes
-    
+        return fig, axes, pct_shown
+
     def compute_closest_units(self):
         n_num_close_clusters = 10
-        n_close_temp_cosine = 3
 
         assert self.contiguous_labels
         n_units = self.templates.shape[0]
@@ -213,16 +236,22 @@ class Sorting:
                     p=np.inf,
                 )
             close_templates[i] = close_clusters[i][
-                cos_dist.argsort()[:self.n_close_units]
+                cos_dist.argsort()[: self.n_close_units]
             ]
 
         return close_templates
-    
+
     def template_maxchan_vis(self):
         fig = plt.figure(figsize=(6, 4))
         for u in self.unit_labels:
-            plt.plot(self.templates[u, :, self.template_maxchans[u]], color="k", alpha=0.1)
-        plt.title(f"{self.name}, template maxchan traces, {len(self.unit_labels)} units.")
+            plt.plot(
+                self.templates[u, :, self.template_maxchans[u]],
+                color="k",
+                alpha=0.1,
+            )
+        plt.title(
+            f"{self.name}, template maxchan traces, {len(self.unit_labels)} units."
+        )
         return fig
 
 
@@ -233,7 +262,9 @@ class HybridComparison:
     in one place for later plotting / analysis code.
     """
 
-    def __init__(self, gt_sorting, new_sorting, geom, match_score=0.1, dt_samples=5):
+    def __init__(
+        self, gt_sorting, new_sorting, geom, match_score=0.1, dt_samples=5
+    ):
         assert gt_sorting.contiguous_labels
 
         self.gt_sorting = gt_sorting
@@ -254,10 +285,12 @@ class HybridComparison:
                 exhaustive_gt=False,
                 match_score=match_score,
                 verbose=True,
-                delta_time=dt_samples / (gt_sorting.fs / 1000)
+                delta_time=dt_samples / (gt_sorting.fs / 1000),
             )
 
-            self.ordered_agreement = gt_comparison.get_ordered_agreement_scores()
+            self.ordered_agreement = (
+                gt_comparison.get_ordered_agreement_scores()
+            )
             self.best_match_12 = gt_comparison.best_match_12.values.astype(int)
             self.gt_matched = self.best_match_12 >= 0
 
@@ -277,7 +310,9 @@ class HybridComparison:
 
         # unsorted performance
         tp, fn, fp, num_gt, detected = unsorted_confusion(
-            gt_sorting.spike_index, new_sorting.spike_index, n_samples=dt_samples
+            gt_sorting.spike_index,
+            new_sorting.spike_index,
+            n_samples=dt_samples,
         )
         # as in spikeinterface, the idea of a true negative does not make sense here
         # accuracy with tn=0 is called threat score or critical success index, apparently
@@ -482,7 +517,9 @@ def make_diagnostic_plot(hybrid_comparison, gt_unit):
 
 
 def array_scatter_vs(scatter_comparison, vs_comparison, do_ellipse=True):
-    fig, axes = scatter_comparison.new_sorting.array_scatter(do_ellipse=do_ellipse)
+    fig, axes = scatter_comparison.new_sorting.array_scatter(
+        do_ellipse=do_ellipse
+    )
     scatter_match = scatter_comparison.gt_matched
     vs_match = vs_comparison.gt_matched
     match = scatter_match + 2 * vs_match
@@ -527,7 +564,9 @@ def near_gt_scatter_vs(step_comparisons, vs_comparison, gt_unit, dz=100):
         sharex="col",
         sharey=True,
         figsize=(6, 2 * nrows + 1),
-        gridspec_kw=dict(hspace=0.25, wspace=0.0, height_ratios=[1] * nrows + [0.1]),
+        gridspec_kw=dict(
+            hspace=0.25, wspace=0.0, height_ratios=[1] * nrows + [0.1]
+        ),
     )
     print("z", axes.shape, flush=True)
     gt_x, gt_z, gt_ptp = vs_comparison.gt_sorting.template_xzptp.T
@@ -557,7 +596,9 @@ def near_gt_scatter_vs(step_comparisons, vs_comparison, gt_unit, dz=100):
         matchstr = "no match"
         if u >= 0:
             matchstr = f"matching unit {u}"
-        axes[i, 1].set_title(f"{comp.new_sorting.name}, {matchstr}", fontsize=8)
+        axes[i, 1].set_title(
+            f"{comp.new_sorting.name}, {matchstr}", fontsize=8
+        )
 
         if i < nrows - 1:
             for ax in axes[i]:
