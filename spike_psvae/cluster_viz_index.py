@@ -53,10 +53,9 @@ def cluster_scatter(
             mean_x, mean_y = means[k]
             cov = covs[k]
 
-            if (cov <= 0).any():
-                continue
-            
             vx, vy = cov[0, 0], cov[1, 1]
+            if min(vx, vy) <= 0:
+                continue
             rho = np.minimum(1.0, cov[0, 1] / np.sqrt(vx * vy))
             
             color = get_ccolor(k)
