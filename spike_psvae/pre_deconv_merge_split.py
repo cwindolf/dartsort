@@ -58,7 +58,7 @@ def align_spikes_by_templates(
     for unit in idx_not_aligned:
         shift = template_shifts[unit]
         if abs(shift) <= shift_max:
-            shifted_spike_index[labels == unit, 0] += shift
+            shifted_spike_index[labels == unit, 0] -= shift
         else:
             # zero out overly large shifts (denoiser issue)
             template_shifts[unit] = 0
@@ -478,7 +478,9 @@ def get_templates(
     max_spikes=250,
     spike_length_samples=121,
 ):
-    templates = np.zeros((n_templates, spike_length_samples, geom_array.shape[0]))
+    templates = np.zeros(
+        (n_templates, spike_length_samples, geom_array.shape[0])
+    )
     for unit in trange(n_templates, desc="get templates"):
         spike_times_unit = spike_index[labels == unit, 0]
         if spike_times_unit.shape[0] > max_spikes:
@@ -801,7 +803,11 @@ def get_merged(
     x_z_templates = get_x_z_templates(n_templates, labels, x, z)
     print("GET PROPOSED PAIRS")
     dist_argsort, dist_template = get_proposed_pairs(
-        n_templates, templates, x_z_templates, n_temp=n_temp, shifts=shifts,
+        n_templates,
+        templates,
+        x_z_templates,
+        n_temp=n_temp,
+        shifts=shifts,
     )
 
     labels_updated = labels.copy()
