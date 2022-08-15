@@ -20,6 +20,7 @@ from spikeinterface.extractors import NumpySorting
 from spikeinterface.comparison import compare_sorter_to_ground_truth
 
 from spike_psvae.spikeio import get_binary_length
+# from spike_psvae.snr_templates import get_templates
 from spike_psvae.deconvolve import get_templates
 from spike_psvae import localize_index, cluster_viz, cluster_viz_index, pyks_ccg, cluster_utils
 
@@ -43,15 +44,19 @@ class Sorting:
         spike_xzptp=None,
         unsorted=False,
         fs=30_000,
+        n_close_units=3,
+        template_n_spikes=250,
     ):
         n_spikes_full = spike_labels.shape[0]
         assert spike_labels.shape == spike_times.shape == (n_spikes_full,)
         T_samples, T_sec = get_binary_length(raw_bin, len(geom), fs)
+        print("Initializing sorting", name)
 
         self.name = name
         self.geom = geom
         self.name_lo = re.sub("[^a-z0-9]+", "_", name.lower())
         self.fs = fs
+        self.n_close_units = n_close_units
 
         which = np.flatnonzero(spike_labels >= 0)
         which = which[np.argsort(spike_times[which])]
@@ -67,15 +72,26 @@ class Sorting:
         self.contiguous_labels = (
             self.unit_labels.size == self.unit_labels.max() + 1
         )
+        # Issue with localization of empty template
+        assert self.contiguous_labels, "Not having contiguous labels not supported for now."
 
         self.templates = templates
         if templates is None and not unsorted:
+            # self.cleaned_templates, _, self.templates, _ = get_templates(
+            #     np.c_[self.spike_times, self.spike_labels],
+            #     geom,
+            #     raw_bin,
+            #     return_raw_cleaned=True,
+            # )
             self.templates = get_templates(
                 raw_bin,
                 self.spike_times[:, None],
                 self.spike_labels,
                 geom,
+                n_samples = template_n_spikes,
             )
+        if not unsorted:
+            assert self.templates.shape[0] == self.unit_labels.max() + 1
 
         if self.templates is not None:
             self.template_ptps = self.templates.ptp(1)
@@ -90,6 +106,7 @@ class Sorting:
                 n_workers=None,
                 pbar=True,
             )
+            
             self.template_xzptp = np.c_[
                 self.template_locs[0],
                 self.template_locs[3],
@@ -100,7 +117,7 @@ class Sorting:
                 self.template_locs[3],
                 30 * np.log(self.template_maxptps),
             ]
-            self.close_units_cosine = self.compute_closest_units_cosine()
+            self.close_units = self.compute_closest_units()
 
         if spike_maxchans is None:
             assert not unsorted
@@ -168,14 +185,14 @@ class Sorting:
         axes[0].scatter(*self.geom.T, marker="s", s=2, color="orange")
         return fig, axes
     
-    def compute_closest_units_cosine(self):
+    def compute_closest_units(self):
         n_num_close_clusters = 10
         n_close_temp_cosine = 3
 
         assert self.contiguous_labels
         n_units = self.templates.shape[0]
 
-        close_clusters = np.zeros((n_units, n_num_close_clusters))
+        close_clusters = np.zeros((n_units, n_num_close_clusters), dtype=int)
         for i in range(n_units):
             close_clusters[i] = cluster_utils.get_closest_clusters_kilosort(
                 i,
@@ -183,23 +200,30 @@ class Sorting:
                 num_close_clusters=n_num_close_clusters,
             )
 
-        close_clusters = close_clusters.astype("int")
-
-        close_templates_cosine = np.zeros((n_units, n_close_temp_cosine), dtype=int)
+        close_templates = np.zeros((n_units, self.n_close_units), dtype=int)
         for i in tqdm(range(n_units)):
             cos_dist = np.zeros(n_num_close_clusters)
             vis_channels = np.flatnonzero(self.templates[i].ptp(0) >= 1.0)
             for j in range(n_num_close_clusters):
                 idx = close_clusters[i, j]
                 cos_dist[j] = cdist(
-                    self.templates[i, :, vis_channels].T.flatten()[None, :],
-                    self.templates[idx, :, vis_channels].T.flatten()[None, :],
+                    self.templates[i, :, vis_channels].ravel()[None, :],
+                    self.templates[idx, :, vis_channels].ravel()[None, :],
+                    "minkowski",
+                    p=np.inf,
                 )
-            close_templates_cosine[i] = close_clusters[i][
-                cos_dist.argsort()[:n_close_temp_cosine]
+            close_templates[i] = close_clusters[i][
+                cos_dist.argsort()[:self.n_close_units]
             ]
 
-        return close_templates_cosine
+        return close_templates
+    
+    def template_maxchan_vis(self):
+        fig = plt.figure(figsize=(6, 4))
+        for u in self.unit_labels:
+            plt.plot(self.templates[u, :, self.template_maxchans[u]], color="k", alpha=0.1)
+        plt.title(f"{self.name}, template maxchan traces, {len(self.unit_labels)} units.")
+        return fig
 
 
 class HybridComparison:
@@ -437,8 +461,8 @@ def make_diagnostic_plot(hybrid_comparison, gt_unit):
         hybrid_comparison.gt_sorting.spike_index,
         hybrid_comparison.new_sorting.spike_labels,
         hybrid_comparison.gt_sorting.spike_labels,
-        hybrid_comparison.new_sorting.close_units_cosine[new_unit],
-        hybrid_comparison.gt_sorting.close_units_cosine[gt_unit],
+        hybrid_comparison.new_sorting.close_units[new_unit],
+        hybrid_comparison.gt_sorting.close_units[gt_unit],
         scale=7,
         sorting1_name=hybrid_comparison.new_sorting.name,
         sorting2_name=hybrid_comparison.gt_sorting.name,
