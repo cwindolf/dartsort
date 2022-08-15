@@ -87,7 +87,7 @@ def split(
 
             if len(np.unique(clusterer.labels_)) > 1:
                 labels_deconv[which[clusterer.labels_ == -1]] = -1
-                for i in np.unique(clusterer.labels_)[2:]:
+                for i in np.setdiff1d(np.unique(clusterer.labels_), [-1, 0]):
                     labels_deconv[which[clusterer.labels_ == i]] = cmp
                     cmp += 1
 
@@ -426,10 +426,10 @@ def merge(
                 )
 
                 # check isi violation
-                if is_merged:
-                    print("will try", unit_reference, unit_bis_reference)
-                else:
-                    print("nope for", unit_reference, unit_bis_reference)
+                # if is_merged:
+                #     print("will try", unit_reference, unit_bis_reference)
+                # else:
+                #     print("nope for", unit_reference, unit_bis_reference)
 
                 if isi_veto and is_merged_bis:
                     st1 = spike_times[labels == unit_reference]
@@ -559,14 +559,14 @@ def clean_big_clusters(
         ptps_sort = np.argsort(ptps_choice)
         wfs_sort = wfs_unit[ptps_sort]
 
-        lower = max(in_unit.size * 0.05, min_size_split)
-        upper = min(in_unit.size * 0.95, in_unit.size - min_size_split)
+        lower = int(max(np.ceil(in_unit.size * 0.05), min_size_split))
+        upper = int(min(np.floor(in_unit.size * 0.95), in_unit.size - min_size_split))
         if lower >= upper:
             continue
 
         max_diff = 0
         max_diff_ix = 0
-        for n in np.arange(lower, upper):
+        for n in range(lower, upper):
             # Denoise templates?
             temp_1 = np.median(wfs_sort[:n], axis=0)
             temp_2 = np.median(wfs_sort[n:], axis=0)

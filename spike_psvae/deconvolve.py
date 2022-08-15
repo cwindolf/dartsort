@@ -3,7 +3,7 @@ import scipy
 import time, os
 import parmap
 import copy
-from tqdm.auto import tqdm
+from tqdm.auto import tqdm, trange
 import h5py
 from spike_psvae.spikeio import read_data, read_waveforms
 from pathlib import Path
@@ -1024,6 +1024,7 @@ def get_templates(
     n_samples=250,
     trough_offset=42,
     reducer=np.median,
+    pbar=False
 ):
 
     n_chans = geom.shape[0]
@@ -1034,6 +1035,7 @@ def get_templates(
         n_templates -= 1
 
     templates = np.empty((n_templates, n_times, n_chans))
+    units = trange(n_templates, desc="Templates") if pbar else range(n_templates)
     for unit in range(n_templates):
         spike_times_unit = spike_index[labels == unit, 0]
         which = slice(None)
