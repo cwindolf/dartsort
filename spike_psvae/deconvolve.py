@@ -371,7 +371,7 @@ class MatchPursuit_objectiveUpsample(object):
                 self.deconv_dir, "temp_temp_chunk_" + str(i) + ".pkl"
             )
             with open(fname, "rb") as f:
-                temp_pairwise_conv = pickle.load(fname)
+                temp_pairwise_conv = pickle.load(f)
             temp_array.extend(temp_pairwise_conv)
             os.remove(fname)
 
