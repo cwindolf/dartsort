@@ -29,7 +29,11 @@ def post_deconv_split_step(
 
     # deconv can produce an un-aligned spike train.
     # let's also get rid of units with few spikes.
-    spike_train, order, templates = spike_train_utils.clean_align_and_get_templates(
+    (
+        spike_train,
+        order,
+        templates,
+    ) = spike_train_utils.clean_align_and_get_templates(
         spike_train,
         n_channels,
         bin_file,
@@ -50,7 +54,11 @@ def post_deconv_split_step(
     print("sorted?", (spike_train[1:, 0] >= spike_train[:-1, 0]).all())
     u, c = np.unique(spike_train[:, 1], return_counts=True)
     print(u.size, (c > 25).sum(), c[c > 25].sum())
-    spike_train, reorder, templates = spike_train_utils.clean_align_and_get_templates(
+    (
+        spike_train,
+        reorder,
+        templates,
+    ) = spike_train_utils.clean_align_and_get_templates(
         spike_train,
         n_channels,
         bin_file,
@@ -63,7 +71,11 @@ def post_deconv_split_step(
     after_deconv_merge_split.clean_big_clusters(
         templates, spike_train, maxptps[order], bin_file, geom
     )
-    spike_train, reorder, templates = spike_train_utils.clean_align_and_get_templates(
+    (
+        spike_train,
+        reorder,
+        templates,
+    ) = spike_train_utils.clean_align_and_get_templates(
         spike_train,
         n_channels,
         bin_file,
@@ -81,10 +93,12 @@ def post_deconv_split_step(
     (
         spike_train,
         templates,
-    ) = after_deconv_merge_split.remove_oversplits(
-        templates, spike_train
-    )
-    spike_train, reorder, templates = spike_train_utils.clean_align_and_get_templates(
+    ) = after_deconv_merge_split.remove_oversplits(templates, spike_train)
+    (
+        spike_train,
+        reorder,
+        templates,
+    ) = spike_train_utils.clean_align_and_get_templates(
         spike_train,
         n_channels,
         bin_file,
@@ -129,7 +143,11 @@ def post_deconv_merge_step(
         tpca=PCA(6),
         # isi_veto=True,
     )
-    spike_train, reorder, templates = spike_train_utils.clean_align_and_get_templates(
+    (
+        spike_train,
+        reorder,
+        templates,
+    ) = spike_train_utils.clean_align_and_get_templates(
         spike_train,
         n_channels,
         bin_file,
@@ -148,7 +166,12 @@ def post_deconv_merge_step(
     print(f"{n_cleaned=}")
     u, c = np.unique(spike_train[:, 1], return_counts=True)
     print(u.max() + 1, u.size, (c > 25).sum(), c[c > 25].sum())
-    spike_train, reorder, templates = spike_train_utils.clean_align_and_get_templates(
+
+    (
+        spike_train,
+        reorder,
+        templates,
+    ) = spike_train_utils.clean_align_and_get_templates(
         spike_train,
         n_channels,
         bin_file,
@@ -156,6 +179,7 @@ def post_deconv_merge_step(
         pbar=True,
     )
     order = order[reorder]
+
     print("clean/align")
     u, c = np.unique(spike_train[:, 1], return_counts=True)
     print(u.max() + 1, u.size, (c > 25).sum(), c[c > 25].sum())
@@ -164,7 +188,11 @@ def post_deconv_merge_step(
     spike_train, templates = after_deconv_merge_split.remove_oversplits(
         templates, spike_train
     )
-    spike_train, reorder, templates = spike_train_utils.clean_align_and_get_templates(
+    (
+        spike_train,
+        reorder,
+        templates,
+    ) = spike_train_utils.clean_align_and_get_templates(
         spike_train,
         n_channels,
         bin_file,
@@ -172,6 +200,94 @@ def post_deconv_merge_step(
         pbar=True,
     )
     order = order[reorder]
+    u, c = np.unique(spike_train[:, 1], return_counts=True)
+    print(u.max() + 1, u.size, (c > 25).sum(), c[c > 25].sum())
+
+    return spike_train, order, templates
+
+
+def post_deconv2_clean_step(
+    deconv2_dir,
+    deconv2_results_h5,
+    bin_file,
+    geom,
+    clean_min_spikes=25,
+):
+    n_channels = geom.shape[0]
+
+    # load results
+    with h5py.File(deconv2_results_h5) as f:
+        # for k in f:
+        #     print(k, f[k].shape)
+        maxptps = f["maxptps"][:]
+        firstchans = f["first_channels"][:]
+        x, y, z_rel, z_abs, alpha = f["localizations"][:].T
+        print(f"deconv result shapes {maxptps.shape=} {x.shape=} {z_abs.shape=}")
+    spike_train = np.load(deconv2_dir / "spike_train.npy")
+    assert spike_train.shape[0] == maxptps.shape == firstchans.shape
+
+    (
+        spike_train,
+        order,
+        templates,
+    ) = spike_train_utils.clean_align_and_get_templates(
+        spike_train,
+        n_channels,
+        bin_file,
+        min_n_spikes=clean_min_spikes,
+        pbar=True,
+    )
+
+    print("original")
+    print((spike_train[1:, 0] >= spike_train[:-1, 0]).all())
+    u, c = np.unique(spike_train[:, 1], return_counts=True)
+    print(u.size, (c > 25).sum(), c[c > 25].sum())
+
+    print("Before clean big ")
+    n_cleaned = after_deconv_merge_split.clean_big_clusters(
+        templates, spike_train, maxptps[order], bin_file, geom
+    )
+    print(f"n_cleaned={n_cleaned}")
+    u, c = np.unique(spike_train[:, 1], return_counts=True)
+    print(u.max() + 1, u.size, (c > 25).sum(), c[c > 25].sum())
+
+    (
+        spike_train,
+        reorder,
+        templates,
+    ) = spike_train_utils.clean_align_and_get_templates(
+        spike_train,
+        n_channels,
+        bin_file,
+        min_n_spikes=clean_min_spikes,
+        pbar=True,
+    )
+    order = order[reorder]
+
+    print("After clean big")
+    u, c = np.unique(spike_train[:, 1], return_counts=True)
+    print(u.max() + 1, u.size, (c > 25).sum(), c[c > 25].sum())
+
+    print("Remove oversplits")
+    (
+        spike_train,
+        split_templates,
+    ) = after_deconv_merge_split.remove_oversplits(
+        templates, spike_train
+    )
+    (
+        spike_train,
+        reorder,
+        templates,
+    ) = spike_train_utils.clean_align_and_get_templates(
+        spike_train,
+        n_channels,
+        bin_file,
+        min_n_spikes=clean_min_spikes,
+        pbar=True,
+    )
+    order = order[reorder]
+
     u, c = np.unique(spike_train[:, 1], return_counts=True)
     print(u.max() + 1, u.size, (c > 25).sum(), c[c > 25].sum())
 
