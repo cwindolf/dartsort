@@ -175,10 +175,14 @@ def read_waveforms(
     N_load = N - len(skipped_idx)
 
     # allocate output space
-    waveforms = np.empty(
-        (N_load, spike_length_samples, load_channels),
-        dtype=dtype,
-    ) if buffer is None else buffer
+    if buffer is not None:
+        waveforms = buffer[:N_load]
+        assert waveforms.shape == (N_load, spike_length_samples, load_channels)
+    else:
+        waveforms = np.empty(
+            (N_load, spike_length_samples, load_channels),
+            dtype=dtype,
+        )
 
     load_times = trough_times - trough_offset
     offsets = (
@@ -200,179 +204,5 @@ def read_waveforms(
                 wf = wf[:, channels]
 
             waveforms[i] = wf
-
-    return waveforms, skipped_idx
-
-
-def get_chunked_loads(load_times, spike_length_samples):
-    # import time
-    # tic = time.time()
-    load_starts = []
-    load_lens = []
-    load_inner_starts = []
-    load_ixs = []
-
-    i = 0
-    while i < len(load_times):
-        i0 = i
-        t0 = t = load_times[i]
-        load_starts.append(t0)
-        inner_starts = [0]
-        while (
-            i < len(load_times) - 1
-            and load_times[i + 1] - t < spike_length_samples
-        ):
-            i += 1
-            t = load_times[i]
-            inner_starts.append(t - t0)
-        load_lens.append(t + spike_length_samples - t0)
-        load_inner_starts.append(np.array(inner_starts))
-        load_ixs.append(range(i0, i + 1))
-        i += 1
-
-    # print(time.time() - tic)
-    return load_starts, load_lens, load_inner_starts, load_ixs
-
-
-def read_waveforms_fast(
-    trough_times,
-    bin_file,
-    n_channels,
-    channel_index=None,
-    max_channels=None,
-    channels=None,
-    spike_length_samples=121,
-    trough_offset=42,
-    dtype=np.float32,
-    fill_value=np.nan,
-    buffer=None,
-):
-    """Read waveforms from binary file
-
-    Load either waveforms on the full probe, or on a subset of channels
-    if max_channels and channel_index are not None.
-
-    This one figures out in advance which reads will be impossible,
-    avoiding our usual try/except.
-
-    Arguments
-    ---------
-    trough_times : int array
-    bin_file : str or Path
-        Path to binary file of dtype `dtype` with `n_channels` channels.
-    n_channels : int
-        Number of channels on the probe.
-    channel_index : None or array
-        A channel index as created by one of the functions in `subtract`
-    max_channels : None or int array
-        The detection channels for the spikes, used to look up the
-        channels subset to load in `channel_index`
-    channels : None or int array
-        Just read data on these channels. (Don't use this argument and
-        channel_index together.)
-    spike_length_samples, trough_offset : int
-    dtype : numpy dtype
-        dtype stored in bin_file and returned from this function.
-    fill_value : any value of dtype
-        If a spike is loaded on a smaller channel neighborhood, this value
-        will fill in the blank space in the array.
-
-    Returns
-    -------
-    waveforms : (N,T,C) array
-    skipped_ix : int array
-        Which indices could not be loaded, if any.
-    """
-    T_samples = get_binary_length_samples(bin_file, n_channels, dtype=dtype)
-    N = trough_times.shape[0]
-    load_channels = n_channels
-    load_ci = load_chans = False
-
-    bin_file = Path(bin_file)
-    assert bin_file.exists()
-
-    if max_channels is not None:
-        assert max_channels.shape == trough_times.shape
-        if channel_index is None:
-            raise ValueError(
-                "If loading a subset of channels depending on the max "
-                "channel, please supply `channel_index`."
-            )
-        if channels is None:
-            raise ValueError("Pass channel_index or channels, but not both.")
-
-        load_channels = channel_index.shape[1]
-        load_channel_index = channel_index
-        load_ci = True
-
-    elif channels is not None:
-        channels = np.atleast_1d(channels)
-        assert channels.ndim == 1
-        load_channels = channels.size
-        max_channels = np.zeros_like(trough_times)
-        load_chans = True
-
-        load_channel_index = np.tile(channels, (n_channels, 1))
-
-    else:
-        max_channels = np.zeros_like(trough_times)
-        load_channel_index = np.tile(np.arange(n_channels), (n_channels, 1))
-
-    # figure out which loads will be skipped in advance
-    max_load_time = T_samples - spike_length_samples + trough_offset
-    # this can be sped up with a searchsorted if times are sorted...
-    skipped_idx = np.flatnonzero(
-        (trough_times < trough_offset) | (trough_times > max_load_time)
-    )
-    kept_idx = np.setdiff1d(np.arange(N), skipped_idx)
-    N_load = N - len(skipped_idx)
-
-    # allocate output space
-    waveforms = np.empty(
-        (N_load, spike_length_samples, load_channels),
-        dtype=dtype,
-    ) if buffer is None else buffer
-
-    load_times = trough_times[kept_idx] - trough_offset
-
-    # it's inefficient to seek backwards, so let's find "runs" of load
-    # times which correspond to overlapped spikes
-    load_starts, load_lens, load_inner_starts, load_ixs = get_chunked_loads(load_times, spike_length_samples)
-
-    # print(sum(map(len, load_ixs)) / len(load_ixs))
-    # print(max(map(len, load_ixs)))
-    with open(bin_file, "rb") as fin:
-        for i, (start, length, inner_starts, ixs) in enumerate(
-            zip(load_starts, load_lens, load_inner_starts, load_ixs)
-        ):
-            fin.seek(start * np.dtype(dtype).itemsize * n_channels, SEEK_SET)
-            wfs = np.fromfile(
-                fin,
-                dtype=dtype,
-                count=length * n_channels,
-            ).reshape(length, n_channels)
-
-            # print(start, length, inner_starts, ixs)
-            # if len(load_ixs):
-            #     wfs = read_waveforms_in_memory(
-            #         wfs,
-            #         np.c_[inner_starts, max_channels[kept_idx[ixs]]],
-            #         spike_length_samples,
-            #         load_channel_index,
-            #         trough_offset=0,
-            #         buffer=0,
-            #     )
-            # if len(load_ixs):
-            for s, ix in zip(inner_starts, ixs):
-                wf = wfs[s:s + spike_length_samples]
-                if load_ci:
-                    wf = np.pad(wf, [(0, 0), (0, 1)], constant_values=fill_value)
-                    wf = wf[:, channel_index[max_channels[kept_idx[ix]]]]
-                elif load_chans:
-                    wf = wf[:, channels]
-
-                waveforms[ix] = wf
-            # else:
-                # waveforms[ixs] = wfs
 
     return waveforms, skipped_idx
