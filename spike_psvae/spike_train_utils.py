@@ -86,9 +86,9 @@ def clean_align_and_get_templates(
         dtype=dtype,
     )
 
-    # a waveform storage buffer
+    # a padded waveform storage buffer
     buffer = np.empty(
-        (n_samples, spike_length_samples, n_channels), dtype=dtype
+        (n_samples, spike_length_load, n_channels), dtype=dtype
     )
 
     # we will iterate through chunks of labels
