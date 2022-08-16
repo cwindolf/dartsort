@@ -1,7 +1,8 @@
 import numpy as np
 import scipy
 import time, os
-import parmap
+import multiprocessing
+from itertools import repeat
 import copy
 from tqdm.auto import tqdm, trange
 import h5py
@@ -69,6 +70,9 @@ def parallel_conv_filter(
         np.asarray(pairwise_conv_array, dtype=object),
     )
 
+def _parallel_conv_filter(args):
+    return parallel_conv_filter(*args)
+
 
 class MatchPursuit_objectiveUpsample(object):
     """Class for doing greedy matching pursuit deconvolution."""
@@ -78,6 +82,7 @@ class MatchPursuit_objectiveUpsample(object):
         templates,
         deconv_dir,
         standardized_bin,
+        save_residual=False,
         t_start=0,
         t_end=None,
         n_sec_chunk=1,
@@ -190,7 +195,7 @@ class MatchPursuit_objectiveUpsample(object):
         # self.update_data(data)
         self.dec_spike_train = np.zeros([0, 2], dtype=np.int32)
 
-        # Energey reduction for assigned spikes.
+        # Energy reduction for assigned spikes.
         self.dist_metric = np.array([])
 
         # Single time preperation for high resolution matches
@@ -332,24 +337,28 @@ class MatchPursuit_objectiveUpsample(object):
         )
 
 
-    # Cat: TODO: Parallelize this function
-    def pairwise_filter_conv_parallel(self):
+    def pairwise_filter_conv(self):
         # Cat: TODO: this may still crash memory in some cases; can split into additional bits
         units = np.array_split(np.unique(self.up_up_map), self.n_processors)
         if self.multi_processing:
-            parmap.map(
-                parallel_conv_filter,
-                list(zip(np.arange(len(units)), units)),
-                self.n_time,
-                self.up_up_map,
-                self.unit_overlap,
-                self.up_factor,
-                self.vis_chan,
-                self.approx_rank,
-                self.deconv_dir,
-                pm_processes=self.n_processors,
-                pm_pbar=True,
-            )
+            ctx = multiprocessing.get_context("spawn")
+            with ctx.Pool(self.n_processors) as pool:
+                for result in tqdm(
+                    pool.imap_unordered(parallel_conv_filter),
+                    zip(
+                        list(zip(np.arange(len(units)), units)),
+                        repeat(self.n_time),
+                        repeat(self.up_up_map),
+                        repeat(self.unit_overlap),
+                        repeat(self.up_factor),
+                        repeat(self.vis_chan),
+                        repeat(self.approx_rank),
+                        repeat(self.deconv_dir),
+                    ),
+                    total=len(units),
+                    desc="pairwise_filter_conv",
+                ):
+                    pass
         else:
             units = np.unique(self.up_up_map)
 
@@ -371,7 +380,9 @@ class MatchPursuit_objectiveUpsample(object):
             fname = os.path.join(
                 self.deconv_dir, "temp_temp_chunk_" + str(i) + ".npy"
             )
-            temp_array.extend(np.load(fname, allow_pickle=True))
+            temp_array.extend(
+                np.load(fname, allow_pickle=True).astype(np.float32)
+            )
             os.remove(fname)
 
         # initialize empty list and fill only correct locations
@@ -390,13 +401,6 @@ class MatchPursuit_objectiveUpsample(object):
         np.save(
             os.path.join(self.deconv_dir, "pairwise_conv.npy"), pairwise_conv
         )
-
-    # Cat: TODO: Parallelize this function
-    def pairwise_filter_conv(self):
-        """Computes pairwise convolution of templates using SVD approximation."""
-
-        #         if os.path.exists(os.path.join(self.deconv_dir, "pairwise_conv.npy")) == False:
-        self.pairwise_filter_conv_parallel()
 
     def get_sparse_upsampled_templates(self):
         """Returns the fully upsampled sparse version of the original templates.
@@ -472,26 +476,6 @@ class MatchPursuit_objectiveUpsample(object):
 
         return all_temps, deconv_id_sparse_temp_map
 
-    def get_sparse_upsampled_templates_parallel(self, unit):
-
-        i = unit
-
-        up_temps = scipy.signal.resample(
-            self.temps[:, :, i], self.n_time * self.up_factor
-        )[down_sample_idx, :]
-        up_temps = up_temps.transpose([1, 2, 0])
-        up_temps = up_temps[:, :, reorder_idx]
-        skip = self.up_factor // self.unit_up_factor[i]
-        keep_upsample_idx = np.arange(0, self.up_factor, skip).astype(np.int32)
-
-        deconv_id_sparse_temp_map.append(
-            np.arange(self.unit_up_factor[i]).repeat(skip) + tot_temps_so_far
-        )
-
-        tot_temps_so_far += self.unit_up_factor[i]
-
-        all_temps.append(up_temps[:, :, keep_upsample_idx])
-
     def get_upsampled_templates(self):
         """Returns the fully upsampled version of the original templates."""
         down_sample_idx = np.arange(
@@ -502,15 +486,23 @@ class MatchPursuit_objectiveUpsample(object):
         )
 
         if self.multi_processing:
-            res = parmap.map(
-                self.upsample_templates_parallel,
-                self.temps.T,
-                self.n_time,
-                self.up_factor,
-                down_sample_idx,
-                pm_processes=self.n_processors,
-                pm_pbar=True,
-            )
+            ctx = multiprocessing.get_context("spawn")
+            with ctx.Pool(self.n_processors) as pool:
+                res = []
+                for r in tqdm(
+                    pool.imap(
+                        self.upsample_templates_parallel,
+                        zip(
+                            self.temps.T,
+                            repeat(self.n_time),
+                            repeat(self.up_factor),
+                            repeat(down_sample_idx),
+                        )
+                    ),
+                    total=len(self.temps.T),
+                    desc="get_upsampled_templates",
+                ):
+                    res.append(r)
         else:
             res = []
             for k in range(self.temps.T.shape[0]):
@@ -713,10 +705,6 @@ class MatchPursuit_objectiveUpsample(object):
 
         # loop over each assigned segment
         for batch_id, fname_out in zip(batch_ids, fnames_out):
-
-            #             if os.path.exists(fname_out):
-            #                 break
-
             # load pairwise conv filter only once per core:
             self.pairwise_conv = np.load(
                 os.path.join(self.deconv_dir, "pairwise_conv.npy"),
@@ -726,7 +714,6 @@ class MatchPursuit_objectiveUpsample(object):
             start_time = time.time()
 
             # ********* run deconv ************
-
             # read raw data for segment using idx_list vals
             # load raw data with buffer
 
@@ -964,12 +951,17 @@ def deconvolution(
         if multi_processing:
             batches_in = np.array_split(batch_ids, n_processors)
             fnames_in = np.array_split(fnames_out, n_processors)
-            parmap.starmap(
-                mp_object.run,
-                list(zip(batches_in, fnames_in)),
-                pm_processes=n_processors,
-                pm_pbar=True,
-            )
+            ctx = multiprocessing.get_context("spawn")
+            with ctx.Pool(n_processors) as pool:
+                for res in tqdm(
+                    pool.imap_unordered(
+                        mp_object.run,
+                        zip(batches_in, fnames_in),
+                    ),
+                    total=len(batches_in),
+                    desc="run",
+                ):
+                    pass
         else:
             for ctr in range(len(batch_ids)):
                 mp_object.run([batch_ids[ctr]], [fnames_out[ctr]])
