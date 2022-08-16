@@ -858,6 +858,7 @@ def deconvolution(
         standardized_recording_path: standardized raw data path
         threshold: threshold for deconvolution
     """
+    print("z")
 
     if not os.path.exists(output_directory):
         os.makedirs(output_directory)
@@ -984,6 +985,7 @@ def deconvolution(
     spike_train[:, 0] += trough_offset
     # save
     np.save(fname_spike_train, spike_train)
+    print(fname_spike_train, spike_train.shape)
 
     # get upsampled templates and mapping for computing residual
     (
@@ -991,12 +993,15 @@ def deconvolution(
         deconv_id_sparse_temp_map,
     ) = mp_object.get_sparse_upsampled_templates()
     np.save(fname_templates_up, templates_up.transpose(2, 0, 1))
+    print(fname_templates_up)
+    print(templates_up.transpose(2, 0, 1).shape)
 
     # get upsampled spike train
     spike_train_up = np.copy(res)
     spike_train_up[:, 1] = deconv_id_sparse_temp_map[spike_train_up[:, 1]]
     spike_train_up[:, 0] += trough_offset
     np.save(fname_spike_train_up, spike_train_up)
+    print(fname_spike_train_up, spike_train_up.shape)
 
     return (
         fname_templates_up,
