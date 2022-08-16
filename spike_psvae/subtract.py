@@ -23,7 +23,7 @@ from sklearn.decomposition import PCA
 from tqdm.auto import tqdm
 
 from . import denoise, detect, localize_index
-from .spikeio import get_binary_length, read_data
+from .spikeio import get_binary_length, read_data, read_waveforms_in_memory
 
 
 def subtraction(
@@ -61,6 +61,8 @@ def subtraction(
     loc_workers=4,
     overwrite=False,
     random_seed=0,
+    binary_dtype=np.float32,
+    dtype=np.float32,
 ):
     """Subtraction-based waveform extraction
 
@@ -185,7 +187,11 @@ def subtraction(
 
     # figure out length of data
     T_samples, T_sec = get_binary_length(
-        standardized_bin, n_channels, sampling_rate, nsync=nsync
+        standardized_bin,
+        n_channels,
+        sampling_rate,
+        nsync=nsync,
+        dtype=binary_dtype,
     )
     assert t_start >= 0 and (t_end is None or t_end <= T_sec)
     start_sample = int(np.floor(t_start * sampling_rate))
@@ -280,11 +286,12 @@ def subtraction(
                     do_nn_denoise=do_nn_denoise,
                     do_enforce_decrease=do_enforce_decrease,
                     probe=probe,
-                    standardized_dtype=np.float32,
                     n_sec_pca=n_sec_pca,
                     rank=tpca_rank,
                     random_seed=random_seed,
                     device=device,
+                    binary_dtype=binary_dtype,
+                    dtype=dtype,
                 )
 
             # try to free up some memory on GPU that might have been used above
@@ -329,6 +336,7 @@ def subtraction(
         do_clean=do_clean,
         do_localize=do_localize,
         overwrite=overwrite,
+        dtype=dtype,
     ) as (output_h5, last_sample):
 
         spike_index = output_h5["spike_index"]
@@ -387,19 +395,27 @@ def subtraction(
                 loc_radius,
                 peak_sign,
                 nsync,
+                binary_dtype,
+                dtype,
             )
             for batch_id, s_start in jobs
         )
 
+        # no-threading/multiprocessing execution for debugging if n_jobs == 0
         Executor = ProcessPoolExecutor if n_jobs else MockPoolExecutor
-        n_jobs = n_jobs or 1
         context = multiprocessing.get_context("spawn")
-        manager = context.Manager()
-        id_queue = manager.Queue()
+        manager = context.Manager() if n_jobs else None
+        id_queue = manager.Queue() if n_jobs else MockQueue()
+
+        n_jobs = n_jobs or 1
+        if n_jobs < 0:
+            n_jobs = multiprocessing.cpu_count() - 1
+
         for id in range(n_jobs):
             id_queue.put(id)
-        with ProcessPoolExecutor(
-            n_jobs,
+
+        with Executor(
+            max_workers=n_jobs,
             mp_context=context,
             initializer=_subtraction_batch_init,
             initargs=(
@@ -429,39 +445,37 @@ def subtraction(
                     if not N_new:
                         continue
 
-                    # grow arrays as necessary
+                    # grow arrays as necessary and write results
                     subtracted_tpca_projs.resize(N + N_new, axis=0)
-                    if save_waveforms:
-                        subtracted_wfs.resize(N + N_new, axis=0)
-                        if do_clean:
-                            cleaned_wfs.resize(N + N_new, axis=0)
-                    spike_index.resize(N + N_new, axis=0)
-                    if do_localize:
-                        locs.resize(N + N_new, axis=0)
-                        maxptps.resize(N + N_new, axis=0)
-                        trough_depths.resize(N + N_new, axis=0)
-                        peak_heights.resize(N + N_new, axis=0)
-                        widths.resize(N + N_new, axis=0)
-                    if neighborhood_kind == "firstchan":
-                        firstchans.resize(N + N_new, axis=0)
-
-                    # write results
                     subtracted_tpca_projs[N:] = np.load(
                         result.subtracted_tpca_projs
                     )
+
                     if save_waveforms:
+                        subtracted_wfs.resize(N + N_new, axis=0)
                         subtracted_wfs[N:] = np.load(result.subtracted_wfs)
+
                         if do_clean:
+                            cleaned_wfs.resize(N + N_new, axis=0)
                             cleaned_wfs[N:] = np.load(result.cleaned_wfs)
+
+                    spike_index.resize(N + N_new, axis=0)
                     spike_index[N:] = np.load(result.spike_index)
+
                     if do_localize:
+                        locs.resize(N + N_new, axis=0)
                         locs[N:] = np.load(result.localizations)
+                        maxptps.resize(N + N_new, axis=0)
                         maxptps[N:] = np.load(result.maxptps)
+                        trough_depths.resize(N + N_new, axis=0)
                         trough_depths[N:] = np.load(result.trough_depths)
+                        peak_heights.resize(N + N_new, axis=0)
                         peak_heights[N:] = np.load(result.peak_heights)
+                        widths.resize(N + N_new, axis=0)
                         widths[N:] = np.load(result.widths)
 
                     if neighborhood_kind == "firstchan":
+                        firstchans.resize(N + N_new, axis=0)
                         firstchans[N:] = extract_channel_index[
                             spike_index[N:, 1], 0
                         ]
@@ -606,6 +620,8 @@ def subtraction_batch(
     loc_radius,
     peak_sign,
     nsync,
+    binary_dtype,
+    dtype,
     device,
     denoiser,
     detector,
@@ -617,6 +633,14 @@ def subtraction_batch(
     (padding it with a buffer where necessary), running the loop
     over thresholds for `detect_and_subtract`, handling spikes
     that were in the buffer, and applying the denoising pipeline.
+
+    A note on buffer logic:
+     - We load a buffer of twice the spike length.
+     - The outer buffer of size spike length is to ensure that
+       spikes inside the inner buffer of size spike length can be
+       loaded
+     - We subtract spikes inside the inner buffer in `detect_and_subtract`
+       to ensure consistency of the residual across batches.
 
     Arguments
     ---------
@@ -665,14 +689,30 @@ def subtraction_batch(
     -------
     res : SubtractionBatchResult
     """
+    # we use a double buffer: inner buffer of length spike_length,
+    # outer buffer of length spike_length
+    #  - detections are restricted to the inner buffer
+    #  - outer buffer allows detections on the border of the inner
+    #    buffer to be loaded
+    #  - using the inner buffer allows for subtracted residuals to be
+    #    consistent (more or less) across batches
+    #  - only the spikes in the center (i.e. not in either buffer)
+    #    will be returned to the caller
+    buffer = 2 * spike_length_samples
+
     # load raw data with buffer
     s_end = min(end_sample, s_start + batch_len_samples)
-    buffer = 2 * spike_length_samples
     n_channels = len(dedup_channel_index)
     load_start = max(start_sample, s_start - buffer)
     load_end = min(end_sample, s_end + buffer)
     residual = read_data(
-        standardized_bin, np.float32, load_start, load_end, n_channels, nsync
+        standardized_bin,
+        binary_dtype,
+        load_start,
+        load_end,
+        n_channels,
+        nsync,
+        out_dtype=dtype,
     )
 
     # 0 padding if we were at the edge of the data
@@ -685,6 +725,8 @@ def subtraction_batch(
         residual = np.pad(
             residual, [(pad_left, pad_right), (0, 0)], mode="edge"
         )
+
+    # now, no matter where we were, the data has the following shape
     assert residual.shape == (2 * buffer + s_end - s_start, n_channels)
 
     # main subtraction loop
@@ -717,14 +759,19 @@ def subtraction_batch(
                 subtracted_tpca_projs.append(subpcs)
             spike_index.append(spind)
 
+    # at this point, trough times in the spike index are relative
+    # to the full buffer of length 2 * spike length
+
     # strip buffer from residual and remove spikes in buffer
+    residual_singlebuf = residual[spike_length_samples:-spike_length_samples]
     if batch_data_folder is not None:
         residual = residual[buffer:-buffer]
         np.save(batch_data_folder / f"{batch_id:08d}_res.npy", residual)
 
     # return early if there were no spikes
     if batch_data_folder is None and not spike_index:
-        return spike_index, subtracted_wfs
+        # this return is used by `train_pca` as an early exit
+        return spike_index, subtracted_wfs, residual_singlebuf
     elif not spike_index:
         return SubtractionBatchResult(
             N_new=0,
@@ -738,6 +785,9 @@ def subtraction_batch(
             batch_id=batch_id,
             localizations=None,
             maxptps=None,
+            peak_heights=None,
+            trough_depths=None,
+            widths=None,
         )
 
     subtracted_wfs = np.concatenate(subtracted_wfs, axis=0)
@@ -758,12 +808,12 @@ def subtraction_batch(
     spike_time_min = 0
     if s_start == start_sample:
         spike_time_min = trough_offset
-    spike_time_max = s_end - s_start - 2 * buffer
+    spike_time_max = s_end - s_start
     if load_end == end_sample:
         spike_time_max -= spike_length_samples - trough_offset
 
-    minix = np.searchsorted(spike_index[:, 0], spike_time_min, side="right")
-    maxix = np.searchsorted(spike_index[:, 0], spike_time_max, side="left")
+    minix = np.searchsorted(spike_index[:, 0], spike_time_min, side="left")
+    maxix = np.searchsorted(spike_index[:, 0], spike_time_max, side="right")
     spike_index = spike_index[minix:maxix]
     subtracted_wfs = subtracted_wfs[minix:maxix]
     if tpca is not None:
@@ -772,20 +822,20 @@ def subtraction_batch(
     # if caller passes None for the output folder, just return
     # the results now (eg this is used by train_pca)
     if batch_data_folder is None:
-        return spike_index, subtracted_wfs
+        return spike_index, subtracted_wfs, residual_singlebuf
 
     # get cleaned waveforms
     cleaned_wfs = None
     if do_clean:
         cleaned_wfs = subtracted_wfs
         if spike_index.size:
-            cleaned_wfs = read_waveforms(
-                residual,
+            cleaned_wfs = read_waveforms_in_memory(
+                residual_singlebuf,
                 spike_index,
                 spike_length_samples,
                 extract_channel_index,
                 trough_offset=trough_offset,
-                buffer=buffer,
+                buffer=spike_length_samples,
             )
             cleaned_wfs = full_denoising(
                 cleaned_wfs + subtracted_wfs,
@@ -799,7 +849,9 @@ def subtraction_batch(
                 denoiser=denoiser,
             )
 
-    # time relative to batch start
+    # times relative to batch start
+    # recall, these times were aligned to the double buffer, so we don't
+    # need to adjust them according to the buffer at all.
     spike_index[:, 0] += s_start
 
     # save the results to disk to avoid memory issues
@@ -889,22 +941,28 @@ def train_pca(
     nn_detector_path,
     denoise_detect,
     nn_channel_index,
+    subtraction_tpca=None,
     peak_sign="neg",
     do_nn_denoise=True,
     do_enforce_decrease=True,
     probe=None,
-    standardized_dtype=np.float32,
     n_sec_pca=10,
     rank=7,
     nsync=0,
     random_seed=0,
     device="cpu",
+    trough_offset=42,
+    binary_dtype=np.float32,
+    dtype=np.float32,
 ):
     """Pre-train temporal PCA
 
     Extracts several random seconds of data by subtraction
     with no PCA, and trains a temporal PCA on the resulting
     waveforms.
+
+    This same function is used to fit the subtraction TPCA and the
+    collision-cleaned TPCA.
     """
     n_seconds = len_recording_samples // sampling_rate
     starts = sampling_rate * np.random.default_rng(random_seed).choice(
@@ -928,18 +986,19 @@ def train_pca(
         dn_detector.to(device)
 
     # do a mini-subtraction with no PCA, just NN denoise and enforce_decrease
-    spike_index = []
+    spike_indices = []
     waveforms = []
+    residuals = []
     for s_start in tqdm(starts, "PCA training subtraction"):
-        spind, wfs = subtraction_batch(
+        spind, wfs, residual_singlebuf = subtraction_batch(
             0,
             None,
             s_start,
             sampling_rate,
             standardized_bin,
             thresholds,
-            None,
-            42,
+            subtraction_tpca,
+            trough_offset,
             dedup_channel_index,
             spike_length_samples,
             extract_channel_index,
@@ -956,33 +1015,63 @@ def train_pca(
             None,
             peak_sign,
             nsync,
+            binary_dtype,
+            dtype,
             device,
             denoiser,
             detector,
             dn_detector,
         )
-        spike_index.append(spind)
+        spike_indices.append(spind)
         waveforms.append(wfs)
+        residuals.append(residual_singlebuf)
 
     try:
-        spike_index = np.concatenate(spike_index, axis=0)
+        # this can raise value error
+        spike_index = np.concatenate(spike_indices, axis=0)
         waveforms = np.concatenate(waveforms, axis=0)
-    except ValueError as e:
+
+        # but we can also be here...
+        if waveforms.size == 0:
+            raise ValueError
+    except ValueError:
         raise ValueError(
             f"No waveforms found in the whole {n_sec_pca} training "
             "batches for TPCA, so we could not train it. Maybe you "
             "can increase n_sec_pca, but also maybe there are data "
-            "issues?"
-        ) from e
+            "or threshold issues?"
+        )
 
     N, T, C = waveforms.shape
     print("Fitting PCA on", N, "waveforms from mini-subtraction")
 
+    # get subtracted or collision-cleaned waveforms
+    if subtraction_tpca is None:
+        # we're fitting to subtracted wfs
+        pass
+    else:
+        # otherwise, we are fitting the collision-cleaned TPCA,
+        # so add back the residual
+        waveforms += np.concatenate(
+            [
+                read_waveforms_in_memory(
+                    res,
+                    spike_index,
+                    spike_length_samples,
+                    extract_channel_index,
+                    trough_offset=trough_offset,
+                    buffer=spike_length_samples,
+                )
+                for res, spind in zip(residuals, spike_indices)
+            ],
+            axis=0,
+        )
+
     # fit TPCA
     tpca = PCA(rank, random_state=random_seed)
     # extract waveforms for real channels
-    in_probe_index = extract_channel_index < extract_channel_index.shape[0]
     wfs_in_probe = waveforms.transpose(0, 2, 1)
+    in_probe_index = extract_channel_index < extract_channel_index.shape[0]
     wfs_in_probe = wfs_in_probe[in_probe_index[spike_index[:, 1]]]
     tpca.fit(wfs_in_probe)
 
@@ -999,6 +1088,7 @@ def detect_and_subtract(
     tpca,
     dedup_channel_index,
     extract_channel_index,
+    *,
     peak_sign="neg",
     detector=None,
     denoiser=None,
@@ -1035,21 +1125,30 @@ def detect_and_subtract(
         start = start - 42
         end = end + 79
 
+    # the full buffer has length 2 * spike len on both sides,
+    # but this spike index only contains the spikes inside
+    # the inner buffer of length spike len
+    # times are relative to the *inner* buffer
     spike_index = detect.detect_and_deduplicate(
         raw[start:end].copy(),
         threshold,
         dedup_channel_index,
-        spike_length_samples,
+        buffer_size=spike_length_samples,
         device=device,
         peak_sign=peak_sign,
+        spike_length_samples=spike_length_samples,
         **kwargs,
     )
     if not spike_index.size:
-        return [], raw, []
+        return [], [], raw, []
 
     # -- read waveforms
     padded_raw = np.pad(raw, [(0, 0), (0, 1)], constant_values=np.nan)
-    # times relative to trough + buffer
+    # get times relative to trough + buffer
+    # currently, times are trough times relative to spike_length_samples,
+    # but they also *start* there
+    # thus, they are actually relative to the full buffer
+    # of length 2 * spike_length_samples
     time_range = np.arange(
         2 * spike_length_samples - trough_offset,
         3 * spike_length_samples - trough_offset,
@@ -1109,12 +1208,13 @@ def full_denoising(
     # in new pipeline, some channels are off the edge of the probe
     # those are filled with NaNs, which will blow up PCA. so, here
     # we grab just the non-NaN channels.
+
     in_probe_channel_index = extract_channel_index < num_channels
     in_probe_index = in_probe_channel_index[maxchans]
     waveforms = waveforms.transpose(0, 2, 1)
     wfs_in_probe = waveforms[in_probe_index]
 
-    # Apply NN denoiser (skip if None)
+    # Apply NN denoiser (skip if None) #doesn't matter if wf on channels or everywhere
     if denoiser is not None:
         results = []
         for bs in range(0, wfs_in_probe.shape[0], batch_size):
@@ -1170,38 +1270,13 @@ def full_denoising(
         tpca_embeddings = np.empty(
             (N, C, tpca.n_components), dtype=waveforms.dtype
         )
+        # run tpca only on channels that matter!
         tpca_embeddings[in_probe_index] = tpca.transform(
             waveforms.transpose(0, 2, 1)[in_probe_index]
         )
         return waveforms, tpca_embeddings.transpose(0, 2, 1)
     elif return_tpca_embedding:
         return waveforms, None
-
-    return waveforms
-
-
-def read_waveforms(
-    recording,
-    spike_index,
-    spike_length_samples,
-    extract_channel_index,
-    trough_offset=42,
-    buffer=0,
-):
-    """Load waveforms from an array in memory"""
-    # pad with NaN to fill resulting waveforms with NaN when
-    # channel is outside probe
-    padded_recording = np.pad(
-        recording, [(0, 0), (0, 1)], constant_values=np.nan
-    )
-    # times relative to trough + buffer
-    time_range = np.arange(
-        buffer - trough_offset,
-        buffer + spike_length_samples - trough_offset,
-    )
-    time_ix = spike_index[:, 0, None] + time_range[None, :]
-    chan_ix = extract_channel_index[spike_index[:, 1]]
-    waveforms = padded_recording[time_ix[:, :, None], chan_ix[:, None, :]]
 
     return waveforms
 
@@ -1224,6 +1299,7 @@ def get_output_h5(
     save_waveforms=True,
     overwrite=False,
     chunk_len=4096,
+    dtype=np.float32,
 ):
     h5_exists = Path(out_h5).exists()
     last_sample = 0
@@ -1253,7 +1329,7 @@ def get_output_h5(
             shape=(0, tpca.components_.shape[0], extract_channels),
             chunks=(chunk_len, tpca.components_.shape[0], extract_channels),
             maxshape=(None, tpca.components_.shape[0], extract_channels),
-            dtype=np.float32,
+            dtype=dtype,
         )
         if save_waveforms:
             output_h5.create_dataset(
@@ -1261,7 +1337,7 @@ def get_output_h5(
                 shape=(0, spike_length_samples, extract_channels),
                 chunks=(chunk_len, spike_length_samples, extract_channels),
                 maxshape=(None, spike_length_samples, extract_channels),
-                dtype=np.float32,
+                dtype=dtype,
             )
         output_h5.create_dataset(
             "spike_index",
@@ -1284,7 +1360,7 @@ def get_output_h5(
                 shape=(0, spike_length_samples, extract_channels),
                 chunks=(chunk_len, spike_length_samples, extract_channels),
                 maxshape=(None, spike_length_samples, extract_channels),
-                dtype=np.float32,
+                dtype=dtype,
             )
         if do_localize:
             output_h5.create_dataset(
@@ -1292,35 +1368,35 @@ def get_output_h5(
                 shape=(0, 5),
                 chunks=(chunk_len, 5),
                 maxshape=(None, 5),
-                dtype=np.float32,
+                dtype=dtype,
             )
             output_h5.create_dataset(
                 "maxptps",
                 shape=(0,),
                 chunks=(chunk_len,),
                 maxshape=(None,),
-                dtype=np.float32,
+                dtype=dtype,
             )
             output_h5.create_dataset(
                 "peak_heights",
                 shape=(0,),
                 chunks=(chunk_len,),
                 maxshape=(None,),
-                dtype=np.float32,
+                dtype=dtype,
             )
             output_h5.create_dataset(
                 "trough_depths",
                 shape=(0,),
                 chunks=(chunk_len,),
                 maxshape=(None,),
-                dtype=np.float32,
+                dtype=dtype,
             )
             output_h5.create_dataset(
                 "widths",
                 shape=(0,),
                 chunks=(chunk_len,),
                 maxshape=(None,),
-                dtype=np.float32,
+                dtype=dtype,
             )
 
     done_percent = (
@@ -1469,11 +1545,30 @@ def read_geom_from_meta(bin_file):
 class MockPoolExecutor:
     """A helper class for turning off concurrency when debugging."""
 
-    def __init__(n_jobs, mp_context=None, initializer=None, initargs=None):
-        initializer(initargs)
+    def __init__(
+        self,
+        max_workers=None,
+        mp_context=None,
+        initializer=None,
+        initargs=None,
+    ):
+        initializer(*initargs)
+        self.map = map
 
-    def map(self, f, jobs):
-        return map(f, jobs)
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        return
+
+
+class MockQueue:
+    """Another helper class for turning off concurrency when debugging."""
+
+    def __init__(self):
+        self.q = []
+        self.put = self.q.append
+        self.get = lambda: self.q.pop(0)
 
 
 class timer:
