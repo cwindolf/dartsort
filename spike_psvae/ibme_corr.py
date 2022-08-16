@@ -390,6 +390,7 @@ def online_register_rigid(
     disp=None,
     csd=False,
     channels=slice(None),
+    batch_size=32,
 ):
     T = raster.shape[1]
 
@@ -399,6 +400,7 @@ def online_register_rigid(
         raster0,
         disp=disp,
         pbar=False,
+        batch_size=batch_size,
     )
     p0 = psolvecorr(D00, C00, mincorr=mincorr)
 
@@ -412,6 +414,7 @@ def online_register_rigid(
             raster1,
             disp=disp,
             pbar=False,
+            batch_size=batch_size,
         )
         p1 = psolveonline(D01, C01, D11, C11, p0, mincorr)
         ps.append(p1)
