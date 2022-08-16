@@ -3,9 +3,9 @@ import scipy
 import time, os
 import parmap
 import copy
-from tqdm.auto import tqdm
+from tqdm.auto import tqdm, trange
 import h5py
-from spike_psvae.subtract import read_data
+from spike_psvae.spikeio import read_data, read_waveforms
 from pathlib import Path
 from spike_psvae import snr_templates
 
@@ -65,8 +65,8 @@ def parallel_conv_filter(
         pairwise_conv_array.append(pairwise_conv)
 
     np.save(
-        deconv_dir + "/temp_temp_chunk_" + str(proc_index),
-        np.asarray(pairwise_conv_array),
+        deconv_dir + "/temp_temp_chunk_" + str(proc_index) + ".npy",
+        np.asarray(pairwise_conv_array, dtype=object),
     )
 
 
@@ -331,16 +331,9 @@ class MatchPursuit_objectiveUpsample(object):
             spatial=self.spatial,
         )
 
-    #         else:
-    #             data = np.load(fname)
-    #             self.temporal_up = data['temporal_up']
-    #             self.temporal = data['temporal']
-    #             self.singular = data['singular']
-    #             self.spatial = data['spatial']
 
     # Cat: TODO: Parallelize this function
     def pairwise_filter_conv_parallel(self):
-
         # Cat: TODO: this may still crash memory in some cases; can split into additional bits
         units = np.array_split(np.unique(self.up_up_map), self.n_processors)
         if self.multi_processing:
@@ -354,7 +347,7 @@ class MatchPursuit_objectiveUpsample(object):
                 self.vis_chan,
                 self.approx_rank,
                 self.deconv_dir,
-                processes=self.n_processors,
+                pm_processes=self.n_processors,
                 pm_pbar=True,
             )
         else:
@@ -378,8 +371,7 @@ class MatchPursuit_objectiveUpsample(object):
             fname = os.path.join(
                 self.deconv_dir, "temp_temp_chunk_" + str(i) + ".npy"
             )
-            temp_pairwise_conv = np.load(fname, allow_pickle=True)
-            temp_array.extend(temp_pairwise_conv)
+            temp_array.extend(np.load(fname, allow_pickle=True))
             os.remove(fname)
 
         # initialize empty list and fill only correct locations
@@ -516,7 +508,7 @@ class MatchPursuit_objectiveUpsample(object):
                 self.n_time,
                 self.up_factor,
                 down_sample_idx,
-                processes=self.n_processors,
+                pm_processes=self.n_processors,
                 pm_pbar=True,
             )
         else:
@@ -697,7 +689,7 @@ class MatchPursuit_objectiveUpsample(object):
         self.obj[unit_idx, time_idx[:, 1:-1]] = -np.inf
 
     def subtract_spike_train(self, spt):
-        """Substracts a spike train from the original spike_train."""
+        """Subtracts a spike train from the original spike_train."""
         present_units = np.unique(spt[:, 1])
         for i in present_units:
             conv_res_len = self.n_time * 2 - 1
@@ -869,6 +861,7 @@ def deconvolution(
     n_sec_chunk=1,
     verbose=False,
     trough_offset=42,
+    reducer=np.median,
 ):
     r"""Deconvolution.
     YASS deconvolution (cpu version) refactored: https://github.com/paninski-lab/yass/blob/yass-registration/src/yass/deconvolve/run_original.py
@@ -878,6 +871,7 @@ def deconvolution(
         standardized_recording_path: standardized raw data path
         threshold: threshold for deconvolution
     """
+    print("z")
 
     if not os.path.exists(output_directory):
         os.makedirs(output_directory)
@@ -904,6 +898,7 @@ def deconvolution(
             tpca_rank=3,
             snr_threshold=5.0 * np.sqrt(100),
             trough_offset=trough_offset,
+            reducer=reducer,
         )
         print("templates dtype", templates.dtype)
     else:
@@ -913,6 +908,7 @@ def deconvolution(
             cluster_labels,
             geom,
             trough_offset=trough_offset,
+            reducer=reducer,
         )  # .astype(np.float32)
         print("templates dtype", templates.dtype)
 
@@ -972,7 +968,7 @@ def deconvolution(
             parmap.starmap(
                 mp_object.run,
                 list(zip(batches_in, fnames_in)),
-                processes=n_processors,
+                pm_processes=n_processors,
                 pm_pbar=True,
             )
         else:
@@ -997,6 +993,7 @@ def deconvolution(
     spike_train[:, 0] += trough_offset
     # save
     np.save(fname_spike_train, spike_train)
+    print(fname_spike_train, spike_train.shape)
 
     # get upsampled templates and mapping for computing residual
     (
@@ -1004,12 +1001,15 @@ def deconvolution(
         deconv_id_sparse_temp_map,
     ) = mp_object.get_sparse_upsampled_templates()
     np.save(fname_templates_up, templates_up.transpose(2, 0, 1))
+    print(fname_templates_up)
+    print(templates_up.transpose(2, 0, 1).shape)
 
     # get upsampled spike train
     spike_train_up = np.copy(res)
     spike_train_up[:, 1] = deconv_id_sparse_temp_map[spike_train_up[:, 1]]
     spike_train_up[:, 0] += trough_offset
     np.save(fname_spike_train_up, spike_train_up)
+    print(fname_spike_train_up, spike_train_up.shape)
 
     return (
         fname_templates_up,
@@ -1017,52 +1017,6 @@ def deconvolution(
         template_path,
         fname_spike_train,
     )
-
-
-def read_waveforms(
-    spike_times,
-    bin_file,
-    geom_array,
-    n_times=121,
-    channels=None,
-    dtype=np.dtype("float32"),
-    trough_offset=42,
-):
-    """
-    read waveforms from recording
-    n_times : waveform temporal length
-    channels : channels to read from
-    """
-    # n_times needs to be odd
-    if n_times % 2 == 0:
-        n_times += 1
-
-    # read all channels
-    if channels is None:
-        channels = np.arange(geom_array.shape[0])
-
-    # ***** LOAD RAW RECORDING *****
-    wfs = np.zeros((len(spike_times), n_times, len(channels)), "float32")
-
-    skipped_idx = []
-    n_channels = len(channels)
-    total_size = n_times * n_channels
-    # spike_times are the centers of waveforms
-    spike_times_shifted = spike_times - trough_offset
-    offsets = spike_times_shifted.astype("int64") * dtype.itemsize * n_channels
-    with open(bin_file, "rb") as fin:
-        for ctr, spike in enumerate(spike_times_shifted):
-            try:
-                fin.seek(offsets[ctr], os.SEEK_SET)
-                wf = np.fromfile(fin, dtype=dtype, count=total_size)
-                wfs[ctr] = wf.reshape(n_times, n_channels)[:, channels]
-            except:
-                # print(f"skipped {ctr, spike}")
-                skipped_idx.append(ctr)
-    wfs = np.delete(wfs, skipped_idx, axis=0)
-    fin.close()
-
-    return wfs, skipped_idx
 
 
 def get_templates(
@@ -1073,6 +1027,8 @@ def get_templates(
     n_times=121,
     n_samples=250,
     trough_offset=42,
+    reducer=np.median,
+    pbar=False
 ):
 
     n_chans = geom.shape[0]
@@ -1082,21 +1038,23 @@ def get_templates(
     if -1 in unique_labels:
         n_templates -= 1
 
-    templates = np.zeros((n_templates, n_times, n_chans))
+    templates = np.empty((n_templates, n_times, n_chans))
+    units = trange(n_templates, desc="Templates") if pbar else range(n_templates)
     for unit in range(n_templates):
         spike_times_unit = spike_index[labels == unit, 0]
+        which = slice(None)
         if spike_times_unit.shape[0] > n_samples:
-            idx = np.random.choice(
-                np.arange(spike_times_unit.shape[0]), n_samples, replace=False
+            which = np.random.choice(
+                spike_times_unit.shape[0], n_samples, replace=False
             )
-        else:
-            idx = np.arange(spike_times_unit.shape[0])
-        wfs_unit = read_waveforms(
-            spike_times_unit[idx],
+
+        wfs_unit, skipped_idx = read_waveforms(
+            spike_times_unit[which],
             standardized_bin,
-            geom,
-            n_times=n_times,
+            geom.shape[0],
+            spike_length_samples=n_times,
             trough_offset=trough_offset,
-        )[0]
-        templates[unit] = wfs_unit.mean(0)
+        )
+        templates[unit] = reducer(wfs_unit, axis=0)
+
     return templates

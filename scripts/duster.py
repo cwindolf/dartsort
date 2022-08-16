@@ -142,6 +142,16 @@ tpca.components_ = tpca_components
     split_big=True,
 )
 
+# remove self-duplicate spikes
+kept_ix, removed_ix = cluster_utils.remove_self_duplicates(
+    tspike_index[:, 0],
+    clusterer.labels_,
+    raw_data_bin,
+    geom.shape[0],
+    frame_dedup=20,
+)
+clusterer.labels_[removed_ix] = -1
+
 # labels in full index space (not triaged)
 labels = np.full(x.shape, -1)
 labels[idx_keep_full] = clusterer.labels_
