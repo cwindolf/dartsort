@@ -89,7 +89,7 @@ hybrid_bin_dir.exists(), hybrid_res_dir.exists(), hybrid_ks_dir.exists(), hybrid
 subjects = ("DY_018", "CSHL051")
 
 # %%
-hybrid_fig_dir = Path("/share/ctn/users/ciw2107/hybrid_5min/figs_8_4_bugfix/")
+hybrid_fig_dir = Path("/share/ctn/users/ciw2107/hybrid_5min/figs_8_15/")
 hybrid_fig_dir.mkdir(exist_ok=True)
 
 # %%
@@ -225,42 +225,98 @@ for subject in tqdm(subjects):
     
     # deconv1
     print("//Deconv1...")
-    deconv1_samples = np.load(hybrid_deconv_dir / subject / "postdeconv_split_times.npy")
-    deconv1_labels = np.load(hybrid_deconv_dir / subject / "postdeconv_merge_labels.npy")
-    deconv1_sort = np.load(hybrid_deconv_dir / subject / "postdeconv_split_order.npy")
+    orig_deconv1_st = np.load(hybrid_deconv_dir / subject / "spike_train.npy")
     with h5py.File(hybrid_deconv_dir / subject / "deconv_results.h5") as h5:
         locs = h5["localizations"][:]
         deconv1_xzptp = np.c_[locs[:, 0], locs[:, 3], h5["maxptps"][:]]
     hybrid_sortings[subject]["Deconv1"] = Sorting(
         raw_data_bin,
         geom,
-        deconv1_samples,
-        deconv1_labels,
+        orig_deconv1_st[:, 0],
+        cluster_utils.make_labels_contiguous(orig_deconv1_st[:, 1]),
         "Deconv1",
-        spike_xzptp=deconv1_xzptp[deconv1_sort],
+        spike_xzptp=deconv1_xzptp,
     )
     hybrid_comparisons[subject]["Deconv1"] = HybridComparison(
         gt_sortings[subject], hybrid_sortings[subject]["Deconv1"], geom
     )
     
+    print("//Deconv1-Split...")
+    samples = np.load(hybrid_deconv_dir / subject / "postdeconv_split_times.npy")
+    labels = np.load(hybrid_deconv_dir / subject / "postdeconv_split_labels.npy")
+    order = np.load(hybrid_deconv_dir / subject / "postdeconv_split_order.npy")
+    templates = np.load(hybrid_deconv_dir / subject / "postdeconv_split_templates.npy")
+    with h5py.File(hybrid_deconv_dir / subject / "deconv_results.h5") as h5:
+        locs = h5["localizations"][:]
+        deconv1_xzptp = np.c_[locs[:, 0], locs[:, 3], h5["maxptps"][:]]
+    hybrid_sortings[subject]["Deconv1-Split"] = Sorting(
+        raw_data_bin,
+        geom,
+        samples,
+        labels,
+        "Deconv1-Split",
+        templates=templates,
+        spike_xzptp=deconv1_xzptp[order],
+    )
+    hybrid_comparisons[subject]["Deconv1-Split"] = HybridComparison(
+        gt_sortings[subject], hybrid_sortings[subject]["Deconv1-Split"], geom
+    )
+    
+    print("//Deconv1-SplitMerge...")
+    samples = np.load(hybrid_deconv_dir / subject / "postdeconv_merge_times.npy")
+    labels = np.load(hybrid_deconv_dir / subject / "postdeconv_merge_labels.npy")
+    order = np.load(hybrid_deconv_dir / subject / "postdeconv_merge_order.npy")
+    templates = np.load(hybrid_deconv_dir / subject / "postdeconv_merge_templates.npy")
+    with h5py.File(hybrid_deconv_dir / subject / "deconv_results.h5") as h5:
+        locs = h5["localizations"][:]
+        deconv1_xzptp = np.c_[locs[:, 0], locs[:, 3], h5["maxptps"][:]]
+    hybrid_sortings[subject]["Deconv1-SplitMerge"] = Sorting(
+        raw_data_bin,
+        geom,
+        samples,
+        labels,
+        "Deconv1-SplitMerge",
+        templates=templates,
+        spike_xzptp=deconv1_xzptp[order],
+    )
+    hybrid_comparisons[subject]["Deconv1-SplitMerge"] = HybridComparison(
+        gt_sortings[subject], hybrid_sortings[subject]["Deconv1-SplitMerge"], geom
+    )
+    
     # deconv2
     print("//Deconv2...")
-    deconv2_samples = np.load(hybrid_deconv_dir / subject / "deconv2/postdeconv_cleaned_times.npy")
-    deconv2_labels = np.load(hybrid_deconv_dir / subject / "deconv2/postdeconv_cleaned_labels.npy")
-    deconv2_sort = np.load(hybrid_deconv_dir / subject / "deconv2/postdeconv_cleaned_order.npy")
+    deconv2_st = np.load(hybrid_deconv_dir / subject / "deconv2/spike_train.npy")
     with h5py.File(hybrid_deconv_dir / subject / "deconv2/deconv_results.h5") as h5:
         locs = h5["localizations"][:]
         deconv2_xzptp = np.c_[locs[:, 0], locs[:, 3], h5["maxptps"][:]]
     hybrid_sortings[subject]["Deconv2"] = Sorting(
         raw_data_bin,
         geom,
-        deconv2_samples,
-        deconv2_labels,
+        deconv2_st[:, 0],
+        deconv2_st[:, 1],
         "Deconv2",
-        spike_xzptp=deconv2_xzptp[deconv2_sort],
+        spike_xzptp=deconv2_xzptp,
     )
     hybrid_comparisons[subject]["Deconv2"] = HybridComparison(
         gt_sortings[subject], hybrid_sortings[subject]["Deconv2"], geom
+    )
+    
+    print("//Deconv2-Cleaned...")
+    samples = np.load(hybrid_deconv_dir / subject / "deconv2/postdeconv_cleaned_times.npy")
+    labels = np.load(hybrid_deconv_dir / subject / "deconv2/postdeconv_cleaned_labels.npy")
+    order = np.load(hybrid_deconv_dir / subject / "deconv2/postdeconv_cleaned_order.npy")
+    templates = np.load(hybrid_deconv_dir / subject / "deconv2/postdeconv_cleaned_templates.npy")
+    hybrid_sortings[subject]["Deconv1-SplitMerge"] = Sorting(
+        raw_data_bin,
+        geom,
+        samples,
+        labels,
+        "Deconv2-Cleaned",
+        templates=templates,
+        spike_xzptp=deconv2_xzptp[order],
+    )
+    hybrid_comparisons[subject]["Deconv2-Cleaned"] = HybridComparison(
+        gt_sortings[subject], hybrid_sortings[subject]["Deconv2-Cleaned"], geom
     )
     
     # KSall
@@ -458,6 +514,28 @@ for step, df in new_unit_df.groupby("step"):
     plt.show()
     plt.close(fig)
 
+# %%
+(hybrid_fig_dir / "template_maxchan_traces").mkdir(exist_ok=True)
+
+def job(step, subject, new_sorting):
+    fig = new_sorting.template_maxchan_vis()
+    name_lo = new_sorting.name_lo
+    fig.savefig(hybrid_fig_dir / "template_maxchan_traces" / f"{subject}_{step}_{name_lo}.png", dpi=300)
+    plt.close(fig)
+
+jobs = []
+for subject, comparisons in hybrid_comparisons.items():
+    for step, (sorting, comp) in enumerate(comparisons.items()):
+        if comp.unsorted:
+            continue
+        jobs.append(delayed(job)(step, subject, comp.new_sorting))
+
+for res in Parallel(8)(tqdm(jobs, total=len(jobs))):
+    pass
+
+# %%
+hybrid_comparisons["CSHL051"]["Deconv1"].new_sorting.unsorted
+
 # %% tags=[]
 (hybrid_fig_dir / "array_scatter").mkdir(exist_ok=True)
 
@@ -475,59 +553,32 @@ for subject, comparisons in hybrid_comparisons.items():
     for step, (sorting, comp) in enumerate(comparisons.items()):
         if comp.unsorted or "ks" in comp.new_sorting.name_lo:
             continue
+        print(subject, comp.new_sorting.name)
         jobs.append(delayed(job)(step, subject, comp, ks_comp))
 
 for res in Parallel(8)(tqdm(jobs, total=len(jobs))):
     pass
 
-# %% tags=[]
-sorting = "Deconv2"
-outdir = hybrid_fig_dir / "venn_gt_v_deconv2"
+# %%
+# compose colormap with sqrt to enhance dynamic range on the low end
+cmap = colors.LinearSegmentedColormap.from_list("cbhlx", plt.cm.magma(np.sqrt(np.linspace(0, 1, num=256))))
+
+outdir = hybrid_fig_dir / "agreement"
 outdir.mkdir(exist_ok=True)
 
-def job(hybrid_comparison, subject, gt_unit):
-    import warnings
-    with warnings.catch_warnings():
-        try:
-            fig, gt_ptp = make_diagnostic_plot(hybrid_comparison, gt_unit)
-            fig.savefig(outdir / f"ptp{gt_ptp:05.2f}_{subject}_unit{gt_unit:02d}.png")
-            plt.close(fig)
-        except ValueError as e:
-            print(e)
-
-jobs = []
 for subject, comparisons in hybrid_comparisons.items():
-    comp = comparisons[sorting]
-    for gt_unit in comp.gt_sorting.unit_labels:
-        jobs.append(delayed(job)(comp, subject, gt_unit))
-
-for res in Parallel(8)(tqdm(jobs, total=len(jobs))):
-    pass
-
-# %% tags=[]
-sorting = "KSAll"
-outdir = hybrid_fig_dir / "venn_gt_v_ksall"
-outdir.mkdir(exist_ok=True)
-
-def job(hybrid_comparison, subject, gt_unit):
-    try:
-        fig, gt_ptp = make_diagnostic_plot(hybrid_comparison, gt_unit)
-        fig.savefig(outdir / f"ptp{gt_ptp:05.2f}_{subject}_unit{gt_unit:02d}.png")
+    for name, comp in comparisons.items():
+        if comp.unsorted:
+            continue
+        ax = plot_agreement_matrix(comp, cmap=cmap)
+        fig = ax.figure
+        ax.set_title(f"{subject}: {name} agreement matrix")
+        plt.show()
+        fig.savefig(
+            outdir / f"{subject}_{comp.new_sorting.name_lo}_agreement.png",
+            dpi=300,
+        )
         plt.close(fig)
-    except:
-        return 1
-    return 0
-
-jobs = []
-for subject, comparisons in hybrid_comparisons.items():
-    comp = comparisons[sorting]
-    for gt_unit in comp.gt_sorting.unit_labels:
-        jobs.append(delayed(job)(comp, subject, gt_unit))
-
-failed = 0
-for res in Parallel(8)(tqdm(jobs, total=len(jobs))):
-    failed += res
-print(failed)
 
 # %% tags=[]
 outdir = hybrid_fig_dir / "zoom_scatter"
@@ -557,23 +608,123 @@ for subject, comparisons in hybrid_comparisons.items():
 for res in Parallel(28)(tqdm(jobs, total=len(jobs))):
     pass
 
-# %%
-# compose colormap with sqrt to enhance dynamic range on the low end
-cmap = colors.LinearSegmentedColormap.from_list("cbhlx", plt.cm.magma(np.sqrt(np.linspace(0, 1, num=256))))
-
-outdir = hybrid_fig_dir / "agreement"
+# %% tags=[]
+sorting = "Deconv1"
+outdir = hybrid_fig_dir / "venn_gt_v_deconv1"
 outdir.mkdir(exist_ok=True)
 
-for subject, comparisons in hybrid_comparisons.items():
-    for name, comp in comparisons.items():
-        if comp.unsorted:
-            continue
-        ax = plot_agreement_matrix(comp, cmap=cmap)
-        fig = ax.figure
-        ax.set_title(f"{subject}: {name} agreement matrix")
-        plt.show()
-        fig.savefig(
-            outdir / f"{subject}_{comp.new_sorting.name_lo}_agreement.png",
-            dpi=300,
-        )
+def job(hybrid_comparison, subject, gt_unit):
+    import warnings
+    with warnings.catch_warnings():
+        # try:
+        fig, gt_ptp, acc = make_diagnostic_plot(hybrid_comparison, gt_unit)
+        fig.savefig(outdir / f"ptp{gt_ptp:05.2f}_acc{acc}_{subject}_unit{gt_unit:02d}.png")
         plt.close(fig)
+        # except ValueError as e:
+            # print(e)
+
+jobs = []
+for subject, comparisons in hybrid_comparisons.items():
+    comp = comparisons[sorting]
+    for gt_unit in comp.gt_sorting.unit_labels:
+        jobs.append(delayed(job)(comp, subject, gt_unit))
+
+for res in Parallel(8)(tqdm(jobs, total=len(jobs))):
+    pass
+
+# %%
+sorting = "Deconv1-SplitMerge"
+outdir = hybrid_fig_dir / "venn_gt_v_deconv1_splitmerge"
+outdir.mkdir(exist_ok=True)
+
+def job(hybrid_comparison, subject, gt_unit):
+    import warnings
+    with warnings.catch_warnings():
+        # try:
+        fig, gt_ptp, acc = make_diagnostic_plot(hybrid_comparison, gt_unit)
+        fig.savefig(outdir / f"ptp{gt_ptp:05.2f}_acc{acc}_{subject}_unit{gt_unit:02d}.png")
+        plt.close(fig)
+        # except ValueError as e:
+            # print(e)
+
+jobs = []
+for subject, comparisons in hybrid_comparisons.items():
+    comp = comparisons[sorting]
+    for gt_unit in comp.gt_sorting.unit_labels:
+        jobs.append(delayed(job)(comp, subject, gt_unit))
+
+for res in Parallel(8)(tqdm(jobs, total=len(jobs))):
+    pass
+
+# %% tags=[]
+sorting = "Deconv2-Cleaned"
+outdir = hybrid_fig_dir / "venn_gt_v_deconv2_cleaned"
+outdir.mkdir(exist_ok=True)
+
+def job(hybrid_comparison, subject, gt_unit):
+    import warnings
+    with warnings.catch_warnings():
+        # try:
+        fig, gt_ptp, acc = make_diagnostic_plot(hybrid_comparison, gt_unit)
+        fig.savefig(outdir / f"ptp{gt_ptp:05.2f}_acc{acc}_{subject}_unit{gt_unit:02d}.png")
+        plt.close(fig)
+        # except ValueError as e:
+            # print(e)
+
+jobs = []
+for subject, comparisons in hybrid_comparisons.items():
+    comp = comparisons[sorting]
+    for gt_unit in comp.gt_sorting.unit_labels:
+        jobs.append(delayed(job)(comp, subject, gt_unit))
+
+for res in Parallel(8)(tqdm(jobs, total=len(jobs))):
+    pass
+
+# %% tags=[]
+sorting = "Deconv2"
+outdir = hybrid_fig_dir / "venn_gt_v_deconv2"
+outdir.mkdir(exist_ok=True)
+
+def job(hybrid_comparison, subject, gt_unit):
+    import warnings
+    with warnings.catch_warnings():
+        # try:
+        fig, gt_ptp, acc = make_diagnostic_plot(hybrid_comparison, gt_unit)
+        fig.savefig(outdir / f"ptp{gt_ptp:05.2f}_acc{acc}_{subject}_unit{gt_unit:02d}.png")
+        plt.close(fig)
+        # except ValueError as e:
+            # print(e)
+
+jobs = []
+for subject, comparisons in hybrid_comparisons.items():
+    comp = comparisons[sorting]
+    for gt_unit in comp.gt_sorting.unit_labels:
+        jobs.append(delayed(job)(comp, subject, gt_unit))
+
+for res in Parallel(8)(tqdm(jobs, total=len(jobs))):
+    pass
+
+# %% tags=[]
+sorting = "KSAll"
+outdir = hybrid_fig_dir / "venn_gt_v_ksall"
+outdir.mkdir(exist_ok=True)
+
+def job(hybrid_comparison, subject, gt_unit):
+    try:
+        fig, gt_ptp, acc = make_diagnostic_plot(hybrid_comparison, gt_unit)
+        fig.savefig(outdir / f"ptp{gt_ptp:05.2f}_acc{acc}_{subject}_unit{gt_unit:02d}.png")
+        plt.close(fig)
+    except:
+        return 1
+    return 0
+
+jobs = []
+for subject, comparisons in hybrid_comparisons.items():
+    comp = comparisons[sorting]
+    for gt_unit in comp.gt_sorting.unit_labels:
+        jobs.append(delayed(job)(comp, subject, gt_unit))
+
+failed = 0
+for res in Parallel(8)(tqdm(jobs, total=len(jobs))):
+    failed += res
+print(failed)
