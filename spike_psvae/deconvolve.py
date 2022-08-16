@@ -5,6 +5,7 @@ import multiprocessing
 from itertools import repeat
 import copy
 from tqdm.auto import tqdm, trange
+import pickle
 import h5py
 from spike_psvae.spikeio import read_data, read_waveforms
 from pathlib import Path
@@ -65,10 +66,8 @@ def parallel_conv_filter(
 
         pairwise_conv_array.append(pairwise_conv)
 
-    np.save(
-        deconv_dir + "/temp_temp_chunk_" + str(proc_index) + ".npy",
-        np.asarray(pairwise_conv_array, dtype=object),
-    )
+    with open(deconv_dir + "/temp_temp_chunk_" + str(proc_index) + ".pkl", "wb") as f:
+        pickle.dump(pairwise_conv_array, f)
 
 def _parallel_conv_filter(args):
     return parallel_conv_filter(*args)
@@ -344,16 +343,18 @@ class MatchPursuit_objectiveUpsample(object):
             ctx = multiprocessing.get_context("spawn")
             with ctx.Pool(self.n_processors) as pool:
                 for result in tqdm(
-                    pool.imap_unordered(parallel_conv_filter),
-                    zip(
-                        list(zip(np.arange(len(units)), units)),
-                        repeat(self.n_time),
-                        repeat(self.up_up_map),
-                        repeat(self.unit_overlap),
-                        repeat(self.up_factor),
-                        repeat(self.vis_chan),
-                        repeat(self.approx_rank),
-                        repeat(self.deconv_dir),
+                    pool.imap_unordered(
+                        _parallel_conv_filter,
+                        zip(
+                            enumerate(units),
+                            repeat(self.n_time),
+                            repeat(self.up_up_map),
+                            repeat(self.unit_overlap),
+                            repeat(self.up_factor),
+                            repeat(self.vis_chan),
+                            repeat(self.approx_rank),
+                            repeat(self.deconv_dir),
+                        ),
                     ),
                     total=len(units),
                     desc="pairwise_filter_conv",
@@ -378,11 +379,10 @@ class MatchPursuit_objectiveUpsample(object):
         temp_array = []
         for i in range(len(units)):
             fname = os.path.join(
-                self.deconv_dir, "temp_temp_chunk_" + str(i) + ".npy"
+                self.deconv_dir, "temp_temp_chunk_" + str(i) + ".pkl"
             )
-            temp_array.extend(
-                np.load(fname, allow_pickle=True).astype(np.float32)
-            )
+            with open(fname, "rb") as f:
+                temp_array.extend(pickle.load(f))
             os.remove(fname)
 
         # initialize empty list and fill only correct locations
@@ -700,6 +700,9 @@ class MatchPursuit_objectiveUpsample(object):
             )
 
         self.enforce_refractory(spt)
+        
+    def _run(self, args):
+        return self.run(*args)
 
     def run(self, batch_ids, fnames_out):
 
@@ -869,7 +872,7 @@ def deconvolution(
     template_path = os.path.join(output_directory, "templates.npy")
     print(template_path)
     #         if not os.path.exists(template_path):
-    print("computing templates")
+    print("computing templates!")
     if cleaned_temps:
         templates, snrs, _, _ = snr_templates.get_templates(
             template_spike_train[:],
@@ -896,6 +899,7 @@ def deconvolution(
             geom,
             trough_offset=trough_offset,
             reducer=reducer,
+            pbar=True,
         )  # .astype(np.float32)
         print("templates dtype", templates.dtype)
 
@@ -956,7 +960,7 @@ def deconvolution(
             with ctx.Pool(n_processors) as pool:
                 for res in tqdm(
                     pool.imap_unordered(
-                        mp_object.run,
+                        mp_object._run,
                         zip(batches_in, fnames_in),
                     ),
                     total=len(batches_in),
@@ -964,7 +968,7 @@ def deconvolution(
                 ):
                     pass
         else:
-            for ctr in range(len(batch_ids)):
+            for ctr in trange(len(batch_ids)):
                 mp_object.run([batch_ids[ctr]], [fnames_out[ctr]])
 
     res = []
@@ -1032,7 +1036,7 @@ def get_templates(
 
     templates = np.empty((n_templates, n_times, n_chans))
     units = trange(n_templates, desc="Templates") if pbar else range(n_templates)
-    for unit in range(n_templates):
+    for unit in units:
         spike_times_unit = spike_index[labels == unit, 0]
         which = slice(None)
         if spike_times_unit.shape[0] > n_samples:
