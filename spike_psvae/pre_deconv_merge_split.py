@@ -13,6 +13,7 @@ from scipy.spatial.distance import cdist
 from tqdm.auto import tqdm, trange
 from spike_psvae.denoise import denoise_wf_nn_tmp_single_channel
 from spike_psvae import waveform_utils
+from spike_psvae.pyks_ccg import ccg_metrics
 
 # %%
 # deprecated
@@ -57,7 +58,7 @@ def align_spikes_by_templates(
     for unit in idx_not_aligned:
         shift = template_shifts[unit]
         if abs(shift) <= shift_max:
-            shifted_spike_index[labels == unit, 0] += shift
+            shifted_spike_index[labels == unit, 0] -= shift
         else:
             # zero out overly large shifts (denoiser issue)
             template_shifts[unit] = 0
@@ -200,8 +201,8 @@ def split_individual_cluster(
     readwfs, skipped = read_waveforms(
         spike_index_unit[:, 0],
         residual_path,
-        geom_array,
-        n_times=T,
+        geom_array.shape[0],
+        spike_length_samples=T,
         channels=np.arange(mc - n_channels_half, mc + n_channels_half),
     )
 
@@ -475,9 +476,11 @@ def get_templates(
     spike_index,
     labels,
     max_spikes=250,
-    n_times=121,
+    spike_length_samples=121,
 ):
-    templates = np.zeros((n_templates, n_times, geom_array.shape[0]))
+    templates = np.zeros(
+        (n_templates, spike_length_samples, geom_array.shape[0])
+    )
     for unit in trange(n_templates, desc="get templates"):
         spike_times_unit = spike_index[labels == unit, 0]
         if spike_times_unit.shape[0] > max_spikes:
@@ -490,10 +493,10 @@ def get_templates(
         wfs_unit = read_waveforms(
             spike_times_unit[idx],
             standardized_path,
-            geom_array,
-            n_times=n_times,
+            geom_array.shape[0],
+            spike_length_samples=spike_length_samples,
         )[0]
-        templates[unit] = wfs_unit.mean(0)
+        templates[unit] = np.median(wfs_unit, axis=0)
     return templates
 
 
@@ -515,7 +518,9 @@ def get_proposed_pairs(
                 :,
                 mc - n_channels_half : mc + n_channels_half,
             ]
-            dist_template[i, j], best_shift = compute_shifted_similarity(temp_a, temp_b, shifts=shifts)
+            dist_template[i, j], best_shift = compute_shifted_similarity(
+                temp_a, temp_b, shifts=shifts
+            )
     return dist_argsort, dist_template
 
 
@@ -537,11 +542,17 @@ def get_diptest_value(
     denoiser,
     device,
     tpca,
+    tpca_rank=5,
     n_channels=10,
     n_times=121,
     nn_denoise=False,
     max_spikes=250,
 ):
+    tpca_rank = (
+        tpca.n_components
+        if tpca_rank is None
+        else min(tpca.n_components, tpca_rank)
+    )
     # ALIGN BASED ON MAX PTP TEMPLATE MC
     n_channels_half = n_channels // 2
 
@@ -609,15 +620,15 @@ def get_diptest_value(
             wfs_a_bis += read_waveforms(
                 spike_times_unit_a + two_units_shift,
                 residual_path,
-                geom_array,
-                n_times=n_times,
+                geom_array.shape[0],
+                spike_length_samples=n_times,
                 channels=np.arange(mc - n_channels_half, mc + n_channels_half),
             )[0]
             wfs_b_bis += read_waveforms(
                 spike_times_unit_b,
                 residual_path,
-                geom_array,
-                n_times=n_times,
+                geom_array.shape[0],
+                spike_length_samples=n_times,
                 channels=np.arange(mc - n_channels_half, mc + n_channels_half),
             )[0]
         else:
@@ -637,15 +648,15 @@ def get_diptest_value(
             wfs_a_bis += read_waveforms(
                 spike_times_unit_a,
                 residual_path,
-                geom_array,
-                n_times=n_times,
+                geom_array.shape[0],
+                spike_length_samples=n_times,
                 channels=np.arange(mc - n_channels_half, mc + n_channels_half),
             )[0]
             wfs_b_bis += read_waveforms(
                 spike_times_unit_b + two_units_shift,
                 residual_path,
-                geom_array,
-                n_times=n_times,
+                geom_array.shape[0],
+                spike_length_samples=n_times,
                 channels=np.arange(mc - n_channels_half, mc + n_channels_half),
             )[0]
     elif two_units_shift < 0:
@@ -666,15 +677,15 @@ def get_diptest_value(
             wfs_a_bis += read_waveforms(
                 spike_times_unit_a + two_units_shift,
                 residual_path,
-                geom_array,
-                n_times=n_times,
+                geom_array.shape[0],
+                spike_length_samples=n_times,
                 channels=np.arange(mc - n_channels_half, mc + n_channels_half),
             )[0]
             wfs_b_bis += read_waveforms(
                 spike_times_unit_b,
                 residual_path,
-                geom_array,
-                n_times=n_times,
+                geom_array.shape[0],
+                spike_length_samples=n_times,
                 channels=np.arange(mc - n_channels_half, mc + n_channels_half),
             )[0]
 
@@ -695,15 +706,15 @@ def get_diptest_value(
             wfs_a_bis += read_waveforms(
                 spike_times_unit_a,
                 residual_path,
-                geom_array,
-                n_times=n_times,
+                geom_array.shape[0],
+                spike_length_samples=n_times,
                 channels=np.arange(mc - n_channels_half, mc + n_channels_half),
             )[0]
             wfs_b_bis += read_waveforms(
                 spike_times_unit_b + two_units_shift,
                 residual_path,
-                geom_array,
-                n_times=n_times,
+                geom_array.shape[0],
+                spike_length_samples=n_times,
                 channels=np.arange(mc - n_channels_half, mc + n_channels_half),
             )[0]
     else:
@@ -719,15 +730,15 @@ def get_diptest_value(
         wfs_a_bis += read_waveforms(
             spike_times_unit_a,
             residual_path,
-            geom_array,
-            n_times=n_times,
+            geom_array.shape[0],
+            spike_length_samples=n_times,
             channels=np.arange(mc - n_channels_half, mc + n_channels_half),
         )[0]
         wfs_b_bis += read_waveforms(
             spike_times_unit_b,
             residual_path,
-            geom_array,
-            n_times=n_times,
+            geom_array.shape[0],
+            spike_length_samples=n_times,
             channels=np.arange(mc - n_channels_half, mc + n_channels_half),
         )[0]
 
@@ -745,7 +756,7 @@ def get_diptest_value(
     # wfs_diptest = (
     #     wfs_diptest.reshape(N, C, T).transpose(0, 2, 1).reshape((N, C * T))
     # )
-    wfs_diptest = tpca.fit_transform(wfs_diptest)
+    wfs_diptest = tpca.fit_transform(wfs_diptest)[:, :tpca_rank]
     wfs_diptest = (
         wfs_diptest.reshape(N, C, tpca.n_components)
         .transpose(0, 2, 1)
@@ -781,12 +792,22 @@ def get_merged(
     distance_threshold=3.0,
     threshold_diptest=1.0,
     nn_denoise=False,
+    isi_veto=False,
+    contam_ratio_threshold=0.2,
+    contam_alpha=0.05,
+    isi_nbins=500,
+    isi_bin_nsamples=30,
+    shifts=[-2, -1, 0, 1, 2],
 ):
     n_spikes_templates = get_n_spikes_templates(n_templates, labels)
     x_z_templates = get_x_z_templates(n_templates, labels, x, z)
     print("GET PROPOSED PAIRS")
     dist_argsort, dist_template = get_proposed_pairs(
-        n_templates, templates, x_z_templates, n_temp=n_temp
+        n_templates,
+        templates,
+        x_z_templates,
+        n_temp=n_temp,
+        shifts=shifts,
     )
 
     labels_updated = labels.copy()
@@ -842,10 +863,25 @@ def get_merged(
                         nn_denoise=nn_denoise,
                     )
                     # print(unit_reference, unit_bis_reference, dpt_val)
-                    if (
+                    is_merged = (
                         dpt_val < threshold_diptest
                         and np.abs(two_units_shift) < 2
-                    ):
+                    )
+
+                    # check isi violation
+                    isi_allows_merge = True
+                    if isi_veto and is_merged:
+                        st1 = spike_index[labels == unit_reference, 0]
+                        st2 = spike_index[labels == unit_bis_reference, 0]
+                        contam_ratio, p_value = ccg_metrics(
+                            st1, st2, isi_nbins, isi_bin_nsamples
+                        )
+                        contam_ok = contam_ratio < contam_ratio_threshold
+                        contam_sig = p_value < contam_alpha
+                        isi_allows_merge = contam_ok and contam_sig
+
+                    # apply merge
+                    if is_merged and isi_allows_merge:
                         to_be_merged.append(unit_bis_reference)
                         if unit_shifted == unit_bis_reference:
                             merge_shifts.append(-two_units_shift)
@@ -958,7 +994,7 @@ def ks_bimodal_pursuit(
         rs /= np.sum(rs, axis=1)[:, np.newaxis]
         if rs.sum(0).min() < 1e-6:
             break
-            
+
         # mean probability to be assigned to Gaussian 1
         p = rs[:, 0].mean()
         # new estimate of mean of cluster 1 (weighted by "responsibilities")
@@ -1011,7 +1047,9 @@ def ks_bimodal_pursuit(
     # c1 = cp.matmul(wPCA, cp.reshape((mean(clp0[ilow, :], 0), 3, -1), order='F'))
     c1 = tpca.inverse_transform(unit_features[ilow].mean())
     c2 = tpca.inverse_transform(unit_features[~ilow].mean())
-    cc = np.corrcoef(c1.ravel(), c2.ravel())[0, 1]  # correlation of mean waveforms
+    cc = np.corrcoef(c1.ravel(), c2.ravel())[
+        0, 1
+    ]  # correlation of mean waveforms
     n1 = np.linalg.norm(c1)  # the amplitude estimate 1
     n2 = np.linalg.norm(c2)  # the amplitude estimate 2
 
@@ -1076,16 +1114,20 @@ def ks_maxchan_tpca_split(
         cur_label = labels_to_process.pop()
         in_unit = np.flatnonzero(labels_new == cur_label)
         unit_features = maxchan_loadings[in_unit]
-        is_split, group_a, group_b = ks_bimodal_pursuit(
-            unit_features,
-            tpca,
-            top_pc_init=top_pc_init,
-            aucsplit=aucsplit,
-            min_size_split=min_size_split,
-            max_split_corr=max_split_corr,
-            min_amp_sim=min_amp_sim,
-            min_split_prop=min_split_prop,
-        )
+        try:
+            is_split, group_a, group_b = ks_bimodal_pursuit(
+                unit_features,
+                tpca,
+                top_pc_init=top_pc_init,
+                aucsplit=aucsplit,
+                min_size_split=min_size_split,
+                max_split_corr=max_split_corr,
+                min_amp_sim=min_amp_sim,
+                min_split_prop=min_split_prop,
+            )
+        except np.linalg.LinalgError as e:
+            print(cur_label, "had error", e)
+            is_split = False
 
         if is_split:
             labels_new[in_unit[group_b]] = next_label
