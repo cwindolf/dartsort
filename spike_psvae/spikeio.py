@@ -1,7 +1,6 @@
 """A library for quickly reading spike data from .bin files."""
 from pathlib import Path
 import numpy as np
-from numba import njit
 from os import SEEK_SET
 
 
