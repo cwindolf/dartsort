@@ -32,7 +32,24 @@ def channel_index_subset(geom, channel_index, n_channels=None, radius=None):
     return subset
 
 
-def get_channel_subset(waveforms, max_channels, channel_index_subset, fill_value=np.nan):
+def channel_index_is_subset(channel_index_a, channel_index_b):
+    if not np.all(
+        np.array(channel_index_a.shape) <= np.array(channel_index_b.shape)
+    ):
+        return False
+
+    n_channels = channel_index_a.shape[0]
+
+    for row_a, row_b in zip(channel_index_a, channel_index_b):
+        if not np.isin(np.setdiff1d(row_a, [n_channels]), row_b).all():
+            return False
+
+    return True
+
+
+def get_channel_subset(
+    waveforms, max_channels, channel_index_subset, fill_value=np.nan
+):
     """You have waveforms on C channels, and you want them on fewer.
 
     You can use a channel_index_subset obtained from the function `channel_index_subset`
@@ -81,8 +98,37 @@ def get_channel_subset(waveforms, max_channels, channel_index_subset, fill_value
     ]
 
 
+def channel_subset_by_index(
+    waveforms,
+    max_channels,
+    channel_index_full,
+    channel_index_new,
+    fill_value=np.nan,
+):
+    """Restrict waveforms to channels in new channel index."""
+    assert channel_index_is_subset(channel_index_new, channel_index_full)
+
+    # boolean mask of same shape as channel_index_full
+    n_channels = channel_index_full.shape[0]
+    channel_index_mask = np.array(
+        [
+            # by removing n_channels, chans outside array are treated
+            # like excluded channels and will be loaded with fill_value
+            # by get_channel_subset
+            # this could be surprising if fill_value here is different
+            # from the one used when loading the waveforms originally
+            np.isin(row_full, np.setdiff1d(row_new, [n_channels]))
+            for row_full, row_new in zip(channel_index_full, channel_index_new)
+        ]
+    )
+
+    return get_channel_subset(waveforms, max_channels, channel_index_mask)
+
+
 def get_maxchan_traces(waveforms, channel_index, maxchans):
-    index_of_mc = np.argwhere(channel_index == np.arange(len(channel_index))[:, None])
+    index_of_mc = np.argwhere(
+        channel_index == np.arange(len(channel_index))[:, None]
+    )
     assert (index_of_mc[:, 0] == np.arange(len(channel_index))).all()
     index_of_mc = index_of_mc[:, 1]
     rel_maxchans = index_of_mc[maxchans]
@@ -199,6 +245,7 @@ def relativize_waveforms(
     else:
         return stdwfs, firstchans_std, maxchans_std, chans_down
 
+
 def relativize_waveforms_np1(
     wfs, firstchans_orig, geom, maxchans_orig, feat_chans=20
 ):
@@ -233,4 +280,3 @@ def relativize_waveforms_np1(
         stdwfs[i] = wf[:, low:high]
 
     return stdwfs, firstchans_std, chans_down
-    
