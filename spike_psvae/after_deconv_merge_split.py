@@ -39,6 +39,9 @@ def split(
             #             )
         )
         which_load = order[which]
+        sort = np.argsort(which_load)
+        which_load = which_load[sort]
+        which = which[sort]
         if len(which) > min_cluster_size:
             with h5py.File(path_denoised_wfs_h5, "r") as h5:
                 batch_wfs = np.empty(
@@ -184,6 +187,7 @@ def check_merge(
         )
     )
     which = order[np.flatnonzero(labels_updated == unit_reference)]
+    which.sort()
     #         np.logical_and(
     #             maxptps > ptp_threshold,
     #             labels_updated == unit_reference,
@@ -242,6 +246,7 @@ def check_merge(
             ]
 
     which = order[np.flatnonzero(labels_updated == unit_bis_reference)]
+    which.sort()
     #         np.logical_and(
     #             maxptps > ptp_threshold,
     #             labels_updated == unit_bis_reference,
