@@ -15,28 +15,6 @@ from spike_psvae.denoise import denoise_wf_nn_tmp_single_channel
 from spike_psvae import waveform_utils
 from spike_psvae.pyks_ccg import ccg_metrics
 
-# %%
-# deprecated
-def align_templates(
-    labels, templates, triaged_spike_index, trough_offset=42, copy=False
-):
-    list_argmin = np.zeros(templates.shape[0])
-    for i in range(templates.shape[0]):
-        list_argmin[i] = templates[i, :, templates[i].ptp(0).argmax()].argmin()
-    idx_not_aligned = np.where(list_argmin != trough_offset)[0]
-
-    if copy:
-        triaged_spike_index = triaged_spike_index.copy()
-    for unit in idx_not_aligned:
-        mc = templates[unit].ptp(0).argmax()
-        offset = templates[unit, :, mc].argmin()
-        triaged_spike_index[labels == unit, 0] += offset - trough_offset
-
-    idx_sorted = triaged_spike_index[:, 0].argsort()
-    triaged_spike_index = triaged_spike_index[idx_sorted]
-
-    return triaged_spike_index, idx_sorted
-
 
 def align_spikes_by_templates(
     labels,
@@ -124,23 +102,6 @@ def run_LDA_split(wfs, max_channels, threshold_diptest=1.0):
         #         plt.plot(wfs[i].T.flatten(), color='red',alpha=.1)
         # print(labels)
     return labels
-
-
-# deprecated
-def run_CCA_split(
-    wfs,
-    x,
-    z,
-    maxptp,
-):
-    cca = CCA(n_components=2)
-    cca_embed, _ = cca.fit_transform(
-        wfs.reshape(wfs.shape[0], -1),
-        np.c_[tx[twhich], tz[twhich], 30 * np.log(tmaxptps[twhich])],
-    )
-    cca_hdb = hdbscan.HDBSCAN(min_cluster_size=25, min_samples=25)
-    cca_hdb.fit(cca_embed)
-    return cca_hdb.labels_
 
 
 # %%
