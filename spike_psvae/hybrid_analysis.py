@@ -517,7 +517,7 @@ def make_diagnostic_plot(hybrid_comparison, gt_unit):
 
 
 def array_scatter_vs(scatter_comparison, vs_comparison, do_ellipse=True):
-    fig, axes = scatter_comparison.new_sorting.array_scatter(
+    fig, axes, pct_shown = scatter_comparison.new_sorting.array_scatter(
         do_ellipse=do_ellipse
     )
     scatter_match = scatter_comparison.gt_matched
@@ -568,7 +568,6 @@ def near_gt_scatter_vs(step_comparisons, vs_comparison, gt_unit, dz=100):
             hspace=0.25, wspace=0.0, height_ratios=[1] * nrows + [0.1]
         ),
     )
-    print("z", axes.shape, flush=True)
     gt_x, gt_z, gt_ptp = vs_comparison.gt_sorting.template_xzptp.T
     log_gt_ptp = np.log(gt_ptp)
     gt_unit_z = gt_z[gt_unit]
