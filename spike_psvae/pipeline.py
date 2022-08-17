@@ -33,6 +33,7 @@ def post_deconv_split_step(
         spike_train,
         order,
         templates,
+        template_shifts,
     ) = spike_train_utils.clean_align_and_get_templates(
         spike_train,
         n_channels,
@@ -59,6 +60,7 @@ def post_deconv_split_step(
         spike_train,
         reorder,
         templates,
+        template_shifts,
     ) = spike_train_utils.clean_align_and_get_templates(
         spike_train,
         n_channels,
@@ -76,6 +78,7 @@ def post_deconv_split_step(
         spike_train,
         reorder,
         templates,
+        template_shifts,
     ) = spike_train_utils.clean_align_and_get_templates(
         spike_train,
         n_channels,
@@ -99,6 +102,7 @@ def post_deconv_split_step(
         spike_train,
         reorder,
         templates,
+        template_shifts,
     ) = spike_train_utils.clean_align_and_get_templates(
         spike_train,
         n_channels,
@@ -149,6 +153,7 @@ def post_deconv_merge_step(
         spike_train,
         reorder,
         templates,
+        template_shifts,
     ) = spike_train_utils.clean_align_and_get_templates(
         spike_train,
         n_channels,
@@ -173,6 +178,7 @@ def post_deconv_merge_step(
         spike_train,
         reorder,
         templates,
+        template_shifts,
     ) = spike_train_utils.clean_align_and_get_templates(
         spike_train,
         n_channels,
@@ -194,6 +200,7 @@ def post_deconv_merge_step(
         spike_train,
         reorder,
         templates,
+        template_shifts,
     ) = spike_train_utils.clean_align_and_get_templates(
         spike_train,
         n_channels,
@@ -233,6 +240,7 @@ def post_deconv2_clean_step(
         spike_train,
         order,
         templates,
+        template_shifts,
     ) = spike_train_utils.clean_align_and_get_templates(
         spike_train,
         n_channels,
@@ -258,6 +266,7 @@ def post_deconv2_clean_step(
         spike_train,
         reorder,
         templates,
+        template_shifts,
     ) = spike_train_utils.clean_align_and_get_templates(
         spike_train,
         n_channels,
@@ -282,6 +291,7 @@ def post_deconv2_clean_step(
         spike_train,
         reorder,
         templates,
+        template_shifts,
     ) = spike_train_utils.clean_align_and_get_templates(
         spike_train,
         n_channels,
