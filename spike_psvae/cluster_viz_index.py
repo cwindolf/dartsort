@@ -3,7 +3,7 @@ import matplotlib.pyplot as plt
 import colorcet as cc
 from scipy.spatial.distance import cdist
 from spikeinterface import NumpySorting
-from spikeinterface.toolkit import compute_correlograms
+from spikeinterface.postprocessing import compute_correlograms
 from spikeinterface.comparison import compare_two_sorters
 from matplotlib_venn import venn2
 
