@@ -553,7 +553,7 @@ def array_scatter_vs(scatter_comparison, vs_comparison, do_ellipse=True):
         borderaxespad=-10,
     )
 
-    return fig, axes, leg_artist
+    return fig, axes, leg_artist, pct_shown
 
 
 def near_gt_scatter_vs(step_comparisons, vs_comparison, gt_unit, dz=100):
