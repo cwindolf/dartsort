@@ -60,7 +60,7 @@ def clean_align_and_get_templates(
 
     # clean spike train: remove small units, make labels contiguous
     units, counts = np.unique(aligned_spike_train[:, 1], return_counts=True)
-    print(aligned_spike_train[:, 1].max() + 1 - units.size, "inactive units")
+    print((aligned_spike_train[:, 1].max() + 1) - (units.size - 1), "inactive units")
     if min_n_spikes > 0:
         too_small_units = units[counts < min_n_spikes]
         # don't want to touch the triaged spikes
