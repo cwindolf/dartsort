@@ -47,6 +47,7 @@ def post_deconv_split_step(
         templates,
         firstchans,
         deconv_results_h5,
+        order=order,
         wfs_key="denoised_waveforms",
         pc_split_rank=6,
     )
@@ -135,8 +136,9 @@ def post_deconv_merge_step(
         spike_train[:, 1],
         templates,
         deconv_results_h5,
-        firstchans[order],
+        firstchans,
         geom,
+        order=order,
         spike_times=spike_train[:, 0],
         n_chan_merge=10,
         wfs_key="cleaned_waveforms",
