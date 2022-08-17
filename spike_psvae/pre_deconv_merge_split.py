@@ -477,6 +477,7 @@ def get_templates(
     labels,
     max_spikes=250,
     spike_length_samples=121,
+    reducer=np.median,
 ):
     templates = np.zeros(
         (n_templates, spike_length_samples, geom_array.shape[0])
@@ -496,7 +497,7 @@ def get_templates(
             geom_array.shape[0],
             spike_length_samples=spike_length_samples,
         )[0]
-        templates[unit] = np.median(wfs_unit, axis=0)
+        templates[unit] = reducer(wfs_unit, axis=0)
     return templates
 
 
