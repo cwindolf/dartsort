@@ -7,7 +7,7 @@ from sklearn.decomposition import PCA
 from sklearn.discriminant_analysis import LinearDiscriminantAnalysis as LDA
 from spike_psvae import pre_deconv_merge_split, cluster_utils
 from spike_psvae.spikeio import read_waveforms
-from spike_psvae.pyks_ccg import ccg_metrics, ccg
+from spike_psvae.pyks_ccg import ccg_metrics
 from tqdm.auto import tqdm, trange
 
 
@@ -16,6 +16,7 @@ def split(
     templates,
     firstchans,
     path_denoised_wfs_h5,
+    order=None,
     batch_size=1000,
     n_chans_split=10,
     min_cluster_size=25,
@@ -26,12 +27,18 @@ def split(
 ):
     cmp = labels_deconv.max() + 1
 
+    if order is None:
+        order = np.arange(len(labels_deconv))
+
     for cluster_id in tqdm(np.unique(labels_deconv)):
-        which = np.flatnonzero(labels_deconv == cluster_id
-#             np.logical_and(
-#                 labels_deconv == cluster_id, maxptps > ptp_threshold 
-#             )
+        which = np.flatnonzero(
+            labels_deconv
+            == cluster_id
+            #             np.logical_and(
+            #                 labels_deconv == cluster_id, maxptps > ptp_threshold
+            #             )
         )
+        which_load = order[which]
         if len(which) > min_cluster_size:
             with h5py.File(path_denoised_wfs_h5, "r") as h5:
                 batch_wfs = np.empty(
@@ -41,7 +48,7 @@ def split(
                 h5_wfs = h5[wfs_key]
                 for batch_start in range(0, len(which), 1000):
                     batch_wfs[batch_start : batch_start + batch_size] = h5_wfs[
-                        which[batch_start : batch_start + batch_size]
+                        which_load[batch_start : batch_start + batch_size]
                     ]
 
             C = batch_wfs.shape[2]
@@ -49,7 +56,7 @@ def split(
                 n_chans_split = C
 
             maxchan = templates[cluster_id].ptp(0).argmax()
-            firstchan_maxchan = maxchan - firstchans[which]
+            firstchan_maxchan = maxchan - firstchans[which_load]
             firstchan_maxchan = np.maximum(
                 firstchan_maxchan, n_chans_split // 2
             )
@@ -93,16 +100,27 @@ def split(
 
     return labels_deconv
 
+
 def get_templates_com(templates, geom, n_channels=12):
     x_z_templates = np.zeros((templates.shape[0], 2))
-    n_chan_half = n_channels//2
+    n_chan_half = n_channels // 2
     n_chan_total = geom.shape[0]
     for i in range(templates.shape[0]):
         mc = templates[i].ptp(0).argmax()
-        mc = mc-mc%2
-        mc = max(min(n_chan_total-n_chan_half, mc), n_chan_half)
-        x_z_templates[i, 0] = (templates[i].ptp(0)[mc-n_chan_half:mc+n_chan_half]*geom[mc-n_chan_half:mc+n_chan_half, 0]).sum()/templates[i].ptp(0)[mc-n_chan_half:mc+n_chan_half].sum()
-        x_z_templates[i, 1] = (templates[i].ptp(0)[mc-n_chan_half:mc+n_chan_half]*geom[mc-n_chan_half:mc+n_chan_half, 1]).sum()/templates[i].ptp(0)[mc-n_chan_half:mc+n_chan_half].sum()
+        mc = mc - mc % 2
+        mc = max(min(n_chan_total - n_chan_half, mc), n_chan_half)
+        x_z_templates[i, 0] = (
+            templates[i].ptp(0)[mc - n_chan_half : mc + n_chan_half]
+            * geom[mc - n_chan_half : mc + n_chan_half, 0]
+        ).sum() / templates[i].ptp(0)[
+            mc - n_chan_half : mc + n_chan_half
+        ].sum()
+        x_z_templates[i, 1] = (
+            templates[i].ptp(0)[mc - n_chan_half : mc + n_chan_half]
+            * geom[mc - n_chan_half : mc + n_chan_half, 1]
+        ).sum() / templates[i].ptp(0)[
+            mc - n_chan_half : mc + n_chan_half
+        ].sum()
     return x_z_templates
 
 
@@ -118,6 +136,7 @@ def check_merge(
     labels_updated,
     firstchans,
     tpca,
+    order=None,
     n_chan_merge=10,
     max_spikes=500,
     threshold_diptest=1.0,
@@ -138,6 +157,10 @@ def check_merge(
     )
     if mc_diff >= 3:
         return False, unit_bis_reference, 0
+
+    if order is None:
+        order = np.arange(len(labels_updated))
+
     # ALIGN BASED ON MAX PTP TEMPLATE MC
     # the template with the larger MC is not shifted, so
     # we set unit_shifted to be the unit with smaller ptp
@@ -160,20 +183,18 @@ def check_merge(
             ),
         )
     )
-    which = np.flatnonzero(labels_updated == unit_reference)
-#         np.logical_and(
-#             maxptps > ptp_threshold,
-#             labels_updated == unit_reference,
-#         )
-#     )
+    which = order[np.flatnonzero(labels_updated == unit_reference)]
+    #         np.logical_and(
+    #             maxptps > ptp_threshold,
+    #             labels_updated == unit_reference,
+    #         )
+    #     )
 
     if len(which) < 2:
         return False, unit_bis_reference, 0
 
     if len(which) > n_wfs_max:
-        idx = np.random.choice(
-            np.arange(len(which)), n_wfs_max, replace=False
-        )
+        idx = np.random.choice(np.arange(len(which)), n_wfs_max, replace=False)
         idx.sort()
     else:
         idx = np.arange(len(which))
@@ -188,12 +209,10 @@ def check_merge(
     C = waveforms_ref.shape[2]
     if C < n_chan_merge:
         n_chan_merge = C
-    firstchan_maxchan = mc - firstchans[which]
+    firstchan_maxchan = mc - firstchans[which[idx]]
 
     firstchan_maxchan = np.maximum(firstchan_maxchan, n_chan_merge // 2)
-    firstchan_maxchan = np.minimum(
-        firstchan_maxchan, C - n_chan_merge // 2
-    )
+    firstchan_maxchan = np.minimum(firstchan_maxchan, C - n_chan_merge // 2)
 
     firstchan_maxchan = firstchan_maxchan.astype("int")
 
@@ -222,30 +241,26 @@ def check_merge(
                 + n_chan_merge // 2,
             ]
 
-    which = np.flatnonzero(labels_updated == unit_bis_reference)
-#         np.logical_and(
-#             maxptps > ptp_threshold,
-#             labels_updated == unit_bis_reference,
-#         )
-#     )
+    which = order[np.flatnonzero(labels_updated == unit_bis_reference)]
+    #         np.logical_and(
+    #             maxptps > ptp_threshold,
+    #             labels_updated == unit_bis_reference,
+    #         )
+    #     )
 
     if len(which) < 2:
         return False, unit_bis_reference, 0
 
     if len(which) > n_wfs_max:
-        idx = np.random.choice(
-            np.arange(len(which)), n_wfs_max, replace=False
-        )
+        idx = np.random.choice(np.arange(len(which)), n_wfs_max, replace=False)
         idx.sort()
     else:
         idx = np.arange(len(which))
 
-    firstchan_maxchan = mc - firstchans[which]
+    firstchan_maxchan = mc - firstchans[which[idx]]
 
     firstchan_maxchan = np.maximum(firstchan_maxchan, n_chan_merge // 2)
-    firstchan_maxchan = np.minimum(
-        firstchan_maxchan, C - n_chan_merge // 2
-    )
+    firstchan_maxchan = np.minimum(firstchan_maxchan, C - n_chan_merge // 2)
     firstchan_maxchan = firstchan_maxchan.astype("int")
 
     with h5py.File(path_cleaned_wfs_h5, "r") as h5:
@@ -356,6 +371,7 @@ def merge(
     path_cleaned_wfs_h5,
     firstchans,
     geom,
+    order=None,
     n_chan_merge=10,
     tpca=PCA(5),
     n_temp=10,
@@ -418,6 +434,7 @@ def merge(
                     labels_updated,
                     firstchans,
                     tpca,
+                    order=order,
                     n_chan_merge=n_chan_merge,
                     max_spikes=max_spikes,
                     threshold_diptest=threshold_diptest,
@@ -441,9 +458,21 @@ def merge(
                     contam_sig = p_value < contam_alpha
                     is_merged_bis = contam_ok and contam_sig
                     if not is_merged_bis:
-                        print("ISI prevented merge with", contam_ratio, p_value, st1.shape, st2.shape)
+                        print(
+                            "ISI prevented merge with",
+                            contam_ratio,
+                            p_value,
+                            st1.shape,
+                            st2.shape,
+                        )
                     else:
-                        print("ISI allowed merge with", contam_ratio, p_value, st1.shape, st2.shape)
+                        print(
+                            "ISI allowed merge with",
+                            contam_ratio,
+                            p_value,
+                            st1.shape,
+                            st2.shape,
+                        )
 
                     # ccg1 = ccg(st1, st1, 500, 30)
                     # contam_ratio1, p_value1 = ccg_metrics(
@@ -560,7 +589,9 @@ def clean_big_clusters(
         wfs_sort = wfs_unit[ptps_sort]
 
         lower = int(max(np.ceil(in_unit.size * 0.05), min_size_split))
-        upper = int(min(np.floor(in_unit.size * 0.95), in_unit.size - min_size_split))
+        upper = int(
+            min(np.floor(in_unit.size * 0.95), in_unit.size - min_size_split)
+        )
         if lower >= upper:
             continue
 
@@ -574,7 +605,9 @@ def clean_big_clusters(
             if diff > max_diff:
                 max_diff = diff
                 max_diff_ix = n
-        max_diff_ptp = 0.5 * (ptps_sort[max_diff_ix] + ptps_sort[max_diff_ix - 1])
+        max_diff_ptp = 0.5 * (
+            ptps_sort[max_diff_ix] + ptps_sort[max_diff_ix - 1]
+        )
 
         if max_diff < split_diff:
             continue
@@ -603,11 +636,15 @@ def remove_oversplits(templates, spike_train, min_ptp=4.0, max_diff=2.0):
     # remove oversplits according to max abs norm
     for unit in trange(templates.shape[0] - 1, desc="max abs merge"):
         if templates[unit].ptp(0).max(0) >= min_ptp:
-            max_vec = np.abs(
-                templates[unit, :, :] - templates[unit + 1 :]
-            ).max(1).max(1)
+            max_vec = (
+                np.abs(templates[unit, :, :] - templates[unit + 1 :])
+                .max(1)
+                .max(1)
+            )
             if max_vec.min() < max_diff:
-                idx_units_to_change = unit + 1 + np.where(max_vec < max_diff)[0]
+                idx_units_to_change = (
+                    unit + 1 + np.where(max_vec < max_diff)[0]
+                )
                 in_change = np.isin(spike_train[:, 1], idx_units_to_change)
                 assert in_change.shape == spike_train[:, 0].shape
                 spike_train[in_change, 1] = unit
