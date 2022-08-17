@@ -224,7 +224,8 @@ def post_deconv2_clean_step(
         x, y, z_rel, z_abs, alpha = f["localizations"][:].T
         print(f"deconv result shapes {maxptps.shape=} {x.shape=} {z_abs.shape=}")
     spike_train = np.load(deconv2_dir / "spike_train.npy")
-    assert spike_train.shape[0] == maxptps.shape == firstchans.shape
+    print(deconv2_dir / "spike_train.npy", f"{spike_train.shape}")
+    assert (spike_train.shape[0],) == maxptps.shape == firstchans.shape
 
     (
         spike_train,
