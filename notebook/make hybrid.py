@@ -5,7 +5,7 @@
 #       extension: .py
 #       format_name: percent
 #       format_version: '1.3'
-#       jupytext_version: 1.13.8
+#       jupytext_version: 1.13.0
 #   kernelspec:
 #     display_name: Python 3 (ipykernel)
 #     language: python
@@ -93,7 +93,11 @@ class timer:
 
 # %%
 # base_dir = Path("/share/ctn/users/ciw2107/hybrid_1min/")
-base_dir = Path("/share/ctn/users/ciw2107/hybrid_5min/")
+# base_dir = Path("/share/ctn/users/ciw2107/hybrid_5min/")
+base_dir = Path("/mnt/3TB/charlie/hybrid_5min/")
+
+# %%
+# %ll {base_dir}
 
 # %%
 in_dir = next(base_dir.glob("*input"))
@@ -137,6 +141,9 @@ while True:
     time.sleep(10 * 60)
 print("ok!")
 in_bins
+
+# %%
+active_dsets = ("CSHL051", "DY_018")
 
 # %%
 
@@ -359,7 +366,7 @@ for i, in_bin in enumerate(tqdm(in_bins)):
 # %%
 for i, in_bin in enumerate(tqdm(in_bins)):
     subject = in_bin.stem.split(".")[0]
-    if subject not in ("DY_018", "CSHL051"):
+    if subject not in active_dsets:
         continue
     print(subject)
     out_bin = out_dir / f"{in_bin.stem}.bin"
@@ -404,7 +411,7 @@ import torch; torch.cuda.empty_cache()
 for i, in_bin in enumerate(tqdm(in_bins)):
     subject = in_bin.stem.split(".")[0]
     
-    if subject not in ("DY_018", "CSHL051"):
+    if subject not in active_dsets:
         continue
         
     print(subject)
@@ -447,7 +454,7 @@ for i, in_bin in enumerate(tqdm(in_bins)):
     subject = in_bin.stem.split(".")[0]
     out_bin = out_dir / f"{in_bin.stem}.bin"
     
-    if subject not in ("DY_018", "CSHL051"):
+    if subject not in active_dsets:
         continue
     
     subject_sub_dir = sub_dir / subject
@@ -476,11 +483,11 @@ just_do_it = True
 # from joblib import Parallel, delayed
 # for res in tqdm(Parallel(5)(delayed(job)(in_bin) for in_bin in in_bins)):
 #     print(res)
-Path("/local/duster").mkdir(exist_ok=True)
+Path("/tmp/duster").mkdir(exist_ok=True)
 for i, in_bin in enumerate(tqdm(in_bins)):
     subject = in_bin.stem.split(".")[0]
     print(subject, flush=True)
-    if subject not in ("DY_018", "CSHL051"):
+    if subject not in active_dsets:
         continue
     # if subject != "SWC_054":
         # continue
@@ -506,11 +513,13 @@ for i, in_bin in enumerate(tqdm(in_bins)):
                 subject_res_bin,
                 subject_sub_h5,
                 subject_sub_dir,
-                "--inmem",
+                # "--inmem",
                 "--merge_dipscore=0.5",
                 "--doplot",
                 f"--plotdir={clust_plotdir}",
-                "--tmpdir=/local/duster",
+                "--tmpdir=/tmp/duster",
+                "--noremoveselfdups",
+                "--usemean",
             ],
             env=os.environ,
             # stderr=subprocess.DEVNULL,
@@ -550,7 +559,7 @@ print(1)
 for i, in_bin in enumerate(tqdm(in_bins)):
     subject = in_bin.stem.split(".")[0]
     # if subject != "DY_018":
-    if subject not in ("CSHL051", "DY_018"):
+    if subject not in active_dsets:
         continue
     
     out_bin = out_dir / f"{in_bin.stem}.bin"
@@ -623,14 +632,14 @@ for i, in_bin in enumerate(tqdm(in_bins)):
 
 
 # %%
-# %rm -rf /local/deconv*
+# %rm -rf /tmp/deconv*
 
 # %% tags=[]
 for in_bin in in_bins:
     subject = in_bin.stem.split(".")[0]
     # if subject != "DY_018":
 
-    if subject not in ("CSHL051", "DY_018"):
+    if subject not in active_dsets:
         continue
     print(subject)
     
@@ -643,7 +652,7 @@ for in_bin in in_bins:
     use_scratch = True
     
     if use_scratch:
-        deconv_scratch_dir = Path("/local/deconv")
+        deconv_scratch_dir = Path("/tmp/deconv")
         deconv_scratch_dir.mkdir(exist_ok=True)
         raw_bin = deconv_scratch_dir / "raw.bin"
     else:
@@ -669,7 +678,9 @@ for in_bin in in_bins:
             # scratch_dir=deconv_scratch_dir,
         )
         with timer("copying deconv h5 to output"):
-            shutil.copy(deconv_h5, subject_deconv_dir / "deconv_results.h5")
+            subprocess.run(
+                ["rsync", "-avP", deconv_h5, subject_deconv_dir / "deconv_results.h5"]
+            )
     
     do_split = not (subject_deconv_dir / "postdeconv_split_labels.npy").exists()
     do_split = True
@@ -678,19 +689,11 @@ for in_bin in in_bins:
     do_anything = do_split or do_merge
     
     if do_anything and use_scratch:
-        if not (deconv_scratch_dir / "deconv_results.h5").exists():
-            print("scratch deconv h5 does not exist")
-            with timer("copying to scratch"):
-                shutil.copy(subject_deconv_dir / "deconv_results.h5", deconv_scratch_dir / "deconv_results.h5")
-        else:
-            print("Scratch h5 already there")
+        with timer("copying to scratch"):
+            subprocess.run(["rsync", "-avP", subject_deconv_dir / "deconv_results.h5", deconv_scratch_dir / "deconv_results.h5"])
         
-        if not (deconv_scratch_dir / "raw.bin").exists():
-            print("scratch bin does not exist")
-            with timer("copying to scratch"):
-                shutil.copy(out_bin, deconv_scratch_dir / "raw.bin")
-        else:
-            print("Scratch bin already there")
+        with timer("copying to scratch"):
+            subprocess.run(["rsync", "-avP", out_bin, deconv_scratch_dir / "raw.bin"])
     
     if do_split:
         print("run split")
@@ -745,7 +748,7 @@ for in_bin in in_bins:
 for i, in_bin in enumerate(tqdm(in_bins)):
     subject = in_bin.stem.split(".")[0]
     # if subject != "DY_018":
-    if subject not in ("CSHL051", "DY_018"):
+    if subject not in active_dsets:
         continue
     
     out_bin = out_dir / f"{in_bin.stem}.bin"
@@ -766,10 +769,12 @@ for i, in_bin in enumerate(tqdm(in_bins)):
     print(postdeconv_merge_labels.max() + 1, u.size, (c > 25).sum(), c[c > 25].sum())
 
 # %% tags=[]
+from spike_psvae import deconvolve
+
 for i, in_bin in enumerate(tqdm(in_bins)):
     subject = in_bin.stem.split(".")[0]
-    if subject != "DY_018":
-    # if subject not in ("CSHL051", "DY_018"):
+    # if subject != "DY_018":
+    if subject not in active_dsets:
         continue
     
     out_bin = out_dir / f"{in_bin.stem}.bin"
@@ -777,6 +782,8 @@ for i, in_bin in enumerate(tqdm(in_bins)):
     subject_deconv_dir = deconv_dir / subject
     second_deconv_dir = deconv_dir / subject / "deconv2"
     second_deconv_dir.mkdir(exist_ok=True)
+    
+    subprocess.run(["rsync", "-avP", out_bin, "/tmp/raw.bin"])
     
     # if (subject_deconv_dir / "spike_train.npy").exists():
     #     print("done, skip")
@@ -802,7 +809,7 @@ for i, in_bin in enumerate(tqdm(in_bins)):
         times[which, None],
         labels[which],
         second_deconv_dir,
-        out_bin,
+        "/tmp/raw.bin",
         None,
         np.c_[times[which], labels[which]],
         subject_deconv_dir / "geom.npy",
@@ -813,19 +820,22 @@ for i, in_bin in enumerate(tqdm(in_bins)):
         verbose=False,
         reducer=np.median,
     )
+    Path("/tmp/raw.bin").unlink()
 
 
 # %%
 # %rm -rf /local/deconv*
 
 # %% tags=[]
+from spike_psvae import extract_deconv, pipeline
+
 for in_bin in in_bins:
     subject = in_bin.stem.split(".")[0]
     # if subject != "DY_018":
     # if subject_deconv_dir:
     #     del subject_deconv_dir
 
-    if subject not in ("CSHL051", "DY_018"):
+    if subject not in active_dsets:
         continue
     print(subject)
 
@@ -836,18 +846,16 @@ for in_bin in in_bins:
     subj_dc2_dir = deconv_dir / subject / "deconv2"
     subj_dc2_dir.mkdir(exist_ok=True, parents=True)
     
-    deconv_scratch_dir = Path("/local/deconv")
+    deconv_scratch_dir = Path("/tmp/deconv")
     deconv_scratch_dir.mkdir(exist_ok=True)
     
     do_extract = not (subj_dc2_dir / "deconv_results.h5").exists()
     do_extract = True
 
-    if not (deconv_scratch_dir / "raw.bin").exists():
-        print("scratch bin does not exist")
-        with timer("copying to scratch"):
-            shutil.copy(out_bin, deconv_scratch_dir / "raw.bin")
-    else:
-        print("Scratch bin already there")
+    with timer("copying to scratch"):
+        subprocess.run(
+            ["rsync", "-avP", out_bin, deconv_scratch_dir / "raw.bin"]
+        )
     
     if do_extract:
         print("run extract")
@@ -863,30 +871,30 @@ for in_bin in in_bins:
             save_denoised_waveforms=True,
             n_channels_extract=20,
             n_jobs=13,
-            # device="cpu",
+            device="cpu",
             scratch_dir=deconv_scratch_dir,
         )
         with timer("copying deconv h5 to output"):
-            shutil.copy(deconv_h5, subj_dc2_dir / "deconv_results.h5")
+            subprocess.run(
+                ["rsync", "-avP", deconv_h5, subj_dc2_dir / "deconv_results.h5"]
+            )
     
     do_clean = not (subj_dc2_dir / "postdeconv_cleaned_labels.npy").exists()
     do_clean = True
     do_anything = do_clean
     
     if do_anything:
-        if not (deconv_scratch_dir / "deconv_results.h5").exists():
-            print("scratch deconv h5 does not exist")
-            with timer("copying to scratch"):
-                shutil.copy(subj_dc2_dir / "deconv_results.h5", deconv_scratch_dir / "deconv_results.h5")
-        else:
-            print("Scratch h5 already there")
-        
-        if not (deconv_scratch_dir / "raw.bin").exists():
-            print("scratch bin does not exist")
-            with timer("copying to scratch"):
-                shutil.copy(out_bin, deconv_scratch_dir / "raw.bin")
-        else:
-            print("Scratch bin already there")
+        subprocess.run(
+            [
+                "rsync",
+                "-avP", 
+                subj_dc2_dir / "deconv_results.h5",
+                deconv_scratch_dir / "deconv_results.h5",
+            ]
+        )
+        subprocess.run(
+            ["rsync", "-avP", out_bin, deconv_scratch_dir / "raw.bin"],
+        )
     
     if do_clean:
         print("run clean")
@@ -902,7 +910,7 @@ for in_bin in in_bins:
         np.save(subj_dc2_dir / "postdeconv_cleaned_times.npy", spike_train[:, 0])
         np.save(subj_dc2_dir / "postdeconv_cleaned_labels.npy", spike_train[:, 1])
         np.save(subj_dc2_dir / "postdeconv_cleaned_order.npy", order)
-        np.save(subj_dc2_dir / "postdeconv_cleaned_templates.npy", order)
+        np.save(subj_dc2_dir / "postdeconv_cleaned_templates.npy", templates)
 
     if do_anything:
         print("scratch h5 exists?", (deconv_scratch_dir / "deconv_results.h5").exists())
@@ -911,18 +919,6 @@ for in_bin in in_bins:
         print("scratch bin exists?", (deconv_scratch_dir / "raw.bin").exists())
         if (deconv_scratch_dir / "raw.bin").exists():
             (deconv_scratch_dir / "raw.bin").unlink()
-
-# %%
-np.load(subj_dc2_dir / "templates_up.npy").shape
-
-# %%
-np.load(subj_dc2_dir / "spike_train_up.npy").shape
-
-# %%
-np.load(subj_dc2_dir / "spike_train.npy").shape
-
-# %%
-np.load(subj_dc2_dir / "templates_up.npy").shape
 
 # %%
 1
