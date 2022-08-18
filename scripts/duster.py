@@ -9,7 +9,7 @@ from tqdm.auto import tqdm
 import pickle
 from sklearn.decomposition import PCA
 import time
-import shutil
+import subprocess
 
 from spike_psvae import (
     pre_deconv_merge_split,
@@ -77,16 +77,11 @@ class timer:
 print("cooking", flush=True)
 if args.tmpdir is not None:
     with timer("copying h5 to scratch"):
-        shutil.copy(sub_h5, args.tmpdir / "sub.h5")
+        subprocess.run(["rsync", "-avP", sub_h5, args.tmpdir / "sub.h5"])
     sub_h5 = args.tmpdir / "sub.h5"
-
-# %%
-# raw_data_bin = Path("/mnt/3TB/charlie/re_snips/CSH_ZAD_026_snip.ap.bin")
-# assert raw_data_bin.exists()
-# residual_data_bin = Path("/mnt/3TB/charlie/re_snip_res/CSH_ZAD_026_fc/residual_CSH_ZAD_026_snip.ap_t_0_None.bin")
-# assert residual_data_bin.exists()
-# sub_h5 = Path("/mnt/3TB/charlie/re_snip_res/CSH_ZAD_026_fc/subtraction_CSH_ZAD_026_snip.ap_t_0_None.h5")
-# sub_h5.exists()
+    with timer("copying bin to scratch"):
+        subprocess.run(["rsync", "-avP", raw_data_bin, args.tmpdir / "raw.bin"])
+    raw_data_bin = args.tmpdir / "raw.bin"
 
 # %%
 output_dir = Path(args.output_dir)
