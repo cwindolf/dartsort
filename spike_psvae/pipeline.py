@@ -2,7 +2,7 @@ import numpy as np
 import h5py
 from sklearn.decomposition import PCA
 
-from . import after_deconv_merge_split, spike_train_utils
+from . import after_deconv_merge_split, spike_train_utils, extractors
 
 
 def post_deconv_split_step(
@@ -12,13 +12,7 @@ def post_deconv_split_step(
     geom,
     clean_min_spikes=25,
 ):
-    # -- load up the deconv result
-    with h5py.File(deconv_results_h5) as f:
-        maxptps = f["maxptps"][:]
-        firstchans = f["first_channels"][:]
-
     spike_train = np.load(deconv_dir / "spike_train.npy")
-    assert spike_train.shape == (*maxptps.shape, 2)
     templates = np.load(deconv_dir / "templates.npy")
     assert templates.shape[0] == spike_train[:, 1].max() + 1
     print("original")
@@ -26,6 +20,11 @@ def post_deconv_split_step(
     print(u.size, (c > 25).sum(), c[c > 25].sum())
     n_channels = templates.shape[2]
     assert n_channels == geom.shape[0]
+
+    deconv_extractor = extractors.DeconvH5Extractor(
+        deconv_results_h5, bin_file
+    )
+    assert deconv_extractor.spike_train.shape == spike_train.shape
 
     # deconv can produce an un-aligned spike train.
     # let's also get rid of units with few spikes.
@@ -45,9 +44,7 @@ def post_deconv_split_step(
     # the initial split
     spike_train[:, 1] = after_deconv_merge_split.split(
         spike_train[:, 1],
-        templates,
-        firstchans,
-        deconv_results_h5,
+        deconv_extractor,
         order=order,
         wfs_key="denoised_waveforms",
         pc_split_rank=6,
@@ -72,7 +69,7 @@ def post_deconv_split_step(
 
     # clean big
     after_deconv_merge_split.clean_big_clusters(
-        templates, spike_train, maxptps[order], bin_file, geom
+        templates, spike_train, deconv_extractor.ptp[order], bin_file, geom
     )
     (
         spike_train,
