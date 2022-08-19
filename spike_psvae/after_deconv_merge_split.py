@@ -7,15 +7,14 @@ from sklearn.decomposition import PCA
 from sklearn.discriminant_analysis import LinearDiscriminantAnalysis as LDA
 from spike_psvae import pre_deconv_merge_split, cluster_utils
 from spike_psvae.spikeio import read_waveforms
+from spike_psvae.subtract import make_contiguous_channel_index
 from spike_psvae.pyks_ccg import ccg_metrics
 from tqdm.auto import tqdm, trange
 
 
 def split(
     labels_deconv,
-    templates,
-    firstchans,
-    path_denoised_wfs_h5,
+    deconv_extractor,
     order=None,
     batch_size=1000,
     n_chans_split=10,
@@ -23,83 +22,51 @@ def split(
     min_samples=25,
     pc_split_rank=5,
     ptp_threshold=4,
-    wfs_key="denoised_waveforms",
+    wfs_kind="denoised",
 ):
-    cmp = labels_deconv.max() + 1
+    next_label = labels_deconv.max() + 1
+    n_channels = deconv_extractor.channel_index.shape[0]
+    split_channel_index = make_contiguous_channel_index(
+        n_channels, n_neighbors=n_chans_split
+    )
 
     if order is None:
         order = np.arange(len(labels_deconv))
 
     for cluster_id in tqdm(np.unique(labels_deconv)):
         which = np.flatnonzero(
-            labels_deconv
-            == cluster_id
-            #             np.logical_and(
-            #                 labels_deconv == cluster_id, maxptps > ptp_threshold
-            #             )
+            labels_deconv == cluster_id
         )
+        # np.flatnonzero(np.logical_and(
+        #     labels_deconv == cluster_id, maxptps > ptp_threshold
+        # ))
+
+        # too small to split?
+        if len(which) <= min_cluster_size:
+            continue
+
+        # indexing logic
         which_load = order[which]
         sort = np.argsort(which_load)
         which_load = which_load[sort]
         which = which[sort]
-        if len(which) > min_cluster_size:
-            with h5py.File(path_denoised_wfs_h5, "r") as h5:
-                batch_wfs = np.empty(
-                    (len(which), *h5[wfs_key].shape[1:]),
-                    dtype=h5[wfs_key].dtype,
-                )
-                h5_wfs = h5[wfs_key]
-                for batch_start in range(0, len(which), 1000):
-                    batch_wfs[batch_start : batch_start + batch_size] = h5_wfs[
-                        which_load[batch_start : batch_start + batch_size]
-                    ]
 
-            C = batch_wfs.shape[2]
-            if C < n_chans_split:
-                n_chans_split = C
+        # load denoised waveforms on n_chans_split channels
+        wfs_split = deconv_extractor.get_waveforms(
+            which_load, channel_index=split_channel_index, kind=wfs_kind
+        )
 
-            maxchan = templates[cluster_id].ptp(0).argmax()
-            firstchan_maxchan = maxchan - firstchans[which_load]
-            firstchan_maxchan = np.maximum(
-                firstchan_maxchan, n_chans_split // 2
-            )
-            firstchan_maxchan = np.minimum(
-                firstchan_maxchan, C - n_chans_split // 2
-            )
-            firstchan_maxchan = firstchan_maxchan.astype("int")
+        pcs_cluster = PCA(pc_split_rank).fit_transform(
+            wfs_split.reshape(wfs_split.shape[0], -1)
+        )
+        clusterer = hdbscan.HDBSCAN(min_cluster_size=25, min_samples=25)
+        clusterer.fit(pcs_cluster)
 
-            if len(np.unique(firstchan_maxchan)) <= 1:
-                wfs_split = batch_wfs[
-                    :,
-                    :,
-                    firstchan_maxchan[0]
-                    - n_chans_split // 2 : firstchan_maxchan[0]
-                    + n_chans_split // 2,
-                ]
-            else:
-                wfs_split = np.zeros(
-                    (batch_wfs.shape[0], batch_wfs.shape[1], n_chans_split)
-                )
-                for j in range(batch_wfs.shape[0]):
-                    wfs_split[j] = batch_wfs[
-                        j,
-                        :,
-                        firstchan_maxchan[j]
-                        - n_chans_split // 2 : firstchan_maxchan[j]
-                        + n_chans_split // 2,
-                    ]
-
-            pcs_cluster = PCA(pc_split_rank).fit_transform(
-                wfs_split.reshape(wfs_split.shape[0], -1)
-            )
-            clusterer = hdbscan.HDBSCAN(min_cluster_size=25, min_samples=25)
-            clusterer.fit(pcs_cluster)
-
-            if len(np.unique(clusterer.labels_)) > 1:
-                labels_deconv[which[clusterer.labels_ == -1]] = -1
-                for i in np.setdiff1d(np.unique(clusterer.labels_), [-1, 0]):
-                    labels_deconv[which[clusterer.labels_ == i]] = cmp
-                    cmp += 1
+        if len(np.unique(clusterer.labels_)) > 1:
+            labels_deconv[which[clusterer.labels_ == -1]] = -1
+            for i in np.setdiff1d(np.unique(clusterer.labels_), [-1, 0]):
+                labels_deconv[which[clusterer.labels_ == i]] = next_label
+                next_label += 1
 
     return labels_deconv
 
@@ -564,6 +531,7 @@ def clean_big_clusters(
     n_temp_cleaned = 0
     next_label = templates.shape[0]
     rg = np.random.default_rng(seed)
+
     for unit in trange(templates.shape[0], desc="clean big"):
         mc = templates[unit].ptp(0).argmax()
         template_mc_trace = templates[unit, :, mc]
