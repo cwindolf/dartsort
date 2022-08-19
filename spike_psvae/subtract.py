@@ -1,3 +1,4 @@
+from pathlib import Path
 import contextlib
 import gc
 import h5py
@@ -7,23 +8,19 @@ import time
 import torch
 import multiprocessing
 from concurrent.futures import ProcessPoolExecutor
-
 from collections import namedtuple
+import logging
 
-try:
-    from spikeglx import _geometry_from_meta, read_meta_data
-except ImportError:
-    try:
-        from ibllib.io.spikeglx import _geometry_from_meta, read_meta_data
-    except ImportError:
-        raise ImportError("Can't find spikeglx...")
-from pathlib import Path
+import pandas as pd
+from spikeglx import _geometry_from_meta, read_meta_data
 from scipy.spatial.distance import pdist, squareform
 from sklearn.decomposition import PCA
 from tqdm.auto import tqdm
 
 from . import denoise, detect, localize_index
 from .spikeio import get_binary_length, read_data, read_waveforms_in_memory
+
+_logger = logging.getLogger(__name__)
 
 
 def subtraction(
@@ -1539,6 +1536,121 @@ def read_geom_from_meta(bin_file):
     return geom
 
 
+def subtract_and_localize_numpy(
+    raw,
+    geom,
+    extract_radius=200.,
+    loc_radius=100.,
+    dedup_spatial_radius=70.,
+    thresholds=[12, 10, 8, 6, 5],
+    radial_parents=None,
+    tpca=None,
+    device=None,
+    probe="np1",
+    trough_offset=42,
+    spike_length_samples=121,
+    loc_workers=1,
+):
+    # we will run in this buffer and return it after subtraction
+    residual = raw.copy()
+
+    # probe geometry helper structures
+    dedup_channel_index = make_channel_index(
+        geom, dedup_spatial_radius, steps=2
+    )
+    extract_channel_index = make_channel_index(geom, extract_radius, distance_order=False)
+    # use radius-based localization neighborhood
+    loc_n_chans = None
+
+    if radial_parents is None:
+        # this can be slow to compute, so could be worth pre-computing it
+        radial_parents = denoise.make_radial_order_parents(
+            geom, extract_channel_index, n_jumps_per_growth=1, n_jumps_parent=3
+        )
+
+    # load neural nets
+    if device is None:
+        device = "cuda" if torch.cuda.is_available else "cpu"
+    device = torch.device(device)
+    denoiser = denoise.SingleChanDenoiser()
+    denoiser.load()
+    denoiser.to(device)
+    dn_detector = detect.DenoiserDetect(denoiser)
+    dn_detector.to(device)
+
+    subtracted_wfs = []
+    spike_index = []
+    for threshold in thresholds:
+        subwfs, tcpca_proj, residual, spind = detect_and_subtract(
+            residual,
+            threshold,
+            radial_parents,
+            tpca,
+            dedup_channel_index,
+            extract_channel_index,
+            detector=None,
+            denoiser=denoiser,
+            denoiser_detector=dn_detector,
+            trough_offset=trough_offset,
+            spike_length_samples=spike_length_samples,
+            device=device,
+            probe=probe,
+        )
+        _logger.debug(f"Detected and subtracted {spind.shape[0]} spikes with threshold {threshold} on {thresholds}")
+        if len(spind):
+            subtracted_wfs.append(subwfs)
+            spike_index.append(spind)
+
+    subtracted_wfs = np.concatenate(subtracted_wfs, axis=0)
+    spike_index = np.concatenate(spike_index, axis=0)
+    _logger.debug(f"Detected and subtracted {spike_index.shape[0]} spikes Total")
+
+    # sort so time increases
+    sort = np.argsort(spike_index[:, 0])
+    subtracted_wfs = subtracted_wfs[sort]
+    spike_index = spike_index[sort]
+
+    _logger.debug(f"Denoising waveforms...")
+    # "collision-cleaned" wfs
+
+    cleaned_wfs = read_waveforms_in_memory(
+        residual,
+        spike_index,
+        spike_length_samples,
+        extract_channel_index,
+        trough_offset=trough_offset,
+        buffer=0,
+    )
+
+    cleaned_wfs = full_denoising(
+        cleaned_wfs + subtracted_wfs,
+        spike_index[:, 1],
+        extract_channel_index,
+        radial_parents,
+        probe=probe,
+        tpca=tpca,
+        device=device,
+        denoiser=denoiser,
+    )
+
+    # localize
+    _logger.debug(f"Localisation...")
+    locptps = cleaned_wfs.ptp(1)
+    xs, ys, z_rels, z_abss, alphas = localize_index.localize_ptps_index(
+        locptps,
+        geom,
+        spike_index[:, 1],
+        extract_channel_index,
+        n_channels=loc_n_chans,
+        radius=loc_radius,
+        n_workers=loc_workers,
+        pbar=False,
+    )
+    df_localisation = pd.DataFrame(
+        data=np.c_[spike_index[:, 0] + spike_length_samples * 2, spike_index[:, 1], xs, ys, z_abss, alphas],
+        columns=['sample', 'trace', 'x', 'y', 'z', 'alpha']
+    )
+    return df_localisation, cleaned_wfs
 # -- utils
 
 
