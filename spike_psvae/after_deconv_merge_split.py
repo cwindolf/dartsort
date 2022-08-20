@@ -34,9 +34,7 @@ def split(
         order = np.arange(len(labels_deconv))
 
     for cluster_id in tqdm(np.unique(labels_deconv)):
-        which = np.flatnonzero(
-            labels_deconv == cluster_id
-        )
+        which = np.flatnonzero(labels_deconv == cluster_id)
         # np.flatnonzero(np.logical_and(
         #     labels_deconv == cluster_id, maxptps > ptp_threshold
         # ))
@@ -102,16 +100,17 @@ def check_merge(
     reference_units,
     templates,
     n_spikes_templates,
-    path_cleaned_wfs_h5,
     labels_updated,
-    firstchans,
+    deconv_extractor,
     tpca,
     order=None,
     n_chan_merge=10,
     max_spikes=500,
     threshold_diptest=1.0,
     ptp_threshold=4,
-    wfs_key="cleaned_waveforms",
+    mc_diff_max=3,
+    wfs_kind="cleaned",
+    rg=None,
 ):
     if unit_reference == unit_bis_reference:
         return False, unit_bis_reference, 0
@@ -125,11 +124,15 @@ def check_merge(
         templates[unit_bis_reference].ptp(0).max()
         - templates[unit_reference].ptp(0).max()
     )
-    if mc_diff >= 3:
+    if mc_diff >= mc_diff_max:
         return False, unit_bis_reference, 0
 
     if order is None:
         order = np.arange(len(labels_updated))
+
+    merge_channel_index = make_contiguous_channel_index(
+        deconv_extractor.channel_index.shape[0], n_neighbors=n_chan_merge
+    )
 
     # ALIGN BASED ON MAX PTP TEMPLATE MC
     # the template with the larger MC is not shifted, so
@@ -137,6 +140,8 @@ def check_merge(
     unit_shifted = (
         unit_reference if unit_ptp <= unit_bis_ptp else unit_bis_reference
     )
+    # we will load wfs on the same subset of channels, using this
+    # as the maxchan
     mc = unit_mc if unit_ptp <= unit_bis_ptp else unit_bis_mc
     # template_pair_shift is unit argmin - unit_bis argmin
     # this ensures it has the same sign as before
@@ -147,126 +152,52 @@ def check_merge(
     n_wfs_max = int(
         min(
             max_spikes,
-            min(
-                n_spikes_templates[unit_reference],
-                n_spikes_templates[unit_bis_reference],
-            ),
+            n_spikes_templates[unit_reference],
+            n_spikes_templates[unit_bis_reference],
         )
     )
     which = order[np.flatnonzero(labels_updated == unit_reference)]
     which.sort()
-    #         np.logical_and(
-    #             maxptps > ptp_threshold,
-    #             labels_updated == unit_reference,
-    #         )
+    which_bis = order[np.flatnonzero(labels_updated == unit_bis_reference)]
+    which_bis.sort()
+    #     np.logical_and(
+    #         maxptps > ptp_threshold,
+    #         labels_updated == unit_reference,
     #     )
+    # )
 
-    if len(which) < 2:
+    if len(which) < 2 or len(which_bis) < 2:
         return False, unit_bis_reference, 0
 
     if len(which) > n_wfs_max:
-        idx = np.random.choice(np.arange(len(which)), n_wfs_max, replace=False)
+        idx = rg.choice(np.arange(len(which)), n_wfs_max, replace=False)
         idx.sort()
     else:
         idx = np.arange(len(which))
+    # load waveforms on n_chan_merge channels
+    max_channels = np.full_like(which[idx], mc)
+    wfs_merge_ref = deconv_extractor.get_waveforms(
+        which[idx],
+        channel_index=merge_channel_index,
+        kind=wfs_kind,
+        max_channels=max_channels,
+    )
 
-    with h5py.File(path_cleaned_wfs_h5, "r") as h5:
-        waveforms_ref = np.empty(
-            (n_wfs_max, *h5[wfs_key].shape[1:]),
-            dtype=h5[wfs_key].dtype,
-        )
-        waveforms_ref = h5[wfs_key][which[idx]]
-
-    C = waveforms_ref.shape[2]
-    if C < n_chan_merge:
-        n_chan_merge = C
-    firstchan_maxchan = mc - firstchans[which[idx]]
-
-    firstchan_maxchan = np.maximum(firstchan_maxchan, n_chan_merge // 2)
-    firstchan_maxchan = np.minimum(firstchan_maxchan, C - n_chan_merge // 2)
-
-    firstchan_maxchan = firstchan_maxchan.astype("int")
-
-    if len(np.unique(firstchan_maxchan)) <= 1:
-        wfs_merge_ref = waveforms_ref[
-            :,
-            :,
-            firstchan_maxchan[0]
-            - n_chan_merge // 2 : firstchan_maxchan[0]
-            + n_chan_merge // 2,
-        ]
-    else:
-        wfs_merge_ref = np.zeros(
-            (
-                waveforms_ref.shape[0],
-                waveforms_ref.shape[1],
-                n_chan_merge,
-            )
-        )
-        for j in range(waveforms_ref.shape[0]):
-            wfs_merge_ref[j] = waveforms_ref[
-                j,
-                :,
-                firstchan_maxchan[j]
-                - n_chan_merge // 2 : firstchan_maxchan[j]
-                + n_chan_merge // 2,
-            ]
-
-    which = order[np.flatnonzero(labels_updated == unit_bis_reference)]
-    which.sort()
-    #         np.logical_and(
-    #             maxptps > ptp_threshold,
-    #             labels_updated == unit_bis_reference,
-    #         )
-    #     )
-
-    if len(which) < 2:
-        return False, unit_bis_reference, 0
-
-    if len(which) > n_wfs_max:
-        idx = np.random.choice(np.arange(len(which)), n_wfs_max, replace=False)
+    if len(which_bis) > n_wfs_max:
+        idx = rg.choice(np.arange(len(which_bis)), n_wfs_max, replace=False)
         idx.sort()
     else:
-        idx = np.arange(len(which))
+        idx = np.arange(len(which_bis))
+    # load waveforms on n_chan_merge channels
+    max_channels = np.full_like(which_bis[idx], mc)
+    wfs_merge_ref_bis = deconv_extractor.get_waveforms(
+        which_bis[idx],
+        channel_index=merge_channel_index,
+        kind=wfs_kind,
+        max_channels=max_channels,
+    )
 
-    firstchan_maxchan = mc - firstchans[which[idx]]
-
-    firstchan_maxchan = np.maximum(firstchan_maxchan, n_chan_merge // 2)
-    firstchan_maxchan = np.minimum(firstchan_maxchan, C - n_chan_merge // 2)
-    firstchan_maxchan = firstchan_maxchan.astype("int")
-
-    with h5py.File(path_cleaned_wfs_h5, "r") as h5:
-        waveforms_ref_bis = np.empty(
-            (n_wfs_max, *h5[wfs_key].shape[1:]),
-            dtype=h5[wfs_key].dtype,
-        )
-        waveforms_ref_bis = h5[wfs_key][which[idx]]
-    # print(f"{firstchan_maxchan=}, {mc=}, {len(which)=}, {firstchans.shape=}, {firstchan_maxchan.shape=}")
-    if len(np.unique(firstchan_maxchan)) <= 1:
-        wfs_merge_ref_bis = waveforms_ref_bis[
-            :,
-            :,
-            firstchan_maxchan[0]
-            - n_chan_merge // 2 : firstchan_maxchan[0]
-            + n_chan_merge // 2,
-        ]
-    else:
-        wfs_merge_ref_bis = np.zeros(
-            (
-                waveforms_ref_bis.shape[0],
-                waveforms_ref_bis.shape[1],
-                n_chan_merge,
-            )
-        )
-        for j in range(waveforms_ref_bis.shape[0]):
-            wfs_merge_ref_bis[j] = waveforms_ref_bis[
-                j,
-                :,
-                firstchan_maxchan[j]
-                - n_chan_merge // 2 : firstchan_maxchan[j]
-                + n_chan_merge // 2,
-            ]
-
+    # shift according to template trough difference
     if unit_shifted == unit_reference and two_units_shift > 0:
         wfs_merge_ref = wfs_merge_ref[:, two_units_shift:, :]
         wfs_merge_ref_bis = wfs_merge_ref_bis[:, :-two_units_shift, :]
@@ -280,20 +211,12 @@ def check_merge(
         wfs_merge_ref = wfs_merge_ref[:, -two_units_shift:, :]
         wfs_merge_ref_bis = wfs_merge_ref_bis[:, :two_units_shift, :]
 
+    # it's possible that a waveform could have been skipped,
     n_wfs_max = int(
-        min(
-            max_spikes,
-            min(
-                wfs_merge_ref.shape[0],
-                wfs_merge_ref_bis.shape[0],
-            ),
-        )
+        min(max_spikes, wfs_merge_ref.shape[0], wfs_merge_ref_bis.shape[0])
     )
-
-    idx_ref = np.random.choice(
-        wfs_merge_ref.shape[0], n_wfs_max, replace=False
-    )
-    idx_ref_bis = np.random.choice(
+    idx_ref = rg.choice(wfs_merge_ref.shape[0], n_wfs_max, replace=False)
+    idx_ref_bis = rg.choice(
         wfs_merge_ref_bis.shape[0],
         n_wfs_max,
         replace=False,
@@ -340,8 +263,7 @@ def check_merge(
 def merge(
     labels,
     templates,
-    path_cleaned_wfs_h5,
-    firstchans,
+    deconv_extractor,
     geom,
     order=None,
     n_chan_merge=10,
@@ -352,17 +274,19 @@ def merge(
     threshold_diptest=1.0,
     ptp_threshold=4.0,
     max_spikes=500,
-    wfs_key="cleaned_waveforms",
+    wfs_kind="cleaned",
     isi_veto=False,
     spike_times=None,
     contam_ratio_threshold=0.2,
     contam_alpha=0.05,
     isi_nbins=500,
     isi_bin_nsamples=30,
+    seed=0,
 ):
     """
     merge is applied on spikes with ptp > ptp_threshold only
     """
+    rg = np.random.default_rng(seed)
 
     labels_updated = labels.copy()
     n_templates = templates.shape[0]
@@ -402,16 +326,16 @@ def merge(
                     reference_units,
                     templates,
                     n_spikes_templates,
-                    path_cleaned_wfs_h5,
                     labels_updated,
-                    firstchans,
+                    deconv_extractor,
                     tpca,
                     order=order,
                     n_chan_merge=n_chan_merge,
                     max_spikes=max_spikes,
                     threshold_diptest=threshold_diptest,
                     ptp_threshold=ptp_threshold,
-                    wfs_key=wfs_key,
+                    wfs_kind=wfs_kind,
+                    rg=rg,
                 )
 
                 # check isi violation
