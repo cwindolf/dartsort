@@ -31,7 +31,7 @@ def clean_align_and_get_templates(
     n_samples=250,
     spike_length_samples=121,
     trough_offset=42,
-    pbar=False,
+    pbar=True,
     seed=0,
     dtype=np.float32,
 ):
@@ -129,7 +129,7 @@ def clean_align_and_get_templates(
         if abs(shift) > max_shift:
             shift = 0
         if shift != 0:
-            aligned_spike_train[in_unit, 0] -= shift
+            aligned_spike_train[in_unit, 0] += shift
         template_shifts[unit] = shift
 
         # crop aligned template and store it
