@@ -11,6 +11,7 @@ def post_deconv_split_step(
     bin_file,
     geom,
     clean_min_spikes=25,
+    reducer=np.median,
 ):
     # -- load up the deconv result
     with h5py.File(deconv_results_h5) as f:
@@ -40,6 +41,7 @@ def post_deconv_split_step(
         bin_file,
         min_n_spikes=clean_min_spikes,
         pbar=True,
+        reducer=reducer,
     )
 
     # the initial split
@@ -67,12 +69,13 @@ def post_deconv_split_step(
         bin_file,
         min_n_spikes=clean_min_spikes,
         pbar=True,
+        reducer=reducer,
     )
     order = order[reorder]
 
     # clean big
     after_deconv_merge_split.clean_big_clusters(
-        templates, spike_train, maxptps[order], bin_file, geom
+        templates, spike_train, maxptps[order], bin_file, geom, reducer=reducer,
     )
     (
         spike_train,
@@ -85,6 +88,7 @@ def post_deconv_split_step(
         bin_file,
         min_n_spikes=clean_min_spikes,
         pbar=True,
+        reducer=reducer,
     )
     order = order[reorder]
 
@@ -109,6 +113,7 @@ def post_deconv_split_step(
         bin_file,
         min_n_spikes=clean_min_spikes,
         pbar=True,
+        reducer=reducer,
     )
     order = order[reorder]
 
@@ -124,6 +129,7 @@ def post_deconv_merge_step(
     bin_file,
     geom,
     clean_min_spikes=25,
+    reducer=np.median,
 ):
     n_channels = geom.shape[0]
     with h5py.File(deconv_results_h5) as f:
@@ -160,6 +166,7 @@ def post_deconv_merge_step(
         bin_file,
         min_n_spikes=clean_min_spikes,
         pbar=True,
+        reducer=reducer,
     )
     order = order[reorder]
     print("Just after merge...")
@@ -168,7 +175,7 @@ def post_deconv_merge_step(
 
     print("Clean big ")
     n_cleaned = after_deconv_merge_split.clean_big_clusters(
-        templates, spike_train, maxptps[order], bin_file, geom
+        templates, spike_train, maxptps[order], bin_file, geom, reducer=reducer
     )
     print(f"{n_cleaned=}")
     u, c = np.unique(spike_train[:, 1], return_counts=True)
@@ -183,8 +190,9 @@ def post_deconv_merge_step(
         spike_train,
         n_channels,
         bin_file,
-        min_n_spikes=clean_min_spikes,
+        min_n_spikes=0,
         pbar=True,
+        reducer=reducer,
     )
     order = order[reorder]
 
@@ -207,6 +215,7 @@ def post_deconv_merge_step(
         bin_file,
         min_n_spikes=clean_min_spikes,
         pbar=True,
+        reducer=reducer,
     )
     order = order[reorder]
     u, c = np.unique(spike_train[:, 1], return_counts=True)
