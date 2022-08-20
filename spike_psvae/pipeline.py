@@ -122,12 +122,13 @@ def post_deconv_merge_step(
     geom,
     clean_min_spikes=25,
 ):
-    n_channels = geom.shape[0]
-    with h5py.File(deconv_results_h5) as f:
-        maxptps = f["maxptps"][:]
-        firstchans = f["first_channels"][:]
-
     spike_train = spike_train.copy()
+
+    deconv_extractor = extractors.DeconvH5Extractor(
+        deconv_results_h5, bin_file
+    )
+    assert deconv_extractor.spike_train.shape == spike_train.shape
+    n_channels = geom.shape[0]
 
     print("Just before merge...")
     u, c = np.unique(spike_train[:, 1], return_counts=True)
@@ -136,8 +137,7 @@ def post_deconv_merge_step(
     spike_train[:, 1] = after_deconv_merge_split.merge(
         spike_train[:, 1],
         templates,
-        deconv_results_h5,
-        firstchans,
+        deconv_extractor,
         geom,
         order=order,
         spike_times=spike_train[:, 0],
@@ -165,7 +165,7 @@ def post_deconv_merge_step(
 
     print("Clean big ")
     n_cleaned = after_deconv_merge_split.clean_big_clusters(
-        templates, spike_train, maxptps[order], bin_file, geom
+        templates, spike_train, deconv_extractor.ptp[order], bin_file, geom
     )
     print(f"{n_cleaned=}")
     u, c = np.unique(spike_train[:, 1], return_counts=True)
