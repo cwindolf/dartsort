@@ -98,6 +98,7 @@ class Sorting:
                 self.spike_labels,
                 geom,
                 n_samples=template_n_spikes,
+                pbar=True,
             )
         if not unsorted:
             assert self.templates.shape[0] == self.unit_labels.max() + 1
