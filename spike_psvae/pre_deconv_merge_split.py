@@ -412,7 +412,6 @@ def split_clusters(
     return labels_new
 
 
-# %%
 def get_x_z_templates(n_templates, labels, x, z):
     x_z_templates = np.zeros((n_templates, 2))
     for i in range(n_templates):
@@ -421,15 +420,13 @@ def get_x_z_templates(n_templates, labels, x, z):
     return x_z_templates
 
 
-# %%
 def get_n_spikes_templates(n_templates, labels):
-    n_spikes_templates = np.zeros(n_templates)
-    for i in range(n_templates):
-        n_spikes_templates[i] = (labels == i).sum()
+    n_spikes_templates = np.zeros(n_templates, dtype=int)
+    unique, count = np.unique(labels, return_counts=True)
+    n_spikes_templates[unique] = count
     return n_spikes_templates
 
 
-# %%
 def get_templates(
     standardized_path,
     geom_array,
