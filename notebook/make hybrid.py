@@ -470,7 +470,7 @@ for i, in_bin in enumerate(tqdm(in_bins)):
 # # duster
 
 # %%
-# %rm -rf /local/duster/*
+# %rm -rf /tmp/duster/*
 
 # %%
 1
@@ -518,8 +518,8 @@ for i, in_bin in enumerate(tqdm(in_bins)):
                 "--doplot",
                 f"--plotdir={clust_plotdir}",
                 "--tmpdir=/tmp/duster",
-                "--noremoveselfdups",
-                "--usemean",
+                # "--noremoveselfdups",
+                # "--usemean",
             ],
             env=os.environ,
             # stderr=subprocess.DEVNULL,
@@ -553,7 +553,10 @@ print(1)
 #     )
 
 # %%
-# %rm -rf /local/{deconv,duster}/*
+# %rm -rf /tmp/{deconv,duster}/*
+
+# %% [markdown]
+# ## deconv1
 
 # %%
 for i, in_bin in enumerate(tqdm(in_bins)):
@@ -634,6 +637,9 @@ for i, in_bin in enumerate(tqdm(in_bins)):
 # %%
 # %rm -rf /tmp/deconv*
 
+# %%
+## post-deconv1 split merge
+
 # %% tags=[]
 for in_bin in in_bins:
     subject = in_bin.stem.split(".")[0]
@@ -660,6 +666,7 @@ for in_bin in in_bins:
         raw_bin = out_bin
     
     do_extract = not (subject_deconv_dir / "deconv_results.h5").exists()
+    # do_extract = True
     # do_extract = not (subject_deconv_dir / "deconv_results.h5").exists()
     
     if do_extract:
@@ -674,7 +681,7 @@ for in_bin in in_bins:
             save_denoised_waveforms=True,
             n_channels_extract=20,
             n_jobs=13,
-            # device="cpu",
+            device="cpu",
             # scratch_dir=deconv_scratch_dir,
         )
         with timer("copying deconv h5 to output"):
@@ -702,7 +709,8 @@ for in_bin in in_bins:
             deconv_scratch_dir / "deconv_results.h5",
             raw_bin,
             geom,
-            clean_min_spikes=25,
+            clean_min_spikes=0,
+            reducer=np.median,
         )
         
         np.save(subject_deconv_dir / "postdeconv_split_times.npy", spike_train[:, 0])
@@ -727,7 +735,8 @@ for in_bin in in_bins:
             deconv_scratch_dir / "deconv_results.h5",
             raw_bin,
             geom,
-            clean_min_spikes=25,
+            clean_min_spikes=0,
+            reducer=np.median,
         )
         
         np.save(subject_deconv_dir / "postdeconv_merge_times.npy", spike_train[:, 0])
@@ -743,6 +752,9 @@ for in_bin in in_bins:
         if (deconv_scratch_dir / "raw.bin").exists():
             (deconv_scratch_dir / "raw.bin").unlink()
 
+
+# %%
+1
 
 # %%
 for i, in_bin in enumerate(tqdm(in_bins)):
@@ -773,8 +785,8 @@ from spike_psvae import deconvolve
 
 for i, in_bin in enumerate(tqdm(in_bins)):
     subject = in_bin.stem.split(".")[0]
-    # if subject != "DY_018":
-    if subject not in active_dsets:
+    if subject != "DY_018":
+    # if subject not in active_dsets:
         continue
     
     out_bin = out_dir / f"{in_bin.stem}.bin"
@@ -816,7 +828,7 @@ for i, in_bin in enumerate(tqdm(in_bins)):
         threshold=40,
         multi_processing=True,
         cleaned_temps=True,
-        n_processors=12,
+        n_processors=6,
         verbose=False,
         reducer=np.median,
     )
@@ -824,7 +836,7 @@ for i, in_bin in enumerate(tqdm(in_bins)):
 
 
 # %%
-# %rm -rf /local/deconv*
+# %rm -rf /tmp/deconv*
 
 # %% tags=[]
 from spike_psvae import extract_deconv, pipeline
@@ -904,7 +916,7 @@ for in_bin in in_bins:
             deconv_scratch_dir / "deconv_results.h5",
             deconv_scratch_dir / "raw.bin",
             geom,
-            clean_min_spikes=25,
+            clean_min_spikes=0,
         )
         
         np.save(subj_dc2_dir / "postdeconv_cleaned_times.npy", spike_train[:, 0])
