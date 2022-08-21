@@ -41,6 +41,12 @@ from matplotlib import colors
 os.environ["CUDA_VISIBLE_DEVICES"] = ""
 
 # %%
+while not Path(
+    "/mnt/3TB/charlie/hybrid_5min/hybrid_5min_deconv/DY_018/deconv2/postdeconv_cleaned_templates.npy"
+).exists():
+    time.sleep(5*60)
+
+# %%
 from spike_psvae import (
     subtract,
     cluster_utils,
@@ -85,9 +91,10 @@ assert all((hybrid_bin_dir.exists(), hybrid_res_dir.exists(), hybrid_ks_dir.exis
 
 # %%
 subjects = ("DY_018", "CSHL051")
+# subjects = ("CSHL051",)
 
 # %%
-hybrid_fig_dir = Path("/mnt/3TB/charlie/hybrid_5min/figs_8_17_wfsbugfix/")
+hybrid_fig_dir = Path("/mnt/3TB/charlie/hybrid_5min/figs_8_19_b_oldbig")
 hybrid_fig_dir.mkdir(exist_ok=True)
 
 # %%
@@ -144,10 +151,14 @@ hybrid_sortings = {}
 hybrid_comparisons = {}
 for subject in tqdm(subjects):
     print(subject)
-
     # we will populate these dicts
-    hybrid_sortings[subject] = {}
-    hybrid_comparisons[subject] = {}
+    if subject not in hybrid_comparisons:
+        hybrid_sortings[subject] = {}
+        hybrid_comparisons[subject] = {}
+
+# %%
+deconv2 = True
+# deconv2 = False
 
 # %% tags=[]
 for subject in tqdm(subjects):
@@ -295,7 +306,7 @@ for subject in tqdm(subjects):
     
     # deconv2
     name = "Deconv2"
-    if name not in hybrid_comparisons[subject]:
+    if deconv2 and name not in hybrid_comparisons[subject]:
         print("//", name)
         deconv2_st = np.load(hybrid_deconv_dir / subject / "deconv2/spike_train.npy")
         with h5py.File(hybrid_deconv_dir / subject / "deconv2/deconv_results.h5") as h5:
@@ -314,7 +325,7 @@ for subject in tqdm(subjects):
         )
     
     name = "Deconv2-Cleaned"
-    if name not in hybrid_comparisons[subject]:
+    if deconv2 and name not in hybrid_comparisons[subject]:
         print("//", name)
         samples = np.load(hybrid_deconv_dir / subject / "deconv2/postdeconv_cleaned_times.npy")
         labels = np.load(hybrid_deconv_dir / subject / "deconv2/postdeconv_cleaned_labels.npy")
@@ -681,12 +692,12 @@ outdir.mkdir(exist_ok=True)
 def job(hybrid_comparison, subject, gt_unit):
     import warnings
     with warnings.catch_warnings():
-        # try:
-        fig, gt_ptp, acc = make_diagnostic_plot(hybrid_comparison, gt_unit)
-        fig.savefig(outdir / f"ptp{gt_ptp:05.2f}_acc{acc}_{subject}_unit{gt_unit:02d}.png")
-        plt.close(fig)
-        # except ValueError as e:
-            # print(e)
+        try:
+            fig, gt_ptp, acc = make_diagnostic_plot(hybrid_comparison, gt_unit)
+            fig.savefig(outdir / f"ptp{gt_ptp:05.2f}_acc{acc}_{subject}_unit{gt_unit:02d}.png")
+            plt.close(fig)
+        except ValueError as e:
+            print(e)
 
 jobs = []
 for subject, comparisons in hybrid_comparisons.items():
@@ -705,12 +716,12 @@ outdir.mkdir(exist_ok=True)
 def job(hybrid_comparison, subject, gt_unit):
     import warnings
     with warnings.catch_warnings():
-        # try:
-        fig, gt_ptp, acc = make_diagnostic_plot(hybrid_comparison, gt_unit)
-        fig.savefig(outdir / f"ptp{gt_ptp:05.2f}_acc{acc}_{subject}_unit{gt_unit:02d}.png")
-        plt.close(fig)
-        # except ValueError as e:
-            # print(e)
+        try:
+            fig, gt_ptp, acc = make_diagnostic_plot(hybrid_comparison, gt_unit)
+            fig.savefig(outdir / f"ptp{gt_ptp:05.2f}_acc{acc}_{subject}_unit{gt_unit:02d}.png")
+            plt.close(fig)
+        except ValueError as e:
+            print(e)
 
 jobs = []
 for subject, comparisons in hybrid_comparisons.items():
@@ -745,6 +756,42 @@ failed = 0
 for res in Parallel(13)(tqdm(jobs, total=len(jobs))):
     failed += res
 print(failed)
+
+# %%
+
+# %%
+
+# %%
+
+# %%
+
+# %%
+
+# %%
+
+# %%
+
+# %%
+
+# %%
+
+# %%
+
+# %%
+
+# %%
+
+# %%
+
+# %%
+
+# %%
+
+# %%
+
+# %%
+
+# %%
 
 # %%
 
