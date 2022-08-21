@@ -106,8 +106,6 @@ def channel_subset_by_index(
     fill_value=np.nan,
 ):
     """Restrict waveforms to channels in new channel index."""
-    assert channel_index_is_subset(channel_index_new, channel_index_full)
-
     # boolean mask of same shape as channel_index_full
     n_channels = channel_index_full.shape[0]
     channel_index_mask = np.array(
