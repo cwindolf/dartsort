@@ -103,8 +103,8 @@ def check_merge(
     labels_updated,
     deconv_extractor,
     tpca,
+    merge_channel_index,
     order=None,
-    n_chan_merge=10,
     max_spikes=500,
     threshold_diptest=1.0,
     ptp_threshold=4,
@@ -129,10 +129,6 @@ def check_merge(
 
     if order is None:
         order = np.arange(len(labels_updated))
-
-    merge_channel_index = make_contiguous_channel_index(
-        deconv_extractor.channel_index.shape[0], n_neighbors=n_chan_merge
-    )
 
     # ALIGN BASED ON MAX PTP TEMPLATE MC
     # the template with the larger MC is not shifted, so
@@ -174,13 +170,13 @@ def check_merge(
         idx.sort()
     else:
         idx = np.arange(len(which))
+
     # load waveforms on n_chan_merge channels
-    max_channels = np.full_like(which[idx], mc)
     wfs_merge_ref = deconv_extractor.get_waveforms(
         which[idx],
         channel_index=merge_channel_index,
         kind=wfs_kind,
-        max_channels=max_channels,
+        channels=merge_channel_index[mc],
     )
 
     if len(which_bis) > n_wfs_max:
@@ -188,13 +184,13 @@ def check_merge(
         idx.sort()
     else:
         idx = np.arange(len(which_bis))
+
     # load waveforms on n_chan_merge channels
-    max_channels = np.full_like(which_bis[idx], mc)
     wfs_merge_ref_bis = deconv_extractor.get_waveforms(
         which_bis[idx],
         channel_index=merge_channel_index,
         kind=wfs_kind,
-        max_channels=max_channels,
+        channels=merge_channel_index[mc],
     )
 
     # shift according to template trough difference
@@ -288,6 +284,10 @@ def merge(
     """
     rg = np.random.default_rng(seed)
 
+    merge_channel_index = make_contiguous_channel_index(
+        deconv_extractor.channel_index.shape[0], n_neighbors=n_chan_merge
+    )
+
     labels_updated = labels.copy()
     n_templates = templates.shape[0]
     n_spikes_templates = pre_deconv_merge_split.get_n_spikes_templates(
@@ -329,8 +329,8 @@ def merge(
                     labels_updated,
                     deconv_extractor,
                     tpca,
+                    merge_channel_index,
                     order=order,
-                    n_chan_merge=n_chan_merge,
                     max_spikes=max_spikes,
                     threshold_diptest=threshold_diptest,
                     ptp_threshold=ptp_threshold,
