@@ -1137,7 +1137,7 @@ def detect_and_subtract(
         **kwargs,
     )
     if not spike_index.size:
-        return [], [], raw, []
+        return np.empty(0), np.empty(0), raw, np.empty(0)
 
     # -- read waveforms
     padded_raw = np.pad(raw, [(0, 0), (0, 1)], constant_values=np.nan)
