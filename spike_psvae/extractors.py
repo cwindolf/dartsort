@@ -218,12 +218,16 @@ class DeconvH5Extractor(BaseExtractor):
     """In case you already ran the full `extract_deconv`."""
 
     def __init__(
-        self, deconv_results_h5, raw_bin, residual_bin=None, tpca=None, device=None, seed=0,
+        self, deconv_results_h5, raw_bin, spike_train=None, templates=None, residual_bin=None, tpca=None, device=None, seed=0,
     ):
         super().__init__(seed)
         self.deconv_results_h5 = deconv_results_h5
         self.residual_bin = residual_bin
         self.raw_bin = raw_bin
+        
+        # these are optional, since they aren't necessary for just loading waveforms
+        self.spike_train = spike_train
+        self.templates = templates
 
         # extract some of the things that fit in memory, but not
         # the waveforms
@@ -231,17 +235,16 @@ class DeconvH5Extractor(BaseExtractor):
             self.channel_index = h5["channel_index"][:]
             self.localizations = h5["localizations"][:]
             self.ptp = h5["maxptps"][:]
-            self.templates = h5["templates"][:]
+            self.templates_up = h5["templates_up"][:]
             self.templates_up_loc = h5["templates_loc"][:]
             self.templates_up_maxchans = h5["templates_up_maxchans"][:]
-            self.spike_train = h5["spike_train"][:]
             self.spike_train_up = h5["spike_train_up"][:]
             self.max_channels = h5["spike_index_up"][:, 1]
 
             assert "cleaned_waveforms" in h5
             self.has_denoised = "denoised_waveforms" in h5
 
-        self.spike_length_samples = self.templates.shape[1]
+        self.spike_length_samples = self.templates_up.shape[1]
         self.denoiser = None
         if device is None:
             self.device = torch.device(
@@ -252,9 +255,6 @@ class DeconvH5Extractor(BaseExtractor):
         self.tpca = tpca
 
     def _get_subtracted_waveforms(self, indices, channel_index):
-        assert waveform_utils.channel_index_is_subset(
-            channel_index, self.channel_index
-        )
         temp_wfs_loc = self.templates_up_loc[self.spike_train_up[indices, 1]]
 
         if channel_index.shape == self.channel_index.shape:
@@ -276,9 +276,6 @@ class DeconvH5Extractor(BaseExtractor):
 
         # are we loading fewer chans than stored in h5?
         load_subset = True
-        assert waveform_utils.channel_index_is_subset(
-            channel_index, self.channel_index
-        )
         if channel_index.shape == self.channel_index.shape:
             if (channel_index == self.channel_index).all():
                 return False
@@ -296,12 +293,13 @@ class DeconvH5Extractor(BaseExtractor):
 
             for start in range(0, indices.size, batch_size):
                 end = min(indices.size, start + batch_size)
-                wfs = wfs_dset[indices[start:end]]
+                ixs = indices[start:end]
+                wfs = wfs_dset[ixs]
 
                 if load_subset:
                     wfs = waveform_utils.channel_subset_by_index(
                         wfs,
-                        self.max_channels[indices],
+                        self.max_channels[ixs],
                         self.channel_index,
                         channel_index,
                     )
@@ -312,7 +310,7 @@ class DeconvH5Extractor(BaseExtractor):
 
     def get_waveforms(self, indices, channel_index=None, kind="cleaned", channels=None):
         assert kind in ("raw", "subtracted", "cleaned", "denoised")
-        trough_times = self.spike_train[indices, 0]
+        trough_times = self.spike_train_up[indices, 0]
         max_channels = self.max_channels[indices]
 
         # user can supply their own set of channels

@@ -25,7 +25,7 @@ def post_deconv_split_step(
     deconv_extractor = extractors.DeconvH5Extractor(
         deconv_results_h5, bin_file
     )
-    assert deconv_extractor.spike_train.shape == spike_train.shape
+    assert deconv_extractor.spike_train_up.shape == spike_train.shape
 
     # deconv can produce an un-aligned spike train.
     # let's also get rid of units with few spikes.
@@ -48,7 +48,6 @@ def post_deconv_split_step(
         spike_train[:, 1],
         deconv_extractor,
         order=order,
-        wfs_key="denoised_waveforms",
         pc_split_rank=6,
     )
     print("A")
@@ -133,7 +132,7 @@ def post_deconv_merge_step(
     deconv_extractor = extractors.DeconvH5Extractor(
         deconv_results_h5, bin_file
     )
-    assert deconv_extractor.spike_train.shape == spike_train.shape
+    assert deconv_extractor.spike_train_up.shape == spike_train.shape
     n_channels = geom.shape[0]
 
     print("Just before merge...")
@@ -148,7 +147,6 @@ def post_deconv_merge_step(
         order=order,
         spike_times=spike_train[:, 0],
         n_chan_merge=10,
-        wfs_key="cleaned_waveforms",
         tpca=PCA(6),
         # isi_veto=True,
     )
