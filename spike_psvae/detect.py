@@ -79,7 +79,7 @@ def detect_and_deduplicate(
             spike_index = np.c_[times.cpu().numpy(), chans.cpu().numpy()]
             spike_index[:, 0] -= buffer_size
         else:
-            return np.array([]), np.array([])
+            return np.array([])
 
     if torch.is_tensor(spike_index):
         spike_index = spike_index.cpu().numpy()
