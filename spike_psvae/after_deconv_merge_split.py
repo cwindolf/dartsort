@@ -32,7 +32,7 @@ def split(
     if order is None:
         order = np.arange(len(labels_deconv))
 
-    for cluster_id in tqdm(np.unique(labels_deconv)):
+    for cluster_id in tqdm(np.unique(labels_deconv), desc="Split"):
         which = np.flatnonzero(labels_deconv == cluster_id)
         # np.flatnonzero(np.logical_and(
         #     labels_deconv == cluster_id, maxptps > ptp_threshold
@@ -143,6 +143,8 @@ def check_merge(
     two_units_shift = (
         1 if unit_shifted == unit_reference else -1
     ) * template_pair_shift
+    # print(mc, unit_mc, unit_bis_mc)
+    # print(merge_channel_index[mc], deconv_extractor.channel_index[unit_mc], deconv_extractor.channel_index[unit_bis_mc])
 
     n_wfs_max = int(
         min(
@@ -171,12 +173,14 @@ def check_merge(
         idx = np.arange(len(which))
 
     # load waveforms on n_chan_merge channels
+    # print("load")
     wfs_merge_ref = deconv_extractor.get_waveforms(
         which[idx],
-        channel_index=merge_channel_index,
         kind=wfs_kind,
         channels=merge_channel_index[mc],
     )
+    if np.isnan(wfs_merge_ref).any():
+        return False, unit_bis_reference, 0
 
     if len(which_bis) > n_wfs_max:
         idx = rg.choice(np.arange(len(which_bis)), n_wfs_max, replace=False)
@@ -185,12 +189,14 @@ def check_merge(
         idx = np.arange(len(which_bis))
 
     # load waveforms on n_chan_merge channels
+    # print("load bis")
     wfs_merge_ref_bis = deconv_extractor.get_waveforms(
         which_bis[idx],
-        channel_index=merge_channel_index,
         kind=wfs_kind,
         channels=merge_channel_index[mc],
     )
+    if np.isnan(wfs_merge_ref_bis).any():
+        return False, unit_bis_reference, 0
 
     # shift according to template trough difference
     if unit_shifted == unit_reference and two_units_shift > 0:

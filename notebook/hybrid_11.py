@@ -41,12 +41,6 @@ from matplotlib import colors
 os.environ["CUDA_VISIBLE_DEVICES"] = ""
 
 # %%
-while not Path(
-    "/mnt/3TB/charlie/hybrid_5min/hybrid_5min_deconv/DY_018/deconv2/postdeconv_cleaned_templates.npy"
-).exists():
-    time.sleep(5*60)
-
-# %%
 from spike_psvae import (
     subtract,
     cluster_utils,
@@ -94,7 +88,7 @@ subjects = ("DY_018", "CSHL051")
 # subjects = ("CSHL051",)
 
 # %%
-hybrid_fig_dir = Path("/mnt/3TB/charlie/hybrid_5min/figs_8_19_b_oldbig")
+hybrid_fig_dir = Path("/mnt/3TB/charlie/hybrid_5min/figs_8_22")
 hybrid_fig_dir.mkdir(exist_ok=True)
 
 # %%
