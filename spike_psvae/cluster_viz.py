@@ -64,9 +64,8 @@ def cluster_scatter(
         yk = ys[where]
         color = get_ccolor(k)
         ax.scatter(xk, yk, s=s, color=color, alpha=alpha, marker=".")
-        if k not in excluded_id:
+        if k not in excluded_ids:
             if do_ellipse:
-
                 x_mean, y_mean = xk.mean(), yk.mean()
                 ax.annotate(str(k), (x_mean, y_mean))
                 xycov = np.cov(xk, yk)
