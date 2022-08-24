@@ -66,8 +66,11 @@ def parallel_conv_filter(
 
         pairwise_conv_array.append(pairwise_conv)
 
-    with open(deconv_dir + "/temp_temp_chunk_" + str(proc_index) + ".pkl", "wb") as f:
+    with open(
+        deconv_dir + "/temp_temp_chunk_" + str(proc_index) + ".pkl", "wb"
+    ) as f:
         pickle.dump(pairwise_conv_array, f)
+
 
 def _parallel_conv_filter(args):
     return parallel_conv_filter(*args)
@@ -342,7 +345,6 @@ class MatchPursuit_objectiveUpsample(object):
             spatial=self.spatial,
         )
 
-
     def pairwise_filter_conv(self):
         # Cat: TODO: this may still crash memory in some cases; can split into additional bits
         units = np.array_split(np.unique(self.up_up_map), self.n_processors)
@@ -498,7 +500,7 @@ class MatchPursuit_objectiveUpsample(object):
                             repeat(self.n_time),
                             repeat(self.up_factor),
                             repeat(down_sample_idx),
-                        )
+                        ),
                     ),
                     total=len(self.temps.T),
                     desc="get_upsampled_templates",
@@ -581,9 +583,8 @@ class MatchPursuit_objectiveUpsample(object):
         else:
             # the objective is (conv + 1/lambd)^2 / (norm + 1/lambd) - 1/lambd
             # we omit the final -1/lambd since it's ok to work up to a constant
-            self.obj = (
-                np.square(self.conv_result + 1 / self.lambd)
-                / (self.norm + 1 / self.lambd)
+            self.obj = np.square(self.conv_result + 1 / self.lambd) / (
+                self.norm + 1 / self.lambd
             )
 
         # Set indicator to true so that it no longer is run
@@ -653,15 +654,10 @@ class MatchPursuit_objectiveUpsample(object):
     def find_peaks(self):
         """Finds peaks in subtraction differentials of spikes."""
         max_across_temp = np.max(self.obj, axis=0)
-        spike_times = (
-            scipy.signal.argrelmax(
-                max_across_temp[
-                    self.n_time - 1 : self.obj.shape[1] - self.n_time
-                ],
-                order=self.refrac_radius,
-            )[0]
-            + (self.n_time - 1)
-        )
+        spike_times = scipy.signal.argrelmax(
+            max_across_temp[self.n_time - 1 : self.obj.shape[1] - self.n_time],
+            order=self.refrac_radius,
+        )[0] + (self.n_time - 1)
         spike_times = spike_times[
             max_across_temp[spike_times] > self.threshold
         ]
@@ -693,9 +689,8 @@ class MatchPursuit_objectiveUpsample(object):
             scalings = np.ones(len(new_spike_train), dtype=np.float32)
         else:
             scalings = (
-                (self.conv_result[spike_ids, spike_times] + 1 / self.lambd)
-                / (self.norm[spike_ids] + 1 / self.lambd)
-            )
+                self.conv_result[spike_ids, spike_times] + 1 / self.lambd
+            ) / (self.norm[spike_ids] + 1 / self.lambd)
 
         return new_spike_train, scalings, dist_metric[valid_idx]
 
@@ -755,13 +750,12 @@ class MatchPursuit_objectiveUpsample(object):
                 )
                 # now we update the objective just at the changed
                 # indices -- no need to do the whole thing.
-                self.obj[idx] = (
-                    np.square(self.conv_result[idx] + 1 / self.lambd)
-                    / (self.norm[i] + 1 / self.lambd)
-                )
+                self.obj[idx] = np.square(
+                    self.conv_result[idx] + 1 / self.lambd
+                ) / (self.norm[i] + 1 / self.lambd)
 
         self.enforce_refractory(spt)
-        
+
     def _run(self, args):
         # helper for multiprocessing
         return self.run(*args)
@@ -979,6 +973,7 @@ def deconvolution(
     #             templates = np.load(template_path)
 
     fname_spike_train = os.path.join(output_directory, "spike_train.npy")
+    fname_scalings = os.path.join(output_directory, "scalings.npy")
     fname_templates_up = os.path.join(output_directory, "templates_up.npy")
     fname_spike_train_up = os.path.join(output_directory, "spike_train_up.npy")
 
@@ -1039,25 +1034,31 @@ def deconvolution(
             for ctr in trange(len(batch_ids)):
                 mp_object.run([batch_ids[ctr]], [fnames_out[ctr]])
 
-    res = []
+    deconv_st = []
+    deconv_scalings = []
     print("gathering deconvolution results")
     for batch_id in range(mp_object.n_batches):
         fname_out = os.path.join(
             deconv_dir, "seg_{}_deconv.npz".format(str(batch_id).zfill(6))
         )
-        res.append(np.load(fname_out)["spike_train"])
-    res = np.vstack(res)
+        with np.load(fname_out) as d:
+            deconv_st.append(d["spike_train"])
+            deconv_scalings.append(d["scalings"])
+    deconv_st = np.vstack(deconv_st)
+    deconv_scalings = np.vstack(deconv_scalings)
 
-    print("Number of Spikes deconvolved: {}".format(res.shape[0]))
+    print(f"Number of Spikes deconvolved: {deconv_st.shape[0]}")
 
     # get spike train and save
-    spike_train = np.copy(res)
+    spike_train = np.copy(deconv_st)
     # map back to original id
     spike_train[:, 1] = np.int32(spike_train[:, 1] / max_upsample)
     spike_train[:, 0] += trough_offset
     # save
     np.save(fname_spike_train, spike_train)
     print(fname_spike_train, spike_train.shape)
+    np.save(fname_scalings, scalings)
+    print(fname_scalings, scalings.shape)
 
     # get upsampled templates and mapping for computing residual
     (
@@ -1069,7 +1070,7 @@ def deconvolution(
     print(templates_up.transpose(2, 0, 1).shape)
 
     # get upsampled spike train
-    spike_train_up = np.copy(res)
+    spike_train_up = np.copy(deconv_st)
     spike_train_up[:, 1] = deconv_id_sparse_temp_map[spike_train_up[:, 1]]
     spike_train_up[:, 0] += trough_offset
     np.save(fname_spike_train_up, spike_train_up)
@@ -1092,7 +1093,7 @@ def get_templates(
     n_samples=250,
     trough_offset=42,
     reducer=np.median,
-    pbar=False
+    pbar=False,
 ):
 
     n_chans = geom.shape[0]
@@ -1103,7 +1104,9 @@ def get_templates(
         n_templates -= 1
 
     templates = np.empty((n_templates, n_times, n_chans))
-    units = trange(n_templates, desc="Templates") if pbar else range(n_templates)
+    units = (
+        trange(n_templates, desc="Templates") if pbar else range(n_templates)
+    )
     for unit in units:
         spike_times_unit = spike_index[labels == unit, 0]
         which = slice(None)
