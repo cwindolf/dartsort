@@ -73,10 +73,10 @@ class Sorting:
         self.unsorted = unsorted
         self.raw_bin = raw_bin
         self.original_spike_train = np.c_[spike_times, spike_labels]
-        
+
         # see if we can load up expensive stuff from cache
         # this will check if the sorting in the cache uses the same
-        # spike train and raw bin file path, and 
+        # spike train and raw bin file path, and
         cached = False
         if cache_dir and templates is None:
             cached, cached_templates = self.try_to_load_from_cache(cache_dir)
@@ -185,7 +185,7 @@ class Sorting:
                     self.contam_ratios[i],
                     self.contam_p_values[i],
                 ) = pyks_ccg.ccg_metrics(st, st, 500, self.fs / 1000)
-        
+
         if cache_dir and not cached:
             self.save_to_cache(cache_dir)
 
@@ -202,10 +202,10 @@ class Sorting:
             labels_list=self.spike_labels,
             sampling_frequency=self.fs,
         )
-    
+
     # -- caching logic so we don't re-compute templates all the time
     # cache invalidation is based on the spike train!
-    
+
     def try_to_load_from_cache(self, cache_dir):
         my_cache = Path(cache_dir) / self.name_lo
         meta_pkl = my_cache / "meta.pkl"
@@ -216,34 +216,38 @@ class Sorting:
             # no cache saved
             print(f"There is no cache to load for sorting {self.name}")
             return False, None
-        
+
         with open(meta_pkl, "rb") as jar:
             meta = pickle.load(jar)
         cache_bin_file = meta["bin_file"]
         if cache_bin_file != self.raw_bin:
-            print(f"Won't load sorting {self.name} from cache: different binary path")
+            print(
+                f"Won't load sorting {self.name} from cache: different binary path"
+            )
             return False, None
-        
+
         cache_st = np.load(st_npy)
         if not np.array_equal(cache_st, self.original_spike_train):
-            print(f"Won't load sorting {self.name} from cache: different spike train")
+            print(
+                f"Won't load sorting {self.name} from cache: different spike train"
+            )
             return False, None
-        
+
         print(f"Loading sorting {self.name} from cache")
         temps = np.load(temps_npy, allow_pickle=True)
         if temps is None or temps.size <= 1:
             return False, None
-    
+
         return True, temps
-    
+
     def save_to_cache(self, cache_dir):
         my_cache = Path(cache_dir) / self.name_lo
         my_cache.mkdir(parents=True, exist_ok=True)
-        
+
         meta_pkl = my_cache / "meta.pkl"
         st_npy = my_cache / "st.npy"
         temps_npy = my_cache / "temps.npy"
-        
+
         with open(meta_pkl, "wb") as jar:
             pickle.dump(dict(bin_file=self.raw_bin), jar)
         np.save(st_npy, self.original_spike_train)
@@ -315,18 +319,22 @@ class Sorting:
 
     def template_maxchan_vis(self):
         fig, (aa, ab) = plt.subplots(nrows=2, figsize=(6, 7), sharex=True)
-        
-        colors_uniq = cc.m_glasbey_hv(np.arange(len(self.unit_labels)) % len(cc.glasbey_hv))
-        
+
+        colors_uniq = cc.m_glasbey_hv(
+            np.arange(len(self.unit_labels)) % len(cc.glasbey_hv)
+        )
+
         for i, u in enumerate(self.unit_labels):
             aa.plot(
                 self.templates[u, :, self.template_maxchans[u]],
                 color=colors_uniq[i],
                 alpha=0.5,
             )
-        
+
         count_argsort = np.argsort(self.unit_spike_counts)[::-1]
-        colors_spike_count = plt.cm.inferno(np.log10(self.unit_spike_counts[count_argsort]))
+        colors_spike_count = plt.cm.inferno(
+            np.log10(self.unit_spike_counts[count_argsort])
+        )
         for j, i in enumerate(count_argsort):
             u = self.unit_labels[i]
             ab.plot(
@@ -340,7 +348,7 @@ class Sorting:
                     np.log10(self.unit_spike_counts).min(),
                     np.log10(self.unit_spike_counts).max(),
                 ),
-                cmap=plt.cm.inferno
+                cmap=plt.cm.inferno,
             ),
             ax=ab,
             label="log10 count",
@@ -356,7 +364,13 @@ class Sorting:
     def cleaned_temp_vis(self, unit, nchans=20):
         in_unit = np.flatnonzero(self.spike_train[:, 1] == unit)
         unit_st = np.c_[self.spike_train[unit, 0], np.zeros_like(in_unit)]
-        templates, snrs, raw_templates, cleaned_templates, extra = get_templates(
+        (
+            templates,
+            snrs,
+            raw_templates,
+            cleaned_templates,
+            extra,
+        ) = get_templates(
             unit_st,
             self.geom,
             self.raw_bin,
@@ -381,7 +395,9 @@ class Sorting:
         cleaned_temp = cleaned_templates[0]
 
         # get on fewer chans
-        ci = waveform_utils.make_contiguous_channel_index(self.geom.shape[0], nchans)
+        ci = waveform_utils.make_contiguous_channel_index(
+            self.geom.shape[0], nchans
+        )
         tmc = temp.ptp(0).argmax()
         temp_loc = temp[:, ci[tmc]]
         raw_temp_loc = raw_temp[:, ci[tmc]]
@@ -394,7 +410,12 @@ class Sorting:
             raw_temp_loc, tmc, ci, self.geom, max_abs_amp=amp, color="gray"
         )
         cl_lines = cluster_viz_index.pgeom(
-            cleaned_temp_loc, tmc, ci, self.geom, max_abs_amp=amp, color="green"
+            cleaned_temp_loc,
+            tmc,
+            ci,
+            self.geom,
+            max_abs_amp=amp,
+            color="green",
         )
         lines = cluster_viz_index.pgeom(
             temp_loc, tmc, ci, self.geom, max_abs_amp=amp, color="k"
@@ -402,7 +423,7 @@ class Sorting:
         ax.legend(
             (raw_lines[0], cl_lines[0], lines[0]),
             ("raw", "denoised", "final"),
-            fancybox=False
+            fancybox=False,
         )
         ax.set_xticks([])
         ax.set_yticks([])
