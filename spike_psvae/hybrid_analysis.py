@@ -15,6 +15,8 @@ from scipy.optimize import least_squares
 from scipy.spatial.distance import cdist
 import seaborn as sns
 from tqdm.auto import tqdm
+from pathlib import Path
+import pickle
 
 from spikeinterface.extractors import NumpySorting
 from spikeinterface.comparison import compare_sorter_to_ground_truth
@@ -55,6 +57,7 @@ class Sorting:
         fs=30_000,
         n_close_units=3,
         template_n_spikes=250,
+        cache_dir=None,
     ):
         n_spikes_full = spike_labels.shape[0]
         assert spike_labels.shape == spike_times.shape == (n_spikes_full,)
@@ -66,25 +69,32 @@ class Sorting:
         self.name_lo = re.sub("[^a-z0-9]+", "_", name.lower())
         self.fs = fs
         self.n_close_units = n_close_units
+        self.unsorted = unsorted
+        self.raw_bin = raw_bin
+        self.original_spike_train = np.c_[spike_times, spike_labels]
+        
+        # see if we can load up expensive stuff from cache
+        # this will check if the sorting in the cache uses the same
+        # spike train and raw bin file path, and 
+        cached = False
+        if cache_dir and templates is None:
+            cached, cached_templates = self.try_to_load_from_cache(cache_dir)
+            templates = cached_templates if cached else templates
 
         which = np.flatnonzero(spike_labels >= 0)
         which = which[np.argsort(spike_times[which])]
 
-        self.unsorted = unsorted
-        self.raw_bin = raw_bin
         self.spike_times = spike_times[which]
         self.spike_labels = spike_labels[which]
         self.unit_labels, self.unit_spike_counts = np.unique(
             self.spike_labels, return_counts=True
         )
+        full_spike_counts = np.zeros(self.unit_labels.max() + 1, dtype=int)
+        full_spike_counts[self.unit_labels] = self.unit_spike_counts
         self.unit_firing_rates = self.unit_spike_counts / T_sec
         self.contiguous_labels = (
             self.unit_labels.size == self.unit_labels.max() + 1
         )
-        # Issue with localization of empty template
-        assert (
-            self.contiguous_labels
-        ), "Not having contiguous labels not supported for now."
 
         self.templates = templates
         if templates is None and not unsorted:
@@ -103,21 +113,27 @@ class Sorting:
                 pbar=True,
             )
         if not unsorted:
-            assert self.templates.shape[0] == self.unit_labels.max() + 1
+            assert self.templates.shape[0] >= self.unit_labels.max() + 1
 
         if self.templates is not None:
             self.template_ptps = self.templates.ptp(1)
             self.template_maxptps = self.template_ptps.max(1)
             self.template_maxchans = self.template_ptps.argmax(1)
+            which_to_localize = self.unit_spike_counts > 0
             self.template_locs = localize_index.localize_ptps_index(
-                self.template_ptps,
+                self.template_ptps[full_spike_counts > 0],
                 geom,
-                self.template_maxchans,
+                self.template_maxchans[full_spike_counts > 0],
                 np.stack([np.arange(len(geom))] * len(geom), axis=0),
                 n_channels=20,
                 n_workers=None,
                 pbar=True,
             )
+            self.template_locs = list(self.template_locs)
+            for i, loc in enumerate(self.template_locs):
+                loc_ = np.zeros_like(self.template_maxptps)
+                loc_[full_spike_counts > 0] = loc
+                self.template_locs[i] = loc_
 
             self.template_xzptp = np.c_[
                 self.template_locs[0],
@@ -168,6 +184,9 @@ class Sorting:
                     self.contam_ratios[i],
                     self.contam_p_values[i],
                 ) = pyks_ccg.ccg_metrics(st, st, 500, self.fs / 1000)
+        
+        if cache_dir and not cached:
+            self.save_to_cache(cache_dir)
 
     def get_unit_spike_train(self, unit):
         return self.spike_times[self.spike_labels == unit]
@@ -182,6 +201,49 @@ class Sorting:
             labels_list=self.spike_labels,
             sampling_frequency=self.fs,
         )
+    
+    def try_to_load_from_cache(self, cache_dir):
+        my_cache = Path(cache_dir) / self.name_lo
+        meta_pkl = my_cache / "meta.pkl"
+        st_npy = my_cache / "st.npy"
+        temps_npy = my_cache / "temps.npy"
+        paths = [my_cache, meta_pkl, st_npy, temps_npy]
+        if not all(p.exists() for p in paths):
+            # no cache saved
+            print(f"There is no cache to load for sorting {self.name}")
+            return False, None
+        
+        with open(meta_pkl, "rb") as jar:
+            meta = pickle.load(jar)
+        cache_bin_file = meta["bin_file"]
+        if cache_bin_file != self.raw_bin:
+            print(f"Won't load sorting {self.name} from cache: different binary path")
+            return False, None
+        
+        cache_st = np.load(st_npy)
+        if not np.array_equal(cache_st, self.original_spike_train):
+            print(f"Won't load sorting {self.name} from cache: different spike train")
+            return False, None
+        
+        print(f"Loading sorting {self.name} from cache")
+        temps = np.load(temps_npy, allow_pickle=True)
+        if temps is None or temps.size <= 1:
+            return False, None
+    
+        return True, temps
+    
+    def save_to_cache(self, cache_dir):
+        my_cache = Path(cache_dir) / self.name_lo
+        my_cache.mkdir(parents=True, exist_ok=True)
+        
+        meta_pkl = my_cache / "meta.pkl"
+        st_npy = my_cache / "st.npy"
+        temps_npy = my_cache / "temps.npy"
+        
+        with open(meta_pkl, "wb") as jar:
+            pickle.dump(dict(bin_file=self.raw_bin), jar)
+        np.save(st_npy, self.original_spike_train)
+        np.save(temps_npy, self.templates)
 
     def array_scatter(
         self,
