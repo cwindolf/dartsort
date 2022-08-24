@@ -757,9 +757,6 @@ for in_bin in in_bins:
 
 
 # %%
-1
-
-# %%
 for i, in_bin in enumerate(tqdm(in_bins)):
     subject = in_bin.stem.split(".")[0]
     # if subject != "DY_018":
@@ -788,7 +785,8 @@ from spike_psvae import deconvolve
 
 for i, in_bin in enumerate(tqdm(in_bins)):
     subject = in_bin.stem.split(".")[0]
-    if subject != "DY_018":
+    # if subject != "DY_018":
+    if subject != "CSHL051":
     # if subject not in active_dsets:
         continue
     
@@ -831,7 +829,7 @@ for i, in_bin in enumerate(tqdm(in_bins)):
         threshold=40,
         multi_processing=True,
         cleaned_temps=True,
-        n_processors=6,
+        n_processors=2,
         verbose=False,
         reducer=np.median,
     )
