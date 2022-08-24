@@ -634,7 +634,7 @@ class MatchPursuit_objectiveUpsample(object):
         # we recompute the objective differently now in subtraction
         if not self.no_amplitude_scaling:
             self.conv_result[unit_ids[invalid_idx], turn_off_idx] = -np.inf
-        
+
         valid_idx = np.flatnonzero(np.logical_not(invalid_idx))
         peak_window = peak_window[:, valid_idx]
         if peak_window.shape[1] == 0:
@@ -794,9 +794,7 @@ class MatchPursuit_objectiveUpsample(object):
         if load_end == self.end_sample:
             pad_right = self.buffer - (self.end_sample - s_end)
         if pad_left != 0 or pad_right != 0:
-            data = np.pad(
-                data, [(pad_left, pad_right), (0, 0)], mode="edge"
-            )
+            data = np.pad(data, [(pad_left, pad_right), (0, 0)], mode="edge")
         assert data.shape == (
             2 * self.buffer + s_end - s_start,
             self.n_chan,
@@ -826,12 +824,8 @@ class MatchPursuit_objectiveUpsample(object):
             if len(spt) == 0:
                 break
 
-            self.dec_spike_train = np.append(
-                self.dec_spike_train, spt, axis=0
-            )
-            self.dec_scalings = np.append(
-                self.dec_scalings, scalings, axis=0
-            )
+            self.dec_spike_train = np.append(self.dec_spike_train, spt, axis=0)
+            self.dec_scalings = np.append(self.dec_scalings, scalings, axis=0)
 
             self.subtract_spike_train(spt, scalings)
 
@@ -871,8 +865,7 @@ class MatchPursuit_objectiveUpsample(object):
         idx = np.where(
             np.logical_and(
                 self.dec_spike_train[:, 0] >= self.buffer,
-                self.dec_spike_train[:, 0]
-                < self.data.shape[0] - subtract_t,
+                self.dec_spike_train[:, 0] < self.data.shape[0] - subtract_t,
             )
         )[0]
         self.dec_spike_train = self.dec_spike_train[idx]
@@ -892,7 +885,9 @@ class MatchPursuit_objectiveUpsample(object):
     def run(self, batch_ids, fnames_out):
         # loop over each assigned segment
         self.load_saved_state()
-        for batch_id, fname_out in zip(batch_ids, fnames_out):
+        for batch_id, fname_out in tqdm(
+            zip(batch_ids, fnames_out), total=len(batch_ids)
+        ):
             self.run_batch(batch_id, fname_out)
 
 
@@ -1025,12 +1020,11 @@ def deconvolution(
                         zip(batch_ids, fnames_out),
                     ),
                     total=len(batch_ids),
-                    desc="run",
+                    desc="run template matching",
                 ):
                     pass
         else:
-            for ctr in trange(len(batch_ids)):
-                mp_object.run_batch(batch_ids[ctr], fnames_out[ctr])
+            mp_object.run(batch_ids, fnames_out)
 
     deconv_st = []
     deconv_scalings = []
