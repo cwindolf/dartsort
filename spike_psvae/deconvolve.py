@@ -757,139 +757,143 @@ class MatchPursuit_objectiveUpsample(object):
 
         self.enforce_refractory(spt)
 
-    def _run(self, args):
+    def _run_batch(self, args):
         # helper for multiprocessing
-        return self.run(*args)
+        return self.run_batch(*args)
+
+    def load_saved_state(self):
+        # helper -- initializer for threads
+        self.pairwise_conv = np.load(
+            os.path.join(self.deconv_dir, "pairwise_conv.npy"),
+            allow_pickle=True,
+        )
+
+    def run_batch(batch_id, fname_out):
+        start_time = time.time()
+
+        # ********* run deconv ************
+        # read raw data for segment using idx_list vals
+        # load raw data with buffer
+
+        s_start = self.start_sample + batch_id * self.batch_len_samples
+        s_end = min(self.end_sample, s_start + self.batch_len_samples)
+        load_start = max(self.start_sample, s_start - self.buffer)
+        load_end = min(self.end_sample, s_end + self.buffer)
+        data = read_data(
+            self.standardized_bin,
+            np.float32,
+            load_start,
+            load_end,
+            self.n_chan,
+        )
+
+        # 0 padding if we were at the edge of the data
+        pad_left = pad_right = 0
+        if load_start == self.start_sample:
+            pad_left = self.buffer
+        if load_end == self.end_sample:
+            pad_right = self.buffer - (self.end_sample - s_end)
+        if pad_left != 0 or pad_right != 0:
+            data = np.pad(
+                data, [(pad_left, pad_right), (0, 0)], mode="edge"
+            )
+        assert data.shape == (
+            2 * self.buffer + s_end - s_start,
+            self.n_chan,
+        )
+
+        self.data = data
+        self.data_len = self.data.shape[0]
+
+        # update data
+        self.update_data()
+
+        # compute objective function
+        start_time = time.time()
+        self.compute_objective()
+        if self.verbose:
+            print(
+                "deconv seg {0}, objective matrix took: {1:.2f}".format(
+                    batch_id, time.time() - start_time
+                )
+            )
+
+        ctr = 0
+        tot_max = np.inf
+        while tot_max > self.threshold and ctr < self.max_iter:
+            spt, scalings, dist_met = self.find_peaks()
+
+            if len(spt) == 0:
+                break
+
+            self.dec_spike_train = np.append(
+                self.dec_spike_train, spt, axis=0
+            )
+            self.dec_scalings = np.append(
+                self.dec_scalings, scalings, axis=0
+            )
+
+            self.subtract_spike_train(spt, scalings)
+
+            self.dist_metric = np.append(self.dist_metric, dist_met)
+
+            if self.verbose:
+                print(
+                    "Iteration {0} Found {1} spikes with {2:.2f} energy reduction.".format(
+                        ctr, spt.shape[0], np.sum(dist_met)
+                    )
+                )
+
+            ctr += 1
+
+        if self.verbose:
+            print(
+                "deconv seg {0}, # iter: {1}, tot_spikes: {2}, tot_time: {3:.2f}".format(
+                    batch_id,
+                    ctr,
+                    self.dec_spike_train.shape[0],
+                    time.time() - start_time,
+                )
+            )
+
+        # ******** ADJUST SPIKE TIMES TO REMOVE BUFFER AND OFSETS *******
+        # order spike times
+        idx = np.argsort(self.dec_spike_train[:, 0])
+        self.dec_spike_train = self.dec_spike_train[idx]
+        self.dec_scalings = self.dec_scalings[idx]
+
+        # find spikes inside data block, i.e. outside buffers
+        if pad_right > 0:  # end of the recording (TODO: need to check)
+            subtract_t = self.buffer + self.n_time
+        else:
+            subtract_t = self.buffer
+
+        idx = np.where(
+            np.logical_and(
+                self.dec_spike_train[:, 0] >= self.buffer,
+                self.dec_spike_train[:, 0]
+                < self.data.shape[0] - subtract_t,
+            )
+        )[0]
+        self.dec_spike_train = self.dec_spike_train[idx]
+        self.dec_scalings = self.dec_scalings[idx]
+
+        # offset spikes to start of index
+        batch_offset = s_start - self.buffer
+        self.dec_spike_train[:, 0] += batch_offset
+
+        np.savez(
+            fname_out,
+            spike_train=self.dec_spike_train,
+            scalings=self.dec_scalings,
+            dist_metric=self.dist_metric,
+        )
 
     def run(self, batch_ids, fnames_out):
-
         # loop over each assigned segment
+        self.load_saved_state()
         for batch_id, fname_out in zip(batch_ids, fnames_out):
-            # load pairwise conv filter only once per core:
-            self.pairwise_conv = np.load(
-                os.path.join(self.deconv_dir, "pairwise_conv.npy"),
-                allow_pickle=True,
-            )
-
-            start_time = time.time()
-
-            # ********* run deconv ************
-            # read raw data for segment using idx_list vals
-            # load raw data with buffer
-
-            s_start = self.start_sample + batch_id * self.batch_len_samples
-            s_end = min(self.end_sample, s_start + self.batch_len_samples)
-            load_start = max(self.start_sample, s_start - self.buffer)
-            load_end = min(self.end_sample, s_end + self.buffer)
-            data = read_data(
-                self.standardized_bin,
-                np.float32,
-                load_start,
-                load_end,
-                self.n_chan,
-            )
-
-            # 0 padding if we were at the edge of the data
-            pad_left = pad_right = 0
-            if load_start == self.start_sample:
-                pad_left = self.buffer
-            if load_end == self.end_sample:
-                pad_right = self.buffer - (self.end_sample - s_end)
-            if pad_left != 0 or pad_right != 0:
-                data = np.pad(
-                    data, [(pad_left, pad_right), (0, 0)], mode="edge"
-                )
-            assert data.shape == (
-                2 * self.buffer + s_end - s_start,
-                self.n_chan,
-            )
-
-            self.data = data
-            self.data_len = self.data.shape[0]
-
-            # update data
-            self.update_data()
-
-            # compute objective function
-            start_time = time.time()
-            self.compute_objective()
-            if self.verbose:
-                print(
-                    "deconv seg {0}, objective matrix took: {1:.2f}".format(
-                        batch_id, time.time() - start_time
-                    )
-                )
-
-            ctr = 0
-            tot_max = np.inf
-            while tot_max > self.threshold and ctr < self.max_iter:
-                spt, scalings, dist_met = self.find_peaks()
-
-                if len(spt) == 0:
-                    break
-
-                self.dec_spike_train = np.append(
-                    self.dec_spike_train, spt, axis=0
-                )
-                self.dec_scalings = np.append(
-                    self.dec_scalings, scalings, axis=0
-                )
-
-                self.subtract_spike_train(spt, scalings)
-
-                self.dist_metric = np.append(self.dist_metric, dist_met)
-
-                if self.verbose:
-                    print(
-                        "Iteration {0} Found {1} spikes with {2:.2f} energy reduction.".format(
-                            ctr, spt.shape[0], np.sum(dist_met)
-                        )
-                    )
-
-                ctr += 1
-
-            if self.verbose:
-                print(
-                    "deconv seg {0}, # iter: {1}, tot_spikes: {2}, tot_time: {3:.2f}".format(
-                        batch_id,
-                        ctr,
-                        self.dec_spike_train.shape[0],
-                        time.time() - start_time,
-                    )
-                )
-
-            # ******** ADJUST SPIKE TIMES TO REMOVE BUFFER AND OFSETS *******
-            # order spike times
-            idx = np.argsort(self.dec_spike_train[:, 0])
-            self.dec_spike_train = self.dec_spike_train[idx]
-            self.dec_scalings = self.dec_scalings[idx]
-
-            # find spikes inside data block, i.e. outside buffers
-            if pad_right > 0:  # end of the recording (TODO: need to check)
-                subtract_t = self.buffer + self.n_time
-            else:
-                subtract_t = self.buffer
-
-            idx = np.where(
-                np.logical_and(
-                    self.dec_spike_train[:, 0] >= self.buffer,
-                    self.dec_spike_train[:, 0]
-                    < self.data.shape[0] - subtract_t,
-                )
-            )[0]
-            self.dec_spike_train = self.dec_spike_train[idx]
-            self.dec_scalings = self.dec_scalings[idx]
-
-            # offset spikes to start of index
-            batch_offset = s_start - self.buffer
-            self.dec_spike_train[:, 0] += batch_offset
-
-            np.savez(
-                fname_out,
-                spike_train=self.dec_spike_train,
-                scalings=self.dec_scalings,
-                dist_metric=self.dist_metric,
-            )
+            self.run_batch(batch_id, fname_out)
 
 
 def deconvolution(
@@ -924,8 +928,6 @@ def deconvolution(
         standardized_recording_path: standardized raw data path
         threshold: threshold for deconvolution
     """
-    print("z")
-
     if not os.path.exists(output_directory):
         os.makedirs(output_directory)
 
@@ -953,7 +955,6 @@ def deconvolution(
                 trough_offset=trough_offset,
                 reducer=reducer,
             )
-            print("templates dtype", templates.dtype)
         else:
             templates = get_templates(
                 standardized_bin,
@@ -964,11 +965,6 @@ def deconvolution(
                 reducer=reducer,
                 pbar=True,
             )  # .astype(np.float32)
-            print("templates dtype", templates.dtype)
-
-    #         print(templates.dtype)
-    #         print(templates.shape)
-    # save templates
         np.save(template_path, templates)
     else:
         templates = np.load(template_path)
@@ -1018,22 +1014,23 @@ def deconvolution(
 
     if len(batch_ids) > 0:
         if multi_processing:
-            batches_in = np.array_split(batch_ids, n_processors)
-            fnames_in = np.array_split(fnames_out, n_processors)
             ctx = multiprocessing.get_context("spawn")
-            with ctx.Pool(n_processors) as pool:
+            with ctx.Pool(
+                n_processors,
+                initializer=mp_object.load_saved_state,
+            ) as pool:
                 for res in tqdm(
                     pool.imap_unordered(
-                        mp_object._run,
-                        zip(batches_in, fnames_in),
+                        mp_object._run_batch,
+                        zip(batch_ids, fnames_out),
                     ),
-                    total=len(batches_in),
+                    total=len(batch_ids),
                     desc="run",
                 ):
                     pass
         else:
             for ctr in trange(len(batch_ids)):
-                mp_object.run([batch_ids[ctr]], [fnames_out[ctr]])
+                mp_object.run_batch(batch_ids[ctr], fnames_out[ctr])
 
     deconv_st = []
     deconv_scalings = []
