@@ -547,6 +547,7 @@ def clean_big_clusters(
     # min_size_split=25,
     seed=0,
     reducer=np.median,
+    min_size_split=25,
 ):
     """This operates on spike_train in place."""
     # TODO:
@@ -559,46 +560,63 @@ def clean_big_clusters(
     n_temp_cleaned = 0
     next_label = templates.shape[0]
     # rg = np.random.default_rng(seed)
+    # orig_ids = {}
+
     for unit in trange(templates.shape[0], desc="clean big"):
+        # orig_ids[unit] = unit
         mc = templates[unit].ptp(0).argmax()
         template_mc_trace = templates[unit, :, mc]
-        if template_mc_trace.ptp() > min_ptp:
-            spikes_in_unit = np.flatnonzero(spike_train[:, 1] == unit)
-            spike_times_unit = spike_train[spikes_in_unit, 0]
-            wfs_unit = read_waveforms(
-                spike_times_unit, raw_bin, geom.shape[0], channels=[mc]
-            )[0][:, :, 0]
+        if template_mc_trace.ptp() < min_ptp:
+            continue
 
-            ptp_sort_idx = wfs_unit.ptp(1).argsort()
-            wfs_unit = wfs_unit[ptp_sort_idx]
-            lower = int(wfs_unit.shape[0] * 0.05)
-            upper = int(wfs_unit.shape[0] * 0.95)
+        spikes_in_unit = np.flatnonzero(spike_train[:, 1] == unit)
+        spike_times_unit = spike_train[spikes_in_unit, 0]
+        wfs_unit = read_waveforms(
+            spike_times_unit, raw_bin, geom.shape[0], channels=[mc]
+        )[0][:, :, 0]
 
-            max_diff = 0
-            max_diff_N = 0
-            for n in np.arange(lower, upper):
-                # Denoise templates?
-                temp_1 = reducer(wfs_unit[:n], axis=0)
-                temp_2 = reducer(wfs_unit[n:], axis=0)
-                diff = np.abs(temp_1 - temp_2).max()
-                if diff > max_diff:
-                    max_diff = diff
-                    max_diff_N = n
+        ptp_sort_idx = wfs_unit.ptp(1).argsort()
+        wfs_unit = wfs_unit[ptp_sort_idx]
+        lower = max(min_size_split, int(wfs_unit.shape[0] * 0.05))
+        upper = min(spikes_in_unit.size - min_size_split, int(wfs_unit.shape[0] * 0.95))
 
-            if max_diff > split_diff:
-                temp_1 = reducer(wfs_unit[:max_diff_N], axis=0)
-                temp_2 = reducer(wfs_unit[max_diff_N:], axis=0)
-                n_temp_cleaned += 1
-                if (
-                    np.abs(temp_1 - template_mc_trace).max()
-                    > np.abs(temp_2 - template_mc_trace).max()
-                ):
-                    which = spikes_in_unit[ptp_sort_idx[:max_diff_N]]
-                    spike_train[which] = next_label
-                else:
-                    which = spikes_in_unit[ptp_sort_idx[max_diff_N:]]
-                    spike_train[which] = next_label
-            next_label += 1
+        if lower >= upper:
+            continue
+
+        max_diff = 0
+        max_diff_N = 0
+        for n in range(lower, upper):
+            # Denoise templates?
+            temp_1 = reducer(wfs_unit[:n], axis=0)
+            temp_2 = reducer(wfs_unit[n:], axis=0)
+            diff = np.abs(temp_1 - temp_2).max()
+            if diff > max_diff:
+                max_diff = diff
+                max_diff_N = n
+
+        if max_diff < split_diff:
+            continue
+
+        temp_1 = reducer(wfs_unit[:max_diff_N], axis=0)
+        temp_2 = reducer(wfs_unit[max_diff_N:], axis=0)
+
+        if (
+            np.abs(temp_1 - template_mc_trace).max()
+            > np.abs(temp_2 - template_mc_trace).max()
+        ):
+            which = spikes_in_unit[ptp_sort_idx[:max_diff_N]]
+            spike_train[which, 1] = next_label
+        else:
+            which = spikes_in_unit[ptp_sort_idx[max_diff_N:]]
+            spike_train[which, 1] = next_label
+        # orig_ids[next_label] = unit
+
+        n_temp_cleaned += 1
+        next_label += 1
+
+    # new_id_to_old_id = np.zeros(next_label, dtype=int)
+    # for new, old in orig_ids.items():
+    #     new_id_to_old_id[new] = old
 
     return n_temp_cleaned
 
