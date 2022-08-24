@@ -74,6 +74,7 @@ class Sorting:
         self.unsorted = unsorted
         self.raw_bin = raw_bin
         self.original_spike_train = np.c_[spike_times, spike_labels]
+        self.cleaned_templates = None
 
         # see if we can load up expensive stuff from cache
         # this will check if the sorting in the cache uses the same
@@ -115,8 +116,7 @@ class Sorting:
                 pbar=True,
             )
 
-        self.cleaned_templates = None
-        if radial_parents is not None:
+        if self.cleaned_templates is None and radial_parents is not None:
             (
                 cleaned_templates,
                 snrs,
@@ -243,6 +243,7 @@ class Sorting:
         meta_pkl = my_cache / "meta.pkl"
         st_npy = my_cache / "st.npy"
         temps_npy = my_cache / "temps.npy"
+        snr_temps_pkl = my_cache / "snr_temps.pkl"
         paths = [my_cache, meta_pkl, st_npy, temps_npy]
         if not all(p.exists() for p in paths):
             # no cache saved
@@ -270,6 +271,15 @@ class Sorting:
         if temps is None or temps.size <= 1:
             return False, None
 
+        if self.cleaned_templates is None and snr_temps_pkl.exists():
+            with open(snr_temps_pkl, "rb") as jar:
+                (
+                    self.cleaned_templates,
+                    self.snrs,
+                    self.denoised_templates,
+                    self.raw_templates,
+                ) = pickle.load(jar)
+
         return True, temps
 
     def save_to_cache(self, cache_dir):
@@ -279,11 +289,24 @@ class Sorting:
         meta_pkl = my_cache / "meta.pkl"
         st_npy = my_cache / "st.npy"
         temps_npy = my_cache / "temps.npy"
+        snr_temps_pkl = my_cache / "snr_temps.pkl"
 
         with open(meta_pkl, "wb") as jar:
             pickle.dump(dict(bin_file=self.raw_bin), jar)
         np.save(st_npy, self.original_spike_train)
         np.save(temps_npy, self.templates)
+
+        if self.cleaned_templates is not None:
+            with open(snr_temps_pkl, "rb") as jar:
+                pickle.dump(
+                    (
+                        self.cleaned_templates,
+                        self.snrs,
+                        self.denoised_templates,
+                        self.raw_templates,
+                    ),
+                    jar,
+                )
 
     # -- below are some plots that the sorting can make about itself
 
