@@ -168,17 +168,16 @@ for subject in tqdm(subjects):
     raw_data_bin = hybrid_bin_dir / f"{subject}.ap.bin"
     sub_h5 = next((hybrid_res_dir / subject).glob("sub*h5"))
     
-    with h5py.File(sub_h5, "r") as h5:
-        det_spike_index = h5["spike_index"][:]
-        x = h5["localizations"][:, 0]
-        z_reg = h5["z_reg"][:]
-        maxptps = h5["maxptps"][:]
-        det_xzptp = np.c_[x, z_reg, maxptps]
-    
     # unsorted comparison with detection
     name = "Detection"
     if name not in hybrid_comparisons[subject]:
         print("//", name)
+        with h5py.File(sub_h5, "r") as h5:
+            det_spike_index = h5["spike_index"][:]
+            x = h5["localizations"][:, 0]
+            z_reg = h5["z_reg"][:]
+            maxptps = h5["maxptps"][:]
+            det_xzptp = np.c_[x, z_reg, maxptps]
         hybrid_sortings[subject][name] = Sorting(
             raw_data_bin,
             geom,
@@ -472,6 +471,30 @@ plt.legend([la, lb, lc], ["accuracy", "recall", "precision"], frameon=False)
 plt.gcf().savefig(hybrid_fig_dir / "summary_perf.png", dpi=300, bbox_inches="tight")
 plt.show()
 
+# %%
+import colorcet as cc
+
+# %%
+cc.viridis
+
+# %%
+plt.Normalize
+
+# %%
+(hybrid_fig_dir / "template_maxchan_traces").mkdir(exist_ok=True)
+
+jobs = []
+for subject, comparisons in hybrid_comparisons.items():
+    for step, (sorting, comp) in enumerate(comparisons.items()):
+        if comp.unsorted:
+            continue
+        
+        fig = comp.new_sorting.template_maxchan_vis()
+        name_lo = comp.new_sorting.name_lo
+        plt.show()
+        fig.savefig(hybrid_fig_dir / "template_maxchan_traces" / f"{subject}_{step}_{name_lo}.png", dpi=300)
+        plt.close(fig)
+
 # %% tags=[]
 (hybrid_fig_dir / "perf_by_ptp").mkdir(exist_ok=True)
 
@@ -551,25 +574,6 @@ for step, df in new_unit_df.groupby("step"):
     fig.savefig(hybrid_fig_dir / "single_unit_metrics" / f"{step}_{name_lo}.png")
     plt.show()
     plt.close(fig)
-
-# %%
-(hybrid_fig_dir / "template_maxchan_traces").mkdir(exist_ok=True)
-
-def job(step, subject, new_sorting):
-    fig = new_sorting.template_maxchan_vis()
-    name_lo = new_sorting.name_lo
-    fig.savefig(hybrid_fig_dir / "template_maxchan_traces" / f"{subject}_{step}_{name_lo}.png", dpi=300)
-    plt.close(fig)
-
-jobs = []
-for subject, comparisons in hybrid_comparisons.items():
-    for step, (sorting, comp) in enumerate(comparisons.items()):
-        if comp.unsorted:
-            continue
-        jobs.append(delayed(job)(step, subject, comp.new_sorting))
-
-for res in Parallel(8)(tqdm(jobs, total=len(jobs))):
-    pass
 
 # %% tags=[]
 (hybrid_fig_dir / "array_scatter").mkdir(exist_ok=True)
