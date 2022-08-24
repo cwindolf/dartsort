@@ -88,8 +88,12 @@ subjects = ("DY_018", "CSHL051")
 # subjects = ("CSHL051",)
 
 # %%
-hybrid_fig_dir = Path("/mnt/3TB/charlie/hybrid_5min/figs_8_22")
+hybrid_fig_dir = Path("/mnt/3TB/charlie/hybrid_5min/figs_8_23")
 hybrid_fig_dir.mkdir(exist_ok=True)
+
+# %%
+hybrid_fig_cache_dir = Path("/tmp/hybrid_cache")
+hybrid_fig_cache_dir.mkdir(exist_ok=True)
 
 # %%
 # load gt sortings
@@ -134,6 +138,7 @@ for subject in tqdm(subjects):
         "GT",
         spike_maxchans=gt_spike_index[:, 1],
         templates=gt_templates,
+        cache_dir= hybrid_fig_cache_dir / subject,
         # spike_xzptp=gt_xzptp,
     )
 
@@ -183,6 +188,7 @@ for subject in tqdm(subjects):
             spike_maxchans=det_spike_index[:, 1],
             unsorted=True,
             spike_xzptp=det_xzptp,
+            cache_dir= hybrid_fig_cache_dir / subject,
         )
         hybrid_comparisons[subject][name] = HybridComparison(
             gt_sortings[subject], hybrid_sortings[subject][name], geom
@@ -206,6 +212,7 @@ for subject in tqdm(subjects):
             name,
             spike_maxchans=cluster_spike_index[:, 1],
             spike_xzptp=det_xzptp,
+            cache_dir= hybrid_fig_cache_dir / subject,
         )
         hybrid_comparisons[subject][name] = HybridComparison(
             gt_sortings[subject], hybrid_sortings[subject][name], geom
@@ -227,6 +234,7 @@ for subject in tqdm(subjects):
             name,
             spike_maxchans=splitmerge_spike_index[:, 1],
             spike_xzptp=det_xzptp,
+            cache_dir= hybrid_fig_cache_dir / subject,
         )
         hybrid_comparisons[subject][name] = HybridComparison(
             gt_sortings[subject], hybrid_sortings[subject][name], geom
@@ -247,6 +255,7 @@ for subject in tqdm(subjects):
             cluster_utils.make_labels_contiguous(orig_deconv1_st[:, 1]),
             name,
             spike_xzptp=deconv1_xzptp,
+            cache_dir= hybrid_fig_cache_dir / subject,
         )
         hybrid_comparisons[subject][name] = HybridComparison(
             gt_sortings[subject], hybrid_sortings[subject][name], geom
@@ -270,6 +279,7 @@ for subject in tqdm(subjects):
             name,
             templates=templates,
             spike_xzptp=deconv1_xzptp[order],
+            cache_dir= hybrid_fig_cache_dir / subject,
         )
         hybrid_comparisons[subject][name] = HybridComparison(
             gt_sortings[subject], hybrid_sortings[subject][name], geom
@@ -293,6 +303,7 @@ for subject in tqdm(subjects):
             "Deconv1-SplitMerge",
             templates=templates,
             spike_xzptp=deconv1_xzptp[order],
+            cache_dir= hybrid_fig_cache_dir / subject,
         )
         hybrid_comparisons[subject]["Deconv1-SplitMerge"] = HybridComparison(
             gt_sortings[subject], hybrid_sortings[subject]["Deconv1-SplitMerge"], geom
@@ -313,6 +324,7 @@ for subject in tqdm(subjects):
             cluster_utils.make_labels_contiguous(deconv2_st[:, 1]),
             name,
             spike_xzptp=deconv2_xzptp,
+            cache_dir= hybrid_fig_cache_dir / subject,
         )
         hybrid_comparisons[subject][name] = HybridComparison(
             gt_sortings[subject], hybrid_sortings[subject][name], geom
@@ -333,6 +345,7 @@ for subject in tqdm(subjects):
             name,
             templates=templates,
             spike_xzptp=deconv2_xzptp[order],
+            cache_dir= hybrid_fig_cache_dir / subject,
         )
         hybrid_comparisons[subject][name] = HybridComparison(
             gt_sortings[subject], hybrid_sortings[subject][name], geom
@@ -351,6 +364,7 @@ for subject in tqdm(subjects):
             ks_samples.squeeze().astype(int),
             ks_labels.squeeze().astype(int),
             name,
+            cache_dir= hybrid_fig_cache_dir / subject,
         )
         hybrid_comparisons[subject][name] = HybridComparison(
             gt_sortings[subject], hybrid_sortings[subject][name], geom
