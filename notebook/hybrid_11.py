@@ -36,6 +36,7 @@ from IPython.display import display, Image
 from joblib import Parallel, delayed
 import os
 import colorcet as cc
+import pickle
 from matplotlib import colors
 
 os.environ["CUDA_VISIBLE_DEVICES"] = ""
@@ -48,6 +49,7 @@ from spike_psvae import (
     cluster_viz_index,
     grab_and_localize,
     pyks_ccg,
+    denoise,
 )
 from spike_psvae.hybrid_analysis import (
     Sorting,
@@ -187,7 +189,8 @@ for subject in tqdm(subjects):
             spike_maxchans=det_spike_index[:, 1],
             unsorted=True,
             spike_xzptp=det_xzptp,
-            cache_dir= hybrid_fig_cache_dir / subject,
+            cache_dir=hybrid_fig_cache_dir / subject,
+            do_cleaned_templates=True,
         )
         hybrid_comparisons[subject][name] = HybridComparison(
             gt_sortings[subject], hybrid_sortings[subject][name], geom
@@ -211,7 +214,8 @@ for subject in tqdm(subjects):
             name,
             spike_maxchans=cluster_spike_index[:, 1],
             spike_xzptp=det_xzptp,
-            cache_dir= hybrid_fig_cache_dir / subject,
+            cache_dir=hybrid_fig_cache_dir / subject,
+            do_cleaned_templates=True,
         )
         hybrid_comparisons[subject][name] = HybridComparison(
             gt_sortings[subject], hybrid_sortings[subject][name], geom
@@ -234,6 +238,7 @@ for subject in tqdm(subjects):
             spike_maxchans=splitmerge_spike_index[:, 1],
             spike_xzptp=det_xzptp,
             cache_dir= hybrid_fig_cache_dir / subject,
+            do_cleaned_templates=True,
         )
         hybrid_comparisons[subject][name] = HybridComparison(
             gt_sortings[subject], hybrid_sortings[subject][name], geom
@@ -255,6 +260,7 @@ for subject in tqdm(subjects):
             name,
             spike_xzptp=deconv1_xzptp,
             cache_dir= hybrid_fig_cache_dir / subject,
+            do_cleaned_templates=True,
         )
         hybrid_comparisons[subject][name] = HybridComparison(
             gt_sortings[subject], hybrid_sortings[subject][name], geom
@@ -279,6 +285,7 @@ for subject in tqdm(subjects):
             templates=templates,
             spike_xzptp=deconv1_xzptp[order],
             cache_dir= hybrid_fig_cache_dir / subject,
+            do_cleaned_templates=True,
         )
         hybrid_comparisons[subject][name] = HybridComparison(
             gt_sortings[subject], hybrid_sortings[subject][name], geom
@@ -303,6 +310,7 @@ for subject in tqdm(subjects):
             templates=templates,
             spike_xzptp=deconv1_xzptp[order],
             cache_dir= hybrid_fig_cache_dir / subject,
+            do_cleaned_templates=True,
         )
         hybrid_comparisons[subject]["Deconv1-SplitMerge"] = HybridComparison(
             gt_sortings[subject], hybrid_sortings[subject]["Deconv1-SplitMerge"], geom
@@ -324,6 +332,7 @@ for subject in tqdm(subjects):
             name,
             spike_xzptp=deconv2_xzptp,
             cache_dir= hybrid_fig_cache_dir / subject,
+            do_cleaned_templates=True,
         )
         hybrid_comparisons[subject][name] = HybridComparison(
             gt_sortings[subject], hybrid_sortings[subject][name], geom
@@ -345,6 +354,7 @@ for subject in tqdm(subjects):
             templates=templates,
             spike_xzptp=deconv2_xzptp[order],
             cache_dir= hybrid_fig_cache_dir / subject,
+            do_cleaned_templates=True,
         )
         hybrid_comparisons[subject][name] = HybridComparison(
             gt_sortings[subject], hybrid_sortings[subject][name], geom
@@ -364,6 +374,7 @@ for subject in tqdm(subjects):
             ks_labels.squeeze().astype(int),
             name,
             cache_dir= hybrid_fig_cache_dir / subject,
+            do_cleaned_templates=True,
         )
         hybrid_comparisons[subject][name] = HybridComparison(
             gt_sortings[subject], hybrid_sortings[subject][name], geom
@@ -472,15 +483,6 @@ plt.gcf().savefig(hybrid_fig_dir / "summary_perf.png", dpi=300, bbox_inches="tig
 plt.show()
 
 # %%
-import colorcet as cc
-
-# %%
-cc.viridis
-
-# %%
-plt.Normalize
-
-# %%
 (hybrid_fig_dir / "template_maxchan_traces").mkdir(exist_ok=True)
 
 jobs = []
@@ -494,6 +496,24 @@ for subject, comparisons in hybrid_comparisons.items():
         plt.show()
         fig.savefig(hybrid_fig_dir / "template_maxchan_traces" / f"{subject}_{step}_{name_lo}.png", dpi=300)
         plt.close(fig)
+
+# %%
+(hybrid_fig_dir / "cleaned_temp_vis").mkdir(exist_ok=True)
+
+jobs = []
+for subject, comparisons in hybrid_comparisons.items():
+    for step, (sorting, comp) in enumerate(comparisons.items()):
+        if comp.unsorted:
+            continue
+        
+        for i, unit in enumerate(comp.new_sorting.unit_labels):
+            count = comp.new_sorting.unit_spike_counts[i]
+            print(count)
+            fig, ax, maxsnr, maxptp = comp.new_sorting.cleaned_temp_vis(unit, radial_parents=radial_parents)
+            name_lo = comp.new_sorting.name_lo
+            plt.show()
+            # fig.savefig(hybrid_fig_dir / "cleaned_temp_vis" / f"{subject}_{step}_{name_lo}.png", dpi=300)
+            plt.close(fig)
 
 # %% tags=[]
 (hybrid_fig_dir / "perf_by_ptp").mkdir(exist_ok=True)
