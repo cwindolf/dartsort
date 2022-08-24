@@ -4,13 +4,15 @@ from sklearn.decomposition import PCA
 
 from . import after_deconv_merge_split, spike_train_utils, extractors
 
+from .hybrid_analysis import Sorting
+import matplotlib.pyplot as plt
 
 def post_deconv_split_step(
     deconv_dir,
     deconv_results_h5,
     bin_file,
     geom,
-    clean_min_spikes=25,
+    clean_min_spikes=0,
     reducer=np.median,
 ):
     spike_train = np.load(deconv_dir / "spike_train.npy")
@@ -28,7 +30,6 @@ def post_deconv_split_step(
     assert deconv_extractor.spike_train_up.shape == spike_train.shape
 
     # deconv can produce an un-aligned spike train.
-    # let's also get rid of units with few spikes.
     (
         spike_train,
         order,
@@ -54,6 +55,7 @@ def post_deconv_split_step(
     print("sorted?", (spike_train[1:, 0] >= spike_train[:-1, 0]).all())
     u, c = np.unique(spike_train[:, 1], return_counts=True)
     print(u.size, (c > 25).sum(), c[c > 25].sum())
+  
     (
         spike_train,
         reorder,
@@ -89,7 +91,6 @@ def post_deconv_split_step(
     order = order[reorder]
 
     print("B")
-    print("sorted?", (spike_train[1:, 0] >= spike_train[:-1, 0]).all())
     u, c = np.unique(spike_train[:, 1], return_counts=True)
     print(u.size, (c > 25).sum(), c[c > 25].sum())
 
@@ -98,6 +99,7 @@ def post_deconv_split_step(
         spike_train,
         templates,
     ) = after_deconv_merge_split.remove_oversplits(templates, spike_train)
+    
     (
         spike_train,
         reorder,
@@ -112,7 +114,7 @@ def post_deconv_split_step(
         reducer=reducer,
     )
     order = order[reorder]
-
+    
     return spike_train, order, templates
 
 
