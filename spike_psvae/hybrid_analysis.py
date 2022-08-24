@@ -59,6 +59,7 @@ class Sorting:
         n_close_units=3,
         template_n_spikes=250,
         cache_dir=None,
+        radial_parents=None,
     ):
         n_spikes_full = spike_labels.shape[0]
         assert spike_labels.shape == spike_times.shape == (n_spikes_full,)
@@ -113,6 +114,38 @@ class Sorting:
                 n_samples=template_n_spikes,
                 pbar=True,
             )
+
+        self.cleaned_templates = None
+        if radial_parents is not None:
+            (
+                cleaned_templates,
+                snrs,
+                _,
+                denoised_templates,
+                extra,
+            ) = snr_templates.get_templates(
+                np.c_[self.spike_times, self.spike_labels],
+                self.geom,
+                self.raw_bin,
+                max_spikes_per_unit=500,
+                do_tpca=True,
+                do_enforce_decrease=True,
+                do_temporal_decrease=True,
+                do_collision_clean=False,
+                reducer=np.median,
+                snr_threshold=5.0 * np.sqrt(200),
+                snr_by_channel=True,
+                n_jobs=1,
+                return_raw_cleaned=True,
+                return_extra=True,
+                radial_parents=radial_parents,
+                pbar=False,
+            )
+            self.cleaned_templates = cleaned_templates
+            self.snrs = snrs
+            self.denoised_templates = denoised_templates
+            self.raw_templates = extra["original_raw"]
+
         if not unsorted:
             assert self.templates.shape[0] >= self.unit_labels.max() + 1
 
@@ -120,7 +153,6 @@ class Sorting:
             self.template_ptps = self.templates.ptp(1)
             self.template_maxptps = self.template_ptps.max(1)
             self.template_maxchans = self.template_ptps.argmax(1)
-            which_to_localize = self.unit_spike_counts > 0
             self.template_locs = localize_index.localize_ptps_index(
                 self.template_ptps[full_spike_counts > 0],
                 geom,
@@ -362,36 +394,11 @@ class Sorting:
         return fig
 
     def cleaned_temp_vis(self, unit, radial_parents=None, nchans=20):
-        in_unit = np.flatnonzero(self.spike_train[:, 1] == unit)
-        unit_st = np.c_[self.spike_train[in_unit, 0], np.zeros_like(in_unit)]
-        (
-            templates,
-            snrs,
-            raw_templates,
-            cleaned_templates,
-            extra,
-        ) = snr_templates.get_templates(
-            unit_st,
-            self.geom,
-            self.raw_bin,
-            max_spikes_per_unit=500,
-            do_tpca=True,
-            do_enforce_decrease=True,
-            do_temporal_decrease=True,
-            do_collision_clean=False,
-            reducer=np.median,
-            snr_threshold=5.0 * np.sqrt(200),
-            snr_by_channel=True,
-            n_jobs=1,
-            return_raw_cleaned=True,
-            return_extra=True,
-            radial_parents=radial_parents,
-            pbar=False,
-        )
-        assert templates.shape[0] == 1
-        temp = templates[0]
-        raw_temp = extra["original_raw"][0]
-        cleaned_temp = cleaned_templates[0]
+        assert self.contiguous_labels and self.snrs is not None
+
+        temp = self.cleaned_templates[unit]
+        raw_temp = self.raw_templates[unit]
+        cleaned_temp = self.denoised_templates[unit]
 
         # get on fewer chans
         ci = waveform_utils.make_contiguous_channel_index(
@@ -435,7 +442,7 @@ class Sorting:
         ax.set_xticks([])
         ax.set_yticks([])
 
-        return fig, ax, snrs.max(), temp_loc.ptp(0).max()
+        return fig, ax, self.snrs[unit], temp_loc.ptp(0).max()
 
 
 class HybridComparison:
