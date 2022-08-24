@@ -615,6 +615,7 @@ class MatchPursuit_objectiveUpsample(object):
         """
         if self.up_factor == 1 or len(times) < 1:
             return 0, 0, range(len(times))
+
         idx = times + self.up_window
         peak_window = self.obj[unit_ids, idx]
 
@@ -633,8 +634,8 @@ class MatchPursuit_objectiveUpsample(object):
         # we recompute the objective differently now in subtraction
         if not self.no_amplitude_scaling:
             self.conv_result[unit_ids[invalid_idx], turn_off_idx] = -np.inf
-
-        valid_idx = np.logical_not(invalid_idx)
+        
+        valid_idx = np.flatnonzero(np.logical_not(invalid_idx))
         peak_window = peak_window[:, valid_idx]
         if peak_window.shape[1] == 0:
             return np.array([]), np.array([]), valid_idx
@@ -672,7 +673,7 @@ class MatchPursuit_objectiveUpsample(object):
         # The spikes that had NaN in the window and could not be upsampled
         # should fall-back on default value.
         spike_ids *= self.up_factor
-        if valid_idx.any():
+        if len(valid_idx):
             spike_ids[valid_idx] += upsampled_template_idx
             spike_times[valid_idx] += time_shift
 
@@ -933,44 +934,44 @@ def deconvolution(
     # get templates
     template_path = os.path.join(output_directory, "templates.npy")
     print(template_path)
-    #         if not os.path.exists(template_path):
-    print("computing templates!")
-    if cleaned_temps:
-        templates, snrs, _, _ = snr_templates.get_templates(
-            template_spike_train[:],
-            geom,
-            standardized_bin,
-            residual_bin,
-            do_tpca=True,
-            return_raw_cleaned=True,
-            do_collision_clean=False,
-            do_enforce_decrease=False,
-            do_temporal_decrease=False,
-            tpca_radius=100,
-            tpca_rank=3,
-            snr_threshold=5.0 * np.sqrt(100),
-            trough_offset=trough_offset,
-            reducer=reducer,
-        )
-        print("templates dtype", templates.dtype)
-    else:
-        templates = get_templates(
-            standardized_bin,
-            spike_index,
-            cluster_labels,
-            geom,
-            trough_offset=trough_offset,
-            reducer=reducer,
-            pbar=True,
-        )  # .astype(np.float32)
-        print("templates dtype", templates.dtype)
+    if not os.path.exists(template_path):
+        print("computing templates!")
+        if cleaned_temps:
+            templates, snrs, _, _ = snr_templates.get_templates(
+                template_spike_train[:],
+                geom,
+                standardized_bin,
+                residual_bin,
+                do_tpca=True,
+                return_raw_cleaned=True,
+                do_collision_clean=False,
+                do_enforce_decrease=False,
+                do_temporal_decrease=False,
+                tpca_radius=100,
+                tpca_rank=3,
+                snr_threshold=5.0 * np.sqrt(100),
+                trough_offset=trough_offset,
+                reducer=reducer,
+            )
+            print("templates dtype", templates.dtype)
+        else:
+            templates = get_templates(
+                standardized_bin,
+                spike_index,
+                cluster_labels,
+                geom,
+                trough_offset=trough_offset,
+                reducer=reducer,
+                pbar=True,
+            )  # .astype(np.float32)
+            print("templates dtype", templates.dtype)
 
     #         print(templates.dtype)
     #         print(templates.shape)
     # save templates
-    np.save(template_path, templates)
-    #         else:
-    #             templates = np.load(template_path)
+        np.save(template_path, templates)
+    else:
+        templates = np.load(template_path)
 
     fname_spike_train = os.path.join(output_directory, "spike_train.npy")
     fname_scalings = os.path.join(output_directory, "scalings.npy")
