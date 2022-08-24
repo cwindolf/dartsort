@@ -59,7 +59,7 @@ class Sorting:
         n_close_units=3,
         template_n_spikes=250,
         cache_dir=None,
-        radial_parents=None,
+        do_cleaned_templates=False,
     ):
         n_spikes_full = spike_labels.shape[0]
         assert spike_labels.shape == spike_times.shape == (n_spikes_full,)
@@ -116,7 +116,7 @@ class Sorting:
                 pbar=True,
             )
 
-        if self.cleaned_templates is None and radial_parents is not None:
+        if self.cleaned_templates is None and do_cleaned_templates:
             (
                 cleaned_templates,
                 snrs,
@@ -129,17 +129,9 @@ class Sorting:
                 self.raw_bin,
                 max_spikes_per_unit=500,
                 do_tpca=True,
-                do_enforce_decrease=True,
-                do_temporal_decrease=True,
-                do_collision_clean=False,
-                reducer=np.median,
-                snr_threshold=5.0 * np.sqrt(200),
                 snr_by_channel=True,
-                n_jobs=1,
                 return_raw_cleaned=True,
                 return_extra=True,
-                radial_parents=radial_parents,
-                pbar=False,
             )
             self.cleaned_templates = cleaned_templates
             self.snrs = snrs
@@ -297,7 +289,7 @@ class Sorting:
         np.save(temps_npy, self.templates)
 
         if self.cleaned_templates is not None:
-            with open(snr_temps_pkl, "rb") as jar:
+            with open(snr_temps_pkl, "wb") as jar:
                 pickle.dump(
                     (
                         self.cleaned_templates,
