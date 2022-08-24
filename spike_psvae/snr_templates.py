@@ -28,6 +28,8 @@ def get_templates(
     tpca_rank=8,
     tpca_radius=200,
     return_extra=False,
+    radial_parents=None,
+    pbar=True,
 ):
     """Get denoised templates
 
@@ -86,9 +88,10 @@ def get_templates(
     # -- helper data structures
     if do_enforce_decrease:
         full_channel_index = np.array([np.arange(len(geom))] * len(geom))
-        radial_parents = denoise.make_radial_order_parents(
-            geom, full_channel_index
-        )
+        if radial_parents is None:
+            radial_parents = denoise.make_radial_order_parents(
+                geom, full_channel_index
+            )
     if do_tpca:
         tpca_channel_index = subtract.make_channel_index(
             geom, tpca_radius, steps=1, distance_order=False, p=1
@@ -97,7 +100,7 @@ def get_templates(
     # -- main loop to make templates
     units = np.unique(spike_train[:, 1])
     units = units[units >= 0]
-    for unit in tqdm(units, desc="Denoised templates"):
+    for unit in tqdm(units, desc="Denoised templates") if pbar else units:
         # get raw template
         raw_wfs = get_waveforms(
             unit,
