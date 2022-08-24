@@ -11,6 +11,7 @@ import pandas as pd
 from scipy.spatial import KDTree
 import matplotlib.pyplot as plt
 import statsmodels.api as sm
+import colorcet as cc
 from scipy.optimize import least_squares
 from scipy.spatial.distance import cdist
 import seaborn as sns
@@ -200,6 +201,9 @@ class Sorting:
             sampling_frequency=self.fs,
         )
     
+    # -- caching logic so we don't re-compute templates all the time
+    # cache invalidation is based on the spike train!
+    
     def try_to_load_from_cache(self, cache_dir):
         my_cache = Path(cache_dir) / self.name_lo
         meta_pkl = my_cache / "meta.pkl"
@@ -242,6 +246,8 @@ class Sorting:
             pickle.dump(dict(bin_file=self.raw_bin), jar)
         np.save(st_npy, self.original_spike_train)
         np.save(temps_npy, self.templates)
+
+    # -- below are some plots that the sorting can make about itself
 
     def array_scatter(
         self,
@@ -292,6 +298,7 @@ class Sorting:
             vis_channels = np.flatnonzero(self.templates[i].ptp(0) >= 1.0)
             for j in range(n_num_close_clusters):
                 idx = close_clusters[i, j]
+                # this is max abs norm distance (L_\infty)
                 cos_dist[j] = cdist(
                     self.templates[i, :, vis_channels].ravel()[None, :],
                     self.templates[idx, :, vis_channels].ravel()[None, :],
@@ -305,14 +312,41 @@ class Sorting:
         return close_templates
 
     def template_maxchan_vis(self):
-        fig = plt.figure(figsize=(6, 4))
-        for u in self.unit_labels:
-            plt.plot(
+        fig, (aa, ab) = plt.subplots(nrows=2, figsize=(6, 7), sharex=True)
+        
+        colors_uniq = cc.m_glasbey_hv(np.arange(len(self.unit_labels)) % len(cc.glasbey_hv))
+        
+        for i, u in enumerate(self.unit_labels):
+            aa.plot(
                 self.templates[u, :, self.template_maxchans[u]],
-                color="k",
-                alpha=0.1,
+                color=colors_uniq[i],
+                alpha=0.5,
             )
-        plt.title(
+        
+        count_argsort = np.argsort(self.unit_spike_counts)[::-1]
+        colors_spike_count = plt.cm.inferno(np.log10(self.unit_spike_counts[count_argsort]))
+        for j, i in enumerate(count_argsort):
+            u = self.unit_labels[i]
+            ab.plot(
+                self.templates[u, :, self.template_maxchans[u]],
+                color=colors_spike_count[j],
+                alpha=0.5,
+            )
+        cbar = plt.colorbar(
+            plt.cm.ScalarMappable(
+                norm=plt.Normalize(
+                    np.log10(self.unit_spike_counts).min(),
+                    np.log10(self.unit_spike_counts).max(),
+                ),
+                cmap=plt.cm.inferno
+            ),
+            ax=ab,
+            label="log10 count",
+        )
+        aa.set_xticks([])
+        aa.set_title("color=unit")
+        ab.set_title("color=count")
+        fig.suptitle(
             f"{self.name}, template maxchan traces, {len(self.unit_labels)} units."
         )
         return fig
