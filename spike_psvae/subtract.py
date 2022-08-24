@@ -12,13 +12,20 @@ from collections import namedtuple
 import logging
 
 import pandas as pd
-from spikeglx import _geometry_from_meta, read_meta_data
-from scipy.spatial.distance import pdist, squareform
+
+try:
+    from spikeglx import _geometry_from_meta, read_meta_data
+except ImportError:
+    try:
+        from ibllib.io.spikeglx import _geometry_from_meta, read_meta_data
+    except ImportError:
+        raise ImportError("Can't find spikeglx...")
 from sklearn.decomposition import PCA
 from tqdm.auto import tqdm
 
 from . import denoise, detect, localize_index
 from .spikeio import get_binary_length, read_data, read_waveforms_in_memory
+from .waveform_utils import make_channel_index, make_contiguous_channel_index
 
 _logger = logging.getLogger(__name__)
 
@@ -1429,101 +1436,6 @@ def tpca_from_h5(h5):
     return tpca
 
 
-# -- channels / geometry helpers
-
-
-def n_steps_neigh_channels(neighbors_matrix, steps):
-    """Compute a neighbors matrix by considering neighbors of neighbors
-
-    Parameters
-    ----------
-    neighbors_matrix: numpy.ndarray
-        Neighbors matrix
-    steps: int
-        Number of steps to still consider channels as neighbors
-
-    Returns
-    -------
-    numpy.ndarray (n_channels, n_channels)
-        Symmetric boolean matrix with the i, j as True if the ith and jth
-        channels are considered neighbors
-    """
-    # Compute neighbors of neighbors via matrix powers
-    output = np.eye(neighbors_matrix.shape[0]) + neighbors_matrix
-    return np.linalg.matrix_power(output, steps) > 0
-
-
-def order_channels_by_distance(reference, channels, geom):
-    """Order channels by distance using certain channel as reference
-    Parameters
-    ----------
-    reference: int
-        Reference channel
-    channels: np.ndarray
-        Channels to order
-    geom
-        Geometry matrix
-    Returns
-    -------
-    numpy.ndarray
-        1D array with the channels ordered by distance using the reference
-        channels
-    numpy.ndarray
-        1D array with the indexes for the ordered channels
-    """
-    coord_main = geom[reference]
-    coord_others = geom[channels]
-    idx = np.argsort(np.sum(np.square(coord_others - coord_main), axis=1))
-    return channels[idx], idx
-
-
-def make_contiguous_channel_index(n_channels, n_neighbors=40):
-    channel_index = []
-    for c in range(n_channels):
-        low = max(0, c - n_neighbors // 2)
-        low = min(n_channels - n_neighbors, low)
-        channel_index.append(np.arange(low, low + n_neighbors))
-    channel_index = np.array(channel_index)
-
-    return channel_index
-
-
-def make_channel_index(geom, radius, steps=1, distance_order=True, p=2):
-    """
-    Compute an array whose whose ith row contains the ordered
-    (by distance) neighbors for the ith channel
-    """
-    C = geom.shape[0]
-
-    # get neighbors matrix
-    neighbors = squareform(pdist(geom, metric="minkowski", p=p)) <= radius
-    neighbors = n_steps_neigh_channels(neighbors, steps=steps)
-
-    # max number of neighbors for all channels
-    n_neighbors = np.max(np.sum(neighbors, 0))
-
-    # initialize channel index
-    # entries for channels which don't have as many neighbors as
-    # others will be filled with the total number of channels
-    # (an invalid index into the recording, but this behavior
-    # is useful e.g. in the spatial max pooling for deduplication)
-    channel_index = np.full((C, n_neighbors), C, dtype=int)
-
-    # fill every row in the matrix (one per channel)
-    for current in range(C):
-        # indexes of current channel neighbors
-        ch_idx = np.flatnonzero(neighbors[current])
-
-        # sort them by distance
-        if distance_order:
-            ch_idx, _ = order_channels_by_distance(current, ch_idx, geom)
-
-        # fill entries with the sorted neighbor indexes
-        channel_index[current, : ch_idx.shape[0]] = ch_idx
-
-    return channel_index
-
-
 # -- data loading helpers
 
 
@@ -1539,9 +1451,9 @@ def read_geom_from_meta(bin_file):
 def subtract_and_localize_numpy(
     raw,
     geom,
-    extract_radius=200.,
-    loc_radius=100.,
-    dedup_spatial_radius=70.,
+    extract_radius=200.0,
+    loc_radius=100.0,
+    dedup_spatial_radius=70.0,
     thresholds=[12, 10, 8, 6, 5],
     radial_parents=None,
     tpca=None,
@@ -1558,7 +1470,9 @@ def subtract_and_localize_numpy(
     dedup_channel_index = make_channel_index(
         geom, dedup_spatial_radius, steps=2
     )
-    extract_channel_index = make_channel_index(geom, extract_radius, distance_order=False)
+    extract_channel_index = make_channel_index(
+        geom, extract_radius, distance_order=False
+    )
     # use radius-based localization neighborhood
     loc_n_chans = None
 
@@ -1596,14 +1510,18 @@ def subtract_and_localize_numpy(
             device=device,
             probe=probe,
         )
-        _logger.debug(f"Detected and subtracted {spind.shape[0]} spikes with threshold {threshold} on {thresholds}")
+        _logger.debug(
+            f"Detected and subtracted {spind.shape[0]} spikes with threshold {threshold} on {thresholds}"
+        )
         if len(spind):
             subtracted_wfs.append(subwfs)
             spike_index.append(spind)
 
     subtracted_wfs = np.concatenate(subtracted_wfs, axis=0)
     spike_index = np.concatenate(spike_index, axis=0)
-    _logger.debug(f"Detected and subtracted {spike_index.shape[0]} spikes Total")
+    _logger.debug(
+        f"Detected and subtracted {spike_index.shape[0]} spikes Total"
+    )
 
     # sort so time increases
     sort = np.argsort(spike_index[:, 0])
@@ -1647,10 +1565,19 @@ def subtract_and_localize_numpy(
         pbar=False,
     )
     df_localisation = pd.DataFrame(
-        data=np.c_[spike_index[:, 0] + spike_length_samples * 2, spike_index[:, 1], xs, ys, z_abss, alphas],
-        columns=['sample', 'trace', 'x', 'y', 'z', 'alpha']
+        data=np.c_[
+            spike_index[:, 0] + spike_length_samples * 2,
+            spike_index[:, 1],
+            xs,
+            ys,
+            z_abss,
+            alphas,
+        ],
+        columns=["sample", "trace", "x", "y", "z", "alpha"],
     )
     return df_localisation, cleaned_wfs
+
+
 # -- utils
 
 
@@ -1696,7 +1623,7 @@ class timer:
         print(self.name, "took", self.t, "s")
 
 
-class _noint:
+class NoKeyboardInterrupt:
     """A context manager that we use to avoid ending up in invalid states."""
 
     def handler(self, *sig):
@@ -1716,4 +1643,4 @@ class _noint:
             self.old_handler(*self.sig)
 
 
-noint = _noint()
+noint = NoKeyboardInterrupt()
