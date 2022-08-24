@@ -361,20 +361,20 @@ class Sorting:
         )
         return fig
 
-    def cleaned_temp_vis(self, unit, nchans=20):
+    def cleaned_temp_vis(self, unit, radial_parents=None, nchans=20):
         in_unit = np.flatnonzero(self.spike_train[:, 1] == unit)
-        unit_st = np.c_[self.spike_train[unit, 0], np.zeros_like(in_unit)]
+        unit_st = np.c_[self.spike_train[in_unit, 0], np.zeros_like(in_unit)]
         (
             templates,
             snrs,
             raw_templates,
             cleaned_templates,
             extra,
-        ) = get_templates(
+        ) = snr_templates.get_templates(
             unit_st,
             self.geom,
             self.raw_bin,
-            max_spikes_per_unit=250,
+            max_spikes_per_unit=500,
             do_tpca=True,
             do_enforce_decrease=True,
             do_temporal_decrease=True,
@@ -383,11 +383,10 @@ class Sorting:
             snr_threshold=5.0 * np.sqrt(200),
             snr_by_channel=True,
             n_jobs=1,
-            spike_length_samples=121,
             return_raw_cleaned=True,
             return_extra=True,
-            tpca_rank=8,
-            tpca_radius=200,
+            radial_parents=radial_parents,
+            pbar=False,
         )
         assert templates.shape[0] == 1
         temp = templates[0]
@@ -404,7 +403,7 @@ class Sorting:
         cleaned_temp_loc = cleaned_temp[:, ci[tmc]]
 
         # make plot
-        fig, ax = plt.subplots(figsize=(5, 5))
+        fig, ax = plt.subplots(figsize=(8, 8))
         amp = np.abs(raw_temp_loc).max()
         raw_lines = cluster_viz_index.pgeom(
             raw_temp_loc, tmc, ci, self.geom, max_abs_amp=amp, color="gray"
@@ -416,9 +415,17 @@ class Sorting:
             self.geom,
             max_abs_amp=amp,
             color="green",
+            show_zero=False,
         )
         lines = cluster_viz_index.pgeom(
-            temp_loc, tmc, ci, self.geom, max_abs_amp=amp, color="k"
+            temp_loc,
+            tmc,
+            ci,
+            self.geom,
+            max_abs_amp=amp,
+            color="k",
+            lw=1,
+            show_zero=False,
         )
         ax.legend(
             (raw_lines[0], cl_lines[0], lines[0]),

@@ -161,7 +161,9 @@ def pgeom(
     ax=None,
     color=None,
     alpha=1,
-    extension=0.5,
+    z_extension=1.0,
+    x_extension=0.8,
+    lw=None,
     show_zero=True,
     max_abs_amp=None
 ):
@@ -180,13 +182,14 @@ def pgeom(
     assert waveforms.shape == (*max_channels.shape, T, C)
 
     # -- figure out units for plotting
-    x_uniq, z_uniq = np.unique(geom[:, 0]), np.unique(geom[:, 1])
+    z_uniq, z_ix = np.unique(geom[:, 1], return_inverse=True)
+    x_uniq = np.unique(geom[z_ix == 0, 0])
     inter_chan_x = x_uniq[1] - x_uniq[0]
     inter_chan_z = z_uniq[1] - z_uniq[0]
     max_abs_amp = max_abs_amp or np.abs(waveforms).max()
     geom_scales = [
-        T / inter_chan_x,
-        max_abs_amp / inter_chan_z / extension,
+        T / inter_chan_x / x_extension,
+        max_abs_amp / inter_chan_z / z_extension,
     ]
     geom_plot = geom * geom_scales
     t_domain = np.linspace(-T // 2, T // 2, num=T)
@@ -195,19 +198,19 @@ def pgeom(
     draw = []
     unique_chans = set()
     for wf, mc in zip(waveforms, max_channels):
-        for c in channel_index[mc]:
+        for i, c in enumerate(channel_index[mc]):
             if c == n_channels:
                 continue
 
             draw.append(geom_plot[c, 0] + t_domain)
-            draw.append(geom_plot[c, 1] + wf[:, c])
-            unique_chans.append(c)
+            draw.append(geom_plot[c, 1] + wf[:, i])
+            unique_chans.add(c)
 
     if show_zero:
         for c in unique_chans:
-            ax.axhline(geom_plot[c, 1], color="k", lw=1, linestyle="--")
+            ax.axhline(geom_plot[c, 1], color="gray", lw=1, linestyle="--")
 
-    lines = ax.plot(*draw, alpha=alpha, color=color)
+    lines = ax.plot(*draw, alpha=alpha, color=color, lw=lw)
 
     return lines
 
