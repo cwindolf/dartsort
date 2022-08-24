@@ -21,7 +21,16 @@ def get_ccolor(k):
 
 
 def cluster_scatter(
-    xs, ys, ids, ax=None, n_std=2.0, excluded_ids={-1}, s=1, alpha=0.5, annotate=True, do_ellipse=True
+    xs,
+    ys,
+    ids,
+    ax=None,
+    n_std=2.0,
+    excluded_ids={-1},
+    s=1,
+    alpha=0.5,
+    annotate=True,
+    do_ellipse=True,
 ):
     ax = ax or plt.gca()
     # scatter and collect gaussian info
@@ -57,7 +66,7 @@ def cluster_scatter(
             if min(vx, vy) <= 0:
                 continue
             rho = np.minimum(1.0, cov[0, 1] / np.sqrt(vx * vy))
-            
+
             color = get_ccolor(k)
             ell = Ellipse(
                 (0, 0),
@@ -144,6 +153,65 @@ def array_scatter(
     return fig, axes
 
 
+def pgeom(
+    waveforms,
+    max_channels,
+    channel_index,
+    geom,
+    ax=None,
+    color=None,
+    alpha=1,
+    extension=0.5,
+    show_zero=True,
+    max_abs_amp=None
+):
+    """Plot waveforms according to geometry using channel index"""
+    ax = ax or plt.gca()
+
+    # -- validate shapes
+    max_channels = np.atleast_1d(max_channels)
+    if waveforms.ndim == 2:
+        waveforms = waveforms[None]
+    else:
+        assert waveforms.ndim == 3
+    n_channels, C = channel_index.shape
+    assert geom.shape == (n_channels, 2)
+    T = waveforms.shape[1]
+    assert waveforms.shape == (*max_channels.shape, T, C)
+
+    # -- figure out units for plotting
+    x_uniq, z_uniq = np.unique(geom[:, 0]), np.unique(geom[:, 1])
+    inter_chan_x = x_uniq[1] - x_uniq[0]
+    inter_chan_z = z_uniq[1] - z_uniq[0]
+    max_abs_amp = max_abs_amp or np.abs(waveforms).max()
+    geom_scales = [
+        T / inter_chan_x,
+        max_abs_amp / inter_chan_z / extension,
+    ]
+    geom_plot = geom * geom_scales
+    t_domain = np.linspace(-T // 2, T // 2, num=T)
+
+    # -- and, plot
+    draw = []
+    unique_chans = set()
+    for wf, mc in zip(waveforms, max_channels):
+        for c in channel_index[mc]:
+            if c == n_channels:
+                continue
+
+            draw.append(geom_plot[c, 0] + t_domain)
+            draw.append(geom_plot[c, 1] + wf[:, c])
+            unique_chans.append(c)
+
+    if show_zero:
+        for c in unique_chans:
+            ax.axhline(geom_plot[c, 1], color="k", lw=1, linestyle="--")
+
+    lines = ax.plot(*draw, alpha=alpha, color=color)
+
+    return lines
+
+
 def plot_waveforms_geom(
     main_cluster_id,
     neighbor_clusters,
@@ -199,7 +267,9 @@ def plot_waveforms_geom(
         res_data = np.memmap(residual_bin, dtype=np.float32)
         res_data = res_data.reshape(-1, len(channel_index))
 
-    for j, cluster_id in reversed(list(enumerate((main_cluster_id, *neighbor_clusters)))):
+    for j, cluster_id in reversed(
+        list(enumerate((main_cluster_id, *neighbor_clusters)))
+    ):
         if colors is None:
             color = get_ccolor(cluster_id)
         else:
@@ -297,10 +367,12 @@ def single_unit_summary(
     scale_mul=1,
 ):
     # 2 neighbor clusters
-    cluster_centers = np.array([
-        clusterer.weighted_cluster_centroid(l)
-        for l in np.setdiff1d(np.unique(labels), [-1])
-    ])
+    cluster_centers = np.array(
+        [
+            clusterer.weighted_cluster_centroid(l)
+            for l in np.setdiff1d(np.unique(labels), [-1])
+        ]
+    )
     closest_clusters = np.argsort(
         cdist([cluster_centers[cluster_id]], cluster_centers)[0]
     )[1:3]
@@ -311,8 +383,23 @@ def single_unit_summary(
         gridspec_kw=dict(
             hspace=0.5,
             wspace=0.1,
-            width_ratios=[4, 4, 4, 1, 1, 1, 0.33, 0.167, 1, 1, 0.167, 0.33, 1, 1]
-        )
+            width_ratios=[
+                4,
+                4,
+                4,
+                1,
+                1,
+                1,
+                0.33,
+                0.167,
+                1,
+                1,
+                0.167,
+                0.33,
+                1,
+                1,
+            ],
+        ),
     )
     axes["a"].get_shared_y_axes().join(axes["a"], axes["b"])
     axes["a"].get_shared_y_axes().join(axes["a"], axes["c"])
@@ -453,7 +540,7 @@ def plot_agreement_venn(
     if not (match2 and match2 > -1):
         return
     match_frac = comp.get_agreement_fraction(cluster_id1, match2)
-    
+
     st1 = sorting1.get_unit_spike_train(cluster_id1)
     st2 = sorting2.get_unit_spike_train(match2)
     (
@@ -478,10 +565,10 @@ def plot_agreement_venn(
     v.get_patch_by_id("01").set_color("blue")
     v.get_patch_by_id("11").set_color("goldenrod")
     axes[0].set_title(
-        #f"{name1}{cluster_id1} + {name2}{match2}, "
+        # f"{name1}{cluster_id1} + {name2}{match2}, "
         f"{match_frac.round(2)*100}% agreement"
     )
-        
+
     which1 = np.flatnonzero(labels1 == cluster_id1)
     which2 = np.flatnonzero(labels2 == match2)
 

@@ -29,6 +29,8 @@ from spike_psvae import (
     cluster_viz_index,
     pyks_ccg,
     cluster_utils,
+    snr_templates,
+    waveform_utils,
 )
 
 
@@ -254,6 +256,62 @@ class Sorting:
             f"{self.name}, template maxchan traces, {len(self.unit_labels)} units."
         )
         return fig
+
+    def cleaned_temp_vis(self, unit, nchans=20):
+        in_unit = np.flatnonzero(self.spike_train[:, 1] == unit)
+        unit_st = np.c_[self.spike_train[unit, 0], np.zeros_like(in_unit)]
+        templates, snrs, raw_templates, cleaned_templates, extra = get_templates(
+            unit_st,
+            self.geom,
+            self.raw_bin,
+            max_spikes_per_unit=250,
+            do_tpca=True,
+            do_enforce_decrease=True,
+            do_temporal_decrease=True,
+            do_collision_clean=False,
+            reducer=np.median,
+            snr_threshold=5.0 * np.sqrt(200),
+            snr_by_channel=True,
+            n_jobs=1,
+            spike_length_samples=121,
+            return_raw_cleaned=True,
+            return_extra=True,
+            tpca_rank=8,
+            tpca_radius=200,
+        )
+        assert templates.shape[0] == 1
+        temp = templates[0]
+        raw_temp = extra["original_raw"][0]
+        cleaned_temp = cleaned_templates[0]
+
+        # get on fewer chans
+        ci = waveform_utils.make_contiguous_channel_index(self.geom.shape[0], nchans)
+        tmc = temp.ptp(0).argmax()
+        temp_loc = temp[:, ci[tmc]]
+        raw_temp_loc = raw_temp[:, ci[tmc]]
+        cleaned_temp_loc = cleaned_temp[:, ci[tmc]]
+
+        # make plot
+        fig, ax = plt.subplots(figsize=(5, 5))
+        amp = np.abs(raw_temp_loc).max()
+        raw_lines = cluster_viz_index.pgeom(
+            raw_temp_loc, tmc, ci, self.geom, max_abs_amp=amp, color="gray"
+        )
+        cl_lines = cluster_viz_index.pgeom(
+            cleaned_temp_loc, tmc, ci, self.geom, max_abs_amp=amp, color="green"
+        )
+        lines = cluster_viz_index.pgeom(
+            temp_loc, tmc, ci, self.geom, max_abs_amp=amp, color="k"
+        )
+        ax.legend(
+            (raw_lines[0], cl_lines[0], lines[0]),
+            ("raw", "denoised", "final"),
+            fancybox=False
+        )
+        ax.set_xticks([])
+        ax.set_yticks([])
+
+        return fig, ax, snrs.max(), temp_loc.ptp(0).max()
 
 
 class HybridComparison:
