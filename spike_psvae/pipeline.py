@@ -20,7 +20,6 @@ def initial_clustering(
     use_registered=True,
     reducer=np.median,
 ):
-    # %% tags=[]
     # load features
     with h5py.File(sub_h5, "r") as h5:
         spike_index = h5["spike_index"][:]
@@ -31,6 +30,7 @@ def initial_clustering(
 
     z = z_reg if use_registered else z
 
+    print("Initial clustering...")
     (
         clusterer,
         cluster_centers,
@@ -49,6 +49,7 @@ def initial_clustering(
 
     # remove self-duplicate spikes
     if remove_self_duplicates:
+        print("Self-duplicates...")
         kept_ix, removed_ix = cluster_utils.remove_self_duplicates(
             tspike_index[:, 0],
             clusterer.labels_,
@@ -141,7 +142,6 @@ def pre_deconv_split_step(
     )
     print("after ks split", spike_train[:, 1].max() + 1)
 
-    # %%
     # re-order again
     clusterer.labels_ = spike_train[:, 1][idx_keep_full]
     cluster_centers = cluster_utils.compute_cluster_centers(clusterer)
@@ -210,14 +210,12 @@ def pre_deconv_merge_step(
         )
     print("pre->post merge", K_pre, spike_train[:, 1].max() + 1)
 
-    # %%
     # re-order again
     clusterer.labels_ = spike_train[idx_keep_full, 1]
     cluster_centers = cluster_utils.compute_cluster_centers(clusterer)
     clusterer = cluster_utils.relabel_by_depth(clusterer, cluster_centers)
     spike_train[idx_keep_full, 1] = clusterer.labels_
 
-    # %%
     # final templates
     (
         spike_train,
