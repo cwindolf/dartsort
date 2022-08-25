@@ -5,7 +5,7 @@ import pandas
 import hdbscan
 from spike_psvae import triage
 from spike_psvae.spikeio import read_waveforms
-from tqdm.auto import tqdm, trange
+from tqdm.auto import tqdm
 import scipy
 
 
@@ -469,7 +469,6 @@ def cluster_spikes(
         axis=1,
     )
     if do_copy_spikes:
-        print(f"copying {z.size} spikes")
         x, z, maxptps, spike_index, true_spike_indices = copy_spikes(
             x,
             z,
@@ -478,10 +477,8 @@ def cluster_spikes(
             scales=scales,
             num_duplicates_list=[0, 1, 2, 3, 4],
         )
-        print(f"{z.size} spikes")
 
     if do_subsample:
-        print(f"subsampling from {z.size} spikes")
         n_spikes = 2000
         selected_spike_indices = subsample_spikes(
             n_spikes=n_spikes,
@@ -496,7 +493,6 @@ def cluster_spikes(
         maxptps = maxptps[selected_spike_indices]
         spike_index = spike_index[selected_spike_indices]
         true_spike_indices = true_spike_indices[selected_spike_indices]
-        print(f"{z.size} spikes")
 
     # triage low ptp spikes to improve density-based clustering
     if triage_quantile < 100:
@@ -553,7 +549,6 @@ def cluster_spikes(
         )
         spike_index = spike_index[low_ptp_filter][idx_keep]
         true_spike_indices = true_spike_indices[low_ptp_filter][idx_keep]
-        print(f"{z.size} spikes")
         # barf
 
     # create feature set for clustering
