@@ -2,7 +2,7 @@ import numpy as np
 from tqdm.auto import tqdm
 from sklearn.decomposition import PCA
 
-from . import denoise, subtract, spikeio
+from . import denoise, spikeio, waveform_utils
 
 
 def get_templates(
@@ -18,6 +18,7 @@ def get_templates(
     do_enforce_decrease=False,
     do_temporal_decrease=False,
     do_collision_clean=False,
+    zero_radius_um=200,
     reducer=np.median,
     snr_threshold=5.0 * np.sqrt(100),
     snr_by_channel=True,
@@ -93,7 +94,7 @@ def get_templates(
                 geom, full_channel_index
             )
     if do_tpca:
-        tpca_channel_index = subtract.make_channel_index(
+        tpca_channel_index = waveform_utils.make_channel_index(
             geom, tpca_radius, steps=1, distance_order=False, p=1
         )
 
@@ -200,10 +201,19 @@ def get_templates(
         lerp = np.minimum(1.0, snrs / snr_threshold)[:, None, None]
     templates = lerp * raw_templates + (1 - lerp) * cleaned_templates
 
+    # zero out far away channels
+    if zero_radius_um is not None:
+        zero_ci = waveform_utils.make_channel_index(
+            geom, zero_radius_um, steps=1, distance_order=False, p=2
+        )
+        for i in range(len(templates)):
+            mc = templates[i].ptp(0).argmax()
+            far = ~np.isin(np.arange(len(geom)), zero_ci[mc])
+            templates[i, :, far] = 0
+
     if return_raw_cleaned:
         if return_extra:
             return templates, snrs, raw_templates, cleaned_templates, extra
-
         return templates, snrs, raw_templates, cleaned_templates
 
     return templates, snrs
