@@ -768,7 +768,7 @@ class MatchPursuit_objectiveUpsample(object):
             allow_pickle=True,
         )
 
-    def run_batch(batch_id, fname_out):
+    def run_batch(self, batch_id, fname_out):
         start_time = time.time()
 
         # ********* run deconv ************
