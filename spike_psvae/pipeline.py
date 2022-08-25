@@ -55,7 +55,7 @@ def post_deconv_split_step(
     print("sorted?", (spike_train[1:, 0] >= spike_train[:-1, 0]).all())
     u, c = np.unique(spike_train[:, 1], return_counts=True)
     print(u.size, (c > 25).sum(), c[c > 25].sum())
-  
+
     (
         spike_train,
         reorder,
@@ -73,7 +73,7 @@ def post_deconv_split_step(
 
     # clean big
     after_deconv_merge_split.clean_big_clusters(
-        templates, spike_train, deconv_extractor.ptp[order], bin_file, geom
+        templates, spike_train, deconv_extractor.ptp[order], bin_file, geom, reducer=reducer,
     )
     (
         spike_train,
@@ -172,7 +172,7 @@ def post_deconv_merge_step(
 
     print("Clean big ")
     n_cleaned = after_deconv_merge_split.clean_big_clusters(
-        templates, spike_train, deconv_extractor.ptp[order], bin_file, geom
+        templates, spike_train, deconv_extractor.ptp[order], bin_file, geom, reducer=reducer
     )
     print(f"{n_cleaned=}")
     u, c = np.unique(spike_train[:, 1], return_counts=True)
