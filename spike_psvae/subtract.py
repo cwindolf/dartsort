@@ -10,8 +10,9 @@ import multiprocessing
 from concurrent.futures import ProcessPoolExecutor
 from collections import namedtuple
 import logging
-
 import pandas as pd
+from sklearn.decomposition import PCA
+from tqdm.auto import tqdm
 
 try:
     from spikeglx import _geometry_from_meta, read_meta_data
@@ -20,8 +21,6 @@ except ImportError:
         from ibllib.io.spikeglx import _geometry_from_meta, read_meta_data
     except ImportError:
         raise ImportError("Can't find spikeglx...")
-from sklearn.decomposition import PCA
-from tqdm.auto import tqdm
 
 from . import denoise, detect, localize_index
 from .spikeio import get_binary_length, read_data, read_waveforms_in_memory
@@ -1511,7 +1510,12 @@ def subtract_and_localize_numpy(
             probe=probe,
         )
         _logger.debug(
+<<<<<<< HEAD
             f"Detected and subtracted {spind.shape[0]} spikes with threshold {threshold} on {thresholds}"
+=======
+            f"Detected and subtracted {spind.shape[0]} spikes "
+            "with threshold {threshold} on {thresholds}"
+>>>>>>> d144479 (Rebase on main)
         )
         if len(spind):
             subtracted_wfs.append(subwfs)
