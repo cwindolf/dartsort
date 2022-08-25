@@ -61,7 +61,7 @@ def make_contiguous_channel_index(n_channels, n_neighbors=40):
     return channel_index
 
 
-def make_channel_index(geom, radius, steps=1, distance_order=True, p=2):
+def make_channel_index(geom, radius, steps=1, distance_order=False, p=2):
     """
     Compute an array whose whose ith row contains the ordered
     (by distance) neighbors for the ith channel
