@@ -1,4 +1,3 @@
-import h5py
 import hdbscan
 import numpy as np
 
@@ -535,7 +534,6 @@ def merge(
 
 
 def clean_big_clusters(
-    # templates, spike_train, raw_bin, geom, min_ptp=6.0, split_diff=2.0
     templates,
     spike_train,
     ptps,
@@ -543,8 +541,6 @@ def clean_big_clusters(
     geom,
     min_ptp=6.0,
     split_diff=2.0,
-    # max_samples=500,
-    # min_size_split=25,
     seed=0,
     reducer=np.median,
     min_size_split=25,
@@ -613,6 +609,10 @@ def clean_big_clusters(
 
         n_temp_cleaned += 1
         next_label += 1
+
+    # new_id_to_old_id = np.zeros(next_label, dtype=int)
+    # for new, old in orig_ids.items():
+    #     new_id_to_old_id[new] = old
 
     # new_id_to_old_id = np.zeros(next_label, dtype=int)
     # for new, old in orig_ids.items():
