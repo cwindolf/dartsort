@@ -555,6 +555,7 @@ def clean_big_clusters(
     # and, what should happen when there aren't many spikes?
     n_temp_cleaned = 0
     next_label = templates.shape[0]
+    # rg = np.random.default_rng(seed)
     # orig_ids = {}
 
     for unit in trange(templates.shape[0], desc="clean big"):
@@ -608,7 +609,11 @@ def clean_big_clusters(
 
         n_temp_cleaned += 1
         next_label += 1
-    
+
+    # new_id_to_old_id = np.zeros(next_label, dtype=int)
+    # for new, old in orig_ids.items():
+    #     new_id_to_old_id[new] = old
+
     # new_id_to_old_id = np.zeros(next_label, dtype=int)
     # for new, old in orig_ids.items():
     #     new_id_to_old_id[new] = old
