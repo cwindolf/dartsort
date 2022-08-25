@@ -1510,12 +1510,8 @@ def subtract_and_localize_numpy(
             probe=probe,
         )
         _logger.debug(
-<<<<<<< HEAD
-            f"Detected and subtracted {spind.shape[0]} spikes with threshold {threshold} on {thresholds}"
-=======
             f"Detected and subtracted {spind.shape[0]} spikes "
             "with threshold {threshold} on {thresholds}"
->>>>>>> d144479 (Rebase on main)
         )
         if len(spind):
             subtracted_wfs.append(subwfs)
