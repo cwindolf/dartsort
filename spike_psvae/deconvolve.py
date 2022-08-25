@@ -76,7 +76,7 @@ def _parallel_conv_filter(args):
     return parallel_conv_filter(*args)
 
 
-class MatchPursuit_objectiveUpsample(object):
+class MatchPursuitObjectiveUpsample:
     """Class for doing greedy matching pursuit deconvolution."""
 
     def __init__(
@@ -153,7 +153,7 @@ class MatchPursuit_objectiveUpsample(object):
         T_sec = T_samples / sampling_rate
         assert t_start >= 0 and (t_end is None or t_end <= T_sec)
         print(
-            "Instantiating MatchPursuit_objectiveUpsample on ",
+            "Instantiating MatchPursuitObjectiveUpsample on ",
             T_sec,
             "seconds long recording with threshold",
             threshold,
@@ -979,7 +979,7 @@ def deconvolution(
     if not os.path.exists(deconv_dir):
         os.makedirs(deconv_dir)
     # match and pursuit object
-    mp_object = MatchPursuit_objectiveUpsample(
+    mp_object = MatchPursuitObjectiveUpsample(
         templates=templates,
         deconv_dir=deconv_dir,
         standardized_bin=standardized_bin,
