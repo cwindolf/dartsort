@@ -1,6 +1,9 @@
 #!/usr/bin/env python
 from setuptools import setup
 
+with open("requirements.txt") as f:
+    require = [x.strip() for x in f.readlines() if not x.startswith("git+")]
+
 try:
     from Cython.Build import cythonize
 
