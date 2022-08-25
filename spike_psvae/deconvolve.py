@@ -763,7 +763,7 @@ class MatchPursuitObjectiveUpsample:
 
     def load_saved_state(self):
         # helper -- initializer for threads
-        self.pairwise_conv = np.load(
+        MatchPursuitObjectiveUpsample.pairwise_conv = np.load(
             os.path.join(self.deconv_dir, "pairwise_conv.npy"),
             allow_pickle=True,
         )
@@ -1000,7 +1000,7 @@ def deconvolution(
     batch_ids = []
     for batch_id in range(mp_object.n_batches):
         fname_temp = os.path.join(
-            deconv_dir, "seg_{}_deconv.npz".format(str(batch_id).zfill(6))
+            deconv_dir, f"seg_{str(batch_id).zfill(6)}_deconv.npz"
         )
         fnames_out.append(fname_temp)
         batch_ids.append(batch_id)
@@ -1036,8 +1036,8 @@ def deconvolution(
         with np.load(fname_out) as d:
             deconv_st.append(d["spike_train"])
             deconv_scalings.append(d["scalings"])
-    deconv_st = np.vstack(deconv_st)
-    deconv_scalings = np.vstack(deconv_scalings)
+    deconv_st = np.concatenate(deconv_st, axis=0)
+    deconv_scalings = np.concatenate(deconv_scalings, axis=0)
 
     print(f"Number of Spikes deconvolved: {deconv_st.shape[0]}")
 
@@ -1049,8 +1049,8 @@ def deconvolution(
     # save
     np.save(fname_spike_train, spike_train)
     print(fname_spike_train, spike_train.shape)
-    np.save(fname_scalings, scalings)
-    print(fname_scalings, scalings.shape)
+    np.save(fname_scalings, deconv_scalings)
+    print(fname_scalings, deconv_scalings.shape)
 
     # get upsampled templates and mapping for computing residual
     (
