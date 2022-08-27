@@ -10,6 +10,7 @@ import numpy as np
 import pandas as pd
 from scipy.spatial import KDTree
 import matplotlib.pyplot as plt
+from matplotlib import colors
 import statsmodels.api as sm
 import colorcet as cc
 from scipy.optimize import least_squares
@@ -59,6 +60,7 @@ class Sorting:
         n_close_units=3,
         template_n_spikes=250,
         cache_dir=None,
+        overwrite=False,
         do_cleaned_templates=False,
     ):
         n_spikes_full = spike_labels.shape[0]
@@ -75,12 +77,13 @@ class Sorting:
         self.raw_bin = raw_bin
         self.original_spike_train = np.c_[spike_times, spike_labels]
         self.cleaned_templates = None
+        self.do_cleaned_templates = do_cleaned_templates
 
         # see if we can load up expensive stuff from cache
         # this will check if the sorting in the cache uses the same
         # spike train and raw bin file path, and
         cached = False
-        if cache_dir and templates is None:
+        if not overwrite and (cache_dir and templates is None):
             cached, cached_templates = self.try_to_load_from_cache(cache_dir)
             templates = cached_templates if cached else templates
 
@@ -92,6 +95,7 @@ class Sorting:
         self.unit_labels, self.unit_spike_counts = np.unique(
             self.spike_labels, return_counts=True
         )
+        self.n_units = self.unit_labels.size
         full_spike_counts = np.zeros(self.unit_labels.max() + 1, dtype=int)
         full_spike_counts[self.unit_labels] = self.unit_spike_counts
         self.unit_firing_rates = self.unit_spike_counts / T_sec
@@ -120,23 +124,27 @@ class Sorting:
             (
                 cleaned_templates,
                 snrs,
-                _,
+                raw_ed_templates,
                 denoised_templates,
                 extra,
-            ) = snr_templates.get_templates(
+            ) = snr_templates.get_templates_wfs_tpca(
                 np.c_[self.spike_times, self.spike_labels],
                 self.geom,
                 self.raw_bin,
+                self.templates.ptp(1).argmax(1),
                 max_spikes_per_unit=500,
                 do_tpca=True,
                 snr_by_channel=True,
                 return_raw_cleaned=True,
                 return_extra=True,
+                tpca_rank=5,
             )
             self.cleaned_templates = cleaned_templates
             self.snrs = snrs
             self.denoised_templates = denoised_templates
             self.raw_templates = extra["original_raw"]
+            self.raw_ed_templates = raw_ed_templates
+            self.extra = extra
 
         if not unsorted:
             assert self.templates.shape[0] >= self.unit_labels.max() + 1
@@ -210,7 +218,7 @@ class Sorting:
                     self.contam_p_values[i],
                 ) = pyks_ccg.ccg_metrics(st, st, 500, self.fs / 1000)
 
-        if cache_dir and not cached:
+        if cache_dir and (overwrite or not cached):
             self.save_to_cache(cache_dir)
 
     def get_unit_spike_train(self, unit):
@@ -263,7 +271,7 @@ class Sorting:
         if temps is None or temps.size <= 1:
             return False, None
 
-        if self.cleaned_templates is None and snr_temps_pkl.exists():
+        if self.do_cleaned_templates and self.cleaned_templates is None and snr_temps_pkl.exists():
             with open(snr_temps_pkl, "rb") as jar:
                 (
                     self.cleaned_templates,
@@ -332,24 +340,24 @@ class Sorting:
         return fig, axes, pct_shown
 
     def compute_closest_units(self):
-        n_num_close_clusters = 10
+        num_close_clusters = min(10, self.n_units - 1)
 
         assert self.contiguous_labels
         n_units = self.templates.shape[0]
 
-        close_clusters = np.zeros((n_units, n_num_close_clusters), dtype=int)
+        close_clusters = np.zeros((n_units, num_close_clusters), dtype=int)
         for i in range(n_units):
             close_clusters[i] = cluster_utils.get_closest_clusters_kilosort(
                 i,
                 dict(zip(self.unit_labels, self.template_xzptp[:, 1])),
-                num_close_clusters=n_num_close_clusters,
+                num_close_clusters=num_close_clusters,
             )
 
-        close_templates = np.zeros((n_units, self.n_close_units), dtype=int)
+        close_templates = np.zeros((n_units, min(self.n_units - 1, self.n_close_units)), dtype=int)
         for i in tqdm(range(n_units)):
-            cos_dist = np.zeros(n_num_close_clusters)
+            cos_dist = np.zeros(num_close_clusters)
             vis_channels = np.flatnonzero(self.templates[i].ptp(0) >= 1.0)
-            for j in range(n_num_close_clusters):
+            for j in range(num_close_clusters):
                 idx = close_clusters[i, j]
                 # this is max abs norm distance (L_\infty)
                 cos_dist[j] = cdist(
@@ -359,7 +367,7 @@ class Sorting:
                     p=np.inf,
                 )
             close_templates[i] = close_clusters[i][
-                cos_dist.argsort()[: self.n_close_units]
+                cos_dist.argsort()[: min(self.n_units - 1, self.n_close_units)]
             ]
 
         return close_templates
@@ -379,37 +387,35 @@ class Sorting:
             )
 
         count_argsort = np.argsort(self.unit_spike_counts)[::-1]
-        colors_spike_count = plt.cm.inferno(
-            np.log10(self.unit_spike_counts[count_argsort])
+        norm = colors.LogNorm(
+            self.unit_spike_counts.min(),
+            self.unit_spike_counts.max(),
         )
-        for j, i in enumerate(count_argsort):
+        mappable = plt.cm.ScalarMappable(
+            norm=norm,
+            cmap=plt.cm.inferno,
+        )
+        for i in count_argsort:
             u = self.unit_labels[i]
             ab.plot(
                 self.templates[u, :, self.template_maxchans[u]],
-                color=colors_spike_count[j],
+                color=mappable.cmap(norm(self.unit_spike_counts[i])),
                 alpha=0.5,
             )
         cbar = plt.colorbar(
-            plt.cm.ScalarMappable(
-                norm=plt.Normalize(
-                    np.log10(self.unit_spike_counts).min(),
-                    np.log10(self.unit_spike_counts).max(),
-                ),
-                cmap=plt.cm.inferno,
-            ),
+            mappable,
             ax=ab,
             label="log10 count",
         )
         aa.set_xticks([])
-        aa.set_title("color=unit")
-        ab.set_title("color=count")
         fig.suptitle(
-            f"{self.name}, template maxchan traces, {len(self.unit_labels)} units."
+            f"{self.name}, template maxchan traces, {len(self.unit_labels)} units.",
+            y=0.95,
         )
         return fig
 
-    def cleaned_temp_vis(self, unit, radial_parents=None, nchans=20):
-        assert self.contiguous_labels and self.snrs is not None
+    def cleaned_temp_vis(self, unit, nchans=20):
+        assert self.contiguous_labels and self.cleaned_templates is not None
 
         temp = self.cleaned_templates[unit]
         raw_temp = self.raw_templates[unit]
@@ -425,7 +431,7 @@ class Sorting:
         cleaned_temp_loc = cleaned_temp[:, ci[tmc]]
 
         # make plot
-        fig, ax = plt.subplots(figsize=(8, 8))
+        fig, ax = plt.subplots(figsize=(6, 6))
         amp = np.abs(raw_temp_loc).max()
         raw_lines = cluster_viz_index.pgeom(
             raw_temp_loc, tmc, ci, self.geom, max_abs_amp=amp, color="gray"
@@ -457,7 +463,7 @@ class Sorting:
         ax.set_xticks([])
         ax.set_yticks([])
 
-        return fig, ax, self.snrs[unit], temp_loc.ptp(0).max()
+        return fig, ax, self.snrs[unit], raw_temp_loc.ptp(0).max(), temp_loc.ptp(0).max()
 
 
 class HybridComparison:
