@@ -15,6 +15,7 @@ def extract_deconv(
     spike_train_up_path,
     output_directory,
     standardized_bin,
+    channel_index=None,
     n_channels_extract=20,
     subtraction_h5=None,
     save_residual=True,
@@ -87,9 +88,10 @@ def extract_deconv(
     spike_index_up = np.c_[spike_train_up[:, 0], up_maxchans]
 
     # a firstchans-style channel index
-    channel_index = subtract.make_contiguous_channel_index(
-        n_chans, n_neighbors=n_channels_extract
-    )
+    if channel_index is None:
+        channel_index = subtract.make_contiguous_channel_index(
+            n_chans, n_neighbors=n_channels_extract
+        )
 
     # templates on few channels
     templates_loc = np.empty(
