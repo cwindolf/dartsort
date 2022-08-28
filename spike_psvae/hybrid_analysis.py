@@ -123,10 +123,7 @@ class Sorting:
         if self.cleaned_templates is None and do_cleaned_templates:
             (
                 cleaned_templates,
-                snrs,
-                raw_ed_templates,
-                denoised_templates,
-                extra,
+                extra
             ) = snr_templates.get_templates_wfs_tpca(
                 np.c_[self.spike_times, self.spike_labels],
                 self.geom,
@@ -140,11 +137,10 @@ class Sorting:
                 tpca_rank=5,
             )
             self.cleaned_templates = cleaned_templates
-            self.snrs = snrs
-            self.denoised_templates = denoised_templates
-            self.raw_templates = extra["original_raw"]
-            self.raw_ed_templates = raw_ed_templates
-            self.extra = extra
+            self.snrs = extra["snr_by_channel"]
+            self.denoised_templates = extra["denoised_templates"]
+            self.raw_templates = extra["orig_raw_templates"]
+            self.snr_weights = extra["weights"]
 
         if not unsorted:
             assert self.templates.shape[0] >= self.unit_labels.max() + 1
@@ -276,6 +272,7 @@ class Sorting:
                 (
                     self.cleaned_templates,
                     self.snrs,
+                    self.snr_weights,
                     self.denoised_templates,
                     self.raw_templates,
                 ) = pickle.load(jar)
@@ -302,6 +299,7 @@ class Sorting:
                     (
                         self.cleaned_templates,
                         self.snrs,
+                        self.snr_weights,
                         self.denoised_templates,
                         self.raw_templates,
                     ),
@@ -373,12 +371,12 @@ class Sorting:
         return close_templates
 
     def template_maxchan_vis(self):
-        fig, (aa, ab) = plt.subplots(nrows=2, figsize=(6, 7), sharex=True)
+        fig, (aa, ab) = plt.subplots(nrows=2, figsize=(6, 7))
 
+        # aa: plot templates colored by unit
         colors_uniq = cc.m_glasbey_hv(
             np.arange(len(self.unit_labels)) % len(cc.glasbey_hv)
         )
-
         for i, u in enumerate(self.unit_labels):
             aa.plot(
                 self.templates[u, :, self.template_maxchans[u]],
@@ -386,6 +384,8 @@ class Sorting:
                 alpha=0.5,
             )
 
+        # ab: plot templates colored by count, in descending order
+        # so that we can actually see the small count templates.
         count_argsort = np.argsort(self.unit_spike_counts)[::-1]
         norm = colors.LogNorm(
             self.unit_spike_counts.min(),
@@ -402,12 +402,11 @@ class Sorting:
                 color=mappable.cmap(norm(self.unit_spike_counts[i])),
                 alpha=0.5,
             )
-        cbar = plt.colorbar(
+        plt.colorbar(
             mappable,
             ax=ab,
             label="log10 count",
         )
-        aa.set_xticks([])
         fig.suptitle(
             f"{self.name}, template maxchan traces, {len(self.unit_labels)} units.",
             y=0.95,
@@ -419,25 +418,23 @@ class Sorting:
 
         temp = self.cleaned_templates[unit]
         raw_temp = self.raw_templates[unit]
-        cleaned_temp = self.denoised_templates[unit]
+        denoised_temp = self.denoised_templates[unit]
+        weights = self.snr_weights[unit]
 
         # get on fewer chans
         ci = waveform_utils.make_contiguous_channel_index(
             self.geom.shape[0], nchans
         )
         tmc = temp.ptp(0).argmax()
-        temp_loc = temp[:, ci[tmc]]
-        raw_temp_loc = raw_temp[:, ci[tmc]]
-        cleaned_temp_loc = cleaned_temp[:, ci[tmc]]
 
         # make plot
         fig, ax = plt.subplots(figsize=(6, 6))
-        amp = np.abs(raw_temp_loc).max()
-        raw_lines = cluster_viz_index.pgeom(
-            raw_temp_loc, tmc, ci, self.geom, max_abs_amp=amp, color="gray"
+        amp = np.abs(temp).max()
+        rlines = cluster_viz_index.pgeom(
+            raw_temp[:, ci[tmc]], tmc, ci, self.geom, max_abs_amp=amp, color="gray"
         )
-        cl_lines = cluster_viz_index.pgeom(
-            cleaned_temp_loc,
+        dlines = cluster_viz_index.pgeom(
+            denoised_temp[:, ci[tmc]],
             tmc,
             ci,
             self.geom,
@@ -446,24 +443,34 @@ class Sorting:
             show_zero=False,
         )
         lines = cluster_viz_index.pgeom(
-            temp_loc,
+            temp[:, ci[tmc]],
             tmc,
             ci,
             self.geom,
             max_abs_amp=amp,
             color="k",
-            lw=1,
+            lw=0.5,
+            show_zero=False,
+        )
+        wlines = cluster_viz_index.pgeom(
+            weights[:, ci[tmc]],
+            tmc,
+            ci,
+            self.geom,
+            max_abs_amp=amp,
+            color="k",
+            lw=0.5,
             show_zero=False,
         )
         ax.legend(
-            (raw_lines[0], cl_lines[0], lines[0]),
-            ("raw", "denoised", "final"),
+            (rlines[0], dlines[0], lines[0], wlines[0]),
+            ("raw", "denoised", "final", "weight"),
             fancybox=False,
         )
         ax.set_xticks([])
         ax.set_yticks([])
 
-        return fig, ax, self.snrs[unit], raw_temp_loc.ptp(0).max(), temp_loc.ptp(0).max()
+        return fig, ax, self.snrs[unit], raw_temp.ptp(0).max(), temp.ptp(0).max()
 
 
 class HybridComparison:
