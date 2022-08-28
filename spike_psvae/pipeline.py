@@ -16,8 +16,10 @@ from . import (
 def initial_clustering(
     sub_h5,
     raw_data_bin,
+    remove_pair_duplicates=True,
     remove_self_duplicates=True,
     use_registered=True,
+    frames_dedup=12,
     reducer=np.median,
 ):
     # load features
@@ -45,7 +47,20 @@ def initial_clustering(
         maxptps,
         spike_index,
         split_big=True,
+        do_remove_dups=False,
     )
+    
+    # remove cross dups after remove self dups
+    if remove_pair_duplicates:
+        print("dups", flush=True)
+        (
+            clusterer,
+            duplicate_indices,
+            duplicate_spikes,
+        ) = cluster_utils.remove_duplicate_spikes(
+            clusterer, tspike_index[:, 0], tmaxptps, frames_dedup=frames_dedup
+        )
+        clusterer.labels_ = spike_train_utils.make_labels_contiguous(clusterer.labels_)
 
     # remove self-duplicate spikes
     if remove_self_duplicates:
@@ -58,7 +73,8 @@ def initial_clustering(
             frame_dedup=20,
         )
         clusterer.labels_[removed_ix] = -1
-
+        clusterer.labels_ = spike_train_utils.make_labels_contiguous(clusterer.labels_)
+    
     # labels in full index space (not triaged)
     spike_train = spike_index.copy()
     spike_train[:, 1] = -1
@@ -78,9 +94,10 @@ def initial_clustering(
         min_n_spikes=0,
         pbar=True,
     )
-    spike_index = np.c_[spike_train[:, 0], spike_index[:, 1]]
+    aligned_spike_index = np.c_[spike_train[:, 0], spike_index[:, 1]]
+    clusterer.labels_ = spike_train[idx_keep_full, 1]
 
-    return spike_train, spike_index, templates, template_shifts, clusterer, idx_keep_full
+    return spike_train, aligned_spike_index, templates, template_shifts, clusterer, idx_keep_full
 
 
 def pre_deconv_split_step(
@@ -88,7 +105,7 @@ def pre_deconv_split_step(
     raw_data_bin,
     residual_data_bin,
     spike_train,
-    spike_index,
+    aligned_spike_index,
     templates,
     template_shifts,
     clusterer,
@@ -99,12 +116,13 @@ def pre_deconv_split_step(
 ):
     with h5py.File(sub_h5, "r") as h5:
         sub_wf = h5["subtracted_waveforms"]
-        firstchans = h5["firstchans"][:]
+        firstchans = h5["first_channels"][:]
         x, y, z, alpha, z_rel = h5["localizations"][:].T
         geom = h5["geom"][:]
         z_reg = h5["z_reg"][:]
         channel_index = h5["channel_index"][:]
         tpca = subtract.tpca_from_h5(h5)
+        orig_spike_index = h5["spike_index"][:]
 
         z = z_reg if use_registered else z
 
@@ -112,7 +130,7 @@ def pre_deconv_split_step(
             residual_data_bin,
             sub_wf,
             firstchans,
-            spike_index,
+            aligned_spike_index,
             templates.ptp(1).argmax(1),
             template_shifts,
             spike_train[:, 1],
@@ -124,23 +142,23 @@ def pre_deconv_split_step(
             tpca,
         )
 
-    # ks split
-    print("before ks split", spike_train[:, 1].max() + 1)
-    spike_train[:, 1], split_map = pre_deconv_merge_split.ks_maxchan_tpca_split(
-        h5["subtracted_tpca_projs"],
-        channel_index,
-        spike_index[:, 1],
-        spike_train[:, 1],
-        tpca,
-        recursive=True,
-        top_pc_init=True,
-        aucsplit=0.85,
-        min_size_split=50,
-        max_split_corr=0.9,
-        min_amp_sim=0.2,
-        min_split_prop=0.05,
-    )
-    print("after ks split", spike_train[:, 1].max() + 1)
+        # ks split
+        print("before ks split", spike_train[:, 1].max() + 1)
+        spike_train[:, 1], split_map = pre_deconv_merge_split.ks_maxchan_tpca_split(
+            h5["subtracted_tpca_projs"],
+            channel_index,
+            aligned_spike_index[:, 1],
+            spike_train[:, 1],
+            tpca,
+            recursive=True,
+            top_pc_init=True,
+            aucsplit=0.85,
+            min_size_split=50,
+            max_split_corr=0.9,
+            min_amp_sim=0.2,
+            min_split_prop=0.05,
+        )
+        print("after ks split", spike_train[:, 1].max() + 1)
 
     # re-order again
     clusterer.labels_ = spike_train[:, 1][idx_keep_full]
@@ -149,23 +167,25 @@ def pre_deconv_split_step(
     cluster_centers = cluster_utils.compute_cluster_centers(clusterer)
     spike_train[idx_keep_full, 1] = clusterer.labels_
 
+    # note, we use the original spike index times here so that the template
+    # shifts are correct relative to the stored subtracted waveforms
     (
         spike_train,
         _,
         templates,
         template_shifts,
     ) = spike_train_utils.clean_align_and_get_templates(
-        spike_train,
+        np.c_[orig_spike_index[:, 0], spike_train[:, 1]],
         geom.shape[0],
         raw_data_bin,
         sort_by_time=False,
         reducer=reducer,
-        min_n_spikes=0,
         pbar=True,
     )
-    spike_index = np.c_[spike_train[:, 0], spike_index[:, 1]]
+    aligned_spike_index = np.c_[spike_train[:, 0], spike_index[:, 1]]
+    clusterer.labels_ = spike_train[idx_keep_full, 1]
 
-    return spike_train, spike_index, templates, template_shifts, clusterer
+    return spike_train, aligned_spike_index, templates, template_shifts, clusterer
 
 
 def pre_deconv_merge_step(
@@ -173,18 +193,20 @@ def pre_deconv_merge_step(
     raw_data_bin,
     residual_data_bin,
     spike_train,
-    spike_index,
+    aligned_spike_index,
     templates,
     template_shifts,
     clusterer,
     idx_keep_full,
+    final_align_max_shift=25,
+    final_clean_min_spikes=5,
     device=None,
     merge_dipscore=0.5,
     reducer=np.median,
 ):
     with h5py.File(sub_h5, "r") as h5:
         sub_wf = h5["subtracted_waveforms"]
-        firstchans = h5["firstchans"][:]
+        firstchans = h5["first_channels"][:]
         x, y, z, alpha, z_rel = h5["localizations"][:].T
         geom = h5["geom"][:]
         z_reg = h5["z_reg"][:]
@@ -199,7 +221,7 @@ def pre_deconv_merge_step(
             templates,
             template_shifts,
             len(templates),
-            spike_index,
+            aligned_spike_index,
             spike_train[:, 1],
             x,
             z_reg,
@@ -217,6 +239,8 @@ def pre_deconv_merge_step(
     spike_train[idx_keep_full, 1] = clusterer.labels_
 
     # final templates
+    # here, we don't need to use the original spike index, since we
+    # won't be touching the subtracted waveforms any more.
     (
         spike_train,
         order,
@@ -228,10 +252,12 @@ def pre_deconv_merge_step(
         raw_data_bin,
         sort_by_time=False,
         reducer=reducer,
-        min_n_spikes=0,
+        max_shift=final_align_max_shift,
+        min_n_spikes=final_clean_min_spikes,
         pbar=True,
     )
     spike_index = np.c_[spike_train[:, 0], spike_index[:, 1]]
+    clusterer.labels_ = spike_train[idx_keep_full, 1]
 
     return spike_train, spike_index, templates, template_shifts
 
