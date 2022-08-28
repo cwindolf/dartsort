@@ -1084,7 +1084,7 @@ def ks_maxchan_tpca_split(
                 min_amp_sim=min_amp_sim,
                 min_split_prop=min_split_prop,
             )
-        except np.linalg.LinalgError as e:
+        except np.linalg.LinAlgError as e:
             print(cur_label, "had error", e)
             is_split = False
 
