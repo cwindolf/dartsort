@@ -177,16 +177,16 @@ def get_agreement_indices(
     mapped_st = sorting2.get_unit_spike_train(lab_st2)
     times_concat = np.concatenate((st_1, mapped_st))
     membership = np.concatenate(
-        (np.ones(st_1.shape) * 1, np.ones(mapped_st.shape) * 2)
+        (np.full_like(st_1, 1), np.full_like(mapped_st, 2))
     )
     indices = times_concat.argsort()
     times_concat_sorted = times_concat[indices]
     membership_sorted = membership[indices]
-    diffs = times_concat_sorted[1:] - times_concat_sorted[:-1]
-    inds = np.where(
+    diffs = np.diff(times_concat_sorted)
+    inds = np.flatnonzero(
         (diffs <= delta_frames)
         & (membership_sorted[:-1] != membership_sorted[1:])
-    )[0]
+    )
 
     if len(inds) > 0:
         inds2 = inds[np.where(inds[:-1] + 1 != inds[1:])[0]] + 1
@@ -245,16 +245,23 @@ def remove_duplicate_units(clusterer, spike_frames, maxptps):
     return clusterer, remove_ids
 
 
-def remove_duplicate_spikes(clusterer, spike_frames, maxptps, frames_dedup):
+def remove_duplicate_spikes(
+    clusterer,
+    spike_frames,
+    maxptps,
+    frames_dedup,
+    full_duplicate_fraction=0.95,
+    min_result_spikes=10,
+):
     # normalize agreement by smaller unit and then remove only the spikes with agreement
     sorting = make_sorting_from_labels_frames(clusterer.labels_, spike_frames)
     # remove duplicates
     cmp_self = compare_two_sorters(
-        sorting, sorting, match_score=0.1, chance_score=0.1, verbose=True
+        sorting, sorting, match_score=0.1, chance_score=0.1
     )
     removed_cluster_ids = set()
     remove_spikes = []
-    for cluster_id in tqdm(sorting.get_unit_ids(), desc="remove dups"):
+    for cluster_id in tqdm(sorting.get_unit_ids(), desc="Remove pair dups"):
         possible_matches = cmp_self.possible_match_12[cluster_id]
         # possible_matches[possible_matches!=cluster_id])
         if len(possible_matches) == 2:
@@ -268,18 +275,21 @@ def remove_duplicate_spikes(clusterer, spike_frames, maxptps, frames_dedup):
             ) = compute_spiketrain_agreement(
                 st_1, st_2, delta_frames=frames_dedup
             )
-            indices_agreement = [ind_st1, ind_st2]
             mean_ptp_matches = [
-                np.mean(maxptps[clusterer.labels_ == cluster_id])
+                maxptps[clusterer.labels_ == cluster_id].mean()
                 for cluster_id in possible_matches
             ]
-            remove_cluster_id = possible_matches[np.argmin(mean_ptp_matches)]
-            remove_spike_indices = indices_agreement[
-                np.argmin(mean_ptp_matches)
-            ]
+            which = np.argmin(mean_ptp_matches)
+            remove_cluster_id = possible_matches[which]
+            remove_ind = [ind_st1, ind_st2][which]
+            not_match = [not_match_ind_st1, not_match_ind_st2][which]
+            remain_frac = not_match.size / (not_match.size + remove_ind.size)
+            if not_match.size < min_result_spikes or remain_frac < 1 - full_duplicate_fraction:
+                remove_ind = np.concatenate((remove_ind, not_match))
+            
             if remove_cluster_id not in removed_cluster_ids:
                 remove_spikes.append(
-                    (remove_cluster_id, possible_matches, remove_spike_indices)
+                    (remove_cluster_id, possible_matches, remove_ind)
                 )
                 removed_cluster_ids.add(remove_cluster_id)
 
@@ -304,20 +314,43 @@ def remove_self_duplicates(
     n_channels,
     frame_dedup=20,
     n_samples=250,
+    too_contaminated=0.75,
+    search_threshold_lo=0.01,
+    search_threshold_switch=500,
+    search_threshold_hi=0.05,
+    seed=0,
 ):
     indices_to_remove = []
     N = spike_labels.shape[0]
     assert spike_times.shape == spike_labels.shape == (N,)
     unit_labels = np.unique(spike_labels)
     unit_labels = unit_labels[unit_labels >= 0]
+    rg = np.random.default_rng(seed)
 
-    for unit in tqdm(unit_labels, desc="Self violations"):
+    for unit in tqdm(unit_labels, desc="Remove self violations"):
         in_unit = np.flatnonzero(spike_labels == unit)
 
         spike_times_unit = spike_times[in_unit]
         violations = np.diff(spike_times_unit) < frame_dedup
+        
+        # if there are few violations, it's not worth trying to keep them
+        if (
+            violations.mean() < search_threshold_lo
+            or (
+                in_unit.size > search_threshold_switch
+                and violations.mean() < search_threshold_hi
+            )
+        ):
+            viol_ix = np.flatnonzero(violations)
+            ix_remove_unit = np.unique(np.concatenate((viol_ix, viol_ix + 1)))
+            indices_to_remove.extend(in_unit[ix_remove_unit])
+            
+        elif violations.mean() > too_contaminated:
+            print("super contaminated unit.")
+            indices_to_remove.extend(in_unit)
 
-        if violations.any():
+        elif violations.any():
+            print(f"{unit=} {in_unit.size=} {violations.mean()=}")
             # we'll remove either an index in first_viol_ix,
             # or that index + 1, depending on template agreement
             first_viol_ix = np.flatnonzero(violations)
@@ -330,14 +363,17 @@ def remove_self_duplicates(
             # load as many unviolated wfs as possible
             if unviol.size > n_samples:
                 # we can compute template just from unviolated wfs
+                which_unviol = rg.choice(unviol.size, n_samples, replace=False)
+                which_unviol.sort()
                 wfs_unit, _ = read_waveforms(
                     spike_times_unit[unviol], binary_file, n_channels
                 )
             else:
                 n_viol_load = min(all_viol_ix.size, n_samples - unviol.size)
                 load_ix = np.concatenate(
-                    [unviol, np.random.choice(all_viol_ix, n_viol_load, replace=False)]
+                    [unviol, rg.choice(all_viol_ix, n_viol_load, replace=False)]
                 )
+                load_ix.sort()
                 wfs_unit, _ = read_waveforms(
                     spike_times_unit[load_ix], binary_file, n_channels
                 )
@@ -353,21 +389,24 @@ def remove_self_duplicates(
             wfs_1, _ = read_waveforms(
                 spike_times_unit[first_viol_ix], binary_file, n_channels, channels=[mc]
             )
+            wfs_1 = wfs_1[:, :, 0]
             wfs_2, _ = read_waveforms(
                 spike_times_unit[first_viol_ix + 1], binary_file, n_channels, channels=[mc]
             )
+            wfs_2 = wfs_2[:, :, 0]
 
-            # best aligned will have a 1 where wfs_1 was better
+            # first is better will have a 1 where wfs_1 was better
             # aligned then wfs_2, so that first_viol_ix + best_aligned
             # is the index of the waveforms to *remove!*
             argmins_1 = wfs_1.argmin(axis=1)
             argmins_2 = wfs_2.argmin(axis=1)
-            best_aligned = np.abs(argmins_1 - template_argmin) < (argmins_2 - template_argmin)
+            first_is_better = np.abs(argmins_1 - template_argmin) <= (argmins_2 - template_argmin)
 
             # it's possible that duplicates could arrive, so that we're
             # not really removing *all* the violations.
             # but it's better than nothing!
-            ix_remove_unit = np.unique(first_viol_ix + best_aligned)
+            ix_remove_unit = np.unique(first_viol_ix + first_is_better)
+            ix_keep_unit = np.unique(first_viol_ix + (1-first_is_better))
 
             # append and continue to next unit
             indices_to_remove.extend(in_unit[ix_remove_unit])
@@ -587,7 +626,6 @@ def cluster_spikes(
         cluster_centers = compute_cluster_centers(clusterer)
     # remove dups (from NN denoise) and reorder by z
     if do_remove_dups:
-        print("dups", flush=True)
         (
             clusterer,
             duplicate_indices,
@@ -608,8 +646,8 @@ def cluster_spikes(
             spike_index,
             **split_big_kw,
         )
-        print("done splitting big", flush=True)
-    print("done", flush=True)
+        # print("done splitting big", flush=True)
+    # print("done", flush=True)
 
     return (
         clusterer,
