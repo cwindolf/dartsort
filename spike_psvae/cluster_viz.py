@@ -505,9 +505,15 @@ def plot_isi_distribution(spike_train, ax=None):
         fig = plt.figure(figsize=(6, 3))
         ax = fig.gca()
     ax.set_xlabel("isi (ms)")
+    ax.set_xticks(np.arange(0, 11, 2.5))
+    ax.set_xlim([-0.01, 10.1])
+    ax.set_ylabel("mass")
+
     spike_train_diff = np.diff(spike_train) / 30000
     spike_train_diff = spike_train_diff[np.where(spike_train_diff < 0.01)]
     spike_train_diff = spike_train_diff * 1000  # convert 1/10 to ms
+    if np.all(spike_train_diff > 10):
+        return ax
 
     y, x, _ = ax.hist(
         spike_train_diff, bins=np.arange(0, 10.1, 0.5), density=True
@@ -518,8 +524,6 @@ def plot_isi_distribution(spike_train, ax=None):
         print("Ignoring seaborn error", e)
     #     sns.distplot(spike_train_diff)
 
-    ax.set_xticks(np.arange(0, 11, 2.5))
-    ax.set_xlim([-0.01, 10.1])
     return ax
 
 
