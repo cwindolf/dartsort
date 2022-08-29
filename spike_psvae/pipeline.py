@@ -182,7 +182,7 @@ def pre_deconv_split_step(
         reducer=reducer,
         pbar=True,
     )
-    aligned_spike_index = np.c_[spike_train[:, 0], spike_index[:, 1]]
+    aligned_spike_index = np.c_[spike_train[:, 0], aligned_spike_index[:, 1]]
     clusterer.labels_ = spike_train[idx_keep_full, 1]
 
     return spike_train, aligned_spike_index, templates, template_shifts, clusterer
@@ -256,10 +256,10 @@ def pre_deconv_merge_step(
         min_n_spikes=final_clean_min_spikes,
         pbar=True,
     )
-    spike_index = np.c_[spike_train[:, 0], spike_index[:, 1]]
+    aligned_spike_index = np.c_[spike_train[:, 0], aligned_spike_index[:, 1]]
     clusterer.labels_ = spike_train[idx_keep_full, 1]
 
-    return spike_train, spike_index, templates, template_shifts
+    return spike_train, aligned_spike_index, templates, template_shifts
 
 
 def post_deconv_split_step(
