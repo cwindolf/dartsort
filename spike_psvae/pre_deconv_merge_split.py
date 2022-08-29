@@ -964,6 +964,9 @@ def ks_bimodal_pursuit(
         # new estimates of variances
         s1 = np.dot(rs[:, 0], (x - mu1) ** 2) / np.sum(rs[:, 0])
         s2 = np.dot(rs[:, 1], (x - mu2) ** 2) / np.sum(rs[:, 1])
+        
+        if min(s1, s2) < 1e-6:
+            break
 
         if (k >= 10) and (k % 2 == 0):
             # starting at iteration 10, we start re-estimating the pursuit direction
