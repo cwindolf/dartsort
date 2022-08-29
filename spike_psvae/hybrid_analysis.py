@@ -380,23 +380,38 @@ class Sorting:
 
         return close_templates
 
-    def template_maxchan_vis(self):
-        fig, (aa, ab) = plt.subplots(nrows=2, figsize=(6, 7))
+    def template_maxchan_vis(self, secondary_minptp=3, n_secondary=3):
+        fig, (aa, ab, ac) = plt.subplots(nrows=3, figsize=(6, 12))
+        count_argsort = np.argsort(self.unit_spike_counts)[::-1]
 
         # aa: plot templates colored by unit
         colors_uniq = cc.m_glasbey_hv(
             np.arange(len(self.unit_labels)) % len(cc.glasbey_hv)
         )
-        for i, u in enumerate(self.unit_labels):
+        for i in count_argsort:
+            u = self.unit_labels[i]
             aa.plot(
                 self.templates[u, :, self.template_maxchans[u]],
-                color=colors_uniq[i],
+                color=colors_uniq[u],
                 alpha=0.5,
             )
+            vis_chans = np.setdiff1d(
+                np.flatnonzero(self.templates[u].ptp(0) > secondary_minptp),
+                [self.template_maxchans[u]],
+            )
+            if not vis_chans.any():
+                continue
+            vis_chans_sort = np.argsort(self.templates[u].ptp(0)[vis_chans])[::-1]
+            vis_chans = vis_chans[vis_chans_sort[:n_secondary]]
+            for c in vis_chans:
+                ac.plot(
+                    self.templates[u, :, c],
+                    color=colors_uniq[u],
+                    alpha=0.5,
+                )
 
         # ab: plot templates colored by count, in descending order
         # so that we can actually see the small count templates.
-        count_argsort = np.argsort(self.unit_spike_counts)[::-1]
         norm = colors.LogNorm(
             self.unit_spike_counts.min(),
             self.unit_spike_counts.max(),
@@ -417,9 +432,13 @@ class Sorting:
             ax=ab,
             label="spike count",
         )
+        aa.set_title("primary channels by unit")
+        ab.set_title("primary channels by count")
+        ac.set_title(f"top {n_secondary} secondary channels with ptp>{secondary_minptp} by unit")
         fig.suptitle(
             f"{self.name}, template maxchan traces, {len(self.unit_labels)} units.",
-            y=0.95,
+            fontsize=12,
+            y=0.92,
         )
         return fig
 
@@ -615,7 +634,7 @@ class Sorting:
         axes["d"].set_xticks([])
         axes["d"].set_yticks([])
         
-        return fig, axes
+        return fig, axes, self.template_maxptps[unit]
 
 
 class HybridComparison:
