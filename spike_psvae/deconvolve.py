@@ -1,5 +1,5 @@
 import numpy as np
-import scipy
+from scipy import signal
 import time, os
 import multiprocessing
 from itertools import repeat
@@ -323,7 +323,7 @@ class MatchPursuitObjectiveUpsample:
             # No upsampling is needed.
             temporal_up = self.temporal
         else:
-            temporal_up = scipy.signal.resample(
+            temporal_up = signal.resample(
                 self.temporal, self.n_time * self.up_factor, axis=1
             )
             idx = (
@@ -449,7 +449,7 @@ class MatchPursuitObjectiveUpsample:
         tot_temps_so_far = 0
 
         for i in range(self.orig_n_unit):
-            up_temps = scipy.signal.resample(
+            up_temps = signal.resample(
                 self.temps[:, :, i], self.n_time * self.up_factor
             )[down_sample_idx, :]
             up_temps = up_temps.transpose([1, 2, 0])
@@ -542,7 +542,7 @@ class MatchPursuitObjectiveUpsample:
     def upsample_templates_parallel(
         template, n_time, up_factor, down_sample_idx
     ):
-        return scipy.signal.resample(template.T, n_time * up_factor)[
+        return signal.resample(template.T, n_time * up_factor)[
             down_sample_idx, :
         ]
 
@@ -640,7 +640,7 @@ class MatchPursuitObjectiveUpsample:
         if peak_window.shape[1] == 0:
             return np.array([]), np.array([]), valid_idx
 
-        high_resolution_peaks = scipy.signal.resample(
+        high_resolution_peaks = signal.resample(
             peak_window, self.up_window_len * self.up_factor, axis=0
         )
         shift_idx = np.argmax(
@@ -655,7 +655,7 @@ class MatchPursuitObjectiveUpsample:
     def find_peaks(self):
         """Finds peaks in subtraction differentials of spikes."""
         max_across_temp = np.max(self.obj, axis=0)
-        spike_times = scipy.signal.argrelmax(
+        spike_times = signal.argrelmax(
             max_across_temp[self.n_time - 1 : self.obj.shape[1] - self.n_time],
             order=self.refrac_radius,
         )[0] + (self.n_time - 1)
@@ -899,6 +899,7 @@ def deconvolution(
     residual_bin,
     template_spike_train,
     geom_path,
+    unit_maxchans=None,
     threshold=50,
     max_upsample=8,
     vis_su_threshold=1.0,
@@ -914,6 +915,7 @@ def deconvolution(
     verbose=False,
     trough_offset=42,
     reducer=np.median,
+    overwrite=True,
 ):
     r"""Deconvolution.
     YASS deconvolution (cpu version) refactored: https://github.com/paninski-lab/yass/blob/yass-registration/src/yass/deconvolve/run_original.py
@@ -931,22 +933,16 @@ def deconvolution(
     # get templates
     template_path = os.path.join(output_directory, "templates.npy")
     print(template_path)
-    if not os.path.exists(template_path):
+    if overwrite or not os.path.exists(template_path):
         print("computing templates!")
         if cleaned_temps:
-            templates, snrs, _, _ = snr_templates.get_templates(
-                template_spike_train[:],
+            if unit_maxchans is None:
+                raise ValueError("We need unit maxchans to get the cleaned templates")
+            templates, extra = snr_templates.get_templates(
+                template_spike_train,
                 geom,
                 standardized_bin,
-                residual_bin,
-                do_tpca=True,
-                return_raw_cleaned=True,
-                do_collision_clean=False,
-                do_enforce_decrease=False,
-                do_temporal_decrease=False,
-                tpca_radius=100,
-                tpca_rank=3,
-                snr_threshold=5.0 * np.sqrt(100),
+                unit_maxchans,
                 trough_offset=trough_offset,
                 reducer=reducer,
             )
