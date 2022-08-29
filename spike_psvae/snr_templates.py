@@ -82,7 +82,7 @@ def get_templates(
 
     # -- fit TPCA to randomly sampled waveforms
     if do_tpca:
-        print("pca wfs...")
+        print("Loading TPCA wfs...")
         tpca_channel_index = waveform_utils.make_channel_index(
             geom, tpca_radius, steps=1, distance_order=False, p=1
         )
@@ -96,7 +96,6 @@ def get_templates(
             spike_length_samples=spike_length_samples,
             max_channels=unit_max_channels[spike_train[choices, 1]],
         )
-        print(tpca_waveforms.shape)
         # NTC -> NCT
         denoise.enforce_temporal_decrease(tpca_waveforms, in_place=True)
         tpca_waveforms = tpca_waveforms.transpose(0, 2, 1).reshape(
@@ -119,11 +118,10 @@ def get_templates(
                 in_unit.size, max_spikes_per_unit, replace=False
             )
             choices.sort()
-        waveforms = spikeio.get_waveforms(
-            spike_train[choices, 0],
+        waveforms, skipped_idx = spikeio.read_waveforms(
+            spike_train[in_unit[choices], 0],
             raw_binary_file,
             len(geom),
-            max_spikes_per_unit=max_spikes_per_unit,
             trough_offset=trough_offset,
             spike_length_samples=spike_length_samples,
         )
@@ -151,7 +149,7 @@ def get_templates(
     weights = denoised_weights(
         snr_by_channel, spike_length_samples, trough_offset, snr_threshold
     )
-    templates = weights * denoised_templates + (1 - weights) * raw_templates
+    templates = weights * raw_templates + (1 - weights) * denoised_templates
     extra["weights"] = weights
 
     # zero out far away channels
@@ -177,9 +175,7 @@ def denoised_weights(
     d=6.0,
 ):
     # v shaped function for time weighting
-    vt = np.abs(np.arange(spike_length_samples) - trough_offset, dtype=float)[
-        :, None
-    ]
+    vt = np.abs(np.arange(spike_length_samples) - trough_offset, dtype=float)
     vt[trough_offset:] = vt[trough_offset:] / vt[trough_offset:].max()
     vt[:trough_offset] = vt[:trough_offset] / vt[:trough_offset].max()
 
@@ -187,6 +183,6 @@ def denoised_weights(
     sc = np.minimum(snrs, snr_threshold) / snr_threshold
 
     # pass it through a hand picked squashing function
-    wtc = 1.0 / (1.0 + np.exp(d + a * vt - b * sc))
+    wtc = 1.0 / (1.0 + np.exp(d + a * vt[None, :, None] - b * sc[:, None, :]))
 
     return wtc
