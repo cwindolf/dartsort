@@ -253,13 +253,36 @@ def pre_deconv_merge_step(
         sort_by_time=False,
         reducer=reducer,
         max_shift=final_align_max_shift,
+        pbar=True,
+    )
+    aligned_spike_index = np.c_[spike_train[:, 0], aligned_spike_index[:, 1]]
+    clusterer.labels_ = spike_train[idx_keep_full, 1]
+    
+    # remove oversplits -- important to do this after the big align
+    (
+        spike_train,
+        templates,
+    ) = after_deconv_merge_split.remove_oversplits(templates, spike_train)
+    
+    # and clean up the spike train to finish.
+    (
+        spike_train,
+        order,
+        templates,
+        template_shifts,
+    ) = spike_train_utils.clean_align_and_get_templates(
+        spike_train,
+        geom.shape[0],
+        raw_data_bin,
+        sort_by_time=False,
+        reducer=reducer,
         min_n_spikes=final_clean_min_spikes,
         pbar=True,
     )
     aligned_spike_index = np.c_[spike_train[:, 0], aligned_spike_index[:, 1]]
     clusterer.labels_ = spike_train[idx_keep_full, 1]
 
-    return spike_train, aligned_spike_index, templates, template_shifts
+    return spike_train, aligned_spike_index, templates
 
 
 def post_deconv_split_step(
