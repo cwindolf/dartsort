@@ -23,7 +23,7 @@ import pickle
 from spikeinterface.extractors import NumpySorting
 from spikeinterface.comparison import compare_sorter_to_ground_truth
 
-from spike_psvae.spikeio import get_binary_length
+from spike_psvae.spikeio import get_binary_length, read_waveforms
 
 # from spike_psvae.snr_templates import get_templates
 from spike_psvae.deconvolve import get_templates
@@ -262,7 +262,11 @@ class Sorting:
         if temps is None or temps.size <= 1:
             return False, None
 
-        if self.do_cleaned_templates and self.cleaned_templates is None and snr_temps_pkl.exists():
+        if (
+            self.do_cleaned_templates
+            and self.cleaned_templates is None
+            and snr_temps_pkl.exists()
+        ):
             with open(snr_temps_pkl, "rb") as jar:
                 (
                     self.cleaned_templates,
@@ -310,13 +314,21 @@ class Sorting:
         do_ellipse=True,
         max_n_spikes=500_000,
     ):
-        sample = slice(None)
         pct_shown = 100
         if self.n_spikes > max_n_spikes:
             sample = np.random.default_rng(0).choice(
                 self.n_spikes, size=max_n_spikes, replace=False
             )
+            sample.sort()
             pct_shown = np.round(100 * max_n_spikes / self.n_spikes)
+        else:
+            sample = np.arange(self.n_spikes)
+
+        z_hidden = np.flatnonzero(
+            (self.spike_xzptp[:, 1] < zlim[0])
+            | (self.spike_xzptp[:, 1] > zlim[1])
+        )
+        sample = np.setdiff1d(sample, z_hidden)
 
         fig, axes = cluster_viz_index.array_scatter(
             self.spike_labels[sample],
@@ -346,7 +358,9 @@ class Sorting:
                 num_close_clusters=num_close_clusters,
             )
 
-        close_templates = np.zeros((n_units, min(self.n_units - 1, self.n_close_units)), dtype=int)
+        close_templates = np.zeros(
+            (n_units, min(self.n_units - 1, self.n_close_units)), dtype=int
+        )
         for i in tqdm(range(n_units)):
             cos_dist = np.zeros(num_close_clusters)
             vis_channels = np.flatnonzero(self.templates[i].ptp(0) >= 1.0)
@@ -408,8 +422,13 @@ class Sorting:
         )
         return fig
 
-    def cleaned_temp_vis(self, unit, nchans=20):
+    def cleaned_temp_vis(self, unit, ax=None, nchans=20):
         assert self.contiguous_labels and self.cleaned_templates is not None
+
+        if ax is None:
+            fig, ax = plt.subplots(figsize=(6, 6))
+        else:
+            fig = ax.figure
 
         temp = self.cleaned_templates[unit]
         raw_temp = self.raw_templates[unit]
@@ -423,10 +442,15 @@ class Sorting:
         tmc = temp.ptp(0).argmax()
 
         # make plot
-        fig, ax = plt.subplots(figsize=(6, 6))
         amp = np.abs(temp).max()
         rlines = cluster_viz_index.pgeom(
-            raw_temp[:, ci[tmc]], tmc, ci, self.geom, max_abs_amp=amp, color="gray"
+            raw_temp[:, ci[tmc]],
+            tmc,
+            ci,
+            self.geom,
+            max_abs_amp=amp,
+            color="gray",
+            ax=ax,
         )
         dlines = cluster_viz_index.pgeom(
             denoised_temp[:, ci[tmc]],
@@ -436,6 +460,7 @@ class Sorting:
             max_abs_amp=amp,
             color="green",
             show_zero=False,
+            ax=ax,
         )
         lines = cluster_viz_index.pgeom(
             temp[:, ci[tmc]],
@@ -446,6 +471,7 @@ class Sorting:
             color="orange",
             lw=1,
             show_zero=False,
+            ax=ax,
         )
         wlines = cluster_viz_index.pgeom(
             weights[:, ci[tmc]],
@@ -456,6 +482,7 @@ class Sorting:
             color="purple",
             lw=1,
             show_zero=False,
+            ax=ax,
         )
         ax.legend(
             (rlines[0], dlines[0], lines[0], wlines[0]),
@@ -465,7 +492,119 @@ class Sorting:
         ax.set_xticks([])
         ax.set_yticks([])
 
-        return fig, ax, self.snrs[unit].max(), raw_temp.ptp(0).max(), temp.ptp(0).max()
+        return (
+            fig,
+            ax,
+            self.snrs[unit],
+            raw_temp.ptp(0).max(),
+            temp.ptp(0).max(),
+        )
+
+    def unit_summary_fig(self, unit, dz=50, nchans=16, n_wfs_max=250):
+        have_loc = self.spike_xzptp is not None
+
+        fig, axes = plt.subplot_mosaic(
+            "aat\nxyz\nddd" if have_loc else "aat\nddd",
+            gridspec_kw=dict(
+                height_ratios=[1, 1, 3, 3] if have_loc else [1, 3, 3],
+            ),
+        )
+
+        in_unit = np.flatnonzero(self.spike_train[:, 1] == unit)
+        unit_st = self.spike_train[in_unit, 0]
+        cx, cz, cptp = self.template_xzptp[unit]
+
+        # text summaries
+        unit_props = dict(
+            unit=unit,
+            snr=self.templates[unit].ptp(1).max() / self.unit_spike_counts[unit],
+            n_spikes=self.unit_spike_counts[unit],
+            template_ptp=self.templates[unit].ptp(1).max(),
+            max_channel=self.template_maxchans[unit],
+            trough_sample=self.templates[unit, :, self.template_maxchans[unit]].argmin(),
+        )
+        axes["t"].text(
+            0.05,
+            0.95,
+            "\n".join(f"{k}: {v}" for k, v in unit_props.items()),
+            transform=axes["t"].transAxes,
+            fontsize=10,
+            verticalalignment="top",
+            bbox=dict(edgecolor="none"),
+        )
+
+        # ISI distribution
+        cluster_viz.plot_isi_distribution(unit_st, ax=axes["a"])
+
+        # Scatter
+        if have_loc:
+            self.array_scatter(
+                zlim=(cz - dz, cz + dz),
+                axes=[axes[k] for k in "xyz"],
+                do_ellipse=True,
+            )
+
+        # Waveforms
+        ci = waveform_utils.make_contiguous_channel_index(
+            self.geom.shape[0], nchans
+        )
+        choices = slice(None)
+        if in_unit.size > n_wfs_max:
+            choices = np.random.choice(in_unit.size, n_wfs_max, replace=False)
+            choices.sort()
+        maxchans = self.template_maxchans[
+            self.spike_train[in_unit[choices], 1]
+        ]
+        wfs = read_waveforms(
+            self.spike_train[in_unit[choices], 0],
+            self.raw_bin,
+            len(self.geom),
+            channel_index=ci,
+            max_channels=maxchans,
+        )
+        max_abs_amp = np.abs(wfs).max()
+        wf_lines = cluster_viz_index.pgeom(
+            wfs,
+            maxchans,
+            ci,
+            self.geom,
+            ax=axes["d"],
+            max_abs_amp=max_abs_amp,
+            color="k",
+            alpha=0.1,
+        )
+        rt_lines = cluster_viz_index.pgeom(
+            self.templates[unit][:, ci[self.template_maxchans[unit]]],
+            self.template_maxchans[unit],
+            ci,
+            self.geom,
+            ax=axes["d"],
+            max_abs_amp=max_abs_amp,
+            color="b",
+            lw=1,
+        )
+        ch = cl = ()
+        if self.cleaned_templates is not None:
+            ct_lines = cluster_viz_index.pgeom(
+                self.cleaned_templates[unit][
+                    :, ci[self.template_maxchans[unit]]
+                ],
+                self.template_maxchans[unit],
+                ci,
+                self.geom,
+                ax=axes["d"],
+                max_abs_amp=max_abs_amp,
+                color="orange",
+                lw=1,
+            )
+            ch = (ct_lines[0],)
+            ch = ("cleaned template",)
+        axes["d"].legend(
+            (wf_lines[0], rt_lines[0], *ch),
+            ("waveforms", "raw template", *cl),
+            fancybox=False,
+        )
+>>>>>>> d6ccec3 (Add single unit summary)
 
 
 class HybridComparison:
