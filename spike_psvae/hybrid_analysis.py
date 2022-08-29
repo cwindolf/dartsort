@@ -124,16 +124,11 @@ class Sorting:
             (
                 cleaned_templates,
                 extra
-            ) = snr_templates.get_templates_wfs_tpca(
+            ) = snr_templates.get_templates(
                 np.c_[self.spike_times, self.spike_labels],
                 self.geom,
                 self.raw_bin,
                 self.templates.ptp(1).argmax(1),
-                max_spikes_per_unit=500,
-                do_tpca=True,
-                snr_by_channel=True,
-                return_raw_cleaned=True,
-                return_extra=True,
                 tpca_rank=5,
             )
             self.cleaned_templates = cleaned_templates
@@ -405,7 +400,7 @@ class Sorting:
         plt.colorbar(
             mappable,
             ax=ab,
-            label="log10 count",
+            label="spike count",
         )
         fig.suptitle(
             f"{self.name}, template maxchan traces, {len(self.unit_labels)} units.",
@@ -448,8 +443,8 @@ class Sorting:
             ci,
             self.geom,
             max_abs_amp=amp,
-            color="k",
-            lw=0.5,
+            color="orange",
+            lw=1,
             show_zero=False,
         )
         wlines = cluster_viz_index.pgeom(
@@ -458,8 +453,8 @@ class Sorting:
             ci,
             self.geom,
             max_abs_amp=amp,
-            color="k",
-            lw=0.5,
+            color="purple",
+            lw=1,
             show_zero=False,
         )
         ax.legend(
@@ -470,7 +465,7 @@ class Sorting:
         ax.set_xticks([])
         ax.set_yticks([])
 
-        return fig, ax, self.snrs[unit], raw_temp.ptp(0).max(), temp.ptp(0).max()
+        return fig, ax, self.snrs[unit].max(), raw_temp.ptp(0).max(), temp.ptp(0).max()
 
 
 class HybridComparison:
