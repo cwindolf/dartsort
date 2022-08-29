@@ -4,7 +4,6 @@ import matplotlib.pyplot as plt
 import colorcet
 from matplotlib.patches import Ellipse
 import matplotlib.transforms as transforms
-from spike_psvae.isocut5 import isocut5 as isocut
 
 # matplotlib.use('Agg')
 from matplotlib_venn import venn2
@@ -16,14 +15,11 @@ import seaborn as sns
 import matplotlib.gridspec as gridspec
 from sklearn.discriminant_analysis import LinearDiscriminantAnalysis as LDA
 from sklearn.decomposition import PCA
-from tqdm.auto import tqdm
 
 from spike_psvae.spikeio import read_waveforms
 from spike_psvae.cluster_utils import (
-    get_agreement_indices,
     compute_spiketrain_agreement,
     get_unit_similarities,
-    compute_shifted_similarity,
     get_closest_clusters_kilosort,
     get_closest_clusters_hdbscan,
 )
@@ -508,7 +504,7 @@ def plot_isi_distribution(spike_train, ax=None):
     if ax is None:
         fig = plt.figure(figsize=(6, 3))
         ax = fig.gca()
-    ax.set_xlabel("ms")
+    ax.set_xlabel("isi (ms)")
     spike_train_diff = np.diff(spike_train) / 30000
     spike_train_diff = spike_train_diff[np.where(spike_train_diff < 0.01)]
     spike_train_diff = spike_train_diff * 1000  # convert 1/10 to ms
@@ -523,7 +519,6 @@ def plot_isi_distribution(spike_train, ax=None):
     #     sns.distplot(spike_train_diff)
 
     ax.set_xticks(np.arange(0, 11, 2.5))
-    ax.set_title("isis")
     ax.set_xlim([-0.01, 10.1])
     return ax
 
