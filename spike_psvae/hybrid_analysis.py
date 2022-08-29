@@ -313,6 +313,7 @@ class Sorting:
         axes=None,
         do_ellipse=True,
         max_n_spikes=500_000,
+        pad_zfilter=50,
     ):
         pct_shown = 100
         if self.n_spikes > max_n_spikes:
@@ -325,8 +326,8 @@ class Sorting:
             sample = np.arange(self.n_spikes)
 
         z_hidden = np.flatnonzero(
-            (self.spike_xzptp[:, 1] < zlim[0])
-            | (self.spike_xzptp[:, 1] > zlim[1])
+            (self.spike_xzptp[:, 1] < zlim[0] - pad_zfilter)
+            | (self.spike_xzptp[:, 1] > zlim[1] + pad_zfilter)
         )
         sample = np.setdiff1d(sample, z_hidden)
 
@@ -500,14 +501,15 @@ class Sorting:
             temp.ptp(0).max(),
         )
 
-    def unit_summary_fig(self, unit, dz=50, nchans=16, n_wfs_max=250):
+    def unit_summary_fig(self, unit, dz=50, nchans=16, n_wfs_max=100):
         have_loc = self.spike_xzptp is not None
-
+        height_ratios = [1, 1, 3] if have_loc else [1, 3]
         fig, axes = plt.subplot_mosaic(
             "aat\nxyz\nddd" if have_loc else "aat\nddd",
             gridspec_kw=dict(
-                height_ratios=[1, 1, 3, 3] if have_loc else [1, 3, 3],
+                height_ratios=[1, 2, 5] if have_loc else [1, 5],
             ),
+            figsize=(6, 2 * sum(height_ratios)),
         )
 
         in_unit = np.flatnonzero(self.spike_train[:, 1] == unit)
@@ -524,14 +526,17 @@ class Sorting:
             trough_sample=self.templates[unit, :, self.template_maxchans[unit]].argmin(),
         )
         axes["t"].text(
-            0.05,
-            0.95,
-            "\n".join(f"{k}: {v}" for k, v in unit_props.items()),
+            0,
+            1,
+            "\n".join(
+                (f"{k}: {v}" if np.issubdtype(v, np.integer) else f"{k}: {v:0.2f}")
+                for k, v in unit_props.items()),
             transform=axes["t"].transAxes,
             fontsize=10,
             verticalalignment="top",
-            bbox=dict(edgecolor="none"),
+            bbox=dict(edgecolor="none", facecolor="none"),
         )
+        axes["t"].axis("off")
 
         # ISI distribution
         cluster_viz.plot_isi_distribution(unit_st, ax=axes["a"])
@@ -543,6 +548,8 @@ class Sorting:
                 axes=[axes[k] for k in "xyz"],
                 do_ellipse=True,
             )
+            axes["y"].set_yticks([])
+            axes["z"].set_yticks([])
 
         # Waveforms
         ci = waveform_utils.make_contiguous_channel_index(
@@ -555,7 +562,7 @@ class Sorting:
         maxchans = self.template_maxchans[
             self.spike_train[in_unit[choices], 1]
         ]
-        wfs = read_waveforms(
+        wfs, skipped = read_waveforms(
             self.spike_train[in_unit[choices], 0],
             self.raw_bin,
             len(self.geom),
@@ -571,7 +578,7 @@ class Sorting:
             ax=axes["d"],
             max_abs_amp=max_abs_amp,
             color="k",
-            alpha=0.1,
+            alpha=0.05,
         )
         rt_lines = cluster_viz_index.pgeom(
             self.templates[unit][:, ci[self.template_maxchans[unit]]],
@@ -598,13 +605,17 @@ class Sorting:
                 lw=1,
             )
             ch = (ct_lines[0],)
-            ch = ("cleaned template",)
+            cl = ("cleaned template",)
         axes["d"].legend(
             (wf_lines[0], rt_lines[0], *ch),
             ("waveforms", "raw template", *cl),
             fancybox=False,
+            loc="lower right",
         )
->>>>>>> d6ccec3 (Add single unit summary)
+        axes["d"].set_xticks([])
+        axes["d"].set_yticks([])
+        
+        return fig, axes
 
 
 class HybridComparison:
