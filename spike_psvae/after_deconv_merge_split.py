@@ -642,7 +642,7 @@ def remove_oversplits(templates, spike_train, min_ptp=4.0, max_diff=2.0):
 
     # make labels contiguous and get corresponding templates
     spike_train[:, 1], orig_uniq = cluster_utils.make_labels_contiguous(
-        spike_train[:, 1], return_unique=True
+        spike_train[:, 1], return_orig_unit_labels=True
     )
     templates = templates[orig_uniq]
 
