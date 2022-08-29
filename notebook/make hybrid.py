@@ -475,7 +475,7 @@ for i, in_bin in enumerate(tqdm(in_bins)):
 # %%
 1
 
-# %% tags=[] jupyter={"outputs_hidden": true}
+# %% tags=[]
 # cluster + deconv in one go for better cache behavior
 just_do_it = False
 just_do_it = True
@@ -570,7 +570,7 @@ for i, in_bin in enumerate(tqdm(in_bins)):
     plt.show()
     
     (
-        spike_train, aligned_spike_index, templates, template_shifts
+        spike_train, aligned_spike_index, templates  # , template_shifts
     ) = pipeline.pre_deconv_merge_step(
         sub_h5,
         raw_bin,
@@ -605,7 +605,8 @@ for i, in_bin in enumerate(tqdm(in_bins)):
     np.save(subject_sub_dir / "aligned_spike_index.npy", aligned_spike_index)
     np.save(subject_sub_dir / "templates.npy", templates)
     np.save(subject_sub_dir / "aligned_templates.npy", templates)
-    np.save(subject_sub_dir / "template_shifts.npy", template_shifts)
+    # need to redo the bookkeeping logic if we need these, but we don't.
+    # np.save(subject_sub_dir / "template_shifts.npy", template_shifts)
 
 # %%
 # # print helpful stuff for copypasting kilosort sbatch commands
