@@ -26,7 +26,6 @@ from spikeinterface.comparison import compare_sorter_to_ground_truth
 from spike_psvae.spikeio import get_binary_length, read_waveforms
 
 # from spike_psvae.snr_templates import get_templates
-from spike_psvae.deconvolve import get_templates
 from spike_psvae import (
     localize_index,
     cluster_viz,
@@ -35,6 +34,7 @@ from spike_psvae import (
     cluster_utils,
     snr_templates,
     waveform_utils,
+    deconvolve,
 )
 
 
@@ -105,13 +105,14 @@ class Sorting:
 
         self.templates = templates
         if templates is None and not unsorted:
+            print("Computing raw templates")
             # self.cleaned_templates, _, self.templates, _ = get_templates(
             #     np.c_[self.spike_times, self.spike_labels],
             #     geom,
             #     raw_bin,
             #     return_raw_cleaned=True,
             # )
-            self.templates = get_templates(
+            self.templates = deconvolve.get_templates(
                 raw_bin,
                 self.spike_times[:, None],
                 self.spike_labels,
@@ -121,6 +122,7 @@ class Sorting:
             )
 
         if self.cleaned_templates is None and do_cleaned_templates:
+            print("Computing cleaned templates")
             (
                 cleaned_templates,
                 extra
@@ -515,7 +517,7 @@ class Sorting:
         return (
             fig,
             ax,
-            self.snrs[unit],
+            self.snrs[unit].max(),
             raw_temp.ptp(0).max(),
             temp.ptp(0).max(),
         )
