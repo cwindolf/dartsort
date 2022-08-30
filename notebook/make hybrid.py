@@ -871,15 +871,15 @@ from spike_psvae import deconvolve
 
 for i, in_bin in enumerate(tqdm(in_bins)):
     subject = in_bin.stem.split(".")[0]
-    # if subject != "DY_018":
+    if subject != "DY_018":
     # if subject != "CSHL051":
-    if subject not in active_dsets:
+    # if subject not in active_dsets:
         continue
     
     out_bin = out_dir / f"{in_bin.stem}.bin"
     subject_sub_h5 = next((sub_dir / subject).glob("sub*.h5"))
     subject_deconv_dir = deconv_dir / subject
-    second_deconv_dir = deconv_dir / subject / "deconv2_new"
+    second_deconv_dir = deconv_dir / subject / "deconv2"
     second_deconv_dir.mkdir(exist_ok=True)
     
     subprocess.run(["rsync", "-avP", out_bin, "/tmp/raw.bin"])
@@ -930,11 +930,8 @@ from spike_psvae import extract_deconv, pipeline
 
 for in_bin in in_bins:
     subject = in_bin.stem.split(".")[0]
-    # if subject != "DY_018":
-    # if subject_deconv_dir:
-    #     del subject_deconv_dir
-
-    if subject not in active_dsets:
+    if subject != "DY_018":
+    # if subject not in active_dsets:
         continue
     print(subject)
 
@@ -1021,5 +1018,8 @@ for in_bin in in_bins:
 
 # %%
 1
+
+# %%
+np.load("/mnt/3TB/charlie/hybrid_5min/hybrid_5min_deconv/CSHL051/deconv2/spike_train_up.npy").shape
 
 # %%
