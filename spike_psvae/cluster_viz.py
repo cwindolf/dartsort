@@ -500,7 +500,7 @@ def plot_self_agreement(labels, spike_times, fig=None):
     return fig
 
 
-def plot_isi_distribution(spike_train, ax=None):
+def plot_isi_distribution(spike_train, ax=None, cdf=True):
     if ax is None:
         fig = plt.figure(figsize=(6, 3))
         ax = fig.gca()
@@ -518,11 +518,12 @@ def plot_isi_distribution(spike_train, ax=None):
     y, x, _ = ax.hist(
         spike_train_diff, bins=np.arange(0, 10.1, 0.5), density=True
     )
-    try:
-        sns.ecdfplot(spike_train_diff, ax=ax)
-    except KeyError as e:
-        print("Ignoring seaborn error", e)
-    #     sns.distplot(spike_train_diff)
+    if cdf:
+        try:
+            sns.ecdfplot(spike_train_diff, ax=ax)
+        except KeyError as e:
+            print("Ignoring seaborn error", e)
+        #     sns.distplot(spike_train_diff)
 
     return ax
 
