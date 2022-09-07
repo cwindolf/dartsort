@@ -540,7 +540,7 @@ class Sorting:
         # text summaries
         unit_props = dict(
             unit=unit,
-            snr=self.templates[unit].ptp(1).max() * self.unit_spike_counts[unit],
+            snr=self.templates[unit].ptp(1).max() * np.sqrt(self.unit_spike_counts[unit]),
             n_spikes=self.unit_spike_counts[unit],
             template_ptp=self.templates[unit].ptp(1).max(),
             max_channel=self.template_maxchans[unit],
