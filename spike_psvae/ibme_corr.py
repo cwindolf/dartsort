@@ -388,8 +388,6 @@ def online_register_rigid(
     time_downsample_factor=1,
     mincorr=0.7,
     disp=None,
-    csd=False,
-    channels=slice(None),
     batch_size=32,
     device=None,
 ):
