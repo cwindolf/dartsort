@@ -1,6 +1,7 @@
 import numpy as np
 from scipy import signal
-import time, os
+import time
+import os
 import multiprocessing
 from itertools import repeat
 import copy
@@ -10,10 +11,6 @@ import h5py
 from spike_psvae.spikeio import read_data, read_waveforms
 from pathlib import Path
 from spike_psvae import snr_templates
-
-# ********************************************************
-# ********************************************************
-# ********************************************************
 
 
 def parallel_conv_filter(
@@ -26,12 +23,10 @@ def parallel_conv_filter(
     approx_rank,
     deconv_dir,
 ):
-
     proc_index = data_in[0]
     unit_array = data_in[1]
 
-    # Cat: must load these structures from disk for multiprocessing step;
-    #       where there are many templates; due to multiproc 4gb limit
+    # load template SVD from disk (pickle size limit)
     fname = os.path.join(deconv_dir, "svd.npz")
     data = np.load(fname)
     temporal_up = data["temporal_up"]
@@ -85,6 +80,7 @@ class MatchPursuitObjectiveUpsample:
         deconv_dir,
         standardized_bin,
         lambd=0,
+        allowed_scale=np.inf,
         save_residual=False,
         t_start=0,
         t_end=None,
@@ -131,6 +127,8 @@ class MatchPursuitObjectiveUpsample:
         assert lambd is None or lambd >= 0
         self.lambd = lambd
         self.no_amplitude_scaling = lambd is None or lambd == 0
+        self.scale_min = 1 / (1 + allowed_scale)
+        self.scale_max = 1 + allowed_scale
 
         print(
             "expected shape of templates loaded (n_times, n_chan, n_units) : ",
@@ -193,16 +191,16 @@ class MatchPursuitObjectiveUpsample:
         # Compute pairwise convolution of filters
         self.pairwise_filter_conv()
 
-        # compute norm of templates
-        self.norm = np.zeros([self.orig_n_unit, 1], dtype=np.float32)
+        # compute squared norm of templates
+        self.norm = np.zeros(self.orig_n_unit, dtype=np.float32)
         for i in range(self.orig_n_unit):
             self.norm[i] = np.sum(
                 np.square(self.temps[:, self.vis_chan[:, i], i])
             )
 
         # self.update_data(data)
-        self.dec_spike_train = np.zeros([0, 2], dtype=np.int32)
-        self.dec_scalings = np.zeros([0], dtype=np.float32)
+        self.dec_spike_train = np.zeros((0, 2), dtype=np.int32)
+        self.dec_scalings = np.zeros((0,), dtype=np.float32)
 
         # Energy reduction for assigned spikes.
         self.dist_metric = np.array([])
@@ -217,10 +215,10 @@ class MatchPursuitObjectiveUpsample:
 
         # Indices of single time window the window around peak after upsampling
         self.zoom_index = radius * factor + np.arange(-radius, radius + 1)
-        self.peak_to_template_idx = np.append(
-            np.arange(radius, -1, -1), (factor - 1) - np.arange(radius)
+        self.peak_to_template_idx = np.concatenate(
+            (np.arange(radius, -1, -1), (factor - 1) - np.arange(radius))
         )
-        self.peak_time_jitter = np.append([0], np.array([0, 1]).repeat(radius))
+        self.peak_time_jitter = np.concatenate(([0], np.array([0, 1]).repeat(radius)))
 
         # Refractory Perios Setup.
         # DO NOT MAKE IT SMALLER THAN self.n_time - 1 !!!
@@ -308,17 +306,17 @@ class MatchPursuitObjectiveUpsample:
         """Compresses the templates using SVD and upsample temporal compoents."""
 
         fname = os.path.join(self.deconv_dir, "svd.npz")
-        #         if os.path.exists(fname)==False:
         self.temporal, self.singular, self.spatial = np.linalg.svd(
             np.transpose(self.temps, (2, 0, 1))
         )
+
         # Keep only the strongest components
         self.temporal = self.temporal[:, :, : self.approx_rank]
         self.singular = self.singular[:, : self.approx_rank]
         self.spatial = self.spatial[:, : self.approx_rank, :]
-        # Upsample the temporal components of the SVD
-        # in effect, upsampling the reconstruction of the
-        # templates.
+
+        # Upsample the temporal components of the SVD in effect,
+        # upsampling the reconstruction of the templates.
         if self.up_factor == 1:
             # No upsampling is needed.
             temporal_up = self.temporal
@@ -346,7 +344,7 @@ class MatchPursuitObjectiveUpsample:
         )
 
     def pairwise_filter_conv(self):
-        # Cat: TODO: this may still crash memory in some cases; can split into additional bits
+        # TODO: split based on size limit rather than n_processors
         units = np.array_split(np.unique(self.up_up_map), self.n_processors)
         if self.multi_processing:
             ctx = multiprocessing.get_context("spawn")
@@ -439,8 +437,8 @@ class MatchPursuitObjectiveUpsample:
         # respectively correspond to [0, 9, 8, ..., 1] of the 10x upsampled of
         # the original templates.
         all_temps = []
-        reorder_idx = np.append(
-            np.arange(0, 1), np.arange(self.up_factor - 1, 0, -1)
+        reorder_idx = np.concatenate(
+            (np.arange(0, 1), np.arange(self.up_factor - 1, 0, -1))
         )
 
         # Sequentialize the number of up_up_map. For instance,
@@ -531,7 +529,7 @@ class MatchPursuitObjectiveUpsample:
         # respectively correspond to [0, 9, 8, ..., 1] of the 10x upsampled of
         # the original templates.
         reorder_idx = np.tile(
-            np.append(np.arange(0, 1), np.arange(self.up_factor - 1, 0, -1)),
+            np.concatenate((np.arange(0, 1), np.arange(self.up_factor - 1, 0, -1))),
             self.orig_n_unit,
         )
         reorder_idx += np.arange(
@@ -574,22 +572,21 @@ class MatchPursuitObjectiveUpsample:
                 self.conv_result[unit, :] += np.convolve(
                     matmul_result[unit, :], filters[unit], mode="full"
                 )
-
+            
         if self.no_amplitude_scaling:
-            # the original objective with no amplitude scaling
-            # note that the objective below converges to this one
-            # as lambda -> 0
-            self.obj = 2 * self.conv_result - self.norm
+            # the original objective with no amplitude scaling. note that
+            # the objective below converges to this one as lambda -> 0
+            self.obj = 2 * self.conv_result - self.norm[:, None]
         else:
             # the objective is (conv + 1/lambd)^2 / (norm + 1/lambd) - 1/lambd
             # we omit the final -1/lambd since it's ok to work up to a constant
-            self.obj = np.square(self.conv_result + 1 / self.lambd) / (
-                self.norm + 1 / self.lambd
-            )
-
-        # Set indicator to true so that it no longer is run
-        # for future iterations in case subtractions are done
-        # implicitly.
+            b = self.conv_result + 1 / self.lambd
+            a = self.norm[:, None] + 1 / self.lambd
+            # this order of operations is key to avoid overflows when squaring!
+            self.obj = b * (b / a) - 1 / self.lambd
+            
+        # Set indicator to true so that it no longer is run for future
+        # iterations in case subtractions are done implicitly.
         self.obj_computed = True
 
     def high_res_peak(self, times, unit_ids):
@@ -669,6 +666,21 @@ class MatchPursuitObjectiveUpsample:
         upsampled_template_idx, time_shift, valid_idx = self.high_res_peak(
             spike_times, spike_ids
         )
+        
+        # find amplitude scalings when lambda != 0
+        # we run this before shifting the spike ids into the upsampled id space,
+        # because it requires the conv result and we have only computed this with
+        # the original, non-upsampled templates. probably it would be good to do
+        # so with the upsampled templates, which would require computing the obj
+        # and the pairwise_conv in the upsampled id space -- that could be expensive.
+        # for now, we're leaving it like this.
+        if self.no_amplitude_scaling:
+            scalings = np.ones(len(spike_times), dtype=np.float32)
+        else:
+            scalings = (
+                self.conv_result[spike_ids, spike_times] + 1 / self.lambd
+            ) / (self.norm[spike_ids] + 1 / self.lambd)
+            scalings = np.clip(scalings, self.scale_min, self.scale_max)
 
         # The spikes that had NaN in the window and could not be upsampled
         # should fall-back on default value.
@@ -676,22 +688,10 @@ class MatchPursuitObjectiveUpsample:
         if len(valid_idx):
             spike_ids[valid_idx] += upsampled_template_idx
             spike_times[valid_idx] += time_shift
-
+            
         # Note that we shift the discovered spike times from convolution
         # space to actual raw voltage space by subtracting self.n_time + 1
-        new_spike_train = np.append(
-            spike_times[:, None] - (self.n_time - 1),
-            spike_ids[:, None],
-            axis=1,
-        )
-
-        # find amplitude scalings when lambda != 0
-        if self.no_amplitude_scaling:
-            scalings = np.ones(len(new_spike_train), dtype=np.float32)
-        else:
-            scalings = (
-                self.conv_result[spike_ids, spike_times] + 1 / self.lambd
-            ) / (self.norm[spike_ids] + 1 / self.lambd)
+        new_spike_train = np.c_[spike_times - (self.n_time - 1), spike_ids]
 
         return new_spike_train, scalings, dist_metric[valid_idx]
 
@@ -718,8 +718,8 @@ class MatchPursuitObjectiveUpsample:
     def subtract_spike_train(self, spt, scalings):
         """Subtracts a spike train from the original spike_train."""
         present_units = np.unique(spt[:, 1])
+        conv_res_len = self.n_time * 2 - 1
         for i in present_units:
-            conv_res_len = self.n_time * 2 - 1
             in_unit = np.flatnonzero(spt[:, 1] == i)
             unit_spt = spt[in_unit, :]
             spt_idx = np.arange(0, conv_res_len) + unit_spt[:, :1]
@@ -729,7 +729,7 @@ class MatchPursuitObjectiveUpsample:
             # I think this was to handle overlaps: in place -= in numpy
             # won't subtract from the same index twice.
             # But np.subtract.at will! Switching to that.
-            unit_idx = self.unit_overlap[i]
+            unit_idx = np.flatnonzero(self.unit_overlap[i])
             idx = np.ix_(unit_idx, spt_idx.ravel())
             pconv = self.pairwise_conv[self.up_up_map[i]]
             if self.no_amplitude_scaling:
@@ -742,18 +742,24 @@ class MatchPursuitObjectiveUpsample:
                     ),
                 )
             else:
-                to_subtract = pconv[..., None] * scalings[in_unit]
+                # this particular broadcasting makes things line up with the ravel()
+                # used in the definition of `idx` above
+                to_subtract = pconv[:, None, :] * scalings[in_unit][None, :, None]
                 to_subtract = to_subtract.reshape(*pconv.shape[:-1], -1)
+                ninf_ix = np.where(self.conv_result[idx] == -np.inf)
                 np.subtract.at(
                     self.conv_result,
                     idx,
                     to_subtract,
                 )
+
                 # now we update the objective just at the changed
                 # indices -- no need to do the whole thing.
-                self.obj[idx] = np.square(
-                    self.conv_result[idx] + 1 / self.lambd
-                ) / (self.norm[i] + 1 / self.lambd)
+                b = self.conv_result[idx] + 1 / self.lambd
+                a = self.norm[unit_idx, None] + 1 / self.lambd
+                bba = b * (b / a) - 1 / self.lambd
+                bba[ninf_ix] = -np.inf
+                self.obj[idx] = bba
 
         self.enforce_refractory(spt)
 
@@ -774,7 +780,6 @@ class MatchPursuitObjectiveUpsample:
         # ********* run deconv ************
         # read raw data for segment using idx_list vals
         # load raw data with buffer
-
         s_start = self.start_sample + batch_id * self.batch_len_samples
         s_end = min(self.end_sample, s_start + self.batch_len_samples)
         load_start = max(self.start_sample, s_start - self.buffer)
@@ -824,12 +829,12 @@ class MatchPursuitObjectiveUpsample:
             if len(spt) == 0:
                 break
 
-            self.dec_spike_train = np.append(self.dec_spike_train, spt, axis=0)
-            self.dec_scalings = np.append(self.dec_scalings, scalings, axis=0)
+            self.dec_spike_train = np.concatenate((self.dec_spike_train, spt))
+            self.dec_scalings = np.concatenate((self.dec_scalings, scalings))
 
             self.subtract_spike_train(spt, scalings)
 
-            self.dist_metric = np.append(self.dist_metric, dist_met)
+            self.dist_metric = np.concatenate((self.dist_metric, dist_met))
 
             if self.verbose:
                 print(
@@ -916,6 +921,8 @@ def deconvolution(
     trough_offset=42,
     reducer=np.median,
     overwrite=True,
+    lambd=0,
+    allowed_scale=np.inf,
 ):
     r"""Deconvolution.
     YASS deconvolution (cpu version) refactored: https://github.com/paninski-lab/yass/blob/yass-registration/src/yass/deconvolve/run_original.py
@@ -990,6 +997,8 @@ def deconvolution(
         n_processors=n_processors,
         multi_processing=multi_processing,
         verbose=verbose,
+        lambd=lambd,
+        allowed_scale=allowed_scale,
     )
 
     fnames_out = []
@@ -1000,9 +1009,7 @@ def deconvolution(
         )
         fnames_out.append(fname_temp)
         batch_ids.append(batch_id)
-
-    print(f"running deconvolution on {mp_object.n_batches} batches")
-
+    
     if len(batch_ids) > 0:
         if multi_processing:
             ctx = multiprocessing.get_context("spawn")
@@ -1069,6 +1076,7 @@ def deconvolution(
         fname_spike_train_up,
         template_path,
         fname_spike_train,
+        fname_scalings,
     )
 
 

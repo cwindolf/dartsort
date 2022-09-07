@@ -904,6 +904,10 @@ def array_scatter_vs(scatter_comparison, vs_comparison, do_ellipse=True):
     fig, axes, pct_shown = scatter_comparison.new_sorting.array_scatter(
         do_ellipse=do_ellipse
     )
+    
+    if vs_comparison is None:
+        return fig, axes, None, pct_shown
+
     scatter_match = scatter_comparison.gt_matched
     vs_match = vs_comparison.gt_matched
     match = scatter_match + 2 * vs_match
