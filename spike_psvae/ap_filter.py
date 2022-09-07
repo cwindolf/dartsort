@@ -29,7 +29,7 @@ def run_preprocessing(
     pad_for_filter=None,
     chunk_seconds=5,
     do_filter=True,
-    standardize="perchan",
+    standardize=None,
     in_dtype=np.int16,
     rmss=None,
     avg_depth=False,
@@ -65,6 +65,8 @@ def run_preprocessing(
     s_start = int(np.floor(t_start * fs))
     s_end = int(np.floor(t_end * fs)) if t_end is not None else T_samples
     assert 0 <= s_start < s_end <= T_samples
+
+    out_bin = Path(out_bin)
 
     # preprocessed chunk factory
     get_chunk = make_chunk_preprocessor(
@@ -113,18 +115,19 @@ def run_preprocessing(
     if standardize == "global":
         rmss[:] = np.median(rmss)
 
-    Path(out_bin).rename(out_bin + ".tmp")
-    with open(out_bin, "wb") as out:
-        for s in trange(0, T_samples, fs * chunk_seconds, desc="stdize"):
-            chunk = read_data(
-                out_bin + ".tmp",
-                np.float32,
-                s,
-                min(T_samples, s + fs * chunk_seconds),
-                n_channels,
-            )
-            chunk = chunk / rmss
-            chunk.tofile(out)
+    if standardize in ("global", "perchan"):
+        out_bin.rename(out_bin.with_suffix(".tmp"))
+        with open(out_bin, "wb") as out:
+            for s in trange(0, T_samples, fs * chunk_seconds, desc="stdize"):
+                chunk = read_data(
+                    out_bin + ".tmp",
+                    np.float32,
+                    s,
+                    min(T_samples, s + fs * chunk_seconds),
+                    n_channels,
+                )
+                chunk = chunk / rmss
+                chunk.tofile(out)
 
 
 def run_standardize(
@@ -273,8 +276,9 @@ def make_chunk_preprocessor(
             chunk = chunk_ * (unique_depths.size / same_depth_chans.size)
 
         if csd:
-            chunk = np.pad(chunk, [(0, 0), (1, 1)], mode="edge")
-            chunk = 2 * chunk[:, 1:-1] - chunk[:, 2:] - chunk[:, :-2]
+            assert not avg_depth
+            chunk, yuniq = pixelcsd(chunk.T, geom)
+            chunk = chunk.T
 
         # z score iters for decorrelation
         for _ in range(decorr_iter):
@@ -288,6 +292,51 @@ def make_chunk_preprocessor(
         return chunk.astype(out_dtype)
 
     return get_chunk
+
+
+def pixelcsd(lfp, geom):
+    """Takes neuropixels lfp and geometry and computes CSD for each column
+       returns the average per-depth
+
+    Args:
+        lfp : np.array, depth by time
+        geom : n_channels by 2
+
+    Returns:
+        CSD [array]: [description]
+    """
+    if geom.shape[0] != lfp.shape[0]:
+        raise ValueError(
+            "May need to transpose `lfp`. It should be depth x time."
+        )
+
+    x_values = geom[:, 0]
+    y_values = geom[:, 1]
+    assert all(y_values[1:] >= y_values[:-1]), "Requires depth order."
+
+    x_unique = np.unique(x_values)
+    y_unique = np.unique(y_values)
+
+    # init with NaNs:
+    csd = np.full(
+        (y_unique.size, lfp.shape[1], x_unique.size),
+        np.nan,
+        dtype=lfp.dtype,
+    )
+
+    for i, x in enumerate(x_unique):
+        lfp_subset = lfp[x_values == x, :]
+        y_subset = y_values[x_values == x]
+
+        # csd as second spatial derivative
+        csd_subset = np.gradient(lfp_subset, y_subset, axis=0)
+        csd_subset = np.gradient(csd_subset, y_subset, axis=0)
+        csd[np.isin(y_unique, y_subset), :, i] = csd_subset
+
+    mean_csd = np.nanmean(csd, axis=2)
+    # remove rows that are all NaNs:
+    idx = ~np.isnan(mean_csd).all(axis=1)
+    return mean_csd[idx], y_unique[idx]
 
 
 class _noint:
