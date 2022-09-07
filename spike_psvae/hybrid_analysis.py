@@ -540,7 +540,7 @@ class Sorting:
         # text summaries
         unit_props = dict(
             unit=unit,
-            snr=self.templates[unit].ptp(1).max() / self.unit_spike_counts[unit],
+            snr=self.templates[unit].ptp(1).max() * self.unit_spike_counts[unit],
             n_spikes=self.unit_spike_counts[unit],
             template_ptp=self.templates[unit].ptp(1).max(),
             max_channel=self.template_maxchans[unit],
@@ -560,7 +560,7 @@ class Sorting:
         axes["t"].axis("off")
 
         # ISI distribution
-        cluster_viz.plot_isi_distribution(unit_st, ax=axes["a"])
+        cluster_viz.plot_isi_distribution(unit_st, ax=axes["a"], cdf=False)
 
         # Scatter
         if have_loc:
