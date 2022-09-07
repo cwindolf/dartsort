@@ -9,13 +9,14 @@ from tqdm.auto import tqdm
 import pickle
 from sklearn.decomposition import PCA
 import time
-import shutil
+import subprocess
 
 from spike_psvae import (
     pre_deconv_merge_split,
     cluster_viz_index,
     denoise,
     cluster_utils,
+    spike_train_utils
     # cluster_viz,
 )
 
@@ -29,6 +30,8 @@ ap.add_argument("--tmpdir", type=Path, default=None)
 ap.add_argument("--inmem", action="store_true")
 ap.add_argument("--doplot", action="store_true")
 ap.add_argument("--doscatter", action="store_true")
+ap.add_argument("--noremoveselfdups", action="store_true")
+ap.add_argument("--usemean", action="store_true")
 ap.add_argument("--plotdir", type=str, default=None)
 ap.add_argument("--merge_dipscore", type=float, default=1.0)
 
@@ -70,19 +73,15 @@ class timer:
         self.t = time.time() - self.start
         print(self.name, "took", self.t, "s")
 
+
 print("cooking", flush=True)
 if args.tmpdir is not None:
     with timer("copying h5 to scratch"):
-        shutil.copy(sub_h5, args.tmpdir / "sub.h5")
+        subprocess.run(["rsync", "-avP", sub_h5, args.tmpdir / "sub.h5"])
     sub_h5 = args.tmpdir / "sub.h5"
-
-# %%
-# raw_data_bin = Path("/mnt/3TB/charlie/re_snips/CSH_ZAD_026_snip.ap.bin")
-# assert raw_data_bin.exists()
-# residual_data_bin = Path("/mnt/3TB/charlie/re_snip_res/CSH_ZAD_026_fc/residual_CSH_ZAD_026_snip.ap_t_0_None.bin")
-# assert residual_data_bin.exists()
-# sub_h5 = Path("/mnt/3TB/charlie/re_snip_res/CSH_ZAD_026_fc/subtraction_CSH_ZAD_026_snip.ap_t_0_None.h5")
-# sub_h5.exists()
+    with timer("copying bin to scratch"):
+        subprocess.run(["rsync", "-avP", raw_data_bin, args.tmpdir / "raw.bin"])
+    raw_data_bin = args.tmpdir / "raw.bin"
 
 # %%
 output_dir = Path(args.output_dir)
@@ -124,6 +123,7 @@ tpca = PCA(tpca_components.shape[0])
 tpca.mean_ = tpca_mean
 tpca.components_ = tpca_components
 
+reducer = np.mean if args.usemean else np.median
 
 # %%
 (
@@ -143,14 +143,15 @@ tpca.components_ = tpca_components
 )
 
 # remove self-duplicate spikes
-kept_ix, removed_ix = cluster_utils.remove_self_duplicates(
-    tspike_index[:, 0],
-    clusterer.labels_,
-    raw_data_bin,
-    geom.shape[0],
-    frame_dedup=20,
-)
-clusterer.labels_[removed_ix] = -1
+if not args.noremoveselfdups:
+    kept_ix, removed_ix = cluster_utils.remove_self_duplicates(
+        tspike_index[:, 0],
+        clusterer.labels_,
+        raw_data_bin,
+        geom.shape[0],
+        frame_dedup=20,
+    )
+    clusterer.labels_[removed_ix] = -1
 
 # labels in full index space (not triaged)
 labels = np.full(x.shape, -1)
@@ -173,54 +174,39 @@ if args.doplot:
         plt.close(fig)
 
 # %%
-templates = pre_deconv_merge_split.get_templates(
-    raw_data_bin,
-    geom,
-    clusterer.labels_.max() + 1,
-    spike_index[idx_keep_full],
-    clusterer.labels_,
-)
-
+spike_train = np.c_[
+    spike_index[:, 0],
+    labels,
+]
+del labels
 (
+    spike_train,
+    order,
+    templates,
     template_shifts,
-    template_maxchans,
-    shifted_triaged_spike_index,
-    idx_not_aligned,
-) = pre_deconv_merge_split.align_spikes_by_templates(
-    clusterer.labels_, templates, spike_index[idx_keep_full]
-)
-
-# %%
-shifted_full_spike_index = spike_index.copy()
-shifted_full_spike_index[idx_keep_full] = shifted_triaged_spike_index
-print(
-    shifted_full_spike_index[:, 0].min(), shifted_full_spike_index[:, 0].max()
-)
-shifted_templates = pre_deconv_merge_split.get_templates(
+) = spike_train_utils.clean_align_and_get_templates(
+    spike_train,
+    geom.shape[0],
     raw_data_bin,
-    geom,
-    clusterer.labels_.max() + 1,
-    shifted_full_spike_index[idx_keep_full],
-    clusterer.labels_,
+    sort_by_time=False,
+    reducer=reducer,
+    min_n_spikes=0,
+    pbar=True,
 )
+spike_index = np.c_[spike_train[:, 0], spike_index[:, 1]]
 
 # save
 print("Save pre merge/split...")
-np.save(output_dir / "pre_merge_split_labels.npy", labels)
-cluster_centers.to_csv(output_dir / "pre_merge_split_cluster_centers.csv")
-with open(output_dir / "pre_merge_split_clusterer.pickle", "wb") as jar:
-    pickle.dump(clusterer, jar)
+np.save(output_dir / "pre_merge_split_labels.npy", spike_train[:, 1])
 np.save(
     output_dir / "pre_merge_split_aligned_spike_index.npy",
-    shifted_full_spike_index,
+    spike_index,
 )
-np.save(output_dir / "pre_merge_split_templates.npy", templates)
 np.save(
-    output_dir / "pre_merge_split_aligned_templates.npy", shifted_templates
+    output_dir / "pre_merge_split_aligned_templates.npy", templates
 )
-np.save(output_dir / "pre_merge_split_template_shifts.npy", template_shifts)
 np.save(
-    output_dir / "pre_merge_split_template_maxchans.npy", template_maxchans
+    output_dir / "pre_merge_split_template_shifts.npy", template_shifts
 )
 
 
@@ -230,14 +216,14 @@ h5 = h5py.File(sub_h5, "r")
 sub_wf = h5["subtracted_waveforms"]
 if args.inmem:
     sub_wf = sub_wf[:]
-labels_split = pre_deconv_merge_split.split_clusters(
+spike_train[:, 1] = pre_deconv_merge_split.split_clusters(
     residual_data_bin,
     sub_wf,
     firstchans,
-    shifted_full_spike_index,
-    template_maxchans,
+    spike_index,
+    templates.ptp(1).argmax(1),
     template_shifts,
-    labels_original,
+    spike_train[:, 1],
     x,
     z_reg,
     # maxptps,
@@ -248,12 +234,12 @@ labels_split = pre_deconv_merge_split.split_clusters(
 )
 
 # ks split
-print("before ks split", labels_split.max() + 1)
-labels_split, split_map = pre_deconv_merge_split.ks_maxchan_tpca_split(
+print("before ks split", spike_train[:, 1].max() + 1)
+spike_train[:, 1], split_map = pre_deconv_merge_split.ks_maxchan_tpca_split(
     h5["subtracted_tpca_projs"],
     channel_index,
     spike_index[:, 1],
-    labels_split,
+    spike_train[:, 1],
     tpca,
     recursive=True,
     top_pc_init=True,
@@ -263,16 +249,15 @@ labels_split, split_map = pre_deconv_merge_split.ks_maxchan_tpca_split(
     min_amp_sim=0.2,
     min_split_prop=0.05,
 )
-print("after ks split", labels_split.max() + 1)
+print("after ks split", spike_train[:, 1].max() + 1)
 
 # %%
 # re-order again
-clusterer.labels_ = labels_split[idx_keep_full]
+clusterer.labels_ = spike_train[:, 1][idx_keep_full]
 cluster_centers = cluster_utils.compute_cluster_centers(clusterer)
 clusterer = cluster_utils.relabel_by_depth(clusterer, cluster_centers)
 cluster_centers = cluster_utils.compute_cluster_centers(clusterer)
-labels = np.full(x.shape, -1)
-labels[idx_keep_full] = clusterer.labels_
+spike_train[idx_keep_full, 1] = clusterer.labels_
 
 # %%
 if args.doplot:
@@ -290,30 +275,26 @@ if args.doplot:
         plt.close(fig)
 
 # %%
-# get templates
-templates = pre_deconv_merge_split.get_templates(
-    raw_data_bin,
-    geom,
-    clusterer.labels_.max() + 1,
-    spike_index[idx_keep_full],
-    clusterer.labels_,
-)
-
 (
+    spike_train,
+    order,
+    templates,
     template_shifts,
-    template_maxchans,
-    shifted_triaged_spike_index,
-    idx_not_aligned,
-) = pre_deconv_merge_split.align_spikes_by_templates(
-    clusterer.labels_, templates, spike_index[idx_keep_full]
+) = spike_train_utils.clean_align_and_get_templates(
+    spike_train,
+    geom.shape[0],
+    raw_data_bin,
+    sort_by_time=False,
+    reducer=reducer,
+    min_n_spikes=0,
+    pbar=True,
 )
-shifted_full_spike_index = spike_index.copy()
-shifted_full_spike_index[idx_keep_full] = shifted_triaged_spike_index
+spike_index = np.c_[spike_train[:, 0], spike_index[:, 1]]
 
 # %%
 # merge
-K_pre = labels.max() + 1
-labels_merged = pre_deconv_merge_split.get_merged(
+K_pre = spike_train[:, 1].max() + 1
+spike_train[:, 1] = pre_deconv_merge_split.get_merged(
     residual_data_bin,
     sub_wf,
     firstchans,
@@ -321,8 +302,8 @@ labels_merged = pre_deconv_merge_split.get_merged(
     templates,
     template_shifts,
     len(templates),
-    shifted_full_spike_index,
-    labels,
+    spike_index,
+    spike_train[:, 1],
     x,
     z_reg,
     denoiser,
@@ -330,57 +311,41 @@ labels_merged = pre_deconv_merge_split.get_merged(
     tpca,
     threshold_diptest=args.merge_dipscore,
 )
-print("pre->post merge", K_pre, labels_merged.max() + 1)
+print("pre->post merge", K_pre, spike_train[:, 1].max() + 1)
 
 # %%
 # re-order again
-clusterer.labels_ = labels_merged[idx_keep_full]
+clusterer.labels_ = spike_train[idx_keep_full, 1]
 cluster_centers = cluster_utils.compute_cluster_centers(clusterer)
 clusterer = cluster_utils.relabel_by_depth(clusterer, cluster_centers)
-cluster_centers = cluster_utils.compute_cluster_centers(clusterer)
-labels = np.full(x.shape, -1)
-labels[idx_keep_full] = clusterer.labels_
+spike_train[idx_keep_full, 1] = clusterer.labels_
 
 # %%
 # final templates
-templates = pre_deconv_merge_split.get_templates(
-    raw_data_bin,
-    geom,
-    clusterer.labels_.max() + 1,
-    spike_index[idx_keep_full],
-    clusterer.labels_,
-)
-
 (
+    spike_train,
+    order,
+    templates,
     template_shifts,
-    template_maxchans,
-    shifted_triaged_spike_index,
-    idx_not_aligned,
-) = pre_deconv_merge_split.align_spikes_by_templates(
-    clusterer.labels_, templates, spike_index[idx_keep_full]
-)
-shifted_full_spike_index = spike_index.copy()
-shifted_full_spike_index[idx_keep_full] = shifted_triaged_spike_index
-shifted_templates = pre_deconv_merge_split.get_templates(
+) = spike_train_utils.clean_align_and_get_templates(
+    spike_train,
+    geom.shape[0],
     raw_data_bin,
-    geom,
-    clusterer.labels_.max() + 1,
-    shifted_full_spike_index[idx_keep_full],
-    clusterer.labels_,
+    sort_by_time=False,
+    reducer=reducer,
+    min_n_spikes=0,
+    pbar=True,
 )
+spike_index = np.c_[spike_train[:, 0], spike_index[:, 1]]
 
 
 # save
 print("Save final...")
-np.save(output_dir / "labels.npy", labels)
-cluster_centers.to_csv(output_dir / "cluster_centers.csv")
-with open(output_dir / "clusterer.pickle", "wb") as jar:
-    pickle.dump(clusterer, jar)
-np.save(output_dir / "aligned_spike_index.npy", shifted_full_spike_index)
+np.save(output_dir / "labels.npy", spike_train[:, 1])
+np.save(output_dir / "aligned_spike_index.npy", spike_index)
 np.save(output_dir / "templates.npy", templates)
-np.save(output_dir / "aligned_templates.npy", shifted_templates)
+np.save(output_dir / "aligned_templates.npy", templates)
 np.save(output_dir / "template_shifts.npy", template_shifts)
-np.save(output_dir / "template_maxchans.npy", template_maxchans)
 
 
 # %%
@@ -411,22 +376,11 @@ if args.doplot:
     color_arr[:, 3] = triaged_ptp_rescaled
 
     # ## Define colors
-    unique_colors = [
-        "#e6194b",
-        "#4363d8",
-        "#f58231",
-        "#911eb4",
-        "#46f0f0",
-        "#f032e6",
-        "#008080",
-        "#e6beff",
-        "#9a6324",
-        "#800000",
-        "#aaffc3",
-        "#808000",
-        "#000075",
-        "#000000",
-    ]
+    unique_colors = (
+        "#e6194b,#4363d8,#f58231,#911eb4,#46f0f0,"
+        "#f032e6,#008080,#e6beff,#9a6324,#800000,"
+        "#aaffc3,#808000,#000075,#000000",
+    ).split(",")
 
     cluster_color_dict = {}
     for cluster_id in np.unique(clusterer.labels_):
@@ -448,31 +402,10 @@ if args.doplot:
         if (sudir / f"unit_{cluster_id:03d}.png").exists():
             return
         with h5py.File(sub_h5, "r") as d:
-            # fig = cluster_viz.plot_single_unit_summary(
-            #     cluster_id,
-            #     clusterer.labels_,
-            #     cluster_centers,
-            #     geom,
-            #     200,
-            #     3,
-            #     tx,
-            #     tz,
-            #     tmaxptps,
-            #     firstchans[idx_keep_full],
-            #     spike_index[idx_keep_full, 1],
-            #     spike_index[idx_keep_full, 0],
-            #     idx_keep_full,
-            #     d["cleaned_waveforms"],
-            #     d["subtracted_waveforms"],
-            #     cluster_color_dict,
-            #     color_arr,
-            #     raw_data_bin,
-            #     residual_data_bin,
-            # )
             fig = cluster_viz_index.single_unit_summary(
                 cluster_id,
                 clusterer,
-                labels,
+                spike_train[:, 1],
                 geom,
                 idx_keep_full,
                 x,

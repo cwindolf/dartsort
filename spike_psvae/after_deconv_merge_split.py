@@ -1,4 +1,3 @@
-import h5py
 import hdbscan
 import numpy as np
 
@@ -7,102 +6,88 @@ from sklearn.decomposition import PCA
 from sklearn.discriminant_analysis import LinearDiscriminantAnalysis as LDA
 from spike_psvae import pre_deconv_merge_split, cluster_utils
 from spike_psvae.spikeio import read_waveforms
-from spike_psvae.pyks_ccg import ccg_metrics, ccg
+from spike_psvae.subtract import make_contiguous_channel_index
+from spike_psvae.pyks_ccg import ccg_metrics
 from tqdm.auto import tqdm, trange
 
 
 def split(
     labels_deconv,
-    templates,
-    firstchans,
-    path_denoised_wfs_h5,
+    deconv_extractor,
+    order=None,
     batch_size=1000,
     n_chans_split=10,
     min_cluster_size=25,
     min_samples=25,
     pc_split_rank=5,
     ptp_threshold=4,
-    wfs_key="denoised_waveforms",
+    wfs_kind="denoised",
 ):
-    cmp = labels_deconv.max() + 1
+    next_label = labels_deconv.max() + 1
+    n_channels = deconv_extractor.channel_index.shape[0]
+    split_channel_index = make_contiguous_channel_index(
+        n_channels, n_neighbors=n_chans_split
+    )
 
-    for cluster_id in tqdm(np.unique(labels_deconv)):
-        which = np.flatnonzero(labels_deconv == cluster_id
-#             np.logical_and(
-#                 labels_deconv == cluster_id, maxptps > ptp_threshold 
-#             )
+    if order is None:
+        order = np.arange(len(labels_deconv))
+
+    for cluster_id in tqdm(np.unique(labels_deconv), desc="Split"):
+        which = np.flatnonzero(labels_deconv == cluster_id)
+        # np.flatnonzero(np.logical_and(
+        #     labels_deconv == cluster_id, maxptps > ptp_threshold
+        # ))
+
+        # too small to split?
+        if len(which) <= min_cluster_size:
+            continue
+
+        # indexing logic
+        which_load = order[which]
+        sort = np.argsort(which_load)
+        which_load = which_load[sort]
+        which = which[sort]
+
+        # load denoised waveforms on n_chans_split channels
+        wfs_split = deconv_extractor.get_waveforms(
+            which_load, channel_index=split_channel_index, kind=wfs_kind
         )
-        if len(which) > min_cluster_size:
-            with h5py.File(path_denoised_wfs_h5, "r") as h5:
-                batch_wfs = np.empty(
-                    (len(which), *h5[wfs_key].shape[1:]),
-                    dtype=h5[wfs_key].dtype,
-                )
-                h5_wfs = h5[wfs_key]
-                for batch_start in range(0, len(which), 1000):
-                    batch_wfs[batch_start : batch_start + batch_size] = h5_wfs[
-                        which[batch_start : batch_start + batch_size]
-                    ]
 
-            C = batch_wfs.shape[2]
-            if C < n_chans_split:
-                n_chans_split = C
+        pcs_cluster = PCA(pc_split_rank).fit_transform(
+            wfs_split.reshape(wfs_split.shape[0], -1)
+        )
+        clusterer = hdbscan.HDBSCAN(min_cluster_size=25, min_samples=25)
+        clusterer.fit(pcs_cluster)
 
-            maxchan = templates[cluster_id].ptp(0).argmax()
-            firstchan_maxchan = maxchan - firstchans[which]
-            firstchan_maxchan = np.maximum(
-                firstchan_maxchan, n_chans_split // 2
-            )
-            firstchan_maxchan = np.minimum(
-                firstchan_maxchan, C - n_chans_split // 2
-            )
-            firstchan_maxchan = firstchan_maxchan.astype("int")
-
-            if len(np.unique(firstchan_maxchan)) <= 1:
-                wfs_split = batch_wfs[
-                    :,
-                    :,
-                    firstchan_maxchan[0]
-                    - n_chans_split // 2 : firstchan_maxchan[0]
-                    + n_chans_split // 2,
-                ]
-            else:
-                wfs_split = np.zeros(
-                    (batch_wfs.shape[0], batch_wfs.shape[1], n_chans_split)
-                )
-                for j in range(batch_wfs.shape[0]):
-                    wfs_split[j] = batch_wfs[
-                        j,
-                        :,
-                        firstchan_maxchan[j]
-                        - n_chans_split // 2 : firstchan_maxchan[j]
-                        + n_chans_split // 2,
-                    ]
-
-            pcs_cluster = PCA(pc_split_rank).fit_transform(
-                wfs_split.reshape(wfs_split.shape[0], -1)
-            )
-            clusterer = hdbscan.HDBSCAN(min_cluster_size=25, min_samples=25)
-            clusterer.fit(pcs_cluster)
-
-            if len(np.unique(clusterer.labels_)) > 1:
-                labels_deconv[which[clusterer.labels_ == -1]] = -1
-                for i in np.setdiff1d(np.unique(clusterer.labels_), [-1, 0]):
-                    labels_deconv[which[clusterer.labels_ == i]] = cmp
-                    cmp += 1
+        if len(np.unique(clusterer.labels_)) > 1:
+            labels_deconv[which[clusterer.labels_ == -1]] = -1
+            for i in np.setdiff1d(np.unique(clusterer.labels_), [-1, 0]):
+                labels_deconv[which[clusterer.labels_ == i]] = next_label
+                next_label += 1
 
     return labels_deconv
 
+
 def get_templates_com(templates, geom, n_channels=12):
     x_z_templates = np.zeros((templates.shape[0], 2))
-    n_chan_half = n_channels//2
+    n_chan_half = n_channels // 2
     n_chan_total = geom.shape[0]
     for i in range(templates.shape[0]):
         mc = templates[i].ptp(0).argmax()
-        mc = mc-mc%2
-        mc = max(min(n_chan_total-n_chan_half, mc), n_chan_half)
-        x_z_templates[i, 0] = (templates[i].ptp(0)[mc-n_chan_half:mc+n_chan_half]*geom[mc-n_chan_half:mc+n_chan_half, 0]).sum()/templates[i].ptp(0)[mc-n_chan_half:mc+n_chan_half].sum()
-        x_z_templates[i, 1] = (templates[i].ptp(0)[mc-n_chan_half:mc+n_chan_half]*geom[mc-n_chan_half:mc+n_chan_half, 1]).sum()/templates[i].ptp(0)[mc-n_chan_half:mc+n_chan_half].sum()
+        mc = mc - mc % 2
+        mc = max(min(n_chan_total - n_chan_half, mc), n_chan_half)
+        x_z_templates[i, 0] = (
+            templates[i].ptp(0)[mc - n_chan_half : mc + n_chan_half]
+            * geom[mc - n_chan_half : mc + n_chan_half, 0]
+        ).sum() / templates[i].ptp(0)[
+            mc - n_chan_half : mc + n_chan_half
+        ].sum()
+        x_z_templates[i, 1] = (
+            templates[i].ptp(0)[mc - n_chan_half : mc + n_chan_half]
+            * geom[mc - n_chan_half : mc + n_chan_half, 1]
+        ).sum() / templates[i].ptp(0)[
+            mc - n_chan_half : mc + n_chan_half
+        ].sum()
     return x_z_templates
 
 
@@ -114,15 +99,17 @@ def check_merge(
     reference_units,
     templates,
     n_spikes_templates,
-    path_cleaned_wfs_h5,
     labels_updated,
-    firstchans,
+    deconv_extractor,
     tpca,
-    n_chan_merge=10,
+    merge_channel_index,
+    order=None,
     max_spikes=500,
     threshold_diptest=1.0,
     ptp_threshold=4,
-    wfs_key="cleaned_waveforms",
+    mc_diff_max=3,
+    wfs_kind="cleaned",
+    rg=None,
 ):
     if unit_reference == unit_bis_reference:
         return False, unit_bis_reference, 0
@@ -136,150 +123,82 @@ def check_merge(
         templates[unit_bis_reference].ptp(0).max()
         - templates[unit_reference].ptp(0).max()
     )
-    if mc_diff >= 3:
+    if mc_diff >= mc_diff_max:
         return False, unit_bis_reference, 0
+
+    if order is None:
+        order = np.arange(len(labels_updated))
+
     # ALIGN BASED ON MAX PTP TEMPLATE MC
     # the template with the larger MC is not shifted, so
     # we set unit_shifted to be the unit with smaller ptp
     unit_shifted = (
         unit_reference if unit_ptp <= unit_bis_ptp else unit_bis_reference
     )
+    # we will load wfs on the same subset of channels, using this
+    # as the maxchan
     mc = unit_mc if unit_ptp <= unit_bis_ptp else unit_bis_mc
     # template_pair_shift is unit argmin - unit_bis argmin
     # this ensures it has the same sign as before
     two_units_shift = (
         1 if unit_shifted == unit_reference else -1
     ) * template_pair_shift
+    # print(mc, unit_mc, unit_bis_mc)
+    # print(merge_channel_index[mc], deconv_extractor.channel_index[unit_mc], deconv_extractor.channel_index[unit_bis_mc])
 
     n_wfs_max = int(
         min(
             max_spikes,
-            min(
-                n_spikes_templates[unit_reference],
-                n_spikes_templates[unit_bis_reference],
-            ),
+            n_spikes_templates[unit_reference],
+            n_spikes_templates[unit_bis_reference],
         )
     )
-    which = np.flatnonzero(labels_updated == unit_reference)
-#         np.logical_and(
-#             maxptps > ptp_threshold,
-#             labels_updated == unit_reference,
-#         )
-#     )
+    which = order[np.flatnonzero(labels_updated == unit_reference)]
+    which.sort()
+    which_bis = order[np.flatnonzero(labels_updated == unit_bis_reference)]
+    which_bis.sort()
+    #     np.logical_and(
+    #         maxptps > ptp_threshold,
+    #         labels_updated == unit_reference,
+    #     )
+    # )
 
-    if len(which) < 2:
+    if len(which) < 2 or len(which_bis) < 2:
         return False, unit_bis_reference, 0
 
     if len(which) > n_wfs_max:
-        idx = np.random.choice(
-            np.arange(len(which)), n_wfs_max, replace=False
-        )
+        idx = rg.choice(np.arange(len(which)), n_wfs_max, replace=False)
         idx.sort()
     else:
         idx = np.arange(len(which))
 
-    with h5py.File(path_cleaned_wfs_h5, "r") as h5:
-        waveforms_ref = np.empty(
-            (n_wfs_max, *h5[wfs_key].shape[1:]),
-            dtype=h5[wfs_key].dtype,
-        )
-        waveforms_ref = h5[wfs_key][which[idx]]
-
-    C = waveforms_ref.shape[2]
-    if C < n_chan_merge:
-        n_chan_merge = C
-    firstchan_maxchan = mc - firstchans[which]
-
-    firstchan_maxchan = np.maximum(firstchan_maxchan, n_chan_merge // 2)
-    firstchan_maxchan = np.minimum(
-        firstchan_maxchan, C - n_chan_merge // 2
+    # load waveforms on n_chan_merge channels
+    # print("load")
+    wfs_merge_ref = deconv_extractor.get_waveforms(
+        which[idx],
+        kind=wfs_kind,
+        channels=merge_channel_index[mc],
     )
-
-    firstchan_maxchan = firstchan_maxchan.astype("int")
-
-    if len(np.unique(firstchan_maxchan)) <= 1:
-        wfs_merge_ref = waveforms_ref[
-            :,
-            :,
-            firstchan_maxchan[0]
-            - n_chan_merge // 2 : firstchan_maxchan[0]
-            + n_chan_merge // 2,
-        ]
-    else:
-        wfs_merge_ref = np.zeros(
-            (
-                waveforms_ref.shape[0],
-                waveforms_ref.shape[1],
-                n_chan_merge,
-            )
-        )
-        for j in range(waveforms_ref.shape[0]):
-            wfs_merge_ref[j] = waveforms_ref[
-                j,
-                :,
-                firstchan_maxchan[j]
-                - n_chan_merge // 2 : firstchan_maxchan[j]
-                + n_chan_merge // 2,
-            ]
-
-    which = np.flatnonzero(labels_updated == unit_bis_reference)
-#         np.logical_and(
-#             maxptps > ptp_threshold,
-#             labels_updated == unit_bis_reference,
-#         )
-#     )
-
-    if len(which) < 2:
+    if np.isnan(wfs_merge_ref).any():
         return False, unit_bis_reference, 0
 
-    if len(which) > n_wfs_max:
-        idx = np.random.choice(
-            np.arange(len(which)), n_wfs_max, replace=False
-        )
+    if len(which_bis) > n_wfs_max:
+        idx = rg.choice(np.arange(len(which_bis)), n_wfs_max, replace=False)
         idx.sort()
     else:
-        idx = np.arange(len(which))
+        idx = np.arange(len(which_bis))
 
-    firstchan_maxchan = mc - firstchans[which]
-
-    firstchan_maxchan = np.maximum(firstchan_maxchan, n_chan_merge // 2)
-    firstchan_maxchan = np.minimum(
-        firstchan_maxchan, C - n_chan_merge // 2
+    # load waveforms on n_chan_merge channels
+    # print("load bis")
+    wfs_merge_ref_bis = deconv_extractor.get_waveforms(
+        which_bis[idx],
+        kind=wfs_kind,
+        channels=merge_channel_index[mc],
     )
-    firstchan_maxchan = firstchan_maxchan.astype("int")
+    if np.isnan(wfs_merge_ref_bis).any():
+        return False, unit_bis_reference, 0
 
-    with h5py.File(path_cleaned_wfs_h5, "r") as h5:
-        waveforms_ref_bis = np.empty(
-            (n_wfs_max, *h5[wfs_key].shape[1:]),
-            dtype=h5[wfs_key].dtype,
-        )
-        waveforms_ref_bis = h5[wfs_key][which[idx]]
-    # print(f"{firstchan_maxchan=}, {mc=}, {len(which)=}, {firstchans.shape=}, {firstchan_maxchan.shape=}")
-    if len(np.unique(firstchan_maxchan)) <= 1:
-        wfs_merge_ref_bis = waveforms_ref_bis[
-            :,
-            :,
-            firstchan_maxchan[0]
-            - n_chan_merge // 2 : firstchan_maxchan[0]
-            + n_chan_merge // 2,
-        ]
-    else:
-        wfs_merge_ref_bis = np.zeros(
-            (
-                waveforms_ref_bis.shape[0],
-                waveforms_ref_bis.shape[1],
-                n_chan_merge,
-            )
-        )
-        for j in range(waveforms_ref_bis.shape[0]):
-            wfs_merge_ref_bis[j] = waveforms_ref_bis[
-                j,
-                :,
-                firstchan_maxchan[j]
-                - n_chan_merge // 2 : firstchan_maxchan[j]
-                + n_chan_merge // 2,
-            ]
-
+    # shift according to template trough difference
     if unit_shifted == unit_reference and two_units_shift > 0:
         wfs_merge_ref = wfs_merge_ref[:, two_units_shift:, :]
         wfs_merge_ref_bis = wfs_merge_ref_bis[:, :-two_units_shift, :]
@@ -293,20 +212,12 @@ def check_merge(
         wfs_merge_ref = wfs_merge_ref[:, -two_units_shift:, :]
         wfs_merge_ref_bis = wfs_merge_ref_bis[:, :two_units_shift, :]
 
+    # it's possible that a waveform could have been skipped,
     n_wfs_max = int(
-        min(
-            max_spikes,
-            min(
-                wfs_merge_ref.shape[0],
-                wfs_merge_ref_bis.shape[0],
-            ),
-        )
+        min(max_spikes, wfs_merge_ref.shape[0], wfs_merge_ref_bis.shape[0])
     )
-
-    idx_ref = np.random.choice(
-        wfs_merge_ref.shape[0], n_wfs_max, replace=False
-    )
-    idx_ref_bis = np.random.choice(
+    idx_ref = rg.choice(wfs_merge_ref.shape[0], n_wfs_max, replace=False)
+    idx_ref_bis = rg.choice(
         wfs_merge_ref_bis.shape[0],
         n_wfs_max,
         replace=False,
@@ -353,9 +264,9 @@ def check_merge(
 def merge(
     labels,
     templates,
-    path_cleaned_wfs_h5,
-    firstchans,
+    deconv_extractor,
     geom,
+    order=None,
     n_chan_merge=10,
     tpca=PCA(5),
     n_temp=10,
@@ -364,17 +275,23 @@ def merge(
     threshold_diptest=1.0,
     ptp_threshold=4.0,
     max_spikes=500,
-    wfs_key="cleaned_waveforms",
+    wfs_kind="cleaned",
     isi_veto=False,
     spike_times=None,
     contam_ratio_threshold=0.2,
     contam_alpha=0.05,
     isi_nbins=500,
     isi_bin_nsamples=30,
+    seed=0,
 ):
     """
     merge is applied on spikes with ptp > ptp_threshold only
     """
+    rg = np.random.default_rng(seed)
+
+    merge_channel_index = make_contiguous_channel_index(
+        deconv_extractor.channel_index.shape[0], n_neighbors=n_chan_merge
+    )
 
     labels_updated = labels.copy()
     n_templates = templates.shape[0]
@@ -414,15 +331,16 @@ def merge(
                     reference_units,
                     templates,
                     n_spikes_templates,
-                    path_cleaned_wfs_h5,
                     labels_updated,
-                    firstchans,
+                    deconv_extractor,
                     tpca,
-                    n_chan_merge=n_chan_merge,
+                    merge_channel_index,
+                    order=order,
                     max_spikes=max_spikes,
                     threshold_diptest=threshold_diptest,
                     ptp_threshold=ptp_threshold,
-                    wfs_key=wfs_key,
+                    wfs_kind=wfs_kind,
+                    rg=rg,
                 )
 
                 # check isi violation
@@ -441,9 +359,21 @@ def merge(
                     contam_sig = p_value < contam_alpha
                     is_merged_bis = contam_ok and contam_sig
                     if not is_merged_bis:
-                        print("ISI prevented merge with", contam_ratio, p_value, st1.shape, st2.shape)
+                        print(
+                            "ISI prevented merge with",
+                            contam_ratio,
+                            p_value,
+                            st1.shape,
+                            st2.shape,
+                        )
                     else:
-                        print("ISI allowed merge with", contam_ratio, p_value, st1.shape, st2.shape)
+                        print(
+                            "ISI allowed merge with",
+                            contam_ratio,
+                            p_value,
+                            st1.shape,
+                            st2.shape,
+                        )
 
                     # ccg1 = ccg(st1, st1, 500, 30)
                     # contam_ratio1, p_value1 = ccg_metrics(
@@ -507,6 +437,102 @@ def merge(
     return labels_updated
 
 
+# def clean_big_clusters(
+#     templates,
+#     spike_train,
+#     ptps,
+#     raw_bin,
+#     geom,
+#     min_ptp=6.0,
+#     split_diff=2.0,
+#     max_samples=500,
+#     min_size_split=25,
+#     seed=0,
+#     reducer=np.median,
+# ):
+#     """This operates on spike_train in place."""
+#     # TODO:
+#     # it's not possible to load all waveforms as is currently done
+#     # rather, we should do something like, sort the ptps,
+#     # then load N wfs above/below
+#     # or, uniformly subsample e.g. 1000 spikes according to PTP,
+#     # and use those...
+#     # and, what should happen when there aren't many spikes?
+#     n_temp_cleaned = 0
+#     next_label = templates.shape[0]
+#     rg = np.random.default_rng(seed)
+#     for unit in trange(templates.shape[0], desc="clean big"):
+#         mc = templates[unit].ptp(0).argmax()
+#         template_mc_trace = templates[unit, :, mc]
+
+#         if template_mc_trace.ptp() < min_ptp:
+#             continue
+
+#         in_unit = np.flatnonzero(spike_train[:, 1] == unit)
+#         if in_unit.size <= 2 * min_size_split:
+#             # we won't split if smaller than this
+#             continue
+#         n_samples = min(max_samples, in_unit.size)
+
+#         # pick random wfs
+#         choices = rg.choice(in_unit.size, size=n_samples, replace=False)
+#         spike_times_unit = spike_train[in_unit[choices], 0]
+#         wfs_unit, skipped_idx = read_waveforms(
+#             spike_times_unit, raw_bin, geom.shape[0], channels=[mc]
+#         )
+#         assert wfs_unit.shape[-1] == 1
+#         assert not skipped_idx.size
+#         wfs_unit = wfs_unit[:, :, 0]
+
+#         # ptp order
+#         ptps_unit = ptps[in_unit]
+#         ptps_choice = ptps_unit[choices]
+#         ptps_sort = np.argsort(ptps_choice)
+#         wfs_sort = wfs_unit[ptps_sort]
+
+#         lower = int(max(np.ceil(in_unit.size * 0.05), min_size_split))
+#         upper = int(
+#             min(np.floor(in_unit.size * 0.95), in_unit.size - min_size_split)
+#         )
+#         if lower >= upper:
+#             continue
+
+#         max_diff = 0
+#         max_diff_ix = 0
+#         for n in range(lower, upper):
+#             # Denoise templates?
+#             temp_1 = reducer(wfs_sort[:n], axis=0)
+#             temp_2 = reducer(wfs_sort[n:], axis=0)
+#             diff = np.abs(temp_1 - temp_2).max()
+#             if diff > max_diff:
+#                 max_diff = diff
+#                 max_diff_ix = n
+#         max_diff_ptp = 0.5 * (
+#             ptps_sort[max_diff_ix] + ptps_sort[max_diff_ix - 1]
+#         )
+
+#         if max_diff < split_diff:
+#             continue
+
+#         which_a = in_unit[ptps_unit <= max_diff_ptp]
+#         which_b = in_unit[ptps_unit > max_diff_ptp]
+
+#         temp_a = reducer(wfs_unit[:max_diff_ix], axis=0)
+#         temp_b = reducer(wfs_unit[max_diff_ix:], axis=0)
+#         temp_diff_a = np.abs(temp_a - template_mc_trace).max()
+#         temp_diff_b = np.abs(temp_b - template_mc_trace).max()
+
+#         if temp_diff_a < temp_diff_b:
+#             spike_train[which_b] = next_label
+#         else:
+#             spike_train[which_a] = next_label
+
+#         n_temp_cleaned += 1
+#         next_label += 1
+
+#     return n_temp_cleaned
+
+
 def clean_big_clusters(
     templates,
     spike_train,
@@ -515,9 +541,9 @@ def clean_big_clusters(
     geom,
     min_ptp=6.0,
     split_diff=2.0,
-    max_samples=500,
-    min_size_split=25,
     seed=0,
+    reducer=np.median,
+    min_size_split=25,
 ):
     """This operates on spike_train in place."""
     # TODO:
@@ -529,71 +555,68 @@ def clean_big_clusters(
     # and, what should happen when there aren't many spikes?
     n_temp_cleaned = 0
     next_label = templates.shape[0]
-    rg = np.random.default_rng(seed)
+    # rg = np.random.default_rng(seed)
+    # orig_ids = {}
+
     for unit in trange(templates.shape[0], desc="clean big"):
+        # orig_ids[unit] = unit
         mc = templates[unit].ptp(0).argmax()
         template_mc_trace = templates[unit, :, mc]
-
         if template_mc_trace.ptp() < min_ptp:
             continue
 
-        in_unit = np.flatnonzero(spike_train[:, 1] == unit)
-        if in_unit.size <= 2 * min_size_split:
-            # we won't split if smaller than this
-            continue
-        n_samples = min(max_samples, in_unit.size)
-
-        # pick random wfs
-        choices = rg.choice(in_unit.size, size=n_samples, replace=False)
-        spike_times_unit = spike_train[in_unit[choices], 0]
-        wfs_unit, skipped_idx = read_waveforms(
+        spikes_in_unit = np.flatnonzero(spike_train[:, 1] == unit)
+        spike_times_unit = spike_train[spikes_in_unit, 0]
+        wfs_unit = read_waveforms(
             spike_times_unit, raw_bin, geom.shape[0], channels=[mc]
-        )
-        assert wfs_unit.shape[-1] == 1
-        assert not skipped_idx.size
-        wfs_unit = wfs_unit[:, :, 0]
+        )[0][:, :, 0]
 
-        # ptp order
-        ptps_unit = ptps[in_unit]
-        ptps_choice = ptps_unit[choices]
-        ptps_sort = np.argsort(ptps_choice)
-        wfs_sort = wfs_unit[ptps_sort]
+        ptp_sort_idx = wfs_unit.ptp(1).argsort()
+        wfs_unit = wfs_unit[ptp_sort_idx]
+        lower = max(min_size_split, int(wfs_unit.shape[0] * 0.05))
+        upper = min(spikes_in_unit.size - min_size_split, int(wfs_unit.shape[0] * 0.95))
 
-        lower = int(max(np.ceil(in_unit.size * 0.05), min_size_split))
-        upper = int(min(np.floor(in_unit.size * 0.95), in_unit.size - min_size_split))
         if lower >= upper:
             continue
 
         max_diff = 0
-        max_diff_ix = 0
+        max_diff_N = 0
         for n in range(lower, upper):
             # Denoise templates?
-            temp_1 = np.median(wfs_sort[:n], axis=0)
-            temp_2 = np.median(wfs_sort[n:], axis=0)
+            temp_1 = reducer(wfs_unit[:n], axis=0)
+            temp_2 = reducer(wfs_unit[n:], axis=0)
             diff = np.abs(temp_1 - temp_2).max()
             if diff > max_diff:
                 max_diff = diff
-                max_diff_ix = n
-        max_diff_ptp = 0.5 * (ptps_sort[max_diff_ix] + ptps_sort[max_diff_ix - 1])
+                max_diff_N = n
 
         if max_diff < split_diff:
             continue
 
-        which_a = in_unit[ptps_unit <= max_diff_ptp]
-        which_b = in_unit[ptps_unit > max_diff_ptp]
+        temp_1 = reducer(wfs_unit[:max_diff_N], axis=0)
+        temp_2 = reducer(wfs_unit[max_diff_N:], axis=0)
 
-        temp_a = np.median(wfs_unit[:max_diff_ix], axis=0)
-        temp_b = np.median(wfs_unit[max_diff_ix:], axis=0)
-        temp_diff_a = np.abs(temp_a - template_mc_trace).max()
-        temp_diff_b = np.abs(temp_b - template_mc_trace).max()
-
-        if temp_diff_a < temp_diff_b:
-            spike_train[which_b] = next_label
+        if (
+            np.abs(temp_1 - template_mc_trace).max()
+            > np.abs(temp_2 - template_mc_trace).max()
+        ):
+            which = spikes_in_unit[ptp_sort_idx[:max_diff_N]]
+            spike_train[which, 1] = next_label
         else:
-            spike_train[which_a] = next_label
+            which = spikes_in_unit[ptp_sort_idx[max_diff_N:]]
+            spike_train[which, 1] = next_label
+        # orig_ids[next_label] = unit
 
         n_temp_cleaned += 1
         next_label += 1
+
+    # new_id_to_old_id = np.zeros(next_label, dtype=int)
+    # for new, old in orig_ids.items():
+    #     new_id_to_old_id[new] = old
+
+    # new_id_to_old_id = np.zeros(next_label, dtype=int)
+    # for new, old in orig_ids.items():
+    #     new_id_to_old_id[new] = old
 
     return n_temp_cleaned
 
@@ -603,11 +626,15 @@ def remove_oversplits(templates, spike_train, min_ptp=4.0, max_diff=2.0):
     # remove oversplits according to max abs norm
     for unit in trange(templates.shape[0] - 1, desc="max abs merge"):
         if templates[unit].ptp(0).max(0) >= min_ptp:
-            max_vec = np.abs(
-                templates[unit, :, :] - templates[unit + 1 :]
-            ).max(1).max(1)
+            max_vec = (
+                np.abs(templates[unit, :, :] - templates[unit + 1 :])
+                .max(1)
+                .max(1)
+            )
             if max_vec.min() < max_diff:
-                idx_units_to_change = unit + 1 + np.where(max_vec < max_diff)[0]
+                idx_units_to_change = (
+                    unit + 1 + np.where(max_vec < max_diff)[0]
+                )
                 in_change = np.isin(spike_train[:, 1], idx_units_to_change)
                 assert in_change.shape == spike_train[:, 0].shape
                 spike_train[in_change, 1] = unit
@@ -615,7 +642,7 @@ def remove_oversplits(templates, spike_train, min_ptp=4.0, max_diff=2.0):
 
     # make labels contiguous and get corresponding templates
     spike_train[:, 1], orig_uniq = cluster_utils.make_labels_contiguous(
-        spike_train[:, 1], return_unique=True
+        spike_train[:, 1], return_orig_unit_labels=True
     )
     templates = templates[orig_uniq]
 
