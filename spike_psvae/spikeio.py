@@ -22,9 +22,13 @@ def get_binary_length(
 ):
     """How long is this binary file in samples and seconds?"""
     bin_size = Path(input_bin).stat().st_size
-    assert not bin_size % np.dtype(dtype).itemsize
+    if bin_size % np.dtype(dtype).itemsize:
+        raise ValueError(f"Binary file cannot be of dtype {dtype}.")
     bin_size = bin_size // np.dtype(dtype).itemsize
-    assert not bin_size % (nsync + n_channels)
+    if bin_size % (nsync + n_channels):
+        raise ValueError(
+            f"Binary file cannot have {n_channels} channels with {nsync} sync chans."
+        )
     T_samples = bin_size // (nsync + n_channels)
     T_sec = T_samples / sampling_rate
     return T_samples, T_sec
