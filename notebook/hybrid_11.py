@@ -5,7 +5,7 @@
 #       extension: .py
 #       format_name: percent
 #       format_version: '1.3'
-#       jupytext_version: 1.13.8
+#       jupytext_version: 1.13.0
 #   kernelspec:
 #     display_name: Python 3 (ipykernel)
 #     language: python
@@ -20,6 +20,9 @@
 # %autoreload 2
 
 # %%
+import time
+
+# %%
 import h5py
 import numpy as np
 import matplotlib.pyplot as plt
@@ -30,9 +33,32 @@ from IPython.display import display, Image
 from joblib import Parallel, delayed
 import os
 import colorcet as cc
+import pickle
 from matplotlib import colors
 
 os.environ["CUDA_VISIBLE_DEVICES"] = ""
+
+# %%
+from spike_psvae import (
+    subtract,
+    cluster_utils,
+    cluster_viz,
+    cluster_viz_index,
+    grab_and_localize,
+    pyks_ccg,
+    denoise,
+)
+from spike_psvae.hybrid_analysis import (
+    Sorting,
+    HybridComparison,
+    plotgistic,
+    make_diagnostic_plot,
+    array_scatter_vs,
+    near_gt_scatter_vs,
+    density_near_gt,
+    plot_agreement_matrix,
+)
+
 
 # %%
 # %matplotlib inline
@@ -49,53 +75,40 @@ plt.rc('legend', fontsize=SMALL_SIZE)
 plt.rc('figure', titlesize=BIGGER_SIZE)
 
 # %%
-import warnings
-warnings.filterwarnings("ignore", category=DeprecationWarning)
-
-# %%
-from spike_psvae import (
-    subtract,
-    cluster_utils,
-    cluster_viz,
-    cluster_viz_index,
-    grab_and_localize,
-    pyks_ccg,
-)
-from spike_psvae.hybrid_analysis import (
-    Sorting,
-    HybridComparison,
-    plotgistic,
-    make_diagnostic_plot,
-    array_scatter_vs,
-    near_gt_scatter_vs,
-    density_near_gt,
-    plot_agreement_matrix,
-)
+hybrid_bin_dir = Path("/mnt/3TB/charlie/hybrid_5min/hybrid_5min_output/")
+hybrid_res_dir = Path("/mnt/3TB/charlie/hybrid_5min/hybrid_5min_subtraction/")
+hybrid_ks_dir = Path("/mnt/3TB/charlie/hybrid_5min/hybrid_5min_kilosort/")
+hybrid_deconv_dir = Path("/mnt/3TB/charlie/hybrid_5min/hybrid_5min_deconv/")
+assert all((hybrid_bin_dir.exists(), hybrid_res_dir.exists(), hybrid_ks_dir.exists(), hybrid_deconv_dir.exists()))
 
 
 # %%
-import warnings
-warnings.filterwarnings("ignore", category=DeprecationWarning)
+subjects = ("CSHL051", "DY_018")
+# subjects = ("CSHL051",)
 
 # %%
-hybrid_bin_dir = Path("/share/ctn/users/ciw2107/hybrid_5min/hybrid_5min_output/")
-hybrid_res_dir = Path("/share/ctn/users/ciw2107/hybrid_5min/hybrid_5min_subtraction/")
-hybrid_ks_dir = Path("/share/ctn/users/ciw2107/hybrid_5min/hybrid_5min_kilosort/")
-hybrid_deconv_dir = Path("/share/ctn/users/ciw2107/hybrid_5min/hybrid_5min_deconv/")
-hybrid_bin_dir.exists(), hybrid_res_dir.exists(), hybrid_ks_dir.exists(), hybrid_deconv_dir.exists()
-
-
-# %%
-subjects = ("DY_018", "CSHL051")
+# while not all(
+#     (hybrid_deconv_dir / subj / "deconv2/postdeconv_cleaned_templates.npy").exists()
+#     for subj in subjects
+# ):
+#     print(".", end="")
+#     time.sleep(5 * 60)
 
 # %%
-hybrid_fig_dir = Path("/share/ctn/users/ciw2107/hybrid_5min/figs_8_15/")
+hybrid_fig_dir = Path("/mnt/3TB/charlie/hybrid_5min/figs_8_30")
 hybrid_fig_dir.mkdir(exist_ok=True)
 
 # %%
-# %rm -rf {hybrid_fig_dir}/*
+# # %rm -rf {hybrid_fig_dir}/*
 
 # %%
+hybrid_fig_cache_dir = Path("/tmp/hybrid_cache")
+hybrid_fig_cache_dir.mkdir(exist_ok=True)
+
+# %%
+# # %rm -rf {hybrid_fig_cache_dir}/*
+
+# %% tags=[]
 # load gt sortings
 gt_sortings = {}
 for subject in tqdm(subjects):
@@ -138,16 +151,71 @@ for subject in tqdm(subjects):
         "GT",
         spike_maxchans=gt_spike_index[:, 1],
         templates=gt_templates,
+        cache_dir= hybrid_fig_cache_dir / subject,
         # spike_xzptp=gt_xzptp,
     )
 
 # %%
 1
 
-# %% tags=[]
+# %%
 hybrid_sortings = {}
 hybrid_comparisons = {}
+for subject in tqdm(subjects):
+    print(subject)
+    # we will populate these dicts
+    if subject not in hybrid_comparisons:
+        hybrid_sortings[subject] = {}
+        hybrid_comparisons[subject] = {}
 
+# %%
+deconv2 = True
+# deconv2 = False
+
+# %%
+
+# %%
+# subject = "CSHL051"
+# raw_data_bin = f"/tmp/{subject}.ap.bin"
+
+# splitmerge_spike_index = np.load(
+#     hybrid_res_dir / subject / "aligned_spike_index.npy"
+# )
+# splitmerge_labels = np.load(hybrid_res_dir / subject / "labels.npy")
+# sorting = Sorting(
+#     raw_data_bin,
+#     geom,
+#     splitmerge_spike_index[:, 0],
+#     splitmerge_labels,
+#     "testsplitmerge",
+#     spike_maxchans=splitmerge_spike_index[:, 1],
+#     # spike_xzptp=det_xzptp,
+#     # cache_dir= hybrid_fig_cache_dir / subject,
+#     do_cleaned_templates=True,
+#     # overwrite=True,
+# )
+
+# %% tags=[]
+# def job(step_savedir, new_sorting, i, unit):
+#     count = new_sorting.unit_spike_counts[i]
+#     fig, ax, maxsnr, raw_maxptp, cleaned_maxptp = new_sorting.cleaned_temp_vis(
+#         unit
+#     )
+#     fig.suptitle(
+#         f"unit {unit}: raw maxptp {raw_maxptp:.2f}, cleaned maxptp {cleaned_maxptp:.2f}, "
+#         f"nspikes {count}, max chan snr {maxsnr:.2f}.",
+#         fontsize=10,
+#         y=0.91,
+#     )
+#     plt.show()
+#     # fig.savefig(step_savedir / f"rawmaxptp{raw_maxptp:05.2f}_unit{unit:03d}.pdf")
+#     plt.close(fig)
+
+# for i, unit in enumerate(sorting.unit_labels):
+#     # jobs.append(delayed(job)(step_savedir, sorting, i, unit))
+#     job(None, sorting, i, unit)
+
+# %% tags=[]
 for subject in tqdm(subjects):
     print(subject)
     print("-" * len(subject))
@@ -156,184 +224,210 @@ for subject in tqdm(subjects):
     raw_data_bin = hybrid_bin_dir / f"{subject}.ap.bin"
     sub_h5 = next((hybrid_res_dir / subject).glob("sub*h5"))
     
-    with h5py.File(sub_h5, "r") as h5:
-        det_spike_index = h5["spike_index"][:]
-        x = h5["localizations"][:, 0]
-        z_reg = h5["z_reg"][:]
-        maxptps = h5["maxptps"][:]
-        det_xzptp = np.c_[x, z_reg, maxptps]
-    
-    # we will populate these dicts
-    hybrid_sortings[subject] = {}
-    hybrid_comparisons[subject] = {}
-    
     # unsorted comparison with detection
-    print("//Detection...")
-    hybrid_sortings[subject]["Detection"] = Sorting(
-        raw_data_bin,
-        geom,
-        det_spike_index[:, 0],
-        np.zeros_like(det_spike_index[:, 0]),
-        "Detection",
-        spike_maxchans=det_spike_index[:, 1],
-        unsorted=True,
-        spike_xzptp=det_xzptp,
-    )
-    hybrid_comparisons[subject]["Detection"] = HybridComparison(
-        gt_sortings[subject], hybrid_sortings[subject]["Detection"], geom
-    )
+    name = "Detection"
+    if name not in hybrid_comparisons[subject]:
+        print("//", name)
+        with h5py.File(sub_h5, "r") as h5:
+            det_spike_index = h5["spike_index"][:]
+            x = h5["localizations"][:, 0]
+            z_reg = h5["z_reg"][:]
+            maxptps = h5["maxptps"][:]
+            det_xzptp = np.c_[x, z_reg, maxptps]
+        hybrid_sortings[subject][name] = Sorting(
+            raw_data_bin,
+            geom,
+            det_spike_index[:, 0],
+            np.zeros_like(det_spike_index[:, 0]),
+            name,
+            spike_maxchans=det_spike_index[:, 1],
+            unsorted=True,
+            spike_xzptp=det_xzptp,
+            cache_dir=hybrid_fig_cache_dir / subject,
+        )
+        hybrid_comparisons[subject][name] = HybridComparison(
+            gt_sortings[subject], hybrid_sortings[subject][name], geom
+        )
     
     # original clustering
-    print("//Cluster...")
-    cluster_spike_index = np.load(
-        hybrid_res_dir / subject / "pre_merge_split_aligned_spike_index.npy"
-    )
-    cluster_labels = np.load(
-        hybrid_res_dir / subject / "pre_merge_split_labels.npy"
-    )
-    hybrid_sortings[subject]["Cluster"] = Sorting(
-        raw_data_bin,
-        geom,
-        cluster_spike_index[:, 0],
-        cluster_labels,
-        "Cluster",
-        spike_maxchans=cluster_spike_index[:, 1],
-        spike_xzptp=det_xzptp,
-    )
-    hybrid_comparisons[subject]["Cluster"] = HybridComparison(
-        gt_sortings[subject], hybrid_sortings[subject]["Cluster"], geom
-    )
+    name = "Cluster"
+    if name not in hybrid_comparisons[subject]:
+        print("//", name)
+        cluster_spike_index = np.load(
+            hybrid_res_dir / subject / "pre_merge_split_aligned_spike_index.npy"
+        )
+        cluster_labels = np.load(
+            hybrid_res_dir / subject / "pre_merge_split_labels.npy"
+        )
+        hybrid_sortings[subject][name] = Sorting(
+            raw_data_bin,
+            geom,
+            cluster_spike_index[:, 0],
+            cluster_labels,
+            name,
+            spike_maxchans=cluster_spike_index[:, 1],
+            spike_xzptp=det_xzptp,
+            cache_dir=hybrid_fig_cache_dir / subject,
+        )
+        hybrid_comparisons[subject][name] = HybridComparison(
+            gt_sortings[subject], hybrid_sortings[subject][name], geom
+        )
     
     # original clustering -> split/merge
-    print("//Split/merge...")
-    splitmerge_spike_index = np.load(
-        hybrid_res_dir / subject / "aligned_spike_index.npy"
-    )
-    splitmerge_labels = np.load(hybrid_res_dir / subject / "labels.npy")
-    hybrid_sortings[subject]["Split/Merge"] = Sorting(
-        raw_data_bin,
-        geom,
-        splitmerge_spike_index[:, 0],
-        splitmerge_labels,
-        "Split/Merge",
-        spike_maxchans=splitmerge_spike_index[:, 1],
-        spike_xzptp=det_xzptp,
-    )
-    hybrid_comparisons[subject]["Split/Merge"] = HybridComparison(
-        gt_sortings[subject], hybrid_sortings[subject]["Split/Merge"], geom
-    )
+    name = "Split/Merge"
+    if name not in hybrid_comparisons[subject]:
+        print("//", name)
+        splitmerge_spike_index = np.load(
+            hybrid_res_dir / subject / "aligned_spike_index.npy"
+        )
+        splitmerge_labels = np.load(hybrid_res_dir / subject / "labels.npy")
+        hybrid_sortings[subject][name] = Sorting(
+            raw_data_bin,
+            geom,
+            splitmerge_spike_index[:, 0],
+            splitmerge_labels,
+            name,
+            spike_maxchans=splitmerge_spike_index[:, 1],
+            spike_xzptp=det_xzptp,
+            cache_dir= hybrid_fig_cache_dir / subject,
+            do_cleaned_templates=True,
+        )
+        hybrid_comparisons[subject][name] = HybridComparison(
+            gt_sortings[subject], hybrid_sortings[subject][name], geom
+        )
     
     # deconv1
-    print("//Deconv1...")
-    orig_deconv1_st = np.load(hybrid_deconv_dir / subject / "spike_train.npy")
-    with h5py.File(hybrid_deconv_dir / subject / "deconv_results.h5") as h5:
-        locs = h5["localizations"][:]
-        deconv1_xzptp = np.c_[locs[:, 0], locs[:, 3], h5["maxptps"][:]]
-    hybrid_sortings[subject]["Deconv1"] = Sorting(
-        raw_data_bin,
-        geom,
-        orig_deconv1_st[:, 0],
-        cluster_utils.make_labels_contiguous(orig_deconv1_st[:, 1]),
-        "Deconv1",
-        spike_xzptp=deconv1_xzptp,
-    )
-    hybrid_comparisons[subject]["Deconv1"] = HybridComparison(
-        gt_sortings[subject], hybrid_sortings[subject]["Deconv1"], geom
-    )
+    name = "Deconv1"
+    if name not in hybrid_comparisons[subject]:
+        print("//", name)
+        orig_deconv1_st = np.load(hybrid_deconv_dir / subject / "spike_train.npy")
+        with h5py.File(hybrid_deconv_dir / subject / "deconv_results.h5") as h5:
+            locs = h5["localizations"][:]
+            deconv1_xzptp = np.c_[locs[:, 0], locs[:, 3], h5["maxptps"][:]]
+        hybrid_sortings[subject][name] = Sorting(
+            raw_data_bin,
+            geom,
+            orig_deconv1_st[:, 0],
+            cluster_utils.make_labels_contiguous(orig_deconv1_st[:, 1]),
+            name,
+            spike_xzptp=deconv1_xzptp,
+            cache_dir=hybrid_fig_cache_dir / subject,
+        )
+        hybrid_comparisons[subject][name] = HybridComparison(
+            gt_sortings[subject], hybrid_sortings[subject][name], geom
+        )
     
-    print("//Deconv1-Split...")
-    samples = np.load(hybrid_deconv_dir / subject / "postdeconv_split_times.npy")
-    labels = np.load(hybrid_deconv_dir / subject / "postdeconv_split_labels.npy")
-    order = np.load(hybrid_deconv_dir / subject / "postdeconv_split_order.npy")
-    templates = np.load(hybrid_deconv_dir / subject / "postdeconv_split_templates.npy")
-    with h5py.File(hybrid_deconv_dir / subject / "deconv_results.h5") as h5:
-        locs = h5["localizations"][:]
-        deconv1_xzptp = np.c_[locs[:, 0], locs[:, 3], h5["maxptps"][:]]
-    hybrid_sortings[subject]["Deconv1-Split"] = Sorting(
-        raw_data_bin,
-        geom,
-        samples,
-        labels,
-        "Deconv1-Split",
-        templates=templates,
-        spike_xzptp=deconv1_xzptp[order],
-    )
-    hybrid_comparisons[subject]["Deconv1-Split"] = HybridComparison(
-        gt_sortings[subject], hybrid_sortings[subject]["Deconv1-Split"], geom
-    )
+    name = "Deconv1-Split"
+    if name not in hybrid_comparisons[subject]:
+        print("//", name)
+        samples = np.load(hybrid_deconv_dir / subject / "postdeconv_split_times.npy")
+        labels = np.load(hybrid_deconv_dir / subject / "postdeconv_split_labels.npy")
+        order = np.load(hybrid_deconv_dir / subject / "postdeconv_split_order.npy")
+        templates = np.load(hybrid_deconv_dir / subject / "postdeconv_split_templates.npy")
+        with h5py.File(hybrid_deconv_dir / subject / "deconv_results.h5") as h5:
+            locs = h5["localizations"][:]
+            deconv1_xzptp = np.c_[locs[:, 0], locs[:, 3], h5["maxptps"][:]]
+        hybrid_sortings[subject][name] = Sorting(
+            raw_data_bin,
+            geom,
+            samples,
+            labels,
+            name,
+            templates=templates,
+            spike_xzptp=deconv1_xzptp[order],
+            cache_dir=hybrid_fig_cache_dir / subject,
+        )
+        hybrid_comparisons[subject][name] = HybridComparison(
+            gt_sortings[subject], hybrid_sortings[subject][name], geom
+        )
     
-    print("//Deconv1-SplitMerge...")
-    samples = np.load(hybrid_deconv_dir / subject / "postdeconv_merge_times.npy")
-    labels = np.load(hybrid_deconv_dir / subject / "postdeconv_merge_labels.npy")
-    order = np.load(hybrid_deconv_dir / subject / "postdeconv_merge_order.npy")
-    templates = np.load(hybrid_deconv_dir / subject / "postdeconv_merge_templates.npy")
-    with h5py.File(hybrid_deconv_dir / subject / "deconv_results.h5") as h5:
-        locs = h5["localizations"][:]
-        deconv1_xzptp = np.c_[locs[:, 0], locs[:, 3], h5["maxptps"][:]]
-    hybrid_sortings[subject]["Deconv1-SplitMerge"] = Sorting(
-        raw_data_bin,
-        geom,
-        samples,
-        labels,
-        "Deconv1-SplitMerge",
-        templates=templates,
-        spike_xzptp=deconv1_xzptp[order],
-    )
-    hybrid_comparisons[subject]["Deconv1-SplitMerge"] = HybridComparison(
-        gt_sortings[subject], hybrid_sortings[subject]["Deconv1-SplitMerge"], geom
-    )
+    name = "Deconv1-SplitMerge"
+    if name not in hybrid_comparisons[subject]:
+        print("//", name)
+        samples = np.load(hybrid_deconv_dir / subject / "postdeconv_merge_times.npy")
+        labels = np.load(hybrid_deconv_dir / subject / "postdeconv_merge_labels.npy")
+        order = np.load(hybrid_deconv_dir / subject / "postdeconv_merge_order.npy")
+        templates = np.load(hybrid_deconv_dir / subject / "postdeconv_merge_templates.npy")
+        with h5py.File(hybrid_deconv_dir / subject / "deconv_results.h5") as h5:
+            locs = h5["localizations"][:]
+            deconv1_xzptp = np.c_[locs[:, 0], locs[:, 3], h5["maxptps"][:]]
+        hybrid_sortings[subject][name] = Sorting(
+            raw_data_bin,
+            geom,
+            samples,
+            labels,
+            name,
+            templates=templates,
+            spike_xzptp=deconv1_xzptp[order],
+            cache_dir= hybrid_fig_cache_dir / subject,
+            do_cleaned_templates=True,
+        )
+        hybrid_comparisons[subject][name] = HybridComparison(
+            gt_sortings[subject], hybrid_sortings[subject][name], geom
+        )
     
     # deconv2
-    print("//Deconv2...")
-    deconv2_st = np.load(hybrid_deconv_dir / subject / "deconv2/spike_train.npy")
-    with h5py.File(hybrid_deconv_dir / subject / "deconv2/deconv_results.h5") as h5:
-        locs = h5["localizations"][:]
-        deconv2_xzptp = np.c_[locs[:, 0], locs[:, 3], h5["maxptps"][:]]
-    hybrid_sortings[subject]["Deconv2"] = Sorting(
-        raw_data_bin,
-        geom,
-        deconv2_st[:, 0],
-        deconv2_st[:, 1],
-        "Deconv2",
-        spike_xzptp=deconv2_xzptp,
-    )
-    hybrid_comparisons[subject]["Deconv2"] = HybridComparison(
-        gt_sortings[subject], hybrid_sortings[subject]["Deconv2"], geom
-    )
+    name = "Deconv2"
+    if deconv2 and name not in hybrid_comparisons[subject]:
+        print("//", name)
+        deconv2_st = np.load(hybrid_deconv_dir / subject / "deconv2/spike_train.npy")
+        with h5py.File(hybrid_deconv_dir / subject / "deconv2/deconv_results.h5") as h5:
+            locs = h5["localizations"][:]
+            deconv2_xzptp = np.c_[locs[:, 0], locs[:, 3], h5["maxptps"][:]]
+        hybrid_sortings[subject][name] = Sorting(
+            raw_data_bin,
+            geom,
+            deconv2_st[:, 0],
+            cluster_utils.make_labels_contiguous(deconv2_st[:, 1]),
+            name,
+            spike_xzptp=deconv2_xzptp,
+            cache_dir= hybrid_fig_cache_dir / subject,
+        )
+        hybrid_comparisons[subject][name] = HybridComparison(
+            gt_sortings[subject], hybrid_sortings[subject][name], geom
+        )
     
-    print("//Deconv2-Cleaned...")
-    samples = np.load(hybrid_deconv_dir / subject / "deconv2/postdeconv_cleaned_times.npy")
-    labels = np.load(hybrid_deconv_dir / subject / "deconv2/postdeconv_cleaned_labels.npy")
-    order = np.load(hybrid_deconv_dir / subject / "deconv2/postdeconv_cleaned_order.npy")
-    templates = np.load(hybrid_deconv_dir / subject / "deconv2/postdeconv_cleaned_templates.npy")
-    hybrid_sortings[subject]["Deconv1-SplitMerge"] = Sorting(
-        raw_data_bin,
-        geom,
-        samples,
-        labels,
-        "Deconv2-Cleaned",
-        templates=templates,
-        spike_xzptp=deconv2_xzptp[order],
-    )
-    hybrid_comparisons[subject]["Deconv2-Cleaned"] = HybridComparison(
-        gt_sortings[subject], hybrid_sortings[subject]["Deconv2-Cleaned"], geom
-    )
+    name = "Deconv2-Cleaned"
+    if deconv2 and name not in hybrid_comparisons[subject]:
+        print("//", name)
+        samples = np.load(hybrid_deconv_dir / subject / "deconv2/postdeconv_cleaned_times.npy")
+        labels = np.load(hybrid_deconv_dir / subject / "deconv2/postdeconv_cleaned_labels.npy")
+        order = np.load(hybrid_deconv_dir / subject / "deconv2/postdeconv_cleaned_order.npy")
+        templates = np.load(hybrid_deconv_dir / subject / "deconv2/postdeconv_cleaned_templates.npy")
+        hybrid_sortings[subject][name] = Sorting(
+            raw_data_bin,
+            geom,
+            samples,
+            labels,
+            name,
+            templates=templates,
+            spike_xzptp=deconv2_xzptp[order],
+            cache_dir= hybrid_fig_cache_dir / subject,
+            # do_cleaned_templates=True,
+        )
+        hybrid_comparisons[subject][name] = HybridComparison(
+            gt_sortings[subject], hybrid_sortings[subject][name], geom
+        )
     
     # KSall
-    print("//Kilosort...")
-    ks_samples = np.load(hybrid_ks_dir / subject / "spike_times.npy")
-    ks_labels = np.load(hybrid_ks_dir / subject / "spike_clusters.npy")
-    ks_labels = cluster_utils.make_labels_contiguous(ks_labels.squeeze().astype(int))
-    hybrid_sortings[subject]["KSAll"] = Sorting(
-        raw_data_bin,
-        geom,
-        ks_samples.squeeze().astype(int),
-        ks_labels.squeeze().astype(int),
-        "KSAll",
-    )
-    hybrid_comparisons[subject]["KSAll"] = HybridComparison(
-        gt_sortings[subject], hybrid_sortings[subject]["KSAll"], geom
-    )
+    name = "KSAll"
+    if name not in hybrid_comparisons[subject]:
+        print("//", name)
+        ks_samples = np.load(hybrid_ks_dir / subject / "spike_times.npy")
+        ks_labels = np.load(hybrid_ks_dir / subject / "spike_clusters.npy")
+        ks_labels = cluster_utils.make_labels_contiguous(ks_labels.squeeze().astype(int))
+        hybrid_sortings[subject][name] = Sorting(
+            raw_data_bin,
+            geom,
+            ks_samples.squeeze().astype(int),
+            ks_labels.squeeze().astype(int),
+            name,
+            cache_dir= hybrid_fig_cache_dir / subject,
+            # do_cleaned_templates=True,
+        )
+        hybrid_comparisons[subject][name] = HybridComparison(
+            gt_sortings[subject], hybrid_sortings[subject][name], geom
+        )
 
     print()
 
@@ -405,6 +499,9 @@ new_unit_df = pd.concat(new_unit_dfs, ignore_index=True)
 new_unit_df
 
 # %%
+plt.close("all")
+
+# %%
 for subject in subjects:
     comparisons = hybrid_comparisons[subject]
     names = list(comparisons.keys())
@@ -412,7 +509,7 @@ for subject in subjects:
     sorted_recalls = [c.weighted_average_performance["recall"] for c in comparisons.values()]
     la, = plt.plot(unsorted_recalls, "b") 
     lb, = plt.plot(sorted_recalls, "green")
-plt.gca().set_xticks(range(len(names)), names)
+plt.gca().set_xticks(range(len(names)), names, rotation=45)
 plt.title("Recall through the pipeline")
 plt.legend([la, lb], ["unsorted", "sorted"], frameon=False)
 plt.gcf().savefig(hybrid_fig_dir / "summary_recall.png", dpi=300, bbox_inches="tight")
@@ -428,11 +525,66 @@ for subject in subjects:
     la, = plt.plot(acc, "b") 
     lb, = plt.plot(rec, "g")
     lc, = plt.plot(prec, "r")
-plt.gca().set_xticks(range(len(names)), names)
+plt.gca().set_xticks(range(len(names)), names, rotation=45)
 plt.title("Sorted metrics through the pipeline")
 plt.legend([la, lb, lc], ["accuracy", "recall", "precision"], frameon=False)
 plt.gcf().savefig(hybrid_fig_dir / "summary_perf.png", dpi=300, bbox_inches="tight")
 plt.show()
+
+# %% tags=[]
+(hybrid_fig_dir / "template_maxchan_traces").mkdir(exist_ok=True)
+
+jobs = []
+for subject, comparisons in hybrid_comparisons.items():
+    for step, (sorting, comp) in enumerate(comparisons.items()):
+        if comp.unsorted:
+            continue
+        
+        fig = comp.new_sorting.template_maxchan_vis()
+        name_lo = comp.new_sorting.name_lo
+        plt.show()
+        fig.savefig(hybrid_fig_dir / "template_maxchan_traces" / f"{subject}_{step}_{name_lo}.png", dpi=300)
+        plt.close(fig)
+
+# %%
+(hybrid_fig_dir / "cleaned_temp_vis").mkdir(exist_ok=True)
+
+def job(step_savedir, new_sorting, i, unit):
+    count = new_sorting.unit_spike_counts[i]
+    fig, ax, maxsnr, raw_maxptp, cleaned_maxptp = new_sorting.cleaned_temp_vis(
+        unit
+    )
+    fig.suptitle(
+        f"unit {unit}: raw maxptp {raw_maxptp:.2f}, cleaned maxptp {cleaned_maxptp:.2f}, "
+        f"nspikes {count}, max chan snr {maxsnr:.2f}.",
+        fontsize=8,
+        y=0.91,
+    )
+    # plt.show()
+    fig.savefig(step_savedir / f"rawmaxptp{raw_maxptp:05.2f}_unit{unit:03d}.pdf")
+    plt.close(fig)
+
+
+jobs = []
+for subject, comparisons in hybrid_comparisons.items():
+    for step, (sorting, comp) in enumerate(comparisons.items()):
+        
+        if comp.unsorted:
+            continue
+        
+        if comp.new_sorting.cleaned_templates is None:
+            continue
+        
+        name_lo = comp.new_sorting.name_lo
+        step_savedir = hybrid_fig_dir / "cleaned_temp_vis" / subject / f"{step}_{name_lo}"
+        step_savedir.mkdir(exist_ok=True, parents=True)
+
+        for i, unit in enumerate(comp.new_sorting.unit_labels):
+            jobs.append(delayed(job)(step_savedir, comp.new_sorting, i, unit))
+            # job(step_savedir, comp.new_sorting, i, unit)
+
+for res in Parallel(14)(tqdm(jobs)):
+    pass
 
 # %% tags=[]
 (hybrid_fig_dir / "perf_by_ptp").mkdir(exist_ok=True)
@@ -451,7 +603,7 @@ for step, df in unit_df.groupby("step"):
     
     fig.suptitle(f"Step {step}: {sort}.   {n_missed=}", y=0.925)
     fig.savefig(hybrid_fig_dir / "perf_by_ptp" / f"{step}_{name_lo}.png")
-    plt.show()
+    # plt.show()
     plt.close(fig)
 
 # %% tags=[]
@@ -471,7 +623,7 @@ for step, df in unit_df.groupby("step"):
     
     fig.suptitle(f"Step {step}: {sort}.    {n_missed=}", y=0.925)
     fig.savefig(hybrid_fig_dir / "perf_by_firing_rate" / f"{step}_{name_lo}.png")
-    plt.show()
+    # plt.show()
     plt.close(fig)
 
 # %% tags=[]
@@ -491,10 +643,10 @@ for step, df in unit_df.groupby("step"):
     
     fig.suptitle(f"Step {step}: {sort}.    {n_missed=}", y=0.925)
     fig.savefig(hybrid_fig_dir / "perf_by_local_detection_density" / f"{step}_{name_lo}.png")
-    plt.show()
+    # plt.show()
     plt.close(fig)
 
-# %%
+# %% tags=[]
 (hybrid_fig_dir / "single_unit_metrics").mkdir(exist_ok=True)
 
 for step, df in new_unit_df.groupby("step"):
@@ -511,30 +663,8 @@ for step, df in new_unit_df.groupby("step"):
     fig.suptitle(f"Step {step}: {sort}.    {mean_contam_ratio=:0.2f}", y=0.925)
     step = step if step >= 0 else "_gt"
     fig.savefig(hybrid_fig_dir / "single_unit_metrics" / f"{step}_{name_lo}.png")
-    plt.show()
+    # plt.show()
     plt.close(fig)
-
-# %%
-(hybrid_fig_dir / "template_maxchan_traces").mkdir(exist_ok=True)
-
-def job(step, subject, new_sorting):
-    fig = new_sorting.template_maxchan_vis()
-    name_lo = new_sorting.name_lo
-    fig.savefig(hybrid_fig_dir / "template_maxchan_traces" / f"{subject}_{step}_{name_lo}.png", dpi=300)
-    plt.close(fig)
-
-jobs = []
-for subject, comparisons in hybrid_comparisons.items():
-    for step, (sorting, comp) in enumerate(comparisons.items()):
-        if comp.unsorted:
-            continue
-        jobs.append(delayed(job)(step, subject, comp.new_sorting))
-
-for res in Parallel(8)(tqdm(jobs, total=len(jobs))):
-    pass
-
-# %%
-hybrid_comparisons["CSHL051"]["Deconv1"].new_sorting.unsorted
 
 # %% tags=[]
 (hybrid_fig_dir / "array_scatter").mkdir(exist_ok=True)
@@ -542,9 +672,10 @@ hybrid_comparisons["CSHL051"]["Deconv1"].new_sorting.unsorted
 def job(step, subject, comp_a, ks_comp):
     name = comp_a.new_sorting.name
     name_lo = comp_a.new_sorting.name_lo
-    fig, axes, ea = array_scatter_vs(comp_a, ks_comp, do_ellipse=True)
-    fig.suptitle(f"{subject}: GT template locs + {name} locs", y=1.01)
-    fig.savefig(hybrid_fig_dir / "array_scatter" / f"{subject}_{step}_{name_lo}.png", dpi=300)
+    fig, axes, ea, pct = array_scatter_vs(comp_a, ks_comp, do_ellipse=True)
+    n_units = comp_a.new_sorting.unit_labels.size
+    st = fig.suptitle(f"{subject}, {name}. {pct}% of spikes shown from {n_units} units. ", y=1.01)
+    fig.savefig(hybrid_fig_dir / "array_scatter" / f"{subject}_{step}_{name_lo}.png", dpi=300, bbox_inches="tight", bbox_extra_artists=[st])
     plt.close(fig)
 
 jobs = []
@@ -556,7 +687,7 @@ for subject, comparisons in hybrid_comparisons.items():
         print(subject, comp.new_sorting.name)
         jobs.append(delayed(job)(step, subject, comp, ks_comp))
 
-for res in Parallel(8)(tqdm(jobs, total=len(jobs))):
+for res in Parallel(14)(tqdm(jobs, total=len(jobs))):
     pass
 
 # %%
@@ -629,7 +760,7 @@ for subject, comparisons in hybrid_comparisons.items():
     for gt_unit in comp.gt_sorting.unit_labels:
         jobs.append(delayed(job)(comp, subject, gt_unit))
 
-for res in Parallel(8)(tqdm(jobs, total=len(jobs))):
+for res in Parallel(13)(tqdm(jobs, total=len(jobs))):
     pass
 
 # %%
@@ -653,7 +784,7 @@ for subject, comparisons in hybrid_comparisons.items():
     for gt_unit in comp.gt_sorting.unit_labels:
         jobs.append(delayed(job)(comp, subject, gt_unit))
 
-for res in Parallel(8)(tqdm(jobs, total=len(jobs))):
+for res in Parallel(13)(tqdm(jobs, total=len(jobs))):
     pass
 
 # %% tags=[]
@@ -664,12 +795,12 @@ outdir.mkdir(exist_ok=True)
 def job(hybrid_comparison, subject, gt_unit):
     import warnings
     with warnings.catch_warnings():
-        # try:
-        fig, gt_ptp, acc = make_diagnostic_plot(hybrid_comparison, gt_unit)
-        fig.savefig(outdir / f"ptp{gt_ptp:05.2f}_acc{acc}_{subject}_unit{gt_unit:02d}.png")
-        plt.close(fig)
-        # except ValueError as e:
-            # print(e)
+        try:
+            fig, gt_ptp, acc = make_diagnostic_plot(hybrid_comparison, gt_unit)
+            fig.savefig(outdir / f"ptp{gt_ptp:05.2f}_acc{acc}_{subject}_unit{gt_unit:02d}.png")
+            plt.close(fig)
+        except ValueError as e:
+            print(e)
 
 jobs = []
 for subject, comparisons in hybrid_comparisons.items():
@@ -677,7 +808,7 @@ for subject, comparisons in hybrid_comparisons.items():
     for gt_unit in comp.gt_sorting.unit_labels:
         jobs.append(delayed(job)(comp, subject, gt_unit))
 
-for res in Parallel(8)(tqdm(jobs, total=len(jobs))):
+for res in Parallel(13)(tqdm(jobs, total=len(jobs))):
     pass
 
 # %% tags=[]
@@ -688,12 +819,12 @@ outdir.mkdir(exist_ok=True)
 def job(hybrid_comparison, subject, gt_unit):
     import warnings
     with warnings.catch_warnings():
-        # try:
-        fig, gt_ptp, acc = make_diagnostic_plot(hybrid_comparison, gt_unit)
-        fig.savefig(outdir / f"ptp{gt_ptp:05.2f}_acc{acc}_{subject}_unit{gt_unit:02d}.png")
-        plt.close(fig)
-        # except ValueError as e:
-            # print(e)
+        try:
+            fig, gt_ptp, acc = make_diagnostic_plot(hybrid_comparison, gt_unit)
+            fig.savefig(outdir / f"ptp{gt_ptp:05.2f}_acc{acc}_{subject}_unit{gt_unit:02d}.png")
+            plt.close(fig)
+        except ValueError as e:
+            print(e)
 
 jobs = []
 for subject, comparisons in hybrid_comparisons.items():
@@ -701,7 +832,7 @@ for subject, comparisons in hybrid_comparisons.items():
     for gt_unit in comp.gt_sorting.unit_labels:
         jobs.append(delayed(job)(comp, subject, gt_unit))
 
-for res in Parallel(8)(tqdm(jobs, total=len(jobs))):
+for res in Parallel(13)(tqdm(jobs, total=len(jobs))):
     pass
 
 # %% tags=[]
@@ -725,6 +856,84 @@ for subject, comparisons in hybrid_comparisons.items():
         jobs.append(delayed(job)(comp, subject, gt_unit))
 
 failed = 0
-for res in Parallel(8)(tqdm(jobs, total=len(jobs))):
+for res in Parallel(13)(tqdm(jobs, total=len(jobs))):
     failed += res
 print(failed)
+
+# %%
+(hybrid_fig_dir / "unit_summary_fig").mkdir(exist_ok=True)
+
+def job(step_savedir, new_sorting, i, unit):
+    count = new_sorting.unit_spike_counts[i]
+    fig, ax, raw_maxptp = new_sorting.unit_summary_fig(unit)
+    # plt.show()
+    fig.savefig(step_savedir / f"rawmaxptp{raw_maxptp:05.2f}_unit{unit:03d}.png")
+    plt.close(fig)
+
+
+jobs = []
+for subject, comparisons in hybrid_comparisons.items():
+    for step, (sorting, comp) in enumerate(comparisons.items()):
+        
+        if comp.unsorted:
+            continue
+        
+        # if "ks" not in comp.new_sorting.name_lo and comp.new_sorting.cleaned_templates is None:
+        #     continue
+        if not any(
+            k in comp.new_sorting.name_lo for k in ("ks", "cleaned")
+        ):
+            continue
+        
+        name_lo = comp.new_sorting.name_lo
+        print(subject, step, name_lo)
+
+        step_savedir = hybrid_fig_dir / "unit_summary_fig" / subject / f"{step}_{name_lo}"
+        step_savedir.mkdir(exist_ok=True, parents=True)
+
+        for i, unit in enumerate(comp.new_sorting.unit_labels):
+            jobs.append(delayed(job)(step_savedir, comp.new_sorting, i, unit))
+            # job(step_savedir, comp.new_sorting, i, unit)
+
+for res in Parallel(14)(tqdm(jobs)):
+    pass
+
+# %%
+
+# %%
+
+# %%
+
+# %%
+
+# %%
+
+# %%
+
+# %%
+
+# %%
+
+# %%
+
+# %%
+
+# %%
+
+# %%
+
+# %%
+
+# %%
+
+# %%
+
+# %%
+
+# %%
+
+# %%
+
+# %%
+
+# %%

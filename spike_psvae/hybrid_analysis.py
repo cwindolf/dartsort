@@ -10,25 +10,31 @@ import numpy as np
 import pandas as pd
 from scipy.spatial import KDTree
 import matplotlib.pyplot as plt
+from matplotlib import colors
 import statsmodels.api as sm
+import colorcet as cc
 from scipy.optimize import least_squares
 from scipy.spatial.distance import cdist
 import seaborn as sns
 from tqdm.auto import tqdm
+from pathlib import Path
+import pickle
 
 from spikeinterface.extractors import NumpySorting
 from spikeinterface.comparison import compare_sorter_to_ground_truth
 
-from spike_psvae.spikeio import get_binary_length
+from spike_psvae.spikeio import get_binary_length, read_waveforms
 
 # from spike_psvae.snr_templates import get_templates
-from spike_psvae.deconvolve import get_templates
 from spike_psvae import (
     localize_index,
     cluster_viz,
     cluster_viz_index,
     pyks_ccg,
     cluster_utils,
+    snr_templates,
+    waveform_utils,
+    deconvolve,
 )
 
 
@@ -53,6 +59,9 @@ class Sorting:
         fs=30_000,
         n_close_units=3,
         template_n_spikes=250,
+        cache_dir=None,
+        overwrite=False,
+        do_cleaned_templates=False,
     ):
         n_spikes_full = spike_labels.shape[0]
         assert spike_labels.shape == spike_times.shape == (n_spikes_full,)
@@ -64,57 +73,93 @@ class Sorting:
         self.name_lo = re.sub("[^a-z0-9]+", "_", name.lower())
         self.fs = fs
         self.n_close_units = n_close_units
+        self.unsorted = unsorted
+        self.raw_bin = raw_bin
+        self.original_spike_train = np.c_[spike_times, spike_labels]
+        self.cleaned_templates = None
+        self.do_cleaned_templates = do_cleaned_templates
+
+        # see if we can load up expensive stuff from cache
+        # this will check if the sorting in the cache uses the same
+        # spike train and raw bin file path, and
+        cached = False
+        if not overwrite and (cache_dir and templates is None):
+            cached, cached_templates = self.try_to_load_from_cache(cache_dir)
+            templates = cached_templates if cached else templates
 
         which = np.flatnonzero(spike_labels >= 0)
         which = which[np.argsort(spike_times[which])]
 
-        self.unsorted = unsorted
-        self.raw_bin = raw_bin
         self.spike_times = spike_times[which]
         self.spike_labels = spike_labels[which]
         self.unit_labels, self.unit_spike_counts = np.unique(
             self.spike_labels, return_counts=True
         )
+        self.n_units = self.unit_labels.size
+        full_spike_counts = np.zeros(self.unit_labels.max() + 1, dtype=int)
+        full_spike_counts[self.unit_labels] = self.unit_spike_counts
         self.unit_firing_rates = self.unit_spike_counts / T_sec
         self.contiguous_labels = (
             self.unit_labels.size == self.unit_labels.max() + 1
         )
-        # Issue with localization of empty template
-        assert (
-            self.contiguous_labels
-        ), "Not having contiguous labels not supported for now."
 
         self.templates = templates
         if templates is None and not unsorted:
+            print("Computing raw templates")
             # self.cleaned_templates, _, self.templates, _ = get_templates(
             #     np.c_[self.spike_times, self.spike_labels],
             #     geom,
             #     raw_bin,
             #     return_raw_cleaned=True,
             # )
-            self.templates = get_templates(
+            self.templates = deconvolve.get_templates(
                 raw_bin,
                 self.spike_times[:, None],
                 self.spike_labels,
                 geom,
                 n_samples=template_n_spikes,
+                pbar=True,
             )
+
+        if self.cleaned_templates is None and do_cleaned_templates:
+            print("Computing cleaned templates")
+            (
+                cleaned_templates,
+                extra
+            ) = snr_templates.get_templates(
+                np.c_[self.spike_times, self.spike_labels],
+                self.geom,
+                self.raw_bin,
+                self.templates.ptp(1).argmax(1),
+                tpca_rank=5,
+            )
+            self.cleaned_templates = cleaned_templates
+            self.snrs = extra["snr_by_channel"]
+            self.denoised_templates = extra["denoised_templates"]
+            self.raw_templates = extra["orig_raw_templates"]
+            self.snr_weights = extra["weights"]
+
         if not unsorted:
-            assert self.templates.shape[0] == self.unit_labels.max() + 1
+            assert self.templates.shape[0] >= self.unit_labels.max() + 1
 
         if self.templates is not None:
             self.template_ptps = self.templates.ptp(1)
             self.template_maxptps = self.template_ptps.max(1)
             self.template_maxchans = self.template_ptps.argmax(1)
             self.template_locs = localize_index.localize_ptps_index(
-                self.template_ptps,
+                self.template_ptps[full_spike_counts > 0],
                 geom,
-                self.template_maxchans,
+                self.template_maxchans[full_spike_counts > 0],
                 np.stack([np.arange(len(geom))] * len(geom), axis=0),
                 n_channels=20,
                 n_workers=None,
                 pbar=True,
             )
+            self.template_locs = list(self.template_locs)
+            for i, loc in enumerate(self.template_locs):
+                loc_ = np.zeros_like(self.template_maxptps)
+                loc_[full_spike_counts > 0] = loc
+                self.template_locs[i] = loc_
 
             self.template_xzptp = np.c_[
                 self.template_locs[0],
@@ -166,6 +211,9 @@ class Sorting:
                     self.contam_p_values[i],
                 ) = pyks_ccg.ccg_metrics(st, st, 500, self.fs / 1000)
 
+        if cache_dir and (overwrite or not cached):
+            self.save_to_cache(cache_dir)
+
     def get_unit_spike_train(self, unit):
         return self.spike_times[self.spike_labels == unit]
 
@@ -180,20 +228,110 @@ class Sorting:
             sampling_frequency=self.fs,
         )
 
+    # -- caching logic so we don't re-compute templates all the time
+    # cache invalidation is based on the spike train!
+
+    def try_to_load_from_cache(self, cache_dir):
+        my_cache = Path(cache_dir) / self.name_lo
+        meta_pkl = my_cache / "meta.pkl"
+        st_npy = my_cache / "st.npy"
+        temps_npy = my_cache / "temps.npy"
+        snr_temps_pkl = my_cache / "snr_temps.pkl"
+        paths = [my_cache, meta_pkl, st_npy, temps_npy]
+        if not all(p.exists() for p in paths):
+            # no cache saved
+            print(f"There is no cache to load for sorting {self.name}")
+            return False, None
+
+        with open(meta_pkl, "rb") as jar:
+            meta = pickle.load(jar)
+        cache_bin_file = meta["bin_file"]
+        if cache_bin_file != self.raw_bin:
+            print(
+                f"Won't load sorting {self.name} from cache: different binary path"
+            )
+            return False, None
+
+        cache_st = np.load(st_npy)
+        if not np.array_equal(cache_st, self.original_spike_train):
+            print(
+                f"Won't load sorting {self.name} from cache: different spike train"
+            )
+            return False, None
+
+        print(f"Loading sorting {self.name} from cache")
+        temps = np.load(temps_npy, allow_pickle=True)
+        if temps is None or temps.size <= 1:
+            return False, None
+
+        if (
+            self.do_cleaned_templates
+            and self.cleaned_templates is None
+            and snr_temps_pkl.exists()
+        ):
+            with open(snr_temps_pkl, "rb") as jar:
+                (
+                    self.cleaned_templates,
+                    self.snrs,
+                    self.snr_weights,
+                    self.denoised_templates,
+                    self.raw_templates,
+                ) = pickle.load(jar)
+
+        return True, temps
+
+    def save_to_cache(self, cache_dir):
+        my_cache = Path(cache_dir) / self.name_lo
+        my_cache.mkdir(parents=True, exist_ok=True)
+
+        meta_pkl = my_cache / "meta.pkl"
+        st_npy = my_cache / "st.npy"
+        temps_npy = my_cache / "temps.npy"
+        snr_temps_pkl = my_cache / "snr_temps.pkl"
+
+        with open(meta_pkl, "wb") as jar:
+            pickle.dump(dict(bin_file=self.raw_bin), jar)
+        np.save(st_npy, self.original_spike_train)
+        np.save(temps_npy, self.templates)
+
+        if self.cleaned_templates is not None:
+            with open(snr_temps_pkl, "wb") as jar:
+                pickle.dump(
+                    (
+                        self.cleaned_templates,
+                        self.snrs,
+                        self.snr_weights,
+                        self.denoised_templates,
+                        self.raw_templates,
+                    ),
+                    jar,
+                )
+
+    # -- below are some plots that the sorting can make about itself
+
     def array_scatter(
         self,
         zlim=(-50, 3900),
         axes=None,
         do_ellipse=True,
         max_n_spikes=500_000,
+        pad_zfilter=50,
     ):
-        sample = slice(None)
         pct_shown = 100
         if self.n_spikes > max_n_spikes:
             sample = np.random.default_rng(0).choice(
                 self.n_spikes, size=max_n_spikes, replace=False
             )
+            sample.sort()
             pct_shown = np.round(100 * max_n_spikes / self.n_spikes)
+        else:
+            sample = np.arange(self.n_spikes)
+
+        z_hidden = np.flatnonzero(
+            (self.spike_xzptp[:, 1] < zlim[0] - pad_zfilter)
+            | (self.spike_xzptp[:, 1] > zlim[1] + pad_zfilter)
+        )
+        sample = np.setdiff1d(sample, z_hidden)
 
         fig, axes = cluster_viz_index.array_scatter(
             self.spike_labels[sample],
@@ -210,25 +348,28 @@ class Sorting:
         return fig, axes, pct_shown
 
     def compute_closest_units(self):
-        n_num_close_clusters = 10
+        num_close_clusters = min(10, self.n_units - 1)
 
         assert self.contiguous_labels
         n_units = self.templates.shape[0]
 
-        close_clusters = np.zeros((n_units, n_num_close_clusters), dtype=int)
+        close_clusters = np.zeros((n_units, num_close_clusters), dtype=int)
         for i in range(n_units):
             close_clusters[i] = cluster_utils.get_closest_clusters_kilosort(
                 i,
                 dict(zip(self.unit_labels, self.template_xzptp[:, 1])),
-                num_close_clusters=n_num_close_clusters,
+                num_close_clusters=num_close_clusters,
             )
 
-        close_templates = np.zeros((n_units, self.n_close_units), dtype=int)
+        close_templates = np.zeros(
+            (n_units, min(self.n_units - 1, self.n_close_units)), dtype=int
+        )
         for i in tqdm(range(n_units)):
-            cos_dist = np.zeros(n_num_close_clusters)
+            cos_dist = np.zeros(num_close_clusters)
             vis_channels = np.flatnonzero(self.templates[i].ptp(0) >= 1.0)
-            for j in range(n_num_close_clusters):
+            for j in range(num_close_clusters):
                 idx = close_clusters[i, j]
+                # this is max abs norm distance (L_\infty)
                 cos_dist[j] = cdist(
                     self.templates[i, :, vis_channels].ravel()[None, :],
                     self.templates[idx, :, vis_channels].ravel()[None, :],
@@ -236,23 +377,266 @@ class Sorting:
                     p=np.inf,
                 )
             close_templates[i] = close_clusters[i][
-                cos_dist.argsort()[: self.n_close_units]
+                cos_dist.argsort()[: min(self.n_units - 1, self.n_close_units)]
             ]
 
         return close_templates
 
-    def template_maxchan_vis(self):
-        fig = plt.figure(figsize=(6, 4))
-        for u in self.unit_labels:
-            plt.plot(
+    def template_maxchan_vis(self, secondary_minptp=3, n_secondary=3):
+        fig, (aa, ab, ac) = plt.subplots(nrows=3, figsize=(6, 12))
+        count_argsort = np.argsort(self.unit_spike_counts)[::-1]
+
+        # aa: plot templates colored by unit
+        colors_uniq = cc.m_glasbey_hv(
+            np.arange(len(self.unit_labels)) % len(cc.glasbey_hv)
+        )
+        for i in count_argsort:
+            u = self.unit_labels[i]
+            aa.plot(
                 self.templates[u, :, self.template_maxchans[u]],
-                color="k",
-                alpha=0.1,
+                color=colors_uniq[u],
+                alpha=0.5,
             )
-        plt.title(
-            f"{self.name}, template maxchan traces, {len(self.unit_labels)} units."
+            vis_chans = np.setdiff1d(
+                np.flatnonzero(self.templates[u].ptp(0) > secondary_minptp),
+                [self.template_maxchans[u]],
+            )
+            if not vis_chans.any():
+                continue
+            vis_chans_sort = np.argsort(self.templates[u].ptp(0)[vis_chans])[::-1]
+            vis_chans = vis_chans[vis_chans_sort[:n_secondary]]
+            for c in vis_chans:
+                ac.plot(
+                    self.templates[u, :, c],
+                    color=colors_uniq[u],
+                    alpha=0.5,
+                )
+
+        # ab: plot templates colored by count, in descending order
+        # so that we can actually see the small count templates.
+        norm = colors.LogNorm(
+            self.unit_spike_counts.min(),
+            self.unit_spike_counts.max(),
+        )
+        mappable = plt.cm.ScalarMappable(
+            norm=norm,
+            cmap=plt.cm.inferno,
+        )
+        for i in count_argsort:
+            u = self.unit_labels[i]
+            ab.plot(
+                self.templates[u, :, self.template_maxchans[u]],
+                color=mappable.cmap(norm(self.unit_spike_counts[i])),
+                alpha=0.5,
+            )
+        plt.colorbar(
+            mappable,
+            ax=ab,
+            label="spike count",
+        )
+        aa.set_title("primary channels by unit")
+        ab.set_title("primary channels by count")
+        ac.set_title(f"top {n_secondary} secondary channels with ptp>{secondary_minptp} by unit")
+        fig.suptitle(
+            f"{self.name}, template maxchan traces, {len(self.unit_labels)} units.",
+            fontsize=12,
+            y=0.92,
         )
         return fig
+
+    def cleaned_temp_vis(self, unit, ax=None, nchans=20):
+        assert self.contiguous_labels and self.cleaned_templates is not None
+
+        if ax is None:
+            fig, ax = plt.subplots(figsize=(6, 6))
+        else:
+            fig = ax.figure
+
+        temp = self.cleaned_templates[unit]
+        raw_temp = self.raw_templates[unit]
+        denoised_temp = self.denoised_templates[unit]
+        weights = self.snr_weights[unit]
+
+        # get on fewer chans
+        ci = waveform_utils.make_contiguous_channel_index(
+            self.geom.shape[0], nchans
+        )
+        tmc = temp.ptp(0).argmax()
+
+        # make plot
+        amp = np.abs(temp).max()
+        rlines = cluster_viz_index.pgeom(
+            raw_temp[:, ci[tmc]],
+            tmc,
+            ci,
+            self.geom,
+            max_abs_amp=amp,
+            color="gray",
+            ax=ax,
+        )
+        dlines = cluster_viz_index.pgeom(
+            denoised_temp[:, ci[tmc]],
+            tmc,
+            ci,
+            self.geom,
+            max_abs_amp=amp,
+            color="green",
+            show_zero=False,
+            ax=ax,
+        )
+        lines = cluster_viz_index.pgeom(
+            temp[:, ci[tmc]],
+            tmc,
+            ci,
+            self.geom,
+            max_abs_amp=amp,
+            color="orange",
+            lw=1,
+            show_zero=False,
+            ax=ax,
+        )
+        wlines = cluster_viz_index.pgeom(
+            weights[:, ci[tmc]],
+            tmc,
+            ci,
+            self.geom,
+            max_abs_amp=amp,
+            color="purple",
+            lw=1,
+            show_zero=False,
+            ax=ax,
+        )
+        ax.legend(
+            (rlines[0], dlines[0], lines[0], wlines[0]),
+            ("raw", "denoised", "final", "weight"),
+            fancybox=False,
+        )
+        ax.set_xticks([])
+        ax.set_yticks([])
+
+        return (
+            fig,
+            ax,
+            self.snrs[unit].max(),
+            raw_temp.ptp(0).max(),
+            temp.ptp(0).max(),
+        )
+
+    def unit_summary_fig(self, unit, dz=50, nchans=16, n_wfs_max=100):
+        have_loc = self.spike_xzptp is not None
+        height_ratios = [1, 1, 3] if have_loc else [1, 3]
+        fig, axes = plt.subplot_mosaic(
+            "aat\nxyz\nddd" if have_loc else "aat\nddd",
+            gridspec_kw=dict(
+                height_ratios=[1, 2, 5] if have_loc else [1, 5],
+            ),
+            figsize=(6, 2 * sum(height_ratios)),
+        )
+
+        in_unit = np.flatnonzero(self.spike_train[:, 1] == unit)
+        unit_st = self.spike_train[in_unit, 0]
+        cx, cz, cptp = self.template_xzptp[unit]
+
+        # text summaries
+        unit_props = dict(
+            unit=unit,
+            snr=self.templates[unit].ptp(1).max() * self.unit_spike_counts[unit],
+            n_spikes=self.unit_spike_counts[unit],
+            template_ptp=self.templates[unit].ptp(1).max(),
+            max_channel=self.template_maxchans[unit],
+            trough_sample=self.templates[unit, :, self.template_maxchans[unit]].argmin(),
+        )
+        axes["t"].text(
+            0,
+            1,
+            "\n".join(
+                (f"{k}: {v}" if np.issubdtype(v, np.integer) else f"{k}: {v:0.2f}")
+                for k, v in unit_props.items()),
+            transform=axes["t"].transAxes,
+            fontsize=10,
+            verticalalignment="top",
+            bbox=dict(edgecolor="none", facecolor="none"),
+        )
+        axes["t"].axis("off")
+
+        # ISI distribution
+        cluster_viz.plot_isi_distribution(unit_st, ax=axes["a"], cdf=False)
+
+        # Scatter
+        if have_loc:
+            self.array_scatter(
+                zlim=(cz - dz, cz + dz),
+                axes=[axes[k] for k in "xyz"],
+                do_ellipse=True,
+            )
+            axes["y"].set_yticks([])
+            axes["z"].set_yticks([])
+
+        # Waveforms
+        ci = waveform_utils.make_contiguous_channel_index(
+            self.geom.shape[0], nchans
+        )
+        choices = slice(None)
+        if in_unit.size > n_wfs_max:
+            choices = np.random.choice(in_unit.size, n_wfs_max, replace=False)
+            choices.sort()
+        maxchans = self.template_maxchans[
+            self.spike_train[in_unit[choices], 1]
+        ]
+        wfs, skipped = read_waveforms(
+            self.spike_train[in_unit[choices], 0],
+            self.raw_bin,
+            len(self.geom),
+            channel_index=ci,
+            max_channels=maxchans,
+        )
+        max_abs_amp = np.abs(wfs).max()
+        wf_lines = cluster_viz_index.pgeom(
+            wfs,
+            maxchans,
+            ci,
+            self.geom,
+            ax=axes["d"],
+            max_abs_amp=max_abs_amp,
+            color="k",
+            alpha=0.05,
+        )
+        rt_lines = cluster_viz_index.pgeom(
+            self.templates[unit][:, ci[self.template_maxchans[unit]]],
+            self.template_maxchans[unit],
+            ci,
+            self.geom,
+            ax=axes["d"],
+            max_abs_amp=max_abs_amp,
+            color="b",
+            lw=1,
+        )
+        ch = cl = ()
+        if self.cleaned_templates is not None:
+            ct_lines = cluster_viz_index.pgeom(
+                self.cleaned_templates[unit][
+                    :, ci[self.template_maxchans[unit]]
+                ],
+                self.template_maxchans[unit],
+                ci,
+                self.geom,
+                ax=axes["d"],
+                max_abs_amp=max_abs_amp,
+                color="orange",
+                lw=1,
+            )
+            ch = (ct_lines[0],)
+            cl = ("cleaned template",)
+        axes["d"].legend(
+            (wf_lines[0], rt_lines[0], *ch),
+            ("waveforms", "raw template", *cl),
+            fancybox=False,
+            loc="lower right",
+        )
+        axes["d"].set_xticks([])
+        axes["d"].set_yticks([])
+        
+        return fig, axes, self.template_maxptps[unit]
 
 
 class HybridComparison:
@@ -517,9 +901,13 @@ def make_diagnostic_plot(hybrid_comparison, gt_unit):
 
 
 def array_scatter_vs(scatter_comparison, vs_comparison, do_ellipse=True):
-    fig, axes = scatter_comparison.new_sorting.array_scatter(
+    fig, axes, pct_shown = scatter_comparison.new_sorting.array_scatter(
         do_ellipse=do_ellipse
     )
+    
+    if vs_comparison is None:
+        return fig, axes, None, pct_shown
+
     scatter_match = scatter_comparison.gt_matched
     vs_match = vs_comparison.gt_matched
     match = scatter_match + 2 * vs_match
@@ -553,7 +941,7 @@ def array_scatter_vs(scatter_comparison, vs_comparison, do_ellipse=True):
         borderaxespad=-10,
     )
 
-    return fig, axes, leg_artist
+    return fig, axes, leg_artist, pct_shown
 
 
 def near_gt_scatter_vs(step_comparisons, vs_comparison, gt_unit, dz=100):
@@ -568,7 +956,6 @@ def near_gt_scatter_vs(step_comparisons, vs_comparison, gt_unit, dz=100):
             hspace=0.25, wspace=0.0, height_ratios=[1] * nrows + [0.1]
         ),
     )
-    print("z", axes.shape, flush=True)
     gt_x, gt_z, gt_ptp = vs_comparison.gt_sorting.template_xzptp.T
     log_gt_ptp = np.log(gt_ptp)
     gt_unit_z = gt_z[gt_unit]

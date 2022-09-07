@@ -1,5 +1,100 @@
 import numpy as np
-from scipy.spatial.distance import cdist
+from scipy.spatial.distance import cdist, pdist, squareform
+
+
+# -- channels / geometry helpers
+
+
+def n_steps_neigh_channels(neighbors_matrix, steps):
+    """Compute a neighbors matrix by considering neighbors of neighbors
+
+    Parameters
+    ----------
+    neighbors_matrix: numpy.ndarray
+        Neighbors matrix
+    steps: int
+        Number of steps to still consider channels as neighbors
+
+    Returns
+    -------
+    numpy.ndarray (n_channels, n_channels)
+        Symmetric boolean matrix with the i, j as True if the ith and jth
+        channels are considered neighbors
+    """
+    # Compute neighbors of neighbors via matrix powers
+    output = np.eye(neighbors_matrix.shape[0]) + neighbors_matrix
+    return np.linalg.matrix_power(output, steps) > 0
+
+
+def order_channels_by_distance(reference, channels, geom):
+    """Order channels by distance using certain channel as reference
+    Parameters
+    ----------
+    reference: int
+        Reference channel
+    channels: np.ndarray
+        Channels to order
+    geom
+        Geometry matrix
+    Returns
+    -------
+    numpy.ndarray
+        1D array with the channels ordered by distance using the reference
+        channels
+    numpy.ndarray
+        1D array with the indexes for the ordered channels
+    """
+    coord_main = geom[reference]
+    coord_others = geom[channels]
+    idx = np.argsort(np.sum(np.square(coord_others - coord_main), axis=1))
+    return channels[idx], idx
+
+
+def make_contiguous_channel_index(n_channels, n_neighbors=40):
+    channel_index = []
+    for c in range(n_channels):
+        low = max(0, c - n_neighbors // 2)
+        low = min(n_channels - n_neighbors, low)
+        channel_index.append(np.arange(low, low + n_neighbors))
+    channel_index = np.array(channel_index)
+
+    return channel_index
+
+
+def make_channel_index(geom, radius, steps=1, distance_order=False, p=2):
+    """
+    Compute an array whose whose ith row contains the ordered
+    (by distance) neighbors for the ith channel
+    """
+    C = geom.shape[0]
+
+    # get neighbors matrix
+    neighbors = squareform(pdist(geom, metric="minkowski", p=p)) <= radius
+    neighbors = n_steps_neigh_channels(neighbors, steps=steps)
+
+    # max number of neighbors for all channels
+    n_neighbors = np.max(np.sum(neighbors, 0))
+
+    # initialize channel index
+    # entries for channels which don't have as many neighbors as
+    # others will be filled with the total number of channels
+    # (an invalid index into the recording, but this behavior
+    # is useful e.g. in the spatial max pooling for deduplication)
+    channel_index = np.full((C, n_neighbors), C, dtype=int)
+
+    # fill every row in the matrix (one per channel)
+    for current in range(C):
+        # indexes of current channel neighbors
+        ch_idx = np.flatnonzero(neighbors[current])
+
+        # sort them by distance
+        if distance_order:
+            ch_idx, _ = order_channels_by_distance(current, ch_idx, geom)
+
+        # fill entries with the sorted neighbor indexes
+        channel_index[current, : ch_idx.shape[0]] = ch_idx
+
+    return channel_index
 
 
 def channel_index_subset(geom, channel_index, n_channels=None, radius=None):
@@ -32,7 +127,24 @@ def channel_index_subset(geom, channel_index, n_channels=None, radius=None):
     return subset
 
 
-def get_channel_subset(waveforms, max_channels, channel_index_subset, fill_value=np.nan):
+def channel_index_is_subset(channel_index_a, channel_index_b):
+    if not np.all(
+        np.array(channel_index_a.shape) <= np.array(channel_index_b.shape)
+    ):
+        return False
+
+    n_channels = channel_index_a.shape[0]
+
+    for row_a, row_b in zip(channel_index_a, channel_index_b):
+        if not np.isin(np.setdiff1d(row_a, [n_channels]), row_b).all():
+            return False
+
+    return True
+
+
+def get_channel_subset(
+    waveforms, max_channels, channel_index_subset, fill_value=np.nan
+):
     """You have waveforms on C channels, and you want them on fewer.
 
     You can use a channel_index_subset obtained from the function `channel_index_subset`
@@ -81,8 +193,35 @@ def get_channel_subset(waveforms, max_channels, channel_index_subset, fill_value
     ]
 
 
+def channel_subset_by_index(
+    waveforms,
+    max_channels,
+    channel_index_full,
+    channel_index_new,
+    fill_value=np.nan,
+):
+    """Restrict waveforms to channels in new channel index."""
+    # boolean mask of same shape as channel_index_full
+    n_channels = channel_index_full.shape[0]
+    channel_index_mask = np.array(
+        [
+            # by removing n_channels, chans outside array are treated
+            # like excluded channels and will be loaded with fill_value
+            # by get_channel_subset
+            # this could be surprising if fill_value here is different
+            # from the one used when loading the waveforms originally
+            np.isin(row_full, np.setdiff1d(row_new, [n_channels]))
+            for row_full, row_new in zip(channel_index_full, channel_index_new)
+        ]
+    )
+
+    return get_channel_subset(waveforms, max_channels, channel_index_mask)
+
+
 def get_maxchan_traces(waveforms, channel_index, maxchans):
-    index_of_mc = np.argwhere(channel_index == np.arange(len(channel_index))[:, None])
+    index_of_mc = np.argwhere(
+        channel_index == np.arange(len(channel_index))[:, None]
+    )
     assert (index_of_mc[:, 0] == np.arange(len(channel_index))).all()
     index_of_mc = index_of_mc[:, 1]
     rel_maxchans = index_of_mc[maxchans]
@@ -199,6 +338,7 @@ def relativize_waveforms(
     else:
         return stdwfs, firstchans_std, maxchans_std, chans_down
 
+
 def relativize_waveforms_np1(
     wfs, firstchans_orig, geom, maxchans_orig, feat_chans=20
 ):
@@ -233,4 +373,3 @@ def relativize_waveforms_np1(
         stdwfs[i] = wf[:, low:high]
 
     return stdwfs, firstchans_std, chans_down
-    

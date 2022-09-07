@@ -1,7 +1,6 @@
 """A library for quickly reading spike data from .bin files."""
 from pathlib import Path
 import numpy as np
-from numba import njit
 from os import SEEK_SET
 
 
@@ -157,7 +156,7 @@ def read_waveforms(
                 "If loading a subset of channels depending on the max "
                 "channel, please supply `channel_index`."
             )
-        if channels is None:
+        if channels is not None:
             raise ValueError("Pass channel_index or channels, but not both.")
 
         load_channels = channel_index.shape[1]
