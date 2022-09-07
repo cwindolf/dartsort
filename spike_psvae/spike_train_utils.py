@@ -26,11 +26,12 @@ def clean_align_and_get_templates(
     bin_file,
     min_n_spikes=0,
     reducer=np.median,
+    sort_by_time=True,
     max_shift=3,
     n_samples=250,
     spike_length_samples=121,
     trough_offset=42,
-    pbar=False,
+    pbar=True,
     seed=0,
     dtype=np.float32,
 ):
@@ -60,6 +61,7 @@ def clean_align_and_get_templates(
 
     # clean spike train: remove small units, make labels contiguous
     units, counts = np.unique(aligned_spike_train[:, 1], return_counts=True)
+    print((aligned_spike_train[:, 1].max() + 1) - (units.size - 1), "inactive units")
     if min_n_spikes > 0:
         too_small_units = units[counts < min_n_spikes]
         # don't want to touch the triaged spikes
@@ -67,7 +69,7 @@ def clean_align_and_get_templates(
         too_small = np.isin(aligned_spike_train[:, 1], too_small_units)
         print(
             f"Spike train cleaning will remove {too_small_units.size} "
-            f"units with < {min_n_spikes} spikes"
+            f"active units with < {min_n_spikes} spikes"
         )
         # mark these spikes as triaged
         # (rather than deleting, to keep the same shape for the spike train)
@@ -95,6 +97,7 @@ def clean_align_and_get_templates(
     units = range(n_units)
     if pbar:
         units = tqdm(units, desc="Align and get templates")
+    template_shifts = np.zeros(n_units, dtype=int)
     for unit in units:
         in_unit = np.flatnonzero(aligned_spike_train[:, 1] == unit)
         if not in_unit.size:
@@ -126,7 +129,8 @@ def clean_align_and_get_templates(
         if abs(shift) > max_shift:
             shift = 0
         if shift != 0:
-            aligned_spike_train[in_unit, 0] -= shift
+            aligned_spike_train[in_unit, 0] += shift
+        template_shifts[unit] = shift
 
         # crop aligned template and store it
         # we use a + here not a -!
@@ -137,7 +141,10 @@ def clean_align_and_get_templates(
 
     # sort so that times are increasing, but keep track of the order
     # so that the caller can handle bookkeeping
-    order = np.argsort(aligned_spike_train[:, 0])
-    aligned_spike_train = aligned_spike_train[order]
+    if sort_by_time:
+        order = np.argsort(aligned_spike_train[:, 0])
+        aligned_spike_train = aligned_spike_train[order]
+    else:
+        order = np.arange(len(aligned_spike_train))
 
-    return aligned_spike_train, order, templates
+    return aligned_spike_train, order, templates, template_shifts

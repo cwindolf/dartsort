@@ -5,7 +5,7 @@
 #       extension: .py
 #       format_name: percent
 #       format_version: '1.3'
-#       jupytext_version: 1.13.8
+#       jupytext_version: 1.13.0
 #   kernelspec:
 #     display_name: Python 3 (ipykernel)
 #     language: python
@@ -93,7 +93,11 @@ class timer:
 
 # %%
 # base_dir = Path("/share/ctn/users/ciw2107/hybrid_1min/")
-base_dir = Path("/share/ctn/users/ciw2107/hybrid_5min/")
+# base_dir = Path("/share/ctn/users/ciw2107/hybrid_5min/")
+base_dir = Path("/mnt/3TB/charlie/hybrid_5min/")
+
+# %%
+# %ll {base_dir}
 
 # %%
 in_dir = next(base_dir.glob("*input"))
@@ -137,6 +141,9 @@ while True:
     time.sleep(10 * 60)
 print("ok!")
 in_bins
+
+# %%
+active_dsets = ("CSHL051", "DY_018")
 
 # %%
 
@@ -359,7 +366,7 @@ for i, in_bin in enumerate(tqdm(in_bins)):
 # %%
 for i, in_bin in enumerate(tqdm(in_bins)):
     subject = in_bin.stem.split(".")[0]
-    if subject not in ("DY_018", "CSHL051"):
+    if subject not in active_dsets:
         continue
     print(subject)
     out_bin = out_dir / f"{in_bin.stem}.bin"
@@ -404,7 +411,7 @@ import torch; torch.cuda.empty_cache()
 for i, in_bin in enumerate(tqdm(in_bins)):
     subject = in_bin.stem.split(".")[0]
     
-    if subject not in ("DY_018", "CSHL051"):
+    if subject not in active_dsets:
         continue
         
     print(subject)
@@ -447,7 +454,7 @@ for i, in_bin in enumerate(tqdm(in_bins)):
     subject = in_bin.stem.split(".")[0]
     out_bin = out_dir / f"{in_bin.stem}.bin"
     
-    if subject not in ("DY_018", "CSHL051"):
+    if subject not in active_dsets:
         continue
     
     subject_sub_dir = sub_dir / subject
@@ -463,7 +470,7 @@ for i, in_bin in enumerate(tqdm(in_bins)):
 # # duster
 
 # %%
-# %rm -rf /local/duster/*
+# %rm -rf /tmp/duster/*
 
 # %%
 1
@@ -472,56 +479,134 @@ for i, in_bin in enumerate(tqdm(in_bins)):
 # cluster + deconv in one go for better cache behavior
 just_do_it = False
 just_do_it = True
+use_scratch = True
 
 # from joblib import Parallel, delayed
 # for res in tqdm(Parallel(5)(delayed(job)(in_bin) for in_bin in in_bins)):
 #     print(res)
-Path("/local/duster").mkdir(exist_ok=True)
+Path("/tmp/duster").mkdir(exist_ok=True)
 for i, in_bin in enumerate(tqdm(in_bins)):
     subject = in_bin.stem.split(".")[0]
     print(subject, flush=True)
-    if subject not in ("DY_018", "CSHL051"):
+    if subject not in active_dsets:
         continue
-    # if subject != "SWC_054":
-        # continue
     out_bin = out_dir / f"{in_bin.stem}.bin"
     
     subject_sub_dir = sub_dir / subject
     subject_sub_h5 = next(subject_sub_dir.glob("sub*.h5"))
     subject_res_bin = next(subject_sub_dir.glob("res*.bin"))
     (deconv_dir / subject).mkdir(exist_ok=True, parents=True)
-    clust_plotdir = vis_dir / f"{subject}_clust_merge_split"
-    clust_plotdir.mkdir(exist_ok=True)
     
-    if just_do_it or not (subject_sub_dir / "aligned_spike_index.npy").exists():
-        # print("
-        import os
-        os.environ["PYTHONWARNINGS"] = "ignore"
-        res = subprocess.run(
-            [
-                "python",
-                "-W", "ignore",
-                "../scripts/duster.py",
-                out_bin,
-                subject_res_bin,
-                subject_sub_h5,
-                subject_sub_dir,
-                "--inmem",
-                "--merge_dipscore=0.5",
-                "--doplot",
-                f"--plotdir={clust_plotdir}",
-                "--tmpdir=/local/duster",
-            ],
-            env=os.environ,
-            # stderr=subprocess.DEVNULL,
+    raw_bin = out_bin
+    sub_h5 = subject_sub_h5
+    if use_scratch:
+        subprocess.run(
+            ["rsync", "-avP", out_bin, "/tmp/duster/raw.bin"]
         )
-        print(subject, res.returncode)
-        print(res)
-    else:
-        print(subject_sub_dir / "aligned_spike_index.npy", "exists, skipping", subject)
+        subprocess.run(
+            ["rsync", "-avP", subject_sub_h5, "/tmp/duster/sub.h5"]
+        )
+        raw_bin = "/tmp/duster/raw.bin"
+        sub_h5 = "/tmp/duster/sub.h5"
+    
+    # Initial clustering step
+    (
+        spike_train, aligned_spike_index, templates, template_shifts, clusterer, idx_keep_full
+    ) = pipeline.initial_clustering(
+        sub_h5,
+        raw_bin,
+        remove_self_duplicates=True,
+        use_registered=True,
+        reducer=np.median,
+    )
+    
+    print("Save pre merge/split...")
+    np.save(subject_sub_dir / "pre_merge_split_labels.npy", spike_train[:, 1])
+    np.save(subject_sub_dir / "pre_merge_split_aligned_spike_index.npy", aligned_spike_index)
+    np.save(subject_sub_dir / "pre_merge_split_aligned_templates.npy", templates)
+    np.save(subject_sub_dir / "pre_merge_split_template_shifts.npy", template_shifts)
 
-# %%
-print(1)
+
+    from spike_psvae.hybrid_analysis import Sorting
+    s = Sorting(
+        raw_bin,
+        geom,
+        spike_train[:, 0],
+        spike_train[:, 1],
+        "InitialClustering",
+        templates=templates,
+    )
+    fig = s.template_maxchan_vis()
+    plt.show()
+    
+    # Split step
+    (
+        spike_train, aligned_spike_index, templates, template_shifts, clusterer
+    ) = pipeline.pre_deconv_split_step(
+        sub_h5,
+        raw_bin,
+        subject_res_bin,
+        spike_train,
+        aligned_spike_index,
+        templates,
+        template_shifts,
+        clusterer,
+        idx_keep_full,
+        use_registered=True,
+        reducer=np.median,
+        device=None,
+    )
+    
+    from spike_psvae.hybrid_analysis import Sorting
+    s = Sorting(
+        raw_bin,
+        geom,
+        spike_train[:, 0],
+        spike_train[:, 1],
+        "InitialSplit",
+        templates=templates,
+    )
+    fig = s.template_maxchan_vis()
+    plt.show()
+    
+    (
+        spike_train, aligned_spike_index, templates  # , template_shifts
+    ) = pipeline.pre_deconv_merge_step(
+        sub_h5,
+        raw_bin,
+        subject_res_bin,
+        spike_train,
+        aligned_spike_index,
+        templates,
+        template_shifts,
+        clusterer,
+        idx_keep_full,
+        final_align_max_shift=25,
+        final_clean_min_spikes=5,
+        device=None,
+        merge_dipscore=0.5,
+        reducer=np.median,
+    )
+    
+    from spike_psvae.hybrid_analysis import Sorting
+    s = Sorting(
+        raw_bin,
+        geom,
+        spike_train[:, 0],
+        spike_train[:, 1],
+        "InitialSplitMerge",
+        templates=templates,
+    )
+    fig = s.template_maxchan_vis()
+    plt.show()
+    
+    print("Save final...")
+    np.save(subject_sub_dir / "labels.npy", spike_train[:, 1])
+    np.save(subject_sub_dir / "aligned_spike_index.npy", aligned_spike_index)
+    np.save(subject_sub_dir / "templates.npy", templates)
+    np.save(subject_sub_dir / "aligned_templates.npy", templates)
+    # need to redo the bookkeeping logic if we need these, but we don't.
+    # np.save(subject_sub_dir / "template_shifts.npy", template_shifts)
 
 # %%
 # # print helpful stuff for copypasting kilosort sbatch commands
@@ -544,13 +629,18 @@ print(1)
 #     )
 
 # %%
-# %rm -rf /local/{deconv,duster}/*
+# %rm -rf /tmp/{deconv,duster}/*
+
+# %% [markdown]
+# ## deconv1
 
 # %%
+use_scratch = True
+
 for i, in_bin in enumerate(tqdm(in_bins)):
     subject = in_bin.stem.split(".")[0]
     # if subject != "DY_018":
-    if subject not in ("CSHL051", "DY_018"):
+    if subject not in active_dsets:
         continue
     
     out_bin = out_dir / f"{in_bin.stem}.bin"
@@ -573,13 +663,27 @@ for i, in_bin in enumerate(tqdm(in_bins)):
         print(ds, ss, se)
     
     aligned_spike_index = Path(sub_dir / subject / "aligned_spike_index.npy")
+    aligned_templates = Path(sub_dir / subject / "aligned_templates.npy")
     if not aligned_spike_index.exists():
         print("no asi, skip")
         continue
     aligned_spike_index = np.load(aligned_spike_index)
+    aligned_templates = np.load(aligned_templates)
+    splitmerge_unit_maxchans = aligned_templates.ptp(1).argmax(1)
+    
+    raw_bin = out_bin
+    if use_scratch:
+        Path("/tmp/deconv").mkdir(exist_ok=True)
+        subprocess.run(["rsync", "-avP", out_bin, "/tmp/deconv/raw.bin"])
+        raw_bin = "/tmp/deconv/raw.bin"
+        
     
     print("asi", aligned_spike_index[:, 0].min(), aligned_spike_index[:, 0].max())
     final_labels = np.load(sub_dir / subject / "labels.npy")
+    
+    # please have a contiguous label space by this point
+    assert final_labels.max() + 1 == np.setdiff1d(np.unique(final_labels), [-1]).size
+    
     which = (final_labels >= 0) & (aligned_spike_index[:, 0] > 70) & (aligned_spike_index[:,0] < (ds - 79))
     final_labels = final_labels[which]
     aligned_spike_index = aligned_spike_index[which]
@@ -587,13 +691,6 @@ for i, in_bin in enumerate(tqdm(in_bins)):
     u, c = np.unique(final_labels, return_counts=True)
     print(f"which {final_labels.max()=}, {u.size=}, {c.min()=}, {(c<25).sum()=}")
     
-    which2 = np.isin(final_labels, u[c >= 25])
-    final_labels = final_labels[which2]
-    final_labels = cluster_utils.make_labels_contiguous(final_labels)
-    aligned_spike_index = aligned_spike_index[which2]
-    u, c = np.unique(final_labels, return_counts=True)
-    print(f"which2 {final_labels.max()=}, {u.size=}, {c.min()=}, {(c<25).sum()=}")
-
     template_spike_train = np.c_[aligned_spike_index[:, 0], final_labels]
     print("Nunits", template_spike_train[:, 1].max() + 1)
     
@@ -602,17 +699,18 @@ for i, in_bin in enumerate(tqdm(in_bins)):
         aligned_spike_index,
         final_labels,
         subject_deconv_dir,
-        out_bin,
+        raw_bin,
         subject_res_bin,
         template_spike_train,
         subject_deconv_dir / "geom.npy",
+        unit_maxchans=splitmerge_unit_maxchans,
         threshold=40,
         max_upsample=8,
         vis_su_threshold=1.0,
         approx_rank=5,
         multi_processing=True,
         cleaned_temps=True,
-        n_processors=8,
+        n_processors=6,
         sampling_rate=30000,
         deconv_max_iters=1000,
         t_start=0,
@@ -623,14 +721,20 @@ for i, in_bin in enumerate(tqdm(in_bins)):
 
 
 # %%
-# %rm -rf /local/deconv*
+# %rm -rf /tmp/deconv*
+
+# %%
+## post-deconv1 split merge
+
+# %%
+1
 
 # %% tags=[]
 for in_bin in in_bins:
     subject = in_bin.stem.split(".")[0]
     # if subject != "DY_018":
 
-    if subject not in ("CSHL051", "DY_018"):
+    if subject not in active_dsets:
         continue
     print(subject)
     
@@ -643,7 +747,7 @@ for in_bin in in_bins:
     use_scratch = True
     
     if use_scratch:
-        deconv_scratch_dir = Path("/local/deconv")
+        deconv_scratch_dir = Path("/tmp/deconv")
         deconv_scratch_dir.mkdir(exist_ok=True)
         raw_bin = deconv_scratch_dir / "raw.bin"
     else:
@@ -651,6 +755,7 @@ for in_bin in in_bins:
         raw_bin = out_bin
     
     do_extract = not (subject_deconv_dir / "deconv_results.h5").exists()
+    # do_extract = True
     # do_extract = not (subject_deconv_dir / "deconv_results.h5").exists()
     
     if do_extract:
@@ -665,11 +770,13 @@ for in_bin in in_bins:
             save_denoised_waveforms=True,
             n_channels_extract=20,
             n_jobs=13,
-            # device="cpu",
+            device="cpu",
             # scratch_dir=deconv_scratch_dir,
         )
         with timer("copying deconv h5 to output"):
-            shutil.copy(deconv_h5, subject_deconv_dir / "deconv_results.h5")
+            subprocess.run(
+                ["rsync", "-avP", deconv_h5, subject_deconv_dir / "deconv_results.h5"]
+            )
     
     do_split = not (subject_deconv_dir / "postdeconv_split_labels.npy").exists()
     do_split = True
@@ -678,19 +785,11 @@ for in_bin in in_bins:
     do_anything = do_split or do_merge
     
     if do_anything and use_scratch:
-        if not (deconv_scratch_dir / "deconv_results.h5").exists():
-            print("scratch deconv h5 does not exist")
-            with timer("copying to scratch"):
-                shutil.copy(subject_deconv_dir / "deconv_results.h5", deconv_scratch_dir / "deconv_results.h5")
-        else:
-            print("Scratch h5 already there")
+        with timer("copying to scratch"):
+            subprocess.run(["rsync", "-avP", subject_deconv_dir / "deconv_results.h5", deconv_scratch_dir / "deconv_results.h5"])
         
-        if not (deconv_scratch_dir / "raw.bin").exists():
-            print("scratch bin does not exist")
-            with timer("copying to scratch"):
-                shutil.copy(out_bin, deconv_scratch_dir / "raw.bin")
-        else:
-            print("Scratch bin already there")
+        with timer("copying to scratch"):
+            subprocess.run(["rsync", "-avP", out_bin, deconv_scratch_dir / "raw.bin"])
     
     if do_split:
         print("run split")
@@ -699,7 +798,8 @@ for in_bin in in_bins:
             deconv_scratch_dir / "deconv_results.h5",
             raw_bin,
             geom,
-            clean_min_spikes=25,
+            clean_min_spikes=0,
+            reducer=np.median,
         )
         
         np.save(subject_deconv_dir / "postdeconv_split_times.npy", spike_train[:, 0])
@@ -724,7 +824,8 @@ for in_bin in in_bins:
             deconv_scratch_dir / "deconv_results.h5",
             raw_bin,
             geom,
-            clean_min_spikes=25,
+            clean_min_spikes=0,
+            reducer=np.median,
         )
         
         np.save(subject_deconv_dir / "postdeconv_merge_times.npy", spike_train[:, 0])
@@ -745,7 +846,7 @@ for in_bin in in_bins:
 for i, in_bin in enumerate(tqdm(in_bins)):
     subject = in_bin.stem.split(".")[0]
     # if subject != "DY_018":
-    if subject not in ("CSHL051", "DY_018"):
+    if subject not in active_dsets:
         continue
     
     out_bin = out_dir / f"{in_bin.stem}.bin"
@@ -766,10 +867,13 @@ for i, in_bin in enumerate(tqdm(in_bins)):
     print(postdeconv_merge_labels.max() + 1, u.size, (c > 25).sum(), c[c > 25].sum())
 
 # %% tags=[]
+from spike_psvae import deconvolve
+
 for i, in_bin in enumerate(tqdm(in_bins)):
     subject = in_bin.stem.split(".")[0]
     if subject != "DY_018":
-    # if subject not in ("CSHL051", "DY_018"):
+    # if subject != "CSHL051":
+    # if subject not in active_dsets:
         continue
     
     out_bin = out_dir / f"{in_bin.stem}.bin"
@@ -777,6 +881,8 @@ for i, in_bin in enumerate(tqdm(in_bins)):
     subject_deconv_dir = deconv_dir / subject
     second_deconv_dir = deconv_dir / subject / "deconv2"
     second_deconv_dir.mkdir(exist_ok=True)
+    
+    subprocess.run(["rsync", "-avP", out_bin, "/tmp/raw.bin"])
     
     # if (subject_deconv_dir / "spike_train.npy").exists():
     #     print("done, skip")
@@ -794,38 +900,38 @@ for i, in_bin in enumerate(tqdm(in_bins)):
     
     times = np.load(subject_deconv_dir / "postdeconv_merge_times.npy")
     labels = np.load(subject_deconv_dir / "postdeconv_merge_labels.npy")
+    templates = np.load(subject_deconv_dir / "postdeconv_merge_templates.npy")
     which = (labels >= 0) & (times > 70) & (times < (ds - 79))
     u, c = np.unique(labels[which], return_counts=True)
     print("Nunits", labels[which].max() + 1, u.size, (c > 25).sum())
+    unit_maxchans = templates.ptp(1).argmax(1)
     
     fname_templates_up,fname_spike_train_up,template_path,fname_spike_train = deconvolve.deconvolution(
         times[which, None],
         labels[which],
         second_deconv_dir,
-        out_bin,
+        "/tmp/raw.bin",
         None,
         np.c_[times[which], labels[which]],
         subject_deconv_dir / "geom.npy",
+        unit_maxchans=unit_maxchans,
         threshold=40,
         multi_processing=True,
         cleaned_temps=True,
-        n_processors=12,
+        n_processors=6,
         verbose=False,
         reducer=np.median,
     )
+    Path("/tmp/raw.bin").unlink()
 
-
-# %%
-# %rm -rf /local/deconv*
 
 # %% tags=[]
+from spike_psvae import extract_deconv, pipeline
+
 for in_bin in in_bins:
     subject = in_bin.stem.split(".")[0]
-    # if subject != "DY_018":
-    # if subject_deconv_dir:
-    #     del subject_deconv_dir
-
-    if subject not in ("CSHL051", "DY_018"):
+    if subject != "DY_018":
+    # if subject not in active_dsets:
         continue
     print(subject)
 
@@ -836,18 +942,16 @@ for in_bin in in_bins:
     subj_dc2_dir = deconv_dir / subject / "deconv2"
     subj_dc2_dir.mkdir(exist_ok=True, parents=True)
     
-    deconv_scratch_dir = Path("/local/deconv")
+    deconv_scratch_dir = Path("/tmp/deconv")
     deconv_scratch_dir.mkdir(exist_ok=True)
     
     do_extract = not (subj_dc2_dir / "deconv_results.h5").exists()
     do_extract = True
 
-    if not (deconv_scratch_dir / "raw.bin").exists():
-        print("scratch bin does not exist")
-        with timer("copying to scratch"):
-            shutil.copy(out_bin, deconv_scratch_dir / "raw.bin")
-    else:
-        print("Scratch bin already there")
+    with timer("copying to scratch"):
+        subprocess.run(
+            ["rsync", "-avP", out_bin, deconv_scratch_dir / "raw.bin"]
+        )
     
     if do_extract:
         print("run extract")
@@ -863,30 +967,30 @@ for in_bin in in_bins:
             save_denoised_waveforms=True,
             n_channels_extract=20,
             n_jobs=13,
-            # device="cpu",
+            device="cpu",
             scratch_dir=deconv_scratch_dir,
         )
         with timer("copying deconv h5 to output"):
-            shutil.copy(deconv_h5, subj_dc2_dir / "deconv_results.h5")
+            subprocess.run(
+                ["rsync", "-avP", deconv_h5, subj_dc2_dir / "deconv_results.h5"]
+            )
     
     do_clean = not (subj_dc2_dir / "postdeconv_cleaned_labels.npy").exists()
     do_clean = True
     do_anything = do_clean
     
     if do_anything:
-        if not (deconv_scratch_dir / "deconv_results.h5").exists():
-            print("scratch deconv h5 does not exist")
-            with timer("copying to scratch"):
-                shutil.copy(subj_dc2_dir / "deconv_results.h5", deconv_scratch_dir / "deconv_results.h5")
-        else:
-            print("Scratch h5 already there")
-        
-        if not (deconv_scratch_dir / "raw.bin").exists():
-            print("scratch bin does not exist")
-            with timer("copying to scratch"):
-                shutil.copy(out_bin, deconv_scratch_dir / "raw.bin")
-        else:
-            print("Scratch bin already there")
+        subprocess.run(
+            [
+                "rsync",
+                "-avP", 
+                subj_dc2_dir / "deconv_results.h5",
+                deconv_scratch_dir / "deconv_results.h5",
+            ]
+        )
+        subprocess.run(
+            ["rsync", "-avP", out_bin, deconv_scratch_dir / "raw.bin"],
+        )
     
     if do_clean:
         print("run clean")
@@ -896,13 +1000,13 @@ for in_bin in in_bins:
             deconv_scratch_dir / "deconv_results.h5",
             deconv_scratch_dir / "raw.bin",
             geom,
-            clean_min_spikes=25,
+            clean_min_spikes=0,
         )
         
         np.save(subj_dc2_dir / "postdeconv_cleaned_times.npy", spike_train[:, 0])
         np.save(subj_dc2_dir / "postdeconv_cleaned_labels.npy", spike_train[:, 1])
         np.save(subj_dc2_dir / "postdeconv_cleaned_order.npy", order)
-        np.save(subj_dc2_dir / "postdeconv_cleaned_templates.npy", order)
+        np.save(subj_dc2_dir / "postdeconv_cleaned_templates.npy", templates)
 
     if do_anything:
         print("scratch h5 exists?", (deconv_scratch_dir / "deconv_results.h5").exists())
@@ -913,18 +1017,9 @@ for in_bin in in_bins:
             (deconv_scratch_dir / "raw.bin").unlink()
 
 # %%
-np.load(subj_dc2_dir / "templates_up.npy").shape
-
-# %%
-np.load(subj_dc2_dir / "spike_train_up.npy").shape
-
-# %%
-np.load(subj_dc2_dir / "spike_train.npy").shape
-
-# %%
-np.load(subj_dc2_dir / "templates_up.npy").shape
-
-# %%
 1
+
+# %%
+np.load("/mnt/3TB/charlie/hybrid_5min/hybrid_5min_deconv/CSHL051/deconv2/spike_train_up.npy").shape
 
 # %%
