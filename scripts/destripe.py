@@ -5,20 +5,21 @@ import shutil
 from pathlib import Path
 from tqdm.auto import trange
 
-from ibllib.dsp import voltage
+from neurodsp import voltage, utils
 from ibllib.io import spikeglx
 
 
 ap = argparse.ArgumentParser()
 
-ap.add_argument("binary")
+ap.add_argument("input_binary")
+ap.add_argument("--no-bad-channels", action="store_true")
 
 args = ap.parse_args()
 
 
-binary = Path(args.binary)
+binary = Path(args.input_binary)
 folder = binary.parent
-standardized_file = folder / f"{binary.stem}.normalized.bin"
+standardized_file = folder / f"destriped_{binary.name}"
 
 # run destriping
 sr = spikeglx.Reader(binary)
@@ -42,7 +43,7 @@ if not standardized_file.exists():
         )
         np.fill_diagonal(
             wrots[ibatch, :, :],
-            1 / voltage.rms(sample) * sr.sample2volts[: -sr.nsync],
+            1 / utils.rms(sample) * sr.sample2volts[: -sr.nsync],
         )
 
     wrot = np.median(wrots, axis=0)
@@ -53,12 +54,11 @@ if not standardized_file.exists():
         output_file=standardized_file,
         dtype=np.float32,
         nc_out=sr.nc - sr.nsync,
+        reject_channels=not args.no_bad_channels,
     )
 
     # also copy the companion meta-data file
     shutil.copy(
         sr.file_meta_data,
-        standardized_file.parent.joinpath(
-            f"{sr.file_meta_data.stem}.normalized.meta"
-        ),
+        folder / f"destriped_{sr.file_meta_data.name}",
     )
