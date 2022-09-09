@@ -274,7 +274,7 @@ def _extract_deconv_worker(start_sample):
     )
     for i in range(len(spike_index)):
         resid[spike_index[i, 0] + rel_times] -= (
-            scalings[:, None, None] * p.templates_up[spike_train[i, 1]]
+            scalings[i] * p.templates_up[spike_train[i, 1]]
         )
 
     if p.save_residual:
