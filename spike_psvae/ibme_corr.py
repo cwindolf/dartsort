@@ -398,7 +398,6 @@ def online_register_rigid(
     D00, C00 = calc_corr_decent(
         raster0,
         disp=disp,
-        # pbar=False,
         batch_size=batch_size,
         device=device,
         pbar=True,
