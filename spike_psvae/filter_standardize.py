@@ -255,18 +255,25 @@ def filter_standardize_batch(batch_id, bin_file, fname_mean_sd,
     
     # filter
     if apply_filter:
+        buffer_before = True
+        buffer_after = True
         # read a batch
         # Add buffer into s_start and s_end
         s_start = batch_id*sampling_frequency-buffer
         s_end = (batch_id+1)*sampling_frequency+buffer
         if s_start<0:
             s_start=0
+            buffer_before = False
         if s_end>rec_len:
             s_end = rec_len
+            buffer_after = False
         ts = spikeio.read_data(bin_file, dtype_input, s_start, s_end, n_channels)
         ts = _butterworth(ts, low_frequency, high_factor,
                               order, sampling_frequency)
-        ts = ts[buffer:-buffer]
+        if buffer_before:
+            ts = ts[buffer:]
+        if buffer_after:
+            ts = ts[:-buffer]
     else:
         # read a batch
         s_start = batch_id*sampling_frequency
@@ -351,7 +358,6 @@ def merge_filtered_files(filtered_location, output_directory):
     filenames_sorted = sorted(filenames)
 
     f_out = os.path.join(output_directory, "standardized.bin")
-    logger.info('...saving standardized file: %s', f_out)
 
     f = open(f_out, 'wb')
     for fname in filenames_sorted:
