@@ -1,9 +1,11 @@
+# %%
 import os
 import numpy as np
 import parmap
 from scipy.signal import butter, filtfilt
 from spike_psvae import spikeio
 
+# %%
 def filter_standardize_rec(output_directory, filename_raw, dtype_raw,
     rec_len_sec, n_channels = 384,
     dtype_output = np.float32,
@@ -46,9 +48,6 @@ def filter_standardize_rec(output_directory, filename_raw, dtype_raw,
     rec_len = rec_len_sec*sampling_frequency
     if rec_len < chunk_5sec:
         chunk_5sec = rec_len
-    small_batch = reader.read_data(
-        data_start=CONFIG.rec_len//2 - chunk_5sec//2,
-        data_end=CONFIG.rec_len//2 + chunk_5sec//2)
 
     small_batch = spikeio.read_data(
         filename_raw, 
@@ -59,7 +58,7 @@ def filter_standardize_rec(output_directory, filename_raw, dtype_raw,
 
     fname_mean_sd = os.path.join(
         output_directory, 'mean_and_standard_dev_value.npz')
-    if not os.path.exists(fname_mean_sd) and not overwrite:
+    if overwrite or not os.path.exists(fname_mean_sd):
         get_std(small_batch, sampling_frequency,
                 fname_mean_sd, apply_filter,
                 low_frequency, high_factor, order)
@@ -84,35 +83,37 @@ def filter_standardize_rec(output_directory, filename_raw, dtype_raw,
         parmap.map(
             filter_standardize_batch,
             [i for i in range(n_batches)],
-            fname_mean_sd,
             filename_raw, 
+            fname_mean_sd,
             apply_filter,
             dtype_raw, 
             dtype_output,
             filtered_location,
             n_channels,
             buffer,
+            rec_len,
             low_frequency,
             high_factor,
             order,
-            sampling_rate,
+            sampling_frequency,
             processes=n_processors,
             pm_pbar=True)
     else:
         for batch_id in range(n_batches):
             filter_standardize_batch(
-                batch_id, fname_mean_sd,
-                filename_raw, 
+                batch_id, filename_raw, 
+                fname_mean_sd,
                 apply_filter,
                 dtype_raw, 
                 dtype_output,
                 filtered_location,
                 n_channels, 
                 buffer,
+                rec_len, 
                 low_frequency,
                 high_factor,
                 order,
-                sampling_rate,
+                sampling_frequency,
                 )
 
     # Merge the chunk filtered files and delete the individual chunks
@@ -121,7 +122,9 @@ def filter_standardize_rec(output_directory, filename_raw, dtype_raw,
     return standardized_path, standardized_params['dtype']
 
 
+# %%
 
+# %%
 def _butterworth(ts, low_frequency, high_factor, order, sampling_frequency):
     """Butterworth filter
     Parameters
@@ -161,6 +164,7 @@ def _butterworth(ts, low_frequency, high_factor, order, sampling_frequency):
         return output
 
 
+# %%
 def _mean_standard_deviation(rec, centered=False):
     """Determine standard deviation of noise in each channel
     Parameters
@@ -184,6 +188,7 @@ def _mean_standard_deviation(rec, centered=False):
     return np.median(np.abs(rec), 0)/0.6745, centers
 
 
+# %%
 def _standardize(rec, sd=None, centers=None):
     """Determine standard deviation of noise in each channel
     Parameters
@@ -217,10 +222,12 @@ def _standardize(rec, sd=None, centers=None):
     #return np.divide(rec, sd)
 
 
+# %%
 
+# %%
 def filter_standardize_batch(batch_id, bin_file, fname_mean_sd,
                              apply_filter, dtype_input, out_dtype, output_directory,
-                             n_channels, buffer,
+                             n_channels, buffer, rec_len,
                              low_frequency=None, high_factor=None,
                              order=None, sampling_frequency=None):
     """Butterworth filter for a one dimensional time series
@@ -245,8 +252,6 @@ def filter_standardize_batch(batch_id, bin_file, fname_mean_sd,
     NotImplementedError
         If a multidmensional array is passed
     """
-    logger = logging.getLogger(__name__)
-
     
     # filter
     if apply_filter:
@@ -254,14 +259,22 @@ def filter_standardize_batch(batch_id, bin_file, fname_mean_sd,
         # Add buffer into s_start and s_end
         s_start = batch_id*sampling_frequency-buffer
         s_end = (batch_id+1)*sampling_frequency+buffer
+        if s_start<0:
+            s_start=0
+        if s_end>rec_len:
+            s_end = rec_len
         ts = spikeio.read_data(bin_file, dtype_input, s_start, s_end, n_channels)
         ts = _butterworth(ts, low_frequency, high_factor,
                               order, sampling_frequency)
         ts = ts[buffer:-buffer]
     else:
         # read a batch
-        s_start = batch_id*sampling_frequency-buffer
-        s_end = (batch_id+1)*sampling_frequency+buffer
+        s_start = batch_id*sampling_frequency
+        s_end = (batch_id+1)*sampling_frequency
+        if s_start<0:
+            s_start=0
+        if s_end>rec_len:
+            s_end = rec_len
         ts = spikeio.read_data(bin_file, dtype_input, s_start, s_end, n_channels)
     # standardize
     temp = np.load(fname_mean_sd)
@@ -284,7 +297,9 @@ def filter_standardize_batch(batch_id, bin_file, fname_mean_sd,
     #f.write(ts.astype(out_dtype))
 
 
+# %%
 
+# %%
 def get_std(ts,
             sampling_frequency,
             fname,
@@ -329,9 +344,8 @@ def get_std(ts,
              sd=sd)
 
 
+# %%
 def merge_filtered_files(filtered_location, output_directory):
-
-    logger = logging.getLogger(__name__)
 
     filenames = os.listdir(filtered_location)
     filenames_sorted = sorted(filenames)
