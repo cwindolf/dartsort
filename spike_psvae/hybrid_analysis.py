@@ -523,7 +523,7 @@ class Sorting:
             temp.ptp(0).max(),
         )
 
-    def unit_summary_fig(self, unit, dz=50, nchans=16, n_wfs_max=100):
+    def unit_summary_fig(self, unit, dz=50, nchans=16, n_wfs_max=100, show_chan_label=True, chan_labels=None):
         have_loc = self.spike_xzptp is not None
         height_ratios = [1, 1, 3] if have_loc else [1, 3]
         fig, axes = plt.subplot_mosaic(
@@ -569,6 +569,7 @@ class Sorting:
                 zlim=(cz - dz, cz + dz),
                 axes=[axes[k] for k in "xyz"],
                 do_ellipse=True,
+                annotate=True,
             )
             axes["y"].set_yticks([])
             axes["z"].set_yticks([])
@@ -601,6 +602,7 @@ class Sorting:
             max_abs_amp=max_abs_amp,
             color="k",
             alpha=0.05,
+            show_chan_label=False,
         )
         rt_lines = cluster_viz_index.pgeom(
             self.templates[unit][:, ci[self.template_maxchans[unit]]],
@@ -611,6 +613,8 @@ class Sorting:
             max_abs_amp=max_abs_amp,
             color="b",
             lw=1,
+            show_chan_label=show_chan_label,
+            chan_labels=chan_labels,
         )
         ch = cl = ()
         if self.cleaned_templates is not None:
@@ -625,6 +629,7 @@ class Sorting:
                 max_abs_amp=max_abs_amp,
                 color="orange",
                 lw=1,
+                show_chan_label=False,
             )
             ch = (ct_lines[0],)
             cl = ("cleaned template",)
@@ -636,7 +641,7 @@ class Sorting:
         )
         axes["d"].set_xticks([])
         axes["d"].set_yticks([])
-        
+
         return fig, axes, self.template_maxptps[unit]
 
 
