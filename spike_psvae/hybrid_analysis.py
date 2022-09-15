@@ -316,6 +316,7 @@ class Sorting:
         do_ellipse=True,
         max_n_spikes=500_000,
         pad_zfilter=50,
+        annotate=True,
     ):
         pct_shown = 100
         if self.n_spikes > max_n_spikes:
@@ -339,7 +340,7 @@ class Sorting:
             self.spike_xzptp[sample, 0],
             self.spike_xzptp[sample, 1],
             self.spike_xzptp[sample, 2],
-            annotate=False,
+            annotate=annotate,
             zlim=zlim,
             axes=axes,
             do_ellipse=do_ellipse,
