@@ -937,11 +937,18 @@ def deconvolution(
 ):
     r"""Deconvolution.
     YASS deconvolution (cpu version) refactored: https://github.com/paninski-lab/yass/blob/yass-registration/src/yass/deconvolve/run_original.py
-    Args:
-        cluster_labels: cluster labels
-        output_directory: save directory
-        standardized_recording_path: standardized raw data path
-        threshold: threshold for deconvolution
+    
+    Arguments
+    ---------
+    cluster_labels: cluster labels
+    output_directory: save directory
+    standardized_recording_path: standardized raw data path
+    threshold: threshold for deconvolution
+    lambd : float
+        Variance for amplitude scaling prior
+    allowed_scale : float
+        Recovered scales will be clipped to the interval `[1 / (1 + allowed_scale), 1 + allowed_scale]`.
+        Set to np.inf to allow any positive scaling.
     """
     if not os.path.exists(output_directory):
         os.makedirs(output_directory)
