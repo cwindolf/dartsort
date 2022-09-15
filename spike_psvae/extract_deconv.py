@@ -88,6 +88,9 @@ def extract_deconv(
     # determine jobs to run
     batch_length = n_sec_chunk * sampling_rate
     start_samples = range(last_batch_end, T_samples, batch_length)
+    if not len(start_samples):
+        print("Extraction already done")
+        return out_h5, residual_path
 
     # build spike index from templates and spike train
     templates_up_maxchans = templates_up.ptp(1).argmax(1)
