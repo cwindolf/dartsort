@@ -62,7 +62,7 @@ def parallel_conv_filter(
         pairwise_conv_array.append(pairwise_conv)
 
     with open(
-        deconv_dir + "/temp_temp_chunk_" + str(proc_index) + ".pkl", "wb"
+        Path(deconv_dir) / ("temp_temp_chunk_" + str(proc_index) + ".pkl"), "wb"
     ) as f:
         pickle.dump(pairwise_conv_array, f)
 
@@ -558,7 +558,7 @@ class MatchPursuitObjectiveUpsample:
         if self.obj_computed:
             return self.obj
 
-        self.conv_result = np.empty(
+        self.conv_result = np.zeros(
             [self.orig_n_unit, self.data_len + self.n_time - 1],
             dtype=np.float32,
         )
@@ -566,8 +566,8 @@ class MatchPursuitObjectiveUpsample:
             matmul_result = np.matmul(
                 self.spatial[:, rank] * self.singular[:, [rank]], self.data.T
             )
-
             filters = self.temporal[:, :, rank]
+            inner_conv0 = np.convolve(matmul_result[0, :], filters[0], mode="full")
             for unit in range(self.orig_n_unit):
                 self.conv_result[unit, :] += np.convolve(
                     matmul_result[unit, :], filters[unit], mode="full"
@@ -582,8 +582,19 @@ class MatchPursuitObjectiveUpsample:
             # we omit the final -1/lambd since it's ok to work up to a constant
             b = self.conv_result + 1 / self.lambd
             a = self.norm[:, None] + 1 / self.lambd
+            
+            # this is the objective with the optimal scaling *without hard clipping*
             # this order of operations is key to avoid overflows when squaring!
-            self.obj = b * (b / a) - 1 / self.lambd
+            # self.obj = b * (b / a) - 1 / self.lambd
+            
+            # but, in practice we do apply hard clipping. so we have to compute
+            # the following more cumbersome formula:
+            scalings = np.clip(b / a, self.scale_min, self.scale_max)
+            self.obj = (
+                2 * scalings * b
+                - np.square(scalings) * a
+                - 1 / self.lambd
+            )
             
         # Set indicator to true so that it no longer is run for future
         # iterations in case subtractions are done implicitly.
@@ -660,7 +671,7 @@ class MatchPursuitObjectiveUpsample:
             max_across_temp[spike_times] > self.threshold
         ]
         dist_metric = max_across_temp[spike_times]
-
+        
         # Upsample the objective and find the best upsampled template.
         spike_ids = np.argmax(self.obj[:, spike_times], axis=0)
         upsampled_template_idx, time_shift, valid_idx = self.high_res_peak(
@@ -769,7 +780,7 @@ class MatchPursuitObjectiveUpsample:
 
     def load_saved_state(self):
         # helper -- initializer for threads
-        MatchPursuitObjectiveUpsample.pairwise_conv = np.load(
+        MatchPursuitObjectiveUpsample.pairwise_conv = self.pairwise_conv = np.load(
             os.path.join(self.deconv_dir, "pairwise_conv.npy"),
             allow_pickle=True,
         )
@@ -939,9 +950,8 @@ def deconvolution(
 
     # get templates
     template_path = os.path.join(output_directory, "templates.npy")
-    print(template_path)
     if overwrite or not os.path.exists(template_path):
-        print("computing templates!")
+        print("Computing templates")
         if cleaned_temps:
             if unit_maxchans is None:
                 raise ValueError("We need unit maxchans to get the cleaned templates")
@@ -965,12 +975,14 @@ def deconvolution(
             )  # .astype(np.float32)
         np.save(template_path, templates)
     else:
+        print(f"Loading templates from {template_path}")
         templates = np.load(template_path)
 
     fname_spike_train = os.path.join(output_directory, "spike_train.npy")
     fname_scalings = os.path.join(output_directory, "scalings.npy")
     fname_templates_up = os.path.join(output_directory, "templates_up.npy")
     fname_spike_train_up = os.path.join(output_directory, "spike_train_up.npy")
+    fname_map = os.path.join(output_directory, "deconv_id_sparse_temp_map.npy")
 
     #         if (os.path.exists(template_path) and
     #             os.path.exists(fname_spike_train) and
@@ -1000,6 +1012,15 @@ def deconvolution(
         lambd=lambd,
         allowed_scale=allowed_scale,
     )
+    
+    
+    (
+        templates_up,
+        deconv_id_sparse_temp_map,
+    ) = mp_object.get_sparse_upsampled_templates()
+    np.save(fname_templates_up, templates_up.transpose(2, 0, 1))
+    np.save(fname_map, deconv_id_sparse_temp_map)
+    print(fname_map)
 
     fnames_out = []
     batch_ids = []
@@ -1056,18 +1077,14 @@ def deconvolution(
     print(fname_scalings, deconv_scalings.shape)
 
     # get upsampled templates and mapping for computing residual
-    (
-        templates_up,
-        deconv_id_sparse_temp_map,
-    ) = mp_object.get_sparse_upsampled_templates()
-    np.save(fname_templates_up, templates_up.transpose(2, 0, 1))
     print(fname_templates_up)
     print(templates_up.transpose(2, 0, 1).shape)
 
     # get upsampled spike train
     spike_train_up = np.copy(deconv_st)
-    spike_train_up[:, 1] = deconv_id_sparse_temp_map[spike_train_up[:, 1]]
     spike_train_up[:, 0] += trough_offset
+    np.save(os.path.join(output_directory, "spike_train_up_orig.npy"), spike_train_up)
+    spike_train_up[:, 1] = deconv_id_sparse_temp_map[spike_train_up[:, 1]]
     np.save(fname_spike_train_up, spike_train_up)
     print(fname_spike_train_up, spike_train_up.shape)
 
