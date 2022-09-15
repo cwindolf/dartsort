@@ -183,6 +183,7 @@ def extract_deconv(
                 T_samples,
                 templates_loc,
                 scalings,
+                n_chans,
             ),
             context=ctx,
         ) as pool:
@@ -256,7 +257,7 @@ def _extract_deconv_worker(start_sample):
         np.float32,
         start_sample - buffer_left,
         end_sample + buffer_right,
-        len(p.geom),
+        p.n_chans,
     )
     # pad left/right if necessary
     # note, for spikes which end up loading in this buffer,
@@ -396,14 +397,17 @@ def _extract_deconv_init(
     T_samples,
     templates_loc,
     scalings,
+    n_chans,
 ):
-    with h5py.File(subtraction_h5) as h5:
-        tpca_mean = h5["tpca_mean"][:]
-        tpca_components = h5["tpca_components"][:]
-        geom = h5["geom"][:]
-    tpca = PCA(tpca_components.shape[0])
-    tpca.mean_ = tpca_mean
-    tpca.components_ = tpca_components
+    geom = tpca = None
+    if subtraction_h5 is not None:
+        with h5py.File(subtraction_h5) as h5:
+            tpca_mean = h5["tpca_mean"][:]
+            tpca_components = h5["tpca_components"][:]
+            geom = h5["geom"][:]
+        tpca = PCA(tpca_components.shape[0])
+        tpca.mean_ = tpca_mean
+        tpca.components_ = tpca_components
 
     if device is None:
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -429,4 +433,5 @@ def _extract_deconv_init(
     _extract_deconv_worker.temp_dir = temp_dir
     _extract_deconv_worker.T_samples = T_samples
     _extract_deconv_worker.batch_length = batch_length
+    _extract_deconv_worker.n_chans = n_chans
     print(".", end="", flush=True)
