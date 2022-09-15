@@ -1,90 +1,10 @@
-# %%
 import numpy as np
 from tqdm.auto import tqdm
 from sklearn.decomposition import PCA
 
-# %%
 from . import denoise, spikeio, waveform_utils
 
 
-# %%
-def get_single_templates(
-    spike_times, 
-    geom,
-    raw_binary_file,
-    tpca=None,
-    max_spikes_per_unit=500,
-    do_tpca=True,
-    do_temporal_decrease=True,
-    zero_radius_um=200,
-    reducer=np.median,
-    snr_threshold=5.0 * np.sqrt(100),
-    spike_length_samples=121,
-    trough_offset=42,
-    sampling_frequency=30_000,
-    return_raw_cleaned=False,
-    tpca_rank=5,
-    tpca_radius=75,
-    radial_parents=None,
-    pbar=True,
-    tpca_n_wfs=50_000,
-    seed=0,
-):
-    
-    rg = np.random.default_rng(seed)
-    choices = slice(None)
-    if spike_times.shape[0] > max_spikes_per_unit:
-        choices = rg.choice(
-            spike_times.shape[0], max_spikes_per_unit, replace=False
-        )
-        choices.sort()
-    waveforms, skipped_idx = spikeio.read_waveforms(
-        spike_times[choices],
-        raw_binary_file,
-        len(geom),
-        trough_offset=trough_offset,
-        spike_length_samples=spike_length_samples,
-    )
-    
-    if do_temporal_decrease:
-        denoise.enforce_temporal_decrease(waveforms, in_place=True)
-    
-    raw_templates = reducer(waveforms, axis=0)
-    raw_ptp = raw_templates.ptp(0)
-    snr_by_channel = raw_ptp * np.sqrt(len(waveforms))
-
-    # denoise the waveforms
-    if do_tpca:
-        nn, tt, cc = waveforms.shape
-        waveforms = waveforms.transpose(0, 2, 1).reshape(nn * cc, tt)
-        waveforms = tpca.inverse_transform(tpca.transform(waveforms))
-        waveforms = waveforms.reshape(nn, cc, tt).transpose(0, 2, 1)
-
-    # enforce decrease for both, using raw maxchan
-    if do_temporal_decrease:
-        denoise.enforce_temporal_decrease(waveforms, in_place=True)
-    denoised_templates = reducer(waveforms, axis=0)
-
-    # SNR-weighted combination to create the template
-    weights = denoised_weights_single(
-        snr_by_channel, spike_length_samples, trough_offset, snr_threshold
-    )
-     
-    templates = weights * raw_templates + (1 - weights) * denoised_templates
-
-    # zero out far away channels
-    if zero_radius_um is not None:
-        zero_ci = waveform_utils.make_channel_index(
-            geom, zero_radius_um, steps=1, distance_order=False, p=2
-        )
-        mc = templates.ptp(0).argmax()
-        far = ~np.isin(np.arange(len(geom)), zero_ci[mc])
-        templates[:, far] = 0
-
-    return templates
-
-
-# %%
 def get_templates(
     spike_train,
     geom,
@@ -245,7 +165,82 @@ def get_templates(
     return templates, extra
 
 
-# %%
+def get_single_templates(
+    spike_times,
+    geom,
+    raw_binary_file,
+    tpca=None,
+    max_spikes_per_unit=500,
+    do_tpca=True,
+    do_temporal_decrease=True,
+    zero_radius_um=200,
+    reducer=np.median,
+    snr_threshold=5.0 * np.sqrt(100),
+    spike_length_samples=121,
+    trough_offset=42,
+    sampling_frequency=30_000,
+    return_raw_cleaned=False,
+    tpca_rank=5,
+    tpca_radius=75,
+    radial_parents=None,
+    pbar=True,
+    tpca_n_wfs=50_000,
+    seed=0,
+):
+
+    rg = np.random.default_rng(seed)
+    choices = slice(None)
+    if spike_times.shape[0] > max_spikes_per_unit:
+        choices = rg.choice(
+            spike_times.shape[0], max_spikes_per_unit, replace=False
+        )
+        choices.sort()
+    waveforms, skipped_idx = spikeio.read_waveforms(
+        spike_times[choices],
+        raw_binary_file,
+        len(geom),
+        trough_offset=trough_offset,
+        spike_length_samples=spike_length_samples,
+    )
+
+    if do_temporal_decrease:
+        denoise.enforce_temporal_decrease(waveforms, in_place=True)
+
+    raw_templates = reducer(waveforms, axis=0)
+    raw_ptp = raw_templates.ptp(0)
+    snr_by_channel = raw_ptp * np.sqrt(len(waveforms))
+
+    # denoise the waveforms
+    if do_tpca:
+        nn, tt, cc = waveforms.shape
+        waveforms = waveforms.transpose(0, 2, 1).reshape(nn * cc, tt)
+        waveforms = tpca.inverse_transform(tpca.transform(waveforms))
+        waveforms = waveforms.reshape(nn, cc, tt).transpose(0, 2, 1)
+
+    # enforce decrease for both, using raw maxchan
+    if do_temporal_decrease:
+        denoise.enforce_temporal_decrease(waveforms, in_place=True)
+    denoised_templates = reducer(waveforms, axis=0)
+
+    # SNR-weighted combination to create the template
+    weights = denoised_weights_single(
+        snr_by_channel, spike_length_samples, trough_offset, snr_threshold
+    )
+
+    templates = weights * raw_templates + (1 - weights) * denoised_templates
+
+    # zero out far away channels
+    if zero_radius_um is not None:
+        zero_ci = waveform_utils.make_channel_index(
+            geom, zero_radius_um, steps=1, distance_order=False, p=2
+        )
+        mc = templates.ptp(0).argmax()
+        far = ~np.isin(np.arange(len(geom)), zero_ci[mc])
+        templates[:, far] = 0
+
+    return templates
+
+
 def denoised_weights(
     snrs,
     spike_length_samples,
@@ -269,7 +264,6 @@ def denoised_weights(
     return wtc
 
 
-# %%
 def denoised_weights_single(
     snrs,
     spike_length_samples,
@@ -287,8 +281,6 @@ def denoised_weights_single(
     # snr weighting per channel
     sc = np.minimum(snrs, snr_threshold) / snr_threshold
     # pass it through a hand picked squashing function
-    wtc = 1.0 / (1.0 + np.exp(d + a * vt[None, :] - b * sc[:, None]))
+    wtc = 1.0 / (1.0 + np.exp(d + a * vt[:, None] - b * sc[None, :]))
 
-    return wtc.T
-
-# %%
+    return wtc
