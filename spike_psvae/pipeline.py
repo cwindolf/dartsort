@@ -10,6 +10,7 @@ from . import (
     spike_train_utils,
     extractors,
     subtract,
+    deconv_resid_merge,
 )
 
 
@@ -49,7 +50,7 @@ def initial_clustering(
         split_big=True,
         do_remove_dups=False,
     )
-    
+
     # remove cross dups after remove self dups
     if remove_pair_duplicates:
         print("dups", flush=True)
@@ -60,7 +61,9 @@ def initial_clustering(
         ) = cluster_utils.remove_duplicate_spikes(
             clusterer, tspike_index[:, 0], tmaxptps, frames_dedup=frames_dedup
         )
-        clusterer.labels_ = spike_train_utils.make_labels_contiguous(clusterer.labels_)
+        clusterer.labels_ = spike_train_utils.make_labels_contiguous(
+            clusterer.labels_
+        )
 
     # remove self-duplicate spikes
     if remove_self_duplicates:
@@ -73,8 +76,10 @@ def initial_clustering(
             frame_dedup=20,
         )
         clusterer.labels_[removed_ix] = -1
-        clusterer.labels_ = spike_train_utils.make_labels_contiguous(clusterer.labels_)
-    
+        clusterer.labels_ = spike_train_utils.make_labels_contiguous(
+            clusterer.labels_
+        )
+
     # labels in full index space (not triaged)
     spike_train = spike_index.copy()
     spike_train[:, 1] = -1
@@ -97,7 +102,14 @@ def initial_clustering(
     aligned_spike_index = np.c_[spike_train[:, 0], spike_index[:, 1]]
     clusterer.labels_ = spike_train[idx_keep_full, 1]
 
-    return spike_train, aligned_spike_index, templates, template_shifts, clusterer, idx_keep_full
+    return (
+        spike_train,
+        aligned_spike_index,
+        templates,
+        template_shifts,
+        clusterer,
+        idx_keep_full,
+    )
 
 
 def pre_deconv_split_step(
@@ -144,7 +156,10 @@ def pre_deconv_split_step(
 
         # ks split
         print("before ks split", spike_train[:, 1].max() + 1)
-        spike_train[:, 1], split_map = pre_deconv_merge_split.ks_maxchan_tpca_split(
+        (
+            spike_train[:, 1],
+            split_map,
+        ) = pre_deconv_merge_split.ks_maxchan_tpca_split(
             h5["subtracted_tpca_projs"],
             channel_index,
             aligned_spike_index[:, 1],
@@ -185,7 +200,13 @@ def pre_deconv_split_step(
     aligned_spike_index = np.c_[spike_train[:, 0], aligned_spike_index[:, 1]]
     clusterer.labels_ = spike_train[idx_keep_full, 1]
 
-    return spike_train, aligned_spike_index, templates, template_shifts, clusterer
+    return (
+        spike_train,
+        aligned_spike_index,
+        templates,
+        template_shifts,
+        clusterer,
+    )
 
 
 def pre_deconv_merge_step(
@@ -202,13 +223,54 @@ def pre_deconv_merge_step(
     final_clean_min_spikes=5,
     device=None,
     merge_dipscore=0.5,
+    merge_resid_threshold=1.1,
     reducer=np.median,
 ):
+    with h5py.File(sub_h5, "r") as h5:
+        geom = h5["geom"][:]
+
+    # start with new merge step before LDA with smaller threshold
+    K_pre = spike_train[:, 1].max() + 1
+    labels_updated = deconv_resid_merge.run_deconv_merge(
+        spike_train[spike_train[:, 1] >= 0],
+        geom,
+        raw_data_bin,
+        templates.ptp(1).argmax(1),
+        merge_resid_threshold=merge_resid_threshold,
+    )
+    spike_train[spike_train[:, 1] >= 0] = labels_updated
+    print("Resid merge: {K_pre} -> {np.unique(labels_updated).size}")
+
+    # re-order again
+    clusterer.labels_ = spike_train[idx_keep_full, 1]
+    cluster_centers = cluster_utils.compute_cluster_centers(clusterer)
+    clusterer = cluster_utils.relabel_by_depth(clusterer, cluster_centers)
+    spike_train[idx_keep_full, 1] = clusterer.labels_
+
+    # final templates
+    # here, we don't need to use the original spike index, since we
+    # won't be touching the subtracted waveforms any more.
+    (
+        spike_train,
+        order,
+        templates,
+        template_shifts,
+    ) = spike_train_utils.clean_align_and_get_templates(
+        spike_train,
+        geom.shape[0],
+        raw_data_bin,
+        sort_by_time=False,
+        reducer=reducer,
+        max_shift=final_align_max_shift,
+        pbar=True,
+    )
+    aligned_spike_index = np.c_[spike_train[:, 0], aligned_spike_index[:, 1]]
+    clusterer.labels_ = spike_train[idx_keep_full, 1]
+
     with h5py.File(sub_h5, "r") as h5:
         sub_wf = h5["subtracted_waveforms"]
         firstchans = h5["first_channels"][:]
         x, y, z, alpha, z_rel = h5["localizations"][:].T
-        geom = h5["geom"][:]
         z_reg = h5["z_reg"][:]
         tpca = subtract.tpca_from_h5(h5)
 
@@ -257,13 +319,23 @@ def pre_deconv_merge_step(
     )
     aligned_spike_index = np.c_[spike_train[:, 0], aligned_spike_index[:, 1]]
     clusterer.labels_ = spike_train[idx_keep_full, 1]
-    
+
     # remove oversplits -- important to do this after the big align
-    (
-        spike_train,
-        templates,
-    ) = after_deconv_merge_split.remove_oversplits(templates, spike_train)
-    
+    # (
+    #     spike_train,
+    #     templates,
+    # ) = after_deconv_merge_split.remove_oversplits(templates, spike_train)
+    K_pre = spike_train[:, 1].max() + 1
+    labels_updated = deconv_resid_merge.run_deconv_merge(
+        spike_train[spike_train[:, 1] >= 0],
+        geom,
+        raw_data_bin,
+        templates.ptp(1).argmax(1),
+        merge_resid_threshold=merge_resid_threshold,
+    )
+    spike_train[spike_train[:, 1] >= 0] = labels_updated
+    print("Resid merge: {K_pre} -> {np.unique(labels_updated).size}")
+
     # and clean up the spike train to finish.
     (
         spike_train,
@@ -288,7 +360,7 @@ def pre_deconv_merge_step(
 def post_deconv_split_step(
     deconv_dir,
     deconv_results_h5,
-    bin_file,
+    raw_data_bin,
     geom,
     clean_min_spikes=0,
     reducer=np.median,
@@ -303,7 +375,7 @@ def post_deconv_split_step(
     assert n_channels == geom.shape[0]
 
     deconv_extractor = extractors.DeconvH5Extractor(
-        deconv_results_h5, bin_file
+        deconv_results_h5, raw_data_bin
     )
     assert deconv_extractor.spike_train_up.shape == spike_train.shape
 
@@ -316,7 +388,7 @@ def post_deconv_split_step(
     ) = spike_train_utils.clean_align_and_get_templates(
         spike_train,
         n_channels,
-        bin_file,
+        raw_data_bin,
         min_n_spikes=clean_min_spikes,
         pbar=True,
         reducer=reducer,
@@ -342,7 +414,7 @@ def post_deconv_split_step(
     ) = spike_train_utils.clean_align_and_get_templates(
         spike_train,
         n_channels,
-        bin_file,
+        raw_data_bin,
         min_n_spikes=clean_min_spikes,
         pbar=True,
         reducer=reducer,
@@ -354,7 +426,7 @@ def post_deconv_split_step(
         templates,
         spike_train,
         deconv_extractor.ptp[order],
-        bin_file,
+        raw_data_bin,
         geom,
         reducer=reducer,
     )
@@ -366,7 +438,7 @@ def post_deconv_split_step(
     ) = spike_train_utils.clean_align_and_get_templates(
         spike_train,
         n_channels,
-        bin_file,
+        raw_data_bin,
         min_n_spikes=clean_min_spikes,
         pbar=True,
         reducer=reducer,
@@ -391,7 +463,7 @@ def post_deconv_split_step(
     ) = spike_train_utils.clean_align_and_get_templates(
         spike_train,
         n_channels,
-        bin_file,
+        raw_data_bin,
         min_n_spikes=clean_min_spikes,
         pbar=True,
         reducer=reducer,
@@ -407,15 +479,16 @@ def post_deconv_merge_step(
     templates,
     deconv_dir,
     deconv_results_h5,
-    bin_file,
+    raw_data_bin,
     geom,
+    merge_resid_threshold=1.5,
     clean_min_spikes=25,
     reducer=np.median,
 ):
     spike_train = spike_train.copy()
 
     deconv_extractor = extractors.DeconvH5Extractor(
-        deconv_results_h5, bin_file
+        deconv_results_h5, raw_data_bin
     )
     assert deconv_extractor.spike_train_up.shape == spike_train.shape
     n_channels = geom.shape[0]
@@ -443,7 +516,7 @@ def post_deconv_merge_step(
     ) = spike_train_utils.clean_align_and_get_templates(
         spike_train,
         n_channels,
-        bin_file,
+        raw_data_bin,
         min_n_spikes=clean_min_spikes,
         pbar=True,
         reducer=reducer,
@@ -458,7 +531,7 @@ def post_deconv_merge_step(
         templates,
         spike_train,
         deconv_extractor.ptp[order],
-        bin_file,
+        raw_data_bin,
         geom,
         reducer=reducer,
     )
@@ -474,7 +547,7 @@ def post_deconv_merge_step(
     ) = spike_train_utils.clean_align_and_get_templates(
         spike_train,
         n_channels,
-        bin_file,
+        raw_data_bin,
         min_n_spikes=0,
         pbar=True,
         reducer=reducer,
@@ -486,9 +559,18 @@ def post_deconv_merge_step(
     print(u.max() + 1, u.size, (c > 25).sum(), c[c > 25].sum())
 
     print("Remove oversplit")
-    spike_train, templates = after_deconv_merge_split.remove_oversplits(
-        templates, spike_train
+    # spike_train, templates = after_deconv_merge_split.remove_oversplits(
+    #     templates, spike_train
+    # )
+    labels_updated = deconv_resid_merge.run_deconv_merge(
+        spike_train[spike_train[:, 1] >= 0],
+        geom,
+        raw_data_bin,
+        templates.ptp(1).argmax(1),
+        merge_resid_threshold=merge_resid_threshold,
     )
+    spike_train[spike_train[:, 1] >= 0] = labels_updated
+    print("Resid merge: {K_pre} -> {np.unique(labels_updated).size}")
     (
         spike_train,
         reorder,
@@ -497,7 +579,7 @@ def post_deconv_merge_step(
     ) = spike_train_utils.clean_align_and_get_templates(
         spike_train,
         n_channels,
-        bin_file,
+        raw_data_bin,
         min_n_spikes=clean_min_spikes,
         pbar=True,
         reducer=reducer,
@@ -512,8 +594,9 @@ def post_deconv_merge_step(
 def post_deconv2_clean_step(
     deconv2_dir,
     deconv2_results_h5,
-    bin_file,
+    raw_data_bin,
     geom,
+    merge_resid_threshold=1.5,
     clean_min_spikes=25,
 ):
     n_channels = geom.shape[0]
@@ -540,7 +623,7 @@ def post_deconv2_clean_step(
     ) = spike_train_utils.clean_align_and_get_templates(
         spike_train,
         n_channels,
-        bin_file,
+        raw_data_bin,
         min_n_spikes=clean_min_spikes,
         pbar=True,
     )
@@ -552,7 +635,7 @@ def post_deconv2_clean_step(
 
     print("Before clean big ")
     n_cleaned = after_deconv_merge_split.clean_big_clusters(
-        templates, spike_train, maxptps[order], bin_file, geom
+        templates, spike_train, maxptps[order], raw_data_bin, geom
     )
     print(f"n_cleaned={n_cleaned}")
     u, c = np.unique(spike_train[:, 1], return_counts=True)
@@ -566,7 +649,7 @@ def post_deconv2_clean_step(
     ) = spike_train_utils.clean_align_and_get_templates(
         spike_train,
         n_channels,
-        bin_file,
+        raw_data_bin,
         min_n_spikes=clean_min_spikes,
         pbar=True,
     )
@@ -577,10 +660,19 @@ def post_deconv2_clean_step(
     print(u.max() + 1, u.size, (c > 25).sum(), c[c > 25].sum())
 
     print("Remove oversplits")
-    (
-        spike_train,
-        split_templates,
-    ) = after_deconv_merge_split.remove_oversplits(templates, spike_train)
+    # (
+    #     spike_train,
+    #     split_templates,
+    # ) = after_deconv_merge_split.remove_oversplits(templates, spike_train)
+    labels_updated = deconv_resid_merge.run_deconv_merge(
+        spike_train[spike_train[:, 1] >= 0],
+        geom,
+        raw_data_bin,
+        templates.ptp(1).argmax(1),
+        merge_resid_threshold=merge_resid_threshold,
+    )
+    spike_train[spike_train[:, 1] >= 0] = labels_updated
+    print("Resid merge: {K_pre} -> {np.unique(labels_updated).size}")
     (
         spike_train,
         reorder,
@@ -589,7 +681,7 @@ def post_deconv2_clean_step(
     ) = spike_train_utils.clean_align_and_get_templates(
         spike_train,
         n_channels,
-        bin_file,
+        raw_data_bin,
         min_n_spikes=clean_min_spikes,
         pbar=True,
     )
