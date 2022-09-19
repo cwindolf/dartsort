@@ -1,8 +1,10 @@
+# %%
 import numpy as np
 from pathlib import Path
 import tempfile
 from tqdm.auto import tqdm
 
+# %%
 from .extract_deconv import extract_deconv
 from .deconvolve import MatchPursuitObjectiveUpsample
 from .snr_templates import get_single_templates, get_templates
@@ -10,6 +12,7 @@ from .pre_deconv_merge_split import get_proposed_pairs
 from .localize_index import localize_ptps_index
 
 
+# %%
 def find_original_merges(
     output_dir,
     templates_cleaned,
@@ -37,6 +40,7 @@ def find_original_merges(
     max_values = []
     units = []
     units_matched = []
+    shifts = []
 
     for i in range(templates_cleaned.shape[0]):
         temp_concatenated = np.zeros((3 * T, C), dtype=np.float32)
@@ -142,10 +146,12 @@ def find_original_merges(
             max_values.append(np.abs(res_array).max())
             units.append(i)
             units_matched.append(dist_argsort[i][int(deconv_st[0, 1] / 8)])
+            shifts.append(deconv_st[0, 0]-T)
 
-    return np.array(max_values), np.array(units), np.array(units_matched)
+    return np.array(max_values), np.array(units), np.array(units_matched), np.array(shifts)
 
 
+# %%
 def check_additional_merge(
     output_dir,
     temp_to_input,
@@ -220,7 +226,7 @@ def check_additional_merge(
 
     # no spike found
     if not deconv_st.size:
-        return np.inf
+        return np.inf, 0
 
     # get spike train and save
     spike_train_tmp = np.copy(deconv_st)
@@ -257,13 +263,15 @@ def check_additional_merge(
     )
 
     resid = np.fromfile(deconv_residual_path, dtype=np.float32)
-    return np.abs(resid).max()
+    return np.abs(resid).max(), deconv_st[0, 0]-T
 
 
+# %%
 def merge_units_temp_deconv(
     units,
     units_matched,
     max_values,
+    shifts,
     templates_cleaned,
     labels,
     spike_times,
@@ -283,12 +291,14 @@ def merge_units_temp_deconv(
     units = units[max_values <= merge_resid_threshold]
     units_matched = units_matched[max_values <= merge_resid_threshold]
     max_values = max_values[max_values <= merge_resid_threshold]
-
+    shifts = shifts[max_values <= merge_resid_threshold]
+    
     idx = max_values.argsort()
 
     units = units[idx]
     units_matched = units_matched[idx]
     max_values = max_values[idx]
+    shifts = shifts[idx]
 
     for j, unit, matched in tqdm(
         zip(range(len(units)), units, units_matched),
@@ -311,6 +321,9 @@ def merge_units_temp_deconv(
             )
             templates_updated[matched] = temp_merge
             templates_updated[unit] = temp_merge
+            
+            # Update spike times
+            spike_times[labels == matched]-=shifts[j]
 
         elif np.isin(unit, units_already_merged) and ~np.isin(
             matched, units_already_merged
@@ -338,6 +351,9 @@ def merge_units_temp_deconv(
                 templates_updated[unit] = temp_merge
                 templates_updated[unit_ref] = temp_merge
                 labels_updated[labels_updated == matched] = unit_ref
+                
+                # Update spike times
+                spike_times[labels_updated == matched]-=shifts[j]
 
         elif ~np.isin(unit, units_already_merged) and np.isin(
             matched, units_already_merged
@@ -365,6 +381,10 @@ def merge_units_temp_deconv(
                 templates_updated[unit] = temp_merge
                 templates_updated[unit_ref] = temp_merge
                 labels_updated[labels_updated == unit] = unit_ref
+                
+                # Update spike times
+                spike_times[labels_updated == unit]+=shifts[j]
+                
         else:
             # check MERGE unit_reference[matched] to unit_reference[unit]
             temp_to_input = templates_cleaned[unit_reference[matched]]
@@ -402,9 +422,13 @@ def merge_units_temp_deconv(
                     labels_updated == unit_reference[matched]
                 ] = unit_reference[unit]
 
+                # Update spike times
+                spike_times[labels_updated == unit_reference[matched]]-=shifts[j]
+                
     return templates_updated, labels_updated, unit_reference
 
 
+# %%
 def run_deconv_merge(
     spike_train,
     geom,
@@ -441,7 +465,7 @@ def run_deconv_merge(
     )
 
     with tempfile.TemporaryDirectory(prefix="drm") as workdir:
-        max_values, units, units_matched = find_original_merges(
+        max_values, units, units_matched, shifts = find_original_merges(
             workdir, templates_cleaned, dist_argsort, deconv_threshold
         )
         (
@@ -452,6 +476,7 @@ def run_deconv_merge(
             units,
             units_matched,
             max_values,
+            shifts,
             templates_cleaned,
             spike_train[:, 1].copy(),
             spike_train[:, 0].copy(),
