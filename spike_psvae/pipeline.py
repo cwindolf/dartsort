@@ -11,8 +11,9 @@ from . import (
     extractors,
     subtract,
     deconv_resid_merge,
+    waveform_utils, 
+    spike_reassignment
 )
-
 
 def initial_clustering(
     sub_h5,
@@ -691,3 +692,53 @@ def post_deconv2_clean_step(
     print(u.max() + 1, u.size, (c > 25).sum(), c[c > 25].sum())
 
     return spike_train, order, templates
+
+
+# data_path = '/media/cat/data/'
+# data_name = 'CSH_ZAD_026_5min'
+# data_dir = data_path + data_name + '/'
+# raw_bin = data_dir + 'CSH_ZAD_026_snip.ap.bin'
+
+# deconv_dir = '/media/cat/julien/5min_full_pipeline_output/second_deconv_output/'
+# data_dir = '/media/cat/data/CSH_ZAD_026_5min/'
+# residual_bin_path = deconv_dir + 'residual.bin'
+# templates_path = deconv_dir + 'templates.npy'
+# spike_train_path = deconv_dir + 'spike_train.npy'
+# spike_index_path = deconv_dir + 'spike_index.npy' 
+# spike_index = np.load(spike_index_path)
+# tpca =  fit_tpca_bin(spike_index, geom, raw_bin)
+
+# geom_path = data_dir + 'np1_channel_map.npy'
+# # tpca_components = np.load(data_dir + 'tpca_components.npy')
+# # tpca_mean = np.load(data_dir + 'tpca_mean.npy')
+
+# output_path = '/media/cat/data/outlier_detection'
+
+def reassign_and_triage_spikes(
+    deconv_dir,
+    raw_data_bin,
+    geom,
+    n_chans=8,
+    n_sim_units=2,
+    num_sigma_outlier=4,
+    batch_size=4096,
+):
+    
+    residual_bin_path = deconv_dir + 'residual.bin'
+    templates_path = deconv_dir + 'templates.npy'
+    spike_train_path = deconv_dir + 'spike_train.npy'
+    spike_index_path = deconv_dir + 'spike_index.npy' 
+    spike_index = np.load(spike_index_path)
+    #compute tpca on raw waveforms
+    tpca = waveform_utils.fit_tpca_bin(spike_index, geom, raw_data_bin)
+    #run spike reassignment and outlier triaging
+    soft_assignment_scores, reassignment, reassigned_scores = spike_reassignment.run(residual_bin_path,
+                                                                                     templates_path,
+                                                                                     spike_train_path,
+                                                                                     geom,
+                                                                                     tpca,
+                                                                                     n_chans=n_chans,
+                                                                                     n_sim_units=n_sim_units,
+                                                                                     num_sigma_outlier=num_sigma_outlier,
+                                                                                     batch_size=batch_size)
+    return soft_assignment_scores, reassignment, reassigned_scores
