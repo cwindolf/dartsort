@@ -1,5 +1,4 @@
 import numpy as np
-import numba
 from scipy.spatial.distance import cdist
 
 # import numpy.linalg as la
