@@ -64,6 +64,8 @@ def subtraction(
     loc_workers=4,
     overwrite=False,
     random_seed=0,
+    denoiser_init_kwargs={},
+    denoiser_weights_path=None,
     binary_dtype=np.float32,
     dtype=np.float32,
 ):
@@ -289,6 +291,8 @@ def subtraction(
                     do_nn_denoise=do_nn_denoise,
                     do_enforce_decrease=do_enforce_decrease,
                     probe=probe,
+                    denoiser_init_kwargs=denoiser_init_kwargs,
+                    denoiser_weights_path=denoiser_weights_path,
                     n_sec_pca=n_sec_pca,
                     rank=tpca_rank,
                     random_seed=random_seed,
@@ -428,6 +432,8 @@ def subtraction(
                 denoise_detect,
                 do_nn_denoise,
                 id_queue,
+                denoiser_init_kwargs,
+                denoiser_weights_path,
             ),
         ) as pool:
             for result in tqdm(
@@ -557,6 +563,8 @@ def _subtraction_batch_init(
     denoise_detect,
     do_nn_denoise,
     id_queue,
+    denoiser_init_kwargs,
+    denoiser_weights_path,
 ):
     """Thread/process initializer -- loads up neural nets"""
     rank = id_queue.get()
@@ -579,8 +587,11 @@ def _subtraction_batch_init(
 
     denoiser = None
     if do_nn_denoise:
-        denoiser = denoise.SingleChanDenoiser()
-        denoiser.load()
+        denoiser = denoise.SingleChanDenoiser(**denoiser_init_kwargs)
+        if denoiser_weights_path is not None:
+            denoiser.load(fname_model=denoiser_weights_path)
+        else:
+            denoiser.load()
         denoiser.to(device)
     _subtraction_batch.denoiser = denoiser
 
@@ -954,6 +965,8 @@ def train_pca(
     nsync=0,
     random_seed=0,
     device="cpu",
+    denoiser_init_kwargs={},
+    denoiser_weights_path=None,
     trough_offset=42,
     binary_dtype=np.float32,
     dtype=np.float32,
@@ -974,7 +987,12 @@ def train_pca(
 
     denoiser = None
     if do_nn_denoise:
-        denoiser = denoise.SingleChanDenoiser().load().to(device)
+        denoiser = denoise.SingleChanDenoiser(**denoiser_init_kwargs)
+        if denoiser_weights_path is not None:
+            denoiser.load(fname_model=denoiser_weights_path)
+        else:
+            denoiser.load()
+        denoiser.to(device)
 
     detector = None
     if nn_detector_path:
