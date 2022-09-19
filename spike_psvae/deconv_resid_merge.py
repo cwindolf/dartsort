@@ -313,7 +313,9 @@ def merge_units_temp_deconv(
             units_already_merged.append(matched)
             unit_reference[matched] = unit
             labels_updated[labels_updated == matched] = unit
-
+            
+            # Update spike times
+            spike_times[labels == matched]-=shifts[j]
             # Update template
             spike_times_test = spike_times[np.isin(labels, [matched, unit])]
             temp_merge = get_single_templates(
@@ -322,9 +324,6 @@ def merge_units_temp_deconv(
             templates_updated[matched] = temp_merge
             templates_updated[unit] = temp_merge
             
-            # Update spike times
-            spike_times[labels == matched]-=shifts[j]
-
         elif np.isin(unit, units_already_merged) and ~np.isin(
             matched, units_already_merged
         ):
@@ -341,6 +340,9 @@ def merge_units_temp_deconv(
             ):
                 units_already_merged.append(matched)
                 unit_reference[matched] = unit_ref
+                
+                # Update spike times
+                spike_times[labels_updated == matched]-=shifts[j]
                 spike_times_test = spike_times[
                     np.isin(labels, [matched, unit, unit_ref])
                 ]
@@ -352,9 +354,6 @@ def merge_units_temp_deconv(
                 templates_updated[unit_ref] = temp_merge
                 labels_updated[labels_updated == matched] = unit_ref
                 
-                # Update spike times
-                spike_times[labels_updated == matched]-=shifts[j]
-
         elif ~np.isin(unit, units_already_merged) and np.isin(
             matched, units_already_merged
         ):
@@ -371,6 +370,9 @@ def merge_units_temp_deconv(
             ):
                 units_already_merged.append(unit)
                 unit_reference[unit] = unit_ref
+                
+                # Update spike times
+                spike_times[labels_updated == unit]+=shifts[j]
                 spike_times_test = spike_times[
                     np.isin(labels, [matched, unit, unit_ref])
                 ]
@@ -381,10 +383,7 @@ def merge_units_temp_deconv(
                 templates_updated[unit] = temp_merge
                 templates_updated[unit_ref] = temp_merge
                 labels_updated[labels_updated == unit] = unit_ref
-                
-                # Update spike times
-                spike_times[labels_updated == unit]+=shifts[j]
-                
+                                
         else:
             # check MERGE unit_reference[matched] to unit_reference[unit]
             temp_to_input = templates_cleaned[unit_reference[matched]]
@@ -397,6 +396,9 @@ def merge_units_temp_deconv(
             ):
                 unit_reference[matched] = unit_reference[unit]
                 unit_reference[unit_reference[matched]] = unit_reference[unit]
+                
+                # Update spike times
+                spike_times[labels_updated == unit_reference[matched]]-=shifts[j]
                 spike_times_test = spike_times[
                     np.isin(
                         labels,
@@ -421,9 +423,6 @@ def merge_units_temp_deconv(
                 labels_updated[
                     labels_updated == unit_reference[matched]
                 ] = unit_reference[unit]
-
-                # Update spike times
-                spike_times[labels_updated == unit_reference[matched]]-=shifts[j]
                 
     return templates_updated, labels_updated, unit_reference
 
