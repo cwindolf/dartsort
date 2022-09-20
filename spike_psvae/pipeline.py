@@ -230,22 +230,23 @@ def pre_deconv_merge_step(
         geom = h5["geom"][:]
 
     # start with new merge step before LDA with smaller threshold
-    K_pre = spike_train[:, 1].max() + 1
-    labels_updated = deconv_resid_merge.run_deconv_merge(
-        spike_train[spike_train[:, 1] >= 0],
-        geom,
-        raw_data_bin,
-        templates.ptp(1).argmax(1),
-        merge_resid_threshold=merge_resid_threshold,
-    )
-    spike_train[spike_train[:, 1] >= 0] = labels_updated
-    print("Resid merge: {K_pre} -> {np.unique(labels_updated).size}")
+    # K_pre = spike_train[:, 1].max() + 1
+    # print(f"Before resid merge {spike_train.shape=} {(spike_train[:, 1] >= 0).sum()=} {(spike_train[:, 1].max() + 1)=} {np.unique(spike_train[:,1]).size=})")
+    # labels_updated = deconv_resid_merge.run_deconv_merge(
+    #     spike_train[spike_train[:, 1] >= 0],
+    #     geom,
+    #     raw_data_bin,
+    #     templates.ptp(1).argmax(1),
+    #     merge_resid_threshold=merge_resid_threshold,
+    # )
+    # spike_train[spike_train[:, 1] >= 0, 1] = labels_updated
+    # print(f"Resid merge: {K_pre} -> {np.unique(labels_updated).size} {spike_train.shape=} {(spike_train[:, 1] >= 0).sum()=} {(spike_train[:, 1].max() + 1)=} {np.unique(spike_train[:,1]).size=})")
 
     # re-order again
-    clusterer.labels_ = spike_train[idx_keep_full, 1]
-    cluster_centers = cluster_utils.compute_cluster_centers(clusterer)
-    clusterer = cluster_utils.relabel_by_depth(clusterer, cluster_centers)
-    spike_train[idx_keep_full, 1] = clusterer.labels_
+    # clusterer.labels_ = spike_train[idx_keep_full, 1]
+    # cluster_centers = cluster_utils.compute_cluster_centers(clusterer)
+    # clusterer = cluster_utils.relabel_by_depth(clusterer, cluster_centers)
+    # spike_train[idx_keep_full, 1] = clusterer.labels_
 
     # final templates
     # here, we don't need to use the original spike index, since we
@@ -326,6 +327,7 @@ def pre_deconv_merge_step(
     #     templates,
     # ) = after_deconv_merge_split.remove_oversplits(templates, spike_train)
     K_pre = spike_train[:, 1].max() + 1
+    print(f"Before resid merge {spike_train.shape=} {(spike_train[:, 1] >= 0).sum()=} {(spike_train[:, 1].max() + 1)=} {np.unique(spike_train[:,1]).size=})")
     labels_updated = deconv_resid_merge.run_deconv_merge(
         spike_train[spike_train[:, 1] >= 0],
         geom,
@@ -333,8 +335,8 @@ def pre_deconv_merge_step(
         templates.ptp(1).argmax(1),
         merge_resid_threshold=merge_resid_threshold,
     )
-    spike_train[spike_train[:, 1] >= 0] = labels_updated
-    print("Resid merge: {K_pre} -> {np.unique(labels_updated).size}")
+    spike_train[spike_train[:, 1] >= 0, 1] = labels_updated
+    print(f"Resid merge: {K_pre} -> {np.unique(labels_updated).size} {spike_train.shape=} {(spike_train[:, 1] >= 0).sum()=} {(spike_train[:, 1].max() + 1)=} {np.unique(spike_train[:,1]).size=})")
 
     # and clean up the spike train to finish.
     (
@@ -362,6 +364,7 @@ def post_deconv_split_step(
     deconv_results_h5,
     raw_data_bin,
     geom,
+    merge_resid_threshold=1.5,
     clean_min_spikes=0,
     reducer=np.median,
 ):
@@ -450,10 +453,20 @@ def post_deconv_split_step(
     print(u.size, (c > 25).sum(), c[c > 25].sum())
 
     # remove oversplits
-    (
-        spike_train,
-        templates,
-    ) = after_deconv_merge_split.remove_oversplits(templates, spike_train)
+    # (
+    #     spike_train,
+    #     templates,
+    # ) = after_deconv_merge_split.remove_oversplits(templates, spike_train)
+    print(f"Before resid merge {spike_train.shape=} {(spike_train[:, 1] >= 0).sum()=} {(spike_train[:, 1].max() + 1)=} {np.unique(spike_train[:,1]).size=})")
+    labels_updated = deconv_resid_merge.run_deconv_merge(
+        spike_train[spike_train[:, 1] >= 0],
+        geom,
+        raw_data_bin,
+        templates.ptp(1).argmax(1),
+        merge_resid_threshold=merge_resid_threshold,
+    )
+    spike_train[spike_train[:, 1] >= 0, 1] = labels_updated
+    print(f"Resid merge: {np.unique(labels_updated).size} {spike_train.shape=} {(spike_train[:, 1] >= 0).sum()=} {(spike_train[:, 1].max() + 1)=} {np.unique(spike_train[:,1]).size=})")
 
     (
         spike_train,
@@ -562,6 +575,7 @@ def post_deconv_merge_step(
     # spike_train, templates = after_deconv_merge_split.remove_oversplits(
     #     templates, spike_train
     # )
+    print(f"Before resid merge {spike_train.shape=} {(spike_train[:, 1] >= 0).sum()=} {(spike_train[:, 1].max() + 1)=} {np.unique(spike_train[:,1]).size=})")
     labels_updated = deconv_resid_merge.run_deconv_merge(
         spike_train[spike_train[:, 1] >= 0],
         geom,
@@ -569,8 +583,8 @@ def post_deconv_merge_step(
         templates.ptp(1).argmax(1),
         merge_resid_threshold=merge_resid_threshold,
     )
-    spike_train[spike_train[:, 1] >= 0] = labels_updated
-    print("Resid merge: {K_pre} -> {np.unique(labels_updated).size}")
+    spike_train[spike_train[:, 1] >= 0, 1] = labels_updated
+    print(f"Resid merge: {np.unique(labels_updated).size} {spike_train.shape=} {(spike_train[:, 1] >= 0).sum()=} {(spike_train[:, 1].max() + 1)=} {np.unique(spike_train[:,1]).size=})")
     (
         spike_train,
         reorder,
@@ -664,6 +678,7 @@ def post_deconv2_clean_step(
     #     spike_train,
     #     split_templates,
     # ) = after_deconv_merge_split.remove_oversplits(templates, spike_train)
+    print(f"Before resid merge {spike_train.shape=} {(spike_train[:, 1] >= 0).sum()=} {(spike_train[:, 1].max() + 1)=} {np.unique(spike_train[:,1]).size=})")
     labels_updated = deconv_resid_merge.run_deconv_merge(
         spike_train[spike_train[:, 1] >= 0],
         geom,
@@ -671,8 +686,8 @@ def post_deconv2_clean_step(
         templates.ptp(1).argmax(1),
         merge_resid_threshold=merge_resid_threshold,
     )
-    spike_train[spike_train[:, 1] >= 0] = labels_updated
-    print("Resid merge: {K_pre} -> {np.unique(labels_updated).size}")
+    spike_train[spike_train[:, 1] >= 0, 1] = labels_updated
+    print(f"After resid merge: {np.unique(labels_updated).size} {spike_train.shape=} {(spike_train[:, 1] >= 0).sum()=} {(spike_train[:, 1].max() + 1)=} {np.unique(spike_train[:,1]).size=})")
     (
         spike_train,
         reorder,
