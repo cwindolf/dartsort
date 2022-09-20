@@ -84,7 +84,6 @@ def find_original_merges(
 
         deconv_st = []
         deconv_scalings = []
-        #         print("gathering deconvolution results")
         for batch_id in range(mp_object.n_batches):
             fname_out = output_dir / "seg_{}_deconv.npz".format(
                 str(batch_id).zfill(6)
@@ -95,56 +94,53 @@ def find_original_merges(
         deconv_st = np.concatenate(deconv_st, axis=0)
         deconv_scalings = np.concatenate(deconv_scalings, axis=0)
 
-        #         print(f"Number of Spikes deconvolved: {deconv_st.shape[0]}")
-        if deconv_st.shape[0] > 0:
-            # get spike train and save
-            spike_train_tmp = np.copy(deconv_st)
-            # map back to original id
-            spike_train_tmp[:, 1] = np.int32(
-                spike_train_tmp[:, 1] / max_upsample
-            )
-            spike_train_tmp[:, 0] += trough_offset
-            # save
-            np.save(fname_spike_train, spike_train_tmp)
-            np.save(fname_scalings, deconv_scalings)
+        if not deconv_st.shape[0]:
+            continue
 
-            # get upsampled templates and mapping for computing residual
-            (
-                templates_up,
-                deconv_id_sparse_temp_map,
-            ) = mp_object.get_sparse_upsampled_templates()
-            np.save(fname_templates_up, templates_up.transpose(2, 0, 1))
+        # get spike train and save
+        spike_train_tmp = np.copy(deconv_st)
+        # map back to original id
+        spike_train_tmp[:, 1] = np.int32(spike_train_tmp[:, 1] / max_upsample)
+        spike_train_tmp[:, 0] += trough_offset
+        # save
+        np.save(fname_spike_train, spike_train_tmp)
+        np.save(fname_scalings, deconv_scalings)
 
-            # get upsampled spike train
-            spike_train_up = np.copy(deconv_st)
-            spike_train_up[:, 1] = deconv_id_sparse_temp_map[
-                spike_train_up[:, 1]
-            ]
-            spike_train_up[:, 0] += trough_offset
-            np.save(fname_spike_train_up, spike_train_up)
+        # get upsampled templates and mapping for computing residual
+        (
+            templates_up,
+            deconv_id_sparse_temp_map,
+        ) = mp_object.get_sparse_upsampled_templates()
+        np.save(fname_templates_up, templates_up.transpose(2, 0, 1))
 
-            deconv_h5, deconv_residual_path = extract_deconv(
-                fname_templates_up,
-                fname_spike_train_up,
-                output_dir,
-                f_out,
-                scalings_path=output_dir / "scalings.npy",
-                save_cleaned_waveforms=False,
-                save_denoised_waveforms=False,
-                localize=False,
-                n_jobs=1,
-                device="cpu",
-                overwrite=True,
-                pbar=False,
-            )
+        # get upsampled spike train
+        spike_train_up = np.copy(deconv_st)
+        spike_train_up[:, 1] = deconv_id_sparse_temp_map[spike_train_up[:, 1]]
+        spike_train_up[:, 0] += trough_offset
+        np.save(fname_spike_train_up, spike_train_up)
 
-            res_array = np.fromfile(
-                deconv_residual_path, dtype=np.float32
-            ).reshape(-1, 384)
-            max_values.append(np.abs(res_array).max())
-            units.append(i)
-            units_matched.append(dist_argsort[i][int(deconv_st[0, 1] / 8)])
-            shifts.append(deconv_st[0, 0] - T)
+        deconv_h5, deconv_residual_path = extract_deconv(
+            fname_templates_up,
+            fname_spike_train_up,
+            output_dir,
+            f_out,
+            scalings_path=output_dir / "scalings.npy",
+            save_cleaned_waveforms=False,
+            save_denoised_waveforms=False,
+            localize=False,
+            n_jobs=1,
+            device="cpu",
+            overwrite=True,
+            pbar=False,
+        )
+
+        res_array = np.fromfile(
+            deconv_residual_path, dtype=np.float32
+        ).reshape(-1, 384)
+        max_values.append(np.abs(res_array).max())
+        units.append(i)
+        units_matched.append(dist_argsort[i][int(deconv_st[0, 1] / 8)])
+        shifts.append(deconv_st[0, 0] - T)
 
     return (
         np.array(max_values),
@@ -293,8 +289,8 @@ def merge_units_temp_deconv(
 
     units = units[max_values <= merge_resid_threshold]
     units_matched = units_matched[max_values <= merge_resid_threshold]
-    max_values = max_values[max_values <= merge_resid_threshold]
     shifts = shifts[max_values <= merge_resid_threshold]
+    max_values = max_values[max_values <= merge_resid_threshold]
 
     idx = max_values.argsort()
 
@@ -334,18 +330,16 @@ def merge_units_temp_deconv(
             unit_ref = unit_reference[unit]
             temp_to_input = templates_cleaned[matched]
             temp_to_deconv = templates_updated[unit_ref]
+            maxresid, shift = check_additional_merge(
+                output_dir, temp_to_input, temp_to_deconv, deconv_threshold
+            )
 
-            if (
-                check_additional_merge(
-                    output_dir, temp_to_input, temp_to_deconv, deconv_threshold
-                )
-                < merge_resid_threshold
-            ):
+            if maxresid < merge_resid_threshold:
                 units_already_merged.append(matched)
                 unit_reference[matched] = unit_ref
 
                 # Update spike times
-                spike_times[labels_updated == matched] -= shifts[j]
+                spike_times[labels_updated == matched] -= shift
                 spike_times_test = spike_times[
                     np.isin(labels, [matched, unit, unit_ref])
                 ]
@@ -365,17 +359,17 @@ def merge_units_temp_deconv(
             temp_to_input = templates_cleaned[unit_ref]
             temp_to_deconv = templates_updated[unit]
 
-            if (
-                check_additional_merge(
-                    output_dir, temp_to_input, temp_to_deconv, deconv_threshold
-                )
-                < merge_resid_threshold
-            ):
+            maxresid, shift = check_additional_merge(
+                output_dir, temp_to_input, temp_to_deconv, deconv_threshold
+            )
+
+            if maxresid < merge_resid_threshold:
                 units_already_merged.append(unit)
                 unit_reference[unit] = unit_ref
 
                 # Update spike times
-                spike_times[labels_updated == unit] += shifts[j]
+                # spike_times[labels_updated == unit] += shifts[j]
+                spike_times[labels_updated == unit] -= shift
                 spike_times_test = spike_times[
                     np.isin(labels, [matched, unit, unit_ref])
                 ]
@@ -391,19 +385,20 @@ def merge_units_temp_deconv(
             # check MERGE unit_reference[matched] to unit_reference[unit]
             temp_to_input = templates_cleaned[unit_reference[matched]]
             temp_to_deconv = templates_updated[unit_reference[unit]]
-            if (
-                check_additional_merge(
-                    output_dir, temp_to_input, temp_to_deconv, deconv_threshold
-                )
-                < merge_resid_threshold
-            ):
+
+            maxresid, shift = check_additional_merge(
+                output_dir, temp_to_input, temp_to_deconv, deconv_threshold
+            )
+
+            if maxresid < merge_resid_threshold:
                 unit_reference[matched] = unit_reference[unit]
                 unit_reference[unit_reference[matched]] = unit_reference[unit]
 
                 # Update spike times
                 spike_times[
                     labels_updated == unit_reference[matched]
-                ] -= shifts[j]
+                ] -= shift
+                # ] -= shifts[j]
                 spike_times_test = spike_times[
                     np.isin(
                         labels,
@@ -470,6 +465,9 @@ def run_deconv_merge(
     with tempfile.TemporaryDirectory(prefix="drm") as workdir:
         max_values, units, units_matched, shifts = find_original_merges(
             workdir, templates_cleaned, dist_argsort, deconv_threshold
+        )
+        print(
+            f"{max_values.shape=}, {units.shape=}, {units_matched.shape=}, {shifts.shape=}"
         )
         (
             templates_updated,
