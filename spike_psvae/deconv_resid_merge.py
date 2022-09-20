@@ -369,7 +369,7 @@ def merge_units_temp_deconv(
 
                 # Update spike times
                 # spike_times[labels_updated == unit] += shifts[j]
-                spike_times[labels_updated == unit] -= shift
+                spike_times[labels_updated == unit] += shift
                 spike_times_test = spike_times[
                     np.isin(labels, [matched, unit, unit_ref])
                 ]
