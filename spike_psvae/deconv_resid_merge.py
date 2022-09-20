@@ -134,6 +134,7 @@ def find_original_merges(
                 n_jobs=1,
                 device="cpu",
                 overwrite=True,
+                pbar=False,
             )
 
             res_array = np.fromfile(
@@ -254,6 +255,7 @@ def check_additional_merge(
         n_jobs=1,
         device="cpu",
         overwrite=True,
+        pbar=False,
     )
 
     resid = np.fromfile(deconv_residual_path, dtype=np.float32)
@@ -460,7 +462,7 @@ def run_deconv_merge(
             geom,
             raw_binary_file,
             tpca,
-            threshold=merge_resid_threshold,
+            merge_resid_threshold=merge_resid_threshold,
         )
 
     return labels_updated
