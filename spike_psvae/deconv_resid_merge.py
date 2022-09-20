@@ -1,10 +1,8 @@
-# %%
 import numpy as np
 from pathlib import Path
 import tempfile
 from tqdm.auto import tqdm
 
-# %%
 from .extract_deconv import extract_deconv
 from .deconvolve import MatchPursuitObjectiveUpsample
 from .snr_templates import get_single_templates, get_templates
@@ -12,7 +10,6 @@ from .pre_deconv_merge_split import get_proposed_pairs
 from .localize_index import localize_ptps_index
 
 
-# %%
 def find_original_merges(
     output_dir,
     templates_cleaned,
@@ -157,7 +154,6 @@ def find_original_merges(
     )
 
 
-# %%
 def check_additional_merge(
     output_dir,
     temp_to_input,
@@ -273,7 +269,6 @@ def check_additional_merge(
     return np.abs(resid).max(), deconv_st[0, 0] - T
 
 
-# %%
 def merge_units_temp_deconv(
     units,
     units_matched,
@@ -437,7 +432,6 @@ def merge_units_temp_deconv(
     return templates_updated, spike_times, labels_updated, unit_reference
 
 
-# %%
 def run_deconv_merge(
     spike_train,
     geom,
@@ -479,6 +473,7 @@ def run_deconv_merge(
         )
         (
             templates_updated,
+            times_updated,
             labels_updated,
             unit_reference,
         ) = merge_units_temp_deconv(
@@ -497,4 +492,4 @@ def run_deconv_merge(
             merge_resid_threshold=merge_resid_threshold,
         )
 
-    return labels_updated
+    return times_updated, labels_updated
