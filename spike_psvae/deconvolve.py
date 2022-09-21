@@ -130,10 +130,11 @@ class MatchPursuitObjectiveUpsample:
         self.scale_min = 1 / (1 + allowed_scale)
         self.scale_max = 1 + allowed_scale
 
-        print(
-            "expected shape of templates loaded (n_times, n_chan, n_units) : ",
-            temps.shape,
-        )
+        if verbose:
+            print(
+                "expected shape of templates loaded (n_times, n_chan, n_units) : ",
+                temps.shape,
+            )
         self.n_time, self.n_chan, self.n_unit = temps.shape
         self.deconv_dir = deconv_dir
         self.max_iter = max_iter
@@ -150,12 +151,13 @@ class MatchPursuitObjectiveUpsample:
         # time logic -- what region are we going to load
         T_sec = T_samples / sampling_rate
         assert t_start >= 0 and (t_end is None or t_end <= T_sec)
-        print(
-            "Instantiating MatchPursuitObjectiveUpsample on ",
-            T_sec,
-            "seconds long recording with threshold",
-            threshold,
-        )
+        if verbose:
+            print(
+                "Instantiating MatchPursuitObjectiveUpsample on ",
+                T_sec,
+                "seconds long recording with threshold",
+                threshold,
+            )
 
         self.start_sample = t_start
         if t_end is not None:
@@ -349,7 +351,7 @@ class MatchPursuitObjectiveUpsample:
         if self.multi_processing:
             ctx = multiprocessing.get_context("spawn")
             with ctx.Pool(self.n_processors) as pool:
-                for result in tqdm(
+                for result in xqdm(
                     pool.imap_unordered(
                         _parallel_conv_filter,
                         zip(
@@ -363,6 +365,7 @@ class MatchPursuitObjectiveUpsample:
                             repeat(self.deconv_dir),
                         ),
                     ),
+                    pbar=self.verbose,
                     total=len(units),
                     desc="pairwise_filter_conv",
                 ):
@@ -370,7 +373,7 @@ class MatchPursuitObjectiveUpsample:
         else:
             units = np.unique(self.up_up_map)
 
-            for k in tqdm(range(len(units))):
+            for k in xqdm(range(len(units)), pbar=self.verbose):
                 parallel_conv_filter(
                     [k, [units[k]]],
                     self.n_time,
@@ -490,7 +493,7 @@ class MatchPursuitObjectiveUpsample:
             ctx = multiprocessing.get_context("spawn")
             with ctx.Pool(self.n_processors) as pool:
                 res = []
-                for r in tqdm(
+                for r in xqdm(
                     pool.imap(
                         self.upsample_templates_parallel,
                         zip(
@@ -502,6 +505,7 @@ class MatchPursuitObjectiveUpsample:
                     ),
                     total=len(self.temps.T),
                     desc="get_upsampled_templates",
+                    pbar=self.verbose,
                 ):
                     res.append(r)
         else:
@@ -825,7 +829,7 @@ class MatchPursuitObjectiveUpsample:
         # compute objective function
         start_time = time.time()
         self.compute_objective()
-        if self.verbose:
+        if int(self.verbose) > 1:
             print(
                 "deconv seg {0}, objective matrix took: {1:.2f}".format(
                     batch_id, time.time() - start_time
@@ -847,7 +851,7 @@ class MatchPursuitObjectiveUpsample:
 
             self.dist_metric = np.concatenate((self.dist_metric, dist_met))
 
-            if self.verbose:
+            if int(self.verbose) > 1:
                 print(
                     "Iteration {0} Found {1} spikes with {2:.2f} energy reduction.".format(
                         ctr, spt.shape[0], np.sum(dist_met)
@@ -856,7 +860,7 @@ class MatchPursuitObjectiveUpsample:
 
             ctr += 1
 
-        if self.verbose:
+        if int(self.verbose) > 1:
             print(
                 "deconv seg {0}, # iter: {1}, tot_spikes: {2}, tot_time: {3:.2f}".format(
                     batch_id,
@@ -901,8 +905,8 @@ class MatchPursuitObjectiveUpsample:
     def run(self, batch_ids, fnames_out):
         # loop over each assigned segment
         self.load_saved_state()
-        for batch_id, fname_out in tqdm(
-            zip(batch_ids, fnames_out), total=len(batch_ids)
+        for batch_id, fname_out in xqdm(
+            zip(batch_ids, fnames_out), total=len(batch_ids), pbar=self.verbose
         ):
             self.run_batch(batch_id, fname_out)
 
@@ -1145,3 +1149,10 @@ def get_templates(
         templates[unit] = reducer(wfs_unit, axis=0)
 
     return templates
+
+def xqdm(it, pbar=True, **kwargs):
+    if pbar:
+        return tqdm(it, **kwargs)
+    else:
+        return it
+
