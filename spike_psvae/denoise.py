@@ -1,3 +1,4 @@
+# %%
 import numpy as np
 import numba
 from scipy.spatial.distance import cdist
@@ -28,11 +29,16 @@ class SingleChanDenoiser(nn.Module):
         self, n_filters=[16, 8, 4], filter_sizes=[5, 11, 21], spike_size=121
     ):
         super(SingleChanDenoiser, self).__init__()
-        feat1, feat2, feat3 = n_filters
-        size1, size2, size3 = filter_sizes
+        if len(n_filters)==3:
+            feat1, feat2, feat3 = n_filters
+            size1, size2, size3 = filter_sizes
+        else:
+            feat1, feat2 = n_filters
+            size1, size2 = filter_sizes
         self.conv1 = nn.Sequential(nn.Conv1d(1, feat1, size1), nn.ReLU())
         self.conv2 = nn.Sequential(nn.Conv1d(feat1, feat2, size2), nn.ReLU())
-        self.conv3 = nn.Sequential(nn.Conv1d(feat2, feat3, size3), nn.ReLU())
+        if len(n_filters)==3:
+            self.conv3 = nn.Sequential(nn.Conv1d(feat2, feat3, size3), nn.ReLU())
         n_input_feat = feat2 * (spike_size - size1 - size2 + 2)
         self.out = nn.Linear(n_input_feat, spike_size)
 
