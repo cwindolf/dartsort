@@ -30,6 +30,7 @@ def extract_deconv(
     trough_offset=42,
     overwrite=True,
     scratch_dir=None,
+    pbar=True,
 ):
     standardized_bin = Path(standardized_bin)
     output_directory = Path(output_directory)
@@ -159,7 +160,8 @@ def extract_deconv(
                 )
 
         ctx = multiprocessing.get_context("spawn")
-        print("Initializing threads", end="")
+        if n_jobs is not None and n_jobs > 1:
+            print("Initializing threads", end="")
         with Pool(
             n_jobs,
             initializer=_extract_deconv_init,
@@ -187,12 +189,14 @@ def extract_deconv(
             ),
             context=ctx,
         ) as pool:
-            print(" Ok.", flush=True)
-            for result in tqdm(
+            if n_jobs is not None and n_jobs > 1:
+                print(" Ok.", flush=True)
+            for result in xqdm(
                 pool.imap(_extract_deconv_worker, start_samples),
                 desc="extract deconv",
                 smoothing=0,
                 total=len(start_samples),
+                pbar=pbar,
             ):
                 h5["last_batch_end"][()] = result.last_batch_end
 
@@ -435,3 +439,9 @@ def _extract_deconv_init(
     _extract_deconv_worker.batch_length = batch_length
     _extract_deconv_worker.n_chans = n_chans
     print(".", end="", flush=True)
+
+def xqdm(it, pbar=True, **kwargs):
+    if pbar:
+        return tqdm(it, **kwargs)
+    else:
+        return it
