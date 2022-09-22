@@ -96,6 +96,7 @@ def filter_standardize_rec(output_directory, filename_raw, dtype_raw,
             high_factor,
             order,
             sampling_frequency,
+            channels_to_remove=None,
             processes=n_processors,
             pm_pbar=True)
     else:
@@ -114,6 +115,7 @@ def filter_standardize_rec(output_directory, filename_raw, dtype_raw,
                 high_factor,
                 order,
                 sampling_frequency,
+                channels_to_remove=None
                 )
 
     # Merge the chunk filtered files and delete the individual chunks
@@ -229,7 +231,7 @@ def filter_standardize_batch(batch_id, bin_file, fname_mean_sd,
                              apply_filter, dtype_input, out_dtype, output_directory,
                              n_channels, buffer, rec_len,
                              low_frequency=None, high_factor=None,
-                             order=None, sampling_frequency=None):
+                             order=None, sampling_frequency=None, channels_to_remove=None):
     """Butterworth filter for a one dimensional time series
     Parameters
     ----------
@@ -288,6 +290,8 @@ def filter_standardize_batch(batch_id, bin_file, fname_mean_sd,
     sd = temp['sd']
     centers = temp['centers']
     ts = _standardize(ts, sd, centers)
+    if channels_to_remove is not None:
+        ts = np.delete(ts, channels_to_remove, axis=1)
     
     # save
     fname = os.path.join(
