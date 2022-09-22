@@ -59,7 +59,6 @@ class MatchPursuitObjectiveUpsample:
         self.verbose = verbose
 
         self.standardized_bin = standardized_bin
-        standardized_bin = Path(standardized_bin)
 
         temps = templates.transpose(1, 2, 0)
         self.temps = temps.astype(np.float32)
@@ -83,32 +82,34 @@ class MatchPursuitObjectiveUpsample:
         self.multi_processing = multi_processing
 
         # figure out length of data
-        std_size = standardized_bin.stat().st_size
-        assert not std_size % np.dtype(np.float32).itemsize
-        std_size = std_size // np.dtype(np.float32).itemsize
-        assert not std_size % self.n_chan
-        T_samples = std_size // self.n_chan
+        if standardized_bin is not None:
+            standardized_bin = Path(standardized_bin)
+            std_size = standardized_bin.stat().st_size
+            assert not std_size % np.dtype(np.float32).itemsize
+            std_size = std_size // np.dtype(np.float32).itemsize
+            assert not std_size % self.n_chan
+            T_samples = std_size // self.n_chan
 
-        # time logic -- what region are we going to load
-        T_sec = T_samples / sampling_rate
-        assert t_start >= 0 and (t_end is None or t_end <= T_sec)
-        if verbose:
-            print(
-                "Instantiating MatchPursuitObjectiveUpsample on ",
-                T_sec,
-                "seconds long recording with threshold",
-                threshold,
-            )
+            # time logic -- what region are we going to load
+            T_sec = T_samples / sampling_rate
+            assert t_start >= 0 and (t_end is None or t_end <= T_sec)
+            if verbose:
+                print(
+                    "Instantiating MatchPursuitObjectiveUpsample on ",
+                    T_sec,
+                    "seconds long recording with threshold",
+                    threshold,
+                )
 
-        self.start_sample = t_start
-        if t_end is not None:
-            self.end_sample = t_end
-        else:
-            self.end_sample = T_samples
-        self.batch_len_samples = n_sec_chunk * sampling_rate
-        self.n_batches = np.ceil(
-            (self.end_sample - self.start_sample) / self.batch_len_samples
-        ).astype(int)
+            self.start_sample = t_start
+            if t_end is not None:
+                self.end_sample = t_end
+            else:
+                self.end_sample = T_samples
+            self.batch_len_samples = n_sec_chunk * sampling_rate
+            self.n_batches = np.ceil(
+                (self.end_sample - self.start_sample) / self.batch_len_samples
+            ).astype(int)
         self.buffer = 300
 
         # Upsample and downsample time shifted versions
@@ -381,7 +382,7 @@ class MatchPursuitObjectiveUpsample:
             temp_array = []
 
             for k in xqdm(
-                range(len(units), desc="pairwise conv"), pbar=self.verbose
+                range(len(units)), desc="pairwise conv", pbar=self.verbose
             ):
                 chunk = self.conv_filter(
                     [units[k]],
@@ -413,7 +414,7 @@ class MatchPursuitObjectiveUpsample:
         else:
             self.pairwise_conv = pairwise_conv
 
-    def get_sparse_upsampled_templates(self):
+    def get_sparse_upsampled_templates(self, save_npy=True):
         """Returns the fully upsampled sparse version of the original templates.
         returns:
         --------
@@ -470,13 +471,14 @@ class MatchPursuitObjectiveUpsample:
 
         all_temps = np.concatenate(all_temps, axis=2)
 
-        np.save(
-            os.path.join(self.deconv_dir, "sparse_templates.npy"), all_temps
-        )
-        np.save(
-            os.path.join(self.deconv_dir, "deconv_id_sparse_temp_map.npy"),
-            deconv_id_sparse_temp_map,
-        )
+        if save_npy:
+            np.save(
+                os.path.join(self.deconv_dir, "sparse_templates.npy"), all_temps
+            )
+            np.save(
+                os.path.join(self.deconv_dir, "deconv_id_sparse_temp_map.npy"),
+                deconv_id_sparse_temp_map,
+            )
 
         return all_temps, deconv_id_sparse_temp_map
 
@@ -1083,10 +1085,6 @@ def deconvolution(
     print(fname_spike_train, spike_train.shape)
     np.save(fname_scalings, deconv_scalings)
     print(fname_scalings, deconv_scalings.shape)
-
-    # get upsampled templates and mapping for computing residual
-    print(fname_templates_up)
-    print(templates_up.transpose(2, 0, 1).shape)
 
     # get upsampled spike train
     spike_train_up = np.copy(deconv_st)
