@@ -2,7 +2,6 @@
 import numpy as np
 from sklearn.decomposition import PCA
 from sklearn.discriminant_analysis import LinearDiscriminantAnalysis as LDA
-from sklearn.cross_decomposition import CCA
 import hdbscan
 from spike_psvae.cluster_utils import (
     compute_shifted_similarity,
