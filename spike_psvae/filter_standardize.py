@@ -11,6 +11,7 @@ def filter_standardize_rec(output_directory, filename_raw, dtype_raw,
     dtype_output = np.float32,
     apply_filter = True,
     low_frequency =300, high_factor = 0.1, order = 3, sampling_frequency= 30000, 
+    channels_to_remove=None,
     buffer = None,
     n_sec_chunk=1, multi_processing = True, n_processors = 6, overwrite = True):
     """Preprocess pipeline: filtering, standarization and whitening filter
@@ -95,8 +96,8 @@ def filter_standardize_rec(output_directory, filename_raw, dtype_raw,
             low_frequency,
             high_factor,
             order,
-            sampling_frequency,
-            channels_to_remove=None,
+            sampling_frequency, 
+            channels_to_remove=channels_to_remove,
             processes=n_processors,
             pm_pbar=True)
     else:
@@ -115,7 +116,7 @@ def filter_standardize_rec(output_directory, filename_raw, dtype_raw,
                 high_factor,
                 order,
                 sampling_frequency,
-                channels_to_remove=None
+                channels_to_remove=channels_to_remove
                 )
 
     # Merge the chunk filtered files and delete the individual chunks
