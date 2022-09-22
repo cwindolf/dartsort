@@ -8,6 +8,7 @@ of sorts a little easier.
 import re
 import numpy as np
 import pandas as pd
+import tempfile
 from scipy.spatial import KDTree
 import matplotlib.pyplot as plt
 from matplotlib import colors
@@ -35,6 +36,7 @@ from spike_psvae import (
     snr_templates,
     waveform_utils,
     deconvolve,
+    deconv_resid_merge,
 )
 
 
@@ -1017,6 +1019,69 @@ def near_gt_scatter_vs(step_comparisons, vs_comparison, gt_unit, dz=100):
     return fig, axes, leg_artist, gt_unit_ptp
 
 
-def plot_agreement_matrix(hybrid_comparison, cmap=plt.cm.plasma):
-    axes = sns.heatmap(hybrid_comparison.ordered_agreement, cmap=cmap)
-    return axes
+def calc_resid_matrix(templates_a, units_a, templates_b, units_b, thresh=8):
+    resid_matrix = np.zeros((units_a.size, units_b.size))
+    for ua in tqdm(units_a):
+        for ub in units_b:
+            maxres_a, _ = deconv_resid_merge.check_additional_merge(
+                templates_a[ua],
+                templates_b[ub],
+                thresh,
+            )
+            maxres_b, _ = deconv_resid_merge.check_additional_merge(
+                templates_a[ua],
+                templates_b[ub],
+                thresh,
+            )
+            resid_matrix[ua, ub] = min(maxres_a, maxres_b)
+    return resid_matrix
+
+def resid_dfs(hybrid_comparison):
+    gts = hybrid_comparison.gt_sorting
+    news = hybrid_comparison.new_sorting
+    thresh = 0.9 * np.square(gts.templates).sum(axis=(1, 2)).min()
+    print(f"{thresh=}")
+    
+    resid_matrix = calc_resid_matrix(gts.templates, gts.unit_labels, news.templates, news.unit_labels, thresh)
+    
+    # ordered versions
+    # agreement order
+    resid_matchord_df = hybrid_comparison.ordered_agreement.copy()
+    resid_matchord_df[:] = 0.0
+    for i, gtu in enumerate(resid_matchord_df.index):
+        for j, newu in enumerate(resid_matchord_df.columns):
+            resid_matchord_df.values[i, j] = resid_matrix[gtu, newu]
+            
+    # z order
+    gtzord = np.argsort(gts.template_xzptp[:, 1])
+    newzord = np.argsort(news.template_xzptp[:, 1])
+    resid_zord_df = pd.DataFrame(
+        resid_matrix[gtzord, :][:, newzord],
+        index=gts.unit_labels[gtzord],
+        columns=news.unit_labels[newzord],
+    )
+    
+    return resid_matrix, resid_matchord_df, resid_zord_df
+
+
+def plot_agreement_matrix(hybrid_comparison, with_resid=False, cmap=plt.cm.plasma):
+    if with_resid:
+        resid_matrix, resid_matchord_df, resid_zord_df = resid_dfs(hybrid_comparison)
+        vals = resid_matrix[np.isfinite(resid_matrix)]
+
+        fig, axes = plt.subplots(2, 2, figsize=(8, 8))
+        sns.heatmap(hybrid_comparison.ordered_agreement, cmap=cmap, ax=axes[0, 0])
+        axes[0, 0].set_title("spike train agreement")
+        
+        sns.heatmap(resid_matchord_df, vmin=vals.min(), vmax=vals.max(), cmap=cmap, ax=axes[1, 0])
+        axes[1, 0].set_title("agreement ordered deconv resid")
+        sns.heatmap(resid_zord_df, vmin=vals.min(), vmax=vals.max(), cmap=cmap, ax=axes[1, 1])
+        axes[1, 1].set_title("z ordered deconv resid")
+        
+        axes[0, 1].hist(vals, bins=32)
+        axes[0, 1].set_title("deconv resid histogram")
+
+        return fig, axes
+    else:
+        ax = sns.heatmap(hybrid_comparison.ordered_agreement, cmap=cmap)
+        return ax.figure, ax
