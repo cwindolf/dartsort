@@ -166,7 +166,7 @@ def pgeom(
     lw=None,
     show_zero=True,
     max_abs_amp=None,
-    show_chan_label=True,
+    show_chan_label=False,
     chan_labels=None,
 ):
     """Plot waveforms according to geometry using channel index"""
