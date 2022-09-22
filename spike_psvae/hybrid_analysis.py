@@ -62,6 +62,8 @@ class Sorting:
         cache_dir=None,
         overwrite=False,
         do_cleaned_templates=False,
+        cleaned_templates=None,
+        extra=None,
     ):
         n_spikes_full = spike_labels.shape[0]
         assert spike_labels.shape == spike_times.shape == (n_spikes_full,)
@@ -76,7 +78,7 @@ class Sorting:
         self.unsorted = unsorted
         self.raw_bin = raw_bin
         self.original_spike_train = np.c_[spike_times, spike_labels]
-        self.cleaned_templates = None
+        self.cleaned_templates = cleaned_templates
         self.do_cleaned_templates = do_cleaned_templates
 
         # see if we can load up expensive stuff from cache
@@ -134,9 +136,11 @@ class Sorting:
                 tpca_rank=5,
             )
             self.cleaned_templates = cleaned_templates
+
+        if extra is not None:
             self.snrs = extra["snr_by_channel"]
             self.denoised_templates = extra["denoised_templates"]
-            self.raw_templates = extra["orig_raw_templates"]
+            self.raw_templates = extra["raw_templates"]
             self.snr_weights = extra["weights"]
 
         if not unsorted:
