@@ -22,7 +22,7 @@ def resid_dist(
     n_processors=1,
     multi_processing=False,
     lambd=0.001,
-    allowed_scale=0.01,
+    allowed_scale=0.1,
 ):
     T, C = target_template.shape
     if search_templates.ndim == 2:
@@ -150,7 +150,7 @@ def check_additional_merge(
     sampling_rate=30000,
     conv_approx_rank=5,
     lambd=0.001,
-    allowed_scale=0.01,
+    allowed_scale=0.1,
 ):
     match_ix, dist, shift = resid_dist(
         temp_to_deconv,
