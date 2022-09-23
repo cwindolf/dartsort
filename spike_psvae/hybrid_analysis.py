@@ -8,7 +8,6 @@ of sorts a little easier.
 import re
 import numpy as np
 import pandas as pd
-import tempfile
 from scipy.spatial import KDTree
 import matplotlib.pyplot as plt
 from matplotlib import colors
@@ -20,6 +19,7 @@ import seaborn as sns
 from tqdm.auto import tqdm
 from pathlib import Path
 import pickle
+from joblib import Parallel, delayed
 
 from spikeinterface.extractors import NumpySorting
 from spikeinterface.comparison import compare_sorter_to_ground_truth
@@ -182,8 +182,8 @@ class Sorting:
         if spike_maxchans is None:
             assert not unsorted
             print(
-                f"Sorting {name} has no intrinsic maxchans. "
-                "Using template maxchans."
+                f"Sorting {name} has no per-spike maxchans. "
+                "Will use template maxchans when spike maxchans are needed."
             )
             self.spike_maxchans = self.template_maxchans[self.spike_labels]
         else:
@@ -225,6 +225,22 @@ class Sorting:
 
     def get_unit_maxchans(self, unit):
         return self.spike_maxchans[self.spike_labels == unit]
+    
+    def resid_matrix(self, units, n_jobs=-1, pbar=True, lambd=0.001, allowed_scale=0.1):
+        thresh = 0.9 * np.square(self.cleaned_templates).sum(axis=(1, 2)).min()
+        dists = calc_resid_matrix(
+            self.cleaned_templates,
+            units,
+            self.cleaned_templates,
+            units,
+            thresh=thresh,
+            n_jobs=n_jobs,
+            auto=True,
+            pbar=pbar,
+            lambd=lambd,
+            allowed_scale=allowed_scale,
+        )
+        return thresh, dists
 
     @property
     def np_sorting(self):
@@ -1023,30 +1039,47 @@ def near_gt_scatter_vs(step_comparisons, vs_comparison, gt_unit, dz=100):
     return fig, axes, leg_artist, gt_unit_ptp
 
 
-def calc_resid_matrix(templates_a, units_a, templates_b, units_b, thresh=8):
-    resid_matrix = np.zeros((units_a.size, units_b.size))
-    for ua in tqdm(units_a):
-        for ub in units_b:
-            maxres_a, _ = deconv_resid_merge.check_additional_merge(
-                templates_a[ua],
-                templates_b[ub],
-                thresh,
-            )
-            maxres_b, _ = deconv_resid_merge.check_additional_merge(
-                templates_a[ua],
-                templates_b[ub],
-                thresh,
-            )
-            resid_matrix[ua, ub] = min(maxres_a, maxres_b)
+def sym_resid_dist(temp_a, temp_b, thresh, lambd=0.001, allowed_scale=0.1):
+    maxres_a, _ = deconv_resid_merge.check_additional_merge(
+        temp_a, temp_b, thresh, lambd=lambd, allowed_scale=allowed_scale
+    )
+    maxres_b, _ = deconv_resid_merge.check_additional_merge(
+        temp_b, temp_a, thresh, lambd=lambd, allowed_scale=allowed_scale
+    )
+    return min(maxres_a, maxres_b)
+
+def calc_resid_matrix(templates_a, units_a, templates_b, units_b, thresh=8, n_jobs=-1, vis_ptp_thresh=1, auto=False, pbar=True, lambd=0.001, allowed_scale=0.1):
+    # we will calculate resid dist for templates that overlap at all
+    # according to these channel neighborhoods
+    chans_a = [np.flatnonzero(temp.ptp(0) > vis_ptp_thresh) for temp in templates_a]
+    chans_b = [np.flatnonzero(temp.ptp(0) > vis_ptp_thresh) for temp in templates_b]
+    
+    def job(i, j, ua, ub):
+        return i, j, sym_resid_dist(templates_a[ua], templates_b[ub], thresh, lambd=lambd, allowed_scale=allowed_scale)
+    
+    jobs = []
+    resid_matrix = np.full((units_a.size, units_b.size), np.inf)
+    for i, ua in enumerate(units_a):
+        for j, ub in enumerate(units_b):
+            if auto and ua == ub:
+                continue
+            if np.intersect1d(chans_a[ua], chans_b[ub]).size:
+                jobs.append(delayed(job)(i, j, ua, ub))
+            
+    if pbar:
+        jobs = tqdm(jobs, desc="Resid matrix")
+    for i, j, dist in Parallel(n_jobs)(jobs):
+        resid_matrix[i, j] = dist
+            
     return resid_matrix
 
-def resid_dfs(hybrid_comparison):
+def resid_dfs(hybrid_comparison, lambd=0.001, allowed_scale=0.1):
     gts = hybrid_comparison.gt_sorting
     news = hybrid_comparison.new_sorting
     thresh = 0.9 * np.square(gts.templates).sum(axis=(1, 2)).min()
     print(f"{thresh=}")
     
-    resid_matrix = calc_resid_matrix(gts.templates, gts.unit_labels, news.templates, news.unit_labels, thresh)
+    resid_matrix = calc_resid_matrix(gts.templates, gts.unit_labels, news.templates, news.unit_labels, thresh, lambd=lambd, allowed_scale=allowed_scale)
     
     # ordered versions
     # agreement order
@@ -1072,20 +1105,109 @@ def plot_agreement_matrix(hybrid_comparison, with_resid=False, cmap=plt.cm.plasm
     if with_resid:
         resid_matrix, resid_matchord_df, resid_zord_df = resid_dfs(hybrid_comparison)
         vals = resid_matrix[np.isfinite(resid_matrix)]
+        
+        newu_zord = hybrid_comparison.new_sorting.unit_labels[
+            np.argsort(hybrid_comparison.new_sorting.template_xzptp[:, 1])
+        ]
+        selfthresh, new_self_resids = hybrid_comparison.new_sorting.resid_matrix(newu_zord)
+        self_vals = new_self_resids[np.isfinite(new_self_resids)]
+        newu_zord_df = pd.DataFrame(new_self_resids, index=newu_zord, columns=newu_zord)
 
-        fig, axes = plt.subplots(2, 2, figsize=(8, 8))
-        sns.heatmap(hybrid_comparison.ordered_agreement, cmap=cmap, ax=axes[0, 0])
+        fig, axes = plt.subplots(2, 3, figsize=(12, 8))
+        oa = hybrid_comparison.ordered_agreement.copy()
+        oa.values[oa.values == 0] = np.inf
+        sns.heatmap(oa, vmin=0, vmax=1.0, cmap=plt.cm.gnuplot2_r, ax=axes[0, 0])
         axes[0, 0].set_title("spike train agreement")
         
         sns.heatmap(resid_matchord_df, vmin=vals.min(), vmax=vals.max(), cmap=cmap, ax=axes[1, 0])
         axes[1, 0].set_title("agreement ordered deconv resid")
+        
         sns.heatmap(resid_zord_df, vmin=vals.min(), vmax=vals.max(), cmap=cmap, ax=axes[1, 1])
         axes[1, 1].set_title("z ordered deconv resid")
         
         axes[0, 1].hist(vals, bins=32)
         axes[0, 1].set_title("deconv resid histogram")
+        
+        sns.heatmap(newu_zord_df, vmin=self_vals.min(), vmax=self_vals.max(), cmap=cmap, ax=axes[1, 2])
+        axes[1, 2].set_title(f"z ordered {hybrid_comparison.new_sorting.name_lo} self resid dists")
+        
+        axes[0, 2].hist(self_vals, bins=32)
+        axes[0, 2].set_title(f"{hybrid_comparison.new_sorting.name_lo} self resid dist histogram")
 
         return fig, axes
     else:
         ax = sns.heatmap(hybrid_comparison.ordered_agreement, cmap=cmap)
         return ax.figure, ax
+
+
+def gtunit_resid_study(hybrid_comparison, gt_unit, n_max=5, plot_chans=10, lambd=0.001, allowed_scale=0.1):
+    gt_temp = hybrid_comparison.gt_sorting.templates[gt_unit]
+    thresh = 0.9 * np.square(hybrid_comparison.gt_sorting.templates).sum(axis=(1, 2)).min()
+    new_temps = hybrid_comparison.new_sorting.cleaned_templates
+    resid_v_new = calc_resid_matrix(
+        gt_temp[None], np.array([0]), new_temps, np.arange(new_temps.shape[0]), thresh=thresh, n_jobs=1, pbar=False, lambd=lambd, allowed_scale=allowed_scale
+    ).squeeze()
+    
+    resid_is_finite = np.isfinite(resid_v_new)
+    if not resid_is_finite.any():
+        return None, None
+
+    resid_is_finite = np.flatnonzero(resid_is_finite)
+    
+    resid_vals = resid_v_new[resid_is_finite]
+    sort = np.argsort(resid_vals)
+    sorted_near_units = hybrid_comparison.new_sorting.unit_labels[
+        resid_is_finite[sort]
+    ]
+    
+    fig, axes = plt.subplot_mosaic(
+        "a.b\n...\nccc",
+        gridspec_kw=dict(height_ratios=[1.5, 0.1, 4], width_ratios=[1, 0.1, 1]),
+        figsize=(4, 8),
+    )
+    
+    axes["a"].plot(resid_vals[sort])
+    axes["a"].set_xticks(
+        np.arange(len(sort)),
+        sorted_near_units,
+    )
+    axes["a"].set_xlabel("all nearby sorter units")
+    axes["a"].set_ylabel("resid dist")
+    
+    sorted_near_units = sorted_near_units[:n_max]
+    
+    thresh, near_unit_distmat = hybrid_comparison.new_sorting.resid_matrix(sorted_near_units, n_jobs=1, pbar=False, lambd=lambd, allowed_scale=allowed_scale)
+    near_dist_df = pd.DataFrame(near_unit_distmat, index=sorted_near_units, columns=sorted_near_units)
+    vals = near_unit_distmat[np.isfinite(near_unit_distmat)]
+    if not vals.size:
+        vals = np.array([0, 0])
+    sns.heatmap(near_dist_df, vmin=vals.min(), vmax=vals.max(), ax=axes["b"])
+    axes["b"].set_xlabel("nearby sorter units")
+    axes["b"].set_title(f"{len(sorted_near_units)} closest pairwise resid dists", fontsize=8)
+    
+    ls = []
+    hs = []
+    plotci = waveform_utils.make_contiguous_channel_index(
+        hybrid_comparison.new_sorting.geom.shape[0], plot_chans
+    )
+    pal = sns.color_palette(n_colors=len(sorted_near_units))
+    gtmc = hybrid_comparison.gt_sorting.template_maxchans[gt_unit]
+    max_abs = np.abs(hybrid_comparison.new_sorting.cleaned_templates[sorted_near_units]).max()
+    for j, unit in enumerate(sorted_near_units[::-1]):
+        lines = cluster_viz_index.pgeom(
+            hybrid_comparison.new_sorting.cleaned_templates[unit][:, plotci[gtmc]],
+            gtmc,
+            plotci,
+            hybrid_comparison.new_sorting.geom,
+            ax=axes["c"],
+            color=pal[j],
+            max_abs_amp=max_abs,
+            show_zero=not j,
+        )
+        ls.append(lines[0])
+        hs.append(str(unit))
+    axes["c"].legend(ls, hs, title="nearby units", loc="lower right")
+    axes["c"].set_title("templates of nearby units around GT maxchan")
+    
+    return fig, axes
+        
