@@ -181,7 +181,10 @@ def pgeom(
     n_channels, C = channel_index.shape
     assert geom.shape == (n_channels, 2)
     T = waveforms.shape[1]
-    assert waveforms.shape == (*max_channels.shape, T, C)
+    if waveforms.shape != (*max_channels.shape, T, C):
+        raise ValueError(
+            f"Bad shapes: {waveforms.shape=}, {max_channels.shape=}"
+        )
 
     # -- figure out units for plotting
     z_uniq, z_ix = np.unique(geom[:, 1], return_inverse=True)
