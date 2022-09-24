@@ -544,6 +544,10 @@ def run_deconv_merge(
 
     # align to best snr unit
     for new_label, orig_labels in clust_inverse.items():
+        # we don't need to realign clusters which didn't change
+        if len(orig_labels) <= 1:
+            continue
+        
         orig_snrs = maxsnrs[orig_labels]
         best_orig = orig_labels[orig_snrs.argmax()]
         for ogl in np.setdiff1d(orig_labels, [best_orig]):
