@@ -1048,6 +1048,7 @@ def sym_resid_dist(temp_a, temp_b, thresh, lambd=0.001, allowed_scale=0.1):
     )
     return min(maxres_a, maxres_b)
 
+
 def calc_resid_matrix(templates_a, units_a, templates_b, units_b, thresh=8, n_jobs=-1, vis_ptp_thresh=1, auto=False, pbar=True, lambd=0.001, allowed_scale=0.1):
     # we will calculate resid dist for templates that overlap at all
     # according to these channel neighborhoods

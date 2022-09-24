@@ -3,6 +3,7 @@ from pathlib import Path
 import tempfile
 from tqdm.auto import tqdm, trange
 from joblib import Parallel, delayed
+from scipy.cluster.hierarchy import complete, fcluster
 
 from .extract_deconv import extract_deconv
 from .deconvolve import MatchPursuitObjectiveUpsample
@@ -326,13 +327,146 @@ def merge_units_temp_deconv(
     return templates_updated, spike_times, labels_updated, unit_reference
 
 
+# def run_deconv_merge(
+#     spike_train,
+#     geom,
+#     raw_binary_file,
+#     unit_max_channels,
+#     deconv_threshold_mul=0.9,
+#     merge_resid_threshold=1.5,
+# ):
+#     templates_cleaned, extra = get_templates(
+#         spike_train,
+#         geom,
+#         raw_binary_file,
+#         unit_max_channels,
+#     )
+#     tpca = extra["tpca"]
+
+#     deconv_threshold = (
+#         deconv_threshold_mul
+#         * np.square(templates_cleaned).sum(axis=(1, 2)).min()
+#     )
+
+#     x, y, z_rel, z_abs, alpha = localize_ptps_index(
+#         templates_cleaned.ptp(1),
+#         geom,
+#         templates_cleaned.ptp(1).argmax(1),
+#         np.arange(len(geom))[None, :] * np.ones(len(geom), dtype=int)[:, None],
+#     )
+
+#     dist_argsort, dist_template = get_proposed_pairs(
+#         templates_cleaned.shape[0],
+#         templates_cleaned,
+#         np.c_[x, z_abs],
+#         n_temp=20,
+#     )
+
+#     with tempfile.TemporaryDirectory(prefix="drm") as workdir:
+#         max_values, units, units_matched, shifts = find_original_merges(
+#             workdir, templates_cleaned, dist_argsort, deconv_threshold
+#         )
+#         print(
+#             f"{max_values.shape=}, {units.shape=}, {units_matched.shape=}, {shifts.shape=}"
+#         )
+#         (
+#             templates_updated,
+#             times_updated,
+#             labels_updated,
+#             unit_reference,
+#         ) = merge_units_temp_deconv(
+#             units,
+#             units_matched,
+#             max_values,
+#             shifts,
+#             templates_cleaned,
+#             spike_train[:, 1].copy(),
+#             spike_train[:, 0].copy(),
+#             workdir,
+#             deconv_threshold,
+#             geom,
+#             raw_binary_file,
+#             tpca,
+#             merge_resid_threshold=merge_resid_threshold,
+#         )
+
+#     return times_updated, labels_updated
+
+
+def resid_dist__(temp_a, temp_b, thresh, lambd=0.001, allowed_scale=0.1):
+    maxres_a, shift_a = check_additional_merge(
+        temp_a, temp_b, thresh, lambd=lambd, allowed_scale=allowed_scale
+    )
+    # maxres_b, shift_b = deconv_resid_merge.check_additional_merge(
+    #     temp_b, temp_a, thresh, lambd=lambd, allowed_scale=allowed_scale
+    # )
+    # shift from a -> b
+    return maxres_a, shift_a
+
+
+def calc_resid_matrix(
+    templates_a,
+    units_a,
+    templates_b,
+    units_b,
+    thresh=8,
+    n_jobs=-1,
+    vis_ptp_thresh=1,
+    auto=False,
+    pbar=True,
+    lambd=0.001,
+    allowed_scale=0.1,
+):
+    # we will calculate resid dist for templates that overlap at all
+    # according to these channel neighborhoods
+    chans_a = [
+        np.flatnonzero(temp.ptp(0) > vis_ptp_thresh) for temp in templates_a
+    ]
+    chans_b = [
+        np.flatnonzero(temp.ptp(0) > vis_ptp_thresh) for temp in templates_b
+    ]
+
+    def job(i, j, ua, ub):
+        return (
+            i,
+            j,
+            *resid_dist__(
+                templates_a[ua],
+                templates_b[ub],
+                thresh,
+                lambd=lambd,
+                allowed_scale=allowed_scale,
+            ),
+        )
+
+    jobs = []
+    resid_matrix = np.full((units_a.size, units_b.size), np.inf)
+    shift_matrix = np.zeros((units_a.size, units_b.size))
+    for i, ua in enumerate(units_a):
+        for j, ub in enumerate(units_b):
+            if auto and ua == ub:
+                continue
+            if np.intersect1d(chans_a[ua], chans_b[ub]).size:
+                jobs.append(delayed(job)(i, j, ua, ub))
+
+    if pbar:
+        jobs = tqdm(jobs, desc="Resid matrix")
+    for i, j, dist, shift in Parallel(n_jobs)(jobs):
+        resid_matrix[i, j] = dist
+        shift_matrix[i, j] = shift
+
+    return resid_matrix, shift_matrix
+
+
 def run_deconv_merge(
     spike_train,
     geom,
     raw_binary_file,
     unit_max_channels,
     deconv_threshold_mul=0.9,
-    merge_resid_threshold=1.5,
+    merge_resid_threshold=2.5,
+    # 2 is conservative, 2.5 is nice, 3 is aggressive
+    # merge_resid_threshold=2.5,
 ):
     templates_cleaned, extra = get_templates(
         spike_train,
@@ -340,53 +474,84 @@ def run_deconv_merge(
         raw_binary_file,
         unit_max_channels,
     )
-    tpca = extra["tpca"]
+
+    # get rms on active channels
+    rms = np.array(
+        [
+            np.sqrt(np.square(ta).sum() / (np.abs(ta) > 0).sum())
+            for ta in templates_cleaned
+        ]
+    )
 
     deconv_threshold = (
         deconv_threshold_mul
         * np.square(templates_cleaned).sum(axis=(1, 2)).min()
     )
 
-    x, y, z_rel, z_abs, alpha = localize_ptps_index(
-        templates_cleaned.ptp(1),
-        geom,
-        templates_cleaned.ptp(1).argmax(1),
-        np.arange(len(geom))[None, :] * np.ones(len(geom), dtype=int)[:, None],
-    )
-
-    dist_argsort, dist_template = get_proposed_pairs(
-        templates_cleaned.shape[0],
+    resids, shifts = calc_resid_matrix(
         templates_cleaned,
-        np.c_[x, z_abs],
-        n_temp=20,
+        np.arange(templates_cleaned.shape[0]),
+        templates_cleaned,
+        np.arange(templates_cleaned.shape[0]),
+        thresh=deconv_threshold,
+        n_jobs=-1,
+        vis_ptp_thresh=1,
+        auto=True,
+        pbar=True,
+        lambd=0.001,
+        allowed_scale=0.1,
     )
+    # shifts[i, j] is like trough[j] - trough[i]
 
-    with tempfile.TemporaryDirectory(prefix="drm") as workdir:
-        max_values, units, units_matched, shifts = find_original_merges(
-            workdir, templates_cleaned, dist_argsort, deconv_threshold
-        )
-        print(
-            f"{max_values.shape=}, {units.shape=}, {units_matched.shape=}, {shifts.shape=}"
-        )
-        (
-            templates_updated,
-            times_updated,
-            labels_updated,
-            unit_reference,
-        ) = merge_units_temp_deconv(
-            units,
-            units_matched,
-            max_values,
-            shifts,
-            templates_cleaned,
-            spike_train[:, 1].copy(),
-            spike_train[:, 0].copy(),
-            workdir,
-            deconv_threshold,
-            geom,
-            raw_binary_file,
-            tpca,
-            merge_resid_threshold=merge_resid_threshold,
-        )
+    # normalize by a factor to make things dimensionless
+    normresids = resids / np.sqrt(rms[:, None] * rms[None, :])
+    del resids
+
+    # symmetrize resids and get corresponding best shifts
+    symresids = np.minimum(normresids, normresids.T)
+    symshifts = np.where(
+        normresids <= normresids.T,
+        shifts,
+        -shifts.T,
+    ).astype(int)
+    del normresids
+
+    # upper triangle not including diagonal, aka condensed distance matrix in scipy
+    pdist = symresids[np.triu_indices(symresids.shape[0], k=1)]
+    # scipy hierarchical clustering only supports finite values, so let's just
+    # drop in a huge value here
+    pdist[~np.isfinite(pdist)] = 1_000_000 + pdist[np.isfinite(pdist)].max()
+    # complete linkage: max dist between all pairs across clusters.
+    Z = complete(pdist)
+    # extract flat clustering using our max dist threshold
+    new_labels = fcluster(Z, merge_resid_threshold, criterion="distance")
+
+    # update labels
+    labels_updated = spike_train[:, 1].copy()
+    kept = np.flatnonzero(labels_updated >= 0)
+    labels_updated[kept] = new_labels[labels_updated[kept]]
+
+    # update times according to shifts
+    times_updated = spike_train[:, 0].copy()
+
+    # this is done by aligning each unit to the max snr unit in its cluster
+    maxsnrs = extra["snr_by_channel"].max(axis=1)
+
+    # find original labels in each cluster
+    clust_inverse = {i: [] for i in new_labels}
+    for orig_label, new_label in enumerate(new_labels):
+        clust_inverse[new_label].append(orig_label)
+
+    # align to best snr unit
+    for new_label, orig_labels in clust_inverse.items():
+        orig_snrs = maxsnrs[orig_labels]
+        best_orig = orig_labels[orig_snrs.argmax()]
+        for ogl in np.setdiff1d(orig_labels, [best_orig]):
+            in_orig_unit = np.flatnonzero(spike_train[:, 1] == ogl)
+            # this is like trough[best] - trough[ogl]
+            shift_og_best = symshifts[ogl, best_orig]
+            # if >0, trough of og is behind trough of best.
+            # subtracting will move trough of og to the right.
+            times_updated[in_orig_unit] -= shift_og_best
 
     return times_updated, labels_updated
