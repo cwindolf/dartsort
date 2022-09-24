@@ -372,7 +372,7 @@ def post_deconv_split_step(
     deconv_results_h5,
     raw_data_bin,
     geom,
-    merge_resid_threshold=1.5,
+    merge_resid_threshold=2.0,
     clean_min_spikes=0,
     reducer=np.median,
 ):
@@ -511,7 +511,7 @@ def post_deconv_merge_step(
     deconv_results_h5,
     raw_data_bin,
     geom,
-    merge_resid_threshold=1.5,
+    merge_resid_threshold=2.5,
     clean_min_spikes=25,
     reducer=np.median,
 ):
@@ -635,7 +635,7 @@ def post_deconv2_clean_step(
     deconv2_results_h5,
     raw_data_bin,
     geom,
-    merge_resid_threshold=1.5,
+    merge_resid_threshold=3.0,
     clean_min_spikes=25,
 ):
     n_channels = geom.shape[0]
