@@ -1252,6 +1252,8 @@ def gtunit_resid_study(
     plot_chans=10,
     lambd=0.001,
     allowed_scale=0.1,
+    tmin=10,
+    tmax=100
 ):
     gt_temp = hybrid_comparison.gt_sorting.templates[gt_unit]
     thresh = (
@@ -1338,7 +1340,7 @@ def gtunit_resid_study(
     for j, unit in enumerate(sorted_near_units[::-1]):
         lines = cluster_viz_index.pgeom(
             hybrid_comparison.new_sorting.cleaned_templates[unit][
-                :, plotci[gtmc]
+                tmin:tmax, plotci[gtmc]
             ],
             gtmc,
             plotci,
@@ -1350,6 +1352,21 @@ def gtunit_resid_study(
         )
         ls.append(lines[0])
         hs.append(str(unit))
+
+    # plot gt template
+    lines = cluster_viz_index.pgeom(
+        gt_temp[tmin:tmax, plotci[gtmc]],
+        gtmc,
+        plotci,
+        hybrid_comparison.new_sorting.geom,
+        ax=axes["c"],
+        color="k",
+        max_abs_amp=max_abs,
+        show_zero=not j,
+    )
+    ls.append(lines[0])
+    hs.append(f"GT{gt_unit}")
+
     axes["c"].legend(ls, hs, title="nearby units", loc="lower right")
     axes["c"].set_title("templates of nearby units around GT maxchan")
 
