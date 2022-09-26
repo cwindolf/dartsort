@@ -1349,6 +1349,7 @@ def gtunit_resid_study(
             color=pal[j],
             max_abs_amp=max_abs,
             show_zero=not j,
+            x_extension=0.9,
         )
         ls.append(lines[0])
         hs.append(str(unit))
@@ -1363,6 +1364,7 @@ def gtunit_resid_study(
         color="k",
         max_abs_amp=max_abs,
         show_zero=not j,
+        x_extension=0.9,
     )
     ls.append(lines[0])
     hs.append(f"GT{gt_unit}")
