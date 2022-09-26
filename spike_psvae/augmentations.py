@@ -1,5 +1,3 @@
-import h5py
-import random
 import numpy as np
 import scipy as sp
 
@@ -126,16 +124,6 @@ def align_get_shifts_with_ref(wf, ref=None, upsample_factor=5, nshifts=7):
 
     if ref is None:
         ref = np.mean(wf, axis=0)
-
-    #n_time_rf = len(ref)
-    #if n_time > n_time_rf:
-    #    left_cut = (n_time - n_time_rf)//2
-    #    right_cut = n_time - n_time_rf - left_cut
-    #    wf = wf[:, left_cut:-right_cut]
-    #elif n_time < n_time_rf:
-    #    left_buffer = np.zeros((n_data, (n_time_rf - n_time)//2))
-    #    right_buffer = np.zeros((n_data,n_time_rf - n_time - left_buffer))
-    #    wf = np.concatenate((left_buffer, wf, right_buffer), axis=1)
       
     # convert nshifts from timesamples to  #of times in upsample_factor
     nshifts = (nshifts*upsample_factor)
@@ -232,15 +220,15 @@ def noisify(max_chan_templates):
     templates = np.copy(max_chan_templates)
     n_templates, n_times = templates.shape
     
-    noise = np.random.normal(0, 0.1, templates.shape)
+    noise = np.random.normal(0, 1, templates.shape)
     templates = np.add(templates, noise)
     return templates
 
-def smart_noisify2(max_chan_templates, temp_cov):
-    # temp_cov = np.load('temporal_cov_example.npy')
+def smart_noisify2(max_chan_templates, temporal_cov):
+    # temporal_cov = np.load('temporal_cov_example.npy')
     n_templates, n_times = max_chan_templates.shape
     
-    noise_2_add = np.random.multivariate_normal(np.zeros(n_times), temp_cov, n_templates)
+    noise_2_add = np.random.multivariate_normal(np.zeros(n_times), temporal_cov, n_templates)
     noisy_templates = np.add(max_chan_templates, noise_2_add)
     
     return noisy_templates
