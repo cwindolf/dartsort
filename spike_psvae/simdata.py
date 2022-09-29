@@ -362,22 +362,19 @@ def hybrid_recording(
     Nt, T, n_channels = templates.shape
     assert geom.shape == (n_channels, 2)
     write_n_channels = write_channel_index.shape[1]
-
-    # load raw data
-    raw = np.fromfile(input_bin, dtype=np.float32)
-    raw = raw.reshape(-1, 384)
-    t_total = raw.shape[0]
-    t_total_s = t_total / 30000
+    print(f"Making hybrid data based on {input_bin}. Templates shape: {Nt, T, n_channels}.")
 
     # choose clusters
     template_ptps = templates.ptp(1)
     template_maxchans = template_ptps.argmax(1)
+    print(f"{template_maxchans.shape}")
     choices = np.flatnonzero(
         (write_n_channels // 2 < template_maxchans)
         & (template_maxchans < (n_channels - write_n_channels // 2))
     )
     choices = rg.choice(choices, replace=False, size=n_clusters)
     choices.sort()
+    print(f"Choosing templates: {choices}")
     templates = templates[choices]
     template_ptps = template_ptps[choices]
     template_maxchans = template_maxchans[choices]
@@ -400,7 +397,14 @@ def hybrid_recording(
         n_channels - (write_n_channels // 2 + 1),
         size=n_clusters,
     )
-    # new_maxchans -= new_maxchans % 4
+    new_maxchans -= new_maxchans % 4
+    new_maxchans += template_maxchans % 4
+    
+    # load raw data
+    raw = np.fromfile(input_bin, dtype=np.float32)
+    raw = raw.reshape(-1, 384)
+    t_total = raw.shape[0]
+    t_total_s = t_total / 30000
 
     # pick point process params
     try:
