@@ -335,6 +335,7 @@ def subtraction(
         tpca,
         neighborhood_kind,
         spike_length_samples,
+        sampling_rate,
         save_waveforms=save_waveforms,
         do_clean=do_clean,
         do_localize=do_localize,
@@ -1247,27 +1248,28 @@ def full_denoising(
     waveforms = waveforms.transpose(0, 2, 1)
 
     # enforce decrease
-    if radial_parents is None and probe is not None:
-        rel_maxchans = maxchans - extract_channel_index[maxchans, 0]
-        if probe == "np1":
-            for i in range(N):
-                denoise.enforce_decrease_np1(
-                    waveforms[i], max_chan=rel_maxchans[i], in_place=True
-                )
-        elif probe == "np2":
-            for i in range(N):
-                denoise.enforce_decrease(
-                    waveforms[i], max_chan=rel_maxchans[i], in_place=True
-                )
+    if do_enforce_decrease:
+        if radial_parents is None and probe is not None:
+            rel_maxchans = maxchans - extract_channel_index[maxchans, 0]
+            if probe == "np1":
+                for i in range(N):
+                    denoise.enforce_decrease_np1(
+                        waveforms[i], max_chan=rel_maxchans[i], in_place=True
+                    )
+            elif probe == "np2":
+                for i in range(N):
+                    denoise.enforce_decrease(
+                        waveforms[i], max_chan=rel_maxchans[i], in_place=True
+                    )
+            else:
+                assert False
+        elif radial_parents is not None:
+            denoise.enforce_decrease_shells(
+                waveforms, maxchans, radial_parents, in_place=True
+            )
         else:
-            assert False
-    elif radial_parents is not None:
-        denoise.enforce_decrease_shells(
-            waveforms, maxchans, radial_parents, in_place=True
-        )
-    else:
-        # no enforce decrease
-        pass
+            # no enforce decrease
+            pass
 
     if return_tpca_embedding and tpca is not None:
         tpca_embeddings = np.empty(
@@ -1297,6 +1299,7 @@ def get_output_h5(
     tpca,
     neighborhood_kind,
     spike_length_samples,
+    sampling_rate,
     do_clean=True,
     do_localize=True,
     save_waveforms=True,
@@ -1317,6 +1320,7 @@ def get_output_h5(
         output_h5 = h5py.File(out_h5, "w")
 
         # initialize datasets
+        output_h5.create_dataset("fs", data=sampling_rate)
         output_h5.create_dataset("geom", data=geom)
         output_h5.create_dataset("start_sample", data=start_sample)
         output_h5.create_dataset("end_sample", data=end_sample)
