@@ -15,6 +15,7 @@ def extract_deconv(
     spike_train_up_path,
     output_directory,
     standardized_bin,
+    scalings_path=None,
     channel_index=None,
     n_channels_extract=20,
     subtraction_h5=None,
@@ -29,6 +30,7 @@ def extract_deconv(
     trough_offset=42,
     overwrite=True,
     scratch_dir=None,
+    pbar=True,
 ):
     standardized_bin = Path(standardized_bin)
     output_directory = Path(output_directory)
@@ -40,6 +42,12 @@ def extract_deconv(
     n_templates, spike_length_samples, n_chans = templates_up.shape
     spike_train_up = np.load(spike_train_up_path)
     n_spikes = len(spike_train_up)
+
+    if scalings_path is not None:
+        scalings = np.load(scalings_path)
+        assert scalings.shape == (n_spikes,)
+    else:
+        scalings = np.ones(n_spikes, dtype=templates_up.dtype)
 
     std_size = standardized_bin.stat().st_size
     assert not std_size % np.dtype(np.float32).itemsize
@@ -81,6 +89,9 @@ def extract_deconv(
     # determine jobs to run
     batch_length = n_sec_chunk * sampling_rate
     start_samples = range(last_batch_end, T_samples, batch_length)
+    if not len(start_samples):
+        print("Extraction already done")
+        return out_h5, residual_path
 
     # build spike index from templates and spike train
     templates_up_maxchans = templates_up.ptp(1).argmax(1)
@@ -120,6 +131,7 @@ def extract_deconv(
             h5.create_dataset("channel_index", data=channel_index)
             h5.create_dataset("templates_loc", data=templates_loc)
             h5.create_dataset("spike_train_up", data=spike_train_up)
+            h5.create_dataset("scalings", data=scalings)
             h5.create_dataset("spike_index_up", data=spike_index_up)
             h5.create_dataset(
                 "first_channels",
@@ -148,7 +160,8 @@ def extract_deconv(
                 )
 
         ctx = multiprocessing.get_context("spawn")
-        print("Initializing threads", end="")
+        if n_jobs is not None and n_jobs > 1:
+            print("Initializing threads", end="")
         with Pool(
             n_jobs,
             initializer=_extract_deconv_init,
@@ -171,15 +184,19 @@ def extract_deconv(
                 temp_dir,
                 T_samples,
                 templates_loc,
+                scalings,
+                n_chans,
             ),
             context=ctx,
         ) as pool:
-            print(" Ok.", flush=True)
-            for result in tqdm(
+            if n_jobs is not None and n_jobs > 1:
+                print(" Ok.", flush=True)
+            for result in xqdm(
                 pool.imap(_extract_deconv_worker, start_samples),
                 desc="extract deconv",
                 smoothing=0,
                 total=len(start_samples),
+                pbar=pbar,
             ):
                 h5["last_batch_end"][()] = result.last_batch_end
 
@@ -232,6 +249,7 @@ def _extract_deconv_worker(start_sample):
     )
     spike_index = p.spike_index_up[which_spikes]
     spike_train = p.spike_train_up[which_spikes]
+    scalings = p.scalings[which_spikes]
 
     # load raw recording with padding
     at_start = start_sample == 0
@@ -243,7 +261,7 @@ def _extract_deconv_worker(start_sample):
         np.float32,
         start_sample - buffer_left,
         end_sample + buffer_right,
-        len(p.geom),
+        p.n_chans,
     )
     # pad left/right if necessary
     # note, for spikes which end up loading in this buffer,
@@ -263,9 +281,9 @@ def _extract_deconv_worker(start_sample):
         - p.trough_offset,
     )
     for i in range(len(spike_index)):
-        resid[spike_index[i, 0] + rel_times] -= p.templates_up[
-            spike_train[i, 1]
-        ]
+        resid[spike_index[i, 0] + rel_times] -= (
+            scalings[i] * p.templates_up[spike_train[i, 1]]
+        )
 
     if p.save_residual:
         np.save(
@@ -286,7 +304,9 @@ def _extract_deconv_worker(start_sample):
             buffer=-start_sample + buffer_left + pad_left,
         )
         # now add the templates
-        waveforms += p.templates_loc[spike_train[:, 1]]
+        waveforms += (
+            scalings[:, None, None] * p.templates_loc[spike_train[:, 1]]
+        )
         if p.save_cleaned_waveforms:
             np.save(p.temp_dir / f"cleaned_{batch_str}.npy", waveforms)
 
@@ -380,14 +400,18 @@ def _extract_deconv_init(
     temp_dir,
     T_samples,
     templates_loc,
+    scalings,
+    n_chans,
 ):
-    with h5py.File(subtraction_h5) as h5:
-        tpca_mean = h5["tpca_mean"][:]
-        tpca_components = h5["tpca_components"][:]
-        geom = h5["geom"][:]
-    tpca = PCA(tpca_components.shape[0])
-    tpca.mean_ = tpca_mean
-    tpca.components_ = tpca_components
+    geom = tpca = None
+    if subtraction_h5 is not None:
+        with h5py.File(subtraction_h5) as h5:
+            tpca_mean = h5["tpca_mean"][:]
+            tpca_components = h5["tpca_components"][:]
+            geom = h5["geom"][:]
+        tpca = PCA(tpca_components.shape[0])
+        tpca.mean_ = tpca_mean
+        tpca.components_ = tpca_components
 
     if device is None:
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -409,7 +433,15 @@ def _extract_deconv_init(
     _extract_deconv_worker.spike_length_samples = spike_length_samples
     _extract_deconv_worker.templates_up = templates_up
     _extract_deconv_worker.templates_loc = templates_loc
+    _extract_deconv_worker.scalings = scalings
     _extract_deconv_worker.temp_dir = temp_dir
     _extract_deconv_worker.T_samples = T_samples
     _extract_deconv_worker.batch_length = batch_length
+    _extract_deconv_worker.n_chans = n_chans
     print(".", end="", flush=True)
+
+def xqdm(it, pbar=True, **kwargs):
+    if pbar:
+        return tqdm(it, **kwargs)
+    else:
+        return it

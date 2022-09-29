@@ -165,7 +165,9 @@ def pgeom(
     x_extension=0.8,
     lw=None,
     show_zero=True,
-    max_abs_amp=None
+    max_abs_amp=None,
+    show_chan_label=False,
+    chan_labels=None,
 ):
     """Plot waveforms according to geometry using channel index"""
     ax = ax or plt.gca()
@@ -179,11 +181,19 @@ def pgeom(
     n_channels, C = channel_index.shape
     assert geom.shape == (n_channels, 2)
     T = waveforms.shape[1]
-    assert waveforms.shape == (*max_channels.shape, T, C)
+    if waveforms.shape != (*max_channels.shape, T, C):
+        raise ValueError(
+            f"Bad shapes: {waveforms.shape=}, {max_channels.shape=}"
+        )
 
     # -- figure out units for plotting
     z_uniq, z_ix = np.unique(geom[:, 1], return_inverse=True)
-    x_uniq = np.unique(geom[z_ix == 0, 0])
+    for i in z_ix:
+        x_uniq = np.unique(geom[z_ix == i, 0])
+        if x_uniq.size > 1:
+            break
+    else:
+        x_uniq = np.unique(geom[:, 0])
     inter_chan_x = x_uniq[1] - x_uniq[0]
     inter_chan_z = z_uniq[1] - z_uniq[0]
     max_abs_amp = max_abs_amp or np.abs(waveforms).max()
@@ -206,9 +216,13 @@ def pgeom(
             draw.append(geom_plot[c, 1] + wf[:, i])
             unique_chans.add(c)
 
-    if show_zero:
-        for c in unique_chans:
+    ann_offset = np.array([0, 0.33 * inter_chan_z]) * geom_scales
+    chan_labels = chan_labels if chan_labels is not None else [str(c) for c in unique_chans]
+    for c in unique_chans:
+        if show_zero:
             ax.axhline(geom_plot[c, 1], color="gray", lw=1, linestyle="--")
+        if show_chan_label:
+            ax.annotate(chan_labels[c], geom_plot[c] + ann_offset, size=6, color="gray")
 
     lines = ax.plot(*draw, alpha=alpha, color=color, lw=lw)
 
