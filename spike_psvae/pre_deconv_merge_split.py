@@ -2,7 +2,6 @@
 import numpy as np
 from sklearn.decomposition import PCA
 from sklearn.discriminant_analysis import LinearDiscriminantAnalysis as LDA
-from sklearn.cross_decomposition import CCA
 import hdbscan
 from spike_psvae.cluster_utils import (
     compute_shifted_similarity,
@@ -575,21 +574,29 @@ def get_diptest_value(
                 first_chan = min(wfs_b.shape[2] - n_channels, int(first_chan))
                 wfs_b_bis[i, :] = wfs_b[
                     i, :, first_chan : first_chan + n_channels
-                ]
-            wfs_a_bis += read_waveforms(
+                ] 
+                
+            wfs_a_read, skipped_idx = read_waveforms(
                 spike_times_unit_a + two_units_shift,
                 residual_path,
                 geom_array.shape[0],
                 spike_length_samples=n_times,
                 channels=np.arange(mc - n_channels_half, mc + n_channels_half),
-            )[0]
-            wfs_b_bis += read_waveforms(
+            )
+            kept_idx = np.delete(np.arange(wfs_a_bis.shape[0]), skipped_idx)
+            wfs_a_bis = wfs_a_bis[kept_idx] + wfs_a_read
+            
+            wfs_b_read, skipped_idx = read_waveforms(
                 spike_times_unit_b,
                 residual_path,
                 geom_array.shape[0],
                 spike_length_samples=n_times,
                 channels=np.arange(mc - n_channels_half, mc + n_channels_half),
-            )[0]
+            )
+            kept_idx = np.delete(np.arange(wfs_b_bis.shape[0]), skipped_idx)
+            wfs_b_bis = wfs_b_bis[kept_idx] + wfs_b_read
+            
+
         else:
             for i in range(wfs_a_bis.shape[0]):
                 first_chan = int(mc - first_chan_a[i] - n_channels_half)
@@ -604,20 +611,25 @@ def get_diptest_value(
                 wfs_b_bis[i, :-two_units_shift] = wfs_b[
                     i, two_units_shift:, first_chan : first_chan + n_channels
                 ]
-            wfs_a_bis += read_waveforms(
+            wfs_a_read, skipped_idx = read_waveforms(
                 spike_times_unit_a,
                 residual_path,
                 geom_array.shape[0],
                 spike_length_samples=n_times,
                 channels=np.arange(mc - n_channels_half, mc + n_channels_half),
-            )[0]
-            wfs_b_bis += read_waveforms(
+            )
+            kept_idx = np.delete(np.arange(wfs_a_bis.shape[0]), skipped_idx)
+            wfs_a_bis = wfs_a_bis[kept_idx] + wfs_a_read
+            
+            wfs_b_read, skipped_idx = read_waveforms(
                 spike_times_unit_b + two_units_shift,
                 residual_path,
                 geom_array.shape[0],
                 spike_length_samples=n_times,
                 channels=np.arange(mc - n_channels_half, mc + n_channels_half),
-            )[0]
+            )
+            kept_idx = np.delete(np.arange(wfs_b_bis.shape[0]), skipped_idx)
+            wfs_b_bis = wfs_b_bis[kept_idx] + wfs_b_read
     elif two_units_shift < 0:
         if unit_shifted == unit_a:
             for i in range(wfs_a_bis.shape[0]):
@@ -633,20 +645,27 @@ def get_diptest_value(
                 wfs_b_bis[i, :] = wfs_b[
                     i, :, first_chan : first_chan + n_channels
                 ]
-            wfs_a_bis += read_waveforms(
+                
+            wfs_a_read, skipped_idx = read_waveforms(
                 spike_times_unit_a + two_units_shift,
                 residual_path,
                 geom_array.shape[0],
                 spike_length_samples=n_times,
                 channels=np.arange(mc - n_channels_half, mc + n_channels_half),
-            )[0]
-            wfs_b_bis += read_waveforms(
+            )
+            kept_idx = np.delete(np.arange(wfs_a_bis.shape[0]), skipped_idx)
+            wfs_a_bis = wfs_a_bis[kept_idx] + wfs_a_read
+            
+            wfs_b_read, skipped_idx = read_waveforms(
                 spike_times_unit_b,
                 residual_path,
                 geom_array.shape[0],
                 spike_length_samples=n_times,
                 channels=np.arange(mc - n_channels_half, mc + n_channels_half),
-            )[0]
+            )
+            kept_idx = np.delete(np.arange(wfs_b_bis.shape[0]), skipped_idx)
+            wfs_b_bis = wfs_b_bis[kept_idx] + wfs_b_read
+                        
 
         else:
             for i in range(wfs_a_bis.shape[0]):
@@ -662,20 +681,25 @@ def get_diptest_value(
                 wfs_b_bis[i, -two_units_shift:] = wfs_b[
                     i, :two_units_shift, first_chan : first_chan + n_channels
                 ]
-            wfs_a_bis += read_waveforms(
+            wfs_a_read, skipped_idx = read_waveforms(
                 spike_times_unit_a,
                 residual_path,
                 geom_array.shape[0],
                 spike_length_samples=n_times,
                 channels=np.arange(mc - n_channels_half, mc + n_channels_half),
-            )[0]
-            wfs_b_bis += read_waveforms(
+            )
+            kept_idx = np.delete(np.arange(wfs_a_bis.shape[0]), skipped_idx)
+            wfs_a_bis = wfs_a_bis[kept_idx] + wfs_a_read
+            
+            wfs_b_read, skipped_idx = read_waveforms(
                 spike_times_unit_b + two_units_shift,
                 residual_path,
                 geom_array.shape[0],
                 spike_length_samples=n_times,
                 channels=np.arange(mc - n_channels_half, mc + n_channels_half),
-            )[0]
+            )
+            kept_idx = np.delete(np.arange(wfs_b_bis.shape[0]), skipped_idx)
+            wfs_b_bis = wfs_b_bis[kept_idx] + wfs_b_read
     else:
         for i in range(wfs_a_bis.shape[0]):
             first_chan = int(mc - first_chan_a[i] - n_channels_half)
@@ -686,20 +710,25 @@ def get_diptest_value(
             first_chan = max(0, int(first_chan))
             first_chan = min(wfs_b.shape[2] - n_channels, int(first_chan))
             wfs_b_bis[i, :] = wfs_b[i, :, first_chan : first_chan + n_channels]
-        wfs_a_bis += read_waveforms(
+        wfs_a_read, skipped_idx = read_waveforms(
             spike_times_unit_a,
             residual_path,
             geom_array.shape[0],
             spike_length_samples=n_times,
             channels=np.arange(mc - n_channels_half, mc + n_channels_half),
-        )[0]
-        wfs_b_bis += read_waveforms(
+        )
+        kept_idx = np.delete(np.arange(wfs_a_bis.shape[0]), skipped_idx)
+        wfs_a_bis = wfs_a_bis[kept_idx] + wfs_a_read
+
+        wfs_b_read, skipped_idx = read_waveforms(
             spike_times_unit_b,
             residual_path,
             geom_array.shape[0],
             spike_length_samples=n_times,
             channels=np.arange(mc - n_channels_half, mc + n_channels_half),
-        )[0]
+        )
+        kept_idx = np.delete(np.arange(wfs_b_bis.shape[0]), skipped_idx)
+        wfs_b_bis = wfs_b_bis[kept_idx] + wfs_b_read
 
     # tpca = PCA(rank_pca)
     wfs_diptest = np.concatenate((wfs_a_bis, wfs_b_bis))

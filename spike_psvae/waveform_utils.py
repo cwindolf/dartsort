@@ -1,5 +1,44 @@
 import numpy as np
 from scipy.spatial.distance import cdist, pdist, squareform
+from sklearn.decomposition import PCA
+
+from . import spikeio
+
+
+def fit_tpca_bin(
+    spike_index,
+    geom,
+    binary_file,
+    tpca_rank=5,
+    tpca_n_wfs=50_000,
+    spike_length_samples=121,
+    spatial_radius=75,
+    seed=0,
+):
+    rg = np.random.default_rng(seed)
+    tpca_channel_index = make_channel_index(
+        geom, spatial_radius, steps=1, distance_order=False, p=1
+    )
+    choices = rg.choice(len(spike_index), size=tpca_n_wfs, replace=False)
+    choices.sort()
+    tpca_waveforms, skipped_idx = spikeio.read_waveforms(
+        spike_index[choices, 0],
+        binary_file,
+        geom.shape[0],
+        channel_index=tpca_channel_index,
+        spike_length_samples=spike_length_samples,
+        max_channels=spike_index[choices, 1],
+    )
+    # NTC -> NCT
+    tpca_waveforms = tpca_waveforms.transpose(0, 2, 1).reshape(
+        -1, spike_length_samples
+    )
+    which = np.isfinite(tpca_waveforms[:, 0])
+    tpca_waveforms = tpca_waveforms[which]
+    tpca = PCA(tpca_rank).fit(tpca_waveforms)
+
+    return tpca
+
 
 
 # -- channels / geometry helpers
