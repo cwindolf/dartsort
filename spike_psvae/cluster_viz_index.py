@@ -168,6 +168,7 @@ def pgeom(
     max_abs_amp=None,
     show_chan_label=False,
     chan_labels=None,
+    linestyle=None,
 ):
     """Plot waveforms according to geometry using channel index"""
     ax = ax or plt.gca()
@@ -224,7 +225,7 @@ def pgeom(
         if show_chan_label:
             ax.annotate(chan_labels[c], geom_plot[c] + ann_offset, size=6, color="gray")
 
-    lines = ax.plot(*draw, alpha=alpha, color=color, lw=lw)
+    lines = ax.plot(*draw, alpha=alpha, color=color, lw=lw, linestyle=linestyle)
 
     return lines
 
