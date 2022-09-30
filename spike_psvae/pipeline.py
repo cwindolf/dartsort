@@ -637,6 +637,7 @@ def post_deconv2_clean_step(
     geom,
     merge_resid_threshold=3.0,
     clean_min_spikes=25,
+    do_clean_big=False,
 ):
     n_channels = geom.shape[0]
 
@@ -672,31 +673,35 @@ def post_deconv2_clean_step(
     u, c = np.unique(spike_train[:, 1], return_counts=True)
     print(u.size, (c > 25).sum(), c[c > 25].sum())
 
-    print("Before clean big ")
-    n_cleaned = after_deconv_merge_split.clean_big_clusters(
-        templates, spike_train, maxptps[order], raw_data_bin, geom
-    )
-    print(f"n_cleaned={n_cleaned}")
-    u, c = np.unique(spike_train[:, 1], return_counts=True)
-    print(u.max() + 1, u.size, (c > 25).sum(), c[c > 25].sum())
+    if do_clean_big:
+        print("Before clean big ")
+        n_cleaned = after_deconv_merge_split.clean_big_clusters(
+            templates, spike_train, maxptps[order], raw_data_bin, geom
+        )
+        print(f"n_cleaned={n_cleaned}")
+        u, c = np.unique(spike_train[:, 1], return_counts=True)
+        print(u.max() + 1, u.size, (c > 25).sum(), c[c > 25].sum())
 
-    (
-        spike_train,
-        reorder,
-        templates,
-        template_shifts,
-    ) = spike_train_utils.clean_align_and_get_templates(
-        spike_train,
-        n_channels,
-        raw_data_bin,
-        min_n_spikes=clean_min_spikes,
-        pbar=True,
-    )
-    order = order[reorder]
+        (
+            spike_train,
+            reorder,
+            templates,
+            template_shifts,
+        ) = spike_train_utils.clean_align_and_get_templates(
+            spike_train,
+            n_channels,
+            raw_data_bin,
+            min_n_spikes=clean_min_spikes,
+            pbar=True,
+        )
+        order = order[reorder]
 
-    print("After clean big")
-    u, c = np.unique(spike_train[:, 1], return_counts=True)
-    print(u.max() + 1, u.size, (c > 25).sum(), c[c > 25].sum())
+        print("After clean big")
+        u, c = np.unique(spike_train[:, 1], return_counts=True)
+        print(u.max() + 1, u.size, (c > 25).sum(), c[c > 25].sum())
+        clean_st = spike_train.copy()
+        clean_temp = templates.copy()
+        clean_ord = order.copy()
 
     print("Remove oversplits")
     # (
@@ -738,7 +743,7 @@ def post_deconv2_clean_step(
     u, c = np.unique(spike_train[:, 1], return_counts=True)
     print(u.max() + 1, u.size, (c > 25).sum(), c[c > 25].sum())
 
-    return spike_train, order, templates
+    return spike_train, order, templates #, clean_st, clean_ord, clean_temp
 
 
 # data_path = '/media/cat/data/'

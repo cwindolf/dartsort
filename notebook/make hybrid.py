@@ -13,7 +13,7 @@
 # ---
 
 # %%
-# 1
+1
 
 # %%
 # %load_ext autoreload
@@ -53,6 +53,7 @@ from spike_psvae import (
     after_deconv_merge_split,
     cluster_utils,
     pipeline,
+    spike_reassignment,
 )
 
 # %%
@@ -127,6 +128,11 @@ deconv2_dir.mkdir(exist_ok=True)
 deconv2_dir, deconv2_dir.exists()
 
 # %%
+deconv3_dir = base_dir / "hybrid_5min_deconv3"
+deconv3_dir.mkdir(exist_ok=True)
+deconv3_dir, deconv3_dir.exists()
+
+# %%
 vis_dir = base_dir / "hybrid_5min_vis"
 vis_dir.mkdir(exist_ok=True)
 vis_dir, vis_dir.exists()
@@ -164,9 +170,6 @@ for meta in Path(in_dir).glob("*.meta"):
         pass
     shutil.copy(meta, out_dir / meta.name)
 
-
-# %% [markdown] tags=[]
-# <!-- # make hybrid binary -->
 
 # %%
 1
@@ -788,6 +791,9 @@ for i, in_bin in enumerate(tqdm(in_bins)):
 # %%
 geom = np.load(next(deconv1_dir.glob("**/geom.npy")))
 
+# %%
+1
+
 # %% tags=[]
 for in_bin in in_bins:
     subject = in_bin.stem.split(".")[0]
@@ -814,8 +820,7 @@ for in_bin in in_bins:
         raw_bin = out_bin
     
     do_extract = not (subject_deconv1_dir / "deconv_results.h5").exists()
-    do_extract = True
-    # do_extract = not (subject_deconv1_dir / "deconv_results.h5").exists()
+    # do_extract = True
     
     if do_extract:
         print("run extract")
@@ -1000,6 +1005,14 @@ for i, in_bin in enumerate(tqdm(in_bins)):
 
 
 # %%
+
+# %%
+geom = np.load(next(deconv1_dir.glob("**/geom.npy")))
+
+# %%
+1
+
+# %%
 from spike_psvae import extract_deconv, pipeline
 
 for in_bin in in_bins:
@@ -1020,7 +1033,7 @@ for in_bin in in_bins:
     deconv_scratch_dir.mkdir(exist_ok=True)
     
     do_extract = not (subject_deconv2_dir / "deconv_results.h5").exists()
-    # do_extract = True
+    do_extract = True
 
     with timer("copying to scratch"):
         subprocess.run(
@@ -1047,6 +1060,9 @@ for in_bin in in_bins:
         with timer("copying deconv h5 to output"):
             subprocess.run(
                 ["rsync", "-avP", deconv_h5, subject_deconv2_dir / "deconv_results.h5"]
+            )
+            subprocess.run(
+                ["rsync", "-avP", deconv_residual_path, subject_deconv2_dir / "residual.bin"]
             )
     
     do_clean = not (subject_deconv2_dir / "postdeconv_cleaned_labels.npy").exists()
@@ -1081,6 +1097,11 @@ for in_bin in in_bins:
         np.save(subject_deconv2_dir / "postdeconv_cleaned_labels.npy", spike_train[:, 1])
         np.save(subject_deconv2_dir / "postdeconv_cleaned_order.npy", order)
         np.save(subject_deconv2_dir / "postdeconv_cleaned_templates.npy", templates)
+        
+        # np.save(subject_deconv2_dir / "postdeconv_cleanbig_times.npy", clean_st[:, 0])
+        # np.save(subject_deconv2_dir / "postdeconv_cleanbig_labels.npy", clean_st[:, 1])
+        # np.save(subject_deconv2_dir / "postdeconv_cleanbig_order.npy", clean_ord)
+        # np.save(subject_deconv2_dir / "postdeconv_cleanbig_templates.npy", clean_temp)
 
     if do_anything:
         print("scratch h5 exists?", (deconv_scratch_dir / "deconv_results.h5").exists())
@@ -1091,6 +1112,126 @@ for in_bin in in_bins:
             (deconv_scratch_dir / "raw.bin").unlink()
 
 # %%
+geom_path = next(deconv1_dir.glob("**/geom.npy"))
+geom = np.load(geom_path)
+
+# %%
+deconv_scratch_dir = Path("/tmp/deconv")
+
+# %%
+from spike_psvae import deconvolve, waveform_utils
+
+for i, in_bin in enumerate(tqdm(in_bins)):
+    # for lambd in (0.1, 0.01, 0.001):
+    lambd = 0
+    
+    subject = in_bin.stem.split(".")[0]
+    # if subject != "DY_018":
+    # if subject != "CSHL051":
+    if subject not in active_dsets:
+        continue
+
+    out_bin = out_dir / f"{in_bin.stem}.bin"
+    subject_sub_h5 = next((sub_dir / subject).glob("sub*.h5"))
+    subject_deconv2_dir = deconv2_dir / subject
+    subject_deconv3_dir = deconv3_dir / subject
+    # subject_deconv2_dir = deconv_dir / subject / f"deconv2_lambd{lambd}_allowed1.0"
+    subject_deconv3_dir.mkdir(exist_ok=True)
+
+    print(subject, lambd, subject_deconv2_dir)
+    
+    deconv_scratch_dir.mkdir(exist_ok=True)
+    subprocess.run(
+        ["rsync", "-avP", out_bin, deconv_scratch_dir / "raw.bin"]
+    )
+
+    with h5py.File(subject_sub_h5) as h5:
+        geom = h5["geom"][:]
+        se, ss = h5["end_sample"][()], h5["start_sample"][()]
+        ds = se - ss
+        print(ds, ss, se)
+
+    times = np.load(subject_deconv2_dir / "postdeconv_cleaned_times.npy")
+    labels = np.load(subject_deconv2_dir / "postdeconv_cleaned_labels.npy")
+    templates = np.load(subject_deconv2_dir / "postdeconv_cleaned_templates.npy")
+    which = (labels >= 0) & (times > 70) & (times < (ds - 79))
+    u, c = np.unique(labels[which], return_counts=True)
+    print("Nunits", labels[which].max() + 1, u.size, (c > 25).sum())
+    unit_maxchans = templates.ptp(1).argmax(1)
+
+    if not (subject_deconv3_dir / "deconv_results.h5").exists():
+        fname_templates_up,fname_spike_train_up,template_path,fname_spike_train,fname_scalings = deconvolve.deconvolution(
+        # mp_object, batch_ids, fnames_out = deconvolve.deconvolution(
+            times[which, None],
+            labels[which],
+            subject_deconv3_dir,
+            deconv_scratch_dir / "raw.bin",
+            None,
+            np.c_[times[which], labels[which]],
+            geom_path,
+            unit_maxchans=unit_maxchans,
+            threshold=40,
+            multi_processing=True,
+            cleaned_temps=True,
+            n_processors=6,
+            verbose=False,
+            reducer=np.median,
+            lambd=lambd,
+            allowed_scale=1.0,
+            overwrite=False,
+        )
+
+        deconv_h5, deconv_residual_path = extract_deconv.extract_deconv(
+            subject_deconv3_dir / "templates_up.npy",
+            subject_deconv3_dir / "spike_train_up.npy",
+            deconv_scratch_dir, # subject_deconv2_dir,
+            out_bin,
+            subtraction_h5=subject_sub_h5,
+            save_cleaned_waveforms=True,
+            save_denoised_waveforms=True,
+            n_channels_extract=20,
+            n_jobs=13,
+            device="cpu",
+            scratch_dir=deconv_scratch_dir,
+        )
+        with timer("copying deconv h5 to output"):
+            subprocess.run(
+                ["rsync", "-avP", deconv_h5, subject_deconv3_dir / "deconv_results.h5"]
+            )
+            subprocess.run(
+                ["rsync", "-avP", deconv_residual_path, subject_deconv3_dir / "residual.bin"]
+            )
+
+    deconv3_res_bin = deconv_scratch_dir / "residual.bin"
+        
+    
+    clean_st = np.load(subject_deconv3_dir / "spike_train.npy")
+    clean_si = np.c_[clean_st[:, 0], unit_maxchans[clean_st[:, 1]]]
+    
+    tpca = waveform_utils.fit_tpca_bin(clean_si, geom, out_bin)
+    
+    # run spike reassignment and outlier triaging
+    (
+        soft_assignment_scores,
+        reassignment,
+        reassigned_scores,
+    ) = spike_reassignment.run(
+        deconv3_res_bin,
+        subject_deconv3_dir / "templates.npy",
+        subject_deconv3_dir / "spike_train.npy",
+        geom,
+        tpca,
+        n_chans=8,
+        n_sim_units=2,
+        # num_sigma_outlier=np.inf,
+        batch_size=4096,
+    )
+    
+    np.save(subject_deconv3_dir / "reassignment.npy", reassignment)
+    np.save(subject_deconv3_dir / "reassigned_scores.npy", reassigned_scores)
+    np.save(subject_deconv3_dir / "soft_assignment_scores.npy", soft_assignment_scores)
+    
+    # %rm -rf {deconv_scratch_dir}/*
 
 # %%
 
