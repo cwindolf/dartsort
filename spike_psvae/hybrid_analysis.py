@@ -1121,14 +1121,14 @@ def calc_resid_matrix(
     if normalized:
         rms_a = np.array(
             [
-                np.sqrt(np.square(ta).sum() / (np.abs(ta) > 0).sum())
-                for ta in templates_a
+                np.sqrt(np.square(templates_a[ua]).sum() / (np.abs(templates_a[ua]) > 0).sum())
+                for ua in units_a
             ]
         )
         rms_b = np.array(
             [
-                np.sqrt(np.square(tb).sum() / (np.abs(tb) > 0).sum())
-                for tb in templates_b
+                np.sqrt(np.square(templates_b[ub]).sum() / (np.abs(templates_b[ub]) > 0).sum())
+                for ub in units_b
             ]
         )
         resid_matrix = resid_matrix / np.sqrt(rms_a[:, None] * rms_b[None, :])
@@ -1276,7 +1276,7 @@ def gtunit_resid_study(
     ).squeeze()
 
     # ignore large distances
-    resid_v_new[resid_v_new > max_dist] = np.inf
+    # resid_v_new[resid_v_new > max_dist] = np.inf
 
     resid_is_finite = np.isfinite(resid_v_new)
     if not resid_is_finite.any():
@@ -1285,7 +1285,7 @@ def gtunit_resid_study(
     resid_is_finite = np.flatnonzero(resid_is_finite)
 
     resid_vals = resid_v_new[resid_is_finite]
-    sort = np.argsort(resid_vals)
+    sort = np.argsort(resid_vals)[:n_max]
     sorted_near_units = hybrid_comparison.new_sorting.unit_labels[
         resid_is_finite[sort]
     ]
@@ -1306,7 +1306,7 @@ def gtunit_resid_study(
     axes["a"].set_xlabel("all nearby sorter units")
     axes["a"].set_ylabel("normalized resid dist")
 
-    sorted_near_units = sorted_near_units[:n_max]
+    sorted_near_units = sorted_near_units
 
     thresh, near_unit_distmat = hybrid_comparison.new_sorting.resid_matrix(
         sorted_near_units,
@@ -1333,6 +1333,7 @@ def gtunit_resid_study(
         hybrid_comparison.new_sorting.geom.shape[0], plot_chans
     )
     pal = sns.color_palette(n_colors=len(sorted_near_units))
+    pal = pal[::-1]
     gtmc = hybrid_comparison.gt_sorting.template_maxchans[gt_unit]
     max_abs = np.abs(
         hybrid_comparison.new_sorting.cleaned_templates[sorted_near_units]
@@ -1362,6 +1363,7 @@ def gtunit_resid_study(
         hybrid_comparison.new_sorting.geom,
         ax=axes["c"],
         color="k",
+        linestyle="--",
         max_abs_amp=max_abs,
         show_zero=not j,
         x_extension=0.9,
