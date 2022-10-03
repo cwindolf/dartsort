@@ -2351,3 +2351,737 @@ def diagnostic_plots(
 #         ax_maxptp.set_yticks([])
 #     plt.close(fig)
 #     fig.savefig(f"kilosort_cluster_summaries_norm.png")
+
+
+def get_outliers_wfs(    
+    spike_times,
+    raw_bin,
+    shared_mc,
+    geom,
+    num_spikes_plot=100,
+
+):
+    some_in_cluster = np.random.default_rng(0).choice(
+        list(range(len(spike_times))),
+        replace=False,
+        size=min(len(spike_times), num_spikes_plot),
+    )
+
+    spike_times = spike_times[some_in_cluster]
+    first_chans_cluster = first_chans_cluster[some_in_cluster]
+
+
+    if raw_bin is not None:
+        start = np.maximum(shared_mc - 5, 0)
+        end = start + 11                
+        waveforms = read_waveforms(
+            spike_times, raw_bin, geom.shape[0], channels = np.arange(start, end), spike_length_samples=121
+        )[0]
+        return waveforms
+    else:
+        return None
+
+
+
+def diagnostic_plots_with_outliers(
+    cluster_id_1,
+    cluster_id_2,
+    st_1,
+    spike_times_outliers_1,
+    st_2,
+    templates_yass,
+    templates_ks,
+    mcs_abs_cluster_sorting1,
+    mcs_abs_cluster_sorting2,
+    geom,
+    raw_bin,
+    hdb_cluster_depth_means,
+    kilo_cluster_depth_means,
+    spike_index_yass,
+    spike_index_ks,
+    labels_yass,
+    labels_ks,
+    closest_clusters_hdb,
+    closest_clusters_kilo,
+    scale=7,
+    sorting1_name="1",
+    sorting2_name="2",
+    num_channels=40,
+    num_spikes_plot=100,
+    t_range=(30, 90),
+    num_rows=3,
+    alpha=0.1,
+    delta_frames=12,
+    num_close_clusters=5,
+    tpca_rank=5,
+):
+    print(f"{st_1.shape=}, {st_2.shape=}")
+
+    if not st_1.size and not st_2.size:
+        raise ValueError("nothing in either spike train")
+    lab_st1 = cluster_id_1
+    lab_st2 = cluster_id_2
+    (
+        ind_st1,
+        ind_st2,
+        not_match_ind_st1,
+        not_match_ind_st2,
+    ) = compute_spiketrain_agreement(st_1, st_2, delta_frames)
+    print(f"{ind_st1.shape=}, {ind_st2.shape=}, {not_match_ind_st1.shape=}, {not_match_ind_st2.shape=}")
+    agreement = len(ind_st1) / (len(st_1) + len(st_2) - len(ind_st1))
+    fig = plt.figure(figsize=(12, 20))
+
+    gs = fig.add_gridspec(9, 12, height_ratios=(5, 1, 2, 2, 2, 2, 1, 2, 1))
+
+    ax_sorting1 = fig.add_subplot(gs[0, :6])
+    ax_sorting2 = fig.add_subplot(gs[0, 6:])
+
+    ax_venn = fig.add_subplot(gs[1, :3])
+    ax_lda_blue_yellow = fig.add_subplot(gs[1, 3:6])
+    ax_lda_red_yellow = fig.add_subplot(gs[1, 6:9])
+    ax_lda_blue_red = fig.add_subplot(gs[1, 9:])
+
+    ax_wfs_shared_yass = fig.add_subplot(gs[2, :])
+    ax_wfs_shared_ks = fig.add_subplot(gs[3, :])
+    ax_wfs_outliers = fig.add_subplot(gs[4, :])
+
+    ax_templates_yass = fig.add_subplot(gs[5, :])
+    ax_isi_yass = fig.add_subplot(gs[6, :3])
+    ax_LDA1_yass = fig.add_subplot(gs[6, 3:6])
+    ax_LDA2_yass = fig.add_subplot(gs[6, 6:9])
+    ax_PCs_yass = fig.add_subplot(gs[6, 9:])
+
+    ax_templates_ks = fig.add_subplot(gs[7, :])
+    ax_isi_ks = fig.add_subplot(gs[8, :3])
+    ax_LDA1_ks = fig.add_subplot(gs[8, 3:6])
+    ax_LDA2_ks = fig.add_subplot(gs[8, 6:9])
+    ax_PCs_ks = fig.add_subplot(gs[8, 9:])
+
+    list_ax_wfs_shared_ks = [0]
+    for cm_x in np.arange(0, 675, 10):
+        if cm_x > 0:
+            if cm_x % 60 == 0:
+                list_ax_wfs_shared_ks.append(cm_x + 1)
+            else:
+                list_ax_wfs_shared_ks.append(cm_x)
+
+    ax_wfs_shared_yass.set_xticks(list_ax_wfs_shared_ks, minor=True)
+    #     ax_test_split_ptp = fig.add_subplot(gs[8, 3:6])
+    #     ax_test_split_temp_proj = fig.add_subplot(gs[8, 6:9])
+
+    plot_isi_distribution(st_1, ax=ax_isi_yass)
+    plot_isi_distribution(st_2, ax=ax_isi_ks)
+
+    def apply_tpca(wfs_a, wfs_b):
+        wfs = np.r_[wfs_a.transpose(0, 2, 1), wfs_b.transpose(0, 2, 1)]
+        N, C, T = wfs.shape
+        tpca = PCA(tpca_rank)
+        wfs = tpca.fit_transform(wfs.reshape(-1, T))
+        wfs = wfs.reshape(N, C, tpca_rank).reshape(N, -1)
+        return wfs
+
+    subsets = [len(not_match_ind_st1), len(not_match_ind_st2), len(ind_st1)]
+    v = venn2(
+        subsets=subsets,
+        set_labels=[
+            f"{sorting1_name} {lab_st1}",
+            f"{sorting2_name} {lab_st2}",
+        ],
+        ax=ax_venn,
+    )
+    if len(not_match_ind_st1) > 0:
+        v.get_patch_by_id("10").set_color("red")
+    if len(not_match_ind_st2) > 0:
+        v.get_patch_by_id("01").set_color("blue")
+    if len(ind_st1) > 0:
+        v.get_patch_by_id("11").set_color("goldenrod")
+    for text in v.subset_labels:
+        if text is not None:
+            text.set_fontsize(6)
+    for text in v.set_labels:
+        if text is not None:
+            text.set_fontsize(8)
+
+    ax_venn.set_title(f"{np.round(agreement, 2)*100}% agreement")
+
+    ax_lda_blue_red.set_title(f"Distinct {sorting2_name}/{sorting1_name} LDA")
+    ax_lda_blue_yellow.set_title(f"Shared/{sorting2_name} LDA")
+    ax_lda_red_yellow.set_title(f"Shared/{sorting1_name} LDA")
+
+    # fig, axes = plt.subplots(1, 2, sharey=True, figsize=(12,12))
+    h_shifts = [-10, 10]
+    colors = ["goldenrod", "red"]
+    indices = [ind_st1, not_match_ind_st1]
+    # FIX CHANNEL INDEX!!
+    
+    vals, counts = np.unique(
+        mcs_abs_cluster_sorting1,
+        return_counts=True,
+    )
+    z_uniq, z_ids = np.unique(geom[:, 1], return_inverse=True)
+    mcid = z_ids[vals[counts.argmax()]]
+    
+    cmp = 0
+    wfs_shared = np.array([])
+    wfs_lda_red = np.array([])
+    if ind_st1.size:
+        u, c = np.unique(mcs_abs_cluster_sorting1[ind_st1], return_counts=True)
+        shared_mc = u[c.argmax()]
+    elif not_match_ind_st1.size:
+        u, c = np.unique(mcs_abs_cluster_sorting1[not_match_ind_st1], return_counts=True)
+        shared_mc = u[c.argmax()]
+    elif not_match_ind_st2.size:
+        u, c = np.unique(mcs_abs_cluster_sorting2[not_match_ind_st2], return_counts=True)
+        shared_mc = u[c.argmax()]
+    else:
+        assert False
+    template_red = None
+    template_black = None
+    for indices_match, color, h_shift in zip(indices, colors, h_shifts):
+        if len(indices_match) > 0:
+            # firstchans_cluster_sorting = firstchans_cluster_sorting1[
+            #     indices_match
+            # ]
+            # mcs_abs_cluster_sorting = mcs_abs_cluster_sorting1[indices_match]
+            mcs_abs_cluster_sorting = np.full(indices_match.shape, shared_mc)
+#             print(mcs_abs_cluster_sorting)
+            firstchans_cluster_sorting = np.maximum(
+                mcs_abs_cluster_sorting - 20, 0
+            )
+            spike_times = st_1[indices_match]
+            # geom, first_chans_cluster, mcs_abs_cluster, max_ptps_cluster, spike_times,
+            (
+                waveforms,
+                first_chan_cluster,
+            ) = plot_waveforms_geom_unit_with_return(
+                geom,
+                firstchans_cluster_sorting,
+                mcs_abs_cluster_sorting,
+                spike_times,
+                z_ids, 
+                mcid,
+                raw_bin=raw_bin,
+                num_spikes_plot=num_spikes_plot,
+                t_range=t_range,
+                num_channels=num_channels,
+                num_rows=num_rows,
+                do_mean=False,
+                scale=scale,
+                h_shift=h_shift,
+                alpha=alpha,
+                ax=ax_sorting1,
+                color=color,
+            )
+            mc = (
+                shared_mc - firstchans_cluster_sorting
+            )  # waveforms.mean(0).ptp(0).argmax()
+            start = np.maximum(mc - 5, 0)
+            end = start + 11
+            for i in range(min(len(waveforms), num_spikes_plot)):
+                ax_wfs_shared_yass.plot(
+                    waveforms[i, 30:-30, start[i] : end[i]].T.flatten(),
+                    alpha=alpha,
+                    color=color,
+                )
+            for i in range(10):
+                ax_wfs_shared_yass.axvline(61 + 61 * i, c="black")
+            #             ax_templates.plot(waveforms[:, :, mc-5:mc+6].mean(0).T.flatten(), color=color)
+            cmp += 1
+            # print("waveforms", waveforms.shape)
+            if color == "goldenrod":
+                wfs_shared = np.stack(
+                    [
+                        waveforms[i, :, start[i] : end[i]]
+                        for i in range(len(waveforms))
+                    ],
+                    axis=0,
+                )
+                template_black = wfs_shared.mean(0)
+                # print("shared", wfs_shared.shape, mc, flush=True)
+            if color == "red":
+                wfs_lda_red = np.stack(
+                    [
+                        waveforms[i, :, start[i] : end[i]]
+                        for i in range(len(waveforms))
+                    ],
+                    axis=0,
+                )
+                template_red = wfs_lda_red.mean(0)
+                # print("red", wfs_shared.shape, mc, flush=True)
+
+    ## PTP/ template split
+    #     waveforms_yass_to_split = np.concatenate((wfs_shared, wfs_lda_red))
+    #     mc = templates_yass[cluster_id_1].ptp(0).argmax()
+
+    #     ptps = waveforms_yass_to_split[:, :, 5].ptp(1)
+    #     value_dpt, cut_calue = isocut(ptps)
+
+    #     ax_test_split_ptp.hist(ptps, bins = 50)
+    #     ax_test_split_ptp.set_title(str(value_dpt) + '\n' + str(cut_calue))
+
+    #     temp_unit = templates_yass[cluster_id_1, :, mc]
+    #     norm_wfs = np.sqrt(np.square(waveforms_yass_to_split[:, :, 5]).sum(1))
+    #     temp_proj = np.einsum('ij,j->i', waveforms_yass_to_split[:, :, 5], templates_yass[cluster_id_1, :, mc])/norm_wfs
+    #     value_dpt, cut_calue = isocut(temp_proj)
+
+    #     ax_test_split_temp_proj.hist(temp_proj, bins = 50)
+    #     ax_test_split_temp_proj.set_title(str(value_dpt) + '\n' + str(cut_calue))
+    #     ax_wfs_shared_yass.set_xticks([])
+
+    #     wfs_mc = waveforms_yass_to_split[:, :, 5]
+    #     wfs_mc = wfs_mc[wfs_mc.ptp(1).argsort()]
+    #     lower = int(waveforms_yass_to_split.shape[0]*0.05)
+    #     upper = int(waveforms_yass_to_split.shape[0]*0.95)
+    #     max_diff = 0
+    #     max_diff_N = 0
+    #     for n in tqdm(np.arange(lower, upper)):
+    #         temp_1 = np.mean(wfs_mc[:n], axis = 0)
+    #         temp_2 = np.mean(wfs_mc[n:], axis = 0)
+    #         if np.abs(temp_1-temp_2).max() > max_diff:
+    #             max_diff = np.abs(temp_1-temp_2).max()
+    #             max_diff_N = n
+    #     print(max_diff)
+    #     print(max_diff_N)
+
+    colors = ["goldenrod", "blue"]
+    indices = [ind_st2, not_match_ind_st2]
+    wfs_lda_blue = np.array([])
+    template_blue = None
+
+    for indices_match, color, h_shift in zip(indices, colors, h_shifts):
+        if len(indices_match) > 0:
+            mcs_abs_cluster_sorting = np.full(indices_match.shape, shared_mc)
+            firstchans_cluster_sorting = np.maximum(
+                mcs_abs_cluster_sorting - 20, 0
+            )
+            # mcs_abs_cluster_sorting = mcs_abs_cluster_sorting2[indices_match]
+            # firstchans_cluster_sorting = firstchans_cluster_sorting2[
+            #     indices_match
+            # ]
+            spike_times = st_2[indices_match]
+
+            (
+                waveforms,
+                first_chan_cluster,
+            ) = plot_waveforms_geom_unit_with_return(
+                geom,
+                firstchans_cluster_sorting,
+                mcs_abs_cluster_sorting,
+                spike_times,
+                z_ids, 
+                mcid,
+                raw_bin=raw_bin,
+                num_spikes_plot=num_spikes_plot,
+                t_range=t_range,
+                num_channels=num_channels,
+                num_rows=num_rows,
+                do_mean=False,
+                scale=scale,
+                h_shift=h_shift,
+                alpha=alpha,
+                ax=ax_sorting2,
+                color=color,
+            )
+            mc = (
+                shared_mc - firstchans_cluster_sorting
+            )  # waveforms.mean(0).ptp(0).argmax()
+            start = np.maximum(mc - 5, 0)
+            end = start + 11
+            for i in range(min(len(waveforms), num_spikes_plot)):
+                ax_wfs_shared_ks.plot(
+                    waveforms[i, 30:-30, start[i] : end[i]].T.flatten(),
+                    alpha=alpha,
+                    color=color,
+                )
+            for i in range(10):
+                ax_wfs_shared_ks.axvline(61 + 61 * i, c="black")
+            if color == "blue":
+                wfs_lda_blue = np.stack(
+                    [
+                        waveforms[i, :, start[i] : end[i]]
+                        for i in range(len(waveforms))
+                    ],
+                    axis=0,
+                )
+                template_blue = wfs_lda_blue.mean(0)
+
+    waveforms_outliers = get_outliers_wfs(    
+        spike_times_outliers_1,
+        raw_bin,
+        shared_mc,
+        geom
+    )
+
+    if waveforms_outliers is not None:
+        for i in range(len(waveforms_outliers)):
+            ax_wfs_outliers.plot(
+                waveforms_outliers[i, 15:-15].T.flatten(),
+                alpha=0.05,
+                color=''black,
+            )
+        for i in range(10):
+            ax_wfs_shared_ks.axvline(91 + 91 * i, c="black")
+
+        ax_wfs_shared_yass.grid(which="both")    
+        ax_wfs_shared_yass.set_title("Outliers")
+
+
+
+    lda_labels = np.zeros(wfs_shared.shape[0] + wfs_lda_red.shape[0])
+    lda_labels[: wfs_shared.shape[0]] = 1
+    if wfs_lda_red.size and wfs_shared.size:
+        lda_comps = LDA(n_components=1).fit_transform(
+            apply_tpca(wfs_shared, wfs_lda_red),
+            lda_labels,
+        )
+        ax_lda_red_yellow.hist(
+            lda_comps[: wfs_shared.shape[0], 0],
+            bins=25,
+            color="goldenrod",
+            alpha=0.5,
+        )
+        ax_lda_red_yellow.hist(
+            lda_comps[wfs_shared.shape[0] :, 0],
+            bins=25,
+            color="red",
+            alpha=0.5,
+        )
+
+    if wfs_lda_blue.size and wfs_shared.size:
+        lda_labels = np.zeros(wfs_shared.shape[0] + wfs_lda_blue.shape[0])
+        lda_labels[: wfs_shared.shape[0]] = 1
+        lda_comps = LDA(n_components=1).fit_transform(
+            apply_tpca(wfs_shared, wfs_lda_blue),
+            lda_labels,
+        )
+        ax_lda_blue_yellow.hist(
+            lda_comps[: wfs_shared.shape[0], 0],
+            bins=25,
+            color="goldenrod",
+            alpha=0.5,
+        )
+        ax_lda_blue_yellow.hist(
+            lda_comps[wfs_shared.shape[0] :, 0],
+            bins=25,
+            color="blue",
+            alpha=0.5,
+        )
+
+    if (
+        len(not_match_ind_st1) > 0
+        and len(not_match_ind_st2) > 0
+        and wfs_lda_red.size
+        and wfs_lda_blue.size
+    ):
+        lda_labels = np.zeros(wfs_lda_blue.shape[0] + wfs_lda_red.shape[0])
+        lda_labels[: wfs_lda_blue.shape[0]] = 1
+        lda_comps = LDA(n_components=1).fit_transform(
+            apply_tpca(wfs_lda_blue, wfs_lda_red),
+            lda_labels,
+        )
+        ax_lda_blue_red.hist(
+            lda_comps[: wfs_lda_blue.shape[0], 0],
+            bins=25,
+            color="red",
+            alpha=0.5,
+        )
+        ax_lda_blue_red.hist(
+            lda_comps[wfs_lda_blue.shape[0] :, 0],
+            bins=25,
+            color="blue",
+            alpha=0.5,
+        )
+
+    #     ax_wfs_shared_ks.set_xticks([])
+    ax_wfs_shared_ks.set_xticks(list_ax_wfs_shared_ks, minor=True)
+
+    mc = templates_yass[cluster_id_1].ptp(0).argmax()
+
+    ax_wfs_shared_yass.set_ylim(
+        (
+            templates_yass[cluster_id_1, :, mc].min() - 2,
+            templates_yass[cluster_id_1, :, mc].max() + 2,
+        )
+    )
+
+    ax_wfs_shared_yass.set_yticks(
+        np.arange(
+            templates_yass[cluster_id_1, :, mc].min() - 2,
+            templates_yass[cluster_id_1, :, mc].max() + 2,
+            1,
+        ),
+        minor=True,
+    )
+
+    ax_wfs_shared_yass.grid(which="both")    
+    color_array_yass_close = ["red", "cyan", "lime", "fuchsia"]
+    pc_scatter = PCA(2)
+
+    # CHANGE TO ADD RED / BLACK
+    if template_black is not None:
+        ax_templates_yass.plot(
+            template_black[30:-30].T.flatten(),
+            c="black"
+            #         templates_yass[cluster_id_1, 30:-30, mc_plot - 5 : mc_plot + 5].T.flatten(),
+            #         c=color_array_yass_close[0],
+        )
+    else:
+        print("No black template")
+    if template_red is not None:
+        ax_templates_yass.plot(template_red[30:-30].T.flatten(), c="red")
+    else:
+        print("No red template")
+    some_in_cluster = np.random.choice(
+        list(range((labels_yass == cluster_id_1).sum())),
+        replace=False,
+        size=min((labels_yass == cluster_id_1).sum(), num_spikes_plot),
+    )
+    waveforms_unit = read_waveforms(
+        spike_index_yass[labels_yass == cluster_id_1, 0][some_in_cluster],
+        raw_bin,
+        geom.shape[0],
+        spike_length_samples=121,
+        channels=np.arange(mc - 10, mc + 10).astype("int"),
+    )[0]
+    pcs_unit = pc_scatter.fit_transform(
+        waveforms_unit.reshape(waveforms_unit.shape[0], -1)
+    )
+
+    ax_PCs_yass.scatter(
+        pcs_unit[:, 0], pcs_unit[:, 1], s=2, c=color_array_yass_close[0]
+    )
+
+    for j in range(2):
+        ax_templates_yass.plot(
+            templates_yass[
+                closest_clusters_hdb[j], 11:61+11, shared_mc - 5 : shared_mc + 6
+            ].T.flatten(),
+            c=color_array_yass_close[j + 1],
+        )
+
+        #         print("abs distance :")
+        #         print(np.abs(templates_yass[closest_clusters_hdb[j], :, mc - 5 : mc + 5]-templates_yass[cluster_id_1, :, mc - 5 : mc + 5]).max())
+        #         print("cosine distance :")
+        #         print(scipy.spatial.distance.cosine(templates_yass[closest_clusters_hdb[j], :, mc - 5 : mc + 5].flatten(), templates_yass[cluster_id_1, :, mc - 5 : mc + 5].flatten()))
+
+        some_in_cluster = np.random.choice(
+            list(range((labels_yass == closest_clusters_hdb[j]).sum())),
+            replace=False,
+            size=min(
+                (labels_yass == closest_clusters_hdb[j]).sum(), num_spikes_plot
+            ),
+        )
+        waveforms_unit_bis = read_waveforms(
+            spike_index_yass[labels_yass == closest_clusters_hdb[j], 0][
+                some_in_cluster
+            ],
+            raw_bin,
+            geom.shape[0],
+            spike_length_samples=121,
+            channels=np.arange(mc - 10, mc + 10).astype("int"),
+        )[0]
+        lda_labels = np.zeros(
+            waveforms_unit_bis.shape[0] + waveforms_unit.shape[0]
+        )
+        lda_labels[: waveforms_unit.shape[0]] = 1
+        lda_comps = LDA(n_components=1).fit_transform(
+            apply_tpca(waveforms_unit, waveforms_unit_bis),
+            lda_labels,
+        )
+        if j == 0:
+            ax_LDA_yass = ax_LDA1_yass
+        else:
+            ax_LDA_yass = ax_LDA2_yass
+
+        ax_LDA_yass.hist(
+            lda_comps[: waveforms_unit.shape[0], 0],
+            bins=25,
+            color=color_array_yass_close[0],
+            alpha=0.5,
+        )
+        ax_LDA_yass.hist(
+            lda_comps[waveforms_unit.shape[0] :, 0],
+            bins=25,
+            color=color_array_yass_close[j + 1],
+            alpha=0.5,
+        )
+
+    #         pcs_unit = pc_scatter.fit_transform(waveforms_unit_bis.reshape(waveforms_unit_bis.shape[0], -1))
+    #         ax_PCs_yass.scatter(pcs_unit[:, 0], pcs_unit[:, 1], s=2, c=color_array_yass_close[j+1])
+    ax_PCs_yass.yaxis.tick_right()
+
+    for i in range(10):
+        ax_templates_yass.axvline(61 + 61 * i, c="black")
+    ax_templates_yass.set_xticks([])
+    ax_templates_yass.set_title(
+        f"{sorting1_name} close Units: {closest_clusters_hdb[0]}, {closest_clusters_hdb[1]}, {closest_clusters_hdb[2]}"
+    )
+
+    ax_LDA1_yass.set_xticks([])
+    ax_LDA2_yass.set_xticks([])
+
+    t0 = templates_yass[cluster_id_1, :, mc - 5 : mc + 5].T.flatten()
+    t1 = templates_yass[
+        closest_clusters_hdb[0], :, mc - 5 : mc + 5
+    ].T.flatten()
+    t2 = templates_yass[
+        closest_clusters_hdb[1], :, mc - 5 : mc + 5
+    ].T.flatten()
+    try:
+        ax_LDA1_yass.set_title(
+            f"LDA: {closest_clusters_hdb[0]}, temp. dist {np.abs(t0 - t1).max():0.2f}"
+        )
+        ax_LDA2_yass.set_title(
+            f"LDA: {closest_clusters_hdb[1]}, temp. dist {np.abs(t0 - t2).max():0.2f}"
+        )
+    except:
+        print("problem neighbors")
+    ax_PCs_yass.set_title("2 PCs")
+
+    mc = templates_ks[cluster_id_2].ptp(0).argmax()
+
+    ax_wfs_shared_ks.set_ylim(
+        (
+            templates_ks[cluster_id_2, :, mc].min() - 2,
+            templates_ks[cluster_id_2, :, mc].max() + 2,
+        )
+    )
+    ax_wfs_shared_ks.set_yticks(
+        np.arange(
+            templates_ks[cluster_id_2, :, mc].min() - 2,
+            templates_ks[cluster_id_2, :, mc].max() + 2,
+            1,
+        ),
+        minor=True,
+    )
+    ax_wfs_shared_ks.grid(which="both")
+
+    color_array_ks_close = ["blue", "green", "magenta", "orange"]
+    pc_scatter = PCA(2)
+
+    # CHANGE TO ADD RED / BLACK
+    if template_black is not None:
+        ax_templates_ks.plot(
+            template_black[30:-30].T.flatten(),
+            c="black"
+            #         templates_ks[cluster_id_2, 30:-30, mc_plot - 5 : mc_plot + 5].T.flatten(),
+            #         c=color_array_ks_close[0],
+        )
+    else:
+        print("again, no black template")
+    if template_blue is not None:
+        ax_templates_ks.plot(template_blue[30:-30].T.flatten(), c="blue")
+    else:
+        print("No blue template")
+    some_in_cluster = np.random.choice(
+        list(range((labels_ks == cluster_id_2).sum())),
+        replace=False,
+        size=min((labels_ks == cluster_id_2).sum(), num_spikes_plot),
+    )
+    load_times = spike_index_ks[labels_ks == cluster_id_2, 0][some_in_cluster].astype('int')
+    waveforms_unit = read_waveforms(
+        load_times,
+        raw_bin,
+        geom.shape[0],
+        spike_length_samples=121,
+        channels=np.arange(mc - 10, mc + 10).astype('int'),
+    )[0]
+    pcs_unit = pc_scatter.fit_transform(
+        waveforms_unit.reshape(waveforms_unit.shape[0], -1)
+    )
+
+    ax_PCs_ks.scatter(
+        pcs_unit[:, 0], pcs_unit[:, 1], s=2, c=color_array_ks_close[0]
+    )
+
+    for j in range(2):
+
+        ax_templates_ks.plot(
+            templates_ks[
+                closest_clusters_kilo[j], 11:61+11, shared_mc - 5 : shared_mc + 6
+            ].T.flatten(),
+            c=color_array_ks_close[j + 1],
+        )
+
+        some_in_cluster = np.random.choice(
+            list(range((labels_ks == closest_clusters_kilo[j]).sum())),
+            replace=False,
+            size=min(
+                (labels_ks == closest_clusters_kilo[j]).sum(), num_spikes_plot
+            ),
+        )
+
+        if (labels_ks == closest_clusters_kilo[j]).sum() > 0:
+            waveforms_unit_bis = read_waveforms(
+                spike_index_ks[labels_ks == closest_clusters_kilo[j], 0][
+                    some_in_cluster
+                ],
+                raw_bin,
+                geom.shape[0],
+                spike_length_samples=121,
+                channels=np.arange(mc - 10, mc + 10).astype("int"),
+            )[0]
+            # DO TPCA
+            lda_labels = np.zeros(
+                waveforms_unit_bis.shape[0] + waveforms_unit.shape[0]
+            )
+            lda_labels[: waveforms_unit.shape[0]] = 1
+            lda_comps = LDA(n_components=1).fit_transform(
+                apply_tpca(waveforms_unit, waveforms_unit_bis),
+                lda_labels,
+            )
+            if j == 0:
+                ax_LDA1_ks.hist(
+                    lda_comps[: waveforms_unit.shape[0], 0],
+                    bins=25,
+                    color=color_array_ks_close[0],
+                    alpha=0.5,
+                )
+                ax_LDA1_ks.hist(
+                    lda_comps[waveforms_unit.shape[0] :, 0],
+                    bins=25,
+                    color=color_array_ks_close[j + 1],
+                    alpha=0.5,
+                )
+            else:
+                ax_LDA2_ks.hist(
+                    lda_comps[: waveforms_unit.shape[0], 0],
+                    bins=25,
+                    color=color_array_ks_close[0],
+                    alpha=0.5,
+                )
+                ax_LDA2_ks.hist(
+                    lda_comps[waveforms_unit.shape[0] :, 0],
+                    bins=25,
+                    color=color_array_ks_close[j + 1],
+                    alpha=0.5,
+                )
+    #         if len(waveforms_unit_bis) > 2:
+    #             pcs_unit = pc_scatter.fit_transform(waveforms_unit_bis.reshape(waveforms_unit_bis.shape[0], -1))
+    #             ax_PCs_ks.scatter(pcs_unit[:, 0], pcs_unit[:, 1], s=2, c=color_array_ks_close[j+1])
+    ax_LDA1_ks.set_xticks([])
+    ax_LDA2_ks.set_xticks([])
+    ax_PCs_ks.yaxis.tick_right()
+
+    t0 = templates_ks[cluster_id_2, :, mc - 5 : mc + 5]
+    t1 = templates_ks[closest_clusters_kilo[0], :, mc - 5 : mc + 5]
+    t2 = templates_ks[closest_clusters_kilo[1], :, mc - 5 : mc + 5]
+    try:
+        ax_LDA1_ks.set_title(
+            f"LDA: {closest_clusters_kilo[0]}, temp. dist {np.abs(t0 - t1).max():0.2f}"
+        )
+        ax_LDA2_ks.set_title(
+            f"LDA: {closest_clusters_kilo[1]}, temp. dist {np.abs(t0 - t2).max():0.2f}"
+        )
+    except Exception as e:
+        print("problem KS neighbors", e)
+    ax_PCs_ks.set_title("2 PCs")
+
+    for i in range(10):
+        ax_templates_ks.axvline(61 + 61 * i, c="black")
+    ax_templates_ks.set_xticks([])
+    ax_templates_ks.set_title(
+        f"{sorting2_name} close Units: {closest_clusters_kilo[0]}, {closest_clusters_kilo[1]}"
+    )
+
+    return fig, np.round(agreement, 2) * 100
