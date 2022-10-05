@@ -25,8 +25,8 @@ def align_spikes_by_templates(
     list_argmin = np.zeros(templates.shape[0])
     template_maxchans = []
     for i in range(templates.shape[0]):
-        mc = templates[i].ptp(0).argmax()
-        list_argmin[i] = templates[i, :, mc].argmin()
+        mc = np.abs(templates[i]).max(0).argmax()
+        list_argmin[i] = np.abs(templates[i, :, mc]).argmax() #MAYBE CHANGE NAME HERE
         template_maxchans.append(mc)
     idx_not_aligned = np.where(list_argmin != trough_offset)[0]
     template_shifts = np.array(list_argmin, dtype=int) - trough_offset
@@ -258,7 +258,7 @@ def split_individual_cluster(
         is_split = True
 
     # LDA split - split by clustering LDA embeddings: X,y = wfs,max_channels
-    max_channels_all = wfs_unit.ptp(1).argmax(1)
+    max_channels_all = np.abs(wfs_unit).max(1).argmax(1)
     if is_split:
         # split by herdingspikes, run LDA split on new clusters.
         labels_unit[labels_rec_hdbscan == -1] = -1
@@ -270,7 +270,7 @@ def split_individual_cluster(
             ]
             # get max_channels for new unit
             max_channels = (
-                wfs_unit[labels_rec_hdbscan == new_unit_id].ptp(1).argmax(1)
+                np.abs(wfs_unit[labels_rec_hdbscan == new_unit_id]).max(1).argmax(1)
             )
             # lda split
             lda_labels = run_LDA_split(
@@ -467,7 +467,7 @@ def get_proposed_pairs(
     dist_argsort = dist.argsort(axis=1)[:, 1 : n_temp + 1]
     dist_template = np.zeros((dist_argsort.shape[0], n_temp))
     for i in range(n_templates):
-        mc = min(templates[i].ptp(0).argmax(), 384 - n_channels_half)
+        mc = min(np.abs(templates[i]).max(0).argmax(), 384 - n_channels_half)
         mc = max(mc, n_channels_half)
         temp_a = templates[i, :, mc - n_channels_half : mc + n_channels_half]
         for j in range(n_temp):
@@ -814,20 +814,20 @@ def get_merged(
                 if unit_reference != unit_bis_reference:
                     # ALIGN BASED ON MAX PTP TEMPLATE MC
                     if (
-                        templates[unit_reference].ptp(0).max()
-                        < templates[unit_bis_reference].ptp(0).max()
+                        np.abs(templates[unit_reference]).max()
+                        < np.abs(templates[unit_bis_reference]).max()
                     ):
-                        mc = templates[unit_bis_reference].ptp(0).argmax()
+                        mc = np.abs(templates[unit_bis_reference]).max(0).argmax()
                         two_units_shift = (
-                            templates[unit_reference, :, mc].argmin()
-                            - templates[unit_bis_reference, :, mc].argmin()
+                            np.abs(templates[unit_reference, :, mc]).argmax()
+                            - np.abs(templates[unit_bis_reference, :, mc]).argmax()
                         )
                         unit_shifted = unit_reference
                     else:
-                        mc = templates[unit_reference].ptp(0).argmax()
+                        mc = np.abs(templates[unit_reference]).max(0).argmax()
                         two_units_shift = (
-                            templates[unit_bis_reference, :, mc].argmin()
-                            - templates[unit_reference, :, mc].argmin()
+                            np.abs(templates[unit_bis_reference, :, mc]).argmax()
+                            - np.abs(templates[unit_reference, :, mc]).argmax()
                         )
                         unit_shifted = unit_bis_reference
                     dpt_val = get_diptest_value(
