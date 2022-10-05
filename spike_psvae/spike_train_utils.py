@@ -1,8 +1,10 @@
+# %%
 import numpy as np
 from tqdm.auto import tqdm
 from . import spikeio
 
 
+# %%
 def make_labels_contiguous(
     labels, in_place=False, return_orig_unit_labels=False
 ):
@@ -20,6 +22,7 @@ def make_labels_contiguous(
     return out
 
 
+# %%
 def clean_align_and_get_templates(
     spike_train,
     n_channels,
@@ -121,8 +124,8 @@ def clean_align_and_get_templates(
 
         # find trough misalignment
         template = reducer(waveforms, axis=0)
-        template_mc = template.ptp(0).argmax()
-        trough = template[:, template_mc].argmin()
+        template_mc = np.abs(template).max(0).argmax()
+        trough = np.abs(template[:, template_mc]).argmax()
         # shift is actual trough - desired trough
         # so, if shift > 0, we need to subtract it
         shift = trough - trough_offset_load
