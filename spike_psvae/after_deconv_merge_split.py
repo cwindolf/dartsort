@@ -1,6 +1,8 @@
+# %%
 import hdbscan
 import numpy as np
 
+# %%
 from spike_psvae.isocut5 import isocut5 as isocut
 from sklearn.decomposition import PCA
 from sklearn.discriminant_analysis import LinearDiscriminantAnalysis as LDA
@@ -11,6 +13,7 @@ from spike_psvae.pyks_ccg import ccg_metrics
 from tqdm.auto import tqdm, trange
 
 
+# %%
 def split(
     labels_deconv,
     deconv_extractor,
@@ -68,12 +71,13 @@ def split(
     return labels_deconv
 
 
+# %%
 def get_templates_com(templates, geom, n_channels=12):
     x_z_templates = np.zeros((templates.shape[0], 2))
     n_chan_half = n_channels // 2
     n_chan_total = geom.shape[0]
     for i in range(templates.shape[0]):
-        mc = templates[i].ptp(0).argmax()
+        mc = np.abs(templates[i]).max(0).argmax()
         mc = mc - mc % 2
         mc = max(min(n_chan_total - n_chan_half, mc), n_chan_half)
         x_z_templates[i, 0] = (
@@ -91,6 +95,7 @@ def get_templates_com(templates, geom, n_channels=12):
     return x_z_templates
 
 
+# %%
 def check_merge(
     unit_reference,
     unit_bis_reference,
@@ -114,11 +119,11 @@ def check_merge(
     if unit_reference == unit_bis_reference:
         return False, unit_bis_reference, 0
 
-    unit_mc = templates[unit_reference].ptp(0).argmax()
-    unit_bis_mc = templates[unit_bis_reference].ptp(0).argmax()
+    unit_mc = np.abs(templates[unit_reference]).max(0).argmax()
+    unit_bis_mc = np.abs(templates[unit_bis_reference]).max(0).argmax()
     mc_diff = np.abs(unit_mc - unit_bis_mc)
-    unit_ptp = templates[unit_reference].ptp(0).max()
-    unit_bis_ptp = templates[unit_bis_reference].ptp(0).max()
+    unit_ptp = np.abs(templates[unit_reference]).max()
+    unit_bis_ptp = np.abs(templates[unit_bis_reference]).max()
     ptp_diff = np.abs(
         templates[unit_bis_reference].ptp(0).max()
         - templates[unit_reference].ptp(0).max()
@@ -261,6 +266,7 @@ def check_merge(
     return False, unit_bis_reference, 0
 
 
+# %%
 def merge(
     labels,
     templates,
@@ -307,7 +313,7 @@ def merge(
     print(n_templates, reference_units.shape)
 
     # get template shifts
-    template_mcs = templates.ptp(1).argmax(1)
+    template_mcs = np.abs(templates).max(1).argmax(1)
     template_mctraces = templates[np.arange(len(templates)), :, template_mcs]
     template_troughs = template_mctraces.argmin(1)
     # pair_shifts[i, j] = template i trough time - template j trough time
@@ -437,6 +443,7 @@ def merge(
     return labels_updated
 
 
+# %% [markdown]
 # def clean_big_clusters(
 #     templates,
 #     spike_train,
@@ -465,15 +472,18 @@ def merge(
 #         mc = templates[unit].ptp(0).argmax()
 #         template_mc_trace = templates[unit, :, mc]
 
+# %% [markdown]
 #         if template_mc_trace.ptp() < min_ptp:
 #             continue
 
+# %% [markdown]
 #         in_unit = np.flatnonzero(spike_train[:, 1] == unit)
 #         if in_unit.size <= 2 * min_size_split:
 #             # we won't split if smaller than this
 #             continue
 #         n_samples = min(max_samples, in_unit.size)
 
+# %% [markdown]
 #         # pick random wfs
 #         choices = rg.choice(in_unit.size, size=n_samples, replace=False)
 #         spike_times_unit = spike_train[in_unit[choices], 0]
@@ -484,12 +494,14 @@ def merge(
 #         assert not skipped_idx.size
 #         wfs_unit = wfs_unit[:, :, 0]
 
+# %% [markdown]
 #         # ptp order
 #         ptps_unit = ptps[in_unit]
 #         ptps_choice = ptps_unit[choices]
 #         ptps_sort = np.argsort(ptps_choice)
 #         wfs_sort = wfs_unit[ptps_sort]
 
+# %% [markdown]
 #         lower = int(max(np.ceil(in_unit.size * 0.05), min_size_split))
 #         upper = int(
 #             min(np.floor(in_unit.size * 0.95), in_unit.size - min_size_split)
@@ -497,6 +509,7 @@ def merge(
 #         if lower >= upper:
 #             continue
 
+# %% [markdown]
 #         max_diff = 0
 #         max_diff_ix = 0
 #         for n in range(lower, upper):
@@ -511,28 +524,35 @@ def merge(
 #             ptps_sort[max_diff_ix] + ptps_sort[max_diff_ix - 1]
 #         )
 
+# %% [markdown]
 #         if max_diff < split_diff:
 #             continue
 
+# %% [markdown]
 #         which_a = in_unit[ptps_unit <= max_diff_ptp]
 #         which_b = in_unit[ptps_unit > max_diff_ptp]
 
+# %% [markdown]
 #         temp_a = reducer(wfs_unit[:max_diff_ix], axis=0)
 #         temp_b = reducer(wfs_unit[max_diff_ix:], axis=0)
 #         temp_diff_a = np.abs(temp_a - template_mc_trace).max()
 #         temp_diff_b = np.abs(temp_b - template_mc_trace).max()
 
+# %% [markdown]
 #         if temp_diff_a < temp_diff_b:
 #             spike_train[which_b] = next_label
 #         else:
 #             spike_train[which_a] = next_label
 
+# %% [markdown]
 #         n_temp_cleaned += 1
 #         next_label += 1
 
+# %% [markdown]
 #     return n_temp_cleaned
 
 
+# %%
 def clean_big_clusters(
     templates,
     spike_train,
@@ -560,7 +580,7 @@ def clean_big_clusters(
 
     for unit in trange(templates.shape[0], desc="clean big"):
         # orig_ids[unit] = unit
-        mc = templates[unit].ptp(0).argmax()
+        mc = np.abs(templates[unit]).max(0).argmax()
         template_mc_trace = templates[unit, :, mc]
         if template_mc_trace.ptp() < min_ptp:
             continue
@@ -621,6 +641,7 @@ def clean_big_clusters(
     return n_temp_cleaned
 
 
+# %%
 def remove_oversplits(templates, spike_train, min_ptp=4.0, max_diff=2.0):
     """This will modify spike_train"""
     # remove oversplits according to max abs norm
