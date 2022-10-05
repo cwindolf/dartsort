@@ -1,3 +1,4 @@
+# %%
 import numpy as np
 import spikeinterface
 from spikeinterface.comparison import compare_two_sorters
@@ -10,6 +11,7 @@ from tqdm.auto import tqdm
 import scipy
 
 
+# %%
 def compute_shifted_similarity(template1, template2, shifts=[0]):
     # TODO trim instead of padding, it can artificially increase this distance
     curr_similarities = []
@@ -34,6 +36,7 @@ def compute_shifted_similarity(template1, template2, shifts=[0]):
     return np.min(curr_similarities), shifts[np.argmin(curr_similarities)]
 
 
+# %%
 def get_unit_similarities(
     cluster_id,
     st_1,
@@ -50,7 +53,7 @@ def get_unit_similarities(
     waveforms1, _ = read_waveforms(st_1, raw_data_bin, geom_array.shape[0])
     template1 = np.median(waveforms1, axis=0)
     original_template = np.copy(template1)
-    max_ptp_channel = np.argmax(template1.ptp(0))
+    max_ptp_channel = np.argmax(np.abs(template1).max(0))
     channel_range = (
         max(max_ptp_channel - num_channels_similarity // 2, 0),
         max_ptp_channel + num_channels_similarity // 2,
@@ -126,6 +129,7 @@ def get_unit_similarities(
     )
 
 
+# %%
 def compute_spiketrain_agreement(st_1, st_2, delta_frames=12):
     # create figure for each match
     times_concat = np.concatenate((st_1, st_2))
@@ -167,6 +171,7 @@ def compute_spiketrain_agreement(st_1, st_2, delta_frames=12):
     return ind_st1, ind_st2, not_match_ind_st1, not_match_ind_st2
 
 
+# %%
 def get_agreement_indices(
     cluster_id_1, cluster_id_2, sorting1, sorting2, delta_frames=12
 ):
@@ -216,6 +221,7 @@ def get_agreement_indices(
     )
 
 
+# %%
 def remove_duplicate_units(clusterer, spike_frames, maxptps):
     sorting = make_sorting_from_labels_frames(clusterer.labels_, spike_frames)
     # remove duplicates
@@ -243,6 +249,7 @@ def remove_duplicate_units(clusterer, spike_frames, maxptps):
     return clusterer, remove_ids
 
 
+# %%
 def remove_duplicate_spikes(
     clusterer,
     spike_frames,
@@ -307,6 +314,7 @@ def remove_duplicate_spikes(
     return clusterer, remove_indices_list, remove_spikes
 
 
+# %%
 def remove_self_duplicates(
     spike_times,
     spike_labels,
@@ -381,9 +389,9 @@ def remove_self_duplicates(
 
             # reshape to NxT
             template = np.median(wfs_unit, axis=0)
-            mc = template.ptp(0).argmax()
+            mc = np.abs(template).max(0).argmax()
             template_mc = template[:, mc]
-            template_argmin = template_mc.argmin()
+            template_argmin = np.abs(template_mc).argmax()
 
             # get subsets of wfs -- will we remove leading (wfs_1)
             # or trailing (wfs_2) waveform in each case?
@@ -405,8 +413,8 @@ def remove_self_duplicates(
             # first is better will have a 1 where wfs_1 was better
             # aligned then wfs_2, so that first_viol_ix + best_aligned
             # is the index of the waveforms to *remove!*
-            argmins_1 = wfs_1.argmin(axis=1)
-            argmins_2 = wfs_2.argmin(axis=1)
+            argmins_1 = np.abs(wfs_1).argmax(axis=1)
+            argmins_2 = np.abs(wfs_2).argmax(axis=1)
             first_is_better = np.abs(argmins_1 - template_argmin) <= (
                 argmins_2 - template_argmin
             )
@@ -425,6 +433,7 @@ def remove_self_duplicates(
     return indices_to_keep, indices_to_remove
 
 
+# %%
 def perturb_features(x, z, logmaxptp_scaled, noise_scale):
     x_p = x + np.random.normal(loc=0.0, scale=noise_scale)
     z_p = z + np.random.normal(loc=0.0, scale=noise_scale)
@@ -434,6 +443,7 @@ def perturb_features(x, z, logmaxptp_scaled, noise_scale):
     return x_p, z_p, log_maxptp_scaled_p
 
 
+# %%
 def copy_spikes(
     x,
     z,
@@ -489,6 +499,7 @@ def copy_spikes(
     return new_x, new_z, new_maxptps, new_spike_index, true_spike_indices
 
 
+# %%
 def cluster_spikes(
     x,
     z,
@@ -631,6 +642,7 @@ def cluster_spikes(
     )
 
 
+# %%
 def split_big_clusters(
     labels_original,
     x,
@@ -684,6 +696,7 @@ def split_big_clusters(
     return labels_new
 
 
+# %%
 def compute_cluster_centers(clusterer):
     cluster_centers_data = []
     cluster_ids = np.setdiff1d(np.unique(clusterer.labels_), [-1])
@@ -696,6 +709,7 @@ def compute_cluster_centers(clusterer):
     return cluster_centers
 
 
+# %%
 def relabel_by_depth(clusterer, cluster_centers):
     # re-label each cluster by z-depth
     indices_depth = np.argsort(-cluster_centers.iloc[:, 1].to_numpy())
@@ -709,6 +723,7 @@ def relabel_by_depth(clusterer, cluster_centers):
     return clusterer
 
 
+# %%
 def get_closest_clusters_hdbscan(
     cluster_id, cluster_centers, num_close_clusters=2
 ):
@@ -724,6 +739,7 @@ def get_closest_clusters_hdbscan(
     return closest_clusters
 
 
+# %%
 def get_closest_clusters_kilosort(
     cluster_id, kilo_cluster_depth_means, num_close_clusters=2
 ):
@@ -741,6 +757,7 @@ def get_closest_clusters_kilosort(
     return closest_clusters
 
 
+# %%
 def get_closest_clusters_hdbscan_kilosort(
     cluster_id, cluster_centers, kilo_cluster_depth_means, num_close_clusters=2
 ):
@@ -759,6 +776,7 @@ def get_closest_clusters_hdbscan_kilosort(
     return closest_clusters
 
 
+# %%
 def get_closest_clusters_kilosort_hdbscan(
     cluster_id, kilo_cluster_depth_means, cluster_centers, num_close_clusters=2
 ):
@@ -772,6 +790,7 @@ def get_closest_clusters_kilosort_hdbscan(
     return closest_clusters
 
 
+# %%
 def make_sorting_from_labels_frames(
     labels, spike_frames, sampling_frequency=30000
 ):
@@ -791,6 +810,7 @@ def make_sorting_from_labels_frames(
     return sorting
 
 
+# %%
 def subsample_spikes(
     n_spikes,
     spike_index,
@@ -856,10 +876,12 @@ def subsample_spikes(
     return selected_spike_indices
 
 
+# %%
 def reject_rate(x, d, a, target, n_bins):
     return (np.mean(n_bins * a * np.clip(1 - d * x, 0, 1)) - target) ** 2
 
 
+# %%
 def get_valid_indices(maxptps, n_bins, n_spikes, exponent=1):
     assert n_bins is not None
     bins = np.linspace(maxptps.min(), maxptps.max(), n_bins)
