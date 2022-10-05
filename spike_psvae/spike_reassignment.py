@@ -1,3 +1,4 @@
+# %%
 """
 outlier detection & soft assignment
 
@@ -18,6 +19,7 @@ output:
         max norm of tpca'd spikes; scores used to reassign spikes
 """
 
+# %%
 import numpy as np
 import scipy.spatial.distance as dist
 from sklearn.decomposition import PCA
@@ -33,6 +35,7 @@ from spike_psvae.waveform_utils import get_local_geom, relativize_waveforms, cha
 from spike_psvae.pre_deconv_merge_split import get_proposed_pairs, get_x_z_templates
 import matplotlib.pyplot as plt
 
+# %%
 def run(
     residual_bin_path,
     template_path,
@@ -57,8 +60,8 @@ def run(
 
     # load templates
     templates = np.load(template_path)
-    ptps = templates.ptp(1)
-    mcs = ptps.argmax(1)
+#     ptps = templates.ptp(1)
+    mcs = np.abs(templates).max(1).argmax()   #     ptps.argmax(1)
 
     # load spike train
     spike_train = np.load(spike_train_path)
@@ -177,10 +180,12 @@ def run(
 
     return soft_assignment_scores, spike_reassignment, reassigned_scores
 
+# %%
 def get_similar_templates(templates, extract_channel_index_40, n_sim_units, n_chans, geom):
     n_units = templates.shape[0]
-    ptps = templates.ptp(1)
-    mcs = ptps.argmax(1)
+#     ptps = templates.ptp(1)
+    mcs = np.abs(templates).max(1).argmax(1)
+#     mcs = ptps.argmax(1)
     
     #localize templates
     x_z_templates = np.zeros((n_units,2))
