@@ -2717,7 +2717,7 @@ def diagnostic_plots_with_outliers(
             ax_wfs_outliers.plot(
                 waveforms_outliers[i, 15:-15].T.flatten(),
                 alpha=0.05,
-                color=''black,
+                color='k',
             )
         for i in range(10):
             ax_wfs_shared_ks.axvline(91 + 91 * i, c="black")
