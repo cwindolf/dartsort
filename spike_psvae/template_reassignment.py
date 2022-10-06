@@ -1,16 +1,13 @@
-# %%
 import h5py
 import multiprocessing
 import numpy as np
 
-# %%
 from collections import namedtuple
 from multiprocessing.pool import Pool
 from scipy.spatial.distance import cdist
 from tqdm.auto import tqdm
 
 
-# %%
 def template_reassignment(
     subtraction_h5,
     residual_binary_file,
@@ -53,7 +50,7 @@ def template_reassignment(
     # templates on same # of chans as wfs
     Nt, T, n_channels = templates.shape
     assert n_channels == len(geom)
-    template_maxchans = np.abs(templates).max(1).argmax(1) #Shjould we do it here?
+    template_maxchans = templates.ptp(1).argmax(1)
 
     # make a structure for quickly checking whether a waveform
     # should be compared to each template, so we don't do all
@@ -104,7 +101,6 @@ def template_reassignment(
     return reassignments
 
 
-# %%
 def _job(batch_idx):
     p = _job.data
     T = p.padded_templates.shape[1]
@@ -151,7 +147,6 @@ def _job(batch_idx):
     return batch_idx, reassignments
 
 
-# %%
 JobData = namedtuple(
     "JobData",
     [
@@ -168,7 +163,6 @@ JobData = namedtuple(
 )
 
 
-# %%
 def _job_init(
     subtraction_h5,
     residual_binary_file,
@@ -195,7 +189,6 @@ def _job_init(
     )
 
 
-# %%
 def get_raw_local_waveforms(
     spike_index,
     binary_file,
