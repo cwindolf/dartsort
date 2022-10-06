@@ -1,10 +1,8 @@
-# %%
 import numpy as np
 from tqdm.auto import tqdm
 from . import spikeio
 
 
-# %%
 def make_labels_contiguous(
     labels, in_place=False, return_orig_unit_labels=False
 ):
@@ -22,7 +20,6 @@ def make_labels_contiguous(
     return out
 
 
-# %%
 def clean_align_and_get_templates(
     spike_train,
     n_channels,
@@ -64,7 +61,10 @@ def clean_align_and_get_templates(
 
     # clean spike train: remove small units, make labels contiguous
     units, counts = np.unique(aligned_spike_train[:, 1], return_counts=True)
-    print((aligned_spike_train[:, 1].max() + 1) - (units.size - 1), "inactive units")
+    print(
+        (aligned_spike_train[:, 1].max() + 1) - (units.size - 1),
+        "inactive units",
+    )
     if min_n_spikes > 0:
         too_small_units = units[counts < min_n_spikes]
         # don't want to touch the triaged spikes
@@ -92,9 +92,7 @@ def clean_align_and_get_templates(
     )
 
     # a padded waveform storage buffer
-    buffer = np.empty(
-        (n_samples, spike_length_load, n_channels), dtype=dtype
-    )
+    buffer = np.empty((n_samples, spike_length_load, n_channels), dtype=dtype)
 
     # we will iterate through chunks of labels
     units = range(n_units)
@@ -124,7 +122,7 @@ def clean_align_and_get_templates(
 
         # find trough misalignment
         template = reducer(waveforms, axis=0)
-        template_mc = np.abs(template).max(0).argmax()
+        template_mc = template.ptp(0).argmax()
         trough = np.abs(template[:, template_mc]).argmax()
         # shift is actual trough - desired trough
         # so, if shift > 0, we need to subtract it
