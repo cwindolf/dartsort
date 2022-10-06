@@ -1,4 +1,3 @@
-# %%
 import numpy as np
 from sklearn.decomposition import PCA
 from sklearn.discriminant_analysis import LinearDiscriminantAnalysis as LDA
@@ -22,14 +21,14 @@ def align_spikes_by_templates(
     trough_offset=42,
     shift_max=2,
 ):
-    list_argmin = np.zeros(templates.shape[0])
+    spike_time_offsets = np.zeros(templates.shape[0])
     template_maxchans = []
     for i in range(templates.shape[0]):
-        mc = np.abs(templates[i]).max(0).argmax()
-        list_argmin[i] = np.abs(templates[i, :, mc]).argmax() #MAYBE CHANGE NAME HERE
+        mc = templates[i].ptp(0).argmax()
+        spike_time_offsets[i] = np.abs(templates[i, :, mc]).argmax()
         template_maxchans.append(mc)
-    idx_not_aligned = np.where(list_argmin != trough_offset)[0]
-    template_shifts = np.array(list_argmin, dtype=int) - trough_offset
+    idx_not_aligned = np.where(spike_time_offsets != trough_offset)[0]
+    template_shifts = np.array(spike_time_offsets, dtype=int) - trough_offset
 
     shifted_spike_index = spike_index.copy()
     for unit in idx_not_aligned:
@@ -47,7 +46,6 @@ def align_spikes_by_templates(
     )
 
 
-# %%
 def run_LDA_split(wfs, max_channels, threshold_diptest=1.0):
     ncomp = 2
     if np.unique(max_channels).shape[0] < 2:
@@ -79,31 +77,15 @@ def run_LDA_split(wfs, max_channels, threshold_diptest=1.0):
         lda_clusterer = hdbscan.HDBSCAN(min_cluster_size=25, min_samples=25)
         lda_clusterer.fit(lda_comps)
         labels = lda_clusterer.labels_
-        # print("lda no diptest", np.unique(labels))
     else:
         value_dpt, cut_value = isocut(lda_comps[:, 0])
-        # print("lda diptest", value_dpt)
-        # print("dip test", value_dpt, cut_value)
         if value_dpt < threshold_diptest:
             labels = np.zeros(len(max_channels), dtype=int)
-            # print(labels)
         else:
             labels = np.zeros(len(max_channels), dtype=int)
             labels[np.where(lda_comps[:, 0] > cut_value)] = 1
 
-        # print(np.unique(labels, return_counts=True))
-        # # print(wfs.shape)
-        # # barf
-        # for i, label in enumerate(labels[:1000]):
-        #     if label == 0:
-        #         plt.plot(wfs[i].T.flatten(),color='blue', alpha=.1)
-        #     else:
-        #         plt.plot(wfs[i].T.flatten(), color='red',alpha=.1)
-        # print(labels)
     return labels
-
-
-# %%
 
 
 def split_individual_cluster(
@@ -258,42 +240,36 @@ def split_individual_cluster(
         is_split = True
 
     # LDA split - split by clustering LDA embeddings: X,y = wfs,max_channels
-    max_channels_all = np.abs(wfs_unit).max(1).argmax(1)
+    max_channels_all = wfs_unit.ptp(1).argmax(1)
     if is_split:
         # split by herdingspikes, run LDA split on new clusters.
         labels_unit[labels_rec_hdbscan == -1] = -1
-        label_max_temp = labels_rec_hdbscan.max()
         cmp = 0
         for new_unit_id in np.unique(labels_rec_hdbscan)[1:]:
-            tpca_wfs_new_unit = tpca_wf_units[
-                labels_rec_hdbscan == new_unit_id
-            ]
+            in_new_unit = np.flatnonzero(labels_rec_hdbscan == new_unit_id)
+            tpca_wfs_new_unit = tpca_wf_units[in_new_unit]
+
             # get max_channels for new unit
-            max_channels = (
-                np.abs(wfs_unit[labels_rec_hdbscan == new_unit_id]).max(1).argmax(1)
-            )
+            max_channels = wfs_unit[in_new_unit].ptp(1).argmax(1)
+
             # lda split
             lda_labels = run_LDA_split(
                 tpca_wfs_new_unit, max_channels, threshold_diptest
             )
             # print("new unit", new_unit_id, "lda", np.unique(lda_labels))
             if np.unique(lda_labels).shape[0] == 1:
-                labels_unit[labels_rec_hdbscan == new_unit_id] = cmp
+                labels_unit[in_new_unit] = cmp
                 cmp += 1
             else:
                 for lda_unit in np.unique(lda_labels):
                     if lda_unit >= 0:
                         labels_unit[
-                            np.flatnonzero(labels_rec_hdbscan == new_unit_id)[
-                                lda_labels == lda_unit
-                            ]
+                            np.flatnonzero(in_new_unit)[lda_labels == lda_unit]
                         ] = cmp
                         cmp += 1
                     else:
                         labels_unit[
-                            np.flatnonzero(labels_rec_hdbscan == new_unit_id)[
-                                lda_labels == lda_unit
-                            ]
+                            np.flatnonzero(in_new_unit)[lda_labels == lda_unit]
                         ] = -1
     else:
         # not split by herdingspikes, run LDA split.
@@ -341,7 +317,6 @@ def load_aligned_waveforms(
     return waveforms_unit
 
 
-# %%
 def split_clusters(
     residual_path,
     waveforms,
@@ -458,7 +433,6 @@ def get_templates(
     return templates
 
 
-# %%
 def get_proposed_pairs(
     n_templates, templates, x_z_templates, n_temp=20, n_channels=10, shifts=[0]
 ):
@@ -467,7 +441,7 @@ def get_proposed_pairs(
     dist_argsort = dist.argsort(axis=1)[:, 1 : n_temp + 1]
     dist_template = np.zeros((dist_argsort.shape[0], n_temp))
     for i in range(n_templates):
-        mc = min(np.abs(templates[i]).max(0).argmax(), 384 - n_channels_half)
+        mc = min(templates[i].ptp(0).argmax(), 384 - n_channels_half)
         mc = max(mc, n_channels_half)
         temp_a = templates[i, :, mc - n_channels_half : mc + n_channels_half]
         for j in range(n_temp):
@@ -482,7 +456,6 @@ def get_proposed_pairs(
     return dist_argsort, dist_template
 
 
-# %%
 def get_diptest_value(
     residual_path,
     waveforms,
@@ -574,8 +547,8 @@ def get_diptest_value(
                 first_chan = min(wfs_b.shape[2] - n_channels, int(first_chan))
                 wfs_b_bis[i, :] = wfs_b[
                     i, :, first_chan : first_chan + n_channels
-                ] 
-                
+                ]
+
             wfs_a_read, skipped_idx = read_waveforms(
                 spike_times_unit_a + two_units_shift,
                 residual_path,
@@ -585,7 +558,7 @@ def get_diptest_value(
             )
             kept_idx = np.delete(np.arange(wfs_a_bis.shape[0]), skipped_idx)
             wfs_a_bis = wfs_a_bis[kept_idx] + wfs_a_read
-            
+
             wfs_b_read, skipped_idx = read_waveforms(
                 spike_times_unit_b,
                 residual_path,
@@ -595,7 +568,6 @@ def get_diptest_value(
             )
             kept_idx = np.delete(np.arange(wfs_b_bis.shape[0]), skipped_idx)
             wfs_b_bis = wfs_b_bis[kept_idx] + wfs_b_read
-            
 
         else:
             for i in range(wfs_a_bis.shape[0]):
@@ -620,7 +592,7 @@ def get_diptest_value(
             )
             kept_idx = np.delete(np.arange(wfs_a_bis.shape[0]), skipped_idx)
             wfs_a_bis = wfs_a_bis[kept_idx] + wfs_a_read
-            
+
             wfs_b_read, skipped_idx = read_waveforms(
                 spike_times_unit_b + two_units_shift,
                 residual_path,
@@ -645,7 +617,7 @@ def get_diptest_value(
                 wfs_b_bis[i, :] = wfs_b[
                     i, :, first_chan : first_chan + n_channels
                 ]
-                
+
             wfs_a_read, skipped_idx = read_waveforms(
                 spike_times_unit_a + two_units_shift,
                 residual_path,
@@ -655,7 +627,7 @@ def get_diptest_value(
             )
             kept_idx = np.delete(np.arange(wfs_a_bis.shape[0]), skipped_idx)
             wfs_a_bis = wfs_a_bis[kept_idx] + wfs_a_read
-            
+
             wfs_b_read, skipped_idx = read_waveforms(
                 spike_times_unit_b,
                 residual_path,
@@ -665,7 +637,6 @@ def get_diptest_value(
             )
             kept_idx = np.delete(np.arange(wfs_b_bis.shape[0]), skipped_idx)
             wfs_b_bis = wfs_b_bis[kept_idx] + wfs_b_read
-                        
 
         else:
             for i in range(wfs_a_bis.shape[0]):
@@ -690,7 +661,7 @@ def get_diptest_value(
             )
             kept_idx = np.delete(np.arange(wfs_a_bis.shape[0]), skipped_idx)
             wfs_a_bis = wfs_a_bis[kept_idx] + wfs_a_read
-            
+
             wfs_b_read, skipped_idx = read_waveforms(
                 spike_times_unit_b + two_units_shift,
                 residual_path,
@@ -759,7 +730,6 @@ def get_diptest_value(
     return value_dpt
 
 
-# %%
 def get_merged(
     residual_path,
     waveforms,
@@ -811,22 +781,27 @@ def get_merged(
             if dist_template[unit, j] < distance_threshold:
                 unit_bis = dist_argsort[unit, j]
                 unit_bis_reference = reference_units[unit_bis]
+
                 if unit_reference != unit_bis_reference:
                     # ALIGN BASED ON MAX PTP TEMPLATE MC
                     if (
                         np.abs(templates[unit_reference]).max()
                         < np.abs(templates[unit_bis_reference]).max()
                     ):
-                        mc = np.abs(templates[unit_bis_reference]).max(0).argmax()
+                        mc = templates[unit_bis_reference].ptp(0).argmax()
                         two_units_shift = (
                             np.abs(templates[unit_reference, :, mc]).argmax()
-                            - np.abs(templates[unit_bis_reference, :, mc]).argmax()
+                            - np.abs(
+                                templates[unit_bis_reference, :, mc]
+                            ).argmax()
                         )
                         unit_shifted = unit_reference
                     else:
-                        mc = np.abs(templates[unit_reference]).max(0).argmax()
+                        mc = templates[unit_reference].ptp(0).argmax()
                         two_units_shift = (
-                            np.abs(templates[unit_bis_reference, :, mc]).argmax()
+                            np.abs(
+                                templates[unit_bis_reference, :, mc]
+                            ).argmax()
                             - np.abs(templates[unit_reference, :, mc]).argmax()
                         )
                         unit_shifted = unit_bis_reference
@@ -993,7 +968,7 @@ def ks_bimodal_pursuit(
         # new estimates of variances
         s1 = np.dot(rs[:, 0], (x - mu1) ** 2) / np.sum(rs[:, 0])
         s2 = np.dot(rs[:, 1], (x - mu2) ** 2) / np.sum(rs[:, 1])
-        
+
         if min(s1, s2) < 1e-6:
             break
 
