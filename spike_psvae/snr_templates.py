@@ -1,14 +1,11 @@
-# %%
 import numpy as np
 from tqdm.auto import tqdm
 import multiprocessing
 from concurrent.futures import ProcessPoolExecutor
 
-# %%
 from . import denoise, spikeio, waveform_utils
 
 
-# %%
 def get_templates(
     spike_train,
     geom,
@@ -73,8 +70,6 @@ def get_templates(
     templates = np.zeros((n_templates, spike_length_samples, len(geom)))
 
     snr_by_channel = np.zeros((n_templates, len(geom)))
-    rg = np.random.default_rng(seed)
-
     raw_templates = np.zeros_like(templates)
     denoised_templates = np.zeros_like(templates)
     extra = dict(
@@ -158,14 +153,13 @@ def get_templates(
             geom, zero_radius_um, steps=1, distance_order=False, p=2
         )
         for i in range(len(templates)):
-            mc = np.abs(templates[i]).max(0).argmax()
+            mc = templates[i].ptp(0).argmax()
             far = ~np.isin(np.arange(len(geom)), zero_ci[mc])
             templates[i, :, far] = 0
 
     return templates, extra
 
 
-# %%
 def get_single_templates(
     spike_times,
     geom,
@@ -216,14 +210,13 @@ def get_single_templates(
         zero_ci = waveform_utils.make_channel_index(
             geom, zero_radius_um, steps=1, distance_order=False, p=2
         )
-        mc = np.abs(template).max(0).argmax()
+        mc = template.ptp(0).argmax()
         far = ~np.isin(np.arange(len(geom)), zero_ci[mc])
         template[:, far] = 0
 
     return template
 
 
-# %%
 def get_raw_denoised_template_single(
     spike_times,
     geom,
@@ -274,7 +267,6 @@ def get_raw_denoised_template_single(
     return raw_template, denoised_template, snr_by_channel
 
 
-# %%
 def denoised_weights(
     snrs,
     spike_length_samples,
@@ -298,7 +290,6 @@ def denoised_weights(
     return wtc
 
 
-# %%
 def denoised_weights_single(
     snrs,
     spike_length_samples,
@@ -321,11 +312,9 @@ def denoised_weights_single(
     return wtc
 
 
-# %% [markdown]
 # -- parallelism helpers
 
 
-# %%
 def template_worker(unit):
     # parameters set by init below
     p = template_worker
@@ -353,7 +342,6 @@ def template_worker(unit):
     return unit, raw_template, denoised_template, snr_by_channel
 
 
-# %%
 def template_worker_init(
     id_queue,
     seed,
@@ -383,7 +371,6 @@ def template_worker_init(
     p.spike_length_samples = spike_length_samples
 
 
-# %%
 class MockPoolExecutor:
     """A helper class for turning off concurrency when debugging."""
 
@@ -404,7 +391,6 @@ class MockPoolExecutor:
         return
 
 
-# %%
 class MockQueue:
     """Another helper class for turning off concurrency when debugging."""
 
@@ -414,7 +400,6 @@ class MockQueue:
         self.get = lambda: self.q.pop(0)
 
 
-# %%
 def xqdm(iterator, pbar=True, **kwargs):
     if pbar:
         return tqdm(iterator, **kwargs)

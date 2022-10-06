@@ -1,4 +1,3 @@
-# %%
 import h5py
 import numpy as np
 import torch
@@ -11,7 +10,6 @@ from sklearn.decomposition import PCA
 from spike_psvae import denoise, subtract, localize_index, spikeio
 
 
-# %%
 def extract_deconv(
     templates_up_path,
     spike_train_up_path,
@@ -96,7 +94,7 @@ def extract_deconv(
         return out_h5, residual_path
 
     # build spike index from templates and spike train
-    templates_up_maxchans = np.abs(templates_up).max(1).argmax(1)
+    templates_up_maxchans = templates_up.ptp(1).argmax(1)
     up_maxchans = templates_up_maxchans[spike_train_up[:, 1]]
     spike_index_up = np.c_[spike_train_up[:, 0], up_maxchans]
 
@@ -226,7 +224,6 @@ def extract_deconv(
     return out_h5, residual_path
 
 
-# %%
 JobResult = namedtuple(
     "JobResult",
     [
@@ -241,7 +238,6 @@ JobResult = namedtuple(
 )
 
 
-# %%
 def _extract_deconv_worker(start_sample):
     # an easy name to extract the params set by _extract_deconv_init
     p = _extract_deconv_worker
@@ -362,7 +358,6 @@ def _extract_deconv_worker(start_sample):
     )
 
 
-# %%
 def temporal_align(waveforms, maxchans, offset=42):
     N, T, C = waveforms.shape
     offsets = np.abs(waveforms[np.arange(N), :, maxchans]).argmax(1)
@@ -386,7 +381,6 @@ def temporal_align(waveforms, maxchans, offset=42):
     return out
 
 
-# %%
 def _extract_deconv_init(
     subtraction_h5,
     device,
@@ -446,7 +440,7 @@ def _extract_deconv_init(
     _extract_deconv_worker.n_chans = n_chans
     print(".", end="", flush=True)
 
-# %%
+
 def xqdm(it, pbar=True, **kwargs):
     if pbar:
         return tqdm(it, **kwargs)
