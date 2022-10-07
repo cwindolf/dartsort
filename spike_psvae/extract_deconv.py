@@ -360,7 +360,7 @@ def _extract_deconv_worker(start_sample):
 
 def temporal_align(waveforms, maxchans, offset=42):
     N, T, C = waveforms.shape
-    offsets = waveforms[np.arange(N), :, maxchans].argmin(1)
+    offsets = np.abs(waveforms[np.arange(N), :, maxchans]).argmax(1)
     rolls = offset - offsets
     out = np.empty_like(waveforms)
     pads = [(0, 0), (0, 0)]
@@ -439,6 +439,7 @@ def _extract_deconv_init(
     _extract_deconv_worker.batch_length = batch_length
     _extract_deconv_worker.n_chans = n_chans
     print(".", end="", flush=True)
+
 
 def xqdm(it, pbar=True, **kwargs):
     if pbar:
