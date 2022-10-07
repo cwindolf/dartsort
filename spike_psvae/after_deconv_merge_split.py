@@ -437,102 +437,6 @@ def merge(
     return labels_updated
 
 
-# def clean_big_clusters(
-#     templates,
-#     spike_train,
-#     ptps,
-#     raw_bin,
-#     geom,
-#     min_ptp=6.0,
-#     split_diff=2.0,
-#     max_samples=500,
-#     min_size_split=25,
-#     seed=0,
-#     reducer=np.median,
-# ):
-#     """This operates on spike_train in place."""
-#     # TODO:
-#     # it's not possible to load all waveforms as is currently done
-#     # rather, we should do something like, sort the ptps,
-#     # then load N wfs above/below
-#     # or, uniformly subsample e.g. 1000 spikes according to PTP,
-#     # and use those...
-#     # and, what should happen when there aren't many spikes?
-#     n_temp_cleaned = 0
-#     next_label = templates.shape[0]
-#     rg = np.random.default_rng(seed)
-#     for unit in trange(templates.shape[0], desc="clean big"):
-#         mc = templates[unit].ptp(0).argmax()
-#         template_mc_trace = templates[unit, :, mc]
-
-#         if template_mc_trace.ptp() < min_ptp:
-#             continue
-
-#         in_unit = np.flatnonzero(spike_train[:, 1] == unit)
-#         if in_unit.size <= 2 * min_size_split:
-#             # we won't split if smaller than this
-#             continue
-#         n_samples = min(max_samples, in_unit.size)
-
-#         # pick random wfs
-#         choices = rg.choice(in_unit.size, size=n_samples, replace=False)
-#         spike_times_unit = spike_train[in_unit[choices], 0]
-#         wfs_unit, skipped_idx = read_waveforms(
-#             spike_times_unit, raw_bin, geom.shape[0], channels=[mc]
-#         )
-#         assert wfs_unit.shape[-1] == 1
-#         assert not skipped_idx.size
-#         wfs_unit = wfs_unit[:, :, 0]
-
-#         # ptp order
-#         ptps_unit = ptps[in_unit]
-#         ptps_choice = ptps_unit[choices]
-#         ptps_sort = np.argsort(ptps_choice)
-#         wfs_sort = wfs_unit[ptps_sort]
-
-#         lower = int(max(np.ceil(in_unit.size * 0.05), min_size_split))
-#         upper = int(
-#             min(np.floor(in_unit.size * 0.95), in_unit.size - min_size_split)
-#         )
-#         if lower >= upper:
-#             continue
-
-#         max_diff = 0
-#         max_diff_ix = 0
-#         for n in range(lower, upper):
-#             # Denoise templates?
-#             temp_1 = reducer(wfs_sort[:n], axis=0)
-#             temp_2 = reducer(wfs_sort[n:], axis=0)
-#             diff = np.abs(temp_1 - temp_2).max()
-#             if diff > max_diff:
-#                 max_diff = diff
-#                 max_diff_ix = n
-#         max_diff_ptp = 0.5 * (
-#             ptps_sort[max_diff_ix] + ptps_sort[max_diff_ix - 1]
-#         )
-
-#         if max_diff < split_diff:
-#             continue
-
-#         which_a = in_unit[ptps_unit <= max_diff_ptp]
-#         which_b = in_unit[ptps_unit > max_diff_ptp]
-
-#         temp_a = reducer(wfs_unit[:max_diff_ix], axis=0)
-#         temp_b = reducer(wfs_unit[max_diff_ix:], axis=0)
-#         temp_diff_a = np.abs(temp_a - template_mc_trace).max()
-#         temp_diff_b = np.abs(temp_b - template_mc_trace).max()
-
-#         if temp_diff_a < temp_diff_b:
-#             spike_train[which_b] = next_label
-#         else:
-#             spike_train[which_a] = next_label
-
-#         n_temp_cleaned += 1
-#         next_label += 1
-
-#     return n_temp_cleaned
-
-
 def clean_big_clusters(
     templates,
     spike_train,
@@ -559,7 +463,6 @@ def clean_big_clusters(
     # orig_ids = {}
 
     for unit in trange(templates.shape[0], desc="clean big"):
-        # orig_ids[unit] = unit
         mc = templates[unit].ptp(0).argmax()
         template_mc_trace = templates[unit, :, mc]
         if template_mc_trace.ptp() < min_ptp:
@@ -574,7 +477,9 @@ def clean_big_clusters(
         ptp_sort_idx = wfs_unit.ptp(1).argsort()
         wfs_unit = wfs_unit[ptp_sort_idx]
         lower = max(min_size_split, int(wfs_unit.shape[0] * 0.05))
-        upper = min(spikes_in_unit.size - min_size_split, int(wfs_unit.shape[0] * 0.95))
+        upper = min(
+            spikes_in_unit.size - min_size_split, int(wfs_unit.shape[0] * 0.95)
+        )
 
         if lower >= upper:
             continue
