@@ -70,8 +70,6 @@ def get_templates(
     templates = np.zeros((n_templates, spike_length_samples, len(geom)))
 
     snr_by_channel = np.zeros((n_templates, len(geom)))
-    rg = np.random.default_rng(seed)
-
     raw_templates = np.zeros_like(templates)
     denoised_templates = np.zeros_like(templates)
     extra = dict(

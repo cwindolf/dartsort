@@ -50,7 +50,7 @@ def get_unit_similarities(
     waveforms1, _ = read_waveforms(st_1, raw_data_bin, geom_array.shape[0])
     template1 = np.median(waveforms1, axis=0)
     original_template = np.copy(template1)
-    max_ptp_channel = np.argmax(template1.ptp(0))
+    max_ptp_channel = template1.ptp(0).argmax()
     channel_range = (
         max(max_ptp_channel - num_channels_similarity // 2, 0),
         max_ptp_channel + num_channels_similarity // 2,
@@ -383,7 +383,7 @@ def remove_self_duplicates(
             template = np.median(wfs_unit, axis=0)
             mc = template.ptp(0).argmax()
             template_mc = template[:, mc]
-            template_argmin = template_mc.argmin()
+            template_argmin = np.abs(template_mc).argmax()
 
             # get subsets of wfs -- will we remove leading (wfs_1)
             # or trailing (wfs_2) waveform in each case?
@@ -405,8 +405,8 @@ def remove_self_duplicates(
             # first is better will have a 1 where wfs_1 was better
             # aligned then wfs_2, so that first_viol_ix + best_aligned
             # is the index of the waveforms to *remove!*
-            argmins_1 = wfs_1.argmin(axis=1)
-            argmins_2 = wfs_2.argmin(axis=1)
+            argmins_1 = np.abs(wfs_1).argmax(axis=1)
+            argmins_2 = np.abs(wfs_2).argmax(axis=1)
             first_is_better = np.abs(argmins_1 - template_argmin) <= (
                 argmins_2 - template_argmin
             )
