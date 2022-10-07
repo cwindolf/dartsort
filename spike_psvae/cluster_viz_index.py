@@ -97,6 +97,8 @@ def array_scatter(
     annotate=True,
     subplots_kw={},
     do_ellipse=True,
+    c=0,
+    do_log=True,
 ):
     fig = None
     if axes is None:
@@ -121,7 +123,7 @@ def array_scatter(
     axes[2].set_xlabel("x")
 
     cluster_scatter(
-        np.log(maxptp),
+        np.log(c + maxptp) if do_log else maxptp,
         z,
         labels,
         ax=axes[1],
@@ -130,7 +132,12 @@ def array_scatter(
         annotate=annotate,
         do_ellipse=do_ellipse,
     )
-    axes[1].set_xlabel("log maxptp")
+    xlabel = "maxptp"
+    if do_log and c > 0:
+        xlabel = f"log({c}+maxptp)"
+    elif do_log:
+        xlabel = "log maxptp"
+    axes[1].set_xlabel(xlabel)
     axes[2].scatter(
         x,
         z,
