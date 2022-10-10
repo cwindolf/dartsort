@@ -89,7 +89,7 @@ assert all((hybrid_bin_dir.exists(), hybrid_res_dir.exists(), hybrid_ks_dir.exis
 
 # %%
 subjects = ("CSHL051", "DY_018")
-# subjects = ("CSHL051",)
+subjects = ("CSHL051",)
 
 # %%
 while not all(
@@ -105,7 +105,7 @@ while not all(
 #
 
 # %%
-hybrid_fig_dir = Path("/mnt/3TB/charlie/hybrid_5min/figs_9_30")
+hybrid_fig_dir = Path("/mnt/3TB/charlie/hybrid_5min/figs_10_6_newdn_log10")
 hybrid_fig_dir.mkdir(exist_ok=True)
 
 # %%
@@ -763,7 +763,7 @@ for subject, comparisons in hybrid_comparisons.items():
         print(subject, comp.new_sorting.name)
         jobs.append(delayed(job)(step, subject, comp, ks_comp))
 
-for res in Parallel(14)(tqdm(jobs, total=len(jobs))):
+for res in Parallel(4)(tqdm(jobs, total=len(jobs))):
     pass
 
 # %%
@@ -785,24 +785,6 @@ for subject, comparisons in hybrid_comparisons.items():
             dpi=300,
         )
         plt.close(fig)
-
-# %%
-1
-
-# %%
-[(i, j) for i in range(2) for j in [5,6,7]]
-
-# %%
-1
-
-# %%
-plt.close("all")
-
-# %%
-import gc; gc.collect()
-
-# %%
-# %rm -rf {hybrid_fig_dir / "gtunit_resid_lambd0.005"}
 
 # %%
 outdir = hybrid_fig_dir / "gtunit_resid_norm"
