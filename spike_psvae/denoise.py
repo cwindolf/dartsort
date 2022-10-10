@@ -25,7 +25,8 @@ class SingleChanDenoiser(nn.Module):
     """Cleaned up a little. Why is conv3 here and commented out in forward?"""
 
     def __init__(
-        self, n_filters=[16, 8, 4], filter_sizes=[5, 11, 21], spike_size=121
+        # self, n_filters=[16, 8, 4], filter_sizes=[5, 11, 21], spike_size=121
+        self, n_filters=[16, 8], filter_sizes=[5, 11], spike_size=121
     ):
         super(SingleChanDenoiser, self).__init__()
         self.conv1 = nn.Sequential(nn.Conv1d(1, n_filters[0], filter_sizes[0]), nn.ReLU())
