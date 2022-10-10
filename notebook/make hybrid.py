@@ -44,7 +44,7 @@ from spike_psvae import (
     snr_templates,
     grab_and_localize,
     localize_index,
-    cluster_viz,
+    # cluster_viz,
     cluster_viz_index,
     deconvolve,
     extract_deconv,
@@ -155,6 +155,7 @@ print(in_bins)
 
 # %%
 active_dsets = ("CSHL051", "DY_018")
+# active_dsets = ("CSHL051",)
 
 # %%
 
@@ -178,14 +179,19 @@ for meta in Path(in_dir).glob("*.meta"):
 # # hybrid recording
 
 # %%
-geom = np.load("/mnt/3TB/charlie/re_res_5min/CSH_ZAD_026_snip/deconv1/geom.npy")
-templates_cleaned = np.load("/mnt/3TB/charlie/re_res_5min/CSH_ZAD_026_snip/deconv1/templates.npy")
-template_snrs = np.load("/mnt/3TB/charlie/re_res_5min/CSH_ZAD_026_snip/deconv1/template_snrs.npy")
-template_ptps = templates_cleaned.ptp(1).max(1)
-templates_cleaned = templates_cleaned[(template_ptps >= 5) & (template_snrs > 50)]
 
 # %%
-templates_cleaned.shape, templates_cleaned.ptp(1).max()
+geom = np.load("/mnt/3TB/charlie/re_res_5min/CSH_ZAD_026_snip/deconv1/geom.npy")
+# templates_cleaned = np.load("/mnt/3TB/charlie/re_res_5min/CSH_ZAD_026_snip/deconv1/templates.npy")
+# template_snrs = np.load("/mnt/3TB/charlie/re_res_5min/CSH_ZAD_026_snip/deconv1/template_snrs.npy")
+
+templates_cleaned = np.load("/mnt/3TB/charlie/nyu47_templates/kilosort_cleaned_templates.npy")
+template_spike_counts = np.load("/mnt/3TB/charlie/nyu47_templates/spike_counts.npy")
+template_good = np.load("/mnt/3TB/charlie/nyu47_templates/good_units_kilosort.npy")
+# I plotted and looked thru manually
+template_good = np.setdiff1d(template_good, [51])
+
+templates_cleaned = templates_cleaned[template_good]
 
 # %%
 for i, in_bin in enumerate(tqdm(in_bins)):
@@ -211,6 +217,8 @@ for i, in_bin in enumerate(tqdm(in_bins)):
         write_channel_index,
         do_noise=False,
         mean_spike_rate=(0.1, 10),
+        simple_amp_noise_std=0.1,
+        simple_amp_noise_lim=0.2,
         seed=i,
     )
     hybrid_raw.tofile(out_bin)
@@ -413,10 +421,6 @@ for i, in_bin in enumerate(tqdm(in_bins)):
 # # subtraction
 
 # %%
-fname_model = Path("../pretrained/offset_trained_denoiser.pt")
-fname_model
-
-# %%
 for i, in_bin in enumerate(tqdm(in_bins)):
     subject = in_bin.stem.split(".")[0]
     if subject not in active_dsets:
@@ -445,8 +449,8 @@ for i, in_bin in enumerate(tqdm(in_bins)):
         overwrite=True,
         random_seed=0,
         n_jobs=1,
-        denoiser_init_kwargs=dict(n_filters=[16, 8], filter_sizes=[5, 11], spike_size=121),
-        denoiser_weights_path=fname_model,
+        # denoiser_init_kwargs=dict(n_filters=[16, 8], filter_sizes=[5, 11], spike_size=121),
+        # denoiser_weights_path=fname_model,
     )
 
 # %%
@@ -526,9 +530,6 @@ for i, in_bin in enumerate(tqdm(in_bins)):
 
 # %%
 1
-
-# %%
-templates.shape, template_shifts.shape
 
 # %% tags=[]
 # cluster + deconv in one go for better cache behavior
@@ -793,6 +794,8 @@ geom = np.load(next(deconv1_dir.glob("**/geom.npy")))
 
 # %%
 1
+
+# %%
 
 # %% tags=[]
 for in_bin in in_bins:
