@@ -114,7 +114,7 @@ def split_individual_cluster(
     N, T, wf_chans = waveforms_unit.shape
     n_channels_half = n_channels // 2
 
-    labels_unit = np.full(spike_index_unit.shape[0], -1)
+    labels_unit = np.full(N, -1)
     is_split = False
 
     if N < min_size_split:
@@ -133,10 +133,11 @@ def split_individual_cluster(
         spike_length_samples=T,
         channels=np.arange(mc - n_channels_half, mc + n_channels_half),
     )
+    kept = np.setdiff1d(np.arange(N), skipped)
     
     # add in raw waveforms
     # get n_channels of waveforms for each unit with the unit max channel and the firstchan for each spike
-    for i, j in enumerate(np.setdiff1d(np.arange(wfs_unit.shape[0]), skipped)):
+    for i, j in enumerate(kept):
         mc_new = int(mc - first_chans_unit[i])
         if mc_new <= n_channels_half:
             wfs_unit[i] += waveforms_unit[j, :, :n_channels]
@@ -219,8 +220,8 @@ def split_individual_cluster(
     # create 5D feature set for clustering (herdingspikes)
     features = np.concatenate(
         (
-            np.expand_dims(x_unit, 1),
-            np.expand_dims(z_unit, 1),
+            np.expand_dims(x_unit[kept], 1),
+            np.expand_dims(z_unit[kept], 1),
             np.expand_dims(pcs[:, 0], 1) * alpha1,
             np.expand_dims(pcs[:, 1], 1) * alpha2,
             np.expand_dims(np.log(ptps_unit) * 30, 1),
@@ -241,7 +242,7 @@ def split_individual_cluster(
     max_channels_all = wfs_unit.ptp(1).argmax(1)
     if is_split:
         # split by herdingspikes, run LDA split on new clusters.
-        labels_unit[labels_rec_hdbscan == -1] = -1
+        labels_unit[kept[labels_rec_hdbscan == -1]] = -1
         cmp = 0
         for new_unit_id in np.unique(labels_rec_hdbscan)[1:]:
             in_new_unit = np.flatnonzero(labels_rec_hdbscan == new_unit_id)
@@ -256,15 +257,15 @@ def split_individual_cluster(
             )
             # print("new unit", new_unit_id, "lda", np.unique(lda_labels))
             if np.unique(lda_labels).shape[0] == 1:
-                labels_unit[in_new_unit] = cmp
+                labels_unit[kept[in_new_unit]] = cmp
                 cmp += 1
             else:
                 for lda_unit in np.unique(lda_labels):
                     if lda_unit >= 0:
-                        labels_unit[in_new_unit[lda_labels == lda_unit]] = cmp
+                        labels_unit[kept[in_new_unit[lda_labels == lda_unit]]] = cmp
                         cmp += 1
                     else:
-                        labels_unit[in_new_unit[lda_labels == lda_unit]] = -1
+                        labels_unit[kept[in_new_unit[lda_labels == lda_unit]]] = -1
     else:
         # not split by herdingspikes, run LDA split.
         lda_labels = run_LDA_split(
@@ -273,7 +274,7 @@ def split_individual_cluster(
         if np.unique(lda_labels).shape[0] > 1:
             is_split = True
             labels_unit = lda_labels
-    # print("split", is_split, np.unique(labels_unit), len(np.unique(labels_unit)[1:]))
+
     return is_split, labels_unit
 
 
@@ -333,8 +334,7 @@ def split_clusters(
     threshold_diptest=1.0,
 ):
     labels_new = labels.copy()
-    labels_original = labels.copy()
-    cur_max_label = labels.max()
+    next_label = labels.max() + 1
     for unit in tqdm(np.setdiff1d(np.unique(labels), [-1])):  # 216
         # for unit in [412]:
         # print(f"splitting unit {unit}")
@@ -344,6 +344,7 @@ def split_clusters(
         waveforms_unit = load_aligned_waveforms(
             waveforms, labels, unit, template_shift
         )
+        # print(f"{in_unit.shape=} {spike_index_unit.shape=} {waveforms_unit.shape=}")
         # print("max channels unit", np.unique(waveforms_unit.ptp(1).argmax(1)))
 
         first_chans_unit = first_chans[in_unit]
@@ -365,20 +366,17 @@ def split_clusters(
             nn_denoise,
             threshold_diptest,
         )
+        # print(f"{in_unit.shape=} {unit_new_labels.shape=}")
         # print("final", is_split)
         if is_split:
             for new_label in np.unique(unit_new_labels):
                 if new_label == -1:
-                    idx = np.flatnonzero(labels_original == unit)[
-                        unit_new_labels == new_label
-                    ]
-                    labels_new[idx] = new_label
+                    idx = in_unit[unit_new_labels == new_label]
+                    labels_new[idx] = -1
                 elif new_label > 0:
-                    cur_max_label += 1
-                    idx = np.flatnonzero(labels_original == unit)[
-                        unit_new_labels == new_label
-                    ]
-                    labels_new[idx] = cur_max_label
+                    idx = in_unit[unit_new_labels == new_label]
+                    labels_new[idx] = next_label
+                    next_label += 1
     return labels_new
 
 
