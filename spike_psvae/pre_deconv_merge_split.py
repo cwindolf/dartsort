@@ -121,35 +121,29 @@ def split_individual_cluster(
     assert mc - n_channels_half >= 0
     assert mc + n_channels_half <= total_channels
 
-    wfs_unit = np.zeros(
-        (waveforms_unit.shape[0], waveforms_unit.shape[1], n_channels)
-    )
-
-    # get n_channels of waveforms for each unit with the unit max channel and the firstchan for each spike
-    for i in range(wfs_unit.shape[0]):
-        mc_new = int(mc - first_chans_unit[i])
-        if mc_new <= n_channels_half:
-            wfs_unit[i] = waveforms_unit[i, :, :n_channels]
-        elif mc_new >= waveforms_unit.shape[2] - n_channels_half:
-            wfs_unit[i] = waveforms_unit[
-                i, :, waveforms_unit.shape[2] - n_channels :
-            ]
-        else:
-            wfs_unit[i] = waveforms_unit[
-                i, :, mc_new - n_channels_half : mc_new + n_channels_half
-            ]
-
     # get n_channels worth of residuals
-    readwfs, skipped = read_waveforms(
+    wfs_unit, skipped = read_waveforms(
         spike_index_unit[:, 0],
         residual_path,
         geom_array.shape[0],
         spike_length_samples=T,
         channels=np.arange(mc - n_channels_half, mc + n_channels_half),
     )
-
-    # create collision-cleaned waveforms by adding residual
-    wfs_unit += readwfs
+    
+    # add in raw waveforms
+    # get n_channels of waveforms for each unit with the unit max channel and the firstchan for each spike
+    for i, j in enumerate(np.setdiff1d(np.arange(wfs_unit.shape[0]), skipped)):
+        mc_new = int(mc - first_chans_unit[i])
+        if mc_new <= n_channels_half:
+            wfs_unit[i] += waveforms_unit[j, :, :n_channels]
+        elif mc_new >= waveforms_unit.shape[2] - n_channels_half:
+            wfs_unit[i] += waveforms_unit[
+                j, :, waveforms_unit.shape[2] - n_channels :
+            ]
+        else:
+            wfs_unit[i] += waveforms_unit[
+                j, :, mc_new - n_channels_half : mc_new + n_channels_half
+            ]
 
     # denoise optional (False by default)
     if nn_denoise:
@@ -263,14 +257,10 @@ def split_individual_cluster(
             else:
                 for lda_unit in np.unique(lda_labels):
                     if lda_unit >= 0:
-                        labels_unit[
-                            np.flatnonzero(in_new_unit)[lda_labels == lda_unit]
-                        ] = cmp
+                        labels_unit[in_new_unit[lda_labels == lda_unit]] = cmp
                         cmp += 1
                     else:
-                        labels_unit[
-                            np.flatnonzero(in_new_unit)[lda_labels == lda_unit]
-                        ] = -1
+                        labels_unit[in_new_unit[lda_labels == lda_unit]] = -1
     else:
         # not split by herdingspikes, run LDA split.
         lda_labels = run_LDA_split(
