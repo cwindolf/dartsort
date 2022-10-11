@@ -1,3 +1,4 @@
+# %%
 import numpy as np
 from sklearn.decomposition import PCA
 from sklearn.discriminant_analysis import LinearDiscriminantAnalysis as LDA
@@ -14,6 +15,7 @@ from spike_psvae import waveform_utils
 from spike_psvae.pyks_ccg import ccg_metrics
 
 
+# %%
 def align_spikes_by_templates(
     labels,
     templates,
@@ -46,6 +48,7 @@ def align_spikes_by_templates(
     )
 
 
+# %%
 def run_LDA_split(wfs, max_channels, threshold_diptest=1.0):
     ncomp = 2
     if np.unique(max_channels).shape[0] < 2:
@@ -88,6 +91,7 @@ def run_LDA_split(wfs, max_channels, threshold_diptest=1.0):
     return labels
 
 
+# %%
 def split_individual_cluster(
     residual_path,
     true_mc,
@@ -149,7 +153,12 @@ def split_individual_cluster(
     )
 
     # create collision-cleaned waveforms by adding residual
-    wfs_unit += readwfs
+    # NEED TO FIX THIS - NOT STRAIGHTFORWARD, HOW TO HANDLE THIS???
+    if len(skipped)>0:
+#         wfs_unit = np.delete(wfs_unit, skipped, axis=0)
+        wfs_unit[np.delete(wfs_unit.shape[0], skipped)] += readwfs
+    else:
+        wfs_unit += readwfs
 
     # denoise optional (False by default)
     if nn_denoise:
@@ -283,6 +292,7 @@ def split_individual_cluster(
     return is_split, labels_unit
 
 
+# %%
 def load_aligned_waveforms(
     waveforms, labels, unit, template_shift, indices=None
 ):
@@ -317,6 +327,7 @@ def load_aligned_waveforms(
     return waveforms_unit
 
 
+# %%
 def split_clusters(
     residual_path,
     waveforms,
@@ -386,6 +397,7 @@ def split_clusters(
     return labels_new
 
 
+# %%
 def get_x_z_templates(n_templates, labels, x, z):
     x_z_templates = np.zeros((n_templates, 2))
     for i in range(n_templates):
@@ -394,6 +406,7 @@ def get_x_z_templates(n_templates, labels, x, z):
     return x_z_templates
 
 
+# %%
 def get_n_spikes_templates(n_templates, labels):
     n_spikes_templates = np.zeros(n_templates, dtype=int)
     unique, count = np.unique(labels, return_counts=True)
@@ -401,6 +414,7 @@ def get_n_spikes_templates(n_templates, labels):
     return n_spikes_templates
 
 
+# %%
 def get_templates(
     standardized_path,
     geom_array,
@@ -433,6 +447,7 @@ def get_templates(
     return templates
 
 
+# %%
 def get_proposed_pairs(
     n_templates, templates, x_z_templates, n_temp=20, n_channels=10, shifts=[0]
 ):
@@ -456,6 +471,7 @@ def get_proposed_pairs(
     return dist_argsort, dist_template
 
 
+# %%
 def get_diptest_value(
     residual_path,
     waveforms,
@@ -730,6 +746,7 @@ def get_diptest_value(
     return value_dpt
 
 
+# %%
 def get_merged(
     residual_path,
     waveforms,
@@ -885,6 +902,7 @@ def get_merged(
     return labels_updated
 
 
+# %%
 def ks_bimodal_pursuit(
     unit_features,
     tpca,
@@ -1038,6 +1056,7 @@ def ks_bimodal_pursuit(
     return False, full, empty
 
 
+# %%
 def ks_maxchan_tpca_split(
     tpca_embeddings,
     channel_index,
