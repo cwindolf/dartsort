@@ -364,7 +364,7 @@ def remove_self_duplicates(
                 which_unviol = rg.choice(unviol.size, n_samples, replace=False)
                 which_unviol.sort()
                 wfs_unit, _ = read_waveforms(
-                    spike_times_unit[unviol], binary_file, n_channels
+                    spike_times_unit[which_unviol], binary_file, n_channels
                 )
             else:
                 n_viol_load = min(all_viol_ix.size, n_samples - unviol.size)
@@ -439,8 +439,9 @@ def copy_spikes(
     z,
     maxptps,
     spike_index,
-    scales=(1, 1, 30),
+    scales=(1, 1, 50),
     num_duplicates_list=[0, 1, 2, 3, 4],
+    log_c=5,
 ):
     true_spike_indices = []
     new_x = []
@@ -472,12 +473,12 @@ def copy_spikes(
             x_p, z_p, log_maxptp_scaled_p = perturb_features(
                 x_i * scales[0],
                 z_i * scales[1],
-                np.log(maxptp_i) * scales[2],
+                np.log(log_c + maxptp_i) * scales[2],
                 noise_scale=1,
             )
             new_x.append(x_p / scales[0])
             new_z.append(z_p / scales[1])
-            new_maxptps.append(np.e ** (log_maxptp_scaled_p / scales[2]))
+            new_maxptps.append(np.exp(log_maxptp_scaled_p / scales[2]) - log_c)
             new_spike_index.append(spike_index[spike_id])
             # add a 0 to spike index to indicate copied spike
             true_spike_indices.append([False, -1])
@@ -496,7 +497,7 @@ def cluster_spikes(
     spike_index,
     min_cluster_size=25,
     min_samples=25,
-    scales=(1, 1, 30),
+    scales=(1, 1, 50),
     frames_dedup=12,
     triage_quantile=80,
     region_size=25,
@@ -509,6 +510,7 @@ def cluster_spikes(
     split_big=False,
     split_big_kw=dict(dx=40, dz=48, min_size_split=50),
     do_subsample=False,
+    log_c=5,
 ):
     # copy high-ptp spikes
     true_spike_indices = np.stack(
@@ -523,6 +525,7 @@ def cluster_spikes(
             spike_index,
             scales=scales,
             num_duplicates_list=[0, 1, 2, 3, 4],
+            log_c=log_c,
         )
 
     if do_subsample:
@@ -564,7 +567,7 @@ def cluster_spikes(
         # barf
 
     # create feature set for clustering
-    features = np.c_[x * scales[0], z * scales[1], np.log(maxptps) * scales[2]]
+    features = np.c_[x * scales[0], z * scales[1], np.log(log_c + maxptps) * scales[2]]
     clusterer = hdbscan.HDBSCAN(
         min_cluster_size=min_cluster_size,
         min_samples=min_samples,
