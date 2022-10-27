@@ -154,7 +154,8 @@ class Sorting:
                 geom,
                 self.template_maxchans[full_spike_counts > 0],
                 np.stack([np.arange(len(geom))] * len(geom), axis=0),
-                n_channels=20,
+                # n_channels=20,
+                radius=100,
                 n_workers=None,
                 pbar=True,
             )
