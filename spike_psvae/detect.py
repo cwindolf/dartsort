@@ -396,7 +396,7 @@ def torch_voltage_detect_dedup(
         neg_recording[None, None],
         kernel_size=[2 * order + 1, 1],
         stride=1,
-        padding=[5, 0],
+        padding=[order, 0],
     )
     max_energies = max_energies[0, 0]
     inds = inds[0, 0]
