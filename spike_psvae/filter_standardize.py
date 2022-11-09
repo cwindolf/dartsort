@@ -4,6 +4,68 @@ import numpy as np
 import parmap
 from scipy.signal import butter, filtfilt
 from spike_psvae import spikeio
+import np.fft as fft
+
+# ADC SHIFT 
+def phaseShiftSig(sig, fs, nSamples):
+    # % function sig1 = phaseShiftSig(sig, fs, nSamples)
+    # %
+    # % Shift the fourier phase components of a vector to perform a sub-sample
+    # % shifting of the data, return the data in the time domain.
+
+    n = len(sig)
+    f = np.arange(-n/2,n/2-1)*fs/n
+
+    # % take fft
+    y = fft.fftshift(fft.fft(sig))/n
+
+    # % shift the phase of each sample in a frequency-dependent manner so the
+    # % absolute time shift is constant across frequencies 
+    y1 = y*np.exp(-2*pi*1j*f*nSamples/fs) #ELEMENT WISE MULTIPLICATION
+
+    # % ifft back to time domain
+    sig1 = np.real(n*(fft.ifft(fft.ifftshift(y1))))
+    return sig1
+
+def npSampShifts():
+# % return the true sampling time (relative to the average sample time) of
+# % each channel of a neuropixels 1.0 or 2.0 probe. 
+
+    nCh = 384
+    sampShifts = np.zeros(nCh)
+#     if ver:
+#         case 1
+    nADC = 32 #similar to NP 1
+
+    nChPerADC = nCh//nADC
+    startChan = np.array([np.arange(0, nCh, nChPerADC*2), np.arange(1, nCh, nChPerADC*2)]).flatten()
+    
+    for n in range(nADC):
+        sampShifts[np.arange(startChan[n], startChan[n]+2*nChPerADC-1, 2)] = np.arange(nChPerADC)
+
+# % here just centering the shift amount (arbitrary) and returning in units
+# % of samples
+    sampShifts = (sampShifts-nChPerADC/2)/nChPerADC
+    return sampShifts
+
+def shiftWF(thisWF):
+# % thisWF is a matrix of raw neuropixels data nChannels x nSamples
+# % ver is either 1 or 2, for a 1.0 or 2.0 Neuropixels probe
+# % newWF has the same size as thisWF but appropriately shifted
+
+
+# % determine how much each channel should be shifted by for this probe
+    sampShifts = npSampShifts()
+
+    assert(len(sampShifts)==len(thisWF))
+
+#     % go through each channel and shift that channel alone
+    fs = 30000
+    newWF = np.zeros(thisWF.shape)
+    for ch in range(len(sampShifts)):
+        newWF[ch,:] = phaseShiftSig(thisWF[ch,:], fs, sampShifts[ch])
+    
+    return newWF
 
 # %%
 def filter_standardize_rec(output_directory, filename_raw, dtype_raw,
