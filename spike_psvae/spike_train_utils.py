@@ -27,7 +27,7 @@ def clean_align_and_get_templates(
     min_n_spikes=0,
     reducer=np.median,
     sort_by_time=True,
-    max_shift=3,
+    max_shift=0,
     n_samples=250,
     spike_length_samples=121,
     trough_offset=42,

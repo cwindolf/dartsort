@@ -92,7 +92,7 @@ def array_scatter(
     x,
     z,
     maxptp,
-    zlim=(-50, 3900),
+    zlim=None,
     axes=None,
     annotate=True,
     subplots_kw={},
