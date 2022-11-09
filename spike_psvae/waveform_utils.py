@@ -40,8 +40,20 @@ def fit_tpca_bin(
     return tpca
 
 
-
 # -- channels / geometry helpers
+"""
+For example let’s say we use a Neuropixels probe
+and create a channel index for channels which are
+<=200um apart from each other. This will be a
+(384, n_neighbors)  shaped integer array, where
+n_neighbors should be ~40 for 200um.
+Then channel_index[i] is an array with 40 integers
+containing all of the indices of the neighboring
+channels. Since different channels may have different
+numbers of neighbors, we need to fill in some gaps in
+this array, and those will be filled with the value 384
+(or whatever the number of channels is
+"""
 
 
 def n_steps_neigh_channels(neighbors_matrix, steps):
@@ -186,15 +198,17 @@ def get_channel_subset(
 ):
     """You have waveforms on C channels, and you want them on fewer.
 
-    You can use a channel_index_subset obtained from the function `channel_index_subset`
-    above together with this function to do it.
+    You can use a channel_index_subset obtained from the function
+    `channel_index_subset` above together with this function to do it.
 
-    E.g. you have waveforms on 40 channels extracted using `channel_index`, and you
-    want 10 channels in the end. You get:
+    E.g. you have waveforms on 40 channels extracted using
+    `channel_index`, and you want 10 channels in the end. You get:
 
     ```
     subset = channel_index_subset(geom, channel_index, n_channels=10)
     ```
+    This will be a boolean array of the same shape as the original
+    channel index. You can make your own too, of course.
 
     (The number of channels extracted at each max channel will be:
     ```
