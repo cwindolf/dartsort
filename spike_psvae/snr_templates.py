@@ -2,6 +2,7 @@ import numpy as np
 from tqdm.auto import tqdm
 import multiprocessing
 from concurrent.futures import ProcessPoolExecutor
+from .multiprocessing_utils import MockPoolExecutor, MockQueue
 
 from . import denoise, spikeio, waveform_utils
 
@@ -267,6 +268,34 @@ def get_raw_denoised_template_single(
     return raw_template, denoised_template, snr_by_channel
 
 
+def get_raw_template_single(
+    spike_times,
+    raw_binary_file,
+    n_channels,
+    max_spikes_per_unit=250,
+    reducer=np.median,
+    trough_offset=42,
+    spike_length_samples=121,
+    seed=0,
+):
+    choices = slice(None)
+    if spike_times.shape[0] > max_spikes_per_unit:
+        choices = np.random.default_rng(seed).choice(
+            spike_times.shape[0], max_spikes_per_unit, replace=False
+        )
+        choices.sort()
+
+    waveforms, skipped_idx = spikeio.read_waveforms(
+        spike_times[choices],
+        raw_binary_file,
+        n_channels,
+        trough_offset=trough_offset,
+        spike_length_samples=spike_length_samples,
+    )
+
+    return reducer(waveforms, axis=0)
+
+
 def denoised_weights(
     snrs,
     spike_length_samples,
@@ -369,35 +398,6 @@ def template_worker_init(
     p.reducer = reducer
     p.trough_offset = trough_offset
     p.spike_length_samples = spike_length_samples
-
-
-class MockPoolExecutor:
-    """A helper class for turning off concurrency when debugging."""
-
-    def __init__(
-        self,
-        max_workers=None,
-        mp_context=None,
-        initializer=None,
-        initargs=None,
-    ):
-        initializer(*initargs)
-        self.map = map
-
-    def __enter__(self):
-        return self
-
-    def __exit__(self, exc_type, exc_val, exc_tb):
-        return
-
-
-class MockQueue:
-    """Another helper class for turning off concurrency when debugging."""
-
-    def __init__(self):
-        self.q = []
-        self.put = self.q.append
-        self.get = lambda: self.q.pop(0)
 
 
 def xqdm(iterator, pbar=True, **kwargs):
