@@ -13,6 +13,7 @@ import logging
 import pandas as pd
 from sklearn.decomposition import PCA
 from tqdm.auto import tqdm
+from copy import copy
 
 try:
     from spikeglx import _geometry_from_meta, read_meta_data
@@ -22,52 +23,76 @@ except ImportError:
     except ImportError:
         raise ImportError("Can't find spikeglx...")
 
-from . import denoise, detect, localize_index
+from . import denoise, detect, localize_index, subtraction_feats
+from .multiprocessing_utils import MockPoolExecutor, MockQueue
 from .spikeio import get_binary_length, read_data, read_waveforms_in_memory
 from .waveform_utils import make_channel_index, make_contiguous_channel_index
 
 _logger = logging.getLogger(__name__)
 
 
+default_extra_feats = [
+    subtraction_feats.MaxPTP(),
+    subtraction_feats.TroughDepth(),
+    subtraction_feats.PeakHeight(),
+]
+
+
 def subtraction(
     standardized_bin,
     out_folder,
     geom=None,
+    # should we start over?
+    overwrite=False,
+    # waveform args
+    spike_length_samples=121,
+    trough_offset=42,
+    # tpca args
     tpca_rank=8,
-    n_sec_chunk=1,
     n_sec_pca=10,
+    # time / input binary details
+    n_sec_chunk=1,
     t_start=0,
     t_end=None,
     sampling_rate=30_000,
+    nsync=0,
+    binary_dtype=np.float32,
+    # detection
     thresholds=[12, 10, 8, 6, 5, 4],
     peak_sign="neg",
     nn_detect=False,
     denoise_detect=False,
     do_nn_denoise=True,
+    # waveform extraction channels
     neighborhood_kind="firstchan",
     extract_box_radius=200,
     extract_firstchan_n_channels=40,
     box_norm_p=np.inf,
-    spike_length_samples=121,
-    trough_offset=42,
     dedup_spatial_radius=70,
     enforce_decrease_kind="columns",
-    nsync=0,
-    n_jobs=1,
-    device=None,
+    # what to save?
     save_residual=False,
-    save_waveforms=False,
-    do_clean=True,
+    save_subtracted_waveforms=False,
+    save_cleaned_waveforms=False,
+    save_denoised_waveforms=False,
+    save_subtracted_tpca_projs=True,
+    save_cleaned_tpca_projs=True,
+    save_denoised_tpca_projs=True,
+    # localization args
+    # set this to None or "none" to turn off
     localization_kind="logbarrier",
     localize_radius=100,
     localize_firstchan_n_channels=20,
     loc_workers=4,
-    overwrite=False,
+    # want to compute any other features of the waveforms?
+    extra_features="default",
+    # misc kwargs
     random_seed=0,
     denoiser_init_kwargs={},
     denoiser_weights_path=None,
-    binary_dtype=np.float32,
     dtype=np.float32,
+    n_jobs=1,
+    device=None,
 ):
     """Subtraction-based waveform extraction
 
@@ -117,6 +142,9 @@ def subtraction(
     out_h5 : path to output hdf5 file
     residual : path to residual if save_residual
     """
+    if extra_features == "default":
+        extra_features = copy(default_extra_feats)
+
     if neighborhood_kind not in ("firstchan", "box", "circle"):
         raise ValueError(
             "Neighborhood kind", neighborhood_kind, "not understood."
@@ -127,6 +155,10 @@ def subtraction(
         )
     if peak_sign not in ("neg", "both"):
         raise ValueError("peak_sign", peak_sign, "not understood.")
+
+    if neighborhood_kind == "circle":
+        neighborhood_kind = "box"
+        box_norm_p = 2
 
     standardized_bin = Path(standardized_bin)
     stem = standardized_bin.stem
@@ -141,6 +173,8 @@ def subtraction(
     if save_residual:
         residual_bin = out_folder / f"residual_{stem}_t_{t_start}_{t_end}.bin"
     try:
+        # this is to check if another program is using our h5, in which
+        # case we should crash early rather than late.
         if out_h5.exists():
             with h5py.File(out_h5, "r+") as _:
                 pass
@@ -168,12 +202,11 @@ def subtraction(
                 "Either pass `geom` or put meta file in folder with binary."
             )
     n_channels = geom.shape[0]
-    ncols = len(np.unique(geom[:, 0]))
 
     # TODO: read this from meta.
     # right now it's just used to load NN detector and pick the enforce
     # decrease method if enforce_decrease_kind=="columns"
-    probe = {4: "np1", 2: "np2"}.get(ncols, None)
+    probe = {4: "np1", 2: "np2"}.get(np.unique(geom[:, 0]).size, None)
 
     # figure out if we will use a NN detector, and if so which
     nn_detector_path = None
@@ -220,24 +253,10 @@ def subtraction(
         extract_channel_index = make_channel_index(
             geom, extract_box_radius, distance_order=False, p=box_norm_p
         )
-        # use radius-based localization neighborhood
-        loc_n_chans = None
-        loc_radius = localize_radius
-    elif neighborhood_kind == "circle":
-        extract_channel_index = make_channel_index(
-            geom, extract_box_radius, distance_order=False, p=2
-        )
-        # use radius-based localization neighborhood
-        loc_n_chans = None
-        loc_radius = localize_radius
     elif neighborhood_kind == "firstchan":
         extract_channel_index = make_contiguous_channel_index(
             n_channels, n_neighbors=extract_firstchan_n_channels
         )
-
-        # use old firstchan style localization neighborhood
-        loc_n_chans = localize_firstchan_n_channels
-        loc_radius = None
     else:
         assert False
 
@@ -257,54 +276,160 @@ def subtraction(
     # check localization arg
     if localization_kind in ("original", "logbarrier"):
         print("Using", localization_kind, "localization")
-        do_localize = True
+        extra_features += [
+            subtraction_feats.Localization(
+                geom,
+                extract_channel_index,
+                loc_n_chans=localize_firstchan_n_channels
+                if neighborhood_kind == "firstchan"
+                else None,
+                loc_radius=localize_radius
+                if neighborhood_kind != "firstchan"
+                else None,
+                localization_kind=localization_kind,
+            )
+        ]
     else:
         print("No localization")
-        do_localize = False
 
-    # pre-fit temporal PCA
-    tpca = None
-    if n_sec_pca is not None:
-        # try to load old TPCA if it's around
+    # see if we are asked to save any waveforms
+    wf_bools = (
+        save_subtracted_waveforms,
+        save_cleaned_waveforms,
+        save_denoised_waveforms,
+    )
+    wf_names = ("subtracted", "cleaned", "denoised")
+    for do_save, kind in zip(wf_bools, wf_names):
+        if do_save:
+            extra_features += [
+                subtraction_feats.Waveform(
+                    which_waveforms=kind,
+                )
+            ]
+
+    # see if we are asked to save tpca projs for
+    # collision-cleaned or denoised waveforms
+    subtracted_tpca_feat = subtraction_feats.TPCA(
+        tpca_rank,
+        extract_channel_index,
+        which_waveforms="subtracted",
+        random_state=random_seed,
+    )
+    if save_subtracted_tpca_projs:
+        extra_features += [subtracted_tpca_feat]
+    if save_cleaned_tpca_projs:
+        extra_features += [
+            subtraction_feats.TPCA(
+                tpca_rank,
+                extract_channel_index,
+                which_waveforms="cleaned",
+                random_state=random_seed,
+            )
+        ]
+    do_clean = False
+    fit_feats = []
+    if save_denoised_tpca_projs or localization_kind in (
+        "original",
+        "logbarrier",
+    ):
+        denoised_tpca_feat = subtraction_feats.TPCA(
+            tpca_rank,
+            extract_channel_index,
+            which_waveforms="denoised",
+            random_state=random_seed,
+        )
+        do_clean = True
+        if save_denoised_tpca_projs:
+            extra_features += [denoised_tpca_feat]
+        else:
+            fit_feats += [denoised_tpca_feat]
+    print(f"{do_clean=}")
+
+    # temporal PCA for subtracted waveforms
+    # try to load old TPCA if it's around
+    if not overwrite and out_h5.exists():
+        with h5py.File(out_h5, "r") as output_h5:
+            subtracted_tpca_feat.from_h5(output_h5)
+
+    # otherwise, train it
+    # TODO: ideally would run this on another process,
+    # because this is the only time the main thread uses
+    # GPU, and we could avoid initializing torch runtime.
+    if subtracted_tpca_feat.needs_fit:
+        with timer("Training TPCA..."), torch.no_grad():
+            train_featurizers(
+                standardized_bin,
+                spike_length_samples,
+                extract_channel_index,
+                geom,
+                radial_parents,
+                T_samples,
+                sampling_rate,
+                dedup_channel_index,
+                thresholds,
+                nn_detector_path,
+                denoise_detect,
+                nn_channel_index,
+                extra_features=[subtracted_tpca_feat],
+                subtracted_tpca=None,
+                nsync=nsync,
+                peak_sign=peak_sign,
+                do_nn_denoise=do_nn_denoise,
+                do_enforce_decrease=do_enforce_decrease,
+                probe=probe,
+                denoiser_init_kwargs=denoiser_init_kwargs,
+                denoiser_weights_path=denoiser_weights_path,
+                n_sec_pca=n_sec_pca,
+                random_seed=random_seed,
+                device=device,
+                binary_dtype=binary_dtype,
+                dtype=dtype,
+            )
+
+        # try to free up some memory on GPU that might have been used above
+        if device.type == "cuda":
+            gc.collect()
+            torch.cuda.empty_cache()
+
+    # train featurizers
+    if any(f.needs_fit for f in extra_features + fit_feats):
+        # try to load old featurizers
         if not overwrite and out_h5.exists():
             with h5py.File(out_h5, "r") as output_h5:
-                tpca = tpca_from_h5(output_h5)
+                for f in extra_features:
+                    if f.needs_fit:
+                        f.from_h5(output_h5)
 
-        # otherwise, train it
-        if tpca is None:
-            with timer("Training TPCA"), torch.no_grad():
-                tpca = train_pca(
-                    standardized_bin,
-                    spike_length_samples,
-                    extract_channel_index,
-                    geom,
-                    radial_parents,
-                    T_samples,
-                    sampling_rate,
-                    dedup_channel_index,
-                    thresholds,
-                    nn_detector_path,
-                    denoise_detect,
-                    nn_channel_index,
-                    nsync=nsync,
-                    peak_sign=peak_sign,
-                    do_nn_denoise=do_nn_denoise,
-                    do_enforce_decrease=do_enforce_decrease,
-                    probe=probe,
-                    denoiser_init_kwargs=denoiser_init_kwargs,
-                    denoiser_weights_path=denoiser_weights_path,
-                    n_sec_pca=n_sec_pca,
-                    rank=tpca_rank,
-                    random_seed=random_seed,
-                    device=device,
-                    binary_dtype=binary_dtype,
-                    dtype=dtype,
-                )
-
-            # try to free up some memory on GPU that might have been used above
-            if device.type == "cuda":
-                gc.collect()
-                torch.cuda.empty_cache()
+        # train any which couldn't load
+        if any(f.needs_fit for f in extra_features + fit_feats):
+            train_featurizers(
+                standardized_bin,
+                spike_length_samples,
+                extract_channel_index,
+                geom,
+                radial_parents,
+                T_samples,
+                sampling_rate,
+                dedup_channel_index,
+                thresholds,
+                nn_detector_path,
+                denoise_detect,
+                nn_channel_index,
+                subtracted_tpca=subtracted_tpca_feat.tpca,
+                extra_features=extra_features + fit_feats,
+                nsync=nsync,
+                peak_sign=peak_sign,
+                do_nn_denoise=do_nn_denoise,
+                do_enforce_decrease=do_enforce_decrease,
+                probe=probe,
+                denoiser_init_kwargs=denoiser_init_kwargs,
+                denoiser_weights_path=denoiser_weights_path,
+                n_sec_pca=n_sec_pca,
+                random_seed=random_seed,
+                device=device,
+                binary_dtype=binary_dtype,
+                dtype=dtype,
+            )
 
     # if we're on GPU, we can't use processes, since each process will
     # have it's own torch runtime and those will use all the memory
@@ -336,31 +461,14 @@ def subtraction(
         end_sample,
         geom,
         extract_channel_index,
-        tpca,
-        neighborhood_kind,
-        spike_length_samples,
         sampling_rate,
-        save_waveforms=save_waveforms,
-        do_clean=do_clean,
-        do_localize=do_localize,
+        extra_features,
         overwrite=overwrite,
         dtype=dtype,
     ) as (output_h5, last_sample):
 
         spike_index = output_h5["spike_index"]
-        subtracted_tpca_projs = output_h5["subtracted_tpca_projs"]
-        if neighborhood_kind == "firstchan":
-            firstchans = output_h5["first_channels"]
-        if save_waveforms:
-            subtracted_wfs = output_h5["subtracted_waveforms"]
-            if do_clean:
-                cleaned_wfs = output_h5["cleaned_waveforms"]
-        if localization_kind in ("original", "logbarrier"):
-            locs = output_h5["localizations"]
-            maxptps = output_h5["maxptps"]
-            peak_heights = output_h5["peak_heights"]
-            trough_depths = output_h5["trough_depths"]
-            widths = output_h5["widths"]
+        feature_dsets = [output_h5[f.name] for f in extra_features]
         N = len(spike_index)
 
         # if we're resuming, filter out jobs we already did
@@ -379,13 +487,13 @@ def subtraction(
         # now run subtraction in parallel
         jobs = (
             (
-                batch_id,
                 batch_data_folder,
                 s_start,
                 batch_len_samples,
                 standardized_bin,
                 thresholds,
-                tpca,
+                subtracted_tpca_feat.tpca,
+                denoised_tpca_feat.tpca if do_clean else None,
                 trough_offset,
                 dedup_channel_index,
                 spike_length_samples,
@@ -393,18 +501,16 @@ def subtraction(
                 start_sample,
                 end_sample,
                 do_clean,
+                save_residual,
                 radial_parents,
-                localization_kind,
-                loc_workers,
                 geom,
                 do_enforce_decrease,
                 probe,
-                loc_n_chans,
-                loc_radius,
                 peak_sign,
                 nsync,
                 binary_dtype,
                 dtype,
+                extra_features,
             )
             for batch_id, s_start in jobs
         )
@@ -449,59 +555,19 @@ def subtraction(
                     # write new residual
                     if save_residual:
                         np.load(result.residual).tofile(residual)
-                    Path(result.residual).unlink()
-
-                    # skip if nothing new
-                    if not N_new:
-                        continue
+                        Path(result.residual).unlink()
 
                     # grow arrays as necessary and write results
-                    subtracted_tpca_projs.resize(N + N_new, axis=0)
-                    subtracted_tpca_projs[N:] = np.load(
-                        result.subtracted_tpca_projs
-                    )
-
-                    if save_waveforms:
-                        subtracted_wfs.resize(N + N_new, axis=0)
-                        subtracted_wfs[N:] = np.load(result.subtracted_wfs)
-
-                        if do_clean:
-                            cleaned_wfs.resize(N + N_new, axis=0)
-                            cleaned_wfs[N:] = np.load(result.cleaned_wfs)
-
                     spike_index.resize(N + N_new, axis=0)
                     spike_index[N:] = np.load(result.spike_index)
-
-                    if do_localize:
-                        locs.resize(N + N_new, axis=0)
-                        locs[N:] = np.load(result.localizations)
-                        maxptps.resize(N + N_new, axis=0)
-                        maxptps[N:] = np.load(result.maxptps)
-                        trough_depths.resize(N + N_new, axis=0)
-                        trough_depths[N:] = np.load(result.trough_depths)
-                        peak_heights.resize(N + N_new, axis=0)
-                        peak_heights[N:] = np.load(result.peak_heights)
-                        widths.resize(N + N_new, axis=0)
-                        widths[N:] = np.load(result.widths)
-
-                    if neighborhood_kind == "firstchan":
-                        firstchans.resize(N + N_new, axis=0)
-                        firstchans[N:] = extract_channel_index[
-                            spike_index[N:, 1], 0
-                        ]
-
-                    # delete original files
-                    Path(result.subtracted_tpca_projs).unlink()
-                    Path(result.subtracted_wfs).unlink()
-                    if do_clean:
-                        Path(result.cleaned_wfs).unlink()
                     Path(result.spike_index).unlink()
-                    if do_localize:
-                        Path(result.localizations).unlink()
-                        Path(result.maxptps).unlink()
-                        Path(result.trough_depths).unlink()
-                        Path(result.peak_heights).unlink()
-                        Path(result.widths).unlink()
+                    for f, dset in zip(extra_features, feature_dsets):
+                        dset.resize(N + N_new, axis=0)
+                        fnpy = (
+                            batch_data_folder / f"{result.prefix}{f.name}.npy"
+                        )
+                        dset[N:] = np.load(fnpy)
+                        Path(fnpy).unlink()
 
                     # update spike count
                     N += N_new
@@ -527,22 +593,7 @@ def subtraction(
 # the return type for `subtraction_batch` below
 SubtractionBatchResult = namedtuple(
     "SubtractionBatchResult",
-    [
-        "N_new",
-        "s_start",
-        "s_end",
-        "residual",
-        "subtracted_wfs",
-        "subtracted_tpca_projs",
-        "cleaned_wfs",
-        "spike_index",
-        "batch_id",
-        "localizations",
-        "maxptps",
-        "trough_depths",
-        "peak_heights",
-        "widths",
-    ],
+    ["N_new", "s_start", "s_end", "spike_index", "residual", "prefix"],
 )
 
 
@@ -611,13 +662,13 @@ def _subtraction_batch_init(
 
 
 def subtraction_batch(
-    batch_id,
     batch_data_folder,
     s_start,
     batch_len_samples,
     standardized_bin,
     thresholds,
-    tpca,
+    subtracted_tpca,
+    denoised_tpca,
     trough_offset,
     dedup_channel_index,
     spike_length_samples,
@@ -625,18 +676,16 @@ def subtraction_batch(
     start_sample,
     end_sample,
     do_clean,
+    save_residual,
     radial_parents,
-    localization_kind,
-    loc_workers,
     geom,
     do_enforce_decrease,
     probe,
-    loc_n_chans,
-    loc_radius,
     peak_sign,
     nsync,
     binary_dtype,
     dtype,
+    extra_features,
     device,
     denoiser,
     detector,
@@ -659,10 +708,6 @@ def subtraction_batch(
 
     Arguments
     ---------
-    batch_id : int
-        Used when naming temporary batch result files saved to
-        `batch_data_folder`. (Not used otherwise -- in particular
-        this does not determine what data is loaded or processed.)
     batch_data_folder : string
         Where temporary results are being stored
     s_start : int
@@ -729,6 +774,7 @@ def subtraction_batch(
         nsync,
         out_dtype=dtype,
     )
+    prefix = f"{s_start:10d}_"
 
     # 0 padding if we were at the edge of the data
     pad_left = pad_right = 0
@@ -746,16 +792,13 @@ def subtraction_batch(
 
     # main subtraction loop
     subtracted_wfs = []
-    subtracted_tpca_projs = None
-    if tpca is not None:
-        subtracted_tpca_projs = []
     spike_index = []
     for threshold in thresholds:
         subwfs, subpcs, residual, spind = detect_and_subtract(
             residual,
             threshold,
             radial_parents,
-            tpca,
+            subtracted_tpca,
             dedup_channel_index,
             extract_channel_index,
             peak_sign=peak_sign,
@@ -770,8 +813,6 @@ def subtraction_batch(
         )
         if len(spind):
             subtracted_wfs.append(subwfs)
-            if tpca is not None:
-                subtracted_tpca_projs.append(subpcs)
             spike_index.append(spind)
 
     # at this point, trough times in the spike index are relative
@@ -779,9 +820,9 @@ def subtraction_batch(
 
     # strip buffer from residual and remove spikes in buffer
     residual_singlebuf = residual[spike_length_samples:-spike_length_samples]
-    if batch_data_folder is not None:
-        residual = residual[buffer:-buffer]
-        np.save(batch_data_folder / f"{batch_id:08d}_res.npy", residual)
+    residual = residual[buffer:-buffer]
+    if batch_data_folder is not None and save_residual:
+        np.save(batch_data_folder / f"{prefix}res.npy", residual)
 
     # return early if there were no spikes
     if batch_data_folder is None and not spike_index:
@@ -792,29 +833,17 @@ def subtraction_batch(
             N_new=0,
             s_start=s_start,
             s_end=s_end,
-            residual=batch_data_folder / f"{batch_id:08d}_res.npy",
-            subtracted_wfs=None,
-            subtracted_tpca_projs=None,
-            cleaned_wfs=None,
             spike_index=None,
-            batch_id=batch_id,
-            localizations=None,
-            maxptps=None,
-            peak_heights=None,
-            trough_depths=None,
-            widths=None,
+            residual=batch_data_folder / f"{prefix}res.npy",
+            prefix=prefix,
         )
 
     subtracted_wfs = np.concatenate(subtracted_wfs, axis=0)
-    if tpca is not None:
-        subtracted_tpca_projs = np.concatenate(subtracted_tpca_projs, axis=0)
     spike_index = np.concatenate(spike_index, axis=0)
 
     # sort so time increases
     sort = np.argsort(spike_index[:, 0])
     subtracted_wfs = subtracted_wfs[sort]
-    if tpca is not None:
-        subtracted_tpca_projs = subtracted_tpca_projs[sort]
     spike_index = spike_index[sort]
 
     # get rid of spikes in the buffer
@@ -831,8 +860,6 @@ def subtraction_batch(
     maxix = np.searchsorted(spike_index[:, 0], spike_time_max, side="right")
     spike_index = spike_index[minix:maxix]
     subtracted_wfs = subtracted_wfs[minix:maxix]
-    if tpca is not None:
-        subtracted_tpca_projs = subtracted_tpca_projs[minix:maxix]
 
     # if caller passes None for the output folder, just return
     # the results now (eg this is used by train_pca)
@@ -840,29 +867,31 @@ def subtraction_batch(
         return spike_index, subtracted_wfs, residual_singlebuf
 
     # get cleaned waveforms
-    cleaned_wfs = None
+    cleaned_wfs = denoised_wfs = None
+    if not spike_index.size:
+        cleaned_wfs = denoised_wfs = np.empty_like(subtracted_wfs)
     if do_clean:
-        cleaned_wfs = subtracted_wfs
-        if spike_index.size:
-            cleaned_wfs = read_waveforms_in_memory(
-                residual_singlebuf,
-                spike_index,
-                spike_length_samples,
-                extract_channel_index,
-                trough_offset=trough_offset,
-                buffer=spike_length_samples,
-            )
-            cleaned_wfs = full_denoising(
-                cleaned_wfs + subtracted_wfs,
-                spike_index[:, 1],
-                extract_channel_index,
-                radial_parents,
-                do_enforce_decrease=do_enforce_decrease,
-                probe=probe,
-                tpca=tpca,
-                device=device,
-                denoiser=denoiser,
-            )
+        cleaned_wfs = read_waveforms_in_memory(
+            residual_singlebuf,
+            spike_index,
+            spike_length_samples,
+            extract_channel_index,
+            trough_offset=trough_offset,
+            buffer=spike_length_samples,
+        )
+        cleaned_wfs += subtracted_wfs
+        denoised_wfs = full_denoising(
+            cleaned_wfs,
+            spike_index[:, 1],
+            extract_channel_index,
+            radial_parents,
+            do_enforce_decrease=do_enforce_decrease,
+            probe=probe,
+            # tpca=subtracted_tpca,
+            tpca=denoised_tpca,
+            device=device,
+            denoiser=denoiser,
+        )
 
     # times relative to batch start
     # recall, these times were aligned to the double buffer, so we don't
@@ -871,70 +900,27 @@ def subtraction_batch(
 
     # save the results to disk to avoid memory issues
     N_new = len(spike_index)
-    np.save(batch_data_folder / f"{batch_id:08d}_sub.npy", subtracted_wfs)
-    np.save(
-        batch_data_folder / f"{batch_id:08d}_subpc.npy", subtracted_tpca_projs
-    )
-    np.save(batch_data_folder / f"{batch_id:08d}_si.npy", spike_index)
+    np.save(batch_data_folder / f"{prefix}si.npy", spike_index)
 
-    clean_file = None
-    if do_clean:
-        clean_file = batch_data_folder / f"{batch_id:08d}_clean.npy"
-        np.save(clean_file, cleaned_wfs)
-
-    localizations_file = (
-        maxptps_file
-    ) = peak_heights_file = trough_depths_file = widths_file = None
-    if localization_kind in ("original", "logbarrier"):
-        locwfs = cleaned_wfs if do_clean else subtracted_wfs
-        locptps = locwfs.ptp(1)
-        maxchans = np.nanargmax(locptps, axis=1)
-        maxchan_traces = locwfs[np.arange(len(locwfs)), :, maxchans]
-        trough_depths = maxchan_traces.min(1)
-        peak_heights = maxchan_traces.max(1)
-        first_peaks = maxchan_traces[:, :trough_offset].argmax(1)
-        second_peaks = trough_offset + maxchan_traces[
-            :, trough_offset:
-        ].argmax(1)
-        widths = second_peaks - first_peaks
-
-        xs, ys, z_rels, z_abss, alphas = localize_index.localize_ptps_index(
-            locptps,
-            geom,
-            spike_index[:, 1],
-            extract_channel_index,
-            n_channels=loc_n_chans,
-            radius=loc_radius,
-            n_workers=loc_workers,
-            pbar=False,
-            logbarrier=localization_kind == "logbarrier",
+    # compute and save features
+    for f in extra_features:
+        np.save(
+            batch_data_folder / f"{prefix}{f.name}.npy",
+            f.transform(
+                spike_index[:, 1],
+                subtracted_wfs=subtracted_wfs,
+                cleaned_wfs=cleaned_wfs,
+                denoised_wfs=denoised_wfs,
+            ),
         )
-        localizations_file = batch_data_folder / f"{batch_id:08d}_loc.npy"
-        np.save(localizations_file, np.c_[xs, ys, z_abss, alphas, z_rels])
-        maxptps_file = batch_data_folder / f"{batch_id:08d}_maxptp.npy"
-        np.save(maxptps_file, np.nanmax(locptps, axis=1))
-        trough_depths_file = batch_data_folder / f"{batch_id:08d}_tdepth.npy"
-        np.save(trough_depths_file, trough_depths)
-        peak_heights_file = batch_data_folder / f"{batch_id:08d}_pheight.npy"
-        np.save(peak_heights_file, peak_heights)
-        widths_file = batch_data_folder / f"{batch_id:08d}_width.npy"
-        np.save(widths_file, widths)
 
     res = SubtractionBatchResult(
         N_new=N_new,
         s_start=s_start,
         s_end=s_end,
-        residual=batch_data_folder / f"{batch_id:08d}_res.npy",
-        subtracted_wfs=batch_data_folder / f"{batch_id:08d}_sub.npy",
-        subtracted_tpca_projs=batch_data_folder / f"{batch_id:08d}_subpc.npy",
-        cleaned_wfs=clean_file,
-        spike_index=batch_data_folder / f"{batch_id:08d}_si.npy",
-        batch_id=batch_id,
-        localizations=localizations_file,
-        maxptps=maxptps_file,
-        peak_heights=peak_heights_file,
-        trough_depths=trough_depths_file,
-        widths=widths_file,
+        spike_index=batch_data_folder / f"{prefix}si.npy",
+        residual=batch_data_folder / f"{prefix}res.npy",
+        prefix=prefix,
     )
 
     return res
@@ -943,7 +929,7 @@ def subtraction_batch(
 # -- temporal PCA
 
 
-def train_pca(
+def train_featurizers(
     standardized_bin,
     spike_length_samples,
     extract_channel_index,
@@ -956,13 +942,13 @@ def train_pca(
     nn_detector_path,
     denoise_detect,
     nn_channel_index,
-    subtraction_tpca=None,
+    extra_features=None,
+    subtracted_tpca=None,
     peak_sign="neg",
     do_nn_denoise=True,
     do_enforce_decrease=True,
     probe=None,
     n_sec_pca=10,
-    rank=7,
     nsync=0,
     random_seed=0,
     device="cpu",
@@ -1013,36 +999,34 @@ def train_pca(
     residuals = []
     for s_start in tqdm(starts, "PCA training subtraction"):
         spind, wfs, residual_singlebuf = subtraction_batch(
-            0,
-            None,
-            s_start,
-            sampling_rate,
-            standardized_bin,
-            thresholds,
-            subtraction_tpca,
-            trough_offset,
-            dedup_channel_index,
-            spike_length_samples,
-            extract_channel_index,
-            0,
-            len_recording_samples,
-            False,
-            radial_parents,
-            False,
-            None,
-            None,
-            do_enforce_decrease,
-            probe,
-            None,
-            None,
-            peak_sign,
-            nsync,
-            binary_dtype,
-            dtype,
-            device,
-            denoiser,
-            detector,
-            dn_detector,
+            batch_data_folder=None,
+            s_start=s_start,
+            batch_len_samples=sampling_rate,
+            standardized_bin=standardized_bin,
+            thresholds=thresholds,
+            subtracted_tpca=subtracted_tpca,
+            denoised_tpca=None,
+            trough_offset=trough_offset,
+            dedup_channel_index=dedup_channel_index,
+            spike_length_samples=spike_length_samples,
+            extract_channel_index=extract_channel_index,
+            start_sample=0,
+            end_sample=len_recording_samples,
+            do_clean=False,
+            save_residual=False,
+            radial_parents=radial_parents,
+            geom=geom,
+            do_enforce_decrease=do_enforce_decrease,
+            probe=probe,
+            peak_sign=peak_sign,
+            nsync=nsync,
+            binary_dtype=binary_dtype,
+            dtype=dtype,
+            extra_features=[],
+            device=device,
+            denoiser=denoiser,
+            detector=detector,
+            dn_detector=dn_detector,
         )
         spike_indices.append(spind)
         waveforms.append(wfs)
@@ -1068,17 +1052,17 @@ def train_pca(
     print("Fitting PCA on", N, "waveforms from mini-subtraction")
 
     # get subtracted or collision-cleaned waveforms
-    if subtraction_tpca is None:
-        # we're fitting to subtracted wfs
-        pass
+    if subtracted_tpca is None:
+        # we're fitting TPCA to subtracted wfs so we won't need denoised wfs
+        cleaned_waveforms = denoised_waveforms = None
     else:
-        # otherwise, we are fitting the collision-cleaned TPCA,
-        # so add back the residual
-        waveforms += np.concatenate(
+        # otherwise, we are fitting featurizers, so compute
+        # denoised versions
+        cleaned_waveforms = np.concatenate(
             [
                 read_waveforms_in_memory(
                     res,
-                    spike_index,
+                    spind,
                     spike_length_samples,
                     extract_channel_index,
                     trough_offset=trough_offset,
@@ -1088,16 +1072,31 @@ def train_pca(
             ],
             axis=0,
         )
+        cleaned_waveforms += waveforms
+        denoised_waveforms = full_denoising(
+            cleaned_waveforms,
+            spike_index[:, 1],
+            extract_channel_index,
+            radial_parents,
+            do_enforce_decrease=do_enforce_decrease,
+            probe=probe,
+            tpca=None,
+            device=device,
+            denoiser=denoiser,
+        )
 
-    # fit TPCA
-    tpca = PCA(rank, random_state=random_seed)
-    # extract waveforms for real channels
-    wfs_in_probe = waveforms.transpose(0, 2, 1)
-    in_probe_index = extract_channel_index < extract_channel_index.shape[0]
-    wfs_in_probe = wfs_in_probe[in_probe_index[spike_index[:, 1]]]
-    tpca.fit(wfs_in_probe)
+    # train extra featurizers if necessary
+    extra_features = [] if extra_features is None else extra_features
+    if not any(f.needs_fit for f in extra_features):
+        return
 
-    return tpca
+    for f in extra_features:
+        f.fit(
+            spike_index[:, 1],
+            subtracted_wfs=waveforms,
+            cleaned_wfs=cleaned_waveforms,
+            denoised_wfs=denoised_waveforms,
+        )
 
 
 # -- denoising / detection helpers
@@ -1314,15 +1313,10 @@ def get_output_h5(
     end_sample,
     geom,
     extract_channel_index,
-    tpca,
-    neighborhood_kind,
-    spike_length_samples,
     sampling_rate,
-    do_clean=True,
-    do_localize=True,
-    save_waveforms=True,
+    extra_features,
     overwrite=False,
-    chunk_len=4096,
+    chunk_len=1024,
     dtype=np.float32,
 ):
     h5_exists = Path(out_h5).exists()
@@ -1343,27 +1337,8 @@ def get_output_h5(
         output_h5.create_dataset("start_sample", data=start_sample)
         output_h5.create_dataset("end_sample", data=end_sample)
         output_h5.create_dataset("channel_index", data=extract_channel_index)
-        if tpca is not None:
-            output_h5.create_dataset("tpca_mean", data=tpca.mean_)
-            output_h5.create_dataset("tpca_components", data=tpca.components_)
 
         # resizable datasets so we don't fill up space
-        extract_channels = extract_channel_index.shape[1]
-        output_h5.create_dataset(
-            "subtracted_tpca_projs",
-            shape=(0, tpca.components_.shape[0], extract_channels),
-            chunks=(chunk_len, tpca.components_.shape[0], extract_channels),
-            maxshape=(None, tpca.components_.shape[0], extract_channels),
-            dtype=dtype,
-        )
-        if save_waveforms:
-            output_h5.create_dataset(
-                "subtracted_waveforms",
-                shape=(0, spike_length_samples, extract_channels),
-                chunks=(chunk_len, spike_length_samples, extract_channels),
-                maxshape=(None, spike_length_samples, extract_channels),
-                dtype=dtype,
-            )
         output_h5.create_dataset(
             "spike_index",
             shape=(0, 2),
@@ -1371,58 +1346,16 @@ def get_output_h5(
             maxshape=(None, 2),
             dtype=np.int64,
         )
-        if neighborhood_kind == "firstchan":
+
+        for f in extra_features:
             output_h5.create_dataset(
-                "first_channels",
-                shape=(0,),
-                chunks=(chunk_len,),
-                maxshape=(None,),
-                dtype=np.int64,
+                f.name,
+                shape=(0, *f.out_shape),
+                chunks=(chunk_len, *f.out_shape),
+                maxshape=(None, *f.out_shape),
+                dtype=f.dtype,
             )
-        if save_waveforms and do_clean:
-            output_h5.create_dataset(
-                "cleaned_waveforms",
-                shape=(0, spike_length_samples, extract_channels),
-                chunks=(chunk_len, spike_length_samples, extract_channels),
-                maxshape=(None, spike_length_samples, extract_channels),
-                dtype=dtype,
-            )
-        if do_localize:
-            output_h5.create_dataset(
-                "localizations",
-                shape=(0, 5),
-                chunks=(chunk_len, 5),
-                maxshape=(None, 5),
-                dtype=dtype,
-            )
-            output_h5.create_dataset(
-                "maxptps",
-                shape=(0,),
-                chunks=(chunk_len,),
-                maxshape=(None,),
-                dtype=dtype,
-            )
-            output_h5.create_dataset(
-                "peak_heights",
-                shape=(0,),
-                chunks=(chunk_len,),
-                maxshape=(None,),
-                dtype=dtype,
-            )
-            output_h5.create_dataset(
-                "trough_depths",
-                shape=(0,),
-                chunks=(chunk_len,),
-                maxshape=(None,),
-                dtype=dtype,
-            )
-            output_h5.create_dataset(
-                "widths",
-                shape=(0,),
-                chunks=(chunk_len,),
-                maxshape=(None,),
-                dtype=dtype,
-            )
+            f.to_h5(output_h5)
 
     done_percent = (
         100 * (last_sample - start_sample) / (end_sample - start_sample)
@@ -1601,35 +1534,6 @@ def subtract_and_localize_numpy(
 
 
 # -- utils
-
-
-class MockPoolExecutor:
-    """A helper class for turning off concurrency when debugging."""
-
-    def __init__(
-        self,
-        max_workers=None,
-        mp_context=None,
-        initializer=None,
-        initargs=None,
-    ):
-        initializer(*initargs)
-        self.map = map
-
-    def __enter__(self):
-        return self
-
-    def __exit__(self, exc_type, exc_val, exc_tb):
-        return
-
-
-class MockQueue:
-    """Another helper class for turning off concurrency when debugging."""
-
-    def __init__(self):
-        self.q = []
-        self.put = self.q.append
-        self.get = lambda: self.q.pop(0)
 
 
 class timer:
