@@ -6,7 +6,7 @@ from scipy.signal import butter, filtfilt
 from spike_psvae import spikeio
 import numpy.fft as fft
 
-# ADC SHIFT 
+#ADC shift correction
 def phaseShiftSig(sig, fs, nSamples):
     # % function sig1 = phaseShiftSig(sig, fs, nSamples)
     # %
@@ -14,14 +14,13 @@ def phaseShiftSig(sig, fs, nSamples):
     # % shifting of the data, return the data in the time domain.
 
     n = len(sig)
-    f = np.arange(-n/2,n/2-1)*fs/n
-
+    f = np.arange(-n/2,n/2)*fs/n
     # % take fft
     y = fft.fftshift(fft.fft(sig))/n
 
     # % shift the phase of each sample in a frequency-dependent manner so the
     # % absolute time shift is constant across frequencies 
-    y1 = y*np.exp(-2*pi*1j*f*nSamples/fs) #ELEMENT WISE MULTIPLICATION
+    y1 = y*np.exp(-2*math.pi*1j*f*nSamples/fs) #ELEMENT WISE MULTIPLICATION
 
     # % ifft back to time domain
     sig1 = np.real(n*(fft.ifft(fft.ifftshift(y1))))
@@ -66,6 +65,7 @@ def shiftWF(thisWF):
         newWF[ch,:] = phaseShiftSig(thisWF[ch,:], fs, sampShifts[ch])
     
     return newWF
+
 
 # %%
 def filter_standardize_rec(output_directory, filename_raw, dtype_raw,
@@ -355,6 +355,9 @@ def filter_standardize_batch(batch_id, bin_file, fname_mean_sd,
     ts = _standardize(ts, sd, centers)
     if channels_to_remove is not None:
         ts = np.delete(ts, channels_to_remove, axis=1)
+    
+    ts = shiftWF(ts.T).T
+    ts = ts - np.median(ts, axis = 0)[None, :]
     
     # save
     fname = os.path.join(
