@@ -4,7 +4,7 @@ import numpy as np
 import parmap
 from scipy.signal import butter, filtfilt
 from spike_psvae import spikeio
-import np.fft as fft
+import numpy.fft as fft
 
 # ADC SHIFT 
 def phaseShiftSig(sig, fs, nSamples):
