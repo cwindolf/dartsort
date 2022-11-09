@@ -103,7 +103,7 @@ class MatchPursuitObjectiveUpsample:
 
             self.start_sample = t_start
             if t_end is not None:
-                self.end_sample = t_end
+                self.end_sample = t_end * sampling_rate
             else:
                 self.end_sample = T_samples
             self.batch_len_samples = n_sec_chunk * sampling_rate
