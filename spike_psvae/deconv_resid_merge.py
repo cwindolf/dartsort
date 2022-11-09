@@ -327,72 +327,6 @@ def merge_units_temp_deconv(
     return templates_updated, spike_times, labels_updated, unit_reference
 
 
-# def run_deconv_merge(
-#     spike_train,
-#     geom,
-#     raw_binary_file,
-#     unit_max_channels,
-#     deconv_threshold_mul=0.9,
-#     merge_resid_threshold=1.5,
-# ):
-#     templates_cleaned, extra = get_templates(
-#         spike_train,
-#         geom,
-#         raw_binary_file,
-#         unit_max_channels,
-#     )
-#     tpca = extra["tpca"]
-
-#     deconv_threshold = (
-#         deconv_threshold_mul
-#         * np.square(templates_cleaned).sum(axis=(1, 2)).min()
-#     )
-
-#     x, y, z_rel, z_abs, alpha = localize_ptps_index(
-#         templates_cleaned.ptp(1),
-#         geom,
-#         templates_cleaned.ptp(1).argmax(1),
-#         np.arange(len(geom))[None, :] * np.ones(len(geom), dtype=int)[:, None],
-#     )
-
-#     dist_argsort, dist_template = get_proposed_pairs(
-#         templates_cleaned.shape[0],
-#         templates_cleaned,
-#         np.c_[x, z_abs],
-#         n_temp=20,
-#     )
-
-#     with tempfile.TemporaryDirectory(prefix="drm") as workdir:
-#         max_values, units, units_matched, shifts = find_original_merges(
-#             workdir, templates_cleaned, dist_argsort, deconv_threshold
-#         )
-#         print(
-#             f"{max_values.shape=}, {units.shape=}, {units_matched.shape=}, {shifts.shape=}"
-#         )
-#         (
-#             templates_updated,
-#             times_updated,
-#             labels_updated,
-#             unit_reference,
-#         ) = merge_units_temp_deconv(
-#             units,
-#             units_matched,
-#             max_values,
-#             shifts,
-#             templates_cleaned,
-#             spike_train[:, 1].copy(),
-#             spike_train[:, 0].copy(),
-#             workdir,
-#             deconv_threshold,
-#             geom,
-#             raw_binary_file,
-#             tpca,
-#             merge_resid_threshold=merge_resid_threshold,
-#         )
-
-#     return times_updated, labels_updated
-
-
 def resid_dist__(temp_a, temp_b, thresh, lambd=0.001, allowed_scale=0.1):
     maxres_a, shift_a = check_additional_merge(
         temp_a, temp_b, thresh, lambd=lambd, allowed_scale=allowed_scale
@@ -464,9 +398,8 @@ def run_deconv_merge(
     raw_binary_file,
     unit_max_channels,
     deconv_threshold_mul=0.9,
-    merge_resid_threshold=2.5,
     # 2 is conservative, 2.5 is nice, 3 is aggressive
-    # merge_resid_threshold=2.5,
+    merge_resid_threshold=2.5,
 ):
     templates_cleaned, extra = get_templates(
         spike_train,
@@ -547,7 +480,7 @@ def run_deconv_merge(
         # we don't need to realign clusters which didn't change
         if len(orig_labels) <= 1:
             continue
-        
+
         orig_snrs = maxsnrs[orig_labels]
         best_orig = orig_labels[orig_snrs.argmax()]
         for ogl in np.setdiff1d(orig_labels, [best_orig]):
