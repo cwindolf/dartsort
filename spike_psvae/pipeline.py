@@ -364,7 +364,7 @@ def pre_deconv_merge_step(
     # we don't use this, but just for bookkeeping, in case another step is added...
     order = order[reorder]
 
-    return spike_train, aligned_spike_index, templates
+    return spike_train, aligned_spike_index, templates, order
 
 
 def post_deconv_split_step(
