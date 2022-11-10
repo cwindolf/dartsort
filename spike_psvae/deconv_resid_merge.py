@@ -360,13 +360,13 @@ def calc_resid_matrix(
         np.flatnonzero(temp.ptp(0) > vis_ptp_thresh) for temp in templates_b
     ]
 
-    def job(i, j, ua, ub):
+    def job(i, j):
         return (
             i,
             j,
             *resid_dist__(
-                templates_a[ua],
-                templates_b[ub],
+                templates_a[i],
+                templates_b[j],
                 thresh,
                 lambd=lambd,
                 allowed_scale=allowed_scale,
@@ -380,8 +380,8 @@ def calc_resid_matrix(
         for j, ub in enumerate(units_b):
             if auto and ua == ub:
                 continue
-            if np.intersect1d(chans_a[ua], chans_b[ub]).size:
-                jobs.append(delayed(job)(i, j, ua, ub))
+            if np.intersect1d(chans_a[i], chans_b[j]).size:
+                jobs.append(delayed(job)(i, j))
 
     if pbar:
         jobs = tqdm(jobs, desc="Resid matrix")
