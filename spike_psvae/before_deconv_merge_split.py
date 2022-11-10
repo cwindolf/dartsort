@@ -486,6 +486,7 @@ def lda_diptest_merge(
     channel_index,
     tpca_rank=5,
     n_channels=10,
+    min_spikes=10,
     max_spikes=250,
     threshold_diptest=0.5,
     seed=0,
@@ -508,6 +509,8 @@ def lda_diptest_merge(
         channel_index,
         which_chans,
     )
+    too_far_a = np.isnan(projs_a).any(axis=(1, 2))
+    projs_a = projs_a[~too_far_a]
     projs_b = get_pca_projs_on_channel_subset(
         in_unit_b,
         tpca_projs,
@@ -515,6 +518,12 @@ def lda_diptest_merge(
         channel_index,
         which_chans,
     )
+    too_far_b = np.isnan(projs_b).any(axis=(1, 2))
+    projs_b = projs_b[~too_far_b]
+    del in_unit_a, in_unit_b
+
+    if min(projs_a.shape[0], projs_b.shape[0]) < min_spikes:
+        return False
 
     # invert the tpca and align the times according to shift
     # shift is trough[b] - trough[a] here
