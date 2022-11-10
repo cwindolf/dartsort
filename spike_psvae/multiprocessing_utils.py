@@ -1,3 +1,14 @@
+class MockFuture:
+    """See below."""
+
+    def __init__(self, f, *args):
+        self.f = f
+        self.args = args
+
+    def result(self):
+        return self.f(*self.args)
+
+
 class MockPoolExecutor:
     """A helper class for turning off concurrency when debugging."""
 
@@ -16,6 +27,9 @@ class MockPoolExecutor:
 
     def __exit__(self, exc_type, exc_val, exc_tb):
         return
+
+    def submit(self, f, *args):
+        return MockFuture(f, *args)
 
 
 class MockQueue:
