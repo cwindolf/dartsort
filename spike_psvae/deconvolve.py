@@ -1,3 +1,4 @@
+# %%
 import numpy as np
 from scipy import signal
 import time
@@ -12,6 +13,7 @@ from pathlib import Path
 from spike_psvae import snr_templates
 
 
+# %%
 class MatchPursuitObjectiveUpsample:
     """Class for doing greedy matching pursuit deconvolution."""
 
@@ -96,12 +98,12 @@ class MatchPursuitObjectiveUpsample:
             if verbose:
                 print(
                     "Instantiating MatchPursuitObjectiveUpsample on ",
-                    T_sec,
+                    t_end-t_start,
                     "seconds long recording with threshold",
                     threshold,
                 )
 
-            self.start_sample = t_start
+            self.start_sample = t_start * sampling_rate
             if t_end is not None:
                 self.end_sample = t_end * sampling_rate
             else:
@@ -910,6 +912,7 @@ class MatchPursuitObjectiveUpsample:
             self.run_batch(batch_id, fname_out)
 
 
+# %%
 def deconvolution(
     spike_index,
     cluster_labels,
@@ -1111,6 +1114,7 @@ def deconvolution(
     )
 
 
+# %%
 def get_templates(
     standardized_bin,
     spike_index,
@@ -1154,6 +1158,7 @@ def get_templates(
     return templates
 
 
+# %%
 def xqdm(it, pbar=True, **kwargs):
     if pbar:
         return tqdm(it, **kwargs)
