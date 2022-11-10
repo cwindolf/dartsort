@@ -220,6 +220,7 @@ def ks_bimodal_pursuit_split(
 ):
     """Adapted from PyKS"""
     p = split_worker_init
+    tpca = p.tpca
     n_spikes = in_unit.size
 
     # bail early if too small
@@ -346,8 +347,8 @@ def ks_bimodal_pursuit_split(
     # now decide if the split would result in waveforms that are too similar
     # the reconstructed mean waveforms for putative cluster 1
     # c1 = cp.matmul(wPCA, cp.reshape((mean(clp0[ilow, :], 0), 3, -1), order='F'))
-    c1 = p.tpca.inverse_transform(unit_features[ilow].mean())
-    c2 = p.tpca.inverse_transform(unit_features[~ilow].mean())
+    c1 = tpca.inverse_transform(unit_features[ilow].mean())
+    c2 = tpca.inverse_transform(unit_features[~ilow].mean())
     # correlation of mean waveforms
     cc = np.corrcoef(c1.ravel(), c2.ravel())[0, 1]
     n1 = np.linalg.norm(c1)  # the amplitude estimate 1
