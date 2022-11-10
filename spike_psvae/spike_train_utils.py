@@ -143,7 +143,7 @@ def clean_align_and_get_templates(
     # sort so that times are increasing, but keep track of the order
     # so that the caller can handle bookkeeping
     if sort_by_time:
-        order = np.argsort(aligned_spike_train[:, 0])
+        order = np.argsort(aligned_spike_train[:, 0], kind="stable")
         aligned_spike_train = aligned_spike_train[order]
     else:
         order = np.arange(len(aligned_spike_train))
