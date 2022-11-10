@@ -124,7 +124,7 @@ if __name__ == "__main__":
         n_jobs=args.n_jobs,
         t_start=args.t_start,
         t_end=args.t_end,
-        do_clean=not args.noclean,
+#         do_clean=not args.noclean,
         n_sec_pca=args.n_sec_pca if not args.notpca else None,
         localization_kind=args.localization_kind,
         save_residual=not args.noresidual,
