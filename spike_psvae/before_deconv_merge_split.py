@@ -187,7 +187,7 @@ def maxchan_lda_split(
     # fit the lda model
     n_lda_components = min(n_max_chans - 1, 2)
     lda_projs = LDA(n_components=n_lda_components).fit_transform(
-        unit_tpca_projs[kept].reshape(kept.size, -1)
+        unit_tpca_projs[kept].reshape(kept.size, -1), unit_max_chans[kept]
     )
 
     # perform the split with isocut if not enough dims for hdbscan
@@ -233,9 +233,9 @@ def ks_bimodal_pursuit_split(
         (in_unit.size, p.tpca_projs.shape[1]), dtype=p.tpca_projs.dtype
     )
     for bs in range(0, in_unit.size, load_batch_size):
-        be = bs + load_batch_size
-        unit_features[bs:be] = p.tpca_projs[
-            in_unit[bs:be], :, unit_rel_max_chans[bs:be]
+        be = min(in_unit.size, bs + load_batch_size)
+        unit_features[bs:be] = p.tpca_projs[in_unit[bs:be]][
+            np.arange(be - bs), :, unit_rel_max_chans[bs:be]
         ]
 
     if unit_rank < unit_features.shape[1]:
@@ -388,7 +388,7 @@ def split_clusters(
     split_steps=(maxchan_lda_split, herding_split, ks_bimodal_pursuit_split),
     recursive_steps=(False, False, True),
 ):
-    contig = labels.max() + 1 == np.unique(labels).size
+    contig = labels.max() + 1 == np.unique(labels[labels >= 0]).size
     if not contig:
         raise ValueError("Please pass contiguous labels to the split step.")
 
@@ -413,7 +413,7 @@ def split_clusters(
     with Executor(
         max_workers=n_workers,
         mp_context=context,
-        intializer=split_worker_init,
+        initializer=split_worker_init,
         initargs=(
             subtraction_h5,
             log_c,
@@ -426,7 +426,8 @@ def split_clusters(
         # starting with the labels set output by the previous step
         for split_step, recursive in zip(split_steps, recursive_steps):
             cur_labels_set = np.setdiff1d(new_labels, [-1])
-            next_label = cur_labels_set.max() + 1
+            cur_max_label = cur_labels_set.max()
+            nlabels_cur = cur_max_label + 1
 
             jobs = [
                 pool.submit(split_step, np.flatnonzero(new_labels == i))
@@ -447,14 +448,14 @@ def split_clusters(
 
                 # -1 will become -1, 0 will keep its current label
                 # 1 and on will start at next_label
-                unit_new_labels[unit_new_labels > 0] += next_label
-                new_labels[unit_new_labels < 0] = unit_new_labels[
+                unit_new_labels[unit_new_labels > 0] += cur_max_label
+                new_labels[in_unit[unit_new_labels < 0]] = unit_new_labels[
                     unit_new_labels < 0
                 ]
-                new_labels[unit_new_labels > 0] = unit_new_labels[
+                new_labels[in_unit[unit_new_labels > 0]] = unit_new_labels[
                     unit_new_labels > 0
                 ]
-                next_label = new_labels[in_unit].max() + 1
+                cur_max_label = new_labels[in_unit].max()
 
                 if recursive:
                     jobs.extend(
@@ -463,6 +464,8 @@ def split_clusters(
                         )
                         for i in np.setdiff1d(new_labels[in_unit], [-1])
                     )
+
+            print(f"{new_labels.max() + 1 - nlabels_cur} new units.")
 
     return new_labels
 
@@ -534,8 +537,19 @@ def lda_diptest_merge(
     # LDA project and dip test
     labels = np.ones(Ntot, dtype=int)
     labels[: wfs_a.shape[0]] = 0
-    lda_projs = LDA(n_components=1).fit_transform(wfs)
+    lda_projs = LDA(n_components=1).fit_transform(wfs, labels)
     dipscore, cutpoint = isocut5(lda_projs.squeeze())
+
+    # import matplotlib.pyplot as plt
+    # fig, (aa, ab) = plt.subplots(ncols=2, figsize=(8, 5))
+    # aa.hist(lda_projs, bins=64)
+    # aa.set_title(dipscore)
+    # ta = wfs_a.mean(0)
+    # tb = wfs_b.mean(0)
+    # ab.plot(ta[:, ta.ptp(0).argmax()])
+    # ab.plot(tb[:, tb.ptp(0).argmax()])
+    # plt.show()
+    # plt.close(fig)
 
     return dipscore < threshold_diptest
 
@@ -550,7 +564,7 @@ def get_proposed_pairs_for_unit(
     lambd=0.001,
     allowed_scale=0.1,
 ):
-    other_templates = np.concatenate([templates_dict[j] for j in other_units])
+    other_templates = np.stack([templates_dict[j] for j in other_units], axis=0)
     deconv_threshold = deconv_threshold_mul * min(
         np.square(templates_dict[unit]).sum(),
         np.square(other_templates).sum(axis=(1, 2)).min(),
@@ -558,24 +572,27 @@ def get_proposed_pairs_for_unit(
 
     # shifts[i, j] is like trough[j] - trough[i]
     resids, shifts = calc_resid_matrix(
-        templates_dict[unit],
-        [unit],
+        templates_dict[unit][None],
+        np.array([unit]),
         other_templates,
-        other_units,
+        np.array(other_units),
         thresh=deconv_threshold,
         n_jobs=n_jobs,
         vis_ptp_thresh=1,
         auto=True,
-        pbar=True,
+        pbar=False,
         lambd=lambd,
         allowed_scale=allowed_scale,
     )
     resids = resids.squeeze()
-    shifts = shifts.squeeze()
+    shifts = shifts.squeeze().astype(int)
 
     # get pairs with resid max norm < threshold
     ix = np.flatnonzero(resids < max_resid_dist)
-    proposals = [other_units[j] for j in ix]
+    if not ix.size:
+        return (), ()
+    proposals = np.array([other_units[j] for j in ix])
+    print(resids.shape, ix)
     prop_resids = resids[ix]
 
     # sort them in order of increasing distance
@@ -628,7 +645,8 @@ def merge_clusters(
     # loop by order of snr
     # high snr will be the last element here
     labels_to_process = list(np.argsort(snrs))
-    while labels_to_process:
+    t = tqdm(desc="Merge", total=len(labels_to_process))
+    while len(labels_to_process) > 1:
         # pop removes from the end of list
         label = labels_to_process.pop()
         in_label = np.flatnonzero(new_labels == label)
@@ -640,7 +658,9 @@ def merge_clusters(
             labels_to_process,
             templates_dict,
             max_resid_dist=proposal_max_resid_dist,
+            # n_jobs=1,
         )
+        # print(label, proposals.size)
 
         # loop through candidates until we find a merge
         # if we find a merge, update the state and add the merged
@@ -665,6 +685,7 @@ def merge_clusters(
 
             if is_merge:
                 # update the state
+                # print("merge", label, candidate)
 
                 # update spike times, using the alignment of the
                 # higher snr template. since we are iterating in
@@ -694,8 +715,12 @@ def merge_clusters(
                     # we add this to the end of the list,
                     # so it's up next for processing.
                     labels_to_process.append(label)
+                    t.total += 1
+                    t.refresh()
 
                 break
+
+        t.update()
 
     return aligned_times, new_labels
 
