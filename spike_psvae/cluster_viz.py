@@ -1250,7 +1250,11 @@ def plot_waveforms_geom_unit_with_return(
             waveforms = np.asarray(waveforms)
         else:
             waveforms = read_waveforms(
-                spike_times, raw_bin, geom.shape[0], channels = np.arange(first_chans_cluster[0], first_chans_cluster[0]+40), spike_length_samples=121
+                spike_times,
+                raw_bin,
+                geom.shape[0],
+                channels=np.arange(first_chans_cluster[0], first_chans_cluster[0]+num_channels),
+                spike_length_samples=121,
             )[0]
 
     elif waveforms_cluster is None:
@@ -1745,10 +1749,16 @@ def diagnostic_plots(
             #     indices_match
             # ]
             # mcs_abs_cluster_sorting = mcs_abs_cluster_sorting1[indices_match]
-            mcs_abs_cluster_sorting = np.full(indices_match.shape, shared_mc)
+            mcs_abs_cluster_sorting = np.full(
+                indices_match.shape,
+                shared_mc,
+            )
 #             print(mcs_abs_cluster_sorting)
-            firstchans_cluster_sorting = np.maximum(
-                mcs_abs_cluster_sorting - 20, 0
+            firstchans_cluster_sorting = np.minimum(
+                geom.shape[0] - num_channels,
+                np.maximum(
+                    mcs_abs_cluster_sorting - num_channels // 2, 0
+                )
             )
             spike_times = st_1[indices_match]
             # geom, first_chans_cluster, mcs_abs_cluster, max_ptps_cluster, spike_times,
