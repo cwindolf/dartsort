@@ -602,7 +602,6 @@ def get_proposed_pairs_for_unit(
     if not ix.size:
         return (), ()
     proposals = np.array([other_units[j] for j in ix])
-    print(resids.shape, ix)
     prop_resids = resids[ix]
 
     # sort them in order of increasing distance
