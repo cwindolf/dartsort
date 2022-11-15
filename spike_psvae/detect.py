@@ -381,14 +381,14 @@ def torch_voltage_detect_dedup(
     if device is None:
         device = "cuda" if torch.cuda.is_available() else "cpu"
 
-    # -- torch argrelmin
+    # -- torch argrelMAX not argrelmin, on the negative
     if peak_sign == "neg":
         neg_recording = torch.as_tensor(
             -recording, device=device, dtype=torch.float
         )
     elif peak_sign == "both":
         neg_recording = torch.as_tensor(
-            -np.abs(recording), device=device, dtype=torch.float
+            np.abs(recording), device=device, dtype=torch.float
         )
     else:
         assert False
