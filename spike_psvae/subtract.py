@@ -343,7 +343,6 @@ def subtraction(
             extra_features += [denoised_tpca_feat]
         else:
             fit_feats += [denoised_tpca_feat]
-    print(f"{do_clean=}")
 
     # temporal PCA for subtracted waveforms
     # try to load old TPCA if it's around
