@@ -557,19 +557,19 @@ def subtraction(
                         Path(result.residual).unlink()
 
                     # grow arrays as necessary and write results
-                    spike_index.resize(N + N_new, axis=0)
-                    spike_index[N:] = np.load(result.spike_index)
-                    Path(result.spike_index).unlink()
-                    for f, dset in zip(extra_features, feature_dsets):
-                        dset.resize(N + N_new, axis=0)
-                        fnpy = (
-                            batch_data_folder / f"{result.prefix}{f.name}.npy"
-                        )
-                        dset[N:] = np.load(fnpy)
-                        Path(fnpy).unlink()
-
-                    # update spike count
-                    N += N_new
+                    if N_new>0:
+                        spike_index.resize(N + N_new, axis=0)
+                        spike_index[N:] = np.load(result.spike_index)
+                        Path(result.spike_index).unlink()
+                        for f, dset in zip(extra_features, feature_dsets):
+                            dset.resize(N + N_new, axis=0)
+                            fnpy = (
+                                batch_data_folder / f"{result.prefix}{f.name}.npy"
+                            )
+                            dset[N:] = np.load(fnpy)
+                            Path(fnpy).unlink()
+                        # update spike count
+                        N += N_new
 
     # -- done!
     if save_residual:
