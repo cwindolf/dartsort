@@ -358,7 +358,7 @@ def filter_standardize_batch(batch_id, bin_file, fname_mean_sd,
         ts = np.delete(ts, channels_to_remove, axis=1)
     
     ts = shiftWF(ts.T).T
-    ts = ts - np.median(ts, axis = 0)[None, :]
+    ts = ts - np.median(ts, axis = 1)[:, None]
     
     # save
     fname = os.path.join(
