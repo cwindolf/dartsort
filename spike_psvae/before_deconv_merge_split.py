@@ -3,6 +3,8 @@ import h5py
 import multiprocessing
 
 from hdbscan import HDBSCAN
+from isosplit import isosplit
+from sklearn.mixture import DPGMM
 from concurrent.futures import ProcessPoolExecutor
 from tqdm.auto import tqdm
 from sklearn.decomposition import PCA
@@ -70,7 +72,9 @@ def herding_split(
     min_size_split=25,
     n_channels=5,
     n_pca_features=2,
+    clusterer="hdbscan",
     hdbscan_kwargs=dict(min_cluster_size=25, min_samples=25),
+    dpgmm_kwargs=dict(n_components=10, covariance_type="full"),
 ):
     p = split_worker_init
     n_spikes = in_unit.size
@@ -122,9 +126,18 @@ def herding_split(
     unit_features = np.c_[unit_features, pca_projs]
 
     # run hdbscan
-    clust = HDBSCAN(**hdbscan_kwargs)
-    clust.fit(unit_features)
-    new_labels[kept] = clust.labels_
+    if clusterer == "hdbscan":
+        clust = HDBSCAN(**hdbscan_kwargs)
+        clust.fit(unit_features)
+        new_labels[kept] = clust.labels_
+    elif clusterer == "isosplit":
+        new_labels[kept] = isosplit(unit_features.T)
+    elif clusterer == "dpgmm":
+        clust = DPGMM(**dpgmm_kwargs)
+        clust.fit(unit_features)
+        new_labels[kept] = clust.predict(unit_features)
+    else:
+        assert False
 
     is_split = np.setdiff1d(np.unique(new_labels), [-1]).size > 1
     return is_split, new_labels, in_unit
