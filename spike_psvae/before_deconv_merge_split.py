@@ -4,7 +4,7 @@ import multiprocessing
 
 from hdbscan import HDBSCAN
 from isosplit import isosplit
-from sklearn.mixture import DPGMM
+from sklearn.mixture import BayesianGaussianMixture
 from concurrent.futures import ProcessPoolExecutor
 from tqdm.auto import tqdm
 from sklearn.decomposition import PCA
@@ -74,7 +74,7 @@ def herding_split(
     n_pca_features=2,
     clusterer="hdbscan",
     hdbscan_kwargs=dict(min_cluster_size=25, min_samples=25),
-    dpgmm_kwargs=dict(n_components=10, covariance_type="full"),
+    dpgmm_kwargs=dict(n_components=10),
 ):
     p = split_worker_init
     n_spikes = in_unit.size
@@ -133,7 +133,7 @@ def herding_split(
     elif clusterer == "isosplit":
         new_labels[kept] = isosplit(unit_features.T)
     elif clusterer == "dpgmm":
-        clust = DPGMM(**dpgmm_kwargs)
+        clust = BayesianGaussianMixture(**dpgmm_kwargs)
         clust.fit(unit_features)
         new_labels[kept] = clust.predict(unit_features)
     else:
