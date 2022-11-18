@@ -501,7 +501,7 @@ def lda_diptest_merge(
 
     # load cleaned wf tpca projections for both
     # units on the channels subset
-    which_chans = np.argsort(-(template_a + template_b).ptp(0))[:n_channels]
+    which_chans = np.argsort(-(template_a.ptp(0) + template_b.ptp(0)))[:n_channels]
     projs_a = get_pca_projs_on_channel_subset(
         in_unit_a,
         tpca_projs,
