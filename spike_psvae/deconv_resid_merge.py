@@ -400,12 +400,14 @@ def run_deconv_merge(
     deconv_threshold_mul=0.9,
     # 2 is conservative, 2.5 is nice, 3 is aggressive
     merge_resid_threshold=2.5,
+    tpca=None
 ):
     templates_cleaned, extra = get_templates(
         spike_train,
         geom,
         raw_binary_file,
         unit_max_channels,
+        tpca = tpca
     )
 
     # get rms on active channels
