@@ -1,8 +1,10 @@
+# %%
 import numpy as np
 from tqdm.auto import tqdm
 from . import spikeio
 
 
+# %%
 def make_labels_contiguous(
     labels, in_place=False, return_orig_unit_labels=False
 ):
@@ -20,6 +22,7 @@ def make_labels_contiguous(
     return out
 
 
+# %%
 def clean_align_and_get_templates(
     spike_train,
     n_channels,
@@ -34,6 +37,7 @@ def clean_align_and_get_templates(
     pbar=True,
     seed=0,
     dtype=np.float32,
+    remove_empty_units = True,
 ):
     """
     A helper function for cleaning and aligning spike trains
@@ -77,7 +81,8 @@ def clean_align_and_get_templates(
         # mark these spikes as triaged
         # (rather than deleting, to keep the same shape for the spike train)
         aligned_spike_train[too_small, 1] = -1
-    make_labels_contiguous(aligned_spike_train[:, 1], in_place=True)
+    if remove_empty_units:
+        make_labels_contiguous(aligned_spike_train[:, 1], in_place=True)
     times, labels = aligned_spike_train.T
     n_units = labels.max() + 1
 
