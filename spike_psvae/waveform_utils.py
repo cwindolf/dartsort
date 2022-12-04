@@ -19,7 +19,7 @@ def fit_tpca_bin(
     tpca_channel_index = make_channel_index(
         geom, spatial_radius, steps=1, distance_order=False, p=1
     )
-    choices = rg.choice(len(spike_index), size=tpca_n_wfs, replace=False)
+    choices = rg.choice(len(spike_index), size=min(len(spike_index), tpca_n_wfs), replace=False)
     choices.sort()
     tpca_waveforms, skipped_idx = spikeio.read_waveforms(
         spike_index[choices, 0],
