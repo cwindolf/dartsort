@@ -141,6 +141,43 @@ class PeakHeight(ExtraFeat):
         return peak_heights
 
 
+class PTPVector(ExtraFeat):
+
+    name = "ptp_vectors"
+
+    def __init__(self, which_waveforms="denoised"):
+        self.which_waveforms = which_waveforms
+
+    def fit(
+        self,
+        max_channels=None,
+        subtracted_wfs=None,
+        cleaned_wfs=None,
+        denoised_wfs=None,
+    ):
+
+        wfs = self.handle_which_wfs(subtracted_wfs, cleaned_wfs, denoised_wfs)
+        if wfs is None:
+            return None
+
+        N, T, C = wfs.shape
+        self.out_shape = (C,)
+        self.dtype = wfs.dtype
+        self.needs_fit = False
+
+    def transform(
+        self,
+        max_channels=None,
+        subtracted_wfs=None,
+        cleaned_wfs=None,
+        denoised_wfs=None,
+    ):
+        wfs = self.handle_which_wfs(subtracted_wfs, cleaned_wfs, denoised_wfs)
+        if wfs is None:
+            return None
+        return wfs.ptp(1)
+
+
 class Waveform(ExtraFeat):
     def __init__(self, which_waveforms):
         super().__init__()
@@ -203,6 +240,7 @@ class Localization(ExtraFeat):
         loc_radius=None,
         n_workers=1,
         localization_kind="logbarrier",
+        which_waveforms="denoised",
     ):
         super().__init__()
         assert channel_index.shape[0] == geom.shape[0]
@@ -212,6 +250,7 @@ class Localization(ExtraFeat):
         self.loc_n_chans = loc_n_chans
         self.loc_radius = loc_radius
         self.n_workers = n_workers
+        self.which_waveforms = which_waveforms
 
     def transform(
         self,

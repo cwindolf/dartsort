@@ -37,6 +37,7 @@ if __name__ == "__main__":
     g.add_argument("--save_subtracted_tpca_projs", action="store_true")
     g.add_argument("--save_cleaned_tpca_projs", action="store_true")
     g.add_argument("--save_denoised_tpca_projs", action="store_true")
+    g.add_argument("--save_denoised_ptp_vectors", action="store_true")
 
     g = ap.add_argument_group("Subtraction configuration")
     g.add_argument(
@@ -136,6 +137,7 @@ if __name__ == "__main__":
         save_denoised_waveforms=args.save_denoised_waveforms,
         save_subtracted_tpca_projs=args.save_subtracted_tpca_projs,
         save_cleaned_tpca_projs=args.save_cleaned_tpca_projs,
+        save_denoised_ptp_vectors=args.save_denoised_ptp_vectors,
         thresholds=args.thresholds,
         peak_sign=args.peak_sign,
         nn_detect=args.nn_detect,

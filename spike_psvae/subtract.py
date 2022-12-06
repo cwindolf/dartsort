@@ -78,6 +78,7 @@ def subtraction(
     save_subtracted_tpca_projs=True,
     save_cleaned_tpca_projs=True,
     save_denoised_tpca_projs=True,
+    save_denoised_ptp_vectors=False,
     # localization args
     # set this to None or "none" to turn off
     localization_kind="logbarrier",
@@ -142,13 +143,24 @@ def subtraction(
     out_h5 : path to output hdf5 file
     residual : path to residual if save_residual
     """
-    do_clean = (save_denoised_tpca_projs or localization_kind in (
-        "original",
-        "logbarrier",
-    ))
+    do_clean = (
+        save_denoised_tpca_projs
+        or save_denoised_ptp_vectors
+        or localization_kind
+        in (
+            "original",
+            "logbarrier",
+        )
+    )
     if extra_features == "default":
         feat_wfs = "denoised" if do_clean else "subtracted"
-        extra_features = [F(which_waveforms=feat_wfs) for F in default_extra_feats]
+        extra_features = [
+            F(which_waveforms=feat_wfs) for F in default_extra_feats
+        ]
+    if save_denoised_ptp_vectors:
+        extra_features += [
+            subtraction_feats.PTPVector(which_waveforms="denoised")
+        ]
 
     if neighborhood_kind not in ("firstchan", "box", "circle"):
         raise ValueError(
