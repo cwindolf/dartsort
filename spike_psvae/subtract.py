@@ -622,6 +622,7 @@ def _subtraction_batch_init(
 
     torch.set_grad_enabled(False)
     if device.type == "cuda":
+        print("num gpus:", torch.cuda.device_count())
         if torch.cuda.device_count() > 1:
             device = torch.device(
                 "cuda", index=rank % torch.cuda.device_count()
@@ -1326,8 +1327,9 @@ def get_output_h5(
         if len(output_h5["spike_index"]) > 0:
             last_sample = output_h5["spike_index"][-1, 0]
     else:
-        if overwrite:
+        if overwrite and h5_exists:
             print("Overwriting previous results, if any.")
+            Path(out_h5).unlink()
         output_h5 = h5py.File(out_h5, "w")
 
         # initialize datasets
