@@ -15,6 +15,10 @@ class ExtraFeat:
     dtype = np.float32  # dtype of this feature
     # helper property, set it if fit is implemented
     needs_fit = False
+    # featurizers should set this to one of "subtracted", "cleaned", "denoised".
+    # featurizers will return None when this kind of wf is not passed to their
+    # transform step.
+    which_waveforms = NotImplemented
 
     def fit(
         self,
@@ -47,6 +51,15 @@ class ExtraFeat:
         """ExtraFeats should implement this."""
         raise NotImplementedError
 
+    def handle_which_wfs(self, subtracted_wfs, cleaned_wfs, denoised_wfs):
+        if self.which_waveforms == "subtracted":
+            wfs = subtracted_wfs
+        elif self.which_waveforms == "cleaned":
+            wfs = cleaned_wfs
+        elif self.which_waveforms == "denoised":
+            wfs = denoised_wfs
+        return wfs
+
 
 # -- a couple of very basic extra features
 
@@ -57,6 +70,9 @@ class MaxPTP(ExtraFeat):
     # scalar
     out_shape = ()
 
+    def __init__(self, which_waveforms="denoised"):
+        self.which_waveforms = which_waveforms
+
     def transform(
         self,
         max_channels=None,
@@ -64,8 +80,9 @@ class MaxPTP(ExtraFeat):
         cleaned_wfs=None,
         denoised_wfs=None,
     ):
-        # in subtraction, the user can decide not to run cleaned waveforms
-        wfs = denoised_wfs if denoised_wfs is not None else subtracted_wfs
+        wfs = self.handle_which_wfs(subtracted_wfs, cleaned_wfs, denoised_wfs)
+        if wfs is None:
+            return None
         maxptps = np.nanmax(wfs.ptp(1), axis=1)
         return maxptps
 
@@ -76,6 +93,9 @@ class TroughDepth(ExtraFeat):
     # scalar
     out_shape = ()
 
+    def __init__(self, which_waveforms="denoised"):
+        self.which_waveforms = which_waveforms
+
     def transform(
         self,
         max_channels=None,
@@ -83,8 +103,9 @@ class TroughDepth(ExtraFeat):
         cleaned_wfs=None,
         denoised_wfs=None,
     ):
-        # in subtraction, the user can decide not to run cleaned waveforms
-        wfs = denoised_wfs if denoised_wfs is not None else subtracted_wfs
+        wfs = self.handle_which_wfs(subtracted_wfs, cleaned_wfs, denoised_wfs)
+        if wfs is None:
+            return None
         mcs = np.nanargmax(wfs.ptp(1), axis=1)
         maxchan_traces = wfs[np.arange(len(wfs)), :, mcs]
         trough_depths = maxchan_traces.min(1)
@@ -97,6 +118,9 @@ class PeakHeight(ExtraFeat):
     # scalar
     out_shape = ()
 
+    def __init__(self, which_waveforms="denoised"):
+        self.which_waveforms = which_waveforms
+
     def transform(
         self,
         max_channels=None,
@@ -104,8 +128,9 @@ class PeakHeight(ExtraFeat):
         cleaned_wfs=None,
         denoised_wfs=None,
     ):
-        # in subtraction, the user can decide not to run cleaned waveforms
-        wfs = denoised_wfs if denoised_wfs is not None else subtracted_wfs
+        wfs = self.handle_which_wfs(subtracted_wfs, cleaned_wfs, denoised_wfs)
+        if wfs is None:
+            return None
         mcs = np.nanargmax(wfs.ptp(1), axis=1)
         maxchan_traces = wfs[np.arange(len(wfs)), :, mcs]
         peak_heights = maxchan_traces.max(1)
@@ -126,12 +151,9 @@ class Waveform(ExtraFeat):
         cleaned_wfs=None,
         denoised_wfs=None,
     ):
-        if self.which_waveforms == "subtracted":
-            wfs = subtracted_wfs
-        elif self.which_waveforms == "cleaned":
-            wfs = cleaned_wfs
-        elif self.which_waveforms == "denoised":
-            wfs = denoised_wfs
+        wfs = self.handle_which_wfs(subtracted_wfs, cleaned_wfs, denoised_wfs)
+        if wfs is None:
+            return None
 
         N, T, C = wfs.shape
         self.out_shape = (T, C)
@@ -158,12 +180,7 @@ class Waveform(ExtraFeat):
         cleaned_wfs=None,
         denoised_wfs=None,
     ):
-        if self.which_waveforms == "subtracted":
-            return subtracted_wfs
-        elif self.which_waveforms == "cleaned":
-            return cleaned_wfs
-        elif self.which_waveforms == "denoised":
-            return denoised_wfs
+        return self.handle_which_wfs(subtracted_wfs, cleaned_wfs, denoised_wfs)
 
 
 # -- localization
@@ -199,7 +216,9 @@ class Localization(ExtraFeat):
         cleaned_wfs=None,
         denoised_wfs=None,
     ):
-        wfs = denoised_wfs if denoised_wfs is not None else subtracted_wfs
+        wfs = self.handle_which_wfs(subtracted_wfs, cleaned_wfs, denoised_wfs)
+        if wfs is None:
+            return None
         ptps = wfs.ptp(1)
         xs, ys, z_rels, z_abss, alphas = localize_index.localize_ptps_index(
             ptps,
@@ -240,12 +259,8 @@ class TPCA(ExtraFeat):
         cleaned_wfs=None,
         denoised_wfs=None,
     ):
-        if self.which_waveforms == "subtracted":
-            wfs = subtracted_wfs
-        elif self.which_waveforms == "cleaned":
-            wfs = cleaned_wfs
-        elif self.which_waveforms == "denoised":
-            wfs = denoised_wfs
+        wfs = self.handle_which_wfs(subtracted_wfs, cleaned_wfs, denoised_wfs)
+        assert wfs is not None
         N, T, C = wfs.shape
         self.T = T
 
@@ -281,12 +296,9 @@ class TPCA(ExtraFeat):
         cleaned_wfs=None,
         denoised_wfs=None,
     ):
-        if self.which_waveforms == "subtracted":
-            wfs = subtracted_wfs
-        elif self.which_waveforms == "cleaned":
-            wfs = cleaned_wfs
-        elif self.which_waveforms == "denoised":
-            wfs = denoised_wfs
+        wfs = self.handle_which_wfs(subtracted_wfs, cleaned_wfs, denoised_wfs)
+        if wfs is None:
+            return None
 
         features = np.full(
             (wfs.shape[0], *self.out_shape), np.nan, dtype=self.dtype
@@ -309,12 +321,9 @@ class TPCA(ExtraFeat):
         cleaned_wfs=None,
         denoised_wfs=None,
     ):
-        if self.which_waveforms == "subtracted":
-            wfs = subtracted_wfs
-        elif self.which_waveforms == "cleaned":
-            wfs = cleaned_wfs
-        elif self.which_waveforms == "denoised":
-            wfs = denoised_wfs
+        wfs = self.handle_which_wfs(subtracted_wfs, cleaned_wfs, denoised_wfs)
+        if wfs is None:
+            return None
         out = wfs.copy()
 
         out = out.transpose(0, 2, 1)
