@@ -32,9 +32,9 @@ _logger = logging.getLogger(__name__)
 
 
 default_extra_feats = [
-    subtraction_feats.MaxPTP(),
-    subtraction_feats.TroughDepth(),
-    subtraction_feats.PeakHeight(),
+    subtraction_feats.MaxPTP,
+    subtraction_feats.TroughDepth,
+    subtraction_feats.PeakHeight,
 ]
 
 
@@ -142,8 +142,13 @@ def subtraction(
     out_h5 : path to output hdf5 file
     residual : path to residual if save_residual
     """
+    do_clean = (save_denoised_tpca_projs or localization_kind in (
+        "original",
+        "logbarrier",
+    ))
     if extra_features == "default":
-        extra_features = copy(default_extra_feats)
+        feat_wfs = "denoised" if do_clean else "subtracted"
+        extra_features = [F(which_waveforms=feat_wfs) for F in default_extra_feats]
 
     if neighborhood_kind not in ("firstchan", "box", "circle"):
         raise ValueError(
@@ -326,19 +331,14 @@ def subtraction(
                 random_state=random_seed,
             )
         ]
-    do_clean = False
     fit_feats = []
-    if save_denoised_tpca_projs or localization_kind in (
-        "original",
-        "logbarrier",
-    ):
+    if do_clean:
         denoised_tpca_feat = subtraction_feats.TPCA(
             tpca_rank,
             extract_channel_index,
             which_waveforms="denoised",
             random_state=random_seed,
         )
-        do_clean = True
         if save_denoised_tpca_projs:
             extra_features += [denoised_tpca_feat]
         else:
@@ -557,19 +557,20 @@ def subtraction(
                         Path(result.residual).unlink()
 
                     # grow arrays as necessary and write results
+                    spike_index.resize(N + N_new, axis=0)
                     if N_new > 0:
-                        spike_index.resize(N + N_new, axis=0)
                         spike_index[N:] = np.load(result.spike_index)
-                        Path(result.spike_index).unlink()
-                        for f, dset in zip(extra_features, feature_dsets):
-                            dset.resize(N + N_new, axis=0)
-                            fnpy = (
-                                batch_data_folder / f"{result.prefix}{f.name}.npy"
-                            )
+                    Path(result.spike_index).unlink()
+                    for f, dset in zip(extra_features, feature_dsets):
+                        dset.resize(N + N_new, axis=0)
+                        fnpy = (
+                            batch_data_folder / f"{result.prefix}{f.name}.npy"
+                        )
+                        if N_new > 0:
                             dset[N:] = np.load(fnpy)
-                            Path(fnpy).unlink()
-                        # update spike count
-                        N += N_new
+                        Path(fnpy).unlink()
+                    # update spike count
+                    N += N_new
 
     # -- done!
     if save_residual:
@@ -866,10 +867,23 @@ def subtraction_batch(
     if batch_data_folder is None:
         return spike_index, subtracted_wfs, residual_singlebuf
 
+    # compute and save features for subtracted wfs
+    for f in extra_features:
+        feat = f.transform(
+            spike_index[:, 1],
+            subtracted_wfs=subtracted_wfs,
+        )
+        if feat is not None:
+            np.save(
+                batch_data_folder / f"{prefix}{f.name}.npy",
+                feat,
+            )
+
     # get cleaned waveforms
     cleaned_wfs = denoised_wfs = None
     if not spike_index.size:
         cleaned_wfs = denoised_wfs = np.empty_like(subtracted_wfs)
+
     if do_clean:
         cleaned_wfs = read_waveforms_in_memory(
             residual_singlebuf,
@@ -880,6 +894,21 @@ def subtraction_batch(
             buffer=spike_length_samples,
         )
         cleaned_wfs += subtracted_wfs
+        del subtracted_wfs
+
+        # compute and save features for subtracted wfs
+        for f in extra_features:
+            feat = f.transform(
+                spike_index[:, 1],
+                cleaned_wfs=cleaned_wfs,
+                denoised_wfs=None,
+            )
+            if feat is not None:
+                np.save(
+                    batch_data_folder / f"{prefix}{f.name}.npy",
+                    feat,
+                )
+
         denoised_wfs = full_denoising(
             cleaned_wfs,
             spike_index[:, 1],
@@ -892,6 +921,19 @@ def subtraction_batch(
             device=device,
             denoiser=denoiser,
         )
+        del cleaned_wfs
+
+        # compute and save features for subtracted wfs
+        for f in extra_features:
+            feat = f.transform(
+                spike_index[:, 1],
+                denoised_wfs=denoised_wfs,
+            )
+            if feat is not None:
+                np.save(
+                    batch_data_folder / f"{prefix}{f.name}.npy",
+                    feat,
+                )
 
     # times relative to batch start
     # recall, these times were aligned to the double buffer, so we don't
@@ -901,18 +943,6 @@ def subtraction_batch(
     # save the results to disk to avoid memory issues
     N_new = len(spike_index)
     np.save(batch_data_folder / f"{prefix}si.npy", spike_index)
-
-    # compute and save features
-    for f in extra_features:
-        np.save(
-            batch_data_folder / f"{prefix}{f.name}.npy",
-            f.transform(
-                spike_index[:, 1],
-                subtracted_wfs=subtracted_wfs,
-                cleaned_wfs=cleaned_wfs,
-                denoised_wfs=denoised_wfs,
-            ),
-        )
 
     res = SubtractionBatchResult(
         N_new=N_new,
