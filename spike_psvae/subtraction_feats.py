@@ -58,6 +58,10 @@ class ExtraFeat:
             wfs = cleaned_wfs
         elif self.which_waveforms == "denoised":
             wfs = denoised_wfs
+        else:
+            raise ValueError(
+                f"which_waveforms={self.which_waveforms} not in ('subtracted', 'cleaned', denoised)"
+            )
         return wfs
 
 
