@@ -557,7 +557,7 @@ def subtraction(
                         Path(result.residual).unlink()
 
                     # grow arrays as necessary and write results
-                    if N_new>0:
+                    if N_new > 0:
                         spike_index.resize(N + N_new, axis=0)
                         spike_index[N:] = np.load(result.spike_index)
                         Path(result.spike_index).unlink()
