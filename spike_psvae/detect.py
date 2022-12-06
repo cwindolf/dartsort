@@ -20,6 +20,7 @@ from copy import deepcopy
 
 
 MAXCOPY = 8
+DEFAULT_DEDUP_T = 7
 
 
 def detect_and_deduplicate(
@@ -248,6 +249,7 @@ def voltage_detect_and_deduplicate(
     buffer_size,
     device="cpu",
     peak_sign="neg",
+    max_window=DEFAULT_DEDUP_T,
 ):
     if torch.device(device).type == "cuda":
         times, chans, energy = torch_voltage_detect_dedup(
@@ -257,6 +259,7 @@ def voltage_detect_and_deduplicate(
             order=5,
             device=device,
             peak_sign=peak_sign,
+            max_window=max_window,
         )
         if times.numel():
             spike_index = np.c_[times.cpu().numpy(), chans.cpu().numpy()]
@@ -273,6 +276,7 @@ def voltage_detect_and_deduplicate(
             recording.shape,
             channel_index,
             device=device,
+            max_window=max_window,
         )
 
     # update times wrt buffer size

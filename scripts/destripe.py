@@ -12,14 +12,21 @@ from ibllib.io import spikeglx
 ap = argparse.ArgumentParser()
 
 ap.add_argument("input_binary")
+ap.add_argument("--output-binary", type=str, default=None)
 ap.add_argument("--no-bad-channels", action="store_true")
+ap.add_argument("--output-dtype", default="float32")
 
 args = ap.parse_args()
 
 
 binary = Path(args.input_binary)
 folder = binary.parent
+output_dtype = np.dtype(args.output_dtype).type
+
 standardized_file = folder / f"destriped_{binary.name}"
+if args.output_binary is not None:
+    standardized_file = Path(args.output_binary)
+    assert standardized_file.parent.exists()
 
 # run destriping
 sr = spikeglx.Reader(binary)
@@ -52,7 +59,7 @@ if not standardized_file.exists():
         h=h,
         wrot=wrot,
         output_file=standardized_file,
-        dtype=np.float32,
+        dtype=output_dtype,
         nc_out=sr.nc - sr.nsync,
         reject_channels=not args.no_bad_channels,
     )
@@ -60,5 +67,5 @@ if not standardized_file.exists():
     # also copy the companion meta-data file
     shutil.copy(
         sr.file_meta_data,
-        folder / f"destriped_{sr.file_meta_data.name}",
+        standardized_file.parent / f"{standardized_file.stem}.meta",
     )
