@@ -11,6 +11,7 @@ logs/*.log
 notebook/.stan/*
 figs/*
 .idea
+*.swp
 
 ## Core latex/pdflatex auxiliary files:
 *.aux
