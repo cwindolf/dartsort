@@ -11,7 +11,7 @@ def get_templates(
     spike_train,
     geom,
     raw_binary_file,
-    unit_max_channels,
+    unit_max_channels=None,
     max_spikes_per_unit=500,
     do_temporal_decrease=True,
     zero_radius_um=200,
@@ -19,8 +19,6 @@ def get_templates(
     snr_threshold=5.0 * np.sqrt(100),
     spike_length_samples=121,
     trough_offset=42,
-    sampling_frequency=30_000,
-    return_raw_cleaned=False,
     do_tpca=True,
     tpca=None,
     tpca_rank=5,
@@ -29,6 +27,7 @@ def get_templates(
     pbar=True,
     seed=0,
     n_jobs=-1,
+    raw_only=False,
 ):
     """Get denoised templates
 
@@ -61,26 +60,38 @@ def get_templates(
     Returns
     -------
     templates : np.array (n_templates, spike_length_samples, geom.shape[0])
-    snrs : np.array (n_templates,)
-        The snrs of the original raw templates.
-    if return_raw_cleaned, also returns raw_templates and denoised_templates,
-    both arrays like templates.
+    extra : dict with other info
     """
+    if do_tpca and unit_max_channels is None:
+        # estimate max channels for each unit by computing raw templates
+        unit_max_channels = get_raw_templates(
+            spike_train,
+            geom,
+            raw_binary_file,
+            reducer=reducer,
+            spike_length_samples=spike_length_samples,
+            trough_offset=trough_offset,
+            pbar=pbar,
+            seed=seed,
+            n_jobs=n_jobs,
+        ).ptp(1).argmax(1)
+
     # -- initialize output
     n_templates = spike_train[:, 1].max() + 1
     templates = np.zeros((n_templates, spike_length_samples, len(geom)))
 
-    snr_by_channel = np.zeros((n_templates, len(geom)))
     raw_templates = np.zeros_like(templates)
-    denoised_templates = np.zeros_like(templates)
-    extra = dict(
-        raw_templates=raw_templates,
-        denoised_templates=denoised_templates,
-        snr_by_channel=snr_by_channel,
-    )
+    if not raw_only:
+        snr_by_channel = np.zeros((n_templates, len(geom)))
+        denoised_templates = np.zeros_like(templates)
+        extra = dict(
+            raw_templates=raw_templates,
+            denoised_templates=denoised_templates,
+            snr_by_channel=snr_by_channel,
+        )
 
     # -- fit TPCA to randomly sampled waveforms
-    if do_tpca and tpca is None:
+    if not raw_only and do_tpca and tpca is None:
         max_channels = unit_max_channels[spike_train[:, 1]]
         tpca = waveform_utils.fit_tpca_bin(
             np.c_[spike_train[:, 0], max_channels],
@@ -128,18 +139,23 @@ def get_templates(
             reducer,
             trough_offset,
             spike_length_samples,
+            raw_only,
         ),
     ) as pool:
         for unit, raw_template, denoised_template, snr_by_chan in xqdm(
             pool.map(template_worker, units),
             total=len(units),
-            desc="Cleaned templates",
+            desc="Raw templates" if raw_only else "Cleaned templates",
             smoothing=0,
             pbar=pbar,
         ):
             raw_templates[unit] = raw_template
-            denoised_templates[unit] = denoised_template
-            snr_by_channel[unit] = snr_by_chan
+            if not raw_only:
+                denoised_templates[unit] = denoised_template
+                snr_by_channel[unit] = snr_by_chan
+
+    if raw_only:
+        return raw_templates
 
     # SNR-weighted combination to create the template
     weights = denoised_weights(
@@ -161,6 +177,36 @@ def get_templates(
     return templates, extra
 
 
+def get_raw_templates(
+    spike_train,
+    geom,
+    raw_binary_file,
+    max_spikes_per_unit=250,
+    reducer=np.median,
+    spike_length_samples=121,
+    trough_offset=42,
+    pbar=True,
+    seed=0,
+    n_jobs=-1,
+):
+    raw_templates = get_templates(
+        spike_train,
+        geom,
+        raw_binary_file,
+        max_spikes_per_unit=max_spikes_per_unit,
+        reducer=reducer,
+        spike_length_samples=spike_length_samples,
+        do_temporal_decrease=False,
+        raw_only=True,
+        trough_offset=trough_offset,
+        do_tpca=False,
+        pbar=True,
+        seed=seed,
+        n_jobs=n_jobs,
+    )
+    return raw_templates
+
+
 def get_single_templates(
     spike_times,
     geom,
@@ -174,8 +220,6 @@ def get_single_templates(
     snr_threshold=5.0 * np.sqrt(100),
     spike_length_samples=121,
     trough_offset=42,
-    sampling_frequency=30_000,
-    return_raw_cleaned=False,
     tpca_rank=5,
     tpca_radius=75,
     pbar=True,
@@ -350,23 +394,36 @@ def template_worker(unit):
 
     in_unit = np.flatnonzero(p.spike_train[:, 1] == unit)
 
-    (
-        raw_template,
-        denoised_template,
-        snr_by_channel,
-    ) = get_raw_denoised_template_single(
-        p.spike_train[in_unit, 0],
-        p.geom,
-        p.raw_binary_file,
-        do_tpca=p.do_tpca,
-        tpca=p.tpca,
-        do_temporal_decrease=p.do_temporal_decrease,
-        max_spikes_per_unit=p.max_spikes_per_unit,
-        seed=p.rg.integers(np.iinfo(np.int64).max),
-        reducer=p.reducer,
-        trough_offset=p.trough_offset,
-        spike_length_samples=p.spike_length_samples,
-    )
+    if p.raw_only:
+        raw_template = get_raw_template_single(
+            p.spike_train[in_unit, 0],
+            p.raw_binary_file,
+            p.geom.shape[0],
+            max_spikes_per_unit=p.max_spikes_per_unit,
+            reducer=p.reducer,
+            trough_offset=p.trough_offset,
+            spike_length_samples=p.spike_length_samples,
+            seed=p.rg.integers(np.iinfo(np.int64).max),
+        )
+        denoised_template = snr_by_channel = None
+    else:
+        (
+            raw_template,
+            denoised_template,
+            snr_by_channel,
+        ) = get_raw_denoised_template_single(
+            p.spike_train[in_unit, 0],
+            p.geom,
+            p.raw_binary_file,
+            do_tpca=p.do_tpca,
+            tpca=p.tpca,
+            do_temporal_decrease=p.do_temporal_decrease,
+            max_spikes_per_unit=p.max_spikes_per_unit,
+            seed=p.rg.integers(np.iinfo(np.int64).max),
+            reducer=p.reducer,
+            trough_offset=p.trough_offset,
+            spike_length_samples=p.spike_length_samples,
+        )
 
     return unit, raw_template, denoised_template, snr_by_channel
 
@@ -384,6 +441,7 @@ def template_worker_init(
     reducer,
     trough_offset,
     spike_length_samples,
+    raw_only,
 ):
     rank = id_queue.get()
     p = template_worker
@@ -398,6 +456,7 @@ def template_worker_init(
     p.reducer = reducer
     p.trough_offset = trough_offset
     p.spike_length_samples = spike_length_samples
+    p.raw_only = raw_only
 
 
 def xqdm(iterator, pbar=True, **kwargs):
