@@ -26,6 +26,7 @@ def register_rigid(
     destripe=False,
     max_dt=None,
     batch_size=1,
+    prior_lambda=0,
     return_extra=False,
 ):
     """1D rigid registration
@@ -72,6 +73,7 @@ def register_rigid(
         normalized=normalized,
         max_dt=max_dt,
         adaptive_mincorr_percentile=adaptive_mincorr_percentile,
+        prior_lambda=prior_lambda,
     )
     extra = dict(D=D, C=C)
 
