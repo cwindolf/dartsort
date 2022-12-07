@@ -176,6 +176,7 @@ def pgeom(
     show_chan_label=False,
     chan_labels=None,
     linestyle=None,
+    xlim_factor=1,
 ):
     """Plot waveforms according to geometry using channel index"""
     ax = ax or plt.gca()
@@ -215,6 +216,7 @@ def pgeom(
     # -- and, plot
     draw = []
     unique_chans = set()
+    xmin, xmax = np.inf, -np.inf
     for wf, mc in zip(waveforms, max_channels):
         for i, c in enumerate(channel_index[mc]):
             if c == n_channels:
@@ -222,17 +224,29 @@ def pgeom(
 
             draw.append(geom_plot[c, 0] + t_domain)
             draw.append(geom_plot[c, 1] + wf[:, i])
+            xmin = min(geom_plot[c, 0] + t_domain.min(), xmin)
+            xmax = max(geom_plot[c, 0] + t_domain.max(), xmax)
             unique_chans.add(c)
+    dx = xmax - xmin
+    ax.set_xlim([xmin + dx / 2 - xlim_factor * dx / 2, xmax - dx / 2 + xlim_factor * dx / 2])
 
     ann_offset = np.array([0, 0.33 * inter_chan_z]) * geom_scales
-    chan_labels = chan_labels if chan_labels is not None else [str(c) for c in unique_chans]
+    chan_labels = (
+        chan_labels
+        if chan_labels is not None
+        else [str(c) for c in unique_chans]
+    )
     for c in unique_chans:
         if show_zero:
             ax.axhline(geom_plot[c, 1], color="gray", lw=1, linestyle="--")
         if show_chan_label:
-            ax.annotate(chan_labels[c], geom_plot[c] + ann_offset, size=6, color="gray")
+            ax.annotate(
+                chan_labels[c], geom_plot[c] + ann_offset, size=6, color="gray"
+            )
 
-    lines = ax.plot(*draw, alpha=alpha, color=color, lw=lw, linestyle=linestyle)
+    lines = ax.plot(
+        *draw, alpha=alpha, color=color, lw=lw, linestyle=linestyle
+    )
 
     return lines
 
