@@ -20,6 +20,7 @@ def register_raster_rigid(
     batch_size=8,
     device=None,
     pbar=True,
+    prior_lambda=0,
 ):
     """Rigid correlation subsampled registration
 
@@ -46,7 +47,7 @@ def register_raster_rigid(
     if adaptive_mincorr_percentile is not None:
         mincorr = np.percentile(np.diagonal(C, 1), adaptive_mincorr_percentile)
     p = psolvecorr(
-        D, C, mincorr=mincorr, robust_sigma=robust_sigma, max_dt=max_dt
+        D, C, mincorr=mincorr, robust_sigma=robust_sigma, max_dt=max_dt, prior_lambda=prior_lambda
     )
     return p, D, C
 
