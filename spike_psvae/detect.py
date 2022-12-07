@@ -304,7 +304,7 @@ def deduplicate_torch(
     energy,
     recording_shape,
     channel_index,
-    max_window=7,
+    max_window=DEFAULT_DEDUP_T,
     device="cpu",
 ):
     spike_index_torch = torch.as_tensor(spike_index, device=device)
@@ -356,7 +356,7 @@ def torch_voltage_detect_dedup(
     threshold,
     peak_sign="neg",
     order=5,
-    max_window=7,
+    max_window=DEFAULT_DEDUP_T,
     channel_index=None,
     device=None,
 ):
@@ -565,7 +565,7 @@ def denoiser_detect_dedup(
     ptp_threshold,
     denoiser_detector,
     order=5,
-    max_window=7,
+    max_window=DEFAULT_DEDUP_T,
     channel_index=None,
     device=None,
 ):
