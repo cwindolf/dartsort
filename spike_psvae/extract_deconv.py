@@ -19,6 +19,7 @@ def extract_deconv(
     channel_index=None,
     n_channels_extract=20,
     subtraction_h5=None,
+    tpca=None,
     save_residual=True,
     save_cleaned_waveforms=True,
     save_denoised_waveforms=False,
@@ -31,6 +32,7 @@ def extract_deconv(
     overwrite=True,
     scratch_dir=None,
     pbar=True,
+    nn_denoise=True,
 ):
     standardized_bin = Path(standardized_bin)
     output_directory = Path(output_directory)
@@ -59,7 +61,7 @@ def extract_deconv(
 
     # load TPCA if necessary
     if save_denoised_waveforms or localize:
-        if subtraction_h5 is None:
+        if tpca is None and subtraction_h5 is None:
             raise ValueError(
                 "subtraction_h5 is needed to load TPCA when computing "
                 "denoised waveforms or localizing."
@@ -103,16 +105,17 @@ def extract_deconv(
         channel_index = subtract.make_contiguous_channel_index(
             n_chans, n_neighbors=n_channels_extract
         )
+    n_channels_extract = channel_index.shape[1]
 
     # templates on few channels
-    templates_loc = np.empty(
+    templates_loc = np.full(
         (n_templates, spike_length_samples, n_channels_extract),
+        np.nan,
         dtype=templates_up.dtype,
     )
     for i in range(n_templates):
-        templates_loc[i] = templates_up[i][
-            :, channel_index[templates_up_maxchans[i]]
-        ]
+        ci_chans = channel_index[templates_up_maxchans[i]]
+        templates_loc[i, :, :] = np.pad(templates_up[i], [(0, 0), (0, 1)], constant_values=np.nan)[:, ci_chans]
 
     with h5py.File(out_h5, "a") as h5:
         if last_batch_end > 0:
@@ -186,6 +189,8 @@ def extract_deconv(
                 templates_loc,
                 scalings,
                 n_chans,
+                nn_denoise,
+                tpca,
             ),
             context=ctx,
         ) as pool:
@@ -220,8 +225,9 @@ def extract_deconv(
 
     if save_residual:
         resid.close()
+        return out_h5, residual_path
 
-    return out_h5, residual_path
+    return out_h5
 
 
 JobResult = namedtuple(
@@ -322,7 +328,6 @@ def _extract_deconv_worker(start_sample):
             waveforms,
             spike_index[:, 1],
             p.channel_index,
-            probe="np1",
             tpca=p.tpca,
             device=p.device,
             denoiser=p.denoiser,
@@ -402,20 +407,30 @@ def _extract_deconv_init(
     templates_loc,
     scalings,
     n_chans,
+    nn_denoise,
+    tpca,
 ):
-    geom = tpca = None
+    geom = None
     if subtraction_h5 is not None:
         with h5py.File(subtraction_h5) as h5:
-            tpca_mean = h5["tpca_mean"][:]
-            tpca_components = h5["tpca_components"][:]
+            if tpca is None:
+                try:
+                    tpca_mean = h5["tpca_mean"][:]
+                    tpca_components = h5["tpca_components"][:]
+                except KeyError:
+                    tpca_mean = h5["cleaned_tpca/tpca_mean"][:]
+                    tpca_components = h5["cleaned_tpca/tpca_components"][:]
+                tpca = PCA(tpca_components.shape[0])
+                tpca.mean_ = tpca_mean
+                tpca.components_ = tpca_components
+
             geom = h5["geom"][:]
-        tpca = PCA(tpca_components.shape[0])
-        tpca.mean_ = tpca_mean
-        tpca.components_ = tpca_components
 
     if device is None:
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    denoiser = denoise.SingleChanDenoiser().load().to(device)
+    denoiser = None
+    if nn_denoise:
+        denoiser = denoise.SingleChanDenoiser().load().to(device)
 
     _extract_deconv_worker.geom = geom
     _extract_deconv_worker.tpca = tpca
