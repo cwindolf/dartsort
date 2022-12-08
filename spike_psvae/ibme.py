@@ -94,6 +94,8 @@ def register_nonrigid(
     robust_sigma=0.0,
     denoise_sigma=0.1,
     corr_threshold=0.0,
+    adaptive_mincorr_percentile=None,
+    prior_lambda=0,
     normalized=True,
     rigid_disp=400,
     disp=800,
@@ -168,6 +170,8 @@ def register_nonrigid(
             times,
             robust_sigma=robust_sigma,
             corr_threshold=corr_threshold,
+            adaptive_mincorr_percentile=adaptive_mincorr_percentile,
+            prior_lambda=prior_lambda,
             normalized=normalized,
             batch_size=batch_size,
             disp=rigid_disp,
@@ -213,6 +217,8 @@ def register_nonrigid(
                 disp=max(25, int(np.ceil(disp / nwin))),
                 batch_size=batch_size,
                 pbar=False,
+                prior_lambda=prior_lambda,
+                adaptive_mincorr_percentile=adaptive_mincorr_percentile,
             )
             ps[k] = p
 
