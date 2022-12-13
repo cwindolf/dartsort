@@ -357,6 +357,17 @@ class TPCA(ExtraFeat):
         features = features.transpose(0, 2, 1)
         return features
 
+    def inverse_transform(self, features, max_channels, channel_index):
+        in_probe_index = self.channel_index < self.channel_index.shape[0]
+        chans_in_probe = in_probe_index[max_channels]
+        wfs = np.full(
+            (features.shape[0], self.C, self.T), np.nan, dtype=self.dtype
+        )
+        wfs[chans_in_probe] = self.tpca.inverse_transform(
+            features.transpose(0, 2, 1)[chans_in_probe]
+        )
+        return wfs.transpose(0, 2, 1)
+
     def denoise(
         self,
         max_channels=None,
