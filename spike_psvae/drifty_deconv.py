@@ -4,41 +4,7 @@ from pathlib import Path
 from tqdm.auto import tqdm
 import multiprocessing
 from . import deconvolve, snr_templates, spike_train_utils
-
-
-def get_pitch(geom):
-    """Compute pitch, even for probes with gaps or channels missing at random.
-
-
-    This is the unit at which the probe repeats itself, computed as the
-    vertical distance between electrodes in the same column.
-
-    So for NP1, it's not every row, but every 2 rows! And for a probe with a
-    zig-zag arrangement, it would be also 2 vertical distances between channels.
-    """
-    x_uniq = np.unique(geom[:, 0])
-    pitch = np.inf
-    for x in x_uniq:
-        pitch = min(pitch, np.diff(np.unique(geom[geom[:, 0] == x, 1])).min())
-    return pitch
-
-
-def pitch_shift_templates(n_pitches_shift, geom, templates, fill_value=0.0):
-    if n_pitches_shift == 0:
-        return templates
-
-    pitch = get_pitch(geom)
-    # + or -? if the drift was +x, then we want to load from channel at +x
-    shifted_geom = geom - [[0, n_pitches_shift * pitch]]
-    geom_matching = (shifted_geom[:, None, :] == geom[None, :, :]).all(axis=2)
-
-    new_templates = np.full_like(templates, fill_value=fill_value)
-    for shifted_ix, matched_orig in enumerate(np.flatnonzero(gm) for gm in geom_matching):
-        if matched_orig.size:
-            assert matched_orig.size == 1
-            new_templates[:, :, shifted_ix] = templates[:, :, matched_orig[0]]
-
-    return new_templates
+from .waveform_utils import get_pitch, pitch_shift_templates
 
 
 def superres_spike_train(
