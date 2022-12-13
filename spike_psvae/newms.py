@@ -38,6 +38,7 @@ def new_merge_split(
     herding_npcs=2,
     herding_clust="hdbscan",
     merge_resid_threshold=2.0,
+    relocated=False,
 ):
     (
         aligned_spike_train,
@@ -55,6 +56,7 @@ def new_merge_split(
         raw_bin,
         sub_h5,
         n_workers=n_workers,
+        relocated=relocated,
     )
 
     (
@@ -80,6 +82,7 @@ def new_merge_split(
         raw_bin,
         aligned_spike_train2[:, 1],
         templates,
+        relocated=relocated,
     )
 
     (
@@ -91,7 +94,7 @@ def new_merge_split(
         np.c_[aligned_spike_train2[:, 0], new_labels],
         n_channels,
         raw_bin,
-        max_shift=10,
+        max_shift=20,
     )
 
     kept = aligned_spike_train3[:, 1] >= 0

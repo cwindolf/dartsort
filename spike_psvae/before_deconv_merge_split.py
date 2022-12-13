@@ -16,6 +16,7 @@ from .isocut5 import isocut5
 from .subtraction_feats import TPCA
 from .snr_templates import get_raw_template_single
 from .deconv_resid_merge import calc_resid_matrix
+from . import relocation
 
 
 # -- split step
@@ -30,7 +31,7 @@ from .deconv_resid_merge import calc_resid_matrix
 
 
 def split_worker_init(
-    subtraction_h5, log_c, feature_scales, waveforms_kind, raw_data_bin
+    subtraction_h5, log_c, feature_scales, waveforms_kind, raw_data_bin, relocated
 ):
     """
     Loads hdf5 datasets on each worker process, rather than
@@ -51,6 +52,12 @@ def split_worker_init(
     p.n_channels = p.channel_index.shape[0]
     p.features = np.c_[x, z, np.log(log_c + maxptp)]
     p.features *= feature_scales
+    p.geom = h5["geom"][:]
+
+    # things we will need if doing relocated clustering
+    p.relocated = relocated
+    if relocated:
+        p.y, p.z_abs, p.alpha = h5["localizations"][:, 1:4].T
 
     # refrence to waveform tpca embeddings in h5 file
     # we could load them in memory here if that seems helpful
@@ -64,7 +71,8 @@ def split_worker_init(
         waveforms_kind,
     )
     tpca_feat.from_h5(h5)
-    p.tpca = tpca_feat.tpca
+    p.tpca = tpca_feat
+    p.T = tpca_feat.T
 
 
 def herding_split(
@@ -95,18 +103,35 @@ def herding_split(
     which_chans = (-template.ptp(0)).argsort()[:n_channels]
 
     # get pca projections on channel subset
-    unit_tpca_projs = get_pca_projs_on_channel_subset(
-        in_unit,
-        p.tpca_projs,
-        p.max_channels,
-        p.channel_index,
-        which_chans,
-    )
+    if p.relocated:
+        unit_features = get_relocated_wfs_on_channel_subset(
+            in_unit,
+            p.tpca_projs,
+            p.max_channels,
+            p.channel_index,
+            which_chans,
+            p.tpca,
+            p.x,
+            p.y,
+            p.z_abs,
+            p.z,
+            p.alpha,
+            p.geom,
+            T=p.T,
+        )
+    else:
+        unit_features = get_pca_projs_on_channel_subset(
+            in_unit,
+            p.tpca_projs,
+            p.max_channels,
+            p.channel_index,
+            which_chans,
+        )
 
     # some spikes may not exist on all these channels.
     # this should be exceedingly rare but everything that can
     # happen will. for now, let's triage them away
-    too_far = np.isnan(unit_tpca_projs).any(axis=(1, 2))
+    too_far = np.isnan(unit_features).any(axis=(1, 2))
     new_labels[too_far] = -1
     kept = np.flatnonzero(new_labels >= 0)
 
@@ -116,8 +141,9 @@ def herding_split(
 
     # fit a pca projection to what we got
     pca_projs = PCA(n_pca_features, whiten=True).fit_transform(
-        unit_tpca_projs[kept].reshape(kept.size, -1)
+        unit_features[kept].reshape(kept.size, -1)
     )
+    del unit_features
 
     # create features for hdbscan, scaling pca projs to match
     # the current feature set
@@ -175,18 +201,35 @@ def maxchan_lda_split(
     which_chans = (-template.ptp(0)).argsort()[:n_channels]
 
     # get pca projections on channel subset
-    unit_tpca_projs = get_pca_projs_on_channel_subset(
-        in_unit,
-        p.tpca_projs,
-        p.max_channels,
-        p.channel_index,
-        which_chans,
-    )
+    if p.relocated:
+        unit_features = get_relocated_wfs_on_channel_subset(
+            in_unit,
+            p.tpca_projs,
+            p.max_channels,
+            p.channel_index,
+            which_chans,
+            p.tpca,
+            p.x,
+            p.y,
+            p.z_abs,
+            p.z,
+            p.alpha,
+            p.geom,
+            T=p.T,
+        )
+    else:
+        unit_features = get_pca_projs_on_channel_subset(
+            in_unit,
+            p.tpca_projs,
+            p.max_channels,
+            p.channel_index,
+            which_chans,
+        )
 
     # some spikes may not exist on all these channels.
     # this should be exceedingly rare but everything that can
     # happen will. for now, let's triage them away
-    too_far = np.isnan(unit_tpca_projs).any(axis=(1, 2))
+    too_far = np.isnan(unit_features).any(axis=(1, 2))
     new_labels[too_far] = -1
     kept = np.flatnonzero(new_labels >= 0)
 
@@ -200,8 +243,9 @@ def maxchan_lda_split(
     # fit the lda model
     n_lda_components = min(n_max_chans - 1, 2)
     lda_projs = LDA(n_components=n_lda_components).fit_transform(
-        unit_tpca_projs[kept].reshape(kept.size, -1), unit_max_chans[kept]
+        unit_features[kept].reshape(kept.size, -1), unit_max_chans[kept]
     )
+    del unit_features
 
     # perform the split with isocut if not enough dims for hdbscan
     if n_lda_components == 1:
@@ -233,7 +277,7 @@ def ks_bimodal_pursuit_split(
 ):
     """Adapted from PyKS"""
     p = split_worker_init
-    tpca = p.tpca
+    tpca = p.tpca.tpca
     n_spikes = in_unit.size
 
     # bail early if too small
@@ -242,7 +286,8 @@ def ks_bimodal_pursuit_split(
 
     # load pca embeddings on the max channel
     unit_max_chans = p.max_channels[in_unit]
-    unit_rel_max_chans = unit_max_chans - p.channel_index[unit_max_chans][:, 0]
+    ix0, unit_rel_max_chans = np.nonzero(unit_max_chans[:, None] == p.channel_index[unit_max_chans])
+    assert np.array_equal(ix0, np.arange(unit_max_chans.shape[0]))
     unit_features = np.empty(
         (in_unit.size, p.tpca_projs.shape[1]), dtype=p.tpca_projs.dtype
     )
@@ -401,6 +446,7 @@ def split_clusters(
     waveforms_kind="cleaned",
     split_steps=(maxchan_lda_split, herding_split, ks_bimodal_pursuit_split),
     recursive_steps=(False, False, True),
+    relocated=False,
 ):
     contig = labels.max() + 1 == np.unique(labels[labels >= 0]).size
     if not contig:
@@ -434,6 +480,7 @@ def split_clusters(
             feature_scales,
             waveforms_kind,
             raw_data_bin,
+            relocated,
         ),
     ) as pool:
         # we will do each split step one after the other, each
@@ -502,6 +549,8 @@ def lda_diptest_merge(
     min_spikes=10,
     max_spikes=250,
     threshold_diptest=0.5,
+    relocated=False,
+    x=None, y=None, z_abs=None, z_reg=None, alpha=None, geom=None, T=121,
     seed=0,
 ):
     # randomly subset waveforms to balance the problem
@@ -515,33 +564,73 @@ def lda_diptest_merge(
     # load cleaned wf tpca projections for both
     # units on the channels subset
     which_chans = np.argsort(-(template_a.ptp(0) + template_b.ptp(0)))[:n_channels]
-    projs_a = get_pca_projs_on_channel_subset(
-        in_unit_a,
-        tpca_projs,
-        max_channels,
-        channel_index,
-        which_chans,
-    )
-    too_far_a = np.isnan(projs_a).any(axis=(1, 2))
-    projs_a = projs_a[~too_far_a]
-    projs_b = get_pca_projs_on_channel_subset(
-        in_unit_b,
-        tpca_projs,
-        max_channels,
-        channel_index,
-        which_chans,
-    )
-    too_far_b = np.isnan(projs_b).any(axis=(1, 2))
-    projs_b = projs_b[~too_far_b]
+    if relocated:
+        feats_a = get_relocated_wfs_on_channel_subset(
+            in_unit_a,
+            tpca_projs,
+            max_channels,
+            channel_index,
+            which_chans,
+            tpca,
+            x,
+            y,
+            z_abs,
+            z_reg,
+            alpha,
+            geom,
+            T=T,
+        )
+    else:
+        feats_a = get_pca_projs_on_channel_subset(
+            in_unit_a,
+            tpca_projs,
+            max_channels,
+            channel_index,
+            which_chans,
+        )
+    too_far_a = np.isnan(feats_a).any(axis=(1, 2))
+    feats_a = feats_a[~too_far_a]
+    if relocated:
+        feats_b = get_relocated_wfs_on_channel_subset(
+            in_unit_b,
+            tpca_projs,
+            max_channels,
+            channel_index,
+            which_chans,
+            tpca,
+            x,
+            y,
+            z_abs,
+            z_reg,
+            alpha,
+            geom,
+            T=T,
+        )
+    else:
+        feats_b = get_pca_projs_on_channel_subset(
+            in_unit_b,
+            tpca_projs,
+            max_channels,
+            channel_index,
+            which_chans,
+        )
+    too_far_b = np.isnan(feats_b).any(axis=(1, 2))
+    feats_b = feats_b[~too_far_b]
     del in_unit_a, in_unit_b
 
-    if min(projs_a.shape[0], projs_b.shape[0]) < min_spikes:
+    if min(feats_a.shape[0], feats_b.shape[0]) < min_spikes:
         return False
 
     # invert the tpca and align the times according to shift
     # shift is trough[b] - trough[a] here
-    wfs_a = invert_tpca(projs_a, tpca)
-    wfs_b = invert_tpca(projs_b, tpca)
+    if relocated:
+        wfs_a = feats_a
+        wfs_b = feats_b
+    else:
+        wfs_a = invert_tpca(feats_a, tpca.tpca)
+        wfs_b = invert_tpca(feats_b, tpca.tpca)
+    del feats_a, feats_b
+
     if shift > 0:
         wfs_a = wfs_a[:, :-shift, :]
         wfs_b = wfs_b[:, shift:, :]
@@ -635,6 +724,8 @@ def merge_clusters(
     threshold_diptest=0.5,
     waveforms_kind="cleaned",
     recursive=True,
+    relocated=False,
+    T=121,
 ):
 
     orig_labels, orig_counts = np.unique(
@@ -663,6 +754,11 @@ def merge_clusters(
     tpca_projs = h5[f"{waveforms_kind}_tpca_projs"]
     tpca_feat = TPCA(tpca_projs.shape[1], channel_index, waveforms_kind)
     tpca_feat.from_h5(h5)
+
+    if relocated:
+        x, y, z_abs, alpha = h5["localizations"][:, :4].T
+        z_reg = h5["z_reg"][:]
+        geom = h5["geom"][:]
 
     # loop by order of snr
     # high snr will be the last element here
@@ -700,9 +796,11 @@ def merge_clusters(
                 shift,
                 max_channels,
                 tpca_projs,
-                tpca_feat.tpca,
+                tpca_feat,
                 channel_index,
                 threshold_diptest=threshold_diptest,
+                relocated=relocated,
+                x=x, y=y, z_abs=z_abs, z_reg=z_reg, alpha=alpha, geom=geom, T=T
             )
 
             if is_merge:
@@ -744,10 +842,54 @@ def merge_clusters(
 
         t.update()
 
+    h5.close()
+
     return aligned_times, new_labels
 
 
 # -- helpers
+
+
+def get_relocated_wfs_on_channel_subset(
+    which,
+    tpca_projs,
+    max_channels,
+    channel_index,
+    which_chans,
+    tpca,
+    x,
+    y,
+    z_abs,
+    z_reg,
+    alpha,
+    geom,
+    T=121,
+    load_batch_size=512,
+):
+    # load pca projected spikes for this unit
+    these_wfs = np.empty(
+        (which.size, T, tpca_projs.shape[2]), dtype=tpca_projs.dtype
+    )
+    for bs in range(0, which.size, load_batch_size):
+        be = bs + load_batch_size
+        these_wfs[bs:be] = tpca.inverse_transform(
+            tpca_projs[which[bs:be]],
+            max_channels[which[bs:be]],
+            channel_index,
+        )
+
+    relocated_wfs = relocation.get_relocated_waveforms_on_channel_subset(
+        max_channels[which],
+        these_wfs,
+        np.c_[x[which], y[which], z_abs[which], alpha[which]],
+        z_reg[which],
+        channel_index,
+        geom,
+        which_chans,
+        fill_value=np.nan,
+    )
+
+    return relocated_wfs
 
 
 def get_pca_projs_on_channel_subset(
