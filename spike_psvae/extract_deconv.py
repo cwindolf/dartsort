@@ -338,7 +338,7 @@ def _extract_deconv_worker(start_sample):
     # -- localize and done
     if p.localize:
         ptps = waveforms.ptp(1)
-        maxptps = ptps.max(1)
+        maxptps = np.nanmax(ptps, axis=1)
         x, y, z_rel, z_abs, alpha = localize_index.localize_ptps_index(
             ptps,
             p.geom,
