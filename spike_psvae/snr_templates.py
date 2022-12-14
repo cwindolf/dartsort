@@ -260,7 +260,7 @@ def get_denoised_template_single(
         template[:, far] = 0
 
     return template
-get_single_templates = 
+get_single_templates = get_denoised_template_single
 
 def get_raw_denoised_template_single(
     spike_times,
