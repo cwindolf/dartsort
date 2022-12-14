@@ -207,7 +207,7 @@ def get_raw_templates(
     return raw_templates
 
 
-def get_single_templates(
+def get_denoised_template_single(
     spike_times,
     geom,
     raw_binary_file,
@@ -260,7 +260,7 @@ def get_single_templates(
         template[:, far] = 0
 
     return template
-
+get_single_templates = 
 
 def get_raw_denoised_template_single(
     spike_times,
