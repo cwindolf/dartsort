@@ -1,3 +1,4 @@
+import h5py
 import numpy as np
 import tempfile
 from pathlib import Path
@@ -5,6 +6,8 @@ from tqdm.auto import tqdm
 import multiprocessing
 from . import deconvolve, snr_templates, spike_train_utils
 from .waveform_utils import get_pitch, pitch_shift_templates
+from .deconv_resid_merge import calc_resid_matrix
+from .extract_deconv import extract_deconv
 
 
 def superres_spike_train(
@@ -47,7 +50,11 @@ def superres_spike_train(
 
     superres_label_to_bin_id = np.array(superres_label_to_bin_id)
     superres_label_to_orig_label = np.array(superres_label_to_orig_label)
-    return superres_labels, superres_label_to_bin_id, superres_label_to_orig_label
+    return (
+        superres_labels,
+        superres_label_to_bin_id,
+        superres_label_to_orig_label,
+    )
 
 
 def superres_denoised_templates(
@@ -73,7 +80,11 @@ def superres_denoised_templates(
     seed=0,
     n_jobs=-1,
 ):
-    superres_labels, superres_label_to_bin_id, superres_label_to_orig_label = superres_spike_train(
+    (
+        superres_labels,
+        superres_label_to_bin_id,
+        superres_label_to_orig_label,
+    ) = superres_spike_train(
         spike_train,
         z_abs,
         bin_size_um,
@@ -126,11 +137,15 @@ def shift_superres_templates(
     # How to do the shifting?
     # We break the shift into two pieces: the number of full pitches,
     # and the remaining bins after shifting by full pitches.
-    n_pitches_shift = int(bins_shift / bins_per_pitch)  # want to round towards 0, not //
+    n_pitches_shift = int(
+        bins_shift / bins_per_pitch
+    )  # want to round towards 0, not //
     bins_shift_rem = bins_shift - bins_per_pitch * n_pitches_shift
 
     # Now, first we do the pitch shifts
-    shifted_templates = pitch_shift_templates(n_pitches_shift, geom, superres_templates, fill_value=fill_value)
+    shifted_templates = pitch_shift_templates(
+        n_pitches_shift, geom, superres_templates, fill_value=fill_value
+    )
 
     # The rest of the shift is handled by updating bin ids
     # This part doesn't matter for the recovered spike train, since
@@ -149,6 +164,7 @@ def rigid_int_shift_deconv(
     pfs=30_000,
     spike_train=None,
     templates=None,
+    template_index_to_unit_id=None,
     # need to implement
     # t_start=0,
     # t_end=None,
@@ -156,6 +172,7 @@ def rigid_int_shift_deconv(
     trough_offset=42,
     spike_length_samples=121,
     max_upsample=8,
+    refractory_period_frames=10,
 ):
     # discover the pitch of the probe
     # this is the unit at which the probe repeats itself.
@@ -169,7 +186,12 @@ def rigid_int_shift_deconv(
 
     # original denoised templates
     if templates is None:
-        spike_train, order, templates, template_shifts = spike_train_utils.clean_align_and_get_templates(
+        (
+            spike_train,
+            order,
+            templates,
+            template_shifts,
+        ) = spike_train_utils.clean_align_and_get_templates(
             spike_train,
             geom.shape[0],
             raw_bin,
@@ -188,17 +210,22 @@ def rigid_int_shift_deconv(
 
     # for each shift, get shifted templates
     shifted_templates = [
-        pitch_shift_templates(shift, geom, templates) for shift in unique_shifts
+        pitch_shift_templates(shift, geom, templates)
+        for shift in unique_shifts
     ]
 
     # run deconv on just the appropriate batches for each shift
-    deconv_dir = Path(deconv_dir if deconv_dir is not None else tempfile.mkdtemp())
+    deconv_dir = Path(
+        deconv_dir if deconv_dir is not None else tempfile.mkdtemp()
+    )
     if n_jobs > 1:
         ctx = multiprocessing.get_context("spawn")
     shifted_templates_up = []
     shifted_sparse_temp_map = []
     batch2shiftix = {}
-    for shiftix, (shift, temps) in enumerate(zip(unique_shifts, tqdm(shifted_templates, desc="Shifts"))):
+    for shiftix, (shift, temps) in enumerate(
+        zip(unique_shifts, tqdm(shifted_templates, desc="Shifts"))
+    ):
         mp_object = deconvolve.MatchPursuitObjectiveUpsample(
             templates=temps,
             deconv_dir=deconv_dir,
@@ -216,11 +243,15 @@ def rigid_int_shift_deconv(
             upsample=max_upsample,
             lambd=0,
             allowed_scale=0,
+            template_index_to_unit_id=template_index_to_unit_id,
+            refractory_period_frames=refractory_period_frames,
         )
         my_batches = np.flatnonzero(pitch_shifts == shift)
         for bid in my_batches:
             batch2shiftix[bid] = shiftix
-        my_fnames = [deconv_dir / f"seg_{bid:06d}_deconv.npz" for bid in my_batches]
+        my_fnames = [
+            deconv_dir / f"seg_{bid:06d}_deconv.npz" for bid in my_batches
+        ]
         if n_jobs <= 1:
             mp_object.run(my_batches, my_fnames)
         else:
@@ -246,11 +277,25 @@ def rigid_int_shift_deconv(
         shifted_sparse_temp_map.append(deconv_id_sparse_temp_map)
 
     # collect all shifted and upsampled templates
-    shift_up_start_ixs = [0] + list(np.cumsum([t.shape[0] for t in shifted_templates_up]))
-    all_up_temps = np.concatenate(shifted_templates_up, axis=0)
+    shifted_upsampled_start_ixs = [0] + list(
+        np.cumsum([t.shape[0] for t in shifted_templates_up])
+    )
+    all_shifted_upsampled_temps = np.concatenate(shifted_templates_up, axis=0)
+    shifted_upsampled_idx_to_shift_id = np.concatenate(
+        [[i] * t.shape[0] for t in shifted_templates_up], axis=0
+    )
+    shifted_upsampled_idx_to_orig_id = np.concatenate(
+        [
+            start_ix + temp_map
+            for start_ix, temp_map in zip(
+                shifted_upsampled_start_ixs, shifted_sparse_temp_map
+            )
+        ],
+        axis=0,
+    )
 
     # gather deconv resultsdeconv_st = []
-    deconv_spike_train_up = []
+    deconv_spike_train_upsampled_shifted = []
     deconv_spike_train = []
     deconv_scalings = []
     print("gathering deconvolution results")
@@ -272,16 +317,27 @@ def rigid_int_shift_deconv(
         # upsampled + shifted spike train
         st_up = st.copy()
         st_up[:, 1] = shifted_sparse_temp_map[which_shiftix][st_up[:, 1]]
-        st_up[:, 1] += shift_up_start_ixs[which_shiftix]
-        deconv_spike_train_up.append(st_up)
+        st_up[:, 1] += shifted_upsampled_start_ixs[which_shiftix]
+        deconv_spike_train_upsampled_shifted.append(st_up)
 
     deconv_spike_train = np.concatenate(deconv_spike_train, axis=0)
-    deconv_spike_train_up = np.concatenate(deconv_spike_train_up, axis=0)
+    deconv_spike_train_upsampled_shifted = np.concatenate(
+        deconv_spike_train_upsampled_shifted, axis=0
+    )
     deconv_scalings = np.concatenate(deconv_scalings, axis=0)
 
-    print(f"Number of Spikes deconvolved: {deconv_spike_train_up.shape[0]}")
+    print(
+        f"Number of Spikes deconvolved: {deconv_spike_train_upsampled_shifted.shape[0]}"
+    )
 
-    return deconv_spike_train, deconv_spike_train_up, deconv_scalings, all_up_temps
+    return dict(
+        deconv_spike_train=deconv_spike_train,
+        deconv_spike_train_upsampled_shifted=deconv_spike_train_upsampled_shifted,
+        deconv_scalings=deconv_scalings,
+        all_shifted_upsampled_temps=all_shifted_upsampled_temps,
+        shifted_upsampled_idx_to_orig_id=shifted_upsampled_idx_to_orig_id,
+        shifted_upsampled_idx_to_shift_id=shifted_upsampled_idx_to_shift_id,
+    )
 
 
 def superres_deconv(
@@ -301,8 +357,13 @@ def superres_deconv(
     trough_offset=42,
     spike_length_samples=121,
     max_upsample=8,
+    refractory_period_frames=10,
 ):
-    superres_templates, superres_label_to_bin_id, superres_label_to_orig_label = superres_denoised_templates(
+    (
+        superres_templates,
+        superres_label_to_bin_id,
+        superres_label_to_orig_label,
+    ) = superres_denoised_templates(
         spike_train,
         z_abs,
         bin_size_um,
@@ -323,9 +384,13 @@ def superres_deconv(
         tpca_n_wfs=50_000,
         n_jobs=n_jobs,
     )
-    print(superres_label_to_orig_label.size, superres_label_to_orig_label.max() + 1, superres_templates.shape)
+    print(
+        superres_label_to_orig_label.size,
+        superres_label_to_orig_label.max() + 1,
+        superres_templates.shape,
+    )
 
-    superres_deconv_spike_train, deconv_spike_train_up, deconv_scalings, all_up_temps = rigid_int_shift_deconv(
+    shifted_deconv_res = rigid_int_shift_deconv(
         raw_bin,
         geom,
         p,
@@ -341,17 +406,238 @@ def superres_deconv(
         trough_offset=trough_offset,
         spike_length_samples=spike_length_samples,
         max_upsample=max_upsample,
+        template_index_to_unit_id=superres_label_to_orig_label,
+        refractory_period_frames=refractory_period_frames,
     )
+
+    # unpack results
+    superres_deconv_spike_train = shifted_deconv_res["deconv_spike_train"]
+    superres_deconv_spike_train_upsampled_shifted = shifted_deconv_res[
+        "deconv_spike_train_upsampled_shifted"
+    ]
+    deconv_scalings = shifted_deconv_res["deconv_scalings"]
+    all_shifted_upsampled_temps = shifted_deconv_res[
+        "all_shifted_upsampled_temps"
+    ]
+    shifted_upsampled_idx_to_superres_id = shifted_deconv_res[
+        "shifted_upsampled_idx_to_orig_id"
+    ]
+    shifted_upsampled_idx_to_shift_id = shifted_deconv_res[
+        "shifted_upsampled_idx_to_shift_id"
+    ]
 
     # back to original label space
     deconv_spike_train = superres_deconv_spike_train.copy()
-    deconv_spike_train[:, 1] = superres_label_to_orig_label[deconv_spike_train[:, 1]]
+    deconv_spike_train[:, 1] = superres_label_to_orig_label[
+        deconv_spike_train[:, 1]
+    ]
+    shifted_upsampled_idx_to_orig_id = superres_label_to_orig_label[
+        shifted_upsampled_idx_to_superres_id
+    ]
 
     return dict(
         deconv_spike_train=deconv_spike_train,
         superres_deconv_spike_train=superres_deconv_spike_train,
+        superres_deconv_spike_train_upsampled_shifted=superres_deconv_spike_train_upsampled_shifted,
+        deconv_scalings=deconv_scalings,
         superres_templates=superres_templates,
         superres_label_to_orig_label=superres_label_to_orig_label,
-        deconv_spike_train_up=deconv_spike_train_up,
-        all_up_temps=all_up_temps,
+        all_shifted_upsampled_temps=all_shifted_upsampled_temps,
+        shifted_upsampled_idx_to_superres_id=shifted_upsampled_idx_to_superres_id,
+        shifted_upsampled_idx_to_orig_id=shifted_upsampled_idx_to_orig_id,
+        shifted_upsampled_idx_to_shift_id=shifted_upsampled_idx_to_shift_id,
+        trough_offset=trough_offset,
+        spike_length_samples=spike_length_samples,
+        bin_size_um=bin_size_um,
+        raw_bin=raw_bin,
+        deconv_dir=deconv_dir,
     )
+
+
+def superres_propose_pairs(
+    superres_templates,
+    superres_label_to_orig_label,
+    max_resid_dist=5,
+    lambd=0.001,
+    allowed_scale=0.1,
+    deconv_threshold_mul=0.9,
+    n_jobs=-1,
+):
+    n_superres_templates = superres_templates.shape[0]
+    assert superres_label_to_orig_label.shape == (n_superres_templates,)
+
+    # shifts[i, j] is like trough[j] - trough[i]
+    deconv_threshold = deconv_threshold_mul * np.min(
+        np.square(superres_templates).sum(axis=(1, 2))
+    )
+    resids, shifts = calc_resid_matrix(
+        superres_templates,
+        np.arange(n_superres_templates),
+        superres_templates,
+        np.arange(n_superres_templates),
+        thresh=deconv_threshold,
+        n_jobs=n_jobs,
+        vis_ptp_thresh=1,
+        auto=True,
+        pbar=True,
+        lambd=lambd,
+        allowed_scale=allowed_scale,
+    )
+
+    # which pairs of superres templates are close enough?
+    # list of superres template indices of length n_superres_templates
+    superres_pairs = [
+        np.flatnonzero(resids[i] <= max_resid_dist)
+        for i in range(n_superres_templates)
+    ]
+
+    # which pairs of units have superres pairs which are close enough?
+    # list of unit indices of length n_units = np.unique(superres_label_to_orig_label).size
+    unit_pairs = [
+        np.unique(
+            [
+                superres_label_to_orig_label[pair_unit]
+                for superres_ix in np.flatnonzero(
+                    superres_label_to_orig_label == unit
+                )
+                for pair_unit in superres_pairs[superres_ix]
+            ]
+        )
+        for unit in np.uniqe(superres_label_to_orig_label)
+    ]
+
+    return unit_pairs, superres_pairs
+
+
+def extract_superres_shifted_deconv(
+    superres_deconv_result,
+    subtraction_h5,
+    overwrite=True,
+    pbar=True,
+    nn_denoise=True,
+    output_directory=None,
+    extract_radius_um=100,
+    # superres_propose_pairs args
+    max_resid_dist=5,
+    lambd=0.001,
+    allowed_scale=0.1,
+    deconv_threshold_mul=0.9,
+    save_residual=False,
+    save_cleaned_waveforms=True,
+    save_denoised_waveforms=False,
+    save_outlier_scores=True,
+    do_reassignment=True,
+    localize=True,
+    reassignment_tpca_rank=5,
+    reassignment_tpca_spatial_radius=75,
+    reassignment_tpca_n_wfs=50000,
+    device=None,
+    n_jobs=-1,
+):
+    """
+    This is a wrapper that helps us deal with the bookkeeping for proposed
+    pairs and reassignment with the shifting and the superres and the
+    upsampling and all that...
+    """
+    # propose pairs of unit and superres labels
+    unit_pairs, superres_pairs = superres_propose_pairs(
+        superres_deconv_result["superres_templates"],
+        superres_deconv_result["superres_label_to_orig_label"],
+        max_resid_dist=max_resid_dist,
+        lambd=lambd,
+        allowed_scale=allowed_scale,
+        deconv_threshold_mul=deconv_threshold_mul,
+        n_jobs=n_jobs,
+    )
+
+    # infer what upsampled shifted superres units can be pairs
+    shifted_upsampled_idx_to_shift_id = superres_deconv_result[
+        "shifted_upsampled_idx_to_shift_id"
+    ]
+    shifted_upsampled_idx_to_superres_id = superres_deconv_result[
+        "shifted_upsampled_idx_to_superres_id"
+    ]
+    shifted_upsampled_idx_to_orig_id = superres_deconv_result[
+        "shifted_upsampled_idx_to_orig_id"
+    ]
+    superres_id_to_shifted_upsampled_idxs = [
+        np.flatnonzero(shifted_upsampled_idx_to_superres_id == supid)
+        for supid in np.unique(shifted_upsampled_idx_to_superres_id)
+    ]
+
+    shifted_upsampled_pairs = []
+    for shifted_upsampled_idx, (shift_id, superres_id) in enumerate(
+        zip(
+            shifted_upsampled_idx_to_shift_id,
+            shifted_upsampled_idx_to_superres_id,
+        )
+    ):
+        superres_matches = superres_pairs[superres_id]
+        shifted_upsampled_matches = np.unique(
+            [
+                shifted_upsampled_match
+                for match in superres_matches
+                for shifted_upsampled_match in np.flatnonzero(
+                    (shifted_upsampled_idx_to_shift_id == shift_id)
+                    & (shifted_upsampled_idx_to_superres_id == match)
+                )
+            ]
+        )
+        shifted_upsampled_pairs.append(shifted_upsampled_matches)
+
+    ret = extract_deconv(
+        superres_deconv_result["all_shifted_upsampled_temps"],
+        superres_deconv_result[
+            "superres_deconv_spike_train_upsampled_shifted"
+        ],
+        output_directory
+        if output_directory is not None
+        else superres_deconv_result["deconv_dir"],
+        superres_deconv_result["raw_bin"],
+        scalings=superres_deconv_result["deconv_scalings"],
+        extract_radius_um=extract_radius_um,
+        subtraction_h5=subtraction_h5,
+        save_residual=save_residual,
+        save_cleaned_waveforms=save_cleaned_waveforms,
+        save_denoised_waveforms=save_denoised_waveforms,
+        save_outlier_scores=save_outlier_scores,
+        do_reassignment=do_reassignment,
+        reassignment_proposed_pairs_up=shifted_upsampled_pairs,
+        reassignment_tpca_rank=reassignment_tpca_rank,
+        reassignment_tpca_spatial_radius=reassignment_tpca_spatial_radius,
+        reassignment_tpca_n_wfs=reassignment_tpca_n_wfs,
+        localize=localize,
+        n_jobs=n_jobs,
+        n_sec_chunk=1,
+        sampling_rate=30_000,
+        device=device,
+        trough_offset=superres_deconv_result["trough_offset"],
+        overwrite=overwrite,
+        scratch_dir=None,
+        pbar=pbar,
+        nn_denoise=nn_denoise,
+        seed=0,
+    )
+    if save_residual:
+        extract_h5, residual = ret
+    else:
+        extract_h5 = ret
+
+    with h5py.File(extract_h5, "r+") as h5:
+        # map the reassigned spike train from "shifted superres" label space
+        # to both superres and the original label space, and store for user
+        if do_reassignment:
+            new_labels_shifted_up = h5["reassigned_labels_up"][:]
+            new_labels_superres = shifted_upsampled_idx_to_superres_id[new_labels_shifted_up]
+            new_labels_orig = shifted_upsampled_idx_to_orig_id[new_labels_shifted_up]
+            h5.create_dataset(
+                "reassigned_superres_labels", data=new_labels_superres
+            )
+            h5.create_dataset(
+                "reassigned_unit_labels", data=new_labels_orig
+            )
+
+        # store everything also for the user
+        for k, v in superres_deconv_result:
+            if k not in h5:
+                h5.create_dataset(k, data=v)
