@@ -37,6 +37,8 @@ class MatchPursuitObjectiveUpsample:
         multi_processing=False,
         vis_su=1.0,
         verbose=False,
+        template_index_to_unit_id=None,
+        refractory_period_frames=10,
     ):
         """Sets up the deconvolution object.
 
@@ -56,6 +58,10 @@ class MatchPursuitObjectiveUpsample:
         vis_su: float
             threshold for visibility of template channel in terms
             of peak to peak standard unit.
+        template_index_to_unit_id : int array of shape (K,)
+            If multiple templates correspond to the same unit (e.g. supperres),
+            specify that here so that we can correctly enforce the refractory
+            period.
         """
 
         self.verbose = verbose
@@ -64,6 +70,30 @@ class MatchPursuitObjectiveUpsample:
 
         temps = templates.transpose(1, 2, 0)
         self.temps = temps.astype(np.float32)
+        self.n_time, self.n_chan, self.n_unit = temps.shape
+
+        # handle grouped templates, as in the superresolution case
+        self.grouped_temps = False
+        if template_index_to_unit_id is not None:
+            self.grouped_temps = True
+            assert template_index_to_unit_id.shape == (self.n_unit,)
+            group_index = [
+                np.flatnonzero(template_index_to_unit_id == u)
+                for u in template_index_to_unit_id
+            ]
+            self.max_group_size = max(map(len, group_index))
+
+            # like a channel index, sort of
+            # this is a n_templates x group_size array that maps each
+            # template index to the set of other template indices that
+            # are part of its group. so that the array is not ragged,
+            # we pad rows with -1s when their group is smaller than the
+            # largest group.
+            self.group_index = np.full(
+                (self.n_unit, self.max_group_size), -1
+            )
+            for j, row in enumerate(group_index):
+                self.group_index[j, : len(row)] = row
 
         # variance parameter for the amplitude scaling prior
         assert lambd is None or lambd >= 0
@@ -77,7 +107,6 @@ class MatchPursuitObjectiveUpsample:
                 "expected shape of templates loaded (n_times, n_chan, n_units):",
                 temps.shape,
             )
-        self.n_time, self.n_chan, self.n_unit = temps.shape
         self.deconv_dir = deconv_dir
         self.max_iter = max_iter
         self.n_processors = n_processors
@@ -98,7 +127,7 @@ class MatchPursuitObjectiveUpsample:
             if verbose:
                 print(
                     "Instantiating MatchPursuitObjectiveUpsample on ",
-                    t_end-t_start,
+                    t_end - t_start,
                     "seconds long recording with threshold",
                     threshold,
                 )
@@ -167,13 +196,15 @@ class MatchPursuitObjectiveUpsample:
             ([0], np.array([0, 1]).repeat(radius))
         )
 
-        # Refractory Perios Setup.
+        # Refractory Period Setup.
         # DO NOT MAKE IT SMALLER THAN self.n_time - 1 !!!
+        # (This is not actually the refractory condition we enforce.)
         self.refrac_radius = self.n_time - 1
 
         # Account for upsampling window so that np.inf does not fall into the
         # window around peak for valid spikes.
-        self.adjusted_refrac_radius = 10
+        # (This is the refractory condition we enforce.)
+        self.adjusted_refrac_radius = refractory_period_frames
 
     def upsample_templates_mp(self, upsample):
         if upsample != 1:
@@ -475,7 +506,8 @@ class MatchPursuitObjectiveUpsample:
 
         if save_npy:
             np.save(
-                os.path.join(self.deconv_dir, "sparse_templates.npy"), all_temps
+                os.path.join(self.deconv_dir, "sparse_templates.npy"),
+                all_temps,
             )
             np.save(
                 os.path.join(self.deconv_dir, "deconv_id_sparse_temp_map.npy"),
@@ -718,14 +750,31 @@ class MatchPursuitObjectiveUpsample:
         window = np.arange(
             -self.adjusted_refrac_radius, self.adjusted_refrac_radius + 1
         )
+        # Re-adjust cluster id's so that they match with the original templates
+        unit_idx = spike_train[:, 1] // self.up_factor
+        spike_times = spike_train[:, 0]
+
+        # correct for template grouping (for example, the superres case)
+        if self.grouped_temps:
+            # here, each index in unit_idx corresponds to a template which
+            # is part of a set of templates that all correspond to the same
+            # unit. so we want to deactivate all at once.
+            # these arrays are both N_spikes x group size
+            units_group_idx = self.group_index[unit_idx]
+            spike_times = np.broadcast_to(
+                spike_times[:, None], (spike_times.shape[0], self.max_group_size)
+            )
+            valid_spikes = units_group_idx > 0
+            unit_idx = units_group_idx[valid_spikes]
+            spike_times = spike_times[valid_spikes]
+
         # The offset self.n_time - 1 is necessary to revert the spike times
         # back to objective function indices which is the result of convoultion
         # operation.
-        time_idx = (spike_train[:, 0:1] + self.n_time - 1) + window
-        # Re-adjust cluster id's so that they match
-        # with the original templates
-        unit_idx = spike_train[:, 1:2] // self.up_factor
-        self.obj[unit_idx, time_idx[:, 1:-1]] = -np.inf
+        time_idx = (spike_times[:, None] + self.n_time - 1) + window
+
+        # enforce refractory by setting objective to 0 in invalid regions
+        self.obj[unit_idx[:, None], time_idx[:, 1:-1]] = -np.inf
         # added this line when including lambda, since
         # we recompute the objective differently now in subtraction
         if not self.no_amplitude_scaling:
