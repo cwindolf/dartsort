@@ -64,17 +64,21 @@ def get_templates(
     """
     if do_tpca and unit_max_channels is None:
         # estimate max channels for each unit by computing raw templates
-        unit_max_channels = get_raw_templates(
-            spike_train,
-            geom,
-            raw_binary_file,
-            reducer=reducer,
-            spike_length_samples=spike_length_samples,
-            trough_offset=trough_offset,
-            pbar=pbar,
-            seed=seed,
-            n_jobs=n_jobs,
-        ).ptp(1).argmax(1)
+        unit_max_channels = (
+            get_raw_templates(
+                spike_train,
+                geom,
+                raw_binary_file,
+                reducer=reducer,
+                spike_length_samples=spike_length_samples,
+                trough_offset=trough_offset,
+                pbar=pbar,
+                seed=seed,
+                n_jobs=n_jobs,
+            )
+            .ptp(1)
+            .argmax(1)
+        )
 
     # -- initialize output
     n_templates = spike_train[:, 1].max() + 1
@@ -260,7 +264,10 @@ def get_denoised_template_single(
         template[:, far] = 0
 
     return template
+
+
 get_single_templates = get_denoised_template_single
+
 
 def get_raw_denoised_template_single(
     spike_times,
