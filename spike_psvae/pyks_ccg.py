@@ -18,7 +18,26 @@ def ccg_metrics(st1, st2, nbins, tbin):
              p_value: Statistical significance of fewer spikes in the refractory period, float
     """
     K = ccg(st1, st2, nbins, tbin)
+    contam_ratio, p_value = _ccg_metrics(K, nbins)
+    return contam_ratio, p_value
 
+
+def ccg(st1, st2, nbins, tbin):
+    """
+    Computes the cross-correlogram for two arrays of spike times
+    :param st1: Array of spike times (seconds), numpy or cupy array
+    :param st2: Array of spike times (seconds), numpy or cupy array
+    :param nbins: Number of time bins either side, int
+    :param tbin: Length of each time bin, float
+    :return: Cross-correlogram, numpy array
+    """
+    if (len(st1) == 0) or (len(st2) == 0):
+        return np.zeros(2 * nbins + 1)
+
+    return _ccg(st1, st2, nbins, tbin)
+
+
+def _ccg_metrics(K, nbins):
     # Indices for the tails of the ccg
     irange1 = np.concatenate(
         (np.arange(1, nbins // 2), np.arange(3 * nbins // 2, 2 * nbins))
@@ -82,21 +101,6 @@ def ccg_metrics(st1, st2, nbins, tbin):
         contam_ratio = np.min(contam_rates) / ccg_rate
 
     return contam_ratio, p_value
-
-
-def ccg(st1, st2, nbins, tbin):
-    """
-    Computes the cross-correlogram for two arrays of spike times
-    :param st1: Array of spike times (seconds), numpy or cupy array
-    :param st2: Array of spike times (seconds), numpy or cupy array
-    :param nbins: Number of time bins either side, int
-    :param tbin: Length of each time bin, float
-    :return: Cross-correlogram, numpy array
-    """
-    if (len(st1) == 0) or (len(st2) == 0):
-        return np.zeros(2 * nbins + 1)
-
-    return _ccg(st1, st2, nbins, tbin)
 
 
 @numba.jit(nopython=True)
