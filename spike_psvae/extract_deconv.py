@@ -4,6 +4,7 @@ import torch
 import multiprocessing
 from collections import namedtuple
 from multiprocessing.pool import Pool
+from .multiprocessing_utils import get_pool
 from pathlib import Path
 from tqdm.auto import tqdm
 from sklearn.decomposition import PCA
@@ -84,6 +85,10 @@ def extract_deconv(
                 "denoised waveforms or localizing."
             )
         subtraction_h5 = Path(subtraction_h5)
+
+    if geom is None and subtraction_h5 is not None:
+        with h5py.File(subtraction_h5, "r") as h5:
+            geom = h5["geom"][:]
 
     # paths for output
     if save_residual:
@@ -166,13 +171,17 @@ def extract_deconv(
         for up_mc, pairs in zip(
             templates_up_maxchans, reassignment_proposed_pairs_up
         ):
+            if not pairs.size:
+                reassignment_temps_up_loc.append(np.empty([]))
+                continue
+
             ci_chans = channel_index[up_mc]
             pair_temps_up = templates_up[pairs]
             pair_temps_up_loc = np.pad(
                 pair_temps_up,
                 [(0, 0), (0, 0), (0, 1)],
                 constant_values=np.nan,
-            )[:, ci_chans]
+            )[:, :, ci_chans]
             reassignment_temps_up_loc.append(pair_temps_up_loc)
 
     with h5py.File(out_h5, "a") as h5:
@@ -230,10 +239,10 @@ def extract_deconv(
                     "reassigned_labels_up", shape=(n_spikes,), dtype=int
                 )
 
-        ctx = multiprocessing.get_context("spawn")
         if n_jobs is not None and n_jobs > 1:
             print("Initializing threads", end="")
-        with Pool(
+        pool, ctx = get_pool(n_jobs, cls=Pool)
+        with pool(
             n_jobs,
             initializer=_extract_deconv_init,
             initargs=(
@@ -405,15 +414,16 @@ def _extract_deconv_worker(start_sample):
         # outlier score is easy if we don't do reassignment
         if not p.do_reassignment and p.save_outlier_scores:
             # TODO: tpca'd residuals? we used to do that.
-            outlier_scores = np.nanmax(np.abs(resid_waveforms), axis=(1, 2))
+            outlier_scores = np.nanmax(
+                np.abs(apply_tpca(resid_waveforms, p.reassignment_tpca)),
+                axis=(1, 2),
+            )
             np.save(
                 p.temp_dir / f"outlier_scores_{batch_str}.npy", outlier_scores
             )
 
         # now add the templates
-        waveforms = resid_waveforms  # I just wanted to rename these to be clear about what they are becoming
-        del resid_waveforms
-        waveforms += (
+        waveforms = resid_waveforms + (
             scalings[:, None, None] * p.templates_up_loc[spike_train[:, 1]]
         )
         if p.save_cleaned_waveforms:
@@ -423,10 +433,19 @@ def _extract_deconv_worker(start_sample):
     if p.do_reassignment:
         new_labels_up = spike_train[:, 1].copy()
         outlier_scores = np.empty(len(spike_index), dtype=waveforms.dtype)
-        for j, (label, waveform) in zip(spike_train[:, 1], waveforms):
+        for j, (label, waveform) in enumerate(
+            zip(spike_train[:, 1], waveforms)
+        ):
             pairs = p.reassignment_pairs_up[label]
-            resids = waveform[None, :, :] - p.reassignment_temps_up_loc[j]
-            scores = np.square(resids).sum(axis=(1, 2))
+            if not pairs.size:
+                new_labels_up[j] = label
+                outlier_scores[j] = np.nanmax(np.abs(resid_waveforms[j]))
+                continue
+
+            resids = waveform[None, :, :] - p.reassignment_temps_up_loc[label]
+            scores = np.nanmax(
+                np.abs(apply_tpca(resids, p.reassignment_tpca)), axis=(1, 2)
+            )
             best = scores.argmin()
             new_labels_up[j] = pairs[best]
             outlier_scores[j] = scores[best]
@@ -552,6 +571,7 @@ def _extract_deconv_init(
 
     _extract_deconv_worker.geom = geom
     _extract_deconv_worker.tpca = tpca
+    _extract_deconv_worker.do_reassignment = do_reassignment
     _extract_deconv_worker.reassignment_tpca = reassignment_tpca
     _extract_deconv_worker.device = device
     _extract_deconv_worker.denoiser = denoiser
@@ -585,3 +605,19 @@ def xqdm(it, pbar=True, **kwargs):
         return tqdm(it, **kwargs)
     else:
         return it
+
+
+def apply_tpca(waveforms, tpca):
+    if tpca is None:
+        return waveforms
+    single = waveforms.ndim == 2
+    if single:
+        waveforms = waveforms[None]
+    n, t, c = waveforms.shape
+    waveforms = waveforms.transpose(0, 2, 1).reshape(n * c, t)
+    valid = ~np.isnan(waveforms).any(axis=1)
+    waveforms[valid] = tpca.inverse_transform(tpca.transform(waveforms[valid]))
+    waveforms = waveforms.reshape(n, c, t).transpose(0, 2, 1)
+    if single:
+        waveforms = waveforms[0]
+    return waveforms
