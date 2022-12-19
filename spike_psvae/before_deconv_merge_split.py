@@ -3,7 +3,10 @@ import h5py
 import multiprocessing
 
 from hdbscan import HDBSCAN
-from isosplit import isosplit
+try:
+    from isosplit import isosplit
+except ImportError:
+    pass
 from sklearn.mixture import BayesianGaussianMixture
 from concurrent.futures import ProcessPoolExecutor
 from tqdm.auto import tqdm
@@ -392,6 +395,7 @@ def ks_bimodal_pursuit_split(
             x = unit_features @ w
 
     # these spikes are assigned to cluster 1
+    rs = np.exp(logp)
     ilow = rs[:, 0] > rs[:, 1]
     # the smallest cluster has this proportion of all spikes
     nremove = min(ilow.mean(), (~ilow).mean())
