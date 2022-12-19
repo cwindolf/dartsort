@@ -89,9 +89,7 @@ class MatchPursuitObjectiveUpsample:
             # are part of its group. so that the array is not ragged,
             # we pad rows with -1s when their group is smaller than the
             # largest group.
-            self.group_index = np.full(
-                (self.n_unit, self.max_group_size), -1
-            )
+            self.group_index = np.full((self.n_unit, self.max_group_size), -1)
             for j, row in enumerate(group_index):
                 self.group_index[j, : len(row)] = row
 
@@ -219,7 +217,7 @@ class MatchPursuitObjectiveUpsample:
             self.unit_up_factor[
                 self.unit_up_factor > max_upsample
             ] = max_upsample
-            self.unit_up_factor = np.maximum(1, self.unit_up_factor)
+            self.unit_up_factor = np.maximum(1, self.unit_up_factor).astype(int)
             self.up_up_map = np.zeros(
                 self.n_unit * self.up_factor, dtype=np.int32
             )
@@ -447,7 +445,7 @@ class MatchPursuitObjectiveUpsample:
         else:
             self.pairwise_conv = pairwise_conv
 
-    def get_sparse_upsampled_templates(self, save_npy=True):
+    def get_sparse_upsampled_templates(self, save_npy=True, return_orig_map=False):
         """Returns the fully upsampled sparse version of the original templates.
         returns:
         --------
@@ -480,6 +478,8 @@ class MatchPursuitObjectiveUpsample:
         # [0, 0, 0, 0, 4, 4, 4, 4, ...] turns to [0, 0, 0, 0, 1, 1, 1, 1, ...].
         deconv_id_sparse_temp_map = []
         tot_temps_so_far = 0
+        # maps sparse unit label to original unit label
+        orig_map = []
 
         for i in range(self.orig_n_unit):
             up_temps = signal.resample(
@@ -497,10 +497,12 @@ class MatchPursuitObjectiveUpsample:
             )
             tot_temps_so_far += self.unit_up_factor[i]
             all_temps.append(up_temps[:, :, keep_upsample_idx])
+            orig_map += [i] * self.unit_up_factor[i]
 
         deconv_id_sparse_temp_map = np.concatenate(
             deconv_id_sparse_temp_map, axis=0
         )
+        orig_map = np.array(orig_map)
 
         all_temps = np.concatenate(all_temps, axis=2)
 
@@ -513,6 +515,9 @@ class MatchPursuitObjectiveUpsample:
                 os.path.join(self.deconv_dir, "deconv_id_sparse_temp_map.npy"),
                 deconv_id_sparse_temp_map,
             )
+
+        if return_orig_map:
+            return all_temps, deconv_id_sparse_temp_map, orig_map
 
         return all_temps, deconv_id_sparse_temp_map
 
@@ -762,7 +767,8 @@ class MatchPursuitObjectiveUpsample:
             # these arrays are both N_spikes x group size
             units_group_idx = self.group_index[unit_idx]
             spike_times = np.broadcast_to(
-                spike_times[:, None], (spike_times.shape[0], self.max_group_size)
+                spike_times[:, None],
+                (spike_times.shape[0], self.max_group_size),
             )
             valid_spikes = units_group_idx > 0
             unit_idx = units_group_idx[valid_spikes]
