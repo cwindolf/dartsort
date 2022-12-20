@@ -5,7 +5,7 @@ import multiprocessing
 import h5py
 from scipy.optimize import minimize
 from tqdm.auto import tqdm
-from .waveform_utils import get_local_geom, relativize_waveforms, channel_index_subset
+from .waveform_utils import relativize_waveforms, channel_index_subset #get_local_geom, 
 
 # (x_low, y_low, z_low, alpha_low), (x_high, y_high, z_high, alpha_high)
 # BOUNDS_NP1 = (-100, 1e-4, -100, 0), (132, 250, 100, 20000)
