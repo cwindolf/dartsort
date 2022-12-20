@@ -34,11 +34,11 @@ from spike_psvae.cluster_utils import (
 )
 from collections import defaultdict
 from spike_psvae.localization import localize_ptp
-from spike_psvae.waveform_utils import (
-    get_local_geom,
-    relativize_waveforms,
-    channel_index_subset,
-)
+# from spike_psvae.waveform_utils import (
+#     get_local_geom,
+#     relativize_waveforms,
+#     channel_index_subset,
+# )
 from spike_psvae.pre_deconv_merge_split import (
     get_proposed_pairs,
     get_x_z_templates,
