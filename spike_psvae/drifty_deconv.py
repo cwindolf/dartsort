@@ -300,7 +300,7 @@ def rigid_int_shift_deconv(
     deconv_scalings = []
     print("gathering deconvolution results")
     for bid in range(mp_object.n_batches):
-        which_shiftix = batch2shiftix[bid]
+        which_shiftix = batch2shiftix[bid+t_start]
 
         fname_out = deconv_dir / f"seg_{bid:06d}_deconv.npz"
         with np.load(fname_out) as d:
