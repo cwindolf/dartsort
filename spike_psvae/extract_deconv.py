@@ -1,19 +1,18 @@
 import h5py
 import numpy as np
 import torch
-import multiprocessing
 from collections import namedtuple
 from multiprocessing.pool import Pool
 from .multiprocessing_utils import get_pool
 from pathlib import Path
+import shutil
 from tqdm.auto import tqdm
-from sklearn.decomposition import PCA
 from spike_psvae import (
     denoise,
     subtract,
-    localize_index,
     spikeio,
     waveform_utils,
+    chunk_features,
 )
 
 
@@ -23,38 +22,39 @@ def extract_deconv(
     output_directory,
     standardized_bin,
     scalings=None,
+    geom=None,
     channel_index=None,
     n_channels_extract=20,
     extract_radius_um=100,
     subtraction_h5=None,
-    tpca=None,
-    save_residual=True,
-    save_cleaned_waveforms=True,
+    tpca_rank=8,
+    save_residual=False,
+    save_cleaned_waveforms=False,
+    save_cleaned_tpca_projs=True,
     save_denoised_waveforms=False,
+    do_denoised_tpca=True,
+    save_denoised_tpca_projs=False,
     save_outlier_scores=True,
     do_reassignment=True,
     reassignment_proposed_pairs_up=None,
     reassignment_tpca_rank=5,
     reassignment_tpca_spatial_radius=75,
     reassignment_tpca_n_wfs=50000,
-    geom=None,
     localize=True,
+    loc_radius=100,
     n_sec_chunk=1,
     n_jobs=1,
     sampling_rate=30_000,
+    n_sec_train_feats=40,
     device=None,
     trough_offset=42,
     overwrite=True,
-    scratch_dir=None,
     pbar=True,
     nn_denoise=True,
     seed=0,
 ):
     standardized_bin = Path(standardized_bin)
     output_directory = Path(output_directory)
-    scratch_dir = output_directory
-    if scratch_dir is not None:
-        scratch_dir = Path(scratch_dir)
 
     if isinstance(templates_up, (str, Path)):
         templates_up = np.load(templates_up)
@@ -77,18 +77,13 @@ def extract_deconv(
     assert not std_size % n_chans
     T_samples = std_size // n_chans
 
-    # load TPCA if necessary
-    if save_denoised_waveforms or localize:
-        if tpca is None and subtraction_h5 is None:
-            raise ValueError(
-                "subtraction_h5 is needed to load TPCA when computing "
-                "denoised waveforms or localizing."
-            )
-        subtraction_h5 = Path(subtraction_h5)
-
     if geom is None and subtraction_h5 is not None:
         with h5py.File(subtraction_h5, "r") as h5:
             geom = h5["geom"][:]
+    if geom is None:
+        raise ValueError(
+            "Please pass geom, or subtraction_h5 if that's easier."
+        )
 
     # paths for output
     if save_residual:
@@ -101,7 +96,7 @@ def extract_deconv(
     if overwrite:
         if out_h5.exists():
             out_h5.unlink()
-    temp_dir = scratch_dir / "temp_batch_results"
+    temp_dir = output_directory / "temp_batch_results"
     temp_dir.mkdir(exist_ok=True, parents=True)
 
     # are we resuming?
@@ -148,11 +143,11 @@ def extract_deconv(
         )[:, ci_chans]
 
     # precompute things for reassignment
+    reassignment_tpca = reassignment_temps_up_loc = None
     if do_reassignment:
         save_outlier_scores = True
 
         # fit a TPCA to raw waveforms
-        assert geom is not None
         reassignment_tpca = waveform_utils.fit_tpca_bin(
             spike_index_up,
             geom,
@@ -184,17 +179,76 @@ def extract_deconv(
             )[:, :, ci_chans]
             reassignment_temps_up_loc.append(pair_temps_up_loc)
 
+    # create chunk feature objects
+    denoised_tpca = None
+    if localize or (do_denoised_tpca and save_denoised_waveforms) or save_denoised_tpca_projs:
+        denoised_tpca = chunk_features.TPCA(
+            tpca_rank, channel_index, "denoised"
+        )
+    featurizers = []
+    no_save_featurizers = []
+    if save_cleaned_waveforms:
+        featurizers.append(
+            chunk_features.Waveform(
+                "cleaned",
+                spike_length_samples=templates_up.shape[1],
+                channel_index=channel_index,
+            )
+        )
+    if save_denoised_waveforms:
+        featurizers.append(
+            chunk_features.Waveform(
+                "denoised",
+                spike_length_samples=templates_up.shape[1],
+                channel_index=channel_index,
+            )
+        )
+    if save_cleaned_tpca_projs:
+        featurizers.append(
+            chunk_features.TPCA(tpca_rank, channel_index, "cleaned")
+        )
+    if save_denoised_tpca_projs:
+        featurizers.append(denoised_tpca)
+    elif denoised_tpca is not None:
+        no_save_featurizers.append(denoised_tpca)
+    if localize:
+        featurizers.append(
+            chunk_features.Localization(
+                geom, channel_index, loc_radius=loc_radius
+            )
+        )
+        featurizers.append(chunk_features.MaxPTP())
+
+    # which waveforms will we be computing?
+    do_clean = do_reassignment or save_outlier_scores or len(featurizers)
+    do_denoise = any(f.which_waveforms == "denoised" for f in featurizers)
+
     with h5py.File(out_h5, "a") as h5:
+        load_or_fit_featurizers(
+            featurizers + no_save_featurizers,
+            h5,
+            channel_index,
+            templates_up,
+            spike_train_up,
+            output_directory,
+            standardized_bin,
+            scalings,
+            geom,
+            n_sec_train_feats,
+            n_sec_chunk=n_sec_chunk,
+            n_jobs=n_jobs,
+            sampling_rate=sampling_rate,
+            device=device,
+            trough_offset=trough_offset,
+            nn_denoise=nn_denoise,
+            seed=seed,
+        )
+
         if last_batch_end > 0:
-            if save_cleaned_waveforms:
-                cleaned_wfs = h5["cleaned_waveforms"]
-            if save_denoised_waveforms:
-                denoised_wfs = h5["denoised_waveforms"]
-            if localize:
-                localizations = h5["localizations"]
-                maxptps = h5["maxptps"]
             if save_outlier_scores:
                 outlier_scores = h5["outlier_scores"]
+            if do_reassignment:
+                reassigned_labels_up = h5["reassigned_labels_up"]
         else:
             h5.create_dataset("templates_up", data=templates_up)
             h5.create_dataset(
@@ -204,32 +258,13 @@ def extract_deconv(
             h5.create_dataset("templates_up_loc", data=templates_up_loc)
             h5.create_dataset("spike_train_up", data=spike_train_up)
             h5.create_dataset("scalings", data=scalings)
-            h5.create_dataset("spike_index_up", data=spike_index_up)
+            h5.create_dataset("spike_index", data=spike_index_up)
             h5.create_dataset(
                 "first_channels",
                 data=channel_index[:, 0][spike_index_up[:, 1]],
             )
             h5.create_dataset("last_batch_end", data=0)
 
-            if save_cleaned_waveforms:
-                cleaned_wfs = h5.create_dataset(
-                    "cleaned_waveforms",
-                    shape=(n_spikes, spike_length_samples, n_channels_extract),
-                    dtype=np.float32,
-                )
-            if save_denoised_waveforms:
-                denoised_wfs = h5.create_dataset(
-                    "denoised_waveforms",
-                    shape=(n_spikes, spike_length_samples, n_channels_extract),
-                    dtype=np.float32,
-                )
-            if localize:
-                localizations = h5.create_dataset(
-                    "localizations", shape=(n_spikes, 5), dtype=np.float64
-                )
-                maxptps = h5.create_dataset(
-                    "maxptps", shape=(n_spikes,), dtype=np.float64
-                )
             if save_outlier_scores:
                 outlier_scores = h5.create_dataset(
                     "outlier_scores", shape=(n_spikes,), dtype=np.float64
@@ -239,6 +274,15 @@ def extract_deconv(
                     "reassigned_labels_up", shape=(n_spikes,), dtype=int
                 )
 
+            for f in featurizers:
+                h5.create_dataset(
+                    f.name,
+                    shape=(n_spikes, *f.out_shape),
+                    dtype=f.dtype,
+                )
+
+        feature_dsets = [h5[f.name] for f in featurizers]
+
         if n_jobs is not None and n_jobs > 1:
             print("Initializing threads", end="")
         pool, ctx = get_pool(n_jobs, cls=Pool)
@@ -246,15 +290,14 @@ def extract_deconv(
             n_jobs,
             initializer=_extract_deconv_init,
             initargs=(
-                subtraction_h5,
+                geom,
                 device,
                 channel_index,
                 batch_length,
-                save_cleaned_waveforms,
-                save_denoised_waveforms,
+                do_clean,
+                do_denoise,
                 save_outlier_scores,
                 save_residual,
-                localize,
                 trough_offset,
                 spike_index_up,
                 spike_train_up,
@@ -268,11 +311,12 @@ def extract_deconv(
                 scalings,
                 n_chans,
                 nn_denoise,
-                tpca,
+                denoised_tpca.tpca if denoised_tpca is not None else None,
                 do_reassignment,
                 reassignment_tpca,
                 reassignment_proposed_pairs_up,
                 reassignment_temps_up_loc,
+                featurizers,
             ),
             context=ctx,
         ) as pool:
@@ -291,20 +335,6 @@ def extract_deconv(
                     np.load(result.resid_path).tofile(resid)
                     Path(result.resid_path).unlink()
 
-                if save_cleaned_waveforms:
-                    cleaned_wfs[result.inds] = np.load(result.cleaned_path)
-                    Path(result.cleaned_path).unlink()
-
-                if save_denoised_waveforms:
-                    denoised_wfs[result.inds] = np.load(result.denoised_path)
-                    Path(result.denoised_path).unlink()
-
-                if localize:
-                    localizations[result.inds] = np.load(result.locs_path)
-                    maxptps[result.inds] = np.load(result.maxptps_path)
-                    Path(result.locs_path).unlink()
-                    Path(result.maxptps_path).unlink()
-
                 if save_outlier_scores:
                     outlier_scores[result.inds] = np.load(
                         result.outlier_scores_path
@@ -317,6 +347,11 @@ def extract_deconv(
                     )
                     Path(result.reassignments_path).unlink()
 
+                for f, dset in zip(featurizers, feature_dsets):
+                    fnpy = temp_dir / f"{result.batch_prefix}_{f.name}.npy"
+                    dset[result.inds] = np.load(fnpy)
+                    Path(fnpy).unlink()
+
     if save_residual:
         resid.close()
         return out_h5, residual_path
@@ -328,11 +363,8 @@ JobResult = namedtuple(
     "JobResult",
     [
         "last_batch_end",
+        "batch_prefix",
         "resid_path",
-        "cleaned_path",
-        "denoised_path",
-        "locs_path",
-        "maxptps_path",
         "outlier_scores_path",
         "reassignments_path",
         "inds",
@@ -396,12 +428,7 @@ def _extract_deconv_worker(start_sample):
         )
 
     # -- load collision-cleaned waveforms
-    if (
-        p.save_cleaned_waveforms
-        or p.save_denoised_waveforms
-        or p.localize
-        or p.save_outlier_scores
-    ):
+    if p.do_clean:
         # initialize by reading from residual
         resid_waveforms = spikeio.read_waveforms_in_memory(
             resid,
@@ -413,7 +440,6 @@ def _extract_deconv_worker(start_sample):
 
         # outlier score is easy if we don't do reassignment
         if not p.do_reassignment and p.save_outlier_scores:
-            # TODO: tpca'd residuals? we used to do that.
             outlier_scores = np.nanmax(
                 np.abs(apply_tpca(resid_waveforms, p.reassignment_tpca)),
                 axis=(1, 2),
@@ -426,8 +452,18 @@ def _extract_deconv_worker(start_sample):
         waveforms = resid_waveforms + (
             scalings[:, None, None] * p.templates_up_loc[spike_train[:, 1]]
         )
-        if p.save_cleaned_waveforms:
-            np.save(p.temp_dir / f"cleaned_{batch_str}.npy", waveforms)
+
+        # compute and save features for cleaned wfs
+        for f in p.featurizers:
+            feat = f.transform(
+                spike_index[:, 1],
+                cleaned_wfs=waveforms,
+            )
+            if feat is not None:
+                np.save(
+                    p.temp_dir / f"{batch_str}_{f.name}.npy",
+                    feat,
+                )
 
     # -- reassign these waveforms
     if p.do_reassignment:
@@ -453,7 +489,7 @@ def _extract_deconv_worker(start_sample):
         np.save(p.temp_dir / f"outlier_scores_{batch_str}.npy", outlier_scores)
 
     # -- denoise them
-    if p.save_denoised_waveforms or p.localize:
+    if p.do_denoise:
         waveforms = subtract.full_denoising(
             waveforms,
             spike_index[:, 1],
@@ -462,33 +498,23 @@ def _extract_deconv_worker(start_sample):
             device=p.device,
             denoiser=p.denoiser,
         )
-        if p.save_denoised_waveforms:
-            np.save(p.temp_dir / f"denoised_{batch_str}.npy", waveforms)
 
-    # -- localize and done
-    if p.localize:
-        ptps = waveforms.ptp(1)
-        maxptps = np.nanmax(ptps, axis=1)
-        x, y, z_rel, z_abs, alpha = localize_index.localize_ptps_index(
-            ptps,
-            p.geom,
-            spike_index[:, 1],
-            p.channel_index,
-            pbar=False,
-        )
-        np.save(p.temp_dir / f"maxptps_{batch_str}.npy", maxptps)
-        np.save(
-            p.temp_dir / f"locs_{batch_str}.npy",
-            np.c_[x, y, z_rel, z_abs, alpha],
-        )
+        # compute and save features for denoised wfs
+        for f in p.featurizers:
+            feat = f.transform(
+                spike_index[:, 1],
+                denoised_wfs=waveforms,
+            )
+            if feat is not None:
+                np.save(
+                    p.temp_dir / f"{batch_str}_{f.name}.npy",
+                    feat,
+                )
 
     return JobResult(
         end_sample,
+        batch_str,
         p.temp_dir / f"resid_{batch_str}.npy",
-        p.temp_dir / f"cleaned_{batch_str}.npy",
-        p.temp_dir / f"denoised_{batch_str}.npy",
-        p.temp_dir / f"locs_{batch_str}.npy",
-        p.temp_dir / f"maxptps_{batch_str}.npy",
         p.temp_dir / f"outlier_scores_{batch_str}.npy",
         p.temp_dir / f"new_labels_up_{batch_str}.npy",
         which_spikes,
@@ -519,15 +545,14 @@ def temporal_align(waveforms, maxchans, offset=42):
 
 
 def _extract_deconv_init(
-    subtraction_h5,
+    geom,
     device,
     channel_index,
     batch_length,
-    save_cleaned_waveforms,
-    save_denoised_waveforms,
+    do_clean,
+    do_denoise,
     save_outlier_scores,
     save_residual,
-    localize,
     trough_offset,
     spike_index_up,
     spike_train_up,
@@ -546,62 +571,153 @@ def _extract_deconv_init(
     reassignment_tpca,
     reassignment_pairs_up,
     reassignment_temps_up_loc,
+    featurizers,
 ):
-    geom = None
-    if subtraction_h5 is not None:
-        with h5py.File(subtraction_h5) as h5:
-            if tpca is None:
-                try:
-                    tpca_mean = h5["tpca_mean"][:]
-                    tpca_components = h5["tpca_components"][:]
-                except KeyError:
-                    tpca_mean = h5["cleaned_tpca/tpca_mean"][:]
-                    tpca_components = h5["cleaned_tpca/tpca_components"][:]
-                tpca = PCA(tpca_components.shape[0])
-                tpca.mean_ = tpca_mean
-                tpca.components_ = tpca_components
-
-            geom = h5["geom"][:]
-
     if device is None:
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     denoiser = None
     if nn_denoise:
         denoiser = denoise.SingleChanDenoiser().load().to(device)
 
-    _extract_deconv_worker.geom = geom
-    _extract_deconv_worker.tpca = tpca
-    _extract_deconv_worker.do_reassignment = do_reassignment
-    _extract_deconv_worker.reassignment_tpca = reassignment_tpca
-    _extract_deconv_worker.device = device
-    _extract_deconv_worker.denoiser = denoiser
-    _extract_deconv_worker.channel_index = channel_index
-    _extract_deconv_worker.save_cleaned_waveforms = save_cleaned_waveforms
-    _extract_deconv_worker.save_denoised_waveforms = save_denoised_waveforms
-    _extract_deconv_worker.save_outlier_scores = save_outlier_scores
-    _extract_deconv_worker.save_residual = save_residual
-    _extract_deconv_worker.localize = localize
-    _extract_deconv_worker.trough_offset = trough_offset
-    _extract_deconv_worker.spike_index_up = spike_index_up
-    _extract_deconv_worker.spike_train_up = spike_train_up
-    _extract_deconv_worker.standardized_bin = standardized_bin
-    _extract_deconv_worker.spike_length_samples = spike_length_samples
-    _extract_deconv_worker.templates_up = templates_up
-    _extract_deconv_worker.templates_up_loc = templates_up_loc
-    _extract_deconv_worker.scalings = scalings
-    _extract_deconv_worker.temp_dir = temp_dir
-    _extract_deconv_worker.T_samples = T_samples
-    _extract_deconv_worker.batch_length = batch_length
-    _extract_deconv_worker.n_chans = n_chans
-    _extract_deconv_worker.reassignment_pairs_up = reassignment_pairs_up
-    _extract_deconv_worker.reassignment_temps_up_loc = (
-        reassignment_temps_up_loc
-    )
+    p = _extract_deconv_worker
+    p.geom = geom
+    p.tpca = tpca
+    p.do_reassignment = do_reassignment
+    p.reassignment_tpca = reassignment_tpca
+    p.device = device
+    p.denoiser = denoiser
+    p.channel_index = channel_index
+    p.do_clean = do_clean
+    p.do_denoise = do_denoise
+    p.save_outlier_scores = save_outlier_scores
+    p.save_residual = save_residual
+    p.trough_offset = trough_offset
+    p.spike_index_up = spike_index_up
+    p.spike_train_up = spike_train_up
+    p.standardized_bin = standardized_bin
+    p.spike_length_samples = spike_length_samples
+    p.templates_up = templates_up
+    p.templates_up_loc = templates_up_loc
+    p.scalings = scalings
+    p.temp_dir = temp_dir
+    p.T_samples = T_samples
+    p.batch_length = batch_length
+    p.n_chans = n_chans
+    p.reassignment_pairs_up = reassignment_pairs_up
+    p.reassignment_temps_up_loc = reassignment_temps_up_loc
+    p.featurizers = featurizers
+
     print(".", end="", flush=True)
+
+
+def load_or_fit_featurizers(
+    featurizers,
+    h5,
+    channel_index,
+    templates_up,
+    spike_train_up,
+    output_directory,
+    standardized_bin,
+    scalings,
+    geom,
+    n_sec_train_feats,
+    n_sec_chunk=1,
+    n_jobs=1,
+    sampling_rate=30_000,
+    device=None,
+    trough_offset=42,
+    nn_denoise=True,
+    seed=0,
+):
+    if not any(f.needs_fit for f in featurizers):
+        return
+
+    for f in featurizers:
+        f.from_h5(h5)
+
+    if not any(f.needs_fit for f in featurizers):
+        return
+
+    # run a mini extract with waveform saving and no features
+    # to fit the featurizers on
+
+    # -- restrict the spike train to some randomly chosen seconds
+    t_min = np.ceil(spike_train_up[:, 0].min() / sampling_rate)
+    t_max = np.floor(spike_train_up[:, 0].max() / sampling_rate)
+    valid_times = np.random.default_rng(seed).choice(
+        np.arange(t_min, t_max),
+        size=min(n_sec_train_feats, t_max - t_min),
+        replace=False,
+    )
+    which_mini = (np.isin(spike_train_up[:, 0] // sampling_rate, valid_times),)
+    spike_train_up_mini = spike_train_up[which_mini]
+    scalings_mini = scalings[which_mini]
+
+    # -- mini extraction
+    (output_directory / "mini_extract_feats").mkdir(exist_ok=True)
+    extract_h5 = extract_deconv(
+        templates_up,
+        spike_train_up_mini,
+        output_directory / "mini_extract_feats",
+        standardized_bin,
+        scalings=scalings_mini,
+        channel_index=channel_index,
+        n_channels_extract=None,
+        extract_radius_um=None,
+        subtraction_h5=None,
+        tpca_rank=None,
+        save_residual=False,
+        save_cleaned_waveforms=True,
+        save_cleaned_tpca_projs=False,
+        save_denoised_waveforms=True,
+        do_denoised_tpca=False,
+        save_denoised_tpca_projs=False,
+        save_outlier_scores=False,
+        do_reassignment=False,
+        geom=geom,
+        localize=False,
+        n_sec_chunk=n_sec_chunk,
+        n_jobs=n_jobs,
+        sampling_rate=sampling_rate,
+        device=device,
+        trough_offset=trough_offset,
+        pbar="Extract deconv: train featurizers",
+        nn_denoise=nn_denoise,
+        seed=seed,
+    )
+
+    # -- fit features
+    with h5py.File(extract_h5, "r") as mini_h5:
+        max_channels = mini_h5["spike_index"][:, 1]
+        print(
+            f"Training featurizers on {max_channels.size} waveforms from mini-extraction."
+        )
+        cleaned_wfs = mini_h5["cleaned_waveforms"][:]
+        for f in featurizers:
+            f.fit(max_channels=max_channels, cleaned_wfs=cleaned_wfs)
+        del cleaned_wfs
+        denoised_wfs = mini_h5["denoised_waveforms"][:]
+        for f in featurizers:
+            f.fit(max_channels=max_channels, denoised_wfs=denoised_wfs)
+        del denoised_wfs
+
+    # clean up after ourselves
+    shutil.rmtree(output_directory / "mini_extract_feats")
+
+    if any(f.needs_fit for f in featurizers):
+        raise ValueError("Unable to fit all featurizers.")
+
+    # save to output
+    for f in featurizers:
+        f.to_h5(h5)
+
+    # done. at this point the caller can rely on fitted featurizers.
 
 
 def xqdm(it, pbar=True, **kwargs):
     if pbar:
+        if isinstance(pbar, str):
+            kwargs["desc"] = pbar
         return tqdm(it, **kwargs)
     else:
         return it
