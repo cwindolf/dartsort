@@ -166,8 +166,8 @@ def rigid_int_shift_deconv(
     templates=None,
     template_index_to_unit_id=None,
     # need to implement
-#     t_start=0,
-#     t_end=None,
+    t_start=0,
+    t_end=None,
     n_jobs=1,
     trough_offset=42,
     spike_length_samples=121,
@@ -181,6 +181,7 @@ def rigid_int_shift_deconv(
     print(f"{pitch=}")
 
     # integer probe-pitch shifts at each time bin
+    p = p[t_start:t_end]
     pitch_shifts = (p - reference_displacement + pitch / 2) // pitch
     unique_shifts = np.unique(pitch_shifts)
 
@@ -231,8 +232,8 @@ def rigid_int_shift_deconv(
             templates=temps,
             deconv_dir=deconv_dir,
             standardized_bin=raw_bin,
-            t_start=0,
-            t_end=None,
+            t_start=t_start,
+            t_end=t_end,
             n_sec_chunk=1,
             sampling_rate=pfs,
             max_iter=1000,
@@ -248,6 +249,8 @@ def rigid_int_shift_deconv(
             refractory_period_frames=refractory_period_frames,
         )
         my_batches = np.flatnonzero(pitch_shifts == shift)
+        my_batches = my_batches[my_batches>=t_start]
+        my_batches = my_batches[my_batches<t_end]
         for bid in my_batches:
             batch2shiftix[bid] = shiftix
         my_fnames = [
