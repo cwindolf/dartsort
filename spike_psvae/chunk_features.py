@@ -4,7 +4,13 @@ from sklearn.decomposition import PCA
 from spike_psvae import localize_index
 
 
-class ExtraFeat:
+class ChunkFeature:
+    """Feature computers for chunk pipelines (subtract and extract_deconv)
+
+    Subclasses ompute features from subtracted/cleaned/denoised waveforms,
+    fit featurizers, save and load things from hdf5, ...
+    """
+
     # subclasses should have these as class properties,
     # or assigned during __init__
     name = NotImplemented
@@ -27,7 +33,7 @@ class ExtraFeat:
         cleaned_wfs=None,
         denoised_wfs=None,
     ):
-        """Some ExtraFeats don't fit, so useful to inherit this."""
+        """Some ChunkFeatures don't fit, so useful to inherit this."""
         pass
 
     def to_h5(self, h5):
@@ -48,7 +54,7 @@ class ExtraFeat:
         cleaned_wfs=None,
         denoised_wfs=None,
     ):
-        """ExtraFeats should implement this."""
+        """ChunkFeatures should implement this."""
         raise NotImplementedError
 
     def handle_which_wfs(self, subtracted_wfs, cleaned_wfs, denoised_wfs):
@@ -68,7 +74,7 @@ class ExtraFeat:
 # -- a couple of very basic extra features
 
 
-class MaxPTP(ExtraFeat):
+class MaxPTP(ChunkFeature):
 
     name = "maxptps"
     # scalar
@@ -91,7 +97,7 @@ class MaxPTP(ExtraFeat):
         return maxptps
 
 
-class TroughDepth(ExtraFeat):
+class TroughDepth(ChunkFeature):
 
     name = "trough_depths"
     # scalar
@@ -116,7 +122,7 @@ class TroughDepth(ExtraFeat):
         return trough_depths
 
 
-class PeakHeight(ExtraFeat):
+class PeakHeight(ChunkFeature):
 
     name = "peak_heights"
     # scalar
@@ -141,12 +147,17 @@ class PeakHeight(ExtraFeat):
         return peak_heights
 
 
-class PTPVector(ExtraFeat):
+class PTPVector(ChunkFeature):
 
     name = "ptp_vectors"
+    needs_fit = True
 
-    def __init__(self, which_waveforms="denoised"):
+    def __init__(self, which_waveforms="denoised", channel_index=None, dtype=np.float32):
         self.which_waveforms = which_waveforms
+        if channel_index is not None:
+            self.C = channel_index.shape[1]
+            self.dtype = dtype
+            self.needs_fit = False
 
     def fit(
         self,
@@ -155,7 +166,6 @@ class PTPVector(ExtraFeat):
         cleaned_wfs=None,
         denoised_wfs=None,
     ):
-
         wfs = self.handle_which_wfs(subtracted_wfs, cleaned_wfs, denoised_wfs)
         if wfs is None:
             return None
@@ -164,6 +174,18 @@ class PTPVector(ExtraFeat):
         self.out_shape = (C,)
         self.dtype = wfs.dtype
         self.needs_fit = False
+
+    def to_h5(self, h5):
+        group = h5.create_group(f"{self.which_waveforms}_ptpvector_info")
+        group.create_dataset("C", data=self.out_shape[1])
+
+    def from_h5(self, h5):
+        try:
+            group = h5[f"{self.which_waveforms}_ptpvector_info"]
+            self.out_shape = (group["C"][()],)
+            self.needs_fit = False
+        except KeyError:
+            pass
 
     def transform(
         self,
@@ -178,12 +200,18 @@ class PTPVector(ExtraFeat):
         return wfs.ptp(1)
 
 
-class Waveform(ExtraFeat):
-    def __init__(self, which_waveforms):
+class Waveform(ChunkFeature):
+    needs_fit = True
+
+    def __init__(self, which_waveforms, spike_length_samples=None, channel_index=None, dtype=np.float32):
         super().__init__()
         assert which_waveforms in ("subtracted", "cleaned", "denoised")
         self.which_waveforms = which_waveforms
         self.name = f"{which_waveforms}_waveforms"
+        if channel_index is not None and spike_length_samples is not None:
+            self.out_shape = (spike_length_samples, channel_index.shape[1])
+            self.dtype = dtype
+            self.needs_fit = False
 
     def fit(
         self,
@@ -227,7 +255,7 @@ class Waveform(ExtraFeat):
 # -- localization
 
 
-class Localization(ExtraFeat):
+class Localization(ChunkFeature):
 
     name = "localizations"
     out_shape = (5,)
@@ -281,14 +309,15 @@ class Localization(ExtraFeat):
 # -- a more involved example
 
 
-class TPCA(ExtraFeat):
+class TPCA(ChunkFeature):
+    needs_fit = True
+
     def __init__(self, rank, channel_index, which_waveforms, random_state=0):
         super().__init__()
         assert which_waveforms in ("subtracted", "cleaned", "denoised")
         self.which_waveforms = which_waveforms
         self.rank = rank
         self.name = f"{which_waveforms}_tpca_projs"
-        self.needs_fit = True
         self.channel_index = channel_index
         self.random_state = random_state
         self.C = channel_index.shape[1]
@@ -303,7 +332,9 @@ class TPCA(ExtraFeat):
         denoised_wfs=None,
     ):
         wfs = self.handle_which_wfs(subtracted_wfs, cleaned_wfs, denoised_wfs)
-        assert wfs is not None
+        if wfs is None:
+            return
+
         N, T, C = wfs.shape
         self.T = T
 
