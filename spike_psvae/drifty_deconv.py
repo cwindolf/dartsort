@@ -520,8 +520,8 @@ def extract_superres_shifted_deconv(
     extract_radius_um=100,
     # superres_propose_pairs args
     max_resid_dist=5,
-    lambd=0,
-    allowed_scale=np.inf,
+    lambd=0.001,
+    allowed_scale=0.1,
     deconv_threshold_mul=0.9,
     save_residual=False,
     save_cleaned_waveforms=True,
