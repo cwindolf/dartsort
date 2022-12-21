@@ -351,8 +351,8 @@ def superres_deconv(
     pfs=30_000,
     reference_displacement=0,
     # need to implement
-    # t_start=0,
-    # t_end=None,
+    t_start=0,
+    t_end=None,
     n_jobs=1,
     trough_offset=42,
     spike_length_samples=121,
@@ -400,8 +400,8 @@ def superres_deconv(
         spike_train=None,
         templates=superres_templates,
         # need to implement
-        # t_start=0,
-        # t_end=None,
+        t_start=t_start,
+        t_end=t_end,
         n_jobs=n_jobs,
         trough_offset=trough_offset,
         spike_length_samples=spike_length_samples,
