@@ -249,8 +249,6 @@ def rigid_int_shift_deconv(
             refractory_period_frames=refractory_period_frames,
         )
         my_batches = np.flatnonzero(pitch_shifts == shift)
-        my_batches = my_batches[my_batches>=t_start]
-        my_batches = my_batches[my_batches<t_end]
         for bid in my_batches:
             batch2shiftix[bid] = shiftix
         my_fnames = [
@@ -300,7 +298,7 @@ def rigid_int_shift_deconv(
     deconv_scalings = []
     print("gathering deconvolution results")
     for bid in range(mp_object.n_batches):
-        which_shiftix = batch2shiftix[bid+t_start]
+        which_shiftix = batch2shiftix[bid]
 
         fname_out = deconv_dir / f"seg_{bid:06d}_deconv.npz"
         with np.load(fname_out) as d:
