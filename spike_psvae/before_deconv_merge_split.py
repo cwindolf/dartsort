@@ -16,7 +16,7 @@ from sklearn.discriminant_analysis import LinearDiscriminantAnalysis as LDA
 from .multiprocessing_utils import MockPoolExecutor
 from .waveform_utils import get_channel_subset
 from .isocut5 import isocut5
-from .subtraction_feats import TPCA
+# from .subtraction_feats import TPCA
 from .snr_templates import get_raw_template_single
 from .deconv_resid_merge import calc_resid_matrix
 from . import relocation
