@@ -541,6 +541,8 @@ def extract_superres_shifted_deconv(
     geom=None,
     subtraction_h5=None,
     n_jobs=-1,
+    t_start=0,
+    t_end=None
 ):
     """
     This is a wrapper that helps us deal with the bookkeeping for proposed
@@ -627,6 +629,8 @@ def extract_superres_shifted_deconv(
         pbar=pbar,
         nn_denoise=nn_denoise,
         seed=0,
+        t_start=t_start,
+        t_end=t_end
     )
     if save_residual:
         extract_h5, residual = ret
