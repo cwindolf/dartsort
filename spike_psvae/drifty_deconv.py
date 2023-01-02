@@ -110,7 +110,11 @@ def superres_denoised_templates(
         seed=seed,
         n_jobs=n_jobs,
     )
-    return templates, superres_label_to_bin_id, superres_label_to_orig_label
+    return (
+        templates,
+        superres_label_to_bin_id,
+        superres_label_to_orig_label,
+    )
 
 
 def shift_superres_templates(
@@ -181,7 +185,7 @@ def rigid_int_shift_deconv(
     print(f"{pitch=}")
 
     # integer probe-pitch shifts at each time bin
-    p = p[t_start:t_end]
+    p = p[t_start:t_end if t_end is not None else len(p)]
     pitch_shifts = (p - reference_displacement + pitch / 2) // pitch
     unique_shifts = np.unique(pitch_shifts)
 
@@ -441,6 +445,7 @@ def superres_deconv(
         deconv_scalings=deconv_scalings,
         superres_templates=superres_templates,
         superres_label_to_orig_label=superres_label_to_orig_label,
+        superres_label_to_bin_id=superres_label_to_bin_id,
         all_shifted_upsampled_temps=all_shifted_upsampled_temps,
         shifted_upsampled_idx_to_superres_id=shifted_upsampled_idx_to_superres_id,
         shifted_upsampled_idx_to_orig_id=shifted_upsampled_idx_to_orig_id,
@@ -665,6 +670,7 @@ def extract_superres_shifted_deconv(
             "superres_deconv_spike_train_shifted_upsampled",
             "superres_templates",
             "superres_label_to_orig_label",
+            "superres_label_to_bin_id",
             "all_shifted_upsampled_temps",
             "shifted_upsampled_idx_to_superres_id",
             "shifted_upsampled_idx_to_orig_id",
