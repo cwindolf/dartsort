@@ -6,9 +6,11 @@ from spikeinterface import NumpySorting
 from spikeinterface.postprocessing import compute_correlograms
 from spikeinterface.comparison import compare_two_sorters
 from matplotlib_venn import venn2
+from tqdm.auto import tqdm
+from . import spikeio, waveform_utils
 
 import matplotlib.transforms as transforms
-from matplotlib.patches import Ellipse
+from matplotlib.patches import Ellipse, Rectangle
 
 ccolors = cc.glasbey[:31]
 
@@ -177,6 +179,7 @@ def pgeom(
     chan_labels=None,
     linestyle=None,
     xlim_factor=1,
+    subar=False,
 ):
     """Plot waveforms according to geometry using channel index"""
     ax = ax or plt.gca()
@@ -213,6 +216,15 @@ def pgeom(
     geom_plot = geom * geom_scales
     t_domain = np.linspace(-T // 2, T // 2, num=T)
 
+    if subar:
+        if isinstance(subar, bool):
+            # auto su if True, but you can pass int/float too.
+            subars = (1, 2, 5, 10, 20, 30, 50)
+            for j in range(len(subars)):
+                if subars[j] > 1.2 * max_abs_amp:
+                    break
+            subar = subars[max(0, j - 1)]
+
     # -- and, plot
     draw = []
     unique_chans = set()
@@ -228,13 +240,18 @@ def pgeom(
             xmax = max(geom_plot[c, 0] + t_domain.max(), xmax)
             unique_chans.add(c)
     dx = xmax - xmin
-    ax.set_xlim([xmin + dx / 2 - xlim_factor * dx / 2, xmax - dx / 2 + xlim_factor * dx / 2])
+    ax.set_xlim(
+        [
+            xmin + dx / 2 - xlim_factor * dx / 2,
+            xmax - dx / 2 + xlim_factor * dx / 2,
+        ]
+    )
 
     ann_offset = np.array([0, 0.33 * inter_chan_z]) * geom_scales
     chan_labels = (
         chan_labels
         if chan_labels is not None
-        else [str(c) for c in unique_chans]
+        else list(map(str, range(len(geom))))
     )
     for c in unique_chans:
         if show_zero:
@@ -248,7 +265,248 @@ def pgeom(
         *draw, alpha=alpha, color=color, lw=lw, linestyle=linestyle
     )
 
+    if subar:
+        min_z = min(geom_plot[c, 1] for c in unique_chans)
+        ax.add_patch(
+            Rectangle(
+                [
+                    geom_plot[:, 0].max() + T // 4,
+                    min_z - max_abs_amp / 2,
+                ],
+                4,
+                subar,
+                fc="k",
+            )
+        )
+        ax.text(
+            geom_plot[:, 0].max() + T // 4 + 4 + 5,
+            min_z - max_abs_amp / 2 + subar / 2,
+            f"{subar} s.u.",
+            transform=ax.transData,
+            fontsize=5,
+            ha="left",
+            va="center",
+            rotation=-90,
+        )
+
     return lines
+
+
+def superres_template_viz(
+    orig_label,
+    superres_templates,
+    superres_label_to_orig_label,
+    superres_label_to_bin_id,
+    spike_train_orig,
+    geom,
+    radius=200,
+):
+    in_label = np.flatnonzero(superres_label_to_orig_label == orig_label)
+    max_bin = np.abs(superres_label_to_bin_id).max()
+    temps = superres_templates[in_label]
+    bin_ids = superres_label_to_bin_id[in_label]
+    colors = 0.5 + bin_ids / max_bin / 2
+    ns = (spike_train_orig[:, 1] == orig_label).sum()
+
+    channel_index = waveform_utils.make_channel_index(geom, radius)
+    avg_temp = temps.mean(0)
+    my_mc = avg_temp.ptp(0).argmax()
+
+    fig, ax = plt.subplots(figsize=(6, 6))
+    for temp, col in zip(temps, colors):
+        temp_pad = np.pad(temp, [(0, 0), (0, 1)], constant_values=np.nan)
+        pgeom(
+            temp_pad[:, channel_index[my_mc]],
+            my_mc,
+            channel_index,
+            geom,
+            ax=ax,
+            color=plt.cm.viridis(col),
+            max_abs_amp=np.abs(temps).max(),
+            subar=True,
+            show_chan_label=True,
+        )
+    ax.axis("off")
+    ax.set_title(
+        f"Superres templates for unit={orig_label}. {ns} spikes, {temps.ptp(1).max():0.1f} max ptp."
+    )
+
+    return fig, ax
+
+
+def superres_templates_viz(
+    superres_templates,
+    superres_label_to_orig_label,
+    superres_label_to_bin_id,
+    spike_train_orig,
+    output_directory,
+    geom,
+    radius=200,
+):
+    output_directory.mkdir(exist_ok=True)
+    for orig_label in tqdm(np.unique(superres_label_to_orig_label)):
+        fig, ax = superres_template_viz(
+            orig_label,
+            superres_templates,
+            superres_label_to_orig_label,
+            superres_label_to_bin_id,
+            spike_train_orig,
+            geom,
+            radius=radius,
+        )
+        fig.savefig(
+            output_directory / f"superres_unit{orig_label:03d}.png", dpi=300
+        )
+        plt.close(fig)
+
+
+def reassignment_viz(
+    orig_label,
+    spike_train_orig,
+    new_labels,
+    raw_bin,
+    geom,
+    radius=200,
+    n_plot=250,
+    z_extension=1.0,
+):
+    in_unit = np.flatnonzero(spike_train_orig[:, 1] == orig_label)
+    newids = new_labels[in_unit]
+    new_units = np.setdiff1d(np.unique(newids), [orig_label])
+    kept = newids == orig_label
+    # print(orig_label, new_units, np.unique(newids))
+    # print(in_unit.size, in_unit[kept].size)
+
+    fig, axes = plt.subplots(
+        ncols=1 + new_units.size, figsize=(8 * (1 + new_units.size), 8)
+    )
+    axes = np.atleast_1d(axes)
+
+    rg = np.random.default_rng(0)
+    channel_index = waveform_utils.make_channel_index(geom, radius)
+
+    orig_choices = rg.choice(
+        in_unit, size=min(n_plot, in_unit.size), replace=False
+    )
+    orig_wf, _ = spikeio.read_waveforms(
+        spike_train_orig[orig_choices, 0],
+        raw_bin,
+        geom.shape[0],
+        channel_index=None,
+        max_channels=None,
+        channels=None,
+    )
+    og_temp = orig_wf.mean(0)
+    og_mc = og_temp.ptp(0).argmax()
+    orig_wf = np.pad(orig_wf, [(0, 0), (0, 0), (0, 1)])[:, :, channel_index[og_mc]]
+    og_mcs = [og_mc] * orig_choices.size
+
+    kept_choices = rg.choice(
+        in_unit[kept], size=min(n_plot, in_unit[kept].size), replace=False
+    )
+    kept_wf, _ = spikeio.read_waveforms(
+        spike_train_orig[kept_choices, 0],
+        raw_bin,
+        geom.shape[0],
+        channels=channel_index[og_mc],
+    )
+    kept_mcs = [og_mc] * kept_choices.size
+    pgeom(
+        orig_wf,
+        og_mcs,
+        channel_index,
+        geom,
+        ax=axes[0],
+        color="k",
+        max_abs_amp=np.abs(orig_wf).max(),
+        lw=1,
+        alpha=0.1,
+        z_extension=z_extension,
+        show_zero=False,
+    )
+    if kept_choices.size:
+        pgeom(
+            kept_wf,
+            kept_mcs,
+            channel_index,
+            geom,
+            ax=axes[0],
+            color=cc.glasbey[0],
+            max_abs_amp=np.abs(orig_wf).max(),
+            lw=1,
+            alpha=0.1,
+            show_zero=False,
+            z_extension=z_extension,
+        )
+    axes[0].set_title(f"unit {orig_label} kept {kept.sum()}/{in_unit.size} ({100*kept.mean():0.1f}%)")
+
+    for j, (newu, ax) in enumerate(zip(new_units, axes.flat[1:])):
+        new_choices = rg.choice(
+            in_unit[newids == newu],
+            size=min(n_plot, in_unit[newids == newu].size),
+            replace=False,
+        )
+        axes[j + 1].set_title(f"{(newids == newu).sum()} spikes -> {newu}")
+        new_wf, _ = spikeio.read_waveforms(
+            spike_train_orig[new_choices, 0],
+            raw_bin,
+            geom.shape[0],
+            channels=channel_index[og_mc],
+        )
+        new_mcs = [og_mc] * new_choices.size
+        pgeom(
+            orig_wf,
+            og_mcs,
+            channel_index,
+            geom,
+            ax=axes[j + 1],
+            color="k",
+            lw=1,
+            alpha=0.1,
+            z_extension=z_extension,
+        )
+        if new_choices.size:
+            pgeom(
+                new_wf,
+                new_mcs,
+                channel_index,
+                geom,
+                ax=axes[j + 1],
+                color=cc.glasbey[j + 1],
+                max_abs_amp=np.abs(orig_wf).max(),
+                lw=1,
+                alpha=0.1,
+                show_zero=False,
+                z_extension=z_extension,
+            )
+
+    return fig, axes
+
+
+def reassignments_viz(
+    spike_train_orig,
+    new_labels,
+    raw_bin,
+    output_directory,
+    geom,
+    radius=200,
+    z_extension=1.0,
+):
+    output_directory.mkdir(exist_ok=True)
+    for orig_label in tqdm(np.unique(spike_train_orig[:, 1])):
+        fig, ax = reassignment_viz(
+            orig_label,
+            spike_train_orig,
+            new_labels,
+            raw_bin,
+            geom,
+            radius=radius,
+            z_extension=z_extension,
+        )
+        fig.savefig(
+            output_directory / f"reassign_unit{orig_label:03d}.png", dpi=300
+        )
+        plt.close(fig)
 
 
 def plot_waveforms_geom(
