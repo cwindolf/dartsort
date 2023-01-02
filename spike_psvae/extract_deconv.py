@@ -181,7 +181,11 @@ def extract_deconv(
 
     # create chunk feature objects
     denoised_tpca = None
-    if localize or (do_denoised_tpca and save_denoised_waveforms) or save_denoised_tpca_projs:
+    if (
+        localize
+        or (do_denoised_tpca and save_denoised_waveforms)
+        or save_denoised_tpca_projs
+    ):
         denoised_tpca = chunk_features.TPCA(
             tpca_rank, channel_index, "denoised"
         )
@@ -335,13 +339,13 @@ def extract_deconv(
                     np.load(result.resid_path).tofile(resid)
                     Path(result.resid_path).unlink()
 
-                if save_outlier_scores:
+                if save_outlier_scores and result.outlier_scores_path:
                     outlier_scores[result.inds] = np.load(
                         result.outlier_scores_path
                     )
                     Path(result.outlier_scores_path).unlink()
 
-                if do_reassignment:
+                if do_reassignment and result.reassignments_path:
                     reassigned_labels_up[result.inds] = np.load(
                         result.reassignments_path
                     )
@@ -349,8 +353,9 @@ def extract_deconv(
 
                 for f, dset in zip(featurizers, feature_dsets):
                     fnpy = temp_dir / f"{result.batch_prefix}_{f.name}.npy"
-                    dset[result.inds] = np.load(fnpy)
-                    Path(fnpy).unlink()
+                    if fnpy.exists():
+                        dset[result.inds] = np.load(fnpy)
+                        Path(fnpy).unlink()
 
     if save_residual:
         resid.close()
@@ -397,6 +402,23 @@ def _extract_deconv_worker(start_sample):
         end_sample + buffer_right,
         p.n_chans,
     )
+
+    # if no spikes, bail early now before padding the residual
+    if not spike_train.size:
+        if p.save_residual:
+            np.save(
+                p.temp_dir / f"resid_{batch_str}.npy",
+                resid,
+            )
+        return JobResult(
+            end_sample,
+            batch_str,
+            p.temp_dir / f"resid_{batch_str}.npy",
+            None,
+            None,
+            which_spikes,
+        )
+
     # pad left/right if necessary
     # note, for spikes which end up loading in this buffer,
     # the localizations will be junk.
