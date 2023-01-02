@@ -52,8 +52,6 @@ def extract_deconv(
     pbar=True,
     nn_denoise=True,
     seed=0,
-    t_start=0,
-    t_end=None,
 ):
     standardized_bin = Path(standardized_bin)
     output_directory = Path(output_directory)
@@ -73,14 +71,11 @@ def extract_deconv(
     else:
         scalings = np.ones(n_spikes, dtype=templates_up.dtype)
 
-    if t_end:
-        T_samples=int(t_end*sampling_rate)
-    else:
-        std_size = standardized_bin.stat().st_size
-        assert not std_size % np.dtype(np.float32).itemsize
-        std_size = std_size // np.dtype(np.float32).itemsize
-        assert not std_size % n_chans
-        T_samples = std_size // n_chans
+    std_size = standardized_bin.stat().st_size
+    assert not std_size % np.dtype(np.float32).itemsize
+    std_size = std_size // np.dtype(np.float32).itemsize
+    assert not std_size % n_chans
+    T_samples = std_size // n_chans
 
     if geom is None and subtraction_h5 is not None:
         with h5py.File(subtraction_h5, "r") as h5:
@@ -105,21 +100,17 @@ def extract_deconv(
     temp_dir.mkdir(exist_ok=True, parents=True)
 
     # are we resuming?
-    last_batch_end = int(t_start * sampling_rate)
+    last_batch_end = 0
     if out_h5.exists():
         with h5py.File(out_h5, "r") as h5:
             last_batch_end = h5["last_batch_end"][()]
 
     # determine jobs to run
     batch_length = n_sec_chunk * sampling_rate
-    print(last_batch_end, T_samples, batch_length)
     start_samples = range(last_batch_end, T_samples, batch_length)
-    print(start_samples)
     if not len(start_samples):
         print("Extraction already done")
-        if save_residual:
-            return out_h5, residual_path
-        return out_h5
+        return out_h5, residual_path
 
     # build spike index from templates and spike train
     templates_up_maxchans = templates_up.ptp(1).argmax(1)
@@ -253,7 +244,7 @@ def extract_deconv(
             seed=seed,
         )
 
-        if last_batch_end > t_start * sampling_rate:
+        if last_batch_end > 0:
             if save_outlier_scores:
                 outlier_scores = h5["outlier_scores"]
             if do_reassignment:
@@ -499,15 +490,14 @@ def _extract_deconv_worker(start_sample):
 
     # -- denoise them
     if p.do_denoise:
-        if len(waveforms):
-            waveforms = subtract.full_denoising(
-                waveforms,
-                spike_index[:, 1],
-                p.channel_index,
-                tpca=p.tpca,
-                device=p.device,
-                denoiser=p.denoiser,
-            )
+        waveforms = subtract.full_denoising(
+            waveforms,
+            spike_index[:, 1],
+            p.channel_index,
+            tpca=p.tpca,
+            device=p.device,
+            denoiser=p.denoiser,
+        )
 
         # compute and save features for denoised wfs
         for f in p.featurizers:
