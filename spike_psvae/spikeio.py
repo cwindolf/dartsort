@@ -204,6 +204,7 @@ def read_waveforms(
                 wf = np.pad(wf, [(0, 0), (0, 1)], constant_values=fill_value)
                 wf = wf[:, channel_index[max_channels[spike_ix]]]
             elif load_chans:
+                wf = np.pad(wf, [(0, 0), (0, 1)], constant_values=fill_value)
                 wf = wf[:, channels]
 
             waveforms[i] = wf
