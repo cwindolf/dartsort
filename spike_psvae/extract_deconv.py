@@ -13,6 +13,7 @@ from spike_psvae import (
     spikeio,
     waveform_utils,
     chunk_features,
+    reassignment,
 )
 
 
@@ -159,25 +160,10 @@ def extract_deconv(
             seed=seed,
         )
 
-        # we will make residuals on local chan neighborhoods corresponding
-        # to their upsampled template's maxchan, so get the templates for
-        # reassignment pairs on the same neighborhoods
-        reassignment_temps_up_loc = []
-        for up_mc, pairs in zip(
-            templates_up_maxchans, reassignment_proposed_pairs_up
-        ):
-            if not pairs.size:
-                reassignment_temps_up_loc.append(np.empty([]))
-                continue
-
-            ci_chans = channel_index[up_mc]
-            pair_temps_up = templates_up[pairs]
-            pair_temps_up_loc = np.pad(
-                pair_temps_up,
-                [(0, 0), (0, 0), (0, 1)],
-                constant_values=np.nan,
-            )[:, :, ci_chans]
-            reassignment_temps_up_loc.append(pair_temps_up_loc)
+        # get local views of templates for reassignment
+        reassignment_temps_up_loc = reassignment.reassignment_templates_local(
+            templates_up, reassignment_proposed_pairs_up, channel_index
+        )
 
     # create chunk feature objects
     denoised_tpca = None
@@ -463,7 +449,11 @@ def _extract_deconv_worker(start_sample):
         # outlier score is easy if we don't do reassignment
         if not p.do_reassignment and p.save_outlier_scores:
             outlier_scores = np.nanmax(
-                np.abs(apply_tpca(resid_waveforms, p.reassignment_tpca)),
+                np.abs(
+                    waveform_utils.apply_tpca(
+                        resid_waveforms, p.reassignment_tpca
+                    )
+                ),
                 axis=(1, 2),
             )
             np.save(
@@ -471,7 +461,9 @@ def _extract_deconv_worker(start_sample):
             )
 
         # now add the templates
-        waveforms = resid_waveforms + (
+        cleaned_waveforms = resid_waveforms
+        del resid_waveforms
+        cleaned_waveforms += (
             scalings[:, None, None] * p.templates_up_loc[spike_train[:, 1]]
         )
 
@@ -479,7 +471,7 @@ def _extract_deconv_worker(start_sample):
         for f in p.featurizers:
             feat = f.transform(
                 spike_index[:, 1],
-                cleaned_wfs=waveforms,
+                cleaned_wfs=cleaned_waveforms,
             )
             if feat is not None:
                 np.save(
@@ -489,43 +481,33 @@ def _extract_deconv_worker(start_sample):
 
     # -- reassign these waveforms
     if p.do_reassignment:
-        new_labels_up = spike_train[:, 1].copy()
-        outlier_scores = np.empty(len(spike_index), dtype=waveforms.dtype)
-        for j, (label, waveform) in enumerate(
-            zip(spike_train[:, 1], waveforms)
-        ):
-            pairs = p.reassignment_pairs_up[label]
-            if not pairs.size:
-                new_labels_up[j] = label
-                outlier_scores[j] = np.nanmax(np.abs(resid_waveforms[j]))
-                continue
-
-            resids = waveform[None, :, :] - p.reassignment_temps_up_loc[label]
-            scores = np.nanmax(
-                np.abs(apply_tpca(resids, p.reassignment_tpca)), axis=(1, 2)
-            )
-            best = scores.argmin()
-            new_labels_up[j] = pairs[best]
-            outlier_scores[j] = scores[best]
+        new_labels_up, outlier_scores = reassignment.reassign_waveforms(
+            spike_train[:, 1],
+            cleaned_waveforms,
+            p.reassignment_pairs_up,
+            p.reassignment_temps_up_loc,
+            tpca=p.reassignment_tpca,
+        )
         np.save(p.temp_dir / f"new_labels_up_{batch_str}.npy", new_labels_up)
         np.save(p.temp_dir / f"outlier_scores_{batch_str}.npy", outlier_scores)
 
     # -- denoise them
     if p.do_denoise:
-        waveforms = subtract.full_denoising(
-            waveforms,
+        denoised_waveforms = subtract.full_denoising(
+            cleaned_waveforms,
             spike_index[:, 1],
             p.channel_index,
             tpca=p.tpca,
             device=p.device,
             denoiser=p.denoiser,
         )
+        del cleaned_waveforms
 
         # compute and save features for denoised wfs
         for f in p.featurizers:
             feat = f.transform(
                 spike_index[:, 1],
-                denoised_wfs=waveforms,
+                denoised_wfs=denoised_waveforms,
             )
             if feat is not None:
                 np.save(
@@ -743,19 +725,3 @@ def xqdm(it, pbar=True, **kwargs):
         return tqdm(it, **kwargs)
     else:
         return it
-
-
-def apply_tpca(waveforms, tpca):
-    if tpca is None:
-        return waveforms
-    single = waveforms.ndim == 2
-    if single:
-        waveforms = waveforms[None]
-    n, t, c = waveforms.shape
-    waveforms = waveforms.transpose(0, 2, 1).reshape(n * c, t)
-    valid = ~np.isnan(waveforms).any(axis=1)
-    waveforms[valid] = tpca.inverse_transform(tpca.transform(waveforms[valid]))
-    waveforms = waveforms.reshape(n, c, t).transpose(0, 2, 1)
-    if single:
-        waveforms = waveforms[0]
-    return waveforms
