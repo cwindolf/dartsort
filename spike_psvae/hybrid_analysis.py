@@ -559,11 +559,11 @@ class Sorting:
         chan_labels=None,
     ):
         have_loc = self.spike_xzptp is not None
-        height_ratios = [1, 1, 3] if have_loc else [1, 3]
+        height_ratios = [1, 1, 2, 5] if have_loc else [1, 1, 5]
         fig, axes = plt.subplot_mosaic(
-            "aat\nxyz\nddd" if have_loc else "aat\nddd",
+            "aat\nbbt\nxyz\nddd" if have_loc else "aat\nbbt\nddd",
             gridspec_kw=dict(
-                height_ratios=[1, 2, 5] if have_loc else [1, 5],
+                height_ratios=height_ratios,
             ),
             figsize=(6, 2 * sum(height_ratios)),
         )
@@ -604,6 +604,9 @@ class Sorting:
 
         # ISI distribution
         cluster_viz.plot_isi_distribution(unit_st, ax=axes["a"], cdf=False)
+        cluster_viz_index.plot_ccg(
+            unit_st, ms_frames=self.fs / 1000, ax=axes["b"]
+        )
 
         # Scatter
         if have_loc:
@@ -685,6 +688,29 @@ class Sorting:
         axes["d"].set_yticks([])
 
         return fig, axes, self.template_maxptps[unit]
+
+    def make_unit_summaries(
+        self,
+        out_folder,
+        dz=50,
+        nchans=16,
+        n_wfs_max=100,
+        show_chan_label=True,
+        chan_labels=None,
+    ):
+        out_folder = Path(out_folder)
+        out_folder.mkdir(exist_ok=True)
+        for unit in tqdm(self.unit_labels, desc="Unit summaries"):
+            fig, axes, ptp = self.unit_summary_fig(
+                unit,
+                dz=dz,
+                nchans=nchans,
+                n_wfs_max=n_wfs_max,
+                show_chan_label=show_chan_label,
+                chan_labels=chan_labels,
+            )
+            fig.savefig(out_folder / f"{self.name_lo}_unit{unit:03d}.png", dpi=300)
+            plt.close(fig)
 
 
 class HybridComparison:
@@ -1122,13 +1148,19 @@ def calc_resid_matrix(
     if normalized:
         rms_a = np.array(
             [
-                np.sqrt(np.square(templates_a[ua]).sum() / (np.abs(templates_a[ua]) > 0).sum())
+                np.sqrt(
+                    np.square(templates_a[ua]).sum()
+                    / (np.abs(templates_a[ua]) > 0).sum()
+                )
                 for ua in units_a
             ]
         )
         rms_b = np.array(
             [
-                np.sqrt(np.square(templates_b[ub]).sum() / (np.abs(templates_b[ub]) > 0).sum())
+                np.sqrt(
+                    np.square(templates_b[ub]).sum()
+                    / (np.abs(templates_b[ub]) > 0).sum()
+                )
                 for ub in units_b
             ]
         )
@@ -1254,7 +1286,7 @@ def gtunit_resid_study(
     lambd=0.001,
     allowed_scale=0.1,
     tmin=10,
-    tmax=100
+    tmax=100,
 ):
     gt_temp = hybrid_comparison.gt_sorting.templates[gt_unit]
     thresh = (
