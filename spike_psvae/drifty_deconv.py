@@ -4,9 +4,8 @@ import tempfile
 from pathlib import Path
 from tqdm.auto import tqdm
 import multiprocessing
-from . import deconvolve, snr_templates, spike_train_utils
+from . import deconvolve, snr_templates, spike_train_utils, reassignment
 from .waveform_utils import get_pitch, pitch_shift_templates
-from .deconv_resid_merge import calc_resid_matrix
 from .extract_deconv import extract_deconv
 
 
@@ -470,30 +469,16 @@ def superres_propose_pairs(
     n_superres_templates = superres_templates.shape[0]
     assert superres_label_to_orig_label.shape == (n_superres_templates,)
 
-    # shifts[i, j] is like trough[j] - trough[i]
-    deconv_threshold = deconv_threshold_mul * np.min(
-        np.square(superres_templates).sum(axis=(1, 2))
-    )
-    resids, shifts = calc_resid_matrix(
-        superres_templates,
-        np.arange(n_superres_templates),
-        superres_templates,
-        np.arange(n_superres_templates),
-        thresh=deconv_threshold,
-        n_jobs=n_jobs,
-        vis_ptp_thresh=1,
-        auto=True,
-        pbar=True,
-        lambd=lambd,
-        allowed_scale=allowed_scale,
-    )
-
     # which pairs of superres templates are close enough?
     # list of superres template indices of length n_superres_templates
-    superres_pairs = [
-        np.flatnonzero(resids[i] <= max_resid_dist)
-        for i in range(n_superres_templates)
-    ]
+    superres_pairs = reassignment.propose_pairs(
+        superres_templates,
+        max_resid_dist=5,
+        lambd=0.001,
+        allowed_scale=0.1,
+        deconv_threshold_mul=0.9,
+        n_jobs=-1,
+    )
 
     # which pairs of units have superres pairs which are close enough?
     # list of unit indices of length n_units = np.unique(superres_label_to_orig_label).size

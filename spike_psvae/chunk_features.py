@@ -324,6 +324,12 @@ class TPCA(ChunkFeature):
         self.out_shape = (self.rank, self.C)
         self.tpca = PCA(self.rank, random_state=self.random_state)
 
+    def __str__(self):
+        if self.needs_fit:
+            return f"TPCA(needs_fit=True, C={self.C}, PCA={self.tpca})"
+        else:
+            return f"TPCA(needs_fit=False, T={self.T}, C={self.C}, PCA={self.tpca})"
+
     def fit(
         self,
         max_channels=None,

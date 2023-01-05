@@ -16,7 +16,7 @@ from sklearn.discriminant_analysis import LinearDiscriminantAnalysis as LDA
 from .multiprocessing_utils import MockPoolExecutor
 from .waveform_utils import get_channel_subset
 from .isocut5 import isocut5
-# from .subtraction_feats import TPCA
+from .chunk_features import TPCA
 from .snr_templates import get_raw_template_single
 from .deconv_resid_merge import calc_resid_matrix
 from . import relocation
@@ -554,9 +554,12 @@ def lda_diptest_merge(
     max_spikes=250,
     threshold_diptest=0.5,
     relocated=False,
-    x=None, y=None, z_abs=None, z_reg=None, alpha=None, geom=None, T=121,
+    x=None, y=None, z_abs=None, z_reg=None, alpha=None, geom=None,
     seed=0,
 ):
+    T = template_a.shape[0]
+    assert template_b.shape == template_a.shape
+
     # randomly subset waveforms to balance the problem
     rg = np.random.default_rng(seed)
     max_spikes = min(max_spikes, in_unit_a.size, in_unit_b.size)
@@ -729,7 +732,8 @@ def merge_clusters(
     waveforms_kind="cleaned",
     recursive=True,
     relocated=False,
-    T=121,
+    trough_offset=42,
+    n_jobs=-1,
 ):
 
     orig_labels, orig_counts = np.unique(
@@ -745,6 +749,7 @@ def merge_clusters(
     # turn templates into a dict for this step
     snrs = templates.ptp(1).max(1) * np.sqrt(orig_counts)
     templates_dict = {i: templates[i] for i in orig_labels}
+    spike_length_samples = templates.shape[1]
     del templates
 
     # load some stuff from the h5
@@ -780,7 +785,7 @@ def merge_clusters(
             labels_to_process,
             templates_dict,
             max_resid_dist=proposal_max_resid_dist,
-            # n_jobs=1,
+            n_jobs=n_jobs,
         )
         # print(label, proposals.size)
 
@@ -804,7 +809,7 @@ def merge_clusters(
                 channel_index,
                 threshold_diptest=threshold_diptest,
                 relocated=relocated,
-                x=x, y=y, z_abs=z_abs, z_reg=z_reg, alpha=alpha, geom=geom, T=T
+                x=x, y=y, z_abs=z_abs, z_reg=z_reg, alpha=alpha, geom=geom,
             )
 
             if is_merge:
@@ -833,6 +838,8 @@ def merge_clusters(
                     aligned_times[new_labels == label],
                     raw_data_bin,
                     n_channels,
+                    trough_offset=trough_offset,
+                    spike_length_samples=spike_length_samples,
                 )
 
                 if recursive:

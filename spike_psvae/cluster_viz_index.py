@@ -1,4 +1,5 @@
 import numpy as np
+import h5py
 import matplotlib.pyplot as plt
 import colorcet as cc
 from scipy.spatial.distance import cdist
@@ -7,7 +8,8 @@ from spikeinterface.postprocessing import compute_correlograms
 from spikeinterface.comparison import compare_two_sorters
 from matplotlib_venn import venn2
 from tqdm.auto import tqdm
-from . import spikeio, waveform_utils
+from . import spikeio, waveform_utils, chunk_features
+from .pyks_ccg import ccg
 
 import matplotlib.transforms as transforms
 from matplotlib.patches import Ellipse, Rectangle
@@ -369,6 +371,8 @@ def reassignment_viz(
     radius=200,
     n_plot=250,
     z_extension=1.0,
+    trough_offset=42,
+    spike_length_samples=121,
 ):
     in_unit = np.flatnonzero(spike_train_orig[:, 1] == orig_label)
     newids = new_labels[in_unit]
@@ -395,10 +399,14 @@ def reassignment_viz(
         channel_index=None,
         max_channels=None,
         channels=None,
+        trough_offset=trough_offset,
+        spike_length_samples=spike_length_samples,
     )
     og_temp = orig_wf.mean(0)
     og_mc = og_temp.ptp(0).argmax()
-    orig_wf = np.pad(orig_wf, [(0, 0), (0, 0), (0, 1)])[:, :, channel_index[og_mc]]
+    orig_wf = np.pad(orig_wf, [(0, 0), (0, 0), (0, 1)])[
+        :, :, channel_index[og_mc]
+    ]
     og_mcs = [og_mc] * orig_choices.size
 
     kept_choices = rg.choice(
@@ -409,6 +417,8 @@ def reassignment_viz(
         raw_bin,
         geom.shape[0],
         channels=channel_index[og_mc],
+        trough_offset=trough_offset,
+        spike_length_samples=spike_length_samples,
     )
     kept_mcs = [og_mc] * kept_choices.size
     pgeom(
@@ -438,7 +448,9 @@ def reassignment_viz(
             show_zero=False,
             z_extension=z_extension,
         )
-    axes[0].set_title(f"unit {orig_label} kept {kept.sum()}/{in_unit.size} ({100*kept.mean():0.1f}%)")
+    axes[0].set_title(
+        f"unit {orig_label} kept {kept.sum()}/{in_unit.size} ({100*kept.mean():0.1f}%)"
+    )
 
     for j, (newu, ax) in enumerate(zip(new_units, axes.flat[1:])):
         new_choices = rg.choice(
@@ -452,6 +464,8 @@ def reassignment_viz(
             raw_bin,
             geom.shape[0],
             channels=channel_index[og_mc],
+            trough_offset=trough_offset,
+            spike_length_samples=spike_length_samples,
         )
         new_mcs = [og_mc] * new_choices.size
         pgeom(
@@ -491,6 +505,8 @@ def reassignments_viz(
     geom,
     radius=200,
     z_extension=1.0,
+    trough_offset=42,
+    spike_length_samples=121,
 ):
     output_directory.mkdir(exist_ok=True)
     for orig_label in tqdm(np.unique(spike_train_orig[:, 1])):
@@ -502,11 +518,39 @@ def reassignments_viz(
             geom,
             radius=radius,
             z_extension=z_extension,
+            trough_offset=trough_offset,
+            spike_length_samples=spike_length_samples,
         )
         fig.savefig(
             output_directory / f"reassign_unit{orig_label:03d}.png", dpi=300
         )
         plt.close(fig)
+
+
+def unsorted_waveforms_diagnostic(
+    subtraction_h5, raw_bin, nwfs=50, cutoff=15, trough_offset=42
+):
+    rg = np.random.default_rng(0)
+
+    with h5py.File(subtraction_h5) as h5:
+        maxptps = h5["maxptps"][:]
+        which_high_amp = np.flatnonzero(maxptps > cutoff)
+        which_high_amp = rg.choice(
+            which_high_amp, size=min(nwfs, which_high_amp.size), replace=False
+        )
+        which_low_amp = np.flatnonzero(maxptps < cutoff)
+        which_low_amp = rg.choice(
+            which_low_amp, size=min(nwfs, which_low_amp.size), replace=False
+        )
+
+        # load denoised waveforms
+        tpca = chunk_features.TPCA(which_waveforms="denoised")
+        tpca.from_h5(h5)
+
+        # load raw waveforms
+        raw_high = spikeio.read_waveforms()
+
+    raise NotImplementedError
 
 
 def plot_waveforms_geom(
@@ -633,6 +677,19 @@ def plot_waveforms_geom(
             alpha=alpha,
             c=color,
         )
+
+
+def plot_ccg(times, nbins=50, ms_frames=30, ax=None):
+    ax = ax or plt.gca()
+    nbins = 50
+    ccg_ = ccg(times, times, nbins, ms_frames)
+    ccg_[nbins] = 0
+
+    ax.bar(
+        np.arange(nbins * 2 + 1) - nbins, ccg_, width=1, ec="none"
+    )
+    ax.set_xlabel("isi (ms)")
+    ax.set_ylabel("autocorrelogram count")
 
 
 single_unit_mosaic = """\
