@@ -44,8 +44,8 @@ def subtraction(
     # should we start over?
     overwrite=False,
     # waveform args
-    spike_length_samples=121,
     trough_offset=42,
+    spike_length_samples=121,
     # tpca args
     tpca_rank=8,
     n_sec_pca=10,
@@ -369,7 +369,6 @@ def subtraction(
         with timer("Training TPCA..."), torch.no_grad():
             train_featurizers(
                 standardized_bin,
-                spike_length_samples,
                 extract_channel_index,
                 geom,
                 radial_parents,
@@ -393,6 +392,8 @@ def subtraction(
                 random_seed=random_seed,
                 device=device,
                 binary_dtype=binary_dtype,
+                trough_offset=trough_offset,
+                spike_length_samples=spike_length_samples,
                 dtype=dtype,
             )
 
@@ -414,7 +415,6 @@ def subtraction(
         if any(f.needs_fit for f in extra_features + fit_feats):
             train_featurizers(
                 standardized_bin,
-                spike_length_samples,
                 extract_channel_index,
                 geom,
                 radial_parents,
@@ -439,6 +439,8 @@ def subtraction(
                 device=device,
                 binary_dtype=binary_dtype,
                 dtype=dtype,
+                trough_offset=trough_offset,
+                spike_length_samples=spike_length_samples,
             )
 
     # if we're on GPU, we can't use processes, since each process will
@@ -504,8 +506,8 @@ def subtraction(
                 thresholds,
                 subtracted_tpca_feat.tpca,
                 denoised_tpca_feat.tpca if do_clean else None,
-                trough_offset,
                 dedup_channel_index,
+                trough_offset,
                 spike_length_samples,
                 extract_channel_index,
                 start_sample,
@@ -681,8 +683,8 @@ def subtraction_batch(
     thresholds,
     subtracted_tpca,
     denoised_tpca,
-    trough_offset,
     dedup_channel_index,
+    trough_offset,
     spike_length_samples,
     extract_channel_index,
     start_sample,
@@ -972,7 +974,6 @@ def subtraction_batch(
 
 def train_featurizers(
     standardized_bin,
-    spike_length_samples,
     extract_channel_index,
     geom,
     radial_parents,
@@ -996,6 +997,7 @@ def train_featurizers(
     denoiser_init_kwargs={},
     denoiser_weights_path=None,
     trough_offset=42,
+    spike_length_samples=121,
     binary_dtype=np.float32,
     dtype=np.float32,
 ):
@@ -1047,8 +1049,8 @@ def train_featurizers(
             thresholds=thresholds,
             subtracted_tpca=subtracted_tpca,
             denoised_tpca=None,
-            trough_offset=trough_offset,
             dedup_channel_index=dedup_channel_index,
+            trough_offset=trough_offset,
             spike_length_samples=spike_length_samples,
             extract_channel_index=extract_channel_index,
             start_sample=0,

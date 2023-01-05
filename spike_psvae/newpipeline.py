@@ -41,6 +41,10 @@ def new_merge_split(
     herding_clust="hdbscan",
     merge_resid_threshold=2.0,
     relocated=False,
+    trough_offset=42,
+    spike_length_samples=121,
+    maxchan_split=True,
+    max_shift=20,
 ):
     (
         aligned_spike_train,
@@ -51,15 +55,28 @@ def new_merge_split(
         spike_train,
         n_channels,
         raw_bin,
+        trough_offset=trough_offset,
+        spike_length_samples=spike_length_samples,
     )
 
-    new_labels = before_deconv_merge_split.split_clusters(
-        aligned_spike_train[:, 1],
-        raw_bin,
-        sub_h5,
-        n_workers=n_workers,
-        relocated=relocated,
-    )
+    if maxchan_split:
+        new_labels = before_deconv_merge_split.split_clusters(
+            aligned_spike_train[:, 1],
+            raw_bin,
+            sub_h5,
+            n_workers=n_workers,
+            relocated=relocated,
+        )
+    else:
+        new_labels = before_deconv_merge_split.split_clusters(
+            aligned_spike_train[:, 1],
+            raw_bin,
+            sub_h5,
+            n_workers=n_workers,
+            relocated=relocated,
+            split_steps=(before_deconv_merge_split.herding_split,),
+            recursive_steps=(False,),
+        )
 
     (
         aligned_spike_train2,
@@ -70,6 +87,8 @@ def new_merge_split(
         np.c_[aligned_spike_train[:, 0], new_labels],
         n_channels,
         raw_bin,
+        trough_offset=trough_offset,
+        spike_length_samples=spike_length_samples,
     )
 
     assert (order == np.arange(len(order))).all()
@@ -85,6 +104,8 @@ def new_merge_split(
         aligned_spike_train2[:, 1],
         templates,
         relocated=relocated,
+        trough_offset=trough_offset,
+        n_jobs=n_workers,
     )
 
     (
@@ -96,7 +117,9 @@ def new_merge_split(
         np.c_[aligned_spike_train2[:, 0], new_labels],
         n_channels,
         raw_bin,
-        max_shift=20,
+        max_shift=max_shift,
+        trough_offset=trough_offset,
+        spike_length_samples=spike_length_samples,
     )
 
     kept = aligned_spike_train3[:, 1] >= 0
@@ -106,6 +129,8 @@ def new_merge_split(
         raw_bin,
         templates.ptp(1).argmax(1),
         merge_resid_threshold=merge_resid_threshold,
+        trough_offset=trough_offset,
+        spike_length_samples=spike_length_samples,
     )
     aligned_spike_train3[kept, 0] = times_updated
     aligned_spike_train3[kept, 1] = labels_updated
@@ -119,7 +144,9 @@ def new_merge_split(
         aligned_spike_train3,
         n_channels,
         raw_bin,
-        max_shift=20,
+        max_shift=max_shift,
+        trough_offset=trough_offset,
+        spike_length_samples=spike_length_samples,
     )
     order = order[reorder]
 

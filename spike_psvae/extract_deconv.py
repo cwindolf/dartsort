@@ -525,29 +525,6 @@ def _extract_deconv_worker(start_sample):
     )
 
 
-def temporal_align(waveforms, maxchans, offset=42):
-    N, T, C = waveforms.shape
-    offsets = np.abs(waveforms[np.arange(N), :, maxchans]).argmax(1)
-    rolls = offset - offsets
-    out = np.empty_like(waveforms)
-    pads = [(0, 0), (0, 0)]
-    for i, roll in enumerate(rolls):
-        if roll > 0:
-            pads[0] = (roll, 0)
-            start, end = 0, T
-        elif roll < 0:
-            pads[0] = (0, -roll)
-            start, end = -roll, T - roll
-        else:
-            out[i] = waveforms[i]
-            continue
-
-        pwf = np.pad(waveforms[i], pads, mode="linear_ramp")
-        out[i] = pwf[start:end, :]
-
-    return out
-
-
 def _extract_deconv_init(
     geom,
     device,
