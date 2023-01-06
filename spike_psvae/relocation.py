@@ -4,6 +4,7 @@
 import numpy as np
 # from numba import njit
 from .waveform_utils import get_pitch
+from .spikeio import read_waveforms
 
 
 def point_source_ptp(xyza, wf_channels, geom, fill_value=np.nan):
@@ -112,6 +113,72 @@ def get_relocated_waveforms_on_channel_subset(
     )
 
     return shifted_waveforms
+
+
+def load_relocated_waveforms_on_channel_subset(
+    spike_index,
+    raw_bin,
+    xyza_from,
+    z_to,
+    geom,
+    target_channels,
+    fill_value=np.nan,
+    trough_offset=42,
+    spike_length_samples=121,
+):
+    """Relocated waveforms on a specific group of channels `target_channels`
+    """
+    assert spike_index.shape[0] == xyza_from.shape[0] == z_to.shape[0]
+    # we will handle the "integer part" of the drift by just grabbing
+    # different channels in the waveforms, and the remainder by point
+    # source relocation
+    z_drift = z_to - xyza_from[:, 2]
+    pitch = get_pitch(geom)
+    # want to round towards 0, not //
+    n_pitches_shift = (z_drift / pitch).astype(int)
+    z_drift_rem = z_drift - pitch * n_pitches_shift
+
+    # -- first, handle the integer part of the shift
+    # we want to grab the original channels which would land on the target channels
+    # after shifting by n_pitches_shift. this is per-waveform, then.
+    # start by finding the channel neighborhoods for each unique value of n_pitches_shift
+    pitches_shift_uniq, pitch_index = np.unique(
+        n_pitches_shift, return_inverse=True
+    )
+    orig_chans_uniq = np.array(
+        [
+            shifted_chans(pitches_shift, target_channels, geom)
+            for pitches_shift in pitches_shift_uniq
+        ]
+    )
+    orig_chans = orig_chans_uniq[pitch_index]
+
+    # now, grab the waveforms on those channels.
+    shifted_waveforms, skipped = read_waveforms(
+        spike_index[:, 0],
+        raw_bin,
+        geom.shape[0],
+        channels=orig_chans,
+        trough_offset=trough_offset,
+        spike_length_samples=spike_length_samples,
+        fill_value=fill_value,
+    )
+    kept = np.setdiff1d(np.arange(len(spike_index)), skipped)
+
+    # -- now, the remaining shift is done with point source
+    xyza_cur = xyza_from[kept].copy()
+    xyza_cur[:, 2] += pitch * n_pitches_shift
+    xyza_to = xyza_cur.copy()
+    xyza_to[:, 2] += z_drift_rem[kept]
+    shifted_waveforms = relocate_simple(
+        shifted_waveforms,
+        xyza_cur,
+        xyza_to,
+        geom,
+        wf_channels=target_channels,
+    )
+
+    return shifted_waveforms, skipped
 
 
 # @njit(cache=False)
