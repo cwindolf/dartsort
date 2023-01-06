@@ -13,7 +13,6 @@ import logging
 import pandas as pd
 from sklearn.decomposition import PCA
 from tqdm.auto import tqdm
-from copy import copy
 
 try:
     from spikeglx import _geometry_from_meta, read_meta_data
@@ -23,7 +22,7 @@ except ImportError:
     except ImportError:
         raise ImportError("Can't find spikeglx...")
 
-from . import denoise, detect, localize_index, subtraction_feats
+from . import denoise, detect, localize_index, chunk_features
 from .multiprocessing_utils import MockPoolExecutor, MockQueue
 from .spikeio import get_binary_length, read_data, read_waveforms_in_memory
 from .waveform_utils import make_channel_index, make_contiguous_channel_index
@@ -32,9 +31,9 @@ _logger = logging.getLogger(__name__)
 
 
 default_extra_feats = [
-    subtraction_feats.MaxPTP,
-    subtraction_feats.TroughDepth,
-    subtraction_feats.PeakHeight,
+    chunk_features.MaxPTP,
+    chunk_features.TroughDepth,
+    chunk_features.PeakHeight,
 ]
 
 
@@ -45,8 +44,8 @@ def subtraction(
     # should we start over?
     overwrite=False,
     # waveform args
-    spike_length_samples=121,
     trough_offset=42,
+    spike_length_samples=121,
     # tpca args
     tpca_rank=8,
     n_sec_pca=10,
@@ -159,7 +158,7 @@ def subtraction(
         ]
     if save_denoised_ptp_vectors:
         extra_features += [
-            subtraction_feats.PTPVector(which_waveforms="denoised")
+            chunk_features.PTPVector(which_waveforms="denoised")
         ]
 
     if neighborhood_kind not in ("firstchan", "box", "circle"):
@@ -294,7 +293,7 @@ def subtraction(
     if localization_kind in ("original", "logbarrier"):
         print("Using", localization_kind, "localization")
         extra_features += [
-            subtraction_feats.Localization(
+            chunk_features.Localization(
                 geom,
                 extract_channel_index,
                 loc_n_chans=localize_firstchan_n_channels
@@ -319,14 +318,14 @@ def subtraction(
     for do_save, kind in zip(wf_bools, wf_names):
         if do_save:
             extra_features += [
-                subtraction_feats.Waveform(
+                chunk_features.Waveform(
                     which_waveforms=kind,
                 )
             ]
 
     # see if we are asked to save tpca projs for
     # collision-cleaned or denoised waveforms
-    subtracted_tpca_feat = subtraction_feats.TPCA(
+    subtracted_tpca_feat = chunk_features.TPCA(
         tpca_rank,
         extract_channel_index,
         which_waveforms="subtracted",
@@ -336,7 +335,7 @@ def subtraction(
         extra_features += [subtracted_tpca_feat]
     if save_cleaned_tpca_projs:
         extra_features += [
-            subtraction_feats.TPCA(
+            chunk_features.TPCA(
                 tpca_rank,
                 extract_channel_index,
                 which_waveforms="cleaned",
@@ -345,7 +344,7 @@ def subtraction(
         ]
     fit_feats = []
     if do_clean:
-        denoised_tpca_feat = subtraction_feats.TPCA(
+        denoised_tpca_feat = chunk_features.TPCA(
             tpca_rank,
             extract_channel_index,
             which_waveforms="denoised",
@@ -370,7 +369,6 @@ def subtraction(
         with timer("Training TPCA..."), torch.no_grad():
             train_featurizers(
                 standardized_bin,
-                spike_length_samples,
                 extract_channel_index,
                 geom,
                 radial_parents,
@@ -394,6 +392,8 @@ def subtraction(
                 random_seed=random_seed,
                 device=device,
                 binary_dtype=binary_dtype,
+                trough_offset=trough_offset,
+                spike_length_samples=spike_length_samples,
                 dtype=dtype,
             )
 
@@ -415,7 +415,6 @@ def subtraction(
         if any(f.needs_fit for f in extra_features + fit_feats):
             train_featurizers(
                 standardized_bin,
-                spike_length_samples,
                 extract_channel_index,
                 geom,
                 radial_parents,
@@ -440,6 +439,8 @@ def subtraction(
                 device=device,
                 binary_dtype=binary_dtype,
                 dtype=dtype,
+                trough_offset=trough_offset,
+                spike_length_samples=spike_length_samples,
             )
 
     # if we're on GPU, we can't use processes, since each process will
@@ -505,8 +506,8 @@ def subtraction(
                 thresholds,
                 subtracted_tpca_feat.tpca,
                 denoised_tpca_feat.tpca if do_clean else None,
-                trough_offset,
                 dedup_channel_index,
+                trough_offset,
                 spike_length_samples,
                 extract_channel_index,
                 start_sample,
@@ -682,8 +683,8 @@ def subtraction_batch(
     thresholds,
     subtracted_tpca,
     denoised_tpca,
-    trough_offset,
     dedup_channel_index,
+    trough_offset,
     spike_length_samples,
     extract_channel_index,
     start_sample,
@@ -973,7 +974,6 @@ def subtraction_batch(
 
 def train_featurizers(
     standardized_bin,
-    spike_length_samples,
     extract_channel_index,
     geom,
     radial_parents,
@@ -997,6 +997,7 @@ def train_featurizers(
     denoiser_init_kwargs={},
     denoiser_weights_path=None,
     trough_offset=42,
+    spike_length_samples=121,
     binary_dtype=np.float32,
     dtype=np.float32,
 ):
@@ -1048,8 +1049,8 @@ def train_featurizers(
             thresholds=thresholds,
             subtracted_tpca=subtracted_tpca,
             denoised_tpca=None,
-            trough_offset=trough_offset,
             dedup_channel_index=dedup_channel_index,
+            trough_offset=trough_offset,
             spike_length_samples=spike_length_samples,
             extract_channel_index=extract_channel_index,
             start_sample=0,

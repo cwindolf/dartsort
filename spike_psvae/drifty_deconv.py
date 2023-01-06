@@ -4,9 +4,8 @@ import tempfile
 from pathlib import Path
 from tqdm.auto import tqdm
 import multiprocessing
-from . import deconvolve, snr_templates, spike_train_utils
+from . import deconvolve, snr_templates, spike_train_utils, reassignment
 from .waveform_utils import get_pitch, pitch_shift_templates
-from .deconv_resid_merge import calc_resid_matrix
 from .extract_deconv import extract_deconv
 
 
@@ -110,7 +109,11 @@ def superres_denoised_templates(
         seed=seed,
         n_jobs=n_jobs,
     )
-    return templates, superres_label_to_bin_id, superres_label_to_orig_label
+    return (
+        templates,
+        superres_label_to_bin_id,
+        superres_label_to_orig_label,
+    )
 
 
 def shift_superres_templates(
@@ -166,8 +169,8 @@ def rigid_int_shift_deconv(
     templates=None,
     template_index_to_unit_id=None,
     # need to implement
-    # t_start=0,
-    # t_end=None,
+    t_start=0,
+    t_end=None,
     n_jobs=1,
     trough_offset=42,
     spike_length_samples=121,
@@ -181,6 +184,7 @@ def rigid_int_shift_deconv(
     print(f"{pitch=}")
 
     # integer probe-pitch shifts at each time bin
+    p = p[t_start:t_end if t_end is not None else len(p)]
     pitch_shifts = (p - reference_displacement + pitch / 2) // pitch
     unique_shifts = np.unique(pitch_shifts)
 
@@ -231,8 +235,8 @@ def rigid_int_shift_deconv(
             templates=temps,
             deconv_dir=deconv_dir,
             standardized_bin=raw_bin,
-            t_start=0,
-            t_end=None,
+            t_start=t_start,
+            t_end=t_end,
             n_sec_chunk=1,
             sampling_rate=pfs,
             max_iter=1000,
@@ -348,8 +352,8 @@ def superres_deconv(
     pfs=30_000,
     reference_displacement=0,
     # need to implement
-    # t_start=0,
-    # t_end=None,
+    t_start=0,
+    t_end=None,
     n_jobs=1,
     trough_offset=42,
     spike_length_samples=121,
@@ -397,8 +401,8 @@ def superres_deconv(
         spike_train=None,
         templates=superres_templates,
         # need to implement
-        # t_start=0,
-        # t_end=None,
+        t_start=t_start,
+        t_end=t_end,
         n_jobs=n_jobs,
         trough_offset=trough_offset,
         spike_length_samples=spike_length_samples,
@@ -440,6 +444,7 @@ def superres_deconv(
         deconv_scalings=deconv_scalings,
         superres_templates=superres_templates,
         superres_label_to_orig_label=superres_label_to_orig_label,
+        superres_label_to_bin_id=superres_label_to_bin_id,
         all_shifted_upsampled_temps=all_shifted_upsampled_temps,
         shifted_upsampled_idx_to_superres_id=shifted_upsampled_idx_to_superres_id,
         shifted_upsampled_idx_to_orig_id=shifted_upsampled_idx_to_orig_id,
@@ -464,30 +469,16 @@ def superres_propose_pairs(
     n_superres_templates = superres_templates.shape[0]
     assert superres_label_to_orig_label.shape == (n_superres_templates,)
 
-    # shifts[i, j] is like trough[j] - trough[i]
-    deconv_threshold = deconv_threshold_mul * np.min(
-        np.square(superres_templates).sum(axis=(1, 2))
-    )
-    resids, shifts = calc_resid_matrix(
-        superres_templates,
-        np.arange(n_superres_templates),
-        superres_templates,
-        np.arange(n_superres_templates),
-        thresh=deconv_threshold,
-        n_jobs=n_jobs,
-        vis_ptp_thresh=1,
-        auto=True,
-        pbar=True,
-        lambd=lambd,
-        allowed_scale=allowed_scale,
-    )
-
     # which pairs of superres templates are close enough?
     # list of superres template indices of length n_superres_templates
-    superres_pairs = [
-        np.flatnonzero(resids[i] <= max_resid_dist)
-        for i in range(n_superres_templates)
-    ]
+    superres_pairs = reassignment.propose_pairs(
+        superres_templates,
+        max_resid_dist=5,
+        lambd=0.001,
+        allowed_scale=0.1,
+        deconv_threshold_mul=0.9,
+        n_jobs=-1,
+    )
 
     # which pairs of units have superres pairs which are close enough?
     # list of unit indices of length n_units = np.unique(superres_label_to_orig_label).size
@@ -509,7 +500,6 @@ def superres_propose_pairs(
 
 def extract_superres_shifted_deconv(
     superres_deconv_result,
-    subtraction_h5=None,
     overwrite=True,
     pbar=True,
     nn_denoise=True,
@@ -517,23 +507,29 @@ def extract_superres_shifted_deconv(
     extract_radius_um=100,
     # superres_propose_pairs args
     max_resid_dist=5,
-    lambd=0.001,
-    allowed_scale=0.1,
-    deconv_threshold_mul=0.9,
+    propose_pairs_lambd=0.001,
+    propose_pairs_allowed_scale=0.1,
+    propose_pairs_deconv_threshold_mul=0.9,
+    # what to save / do?
     save_residual=False,
-    save_cleaned_waveforms=True,
+    save_cleaned_waveforms=False,
     save_denoised_waveforms=False,
+    save_cleaned_tpca_projs=False,
+    save_denoised_tpca_projs=False,
+    tpca_rank=8,
+    localize=True,
+    loc_radius=100,
     save_outlier_scores=True,
     do_reassignment=True,
-    sampling_rate=30000,
-    n_sec_chunk=1,
-    localize=True,
     reassignment_tpca_rank=5,
     reassignment_tpca_spatial_radius=75,
     reassignment_tpca_n_wfs=50000,
+    # usual suspects
+    sampling_rate=30000,
+    n_sec_chunk=1,
     device=None,
     geom=None,
-    tpca=None,
+    subtraction_h5=None,
     n_jobs=-1,
 ):
     """
@@ -546,9 +542,9 @@ def extract_superres_shifted_deconv(
         superres_deconv_result["superres_templates"],
         superres_deconv_result["superres_label_to_orig_label"],
         max_resid_dist=max_resid_dist,
-        lambd=lambd,
-        allowed_scale=allowed_scale,
-        deconv_threshold_mul=deconv_threshold_mul,
+        lambd=propose_pairs_lambd,
+        allowed_scale=propose_pairs_allowed_scale,
+        deconv_threshold_mul=propose_pairs_deconv_threshold_mul,
         n_jobs=n_jobs,
     )
     # print(f"{superres_pairs=}")
@@ -595,11 +591,15 @@ def extract_superres_shifted_deconv(
         else superres_deconv_result["deconv_dir"],
         superres_deconv_result["raw_bin"],
         scalings=superres_deconv_result["deconv_scalings"],
+        geom=geom,
         extract_radius_um=extract_radius_um,
         subtraction_h5=subtraction_h5,
         save_residual=save_residual,
         save_cleaned_waveforms=save_cleaned_waveforms,
         save_denoised_waveforms=save_denoised_waveforms,
+        save_cleaned_tpca_projs=save_cleaned_tpca_projs,
+        save_denoised_tpca_projs=save_denoised_tpca_projs,
+        tpca_rank=tpca_rank,
         save_outlier_scores=save_outlier_scores,
         do_reassignment=do_reassignment,
         reassignment_proposed_pairs_up=shifted_upsampled_pairs,
@@ -607,17 +607,15 @@ def extract_superres_shifted_deconv(
         reassignment_tpca_spatial_radius=reassignment_tpca_spatial_radius,
         reassignment_tpca_n_wfs=reassignment_tpca_n_wfs,
         localize=localize,
+        loc_radius=loc_radius,
         n_jobs=n_jobs,
         n_sec_chunk=n_sec_chunk,
         sampling_rate=sampling_rate,
         device=device,
         trough_offset=superres_deconv_result["trough_offset"],
         overwrite=overwrite,
-        scratch_dir=None,
         pbar=pbar,
         nn_denoise=nn_denoise,
-        tpca=tpca,
-        geom=geom,
         seed=0,
     )
     if save_residual:
@@ -653,6 +651,7 @@ def extract_superres_shifted_deconv(
             "superres_deconv_spike_train_shifted_upsampled",
             "superres_templates",
             "superres_label_to_orig_label",
+            "superres_label_to_bin_id",
             "all_shifted_upsampled_temps",
             "shifted_upsampled_idx_to_superres_id",
             "shifted_upsampled_idx_to_orig_id",

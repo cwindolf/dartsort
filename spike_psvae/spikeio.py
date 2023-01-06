@@ -99,8 +99,8 @@ def read_waveforms(
     channel_index=None,
     max_channels=None,
     channels=None,
-    spike_length_samples=121,
     trough_offset=42,
+    spike_length_samples=121,
     dtype=np.float32,
     fill_value=np.nan,
     buffer=None,
@@ -204,8 +204,31 @@ def read_waveforms(
                 wf = np.pad(wf, [(0, 0), (0, 1)], constant_values=fill_value)
                 wf = wf[:, channel_index[max_channels[spike_ix]]]
             elif load_chans:
+                wf = np.pad(wf, [(0, 0), (0, 1)], constant_values=fill_value)
                 wf = wf[:, channels]
 
             waveforms[i] = wf
 
     return waveforms, skipped_idx
+
+
+def read_maxchan_traces(
+    spike_index,
+    bin_file,
+    n_channels,
+    dtype=np.float32,
+    trough_offset=42,
+    spike_length_samples=121,
+):
+    """Helper to read waveforms on their main channel."""
+    maxchan_channel_index = np.arange(n_channels)[:, None]
+    return read_waveforms(
+        spike_index[:, 0],
+        bin_file,
+        n_channels,
+        channel_index=maxchan_channel_index,
+        max_channels=spike_index[:, 1],
+        trough_offset=trough_offset,
+        spike_length_samples=spike_length_samples,
+        dtype=dtype,
+    )
