@@ -1,3 +1,6 @@
+"""Helper functions for point source relocation
+"""
+
 import numpy as np
 # from numba import njit
 from .waveform_utils import get_pitch
@@ -69,8 +72,7 @@ def get_relocated_waveforms_on_channel_subset(
     pitch = get_pitch(geom)
     # want to round towards 0, not //
     n_pitches_shift = (z_drift / pitch).astype(int)
-    # not using this, but it's useful to have around to see what's left
-    # z_drift_rem = z_drift - pitch * n_pitches_shift
+    z_drift_rem = z_drift - pitch * n_pitches_shift
 
     # -- first, handle the integer part of the shift
     # we want to grab the original channels which would land on the target channels
@@ -99,14 +101,14 @@ def get_relocated_waveforms_on_channel_subset(
     # -- now, the remaining shift is done with point source
     xyza_cur = xyza_from.copy()
     xyza_cur[:, 2] += pitch * n_pitches_shift
-    xyza_to = xyza_from.copy()
-    xyza_to[:, 2] = z_to
+    xyza_to = xyza_cur.copy()
+    xyza_to[:, 2] += z_drift_rem
     shifted_waveforms = relocate_simple(
         shifted_waveforms,
         xyza_cur,
         xyza_to,
         geom,
-        wf_channels=orig_chans,
+        wf_channels=target_channels,
     )
 
     return shifted_waveforms
