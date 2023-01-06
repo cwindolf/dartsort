@@ -40,6 +40,22 @@ def fit_tpca_bin(
     return tpca
 
 
+def apply_tpca(waveforms, tpca):
+    if tpca is None:
+        return waveforms
+    single = waveforms.ndim == 2
+    if single:
+        waveforms = waveforms[None]
+    n, t, c = waveforms.shape
+    waveforms = waveforms.transpose(0, 2, 1).reshape(n * c, t)
+    valid = ~np.isnan(waveforms).any(axis=1)
+    waveforms[valid] = tpca.inverse_transform(tpca.transform(waveforms[valid]))
+    waveforms = waveforms.reshape(n, c, t).transpose(0, 2, 1)
+    if single:
+        waveforms = waveforms[0]
+    return waveforms
+
+
 # -- channels / geometry helpers
 """
 For example let’s say we use a Neuropixels probe
@@ -289,15 +305,24 @@ def get_pitch(geom):
     """Guess the pitch, even for probes with gaps or channels missing at random
 
     This is the unit at which the probe repeats itself, computed as the
-    vertical distance between electrodes in the same column.
+    vertical distance between electrodes in the same column. Of course, this
+    makes little sense for probes with non-lattice layouts, or even worse,
+    horizontal probes (i.e., x positions are unique) where it cannot be defined.
 
     So for NP1, it's not every row, but every 2 rows! And for a probe with a
     zig-zag arrangement, it would be also 2 vertical distances between channels.
     """
     x_uniq = np.unique(geom[:, 0])
+
     pitch = np.inf
     for x in x_uniq:
-        pitch = min(pitch, np.diff(np.unique(geom[geom[:, 0] == x, 1])).min())
+        y_uniq_at_x = np.unique(geom[geom[:, 0] == x, 1])
+        if y_uniq_at_x.size > 1:
+            pitch = min(pitch, np.diff(y_uniq_at_x).min())
+
+    if np.isinf(pitch):
+        raise ValueError("Horizontal probe.")
+
     return pitch
 
 
@@ -319,26 +344,24 @@ def pitch_shift_templates(n_pitches_shift, geom, templates, fill_value=0.0):
     return new_templates
 
 
-# def pitch_shifted_channel_index(n_pitches_shift, geom, channel_index):
-#     pass
+def temporal_align(waveforms, maxchans, offset=42):
+    N, T, C = waveforms.shape
+    offsets = np.abs(waveforms[np.arange(N), :, maxchans]).argmax(1)
+    rolls = offset - offsets
+    out = np.empty_like(waveforms)
+    pads = [(0, 0), (0, 0)]
+    for i, roll in enumerate(rolls):
+        if roll > 0:
+            pads[0] = (roll, 0)
+            start, end = 0, T
+        elif roll < 0:
+            pads[0] = (0, -roll)
+            start, end = -roll, T - roll
+        else:
+            out[i] = waveforms[i]
+            continue
 
+        pwf = np.pad(waveforms[i], pads, mode="linear_ramp")
+        out[i] = pwf[start:end, :]
 
-# def pitch_shift_waveforms(n_pitches_shift, geom, maxchans, waveforms, channel_index, fill_value=np.nan):
-#     """Shift waveforms which are stored on some channels to another set of channels
-#     """
-#     # how?
-#     # in pitch_shift_templates above, we had waveforms on the full set of channels.
-#     # here, we're working with subsets.
-#     # the subsets are determined by the channel_index and the max channel.
-#     # we have the original subsets for each wf:
-#     orig_chans = channel_index[maxchans]
-
-#     # it makes sense to take the new subsets to be the ones which arise if you shift the
-#     # max channel by however many pitches. the issue arises when that channel does not
-#     # exist. so really, this shift will change the channel index.
-#     # note, this channel index maps original max channels to new sets of channel
-#     # neighborhoods.
-#     shifted_channel_index = pitch_shifted_channel_index(n_pitches_shift, geom, channel_index)
-#     shifted_chans = shifted_channel_index[maxchans]
-
-#     # now, we need to populate the waveforms in their new channels.
+    return out

@@ -1,15 +1,10 @@
 import numpy as np
-from pathlib import Path
-import tempfile
 from tqdm.auto import tqdm, trange
 from joblib import Parallel, delayed
 from scipy.cluster.hierarchy import complete, fcluster
 
-from .extract_deconv import extract_deconv
 from .deconvolve import MatchPursuitObjectiveUpsample
 from .snr_templates import get_single_templates, get_templates
-from .pre_deconv_merge_split import get_proposed_pairs
-from .localize_index import localize_ptps_index
 
 
 def resid_dist(
@@ -17,7 +12,6 @@ def resid_dist(
     search_templates,
     deconv_threshold,
     max_upsample=8,
-    trough_offset=42,
     sampling_rate=30000,
     conv_approx_rank=5,
     n_processors=1,
@@ -67,7 +61,6 @@ def resid_dist(
     deconv_id_sparse_temp_map = deconv_id_sparse_temp_map.astype(int)
     templates_up = templates_up.transpose(2, 0, 1)
     labels_up = deconv_id_sparse_temp_map[deconv_st[:, 1]]
-    # spike_train_up[:, 0] += trough_offset
 
     # subtract from target_recording to leave the residual behind
     rel_times = np.arange(T)
@@ -88,7 +81,6 @@ def find_original_merges(
     dist_argsort,
     deconv_threshold,
     max_upsample=8,
-    trough_offset=42,
     n_pairs_proposed=10,
     sampling_rate=30000,
     conv_approx_rank=5,
@@ -113,7 +105,6 @@ def find_original_merges(
             templates_cleaned_amputated,
             deconv_threshold,
             max_upsample=max_upsample,
-            trough_offset=trough_offset,
             sampling_rate=sampling_rate,
             conv_approx_rank=conv_approx_rank,
             n_processors=1,
@@ -146,7 +137,6 @@ def check_additional_merge(
     temp_to_deconv,
     deconv_threshold,
     max_upsample=8,
-    trough_offset=42,
     n_pairs_proposed=10,
     sampling_rate=30000,
     conv_approx_rank=5,
@@ -158,7 +148,6 @@ def check_additional_merge(
         temp_to_input,
         deconv_threshold,
         max_upsample=max_upsample,
-        trough_offset=trough_offset,
         sampling_rate=sampling_rate,
         conv_approx_rank=conv_approx_rank,
         lambd=lambd,
@@ -396,18 +385,22 @@ def run_deconv_merge(
     spike_train,
     geom,
     raw_binary_file,
-    unit_max_channels,
+    unit_max_channels=None,
     deconv_threshold_mul=0.9,
     # 2 is conservative, 2.5 is nice, 3 is aggressive
     merge_resid_threshold=2.5,
-    tpca=None
+    tpca=None,
+    trough_offset=42,
+    spike_length_samples=121,
 ):
     templates_cleaned, extra = get_templates(
         spike_train,
         geom,
         raw_binary_file,
-        unit_max_channels,
-        tpca = tpca
+        unit_max_channels=unit_max_channels,
+        tpca=tpca,
+        trough_offset=trough_offset,
+        spike_length_samples=spike_length_samples,
     )
 
     # get rms on active channels
