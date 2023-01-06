@@ -9,7 +9,7 @@ TODO: Not sure how much of this code assumes NP2 geom specific stuff.
 import torch
 import numpy as np
 
-from .waveform_utils import get_local_geom
+# from .waveform_utils import get_local_geom
 from .localization import localize_ptp
 
 
