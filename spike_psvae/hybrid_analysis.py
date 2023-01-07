@@ -37,6 +37,7 @@ from spike_psvae import (
     waveform_utils,
     deconvolve,
     deconv_resid_merge,
+    relocation,
 )
 
 
@@ -57,6 +58,9 @@ class Sorting:
         templates=None,
         spike_maxchans=None,
         spike_xzptp=None,
+        spike_xyza=None,
+        spike_z_reg=None,
+        spike_maxptps=None,
         unsorted=False,
         fs=30_000,
         n_close_units=3,
@@ -204,6 +208,16 @@ class Sorting:
                 self.spike_xzptp[:, :2],
                 30 * np.log(self.spike_xzptp[:, 2]),
             ]
+        elif not any(
+            a is None for a in (spike_xyza, spike_z_reg, spike_maxptps)
+        ):
+            self.spike_xzptp = np.c_[
+                spike_xyza[:, 0], spike_z_reg, spike_maxptps
+            ][which]
+        self.spike_xyza = spike_xyza[which] if spike_xyza is not None else None
+        self.spike_z_reg = (
+            spike_z_reg[which] if spike_z_reg is not None else None
+        )
 
         if not self.unsorted:
             self.contam_ratios = np.empty(self.unit_labels.shape)
@@ -557,6 +571,7 @@ class Sorting:
         n_wfs_max=100,
         show_chan_label=True,
         chan_labels=None,
+        relocated=False,
     ):
         have_loc = self.spike_xzptp is not None
         height_ratios = [1, 1, 2, 5] if have_loc else [1, 1, 5]
@@ -630,13 +645,28 @@ class Sorting:
         maxchans = self.template_maxchans[
             self.spike_train[in_unit[choices], 1]
         ]
-        wfs, skipped = read_waveforms(
-            self.spike_train[in_unit[choices], 0],
-            self.raw_bin,
-            len(self.geom),
-            channel_index=ci,
-            max_channels=maxchans,
-        )
+        if relocated:
+            (
+                wfs,
+                skipped,
+            ) = relocation.load_relocated_waveforms_on_channel_subset(
+                np.c_[self.spike_train[in_unit[choices], 0], maxchans],
+                self.raw_bin,
+                self.spike_xyza[in_unit[choices]],
+                self.spike_z_reg[in_unit[choices]],
+                self.geom,
+                target_channels=ci[self.template_maxchans[unit]],
+                fill_value=np.nan,
+            )
+        else:
+            wfs, skipped = read_waveforms(
+                self.spike_train[in_unit[choices], 0],
+                self.raw_bin,
+                len(self.geom),
+                channel_index=ci,
+                max_channels=maxchans,
+            )
+
         max_abs_amp = np.abs(wfs).max()
         wf_lines = cluster_viz_index.pgeom(
             wfs,
@@ -697,10 +727,13 @@ class Sorting:
         n_wfs_max=100,
         show_chan_label=True,
         chan_labels=None,
+        relocated=False,
+        n_jobs=-1,
     ):
         out_folder = Path(out_folder)
         out_folder.mkdir(exist_ok=True)
-        for unit in tqdm(self.unit_labels, desc="Unit summaries"):
+
+        def job(unit):
             fig, axes, ptp = self.unit_summary_fig(
                 unit,
                 dz=dz,
@@ -708,9 +741,19 @@ class Sorting:
                 n_wfs_max=n_wfs_max,
                 show_chan_label=show_chan_label,
                 chan_labels=chan_labels,
+                relocated=relocated,
             )
-            fig.savefig(out_folder / f"{self.name_lo}_unit{unit:03d}.png", dpi=300)
+            fig.savefig(
+                out_folder / f"{self.name_lo}_unit{unit:03d}.png", dpi=300
+            )
             plt.close(fig)
+
+        with Parallel(n_jobs) as p:
+            for res in p(
+                delayed(job)(unit)
+                for unit in tqdm(self.unit_labels, desc="Unit summaries")
+            ):
+                pass
 
 
 class HybridComparison:
