@@ -127,7 +127,9 @@ def read_waveforms(
         channels subset to load in `channel_index`
     channels : None or int array
         Just read data on these channels. (Don't use this argument and
-        channel_index together.)
+        channel_index together.) This can be a 1d set of channels,
+        or a 2d array giving an arbitrary set of channels to load
+        for each spike.
     spike_length_samples, trough_offset : int
     dtype : numpy dtype
         dtype stored in bin_file and returned from this function.
@@ -164,8 +166,11 @@ def read_waveforms(
 
     if channels is not None:
         channels = np.atleast_1d(channels)
-        assert channels.ndim == 1
-        load_channels = channels.size
+        if channels.ndim == 1:
+            channels = channels[None, :]
+        assert channels.ndim == 2
+        assert channels.shape[0] in (1, N)
+        load_channels = channels.shape[1]
         load_chans = True
 
     # figure out which loads will be skipped in advance
@@ -205,7 +210,7 @@ def read_waveforms(
                 wf = wf[:, channel_index[max_channels[spike_ix]]]
             elif load_chans:
                 wf = np.pad(wf, [(0, 0), (0, 1)], constant_values=fill_value)
-                wf = wf[:, channels]
+                wf = wf[:, channels[spike_ix % channels.shape[0]]]
 
             waveforms[i] = wf
 
