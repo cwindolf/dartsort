@@ -254,6 +254,7 @@ def extract_deconv(
                 data=channel_index[:, 0][spike_index_up[:, 1]],
             )
             h5.create_dataset("last_batch_end", data=0)
+            h5.create_dataset("geom", data=geom)
 
             if save_outlier_scores:
                 outlier_scores = h5.create_dataset(

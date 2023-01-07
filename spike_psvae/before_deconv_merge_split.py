@@ -539,7 +539,7 @@ def split_clusters(
 
 
 def lda_diptest_merge(
-    in_unit_a,
+    in_unit_a,  # <= np.flatnonzero(labels == unit_a)
     in_unit_b,
     template_a,
     template_b,

@@ -360,6 +360,8 @@ def superres_deconv(
     max_upsample=8,
     refractory_period_frames=10,
 ):
+    Path(deconv_dir).mkdir(exist_ok=True)
+
     (
         superres_templates,
         superres_label_to_bin_id,
@@ -384,11 +386,6 @@ def superres_deconv(
         tpca_radius=75,
         tpca_n_wfs=50_000,
         n_jobs=n_jobs,
-    )
-    print(
-        superres_label_to_orig_label.size,
-        superres_label_to_orig_label.max() + 1,
-        superres_templates.shape,
     )
 
     shifted_deconv_res = rigid_int_shift_deconv(
@@ -437,6 +434,7 @@ def superres_deconv(
         shifted_upsampled_idx_to_superres_id
     ]
 
+    # return everything the user could need
     return dict(
         deconv_spike_train=deconv_spike_train,
         superres_deconv_spike_train=superres_deconv_spike_train,
@@ -581,14 +579,15 @@ def extract_superres_shifted_deconv(
         shifted_upsampled_pairs.append(shifted_upsampled_matches)
     # print(f"{shifted_upsampled_pairs=}")
 
+    if output_directory is None:
+        output_directory = superres_deconv_result["deconv_dir"]
+
     ret = extract_deconv(
         superres_deconv_result["all_shifted_upsampled_temps"],
         superres_deconv_result[
             "superres_deconv_spike_train_shifted_upsampled"
         ],
-        output_directory
-        if output_directory is not None
-        else superres_deconv_result["deconv_dir"],
+        output_directory,
         superres_deconv_result["raw_bin"],
         scalings=superres_deconv_result["deconv_scalings"],
         geom=geom,
