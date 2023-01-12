@@ -19,7 +19,9 @@ def fit_tpca_bin(
     tpca_channel_index = make_channel_index(
         geom, spatial_radius, steps=1, distance_order=False, p=1
     )
-    choices = rg.choice(len(spike_index), size=min(len(spike_index), tpca_n_wfs), replace=False)
+    choices = rg.choice(
+        len(spike_index), size=min(len(spike_index), tpca_n_wfs), replace=False
+    )
     choices.sort()
     tpca_waveforms, skipped_idx = spikeio.read_waveforms(
         spike_index[choices, 0],
@@ -298,6 +300,61 @@ def get_maxchan_traces(waveforms, channel_index, maxchans):
     return maxchan_traces
 
 
+# thinking about numbaing this... maybe an inner for loop manually checking the ==?
+# @njit(cache=False)
+def restrict_wfs_to_chans(
+    waveforms,
+    max_channels=None,
+    channel_index=None,
+    source_channels=None,
+    dest_channels=None,
+    fill_value=np.nan,
+):
+    """You have `waveforms` on channels from `channel_index` according to `max_channels`.
+    You want them on just `dest_channels`, which can be a 1d array of channels
+    or a 2d array giving specific channels for each waveform. And you'll get them.
+    """
+    N, T, C = waveforms.shape
+
+    # handle source channels
+    if (
+        (max_channels is None and channel_index is None)
+        == (source_channels is None)
+    ):
+        raise ValueError(
+            "Please supply either max_channels and channel_index or source_channels"
+        )
+    if source_channels is None:
+        assert (N,) == max_channels.shape
+        assert C == channel_index.shape[1]
+        source_channels = channel_index[max_channels]
+    source_channels = np.atleast_1d(source_channels)
+    # make at least 2d with empty dim to start if necessary
+    if source_channels.ndim == 1:
+        source_channels = source_channels[None, :]
+    n_source, c = source_channels.shape
+    assert n_source in (1, N)
+
+    # handle dest channels
+    assert dest_channels is not None
+    dest_channels = np.atleast_1d(dest_channels)
+    # make at least 2d with empty dim to start if necessary
+    if dest_channels.ndim == 1:
+        dest_channels = dest_channels[None, :]
+    n_dest, c = dest_channels.shape
+    assert n_dest in (1, N)
+
+    out_waveforms = np.full((N, T, c), fill_value, dtype=waveforms.dtype)
+    for n in range(N):
+        chans_in_target, target_found = np.nonzero(
+            source_channels[n % n_source].reshape(-1, 1)
+            == dest_channels[n % n_dest].reshape(1, -1)
+        )
+        out_waveforms[n, :, target_found] = waveforms[n, :, chans_in_target]
+
+    return out_waveforms
+
+
 # -- channel shifting stuff
 
 
@@ -336,7 +393,9 @@ def pitch_shift_templates(n_pitches_shift, geom, templates, fill_value=0.0):
     geom_matching = (shifted_geom[:, None, :] == geom[None, :, :]).all(axis=2)
 
     new_templates = np.full_like(templates, fill_value=fill_value)
-    for shifted_ix, matched_orig in enumerate(np.flatnonzero(gm) for gm in geom_matching):
+    for shifted_ix, matched_orig in enumerate(
+        np.flatnonzero(gm) for gm in geom_matching
+    ):
         if matched_orig.size:
             assert matched_orig.size == 1
             new_templates[:, :, shifted_ix] = templates[:, :, matched_orig[0]]
