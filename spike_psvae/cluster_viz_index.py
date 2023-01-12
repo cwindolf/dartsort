@@ -1,4 +1,5 @@
 import numpy as np
+from pathlib import Path
 import h5py
 import matplotlib.pyplot as plt
 import colorcet as cc
@@ -208,9 +209,11 @@ def pgeom(
             break
     else:
         x_uniq = np.unique(geom[:, 0])
-    inter_chan_x = x_uniq[1] - x_uniq[0]
+    inter_chan_x = 1
+    if x_uniq.size > 1:
+        inter_chan_x = x_uniq[1] - x_uniq[0]
     inter_chan_z = z_uniq[1] - z_uniq[0]
-    max_abs_amp = max_abs_amp or np.abs(waveforms).max()
+    max_abs_amp = max_abs_amp or np.nanmax(np.abs(waveforms))
     geom_scales = [
         T / inter_chan_x / x_extension,
         max_abs_amp / inter_chan_z / z_extension,
@@ -508,7 +511,8 @@ def reassignments_viz(
     trough_offset=42,
     spike_length_samples=121,
 ):
-    output_directory.mkdir(exist_ok=True)
+    output_directory = Path(output_directory)
+    output_directory.mkdir(exist_ok=True, parents=True)
     for orig_label in tqdm(np.unique(spike_train_orig[:, 1])):
         fig, ax = reassignment_viz(
             orig_label,
