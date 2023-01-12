@@ -535,16 +535,20 @@ def extract_superres_shifted_deconv(
     pairs and reassignment with the shifting and the superres and the
     upsampling and all that...
     """
-    # propose pairs of unit and superres labels
-    unit_pairs, superres_pairs = superres_propose_pairs(
-        superres_deconv_result["superres_templates"],
-        superres_deconv_result["superres_label_to_orig_label"],
-        max_resid_dist=max_resid_dist,
-        lambd=propose_pairs_lambd,
-        allowed_scale=propose_pairs_allowed_scale,
-        deconv_threshold_mul=propose_pairs_deconv_threshold_mul,
-        n_jobs=n_jobs,
-    )
+    # propose pairs of unit and superres labels FOR REASSIGNMENT ONLY? SUPER HEAVY IN MEMORY...
+    if do_reassignment:
+        unit_pairs, superres_pairs = superres_propose_pairs(
+            superres_deconv_result["superres_templates"],
+            superres_deconv_result["superres_label_to_orig_label"],
+            max_resid_dist=max_resid_dist,
+            lambd=propose_pairs_lambd,
+            allowed_scale=propose_pairs_allowed_scale,
+            deconv_threshold_mul=propose_pairs_deconv_threshold_mul,
+            n_jobs=n_jobs,
+        )
+    else: 
+        superres_pairs=None
+        unit_pairs=None
     # print(f"{superres_pairs=}")
 
     # infer what upsampled shifted superres units can be pairs
@@ -559,24 +563,25 @@ def extract_superres_shifted_deconv(
     ]
 
     shifted_upsampled_pairs = []
-    for shifted_upsampled_idx, (shift_id, superres_id) in enumerate(
-        zip(
-            shifted_upsampled_idx_to_shift_id,
-            shifted_upsampled_idx_to_superres_id,
-        )
-    ):
-        superres_matches = superres_pairs[superres_id]
-        shifted_upsampled_matches = np.unique(
-            [
-                shifted_upsampled_match
-                for match in superres_matches
-                for shifted_upsampled_match in np.flatnonzero(
-                    (shifted_upsampled_idx_to_shift_id == shift_id)
-                    & (shifted_upsampled_idx_to_superres_id == match)
-                )
-            ]
-        )
-        shifted_upsampled_pairs.append(shifted_upsampled_matches)
+    if do_reassignment:
+        for shifted_upsampled_idx, (shift_id, superres_id) in enumerate(
+            zip(
+                shifted_upsampled_idx_to_shift_id,
+                shifted_upsampled_idx_to_superres_id,
+            )
+        ):
+            superres_matches = superres_pairs[superres_id]
+            shifted_upsampled_matches = np.unique(
+                [
+                    shifted_upsampled_match
+                    for match in superres_matches
+                    for shifted_upsampled_match in np.flatnonzero(
+                        (shifted_upsampled_idx_to_shift_id == shift_id)
+                        & (shifted_upsampled_idx_to_superres_id == match)
+                    )
+                ]
+            )
+            shifted_upsampled_pairs.append(shifted_upsampled_matches)
     # print(f"{shifted_upsampled_pairs=}")
 
     if output_directory is None:
