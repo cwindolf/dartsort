@@ -1169,6 +1169,112 @@ def deconvolution(
     )
 
 
+def deconv(
+    raw_bin,
+    deconv_dir,
+    templates,
+    t_start=0,
+    t_end=None,
+    sampling_rate=30_000,
+    n_sec_chunk=1,
+    n_jobs=1,
+    max_upsample=8,
+    refractory_period_frames=10,
+    trough_offset=42,
+    threshold=50,
+):
+    mp_object = MatchPursuitObjectiveUpsample(
+        templates=templates,
+        deconv_dir=deconv_dir,
+        standardized_bin=raw_bin,
+        t_start=t_start,
+        t_end=t_end,
+        n_sec_chunk=n_sec_chunk,
+        sampling_rate=sampling_rate,
+        max_iter=1000,
+        threshold=threshold,
+        vis_su=1.0,
+        conv_approx_rank=5,
+        n_processors=n_jobs,
+        multi_processing=n_jobs > 1,
+        upsample=max_upsample,
+        lambd=0,
+        allowed_scale=0,
+        refractory_period_frames=refractory_period_frames,
+    )
+    my_batches = np.arange(mp_object.n_batches)
+    my_fnames = [
+        deconv_dir / f"seg_{bid:06d}_deconv.npz" for bid in my_batches
+    ]
+    if n_jobs <= 1:
+        mp_object.run(my_batches, my_fnames)
+    else:
+        ctx = multiprocessing.get_context("spawn")
+        with ctx.Pool(
+            n_jobs,
+            initializer=mp_object.load_saved_state,
+        ) as pool:
+            for res in tqdm(
+                pool.imap_unordered(
+                    mp_object._run_batch,
+                    zip(my_batches, my_fnames),
+                ),
+                total=len(my_batches),
+                desc="Template matching",
+            ):
+                pass
+
+    (
+        templates_up,
+        deconv_id_sparse_temp_map,
+        sparse_id_to_orig_id,
+    ) = mp_object.get_sparse_upsampled_templates(return_orig_map=True)
+    templates_up = templates_up.transpose(2, 0, 1)
+
+    # gather deconv resultsdeconv_st = []
+    deconv_spike_train_upsampled = []
+    deconv_spike_train = []
+    deconv_scalings = []
+    print("gathering deconvolution results")
+    for bid in range(mp_object.n_batches):
+
+        fname_out = deconv_dir / f"seg_{bid:06d}_deconv.npz"
+        with np.load(fname_out) as d:
+            st = d["spike_train"]
+            deconv_scalings.append(d["scalings"])
+
+        st[:, 0] += trough_offset
+
+        # usual spike train
+        deconv_st = st.copy()
+        deconv_st[:, 1] //= max_upsample
+        deconv_spike_train.append(deconv_st)
+
+        # upsampled spike train
+        st_up = st.copy()
+        st_up[:, 1] = deconv_id_sparse_temp_map[st_up[:, 1]]
+        deconv_spike_train_upsampled.append(st_up)
+
+    deconv_spike_train = np.concatenate(deconv_spike_train, axis=0)
+    deconv_spike_train_upsampled = np.concatenate(
+        deconv_spike_train_upsampled, axis=0
+    )
+    deconv_scalings = np.concatenate(deconv_scalings, axis=0)
+
+    print(
+        f"Number of Spikes deconvolved: {deconv_spike_train_upsampled.shape[0]}"
+    )
+
+    return dict(
+        deconv_spike_train=deconv_spike_train,
+        deconv_spike_train_upsampled=deconv_spike_train_upsampled,
+        deconv_scalings=deconv_scalings,
+        deconv_id_sparse_temp_map=deconv_id_sparse_temp_map,
+        sparse_id_to_orig_id=sparse_id_to_orig_id,
+        templates_up=templates_up,
+    )
+
+
 # %%
 def get_templates(
     standardized_bin,
