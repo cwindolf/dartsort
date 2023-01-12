@@ -20,6 +20,7 @@ from tqdm.auto import tqdm
 from pathlib import Path
 import pickle
 from joblib import Parallel, delayed
+from sklearn.decomposition import PCA
 
 from spikeinterface.extractors import NumpySorting
 from spikeinterface.comparison import compare_sorter_to_ground_truth
@@ -35,7 +36,6 @@ from spike_psvae import (
     cluster_utils,
     snr_templates,
     waveform_utils,
-    deconvolve,
     deconv_resid_merge,
     relocation,
 )
@@ -69,9 +69,11 @@ class Sorting:
         overwrite=False,
         do_cleaned_templates=False,
         cleaned_templates=None,
+        trough_offset=42,
+        spike_length_samples=121,
         extra=None,
     ):
-        n_spikes_full = spike_labels.shape[0]
+        self.n_spikes_full = n_spikes_full = spike_labels.shape[0]
         assert spike_labels.shape == spike_times.shape == (n_spikes_full,)
         T_samples, T_sec = get_binary_length(raw_bin, len(geom), fs)
         print("Initializing sorting", name)
@@ -86,6 +88,8 @@ class Sorting:
         self.original_spike_train = np.c_[spike_times, spike_labels]
         self.cleaned_templates = cleaned_templates
         self.do_cleaned_templates = do_cleaned_templates
+        self.trough_offset = trough_offset
+        self.spike_length_samples = spike_length_samples
 
         # see if we can load up expensive stuff from cache
         # this will check if the sorting in the cache uses the same
@@ -96,7 +100,9 @@ class Sorting:
             templates = cached_templates if cached else templates
 
         which = np.flatnonzero(spike_labels >= 0)
-        which = which[np.argsort(spike_times[which])]
+        self.was_sorted = (np.diff(spike_times[which]) >= 0).all()
+        which = which[np.argsort(spike_times[which], kind="stable")]
+        self.which = which
 
         self.spike_times = spike_times[which]
         self.spike_labels = spike_labels[which]
@@ -120,13 +126,17 @@ class Sorting:
             #     raw_bin,
             #     return_raw_cleaned=True,
             # )
-            self.templates = deconvolve.get_templates(
-                raw_bin,
-                self.spike_times[:, None],
-                self.spike_labels,
+            self.templates = snr_templates.get_raw_templates(
+                np.c_[self.spike_times, self.spike_labels],
                 geom,
-                n_samples=template_n_spikes,
+                raw_bin,
+                max_spikes_per_unit=template_n_spikes,
+                reducer=np.median,
+                spike_length_samples=spike_length_samples,
+                trough_offset=trough_offset,
                 pbar=True,
+                seed=0,
+                n_jobs=-1,
             )
 
         if self.cleaned_templates is None and do_cleaned_templates:
@@ -137,6 +147,8 @@ class Sorting:
                 self.raw_bin,
                 self.templates.ptp(1).argmax(1),
                 tpca_rank=5,
+                spike_length_samples=spike_length_samples,
+                trough_offset=trough_offset,
             )
             self.cleaned_templates = cleaned_templates
 
@@ -232,6 +244,9 @@ class Sorting:
         if cache_dir and (overwrite or not cached):
             self.save_to_cache(cache_dir)
 
+        self._template_residuals = None
+        self._norm_template_residuals = None
+
     def get_unit_spike_train(self, unit):
         return self.spike_times[self.spike_labels == unit]
 
@@ -239,8 +254,9 @@ class Sorting:
         return self.spike_maxchans[self.spike_labels == unit]
 
     def resid_matrix(
-        self, units, n_jobs=-1, pbar=True, lambd=0.001, allowed_scale=0.1
+        self, units, n_jobs=-1, pbar=True, lambd=0.001, allowed_scale=0.1, normalized=True
     ):
+        assert self.cleaned_templates is not None
         thresh = 0.9 * np.square(self.cleaned_templates).sum(axis=(1, 2)).min()
         dists = calc_resid_matrix(
             self.cleaned_templates,
@@ -253,8 +269,23 @@ class Sorting:
             pbar=pbar,
             lambd=lambd,
             allowed_scale=allowed_scale,
+            normalized=normalized,
         )
         return thresh, dists
+
+    @property
+    def template_residuals(self):
+        if self._template_residuals is None:
+            thresh, dists = self.resid_matrix(self.unit_labels, normalized=False)
+            self._template_residuals = dists
+        return self._template_residuals
+
+    @property
+    def norm_template_residuals(self):
+        if self._norm_template_residuals is None:
+            thresh, dists = self.resid_matrix(self.unit_labels, normalized=True)
+            self._norm_template_residuals = dists
+        return self._norm_template_residuals
 
     @property
     def np_sorting(self):
@@ -570,13 +601,22 @@ class Sorting:
         nchans=16,
         n_wfs_max=100,
         show_chan_label=True,
+        show_scatter=True,
         chan_labels=None,
         relocated=False,
+        stored_channel_index=None,
+        stored_maxchans=None,
+        stored_waveforms=None,
+        stored_tpca_projs=None,
+        stored_tpca=None,
+        stored_order=None,
     ):
-        have_loc = self.spike_xzptp is not None
-        height_ratios = [1, 1, 2, 5] if have_loc else [1, 1, 5]
+        show_scatter = show_scatter and self.spike_xzptp is not None
+        height_ratios = [1, 1, 1, 2, 5] if show_scatter else [1, 1, 1, 5]
         fig, axes = plt.subplot_mosaic(
-            "aat\nbbt\nxyz\nddd" if have_loc else "aat\nbbt\nddd",
+            "aat\nbbt\ncct\nxyz\nddd"
+            if show_scatter
+            else "aat\nbbt\ncct\nddd",
             gridspec_kw=dict(
                 height_ratios=height_ratios,
             ),
@@ -624,7 +664,7 @@ class Sorting:
         )
 
         # Scatter
-        if have_loc:
+        if show_scatter:
             self.array_scatter(
                 zlim=(cz - dz, cz + dz),
                 axes=[axes[k] for k in "xyz"],
@@ -645,40 +685,87 @@ class Sorting:
         maxchans = self.template_maxchans[
             self.spike_train[in_unit[choices], 1]
         ]
-        if relocated:
-            (
-                wfs,
-                skipped,
-            ) = relocation.load_relocated_waveforms_on_channel_subset(
-                np.c_[self.spike_train[in_unit[choices], 0], maxchans],
-                self.raw_bin,
-                self.spike_xyza[in_unit[choices]],
-                self.spike_z_reg[in_unit[choices]],
-                self.geom,
-                target_channels=ci[self.template_maxchans[unit]],
-                fill_value=np.nan,
-            )
-        else:
-            wfs, skipped = read_waveforms(
-                self.spike_train[in_unit[choices], 0],
-                self.raw_bin,
-                len(self.geom),
-                channel_index=ci,
-                max_channels=maxchans,
-            )
 
-        max_abs_amp = np.abs(wfs).max()
-        wf_lines = cluster_viz_index.pgeom(
-            wfs,
-            maxchans,
-            ci,
-            self.geom,
-            ax=axes["d"],
-            max_abs_amp=max_abs_amp,
-            color="k",
-            alpha=0.05,
-            show_chan_label=False,
-        )
+        # load waveforms: either from h5 (stored_*) or disk
+        kept = np.arange(len(in_unit[choices]))
+        if stored_waveforms is None and stored_tpca_projs is None:
+            if relocated:
+                (
+                    wfs,
+                    skipped,
+                ) = relocation.load_relocated_waveforms_on_channel_subset(
+                    np.c_[self.spike_train[in_unit[choices], 0], maxchans],
+                    self.raw_bin,
+                    self.spike_xyza[in_unit[choices]],
+                    self.spike_z_reg[in_unit[choices]],
+                    self.geom,
+                    target_channels=ci[self.template_maxchans[unit]],
+                    fill_value=np.nan,
+                    trough_offset=self.trough_offset,
+                    spike_length_samples=self.spike_length_samples,
+                )
+            else:
+                wfs, skipped = read_waveforms(
+                    self.spike_train[in_unit[choices], 0],
+                    self.raw_bin,
+                    len(self.geom),
+                    channel_index=ci,
+                    max_channels=maxchans,
+                    trough_offset=self.trough_offset,
+                    spike_length_samples=self.spike_length_samples,
+                )
+            kept = np.setdiff1d(kept, skipped)
+        else:
+            assert stored_maxchans is not None
+            assert stored_channel_index is not None
+            if stored_order is None:
+                stored_order = np.arange(self.n_spikes)
+            load_stored = stored_order[self.which[in_unit[choices]]]
+            mcs = stored_maxchans[load_stored]
+
+            if stored_waveforms is not None:
+                assert stored_waveforms.shape[0] == self.n_spikes_full
+                wfs = stored_waveforms[load_stored]
+            elif stored_tpca_projs is not None:
+                assert stored_tpca_projs.shape[0] == self.n_spikes_full
+                projs = stored_tpca_projs[load_stored]
+                wfs = stored_tpca.inverse_transform(
+                    projs, mcs, stored_channel_index
+                )
+
+            if relocated:
+                wfs = relocation.get_relocated_waveforms_on_channel_subset(
+                    mcs,
+                    wfs,
+                    self.spike_xyza[in_unit[choices]],
+                    self.spike_z_reg[in_unit[choices]],
+                    stored_channel_index,
+                    self.geom,
+                    target_channels=ci[self.template_maxchans[unit]],
+                )
+            else:
+                wfs = waveform_utils.restrict_wfs_to_chans(
+                    wfs,
+                    mcs,
+                    stored_channel_index,
+                    ci[self.template_maxchans[unit]],
+                )
+            kept = np.flatnonzero(~np.isnan(wfs).all(axis=(1, 2)))
+
+        max_abs_amp = None
+        if kept.size:
+            max_abs_amp = np.nanmax(np.abs(wfs[kept]))
+            wf_lines = cluster_viz_index.pgeom(
+                wfs[kept],
+                maxchans[kept],
+                ci,
+                self.geom,
+                ax=axes["d"],
+                max_abs_amp=max_abs_amp,
+                color="k",
+                alpha=0.05,
+                show_chan_label=False,
+            )
         rt_lines = cluster_viz_index.pgeom(
             self.templates[unit][:, ci[self.template_maxchans[unit]]],
             self.template_maxchans[unit],
@@ -708,14 +795,43 @@ class Sorting:
             )
             ch = (ct_lines[0],)
             cl = ("cleaned template",)
-        axes["d"].legend(
-            (wf_lines[0], rt_lines[0], *ch),
-            ("waveforms", "raw template", *cl),
-            fancybox=False,
-            loc="lower right",
-        )
+        if kept.size:
+            axes["d"].legend(
+                (wf_lines[0], rt_lines[0], *ch),
+                ("waveforms", "raw template", *cl),
+                fancybox=False,
+                loc="lower right",
+            )
+        else:
+            axes["d"].legend(
+                (rt_lines[0], *ch),
+                ("raw template", *cl),
+                fancybox=False,
+                loc="lower right",
+            )
         axes["d"].set_xticks([])
         axes["d"].set_yticks([])
+
+        # pca plot
+        kept2 = ~np.isnan(wfs).any(axis=(1, 2))
+        if kept2.sum() > 1:
+            pca_chans = np.flatnonzero(
+                cdist(
+                    self.geom[self.template_maxchans[unit]][None], self.geom
+                )[0]
+                < 75
+            )
+            pca_wfs = waveform_utils.restrict_wfs_to_chans(
+                wfs[kept2],
+                source_channels=ci[self.template_maxchans[unit]],
+                dest_channels=pca_chans,
+            )
+            pca_projs = PCA(2).fit_transform(
+                pca_wfs.reshape(pca_wfs.shape[0], -1)
+            )
+            axes["c"].scatter(*pca_projs.T, color="k", s=1)
+        axes["c"].set_xlabel("unit pc1")
+        axes["c"].set_ylabel("unit pc2")
 
         return fig, axes, self.template_maxptps[unit]
 
@@ -724,14 +840,21 @@ class Sorting:
         out_folder,
         dz=50,
         nchans=16,
-        n_wfs_max=100,
+        n_wfs_max=250,
         show_chan_label=True,
+        show_scatter=True,
         chan_labels=None,
         relocated=False,
+        stored_channel_index=None,
+        stored_maxchans=None,
+        stored_waveforms=None,
+        stored_tpca_projs=None,
+        stored_tpca=None,
+        stored_order=None,
         n_jobs=-1,
     ):
         out_folder = Path(out_folder)
-        out_folder.mkdir(exist_ok=True)
+        out_folder.mkdir(exist_ok=True, parents=True)
 
         def job(unit):
             fig, axes, ptp = self.unit_summary_fig(
@@ -740,8 +863,15 @@ class Sorting:
                 nchans=nchans,
                 n_wfs_max=n_wfs_max,
                 show_chan_label=show_chan_label,
+                show_scatter=show_scatter,
                 chan_labels=chan_labels,
                 relocated=relocated,
+                stored_channel_index=stored_channel_index,
+                stored_maxchans=stored_maxchans,
+                stored_waveforms=stored_waveforms,
+                stored_tpca_projs=stored_tpca_projs,
+                stored_tpca=stored_tpca,
+                stored_order=stored_order,
             )
             fig.savefig(
                 out_folder / f"{self.name_lo}_unit{unit:03d}.png", dpi=300
@@ -752,6 +882,167 @@ class Sorting:
             for res in p(
                 delayed(job)(unit)
                 for unit in tqdm(self.unit_labels, desc="Unit summaries")
+            ):
+                pass
+
+    def unit_resid_study(
+        self,
+        unit,
+        n_max=5,
+        max_dist=4,
+        plot_chans=10,
+        lambd=0.001,
+        allowed_scale=0.1,
+        tmin=None,
+        tmax=None,
+    ):
+        unit_temp = self.cleaned_templates[unit]
+        thresh = 0.9 * np.square(self.cleaned_templates).sum(axis=(1, 2)).min()
+        resid_v_new = calc_resid_matrix(
+            unit_temp[None],
+            np.array([0]),
+            self.cleaned_templates,
+            np.arange(self.cleaned_templates.shape[0]),
+            thresh=thresh,
+            n_jobs=1,
+            pbar=False,
+            lambd=lambd,
+            allowed_scale=allowed_scale,
+        ).squeeze()
+
+        # ignore large distances
+        # resid_v_new[resid_v_new > max_dist] = np.inf
+
+        resid_is_finite = np.isfinite(resid_v_new)
+        if not resid_is_finite.any():
+            return None, None
+
+        resid_is_finite = np.flatnonzero(resid_is_finite)
+
+        resid_vals = resid_v_new[resid_is_finite]
+        sort = np.argsort(resid_vals)[:n_max]
+        sorted_near_units = self.unit_labels[resid_is_finite[sort]]
+
+        fig, axes = plt.subplot_mosaic(
+            "a.b\n...\nccc",
+            gridspec_kw=dict(
+                height_ratios=[1.5, 0.1, 4], width_ratios=[1, 0.1, 1]
+            ),
+            figsize=(4, 8),
+        )
+
+        axes["a"].plot(resid_vals[sort])
+        axes["a"].set_xticks(
+            np.arange(len(sort)),
+            sorted_near_units,
+        )
+        axes["a"].set_xlabel("all nearby units")
+        axes["a"].set_ylabel("resid dist")
+
+        sorted_near_units = sorted_near_units
+
+        thresh, near_unit_distmat = self.resid_matrix(
+            sorted_near_units,
+            n_jobs=1,
+            pbar=False,
+            lambd=lambd,
+            allowed_scale=allowed_scale,
+        )
+        near_dist_df = pd.DataFrame(
+            near_unit_distmat,
+            index=sorted_near_units,
+            columns=sorted_near_units,
+        )
+        vals = near_unit_distmat[np.isfinite(near_unit_distmat)]
+        if not vals.size:
+            vals = np.array([0, 0])
+        sns.heatmap(
+            near_dist_df, vmin=vals.min(), vmax=vals.max(), ax=axes["b"]
+        )
+        axes["b"].set_xlabel("nearby units")
+        axes["b"].set_title(
+            f"{len(sorted_near_units)} closest pairwise resid dists",
+            fontsize=8,
+        )
+
+        ls = []
+        hs = []
+        plotci = waveform_utils.make_contiguous_channel_index(
+            self.geom.shape[0], plot_chans
+        )
+        pal = sns.color_palette(n_colors=len(sorted_near_units))
+        pal = pal[::-1]
+        gtmc = self.template_maxchans[unit]
+        max_abs = np.abs(
+            self.cleaned_templates[sorted_near_units]
+        ).max()
+        for j, nearby in enumerate(sorted_near_units[::-1]):
+            lines = cluster_viz_index.pgeom(
+                self.cleaned_templates[nearby][
+                    tmin:tmax, plotci[gtmc]
+                ],
+                gtmc,
+                plotci,
+                self.geom,
+                ax=axes["c"],
+                color=pal[j],
+                max_abs_amp=max_abs,
+                show_zero=not j,
+                x_extension=0.9,
+            )
+            ls.append(lines[0])
+            hs.append(str(nearby))
+
+        # plot gt template
+        lines = cluster_viz_index.pgeom(
+            self.templates[unit][tmin:tmax, plotci[gtmc]],
+            gtmc,
+            plotci,
+            self.geom,
+            ax=axes["c"],
+            color="k",
+            linestyle="--",
+            max_abs_amp=max_abs,
+            show_zero=not j,
+            x_extension=0.9,
+        )
+        ls.append(lines[0])
+        hs.append(f"unit{unit}")
+
+        axes["c"].legend(ls, hs, title="nearby units", loc="lower right")
+        axes["c"].set_title("templates of nearby units around unit maxchan")
+
+        return fig, axes
+
+    def make_resid_studies(
+        self,
+        out_folder,
+        n_jobs=-1,
+    ):
+        out_folder = Path(out_folder)
+        out_folder.mkdir(exist_ok=True, parents=True)
+
+        def job(unit):
+            fig, axes = self.unit_resid_study(
+                unit,
+                n_max=5,
+                max_dist=4,
+                plot_chans=10,
+                lambd=0.001,
+                allowed_scale=0.1,
+                tmin=None,
+                tmax=None,
+            )
+            if fig is not None:
+                fig.savefig(
+                    out_folder / f"{self.name_lo}_unit{unit:03d}.png", dpi=300
+                )
+                plt.close(fig)
+
+        with Parallel(n_jobs) as p:
+            for res in p(
+                delayed(job)(unit)
+                for unit in tqdm(self.unit_labels, desc="Resid studies")
             ):
                 pass
 
