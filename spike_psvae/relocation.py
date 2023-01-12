@@ -1,9 +1,7 @@
 """Helper functions for point source relocation
 """
-
 import numpy as np
-# from numba import njit
-from .waveform_utils import get_pitch
+from .waveform_utils import get_pitch, restrict_wfs_to_chans
 from .spikeio import read_waveforms
 
 
@@ -13,10 +11,7 @@ def point_source_ptp(xyza, wf_channels, geom, fill_value=np.nan):
     return xyza[:, 3][:, None] / (
         np.square(xyza[:, 1])[:, None]
         + np.sum(
-            np.square(
-                wf_geoms
-                - xyza[:, (0, 2)][:, None, :]
-            ),
+            np.square(wf_geoms - xyza[:, (0, 2)][:, None, :]),
             axis=2,
         )
     )
@@ -64,8 +59,7 @@ def get_relocated_waveforms_on_channel_subset(
     target_channels,
     fill_value=np.nan,
 ):
-    """Relocated waveforms on a specific group of channels `target_channels`
-    """
+    """Relocated waveforms on a specific group of channels `target_channels`"""
     # we will handle the "integer part" of the drift by just grabbing
     # different channels in the waveforms, and the remainder by point
     # source relocation
@@ -93,9 +87,9 @@ def get_relocated_waveforms_on_channel_subset(
     # now, grab the waveforms on those channels.
     shifted_waveforms = restrict_wfs_to_chans(
         waveforms,
-        max_channels,
-        channel_index,
-        orig_chans,
+        max_channels=max_channels,
+        channel_index=channel_index,
+        dest_channels=orig_chans,
         fill_value=fill_value,
     )
 
@@ -126,8 +120,7 @@ def load_relocated_waveforms_on_channel_subset(
     trough_offset=42,
     spike_length_samples=121,
 ):
-    """Relocated waveforms on a specific group of channels `target_channels`
-    """
+    """Relocated waveforms on a specific group of channels `target_channels`"""
     assert spike_index.shape[0] == xyza_from.shape[0] == z_to.shape[0]
     # we will handle the "integer part" of the drift by just grabbing
     # different channels in the waveforms, and the remainder by point
@@ -179,25 +172,3 @@ def load_relocated_waveforms_on_channel_subset(
     )
 
     return shifted_waveforms, skipped
-
-
-# @njit(cache=False)
-def restrict_wfs_to_chans(
-    waveforms, maxchans, channel_index, dest_channels, fill_value=np.nan
-):
-    N, T, C = waveforms.shape
-    assert N == maxchans.size
-    assert C == channel_index.shape[1]
-    N_, c = dest_channels.shape
-    assert N == N_
-
-    out_waveforms = np.full((N, T, c), fill_value, dtype=waveforms.dtype)
-    for n in range(N):
-        chans_in_target, target_found = np.nonzero(
-            channel_index[maxchans[n]].reshape(-1, 1) == dest_channels[n].reshape(1, -1)
-        )
-        out_waveforms[n, :, target_found] = waveforms[n, :, chans_in_target]
-        # for t, c in zip(target_found, chans_in_target):
-        #     out_waveforms[n, :, t] = waveforms[n, :, c]
-
-    return out_waveforms
