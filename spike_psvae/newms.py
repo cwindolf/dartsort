@@ -5,6 +5,7 @@ from spike_psvae import (
     deconv_resid_merge,
 )
 from scipy.spatial.distance import cdist
+from functools import partial
 
 
 def registered_maxchan(
@@ -35,65 +36,117 @@ def new_merge_split(
     geom,
     outdir,
     n_workers=1,
-    herding_npcs=2,
-    herding_clust="hdbscan",
     merge_resid_threshold=2.0,
+    threshold_diptest=0.5,
     relocated=False,
     trough_offset=42,
     spike_length_samples=121,
-    maxchan_split=True,
+    extra_pc_split=True,
+    pc_only=False,
+    load_split=False,
 ):
-    (
-        aligned_spike_train,
-        order,
-        templates,
-        template_shifts,
-    ) = spike_train_utils.clean_align_and_get_templates(
-        spike_train,
-        n_channels,
-        raw_bin,
-        trough_offset=trough_offset,
-        spike_length_samples=spike_length_samples,
-    )
-
-    if maxchan_split:
-        new_labels = before_deconv_merge_split.split_clusters(
-            aligned_spike_train[:, 1],
+    if not load_split:
+        (
+            aligned_spike_train,
+            order,
+            templates,
+            template_shifts,
+        ) = spike_train_utils.clean_align_and_get_templates(
+            spike_train,
+            n_channels,
             raw_bin,
-            sub_h5,
-            n_workers=n_workers,
-            relocated=relocated,
+            trough_offset=trough_offset,
+            spike_length_samples=spike_length_samples,
         )
+
+        # yizi_split = partial(before_deconv_merge_split.herding_split, clusterer="optics")
+        # yizi_split.__name__ = "optics Split"
+
+        if extra_pc_split:
+            new_labels = before_deconv_merge_split.split_clusters(
+                aligned_spike_train[:, 1],
+                raw_bin,
+                sub_h5,
+                n_workers=n_workers,
+                relocated=relocated,
+                split_steps=(
+                    before_deconv_merge_split.herding_split,
+                    before_deconv_merge_split.herding_split,
+                ),
+                recursive_steps=(False, True),
+                split_step_kwargs=(
+                    {},
+                    dict(
+                        use_features=False,
+                        n_pca_features=3,
+                        hdbscan_kwargs=dict(min_cluster_size=15, min_samples=5),
+                    ),
+                ),
+                # split_steps=(before_deconv_merge_split.herding_split, yizi_split,),
+                # recursive_steps=(False, True,),
+                # split_steps=(yizi_split,),
+                # recursive_steps=(True,),
+            )
+        elif pc_only:
+            new_labels = before_deconv_merge_split.split_clusters(
+                aligned_spike_train[:, 1],
+                raw_bin,
+                sub_h5,
+                n_workers=n_workers,
+                relocated=relocated,
+                split_steps=(before_deconv_merge_split.herding_split,),
+                recursive_steps=(True,),
+                split_step_kwargs=(
+                    dict(
+                        use_features=False,
+                        n_pca_features=3,
+                        hdbscan_kwargs=dict(min_cluster_size=25, min_samples=5),
+                    ),
+                ),
+                # split_steps=(before_deconv_merge_split.herding_split, yizi_split,),
+                # recursive_steps=(False, True,),
+                # split_steps=(yizi_split,),
+                # recursive_steps=(True,),
+            )
+        else:
+            new_labels = before_deconv_merge_split.split_clusters(
+                aligned_spike_train[:, 1],
+                raw_bin,
+                sub_h5,
+                n_workers=n_workers,
+                relocated=relocated,
+                split_steps=(before_deconv_merge_split.herding_split,),
+                recursive_steps=(True,),
+                # split_steps=(before_deconv_merge_split.herding_split, yizi_split,),
+                # recursive_steps=(False, True,),
+                # split_steps=(yizi_split,),
+                # recursive_steps=(True,),
+            )
+        (
+            aligned_spike_train2,
+            order,
+            templates,
+            template_shifts,
+        ) = spike_train_utils.clean_align_and_get_templates(
+            np.c_[aligned_spike_train[:, 0], new_labels],
+            n_channels,
+            raw_bin,
+            trough_offset=trough_offset,
+            spike_length_samples=spike_length_samples,
+            order_units_by_z=True,
+            geom=geom,
+        )
+
+        assert (order == np.arange(len(order))).all()
+
+        print("Save split...")
+        np.save(outdir / "split_st.npy", aligned_spike_train2)
+        np.save(outdir / "split_templates.npy", templates)
+        np.save(outdir / "split_order.npy", order)
     else:
-        new_labels = before_deconv_merge_split.split_clusters(
-            aligned_spike_train[:, 1],
-            raw_bin,
-            sub_h5,
-            n_workers=n_workers,
-            relocated=relocated,
-            split_steps=(before_deconv_merge_split.herding_split,),
-            recursive_steps=(False,),
-        )
-
-    (
-        aligned_spike_train2,
-        order,
-        templates,
-        template_shifts,
-    ) = spike_train_utils.clean_align_and_get_templates(
-        np.c_[aligned_spike_train[:, 0], new_labels],
-        n_channels,
-        raw_bin,
-        trough_offset=trough_offset,
-        spike_length_samples=spike_length_samples,
-    )
-
-    assert (order == np.arange(len(order))).all()
-
-    print("Save split...")
-    np.save(outdir / "split_st.npy", aligned_spike_train2)
-    np.save(outdir / "split_templates.npy", templates)
-    np.save(outdir / "split_order.npy", order)
+        aligned_spike_train2 = np.load(outdir / "split_st.npy")
+        templates = np.load(outdir / "split_templates.npy")
+        order = np.load(outdir / "split_order.npy")
 
     aligned_times, new_labels = before_deconv_merge_split.merge_clusters(
         sub_h5,
@@ -103,6 +156,7 @@ def new_merge_split(
         relocated=relocated,
         trough_offset=trough_offset,
         n_jobs=n_workers,
+        threshold_diptest=threshold_diptest,
     )
 
     (
@@ -144,6 +198,8 @@ def new_merge_split(
         max_shift=20,
         trough_offset=trough_offset,
         spike_length_samples=spike_length_samples,
+        order_units_by_z=True,
+        geom=geom,
     )
     order = order[reorder]
 
