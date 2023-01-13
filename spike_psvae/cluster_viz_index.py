@@ -167,9 +167,9 @@ def array_scatter(
 
 def pgeom(
     waveforms,
-    max_channels,
-    channel_index,
-    geom,
+    max_channels=None,
+    channel_index=None,
+    geom=None,
     ax=None,
     color=None,
     alpha=1,
@@ -185,9 +185,16 @@ def pgeom(
     subar=False,
 ):
     """Plot waveforms according to geometry using channel index"""
+    assert geom is not None
     ax = ax or plt.gca()
 
     # -- validate shapes
+    if max_channels is None and channel_index is None:
+        max_channels = np.zeros(waveforms.shape[0], dtype=int)
+        channel_index = (
+            np.arange(geom.shape[0])[None, :]
+            * np.ones(geom.shape[0], dtype=int)[:, None]
+        )
     max_channels = np.atleast_1d(max_channels)
     if waveforms.ndim == 2:
         waveforms = waveforms[None]
@@ -371,6 +378,7 @@ def reassignment_viz(
     new_labels,
     raw_bin,
     geom,
+    templates=None,
     radius=200,
     n_plot=250,
     z_extension=1.0,
@@ -395,7 +403,8 @@ def reassignment_viz(
     orig_choices = rg.choice(
         in_unit, size=min(n_plot, in_unit.size), replace=False
     )
-    orig_wf, _ = spikeio.read_waveforms(
+    orig_choices.sort()
+    orig_wf, skipped = spikeio.read_waveforms(
         spike_train_orig[orig_choices, 0],
         raw_bin,
         geom.shape[0],
@@ -405,17 +414,18 @@ def reassignment_viz(
         trough_offset=trough_offset,
         spike_length_samples=spike_length_samples,
     )
+    print(f"orig {orig_wf.shape=} {skipped=}")
     og_temp = orig_wf.mean(0)
     og_mc = og_temp.ptp(0).argmax()
     orig_wf = np.pad(orig_wf, [(0, 0), (0, 0), (0, 1)])[
         :, :, channel_index[og_mc]
     ]
-    og_mcs = [og_mc] * orig_choices.size
+    og_mcs = [og_mc] * orig_wf.shape[0]
 
     kept_choices = rg.choice(
         in_unit[kept], size=min(n_plot, in_unit[kept].size), replace=False
     )
-    kept_wf, _ = spikeio.read_waveforms(
+    kept_wf, skipped = spikeio.read_waveforms(
         spike_train_orig[kept_choices, 0],
         raw_bin,
         geom.shape[0],
@@ -423,7 +433,8 @@ def reassignment_viz(
         trough_offset=trough_offset,
         spike_length_samples=spike_length_samples,
     )
-    kept_mcs = [og_mc] * kept_choices.size
+    print(f"kept {kept_wf.shape=} {skipped=}")
+    kept_mcs = [og_mc] * kept_wf.shape[0]
     pgeom(
         orig_wf,
         og_mcs,
@@ -454,6 +465,20 @@ def reassignment_viz(
     axes[0].set_title(
         f"unit {orig_label} kept {kept.sum()}/{in_unit.size} ({100*kept.mean():0.1f}%)"
     )
+    if templates is not None:
+        pgeom(
+            templates[orig_label][None, :, channel_index[og_mc]],
+            [og_mc],
+            channel_index,
+            geom,
+            ax=axes[0],
+            color=cc.glasbey[0],
+            max_abs_amp=np.abs(orig_wf).max(),
+            lw=1,
+            alpha=1,
+            show_zero=False,
+            z_extension=z_extension,
+        )
 
     for j, (newu, ax) in enumerate(zip(new_units, axes.flat[1:])):
         new_choices = rg.choice(
@@ -462,7 +487,7 @@ def reassignment_viz(
             replace=False,
         )
         axes[j + 1].set_title(f"{(newids == newu).sum()} spikes -> {newu}")
-        new_wf, _ = spikeio.read_waveforms(
+        new_wf, skipped = spikeio.read_waveforms(
             spike_train_orig[new_choices, 0],
             raw_bin,
             geom.shape[0],
@@ -470,7 +495,8 @@ def reassignment_viz(
             trough_offset=trough_offset,
             spike_length_samples=spike_length_samples,
         )
-        new_mcs = [og_mc] * new_choices.size
+        new_mcs = [og_mc] * new_wf.shape[0]
+        print(f"new {spike_train_orig[new_choices, 0]=} {new_wf.shape=} {skipped=}")
         pgeom(
             orig_wf,
             og_mcs,
@@ -492,7 +518,21 @@ def reassignment_viz(
                 color=cc.glasbey[j + 1],
                 max_abs_amp=np.abs(orig_wf).max(),
                 lw=1,
-                alpha=0.1,
+                alpha=0.5,
+                show_zero=False,
+                z_extension=z_extension,
+            )
+        if templates is not None:
+            pgeom(
+                templates[newu][None, :, channel_index[og_mc]],
+                [og_mc],
+                channel_index,
+                geom,
+                ax=axes[j + 1],
+                color=cc.glasbey[j + 1],
+                max_abs_amp=np.abs(orig_wf).max(),
+                lw=1,
+                alpha=1,
                 show_zero=False,
                 z_extension=z_extension,
             )
@@ -506,6 +546,7 @@ def reassignments_viz(
     raw_bin,
     output_directory,
     geom,
+    templates=None,
     radius=200,
     z_extension=1.0,
     trough_offset=42,
@@ -520,6 +561,7 @@ def reassignments_viz(
             new_labels,
             raw_bin,
             geom,
+            templates=templates,
             radius=radius,
             z_extension=z_extension,
             trough_offset=trough_offset,
@@ -689,9 +731,7 @@ def plot_ccg(times, nbins=50, ms_frames=30, ax=None):
     ccg_ = ccg(times, times, nbins, ms_frames)
     ccg_[nbins] = 0
 
-    ax.bar(
-        np.arange(nbins * 2 + 1) - nbins, ccg_, width=1, ec="none"
-    )
+    ax.bar(np.arange(nbins * 2 + 1) - nbins, ccg_, width=1, ec="none")
     ax.set_xlabel("isi (ms)")
     ax.set_ylabel("autocorrelogram count")
 
