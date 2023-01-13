@@ -37,6 +37,7 @@ def extract_deconv(
     save_denoised_tpca_projs=False,
     save_outlier_scores=True,
     do_reassignment=True,
+    do_reassignment_tpca=True,
     reassignment_proposed_pairs_up=None,
     reassignment_tpca_rank=5,
     reassignment_tpca_spatial_radius=75,
@@ -149,16 +150,17 @@ def extract_deconv(
         save_outlier_scores = True
 
         # fit a TPCA to raw waveforms
-        reassignment_tpca = waveform_utils.fit_tpca_bin(
-            spike_index_up,
-            geom,
-            standardized_bin,
-            tpca_rank=reassignment_tpca_rank,
-            spike_length_samples=spike_length_samples,
-            spatial_radius=reassignment_tpca_rank,
-            tpca_n_wfs=reassignment_tpca_n_wfs,
-            seed=seed,
-        )
+        if do_reassignment_tpca:
+            reassignment_tpca = waveform_utils.fit_tpca_bin(
+                spike_index_up,
+                geom,
+                standardized_bin,
+                tpca_rank=reassignment_tpca_rank,
+                spike_length_samples=spike_length_samples,
+                spatial_radius=reassignment_tpca_rank,
+                tpca_n_wfs=reassignment_tpca_n_wfs,
+                seed=seed,
+            )
 
         # get local views of templates for reassignment
         reassignment_temps_up_loc = reassignment.reassignment_templates_local(
