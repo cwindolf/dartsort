@@ -1,4 +1,3 @@
-# %%
 """Helper functions for reassignment
 """
 import numpy as np
@@ -6,7 +5,6 @@ from .deconv_resid_merge import calc_resid_matrix
 from .waveform_utils import apply_tpca
 
 
-# %%
 def propose_pairs(
     templates,
     max_resid_dist=5,
@@ -28,7 +26,7 @@ def propose_pairs(
     deconv_threshold = deconv_threshold_mul * np.min(
         np.square(templates).sum(axis=(1, 2))
     )
-    # TODO: This is a sparse matrix - no need to save a n_templates*n_templates matrix 
+    # TODO: This is a sparse matrix - no need to save a n_templates * n_templates matrix
     # Breaks things when high n channels / high n templates
     resids, shifts = calc_resid_matrix(
         templates,
@@ -54,9 +52,8 @@ def propose_pairs(
     return pairs
 
 
-# %%
 def reassign_waveforms(
-    labels, cleaned_waveforms, proposed_pairs, templates_loc, tpca=None
+    labels, cleaned_waveforms, proposed_pairs, templates_loc, tpca=None, norm_p=np.inf,
 ):
     N = labels.size
     assert N == cleaned_waveforms.shape[0]
@@ -70,7 +67,10 @@ def reassign_waveforms(
 
         resids = cwf[None, :, :] - templates_loc[label]
         resids = apply_tpca(resids, tpca)
-        scores = np.nanmax(np.abs(resids), axis=(1, 2))
+        if norm_p == np.inf:
+            scores = np.nanmax(np.abs(resids), axis=(1, 2))
+        else:
+            scores = np.nanmean(np.abs(resids) ** norm_p, axis=(1, 2))
         best = scores.argmin()
         new_labels[j] = pairs[best]
         outlier_scores[j] = scores[best]
@@ -78,7 +78,6 @@ def reassign_waveforms(
     return new_labels, outlier_scores
 
 
-# %%
 def reassignment_templates_local(templates, proposed_pairs, channel_index):
     """
     For each template, and for each proposed pair template, get the pair
