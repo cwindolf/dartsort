@@ -67,6 +67,7 @@ def superres_denoised_templates(
     raw_binary_file,
     min_spikes_bin=10,
     max_spikes_per_unit=500,
+    denoise_templates=True,
     do_temporal_decrease=True,
     zero_radius_um=200,
     reducer=np.median,
@@ -92,6 +93,7 @@ def superres_denoised_templates(
         bin_size_um,
         min_spikes_bin=min_spikes_bin,
     )
+    print(f"{np.unique(superres_labels, return_counts=True)=}")
     templates, extra = snr_templates.get_templates(
         np.c_[spike_train[:, 0], superres_labels],
         geom,
@@ -111,6 +113,7 @@ def superres_denoised_templates(
         pbar=pbar,
         seed=seed,
         n_jobs=n_jobs,
+        raw_only=not denoise_templates,
     )
     return (
         templates,
@@ -363,7 +366,6 @@ def superres_deconv(
     deconv_dir=None,
     pfs=30_000,
     reference_displacement=0,
-    # need to implement
     t_start=0,
     t_end=None,
     n_jobs=1,
@@ -371,6 +373,7 @@ def superres_deconv(
     spike_length_samples=121,
     max_upsample=8,
     refractory_period_frames=10,
+    denoise_templates=True,
 ):
     Path(deconv_dir).mkdir(exist_ok=True)
 
@@ -384,6 +387,7 @@ def superres_deconv(
         bin_size_um,
         geom,
         raw_bin,
+        denoise_templates=denoise_templates,
         min_spikes_bin=10,
         max_spikes_per_unit=500,
         do_temporal_decrease=True,
@@ -399,6 +403,8 @@ def superres_deconv(
         tpca_n_wfs=50_000,
         n_jobs=n_jobs,
     )
+    print(f"{superres_templates.shape=}")
+    print(f"{superres_templates.ptp(1).max(1)=}")
 
     shifted_deconv_res = rigid_int_shift_deconv(
         raw_bin,
@@ -409,7 +415,6 @@ def superres_deconv(
         pfs=pfs,
         spike_train=None,
         templates=superres_templates,
-        # need to implement
         t_start=t_start,
         t_end=t_end,
         n_jobs=n_jobs,
@@ -536,6 +541,7 @@ def extract_superres_shifted_deconv(
     loc_radius=100,
     save_outlier_scores=True,
     do_reassignment=True,
+    do_reassignment_tpca=True,
     reassignment_tpca_rank=5,
     reassignment_tpca_spatial_radius=75,
     reassignment_tpca_n_wfs=50000,
@@ -563,9 +569,8 @@ def extract_superres_shifted_deconv(
             deconv_threshold_mul=propose_pairs_deconv_threshold_mul,
             n_jobs=n_jobs,
         )
-    else: 
-        superres_pairs=None
-        unit_pairs=None
+    else:
+        superres_pairs = None
     # print(f"{superres_pairs=}")
 
     # infer what upsampled shifted superres units can be pairs
@@ -623,6 +628,7 @@ def extract_superres_shifted_deconv(
         tpca_rank=tpca_rank,
         save_outlier_scores=save_outlier_scores,
         do_reassignment=do_reassignment,
+        do_reassignment_tpca=do_reassignment_tpca,
         reassignment_proposed_pairs_up=shifted_upsampled_pairs,
         reassignment_tpca_rank=reassignment_tpca_rank,
         reassignment_tpca_spatial_radius=reassignment_tpca_spatial_radius,
@@ -683,4 +689,6 @@ def extract_superres_shifted_deconv(
         ):
             h5.create_dataset(key, data=superres_deconv_result[key])
 
-    return ret
+    extra = dict(superres_pairs=superres_pairs, shifted_upsampled_pairs=shifted_upsampled_pairs)
+
+    return ret, extra

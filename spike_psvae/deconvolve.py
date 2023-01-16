@@ -1,11 +1,9 @@
-# %%
 import numpy as np
 from scipy import signal
 import time
 import os
 import multiprocessing
 from itertools import repeat
-import copy
 from tqdm.auto import tqdm, trange
 import pickle
 from spike_psvae.spikeio import read_data, read_waveforms
@@ -13,7 +11,6 @@ from pathlib import Path
 from spike_psvae import snr_templates
 
 
-# %%
 class MatchPursuitObjectiveUpsample:
     """Class for doing greedy matching pursuit deconvolution."""
 
@@ -196,12 +193,14 @@ class MatchPursuitObjectiveUpsample:
 
         # Refractory Period Setup.
         # DO NOT MAKE IT SMALLER THAN self.n_time - 1 !!!
-        # (This is not actually the refractory condition we enforce.)
+        # (This is not actually the refractory condition we enforce.
+        #  It is a radius to make sure the algorithm does not subtract
+        #  two overlapping spikes at the same time, which would confuse it.)
         self.refrac_radius = self.n_time - 1
 
         # Account for upsampling window so that np.inf does not fall into the
         # window around peak for valid spikes.
-        # (This is the refractory condition we enforce.)
+        # (This is the actual refractory condition we enforce.)
         self.adjusted_refrac_radius = refractory_period_frames
 
     def upsample_templates_mp(self, upsample):
@@ -209,11 +208,9 @@ class MatchPursuitObjectiveUpsample:
             max_upsample = upsample
             # original function
             self.unit_up_factor = np.power(
-                4, np.floor(np.log2(np.max(self.temps.ptp(axis=0), axis=0)))
+                4, np.floor(np.log2(self.temps.ptp(axis=0).max(axis=0)))
             )
-            self.up_factor = min(
-                max_upsample, int(np.max(self.unit_up_factor))
-            )
+            self.up_factor = np.clip(int(np.max(self.unit_up_factor)), 1, max_upsample)
             self.unit_up_factor[
                 self.unit_up_factor > max_upsample
             ] = max_upsample
@@ -232,8 +229,8 @@ class MatchPursuitObjectiveUpsample:
         else:
             # Upsample and downsample time shifted versions
             self.up_factor = upsample
-            self.unit_up_factor = np.ones(self.n_unit)
-            self.up_up_map = range(self.n_unit * self.up_factor)
+            self.unit_up_factor = np.ones(self.n_unit, dtype=int)
+            self.up_up_map = np.arange(self.n_unit * self.up_factor)
 
     def update_data(self):
         """Updates the data for the deconv to be run on with same templates."""
@@ -447,8 +444,17 @@ class MatchPursuitObjectiveUpsample:
 
     def get_sparse_upsampled_templates(self, save_npy=True, return_orig_map=False):
         """Returns the fully upsampled sparse version of the original templates.
+
         returns:
         --------
+        all_temps : array of shape (t, C, M)
+            The set of upsampled shifted templates.
+        deconv_id_sparse_temp_map : array of length K
+            K = original number of units * max upsample
+            This maps cluster ids from the deconvolution result to
+            the range(M) id space of the sparse upsampled templates.
+        orig_map : array of length 
+
         Tuple of numpy.ndarray. First element is of shape (t, C, M) is the set
         upsampled shifted templates that have been used in the dynamic
         upsampling approach. Second is an array of lenght K (number of original
@@ -469,7 +475,7 @@ class MatchPursuitObjectiveUpsample:
         # respectively correspond to [0, 9, 8, ..., 1] of the 10x upsampled of
         # the original templates.
         all_temps = []
-        # TODO: unused variable, why?
+        # TODO: unused variable, why? -- I t
         # reorder_idx = np.concatenate(
         #     (np.arange(0, 1), np.arange(self.up_factor - 1, 0, -1))
         # )
@@ -592,11 +598,11 @@ class MatchPursuitObjectiveUpsample:
         ]
 
     def correct_shift_deconv_spike_train(self, dec_spike_train):
-        """Get time shift corrected version of the deconvovled spike train.
+        """Get time shift corrected version of the deconvolved spike train.
         This corrected version only applies if you consider getting upsampled
         templates with get_upsampled_templates() method.
         """
-        correct_spt = copy.copy(dec_spike_train)
+        correct_spt = dec_spike_train.copy()
         correct_spt[correct_spt[:, 1] % self.up_factor > 0, 0] += 1
         return correct_spt
 
@@ -933,17 +939,14 @@ class MatchPursuitObjectiveUpsample:
 
         # ******** ADJUST SPIKE TIMES TO REMOVE BUFFER AND OFSETS *******
         # find spikes inside data block, i.e. outside buffers
-        if pad_right > 0:  # end of the recording (TODO: need to check)
-            subtract_t = self.buffer + self.n_time
-        else:
-            subtract_t = self.buffer
-
-        idx = np.where(
-            np.logical_and(
-                self.dec_spike_train[:, 0] >= self.buffer,
-                self.dec_spike_train[:, 0] < self.data.shape[0] - subtract_t,
-            )
-        )[0]
+        limit_low = self.buffer
+        limit_high = self.buffer + s_end - s_start
+        if load_end == self.end_sample:
+            limit_high -= self.n_time
+        idx = np.flatnonzero(
+            (self.dec_spike_train[:, 0] >= limit_low)
+            & (self.dec_spike_train[:, 0] < limit_high)
+        )
         self.dec_spike_train = self.dec_spike_train[idx]
         self.dec_scalings = self.dec_scalings[idx]
 
@@ -967,7 +970,6 @@ class MatchPursuitObjectiveUpsample:
             self.run_batch(batch_id, fname_out)
 
 
-# %%
 def deconvolution(
     spike_index,
     cluster_labels,
@@ -1169,7 +1171,119 @@ def deconvolution(
     )
 
 
-# %%
+def deconv(
+    raw_bin,
+    deconv_dir,
+    templates,
+    t_start=0,
+    t_end=None,
+    sampling_rate=30_000,
+    n_sec_chunk=1,
+    n_jobs=1,
+    max_upsample=8,
+    refractory_period_frames=10,
+    trough_offset=42,
+    threshold=50,
+):
+    deconv_dir = Path(deconv_dir)
+    deconv_dir.mkdir(exist_ok=True, parents=True)
+    mp_object = MatchPursuitObjectiveUpsample(
+        templates=templates,
+        deconv_dir=deconv_dir,
+        standardized_bin=raw_bin,
+        t_start=t_start,
+        t_end=t_end,
+        n_sec_chunk=n_sec_chunk,
+        sampling_rate=sampling_rate,
+        max_iter=1000,
+        threshold=threshold,
+        vis_su=1.0,
+        conv_approx_rank=5,
+        n_processors=n_jobs,
+        multi_processing=n_jobs > 1,
+        upsample=max_upsample,
+        lambd=0,
+        allowed_scale=0,
+        refractory_period_frames=refractory_period_frames,
+    )
+    my_batches = np.arange(mp_object.n_batches)
+    my_fnames = [
+        deconv_dir / f"seg_{bid:06d}_deconv.npz" for bid in my_batches
+    ]
+    if n_jobs <= 1:
+        mp_object.run(my_batches, my_fnames)
+    else:
+        ctx = multiprocessing.get_context("spawn")
+        with ctx.Pool(
+            n_jobs,
+            initializer=mp_object.load_saved_state,
+        ) as pool:
+            for res in tqdm(
+                pool.imap_unordered(
+                    mp_object._run_batch,
+                    zip(my_batches, my_fnames),
+                ),
+                total=len(my_batches),
+                desc="Template matching",
+            ):
+                pass
+
+    (
+        templates_up,
+        deconv_id_sparse_temp_map,
+        sparse_id_to_orig_id,
+    ) = mp_object.get_sparse_upsampled_templates(return_orig_map=True)
+    templates_up = templates_up.transpose(2, 0, 1)
+
+    # gather deconv results
+    deconv_spike_train_upsampled = []
+    deconv_spike_train = []
+    deconv_scalings = []
+    print("gathering deconvolution results")
+    for bid in range(mp_object.n_batches):
+
+        fname_out = deconv_dir / f"seg_{bid:06d}_deconv.npz"
+        with np.load(fname_out) as d:
+            st = d["spike_train"]
+            deconv_scalings.append(d["scalings"])
+
+        st[:, 0] += trough_offset
+
+        # usual spike train
+        deconv_st = st.copy()
+        # correct the troughs according to the upsampling
+        deconv_st = mp_object.correct_shift_deconv_spike_train(deconv_st)
+        deconv_st[:, 1] //= max_upsample
+        deconv_spike_train.append(deconv_st)
+
+        # upsampled spike train
+        st_up = st.copy()
+        st_up[:, 1] = deconv_id_sparse_temp_map[st_up[:, 1]]
+        deconv_spike_train_upsampled.append(st_up)
+
+    deconv_spike_train = np.concatenate(deconv_spike_train, axis=0)
+    deconv_spike_train_upsampled = np.concatenate(
+        deconv_spike_train_upsampled, axis=0
+    )
+    deconv_scalings = np.concatenate(deconv_scalings, axis=0)
+
+    print(
+        f"Number of Spikes deconvolved: {deconv_spike_train_upsampled.shape[0]}"
+    )
+
+    return dict(
+        deconv_spike_train=deconv_spike_train,
+        deconv_spike_train_upsampled=deconv_spike_train_upsampled,
+        deconv_scalings=deconv_scalings,
+        deconv_id_sparse_temp_map=deconv_id_sparse_temp_map,
+        sparse_id_to_orig_id=sparse_id_to_orig_id,
+        templates_up=templates_up,
+        temporal=mp_object.temporal,
+        singular=mp_object.singular,
+        spatial=mp_object.spatial,
+    )
+
+
 def get_templates(
     standardized_bin,
     spike_index,
@@ -1213,7 +1327,6 @@ def get_templates(
     return templates
 
 
-# %%
 def xqdm(it, pbar=True, **kwargs):
     if pbar:
         return tqdm(it, **kwargs)

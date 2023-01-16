@@ -1,10 +1,8 @@
-# %%
 import numpy as np
 from tqdm.auto import tqdm
-from . import spikeio
+from . import spikeio, localize_index
 
 
-# %%
 def make_labels_contiguous(
     labels, in_place=False, return_orig_unit_labels=False
 ):
@@ -22,7 +20,6 @@ def make_labels_contiguous(
     return out
 
 
-# %%
 def clean_align_and_get_templates(
     spike_train,
     n_channels,
@@ -37,7 +34,9 @@ def clean_align_and_get_templates(
     pbar=True,
     seed=0,
     dtype=np.float32,
-    remove_empty_units = True,
+    remove_empty_units=True,
+    order_units_by_z=False,
+    geom=None,
 ):
     """
     A helper function for cleaning and aligning spike trains
@@ -152,5 +151,24 @@ def clean_align_and_get_templates(
         aligned_spike_train = aligned_spike_train[order]
     else:
         order = np.arange(len(aligned_spike_train))
+
+    if order_units_by_z:
+        assert geom is not None
+        _, _, _, tz, _ = localize_index.localize_ptps_index(
+            templates.ptp(1),
+            geom,
+            templates.ptp(1).argmax(1),
+            np.array([np.arange(geom.shape[0])] * geom.shape[0]),
+            radius=100,
+        )
+        zord = np.argsort(tz)
+        templates = templates[zord]
+        template_shifts = template_shifts[zord]
+        zord_inv = np.argsort(zord)
+        zord_inv = np.concatenate([[-1], zord_inv], axis=0)
+        aligned_spike_train = np.c_[
+            aligned_spike_train[:, 0],
+            zord_inv[1 + aligned_spike_train[:, 1]],
+        ]
 
     return aligned_spike_train, order, templates, template_shifts
