@@ -1,3 +1,4 @@
+# %%
 import h5py
 import numpy as np
 import tempfile
@@ -9,6 +10,7 @@ from .waveform_utils import get_pitch, pitch_shift_templates
 from .extract_deconv import extract_deconv
 
 
+# %%
 def superres_spike_train(
     spike_train,
     z_abs,
@@ -56,6 +58,7 @@ def superres_spike_train(
     )
 
 
+# %%
 def superres_denoised_templates(
     spike_train,
     z_abs,
@@ -116,6 +119,7 @@ def superres_denoised_templates(
     )
 
 
+# %%
 def shift_superres_templates(
     superres_templates,
     superres_label_to_bin_id,
@@ -158,6 +162,7 @@ def shift_superres_templates(
     return shifted_templates, superres_label_to_bin_id
 
 
+# %%
 def rigid_int_shift_deconv(
     raw_bin,
     geom,
@@ -299,6 +304,7 @@ def rigid_int_shift_deconv(
     deconv_spike_train_shifted_upsampled = []
     deconv_spike_train = []
     deconv_scalings = []
+    deconv_dist_metrics = []
     print("gathering deconvolution results")
     for bid in range(mp_object.n_batches):
         which_shiftix = batch2shiftix[bid]
@@ -307,6 +313,7 @@ def rigid_int_shift_deconv(
         with np.load(fname_out) as d:
             st = d["spike_train"]
             deconv_scalings.append(d["scalings"])
+            deconv_dist_metrics.append(d["dist_metric"])
 
         st[:, 0] += trough_offset
 
@@ -326,6 +333,7 @@ def rigid_int_shift_deconv(
         deconv_spike_train_shifted_upsampled, axis=0
     )
     deconv_scalings = np.concatenate(deconv_scalings, axis=0)
+    deconv_dist_metrics = np.concatenate(deconv_dist_metrics, axis=0)
 
     print(
         f"Number of Spikes deconvolved: {deconv_spike_train_shifted_upsampled.shape[0]}"
@@ -338,9 +346,13 @@ def rigid_int_shift_deconv(
         all_shifted_upsampled_temps=all_shifted_upsampled_temps,
         shifted_upsampled_idx_to_orig_id=shifted_upsampled_idx_to_orig_id,
         shifted_upsampled_idx_to_shift_id=shifted_upsampled_idx_to_shift_id,
+        deconv_dist_metrics=deconv_dist_metrics,
     )
 
 
+# %%
+
+# %%
 def superres_deconv(
     raw_bin,
     geom,
@@ -409,6 +421,7 @@ def superres_deconv(
     )
 
     # unpack results
+    deconv_dist_metrics=shifted_deconv_res["deconv_dist_metrics"]
     superres_deconv_spike_train = shifted_deconv_res["deconv_spike_train"]
     superres_deconv_spike_train_shifted_upsampled = shifted_deconv_res[
         "deconv_spike_train_shifted_upsampled"
@@ -452,9 +465,11 @@ def superres_deconv(
         bin_size_um=bin_size_um,
         raw_bin=raw_bin,
         deconv_dir=deconv_dir,
+        deconv_dist_metrics=deconv_dist_metrics,
     )
 
 
+# %%
 def superres_propose_pairs(
     superres_templates,
     superres_label_to_orig_label,
@@ -496,6 +511,7 @@ def superres_propose_pairs(
     return unit_pairs, superres_pairs
 
 
+# %%
 def extract_superres_shifted_deconv(
     superres_deconv_result,
     overwrite=True,
@@ -503,6 +519,7 @@ def extract_superres_shifted_deconv(
     nn_denoise=True,
     output_directory=None,
     extract_radius_um=100,
+    n_sec_train_feats=40,
     # superres_propose_pairs args
     max_resid_dist=5,
     propose_pairs_lambd=0.001,
@@ -612,6 +629,7 @@ def extract_superres_shifted_deconv(
         reassignment_tpca_n_wfs=reassignment_tpca_n_wfs,
         localize=localize,
         loc_radius=loc_radius,
+        n_sec_train_feats=n_sec_train_feats,
         n_jobs=n_jobs,
         n_sec_chunk=n_sec_chunk,
         sampling_rate=sampling_rate,
@@ -661,6 +679,7 @@ def extract_superres_shifted_deconv(
             "shifted_upsampled_idx_to_orig_id",
             "shifted_upsampled_idx_to_shift_id",
             "bin_size_um",
+            "deconv_dist_metrics",
         ):
             h5.create_dataset(key, data=superres_deconv_result[key])
 
