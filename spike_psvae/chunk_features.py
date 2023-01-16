@@ -324,6 +324,26 @@ class TPCA(ChunkFeature):
         self.out_shape = (self.rank, self.C)
         self.tpca = PCA(self.rank, random_state=self.random_state)
 
+    @classmethod
+    def load_from_h5(cls, h5, which_waveforms, random_state=0):
+        group = h5[f"{which_waveforms}_tpca"]
+        T = group["T"][()]
+        mean_ = group["tpca_mean"][:]
+        components_ = group["tpca_components"][:]
+        rank = components_.shape[0]
+        channel_index = h5["channel_index"][:]
+
+        self = cls(rank, channel_index, which_waveforms, random_state=random_state)
+
+        self.T = T
+        self.tpca = PCA(self.rank)
+        self.tpca.mean_ = mean_
+        self.tpca.components_ = components_
+        self.dtype = components_.dtype
+        self.needs_fit = False
+
+        return self
+
     def __str__(self):
         if self.needs_fit:
             return f"TPCA(needs_fit=True, C={self.C}, PCA={self.tpca})"
