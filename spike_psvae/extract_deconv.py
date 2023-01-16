@@ -1,3 +1,4 @@
+# %%
 import h5py
 import numpy as np
 import torch
@@ -17,6 +18,7 @@ from spike_psvae import (
 )
 
 
+# %%
 def extract_deconv(
     templates_up,
     spike_train_up,
@@ -351,6 +353,7 @@ def extract_deconv(
     return out_h5
 
 
+# %%
 JobResult = namedtuple(
     "JobResult",
     [
@@ -364,6 +367,7 @@ JobResult = namedtuple(
 )
 
 
+# %%
 def _extract_deconv_worker(start_sample):
     # an easy name to extract the params set by _extract_deconv_init
     p = _extract_deconv_worker
@@ -526,6 +530,7 @@ def _extract_deconv_worker(start_sample):
     )
 
 
+# %%
 def _extract_deconv_init(
     geom,
     device,
@@ -592,6 +597,7 @@ def _extract_deconv_init(
     print(".", end="", flush=True)
 
 
+# %%
 def load_or_fit_featurizers(
     featurizers,
     h5,
@@ -675,10 +681,21 @@ def load_or_fit_featurizers(
             f"Training featurizers on {max_channels.size} waveforms from mini-extraction."
         )
         cleaned_wfs = mini_h5["cleaned_waveforms"][:]
+        # Reduce N_sec / N_channels rather than restricting N_wfs
+#         if max_channels.size>max_wfs_fit_pca:
+#             idx_subsample = np.random.choice(cleaned_wfs.shape[0], max_wfs_fit_pca, replace=False)
+#             cleaned_wfs = cleaned_wfs[idx_subsample]
+#             max_channels = max_channels[idx_subsample]
         for f in featurizers:
             f.fit(max_channels=max_channels, cleaned_wfs=cleaned_wfs)
         del cleaned_wfs
+        
+#         max_channels = mini_h5["spike_index"][:, 1]
         denoised_wfs = mini_h5["denoised_waveforms"][:]
+#         if max_channels.size>max_wfs_fit_pca:
+#             idx_subsample = np.random.choice(denoised_wfs.shape[0], max_wfs_fit_pca, replace=False)
+#             denoised_wfs = denoised_wfs[idx_subsample]
+#             max_channels = max_channels[idx_subsample]
         for f in featurizers:
             f.fit(max_channels=max_channels, denoised_wfs=denoised_wfs)
         del denoised_wfs
@@ -696,6 +713,7 @@ def load_or_fit_featurizers(
     # done. at this point the caller can rely on fitted featurizers.
 
 
+# %%
 def xqdm(it, pbar=True, **kwargs):
     if pbar:
         if isinstance(pbar, str):
