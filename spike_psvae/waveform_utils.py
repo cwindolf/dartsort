@@ -11,6 +11,7 @@ def fit_tpca_bin(
     binary_file,
     tpca_rank=5,
     tpca_n_wfs=50_000,
+    trough_offset=42,
     spike_length_samples=121,
     spatial_radius=75,
     seed=0,
@@ -28,6 +29,7 @@ def fit_tpca_bin(
         binary_file,
         geom.shape[0],
         channel_index=tpca_channel_index,
+        trough_offset=trough_offset,
         spike_length_samples=spike_length_samples,
         max_channels=spike_index[choices, 1],
     )
