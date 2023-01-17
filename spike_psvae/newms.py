@@ -100,7 +100,7 @@ def new_merge_split(
                     dict(
                         use_features=False,
                         n_pca_features=3,
-                        hdbscan_kwargs=dict(min_cluster_size=25, min_samples=5),
+                        hdbscan_kwargs=dict(min_cluster_size=15, min_samples=5),
                     ),
                 ),
                 # split_steps=(before_deconv_merge_split.herding_split, yizi_split,),
