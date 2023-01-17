@@ -40,6 +40,7 @@ def extract_deconv(
     save_outlier_scores=True,
     do_reassignment=True,
     do_reassignment_tpca=True,
+    save_reassignment_residuals=False,
     reassignment_proposed_pairs_up=None,
     reassignment_tpca_rank=5,
     reassignment_tpca_spatial_radius=75,
@@ -158,6 +159,7 @@ def extract_deconv(
                 geom,
                 standardized_bin,
                 tpca_rank=reassignment_tpca_rank,
+                trough_offset=trough_offset,
                 spike_length_samples=spike_length_samples,
                 spatial_radius=reassignment_tpca_rank,
                 tpca_n_wfs=reassignment_tpca_n_wfs,
@@ -268,6 +270,22 @@ def extract_deconv(
                 reassigned_labels_up = h5.create_dataset(
                     "reassigned_labels_up", shape=(n_spikes,), dtype=int
                 )
+                if save_reassignment_residuals:
+                    reassigned_resids = h5.create_dataset(
+                        "reassigned_residuals",
+                        shape=(
+                            n_spikes,
+                            2,
+                            spike_length_samples,
+                            n_channels_extract,
+                        ),
+                        dtype=templates_up.dtype,
+                    )
+                    reassigned_scores = h5.create_dataset(
+                        "reassigned_scores",
+                        shape=(n_spikes, 2),
+                        dtype=np.float64,
+                    )
 
             for f in featurizers:
                 h5.create_dataset(
@@ -311,6 +329,7 @@ def extract_deconv(
                 reassignment_tpca,
                 reassignment_proposed_pairs_up,
                 reassignment_temps_up_loc,
+                save_reassignment_residuals,
                 featurizers,
             ),
             context=ctx,
@@ -341,6 +360,11 @@ def extract_deconv(
                         result.reassignments_path
                     )
                     Path(result.reassignments_path).unlink()
+                    if save_reassignment_residuals:
+                        reassigned_scores[result.inds] = np.load(result.reassigned_scores_path)
+                        Path(result.reassigned_scores_path).unlink()
+                        reassigned_resids[result.inds] = np.load(result.reassigned_residuals_path)
+                        Path(result.reassigned_residuals_path).unlink()
 
                 for f, dset in zip(featurizers, feature_dsets):
                     fnpy = temp_dir / f"{result.batch_prefix}_{f.name}.npy"
@@ -364,6 +388,8 @@ JobResult = namedtuple(
         "resid_path",
         "outlier_scores_path",
         "reassignments_path",
+        "reassigned_residuals_path",
+        "reassigned_scores_path",
         "inds",
     ],
 )
@@ -407,6 +433,8 @@ def _extract_deconv_worker(start_sample):
             end_sample,
             batch_str,
             p.temp_dir / f"resid_{batch_str}.npy",
+            None,
+            None,
             None,
             None,
             which_spikes,
@@ -488,13 +516,20 @@ def _extract_deconv_worker(start_sample):
 
     # -- reassign these waveforms
     if p.do_reassignment:
-        new_labels_up, outlier_scores = reassignment.reassign_waveforms(
+        new_labels_up, outlier_scores, *rest = reassignment.reassign_waveforms(
             spike_train[:, 1],
             cleaned_waveforms,
             p.reassignment_pairs_up,
             p.reassignment_temps_up_loc,
             tpca=p.reassignment_tpca,
+            return_resids=p.save_reassignment_residuals,
         )
+
+        if p.save_reassignment_residuals:
+            reas_scores, reas_resids = rest
+            np.save(p.temp_dir / f"reas_score_{batch_str}.npy", reas_scores)
+            np.save(p.temp_dir / f"reas_resid_{batch_str}.npy", reas_resids)
+
         np.save(p.temp_dir / f"new_labels_up_{batch_str}.npy", new_labels_up)
         np.save(p.temp_dir / f"outlier_scores_{batch_str}.npy", outlier_scores)
 
@@ -528,6 +563,8 @@ def _extract_deconv_worker(start_sample):
         p.temp_dir / f"resid_{batch_str}.npy",
         p.temp_dir / f"outlier_scores_{batch_str}.npy",
         p.temp_dir / f"new_labels_up_{batch_str}.npy",
+        p.temp_dir / f"reas_resid_{batch_str}.npy",
+        p.temp_dir / f"reas_score_{batch_str}.npy",
         which_spikes,
     )
 
@@ -560,6 +597,7 @@ def _extract_deconv_init(
     reassignment_tpca,
     reassignment_pairs_up,
     reassignment_temps_up_loc,
+    save_reassignment_residuals,
     featurizers,
 ):
     if device is None:
@@ -572,6 +610,7 @@ def _extract_deconv_init(
     p.geom = geom
     p.tpca = tpca
     p.do_reassignment = do_reassignment
+    p.save_reassignment_residuals = save_reassignment_residuals
     p.reassignment_tpca = reassignment_tpca
     p.device = device
     p.denoiser = denoiser
