@@ -106,6 +106,7 @@ def get_templates(
             raw_binary_file,
             tpca_rank=tpca_rank,
             tpca_n_wfs=tpca_n_wfs,
+            trough_offset=trough_offset,
             spike_length_samples=spike_length_samples,
             spatial_radius=tpca_radius,
             seed=seed,
