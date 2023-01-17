@@ -176,6 +176,7 @@ def pgeom(
     z_extension=1.0,
     x_extension=0.8,
     lw=None,
+    ls=None,
     show_zero=True,
     max_abs_amp=None,
     show_chan_label=False,
@@ -273,6 +274,7 @@ def pgeom(
                 chan_labels[c], geom_plot[c] + ann_offset, size=6, color="gray"
             )
 
+    linestyle = linestyle or ls
     lines = ax.plot(
         *draw, alpha=alpha, color=color, lw=lw, linestyle=linestyle
     )
@@ -384,6 +386,11 @@ def reassignment_viz(
     z_extension=1.0,
     trough_offset=42,
     spike_length_samples=121,
+    proposed_pairs=None,
+    reassigned_scores=None,
+    reassigned_resids=None,
+    reas_channel_index=None,
+    max_channels=None,
 ):
     in_unit = np.flatnonzero(spike_train_orig[:, 1] == orig_label)
     newids = new_labels[in_unit]
@@ -392,8 +399,19 @@ def reassignment_viz(
     # print(orig_label, new_units, np.unique(newids))
     # print(in_unit.size, in_unit[kept].size)
 
+    show_scores = reassigned_scores is not None
+    show_resids = reassigned_resids is not None
     fig, axes = plt.subplots(
-        ncols=1 + new_units.size, figsize=(8 * (1 + new_units.size), 8)
+        nrows=1 + show_scores + show_resids,
+        ncols=1 + new_units.size,
+        figsize=(
+            8 * (1 + new_units.size),
+            8 + 4 * show_scores + 8 * show_resids,
+        ),
+        gridspec_kw=dict(
+            height_ratios=[2] + ([1] * show_scores) + ([2] * show_resids),
+        ),
+        squeeze=False,
     )
     axes = np.atleast_1d(axes)
 
@@ -414,17 +432,18 @@ def reassignment_viz(
         trough_offset=trough_offset,
         spike_length_samples=spike_length_samples,
     )
-    print(f"orig {orig_wf.shape=} {skipped=}")
+    orig_choices = np.delete(orig_choices, skipped)
     og_temp = orig_wf.mean(0)
     og_mc = og_temp.ptp(0).argmax()
     orig_wf = np.pad(orig_wf, [(0, 0), (0, 0), (0, 1)])[
         :, :, channel_index[og_mc]
     ]
-    og_mcs = [og_mc] * orig_wf.shape[0]
+    og_mcs = np.array([og_mc] * orig_wf.shape[0])
 
     kept_choices = rg.choice(
         in_unit[kept], size=min(n_plot, in_unit[kept].size), replace=False
     )
+    kept_choices.sort()
     kept_wf, skipped = spikeio.read_waveforms(
         spike_train_orig[kept_choices, 0],
         raw_bin,
@@ -433,14 +452,14 @@ def reassignment_viz(
         trough_offset=trough_offset,
         spike_length_samples=spike_length_samples,
     )
-    print(f"kept {kept_wf.shape=} {skipped=}")
-    kept_mcs = [og_mc] * kept_wf.shape[0]
+    kept_choices = np.delete(kept_choices, skipped)
+    kept_mcs = np.array([og_mc] * kept_wf.shape[0])
     pgeom(
         orig_wf,
         og_mcs,
         channel_index,
         geom,
-        ax=axes[0],
+        ax=axes[0, 0],
         color="k",
         max_abs_amp=np.abs(orig_wf).max(),
         lw=1,
@@ -454,7 +473,7 @@ def reassignment_viz(
             kept_mcs,
             channel_index,
             geom,
-            ax=axes[0],
+            ax=axes[0, 0],
             color=cc.glasbey[0],
             max_abs_amp=np.abs(orig_wf).max(),
             lw=1,
@@ -462,31 +481,24 @@ def reassignment_viz(
             show_zero=False,
             z_extension=z_extension,
         )
-    axes[0].set_title(
-        f"unit {orig_label} kept {kept.sum()}/{in_unit.size} ({100*kept.mean():0.1f}%)"
-    )
-    if templates is not None:
-        pgeom(
-            templates[orig_label][None, :, channel_index[og_mc]],
-            [og_mc],
-            channel_index,
-            geom,
-            ax=axes[0],
-            color=cc.glasbey[0],
-            max_abs_amp=np.abs(orig_wf).max(),
-            lw=1,
-            alpha=1,
-            show_zero=False,
-            z_extension=z_extension,
+    pairstr = ""
+    if proposed_pairs is not None:
+        pairstr = (
+            f" proppairs: {','.join(map(str, proposed_pairs[orig_label]))}"
         )
+    axes[0, 0].set_title(
+        f"unit {orig_label} kept {kept.sum()}/{in_unit.size} ({100*kept.mean():0.1f}%){pairstr}"
+    )
 
-    for j, (newu, ax) in enumerate(zip(new_units, axes.flat[1:])):
+    newchoices = []
+    for j, (newu, ax) in enumerate(zip(new_units, axes[0])):
         new_choices = rg.choice(
             in_unit[newids == newu],
             size=min(n_plot, in_unit[newids == newu].size),
             replace=False,
         )
-        axes[j + 1].set_title(f"{(newids == newu).sum()} spikes -> {newu}")
+        new_choices.sort()
+        axes[0, j + 1].set_title(f"{(newids == newu).sum()} spikes -> {newu}")
         new_wf, skipped = spikeio.read_waveforms(
             spike_train_orig[new_choices, 0],
             raw_bin,
@@ -495,14 +507,14 @@ def reassignment_viz(
             trough_offset=trough_offset,
             spike_length_samples=spike_length_samples,
         )
+        newchoices.append(np.delete(new_choices, skipped))
         new_mcs = [og_mc] * new_wf.shape[0]
-        print(f"new {spike_train_orig[new_choices, 0]=} {new_wf.shape=} {skipped=}")
         pgeom(
             orig_wf,
             og_mcs,
             channel_index,
             geom,
-            ax=axes[j + 1],
+            ax=axes[0, j + 1],
             color="k",
             lw=1,
             alpha=0.1,
@@ -514,7 +526,7 @@ def reassignment_viz(
                 new_mcs,
                 channel_index,
                 geom,
-                ax=axes[j + 1],
+                ax=axes[0, j + 1],
                 color=cc.glasbey[j + 1],
                 max_abs_amp=np.abs(orig_wf).max(),
                 lw=1,
@@ -522,19 +534,173 @@ def reassignment_viz(
                 show_zero=False,
                 z_extension=z_extension,
             )
+
+    # plot templates on top
+    if templates is not None:
+        templates = np.pad(
+            templates, [(0, 0), (0, 0), (0, 1)], constant_values=np.nan
+        )
+        for ax in axes[0]:
+            for c, ls in zip((cc.glasbey[0], "w"), (None, ":")):
+                pgeom(
+                    templates[orig_label][None, :, channel_index[og_mc]],
+                    [og_mc],
+                    channel_index,
+                    geom,
+                    color=c,
+                    max_abs_amp=np.abs(orig_wf).max(),
+                    lw=1,
+                    ls=ls,
+                    alpha=1,
+                    show_zero=False,
+                    z_extension=z_extension,
+                    ax=ax,
+                )
+    for j, newu in enumerate(new_units):
         if templates is not None:
+            # for ax in axes[0]:
+            for c, ls in zip((cc.glasbey[j + 1], "w"), (None, ":")):
+                pgeom(
+                    templates[newu][None, :, channel_index[og_mc]],
+                    [og_mc],
+                    channel_index,
+                    geom,
+                    color=c,
+                    max_abs_amp=np.abs(orig_wf).max(),
+                    lw=1,
+                    ls=ls,
+                    alpha=1,
+                    show_zero=False,
+                    z_extension=z_extension,
+                    ax=axes[0, j + 1],
+                )
+
+    # plot outlier scores
+    if show_scores:
+        axes[1, 0].scatter(
+            *reassigned_scores[in_unit].T, color="k", s=2, lw=0, label="all"
+        )
+        axes[1, 0].scatter(
+            *reassigned_scores[in_unit[kept]].T,
+            color=cc.glasbey[0],
+            s=2,
+            lw=0,
+            label="kept",
+        )
+
+        for j, (newu, ax) in enumerate(zip(new_units, axes[1, 1:])):
+            ax.scatter(
+                *reassigned_scores[in_unit].T,
+                color="k",
+                s=2,
+                lw=0,
+                label="all",
+            )
+            ax.scatter(
+                *reassigned_scores[in_unit[newids == newu]].T,
+                color=cc.glasbey[j + 1],
+                s=2,
+                lw=0,
+                label=f"to {newu}",
+            )
+
+        for ax in axes[1]:
+            ax.set_xlabel("original unit outlier score")
+            ax.set_ylabel("reassigned unit outlier score")
+            mn = reassigned_scores[in_unit].min(axis=0)
+            mx = reassigned_scores[in_unit].max(axis=0)
+            ax.plot(
+                [max(mn[0], mn[1]), min(mx[0], mx[1])],
+                [max(mn[0], mn[1]), min(mx[0], mx[1])],
+                color="gray",
+                lw=1,
+                label="y=x",
+            )
+            ax.legend(frameon=False, loc="upper left")
+
+    # plot residuals
+    if show_resids:
+        assert reas_channel_index is not None
+        assert max_channels is not None
+        orig_resids = waveform_utils.restrict_wfs_to_chans(
+            reassigned_resids[orig_choices, 0],
+            max_channels=max_channels[orig_choices],
+            channel_index=reas_channel_index,
+            dest_channels=channel_index[og_mc],
+        )
+        pgeom(
+            orig_resids,
+            og_mcs,
+            channel_index,
+            geom,
+            ax=axes[2, 0],
+            color="k",
+            max_abs_amp=np.nanmax(np.abs(orig_resids)),
+            lw=1,
+            alpha=0.1,
+            z_extension=z_extension,
+            show_zero=False,
+        )
+
+        kept_resids = waveform_utils.restrict_wfs_to_chans(
+            reassigned_resids[kept_choices, 1],
+            max_channels=max_channels[kept_choices],
+            channel_index=reas_channel_index,
+            dest_channels=channel_index[og_mc],
+        )
+        pgeom(
+            kept_resids,
+            kept_mcs,
+            channel_index,
+            geom,
+            ax=axes[2, 0],
+            color=cc.glasbey[0],
+            max_abs_amp=np.nanmax(np.abs(orig_resids)),
+            lw=1,
+            alpha=0.1,
+            z_extension=z_extension,
+            show_zero=False,
+        )
+
+        for j, (newu, ax) in enumerate(zip(new_units, axes[2, 1:])):
+            newu_resids_orig = waveform_utils.restrict_wfs_to_chans(
+                reassigned_resids[newchoices[j], 0],
+                max_channels=max_channels[newchoices[j]],
+                channel_index=reas_channel_index,
+                dest_channels=channel_index[og_mc],
+            )
             pgeom(
-                templates[newu][None, :, channel_index[og_mc]],
-                [og_mc],
+                newu_resids_orig,
+                [og_mc] * newu_resids_orig.shape[0],
                 channel_index,
                 geom,
-                ax=axes[j + 1],
-                color=cc.glasbey[j + 1],
-                max_abs_amp=np.abs(orig_wf).max(),
+                ax=ax,
+                color="k",
+                max_abs_amp=np.nanmax(np.abs(orig_resids)),
                 lw=1,
-                alpha=1,
-                show_zero=False,
+                alpha=0.1,
                 z_extension=z_extension,
+                show_zero=False,
+            )
+
+            newu_resids_new = waveform_utils.restrict_wfs_to_chans(
+                reassigned_resids[newchoices[j], 1],
+                max_channels=max_channels[newchoices[j]],
+                channel_index=reas_channel_index,
+                dest_channels=channel_index[og_mc],
+            )
+            pgeom(
+                newu_resids_new,
+                [og_mc] * newu_resids_new.shape[0],
+                channel_index,
+                geom,
+                ax=ax,
+                color=cc.glasbey[j + 1],
+                max_abs_amp=np.nanmax(np.abs(orig_resids)),
+                lw=1,
+                alpha=0.1,
+                z_extension=z_extension,
+                show_zero=False,
             )
 
     return fig, axes
@@ -551,10 +717,15 @@ def reassignments_viz(
     z_extension=1.0,
     trough_offset=42,
     spike_length_samples=121,
+    proposed_pairs=None,
+    reassigned_scores=None,
+    reassigned_resids=None,
+    reas_channel_index=None,
+    max_channels=None,
 ):
     output_directory = Path(output_directory)
     output_directory.mkdir(exist_ok=True, parents=True)
-    for orig_label in tqdm(np.unique(spike_train_orig[:, 1])):
+    for orig_label in tqdm(np.setdiff1d(np.unique(spike_train_orig[:, 1]), [-1])):
         fig, ax = reassignment_viz(
             orig_label,
             spike_train_orig,
@@ -566,6 +737,11 @@ def reassignments_viz(
             z_extension=z_extension,
             trough_offset=trough_offset,
             spike_length_samples=spike_length_samples,
+            proposed_pairs=proposed_pairs,
+            reassigned_scores=reassigned_scores,
+            reassigned_resids=reassigned_resids,
+            reas_channel_index=reas_channel_index,
+            max_channels=max_channels,
         )
         fig.savefig(
             output_directory / f"reassign_unit{orig_label:03d}.png", dpi=300
