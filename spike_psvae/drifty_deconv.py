@@ -90,7 +90,6 @@ def superres_denoised_templates(
         bin_size_um,
         min_spikes_bin=min_spikes_bin,
     )
-    print(f"{np.unique(superres_labels, return_counts=True)=}")
     templates, extra = snr_templates.get_templates(
         np.c_[spike_train[:, 0], superres_labels],
         geom,
@@ -543,6 +542,7 @@ def extract_superres_shifted_deconv(
     save_cleaned_tpca_projs=False,
     save_denoised_tpca_projs=False,
     tpca_rank=8,
+    tpca_weighted=False,
     localize=True,
     loc_radius=100,
     save_outlier_scores=True,
@@ -591,6 +591,8 @@ def extract_superres_shifted_deconv(
     shifted_upsampled_idx_to_orig_id = superres_deconv_result[
         "shifted_upsampled_idx_to_orig_id"
     ]
+    print(f"{shifted_upsampled_idx_to_superres_id.shape=}")
+    # print(",".join(map(str, shifted_upsampled_idx_to_superres_id)))
 
     shifted_upsampled_pairs = []
     if do_reassignment:
@@ -601,26 +603,17 @@ def extract_superres_shifted_deconv(
             )
         ):
             superres_matches = superres_pairs[superres_id]
-            shifted_upsampled_matches = np.unique(
-                [
-                    shifted_upsampled_match
-                    for match in superres_matches
-                    for shifted_upsampled_match in np.flatnonzero(
-                        (shifted_upsampled_idx_to_shift_id == shift_id)
-                        & (shifted_upsampled_idx_to_superres_id == match)
-                    )
-                ]
+            shifted_upsampled_matches = np.flatnonzero(
+                (shifted_upsampled_idx_to_shift_id == shifted_upsampled_idx_to_shift_id)
+                & np.isin(shifted_upsampled_idx_to_superres_id, superres_matches)
             )
 
-            # if shifted_upsampled_matches.ptp() > 500:
-            #     print(
-            #         f"------- {shifted_upsampled_idx=} {shift_id=} {superres_id=}"
-            #     )
-            #     print(
-            #         f"{len(superres_matches)=} {len(shifted_upsampled_matches)=}"
-            #     )
-            #     print(f"{superres_matches=}")
-            #     print(f"{shifted_upsampled_matches=}")
+            # print("-----")
+            # print(f"{shifted_upsampled_idx=} {shift_id=} {superres_id=}")
+            # print(f"{superres_pairs[superres_id]=}")
+            # print(f"{shifted_upsampled_matches=}")
+            # print(f"{shifted_upsampled_idx_to_shift_id[shifted_upsampled_matches]=}")
+            # print(f"{shifted_upsampled_idx_to_superres_id[shifted_upsampled_matches]=}")
 
             shifted_upsampled_pairs.append(shifted_upsampled_matches)
 
@@ -644,6 +637,7 @@ def extract_superres_shifted_deconv(
         save_cleaned_tpca_projs=save_cleaned_tpca_projs,
         save_denoised_tpca_projs=save_denoised_tpca_projs,
         tpca_rank=tpca_rank,
+        tpca_weighted=tpca_weighted,
         save_outlier_scores=save_outlier_scores,
         do_reassignment=do_reassignment,
         save_reassignment_residuals=save_reassignment_residuals,
