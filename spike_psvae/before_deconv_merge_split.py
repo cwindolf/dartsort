@@ -63,6 +63,8 @@ class H5Extractor:
 
         # things we will need if doing relocated clustering
         self.y, self.z_abs, self.alpha = h5["localizations"][:, 1:4].T
+        self.log_c = log_c
+        self.feature_scales = feature_scales
 
         # refrence to waveform tpca embeddings in h5 file
         # we could load them in memory here if that seems helpful
@@ -127,7 +129,7 @@ def herding_split(
 
     # get pca projections on channel subset
     if relocated:
-        unit_features = get_relocated_wfs_on_channel_subset(
+        unit_features, relocated_maxptps = get_relocated_wfs_on_channel_subset(
             in_unit,
             extractor.tpca_projs,
             extractor.max_channels,
@@ -172,6 +174,8 @@ def herding_split(
     # the current feature set
     if use_features:
         unit_features = extractor.features[in_unit[kept]]
+        if relocated:
+            unit_features[:, 2] = extractor.feature_scales[2] * np.log(extractor.log_c + relocated_maxptps)
         pca_projs *= unit_features.std(axis=0).mean()
         unit_features = np.c_[unit_features, pca_projs]
     else:
@@ -275,7 +279,7 @@ def maxchan_lda_split(
 
     # get pca projections on channel subset
     if relocated:
-        unit_features = get_relocated_wfs_on_channel_subset(
+        unit_features, relocated_maxptps = get_relocated_wfs_on_channel_subset(
             in_unit,
             extractor.tpca_projs,
             extractor.max_channels,
@@ -666,7 +670,7 @@ def lda_diptest_merge(
         :n_channels
     ]
     if relocated:
-        feats_a = get_relocated_wfs_on_channel_subset(
+        feats_a, relocated_maxptps = get_relocated_wfs_on_channel_subset(
             in_unit_a,
             tpca_projs,
             max_channels,
@@ -692,7 +696,7 @@ def lda_diptest_merge(
     too_far_a = np.isnan(feats_a).any(axis=(1, 2))
     feats_a = feats_a[~too_far_a]
     if relocated:
-        feats_b = get_relocated_wfs_on_channel_subset(
+        feats_b, relocated_maxptps = get_relocated_wfs_on_channel_subset(
             in_unit_b,
             tpca_projs,
             max_channels,
@@ -897,7 +901,7 @@ def merge_clusters(
             is_merge = lda_diptest_merge(
                 in_label,
                 in_candidate,
-                templates_dict[label], 
+                templates_dict[label],
                 templates_dict[candidate],
                 shift,
                 max_channels,
@@ -1002,7 +1006,9 @@ def get_relocated_wfs_on_channel_subset(
         fill_value=np.nan,
     )
 
-    return relocated_wfs
+    relocated_maxptps = np.nanmax(relocated_wfs.ptp(1), axis=1)
+
+    return relocated_wfs, relocated_maxptps
 
 
 def get_pca_projs_on_channel_subset(
