@@ -741,7 +741,7 @@ def load_or_fit_featurizers(
     t_max = np.floor(spike_train_up[:, 0].max() / sampling_rate)
     valid_times = np.random.default_rng(seed).choice(
         np.arange(t_min, t_max),
-        size=min(n_sec_train_feats, t_max - t_min),
+        size=min(n_sec_train_feats, int(t_max - t_min)),
         replace=False,
     )
     which_mini = (np.isin(spike_train_up[:, 0] // sampling_rate, valid_times),)
