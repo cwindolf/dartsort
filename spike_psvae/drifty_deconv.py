@@ -14,6 +14,7 @@ def superres_spike_train(
     z_abs,
     bin_size_um,
     min_spikes_bin=10,
+    max_z_dist=None
 ):
     assert spike_train.shape == (*z_abs.shape, 2)
     assert bin_size_um > 0
@@ -41,11 +42,22 @@ def superres_spike_train(
         #   ... -3bin/2 , -bin/2, bin/2, 3bin/2, ...
         bin_ids = (centered_z + bin_size_um / 2) // bin_size_um
         occupied_bins, bin_counts = np.unique(bin_ids, return_counts=True)
-        for bin_id in occupied_bins[bin_counts >= min_spikes_bin]:
-            superres_labels[in_u[bin_ids == bin_id]] = cur_superres_label
-            superres_label_to_bin_id.append(bin_id)
+        if max_z_dist is not None:
+            # np.abs(bin_ids) <= (np.abs(centered_z)+ bin_size_um / 2)//bin_size_um <= (max_z_dist + bin_size_um / 2)//bin_size_um
+            bin_counts = bin_counts[np.abs(occupied_bins)<=(max_z_dist + bin_size_um / 2)//bin_size_um]
+            occupied_bins = occupied_bins[np.abs(occupied_bins)<=(max_z_dist + bin_size_um / 2)//bin_size_um]
+        if bin_counts.max() >= min_spikes_bin:
+            for bin_id in occupied_bins[bin_counts >= min_spikes_bin]:
+                superres_labels[in_u[bin_ids == bin_id]] = cur_superres_label
+                superres_label_to_bin_id.append(bin_id)
+                superres_label_to_orig_label.append(u)
+                cur_superres_label += 1
+        #what if no template was computed for u
+        else:
+            superres_labels[in_u] = cur_superres_label
+            superres_label_to_bin_id.append(0)
             superres_label_to_orig_label.append(u)
-            cur_superres_label += 1
+            cur_superres_label+=1
 
     superres_label_to_bin_id = np.array(superres_label_to_bin_id)
     superres_label_to_orig_label = np.array(superres_label_to_orig_label)
@@ -63,7 +75,9 @@ def superres_denoised_templates(
     geom,
     raw_binary_file,
     min_spikes_bin=10,
+    max_z_dist=None,
     max_spikes_per_unit=500,
+    denoise_templates=True,
     do_temporal_decrease=True,
     zero_radius_um=200,
     reducer=np.median,
@@ -88,6 +102,7 @@ def superres_denoised_templates(
         z_abs,
         bin_size_um,
         min_spikes_bin=min_spikes_bin,
+        max_z_dist=max_z_dist,
     )
     templates, extra = snr_templates.get_templates(
         np.c_[spike_train[:, 0], superres_labels],
@@ -108,6 +123,7 @@ def superres_denoised_templates(
         pbar=pbar,
         seed=seed,
         n_jobs=n_jobs,
+        raw_only=not denoise_templates,
     )
     return (
         templates,
@@ -184,7 +200,7 @@ def rigid_int_shift_deconv(
     print(f"{pitch=}")
 
     # integer probe-pitch shifts at each time bin
-    p = p[t_start:t_end if t_end is not None else len(p)]
+    p = p[t_start : t_end if t_end is not None else len(p)]
     pitch_shifts = (p - reference_displacement + pitch / 2) // pitch
     unique_shifts = np.unique(pitch_shifts)
 
@@ -213,10 +229,12 @@ def rigid_int_shift_deconv(
         )
 
     # for each shift, get shifted templates
-    shifted_templates = [
-        pitch_shift_templates(shift, geom, templates)
-        for shift in unique_shifts
-    ]
+    shifted_templates = np.array(
+        [
+            pitch_shift_templates(shift, geom, templates)
+            for shift in unique_shifts
+        ]
+    )
 
     # run deconv on just the appropriate batches for each shift
     deconv_dir = Path(
@@ -299,6 +317,7 @@ def rigid_int_shift_deconv(
     deconv_spike_train_shifted_upsampled = []
     deconv_spike_train = []
     deconv_scalings = []
+    deconv_dist_metrics = []
     print("gathering deconvolution results")
     for bid in range(mp_object.n_batches):
         which_shiftix = batch2shiftix[bid]
@@ -307,6 +326,7 @@ def rigid_int_shift_deconv(
         with np.load(fname_out) as d:
             st = d["spike_train"]
             deconv_scalings.append(d["scalings"])
+            deconv_dist_metrics.append(d["dist_metric"])
 
         st[:, 0] += trough_offset
 
@@ -326,6 +346,7 @@ def rigid_int_shift_deconv(
         deconv_spike_train_shifted_upsampled, axis=0
     )
     deconv_scalings = np.concatenate(deconv_scalings, axis=0)
+    deconv_dist_metrics = np.concatenate(deconv_dist_metrics, axis=0)
 
     print(
         f"Number of Spikes deconvolved: {deconv_spike_train_shifted_upsampled.shape[0]}"
@@ -335,9 +356,11 @@ def rigid_int_shift_deconv(
         deconv_spike_train=deconv_spike_train,
         deconv_spike_train_shifted_upsampled=deconv_spike_train_shifted_upsampled,
         deconv_scalings=deconv_scalings,
+        shifted_templates=shifted_templates,
         all_shifted_upsampled_temps=all_shifted_upsampled_temps,
         shifted_upsampled_idx_to_orig_id=shifted_upsampled_idx_to_orig_id,
         shifted_upsampled_idx_to_shift_id=shifted_upsampled_idx_to_shift_id,
+        deconv_dist_metrics=deconv_dist_metrics,
     )
 
 
@@ -351,7 +374,7 @@ def superres_deconv(
     deconv_dir=None,
     pfs=30_000,
     reference_displacement=0,
-    # need to implement
+    max_z_dist=None,
     t_start=0,
     t_end=None,
     n_jobs=1,
@@ -359,6 +382,7 @@ def superres_deconv(
     spike_length_samples=121,
     max_upsample=8,
     refractory_period_frames=10,
+    denoise_templates=True,
 ):
     Path(deconv_dir).mkdir(exist_ok=True)
 
@@ -372,7 +396,9 @@ def superres_deconv(
         bin_size_um,
         geom,
         raw_bin,
+        denoise_templates=denoise_templates,
         min_spikes_bin=10,
+        max_z_dist=max_z_dist,
         max_spikes_per_unit=500,
         do_temporal_decrease=True,
         zero_radius_um=200,
@@ -397,7 +423,6 @@ def superres_deconv(
         pfs=pfs,
         spike_train=None,
         templates=superres_templates,
-        # need to implement
         t_start=t_start,
         t_end=t_end,
         n_jobs=n_jobs,
@@ -409,6 +434,7 @@ def superres_deconv(
     )
 
     # unpack results
+    deconv_dist_metrics = shifted_deconv_res["deconv_dist_metrics"]
     superres_deconv_spike_train = shifted_deconv_res["deconv_spike_train"]
     superres_deconv_spike_train_shifted_upsampled = shifted_deconv_res[
         "deconv_spike_train_shifted_upsampled"
@@ -452,17 +478,26 @@ def superres_deconv(
         bin_size_um=bin_size_um,
         raw_bin=raw_bin,
         deconv_dir=deconv_dir,
+        deconv_dist_metrics=deconv_dist_metrics,
+        shifted_superres_templates=shifted_deconv_res["shifted_templates"],
     )
 
 
 def superres_propose_pairs(
     superres_templates,
     superres_label_to_orig_label,
-    max_resid_dist=5,
-    lambd=0.001,
-    allowed_scale=0.1,
-    deconv_threshold_mul=0.9,
-    n_jobs=-1,
+    method="resid_dist",
+    max_resid_dist=8,
+    resid_dist_kwargs=dict(
+        lambd=0.001,
+        allowed_scale=0.1,
+        thresh_mul=0.9,
+        normalized=True,
+        n_jobs=-1,
+    ),
+    max_distance=50,
+    loc_radius=100,
+    geom=None,
 ):
     n_superres_templates = superres_templates.shape[0]
     assert superres_label_to_orig_label.shape == (n_superres_templates,)
@@ -471,11 +506,12 @@ def superres_propose_pairs(
     # list of superres template indices of length n_superres_templates
     superres_pairs = reassignment.propose_pairs(
         superres_templates,
-        max_resid_dist=5,
-        lambd=0.001,
-        allowed_scale=0.1,
-        deconv_threshold_mul=0.9,
-        n_jobs=-1,
+        method=method,
+        max_resid_dist=max_resid_dist,
+        resid_dist_kwargs=resid_dist_kwargs,
+        max_distance=max_distance,
+        loc_radius=loc_radius,
+        geom=geom,
     )
 
     # which pairs of units have superres pairs which are close enough?
@@ -503,11 +539,18 @@ def extract_superres_shifted_deconv(
     nn_denoise=True,
     output_directory=None,
     extract_radius_um=100,
+    n_sec_train_feats=40,
     # superres_propose_pairs args
-    max_resid_dist=5,
-    propose_pairs_lambd=0.001,
-    propose_pairs_allowed_scale=0.1,
-    propose_pairs_deconv_threshold_mul=0.9,
+    pairs_method="resid_dist",
+    max_resid_dist=8,
+    resid_dist_kwargs=dict(
+        lambd=0.001,
+        allowed_scale=0.1,
+        thresh_mul=0.9,
+        normalized=True,
+        n_jobs=-1,
+    ),
+    max_distance=50,
     # what to save / do?
     save_residual=False,
     save_cleaned_waveforms=False,
@@ -515,10 +558,13 @@ def extract_superres_shifted_deconv(
     save_cleaned_tpca_projs=False,
     save_denoised_tpca_projs=False,
     tpca_rank=8,
+    tpca_weighted=False,
     localize=True,
     loc_radius=100,
     save_outlier_scores=True,
     do_reassignment=True,
+    do_reassignment_tpca=True,
+    save_reassignment_residuals=False,
     reassignment_tpca_rank=5,
     reassignment_tpca_spatial_radius=75,
     reassignment_tpca_n_wfs=50000,
@@ -540,16 +586,16 @@ def extract_superres_shifted_deconv(
         unit_pairs, superres_pairs = superres_propose_pairs(
             superres_deconv_result["superres_templates"],
             superres_deconv_result["superres_label_to_orig_label"],
+            method=pairs_method,
             max_resid_dist=max_resid_dist,
-            lambd=propose_pairs_lambd,
-            allowed_scale=propose_pairs_allowed_scale,
-            deconv_threshold_mul=propose_pairs_deconv_threshold_mul,
-            n_jobs=n_jobs,
+            resid_dist_kwargs=resid_dist_kwargs,
+            max_distance=max_distance,
+            loc_radius=loc_radius,
+            geom=geom,
         )
-    else: 
-        superres_pairs=None
-        unit_pairs=None
-    # print(f"{superres_pairs=}")
+    else:
+        superres_pairs = None
+        unit_pairs = None
 
     # infer what upsampled shifted superres units can be pairs
     shifted_upsampled_idx_to_shift_id = superres_deconv_result[
@@ -561,6 +607,8 @@ def extract_superres_shifted_deconv(
     shifted_upsampled_idx_to_orig_id = superres_deconv_result[
         "shifted_upsampled_idx_to_orig_id"
     ]
+    print(f"{shifted_upsampled_idx_to_superres_id.shape=}")
+    # print(",".join(map(str, shifted_upsampled_idx_to_superres_id)))
 
     shifted_upsampled_pairs = []
     if do_reassignment:
@@ -571,18 +619,19 @@ def extract_superres_shifted_deconv(
             )
         ):
             superres_matches = superres_pairs[superres_id]
-            shifted_upsampled_matches = np.unique(
-                [
-                    shifted_upsampled_match
-                    for match in superres_matches
-                    for shifted_upsampled_match in np.flatnonzero(
-                        (shifted_upsampled_idx_to_shift_id == shift_id)
-                        & (shifted_upsampled_idx_to_superres_id == match)
-                    )
-                ]
+            shifted_upsampled_matches = np.flatnonzero(
+                (shifted_upsampled_idx_to_shift_id == shifted_upsampled_idx_to_shift_id)
+                & np.isin(shifted_upsampled_idx_to_superres_id, superres_matches)
             )
+
+            # print("-----")
+            # print(f"{shifted_upsampled_idx=} {shift_id=} {superres_id=}")
+            # print(f"{superres_pairs[superres_id]=}")
+            # print(f"{shifted_upsampled_matches=}")
+            # print(f"{shifted_upsampled_idx_to_shift_id[shifted_upsampled_matches]=}")
+            # print(f"{shifted_upsampled_idx_to_superres_id[shifted_upsampled_matches]=}")
+
             shifted_upsampled_pairs.append(shifted_upsampled_matches)
-    # print(f"{shifted_upsampled_pairs=}")
 
     if output_directory is None:
         output_directory = superres_deconv_result["deconv_dir"]
@@ -604,14 +653,18 @@ def extract_superres_shifted_deconv(
         save_cleaned_tpca_projs=save_cleaned_tpca_projs,
         save_denoised_tpca_projs=save_denoised_tpca_projs,
         tpca_rank=tpca_rank,
+        tpca_weighted=tpca_weighted,
         save_outlier_scores=save_outlier_scores,
         do_reassignment=do_reassignment,
+        save_reassignment_residuals=save_reassignment_residuals,
+        do_reassignment_tpca=do_reassignment_tpca,
         reassignment_proposed_pairs_up=shifted_upsampled_pairs,
         reassignment_tpca_rank=reassignment_tpca_rank,
         reassignment_tpca_spatial_radius=reassignment_tpca_spatial_radius,
         reassignment_tpca_n_wfs=reassignment_tpca_n_wfs,
         localize=localize,
         loc_radius=loc_radius,
+        n_sec_train_feats=n_sec_train_feats,
         n_jobs=n_jobs,
         n_sec_chunk=n_sec_chunk,
         sampling_rate=sampling_rate,
@@ -661,7 +714,17 @@ def extract_superres_shifted_deconv(
             "shifted_upsampled_idx_to_orig_id",
             "shifted_upsampled_idx_to_shift_id",
             "bin_size_um",
+            "deconv_dist_metrics",
         ):
             h5.create_dataset(key, data=superres_deconv_result[key])
 
-    return ret
+    extra = dict(
+        unit_pairs=unit_pairs,
+        superres_pairs=superres_pairs,
+        shifted_upsampled_pairs=shifted_upsampled_pairs,
+    )
+
+    if save_residual:
+        return extract_h5, residual, extra
+    else:
+        return extract_h5, extra

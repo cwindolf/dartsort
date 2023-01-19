@@ -97,12 +97,12 @@ def find_original_merges(
     shifts = []
 
     def job(i):
-        templates_cleaned_amputated = templates_cleaned[
+        templates_cleaned_closest = templates_cleaned[
             dist_argsort[i][:n_pairs_proposed]
         ]
         match_ix, dist, shift = resid_dist(
             templates_cleaned[i],
-            templates_cleaned_amputated,
+            templates_cleaned_closest,
             deconv_threshold,
             max_upsample=max_upsample,
             sampling_rate=sampling_rate,
@@ -333,13 +333,17 @@ def calc_resid_matrix(
     templates_b,
     units_b,
     thresh=8,
+    thresh_mul=0.9,
     n_jobs=-1,
     vis_ptp_thresh=1,
     auto=False,
     pbar=True,
     lambd=0.001,
     allowed_scale=0.1,
+    normalized=False,
 ):
+    if auto and thresh is None:
+        thresh = thresh_mul * np.min(np.square(templates_a).sum(axis=(1, 2)))
     # we will calculate resid dist for templates that overlap at all
     # according to these channel neighborhoods
     chans_a = [
@@ -363,8 +367,10 @@ def calc_resid_matrix(
         )
 
     jobs = []
-    resid_matrix = np.full((units_a.size, units_b.size), np.inf)
-    shift_matrix = np.zeros((units_a.size, units_b.size))
+    resid_matrix = np.full(
+        (units_a.size, units_b.size), np.inf, dtype=templates_a.dtype
+    )
+    shift_matrix = np.zeros((units_a.size, units_b.size), dtype=int)
     for i, ua in enumerate(units_a):
         for j, ub in enumerate(units_b):
             if auto and ua == ub:
@@ -378,6 +384,36 @@ def calc_resid_matrix(
         resid_matrix[i, j] = dist
         shift_matrix[i, j] = shift
 
+    if normalized:
+        assert auto
+
+        # get rms on active channels
+        rms_a = np.array(
+            [
+                np.sqrt(np.square(ta).sum() / (np.abs(ta) > 0).sum())
+                for ta in templates_a
+            ]
+        )
+        rms_b = np.array(
+            [
+                np.sqrt(np.square(tb).sum() / (np.abs(tb) > 0).sum())
+                for tb in templates_b
+            ]
+        )
+
+        # normalize by a factor to make things dimensionless
+        normresids = resid_matrix / np.sqrt(rms_a[:, None] * rms_b[None, :])
+        del resid_matrix
+
+        # symmetrize resids and get corresponding best shifts
+        resid_matrix = np.minimum(normresids, normresids.T)
+        shift_matrix = np.where(
+            normresids <= normresids.T,
+            shift_matrix,
+            -shift_matrix.T,
+        )
+        del normresids
+
     return resid_matrix, shift_matrix
 
 
@@ -387,11 +423,12 @@ def run_deconv_merge(
     raw_binary_file,
     unit_max_channels=None,
     deconv_threshold_mul=0.9,
-    # 2 is conservative, 2.5 is nice, 3 is aggressive
+    # 2 is conservative, 2.5 is nice, 3 is aggressive when normalized
     merge_resid_threshold=2.5,
     tpca=None,
     trough_offset=42,
     spike_length_samples=121,
+    normalized=True,
 ):
     templates_cleaned, extra = get_templates(
         spike_train,
@@ -401,14 +438,6 @@ def run_deconv_merge(
         tpca=tpca,
         trough_offset=trough_offset,
         spike_length_samples=spike_length_samples,
-    )
-
-    # get rms on active channels
-    rms = np.array(
-        [
-            np.sqrt(np.square(ta).sum() / (np.abs(ta) > 0).sum())
-            for ta in templates_cleaned
-        ]
     )
 
     deconv_threshold = (
@@ -428,24 +457,12 @@ def run_deconv_merge(
         pbar=True,
         lambd=0.001,
         allowed_scale=0.1,
+        normalized=normalized,
     )
     # shifts[i, j] is like trough[j] - trough[i]
 
-    # normalize by a factor to make things dimensionless
-    normresids = resids / np.sqrt(rms[:, None] * rms[None, :])
-    del resids
-
-    # symmetrize resids and get corresponding best shifts
-    symresids = np.minimum(normresids, normresids.T)
-    symshifts = np.where(
-        normresids <= normresids.T,
-        shifts,
-        -shifts.T,
-    ).astype(int)
-    del normresids
-
     # upper triangle not including diagonal, aka condensed distance matrix in scipy
-    pdist = symresids[np.triu_indices(symresids.shape[0], k=1)]
+    pdist = resids[np.triu_indices(resids.shape[0], k=1)]
     # scipy hierarchical clustering only supports finite values, so let's just
     # drop in a huge value here
     pdist[~np.isfinite(pdist)] = 1_000_000 + pdist[np.isfinite(pdist)].max()
@@ -481,7 +498,7 @@ def run_deconv_merge(
         for ogl in np.setdiff1d(orig_labels, [best_orig]):
             in_orig_unit = np.flatnonzero(spike_train[:, 1] == ogl)
             # this is like trough[best] - trough[ogl]
-            shift_og_best = symshifts[ogl, best_orig]
+            shift_og_best = shifts[ogl, best_orig]
             # if >0, trough of og is behind trough of best.
             # subtracting will move trough of og to the right.
             times_updated[in_orig_unit] -= shift_og_best
