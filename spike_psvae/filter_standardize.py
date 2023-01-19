@@ -76,7 +76,8 @@ def filter_standardize_rec(output_directory, filename_raw, dtype_raw,
     low_frequency =300, high_factor = 0.1, order = 3, sampling_frequency= 30000, 
     channels_to_remove=None,
     buffer = None,
-    n_sec_chunk=1, multi_processing = True, n_processors = 6, overwrite = True):
+    n_sec_chunk=1, multi_processing = True, n_processors = 6, overwrite = True,
+    adcshift_correction=False,median_subtraction=False):
     """Preprocess pipeline: filtering, standarization and whitening filter
     This step (optionally) performs filtering on the data, standarizes it
     and computes a whitening filter. Filtering and standardized data are
@@ -160,7 +161,9 @@ def filter_standardize_rec(output_directory, filename_raw, dtype_raw,
             high_factor,
             order,
             sampling_frequency, 
-            channels_to_remove=channels_to_remove,
+            channels_to_remove,
+            adcshift_correction,
+            median_subtraction,
             processes=n_processors,
             pm_pbar=True)
     else:
@@ -179,7 +182,9 @@ def filter_standardize_rec(output_directory, filename_raw, dtype_raw,
                 high_factor,
                 order,
                 sampling_frequency,
-                channels_to_remove=channels_to_remove
+                channels_to_remove,
+                adcshift_correction,
+                median_subtraction,
                 )
 
     # Merge the chunk filtered files and delete the individual chunks
@@ -295,7 +300,8 @@ def filter_standardize_batch(batch_id, bin_file, fname_mean_sd,
                              apply_filter, dtype_input, out_dtype, output_directory,
                              n_channels, buffer, rec_len,
                              low_frequency=None, high_factor=None,
-                             order=None, sampling_frequency=None, channels_to_remove=None):
+                             order=None, sampling_frequency=None, channels_to_remove=None,
+                             adcshift_correction=False,median_subtraction=False):
     """Butterworth filter for a one dimensional time series
     Parameters
     ----------
@@ -355,10 +361,13 @@ def filter_standardize_batch(batch_id, bin_file, fname_mean_sd,
     centers = temp['centers']
     ts = _standardize(ts, sd, centers)
     if channels_to_remove is not None:
+        
         ts = np.delete(ts, channels_to_remove, axis=1)
     
-    ts = shiftWF(ts.T).T
-    ts = ts - np.median(ts, axis = 1)[:, None]
+    if adcshift_correction:
+        ts = shiftWF(ts.T).T
+    if median_subtraction:
+        ts = ts - np.median(ts, axis = 1)[:, None]
     
     # save
     fname = os.path.join(
