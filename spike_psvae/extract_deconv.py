@@ -1,4 +1,3 @@
-# %%
 import h5py
 import numpy as np
 import torch
@@ -18,7 +17,6 @@ from spike_psvae import (
 )
 
 
-# %%
 def extract_deconv(
     templates_up,
     spike_train_up,
@@ -31,6 +29,7 @@ def extract_deconv(
     extract_radius_um=100,
     subtraction_h5=None,
     tpca_rank=8,
+    tpca_weighted=True,
     save_residual=False,
     save_cleaned_waveforms=False,
     save_cleaned_tpca_projs=True,
@@ -154,17 +153,34 @@ def extract_deconv(
 
         # fit a TPCA to raw waveforms
         if do_reassignment_tpca:
-            reassignment_tpca = waveform_utils.fit_tpca_bin(
-                spike_index_up,
-                geom,
-                standardized_bin,
-                tpca_rank=reassignment_tpca_rank,
-                trough_offset=trough_offset,
-                spike_length_samples=spike_length_samples,
-                spatial_radius=reassignment_tpca_rank,
-                tpca_n_wfs=reassignment_tpca_n_wfs,
-                seed=seed,
-            )
+            if tpca_weighted:
+                reassignment_tpca = waveform_utils.fit_tpca_bin_clustered(
+                    spike_train_up[:, 0],
+                    spike_train_up[:, 1],
+                    spike_index_up[:, 1],
+                    geom,
+                    standardized_bin,
+                    centered=False,
+                    normalized=True,
+                    tpca_rank=tpca_rank,
+                    tpca_n_wfs=reassignment_tpca_n_wfs,
+                    trough_offset=trough_offset,
+                    spike_length_samples=spike_length_samples,
+                    spatial_radius=75,
+                    seed=0,
+                )
+            else:
+                reassignment_tpca = waveform_utils.fit_tpca_bin(
+                    spike_index_up,
+                    geom,
+                    standardized_bin,
+                    tpca_rank=reassignment_tpca_rank,
+                    trough_offset=trough_offset,
+                    spike_length_samples=spike_length_samples,
+                    spatial_radius=reassignment_tpca_rank,
+                    tpca_n_wfs=reassignment_tpca_n_wfs,
+                    seed=seed,
+                )
 
         # get local views of templates for reassignment
         reassignment_temps_up_loc = reassignment.reassignment_templates_local(
@@ -226,11 +242,13 @@ def extract_deconv(
             channel_index,
             templates_up,
             spike_train_up,
+            spike_index_up,
             output_directory,
             standardized_bin,
             scalings,
             geom,
             n_sec_train_feats,
+            tpca_weighted=tpca_weighted,
             n_sec_chunk=n_sec_chunk,
             n_jobs=n_jobs,
             sampling_rate=sampling_rate,
@@ -284,6 +302,15 @@ def extract_deconv(
                     reassigned_scores = h5.create_dataset(
                         "reassigned_scores",
                         shape=(n_spikes, 2),
+                        dtype=np.float64,
+                    )
+                    orig_cleaned_wfs = h5.create_dataset(
+                        "orig_cleaned_waveforms",
+                        shape=(
+                            n_spikes,
+                            spike_length_samples,
+                            n_channels_extract,
+                        ),
                         dtype=np.float64,
                     )
 
@@ -361,9 +388,17 @@ def extract_deconv(
                     )
                     Path(result.reassignments_path).unlink()
                     if save_reassignment_residuals:
-                        reassigned_scores[result.inds] = np.load(result.reassigned_scores_path)
+                        reassigned_scores[result.inds] = np.load(
+                            result.reassigned_scores_path
+                        )
                         Path(result.reassigned_scores_path).unlink()
-                        reassigned_resids[result.inds] = np.load(result.reassigned_residuals_path)
+                        orig_cleaned_wfs[result.inds] = np.load(
+                            result.orig_cleaned_wfs_path
+                        )
+                        Path(result.orig_cleaned_wfs_path).unlink()
+                        reassigned_resids[result.inds] = np.load(
+                            result.reassigned_residuals_path
+                        )
                         Path(result.reassigned_residuals_path).unlink()
 
                 for f, dset in zip(featurizers, feature_dsets):
@@ -379,7 +414,6 @@ def extract_deconv(
     return out_h5
 
 
-# %%
 JobResult = namedtuple(
     "JobResult",
     [
@@ -388,6 +422,7 @@ JobResult = namedtuple(
         "resid_path",
         "outlier_scores_path",
         "reassignments_path",
+        "orig_cleaned_wfs_path",
         "reassigned_residuals_path",
         "reassigned_scores_path",
         "inds",
@@ -395,7 +430,6 @@ JobResult = namedtuple(
 )
 
 
-# %%
 def _extract_deconv_worker(start_sample):
     # an easy name to extract the params set by _extract_deconv_init
     p = _extract_deconv_worker
@@ -433,6 +467,7 @@ def _extract_deconv_worker(start_sample):
             end_sample,
             batch_str,
             p.temp_dir / f"resid_{batch_str}.npy",
+            None,
             None,
             None,
             None,
@@ -526,8 +561,9 @@ def _extract_deconv_worker(start_sample):
         )
 
         if p.save_reassignment_residuals:
-            reas_scores, reas_resids = rest
+            orig_cwfs, reas_scores, reas_resids = rest
             np.save(p.temp_dir / f"reas_score_{batch_str}.npy", reas_scores)
+            np.save(p.temp_dir / f"orig_cwfs_{batch_str}.npy", orig_cwfs)
             np.save(p.temp_dir / f"reas_resid_{batch_str}.npy", reas_resids)
 
         np.save(p.temp_dir / f"new_labels_up_{batch_str}.npy", new_labels_up)
@@ -563,13 +599,13 @@ def _extract_deconv_worker(start_sample):
         p.temp_dir / f"resid_{batch_str}.npy",
         p.temp_dir / f"outlier_scores_{batch_str}.npy",
         p.temp_dir / f"new_labels_up_{batch_str}.npy",
+        p.temp_dir / f"orig_cwfs_{batch_str}.npy",
         p.temp_dir / f"reas_resid_{batch_str}.npy",
         p.temp_dir / f"reas_score_{batch_str}.npy",
         which_spikes,
     )
 
 
-# %%
 def _extract_deconv_init(
     geom,
     device,
@@ -638,18 +674,19 @@ def _extract_deconv_init(
     print(".", end="", flush=True)
 
 
-# %%
 def load_or_fit_featurizers(
     featurizers,
     h5,
     channel_index,
     templates_up,
     spike_train_up,
+    spike_index_up,
     output_directory,
     standardized_bin,
     scalings,
     geom,
     n_sec_train_feats,
+    tpca_weighted=False,
     n_sec_chunk=1,
     n_jobs=1,
     sampling_rate=30_000,
@@ -663,6 +700,35 @@ def load_or_fit_featurizers(
 
     for f in featurizers:
         f.from_h5(h5)
+
+    if not any(f.needs_fit for f in featurizers):
+        return
+
+    # handle weighted tpca here temporarily
+    # TODO: figure out how to fit this to actual cleaned
+    # waveforms. not super straightforward with the
+    # chunk-based parallelism here, we would want
+    # something unit based...
+    if tpca_weighted:
+        for f in featurizers:
+            if isinstance(f, chunk_features.TPCA):
+                tpca = waveform_utils.fit_tpca_bin_clustered(
+                    spike_train_up[:, 0],
+                    spike_train_up[:, 1],
+                    spike_index_up[:, 1],
+                    geom,
+                    standardized_bin,
+                    centered=False,
+                    normalized=True,
+                    tpca_rank=f.rank,
+                    tpca_n_wfs=50_000,
+                    trough_offset=trough_offset,
+                    spike_length_samples=templates_up.shape[1],
+                    tpca_channel_index=f.channel_index,
+                    seed=0,
+                )
+                f.from_sklearn(tpca)
+                f.to_h5(h5)
 
     if not any(f.needs_fit for f in featurizers):
         return
@@ -722,21 +788,11 @@ def load_or_fit_featurizers(
             f"Training featurizers on {max_channels.size} waveforms from mini-extraction."
         )
         cleaned_wfs = mini_h5["cleaned_waveforms"][:]
-        # Reduce N_sec / N_channels rather than restricting N_wfs
-#         if max_channels.size>max_wfs_fit_pca:
-#             idx_subsample = np.random.choice(cleaned_wfs.shape[0], max_wfs_fit_pca, replace=False)
-#             cleaned_wfs = cleaned_wfs[idx_subsample]
-#             max_channels = max_channels[idx_subsample]
         for f in featurizers:
             f.fit(max_channels=max_channels, cleaned_wfs=cleaned_wfs)
         del cleaned_wfs
-        
-#         max_channels = mini_h5["spike_index"][:, 1]
+
         denoised_wfs = mini_h5["denoised_waveforms"][:]
-#         if max_channels.size>max_wfs_fit_pca:
-#             idx_subsample = np.random.choice(denoised_wfs.shape[0], max_wfs_fit_pca, replace=False)
-#             denoised_wfs = denoised_wfs[idx_subsample]
-#             max_channels = max_channels[idx_subsample]
         for f in featurizers:
             f.fit(max_channels=max_channels, denoised_wfs=denoised_wfs)
         del denoised_wfs
@@ -754,7 +810,6 @@ def load_or_fit_featurizers(
     # done. at this point the caller can rely on fitted featurizers.
 
 
-# %%
 def xqdm(it, pbar=True, **kwargs):
     if pbar:
         if isinstance(pbar, str):
