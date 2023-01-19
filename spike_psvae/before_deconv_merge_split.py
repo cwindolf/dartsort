@@ -2,20 +2,25 @@ import numpy as np
 import h5py
 import multiprocessing
 
-from hdbscan import HDBSCAN
+
 try:
     from isosplit import isosplit
 except ImportError:
     pass
-from sklearn.mixture import BayesianGaussianMixture
 from concurrent.futures import ProcessPoolExecutor
-from tqdm.auto import tqdm
+from functools import wraps
+from hdbscan import HDBSCAN
+from inspect import getfullargspec
+from scipy.spatial.distance import cdist
 from sklearn.decomposition import PCA
 from sklearn.discriminant_analysis import LinearDiscriminantAnalysis as LDA
+from sklearn.mixture import GaussianMixture, BayesianGaussianMixture
+from sklearn.cluster import OPTICS
+from tqdm.auto import tqdm
 
 from .multiprocessing_utils import MockPoolExecutor
 from .waveform_utils import get_channel_subset
-from .isocut5 import isocut5
+from .isocut5 import isocut5, isosplit1d
 from .chunk_features import TPCA
 from .snr_templates import get_raw_template_single
 from .deconv_resid_merge import calc_resid_matrix
@@ -33,61 +38,68 @@ from . import relocation
 # the main function is `split_clusters` below
 
 
-def split_worker_init(
-    subtraction_h5, log_c, feature_scales, waveforms_kind, raw_data_bin, relocated
-):
-    """
-    Loads hdf5 datasets on each worker process, rather than
-    loading them once in every split.
-    """
-    # we will assign lots of properties here, and
-    # the split functions below will load them up
-    p = split_worker_init
-    p.raw_data_bin = raw_data_bin
+class H5Extractor:
+    def __init__(
+        self,
+        h5_path,
+        raw_data_bin,
+        log_c=5,
+        feature_scales=(1, 1, 50),
+        waveforms_kind="cleaned",
+    ):
+        self.raw_data_bin = raw_data_bin
 
-    # get the clustering features in memory
-    h5 = h5py.File(subtraction_h5)
-    p.x = x = h5["localizations"][:, 0]
-    p.z = z = h5["z_reg"][:]
-    p.maxptp = maxptp = h5["maxptps"][:]
-    p.spike_times, p.max_channels = h5["spike_index"][:].T
-    p.channel_index = h5["channel_index"][:]
-    p.n_channels = p.channel_index.shape[0]
-    p.features = np.c_[x, z, np.log(log_c + maxptp)]
-    p.features *= feature_scales
-    p.geom = h5["geom"][:]
+        # get the clustering features in memory
+        h5 = h5py.File(h5_path)
+        self.x = x = h5["localizations"][:, 0]
+        self.z = z = h5["z_reg"][:]
+        self.maxptp = maxptp = h5["maxptps"][:]
+        self.spike_times, self.max_channels = h5["spike_index"][:].T
+        self.channel_index = h5["channel_index"][:]
+        self.n_channels = self.channel_index.shape[0]
+        self.features = np.c_[x, z, np.log(log_c + maxptp)]
+        self.features *= feature_scales
+        self.geom = h5["geom"][:]
 
-    # things we will need if doing relocated clustering
-    p.relocated = relocated
-    if relocated:
-        p.y, p.z_abs, p.alpha = h5["localizations"][:, 1:4].T
+        # things we will need if doing relocated clustering
+        self.y, self.z_abs, self.alpha = h5["localizations"][:, 1:4].T
+        self.log_c = log_c
+        self.feature_scales = feature_scales
 
-    # refrence to waveform tpca embeddings in h5 file
-    # we could load them in memory here if that seems helpful
-    p.tpca_projs = h5[f"{waveforms_kind}_tpca_projs"]
+        # refrence to waveform tpca embeddings in h5 file
+        # we could load them in memory here if that seems helpful
+        self.tpca_projs = h5[f"{waveforms_kind}_tpca_projs"]
 
-    # load sklearn PCA object from the h5 so that split steps can
-    # reconstruct waveforms from the tpca projections
-    tpca_feat = TPCA(
-        p.tpca_projs.shape[1],
-        p.channel_index,
-        waveforms_kind,
-    )
-    tpca_feat.from_h5(h5)
-    p.tpca = tpca_feat
-    p.T = tpca_feat.T
+        # load sklearn PCA object from the h5 so that split steps can
+        # reconstruct waveforms from the tpca projections
+        tpca_feat = TPCA(
+            self.tpca_projs.shape[1],
+            self.channel_index,
+            waveforms_kind,
+        )
+        tpca_feat.from_h5(h5)
+        self.tpca = tpca_feat
+        self.T = tpca_feat.T
 
 
 def herding_split(
     in_unit,
     min_size_split=25,
-    n_channels=5,
     n_pca_features=2,
     clusterer="hdbscan",
     hdbscan_kwargs=dict(min_cluster_size=25, min_samples=25),
-    dpgmm_kwargs=dict(n_components=10),
+    dpgmm_kwargs=dict(
+        n_components=5,
+        weight_concentration_prior_type="dirichlet_distribution",
+        max_iter=20000,
+    ),
+    chans_method="distance",
+    chans_amplitude_n_channels=5,
+    chans_distance_radius=75,
+    relocated=False,
+    extractor=None,
+    use_features=True,
 ):
-    p = split_worker_init
     n_spikes = in_unit.size
 
     # bail early if too small
@@ -99,35 +111,45 @@ def herding_split(
 
     # pick the subset of channels to use
     template = get_raw_template_single(
-        p.spike_times[in_unit],
-        p.raw_data_bin,
-        p.n_channels,
+        extractor.spike_times[in_unit],
+        extractor.raw_data_bin,
+        extractor.n_channels,
     )
-    which_chans = (-template.ptp(0)).argsort()[:n_channels]
+    if chans_method == "amplitude":
+        which_chans = (-template.ptp(0)).argsort()[:chans_amplitude_n_channels]
+    elif chans_method == "distance":
+        which_chans = np.flatnonzero(
+            cdist(
+                extractor.geom[template.ptp(0).argmax()][None], extractor.geom
+            )
+            < chans_distance_radius
+        )
+    else:
+        raise ValueError("chans_method not in ('amplitude', 'distance')")
 
     # get pca projections on channel subset
-    if p.relocated:
-        unit_features = get_relocated_wfs_on_channel_subset(
+    if relocated:
+        unit_features, relocated_maxptps = get_relocated_wfs_on_channel_subset(
             in_unit,
-            p.tpca_projs,
-            p.max_channels,
-            p.channel_index,
+            extractor.tpca_projs,
+            extractor.max_channels,
+            extractor.channel_index,
             which_chans,
-            p.tpca,
-            p.x,
-            p.y,
-            p.z_abs,
-            p.z,
-            p.alpha,
-            p.geom,
-            T=p.T,
+            extractor.tpca,
+            extractor.x,
+            extractor.y,
+            extractor.z_abs,
+            extractor.z,
+            extractor.alpha,
+            extractor.geom,
+            T=extractor.T,
         )
     else:
         unit_features = get_pca_projs_on_channel_subset(
             in_unit,
-            p.tpca_projs,
-            p.max_channels,
-            p.channel_index,
+            extractor.tpca_projs,
+            extractor.max_channels,
+            extractor.channel_index,
             which_chans,
         )
 
@@ -150,19 +172,58 @@ def herding_split(
 
     # create features for hdbscan, scaling pca projs to match
     # the current feature set
-    unit_features = p.features[in_unit[kept]]
-    pca_projs *= unit_features.std(axis=0).mean()
-    unit_features = np.c_[unit_features, pca_projs]
+    if use_features:
+        unit_features = extractor.features[in_unit[kept]]
+        if relocated:
+            unit_features[:, 2] = extractor.feature_scales[2] * np.log(extractor.log_c + relocated_maxptps)
+        pca_projs *= unit_features.std(axis=0).mean()
+        unit_features = np.c_[unit_features, pca_projs]
+    else:
+        unit_features = pca_projs
 
     # run hdbscan
     if clusterer == "hdbscan":
         clust = HDBSCAN(**hdbscan_kwargs)
         clust.fit(unit_features)
         new_labels[kept] = clust.labels_
+    elif clusterer == "optics":
+        clust = OPTICS(min_samples=10)
+        clust.fit(unit_features)
+        new_labels[kept] = clust.labels_
     elif clusterer == "isosplit":
         new_labels[kept] = isosplit(unit_features.T)
     elif clusterer == "dpgmm":
         clust = BayesianGaussianMixture(**dpgmm_kwargs)
+        clust.fit(unit_features)
+        labs = clust.predict(unit_features)
+        u, c = np.unique(
+            np.concatenate([np.arange(5), labs]), return_counts=True
+        )
+        c -= 1
+        k = (c >= 25).sum()
+        if k <= 1:
+            return False, None, None
+        print(f"{clust.weights_.shape=} {c >= 25}")
+        clust2 = GaussianMixture(
+            n_components=k,
+            weights_init=clust.weights_[c >= 25]
+            / clust.weights_[c >= 25].sum(),
+            means_init=clust.means_[c >= 25],
+            precisions_init=clust.precisions_[c >= 25],
+        )
+        clust2.fit(unit_features)
+        new_labels[kept] = clust2.predict(unit_features)
+    elif clusterer == "isosplit1d_gmm":
+        # -- Yizi's method
+        # guess the number of clusters
+        k = max(
+            np.unique(labels).size
+            for labels, _ in map(isosplit1d, map(np.unique, unit_features.T))
+        )
+        if k <= 1:
+            return False, None, None
+        # fit a GMM
+        clust = GaussianMixture(n_components=k)
         clust.fit(unit_features)
         new_labels[kept] = clust.predict(unit_features)
     else:
@@ -178,8 +239,11 @@ def maxchan_lda_split(
     n_channels=5,
     threshold_diptest=1.0,
     hdbscan_kwargs=dict(min_cluster_size=25, min_samples=25),
+    chans_method="distance",
+    chans_distance_radius=75,
+    extractor=None,
+    relocated=False,
 ):
-    p = split_worker_init
     n_spikes = in_unit.size
 
     # bail early if too small
@@ -188,7 +252,7 @@ def maxchan_lda_split(
 
     # this step relies on there being multiple max channels
     # so let's bail if this is not the case
-    unit_max_chans = p.max_channels[in_unit]
+    unit_max_chans = extractor.max_channels[in_unit]
     if np.unique(unit_max_chans).size <= 1:
         return False, None, None
 
@@ -197,35 +261,45 @@ def maxchan_lda_split(
 
     # pick the subset of channels to use
     template = get_raw_template_single(
-        p.spike_times[in_unit],
-        p.raw_data_bin,
-        p.n_channels,
+        extractor.spike_times[in_unit],
+        extractor.raw_data_bin,
+        extractor.n_channels,
     )
-    which_chans = (-template.ptp(0)).argsort()[:n_channels]
+    if chans_method == "amplitude":
+        which_chans = (-template.ptp(0)).argsort()[:n_channels]
+    elif chans_method == "distance":
+        which_chans = np.flatnonzero(
+            cdist(
+                extractor.geom[template.ptp(0).argmax()][None], extractor.geom
+            )[0]
+            < chans_distance_radius
+        )
+    else:
+        raise ValueError("chans_method not in ('amplitude', 'distance')")
 
     # get pca projections on channel subset
-    if p.relocated:
-        unit_features = get_relocated_wfs_on_channel_subset(
+    if relocated:
+        unit_features, relocated_maxptps = get_relocated_wfs_on_channel_subset(
             in_unit,
-            p.tpca_projs,
-            p.max_channels,
-            p.channel_index,
+            extractor.tpca_projs,
+            extractor.max_channels,
+            extractor.channel_index,
             which_chans,
-            p.tpca,
-            p.x,
-            p.y,
-            p.z_abs,
-            p.z,
-            p.alpha,
-            p.geom,
-            T=p.T,
+            extractor.tpca,
+            extractor.x,
+            extractor.y,
+            extractor.z_abs,
+            extractor.z,
+            extractor.alpha,
+            extractor.geom,
+            T=extractor.T,
         )
     else:
         unit_features = get_pca_projs_on_channel_subset(
             in_unit,
-            p.tpca_projs,
-            p.max_channels,
-            p.channel_index,
+            extractor.tpca_projs,
+            extractor.max_channels,
+            extractor.channel_index,
             which_chans,
         )
 
@@ -277,10 +351,10 @@ def ks_bimodal_pursuit_split(
     min_amp_sim=0.2,
     min_split_prop=0.05,
     load_batch_size=512,
+    extractor=None,
 ):
     """Adapted from PyKS"""
-    p = split_worker_init
-    tpca = p.tpca.tpca
+    tpca = extractor.tpca.tpca
     n_spikes = in_unit.size
 
     # bail early if too small
@@ -288,15 +362,18 @@ def ks_bimodal_pursuit_split(
         return False, None, None
 
     # load pca embeddings on the max channel
-    unit_max_chans = p.max_channels[in_unit]
-    ix0, unit_rel_max_chans = np.nonzero(unit_max_chans[:, None] == p.channel_index[unit_max_chans])
+    unit_max_chans = extractor.max_channels[in_unit]
+    ix0, unit_rel_max_chans = np.nonzero(
+        unit_max_chans[:, None] == extractor.channel_index[unit_max_chans]
+    )
     assert np.array_equal(ix0, np.arange(unit_max_chans.shape[0]))
     unit_features = np.empty(
-        (in_unit.size, p.tpca_projs.shape[1]), dtype=p.tpca_projs.dtype
+        (in_unit.size, extractor.tpca_projs.shape[1]),
+        dtype=extractor.tpca_projs.dtype,
     )
     for bs in range(0, in_unit.size, load_batch_size):
         be = min(in_unit.size, bs + load_batch_size)
-        unit_features[bs:be] = p.tpca_projs[in_unit[bs:be]][
+        unit_features[bs:be] = extractor.tpca_projs[in_unit[bs:be]][
             np.arange(be - bs), :, unit_rel_max_chans[bs:be]
         ]
 
@@ -443,20 +520,21 @@ def ks_bimodal_pursuit_split(
 def split_clusters(
     labels,
     raw_data_bin,
-    subtraction_h5,
+    h5_path,
     n_workers=1,
     feature_scales=(1, 1, 50),
     log_c=5,
     waveforms_kind="cleaned",
     split_steps=(maxchan_lda_split, herding_split, ks_bimodal_pursuit_split),
-    recursive_steps=(False, False, True),
+    recursive_steps=(False, True, True),
+    split_step_kwargs=None,
     relocated=False,
 ):
     contig = labels.max() + 1 == np.unique(labels[labels >= 0]).size
     if not contig:
         raise ValueError("Please pass contiguous labels to the split step.")
 
-    with h5py.File(subtraction_h5, "r") as h5:
+    with h5py.File(h5_path, "r") as h5:
         if labels.shape[0] != h5["spike_index"].shape[0]:
             raise ValueError(
                 "labels shape does not match h5. "
@@ -469,6 +547,11 @@ def split_clusters(
     new_labels = labels.copy()
     del labels
 
+    # process kwargs
+    if split_step_kwargs is None:
+        split_step_kwargs = [{}] * len(split_steps)
+    split_step_kwargs = [kw or {} for kw in split_step_kwargs]
+
     # set up multiprocessing.
     # Mock has better error messages, will be used with n_workers in (0, 1)
     spawn = n_workers not in (0, 1)
@@ -479,7 +562,7 @@ def split_clusters(
         mp_context=context,
         initializer=split_worker_init,
         initargs=(
-            subtraction_h5,
+            h5_path,
             log_c,
             feature_scales,
             waveforms_kind,
@@ -489,21 +572,27 @@ def split_clusters(
     ) as pool:
         # we will do each split step one after the other, each
         # starting with the labels set output by the previous step
-        for split_step, recursive in zip(split_steps, recursive_steps):
+        for split_step, recursive, extra_kwargs in zip(
+            split_steps, recursive_steps, split_step_kwargs
+        ):
+            split_step_wrapped = split_fn_wrapper(split_step, extra_kwargs)
             cur_labels_set = np.setdiff1d(new_labels, [-1])
             cur_max_label = cur_labels_set.max()
             nlabels_cur = cur_max_label + 1
 
             jobs = [
-                pool.submit(split_step, np.flatnonzero(new_labels == i))
+                pool.submit(
+                    split_step_wrapped, np.flatnonzero(new_labels == i)
+                )
                 for i in cur_labels_set
             ]
-            for future in tqdm(
+            iterator = tqdm(
                 jobs,
                 desc=f"Split step: {split_step.__name__}",
                 total=len(cur_labels_set),
                 smoothing=0,
-            ):
+            )
+            for future in iterator:
                 # would be better to do this like "imap style" but not
                 # sure how to do that... anyway its ok.
                 is_split, unit_new_labels, in_unit = future.result()
@@ -523,12 +612,14 @@ def split_clusters(
                 cur_max_label = new_labels[in_unit].max()
 
                 if recursive:
+                    new_jobs = np.setdiff1d(new_labels[in_unit], [-1])
                     jobs.extend(
                         pool.submit(
-                            split_step, np.flatnonzero(new_labels == i)
+                            split_step_wrapped, np.flatnonzero(new_labels == i)
                         )
-                        for i in np.setdiff1d(new_labels[in_unit], [-1])
+                        for i in new_jobs
                     )
+                    iterator.total += len(new_jobs)
 
             print(f"{new_labels.max() + 1 - nlabels_cur} new units.")
 
@@ -554,7 +645,12 @@ def lda_diptest_merge(
     max_spikes=250,
     threshold_diptest=0.5,
     relocated=False,
-    x=None, y=None, z_abs=None, z_reg=None, alpha=None, geom=None,
+    x=None,
+    y=None,
+    z_abs=None,
+    z_reg=None,
+    alpha=None,
+    geom=None,
     seed=0,
 ):
     T = template_a.shape[0]
@@ -570,9 +666,11 @@ def lda_diptest_merge(
 
     # load cleaned wf tpca projections for both
     # units on the channels subset
-    which_chans = np.argsort(-(template_a.ptp(0) + template_b.ptp(0)))[:n_channels]
+    which_chans = np.argsort(-(template_a.ptp(0) + template_b.ptp(0)))[
+        :n_channels
+    ]
     if relocated:
-        feats_a = get_relocated_wfs_on_channel_subset(
+        feats_a, relocated_maxptps = get_relocated_wfs_on_channel_subset(
             in_unit_a,
             tpca_projs,
             max_channels,
@@ -598,7 +696,7 @@ def lda_diptest_merge(
     too_far_a = np.isnan(feats_a).any(axis=(1, 2))
     feats_a = feats_a[~too_far_a]
     if relocated:
-        feats_b = get_relocated_wfs_on_channel_subset(
+        feats_b, relocated_maxptps = get_relocated_wfs_on_channel_subset(
             in_unit_b,
             tpca_projs,
             max_channels,
@@ -683,7 +781,9 @@ def get_proposed_pairs_for_unit(
     lambd=0.001,
     allowed_scale=0.1,
 ):
-    other_templates = np.stack([templates_dict[j] for j in other_units], axis=0)
+    other_templates = np.stack(
+        [templates_dict[j] for j in other_units], axis=0
+    )
     deconv_threshold = deconv_threshold_mul * min(
         np.square(templates_dict[unit]).sum(),
         np.square(other_templates).sum(axis=(1, 2)).min(),
@@ -723,11 +823,11 @@ def get_proposed_pairs_for_unit(
 
 
 def merge_clusters(
-    subtraction_h5,
+    h5_path,
     raw_data_bin,
     labels,
     templates,
-    proposal_max_resid_dist=5,
+    proposal_max_resid_dist=15,
     threshold_diptest=0.5,
     waveforms_kind="cleaned",
     recursive=True,
@@ -753,7 +853,7 @@ def merge_clusters(
     del templates
 
     # load some stuff from the h5
-    h5 = h5py.File(subtraction_h5, "r")
+    h5 = h5py.File(h5_path, "r")
     spike_times, max_channels = h5["spike_index"][:].T
     # TODO: these right now are just use for computing templates
     #       the shifts when merging already merged units are not
@@ -764,6 +864,7 @@ def merge_clusters(
     tpca_feat = TPCA(tpca_projs.shape[1], channel_index, waveforms_kind)
     tpca_feat.from_h5(h5)
 
+    x = y = z_abs = alpha = z_reg = None
     if relocated:
         x, y, z_abs, alpha = h5["localizations"][:, :4].T
         z_reg = h5["z_reg"][:]
@@ -809,7 +910,12 @@ def merge_clusters(
                 channel_index,
                 threshold_diptest=threshold_diptest,
                 relocated=relocated,
-                x=x, y=y, z_abs=z_abs, z_reg=z_reg, alpha=alpha, geom=geom,
+                x=x,
+                y=y,
+                z_abs=z_abs,
+                z_reg=z_reg,
+                alpha=alpha,
+                geom=geom,
             )
 
             if is_merge:
@@ -900,7 +1006,9 @@ def get_relocated_wfs_on_channel_subset(
         fill_value=np.nan,
     )
 
-    return relocated_wfs
+    relocated_maxptps = np.nanmax(relocated_wfs.ptp(1), axis=1)
+
+    return relocated_wfs, relocated_maxptps
 
 
 def get_pca_projs_on_channel_subset(
@@ -937,3 +1045,47 @@ def invert_tpca(projs, tpca):
     projs = projs.transpose(0, 2, 1)
     wfs = tpca.inverse_transform(projs.reshape(-1, R))
     return wfs.reshape(N, C, -1).transpose(0, 2, 1)
+
+
+# -- parallelism helpers
+# users don't need to worry about these -- just write your split functions as above.
+
+
+def split_worker_init(
+    h5_path,
+    log_c,
+    feature_scales,
+    waveforms_kind,
+    raw_data_bin,
+    relocated,
+):
+    """
+    Loads hdf5 datasets on each worker process, rather than
+    loading them once in every split.
+    """
+    # we will assign lots of properties here, and
+    # the split functions below will load them up
+    p = split_worker_init
+    p.extractor = H5Extractor(
+        h5_path,
+        raw_data_bin,
+        log_c=log_c,
+        feature_scales=feature_scales,
+        waveforms_kind=waveforms_kind,
+    )
+    p.relocated = relocated
+
+
+def split_fn_wrapper(split_fn, extra_kwargs):
+    p = split_worker_init
+    argspec = getfullargspec(split_fn)
+
+    @wraps(split_fn)
+    def split_fn_wrapped(*args, **kwargs):
+        kwargs.update(extra_kwargs)
+        kwargs["extractor"] = p.extractor
+        if "relocated" in argspec.args:
+            kwargs["relocated"] = p.relocated
+        return split_fn(*args, **kwargs)
+
+    return split_fn_wrapped

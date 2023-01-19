@@ -152,7 +152,9 @@ class PTPVector(ChunkFeature):
     name = "ptp_vectors"
     needs_fit = True
 
-    def __init__(self, which_waveforms="denoised", channel_index=None, dtype=np.float32):
+    def __init__(
+        self, which_waveforms="denoised", channel_index=None, dtype=np.float32
+    ):
         self.which_waveforms = which_waveforms
         if channel_index is not None:
             self.C = channel_index.shape[1]
@@ -203,7 +205,13 @@ class PTPVector(ChunkFeature):
 class Waveform(ChunkFeature):
     needs_fit = True
 
-    def __init__(self, which_waveforms, spike_length_samples=None, channel_index=None, dtype=np.float32):
+    def __init__(
+        self,
+        which_waveforms,
+        spike_length_samples=None,
+        channel_index=None,
+        dtype=np.float32,
+    ):
         super().__init__()
         assert which_waveforms in ("subtracted", "cleaned", "denoised")
         self.which_waveforms = which_waveforms
@@ -319,10 +327,55 @@ class TPCA(ChunkFeature):
         self.rank = rank
         self.name = f"{which_waveforms}_tpca_projs"
         self.channel_index = channel_index
-        self.random_state = random_state
         self.C = channel_index.shape[1]
         self.out_shape = (self.rank, self.C)
-        self.tpca = PCA(self.rank, random_state=self.random_state)
+        self.tpca = PCA(self.rank, random_state=random_state)
+
+    @classmethod
+    def load_from_h5(cls, h5, which_waveforms, random_state=0):
+        group = h5[f"{which_waveforms}_tpca"]
+        T = group["T"][()]
+        mean_ = group["tpca_mean"][:]
+        components_ = group["tpca_components"][:]
+        rank = components_.shape[0]
+        channel_index = h5["channel_index"][:]
+
+        self = cls(
+            rank, channel_index, which_waveforms, random_state=random_state
+        )
+
+        self.T = T
+        self.tpca.mean_ = mean_
+        self.tpca.components_ = components_
+        self.dtype = components_.dtype
+        self.needs_fit = False
+
+        return self
+
+    def to_h5(self, h5):
+        group = h5.create_group(f"{self.which_waveforms}_tpca")
+        group.create_dataset("T", data=self.T)
+        group.create_dataset("tpca_mean", data=self.tpca.mean_)
+        group.create_dataset("tpca_components", data=self.tpca.components_)
+
+    def from_h5(self, h5):
+        try:
+            group = h5[f"{self.which_waveforms}_tpca"]
+            self.T = group["T"][()]
+            self.tpca = PCA(self.rank)
+            self.tpca.mean_ = group["tpca_mean"][:]
+            self.tpca.components_ = group["tpca_components"][:]
+            self.needs_fit = False
+        except KeyError:
+            pass
+
+    def from_sklearn(self, sklearn_pca):
+        self.T = sklearn_pca.components_.shape[1]
+        self.tpca = sklearn_pca
+        self.dtype = sklearn_pca.components_.dtype
+        self.needs_fit = False
+
+        return self
 
     def __str__(self):
         if self.needs_fit:
@@ -351,23 +404,6 @@ class TPCA(ChunkFeature):
         self.tpca.fit(wfs_in_probe)
         self.needs_fit = False
         self.dtype = self.tpca.components_.dtype
-
-    def to_h5(self, h5):
-        group = h5.create_group(f"{self.which_waveforms}_tpca")
-        group.create_dataset("T", data=self.T)
-        group.create_dataset("tpca_mean", data=self.tpca.mean_)
-        group.create_dataset("tpca_components", data=self.tpca.components_)
-
-    def from_h5(self, h5):
-        try:
-            group = h5[f"{self.which_waveforms}_tpca"]
-            self.T = group["T"][()]
-            self.tpca = PCA(self.rank)
-            self.tpca.mean_ = group["tpca_mean"][:]
-            self.tpca.components_ = group["tpca_components"][:]
-            self.needs_fit = False
-        except KeyError:
-            pass
 
     def transform(
         self,
