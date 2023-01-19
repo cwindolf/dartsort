@@ -1,6 +1,6 @@
 import numpy as np
 from scipy.spatial.distance import cdist, pdist, squareform
-from sklearn.decomposition import PCA
+from sklearn.decomposition import PCA, TruncatedSVD
 
 from . import spikeio
 
@@ -11,6 +11,7 @@ def fit_tpca_bin(
     binary_file,
     tpca_rank=5,
     tpca_n_wfs=50_000,
+    trough_offset=42,
     spike_length_samples=121,
     spatial_radius=75,
     seed=0,
@@ -28,6 +29,7 @@ def fit_tpca_bin(
         binary_file,
         geom.shape[0],
         channel_index=tpca_channel_index,
+        trough_offset=trough_offset,
         spike_length_samples=spike_length_samples,
         max_channels=spike_index[choices, 1],
     )
@@ -38,6 +40,81 @@ def fit_tpca_bin(
     which = np.isfinite(tpca_waveforms[:, 0])
     tpca_waveforms = tpca_waveforms[which]
     tpca = PCA(tpca_rank).fit(tpca_waveforms)
+
+    return tpca
+
+
+def fit_tpca_bin_clustered(
+    spike_times,
+    spike_labels,
+    max_channels,
+    geom,
+    binary_file,
+    centered=False,
+    normalized=True,
+    tpca_rank=5,
+    tpca_n_wfs=50_000,
+    trough_offset=42,
+    spike_length_samples=121,
+    tpca_channel_index=None,
+    spatial_radius=75,
+    seed=0,
+):
+    assert spike_times.shape == spike_labels.shape == max_channels.shape
+    assert not (centered and normalized)
+
+    rg = np.random.default_rng(seed)
+
+    # choose spikes w.p. propto 1/cluster count
+    units, inverse, counts = np.unique(spike_labels, return_inverse=True, return_counts=True)
+    probs = 1.0 / counts.astype(np.float64)
+    probs[units < 0] = 0.0
+    probs = probs[inverse]
+    probs /= probs.sum()
+    choices = rg.choice(
+        len(spike_times),
+        size=min(len(spike_times), tpca_n_wfs),
+        p=probs,
+        replace=False,
+    )
+    choices.sort()
+
+    # load waveforms on channel neighborhood
+    if tpca_channel_index is not None:
+        tpca_channel_index = make_channel_index(
+            geom, spatial_radius, steps=1, distance_order=False, p=1
+        )
+    tpca_waveforms, skipped_idx = spikeio.read_waveforms(
+        spike_times[choices],
+        binary_file,
+        geom.shape[0],
+        channel_index=tpca_channel_index,
+        trough_offset=trough_offset,
+        spike_length_samples=spike_length_samples,
+        max_channels=max_channels[choices],
+    )
+
+    # NTC -> NCT
+    tpca_waveforms = tpca_waveforms.transpose(0, 2, 1).reshape(
+        -1, spike_length_samples
+    )
+    which = np.isfinite(tpca_waveforms[:, 0])
+    tpca_waveforms = tpca_waveforms[which]
+
+    # fit TPCA or truncatedSVD depending on the centering
+    if centered:
+        tpca = PCA(tpca_rank).fit(tpca_waveforms)
+    else:
+        if normalized:
+            tpca_waveforms /= np.linalg.norm(tpca_waveforms, axis=1, keepdims=True)
+
+        # TruncatedSVD is sklearn's uncentered PCA
+        tsvd = TruncatedSVD(tpca_rank).fit(tpca_waveforms)
+
+        # rest of the code expects a mean_ so let's just convert to pca
+        tpca = PCA(tpca_rank)
+        tpca.mean_ = np.zeros_like(tpca_waveforms[0])
+        tpca.components_ = tsvd.components_
 
     return tpca
 
@@ -317,9 +394,8 @@ def restrict_wfs_to_chans(
     N, T, C = waveforms.shape
 
     # handle source channels
-    if (
-        (max_channels is None and channel_index is None)
-        == (source_channels is None)
+    if (max_channels is None and channel_index is None) == (
+        source_channels is None
     ):
         raise ValueError(
             "Please supply either max_channels and channel_index or source_channels"

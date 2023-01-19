@@ -26,6 +26,7 @@ def relocate_simple(
     channel_index=None,
     wf_channels=None,
 ):
+    """Point source relocation."""
     if wf_channels is None:
         wf_channels = channel_index[max_channels]
     ptp_from = point_source_ptp(xyza_from, wf_channels, geom)
@@ -59,7 +60,27 @@ def get_relocated_waveforms_on_channel_subset(
     target_channels,
     fill_value=np.nan,
 ):
-    """Relocated waveforms on a specific group of channels `target_channels`"""
+    """Relocated waveforms on a specific group of channels `target_channels`
+
+    Arguments
+    ---------
+    max_channels : array of shape (n_spikes,)
+    waveforms : array of shape (n_spikes, spike_length_samples, neighbor_chans)
+    xyza_from : array of shape (n_spikes, 4)
+        The columns here should be x, y, z_abs, alpha
+    z_to : array of shape (n_spikes,)
+        z coordinates to shift towards -- probably z_reg.
+    channel_index : array of shape (total_chans, neighbor_chans)
+        For each max channel `c`, we extract waveforms with that max channel on
+        the channel neighborhood `channel_index[c]`
+        So, the nth waveform waveforms[n] was extracted on
+        `channel_index[max_channels[n]]`.
+    geom : array of shape (total_chans, 2)
+    target_channels : array of shape (n_target_channels,)
+        The set of channel
+    """
+    assert xyza_from.shape[0] == z_to.shape[0] == max_channels.shape[0] == waveforms.shape[0]
+
     # we will handle the "integer part" of the drift by just grabbing
     # different channels in the waveforms, and the remainder by point
     # source relocation

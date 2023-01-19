@@ -85,7 +85,10 @@ def get_templates(
     templates = np.zeros((n_templates, spike_length_samples, len(geom)))
 
     raw_templates = np.zeros_like(templates)
-    if not raw_only:
+    if raw_only:
+        snr_by_channel = np.zeros((n_templates, len(geom)))
+        extra = dict(snr_by_channel=snr_by_channel)
+    else:
         snr_by_channel = np.zeros((n_templates, len(geom)))
         denoised_templates = np.zeros_like(templates)
         extra = dict(
@@ -103,6 +106,7 @@ def get_templates(
             raw_binary_file,
             tpca_rank=tpca_rank,
             tpca_n_wfs=tpca_n_wfs,
+            trough_offset=trough_offset,
             spike_length_samples=spike_length_samples,
             spatial_radius=tpca_radius,
             seed=seed,
@@ -154,12 +158,12 @@ def get_templates(
             pbar=pbar,
         ):
             raw_templates[unit] = raw_template
+            snr_by_channel[unit] = snr_by_chan
             if not raw_only:
                 denoised_templates[unit] = denoised_template
-                snr_by_channel[unit] = snr_by_chan
 
     if raw_only:
-        return raw_templates
+        return raw_templates, extra
 
     # SNR-weighted combination to create the template
     weights = denoised_weights(
@@ -193,7 +197,7 @@ def get_raw_templates(
     seed=0,
     n_jobs=-1,
 ):
-    raw_templates = get_templates(
+    raw_templates, _ = get_templates(
         spike_train,
         geom,
         raw_binary_file,
@@ -358,8 +362,10 @@ def denoised_weights(
 ):
     # v shaped function for time weighting
     vt = np.abs(np.arange(spike_length_samples) - trough_offset, dtype=float)
-    vt[trough_offset:] = vt[trough_offset:] / vt[trough_offset:].max()
-    vt[:trough_offset] = vt[:trough_offset] / vt[:trough_offset].max()
+    if trough_offset < spike_length_samples:
+        vt[trough_offset:] = vt[trough_offset:] / vt[trough_offset:].max()
+    if trough_offset > 0:
+        vt[:trough_offset] = vt[:trough_offset] / vt[:trough_offset].max()
 
     # snr weighting per channel
     sc = np.minimum(snrs, snr_threshold) / snr_threshold
@@ -381,8 +387,10 @@ def denoised_weights_single(
 ):
     # v shaped function for time weighting
     vt = np.abs(np.arange(spike_length_samples) - trough_offset, dtype=float)
-    vt[trough_offset:] = vt[trough_offset:] / vt[trough_offset:].max()
-    vt[:trough_offset] = vt[:trough_offset] / vt[:trough_offset].max()
+    if trough_offset < spike_length_samples:
+        vt[trough_offset:] = vt[trough_offset:] / vt[trough_offset:].max()
+    if trough_offset > 0:
+        vt[:trough_offset] = vt[:trough_offset] / vt[:trough_offset].max()
 
     # snr weighting per channel
     sc = np.minimum(snrs, snr_threshold) / snr_threshold
