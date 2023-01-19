@@ -14,6 +14,7 @@ def superres_spike_train(
     z_abs,
     bin_size_um,
     min_spikes_bin=10,
+    max_z_dist=None
 ):
     assert spike_train.shape == (*z_abs.shape, 2)
     assert bin_size_um > 0
@@ -41,11 +42,22 @@ def superres_spike_train(
         #   ... -3bin/2 , -bin/2, bin/2, 3bin/2, ...
         bin_ids = (centered_z + bin_size_um / 2) // bin_size_um
         occupied_bins, bin_counts = np.unique(bin_ids, return_counts=True)
-        for bin_id in occupied_bins[bin_counts >= min_spikes_bin]:
-            superres_labels[in_u[bin_ids == bin_id]] = cur_superres_label
-            superres_label_to_bin_id.append(bin_id)
+        if max_z_dist is not None:
+            # np.abs(bin_ids) <= (np.abs(centered_z)+ bin_size_um / 2)//bin_size_um <= (max_z_dist + bin_size_um / 2)//bin_size_um
+            bin_counts = bin_counts[np.abs(occupied_bins)<=(max_z_dist + bin_size_um / 2)//bin_size_um]
+            occupied_bins = occupied_bins[np.abs(occupied_bins)<=(max_z_dist + bin_size_um / 2)//bin_size_um]
+        if bin_counts.max() >= min_spikes_bin:
+            for bin_id in occupied_bins[bin_counts >= min_spikes_bin]:
+                superres_labels[in_u[bin_ids == bin_id]] = cur_superres_label
+                superres_label_to_bin_id.append(bin_id)
+                superres_label_to_orig_label.append(u)
+                cur_superres_label += 1
+        #what if no template was computed for u
+        else:
+            superres_labels[in_u] = cur_superres_label
+            superres_label_to_bin_id.append(0)
             superres_label_to_orig_label.append(u)
-            cur_superres_label += 1
+            cur_superres_label+=1
 
     superres_label_to_bin_id = np.array(superres_label_to_bin_id)
     superres_label_to_orig_label = np.array(superres_label_to_orig_label)
@@ -63,6 +75,7 @@ def superres_denoised_templates(
     geom,
     raw_binary_file,
     min_spikes_bin=10,
+    max_z_dist=None,
     max_spikes_per_unit=500,
     denoise_templates=True,
     do_temporal_decrease=True,
@@ -89,6 +102,7 @@ def superres_denoised_templates(
         z_abs,
         bin_size_um,
         min_spikes_bin=min_spikes_bin,
+        max_z_dist=max_z_dist,
     )
     templates, extra = snr_templates.get_templates(
         np.c_[spike_train[:, 0], superres_labels],
@@ -360,6 +374,7 @@ def superres_deconv(
     deconv_dir=None,
     pfs=30_000,
     reference_displacement=0,
+    max_z_dist=None,
     t_start=0,
     t_end=None,
     n_jobs=1,
@@ -383,6 +398,7 @@ def superres_deconv(
         raw_bin,
         denoise_templates=denoise_templates,
         min_spikes_bin=10,
+        max_z_dist=max_z_dist,
         max_spikes_per_unit=500,
         do_temporal_decrease=True,
         zero_radius_um=200,
