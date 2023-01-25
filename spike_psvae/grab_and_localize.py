@@ -20,6 +20,7 @@ def grab_and_localize(
     enforce_decrease=True,
     tpca=None,
     chunk_size=30_000,
+    start_time=0,
     n_jobs=1,
     device=None,
 ):
@@ -44,7 +45,7 @@ def grab_and_localize(
     localizations = np.empty((spike_index.shape[0], 5))
     maxptp = np.empty(spike_index.shape[0])
     starts = range(
-        0,
+        start_time,
         spike_index[:, 0].max(),
         chunk_size,
     )
