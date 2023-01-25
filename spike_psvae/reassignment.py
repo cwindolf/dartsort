@@ -91,6 +91,7 @@ def reassign_waveforms(
     outlier_scores = np.empty(N, dtype=cleaned_waveforms.dtype)
     if return_resids:
         orig_and_reas_scores = np.empty((N, 2), dtype=cleaned_waveforms.dtype)
+        orig_cleaned_wfs = cleaned_waveforms.copy()
         orig_and_reas_resids = np.empty(
             (N, 2, *cleaned_waveforms.shape[1:]), dtype=cleaned_waveforms.dtype
         )
@@ -100,15 +101,16 @@ def reassign_waveforms(
         cwf = cleaned_waveforms[j]
         pairs = proposed_pairs[label]
 
-        resids = cwf[None, :, :] - templates_loc[label]
-        resids = apply_tpca(resids, tpca)
-        if norm_p == np.inf:
-            scores = np.nanmax(np.abs(resids), axis=(1, 2))
-        else:
-            scores = np.nanmean(np.abs(resids) ** norm_p, axis=(1, 2))
-        best = scores.argmin()
-        new_labels[j] = pairs[best]
-        outlier_scores[j] = scores[best]
+        if pairs.size:
+            resids = cwf[None, :, :] - templates_loc[label]
+            resids = apply_tpca(resids, tpca)
+            if norm_p == np.inf:
+                scores = np.nanmax(np.abs(resids), axis=(1, 2))
+            else:
+                scores = np.nanmean(np.abs(resids) ** norm_p, axis=(1, 2))
+            best = scores.argmin()
+            new_labels[j] = pairs[best]
+            outlier_scores[j] = scores[best]
 
         if return_resids:
             orig_label_pos = np.flatnonzero(pairs == label)
@@ -158,6 +160,7 @@ def reassign_waveforms(
         return (
             new_labels,
             outlier_scores,
+            orig_cleaned_wfs,
             orig_and_reas_scores,
             orig_and_reas_resids,
         )
@@ -172,7 +175,9 @@ def reassignment_templates_local(templates, proposed_pairs, channel_index):
     """
     assert len(proposed_pairs) == len(templates)
     assert channel_index.shape[0] == templates.shape[2]
-    # print(f"loc temps {len(proposed_pairs)=} {templates.shape=}")
+    print(f"loc temps {len(proposed_pairs)=} {templates.shape=}")
+    tmc = templates.ptp(1).argmax(1)
+    print(f"{np.abs(templates)[np.arange(len(templates)), :, tmc].argmax(1)=}")
 
     template_maxchans = templates.ptp(1).argmax(1)
     templates_padded = np.pad(
@@ -185,11 +190,16 @@ def reassignment_templates_local(templates, proposed_pairs, channel_index):
     reassignment_templates_loc = []
     for maxchan, pairs in zip(template_maxchans, proposed_pairs):
         if not pairs.size:
-            reassignment_templates_loc.append(np.empty([]))
+            reassignment_templates_loc.append(np.empty([0]))
             continue
 
         temp_chans = channel_index[maxchan]
+        # print(f"{pairs.size=} {pairs.shape=} {temp_chans.shape=} {pairs=}")
         pair_temps_loc = templates_padded[pairs][:, :, temp_chans]
+        # print(f"{pair_temps_loc.shape=}")
+        # ptmc = np.nanargmax(pair_temps_loc.ptp(1), 1)
+        # print(f"{ptmc=}")
+        # print(f"{np.abs(pair_temps_loc)[np.arange(len(pair_temps_loc)), :, ptmc].argmax(1)=}")
         reassignment_templates_loc.append(pair_temps_loc)
 
     return reassignment_templates_loc
