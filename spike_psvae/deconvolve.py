@@ -249,8 +249,7 @@ class MatchPursuitObjectiveUpsample:
         self.iter_spike_train = []
 
     def visible_chans(self):
-        a = np.max(self.temps, axis=0) - np.min(self.temps, 0)
-        self.vis_chan = a > self.vis_su_threshold
+        self.vis_chan = self.temps.ptp(0) > self.vis_su_threshold
 
     def template_overlaps(self):
         """Find pairwise units that have overlap between."""
