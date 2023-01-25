@@ -500,7 +500,7 @@ def plot_self_agreement(labels, spike_times, fig=None):
     return fig
 
 
-def plot_isi_distribution(spike_train, ax=None, cdf=True):
+def plot_isi_distribution(spike_train, ax=None, cdf=True, bins=None):
     if ax is None:
         fig = plt.figure(figsize=(6, 3))
         ax = fig.gca()
@@ -515,8 +515,12 @@ def plot_isi_distribution(spike_train, ax=None, cdf=True):
     if np.all(spike_train_diff > 10):
         return ax
 
+    if bins is None:
+        bins = np.arange(0, 10.1, 0.5)
+    elif isinstance(bins, float):
+        bins = np.arange(0, 10.1, bins)
     y, x, _ = ax.hist(
-        spike_train_diff, bins=np.arange(0, 10.1, 0.5), density=True
+        spike_train_diff, bins=bins, density=False
     )
     if cdf:
         try:
