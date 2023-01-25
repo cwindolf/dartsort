@@ -175,7 +175,7 @@ def herding_split(
     if use_features:
         unit_features = extractor.features[in_unit[kept]]
         if relocated:
-            unit_features[:, 2] = extractor.feature_scales[2] * np.log(extractor.log_c + relocated_maxptps)
+            unit_features[:, 2] = extractor.feature_scales[2] * np.log(extractor.log_c + relocated_maxptps[kept])
         pca_projs *= unit_features.std(axis=0).mean()
         unit_features = np.c_[unit_features, pca_projs]
     else:
