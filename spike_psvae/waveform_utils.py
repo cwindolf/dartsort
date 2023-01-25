@@ -59,6 +59,7 @@ def fit_tpca_bin_clustered(
     tpca_channel_index=None,
     spatial_radius=75,
     seed=0,
+    return_as_pca=True,
 ):
     assert spike_times.shape == spike_labels.shape == max_channels.shape
     assert not (centered and normalized)
@@ -80,18 +81,18 @@ def fit_tpca_bin_clustered(
     choices.sort()
 
     # load waveforms on channel neighborhood
-    if tpca_channel_index is not None:
+    if tpca_channel_index is None:
         tpca_channel_index = make_channel_index(
             geom, spatial_radius, steps=1, distance_order=False, p=1
         )
     tpca_waveforms, skipped_idx = spikeio.read_waveforms(
         spike_times[choices],
-        binary_file,
-        geom.shape[0],
+        bin_file=binary_file,
+        n_channels=geom.shape[0],
         channel_index=tpca_channel_index,
+        max_channels=max_channels[choices],
         trough_offset=trough_offset,
         spike_length_samples=spike_length_samples,
-        max_channels=max_channels[choices],
     )
 
     # NTC -> NCT
@@ -109,12 +110,13 @@ def fit_tpca_bin_clustered(
             tpca_waveforms /= np.linalg.norm(tpca_waveforms, axis=1, keepdims=True)
 
         # TruncatedSVD is sklearn's uncentered PCA
-        tsvd = TruncatedSVD(tpca_rank).fit(tpca_waveforms)
+        tpca = tsvd = TruncatedSVD(tpca_rank).fit(tpca_waveforms)
 
         # rest of the code expects a mean_ so let's just convert to pca
-        tpca = PCA(tpca_rank)
-        tpca.mean_ = np.zeros_like(tpca_waveforms[0])
-        tpca.components_ = tsvd.components_
+        if return_as_pca:
+            tpca = PCA(tpca_rank)
+            tpca.mean_ = np.zeros_like(tpca_waveforms[0])
+            tpca.components_ = tsvd.components_
 
     return tpca
 
