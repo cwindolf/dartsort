@@ -7,7 +7,7 @@ from skimage.restoration import denoise_nl_means, estimate_sigma
 from tqdm.auto import tqdm
 
 from .ibme_fast_raster import raster as _raster
-from .ibme_corr import register_raster_rigid
+from .ibme_corr import register_raster_rigid, calc_corr_decent, psolvecorr_spatial
 
 
 # -- main functions: rigid and nonrigid registration
@@ -94,8 +94,10 @@ def register_nonrigid(
     robust_sigma=0.0,
     denoise_sigma=0.1,
     corr_threshold=0.0,
+    window_shape="gaussian",
     adaptive_mincorr_percentile=None,
     prior_lambda=0,
+    spatial_prior=False,
     normalized=True,
     rigid_disp=400,
     disp=800,
@@ -188,41 +190,71 @@ def register_nonrigid(
         D, T = raster.shape
 
         # gaussian windows
-        windows = np.empty((nwin, D))
+        windows = np.zeros((nwin, D))
         slices = []
         space = D // (nwin + 1)
         locs = np.linspace(space, D - space, nwin)
         scale = widthmul * D / nwin
-        for k, loc in enumerate(locs):
-            windows[k, :] = norm.pdf(np.arange(D), loc=loc, scale=scale)
-            domain_large_enough = np.flatnonzero(windows[k, :] > 1e-5)
-            slices.append(
-                slice(domain_large_enough[0], domain_large_enough[-1])
-            )
-        windows /= windows.sum(axis=0, keepdims=True)
+        if window_shape == "gaussian":
+            for k, loc in enumerate(locs):
+                windows[k, :] = norm.pdf(np.arange(D), loc=loc, scale=scale)
+                domain_large_enough = np.flatnonzero(windows[k, :] > 1e-5)
+                slices.append(
+                    slice(domain_large_enough[0], domain_large_enough[-1])
+                )
+        elif window_shape == "rect":
+            for k, loc in enumerate(locs):
+                slices.append(
+                    slice(max(0, np.floor(loc - scale)), min(D, np.floor(loc + scale)))
+                )
+                windows[k, slices[-1]] = 1
 
         # torch versions on device
         windows_ = torch.as_tensor(windows, dtype=torch.float, device=device)
         raster_ = torch.as_tensor(raster, dtype=torch.float, device=device)
 
         # estimate each window's displacement
-        ps = np.empty((nwin, T))
-        for k, window in enumerate(tqdm(windows_, desc="windows")):
-            p, D, C = register_raster_rigid(
-                (window[:, None] * raster_)[slices[k]],
+        if not spatial_prior:
+            ps = np.empty((nwin, T))
+            for k, window in enumerate(tqdm(windows_, desc="windows")):
+                p, D, C = register_raster_rigid(
+                    (window[:, None] * raster_)[slices[k]],
+                    mincorr=corr_threshold,
+                    normalized=normalized,
+                    robust_sigma=robust_sigma,
+                    max_dt=max_dt,
+                    batch_size=batch_size,
+                    pbar=False,
+                    prior_lambda=prior_lambda,
+                    adaptive_mincorr_percentile=adaptive_mincorr_percentile,
+                )
+                ps[k] = p
+        else:
+            block_Ds = np.empty((nwin, T, T))
+            block_Cs = np.empty((nwin, T, T))
+            for k, window in enumerate(tqdm(windows_, desc="windows")):
+                D, C = calc_corr_decent(
+                    (window[:, None] * raster_)[slices[k]],
+                    disp=max(25, int(np.ceil(disp / nwin))),
+                    normalized=normalized,
+                    batch_size=batch_size,
+                    pbar=False,
+                )
+                block_Ds[k] = D
+                block_Cs[k] = C
+
+            ps = psolvecorr_spatial(
+                block_Ds,
+                block_Cs,
                 mincorr=corr_threshold,
-                normalized=normalized,
-                robust_sigma=robust_sigma,
                 max_dt=max_dt,
-                disp=max(25, int(np.ceil(disp / nwin))),
-                batch_size=batch_size,
-                pbar=False,
-                prior_lambda=prior_lambda,
-                adaptive_mincorr_percentile=adaptive_mincorr_percentile,
+                temporal_prior=prior_lambda > 0,
+                spatial_prior=True,
+                reference_displacement="mode_search",
             )
-            ps[k] = p
 
         # warp depths
+        windows /= windows.sum(axis=0, keepdims=True)
         dispmap = windows.T @ ps
         depths = warp_nonrigid(
             depths, times, dispmap, depth_domain=dd, time_domain=tt

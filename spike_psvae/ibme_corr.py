@@ -47,7 +47,12 @@ def register_raster_rigid(
     if adaptive_mincorr_percentile is not None:
         mincorr = np.percentile(np.diagonal(C, 1), adaptive_mincorr_percentile)
     p = psolvecorr(
-        D, C, mincorr=mincorr, robust_sigma=robust_sigma, max_dt=max_dt, prior_lambda=prior_lambda
+        D,
+        C,
+        mincorr=mincorr,
+        robust_sigma=robust_sigma,
+        max_dt=max_dt,
+        prior_lambda=prior_lambda,
     )
     return p, D, C
 
@@ -129,6 +134,159 @@ def psolvecorr(
         p, *_ = sparse.linalg.lsmr(A, V)
 
     return p
+
+
+def psolvecorr_spatial(
+    D,
+    C,
+    mincorr=0.0,
+    robust_sigma=0,
+    robust_iter=5,
+    max_dt=None,
+    temporal_prior=True,
+    spatial_prior=True,
+    reference_displacement="mode_search",
+):
+    # D = pairwise_displacement
+    W = C > mincorr
+
+    # weighted problem
+    # if pairwise_displacement_weight is None:
+    #     pairwise_displacement_weight = np.ones_like(D)
+    # if sparse_mask is None:
+    #     sparse_mask = np.ones_like(D)
+    # W = pairwise_displacement_weight * sparse_mask
+
+    assert D.shape == W.shape
+
+    # first dimension is the windows dim, which could be empty in rigid case
+    # we expand dims so that below we can consider only the nonrigid case
+    if D.ndim == 2:
+        W = W[None]
+        D = D[None]
+    assert D.ndim == W.ndim == 3
+    B, T, T_ = D
+    assert T == T_
+
+    if max_dt is not None and max_dt > 0:
+        horiz = la.toeplitz(
+            np.r_[
+                np.ones(max_dt, dtype=bool), np.zeros(T - max_dt, dtype=bool)
+            ]
+        )
+        for k in range(W.shape[0]):
+            W[k] &= horiz
+
+    # sparsify the problem
+    # we will make a list of temporal problems and then
+    # stack over the windows axis to finish.
+    # each matrix in coefficients will be (sparse_dim, T)
+    coefficients = []
+    # each vector in targets will be (T,)
+    targets = []
+    # we want to solve for a vector of shape BT, which we will reshape
+    # into a (B, T) matrix.
+    # after the loop below, we will stack a coefts matrix (sparse_dim, B, T)
+    # and a target vector of shape (B, T), both to be vectorized on last two axes,
+    # so that the target p is indexed by i = bT + t (block/window major).
+
+    # calculate coefficients matrices and target vector
+    for Wb, Db in zip(W, D):
+        # indices of active temporal pairs in this window
+        I, J = np.nonzero(W > 0)
+        n_sampled = I.size
+
+        # construct Kroneckers and sparse objective in this window
+        ones = np.ones(n_sampled)
+        Mb = sparse.csr_matrix(
+            (ones, (range(n_sampled), I)), shape=(n_sampled, T)
+        )
+        Nb = sparse.csr_matrix(
+            (ones, (range(n_sampled), J)), shape=(n_sampled, T)
+        )
+        block_sparse_kron = Mb - Nb
+        block_disp_pairs = Db[I, J]
+
+        # add the temporal smoothness prior in this window
+        if temporal_prior:
+            temporal_diff_operator = sparse.diags(
+                (
+                    np.full(T - 1, -1, dtype=block_sparse_kron.dtype),
+                    np.full(T - 1, 1, dtype=block_sparse_kron.dtype),
+                ),
+                offsets=(0, 1),
+                shape=(T - 1, T),
+            )
+            block_sparse_kron = sparse.vstack(
+                (block_sparse_kron, temporal_diff_operator),
+                format="csr",
+            )
+            block_disp_pairs = np.concatenate(
+                (block_disp_pairs, np.zeros(T - 1)),
+            )
+
+        coefficients.append(block_sparse_kron)
+        targets.append(block_disp_pairs)
+    coefficients = sparse.hstack(coefficients)
+    targets = np.concatenate(targets, axis=0)
+
+    # spatial smoothness prior: penalize difference of each block's
+    # displacement with the next.
+    # only if B > 1, and not in the last window.
+    # this is a (BT, BT) sparse matrix D such that:
+    # entry at (i, j) is:
+    #  {   1 if i = j, i.e., i = j = bT + t for b = 0,...,B-2
+    #  {  -1 if i = bT + t and j = (b+1)T + t for b = 0,...,B-2
+    #  {   0 otherwise.
+    # put more simply, the first (B-1)T diagonal entries are 1,
+    # and entries (i, j) such that i = j - T are -1.
+    if B > 1 and spatial_prior:
+        spatial_diff_operator = sparse.diags(
+            (
+                np.ones((B - 1) * T, dtype=block_sparse_kron.dtype),
+                np.full((B - 1) * T, -1, dtype=block_sparse_kron.dtype),
+            ),
+            offsets=(0, T),
+            shape=((B - 1) * T, B * T),
+        )
+        coefficients = sparse.vstack((coefficients, spatial_diff_operator))
+        targets = np.concatenate(
+            (targets, np.zeros((B - 1) * T, dtype=targets.dtype))
+        )
+
+    # initialize at the column mean of pairwise displacements (in each window)
+    p0 = D.mean(axis=2).reshape(B * T)
+
+    # use LSMR to solve the whole problem
+    displacement, *_ = sparse.linalg.lsmr(coefficients, targets, x0=p0)
+
+    # TODO: do we need to weight the upsampling somehow?
+
+    # try to avoid spurious constant offsets
+    # let the user choose how to do this. here are some ideas.
+    # (one can also -= their own number on the result of this function.)
+    if reference_displacement == "mean":
+        displacement -= displacement.mean()
+    elif reference_displacement == "median":
+        displacement -= np.median(displacement)
+    elif reference_displacement == "mode_search":
+        # just a sketch of an idea -- things might want to change.
+        step_size = 0.1
+        round_mode = np.round  # floor?
+        best_ref = np.median(displacement)
+        max_zeros = np.sum(round_mode(displacement - best_ref) == 0)
+        for ref in np.arange(
+            np.floor(displacement.min()),
+            np.ceil(displacement.max()),
+            step_size,
+        ):
+            n_zeros = np.sum(round_mode(displacement - ref) == 0)
+            if n_zeros > max_zeros:
+                max_zeros = n_zeros
+                best_ref = ref
+        displacement -= best_ref
+
+    return np.squeeze(displacement)
 
 
 @torch.no_grad()
@@ -402,11 +560,15 @@ def psolveonline(D01, C01, D11, C11, p0, mincorr=0, prior_lambda=0):
     ones1 = np.ones(n1)
     U = sparse.coo_matrix((ones1, (range(n1), i1)), shape=(n1, t1))
     V = sparse.coo_matrix((ones1, (range(n1), j1)), shape=(n1, t1))
-    W = sparse.coo_matrix((np.sqrt(2) * ones0, (range(n0), j0)), shape=(n0, t1))
+    W = sparse.coo_matrix(
+        (np.sqrt(2) * ones0, (range(n0), j0)), shape=(n0, t1)
+    )
 
     # build basic lsqr problem
     A = sparse.vstack([U - V, W]).tocsc()
-    b = np.concatenate([D11[i1, j1], -np.sqrt(2) * (D01 - p0[:, None])[i0, j0]])
+    b = np.concatenate(
+        [D11[i1, j1], -np.sqrt(2) * (D01 - p0[:, None])[i0, j0]]
+    )
 
     # add in prior if requested
     if prior_lambda > 0:
