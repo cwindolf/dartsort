@@ -207,7 +207,11 @@ def register_nonrigid(
                 slices.append(
                     slice(max(0, np.floor(loc - scale)), min(D, np.floor(loc + scale)))
                 )
-                windows[k, slices[-1]] = 1
+                win = np.zeros(T)
+                win[slices[-1]] = 1
+                windows[k, slices[-1]] = win
+        else:
+            assert False
 
         # torch versions on device
         windows_ = torch.as_tensor(windows, dtype=torch.float, device=device)
