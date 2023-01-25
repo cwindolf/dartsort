@@ -14,14 +14,6 @@ import pandas as pd
 from sklearn.decomposition import PCA
 from tqdm.auto import tqdm
 
-try:
-    from spikeglx import _geometry_from_meta, read_meta_data
-except ImportError:
-    try:
-        from ibllib.io.spikeglx import _geometry_from_meta, read_meta_data
-    except ImportError:
-        raise ImportError("Can't find spikeglx...")
-
 from . import denoise, detect, localize_index, chunk_features
 from .multiprocessing_utils import MockPoolExecutor, MockQueue
 from .spikeio import get_binary_length, read_data, read_waveforms_in_memory
@@ -1438,6 +1430,14 @@ def tpca_from_h5(h5):
 
 
 def read_geom_from_meta(bin_file):
+    try:
+        from spikeglx import _geometry_from_meta, read_meta_data
+    except ImportError:
+        try:
+            from ibllib.io.spikeglx import _geometry_from_meta, read_meta_data
+        except ImportError:
+            raise ImportError("Can't find spikeglx...")
+
     meta = Path(bin_file.parent) / (bin_file.stem + ".meta")
     if not meta.exists():
         raise ValueError("Expected", meta, "to exist.")
