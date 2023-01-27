@@ -10,11 +10,7 @@ from .extract_deconv import extract_deconv
 
 
 def superres_spike_train(
-    spike_train,
-    z_abs,
-    bin_size_um,
-    min_spikes_bin=10,
-    max_z_dist=None
+    spike_train, z_abs, bin_size_um, min_spikes_bin=10, max_z_dist=None
 ):
     assert spike_train.shape == (*z_abs.shape, 2)
     assert bin_size_um > 0
@@ -44,20 +40,26 @@ def superres_spike_train(
         occupied_bins, bin_counts = np.unique(bin_ids, return_counts=True)
         if max_z_dist is not None:
             # np.abs(bin_ids) <= (np.abs(centered_z)+ bin_size_um / 2)//bin_size_um <= (max_z_dist + bin_size_um / 2)//bin_size_um
-            bin_counts = bin_counts[np.abs(occupied_bins)<=(max_z_dist + bin_size_um / 2)//bin_size_um]
-            occupied_bins = occupied_bins[np.abs(occupied_bins)<=(max_z_dist + bin_size_um / 2)//bin_size_um]
+            bin_counts = bin_counts[
+                np.abs(occupied_bins)
+                <= (max_z_dist + bin_size_um / 2) // bin_size_um
+            ]
+            occupied_bins = occupied_bins[
+                np.abs(occupied_bins)
+                <= (max_z_dist + bin_size_um / 2) // bin_size_um
+            ]
         if bin_counts.max() >= min_spikes_bin:
             for bin_id in occupied_bins[bin_counts >= min_spikes_bin]:
                 superres_labels[in_u[bin_ids == bin_id]] = cur_superres_label
                 superres_label_to_bin_id.append(bin_id)
                 superres_label_to_orig_label.append(u)
                 cur_superres_label += 1
-        #what if no template was computed for u
+        # what if no template was computed for u
         else:
             superres_labels[in_u] = cur_superres_label
             superres_label_to_bin_id.append(0)
             superres_label_to_orig_label.append(u)
-            cur_superres_label+=1
+            cur_superres_label += 1
 
     superres_label_to_bin_id = np.array(superres_label_to_bin_id)
     superres_label_to_orig_label = np.array(superres_label_to_orig_label)
@@ -197,12 +199,14 @@ def rigid_int_shift_deconv(
     # this is the unit at which the probe repeats itself.
     # so for NP1, it's not every row, but every 2 rows!
     pitch = get_pitch(geom)
-    print(f"{pitch=}")
+    print(f"a {pitch=}")
 
     # integer probe-pitch shifts at each time bin
     p = p[t_start : t_end if t_end is not None else len(p)]
     pitch_shifts = (p - reference_displacement + pitch / 2) // pitch
-    unique_shifts = np.unique(pitch_shifts)
+    unique_shifts, shift_ids_by_time = np.unique(
+        pitch_shifts, return_inverse=True
+    )
 
     # original denoised templates
     if templates is None:
@@ -297,21 +301,30 @@ def rigid_int_shift_deconv(
             deconv_id_sparse_temp_map,
             sparse_id_to_orig_id,
         ) = mp_object.get_sparse_upsampled_templates(return_orig_map=True)
-        shifted_templates_up.append(templates_up.transpose(2, 0, 1))
+        templates_up = templates_up.transpose(2, 0, 1)
+        shifted_templates_up.append(templates_up)
         shifted_sparse_temp_map.append(deconv_id_sparse_temp_map)
         sparse_temp_to_orig_map.append(sparse_id_to_orig_id)
 
+        print(
+            f"{templates_up.shape=} {deconv_id_sparse_temp_map.shape=} {sparse_id_to_orig_id.shape=}"
+        )
+
+        assert len(templates_up) == len(sparse_id_to_orig_id)
+
     # collect all shifted and upsampled templates
-    shifted_upsampled_start_ixs = [0] + list(
-        np.cumsum([t.shape[0] for t in shifted_templates_up])
+    shifted_upsampled_start_ixs = np.array(
+        [0] + list(np.cumsum([t.shape[0] for t in shifted_templates_up[:-1]]))
     )
     all_shifted_upsampled_temps = np.concatenate(shifted_templates_up, axis=0)
     shifted_upsampled_idx_to_shift_id = np.concatenate(
         [[i] * t.shape[0] for i, t in enumerate(shifted_templates_up)], axis=0
     )
-    shifted_upsampled_idx_to_orig_id = np.concatenate(
-        sparse_temp_to_orig_map, axis=0
+    shifted_upsampled_idx_to_orig_id = (
+        np.concatenate(sparse_temp_to_orig_map, axis=0)
+        # + shifted_upsampled_start_ixs[shifted_upsampled_idx_to_shift_id]
     )
+    assert shifted_upsampled_idx_to_shift_id.shape == shifted_upsampled_idx_to_orig_id.shape
 
     # gather deconv resultsdeconv_st = []
     deconv_spike_train_shifted_upsampled = []
@@ -340,6 +353,27 @@ def rigid_int_shift_deconv(
         st_up[:, 1] = shifted_sparse_temp_map[which_shiftix][st_up[:, 1]]
         st_up[:, 1] += shifted_upsampled_start_ixs[which_shiftix]
         deconv_spike_train_shifted_upsampled.append(st_up)
+
+        shift_good = (
+            shifted_upsampled_idx_to_shift_id[st_up[:, 1]] == which_shiftix
+        ).all()
+        tsorted = (np.diff(st_up[:, 0]) >= 0).all()
+        bigger = (bid == 0) or (
+            st_up[:, 0] >= deconv_spike_train_shifted_upsampled[-2][:, 0].max()
+        ).all()
+        pitchy = (
+            pitch_shifts[((st_up[:, 0] - trough_offset) // pfs).astype(int)] == unique_shifts[which_shiftix]
+        ).all()
+        # print(f"{bid=} {shift_good=} {tsorted=} {bigger=} {pitchy=}")
+        assert shift_good
+        assert tsorted
+        assert bigger
+        if not pitchy:
+            raise ValueError(
+                f"{bid=} Not pitchy {np.unique(pitch_shifts[((st_up[:, 0] - trough_offset) // pfs).astype(int)])=} "
+                f"{which_shiftix=} {unique_shifts[which_shiftix]=} {np.unique((st_up[:, 0] - trough_offset) // pfs)=} "
+                f"{pitch_shifts[np.unique((st_up[:, 0] - trough_offset) // pfs)]=}"
+            )
 
     deconv_spike_train = np.concatenate(deconv_spike_train, axis=0)
     deconv_spike_train_shifted_upsampled = np.concatenate(
@@ -455,8 +489,10 @@ def superres_deconv(
     deconv_spike_train[:, 1] = superres_label_to_orig_label[
         deconv_spike_train[:, 1]
     ]
-    # index too large here
     shifted_upsampled_idx_to_orig_id = superres_label_to_orig_label[
+        shifted_upsampled_idx_to_superres_id
+    ]
+    shifted_upsampled_idx_to_superres_bin_id = superres_label_to_bin_id[
         shifted_upsampled_idx_to_superres_id
     ]
 
@@ -471,6 +507,7 @@ def superres_deconv(
         superres_label_to_bin_id=superres_label_to_bin_id,
         all_shifted_upsampled_temps=all_shifted_upsampled_temps,
         shifted_upsampled_idx_to_superres_id=shifted_upsampled_idx_to_superres_id,
+        shifted_upsampled_idx_to_superres_bin_id=shifted_upsampled_idx_to_superres_bin_id,
         shifted_upsampled_idx_to_orig_id=shifted_upsampled_idx_to_orig_id,
         shifted_upsampled_idx_to_shift_id=shifted_upsampled_idx_to_shift_id,
         trough_offset=trough_offset,
@@ -566,6 +603,7 @@ def extract_superres_shifted_deconv(
     do_reassignment_tpca=True,
     save_reassignment_residuals=False,
     reassignment_tpca_rank=5,
+    reassignment_norm_p=np.inf,
     reassignment_tpca_spatial_radius=75,
     reassignment_tpca_n_wfs=50000,
     # usual suspects
@@ -610,6 +648,13 @@ def extract_superres_shifted_deconv(
     print(f"{shifted_upsampled_idx_to_superres_id.shape=}")
     # print(",".join(map(str, shifted_upsampled_idx_to_superres_id)))
 
+    zero_upsampled_temps = np.flatnonzero(
+        np.all(
+            superres_deconv_result["all_shifted_upsampled_temps"] == 0,
+            axis=(1, 2),
+        )
+    )
+
     shifted_upsampled_pairs = []
     if do_reassignment:
         for shifted_upsampled_idx, (shift_id, superres_id) in enumerate(
@@ -618,10 +663,23 @@ def extract_superres_shifted_deconv(
                 shifted_upsampled_idx_to_superres_id,
             )
         ):
+            if shifted_upsampled_idx in zero_upsampled_temps:
+                # these don't matter, since they won't get any spikes, but let's
+                # special case.
+                shifted_upsampled_pairs.append(
+                    np.array([shifted_upsampled_idx])
+                )
+                continue
+
             superres_matches = superres_pairs[superres_id]
             shifted_upsampled_matches = np.flatnonzero(
-                (shifted_upsampled_idx_to_shift_id == shifted_upsampled_idx_to_shift_id)
-                & np.isin(shifted_upsampled_idx_to_superres_id, superres_matches)
+                (shifted_upsampled_idx_to_shift_id == shift_id)
+                & np.isin(
+                    shifted_upsampled_idx_to_superres_id, superres_matches
+                )
+            )
+            shifted_upsampled_matches = np.setdiff1d(
+                shifted_upsampled_matches, zero_upsampled_temps
             )
 
             # print("-----")
@@ -632,6 +690,9 @@ def extract_superres_shifted_deconv(
             # print(f"{shifted_upsampled_idx_to_superres_id[shifted_upsampled_matches]=}")
 
             shifted_upsampled_pairs.append(shifted_upsampled_matches)
+
+        nps = np.array(list(map(len, shifted_upsampled_pairs)))
+        print(f"Median n pairs: {nps.min()=}, {np.median(nps)=}, {nps.max()=}")
 
     if output_directory is None:
         output_directory = superres_deconv_result["deconv_dir"]
@@ -660,6 +721,7 @@ def extract_superres_shifted_deconv(
         do_reassignment_tpca=do_reassignment_tpca,
         reassignment_proposed_pairs_up=shifted_upsampled_pairs,
         reassignment_tpca_rank=reassignment_tpca_rank,
+        reassignment_norm_p=reassignment_norm_p,
         reassignment_tpca_spatial_radius=reassignment_tpca_spatial_radius,
         reassignment_tpca_n_wfs=reassignment_tpca_n_wfs,
         localize=localize,
@@ -700,6 +762,10 @@ def extract_superres_shifted_deconv(
                 "reassigned_superres_labels", data=new_labels_superres
             )
             h5.create_dataset("reassigned_unit_labels", data=new_labels_orig)
+            h5.create_dataset(
+                "reassigned_shifted_upsampled_labels",
+                data=new_labels_shifted_up,
+            )
 
         # store everything also for the user
         for key in (

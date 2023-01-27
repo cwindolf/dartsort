@@ -1,3 +1,4 @@
+# %%
 import numpy as np
 from scipy import signal
 import time
@@ -11,6 +12,7 @@ from pathlib import Path
 from spike_psvae import snr_templates
 
 
+# %%
 class MatchPursuitObjectiveUpsample:
     """Class for doing greedy matching pursuit deconvolution."""
 
@@ -249,8 +251,7 @@ class MatchPursuitObjectiveUpsample:
         self.iter_spike_train = []
 
     def visible_chans(self):
-        a = np.max(self.temps, axis=0) - np.min(self.temps, 0)
-        self.vis_chan = a > self.vis_su_threshold
+        self.vis_chan = self.temps.ptp(0) > self.vis_su_threshold
 
     def template_overlaps(self):
         """Find pairwise units that have overlap between."""
@@ -754,7 +755,7 @@ class MatchPursuitObjectiveUpsample:
         # space to actual raw voltage space by subtracting self.n_time + 1
         new_spike_train = np.c_[spike_times - (self.n_time - 1), spike_ids]
 
-        return new_spike_train, scalings, dist_metric[valid_idx]
+        return new_spike_train, scalings, dist_metric
 
     def enforce_refractory(self, spike_train):
         """Enforces refractory period for units."""
@@ -877,10 +878,9 @@ class MatchPursuitObjectiveUpsample:
 
             self.dec_spike_train = np.concatenate((self.dec_spike_train, spt))
             self.dec_scalings = np.concatenate((self.dec_scalings, scalings))
+            self.dist_metric = np.concatenate((self.dist_metric, dist_met))
 
             self.subtract_spike_train(spt, scalings)
-
-            self.dist_metric = np.concatenate((self.dist_metric, dist_met))
 
             if int(self.verbose) > 1:
                 print(
@@ -894,6 +894,7 @@ class MatchPursuitObjectiveUpsample:
         idx = np.argsort(self.dec_spike_train[:, 0])
         self.dec_spike_train = self.dec_spike_train[idx]
         self.dec_scalings = self.dec_scalings[idx]
+        self.dist_metric = self.dist_metric[idx]
 
         return ctr
 
@@ -949,7 +950,8 @@ class MatchPursuitObjectiveUpsample:
         )
         self.dec_spike_train = self.dec_spike_train[idx]
         self.dec_scalings = self.dec_scalings[idx]
-
+        self.dist_metric = self.dist_metric[idx]
+        
         # offset spikes to start of index
         batch_offset = s_start - self.buffer
         self.dec_spike_train[:, 0] += batch_offset
@@ -970,6 +972,7 @@ class MatchPursuitObjectiveUpsample:
             self.run_batch(batch_id, fname_out)
 
 
+# %%
 def deconvolution(
     spike_index,
     cluster_labels,
@@ -1171,6 +1174,7 @@ def deconvolution(
     )
 
 
+# %%
 def deconv(
     raw_bin,
     deconv_dir,
@@ -1284,6 +1288,7 @@ def deconv(
     )
 
 
+# %%
 def get_templates(
     standardized_bin,
     spike_index,
@@ -1327,6 +1332,7 @@ def get_templates(
     return templates
 
 
+# %%
 def xqdm(it, pbar=True, **kwargs):
     if pbar:
         return tqdm(it, **kwargs)
