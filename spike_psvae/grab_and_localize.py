@@ -14,11 +14,13 @@ def grab_and_localize(
     spike_index,
     binary_file,
     geom,
+    trough_offset=42,
     loc_radius=100,
     nn_denoise=True,
     enforce_decrease=True,
     tpca=None,
     chunk_size=30_000,
+    start_time=0,
     n_jobs=1,
     device=None,
 ):
@@ -43,7 +45,7 @@ def grab_and_localize(
     localizations = np.empty((spike_index.shape[0], 5))
     maxptp = np.empty(spike_index.shape[0])
     starts = range(
-        0,
+        start_time,
         spike_index[:, 0].max(),
         chunk_size,
     )
@@ -62,6 +64,7 @@ def grab_and_localize(
             spike_index,
             binary_file,
             len_data_samples,
+            trough_offset,
         ),
         context=ctx,
     ) as pool:
@@ -111,6 +114,7 @@ def _job(batch_start):
         spike_index,
         spike_length_samples=121,
         channel_index=p.channel_index,
+        trough_offset=p.trough_offset,
         buffer=-batch_start + 42 * (batch_start > 0),
     )
 
@@ -151,6 +155,7 @@ JobData = namedtuple(
         "binary_file",
         "device",
         "len_data_samples",
+        "trough_offset",
     ],
 )
 
@@ -166,6 +171,7 @@ def _job_init(
     spike_index,
     binary_file,
     len_data_samples,
+    trough_offset,
 ):
     denoiser = radial_parents = None
     if nn_denoise:
@@ -185,4 +191,5 @@ def _job_init(
         binary_file,
         device,
         len_data_samples,
+        trough_offset,
     )
