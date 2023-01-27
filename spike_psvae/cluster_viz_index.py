@@ -184,6 +184,7 @@ def pgeom(
     linestyle=None,
     xlim_factor=1,
     subar=False,
+    zlim="auto",
 ):
     """Plot waveforms according to geometry using channel index"""
     assert geom is not None
@@ -304,6 +305,14 @@ def pgeom(
             rotation=-90,
         )
 
+    if zlim is None:
+        pass
+    elif zlim == "auto":
+        min_z = min(geom_plot[c, 1] for c in unique_chans)
+        max_z = max(geom_plot[c, 1] for c in unique_chans)
+        if np.isfinite([min_z, max_z]).all():
+            ax.set_ylim([min_z - 2 * max_abs_amp, max_z + 2 * max_abs_amp])
+
     return lines
 
 
@@ -358,7 +367,7 @@ def superres_templates_viz(
     geom,
     radius=200,
 ):
-    output_directory.mkdir(exist_ok=True)
+    output_directory.mkdir(exist_ok=True, parents=True)
     for orig_label in tqdm(np.unique(superres_label_to_orig_label)):
         fig, ax = superres_template_viz(
             orig_label,
@@ -624,7 +633,7 @@ def reassignment_viz(
         assert reas_channel_index is not None
         assert max_channels is not None
         orig_resids = waveform_utils.restrict_wfs_to_chans(
-            reassigned_resids[orig_choices, 0],
+            np.stack([reassigned_resids[j, 0] for j in orig_choices]),
             max_channels=max_channels[orig_choices],
             channel_index=reas_channel_index,
             dest_channels=channel_index[og_mc],
@@ -642,30 +651,30 @@ def reassignment_viz(
             z_extension=z_extension,
             show_zero=False,
         )
-
-        kept_resids = waveform_utils.restrict_wfs_to_chans(
-            reassigned_resids[kept_choices, 1],
-            max_channels=max_channels[kept_choices],
-            channel_index=reas_channel_index,
-            dest_channels=channel_index[og_mc],
-        )
-        pgeom(
-            kept_resids,
-            kept_mcs,
-            channel_index,
-            geom,
-            ax=axes[2, 0],
-            color=cc.glasbey[0],
-            max_abs_amp=np.nanmax(np.abs(orig_resids)),
-            lw=1,
-            alpha=0.1,
-            z_extension=z_extension,
-            show_zero=False,
-        )
+        if kept_choices.size:
+            kept_resids = waveform_utils.restrict_wfs_to_chans(
+                np.stack([reassigned_resids[j, 1] for j in kept_choices]),
+                max_channels=max_channels[kept_choices],
+                channel_index=reas_channel_index,
+                dest_channels=channel_index[og_mc],
+            )
+            pgeom(
+                kept_resids,
+                kept_mcs,
+                channel_index,
+                geom,
+                ax=axes[2, 0],
+                color=cc.glasbey[0],
+                max_abs_amp=np.nanmax(np.abs(orig_resids)),
+                lw=1,
+                alpha=0.1,
+                z_extension=z_extension,
+                show_zero=False,
+            )
 
         for j, (newu, ax) in enumerate(zip(new_units, axes[2, 1:])):
             newu_resids_orig = waveform_utils.restrict_wfs_to_chans(
-                reassigned_resids[newchoices[j], 0],
+                np.stack([reassigned_resids[jj, 0] for jj in newchoices[j]]),
                 max_channels=max_channels[newchoices[j]],
                 channel_index=reas_channel_index,
                 dest_channels=channel_index[og_mc],
@@ -685,7 +694,7 @@ def reassignment_viz(
             )
 
             newu_resids_new = waveform_utils.restrict_wfs_to_chans(
-                reassigned_resids[newchoices[j], 1],
+                np.stack([reassigned_resids[jj, 1] for jj in newchoices[j]]),
                 max_channels=max_channels[newchoices[j]],
                 channel_index=reas_channel_index,
                 dest_channels=channel_index[og_mc],
@@ -713,6 +722,7 @@ def reassignments_viz(
     raw_bin,
     output_directory,
     geom,
+    units=None,
     templates=None,
     radius=200,
     z_extension=1.0,
@@ -726,7 +736,10 @@ def reassignments_viz(
 ):
     output_directory = Path(output_directory)
     output_directory.mkdir(exist_ok=True, parents=True)
-    for orig_label in tqdm(np.setdiff1d(np.unique(spike_train_orig[:, 1]), [-1])):
+    if units is None:
+        units = np.arange(spike_train_orig[:, 1].max() + 1)
+    units = np.intersect1d(units, np.setdiff1d(np.unique(spike_train_orig[:, 1]), [-1]))
+    for orig_label in tqdm(units):
         fig, ax = reassignment_viz(
             orig_label,
             spike_train_orig,

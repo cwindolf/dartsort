@@ -44,6 +44,7 @@ def extract_deconv(
     reassignment_tpca_rank=5,
     reassignment_tpca_spatial_radius=75,
     reassignment_tpca_n_wfs=50000,
+    reassignment_norm_p=np.inf,
     localize=True,
     loc_radius=100,
     n_sec_chunk=1,
@@ -168,6 +169,7 @@ def extract_deconv(
                     spike_length_samples=spike_length_samples,
                     spatial_radius=75,
                     seed=0,
+                    return_as_pca=False,
                 )
             else:
                 reassignment_tpca = waveform_utils.fit_tpca_bin(
@@ -354,6 +356,7 @@ def extract_deconv(
                 denoised_tpca.tpca if denoised_tpca is not None else None,
                 do_reassignment,
                 reassignment_tpca,
+                reassignment_norm_p,
                 reassignment_proposed_pairs_up,
                 reassignment_temps_up_loc,
                 save_reassignment_residuals,
@@ -484,13 +487,10 @@ def _extract_deconv_worker(start_sample):
         resid = np.pad(resid, [(pad_left, pad_right), (0, 0)])
 
     # subtract templates in-place
+    left_start_total = -start_sample + buffer_left + pad_left
     rel_times = np.arange(
-        -start_sample + buffer_left + pad_left - p.trough_offset,
-        -start_sample
-        + buffer_left
-        + pad_left
-        + p.spike_length_samples
-        - p.trough_offset,
+        left_start_total - p.trough_offset,
+        left_start_total - p.trough_offset + p.spike_length_samples,
     )
     for i in range(len(spike_index)):
         resid[spike_index[i, 0] + rel_times] -= (
@@ -514,6 +514,7 @@ def _extract_deconv_worker(start_sample):
             spike_length_samples=p.spike_length_samples,
             channel_index=p.channel_index,
             buffer=-start_sample + buffer_left + pad_left,
+            trough_offset=p.trough_offset,
         )
 
         # outlier score is easy if we don't do reassignment
@@ -558,6 +559,7 @@ def _extract_deconv_worker(start_sample):
             p.reassignment_temps_up_loc,
             tpca=p.reassignment_tpca,
             return_resids=p.save_reassignment_residuals,
+            norm_p=p.reassignment_norm_p,
         )
 
         if p.save_reassignment_residuals:
@@ -631,6 +633,7 @@ def _extract_deconv_init(
     tpca,
     do_reassignment,
     reassignment_tpca,
+    reassignment_norm_p,
     reassignment_pairs_up,
     reassignment_temps_up_loc,
     save_reassignment_residuals,
@@ -646,6 +649,7 @@ def _extract_deconv_init(
     p.geom = geom
     p.tpca = tpca
     p.do_reassignment = do_reassignment
+    p.reassignment_norm_p = reassignment_norm_p
     p.save_reassignment_residuals = save_reassignment_residuals
     p.reassignment_tpca = reassignment_tpca
     p.device = device

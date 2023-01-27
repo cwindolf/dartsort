@@ -109,6 +109,7 @@ class Sorting:
         self.unit_labels, self.unit_spike_counts = np.unique(
             self.spike_labels, return_counts=True
         )
+        self.unit_label_to_index = dict((v, k) for k, v in enumerate(self.unit_labels))
         self.n_units = self.unit_labels.size
         full_spike_counts = np.zeros(self.unit_labels.max() + 1, dtype=int)
         full_spike_counts[self.unit_labels] = self.unit_spike_counts
@@ -138,6 +139,11 @@ class Sorting:
                 seed=0,
                 n_jobs=-1,
             )
+        assert (
+            self.templates.shape[0]
+            == self.spike_labels.max() + 1
+            >= self.n_units
+        )
 
         if self.cleaned_templates is None and do_cleaned_templates:
             print("Computing cleaned templates")
@@ -151,6 +157,7 @@ class Sorting:
                 trough_offset=trough_offset,
             )
             self.cleaned_templates = cleaned_templates
+            assert self.cleaned_templates.shape[0] == self.templates.shape[0]
 
         if extra is not None:
             self.snrs = extra["snr_by_channel"]
@@ -191,7 +198,11 @@ class Sorting:
                 self.template_locs[3],
                 30 * np.log(self.template_maxptps),
             ]
-            self.close_units = self.compute_closest_units()
+            assert (
+                self.template_locs[0].size
+                == self.template_xzptp.shape[0]
+                == self.templates.shape[0]
+            )
 
         if spike_maxchans is None:
             assert not unsorted
@@ -234,8 +245,8 @@ class Sorting:
         if not self.unsorted:
             self.contam_ratios = np.empty(self.unit_labels.shape)
             self.contam_p_values = np.empty(self.unit_labels.shape)
-            for i in tqdm(self.unit_labels, desc="ccg"):
-                st = self.get_unit_spike_train(i)
+            for i, unit in enumerate(tqdm(self.unit_labels, desc="ccg")):
+                st = self.get_unit_spike_train(unit)
                 (
                     self.contam_ratios[i],
                     self.contam_p_values[i],
@@ -246,6 +257,7 @@ class Sorting:
 
         self._template_residuals = None
         self._norm_template_residuals = None
+        self._close_units = None
 
     def get_unit_spike_train(self, unit):
         return self.spike_times[self.spike_labels == unit]
@@ -254,7 +266,13 @@ class Sorting:
         return self.spike_maxchans[self.spike_labels == unit]
 
     def resid_matrix(
-        self, units, n_jobs=-1, pbar=True, lambd=0.001, allowed_scale=0.1, normalized=True
+        self,
+        units,
+        n_jobs=-1,
+        pbar=True,
+        lambd=0.001,
+        allowed_scale=0.1,
+        normalized=True,
     ):
         assert self.cleaned_templates is not None
         thresh = 0.9 * np.square(self.cleaned_templates).sum(axis=(1, 2)).min()
@@ -276,14 +294,18 @@ class Sorting:
     @property
     def template_residuals(self):
         if self._template_residuals is None:
-            thresh, dists = self.resid_matrix(self.unit_labels, normalized=False)
+            thresh, dists = self.resid_matrix(
+                self.unit_labels, normalized=False
+            )
             self._template_residuals = dists
         return self._template_residuals
 
     @property
     def norm_template_residuals(self):
         if self._norm_template_residuals is None:
-            thresh, dists = self.resid_matrix(self.unit_labels, normalized=True)
+            thresh, dists = self.resid_matrix(
+                self.unit_labels, normalized=True
+            )
             self._norm_template_residuals = dists
         return self._norm_template_residuals
 
@@ -294,6 +316,12 @@ class Sorting:
             labels_list=self.spike_labels,
             sampling_frequency=self.fs,
         )
+
+    @property
+    def close_units(self):
+        if self._close_units is None:
+            self._close_units = self.compute_closest_units()
+        return self._close_units
 
     # -- caching logic so we don't re-compute templates all the time
     # cache invalidation is based on the spike train!
@@ -419,27 +447,32 @@ class Sorting:
         num_close_clusters = min(10, self.n_units - 1)
 
         assert self.contiguous_labels
-        n_units = self.templates.shape[0]
+        n_units = self.unit_labels.size
 
         close_clusters = np.zeros((n_units, num_close_clusters), dtype=int)
-        for i in range(n_units):
+        for i, unit in enumerate(self.unit_labels):
             close_clusters[i] = cluster_utils.get_closest_clusters_kilosort(
-                i,
-                dict(zip(self.unit_labels, self.template_xzptp[:, 1])),
+                unit,
+                dict(
+                    zip(
+                        self.unit_labels,
+                        self.template_xzptp[self.unit_labels, 1],
+                    )
+                ),
                 num_close_clusters=num_close_clusters,
             )
 
         close_templates = np.zeros(
             (n_units, min(self.n_units - 1, self.n_close_units)), dtype=int
         )
-        for i in tqdm(range(n_units)):
+        for i, unit in enumerate(tqdm(self.unit_labels)):
             cos_dist = np.zeros(num_close_clusters)
-            vis_channels = np.flatnonzero(self.templates[i].ptp(0) >= 1.0)
+            vis_channels = np.flatnonzero(self.templates[unit].ptp(0) >= 1.0)
             for j in range(num_close_clusters):
                 idx = close_clusters[i, j]
                 # this is max abs norm distance (L_\infty)
                 cos_dist[j] = cdist(
-                    self.templates[i, :, vis_channels].ravel()[None, :],
+                    self.templates[unit, :, vis_channels].ravel()[None, :],
                     self.templates[idx, :, vis_channels].ravel()[None, :],
                     "minkowski",
                     p=np.inf,
@@ -611,6 +644,7 @@ class Sorting:
         stored_tpca=None,
         stored_order=None,
     ):
+        unit_index = self.unit_label_to_index[unit]
         show_scatter = show_scatter and self.spike_xzptp is not None
         height_ratios = [1, 1, 1, 2, 5] if show_scatter else [1, 1, 1, 5]
         fig, axes = plt.subplot_mosaic(
@@ -631,8 +665,8 @@ class Sorting:
         unit_props = dict(
             unit=unit,
             snr=self.templates[unit].ptp(1).max()
-            * np.sqrt(self.unit_spike_counts[unit]),
-            n_spikes=self.unit_spike_counts[unit],
+            * np.sqrt(self.unit_spike_counts[unit_index]),
+            n_spikes=self.unit_spike_counts[unit_index],
             template_ptp=self.templates[unit].ptp(1).max(),
             max_channel=self.template_maxchans[unit],
             trough_sample=self.templates[
@@ -658,7 +692,9 @@ class Sorting:
         axes["t"].axis("off")
 
         # ISI distribution
-        cluster_viz.plot_isi_distribution(unit_st, ax=axes["a"], cdf=False)
+        cluster_viz.plot_isi_distribution(
+            unit_st, ax=axes["a"], cdf=False, bins=1000 / self.fs
+        )
         cluster_viz_index.plot_ccg(
             unit_st, ms_frames=self.fs / 1000, ax=axes["b"]
         )
@@ -678,7 +714,7 @@ class Sorting:
         ci = waveform_utils.make_contiguous_channel_index(
             self.geom.shape[0], nchans
         )
-        choices = slice(None)
+        choices = np.arange(in_unit.size)
         if in_unit.size > n_wfs_max:
             choices = np.random.choice(in_unit.size, n_wfs_max, replace=False)
             choices.sort()
@@ -719,8 +755,11 @@ class Sorting:
             assert stored_maxchans is not None
             assert stored_channel_index is not None
             if stored_order is None:
-                stored_order = np.arange(self.n_spikes)
+                stored_order = np.arange(self.n_spikes_full)
             load_stored = stored_order[self.which[in_unit[choices]]]
+            reord = np.argsort(load_stored)
+            choices = choices[reord]
+            load_stored = load_stored[reord]
             mcs = stored_maxchans[load_stored]
 
             if stored_waveforms is not None:
@@ -746,15 +785,15 @@ class Sorting:
             else:
                 wfs = waveform_utils.restrict_wfs_to_chans(
                     wfs,
-                    mcs,
-                    stored_channel_index,
-                    ci[self.template_maxchans[unit]],
+                    max_channels=mcs,
+                    channel_index=stored_channel_index,
+                    dest_channels=ci[self.template_maxchans[unit]],
                 )
             kept = np.flatnonzero(~np.isnan(wfs).all(axis=(1, 2)))
 
         max_abs_amp = None
         if kept.size:
-            max_abs_amp = np.nanmax(np.abs(wfs[kept]))
+            max_abs_amp = np.nanmax(np.abs(self.templates[unit]))
             wf_lines = cluster_viz_index.pgeom(
                 wfs[kept],
                 maxchans[kept],
@@ -765,6 +804,7 @@ class Sorting:
                 color="k",
                 alpha=0.05,
                 show_chan_label=False,
+                zlim="auto",
             )
         rt_lines = cluster_viz_index.pgeom(
             self.templates[unit][:, ci[self.template_maxchans[unit]]],
@@ -777,6 +817,7 @@ class Sorting:
             lw=1,
             show_chan_label=show_chan_label,
             chan_labels=chan_labels,
+            zlim="auto",
         )
         ch = cl = ()
         if self.cleaned_templates is not None:
@@ -792,6 +833,7 @@ class Sorting:
                 color="orange",
                 lw=1,
                 show_chan_label=False,
+                zlim="auto",
             )
             ch = (ct_lines[0],)
             cl = ("cleaned template",)
@@ -813,8 +855,7 @@ class Sorting:
         axes["d"].set_yticks([])
 
         # pca plot
-        kept2 = ~np.isnan(wfs).any(axis=(1, 2))
-        if kept2.sum() > 1:
+        if kept.size:
             pca_chans = np.flatnonzero(
                 cdist(
                     self.geom[self.template_maxchans[unit]][None], self.geom
@@ -822,14 +863,16 @@ class Sorting:
                 < 75
             )
             pca_wfs = waveform_utils.restrict_wfs_to_chans(
-                wfs[kept2],
+                wfs,
                 source_channels=ci[self.template_maxchans[unit]],
                 dest_channels=pca_chans,
             )
-            pca_projs = PCA(2).fit_transform(
-                pca_wfs.reshape(pca_wfs.shape[0], -1)
-            )
-            axes["c"].scatter(*pca_projs.T, color="k", s=1)
+            kept2 = ~np.isnan(pca_wfs).any(axis=(1, 2))
+            if kept2.sum() > 1:
+                pca_projs = PCA(2).fit_transform(
+                    pca_wfs[kept2].reshape(kept2.sum(), -1)
+                )
+                axes["c"].scatter(*pca_projs.T, color="k", s=1)
         axes["c"].set_xlabel("unit pc1")
         axes["c"].set_ylabel("unit pc2")
 
@@ -840,6 +883,7 @@ class Sorting:
         out_folder,
         dz=50,
         nchans=16,
+        units=None,
         n_wfs_max=250,
         show_chan_label=True,
         show_scatter=True,
@@ -881,7 +925,13 @@ class Sorting:
         with Parallel(n_jobs) as p:
             for res in p(
                 delayed(job)(unit)
-                for unit in tqdm(self.unit_labels, desc="Unit summaries")
+                for unit in tqdm(
+                    np.intersect1d(
+                        self.unit_labels,
+                        units if units is not None else self.unit_labels,
+                    ),
+                    desc="Unit summaries",
+                )
             ):
                 pass
 
@@ -973,14 +1023,10 @@ class Sorting:
         pal = sns.color_palette(n_colors=len(sorted_near_units))
         pal = pal[::-1]
         gtmc = self.template_maxchans[unit]
-        max_abs = np.abs(
-            self.cleaned_templates[sorted_near_units]
-        ).max()
+        max_abs = np.abs(self.cleaned_templates[sorted_near_units]).max()
         for j, nearby in enumerate(sorted_near_units[::-1]):
             lines = cluster_viz_index.pgeom(
-                self.cleaned_templates[nearby][
-                    tmin:tmax, plotci[gtmc]
-                ],
+                self.cleaned_templates[nearby][tmin:tmax, plotci[gtmc]],
                 gtmc,
                 plotci,
                 self.geom,
