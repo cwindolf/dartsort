@@ -165,7 +165,7 @@ def psolvecorr_spatial(
         W = W[None]
         D = D[None]
     assert D.ndim == W.ndim == 3
-    B, T, T_ = D
+    B, T, T_ = D.shape
     assert T == T_
 
     if max_dt is not None and max_dt > 0:
@@ -193,7 +193,7 @@ def psolvecorr_spatial(
     # calculate coefficients matrices and target vector
     for Wb, Db in zip(W, D):
         # indices of active temporal pairs in this window
-        I, J = np.nonzero(W > 0)
+        I, J = np.nonzero(Wb > 0)
         n_sampled = I.size
 
         # construct Kroneckers and sparse objective in this window
@@ -206,7 +206,7 @@ def psolvecorr_spatial(
         )
         block_sparse_kron = Mb - Nb
         block_disp_pairs = Db[I, J]
-
+        
         # add the temporal smoothness prior in this window
         if temporal_prior:
             temporal_diff_operator = sparse.diags(
@@ -224,10 +224,11 @@ def psolvecorr_spatial(
             block_disp_pairs = np.concatenate(
                 (block_disp_pairs, np.zeros(T - 1)),
             )
+            print(f"{block_sparse_kron.shape=} {block_disp_pairs.shape=}")
 
         coefficients.append(block_sparse_kron)
         targets.append(block_disp_pairs)
-    coefficients = sparse.hstack(coefficients)
+    coefficients = sparse.block_diag(coefficients)
     targets = np.concatenate(targets, axis=0)
 
     # spatial smoothness prior: penalize difference of each block's
@@ -285,6 +286,7 @@ def psolvecorr_spatial(
                 max_zeros = n_zeros
                 best_ref = ref
         displacement -= best_ref
+    displacement = displacement.reshape(B, T)
 
     return np.squeeze(displacement)
 
