@@ -86,6 +86,40 @@ def register_rigid(
     return depths_reg, p
 
 
+def get_windows(
+    n_windows,
+    depth_total,
+    widthmul=1.0,
+    window_shape="gaussian",
+):
+    windows = np.zeros((n_windows, depth_total))
+    slices = []
+
+    space = depth_total // (n_windows + 1)
+    locs = np.linspace(space, depth_total - space, n_windows)
+    scale = widthmul * depth_total / n_windows
+    depth_domain = np.arange(depth_total)
+
+    if window_shape == "gaussian":
+        for k, loc in enumerate(locs):
+            windows[k, :] = norm.pdf(depth_domain, loc=loc, scale=scale)
+            windows[k, :] *= (loc - 3 * scale <= depth_domain) & (depth_domain <= loc + 3 * scale)
+            in_win = np.flatnonzero(windows[k, :])
+            slices.append(
+                slice(in_win[0], in_win[-1])
+            )
+    elif window_shape == "rect":
+        for k, loc in enumerate(locs):
+            slices.append(
+                slice(max(0, np.floor(loc - scale)), min(depth_total, np.floor(loc + scale)))
+            )
+            windows[k, slices[-1]] = 1
+    else:
+        assert False
+
+    return windows, slices
+
+
 @torch.no_grad()
 def register_nonrigid(
     amps,
@@ -187,31 +221,13 @@ def register_nonrigid(
         raster, dd, tt = fast_raster(
             amps, depths, times, sigma=denoise_sigma, destripe=destripe
         )
-        D, T = raster.shape
 
-        # gaussian windows
-        windows = np.zeros((nwin, D))
-        slices = []
-        space = D // (nwin + 1)
-        locs = np.linspace(space, D - space, nwin)
-        scale = widthmul * D / nwin
-        if window_shape == "gaussian":
-            for k, loc in enumerate(locs):
-                windows[k, :] = norm.pdf(np.arange(D), loc=loc, scale=scale)
-                domain_large_enough = np.flatnonzero(windows[k, :] > 1e-5)
-                slices.append(
-                    slice(domain_large_enough[0], domain_large_enough[-1])
-                )
-        elif window_shape == "rect":
-            for k, loc in enumerate(locs):
-                slices.append(
-                    slice(max(0, np.floor(loc - scale)), min(D, np.floor(loc + scale)))
-                )
-                win = np.zeros(T)
-                win[slices[-1]] = 1
-                windows[k, slices[-1]] = win
-        else:
-            assert False
+        windows, slices = get_windows(
+            nwin,
+            raster.shape[0],
+            widthmul=widthmul,
+            window_shape=window_shape,
+        )
 
         # torch versions on device
         windows_ = torch.as_tensor(windows, dtype=torch.float, device=device)
@@ -222,7 +238,8 @@ def register_nonrigid(
             ps = np.empty((nwin, T))
             for k, window in enumerate(tqdm(windows_, desc="windows")):
                 p, D, C = register_raster_rigid(
-                    (window[:, None] * raster_)[slices[k]],
+                    raster_[slices[k]],
+                    weights=window[slices[k]],
                     mincorr=corr_threshold,
                     normalized=normalized,
                     robust_sigma=robust_sigma,
@@ -238,7 +255,8 @@ def register_nonrigid(
             block_Cs = np.empty((nwin, T, T))
             for k, window in enumerate(tqdm(windows_, desc="windows")):
                 D, C = calc_corr_decent(
-                    (window[:, None] * raster_)[slices[k]],
+                    raster_[slices[k]],
+                    weights=window[slices[k]],
                     disp=max(25, int(np.ceil(disp / nwin))),
                     normalized=normalized,
                     batch_size=batch_size,

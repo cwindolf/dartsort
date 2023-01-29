@@ -11,6 +11,7 @@ from tqdm.auto import trange
 
 def register_raster_rigid(
     raster,
+    weights=None,
     mincorr=0.0,
     disp=None,
     robust_sigma=0.0,
@@ -38,6 +39,7 @@ def register_raster_rigid(
     """
     D, C = calc_corr_decent(
         raster,
+        weights=weights,
         disp=disp,
         normalized=normalized,
         batch_size=batch_size,
@@ -292,6 +294,7 @@ def psolvecorr_spatial(
 @torch.no_grad()
 def calc_corr_decent(
     raster,
+    weights=None,
     disp=None,
     normalized=True,
     batch_size=32,
@@ -337,10 +340,12 @@ def calc_corr_decent(
             "Have not implemented step_size > 1 yet, reach out if wanted"
         )
 
-    D, T = raster.shape
+    disp_total, T = raster.shape
+    if weights is not None:
+        assert weights.shape == (disp_total,)
 
     # sensible default: at most half the domain.
-    disp = disp or D // 2
+    disp = disp or disp_total // 2
     assert disp > 0
 
     # pick torch device if unset
@@ -356,6 +361,8 @@ def calc_corr_decent(
     if not normalized:
         # if we're not doing full normxcorr, we still want to keep
         # the outputs between 0 and 1
+        if weights is not None:
+            raster *= weights
         raster /= torch.sqrt((raster**2).sum(dim=1, keepdim=True))
 
     D = np.empty((T, T), dtype=np.float32)
@@ -366,6 +373,7 @@ def calc_corr_decent(
             corr = normxcorr(
                 raster,
                 raster[i : i + batch_size],
+                weights=weights,
                 padding=possible_displacement.size // 2,
             )
         else:
