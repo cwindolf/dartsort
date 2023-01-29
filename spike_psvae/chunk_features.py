@@ -275,18 +275,22 @@ class Localization(ChunkFeature):
         loc_n_chans=None,
         loc_radius=None,
         n_workers=1,
+        localization_model="pointsource",
         localization_kind="logbarrier",
         which_waveforms="denoised",
+        feature="ptp"
     ):
         super().__init__()
         assert channel_index.shape[0] == geom.shape[0]
         self.geom = geom
         self.channel_index = channel_index
         self.localization_kind = localization_kind
+        self.localizaton_model = localization_model
         self.loc_n_chans = loc_n_chans
         self.loc_radius = loc_radius
         self.n_workers = n_workers
         self.which_waveforms = which_waveforms
+        self.feature = feature
 
     def transform(
         self,
@@ -298,7 +302,22 @@ class Localization(ChunkFeature):
         wfs = self.handle_which_wfs(subtracted_wfs, cleaned_wfs, denoised_wfs)
         if wfs is None:
             return None
-        ptps = wfs.ptp(1)
+        
+        if self.feature == 'ptp':
+            ptps = wfs.ptp(1)
+        elif self.feature == 'peak':
+            peaks = np.max(np.absolute(wfs),axis = 1)
+            argpeaks = np.argmax(np.absolute(wfs),axis = 1)
+            mcs = np.nanargmax(peaks, axis=1)
+            argpeaks = argpeaks[np.arange(len(argpeaks)),mcs]
+            
+            ptps = wfs[np.arange(len(mcs)), argpeaks, :]
+            
+        else:
+            raise NameError('Use ptp or peak value for localization.')
+            
+            
+            
         xs, ys, z_rels, z_abss, alphas = localize_index.localize_ptps_index(
             ptps,
             self.geom,
@@ -309,6 +328,7 @@ class Localization(ChunkFeature):
             n_workers=self.n_workers,
             pbar=False,
             logbarrier=self.localization_kind == "logbarrier",
+            model = self.localizaton_model
         )
         # NOTE the reordering, same as it used to be...
         return np.c_[xs, ys, z_abss, alphas, z_rels]
