@@ -29,6 +29,59 @@ def registered_maxchan(
     return regmc
 
 
+def augment_geom(geom, p):
+    sorted_geom = np.array(sorted(geom, key=lambda x: (x[1], x[0])))
+    z_pitch = np.max(np.diff(sorted_geom[:, 1]))
+    total_drift = np.max(p) - np.min(p)
+    orig_z_max = sorted_geom[-1][1]
+    orig_z_min = sorted_geom[0][1]
+    L = orig_z_max - orig_z_min
+    uniq_x_location = sorted_geom[0:len(np.unique(geom[:,0])), 0]
+    uniq_x_location = uniq_x_location.tolist()
+    
+    aug_geom = geom
+    del geom
+    z_augment = orig_z_max
+    CH_N = np.shape(aug_geom)[0]
+    x_augment = aug_geom[-1][0]
+    x_idx = uniq_x_location.index(x_augment)
+    z_max = orig_z_max + total_drift
+    while z_augment < orig_z_max + total_drift:
+        if CH_N % 2 == 0:
+            z_augment += z_pitch
+        x_idx = x_idx % 4
+        x_augment = uniq_x_location[x_idx]
+        x_idx += 1    
+        aug_geom = np.append(aug_geom, [[x_augment, z_augment]], axis = 0)
+        CH_N += 1 
+       
+    return aug_geom, CH_N, L, z_max
+
+# relocate max_chan on an augmented version of probe (NP1), for Eric's insertion data
+def reloc_maxchan_augmented_geom(spike_index, p, geom, pfs=30000, offset=None, depth_domain=None, ymin=0
+):
+    aug_geom, CH_N, L, z_max = augment_geom(geom, p)
+    pos = geom[spike_index[:, 1]]
+    if p.ndim == 1 or p.shape[1] == 1:
+        p = p - p[0]
+        p = p + L - z_max
+        pos[:, 1] -= p[spike_index[:, 0] // pfs]
+        
+    aug_which = np.intersect1d(np.argwhere(aug_geom[:, 1]>np.min(pos[:,1])), np.argwhere(aug_geom[:, 1]<np.max(pos[:,1])))
+
+    batch_size = 10000
+    n_batch = int(np.ceil(len(pos)/batch_size))
+    regmc = []
+    for i in range(n_batch):
+        if i < n_batch - 1:
+            regmc_batch = cdist(pos[(batch_size * i):(batch_size * (i + 1))], aug_geom[aug_which]).argmin(1)
+        else:
+            regmc_batch = cdist(pos[(batch_size * i):None], aug_geom[aug_which]).argmin(1)
+
+    regmc = np.append(regmc, regmc_batch)
+    regmc = aug_which[regmc]
+    return regmc
+
 def new_merge_split(
     spike_train,
     n_channels,
@@ -94,9 +147,9 @@ def new_merge_split(
     assert (order == np.arange(len(order))).all()
 
     print("Save split...")
-    np.save(outdir / "split_st.npy", aligned_spike_train2)
-    np.save(outdir / "split_templates.npy", templates)
-    np.save(outdir / "split_order.npy", order)
+    np.save(outdir + "/" + "split_st.npy", aligned_spike_train2)
+    np.save(outdir + "/" + "split_templates.npy", templates)
+    np.save(outdir + "/" + "split_order.npy", order)
 
     aligned_times, new_labels = before_deconv_merge_split.merge_clusters(
         sub_h5,
@@ -151,9 +204,9 @@ def new_merge_split(
     order = order[reorder]
 
     print("Save merge...")
-    np.save(outdir / "merge_st.npy", aligned_spike_train4)
-    np.save(outdir / "merge_templates.npy", templates)
-    np.save(outdir / "merge_order.npy", order)
+    np.save(outdir + "/" + "merge_st.npy", aligned_spike_train4)
+    np.save(outdir + "/" + "merge_templates.npy", templates)
+    np.save(outdir + "/" + "merge_order.npy", order)
 
     return aligned_spike_train4, templates, order
 
@@ -193,6 +246,8 @@ def initial_clustering(
         spike_index,
         split_big=True,
         do_remove_dups=False,
+        do_copy_spikes=False,
+        ptp_low_threshold=5,
     )
 
     # remove cross dups after remove self dups
