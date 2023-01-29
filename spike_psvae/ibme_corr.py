@@ -384,8 +384,8 @@ def calc_corr_decent(
     return D, C
 
 
-def normxcorr(template, x, padding=None):
-    """normxcorr: Normalized cross-correlation
+def normxcorr(template, x, weights=None, padding=None):
+    """normxcorr: Normalized cross-correlation, optionally weighted
 
     Returns the cross-correlation of `template` and `x` at spatial lags
     determined by `mode`. Useful for estimating the location of `template`
@@ -395,12 +395,18 @@ def normxcorr(template, x, padding=None):
     It uses a direct convolutional translation of the formula
         corr = (E[XY] - EX EY) / sqrt(var X * var Y)
 
+    This also supports weights! In that case, the usual adaptation of
+    the above formula is made to the weighted case -- and all of the
+    normalizations are done per block in the same way.
+
     Arguments
     ---------
     template : tensor, shape (num_templates, length)
         The reference template signal
     x : tensor, 1d shape (length,) or 2d shape (num_inputs, length)
         The signal in which to find `template`
+    weights : tensor, shape (length,)
+        Will use weighted means + variances in this case.
     padding : int, optional
         How far to look? if unset, we'll use half the length
     assume_centered : bool
@@ -420,24 +426,37 @@ def normxcorr(template, x, padding=None):
     if padding is None:
         padding = length // 2
 
-    # compute expectations
+    # generalize over weighted / unweighted case
     ones = torch.ones((1, 1, length), dtype=x.dtype, device=x.device)
+    no_weights = weights is None
+    if no_weights:
+        weights = ones
+    else:
+        assert weights.shape == (length,)
+        weights = weights[None, None]
+
+    # compute expectations
     # how many points in each window? seems necessary to normalize
     # for numerical stability.
-    N = F.conv1d(ones, ones, padding=padding)
-    Et = F.conv1d(ones, template[:, None, :], padding=padding) / N
-    Ex = F.conv1d(x[:, None, :], ones, padding=padding) / N
+    N = F.conv1d(weights, ones, padding=padding)
+    Et = F.conv1d(weights, template[:, None, :], padding=padding) / N
+    Ex = F.conv1d(x[:, None, :], weights, padding=padding) / N
 
-    # compute covariance
-    corr = F.conv1d(x[:, None, :], template[:, None, :], padding=padding) / N
+    # compute (weighted) covariance
+    wx = x[:, None, :]
+    wt = template[:, None, :]
+    if not no_weights:
+        wx = wx * weights
+        wt = wt * weights
+    corr = F.conv1d(wx, wt, padding=padding) / N
     corr -= Ex * Et
 
     # compute variances for denominator, using var X = E[X^2] - (EX)^2
     var_template = F.conv1d(
-        ones, torch.square(template)[:, None, :], padding=padding
+        weights, torch.square(template)[:, None, :], padding=padding
     ) / N - torch.square(Et)
     var_x = F.conv1d(
-        torch.square(x)[:, None, :], ones, padding=padding
+        torch.square(x)[:, None, :], weights, padding=padding
     ) / N - torch.square(Ex)
 
     # now find the final normxcorr and get rid of NaNs in zero-variance areas
