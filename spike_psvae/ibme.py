@@ -158,11 +158,14 @@ def register_nonrigid(
 
     # set origin to min z
     depths = depths - offset
+    
 
     # initialize displacement map
     D = 1 + int(np.floor(depths.max()))
     T = int(np.floor(times.max())) + 1
     total_shift = np.zeros((D, T))
+    
+    extra = dict(D=D, T=T)
 
     # first pass of rigid registration
     if rigid_init:
@@ -183,11 +186,14 @@ def register_nonrigid(
         )
         total_shift[:, :] = p[None, :]
 
-    for nwin in tqdm(n_windows):
+    for nwin in n_windows:
         raster, dd, tt = fast_raster(
             amps, depths, times, sigma=denoise_sigma, destripe=destripe
         )
         D, T = raster.shape
+        
+        extra["depth_domain"] = dd
+        extra["time_domain"] = tt
 
         # gaussian windows
         windows = np.zeros((nwin, D))
@@ -205,13 +211,12 @@ def register_nonrigid(
         elif window_shape == "rect":
             for k, loc in enumerate(locs):
                 slices.append(
-                    slice(max(0, np.floor(loc - scale)), min(D, np.floor(loc + scale)))
+                    slice(max(0, int(np.floor(loc - scale))), min(D, int(np.floor(loc + scale))))
                 )
-                win = np.zeros(T)
-                win[slices[-1]] = 1
-                windows[k, slices[-1]] = win
+                windows[k, slices[-1]] = 1
         else:
             assert False
+        extra["windows"] = windows
 
         # torch versions on device
         windows_ = torch.as_tensor(windows, dtype=torch.float, device=device)
@@ -246,7 +251,7 @@ def register_nonrigid(
                 )
                 block_Ds[k] = D
                 block_Cs[k] = C
-
+                
             ps = psolvecorr_spatial(
                 block_Ds,
                 block_Cs,
@@ -258,7 +263,8 @@ def register_nonrigid(
             )
 
         # warp depths
-        windows /= windows.sum(axis=0, keepdims=True)
+        windows = windows / windows.sum(axis=0, keepdims=True)
+        extra["upsample"] = windows
         dispmap = windows.T @ ps
         depths = warp_nonrigid(
             depths, times, dispmap, depth_domain=dd, time_domain=tt
