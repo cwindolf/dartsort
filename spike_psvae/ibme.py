@@ -198,6 +198,8 @@ def register_nonrigid(
     T = int(np.floor(times.max())) + 1
     total_shift = np.zeros((D, T))
 
+    extra = dict(D=D, T=T)
+
     # first pass of rigid registration
     if rigid_init:
         depths, p = register_rigid(
@@ -217,7 +219,7 @@ def register_nonrigid(
         )
         total_shift[:, :] = p[None, :]
 
-    for nwin in tqdm(n_windows):
+    for nwin in n_windows:
         raster, dd, tt = fast_raster(
             amps, depths, times, sigma=denoise_sigma, destripe=destripe
         )
@@ -228,6 +230,7 @@ def register_nonrigid(
             widthmul=widthmul,
             window_shape=window_shape,
         )
+        extra["windows"] = windows
 
         # torch versions on device
         windows_ = torch.as_tensor(windows, dtype=torch.float, device=device)
@@ -276,7 +279,8 @@ def register_nonrigid(
             )
 
         # warp depths
-        windows /= windows.sum(axis=0, keepdims=True)
+        windows = windows / windows.sum(axis=0, keepdims=True)
+        extra["upsample"] = windows
         dispmap = windows.T @ ps
         depths = warp_nonrigid(
             depths, times, dispmap, depth_domain=dd, time_domain=tt
