@@ -72,10 +72,12 @@ def subtraction(
     save_denoised_ptp_vectors=False,
     # localization args
     # set this to None or "none" to turn off
+    localization_model = "pointsource",
     localization_kind="logbarrier",
     localize_radius=100,
     localize_firstchan_n_channels=20,
     loc_workers=4,
+    loc_feature="ptp",
     # want to compute any other features of the waveforms?
     extra_features="default",
     # misc kwargs
@@ -239,6 +241,7 @@ def subtraction(
         nsync=nsync,
         dtype=binary_dtype,
     )
+    print(T_sec)
     assert t_start >= 0 and (t_end is None or t_end <= T_sec)
     start_sample = int(np.floor(t_start * sampling_rate))
     end_sample = (
@@ -282,6 +285,9 @@ def subtraction(
         do_enforce_decrease = False
 
     # check localization arg
+    if localization_model not in ("pointsource", "CoM", "dipole"):
+        print("Wrong localization modle")
+    print(localization_model)
     if localization_kind in ("original", "logbarrier"):
         print("Using", localization_kind, "localization")
         extra_features += [
@@ -295,6 +301,8 @@ def subtraction(
                 if neighborhood_kind != "firstchan"
                 else None,
                 localization_kind=localization_kind,
+                localization_model=localization_model,
+                feature=loc_feature
             )
         ]
     else:
