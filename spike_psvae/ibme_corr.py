@@ -208,7 +208,7 @@ def psolvecorr_spatial(
         )
         block_sparse_kron = Mb - Nb
         block_disp_pairs = Db[I, J]
-
+        
         # add the temporal smoothness prior in this window
         if temporal_prior:
             temporal_diff_operator = sparse.diags(
@@ -372,7 +372,7 @@ def calc_corr_decent(
     xrange = trange if pbar else range
     for i in xrange(0, T, batch_size):
         if normalized:
-            corr = normxcorr(
+            corr = normxcorr1d(
                 raster,
                 raster[i : i + batch_size],
                 weights=weights,
@@ -394,7 +394,7 @@ def calc_corr_decent(
     return D, C
 
 
-def normxcorr(template, x, weights=None, padding=None):
+def normxcorr1d(template, x,  weights=None, padding=None):
     """normxcorr: Normalized cross-correlation, optionally weighted
 
     Returns the cross-correlation of `template` and `x` at spatial lags
@@ -441,35 +441,43 @@ def normxcorr(template, x, weights=None, padding=None):
     no_weights = weights is None
     if no_weights:
         weights = ones
+        wt = template[:, None, :]
+        wt2 = torch.square(template[:, None, :])
     else:
         assert weights.shape == (length,)
         weights = weights[None, None]
-    weights = weights / weights.sum()
+        wt = template[:, None, :] * weights
+        wt2 = torch.square(template)[:, None, :] * weights
+
+    # conv1d valid rule:
+    # (B,1,L),(O,1,L)->(B,O,L)
 
     # compute expectations
-    Et = F.conv1d(weights, template[:, None, :], padding=padding)
-    Ex = F.conv1d(x[:, None, :], weights, padding=padding)
+    # how many points in each window? seems necessary to normalize
+    # for numerical stability.
+    N = F.conv1d(ones, weights, padding=padding)
+    Et = F.conv1d(ones, wt, padding=padding) / N
+    Ex = F.conv1d(x[:, None, :], weights, padding=padding) / N
 
     # compute (weighted) covariance
-    # w.(x.-w.x).(y.-w.y) = w.(x*y - x w.y - y w.x .+ w.x w.y)
-    #                     = w.x*y - w.x w.y - w.y w.x .+ sum(w)=1 w.x w.y
-    #                     = x.(w*y) - w.x w.y
-    wt = template[:, None, :]
-    if not no_weights:
-        wt = wt * weights
-    corr = F.conv1d(x[:, None, :], wt, padding=padding)
-    corr -= Ex * Et
+    # important: the formula E[XY] - EX EY is well-suited here,
+    # because the means are naturally subtracted correctly
+    # patch-wise. you couldn't pre-subtract them!
+    cov = F.conv1d(x[:, None, :], wt, padding=padding) / N
+    cov -= Ex * Et
 
     # compute variances for denominator, using var X = E[X^2] - (EX)^2
     var_template = F.conv1d(
-        weights, torch.square(template)[:, None, :], padding=padding
-    ) - torch.square(Et)
+        ones, wt2, padding=padding
+    ) / N - torch.square(Et)
     var_x = F.conv1d(
         torch.square(x)[:, None, :], weights, padding=padding
-    ) - torch.square(Ex)
+    ) / N - torch.square(Ex)
 
-    # now find the final normxcorr and get rid of NaNs in zero-variance areas
+    # now find the final normxcorr
+    corr = cov  # renaming for clarity
     corr /= torch.sqrt(var_x * var_template)
+    # get rid of NaNs in zero-variance areas
     corr[~torch.isfinite(corr)] = 0
 
     return corr
