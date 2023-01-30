@@ -111,9 +111,33 @@ def get_windows(
     elif window_shape == "rect":
         for k, loc in enumerate(locs):
             slices.append(
-                slice(max(0, np.floor(loc - scale)), min(depth_total, np.floor(loc + scale)))
+                slice(
+                    max(0, int(np.floor(loc - scale))),
+                    min(depth_total, int(np.floor(loc + scale)))),
             )
             windows[k, slices[-1]] = 1
+    elif window_shape == "parabolic":
+        for k, loc in enumerate(locs):
+            slices.append(
+                slice(
+                    max(0, int(np.floor(loc - scale))),
+                    min(depth_total, int(np.floor(loc + scale)))),
+            )
+            win = -np.square(np.arange(slices[-1].start, slices[-1].stop) - loc)
+            win -= win.min()
+            win /= win.sum()
+            windows[k, slices[-1]] = win
+    elif window_shape == "triangle":
+        for k, loc in enumerate(locs):
+            slices.append(
+                slice(
+                    max(0, int(np.floor(loc - scale))),
+                    min(depth_total, int(np.floor(loc + scale)))),
+            )
+            win = -np.abs(np.arange(slices[-1].start, slices[-1].stop) - loc)
+            win -= win.min()
+            win /= win.sum()
+            windows[k, slices[-1]] = win
     else:
         assert False
 
@@ -137,7 +161,7 @@ def register_nonrigid(
     disp=800,
     rigid_init=False,
     n_windows=10,
-    widthmul=0.5,
+    widthmul=1.0,
     max_dt=None,
     destripe=False,
     device=None,
@@ -294,7 +318,7 @@ def register_nonrigid(
     depths -= depths.min()
     depths += offset
 
-    return depths, total_shift
+    return depths, total_shift, extra
 
 
 # -- nonrigid reg helpers
