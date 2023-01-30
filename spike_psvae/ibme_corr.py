@@ -208,7 +208,7 @@ def psolvecorr_spatial(
         )
         block_sparse_kron = Mb - Nb
         block_disp_pairs = Db[I, J]
-        
+
         # add the temporal smoothness prior in this window
         if temporal_prior:
             temporal_diff_operator = sparse.diags(
@@ -444,30 +444,29 @@ def normxcorr(template, x, weights=None, padding=None):
     else:
         assert weights.shape == (length,)
         weights = weights[None, None]
+    weights = weights / weights.sum()
 
     # compute expectations
-    # how many points in each window? seems necessary to normalize
-    # for numerical stability.
-    N = F.conv1d(weights, ones, padding=padding)
-    Et = F.conv1d(weights, template[:, None, :], padding=padding) / N
-    Ex = F.conv1d(x[:, None, :], weights, padding=padding) / N
+    Et = F.conv1d(weights, template[:, None, :], padding=padding)
+    Ex = F.conv1d(x[:, None, :], weights, padding=padding)
 
     # compute (weighted) covariance
-    wx = x[:, None, :]
+    # w.(x.-w.x).(y.-w.y) = w.(x*y - x w.y - y w.x .+ w.x w.y)
+    #                     = w.x*y - w.x w.y - w.y w.x .+ sum(w)=1 w.x w.y
+    #                     = x.(w*y) - w.x w.y
     wt = template[:, None, :]
     if not no_weights:
-        wx = wx * weights
         wt = wt * weights
-    corr = F.conv1d(wx, wt, padding=padding) / N
+    corr = F.conv1d(x[:, None, :], wt, padding=padding)
     corr -= Ex * Et
 
     # compute variances for denominator, using var X = E[X^2] - (EX)^2
     var_template = F.conv1d(
         weights, torch.square(template)[:, None, :], padding=padding
-    ) / N - torch.square(Et)
+    ) - torch.square(Et)
     var_x = F.conv1d(
         torch.square(x)[:, None, :], weights, padding=padding
-    ) / N - torch.square(Ex)
+    ) - torch.square(Ex)
 
     # now find the final normxcorr and get rid of NaNs in zero-variance areas
     corr /= torch.sqrt(var_x * var_template)
