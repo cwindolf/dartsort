@@ -172,9 +172,10 @@ def superres_denoised_templates(
 
 
 def shift_superres_templates(
+    time_bin,
     superres_templates,
     superres_label_to_bin_id,
-    shift_um,
+    superres_label_to_orig_label,
     bin_size_um,
     geom,
     positions_over_time_clusters,
@@ -182,9 +183,9 @@ def shift_superres_templates(
     fill_value=0.0,
 ):
 
-    """
-    This version shifts by every (possible) mod 
-    """
+"""
+This version shifts by every (possible - if enough templates) mod 
+"""
     pitch = get_pitch(geom)
     bins_per_pitch = pitch / bin_size_um
     # if bins_per_pitch != int(bins_per_pitch):
@@ -195,29 +196,48 @@ def shift_superres_templates(
 
 
     #shift every unit separately
+    for unit in np.unique(superres_label_to_orig_label):
+        # shift in bins, rounded towards 0
+        bins_shift = np.round((positions_over_time_clusters[unit, time_bin] - medians_at_computation[unit])/bin_size_um)
+        
+        # How to do the shifting?
+        # We break the shift into two pieces: the number of full pitches,
+        # and the remaining bins after shifting by full pitches.
+        n_pitches_shift = int(
+            bins_shift / bins_per_pitch
+        )  # want to round towards 0, not //
 
-    # shift in bins, rounded towards 0
-    bins_shift = int(shift_um / bin_size_um)
-    if bins_shift == 0:
-        return superres_templates, superres_label_to_bin_id
+        bins_shift_rem = bins_shift - bins_per_pitch * n_pitches_shift
 
-    # How to do the shifting?
-    # We break the shift into two pieces: the number of full pitches,
-    # and the remaining bins after shifting by full pitches.
-    n_pitches_shift = int(
-        bins_shift / bins_per_pitch
-    )  # want to round towards 0, not //
-    bins_shift_rem = bins_shift - bins_per_pitch * n_pitches_shift
+        # Now, first we do the pitch shifts
+        shifted_templates_unit = pitch_shift_templates(
+            n_pitches_shift, geom, superres_templates[superres_label_to_orig_label==unit], fill_value=fill_value
+        )
+        # Now, do the mod shift bins_shift_rem
+        # IDEA: take the bottom bin and shift it above - 
+        # If more than bins_per_pitch templates - OK, can shift 
+        # Only special case np.abs(bins_shift_rem)<=3 and n_temp <=3 -> better not to shift (no information gain)
 
-    # Now, first we do the pitch shifts
-    shifted_templates = pitch_shift_templates(
-        n_pitches_shift, geom, superres_templates, fill_value=fill_value
-    )
+        n_temp = (superres_label_to_orig_label==unit).sum()
+        if bins_shift_rem<0:
+            if bins_shift_rem<-3 or n_temp>3:
+                shifted_templates_unit[-min(-bins_shift_rem, n_temp):] = pitch_shift_templates(
+                    -1, geom, superres_templates[superres_label_to_orig_label==unit][-min(-bins_shift_rem, n_temp):], fill_value=fill_value
+                )
+                # The rest of the shift is handled by updating bin ids
+                # This part doesn't matter for the recovered spike train, since
+                # the template doesn't change, but it could matter for z tracking
+                superres_label_to_bin_id[superres_label_to_orig_label==unit] = np.roll(superres_label_to_bin_id[superres_label_to_orig_label==0], -min(-bins_shift_rem, n_temp))
+        elif bins_shift_rem>0:
+            if bins_shift_rem>3 or n_temp>3:
+                shifted_templates_unit[:min(bins_shift_rem, n_temp)] = pitch_shift_templates(
+                    1, geom, superres_templates[superres_label_to_orig_label==unit][:min(bins_shift_rem, n_temp)], fill_value=fill_value
+                )
+                # The rest of the shift is handled by updating bin ids
+                # This part doesn't matter for the recovered spike train, since
+                # the template doesn't change, but it could matter for z tracking
+                superres_label_to_bin_id[superres_label_to_orig_label==unit] = np.roll(superres_label_to_bin_id[superres_label_to_orig_label==0], min(bins_shift_rem, n_temp))
 
-    # The rest of the shift is handled by updating bin ids
-    # This part doesn't matter for the recovered spike train, since
-    # the template doesn't change, but it could matter for z tracking
-    superres_label_to_bin_id = superres_label_to_bin_id - bins_shift_rem
 
     return shifted_templates, superres_label_to_bin_id
 
