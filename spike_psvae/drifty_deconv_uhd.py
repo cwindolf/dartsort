@@ -187,14 +187,8 @@ def shift_superres_templates(
     This version shifts by every (possible - if enough templates) mod 
     """
     pitch = get_pitch(geom)
-    bins_per_pitch = pitch / bin_size_um
-    # if bins_per_pitch != int(bins_per_pitch):
-    #     raise ValueError(
-    #         f"The pitch of this probe is {pitch}, but the bin size "
-    #         f"{bin_size_um} does not evenly divide it."
-    #     )
-    shifted_templates = superres_templates.copy()
 
+    shifted_templates = superres_templates.copy()
 
     #shift every unit separately
     for unit in np.unique(superres_label_to_orig_label):
@@ -205,10 +199,10 @@ def shift_superres_templates(
             # We break the shift into two pieces: the number of full pitches,
             # and the remaining bins after shifting by full pitches.
             n_pitches_shift = int(
-                bins_shift / bins_per_pitch
+                bins_shift / pitch
             )  # want to round towards 0, not //
 
-            bins_shift_rem = bins_shift - bins_per_pitch * n_pitches_shift
+            bins_shift_rem = bins_shift - pitch * n_pitches_shift
 
             # Now, first we do the pitch shifts
             shifted_templates_unit = pitch_shift_templates(
@@ -216,7 +210,7 @@ def shift_superres_templates(
             )
             # Now, do the mod shift bins_shift_rem
             # IDEA: take the bottom bin and shift it above - 
-            # If more than bins_per_pitch templates - OK, can shift 
+            # If more than pitch/2 templates - OK, can shift 
             # Only special case np.abs(bins_shift_rem)<=pitch/2 and n_temp <=pitch/2 -> better not to shift (no information gain)
 
             n_temp = (superres_label_to_orig_label==unit).sum()
@@ -282,7 +276,7 @@ def shift_deconv(
 
     # integer probe-pitch shifts at each time bin
     p = p[t_start : t_end if t_end is not None else len(p)]
-    bin_shifts = (p + bin_size_um / 2) // bin_size_um
+    bin_shifts = (p + bin_size_um / 2) // bin_size_um * bin_size_um
     unique_shifts, shift_ids_by_time = np.unique(
         bin_shifts, return_inverse=True
     )
