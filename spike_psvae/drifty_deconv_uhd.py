@@ -471,7 +471,6 @@ def superres_deconv_chunk(
     bin_size_um=1,
     deconv_dir=None,
     pfs=30_000,
-    reference_displacement=0,
     max_z_dist=None,
     t_start=0,
     t_end=None,
