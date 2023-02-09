@@ -13,10 +13,10 @@ def superres_spike_train(
     spike_train, z_abs, bin_size_um, min_spikes_bin=None, 
     units_spread=None, t_end=100, n_spikes_max_recent = 1000, fs=30000,
 ):
-"""
-remove min_spikes_bin by default - it's worse to end up with a template that is mean of all spikes!!!
-units_spread is the spread of each registered clusters np.std(z_reg[spt[:, 1]==unit])*1.65 
-"""
+    """
+    remove min_spikes_bin by default - it's worse to end up with a template that is mean of all spikes!!!
+    units_spread is the spread of each registered clusters np.std(z_reg[spt[:, 1]==unit])*1.65 
+    """
     assert spike_train.shape == (*z_abs.shape, 2)
     assert bin_size_um > 0
 
@@ -124,9 +124,9 @@ def superres_denoised_templates(
     n_jobs=-1,
 ):
 
-"""
-TODO: Use 1000 closest spikes
-"""
+    """
+    TODO: Use 1000 closest spikes
+    """
     (
         superres_labels,
         superres_label_to_bin_id,
@@ -182,9 +182,9 @@ def shift_superres_templates(
     medians_at_computation,
 ):
 
-"""
-This version shifts by every (possible) mod 
-"""
+    """
+    This version shifts by every (possible) mod 
+    """
     pitch = get_pitch(geom)
     bins_per_pitch = pitch / bin_size_um
     # if bins_per_pitch != int(bins_per_pitch):
