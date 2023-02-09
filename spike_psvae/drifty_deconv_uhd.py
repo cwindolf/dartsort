@@ -183,9 +183,9 @@ def shift_superres_templates(
     fill_value=0.0,
 ):
 
-"""
-This version shifts by every (possible - if enough templates) mod 
-"""
+    """
+    This version shifts by every (possible - if enough templates) mod 
+    """
     pitch = get_pitch(geom)
     bins_per_pitch = pitch / bin_size_um
     # if bins_per_pitch != int(bins_per_pitch):
