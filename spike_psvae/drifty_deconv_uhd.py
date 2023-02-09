@@ -10,8 +10,8 @@ from .extract_deconv import extract_deconv
 
 
 def superres_spike_train(
-    spike_train, z_abs, bin_size_um, min_spikes_bin=None, 
-    units_spread=None, t_end=100, n_spikes_max_recent = 1000, fs=30000,
+    spike_train, z_abs, bin_size_um, t_end=100,
+    units_spread=None, min_spikes_bin=None, n_spikes_max_recent = 1000, fs=30000,
 ):
     """
     remove min_spikes_bin by default - it's worse to end up with a template that is mean of all spikes!!!
@@ -66,7 +66,7 @@ def superres_spike_train(
             ]
         # IS THAT NEEDED - min_spikes_bin=6
         if min_spikes_bin is None:
-            for bin_id in occupied_bins[bin_counts >= min_spikes_bin]:
+            for bin_id in occupied_bins:
                 superres_labels[in_u[bin_ids == bin_id]] = cur_superres_label
                 superres_label_to_bin_id.append(bin_id)
                 superres_label_to_orig_label.append(u)
@@ -93,7 +93,6 @@ def superres_spike_train(
         superres_label_to_orig_label,
         medians_at_computation
     )
-
 
 
 def superres_denoised_templates(
