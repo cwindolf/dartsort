@@ -105,6 +105,7 @@ def superres_denoised_templates(
     min_spikes_bin=None,
     units_spread=None,
     max_spikes_per_unit=200, #per superres unit 
+    n_spikes_max_recent = 1000,
     denoise_templates=True,
     do_temporal_decrease=True,
     zero_radius_um=70, #reduce this value in uhd compared to NP1/NP2
@@ -123,9 +124,6 @@ def superres_denoised_templates(
     n_jobs=-1,
 ):
 
-    """
-    TODO: Use 1000 closest spikes
-    """
     (
         superres_labels,
         superres_label_to_bin_id,
@@ -135,11 +133,13 @@ def superres_denoised_templates(
         spike_train,
         z_abs,
         bin_size_um,
-        min_spikes_bin,
-        units_spread,
         t_end,
+        units_spread,
+        min_spikes_bin,
+        n_spikes_max_recent,
         fs,
     )
+
     templates, extra = snr_templates.get_templates(
         np.c_[spike_train[:, 0], superres_labels],
         geom,
@@ -167,6 +167,7 @@ def superres_denoised_templates(
         superres_label_to_orig_label,
         medians_at_computation
     )
+
 
 
 
