@@ -264,7 +264,6 @@ def shift_deconv(
     superres_label_to_orig_label,
     deconv_dir=None,
     pfs=30_000,
-    template_index_to_unit_id=None, #is that superres_label_to_orig_label? CHECK
     t_start=0,
     t_end=None,
     n_jobs=1,
@@ -334,7 +333,7 @@ def shift_deconv(
             upsample=max_upsample,
             lambd=0,
             allowed_scale=0,
-            template_index_to_unit_id=template_index_to_unit_id,
+            template_index_to_unit_id=superres_label_to_orig_label,
             refractory_period_frames=refractory_period_frames,
         )
         my_batches = np.flatnonzero(bin_shifts == shift)
@@ -460,3 +459,140 @@ def shift_deconv(
         shifted_upsampled_idx_to_shift_id=shifted_upsampled_idx_to_shift_id,
         deconv_dist_metrics=deconv_dist_metrics,
     )
+
+def superres_deconv_chunk(
+    raw_bin,
+    geom,
+    z_abs,
+    p,
+    spike_train,
+    registered_medians=None, #registered_median
+    units_spread=None, #registered_spread
+    bin_size_um=1,
+    deconv_dir=None,
+    pfs=30_000,
+    reference_displacement=0,
+    max_z_dist=None,
+    t_start=0,
+    t_end=None,
+    n_jobs=1,
+    trough_offset=42,
+    spike_length_samples=121,
+    max_upsample=1,
+    refractory_period_frames=10,
+    min_spikes_bin=None,
+    max_spikes_per_unit=200,
+    tpca=None,
+    deconv_threshold=500, #Important param to validate
+    su_chan_vis=3, #Important param to validate
+):
+
+    Path(deconv_dir).mkdir(exist_ok=True)
+
+    (
+        superres_templates,
+        superres_label_to_bin_id,
+        superres_label_to_orig_label,
+        medians_at_computation,
+    ) = superres_denoised_templates(
+        spike_train,
+        z_abs,
+        bin_size_um,
+        geom,
+        raw_bin,
+        t_end,
+        min_spikes_bin,
+        units_spread,
+        max_spikes_per_unit,
+        denoise_templates=True,
+        do_temporal_decrease=True,
+        zero_radius_um=70,
+        reducer=np.median,
+        snr_threshold=5.0 * np.sqrt(100),
+        spike_length_samples=spike_length_samples,
+        trough_offset=trough_offset,
+        do_tpca=True,
+        tpca=tpca,
+        tpca_rank=5,
+        tpca_radius=75,
+        tpca_n_wfs=50_000,
+        fs=pfs,
+        seed=0,
+        n_jobs=n_jobs,
+    )
+
+    shifted_deconv_res = shift_deconv(
+        raw_bin,
+        geom,
+        p,
+        bin_size_um,
+        registered_medians,
+        superres_templates,
+        medians_at_computation,
+        superres_label_to_bin_id,
+        superres_label_to_orig_label,
+        deconv_dir=deconv_dir,
+        pfs=pfs,
+        t_start=t_start,
+        t_end=t_end,
+        n_jobs=n_jobs,
+        trough_offset=trough_offset,
+        spike_length_samples=spike_length_samples,
+        max_upsample=max_upsample,
+        refractory_period_frames=refractory_period_frames,
+        deconv_threshold=deconv_threshold,
+        su_chan_vis=su_chan_vis,
+    )
+
+    # unpack results
+    deconv_dist_metrics = shifted_deconv_res["deconv_dist_metrics"]
+    superres_deconv_spike_train = shifted_deconv_res["deconv_spike_train"]
+    superres_deconv_spike_train_shifted_upsampled = shifted_deconv_res[
+        "deconv_spike_train_shifted_upsampled"
+    ]
+    deconv_scalings = shifted_deconv_res["deconv_scalings"]
+    all_shifted_upsampled_temps = shifted_deconv_res[
+        "all_shifted_upsampled_temps"
+    ]
+    shifted_upsampled_idx_to_superres_id = shifted_deconv_res[
+        "shifted_upsampled_idx_to_orig_id"
+    ]
+    shifted_upsampled_idx_to_shift_id = shifted_deconv_res[
+        "shifted_upsampled_idx_to_shift_id"
+    ]
+
+    # back to original label space
+    deconv_spike_train = superres_deconv_spike_train.copy()
+    deconv_spike_train[:, 1] = superres_label_to_orig_label[
+        deconv_spike_train[:, 1]
+    ]
+    shifted_upsampled_idx_to_orig_id = superres_label_to_orig_label[
+        shifted_upsampled_idx_to_superres_id
+    ]
+    shifted_upsampled_idx_to_superres_bin_id = superres_label_to_bin_id[
+        shifted_upsampled_idx_to_superres_id
+    ]
+
+    # return everything the user could need
+    return dict(
+        deconv_spike_train=deconv_spike_train,
+        superres_deconv_spike_train=superres_deconv_spike_train,
+        superres_deconv_spike_train_shifted_upsampled=superres_deconv_spike_train_shifted_upsampled,
+        deconv_scalings=deconv_scalings,
+        superres_templates=superres_templates,
+        superres_label_to_orig_label=superres_label_to_orig_label,
+        superres_label_to_bin_id=superres_label_to_bin_id,
+        all_shifted_upsampled_temps=all_shifted_upsampled_temps,
+        shifted_upsampled_idx_to_superres_id=shifted_upsampled_idx_to_superres_id,
+        shifted_upsampled_idx_to_superres_bin_id=shifted_upsampled_idx_to_superres_bin_id,
+        shifted_upsampled_idx_to_orig_id=shifted_upsampled_idx_to_orig_id,
+        shifted_upsampled_idx_to_shift_id=shifted_upsampled_idx_to_shift_id,
+        trough_offset=trough_offset,
+        spike_length_samples=spike_length_samples,
+        bin_size_um=bin_size_um,
+        raw_bin=raw_bin,
+        deconv_dir=deconv_dir,
+        deconv_dist_metrics=deconv_dist_metrics,
+        shifted_superres_templates=shifted_deconv_res["shifted_templates"],
+    )
+
