@@ -177,9 +177,9 @@ def shift_superres_templates(
     shift_um,
     bin_size_um,
     geom,
-    fill_value=0.0,
     positions_over_time_clusters,
     medians_at_computation,
+    fill_value=0.0,
 ):
 
     """
