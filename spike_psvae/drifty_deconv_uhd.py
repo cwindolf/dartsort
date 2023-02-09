@@ -192,6 +192,8 @@ def shift_superres_templates(
 
     #shift every unit separately
     for unit in np.unique(superres_label_to_orig_label):
+        print(unit)
+        print(disp_value)
         # shift in bins, rounded towards 0
         bins_shift = np.round((disp_value + registered_medians[unit] - medians_at_computation[unit])/bin_size_um)
         if bins_shift!=0:
