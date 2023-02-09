@@ -250,3 +250,213 @@ def shift_superres_templates(
             shifted_templates[superres_label_to_orig_label==unit]=shifted_templates_unit
 
     return shifted_templates, superres_label_to_bin_id
+
+
+def shift_deconv(
+    raw_bin,
+    geom,
+    p, #displacement
+    bin_size_um,
+    registered_medians,
+    superres_templates,
+    medians_at_computation,
+    superres_label_to_bin_id,
+    superres_label_to_orig_label,
+    deconv_dir=None,
+    pfs=30_000,
+    template_index_to_unit_id=None, #is that superres_label_to_orig_label? CHECK
+    t_start=0,
+    t_end=None,
+    n_jobs=1,
+    trough_offset=42,
+    spike_length_samples=121,
+    max_upsample=1, #param for UHD - can increase if speed ok 
+    refractory_period_frames=10,
+    deconv_threshold=500, #Important param to validate
+    su_chan_vis=3, #Important param to validate
+):
+    # discover the pitch of the probe
+    # this is the unit at which the probe repeats itself.
+    # so for NP1, it's not every row, but every 2 rows!
+    pitch = get_pitch(geom)
+    print(f"a {pitch=}")
+
+    # integer probe-pitch shifts at each time bin
+    p = p[t_start : t_end if t_end is not None else len(p)]
+    bin_shifts = (p + bin_size_um / 2) // bin_size_um
+    unique_shifts, shift_ids_by_time = np.unique(
+        bin_shifts, return_inverse=True
+    )
+
+    # for each shift, get shifted templates
+    shifted_templates = np.array(
+        [
+            shift_superres_templates(
+                superres_templates,
+                superres_label_to_bin_id,
+                superres_label_to_orig_label,
+                bin_size_um,
+                geom,
+                shift,
+                registered_medians,
+                medians_at_computation)
+            for shift in unique_shifts
+        ]
+    )
+
+    # run deconv on just the appropriate batches for each shift
+    deconv_dir = Path(
+        deconv_dir if deconv_dir is not None else tempfile.mkdtemp()
+    )
+    if n_jobs > 1:
+        ctx = multiprocessing.get_context("spawn")
+    shifted_templates_up = []
+    shifted_sparse_temp_map = []
+    sparse_temp_to_orig_map = []
+    batch2shiftix = {}
+    for shiftix, (shift, temps) in enumerate(
+        zip(unique_shifts, tqdm(shifted_templates, desc="Shifts"))
+    ):
+        mp_object = deconvolve.MatchPursuitObjectiveUpsample(
+            templates=temps,
+            deconv_dir=deconv_dir,
+            standardized_bin=raw_bin,
+            t_start=t_start,
+            t_end=t_end,
+            n_sec_chunk=1,
+            sampling_rate=pfs,
+            max_iter=1000,
+            threshold=deconv_threshold,
+            vis_su=su_chan_vis,
+            conv_approx_rank=5,
+            n_processors=n_jobs,
+            multi_processing=n_jobs > 1,
+            upsample=max_upsample,
+            lambd=0,
+            allowed_scale=0,
+            template_index_to_unit_id=template_index_to_unit_id,
+            refractory_period_frames=refractory_period_frames,
+        )
+        my_batches = np.flatnonzero(bin_shifts == shift)
+        for bid in my_batches:
+            batch2shiftix[bid] = shiftix
+        my_fnames = [
+            deconv_dir / f"seg_{bid:06d}_deconv.npz" for bid in my_batches
+        ]
+        if n_jobs <= 1:
+            mp_object.run(my_batches, my_fnames)
+        else:
+            with ctx.Pool(
+                n_jobs,
+                initializer=mp_object.load_saved_state,
+            ) as pool:
+                for res in tqdm(
+                    pool.imap_unordered(
+                        mp_object._run_batch,
+                        zip(my_batches, my_fnames),
+                    ),
+                    total=len(my_batches),
+                    desc="Template matching",
+                ):
+                    pass
+
+        (
+            templates_up,
+            deconv_id_sparse_temp_map,
+            sparse_id_to_orig_id,
+        ) = mp_object.get_sparse_upsampled_templates(return_orig_map=True)
+        templates_up = templates_up.transpose(2, 0, 1)
+        shifted_templates_up.append(templates_up)
+        shifted_sparse_temp_map.append(deconv_id_sparse_temp_map)
+        sparse_temp_to_orig_map.append(sparse_id_to_orig_id)
+
+        print(
+            f"{templates_up.shape=} {deconv_id_sparse_temp_map.shape=} {sparse_id_to_orig_id.shape=}"
+        )
+
+        assert len(templates_up) == len(sparse_id_to_orig_id)
+
+    # collect all shifted and upsampled templates
+    shifted_upsampled_start_ixs = np.array(
+        [0] + list(np.cumsum([t.shape[0] for t in shifted_templates_up[:-1]]))
+    )
+    all_shifted_upsampled_temps = np.concatenate(shifted_templates_up, axis=0)
+    shifted_upsampled_idx_to_shift_id = np.concatenate(
+        [[i] * t.shape[0] for i, t in enumerate(shifted_templates_up)], axis=0
+    )
+    shifted_upsampled_idx_to_orig_id = (
+        np.concatenate(sparse_temp_to_orig_map, axis=0)
+        # + shifted_upsampled_start_ixs[shifted_upsampled_idx_to_shift_id]
+    )
+    assert shifted_upsampled_idx_to_shift_id.shape == shifted_upsampled_idx_to_orig_id.shape
+
+    # gather deconv resultsdeconv_st = []
+    deconv_spike_train_shifted_upsampled = []
+    deconv_spike_train = []
+    deconv_scalings = []
+    deconv_dist_metrics = []
+    print("gathering deconvolution results")
+    for bid in range(mp_object.n_batches):
+        which_shiftix = batch2shiftix[bid]
+
+        fname_out = deconv_dir / f"seg_{bid:06d}_deconv.npz"
+        with np.load(fname_out) as d:
+            st = d["spike_train"]
+            deconv_scalings.append(d["scalings"])
+            deconv_dist_metrics.append(d["dist_metric"])
+
+        st[:, 0] += trough_offset
+
+        # usual spike train
+        deconv_st = st.copy()
+        deconv_st[:, 1] //= max_upsample
+        deconv_spike_train.append(deconv_st)
+
+        # upsampled + shifted spike train
+        st_up = st.copy()
+        st_up[:, 1] = shifted_sparse_temp_map[which_shiftix][st_up[:, 1]]
+        st_up[:, 1] += shifted_upsampled_start_ixs[which_shiftix]
+        deconv_spike_train_shifted_upsampled.append(st_up)
+
+        shift_good = (
+            shifted_upsampled_idx_to_shift_id[st_up[:, 1]] == which_shiftix
+        ).all()
+        tsorted = (np.diff(st_up[:, 0]) >= 0).all()
+        bigger = (bid == 0) or (
+            st_up[:, 0] >= deconv_spike_train_shifted_upsampled[-2][:, 0].max()
+        ).all()
+        pitchy = (
+            bin_shifts[((st_up[:, 0] - trough_offset) // pfs).astype(int)] == unique_shifts[which_shiftix]
+        ).all()
+        # print(f"{bid=} {shift_good=} {tsorted=} {bigger=} {pitchy=}")
+        assert shift_good
+        assert tsorted
+        assert bigger
+        if not pitchy:
+            raise ValueError(
+                f"{bid=} Not pitchy {np.unique(bin_shifts[((st_up[:, 0] - trough_offset) // pfs).astype(int)])=} "
+                f"{which_shiftix=} {unique_shifts[which_shiftix]=} {np.unique((st_up[:, 0] - trough_offset) // pfs)=} "
+                f"{bin_shifts[np.unique((st_up[:, 0] - trough_offset) // pfs)]=}"
+            )
+
+    deconv_spike_train = np.concatenate(deconv_spike_train, axis=0)
+    deconv_spike_train_shifted_upsampled = np.concatenate(
+        deconv_spike_train_shifted_upsampled, axis=0
+    )
+    deconv_scalings = np.concatenate(deconv_scalings, axis=0)
+    deconv_dist_metrics = np.concatenate(deconv_dist_metrics, axis=0)
+
+    print(
+        f"Number of Spikes deconvolved: {deconv_spike_train_shifted_upsampled.shape[0]}"
+    )
+
+    return dict(
+        deconv_spike_train=deconv_spike_train,
+        deconv_spike_train_shifted_upsampled=deconv_spike_train_shifted_upsampled,
+        deconv_scalings=deconv_scalings,
+        shifted_templates=shifted_templates,
+        all_shifted_upsampled_temps=all_shifted_upsampled_temps,
+        shifted_upsampled_idx_to_orig_id=shifted_upsampled_idx_to_orig_id,
+        shifted_upsampled_idx_to_shift_id=shifted_upsampled_idx_to_shift_id,
+        deconv_dist_metrics=deconv_dist_metrics,
+    )
