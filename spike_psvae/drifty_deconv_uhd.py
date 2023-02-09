@@ -220,7 +220,7 @@ This version shifts by every (possible - if enough templates) mod
 
         n_temp = (superres_label_to_orig_label==unit).sum()
         if bins_shift_rem<0:
-            if bins_shift_rem<-3 or n_temp>3:
+            if bins_shift_rem<-pitch/2 or n_temp>pitch/2:
                 shifted_templates_unit[-min(-bins_shift_rem, n_temp):] = pitch_shift_templates(
                     -1, geom, superres_templates[superres_label_to_orig_label==unit][-min(-bins_shift_rem, n_temp):], fill_value=fill_value
                 )
@@ -229,7 +229,7 @@ This version shifts by every (possible - if enough templates) mod
                 # the template doesn't change, but it could matter for z tracking
                 superres_label_to_bin_id[superres_label_to_orig_label==unit] = np.roll(superres_label_to_bin_id[superres_label_to_orig_label==0], -min(-bins_shift_rem, n_temp))
         elif bins_shift_rem>0:
-            if bins_shift_rem>3 or n_temp>3:
+            if bins_shift_rem>pitch/2 or n_temp>pitch/2:
                 shifted_templates_unit[:min(bins_shift_rem, n_temp)] = pitch_shift_templates(
                     1, geom, superres_templates[superres_label_to_orig_label==unit][:min(bins_shift_rem, n_temp)], fill_value=fill_value
                 )
