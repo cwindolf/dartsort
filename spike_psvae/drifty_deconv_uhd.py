@@ -247,6 +247,6 @@ def shift_superres_templates(
                 # !!! That's an approximation - maybe we'll need to change if we do z tracking, shoul;d be fine for now - is ok if we have bins that are "continuous" per unit
                 superres_label_to_bin_id[superres_label_to_orig_label==unit] = np.roll(superres_label_to_bin_id[superres_label_to_orig_label==0], n_temp_shift)
 
-
+        shifted_templates[superres_label_to_orig_label==unit]=shifted_templates_unit
     return shifted_templates, superres_label_to_bin_id
 
