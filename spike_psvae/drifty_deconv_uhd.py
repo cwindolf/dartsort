@@ -95,6 +95,7 @@ def superres_spike_train(
     )
 
 
+
 def superres_denoised_templates(
     spike_train,
     z_abs,
@@ -170,15 +171,14 @@ def superres_denoised_templates(
 
 
 
-
 def shift_superres_templates(
-    time_bin,
     superres_templates,
     superres_label_to_bin_id,
     superres_label_to_orig_label,
     bin_size_um,
     geom,
-    positions_over_time_clusters,
+    disp_value,
+    registered_medians,
     medians_at_computation,
     fill_value=0.0,
 ):
@@ -199,7 +199,7 @@ def shift_superres_templates(
     #shift every unit separately
     for unit in np.unique(superres_label_to_orig_label):
         # shift in bins, rounded towards 0
-        bins_shift = np.round((positions_over_time_clusters[unit, time_bin] - medians_at_computation[unit])/bin_size_um)
+        bins_shift = np.round((disp_value + registered_medians[unit] - medians_at_computation[unit])/bin_size_um)
         if bins_shift!=0:
             # How to do the shifting?
             # We break the shift into two pieces: the number of full pitches,
@@ -593,4 +593,5 @@ def superres_deconv_chunk(
         deconv_dist_metrics=deconv_dist_metrics,
         shifted_superres_templates=shifted_deconv_res["shifted_templates"],
     )
+
 
