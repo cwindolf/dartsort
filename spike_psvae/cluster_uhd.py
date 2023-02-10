@@ -4,7 +4,7 @@ import hdbscan
 from sklearn.decomposition import PCA
 from spike_psvae.isocut5 import isocut5 as isocut
 from pathlib import Path
-
+import matplotlib.pyplot as plt
 
 def cluster_5_min(cluster_output_directory, raw_data_bin, geom, T_START, T_END, maxptps, x, z, spike_index, displacement_rigid, 
                   threshold_ptp=3, fs=30000, triage_quantile_cluster=100,
@@ -42,6 +42,7 @@ def cluster_5_min(cluster_output_directory, raw_data_bin, geom, T_START, T_END, 
         do_copy_spikes=False,
         split_big=False,
         do_remove_dups=True,
+        do_relabel_by_depth=False,
         log_c=log_c, 
         scales=scales
     )
@@ -248,6 +249,19 @@ def pre_deconv_split(spt_all, max_ptps_all, x_all, z_all_reg, scales, log_c=5):
 
     return spt_after_split
 
+
+def relabel_by_depth(spt, z_abs):
+    # re-label each cluster by z-depth
+    cluster_centers = np.zeros(spt[:, 1].max()+1)
+    for k in range(spt[:, 1].max()+1):
+      cluster_centers[k] = np.median(z_abs[spt[:, 1]==k])
+    indices_depth = np.argsort(-cluster_centers)
+    cmp=0
+    for unit in indices_depth:
+        spt[spt[:, 1]==unit, 1] = cmp
+        cmp+=1 
+    return spt
+
 def run_full_clustering(t_start, t_end, cluster_output_directory, raw_data_bin, geom, spike_index, 
                         localizations, maxptps, displacement_rigid, len_chunks=300, threshold_ptp=3,
                         fs=30000, triage_quantile_cluster=100, frame_dedup_cluster=20, log_c=5, scales=(1, 1, 50)):
@@ -269,10 +283,13 @@ def run_full_clustering(t_start, t_end, cluster_output_directory, raw_data_bin, 
     print("Split")
     spt = pre_deconv_split(spt, max_ptps, x, z_abs - displacement_rigid[spt[:, 0]//30000], scales=scales, log_c=log_c)
     
+    print("Relabel by Depth")
+    spt = relabel_by_depth(spt, z_abs)
+    
     figname = Path(cluster_output_directory) / "final_clustering_scatter_plot.png"
     fig, axes = cluster_viz.array_scatter(
         spt[:, 1], geom, x, z_abs - displacement_rigid[spt[:, 0]//30000], max_ptps,
         zlim=(-45, 325), do_ellipse=True
     )
-    plt.savefig()
+    plt.savefig(figname)
     return spt, max_ptps, x, z_abs
