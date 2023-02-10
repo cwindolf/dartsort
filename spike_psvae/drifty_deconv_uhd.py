@@ -600,7 +600,6 @@ def extract_superres_shifted_deconv(
     output_directory=None,
     extract_radius_um=100,
     n_sec_train_feats=10, #HAVE TPCA READY BEFORE / subtraction h5
-    max_distance=50,
     # what to save / do?
     localize=True,
     loc_radius=100,
