@@ -853,9 +853,9 @@ def update_spike_train_with_deconv_res(start_sec, end_sec, spt_before, spt_after
                                       localizations_before, localizations_after, dist_metric_before, dist_metric_after, 
                                       maxptps_before, maxptps_after, pfs=30000):
 
-"""
-Keep clustering results if no spikes deconvolved in start_sec end sec
-"""
+    """
+    Keep clustering results if no spikes deconvolved in start_sec end sec
+    """
     
     idx_units_to_add = np.flatnonzero(np.logical_and(spt_all[:, 0]>=start_sec*pfs, spt_all[:, 0]<end_sec*pfs))
     units_to_add = np.setdiff1d(np.unique(spt_all[idx_units_to_add, 1]), np.unique(spike_train_desampled_start_end[:, 1]))
