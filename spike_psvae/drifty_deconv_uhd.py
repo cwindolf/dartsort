@@ -727,7 +727,6 @@ def full_deconv_with_update(
     subtraction_h5=None,
     n_sec_temp_update=None, #length of chunks for template update 
     bin_size_um=1,
-    deconv_dir=None,
     pfs=30_000,
     t_start=0,
     t_end=None,
