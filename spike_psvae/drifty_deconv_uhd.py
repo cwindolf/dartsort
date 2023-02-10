@@ -717,7 +717,6 @@ def full_deconv_with_update(
     extract_dir,
     raw_bin,
     geom,
-    z_abs,
     p,
     spike_train,
     maxptps,
@@ -763,7 +762,7 @@ def full_deconv_with_update(
         deconv_chunk_res = superres_deconv_chunk(
             raw_bin,
             geom,
-            z_abs,
+            localizations[:, 2],
             p,
             spike_train,
             deconv_dir,
