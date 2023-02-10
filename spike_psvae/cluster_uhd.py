@@ -6,7 +6,7 @@ from spike_psvae.isocut5 import isocut5 as isocut
 from pathlib import Path
 
 
-def cluster_5_min(cluster_output_directory, geom, T_START, T_END, maxptps, x, z, spike_index, displacement_rigid, 
+def cluster_5_min(cluster_output_directory, raw_data_bin, geom, T_START, T_END, maxptps, x, z, spike_index, displacement_rigid, 
                   threshold_ptp=3, fs=30000, triage_quantile_cluster=100,
                   frame_dedup_cluster=20, log_c=5, scales=(1, 1, 50)):
 
@@ -249,7 +249,7 @@ def pre_deconv_split(spt_all, max_ptps_all, x_all, z_all_reg, scales, log_c=5):
 
     return spt_after_split
 
-def run_full_clustering(t_start, t_end, cluster_output_directory, geom, spike_index, 
+def run_full_clustering(t_start, t_end, cluster_output_directory, raw_data_bin, geom, spike_index, 
                         localizations, maxptps, displacement_rigid, len_chunks=300, threshold_ptp=3,
                         fs=30000, triage_quantile_cluster=100, frame_dedup_cluster=20, log_c=5, scales=(1, 1, 50)):
 
@@ -257,7 +257,7 @@ def run_full_clustering(t_start, t_end, cluster_output_directory, geom, spike_in
 
     for T_START in np.arange(t_start, t_end, len_chunks):
         T_END = T_START+300
-        cluster_5_min(cluster_output_directory, geom, T_START, T_END, maxptps, 
+        cluster_5_min(cluster_output_directory, raw_data_bin, geom, T_START, T_END, maxptps, 
                       localizations[:, 0], localizations[:, 2], spike_index, displacement_rigid, 
                       threshold_ptp=threshold_ptp, fs=fs, triage_quantile_cluster=triage_quantile_cluster,
                       frame_dedup_cluster=frame_dedup_cluster, log_c=log_c, scales=scales)
@@ -267,6 +267,3 @@ def run_full_clustering(t_start, t_end, cluster_output_directory, geom, spike_in
     spt = ensemble_hdbscan_clustering(t_start, t_end, len_chunks, displacement_rigid, spt, max_ptps, x, z_abs, scales, log_c)
 
     return spt, max_ptps, x, z_abs
-
-
-
