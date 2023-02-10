@@ -1,4 +1,4 @@
-from . import cluster_utils, spike_train_utils
+from . import cluster_utils, spike_train_utils, cluster_viz
 import numpy as np
 import hdbscan
 from sklearn.decomposition import PCA
@@ -265,5 +265,8 @@ def run_full_clustering(t_start, t_end, cluster_output_directory, raw_data_bin, 
     spt, max_ptps, x, z_abs = gather_all_results_clustering(cluster_output_directory, t_start, t_end, len_chunks)
 
     spt = ensemble_hdbscan_clustering(t_start, t_end, len_chunks, displacement_rigid, spt, max_ptps, x, z_abs, scales, log_c)
-
+    fig, axes = cluster_viz.array_scatter(
+        spt[:, 1], geom, x, z_abs - displacement_rigid[spt[:, 0]//30000], max_ptps,
+        zlim=(-45, 325), do_ellipse=True
+    )
     return spt, max_ptps, x, z_abs
