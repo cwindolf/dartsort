@@ -590,3 +590,115 @@ def superres_deconv_chunk(
         deconv_dist_metrics=deconv_dist_metrics,
         shifted_superres_templates=shifted_deconv_res["shifted_templates"],
     )
+
+
+def extract_superres_shifted_deconv(
+    superres_deconv_result,
+    overwrite=True,
+    pbar=True,
+    nn_denoise=True,
+    output_directory=None,
+    extract_radius_um=100,
+    n_sec_train_feats=10, #HAVE TPCA READY BEFORE / subtraction h5
+    max_distance=50,
+    # what to save / do?
+    localize=True,
+    loc_radius=100,
+    # usual suspects
+    sampling_rate=30000,
+    n_sec_chunk=1,
+    device=None,
+    geom=None,
+    subtraction_h5=None,
+    n_jobs=-1,
+):
+    """
+    This is a wrapper that helps us deal with the bookkeeping for proposed
+    pairs and reassignment with the shifting and the superres and the
+    upsampling and all that...
+    """
+
+    # infer what upsampled shifted superres units can be pairs
+    shifted_upsampled_idx_to_shift_id = superres_deconv_result[
+        "shifted_upsampled_idx_to_shift_id"
+    ]
+    shifted_upsampled_idx_to_superres_id = superres_deconv_result[
+        "shifted_upsampled_idx_to_superres_id"
+    ]
+    shifted_upsampled_idx_to_orig_id = superres_deconv_result[
+        "shifted_upsampled_idx_to_orig_id"
+    ]
+    print(f"{shifted_upsampled_idx_to_superres_id.shape=}")
+    # print(",".join(map(str, shifted_upsampled_idx_to_superres_id)))
+
+    if output_directory is None:
+        output_directory = superres_deconv_result["deconv_dir"]
+
+    ret = extract_deconv(
+        superres_deconv_result["all_shifted_upsampled_temps"],
+        superres_deconv_result[
+            "superres_deconv_spike_train_shifted_upsampled"
+        ],
+        output_directory,
+        superres_deconv_result["raw_bin"],
+        scalings=superres_deconv_result["deconv_scalings"],
+        geom=geom,
+        extract_radius_um=extract_radius_um,
+        subtraction_h5=subtraction_h5,
+        save_residual=False,
+        save_cleaned_waveforms=False,
+        save_denoised_waveforms=False,
+        save_cleaned_tpca_projs=False,
+        save_denoised_tpca_projs=False,
+        tpca_rank=8,
+        tpca_weighted=False,
+        save_outlier_scores=False,
+        do_reassignment=False,
+        save_reassignment_residuals=False,
+        do_reassignment_tpca=False,
+        reassignment_proposed_pairs_up=False,
+        reassignment_tpca_rank=False,
+        reassignment_norm_p=False,
+        reassignment_tpca_spatial_radius=False,
+        reassignment_tpca_n_wfs=False,
+        localize=localize,
+        loc_radius=loc_radius,
+        n_sec_train_feats=n_sec_train_feats,
+        n_jobs=n_jobs,
+        n_sec_chunk=n_sec_chunk,
+        sampling_rate=sampling_rate,
+        device=device,
+        trough_offset=superres_deconv_result["trough_offset"],
+        overwrite=overwrite,
+        pbar=pbar,
+        nn_denoise=nn_denoise,
+        seed=0,
+    )
+    if save_residual:
+        extract_h5, residual = ret
+    else:
+        extract_h5 = ret
+
+    with h5py.File(extract_h5, "r+") as h5:
+        # map the reassigned spike train from "shifted superres" label space
+        # to both superres and the original label space, and store for user
+
+        # store everything also for the user
+        for key in (
+            "deconv_spike_train",
+            "superres_deconv_spike_train",
+            "superres_deconv_spike_train_shifted_upsampled",
+            "superres_templates",
+            "superres_label_to_orig_label",
+            "superres_label_to_bin_id",
+            "all_shifted_upsampled_temps",
+            "shifted_upsampled_idx_to_superres_id",
+            "shifted_upsampled_idx_to_orig_id",
+            "shifted_upsampled_idx_to_shift_id",
+            "bin_size_um",
+            "deconv_dist_metrics",
+        ):
+            h5.create_dataset(key, data=superres_deconv_result[key])
+
+    return extract_h5, extra
+
