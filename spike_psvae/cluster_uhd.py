@@ -230,7 +230,7 @@ def ensemble_hdbscan_clustering(t_start, t_end, K_LEN, displacement_rigid, spt_a
         
     return spt_all
 
-def pre_deconv_split(spt_all, max_ptps_all, x_all, z_all_reg, scales, log_c=5)
+def pre_deconv_split(spt_all, max_ptps_all, x_all, z_all_reg, scales, log_c=5):
 
     # Try diptest split 
     pca_features = PCA(1)
