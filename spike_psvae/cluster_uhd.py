@@ -293,4 +293,5 @@ def run_full_clustering(t_start, t_end, cluster_output_directory, raw_data_bin, 
         zlim=(-45, 325), do_ellipse=True
     )
     plt.savefig(figname)
+    plt.close()
     return spt, max_ptps, x, z_abs
