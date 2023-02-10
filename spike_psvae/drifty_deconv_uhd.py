@@ -294,7 +294,7 @@ def shift_deconv(
                 geom,
                 shift,
                 registered_medians,
-                medians_at_computation)
+                medians_at_computation)[0]
             for shift in unique_shifts
         ]
     )
