@@ -712,7 +712,6 @@ def extract_superres_shifted_deconv(
 
 
 
-# Loop over time chunks to do deconv and update spike train 
 
 def full_deconv_with_update(
     deconv_dir,
@@ -728,8 +727,6 @@ def full_deconv_with_update(
     T_END,
     subtraction_h5=None,
     n_sec_temp_update=None, #length of chunks for template update 
-    registered_medians=None, #registered_median
-    units_spread=None, #registered_spread
     bin_size_um=1,
     deconv_dir=None,
     pfs=30_000,
@@ -756,6 +753,8 @@ def full_deconv_with_update(
 ):
 
     Path(extract_dir).mkdir(exist_ok=True)
+
+    registered_medians, units_spread = get_registered_pos(spike_train, localizations[:, 2], p)
 
     if deconv_th_for_temp_computation is not None:
         dist_metric = deconv_th_for_temp_computation*2*np.ones(len(spike_train))
@@ -832,7 +831,7 @@ def full_deconv_with_update(
                                                             spike_train, spt_chunk,
                                                             localizations, localizations_chunk,
                                                             dist_metric, dist_metric_chunk,
-                                                            maxptps, maxptps_chunk)
+                                                            maxptps, maxptps_chunk, pfs)
 
 
     # SAVE FULL RESULT 
@@ -852,16 +851,16 @@ def full_deconv_with_update(
 
 def update_spike_train_with_deconv_res(start_sec, end_sec, spt_before, spt_after,
                                       localizations_before, localizations_after, dist_metric_before, dist_metric_after, 
-                                      maxptps_before, maxptps_after):
+                                      maxptps_before, maxptps_after, pfs=30000):
 
 """
 Keep clustering results if no spikes deconvolved in start_sec end sec
 """
     
-    idx_units_to_add = np.flatnonzero(np.logical_and(spt_all[:, 0]>=start_sec*30000, spt_all[:, 0]<end_sec*30000))
+    idx_units_to_add = np.flatnonzero(np.logical_and(spt_all[:, 0]>=start_sec*pfs, spt_all[:, 0]<end_sec*pfs))
     units_to_add = np.setdiff1d(np.unique(spt_all[idx_units_to_add, 1]), np.unique(spike_train_desampled_start_end[:, 1]))
     
-    idx_before = np.flatnonzero(np.logical_or(spt_before[:, 0]<start_sec*30000, spt_before[:, 0]>=end_sec*30000))
+    idx_before = np.flatnonzero(np.logical_or(spt_before[:, 0]<start_sec*pfs, spt_before[:, 0]>=end_sec*pfs))
     spt_after = np.concatenate((spt_before[idx_before], spt_after))
     localizations_after = np.concatenate((localizations_before[idx_before], localizations_after))
     dist_metric_after = np.concatenate((dist_metric_before[idx_before], dist_metric_after))
@@ -882,4 +881,15 @@ Keep clustering results if no spikes deconvolved in start_sec end sec
 
     return spt_after.astype('int'), z_after, dist_metric_after, maxptps_after
 
+
+
+def get_registered_pos(spt, z, displacement_rigid):
+    z_reg = z-displacement_rigid[spt[:, 0]//pfs]
+    registered_median = np.zeros(spt[:, 1].max()+1)
+    registered_spread = np.zeros(spt[:, 1].max()+1)
+    for k in np.unique(spt[:, 1]):
+        registered_median[k] = np.median(z_reg[spt[:, 1]==k])
+        registered_spread[k] = np.std(z_reg[spt[:, 1]==k])*1.65
+
+    return registered_median, registered_spread
 
