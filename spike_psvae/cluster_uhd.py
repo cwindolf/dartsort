@@ -25,7 +25,6 @@ def cluster_5_min(cluster_output_directory, raw_data_bin, geom, T_START, T_END, 
     maxptps_cluster = maxptps[idx_cluster]
     spike_index_cluster = spike_index[idx_cluster]
 
-    print("Initial clustering...")
     (
         clusterer,
         cluster_centers,
@@ -47,7 +46,6 @@ def cluster_5_min(cluster_output_directory, raw_data_bin, geom, T_START, T_END, 
         scales=scales
     )
 
-    print("Self-duplicates...")
     kept_ix, removed_ix = cluster_utils.remove_self_duplicates(
         tspike_index[:, 0],
         clusterer.labels_,
@@ -254,7 +252,8 @@ def run_full_clustering(t_start, t_end, cluster_output_directory, raw_data_bin, 
                         fs=30000, triage_quantile_cluster=100, frame_dedup_cluster=20, log_c=5, scales=(1, 1, 50)):
 
     Path(cluster_output_directory).mkdir(exist_ok=True)
-
+    
+    print("Initial clustering")
     for T_START in np.arange(t_start, t_end, len_chunks):
         T_END = T_START+300
         cluster_5_min(cluster_output_directory, raw_data_bin, geom, T_START, T_END, maxptps, 
@@ -262,9 +261,11 @@ def run_full_clustering(t_start, t_end, cluster_output_directory, raw_data_bin, 
                       threshold_ptp=threshold_ptp, fs=fs, triage_quantile_cluster=triage_quantile_cluster,
                       frame_dedup_cluster=frame_dedup_cluster, log_c=log_c, scales=scales)
 
+    print("Ensembling")
     spt, max_ptps, x, z_abs = gather_all_results_clustering(cluster_output_directory, t_start, t_end, len_chunks)
-
     spt = ensemble_hdbscan_clustering(t_start, t_end, len_chunks, displacement_rigid, spt, max_ptps, x, z_abs, scales, log_c)
+
+    print("Split")
     spt = pre_deconv_split(spt, max_ptps, x, z_abs - displacement_rigid[spt[:, 0]//30000], scales=scales, log_c=log_c)
     
     figname = Path(cluster_output_directory) / "final_clustering_scatter_plot.png"
