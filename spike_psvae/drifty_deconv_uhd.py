@@ -804,7 +804,7 @@ def full_deconv_with_update(
             n_jobs=n_jobs,
         )
 
-        with h5py.File(extracted_deconv, "r+") as h5:
+        with h5py.File(extract_deconv_chunk, "r+") as h5:
             spt_chunk = h5["deconv_spike_train"][:]
             maxptps_chunk = h5["maxptps"][:]
             localizations_chunk = h5["localizations"][:]
