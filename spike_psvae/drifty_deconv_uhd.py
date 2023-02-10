@@ -425,7 +425,7 @@ def shift_deconv(
             st_up[:, 0] >= deconv_spike_train_shifted_upsampled[-2][:, 0].max()
         ).all()
         pitchy = (
-            bin_shifts[((st_up[:, 0] - trough_offset) // pfs).astype(int)] == unique_shifts[which_shiftix]
+            bin_shifts[((st_up[:, 0] - trough_offset) // pfs - t_start).astype(int)] == unique_shifts[which_shiftix]
         ).all()
         # print(f"{bid=} {shift_good=} {tsorted=} {bigger=} {pitchy=}")
         assert shift_good
@@ -433,9 +433,9 @@ def shift_deconv(
         assert bigger
         if not pitchy:
             raise ValueError(
-                f"{bid=} Not pitchy {np.unique(bin_shifts[((st_up[:, 0] - trough_offset) // pfs).astype(int)])=} "
-                f"{which_shiftix=} {unique_shifts[which_shiftix]=} {np.unique((st_up[:, 0] - trough_offset) // pfs)=} "
-                f"{bin_shifts[np.unique((st_up[:, 0] - trough_offset) // pfs)]=}"
+                f"{bid=} Not pitchy {np.unique(bin_shifts[((st_up[:, 0] - trough_offset) // pfs - t_start).astype(int)])=} "
+                f"{which_shiftix=} {unique_shifts[which_shiftix]=} {np.unique((st_up[:, 0] - trough_offset) // pfs - t_start)=} "
+                f"{bin_shifts[np.unique((st_up[:, 0] - trough_offset) // pfs - t_start)]=}"
             )
 
     deconv_spike_train = np.concatenate(deconv_spike_train, axis=0)
