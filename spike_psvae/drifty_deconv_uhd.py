@@ -749,7 +749,7 @@ def full_deconv_with_update(
 
     Path(extract_dir).mkdir(exist_ok=True)
 
-    registered_medians, units_spread = get_registered_pos(spike_train, localizations[:, 2], p)
+    registered_medians, units_spread = get_registered_pos(spike_train, localizations[:, 2], p, pfs)
 
     if deconv_th_for_temp_computation is not None:
         dist_metric = deconv_th_for_temp_computation*2*np.ones(len(spike_train))
@@ -877,7 +877,7 @@ def update_spike_train_with_deconv_res(start_sec, end_sec, spt_before, spt_after
 
 
 
-def get_registered_pos(spt, z, displacement_rigid):
+def get_registered_pos(spt, z, displacement_rigid, pfs=30000):
     z_reg = z-displacement_rigid[spt[:, 0]//pfs]
     registered_median = np.zeros(spt[:, 1].max()+1)
     registered_spread = np.zeros(spt[:, 1].max()+1)
