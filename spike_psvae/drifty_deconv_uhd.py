@@ -700,5 +700,5 @@ def extract_superres_shifted_deconv(
         ):
             h5.create_dataset(key, data=superres_deconv_result[key])
 
-    return extract_h5, extra
+    return extract_h5
 
