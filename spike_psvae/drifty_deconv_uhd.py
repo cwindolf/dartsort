@@ -720,7 +720,8 @@ def full_deconv_with_update(
     p,
     spike_train,
     maxptps,
-    localizations,
+    x,
+    z,
     T_START=0, 
     T_END=None,
     subtraction_h5=None,
@@ -749,7 +750,7 @@ def full_deconv_with_update(
 
     Path(extract_dir).mkdir(exist_ok=True)
 
-    registered_medians, units_spread = get_registered_pos(spike_train, localizations[:, 2], p, pfs)
+    registered_medians, units_spread = get_registered_pos(spike_train, z, p, pfs)
 
     if deconv_th_for_temp_computation is not None:
         dist_metric = deconv_th_for_temp_computation*2*np.ones(len(spike_train))
@@ -760,7 +761,7 @@ def full_deconv_with_update(
         deconv_chunk_res = superres_deconv_chunk(
             raw_bin,
             geom,
-            localizations[:, 2],
+            z,
             p,
             spike_train,
             deconv_dir,
@@ -821,9 +822,9 @@ def full_deconv_with_update(
             np.save(fname_dist_metric, dist_metric_chunk)
 
 
-        spike_train, localizations, dist_metric, maxptps = update_spike_train_with_deconv_res(start_sec, end_sec, 
+        spike_train, x, z, dist_metric, maxptps = update_spike_train_with_deconv_res(start_sec, end_sec, 
                                                             spike_train, spt_chunk,
-                                                            localizations, localizations_chunk,
+                                                            x, z, localizations_chunk,
                                                             dist_metric, dist_metric_chunk,
                                                             maxptps, maxptps_chunk, pfs)
 
@@ -831,12 +832,14 @@ def full_deconv_with_update(
     # SAVE FULL RESULT 
     fname_ptps = Path(extract_dir) / "maxptps_final_deconv"
     fname_spike_train = Path(extract_dir) / "spike_train_final_deconv"
-    fname_localizations = Path(extract_dir) / "localizations_final_deconv"
+    fname_x = Path(extract_dir) / "x_final_deconv"
+    fname_z = Path(extract_dir) / "z_final_deconv"
     fname_dist_metric = Path(extract_dir) / "dist_metric_final_deconv"
 
     np.save(fname_ptps, maxptps)
     np.save(fname_spike_train, spike_train)
-    np.save(fname_localizations, localizations)
+    np.save(fname_x, x)
+    np.save(fname_z, z)
     np.save(fname_dist_metric, dist_metric_chunk)
 
 
@@ -844,36 +847,42 @@ def full_deconv_with_update(
 
 
 def update_spike_train_with_deconv_res(start_sec, end_sec, spt_before, spt_after,
-                                      localizations_before, localizations_after, dist_metric_before, dist_metric_after, 
+                                      x_before, z_before, localizations_after, dist_metric_before, dist_metric_after, 
                                       maxptps_before, maxptps_after, pfs=30000):
 
     """
     Keep clustering results if no spikes deconvolved in start_sec end sec
     """
+
+    x_after = localizations_after[:, 0]
+    z_after = localizations_after[:, 2]
     
     idx_units_to_add = np.flatnonzero(np.logical_and(spt_all[:, 0]>=start_sec*pfs, spt_all[:, 0]<end_sec*pfs))
     units_to_add = np.setdiff1d(np.unique(spt_all[idx_units_to_add, 1]), np.unique(spike_train_desampled_start_end[:, 1]))
     
     idx_before = np.flatnonzero(np.logical_or(spt_before[:, 0]<start_sec*pfs, spt_before[:, 0]>=end_sec*pfs))
     spt_after = np.concatenate((spt_before[idx_before], spt_after))
-    localizations_after = np.concatenate((localizations_before[idx_before], localizations_after))
+    x_after = np.concatenate((x_before[idx_before], x_after))
+    z_after = np.concatenate((z_before[idx_before], z_after))
     dist_metric_after = np.concatenate((dist_metric_before[idx_before], dist_metric_after))
     maxptps_after = np.concatenate((maxptps_before[idx_before], maxptps_after))
     
     for unit in units_to_add:
         idx_unit = idx_units_to_add[spt_all[idx_units_to_add, 1]==unit]
         spt_after = np.concatenate((spt_before[idx_unit], spt_after))
-        localizations_after = np.concatenate((localizations_before[idx_unit], localizations_after))
+        x_after = np.concatenate((x_before[idx_unit], x_after))
+        z_after = np.concatenate((z_before[idx_unit], z_after))
         dist_metric_after = np.concatenate((dist_metric_before[idx_unit], dist_metric_after))
         maxptps_after = np.concatenate((maxptps_before[idx_unit], maxptps_after))
     
     idx_sort_by_time = spt_after[:, 0].argsort()
-    localizations_after = localizations_after[idx_sort_by_time]
+    x_after = x_after[idx_sort_by_time]
+    z_after = z_after[idx_sort_by_time]
     dist_metric_after = dist_metric_after[idx_sort_by_time]
     maxptps_after = maxptps_after[idx_sort_by_time]
     spt_after = spt_after[idx_sort_by_time]
 
-    return spt_after.astype('int'), z_after, dist_metric_after, maxptps_after
+    return spt_after.astype('int'), x_after, z_after, dist_metric_after, maxptps_after
 
 
 
