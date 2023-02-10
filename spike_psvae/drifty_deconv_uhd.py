@@ -471,7 +471,6 @@ def superres_deconv_chunk(
     units_spread=None, #registered_spread
     dist_metric=None,
     bin_size_um=1,
-    deconv_dir=None,
     pfs=30_000,
     t_start=0,
     t_end=None,
@@ -773,7 +772,6 @@ def full_deconv_with_update(
             units_spread=units_spread, #registered_spread
             dist_metric=dist_metric,
             bin_size_um=bin_size_um,
-            deconv_dir=deconv_dir,
             pfs=pfs,
             t_start=start_sec,
             t_end=end_sec,
