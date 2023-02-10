@@ -673,10 +673,7 @@ def extract_superres_shifted_deconv(
         nn_denoise=nn_denoise,
         seed=0,
     )
-    if save_residual:
-        extract_h5, residual = ret
-    else:
-        extract_h5 = ret
+    extract_h5 = ret
 
     with h5py.File(extract_h5, "r+") as h5:
         # map the reassigned spike train from "shifted superres" label space
