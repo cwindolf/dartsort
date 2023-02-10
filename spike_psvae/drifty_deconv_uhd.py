@@ -857,8 +857,8 @@ def update_spike_train_with_deconv_res(start_sec, end_sec, spt_before, spt_after
     x_after = localizations_after[:, 0]
     z_after = localizations_after[:, 2]
     
-    idx_units_to_add = np.flatnonzero(np.logical_and(spt_all[:, 0]>=start_sec*pfs, spt_all[:, 0]<end_sec*pfs))
-    units_to_add = np.setdiff1d(np.unique(spt_all[idx_units_to_add, 1]), np.unique(spike_train_desampled_start_end[:, 1]))
+    idx_units_to_add = np.flatnonzero(np.logical_and(spt_before[:, 0]>=start_sec*pfs, spt_before[:, 0]<end_sec*pfs))
+    units_to_add = np.setdiff1d(np.unique(spt_before[idx_units_to_add, 1]), np.unique(spt_after[:, 1]))
     
     idx_before = np.flatnonzero(np.logical_or(spt_before[:, 0]<start_sec*pfs, spt_before[:, 0]>=end_sec*pfs))
     spt_after = np.concatenate((spt_before[idx_before], spt_after))
