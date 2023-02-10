@@ -252,15 +252,16 @@ def pre_deconv_split(spt_all, max_ptps_all, x_all, z_all_reg, scales, log_c=5):
 
 def relabel_by_depth(spt, z_abs):
     # re-label each cluster by z-depth
+    spt_ordered = spt.copy()
     cluster_centers = np.zeros(spt[:, 1].max()+1)
     for k in range(spt[:, 1].max()+1):
       cluster_centers[k] = np.median(z_abs[spt[:, 1]==k])
     indices_depth = np.argsort(-cluster_centers)
     cmp=0
     for unit in indices_depth:
-        spt[spt[:, 1]==unit, 1] = cmp
+        spt_ordered[spt[:, 1]==unit, 1] = cmp
         cmp+=1 
-    return spt
+    return spt_ordered
 
 def run_full_clustering(t_start, t_end, cluster_output_directory, raw_data_bin, geom, spike_index, 
                         localizations, maxptps, displacement_rigid, len_chunks=300, threshold_ptp=3,
