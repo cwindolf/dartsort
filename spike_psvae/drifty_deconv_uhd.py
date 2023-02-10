@@ -228,6 +228,9 @@ def shift_superres_templates(
                     print(shifted_templates_unit.shape)
                     print(shifted_templates_unit[-n_temp_shift:].shape)
                     print(shifted_templates_unit[idx_mod_shift].shape)
+                    print(superres_label_to_bin_id[superres_label_to_orig_label==unit].min()-np.arange(-bins_shift_rem)+pitch)
+                    print(superres_label_to_bin_id[superres_label_to_orig_label==unit])
+
                     shifted_templates_unit[-n_temp_shift:] = pitch_shift_templates(
                         -1, geom, shifted_templates_unit[idx_mod_shift], fill_value=fill_value
                     ) 
