@@ -253,7 +253,7 @@ def shift_superres_templates(
                         superres_label_to_bin_id[superres_label_to_orig_label==unit] = np.roll(superres_label_to_bin_id[superres_label_to_orig_label==unit], n_temp_shift)
             shifted_templates[superres_label_to_orig_label==unit]=shifted_templates_unit
 
-    return shifted_templates, superres_label_to_bin_id
+    return shifted_templates #, superres_label_to_bin_id
 
 
 def shift_deconv(
