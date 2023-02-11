@@ -2,7 +2,6 @@ import os
 from pathlib import Path
 import numpy as np
 import h5py
-from tqdm.auto import tqdm, trange
 import scipy.io
 import time
 import torch
@@ -127,6 +126,7 @@ geom = np.load(geom_path)
 
 
 if preprocessing:
+    print("Preprocessing...")
     preprocessing_dir = Path(output_all) / "preprocessing"
     Path(preprocessing_dir).mkdir(exist_ok=True)
     filter_standardize.filter_standardize_rec(preprocessing_dir,raw_data_name, dtype_raw,
@@ -142,6 +142,7 @@ if preprocessing:
 
 # Subtraction 
 if detect_localize:
+    print("Detection...")
     detect_dir = Path(output_all) / "initial_detect_localize"
     Path(detect_dir).mkdir(exist_ok=True)
 
@@ -240,6 +241,7 @@ if detect_localize:
 
     # Clustering 
     if clustering:
+        print("Clustering...")
         cluster_dir = Path(output_all) / "initial_clustering"
         Path(cluster_dir).mkdir(exist_ok=True)
         if t_end_clustering is None:
@@ -251,6 +253,7 @@ if detect_localize:
 
 
     if deconvolve:
+        print("Deconvolution...")
         deconv_dir_all = Path(output_all) / "deconvolution"
         Path(deconv_dir_all).mkdir(exist_ok=True)
         deconv_dir = Path(deconv_dir_all) / "deconv_results"
@@ -269,7 +272,7 @@ if detect_localize:
                    bin_size_um=bin_size_um,
                    pfs=sampling_rate,
                    n_jobs=n_jobs_deconv,
-                   trough_offset=trough_offset
+                   trough_offset=trough_offset,
                    spike_length_samples=spike_length_samples,
                    max_upsample=max_upsample,
                    refractory_period_frames=refractory_period_frames,
