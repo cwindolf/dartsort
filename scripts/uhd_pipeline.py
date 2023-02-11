@@ -46,13 +46,15 @@ low_frequency=300
 high_factor=0.1
 order=3
 median_subtraction=False # Possible to also do median subtraction - I don't think it is necessary 
+t_start_preproc=0
+t_end_preproc=None
 
 
 # Initial Detection - Localization parameters 
 detect_localize = True
 overwrite_detect=True
 t_start_detect = 0 #This is to run detection on full data, and then sort only a "good" portion (no artefacts)
-t_end_detect = None
+t_end_detect = None #These params correspond to recording AFTER preprocessing
 nn_denoise=True
 # I recommend not saving wfs / residuals for memory issue 
 save_residual = False
@@ -127,7 +129,8 @@ if preprocessing:
     preprocessing_dir = Path(output_all) / "preprocessing"
     Path(preprocessing_dir).mkdir(exist_ok=True)
     filter_standardize.filter_standardize_rec(preprocessing_dir,raw_data_name, dtype_raw,
-        rec_len_sec, n_channels = 385, channels_to_remove=384,
+        rec_len_sec, n_channels = 385, channels_to_remove=384, 
+        t_start=t_start_preproc, t_end=t_end_preproc,
         apply_filter=apply_filter, low_frequency=low_frequency, 
         high_factor=high_factor, order=order, sampling_frequency=sampling_rate,
         median_subtraction=median_subtraction)
