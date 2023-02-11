@@ -78,7 +78,7 @@ n_sec_chunk_detect = 1
 nsync = 0
 n_jobs_detect = 1 # check that this is good with your machine
 n_loc_workers = 4
-localization_kind = "log_barrier"
+localization_kind = "logbarrier"
 localize_radius = 100
 
 # Registration parameters 
