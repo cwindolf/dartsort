@@ -45,7 +45,8 @@ channels_to_remove=384 #Typically the reference channel - IMPORTANT: make sure i
 low_frequency=300
 high_factor=0.1
 order=3
-median_subtraction=False # Possible to also do median subtraction - I don't think it is necessary 
+median_subtraction=True,
+adcshift_correction=True,
 t_start_preproc=0
 t_end_preproc=None
 
@@ -133,7 +134,7 @@ if preprocessing:
         t_start=t_start_preproc, t_end=t_end_preproc,
         apply_filter=apply_filter, low_frequency=low_frequency, 
         high_factor=high_factor, order=order, sampling_frequency=sampling_rate,
-        median_subtraction=median_subtraction)
+        median_subtraction=median_subtraction, adcshift_correction=adcshift_correction)
 
     # Update data name and type if preprocesssed
     raw_data_name = Path(preprocessing_dir) / "standardized.bin"
