@@ -265,7 +265,7 @@ def relabel_by_depth(spt, z_abs):
 
 def run_full_clustering(t_start, t_end, cluster_output_directory, raw_data_bin, geom, spike_index, 
                         localizations, maxptps, displacement_rigid, len_chunks=300, threshold_ptp=3,
-                        fs=30000, triage_quantile_cluster=100, frame_dedup_cluster=20, log_c=5, scales=(1, 1, 50)):
+                        fs=30000, triage_quantile_cluster=100, frame_dedup_cluster=20, log_c=5, scales=(1, 1, 50), savefigs=True):
 
     Path(cluster_output_directory).mkdir(exist_ok=True)
     
@@ -287,11 +287,12 @@ def run_full_clustering(t_start, t_end, cluster_output_directory, raw_data_bin, 
     print("Relabel by Depth")
     spt = relabel_by_depth(spt, z_abs)
     
-    figname = Path(cluster_output_directory) / "final_clustering_scatter_plot.png"
-    fig, axes = cluster_viz.array_scatter(
-        spt[:, 1], geom, x, z_abs - displacement_rigid[spt[:, 0]//30000], max_ptps,
-        zlim=(-45, 325), do_ellipse=True
-    )
-    plt.savefig(figname)
-    plt.close()
+    if savefigs:
+      figname = Path(cluster_output_directory) / "final_clustering_scatter_plot.png"
+      fig, axes = cluster_viz.array_scatter(
+          spt[:, 1], geom, x, z_abs - displacement_rigid[spt[:, 0]//30000], max_ptps,
+          zlim=(-45, 325), do_ellipse=True
+      )
+      plt.savefig(figname)
+      plt.close()
     return spt, max_ptps, x, z_abs
