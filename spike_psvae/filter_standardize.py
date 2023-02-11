@@ -75,7 +75,7 @@ def filter_standardize_rec(output_directory, filename_raw, dtype_raw,
     apply_filter = True,
     low_frequency =300, high_factor = 0.1, order = 3, sampling_frequency= 30000, 
     channels_to_remove=None,
-    buffer = None,
+    buffer = None, t_start=0, t_end=None,
     n_sec_chunk=1, multi_processing = True, n_processors = 6, overwrite = True,
     adcshift_correction=False,median_subtraction=False):
     """Preprocess pipeline: filtering, standarization and whitening filter
@@ -135,8 +135,13 @@ def filter_standardize_rec(output_directory, filename_raw, dtype_raw,
     filtered_location = os.path.join(output_directory, "filtered_files")
     if not os.path.exists(filtered_location):
         os.makedirs(filtered_location)
-
-    n_batches = rec_len_sec//n_sec_chunk
+    
+    if t_end is not None:
+        n_batches = (t_end-t_start)//n_sec_chunk
+        all_batches = np.arange(t_start, t_end, n_sec_chunk)
+    else:
+        n_batches = rec_len_sec//n_sec_chunk
+        all_batches = np.arange(n_batches)
 
     # define a size of buffer if not defined
     if buffer is None:
@@ -147,7 +152,7 @@ def filter_standardize_rec(output_directory, filename_raw, dtype_raw,
     if multi_processing:
         parmap.map(
             filter_standardize_batch,
-            [i for i in range(n_batches)],
+            [i for i in all_batches],
             filename_raw, 
             fname_mean_sd,
             apply_filter,
@@ -167,7 +172,7 @@ def filter_standardize_rec(output_directory, filename_raw, dtype_raw,
             processes=n_processors,
             pm_pbar=True)
     else:
-        for batch_id in range(n_batches):
+        for batch_id in all_batches:
             filter_standardize_batch(
                 batch_id, filename_raw, 
                 fname_mean_sd,
