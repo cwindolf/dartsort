@@ -868,7 +868,7 @@ def update_spike_train_with_deconv_res(start_sec, end_sec, spt_before, spt_after
     maxptps_after = np.concatenate((maxptps_before[idx_before], maxptps_after))
     
     for unit in units_to_add:
-        idx_unit = idx_units_to_add[spt_all[idx_units_to_add, 1]==unit]
+        idx_unit = idx_units_to_add[spt_before[idx_units_to_add, 1]==unit]
         spt_after = np.concatenate((spt_before[idx_unit], spt_after))
         x_after = np.concatenate((x_before[idx_unit], x_after))
         z_after = np.concatenate((z_before[idx_unit], z_after))
