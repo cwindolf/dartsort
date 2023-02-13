@@ -27,7 +27,7 @@ dtype_raw = 'int16' #dtype of raw rec
 output_all = "data_set_name" #everything will be saved here
 geom_path = 'geom.npy'
 rec_len_sec = 3000 #length of rec in seconds
-n_channels = 385 #number of channels
+n_channels = 385 #number of channels (before preprocessing)
 sampling_rate = 30000
 savefigs = True # To save summary figs at each step 
 
@@ -37,7 +37,7 @@ if savefigs:
     import colorcet as ccet
 
 
-nogpu = False # default is to use gpu when possible - set this to True to keep everything on cpu
+nogpu = False # default is to use gpu when possible - set this to True to keep everything on cpu. Gpu speeds things up a lot. 
 trough_offset=42 #Keep these two params for good denoising
 spike_length_samples=121
 
