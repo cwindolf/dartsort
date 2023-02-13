@@ -278,6 +278,10 @@ def shift_deconv(
     deconv_threshold=500, #Important param to validate
     su_chan_vis=3, #Important param to validate
 ):
+    #multiprocessing needs to be fixed 
+    n_processors = n_jobs
+    if n_jobs ==0:
+        n_processors=1
     # discover the pitch of the probe
     # this is the unit at which the probe repeats itself.
     # so for NP1, it's not every row, but every 2 rows!
@@ -332,7 +336,7 @@ def shift_deconv(
             threshold=deconv_threshold,
             vis_su=su_chan_vis,
             conv_approx_rank=5,
-            n_processors=n_jobs,
+            n_processors=n_processors,
             multi_processing=n_jobs > 1,
             upsample=max_upsample,
             lambd=0,
