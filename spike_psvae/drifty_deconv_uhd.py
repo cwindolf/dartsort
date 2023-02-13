@@ -690,7 +690,7 @@ def extract_superres_shifted_deconv(
 
     extract_h5 = ret
 
-    with h5py.File(extract_h5, "w") as h5:
+    with h5py.File(extract_h5, "r+") as h5:
         # map the reassigned spike train from "shifted superres" label space
         # to both superres and the original label space, and store for user
 
