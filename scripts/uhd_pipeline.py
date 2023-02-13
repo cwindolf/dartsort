@@ -44,6 +44,7 @@ spike_length_samples=121
 #preprocessing parameters
 preprocessing=True
 apply_filter=True
+n_channels_before_preprocessing=385
 channels_to_remove=384 #Typically the reference channel - IMPORTANT: make sure it is not included in the geometry array 
 low_frequency=300
 high_factor=0.1
@@ -134,8 +135,10 @@ if preprocessing:
     print("Preprocessing...")
     preprocessing_dir = Path(output_all) / "preprocessing"
     Path(preprocessing_dir).mkdir(exist_ok=True)
+    if t_end_preproc is None:
+        t_end_preproc=rec_len_sec
     filter_standardize.filter_standardize_rec(preprocessing_dir,raw_data_name, dtype_raw,
-        rec_len_sec, n_channels = 385, channels_to_remove=384, 
+        rec_len_sec, n_channels = n_channels_before_preprocessing, channels_to_remove=channels_to_remove, 
         t_start=t_start_preproc, t_end=t_end_preproc,
         apply_filter=apply_filter, low_frequency=low_frequency, 
         high_factor=high_factor, order=order, sampling_frequency=sampling_rate,
@@ -305,6 +308,6 @@ if deconvolve:
         plt.figure(figsize = (10, 5))
         for k in range(spt[:, 1].max()+1):
             idx = spt[:, 1]==k
-            plt.scatter(spt[idx, 0]//30000, z[idx], c = ccolors[k], s = 1, alpha = 0.1)
+            plt.scatter(spt[idx, 0]//sampling_rate, z[idx], c = ccolors[k], s = 1, alpha = 0.1)
         plt.savefig(fname_deconv_fig)
         plt.close()
