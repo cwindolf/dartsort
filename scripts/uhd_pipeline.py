@@ -12,6 +12,10 @@ from spike_psvae import filter_standardize
 from spike_psvae.cluster_uhd import run_full_clustering
 from spike_psvae.drifty_deconv_uhd import full_deconv_with_update
 from spike_psvae import subtract, ibme
+from spike_psvae.ibme import register_nonrigid
+from spike_psvae.ibme_corr import calc_corr_decent
+from spike_psvae.ibme import fast_raster
+from spike_psvae.ibme_corr import psolvecorr
 
 """"
 Set parameters / directories name here
@@ -52,6 +56,7 @@ t_end_preproc=None
 
 # Initial Detection - Localization parameters 
 detect_localize = True
+subh5_name = None #This is in case detection has already been ran and we input the subtraction h5 file name here
 overwrite_detect=True
 t_start_detect = 0 #This is to run detection on full data, and then sort only a "good" portion (no artefacts)
 t_end_detect = None #These params correspond to recording AFTER preprocessing
@@ -62,9 +67,9 @@ save_subtracted_waveforms = False
 save_cleaned_waveforms = False
 save_denoised_waveforms = False
 save_subtracted_tpca_projs = False
-save_cleaned_tpca_projs = False
+save_cleaned_tpca_projs = True
 save_denoised_ptp_vectors = False
-thresholds_subtract = [12, 10, 8, 6, 4] #thresholds for subtraction
+thresholds_subtract = [6] #thresholds for subtraction
 peak_sign = "both"
 nn_detect=False
 denoise_detect=False
@@ -76,7 +81,7 @@ tpca_rank = 8
 n_sec_pca = 20
 n_sec_chunk_detect = 1
 nsync = 0
-n_jobs_detect = 1 # check that this is good with your machine
+n_jobs_detect = 0 # set to 0 if multiprocessing doesn't work
 n_loc_workers = 4
 localization_kind = "logbarrier"
 localize_radius = 100
@@ -105,9 +110,9 @@ scales=(1, 1, 50)
 deconvolve=True
 t_start_deconv=0
 t_end_deconv=None
-n_sec_temp_update=100,
+n_sec_temp_update=100
 bin_size_um=1
-n_jobs_deconv=1
+n_jobs_deconv=0
 max_upsample=1
 refractory_period_frames=10
 min_spikes_bin=None
@@ -181,125 +186,125 @@ if detect_localize:
         localize_radius=localize_radius,
     )
 
-
-    with h5py.File(sub_h5, "r+") as h5:
-        cleaned_tpca_group = h5["cleaned_tpca"]
-        tpca_mean = cleaned_tpca_group["tpca_mean"][:]
-        tpca_components = cleaned_tpca_group["tpca_components"][:]
-        localization_results = np.array(h5["localizations"][:]) 
-        maxptps = np.array(h5["maxptps"][:])
-        spike_index = np.array(h5["spike_index"][:])
-
-    # Load tpca
-    tpca = PCA(tpca_components.shape[0])
-    tpca.mean_ = tpca_mean
-    tpca.components_ = tpca_components
-
-    z = localization_results[:, 2]
-    x = localization_results[:, 0]
-
-    # remove spikes localized at boundaries
-    x_bound_low = geom[:, 0].min()
-    x_bound_high = geom[:, 0].max()
-    idx_remove_too_far = np.logical_and(x>x_bound_low-50, x<x_bound_high+50)
+else:
+    sub_h5=subh5_name
     
-    maxptps = maxptps[idx_remove_too_far]
-    z = z[idx_remove_too_far]
-    spike_index = spike_index[idx_remove_too_far]
-    x = x[idx_remove_too_far]
-    localization_results = localization_results[idx_remove_too_far]
+with h5py.File(sub_h5, "r+") as h5:
+    cleaned_tpca_group = h5["cleaned_tpca"]
+    tpca_mean = cleaned_tpca_group["tpca_mean"][:]
+    tpca_components = cleaned_tpca_group["tpca_components"][:]
+    localization_results = np.array(h5["localizations"][:]) 
+    maxptps = np.array(h5["maxptps"][:])
+    spike_index = np.array(h5["spike_index"][:])
+
+# Load tpca
+tpca = PCA(tpca_components.shape[0])
+tpca.mean_ = tpca_mean
+tpca.components_ = tpca_components
+
+z = localization_results[:, 2]
+x = localization_results[:, 0]
+
+# remove spikes localized at boundaries
+x_bound_low = geom[:, 0].min()
+x_bound_high = geom[:, 0].max()
+idx_remove_too_far = np.logical_and(x>x_bound_low-50, x<x_bound_high+50)
+
+maxptps = maxptps[idx_remove_too_far]
+z = z[idx_remove_too_far]
+spike_index = spike_index[idx_remove_too_far]
+x = x[idx_remove_too_far]
+localization_results = localization_results[idx_remove_too_far]
+
+# Rigid Registration
+print("Registration...")
+raster, dd, tt = fast_raster(
+        maxptps, z, spike_index[:, 0]/sampling_rate, sigma=sigma_reg, 
+    )
+D, C = calc_corr_decent(raster, disp = max_disp)
+displacement_rigid = psolvecorr(D, C, mincorr=mincorr, max_dt=max_dt, prior_lambda=prior_lambda)
+
+fname_disp = Path(detect_dir) / "displacement_rigid.npy"
+np.save(fname_disp, displacement_rigid)
+
+if savefigs:
+
+    vir = cm.get_cmap('viridis')
+    ptp_arr = maxptps.copy()
+    ptp_arr = np.log(ptp_arr)
+    ptp_arr -= ptp_arr.min()
+    ptp_arr /= ptp_arr.max()
+    color_array = vir(ptp_arr)
+    fname_detect_fig = Path(detect_dir) / "detection_displacement_raster_plot.png"
+    plt.figure(figsize = (10, 5))
+    plt.scatter(spike_index[:, 0]/sampling_rate, z, color = color_array, s = 1)
+    plt.plot(np.arange(0, displacement_rigid.shape[0]), displacement_rigid-displacement_rigid[0], color = 'red')
+    plt.plot(np.arange(0, displacement_rigid.shape[0]), displacement_rigid-displacement_rigid[0]+100, color = 'red')
+    plt.plot(np.arange(0, displacement_rigid.shape[0]), displacement_rigid-displacement_rigid[0]+200, color = 'red')
+    plt.savefig(fname_detect_fig)
+    plt.close()
 
 
-    # Rigid Registration
+# Clustering 
+if clustering:
+    print("Clustering...")
+    cluster_dir = Path(output_all) / "initial_clustering"
+    Path(cluster_dir).mkdir(exist_ok=True)
+    if t_end_clustering is None:
+        t_end_clustering=rec_len_sec
+    spt, maxptps, x, z = run_full_clustering(t_start_clustering, t_end_clustering, cluster_dir, raw_data_name, geom, spike_index,
+                                                localization_results, maxptps, displacement_rigid, len_chunks=len_chunks_cluster, threshold_ptp=threshold_ptp_cluster,
+                                                fs=sampling_rate, triage_quantile_cluster=triage_quantile_cluster, frame_dedup_cluster=frame_dedup_cluster, 
+                                                log_c=log_c, scales=scales, savefigs=savefigs)
 
-    raster, dd, tt = fast_raster(
-            maxptps, z, spike_index[:, 0]/sampling_rate, sigma=sigma_reg, 
-        )
-    D, C = calc_corr_decent(raster, disp = max_disp)
-    displacement_rigid = psolvecorr(D, C, mincorr=mincorr, max_dt=max_dt, prior_lambda=prior_lambda)
 
-    fname_disp = Path(detect_dir) / "displacement_rigid.npy"
-    np.save(fname_disp, displacement_rigid)
+if deconvolve:
+    print("Deconvolution...")
+    deconv_dir_all = Path(output_all) / "deconvolution"
+    Path(deconv_dir_all).mkdir(exist_ok=True)
+    deconv_dir = Path(deconv_dir_all) / "deconv_results"
+    Path(deconv_dir).mkdir(exist_ok=True)
+    extract_deconv_dir = Path(deconv_dir_all) / "deconv_extracted"
+    Path(extract_deconv_dir).mkdir(exist_ok=True)
+
+    if t_end_deconv is None:
+        t_end_deconv=rec_len_sec
+
+    full_deconv_with_update(deconv_dir, extract_deconv_dir,
+               raw_data_name, geom, displacement_rigid,
+               spt, maxptps, x, z, t_start_deconv, t_end_deconv, sub_h5, 
+               n_sec_temp_update=n_sec_temp_update, 
+               bin_size_um=bin_size_um,
+               pfs=sampling_rate,
+               n_jobs=n_jobs_deconv,
+               trough_offset=trough_offset,
+               spike_length_samples=spike_length_samples,
+               max_upsample=max_upsample,
+               refractory_period_frames=refractory_period_frames,
+               min_spikes_bin=min_spikes_bin,
+               max_spikes_per_unit=max_spikes_per_unit,
+               tpca=tpca,
+               deconv_threshold=deconv_threshold,
+               su_chan_vis=su_chan_vis,
+               deconv_th_for_temp_computation=deconv_th_for_temp_computation,
+               extract_radius_um=extract_box_radius,
+               loc_radius=localize_radius,
+               n_sec_train_feats=n_sec_train_feats,
+               n_sec_chunk=n_sec_chunk_deconv,
+               overwrite=overwrite_deconv,
+               p_bar=True,
+               save_chunk_results=False)
+
 
     if savefigs:
+        spt = np.load(Path(extract_deconv_dir) / "spike_train_final_deconv.npy")
+        z = np.load(Path(extract_deconv_dir) / "z_final_deconv.npy")
 
-        vir = cm.get_cmap('viridis')
-        ptp_arr = maxptps.copy()
-        ptp_arr = np.log(ptp_arr)
-        ptp_arr -= ptp_arr.min()
-        ptp_arr /= ptp_arr.max()
-        color_array = vir(ptp_arr)
-        fname_detect_fig = Path(detect_dir) / "detection_displacement_raster_plot.png"
+        fname_deconv_fig=Path(extract_deconv_dir) / "full_deconv_raster_plot.png"
+        ccolors = ccet.glasbey[:spt[:, 1].max()+1]
         plt.figure(figsize = (10, 5))
-        plt.scatter(spike_index[:, 0]/sampling_rate, z, color = color_array, s = 1)
-        plt.plot(np.arange(0, displacement_rigid.shape[0]), displacement_rigid-displacement_rigid[0], color = 'red')
-        plt.plot(np.arange(0, displacement_rigid.shape[0]), displacement_rigid-displacement_rigid[0]+100, color = 'red')
-        plt.plot(np.arange(0, displacement_rigid.shape[0]), displacement_rigid-displacement_rigid[0]+200, color = 'red')
-        plt.savefig(fname_detect_fig)
+        for k in range(spt[:, 1].max()+1):
+            idx = spt[:, 1]==k
+            plt.scatter(spt[idx, 0]//30000, z[idx], c = ccolors[k], s = 1, alpha = 0.1)
+        plt.savefig(fname_deconv_fig)
         plt.close()
-
-
-    # Clustering 
-    if clustering:
-        print("Clustering...")
-        cluster_dir = Path(output_all) / "initial_clustering"
-        Path(cluster_dir).mkdir(exist_ok=True)
-        if t_end_clustering is None:
-            t_end_clustering=rec_len_sec
-        spt, maxptps, x, z = run_full_clustering(t_start_clustering, t_end_clustering, cluster_dir, raw_data_name, geom, spike_index,
-                                                    localization_results, maxptps, displacement_rigid, len_chunks=len_chunks_cluster, threshold_ptp=threshold_ptp_cluster,
-                                                    fs=sampling_rate, triage_quantile_cluster=triage_quantile_cluster, frame_dedup_cluster=frame_dedup_cluster, 
-                                                    log_c=log_c, scales=scales, savefigs=savefigs)
-
-
-    if deconvolve:
-        print("Deconvolution...")
-        deconv_dir_all = Path(output_all) / "deconvolution"
-        Path(deconv_dir_all).mkdir(exist_ok=True)
-        deconv_dir = Path(deconv_dir_all) / "deconv_results"
-        Path(deconv_dir).mkdir(exist_ok=True)
-        extract_deconv_dir = Path(deconv_dir_all) / "deconv_extracted"
-        Path(extract_deconv_dir).mkdir(exist_ok=True)
-        
-        if t_end_deconv is None:
-            t_end_deconv=rec_len_sec
-
-        full_deconv_with_update(deconv_dir, extract_deconv_dir,
-                   raw_data_name, geom, displacement_rigid,
-                   spt, maxptps, x, z, t_start_deconv, t_end_deconv, sub_h5, 
-
-                   n_sec_temp_update=n_sec_temp_update, 
-                   bin_size_um=bin_size_um,
-                   pfs=sampling_rate,
-                   n_jobs=n_jobs_deconv,
-                   trough_offset=trough_offset,
-                   spike_length_samples=spike_length_samples,
-                   max_upsample=max_upsample,
-                   refractory_period_frames=refractory_period_frames,
-                   min_spikes_bin=min_spikes_bin,
-                   max_spikes_per_unit=max_spikes_per_unit,
-                   tpca=tpca,
-                   deconv_threshold=deconv_threshold,
-                   su_chan_vis=su_chan_vis,
-                   deconv_th_for_temp_computation=deconv_th_for_temp_computation,
-                   extract_radius_um=extract_box_radius,
-                   loc_radius=localize_radius,
-                   n_sec_train_feats=n_sec_train_feats,
-                   n_sec_chunk=n_sec_chunk_deconv,
-                   overwrite=overwrite_deconv,
-                   p_bar=True,
-                   save_chunk_results=False)
-
-
-        if savefigs:
-            spt = np.load(Path(extract_deconv_dir) / "spike_train_final_deconv.npy")
-            z = np.load(Path(extract_deconv_dir) / "z_final_deconv.npy")
-
-            fname_deconv_fig=Path(extract_deconv_dir) / "full_deconv_raster_plot.png"
-            ccolors = ccet.glasbey[:spt[:, 1].max()+1]
-            plt.figure(figsize = (10, 5))
-            for k in range(spt[:, 1].max()+1):
-                idx = spt[:, 1]==k
-                plt.scatter(spt[idx, 0]//30000, z[idx], c = ccolors[k], s = 1, alpha = 0.1)
-            plt.savefig(fname_deconv_fig)
-            plt.close()
