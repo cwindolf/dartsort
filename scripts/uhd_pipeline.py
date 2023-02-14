@@ -124,7 +124,7 @@ deconv_th_for_temp_computation=500
 n_sec_train_feats=10
 n_sec_chunk_deconv=1
 overwrite_deconv=True
-
+remove_final_outliers=True
 
 Path(output_all).mkdir(exist_ok=True)
 geom = np.load(geom_path)
@@ -297,7 +297,19 @@ if deconvolve:
                overwrite=overwrite_deconv,
                p_bar=True,
                save_chunk_results=False)
+    
+    fname_medians = Path(extract_dir) / "registered_medians.npy"
+    fname_spread = Path(extract_dir) / "registered_spreads.npy"
+    units_spread = np.load(fname_spread)
+    units_medians = np.load(fname_medians)
 
+
+    for unit in range(spt[:, 1].max()+1):
+        pos = (units_medians[unit]+disp[spt[spt[:, 1]==unit, 0]//30000])
+        z_pos = z_abs[spt[:, 1]==unit]
+        idx_outlier = np.flatnonzero(np.abs(pos-z_pos)>10*units_spread[unit])
+        idx_outlier = np.flatnonzero(spt[:, 1]==unit)[idx_outlier]
+        spt[idx_outlier, 1]=-1
 
     if savefigs:
         spt = np.load(Path(extract_deconv_dir) / "spike_train_final_deconv.npy")
