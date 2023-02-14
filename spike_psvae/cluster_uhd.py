@@ -287,6 +287,16 @@ def run_full_clustering(t_start, t_end, cluster_output_directory, raw_data_bin, 
     print("Relabel by Depth")
     spt = relabel_by_depth(spt, z_abs)
     
+    fname_spt_cluster = Path(cluster_output_directory) / "spt_full_cluster.npy"
+    fname_x = Path(cluster_output_directory) / "x_full_cluster.npy"
+    fname_z = Path(cluster_output_directory) / "z_full_cluster.npy"
+    fname_maxptps = Path(cluster_output_directory) / "maxptps_full_cluster.npy"
+
+    np.save(fname_spt_cluster, spt)
+    np.save(fname_x, x)
+    np.save(fname_z, z)
+    np.save(fname_maxptps, max_ptps)
+    
     if savefigs:
       figname = Path(cluster_output_directory) / "final_clustering_scatter_plot.png"
       fig, axes = cluster_viz.array_scatter(
