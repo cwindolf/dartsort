@@ -294,7 +294,7 @@ def run_full_clustering(t_start, t_end, cluster_output_directory, raw_data_bin, 
 
     np.save(fname_spt_cluster, spt)
     np.save(fname_x, x)
-    np.save(fname_z, z)
+    np.save(fname_z, z_abs)
     np.save(fname_maxptps, max_ptps)
     
     if savefigs:
