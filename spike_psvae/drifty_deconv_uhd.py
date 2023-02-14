@@ -755,6 +755,11 @@ def full_deconv_with_update(
     Path(extract_dir).mkdir(exist_ok=True)
 
     registered_medians, units_spread = get_registered_pos(spike_train, z, p, pfs)
+    
+    fname_medians = Path(extract_dir) / "registered_medians.npy"
+    fname_spread = Path(extract_dir) / "registered_spreads.npy"
+    np.save(fname_spread, units_spread)
+    np.save(fname_medians, registered_medians)
 
     if deconv_th_for_temp_computation is not None:
         dist_metric = deconv_th_for_temp_computation*2*np.ones(len(spike_train))
