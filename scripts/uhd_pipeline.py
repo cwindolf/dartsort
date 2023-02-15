@@ -53,6 +53,11 @@ median_subtraction=True,
 adcshift_correction=True,
 t_start_preproc=0
 t_end_preproc=None
+#Multi processing params
+mp_preprocessing=True
+n_proc_preprocessing=6
+n_sec_chunk_preprocessing=1
+
 
 
 # Initial Detection - Localization parameters 
@@ -142,7 +147,8 @@ if preprocessing:
         t_start=t_start_preproc, t_end=t_end_preproc,
         apply_filter=apply_filter, low_frequency=low_frequency, 
         high_factor=high_factor, order=order, sampling_frequency=sampling_rate,
-        median_subtraction=median_subtraction, adcshift_correction=adcshift_correction)
+        median_subtraction=median_subtraction, adcshift_correction=adcshift_correction,
+        n_sec_chunk=n_sec_chunk_preprocessing, multi_processing = mp_preprocessing, n_processors = n_proc_preprocessing, overwrite = True,)
 
     # Update data name and type if preprocesssed
     raw_data_name = Path(preprocessing_dir) / "standardized.bin"
