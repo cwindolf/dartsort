@@ -33,9 +33,9 @@ def superres_spike_train(
     # information which we will need later to determine how to shift the templates
     superres_label_to_bin_id = []
     superres_label_to_orig_label = []
+    unit_max_channels = []
     unit_labels = np.unique(spike_train[spike_train[:, 1] >= 0, 1])
     medians_at_computation = np.zeros(unit_labels.max()+1)
-    unit_max_channels = np.zeros(unit_labels.max()+1)
     cur_superres_label = 0
     for u in unit_labels:
         in_u = np.flatnonzero(spike_train[:, 1] == u)
@@ -50,9 +50,7 @@ def superres_spike_train(
 
         # center the z positions in this unit using the median
         centered_z = z_abs[in_u].copy()
-        x_unit = x[in_u].copy()
         medians_at_computation[u] = np.median(centered_z)
-        unit_max_channels[u] = np.sum((geom - [np.median(x_unit), medians_at_computation[u]])**2, axis=1).argmin()
         centered_z -= medians_at_computation[u]
 
         # convert them to bin identities by adding half the bin size and
@@ -77,6 +75,7 @@ def superres_spike_train(
             for bin_id in occupied_bins:
                 superres_labels[in_u[bin_ids == bin_id]] = cur_superres_label
                 superres_label_to_bin_id.append(bin_id)
+                unit_max_channels.append(np.sum((geom - [np.median(x[in_u[bin_ids == bin_id]]), np.median(z_abs[in_u[bin_ids == bin_id]])])**2, axis=1).argmin())
                 superres_label_to_orig_label.append(u)
                 cur_superres_label += 1
         else:
@@ -85,16 +84,19 @@ def superres_spike_train(
                     superres_labels[in_u[bin_ids == bin_id]] = cur_superres_label
                     superres_label_to_bin_id.append(bin_id)
                     superres_label_to_orig_label.append(u)
+                    unit_max_channels.append(np.sum((geom - [np.median(x[in_u[bin_ids == bin_id]]), np.median(z_abs[in_u[bin_ids == bin_id]])])**2, axis=1).argmin())
                     cur_superres_label += 1
             # what if no template was computed for u
             else:
                 superres_labels[in_u] = cur_superres_label
                 superres_label_to_bin_id.append(0)
                 superres_label_to_orig_label.append(u)
+                unit_max_channels.append(np.sum((geom - [np.median(x[in_u]), np.median(z_abs[in_u])])**2, axis=1).argmin())
                 cur_superres_label += 1
 
     superres_label_to_bin_id = np.array(superres_label_to_bin_id)
     superres_label_to_orig_label = np.array(superres_label_to_orig_label)
+    unit_max_channels = np.array(unit_max_channels)
     return (
         superres_labels,
         superres_label_to_bin_id,
