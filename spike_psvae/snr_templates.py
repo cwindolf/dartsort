@@ -180,9 +180,9 @@ def get_templates(
             geom, zero_radius_um, steps=1, distance_order=False, p=2
         )
         for i in range(len(templates)):
-#             mc = templates[i].ptp(0).argmax()
-            unit_max_channels[i]
-            far = ~np.isin(np.arange(len(geom)), zero_ci[unit_max_channels[i]])
+            mc = templates[i].ptp(0).argmax()
+#             mc = int(unit_max_channels[i])
+            far = ~np.isin(np.arange(len(geom)), zero_ci[mc])
             templates[i, :, far] = 0
 
     return templates, extra
