@@ -1,7 +1,7 @@
 # %%
 import os
 import numpy as np
-import parmap
+# import parmap
 from scipy.signal import butter, filtfilt
 from spike_psvae import spikeio
 import numpy.fft as fft
@@ -147,50 +147,50 @@ def filter_standardize_rec(output_directory, filename_raw, dtype_raw,
     if buffer is None:
         buffer = int(max(sampling_frequency/100, 200))
 
-
+# Multiprocessing doesn't work - switch to spikeinterface
     # read config params
-    if multi_processing:
-        parmap.map(
-            filter_standardize_batch,
-            [i for i in all_batches],
-            filename_raw, 
+#     if multi_processing:
+#         parmap.map(
+#             filter_standardize_batch,
+#             [i for i in all_batches],
+#             filename_raw, 
+#             fname_mean_sd,
+#             apply_filter,
+#             dtype_raw, 
+#             dtype_output,
+#             filtered_location,
+#             n_channels,
+#             buffer,
+#             rec_len,
+#             low_frequency,
+#             high_factor,
+#             order,
+#             sampling_frequency, 
+#             channels_to_remove,
+#             adcshift_correction,
+#             median_subtraction,
+#             processes=n_processors,
+#             pm_pbar=True)
+#     else:
+    for batch_id in all_batches:
+        filter_standardize_batch(
+            batch_id, filename_raw, 
             fname_mean_sd,
             apply_filter,
             dtype_raw, 
             dtype_output,
             filtered_location,
-            n_channels,
+            n_channels, 
             buffer,
-            rec_len,
+            rec_len, 
             low_frequency,
             high_factor,
             order,
-            sampling_frequency, 
+            sampling_frequency,
             channels_to_remove,
             adcshift_correction,
             median_subtraction,
-            processes=n_processors,
-            pm_pbar=True)
-    else:
-        for batch_id in all_batches:
-            filter_standardize_batch(
-                batch_id, filename_raw, 
-                fname_mean_sd,
-                apply_filter,
-                dtype_raw, 
-                dtype_output,
-                filtered_location,
-                n_channels, 
-                buffer,
-                rec_len, 
-                low_frequency,
-                high_factor,
-                order,
-                sampling_frequency,
-                channels_to_remove,
-                adcshift_correction,
-                median_subtraction,
-                )
+            )
 
     # Merge the chunk filtered files and delete the individual chunks
     merge_filtered_files(filtered_location, output_directory)
