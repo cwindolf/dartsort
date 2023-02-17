@@ -52,7 +52,7 @@ def superres_spike_train(
         centered_z = z_abs[in_u].copy()
         x_unit = x[in_u].copy()
         medians_at_computation[u] = np.median(centered_z)
-        unit_max_channels[u] = np.argmin(np.abs(geom - [np.median(x_units), medians_at_computation[u]]))
+        unit_max_channels[u] = np.argmin(np.abs(geom - [np.median(x_unit), medians_at_computation[u]]))
         centered_z -= medians_at_computation[u]
 
         # convert them to bin identities by adding half the bin size and
