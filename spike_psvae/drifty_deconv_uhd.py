@@ -867,7 +867,7 @@ def full_deconv_with_update(
     np.save(fname_spike_train, spike_train)
     np.save(fname_x, x)
     np.save(fname_z, z)
-    np.save(fname_dist_metric, dist_metric_chunk)
+    np.save(fname_dist_metric, dist_metric)
 
 
 
