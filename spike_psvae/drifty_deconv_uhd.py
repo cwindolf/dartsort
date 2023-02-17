@@ -177,6 +177,7 @@ def superres_denoised_templates(
         tpca_radius=tpca_radius,
         tpca_n_wfs=tpca_n_wfs,
         tpca_centered=tpca_centered,
+        use_previous_max_channels=True,
         pbar=pbar,
         seed=seed,
         n_jobs=n_jobs,
