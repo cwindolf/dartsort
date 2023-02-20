@@ -108,10 +108,10 @@ def gather_all_results_clustering(cluster_output_directory, t_start, t_end, K_LE
     for T_START in np.arange(t_start + K_LEN, t_end, K_LEN):
         
         T_END = T_START + K_LEN
-        fname_spike_train="spt_clustering_{}_{}.npy".format(T_START, T_END)
-        fname_x_loc="x_clustering_{}_{}.npy".format(T_START, T_END)
-        fname_z_loc="z_abs_clustering_{}_{}.npy".format(T_START, T_END)
-        fname_maxptps_loc="maxptps_clustering_{}_{}.npy".format(T_START, T_END)
+        fname_spike_train=Path(cluster_output_directory) / "spt_clustering_{}_{}.npy".format(T_START, T_END)
+        fname_x_loc=Path(cluster_output_directory) / "x_clustering_{}_{}.npy".format(T_START, T_END)
+        fname_z_loc=Path(cluster_output_directory) / "z_abs_clustering_{}_{}.npy".format(T_START, T_END)
+        fname_maxptps_loc=Path(cluster_output_directory) / "maxptps_clustering_{}_{}.npy".format(T_START, T_END)
             
         spt_all = np.concatenate((spt_all, np.load(fname_spike_train)))
         max_ptps_all = np.concatenate((max_ptps_all, np.load(fname_maxptps_loc)))
