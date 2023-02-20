@@ -791,7 +791,7 @@ class MatchPursuitObjectiveUpsample:
         # added this line when including lambda, since
         # we recompute the objective differently now in subtraction
         if not self.no_amplitude_scaling:
-            self.conv_result[unit_idx, time_idx[:, 1:-1]] = -np.inf
+            self.conv_result[unit_idx[:, None], time_idx[:, 1:-1]] = -np.inf
 
     def subtract_spike_train(self, spt, scalings):
         """Subtracts a spike train from the original spike_train."""
@@ -1188,6 +1188,8 @@ def deconv(
     refractory_period_frames=10,
     trough_offset=42,
     threshold=50,
+    lambd=0,
+    allowed_scale=0.1,
 ):
     deconv_dir = Path(deconv_dir)
     deconv_dir.mkdir(exist_ok=True, parents=True)
@@ -1206,8 +1208,8 @@ def deconv(
         n_processors=n_jobs,
         multi_processing=n_jobs > 1,
         upsample=max_upsample,
-        lambd=0,
-        allowed_scale=0,
+        lambd=lambd,
+        allowed_scale=allowed_scale,
         refractory_period_frames=refractory_period_frames,
     )
     my_batches = np.arange(mp_object.n_batches)
