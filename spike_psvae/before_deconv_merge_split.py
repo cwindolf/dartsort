@@ -10,12 +10,13 @@ except ImportError:
 from concurrent.futures import ProcessPoolExecutor
 from functools import wraps
 from hdbscan import HDBSCAN
+from hdbscan.robust_single_linkage_ import RobustSingleLinkage
 from inspect import getfullargspec
 from scipy.spatial.distance import cdist
 from sklearn.decomposition import PCA
 from sklearn.discriminant_analysis import LinearDiscriminantAnalysis as LDA
 from sklearn.mixture import GaussianMixture, BayesianGaussianMixture
-from sklearn.cluster import OPTICS
+from sklearn.cluster import OPTICS, MeanShift
 from tqdm.auto import tqdm
 
 from .multiprocessing_utils import MockPoolExecutor
@@ -92,6 +93,10 @@ def herding_split(
         n_components=5,
         weight_concentration_prior_type="dirichlet_distribution",
         max_iter=20000,
+    ),
+    meanshift_kwargs=dict(
+        bandwidth=5,
+        max_iter=2000,
     ),
     chans_method="distance",
     chans_amplitude_n_channels=5,
@@ -186,10 +191,18 @@ def herding_split(
         clust = HDBSCAN(**hdbscan_kwargs)
         clust.fit(unit_features)
         new_labels[kept] = clust.labels_
+    elif clusterer == "robustsinglelinkage":
+        clust = RobustSingleLinkage()
+        clust.fit(unit_features)
+        new_labels[kept] = clust.labels_
     elif clusterer == "optics":
         clust = OPTICS(min_samples=10)
         clust.fit(unit_features)
         new_labels[kept] = clust.labels_
+    elif clusterer == "meanshift":
+        clust = MeanShift(**meanshift_kwargs)
+        clust.fit(unit_features)
+        new_labels[kept] = clust.predict(unit_features)
     elif clusterer == "isosplit":
         new_labels[kept] = isosplit(unit_features.T)
     elif clusterer == "dpgmm":
@@ -203,7 +216,6 @@ def herding_split(
         k = (c >= 25).sum()
         if k <= 1:
             return False, None, None
-        print(f"{clust.weights_.shape=} {c >= 25}")
         clust2 = GaussianMixture(
             n_components=k,
             weights_init=clust.weights_[c >= 25]
@@ -227,7 +239,7 @@ def herding_split(
         clust.fit(unit_features)
         new_labels[kept] = clust.predict(unit_features)
     else:
-        assert False
+        raise ValueError(f"{clusterer=} not understood.")
 
     is_split = np.setdiff1d(np.unique(new_labels), [-1]).size > 1
     return is_split, new_labels, in_unit
@@ -854,6 +866,7 @@ def merge_clusters(
 
     # load some stuff from the h5
     h5 = h5py.File(h5_path, "r")
+    geom = h5["geom"][:]
     spike_times, max_channels = h5["spike_index"][:].T
     # TODO: these right now are just use for computing templates
     #       the shifts when merging already merged units are not
@@ -868,7 +881,6 @@ def merge_clusters(
     if relocated:
         x, y, z_abs, alpha = h5["localizations"][:, :4].T
         z_reg = h5["z_reg"][:]
-        geom = h5["geom"][:]
 
     # loop by order of snr
     # high snr will be the last element here
