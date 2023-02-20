@@ -31,6 +31,7 @@ def extract_deconv(
     tpca_rank=8,
     tpca_weighted=True,
     save_residual=False,
+    save_subtracted_waveforms=False,
     save_cleaned_waveforms=False,
     save_cleaned_tpca_projs=True,
     save_denoised_waveforms=False,
@@ -201,6 +202,14 @@ def extract_deconv(
         )
     featurizers = []
     no_save_featurizers = []
+    if save_subtracted_waveforms:
+        featurizers.append(
+            chunk_features.Waveform(
+                "subtracted",
+                spike_length_samples=templates_up.shape[1],
+                channel_index=channel_index,
+            )
+        )
     if save_cleaned_waveforms:
         featurizers.append(
             chunk_features.Waveform(
@@ -492,10 +501,30 @@ def _extract_deconv_worker(start_sample):
         left_start_total - p.trough_offset,
         left_start_total - p.trough_offset + p.spike_length_samples,
     )
+    # subtracted wfs on full channels set
+    subtracted_wfs = scalings[:, None, None] * p.templates_up[spike_train[:, 1]]
     for i in range(len(spike_index)):
-        resid[spike_index[i, 0] + rel_times] -= (
-            scalings[i] * p.templates_up[spike_train[i, 1]]
+        resid[spike_index[i, 0] + rel_times] -= subtracted_wfs[i]
+
+    # subtracted wfs on channel subset
+    subtracted_wfs = waveform_utils.channel_subset_by_index(
+        subtracted_wfs,
+        spike_index[:, 1],
+        waveform_utils.full_channel_index(p.n_chans),
+        p.channel_index,
+        fill_value=np.nan,
+    )
+    for f in p.featurizers:
+        feat = f.transform(
+            spike_index[:, 1],
+            subtracted_wfs=subtracted_wfs,
         )
+        if feat is not None:
+            np.save(
+                p.temp_dir / f"{batch_str}_{f.name}.npy",
+                feat,
+            )
+    del subtracted_wfs
 
     if p.save_residual:
         np.save(
