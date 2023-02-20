@@ -25,6 +25,7 @@ def get_templates(
     tpca_rank=5,
     tpca_radius=75,
     tpca_n_wfs=50_000,
+    use_previous_max_channels=False,
     pbar=True,
     seed=0,
     n_jobs=-1,
@@ -180,9 +181,11 @@ def get_templates(
             geom, zero_radius_um, steps=1, distance_order=False, p=2
         )
         for i in range(len(templates)):
-#             mc = templates[i].ptp(0).argmax()
-            unit_max_channels[i]
-            far = ~np.isin(np.arange(len(geom)), zero_ci[unit_max_channels[i]])
+            if use_previous_max_channels:
+                mc = int(unit_max_channels[i])
+            else:
+                mc = templates[i].ptp(0).argmax()
+            far = ~np.isin(np.arange(len(geom)), zero_ci[mc])
             templates[i, :, far] = 0
 
     return templates, extra

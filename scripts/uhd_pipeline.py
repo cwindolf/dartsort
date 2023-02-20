@@ -96,6 +96,7 @@ localize_radius = 100
 sigma_reg=0.1
 max_disp=100 # This is not the actual max displacement, we don't use paris of bins with relative disp>max_disp when computing full displacement 
 max_dt=250
+max_dt=min(max_dt, rec_len_sec)
 mincorr=0.6
 prior_lambda=1
 
