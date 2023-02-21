@@ -72,7 +72,7 @@ def subtraction(
     save_denoised_ptp_vectors=False,
     # localization args
     # set this to None or "none" to turn off
-    localization_model = "pointsource",
+    localization_model="pointsource",
     localization_kind="logbarrier",
     localize_radius=100,
     localize_firstchan_n_channels=20,
