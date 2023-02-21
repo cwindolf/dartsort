@@ -13,10 +13,11 @@ import logging
 import pandas as pd
 from sklearn.decomposition import PCA
 from tqdm.auto import tqdm
+import spikeinterface.core as sc
 
 from . import denoise, detect, localize_index, chunk_features
 from .multiprocessing_utils import MockPoolExecutor, MockQueue
-from .spikeio import get_binary_length, read_data, read_waveforms_in_memory
+from .spikeio import get_binary_length, read_waveforms_in_memory
 from .waveform_utils import make_channel_index, make_contiguous_channel_index
 
 _logger = logging.getLogger(__name__)
@@ -30,9 +31,8 @@ default_extra_feats = [
 
 
 def subtraction(
-    standardized_bin,
+    recording,
     out_folder,
-    geom=None,
     # should we start over?
     overwrite=False,
     # waveform args
@@ -43,24 +43,19 @@ def subtraction(
     n_sec_pca=10,
     # time / input binary details
     n_sec_chunk=1,
-    t_start=0,
-    t_end=None,
-    sampling_rate=30_000,
-    nsync=0,
-    binary_dtype=np.float32,
     # detection
     thresholds=[12, 10, 8, 6, 5, 4],
-    peak_sign="neg",
+    peak_sign="both",
     nn_detect=False,
     denoise_detect=False,
     do_nn_denoise=True,
     # waveform extraction channels
-    neighborhood_kind="firstchan",
+    neighborhood_kind="circle",
     extract_box_radius=200,
     extract_firstchan_n_channels=40,
     box_norm_p=np.inf,
     dedup_spatial_radius=70,
-    enforce_decrease_kind="columns",
+    enforce_decrease_kind="radial",
     # what to save?
     save_residual=False,
     save_subtracted_waveforms=False,
@@ -136,6 +131,98 @@ def subtraction(
     out_h5 : path to output hdf5 file
     residual : path to residual if save_residual
     """
+    # validate and process args
+    if neighborhood_kind not in ("firstchan", "box", "circle"):
+        raise ValueError(
+            "Neighborhood kind", neighborhood_kind, "not understood."
+        )
+    if enforce_decrease_kind not in ("columns", "radial", "none"):
+        raise ValueError(
+            "Enforce decrease method", enforce_decrease_kind, "not understood."
+        )
+    if peak_sign not in ("neg", "both"):
+        raise ValueError("peak_sign", peak_sign, "not understood.")
+
+    if neighborhood_kind == "circle":
+        neighborhood_kind = "box"
+        box_norm_p = 2
+
+    batch_len_samples = n_sec_chunk * int(np.floor(recording.get_sampling_frequency()))
+
+    # prepare output dir
+    out_folder = Path(out_folder)
+    out_folder.mkdir(exist_ok=True)
+    batch_data_folder = out_folder / f"subtraction_batches"
+    batch_data_folder.mkdir(exist_ok=True)
+    out_h5 = out_folder / f"subtraction.h5"
+    if save_residual:
+        residual_bin = out_folder / f"residual.bin"
+    try:
+        # this is to check if another program is using our h5, in which
+        # case we should crash early rather than late.
+        if out_h5.exists():
+            with h5py.File(out_h5, "r+") as _:
+                pass
+            del _
+            gc.collect()
+    except BlockingIOError as e:
+        raise ValueError(
+            f"Output HDF5 {out_h5} is currently in use by another program. "
+            "Maybe a Jupyter notebook that's still running?"
+        ) from e
+
+    # pick torch device if it's not supplied
+    if device is None:
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        if device.type == "cuda":
+            torch.cuda._lazy_init()
+    else:
+        device = torch.device(device)
+    torch.set_grad_enabled(False)
+
+    # figure out if we will use a NN detector, and if so which
+    nn_detector_path = None
+    if nn_detect:
+        raise NotImplementedError(
+            "Need to find out how to get Neuropixels version from SI."
+        )
+        # nn_detector_path = (
+        #     Path(__file__).parent.parent / f"pretrained/detect_{probe}.pt"
+        # )
+        # print("Using pretrained detector for", probe, "from", nn_detector_path)
+        detection_kind = "voltage->NN"
+    elif denoise_detect:
+        print("Using denoising NN detection")
+        detection_kind = "denoised PTP"
+    else:
+        print("Using voltage detection")
+        detection_kind = "voltage"
+
+    print(
+        f"Running subtraction on: {recording}. "
+        f"Using {detection_kind} detection with thresholds: {thresholds}."
+    )
+
+    # compute helper data structures
+    # channel indexes for extraction, NN detection, deduplication
+    geom = recording.get_channel_locations()
+    dedup_channel_index = make_channel_index(
+        geom, dedup_spatial_radius, steps=2
+    )
+    nn_channel_index = make_channel_index(geom, dedup_spatial_radius, steps=1)
+    if neighborhood_kind == "box":
+        extract_channel_index = make_channel_index(
+            geom, extract_box_radius, distance_order=False, p=box_norm_p
+        )
+    elif neighborhood_kind == "firstchan":
+        extract_channel_index = make_contiguous_channel_index(
+            recording.get_num_channels(),
+            n_neighbors=extract_firstchan_n_channels,
+        )
+    else:
+        assert False
+
+    # handle ChunkFeature pipeline
     do_clean = (
         save_denoised_tpca_projs
         or save_denoised_ptp_vectors
@@ -155,122 +242,6 @@ def subtraction(
             chunk_features.PTPVector(which_waveforms="denoised")
         ]
 
-    if neighborhood_kind not in ("firstchan", "box", "circle"):
-        raise ValueError(
-            "Neighborhood kind", neighborhood_kind, "not understood."
-        )
-    if enforce_decrease_kind not in ("columns", "radial", "none"):
-        raise ValueError(
-            "Enforce decrease method", enforce_decrease_kind, "not understood."
-        )
-    if peak_sign not in ("neg", "both"):
-        raise ValueError("peak_sign", peak_sign, "not understood.")
-
-    if neighborhood_kind == "circle":
-        neighborhood_kind = "box"
-        box_norm_p = 2
-
-    standardized_bin = Path(standardized_bin)
-    stem = standardized_bin.stem
-    batch_len_samples = n_sec_chunk * sampling_rate
-
-    # prepare output dir
-    out_folder = Path(out_folder)
-    out_folder.mkdir(exist_ok=True)
-    batch_data_folder = out_folder / f"batches_{stem}"
-    batch_data_folder.mkdir(exist_ok=True)
-    out_h5 = out_folder / f"subtraction_{stem}_t_{t_start}_{t_end}.h5"
-    if save_residual:
-        residual_bin = out_folder / f"residual_{stem}_t_{t_start}_{t_end}.bin"
-    try:
-        # this is to check if another program is using our h5, in which
-        # case we should crash early rather than late.
-        if out_h5.exists():
-            with h5py.File(out_h5, "r+") as _:
-                pass
-            del _
-    except BlockingIOError as e:
-        raise ValueError(
-            f"Output HDF5 {out_h5} is currently in use by another program. "
-            "Maybe a Jupyter notebook that's still running?"
-        ) from e
-
-    # pick device if it's not supplied
-    if device is None:
-        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        if device.type == "cuda":
-            torch.cuda._lazy_init()
-            torch.set_grad_enabled(False)
-    else:
-        device = torch.device(device)
-
-    # if no geometry is supplied, try to load it from meta file
-    if geom is None:
-        geom = read_geom_from_meta(standardized_bin)
-        if geom is None:
-            raise ValueError(
-                "Either pass `geom` or put meta file in folder with binary."
-            )
-    n_channels = geom.shape[0]
-
-    # TODO: read this from meta.
-    # right now it's just used to load NN detector and pick the enforce
-    # decrease method if enforce_decrease_kind=="columns"
-    probe = {4: "np1", 2: "np2"}.get(np.unique(geom[:, 0]).size, None)
-
-    # figure out if we will use a NN detector, and if so which
-    nn_detector_path = None
-    if nn_detect:
-        nn_detector_path = (
-            Path(__file__).parent.parent / f"pretrained/detect_{probe}.pt"
-        )
-        print("Using pretrained detector for", probe, "from", nn_detector_path)
-        detection_kind = "voltage->NN"
-    elif denoise_detect:
-        print("Using denoising NN detection")
-        detection_kind = "denoised PTP"
-    else:
-        print("Using voltage detection")
-        detection_kind = "voltage"
-
-    # figure out length of data
-    T_samples, T_sec = get_binary_length(
-        standardized_bin,
-        n_channels,
-        sampling_rate,
-        nsync=nsync,
-        dtype=binary_dtype,
-    )
-    print(T_sec)
-    assert t_start >= 0 and (t_end is None or t_end <= T_sec)
-    start_sample = int(np.floor(t_start * sampling_rate))
-    end_sample = (
-        T_samples if t_end is None else int(np.floor(t_end * sampling_rate))
-    )
-    portion_len_s = (end_sample - start_sample) / sampling_rate
-    print(
-        f"Running subtraction. Total recording length is {T_sec:0.2f} "
-        f"s, running on portion of length {portion_len_s:0.2f} s. "
-        f"Using {detection_kind} detection with thresholds: {thresholds}."
-    )
-
-    # compute helper data structures
-    # channel indexes for extraction, NN detection, deduplication
-    dedup_channel_index = make_channel_index(
-        geom, dedup_spatial_radius, steps=2
-    )
-    nn_channel_index = make_channel_index(geom, dedup_spatial_radius, steps=1)
-    if neighborhood_kind == "box":
-        extract_channel_index = make_channel_index(
-            geom, extract_box_radius, distance_order=False, p=box_norm_p
-        )
-    elif neighborhood_kind == "firstchan":
-        extract_channel_index = make_contiguous_channel_index(
-            n_channels, n_neighbors=extract_firstchan_n_channels
-        )
-    else:
-        assert False
-
     # helper data structure for radial enforce decrease
     do_enforce_decrease = True
     radial_parents = None
@@ -286,8 +257,7 @@ def subtraction(
 
     # check localization arg
     if localization_model not in ("pointsource", "CoM", "dipole"):
-        print("Wrong localization modle")
-    print(localization_model)
+        raise ValueError(f"Unknown localization model: {localization_model}")
     if localization_kind in ("original", "logbarrier"):
         print("Using", localization_kind, "localization")
         extra_features += [
@@ -302,7 +272,7 @@ def subtraction(
                 else None,
                 localization_kind=localization_kind,
                 localization_model=localization_model,
-                feature=loc_feature
+                feature=loc_feature,
             )
         ]
     else:
@@ -360,38 +330,35 @@ def subtraction(
     if not overwrite and out_h5.exists():
         with h5py.File(out_h5, "r") as output_h5:
             subtracted_tpca_feat.from_h5(output_h5)
+        del output_h5
+        gc.collect()
 
     # otherwise, train it
     # TODO: ideally would run this on another process,
     # because this is the only time the main thread uses
     # GPU, and we could avoid initializing torch runtime.
     if subtracted_tpca_feat.needs_fit:
-        with timer("Training TPCA..."), torch.no_grad():
+        with timer("Training TPCA..."):
             train_featurizers(
-                standardized_bin,
+                recording,
                 extract_channel_index,
                 geom,
                 radial_parents,
-                T_samples,
-                sampling_rate,
                 dedup_channel_index,
                 thresholds,
-                nn_detector_path,
-                denoise_detect,
-                nn_channel_index,
+                nn_detector_path=nn_detector_path,
+                denoise_detect=denoise_detect,
+                nn_channel_index=nn_channel_index,
                 extra_features=[subtracted_tpca_feat],
                 subtracted_tpca=None,
-                nsync=nsync,
                 peak_sign=peak_sign,
                 do_nn_denoise=do_nn_denoise,
                 do_enforce_decrease=do_enforce_decrease,
-                probe=probe,
                 denoiser_init_kwargs=denoiser_init_kwargs,
                 denoiser_weights_path=denoiser_weights_path,
                 n_sec_pca=n_sec_pca,
                 random_seed=random_seed,
                 device=device,
-                binary_dtype=binary_dtype,
                 trough_offset=trough_offset,
                 spike_length_samples=spike_length_samples,
                 dtype=dtype,
@@ -414,12 +381,10 @@ def subtraction(
         # train any which couldn't load
         if any(f.needs_fit for f in extra_features + fit_feats):
             train_featurizers(
-                standardized_bin,
+                recording,
                 extract_channel_index,
                 geom,
                 radial_parents,
-                T_samples,
-                sampling_rate,
                 dedup_channel_index,
                 thresholds,
                 nn_detector_path,
@@ -427,17 +392,14 @@ def subtraction(
                 nn_channel_index,
                 subtracted_tpca=subtracted_tpca_feat.tpca,
                 extra_features=extra_features + fit_feats,
-                nsync=nsync,
                 peak_sign=peak_sign,
                 do_nn_denoise=do_nn_denoise,
                 do_enforce_decrease=do_enforce_decrease,
-                probe=probe,
                 denoiser_init_kwargs=denoiser_init_kwargs,
                 denoiser_weights_path=denoiser_weights_path,
                 n_sec_pca=n_sec_pca,
                 random_seed=random_seed,
                 device=device,
-                binary_dtype=binary_dtype,
                 dtype=dtype,
                 trough_offset=trough_offset,
                 spike_length_samples=spike_length_samples,
@@ -459,8 +421,8 @@ def subtraction(
     jobs = list(
         enumerate(
             range(
-                start_sample,
-                end_sample,
+                0,
+                recording.get_num_samples(),
                 batch_len_samples,
             )
         )
@@ -469,11 +431,8 @@ def subtraction(
     # -- initialize storage
     with get_output_h5(
         out_h5,
-        start_sample,
-        end_sample,
-        geom,
+        recording,
         extract_channel_index,
-        sampling_rate,
         extra_features,
         overwrite=overwrite,
         dtype=dtype,
@@ -500,9 +459,8 @@ def subtraction(
         jobs = (
             (
                 batch_data_folder,
-                s_start,
                 batch_len_samples,
-                standardized_bin,
+                s_start,
                 thresholds,
                 subtracted_tpca_feat.tpca,
                 denoised_tpca_feat.tpca if do_clean else None,
@@ -510,17 +468,12 @@ def subtraction(
                 trough_offset,
                 spike_length_samples,
                 extract_channel_index,
-                start_sample,
-                end_sample,
                 do_clean,
                 save_residual,
                 radial_parents,
                 geom,
                 do_enforce_decrease,
-                probe,
                 peak_sign,
-                nsync,
-                binary_dtype,
                 dtype,
                 extra_features,
             )
@@ -553,6 +506,7 @@ def subtraction(
                 id_queue,
                 denoiser_init_kwargs,
                 denoiser_weights_path,
+                recording.to_dict(),
             ),
         ) as pool:
             for result in tqdm(
@@ -600,6 +554,56 @@ def subtraction(
     return out_h5
 
 
+def subtraction_binary(
+    standardized_bin,
+    geom=None,
+    t_start=0,
+    t_end=None,
+    sampling_rate=30_000,
+    nsync=0,
+    binary_dtype=np.float32,
+    *args,
+    **kwargs,
+):
+    """Wrapper around `subtraction` to provide the old binary file API"""
+    # if no geometry is supplied, try to load it from meta file
+    if geom is None:
+        geom = read_geom_from_meta(standardized_bin)
+        if geom is None:
+            raise ValueError(
+                "Either pass `geom` or put meta file in folder with binary."
+            )
+    n_channels = geom.shape[0]
+
+    recording = sc.read_binary(
+        standardized_bin,
+        sampling_rate,
+        n_channels,
+        binary_dtype,
+        time_axis=1,
+        is_filtered=True,
+    )
+
+    if nsync > 0:
+        recording = recording.channel_slice(
+            channel_ids=recording.get_channel_ids()[:-nsync]
+        )
+
+    T_samples = recording.get_num_samples()
+    T_sec = T_samples / recording.get_sampling_frequency()
+    assert t_start >= 0 and (t_end is None or t_end <= T_sec)
+    start_sample = int(np.floor(t_start * sampling_rate))
+    end_sample = (
+        T_samples if t_end is None else int(np.floor(t_end * sampling_rate))
+    )
+    if start_sample > 0 or end_sample < T_samples:
+        recording = recording.frame_slice(
+            start_frame=start_sample, end_frame=end_sample
+        )
+
+    return subtraction(recording, *args, **kwargs)
+
+
 # -- subtraction routines
 
 
@@ -614,6 +618,7 @@ SubtractionBatchResult = namedtuple(
 def _subtraction_batch(args):
     return subtraction_batch(
         *args,
+        _subtraction_batch.recording,
         _subtraction_batch.device,
         _subtraction_batch.denoiser,
         _subtraction_batch.detector,
@@ -630,6 +635,7 @@ def _subtraction_batch_init(
     id_queue,
     denoiser_init_kwargs,
     denoiser_weights_path,
+    recording_dict,
 ):
     """Thread/process initializer -- loads up neural nets"""
     rank = id_queue.get()
@@ -674,12 +680,13 @@ def _subtraction_batch_init(
         dn_detector.to(device)
     _subtraction_batch.dn_detector = dn_detector
 
+    _subtraction_batch.recording = sc.BaseRecording.from_dict(recording_dict)
+
 
 def subtraction_batch(
     batch_data_folder,
-    s_start,
     batch_len_samples,
-    standardized_bin,
+    s_start,
     thresholds,
     subtracted_tpca,
     denoised_tpca,
@@ -687,19 +694,15 @@ def subtraction_batch(
     trough_offset,
     spike_length_samples,
     extract_channel_index,
-    start_sample,
-    end_sample,
     do_clean,
     save_residual,
     radial_parents,
     geom,
     do_enforce_decrease,
-    probe,
     peak_sign,
-    nsync,
-    binary_dtype,
     dtype,
     extra_features,
+    recording,
     device,
     denoiser,
     detector,
@@ -775,27 +778,20 @@ def subtraction_batch(
     buffer = 2 * spike_length_samples
 
     # load raw data with buffer
-    s_end = min(end_sample, s_start + batch_len_samples)
+    s_end = min(recording.get_num_samples(), s_start + batch_len_samples)
     n_channels = len(dedup_channel_index)
-    load_start = max(start_sample, s_start - buffer)
-    load_end = min(end_sample, s_end + buffer)
-    residual = read_data(
-        standardized_bin,
-        binary_dtype,
-        load_start,
-        load_end,
-        n_channels,
-        nsync,
-        out_dtype=dtype,
-    )
+    load_start = max(0, s_start - buffer)
+    load_end = min(recording.get_num_samples(), s_end + buffer)
+    residual = recording.get_traces(start_frame=load_start, end_frame=load_end)
+    residual = residual.astype(dtype)
     prefix = f"{s_start:10d}_"
 
     # 0 padding if we were at the edge of the data
     pad_left = pad_right = 0
-    if load_start == start_sample:
+    if load_start == 0:
         pad_left = buffer
-    if load_end == end_sample:
-        pad_right = buffer - (end_sample - s_end)
+    if load_end == recording.get_num_samples():
+        pad_right = buffer - (recording.get_num_samples() - s_end)
     if pad_left != 0 or pad_right != 0:
         residual = np.pad(
             residual, [(pad_left, pad_right), (0, 0)], mode="edge"
@@ -823,7 +819,6 @@ def subtraction_batch(
             spike_length_samples=spike_length_samples,
             device=device,
             do_enforce_decrease=do_enforce_decrease,
-            probe=probe,
         )
         if len(spind):
             subtracted_wfs.append(subwfs)
@@ -864,10 +859,10 @@ def subtraction_batch(
     # also, get rid of spikes too close to the beginning/end
     # of the recording if we are in the first or last batch
     spike_time_min = 0
-    if s_start == start_sample:
+    if s_start == 0:
         spike_time_min = trough_offset
     spike_time_max = s_end - s_start
-    if load_end == end_sample:
+    if load_end == recording.get_num_samples():
         spike_time_max -= spike_length_samples - trough_offset
 
     minix = np.searchsorted(spike_index[:, 0], spike_time_min, side="left")
@@ -928,7 +923,6 @@ def subtraction_batch(
             extract_channel_index,
             radial_parents,
             do_enforce_decrease=do_enforce_decrease,
-            probe=probe,
             # tpca=subtracted_tpca,
             tpca=denoised_tpca,
             device=device,
@@ -973,32 +967,27 @@ def subtraction_batch(
 
 
 def train_featurizers(
-    standardized_bin,
+    recording,
     extract_channel_index,
     geom,
     radial_parents,
-    len_recording_samples,
-    sampling_rate,
     dedup_channel_index,
     thresholds,
-    nn_detector_path,
-    denoise_detect,
-    nn_channel_index,
+    nn_detector_path=None,
+    denoise_detect=False,
+    nn_channel_index=None,
     extra_features=None,
     subtracted_tpca=None,
     peak_sign="neg",
     do_nn_denoise=True,
     do_enforce_decrease=True,
-    probe=None,
     n_sec_pca=10,
-    nsync=0,
     random_seed=0,
     device="cpu",
     denoiser_init_kwargs={},
     denoiser_weights_path=None,
     trough_offset=42,
     spike_length_samples=121,
-    binary_dtype=np.float32,
     dtype=np.float32,
 ):
     """Pre-train temporal PCA
@@ -1010,9 +999,11 @@ def train_featurizers(
     This same function is used to fit the subtraction TPCA and the
     collision-cleaned TPCA.
     """
-    n_seconds = len_recording_samples // sampling_rate
-    starts = sampling_rate * np.random.default_rng(random_seed).choice(
-        n_seconds, size=min(n_sec_pca, n_seconds), replace=False
+    fs = int(np.floor(recording.get_sampling_frequency()))
+    n_seconds = recording.get_num_samples() // fs
+    second_starts = fs * np.arange(n_seconds)
+    starts = np.random.default_rng(random_seed).choice(
+        second_starts, size=min(n_sec_pca, n_seconds), replace=False
     )
 
     denoiser = None
@@ -1043,9 +1034,8 @@ def train_featurizers(
     for s_start in tqdm(starts, "PCA training subtraction"):
         spind, wfs, residual_singlebuf = subtraction_batch(
             batch_data_folder=None,
+            batch_len_samples=fs,
             s_start=s_start,
-            batch_len_samples=sampling_rate,
-            standardized_bin=standardized_bin,
             thresholds=thresholds,
             subtracted_tpca=subtracted_tpca,
             denoised_tpca=None,
@@ -1053,19 +1043,15 @@ def train_featurizers(
             trough_offset=trough_offset,
             spike_length_samples=spike_length_samples,
             extract_channel_index=extract_channel_index,
-            start_sample=0,
-            end_sample=len_recording_samples,
             do_clean=False,
             save_residual=False,
             radial_parents=radial_parents,
             geom=geom,
             do_enforce_decrease=do_enforce_decrease,
-            probe=probe,
             peak_sign=peak_sign,
-            nsync=nsync,
-            binary_dtype=binary_dtype,
             dtype=dtype,
             extra_features=[],
+            recording=recording,
             device=device,
             denoiser=denoiser,
             detector=detector,
@@ -1122,7 +1108,6 @@ def train_featurizers(
             extract_channel_index,
             radial_parents,
             do_enforce_decrease=do_enforce_decrease,
-            probe=probe,
             tpca=None,
             device=device,
             denoiser=denoiser,
@@ -1162,7 +1147,6 @@ def detect_and_subtract(
     spike_length_samples=121,
     device="cpu",
     do_enforce_decrease=True,
-    probe=None,
 ):
     """Detect and subtract
 
@@ -1228,7 +1212,6 @@ def detect_and_subtract(
         extract_channel_index,
         radial_parents,
         do_enforce_decrease=do_enforce_decrease,
-        probe=probe,
         tpca=tpca,
         device=device,
         denoiser=denoiser,
@@ -1352,11 +1335,8 @@ def full_denoising(
 @contextlib.contextmanager
 def get_output_h5(
     out_h5,
-    start_sample,
-    end_sample,
-    geom,
+    recording,
     extract_channel_index,
-    sampling_rate,
     extra_features,
     overwrite=False,
     chunk_len=1024,
@@ -1376,10 +1356,11 @@ def get_output_h5(
         output_h5 = h5py.File(out_h5, "w")
 
         # initialize datasets
-        output_h5.create_dataset("fs", data=sampling_rate)
-        output_h5.create_dataset("geom", data=geom)
-        output_h5.create_dataset("start_sample", data=start_sample)
-        output_h5.create_dataset("end_sample", data=end_sample)
+        output_h5.create_dataset("fs", data=recording.get_sampling_frequency())
+        output_h5.create_dataset(
+            "geom", data=recording.get_channel_locations()
+        )
+        output_h5.create_dataset("start_time", data=recording.get_times()[0])
         output_h5.create_dataset("channel_index", data=extract_channel_index)
 
         # resizable datasets so we don't fill up space
@@ -1401,9 +1382,7 @@ def get_output_h5(
             )
             f.to_h5(output_h5)
 
-    done_percent = (
-        100 * (last_sample - start_sample) / (end_sample - start_sample)
-    )
+    done_percent = 100 * last_sample / recording.get_num_samples()
     if h5_exists and not overwrite:
         print(f"Resuming previous job, which was {done_percent:.0f}% done")
     elif h5_exists and overwrite:
