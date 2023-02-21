@@ -327,6 +327,6 @@ if deconvolve:
         plt.figure(figsize = (10, 5))
         for k in range(spt[:, 1].max()+1):
             idx = spt[:, 1]==k
-            plt.scatter(spt[idx, 0]//sampling_rate, z[idx], c = ccolors[k], s = 1, alpha = 0.1)
+            plt.scatter(spt[idx, 0]/sampling_rate, z[idx], c = ccolors[k], s = 1, alpha = 0.1)
         plt.savefig(fname_deconv_fig)
         plt.close()
