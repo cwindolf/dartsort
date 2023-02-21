@@ -1,11 +1,10 @@
 import numpy as np
-from spike_psvae import (
+from . import (
     spike_train_utils,
     before_deconv_merge_split,
     deconv_resid_merge,
 )
 from scipy.spatial.distance import cdist
-from functools import partial
 
 
 def registered_maxchan(
@@ -41,10 +40,15 @@ def new_merge_split(
     relocated=False,
     trough_offset=42,
     spike_length_samples=121,
-    extra_pc_split=True,
-    pc_only=False,
+    # extra_pc_split=True,
+    # pc_only=False,
+    # exp_split=False,
     load_split=False,
+    split_kwargs=None,
 ):
+    orig_labels = spike_train[:, 1].copy()
+    split_kwargs = {} if split_kwargs is None else split_kwargs
+    outdir.mkdir(exist_ok=True, parents=True)
     if not load_split:
         (
             aligned_spike_train,
@@ -61,67 +65,118 @@ def new_merge_split(
 
         # yizi_split = partial(before_deconv_merge_split.herding_split, clusterer="optics")
         # yizi_split.__name__ = "optics Split"
+        # if exp_split:
+        #     new_labels = before_deconv_merge_split.split_clusters(
+        #         aligned_spike_train[:, 1],
+        #         raw_bin,
+        #         sub_h5,
+        #         n_workers=n_workers,
+        #         relocated=relocated,
+        #         split_steps=(
+        #             before_deconv_merge_split.herding_split,
+        #             # before_deconv_merge_split.herding_split,
+        #         ),
+        #         # recursive_steps=(False, False),
+        #         recursive_steps=(True,),
+        #         split_step_kwargs=(
+        #             dict(
+        #                 # clusterer="robustsinglelinkage",
+        #                 hdbscan_kwargs=dict(
+        #                     min_cluster_size=15,
+        #                     # min_samples=5,
+        #                     cluster_selection_epsilon=20.0,
+        #                 ),
+        #                 # clusterer="robustsinglelinkage",
+        #                 # dict(
+        #                 #     clusterer="meanshift",
+        #                 #     use_features=False,
+        #                 #     n_pca_features=3,
+        #                 #     # hdbscan_kwargs=dict(min_cluster_size=15, min_samples=5),
+        #                 # ),
+        #             ),
+        #         ),
+        #         # split_steps=(before_deconv_merge_split.herding_split, yizi_split,),
+        #         # recursive_steps=(False, True,),
+        #         # split_steps=(yizi_split,),
+        #         # recursive_steps=(True,),
+        #     )
+        # elif extra_pc_split:
+        #     new_labels = before_deconv_merge_split.split_clusters(
+        #         aligned_spike_train[:, 1],
+        #         raw_bin,
+        #         sub_h5,
+        #         n_workers=n_workers,
+        #         relocated=relocated,
+        #         split_steps=(
+        #             before_deconv_merge_split.herding_split,
+        #             before_deconv_merge_split.herding_split,
+        #         ),
+        #         recursive_steps=(False, True),
+        #         split_step_kwargs=(
+        #             {},
+        #             dict(
+        #                 use_features=False,
+        #                 n_pca_features=3,
+        #                 # hdbscan_kwargs=dict(min_cluster_size=15, min_samples=5),
+        #             ),
+        #         ),
+        #         # split_steps=(before_deconv_merge_split.herding_split, yizi_split,),
+        #         # recursive_steps=(False, True,),
+        #         # split_steps=(yizi_split,),
+        #         # recursive_steps=(True,),
+        #     )
+        # elif pc_only:
+        #     new_labels = before_deconv_merge_split.split_clusters(
+        #         aligned_spike_train[:, 1],
+        #         raw_bin,
+        #         sub_h5,
+        #         n_workers=n_workers,
+        #         relocated=relocated,
+        #         split_steps=(before_deconv_merge_split.herding_split,),
+        #         recursive_steps=(True,),
+        #         split_step_kwargs=(
+        #             dict(
+        #                 use_features=False,
+        #                 n_pca_features=3,
+        #                 hdbscan_kwargs=dict(min_cluster_size=15, min_samples=5),
+        #             ),
+        #         ),
+        #         # split_steps=(before_deconv_merge_split.herding_split, yizi_split,),
+        #         # recursive_steps=(False, True,),
+        #         # split_steps=(yizi_split,),
+        #         # recursive_steps=(True,),
+        #     )
+        # else:
+        #     new_labels = before_deconv_merge_split.split_clusters(
+        #         aligned_spike_train[:, 1],
+        #         raw_bin,
+        #         sub_h5,
+        #         n_workers=n_workers,
+        #         relocated=relocated,
+        #         split_steps=(before_deconv_merge_split.herding_split,),
+        #         recursive_steps=(True,),
+        #         # split_steps=(before_deconv_merge_split.herding_split, yizi_split,),
+        #         # recursive_steps=(False, True,),
+        #         # split_steps=(yizi_split,),
+        #         # recursive_steps=(True,),
+        #     )
 
-        if extra_pc_split:
-            new_labels = before_deconv_merge_split.split_clusters(
-                aligned_spike_train[:, 1],
-                raw_bin,
-                sub_h5,
-                n_workers=n_workers,
-                relocated=relocated,
-                split_steps=(
-                    before_deconv_merge_split.herding_split,
-                    before_deconv_merge_split.herding_split,
-                ),
-                recursive_steps=(False, True),
-                split_step_kwargs=(
-                    {},
-                    dict(
-                        use_features=False,
-                        n_pca_features=3,
-                        hdbscan_kwargs=dict(min_cluster_size=15, min_samples=5),
-                    ),
-                ),
-                # split_steps=(before_deconv_merge_split.herding_split, yizi_split,),
-                # recursive_steps=(False, True,),
-                # split_steps=(yizi_split,),
-                # recursive_steps=(True,),
-            )
-        elif pc_only:
-            new_labels = before_deconv_merge_split.split_clusters(
-                aligned_spike_train[:, 1],
-                raw_bin,
-                sub_h5,
-                n_workers=n_workers,
-                relocated=relocated,
-                split_steps=(before_deconv_merge_split.herding_split,),
-                recursive_steps=(True,),
-                split_step_kwargs=(
-                    dict(
-                        use_features=False,
-                        n_pca_features=3,
-                        hdbscan_kwargs=dict(min_cluster_size=15, min_samples=5),
-                    ),
-                ),
-                # split_steps=(before_deconv_merge_split.herding_split, yizi_split,),
-                # recursive_steps=(False, True,),
-                # split_steps=(yizi_split,),
-                # recursive_steps=(True,),
-            )
-        else:
-            new_labels = before_deconv_merge_split.split_clusters(
-                aligned_spike_train[:, 1],
-                raw_bin,
-                sub_h5,
-                n_workers=n_workers,
-                relocated=relocated,
-                split_steps=(before_deconv_merge_split.herding_split,),
-                recursive_steps=(True,),
-                # split_steps=(before_deconv_merge_split.herding_split, yizi_split,),
-                # recursive_steps=(False, True,),
-                # split_steps=(yizi_split,),
-                # recursive_steps=(True,),
-            )
+        new_labels = before_deconv_merge_split.split_clusters(
+            aligned_spike_train[:, 1],
+            raw_bin,
+            sub_h5,
+            n_workers=n_workers,
+            relocated=relocated,
+            **split_kwargs,
+        )
+
+        untriaged_orig = orig_labels >= 0
+        # untriaged_orig_a = orig_labels_a >= 0
+        untriaged_now = new_labels >= 0
+
+        print(f"Split total kept: {(untriaged_now.sum() / untriaged_orig.sum())=}")
+        # print(f"{untriaged_orig.sum()=} {untriaged_orig_a.sum()=} {untriaged_now.sum()=}")
+
         (
             aligned_spike_train2,
             order,
@@ -136,6 +191,7 @@ def new_merge_split(
             order_units_by_z=True,
             geom=geom,
         )
+
 
         assert (order == np.arange(len(order))).all()
 
