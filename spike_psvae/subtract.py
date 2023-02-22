@@ -566,6 +566,7 @@ def subtraction_binary(
     sampling_rate=30_000,
     nsync=0,
     binary_dtype=np.float32,
+    time_axis=0,
     **kwargs,
 ):
     """Wrapper around `subtraction` to provide the old binary file API"""
@@ -583,7 +584,7 @@ def subtraction_binary(
         sampling_rate,
         n_channels,
         binary_dtype,
-        time_axis=1,
+        time_axis=time_axis,
         is_filtered=True,
     )
 
