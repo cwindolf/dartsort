@@ -586,6 +586,9 @@ def subtraction_binary(
         time_axis=1,
         is_filtered=True,
     )
+    
+    if geom is not None: 
+        recording.set_channel_locations(geom)
 
     # set geometry
     recording.set_dummy_probe_from_locations(
