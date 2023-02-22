@@ -583,6 +583,9 @@ def subtraction_binary(
         time_axis=1,
         is_filtered=True,
     )
+    
+    if geom is not None: 
+        recording.set_channel_locations(geom)
 
     if nsync > 0:
         recording = recording.channel_slice(
