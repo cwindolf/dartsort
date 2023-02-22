@@ -42,7 +42,7 @@ def superres_spike_train(
         in_u = np.flatnonzero(spike_train_no_outliers[:, 1] == u)
 
         # Get most recent spikes
-        count_unit = np.logical_and(spike_train[:, 0]<t_end*fs, spike_train_no_outliers[:, 1]==u).sum()
+        count_unit = np.logical_and(spike_train_no_outliers[:, 0]<t_end*fs, spike_train_no_outliers[:, 1]==u).sum()
         if count_unit>n_spikes_max_recent:
             in_u = np.flatnonzero(np.logical_and(spike_train_no_outliers[:, 0]<t_end*fs, 
                                                            spike_train_no_outliers[:, 1]==u))[-n_spikes_max_recent:]
