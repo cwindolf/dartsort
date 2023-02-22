@@ -20,33 +20,34 @@ def superres_spike_train(
     """
     assert spike_train.shape == (*z_abs.shape, 2)
     assert bin_size_um > 0
-
+    
+    spike_train_no_outliers = spike_train.copy()
     if dist_metric is not None:
         # Remove outliers before computing templates
-        spike_train[dist_metric<500, 1]=-1
+        spike_train_no_outliers[dist_metric<500, 1]=-1
 
 
     # bin the spikes to create a binned "superres spike train"
     # we'll use this spike train in an expanded label space to compute templates
-    superres_labels = np.full_like(spike_train[:, 1], -1)
+    superres_labels = np.full_like(spike_train_no_outliers[:, 1], -1)
     # this will keep track of which superres template corresponds to which bin,
     # information which we will need later to determine how to shift the templates
     superres_label_to_bin_id = []
     superres_label_to_orig_label = []
     unit_max_channels = []
-    unit_labels = np.unique(spike_train[spike_train[:, 1] >= 0, 1])
+    unit_labels = np.unique(spike_train_no_outliers[spike_train_no_outliers[:, 1] >= 0, 1])
     medians_at_computation = np.zeros(unit_labels.max()+1)
     cur_superres_label = 0
     for u in unit_labels:
-        in_u = np.flatnonzero(spike_train[:, 1] == u)
+        in_u = np.flatnonzero(spike_train_no_outliers[:, 1] == u)
 
         # Get most recent spikes
-        count_unit = np.logical_and(spike_train[:, 0]<t_end*fs, spike_train[:, 1]==u).sum()
+        count_unit = np.logical_and(spike_train[:, 0]<t_end*fs, spike_train_no_outliers[:, 1]==u).sum()
         if count_unit>n_spikes_max_recent:
-            in_u = np.flatnonzero(np.logical_and(spike_train[:, 0]<t_end*fs, 
-                                                           spike_train[:, 1]==u))[-n_spikes_max_recent:]
+            in_u = np.flatnonzero(np.logical_and(spike_train_no_outliers[:, 0]<t_end*fs, 
+                                                           spike_train_no_outliers[:, 1]==u))[-n_spikes_max_recent:]
         else:
-            in_u = np.flatnonzero(spike_train[:, 1]==u)[:n_spikes_max_recent]
+            in_u = np.flatnonzero(spike_train_no_outliers[:, 1]==u)[:n_spikes_max_recent]
 
         # center the z positions in this unit using the median
         centered_z = z_abs[in_u].copy()
