@@ -161,7 +161,7 @@ if detect_localize:
     detect_dir = Path(output_all) / "initial_detect_localize"
     Path(detect_dir).mkdir(exist_ok=True)
 
-    sub_h5 = subtract.subtraction(
+    sub_h5 = subtract.subtraction_binary(
         raw_data_name,
         Path(detect_dir),
         geom=geom,
