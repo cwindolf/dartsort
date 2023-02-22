@@ -147,7 +147,9 @@ def subtraction(
         neighborhood_kind = "box"
         box_norm_p = 2
 
-    batch_len_samples = n_sec_chunk * int(np.floor(recording.get_sampling_frequency()))
+    batch_len_samples = n_sec_chunk * int(
+        np.floor(recording.get_sampling_frequency())
+    )
 
     # prepare output dir
     out_folder = Path(out_folder)
@@ -206,6 +208,7 @@ def subtraction(
     # compute helper data structures
     # channel indexes for extraction, NN detection, deduplication
     geom = recording.get_channel_locations()
+    print(f"{geom.shape=}")
     dedup_channel_index = make_channel_index(
         geom, dedup_spatial_radius, steps=2
     )
@@ -556,13 +559,13 @@ def subtraction(
 
 def subtraction_binary(
     standardized_bin,
+    *args,
     geom=None,
     t_start=0,
     t_end=None,
     sampling_rate=30_000,
     nsync=0,
     binary_dtype=np.float32,
-    *args,
     **kwargs,
 ):
     """Wrapper around `subtraction` to provide the old binary file API"""
@@ -582,6 +585,11 @@ def subtraction_binary(
         binary_dtype,
         time_axis=1,
         is_filtered=True,
+    )
+
+    # set geometry
+    recording.set_dummy_probe_from_locations(
+        geom, shape_params=dict(radius=10)
     )
 
     if nsync > 0:
