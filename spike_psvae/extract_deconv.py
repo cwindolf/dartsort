@@ -460,7 +460,7 @@ def _extract_deconv_worker(start_sample):
     at_end = end_sample == p.T_samples
     buffer_left = p.trough_offset * (not at_start)
     buffer_right = (p.spike_length_samples - p.trough_offset) * (not at_end)
-    resid = subtract.read_data(
+    resid = spikeio.read_data(
         p.standardized_bin,
         np.float32,
         start_sample - buffer_left,
