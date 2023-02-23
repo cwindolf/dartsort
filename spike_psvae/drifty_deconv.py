@@ -186,6 +186,7 @@ def rigid_int_shift_deconv(
     spike_train=None,
     templates=None,
     template_index_to_unit_id=None,
+    threshold=30.0,
     # need to implement
     t_start=0,
     t_end=None,
@@ -262,7 +263,7 @@ def rigid_int_shift_deconv(
             n_sec_chunk=1,
             sampling_rate=pfs,
             max_iter=1000,
-            threshold=50,
+            threshold=threshold,
             vis_su=1.0,
             conv_approx_rank=5,
             n_processors=n_jobs,
@@ -408,6 +409,7 @@ def superres_deconv(
     deconv_dir=None,
     pfs=30_000,
     reference_displacement=0,
+    threshold=30.0,
     max_z_dist=None,
     t_start=0,
     t_end=None,
@@ -465,6 +467,7 @@ def superres_deconv(
         max_upsample=max_upsample,
         template_index_to_unit_id=superres_label_to_orig_label,
         refractory_period_frames=refractory_period_frames,
+        threshold=threshold,
     )
 
     # unpack results
