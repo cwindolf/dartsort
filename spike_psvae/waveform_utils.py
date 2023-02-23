@@ -9,6 +9,7 @@ def fit_tpca_bin(
     spike_index,
     geom,
     binary_file,
+    centered=True,
     tpca_rank=5,
     tpca_n_wfs=50_000,
     trough_offset=42,
@@ -39,7 +40,18 @@ def fit_tpca_bin(
     )
     which = np.isfinite(tpca_waveforms[:, 0])
     tpca_waveforms = tpca_waveforms[which]
-    tpca = PCA(tpca_rank).fit(tpca_waveforms)
+
+    # fit tpca or svd
+    if centered:
+        tpca = PCA(tpca_rank).fit(tpca_waveforms)
+    else:
+        # TruncatedSVD is sklearn's uncentered PCA
+        tpca = tsvd = TruncatedSVD(tpca_rank).fit(tpca_waveforms)
+
+        # rest of the code expects a mean_ so let's just convert to pca
+        tpca = PCA(tpca_rank)
+        tpca.mean_ = np.zeros_like(tpca_waveforms[0])
+        tpca.components_ = tsvd.components_
 
     return tpca
 
@@ -207,6 +219,10 @@ def make_contiguous_channel_index(n_channels, n_neighbors=40):
     channel_index = np.array(channel_index)
 
     return channel_index
+
+
+def full_channel_index(n_channels):
+    return np.arange(n_channels)[None, :] * np.ones(n_channels, dtype=int)[:, None]
 
 
 def make_channel_index(geom, radius, steps=1, distance_order=False, p=2):

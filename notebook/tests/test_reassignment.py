@@ -5,7 +5,7 @@
 #       extension: .py
 #       format_name: percent
 #       format_version: '1.3'
-#       jupytext_version: 1.14.0
+#       jupytext_version: 1.14.4
 #   kernelspec:
 #     display_name: Python [conda env:a]
 #     language: python
@@ -379,3 +379,24 @@ with h5py.File(dh5) as hh:
         spike_length_samples=spikelen,
         templates=templates_drift[:3],
     )
+
+# %%
+for j, pairs in enumerate(extra["shifted_upsampled_pairs"]):
+    if not j in pairs:
+        print(j, pairs, (superres["all_shifted_upsampled_temps"][j] == 0).all())
+        assert (superres["all_shifted_upsampled_temps"][j] == 0).all()
+        print((superres["superres_deconv_spike_train_shifted_upsampled"][:, 1] == j).sum())
+        assert not (superres["superres_deconv_spike_train_shifted_upsampled"][:, 1] == j).sum()
+    if len(pairs) < 1:
+        assert (superres["all_shifted_upsampled_temps"][j] == 0).all()
+    for k in pairs:
+        assert j in extra["shifted_upsampled_pairs"][k]
+        assert superres["shifted_upsampled_idx_to_shift_id"][j] == superres["shifted_upsampled_idx_to_shift_id"][k]
+    
+    supj = superres["shifted_upsampled_idx_to_superres_id"][j]
+    for k in pairs:
+        supk = superres["shifted_upsampled_idx_to_superres_id"][j]
+        assert supk in extra["superres_pairs"][supj]
+        assert supj in extra["superres_pairs"][supk]        
+
+# %%
