@@ -21,9 +21,11 @@ def get_templates(
     trough_offset=42,
     do_tpca=True,
     tpca=None,
+    tpca_centered=True,
     tpca_rank=5,
     tpca_radius=75,
     tpca_n_wfs=50_000,
+    use_previous_max_channels=False,
     pbar=True,
     seed=0,
     n_jobs=-1,
@@ -104,6 +106,7 @@ def get_templates(
             np.c_[spike_train[:, 0], max_channels],
             geom,
             raw_binary_file,
+            centered=tpca_centered,
             tpca_rank=tpca_rank,
             tpca_n_wfs=tpca_n_wfs,
             trough_offset=trough_offset,
@@ -178,7 +181,10 @@ def get_templates(
             geom, zero_radius_um, steps=1, distance_order=False, p=2
         )
         for i in range(len(templates)):
-            mc = templates[i].ptp(0).argmax()
+            if use_previous_max_channels:
+                mc = int(unit_max_channels[i])
+            else:
+                mc = templates[i].ptp(0).argmax()
             far = ~np.isin(np.arange(len(geom)), zero_ci[mc])
             templates[i, :, far] = 0
 

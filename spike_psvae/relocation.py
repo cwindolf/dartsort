@@ -104,8 +104,6 @@ def get_relocated_waveforms_on_channel_subset(
         ]
     )
     orig_chans = orig_chans_uniq[pitch_index]
-    print(f"{orig_chans.shape=} {max_channels.shape=} {waveforms.shape=}")
-
 
     # now, grab the waveforms on those channels.
     shifted_waveforms = restrict_wfs_to_chans(

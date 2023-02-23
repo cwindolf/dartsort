@@ -88,28 +88,32 @@ def psolvecorr(
     robust_iter=5,
     max_dt=None,
     prior_lambda=0,
+    soft_weights=True,
 ):
     """Solve for rigid displacement given pairwise disps + corrs"""
     T = D.shape[0]
     assert (T, T) == D.shape == C.shape
 
     # subsample where corr > mincorr
-    S = C >= mincorr
+    S = C * (C >= mincorr)
     if max_dt is not None and max_dt > 0:
-        S &= la.toeplitz(
+        S *= la.toeplitz(
             np.r_[
-                np.ones(max_dt, dtype=bool), np.zeros(T - max_dt, dtype=bool)
+                np.ones(max_dt, dtype=S.dtype), np.zeros(T - max_dt, dtype=S.dtype)
             ]
         )
-    I, J = np.where(S == 1)
+    I, J = np.where(S > 0)
     n_sampled = I.shape[0]
 
     # construct Kroneckers
-    ones = np.ones(n_sampled)
-    M = sparse.csr_matrix((ones, (range(n_sampled), I)), shape=(n_sampled, T))
-    N = sparse.csr_matrix((ones, (range(n_sampled), J)), shape=(n_sampled, T))
+    if soft_weights:
+        pair_weights = S[I, J]
+    else:
+        pair_weights = np.ones(n_sampled)
+    M = sparse.csr_matrix((pair_weights, (range(n_sampled), I)), shape=(n_sampled, T))
+    N = sparse.csr_matrix((pair_weights, (range(n_sampled), J)), shape=(n_sampled, T))
     A = M - N
-    V = D[I, J]
+    V = pair_weights * D[I, J]
 
     # add in our prior p_{i+1} - p_i ~ N(0, lambda) by extending the problem
     if prior_lambda > 0:
@@ -148,6 +152,7 @@ def psolvecorr_spatial(
     temporal_prior=True,
     spatial_prior=True,
     reference_displacement="mode_search",
+    soft_weights=True,
 ):
     # D = pairwise_displacement
     W = C > mincorr
@@ -173,11 +178,11 @@ def psolvecorr_spatial(
     if max_dt is not None and max_dt > 0:
         horiz = la.toeplitz(
             np.r_[
-                np.ones(max_dt, dtype=bool), np.zeros(T - max_dt, dtype=bool)
+                np.ones(max_dt, dtype=W.dtype), np.zeros(T - max_dt, dtype=W.dtype)
             ]
         )
         for k in range(W.shape[0]):
-            W[k] &= horiz
+            W[k] *= horiz
 
     # sparsify the problem
     # we will make a list of temporal problems and then
@@ -199,16 +204,19 @@ def psolvecorr_spatial(
         n_sampled = I.size
 
         # construct Kroneckers and sparse objective in this window
-        ones = np.ones(n_sampled)
+        if soft_weights:
+            pair_weights = Wb[I, J]
+        else:
+            pair_weights = np.ones(n_sampled)
         Mb = sparse.csr_matrix(
-            (ones, (range(n_sampled), I)), shape=(n_sampled, T)
+            (pair_weights, (range(n_sampled), I)), shape=(n_sampled, T)
         )
         Nb = sparse.csr_matrix(
-            (ones, (range(n_sampled), J)), shape=(n_sampled, T)
+            (pair_weights, (range(n_sampled), J)), shape=(n_sampled, T)
         )
         block_sparse_kron = Mb - Nb
-        block_disp_pairs = Db[I, J]
-        
+        block_disp_pairs = pair_weights * Db[I, J]
+
         # add the temporal smoothness prior in this window
         if temporal_prior:
             temporal_diff_operator = sparse.diags(
@@ -226,6 +234,7 @@ def psolvecorr_spatial(
             block_disp_pairs = np.concatenate(
                 (block_disp_pairs, np.zeros(T - 1)),
             )
+            print(f"{block_sparse_kron.shape=} {block_disp_pairs.shape=}")
 
         coefficients.append(block_sparse_kron)
         targets.append(block_disp_pairs)
@@ -298,6 +307,7 @@ def calc_corr_decent(
     weights=None,
     disp=None,
     normalized=True,
+    centered=True,
     batch_size=32,
     step_size=1,
     device=None,
@@ -359,42 +369,41 @@ def calc_corr_decent(
     # process raster into the tensors we need for conv below
     # note the transpose from DxT to TxD (batches on first dimension)
     raster = torch.as_tensor(raster, dtype=torch.float32, device=device).T
-    if not normalized:
-        # if we're not doing full normxcorr, we still want to keep
-        # the outputs between 0 and 1
-        if weights is not None:
-            raster *= weights
-        raster /= torch.sqrt((raster**2).sum(dim=1, keepdim=True))
 
     D = np.empty((T, T), dtype=np.float32)
     C = np.empty((T, T), dtype=np.float32)
     xrange = trange if pbar else range
     for i in xrange(0, T, batch_size):
-        if normalized:
-            corr = normxcorr1d(
-                raster,
-                raster[i : i + batch_size],
-                weights=weights,
-                padding=possible_displacement.size // 2,
-            )
-        else:
-            corr = F.conv1d(
-                raster[i : i + batch_size, None, :],
-                raster[:, None, :],
-                padding=possible_displacement.size // 2,
-            )
+        corr = normxcorr1d(
+            raster,
+            raster[i : i + batch_size],
+            weights=weights,
+            padding=possible_displacement.size // 2,
+            normalized=normalized,
+            centered=centered,
+        )
         max_corr, best_disp_inds = torch.max(corr, dim=2)
         best_disp = possible_displacement[best_disp_inds.cpu()]
         D[i : i + batch_size] = best_disp
         C[i : i + batch_size] = max_corr.cpu()
-        gc.collect()
-        torch.cuda.empty_cache()
 
     return D, C
 
 
-def normxcorr1d(template, x,  weights=None, padding=None):
-    """normxcorr: Normalized cross-correlation, optionally weighted
+def normxcorr1d(
+    template,
+    x,
+    weights=None,
+    centered=True,
+    normalized=True,
+    padding="same",
+    conv_engine="torch",
+):
+    """normxcorr1d: Normalized cross-correlation, optionally weighted
+
+    The API is like torch's F.conv1d, except I have accidentally
+    changed the position of input/weights -- template acts like weights,
+    and x acts like input.
 
     Returns the cross-correlation of `template` and `x` at spatial lags
     determined by `mode`. Useful for estimating the location of `template`
@@ -415,28 +424,38 @@ def normxcorr1d(template, x,  weights=None, padding=None):
     x : tensor, 1d shape (length,) or 2d shape (num_inputs, length)
         The signal in which to find `template`
     weights : tensor, shape (length,)
-        Will use weighted means + variances in this case.
+        Will use weighted means, variances, covariances if supplied.
+    centered : bool
+        If true, means will be subtracted (per weighted patch).
+    normalized : bool
+        If true, normalize by the variance (per weighted patch).
     padding : int, optional
         How far to look? if unset, we'll use half the length
-    assume_centered : bool
-        Avoid a copy if your data is centered already.
+    conv_engine : string, one of "torch", "numpy"
+        What library to use for computing cross-correlations.
+        If numpy, falls back to the scipy correlate function.
 
     Returns
     -------
     corr : tensor
     """
-    template = torch.as_tensor(template)
-    x = torch.atleast_2d(torch.as_tensor(x))
-    assert x.device == template.device
+    if conv_engine == "torch":
+        conv1d = F.conv1d
+        npx = torch
+    elif conv_engine == "numpy":
+        conv1d = scipy_conv1d
+        npx = np
+    else:
+        raise ValueError(f"Unknown conv_engine {conv_engine}")
+
+    x = npx.atleast_2d(x)
     num_templates, length = template.shape
     num_inputs, length_ = template.shape
     assert length == length_
 
-    if padding is None:
-        padding = length // 2
-
     # generalize over weighted / unweighted case
-    ones = torch.ones((1, 1, length), dtype=x.dtype, device=x.device)
+    device_kw = {} if conv_engine == "numpy" else dict(device=x.device)
+    ones = npx.ones((1, 1, length), dtype=x.dtype, **device_kw)
     no_weights = weights is None
     if no_weights:
         weights = ones
@@ -452,39 +471,74 @@ def normxcorr1d(template, x,  weights=None, padding=None):
     # compute expectations
     # how many points in each window? seems necessary to normalize
     # for numerical stability.
-    N = F.conv1d(ones, weights, padding=padding)
-    Et = F.conv1d(ones, wt, padding=padding) / N
-    Ex = F.conv1d(x[:, None, :], weights, padding=padding) / N
+    N = conv1d(ones, weights, padding=padding)
+    if centered:
+        Et = conv1d(ones, wt, padding=padding)
+        Et /= N
+        Ex = conv1d(x[:, None, :], weights, padding=padding)
+        Ex /= N
 
     # compute (weighted) covariance
     # important: the formula E[XY] - EX EY is well-suited here,
     # because the means are naturally subtracted correctly
     # patch-wise. you couldn't pre-subtract them!
-    cov = F.conv1d(x[:, None, :], wt, padding=padding) / N
-    cov -= Ex * Et
+    cov = conv1d(x[:, None, :], wt, padding=padding)
+    cov /= N
+    if centered:
+        cov -= Ex * Et
 
     # compute variances for denominator, using var X = E[X^2] - (EX)^2
-    var_template = F.conv1d(
-        ones, wt * template[:, None, :], padding=padding
-    )
-    del wt
-    var_template /= N
-    var_template -= torch.square(Et)
-    var_x = F.conv1d(
-        torch.square(x)[:, None, :], weights, padding=padding
-    )
-    var_x /= N
-    var_x -= torch.square(Ex)
-    del Ex, Et, N
+    if normalized:
+        var_template = conv1d(
+            ones, wt * template[:, None, :], padding=padding
+        )
+        var_template /= N
+        var_x = conv1d(
+            npx.square(x)[:, None, :], weights, padding=padding
+        )
+        var_x /= N
+        if centered:
+            var_template -= npx.square(Et)
+            var_x -= npx.square(Ex)
 
     # now find the final normxcorr
     corr = cov  # renaming for clarity
-    corr /= torch.sqrt(var_x)
-    corr /= torch.sqrt(var_template)
-    # get rid of NaNs in zero-variance areas
-    corr[~torch.isfinite(corr)] = 0
+    if normalized:
+        corr /= npx.sqrt(var_x)
+        corr /= npx.sqrt(var_template)
+        # get rid of NaNs in zero-variance areas
+        corr[~npx.isfinite(corr)] = 0
 
     return corr
+
+
+def scipy_conv1d(input, weights, padding="valid"):
+    """SciPy translation of torch F.conv1d"""
+    from scipy.signal import correlate
+
+    n, c_in, length = input.shape
+    c_out, in_by_groups, kernel_size = weights.shape
+    assert in_by_groups == c_in == 1
+
+    if padding == "same":
+        mode = "same"
+        length_out = length
+    elif padding == "valid":
+        mode = "valid"
+        length_out = length - 2 * (kernel_size // 2)
+    elif isinstance(padding, int):
+        mode = "valid"
+        input = np.pad(input, [*[(0, 0)] * (input.ndim - 1), (padding, padding)])
+        length_out = length - (kernel_size - 1) + 2 * padding
+    else:
+        raise ValueError(f"Unknown padding {padding}")
+
+    output = np.zeros((n, c_out, length_out), dtype=input.dtype)
+    for m in range(n):
+        for c in range(c_out):
+            output[m, c] = correlate(input[m, 0], weights[c, 0], mode=mode)
+
+    return output
 
 
 # -- online methods: not exposed in `ibme` API yet
