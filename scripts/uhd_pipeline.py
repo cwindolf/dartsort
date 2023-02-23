@@ -282,6 +282,13 @@ if deconvolve:
 
     if t_end_deconv is None:
         t_end_deconv=rec_len_sec
+        
+    if time_start_detect>0:
+        spt[:, 0] = spt[:, 0]+time_start_detect*sampling_rate
+        displacement_rigid_bis = np.zeros(0, time_end_detect)
+        displacement_rigid_bis[time_start_detect:time_end_detect] = displacement_rigid
+        displacement_rigid = displacement_rigid_bis
+
 
     full_deconv_with_update(deconv_dir, extract_deconv_dir,
                raw_data_name, geom, displacement_rigid,
