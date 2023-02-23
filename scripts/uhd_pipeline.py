@@ -248,9 +248,9 @@ if savefigs:
     fname_detect_fig = Path(detect_dir) / "detection_displacement_raster_plot.png"
     plt.figure(figsize = (10, 5))
     plt.scatter(spike_index[:, 0]/sampling_rate, z, color = color_array, s = 1)
-    plt.plot(np.arange(t_start_detect, t_end_detect), displacement_rigid[t_start_detect:t_end_detect]-displacement_rigid[t_start_detect], color = 'red')
-    plt.plot(np.arange(t_start_detect, t_end_detect), displacement_rigid[t_start_detect:t_end_detect]-displacement_rigid[t_start_detect]+100, color = 'red')
-    plt.plot(np.arange(t_start_detect, t_end_detect), displacement_rigid[t_start_detect:t_end_detect]-displacement_rigid[t_start_detect]+200, color = 'red')
+    plt.plot(displacement_rigid[t_start_detect:t_end_detect]-displacement_rigid[t_start_detect], color = 'red')
+    plt.plot(displacement_rigid[t_start_detect:t_end_detect]-displacement_rigid[t_start_detect]+100, color = 'red')
+    plt.plot(displacement_rigid[t_start_detect:t_end_detect]-displacement_rigid[t_start_detect]+200, color = 'red')
     plt.savefig(fname_detect_fig)
     plt.close()
 
@@ -262,6 +262,9 @@ if clustering:
     Path(cluster_dir).mkdir(exist_ok=True)
     if t_end_clustering is None:
         t_end_clustering=rec_len_sec
+    t_start_clustering = t_start_clustering-t_start_detect
+    t_end_clustering = t_end_clustering-t_start_detect
+
     spt, maxptps, x, z = run_full_clustering(t_start_clustering, t_end_clustering, cluster_dir, raw_data_name, geom, spike_index,
                                                 localization_results, maxptps, displacement_rigid, len_chunks=len_chunks_cluster, threshold_ptp=threshold_ptp_cluster,
                                                 fs=sampling_rate, triage_quantile_cluster=triage_quantile_cluster, frame_dedup_cluster=frame_dedup_cluster, 
