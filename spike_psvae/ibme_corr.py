@@ -226,7 +226,6 @@ def psolvecorr_spatial(
             block_disp_pairs = np.concatenate(
                 (block_disp_pairs, np.zeros(T - 1)),
             )
-            print(f"{block_sparse_kron.shape=} {block_disp_pairs.shape=}")
 
         coefficients.append(block_sparse_kron)
         targets.append(block_disp_pairs)
@@ -442,12 +441,10 @@ def normxcorr1d(template, x,  weights=None, padding=None):
     if no_weights:
         weights = ones
         wt = template[:, None, :]
-        wt2 = torch.square(template[:, None, :])
     else:
         assert weights.shape == (length,)
         weights = weights[None, None]
         wt = template[:, None, :] * weights
-        wt2 = torch.square(template)[:, None, :] * weights
 
     # conv1d valid rule:
     # (B,1,L),(O,1,L)->(B,O,L)
@@ -468,15 +465,22 @@ def normxcorr1d(template, x,  weights=None, padding=None):
 
     # compute variances for denominator, using var X = E[X^2] - (EX)^2
     var_template = F.conv1d(
-        ones, wt2, padding=padding
-    ) / N - torch.square(Et)
+        ones, wt * template[:, None, :], padding=padding
+    )
+    del wt
+    var_template /= N
+    var_template -= torch.square(Et)
     var_x = F.conv1d(
         torch.square(x)[:, None, :], weights, padding=padding
-    ) / N - torch.square(Ex)
+    )
+    var_x /= N
+    var_x -= torch.square(Ex)
+    del Ex, Et, N
 
     # now find the final normxcorr
     corr = cov  # renaming for clarity
-    corr /= torch.sqrt(var_x * var_template)
+    corr /= torch.sqrt(var_x)
+    corr /= torch.sqrt(var_template)
     # get rid of NaNs in zero-variance areas
     corr[~torch.isfinite(corr)] = 0
 
