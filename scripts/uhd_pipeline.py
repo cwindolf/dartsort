@@ -16,6 +16,10 @@ from spike_psvae.ibme import register_nonrigid
 from spike_psvae.ibme_corr import calc_corr_decent
 from spike_psvae.ibme import fast_raster
 from spike_psvae.ibme_corr import psolvecorr
+from spike_psvae.filter_standardize import npSampShifts
+
+from spikeinterface.preprocessing import highpass_filter, common_reference, zscore, phase_shift 
+import spikeinterface.core as sc
 
 """"
 Set parameters / directories name here
@@ -54,8 +58,7 @@ adcshift_correction=True,
 t_start_preproc=0
 t_end_preproc=None
 #Multi processing params
-mp_preprocessing=True
-n_proc_preprocessing=6
+n_job_preprocessing=-1
 n_sec_chunk_preprocessing=1
 
 
@@ -143,16 +146,35 @@ if preprocessing:
     Path(preprocessing_dir).mkdir(exist_ok=True)
     if t_end_preproc is None:
         t_end_preproc=rec_len_sec
-    filter_standardize.filter_standardize_rec(preprocessing_dir,raw_data_name, dtype_raw,
-        rec_len_sec, n_channels = n_channels_before_preprocessing, channels_to_remove=channels_to_remove, 
-        t_start=t_start_preproc, t_end=t_end_preproc,
-        apply_filter=apply_filter, low_frequency=low_frequency, 
-        high_factor=high_factor, order=order, sampling_frequency=sampling_rate,
-        median_subtraction=median_subtraction, adcshift_correction=adcshift_correction,
-        n_sec_chunk=n_sec_chunk_preprocessing, multi_processing = mp_preprocessing, n_processors = n_proc_preprocessing, overwrite = True,)
+    
+    recording = sc.read_binary(
+        raw_data_name,
+        sampling_rate,
+        n_channels_before_preprocessing,
+        dtype_raw,
+        time_axis=0,
+        is_filtered=False,
+    )
+
+    recording = recording._remove_channels(channels_to_remove)
+
+    # set geometry
+    recording.set_dummy_probe_from_locations(
+        geom, shape_params=dict(radius=10)
+    )
+
+    recording = recording.frame_slice(start_frame=int(sampling_rate * t_start_preproc), end_frame=int(sampling_rate * t_end_preproc))
+
+    sampShifts = npSampShifts()
+    recording = highpass_filter(recording, freq_min=low_frequency, filter_order=order)
+    recording = zscore(recording)
+    recording = phase_shift(recording, inter_sample_shift=sampShifts)
+    recording = common_reference(recording)
+    
+    recording.save(folder=preprocessing_dir, n_jobs=n_job_preprocessing, chunk_size=sampling_rate*n_sec_chunk_preprocessing, progressbar=True)
 
     # Update data name and type if preprocesssed
-    raw_data_name = Path(preprocessing_dir) / "standardized.bin"
+    raw_data_name = Path(preprocessing_dir) / "traces_cached_seg0.raw"
     dtype_raw = "float32"
 
 # Subtraction 
@@ -160,7 +182,7 @@ if detect_localize:
     print("Detection...")
     detect_dir = Path(output_all) / "initial_detect_localize"
     Path(detect_dir).mkdir(exist_ok=True)
-
+    
     sub_h5 = subtract.subtraction_binary(
         raw_data_name,
         Path(detect_dir),
