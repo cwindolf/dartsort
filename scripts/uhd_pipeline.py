@@ -179,6 +179,8 @@ if preprocessing:
 
 # Subtraction 
 t_start_detect-=t_start_preproc
+if t_end_detect is None:
+    t_end_detect=rec_len_sec
 t_end_detect-=t_start_preproc
 
 if detect_localize:
