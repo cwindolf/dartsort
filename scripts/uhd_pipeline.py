@@ -178,11 +178,14 @@ if preprocessing:
     dtype_raw = "float32"
 
 # Subtraction 
+t_start_detect-=t_start_preproc
+t_end_detect-=t_start_preproc
+
 if detect_localize:
     print("Detection...")
     detect_dir = Path(output_all) / "initial_detect_localize"
     Path(detect_dir).mkdir(exist_ok=True)
-    
+        
     sub_h5 = subtract.subtraction_binary(
         raw_data_name,
         Path(detect_dir),
@@ -284,8 +287,8 @@ if clustering:
     Path(cluster_dir).mkdir(exist_ok=True)
     if t_end_clustering is None:
         t_end_clustering=rec_len_sec
-    t_start_clustering = t_start_clustering-t_start_detect
-    t_end_clustering = t_end_clustering-t_start_detect
+    t_start_clustering-=t_start_preproc
+    t_end_clustering-=t_start_preproc
 
     spt, maxptps, x, z = run_full_clustering(t_start_clustering, t_end_clustering, cluster_dir, raw_data_name, geom, spike_index,
                                                 localization_results, maxptps, displacement_rigid, len_chunks=len_chunks_cluster, threshold_ptp=threshold_ptp_cluster,
@@ -304,6 +307,9 @@ if deconvolve:
 
     if t_end_deconv is None:
         t_end_deconv=rec_len_sec
+    t_start_deconv-=t_start_preproc
+    t_end_deconv-=t_start_preproc
+
         
     if time_start_detect>0:
         spt[:, 0] = spt[:, 0]+time_start_detect*sampling_rate
