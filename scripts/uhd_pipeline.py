@@ -233,6 +233,7 @@ with h5py.File(sub_h5, "r+") as h5:
     localization_results = np.array(h5["localizations"][:]) 
     maxptps = np.array(h5["maxptps"][:])
     spike_index = np.array(h5["spike_index"][:])
+    spike_index[:, 0]+=t_start_detect*sampling_rate
 
 # Load tpca
 tpca = PCA(tpca_components.shape[0])
