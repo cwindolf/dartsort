@@ -276,9 +276,9 @@ if savefigs:
     fname_detect_fig = Path(detect_dir) / "detection_displacement_raster_plot.png"
     plt.figure(figsize = (10, 5))
     plt.scatter(spike_index[:, 0]/sampling_rate, z, color = color_array, s = 1)
-    plt.plot(displacement_rigid[t_start_detect:t_end_detect]-displacement_rigid[t_start_detect], color = 'red')
-    plt.plot(displacement_rigid[t_start_detect:t_end_detect]-displacement_rigid[t_start_detect]+100, color = 'red')
-    plt.plot(displacement_rigid[t_start_detect:t_end_detect]-displacement_rigid[t_start_detect]+200, color = 'red')
+    plt.plot(np.arange(t_start_detect,t_end_detect), displacement_rigid[t_start_detect:t_end_detect]-displacement_rigid[t_start_detect], color = 'red')
+    plt.plot(np.arange(t_start_detect,t_end_detect), displacement_rigid[t_start_detect:t_end_detect]-displacement_rigid[t_start_detect]+100, color = 'red')
+    plt.plot(np.arange(t_start_detect,t_end_detect), displacement_rigid[t_start_detect:t_end_detect]-displacement_rigid[t_start_detect]+200, color = 'red')
     plt.savefig(fname_detect_fig)
     plt.close()
 
