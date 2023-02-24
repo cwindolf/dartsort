@@ -143,7 +143,7 @@ geom = np.load(geom_path)
 if preprocessing:
     print("Preprocessing...")
     preprocessing_dir = Path(output_all) / "preprocessing"
-    Path(preprocessing_dir).mkdir(exist_ok=True)
+#     Path(preprocessing_dir).mkdir(exist_ok=True)
     if t_end_preproc is None:
         t_end_preproc=rec_len_sec
     
