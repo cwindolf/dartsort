@@ -264,6 +264,11 @@ displacement_rigid = psolvecorr(D, C, mincorr=mincorr, max_dt=max_dt, prior_lamb
 fname_disp = Path(detect_dir) / "displacement_rigid.npy"
 np.save(fname_disp, displacement_rigid)
 
+if t_start_detect>0:
+    displacement_rigid_bis = np.zeros(t_end_detect)
+    displacement_rigid_bis[t_start_detect:t_end_detect] = displacement_rigid
+    displacement_rigid = displacement_rigid_bis
+
 if savefigs:
 
     vir = cm.get_cmap('viridis')
