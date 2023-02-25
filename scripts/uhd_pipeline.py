@@ -338,8 +338,8 @@ if deconvolve:
                p_bar=True,
                save_chunk_results=False)
     
-    fname_medians = Path(extract_dir) / "registered_medians.npy"
-    fname_spread = Path(extract_dir) / "registered_spreads.npy"
+    fname_medians = Path(extract_deconv_dir) / "registered_medians.npy"
+    fname_spread = Path(extract_deconv_dir) / "registered_spreads.npy"
     units_spread = np.load(fname_spread)
     units_medians = np.load(fname_medians)
 
