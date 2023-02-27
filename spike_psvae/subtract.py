@@ -512,6 +512,7 @@ def subtraction(
                 recording.to_dict(),
             ),
         ) as pool:
+            count = 0
             for result in tqdm(
                 pool.map(_subtraction_batch, jobs),
                 total=n_batches,
@@ -541,6 +542,10 @@ def subtraction(
                         Path(fnpy).unlink()
                     # update spike count
                     N += N_new
+                
+                count += 1
+                if not count % 100:
+                    print("Mean spikes per batch:", N / count)
 
     # -- done!
     if save_residual:
@@ -689,6 +694,16 @@ def _subtraction_batch_init(
         dn_detector.to(device)
     _subtraction_batch.dn_detector = dn_detector
 
+    # this is a hack to fix ibl streaming in parallel
+    stack = [recording_dict]
+    for d in stack:
+        for k, v in d.items():
+            if isinstance(v, dict):
+                if "class" in v and "IblStreamingRecordingExtractor" in v["class"]:
+                    v["kwargs"]["cache_folder"] = Path(v["kwargs"]["cache_folder"]) / f"cache{rank}"
+                else:
+                    stack.append(v)
+                
     _subtraction_batch.recording = sc.BaseRecording.from_dict(recording_dict)
 
 
@@ -793,6 +808,7 @@ def subtraction_batch(
     load_end = min(recording.get_num_samples(), s_end + buffer)
     residual = recording.get_traces(start_frame=load_start, end_frame=load_end)
     residual = residual.astype(dtype)
+    assert np.isfinite(residual).all()
     prefix = f"{s_start:10d}_"
 
     # 0 padding if we were at the edge of the data
