@@ -1,4 +1,5 @@
-
+# %%
+# %%
 import h5py
 import numpy as np
 import tempfile
@@ -10,6 +11,7 @@ from .waveform_utils import get_pitch, pitch_shift_templates
 from .extract_deconv import extract_deconv
 
 
+# %%
 def superres_spike_train(
     spike_train, z_abs, x, bin_size_um, geom, t_end=100, 
     units_spread=None, min_spikes_bin=None, n_spikes_max_recent = 1000, fs=30000, dist_metric=None, dist_metric_threshold=500,
@@ -107,7 +109,9 @@ def superres_spike_train(
     )
 
 
+# %%
 
+# %%
 def superres_denoised_templates(
     spike_train,
     z_abs,
@@ -135,6 +139,11 @@ def superres_denoised_templates(
     tpca_radius=75,
     tpca_n_wfs=50_000,
     tpca_centered=True,
+    do_nn_denoise=False,
+    denoiser_init_kwargs={}, 
+    denoiser_weights_path=None, 
+    device=None,
+    batch_size=1024,
     fs=30000,
     pbar=True,
     seed=0,
@@ -181,6 +190,11 @@ def superres_denoised_templates(
         tpca_n_wfs=tpca_n_wfs,
         tpca_centered=tpca_centered,
         use_previous_max_channels=True,
+        do_nn_denoise=do_nn_denoise,
+        denoiser_init_kwargs=denoiser_init_kwargs, 
+        denoiser_weights_path=denoiser_weights_path, 
+        device=device,
+        batch_size=batch_size,
         pbar=pbar,
         seed=seed,
         n_jobs=n_jobs,
@@ -194,7 +208,9 @@ def superres_denoised_templates(
     )
 
 
+# %%
 
+# %%
 def shift_superres_templates(
     superres_templates,
     superres_label_to_bin_id,
@@ -272,6 +288,7 @@ def shift_superres_templates(
     return shifted_templates #, superres_label_to_bin_id
 
 
+# %%
 def shift_deconv(
     raw_bin,
     geom,
@@ -480,6 +497,7 @@ def shift_deconv(
         deconv_dist_metrics=deconv_dist_metrics,
     )
 
+# %%
 def superres_deconv_chunk(
     raw_bin,
     geom,
@@ -621,9 +639,10 @@ def superres_deconv_chunk(
         shifted_superres_templates=shifted_deconv_res["shifted_templates"],
     )
 
+# %%
 
 
-
+# %%
 def extract_superres_shifted_deconv(
     superres_deconv_result,
     overwrite=True,
@@ -731,9 +750,10 @@ def extract_superres_shifted_deconv(
 
     return extract_h5
 
+# %%
 
 
-
+# %%
 def full_deconv_with_update(
     deconv_dir,
     extract_dir,
@@ -871,9 +891,11 @@ def full_deconv_with_update(
     np.save(fname_dist_metric, dist_metric)
 
 
+# %%
 
+# %%
 
-
+# %%
 def update_spike_train_with_deconv_res(start_sec, end_sec, spt_before, spt_after,
                                       x_before, z_before, localizations_after, dist_metric_before, dist_metric_after, 
                                       maxptps_before, maxptps_after, pfs=30000):
@@ -913,7 +935,9 @@ def update_spike_train_with_deconv_res(start_sec, end_sec, spt_before, spt_after
     return spt_after.astype('int'), x_after, z_after, dist_metric_after, maxptps_after
 
 
+# %%
 
+# %%
 def get_registered_pos(spt, z, displacement_rigid, pfs=30000):
     z_reg = z-displacement_rigid[spt[:, 0]//pfs]
     registered_median = np.zeros(spt[:, 1].max()+1)
@@ -924,4 +948,4 @@ def get_registered_pos(spt, z, displacement_rigid, pfs=30000):
 
     return registered_median, registered_spread
 
-
+# %%
