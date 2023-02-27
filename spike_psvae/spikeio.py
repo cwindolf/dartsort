@@ -1,9 +1,11 @@
+# %%
 """A library for quickly reading spike data from .bin files."""
 from pathlib import Path
 import numpy as np
 from os import SEEK_SET
 
 
+# %%
 def get_binary_length_samples(
     input_bin, n_channels, nsync=0, dtype=np.float32
 ):
@@ -16,6 +18,7 @@ def get_binary_length_samples(
     return T_samples
 
 
+# %%
 def get_binary_length(
     input_bin, n_channels, sampling_rate, nsync=0, dtype=np.float32
 ):
@@ -33,6 +36,7 @@ def get_binary_length(
     return T_samples, T_sec
 
 
+# %%
 def read_data(
     bin_file, dtype, s_start, s_end, n_channels, nsync=0, out_dtype=None
 ):
@@ -56,7 +60,7 @@ def read_data(
     data : np.array of shape (s_end - s_start, n_channels)
     """
     out_dtype = dtype if out_dtype is None else out_dtype
-    offset = s_start * np.dtype(dtype).itemsize * (n_channels + nsync)
+    offset = np.int64(s_start) * np.dtype(dtype).itemsize * (n_channels + nsync)
     with open(bin_file, "rb") as fin:
         data = np.fromfile(
             fin,
@@ -69,6 +73,7 @@ def read_data(
     return data
 
 
+# %%
 def read_waveforms_in_memory(
     array,
     spike_index,
@@ -92,6 +97,7 @@ def read_waveforms_in_memory(
     return waveforms
 
 
+# %%
 def read_waveforms(
     trough_times,
     bin_file,
@@ -217,6 +223,7 @@ def read_waveforms(
     return waveforms, skipped_idx
 
 
+# %%
 def read_maxchan_traces(
     spike_index,
     bin_file,
