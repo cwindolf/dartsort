@@ -34,6 +34,7 @@ def superres_spike_train(
     superres_labels = np.full_like(spike_train_no_outliers[:, 1], -1)
     # this will keep track of which superres template corresponds to which bin,
     # information which we will need later to determine how to shift the templates
+    n_spikes_per_bin = []
     superres_label_to_bin_id = []
     superres_label_to_orig_label = []
     unit_max_channels = []
@@ -75,18 +76,20 @@ def superres_spike_train(
             ]
         # IS THAT NEEDED - min_spikes_bin=6
         if min_spikes_bin is None:
-            for bin_id in occupied_bins:
+            for j, bin_id in enumerate(occupied_bins):
                 superres_labels[in_u[bin_ids == bin_id]] = cur_superres_label
                 superres_label_to_bin_id.append(bin_id)
                 unit_max_channels.append(np.sum((geom - [np.median(x[in_u[bin_ids == bin_id]]), np.median(z_abs[in_u[bin_ids == bin_id]])])**2, axis=1).argmin())
                 superres_label_to_orig_label.append(u)
+                n_spikes_per_bin.append(bin_counts[j])
                 cur_superres_label += 1
         else:
             if bin_counts.max() >= min_spikes_bin:
-                for bin_id in occupied_bins[bin_counts >= min_spikes_bin]:
+                for j, bin_id in enumerate(occupied_bins[bin_counts >= min_spikes_bin]):
                     superres_labels[in_u[bin_ids == bin_id]] = cur_superres_label
                     superres_label_to_bin_id.append(bin_id)
                     superres_label_to_orig_label.append(u)
+                    n_spikes_per_bin.append(bin_counts[j])
                     unit_max_channels.append(np.sum((geom - [np.median(x[in_u[bin_ids == bin_id]]), np.median(z_abs[in_u[bin_ids == bin_id]])])**2, axis=1).argmin())
                     cur_superres_label += 1
             # what if no template was computed for u
@@ -94,18 +97,21 @@ def superres_spike_train(
                 superres_labels[in_u] = cur_superres_label
                 superres_label_to_bin_id.append(0)
                 superres_label_to_orig_label.append(u)
+                n_spikes_per_bin.append(in_u.shape[0])
                 unit_max_channels.append(np.sum((geom - [np.median(x[in_u]), np.median(z_abs[in_u])])**2, axis=1).argmin())
                 cur_superres_label += 1
 
     superres_label_to_bin_id = np.array(superres_label_to_bin_id)
     superres_label_to_orig_label = np.array(superres_label_to_orig_label)
+    n_spikes_per_bin = np.array(n_spikes_per_bin)
     unit_max_channels = np.array(unit_max_channels)
     return (
         superres_labels,
         superres_label_to_bin_id,
         superres_label_to_orig_label,
         medians_at_computation,
-        unit_max_channels
+        unit_max_channels,
+        n_spikes_per_bin
     )
 
 
@@ -121,6 +127,8 @@ def superres_denoised_templates(
     raw_binary_file,
     t_end=100,
     min_spikes_bin=None,
+    augment_low_snr_temps=True,
+    min_spikes_to_augment=25,
     units_spread=None,
     dist_metric=None,
     dist_metric_threshold=500,
@@ -129,7 +137,7 @@ def superres_denoised_templates(
     denoise_templates=True,
     do_temporal_decrease=True,
     zero_radius_um=70, #reduce this value in uhd compared to NP1/NP2
-    reducer=np.median,
+    reducer=np.mean,
     snr_threshold=5.0 * np.sqrt(100),
     spike_length_samples=121,
     trough_offset=42,
@@ -155,7 +163,8 @@ def superres_denoised_templates(
         superres_label_to_bin_id,
         superres_label_to_orig_label,
         medians_at_computation,
-        unit_max_channels
+        unit_max_channels,
+        n_spikes_per_bin
     ) = superres_spike_train(
         spike_train,
         z_abs,
@@ -200,6 +209,18 @@ def superres_denoised_templates(
         n_jobs=n_jobs,
         raw_only=not denoise_templates,
     )
+    
+    if augment_low_snr_temps:
+        templates = augment_low_snr_templates(
+                        templates, 
+                        superres_label_to_bin_id,
+                        superres_label_to_orig_label,
+                        n_spikes_per_bin, 
+                        bin_size_um,
+                        geom,
+                        min_spikes_to_augment = min_spikes_to_augment
+        )
+    
     return (
         templates,
         superres_label_to_bin_id,
@@ -209,6 +230,55 @@ def superres_denoised_templates(
 
 
 # %%
+def augment_low_snr_templates(
+    superres_templates, 
+    superres_label_to_bin_id,
+    superres_label_to_orig_label,
+    n_spikes_per_bin, 
+    bin_size_um,
+    geom,
+    min_spikes_to_augment = 25,
+    fill_value=0.0,
+):
+    
+    pitch = get_pitch(geom)
+    n_chans_per_row = (geom[:, 1]<pitch).sum()
+    
+    temp_to_augment = np.flatnonzero(n_spikes_per_bin<min_spikes_to_augment)
+    for k in temp_to_augment:
+        temp_orig = superres_label_to_orig_label[k]
+        bin_id = superres_label_to_bin_id[k] 
+        bins_to_augment = np.array([bin_id+pitch//bin_size_um, bin_id-pitch//bin_size_um])
+        n_pitch_shifts = np.array([-1, 1])
+        idx_exist = np.isin(bins_to_augment, superres_label_to_bin_id[superres_label_to_orig_label==temp_orig])
+        n_pitch_shifts = n_pitch_shifts[idx_exist]
+        bins_to_augment = bins_to_augment[idx_exist] 
+        if len(bins_to_augment):
+            cmp = n_spikes_per_bin[k]
+            superres_templates[k] = superres_templates[k]*n_spikes_per_bin[k]
+            for j, bin_id_to_augment in enumerate(bins_to_augment):
+                shift = n_pitch_shifts[j]
+                idx_augment = np.flatnonzero(np.logical_and(superres_label_to_orig_label==temp_orig, superres_label_to_bin_id==bin_id_to_augment))
+                if shift>0:
+                    # shift by 1 row up
+                    # set other channels ot 0
+                    superres_templates[k] += pitch_shift_templates(
+                                                shift, geom, superres_templates[idx_augment], fill_value=fill_value
+                                            )[0]*n_spikes_per_bin[idx_augment]
+                    superres_templates[k, :, :shift*n_chans_per_row]=0
+                elif shift<0:
+                    # shift by shift row down
+                    # set other channels ot 0
+                    superres_templates[k] += pitch_shift_templates(
+                                                shift, geom, superres_templates[idx_augment], fill_value=fill_value
+                                            )[0]*n_spikes_per_bin[idx_augment]
+                    superres_templates[k, :, shift*n_chans_per_row:]=0
+                cmp += n_spikes_per_bin[idx_augment]
+            superres_templates[k] /= cmp
+         
+    return superres_templates
+    
+
 
 # %%
 def shift_superres_templates(
@@ -227,22 +297,30 @@ def shift_superres_templates(
     This version shifts by every (possible - if enough templates) mod 
     """
     pitch = get_pitch(geom)
-
+    bins_per_pitch = pitch / bin_size_um
+    
+    if bins_per_pitch != int(bins_per_pitch):
+        raise ValueError(
+            f"The pitch of this probe is {pitch}, but the bin size "
+            f"{bin_size_um} does not evenly divide it."
+        )
+    
     shifted_templates = superres_templates.copy()
 
     #shift every unit separately
     for unit in np.unique(superres_label_to_orig_label):
+        shift_um = disp_value + registered_medians[unit] - medians_at_computation[unit]
         # shift in bins, rounded towards 0
-        bins_shift = np.round((disp_value + registered_medians[unit] - medians_at_computation[unit]))
+        bins_shift = np.round(shift_um / bin_size_um) # ROUND ??? - do mod, a little different
         if bins_shift!=0:
             # How to do the shifting?
             # We break the shift into two pieces: the number of full pitches,
             # and the remaining bins after shifting by full pitches.
             n_pitches_shift = int(
-                bins_shift / pitch
+                bins_shift / bins_per_pitch
             )  # want to round towards 0, not //
 
-            bins_shift_rem = bins_shift - pitch * n_pitches_shift
+            bins_shift_rem = bins_shift - bins_per_pitch * n_pitches_shift
 
             # Now, first we do the pitch shifts
             shifted_templates_unit = pitch_shift_templates(
@@ -256,7 +334,7 @@ def shift_superres_templates(
             n_temp = (superres_label_to_orig_label==unit).sum()
             if bins_shift_rem<0:
                 if bins_shift_rem<-pitch/2 or n_temp>pitch/2:
-                    idx_mod_shift = np.flatnonzero(np.isin(superres_label_to_bin_id[superres_label_to_orig_label==unit], superres_label_to_bin_id[superres_label_to_orig_label==unit].min()-np.arange(-bins_shift_rem)+pitch))
+                    idx_mod_shift = np.flatnonzero(np.isin(superres_label_to_bin_id[superres_label_to_orig_label==unit], superres_label_to_bin_id[superres_label_to_orig_label==unit].min()-np.arange(-bins_shift_rem)+bins_per_pitch-1))
                     n_temp_shift = len(idx_mod_shift)
                     if n_temp_shift:
                         shifted_templates_unit[-n_temp_shift:] = pitch_shift_templates(
@@ -269,7 +347,7 @@ def shift_superres_templates(
                         superres_label_to_bin_id[superres_label_to_orig_label==unit] = np.roll(superres_label_to_bin_id[superres_label_to_orig_label==unit], -len(idx_mod_shift))
             elif bins_shift_rem>0:
                 if bins_shift_rem>pitch/2 or n_temp>pitch/2:
-                    idx_mod_shift = np.flatnonzero(np.isin(superres_label_to_bin_id[superres_label_to_orig_label==unit], superres_label_to_bin_id[superres_label_to_orig_label==unit].max()+np.arange(bins_shift_rem)-pitch))
+                    idx_mod_shift = np.flatnonzero(np.isin(superres_label_to_bin_id[superres_label_to_orig_label==unit], superres_label_to_bin_id[superres_label_to_orig_label==unit].max()+np.arange(bins_shift_rem)-bins_per_pitch+1))
                     n_temp_shift = len(idx_mod_shift)
                     if n_temp_shift:
                         shifted_templates_unit[:n_temp_shift] = pitch_shift_templates(
@@ -519,6 +597,8 @@ def superres_deconv_chunk(
     max_upsample=1,
     refractory_period_frames=10,
     min_spikes_bin=None,
+    augment_low_snr_temps=True, 
+    min_spikes_to_augment=25,
     max_spikes_per_unit=200,
     tpca=None,
     deconv_threshold=200,
@@ -542,6 +622,8 @@ def superres_deconv_chunk(
         raw_bin,
         t_end,
         min_spikes_bin,
+        augment_low_snr_temps, 
+        min_spikes_to_augment,
         units_spread,
         dist_metric,
         deconv_outliers_threshold,
@@ -550,7 +632,7 @@ def superres_deconv_chunk(
         denoise_templates=True,
         do_temporal_decrease=True,
         zero_radius_um=70,
-        reducer=np.median,
+        reducer=np.mean,
         snr_threshold=5.0 * np.sqrt(100),
         spike_length_samples=spike_length_samples,
         trough_offset=trough_offset,
@@ -776,6 +858,8 @@ def full_deconv_with_update(
     max_upsample=1,
     refractory_period_frames=10,
     min_spikes_bin=None,
+    augment_low_snr_temps=True, 
+    min_spikes_to_augment=25,
     max_spikes_per_unit=200,
     tpca=None,
     deconv_threshold=200, #Validated experimentaly with template norm
@@ -826,6 +910,8 @@ def full_deconv_with_update(
             max_upsample=max_upsample,
             refractory_period_frames=refractory_period_frames,
             min_spikes_bin=min_spikes_bin,
+            augment_low_snr_temps=augment_low_snr_temps, 
+            min_spikes_to_augment=min_spikes_to_augment,
             max_spikes_per_unit=max_spikes_per_unit,
             tpca=tpca,
             deconv_threshold=deconv_threshold, 
