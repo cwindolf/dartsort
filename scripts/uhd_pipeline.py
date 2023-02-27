@@ -16,6 +16,10 @@ from spike_psvae.ibme import register_nonrigid
 from spike_psvae.ibme_corr import calc_corr_decent
 from spike_psvae.ibme import fast_raster
 from spike_psvae.ibme_corr import psolvecorr
+from spike_psvae.filter_standardize import npSampShifts
+
+from spikeinterface.preprocessing import highpass_filter, common_reference, zscore, phase_shift 
+import spikeinterface.core as sc
 
 """"
 Set parameters / directories name here
@@ -54,8 +58,7 @@ adcshift_correction=True,
 t_start_preproc=0
 t_end_preproc=None
 #Multi processing params
-mp_preprocessing=True
-n_proc_preprocessing=6
+n_job_preprocessing=-1
 n_sec_chunk_preprocessing=1
 
 
@@ -140,27 +143,51 @@ geom = np.load(geom_path)
 if preprocessing:
     print("Preprocessing...")
     preprocessing_dir = Path(output_all) / "preprocessing"
-    Path(preprocessing_dir).mkdir(exist_ok=True)
+#     Path(preprocessing_dir).mkdir(exist_ok=True)
     if t_end_preproc is None:
         t_end_preproc=rec_len_sec
-    filter_standardize.filter_standardize_rec(preprocessing_dir,raw_data_name, dtype_raw,
-        rec_len_sec, n_channels = n_channels_before_preprocessing, channels_to_remove=channels_to_remove, 
-        t_start=t_start_preproc, t_end=t_end_preproc,
-        apply_filter=apply_filter, low_frequency=low_frequency, 
-        high_factor=high_factor, order=order, sampling_frequency=sampling_rate,
-        median_subtraction=median_subtraction, adcshift_correction=adcshift_correction,
-        n_sec_chunk=n_sec_chunk_preprocessing, multi_processing = mp_preprocessing, n_processors = n_proc_preprocessing, overwrite = True,)
+    
+    recording = sc.read_binary(
+        raw_data_name,
+        sampling_rate,
+        n_channels_before_preprocessing,
+        dtype_raw,
+        time_axis=0,
+        is_filtered=False,
+    )
+
+    recording = recording._remove_channels(channels_to_remove)
+
+    # set geometry
+    recording.set_dummy_probe_from_locations(
+        geom, shape_params=dict(radius=10)
+    )
+
+    recording = recording.frame_slice(start_frame=int(sampling_rate * t_start_preproc), end_frame=int(sampling_rate * t_end_preproc))
+
+    sampShifts = npSampShifts()
+    recording = highpass_filter(recording, freq_min=low_frequency, filter_order=order)
+    recording = zscore(recording)
+    recording = phase_shift(recording, inter_sample_shift=sampShifts)
+    recording = common_reference(recording)
+    
+    recording.save(folder=preprocessing_dir, n_jobs=n_job_preprocessing, chunk_size=sampling_rate*n_sec_chunk_preprocessing, progressbar=True)
 
     # Update data name and type if preprocesssed
-    raw_data_name = Path(preprocessing_dir) / "standardized.bin"
+    raw_data_name = Path(preprocessing_dir) / "traces_cached_seg0.raw"
     dtype_raw = "float32"
 
 # Subtraction 
+t_start_detect-=t_start_preproc
+if t_end_detect is None:
+    t_end_detect=rec_len_sec
+t_end_detect-=t_start_preproc
+
 if detect_localize:
     print("Detection...")
     detect_dir = Path(output_all) / "initial_detect_localize"
     Path(detect_dir).mkdir(exist_ok=True)
-
+        
     sub_h5 = subtract.subtraction_binary(
         raw_data_name,
         Path(detect_dir),
@@ -206,6 +233,7 @@ with h5py.File(sub_h5, "r+") as h5:
     localization_results = np.array(h5["localizations"][:]) 
     maxptps = np.array(h5["maxptps"][:])
     spike_index = np.array(h5["spike_index"][:])
+    spike_index[:, 0]+=t_start_detect*sampling_rate
 
 # Load tpca
 tpca = PCA(tpca_components.shape[0])
@@ -248,9 +276,9 @@ if savefigs:
     fname_detect_fig = Path(detect_dir) / "detection_displacement_raster_plot.png"
     plt.figure(figsize = (10, 5))
     plt.scatter(spike_index[:, 0]/sampling_rate, z, color = color_array, s = 1)
-    plt.plot(displacement_rigid[t_start_detect:t_end_detect]-displacement_rigid[t_start_detect], color = 'red')
-    plt.plot(displacement_rigid[t_start_detect:t_end_detect]-displacement_rigid[t_start_detect]+100, color = 'red')
-    plt.plot(displacement_rigid[t_start_detect:t_end_detect]-displacement_rigid[t_start_detect]+200, color = 'red')
+    plt.plot(np.arange(t_start_detect,t_end_detect), displacement_rigid[t_start_detect:t_end_detect]-displacement_rigid[t_start_detect], color = 'red')
+    plt.plot(np.arange(t_start_detect,t_end_detect), displacement_rigid[t_start_detect:t_end_detect]-displacement_rigid[t_start_detect]+100, color = 'red')
+    plt.plot(np.arange(t_start_detect,t_end_detect), displacement_rigid[t_start_detect:t_end_detect]-displacement_rigid[t_start_detect]+200, color = 'red')
     plt.savefig(fname_detect_fig)
     plt.close()
 
@@ -262,8 +290,8 @@ if clustering:
     Path(cluster_dir).mkdir(exist_ok=True)
     if t_end_clustering is None:
         t_end_clustering=rec_len_sec
-    t_start_clustering = t_start_clustering-t_start_detect
-    t_end_clustering = t_end_clustering-t_start_detect
+    t_start_clustering-=t_start_preproc
+    t_end_clustering-=t_start_preproc
 
     spt, maxptps, x, z = run_full_clustering(t_start_clustering, t_end_clustering, cluster_dir, raw_data_name, geom, spike_index,
                                                 localization_results, maxptps, displacement_rigid, len_chunks=len_chunks_cluster, threshold_ptp=threshold_ptp_cluster,
@@ -282,13 +310,8 @@ if deconvolve:
 
     if t_end_deconv is None:
         t_end_deconv=rec_len_sec
-        
-    if time_start_detect>0:
-        spt[:, 0] = spt[:, 0]+time_start_detect*sampling_rate
-        displacement_rigid_bis = np.zeros(0, time_end_detect)
-        displacement_rigid_bis[time_start_detect:time_end_detect] = displacement_rigid
-        displacement_rigid = displacement_rigid_bis
-
+    t_start_deconv-=t_start_preproc
+    t_end_deconv-=t_start_preproc
 
     full_deconv_with_update(deconv_dir, extract_deconv_dir,
                raw_data_name, geom, displacement_rigid,
@@ -315,8 +338,8 @@ if deconvolve:
                p_bar=True,
                save_chunk_results=False)
     
-    fname_medians = Path(extract_dir) / "registered_medians.npy"
-    fname_spread = Path(extract_dir) / "registered_spreads.npy"
+    fname_medians = Path(extract_deconv_dir) / "registered_medians.npy"
+    fname_spread = Path(extract_deconv_dir) / "registered_spreads.npy"
     units_spread = np.load(fname_spread)
     units_medians = np.load(fname_medians)
 
