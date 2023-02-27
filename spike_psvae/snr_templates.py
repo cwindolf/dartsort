@@ -1,12 +1,16 @@
+# %%
 import numpy as np
 from tqdm.auto import tqdm
 import multiprocessing
 from concurrent.futures import ProcessPoolExecutor
 from .multiprocessing_utils import MockPoolExecutor, MockQueue
+import torch
 
+# %%
 from . import denoise, spikeio, waveform_utils
 
 
+# %%
 def get_templates(
     spike_train,
     geom,
@@ -26,6 +30,11 @@ def get_templates(
     tpca_radius=75,
     tpca_n_wfs=50_000,
     use_previous_max_channels=False,
+    do_nn_denoise=False,
+    denoiser_init_kwargs={}, 
+    denoiser_weights_path=None, 
+    device=None,
+    batch_size=1024,
     pbar=True,
     seed=0,
     n_jobs=-1,
@@ -112,6 +121,11 @@ def get_templates(
             trough_offset=trough_offset,
             spike_length_samples=spike_length_samples,
             spatial_radius=tpca_radius,
+            do_nn_denoise=do_nn_denoise,
+            denoiser_init_kwargs=denoiser_init_kwargs, 
+            denoiser_weights_path=denoiser_weights_path, 
+            device=device,
+            batch_size=batch_size,
             seed=seed,
         )
         extra["tpca"] = tpca
@@ -151,6 +165,11 @@ def get_templates(
             trough_offset,
             spike_length_samples,
             raw_only,
+            do_nn_denoise,
+            denoiser_init_kwargs, 
+            denoiser_weights_path, 
+            device,
+            batch_size
         ),
     ) as pool:
         for unit, raw_template, denoised_template, snr_by_chan in xqdm(
@@ -191,6 +210,7 @@ def get_templates(
     return templates, extra
 
 
+# %%
 def get_raw_templates(
     spike_train,
     geom,
@@ -221,6 +241,7 @@ def get_raw_templates(
     return raw_templates
 
 
+# %%
 def get_denoised_template_single(
     spike_times,
     geom,
@@ -238,6 +259,11 @@ def get_denoised_template_single(
     tpca_radius=75,
     pbar=True,
     tpca_n_wfs=50_000,
+    do_nn_denoise=False,
+    denoiser_init_kwargs={}, 
+    denoiser_weights_path=None, 
+    device=None,
+    batch_size=1024,    
     seed=0,
 ):
     (
@@ -256,6 +282,11 @@ def get_denoised_template_single(
         reducer=reducer,
         trough_offset=trough_offset,
         spike_length_samples=spike_length_samples,
+        do_nn_denoise=do_nn_denoise,
+        denoiser_init_kwargs=denoiser_init_kwargs, 
+        denoiser_weights_path=denoiser_weights_path, 
+        device=device,
+        batch_size=batch_size,    
     )
 
     # SNR-weighted combination to create the template
@@ -276,9 +307,11 @@ def get_denoised_template_single(
     return template
 
 
+# %%
 get_single_templates = get_denoised_template_single
 
 
+# %%
 def get_raw_denoised_template_single(
     spike_times,
     geom,
@@ -291,6 +324,11 @@ def get_raw_denoised_template_single(
     reducer=np.median,
     trough_offset=42,
     spike_length_samples=121,
+    do_nn_denoise=False,
+    denoiser_init_kwargs={}, 
+    denoiser_weights_path=None, 
+    device=None,
+    batch_size=1024,
 ):
     rg = np.random.default_rng(seed)
     choices = slice(None)
@@ -306,6 +344,44 @@ def get_raw_denoised_template_single(
         trough_offset=trough_offset,
         spike_length_samples=spike_length_samples,
     )
+    
+    if do_nn_denoise:
+        N, T, C = waveforms.shape
+        waveforms = waveforms.transpose(0, 2, 1).reshape(
+            -1, spike_length_samples
+        )
+        # pick torch device if it's not supplied
+        if device is None:
+            device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+            if device.type == "cuda":
+                torch.cuda._lazy_init()
+        else:
+            device = torch.device(device)
+        torch.set_grad_enabled(False)
+
+        denoiser = denoise.SingleChanDenoiser(**denoiser_init_kwargs)
+        if denoiser_weights_path is not None:
+            denoiser.load(fname_model=denoiser_weights_path)
+        else:
+            denoiser.load()
+        denoiser.to(device)
+
+        results = []
+        for bs in range(0, waveforms.shape[0], batch_size):
+            be = min(bs + batch_size, N * C)
+            results.append(
+                denoiser(
+                    torch.as_tensor(
+                        waveforms[bs:be], device=device, dtype=torch.float
+                    )
+                )
+                .cpu()
+                .numpy()
+            )
+        waveforms = np.concatenate(results, axis=0)
+        del results
+        waveforms = waveforms.reshape(N,C,T).transpose(0, 2, 1)
+    
 
     if do_temporal_decrease:
         denoise.enforce_temporal_decrease(waveforms, in_place=True)
@@ -329,6 +405,7 @@ def get_raw_denoised_template_single(
     return raw_template, denoised_template, snr_by_channel
 
 
+# %%
 def get_raw_template_single(
     spike_times,
     raw_binary_file,
@@ -357,6 +434,7 @@ def get_raw_template_single(
     return reducer(waveforms, axis=0)
 
 
+# %%
 def denoised_weights(
     snrs,
     spike_length_samples,
@@ -382,6 +460,7 @@ def denoised_weights(
     return wtc
 
 
+# %%
 def denoised_weights_single(
     snrs,
     spike_length_samples,
@@ -406,9 +485,11 @@ def denoised_weights_single(
     return wtc
 
 
+# %% [markdown]
 # -- parallelism helpers
 
 
+# %%
 def template_worker(unit):
     # parameters set by init below
     p = template_worker
@@ -444,11 +525,17 @@ def template_worker(unit):
             reducer=p.reducer,
             trough_offset=p.trough_offset,
             spike_length_samples=p.spike_length_samples,
+            do_nn_denoise=p.do_nn_denoise,
+            denoiser_init_kwargs=p.denoiser_init_kwargs, 
+            denoiser_weights_path=p.denoiser_weights_path, 
+            device=p.device,
+            batch_size=p.batch_size,    
         )
 
     return unit, raw_template, denoised_template, snr_by_channel
 
 
+# %%
 def template_worker_init(
     id_queue,
     seed,
@@ -463,6 +550,11 @@ def template_worker_init(
     trough_offset,
     spike_length_samples,
     raw_only,
+    do_nn_denoise,
+    denoiser_init_kwargs, 
+    denoiser_weights_path, 
+    device,
+    batch_size,
 ):
     rank = id_queue.get()
     p = template_worker
@@ -478,8 +570,15 @@ def template_worker_init(
     p.trough_offset = trough_offset
     p.spike_length_samples = spike_length_samples
     p.raw_only = raw_only
+    p.do_nn_denoise = do_nn_denoise
+    p.denoiser_init_kwargs = denoiser_init_kwargs
+    p.denoiser_weights_path = denoiser_weights_path
+    p.device = device
+    p.batch_size = batch_size
 
 
+
+# %%
 def xqdm(iterator, pbar=True, **kwargs):
     if pbar:
         return tqdm(iterator, **kwargs)
