@@ -1,3 +1,4 @@
+# %%
 import os
 from pathlib import Path
 import numpy as np
@@ -7,6 +8,7 @@ import time
 import torch
 import shutil
 
+# %%
 from sklearn.decomposition import PCA
 from spike_psvae import filter_standardize
 from spike_psvae.cluster_uhd import run_full_clustering
@@ -18,14 +20,17 @@ from spike_psvae.ibme import fast_raster
 from spike_psvae.ibme_corr import psolvecorr
 from spike_psvae.filter_standardize import npSampShifts
 
+# %%
 from spikeinterface.preprocessing import highpass_filter, common_reference, zscore, phase_shift 
 import spikeinterface.core as sc
 
+# %%
 """"
 Set parameters / directories name here
 I recommend to keep default parameters if possible
 """
 
+# %%
 raw_data_name = "binfile.bin" #raw rec location
 dtype_raw = 'int16' #dtype of raw rec
 output_all = "data_set_name" #everything will be saved here
@@ -35,16 +40,19 @@ n_channels = 385 #number of channels (before preprocessing)
 sampling_rate = 30000
 savefigs = True # To save summary figs at each step 
 
+# %%
 if savefigs:
     import matplotlib.pyplot as plt
     import matplotlib.cm as cm
     import colorcet as ccet
 
 
+# %%
 nogpu = False # default is to use gpu when possible - set this to True to keep everything on cpu. Gpu speeds things up a lot. 
 trough_offset=42 #Keep these two params for good denoising
 spike_length_samples=121
 
+# %%
 #preprocessing parameters
 preprocessing=True
 apply_filter=True
@@ -61,8 +69,9 @@ t_end_preproc=None
 n_job_preprocessing=-1
 n_sec_chunk_preprocessing=1
 
+# %%
 
-
+# %%
 # Initial Detection - Localization parameters 
 detect_localize = True
 subh5_name = None #This is in case detection has already been ran and we input the subtraction h5 file name here
@@ -95,6 +104,7 @@ n_loc_workers = 4
 localization_kind = "logbarrier"
 localize_radius = 100
 
+# %%
 # Registration parameters 
 sigma_reg=0.1
 max_disp=100 # This is not the actual max displacement, we don't use paris of bins with relative disp>max_disp when computing full displacement 
@@ -103,6 +113,7 @@ max_dt=min(max_dt, rec_len_sec)
 mincorr=0.6
 prior_lambda=1
 
+# %%
 # Clustering parameters 
 clustering=True
 t_start_clustering=0
@@ -114,8 +125,9 @@ frame_dedup_cluster=20
 log_c=5 #to make clusters isotropic
 scales=(1, 1, 50)
 
+# %%
 
-
+# %%
 #Deconv parameters
 deconvolve=True
 t_start_deconv=0
@@ -134,12 +146,17 @@ n_sec_train_feats=10
 n_sec_chunk_deconv=1
 overwrite_deconv=True
 remove_final_outliers=True
+augment_low_snr_temps=True
+min_spikes_to_augment=25
 
+
+# %%
 Path(output_all).mkdir(exist_ok=True)
 geom = np.load(geom_path)
 
+# %%
 
-
+# %%
 if preprocessing:
     print("Preprocessing...")
     preprocessing_dir = Path(output_all) / "preprocessing"
@@ -177,12 +194,14 @@ if preprocessing:
     raw_data_name = Path(preprocessing_dir) / "traces_cached_seg0.raw"
     dtype_raw = "float32"
 
+# %%
 # Subtraction 
 t_start_detect-=t_start_preproc
 if t_end_detect is None:
     t_end_detect=rec_len_sec
 t_end_detect-=t_start_preproc
 
+# %%
 if detect_localize:
     print("Detection...")
     detect_dir = Path(output_all) / "initial_detect_localize"
@@ -223,9 +242,11 @@ if detect_localize:
         localize_radius=localize_radius,
     )
 
+# %%
 else:
     sub_h5=subh5_name
-    
+
+# %%
 with h5py.File(sub_h5, "r+") as h5:
     cleaned_tpca_group = h5["cleaned_tpca"]
     tpca_mean = cleaned_tpca_group["tpca_mean"][:]
@@ -235,25 +256,30 @@ with h5py.File(sub_h5, "r+") as h5:
     spike_index = np.array(h5["spike_index"][:])
     spike_index[:, 0]+=t_start_detect*sampling_rate
 
+# %%
 # Load tpca
 tpca = PCA(tpca_components.shape[0])
 tpca.mean_ = tpca_mean
 tpca.components_ = tpca_components
 
+# %%
 z = localization_results[:, 2]
 x = localization_results[:, 0]
 
+# %%
 # remove spikes localized at boundaries
 x_bound_low = geom[:, 0].min()
 x_bound_high = geom[:, 0].max()
 idx_remove_too_far = np.logical_and(x>x_bound_low-50, x<x_bound_high+50)
 
+# %%
 maxptps = maxptps[idx_remove_too_far]
 z = z[idx_remove_too_far]
 spike_index = spike_index[idx_remove_too_far]
 x = x[idx_remove_too_far]
 localization_results = localization_results[idx_remove_too_far]
 
+# %%
 # Rigid Registration
 print("Registration...")
 raster, dd, tt = fast_raster(
@@ -262,9 +288,11 @@ raster, dd, tt = fast_raster(
 D, C = calc_corr_decent(raster, disp = max_disp)
 displacement_rigid = psolvecorr(D, C, mincorr=mincorr, max_dt=max_dt, prior_lambda=prior_lambda)
 
+# %%
 fname_disp = Path(detect_dir) / "displacement_rigid.npy"
 np.save(fname_disp, displacement_rigid)
 
+# %%
 if savefigs:
 
     vir = cm.get_cmap('viridis')
@@ -283,6 +311,7 @@ if savefigs:
     plt.close()
 
 
+# %%
 # Clustering 
 if clustering:
     print("Clustering...")
@@ -299,6 +328,7 @@ if clustering:
                                                 log_c=log_c, scales=scales, savefigs=savefigs)
 
 
+# %%
 if deconvolve:
     print("Deconvolution...")
     deconv_dir_all = Path(output_all) / "deconvolution"
@@ -325,6 +355,8 @@ if deconvolve:
                max_upsample=max_upsample,
                refractory_period_frames=refractory_period_frames,
                min_spikes_bin=min_spikes_bin,
+               augment_low_snr_temps=augment_low_snr_temps,
+               min_spikes_to_augment=min_spikes_to_augment,
                max_spikes_per_unit=max_spikes_per_unit,
                tpca=tpca,
                deconv_threshold=deconv_threshold,
