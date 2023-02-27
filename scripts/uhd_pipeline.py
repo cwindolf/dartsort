@@ -143,7 +143,7 @@ geom = np.load(geom_path)
 if preprocessing:
     print("Preprocessing...")
     preprocessing_dir = Path(output_all) / "preprocessing"
-    Path(preprocessing_dir).mkdir(exist_ok=True)
+#     Path(preprocessing_dir).mkdir(exist_ok=True)
     if t_end_preproc is None:
         t_end_preproc=rec_len_sec
     
@@ -179,6 +179,8 @@ if preprocessing:
 
 # Subtraction 
 t_start_detect-=t_start_preproc
+if t_end_detect is None:
+    t_end_detect=rec_len_sec
 t_end_detect-=t_start_preproc
 
 if detect_localize:
@@ -231,6 +233,7 @@ with h5py.File(sub_h5, "r+") as h5:
     localization_results = np.array(h5["localizations"][:]) 
     maxptps = np.array(h5["maxptps"][:])
     spike_index = np.array(h5["spike_index"][:])
+    spike_index[:, 0]+=t_start_detect*sampling_rate
 
 # Load tpca
 tpca = PCA(tpca_components.shape[0])
@@ -273,9 +276,9 @@ if savefigs:
     fname_detect_fig = Path(detect_dir) / "detection_displacement_raster_plot.png"
     plt.figure(figsize = (10, 5))
     plt.scatter(spike_index[:, 0]/sampling_rate, z, color = color_array, s = 1)
-    plt.plot(displacement_rigid[t_start_detect:t_end_detect]-displacement_rigid[t_start_detect], color = 'red')
-    plt.plot(displacement_rigid[t_start_detect:t_end_detect]-displacement_rigid[t_start_detect]+100, color = 'red')
-    plt.plot(displacement_rigid[t_start_detect:t_end_detect]-displacement_rigid[t_start_detect]+200, color = 'red')
+    plt.plot(np.arange(t_start_detect,t_end_detect), displacement_rigid[t_start_detect:t_end_detect]-displacement_rigid[t_start_detect], color = 'red')
+    plt.plot(np.arange(t_start_detect,t_end_detect), displacement_rigid[t_start_detect:t_end_detect]-displacement_rigid[t_start_detect]+100, color = 'red')
+    plt.plot(np.arange(t_start_detect,t_end_detect), displacement_rigid[t_start_detect:t_end_detect]-displacement_rigid[t_start_detect]+200, color = 'red')
     plt.savefig(fname_detect_fig)
     plt.close()
 
@@ -335,8 +338,8 @@ if deconvolve:
                p_bar=True,
                save_chunk_results=False)
     
-    fname_medians = Path(extract_dir) / "registered_medians.npy"
-    fname_spread = Path(extract_dir) / "registered_spreads.npy"
+    fname_medians = Path(extract_deconv_dir) / "registered_medians.npy"
+    fname_spread = Path(extract_deconv_dir) / "registered_spreads.npy"
     units_spread = np.load(fname_spread)
     units_medians = np.load(fname_medians)
 
