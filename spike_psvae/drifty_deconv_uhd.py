@@ -887,7 +887,7 @@ def full_deconv_with_update(
         dist_metric = deconv_th_for_temp_computation*2*np.ones(len(spike_train))
 
     for start_sec in tqdm(np.arange(T_START, T_END, n_sec_temp_update)):
-        end_sec = start_sec+n_sec_temp_update
+        end_sec = min(start_sec+n_sec_temp_update, T_END)
 
         deconv_chunk_res = superres_deconv_chunk(
             raw_bin,
