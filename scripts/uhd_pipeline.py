@@ -144,6 +144,8 @@ if __name__ == "__main__":
     deconv_threshold=200
     su_chan_vis=3, 
     deconv_th_for_temp_computation=500
+    adaptive_th_for_temp_computation=True
+    poly_params=[500, 200, 20, 1]
     n_sec_train_feats=10
     n_sec_chunk_deconv=1
     overwrite_deconv=True
@@ -364,6 +366,8 @@ if __name__ == "__main__":
                    deconv_threshold=deconv_threshold,
                    su_chan_vis=su_chan_vis,
                    deconv_th_for_temp_computation=deconv_th_for_temp_computation,
+                   adaptive_th_for_temp_computation=adaptive_th_for_temp_computation,
+                   poly_params=poly_params,
                    extract_radius_um=extract_box_radius,
                    loc_radius=localize_radius,
                    n_sec_train_feats=n_sec_train_feats,
