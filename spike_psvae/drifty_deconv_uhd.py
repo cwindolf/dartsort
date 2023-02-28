@@ -878,7 +878,7 @@ def full_deconv_with_update(
     su_chan_vis=3, #Don't keep it too low so that templates effectively disappear when too far from the probe 
     deconv_th_for_temp_computation=1000, #Use only best spikes (or detected spikes) for temp computation
     adaptive_th_for_temp_computation=True,
-    p=[500, 200, 20, 1],
+    poly_params=[500, 200, 20, 1],
     extract_radius_um=100,
     loc_radius=100,
     n_sec_train_feats=10,
