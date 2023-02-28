@@ -898,7 +898,7 @@ def full_deconv_with_update(
     np.save(fname_medians, registered_medians)
 
     if adaptive_th_for_temp_computation:
-        outliers_tracking = np.ones(len(spike_train))
+        outliers_tracking = np.ones(len(spike_train), dtype=bool)
         dist_metric = deconv_th_for_temp_computation*2*np.ones(len(spike_train))
 
     elif deconv_th_for_temp_computation is not None:
@@ -970,7 +970,6 @@ def full_deconv_with_update(
                 superres_label = superres_deconv_spike_train_chunk[:, 1]
                 ptps_temp_spikes = superres_templates_chunk.ptp(1).max(1)[superres_label]
                 outliers_tracking_chunk = dist_metric_chunk > (p[0] + p[1]*ptps_temp_spikes + p[2]*ptps_temp_spikes**2 + p[3]*ptps_temp_spikes**3) 
-                outliers_tracking_chunk = outliers_tracking_chunk.astype('int')
             else:
                 outliers_tracking_chunk=None
                 
