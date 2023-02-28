@@ -14,7 +14,9 @@ from .extract_deconv import extract_deconv
 # %%
 def superres_spike_train(
     spike_train, z_abs, x, bin_size_um, geom, t_end=100, 
-    units_spread=None, min_spikes_bin=None, n_spikes_max_recent = 1000, fs=30000, dist_metric=None, dist_metric_threshold=500,
+    units_spread=None, min_spikes_bin=None, n_spikes_max_recent = 1000, fs=30000, 
+    dist_metric=None, dist_metric_threshold=500,
+    adaptive_th_for_temp_computation=False, outliers_tracking=None,
 ):
     """
     remove min_spikes_bin by default - it's worse to end up with a template that is mean of all spikes!!!
@@ -27,6 +29,8 @@ def superres_spike_train(
     if dist_metric is not None:
         # Remove outliers before computing templates
         spike_train_no_outliers[dist_metric<500, 1]=-1
+    if adaptive_th_for_temp_computation:
+        spike_train_no_outliers[~outliers_tracking]=-1
 
 
     # bin the spikes to create a binned "superres spike train"
@@ -131,7 +135,9 @@ def superres_denoised_templates(
     min_spikes_to_augment=25,
     units_spread=None,
     dist_metric=None,
-    dist_metric_threshold=500,
+    dist_metric_threshold=1000,
+    adaptive_th_for_temp_computation=False,
+    outliers_tracking=None,
     max_spikes_per_unit=200, #per superres unit 
     n_spikes_max_recent = 1000,
     denoise_templates=True,
@@ -178,6 +184,8 @@ def superres_denoised_templates(
         fs,
         dist_metric,
         dist_metric_threshold,
+        adaptive_th_for_temp_computation,
+        outliers_tracking,
     )
 
     templates, extra = snr_templates.get_templates(
@@ -601,9 +609,11 @@ def superres_deconv_chunk(
     min_spikes_to_augment=25,
     max_spikes_per_unit=200,
     tpca=None,
-    deconv_threshold=200,
-    deconv_outliers_threshold=500,
-    su_chan_vis=3, 
+    deconv_threshold=500,
+    deconv_outliers_threshold=1000,
+    su_chan_vis=1.5, 
+    adaptive_th_for_temp_computation=False,
+    outliers_tracking=None,
 ):
 
     Path(deconv_dir).mkdir(exist_ok=True)
@@ -627,6 +637,8 @@ def superres_deconv_chunk(
         units_spread,
         dist_metric,
         deconv_outliers_threshold,
+        adaptive_th_for_temp_computation,
+        outliers_tracking,
         max_spikes_per_unit,
         n_spikes_max_recent=1000,
         denoise_templates=True,
@@ -862,9 +874,11 @@ def full_deconv_with_update(
     min_spikes_to_augment=25,
     max_spikes_per_unit=200,
     tpca=None,
-    deconv_threshold=200, #Validated experimentaly with template norm
+    deconv_threshold=500, #Validated experimentaly with template norm
     su_chan_vis=3, #Don't keep it too low so that templates effectively disappear when too far from the probe 
-    deconv_th_for_temp_computation=500, #Use only best spikes (or detected spikes) for temp computation
+    deconv_th_for_temp_computation=1000, #Use only best spikes (or detected spikes) for temp computation
+    adaptive_th_for_temp_computation=True,
+    p=[500, 200, 20, 1],
     extract_radius_um=100,
     loc_radius=100,
     n_sec_train_feats=10,
@@ -883,7 +897,12 @@ def full_deconv_with_update(
     np.save(fname_spread, units_spread)
     np.save(fname_medians, registered_medians)
 
-    if deconv_th_for_temp_computation is not None:
+    if adaptive_th_for_temp_computation:
+        outliers_tracking = np.ones(len(spike_train))
+        dist_metric = deconv_th_for_temp_computation*2*np.ones(len(spike_train))
+
+    elif deconv_th_for_temp_computation is not None:
+        outliers_tracking = None
         dist_metric = deconv_th_for_temp_computation*2*np.ones(len(spike_train))
 
     for start_sec in tqdm(np.arange(T_START, T_END, n_sec_temp_update)):
@@ -917,6 +936,8 @@ def full_deconv_with_update(
             deconv_threshold=deconv_threshold, 
             deconv_outliers_threshold=deconv_th_for_temp_computation,
             su_chan_vis=su_chan_vis,
+            adaptive_th_for_temp_computation=adaptive_th_for_temp_computation,
+            outliers_tracking=outliers_tracking,
         )
 
         extract_deconv_chunk = extract_superres_shifted_deconv(
@@ -943,7 +964,16 @@ def full_deconv_with_update(
             maxptps_chunk = h5["maxptps"][:]
             localizations_chunk = h5["localizations"][:]
             dist_metric_chunk = h5["deconv_dist_metrics"][:]
-
+            if adaptive_th_for_temp_computation:
+                superres_templates_chunk = h5["superres_templates"][:]
+                superres_deconv_spike_train_chunk = h5["superres_deconv_spike_train"][:]
+                superres_label = superres_deconv_spike_train_chunk[:, 1]
+                ptps_temp_spikes = superres_templates_chunk.ptp(1).max(1)[superres_label]
+                outliers_tracking_chunk = dist_metric_chunk > (p[0] + p[1]*ptps_temp_spikes + p[2]*ptps_temp_spikes**2 + p[3]*ptps_temp_spikes**3) 
+                outliers_tracking_chunk = outliers_tracking_chunk.astype('int')
+            else:
+                outliers_tracking_chunk=None
+                
         if save_chunk_results:
             fname_ptps = Path(extract_dir) / "maxptps_deconv_{}_{}".format(start_sec, end_sec)
             fname_spike_train = Path(extract_dir) / "spike_train_deconv_{}_{}".format(start_sec, end_sec)
@@ -954,15 +984,20 @@ def full_deconv_with_update(
             np.save(fname_spike_train, spt_chunk)
             np.save(fname_localizations, localizations_chunk)
             np.save(fname_dist_metric, dist_metric_chunk)
+            
+            if adaptive_th_for_temp_computation:
+                fname_ptps_spikes_temps = Path(extract_dir) / "ptps_temp_before_deconv_{}_{}".format(start_sec, end_sec)
+                np.save(fname_ptps_spikes_temps, ptps_temp_spikes)
 
-
-        spike_train, x, z, dist_metric, maxptps = update_spike_train_with_deconv_res(start_sec, end_sec, 
+        
+        spike_train, x, z, dist_metric, maxptps, outliers_tracking = update_spike_train_with_deconv_res(start_sec, end_sec, 
                                                             spike_train, spt_chunk,
                                                             x, z, localizations_chunk,
                                                             dist_metric, dist_metric_chunk,
-                                                            maxptps, maxptps_chunk, pfs)
-
-
+                                                            maxptps, maxptps_chunk, 
+                                                            outliers_tracking, outliers_tracking_chunk,
+                                                            pfs, adaptive_th_for_temp_computation)
+    
     # SAVE FULL RESULT 
     fname_ptps = Path(extract_dir) / "maxptps_final_deconv"
     fname_spike_train = Path(extract_dir) / "spike_train_final_deconv"
@@ -975,7 +1010,11 @@ def full_deconv_with_update(
     np.save(fname_x, x)
     np.save(fname_z, z)
     np.save(fname_dist_metric, dist_metric)
-
+    
+    if adaptive_th_for_temp_computation:
+        fname_outlier_tracking = Path(extract_dir) / "outliers_final_deconv"
+        np.save(fname_outlier_tracking, outliers_tracking)
+    
 
 # %%
 
@@ -984,7 +1023,8 @@ def full_deconv_with_update(
 # %%
 def update_spike_train_with_deconv_res(start_sec, end_sec, spt_before, spt_after,
                                       x_before, z_before, localizations_after, dist_metric_before, dist_metric_after, 
-                                      maxptps_before, maxptps_after, pfs=30000):
+                                      maxptps_before, maxptps_after, outliers_tracking, outliers_tracking_chunk,
+                                      pfs=30000, adaptive_th_for_temp_computation=False):
 
     """
     Keep clustering results if no spikes deconvolved in start_sec end sec
@@ -1002,6 +1042,8 @@ def update_spike_train_with_deconv_res(start_sec, end_sec, spt_before, spt_after
     z_after = np.concatenate((z_before[idx_before], z_after))
     dist_metric_after = np.concatenate((dist_metric_before[idx_before], dist_metric_after))
     maxptps_after = np.concatenate((maxptps_before[idx_before], maxptps_after))
+    if adaptive_th_for_temp_computation:
+        outliers_tracking_chunk = np.concatenate((outliers_tracking[idx_before], outliers_tracking_chunk))
     
     for unit in units_to_add:
         idx_unit = idx_units_to_add[spt_before[idx_units_to_add, 1]==unit]
@@ -1010,6 +1052,8 @@ def update_spike_train_with_deconv_res(start_sec, end_sec, spt_before, spt_after
         z_after = np.concatenate((z_before[idx_unit], z_after))
         dist_metric_after = np.concatenate((dist_metric_before[idx_unit], dist_metric_after))
         maxptps_after = np.concatenate((maxptps_before[idx_unit], maxptps_after))
+        if adaptive_th_for_temp_computation:
+            outliers_tracking_chunk = np.concatenate((outliers_tracking[idx_unit], outliers_tracking_chunk))
     
     idx_sort_by_time = spt_after[:, 0].argsort()
     x_after = x_after[idx_sort_by_time]
@@ -1017,8 +1061,10 @@ def update_spike_train_with_deconv_res(start_sec, end_sec, spt_before, spt_after
     dist_metric_after = dist_metric_after[idx_sort_by_time]
     maxptps_after = maxptps_after[idx_sort_by_time]
     spt_after = spt_after[idx_sort_by_time]
+    if adaptive_th_for_temp_computation:
+        outliers_tracking_chunk = outliers_tracking_chunk[idx_sort_by_time]
 
-    return spt_after.astype('int'), x_after, z_after, dist_metric_after, maxptps_after
+    return spt_after.astype('int'), x_after, z_after, dist_metric_after, maxptps_after, outliers_tracking_chunk
 
 
 # %%
