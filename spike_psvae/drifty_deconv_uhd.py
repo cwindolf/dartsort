@@ -14,7 +14,7 @@ from .extract_deconv import extract_deconv
 # %%
 def superres_spike_train(
     spike_train, z_abs, x, bin_size_um, geom, t_end=100, 
-    units_spread=None, min_spikes_bin=None, n_spikes_max_recent = 1000, fs=30000, 
+    units_spread=None, n_spikes_max_recent = 1000, fs=30000, 
     dist_metric=None, dist_metric_threshold=500,
     adaptive_th_for_temp_computation=False, outliers_tracking=None,
 ):
@@ -78,32 +78,32 @@ def superres_spike_train(
                 np.abs(occupied_bins)
                 <= (units_spread[u] + bin_size_um / 2) // bin_size_um
             ]
-        # IS THAT NEEDED - min_spikes_bin=6
-        if min_spikes_bin is None:
-            for j, bin_id in enumerate(occupied_bins):
-                superres_labels[in_u[bin_ids == bin_id]] = cur_superres_label
-                superres_label_to_bin_id.append(bin_id)
-                unit_max_channels.append(np.sum((geom - [np.median(x[in_u[bin_ids == bin_id]]), np.median(z_abs[in_u[bin_ids == bin_id]])])**2, axis=1).argmin())
-                superres_label_to_orig_label.append(u)
-                n_spikes_per_bin.append(bin_counts[j])
-                cur_superres_label += 1
-        else:
-            if bin_counts.max() >= min_spikes_bin:
-                for j, bin_id in enumerate(occupied_bins[bin_counts >= min_spikes_bin]):
-                    superres_labels[in_u[bin_ids == bin_id]] = cur_superres_label
-                    superres_label_to_bin_id.append(bin_id)
-                    superres_label_to_orig_label.append(u)
-                    n_spikes_per_bin.append(bin_counts[j])
-                    unit_max_channels.append(np.sum((geom - [np.median(x[in_u[bin_ids == bin_id]]), np.median(z_abs[in_u[bin_ids == bin_id]])])**2, axis=1).argmin())
-                    cur_superres_label += 1
-            # what if no template was computed for u
-            else:
-                superres_labels[in_u] = cur_superres_label
-                superres_label_to_bin_id.append(0)
-                superres_label_to_orig_label.append(u)
-                n_spikes_per_bin.append(in_u.shape[0])
-                unit_max_channels.append(np.sum((geom - [np.median(x[in_u]), np.median(z_abs[in_u])])**2, axis=1).argmin())
-                cur_superres_label += 1
+        # IS THAT NEEDED - min_spikes_bin removed here and used during template augmentation
+#         if min_spikes_bin is None:
+        for j, bin_id in enumerate(occupied_bins):
+            superres_labels[in_u[bin_ids == bin_id]] = cur_superres_label
+            superres_label_to_bin_id.append(bin_id)
+            unit_max_channels.append(np.sum((geom - [np.median(x[in_u[bin_ids == bin_id]]), np.median(z_abs[in_u[bin_ids == bin_id]])])**2, axis=1).argmin())
+            superres_label_to_orig_label.append(u)
+            n_spikes_per_bin.append(bin_counts[j])
+            cur_superres_label += 1
+#         else:
+#             if bin_counts.max() >= min_spikes_bin:
+#                 for j, bin_id in enumerate(occupied_bins[bin_counts >= min_spikes_bin]):
+#                     superres_labels[in_u[bin_ids == bin_id]] = cur_superres_label
+#                     superres_label_to_bin_id.append(bin_id)
+#                     superres_label_to_orig_label.append(u)
+#                     n_spikes_per_bin.append(bin_counts[j])
+#                     unit_max_channels.append(np.sum((geom - [np.median(x[in_u[bin_ids == bin_id]]), np.median(z_abs[in_u[bin_ids == bin_id]])])**2, axis=1).argmin())
+#                     cur_superres_label += 1
+#             # what if no template was computed for u
+#             else:
+#                 superres_labels[in_u] = cur_superres_label
+#                 superres_label_to_bin_id.append(0)
+#                 superres_label_to_orig_label.append(u)
+#                 n_spikes_per_bin.append(in_u.shape[0])
+#                 unit_max_channels.append(np.sum((geom - [np.median(x[in_u]), np.median(z_abs[in_u])])**2, axis=1).argmin())
+#                 cur_superres_label += 1
 
     superres_label_to_bin_id = np.array(superres_label_to_bin_id)
     superres_label_to_orig_label = np.array(superres_label_to_orig_label)
@@ -179,7 +179,6 @@ def superres_denoised_templates(
         geom,
         t_end,
         units_spread,
-        min_spikes_bin,
         n_spikes_max_recent,
         fs,
         dist_metric,
