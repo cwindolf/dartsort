@@ -28,7 +28,7 @@ def superres_spike_train(
     spike_train_no_outliers = spike_train.copy()
     if dist_metric is not None:
         # Remove outliers before computing templates
-        spike_train_no_outliers[dist_metric<500, 1]=-1
+        spike_train_no_outliers[dist_metric<dist_metric_threshold, 1]=-1
     if adaptive_th_for_temp_computation:
         spike_train_no_outliers[~outliers_tracking]=-1
 
@@ -1013,7 +1013,7 @@ def full_deconv_with_update(
     if adaptive_th_for_temp_computation:
         fname_outlier_tracking = Path(extract_dir) / "outliers_final_deconv"
         np.save(fname_outlier_tracking, outliers_tracking)
-    
+
 
 # %%
 
