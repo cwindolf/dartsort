@@ -219,7 +219,7 @@ def superres_denoised_templates(
     )
     
     if augment_low_snr_temps:
-        templates = augment_low_snr_templates(
+        templates, n_spikes_per_bin = augment_low_snr_templates(
                         templates, 
                         superres_label_to_bin_id,
                         superres_label_to_orig_label,
@@ -228,6 +228,9 @@ def superres_denoised_templates(
                         geom,
                         min_spikes_to_augment = min_spikes_to_augment
         )
+
+    if min_spikes_bin is not None:
+        templates[n_spikes_per_bin<min_spikes_bin]=0
     
     return (
         templates,
@@ -282,9 +285,10 @@ def augment_low_snr_templates(
                                             )[0]*n_spikes_per_bin[idx_augment]
                     superres_templates[k, :, shift*n_chans_per_row:]=0
                 cmp += n_spikes_per_bin[idx_augment]
+            n_spikes_per_bin[k]=cmp
             superres_templates[k] /= cmp
          
-    return superres_templates
+    return superres_templates, n_spikes_per_bin
     
 
 
