@@ -24,6 +24,7 @@ from sklearn.decomposition import PCA
 
 from spikeinterface.extractors import NumpySorting
 from spikeinterface.comparison import compare_sorter_to_ground_truth
+from spike_psvae.denoise import denoise_wf_nn_tmp_single_channel, SingleChanDenoiser
 
 from spike_psvae.spikeio import get_binary_length, read_waveforms
 
@@ -187,7 +188,7 @@ class Sorting:
                 loc_ = np.zeros_like(self.template_maxptps)
                 loc_[full_spike_counts > 0] = loc
                 self.template_locs[i] = loc_
-
+                
             self.template_xzptp = np.c_[
                 self.template_locs[0],
                 self.template_locs[3],
@@ -406,16 +407,18 @@ class Sorting:
 
     def array_scatter(
         self,
-        zlim=(-50, 3900),
+        zlim=None,
         axes=None,
         do_ellipse=True,
         max_n_spikes=500_000,
         pad_zfilter=50,
         annotate=True,
     ):
+        if zlim is None:
+            zlim = (self.geom.min() - 50, self.geom.max() + 50)
         pct_shown = 100
         if self.n_spikes > max_n_spikes:
-            sample = np.random.default_rng(0).choice(
+            sample = np.runit_summary_figandom.default_rng(0).choice(
                 self.n_spikes, size=max_n_spikes, replace=False
             )
             sample.sort()
@@ -428,7 +431,6 @@ class Sorting:
             | (self.spike_xzptp[:, 1] > zlim[1] + pad_zfilter)
         )
         sample = np.setdiff1d(sample, z_hidden)
-
         fig, axes = cluster_viz_index.array_scatter(
             self.spike_labels[sample],
             self.geom,
@@ -680,8 +682,8 @@ class Sorting:
             "\n".join(
                 (
                     f"{k}: {v}"
-                    if np.issubdtype(v, np.integer)
-                    else f"{k}: {v:0.2f}"
+                    # if np.issubdtype(v, np.integer)
+                    # else f"{k}: {v:0.2f}"
                 )
                 for k, v in unit_props.items()
             ),
@@ -819,6 +821,7 @@ class Sorting:
             max_abs_amp=max_abs_amp,
             color="b",
             lw=1,
+            alpha=1,
             show_chan_label=show_chan_label,
             chan_labels=chan_labels,
             zlim="auto",

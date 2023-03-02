@@ -274,8 +274,6 @@ def pgeom(
             ax.annotate(
                 chan_labels[c], geom_plot[c] + ann_offset, size=6, color="gray"
             )
-            
-
     linestyle = linestyle or ls
     lines = ax.plot(
         *draw, alpha=alpha, color=color, lw=lw, linestyle=linestyle

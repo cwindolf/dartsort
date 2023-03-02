@@ -130,13 +130,22 @@ def pre_deconv_split_step(
 ):
     with h5py.File(sub_h5, "r") as h5:
         sub_wf = h5["subtracted_waveforms"]
-        firstchans = h5["first_channels"][:]
+        orig_spike_index = h5["spike_index"][:]
+        channel_index = h5["channel_index"][:]
+        firstchans = channel_index[:, 0][orig_spike_index[:,1]]
+        # firstchans = h5["first_channels"][:]
         x, y, z, alpha, z_rel = h5["localizations"][:].T
         geom = h5["geom"][:]
         z_reg = h5["z_reg"][:]
         channel_index = h5["channel_index"][:]
-        tpca = subtract.tpca_from_h5(h5)
-        orig_spike_index = h5["spike_index"][:]
+        # tpca = subtract.tpca_from_h5(h5)
+        # tpca = 
+        # tpca_mean = h5["tpca_mean"][:]
+        # tpca_components = h5["tpca_components"][:]
+        # print("Loading TPCA from h5")
+        # tpca = PCA(tpca_components.shape[0])
+        # tpca.mean_ = tpca_mean
+        # tpca.components_ = tpca_components
 
         z = z_reg if use_registered else z
 
@@ -272,7 +281,10 @@ def pre_deconv_merge_step(
 
     with h5py.File(sub_h5, "r") as h5:
         sub_wf = h5["subtracted_waveforms"]
-        firstchans = h5["first_channels"][:]
+        orig_spike_index = h5["spike_index"][:]
+        channel_index = h5["channel_index"][:]
+        firstchans = channel_index[:, 0][orig_spike_index[:,1]]
+        # firstchans = h5["first_channels"][:]
         x, y, z, alpha, z_rel = h5["localizations"][:].T
         z_reg = h5["z_reg"][:]
         tpca = subtract.tpca_from_h5(h5)
@@ -378,7 +390,7 @@ def post_deconv_split_step(
 ):
     spike_train = np.load(deconv_dir / "spike_train.npy")
     templates = np.load(deconv_dir / "templates.npy")
-    assert templates.shape[0] == spike_train[:, 1].max() + 1
+    assert templates.shape[0] >= spike_train[:, 1].max() + 1
     print("original")
     u, c = np.unique(spike_train[:, 1], return_counts=True)
     print(u.size, (c > 25).sum(), c[c > 25].sum())
@@ -432,15 +444,15 @@ def post_deconv_split_step(
     )
     order = order[reorder]
 
-    # clean big
-    after_deconv_merge_split.clean_big_clusters(
-        templates,
-        spike_train,
-        deconv_extractor.ptp[order],
-        raw_data_bin,
-        geom,
-        reducer=reducer,
-    )
+    # # clean big
+    # after_deconv_merge_split.clean_big_clusters(
+    #     templates,
+    #     spike_train,
+    #     deconv_extractor.ptp[order],
+    #     raw_data_bin,
+    #     geom,
+    #     reducer=reducer,
+    # )
     (
         spike_train,
         reorder,
@@ -537,6 +549,7 @@ def post_deconv_merge_step(
         n_chan_merge=10,
         tpca=PCA(6),
         isi_veto=False,
+        distance_threshold=5.0,
     )
     (
         spike_train,
@@ -556,16 +569,16 @@ def post_deconv_merge_step(
     u, c = np.unique(spike_train[:, 1], return_counts=True)
     print(u.max() + 1, u.size, (c > 25).sum(), c[c > 25].sum())
 
-    print("Clean big ")
-    n_cleaned = after_deconv_merge_split.clean_big_clusters(
-        templates,
-        spike_train,
-        deconv_extractor.ptp[order],
-        raw_data_bin,
-        geom,
-        reducer=reducer,
-    )
-    print(f"{n_cleaned=}")
+    # print("Clean big ")
+    # n_cleaned = after_deconv_merge_split.clean_big_clusters(
+    #     templates,
+    #     spike_train,
+    #     deconv_extractor.ptp[order],
+    #     raw_data_bin,
+    #     geom,
+    #     reducer=reducer,
+    # )
+    # print(f"{n_cleaned=}")
     u, c = np.unique(spike_train[:, 1], return_counts=True)
     print(u.max() + 1, u.size, (c > 25).sum(), c[c > 25].sum())
 
@@ -646,6 +659,7 @@ def post_deconv2_clean_step(
         # for k in f:
         #     print(k, f[k].shape)
         maxptps = f["maxptps"][:]
+        spike_index = f["spike_index_up"][:] #changed to spike_index_up
         firstchans = f["first_channels"][:]
         x, y, z_rel, z_abs, alpha = f["localizations"][:].T
         print(
@@ -673,35 +687,35 @@ def post_deconv2_clean_step(
     u, c = np.unique(spike_train[:, 1], return_counts=True)
     print(u.size, (c > 25).sum(), c[c > 25].sum())
 
-    if do_clean_big:
-        print("Before clean big ")
-        n_cleaned = after_deconv_merge_split.clean_big_clusters(
-            templates, spike_train, maxptps[order], raw_data_bin, geom
-        )
-        print(f"n_cleaned={n_cleaned}")
-        u, c = np.unique(spike_train[:, 1], return_counts=True)
-        print(u.max() + 1, u.size, (c > 25).sum(), c[c > 25].sum())
+#     if do_clean_big:
+#         print("Before clean big ")
+#         n_cleaned = after_deconv_merge_split.clean_big_clusters(
+#             templates, spike_train, maxptps[order], raw_data_bin, geom
+#         )
+#         print(f"n_cleaned={n_cleaned}")
+#         u, c = np.unique(spike_train[:, 1], return_counts=True)
+#         print(u.max() + 1, u.size, (c > 25).sum(), c[c > 25].sum())
 
-        (
-            spike_train,
-            reorder,
-            templates,
-            template_shifts,
-        ) = spike_train_utils.clean_align_and_get_templates(
-            spike_train,
-            n_channels,
-            raw_data_bin,
-            min_n_spikes=clean_min_spikes,
-            pbar=True,
-        )
-        order = order[reorder]
+#         (
+#             spike_train,
+#             reorder,
+#             templates,
+#             template_shifts,
+#         ) = spike_train_utils.clean_align_and_get_templates(
+#             spike_train,
+#             n_channels,
+#             raw_data_bin,
+#             min_n_spikes=clean_min_spikes,
+#             pbar=True,
+#         )
+#         order = order[reorder]
 
-        print("After clean big")
-        u, c = np.unique(spike_train[:, 1], return_counts=True)
-        print(u.max() + 1, u.size, (c > 25).sum(), c[c > 25].sum())
-        clean_st = spike_train.copy()
-        clean_temp = templates.copy()
-        clean_ord = order.copy()
+#         print("After clean big")
+#         u, c = np.unique(spike_train[:, 1], return_counts=True)
+#         print(u.max() + 1, u.size, (c > 25).sum(), c[c > 25].sum())
+#         clean_st = spike_train.copy()
+#         clean_temp = templates.copy()
+#         clean_ord = order.copy()
 
     print("Remove oversplits")
     # (
