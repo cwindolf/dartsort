@@ -1867,8 +1867,11 @@ def diagnostic_plots(
     for indices_match, color, h_shift in zip(indices, colors, h_shifts):
         if len(indices_match) > 0:
             mcs_abs_cluster_sorting = np.full(indices_match.shape, shared_mc)
-            firstchans_cluster_sorting = np.maximum(
-                mcs_abs_cluster_sorting - 20, 0
+            firstchans_cluster_sorting = np.minimum(
+                geom.shape[0] - num_channels,
+                np.maximum(
+                    mcs_abs_cluster_sorting - num_channels // 2, 0
+                )
             )
             # mcs_abs_cluster_sorting = mcs_abs_cluster_sorting2[indices_match]
             # firstchans_cluster_sorting = firstchans_cluster_sorting2[
@@ -1966,6 +1969,8 @@ def diagnostic_plots(
         and len(not_match_ind_st2) > 0
         and wfs_lda_red.size
         and wfs_lda_blue.size
+        and wfs_lda_blue.shape[0] > 2
+        and wfs_lda_red.shape[0] > 2
     ):
         lda_labels = np.zeros(wfs_lda_blue.shape[0] + wfs_lda_red.shape[0])
         lda_labels[: wfs_lda_blue.shape[0]] = 1
@@ -2035,7 +2040,7 @@ def diagnostic_plots(
         raw_bin,
         geom.shape[0],
         spike_length_samples=121,
-        channels=np.arange(mc - 10, mc + 10).astype("int"),
+        channels=np.arange(max(mc - 10, 0), min(mc + 10, geom.shape[0])).astype("int"),
     )[0]
     pcs_unit = pc_scatter.fit_transform(
         waveforms_unit.reshape(waveforms_unit.shape[0], -1)
@@ -2072,7 +2077,7 @@ def diagnostic_plots(
             raw_bin,
             geom.shape[0],
             spike_length_samples=121,
-            channels=np.arange(mc - 10, mc + 10).astype("int"),
+            channels=np.arange(max(mc - 10, 0), min(mc + 10, geom.shape[0])).astype("int"),
         )[0]
         lda_labels = np.zeros(
             waveforms_unit_bis.shape[0] + waveforms_unit.shape[0]
@@ -2178,7 +2183,7 @@ def diagnostic_plots(
         raw_bin,
         geom.shape[0],
         spike_length_samples=121,
-        channels=np.arange(mc - 10, mc + 10).astype('int'),
+        channels=np.arange(max(mc - 10, 0), min(mc + 10, geom.shape[0])).astype("int"),
     )[0]
     pcs_unit = pc_scatter.fit_transform(
         waveforms_unit.reshape(waveforms_unit.shape[0], -1)
@@ -2213,7 +2218,7 @@ def diagnostic_plots(
                 raw_bin,
                 geom.shape[0],
                 spike_length_samples=121,
-                channels=np.arange(mc - 10, mc + 10).astype("int"),
+                channels=np.arange(max(mc - 10, 0), min(mc + 10, geom.shape[0])).astype("int"),
             )[0]
             # DO TPCA
             lda_labels = np.zeros(

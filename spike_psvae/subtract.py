@@ -1437,6 +1437,18 @@ def tpca_from_h5(h5):
             print("Loaded TPCA from h5")
     return tpca
 
+    p.tpca_projs = h5[f"{waveforms_kind}_tpca_projs"]
+
+    # load sklearn PCA object from the h5 so that split steps can
+    # reconstruct waveforms from the tpca projections
+    tpca_feat = TPCA(
+        p.tpca_projs.shape[1],
+        p.channel_index,
+        waveforms_kind,
+    )
+    tpca_feat.from_h5(h5)
+    p.tpca = tpca_feat.tpca
+
 
 # -- data loading helpers
 
