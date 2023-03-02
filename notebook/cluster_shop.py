@@ -3,18 +3,20 @@
 #   jupytext:
 #     text_representation:
 #       extension: .py
-#       format_name: light
-#       format_version: '1.5'
-#       jupytext_version: 1.13.0
+#       format_name: percent
+#       format_version: '1.3'
+#       jupytext_version: 1.14.0
 #   kernelspec:
 #     display_name: Python 3 (ipykernel)
 #     language: python
 #     name: python3
 # ---
 
+# %%
 # %load_ext autoreload
 # %autoreload 2
 
+# %%
 import h5py
 import numpy as np
 import matplotlib.pyplot as plt
@@ -24,21 +26,22 @@ from pathlib import Path
 import torch
 from sklearn.decomposition import PCA
 import matplotlib
-from spike_psvae import cluster, merge_split_cleaned, cluster_viz_index, denoise, cluster_utils, triage, cluster_viz
-from spike_psvae.cluster_utils import read_waveforms, compare_two_sorters, make_sorting_from_labels_frames
-from spike_psvae.cluster_viz import plot_agreement_venn, plot_unit_similarities
-from spike_psvae.cluster_utils import get_closest_clusters_kilosort_hdbscan
-from spike_psvae.cluster_viz import plot_single_unit_summary
-from spike_psvae.cluster_viz import cluster_scatter, plot_waveforms_geom, plot_raw_waveforms_unit_geom, plot_venn_agreement
-from spike_psvae.cluster_viz import plot_array_scatter, plot_self_agreement, plot_single_unit_summary, plot_agreement_venn, plot_isi_distribution, plot_waveforms_unit_geom, plot_unit_similarities
-from spike_psvae.cluster_viz import plot_unit_similarity_heatmaps
-from spike_psvae.cluster_utils import make_sorting_from_labels_frames, compute_cluster_centers, relabel_by_depth, run_weighted_triage, remove_duplicate_units
-from spike_psvae.cluster_utils import get_agreement_indices, compute_spiketrain_agreement, get_unit_similarities, compute_shifted_similarity, read_waveforms
-from spike_psvae.cluster_utils import get_closest_clusters_hdbscan, get_closest_clusters_kilosort, get_closest_clusters_hdbscan_kilosort, get_closest_clusters_kilosort_hdbscan
+# from spike_psvae import cluster, merge_split_cleaned, cluster_viz_index, denoise, cluster_utils, triage, cluster_viz
+# from spike_psvae.cluster_utils import read_waveforms, compare_two_sorters, make_sorting_from_labels_frames
+# from spike_psvae.cluster_viz import plot_agreement_venn, plot_unit_similarities
+# from spike_psvae.cluster_utils import get_closest_clusters_kilosort_hdbscan
+# from spike_psvae.cluster_viz import plot_single_unit_summary
+# from spike_psvae.cluster_viz import cluster_scatter, plot_waveforms_geom, plot_raw_waveforms_unit_geom, plot_venn_agreement
+# from spike_psvae.cluster_viz import plot_array_scatter, plot_self_agreement, plot_single_unit_summary, plot_agreement_venn, plot_isi_distribution, plot_waveforms_unit_geom, plot_unit_similarities
+# from spike_psvae.cluster_viz import plot_unit_similarity_heatmaps
+# from spike_psvae.cluster_utils import make_sorting_from_labels_frames, compute_cluster_centers, relabel_by_depth, run_weighted_triage, remove_duplicate_units
+# from spike_psvae.cluster_utils import get_agreement_indices, compute_spiketrain_agreement, get_unit_similarities, compute_shifted_similarity, read_waveforms
+# from spike_psvae.cluster_utils import get_closest_clusters_hdbscan, get_closest_clusters_kilosort, get_closest_clusters_hdbscan_kilosort, get_closest_clusters_kilosort_hdbscan
 
+# %%
 np.random.seed(0) #for reproducibility (templates use random waveforms)
 
-# +
+# %%
 data_path = '/media/cat/data/'
 data_name = 'CSH_ZAD_026_5min'
 data_dir = data_path + data_name + '/'
@@ -48,7 +51,7 @@ sub_h5 = data_dir + "subtraction_CSH_ZAD_026_snip.ap_t_0_None.h5"
 
 output_dir = Path("/outputs")
 
-# +
+# %%
 #load features
 offset_min = 30 #30 minutes into the recording
 with h5py.File(sub_h5, "r") as h5:
@@ -81,7 +84,7 @@ wfs_subtracted = h5["subtracted_waveforms"]
 wfs_full_denoise = h5["cleaned_waveforms"]
 print(f"duration of recording: {recording_duration} s")
 
-# +
+# %%
 #load kilosort results
 data_path = '/media/cat/data/'
 data_name = 'CSH_ZAD_026_5min'
@@ -127,23 +130,26 @@ good_kilo_sort_clusters_all = np.array([  0,  17,  19,  25,  30,  33,  36,  38, 
 
 #remove empty clusters
 good_kilo_sort_clusters = []
+
 for good_cluster in good_kilo_sort_clusters_all:
     if good_cluster in sorting_kilo.get_unit_ids():
         good_kilo_sort_clusters.append(good_cluster) 
-# -
 
+# %% [markdown]
 # ## triage and cluster
 
+# %%
 tx, ty, tz, talpha, tmaxptps, _, ptp_keep, idx_keep  = triage.run_weighted_triage(
     x, y, z_reg, alpha, maxptps, threshold=80
 )
 idx_keep_full = ptp_keep[idx_keep]
 
+# %%
 denoiser = denoise.SingleChanDenoiser().load()
 device = "cuda" if torch.cuda.is_available() else "cpu"
 denoiser.to(device);
 
-# +
+# %%
 #clustering parameters
 min_cluster_size = 25
 min_samples = 25
@@ -170,7 +176,7 @@ labels = np.full(x.shape, -1)
 labels[idx_keep_full] = clusterer.labels_
 labels_original = labels.copy()
 
-# + tags=[]
+# %% tags=[]
 # z_cutoffs= [(0,550), (500,1050), (1000,1550), (1500,2050), (2000,2550), (2500,3050), (3000,3550), (3500,4050)]
 z_cutoffs= [(500,1000)]#, (1000,1550), (1500,2050), (2000,2550), (2500,3050), (3000,3550), (3500,4050)]
 matplotlib.rcParams.update({'font.size': 14})
@@ -196,7 +202,7 @@ for z_cutoff in z_cutoffs:
     # fig.savefig(f"{save_dir_path}/full_scatter_{z_cutoff[0]}_{z_cutoff[1]}", dpi=200)
     # plt.close(fig)
 
-# +
+# %%
 templates = merge_split_cleaned.get_templates(
     raw_bin, geom, clusterer.labels_.max()+1, spike_index[idx_keep_full], clusterer.labels_
 )
@@ -208,7 +214,7 @@ template_shifts, template_maxchans, shifted_triaged_spike_index, idx_not_aligned
 shifted_full_spike_index = spike_index.copy()
 shifted_full_spike_index[idx_keep_full] = shifted_triaged_spike_index
 
-# + tags=[]
+# %% tags=[] jupyter={"outputs_hidden": true}
 # split
 with h5py.File(sub_h5, "r") as h5:
     labels_split = merge_split_cleaned.split_clusters(
@@ -240,7 +246,7 @@ cluster_centers = cluster_utils.compute_cluster_centers(clusterer)
 labels = np.full(x.shape, -1)
 labels[idx_keep_full] = clusterer.labels_
 
-# + tags=[]
+# %% tags=[]
 # z_cutoffs= [(0,550), (500,1050), (1000,1550), (1500,2050), (2000,2550), (2500,3050), (3000,3550), (3500,4050)]
 z_cutoffs= [(500,1000)]#, (1000,1550), (1500,2050), (2000,2550), (2500,3050), (3000,3550), (3500,4050)]
 matplotlib.rcParams.update({'font.size': 14})
@@ -278,7 +284,7 @@ for z_cutoff in z_cutoffs:
     # fig.savefig(f"{save_dir_path}/full_scatter_{z_cutoff[0]}_{z_cutoff[1]}", dpi=200)
     # plt.close(fig)
 
-# + tags=[]
+# %% tags=[]
 # get templates
 templates = merge_split_cleaned.get_templates(
     raw_bin, geom, clusterer.labels_.max()+1, spike_index[idx_keep_full], clusterer.labels_
@@ -290,7 +296,7 @@ template_shifts, template_maxchans, shifted_triaged_spike_index, idx_not_aligned
 shifted_full_spike_index = spike_index.copy()
 shifted_full_spike_index[idx_keep_full] = shifted_triaged_spike_index
 
-# + tags=[]
+# %% tags=[]
 # merge
 with h5py.File(sub_h5, "r") as h5:
     labels_merged = merge_split_cleaned.get_merged(
@@ -320,8 +326,8 @@ clusterer = cluster_utils.relabel_by_depth(clusterer, cluster_centers)
 cluster_centers = cluster_utils.compute_cluster_centers(clusterer)
 labels = np.full(x.shape, -1)
 labels[idx_keep_full] = clusterer.labels_
-# -
 
+# %%
 # z_cutoffs= [(0,550), (500,1050), (1000,1550), (1500,2050), (2000,2550), (2500,3050), (3000,3550), (3500,4050)]
 z_cutoffs= [(500,1000)]#, (1000,1550), (1500,2050), (2000,2550), (2500,3050), (3000,3550), (3500,4050)]
 matplotlib.rcParams.update({'font.size': 14})
@@ -354,12 +360,14 @@ for z_cutoff in z_cutoffs:
     # fig.savefig(f"{save_dir_path}/full_scatter_{z_cutoff[0]}_{z_cutoff[1]}", dpi=200)
     # plt.close(fig)
 
+# %%
 ###hdbscan
 import os
 save_dir_path = "clustering_results_split_merge"
 if not os.path.exists(save_dir_path):
     os.makedirs(save_dir_path)
 
+# %%
 z_cutoffs= [(0,550), (500,1050), (1000,1550), (1500,2050), (2000,2550), (2500,3050), (3000,3550), (3500,4050)]
 for z_cutoff in z_cutoffs:
     fig, axes = cluster_viz.array_scatter(
@@ -390,7 +398,7 @@ for z_cutoff in z_cutoffs:
     fig.savefig(f"{save_dir_path}/full_scatter_{z_cutoff[0]}_{z_cutoff[1]}", dpi=200)
     plt.close(fig)
 
-# +
+# %%
 from joblib import Parallel, delayed
 
 save_dir_parallel = save_dir_path + "/unit_summaries"
@@ -424,7 +432,7 @@ for cluster_id in np.setdiff1d(np.unique(clusterer.labels_), [-1]):
     fig.savefig(save_dir_parallel + f"/Z{save_str}_cluster{cluster_id}.png", transparent=False, pad_inches=0)
     plt.close(fig)
 
-# +
+# %%
 num_close_clusters = 50
 num_close_clusters_plot=10
 num_channels_similarity = 20
