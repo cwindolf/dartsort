@@ -121,13 +121,13 @@ class MatchPursuitObjectiveUpsample:
             # time logic -- what region are we going to load
             T_sec = T_samples / sampling_rate
             assert t_start >= 0 and (t_end is None or t_end <= T_sec)
-            if verbose:
-                print(
-                    "Instantiating MatchPursuitObjectiveUpsample on ",
-                    t_end - t_start,
-                    "seconds long recording with threshold",
-                    threshold,
-                )
+            # if verbose:
+            #     print(
+            #         "Instantiating MatchPursuitObjectiveUpsample on ",
+            #         t_end - t_start,
+            #         "seconds long recording with threshold",
+            #         threshold,
+            #     )
 
             self.start_sample = t_start * sampling_rate
             if t_end is not None:
