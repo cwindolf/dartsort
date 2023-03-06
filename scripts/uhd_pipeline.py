@@ -58,6 +58,7 @@ if __name__ == "__main__":
     #preprocessing parameters
     preprocessing=True
     apply_filter=True
+    standardize=True
     n_channels_before_preprocessing=385
     channels_to_remove=384 #Typically the reference channel - IMPORTANT: make sure it is not included in the geometry array 
     low_frequency=300
@@ -71,7 +72,7 @@ if __name__ == "__main__":
     n_job_preprocessing=-1
     n_sec_chunk_preprocessing=1
 
-    # %%
+# %%
 
     # %%
     # Initial Detection - Localization parameters 
@@ -127,7 +128,7 @@ if __name__ == "__main__":
     log_c=5 #to make clusters isotropic
     scales=(1, 1, 50)
 
-    # %%
+# %%
 
     # %%
     #Deconv parameters
@@ -158,7 +159,7 @@ if __name__ == "__main__":
     Path(output_all).mkdir(exist_ok=True)
     geom = np.load(geom_path)
 
-    # %%
+# %%
 
     # %%
     if preprocessing:
@@ -186,11 +187,15 @@ if __name__ == "__main__":
 
         recording = recording.frame_slice(start_frame=int(sampling_rate * t_start_preproc), end_frame=int(sampling_rate * t_end_preproc))
 
-        sampShifts = npSampShifts()
-        recording = highpass_filter(recording, freq_min=low_frequency, filter_order=order)
-        recording = zscore(recording)
-        recording = phase_shift(recording, inter_sample_shift=sampShifts)
-        recording = common_reference(recording)
+        if apply_filter:
+            recording = highpass_filter(recording, freq_min=low_frequency, filter_order=order)
+        if standardize:
+            recording = zscore(recording)
+        if adcshift_correction:
+            sampShifts = npSampShifts()
+            recording = phase_shift(recording, inter_sample_shift=sampShifts)
+        if median_subtraction:
+            recording = common_reference(recording)
 
         recording.save(folder=preprocessing_dir, n_jobs=n_job_preprocessing, chunk_size=sampling_rate*n_sec_chunk_preprocessing, progressbar=True)
 
