@@ -1,3 +1,4 @@
+# %%
 import h5py
 import numpy as np
 import torch
@@ -17,6 +18,7 @@ from spike_psvae import (
 )
 
 
+# %%
 def extract_deconv(
     templates_up,
     spike_train_up,
@@ -49,6 +51,8 @@ def extract_deconv(
     localize=True,
     loc_radius=100,
     n_sec_chunk=1,
+    t_start=0,
+    t_end=None,
     n_jobs=1,
     sampling_rate=30_000,
     n_sec_train_feats=40,
@@ -82,6 +86,8 @@ def extract_deconv(
     std_size = std_size // np.dtype(np.float32).itemsize
     assert not std_size % n_chans
     T_samples = std_size // n_chans
+    if t_end is None:
+        t_end=T_samples
 
     if geom is None and subtraction_h5 is not None:
         with h5py.File(subtraction_h5, "r") as h5:
@@ -110,10 +116,12 @@ def extract_deconv(
     if out_h5.exists():
         with h5py.File(out_h5, "r") as h5:
             last_batch_end = h5["last_batch_end"][()]
-
+    if t_start<last_batch_end:
+        t_start=last_batch_end
+        
     # determine jobs to run
     batch_length = n_sec_chunk * sampling_rate
-    start_samples = range(last_batch_end, T_samples, batch_length)
+    start_samples = range(t_start, t_end, batch_length)
     if not len(start_samples):
         print("Extraction already done")
         return out_h5, residual_path
@@ -267,6 +275,8 @@ def extract_deconv(
             trough_offset=trough_offset,
             nn_denoise=nn_denoise,
             seed=seed,
+            t_start=t_start,
+            t_end=t_end,
         )
 
         if last_batch_end > 0:
@@ -426,6 +436,7 @@ def extract_deconv(
     return out_h5
 
 
+# %%
 JobResult = namedtuple(
     "JobResult",
     [
@@ -442,6 +453,7 @@ JobResult = namedtuple(
 )
 
 
+# %%
 def _extract_deconv_worker(start_sample):
     # an easy name to extract the params set by _extract_deconv_init
     p = _extract_deconv_worker
@@ -637,6 +649,7 @@ def _extract_deconv_worker(start_sample):
     )
 
 
+# %%
 def _extract_deconv_init(
     geom,
     device,
@@ -707,6 +720,7 @@ def _extract_deconv_init(
     print(".", end="", flush=True)
 
 
+# %%
 def load_or_fit_featurizers(
     featurizers,
     h5,
@@ -727,6 +741,8 @@ def load_or_fit_featurizers(
     trough_offset=42,
     nn_denoise=True,
     seed=0,
+    t_start=0,
+    t_end=None,
 ):
     if not any(f.needs_fit for f in featurizers):
         return
@@ -805,6 +821,8 @@ def load_or_fit_featurizers(
         geom=geom,
         localize=False,
         n_sec_chunk=n_sec_chunk,
+        t_start=t_start,
+        t_end=t_end,
         n_jobs=n_jobs,
         sampling_rate=sampling_rate,
         device=device,
@@ -843,6 +861,7 @@ def load_or_fit_featurizers(
     # done. at this point the caller can rely on fitted featurizers.
 
 
+# %%
 def xqdm(it, pbar=True, **kwargs):
     if pbar:
         if isinstance(pbar, str):
