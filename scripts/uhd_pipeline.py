@@ -322,10 +322,10 @@ if __name__ == "__main__":
 
     # %%
     # Clustering 
+    cluster_dir = Path(output_all) / "initial_clustering"
+    Path(cluster_dir).mkdir(exist_ok=True)
     if clustering:
         print("Clustering...")
-        cluster_dir = Path(output_all) / "initial_clustering"
-        Path(cluster_dir).mkdir(exist_ok=True)
         if t_end_clustering is None:
             t_end_clustering=rec_len_sec
         t_start_clustering-=t_start_preproc
@@ -337,10 +337,10 @@ if __name__ == "__main__":
                                                     log_c=log_c, scales=scales, savefigs=savefigs)
     
     else:
-        fname_spt_cluster = Path(cluster_output_directory) / "spt_full_cluster.npy"
-        fname_x = Path(cluster_output_directory) / "x_full_cluster.npy"
-        fname_z = Path(cluster_output_directory) / "z_full_cluster.npy"
-        fname_maxptps = Path(cluster_output_directory) / "maxptps_full_cluster.npy"
+        fname_spt_cluster = Path(cluster_dir) / "spt_full_cluster.npy"
+        fname_x = Path(cluster_dir) / "x_full_cluster.npy"
+        fname_z = Path(cluster_dir) / "z_full_cluster.npy"
+        fname_maxptps = Path(cluster_dir) / "maxptps_full_cluster.npy"
         
         spt = np.load(fname_spt_cluster)
         x = np.load(fname_x)
