@@ -65,7 +65,7 @@ def extract_deconv(
 ):
     standardized_bin = Path(standardized_bin)
     output_directory = Path(output_directory)
-
+    
     if isinstance(templates_up, (str, Path)):
         templates_up = np.load(templates_up)
     if isinstance(spike_train_up, (str, Path)):
