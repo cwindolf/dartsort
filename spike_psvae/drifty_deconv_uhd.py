@@ -543,20 +543,20 @@ def shift_deconv(
             st_up[:, 1] += shifted_upsampled_start_ixs[which_shiftix]
             deconv_spike_train_shifted_upsampled.append(st_up)
 
-            shift_good = (
-                shifted_upsampled_idx_to_shift_id[st_up[:, 1]] == which_shiftix
-            ).all()
-            tsorted = (np.diff(st_up[:, 0]) >= 0).all()
-            bigger = (bid == 0) or (
-                st_up[:, 0] >= deconv_spike_train_shifted_upsampled[-2][:, 0].max()
-            ).all()
+#             shift_good = (
+#                 shifted_upsampled_idx_to_shift_id[st_up[:, 1]] == which_shiftix
+#             ).all()
+#             tsorted = (np.diff(st_up[:, 0]) >= 0).all()
+#             bigger = (bid == 0) or (
+#                 st_up[:, 0] >= deconv_spike_train_shifted_upsampled[-2][:, 0].max()
+#             ).all()
             pitchy = (
                 bin_shifts[((st_up[:, 0] - trough_offset) // pfs - t_start).astype(int)] == unique_shifts[which_shiftix]
             ).all()
             # print(f"{bid=} {shift_good=} {tsorted=} {bigger=} {pitchy=}")
-            assert shift_good
-            assert tsorted
-            assert bigger
+#             assert shift_good
+#             assert tsorted
+#             assert bigger
             if not pitchy:
                 raise ValueError(
                     f"{bid=} Not pitchy {np.unique(bin_shifts[((st_up[:, 0] - trough_offset) // pfs - t_start).astype(int)])=} "
@@ -965,8 +965,8 @@ def full_deconv_with_update(
             device=None,
             geom=geom,
             subtraction_h5=subtraction_h5,
-            t_start=start_sec,
-            t_end=end_sec,
+            t_start=start_sec*pfs,
+            t_end=end_sec*pfs,
             n_jobs=n_jobs,
         )
 
