@@ -155,7 +155,7 @@ def superres_denoised_templates(
     tpca_rank=5,
     tpca_radius=75,
     tpca_n_wfs=50_000,
-    tpca_centered=True,
+    tpca_centered=False,
     do_nn_denoise=False,
     denoiser_init_kwargs={}, 
     denoiser_weights_path=None, 
