@@ -145,7 +145,7 @@ def full_post_processing(raw_data_bin, geom,
                          prob_min = 0.1, time_temp_computation=0,
                          threshold_to_clean_1=10, threshold_to_clean_2=5, threshold_to_clean_3=4, 
                          isosplit_th=0.75, n_iter_split=2, 
-                         dist_pairs=20, resid_threshold=10, deconv_th=1000,
+                         dist_pairs=20, resid_threshold=7, deconv_th=1000,
                          bin_size_um=1, pfs=30000):
     
     # Recommendation: set time_temp_computation to middle of recording
