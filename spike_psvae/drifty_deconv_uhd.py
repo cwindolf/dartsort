@@ -13,7 +13,7 @@ from .extract_deconv import extract_deconv
 
 # %%
 def superres_spike_train(
-    spike_train, z_abs, x, bin_size_um, geom, t_end=100, 
+    spike_train, z_abs, x, bin_size_um, geom, bins_sizes_um=None, t_end=100, 
     units_spread=None, n_spikes_max_recent = 1000, fs=30000, 
     dist_metric=None, dist_metric_threshold=500,
     adaptive_th_for_temp_computation=False, outliers_tracking=None,
@@ -66,6 +66,8 @@ def superres_spike_train(
         # this corresponds to bins like:
         #      ... | bin -1 | bin 0 | bin 1 | ...
         #   ... -3bin/2 , -bin/2, bin/2, 3bin/2, ...
+        if bins_sizes_um is not None:
+            bin_size_um = bins_sizes_um[u]
         bin_ids = (centered_z + bin_size_um / 2) // bin_size_um
         occupied_bins, bin_counts = np.unique(bin_ids, return_counts=True)
         if units_spread is not None:
@@ -129,6 +131,7 @@ def superres_denoised_templates(
     bin_size_um,
     geom,
     raw_binary_file,
+    bins_sizes_um=None,
     t_end=100,
     min_spikes_bin=None,
     augment_low_snr_temps=True,
@@ -177,6 +180,7 @@ def superres_denoised_templates(
         x,
         bin_size_um,
         geom,
+        bins_sizes_um,
         t_end,
         units_spread,
         n_spikes_max_recent,
@@ -225,6 +229,7 @@ def superres_denoised_templates(
                         n_spikes_per_bin, 
                         bin_size_um,
                         geom,
+                        bins_sizes_um=bins_sizes_um,
                         min_spikes_to_augment = min_spikes_to_augment
         )
 
@@ -247,6 +252,7 @@ def augment_low_snr_templates(
     n_spikes_per_bin, 
     bin_size_um,
     geom,
+    bins_sizes_um=None,
     min_spikes_to_augment = 25,
     fill_value=0.0,
 ):
@@ -257,6 +263,8 @@ def augment_low_snr_templates(
     temp_to_augment = np.flatnonzero(n_spikes_per_bin<min_spikes_to_augment)
     for k in temp_to_augment:
         temp_orig = superres_label_to_orig_label[k]
+        if bins_sizes_um is not None:
+            bin_size_um = bins_sizes_um[temp_orig]
         bin_id = superres_label_to_bin_id[k] 
         bins_to_augment = np.array([bin_id+pitch//bin_size_um, bin_id-pitch//bin_size_um])
         n_pitch_shifts = np.array([-1, 1])
@@ -301,6 +309,7 @@ def shift_superres_templates(
     disp_value,
     registered_medians,
     medians_at_computation,
+    bins_sizes_um=None,
     fill_value=0.0,
 ):
 
@@ -322,6 +331,8 @@ def shift_superres_templates(
     for unit in np.unique(superres_label_to_orig_label):
         shift_um = disp_value + registered_medians[unit] - medians_at_computation[unit]
         # shift in bins, rounded towards 0
+        if bins_sizes_um is not None:
+            bin_size_um = bins_sizes_um[unit]
         bins_shift = np.round(shift_um / bin_size_um) # ROUND ??? - do mod, a little different
         if bins_shift!=0:
             # How to do the shifting?
@@ -388,6 +399,7 @@ def shift_deconv(
     medians_at_computation,
     superres_label_to_bin_id,
     superres_label_to_orig_label,
+    bins_sizes_um=None,
     deconv_dir=None,
     pfs=30_000,
     t_start=0,
@@ -409,10 +421,13 @@ def shift_deconv(
     # so for NP1, it's not every row, but every 2 rows!
     pitch = get_pitch(geom)
     print(f"a {pitch=}")
-
+    
     # integer probe-pitch shifts at each time bin
     p = p[t_start : t_end if t_end is not None else len(p)]
-    bin_shifts = (p + bin_size_um / 2) // bin_size_um * bin_size_um
+    if bins_sizes_um is not None:
+        bin_shifts = (p + bins_sizes_um.min() / 2) // bins_sizes_um.min() * bins_sizes_um.min()
+    else:
+        bin_shifts = (p + bin_size_um / 2) // bin_size_um * bin_size_um
     unique_shifts, shift_ids_by_time = np.unique(
         bin_shifts, return_inverse=True
     )
@@ -428,7 +443,8 @@ def shift_deconv(
                 geom,
                 shift,
                 registered_medians,
-                medians_at_computation)
+                medians_at_computation,
+                bins_sizes_um)
             for shift in unique_shifts
         ]
     )
@@ -599,6 +615,7 @@ def superres_deconv_chunk(
     units_spread=None, #registered_spread
     dist_metric=None,
     bin_size_um=1,
+    bins_sizes_um=None,#for having a different number of bin per template
     pfs=30_000,
     t_start=0,
     t_end=None,
@@ -633,6 +650,7 @@ def superres_deconv_chunk(
         bin_size_um,
         geom,
         raw_bin,
+        bins_sizes_um,
         t_end,
         min_spikes_bin,
         augment_low_snr_temps, 
@@ -673,6 +691,7 @@ def superres_deconv_chunk(
         medians_at_computation,
         superres_label_to_bin_id,
         superres_label_to_orig_label,
+        bins_sizes_um=bins_sizes_um,
         deconv_dir=deconv_dir,
         pfs=pfs,
         t_start=t_start,
@@ -732,6 +751,7 @@ def superres_deconv_chunk(
         trough_offset=trough_offset,
         spike_length_samples=spike_length_samples,
         bin_size_um=bin_size_um,
+        bins_sizes_um=bins_sizes_um,
         raw_bin=raw_bin,
         deconv_dir=deconv_dir,
         deconv_dist_metrics=deconv_dist_metrics,
@@ -850,6 +870,8 @@ def extract_superres_shifted_deconv(
             "deconv_dist_metrics",
         ):
             h5.create_dataset(key, data=superres_deconv_result[key])
+        if superres_deconv_result["bins_sizes_um"] is not None:
+            h5.create_dataset("bins_sizes_um", data=superres_deconv_result["bins_sizes_um"])
 
     return extract_h5
 
@@ -872,6 +894,7 @@ def full_deconv_with_update(
     subtraction_h5=None,
     n_sec_temp_update=None, #length of chunks for template update 
     bin_size_um=1,
+    bins_sizes_um=None,
     pfs=30_000,
     n_jobs=1,
     trough_offset=42,
@@ -929,6 +952,7 @@ def full_deconv_with_update(
             units_spread=units_spread, #registered_spread
             dist_metric=dist_metric,
             bin_size_um=bin_size_um,
+            bins_sizes_um=bins_sizes_um,
             pfs=pfs,
             t_start=start_sec,
             t_end=end_sec,
