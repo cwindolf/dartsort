@@ -143,7 +143,8 @@ def full_post_processing(raw_data_bin, geom,
                          spt, x, z_reg, z_abs, 
                          pcs, disp, 
                          prob_min = 0.1, time_temp_computation=0,
-                         threshold_to_clean_1=10, isosplit_th=0.75, n_iter_split=2, 
+                         threshold_to_clean_1=10, threshold_to_clean_2=5, threshold_to_clean_3=4, 
+                         isosplit_th=0.75, n_iter_split=2, 
                          dist_pairs=20, resid_threshold=10, deconv_th=1000,
                          bin_size_um=1, pfs=30000):
     
@@ -171,7 +172,7 @@ def full_post_processing(raw_data_bin, geom,
         idx_k = np.flatnonzero(spt_final[:, 1]==k)
         std_z[k] = z_reg[idx_k].std()
         std_x[k] = x[idx_k].std()
-    units_to_clean= np.flatnonzero(np.maximum(std_z, std_x)>threshold_to_clean_1)
+    units_to_clean= np.flatnonzero(np.maximum(std_z, std_x)>threshold_to_clean_2)
     spt_final[:, 1] = correct_outliers(spt_final, x, z_reg, disp, units_to_clean = units_to_clean, prob_min = prob_min)
     
     print("Merge")
@@ -187,7 +188,7 @@ def full_post_processing(raw_data_bin, geom,
         idx_k = np.flatnonzero(spt_final[:, 1]==k)
         std_z[k] = z_reg[idx_k].std()
         std_x[k] = x[idx_k].std()
-    units_to_clean= np.flatnonzero(np.maximum(std_z, std_x)>threshold_to_clean_1)
+    units_to_clean= np.flatnonzero(np.maximum(std_z, std_x)>threshold_to_clean_3)
     spt_final[:, 1] = correct_outliers(spt_final, x, z_reg, disp, units_to_clean = units_to_clean, prob_min = prob_min)
 
     return spt_final
