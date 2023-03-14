@@ -169,6 +169,325 @@ def array_scatter(
 
 
 # %%
+def array_scatter_with_deconv_score_fading(
+    labels,
+    geom,
+    x,
+    z,
+    maxptp,
+    log_dist_metric,
+    disp, 
+    
+    labels_fading,
+    x_fading,
+    z_fading,
+    maxptp_fading,
+    log_dist_metric_fading,
+
+    time_start,
+    time_end,
+    zlim=(-50, 350),
+    xlim=(-30, 70),
+    axes=None,
+    do_ellipse=True,
+    alpha=1,
+    alpha_fading=0.05,
+):
+    
+    geom_shifted = geom - [0, disp[time_start:time_end].mean()]
+    fig = None
+    if axes is None:
+        fig, axes = plt.subplots(1, 4, sharey=True, figsize=(20, 15))
+
+    excluded_ids = {-1}
+    if not do_ellipse:
+        excluded_ids = np.unique(labels)
+
+    cluster_scatter(
+        x,
+        z,
+        labels,
+        ax=axes[0],
+        s=10,
+        alpha=alpha,
+        excluded_ids=excluded_ids,
+        do_ellipse=do_ellipse,
+    )
+    cluster_scatter(
+        x_fading,
+        z_fading,
+        labels_fading,
+        ax=axes[0],
+        s=10,
+        alpha=alpha_fading,
+        excluded_ids=excluded_ids,
+        do_ellipse=False,
+    )
+    axes[0].scatter(*geom_shifted.T, c="orange", marker="s", s=10)
+    axes[0].set_ylabel("z")
+    axes[0].set_xlabel("x")
+    
+    axes[1].scatter(
+        x,
+        z,
+        c=log_dist_metric,
+        alpha=alpha,
+        marker=".",
+        cmap=plt.cm.viridis,
+    )
+    
+    axes[1].scatter(
+        x_fading,
+        z_fading,
+        c=log_dist_metric_fading,
+        alpha=alpha_fading,
+        marker=".",
+        cmap=plt.cm.viridis,
+    )
+    axes[1].scatter(*geom_shifted.T, c="orange", marker="s", s=10)
+    axes[1].set_title("Deconv Score")
+
+    cluster_scatter(
+        maxptp,
+        z,
+        labels,
+        ax=axes[2],
+        s=10,
+        alpha=alpha,
+        excluded_ids=excluded_ids,
+        do_ellipse=do_ellipse,
+    )
+    
+    cluster_scatter(
+        maxptp_fading,
+        z_fading,
+        labels_fading,
+        ax=axes[2],
+        s=10,
+        alpha=alpha_fading,
+        excluded_ids=excluded_ids,
+        do_ellipse=False,
+    )
+    axes[2].set_xlabel("maxptp")
+    
+    axes[3].scatter(
+        x,
+        z,
+        c=np.clip(maxptp, 3, 15),
+        alpha=alpha,
+        marker=".",
+        cmap=plt.cm.viridis,
+    )
+    axes[3].scatter(
+        x_fading,
+        z_fading,
+        c=np.clip(maxptp_fading, 3, 15),
+        alpha=alpha_fading,
+        marker=".",
+        cmap=plt.cm.viridis,
+    )
+    axes[3].scatter(*geom_shifted.T, c="orange", marker="s", s=10)
+    axes[3].set_title("ptps")
+
+    axes[0].set_ylim(zlim)
+    axes[1].set_ylim(zlim)
+    axes[2].set_ylim(zlim)
+    axes[3].set_ylim(zlim)
+
+    axes[0].set_xlim(xlim)
+    axes[1].set_xlim(xlim)
+    axes[3].set_xlim(xlim)
+
+    if fig is not None:
+        plt.tight_layout()
+
+    return fig, axes
+
+
+# %%
+def array_scatter_with_deconv_score(
+    labels,
+    geom,
+    x,
+    z,
+    maxptp,
+    log_dist_metric,
+    disp, 
+    time_start,
+    time_end,
+    zlim=(-50, 350),
+    xlim=(-30, 70),
+    axes=None,
+    do_ellipse=True,
+    alpha=0.1,
+):
+    
+    geom_shifted = geom - [0, disp[time_start:time_end].mean()]
+    fig = None
+    if axes is None:
+        fig, axes = plt.subplots(1, 4, sharey=True, figsize=(20, 15))
+
+    excluded_ids = {-1}
+    if not do_ellipse:
+        excluded_ids = np.unique(labels)
+
+    cluster_scatter(
+        x,
+        z,
+        labels,
+        ax=axes[0],
+        s=10,
+        alpha=alpha,
+        excluded_ids=excluded_ids,
+        do_ellipse=do_ellipse,
+    )
+    axes[0].scatter(*geom_shifted.T, c="orange", marker="s", s=10)
+    axes[0].set_ylabel("z")
+    axes[0].set_xlabel("x")
+    
+    axes[1].scatter(
+        x,
+        z,
+        c=log_dist_metric,
+        alpha=alpha,
+        marker=".",
+        cmap=plt.cm.viridis,
+    )
+    axes[1].scatter(*geom_shifted.T, c="orange", marker="s", s=10)
+    axes[1].set_title("Deconv Score")
+
+    cluster_scatter(
+        maxptp,
+        z,
+        labels,
+        ax=axes[2],
+        s=10,
+        alpha=alpha,
+        excluded_ids=excluded_ids,
+        do_ellipse=do_ellipse,
+    )
+    axes[2].set_xlabel("maxptp")
+    
+    axes[3].scatter(
+        x,
+        z,
+        c=np.clip(maxptp, 3, 15),
+        alpha=alpha,
+        marker=".",
+        cmap=plt.cm.viridis,
+    )
+    axes[3].scatter(*geom_shifted.T, c="orange", marker="s", s=10)
+    axes[3].set_title("ptps")
+
+    axes[0].set_ylim(zlim)
+    axes[1].set_ylim(zlim)
+    axes[2].set_ylim(zlim)
+    axes[3].set_ylim(zlim)
+
+    axes[0].set_xlim(xlim)
+    axes[1].set_xlim(xlim)
+    axes[3].set_xlim(xlim)
+
+    if fig is not None:
+        plt.tight_layout()
+
+    return fig, axes
+
+
+# %%
+def array_scatter_with_pcs(
+    labels,
+    geom,
+    x,
+    z,
+    maxptp,
+    pcs1,
+    pcs2,
+    zlim=(-50, 3900),
+    axes=None,
+    do_ellipse=True,
+):
+    fig = None
+    if axes is None:
+        fig, axes = plt.subplots(1, 5, sharey=True, figsize=(25, 15))
+
+    excluded_ids = {-1}
+    if not do_ellipse:
+        excluded_ids = np.unique(labels)
+
+    cluster_scatter(
+        x,
+        z,
+        labels,
+        ax=axes[0],
+        s=10,
+        alpha=0.05,
+        excluded_ids=excluded_ids,
+        do_ellipse=do_ellipse,
+    )
+    axes[0].scatter(*geom.T, c="orange", marker="s", s=10)
+    axes[0].set_ylabel("z")
+    axes[0].set_xlabel("x")
+
+    cluster_scatter(
+        maxptp,
+        z,
+        labels,
+        ax=axes[1],
+        s=10,
+        alpha=0.05,
+        excluded_ids=excluded_ids,
+        do_ellipse=do_ellipse,
+    )
+    axes[1].set_xlabel("maxptp")
+    axes[2].scatter(
+        x,
+        z,
+        c=np.clip(maxptp, 3, 15),
+        alpha=0.1,
+        marker=".",
+        cmap=plt.cm.viridis,
+    )
+    axes[2].scatter(*geom.T, c="orange", marker="s", s=10)
+    axes[2].set_title("ptps")
+
+    cluster_scatter(
+        pcs1,
+        z,
+        labels,
+        ax=axes[3],
+        s=10,
+        alpha=0.05,
+        excluded_ids=excluded_ids,
+        do_ellipse=do_ellipse,
+    )
+    axes[3].set_xlabel("PC1")
+    
+    cluster_scatter(
+        pcs2,
+        z,
+        labels,
+        ax=axes[4],
+        s=10,
+        alpha=0.05,
+        excluded_ids=excluded_ids,
+        do_ellipse=do_ellipse,
+    )
+    axes[4].set_xlabel("PC2")
+    
+    axes[0].set_ylim(zlim)
+    axes[1].set_ylim(zlim)
+    axes[2].set_ylim(zlim)
+    axes[3].set_ylim(zlim)
+    axes[4].set_ylim(zlim)
+
+    if fig is not None:
+        plt.tight_layout()
+
+    return fig, axes
+
+
+# %%
 def plot_waveforms_geom_unit(
     geom,
     first_chans_cluster,
