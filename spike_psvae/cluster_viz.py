@@ -177,32 +177,39 @@ def array_scatter_with_deconv_score_fading(
     maxptp,
     log_dist_metric,
     disp, 
-    
+    labels_temp_comp,
+    x_temp_comp,
+    z_temp_comp,
+    labels_temp_comp_fading,
+    x_temp_comp_fading,
+    z_temp_comp_fading,
     labels_fading,
     x_fading,
     z_fading,
     maxptp_fading,
     log_dist_metric_fading,
-
     time_start,
     time_end,
     zlim=(-50, 350),
     xlim=(-30, 70),
+    ptps_lim=(0, 50),
     axes=None,
     do_ellipse=True,
     alpha=1,
     alpha_fading=0.05,
+    color_map=plt.cm.viridis,
 ):
     
     geom_shifted = geom - [0, disp[time_start:time_end].mean()]
     fig = None
     if axes is None:
-        fig, axes = plt.subplots(1, 4, sharey=True, figsize=(20, 15))
+        fig, axes = plt.subplots(1, 5, sharey=True, figsize=(25, 15))
 
     excluded_ids = {-1}
     if not do_ellipse:
         excluded_ids = np.unique(labels)
 
+    axes[0].text(xlim[0]+5, zlim[1]-10, "Time {} s".format(time_start), fontsize='large')
     cluster_scatter(
         x,
         z,
@@ -211,7 +218,7 @@ def array_scatter_with_deconv_score_fading(
         s=10,
         alpha=alpha,
         excluded_ids=excluded_ids,
-        do_ellipse=do_ellipse,
+        do_ellipse=False,
     )
     cluster_scatter(
         x_fading,
@@ -221,7 +228,7 @@ def array_scatter_with_deconv_score_fading(
         s=10,
         alpha=alpha_fading,
         excluded_ids=excluded_ids,
-        do_ellipse=False,
+        do_ellipse=do_ellipse,
     )
     axes[0].scatter(*geom_shifted.T, c="orange", marker="s", s=10)
     axes[0].set_ylabel("z")
@@ -233,7 +240,7 @@ def array_scatter_with_deconv_score_fading(
         c=log_dist_metric,
         alpha=alpha,
         marker=".",
-        cmap=plt.cm.viridis,
+        cmap=color_map,
     )
     
     axes[1].scatter(
@@ -242,61 +249,89 @@ def array_scatter_with_deconv_score_fading(
         c=log_dist_metric_fading,
         alpha=alpha_fading,
         marker=".",
-        cmap=plt.cm.viridis,
+        cmap=color_map
     )
     axes[1].scatter(*geom_shifted.T, c="orange", marker="s", s=10)
     axes[1].set_title("Deconv Score")
+    
+    cluster_scatter(
+        x_temp_comp,
+        z_temp_comp,
+        labels_temp_comp,
+        ax=axes[2],
+        s=10,
+        alpha=alpha,
+        excluded_ids=excluded_ids,
+        do_ellipse=False,
+    )
+    cluster_scatter(
+        x_temp_comp_fading,
+        z_temp_comp_fading,
+        labels_temp_comp_fading,
+        ax=axes[2],
+        s=10,
+        alpha=alpha_fading,
+        excluded_ids=excluded_ids,
+        do_ellipse=do_ellipse,
+    )
+    axes[2].scatter(*geom_shifted.T, c="orange", marker="s", s=10)
+    axes[2].set_xlabel("x")
+    axes[2].set_title("Spikes Temp Computation")
 
     cluster_scatter(
         maxptp,
         z,
         labels,
-        ax=axes[2],
+        ax=axes[3],
         s=10,
         alpha=alpha,
         excluded_ids=excluded_ids,
-        do_ellipse=do_ellipse,
+        do_ellipse=False,
     )
     
     cluster_scatter(
         maxptp_fading,
         z_fading,
         labels_fading,
-        ax=axes[2],
+        ax=axes[3],
         s=10,
         alpha=alpha_fading,
         excluded_ids=excluded_ids,
-        do_ellipse=False,
+        do_ellipse=do_ellipse,
     )
-    axes[2].set_xlabel("maxptp")
+    axes[3].set_xlabel("maxptp")
     
-    axes[3].scatter(
+    axes[4].scatter(
         x,
         z,
         c=np.clip(maxptp, 3, 15),
         alpha=alpha,
         marker=".",
-        cmap=plt.cm.viridis,
+        cmap=color_map
     )
-    axes[3].scatter(
+    axes[4].scatter(
         x_fading,
         z_fading,
         c=np.clip(maxptp_fading, 3, 15),
         alpha=alpha_fading,
         marker=".",
-        cmap=plt.cm.viridis,
+        cmap=color_map
     )
-    axes[3].scatter(*geom_shifted.T, c="orange", marker="s", s=10)
-    axes[3].set_title("ptps")
+    
+    axes[4].scatter(*geom_shifted.T, c="orange", marker="s", s=10)
+    axes[4].set_title("ptps")
 
     axes[0].set_ylim(zlim)
     axes[1].set_ylim(zlim)
     axes[2].set_ylim(zlim)
     axes[3].set_ylim(zlim)
+    axes[4].set_ylim(zlim)
 
     axes[0].set_xlim(xlim)
     axes[1].set_xlim(xlim)
-    axes[3].set_xlim(xlim)
+    axes[2].set_xlim(xlim)
+    axes[4].set_xlim(xlim)
+    axes[3].set_xlim(ptps_lim)
 
     if fig is not None:
         plt.tight_layout()
