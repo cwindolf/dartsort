@@ -19,6 +19,8 @@ from spike_psvae.ibme_corr import calc_corr_decent
 from spike_psvae.ibme import fast_raster
 from spike_psvae.ibme_corr import psolvecorr
 from spike_psvae.filter_standardize import npSampShifts
+from spike_psvae.post_processing_uhd import full_post_processing
+
 
 # %%
 from spikeinterface.preprocessing import highpass_filter, common_reference, zscore, phase_shift 
@@ -37,7 +39,7 @@ if __name__ == "__main__":
     dtype_raw = 'int16' #dtype of raw rec
     output_all = "data_set_name" #everything will be saved here
     geom_path = 'geom.npy'
-    rec_len_sec = 3000 #length of rec in seconds
+    rec_len_sec = 4000 #length of rec in seconds
     n_channels = 385 #number of channels (before preprocessing)
     sampling_rate = 30000
     savefigs = True # To save summary figs at each step 
@@ -154,6 +156,11 @@ if __name__ == "__main__":
     augment_low_snr_temps=True
     min_spikes_to_augment=25
 
+
+    # %%
+    postprocessing=True
+    time_temp_computation=rec_len_sec//2 # change this, use stable / nice portion of the recording with average displacement
+    
 
     # %%
     Path(output_all).mkdir(exist_ok=True)
@@ -416,3 +423,12 @@ if __name__ == "__main__":
                 plt.scatter(spt[idx, 0]/sampling_rate, z[idx], c = ccolors[k], s = 1, alpha = 0.1)
             plt.savefig(fname_deconv_fig)
             plt.close()
+            
+            
+    if postprocessing:
+        spt = full_post_processing(raw_data_name, geom, 
+                             spt, x, z-displacement_rigid[spt[:, 0]//sampling_rate], z, 
+                             displacement_rigid, time_temp_computation=time_temp_computation)
+        np.save("final_spike_train.npy", spt)
+        np.save("final_x.npy", x)
+        np.save("final_z.npy", z)
