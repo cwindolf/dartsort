@@ -35,16 +35,12 @@ def correct_outliers(spt, x, z_reg, disp, units_to_clean = None, prob_min = 0.1)
     return labels_outliers_corrected
 
 
-def post_deconv_split(spt_no_outliers, x, z_reg, pcs, isosplit_th=1, n_iter=2):
+def post_deconv_split(spt_no_outliers, x, z_reg, isosplit_th=1, n_iter=2):
     for iter in range(n_iter):
         cmp = spt_no_outliers[:, 1].max()+1
         for unit in range(spt_no_outliers[:, 1].max()+1):
             idx_unit = np.flatnonzero(spt_no_outliers[:, 1]==unit)
-            spread_0 = x[idx_unit].std()/pcs[idx_unit, 0].std()
-            spread_1 = x[idx_unit].std()/pcs[idx_unit, 1].std()
-            features = np.concatenate((z_reg[idx_unit, None], x[idx_unit, None], 
-                                      spread_0*pcs[idx_unit, 0][:, None], 
-                                       spread_1*pcs[idx_unit, 1][:, None]), axis=1)
+            features = np.concatenate((z_reg[idx_unit, None], x[idx_unit, None]), axis=1)
 
             pca_features = PCA(1)
             feat_pca = pca_features.fit_transform(features)[:, 0]
@@ -141,10 +137,9 @@ def post_deconv_merge(raw_data_bin, geom, spt_no_outliers,
 
 def full_post_processing(raw_data_bin, geom, 
                          spt, x, z_reg, z_abs, 
-                         pcs, disp, 
-                         prob_min = 0.1, time_temp_computation=0,
-                         threshold_to_clean_1=10, threshold_to_clean_2=5, threshold_to_clean_3=4, 
-                         isosplit_th=1, n_iter_split=2, 
+                         disp, prob_min = 0.1, time_temp_computation=0,
+                         threshold_to_clean_1=10, threshold_to_clean_2=5, 
+                         threshold_to_clean_3=4, isosplit_th=1, n_iter_split=2, 
                          dist_pairs=20, resid_threshold=7, deconv_th=1000,
                          bin_size_um=1, pfs=30000):
     
@@ -163,7 +158,7 @@ def full_post_processing(raw_data_bin, geom,
     print("Label Outliers")
     spt_final[:, 1] = correct_outliers(spt, x, z_reg, disp, units_to_clean = units_to_clean, prob_min = prob_min)
     print("Split")
-    spt_final = post_deconv_split(spt_final, x, z_reg, pcs, isosplit_th=isosplit_th, n_iter=n_iter_split)
+    spt_final = post_deconv_split(spt_final, x, z_reg, isosplit_th=isosplit_th, n_iter=n_iter_split)
 
     n_units = spt_final[:, 1].max()+1
     std_z = np.zeros(n_units)
