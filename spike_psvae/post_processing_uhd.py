@@ -35,7 +35,7 @@ def correct_outliers(spt, x, z_reg, disp, units_to_clean = None, prob_min = 0.1)
     return labels_outliers_corrected
 
 
-def post_deconv_split(spt_no_outliers, x, z_reg, pcs, isosplit_th=0.75, n_iter=2):
+def post_deconv_split(spt_no_outliers, x, z_reg, pcs, isosplit_th=1, n_iter=2):
     for iter in range(n_iter):
         cmp = spt_no_outliers[:, 1].max()+1
         for unit in range(spt_no_outliers[:, 1].max()+1):
@@ -144,7 +144,7 @@ def full_post_processing(raw_data_bin, geom,
                          pcs, disp, 
                          prob_min = 0.1, time_temp_computation=0,
                          threshold_to_clean_1=10, threshold_to_clean_2=5, threshold_to_clean_3=4, 
-                         isosplit_th=0.75, n_iter_split=2, 
+                         isosplit_th=1, n_iter_split=2, 
                          dist_pairs=20, resid_threshold=7, deconv_th=1000,
                          bin_size_um=1, pfs=30000):
     
