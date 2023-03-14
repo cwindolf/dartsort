@@ -189,6 +189,6 @@ def full_post_processing(raw_data_bin, geom,
         std_z[k] = z_reg[idx_k].std()
         std_x[k] = x[idx_k].std()
     units_to_clean= np.flatnonzero(np.maximum(std_z, std_x)>threshold_to_clean_3)
-    spt_final[:, 1] = correct_outliers(spt_final, x, z_reg, disp, units_to_clean = units_to_clean, prob_min = prob_min)
+    spt_final[:, 1] = correct_outliers(spt_final, x, z_reg, disp, units_to_clean = units_to_clean, prob_min = prob_min/2)
 
     return spt_final
