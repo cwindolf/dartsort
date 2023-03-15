@@ -197,8 +197,9 @@ u_i = \text{pad}(w_i, (C/P)(P - k_i - 1), (C/P)(P + k_i - 1)),
 \end{align}
 $$
 
-where here the pad operation is adding extra channels filled with
-missing value markers (NaNs) that can be accounted for during averaging.
+where here the pad operation $pad(w,c_1,c_2)$ is adding extra channels filled with
+missing value markers (NaNs) that can be accounted for during averaging. $c_1$
+channels are added below and $c_2$ above.
 
 Then the template is simply computed as the missing-value aware average
 of the padded waveforms $u_i$.
