@@ -193,7 +193,7 @@ by $P - k_i - 1$ pitches, for a total of $3P-2$. Define the padded waveform
 
 $$
 \begin{align}
-u_i = pad(w_i, (C/P)(P - k_i - 1), (C/P)(P + k_i - 1)),
+u_i = \text{pad}(w_i, (C/P)(P - k_i - 1), (C/P)(P + k_i - 1)),
 \end{align}
 $$
 
