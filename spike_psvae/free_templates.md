@@ -137,7 +137,7 @@ Formally, how are $k_i$ and $b_i$ chosen in each case?
  - Modes "z" and "p":
     - If mode is "z", let $o_i=z_i-\bar{r}$. If mode is "p", let
       $o_i=p_i-\bar{p}$.
-    - Let $k_i = \lfloor o_i / \Delta$
+    - Let $k_i = \lfloor o_i / \Delta\rfloor$
     - Let $s_i = o_i - k_i\Delta$ be the remaining sub-pitch
       drift, and note $s_i\geq0$ by construction.
     - $b_i$ is obtained as $\lfloor s_i / h\rfloor$.
@@ -191,7 +191,9 @@ If $k_i$ is positive, we want to shift down by $k_i$ pitches.
 This means that we pad above by $P + k_i - 1$ pitches, and we pad below
 by $P - k_i - 1$ pitches, for a total of $3P-2$. Define the padded waveform
 $$
-u_i = \operatorname{pad}(w_i, (C/P)(P - k_i - 1), (C/P)(P + k_i - 1)),
+\begin{align}
+u_i = \mathrm{pad}(w_i, (C/P)(P - k_i - 1), (C/P)(P + k_i - 1)),
+\end{align}
 $$
 where here the pad operation is adding extra channels filled with
 missing value markers (NaNs) that can be accounted for during averaging.
