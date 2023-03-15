@@ -190,11 +190,13 @@ probe according to $k_i$ so that it is centered on the central pitch.
 If $k_i$ is positive, we want to shift down by $k_i$ pitches.
 This means that we pad above by $P + k_i - 1$ pitches, and we pad below
 by $P - k_i - 1$ pitches, for a total of $3P-2$. Define the padded waveform
+
 $$
 \begin{align}
-u_i = \mathrm{pad}(w_i, (C/P)(P - k_i - 1), (C/P)(P + k_i - 1)),
+u_i = pad(w_i, (C/P)(P - k_i - 1), (C/P)(P + k_i - 1)),
 \end{align}
 $$
+
 where here the pad operation is adding extra channels filled with
 missing value markers (NaNs) that can be accounted for during averaging.
 
