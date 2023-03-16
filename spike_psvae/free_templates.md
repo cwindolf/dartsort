@@ -137,13 +137,13 @@ Formally, how are $k_i$ and $b_i$ chosen in each case?
  - Modes "z" and "p":
     - If mode is "z", let $o_i=z_i-\bar{r}$. If mode is "p", let
       $o_i=p_i-\bar{p}$.
-    - Let $k_i = \lfloor o_i / \Delta\rfloor$
+    - Let $k_i = \lfloor (o_i + \Delta/2) / \Delta\rfloor$
     - Let $s_i = o_i - k_i\Delta$ be the remaining sub-pitch
       drift, and note $s_i\geq0$ by construction.
-    - $b_i$ is obtained as $\lfloor s_i / h\rfloor$.
+    - $b_i$ is obtained as $\lfloor (s_i + h/2) / h\rfloor$.
  - Mode "hybrid":
-    - Let $k_i = \lfloor (p_i - \bar{p}) / \Delta$
-    - Let $s_i = z_i - k_i\Delta$ and $b_i=\lfloor s_i / h\rfloor$.
+    - Let $k_i = \lfloor (p_i - \bar{p} + \Delta/2) / \Delta\rfloor$
+    - Let $s_i = z_i - \bar{r} - k_i\Delta$ and $b_i=\lfloor (s_i + h/2) / h\rfloor$.
     - Note that here, the bin ids are signed and may include values
       outside $\{0,...,B - 1\}$.
 
