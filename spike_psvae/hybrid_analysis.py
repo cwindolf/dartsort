@@ -632,6 +632,7 @@ class Sorting:
         unit,
         dz=50,
         nchans=16,
+        plot_channel_index=None,
         n_wfs_max=100,
         show_chan_label=True,
         show_scatter=True,
@@ -711,9 +712,12 @@ class Sorting:
             axes["z"].set_yticks([])
 
         # Waveforms
-        ci = waveform_utils.make_contiguous_channel_index(
-            self.geom.shape[0], nchans
-        )
+        if plot_channel_index is not None:
+            ci = plot_channel_index
+        else:
+            ci = waveform_utils.make_contiguous_channel_index(
+                self.geom.shape[0], nchans
+            )
         choices = np.arange(in_unit.size)
         if in_unit.size > n_wfs_max:
             choices = np.random.choice(in_unit.size, n_wfs_max, replace=False)

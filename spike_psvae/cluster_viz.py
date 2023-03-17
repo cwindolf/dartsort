@@ -1,3 +1,4 @@
+# %%
 import numpy as np
 import matplotlib
 import matplotlib.pyplot as plt
@@ -5,6 +6,7 @@ import colorcet
 from matplotlib.patches import Ellipse
 import matplotlib.transforms as transforms
 
+# %%
 # matplotlib.use('Agg')
 from matplotlib_venn import venn2
 from spikeinterface.extractors import NumpySorting
@@ -16,6 +18,7 @@ import matplotlib.gridspec as gridspec
 from sklearn.discriminant_analysis import LinearDiscriminantAnalysis as LDA
 from sklearn.decomposition import PCA
 
+# %%
 from spike_psvae.spikeio import read_waveforms
 from spike_psvae.cluster_utils import (
     compute_spiketrain_agreement,
@@ -26,12 +29,14 @@ from spike_psvae.cluster_utils import (
 from spike_psvae.denoise import denoise_wf_nn_tmp_single_channel
 import colorcet as cc
 
+# %%
 plt.rcParams["axes.xmargin"] = 0
 matplotlib.rcParams.update({"font.size": 10})
 plt.rcParams["axes.ymargin"] = 0
 ccolors = cc.glasbey[:31]
 
 
+# %%
 def get_ccolor(k):
     if k == -1:
         return "#808080"
@@ -39,6 +44,7 @@ def get_ccolor(k):
         return ccolors[k % len(ccolors)]
 
 
+# %%
 def cluster_scatter(
     xs,
     ys,
@@ -100,6 +106,7 @@ def cluster_scatter(
         ax.add_patch(ell)
 
 
+# %%
 def array_scatter(
     labels,
     geom,
@@ -161,6 +168,361 @@ def array_scatter(
     return fig, axes
 
 
+# %%
+def array_scatter_with_deconv_score_fading(
+    labels,
+    geom,
+    x,
+    z,
+    maxptp,
+    log_dist_metric,
+    disp, 
+    labels_temp_comp,
+    x_temp_comp,
+    z_temp_comp,
+    labels_temp_comp_fading,
+    x_temp_comp_fading,
+    z_temp_comp_fading,
+    labels_fading,
+    x_fading,
+    z_fading,
+    maxptp_fading,
+    log_dist_metric_fading,
+    time_start,
+    time_end,
+    zlim=(-50, 350),
+    xlim=(-30, 70),
+    ptps_lim=(0, 50),
+    axes=None,
+    do_ellipse=True,
+    alpha=1,
+    alpha_fading=0.05,
+    color_map=plt.cm.viridis,
+):
+    
+    geom_shifted = geom - [0, disp[time_start:time_end].mean()]
+    fig = None
+    if axes is None:
+        fig, axes = plt.subplots(1, 5, sharey=True, figsize=(25, 15))
+
+    excluded_ids = {-1}
+    if not do_ellipse:
+        excluded_ids = np.unique(labels)
+
+    axes[0].text(xlim[0]+5, zlim[1]-10, "Time {} s".format(time_start), fontsize='large')
+    cluster_scatter(
+        x,
+        z,
+        labels,
+        ax=axes[0],
+        s=10,
+        alpha=alpha,
+        excluded_ids=excluded_ids,
+        do_ellipse=False,
+    )
+    cluster_scatter(
+        x_fading,
+        z_fading,
+        labels_fading,
+        ax=axes[0],
+        s=10,
+        alpha=alpha_fading,
+        excluded_ids=excluded_ids,
+        do_ellipse=do_ellipse,
+    )
+    axes[0].scatter(*geom_shifted.T, c="orange", marker="s", s=10)
+    axes[0].set_ylabel("z")
+    axes[0].set_xlabel("x")
+    
+    axes[1].scatter(
+        x,
+        z,
+        c=log_dist_metric,
+        alpha=alpha,
+        marker=".",
+        cmap=color_map,
+    )
+    
+    axes[1].scatter(
+        x_fading,
+        z_fading,
+        c=log_dist_metric_fading,
+        alpha=alpha_fading,
+        marker=".",
+        cmap=color_map
+    )
+    axes[1].scatter(*geom_shifted.T, c="orange", marker="s", s=10)
+    axes[1].set_title("Deconv Score")
+    
+    cluster_scatter(
+        x_temp_comp,
+        z_temp_comp,
+        labels_temp_comp,
+        ax=axes[2],
+        s=10,
+        alpha=alpha,
+        excluded_ids=excluded_ids,
+        do_ellipse=False,
+    )
+    cluster_scatter(
+        x_temp_comp_fading,
+        z_temp_comp_fading,
+        labels_temp_comp_fading,
+        ax=axes[2],
+        s=10,
+        alpha=alpha_fading,
+        excluded_ids=excluded_ids,
+        do_ellipse=do_ellipse,
+    )
+    axes[2].scatter(*geom_shifted.T, c="orange", marker="s", s=10)
+    axes[2].set_xlabel("x")
+    axes[2].set_title("Spikes Temp Computation")
+
+    cluster_scatter(
+        maxptp,
+        z,
+        labels,
+        ax=axes[3],
+        s=10,
+        alpha=alpha,
+        excluded_ids=excluded_ids,
+        do_ellipse=False,
+    )
+    
+    cluster_scatter(
+        maxptp_fading,
+        z_fading,
+        labels_fading,
+        ax=axes[3],
+        s=10,
+        alpha=alpha_fading,
+        excluded_ids=excluded_ids,
+        do_ellipse=do_ellipse,
+    )
+    axes[3].set_xlabel("maxptp")
+    
+    axes[4].scatter(
+        x,
+        z,
+        c=np.clip(maxptp, 3, 15),
+        alpha=alpha,
+        marker=".",
+        cmap=color_map
+    )
+    axes[4].scatter(
+        x_fading,
+        z_fading,
+        c=np.clip(maxptp_fading, 3, 15),
+        alpha=alpha_fading,
+        marker=".",
+        cmap=color_map
+    )
+    
+    axes[4].scatter(*geom_shifted.T, c="orange", marker="s", s=10)
+    axes[4].set_title("ptps")
+
+    axes[0].set_ylim(zlim)
+    axes[1].set_ylim(zlim)
+    axes[2].set_ylim(zlim)
+    axes[3].set_ylim(zlim)
+    axes[4].set_ylim(zlim)
+
+    axes[0].set_xlim(xlim)
+    axes[1].set_xlim(xlim)
+    axes[2].set_xlim(xlim)
+    axes[4].set_xlim(xlim)
+    axes[3].set_xlim(ptps_lim)
+
+    if fig is not None:
+        plt.tight_layout()
+
+    return fig, axes
+
+
+# %%
+def array_scatter_with_deconv_score(
+    labels,
+    geom,
+    x,
+    z,
+    maxptp,
+    log_dist_metric,
+    disp, 
+    time_start,
+    time_end,
+    zlim=(-50, 350),
+    xlim=(-30, 70),
+    axes=None,
+    do_ellipse=True,
+    alpha=0.1,
+):
+    
+    geom_shifted = geom - [0, disp[time_start:time_end].mean()]
+    fig = None
+    if axes is None:
+        fig, axes = plt.subplots(1, 4, sharey=True, figsize=(20, 15))
+
+    excluded_ids = {-1}
+    if not do_ellipse:
+        excluded_ids = np.unique(labels)
+
+    cluster_scatter(
+        x,
+        z,
+        labels,
+        ax=axes[0],
+        s=10,
+        alpha=alpha,
+        excluded_ids=excluded_ids,
+        do_ellipse=do_ellipse,
+    )
+    axes[0].scatter(*geom_shifted.T, c="orange", marker="s", s=10)
+    axes[0].set_ylabel("z")
+    axes[0].set_xlabel("x")
+    
+    axes[1].scatter(
+        x,
+        z,
+        c=log_dist_metric,
+        alpha=alpha,
+        marker=".",
+        cmap=plt.cm.viridis,
+    )
+    axes[1].scatter(*geom_shifted.T, c="orange", marker="s", s=10)
+    axes[1].set_title("Deconv Score")
+
+    cluster_scatter(
+        maxptp,
+        z,
+        labels,
+        ax=axes[2],
+        s=10,
+        alpha=alpha,
+        excluded_ids=excluded_ids,
+        do_ellipse=do_ellipse,
+    )
+    axes[2].set_xlabel("maxptp")
+    
+    axes[3].scatter(
+        x,
+        z,
+        c=np.clip(maxptp, 3, 15),
+        alpha=alpha,
+        marker=".",
+        cmap=plt.cm.viridis,
+    )
+    axes[3].scatter(*geom_shifted.T, c="orange", marker="s", s=10)
+    axes[3].set_title("ptps")
+
+    axes[0].set_ylim(zlim)
+    axes[1].set_ylim(zlim)
+    axes[2].set_ylim(zlim)
+    axes[3].set_ylim(zlim)
+
+    axes[0].set_xlim(xlim)
+    axes[1].set_xlim(xlim)
+    axes[3].set_xlim(xlim)
+
+    if fig is not None:
+        plt.tight_layout()
+
+    return fig, axes
+
+
+# %%
+def array_scatter_with_pcs(
+    labels,
+    geom,
+    x,
+    z,
+    maxptp,
+    pcs1,
+    pcs2,
+    zlim=(-50, 3900),
+    axes=None,
+    do_ellipse=True,
+):
+    fig = None
+    if axes is None:
+        fig, axes = plt.subplots(1, 5, sharey=True, figsize=(25, 15))
+
+    excluded_ids = {-1}
+    if not do_ellipse:
+        excluded_ids = np.unique(labels)
+
+    cluster_scatter(
+        x,
+        z,
+        labels,
+        ax=axes[0],
+        s=10,
+        alpha=0.05,
+        excluded_ids=excluded_ids,
+        do_ellipse=do_ellipse,
+    )
+    axes[0].scatter(*geom.T, c="orange", marker="s", s=10)
+    axes[0].set_ylabel("z")
+    axes[0].set_xlabel("x")
+
+    cluster_scatter(
+        maxptp,
+        z,
+        labels,
+        ax=axes[1],
+        s=10,
+        alpha=0.05,
+        excluded_ids=excluded_ids,
+        do_ellipse=do_ellipse,
+    )
+    axes[1].set_xlabel("maxptp")
+    axes[2].scatter(
+        x,
+        z,
+        c=np.clip(maxptp, 3, 15),
+        alpha=0.1,
+        marker=".",
+        cmap=plt.cm.viridis,
+    )
+    axes[2].scatter(*geom.T, c="orange", marker="s", s=10)
+    axes[2].set_title("ptps")
+
+    cluster_scatter(
+        pcs1,
+        z,
+        labels,
+        ax=axes[3],
+        s=10,
+        alpha=0.05,
+        excluded_ids=excluded_ids,
+        do_ellipse=do_ellipse,
+    )
+    axes[3].set_xlabel("PC1")
+    
+    cluster_scatter(
+        pcs2,
+        z,
+        labels,
+        ax=axes[4],
+        s=10,
+        alpha=0.05,
+        excluded_ids=excluded_ids,
+        do_ellipse=do_ellipse,
+    )
+    axes[4].set_xlabel("PC2")
+    
+    axes[0].set_ylim(zlim)
+    axes[1].set_ylim(zlim)
+    axes[2].set_ylim(zlim)
+    axes[3].set_ylim(zlim)
+    axes[4].set_ylim(zlim)
+
+    if fig is not None:
+        plt.tight_layout()
+
+    return fig, axes
+
+
+# %%
 def plot_waveforms_geom_unit(
     geom,
     first_chans_cluster,
@@ -298,6 +660,7 @@ def plot_waveforms_geom_unit(
     )
 
 
+# %%
 def plot_waveforms_geom(
     main_cluster_id,
     neighbor_clusters,
@@ -452,6 +815,7 @@ def plot_waveforms_geom(
         )
 
 
+# %%
 def plot_venn_agreement(
     cluster_id_1,
     cluster_id_2,
@@ -478,6 +842,7 @@ def plot_venn_agreement(
     return ax
 
 
+# %%
 def plot_self_agreement(labels, spike_times, fig=None):
     # matplotlib.rcParams.update({'font.size': 22})
     indices_list = []
@@ -500,6 +865,7 @@ def plot_self_agreement(labels, spike_times, fig=None):
     return fig
 
 
+# %%
 def plot_isi_distribution(spike_train, ax=None, cdf=True, bins=None):
     if ax is None:
         fig = plt.figure(figsize=(6, 3))
@@ -532,6 +898,7 @@ def plot_isi_distribution(spike_train, ax=None, cdf=True, bins=None):
     return ax
 
 
+# %%
 def plot_single_unit_summary(
     cluster_id,
     labels,
@@ -785,6 +1152,7 @@ def plot_single_unit_summary(
     return fig
 
 
+# %%
 def plot_agreement_venn(
     cluster_id_1,
     cluster_id_2,
@@ -892,6 +1260,7 @@ def plot_agreement_venn(
     return fig
 
 
+# %%
 def plot_agreement_venn_better(
     cluster_id_1,
     cluster_id_2,
@@ -920,6 +1289,15 @@ def plot_agreement_venn_better(
     delta_frames=12,
     num_close_clusters=5,
 ):
+    
+    
+    vals, counts = np.unique(
+        mcs_abs_cluster_sorting1,
+        return_counts=True,
+    )
+    z_uniq, z_ids = np.unique(geom[:, 1], return_inverse=True)
+    mcid = z_ids[vals[counts.argmax()]]
+
     lab_st1 = cluster_id_1
     lab_st2 = cluster_id_2
     (
@@ -1082,6 +1460,8 @@ def plot_agreement_venn_better(
                 firstchans_cluster_sorting,
                 mcs_abs_cluster_sorting,
                 spike_times,
+                z_ids, 
+                mcid,
                 raw_bin=raw_bin,
                 num_spikes_plot=num_spikes_plot,
                 t_range=t_range,
@@ -1132,6 +1512,8 @@ def plot_agreement_venn_better(
                 firstchans_cluster_sorting,
                 mcs_abs_cluster_sorting,
                 spike_times,
+                z_ids,
+                mcid,
                 raw_bin=raw_bin,
                 num_spikes_plot=num_spikes_plot,
                 t_range=t_range,
@@ -1170,6 +1552,7 @@ def plot_agreement_venn_better(
     return fig
 
 
+# %%
 def plot_waveforms_geom_unit_with_return(
     geom,
     first_chans_cluster,
@@ -1322,6 +1705,7 @@ def plot_waveforms_geom_unit_with_return(
     return waveforms, first_chans_cluster
 
 
+# %%
 def plot_unit_similarity_heatmaps(
     cluster_id,
     st_1,
@@ -1414,6 +1798,7 @@ def plot_unit_similarity_heatmaps(
     )
 
 
+# %%
 def plot_unit_similarities(
     cluster_id,
     closest_clusters,
@@ -1595,6 +1980,7 @@ def plot_unit_similarities(
     return fig
 
 
+# %%
 def diagnostic_plots(
     cluster_id_1,
     cluster_id_2,
@@ -2281,10 +2667,12 @@ def diagnostic_plots(
     return fig, np.round(agreement, 2) * 100
 
 
+# %% [markdown]
 # def plot_unit_similarities_summary(cluster_id, closest_clusters, sorting1, sorting2, geom, raw_data_bin, recoring_duration, num_channels=40, num_spikes_plot=100, num_channels_similarity=20,
 #                                    num_close_clusters_plot=10, num_close_clusters=30, shifts_align = np.arange(-3,4), order_by ='similarity', normalize_agreement_by="both", denoised_waveforms=None,
 #                                    cluster_labels=None, non_triaged_idxs=None, triaged_mcs_abs=None, triaged_firstchans=None):
 
+# %% [markdown]
 #     # ###Kilosort
 #     cluster_ids_all = sorting1.get_unit_ids()
 #     cluster_ids_list = [cluster_ids_all[i * n:(i + 1) * n] for i in range((len(cluster_ids_all) + n - 1) // n )]
@@ -2305,6 +2693,7 @@ def diagnostic_plots(
 #         ax_agree  = plt.subplot(gs[i,5:7])
 #         ax_isi = plt.subplot(gs[i,7:9])
 
+# %% [markdown]
 #         st_1 = sorting_kilo.get_unit_spike_train(cluster_id)
 #         firing_rate = len(st_1) / recording_duration #in seconds
 #         waveforms1 = read_waveforms(st_1, raw_data_bin, geom, n_times=121)[0]
@@ -2314,11 +2703,13 @@ def diagnostic_plots(
 #         channel_range = (max(max_ptp_channel-num_channels_cosine//2,0),max_ptp_channel+num_channels_cosine//2)
 #         template1 = template1[:,channel_range[0]:channel_range[1]]
 
+# %% [markdown]
 #         #compute K closest clsuters
 #         curr_cluster_depth = kilo_cluster_depth_means[cluster_id]
 #         dist_to_other_cluster_dict = {cluster_id:abs(mean_depth-curr_cluster_depth) for (cluster_id,mean_depth) in kilo_cluster_depth_means.items()}
 #         closest_clusters = [y[0] for y in sorted(dist_to_other_cluster_dict.items(), key = lambda x: x[1])[1:1+num_close_clusters]]
 
+# %% [markdown]
 #         similarities = []
 #         agreements = []
 #         for closest_cluster in closest_clusters:
@@ -2333,6 +2724,7 @@ def diagnostic_plots(
 #             agreement = len(ind_st1) / (len(st_1) + len(st_2) - len(ind_st1))
 #             agreements.append(agreement)
 
+# %% [markdown]
 #         agreements = np.asarray(agreements).round(2)
 #         similarities = np.asarray(similarities).round(2)
 #         closest_clusters = np.asarray(closest_clusters)
@@ -2342,6 +2734,7 @@ def diagnostic_plots(
 #         similarities = similarities[most_similar_idxs]
 #         closest_clusters = closest_clusters[most_similar_idxs]
 
+# %% [markdown]
 #         y_axis_labels = [f"Unit {cluster_id}"]
 #         x_axis_labels = closest_clusters
 #         g = sns.heatmap(np.expand_dims(similarities,0), vmin=0, vmax=max(similarities), cmap='RdYlGn_r', annot=np.expand_dims(similarities,0),xticklabels=x_axis_labels, yticklabels=y_axis_labels, ax=ax_cos,cbar=False)
@@ -2349,17 +2742,21 @@ def diagnostic_plots(
 #         g = sns.heatmap(np.expand_dims(agreements,0), vmin=0, vmax=1, cmap='RdYlGn', annot=np.expand_dims(agreements,0),xticklabels=x_axis_labels, yticklabels=y_axis_labels, ax=ax_agree,cbar=False)
 #         ax_agree.set_title("Agreement");
 
+# %% [markdown]
 #         plot_isi_distribution(st_1, ax=ax_isi);
 #         matplotlib.rcParams.update({'font.size': 22})
 
+# %% [markdown]
 #         ax_cid.text(0.15, 0.45, f"Unit id: {cluster_id}")
 #         ax_cid.set_xticks([])
 #         ax_cid.set_yticks([])
 
+# %% [markdown]
 #         ax_fr.text(0.15, 0.45, f"FR: {'%.1f' % round(firing_rate,2)} Hz")
 #         ax_fr.set_xticks([])
 #         ax_fr.set_yticks([])
 
+# %% [markdown]
 #         ax_maxptp.text(0.1, 0.45, f"max ptp: {'%.1f' % round(max_ptp,2)}")
 #         ax_maxptp.set_xticks([])
 #         ax_maxptp.set_yticks([])
@@ -2367,6 +2764,7 @@ def diagnostic_plots(
 #     fig.savefig(f"kilosort_cluster_summaries_norm.png")
 
 
+# %%
 def get_outliers_wfs(    
     spike_times,
     raw_bin,
@@ -2374,6 +2772,7 @@ def get_outliers_wfs(
     geom,
     num_spikes_plot=100,
 
+# %%
 ):
     some_in_cluster = np.random.default_rng(0).choice(
         list(range(len(spike_times))),
@@ -2396,7 +2795,9 @@ def get_outliers_wfs(
         return None
 
 
+# %%
 
+# %%
 def diagnostic_plots_with_outliers(
     cluster_id_1,
     cluster_id_2,
