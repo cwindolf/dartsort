@@ -116,10 +116,11 @@ def array_scatter(
     zlim=(-50, 3900),
     axes=None,
     do_ellipse=True,
+    figsize = (15, 15),
 ):
     fig = None
     if axes is None:
-        fig, axes = plt.subplots(1, 3, sharey=True, figsize=(15, 15))
+        fig, axes = plt.subplots(1, 3, sharey=True, figsize=figsize)
 
     excluded_ids = {-1}
     if not do_ellipse:
