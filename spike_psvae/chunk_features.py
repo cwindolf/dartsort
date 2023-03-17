@@ -1,9 +1,12 @@
+# %%
 import numpy as np
 from sklearn.decomposition import PCA
 
+# %%
 from spike_psvae import localize_index
 
 
+# %%
 class ChunkFeature:
     """Feature computers for chunk pipelines (subtract and extract_deconv)
 
@@ -71,9 +74,11 @@ class ChunkFeature:
         return wfs
 
 
+# %% [markdown]
 # -- a couple of very basic extra features
 
 
+# %%
 class MaxPTP(ChunkFeature):
 
     name = "maxptps"
@@ -97,6 +102,7 @@ class MaxPTP(ChunkFeature):
         return maxptps
 
 
+# %%
 class TroughDepth(ChunkFeature):
 
     name = "trough_depths"
@@ -122,6 +128,7 @@ class TroughDepth(ChunkFeature):
         return trough_depths
 
 
+# %%
 class PeakHeight(ChunkFeature):
 
     name = "peak_heights"
@@ -147,6 +154,7 @@ class PeakHeight(ChunkFeature):
         return peak_heights
 
 
+# %%
 class PTPVector(ChunkFeature):
 
     name = "ptp_vectors"
@@ -202,6 +210,7 @@ class PTPVector(ChunkFeature):
         return wfs.ptp(1)
 
 
+# %%
 class Waveform(ChunkFeature):
     needs_fit = True
 
@@ -260,9 +269,11 @@ class Waveform(ChunkFeature):
         return self.handle_which_wfs(subtracted_wfs, cleaned_wfs, denoised_wfs)
 
 
+# %% [markdown]
 # -- localization
 
 
+# %%
 class Localization(ChunkFeature):
 
     name = "localizations"
@@ -310,9 +321,8 @@ class Localization(ChunkFeature):
             argpeaks = np.argmax(np.absolute(wfs),axis = 1)
             mcs = np.nanargmax(peaks, axis=1)
             argpeaks = argpeaks[np.arange(len(argpeaks)),mcs]
-            
             ptps = wfs[np.arange(len(mcs)), argpeaks, :]
-            
+            ptps = np.abs(ptps)
         else:
             raise NameError('Use ptp or peak value for localization.')
             
@@ -334,9 +344,11 @@ class Localization(ChunkFeature):
         return np.c_[xs, ys, z_abss, alphas, z_rels]
 
 
+# %% [markdown]
 # -- a more involved example
 
 
+# %%
 class TPCA(ChunkFeature):
     needs_fit = True
 
