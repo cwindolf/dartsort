@@ -1,12 +1,15 @@
+# %%
 import numpy as np
 from tqdm.auto import tqdm, trange
 from joblib import Parallel, delayed
 from scipy.cluster.hierarchy import complete, fcluster
 
+# %%
 from .deconvolve import MatchPursuitObjectiveUpsample
 from .snr_templates import get_single_templates, get_templates
 
 
+# %%
 def resid_dist(
     target_template,
     search_templates,
@@ -75,7 +78,75 @@ def resid_dist(
 
     return match_ix, dist, shift
 
+def resid_dist_multiple(
+    target_templates,
+    search_templates,
+    deconv_threshold,
+    max_upsample=8,
+    sampling_rate=30000,
+    conv_approx_rank=5,
+    n_processors=1,
+    multi_processing=False,
+    lambd=0.001,
+    allowed_scale=0.1,
+):
+    N, T, C = target_templates.shape
+    if search_templates.ndim == 2:
+        search_templates = search_templates[None]
+    N_, T_, C_ = search_templates.shape
+    assert T == T_ and C == C_ and N == N_
 
+    # pad target so that the deconv can find arbitrary offset
+    target_recording = np.pad(target_templates.reshape((N*T, C)), [(T, T), (0, 0)])
+
+    mp_object = MatchPursuitObjectiveUpsample(
+        templates=search_templates,
+        deconv_dir=None,
+        standardized_bin=None,
+        t_start=0,
+        t_end=None,
+        n_sec_chunk=1,
+        sampling_rate=30_000,
+        max_iter=N,
+        upsample=max_upsample,
+        threshold=deconv_threshold,
+        conv_approx_rank=min(conv_approx_rank, C),
+        n_processors=n_processors,
+        multi_processing=False,
+        verbose=False,
+        lambd=lambd,
+        allowed_scale=allowed_scale,
+    )
+
+    mp_object.run_array(target_recording)
+    deconv_st = mp_object.dec_spike_train
+    if not deconv_st.shape[0]:
+        return -1, 0
+
+    # get the rest of the information for computing the residual
+    deconv_scalings = mp_object.dec_scalings
+    (
+        templates_up,
+        deconv_id_sparse_temp_map,
+    ) = mp_object.get_sparse_upsampled_templates(save_npy=False)
+    deconv_id_sparse_temp_map = deconv_id_sparse_temp_map.astype(int)
+    templates_up = templates_up.transpose(2, 0, 1)
+    labels_up = deconv_id_sparse_temp_map[deconv_st[:, 1]]
+
+    # subtract from target_recording to leave the residual behind
+    rel_times = np.arange(T)
+    for i in range(deconv_st.shape[0]):
+        target_recording[deconv_st[i, 0] + rel_times] -= (
+            deconv_scalings[i] * templates_up[labels_up[i]]
+        )
+
+    dist = np.abs(target_recording).max()
+    shift = np.median(deconv_st[:, 0] - T*np.arange(1, len(deconv_st)+1))
+
+    return dist, shift
+
+
+# %%
 def find_original_merges(
     templates_cleaned,
     dist_argsort,
@@ -132,6 +203,7 @@ def find_original_merges(
     )
 
 
+# %%
 def check_additional_merge(
     temp_to_input,
     temp_to_deconv,
@@ -157,6 +229,7 @@ def check_additional_merge(
     return dist, shift
 
 
+# %%
 def merge_units_temp_deconv(
     units,
     units_matched,
@@ -316,6 +389,7 @@ def merge_units_temp_deconv(
     return templates_updated, spike_times, labels_updated, unit_reference
 
 
+# %%
 def resid_dist__(temp_a, temp_b, thresh, lambd=0.001, allowed_scale=0.1):
     maxres_a, shift_a = check_additional_merge(
         temp_a, temp_b, thresh, lambd=lambd, allowed_scale=allowed_scale
@@ -327,6 +401,7 @@ def resid_dist__(temp_a, temp_b, thresh, lambd=0.001, allowed_scale=0.1):
     return maxres_a, shift_a
 
 
+# %%
 def calc_resid_matrix(
     templates_a,
     units_a,
@@ -417,6 +492,7 @@ def calc_resid_matrix(
     return resid_matrix, shift_matrix
 
 
+# %%
 def run_deconv_merge(
     spike_train,
     geom,
