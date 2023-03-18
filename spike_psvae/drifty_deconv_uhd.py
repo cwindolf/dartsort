@@ -908,10 +908,10 @@ def full_deconv_with_update(
     min_spikes_to_augment=25,
     max_spikes_per_unit=200,
     tpca=None,
-    deconv_threshold=500, #Validated experimentaly with template norm
+    deconv_threshold=1000, #Validated experimentaly with template norm
     su_chan_vis=3, #Don't keep it too low so that templates effectively disappear when too far from the probe 
-    deconv_th_for_temp_computation=1000, #Use only best spikes (or detected spikes) for temp computation
-    adaptive_th_for_temp_computation=True,
+    deconv_th_for_temp_computation=5000, #Use only best spikes (or detected spikes) for temp computation
+    adaptive_th_for_temp_computation=False,
     poly_params=[500, 200, 20, 1],
     extract_radius_um=100,
     loc_radius=100,
