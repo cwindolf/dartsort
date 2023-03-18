@@ -328,7 +328,7 @@ def run_full_clustering(t_start, t_end, cluster_output_directory, raw_data_bin, 
 
     print("Split")
     z_reg = z_abs - displacement_rigid[spt[:, 0]//30000]
-    spt = pre_deconv_split(spt, max_ptps, x, z_reg, scales=scales, log_c=log_c)
+    spt = pre_deconv_split(spt, max_ptps, x, z_reg)
     
     n_units = spt[:, 1].max()+1
     std_z = np.zeros(n_units)
