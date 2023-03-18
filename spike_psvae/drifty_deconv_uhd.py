@@ -922,7 +922,6 @@ def full_deconv_with_update(
     p_bar=True,
     save_chunk_results=False,
     dist_metric=None,
-    loc_feature="peak",
     registered_medians=None,
     units_spread=None,
 ):
