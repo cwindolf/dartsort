@@ -6,6 +6,7 @@ from sklearn.decomposition import PCA
 from spike_psvae.isocut5 import isocut5 as isocut
 from pathlib import Path
 import matplotlib.pyplot as plt
+from spike_psvae.post_processing_uhd import post_deconv_merge
 
 # %%
 def cluster_5_min(cluster_output_directory, raw_data_bin, geom, T_START, T_END, maxptps, x, z, spike_index, displacement_rigid, 
@@ -245,20 +246,46 @@ def ensemble_hdbscan_clustering(t_start, t_end, K_LEN, displacement_rigid, spt_a
     return spt_all
 
 # %%
-def pre_deconv_split(spt_all, max_ptps_all, x_all, z_all_reg, scales, log_c=5):
+# def pre_deconv_split(spt_all, max_ptps_all, x_all, z_all_reg, scales=(1, 1, 50), log_c=5):
+
+#     spt_after_split = spt_all.copy()
+#     # Try diptest split 
+#     pca_features = PCA(1)
+#     features = np.concatenate((scales[1]*z_all_reg[:, None], scales[0]*x_all[:, None], scales[2]*np.log(log_c+max_ptps_all[:, None])), axis = 1)
+#     cmp = spt_all[:, 1].max()+1
+#     for unit in range(spt_all[:, 1].max()+1):
+#         features_unit = features[spt_all[:, 1]==unit]
+#         feat_pca = pca_features.fit_transform(features_unit)
+#         value_dpt, cut_value = isocut(feat_pca[:, 0])
+#         if value_dpt>1:
+#             idx_to_update = np.flatnonzero(spt_all[:, 1]==unit)[feat_pca[:, 0]>cut_value]
+#             spt_after_split[idx_to_update, 1]=cmp
+#             cmp+=1
+
+#     return spt_after_split
+
+def pre_deconv_split(spt_all, max_ptps_all, x_all, z_all_reg, prob_th=1):
 
     spt_after_split = spt_all.copy()
-    # Try diptest split 
-    pca_features = PCA(1)
-    features = np.concatenate((scales[1]*z_all_reg[:, None], scales[0]*x_all[:, None], scales[2]*np.log(log_c+max_ptps_all[:, None])), axis = 1)
+    # Try diptest split     
     cmp = spt_all[:, 1].max()+1
     for unit in range(spt_all[:, 1].max()+1):
-        features_unit = features[spt_all[:, 1]==unit]
-        feat_pca = pca_features.fit_transform(features_unit)
-        value_dpt, cut_value = isocut(feat_pca[:, 0])
-        if value_dpt>1:
-            idx_to_update = np.flatnonzero(spt_all[:, 1]==unit)[feat_pca[:, 0]>cut_value]
-            spt_after_split[idx_to_update, 1]=cmp
+        idx_unit = np.flatnonzero(spt_all[:, 1]==unit)
+        prob_all = np.zeros(3)
+        cut_value_all = np.zeros(3)
+
+        feat_pca_all = np.zeros((len(idx_unit), 3))
+
+        feat_pca_all[:, 0] = z_all_reg[idx_unit]
+        prob_all[0], cut_value_all[0] = isocut(feat_pca_all[:, 0])
+        feat_pca_all[:, 1] = x_all[idx_unit]
+        prob_all[1], cut_value_all[1] = isocut(feat_pca_all[:, 1])
+        feat_pca_all[:, 2] = max_ptps_all[idx_unit]
+        prob_all[2], cut_value_all[2] = isocut(feat_pca_all[:, 2])
+
+        if prob_all.max()>prob_th:
+            idx_bigger = idx_unit[feat_pca_all[:, prob_all.argmax()]>cut_value_all[prob_all.argmax()]]
+            spt_after_split[idx_bigger, 1]=cmp
             cmp+=1
 
     return spt_after_split
@@ -281,7 +308,9 @@ def relabel_by_depth(spt, z_abs):
 # %%
 def run_full_clustering(t_start, t_end, cluster_output_directory, raw_data_bin, geom, spike_index, 
                         localizations, maxptps, displacement_rigid, len_chunks=300, threshold_ptp=3,
-                        fs=30000, triage_quantile_cluster=100, frame_dedup_cluster=20, log_c=5, scales=(1, 1, 50), savefigs=True):
+                        fs=30000, triage_quantile_cluster=100, frame_dedup_cluster=20, log_c=5, scales=(1, 1, 50), 
+                        time_temp_comp_merge=0, deconv_resid_th=7,
+                        savefigs=True):
 
     Path(cluster_output_directory).mkdir(exist_ok=True)
     
@@ -298,8 +327,16 @@ def run_full_clustering(t_start, t_end, cluster_output_directory, raw_data_bin, 
     spt = ensemble_hdbscan_clustering(t_start, t_end, len_chunks, displacement_rigid, spt, max_ptps, x, z_abs, scales, log_c)
 
     print("Split")
-    spt = pre_deconv_split(spt, max_ptps, x, z_abs - displacement_rigid[spt[:, 0]//30000], scales=scales, log_c=log_c)
+    z_reg = z_abs - displacement_rigid[spt[:, 0]//30000]
+    spt = pre_deconv_split(spt, max_ptps, x, z_reg, scales=scales, log_c=log_c)
     
+    n_units = spt[:, 1].max()+1
+    std_z = np.zeros(n_units)
+    for k in range(n_units):
+        idx_k = np.flatnonzero(spt[:, 1]==k)
+        std_z[k] = z_reg[idx_k].std()
+    spt[:, 1] = post_deconv_merge(raw_data_bin, geom, spt, z_abs, z_reg, x, time_temp_comp_merge, std_z*1.65, resid_threshold=deconv_resid_th)
+
     print("Relabel by Depth")
     spt = relabel_by_depth(spt, z_abs)
     
