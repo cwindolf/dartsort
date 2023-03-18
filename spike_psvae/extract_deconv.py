@@ -61,6 +61,7 @@ def extract_deconv(
     overwrite=True,
     pbar=True,
     nn_denoise=True,
+    loc_feature="ptp",
     seed=0,
 ):
     standardized_bin = Path(standardized_bin)

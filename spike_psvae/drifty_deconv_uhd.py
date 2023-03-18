@@ -781,6 +781,7 @@ def extract_superres_shifted_deconv(
     subtraction_h5=None,
     t_start=0,
     t_end=None,
+    loc_feature='peak',
     n_jobs=-1,
 ):
     """
@@ -834,6 +835,7 @@ def extract_superres_shifted_deconv(
         reassignment_tpca_n_wfs=False,
         localize=localize,
         loc_radius=loc_radius,
+        loc_feature=loc_feature,
         n_sec_train_feats=n_sec_train_feats,
         n_jobs=n_jobs,
         n_sec_chunk=n_sec_chunk,
@@ -913,17 +915,22 @@ def full_deconv_with_update(
     poly_params=[500, 200, 20, 1],
     extract_radius_um=100,
     loc_radius=100,
+    loc_feature="peak",
     n_sec_train_feats=10,
     n_sec_chunk=1,
     overwrite=True,
     p_bar=True,
     save_chunk_results=False,
     dist_metric=None,
+    loc_feature="peak",
+    registered_medians=None,
+    units_spread=None,
 ):
 
     Path(extract_dir).mkdir(exist_ok=True)
 
-    registered_medians, units_spread = get_registered_pos(spike_train, z, p, pfs)
+    if registered_medians is None or units_spread is None:
+        registered_medians, units_spread = get_registered_pos(spike_train, z, p, pfs)
     
     fname_medians = Path(extract_dir) / "registered_medians.npy"
     fname_spread = Path(extract_dir) / "registered_spreads.npy"
@@ -991,6 +998,7 @@ def full_deconv_with_update(
             n_sec_chunk=n_sec_chunk,
             device=None,
             geom=geom,
+            loc_feature=loc_feature,
             subtraction_h5=subtraction_h5,
             t_start=start_sec*pfs,
             t_end=end_sec*pfs,
