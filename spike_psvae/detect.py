@@ -77,7 +77,7 @@ def detect_and_deduplicate(
             device=device,
         )
         if times.numel():
-            spike_index = np.c_[times.cpu().numpy(), chans.cpu().numpy()]
+            spike_index = torch.stack((times, chans), dim=1)
             spike_index[:, 0] -= buffer_size
         else:
             return np.array([])
@@ -251,7 +251,7 @@ def voltage_detect_and_deduplicate(
     peak_sign="neg",
     max_window=DEFAULT_DEDUP_T,
 ):
-    if torch.device(device).type == "cuda":
+    if torch.is_tensor(recording):
         times, chans, energy = torch_voltage_detect_dedup(
             recording,
             threshold,
@@ -262,8 +262,7 @@ def voltage_detect_and_deduplicate(
             max_window=max_window,
         )
         if times.numel():
-            spike_index = np.c_[times.cpu().numpy(), chans.cpu().numpy()]
-            energy = energy.cpu().numpy()
+            spike_index = torch.stack((times, chans), dim=1)
         else:
             return np.array([]), np.array([])
     else:
