@@ -12,7 +12,7 @@ import shutil
 from sklearn.decomposition import PCA
 from spike_psvae import filter_standardize
 from spike_psvae.cluster_uhd import run_full_clustering
-from spike_psvae.drifty_deconv_uhd import full_deconv_with_update
+from spike_psvae.drifty_deconv_uhd import full_deconv_with_update, get_registered_pos
 from spike_psvae import subtract, ibme
 from spike_psvae.ibme import register_nonrigid
 from spike_psvae.ibme_corr import calc_corr_decent
@@ -20,6 +20,8 @@ from spike_psvae.ibme import fast_raster
 from spike_psvae.ibme_corr import psolvecorr
 from spike_psvae.filter_standardize import npSampShifts
 from spike_psvae.post_processing_uhd import full_post_processing
+from spike_psvae.waveform_utils import get_pitch
+
 
 
 # %%
@@ -108,9 +110,11 @@ if __name__ == "__main__":
     n_loc_workers = 4
     localization_kind = "logbarrier"
     localize_radius = 100
+    loc_feature="peak"
 
     # %%
     # Registration parameters 
+    registration=True
     sigma_reg=0.1
     max_disp=100 # This is not the actual max displacement, we don't use paris of bins with relative disp>max_disp when computing full displacement 
     max_dt=250
@@ -138,21 +142,21 @@ if __name__ == "__main__":
     t_start_deconv=0
     t_end_deconv=None
     n_sec_temp_update=100
-    bin_size_um=1
+    bin_size_um=3
+    adaptive_bin_size_selection=True
     n_jobs_deconv=0
-    max_upsample=1
+    max_upsample=4
     refractory_period_frames=10
     min_spikes_bin=None
-    max_spikes_per_unit=200
-    deconv_threshold=200
-    su_chan_vis=3, 
-    deconv_th_for_temp_computation=500
-    adaptive_th_for_temp_computation=True
+    max_spikes_per_unit=250
+    deconv_threshold=1000
+    su_chan_vis=1.5
+    deconv_th_for_temp_computation=5000
+    adaptive_th_for_temp_computation=False
     poly_params=[500, 200, 20, 1]
     n_sec_train_feats=10
     n_sec_chunk_deconv=1
     overwrite_deconv=True
-    remove_final_outliers=True
     augment_low_snr_temps=True
     min_spikes_to_augment=25
 
@@ -160,7 +164,7 @@ if __name__ == "__main__":
     # %%
     postprocessing=True
     time_temp_computation=rec_len_sec//2 # change this, use stable / nice portion of the recording with average displacement
-    
+
 
     # %%
     Path(output_all).mkdir(exist_ok=True)
@@ -256,6 +260,7 @@ if __name__ == "__main__":
             device="cpu" if nogpu else None,
             localization_kind=localization_kind,
             localize_radius=localize_radius,
+            loc_feature=loc_feature,
         )
 
     # %%
@@ -297,16 +302,19 @@ if __name__ == "__main__":
 
     # %%
     # Rigid Registration
-    print("Registration...")
-    raster, dd, tt = fast_raster(
-            maxptps, z, spike_index[:, 0]/sampling_rate, sigma=sigma_reg, 
-        )
-    D, C = calc_corr_decent(raster, disp = max_disp)
-    displacement_rigid = psolvecorr(D, C, mincorr=mincorr, max_dt=max_dt, prior_lambda=prior_lambda)
+    if registration:
+        print("Registration...")
+        raster, dd, tt = fast_raster(
+                maxptps, z, spike_index[:, 0]/sampling_rate, sigma=sigma_reg, 
+            )
+        D, C = calc_corr_decent(raster, disp = max_disp)
+        displacement_rigid = psolvecorr(D, C, mincorr=mincorr, max_dt=max_dt, prior_lambda=prior_lambda)
+        fname_disp = Path(detect_dir) / "displacement_rigid.npy"
+        np.save(fname_disp, displacement_rigid)    
+    else:
+        fname_disp = Path(detect_dir) / "displacement_rigid.npy"
+        displacement_rigid = np.load(fname_disp)
 
-    # %%
-    fname_disp = Path(detect_dir) / "displacement_rigid.npy"
-    np.save(fname_disp, displacement_rigid)
 
     # %%
     if savefigs:
@@ -341,7 +349,7 @@ if __name__ == "__main__":
         spt, maxptps, x, z = run_full_clustering(t_start_clustering, t_end_clustering, cluster_dir, raw_data_name, geom, spike_index,
                                                     localization_results, maxptps, displacement_rigid, len_chunks=len_chunks_cluster, threshold_ptp=threshold_ptp_cluster,
                                                     fs=sampling_rate, triage_quantile_cluster=triage_quantile_cluster, frame_dedup_cluster=frame_dedup_cluster, 
-                                                    log_c=log_c, scales=scales, savefigs=savefigs)
+                                                    time_temp_comp_merge=time_temp_computation, log_c=log_c, scales=scales, savefigs=savefigs)
     
     else:
         fname_spt_cluster = Path(cluster_dir) / "spt_full_cluster.npy"
@@ -369,11 +377,29 @@ if __name__ == "__main__":
         t_start_deconv-=t_start_preproc
         t_end_deconv-=t_start_preproc
 
+        if adaptive_bin_size_selection:
+            n_units = spt[:, 1].max()+1
+            spread_x = np.zeros(n_units)
+            for k in range(n_units):
+                idx_k = np.flatnonzero(spt[:, 1]==k)
+                spread_x[k] = 1.65*np.median(np.abs(x[idx_k]-np.median(x[idx_k])))/0.6745
+
+            pitch = get_pitch(np.load(geom_path))
+            divisors = np.arange(1, pitch+1)
+            divisors = divisors[6 % divisors==0]
+            bins_sizes_um=divisors[np.abs(spread_x[:, None] - divisors).argmin(1)].astype('int')
+        else:
+            bins_sizes_um=None
+            
+        dist_metric=None
+        registered_medians, units_spread = get_registered_pos(spt, z, displacement_rigid, sampling_rate)
+
         full_deconv_with_update(deconv_dir, extract_deconv_dir,
                    raw_data_name, geom, displacement_rigid,
                    spt, maxptps, x, z, t_start_deconv, t_end_deconv, sub_h5, 
                    n_sec_temp_update=n_sec_temp_update, 
                    bin_size_um=bin_size_um,
+                   bins_sizes_um=bins_sizes_um,
                    pfs=sampling_rate,
                    n_jobs=n_jobs_deconv,
                    trough_offset=trough_offset,
@@ -392,24 +418,26 @@ if __name__ == "__main__":
                    poly_params=poly_params,
                    extract_radius_um=extract_box_radius,
                    loc_radius=localize_radius,
+                   loc_feature=loc_feature,
                    n_sec_train_feats=n_sec_train_feats,
                    n_sec_chunk=n_sec_chunk_deconv,
                    overwrite=overwrite_deconv,
                    p_bar=True,
-                   save_chunk_results=False)
+                   save_chunk_results=False,
+                   dist_metric=dist_metric)
 
-        fname_medians = Path(extract_deconv_dir) / "registered_medians.npy"
-        fname_spread = Path(extract_deconv_dir) / "registered_spreads.npy"
-        units_spread = np.load(fname_spread)
-        units_medians = np.load(fname_medians)
+#         fname_medians = Path(extract_deconv_dir) / "registered_medians.npy"
+#         fname_spread = Path(extract_deconv_dir) / "registered_spreads.npy"
+#         units_spread = np.load(fname_spread)
+#         units_medians = np.load(fname_medians)
 
 
-        for unit in range(spt[:, 1].max()+1):
-            pos = (units_medians[unit]+disp[spt[spt[:, 1]==unit, 0]//30000])
-            z_pos = z_abs[spt[:, 1]==unit]
-            idx_outlier = np.flatnonzero(np.abs(pos-z_pos)>10*units_spread[unit])
-            idx_outlier = np.flatnonzero(spt[:, 1]==unit)[idx_outlier]
-            spt[idx_outlier, 1]=-1
+#         for unit in range(spt[:, 1].max()+1):
+#             pos = (units_medians[unit]+disp[spt[spt[:, 1]==unit, 0]//30000])
+#             z_pos = z_abs[spt[:, 1]==unit]
+#             idx_outlier = np.flatnonzero(np.abs(pos-z_pos)>10*units_spread[unit])
+#             idx_outlier = np.flatnonzero(spt[:, 1]==unit)[idx_outlier]
+#             spt[idx_outlier, 1]=-1
 
         if savefigs:
             spt = np.load(Path(extract_deconv_dir) / "spike_train_final_deconv.npy")
