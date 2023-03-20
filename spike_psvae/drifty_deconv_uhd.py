@@ -781,6 +781,7 @@ def extract_superres_shifted_deconv(
     subtraction_h5=None,
     t_start=0,
     t_end=None,
+    loc_feature='peak',
     n_jobs=-1,
 ):
     """
@@ -834,6 +835,7 @@ def extract_superres_shifted_deconv(
         reassignment_tpca_n_wfs=False,
         localize=localize,
         loc_radius=loc_radius,
+        loc_feature=loc_feature,
         n_sec_train_feats=n_sec_train_feats,
         n_jobs=n_jobs,
         n_sec_chunk=n_sec_chunk,
@@ -906,39 +908,46 @@ def full_deconv_with_update(
     min_spikes_to_augment=25,
     max_spikes_per_unit=200,
     tpca=None,
-    deconv_threshold=500, #Validated experimentaly with template norm
+    deconv_threshold=1000, #Validated experimentaly with template norm
     su_chan_vis=3, #Don't keep it too low so that templates effectively disappear when too far from the probe 
-    deconv_th_for_temp_computation=1000, #Use only best spikes (or detected spikes) for temp computation
-    adaptive_th_for_temp_computation=True,
+    deconv_th_for_temp_computation=5000, #Use only best spikes (or detected spikes) for temp computation
+    adaptive_th_for_temp_computation=False,
     poly_params=[500, 200, 20, 1],
     extract_radius_um=100,
     loc_radius=100,
+    loc_feature="peak",
     n_sec_train_feats=10,
     n_sec_chunk=1,
     overwrite=True,
     p_bar=True,
     save_chunk_results=False,
+    dist_metric=None,
+    registered_medians=None,
+    units_spread=None,
 ):
 
     Path(extract_dir).mkdir(exist_ok=True)
 
-    registered_medians, units_spread = get_registered_pos(spike_train, z, p, pfs)
+    if registered_medians is None or units_spread is None:
+        registered_medians, units_spread = get_registered_pos(spike_train, z, p, pfs)
     
     fname_medians = Path(extract_dir) / "registered_medians.npy"
     fname_spread = Path(extract_dir) / "registered_spreads.npy"
     np.save(fname_spread, units_spread)
     np.save(fname_medians, registered_medians)
 
+    if dist_metric is None:
+        dist_metric = deconv_th_for_temp_computation*2*np.ones(len(spike_train))
+
     if adaptive_th_for_temp_computation:
         outliers_tracking = np.ones(len(spike_train), dtype=bool)
-        dist_metric = deconv_th_for_temp_computation*2*np.ones(len(spike_train))
-
     elif deconv_th_for_temp_computation is not None:
         outliers_tracking = None
-        dist_metric = deconv_th_for_temp_computation*2*np.ones(len(spike_train))
 
     for start_sec in tqdm(np.arange(T_START, T_END, n_sec_temp_update)):
+        
         end_sec = min(start_sec+n_sec_temp_update, T_END)
+        print("DECONV FROM {} TO {}....".format(start_sec, end_sec))
 
         deconv_chunk_res = superres_deconv_chunk(
             raw_bin,
@@ -972,7 +981,7 @@ def full_deconv_with_update(
             adaptive_th_for_temp_computation=adaptive_th_for_temp_computation,
             outliers_tracking=outliers_tracking,
         )
-
+        print("EXTRACT DECONV....")
         extract_deconv_chunk = extract_superres_shifted_deconv(
             deconv_chunk_res,
             overwrite=overwrite,
@@ -988,6 +997,7 @@ def full_deconv_with_update(
             n_sec_chunk=n_sec_chunk,
             device=None,
             geom=geom,
+            loc_feature=loc_feature,
             subtraction_h5=subtraction_h5,
             t_start=start_sec*pfs,
             t_end=end_sec*pfs,
@@ -1033,6 +1043,7 @@ def full_deconv_with_update(
                                                             pfs, adaptive_th_for_temp_computation)
     
         # SAVE FULL RESULT 
+        print("SAVING RESULTS....")
         fname_ptps = Path(extract_dir) / "maxptps_final_deconv"
         fname_spike_train = Path(extract_dir) / "spike_train_final_deconv"
         fname_x = Path(extract_dir) / "x_final_deconv"

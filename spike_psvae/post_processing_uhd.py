@@ -1,3 +1,4 @@
+# %%
 from sklearn.decomposition import PCA
 from sklearn.mixture import GaussianMixture as GMM
 import numpy as np
@@ -7,6 +8,7 @@ from spike_psvae.deconv_resid_merge import resid_dist_multiple
 from scipy.cluster.hierarchy import complete, fcluster
 
 
+# %%
 def correct_outliers(spt, x, z_reg, disp, units_to_clean = None, prob_min = 0.1):
     
     labels_outliers_corrected = spt[:, 1].copy()
@@ -35,6 +37,7 @@ def correct_outliers(spt, x, z_reg, disp, units_to_clean = None, prob_min = 0.1)
     return labels_outliers_corrected
 
 
+# %%
 def post_deconv_split(spt_no_outliers, x, z_reg, isosplit_th=1, n_iter=2):
     for iter in range(n_iter):
         cmp = spt_no_outliers[:, 1].max()+1
@@ -52,9 +55,10 @@ def post_deconv_split(spt_no_outliers, x, z_reg, isosplit_th=1, n_iter=2):
     return spt_no_outliers
 
 
+# %%
 def post_deconv_merge(raw_data_bin, geom, spt_no_outliers, 
                       z_abs, z_reg, x, time_computation, spread_z,
-                      dist_pairs=20, resid_threshold=10, deconv_th=1000,
+                      dist_pairs=20, resid_threshold=7, deconv_th=1000,
                       bin_size_um=1, pfs=30000):
     
     (
@@ -135,6 +139,7 @@ def post_deconv_merge(raw_data_bin, geom, spt_no_outliers,
     return labels_merged
 
 
+# %%
 def full_post_processing(raw_data_bin, geom, 
                          spt, x, z_reg, z_abs, 
                          disp, prob_min = 0.1, time_temp_computation=0,
