@@ -1337,8 +1337,6 @@ def full_denoising(
     in_probe_channel_index = torch.as_tensor(extract_channel_index, device=device) < num_channels
     in_probe_index = in_probe_channel_index[maxchans]
     waveforms = waveforms.permute(0, 2, 1)
-    print(f"{waveforms.shape=} {in_probe_index=} {in_probe_index.shape=}", flush=True)
-    print("x", flush=True)
     wfs_in_probe = waveforms[in_probe_index]
 
     # Apply NN denoiser (skip if None) #doesn't matter if wf on channels or everywhere
