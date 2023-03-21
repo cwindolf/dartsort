@@ -340,6 +340,7 @@ class Localization(ChunkFeature):
         if self.feature == "ptp":
             if torch.is_tensor(wfs):
                 ptps = wfs.max(dim=1).values - wfs.min(dim=1).values
+                ptps = ptps.cpu().numpy()
             else:
                 ptps = wfs.ptp(1)
         elif self.feature == "peak":
@@ -354,7 +355,7 @@ class Localization(ChunkFeature):
             raise NameError("Use ptp or peak value for localization.")
 
         xs, ys, z_rels, z_abss, alphas = localize_index.localize_ptps_index(
-            np.array(ptps),
+            ptps,
             self.geom,
             max_channels,
             self.channel_index,
@@ -478,7 +479,8 @@ class TPCA(ChunkFeature):
         if wfs is None:
             return
 
-        wfs = np.asarray(wfs)
+        if torch.is_tensor(wfs):
+            wfs = wfs.cpu().numpy()
 
         N, T, C = wfs.shape
         self.T = T
