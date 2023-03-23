@@ -1,22 +1,19 @@
 # spike-psvae
 
-*Getting started.* Install `node` without conda, can't figure out how to avoid an environment conflict. Then,
+Install an environment for running this stuff with:
 
-```
-conda create -n psvae python=3.8 numpy seaborn scikit-image scikit-learn scipy h5py tqdm
-conda install pytorch torchvision torchaudio cudatoolkit=10.2 -c pytorch
-```
+```bash
+mamba create -n a python=3.10 numba seaborn scikit-learn scikit-image ipywidgets h5py colorcet tqdm joblib hdbscan cython
+mamba activate a
 
-For jupyter lab, the way I'm doing it for now is:
+# go to pytorch.org and find install instructions if you want gpu!
+mamba install pytorch torchvision torchaudio -c pytorch
 
-```
-pip install jupyterlab jupytext
-jupyter lab build
-```
+pip install matplotlib_venn
 
-Then serve:
+# optional
+pip install ibllib
 
-```
-mkdir -p .jupter/lab/workspaces
-JUPYTERLAB_WORKSPACES_DIR=.jupyter/lab/workspaces jupyter lab --no-browser --ip=0.0.0.0
+# definitely not optional :)
+pip install -e ~/spike-psvae/
 ```
