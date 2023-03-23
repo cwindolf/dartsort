@@ -1,3 +1,4 @@
+# %%
 from pathlib import Path
 import contextlib
 import gc
@@ -15,14 +16,17 @@ from sklearn.decomposition import PCA
 from tqdm.auto import tqdm
 import spikeinterface.core as sc
 
+# %%
 from . import denoise, detect, localize_index, chunk_features
 from .multiprocessing_utils import get_pool, MockQueue
 from .spikeio import read_waveforms_in_memory
 from .waveform_utils import make_channel_index, make_contiguous_channel_index
 
+# %%
 _logger = logging.getLogger(__name__)
 
 
+# %%
 default_extra_feats = [
     chunk_features.MaxPTP,
     chunk_features.TroughDepth,
@@ -30,6 +34,7 @@ default_extra_feats = [
 ]
 
 
+# %%
 def subtraction(
     recording,
     out_folder,
@@ -565,6 +570,7 @@ def subtraction(
     return out_h5
 
 
+# %%
 def subtraction_binary(
     standardized_bin,
     *args,
@@ -621,9 +627,11 @@ def subtraction_binary(
     return subtraction(recording, *args, **kwargs)
 
 
+# %% [markdown]
 # -- subtraction routines
 
 
+# %%
 # the return type for `subtraction_batch` below
 SubtractionBatchResult = namedtuple(
     "SubtractionBatchResult",
@@ -631,6 +639,7 @@ SubtractionBatchResult = namedtuple(
 )
 
 
+# %%
 # Parallelism helpers
 def _subtraction_batch(args):
     return subtraction_batch(
@@ -646,6 +655,7 @@ def _subtraction_batch(args):
     )
 
 
+# %%
 def _subtraction_batch_init(
     device,
     nn_detector_path,
@@ -729,6 +739,7 @@ def _subtraction_batch_init(
     _subtraction_batch.recording = sc.BaseRecording.from_dict(recording_dict)
 
 
+# %%
 def subtraction_batch(
     batch_data_folder,
     batch_len_samples,
@@ -980,6 +991,9 @@ def subtraction_batch(
             denoiser=denoiser,
         )
         del cleaned_wfs
+        
+        if torch.is_tensor(denoised_wfs):
+            denoised_wfs = denoised_wfs.cpu().numpy()
 
         # compute and save features for subtracted wfs
         for f in extra_features:
@@ -1016,9 +1030,11 @@ def subtraction_batch(
     return res
 
 
+# %% [markdown]
 # -- temporal PCA
 
 
+# %%
 def train_featurizers(
     recording,
     extract_channel_index,
@@ -1180,9 +1196,11 @@ def train_featurizers(
         )
 
 
+# %% [markdown]
 # -- denoising / detection helpers
 
 
+# %%
 def detect_and_subtract(
     raw,
     threshold,
@@ -1272,7 +1290,8 @@ def detect_and_subtract(
         denoiser=denoiser,
         return_tpca_embedding=True,
     )
-
+    if torch.is_tensor(waveforms):
+        waveforms = waveforms.cpu().numpy()
     # -- the actual subtraction
     # have to use subtract.at since -= will only subtract once in the overlaps,
     # subtract.at will subtract multiple times where waveforms overlap
@@ -1300,6 +1319,7 @@ def detect_and_subtract(
     return waveforms, tpca_proj, subtracted_raw, spike_index
 
 
+# %%
 @torch.no_grad()
 def full_denoising(
     waveforms,
@@ -1349,15 +1369,19 @@ def full_denoising(
 
     # Temporal PCA while we are still transposed
     if tpca is not None:
+        if torch.is_tensor(wfs_in_probe):
+            wfs_in_probe = wfs_in_probe.cpu().numpy()
         tpca_embeds = tpca.raw_transform(wfs_in_probe)
         wfs_in_probe = tpca.raw_inverse_transform(tpca_embeds)
         if not return_tpca_embedding:
             del tpca_embeds
 
     # back to original shape
+    wfs_in_probe = torch.as_tensor(wfs_in_probe, device=device, dtype=torch.float)
+    
     waveforms[in_probe_index] = wfs_in_probe
     waveforms = waveforms.permute(0, 2, 1)
-
+    
     # enforce decrease
     if do_enforce_decrease:
         if radial_parents is None and probe is not None:
@@ -1395,9 +1419,11 @@ def full_denoising(
     return waveforms
 
 
+# %% [markdown]
 # -- HDF5 initialization / resuming old job logic
 
 
+# %%
 @contextlib.contextmanager
 def get_output_h5(
     out_h5,
@@ -1464,6 +1490,7 @@ def get_output_h5(
         output_h5.close()
 
 
+# %%
 def tpca_from_h5(h5):
     tpca = None
     if "tpca_mean" in h5:
@@ -1479,9 +1506,11 @@ def tpca_from_h5(h5):
     return tpca
 
 
+# %% [markdown]
 # -- data loading helpers
 
 
+# %%
 def read_geom_from_meta(bin_file):
     try:
         from spikeglx import _geometry_from_meta, read_meta_data
@@ -1499,6 +1528,7 @@ def read_geom_from_meta(bin_file):
     return geom
 
 
+# %%
 def subtract_and_localize_numpy(
     raw,
     geom,
@@ -1630,9 +1660,11 @@ def subtract_and_localize_numpy(
     return df_localisation, cleaned_wfs
 
 
+# %% [markdown]
 # -- utils
 
 
+# %%
 class timer:
     def __init__(self, name="timer"):
         self.name = name
@@ -1646,6 +1678,7 @@ class timer:
         print(self.name, "took", self.t, "s")
 
 
+# %%
 class NoKeyboardInterrupt:
     """A context manager that we use to avoid ending up in invalid states."""
 
@@ -1666,4 +1699,5 @@ class NoKeyboardInterrupt:
             self.old_handler(*self.sig)
 
 
+# %%
 noint = NoKeyboardInterrupt()
