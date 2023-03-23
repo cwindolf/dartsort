@@ -157,7 +157,7 @@ def array_scatter(
         c=np.clip(maxptp, 3, 15),
         alpha=0.1,
         marker=".",
-        cmap=plt.cm.viridis,
+        cmap=plt.cm.jet,
     )
     axes[2].scatter(*geom.T, c="orange", marker="s", s=10)
     axes[2].set_title("ptps")
@@ -198,7 +198,7 @@ def array_scatter_with_deconv_score_fading(
     do_ellipse=True,
     alpha=1,
     alpha_fading=0.05,
-    color_map=plt.cm.viridis,
+    color_map=plt.cm.jet,
 ):
     
     geom_shifted = geom - [0, disp[time_start:time_end].mean()]
