@@ -6,8 +6,8 @@ import numpy as np
 import signal
 import time
 import torch
+import torch.nn.functional as F
 import multiprocessing
-from concurrent.futures import ProcessPoolExecutor
 from collections import namedtuple
 import logging
 import pandas as pd
@@ -16,8 +16,8 @@ from tqdm.auto import tqdm
 import spikeinterface.core as sc
 
 from . import denoise, detect, localize_index, chunk_features
-from .multiprocessing_utils import MockPoolExecutor, MockQueue
-from .spikeio import get_binary_length, read_waveforms_in_memory
+from .multiprocessing_utils import get_pool, MockQueue
+from .spikeio import read_waveforms_in_memory
 from .waveform_utils import make_channel_index, make_contiguous_channel_index
 
 _logger = logging.getLogger(__name__)
@@ -147,8 +147,8 @@ def subtraction(
         neighborhood_kind = "box"
         box_norm_p = 2
 
-    batch_len_samples = n_sec_chunk * int(
-        np.floor(recording.get_sampling_frequency())
+    batch_len_samples =  int(
+        np.floor(n_sec_chunk * recording.get_sampling_frequency())
     )
 
     # prepare output dir
@@ -393,7 +393,7 @@ def subtraction(
                 nn_detector_path,
                 denoise_detect,
                 nn_channel_index,
-                subtracted_tpca=subtracted_tpca_feat.tpca,
+                subtracted_tpca=subtracted_tpca_feat,
                 extra_features=extra_features + fit_feats,
                 peak_sign=peak_sign,
                 do_nn_denoise=do_nn_denoise,
@@ -457,6 +457,10 @@ def subtraction(
         if save_residual:
             residual_mode = "ab" if last_sample > 0 else "wb"
             residual = open(residual_bin, mode=residual_mode)
+        
+        extra_features = [ef.to("cpu") for ef in extra_features]
+        gc.collect()
+        torch.cuda.empty_cache()
 
         # now run subtraction in parallel
         jobs = (
@@ -465,8 +469,6 @@ def subtraction(
                 batch_len_samples,
                 s_start,
                 thresholds,
-                subtracted_tpca_feat.tpca,
-                denoised_tpca_feat.tpca if do_clean else None,
                 dedup_channel_index,
                 trough_offset,
                 spike_length_samples,
@@ -478,16 +480,14 @@ def subtraction(
                 do_enforce_decrease,
                 peak_sign,
                 dtype,
-                extra_features,
             )
             for batch_id, s_start in jobs
         )
 
         # no-threading/multiprocessing execution for debugging if n_jobs == 0
-        Executor = ProcessPoolExecutor if n_jobs else MockPoolExecutor
-        context = multiprocessing.get_context("spawn")
-        manager = context.Manager() if n_jobs else None
-        id_queue = manager.Queue() if n_jobs else MockQueue()
+        Executor, context = get_pool(n_jobs)
+        manager = context.Manager() if n_jobs > 1 else None
+        id_queue = manager.Queue() if n_jobs > 1 else MockQueue()
 
         n_jobs = n_jobs or 1
         if n_jobs < 0:
@@ -510,6 +510,9 @@ def subtraction(
                 denoiser_init_kwargs,
                 denoiser_weights_path,
                 recording.to_dict(),
+                extra_features,
+                subtracted_tpca_feat,
+                denoised_tpca_feat if do_clean else None,
             ),
         ) as pool:
             count = 0
@@ -542,7 +545,7 @@ def subtraction(
                         Path(fnpy).unlink()
                     # update spike count
                     N += N_new
-                
+
                 count += 1
                 if not count % 100:
                     print("Mean spikes per batch:", N / count)
@@ -632,6 +635,9 @@ SubtractionBatchResult = namedtuple(
 def _subtraction_batch(args):
     return subtraction_batch(
         *args,
+        _subtraction_batch.extra_features,
+        _subtraction_batch.subtracted_tpca,
+        _subtraction_batch.denoised_tpca,
         _subtraction_batch.recording,
         _subtraction_batch.device,
         _subtraction_batch.denoiser,
@@ -650,6 +656,9 @@ def _subtraction_batch_init(
     denoiser_init_kwargs,
     denoiser_weights_path,
     recording_dict,
+    extra_features,
+    subtracted_tpca,
+    denoised_tpca,
 ):
     """Thread/process initializer -- loads up neural nets"""
     rank = id_queue.get()
@@ -694,16 +703,29 @@ def _subtraction_batch_init(
         dn_detector.to(device)
     _subtraction_batch.dn_detector = dn_detector
 
+    _subtraction_batch.extra_features = [
+        ef.to(device) for ef in extra_features
+    ]
+    _subtraction_batch.subtracted_tpca = subtracted_tpca.to(device)
+    if denoised_tpca is not None:
+        denoised_tpca = denoised_tpca.to(device)
+    _subtraction_batch.denoised_tpca = denoised_tpca
+
     # this is a hack to fix ibl streaming in parallel
     stack = [recording_dict]
     for d in stack:
         for k, v in d.items():
             if isinstance(v, dict):
-                if "class" in v and "IblStreamingRecordingExtractor" in v["class"]:
-                    v["kwargs"]["cache_folder"] = Path(v["kwargs"]["cache_folder"]) / f"cache{rank}"
+                if (
+                    "class" in v
+                    and "IblStreamingRecordingExtractor" in v["class"]
+                ):
+                    v["kwargs"]["cache_folder"] = (
+                        Path(v["kwargs"]["cache_folder"]) / f"cache{rank}"
+                    )
                 else:
                     stack.append(v)
-                
+
     _subtraction_batch.recording = sc.BaseRecording.from_dict(recording_dict)
 
 
@@ -712,8 +734,6 @@ def subtraction_batch(
     batch_len_samples,
     s_start,
     thresholds,
-    subtracted_tpca,
-    denoised_tpca,
     dedup_channel_index,
     trough_offset,
     spike_length_samples,
@@ -726,6 +746,8 @@ def subtraction_batch(
     peak_sign,
     dtype,
     extra_features,
+    subtracted_tpca,
+    denoised_tpca,
     recording,
     device,
     denoiser,
@@ -856,7 +878,7 @@ def subtraction_batch(
     residual_singlebuf = residual[spike_length_samples:-spike_length_samples]
     residual = residual[buffer:-buffer]
     if batch_data_folder is not None and save_residual:
-        np.save(batch_data_folder / f"{prefix}res.npy", residual)
+        np.save(batch_data_folder / f"{prefix}res.npy", residual.cpu().numpy())
 
     # return early if there were no spikes
     if batch_data_folder is None and not spike_index:
@@ -872,11 +894,11 @@ def subtraction_batch(
             prefix=prefix,
         )
 
-    subtracted_wfs = np.concatenate(subtracted_wfs, axis=0)
+    subtracted_wfs = torch.cat(subtracted_wfs, dim=0)
     spike_index = np.concatenate(spike_index, axis=0)
 
     # sort so time increases
-    sort = np.argsort(spike_index[:, 0])
+    sort = np.argsort(spike_index[:, 0], kind="stable")
     subtracted_wfs = subtracted_wfs[sort]
     spike_index = spike_index[sort]
 
@@ -907,6 +929,8 @@ def subtraction_batch(
             subtracted_wfs=subtracted_wfs,
         )
         if feat is not None:
+            if torch.is_tensor(feat):
+                feat = feat.cpu().numpy()
             np.save(
                 batch_data_folder / f"{prefix}{f.name}.npy",
                 feat,
@@ -937,6 +961,8 @@ def subtraction_batch(
                 denoised_wfs=None,
             )
             if feat is not None:
+                if torch.is_tensor(feat):
+                    feat = feat.cpu().numpy()
                 np.save(
                     batch_data_folder / f"{prefix}{f.name}.npy",
                     feat,
@@ -962,6 +988,8 @@ def subtraction_batch(
                 denoised_wfs=denoised_wfs,
             )
             if feat is not None:
+                if torch.is_tensor(feat):
+                    feat = feat.cpu().numpy()
                 np.save(
                     batch_data_folder / f"{prefix}{f.name}.npy",
                     feat,
@@ -1062,8 +1090,6 @@ def train_featurizers(
             batch_len_samples=fs,
             s_start=s_start,
             thresholds=thresholds,
-            subtracted_tpca=subtracted_tpca,
-            denoised_tpca=None,
             dedup_channel_index=dedup_channel_index,
             trough_offset=trough_offset,
             spike_length_samples=spike_length_samples,
@@ -1076,6 +1102,8 @@ def train_featurizers(
             peak_sign=peak_sign,
             dtype=dtype,
             extra_features=[],
+            subtracted_tpca=subtracted_tpca.to(device) if subtracted_tpca is not None else None,
+            denoised_tpca=None,
             recording=recording,
             device=device,
             denoiser=denoiser,
@@ -1083,8 +1111,8 @@ def train_featurizers(
             dn_detector=dn_detector,
         )
         spike_indices.append(spind)
-        waveforms.append(wfs)
-        residuals.append(residual_singlebuf)
+        waveforms.append(wfs.cpu().numpy())
+        residuals.append(residual_singlebuf.cpu().numpy())
 
     try:
         # this can raise value error
@@ -1135,7 +1163,7 @@ def train_featurizers(
             do_enforce_decrease=do_enforce_decrease,
             tpca=None,
             device=device,
-            denoiser=denoiser,
+            denoiser=denoiser.to(),
         )
 
     # train extra featurizers if necessary
@@ -1198,12 +1226,14 @@ def detect_and_subtract(
         start = start - 42
         end = end + 79
 
+    raw = torch.as_tensor(raw, device=device)
+
     # the full buffer has length 2 * spike len on both sides,
     # but this spike index only contains the spikes inside
     # the inner buffer of length spike len
     # times are relative to the *inner* buffer
     spike_index = detect.detect_and_deduplicate(
-        raw[start:end].copy(),
+        raw[start:end],
         threshold,
         dedup_channel_index,
         buffer_size=spike_length_samples,
@@ -1216,7 +1246,7 @@ def detect_and_subtract(
         return np.empty(0), np.empty(0), raw, np.empty(0)
 
     # -- read waveforms
-    padded_raw = np.pad(raw, [(0, 0), (0, 1)], constant_values=np.nan)
+    padded_raw = F.pad(raw, (0, 1), value=torch.nan)
     # get times relative to trough + buffer
     # currently, times are trough times relative to spike_length_samples,
     # but they also *start* there
@@ -1246,11 +1276,24 @@ def detect_and_subtract(
     # -- the actual subtraction
     # have to use subtract.at since -= will only subtract once in the overlaps,
     # subtract.at will subtract multiple times where waveforms overlap
-    np.subtract.at(
-        padded_raw,
-        (time_ix[:, :, None], chan_ix[:, None, :]),
-        waveforms,
+    # np.subtract.at(
+    #     padded_raw,
+    #     (time_ix[:, :, None], chan_ix[:, None, :]),
+    #     waveforms,
+    # )
+    # this is the torch equivalent. just have to do all the broadcasting manually.
+    padded_raw.reshape(-1).scatter_add_(
+        0,
+        torch.as_tensor(
+            np.ravel_multi_index(
+                np.broadcast_arrays(time_ix[:, :, None], chan_ix[:, None, :]),
+                padded_raw.shape,
+            ),
+            device=padded_raw.device,
+        ).reshape(-1),
+        -waveforms.reshape(-1),
     )
+
     # remove the NaN padding
     subtracted_raw = padded_raw[:, :-1]
 
@@ -1268,7 +1311,7 @@ def full_denoising(
     tpca=None,
     device=None,
     denoiser=None,
-    batch_size=1024,
+    batch_size=2 ** 10,
     align=False,
     return_tpca_embedding=False,
 ):
@@ -1277,13 +1320,23 @@ def full_denoising(
     N, T, C = waveforms.shape
     assert not align  # still working on that
 
+    waveforms = torch.as_tensor(waveforms, device=device, dtype=torch.float)
+    
+    if not waveforms.numel():
+        if return_tpca_embedding:
+            embed = np.full(
+                (0, C, tpca.n_components), np.nan, dtype=tpca.dtype
+            )
+            return waveforms, embed
+        return waveforms
+
     # in new pipeline, some channels are off the edge of the probe
     # those are filled with NaNs, which will blow up PCA. so, here
     # we grab just the non-NaN channels.
 
-    in_probe_channel_index = extract_channel_index < num_channels
+    in_probe_channel_index = torch.as_tensor(extract_channel_index, device=device) < num_channels
     in_probe_index = in_probe_channel_index[maxchans]
-    waveforms = waveforms.transpose(0, 2, 1)
+    waveforms = waveforms.permute(0, 2, 1)
     wfs_in_probe = waveforms[in_probe_index]
 
     # Apply NN denoiser (skip if None) #doesn't matter if wf on channels or everywhere
@@ -1291,29 +1344,19 @@ def full_denoising(
         results = []
         for bs in range(0, wfs_in_probe.shape[0], batch_size):
             be = min(bs + batch_size, N * C)
-            results.append(
-                denoiser(
-                    torch.as_tensor(
-                        wfs_in_probe[bs:be], device=device, dtype=torch.float
-                    )
-                )
-                .cpu()
-                .numpy()
-            )
-        wfs_in_probe = np.concatenate(results, axis=0)
+            wfs_in_probe[bs:be] = denoiser(wfs_in_probe[bs:be])
         del results
-
-    # everyone to numpy now, if we were torch
-    if torch.is_tensor(waveforms):
-        waveforms = np.array(waveforms.cpu())
 
     # Temporal PCA while we are still transposed
     if tpca is not None:
-        wfs_in_probe = tpca.inverse_transform(tpca.transform(wfs_in_probe))
+        tpca_embeds = tpca.raw_transform(wfs_in_probe)
+        wfs_in_probe = tpca.raw_inverse_transform(tpca_embeds)
+        if not return_tpca_embedding:
+            del tpca_embeds
 
     # back to original shape
     waveforms[in_probe_index] = wfs_in_probe
-    waveforms = waveforms.transpose(0, 2, 1)
+    waveforms = waveforms.permute(0, 2, 1)
 
     # enforce decrease
     if do_enforce_decrease:
@@ -1340,13 +1383,11 @@ def full_denoising(
             pass
 
     if return_tpca_embedding and tpca is not None:
-        tpca_embeddings = np.empty(
-            (N, C, tpca.n_components), dtype=waveforms.dtype
+        tpca_embeddings = np.full(
+            (N, C, tpca.n_components), np.nan, dtype=tpca.dtype
         )
         # run tpca only on channels that matter!
-        tpca_embeddings[in_probe_index] = tpca.transform(
-            waveforms.transpose(0, 2, 1)[in_probe_index]
-        )
+        tpca_embeddings[in_probe_index.cpu()] = tpca_embeds.cpu()
         return waveforms, tpca_embeddings.transpose(0, 2, 1)
     elif return_tpca_embedding:
         return waveforms, None
