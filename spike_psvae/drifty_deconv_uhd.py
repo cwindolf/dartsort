@@ -875,9 +875,6 @@ def extract_superres_shifted_deconv(
     shifted_upsampled_idx_to_orig_id = superres_deconv_result[
         "shifted_upsampled_idx_to_orig_id"
     ]
-    labels_downsampled = superres_deconv_result[
-        "deconv_spike_train"
-    ][:, 1]
     print(f"{shifted_upsampled_idx_to_superres_id.shape=}")
     # print(",".join(map(str, shifted_upsampled_idx_to_superres_id)))
 
@@ -925,7 +922,6 @@ def extract_superres_shifted_deconv(
         overwrite=overwrite,
         pbar=pbar,
         nn_denoise=nn_denoise,
-        labels_downsampled=labels_downsampled,
         seed=0,
     )
 
