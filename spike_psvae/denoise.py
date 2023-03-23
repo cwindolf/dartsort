@@ -316,7 +316,12 @@ def enforce_decrease_shells(
     assert maxchans.shape == (N,)
 
     # compute original ptps and allocate storage for decreasing ones
-    orig_ptps = waveforms.ptp(axis=1)
+    is_torch = False
+    if torch.is_tensor(waveforms):
+        orig_ptps = (waveforms.max(dim=1).values - waveforms.min(dim=1).values).cpu().numpy()
+        is_torch = True
+    else:
+        orig_ptps = waveforms.ptp(axis=1)
     decreasing_ptps = orig_ptps.copy()
 
     # loop to enforce ptp decrease
@@ -327,11 +332,15 @@ def enforce_decrease_shells(
                 decr_ptp[c] *= decr_ptp[parents_rel].max() / decr_ptp[c]
 
     # apply decreasing ptps to the original waveforms
-    return np.multiply(
-        waveforms,
-        (decreasing_ptps / orig_ptps)[:, None, :],
-        out=waveforms if in_place else None,
-    )
+    rescale = (decreasing_ptps / orig_ptps)[:, None, :]
+    if is_torch:
+        rescale = torch.as_tensor(rescale, device=waveforms.device)
+    if in_place:
+        waveforms *= rescale
+    else:
+        waveforms = waveforms * rescale
+
+    return waveforms
 
 
 def enforce_temporal_decrease(

@@ -2,6 +2,8 @@
 """A library for quickly reading spike data from .bin files."""
 from pathlib import Path
 import numpy as np
+import torch
+import torch.nn.functional as F
 from os import SEEK_SET
 
 
@@ -85,7 +87,10 @@ def read_waveforms_in_memory(
     """Load waveforms from an array in memory"""
     # pad with NaN to fill resulting waveforms with NaN when
     # channel is outside probe
-    padded_array = np.pad(array, [(0, 0), (0, 1)], constant_values=np.nan)
+    if torch.is_tensor(array):
+        padded_array = F.pad(array, (0, 1), value=np.nan)
+    else:
+        padded_array = np.pad(array, [(0, 0), (0, 1)], constant_values=np.nan)
     # times relative to trough + buffer
     time_range = np.arange(
         buffer - trough_offset,
