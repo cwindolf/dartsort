@@ -1,5 +1,6 @@
 # %%
 import numpy as np
+import torch
 from sklearn.decomposition import PCA
 
 # %%
@@ -46,6 +47,9 @@ class ChunkFeature:
         Please create a group in the h5 if you can.
         """
         pass
+
+    def to(self, device):
+        return self
 
     def from_h5(self, h5):
         pass
@@ -98,7 +102,12 @@ class MaxPTP(ChunkFeature):
         wfs = self.handle_which_wfs(subtracted_wfs, cleaned_wfs, denoised_wfs)
         if wfs is None:
             return None
-        maxptps = np.nanmax(wfs.ptp(1), axis=1)
+        if torch.is_tensor(wfs):
+            ptps = wfs.max(1).values - wfs.min(1).values
+            ptps[torch.isnan(ptps)] = -1
+            maxptps = ptps.max(1).values
+        else:
+            maxptps = np.nanmax(wfs.ptp(1), axis=1)
         return maxptps
 
 
@@ -122,9 +131,16 @@ class TroughDepth(ChunkFeature):
         wfs = self.handle_which_wfs(subtracted_wfs, cleaned_wfs, denoised_wfs)
         if wfs is None:
             return None
-        mcs = np.nanargmax(wfs.ptp(1), axis=1)
-        maxchan_traces = wfs[np.arange(len(wfs)), :, mcs]
-        trough_depths = maxchan_traces.min(1)
+        if torch.is_tensor(wfs):
+            ptps = wfs.max(dim=1).values - wfs.min(dim=1).values
+            ptps[torch.isnan(ptps)] = -1
+            mcs = torch.argmax(ptps, dim=1)
+            maxchan_traces = wfs[torch.arange(len(wfs)), :, mcs]
+            trough_depths = maxchan_traces.min(1).values
+        else:
+            ptps = wfs.ptp(1)
+            maxchan_traces = wfs[np.arange(len(wfs)), :, mcs]
+            trough_depths = maxchan_traces.min(1)
         return trough_depths
 
 
@@ -148,9 +164,16 @@ class PeakHeight(ChunkFeature):
         wfs = self.handle_which_wfs(subtracted_wfs, cleaned_wfs, denoised_wfs)
         if wfs is None:
             return None
-        mcs = np.nanargmax(wfs.ptp(1), axis=1)
-        maxchan_traces = wfs[np.arange(len(wfs)), :, mcs]
-        peak_heights = maxchan_traces.max(1)
+        if torch.is_tensor(wfs):
+            ptps = wfs.max(dim=1).values - wfs.min(dim=1).values
+            ptps[torch.isnan(ptps)] = -1
+            mcs = torch.argmax(ptps, dim=1)
+            maxchan_traces = wfs[torch.arange(len(wfs)), :, mcs]
+            peak_heights = maxchan_traces.max(1).values
+        else:
+            mcs = np.nanargmax(wfs.ptp(1), axis=1)
+            maxchan_traces = wfs[np.arange(len(wfs)), :, mcs]
+            peak_heights = maxchan_traces.max(1)
         return peak_heights
 
 
@@ -289,7 +312,7 @@ class Localization(ChunkFeature):
         localization_model="pointsource",
         localization_kind="logbarrier",
         which_waveforms="denoised",
-        feature="ptp"
+        feature="ptp",
     ):
         super().__init__()
         assert channel_index.shape[0] == geom.shape[0]
@@ -313,21 +336,24 @@ class Localization(ChunkFeature):
         wfs = self.handle_which_wfs(subtracted_wfs, cleaned_wfs, denoised_wfs)
         if wfs is None:
             return None
-        
-        if self.feature == 'ptp':
-            ptps = wfs.ptp(1)
-        elif self.feature == 'peak':
-            peaks = np.max(np.absolute(wfs),axis = 1)
-            argpeaks = np.argmax(np.absolute(wfs),axis = 1)
+
+        if self.feature == "ptp":
+            if torch.is_tensor(wfs):
+                ptps = wfs.max(dim=1).values - wfs.min(dim=1).values
+                ptps = ptps.cpu().numpy()
+            else:
+                ptps = wfs.ptp(1)
+        elif self.feature == "peak":
+            wfs = np.array(wfs)
+            peaks = np.max(np.absolute(wfs), axis=1)
+            argpeaks = np.argmax(np.absolute(wfs), axis=1)
             mcs = np.nanargmax(peaks, axis=1)
-            argpeaks = argpeaks[np.arange(len(argpeaks)),mcs]
+            argpeaks = argpeaks[np.arange(len(argpeaks)), mcs]
             ptps = wfs[np.arange(len(mcs)), argpeaks, :]
             ptps = np.abs(ptps)
         else:
-            raise NameError('Use ptp or peak value for localization.')
-            
-            
-            
+            raise NameError("Use ptp or peak value for localization.")
+
         xs, ys, z_rels, z_abss, alphas = localize_index.localize_ptps_index(
             ptps,
             self.geom,
@@ -338,7 +364,7 @@ class Localization(ChunkFeature):
             n_workers=self.n_workers,
             pbar=False,
             logbarrier=self.localization_kind == "logbarrier",
-            model = self.localizaton_model
+            model=self.localizaton_model,
         )
         # NOTE the reordering, same as it used to be...
         return np.c_[xs, ys, z_abss, alphas, z_rels]
@@ -384,6 +410,28 @@ class TPCA(ChunkFeature):
 
         return self
 
+    def to(self, device):
+        self.mean_ = torch.as_tensor(self.tpca.mean_, device=device)
+        self.components_ = torch.as_tensor(
+            self.tpca.components_, device=device
+        )
+        self.whiten = self.tpca.whiten
+        self.whitener = torch.as_tensor(self.whitener, device=device)
+        return self
+
+    def raw_transform(self, X):
+        X = X - self.mean_
+        Xt = X @ self.components_.T
+        if self.whiten:
+            Xt /= self.whitener
+        return Xt
+
+    def raw_inverse_transform(self, X):
+        if self.whiten:
+            return (X @ (self.whitener * self.components_)) + self.mean_
+        else:
+            return (X @ self.components_) + self.mean_
+
     def to_h5(self, h5):
         group = h5.create_group(f"{self.which_waveforms}_tpca")
         group.create_dataset("T", data=self.T)
@@ -406,6 +454,11 @@ class TPCA(ChunkFeature):
         self.tpca = sklearn_pca
         self.dtype = sklearn_pca.components_.dtype
         self.needs_fit = False
+        self.components_ = sklearn_pca.components_
+        self.n_components = sklearn_pca.n_components
+        self.mean_ = sklearn_pca.mean_
+        self.whiten = sklearn_pca.whiten
+        self.whitener = np.sqrt(sklearn_pca.explained_variance_)
 
         return self
 
@@ -426,6 +479,9 @@ class TPCA(ChunkFeature):
         if wfs is None:
             return
 
+        if torch.is_tensor(wfs):
+            wfs = wfs.cpu().numpy()
+
         N, T, C = wfs.shape
         self.T = T
 
@@ -436,6 +492,12 @@ class TPCA(ChunkFeature):
         self.tpca.fit(wfs_in_probe)
         self.needs_fit = False
         self.dtype = self.tpca.components_.dtype
+        self.n_components = self.tpca.n_components
+
+        self.components_ = self.tpca.components_
+        self.mean_ = self.tpca.mean_
+        self.whiten = self.tpca.whiten
+        self.whitener = np.sqrt(self.tpca.explained_variance_)
 
     def transform(
         self,
@@ -451,27 +513,48 @@ class TPCA(ChunkFeature):
         features = np.full(
             (wfs.shape[0], *self.out_shape), np.nan, dtype=self.dtype
         )
-        features = features.transpose(0, 2, 1)
+        features_ = features.transpose(0, 2, 1)
 
-        wfs_in_probe = wfs.transpose(0, 2, 1)
+        if torch.is_tensor(wfs):
+            wfs_in_probe = wfs.permute(0, 2, 1)
+        else:
+            wfs_in_probe = wfs.transpose(0, 2, 1)
+
         in_probe_index = self.channel_index < self.channel_index.shape[0]
         chans_in_probe = in_probe_index[max_channels]
         wfs_in_probe = wfs_in_probe[chans_in_probe]
 
-        features[chans_in_probe] = self.tpca.transform(wfs_in_probe)
-        features = features.transpose(0, 2, 1)
+        features_[chans_in_probe] = self.raw_transform(wfs_in_probe)
+
+        if torch.is_tensor(wfs):
+            wfs_in_probe = wfs.permute(0, 2, 1)
+        else:
+            wfs_in_probe = wfs.transpose(0, 2, 1)
+
         return features
 
     def inverse_transform(self, features, max_channels, channel_index):
         in_probe_index = self.channel_index < self.channel_index.shape[0]
         chans_in_probe = in_probe_index[max_channels]
-        wfs = np.full(
-            (features.shape[0], self.C, self.T), np.nan, dtype=self.dtype
-        )
-        wfs[chans_in_probe] = self.tpca.inverse_transform(
-            features.transpose(0, 2, 1)[chans_in_probe]
-        )
-        return wfs.transpose(0, 2, 1)
+        if torch.is_tensor(features):
+            wfs = torch.full(
+                (features.shape[0], self.C, self.T),
+                torch.nan,
+                dtype=self.dtype,
+            )
+            wfs[chans_in_probe] = self.raw_inverse_transform(
+                features.permute(0, 2, 1)[chans_in_probe]
+            )
+            wfs = wfs.permute(0, 2, 1)
+        else:
+            wfs = np.full(
+                (features.shape[0], self.C, self.T), np.nan, dtype=self.dtype
+            )
+            wfs[chans_in_probe] = self.tpca.inverse_transform(
+                features.transpose(0, 2, 1)[chans_in_probe]
+            )
+            wfs = wfs.transpose(0, 2, 1)
+        return wfs
 
     def denoise(
         self,
