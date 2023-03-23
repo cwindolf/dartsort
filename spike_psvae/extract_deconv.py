@@ -31,6 +31,7 @@ def extract_deconv(
     extract_radius_um=100,
     subtraction_h5=None,
     tpca_rank=8,
+    max_chan_pca_rank=2,
     tpca_weighted=True,
     save_residual=False,
     save_subtracted_waveforms=False,
@@ -246,7 +247,7 @@ def extract_deconv(
     if localize:
         featurizers.append(
             chunk_features.Localization(
-                geom, channel_index, loc_radius=loc_radius
+                geom, channel_index, loc_radius=loc_radius, feature=loc_feature
             )
         )
         featurizers.append(chunk_features.MaxPTP())
@@ -717,7 +718,6 @@ def _extract_deconv_init(
     p.reassignment_pairs_up = reassignment_pairs_up
     p.reassignment_temps_up_loc = reassignment_temps_up_loc
     p.featurizers = featurizers
-
     print(".", end="", flush=True)
 
 
@@ -814,6 +814,7 @@ def load_or_fit_featurizers(
         save_residual=False,
         save_cleaned_waveforms=True,
         save_cleaned_tpca_projs=False,
+        save_max_chan_pca_projs=False,
         save_denoised_waveforms=True,
         do_denoised_tpca=False,
         save_denoised_tpca_projs=False,
@@ -835,19 +836,20 @@ def load_or_fit_featurizers(
 
     # -- fit features
     with h5py.File(extract_h5, "r") as mini_h5:
-        max_channels = mini_h5["spike_index"][:, 1]
-        print(
-            f"Training featurizers on {max_channels.size} waveforms from mini-extraction."
-        )
-        cleaned_wfs = mini_h5["cleaned_waveforms"][:]
-        for f in featurizers:
-            f.fit(max_channels=max_channels, cleaned_wfs=cleaned_wfs)
-        del cleaned_wfs
+        if any(f.needs_fit for f in featurizers):
+            max_channels = mini_h5["spike_index"][:, 1]
+            print(
+                f"Training featurizers on {max_channels.size} waveforms from mini-extraction."
+            )
+            cleaned_wfs = mini_h5["cleaned_waveforms"][:]
+            for f in featurizers:
+                f.fit(max_channels=max_channels, cleaned_wfs=cleaned_wfs)
+            del cleaned_wfs
 
-        denoised_wfs = mini_h5["denoised_waveforms"][:]
-        for f in featurizers:
-            f.fit(max_channels=max_channels, denoised_wfs=denoised_wfs)
-        del denoised_wfs
+            denoised_wfs = mini_h5["denoised_waveforms"][:]
+            for f in featurizers:
+                f.fit(max_channels=max_channels, denoised_wfs=denoised_wfs)
+            del denoised_wfs
 
     # clean up after ourselves
     shutil.rmtree(output_directory / "mini_extract_feats")
