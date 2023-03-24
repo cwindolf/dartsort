@@ -16,12 +16,13 @@ def cluster_5_min(cluster_output_directory, raw_data_bin, geom, T_START, T_END, 
     Path(cluster_output_directory).mkdir(exist_ok=True)
     
     fname_spike_train= Path(cluster_output_directory) / "spt_clustering_{}_{}.npy".format(T_START, T_END)
+    fname_spike_index= Path(cluster_output_directory) / "spike_index_clustering_{}_{}.npy".format(T_START, T_END)
     fname_x_loc= Path(cluster_output_directory) / "x_clustering_{}_{}.npy".format(T_START, T_END)
     fname_z_loc= Path(cluster_output_directory) / "z_abs_clustering_{}_{}.npy".format(T_START, T_END)
     fname_maxptps_loc= Path(cluster_output_directory) / "maxptps_clustering_{}_{}.npy".format(T_START, T_END)
     
     idx_cluster = np.flatnonzero(np.logical_and(maxptps>threshold_ptp, 
-                  np.logical_and(spike_index[:, 0]/fs>T_START, spike_index[:, 0]/fs<T_END)))
+                  np.logical_and(spike_index[:, 0]/fs>=T_START, spike_index[:, 0]/fs<T_END)))
     
     if len(idx_cluster):
         x_cluster = x[idx_cluster]
@@ -85,7 +86,9 @@ def cluster_5_min(cluster_output_directory, raw_data_bin, geom, T_START, T_END, 
                     cmp+=1
                 which = np.where(idx)[0][clust.labels_ == -1]
                 spike_train_split[which, 1] = -1
+                
         np.save(fname_spike_train, spike_train_split)
+        np.save(fname_spike_index, spike_index_cluster)
         np.save(fname_x_loc, x_cluster)
         np.save(fname_z_loc, z[idx_cluster])
         np.save(fname_maxptps_loc, maxptps_cluster)    
@@ -108,11 +111,13 @@ def gather_all_results_clustering(cluster_output_directory, t_start, t_end, K_LE
     T_END = t_start + K_LEN
 
     fname_spike_train=Path(cluster_output_directory) / "spt_clustering_{}_{}.npy".format(T_START, T_END)
+    fname_spike_index=Path(cluster_output_directory) / "spike_index_clustering_{}_{}.npy".format(T_START, T_END)
     fname_x_loc=Path(cluster_output_directory) / "x_clustering_{}_{}.npy".format(T_START, T_END)
     fname_z_loc=Path(cluster_output_directory) / "z_abs_clustering_{}_{}.npy".format(T_START, T_END)
     fname_maxptps_loc=Path(cluster_output_directory) / "maxptps_clustering_{}_{}.npy".format(T_START, T_END)
     
     spt_all = np.load(fname_spike_train)
+    spike_index_all = np.load(fname_spike_index)
     max_ptps_all = np.load(fname_maxptps_loc)
     x_all = np.load(fname_x_loc)
     z_all_abs = np.load(fname_z_loc)
@@ -121,16 +126,18 @@ def gather_all_results_clustering(cluster_output_directory, t_start, t_end, K_LE
         
         T_END = T_START + K_LEN
         fname_spike_train=Path(cluster_output_directory) / "spt_clustering_{}_{}.npy".format(T_START, T_END)
+        fname_spike_index=Path(cluster_output_directory) / "spike_index_clustering_{}_{}.npy".format(T_START, T_END)
         fname_x_loc=Path(cluster_output_directory) / "x_clustering_{}_{}.npy".format(T_START, T_END)
         fname_z_loc=Path(cluster_output_directory) / "z_abs_clustering_{}_{}.npy".format(T_START, T_END)
         fname_maxptps_loc=Path(cluster_output_directory) / "maxptps_clustering_{}_{}.npy".format(T_START, T_END)
             
         spt_all = np.concatenate((spt_all, np.load(fname_spike_train)))
+        spike_index_all = np.concatenate((spike_index_all, np.load(fname_spike_index)))
         max_ptps_all = np.concatenate((max_ptps_all, np.load(fname_maxptps_loc)))
         x_all = np.concatenate((x_all, np.load(fname_x_loc)))
         z_all_abs = np.concatenate((z_all_abs, np.load(fname_z_loc)))
     
-    return spt_all.astype('int'), max_ptps_all, x_all, z_all_abs
+    return spt_all.astype('int'), spike_index_all.astype('int'), max_ptps_all, x_all, z_all_abs
 
 
 # %%
@@ -297,7 +304,7 @@ def relabel_by_depth(spt, z_abs):
     spt_ordered = spt.copy()
     cluster_centers = np.zeros(spt[:, 1].max()+1)
     for k in range(spt[:, 1].max()+1):
-      cluster_centers[k] = np.median(z_abs[spt[:, 1]==k])
+        cluster_centers[k] = np.median(z_abs[spt[:, 1]==k])
     indices_depth = np.argsort(-cluster_centers)
     cmp=0
     for unit in indices_depth:
@@ -323,7 +330,7 @@ def run_full_clustering(t_start, t_end, cluster_output_directory, raw_data_bin, 
                       frame_dedup_cluster=frame_dedup_cluster, log_c=log_c, scales=scales)
 
     print("Ensembling")
-    spt, max_ptps, x, z_abs = gather_all_results_clustering(cluster_output_directory, t_start, t_end, len_chunks)
+    spt, spike_index, max_ptps, x, z_abs = gather_all_results_clustering(cluster_output_directory, t_start, t_end, len_chunks)
     spt = ensemble_hdbscan_clustering(t_start, t_end, len_chunks, displacement_rigid, spt, max_ptps, x, z_abs, scales, log_c)
 
     print("Split")
@@ -344,18 +351,24 @@ def run_full_clustering(t_start, t_end, cluster_output_directory, raw_data_bin, 
     fname_x = Path(cluster_output_directory) / "x_full_cluster.npy"
     fname_z = Path(cluster_output_directory) / "z_full_cluster.npy"
     fname_maxptps = Path(cluster_output_directory) / "maxptps_full_cluster.npy"
+    fname_spike_index = Path(cluster_output_directory) / "spike_index_full_cluster.npy"
 
     np.save(fname_spt_cluster, spt)
+    np.save(fname_spike_index, spike_index)
     np.save(fname_x, x)
     np.save(fname_z, z_abs)
     np.save(fname_maxptps, max_ptps)
     
     if savefigs:
-      figname = Path(cluster_output_directory) / "final_clustering_scatter_plot.png"
-      fig, axes = cluster_viz.array_scatter(
+        print("Save Figure")
+        figname = Path(cluster_output_directory) / "final_clustering_scatter_plot.png"
+        fig, axes = cluster_viz.array_scatter(
           spt[:, 1], geom, x, z_abs - displacement_rigid[spt[:, 0]//30000], max_ptps,
-          zlim=(-45, 325), do_ellipse=True
-      )
-      plt.savefig(figname)
-      plt.close()
-    return spt, max_ptps, x, z_abs
+          zlim=(-50, 350), do_ellipse=True
+        )
+        plt.savefig(figname)
+        plt.close()
+        print("figure saved")
+    return spt, max_ptps, x, z_abs, spike_index
+
+
