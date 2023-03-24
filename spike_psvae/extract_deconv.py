@@ -246,7 +246,7 @@ def extract_deconv(
     if localize:
         featurizers.append(
             chunk_features.Localization(
-                geom, channel_index, loc_radius=loc_radius
+                geom, channel_index, loc_radius=loc_radius, feature=loc_feature
             )
         )
         featurizers.append(chunk_features.MaxPTP())
@@ -373,7 +373,7 @@ def extract_deconv(
                 scalings,
                 n_chans,
                 nn_denoise,
-                denoised_tpca.tpca if denoised_tpca is not None else None,
+                denoised_tpca if denoised_tpca is not None else None,
                 do_reassignment,
                 reassignment_tpca,
                 reassignment_norm_p,
@@ -623,6 +623,8 @@ def _extract_deconv_worker(start_sample):
             device=p.device,
             denoiser=p.denoiser,
         )
+        if torch.is_tensor(denoised_waveforms):
+            denoised_waveforms = denoised_waveforms.cpu().numpy()
         del cleaned_waveforms
 
         # compute and save features for denoised wfs
@@ -717,7 +719,6 @@ def _extract_deconv_init(
     p.reassignment_pairs_up = reassignment_pairs_up
     p.reassignment_temps_up_loc = reassignment_temps_up_loc
     p.featurizers = featurizers
-
     print(".", end="", flush=True)
 
 
@@ -845,6 +846,9 @@ def load_or_fit_featurizers(
         del cleaned_wfs
 
         denoised_wfs = mini_h5["denoised_waveforms"][:]
+        if torch.is_tensor(denoised_wfs):
+            denoised_wfs = denoised_wfs.cpu().numpy()
+
         for f in featurizers:
             f.fit(max_channels=max_channels, denoised_wfs=denoised_wfs)
         del denoised_wfs
