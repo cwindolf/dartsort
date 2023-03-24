@@ -1191,7 +1191,7 @@ def train_featurizers(
             do_enforce_decrease=do_enforce_decrease,
             tpca=None,
             device=device,
-            denoiser=denoiser.to(),
+            denoiser=denoiser,
         )
 
     # train extra featurizers if necessary
@@ -1289,7 +1289,7 @@ def detect_and_subtract(
     time_ix = spike_index[:, 0, None] + time_range[None, :]
     chan_ix = extract_channel_index[spike_index[:, 1]]
     waveforms = padded_raw[time_ix[:, :, None], chan_ix[:, None, :]]
-    print(f"{type(waveforms)=}")
+
     # -- denoising
     waveforms, tpca_proj = full_denoising(
         waveforms,
@@ -1374,7 +1374,6 @@ def full_denoising(
 
     # Apply NN denoiser (skip if None) #doesn't matter if wf on channels or everywhere
     if denoiser is not None:
-        results = []
         for bs in range(0, wfs_in_probe.shape[0], batch_size):
             be = min(bs + batch_size, N * C)
             wfs_in_probe[bs:be] = denoiser(wfs_in_probe[bs:be])
@@ -1382,18 +1381,12 @@ def full_denoising(
 
     # Temporal PCA while we are still transposed
     if tpca is not None:
-        if torch.is_tensor(wfs_in_probe):
-            wfs_in_probe = wfs_in_probe.cpu().numpy()
         tpca_embeds = tpca.raw_transform(wfs_in_probe)
         wfs_in_probe = tpca.raw_inverse_transform(tpca_embeds)
         if not return_tpca_embedding:
             del tpca_embeds
 
     # back to original shape
-    wfs_in_probe = torch.as_tensor(
-        wfs_in_probe, device=device, dtype=torch.float
-    )
-
     waveforms[in_probe_index] = wfs_in_probe
     waveforms = waveforms.permute(0, 2, 1)
 

@@ -3,6 +3,7 @@ import numpy as np
 from scipy.spatial.distance import cdist, pdist, squareform
 from sklearn.decomposition import PCA, TruncatedSVD
 import torch
+import torch.nn.functional as F
 
 # %%
 from . import spikeio
@@ -420,9 +421,12 @@ def get_channel_subset(
         rel_sub_channel_index.append(s)
     rel_sub_channel_index = np.array(rel_sub_channel_index)
 
-    waveforms = np.pad(
-        waveforms, [(0, 0), (0, 0), (0, 1)], constant_values=fill_value
-    )
+    if torch.is_tensor(waveforms):
+        waveforms = F.pad(waveforms, (0, 1), value=fill_value)
+    else:
+        waveforms = np.pad(
+            waveforms, [(0, 0), (0, 0), (0, 1)], constant_values=fill_value
+        )
 
     return waveforms[
         np.arange(N)[:, None, None],

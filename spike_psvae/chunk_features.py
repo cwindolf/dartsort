@@ -612,10 +612,10 @@ class STPCA(ChunkFeature):
         assert which_waveforms in ("subtracted", "cleaned", "denoised")
         self.which_waveforms = which_waveforms
         self.rank = rank
-        self.name = f"{which_waveforms}_tpca_projs"
+        self.name = f"{which_waveforms}_pca_projs"
         self.channel_index = channel_index
         self.C = channel_index.shape[1]
-        self.out_shape = (self.rank, self.C)
+        self.out_shape = (self.rank,)
         self.pca = PCA(self.rank, random_state=random_state)
         self.sub_channel_index = waveform_utils.closest_chans_channel_index(geom, n_channels)
 
@@ -666,8 +666,8 @@ class STPCA(ChunkFeature):
         try:
             group = h5[f"{self.which_waveforms}_pca"]
             self.T = group["T"][()]
-            self.tpca = PCA(self.rank)
-            self.tpca.mean_ = group["pca_mean"][:]
+            self.pca = PCA(self.rank)
+            self.pca.mean_ = group["pca_mean"][:]
             self.tpca.components_ = group["pca_components"][:]
             self.needs_fit = False
         except KeyError:
@@ -685,12 +685,6 @@ class STPCA(ChunkFeature):
         self.whitener = np.sqrt(sklearn_pca.explained_variance_)
 
         return self
-
-    def __str__(self):
-        if self.needs_fit:
-            return f"TPCA(needs_fit=True, C={self.C}, PCA={self.tpca})"
-        else:
-            return f"TPCA(needs_fit=False, T={self.T}, C={self.C}, PCA={self.tpca})"
 
     def fit(
         self,
@@ -719,15 +713,15 @@ class STPCA(ChunkFeature):
         assert not np.isnan(sub_wfs).any()
         assert sub_wfs.shape == (N, T, self.sub_channel_index.shape[1])
 
-        self.tpca.fit(wfs.reshape(N, -1))
+        self.pca.fit(sub_wfs.reshape(N, -1))
         self.needs_fit = False
-        self.dtype = self.tpca.components_.dtype
-        self.n_components = self.tpca.n_components
+        self.dtype = self.pca.components_.dtype
+        self.n_components = self.pca.n_components
 
-        self.components_ = self.tpca.components_
-        self.mean_ = self.tpca.mean_
-        self.whiten = self.tpca.whiten
-        self.whitener = np.sqrt(self.tpca.explained_variance_)
+        self.components_ = self.pca.components_
+        self.mean_ = self.pca.mean_
+        self.whiten = self.pca.whiten
+        self.whitener = np.sqrt(self.pca.explained_variance_)
 
     def transform(
         self,
