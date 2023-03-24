@@ -11,7 +11,7 @@ from spike_psvae import localize_index, waveform_utils
 class ChunkFeature:
     """Feature computers for chunk pipelines (subtract and extract_deconv)
 
-    Subclasses ompute features from subtracted/cleaned/denoised waveforms,
+    Subclasses ompute features from subtracted/cleaned/denoised waveforms, 
     fit featurizers, save and load things from hdf5, ...
     """
 
