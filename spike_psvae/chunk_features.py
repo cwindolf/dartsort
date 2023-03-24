@@ -4,7 +4,7 @@ import torch
 from sklearn.decomposition import PCA
 
 # %%
-from spike_psvae import localize_index
+from spike_psvae import localize_index, waveform_utils
 
 
 # %%
@@ -29,6 +29,7 @@ class ChunkFeature:
     # featurizers will return None when this kind of wf is not passed to their
     # transform step.
     which_waveforms = NotImplemented
+    tensor_ok = False
 
     def fit(
         self,
@@ -75,6 +76,8 @@ class ChunkFeature:
             raise ValueError(
                 f"which_waveforms={self.which_waveforms} not in ('subtracted', 'cleaned', denoised)"
             )
+        if not self.tensor_ok and torch.is_tensor(wfs):
+            wfs = wfs.cpu().numpy()
         return wfs
 
 
@@ -88,6 +91,7 @@ class MaxPTP(ChunkFeature):
     name = "maxptps"
     # scalar
     out_shape = ()
+    tensor_ok = True
 
     def __init__(self, which_waveforms="denoised"):
         self.which_waveforms = which_waveforms
@@ -117,6 +121,7 @@ class TroughDepth(ChunkFeature):
     name = "trough_depths"
     # scalar
     out_shape = ()
+    tensor_ok = True
 
     def __init__(self, which_waveforms="denoised"):
         self.which_waveforms = which_waveforms
@@ -150,6 +155,7 @@ class PeakHeight(ChunkFeature):
     name = "peak_heights"
     # scalar
     out_shape = ()
+    tensor_ok = True
 
     def __init__(self, which_waveforms="denoised"):
         self.which_waveforms = which_waveforms
@@ -301,6 +307,7 @@ class Localization(ChunkFeature):
 
     name = "localizations"
     out_shape = (5,)
+    tensor_ok = True
 
     def __init__(
         self,
@@ -344,8 +351,11 @@ class Localization(ChunkFeature):
             else:
                 ptps = wfs.ptp(1)
         elif self.feature == "peak":
-            wfs = np.array(wfs)
-            peaks = np.max(np.absolute(wfs), axis=1)
+            if torch.is_tensor(wfs):
+                peaks = torch.abs(wfs).max(dim=1).values
+                peaks = peaks.cpu().numpy()
+            else:
+                peaks = np.max(np.absolute(wfs), axis=1)
             argpeaks = np.argmax(np.absolute(wfs), axis=1)
             mcs = np.nanargmax(peaks, axis=1)
             argpeaks = argpeaks[np.arange(len(argpeaks)), mcs]
@@ -377,6 +387,7 @@ class Localization(ChunkFeature):
 # %%
 class TPCA(ChunkFeature):
     needs_fit = True
+    tensor_ok = True
 
     def __init__(self, rank, channel_index, which_waveforms, random_state=0):
         super().__init__()
@@ -578,3 +589,163 @@ class TPCA(ChunkFeature):
         )
         out = out.transpose(0, 2, 1)
         return out
+
+
+class STPCA(ChunkFeature):
+    needs_fit = True
+    tensor_ok = True
+
+    def __init__(
+        self,
+        rank,
+        channel_index,
+        geom,
+        n_channels,
+        which_waveforms,
+        random_state=0,
+    ):
+        """
+        Fit a PCA to waveforms extracted on the n_channels closest
+        channels to the detection channel.
+        """
+        super().__init__()
+        assert which_waveforms in ("subtracted", "cleaned", "denoised")
+        self.which_waveforms = which_waveforms
+        self.rank = rank
+        self.name = f"{which_waveforms}_tpca_projs"
+        self.channel_index = channel_index
+        self.C = channel_index.shape[1]
+        self.out_shape = (self.rank, self.C)
+        self.pca = PCA(self.rank, random_state=random_state)
+        self.sub_channel_index = waveform_utils.closest_chans_channel_index(geom, n_channels)
+
+    @classmethod
+    def load_from_h5(cls, h5, which_waveforms, random_state=0):
+        group = h5[f"{which_waveforms}_pca"]
+        T = group["T"][()]
+        mean_ = group["pca_mean"][:]
+        components_ = group["pca_components"][:]
+        rank = components_.shape[0]
+        channel_index = h5["channel_index"][:]
+
+        self = cls(
+            rank, channel_index, which_waveforms, random_state=random_state
+        )
+
+        self.T = T
+        self.pca.mean_ = mean_
+        self.pca.components_ = components_
+        self.dtype = components_.dtype
+        self.needs_fit = False
+
+        return self
+
+    def to(self, device):
+        self.mean_ = torch.as_tensor(self.pca.mean_, device=device)
+        self.components_ = torch.as_tensor(
+            self.pca.components_, device=device
+        )
+        self.whiten = self.pca.whiten
+        self.whitener = torch.as_tensor(self.whitener, device=device)
+        return self
+
+    def raw_transform(self, X):
+        X = X - self.mean_
+        Xt = X @ self.components_.T
+        if self.whiten:
+            Xt /= self.whitener
+        return Xt
+
+    def to_h5(self, h5):
+        group = h5.create_group(f"{self.which_waveforms}_pca")
+        group.create_dataset("T", data=self.T)
+        group.create_dataset("pca_mean", data=self.pca.mean_)
+        group.create_dataset("pca_components", data=self.pca.components_)
+
+    def from_h5(self, h5):
+        try:
+            group = h5[f"{self.which_waveforms}_pca"]
+            self.T = group["T"][()]
+            self.tpca = PCA(self.rank)
+            self.tpca.mean_ = group["pca_mean"][:]
+            self.tpca.components_ = group["pca_components"][:]
+            self.needs_fit = False
+        except KeyError:
+            pass
+
+    def from_sklearn(self, sklearn_pca):
+        self.T = sklearn_pca.components_.shape[1]
+        self.pca = sklearn_pca
+        self.dtype = sklearn_pca.components_.dtype
+        self.needs_fit = False
+        self.components_ = sklearn_pca.components_
+        self.n_components = sklearn_pca.n_components
+        self.mean_ = sklearn_pca.mean_
+        self.whiten = sklearn_pca.whiten
+        self.whitener = np.sqrt(sklearn_pca.explained_variance_)
+
+        return self
+
+    def __str__(self):
+        if self.needs_fit:
+            return f"TPCA(needs_fit=True, C={self.C}, PCA={self.tpca})"
+        else:
+            return f"TPCA(needs_fit=False, T={self.T}, C={self.C}, PCA={self.tpca})"
+
+    def fit(
+        self,
+        max_channels=None,
+        subtracted_wfs=None,
+        cleaned_wfs=None,
+        denoised_wfs=None,
+    ):
+        wfs = self.handle_which_wfs(subtracted_wfs, cleaned_wfs, denoised_wfs)
+        if wfs is None:
+            return
+
+        if torch.is_tensor(wfs):
+            wfs = wfs.cpu().numpy()
+
+        N, T, C = wfs.shape
+        self.T = T
+
+        sub_wfs = waveform_utils.channel_subset_by_index(
+            wfs,
+            max_channels,
+            self.channel_index,
+            self.sub_channel_index,
+            fill_value=np.nan,
+        )
+        assert not np.isnan(sub_wfs).any()
+        assert sub_wfs.shape == (N, T, self.sub_channel_index.shape[1])
+
+        self.tpca.fit(wfs.reshape(N, -1))
+        self.needs_fit = False
+        self.dtype = self.tpca.components_.dtype
+        self.n_components = self.tpca.n_components
+
+        self.components_ = self.tpca.components_
+        self.mean_ = self.tpca.mean_
+        self.whiten = self.tpca.whiten
+        self.whitener = np.sqrt(self.tpca.explained_variance_)
+
+    def transform(
+        self,
+        max_channels=None,
+        subtracted_wfs=None,
+        cleaned_wfs=None,
+        denoised_wfs=None,
+    ):
+        wfs = self.handle_which_wfs(subtracted_wfs, cleaned_wfs, denoised_wfs)
+        if wfs is None:
+            return None
+
+        sub_wfs = waveform_utils.channel_subset_by_index(
+            wfs,
+            max_channels,
+            self.channel_index,
+            self.sub_channel_index,
+            fill_value=np.nan,
+        )
+
+        return self.raw_transform(sub_wfs.reshape(len(wfs), -1))
