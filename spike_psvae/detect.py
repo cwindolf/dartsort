@@ -262,7 +262,7 @@ def voltage_detect_and_deduplicate(
             max_window=max_window,
         )
         if times.numel():
-            spike_index = torch.stack((times, chans), dim=1)
+            spike_index = torch.stack((torch.atleast_1d(times), torch.atleast_1d(chans)), dim=1)
         else:
             return np.array([]), np.array([])
     else:
@@ -472,6 +472,10 @@ def torch_voltage_detect_dedup(
         times = times[dedup]
         chans = chans[dedup]
         energies = energies[dedup]
+    
+    times = torch.atleast_1d(times)
+    chans = torch.atleast_1d(chans)
+    energies = torch.atleast_1d(energies)
 
     return times, chans, energies
 
