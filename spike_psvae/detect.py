@@ -390,9 +390,9 @@ def torch_voltage_detect_dedup(
             -recording, device=device, dtype=torch.float
         )
     elif peak_sign == "both":
-        neg_recording = torch.as_tensor(
-            np.abs(recording), device=device, dtype=torch.float
-        )
+        neg_recording = torch.abs(torch.as_tensor(
+            recording, device=device, dtype=torch.float
+        ))
     else:
         assert False
     max_energies, inds = F.max_pool2d_with_indices(
