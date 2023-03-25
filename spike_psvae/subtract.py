@@ -281,21 +281,24 @@ def subtraction(
         raise ValueError(f"Unknown localization model: {localization_model}")
     if localization_kind in ("original", "logbarrier"):
         print("Using", localization_kind, "localization")
-        extra_features += [
-            chunk_features.Localization(
-                geom,
-                extract_channel_index,
-                loc_n_chans=localize_firstchan_n_channels
-                if neighborhood_kind == "firstchan"
-                else None,
-                loc_radius=localize_radius
-                if neighborhood_kind != "firstchan"
-                else None,
-                localization_kind=localization_kind,
-                localization_model=localization_model,
-                feature=loc_feature,
-            )
-        ]
+        if not isinstance(loc_feature, (list, tuple)):
+            loc_feature = (loc_feature,)
+        for lf in loc_feature:
+            extra_features += [
+                chunk_features.Localization(
+                    geom,
+                    extract_channel_index,
+                    loc_n_chans=localize_firstchan_n_channels
+                    if neighborhood_kind == "firstchan"
+                    else None,
+                    loc_radius=localize_radius
+                    if neighborhood_kind != "firstchan"
+                    else None,
+                    localization_kind=localization_kind,
+                    localization_model=localization_model,
+                    feature=lf,
+                )
+            ]
     else:
         print("No localization")
 
