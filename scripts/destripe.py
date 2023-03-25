@@ -6,7 +6,8 @@ from pathlib import Path
 from tqdm.auto import trange
 
 from neurodsp import voltage, utils
-from ibllib.io import spikeglx
+# from brainbox.io import spikeglx
+import spikeglx
 
 
 ap = argparse.ArgumentParser()
