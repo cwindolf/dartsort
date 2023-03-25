@@ -356,11 +356,11 @@ class Localization(ChunkFeature):
         elif self.feature == "peak":
             if torch.is_tensor(wfs):
                 abswfs = torch.abs(wfs)
-                argpeaks, peaks = abswfs.max(dim=1)
+                peaks, argpeaks = abswfs.max(dim=1)
                 peaks[torch.isnan(peaks)] = -1
                 mcs = torch.argmax(peaks, dim=1)
                 argpeaks = argpeaks[torch.arange(len(argpeaks)), mcs]
-                ptps = abswfs[torch.arange(len(mcs)), argpeaks, :]
+                ptps = abswfs[torch.arange(len(mcs)), argpeaks, :].cpu().numpy()
             else:
                 peaks = np.max(np.absolute(wfs), axis=1)
                 argpeaks = np.argmax(np.absolute(wfs), axis=1)
@@ -675,7 +675,7 @@ class STPCA(ChunkFeature):
             self.T = group["T"][()]
             self.pca = PCA(self.rank)
             self.pca.mean_ = group["pca_mean"][:]
-            self.tpca.components_ = group["pca_components"][:]
+            self.pca.components_ = group["pca_components"][:]
             self.needs_fit = False
         except KeyError:
             pass
