@@ -332,7 +332,7 @@ class Localization(ChunkFeature):
         self.n_workers = n_workers
         self.which_waveforms = which_waveforms
         self.feature = feature
-        if name_extra is None and feature == "peak":
+        if not name_extra and feature == "peak":
             name_extra = "peak"
         self.name = f"localizations{name_extra}"
 
