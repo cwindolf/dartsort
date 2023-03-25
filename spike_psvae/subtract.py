@@ -1377,7 +1377,6 @@ def full_denoising(
         for bs in range(0, wfs_in_probe.shape[0], batch_size):
             be = min(bs + batch_size, N * C)
             wfs_in_probe[bs:be] = denoiser(wfs_in_probe[bs:be])
-        del results
 
     # Temporal PCA while we are still transposed
     if tpca is not None:
