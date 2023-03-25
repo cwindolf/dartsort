@@ -305,7 +305,6 @@ class Waveform(ChunkFeature):
 # %%
 class Localization(ChunkFeature):
 
-    name = "localizations"
     out_shape = (5,)
     tensor_ok = True
 
@@ -320,6 +319,7 @@ class Localization(ChunkFeature):
         localization_kind="logbarrier",
         which_waveforms="denoised",
         feature="ptp",
+        name_extra="",
     ):
         super().__init__()
         assert channel_index.shape[0] == geom.shape[0]
@@ -332,6 +332,9 @@ class Localization(ChunkFeature):
         self.n_workers = n_workers
         self.which_waveforms = which_waveforms
         self.feature = feature
+        if name_extra is None and feature == "peak":
+            name_extra = "peak"
+        self.name = f"localizations{name_extra}"
 
     def transform(
         self,
