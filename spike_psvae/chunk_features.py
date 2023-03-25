@@ -355,15 +355,19 @@ class Localization(ChunkFeature):
                 ptps = wfs.ptp(1)
         elif self.feature == "peak":
             if torch.is_tensor(wfs):
-                peaks = torch.abs(wfs).max(dim=1).values
-                peaks = peaks.cpu().numpy()
+                abswfs = torch.abs(wfs)
+                argpeaks, peaks = abswfs.max(dim=1)
+                peaks[torch.isnan(peaks)] = -1
+                mcs = torch.argmax(peaks, dim=1)
+                argpeaks = argpeaks[torch.arange(len(argpeaks)), mcs]
+                ptps = abswfs[torch.arange(len(mcs)), argpeaks, :]
             else:
                 peaks = np.max(np.absolute(wfs), axis=1)
-            argpeaks = np.argmax(np.absolute(wfs), axis=1)
-            mcs = np.nanargmax(peaks, axis=1)
-            argpeaks = argpeaks[np.arange(len(argpeaks)), mcs]
-            ptps = wfs[np.arange(len(mcs)), argpeaks, :]
-            ptps = np.abs(ptps)
+                argpeaks = np.argmax(np.absolute(wfs), axis=1)
+                mcs = np.nanargmax(peaks, axis=1)
+                argpeaks = argpeaks[np.arange(len(argpeaks)), mcs]
+                ptps = wfs[np.arange(len(mcs)), argpeaks, :]
+                ptps = np.abs(ptps)
         else:
             raise NameError("Use ptp or peak value for localization.")
 
