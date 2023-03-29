@@ -175,7 +175,7 @@ if __name__ == "__main__":
                 del h5["dispmap"]
 
             if do_reg:
-                samples = h5["spike_index"][:, 0] - h5["start_sample"][()]
+                samples = h5["spike_index"][:, 0] # does not exist anymore - h5["start_sample"][()]
                 z_abs = h5["localizations"][:, 2]
                 maxptps = h5["maxptps"]
 
