@@ -124,7 +124,7 @@ if __name__ == "__main__":
     if args.nogpu:
         os.environ["CUDA_VISIBLE_DEVICES"] = ""
 
-    sub_h5 = subtract.subtraction(
+    sub_h5 = subtract.subtraction_binary(
         args.standardized_bin,
         args.out_folder,
         geom=geom,
