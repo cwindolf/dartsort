@@ -179,7 +179,7 @@ if __name__ == "__main__":
                 z_abs = h5["localizations"][:, 2]
                 maxptps = h5["maxptps"]
 
-                z_reg, dispmap = ibme.register_nonrigid(
+                z_reg, dispmap, extra = ibme.register_nonrigid(
                     maxptps,
                     z_abs,
                     samples / 30000,
