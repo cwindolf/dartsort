@@ -28,10 +28,10 @@ plt.rc("figure", dpi=200)
 # %%
 
 spikelen = 21
-reclen = 50_000_000
+reclen = 500_000
 trough = 0
 nchan = 10
-nspikes_unit = 100_000
+nspikes_unit = 1_000
 refractory = 11
 
 # %%
@@ -91,9 +91,11 @@ np.diff(sta[:,0]).mean(), np.diff(stb[:,0]).mean(), np.diff(stc[:,0]).mean()
 from scipy.optimize import linear_sum_assignment
 from scipy import sparse
 from scipy.sparse.csgraph import maximum_bipartite_matching, min_weight_full_bipartite_matching
+from scipy.spatial.distance import cdist
 
 def timesagree_dense(times1, times2, max_dt=21):
-    C = np.abs(times1[:, None] - times2[None, :]).astype(float)
+    # C = cdist(times1[:, None], times2[:, None], metric="minkowski", p=1)
+    C = np.abs(times1[:, None].astype(float) - times2[None, :].astype(float))
     # valid = C > max_dt
     # valid_1 = valid.any(axis=1)
     # valid_2 = valid.any(axis=1)
@@ -265,6 +267,9 @@ def hungarian_metrics(metrics):
 import time
 
 # %%
+1
+
+# %%
 for dt in (0, 1, 5, 11, 21, 31, 100):
     print(f"----- {dt=}")
     
@@ -290,23 +295,30 @@ for dt in (0, 1, 5, 11, 21, 31, 100):
     mets_sparse = metrics_matrix(st, st, max_dt=dt, fn=timesagree_sparse_fast)
     perf_sparse = hungarian_metrics(mets_sparse)
     sftic = time.time() - toc
+    sftic = time.time() - toc
+    
+    toc = time.time()
+    mets_dense = metrics_matrix(st, st, max_dt=dt, fn=timesagree_dense)
+    perf_dense = hungarian_metrics(mets_dense)
+    stic = time.time() - toc
+    
     
 #     toc = time.time()
 #     mets_slow = metrics_matrix(st, st, max_dt=dt, fn=timesagree_dense_sparsified)
 #     perf_slow = hungarian_metrics(mets_slow)
 #     stic = time.time() - toc
     
-#     toc = time.time()
-#     mets_dense = metrics_matrix(st, st, max_dt=dt, fn=timesagree_dense)
-#     perf_dense = hungarian_metrics(mets_dense)
-#     dtic = time.time() - toc
+    toc = time.time()
+    mets_dense = metrics_matrix(st, st, max_dt=dt, fn=timesagree_dense)
+    perf_dense = hungarian_metrics(mets_dense)
+    dtic = time.time() - toc
     
     # plot both
     fig, ((aa, ab), (ac, ad)) = plt.subplots(nrows=2, ncols=2, figsize=(6, 6))
     sns.heatmap(cmp.agreement_scores, annot=True, cmap=plt.cm.Greens, ax=aa)
     sns.heatmap(mets_sparse["accuracy"], annot=True, cmap=plt.cm.Reds, ax=ab)
     # sns.heatmap(mets_slow["accuracy"], annot=True, cmap=plt.cm.Purples, ax=ac)
-    # sns.heatmap(mets_dense["accuracy"], annot=True, cmap=plt.cm.Blues, ax=ad)
+    sns.heatmap(mets_dense["accuracy"], annot=True, cmap=plt.cm.Blues, ax=ad)
     
     aa.set_title(f"si -- {sitic:0.2f}s")
     ab.set_title(f"sp fast -- {sftic:0.2f}s")
