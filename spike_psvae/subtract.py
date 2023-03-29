@@ -70,6 +70,9 @@ def subtraction(
     save_cleaned_tpca_projs=True,
     save_denoised_tpca_projs=True,
     save_denoised_ptp_vectors=False,
+    # we will save spatiotemporal PCA embeds if this is >0
+    save_cleaned_pca_projs_on_n_channels=None,
+    save_cleaned_pca_projs_rank=5,
     # localization args
     # set this to None or "none" to turn off
     localization_model="pointsource",
@@ -152,7 +155,7 @@ def subtraction(
         neighborhood_kind = "box"
         box_norm_p = 2
 
-    batch_len_samples =  int(
+    batch_len_samples = int(
         np.floor(n_sec_chunk * recording.get_sampling_frequency())
     )
 
@@ -249,6 +252,16 @@ def subtraction(
         extra_features += [
             chunk_features.PTPVector(which_waveforms="denoised")
         ]
+    if save_cleaned_pca_projs_on_n_channels:
+        extra_features += [
+            chunk_features.STPCA(
+                channel_index=extract_channel_index,
+                which_waveforms="cleaned",
+                rank=save_cleaned_pca_projs_rank,
+                n_channels=save_cleaned_pca_projs_on_n_channels,
+                geom=geom,
+            )
+        ]
 
     # helper data structure for radial enforce decrease
     do_enforce_decrease = True
@@ -268,21 +281,24 @@ def subtraction(
         raise ValueError(f"Unknown localization model: {localization_model}")
     if localization_kind in ("original", "logbarrier"):
         print("Using", localization_kind, "localization")
-        extra_features += [
-            chunk_features.Localization(
-                geom,
-                extract_channel_index,
-                loc_n_chans=localize_firstchan_n_channels
-                if neighborhood_kind == "firstchan"
-                else None,
-                loc_radius=localize_radius
-                if neighborhood_kind != "firstchan"
-                else None,
-                localization_kind=localization_kind,
-                localization_model=localization_model,
-                feature=loc_feature,
-            )
-        ]
+        if not isinstance(loc_feature, (list, tuple)):
+            loc_feature = (loc_feature,)
+        for lf in loc_feature:
+            extra_features += [
+                chunk_features.Localization(
+                    geom,
+                    extract_channel_index,
+                    loc_n_chans=localize_firstchan_n_channels
+                    if neighborhood_kind == "firstchan"
+                    else None,
+                    loc_radius=localize_radius
+                    if neighborhood_kind != "firstchan"
+                    else None,
+                    localization_kind=localization_kind,
+                    localization_model=localization_model,
+                    feature=lf,
+                )
+            ]
     else:
         print("No localization")
 
@@ -462,7 +478,7 @@ def subtraction(
         if save_residual:
             residual_mode = "ab" if last_sample > 0 else "wb"
             residual = open(residual_bin, mode=residual_mode)
-        
+
         extra_features = [ef.to("cpu") for ef in extra_features]
         gc.collect()
         torch.cuda.empty_cache()
@@ -991,9 +1007,6 @@ def subtraction_batch(
             denoiser=denoiser,
         )
         del cleaned_wfs
-        
-        if torch.is_tensor(denoised_wfs):
-            denoised_wfs = denoised_wfs.cpu().numpy()
 
         # compute and save features for subtracted wfs
         for f in extra_features:
@@ -1118,7 +1131,9 @@ def train_featurizers(
             peak_sign=peak_sign,
             dtype=dtype,
             extra_features=[],
-            subtracted_tpca=subtracted_tpca.to(device) if subtracted_tpca is not None else None,
+            subtracted_tpca=subtracted_tpca.to(device)
+            if subtracted_tpca is not None
+            else None,
             denoised_tpca=None,
             recording=recording,
             device=device,
@@ -1179,7 +1194,7 @@ def train_featurizers(
             do_enforce_decrease=do_enforce_decrease,
             tpca=None,
             device=device,
-            denoiser=denoiser.to(),
+            denoiser=denoiser,
         )
 
     # train extra featurizers if necessary
@@ -1290,8 +1305,7 @@ def detect_and_subtract(
         denoiser=denoiser,
         return_tpca_embedding=True,
     )
-    if torch.is_tensor(waveforms):
-        waveforms = waveforms.cpu().numpy()
+
     # -- the actual subtraction
     # have to use subtract.at since -= will only subtract once in the overlaps,
     # subtract.at will subtract multiple times where waveforms overlap
@@ -1331,7 +1345,7 @@ def full_denoising(
     tpca=None,
     device=None,
     denoiser=None,
-    batch_size=2 ** 10,
+    batch_size=2**10,
     align=False,
     return_tpca_embedding=False,
 ):
@@ -1341,7 +1355,7 @@ def full_denoising(
     assert not align  # still working on that
 
     waveforms = torch.as_tensor(waveforms, device=device, dtype=torch.float)
-    
+
     if not waveforms.numel():
         if return_tpca_embedding:
             embed = np.full(
@@ -1354,34 +1368,30 @@ def full_denoising(
     # those are filled with NaNs, which will blow up PCA. so, here
     # we grab just the non-NaN channels.
 
-    in_probe_channel_index = torch.as_tensor(extract_channel_index, device=device) < num_channels
+    in_probe_channel_index = (
+        torch.as_tensor(extract_channel_index, device=device) < num_channels
+    )
     in_probe_index = in_probe_channel_index[maxchans]
     waveforms = waveforms.permute(0, 2, 1)
     wfs_in_probe = waveforms[in_probe_index]
 
     # Apply NN denoiser (skip if None) #doesn't matter if wf on channels or everywhere
     if denoiser is not None:
-        results = []
         for bs in range(0, wfs_in_probe.shape[0], batch_size):
             be = min(bs + batch_size, N * C)
             wfs_in_probe[bs:be] = denoiser(wfs_in_probe[bs:be])
-        del results
 
     # Temporal PCA while we are still transposed
     if tpca is not None:
-        if torch.is_tensor(wfs_in_probe):
-            wfs_in_probe = wfs_in_probe.cpu().numpy()
         tpca_embeds = tpca.raw_transform(wfs_in_probe)
         wfs_in_probe = tpca.raw_inverse_transform(tpca_embeds)
         if not return_tpca_embedding:
             del tpca_embeds
 
     # back to original shape
-    wfs_in_probe = torch.as_tensor(wfs_in_probe, device=device, dtype=torch.float)
-    
     waveforms[in_probe_index] = wfs_in_probe
     waveforms = waveforms.permute(0, 2, 1)
-    
+
     # enforce decrease
     if do_enforce_decrease:
         if radial_parents is None and probe is not None:
