@@ -99,7 +99,8 @@ def psolvecorr(
     if max_dt is not None and max_dt > 0:
         S *= la.toeplitz(
             np.r_[
-                np.ones(max_dt, dtype=S.dtype), np.zeros(T - max_dt, dtype=S.dtype)
+                np.ones(max_dt, dtype=S.dtype),
+                np.zeros(T - max_dt, dtype=S.dtype),
             ]
         )
     I, J = np.where(S > 0)
@@ -110,8 +111,12 @@ def psolvecorr(
         pair_weights = S[I, J]
     else:
         pair_weights = np.ones(n_sampled)
-    M = sparse.csr_matrix((pair_weights, (range(n_sampled), I)), shape=(n_sampled, T))
-    N = sparse.csr_matrix((pair_weights, (range(n_sampled), J)), shape=(n_sampled, T))
+    M = sparse.csr_matrix(
+        (pair_weights, (range(n_sampled), I)), shape=(n_sampled, T)
+    )
+    N = sparse.csr_matrix(
+        (pair_weights, (range(n_sampled), J)), shape=(n_sampled, T)
+    )
     A = M - N
     V = pair_weights * D[I, J]
 
@@ -178,7 +183,8 @@ def psolvecorr_spatial(
     if max_dt is not None and max_dt > 0:
         horiz = la.toeplitz(
             np.r_[
-                np.ones(max_dt, dtype=W.dtype), np.zeros(T - max_dt, dtype=W.dtype)
+                np.ones(max_dt, dtype=W.dtype),
+                np.zeros(T - max_dt, dtype=W.dtype),
             ]
         )
         for k in range(W.shape[0]):
@@ -449,19 +455,18 @@ def normxcorr1d(
         raise ValueError(f"Unknown conv_engine {conv_engine}")
 
     x = npx.atleast_2d(x)
-    num_templates, length = template.shape
-    num_inputs, length_ = template.shape
-    assert length == length_
+    num_templates, lengtht = template.shape
+    num_inputs, lengthx = x.shape
 
     # generalize over weighted / unweighted case
     device_kw = {} if conv_engine == "numpy" else dict(device=x.device)
-    ones = npx.ones((1, 1, length), dtype=x.dtype, **device_kw)
+    onesx = npx.ones((1, 1, lengthx), dtype=x.dtype, **device_kw)
     no_weights = weights is None
     if no_weights:
-        weights = ones
+        weights = npx.ones((1, 1, lengtht), dtype=x.dtype, **device_kw)
         wt = template[:, None, :]
     else:
-        assert weights.shape == (length,)
+        assert weights.shape == (lengtht,)
         weights = weights[None, None]
         wt = template[:, None, :] * weights
 
@@ -471,43 +476,43 @@ def normxcorr1d(
     # compute expectations
     # how many points in each window? seems necessary to normalize
     # for numerical stability.
-    N = conv1d(ones, weights, padding=padding)
+    Nx = conv1d(onesx, weights, padding=padding)
     if centered:
-        Et = conv1d(ones, wt, padding=padding)
-        Et /= N
+        Et = conv1d(onesx, wt, padding=padding)
+        Et /= Nx
         Ex = conv1d(x[:, None, :], weights, padding=padding)
-        Ex /= N
+        Ex /= Nx
 
     # compute (weighted) covariance
     # important: the formula E[XY] - EX EY is well-suited here,
     # because the means are naturally subtracted correctly
     # patch-wise. you couldn't pre-subtract them!
     cov = conv1d(x[:, None, :], wt, padding=padding)
-    cov /= N
+    cov /= Nx
     if centered:
         cov -= Ex * Et
 
     # compute variances for denominator, using var X = E[X^2] - (EX)^2
     if normalized:
         var_template = conv1d(
-            ones, wt * template[:, None, :], padding=padding
+            onesx, wt * template[:, None, :], padding=padding
         )
-        var_template /= N
-        var_x = conv1d(
-            npx.square(x)[:, None, :], weights, padding=padding
-        )
-        var_x /= N
+        var_template /= Nx
+        var_x = conv1d(npx.square(x)[:, None, :], weights, padding=padding)
+        var_x /= Nx
         if centered:
             var_template -= npx.square(Et)
             var_x -= npx.square(Ex)
+
+        # fill in zeros to avoid problems when dividing
+        var_template[var_template == 0] = 1
+        var_x[var_x == 0] = 1
 
     # now find the final normxcorr
     corr = cov  # renaming for clarity
     if normalized:
         corr /= npx.sqrt(var_x)
         corr /= npx.sqrt(var_template)
-        # get rid of NaNs in zero-variance areas
-        corr[~npx.isfinite(corr)] = 0
 
     return corr
 
@@ -528,7 +533,9 @@ def scipy_conv1d(input, weights, padding="valid"):
         length_out = length - 2 * (kernel_size // 2)
     elif isinstance(padding, int):
         mode = "valid"
-        input = np.pad(input, [*[(0, 0)] * (input.ndim - 1), (padding, padding)])
+        input = np.pad(
+            input, [*[(0, 0)] * (input.ndim - 1), (padding, padding)]
+        )
         length_out = length - (kernel_size - 1) + 2 * padding
     else:
         raise ValueError(f"Unknown padding {padding}")
@@ -545,7 +552,15 @@ def scipy_conv1d(input, weights, padding="valid"):
 
 
 def calc_corr_decent_pair(
-    raster_a, raster_b, disp=None, batch_size=32, step_size=1, device=None
+    raster_a,
+    raster_b,
+    weights=None,
+    disp=None,
+    batch_size=32,
+    normalized=True,
+    centered=True,
+    possible_displacement=None,
+    device=None,
 ):
     """Calculate TxT normalized xcorr and best displacement matrices
     Given a DxT raster, this computes normalized cross correlations for
@@ -554,8 +569,7 @@ def calc_corr_decent_pair(
     corresponding displacement, resulting in two TxT matrices: one for
     the normxcorrs at the best displacement, and the matrix of the best
     displacements.
-    Note the correlations are normalized but not centered (no mean is
-    subtracted).
+
     Arguments
     ---------
     raster : DxT array
@@ -569,19 +583,19 @@ def calc_corr_decent_pair(
     device : torch device
     Returns: D, C: TxT arrays
     """
-    # this is not implemented but could be done easily via stride
-    if step_size > 1:
-        raise NotImplementedError(
-            "Have not implemented step_size > 1 yet, reach out if wanted"
-        )
-
     D, Ta = raster_a.shape
     D_, Tb = raster_b.shape
-    assert D == D_
 
     # sensible default: at most half the domain.
-    disp = disp or D // 2
-    assert disp > 0
+    if disp is None:
+        disp == D // 2
+
+    # range of displacements
+    if D == D_:
+        if possible_displacement is None:
+            possible_displacement = np.arange(-disp, disp + 1)
+    else:
+        assert possible_displacement is not None
 
     # pick torch device if unset
     if device is None:
@@ -591,50 +605,30 @@ def calc_corr_decent_pair(
             else torch.device("cpu")
         )
 
-    # range of displacements
-    possible_displacement = np.arange(-disp, disp + step_size, step_size)
-
     # process rasters into the tensors we need for conv2ds below
-    raster_a = torch.tensor(
-        raster_a.T, dtype=torch.float32, device=device, requires_grad=False
-    )
+    raster_a = torch.as_tensor(
+        raster_a, dtype=torch.float32, device=device, requires_grad=False
+    ).T
     # normalize over depth for normalized (uncentered) xcorrs
-    raster_a /= torch.sqrt((raster_a**2).sum(dim=1, keepdim=True))
-    image = raster_a[:, None, None, :]  # T11D - NCHW
-    raster_b = torch.tensor(
-        raster_b.T, dtype=torch.float32, device=device, requires_grad=False
-    )
-    # normalize over depth for normalized (uncentered) xcorrs
-    raster_b /= torch.sqrt((raster_b**2).sum(dim=1, keepdim=True))
-    weights = raster_b[:, None, None, :]  # T11D - OIHW
+    raster_b = torch.as_tensor(
+        raster_b, dtype=torch.float32, device=device, requires_grad=False
+    ).T
 
     D = np.empty((Ta, Tb), dtype=np.float32)
     C = np.empty((Ta, Tb), dtype=np.float32)
-    for i in range(0, Ta, batch_size):
-        batch = image[i : i + batch_size]
-        corr = F.conv2d(  # BT1P
-            batch,  # B11D
-            weights,
-            padding=[0, possible_displacement.size // 2],
+    for i in range(0, Tb, batch_size):
+        corr = normxcorr1d(
+            raster_a,
+            raster_b[i : i + batch_size],
+            weights=weights,
+            padding=possible_displacement.size // 2,
+            normalized=normalized,
+            centered=centered,
         )
-        max_corr, best_disp_inds = torch.max(corr[:, :, 0, :], dim=2)
+        max_corr, best_disp_inds = torch.max(corr, dim=2)
         best_disp = possible_displacement[best_disp_inds.cpu()]
-        D[i : i + batch_size] = best_disp
-        C[i : i + batch_size] = max_corr.cpu()
-
-    # free GPU memory (except torch drivers... happens when process ends)
-    del (
-        raster_a,
-        raster_b,
-        corr,
-        batch,
-        max_corr,
-        best_disp_inds,
-        image,
-        weights,
-    )
-    gc.collect()
-    torch.cuda.empty_cache()
+        D[:, i : i + batch_size] = best_disp.T
+        C[:, i : i + batch_size] = max_corr.cpu().T
 
     return D, C
 
