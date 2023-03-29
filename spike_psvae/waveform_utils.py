@@ -3,6 +3,7 @@ import numpy as np
 from scipy.spatial.distance import cdist, pdist, squareform
 from sklearn.decomposition import PCA, TruncatedSVD
 import torch
+import torch.nn.functional as F
 
 # %%
 from . import spikeio
@@ -20,8 +21,8 @@ def fit_tpca_bin(
     spike_length_samples=121,
     spatial_radius=75,
     do_nn_denoise=False,
-    denoiser_init_kwargs={}, 
-    denoiser_weights_path=None, 
+    denoiser_init_kwargs={},
+    denoiser_weights_path=None,
     device=None,
     batch_size=1024,
     seed=0,
@@ -43,7 +44,7 @@ def fit_tpca_bin(
         spike_length_samples=spike_length_samples,
         max_channels=spike_index[choices, 1],
     )
-        
+
     # NTC -> NCT
     tpca_waveforms = tpca_waveforms.transpose(0, 2, 1).reshape(
         -1, spike_length_samples
@@ -51,11 +52,12 @@ def fit_tpca_bin(
     which = np.isfinite(tpca_waveforms[:, 0])
     tpca_waveforms = tpca_waveforms[which]
 
-    
     if do_nn_denoise:
         # pick torch device if it's not supplied
         if device is None:
-            device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+            device = torch.device(
+                "cuda" if torch.cuda.is_available() else "cpu"
+            )
             if device.type == "cuda":
                 torch.cuda._lazy_init()
         else:
@@ -123,7 +125,9 @@ def fit_tpca_bin_clustered(
     rg = np.random.default_rng(seed)
 
     # choose spikes w.p. propto 1/cluster count
-    units, inverse, counts = np.unique(spike_labels, return_inverse=True, return_counts=True)
+    units, inverse, counts = np.unique(
+        spike_labels, return_inverse=True, return_counts=True
+    )
     probs = 1.0 / counts.astype(np.float64)
     probs[units < 0] = 0.0
     probs = probs[inverse]
@@ -163,7 +167,9 @@ def fit_tpca_bin_clustered(
         tpca = PCA(tpca_rank).fit(tpca_waveforms)
     else:
         if normalized:
-            tpca_waveforms /= np.linalg.norm(tpca_waveforms, axis=1, keepdims=True)
+            tpca_waveforms /= np.linalg.norm(
+                tpca_waveforms, axis=1, keepdims=True
+            )
 
         # TruncatedSVD is sklearn's uncentered PCA
         tpca = tsvd = TruncatedSVD(tpca_rank).fit(tpca_waveforms)
@@ -272,7 +278,10 @@ def make_contiguous_channel_index(n_channels, n_neighbors=40):
 
 # %%
 def full_channel_index(n_channels):
-    return np.arange(n_channels)[None, :] * np.ones(n_channels, dtype=int)[:, None]
+    return (
+        np.arange(n_channels)[None, :]
+        * np.ones(n_channels, dtype=int)[:, None]
+    )
 
 
 # %%
@@ -309,6 +318,16 @@ def make_channel_index(geom, radius, steps=1, distance_order=False, p=2):
         # fill entries with the sorted neighbor indexes
         channel_index[current, : ch_idx.shape[0]] = ch_idx
 
+    return channel_index
+
+
+def closest_chans_channel_index(geom, n_channels):
+    assert n_channels <= len(geom)
+    channel_index = np.empty((len(geom), n_channels), dtype=int)
+    for c, pos in enumerate(geom):
+        channel_index[c] = np.argsort(np.square(geom - pos[None]).sum(1))[
+            :n_channels
+        ]
     return channel_index
 
 
@@ -402,9 +421,12 @@ def get_channel_subset(
         rel_sub_channel_index.append(s)
     rel_sub_channel_index = np.array(rel_sub_channel_index)
 
-    waveforms = np.pad(
-        waveforms, [(0, 0), (0, 0), (0, 1)], constant_values=fill_value
-    )
+    if torch.is_tensor(waveforms):
+        waveforms = F.pad(waveforms, (0, 1), value=fill_value)
+    else:
+        waveforms = np.pad(
+            waveforms, [(0, 0), (0, 0), (0, 1)], constant_values=fill_value
+        )
 
     return waveforms[
         np.arange(N)[:, None, None],

@@ -31,8 +31,8 @@ def get_templates(
     tpca_n_wfs=50_000,
     use_previous_max_channels=False,
     do_nn_denoise=False,
-    denoiser_init_kwargs={}, 
-    denoiser_weights_path=None, 
+    denoiser_init_kwargs={},
+    denoiser_weights_path=None,
     device=None,
     batch_size=1024,
     pbar=True,
@@ -122,8 +122,8 @@ def get_templates(
             spike_length_samples=spike_length_samples,
             spatial_radius=tpca_radius,
             do_nn_denoise=do_nn_denoise,
-            denoiser_init_kwargs=denoiser_init_kwargs, 
-            denoiser_weights_path=denoiser_weights_path, 
+            denoiser_init_kwargs=denoiser_init_kwargs,
+            denoiser_weights_path=denoiser_weights_path,
             device=device,
             batch_size=batch_size,
             seed=seed,
@@ -166,10 +166,10 @@ def get_templates(
             spike_length_samples,
             raw_only,
             do_nn_denoise,
-            denoiser_init_kwargs, 
-            denoiser_weights_path, 
+            denoiser_init_kwargs,
+            denoiser_weights_path,
             device,
-            batch_size
+            batch_size,
         ),
     ) as pool:
         for unit, raw_template, denoised_template, snr_by_chan in xqdm(
@@ -260,10 +260,10 @@ def get_denoised_template_single(
     pbar=True,
     tpca_n_wfs=50_000,
     do_nn_denoise=False,
-    denoiser_init_kwargs={}, 
-    denoiser_weights_path=None, 
+    denoiser_init_kwargs={},
+    denoiser_weights_path=None,
     device=None,
-    batch_size=1024,    
+    batch_size=1024,
     seed=0,
 ):
     (
@@ -283,10 +283,10 @@ def get_denoised_template_single(
         trough_offset=trough_offset,
         spike_length_samples=spike_length_samples,
         do_nn_denoise=do_nn_denoise,
-        denoiser_init_kwargs=denoiser_init_kwargs, 
-        denoiser_weights_path=denoiser_weights_path, 
+        denoiser_init_kwargs=denoiser_init_kwargs,
+        denoiser_weights_path=denoiser_weights_path,
         device=device,
-        batch_size=batch_size,    
+        batch_size=batch_size,
     )
 
     # SNR-weighted combination to create the template
@@ -325,8 +325,8 @@ def get_raw_denoised_template_single(
     trough_offset=42,
     spike_length_samples=121,
     do_nn_denoise=False,
-    denoiser_init_kwargs={}, 
-    denoiser_weights_path=None, 
+    denoiser_init_kwargs={},
+    denoiser_weights_path=None,
     device=None,
     batch_size=1024,
 ):
@@ -344,7 +344,7 @@ def get_raw_denoised_template_single(
         trough_offset=trough_offset,
         spike_length_samples=spike_length_samples,
     )
-    
+
     if do_nn_denoise:
         N, T, C = waveforms.shape
         waveforms = waveforms.transpose(0, 2, 1).reshape(
@@ -352,7 +352,9 @@ def get_raw_denoised_template_single(
         )
         # pick torch device if it's not supplied
         if device is None:
-            device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+            device = torch.device(
+                "cuda" if torch.cuda.is_available() else "cpu"
+            )
             if device.type == "cuda":
                 torch.cuda._lazy_init()
         else:
@@ -380,8 +382,7 @@ def get_raw_denoised_template_single(
             )
         waveforms = np.concatenate(results, axis=0)
         del results
-        waveforms = waveforms.reshape(N,C,T).transpose(0, 2, 1)
-    
+        waveforms = waveforms.reshape(N, C, T).transpose(0, 2, 1)
 
     if do_temporal_decrease:
         denoise.enforce_temporal_decrease(waveforms, in_place=True)
@@ -526,10 +527,10 @@ def template_worker(unit):
             trough_offset=p.trough_offset,
             spike_length_samples=p.spike_length_samples,
             do_nn_denoise=p.do_nn_denoise,
-            denoiser_init_kwargs=p.denoiser_init_kwargs, 
-            denoiser_weights_path=p.denoiser_weights_path, 
+            denoiser_init_kwargs=p.denoiser_init_kwargs,
+            denoiser_weights_path=p.denoiser_weights_path,
             device=p.device,
-            batch_size=p.batch_size,    
+            batch_size=p.batch_size,
         )
 
     return unit, raw_template, denoised_template, snr_by_channel
@@ -551,8 +552,8 @@ def template_worker_init(
     spike_length_samples,
     raw_only,
     do_nn_denoise,
-    denoiser_init_kwargs, 
-    denoiser_weights_path, 
+    denoiser_init_kwargs,
+    denoiser_weights_path,
     device,
     batch_size,
 ):
@@ -575,7 +576,6 @@ def template_worker_init(
     p.denoiser_weights_path = denoiser_weights_path
     p.device = device
     p.batch_size = batch_size
-
 
 
 # %%
