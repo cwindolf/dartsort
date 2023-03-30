@@ -124,7 +124,7 @@ if __name__ == "__main__":
     if args.nogpu:
         os.environ["CUDA_VISIBLE_DEVICES"] = ""
 
-    sub_h5 = subtract.subtraction(
+    sub_h5 = subtract.subtraction_binary(
         args.standardized_bin,
         args.out_folder,
         geom=geom,
@@ -175,11 +175,11 @@ if __name__ == "__main__":
                 del h5["dispmap"]
 
             if do_reg:
-                samples = h5["spike_index"][:, 0] - h5["start_sample"][()]
+                samples = h5["spike_index"][:, 0] # does not exist anymore - h5["start_sample"][()]
                 z_abs = h5["localizations"][:, 2]
                 maxptps = h5["maxptps"]
 
-                z_reg, dispmap = ibme.register_nonrigid(
+                z_reg, dispmap, extra = ibme.register_nonrigid(
                     maxptps,
                     z_abs,
                     samples / 30000,
