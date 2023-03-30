@@ -228,7 +228,7 @@ def register_nonrigid(
         geom,
         win_step_um,
         win_sigma_um,
-        margin_um=0,
+        margin_um=-disp,
         win_shape=window_shape,
         return_locs=False,
         zero_threshold=1e-5,
@@ -258,9 +258,10 @@ def register_nonrigid(
 
         # arithmetic to compute the lags in um corresponding to
         # corr argmaxes
-        n_left = disp + sl.start - b_low
-        n_right = disp + b_high - sl.stop
-        poss_disp = np.arange(-n_left, n_right + 1) * bin_um
+        padding = 0
+        n_left = padding + sl.start - b_low
+        n_right = padding + b_high - sl.stop
+        poss_disp = -np.arange(-n_left, n_right + 1) * bin_um
 
         print(f"{disp=} {raster_[sl].shape=} {raster_[b_low:b_high].shape=}")
         print(f"{(sl.start - b_low)=} {(b_high - sl.stop)=}")
@@ -270,7 +271,7 @@ def register_nonrigid(
             raster_[sl],
             raster_[b_low:b_high],
             weights=window[sl],
-            disp=disp,
+            disp=padding,
             batch_size=batch_size,
             normalized=normalized,
             possible_displacement=poss_disp,
