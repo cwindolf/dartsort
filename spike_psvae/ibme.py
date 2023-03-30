@@ -262,10 +262,6 @@ def register_nonrigid(
         n_right = disp + b_high - sl.stop
         poss_disp = np.arange(-n_left, n_right + 1) * bin_um
 
-        print(f"{disp=} {raster_[sl].shape=} {raster_[b_low:b_high].shape=}")
-        print(f"{(sl.start - b_low)=} {(b_high - sl.stop)=}")
-        print(f"{n_left=} {n_right=} {poss_disp.shape=}")
-
         D, C = calc_corr_decent_pair(
             raster_[sl],
             raster_[b_low:b_high],
