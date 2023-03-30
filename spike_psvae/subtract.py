@@ -382,16 +382,11 @@ def subtraction(
                 denoiser_weights_path=denoiser_weights_path,
                 n_sec_pca=n_sec_pca,
                 random_seed=random_seed,
-                device=device,
+                device="cpu",
                 trough_offset=trough_offset,
                 spike_length_samples=spike_length_samples,
                 dtype=dtype,
             )
-
-        # try to free up some memory on GPU that might have been used above
-        if device.type == "cuda":
-            gc.collect()
-            torch.cuda.empty_cache()
 
     # train featurizers
     if any(f.needs_fit for f in extra_features + fit_feats):
@@ -423,7 +418,7 @@ def subtraction(
                 denoiser_weights_path=denoiser_weights_path,
                 n_sec_pca=n_sec_pca,
                 random_seed=random_seed,
-                device=device,
+                device="cpu",
                 dtype=dtype,
                 trough_offset=trough_offset,
                 spike_length_samples=spike_length_samples,
@@ -536,7 +531,14 @@ def subtraction(
                 denoised_tpca_feat if do_clean else None,
             ),
         ) as pool:
-            count = 0
+            count = sum(
+                s < last_sample
+                for s in range(
+                    0,
+                    recording.get_num_samples(),
+                    batch_len_samples,
+                )
+            )
             for result in tqdm(
                 pool.map(_subtraction_batch, jobs),
                 total=n_batches,
@@ -550,6 +552,9 @@ def subtraction(
                     if save_residual:
                         np.load(result.residual).tofile(residual)
                         Path(result.residual).unlink()
+                    
+                    if result.spike_index is None:
+                        continue
 
                     # grow arrays as necessary and write results
                     spike_index.resize(N + N_new, axis=0)
