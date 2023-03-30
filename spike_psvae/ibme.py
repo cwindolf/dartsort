@@ -1,13 +1,27 @@
 import numpy as np
-import pywt
 import torch
 from scipy.stats import norm
 from scipy.interpolate import interp1d, RectBivariateSpline
-from skimage.restoration import denoise_nl_means, estimate_sigma
 from tqdm.auto import tqdm
+from scipy.ndimage import gaussian_filter1d
+from scipy import signal
+from spikeinterface.sortingcomponents.motion_estimation import (
+    get_windows as si_get_windows,
+)
 
-from .ibme_fast_raster import raster as _raster
-from .ibme_corr import register_raster_rigid, calc_corr_decent, psolvecorr_spatial
+from .ibme_corr import (
+    register_raster_rigid,
+    calc_corr_decent,
+    calc_corr_decent_pair,
+    psolvecorr,
+    psolvecorr_spatial,
+)
+from .motion_est import (
+    RigidMotionEstimate,
+    NonrigidMotionEstimate,
+    IdentityMotionEstimate,
+    ComposeMotionEstimates,
+)
 
 
 # -- main functions: rigid and nonrigid registration
@@ -19,15 +33,17 @@ def register_rigid(
     times,
     disp=None,
     robust_sigma=0.0,
-    denoise_sigma=0.1,
     corr_threshold=0.0,
     adaptive_mincorr_percentile=None,
     normalized=True,
-    destripe=False,
     max_dt=None,
     batch_size=1,
     prior_lambda=0,
     return_extra=False,
+    bin_um=1,
+    bin_s=1,
+    amp_scale_fn=np.log1p,
+    gaussian_smoothing_sigma_um=0,
 ):
     """1D rigid registration
 
@@ -59,8 +75,14 @@ def register_rigid(
         The estimated displacement for each time bin.
     """
     # -- compute time/depth binned amplitude averages
-    raster, dd, tt = fast_raster(
-        amps, depths, times, sigma=denoise_sigma, destripe=destripe
+    raster, spatial_bin_edges_um, time_bin_edges_s = fast_raster(
+        amps,
+        depths,
+        times,
+        bin_um=bin_um,
+        bin_s=bin_s,
+        amp_scale_fn=amp_scale_fn,
+        gaussian_smoothing_sigma_um=gaussian_smoothing_sigma_um,
     )
 
     # -- main routine from other file `ibme_corr`
@@ -75,73 +97,18 @@ def register_rigid(
         adaptive_mincorr_percentile=adaptive_mincorr_percentile,
         prior_lambda=prior_lambda,
     )
-    extra = dict(D=D, C=C)
+    p = p * bin_um
 
-    # return new interpolated depths for the caller
-    depths_reg = warp_rigid(depths, times, tt, p)
+    rme = RigidMotionEstimate(p, time_bin_edges_s)
+    extra = dict(
+        D=D,
+        C=C,
+        spatial_bin_edges_um=spatial_bin_edges_um,
+        time_bin_edges_s=time_bin_edges_s,
+    )
 
-    if return_extra:
-        return depths_reg, p, extra
-
-    return depths_reg, p
-
-
-def get_windows(
-    n_windows,
-    depth_total,
-    widthmul=1.0,
-    window_shape="gaussian",
-):
-    windows = np.zeros((n_windows, depth_total))
-    slices = []
-
-    space = depth_total // (n_windows + 1)
-    locs = np.linspace(space, depth_total - space, n_windows)
-    scale = widthmul * depth_total / n_windows
-    depth_domain = np.arange(depth_total)
-
-    if window_shape == "gaussian":
-        for k, loc in enumerate(locs):
-            windows[k, :] = norm.pdf(depth_domain, loc=loc, scale=scale)
-            windows[k, :] *= (loc - 3 * scale <= depth_domain) & (depth_domain <= loc + 3 * scale)
-            in_win = np.flatnonzero(windows[k, :])
-            slices.append(
-                slice(in_win[0], in_win[-1])
-            )
-    elif window_shape == "rect":
-        for k, loc in enumerate(locs):
-            slices.append(
-                slice(
-                    max(0, int(np.floor(loc - scale))),
-                    min(depth_total, int(np.floor(loc + scale)))),
-            )
-            windows[k, slices[-1]] = 1
-    elif window_shape == "parabolic":
-        for k, loc in enumerate(locs):
-            slices.append(
-                slice(
-                    max(0, int(np.floor(loc - scale))),
-                    min(depth_total, int(np.floor(loc + scale)))),
-            )
-            win = -np.square(np.arange(slices[-1].start, slices[-1].stop) - loc)
-            win -= win.min()
-            win /= win.sum()
-            windows[k, slices[-1]] = win
-    elif window_shape == "triangle":
-        for k, loc in enumerate(locs):
-            slices.append(
-                slice(
-                    max(0, int(np.floor(loc - scale))),
-                    min(depth_total, int(np.floor(loc + scale)))),
-            )
-            win = -np.abs(np.arange(slices[-1].start, slices[-1].stop) - loc)
-            win -= win.min()
-            win /= win.sum()
-            windows[k, slices[-1]] = win
-    else:
-        assert False
-
-    return windows, slices
+    return rme, extra
+    # depths_reg = rme.correct_s(times, depths)
 
 
 @torch.no_grad()
@@ -149,23 +116,29 @@ def register_nonrigid(
     amps,
     depths,
     times,
+    geom,
     robust_sigma=0.0,
-    denoise_sigma=0.1,
     corr_threshold=0.0,
+    soft_weights=True,
     window_shape="gaussian",
     adaptive_mincorr_percentile=None,
     prior_lambda=0,
     spatial_prior=False,
     normalized=True,
     rigid_disp=400,
-    disp=800,
+    disp=100,
     rigid_init=False,
-    n_windows=10,
+    win_step_um=100,
+    win_sigma_um=100,
     widthmul=1.0,
     max_dt=None,
-    destripe=False,
     device=None,
     batch_size=1,
+    bin_um=1,
+    bin_s=1,
+    amp_scale_fn=np.log1p,
+    gaussian_smoothing_sigma_um=0,
+    upsample_to_histogram_bin=False,
 ):
     """1D nonrigid registration
 
@@ -208,25 +181,12 @@ def register_nonrigid(
     total_shift : DxT array
         The displacement map
     """
-    if isinstance(n_windows, int):
-        n_windows = [n_windows]
     if device is None:
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    offset = depths.min()
-
-    # set origin to min z
-    depths = depths - offset
-
-    # initialize displacement map
-    D = 1 + int(np.floor(depths.max()))
-    T = int(np.floor(times.max())) + 1
-    total_shift = np.zeros((D, T))
-
-    extra = dict(D=D, T=T)
 
     # first pass of rigid registration
     if rigid_init:
-        depths, p = register_rigid(
+        first_me, extra_rigid = register_rigid(
             amps,
             depths,
             times,
@@ -237,91 +197,173 @@ def register_nonrigid(
             normalized=normalized,
             batch_size=batch_size,
             disp=rigid_disp,
-            denoise_sigma=denoise_sigma,
-            destripe=destripe,
             max_dt=max_dt,
+            bin_s=bin_s,
+            bin_um=bin_um,
+            amp_scale_fn=amp_scale_fn,
+            gaussian_smoothing_sigma_um=gaussian_smoothing_sigma_um,
         )
-        total_shift[:, :] = p[None, :]
+        extra = dict(extra_rigid=extra_rigid)
+    else:
+        first_me = IdentityMotionEstimate()
+        extra = {}
+    depths1 = first_me.correct_s(times, depths)
 
-    for nwin in n_windows:
-        raster, dd, tt = fast_raster(
-            amps, depths, times, sigma=denoise_sigma, destripe=destripe
+    raster, spatial_bin_edges_um, time_bin_edges_s = fast_raster(
+        amps,
+        depths1,
+        times,
+        bin_um=bin_um,
+        bin_s=bin_s,
+        amp_scale_fn=amp_scale_fn,
+        gaussian_smoothing_sigma_um=gaussian_smoothing_sigma_um,
+    )
+    extra["spatial_bin_edges_um"] = spatial_bin_edges_um
+    extra["time_bin_edges_s"] = time_bin_edges_s
+    T = time_bin_edges_s.size - 1
+
+    windows, slices, window_centers = get_windows(
+        bin_um,
+        spatial_bin_edges_um,
+        geom,
+        win_step_um,
+        win_sigma_um,
+        margin_um=0,
+        win_shape=window_shape,
+        return_locs=False,
+        zero_threshold=1e-5,
+    )
+    extra["windows"] = windows
+    extra["window_centers"] = window_centers
+    n_windows = windows.shape[0]
+
+    # torch versions on device
+    windows_ = torch.as_tensor(windows, dtype=torch.float, device=device)
+    raster_ = torch.as_tensor(raster, dtype=torch.float, device=device)
+
+    # estimate each window's displacement
+    if spatial_prior:
+        block_Ds = np.empty((n_windows, T, T))
+        block_Cs = np.empty((n_windows, T, T))
+    else:
+        ps = np.empty((n_windows, T))
+
+    for k, (window, sl) in enumerate(
+        zip(tqdm(windows_, desc="windows"), slices)
+    ):
+        # we search for the template (windowed part of raster a)
+        # within a larger-than-the-window neighborhood in raster b
+        b_low = max(0, sl.start - disp)
+        b_high = min(raster_.shape[0], sl.stop + disp)
+
+        # arithmetic to compute the lags in um corresponding to
+        # corr argmaxes
+        n_left = disp + sl.start - b_low
+        n_right = disp + b_high - sl.stop
+        poss_disp = np.arange(-n_left, n_right + 1) * bin_um
+
+        print(f"{disp=} {raster_[sl].shape=} {raster_[b_low:b_high].shape=}")
+        print(f"{(sl.start - b_low)=} {(b_high - sl.stop)=}")
+        print(f"{n_left=} {n_right=} {poss_disp.shape=}")
+
+        D, C = calc_corr_decent_pair(
+            raster_[sl],
+            raster_[b_low:b_high],
+            weights=window[sl],
+            disp=disp,
+            batch_size=batch_size,
+            normalized=normalized,
+            possible_displacement=poss_disp,
+            device=device,
         )
 
-        windows, slices = get_windows(
-            nwin,
-            raster.shape[0],
-            widthmul=widthmul,
-            window_shape=window_shape,
-        )
-        extra["windows"] = windows
-
-        # torch versions on device
-        windows_ = torch.as_tensor(windows, dtype=torch.float, device=device)
-        raster_ = torch.as_tensor(raster, dtype=torch.float, device=device)
-
-        # estimate each window's displacement
-        if not spatial_prior:
-            ps = np.empty((nwin, T))
-            for k, window in enumerate(tqdm(windows_, desc="windows")):
-                p, D, C = register_raster_rigid(
-                    raster_[slices[k]],
-                    weights=window[slices[k]],
-                    mincorr=corr_threshold,
-                    normalized=normalized,
-                    robust_sigma=robust_sigma,
-                    max_dt=max_dt,
-                    batch_size=batch_size,
-                    pbar=False,
-                    prior_lambda=prior_lambda,
-                    adaptive_mincorr_percentile=adaptive_mincorr_percentile,
-                )
-                ps[k] = p
+        if spatial_prior:
+            block_Ds[k] = D
+            block_Cs[k] = C
         else:
-            block_Ds = np.empty((nwin, T, T))
-            block_Cs = np.empty((nwin, T, T))
-            for k, window in enumerate(tqdm(windows_, desc="windows")):
-                D, C = calc_corr_decent(
-                    raster_[slices[k]],
-                    weights=window[slices[k]],
-                    disp=max(25, int(np.ceil(disp / nwin))),
-                    normalized=normalized,
-                    batch_size=batch_size,
-                    pbar=False,
-                )
-                block_Ds[k] = D
-                block_Cs[k] = C
-
-            ps = psolvecorr_spatial(
-                block_Ds,
-                block_Cs,
+            ps[k] = psolvecorr(
+                D,
+                C,
                 mincorr=corr_threshold,
-                max_dt=max_dt,
-                temporal_prior=prior_lambda > 0,
-                spatial_prior=True,
-                reference_displacement="mode_search",
+                robust_sigma=robust_sigma,
+                max_dt=max_dt * bin_s if max_dt is not None else None,
+                prior_lambda=prior_lambda,
+                soft_weights=soft_weights,
             )
 
-        # warp depths
+    if spatial_prior:
+        ps = psolvecorr_spatial(
+            block_Ds,
+            block_Cs,
+            mincorr=corr_threshold,
+            max_dt=max_dt,
+            temporal_prior=prior_lambda > 0,
+            spatial_prior=True,
+            reference_displacement=None,
+        )
+        ps = ps * bin_um
+
+    extra["ps"] = ps
+
+    # warp depths
+    if upsample_to_histogram_bin:
         windows = windows / windows.sum(axis=0, keepdims=True)
         extra["upsample"] = windows
         dispmap = windows.T @ ps
-        depths = warp_nonrigid(
-            depths, times, dispmap, depth_domain=dd, time_domain=tt
+        nrme = NonrigidMotionEstimate(
+            dispmap,
+            time_bin_edges_s=time_bin_edges_s,
+            spatial_bin_edges_um=spatial_bin_edges_um,
         )
-        depths -= depths.min()
+    else:
+        nrme = NonrigidMotionEstimate(
+            ps,
+            time_bin_edges_s=time_bin_edges_s,
+            spatial_bin_centers_um=window_centers,
+        )
 
-        # update displacement map
-        total_shift[:, :] = compose_shifts_in_orig_domain(total_shift, dispmap)
+    total_me = ComposeMotionEstimates(first_me, nrme)
 
-    # back to original coordinates
-    depths -= depths.min()
-    depths += offset
-
-    return depths, total_shift, extra
+    return total_me, extra
 
 
 # -- nonrigid reg helpers
+
+
+def get_windows(
+    bin_um,
+    spatial_bin_edges,
+    geom,
+    win_step_um,
+    win_sigma_um,
+    margin_um=0,
+    win_shape="rect",
+    return_locs=False,
+    zero_threshold=1e-5,
+):
+    windows, locs = si_get_windows(
+        rigid=False,
+        bin_um=bin_um,
+        contact_pos=geom,
+        spatial_bin_edges=spatial_bin_edges,
+        margin_um=margin_um,
+        win_step_um=win_step_um,
+        win_sigma_um=win_sigma_um,
+        win_shape=win_shape,
+    )
+    windows = np.array(windows)
+    locs = np.array(locs)
+
+    windows /= windows.sum(axis=1, keepdims=True)
+    windows[windows < zero_threshold] = 0
+    windows /= windows.sum(axis=1, keepdims=True)
+
+    slices = []
+    for w in windows:
+        in_window = np.flatnonzero(w)
+        slices.append(slice(in_window[0], in_window[-1]))
+
+    return windows, slices, locs
 
 
 def compose_shifts_in_orig_domain(orig_shift, new_shift):
@@ -368,142 +410,83 @@ def compose_shifts_in_orig_domain(orig_shift, new_shift):
     return orig_shift + h.reshape(orig_shift.shape)
 
 
-def warp_nonrigid(depths, times, dispmap, depth_domain=None, time_domain=None):
-    if depth_domain is None:
-        depth_domain = np.arange(int(np.floor(depths.max())) + 1)
-    if time_domain is None:
-        time_domain = np.arange(int(np.floor(times.max())) + 1)
+# -- code for making rasters
 
-    lerp = RectBivariateSpline(
-        depth_domain,
-        time_domain,
-        dispmap,
-        kx=1,
-        ky=1,
+
+def get_bins(depths, times, bin_um, bin_s):
+    spatial_bin_edges_um = np.arange(
+        np.floor(depths.min()),
+        np.ceil(depths.max()) + bin_um,
+        bin_um,
     )
 
-    return depths - lerp(depths, times, grid=False)
+    time_bin_edges_s = np.arange(
+        np.floor(times.min()),
+        np.ceil(times.max()) + bin_s,
+        bin_s,
+    )
 
-
-def warp_rigid(depths, times, time_domain, p):
-    warps = interp1d(time_domain, p, fill_value="extrapolate")(times)
-    depths_reg = depths - warps
-    depths_reg -= depths_reg.min()
-    return depths_reg
-
-
-# -- code for making rasters
+    return spatial_bin_edges_um, time_bin_edges_s
 
 
 def fast_raster(
     amps,
     depths,
     times,
-    dd=None,
-    tt=None,
-    sigma=None,
-    destripe=False,
-    return_N=False,
+    bin_um=1,
+    bin_s=1,
+    amp_scale_fn=np.log1p,
+    gaussian_smoothing_sigma_um=0,
+    avg_in_bin=False,
 ):
-    # could do [0, D] instead of [min depth, max depth]
-    # dd = np.linspace(depths.min(), depths.max(), num=D)
-    if dd is None:
-        D = 1 + int(np.floor(depths.max()))
-        dd = np.arange(0, D)
+    spatial_bin_edges_um, time_bin_edges_s = get_bins(
+        depths, times, bin_um, bin_s
+    )
+
+    if amp_scale_fn is None:
+        weights = np.ones_like(amps)
     else:
-        D = dd.size
+        weights = amp_scale_fn(amps)
 
-    if tt is None:
-        T = 1 + int(np.floor(times.max()))
-        tt = np.arange(0, T)
-
-    M = np.zeros((D, T))
-    N = np.zeros((D, T))
-    R = np.zeros((D, T))
-    times = np.ascontiguousarray(times, dtype=np.float64)
-    depths = np.ascontiguousarray(depths, dtype=np.float64)
-    amps = np.ascontiguousarray(amps, dtype=np.float64)
-    _raster(times, depths, amps, M, N)
-
-    Nnz = np.nonzero(N)
-    R[Nnz] = M[Nnz] / N[Nnz]
-
-    if destripe:
-        R = wtdestripe(R)
-
-    if sigma is not None:
-        nz = np.flatnonzero(R.max(axis=1))
-        if nz.size > 0:
-            R[nz, :] = cheap_anscombe_denoising(
-                R[nz, :], estimate_sig=False, sigma=sigma
+    if gaussian_smoothing_sigma_um:
+        spatial_bin_edges_um_1um = np.arange(
+            np.floor(depths.min()),
+            np.ceil(depths.max()) + 1,
+            1,
+        )
+        r_up = np.histogram2d(
+            depths,
+            times,
+            bins=(spatial_bin_edges_um_1um, time_bin_edges_s),
+            weights=weights,
+        )[0]
+        if avg_in_bin:
+            r_up /= np.maximum(
+                1,
+                np.histogram2d(
+                    depths,
+                    times,
+                    bins=(spatial_bin_edges_um_1um, time_bin_edges_s),
+                )[0],
             )
 
-    if return_N:
-        return R, N, dd, tt
+        r_up = gaussian_filter1d(r_up, gaussian_smoothing_sigma_um / bin_um)
+        r = signal.resample(r_up, spatial_bin_edges_um.size - 1)
+    else:
+        r = np.histogram2d(
+            depths,
+            times,
+            bins=(spatial_bin_edges_um, time_bin_edges_s),
+            weights=weights,
+        )[0]
+        if avg_in_bin:
+            r /= np.maximum(
+                1,
+                np.histogram2d(
+                    depths,
+                    times,
+                    bins=(spatial_bin_edges_um, time_bin_edges_s),
+                )[0],
+            )
 
-    return R, dd, tt
-
-
-def wtdestripe(raster):
-    D, W = raster.shape
-    LL0 = raster
-    wlet = "db5"
-    coeffs = pywt.wavedec2(LL0, wlet)
-    L = len(coeffs)
-    for i in range(1, L):
-        HL = coeffs[i][1]
-        Fb = np.fft.fft2(HL)
-        Fb = np.fft.fftshift(Fb)
-        mid = Fb.shape[0] // 2
-        Fb[mid, :] = 0
-        Fb[mid - 1, :] /= 3
-        Fb[mid + 1, :] /= 3
-        Fb = np.fft.ifftshift(Fb)
-        coeffs[i] = (coeffs[i][0], np.real(np.fft.ifft2(Fb)), coeffs[i][2])
-    LL = pywt.waverec2(coeffs, wlet)
-    LL = np.ascontiguousarray(LL[:D, :W], dtype=raster.dtype)
-    return LL
-
-
-def cheap_anscombe_denoising(
-    z,
-    sigma=1,
-    h=0.1,
-    estimate_sig=True,
-    fast_mode=True,
-    multichannel=False,
-    patch_size=5,
-    patch_distance=5,
-):
-    minmax = (z - z.min()) / (z.max() - z.min())  # scales data to 0-1
-
-    # Gaussianizing Poissonian data
-    z_anscombe = 2.0 * np.sqrt(minmax + (3.0 / 8.0))
-
-    if estimate_sig:
-        sigma = np.mean(estimate_sigma(z_anscombe, multichannel=multichannel))
-        print(f"estimated sigma: {sigma}")
-
-    # Gaussian denoising
-    z_anscombe_denoised = denoise_nl_means(
-        z_anscombe,
-        h=h * sigma,
-        sigma=sigma,
-        fast_mode=fast_mode,
-        patch_size=patch_size,
-        patch_distance=patch_distance,
-    )
-
-    z_inverse_anscombe = (
-        (z_anscombe_denoised / 2.0) ** 2
-        + 0.25 * np.sqrt(1.5) * z_anscombe_denoised**-1
-        - (11.0 / 8.0) * z_anscombe_denoised**-2
-        + (5.0 / 8.0) * np.sqrt(1.5) * z_anscombe_denoised**-3
-        - (1.0 / 8.0)
-    )
-
-    z_inverse_anscombe_scaled = (z.max() - z.min()) * (
-        z_inverse_anscombe - z_inverse_anscombe.min()
-    )
-
-    return z_inverse_anscombe_scaled
+    return r, spatial_bin_edges_um, time_bin_edges_s
