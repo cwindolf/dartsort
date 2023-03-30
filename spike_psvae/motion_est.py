@@ -119,7 +119,7 @@ class IdentityMotionEstimate(MotionEstimate):
 
 class ComposeMotionEstimates(MotionEstimate):
     def __init__(self, *motion_estimates):
-        """Compose motion estimates, each estimated from the previous' corrections"""
+        """Compose motion estimates, if each was estimated from the previous' corrections"""
         self.motion_estimates = motion_estimates
         super().__init__(None)
 
