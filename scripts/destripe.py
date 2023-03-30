@@ -16,6 +16,7 @@ ap.add_argument("input_binary")
 ap.add_argument("--output-binary", type=str, default=None)
 ap.add_argument("--no-bad-channels", action="store_true")
 ap.add_argument("--output-dtype", default="float32")
+ap.add_argument("--robust", default="float32")
 
 args = ap.parse_args()
 
