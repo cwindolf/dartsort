@@ -94,7 +94,7 @@ class NonrigidMotionEstimate(MotionEstimate):
             time_bin_edges_s=time_bin_edges_s,
             time_bin_centers_s=time_bin_centers_s,
             spatial_bin_edges_um=spatial_bin_edges_um,
-            spatial_bin_edges_um=spatial_bin_centers_um,
+            spatial_bin_centers_um=spatial_bin_centers_um,
         )
 
         self.lerp = RectBivariateSpline(
