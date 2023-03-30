@@ -437,6 +437,23 @@ class TPCA(ChunkFeature):
         self.whitener = torch.as_tensor(self.whitener, device=device)
         return self
 
+
+    def raw_fit(self, wfs, max_channels):
+        # For fitting a tpca object with given wfs and max chans
+        N, T, C = wfs.shape
+        wfs = wfs.transpose(0, 2, 1)
+        in_probe_index = self.channel_index < self.channel_index.shape[0]
+        wfs = wfs[in_probe_index[max_channels]]
+        self.tpca.fit(wfs)
+        self.needs_fit = False
+        self.dtype = self.tpca.components_.dtype
+        self.n_components = self.tpca.n_components
+
+        self.components_ = self.tpca.components_
+        self.mean_ = self.tpca.mean_
+        self.whiten = self.tpca.whiten
+        self.whitener = np.sqrt(self.tpca.explained_variance_)
+
     def raw_transform(self, X):
         X = X - self.mean_
         Xt = X @ self.components_.T
