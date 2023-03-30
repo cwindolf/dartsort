@@ -116,6 +116,7 @@ def register_nonrigid(
     amps,
     depths,
     times,
+    geom,
     robust_sigma=0.0,
     corr_threshold=0.0,
     soft_weights=True,
@@ -127,7 +128,8 @@ def register_nonrigid(
     rigid_disp=400,
     disp=100,
     rigid_init=False,
-    n_windows=10,
+    win_step_um=100,
+    win_sigma_um=100,
     widthmul=1.0,
     max_dt=None,
     device=None,
@@ -221,13 +223,19 @@ def register_nonrigid(
     T = time_bin_edges_s.size - 1
 
     windows, slices, window_centers = get_windows(
-        n_windows,
-        raster.shape[0],
-        widthmul=widthmul,
-        window_shape=window_shape,
+        bin_um,
+        spatial_bin_edges_um,
+        geom,
+        win_step_um,
+        win_sigma_um,
+        margin_um=0,
+        win_shape=window_shape,
+        return_locs=False,
+        zero_threshold=1e-5,
     )
     extra["windows"] = windows
     extra["window_centers"] = window_centers
+    n_windows = windows.shape[0]
 
     # torch versions on device
     windows_ = torch.as_tensor(windows, dtype=torch.float, device=device)
@@ -254,6 +262,10 @@ def register_nonrigid(
         n_right = disp + b_high - sl.stop
         poss_disp = np.arange(-n_left, n_right + 1) * bin_um
 
+        print(f"{disp=} {raster_[sl].shape=} {raster_[b_low:b_high].shape=}")
+        print(f"{(sl.start - b_low)=} {(b_high - sl.stop)=}")
+        print(f"{n_left=} {n_right=} {poss_disp.shape=}")
+
         D, C = calc_corr_decent_pair(
             raster_[sl],
             raster_[b_low:b_high],
@@ -274,7 +286,7 @@ def register_nonrigid(
                 C,
                 mincorr=corr_threshold,
                 robust_sigma=robust_sigma,
-                max_dt=max_dt * bin_s,
+                max_dt=max_dt * bin_s if max_dt is not None else None,
                 prior_lambda=prior_lambda,
                 soft_weights=soft_weights,
             )
@@ -319,7 +331,6 @@ def register_nonrigid(
 
 
 def get_windows(
-    n_windows,
     bin_um,
     spatial_bin_edges,
     geom,
@@ -340,11 +351,12 @@ def get_windows(
         win_sigma_um=win_sigma_um,
         win_shape=win_shape,
     )
-    assert windows.shape == (n_windows, spatial_bin_edges.size - 1)
+    windows = np.array(windows)
+    locs = np.array(locs)
 
-    windows /= windows.sum(axis=1)
+    windows /= windows.sum(axis=1, keepdims=True)
     windows[windows < zero_threshold] = 0
-    windows /= windows.sum(axis=1)
+    windows /= windows.sum(axis=1, keepdims=True)
 
     slices = []
     for w in windows:
@@ -463,7 +475,8 @@ def fast_raster(
     else:
         r = np.histogram2d(
             depths,
-            bins=(spatial_bin_edges_um_1um, time_bin_edges_s),
+            times,
+            bins=(spatial_bin_edges_um, time_bin_edges_s),
             weights=weights,
         )[0]
         if avg_in_bin:
