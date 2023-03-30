@@ -596,6 +596,7 @@ def calc_corr_decent_pair(
             possible_displacement = np.arange(-disp, disp + 1)
     else:
         assert possible_displacement is not None
+        assert disp is not None
 
     # pick torch device if unset
     if device is None:
@@ -606,13 +607,9 @@ def calc_corr_decent_pair(
         )
 
     # process rasters into the tensors we need for conv2ds below
-    raster_a = torch.as_tensor(
-        raster_a, dtype=torch.float32, device=device, requires_grad=False
-    ).T
+    raster_a = torch.as_tensor(raster_a, dtype=torch.float32, device=device).T
     # normalize over depth for normalized (uncentered) xcorrs
-    raster_b = torch.as_tensor(
-        raster_b, dtype=torch.float32, device=device, requires_grad=False
-    ).T
+    raster_b = torch.as_tensor(raster_b, dtype=torch.float32, device=device).T
 
     D = np.empty((Ta, Tb), dtype=np.float32)
     C = np.empty((Ta, Tb), dtype=np.float32)
@@ -621,10 +618,11 @@ def calc_corr_decent_pair(
             raster_a,
             raster_b[i : i + batch_size],
             weights=weights,
-            padding=possible_displacement.size // 2,
+            padding=disp,
             normalized=normalized,
             centered=centered,
         )
+        print(f"{corr.shape=}")
         max_corr, best_disp_inds = torch.max(corr, dim=2)
         best_disp = possible_displacement[best_disp_inds.cpu()]
         D[:, i : i + batch_size] = best_disp.T
