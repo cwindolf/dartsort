@@ -356,11 +356,11 @@ class Localization(ChunkFeature):
         elif self.feature == "peak":
             if torch.is_tensor(wfs):
                 abswfs = torch.abs(wfs)
-                argpeaks, peaks = abswfs.max(dim=1)
+                peaks, argpeaks = abswfs.max(dim=1)
                 peaks[torch.isnan(peaks)] = -1
                 mcs = torch.argmax(peaks, dim=1)
                 argpeaks = argpeaks[torch.arange(len(argpeaks)), mcs]
-                ptps = abswfs[torch.arange(len(mcs)), argpeaks, :]
+                ptps = abswfs[torch.arange(len(mcs)), argpeaks, :].cpu().numpy()
             else:
                 peaks = np.max(np.absolute(wfs), axis=1)
                 argpeaks = np.argmax(np.absolute(wfs), axis=1)
@@ -436,6 +436,23 @@ class TPCA(ChunkFeature):
         self.whiten = self.tpca.whiten
         self.whitener = torch.as_tensor(self.whitener, device=device)
         return self
+
+
+    def raw_fit(self, wfs, max_channels):
+        # For fitting a tpca object with given wfs and max chans
+        N, T, C = wfs.shape
+        wfs = wfs.transpose(0, 2, 1)
+        in_probe_index = self.channel_index < self.channel_index.shape[0]
+        wfs = wfs[in_probe_index[max_channels]]
+        self.tpca.fit(wfs)
+        self.needs_fit = False
+        self.dtype = self.tpca.components_.dtype
+        self.n_components = self.tpca.n_components
+
+        self.components_ = self.tpca.components_
+        self.mean_ = self.tpca.mean_
+        self.whiten = self.tpca.whiten
+        self.whitener = np.sqrt(self.tpca.explained_variance_)
 
     def raw_transform(self, X):
         X = X - self.mean_
@@ -675,7 +692,7 @@ class STPCA(ChunkFeature):
             self.T = group["T"][()]
             self.pca = PCA(self.rank)
             self.pca.mean_ = group["pca_mean"][:]
-            self.tpca.components_ = group["pca_components"][:]
+            self.pca.components_ = group["pca_components"][:]
             self.needs_fit = False
         except KeyError:
             pass
