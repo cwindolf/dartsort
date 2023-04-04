@@ -195,8 +195,8 @@ if __name__ == "__main__":
         recording.set_dummy_probe_from_locations(
             geom, shape_params=dict(radius=10)
         )
-
-        recording = recording.frame_slice(start_frame=int(sampling_rate * t_start_preproc), end_frame=int(sampling_rate * t_end_preproc))
+        if t_end_preproc is not None:
+            recording = recording.frame_slice(start_frame=int(sampling_rate * t_start_preproc), end_frame=int(sampling_rate * t_end_preproc))
 
         if apply_filter:
             recording = highpass_filter(recording, freq_min=low_frequency, filter_order=order)
