@@ -136,8 +136,10 @@ def register_nonrigid(
     batch_size=1,
     bin_um=1,
     bin_s=1,
+    avg_in_bin=False,
     amp_scale_fn=np.log1p,
-    gaussian_smoothing_sigma_um=0,
+    post_transform=np.log1p,
+    gaussian_smoothing_sigma_um=3,
     upsample_to_histogram_bin=False,
 ):
     """1D nonrigid registration
@@ -216,6 +218,8 @@ def register_nonrigid(
         bin_um=bin_um,
         bin_s=bin_s,
         amp_scale_fn=amp_scale_fn,
+        avg_in_bin=avg_in_bin,
+        post_transform=post_transform,
         gaussian_smoothing_sigma_um=gaussian_smoothing_sigma_um,
     )
     extra["spatial_bin_edges_um"] = spatial_bin_edges_um
@@ -338,6 +342,8 @@ def get_windows(
     return_locs=False,
     zero_threshold=1e-5,
 ):
+    if win_shape == "gaussian":
+        win_sigma_um = win_sigma_um / 2
     windows, locs = si_get_windows(
         rigid=False,
         bin_um=bin_um,
@@ -432,16 +438,17 @@ def fast_raster(
     times,
     bin_um=1,
     bin_s=1,
-    amp_scale_fn=np.log1p,
+    amp_scale_fn=None,
     gaussian_smoothing_sigma_um=0,
-    avg_in_bin=False,
+    avg_in_bin=True,
+    post_transform=None,
 ):
     spatial_bin_edges_um, time_bin_edges_s = get_bins(
         depths, times, bin_um, bin_s
     )
 
     if amp_scale_fn is None:
-        weights = np.ones_like(amps)
+        weights = amps
     else:
         weights = amp_scale_fn(amps)
 
@@ -485,5 +492,8 @@ def fast_raster(
                     bins=(spatial_bin_edges_um, time_bin_edges_s),
                 )[0],
             )
+
+    if post_transform is not None:
+        r = post_transform(r)
 
     return r, spatial_bin_edges_um, time_bin_edges_s
