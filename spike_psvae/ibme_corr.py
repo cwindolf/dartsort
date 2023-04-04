@@ -517,6 +517,126 @@ def normxcorr1d(
     return corr
 
 
+def normxcorr2d(
+    template,
+    x,
+    weights=None,
+    centered=True,
+    normalized=True,
+    padding=0,
+):
+    """normxcorr1d: Normalized cross-correlation, optionally weighted
+
+    The API is like torch's F.conv1d, except I have accidentally
+    changed the position of input/weights -- template acts like weights,
+    and x acts like input.
+
+    Returns the cross-correlation of `template` and `x` at spatial lags
+    determined by `mode`. Useful for estimating the location of `template`
+    within `x`.
+
+    This might not be the most efficient implementation -- ideas welcome.
+    It uses a direct convolutional translation of the formula
+        corr = (E[XY] - EX EY) / sqrt(var X * var Y)
+
+    This also supports weights! In that case, the usual adaptation of
+    the above formula is made to the weighted case -- and all of the
+    normalizations are done per block in the same way.
+
+    Arguments
+    ---------
+    template : tensor, shape (num_templates, length)
+        The reference template signal
+    x : tensor, 1d shape (length,) or 2d shape (num_inputs, length)
+        The signal in which to find `template`
+    weights : tensor, shape (length,)
+        Will use weighted means, variances, covariances if supplied.
+    centered : bool
+        If true, means will be subtracted (per weighted patch).
+    normalized : bool
+        If true, normalize by the variance (per weighted patch).
+    padding : int, optional
+        How far to look? if unset, we'll use half the length
+    conv_engine : string, one of "torch", "numpy"
+        What library to use for computing cross-correlations.
+        If numpy, falls back to the scipy correlate function.
+
+    Returns
+    -------
+    corr : tensor
+    """
+    x = torch.atleast_2d(x)
+    num_templates, lengths, lengtht = template.shape
+    num_inputs, lengths_, lengthx = x.shape
+    assert lengths == lengths_
+    padding = (0, padding)
+
+    # generalize over weighted / unweighted case
+    device_kw = dict(device=x.device)
+    onesx = torch.ones((1, 1, lengths, lengthx), dtype=x.dtype, **device_kw)
+    no_weights = weights is None
+    if no_weights:
+        weights = torch.ones((1, 1, lengths, lengtht), dtype=x.dtype, **device_kw)
+        wt = template[:, None, :, :]
+    else:
+        assert weights.shape == (lengtht,)
+        weights = weights[None, None, None] * torch.ones((1, 1, lengthx, 1))
+        wt = template[:, None, :, :] * weights
+
+    # conv1d valid rule:
+    # (B,1,L),(O,1,L)->(B,O,L)
+
+    # compute expectations
+    # how many points in each window? seems necessary to normalize
+    # for numerical stability.
+    print(f"{onesx.shape=} {weights.shape=}")
+    Nx = F.conv2d(onesx, weights, padding=padding)
+    print(f"{Nx.shape=}")
+    if centered:
+        Et = F.conv2d(onesx, wt, padding=padding)
+        print(f"{Et.shape=}")
+        Et /= Nx
+        Ex = F.conv2d(x[:, None, :], weights, padding=padding)
+        print(f"{Ex.shape=}")
+        Ex /= Nx
+
+    # compute (weighted) covariance
+    # important: the formula E[XY] - EX EY is well-suited here,
+    # because the means are naturally subtracted correctly
+    # patch-wise. you couldn't pre-subtract them!
+    cov = F.conv2d(x[:, None, :], wt, padding=padding)
+    cov /= Nx
+    if centered:
+        cov -= Ex * Et
+
+    # compute variances for denominator, using var X = E[X^2] - (EX)^2
+    if normalized:
+        var_template = F.conv2d(
+            onesx, wt * template[:, None, :], padding=padding
+        )
+        var_template /= Nx
+        var_x = F.conv2d(torch.square(x)[:, None, :], weights, padding=padding)
+        var_x /= Nx
+        if centered:
+            var_template -= torch.square(Et)
+            var_x -= torch.square(Ex)
+
+        # fill in zeros to avoid problems when dividing
+        var_template[var_template == 0] = 1
+        var_x[var_x == 0] = 1
+
+    # now find the final normxcorr
+    corr = cov  # renaming for clarity
+    if normalized:
+        corr /= torch.sqrt(var_x)
+        corr /= torch.sqrt(var_template)
+
+    assert corr.shape[2] == 1
+    corr = corr[:, :, 0, :]
+
+    return corr
+
+
 def scipy_conv1d(input, weights, padding="valid"):
     """SciPy translation of torch F.conv1d"""
     from scipy.signal import correlate
