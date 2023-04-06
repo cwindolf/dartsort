@@ -114,6 +114,8 @@ def array_scatter(
     z,
     maxptp,
     zlim=(-50, 3900),
+    xlim=None,
+    ptplim=None,
     axes=None,
     do_ellipse=True,
     figsize = (15, 15),
@@ -137,8 +139,12 @@ def array_scatter(
         do_ellipse=do_ellipse,
     )
     axes[0].scatter(*geom.T, c="orange", marker="s", s=10)
-    axes[0].set_ylabel("z")
-    axes[0].set_xlabel("x")
+    axes[0].scatter(geom[0, 0], geom[0, 1], c="orange", marker="s", s=10, label='Channel Locations')
+    axes[0].set_ylabel("Registered Depth (um)", fontsize=16)
+    axes[0].set_xlabel("x (um)", fontsize=16)
+    axes[0].legend(fontsize=16)
+    axes[0].tick_params(axis='x', labelsize=16)
+    axes[0].tick_params(axis='y', labelsize=16)
 
     cluster_scatter(
         maxptp,
@@ -150,7 +156,9 @@ def array_scatter(
         excluded_ids=excluded_ids,
         do_ellipse=do_ellipse,
     )
-    axes[1].set_xlabel("maxptp")
+    axes[1].set_xlabel("Amplitude (s.u.)", fontsize=16)
+    axes[1].tick_params(axis='x', labelsize=16)
+    
     axes[2].scatter(
         x,
         z,
@@ -162,6 +170,12 @@ def array_scatter(
     axes[2].scatter(*geom.T, c="orange", marker="s", s=10)
     axes[2].set_title("ptps")
     axes[0].set_ylim(zlim)
+    axes[1].set_ylim(zlim)
+    axes[2].set_ylim(zlim)
+    if xlim is not None:
+        axes[0].set_xlim(xlim)
+    if ptplim is not None:
+        axes[1].set_xlim(ptplim)
 
     if fig is not None:
         plt.tight_layout()
