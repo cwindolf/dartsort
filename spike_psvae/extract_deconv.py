@@ -32,7 +32,9 @@ def extract_deconv(
     subtraction_h5=None,
     tpca_rank=8,
     tpca_weighted=True,
+    tpca_centered=True,
     save_residual=False,
+    tpca_radius=75,
     save_subtracted_waveforms=False,
     save_cleaned_waveforms=False,
     save_cleaned_tpca_projs=True,
@@ -186,6 +188,8 @@ def extract_deconv(
                     spike_index_up,
                     geom,
                     standardized_bin,
+                    centered=tpca_centered,
+                    tpca_radius=tpca_radius,
                     tpca_rank=reassignment_tpca_rank,
                     trough_offset=trough_offset,
                     spike_length_samples=spike_length_samples,
@@ -207,7 +211,7 @@ def extract_deconv(
         or save_denoised_tpca_projs
     ):
         denoised_tpca = chunk_features.TPCA(
-            tpca_rank, channel_index, "denoised"
+            tpca_rank, channel_index, "denoised", centered=tpca_centered,
         )
     featurizers = []
     no_save_featurizers = []
@@ -237,7 +241,7 @@ def extract_deconv(
         )
     if save_cleaned_tpca_projs:
         featurizers.append(
-            chunk_features.TPCA(tpca_rank, channel_index, "cleaned")
+            chunk_features.TPCA(tpca_rank, channel_index, "cleaned", centered=tpca_centered)
         )
     if save_denoised_tpca_projs:
         featurizers.append(denoised_tpca)
@@ -745,6 +749,7 @@ def load_or_fit_featurizers(
     seed=0,
     t_start=0,
     t_end=None,
+    tpca_centered=True,
 ):
     if not any(f.needs_fit for f in featurizers):
         return

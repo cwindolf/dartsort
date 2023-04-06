@@ -57,10 +57,10 @@ def post_deconv_split(spt_no_outliers, x, z_reg, isosplit_th=1, n_iter=2):
 
 # %%
 def post_deconv_merge(raw_data_bin, geom, spt_no_outliers, 
-                      z_abs, z_reg, x, time_computation, spread_z,
-                      dist_pairs=20, resid_threshold=7, deconv_th=1000,
+                      z_abs, z_reg, x, time_computation, spread_z, spread_x,
+                      dist_pairs=20, resid_threshold=7,
                       bin_size_um=1, pfs=30000):
-    
+        
     (
         superres_templates_no_augment,
         superres_label_to_bin_id,
@@ -68,6 +68,9 @@ def post_deconv_merge(raw_data_bin, geom, spt_no_outliers,
         medians_at_computation,
     ) = superres_denoised_templates(
         spt_no_outliers,
+        spt_no_outliers,
+        z_abs,
+        x,
         z_abs,
         x,
         bin_size_um,
@@ -76,6 +79,7 @@ def post_deconv_merge(raw_data_bin, geom, spt_no_outliers,
         t_end=time_computation,
         augment_low_snr_temps=False,
         units_spread=spread_z,
+        units_x_spread=spread_x,
         dist_metric=1000*np.ones(len(spt_no_outliers)), #Use all spikes here
         dist_metric_threshold=500,
     )
@@ -85,7 +89,7 @@ def post_deconv_merge(raw_data_bin, geom, spt_no_outliers,
         idx_unit = np.flatnonzero(spt_no_outliers[:, 1]==k)
         med_position_units[k, 0] = np.median(x[idx_unit])
         med_position_units[k, 1] = np.median(z_reg[idx_unit])
-    dist_matrix = ((med_position_units[None] - med_position_units[:, None])**2).sum(2)
+    dist_matrix = np.sqrt(((med_position_units[None] - med_position_units[:, None])**2).sum(2))
     
     units_1 = np.where(dist_matrix<dist_pairs)[0]
     units_2 = np.where(dist_matrix<dist_pairs)[1]
@@ -120,14 +124,17 @@ def post_deconv_merge(raw_data_bin, geom, spt_no_outliers,
 
         good_channels = np.intersect1d(np.flatnonzero(shifted_temp_1.ptp(1).min(0)>1.5), 
                                    np.flatnonzero(shifted_temp_2.ptp(1).min(0)>1.5))
-
+        
         if len(good_channels):
-
-            dist, shift = resid_dist_multiple(shifted_temp_1[:, :, good_channels], shifted_temp_2[:, :, good_channels], deconv_th)
+            bin_rms = np.argmin(np.abs(bins_to_compute_diff))
+            rms_a = np.sqrt(np.square(shifted_temp_1[bin_rms, :, good_channels]).sum()/(np.abs(shifted_temp_1[bin_rms, :, good_channels]) > 0).sum())
+#             rms_b = np.sqrt(np.square(shifted_temp_2[bin_rms, :, good_channels]).sum()/(np.abs(shifted_temp_2[bin_rms, :, good_channels]) > 0).sum())
+            dist, shift = resid_dist_multiple(shifted_temp_1[:, :, good_channels], shifted_temp_2[:, :, good_channels])
             if dist>=0:
-                matrix_all_distances[unit_1, unit_2] = dist
+                #RMS
+                matrix_all_distances[unit_1, unit_2] = dist/rms_a
 
-    matrix_all_distances = np.minimum(matrix_all_distances, matrix_all_distances.T) 
+    matrix_all_distances = np.maximum(matrix_all_distances, matrix_all_distances.T) 
     pdist = matrix_all_distances[np.triu_indices(matrix_all_distances.shape[0], k=1)]
     Z = complete(pdist)
     new_labels = fcluster(Z, resid_threshold, criterion="distance")
@@ -145,7 +152,7 @@ def full_post_processing(raw_data_bin, geom,
                          disp, prob_min = 0.1, time_temp_computation=0,
                          threshold_to_clean_1=10, threshold_to_clean_2=5, 
                          threshold_to_clean_3=4, isosplit_th=1, n_iter_split=2, 
-                         dist_pairs=20, resid_threshold=7, deconv_th=1000,
+                         dist_pairs=20, resid_threshold=2.5,
                          bin_size_um=1, pfs=30000):
     
     # Recommendation: set time_temp_computation to middle of recording
@@ -177,8 +184,8 @@ def full_post_processing(raw_data_bin, geom,
     
     print("Merge")
     spt_final[:, 1] = post_deconv_merge(raw_data_bin, geom, spt_final, 
-                          z_abs, z_reg, x, time_temp_computation, std_z*1.65,
-                          dist_pairs=dist_pairs, resid_threshold=resid_threshold, deconv_th=deconv_th,
+                          z_abs, z_reg, x, time_temp_computation, std_z*1.65, std_x*1.65,
+                          dist_pairs=dist_pairs, resid_threshold=resid_threshold,
                           bin_size_um=bin_size_um, pfs=pfs)
 
     n_units = spt_final[:, 1].max()+1
