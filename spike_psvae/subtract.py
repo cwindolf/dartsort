@@ -1399,17 +1399,24 @@ def full_denoising(
         for bs in range(0, wfs_in_probe.shape[0], batch_size):
             be = min(bs + batch_size, N * C)
             wfs_in_probe[bs:be] = denoiser(wfs_in_probe[bs:be])
-
+    
+    if torch.is_tensor(wfs_in_probe):
+        wfs_in_probe = wfs_in_probe.cpu().numpy()
+    if torch.is_tensor(waveforms):
+        waveforms = waveforms.cpu().numpy()
+    if torch.is_tensor(in_probe_index):
+        in_probe_index = in_probe_index.cpu().numpy()
     # Temporal PCA while we are still transposed
     if tpca is not None:
         tpca_embeds = tpca.raw_transform(wfs_in_probe)
         wfs_in_probe = tpca.raw_inverse_transform(tpca_embeds)
         if not return_tpca_embedding:
             del tpca_embeds
+    
 
     # back to original shape
     waveforms[in_probe_index] = wfs_in_probe
-    waveforms = waveforms.permute(0, 2, 1)
+    waveforms = waveforms.transpose(0, 2, 1)
 
     # enforce decrease
     if do_enforce_decrease:
