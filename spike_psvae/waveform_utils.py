@@ -26,6 +26,7 @@ def fit_tpca_bin(
     device=None,
     batch_size=1024,
     seed=0,
+    dtype=np.float32,
 ):
     rg = np.random.default_rng(seed)
     tpca_channel_index = make_channel_index(
@@ -43,6 +44,7 @@ def fit_tpca_bin(
         trough_offset=trough_offset,
         spike_length_samples=spike_length_samples,
         max_channels=spike_index[choices, 1],
+        dtype=dtype,
     )
 
     # NTC -> NCT
@@ -118,6 +120,7 @@ def fit_tpca_bin_clustered(
     spatial_radius=75,
     seed=0,
     return_as_pca=True,
+    dtype=np.float32,
 ):
     assert spike_times.shape == spike_labels.shape == max_channels.shape
     assert not (centered and normalized)
@@ -153,6 +156,7 @@ def fit_tpca_bin_clustered(
         max_channels=max_channels[choices],
         trough_offset=trough_offset,
         spike_length_samples=spike_length_samples,
+        dtype=dtype,
     )
 
     # NTC -> NCT
