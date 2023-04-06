@@ -581,7 +581,10 @@ class TPCA(ChunkFeature):
         if torch.is_tensor(wfs):
             wfs_in_probe = wfs.permute(0, 2, 1)
             features = torch.full(
-                (wfs.shape[0], *self.out_shape), torch.nan, dtype=wfs.dtype
+                (wfs.shape[0], *self.out_shape),
+                torch.nan,
+                dtype=wfs.dtype,
+                device=wfs.device,
             )
             features_ = features.permute(0, 2, 1)
         else:
