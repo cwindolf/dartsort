@@ -113,6 +113,7 @@ def read_waveforms(
     trough_offset=42,
     spike_length_samples=121,
     dtype=np.float32,
+    dtype_output=np.float32,
     fill_value=np.nan,
     buffer=None,
 ):
@@ -217,15 +218,19 @@ def read_waveforms(
             ).reshape(spike_length_samples, n_channels)
 
             if load_ci:
+                if dtype==np.int16 or dtype==np.int32: #otherwise cannot fill with nan values
+                    wf = wf.astype(np.float32)
                 wf = np.pad(wf, [(0, 0), (0, 1)], constant_values=fill_value)
                 wf = wf[:, channel_index[max_channels[spike_ix]]]
             elif load_chans:
+                if dtype==np.int16 or dtype==np.int32:
+                    wf = wf.astype(np.float32)
                 wf = np.pad(wf, [(0, 0), (0, 1)], constant_values=fill_value)
                 wf = wf[:, channels[spike_ix % channels.shape[0]]]
 
             waveforms[i] = wf
 
-    return waveforms, skipped_idx
+    return waveforms.astype(dtype_output), skipped_idx
 
 
 # %%

@@ -316,7 +316,7 @@ def relabel_by_depth(spt, z_abs):
 def run_full_clustering(t_start, t_end, cluster_output_directory, raw_data_bin, geom, spike_index, 
                         localizations, maxptps, displacement_rigid, len_chunks=300, threshold_ptp=3,
                         fs=30000, triage_quantile_cluster=100, frame_dedup_cluster=20, log_c=5, scales=(1, 1, 50), 
-                        time_temp_comp_merge=0, deconv_resid_th=7,
+                        time_temp_comp_merge=0, deconv_resid_th=0.25,
                         savefigs=True):
 
     Path(cluster_output_directory).mkdir(exist_ok=True)
@@ -339,10 +339,13 @@ def run_full_clustering(t_start, t_end, cluster_output_directory, raw_data_bin, 
     
     n_units = spt[:, 1].max()+1
     std_z = np.zeros(n_units)
+    std_x = np.zeros(n_units)
     for k in range(n_units):
         idx_k = np.flatnonzero(spt[:, 1]==k)
         std_z[k] = z_reg[idx_k].std()
-    spt[:, 1] = post_deconv_merge(raw_data_bin, geom, spt, z_abs, z_reg, x, time_temp_comp_merge, std_z*1.65, resid_threshold=deconv_resid_th)
+        std_x[k] = x[idx_k].std()
+        
+    spt[:, 1] = post_deconv_merge(raw_data_bin, geom, spt, z_abs, z_reg, x, time_temp_comp_merge, std_z*1.65, std_x*1.65, resid_threshold=deconv_resid_th)
 
     print("Relabel by Depth")
     spt = relabel_by_depth(spt, z_abs)
