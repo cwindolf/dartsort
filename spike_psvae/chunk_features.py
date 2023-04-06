@@ -1,7 +1,7 @@
 # %%
 import numpy as np
 import torch
-from sklearn.decomposition import PCA
+from sklearn.decomposition import PCA, TruncatedSVD
 
 # %%
 from spike_psvae import localize_index, waveform_utils
@@ -396,7 +396,7 @@ class TPCA(ChunkFeature):
     needs_fit = True
     tensor_ok = True
 
-    def __init__(self, rank, channel_index, which_waveforms, random_state=0):
+    def __init__(self, rank, channel_index, which_waveforms, centered=True, random_state=0):
         super().__init__()
         assert which_waveforms in ("subtracted", "cleaned", "denoised")
         self.which_waveforms = which_waveforms
@@ -405,6 +405,7 @@ class TPCA(ChunkFeature):
         self.channel_index = channel_index
         self.C = channel_index.shape[1]
         self.out_shape = (self.rank, self.C)
+        self.centered = centered
         self.tpca = PCA(self.rank, random_state=random_state)
 
     @classmethod
@@ -444,26 +445,36 @@ class TPCA(ChunkFeature):
         wfs = wfs.transpose(0, 2, 1)
         in_probe_index = self.channel_index < self.channel_index.shape[0]
         wfs = wfs[in_probe_index[max_channels]]
-        self.tpca.fit(wfs)
+        
+        if self.centered:
+            self.tpca.fit(wfs)
+        else:
+            tsvd = TruncatedSVD(self.rank).fit(wfs)
+            self.tpca.mean_ = np.zeros_like(wfs[0])
+            self.tpca.components_ = tsvd.components_
+            
         self.needs_fit = False
         self.dtype = self.tpca.components_.dtype
         self.n_components = self.tpca.n_components
-
         self.components_ = self.tpca.components_
         self.mean_ = self.tpca.mean_
-        self.whiten = self.tpca.whiten
-        self.whitener = np.sqrt(self.tpca.explained_variance_)
+        if self.centered: #otherwise SVD
+            self.whiten = self.tpca.whiten
+            self.whitener = np.sqrt(self.tpca.explained_variance_)
 
     def raw_transform(self, X):
+
         X = X - self.mean_
         Xt = X @ self.components_.T
-        if self.whiten:
-            Xt /= self.whitener
+        if self.centered:
+            if self.whiten:
+                Xt /= self.whitener
         return Xt
 
     def raw_inverse_transform(self, X):
-        if self.whiten:
-            return (X @ (self.whitener * self.components_)) + self.mean_
+        if self.centered:
+            if self.whiten:
+                return (X @ (self.whitener * self.components_)) + self.mean_
         else:
             return (X @ self.components_) + self.mean_
 
@@ -524,15 +535,22 @@ class TPCA(ChunkFeature):
         in_probe_index = self.channel_index < self.channel_index.shape[0]
         wfs_in_probe = wfs_in_probe[in_probe_index[max_channels]]
 
-        self.tpca.fit(wfs_in_probe)
+        if self.centered:
+            self.tpca.fit(wfs_in_probe)
+        else:
+            tsvd = TruncatedSVD(self.rank).fit(wfs_in_probe)
+            self.tpca.mean_ = np.zeros_like(wfs_in_probe[0])
+            self.tpca.components_ = tsvd.components_
+
         self.needs_fit = False
         self.dtype = self.tpca.components_.dtype
         self.n_components = self.tpca.n_components
 
         self.components_ = self.tpca.components_
         self.mean_ = self.tpca.mean_
-        self.whiten = self.tpca.whiten
-        self.whitener = np.sqrt(self.tpca.explained_variance_)
+        if self.centered:
+            self.whiten = self.tpca.whiten
+            self.whitener = np.sqrt(self.tpca.explained_variance_)
 
     def transform(
         self,
@@ -767,3 +785,5 @@ class STPCA(ChunkFeature):
         )
 
         return self.raw_transform(sub_wfs.reshape(len(wfs), -1))
+
+# %%

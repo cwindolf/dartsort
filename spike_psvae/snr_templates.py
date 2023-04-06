@@ -39,6 +39,7 @@ def get_templates(
     seed=0,
     n_jobs=-1,
     raw_only=False,
+    dtype=np.float32,
 ):
     """Get denoised templates
 
@@ -127,6 +128,7 @@ def get_templates(
             device=device,
             batch_size=batch_size,
             seed=seed,
+            dtype=dtype,
         )
         extra["tpca"] = tpca
 
@@ -170,6 +172,7 @@ def get_templates(
             denoiser_weights_path,
             device,
             batch_size,
+            dtype,
         ),
     ) as pool:
         for unit, raw_template, denoised_template, snr_by_chan in xqdm(
@@ -329,6 +332,7 @@ def get_raw_denoised_template_single(
     denoiser_weights_path=None,
     device=None,
     batch_size=1024,
+    dtype=np.float32,
 ):
     rg = np.random.default_rng(seed)
     choices = slice(None)
@@ -343,6 +347,7 @@ def get_raw_denoised_template_single(
         len(geom),
         trough_offset=trough_offset,
         spike_length_samples=spike_length_samples,
+        dtype=dtype,
     )
 
     if do_nn_denoise:
@@ -416,6 +421,7 @@ def get_raw_template_single(
     trough_offset=42,
     spike_length_samples=121,
     seed=0,
+    dtype=np.float32,
 ):
     choices = slice(None)
     if spike_times.shape[0] > max_spikes_per_unit:
@@ -430,6 +436,7 @@ def get_raw_template_single(
         n_channels,
         trough_offset=trough_offset,
         spike_length_samples=spike_length_samples,
+        dtype=dtype,
     )
 
     return reducer(waveforms, axis=0)
@@ -496,7 +503,6 @@ def template_worker(unit):
     p = template_worker
 
     in_unit = np.flatnonzero(p.spike_train[:, 1] == unit)
-
     if p.raw_only:
         raw_template = get_raw_template_single(
             p.spike_train[in_unit, 0],
@@ -507,6 +513,7 @@ def template_worker(unit):
             trough_offset=p.trough_offset,
             spike_length_samples=p.spike_length_samples,
             seed=p.rg.integers(np.iinfo(np.int64).max),
+            dtype=p.dtype,
         )
         denoised_template = snr_by_channel = None
     else:
@@ -531,6 +538,7 @@ def template_worker(unit):
             denoiser_weights_path=p.denoiser_weights_path,
             device=p.device,
             batch_size=p.batch_size,
+            dtype=p.dtype,
         )
 
     return unit, raw_template, denoised_template, snr_by_channel
@@ -556,6 +564,7 @@ def template_worker_init(
     denoiser_weights_path,
     device,
     batch_size,
+    dtype,
 ):
     rank = id_queue.get()
     p = template_worker
@@ -576,6 +585,7 @@ def template_worker_init(
     p.denoiser_weights_path = denoiser_weights_path
     p.device = device
     p.batch_size = batch_size
+    p.dtype=dtype
 
 
 # %%

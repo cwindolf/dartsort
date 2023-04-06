@@ -15,7 +15,7 @@ from .extract_deconv import extract_deconv
 def superres_spike_train(
     spike_train, spt_before, z_abs_pre, x_pre, z_abs_before, x_pre_before, bin_size_um, geom, 
     bins_sizes_um=None, t_start=0, t_end=100, 
-    units_spread=None, n_spikes_max_recent = 1000, fs=30000, 
+    units_spread=None, units_x_spread=None, n_spikes_max_recent = 1000, fs=30000, 
     dist_metric=None, dist_metric_threshold=500,
     adaptive_th_for_temp_computation=False, outliers_tracking=None, n_spikes_th=100,
 ):
@@ -28,12 +28,13 @@ def superres_spike_train(
     t_end = (t_end+t_start)/2
     assert spike_train.shape == (*z_abs_pre.shape, 2)
     assert bin_size_um > 0
-        
+    pitch = get_pitch(geom)
+
     if t_start==0:
         spike_train_no_outliers = spike_train.copy()
         z_abs = z_abs_pre.copy()
         x = x_pre.copy()
-        
+            
     else:
         if dist_metric is not None:
             # For each unit, if deconvolved spikes scores are < dist_metric_threshold
@@ -92,12 +93,7 @@ def superres_spike_train(
                                                            spike_train_no_outliers[:, 1]==u))[-n_spikes_max_recent:]
         else:
             in_u = np.flatnonzero(spike_train_no_outliers[:, 1]==u)[:n_spikes_max_recent]
-
-        # center the z positions in this unit using the median
-        centered_z = z_abs[in_u].copy()
-        medians_at_computation[u] = np.median(centered_z)
-        centered_z -= medians_at_computation[u]
-
+        
         # convert them to bin identities by adding half the bin size and
         # floor dividing by the bin size
         # this corresponds to bins like:
@@ -105,6 +101,12 @@ def superres_spike_train(
         #   ... -3bin/2 , -bin/2, bin/2, 3bin/2, ...
         if bins_sizes_um is not None:
             bin_size_um = bins_sizes_um[u]
+        # center the z positions in this unit using the median
+        centered_z = z_abs[in_u].copy()
+        counts, values = np.histogram((z_abs[in_u]//bin_size_um).astype('int'))
+        medians_at_computation[u] = (values[counts.argmax()]+values[counts.argmax()+1])*bin_size_um/2
+        centered_z -= medians_at_computation[u]
+            
         bin_ids = (centered_z + bin_size_um / 2) // bin_size_um
         occupied_bins, bin_counts = np.unique(bin_ids, return_counts=True)
         if units_spread is not None:
@@ -127,7 +129,17 @@ def superres_spike_train(
                     np.abs(occupied_bins)
                     <= 1
                 ]
-        # IS THAT NEEDED - min_spikes_bin removed here and used during template augmentation
+
+        if units_x_spread is not None:
+            # np.abs(bin_ids) <= (np.abs(centered_z)+ bin_size_um / 2)//bin_size_um <= (max_z_dist + bin_size_um / 2)//bin_size_um
+            if units_x_spread[u]>2**pitch:
+                bin_counts = bin_counts[
+                    occupied_bins == 0
+                ]
+                occupied_bins = occupied_bins[
+                    occupied_bins == 0
+                ]
+# IS THAT NEEDED - min_spikes_bin removed here and used during template augmentation
 #         if min_spikes_bin is None:
         for j, bin_id in enumerate(occupied_bins):
             superres_labels[in_u[bin_ids == bin_id]] = cur_superres_label
@@ -189,6 +201,7 @@ def superres_denoised_templates(
     augment_low_snr_temps=True,
     min_spikes_to_augment=25,
     units_spread=None,
+    units_x_spread=None,
     dist_metric=None,
     dist_metric_threshold=1000,
     adaptive_th_for_temp_computation=False,
@@ -217,6 +230,7 @@ def superres_denoised_templates(
     pbar=True,
     seed=0,
     n_jobs=-1,
+    dtype=np.float32,
 ):
 
     (
@@ -240,6 +254,7 @@ def superres_denoised_templates(
         t_start,
         t_end,
         units_spread,
+        units_x_spread,
         n_spikes_max_recent,
         fs,
         dist_metric,
@@ -276,16 +291,9 @@ def superres_denoised_templates(
         seed=seed,
         n_jobs=n_jobs,
         raw_only=not denoise_templates,
+        dtype=dtype,
     )
     
-    np.save("superres_labels_test.npy", superres_labels)
-    np.save("superres_label_to_bin_id_test.npy", superres_label_to_bin_id)
-    np.save("superres_label_to_orig_label_test.npy", superres_label_to_orig_label)
-    np.save("medians_at_computation_test.npy", medians_at_computation)
-    np.save("unit_max_channels_test.npy", unit_max_channels)
-    np.save("n_spikes_per_bin_test.npy", n_spikes_per_bin)
-
-    print()
     if augment_low_snr_temps:
         templates, n_spikes_per_bin = augment_low_snr_templates(
                         templates, 
@@ -300,8 +308,6 @@ def superres_denoised_templates(
 
     if min_spikes_bin is not None:
         templates[n_spikes_per_bin<min_spikes_bin]=0
-    np.save("templates_test.npy", templates)
-    print("TEMPLATES SAVED!!!")
 
     return (
         templates,
@@ -683,6 +689,7 @@ def superres_deconv_chunk(
     deconv_dir,
     registered_medians=None, #registered_median
     units_spread=None, #registered_spread
+    units_x_spread=None,
     dist_metric=None,
     bin_size_um=1,
     bins_sizes_um=None,#for having a different number of bin per template
@@ -730,6 +737,7 @@ def superres_deconv_chunk(
         augment_low_snr_temps, 
         min_spikes_to_augment,
         units_spread,
+        units_x_spread,
         dist_metric,
         deconv_outliers_threshold,
         adaptive_th_for_temp_computation,
@@ -858,6 +866,8 @@ def extract_superres_shifted_deconv(
     loc_feature='peak',
     n_jobs=-1,
     save_cleaned_tpca_projs=True,
+    tpca_centered=False,
+    tpca_radius=75,
 ):
     """
     This is a wrapper that helps us deal with the bookkeeping for proposed
@@ -899,6 +909,8 @@ def extract_superres_shifted_deconv(
         save_denoised_tpca_projs=False,
         tpca_rank=8,
         tpca_weighted=False,
+        tpca_centered=tpca_centered,
+        tpca_radius=tpca_radius,
         save_outlier_scores=False,
         do_reassignment=False,
         save_reassignment_residuals=False,
@@ -912,7 +924,7 @@ def extract_superres_shifted_deconv(
         loc_radius=loc_radius,
         loc_feature=loc_feature,
         n_sec_train_feats=n_sec_train_feats,
-        n_jobs=n_jobs,
+        n_jobs=0,
         n_sec_chunk=n_sec_chunk,
         t_start=t_start,
         t_end=t_end,
@@ -1000,17 +1012,20 @@ def full_deconv_with_update(
     dist_metric=None,
     registered_medians=None,
     units_spread=None,
+    units_x_spread=None,
     save_cleaned_tpca_projs=True,
 ):
 
     Path(extract_dir).mkdir(exist_ok=True)
 
-    if registered_medians is None or units_spread is None:
-        registered_medians, units_spread = get_registered_pos(spike_train, z, p, pfs)
+    if registered_medians is None or units_spread is None or units_x_spread is None:
+        registered_medians, units_spread, units_x_spread = get_registered_pos(spike_train, z, x, p, geom, pfs)
     
     fname_medians = Path(extract_dir) / "registered_medians.npy"
     fname_spread = Path(extract_dir) / "registered_spreads.npy"
+    fname_x_spread = Path(extract_dir) / "registered_spreads.npy"
     np.save(fname_spread, units_spread)
+    np.save(fname_x_spread, units_x_spread)
     np.save(fname_medians, registered_medians)
 
     if dist_metric is None:
@@ -1043,6 +1058,7 @@ def full_deconv_with_update(
             deconv_dir,
             registered_medians=registered_medians, #registered_median
             units_spread=units_spread, #registered_spread
+            units_x_spread=units_x_spread,
             dist_metric=dist_metric,
             bin_size_um=bin_size_um,
             bins_sizes_um=bins_sizes_um,
@@ -1093,7 +1109,10 @@ def full_deconv_with_update(
             spt_chunk = h5["deconv_spike_train"][:]
             spike_index_chunk = h5["spike_index"][:]
             maxptps_chunk = h5["maxptps"][:]
-            localizations_chunk = h5["localizations"][:]
+            if loc_feature=='peak':
+                localizations_chunk = h5["localizationspeak"][:]
+            else:
+                localizations_chunk = h5["localizations"][:]
             dist_metric_chunk = h5["deconv_dist_metrics"][:]
             if adaptive_th_for_temp_computation:
                 superres_templates_chunk = h5["superres_templates"][:]
@@ -1203,12 +1222,14 @@ def update_spike_train_with_deconv_res(start_sec, end_sec, spt_before, spt_after
 
 
 # %%
-def get_registered_pos(spt, z, displacement_rigid, pfs=30000):
+def get_registered_pos(spt, z, x, displacement_rigid, geom, pfs=30000):
+    pitch = get_pitch(geom)
     z_reg = z-displacement_rigid[spt[:, 0]//pfs]
     registered_median = np.zeros(spt[:, 1].max()+1)
     registered_spread = np.zeros(spt[:, 1].max()+1)
+    registered_x_spread = np.zeros(spt[:, 1].max()+1)
     for k in np.unique(spt[:, 1]):
         registered_median[k] = np.median(z_reg[spt[:, 1]==k])
-        registered_spread[k] = np.std(z_reg[spt[:, 1]==k])*1.65
-
-    return registered_median, registered_spread
+        registered_spread[k] = min(np.std(z_reg[spt[:, 1]==k])*1.65, 2*pitch)
+        registered_x_spread[k] = np.std(x[spt[:, 1]==k])*1.65
+    return registered_median, registered_spread, registered_x_spread
