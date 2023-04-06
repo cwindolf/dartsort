@@ -46,6 +46,8 @@ def subtraction(
     # tpca args
     tpca_rank=8,
     n_sec_pca=10,
+    pca_t_start=0,
+    pca_t_end=None,
     # time / input binary details
     n_sec_chunk=1,
     # detection
@@ -381,17 +383,14 @@ def subtraction(
                 denoiser_init_kwargs=denoiser_init_kwargs,
                 denoiser_weights_path=denoiser_weights_path,
                 n_sec_pca=n_sec_pca,
+                pca_t_start=pca_t_start,
+                pca_t_end=pca_t_end,
                 random_seed=random_seed,
-                device=device,
+                device="cpu",
                 trough_offset=trough_offset,
                 spike_length_samples=spike_length_samples,
                 dtype=dtype,
             )
-
-        # try to free up some memory on GPU that might have been used above
-        if device.type == "cuda":
-            gc.collect()
-            torch.cuda.empty_cache()
 
     # train featurizers
     if any(f.needs_fit for f in extra_features + fit_feats):
@@ -422,8 +421,10 @@ def subtraction(
                 denoiser_init_kwargs=denoiser_init_kwargs,
                 denoiser_weights_path=denoiser_weights_path,
                 n_sec_pca=n_sec_pca,
+                pca_t_start=pca_t_start,
+                pca_t_end=pca_t_end,
                 random_seed=random_seed,
-                device=device,
+                device="cpu",
                 dtype=dtype,
                 trough_offset=trough_offset,
                 spike_length_samples=spike_length_samples,
@@ -536,7 +537,14 @@ def subtraction(
                 denoised_tpca_feat if do_clean else None,
             ),
         ) as pool:
-            count = 0
+            count = sum(
+                s < last_sample
+                for s in range(
+                    0,
+                    recording.get_num_samples(),
+                    batch_len_samples,
+                )
+            )
             for result in tqdm(
                 pool.map(_subtraction_batch, jobs),
                 total=n_batches,
@@ -550,6 +558,12 @@ def subtraction(
                     if save_residual:
                         np.load(result.residual).tofile(residual)
                         Path(result.residual).unlink()
+                    
+                    if result.spike_index is None:
+                        continue
+
+                    if result.spike_index is None and N_new == 0:
+                        continue
 
                     # grow arrays as necessary and write results
                     spike_index.resize(N + N_new, axis=0)
@@ -1064,6 +1078,8 @@ def train_featurizers(
     do_nn_denoise=True,
     do_enforce_decrease=True,
     n_sec_pca=10,
+    pca_t_start=0,
+    pca_t_end=None,
     random_seed=0,
     device="cpu",
     denoiser_init_kwargs={},
@@ -1084,8 +1100,11 @@ def train_featurizers(
     fs = int(np.floor(recording.get_sampling_frequency()))
     n_seconds = recording.get_num_samples() // fs
     second_starts = fs * np.arange(n_seconds)
+    second_starts = second_starts[second_starts >= fs * pca_t_start]
+    if pca_t_end is not None:
+        second_starts = second_starts[second_starts < fs * pca_t_end]
     starts = np.random.default_rng(random_seed).choice(
-        second_starts, size=min(n_sec_pca, n_seconds), replace=False
+        second_starts, size=min(n_sec_pca, len(second_starts)), replace=False
     )
 
     denoiser = None
