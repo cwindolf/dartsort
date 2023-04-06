@@ -583,7 +583,7 @@ class TPCA(ChunkFeature):
             features = torch.full(
                 (wfs.shape[0], *self.out_shape), torch.nan, dtype=wfs.dtype
             )
-            features_ = features.transpose(0, 2, 1)
+            features_ = features.permute(0, 2, 1)
         else:
             wfs_in_probe = wfs.transpose(0, 2, 1)
             features = np.full(
