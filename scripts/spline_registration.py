@@ -45,6 +45,7 @@ with h5py.File(sub_h5, "r+") as h5:
     maxptps = np.array(h5["maxptps"][:])
     spike_index = np.array(h5["spike_index"][:])
     z_reg = np.array(h5["z_reg"][:])
+    dispmap = np.array(h5["dispmap"][:])
 
 if savefigs:
     idx = maxptps>threshold_ptp_rigid_reg
@@ -134,5 +135,5 @@ if savefigs:
     plt.savefig(Path(output_dir) / "final_registered_raster.png")
     plt.close()
 
-np.save("low_freq_disp.npy", displacement_rigid)
+np.save("low_freq_disp_map.npy", dispmap + displacement_rigid[None, :])
 np.save("high_freq_correction.npy", spline_displacement)
