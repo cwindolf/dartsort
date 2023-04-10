@@ -183,6 +183,7 @@ def fit_tpca_bin_clustered(
             tpca = PCA(tpca_rank)
             tpca.mean_ = np.zeros_like(tpca_waveforms[0])
             tpca.components_ = tsvd.components_
+            tpca.explained_variance_ = tsvd.explained_variance_ #needed for extract_deconv
 
     return tpca
 
