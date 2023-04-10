@@ -220,7 +220,7 @@ def superres_denoised_templates(
     tpca_rank=5,
     tpca_radius=75,
     tpca_n_wfs=50_000,
-    tpca_centered=False,
+    tpca_centered=True,
     do_nn_denoise=False,
     denoiser_init_kwargs={}, 
     denoiser_weights_path=None, 
@@ -866,7 +866,7 @@ def extract_superres_shifted_deconv(
     loc_feature='peak',
     n_jobs=-1,
     save_cleaned_tpca_projs=True,
-    tpca_centered=False,
+    tpca_centered=True,
     tpca_radius=75,
 ):
     """
@@ -924,7 +924,7 @@ def extract_superres_shifted_deconv(
         loc_radius=loc_radius,
         loc_feature=loc_feature,
         n_sec_train_feats=n_sec_train_feats,
-        n_jobs=0,
+        n_jobs=n_jobs,
         n_sec_chunk=n_sec_chunk,
         t_start=t_start,
         t_end=t_end,
