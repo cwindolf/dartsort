@@ -504,7 +504,7 @@ def cluster_spikes(
     bin_size=5,
     ptp_low_threshold=3,
     ptp_high_threshold=6,  # deprecated
-    do_copy_spikes=True,
+    do_copy_spikes=False,
     do_relabel_by_depth=True,
     do_remove_dups=True,
     split_big=False,
@@ -512,6 +512,7 @@ def cluster_spikes(
     do_subsample=False,
     log_c=5,
 ):
+    print("copy spikes", do_copy_spikes)
     # copy high-ptp spikes
     true_spike_indices = np.stack(
         (np.ones(maxptps.shape[0], dtype=bool), np.arange(maxptps.shape[0])),
@@ -666,7 +667,7 @@ def split_big_clusters(
                 maxptps[idx],
                 spike_index[idx],
                 triage_quantile=100,
-                do_copy_spikes=True,
+                do_copy_spikes=False,
                 do_relabel_by_depth=False,
                 do_remove_dups=False,
             )
