@@ -123,7 +123,7 @@ def extract_deconv(
         t_start=last_batch_end
         
     # determine jobs to run
-    batch_length = n_sec_chunk * sampling_rate
+    batch_length = int(n_sec_chunk * sampling_rate)
     start_samples = range(t_start, t_end, batch_length)
     if not len(start_samples):
         print("Extraction already done")
@@ -583,7 +583,8 @@ def _extract_deconv_worker(start_sample):
         cleaned_waveforms += (
             scalings[:, None, None] * p.templates_up_loc[spike_train[:, 1]]
         )
-
+        cleaned_waveforms = torch.as_tensor(cleaned_waveforms, device=p.device) 
+        
         # compute and save features for cleaned wfs
         for f in p.featurizers:
             feat = f.transform(
@@ -591,6 +592,8 @@ def _extract_deconv_worker(start_sample):
                 cleaned_wfs=cleaned_waveforms,
             )
             if feat is not None:
+                if torch.is_tensor(feat):
+                    feat = feat.cpu().numpy()
                 np.save(
                     p.temp_dir / f"{batch_str}_{f.name}.npy",
                     feat,
@@ -619,16 +622,27 @@ def _extract_deconv_worker(start_sample):
 
     # -- denoise them
     if p.do_denoise:
-        denoised_waveforms = subtract.full_denoising(
-            cleaned_waveforms,
-            spike_index[:, 1],
-            p.channel_index,
-            tpca=p.tpca,
-            device=p.device,
-            denoiser=p.denoiser,
-        )
-        if torch.is_tensor(denoised_waveforms):
-            denoised_waveforms = denoised_waveforms.cpu().numpy()
+        if p.tpca is None:
+            denoised_waveforms = subtract.full_denoising(
+                cleaned_waveforms,
+                spike_index[:, 1],
+                torch.as_tensor(p.channel_index, device=p.device),
+                tpca=p.tpca,
+                device=p.device,
+                denoiser=p.denoiser,
+            )
+        else: 
+            denoised_waveforms = subtract.full_denoising(
+                cleaned_waveforms,
+                spike_index[:, 1],
+                torch.as_tensor(p.channel_index, device=p.device),
+                tpca=p.tpca.to(p.device),
+                device=p.device,
+                denoiser=p.denoiser,
+            )
+
+            #         if torch.is_tensor(denoised_waveforms):
+#             denoised_waveforms = denoised_waveforms.cpu().numpy()
         del cleaned_waveforms
 
         # compute and save features for denoised wfs
@@ -638,6 +652,8 @@ def _extract_deconv_worker(start_sample):
                 denoised_wfs=denoised_waveforms,
             )
             if feat is not None:
+                if torch.is_tensor(feat):
+                    feat = feat.cpu().numpy()
                 np.save(
                     p.temp_dir / f"{batch_str}_{f.name}.npy",
                     feat,
@@ -722,7 +738,7 @@ def _extract_deconv_init(
     p.n_chans = n_chans
     p.reassignment_pairs_up = reassignment_pairs_up
     p.reassignment_temps_up_loc = reassignment_temps_up_loc
-    p.featurizers = featurizers
+    p.featurizers = p.featurizers = [f.to(device) for f in featurizers]
     print(".", end="", flush=True)
 
 
