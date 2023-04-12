@@ -8,6 +8,8 @@ from scipy.optimize import minimize
 from scipy.stats import zscore
 from tqdm.auto import trange
 
+from .motion_utils import get_motion_estimate, get_bins
+
 
 def register_raster_rigid(
     raster,
@@ -124,15 +126,16 @@ def psolvecorr(
     if prior_lambda > 0:
         diff = sparse.diags(
             (
-                np.full(T - 1, -prior_lambda, dtype=A.dtype),
-                np.full(T - 1, prior_lambda, dtype=A.dtype),
+                np.full(T - 1, -prior_lambda/2, dtype=A.dtype),
+                np.full(T, prior_lambda, dtype=A.dtype),
+                np.full(T - 1, -prior_lambda/2, dtype=A.dtype),
             ),
-            offsets=(0, 1),
-            shape=(T - 1, T),
+            offsets=(-1, 0, 1),
+            shape=(T, T),
         )
         A = sparse.vstack((A, diff), format="csr")
         V = np.concatenate(
-            (V, np.zeros(T - 1)),
+            (V, np.zeros(T)),
         )
 
     # solve sparse least squares problem
@@ -160,7 +163,7 @@ def psolvecorr_spatial(
     soft_weights=True,
 ):
     # D = pairwise_displacement
-    W = C > mincorr
+    W = (C > mincorr) * C
 
     # weighted problem
     # if pairwise_displacement_weight is None:
@@ -225,6 +228,7 @@ def psolvecorr_spatial(
 
         # add the temporal smoothness prior in this window
         if temporal_prior:
+            print(block_sparse_kron.dtype)
             temporal_diff_operator = sparse.diags(
                 (
                     np.full(T - 1, -1, dtype=block_sparse_kron.dtype),
@@ -273,6 +277,8 @@ def psolvecorr_spatial(
 
     # initialize at the column mean of pairwise displacements (in each window)
     p0 = D.mean(axis=2).reshape(B * T)
+    
+    return coefficients, targets, p0
 
     # use LSMR to solve the whole problem
     displacement, *_ = sparse.linalg.lsmr(coefficients, targets, x0=p0)
@@ -868,3 +874,7 @@ def online_register_rigid(
 
     p = np.concatenate(ps)
     return p
+
+
+# -- newton stuff
+
