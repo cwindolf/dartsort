@@ -194,8 +194,8 @@ def full_weighted_thomas(
     if max_dt_s is not None and max_dt_s > 0:
         mask = la.toeplitz(
             np.r_[
-                np.ones(max_dt_s // bin_s, dtype=Ss.dtype),
-                np.zeros(T - max_dt_s // bin_s, dtype=Ss.dtype),
+                np.ones(int(max_dt_s // bin_s), dtype=Ss.dtype),
+                np.zeros(T - int(max_dt_s // bin_s), dtype=Ss.dtype),
             ]
         )
         Ss *= mask[None]
