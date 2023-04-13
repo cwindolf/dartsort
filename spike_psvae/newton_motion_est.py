@@ -329,7 +329,6 @@ def register(
     win_step_um=400,
     win_scale_um=450,
     max_disp_um=None,
-    max_dt_s=None,
     thomas_kw=default_thomas_kw,
     xcorr_kw=default_xcorr_kw,
     raster_kw=default_raster_kw,
