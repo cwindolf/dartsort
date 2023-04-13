@@ -129,6 +129,9 @@ def _job(batch_start):
         device=p.device,
         denoiser=p.denoiser,
     )
+    
+    if torch.is_tensor(waveforms):
+        waveforms = waveforms.cpu().numpy()
 
     # -- localize and return
     ptps = waveforms.ptp(1)
