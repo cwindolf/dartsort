@@ -1,5 +1,7 @@
 from multiprocessing import get_context
 from concurrent.futures import ProcessPoolExecutor
+import cloudpickle
+from functools import wraps
 
 
 class MockFuture:
@@ -45,6 +47,17 @@ class MockQueue:
         self.q = []
         self.put = self.q.append
         self.get = lambda: self.q.pop(0)
+
+
+
+def apply_cloudpickle(fn, /, *args, **kwargs):
+    fn = cloudpickle.loads(fn)
+    return fn(*args, **kwargs)
+
+
+class CloudpicklePoolExecutor(ProcessPoolExecutor):
+    def submit(self, fn, /, *args, **kwargs):
+        return super().submit(apply_cloudpickle, cloudpickle.dumps(fn), *args, **kwargs)
 
 
 def get_pool(n_jobs, context="spawn", cls=ProcessPoolExecutor):
