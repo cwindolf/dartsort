@@ -578,25 +578,31 @@ class TPCA(ChunkFeature):
         if wfs is None:
             return None
 
-        features = np.full(
-            (wfs.shape[0], *self.out_shape), np.nan, dtype=self.dtype
-        )
-        features_ = features.transpose(0, 2, 1)
-
         if torch.is_tensor(wfs):
             wfs_in_probe = wfs.permute(0, 2, 1)
+            features = torch.full(
+                (wfs.shape[0], *self.out_shape),
+                torch.nan,
+                dtype=wfs.dtype,
+                device=wfs.device,
+            )
+            features_ = features.permute(0, 2, 1)
         else:
             wfs_in_probe = wfs.transpose(0, 2, 1)
+            features = np.full(
+                (wfs.shape[0], *self.out_shape), np.nan, dtype=wfs.dtype
+            )
+            features_ = features.transpose(0, 2, 1)
 
         in_probe_index = self.channel_index < self.channel_index.shape[0]
         chans_in_probe = in_probe_index[max_channels]
         wfs_in_probe = wfs_in_probe[chans_in_probe]
         features_[chans_in_probe] = self.raw_transform(wfs_in_probe)
 
-        if torch.is_tensor(wfs):
-            wfs_in_probe = wfs.permute(0, 2, 1)
-        else:
-            wfs_in_probe = wfs.transpose(0, 2, 1)
+#         if torch.is_tensor(wfs):
+#             wfs_in_probe = wfs.permute(0, 2, 1)
+#         else:
+#             wfs_in_probe = wfs.transpose(0, 2, 1)
 
         return features
 
