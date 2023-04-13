@@ -26,7 +26,8 @@ class MockPoolExecutor:
         initargs=None,
         context=None,
     ):
-        initializer(*initargs)
+        if initializer is not None:
+            initializer(*initargs)
         self.map = map
         self.imap = map
 
