@@ -34,11 +34,11 @@ class MotionEstimate:
                     spatial_bin_edges_um[1:] + spatial_bin_edges_um[:-1]
                 )
 
-    def disp_at_s(self, t_s, depth_um=None):
+    def disp_at_s(self, t_s, depth_um=None, grid=False):
         raise NotImplementedError
 
-    def correct_s(self, t_s, depth_um):
-        return depth_um - self.disp_at_s(t_s, depth_um)
+    def correct_s(self, t_s, depth_um, grid=False):
+        return depth_um - self.disp_at_s(t_s, depth_um, grid=grid)
 
 
 class RigidMotionEstimate(MotionEstimate):
@@ -66,10 +66,12 @@ class RigidMotionEstimate(MotionEstimate):
         self.lerp = interp1d(
             self.time_bin_centers_s,
             self.displacement,
-            fill_value="extrapolate",
+            bounds_error=False,
+            fill_value=tuple(self.displacement[[0, -1]]),
         )
 
-    def disp_at_s(self, t_s, depth_um=None):
+    def disp_at_s(self, t_s, depth_um=None, grid=False):
+        assert not grid
         return self.lerp(t_s)
 
 
@@ -103,6 +105,14 @@ class NonrigidMotionEstimate(MotionEstimate):
             spatial_bin_centers_um=spatial_bin_centers_um,
         )
 
+        # used below to disable RectBivariateSpline's extrapolation behavior
+        # we'd rather fill in with the boundary value than make some line
+        # going who knows where
+        self.t_low = self.time_bin_centers_s.min()
+        self.t_high = self.time_bin_centers_s.max()
+        self.d_low = self.spatial_bin_centers_um.min()
+        self.d_high = self.spatial_bin_centers_um.max()
+
         self.lerp = RectBivariateSpline(
             self.spatial_bin_centers_um,
             self.time_bin_centers_s,
@@ -111,8 +121,12 @@ class NonrigidMotionEstimate(MotionEstimate):
             ky=1,
         )
 
-    def disp_at_s(self, t_s, depth_um=None):
-        return self.lerp(depth_um, t_s, grid=False)
+    def disp_at_s(self, t_s, depth_um=None, grid=False):
+        return self.lerp(
+            np.clip(depth_um, self.d_low, self.d_high),
+            np.clip(t_s, self.t_low, self.t_high),
+            grid=grid,
+        )
 
 
 class IdentityMotionEstimate(MotionEstimate):
@@ -139,17 +153,34 @@ class ComposeMotionEstimates(MotionEstimate):
 
         return disp
 
-    
+
 def get_motion_estimate(
     displacement,
     time_bin_edges_s=None,
     time_bin_centers_s=None,
     spatial_bin_edges_um=None,
     spatial_bin_centers_um=None,
+    windows=None,
+    window_weights=None,
+    upsample_by_windows=False,
 ):
     displacement = np.asarray(displacement).squeeze()
     assert displacement.ndim <= 2
-    if displacement.ndim == 2:
+    assert any(
+        a is not None for a in (spatial_bin_edges_um, spatial_bin_centers_um)
+    )
+    assert any(a is not None for a in (time_bin_edges_s, time_bin_centers_s))
+
+    # rigid case
+    if displacement.ndim == 1:
+        return RigidMotionEstimate(
+            displacement,
+            time_bin_edges_s=time_bin_edges_s,
+            time_bin_centers_s=time_bin_centers_s,
+        )
+
+    # linear interpolation nonrigid
+    if not upsample_by_windows:
         return NonrigidMotionEstimate(
             displacement,
             time_bin_edges_s=time_bin_edges_s,
@@ -157,12 +188,36 @@ def get_motion_estimate(
             spatial_bin_edges_um=spatial_bin_edges_um,
             spatial_bin_centers_um=spatial_bin_centers_um,
         )
+
+    # upsample using the windows to spatial_bin_centers space
+    if spatial_bin_centers_um is not None:
+        D = spatial_bin_centers_um.shape[0]
     else:
-        return RigidMotionEstimate(
-            displacement,
-            time_bin_edges_s=time_bin_edges_s,
-            time_bin_centers_s=time_bin_centers_s,
-        )
+        D = spatial_bin_edges_um.shape[0] - 1
+    assert windows.shape == (displacement.shape[0], D)
+    if window_weights is None:
+        window_weights = np.ones_like(displacement)
+    assert window_weights.shape == displacement.shape
+    # precision weighted average
+    normalizer = windows.T @ window_weights
+    displacement_upsampled = (windows.T @ (P * window_weights)) / normalizer
+
+    return NonrigidMotionEstimate(
+        displacement_upsampled,
+        time_bin_edges_s=time_bin_edges_s,
+        time_bin_centers_s=time_bin_centers_s,
+        spatial_bin_edges_um=spatial_bin_edges_um,
+        spatial_bin_centers_um=spatial_bin_centers_um,
+    )
+
+
+def plot_me_traces(me, ax, offset=0, depths_um=None, **plot_kwargs):
+    if depths_um is None:
+        depths_um = me.spatial_bin_centers_um
+
+    for depth in depths_um:
+        disp = me.disp_at(me.time_bin_centers_um, depth_um=depth)
+        ax.plot(me.time_bin_centers_um, depth + offset + disp, **plot_kwargs)
 
 
 def get_bins(depths, times, bin_um, bin_s):
