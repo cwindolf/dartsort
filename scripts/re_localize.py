@@ -9,6 +9,27 @@ import pickle
 import shutil
 import argparse
 
+
+sdsc_base_path = Path("/mnt/sdceph/users/ibl/data")
+
+def eid2sdscpath(eid):
+    pids, probes = one.eid2pid(eid)
+    alyx_base_path = one.eid2path(eid)
+    paths = {}
+    for pid, probe in zip(pids, probes):
+        rel_path = one.list_datasets(eid, "raw_ephys_data/probe00*ap.cbin")
+        assert len(rel_path) == 1
+        rel_path = Path(rel_path[0])
+        searchdir = sdsc_base_path / p.relative_to(one.cache_dir) / rel_path.parent
+        pattern = Path(rel_path.name).with_suffix(f".*.cbin")
+        glob = list(searchdir.glob(str(pattern)))
+        assert len(glob) == 1
+        paths[probe] = glob[0]
+        assert paths[probe].exists()
+
+    return paths
+
+
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
 
@@ -26,10 +47,7 @@ if __name__ == "__main__":
     #     base_url="https://alyx.internationalbrainlab.org",
     #     username="charlie.windolf",
     # )
-    one = ONE(
-        base_url="https://openalyx.internationalbrainlab.org",
-        password="international",
-    )
+    one = ONE()
 
     sessions_rep_site = one.alyx.rest('sessions', 'list', dataset_types='spikes.times', tag='2022_Q2_IBL_et_al_RepeatedSite')
 
@@ -61,11 +79,9 @@ if __name__ == "__main__":
         with open(sessdir / "session.pkl", "wb") as sess_jar:
             pickle.dump(session, sess_jar)
 
-        first_ap_stream = next(sn for sn in se.IblStreamingRecordingExtractor.get_stream_names(session=session['id']) if sn.endswith(".ap"))
-
         print("-" * 50)
         print(session['id'])
-        rec = si.read_ibl_streaming_recording(
+        rec = si.read_cbin_ibl(
             session['id'],
             first_ap_stream,
             cache_folder="/local/sicache",
