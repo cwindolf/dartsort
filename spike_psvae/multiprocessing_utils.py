@@ -3,7 +3,7 @@ from concurrent.futures import ProcessPoolExecutor
 
 
 class MockFuture:
-    """See below."""
+    """A non-concurrent class for mocking the concurrent.futures API."""
 
     def __init__(self, f, *args):
         self.f = f
@@ -14,7 +14,7 @@ class MockFuture:
 
 
 class MockPoolExecutor:
-    """A helper class for turning off concurrency when debugging."""
+    """A non-concurrent class for mocking the concurrent.futures API."""
 
     def __init__(
         self,
