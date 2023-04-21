@@ -5,9 +5,7 @@ from scipy.interpolate import interp1d, RectBivariateSpline
 from tqdm.auto import tqdm
 from scipy.ndimage import gaussian_filter1d
 from scipy import signal
-from spikeinterface.sortingcomponents.motion_estimation import (
-    get_windows as si_get_windows,
-)
+
 
 from .ibme_corr import (
     register_raster_rigid,
@@ -16,11 +14,13 @@ from .ibme_corr import (
     psolvecorr,
     psolvecorr_spatial,
 )
-from .motion_est import (
+from .motion_utils import (
     RigidMotionEstimate,
     NonrigidMotionEstimate,
     IdentityMotionEstimate,
     ComposeMotionEstimates,
+    fast_raster,
+    get_windows,
 )
 
 
@@ -141,6 +141,9 @@ def register_nonrigid(
     post_transform=np.log1p,
     gaussian_smoothing_sigma_um=3,
     upsample_to_histogram_bin=False,
+    reference=None,
+    pbar=True,
+    return_CD=False,
 ):
     """1D nonrigid registration
 
@@ -232,13 +235,16 @@ def register_nonrigid(
         geom,
         win_step_um,
         win_sigma_um,
-        margin_um=-disp,
+        margin_um=-win_step_um / 2,
         win_shape=window_shape,
         return_locs=False,
         zero_threshold=1e-5,
     )
     extra["windows"] = windows
     extra["window_centers"] = window_centers
+    if return_CD:
+        extra["C"] = []
+        extra["D"] = []
     n_windows = windows.shape[0]
 
     # torch versions on device
@@ -252,9 +258,10 @@ def register_nonrigid(
     else:
         ps = np.empty((n_windows, T))
 
-    for k, (window, sl) in enumerate(
-        zip(tqdm(windows_, desc="windows"), slices)
-    ):
+    it = windows_
+    if pbar:
+        it = tqdm(windows_, desc="windows")
+    for k, (window, sl) in enumerate(zip(it, slices)):
         # we search for the template (windowed part of raster a)
         # within a larger-than-the-window neighborhood in raster b
         b_low = max(0, sl.start - disp)
@@ -291,6 +298,10 @@ def register_nonrigid(
                 prior_lambda=prior_lambda,
                 soft_weights=soft_weights,
             )
+        
+        if return_CD:
+            extra["C"].append(C)
+            extra["D"].append(D)
 
     if spatial_prior:
         ps = psolvecorr_spatial(
@@ -303,6 +314,10 @@ def register_nonrigid(
             reference_displacement=None,
         )
         ps = ps * bin_um
+    
+    if reference is not None:
+        if isinstance(reference, int):
+            ps -= ps[:, 0, None]
 
     extra["ps"] = ps
 
@@ -329,44 +344,6 @@ def register_nonrigid(
 
 
 # -- nonrigid reg helpers
-
-
-def get_windows(
-    bin_um,
-    spatial_bin_edges,
-    geom,
-    win_step_um,
-    win_sigma_um,
-    margin_um=0,
-    win_shape="rect",
-    return_locs=False,
-    zero_threshold=1e-5,
-):
-    if win_shape == "gaussian":
-        win_sigma_um = win_sigma_um / 2
-    windows, locs = si_get_windows(
-        rigid=False,
-        bin_um=bin_um,
-        contact_pos=geom,
-        spatial_bin_edges=spatial_bin_edges,
-        margin_um=margin_um,
-        win_step_um=win_step_um,
-        win_sigma_um=win_sigma_um,
-        win_shape=win_shape,
-    )
-    windows = np.array(windows)
-    locs = np.array(locs)
-
-    windows /= windows.sum(axis=1, keepdims=True)
-    windows[windows < zero_threshold] = 0
-    windows /= windows.sum(axis=1, keepdims=True)
-
-    slices = []
-    for w in windows:
-        in_window = np.flatnonzero(w)
-        slices.append(slice(in_window[0], in_window[-1]))
-
-    return windows, slices, locs
 
 
 def compose_shifts_in_orig_domain(orig_shift, new_shift):
@@ -411,89 +388,3 @@ def compose_shifts_in_orig_domain(orig_shift, new_shift):
     h = g_lerp(x_plus_f.ravel(), np.tile(time_domain, D), grid=False)
 
     return orig_shift + h.reshape(orig_shift.shape)
-
-
-# -- code for making rasters
-
-
-def get_bins(depths, times, bin_um, bin_s):
-    spatial_bin_edges_um = np.arange(
-        np.floor(depths.min()),
-        np.ceil(depths.max()) + bin_um,
-        bin_um,
-    )
-
-    time_bin_edges_s = np.arange(
-        np.floor(times.min()),
-        np.ceil(times.max()) + bin_s,
-        bin_s,
-    )
-
-    return spatial_bin_edges_um, time_bin_edges_s
-
-
-def fast_raster(
-    amps,
-    depths,
-    times,
-    bin_um=1,
-    bin_s=1,
-    amp_scale_fn=None,
-    gaussian_smoothing_sigma_um=0,
-    avg_in_bin=True,
-    post_transform=None,
-):
-    spatial_bin_edges_um, time_bin_edges_s = get_bins(
-        depths, times, bin_um, bin_s
-    )
-
-    if amp_scale_fn is None:
-        weights = amps
-    else:
-        weights = amp_scale_fn(amps)
-
-    if gaussian_smoothing_sigma_um:
-        spatial_bin_edges_um_1um = np.arange(
-            np.floor(depths.min()),
-            np.ceil(depths.max()) + 1,
-            1,
-        )
-        r_up = np.histogram2d(
-            depths,
-            times,
-            bins=(spatial_bin_edges_um_1um, time_bin_edges_s),
-            weights=weights,
-        )[0]
-        if avg_in_bin:
-            r_up /= np.maximum(
-                1,
-                np.histogram2d(
-                    depths,
-                    times,
-                    bins=(spatial_bin_edges_um_1um, time_bin_edges_s),
-                )[0],
-            )
-
-        r_up = gaussian_filter1d(r_up, gaussian_smoothing_sigma_um / bin_um)
-        r = signal.resample(r_up, spatial_bin_edges_um.size - 1)
-    else:
-        r = np.histogram2d(
-            depths,
-            times,
-            bins=(spatial_bin_edges_um, time_bin_edges_s),
-            weights=weights,
-        )[0]
-        if avg_in_bin:
-            r /= np.maximum(
-                1,
-                np.histogram2d(
-                    depths,
-                    times,
-                    bins=(spatial_bin_edges_um, time_bin_edges_s),
-                )[0],
-            )
-
-    if post_transform is not None:
-        r = post_transform(r)
-
-    return r, spatial_bin_edges_um, time_bin_edges_s
