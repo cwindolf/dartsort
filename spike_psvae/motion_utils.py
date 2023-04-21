@@ -166,9 +166,6 @@ def get_motion_estimate(
 ):
     displacement = np.asarray(displacement).squeeze()
     assert displacement.ndim <= 2
-    assert any(
-        a is not None for a in (spatial_bin_edges_um, spatial_bin_centers_um)
-    )
     assert any(a is not None for a in (time_bin_edges_s, time_bin_centers_s))
 
     # rigid case
@@ -178,6 +175,9 @@ def get_motion_estimate(
             time_bin_edges_s=time_bin_edges_s,
             time_bin_centers_s=time_bin_centers_s,
         )
+    assert any(
+        a is not None for a in (spatial_bin_edges_um, spatial_bin_centers_um)
+    )
 
     # linear interpolation nonrigid
     if not upsample_by_windows:
