@@ -881,7 +881,6 @@ def merge_clusters(
     if relocated:
         x, y, z_abs, alpha = h5["localizations"][:, :4].T
         z_reg = h5["z_reg"][:]
-
     # loop by order of snr
     # high snr will be the last element here
     labels_to_process = list(np.argsort(snrs))
