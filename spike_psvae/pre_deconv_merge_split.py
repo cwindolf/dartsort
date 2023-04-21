@@ -1,4 +1,3 @@
-# %%
 import numpy as np
 from sklearn.decomposition import PCA
 from sklearn.discriminant_analysis import LinearDiscriminantAnalysis as LDA
@@ -10,7 +9,7 @@ from spike_psvae.cluster_utils import (
 from spike_psvae.isocut5 import isocut5 as isocut
 from scipy.spatial.distance import cdist
 from tqdm.auto import tqdm, trange
-from spike_psvae.denoise import denoise_wf_nn_tmp_single_channel
+from spike_psvae.denoise import denoise_wf_nn_tmp_single_channel, SingleChanDenoiser
 from spike_psvae import waveform_utils
 from spike_psvae.pyks_ccg import ccg_metrics
 
