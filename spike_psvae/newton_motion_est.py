@@ -55,7 +55,7 @@ def newton_solve_rigid(D, S, Sigma0inv):
     return p, negHS
 
 
-def thomas_solve(Ds, Us, lambda_t=1.0, lambda_s=1.0):
+def thomas_solve(Ds, Us, lambda_t=1.0, lambda_s=1.0, eps=1e-10):
     """Block tridiagonal algorithm, special cased to our setting"""
     Ds = np.asarray(Ds, dtype=np.float64)
     Us = np.asarray(Us, dtype=np.float64)
@@ -63,28 +63,30 @@ def thomas_solve(Ds, Us, lambda_t=1.0, lambda_s=1.0):
     B, T, T_ = Ds.shape
     assert T == T_
     assert Us.shape == Ds.shape
-    L_t = lambda_t * laplacian(T)
-    eye = np.eye(T)
-    eye_s = lambda_s * eye
-    # diag_prior_terms = L_t + lambda_s * eye
-    offdiag_const = -(lambda_s / 2)
-    offdiag_prior_terms = offdiag_const * eye
-    del eye
-    extra = {}
-    extra["L_t"] = L_t
+    # temporal prior matrix
+    L_t = lambda_t * laplacian(T, eps=eps)
+    extra = dict(L_t=L_t)
 
     # just solve independent problems when there's no spatial regularization
     # not that there's much overhead to the backward pass etc but might as well
-    if lambda_s == 0:
+    if B == 1 or lambda_s == 0:
         P = np.zeros((B, T))
         extra["HU"] = np.zeros((B, T, T))
         for b in range(B):
             P[b], extra["HU"][b] = newton_solve_rigid(Ds[b], Us[b], L_t)
         return P, extra
 
+    # spatial prior is a sparse, block tridiagonal kronecker product
+    # the first and last diagonal blocks are
+    # Lambda_s_diag0 = (lambda_s / 2) * (L_t + eps * np.eye(T))
+    # the other diagonal blocks are
+    Lambda_s_diag1 = lambda_s * L_t
+    # and the off-diagonal blocks are
+    Lambda_s_offdiag = (-lambda_s / 2) * L_t
+
     # initialize block-LU stuff and forward variable
-    alpha_hat_b = L_t + eye_s / 2 + neg_hessian_likelihood_term(Us[0])
-    targets = np.c_[offdiag_prior_terms, newton_rhs(Us[0], Ds[0])]
+    alpha_hat_b = L_t + Lambda_s_diag1 / 2 + neg_hessian_likelihood_term(Us[0])
+    targets = np.c_[Lambda_s_offdiag, newton_rhs(Us[0], Ds[0])]
     res = solve(alpha_hat_b, targets, assume_a="pos")
     assert res.shape == (T, T + 1)
     gamma_hats = [res[:, :T]]
@@ -93,10 +95,9 @@ def thomas_solve(Ds, Us, lambda_t=1.0, lambda_s=1.0):
     # forward pass
     for b in range(1, B):
         s_factor = 1 if b < B - 1 else 0.5
-        Ab = L_t + eye_s * s_factor + neg_hessian_likelihood_term(Us[b])
-        # we can * instead of @ since our offdiag is diag
-        alpha_hat_b = Ab - offdiag_const * gamma_hats[b - 1]
-        targets[:, T] = newton_rhs(Us[b], Ds[b]) - offdiag_const * ys[b - 1]
+        Ab = L_t + Lambda_s_diag1 * s_factor + neg_hessian_likelihood_term(Us[b])
+        alpha_hat_b = Ab - Lambda_s_offdiag @ gamma_hats[b - 1]
+        targets[:, T] = newton_rhs(Us[b], Ds[b]) - Lambda_s_offdiag @ ys[b - 1]
         res = solve(alpha_hat_b, targets)
         assert res.shape == (T, T + 1)
         gamma_hats.append(res[:, :T])
@@ -132,8 +133,6 @@ def full_thomas(
     assert Ds.shape == Us.shape
     B, T, T_ = Ds.shape
     assert T == T_
-    if B == 1:
-        lambda_s = 0  # no space to have a prior on
 
     # now we can do our tridiag solve
     P, extra = thomas_solve(Ds, Us, lambda_t=lambda_t, lambda_s=lambda_s)
