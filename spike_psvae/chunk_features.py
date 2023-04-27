@@ -1,10 +1,8 @@
-# %%
 import numpy as np
 import torch
 from sklearn.decomposition import PCA, TruncatedSVD
 
-# %%
-from spike_psvae import localize_index, waveform_utils
+from spike_psvae import localize_index, localize_torch, waveform_utils
 
 
 # %%
@@ -89,7 +87,6 @@ class ChunkFeature:
 
 # %%
 class MaxPTP(ChunkFeature):
-
     name = "maxptps"
     # scalar
     out_shape = ()
@@ -117,9 +114,7 @@ class MaxPTP(ChunkFeature):
         return maxptps
 
 
-# %%
 class TroughDepth(ChunkFeature):
-
     name = "trough_depths"
     # scalar
     out_shape = ()
@@ -151,9 +146,7 @@ class TroughDepth(ChunkFeature):
         return trough_depths
 
 
-# %%
 class PeakHeight(ChunkFeature):
-
     name = "peak_heights"
     # scalar
     out_shape = ()
@@ -185,9 +178,7 @@ class PeakHeight(ChunkFeature):
         return peak_heights
 
 
-# %%
 class PTPVector(ChunkFeature):
-
     name = "ptp_vectors"
     needs_fit = True
 
@@ -219,6 +210,8 @@ class PTPVector(ChunkFeature):
         self.needs_fit = False
 
     def to_h5(self, h5):
+        if f"{self.which_waveforms}_ptpvector_info":
+            return
         group = h5.create_group(f"{self.which_waveforms}_ptpvector_info")
         group.create_dataset("C", data=self.out_shape[1])
 
@@ -243,7 +236,6 @@ class PTPVector(ChunkFeature):
         return wfs.ptp(1)
 
 
-# %%
 class Waveform(ChunkFeature):
     needs_fit = True
 
@@ -282,6 +274,8 @@ class Waveform(ChunkFeature):
         self.needs_fit = False
 
     def to_h5(self, h5):
+        if f"{self.which_waveforms}_waveforms_info" in h5:
+            return
         group = h5.create_group(f"{self.which_waveforms}_waveforms_info")
         group.create_dataset("T", data=self.out_shape[0])
         group.create_dataset("C", data=self.out_shape[1])
@@ -304,13 +298,10 @@ class Waveform(ChunkFeature):
         return self.handle_which_wfs(subtracted_wfs, cleaned_wfs, denoised_wfs)
 
 
-# %% [markdown]
 # -- localization
 
 
-# %%
 class Localization(ChunkFeature):
-
     out_shape = (5,)
     tensor_ok = True
 
@@ -338,9 +329,13 @@ class Localization(ChunkFeature):
         self.n_workers = n_workers
         self.which_waveforms = which_waveforms
         self.feature = feature
-        if not name_extra and feature == "peak":
-            name_extra = "peak"
+        if not name_extra and feature != "ptp":
+            name_extra = feature
         self.name = f"localizations{name_extra}"
+        self.dogpu = "gpu" in feature
+        self.opt = "lbfgs"
+        if "adam" in feature:
+            self.opt = "adam"
 
     def transform(
         self,
@@ -353,10 +348,11 @@ class Localization(ChunkFeature):
         if wfs is None:
             return None
 
-        if self.feature == "ptp":
+        if "ptp" in self.feature:
             if torch.is_tensor(wfs):
                 ptps = wfs.max(dim=1).values - wfs.min(dim=1).values
-                ptps = ptps.cpu().numpy()
+                if not self.dogpu:
+                    ptps = ptps.cpu().numpy()
             else:
                 ptps = wfs.ptp(1)
         elif self.feature == "peak":
@@ -366,9 +362,7 @@ class Localization(ChunkFeature):
                 peaks[torch.isnan(peaks)] = -1
                 mcs = torch.argmax(peaks, dim=1)
                 argpeaks = argpeaks[torch.arange(len(argpeaks)), mcs]
-                ptps = (
-                    abswfs[torch.arange(len(mcs)), argpeaks, :].cpu().numpy()
-                )
+                ptps = abswfs[torch.arange(len(mcs)), argpeaks, :]
             else:
                 peaks = np.max(np.absolute(wfs), axis=1)
                 argpeaks = np.argmax(np.absolute(wfs), axis=1)
@@ -379,27 +373,38 @@ class Localization(ChunkFeature):
         else:
             raise NameError("Use ptp or peak value for localization.")
 
-        xs, ys, z_rels, z_abss, alphas = localize_index.localize_ptps_index(
-            ptps,
-            self.geom,
-            max_channels,
-            self.channel_index,
-            n_channels=self.loc_n_chans,
-            radius=self.loc_radius,
-            n_workers=self.n_workers,
-            pbar=False,
-            logbarrier=self.localization_kind == "logbarrier",
-            model=self.localizaton_model,
-        )
-        # NOTE the reordering, same as it used to be...
-        return np.c_[xs, ys, z_abss, alphas, z_rels]
+        if torch.is_tensor(ptps):
+            x, y, z_rel, z_abs, alpha = localize_torch.localize_ptps_index(
+                ptps,
+                self.geom,
+                max_channels,
+                self.channel_index,
+                n_channels=self.loc_n_chans,
+                radius=self.loc_radius,
+                logbarrier=self.localization_kind == "logbarrier",
+                model=self.localizaton_model,
+                optimizer=self.opt,
+            )
+            return torch.column_stack((x, y, z_abs, alpha, z_rel))
+        else:
+            xs, ys, z_rels, z_abss, alphas = localize_index.localize_ptps_index(
+                ptps,
+                self.geom,
+                max_channels,
+                self.channel_index,
+                n_channels=self.loc_n_chans,
+                radius=self.loc_radius,
+                n_workers=self.n_workers,
+                pbar=False,
+                logbarrier=self.localization_kind == "logbarrier",
+                model=self.localizaton_model,
+            )
+            return np.c_[xs, ys, z_abss, alphas, z_rels]
 
 
-# %% [markdown]
 # -- a more involved example
 
 
-# %%
 class TPCA(ChunkFeature):
     needs_fit = True
     tensor_ok = True
@@ -446,9 +451,7 @@ class TPCA(ChunkFeature):
 
     def to(self, device):
         self.mean_ = torch.as_tensor(self.tpca.mean_, device=device)
-        self.components_ = torch.as_tensor(
-            self.tpca.components_, device=device
-        )
+        self.components_ = torch.as_tensor(self.tpca.components_, device=device)
         self.whiten = self.tpca.whiten
         self.whitener = torch.as_tensor(self.whitener, device=device)
         self.channel_index = torch.as_tensor(self.channel_index, device=device)
@@ -478,7 +481,6 @@ class TPCA(ChunkFeature):
             self.whitener = np.sqrt(self.tpca.explained_variance_)
 
     def raw_transform(self, X):
-
         X = X - self.mean_
         Xt = X @ self.components_.T
         if self.centered:
@@ -493,6 +495,8 @@ class TPCA(ChunkFeature):
             return (X @ self.components_) + self.mean_
 
     def to_h5(self, h5):
+        if f"{self.which_waveforms}_tpca" in h5:
+            return
         group = h5.create_group(f"{self.which_waveforms}_tpca")
         group.create_dataset("T", data=self.T)
         group.create_dataset("tpca_mean", data=self.tpca.mean_)
@@ -509,12 +513,14 @@ class TPCA(ChunkFeature):
             self.tpca = PCA(self.rank)
             self.tpca.mean_ = group["tpca_mean"][:]
             self.tpca.components_ = group["tpca_components"][:]
+            self.n_components = self.tpca.n_components
             self.centered = group["tpca_centered"][()]
             if self.centered:
                 self.whiten = group["tpca_whiten"][()]
                 self.whitener = group["tpca_whitener"][()]
             self.needs_fit = False
         except KeyError:
+            print("Failed to load", f"{self.which_waveforms}_tpca")
             pass
 
     def from_sklearn(self, sklearn_pca):
@@ -616,11 +622,6 @@ class TPCA(ChunkFeature):
         chans_in_probe = in_probe_index[max_channels]
         wfs_in_probe = wfs_in_probe[chans_in_probe]
         features_[chans_in_probe] = self.raw_transform(wfs_in_probe)
-
-#         if torch.is_tensor(wfs):
-#             wfs_in_probe = wfs.permute(0, 2, 1)
-#         else:
-#             wfs_in_probe = wfs.transpose(0, 2, 1)
 
         return features
 
@@ -737,6 +738,8 @@ class STPCA(ChunkFeature):
         return Xt
 
     def to_h5(self, h5):
+        if f"{self.which_waveforms}_pca" in h5:
+            return
         group = h5.create_group(f"{self.which_waveforms}_pca")
         group.create_dataset("T", data=self.T)
         group.create_dataset("pca_mean", data=self.pca.mean_)
@@ -825,6 +828,3 @@ class STPCA(ChunkFeature):
         )
 
         return self.raw_transform(sub_wfs.reshape(len(wfs), -1))
-
-
-# %%

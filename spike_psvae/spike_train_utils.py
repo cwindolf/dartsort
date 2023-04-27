@@ -35,6 +35,7 @@ def clean_align_and_get_templates(
     seed=0,
     dtype=np.float32,
     remove_empty_units=True,
+    remove_double_counted=False,
     order_units_by_z=False,
     geom=None,
 ):
@@ -59,9 +60,6 @@ def clean_align_and_get_templates(
     aligned_spike_train = spike_train.copy()
     del spike_train  # we cannot modify original now
 
-    # randomness used when sampling spikes for templates
-    rg = np.random.default_rng(seed)
-
     # clean spike train: remove small units, make labels contiguous
     units, counts = np.unique(aligned_spike_train[:, 1], return_counts=True)
     print(
@@ -80,69 +78,37 @@ def clean_align_and_get_templates(
         # mark these spikes as triaged
         # (rather than deleting, to keep the same shape for the spike train)
         aligned_spike_train[too_small, 1] = -1
+
     if remove_empty_units:
         make_labels_contiguous(aligned_spike_train[:, 1], in_place=True)
-    times, labels = aligned_spike_train.T
-    n_units = labels.max() + 1
 
-    # pad for shift detection
-    spike_length_load = spike_length_samples + 2 * max_shift
-    trough_offset_load = trough_offset + max_shift
+    if remove_double_counted:
+        # if a unit has the same spike twice, triage it away
+        # False by default because this should be used with caution!
+        # only a good idea when we are confident that we
+        # have well-isolated units.
+        units = np.unique(aligned_spike_train[:, 1])
+        for unit in units[units >= 0]:
+            in_unit = np.flatnonzero(aligned_spike_train[:, 1] == unit)
+            ust = aligned_spike_train[in_unit]
+            unique_times, times_index = np.unique(ust, return_index=True)
+            to_remove = ~np.isin(np.arange(len(ust)), times_index)
+            aligned_spike_train[in_unit[to_remove], 1] = -1
 
-    # we'll store the final templates, not the padded ones
-    templates = np.zeros(
-        (n_units, spike_length_samples, n_channels),
+    aligned_spike_train, templates, template_shifts = align_by_templates(
+        n_channels,
+        bin_file,
+        aligned_spike_train,
+        max_shift=max_shift,
+        n_samples=n_samples,
+        spike_length_samples=spike_length_samples,
+        trough_offset=trough_offset,
+        reducer=reducer,
+        seed=seed,
         dtype=dtype,
+        pbar=pbar,
+        in_place=True,
     )
-
-    # a padded waveform storage buffer
-    buffer = np.empty((n_samples, spike_length_load, n_channels), dtype=dtype)
-
-    # we will iterate through chunks of labels
-    units = range(n_units)
-    if pbar:
-        units = tqdm(units, desc="Align and get templates")
-    template_shifts = np.zeros(n_units, dtype=int)
-    for unit in units:
-        in_unit = np.flatnonzero(aligned_spike_train[:, 1] == unit)
-        if not in_unit.size:
-            continue
-
-        # pick waveforms
-        to_load = rg.choice(
-            in_unit, size=min(n_samples, in_unit.size), replace=False
-        )
-
-        # load padded waveforms
-        waveforms, skipped = spikeio.read_waveforms(
-            aligned_spike_train[to_load, 0],
-            bin_file,
-            n_channels,
-            spike_length_samples=spike_length_load,
-            trough_offset=trough_offset_load,
-            buffer=buffer,
-            dtype=dtype,
-        )
-
-        # find trough misalignment
-        template = reducer(waveforms, axis=0)
-        template_mc = template.ptp(0).argmax()
-        trough = np.abs(template[:, template_mc]).argmax()
-        # shift is actual trough - desired trough
-        # so, if shift > 0, we need to subtract it
-        shift = trough - trough_offset_load
-        if abs(shift) > max_shift:
-            shift = 0
-        if shift != 0:
-            aligned_spike_train[in_unit, 0] += shift
-        template_shifts[unit] = shift
-
-        # crop aligned template and store it
-        # we use a + here not a -!
-        # subtracting means moving the origin to the right
-        templates[unit] = template[
-            max_shift + shift : max_shift + shift + spike_length_samples
-        ]
 
     # sort so that times are increasing, but keep track of the order
     # so that the caller can handle bookkeeping
@@ -172,3 +138,86 @@ def clean_align_and_get_templates(
         ]
 
     return aligned_spike_train, order, templates, template_shifts
+
+
+def align_by_templates(
+    n_channels,
+    bin_file,
+    spike_train,
+    max_shift=0,
+    n_samples=250,
+    spike_length_samples=121,
+    trough_offset=42,
+    reducer=np.median,
+    seed=0,
+    dtype=np.float32,
+    pbar=True,
+    in_place=False,
+):
+    spike_train = spike_train if in_place else spike_train.copy()
+
+    n_units = spike_train[:, 1].max() + 1
+
+    # randomness used when sampling spikes for templates
+    rg = np.random.default_rng(seed)
+
+    # pad for shift detection
+    spike_length_load = spike_length_samples + 2 * max_shift
+    trough_offset_load = trough_offset + max_shift
+
+    # we'll store the final templates, not the padded ones
+    templates = np.zeros(
+        (n_units, spike_length_samples, n_channels),
+        dtype=dtype,
+    )
+
+    # a padded waveform storage buffer
+    buffer = np.empty((n_samples, spike_length_load, n_channels), dtype=dtype)
+
+    # we will iterate through chunks of labels
+    units = range(n_units)
+    if pbar:
+        units = tqdm(units, desc="Align and get templates")
+    template_shifts = np.zeros(n_units, dtype=int)
+    for unit in units:
+        in_unit = np.flatnonzero(spike_train[:, 1] == unit)
+        if not in_unit.size:
+            continue
+
+        # pick waveforms
+        to_load = rg.choice(
+            in_unit, size=min(n_samples, in_unit.size), replace=False
+        )
+
+        # load padded waveforms
+        waveforms, skipped = spikeio.read_waveforms(
+            spike_train[to_load, 0],
+            bin_file,
+            n_channels,
+            spike_length_samples=spike_length_load,
+            trough_offset=trough_offset_load,
+            buffer=buffer,
+            dtype=dtype,
+        )
+
+        # find trough misalignment
+        template = reducer(waveforms, axis=0)
+        template_mc = template.ptp(0).argmax()
+        trough = np.abs(template[:, template_mc]).argmax()
+        # shift is actual trough - desired trough
+        # so, if shift > 0, we need to subtract it
+        shift = trough - trough_offset_load
+        if abs(shift) > max_shift:
+            shift = 0
+        if shift != 0:
+            spike_train[in_unit, 0] += shift
+        template_shifts[unit] = shift
+
+        # crop aligned template and store it
+        # we use a + here not a -!
+        # subtracting means moving the origin to the right
+        templates[unit] = template[
+            max_shift + shift : max_shift + shift + spike_length_samples
+        ]
+
+    return spike_train, templates, template_shifts
