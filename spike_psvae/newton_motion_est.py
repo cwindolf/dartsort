@@ -495,7 +495,6 @@ def register(
     raster_kw=default_raster_kw,
     weights_kw=default_weights_kw,
     upsample_to_histogram_bin=False,
-    do_local_templates=False,
     device=None,
     pbar=True,
     save_full=False,
@@ -569,30 +568,6 @@ def register(
     if save_full:
         extra.update({k: wextra[k] for k in wextra if k in ("S", "U")})
 
-    if do_local_templates:
-        local_templates = np.array(
-            [
-                print(f"st{b}") or shifted_templates(raster, Ds[b], Us[b])
-                for b in range(B)
-            ]
-        )
-        for b in (
-            trange(B, desc="Corr for local templates") if pbar else range(B)
-        ):
-            Ds[b], _, _ = xcorr_windows(
-                local_templates[b],
-                windows[b, None],
-                spatial_bin_edges_um,
-                win_scale_um,
-                rigid=rigid,
-                bin_um=bin_um,
-                max_disp_um=max_disp_um,
-                pbar=False,
-                xcorr_kw=xcorr_kw,
-                device=device,
-            )
-        extra["local_templates"] = local_templates
-
     # solve for P
     me, textra = full_thomas(
         Ds,
@@ -612,21 +587,3 @@ def register(
         extra["C"] = Cs
 
     return me, extra
-
-
-def shifted_template(R, Di, Si, bin_um=1):
-    assert (R.shape[1],) == Di.shape == Si.shape
-    pad = int(np.abs(Di // bin_um).max())
-    Rshifted = np.empty_like(R)
-    for i, d in enumerate((Di // bin_um).astype(int)):
-        Rshifted[i, :] = np.pad(R[i, :], [(pad, pad)])[
-            pad + d : R.shape[1] + pad + d
-        ]
-    return (Rshifted * Si[None, :]).sum(1) / Si.sum()
-
-
-def shifted_templates(R, D, S):
-    sts = np.empty_like(R)
-    for i, (Di, Si) in enumerate(zip(D.T, S.T)):
-        sts[:, i] = shifted_template(R, Di, Si)
-    return sts
