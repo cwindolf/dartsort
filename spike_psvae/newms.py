@@ -311,7 +311,6 @@ def new_merge_split_ensemble(
             np.random.seed(random_seeds[i])
             indices_subset = np.random.choice(indices, size=int(len(indices)*(1-ensemble_percent)), replace=False)
             indices_subset = np.sort(indices_subset)
-            print(ensemble_percent)
             spike_train_subset = aligned_spike_train.copy()
             spike_train_subset[indices_subset,1] = -1
             orig_labels = spike_train_subset[:, 1].copy()
@@ -324,15 +323,51 @@ def new_merge_split_ensemble(
                 relocated=relocated,
                 **split_kwargs,
             )
+            
+            (
+                aligned_spike_train2,
+                order,
+                templates,
+                template_shifts,
+            ) = spike_train_utils.clean_align_and_get_templates(
+                np.vstack((spike_train_subset[:, 0], new_labels)).T,
+                n_channels,
+                raw_bin,
+                trough_offset=trough_offset,
+                spike_length_samples=spike_length_samples,
+                order_units_by_z=True,
+                geom=geom,
+            )
+            assert (order == np.arange(len(order))).all()
+            
+            kept = aligned_spike_train2[:, 1] >= 0
+            times_updated, labels_updated = deconv_resid_merge.run_deconv_merge(
+                aligned_spike_train2[kept],
+                geom,
+                raw_bin,
+                templates.ptp(1).argmax(1),
+                merge_resid_threshold=merge_resid_threshold,
+                trough_offset=trough_offset,
+                spike_length_samples=spike_length_samples,
+            )
+        
             ####MERGE HERE
-            new_labels[new_labels >= 0] = new_labels[new_labels >= 0] + prev_last_label
-            prev_last_label = np.unique(new_labels)[-1] + 1
-            label_list.append(new_labels)
-            spike_time_subset_list.append(spike_train_subset[:,0])
+            aligned_spike_train2[kept, 0] = times_updated
+            aligned_spike_train2[kept, 1] = labels_updated
+            
+            aligned_spike_train2[kept, 1] = aligned_spike_train2[kept, 1] + prev_last_label
+            prev_last_label = np.unique(aligned_spike_train2[kept, 1])[-1] + 1
+            
+            label_list.append(aligned_spike_train2[kept, 1])
+            spike_time_subset_list.append(aligned_spike_train2[kept, 0])
+            
             untriaged_orig = orig_labels >= 0
             # untriaged_orig_a = orig_labels_a >= 0
-            untriaged_now = new_labels >= 0
+            untriaged_now = aligned_spike_train2[kept, 1] >= 0
+            
             print(f"Split total kept: {(untriaged_now.sum() / untriaged_orig.sum())=}")
+            
+            
         labels_cat = np.concatenate(label_list)
         spike_time_cat = np.concatenate(spike_time_subset_list)
         time_order = np.argsort(spike_time_cat)
