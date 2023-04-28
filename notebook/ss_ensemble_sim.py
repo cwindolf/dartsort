@@ -5,18 +5,21 @@
 #       extension: .py
 #       format_name: percent
 #       format_version: '1.3'
-#       jupytext_version: 1.14.0
+#       jupytext_version: 1.14.5
 #   kernelspec:
 #     display_name: Python 3 (ipykernel)
 #     language: python
 #     name: python3
 # ---
 
-# %% tags=[]
+# %%
 # %load_ext autoreload
 # %autoreload 2
 
-# %% tags=[]
+# %%
+import warnings; warnings.simplefilter("ignore", category=DeprecationWarning)
+
+# %%
 from scipy.io import loadmat
 import numpy as np
 import matplotlib.pyplot as plt
@@ -31,7 +34,7 @@ import pickle
 import shutil
 from spike_psvae.hybrid_analysis import Sorting
 
-# %% tags=[]
+# %%
 from spike_psvae import (
     subtract,
     cluster_utils,
@@ -51,7 +54,7 @@ from spike_psvae import (
     before_deconv_merge_split,
 )
 
-# %% tags=[]
+# %%
 # %matplotlib inline
 plt.rc("figure", dpi=200)
 SMALL_SIZE = 8
@@ -65,30 +68,43 @@ plt.rc('ytick', labelsize=SMALL_SIZE)
 plt.rc('legend', fontsize=SMALL_SIZE)
 plt.rc('figure', titlesize=BIGGER_SIZE)
 
-# %% [markdown] tags=[]
+# %%
+import torch
+
+# %%
+torch.cuda.is_available()
+
+# %% [markdown]
 # ## Paths / config
 
 # %%
 #parameters
+bath_path = '/moto/stats/users/ch3676/'
 recording_name='recording_5_static/'
 sorting_name = 'sorting_static_5min/'
-data_path = '/media/cat/data/' + recording_name
-sort_path = Path('/media/cat/data/' + sorting_name)
+data_path = bath_path + recording_name
+sort_path = Path(bath_path + sorting_name)
+# !rsync -aP {data_path} /local/bincache/recording_5_static
+rec_gt = si.load_extractor(str(data_path))
+sort_gt = si.load_extractor(sort_path)
 data_name = 'traces_cached_seg0.raw'
 raw_data_bin = data_path + data_name
-output_folder = Path("/media/cat/cole/simulated_results/outputs_ensemble_static_5_min_sim_ensemble")
+# !rsync -aP {raw_data_bin} /local/bincache/
+raw_data_bin = Path(raw_data_bin)
+data_path = Path(data_path)
+raw_data_bin = Path("/local/bincache/") / raw_data_bin.name
+data_path = Path("/local/bincache/") / data_path.name
+
+output_folder = Path("/local/bincache/") / "simulated_results/outputs_ensemble_static_5min"
 template_locations = np.load(sort_path / 'template_locations.npy')
 
 raw_data_bin = Path(raw_data_bin)
 output_folder = Path(output_folder)
 
-rec_gt = si.load_extractor(data_path)
-sort_gt = si.load_extractor(sort_path)
 geom = rec_gt.get_probe().contact_positions
 print(rec_gt, sort_gt)
 pitch = waveform_utils.get_pitch(geom)
 
-# change the directory
 dsroot = Path(data_path)
 dsout = output_folder
 dsout.mkdir(exist_ok=True, parents=True)
@@ -97,7 +113,7 @@ dsout.mkdir(exist_ok=True, parents=True)
 (dsout / "scatterplots").mkdir(exist_ok=True)
 (dsout / "drift").mkdir(exist_ok=True)
 
-# %% tags=[]
+# %%
 t_start = 0
 t_end = None
 
@@ -112,7 +128,7 @@ args["do_reg"] = do_reg = False
 args["do_reloc"] = do_reloc = False 
 args["subtraction_thresholds"] = subtraction_thresholds = [12, 10, 8, 6, 5, 4]
 args["do_neural_net_denoise"] = do_neural_net_denoise = True
-args["refractory_period_frames"] = refractory_period_frames = 1
+args["refractory_period_frames"] = refractory_period_frames = 10
 args["fs"] = fs = 32000
 
 with open(dsout / 'sort_params.txt', 'w') as f:
@@ -134,13 +150,16 @@ plt.show()
 # %% [markdown]
 # # Detection / featurization
 
-# %% tags=[]
+# %%
 from spike_psvae import waveform_utils
 
 sub_dir = output_folder / "sub"
 sub_dir.mkdir(exist_ok=True)
 
-# %% tags=[]
+# %%
+import torch
+
+# %%
 sub_h5 = subtract.subtraction_binary(
     raw_data_bin,
     # dsout / "sippx" / "traces_cached_seg0.raw",
@@ -166,7 +185,7 @@ sub_h5 = subtract.subtraction_binary(
     sampling_rate=fs,
 )
 
-# %% tags=[]
+# %%
 overwrite = True
 
 with h5py.File(next((dsout / "sub").glob("sub*h5")), "r+" if overwrite else "r") as h5:
@@ -213,7 +232,7 @@ with h5py.File(next((dsout / "sub").glob("sub*h5")), "r+" if overwrite else "r")
         h5.create_dataset("p", data=p)
     t = spike_index[:, 0] / fs
 
-# %% tags=[]
+# %%
 fig, ax = plt.subplots(figsize=(8, 6))
 for zz in np.unique(geom[:, 1]):
     ax.axhline(zz, lw=1, color="k", alpha=0.2)
@@ -309,7 +328,7 @@ fig.suptitle(f"x vs. registered y.  {len(maxptp)} spikes.", y=0.92)
 fig.savefig(dsout / "scatterplots" / "initial_detection_x_v_regy.png")
 plt.close(fig)
 
-# %% tags=[]
+# %%
 fig, (aa, ab) = plt.subplots(ncols=2, figsize=(8, 3))
 
 counts, edges, _ = aa.hist(p, bins=128, color="k")
@@ -358,14 +377,14 @@ fig.savefig(dsout / "drift" / f"initial_detection_stable_bins.png", dpi=300)
 # %% [markdown]
 # # Initial clustering
 
-# %% tags=[]
+# %%
 sub_h5 = next((dsout / "sub").glob("sub*h5"))
 (dsout / "clust").mkdir(exist_ok=True)
 
 with h5py.File(sub_h5) as h5:
     spike_index = h5["spike_index"][:]
 
-# %% tags=[]
+# %%
 st = spike_index.copy()
 # st[:, 1] = newms.registered_maxchan(st, p, geom, pfs=fs)
 good_times = np.isin((st[:, 0]) // fs, np.flatnonzero(p_good))
@@ -374,16 +393,16 @@ st[~good_times, 1] = -1
 spike_train, templates, order = newms.new_merge_split_ensemble(
     st,
     geom.shape[0],
-    dsroot / "traces_cached_seg0.raw",
+    raw_data_bin,
     sub_h5,
     geom,
     dsout / "clust",
-    n_workers=10,
-    merge_resid_threshold=merge_thresh_early,
+    n_workers=20,
+    merge_resid_threshold=2.0,
     relocated=do_reloc,
     trough_offset=trough_offset,
     ensemble_percent=.8,
-    num_ensemble=2,
+    num_ensemble=3,
     spike_length_samples=spike_length_samples,
     split_kwargs=dict(
         split_steps=(
@@ -402,13 +421,43 @@ spike_train, templates, order = newms.new_merge_split_ensemble(
     )
 )
 
+# st = spike_index.copy()
+# # st[:, 1] = newms.registered_maxchan(st, p, geom, pfs=fs)
+# good_times = np.isin((st[:, 0]) // fs, np.flatnonzero(p_good))
+# print(f"{good_times.sum()=}")
+# st[~good_times, 1] = -1
+# spike_train, templates, order = newms.new_merge_split(
+#     st,
+#     geom.shape[0],
+#     raw_data_bin,
+#     sub_h5,
+#     geom,
+#     dsout / "clust",
+#     n_workers=20,
+#     merge_resid_threshold=2.0,
+#     relocated=do_reloc,
+#     trough_offset=trough_offset,
+#     # ensemble_percent=.8,
+#     # num_ensemble=3,
+#     spike_length_samples=spike_length_samples,
+#     split_kwargs=dict(
+#         split_steps=(
+#             before_deconv_merge_split.herding_split,
+#         ),
+#         recursive_steps=(True,),
+#         split_step_kwargs=(
+#             dict(
+#                 hdbscan_kwargs=dict(
+#                     min_cluster_size=15,
+#                     # min_samples=5,
+#                     cluster_selection_epsilon=20.0,
+#                 ),
+#             ),
+#         ),
+#     )
+# )
+
 # %%
-np.vstack((np.zeros(10), np.ones(10))).T
-
-# %% tags=[]
-(spike_train[:, 1] >= 0).sum(), (spike_train[good_times, 1]>=0).mean()
-
-# %% tags=[]
 # for k in ("split", "merge"):
 #     visst = np.load(dsout / "clust" / f"{k}_st.npy")
 #     vissort = Sorting(
@@ -437,100 +486,100 @@ np.vstack((np.zeros(10), np.ones(10))).T
 #     #         n_jobs=1,
 #     #     )
 
-# %% tags=[]
-fig, axes = plt.subplots(1, 3, figsize=(10, 10), gridspec_kw=dict(wspace=0.1))
-cluster_viz_index.array_scatter(
-    spike_train[:, 1],
-    geom,
-    x[order],
-    z_reg[order],
-    maxptp[order],
-    axes=axes,
-    zlim=(geom.min() - 25, geom.max() + 25),
-    c=5,
-)
-cax = axes[2].inset_axes([0.05, 0.02, 0.075, 0.2])
-cbar = plt.colorbar(axes[0].collections[0], ax=axes[1], cax=cax, label="amplitude")
-cbar.solids.set(alpha=1)
-cax.set_yticks([0, 1], labels=[3, 15])
-axes[0].set_ylabel("depth (um)")
-axes[1].set_yticks([])
-axes[1].set_xlabel("log peak-to-peak amplitude")
-axes[2].set_yticks([])
-nunits = np.setdiff1d(np.unique(spike_train[:, 1]), [-1]).size
-axes[1].set_title(f"Spatial view of clustered and triaged spikes. {nunits} units.")
-fig.savefig(dsout / "scatterplots" / "initclust_scatter.png")
-plt.close(fig)
+# %%
+# fig, axes = plt.subplots(1, 3, figsize=(10, 10), gridspec_kw=dict(wspace=0.1))
+# cluster_viz_index.array_scatter(
+#     spike_train[:, 1],
+#     geom,
+#     x[order],
+#     z_reg[order],
+#     maxptp[order],
+#     axes=axes,
+#     zlim=(geom.min() - 25, geom.max() + 25),
+#     c=5,
+# )
+# cax = axes[2].inset_axes([0.05, 0.02, 0.075, 0.2])
+# cbar = plt.colorbar(axes[0].collections[0], ax=axes[1], cax=cax, label="amplitude")
+# cbar.solids.set(alpha=1)
+# cax.set_yticks([0, 1], labels=[3, 15])
+# axes[0].set_ylabel("depth (um)")
+# axes[1].set_yticks([])
+# axes[1].set_xlabel("log peak-to-peak amplitude")
+# axes[2].set_yticks([])
+# nunits = np.setdiff1d(np.unique(spike_train[:, 1]), [-1]).size
+# axes[1].set_title(f"Spatial view of clustered and triaged spikes. {nunits} units.")
+# fig.savefig(dsout / "scatterplots" / "initclust_scatter.png")
+# plt.close(fig)
 
-fig, axes = plt.subplots(1, 3, figsize=(10, 10), gridspec_kw=dict(wspace=0.1))
-cluster_viz_index.array_scatter(
-    spike_train[:, 1],
-    geom,
-    x[order],
-    z_reg[order],
-    maxptp[order],
-    axes=axes,
-    zlim=(500, 1000),
-    c=5,
-)
-cax = axes[2].inset_axes([0.05, 0.02, 0.075, 0.2])
-cbar = plt.colorbar(axes[0].collections[0], ax=axes[1], cax=cax, label="amplitude")
-cbar.solids.set(alpha=1)
-cax.set_yticks([0, 1], labels=[3, 15])
-axes[0].set_ylabel("depth (um)")
-axes[1].set_yticks([])
-axes[1].set_xlabel("log peak-to-peak amplitude")
-axes[2].set_yticks([])
-axes[1].set_title(f"Spatial view (zoom) of clustered and triaged spikes. {nunits} units.")
-fig.savefig(dsout / "scatterplots" / "initclust_scatter_detail.png")
+# fig, axes = plt.subplots(1, 3, figsize=(10, 10), gridspec_kw=dict(wspace=0.1))
+# cluster_viz_index.array_scatter(
+#     spike_train[:, 1],
+#     geom,
+#     x[order],
+#     z_reg[order],
+#     maxptp[order],
+#     axes=axes,
+#     zlim=(500, 1000),
+#     c=5,
+# )
+# cax = axes[2].inset_axes([0.05, 0.02, 0.075, 0.2])
+# cbar = plt.colorbar(axes[0].collections[0], ax=axes[1], cax=cax, label="amplitude")
+# cbar.solids.set(alpha=1)
+# cax.set_yticks([0, 1], labels=[3, 15])
+# axes[0].set_ylabel("depth (um)")
+# axes[1].set_yticks([])
+# axes[1].set_xlabel("log peak-to-peak amplitude")
+# axes[2].set_yticks([])
+# axes[1].set_title(f"Spatial view (zoom) of clustered and triaged spikes. {nunits} units.")
+# fig.savefig(dsout / "scatterplots" / "initclust_scatter_detail.png")
 
-kept = spike_train[:, 1] >= 0
-triaged = spike_train[:, 1] < 0
+# kept = spike_train[:, 1] >= 0
+# triaged = spike_train[:, 1] < 0
 
-fig = plt.figure(figsize=(8, 6))
-plt.scatter(t[order][triaged & ~good_times], z_reg[order][triaged & ~good_times], color="k", s=5, alpha=0.5, marker=".", linewidths=0, label="outside stable")
-plt.scatter(t[order][triaged & good_times], z_reg[order][triaged & good_times], color="gray", s=5, alpha=0.5, marker=".", linewidths=0, label="triaged")
-plt.scatter(t[order][kept], z_reg[order][kept], c=spike_train[kept, 1], cmap=cc.m_glasbey, s=5, alpha=0.5, marker=".", linewidths=0)
-plt.legend(markerscale=2.5)
+# fig = plt.figure(figsize=(8, 6))
+# plt.scatter(t[order][triaged & ~good_times], z_reg[order][triaged & ~good_times], color="k", s=5, alpha=0.5, marker=".", linewidths=0, label="outside stable")
+# plt.scatter(t[order][triaged & good_times], z_reg[order][triaged & good_times], color="gray", s=5, alpha=0.5, marker=".", linewidths=0, label="triaged")
+# plt.scatter(t[order][kept], z_reg[order][kept], c=spike_train[kept, 1], cmap=cc.m_glasbey, s=5, alpha=0.5, marker=".", linewidths=0)
+# plt.legend(markerscale=2.5)
 
-tt = np.arange(0, 100 * (t.max() // 100) , 100)
-plt.xticks(tt, t_start + tt)
-plt.xlabel("time (s)")
-plt.ylabel("depth (um)")
-plt.title(f"time vs. registered y.  {kept.sum()} sorted spikes.")
-fig.savefig(dsout / "scatterplots" / "initclust_scatter_sorted_t_v_regy.png", dpi=300)
+# tt = np.arange(0, 100 * (t.max() // 100) , 100)
+# plt.xticks(tt, t_start + tt)
+# plt.xlabel("time (s)")
+# plt.ylabel("depth (um)")
+# plt.title(f"time vs. registered y.  {kept.sum()} sorted spikes.")
+# fig.savefig(dsout / "scatterplots" / "initclust_scatter_sorted_t_v_regy.png", dpi=300)
 
-kept = spike_train[:, 1] >= 0
-triaged = spike_train[:, 1] < 0
+# kept = spike_train[:, 1] >= 0
+# triaged = spike_train[:, 1] < 0
 
-fig = plt.figure(figsize=(8, 6))
-plt.scatter(t[order][triaged & ~good_times], z[order][triaged & ~good_times], color="k", s=5, alpha=0.5, marker=".", linewidths=0, label="outside stable")
-plt.scatter(t[order][triaged & good_times], z[order][triaged & good_times], color="gray", s=5, alpha=0.5, marker=".", linewidths=0, label="triaged")
-plt.scatter(t[order][kept], z[order][kept], c=spike_train[kept, 1], cmap=cc.m_glasbey, s=5, alpha=0.5, marker=".", linewidths=0)
-plt.legend(markerscale=2.5)
+# fig = plt.figure(figsize=(8, 6))
+# plt.scatter(t[order][triaged & ~good_times], z[order][triaged & ~good_times], color="k", s=5, alpha=0.5, marker=".", linewidths=0, label="outside stable")
+# plt.scatter(t[order][triaged & good_times], z[order][triaged & good_times], color="gray", s=5, alpha=0.5, marker=".", linewidths=0, label="triaged")
+# plt.scatter(t[order][kept], z[order][kept], c=spike_train[kept, 1], cmap=cc.m_glasbey, s=5, alpha=0.5, marker=".", linewidths=0)
+# plt.legend(markerscale=2.5)
 
-tt = np.arange(0, 100 * (t.max() // 100) , 100)
-plt.xticks(tt, t_start + tt)
-plt.xlabel("time (s)")
-plt.ylabel("depth (um)")
-plt.title(f"time vs. y.  {kept.sum()} sorted spikes.")
-fig.savefig(dsout / "scatterplots" / "initclust_scatter_sorted_t_v_y.png")
+# tt = np.arange(0, 100 * (t.max() // 100) , 100)
+# plt.xticks(tt, t_start + tt)
+# plt.xlabel("time (s)")
+# plt.ylabel("depth (um)")
+# plt.title(f"time vs. y.  {kept.sum()} sorted spikes.")
+# fig.savefig(dsout / "scatterplots" / "initclust_scatter_sorted_t_v_y.png")
 
 # %% [markdown]
 # ## Deconv 1
 
-# %% tags=[]
+# %%
 spike_train, order, templates, template_shifts = spike_train_utils.clean_align_and_get_templates(
     np.load(dsout / "clust" / "merge_st.npy"),
     geom.shape[0],
-    dsroot / "traces_cached_seg0.raw",
+    raw_data_bin,
     trough_offset=trough_offset,
     spike_length_samples=spike_length_samples,
     max_shift=0,
     min_n_spikes=5,
 )
 
-# %% tags=[]
+# %%
 assert (order == np.arange(len(order))).all()
 
 if (dsout / "deconv1").exists():
@@ -540,14 +589,14 @@ if (dsout / "deconv1").exists():
 merge_order = np.load(dsout / "clust" / "merge_order.npy")
 sub_h5 = next((dsout / "sub").glob("*.h5"))
 deconv_dict = deconvolve.deconv(
-    dsroot / "traces_cached_seg0.raw",
+    raw_data_bin,
     dsout / "deconv1",
     templates,
     t_start=0,
     t_end=None,
     sampling_rate=fs,
     n_sec_chunk=1,
-    n_jobs=8,
+    n_jobs=10,
     max_upsample=8,
     refractory_period_frames=refractory_period_frames,
     trough_offset=trough_offset,
@@ -557,24 +606,24 @@ deconv_dict = deconvolve.deconv(
 )
 np.save(dsout / "deconv1" / "deconv_spike_train.npy",  deconv_dict['deconv_spike_train'])
 
-# %% tags=[]
+# %%
 extract_deconv1_h5 = extract_deconv.extract_deconv(
     deconv_dict['templates_up'],
     deconv_dict['deconv_spike_train_upsampled'],
     dsout / "deconv1",
-    dsroot / "traces_cached_seg0.raw",
+    raw_data_bin,
     subtraction_h5=sub_h5,
     save_cleaned_waveforms=False,
     save_denoised_waveforms=False,
     save_cleaned_tpca_projs=True,
     n_channels_extract=20,
-    n_jobs=8,
-    device="cpu",
+    n_jobs=10,
+    # device="cpu",
     do_reassignment=False,
     # scratch_dir=deconv_scratch_dir,
 )
 
-# %% tags=[]
+# %%
 overwrite = True
 # overwrite = False
 rereg = False
@@ -622,11 +671,11 @@ with h5py.File(extract_deconv1_h5, "r+" if overwrite else "r") as h5:
         h5.create_dataset("z_reg", data=z_reg)
         h5.create_dataset("p", data=p)
 
-# %% tags=[]
+# %%
 order = slice(None)
 spike_train = deconv_dict["deconv_spike_train"]
 
-# %% tags=[]
+# %%
 fig, axes = plt.subplots(1, 3, figsize=(10, 10), gridspec_kw=dict(wspace=0.1))
 cluster_viz_index.array_scatter(
     spike_train[:, 1],
@@ -700,7 +749,198 @@ plt.ylabel("depth (um)")
 plt.title(f"time vs. y.  {kept.sum()} sorted spikes.")
 fig.savefig(dsout / "scatterplots" / "deconv1_scatter_sorted_t_v_y.png")
 
-# %% tags=[]
+# %%
+# deconv3_spike_train = np.load(Path('/local/bincache/simulated_results/outputs_ensemble_static_5min') / f'deconv3_mt_{merge_threshold_end_new}' / 'deconv_spike_train.npy')
+spike_times = spike_train[:,0]
+spike_labels = spike_train[:,1]
+
+sorting_deconv_1 = si.numpyextractors.NumpySorting.from_times_labels(
+        times_list=spike_times.astype("int"),
+        labels_list=spike_labels.astype("int"),
+        sampling_frequency=fs,
+    )
+
+# %%
+cmp_gt = si.compare_sorter_to_ground_truth(sort_gt, sorting_deconv_1, exhaustive_gt=True, match_score=.1)
+# cmp_gt_deconv1 = si.compare_sorter_to_ground_truth(sort_gt, sorting_deconv1, exhaustive_gt=True, match_score=.1)
+# cmp_gt_deconv2 = si.compare_sorter_to_ground_truth(sort_gt, sorting_deconv2, exhaustive_gt=True, match_score=.1)
+# cmp_gt_merge_deconv2 = si.compare_sorter_to_ground_truth(sort_gt, sorting_merge_deconv2, exhaustive_gt=True, match_score=.1)
+# sort_ks = si.read_kilosort('/media/cat/cole/kilosort_results_sim_5min/KS_output/data/')
+# cmp_gt_ks = si.compare_sorter_to_ground_truth(sort_gt, sort_ks, exhaustive_gt=True, match_score=.1)
+
+# %%
+sort_gt.get_num_units()
+
+# %%
+folder = 'waveform_folder'
+we = si.extract_waveforms(
+    rec_gt,
+    sort_gt,
+    folder,
+    ms_before=1.5,
+    ms_after=2.,
+    max_spikes_per_unit=500,
+    overwrite=True,
+    seed=0,
+    # load_if_exists=True,
+)
+print(we)
+
+# %%
+snrs = si.compute_snrs(waveform_extractor=we)
+ptps = we.get_all_templates().ptp(1).max(1)
+
+# %%
+fig, ax = plt.subplots(1,1, figsize=(8,20))
+ax.imshow(cmp_gt.get_ordered_agreement_scores().to_numpy()[:150,:150])
+ax.set_title('deconv 1')
+# axes[1].imshow(cmp_gt_deconv2.get_ordered_agreement_scores().to_numpy())
+# axes[1].set_title('deconv 2')
+# axes[2].imshow(cmp_gt_merge_deconv2.get_ordered_agreement_scores().to_numpy())
+# axes[2].set_title('deconv 2 merge')
+# axes[3].imshow(cmp_gt.get_ordered_agreement_scores().to_numpy())
+# axes[3].set_title('final deconv');
+# axes[4].imshow(cmp_gt_ks.get_ordered_agreement_scores().to_numpy())
+# axes[4].set_title('kilosort (default)');
+# plt.subplots_adjust(wspace=0.4, hspace=0.4)
+
+# %%
+for name, cmp in [('deconv1', cmp_gt)]:
+    well_detected_units = cmp.get_well_detected_units(well_detected_score = .8)
+    fig, axes = plt.subplots(1,3, figsize=(18,6))
+    axes[0].scatter(snrs.values(), cmp.get_performance()['precision'])
+    axes[0].set_title(f"{name}, total units: {len(sort_gt.get_unit_ids())}, num well-detected units: {len(well_detected_units)}")
+    axes[0].set_ylabel('precision')
+    axes[0].set_xlabel('snr')
+
+    axes[1].scatter(snrs.values(), cmp.get_performance()['recall'])
+    axes[1].set_title(f"{name}, total units: {len(sort_gt.get_unit_ids())}, num well-detected units: {len(well_detected_units)}")
+    axes[1].set_ylabel('recall')
+    axes[1].set_xlabel('snr')
+
+    axes[2].scatter(snrs.values(), cmp.get_performance()['accuracy'])
+    axes[2].set_title(f"{name}, total units: {len(sort_gt.get_unit_ids())}, num well-detected units: {len(well_detected_units)}")
+    axes[2].set_ylabel('accuracy')
+    axes[2].set_xlabel('snr')
+
+# %%
+
+# %%
+
+# %%
+fig, ax = plt.subplots(1,1, figsize=(8,20))
+ax.imshow(cmp_gt.get_ordered_agreement_scores().to_numpy()[:150,:150])
+ax.set_title('deconv 1')
+# axes[1].imshow(cmp_gt_deconv2.get_ordered_agreement_scores().to_numpy())
+# axes[1].set_title('deconv 2')
+# axes[2].imshow(cmp_gt_merge_deconv2.get_ordered_agreement_scores().to_numpy())
+# axes[2].set_title('deconv 2 merge')
+# axes[3].imshow(cmp_gt.get_ordered_agreement_scores().to_numpy())
+# axes[3].set_title('final deconv');
+# axes[4].imshow(cmp_gt_ks.get_ordered_agreement_scores().to_numpy())
+# axes[4].set_title('kilosort (default)');
+# plt.subplots_adjust(wspace=0.4, hspace=0.4)
+
+# %%
+
+for name, cmp in [('deconv1', cmp_gt)]:
+    well_detected_units = cmp.get_well_detected_units(well_detected_score = .8)
+    fig, axes = plt.subplots(1,3, figsize=(18,6))
+    axes[0].scatter(snrs.values(), cmp.get_performance()['precision'])
+    axes[0].set_title(f"{name}, total units: {len(sort_gt.get_unit_ids())}, num well-detected units: {len(well_detected_units)}")
+    axes[0].set_ylabel('precision')
+    axes[0].set_xlabel('snr')
+
+    axes[1].scatter(snrs.values(), cmp.get_performance()['recall'])
+    axes[1].set_title(f"{name}, total units: {len(sort_gt.get_unit_ids())}, num well-detected units: {len(well_detected_units)}")
+    axes[1].set_ylabel('recall')
+    axes[1].set_xlabel('snr')
+
+    axes[2].scatter(snrs.values(), cmp.get_performance()['accuracy'])
+    axes[2].set_title(f"{name}, total units: {len(sort_gt.get_unit_ids())}, num well-detected units: {len(well_detected_units)}")
+    axes[2].set_ylabel('accuracy')
+    axes[2].set_xlabel('snr')
+
+# %%
+
+# %%
+fig, ax = plt.subplots(1,1, figsize=(8,20))
+ax.imshow(cmp_gt.get_ordered_agreement_scores().to_numpy())
+ax.set_title('deconv 1')
+# axes[1].imshow(cmp_gt_deconv2.get_ordered_agreement_scores().to_numpy())
+# axes[1].set_title('deconv 2')
+# axes[2].imshow(cmp_gt_merge_deconv2.get_ordered_agreement_scores().to_numpy())
+# axes[2].set_title('deconv 2 merge')
+# axes[3].imshow(cmp_gt.get_ordered_agreement_scores().to_numpy())
+# axes[3].set_title('final deconv');
+# axes[4].imshow(cmp_gt_ks.get_ordered_agreement_scores().to_numpy())
+# axes[4].set_title('kilosort (default)');
+# plt.subplots_adjust(wspace=0.4, hspace=0.4)
+
+# %%
+
+for name, cmp in [('deconv1', cmp_gt)]:
+    well_detected_units = cmp.get_well_detected_units(well_detected_score = .8)
+    fig, axes = plt.subplots(1,3, figsize=(18,6))
+    axes[0].scatter(snrs.values(), cmp.get_performance()['precision'])
+    axes[0].set_title(f"{name}, total units: {len(sort_gt.get_unit_ids())}, num well-detected units: {len(well_detected_units)}")
+    axes[0].set_ylabel('precision')
+    axes[0].set_xlabel('snr')
+
+    axes[1].scatter(snrs.values(), cmp.get_performance()['recall'])
+    axes[1].set_title(f"{name}, total units: {len(sort_gt.get_unit_ids())}, num well-detected units: {len(well_detected_units)}")
+    axes[1].set_ylabel('recall')
+    axes[1].set_xlabel('snr')
+
+    axes[2].scatter(snrs.values(), cmp.get_performance()['accuracy'])
+    axes[2].set_title(f"{name}, total units: {len(sort_gt.get_unit_ids())}, num well-detected units: {len(well_detected_units)}")
+    axes[2].set_ylabel('accuracy')
+    axes[2].set_xlabel('snr')
+
+# %%
+
+# %%
+
+# %%
+
+# %%
+st = spike_index.copy()
+# st[:, 1] = newms.registered_maxchan(st, p, geom, pfs=fs)
+good_times = np.isin((st[:, 0]) // fs, np.flatnonzero(p_good))
+print(f"{good_times.sum()=}")
+st[~good_times, 1] = -1
+spike_train, templates, order = newms.new_merge_split_ensemble(
+    st,
+    geom.shape[0],
+    raw_data_bin,
+    sub_h5,
+    geom,
+    dsout / "clust",
+    n_workers=10,
+    merge_resid_threshold=merge_thresh_early,
+    relocated=do_reloc,
+    trough_offset=trough_offset,
+    ensemble_percent=.8,
+    num_ensemble=2,
+    spike_length_samples=spike_length_samples,
+    split_kwargs=dict(
+        split_steps=(
+            before_deconv_merge_split.herding_split,
+        ),
+        recursive_steps=(True,),
+        split_step_kwargs=(
+            dict(
+                hdbscan_kwargs=dict(
+                    min_cluster_size=15,
+                    # min_samples=5,
+                    cluster_selection_epsilon=20.0,
+                ),
+            ),
+        ),
+    )
+)
+
+# %%
 st = spike_train.copy()
 # st[:, 1] = newms.registered_maxchan(st, p, geom, pfs=fs)
 good_times = np.isin((st[:, 0]) // fs, np.flatnonzero(p_good))
@@ -709,11 +949,11 @@ st[~good_times, 1] = -1
 spike_train, templates, order = newms.new_merge_split_ensemble(
     st,
     geom.shape[0],
-    dsroot / "traces_cached_seg0.raw",
+    raw_data_bin,
     extract_deconv1_h5,
     geom,
     dsout / "deconv1clust",
-    n_workers=1,
+    n_workers=10,
     merge_resid_threshold=merge_thresh_early,
     relocated=do_reloc,
     trough_offset=trough_offset,
@@ -735,10 +975,10 @@ spike_train, templates, order = newms.new_merge_split_ensemble(
     )
 )
 
-# %% tags=[]
+# %%
 (spike_train[:, 1] >= 0).sum(), (spike_train[good_times, 1]>=0).mean()
 
-# %% tags=[]
+# %%
 # for k in ("split", "merge"):
 #     visst = np.load(dsout / "deconv1clust" / f"{k}_st.npy")
 #     vissort = Sorting(
@@ -765,7 +1005,7 @@ spike_train, templates, order = newms.new_merge_split_ensemble(
 #     #         n_jobs=1,
 #     #     )
 
-# %% tags=[]
+# %%
 fig, axes = plt.subplots(1, 3, figsize=(10, 10), gridspec_kw=dict(wspace=0.1))
 cluster_viz_index.array_scatter(
     spike_train[:, 1],
@@ -842,24 +1082,24 @@ fig.savefig(dsout / "scatterplots" / "deconv1clust_scatter_sorted_t_v_y.png")
 # %% [markdown]
 # ## Deconv 2
 
-# %% tags=[]
+# %%
 spike_train, order, templates, template_shifts = spike_train_utils.clean_align_and_get_templates(
     np.load(dsout / "deconv1clust" / "merge_st.npy"),
     geom.shape[0],
-    dsroot / "traces_cached_seg0.raw",
+    raw_data_bin,
     trough_offset=trough_offset,
     spike_length_samples=spike_length_samples,
     max_shift=0,
     min_n_spikes=5,
 )
 
-# %% tags=[]
+# %%
 assert (order == np.arange(len(order))).all()
 
 if (dsout / "deconv2").exists():
     shutil.rmtree(dsout / "deconv2")
 
-# %% tags=[]
+# %%
 # merge_order = np.load(dsout / "deconv1clust" / "merge_order.npy")
 # with h5py.File(extract_deconv1_h5) as h5:
 #     z = h5["localizations"][:, 2][merge_order]
@@ -880,7 +1120,7 @@ if (dsout / "deconv2").exists():
 #     threshold=deconv_thresh,
 # )
 deconv_dict_2 = deconvolve.deconv(
-    dsroot / "traces_cached_seg0.raw",
+    raw_data_bin,
     dsout / "deconv2",
     templates,
     t_start=0,
@@ -900,7 +1140,7 @@ np.save(dsout / "deconv2" / "deconv_spike_train.npy",  deconv_dict_2['deconv_spi
 # %%
 deconv_dict_2['deconv_spike_train'].shape
 
-# %% tags=[]
+# %%
 # extract_deconv2_h5, extract_deconv2_extra = drifty_deconv.extract_superres_shifted_deconv(
 #     superres2,
 #     save_cleaned_waveforms=True,
@@ -924,7 +1164,7 @@ extract_deconv2_h5 = extract_deconv.extract_deconv(
     deconv_dict_2['templates_up'],
     deconv_dict_2['deconv_spike_train_upsampled'],
     dsout / "deconv2",
-    dsroot / "traces_cached_seg0.raw",
+    raw_data_bin,
     subtraction_h5=sub_h5,
     save_cleaned_waveforms=False,
     save_denoised_waveforms=False,
@@ -936,7 +1176,7 @@ extract_deconv2_h5 = extract_deconv.extract_deconv(
     # scratch_dir=deconv_scratch_dir,
 )
 
-# %% tags=[]
+# %%
 overwrite = True
 # overwrite = False
 rereg = False
@@ -988,11 +1228,11 @@ with h5py.File(extract_deconv2_h5, "r+" if overwrite else "r") as h5:
         h5.create_dataset("z_reg", data=z_reg)
         h5.create_dataset("p", data=p)
 
-# %% tags=[]
+# %%
 order = slice(None)
 spike_train = deconv_dict_2["deconv_spike_train"]
 
-# %% tags=[]
+# %%
 fig, axes = plt.subplots(1, 3, figsize=(10, 10), gridspec_kw=dict(wspace=0.1))
 cluster_viz_index.array_scatter(
     spike_train[:, 1],
@@ -1073,7 +1313,7 @@ merge_thresh_end
 merge_threshold_end_new = merge_thresh_end
 spike_train = np.load(dsout / 'deconv2' / 'deconv_spike_train.npy')
 
-# %% tags=[]
+# %%
 st = spike_train.copy()
 # st[:, 1] = newms.registered_maxchan(st, p, geom, pfs=fs)
 good_times = np.isin((st[:, 0]) // fs, np.flatnonzero(p_good))
@@ -1082,7 +1322,7 @@ st[~good_times, 1] = -1
 spike_train, templates, order = newms.new_merge_split(
     st,
     geom.shape[0],
-    dsroot / "traces_cached_seg0.raw",
+    raw_data_bin,
     extract_deconv2_h5,
     geom,
     dsout / f"deconv2clust_mt_{merge_threshold_end_new}",
@@ -1108,10 +1348,10 @@ spike_train, templates, order = newms.new_merge_split(
     )
 )
 
-# %% tags=[]
+# %%
 (spike_train[:, 1] >= 0).sum(), (spike_train[good_times, 1]>=0).mean()
 
-# %% tags=[]
+# %%
 # for k in ("split", "merge"):
 #     visst = np.load(dsout / "deconv2clust" / f"{k}_st.npy")
 #     vissort = Sorting(
@@ -1138,7 +1378,7 @@ spike_train, templates, order = newms.new_merge_split(
 #     #         n_jobs=1,
 #     #     )
 
-# %% tags=[]
+# %%
 # fig, axes = plt.subplots(1, 3, figsize=(10, 10), gridspec_kw=dict(wspace=0.1))
 # cluster_viz_index.array_scatter(
 #     spike_train[:, 1],
@@ -1216,25 +1456,25 @@ spike_train, templates, order = newms.new_merge_split(
 # %% [markdown]
 # ## Deconv 3
 
-# %% tags=[]
+# %%
 spike_train, order, templates, template_shifts = spike_train_utils.clean_align_and_get_templates(
     np.load(dsout / f"deconv2clust_mt_{merge_threshold_end_new}" / "merge_st.npy"),
     geom.shape[0],
-    dsroot / "traces_cached_seg0.raw",
+    raw_data_bin,
     trough_offset=trough_offset,
     spike_length_samples=spike_length_samples,
     max_shift=0,
     min_n_spikes=5,
 )
 
-# %% tags=[]
+# %%
 assert (order == np.arange(len(order))).all()
 
-# %% tags=[]
+# %%
 if (dsout / "deconv3").exists():
     shutil.rmtree(dsout / "deconv3")
 
-# %% tags=[]
+# %%
 # merge_order = np.load(dsout / "deconv2clust" / "merge_order.npy")
 # with h5py.File(extract_deconv2_h5) as h5: 
 #     z = h5["localizations"][:, 2][merge_order]
@@ -1256,7 +1496,7 @@ if (dsout / "deconv3").exists():
 # )
 
 deconv_dict_3 = deconvolve.deconv(
-    dsroot / "traces_cached_seg0.raw",
+    raw_data_bin,
     dsout / f"deconv3_mt_{merge_threshold_end_new}",
     templates,
     t_start=0,
@@ -1273,7 +1513,7 @@ deconv_dict_3 = deconvolve.deconv(
 )
 np.save(dsout / f"deconv3_mt_{merge_threshold_end_new}" / "deconv_spike_train.npy",  deconv_dict_3['deconv_spike_train'])
 
-# %% tags=[]
+# %%
 # extract_deconv3_h5, extract_deconv3_extra = drifty_deconv.extract_superres_shifted_deconv(
 #     superres3,
 #     save_cleaned_waveforms=True,
@@ -1297,7 +1537,7 @@ extract_deconv3_h5 = extract_deconv.extract_deconv(
     deconv_dict_3['templates_up'],
     deconv_dict_3['deconv_spike_train_upsampled'],
     dsout / f"deconv3_mt_{merge_threshold_end_new}",
-    dsroot / "traces_cached_seg0.raw",
+    raw_data_bin,
     subtraction_h5=sub_h5,
     save_cleaned_waveforms=False,
     save_denoised_waveforms=False,
@@ -1309,7 +1549,7 @@ extract_deconv3_h5 = extract_deconv.extract_deconv(
     # scratch_dir=deconv_scratch_dir,
 )
 
-# %% tags=[]
+# %%
 overwrite = True
 # overwrite = False
 rereg = False
@@ -1361,11 +1601,11 @@ with h5py.File(extract_deconv3_h5, "r+" if overwrite else "r") as h5:
         h5.create_dataset("z_reg", data=z_reg)
         h5.create_dataset("p", data=p)
 
-# %% tags=[]
+# %%
 order = slice(None)
 spike_train = deconv_dict_3["deconv_spike_train"]
 
-# %% tags=[]
+# %%
 # fig, axes = plt.subplots(1, 3, figsize=(10, 10), gridspec_kw=dict(wspace=0.1))
 # cluster_viz_index.array_scatter(
 #     spike_train[:, 1],
@@ -1440,7 +1680,7 @@ spike_train = deconv_dict_3["deconv_spike_train"]
 # # fig.savefig(dsout / "scatterplots" / "deconv3_scatter_sorted_t_v_y.png")
 # plt.close(fig)
 
-# %% tags=[]
+# %%
 # M3_dv3 = h5py.File('/media/peter/2TB/sherry/IND106_shank1_Mar3/deconv3/deconv_results.h5', 'r')
 # spike_train = np.array(M3_dv3["superres_deconv_spike_train"])
 # order = slice(None)
@@ -1448,10 +1688,10 @@ spike_train = deconv_dict_3["deconv_spike_train"]
 # from spike_psvae import (
 #     spike_train_utils)
 
-# %% tags=[]
+# %%
 from spike_psvae import (chunk_features)
 
-# %% tags=[]
+# %%
 # visst = spike_train.copy()
 # # visst[:, 1] = newms.registered_maxchan(visst, p, geom, pfs=fs)
 # good_times = np.isin((visst[:, 0]) // fs, np.flatnonzero(p_good))
@@ -1564,6 +1804,26 @@ print(we)
 # %%
 snrs = we.get_all_templates().ptp(1).max(1) #si.compute_snrs(waveform_extractor=we)
 #ptps = snrs = si.compute_snrs(waveform_extractor=we)
+# for name, cmp in [('deconv1', cmp_gt_deconv1),('deconv2', cmp_gt_deconv2),('final_deconv (rp: 10)', cmp_gt),('kilosort (default)', cmp_gt_ks)]:
+#     well_detected_units = cmp.get_well_detected_units(well_detected_score = .8)
+#     fig, axes = plt.subplots(1,3, figsize=(18,6))
+#     axes[0].scatter(snrs.values(), cmp.get_performance()['precision'])
+#     axes[0].set_title(f"{name}, total units: {len(sort_gt.get_unit_ids())}, num well-detected units: {len(well_detected_units)}")
+#     axes[0].set_ylabel('precision')
+#     axes[0].set_xlabel('snr')
+
+#     axes[1].scatter(snrs.values(), cmp.get_performance()['recall'])
+#     axes[1].set_title(f"{name}, total units: {len(sort_gt.get_unit_ids())}, num well-detected units: {len(well_detected_units)}")
+#     axes[1].set_ylabel('recall')
+#     axes[1].set_xlabel('snr')
+
+#     axes[2].scatter(snrs.values(), cmp.get_performance()['accuracy'])
+#     axes[2].set_title(f"{name}, total units: {len(sort_gt.get_unit_ids())}, num well-detected units: {len(well_detected_units)}")
+#     axes[2].set_ylabel('accuracy')
+#     axes[2].set_xlabel('snr')
+    
+    
+    
 
 # %%
 we.
@@ -1657,10 +1917,10 @@ sorting_deconv_final
 
 # %%
 
-# %% [markdown] tags=[] jp-MarkdownHeadingCollapsed=true
+# %% [markdown] jp-MarkdownHeadingCollapsed=true
 # ## Phy export
 
-# %% tags=[]
+# %%
 # from spike_psvae.cluster_utils import read_waveforms, compare_two_sorters, make_sorting_from_labels_frames
 # from spike_psvae.cluster_viz import plot_agreement_venn, plot_unit_similarities,plot_agreement_venn_better
 # from spike_psvae.cluster_utils import get_closest_clusters_kilosort_hdbscan
@@ -1675,31 +1935,31 @@ sorting_deconv_final
 # import spikeinterface.extractors as se
 # import spikeinterface as si
 
-# %% tags=[]
+# %%
 # if (dsout / "sisorting").exists():
 #     (dsout / "sisorting").unlink()
 # sorting = si.NumpySorting.from_times_labels(times, labels, sampling_frequency=fs)
 # sorting = sorting.save(folder=dsout / "sisorting")
 # sorting
 
-# %% tags=[]
+# %%
 # binrec = si.read_binary_folder(dsout / "sippx")
 # binrec.annotate(is_filtered=True)
 # binrec
 
-# %% tags=[]
+# %%
 # if (dsout / "siwfs").exists():
 #     (dsout / "siwfs").unlink()
 
-# %% tags=[]
+# %%
 # we = si.extract_waveforms(binrec, sorting, dsout / "siwfs")
 
-# %% tags=[]
+# %%
 # from spikeinterface.exporters import export_to_phy
 
-# %% tags=[]
+# %%
 # if (dsout / "phy").exists():
 #     (dsout / "phy").unlink()
 
-# %% tags=[]
+# %%
 # export_to_phy(we, dsout / "phy", n_jobs=8, chunk_size=30000)
