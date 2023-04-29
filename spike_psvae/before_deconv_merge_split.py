@@ -7,7 +7,6 @@ try:
     from isosplit import isosplit
 except ImportError:
     pass
-from concurrent.futures import ProcessPoolExecutor
 from functools import wraps
 from hdbscan import HDBSCAN
 from hdbscan.robust_single_linkage_ import RobustSingleLinkage
@@ -19,7 +18,7 @@ from sklearn.mixture import GaussianMixture, BayesianGaussianMixture
 from sklearn.cluster import OPTICS, MeanShift
 from tqdm.auto import tqdm
 
-from .multiprocessing_utils import MockPoolExecutor
+from .multiprocessing_utils import get_pool
 from .waveform_utils import get_channel_subset
 from .isocut5 import isocut5, isosplit1d
 from .chunk_features import TPCA
@@ -566,9 +565,7 @@ def split_clusters(
 
     # set up multiprocessing.
     # Mock has better error messages, will be used with n_workers in (0, 1)
-    spawn = n_workers not in (0, 1)
-    Executor = ProcessPoolExecutor if spawn else MockPoolExecutor
-    context = multiprocessing.get_context("spawn") if spawn else None
+    Executor, context = get_pool(n_workers)
     with Executor(
         max_workers=n_workers,
         mp_context=context,
@@ -724,6 +721,7 @@ def lda_diptest_merge(
             T=T,
         )
     else:
+        print(in_unit_b)
         feats_b = get_pca_projs_on_channel_subset(
             in_unit_b,
             tpca_projs,
