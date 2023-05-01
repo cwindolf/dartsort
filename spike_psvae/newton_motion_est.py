@@ -375,51 +375,6 @@ def solve_spatial(wt, pt, lambd=1):
     return r
 
 
-def runs_to_ranges(x, one_more=False):
-    if not len(x):
-        return []
-    ranges = []
-    cur = x[0]
-    b = x[0]
-    for a, b in zip(x, x[1:]):
-        assert b > a
-        if b - a == 1:
-            continue
-        else:
-            ranges.append(range(cur, a + 1 + one_more))
-            cur = b
-    ranges.append(range(cur, b + 1 + one_more))
-    return ranges
-
-
-def gapfill(weights, P: np.ndarray, lambd=1, local_reference=True):
-    # which bins have finite weights at each position
-    B = weights.shape[0]
-    fix_runs = []
-    for b in range(B):
-        fix_runs.extend(runs_to_ranges(np.flatnonzero(np.isfinite(weights[b]))))
-    fix_runs = reversed(sorted(fix_runs, key=len))
-    # fix_runs = sorted(fix_runs, key=len)
-    out = np.gradient(P, axis=1, edge_order=2) if local_reference else P.copy()
-    # means = gaussian_filter1d(P, 10)
-
-    for run in fix_runs:
-        # print(run, len(run), np.flatnonzero(np.isfinite(weights[:, run[0]])))
-        # run_offset = out[:, run].mean(axis=1) if local_reference else np.zeros(len(P))
-        # for t in np.flatnonzero(np.isfinite(weights).any(0)):
-        # run_offset = means[:, t]
-        for t in run:
-            out[:, t] = solve_spatial(weights[:, t], out[:, t], lambd=lambd)
-        # out[:, run] += run_offset[:, None]
-        # break
-
-    if local_reference:
-        out = np.cumsum(out, axis=1)
-        # out = np.where(np.isinf(weights), P, out)
-
-    return out
-
-
 default_xcorr_kw = dict(
     centered=True,
     normalized=True,
@@ -427,10 +382,11 @@ default_xcorr_kw = dict(
 
 
 def xcorr_windows(
-    raster,
+    raster_a,
     windows,
     spatial_bin_edges_um,
     win_scale_um,
+    raster_b=None,
     rigid=False,
     bin_um=1,
     max_disp_um=None,
@@ -451,16 +407,24 @@ def xcorr_windows(
 
     max_disp_bins = int(max_disp_um // bin_um)
     slices = get_window_domains(windows)
+    B, D = windows.shape
+    D_, T0 = raster_a.shape
+    assert D == D_
 
     # torch versions on device
     windows_ = torch.as_tensor(windows, dtype=torch.float, device=device)
-    raster_ = torch.as_tensor(raster, dtype=torch.float, device=device)
-    B = windows.shape[0]
-    T = raster.shape[1]
+    raster_a_ = torch.as_tensor(raster_a, dtype=torch.float, device=device)
+    if raster_b is not None:
+        assert raster_b.shape[0] == D
+        T1 = raster_b.shape[1]
+        raster_b_ = torch.as_tensor(raster_b, dtype=torch.float, device=device)
+    else:
+        T1 = T0
+        raster_b_ = raster_a_
 
     # estimate each window's displacement
-    Ds = np.empty((B, T, T), dtype=np.float32)
-    Cs = np.empty((B, T, T), dtype=np.float32)
+    Ds = np.empty((B, T0, T1), dtype=np.float32)
+    Cs = np.empty((B, T0, T1), dtype=np.float32)
     block_iter = trange(B, desc="Cross correlation") if pbar else range(B)
     for b in block_iter:
         window = windows_[b]
@@ -470,7 +434,7 @@ def xcorr_windows(
         targ_low = slices[b].start - max_disp_bins
         b_low = max(0, targ_low)
         targ_high = slices[b].stop + max_disp_bins
-        b_high = min(raster_.shape[0], targ_high)
+        b_high = min(D, targ_high)
         padding = max(b_low - targ_low, targ_high - b_high)
 
         # arithmetic to compute the lags in um corresponding to
@@ -480,8 +444,8 @@ def xcorr_windows(
         poss_disp = -np.arange(-n_left, n_right + 1) * bin_um
 
         Ds[b], Cs[b] = calc_corr_decent_pair(
-            raster_[slices[b]],
-            raster_[b_low:b_high],
+            raster_a_[slices[b]],
+            raster_b_[b_low:b_high],
             weights=window[slices[b]],
             disp=padding,
             possible_displacement=poss_disp,
