@@ -30,35 +30,81 @@ def laplacian(n, wink=True, eps=1e-10):
     return lap
 
 
-def neg_hessian_likelihood_term(S):
-    # the likelihood tearms
-    negHS = -S.copy()
-    negHS -= S.T
-    np.fill_diagonal(negHS, np.diagonal(negHS) + S.sum(1) + S.sum(0))
-    return negHS
+def neg_hessian_likelihood_term(Ub):
+    # negative Hessian of p(D | p) inside a block
+    negHUb = -Ub.copy()
+    negHUb -= Ub.T
+    np.fill_diagonal(negHUb, np.diagonal(negHUb) + Ub.sum(1) + Ub.sum(0))
+    return negHU
 
 
-def newton_rhs(D, S):
-    SD = S * D
-    grad_at_0 = SD.sum(1) - SD.sum(0)
-    return grad_at_0
+def newton_rhs(Db, Ub, Pb_prev=None, Db_prevcur=None, Ub_prevcur=None):
+    UDb = Ub * Db
+    grad_at_0 = UDb.sum(1) - UDb.sum(0)
+    if Pb_prev is None:
+        return grad_at_0
+
+    # online case
+    # the math is written without assuming symmetry, so it has a sum
+    # of the two off-diagonals instead of 2x the upper. symmetry sometimes
+    # will not hold, but for computational purposes it's nice to have.
+    # same goes for the UDb_prev stuff below
+    align_term = 2.0 * (Ub @ Pb_prev)
+    UDb_prevcur = Ub_prevcur * Db_prevcur
+    rhs = align_term + 2.0 * UDb_prevcur.sum(0) + grad_at_0
+
+    return rhs
 
 
-def newton_solve_rigid(D, S, Sigma0inv):
-    """D is TxT displacement, S is TxT subsampling or soft weights matrix"""
-    D = D.astype(np.float64)
-    S = S.astype(np.float64)
-    Sigma0inv = Sigma0inv.astype(np.float64)
-    negHS = neg_hessian_likelihood_term(S)
-    targ = newton_rhs(D, S)
-    p = solve(Sigma0inv + negHS, targ, assume_a="pos")
-    return p, negHS
+def newton_solve_rigid(D, U, Sigma0inv, Pb_prev=None, Db_prevcur=None, Ub_prevcur=None):
+    """D is TxT displacement, U is TxT subsampling or soft weights matrix"""
+    negHU = neg_hessian_likelihood_term(U)
+    targ = newton_rhs(
+        D, U, Pb_prev=Pb_prev, Db_prevcur=Db_prevcur, Ub_prevcur=Ub_prevcur
+    )
+    p = solve(Sigma0inv + negHU, targ, assume_a="pos")
+    return p, negHU
 
 
-def thomas_solve(Ds, Us, lambda_t=1.0, lambda_s=1.0, eps=1e-10):
-    """Block tridiagonal algorithm, special cased to our setting"""
+def thomas_solve(
+    Ds,
+    Us,
+    lambda_t=1.0,
+    lambda_s=1.0,
+    eps=1e-10,
+    P_prev=None,
+    Ds_prevcur=None,
+    Us_prevcur=None,
+):
+    """Block tridiagonal algorithm, special cased to our setting
+
+    This code solves for the displacement estimates across the nonrigid windows,
+    given blockwise, pairwise (BxTxT) displacement and weights arrays `Ds` and `Us`.
+
+    If `lambda_t>0`, a temporal prior is applied to "fill the gaps", effectively
+    interpolating through time to avoid artifacts in low-signal areas. Setting this
+    to 0 can lead to numerical warnings and should be done with care.
+
+    If `lambda_s>0`, a spatial prior is applied. This can help fill gaps more
+    meaningfully in the nonrigid case, using information from the neighboring nonrigid
+    windows to inform the estimate in an untrusted region of a given window.
+
+    If arguments `P_prev,Ds_prevcur,Us_prevcur` are supplied, this code handles the
+    online case. The return value will be the new chunk's displacement estimate,
+    solving the online registration problem.
+    """
     Ds = np.asarray(Ds, dtype=np.float64)
     Us = np.asarray(Us, dtype=np.float64)
+    online = P_prev is not None
+    online_kw = lambda b: {}
+    if online:
+        assert Ds_prevcur is not None
+        assert Us_prevcur is not None
+        online_kw = lambda b: dict(
+            Pb_prev=P_prev[b],
+            Db_prevcur=Ds_prevcur[b],
+            Ub_prevcur=Us_prevcur[b],
+        )
 
     B, T, T_ = Ds.shape
     assert T == T_
@@ -73,7 +119,7 @@ def thomas_solve(Ds, Us, lambda_t=1.0, lambda_s=1.0, eps=1e-10):
         P = np.zeros((B, T))
         extra["HU"] = np.zeros((B, T, T))
         for b in range(B):
-            P[b], extra["HU"][b] = newton_solve_rigid(Ds[b], Us[b], L_t)
+            P[b], extra["HU"][b] = newton_solve_rigid(Ds[b], Us[b], L_t, **online_kw(b))
         return P, extra
 
     # spatial prior is a sparse, block tridiagonal kronecker product
@@ -86,7 +132,7 @@ def thomas_solve(Ds, Us, lambda_t=1.0, lambda_s=1.0, eps=1e-10):
 
     # initialize block-LU stuff and forward variable
     alpha_hat_b = L_t + Lambda_s_diag1 / 2 + neg_hessian_likelihood_term(Us[0])
-    targets = np.c_[Lambda_s_offdiag, newton_rhs(Us[0], Ds[0])]
+    targets = np.c_[Lambda_s_offdiag, newton_rhs(Us[0], Ds[0], **online_kw(0))]
     res = solve(alpha_hat_b, targets, assume_a="pos")
     assert res.shape == (T, T + 1)
     gamma_hats = [res[:, :T]]
@@ -97,7 +143,8 @@ def thomas_solve(Ds, Us, lambda_t=1.0, lambda_s=1.0, eps=1e-10):
         s_factor = 1 if b < B - 1 else 0.5
         Ab = L_t + Lambda_s_diag1 * s_factor + neg_hessian_likelihood_term(Us[b])
         alpha_hat_b = Ab - Lambda_s_offdiag @ gamma_hats[b - 1]
-        targets[:, T] = newton_rhs(Us[b], Ds[b]) - Lambda_s_offdiag @ ys[b - 1]
+        targets[:, T] = newton_rhs(Us[b], Ds[b], **online_kw(b))
+        targets[:, T] -= Lambda_s_offdiag @ ys[b - 1]
         res = solve(alpha_hat_b, targets)
         assert res.shape == (T, T + 1)
         gamma_hats.append(res[:, :T])
@@ -203,18 +250,14 @@ def get_weights(
         nspikes_threshold_low, amp_threshold_low = weights_threshold_low
         unif = np.full_like(windows[0], 1 / len(windows[0]))
         weights_threshold_low = (
-            scale_fn(amp_threshold_low)
-            * windows
-            @ (nspikes_threshold_low * unif)
+            scale_fn(amp_threshold_low) * windows @ (nspikes_threshold_low * unif)
         )
         weights_threshold_low = weights_threshold_low[:, None]
     if isinstance(weights_threshold_high, tuple):
         nspikes_threshold_high, amp_threshold_high = weights_threshold_high
         unif = np.full_like(windows[0], 1 / len(windows[0]))
         weights_threshold_high = (
-            scale_fn(amp_threshold_high)
-            * windows
-            @ (nspikes_threshold_high * unif)
+            scale_fn(amp_threshold_high) * windows @ (nspikes_threshold_high * unif)
         )
         weights_threshold_high = weights_threshold_high[:, None]
     weights_thresh = weights_orig.copy()
@@ -254,9 +297,7 @@ def weight_correlation_matrix(
     B, T, T_ = Ds.shape
     assert T == T_
     assert Ds.shape == Cs.shape
-    spatial_bin_edges_um, time_bin_edges_s = get_bins(
-        depths_um, times_s, bin_um, bin_s
-    )
+    spatial_bin_edges_um, time_bin_edges_s = get_bins(depths_um, times_s, bin_um, bin_s)
     assert (T + 1,) == time_bin_edges_s.shape
     extra = {}
 
@@ -319,8 +360,7 @@ def solve_spatial(wt, pt, lambd=1):
     coefts_ = coefts[finite_inds[:, None], finite_inds[None, :]]
     target_ = (
         target
-        - coefts[finite_inds[:, None], infinite_inds[None, :]]
-        @ pt[infinite_inds]
+        - coefts[finite_inds[:, None], infinite_inds[None, :]] @ pt[infinite_inds]
     )
 
     try:
@@ -333,22 +373,6 @@ def solve_spatial(wt, pt, lambd=1):
     r = pt.copy()
     r[finite_inds] = r_finite
     return r
-
-
-# def solve_spatial_thomas(wt, pt, lambd=1):
-#     nl2 = -lambd / 2
-#     nl22 = nl2 * nl2
-
-#     cps = []
-#     dps = []
-#     for i in range(len(wt)):
-#         if i == len(wt) - 1:
-#             cps.append(nl2 / (lambd + wt[i] - cps[i - 1]))
-#         elif i:
-#             cps.append(nl2 / (lambd / 2 + wt[i] - cps[i - 1]))
-#         else:
-#             cps.append(nl2 / wt[i])
-#             dps.append(wt[i] * pt[i] -
 
 
 def runs_to_ranges(x, one_more=False):
@@ -366,7 +390,6 @@ def runs_to_ranges(x, one_more=False):
             cur = b
     ranges.append(range(cur, b + 1 + one_more))
     return ranges
-
 
 
 def gapfill(weights, P: np.ndarray, lambd=1, local_reference=True):
@@ -587,3 +610,26 @@ def register(
         extra["C"] = Cs
 
     return me, extra
+
+
+def register_online_lfp(
+    lfp_recording,
+    rigid=True,
+    bin_um=1.0,
+    bin_s=1.0,
+    win_shape="gaussian",
+    win_step_um=400,
+    win_scale_um=450,
+    win_margin_um=None,
+    max_disp_um=None,
+    thomas_kw=default_thomas_kw,
+    xcorr_kw=default_xcorr_kw,
+    raster_kw=default_raster_kw,
+    weights_kw=default_weights_kw,
+    upsample_to_histogram_bin=False,
+    device=None,
+    pbar=True,
+    save_full=False,
+    precomputed_D_C_maxdisp=None,
+):
+    """Online registration of a preprocessed lfp recording"""
