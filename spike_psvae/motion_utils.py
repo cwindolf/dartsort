@@ -1,5 +1,5 @@
 import numpy as np
-from scipy.interpolate import interp1d, RectBivariateSpline
+from scipy.interpolate import RectBivariateSpline, interp1d
 from scipy.ndimage import gaussian_filter1d
 from scipy.signal import resample
 from spikeinterface.sortingcomponents.motion_estimation import (
@@ -211,13 +211,63 @@ def get_motion_estimate(
     )
 
 
-def plot_me_traces(me, ax, offset=0, depths_um=None, **plot_kwargs):
+def show_raster(
+    raster, spatial_bin_edges_um, time_bin_edges_s, ax, **imshow_kwargs
+):
+    ax.imshow(
+        raster,
+        extent=(*time_bin_edges_s[[0, -1]], *spatial_bin_edges_um[[0, -1]]),
+        origin="lower",
+        **imshow_kwargs,
+    )
+
+
+def plot_me_traces(
+    me, ax, offset=0, depths_um=None, label=False, **plot_kwargs
+):
     if depths_um is None:
         depths_um = me.spatial_bin_centers_um
 
-    for depth in depths_um:
-        disp = me.disp_at(me.time_bin_centers_um, depth_um=depth)
-        ax.plot(me.time_bin_centers_um, depth + offset + disp, **plot_kwargs)
+    for b, depth in enumerate(depths_um):
+        disp = me.disp_at_s(me.time_bin_centers_s, depth_um=depth)
+        lab = f"bin {b}" if label else None
+        ax.plot(
+            me.time_bin_centers_s,
+            depth + offset + disp,
+            label=lab,
+            **plot_kwargs,
+        )
+
+
+def show_registered_raster(me, amps, depths, times, ax, **imshow_kwargs):
+    depths_reg = me.correct_s(times, depths)
+    raster, spatial_bin_edges_um, time_bin_edges_s = fast_raster(
+        amps, depths_reg, times
+    )
+    ax.imshow(
+        raster,
+        extent=(*time_bin_edges_s[[0, -1]], *spatial_bin_edges_um[[0, -1]]),
+        origin="lower",
+        **imshow_kwargs,
+    )
+
+
+def show_dispmap(me, ax, spatial_bin_centers_um=None, **imshow_kwargs):
+    if spatial_bin_centers_um is None:
+        spatial_bin_centers_um = me.spatial_bin_centers_um
+
+    dispmap = me.disp_at_s(
+        me.time_bin_centers_s, spatial_bin_centers_um, grid=True
+    )
+    ax.imshow(
+        dispmap,
+        extent=(
+            *me.time_bin_centers_s[[0, -1]],
+            *spatial_bin_centers_um[[0, -1]],
+        ),
+        origin="lower",
+        **imshow_kwargs,
+    )
 
 
 def get_bins(depths, times, bin_um, bin_s):
@@ -289,9 +339,13 @@ def fast_raster(
     post_transform=None,
 ):
     if (spatial_bin_edges_um is None) or (time_bin_edges_s is None):
-        spatial_bin_edges_um, time_bin_edges_s = get_bins(
+        _spatial_bin_edges_um, _time_bin_edges_s = get_bins(
             depths, times, bin_um, bin_s
         )
+        if spatial_bin_edges_um is None:
+            spatial_bin_edges_um = _spatial_bin_edges_um
+        if time_bin_edges_s is None:
+            time_bin_edges_s = _time_bin_edges_s
 
     if amp_scale_fn is None:
         weights = amps

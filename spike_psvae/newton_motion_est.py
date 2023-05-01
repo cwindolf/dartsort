@@ -1,17 +1,17 @@
 import numpy as np
 import scipy.linalg as la
-from scipy.linalg import solve
 import torch
+from scipy.linalg import solve
 from tqdm.auto import trange
-from .motion_utils import (
-    get_motion_estimate,
-    get_bins,
-    get_windows,
-    get_window_domains,
-    fast_raster,
-)
-from .ibme_corr import calc_corr_decent_pair
 
+from .ibme_corr import calc_corr_decent_pair
+from .motion_utils import (
+    fast_raster,
+    get_bins,
+    get_motion_estimate,
+    get_window_domains,
+    get_windows,
+)
 
 default_raster_kw = dict(
     amp_scale_fn=None,
@@ -20,10 +20,13 @@ default_raster_kw = dict(
 )
 
 
-def laplacian(T):
-    lap = np.eye(T)
-    lap -= np.diag(0.5 * np.ones(T - 1), k=1)
-    lap -= np.diag(0.5 * np.ones(T - 1), k=-1)
+def laplacian(n, wink=True, eps=1e-10):
+    lap = (1 + eps) * np.eye(n)
+    if wink:
+        lap[0, 0] -= 0.5
+        lap[-1, -1] -= 0.5
+    lap -= np.diag(0.5 * np.ones(n - 1), k=1)
+    lap -= np.diag(0.5 * np.ones(n - 1), k=-1)
     return lap
 
 
@@ -53,8 +56,7 @@ def newton_solve_rigid(D, S, Sigma0inv):
 
 
 def thomas_solve(Ds, Us, lambda_t=1.0, lambda_s=1.0):
-    """Block tridiagonal algorithm, special cased to our setting
-    """
+    """Block tridiagonal algorithm, special cased to our setting"""
     Ds = np.asarray(Ds, dtype=np.float64)
     Us = np.asarray(Us, dtype=np.float64)
 
@@ -68,11 +70,17 @@ def thomas_solve(Ds, Us, lambda_t=1.0, lambda_s=1.0):
     offdiag_const = -(lambda_s / 2)
     offdiag_prior_terms = offdiag_const * eye
     del eye
+    extra = {}
+    extra["L_t"] = L_t
 
     # just solve independent problems when there's no spatial regularization
     # not that there's much overhead to the backward pass etc but might as well
     if lambda_s == 0:
-        return np.array([newton_solve_rigid(D, U, L_t)[0] for D, U in zip(Ds, Us)])
+        P = np.zeros((B, T))
+        extra["HU"] = np.zeros((B, T, T))
+        for b in range(B):
+            P[b], extra["HU"][b] = newton_solve_rigid(Ds[b], Us[b], L_t)
+        return P, extra
 
     # initialize block-LU stuff and forward variable
     alpha_hat_b = L_t + eye_s / 2 + neg_hessian_likelihood_term(Us[0])
@@ -103,7 +111,39 @@ def thomas_solve(Ds, Us, lambda_t=1.0, lambda_s=1.0):
     # un-vectorize
     P = np.concatenate(xs).reshape(B, T)
 
-    return P
+    return P, extra
+
+
+default_thomas_kw = dict(
+    lambda_s=1.0,
+    lambda_t=1.0,
+)
+
+
+def full_thomas(
+    Ds,
+    Us,
+    time_bin_edges_s,
+    lambda_s=1.0,
+    lambda_t=1.0,
+    window_centers=None,
+):
+    assert Ds.ndim == Us.ndim == 3
+    assert Ds.shape == Us.shape
+    B, T, T_ = Ds.shape
+    assert T == T_
+    if B == 1:
+        lambda_s = 0  # no space to have a prior on
+
+    # now we can do our tridiag solve
+    P, extra = thomas_solve(Ds, Us, lambda_t=lambda_t, lambda_s=lambda_s)
+    me1 = get_motion_estimate(
+        P,
+        spatial_bin_centers_um=window_centers,
+        time_bin_edges_s=time_bin_edges_s,
+    )
+
+    return me1, extra
 
 
 def get_weights_in_window(window, db_unreg, db_reg, raster_reg):
@@ -164,14 +204,18 @@ def get_weights(
         nspikes_threshold_low, amp_threshold_low = weights_threshold_low
         unif = np.full_like(windows[0], 1 / len(windows[0]))
         weights_threshold_low = (
-            scale_fn(amp_threshold_low) * windows @ (nspikes_threshold_low * unif)
+            scale_fn(amp_threshold_low)
+            * windows
+            @ (nspikes_threshold_low * unif)
         )
         weights_threshold_low = weights_threshold_low[:, None]
     if isinstance(weights_threshold_high, tuple):
         nspikes_threshold_high, amp_threshold_high = weights_threshold_high
         unif = np.full_like(windows[0], 1 / len(windows[0]))
         weights_threshold_high = (
-            scale_fn(amp_threshold_high) * windows @ (nspikes_threshold_high * unif)
+            scale_fn(amp_threshold_high)
+            * windows
+            @ (nspikes_threshold_high * unif)
         )
         weights_threshold_high = weights_threshold_high[:, None]
     weights_thresh = weights_orig.copy()
@@ -179,7 +223,6 @@ def get_weights(
     weights_thresh[weights_orig > weights_threshold_high] = np.inf
 
     return weights, weights_thresh, p_inds
-
 
 
 def weight_correlation_matrix(
@@ -212,7 +255,9 @@ def weight_correlation_matrix(
     B, T, T_ = Ds.shape
     assert T == T_
     assert Ds.shape == Cs.shape
-    spatial_bin_edges_um, time_bin_edges_s = get_bins(depths_um, times_s, bin_um, bin_s)
+    spatial_bin_edges_um, time_bin_edges_s = get_bins(
+        depths_um, times_s, bin_um, bin_s
+    )
     assert (T + 1,) == time_bin_edges_s.shape
     extra = {}
 
@@ -259,69 +304,98 @@ def weight_correlation_matrix(
 
     return Us, extra
 
-default_thomas_kw = dict(
-    lambda_s=1.0,
-    lambda_t=1.0,
-)
-
-
-def full_thomas(
-    Ds,
-    Us,
-    time_bin_edges_s,
-    lambda_s=1.0,
-    lambda_t=1.0,
-    window_centers=None,
-):
-    assert Ds.ndim == Us.ndim == 3
-    assert Ds.shape == Us.shape
-    B, T, T_ = Ds.shape
-    assert T == T_
-    if B == 1:
-        lambda_s = 0  # no space to have a prior on
-
-    # now we can do our tridiag solve
-    P = thomas_solve(Ds, Us, lambda_t=lambda_t, lambda_s=lambda_s)
-    me1 = get_motion_estimate(
-        P,
-        spatial_bin_centers_um=window_centers,
-        time_bin_edges_s=time_bin_edges_s,
-    )
-
-    return me1
-
 
 def solve_spatial(wt, pt, lambd=1):
     k = wt.size
     assert wt.shape == pt.shape == (k,)
     finite = np.isfinite(wt)
     finite_inds = np.flatnonzero(finite)
+    infinite_inds = np.flatnonzero(~finite)
     if not finite_inds.size:
         return pt
 
-    coefts = np.diag(wt[finite_inds] + lambd + 1e-9)
-    coefts[0, 0] -= lambd / 2
-    coefts[-1, -1] -= lambd / 2
-    target = 2 * wt[finite_inds] * pt[finite_inds]
-    for i, j in enumerate(finite_inds):
-        if j > 0:
-            if finite[j - 1]:
-                coefts[i, i - 1] = coefts[i - 1, i] = -lambd / 2
-            else:
-                target[i] += lambd * pt[j - 1]
-        if j < k - 1:
-            if finite[j + 1]:
-                coefts[i, i + 1] = coefts[i + 1, i] = -lambd / 2
-            else:
-                target[i] += lambd * pt[j + 1]
+    coefts = np.diag(wt) + lambd * laplacian(k)
+    target = wt[finite_inds] * pt[finite_inds]
+
+    coefts_ = coefts[finite_inds[:, None], finite_inds[None, :]]
+    target_ = (
+        target
+        - coefts[finite_inds[:, None], infinite_inds[None, :]]
+        @ pt[infinite_inds]
+    )
+
     try:
-        r_finite = solve(coefts, target)
+        r_finite = solve(coefts_, target_)
     except np.linalg.LinAlgError:
-        print(f"{np.array2string(coefts, precision=2, max_line_width=100)} {target=} {coefts.shape=} {target.shape=}")
+        print(
+            f"{np.array2string(coefts, precision=2, max_line_width=100)} {target=} {coefts.shape=} {target.shape=}"
+        )
         raise
     r = pt.copy()
     r[finite_inds] = r_finite
     return r
+
+
+# def solve_spatial_thomas(wt, pt, lambd=1):
+#     nl2 = -lambd / 2
+#     nl22 = nl2 * nl2
+
+#     cps = []
+#     dps = []
+#     for i in range(len(wt)):
+#         if i == len(wt) - 1:
+#             cps.append(nl2 / (lambd + wt[i] - cps[i - 1]))
+#         elif i:
+#             cps.append(nl2 / (lambd / 2 + wt[i] - cps[i - 1]))
+#         else:
+#             cps.append(nl2 / wt[i])
+#             dps.append(wt[i] * pt[i] -
+
+
+def runs_to_ranges(x, one_more=False):
+    if not len(x):
+        return []
+    ranges = []
+    cur = x[0]
+    b = x[0]
+    for a, b in zip(x, x[1:]):
+        assert b > a
+        if b - a == 1:
+            continue
+        else:
+            ranges.append(range(cur, a + 1 + one_more))
+            cur = b
+    ranges.append(range(cur, b + 1 + one_more))
+    return ranges
+
+
+
+def gapfill(weights, P: np.ndarray, lambd=1, local_reference=True):
+    # which bins have finite weights at each position
+    B = weights.shape[0]
+    fix_runs = []
+    for b in range(B):
+        fix_runs.extend(runs_to_ranges(np.flatnonzero(np.isfinite(weights[b]))))
+    fix_runs = reversed(sorted(fix_runs, key=len))
+    # fix_runs = sorted(fix_runs, key=len)
+    out = np.gradient(P, axis=1, edge_order=2) if local_reference else P.copy()
+    # means = gaussian_filter1d(P, 10)
+
+    for run in fix_runs:
+        # print(run, len(run), np.flatnonzero(np.isfinite(weights[:, run[0]])))
+        # run_offset = out[:, run].mean(axis=1) if local_reference else np.zeros(len(P))
+        # for t in np.flatnonzero(np.isfinite(weights).any(0)):
+        # run_offset = means[:, t]
+        for t in run:
+            out[:, t] = solve_spatial(weights[:, t], out[:, t], lambd=lambd)
+        # out[:, run] += run_offset[:, None]
+        # break
+
+    if local_reference:
+        out = np.cumsum(out, axis=1)
+        # out = np.where(np.isinf(weights), P, out)
+
+    return out
 
 
 default_xcorr_kw = dict(
@@ -415,6 +489,7 @@ def register(
     win_shape="gaussian",
     win_step_um=400,
     win_scale_um=450,
+    win_margin_um=None,
     max_disp_um=None,
     thomas_kw=default_thomas_kw,
     xcorr_kw=default_xcorr_kw,
@@ -451,7 +526,7 @@ def register(
         np.c_[np.zeros_like(spatial_bin_edges_um), spatial_bin_edges_um],
         win_step_um,
         win_scale_um,
-        margin_um=-win_scale_um / 2,
+        margin_um=-win_scale_um / 2 if win_margin_um is None else win_margin_um,
         win_shape=win_shape,
         zero_threshold=1e-5,
         rigid=rigid,
@@ -502,7 +577,9 @@ def register(
                 for b in range(B)
             ]
         )
-        for b in trange(B, desc="Corr for local templates") if pbar else range(B):
+        for b in (
+            trange(B, desc="Corr for local templates") if pbar else range(B)
+        ):
             Ds[b], _, _ = xcorr_windows(
                 local_templates[b],
                 windows[b, None],
@@ -518,13 +595,15 @@ def register(
         extra["local_templates"] = local_templates
 
     # solve for P
-    me = full_thomas(
+    me, textra = full_thomas(
         Ds,
         Us,
         time_bin_edges_s,
         window_centers=window_centers,
         **thomas_kw,
     )
+    if save_full:
+        extra.update(textra)
 
     extra["windows"] = windows
     extra["window_centers"] = window_centers
@@ -536,14 +615,14 @@ def register(
     return me, extra
 
 
-
-
 def shifted_template(R, Di, Si, bin_um=1):
     assert (R.shape[1],) == Di.shape == Si.shape
     pad = int(np.abs(Di // bin_um).max())
     Rshifted = np.empty_like(R)
     for i, d in enumerate((Di // bin_um).astype(int)):
-        Rshifted[i, :] = np.pad(R[i, :], [(pad, pad)])[pad + d : R.shape[1] + pad + d]
+        Rshifted[i, :] = np.pad(R[i, :], [(pad, pad)])[
+            pad + d : R.shape[1] + pad + d
+        ]
     return (Rshifted * Si[None, :]).sum(1) / Si.sum()
 
 
