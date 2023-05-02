@@ -60,7 +60,7 @@ class CloudpicklePoolExecutor(ProcessPoolExecutor):
         return super().submit(apply_cloudpickle, cloudpickle.dumps(fn), *args, **kwargs)
 
 
-def get_pool(n_jobs, context="spawn", cls=ProcessPoolExecutor):
+def get_pool(n_jobs, context="spawn", cls=CloudpicklePoolExecutor):
     Executor = cls if (n_jobs and n_jobs > 1) else MockPoolExecutor
     context = get_context(context)
     return Executor, context
