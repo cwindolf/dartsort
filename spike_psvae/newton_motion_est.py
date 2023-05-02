@@ -30,15 +30,27 @@ def laplacian(n, wink=True, eps=1e-10):
     return lap
 
 
-def neg_hessian_likelihood_term(Ub):
+def neg_hessian_likelihood_term(Ub, Ub_prevcur=None, Ub_curprev=None):
     # negative Hessian of p(D | p) inside a block
     negHUb = -Ub.copy()
     negHUb -= Ub.T
-    np.fill_diagonal(negHUb, np.diagonal(negHUb) + Ub.sum(1) + Ub.sum(0))
-    return negHU
+    diagonal_terms = np.diagonal(negHUb) + Ub.sum(1) + Ub.sum(0)
+    if Ub_prevcur is None:
+        np.fill_diagonal(negHUb, diagonal_terms)
+    else:
+        np.fill_diagonal(negHUb, diagonal_terms + Ub_prevcur.sum(0) + Ub_curprev.sum(1))
+    return negHUb
 
 
-def newton_rhs(Db, Ub, Pb_prev=None, Db_prevcur=None, Ub_prevcur=None):
+def newton_rhs(
+    Db,
+    Ub,
+    Pb_prev=None,
+    Db_prevcur=None,
+    Ub_prevcur=None,
+    Db_curprev=None,
+    Ub_curprev=None,
+):
     UDb = Ub * Db
     grad_at_0 = UDb.sum(1) - UDb.sum(0)
     if Pb_prev is None:
@@ -46,24 +58,56 @@ def newton_rhs(Db, Ub, Pb_prev=None, Db_prevcur=None, Ub_prevcur=None):
 
     # online case
     # the math is written without assuming symmetry, so it has a sum
-    # of the two off-diagonals instead of 2x the upper. symmetry sometimes
-    # will not hold, but for computational purposes it's nice to have.
+    # of the two off-diagonals instead of 2x the upper. symmetry only
+    # approximately holds due to the way we cross-correlate in the
+    # nonrigid case (it holds absolutely in the rigid case), but it's
+    # approximately fine and it would be a waste to compute both off-diagonal
+    # xcorrs.
     # same goes for the UDb_prev stuff below
-    align_term = 2.0 * (Ub @ Pb_prev)
-    UDb_prevcur = Ub_prevcur * Db_prevcur
-    rhs = align_term + 2.0 * UDb_prevcur.sum(0) + grad_at_0
+    align_term = Ub_prevcur.T @ Pb_prev + Ub_curprev @ Pb_prev
+    rhs = (
+        align_term
+        + grad_at_0
+        + (Ub_prevcur * Db_prevcur).sum(0)
+        - (Ub_curprev * Db_curprev).sum(1)
+    )
 
     return rhs
 
 
-def newton_solve_rigid(D, U, Sigma0inv, Pb_prev=None, Db_prevcur=None, Ub_prevcur=None):
+def newton_solve_rigid(
+    D,
+    U,
+    Sigma0inv,
+    Pb_prev=None,
+    Db_prevcur=None,
+    Ub_prevcur=None,
+    Db_curprev=None,
+    Ub_curprev=None,
+):
     """D is TxT displacement, U is TxT subsampling or soft weights matrix"""
-    negHU = neg_hessian_likelihood_term(U)
+    negHU = neg_hessian_likelihood_term(
+        U,
+        Ub_prevcur=Ub_prevcur,
+        Ub_curprev=Ub_curprev,
+    )
     targ = newton_rhs(
-        D, U, Pb_prev=Pb_prev, Db_prevcur=Db_prevcur, Ub_prevcur=Ub_prevcur
+        D,
+        U,
+        Pb_prev=Pb_prev,
+        Db_prevcur=Db_prevcur,
+        Ub_prevcur=Ub_prevcur,
+        Db_curprev=Db_curprev,
+        Ub_curprev=Ub_curprev,
     )
     p = solve(Sigma0inv + negHU, targ, assume_a="pos")
     return p, negHU
+
+
+default_thomas_kw = dict(
+    lambda_s=1.0,
+    lambda_t=1.0,
+)
 
 
 def thomas_solve(
@@ -75,6 +119,8 @@ def thomas_solve(
     P_prev=None,
     Ds_prevcur=None,
     Us_prevcur=None,
+    Ds_curprev=None,
+    Us_curprev=None,
 ):
     """Block tridiagonal algorithm, special cased to our setting
 
@@ -96,14 +142,20 @@ def thomas_solve(
     Ds = np.asarray(Ds, dtype=np.float64)
     Us = np.asarray(Us, dtype=np.float64)
     online = P_prev is not None
-    online_kw = lambda b: {}
+    online_kw_rhs = online_kw_hess = lambda b: {}
     if online:
         assert Ds_prevcur is not None
         assert Us_prevcur is not None
-        online_kw = lambda b: dict(
-            Pb_prev=P_prev[b],
-            Db_prevcur=Ds_prevcur[b],
-            Ub_prevcur=Us_prevcur[b],
+        online_kw_rhs = lambda b: dict(
+            Pb_prev=P_prev[b].astype(np.float64),
+            Db_prevcur=Ds_prevcur[b].astype(np.float64),
+            Ub_prevcur=Us_prevcur[b].astype(np.float64),
+            Db_curprev=Ds_curprev[b].astype(np.float64),
+            Ub_curprev=Us_curprev[b].astype(np.float64),
+        )
+        online_kw_hess = lambda b: dict(
+            Ub_prevcur=Us_prevcur[b].astype(np.float64),
+            Ub_curprev=Us_curprev[b].astype(np.float64),
         )
 
     B, T, T_ = Ds.shape
@@ -119,7 +171,9 @@ def thomas_solve(
         P = np.zeros((B, T))
         extra["HU"] = np.zeros((B, T, T))
         for b in range(B):
-            P[b], extra["HU"][b] = newton_solve_rigid(Ds[b], Us[b], L_t, **online_kw(b))
+            P[b], extra["HU"][b] = newton_solve_rigid(
+                Ds[b], Us[b], L_t, **online_kw_rhs(b)
+            )
         return P, extra
 
     # spatial prior is a sparse, block tridiagonal kronecker product
@@ -131,8 +185,12 @@ def thomas_solve(
     Lambda_s_offdiag = (-lambda_s / 2) * L_t
 
     # initialize block-LU stuff and forward variable
-    alpha_hat_b = L_t + Lambda_s_diag1 / 2 + neg_hessian_likelihood_term(Us[0])
-    targets = np.c_[Lambda_s_offdiag, newton_rhs(Us[0], Ds[0], **online_kw(0))]
+    alpha_hat_b = (
+        L_t
+        + Lambda_s_diag1 / 2
+        + neg_hessian_likelihood_term(Us[0], **online_kw_hess(0))
+    )
+    targets = np.c_[Lambda_s_offdiag, newton_rhs(Us[0], Ds[0], **online_kw_rhs(0))]
     res = solve(alpha_hat_b, targets, assume_a="pos")
     assert res.shape == (T, T + 1)
     gamma_hats = [res[:, :T]]
@@ -141,9 +199,13 @@ def thomas_solve(
     # forward pass
     for b in range(1, B):
         s_factor = 1 if b < B - 1 else 0.5
-        Ab = L_t + Lambda_s_diag1 * s_factor + neg_hessian_likelihood_term(Us[b])
+        Ab = (
+            L_t
+            + Lambda_s_diag1 * s_factor
+            + neg_hessian_likelihood_term(Us[b], **online_kw_hess(b))
+        )
         alpha_hat_b = Ab - Lambda_s_offdiag @ gamma_hats[b - 1]
-        targets[:, T] = newton_rhs(Us[b], Ds[b], **online_kw(b))
+        targets[:, T] = newton_rhs(Us[b], Ds[b], **online_kw_rhs(b))
         targets[:, T] -= Lambda_s_offdiag @ ys[b - 1]
         res = solve(alpha_hat_b, targets)
         assert res.shape == (T, T + 1)
@@ -160,36 +222,6 @@ def thomas_solve(
     P = np.concatenate(xs).reshape(B, T)
 
     return P, extra
-
-
-default_thomas_kw = dict(
-    lambda_s=1.0,
-    lambda_t=1.0,
-)
-
-
-def full_thomas(
-    Ds,
-    Us,
-    time_bin_edges_s,
-    lambda_s=1.0,
-    lambda_t=1.0,
-    window_centers=None,
-):
-    assert Ds.ndim == Us.ndim == 3
-    assert Ds.shape == Us.shape
-    B, T, T_ = Ds.shape
-    assert T == T_
-
-    # now we can do our tridiag solve
-    P, extra = thomas_solve(Ds, Us, lambda_t=lambda_t, lambda_s=lambda_s)
-    me1 = get_motion_estimate(
-        P,
-        spatial_bin_centers_um=window_centers,
-        time_bin_edges_s=time_bin_edges_s,
-    )
-
-    return me1, extra
 
 
 def get_weights_in_window(window, db_unreg, db_reg, raster_reg):
@@ -267,6 +299,31 @@ def get_weights(
     return weights, weights_thresh, p_inds
 
 
+def threshold_correlation_matrix(
+    Cs,
+    mincorr=0.0,
+    max_dt_s=0,
+    in_place=False,
+    bin_s=1,
+):
+    # need abs to avoid -0.0s which cause numerical issues
+    if in_place:
+        Ss = Cs
+        Ss[Ss < mincorr] = 0
+        np.square(Ss, out=Ss)
+    else:
+        Ss = np.square((Cs >= mincorr) * Cs)
+    if max_dt_s is not None and max_dt_s > 0:
+        mask = la.toeplitz(
+            np.r_[
+                np.ones(int(max_dt_s // bin_s), dtype=Ss.dtype),
+                np.zeros(T - int(max_dt_s // bin_s), dtype=Ss.dtype),
+            ]
+        )
+        Ss *= mask[None]
+    return Ss
+
+
 def weight_correlation_matrix(
     Ds,
     Cs,
@@ -301,16 +358,9 @@ def weight_correlation_matrix(
     assert (T + 1,) == time_bin_edges_s.shape
     extra = {}
 
-    # need abs to avoid -0.0s which cause numerical issues below
-    Ss = np.square((Cs >= mincorr) * Cs)
-    if max_dt_s is not None and max_dt_s > 0:
-        mask = la.toeplitz(
-            np.r_[
-                np.ones(int(max_dt_s // bin_s), dtype=Ss.dtype),
-                np.zeros(T - int(max_dt_s // bin_s), dtype=Ss.dtype),
-            ]
-        )
-        Ss *= mask[None]
+    Ss = threshold_correlation_matrix(
+        Cs, mincorr=mincorr, max_dt_s=max_dt_s, bin_s=bin_s
+    )
     extra["S"] = Ss
 
     if not do_window_weights:
@@ -505,12 +555,11 @@ def register(
         **raster_kw,
     )
     windows, window_centers = get_windows(
-        bin_um,
-        spatial_bin_edges_um,
-        # pseudo geom
+        # pseudo geom to fool spikeinterface
         np.c_[np.zeros_like(spatial_bin_edges_um), spatial_bin_edges_um],
         win_step_um,
         win_scale_um,
+        spatial_bin_edges=spatial_bin_edges_um,
         margin_um=-win_scale_um / 2 if win_margin_um is None else win_margin_um,
         win_shape=win_shape,
         zero_threshold=1e-5,
@@ -533,10 +582,8 @@ def register(
         )
     else:
         Ds, Cs, max_disp_um = precomputed_D_C_maxdisp
-    B = Ds.shape[0]
 
     # turn Cs into weights
-    weights_kw = weights_kw | dict()
     Us, wextra = weight_correlation_matrix(
         Ds,
         Cs,
@@ -556,12 +603,12 @@ def register(
         extra.update({k: wextra[k] for k in wextra if k in ("S", "U")})
 
     # solve for P
-    me, textra = full_thomas(
-        Ds,
-        Us,
-        time_bin_edges_s,
-        window_centers=window_centers,
-        **thomas_kw,
+    # now we can do our tridiag solve
+    P, textra = thomas_solve(Ds, Us, **thomas_kw)
+    me = get_motion_estimate(
+        P,
+        spatial_bin_centers_um=window_centers,
+        time_bin_edges_s=time_bin_edges_s,
     )
     if save_full:
         extra.update(textra)
@@ -576,11 +623,17 @@ def register(
     return me, extra
 
 
+default_weights_kw_lfp = dict(
+    mincorr=0.8,
+    max_dt_s=None,
+    do_window_weights=False,
+)
+
+
 def register_online_lfp(
     lfp_recording,
     rigid=True,
-    bin_um=1.0,
-    bin_s=1.0,
+    chunk_len_s=10.0,
     win_shape="gaussian",
     win_step_um=400,
     win_scale_um=450,
@@ -588,12 +641,125 @@ def register_online_lfp(
     max_disp_um=None,
     thomas_kw=default_thomas_kw,
     xcorr_kw=default_xcorr_kw,
-    raster_kw=default_raster_kw,
-    weights_kw=default_weights_kw,
+    weights_kw=default_weights_kw_lfp,
     upsample_to_histogram_bin=False,
     device=None,
     pbar=True,
-    save_full=False,
-    precomputed_D_C_maxdisp=None,
 ):
     """Online registration of a preprocessed lfp recording"""
+    # TODO: upsample_to_histogram_bin
+    assert not upsample_to_histogram_bin
+
+    geom = lfp_recording.get_channel_locations()
+    fs = lfp_recording.get_sampling_frequency()
+    T_total = lfp_recording.get_num_samples()
+    T_chunk = min(int(np.floor(fs * chunk_len_s)), T_total)
+
+    # kwarg defaults and handling
+    # need lfp-specific defaults
+    weights_kw = weights_kw | default_weights_kw_lfp
+    xcorr_kw = xcorr_kw | default_xcorr_kw
+    thomas_kw = thomas_kw | default_thomas_kw
+    full_xcorr_kw = dict(
+        rigid=rigid,
+        bin_um=np.median(np.diff(geom[:, 1])),
+        max_disp_um=max_disp_um,
+        pbar=False,
+        xcorr_kw=xcorr_kw,
+        device=device,
+    )
+    threshold_kw = dict(
+        mincorr=weights_kw["mincorr"],
+        max_dt_s=weights_kw["max_dt_s"],
+        bin_s=1 / fs,
+        in_place=True,
+    )
+
+    # get windows
+    windows, window_centers = get_windows(
+        geom,
+        win_step_um,
+        win_scale_um,
+        spatial_bin_centers=geom[:, 1],
+        margin_um=-win_scale_um / 2 if win_margin_um is None else win_margin_um,
+        win_shape=win_shape,
+        zero_threshold=1e-5,
+        rigid=rigid,
+    )
+    B = len(windows)
+    extra = dict(window_centers=window_centers, windows=windows)
+
+    # -- allocate output and initialize first chunk
+    P_online = np.empty((B, T_total), dtype=np.float32)
+    # below, t0 is start of prev chunk, t1 start of cur chunk, t2 end of cur
+    t0, t1 = 0, T_chunk
+    traces0 = lfp_recording.get_traces(start_frame=t0, end_frame=t1)
+    Ds0, Cs0, max_disp_um = xcorr_windows(
+        traces0.T, windows, geom[:, 1], win_scale_um, **full_xcorr_kw
+    )
+    full_xcorr_kw["max_disp_um"] = max_disp_um
+    Ss0 = threshold_correlation_matrix(Cs0, **threshold_kw)
+    extra["max_disp_um"] = max_disp_um
+    P_online[:, t0:t1], _ = thomas_solve(Ds0, Ss0, **thomas_kw)
+
+    # -- loop through chunks
+    if pbar:
+        chunk_starts = trange(T_chunk, T_total, T_chunk, desc="chunks")
+    else:
+        chunk_starts = range(T_chunk, T_total, T_chunk)
+    for t1 in chunk_starts:
+        t2 = min(T_total, t1 + T_chunk)
+        traces1 = lfp_recording.get_traces(start_frame=t1, end_frame=t2)
+
+        # cross-correlations between prev/cur chunks
+        Ds10, Cs10, _ = xcorr_windows(
+            traces1.T,
+            windows,
+            geom[:, 1],
+            win_scale_um,
+            raster_b=traces0.T,
+            **full_xcorr_kw,
+        )
+        Ss10 = threshold_correlation_matrix(Cs10, **threshold_kw)
+        # Ds01, Cs01, _ = xcorr_windows(
+        #     traces0.T,
+        #     windows,
+        #     geom[:, 1],
+        #     win_scale_um,
+        #     raster_b=traces1.T,
+        #     **full_xcorr_kw,
+        # )
+        # Ss01 = threshold_correlation_matrix(Cs01, **threshold_kw)
+
+        # cross-correlation in current chunk
+        Ds1, Cs1, _ = xcorr_windows(
+            traces1.T, windows, geom[:, 1], win_scale_um, **full_xcorr_kw
+        )
+        Ss1 = threshold_correlation_matrix(Cs1, **threshold_kw)
+
+        # solve online problem
+        P_online[:, t1:t2], _ = thomas_solve(
+            Ds1,
+            Ss1,
+            P_prev=P_online[:, t0:t1],
+            Ds_curprev=Ds10,
+            Us_curprev=Ss10,
+            Ds_prevcur=Ds10.transpose(0, 2, 1),
+            Us_prevcur=Ss10.transpose(0, 2, 1),
+            # Ds_prevcur=Ds01,
+            # Us_prevcur=Ss01,
+            **thomas_kw,
+        )
+
+        # update loop vars
+        t0, t1 = t1, t2
+        traces0 = traces1
+
+    # -- convert to motion estimate and return
+    # should use get_times or something
+    me = get_motion_estimate(
+        P_online,
+        time_bin_centers_s=lfp_recording.get_times(0),
+        spatial_bin_centers_um=window_centers,
+    )
+    return me, extra
