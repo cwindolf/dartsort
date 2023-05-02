@@ -395,36 +395,6 @@ def weight_correlation_matrix(
     return Us, extra
 
 
-def solve_spatial(wt, pt, lambd=1):
-    k = wt.size
-    assert wt.shape == pt.shape == (k,)
-    finite = np.isfinite(wt)
-    finite_inds = np.flatnonzero(finite)
-    infinite_inds = np.flatnonzero(~finite)
-    if not finite_inds.size:
-        return pt
-
-    coefts = np.diag(wt) + lambd * laplacian(k)
-    target = wt[finite_inds] * pt[finite_inds]
-
-    coefts_ = coefts[finite_inds[:, None], finite_inds[None, :]]
-    target_ = (
-        target
-        - coefts[finite_inds[:, None], infinite_inds[None, :]] @ pt[infinite_inds]
-    )
-
-    try:
-        r_finite = solve(coefts_, target_)
-    except np.linalg.LinAlgError:
-        print(
-            f"{np.array2string(coefts, precision=2, max_line_width=100)} {target=} {coefts.shape=} {target.shape=}"
-        )
-        raise
-    r = pt.copy()
-    r[finite_inds] = r_finite
-    return r
-
-
 default_xcorr_kw = dict(
     centered=True,
     normalized=True,
