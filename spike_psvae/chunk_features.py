@@ -363,6 +363,8 @@ class Localization(ChunkFeature):
                 mcs = torch.argmax(peaks, dim=1)
                 argpeaks = argpeaks[torch.arange(len(argpeaks)), mcs]
                 ptps = abswfs[torch.arange(len(mcs)), argpeaks, :]
+                if not self.dogpu:
+                    ptps = ptps.cpu().numpy()
             else:
                 peaks = np.max(np.absolute(wfs), axis=1)
                 argpeaks = np.argmax(np.absolute(wfs), axis=1)
