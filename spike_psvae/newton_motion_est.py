@@ -302,6 +302,7 @@ def get_weights(
 
 def threshold_correlation_matrix(
     Cs,
+    T,
     mincorr=0.0,
     max_dt_s=0,
     in_place=False,
@@ -360,7 +361,7 @@ def weight_correlation_matrix(
     extra = {}
 
     Ss = threshold_correlation_matrix(
-        Cs, mincorr=mincorr, max_dt_s=max_dt_s, bin_s=bin_s
+        Cs, T, mincorr=mincorr, max_dt_s=max_dt_s, bin_s=bin_s
     )
     extra["S"] = Ss
 
