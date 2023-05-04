@@ -32,13 +32,14 @@ def laplacian(n, wink=True, eps=1e-10):
 
 def neg_hessian_likelihood_term(Ub, Ub_prevcur=None, Ub_curprev=None):
     # negative Hessian of p(D | p) inside a block
-    negHUb = -Ub.copy()
+    negHUb = -Ub
     negHUb -= Ub.T
     diagonal_terms = np.diagonal(negHUb) + Ub.sum(1) + Ub.sum(0)
     if Ub_prevcur is None:
         np.fill_diagonal(negHUb, diagonal_terms)
     else:
-        np.fill_diagonal(negHUb, diagonal_terms + Ub_prevcur.sum(0) + Ub_curprev.sum(1))
+        diagonal_terms += Ub_prevcur.sum(0) + Ub_curprev.sum(1)
+        np.fill_diagonal(negHUb, diagonal_terms)
     return negHUb
 
 
@@ -64,12 +65,12 @@ def newton_rhs(
     # approximately fine and it would be a waste to compute both off-diagonal
     # xcorrs.
     # same goes for the UDb_prev stuff below
-    align_term = Ub_prevcur.T @ Pb_prev + Ub_curprev @ Pb_prev
+    align_term = (Ub_prevcur.T + Ub_curprev) @ Pb_prev
     rhs = (
         align_term
         + grad_at_0
-        + (Ub_prevcur * Db_prevcur).sum(0)
-        - (Ub_curprev * Db_curprev).sum(1)
+        + (Ub_curprev * Db_curprev).sum(1)
+        - (Ub_prevcur * Db_prevcur).sum(0)
     )
 
     return rhs
