@@ -140,11 +140,11 @@ def array_scatter(
     )
     axes[0].scatter(*geom.T, c="orange", marker="s", s=10)
     axes[0].scatter(geom[0, 0], geom[0, 1], c="orange", marker="s", s=10, label='Channel Locations')
-    axes[0].set_ylabel("Registered Depth (um)", fontsize=16)
-    axes[0].set_xlabel("x (um)", fontsize=16)
-    axes[0].legend(fontsize=16)
-    axes[0].tick_params(axis='x', labelsize=16)
-    axes[0].tick_params(axis='y', labelsize=16)
+    axes[0].set_ylabel("Registered Depth (um)", fontsize=14)
+    axes[0].set_xlabel("x (um)", fontsize=14)
+    axes[0].legend(fontsize=14, loc='upper left')
+    axes[0].tick_params(axis='x', labelsize=14)
+    axes[0].tick_params(axis='y', labelsize=14)
 
     cluster_scatter(
         maxptp,
