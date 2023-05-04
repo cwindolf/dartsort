@@ -35,6 +35,8 @@ class ChunkFeature:
         subtracted_wfs=None,
         cleaned_wfs=None,
         denoised_wfs=None,
+        geom=None,
+        training_radius=None,
     ):
         """Some ChunkFeatures don't fit, so useful to inherit this."""
         pass
@@ -195,6 +197,8 @@ class PTPVector(ChunkFeature):
         subtracted_wfs=None,
         cleaned_wfs=None,
         denoised_wfs=None,
+        geom=None,
+        training_radius=None,
     ):
         wfs = self.handle_which_wfs(subtracted_wfs, cleaned_wfs, denoised_wfs)
         if wfs is None:
@@ -257,6 +261,8 @@ class Waveform(ChunkFeature):
         subtracted_wfs=None,
         cleaned_wfs=None,
         denoised_wfs=None,
+        geom=None,
+        training_radius=None,
     ):
         wfs = self.handle_which_wfs(subtracted_wfs, cleaned_wfs, denoised_wfs)
         if wfs is None:
@@ -357,6 +363,8 @@ class Localization(ChunkFeature):
                 mcs = torch.argmax(peaks, dim=1)
                 argpeaks = argpeaks[torch.arange(len(argpeaks)), mcs]
                 ptps = abswfs[torch.arange(len(mcs)), argpeaks, :]
+                if not self.dogpu:
+                    ptps = ptps.cpu().numpy()
             else:
                 peaks = np.max(np.absolute(wfs), axis=1)
                 argpeaks = np.argmax(np.absolute(wfs), axis=1)
@@ -420,7 +428,7 @@ class TPCA(ChunkFeature):
         self.C = channel_index.shape[1]
         self.out_shape = (self.rank, self.C)
         self.centered = centered
-        self.tpca = PCA(self.rank, random_state=random_state)
+        self.tpca = PCA(self.rank, random_state=random_state, copy=False)
 
     @classmethod
     def load_from_h5(cls, h5, which_waveforms, random_state=0):
@@ -541,6 +549,8 @@ class TPCA(ChunkFeature):
         subtracted_wfs=None,
         cleaned_wfs=None,
         denoised_wfs=None,
+        geom=None,
+        training_radius=None,
     ):
         wfs = self.handle_which_wfs(subtracted_wfs, cleaned_wfs, denoised_wfs)
         if wfs is None:
@@ -553,9 +563,19 @@ class TPCA(ChunkFeature):
         self.T = T
 
         wfs_in_probe = wfs.transpose(0, 2, 1)
-        in_probe_index = self.channel_index < self.channel_index.shape[0]
-        wfs_in_probe = wfs_in_probe[in_probe_index[max_channels]]
-
+        if geom is None:
+            in_probe_index = self.channel_index < self.channel_index.shape[0]
+            wfs_in_probe = wfs_in_probe[in_probe_index[max_channels]]
+        else:
+            distances_channels = np.sqrt((geom[:, None] - geom[None, :])**2).sum(2)
+            distances_channels = np.pad(distances_channels, ((0, 0), (0, 1)), mode='constant', constant_values=training_radius*2)
+            distances_channels = distances_channels[np.repeat(np.arange(geom.shape[0]), C), self.channel_index.flatten()].reshape((geom.shape[0], C))
+            in_probe_index = distances_channels < training_radius
+            wfs_in_probe = wfs_in_probe[in_probe_index[max_channels]]
+            del distances_channels
+           
+        print("wfs Shape")
+        print(wfs_in_probe.shape)
         if self.centered:
             self.tpca.fit(wfs_in_probe)
         else:
@@ -757,6 +777,8 @@ class STPCA(ChunkFeature):
         subtracted_wfs=None,
         cleaned_wfs=None,
         denoised_wfs=None,
+        geom=None,
+        training_radius=None,
     ):
         wfs = self.handle_which_wfs(subtracted_wfs, cleaned_wfs, denoised_wfs)
         if wfs is None:
