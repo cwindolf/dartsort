@@ -316,7 +316,7 @@ def threshold_correlation_matrix(
         np.square(Ss, out=Ss)
     else:
         Ss = np.square((Cs >= mincorr) * Cs)
-    if max_dt_s is not None and max_dt_s > 0 and max_dt_s < T:
+    if max_dt_s is not None and max_dt_s > 0 and T is not None and max_dt_s < T:
         mask = la.toeplitz(
             np.r_[
                 np.ones(int(max_dt_s // bin_s), dtype=Ss.dtype),
