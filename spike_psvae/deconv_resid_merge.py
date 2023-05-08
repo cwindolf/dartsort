@@ -81,7 +81,6 @@ def resid_dist(
 def resid_dist_multiple(
     target_templates,
     search_templates,
-    deconv_threshold,
     max_upsample=8,
     sampling_rate=30000,
     conv_approx_rank=5,
@@ -89,6 +88,7 @@ def resid_dist_multiple(
     multi_processing=False,
     lambd=0.001,
     allowed_scale=0.1,
+#     deconv_threshold=100,
 ):
     N, T, C = target_templates.shape
     if search_templates.ndim == 2:
@@ -98,6 +98,8 @@ def resid_dist_multiple(
 
     # pad target so that the deconv can find arbitrary offset
     target_recording = np.pad(target_templates.reshape((N*T, C)), [(T, T), (0, 0)])
+    
+    deconv_threshold = 0.5*(target_templates**2).sum((1, 2)).min()
 
     mp_object = MatchPursuitObjectiveUpsample(
         templates=search_templates,
@@ -140,7 +142,9 @@ def resid_dist_multiple(
             deconv_scalings[i] * templates_up[labels_up[i]]
         )
 
-    dist = np.abs(target_recording).max()
+#     dist = np.abs(target_recording).max()
+#     dist = np.abs(target_recording).max()
+    dist = np.sqrt(np.square(target_recording).sum()/(target_recording != 0).sum())
     shift = np.median(deconv_st[:, 0] - T*np.arange(1, len(deconv_st)+1))
 
     return dist, shift

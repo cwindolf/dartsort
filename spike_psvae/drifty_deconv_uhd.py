@@ -15,7 +15,7 @@ from .extract_deconv import extract_deconv
 def superres_spike_train(
     spike_train, spt_before, z_abs_pre, x_pre, z_abs_before, x_pre_before, bin_size_um, geom, 
     bins_sizes_um=None, t_start=0, t_end=100, 
-    units_spread=None, units_x_spread=None, n_spikes_max_recent = 1000, fs=30000, 
+    units_spread=None, units_x_spread=None, n_spikes_max_recent = 10000, fs=30000, 
     dist_metric=None, dist_metric_threshold=500,
     adaptive_th_for_temp_computation=False, outliers_tracking=None, n_spikes_th=100,
 ):
@@ -25,7 +25,7 @@ def superres_spike_train(
     """
     
     # when not doing template update, compute template in the middle of recording
-    t_end = (t_end+t_start)/2
+#     t_end = (t_end+t_start)/2
     assert spike_train.shape == (*z_abs_pre.shape, 2)
     assert bin_size_um > 0
     pitch = get_pitch(geom)
@@ -87,12 +87,13 @@ def superres_spike_train(
         in_u = np.flatnonzero(spike_train_no_outliers[:, 1] == u)
 
         # Get most recent spikes
-        count_unit = np.logical_and(spike_train_no_outliers[:, 0]<t_end*fs, spike_train_no_outliers[:, 1]==u).sum()
+        count_unit = np.logical_and(spike_train_no_outliers[:, 0]>t_start*fs,
+            np.logical_and(spike_train_no_outliers[:, 0]<t_end*fs, spike_train_no_outliers[:, 1]==u)).sum()
         if count_unit>n_spikes_max_recent:
-            in_u = np.flatnonzero(np.logical_and(spike_train_no_outliers[:, 0]<t_end*fs, 
-                                                           spike_train_no_outliers[:, 1]==u))[-n_spikes_max_recent:]
+            in_u = np.flatnonzero(np.logical_and(spike_train_no_outliers[:, 0]>t_start*fs,
+            np.logical_and(spike_train_no_outliers[:, 0]<t_end*fs, spike_train_no_outliers[:, 1]==u))) #[-n_spikes_max_recent:]
         else:
-            in_u = np.flatnonzero(spike_train_no_outliers[:, 1]==u)[:n_spikes_max_recent]
+            in_u = np.flatnonzero(spike_train_no_outliers[:, 1]==u) #[:n_spikes_max_recent]
         
         # convert them to bin identities by adding half the bin size and
         # floor dividing by the bin size
@@ -199,7 +200,7 @@ def superres_denoised_templates(
     t_end=100,
     min_spikes_bin=None,
     augment_low_snr_temps=True,
-    min_spikes_to_augment=25,
+    min_spikes_to_augment=50,
     units_spread=None,
     units_x_spread=None,
     dist_metric=None,
@@ -207,7 +208,7 @@ def superres_denoised_templates(
     adaptive_th_for_temp_computation=False,
     outliers_tracking=None,
     max_spikes_per_unit=200, #per superres unit 
-    n_spikes_max_recent = 1000,
+    n_spikes_max_recent = 10000,
     denoise_templates=True,
     do_temporal_decrease=True,
     zero_radius_um=200, #reduce this value in uhd compared to NP1/NP2
@@ -218,7 +219,7 @@ def superres_denoised_templates(
     do_tpca=True,
     tpca=None,
     tpca_rank=5,
-    tpca_radius=75,
+    tpca_radius=20,
     tpca_n_wfs=50_000,
     tpca_centered=True,
     do_nn_denoise=False,
@@ -305,15 +306,32 @@ def superres_denoised_templates(
                         bins_sizes_um=bins_sizes_um,
                         min_spikes_to_augment = min_spikes_to_augment
         )
+        
+    
 
     if min_spikes_bin is not None:
         templates[n_spikes_per_bin<min_spikes_bin]=0
-
+        
+    for k in range(spike_train[:, 1].max()+1):
+        if (superres_label_to_orig_label==k).sum():
+            snr = np.sqrt(n_spikes_per_bin[superres_label_to_orig_label==k])*templates[superres_label_to_orig_label==k].ptp(1).max(1)
+#             print(k)
+#             print((superres_label_to_orig_label==k).sum())
+#             print(snr)
+            if snr.max()<20:
+                idx = np.flatnonzero(superres_label_to_orig_label==k)
+                templates[idx[superres_label_to_bin_id[idx]==0]] = templates[superres_label_to_orig_label==k].mean(0)
+                templates[idx[superres_label_to_bin_id[idx]!=0]] = 0
+            else:
+                idx = np.flatnonzero(superres_label_to_orig_label==k)[snr<20]
+                templates[idx] = 0
+        
     return (
         templates,
         superres_label_to_bin_id,
         superres_label_to_orig_label,
-        medians_at_computation
+        medians_at_computation, 
+        n_spikes_per_bin
     )
 
 
@@ -483,7 +501,9 @@ def shift_deconv(
     max_upsample=1, #param for UHD - can increase if speed ok 
     refractory_period_frames=10,
     deconv_threshold=500, #Important param to validate
-    su_chan_vis=3, #Important param to validate
+    su_chan_vis=1.5, #Important param to validate
+    su_temp_on=None,
+    save_temps=False, #if false, less memory is taken
 ):
     #multiprocessing needs to be fixed 
     n_processors = n_jobs
@@ -504,8 +524,8 @@ def shift_deconv(
     unique_shifts, shift_ids_by_time = np.unique(
         bin_shifts, return_inverse=True
     )
-
-    # for each shift, get shifted templates
+    
+    # Do we need this outside the for loop?
     shifted_templates = np.array(
         [
             shift_superres_templates(
@@ -522,6 +542,14 @@ def shift_deconv(
         ]
     )
 
+    if su_temp_on is not None:
+        idx_low_temp = shifted_templates.ptp(2).max(2)<su_temp_on
+        shifted_templates[idx_low_temp]=0
+#     print("NUMBER ALL TEMPLATES")
+#     print(shifted_templates.shape)
+#     print("NUMBER GOOD TEMPLATES")
+#     print((shifted_templates.ptp(2).max(2)>su_temp_on).sum())
+
     # run deconv on just the appropriate batches for each shift
     deconv_dir = Path(
         deconv_dir if deconv_dir is not None else tempfile.mkdtemp()
@@ -531,6 +559,8 @@ def shift_deconv(
     shifted_templates_up = []
     shifted_sparse_temp_map = []
     sparse_temp_to_orig_map = []
+    shifted_upsampled_start_ixs = [0]
+    shifted_upsampled_idx_to_shift_id = []
     batch2shiftix = {}
     for shiftix, (shift, temps) in enumerate(
         zip(unique_shifts, tqdm(shifted_templates, desc="Shifts"))
@@ -578,81 +608,132 @@ def shift_deconv(
                 ):
                     pass
 
-        (
-            templates_up,
-            deconv_id_sparse_temp_map,
-            sparse_id_to_orig_id,
-        ) = mp_object.get_sparse_upsampled_templates(return_orig_map=True)
-        templates_up = templates_up.transpose(2, 0, 1)
-        shifted_templates_up.append(templates_up)
-        shifted_sparse_temp_map.append(deconv_id_sparse_temp_map)
-        sparse_temp_to_orig_map.append(sparse_id_to_orig_id)
+        if save_temps:
+        # for each shift, get shifted templates
+            (
+                templates_up,
+                deconv_id_sparse_temp_map,
+                sparse_id_to_orig_id,
+            ) = mp_object.get_sparse_upsampled_templates(return_orig_map=True)
+            templates_up = templates_up.transpose(2, 0, 1)
+            shifted_templates_up.append(templates_up)
+            shifted_sparse_temp_map.append(deconv_id_sparse_temp_map)
+            sparse_temp_to_orig_map.append(sparse_id_to_orig_id)
+            assert len(templates_up) == len(sparse_id_to_orig_id)
+        else:
+            shifted_upsampled_start_ixs.append(shifted_upsampled_start_ixs[-1]+temps.shape[0]) #here only upsample in "space"
+            shifted_upsampled_idx_to_shift_id.append([shiftix] * temps.shape[0])
+            sparse_temp_to_orig_map.append(np.arange(temps.shape[0]))
 
-        assert len(templates_up) == len(sparse_id_to_orig_id)
-
-    # collect all shifted and upsampled templates
-    shifted_upsampled_start_ixs = np.array(
-        [0] + list(np.cumsum([t.shape[0] for t in shifted_templates_up[:-1]]))
-    )
-    all_shifted_upsampled_temps = np.concatenate(shifted_templates_up, axis=0)
-    shifted_upsampled_idx_to_shift_id = np.concatenate(
-        [[i] * t.shape[0] for i, t in enumerate(shifted_templates_up)], axis=0
-    )
-    shifted_upsampled_idx_to_orig_id = (
-        np.concatenate(sparse_temp_to_orig_map, axis=0)
-        # + shifted_upsampled_start_ixs[shifted_upsampled_idx_to_shift_id]
-    )
+    # CHANGE LOGIC HERE
+    if save_temps:
+        # collect all shifted and upsampled templates
+        shifted_upsampled_start_ixs = np.array(
+            [0] + list(np.cumsum([t.shape[0] for t in shifted_templates_up[:-1]]))
+        )
+        all_shifted_upsampled_temps = np.concatenate(shifted_templates_up, axis=0)
+        shifted_upsampled_idx_to_shift_id = np.concatenate(
+            [[i] * t.shape[0] for i, t in enumerate(shifted_templates_up)], axis=0
+        )
+        shifted_upsampled_idx_to_orig_id = (
+            np.concatenate(sparse_temp_to_orig_map, axis=0)
+            # + shifted_upsampled_start_ixs[shifted_upsampled_idx_to_shift_id]
+        )
+    else:
+        # As if time upsampling was 1 :) - indices have to be tracked correctly
+        # This will not impact deconv but will impact cleaned wfs a bit (not too much as hoepfully the residual is ~0)
+        shifted_upsampled_start_ixs = np.array(shifted_upsampled_start_ixs)
+        shifted_upsampled_idx_to_shift_id = np.concatenate(shifted_upsampled_idx_to_shift_id, axis=0)
+        shifted_upsampled_idx_to_orig_id = (
+            np.concatenate(sparse_temp_to_orig_map, axis=0)
+            # + shifted_upsampled_start_ixs[shifted_upsampled_idx_to_shift_id]
+        )        
     assert shifted_upsampled_idx_to_shift_id.shape == shifted_upsampled_idx_to_orig_id.shape
-
-    # gather deconv resultsdeconv_st = []
+        
+    # gather deconv results
     deconv_spike_train_shifted_upsampled = []
     deconv_spike_train = []
     deconv_scalings = []
     deconv_dist_metrics = []
     print("gathering deconvolution results")
-    for bid in range(mp_object.n_batches):
-        which_shiftix = batch2shiftix[bid]
+    if save_temps:
+        for bid in range(mp_object.n_batches):
+            which_shiftix = batch2shiftix[bid]
 
-        fname_out = deconv_dir / f"seg_{bid:06d}_deconv.npz"
-        with np.load(fname_out) as d:
-            st = d["spike_train"]
-            deconv_scalings.append(d["scalings"])
-            deconv_dist_metrics.append(d["dist_metric"])
-        if len(st):
-            st[:, 0] += trough_offset
+            fname_out = deconv_dir / f"seg_{bid:06d}_deconv.npz"
+            with np.load(fname_out) as d:
+                st = d["spike_train"] #upsampled time only 
+                deconv_scalings.append(d["scalings"])
+                deconv_dist_metrics.append(d["dist_metric"])
+            if len(st):
+                st[:, 0] += trough_offset
 
-            # usual spike train
-            deconv_st = st.copy()
-            deconv_st[:, 1] //= max_upsample
-            deconv_spike_train.append(deconv_st)
+                # usual spike train - Here not shifted for each shift :) 
+                deconv_st = st.copy()
+                deconv_st[:, 1] //= max_upsample 
+                deconv_spike_train.append(deconv_st)
 
-            # upsampled + shifted spike train
-            st_up = st.copy()
-            st_up[:, 1] = shifted_sparse_temp_map[which_shiftix][st_up[:, 1]]
-            st_up[:, 1] += shifted_upsampled_start_ixs[which_shiftix]
-            deconv_spike_train_shifted_upsampled.append(st_up)
+                # upsampled + shifted spike train
+                st_up = st.copy()
+                st_up[:, 1] = shifted_sparse_temp_map[which_shiftix][st_up[:, 1]] # upsample time 
+                st_up[:, 1] += shifted_upsampled_start_ixs[which_shiftix] # upsample shift :) 
+                deconv_spike_train_shifted_upsampled.append(st_up)
 
-#             shift_good = (
-#                 shifted_upsampled_idx_to_shift_id[st_up[:, 1]] == which_shiftix
-#             ).all()
-#             tsorted = (np.diff(st_up[:, 0]) >= 0).all()
-#             bigger = (bid == 0) or (
-#                 st_up[:, 0] >= deconv_spike_train_shifted_upsampled[-2][:, 0].max()
-#             ).all()
-            pitchy = (
-                bin_shifts[((st_up[:, 0] - trough_offset) // pfs - t_start).astype(int)] == unique_shifts[which_shiftix]
-            ).all()
-            # print(f"{bid=} {shift_good=} {tsorted=} {bigger=} {pitchy=}")
-#             assert shift_good
-#             assert tsorted
-#             assert bigger
-            if not pitchy:
-                raise ValueError(
-                    f"{bid=} Not pitchy {np.unique(bin_shifts[((st_up[:, 0] - trough_offset) // pfs - t_start).astype(int)])=} "
-                    f"{which_shiftix=} {unique_shifts[which_shiftix]=} {np.unique((st_up[:, 0] - trough_offset) // pfs - t_start)=} "
-                    f"{bin_shifts[np.unique((st_up[:, 0] - trough_offset) // pfs - t_start)]=}"
-                )
+    #             shift_good = (
+    #                 shifted_upsampled_idx_to_shift_id[st_up[:, 1]] == which_shiftix
+    #             ).all()
+    #             tsorted = (np.diff(st_up[:, 0]) >= 0).all()
+    #             bigger = (bid == 0) or (
+    #                 st_up[:, 0] >= deconv_spike_train_shifted_upsampled[-2][:, 0].max()
+    #             ).all()
+                pitchy = (
+                    bin_shifts[((st_up[:, 0] - trough_offset) // pfs - t_start).astype(int)] == unique_shifts[which_shiftix]
+                ).all()
+                # print(f"{bid=} {shift_good=} {tsorted=} {bigger=} {pitchy=}")
+    #             assert shift_good
+    #             assert tsorted
+    #             assert bigger
+                if not pitchy:
+                    raise ValueError(
+                        f"{bid=} Not pitchy {np.unique(bin_shifts[((st_up[:, 0] - trough_offset) // pfs - t_start).astype(int)])=} "
+                        f"{which_shiftix=} {unique_shifts[which_shiftix]=} {np.unique((st_up[:, 0] - trough_offset) // pfs - t_start)=} "
+                        f"{bin_shifts[np.unique((st_up[:, 0] - trough_offset) // pfs - t_start)]=}"
+                    )
+    else:
+        for bid in range(mp_object.n_batches):
+            which_shiftix = batch2shiftix[bid]
 
+            fname_out = deconv_dir / f"seg_{bid:06d}_deconv.npz"
+            with np.load(fname_out) as d:
+                st = d["spike_train"] #upsampled time only 
+                deconv_scalings.append(d["scalings"])
+                deconv_dist_metrics.append(d["dist_metric"])
+            if len(st):
+                st[:, 0] += trough_offset
+
+                # usual spike train - Here not shifted for each shift :) 
+                # unit info 
+                deconv_st = st.copy()
+                deconv_st[:, 1] //= max_upsample 
+                deconv_spike_train.append(deconv_st)
+                
+                # upsampled + shifted spike train
+                # Change here so that it is only shifted - not upsampled :
+                st_up = deconv_st.copy() # no more upsampling
+                st_up[:, 1] += shifted_upsampled_start_ixs[which_shiftix] # upsample shift :) 
+                deconv_spike_train_shifted_upsampled.append(st_up)
+                
+                pitchy = (
+                    bin_shifts[((st_up[:, 0] - trough_offset) // pfs - t_start).astype(int)] == unique_shifts[which_shiftix]
+                ).all()
+                if not pitchy:
+                    raise ValueError(
+                        f"{bid=} Not pitchy {np.unique(bin_shifts[((st_up[:, 0] - trough_offset) // pfs - t_start).astype(int)])=} "
+                        f"{which_shiftix=} {unique_shifts[which_shiftix]=} {np.unique((st_up[:, 0] - trough_offset) // pfs - t_start)=} "
+                        f"{bin_shifts[np.unique((st_up[:, 0] - trough_offset) // pfs - t_start)]=}"
+                    )
+            
+        
     deconv_spike_train = np.concatenate(deconv_spike_train, axis=0)
     deconv_spike_train_shifted_upsampled = np.concatenate(
         deconv_spike_train_shifted_upsampled, axis=0
@@ -663,7 +744,10 @@ def shift_deconv(
     print(
         f"Number of Spikes deconvolved: {deconv_spike_train_shifted_upsampled.shape[0]}"
     )
-
+    
+    if not save_temps:
+        all_shifted_upsampled_temps = np.concatenate(shifted_templates, axis=0)
+    
     return dict(
         deconv_spike_train=deconv_spike_train,
         deconv_spike_train_shifted_upsampled=deconv_spike_train_shifted_upsampled,
@@ -703,14 +787,16 @@ def superres_deconv_chunk(
     refractory_period_frames=10,
     min_spikes_bin=None,
     augment_low_snr_temps=True, 
-    min_spikes_to_augment=25,
+    min_spikes_to_augment=50,
     max_spikes_per_unit=200,
     tpca=None,
     deconv_threshold=500,
     deconv_outliers_threshold=1000,
     su_chan_vis=1.5, 
+    su_temp_on=None,
     adaptive_th_for_temp_computation=False,
     outliers_tracking=None,
+    save_temps=False,
 ):
 
     Path(deconv_dir).mkdir(exist_ok=True)
@@ -720,6 +806,7 @@ def superres_deconv_chunk(
         superres_label_to_bin_id,
         superres_label_to_orig_label,
         medians_at_computation,
+        n_spikes_per_bin
     ) = superres_denoised_templates(
         spike_train,
         spt_before,
@@ -743,18 +830,18 @@ def superres_deconv_chunk(
         adaptive_th_for_temp_computation,
         outliers_tracking,
         max_spikes_per_unit,
-        n_spikes_max_recent=1000,
+        n_spikes_max_recent=10000,
         denoise_templates=True,
         do_temporal_decrease=True,
-        zero_radius_um=70,
-        reducer=np.mean,
+        zero_radius_um=200, # What to do here?
+        reducer=np.median,
         snr_threshold=5.0 * np.sqrt(100),
         spike_length_samples=spike_length_samples,
         trough_offset=trough_offset,
         do_tpca=True,
         tpca=tpca,
-        tpca_rank=5,
-        tpca_radius=75,
+        tpca_rank=5, #-> input params
+        tpca_radius=20,
         tpca_n_wfs=50_000,
         fs=pfs,
         seed=0,
@@ -785,6 +872,8 @@ def superres_deconv_chunk(
         refractory_period_frames=refractory_period_frames,
         deconv_threshold=deconv_threshold,
         su_chan_vis=su_chan_vis,
+        su_temp_on=su_temp_on,
+        save_temps=save_temps, #if false, less memory is taken
     )
 
     # unpack results
@@ -838,7 +927,7 @@ def superres_deconv_chunk(
         deconv_dir=deconv_dir,
         deconv_dist_metrics=deconv_dist_metrics,
         shifted_superres_templates=shifted_deconv_res["shifted_templates"],
-    )
+    ), medians_at_computation
 
 # %%
 
@@ -851,7 +940,7 @@ def extract_superres_shifted_deconv(
     nn_denoise=True,
     output_directory=None,
     extract_radius_um=100,
-    n_sec_train_feats=10, #HAVE TPCA READY BEFORE / subtraction h5
+    n_sec_train_feats=5, #HAVE TPCA READY BEFORE / subtraction h5
     # what to save / do?
     localize=True,
     loc_radius=100,
@@ -866,15 +955,22 @@ def extract_superres_shifted_deconv(
     loc_feature='peak',
     n_jobs=-1,
     save_cleaned_tpca_projs=True,
+    save_denoised_tpca_projs=True,
     tpca_centered=True,
-    tpca_radius=75,
+    tpca_radius=20,
+    tpca_training_radius=20,
+    save_temps=False,
+    p=None,
+    bin_size_um=None,
+    bins_sizes_um=None,
+    registered_medians=None,
+    medians_at_computation=None,
 ):
     """
     This is a wrapper that helps us deal with the bookkeeping for proposed
     pairs and reassignment with the shifting and the superres and the
     upsampling and all that...
     """
-
     # infer what upsampled shifted superres units can be pairs
     shifted_upsampled_idx_to_shift_id = superres_deconv_result[
         "shifted_upsampled_idx_to_shift_id"
@@ -890,7 +986,8 @@ def extract_superres_shifted_deconv(
 
     if output_directory is None:
         output_directory = superres_deconv_result["deconv_dir"]
-
+        
+    # if save_temps:
     ret = extract_deconv(
         superres_deconv_result["all_shifted_upsampled_temps"],
         superres_deconv_result[
@@ -906,7 +1003,7 @@ def extract_superres_shifted_deconv(
         save_cleaned_waveforms=False,
         save_denoised_waveforms=False,
         save_cleaned_tpca_projs=save_cleaned_tpca_projs,
-        save_denoised_tpca_projs=False,
+        save_denoised_tpca_projs=save_denoised_tpca_projs,
         tpca_rank=8,
         tpca_weighted=False,
         tpca_centered=tpca_centered,
@@ -935,8 +1032,86 @@ def extract_superres_shifted_deconv(
         pbar=pbar,
         nn_denoise=nn_denoise,
         seed=0,
+        tpca_training_radius=tpca_training_radius,
     )
+#     else:
 
+#         pitch = get_pitch(geom)
+#         print(f"a {pitch=}")
+
+#         # integer probe-pitch shifts at each time bin
+#         p = p[t_start : t_end if t_end is not None else len(p)]
+#         if bins_sizes_um is not None:
+#             bin_shifts = (p + bins_sizes_um.min() / 2) // bins_sizes_um.min() * bins_sizes_um.min()
+#         else:
+#             bin_shifts = (p + bin_size_um / 2) // bin_size_um * bin_size_um
+#         unique_shifts, shift_ids_by_time = np.unique(
+#             bin_shifts, return_inverse=True
+#         )
+
+#         # for each shift, get shifted templates
+#         shifted_templates = np.concatenate(
+#             [
+#                 shift_superres_templates(
+#                     superres_deconv_result["superres_templates"],
+#                     superres_deconv_result["superres_label_to_bin_id"],
+#                     superres_deconv_result["superres_label_to_orig_label"],
+#                     bin_size_um,
+#                     geom,
+#                     shift,
+#                     registered_medians,
+#                     medians_at_computation,
+#                     bins_sizes_um)
+#                 for shift in unique_shifts
+#             ], axis=0
+#         )
+        
+#         ret = extract_deconv(
+#             shifted_templates, # modify
+#             superres_deconv_result[
+#                 "superres_deconv_spike_train_shifted_upsampled"
+#             ],
+#             output_directory,
+#             superres_deconv_result["raw_bin"],
+#             scalings=superres_deconv_result["deconv_scalings"],
+#             geom=geom,
+#             extract_radius_um=extract_radius_um,
+#             subtraction_h5=subtraction_h5,
+#             save_residual=False,
+#             save_cleaned_waveforms=False,
+#             save_denoised_waveforms=False,
+#             save_cleaned_tpca_projs=save_cleaned_tpca_projs,
+#             save_denoised_tpca_projs=save_denoised_tpca_projs,
+#             tpca_rank=8,
+#             tpca_weighted=False,
+#             tpca_centered=tpca_centered,
+#             tpca_radius=tpca_radius,
+#             save_outlier_scores=False,
+#             do_reassignment=False,
+#             save_reassignment_residuals=False,
+#             do_reassignment_tpca=False,
+#             reassignment_proposed_pairs_up=False,
+#             reassignment_tpca_rank=False,
+#             reassignment_norm_p=False,
+#             reassignment_tpca_spatial_radius=False,
+#             reassignment_tpca_n_wfs=False,
+#             localize=localize,
+#             loc_radius=loc_radius,
+#             loc_feature=loc_feature,
+#             n_sec_train_feats=n_sec_train_feats,
+#             n_jobs=n_jobs,
+#             n_sec_chunk=n_sec_chunk,
+#             t_start=t_start,
+#             t_end=t_end,
+#             sampling_rate=sampling_rate,
+#             device=device,
+#             trough_offset=superres_deconv_result["trough_offset"],
+#             overwrite=overwrite,
+#             pbar=pbar,
+#             nn_denoise=nn_denoise,
+#             seed=0,
+#             tpca_training_radius=tpca_training_radius,
+#         )
     extract_h5 = ret
 
     with h5py.File(extract_h5, "r+") as h5:
@@ -987,24 +1162,26 @@ def full_deconv_with_update(
     bins_sizes_um=None,
     pfs=30_000,
     n_jobs=1,
+    n_jobs_extract_deconv=1,
     trough_offset=42,
     spike_length_samples=121,
     max_upsample=1,
     refractory_period_frames=10,
-    min_spikes_bin=None,
+    min_spikes_bin=25,
     augment_low_snr_temps=True, 
-    min_spikes_to_augment=25,
+    min_spikes_to_augment=50,
     max_spikes_per_unit=200,
     tpca=None,
     deconv_threshold=1000, #Validated experimentaly with template norm
-    su_chan_vis=3, #Don't keep it too low so that templates effectively disappear when too far from the probe 
+    su_chan_vis=1.5, #Don't keep it too low so that templates effectively disappear when too far from the probe 
+    su_temp_on=None,
     deconv_th_for_temp_computation=5000, #Use only best spikes (or detected spikes) for temp computation
     adaptive_th_for_temp_computation=False,
     poly_params=[500, 200, 20, 1],
     extract_radius_um=100,
     loc_radius=100,
     loc_feature="peak",
-    n_sec_train_feats=50,
+    n_sec_train_feats=10,
     n_sec_chunk=1,
     overwrite=True,
     p_bar=True,
@@ -1014,6 +1191,9 @@ def full_deconv_with_update(
     units_spread=None,
     units_x_spread=None,
     save_cleaned_tpca_projs=True,
+    save_denoised_tpca_projs=True,
+    tpca_training_radius=40,
+    save_temps=False,
 ):
 
     Path(extract_dir).mkdir(exist_ok=True)
@@ -1040,138 +1220,153 @@ def full_deconv_with_update(
     z_before = z.copy()
     x_before = x.copy()
 
-    for start_sec in tqdm(np.arange(T_START, T_END, n_sec_temp_update)):
-        
-        end_sec = min(start_sec+n_sec_temp_update, T_END)
-        print("DECONV FROM {} TO {}....".format(start_sec, end_sec))
-
-        deconv_chunk_res = superres_deconv_chunk(
-            raw_bin,
-            geom,
-            z,
-            x,
-            z_before,
-            x_before,
-            p,
-            spike_train,
-            spt_before,
-            deconv_dir,
-            registered_medians=registered_medians, #registered_median
-            units_spread=units_spread, #registered_spread
-            units_x_spread=units_x_spread,
-            dist_metric=dist_metric,
-            bin_size_um=bin_size_um,
-            bins_sizes_um=bins_sizes_um,
-            pfs=pfs,
-            t_start=start_sec,
-            t_end=end_sec,
-            n_jobs=n_jobs,
-            trough_offset=trough_offset,
-            spike_length_samples=spike_length_samples,
-            max_upsample=max_upsample,
-            refractory_period_frames=refractory_period_frames,
-            min_spikes_bin=min_spikes_bin,
-            augment_low_snr_temps=augment_low_snr_temps, 
-            min_spikes_to_augment=min_spikes_to_augment,
-            max_spikes_per_unit=max_spikes_per_unit,
-            tpca=tpca,
-            deconv_threshold=deconv_threshold, 
-            deconv_outliers_threshold=deconv_th_for_temp_computation,
-            su_chan_vis=su_chan_vis,
-            adaptive_th_for_temp_computation=adaptive_th_for_temp_computation,
-            outliers_tracking=outliers_tracking,
-        )
-        print("EXTRACT DECONV....")
-        extract_deconv_chunk = extract_superres_shifted_deconv(
-            deconv_chunk_res,
-            overwrite=overwrite,
-            pbar=p_bar,
-            nn_denoise=True,
-            output_directory=extract_dir,
-            extract_radius_um=extract_radius_um,
-            n_sec_train_feats=10, #HAVE TPCA READY BEFORE / subtraction h5
-            localize=True,
-            loc_radius=loc_radius,
-            # usual suspects
-            sampling_rate=pfs,
-            n_sec_chunk=n_sec_chunk,
-            device=None,
-            geom=geom,
-            loc_feature=loc_feature,
-            subtraction_h5=subtraction_h5,
-            t_start=start_sec*pfs,
-            t_end=end_sec*pfs,
-            n_jobs=n_jobs,
-            save_cleaned_tpca_projs=save_cleaned_tpca_projs,
-        )
-
-        with h5py.File(extract_deconv_chunk, "r+") as h5:
-            spt_chunk = h5["deconv_spike_train"][:]
-            spike_index_chunk = h5["spike_index"][:]
-            maxptps_chunk = h5["maxptps"][:]
-            if loc_feature=='peak':
-                localizations_chunk = h5["localizationspeak"][:]
-            else:
-                localizations_chunk = h5["localizations"][:]
-            dist_metric_chunk = h5["deconv_dist_metrics"][:]
-            if adaptive_th_for_temp_computation:
-                superres_templates_chunk = h5["superres_templates"][:]
-                superres_deconv_spike_train_chunk = h5["superres_deconv_spike_train"][:]
-                superres_label = superres_deconv_spike_train_chunk[:, 1]
-                ptps_temp_spikes = superres_templates_chunk.ptp(1).max(1)[superres_label]
-                outliers_tracking_chunk = dist_metric_chunk > (p[0] + p[1]*ptps_temp_spikes + p[2]*ptps_temp_spikes**2 + p[3]*ptps_temp_spikes**3) 
-            else:
-                outliers_tracking_chunk=None
-                
-        if save_chunk_results:
-            fname_ptps = Path(extract_dir) / "maxptps_deconv_{}_{}".format(start_sec, end_sec)
-            fname_spike_train = Path(extract_dir) / "spike_train_deconv_{}_{}".format(start_sec, end_sec)
-            fname_localizations = Path(extract_dir) / "localizations_deconv_{}_{}".format(start_sec, end_sec)
-            fname_dist_metric = Path(extract_dir) / "dist_metric_deconv_{}_{}".format(start_sec, end_sec)
-            fname_spike_index = Path(extract_dir) / "spike_index_deconv_{}_{}".format(start_sec, end_sec)
-
-            np.save(fname_ptps, maxptps_chunk)
-            np.save(fname_spike_train, spt_chunk)
-            np.save(fname_spike_index, spike_index_chunk)
-            np.save(fname_localizations, localizations_chunk)
-            np.save(fname_dist_metric, dist_metric_chunk)
-            
-            if adaptive_th_for_temp_computation:
-                fname_ptps_spikes_temps = Path(extract_dir) / "ptps_temp_before_deconv_{}_{}".format(start_sec, end_sec)
-                np.save(fname_ptps_spikes_temps, ptps_temp_spikes)
-
-        
-        spike_train, spike_index, x, z, dist_metric, maxptps, outliers_tracking = update_spike_train_with_deconv_res(start_sec, end_sec, 
-                                                            spike_train, spt_chunk,
-                                                            spike_index, spike_index_chunk,
-                                                            x, z, localizations_chunk,
-                                                            dist_metric, dist_metric_chunk,
-                                                            maxptps, maxptps_chunk, 
-                                                            outliers_tracking, outliers_tracking_chunk,
-                                                            pfs, adaptive_th_for_temp_computation)
+    # for start_sec in tqdm(np.arange(T_START, T_END, n_sec_temp_update)):
     
-        # SAVE FULL RESULT 
-        print("SAVING RESULTS....")
-        fname_ptps = Path(extract_dir) / "maxptps_final_deconv"
-        fname_spike_train = Path(extract_dir) / "spike_train_final_deconv"
-        fname_spike_index = Path(extract_dir) / "spike_index_final_deconv"
-        fname_x = Path(extract_dir) / "x_final_deconv"
-        fname_z = Path(extract_dir) / "z_final_deconv"
-        fname_dist_metric = Path(extract_dir) / "dist_metric_final_deconv"
+    start_sec = T_START
+        
+    end_sec = min(start_sec+n_sec_temp_update, T_END)
+    print("DECONV FROM {} TO {}....".format(start_sec, end_sec))
 
-        np.save(fname_ptps, maxptps)
-        np.save(fname_spike_train, spike_train)
-        np.save(fname_spike_index, spike_index)
-        np.save(fname_x, x)
-        np.save(fname_z, z)
-        np.save(fname_dist_metric, dist_metric)
+    deconv_chunk_res, medians_at_computation = superres_deconv_chunk(
+        raw_bin,
+        geom,
+        z,
+        x,
+        z_before,
+        x_before,
+        p,
+        spike_train,
+        spt_before,
+        deconv_dir,
+        registered_medians=registered_medians, #registered_median
+        units_spread=units_spread, #registered_spread
+        units_x_spread=units_x_spread,
+        dist_metric=dist_metric,
+        bin_size_um=bin_size_um,
+        bins_sizes_um=bins_sizes_um,
+        pfs=pfs,
+        t_start=start_sec,
+        t_end=end_sec,
+        n_jobs=n_jobs,
+        trough_offset=trough_offset,
+        spike_length_samples=spike_length_samples,
+        max_upsample=max_upsample,
+        refractory_period_frames=refractory_period_frames,
+        min_spikes_bin=min_spikes_bin,
+        augment_low_snr_temps=augment_low_snr_temps, 
+        min_spikes_to_augment=min_spikes_to_augment,
+        max_spikes_per_unit=max_spikes_per_unit,
+        tpca=tpca,
+        deconv_threshold=deconv_threshold, 
+        deconv_outliers_threshold=deconv_th_for_temp_computation,
+        su_chan_vis=su_chan_vis,
+        su_temp_on=su_temp_on,
+        adaptive_th_for_temp_computation=adaptive_th_for_temp_computation,
+        outliers_tracking=outliers_tracking,
+        save_temps=save_temps,
+    )
+    print("EXTRACT DECONV....")
+    extract_deconv_chunk = extract_superres_shifted_deconv(
+        deconv_chunk_res,
+        overwrite=overwrite,
+        pbar=p_bar,
+        nn_denoise=True,
+        output_directory=extract_dir,
+        extract_radius_um=extract_radius_um,
+        n_sec_train_feats=n_sec_train_feats, #HAVE TPCA READY BEFORE / subtraction h5
+        localize=True,
+        loc_radius=loc_radius,
+        # usual suspects
+        sampling_rate=pfs,
+        n_sec_chunk=n_sec_chunk,
+        device=None,
+        geom=geom,
+        loc_feature=loc_feature,
+        subtraction_h5=subtraction_h5,
+        t_start=start_sec*pfs,
+        t_end=end_sec*pfs,
+        n_jobs=n_jobs_extract_deconv,
+        save_cleaned_tpca_projs=save_cleaned_tpca_projs,
+        save_denoised_tpca_projs=save_denoised_tpca_projs,
+        tpca_training_radius=tpca_training_radius,
+        save_temps=save_temps,
+        p=p,
+        bin_size_um=bin_size_um,
+        bins_sizes_um=bins_sizes_um,
+        registered_medians=registered_medians,
+        medians_at_computation=medians_at_computation,
+    )
+    
+    return extract_deconv_chunk
 
-        if adaptive_th_for_temp_computation:
-            fname_outlier_tracking = Path(extract_dir) / "outliers_final_deconv"
-            np.save(fname_outlier_tracking, outliers_tracking)
+        # with h5py.File(extract_deconv_chunk, "r+") as h5:
+        #     spt_chunk = h5["deconv_spike_train"][:]
+        #     spike_index_chunk = h5["spike_index"][:]
+        #     maxptps_chunk = h5["maxptps"][:]
+        #     if loc_feature=='peak':
+        #         localizations_chunk = h5["localizationspeak"][:]
+        #     else:
+        #         localizations_chunk = h5["localizations"][:]
+        #     dist_metric_chunk = h5["deconv_dist_metrics"][:]
+        #     if adaptive_th_for_temp_computation:
+        #         superres_templates_chunk = h5["superres_templates"][:]
+        #         superres_deconv_spike_train_chunk = h5["superres_deconv_spike_train"][:]
+        #         superres_label = superres_deconv_spike_train_chunk[:, 1]
+        #         ptps_temp_spikes = superres_templates_chunk.ptp(1).max(1)[superres_label]
+        #         outliers_tracking_chunk = dist_metric_chunk > (p[0] + p[1]*ptps_temp_spikes + p[2]*ptps_temp_spikes**2 + p[3]*ptps_temp_spikes**3) 
+        #     else:
+        #         outliers_tracking_chunk=None
+                
+#         if save_chunk_results:
+#             fname_ptps = Path(extract_dir) / "maxptps_deconv_{}_{}".format(start_sec, end_sec)
+#             fname_spike_train = Path(extract_dir) / "spike_train_deconv_{}_{}".format(start_sec, end_sec)
+#             fname_localizations = Path(extract_dir) / "localizations_deconv_{}_{}".format(start_sec, end_sec)
+#             fname_dist_metric = Path(extract_dir) / "dist_metric_deconv_{}_{}".format(start_sec, end_sec)
+#             fname_spike_index = Path(extract_dir) / "spike_index_deconv_{}_{}".format(start_sec, end_sec)
+
+#             np.save(fname_ptps, maxptps_chunk)
+#             np.save(fname_spike_train, spt_chunk)
+#             np.save(fname_spike_index, spike_index_chunk)
+#             np.save(fname_localizations, localizations_chunk)
+#             np.save(fname_dist_metric, dist_metric_chunk)
+            
+#             if adaptive_th_for_temp_computation:
+#                 fname_ptps_spikes_temps = Path(extract_dir) / "ptps_temp_before_deconv_{}_{}".format(start_sec, end_sec)
+#                 np.save(fname_ptps_spikes_temps, ptps_temp_spikes)
+
+        
+#         spike_train, spike_index, x, z, dist_metric, maxptps, outliers_tracking = update_spike_train_with_deconv_res(start_sec, end_sec, 
+#                                                             spike_train, spt_chunk,
+#                                                             spike_index, spike_index_chunk,
+#                                                             x, z, localizations_chunk,
+#                                                             dist_metric, dist_metric_chunk,
+#                                                             maxptps, maxptps_chunk, 
+#                                                             outliers_tracking, outliers_tracking_chunk,
+#                                                             pfs, adaptive_th_for_temp_computation)
+    
+#         # SAVE FULL RESULT 
+#         print("SAVING RESULTS....")
+#         fname_ptps = Path(extract_dir) / "maxptps_final_deconv"
+#         fname_spike_train = Path(extract_dir) / "spike_train_final_deconv"
+#         fname_spike_index = Path(extract_dir) / "spike_index_final_deconv"
+#         fname_x = Path(extract_dir) / "x_final_deconv"
+#         fname_z = Path(extract_dir) / "z_final_deconv"
+#         fname_dist_metric = Path(extract_dir) / "dist_metric_final_deconv"
+
+#         np.save(fname_ptps, maxptps)
+#         np.save(fname_spike_train, spike_train)
+#         np.save(fname_spike_index, spike_index)
+#         np.save(fname_x, x)
+#         np.save(fname_z, z)
+#         np.save(fname_dist_metric, dist_metric)
+
+#         if adaptive_th_for_temp_computation:
+#             fname_outlier_tracking = Path(extract_dir) / "outliers_final_deconv"
+#             np.save(fname_outlier_tracking, outliers_tracking)
 
 
 # %%
+
 def update_spike_train_with_deconv_res(start_sec, end_sec, spt_before, spt_after, spike_index_before, spike_index_after,
                                       x_before, z_before, localizations_after, dist_metric_before, dist_metric_after, 
                                       maxptps_before, maxptps_after, outliers_tracking, outliers_tracking_chunk,
@@ -1179,6 +1374,7 @@ def update_spike_train_with_deconv_res(start_sec, end_sec, spt_before, spt_after
 
     """
     Keep clustering results if no spikes deconvolved in start_sec end sec
+    REWRITE THIS FUNCTION!!
     """
 
     x_after = localizations_after[:, 0]
@@ -1208,6 +1404,7 @@ def update_spike_train_with_deconv_res(start_sec, end_sec, spt_before, spt_after
 #         if adaptive_th_for_temp_computation:
 #             outliers_tracking_chunk = np.concatenate((outliers_tracking[idx_unit], outliers_tracking_chunk))
     
+    # NOT SAME AS H5 OUTPUT ANYMORE..... -> template update broken
     idx_sort_by_time = spt_after[:, 0].argsort()
     x_after = x_after[idx_sort_by_time]
     z_after = z_after[idx_sort_by_time]
@@ -1222,7 +1419,7 @@ def update_spike_train_with_deconv_res(start_sec, end_sec, spt_before, spt_after
 
 
 # %%
-def get_registered_pos(spt, z, x, displacement_rigid, geom, pfs=30000):
+def get_registered_pos(spt, z, x, displacement_rigid, geom, pfs=30000, n_pitch_max=2):
     pitch = get_pitch(geom)
     z_reg = z-displacement_rigid[spt[:, 0]//pfs]
     registered_median = np.zeros(spt[:, 1].max()+1)
@@ -1230,6 +1427,6 @@ def get_registered_pos(spt, z, x, displacement_rigid, geom, pfs=30000):
     registered_x_spread = np.zeros(spt[:, 1].max()+1)
     for k in np.unique(spt[:, 1]):
         registered_median[k] = np.median(z_reg[spt[:, 1]==k])
-        registered_spread[k] = min(np.std(z_reg[spt[:, 1]==k])*1.65, 2*pitch)
+        registered_spread[k] = min(np.std(z_reg[spt[:, 1]==k])*1.65, n_pitch_max*pitch)
         registered_x_spread[k] = np.std(x[spt[:, 1]==k])*1.65
     return registered_median, registered_spread, registered_x_spread

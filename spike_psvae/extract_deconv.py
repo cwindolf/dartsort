@@ -64,6 +64,7 @@ def extract_deconv(
     pbar=True,
     nn_denoise=True,
     loc_feature="ptp",
+    tpca_training_radius=None,
     seed=0,
 ):
     standardized_bin = Path(standardized_bin)
@@ -124,7 +125,8 @@ def extract_deconv(
         
     # determine jobs to run
     batch_length = int(n_sec_chunk * sampling_rate)
-    start_samples = range(t_start, t_end, batch_length)
+    start_samples = np.arange(t_start, t_end, batch_length)
+    start_samples = start_samples[np.isin(start_samples, (spike_train_up[:, 0] // batch_length)*batch_length)]
     if not len(start_samples):
         print("Extraction already done")
         return out_h5, residual_path
@@ -282,6 +284,7 @@ def extract_deconv(
             seed=seed,
             t_start=t_start,
             t_end=t_end,
+            tpca_training_radius=tpca_training_radius,
         )
 
         if last_batch_end > 0:
@@ -766,6 +769,7 @@ def load_or_fit_featurizers(
     t_start=0,
     t_end=None,
     tpca_centered=True,
+    tpca_training_radius=None,
 ):
     if not any(f.needs_fit for f in featurizers):
         return
@@ -811,6 +815,7 @@ def load_or_fit_featurizers(
     # -- restrict the spike train to some randomly chosen seconds
     t_min = np.ceil(spike_train_up[:, 0].min() / sampling_rate)
     t_max = np.floor(spike_train_up[:, 0].max() / sampling_rate)
+    # Select good times here!! 
     valid_times = np.random.default_rng(seed).choice(
         np.arange(t_min, t_max),
         size=min(n_sec_train_feats, int(t_max - t_min)),
@@ -863,18 +868,24 @@ def load_or_fit_featurizers(
         )
         cleaned_wfs = mini_h5["cleaned_waveforms"][:]
         for f in featurizers:
-            f.fit(max_channels=max_channels, cleaned_wfs=cleaned_wfs)
+            if tpca_training_radius is None:
+                f.fit(max_channels=max_channels, cleaned_wfs=cleaned_wfs)
+            else:
+                f.fit(max_channels=max_channels, cleaned_wfs=cleaned_wfs, geom=geom, training_radius=tpca_training_radius)
         del cleaned_wfs
 
-        denoised_wfs = mini_h5["denoised_waveforms"][:]
+        denoised_wfs = mini_h5["denoised_waveforms"][:]  
         if torch.is_tensor(denoised_wfs):
             denoised_wfs = denoised_wfs.cpu().numpy()
-
         for f in featurizers:
-            f.fit(max_channels=max_channels, denoised_wfs=denoised_wfs)
+            if tpca_training_radius is None:
+                f.fit(max_channels=max_channels, denoised_wfs=denoised_wfs)
+            else:
+                f.fit(max_channels=max_channels, denoised_wfs=denoised_wfs, geom=geom, training_radius=tpca_training_radius)
         del denoised_wfs
-
-    # clean up after ourselves
+        del max_channels
+        
+        # clean up after ourselves
     shutil.rmtree(output_directory / "mini_extract_feats")
 
     if any(f.needs_fit for f in featurizers):
@@ -883,6 +894,7 @@ def load_or_fit_featurizers(
     # save to output
     for f in featurizers:
         f.to_h5(h5)
+    print("TPCA SAVED")
 
     # done. at this point the caller can rely on fitted featurizers.
 

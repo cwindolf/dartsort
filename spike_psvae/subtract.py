@@ -1,32 +1,28 @@
-# %%
-from pathlib import Path
 import contextlib
 import gc
+import logging
+import multiprocessing
+import time
+from collections import namedtuple
+from pathlib import Path
+
 import h5py
 import numpy as np
-import signal
-import time
+import pandas as pd
+import spikeinterface.core as sc
 import torch
 import torch.nn.functional as F
-import multiprocessing
-from collections import namedtuple
-import logging
-import pandas as pd
-from sklearn.decomposition import PCA
 from tqdm.auto import tqdm
-import spikeinterface.core as sc
 
-# %%
-from . import denoise, detect, localize_index, chunk_features
-from .multiprocessing_utils import get_pool, MockQueue
+from . import chunk_features, denoise, detect, localize_index
+from .multiprocessing_utils import MockQueue, get_pool
+from .py_utils import noint, timer
 from .spikeio import read_waveforms_in_memory
 from .waveform_utils import make_channel_index, make_contiguous_channel_index
 
-# %%
 _logger = logging.getLogger(__name__)
 
 
-# %%
 default_extra_feats = [
     chunk_features.MaxPTP,
     chunk_features.TroughDepth,
@@ -34,7 +30,6 @@ default_extra_feats = [
 ]
 
 
-# %%
 def subtraction(
     recording,
     out_folder,
@@ -251,9 +246,7 @@ def subtraction(
             F(which_waveforms=feat_wfs) for F in default_extra_feats
         ]
     if save_denoised_ptp_vectors:
-        extra_features += [
-            chunk_features.PTPVector(which_waveforms="denoised")
-        ]
+        extra_features += [chunk_features.PTPVector(which_waveforms="denoised")]
     if save_cleaned_pca_projs_on_n_channels:
         extra_features += [
             chunk_features.STPCA(
@@ -351,11 +344,11 @@ def subtraction(
         else:
             fit_feats += [denoised_tpca_feat]
 
-    # temporal PCA for subtracted waveforms
-    # try to load old TPCA if it's around
+    # try to load feats from h5
     if not overwrite and out_h5.exists():
         with h5py.File(out_h5, "r") as output_h5:
-            subtracted_tpca_feat.from_h5(output_h5)
+            for feat in [subtracted_tpca_feat] + fit_feats:
+                feat.from_h5(output_h5)
         del output_h5
         gc.collect()
 
@@ -397,7 +390,7 @@ def subtraction(
         # try to load old featurizers
         if not overwrite and out_h5.exists():
             with h5py.File(out_h5, "r") as output_h5:
-                for f in extra_features:
+                for f in extra_features + fit_feats:
                     if f.needs_fit:
                         f.from_h5(output_h5)
 
@@ -459,10 +452,10 @@ def subtraction(
         recording,
         extract_channel_index,
         extra_features,
+        fit_features=[subtracted_tpca_feat] + fit_feats,
         overwrite=overwrite,
         dtype=dtype,
     ) as (output_h5, last_sample):
-
         spike_index = output_h5["spike_index"]
         feature_dsets = [output_h5[f.name] for f in extra_features]
         N = len(spike_index)
@@ -545,12 +538,13 @@ def subtraction(
                     batch_len_samples,
                 )
             )
-            for result in tqdm(
+            pbar = tqdm(
                 pool.map(_subtraction_batch, jobs),
                 total=n_batches,
                 desc="Batches",
-                smoothing=0,
-            ):
+                smoothing=0.01,
+            )
+            for result in pbar:
                 with noint:
                     N_new = result.N_new
 
@@ -558,7 +552,7 @@ def subtraction(
                     if save_residual:
                         np.load(result.residual).tofile(residual)
                         Path(result.residual).unlink()
-                    
+
                     if result.spike_index is None:
                         continue
 
@@ -583,7 +577,7 @@ def subtraction(
 
                 count += 1
                 if not count % 100:
-                    print("Mean spikes per batch:", N / count)
+                    pbar.set_description(f"{n_sec_chunk}s/it [spk/it={N / count:0.1f}]")
 
     # -- done!
     if save_residual:
@@ -600,7 +594,6 @@ def subtraction(
     return out_h5
 
 
-# %%
 def subtraction_binary(
     standardized_bin,
     *args,
@@ -633,9 +626,7 @@ def subtraction_binary(
     )
 
     # set geometry
-    recording.set_dummy_probe_from_locations(
-        geom, shape_params=dict(radius=10)
-    )
+    recording.set_dummy_probe_from_locations(geom, shape_params=dict(radius=10))
 
     if nsync > 0:
         recording = recording.channel_slice(
@@ -657,11 +648,9 @@ def subtraction_binary(
     return subtraction(recording, *args, **kwargs)
 
 
-# %% [markdown]
 # -- subtraction routines
 
 
-# %%
 # the return type for `subtraction_batch` below
 SubtractionBatchResult = namedtuple(
     "SubtractionBatchResult",
@@ -669,7 +658,6 @@ SubtractionBatchResult = namedtuple(
 )
 
 
-# %%
 # Parallelism helpers
 def _subtraction_batch(args):
     return subtraction_batch(
@@ -685,7 +673,6 @@ def _subtraction_batch(args):
     )
 
 
-# %%
 def _subtraction_batch_init(
     device,
     nn_detector_path,
@@ -717,7 +704,7 @@ def _subtraction_batch_init(
         torch.cuda._lazy_init()
     _subtraction_batch.device = device
 
-    time.sleep(rank)
+    time.sleep(rank / 20)
     print(f"Worker {rank} init", flush=True)
 
     denoiser = None
@@ -743,9 +730,7 @@ def _subtraction_batch_init(
         dn_detector.to(device)
     _subtraction_batch.dn_detector = dn_detector
 
-    _subtraction_batch.extra_features = [
-        ef.to(device) for ef in extra_features
-    ]
+    _subtraction_batch.extra_features = [ef.to(device) for ef in extra_features]
     _subtraction_batch.subtracted_tpca = subtracted_tpca.to(device)
     if denoised_tpca is not None:
         denoised_tpca = denoised_tpca.to(device)
@@ -769,7 +754,6 @@ def _subtraction_batch_init(
     _subtraction_batch.recording = sc.BaseRecording.from_dict(recording_dict)
 
 
-# %%
 def subtraction_batch(
     batch_data_folder,
     batch_len_samples,
@@ -797,61 +781,61 @@ def subtraction_batch(
 ):
     """Runs subtraction on a batch
 
-    This function handles the logic of loading data from disk
-    (padding it with a buffer where necessary), running the loop
-    over thresholds for `detect_and_subtract`, handling spikes
-    that were in the buffer, and applying the denoising pipeline.
+        This function handles the logic of loading data from disk
+        (padding it with a buffer where necessary), running the loop
+        over thresholds for `detect_and_subtract`, handling spikes
+        that were in the buffer, and applying the denoising pipeline.
 
-    A note on buffer logic:
-     - We load a buffer of twice the spike length.
-     - The outer buffer of size spike length is to ensure that
-       spikes inside the inner buffer of size spike length can be
-       loaded
-     - We subtract spikes inside the inner buffer in `detect_and_subtract`
-       to ensure consistency of the residual across batches.
+        A note on buffer logic:
+         - We load a buffer of twice the spike length.
+         - The outer buffer of size spike length is to ensure that
+           spikes inside the inner buffer of size spike length can be
+           loaded
+         - We subtract spikes inside the inner buffer in `detect_and_subtract`
+           to ensure consistency of the residual across batches.
 
-    Arguments
-    ---------
-    batch_data_folder : string
-        Where temporary results are being stored
-    s_start : int
-        The batch's starting time in samples
-    batch_len_samples : int
-        The length of a batch in samples
-    standardized_bin : int
-        The path to the standardized binary file
-    thresholds : list of int
-        Voltage thresholds for subtraction
-    tpca : sklearn PCA object or None
-        A pre-trained temporal PCA (or None in which case no PCA
-        is applied)
-    trough_offset : int
-        42 in practice, the alignment of the max channel's trough
-        in the extracted waveforms
-    dedup_channel_index : int array (num_channels, num_neighbors)
-        Spatial neighbor structure for deduplication
-    spike_length_samples : int
-        121 in practice, temporal length of extracted waveforms
-    extract_channel_index : int array (num_channels, extract_channels)
-        Channel neighborhoods for extracted waveforms
-    device : string or torch.device
-    start_sample, end_sample : int
-        Temporal boundary of the region of the recording being
-        considered (in samples)
-    radial_parents
-        Helper data structure for enforce_decrease
-    localization_kind : str
+        Arguments
+        ---------
+        batch_data_folder : string
+            Where temporary results are being stored
+        s_start : int
+            The batch's starting time in samples
+        batch_len_samples : int
+            The length of a batch in samples
+        standardized_bin : int
+            The path to the standardized binary file
+        thresholds : list of int
+            Voltage thresholds for subtraction
+        tpca : sklearn PCA object or None
+            A pre-trained temporal PCA (or None in which case no PCA
+            is applied)
+        trough_offset : int
+            42 in practice, the alignment of the max channel's trough
+            in the extracted waveforms
+        dedup_channel_index : int array (num_channels, num_neighbors)
+            Spatial neighbor structure for deduplication
+        spike_length_samples : int
+            121 in practice, temporal length of extracted waveforms
+        extract_channel_index : int array (num_channels, extract_channels)
+            Channel neighborhoods for extracted waveforms
+        device : string or torch.device
+        start_sample, end_sample : int
+            Temporal boundary of the region of the recording being
+            considered (in samples)
+        radial_parents
+            Helper data structure for enforce_decrease
+        localization_kind : str
         How should we run localization?
-    loc_workers : int
+        loc_workers : int
         on how many threads?
-    geom : array
-        The probe geometry
-    denoiser, detector : torch nns or None
-    probe : string or None
+        geom : array
+            The probe geometry
+        denoiser, detector : torch nns or None
+        probe : string or None
 
-    Returns
-    -------
-    res : SubtractionBatchResult
+        Returns
+        -------
+        res : SubtractionBatchResult
     """
     # we use a double buffer: inner buffer of length spike_length,
     # outer buffer of length spike_length
@@ -979,9 +963,6 @@ def subtraction_batch(
 
     # get cleaned waveforms
     cleaned_wfs = denoised_wfs = None
-    if not spike_index.size:
-        cleaned_wfs = denoised_wfs = np.empty_like(subtracted_wfs)
-
     if do_clean:
         cleaned_wfs = read_waveforms_in_memory(
             residual_singlebuf,
@@ -1057,11 +1038,9 @@ def subtraction_batch(
     return res
 
 
-# %% [markdown]
 # -- temporal PCA
 
 
-# %%
 def train_featurizers(
     recording,
     extract_channel_index,
@@ -1230,11 +1209,9 @@ def train_featurizers(
         )
 
 
-# %% [markdown]
 # -- denoising / detection helpers
 
 
-# %%
 def detect_and_subtract(
     raw,
     threshold,
@@ -1352,7 +1329,6 @@ def detect_and_subtract(
     return waveforms, tpca_proj, subtracted_raw, spike_index
 
 
-# %%
 @torch.no_grad()
 def full_denoising(
     waveforms,
@@ -1377,9 +1353,7 @@ def full_denoising(
 
     if not waveforms.numel():
         if return_tpca_embedding:
-            embed = np.full(
-                (0, C, tpca.n_components), np.nan, dtype=tpca.dtype
-            )
+            embed = np.full((0, C, tpca.n_components), np.nan, dtype=tpca.dtype)
             return waveforms, embed
         return waveforms
 
@@ -1447,17 +1421,16 @@ def full_denoising(
     return waveforms
 
 
-# %% [markdown]
 # -- HDF5 initialization / resuming old job logic
 
 
-# %%
 @contextlib.contextmanager
 def get_output_h5(
     out_h5,
     recording,
     extract_channel_index,
     extra_features,
+    fit_features=None,
     overwrite=False,
     chunk_len=1024,
     dtype=np.float32,
@@ -1477,9 +1450,7 @@ def get_output_h5(
 
         # initialize datasets
         output_h5.create_dataset("fs", data=recording.get_sampling_frequency())
-        output_h5.create_dataset(
-            "geom", data=recording.get_channel_locations()
-        )
+        output_h5.create_dataset("geom", data=recording.get_channel_locations())
         output_h5.create_dataset("start_time", data=recording.get_times()[0])
         output_h5.create_dataset("channel_index", data=extract_channel_index)
 
@@ -1501,6 +1472,9 @@ def get_output_h5(
                 dtype=f.dtype,
             )
             f.to_h5(output_h5)
+        if fit_features is not None:
+            for f in fit_features:
+                f.to_h5(output_h5)
 
     done_percent = 100 * last_sample / recording.get_num_samples()
     if h5_exists and not overwrite:
@@ -1518,39 +1492,9 @@ def get_output_h5(
         output_h5.close()
 
 
-# %%
-def tpca_from_h5(h5):
-    tpca = None
-    if "tpca_mean" in h5:
-        tpca_mean = h5["tpca_mean"][:]
-        tpca_components = h5["tpca_components"][:]
-        if (tpca_mean == 0).all():
-            print("H5 exists but TPCA params == 0, re-fit.")
-        else:
-            tpca = PCA(tpca_components.shape[0])
-            tpca.mean_ = tpca_mean
-            tpca.components_ = tpca_components
-            print("Loaded TPCA from h5")
-    return tpca
-
-    p.tpca_projs = h5[f"{waveforms_kind}_tpca_projs"]
-
-    # load sklearn PCA object from the h5 so that split steps can
-    # reconstruct waveforms from the tpca projections
-    tpca_feat = TPCA(
-        p.tpca_projs.shape[1],
-        p.channel_index,
-        waveforms_kind,
-    )
-    tpca_feat.from_h5(h5)
-    p.tpca = tpca_feat.tpca
-
-
-# %% [markdown]
 # -- data loading helpers
 
 
-# %%
 def read_geom_from_meta(bin_file):
     try:
         from spikeglx import _geometry_from_meta, read_meta_data
@@ -1568,7 +1512,6 @@ def read_geom_from_meta(bin_file):
     return geom
 
 
-# %%
 def subtract_and_localize_numpy(
     raw,
     geom,
@@ -1698,46 +1641,3 @@ def subtract_and_localize_numpy(
         columns=["sample", "trace", "x", "y", "z", "alpha"],
     )
     return df_localisation, cleaned_wfs
-
-
-# %% [markdown]
-# -- utils
-
-
-# %%
-class timer:
-    def __init__(self, name="timer"):
-        self.name = name
-
-    def __enter__(self):
-        self.start = time.time()
-        return self
-
-    def __exit__(self, *args):
-        self.t = time.time() - self.start
-        print(self.name, "took", self.t, "s")
-
-
-# %%
-class NoKeyboardInterrupt:
-    """A context manager that we use to avoid ending up in invalid states."""
-
-    def handler(self, *sig):
-        if self.sig:
-            signal.signal(signal.SIGINT, self.old_handler)
-            sig, self.sig = self.sig, None
-            self.old_handler(*sig)
-        self.sig = sig
-
-    def __enter__(self):
-        self.old_handler = signal.signal(signal.SIGINT, self.handler)
-        self.sig = None
-
-    def __exit__(self, type, value, traceback):
-        signal.signal(signal.SIGINT, self.old_handler)
-        if self.sig:
-            self.old_handler(*self.sig)
-
-
-# %%
-noint = NoKeyboardInterrupt()

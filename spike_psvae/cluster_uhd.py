@@ -6,7 +6,7 @@ from sklearn.decomposition import PCA
 from spike_psvae.isocut5 import isocut5 as isocut
 from pathlib import Path
 import matplotlib.pyplot as plt
-from spike_psvae.post_processing_uhd import post_deconv_merge
+from spike_psvae.uhd_split_merge import template_deconv_merge
 
 # %%
 def cluster_5_min(cluster_output_directory, raw_data_bin, geom, T_START, T_END, maxptps, x, z, spike_index, displacement_rigid, 
@@ -344,8 +344,8 @@ def run_full_clustering(t_start, t_end, cluster_output_directory, raw_data_bin, 
         idx_k = np.flatnonzero(spt[:, 1]==k)
         std_z[k] = z_reg[idx_k].std()
         std_x[k] = x[idx_k].std()
-        
-    spt[:, 1] = post_deconv_merge(raw_data_bin, geom, spt, z_abs, z_reg, x, time_temp_comp_merge, std_z*1.65, std_x*1.65, resid_threshold=deconv_resid_th)
+    
+    spt[:, 1] = template_deconv_merge(spt, spt[:, 1], z_abs, z_reg, x, geom, raw_data_bin)
 
     print("Relabel by Depth")
     spt = relabel_by_depth(spt, z_abs)

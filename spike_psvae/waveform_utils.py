@@ -1,15 +1,12 @@
-# %%
 import numpy as np
 from scipy.spatial.distance import cdist, pdist, squareform
 from sklearn.decomposition import PCA, TruncatedSVD
 import torch
 import torch.nn.functional as F
 
-# %%
 from . import spikeio
 
 
-# %%
 def fit_tpca_bin(
     spike_index,
     geom,
@@ -103,7 +100,6 @@ def fit_tpca_bin(
     return tpca
 
 
-# %%
 def fit_tpca_bin_clustered(
     spike_times,
     spike_labels,
@@ -183,12 +179,13 @@ def fit_tpca_bin_clustered(
             tpca = PCA(tpca_rank)
             tpca.mean_ = np.zeros_like(tpca_waveforms[0])
             tpca.components_ = tsvd.components_
-            tpca.explained_variance_ = tsvd.explained_variance_ #needed for extract_deconv
+            tpca.explained_variance_ = (
+                tsvd.explained_variance_
+            )  # needed for extract_deconv
 
     return tpca
 
 
-# %%
 def apply_tpca(waveforms, tpca):
     if tpca is None:
         return waveforms
@@ -205,7 +202,6 @@ def apply_tpca(waveforms, tpca):
     return waveforms
 
 
-# %%
 # -- channels / geometry helpers
 """
 For example let’s say we use a Neuropixels probe
@@ -222,7 +218,6 @@ this array, and those will be filled with the value 384
 """
 
 
-# %%
 def n_steps_neigh_channels(neighbors_matrix, steps):
     """Compute a neighbors matrix by considering neighbors of neighbors
 
@@ -244,7 +239,6 @@ def n_steps_neigh_channels(neighbors_matrix, steps):
     return np.linalg.matrix_power(output, steps) > 0
 
 
-# %%
 def order_channels_by_distance(reference, channels, geom):
     """Order channels by distance using certain channel as reference
     Parameters
@@ -269,7 +263,6 @@ def order_channels_by_distance(reference, channels, geom):
     return channels[idx], idx
 
 
-# %%
 def make_contiguous_channel_index(n_channels, n_neighbors=40):
     channel_index = []
     for c in range(n_channels):
@@ -281,15 +274,12 @@ def make_contiguous_channel_index(n_channels, n_neighbors=40):
     return channel_index
 
 
-# %%
 def full_channel_index(n_channels):
     return (
-        np.arange(n_channels)[None, :]
-        * np.ones(n_channels, dtype=int)[:, None]
+        np.arange(n_channels)[None, :] * np.ones(n_channels, dtype=int)[:, None]
     )
 
 
-# %%
 def make_channel_index(geom, radius, steps=1, distance_order=False, p=2):
     """
     Compute an array whose whose ith row contains the ordered
@@ -336,7 +326,6 @@ def closest_chans_channel_index(geom, n_channels):
     return channel_index
 
 
-# %%
 def channel_index_subset(geom, channel_index, n_channels=None, radius=None):
     """Restrict channel index to fewer channels
 
@@ -367,7 +356,18 @@ def channel_index_subset(geom, channel_index, n_channels=None, radius=None):
     return subset
 
 
-# %%
+def binary_subset_to_relative(channel_index_subset):
+    rel_sub_channel_index = []
+    max_sub_chans = channel_index_subset.sum(axis=1).max()
+    C = channel_index_subset.shape[1]
+    for mask in channel_index_subset:
+        s = np.flatnonzero(mask)
+        s = list(s) + [C] * (max_sub_chans - len(s))
+        rel_sub_channel_index.append(s)
+    rel_sub_channel_index = np.array(rel_sub_channel_index)
+    return rel_sub_channel_index
+
+
 def channel_index_is_subset(channel_index_a, channel_index_b):
     if not np.all(
         np.array(channel_index_a.shape) <= np.array(channel_index_b.shape)
@@ -383,7 +383,6 @@ def channel_index_is_subset(channel_index_a, channel_index_b):
     return True
 
 
-# %%
 def get_channel_subset(
     waveforms, max_channels, channel_index_subset, fill_value=np.nan
 ):
@@ -416,15 +415,8 @@ def get_channel_subset(
     n_channels, C_ = channel_index_subset.shape
     assert C == C_
 
-    max_sub_chans = channel_index_subset.sum(axis=1).max()
-
     # convert to relative channel offsets
-    rel_sub_channel_index = []
-    for mask in channel_index_subset:
-        s = np.flatnonzero(mask)
-        s = list(s) + [C] * (max_sub_chans - len(s))
-        rel_sub_channel_index.append(s)
-    rel_sub_channel_index = np.array(rel_sub_channel_index)
+    rel_sub_channel_index = binary_subset_to_relative(channel_index_subset)
 
     if torch.is_tensor(waveforms):
         waveforms = F.pad(waveforms, (0, 1), value=fill_value)
@@ -440,7 +432,6 @@ def get_channel_subset(
     ]
 
 
-# %%
 def channel_subset_by_index(
     waveforms,
     max_channels,
@@ -466,7 +457,6 @@ def channel_subset_by_index(
     return get_channel_subset(waveforms, max_channels, channel_index_mask)
 
 
-# %%
 def get_maxchan_traces(waveforms, channel_index, maxchans):
     index_of_mc = np.argwhere(
         channel_index == np.arange(len(channel_index))[:, None]
@@ -478,7 +468,6 @@ def get_maxchan_traces(waveforms, channel_index, maxchans):
     return maxchan_traces
 
 
-# %%
 # thinking about numbaing this... maybe an inner for loop manually checking the ==?
 # @njit(cache=False)
 def restrict_wfs_to_chans(
@@ -533,11 +522,9 @@ def restrict_wfs_to_chans(
     return out_waveforms
 
 
-# %% [markdown]
 # -- channel shifting stuff
 
 
-# %%
 def get_pitch(geom):
     """Guess the pitch, even for probes with gaps or channels missing at random
 
@@ -563,7 +550,6 @@ def get_pitch(geom):
     return pitch
 
 
-# %%
 def pitch_shift_templates(n_pitches_shift, geom, templates, fill_value=0.0):
     if n_pitches_shift == 0:
         return templates
@@ -584,7 +570,6 @@ def pitch_shift_templates(n_pitches_shift, geom, templates, fill_value=0.0):
     return new_templates
 
 
-# %%
 def temporal_align(waveforms, maxchans, offset=42):
     N, T, C = waveforms.shape
     offsets = np.abs(waveforms[np.arange(N), :, maxchans]).argmax(1)

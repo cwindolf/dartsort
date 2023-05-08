@@ -2,9 +2,20 @@ import numpy as np
 from scipy.interpolate import RectBivariateSpline, interp1d
 from scipy.ndimage import gaussian_filter1d
 from scipy.signal import resample
-from spikeinterface.sortingcomponents.motion_estimation import (
-    get_windows as si_get_windows,
-)
+
+# this has been copied here for the time being
+# certain modifications are necessary:
+#  - no error on small windows (or, smaller gaussian sigm)
+#  - support input of bin centers rather than edges for LFP use case
+#  - does not actually need bin_um, and this may not always exist under non-uniform bin spacing (i.e. lfp could be from probe with holes)
+#  - should return arrays
+# also, not implemented here, but shouldn't the margin logic be based
+# on the spatial bins rather than the geometry? the way it is now,
+# it makes nonrigid registration after rigid registration of an insertion
+# recording impossible (or generally any iterated idea)
+# from spikeinterface.sortingcomponents.motion_estimation import (
+#     get_windows as si_get_windows,
+# )
 
 
 class MotionEstimate:
@@ -175,9 +186,7 @@ def get_motion_estimate(
             time_bin_edges_s=time_bin_edges_s,
             time_bin_centers_s=time_bin_centers_s,
         )
-    assert any(
-        a is not None for a in (spatial_bin_edges_um, spatial_bin_centers_um)
-    )
+    assert any(a is not None for a in (spatial_bin_edges_um, spatial_bin_centers_um))
 
     # linear interpolation nonrigid
     if not upsample_by_windows:
@@ -211,9 +220,7 @@ def get_motion_estimate(
     )
 
 
-def show_raster(
-    raster, spatial_bin_edges_um, time_bin_edges_s, ax, **imshow_kwargs
-):
+def show_raster(raster, spatial_bin_edges_um, time_bin_edges_s, ax, **imshow_kwargs):
     ax.imshow(
         raster,
         extent=(*time_bin_edges_s[[0, -1]], *spatial_bin_edges_um[[0, -1]]),
@@ -222,17 +229,20 @@ def show_raster(
     )
 
 
-def plot_me_traces(
-    me, ax, offset=0, depths_um=None, label=False, **plot_kwargs
-):
+def plot_me_traces(me, ax, offset=0, depths_um=None, label=False, zero_times=False, **plot_kwargs):
     if depths_um is None:
         depths_um = me.spatial_bin_centers_um
+    
+    t_offset = me.time_bin_centers_s[0] if zero_times else 0
 
     for b, depth in enumerate(depths_um):
         disp = me.disp_at_s(me.time_bin_centers_s, depth_um=depth)
-        lab = f"bin {b}" if label else None
+        if isinstance(label, str):
+            lab = label
+        else:
+            lab = f"bin {b}" if label else None
         ax.plot(
-            me.time_bin_centers_s,
+            me.time_bin_centers_s - t_offset,
             depth + offset + disp,
             label=lab,
             **plot_kwargs,
@@ -256,9 +266,7 @@ def show_dispmap(me, ax, spatial_bin_centers_um=None, **imshow_kwargs):
     if spatial_bin_centers_um is None:
         spatial_bin_centers_um = me.spatial_bin_centers_um
 
-    dispmap = me.disp_at_s(
-        me.time_bin_centers_s, spatial_bin_centers_um, grid=True
-    )
+    dispmap = me.disp_at_s(me.time_bin_centers_s, spatial_bin_centers_um, grid=True)
     ax.imshow(
         dispmap,
         extent=(
@@ -285,11 +293,11 @@ def get_bins(depths, times, bin_um, bin_s):
 
 
 def get_windows(
-    bin_um,
-    spatial_bin_edges,
     geom,
     win_step_um,
     win_sigma_um,
+    spatial_bin_edges=None,
+    spatial_bin_centers=None,
     margin_um=0,
     win_shape="rect",
     zero_threshold=1e-5,
@@ -299,22 +307,107 @@ def get_windows(
         win_sigma_um = win_sigma_um / 2
     windows, locs = si_get_windows(
         rigid=rigid,
-        bin_um=bin_um,
         contact_pos=geom,
         spatial_bin_edges=spatial_bin_edges,
+        spatial_bin_centers=spatial_bin_centers,
         margin_um=margin_um,
         win_step_um=win_step_um,
         win_sigma_um=win_sigma_um,
         win_shape=win_shape,
     )
-    windows = np.array(windows)
-    locs = np.array(locs)
 
     windows /= windows.sum(axis=1, keepdims=True)
     windows[windows < zero_threshold] = 0
     windows /= windows.sum(axis=1, keepdims=True)
 
     return windows, locs
+
+
+def si_get_windows(
+    rigid,
+    contact_pos,
+    spatial_bin_edges=None,
+    margin_um=0,
+    win_step_um=400,
+    win_sigma_um=450,
+    win_shape="gaussian",
+    spatial_bin_centers=None,
+):
+    """
+    Generate spatial windows (taper) for non-rigid motion.
+    For rigid motion, this is equivalent to have one unique rectangular window that covers the entire probe.
+    The windowing can be gaussian or rectangular.
+
+    Parameters
+    ----------
+    rigid : bool
+        If True, returns a single rectangular window
+    bin_um : float
+        Spatial bin size in um
+    contact_pos : np.ndarray
+        Position of electrodes (num_channels, 2)
+    spatial_bin_edges : np.array
+        The pre-computed spatial bin edges
+    margin_um : float
+        The margin to extend (if positive) or shrink (if negative) the probe dimension to compute windows.=
+    win_step_um : float
+        The steps at which windows are defined
+    win_sigma_um : float
+        Sigma of gaussian window (if win_shape is gaussian)
+    win_shape : float
+        "gaussian" | "rect"
+
+    Returns
+    -------
+    non_rigid_windows : list of 1D arrays
+        The scaling for each window. Each element has num_spatial_bins values
+    non_rigid_window_centers: 1D np.array
+        The center of each window
+
+    Notes
+    -----
+    Note that kilosort2.5 uses overlaping rectangular windows.
+    Here by default we use gaussian window.
+
+    """
+    if spatial_bin_centers is None:
+        spatial_bin_centers = 0.5 * (spatial_bin_edges[1:] + spatial_bin_edges[:-1])
+    n = spatial_bin_centers.size
+
+    if rigid:
+        # win_shape = 'rect' is forced
+        non_rigid_windows = [np.ones(n, dtype="float64")]
+        middle = (spatial_bin_centers[0] + spatial_bin_centers[-1]) / 2.0
+        non_rigid_window_centers = np.array([middle])
+    else:
+        min_ = np.min(contact_pos) - margin_um
+        max_ = np.max(contact_pos) + margin_um
+        num_non_rigid_windows = int((max_ - min_) // win_step_um)
+        border = ((max_ - min_) % win_step_um) / 2
+        non_rigid_window_centers = (
+            np.arange(num_non_rigid_windows + 1) * win_step_um + min_ + border
+        )
+        non_rigid_windows = []
+
+        for win_center in non_rigid_window_centers:
+            if win_shape == "gaussian":
+                win = np.exp(
+                    -((spatial_bin_centers - win_center) ** 2) / (2 * win_sigma_um**2)
+                )
+            elif win_shape == "rect":
+                win = np.abs(spatial_bin_centers - win_center) < (win_sigma_um / 2.0)
+                win = win.astype("float64")
+            elif win_shape == "triangle":
+                center_dist = np.abs(bin_centers - win_center)
+                in_window = center_dist <= (win_sigma_um / 2.0)
+                win = -center_dist
+                win[~in_window] = 0
+                win[in_window] -= win[in_window].min()
+                win[in_window] /= win[in_window].max()
+
+            non_rigid_windows.append(win)
+
+    return np.array(non_rigid_windows), np.array(non_rigid_window_centers)
 
 
 def get_window_domains(windows):
