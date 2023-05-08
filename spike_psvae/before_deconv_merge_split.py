@@ -721,7 +721,6 @@ def lda_diptest_merge(
             T=T,
         )
     else:
-        print(in_unit_b)
         feats_b = get_pca_projs_on_channel_subset(
             in_unit_b,
             tpca_projs,

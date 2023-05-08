@@ -95,7 +95,7 @@ data_path = Path(data_path)
 raw_data_bin = Path("/local/bincache/") / raw_data_bin.name
 data_path = Path("/local/bincache/") / data_path.name
 
-output_folder = Path("/local/bincache/") / "simulated_results/outputs_ensemble_static_5min"
+output_folder = Path("/local/bincache/") / "simulated_results/outputs_static_5min"
 template_locations = np.load(sort_path / 'template_locations.npy')
 
 raw_data_bin = Path(raw_data_bin)
@@ -174,7 +174,7 @@ sub_h5 = subtract.subtraction_binary(
     # sampling_rate=30000, #fs
     do_nn_denoise=do_neural_net_denoise,
     thresholds=subtraction_thresholds,
-    n_jobs=8,
+    n_jobs=10,
     overwrite=True,
     localize_radius=100,
     save_subtracted_tpca_projs=False,
@@ -384,25 +384,23 @@ sub_h5 = next((dsout / "sub").glob("sub*h5"))
 with h5py.File(sub_h5) as h5:
     spike_index = h5["spike_index"][:]
 
-# %%
+# %% jupyter={"outputs_hidden": true}
 st = spike_index.copy()
 # st[:, 1] = newms.registered_maxchan(st, p, geom, pfs=fs)
 good_times = np.isin((st[:, 0]) // fs, np.flatnonzero(p_good))
 print(f"{good_times.sum()=}")
 st[~good_times, 1] = -1
-spike_train, templates, order = newms.new_merge_split_ensemble(
+spike_train, templates, order = newms.new_merge_split(
     st,
     geom.shape[0],
     raw_data_bin,
     sub_h5,
     geom,
     dsout / "clust",
-    n_workers=20,
+    n_workers=10,
     merge_resid_threshold=2.0,
     relocated=do_reloc,
     trough_offset=trough_offset,
-    ensemble_percent=.8,
-    num_ensemble=3,
     spike_length_samples=spike_length_samples,
     split_kwargs=dict(
         split_steps=(
@@ -420,42 +418,6 @@ spike_train, templates, order = newms.new_merge_split_ensemble(
         ),
     )
 )
-
-# st = spike_index.copy()
-# # st[:, 1] = newms.registered_maxchan(st, p, geom, pfs=fs)
-# good_times = np.isin((st[:, 0]) // fs, np.flatnonzero(p_good))
-# print(f"{good_times.sum()=}")
-# st[~good_times, 1] = -1
-# spike_train, templates, order = newms.new_merge_split(
-#     st,
-#     geom.shape[0],
-#     raw_data_bin,
-#     sub_h5,
-#     geom,
-#     dsout / "clust",
-#     n_workers=20,
-#     merge_resid_threshold=2.0,
-#     relocated=do_reloc,
-#     trough_offset=trough_offset,
-#     # ensemble_percent=.8,
-#     # num_ensemble=3,
-#     spike_length_samples=spike_length_samples,
-#     split_kwargs=dict(
-#         split_steps=(
-#             before_deconv_merge_split.herding_split,
-#         ),
-#         recursive_steps=(True,),
-#         split_step_kwargs=(
-#             dict(
-#                 hdbscan_kwargs=dict(
-#                     min_cluster_size=15,
-#                     # min_samples=5,
-#                     cluster_selection_epsilon=20.0,
-#                 ),
-#             ),
-#         ),
-#     )
-# )
 
 # %%
 # for k in ("split", "merge"):
@@ -760,19 +722,21 @@ sorting_deconv_1 = si.numpyextractors.NumpySorting.from_times_labels(
         sampling_frequency=fs,
     )
 
+deconv1_spike_train = np.load(Path('/local/bincache/simulated_results/outputs_ensemble_static_5min/deconv1/deconv_spike_train.npy'))
+spike_times_ensemble = deconv1_spike_train[:,0]
+spike_labels_ensemble = deconv1_spike_train[:,1]
+sorting_deconv_1_ensemble = si.numpyextractors.NumpySorting.from_times_labels(
+        times_list=spike_times_ensemble.astype("int"),
+        labels_list=spike_labels_ensemble.astype("int"),
+        sampling_frequency=fs,
+    )
+
 # %%
 cmp_gt = si.compare_sorter_to_ground_truth(sort_gt, sorting_deconv_1, exhaustive_gt=True, match_score=.1)
-# cmp_gt_deconv1 = si.compare_sorter_to_ground_truth(sort_gt, sorting_deconv1, exhaustive_gt=True, match_score=.1)
-# cmp_gt_deconv2 = si.compare_sorter_to_ground_truth(sort_gt, sorting_deconv2, exhaustive_gt=True, match_score=.1)
-# cmp_gt_merge_deconv2 = si.compare_sorter_to_ground_truth(sort_gt, sorting_merge_deconv2, exhaustive_gt=True, match_score=.1)
-# sort_ks = si.read_kilosort('/media/cat/cole/kilosort_results_sim_5min/KS_output/data/')
-# cmp_gt_ks = si.compare_sorter_to_ground_truth(sort_gt, sort_ks, exhaustive_gt=True, match_score=.1)
+cmp_gt_ensemble = si.compare_sorter_to_ground_truth(sort_gt, sorting_deconv_1_ensemble, exhaustive_gt=True, match_score=.1)
 
 # %%
-sort_gt.get_num_units()
-
-# %%
-folder = 'waveform_folder'
+folder = 'waveform_folder1'
 we = si.extract_waveforms(
     rec_gt,
     sort_gt,
@@ -791,154 +755,60 @@ snrs = si.compute_snrs(waveform_extractor=we)
 ptps = we.get_all_templates().ptp(1).max(1)
 
 # %%
-fig, ax = plt.subplots(1,1, figsize=(8,20))
-ax.imshow(cmp_gt.get_ordered_agreement_scores().to_numpy()[:150,:150])
-ax.set_title('deconv 1')
-# axes[1].imshow(cmp_gt_deconv2.get_ordered_agreement_scores().to_numpy())
-# axes[1].set_title('deconv 2')
-# axes[2].imshow(cmp_gt_merge_deconv2.get_ordered_agreement_scores().to_numpy())
-# axes[2].set_title('deconv 2 merge')
-# axes[3].imshow(cmp_gt.get_ordered_agreement_scores().to_numpy())
-# axes[3].set_title('final deconv');
-# axes[4].imshow(cmp_gt_ks.get_ordered_agreement_scores().to_numpy())
-# axes[4].set_title('kilosort (default)');
-# plt.subplots_adjust(wspace=0.4, hspace=0.4)
+fig, axes = plt.subplots(2,1, figsize=(8,20))
+axes[0].imshow(cmp_gt.get_ordered_agreement_scores().to_numpy()[:150, :150])
+axes[0].set_title('deconv 1')
+axes[1].imshow(cmp_gt_ensemble.get_ordered_agreement_scores().to_numpy()[:150, :150])
+axes[1].set_title('deconv 1 ensemble')
 
 # %%
-for name, cmp in [('deconv1', cmp_gt)]:
+fig, axes = plt.subplots(1,3, figsize=(18,6))
+for name, cmp, color in [('deconv1', cmp_gt, 'blue'), ('deconv1_ensemble', cmp_gt_ensemble, 'orange')]:
     well_detected_units = cmp.get_well_detected_units(well_detected_score = .8)
-    fig, axes = plt.subplots(1,3, figsize=(18,6))
-    axes[0].scatter(snrs.values(), cmp.get_performance()['precision'])
+    axes[0].scatter(snrs.values(), cmp.get_performance()['precision'], color=color, alpha=.5, label=name)
     axes[0].set_title(f"{name}, total units: {len(sort_gt.get_unit_ids())}, num well-detected units: {len(well_detected_units)}")
     axes[0].set_ylabel('precision')
     axes[0].set_xlabel('snr')
 
-    axes[1].scatter(snrs.values(), cmp.get_performance()['recall'])
+    axes[1].scatter(snrs.values(), cmp.get_performance()['recall'], color=color, alpha=.5, label=name)
     axes[1].set_title(f"{name}, total units: {len(sort_gt.get_unit_ids())}, num well-detected units: {len(well_detected_units)}")
     axes[1].set_ylabel('recall')
     axes[1].set_xlabel('snr')
 
-    axes[2].scatter(snrs.values(), cmp.get_performance()['accuracy'])
+    axes[2].scatter(snrs.values(), cmp.get_performance()['accuracy'], color=color, alpha=.5, label=name)
     axes[2].set_title(f"{name}, total units: {len(sort_gt.get_unit_ids())}, num well-detected units: {len(well_detected_units)}")
     axes[2].set_ylabel('accuracy')
     axes[2].set_xlabel('snr')
+axes[0].legend()
+
+# %%
+cmp_gt.get_performance(method='pooled_with_average')
+
+# %%
+cmp_gt_ensemble.get_performance(method='pooled_with_average')
+
+# %%
+cmp_gt_ensemble.get_performance(method='pooled_with_average')['precision']
+
+# %%
+np.mean(cmp_gt.get_performance(method='by_unit')['precision'][ptps<6])
+
+# %%
+np.mean(cmp_gt_ensemble.get_performance(method='by_unit')['precision'][ptps<6])
 
 # %%
 
 # %%
 
 # %%
-fig, ax = plt.subplots(1,1, figsize=(8,20))
-ax.imshow(cmp_gt.get_ordered_agreement_scores().to_numpy()[:150,:150])
-ax.set_title('deconv 1')
-# axes[1].imshow(cmp_gt_deconv2.get_ordered_agreement_scores().to_numpy())
-# axes[1].set_title('deconv 2')
-# axes[2].imshow(cmp_gt_merge_deconv2.get_ordered_agreement_scores().to_numpy())
-# axes[2].set_title('deconv 2 merge')
-# axes[3].imshow(cmp_gt.get_ordered_agreement_scores().to_numpy())
-# axes[3].set_title('final deconv');
-# axes[4].imshow(cmp_gt_ks.get_ordered_agreement_scores().to_numpy())
-# axes[4].set_title('kilosort (default)');
-# plt.subplots_adjust(wspace=0.4, hspace=0.4)
 
-# %%
-
-for name, cmp in [('deconv1', cmp_gt)]:
-    well_detected_units = cmp.get_well_detected_units(well_detected_score = .8)
-    fig, axes = plt.subplots(1,3, figsize=(18,6))
-    axes[0].scatter(snrs.values(), cmp.get_performance()['precision'])
-    axes[0].set_title(f"{name}, total units: {len(sort_gt.get_unit_ids())}, num well-detected units: {len(well_detected_units)}")
-    axes[0].set_ylabel('precision')
-    axes[0].set_xlabel('snr')
-
-    axes[1].scatter(snrs.values(), cmp.get_performance()['recall'])
-    axes[1].set_title(f"{name}, total units: {len(sort_gt.get_unit_ids())}, num well-detected units: {len(well_detected_units)}")
-    axes[1].set_ylabel('recall')
-    axes[1].set_xlabel('snr')
-
-    axes[2].scatter(snrs.values(), cmp.get_performance()['accuracy'])
-    axes[2].set_title(f"{name}, total units: {len(sort_gt.get_unit_ids())}, num well-detected units: {len(well_detected_units)}")
-    axes[2].set_ylabel('accuracy')
-    axes[2].set_xlabel('snr')
-# %%
-
-
-# %%
-fig, ax = plt.subplots(1,1, figsize=(8,20))
-ax.imshow(cmp_gt.get_ordered_agreement_scores().to_numpy())
-ax.set_title('deconv 1')
-# axes[1].imshow(cmp_gt_deconv2.get_ordered_agreement_scores().to_numpy())
-# axes[1].set_title('deconv 2')
-# axes[2].imshow(cmp_gt_merge_deconv2.get_ordered_agreement_scores().to_numpy())
-# axes[2].set_title('deconv 2 merge')
-# axes[3].imshow(cmp_gt.get_ordered_agreement_scores().to_numpy())
-# axes[3].set_title('final deconv');
-# axes[4].imshow(cmp_gt_ks.get_ordered_agreement_scores().to_numpy())
-# axes[4].set_title('kilosort (default)');
-# plt.subplots_adjust(wspace=0.4, hspace=0.4)
-
-# %%
-
-for name, cmp in [('deconv1', cmp_gt)]:
-    well_detected_units = cmp.get_well_detected_units(well_detected_score = .8)
-    fig, axes = plt.subplots(1,3, figsize=(18,6))
-    axes[0].scatter(snrs.values(), cmp.get_performance()['precision'])
-    axes[0].set_title(f"{name}, total units: {len(sort_gt.get_unit_ids())}, num well-detected units: {len(well_detected_units)}")
-    axes[0].set_ylabel('precision')
-    axes[0].set_xlabel('snr')
-
-    axes[1].scatter(snrs.values(), cmp.get_performance()['recall'])
-    axes[1].set_title(f"{name}, total units: {len(sort_gt.get_unit_ids())}, num well-detected units: {len(well_detected_units)}")
-    axes[1].set_ylabel('recall')
-    axes[1].set_xlabel('snr')
-
-    axes[2].scatter(snrs.values(), cmp.get_performance()['accuracy'])
-    axes[2].set_title(f"{name}, total units: {len(sort_gt.get_unit_ids())}, num well-detected units: {len(well_detected_units)}")
-    axes[2].set_ylabel('accuracy')
-    axes[2].set_xlabel('snr')
 # %%
 
 # %%
 
 # %%
 
-
 # %%
-st = spike_index.copy()
-# st[:, 1] = newms.registered_maxchan(st, p, geom, pfs=fs)
-good_times = np.isin((st[:, 0]) // fs, np.flatnonzero(p_good))
-print(f"{good_times.sum()=}")
-st[~good_times, 1] = -1
-spike_train, templates, order = newms.new_merge_split_ensemble(
-    st,
-    geom.shape[0],
-    raw_data_bin,
-    sub_h5,
-    geom,
-    dsout / "clust",
-    n_workers=10,
-    merge_resid_threshold=merge_thresh_early,
-    relocated=do_reloc,
-    trough_offset=trough_offset,
-    ensemble_percent=.8,
-    num_ensemble=2,
-    spike_length_samples=spike_length_samples,
-    split_kwargs=dict(
-        split_steps=(
-            before_deconv_merge_split.herding_split,
-        ),
-        recursive_steps=(True,),
-        split_step_kwargs=(
-            dict(
-                hdbscan_kwargs=dict(
-                    min_cluster_size=15,
-                    # min_samples=5,
-                    cluster_selection_epsilon=20.0,
-                ),
-            ),
-        ),
-    )
-)
 
 # %%
 st = spike_train.copy()
