@@ -32,7 +32,7 @@ def laplacian(n, wink=True, eps=1e-10):
 
 def neg_hessian_likelihood_term(Ub, Ub_prevcur=None, Ub_curprev=None):
     # negative Hessian of p(D | p) inside a block
-    negHUb = -Ub
+    negHUb = -Ub.copy()
     negHUb -= Ub.T
     diagonal_terms = np.diagonal(negHUb) + Ub.sum(1) + Ub.sum(0)
     if Ub_prevcur is None:
@@ -108,6 +108,7 @@ def newton_solve_rigid(
 default_thomas_kw = dict(
     lambda_s=1.0,
     lambda_t=1.0,
+    eps=1e-10,
 )
 
 
@@ -306,6 +307,7 @@ def threshold_correlation_matrix(
     max_dt_s=0,
     in_place=False,
     bin_s=1,
+    T=None,
 ):
     # need abs to avoid -0.0s which cause numerical issues
     if in_place:
@@ -314,7 +316,7 @@ def threshold_correlation_matrix(
         np.square(Ss, out=Ss)
     else:
         Ss = np.square((Cs >= mincorr) * Cs)
-    if max_dt_s is not None and max_dt_s > 0:
+    if max_dt_s is not None and max_dt_s > 0 and max_dt_s < T:
         mask = la.toeplitz(
             np.r_[
                 np.ones(int(max_dt_s // bin_s), dtype=Ss.dtype),
@@ -337,6 +339,7 @@ def weight_correlation_matrix(
     bin_s=1,
     bin_um=1,
     lambda_t=1,
+    eps=1e-10,
     do_window_weights=True,
     weights_threshold_low=0.0,
     weights_threshold_high=np.inf,
@@ -360,7 +363,7 @@ def weight_correlation_matrix(
     extra = {}
 
     Ss = threshold_correlation_matrix(
-        Cs, mincorr=mincorr, max_dt_s=max_dt_s, bin_s=bin_s
+        Cs, mincorr=mincorr, max_dt_s=max_dt_s, bin_s=bin_s, T=T
     )
     extra["S"] = Ss
 
@@ -368,7 +371,7 @@ def weight_correlation_matrix(
         return Ss, extra
 
     # get weights
-    L_t = lambda_t * laplacian(T)
+    L_t = lambda_t * laplacian(T, eps=eps)
     weights_orig, weights_thresh, Pind = get_weights(
         Ds,
         Ss,
@@ -565,6 +568,7 @@ def register(
         bin_s=bin_s,
         bin_um=bin_um,
         lambda_t=thomas_kw["lambda_t"],
+        eps=thomas_kw["eps"],
         raster_kw=raster_kw,
         pbar=pbar,
         **weights_kw,
