@@ -3,8 +3,10 @@ from . import (
     spike_train_utils,
     before_deconv_merge_split,
     deconv_resid_merge,
+    uhd_split_merge,
 )
 from scipy.spatial.distance import cdist
+import h5py
 
 
 def registered_maxchan(
@@ -45,6 +47,11 @@ def new_merge_split(
     # exp_split=False,
     load_split=False,
     split_kwargs=None,
+    drift_merge=False,
+    zero_radius_um=70,
+    threshold_resid=.25,
+    bin_size_um=None,
+    sampling_rate=32000,
 ):
     orig_labels = spike_train[:, 1].copy()
     split_kwargs = {} if split_kwargs is None else split_kwargs
@@ -62,104 +69,6 @@ def new_merge_split(
             trough_offset=trough_offset,
             spike_length_samples=spike_length_samples,
         )
-
-        # yizi_split = partial(before_deconv_merge_split.herding_split, clusterer="optics")
-        # yizi_split.__name__ = "optics Split"
-        # if exp_split:
-        #     new_labels = before_deconv_merge_split.split_clusters(
-        #         aligned_spike_train[:, 1],
-        #         raw_bin,
-        #         sub_h5,
-        #         n_workers=n_workers,
-        #         relocated=relocated,
-        #         split_steps=(
-        #             before_deconv_merge_split.herding_split,
-        #             # before_deconv_merge_split.herding_split,
-        #         ),
-        #         # recursive_steps=(False, False),
-        #         recursive_steps=(True,),
-        #         split_step_kwargs=(
-        #             dict(
-        #                 # clusterer="robustsinglelinkage",
-        #                 hdbscan_kwargs=dict(
-        #                     min_cluster_size=15,
-        #                     # min_samples=5,
-        #                     cluster_selection_epsilon=20.0,
-        #                 ),
-        #                 # clusterer="robustsinglelinkage",
-        #                 # dict(
-        #                 #     clusterer="meanshift",
-        #                 #     use_features=False,
-        #                 #     n_pca_features=3,
-        #                 #     # hdbscan_kwargs=dict(min_cluster_size=15, min_samples=5),
-        #                 # ),
-        #             ),
-        #         ),
-        #         # split_steps=(before_deconv_merge_split.herding_split, yizi_split,),
-        #         # recursive_steps=(False, True,),
-        #         # split_steps=(yizi_split,),
-        #         # recursive_steps=(True,),
-        #     )
-        # elif extra_pc_split:
-        #     new_labels = before_deconv_merge_split.split_clusters(
-        #         aligned_spike_train[:, 1],
-        #         raw_bin,
-        #         sub_h5,
-        #         n_workers=n_workers,
-        #         relocated=relocated,
-        #         split_steps=(
-        #             before_deconv_merge_split.herding_split,
-        #             before_deconv_merge_split.herding_split,
-        #         ),
-        #         recursive_steps=(False, True),
-        #         split_step_kwargs=(
-        #             {},
-        #             dict(
-        #                 use_features=False,
-        #                 n_pca_features=3,
-        #                 # hdbscan_kwargs=dict(min_cluster_size=15, min_samples=5),
-        #             ),
-        #         ),
-        #         # split_steps=(before_deconv_merge_split.herding_split, yizi_split,),
-        #         # recursive_steps=(False, True,),
-        #         # split_steps=(yizi_split,),
-        #         # recursive_steps=(True,),
-        #     )
-        # elif pc_only:
-        #     new_labels = before_deconv_merge_split.split_clusters(
-        #         aligned_spike_train[:, 1],
-        #         raw_bin,
-        #         sub_h5,
-        #         n_workers=n_workers,
-        #         relocated=relocated,
-        #         split_steps=(before_deconv_merge_split.herding_split,),
-        #         recursive_steps=(True,),
-        #         split_step_kwargs=(
-        #             dict(
-        #                 use_features=False,
-        #                 n_pca_features=3,
-        #                 hdbscan_kwargs=dict(min_cluster_size=15, min_samples=5),
-        #             ),
-        #         ),
-        #         # split_steps=(before_deconv_merge_split.herding_split, yizi_split,),
-        #         # recursive_steps=(False, True,),
-        #         # split_steps=(yizi_split,),
-        #         # recursive_steps=(True,),
-        #     )
-        # else:
-        #     new_labels = before_deconv_merge_split.split_clusters(
-        #         aligned_spike_train[:, 1],
-        #         raw_bin,
-        #         sub_h5,
-        #         n_workers=n_workers,
-        #         relocated=relocated,
-        #         split_steps=(before_deconv_merge_split.herding_split,),
-        #         recursive_steps=(True,),
-        #         # split_steps=(before_deconv_merge_split.herding_split, yizi_split,),
-        #         # recursive_steps=(False, True,),
-        #         # split_steps=(yizi_split,),
-        #         # recursive_steps=(True,),
-        #     )
 
         new_labels = before_deconv_merge_split.split_clusters(
             aligned_spike_train[:, 1],
@@ -202,17 +111,18 @@ def new_merge_split(
         aligned_spike_train2 = np.load(outdir / "split_st.npy")
         templates = np.load(outdir / "split_templates.npy")
         order = np.load(outdir / "split_order.npy")
-
-    aligned_times, new_labels = before_deconv_merge_split.merge_clusters(
-        sub_h5,
-        raw_bin,
-        aligned_spike_train2[:, 1],
-        templates,
-        relocated=relocated,
-        trough_offset=trough_offset,
-        n_jobs=n_workers,
-        threshold_diptest=threshold_diptest,
-    )
+    
+    #disable diptest
+    # aligned_times, new_labels = before_deconv_merge_split.merge_clusters(
+    #     sub_h5,
+    #     raw_bin,
+    #     aligned_spike_train2[:, 1],
+    #     templates,
+    #     relocated=relocated,
+    #     trough_offset=trough_offset,
+    #     n_jobs=n_workers,
+    #     threshold_diptest=threshold_diptest,
+    # )
 
     (
         aligned_spike_train3,
@@ -226,18 +136,39 @@ def new_merge_split(
         max_shift=20,
         trough_offset=trough_offset,
         spike_length_samples=spike_length_samples,
+        sort_by_time=False,
     )
+    assert np.array_equal(order, np.arange(len(order)))
 
     kept = aligned_spike_train3[:, 1] >= 0
-    times_updated, labels_updated = deconv_resid_merge.run_deconv_merge(
-        aligned_spike_train3[kept],
-        geom,
-        raw_bin,
-        templates.ptp(1).argmax(1),
-        merge_resid_threshold=merge_resid_threshold,
-        trough_offset=trough_offset,
-        spike_length_samples=spike_length_samples,
-    )
+    
+    if not drift_merge:
+        times_updated, labels_updated = deconv_resid_merge.run_deconv_merge(
+            aligned_spike_train3[kept],
+            geom,
+            raw_bin,
+            templates.ptp(1).argmax(1),
+            merge_resid_threshold=merge_resid_threshold,
+            trough_offset=trough_offset,
+            spike_length_samples=spike_length_samples,
+        )
+    else:
+        spt = aligned_spike_train3[kept]
+        labels_split = aligned_spike_train3[:,1][kept]
+        h5 = h5py.File(sub_h5, "r")
+        x, y, z_abs, alpha = h5["localizations"][:, :4].T
+        z_reg = h5["z_reg"][:]
+        raw_data_bin = raw_bin
+        print("running drift-aware merge...")
+        labels_updated = uhd_split_merge.template_deconv_merge(spt, labels_split, z_abs[kept], z_reg[kept],
+                                                               x[kept], geom, raw_data_bin,
+                                                               threshold_resid=threshold_resid, su_chan_vis=1.5, 
+                                                               bin_size_um=bin_size_um,
+                                                               zero_radius_um=zero_radius_um, n_jobs=n_workers,
+                                                               sampling_rate=sampling_rate)
+        print("done with drift-aware merge")
+        times_updated = aligned_spike_train3[:,0][kept]
+        
     aligned_spike_train3[kept, 0] = times_updated
     aligned_spike_train3[kept, 1] = labels_updated
 
@@ -255,8 +186,10 @@ def new_merge_split(
         spike_length_samples=spike_length_samples,
         order_units_by_z=True,
         geom=geom,
+        sort_by_time=False,
     )
     order = order[reorder]
+    assert np.array_equal(order, np.arange(len(order)))
 
     print("Save merge...")
     np.save(outdir / "merge_st.npy", aligned_spike_train4)
