@@ -144,20 +144,22 @@ class IdentityMotionEstimate(MotionEstimate):
     def __init__(self):
         super().__init__(None)
 
-    def disp_at_s(self, t_s, depth_um=None):
-        return 0.0
+    def disp_at_s(self, t_s, depth_um=None, grid=False):
+        return np.zeros_like(t_s)
 
 
 class ComposeMotionEstimates(MotionEstimate):
     def __init__(self, *motion_estimates):
         """Compose motion estimates, if each was estimated from the previous' corrections"""
-        self.motion_estimates = motion_estimates
         super().__init__(None)
+        self.motion_estimates = motion_estimates
+        self.time_bin_edges_s = motion_estimates[0].time_bin_edges_s
+        self.time_bin_centers_s = motion_estimates[0].time_bin_centers_s
 
-    def disp_at_s(self, t_s, depth_um=None):
-        disp = 0
+    def disp_at_s(self, t_s, depth_um=None, grid=False):
+        disp = np.zeros_like(t_s)
         if depth_um is None:
-            depth_um = 0
+            depth_um = np.zeros_like(t_s)
 
         for me in self.motion_estimates:
             disp += me.disp_at_s(t_s, depth_um + disp)
@@ -232,6 +234,8 @@ def show_raster(raster, spatial_bin_edges_um, time_bin_edges_s, ax, **imshow_kwa
 def plot_me_traces(me, ax, offset=0, depths_um=None, label=False, zero_times=False, **plot_kwargs):
     if depths_um is None:
         depths_um = me.spatial_bin_centers_um
+    if depths_um is None:
+        depths_um = [sum(ax.get_ylim()) / 2]
 
     t_offset = me.time_bin_centers_s[0] if zero_times else 0
 
@@ -428,6 +432,7 @@ def fast_raster(
     time_bin_edges_s=None,
     amp_scale_fn=None,
     gaussian_smoothing_sigma_um=0,
+    gaussian_smoothing_sigma_s=0,
     avg_in_bin=True,
     post_transform=None,
 ):
@@ -451,6 +456,7 @@ def fast_raster(
             spatial_bin_edges_um[-1] + 1,
             1,
         )
+        spatial_bin_centers_um_1um = 0.5 * (spatial_bin_edges_um_1um[1:] + spatial_bin_edges_um_1um[:-1])
         r_up = np.histogram2d(
             depths,
             times,
@@ -467,8 +473,14 @@ def fast_raster(
                 )[0],
             )
 
-        r_up = gaussian_filter1d(r_up, gaussian_smoothing_sigma_um / bin_um)
-        r = resample(r_up, spatial_bin_edges_um.size - 1)
+        r_up = gaussian_filter1d(r_up, gaussian_smoothing_sigma_um, axis=0)
+        r = np.empty((spatial_bin_edges_um.size - 1, time_bin_edges_s.size - 1), dtype=r_up.dtype)
+        for i, (bin_start, bin_end) in enumerate(zip(spatial_bin_edges_um, spatial_bin_edges_um[1:])):
+            in_bin = np.flatnonzero(
+                (bin_start <= spatial_bin_centers_um_1um)
+                & (bin_end > spatial_bin_centers_um_1um)
+            )
+            r[i] = r_up[in_bin].sum(0) / (in_bin.size if avg_in_bin else 1)
     else:
         r = np.histogram2d(
             depths,
@@ -488,5 +500,8 @@ def fast_raster(
 
     if post_transform is not None:
         r = post_transform(r)
+
+    if gaussian_smoothing_sigma_s:
+        r = gaussian_filter1d(r, gaussian_smoothing_sigma_s / bin_s, axis=1)
 
     return r, spatial_bin_edges_um, time_bin_edges_s
