@@ -232,7 +232,7 @@ def show_raster(raster, spatial_bin_edges_um, time_bin_edges_s, ax, **imshow_kwa
 def plot_me_traces(me, ax, offset=0, depths_um=None, label=False, zero_times=False, **plot_kwargs):
     if depths_um is None:
         depths_um = me.spatial_bin_centers_um
-    
+
     t_offset = me.time_bin_centers_s[0] if zero_times else 0
 
     for b, depth in enumerate(depths_um):
