@@ -129,13 +129,16 @@ def uhd_split(spt, wfs_mc, spread, x, z_reg, min_cluster_size=25, cluster_select
 
     return labels_split
 
-def template_deconv_merge(spt, labels_split, z_abs, z_reg, x, geom, raw_data_bin, threshold_resid=0.25, su_chan_vis=1.5, bin_size_um=3, n_jobs=-1, sampling_rate=30000):
+def template_deconv_merge(spt, labels_split, z_abs, z_reg, x, geom, raw_data_bin, threshold_resid=0.25, su_chan_vis=1.5, bin_size_um=3, zero_radius_um=70, n_jobs=-1, sampling_rate=30000, dist_proposed_pairs=None):
 
     labels_merge = labels_split.copy()
     
     pitch = get_pitch(geom)
     if bin_size_um is None:
         bin_size_um = pitch//2
+        
+    if dist_proposed_pairs is None:
+        dist_proposed_pairs=pitch
 
     n_units = labels_split.max()+1
     std_z = np.zeros(n_units)
@@ -155,8 +158,8 @@ def template_deconv_merge(spt, labels_split, z_abs, z_reg, x, geom, raw_data_bin
         med_position_units[k, 1] = np.median(z_reg[in_unit])
     dist_matrix = np.sqrt(((med_position_units[None] - med_position_units[:, None])**2).sum(2))
 
-    units_1 = np.where(dist_matrix<6)[0]
-    units_2 = np.where(dist_matrix<6)[1]
+    units_1 = np.where(dist_matrix<dist_proposed_pairs)[0]
+    units_2 = np.where(dist_matrix<dist_proposed_pairs)[1]
     idx = units_1!=units_2
     units_1 = units_1[idx]
     units_2 = units_2[idx]
@@ -182,7 +185,7 @@ def template_deconv_merge(spt, labels_split, z_abs, z_reg, x, geom, raw_data_bin
         geom,
         raw_data_bin,
         reducer=np.median,
-        zero_radius_um=70, # maybe pass it as param input 
+        zero_radius_um=zero_radius_um, # maybe pass it as param input 
         augment_low_snr_temps=True,
         units_spread=std_z*1.65,
         units_x_spread=std_x*1.65,
