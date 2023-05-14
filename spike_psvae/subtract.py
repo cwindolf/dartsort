@@ -33,6 +33,7 @@ default_extra_feats = [
 def subtraction(
     recording,
     out_folder,
+    out_filename="subtraction.h5",
     # should we start over?
     overwrite=False,
     # waveform args
@@ -51,6 +52,7 @@ def subtraction(
     nn_detect=False,
     denoise_detect=False,
     do_nn_denoise=True,
+    residnorm_decrease=False,
     # waveform extraction channels
     neighborhood_kind="circle",
     extract_box_radius=200,
@@ -161,7 +163,8 @@ def subtraction(
     out_folder.mkdir(exist_ok=True)
     batch_data_folder = out_folder / f"subtraction_batches"
     batch_data_folder.mkdir(exist_ok=True)
-    out_h5 = out_folder / f"subtraction.h5"
+    assert out_filename.endswith(".h5"), "Nice try."
+    out_h5 = out_folder / out_filename
     if save_residual:
         residual_bin = out_folder / f"residual.bin"
     try:
@@ -372,6 +375,7 @@ def subtraction(
                 subtracted_tpca=None,
                 peak_sign=peak_sign,
                 do_nn_denoise=do_nn_denoise,
+                residnorm_decrease=residnorm_decrease,
                 do_enforce_decrease=do_enforce_decrease,
                 denoiser_init_kwargs=denoiser_init_kwargs,
                 denoiser_weights_path=denoiser_weights_path,
@@ -410,6 +414,7 @@ def subtraction(
                 extra_features=extra_features + fit_feats,
                 peak_sign=peak_sign,
                 do_nn_denoise=do_nn_denoise,
+                residnorm_decrease=residnorm_decrease,
                 do_enforce_decrease=do_enforce_decrease,
                 denoiser_init_kwargs=denoiser_init_kwargs,
                 denoiser_weights_path=denoiser_weights_path,
@@ -489,6 +494,7 @@ def subtraction(
                 spike_length_samples,
                 extract_channel_index,
                 do_clean,
+                residnorm_decrease,
                 save_residual,
                 radial_parents,
                 geom,
@@ -764,6 +770,7 @@ def subtraction_batch(
     spike_length_samples,
     extract_channel_index,
     do_clean,
+    residnorm_decrease,
     save_residual,
     radial_parents,
     geom,
@@ -891,6 +898,7 @@ def subtraction_batch(
             spike_length_samples=spike_length_samples,
             device=device,
             do_enforce_decrease=do_enforce_decrease,
+            residnorm_decrease=residnorm_decrease,
         )
         if len(spind):
             subtracted_wfs.append(subwfs)
@@ -1055,6 +1063,7 @@ def train_featurizers(
     subtracted_tpca=None,
     peak_sign="neg",
     do_nn_denoise=True,
+    residnorm_decrease=False,
     do_enforce_decrease=True,
     n_sec_pca=10,
     pca_t_start=0,
@@ -1122,6 +1131,7 @@ def train_featurizers(
             spike_length_samples=spike_length_samples,
             extract_channel_index=extract_channel_index,
             do_clean=False,
+            residnorm_decrease=residnorm_decrease,
             save_residual=False,
             radial_parents=radial_parents,
             geom=geom,
@@ -1229,6 +1239,7 @@ def detect_and_subtract(
     spike_length_samples=121,
     device="cpu",
     do_enforce_decrease=True,
+    residnorm_decrease=False,
 ):
     """Detect and subtract
 
@@ -1288,6 +1299,8 @@ def detect_and_subtract(
     time_ix = spike_index[:, 0, None] + time_range[None, :]
     chan_ix = extract_channel_index[spike_index[:, 1]]
     waveforms = padded_raw[time_ix[:, :, None], chan_ix[:, None, :]]
+    if residnorm_decrease:
+        resids = waveforms.clone()
 
     # -- denoising
     waveforms, tpca_proj = full_denoising(
@@ -1301,6 +1314,25 @@ def detect_and_subtract(
         denoiser=denoiser,
         return_tpca_embedding=True,
     )
+    
+    # test residual norm decrease
+    if residnorm_decrease:
+        residthresh = 0.0
+        if isinstance(residnorm_decrease, (int, float)):
+            residthresh = residnorm_decrease
+        residnorms0 = torch.linalg.norm(torch.nan_to_num(resids), dim=(1, 2))
+        resids -= waveforms
+        residnorms1 = torch.linalg.norm(torch.nan_to_num(resids), dim=(1, 2))
+        decreased = residnorms1 + residthresh < residnorms0
+        
+        waveforms = waveforms[decreased]
+        decreased_np = decreased.cpu().numpy()
+        print(f"{threshold=} {len(decreased_np)=} {decreased_np.mean()=}")
+        spike_index = spike_index[decreased_np]
+        time_ix = spike_index[:, 0, None] + time_range[None, :]
+        chan_ix = extract_channel_index[spike_index[:, 1]]
+        if tpca_proj is not None:
+            tpca_proj = tpca_proj[decreased_np]
 
     # -- the actual subtraction
     # have to use subtract.at since -= will only subtract once in the overlaps,
