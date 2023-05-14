@@ -1,7 +1,7 @@
 import numpy as np
 import scipy.linalg as la
 import torch
-from scipy.linalg import solve
+from scipy.linalg import solve, lstsq
 from tqdm.auto import trange
 
 from .ibme_corr import calc_corr_decent_pair
@@ -20,13 +20,13 @@ default_raster_kw = dict(
 )
 
 
-def laplacian(n, wink=True, eps=1e-10):
-    lap = (1 + eps) * np.eye(n)
+def laplacian(n, wink=True, eps=1e-10, lambd=1.0):
+    lap = (lambd + eps) * np.eye(n)
     if wink:
-        lap[0, 0] -= 0.5
-        lap[-1, -1] -= 0.5
-    lap -= np.diag(0.5 * np.ones(n - 1), k=1)
-    lap -= np.diag(0.5 * np.ones(n - 1), k=-1)
+        lap[0, 0] -= 0.5 * lambd
+        lap[-1, -1] -= 0.5 * lambd
+    lap -= np.diag(0.5 * lambd * np.ones(n - 1), k=1)
+    lap -= np.diag(0.5 * lambd * np.ones(n - 1), k=-1)
     return lap
 
 
@@ -101,6 +101,7 @@ def newton_solve_rigid(
         Db_curprev=Db_curprev,
         Ub_curprev=Ub_curprev,
     )
+    # p, *_ = lstsq(Sigma0inv + negHU, targ)#, assume_a="pos")
     p = solve(Sigma0inv + negHU, targ, assume_a="pos")
     return p, negHU
 
@@ -164,7 +165,7 @@ def thomas_solve(
     assert T == T_
     assert Us.shape == Ds.shape
     # temporal prior matrix
-    L_t = lambda_t * laplacian(T, eps=eps)
+    L_t = laplacian(T, eps=eps, lambd=lambda_t)
     extra = dict(L_t=L_t)
 
     # just solve independent problems when there's no spatial regularization
@@ -182,9 +183,9 @@ def thomas_solve(
     # the first and last diagonal blocks are
     # Lambda_s_diag0 = (lambda_s / 2) * (L_t + eps * np.eye(T))
     # the other diagonal blocks are
-    Lambda_s_diag1 = lambda_s * L_t
+    Lambda_s_diag1 = (lambda_s + eps) * laplacian(T, eps=eps, lambd=1.0)
     # and the off-diagonal blocks are
-    Lambda_s_offdiag = (-lambda_s / 2) * L_t
+    Lambda_s_offdiag = (-lambda_s / 2) * laplacian(T, eps=eps, lambd=1.0)
 
     # initialize block-LU stuff and forward variable
     alpha_hat_b = (
@@ -194,6 +195,7 @@ def thomas_solve(
     )
     targets = np.c_[Lambda_s_offdiag, newton_rhs(Us[0], Ds[0], **online_kw_rhs(0))]
     res = solve(alpha_hat_b, targets, assume_a="pos")
+    # res = solve(alpha_hat_b, targets, assume_a="pos")
     assert res.shape == (T, T + 1)
     gamma_hats = [res[:, :T]]
     ys = [res[:, T]]
@@ -275,6 +277,8 @@ def get_weights(
             **raster_kw,
         )
         assert (rr.shape[0],) == window_sliced.shape
+        if rr.sum() <= 0:
+            raise ValueError("Convergence issue when getting weights.")
         weights.append(window_sliced @ rr)
 
     weights_orig = np.array(weights)
@@ -309,6 +313,9 @@ def threshold_correlation_matrix(
     bin_s=1,
     T=None,
 ):
+    if np.size(mincorr) > 1:
+        assert mincorr.size == Cs.shape[1]
+        mincorr = np.minimum(mincorr[:, None], mincorr[None, :])[None]
     # need abs to avoid -0.0s which cause numerical issues
     if in_place:
         Ss = Cs
@@ -335,9 +342,10 @@ def weight_correlation_matrix(
     times_s,
     windows,
     mincorr=0.0,
+    mincorr_percentile=None,
+    adaptive_mincorr_percentile=None,
+    mincorr_percentile_nneighbs=20,
     max_dt_s=None,
-    bin_s=1,
-    bin_um=1,
     lambda_t=1,
     eps=1e-10,
     do_window_weights=True,
@@ -347,6 +355,8 @@ def weight_correlation_matrix(
     pbar=True,
 ):
     extra = {}
+    bin_s = raster_kw["bin_s"]
+    bin_um = raster_kw["bin_um"]
 
     # TODO: upsample_to_histogram_bin
     # handle shapes and the rigid case
@@ -362,6 +372,38 @@ def weight_correlation_matrix(
     assert (T + 1,) == time_bin_edges_s.shape
     extra = {}
 
+    if mincorr_percentile is not None:
+        diags = [
+            np.diagonal(Cs, offset=j, axis1=1, axis2=2).ravel()
+            for j in range(1, mincorr_percentile_nneighbs)
+        ]
+        mincorr = np.percentile(
+            np.concatenate(diags),
+            mincorr_percentile,
+        )
+        print(f"Adaptive {mincorr_percentile=} gave {mincorr=}.")
+
+    if adaptive_mincorr_percentile is not None:
+        mincorr = np.empty(T)
+        for j in range(T):
+            my_corrs = []
+            if j > 0:
+                my_corrs.extend(
+                    [
+                        Cs[:, j, j - mincorr_percentile_nneighbs : j - 1].ravel(),
+                        Cs[:, j - mincorr_percentile_nneighbs : j - 1, j].ravel(),
+                    ]
+                )
+            if j < T:
+                my_corrs.extend(
+                    [
+                        Cs[:, j, j + 1 : j + mincorr_percentile_nneighbs].ravel(),
+                        Cs[:, j + 1 : j + mincorr_percentile_nneighbs, j].ravel(),
+                    ]
+                )
+            mincorr[j] = np.percentile(np.concatenate(my_corrs), adaptive_mincorr_percentile)
+    extra["mincorr"] = mincorr
+
     Ss = threshold_correlation_matrix(
         Cs, mincorr=mincorr, max_dt_s=max_dt_s, bin_s=bin_s, T=T
     )
@@ -371,7 +413,7 @@ def weight_correlation_matrix(
         return Ss, extra
 
     # get weights
-    L_t = lambda_t * laplacian(T, eps=eps)
+    L_t = lambda_t * laplacian(T, eps=max(1e-5, eps))
     weights_orig, weights_thresh, Pind = get_weights(
         Ds,
         Ss,
@@ -517,6 +559,8 @@ def register(
     thomas_kw = default_thomas_kw | thomas_kw
     raster_kw = default_raster_kw | raster_kw
     weights_kw = default_weights_kw | weights_kw
+    raster_kw["bin_s"] = bin_s
+    raster_kw["bin_um"] = bin_um
 
     extra = {}
 
@@ -524,8 +568,6 @@ def register(
         amps,
         depths_um,
         times_s,
-        bin_um=bin_um,
-        bin_s=bin_s,
         **raster_kw,
     )
     windows, window_centers = get_windows(
@@ -565,8 +607,6 @@ def register(
         depths_um,
         times_s,
         windows,
-        bin_s=bin_s,
-        bin_um=bin_um,
         lambda_t=thomas_kw["lambda_t"],
         eps=thomas_kw["eps"],
         raster_kw=raster_kw,
