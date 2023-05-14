@@ -15,7 +15,7 @@ import torch.nn.functional as F
 from tqdm.auto import tqdm
 
 from . import chunk_features, denoise, detect, localize_index
-from .multiprocessing_utils import MockQueue, get_pool
+from .multiprocessing_utils import MockQueue, get_pool, ProcessPoolExecutor
 from .py_utils import noint, timer
 from .spikeio import read_waveforms_in_memory
 from .waveform_utils import make_channel_index, make_contiguous_channel_index
@@ -456,51 +456,15 @@ def subtraction(
         overwrite=overwrite,
         dtype=dtype,
     ) as (output_h5, last_sample):
-        spike_index = output_h5["spike_index"]
-        feature_dsets = [output_h5[f.name] for f in extra_features]
-        N = len(spike_index)
-
-        # if we're resuming, filter out jobs we already did
-        jobs = [
-            (batch_id, start)
-            for batch_id, start in jobs
-            if start >= last_sample
-        ]
-        n_batches = len(jobs)
-
         # residual binary file -- append if we're resuming
         if save_residual:
             residual_mode = "ab" if last_sample > 0 else "wb"
             residual = open(residual_bin, mode=residual_mode)
 
         extra_features = [ef.to("cpu") for ef in extra_features]
-        gc.collect()
-        torch.cuda.empty_cache()
-
-        # now run subtraction in parallel
-        jobs = (
-            (
-                batch_data_folder,
-                batch_len_samples,
-                s_start,
-                thresholds,
-                dedup_channel_index,
-                trough_offset,
-                spike_length_samples,
-                extract_channel_index,
-                do_clean,
-                save_residual,
-                radial_parents,
-                geom,
-                do_enforce_decrease,
-                peak_sign,
-                dtype,
-            )
-            for batch_id, s_start in jobs
-        )
 
         # no-threading/multiprocessing execution for debugging if n_jobs == 0
-        Executor, context = get_pool(n_jobs)
+        Executor, context = get_pool(n_jobs, cls=ProcessPoolExecutor)
         manager = context.Manager() if n_jobs > 1 else None
         id_queue = manager.Queue() if n_jobs > 1 else MockQueue()
 
@@ -530,6 +494,38 @@ def subtraction(
                 denoised_tpca_feat if do_clean else None,
             ),
         ) as pool:
+            spike_index = output_h5["spike_index"]
+            feature_dsets = [output_h5[f.name] for f in extra_features]
+            N = len(spike_index)
+
+            # if we're resuming, filter out jobs we already did
+            jobs = [
+                (batch_id, start)
+                for batch_id, start in jobs
+                if start >= last_sample
+            ]
+            n_batches = len(jobs)
+            jobs = (
+                (
+                    batch_data_folder,
+                    batch_len_samples,
+                    s_start,
+                    thresholds,
+                    dedup_channel_index,
+                    trough_offset,
+                    spike_length_samples,
+                    extract_channel_index,
+                    do_clean,
+                    save_residual,
+                    radial_parents,
+                    geom,
+                    do_enforce_decrease,
+                    peak_sign,
+                    dtype,
+                )
+                for batch_id, s_start in jobs
+            )
+
             count = sum(
                 s < last_sample
                 for s in range(
@@ -538,6 +534,8 @@ def subtraction(
                     batch_len_samples,
                 )
             )
+
+            # now run subtraction in parallel
             pbar = tqdm(
                 pool.map(_subtraction_batch, jobs),
                 total=n_batches,
