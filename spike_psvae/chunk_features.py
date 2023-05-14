@@ -210,10 +210,10 @@ class PTPVector(ChunkFeature):
         self.needs_fit = False
 
     def to_h5(self, h5):
-        if f"{self.which_waveforms}_ptpvector_info":
+        if f"{self.which_waveforms}_ptpvector_info" in h5:
             return
         group = h5.create_group(f"{self.which_waveforms}_ptpvector_info")
-        group.create_dataset("C", data=self.out_shape[1])
+        group.create_dataset("C", data=self.out_shape[0])
 
     def from_h5(self, h5):
         try:
@@ -389,7 +389,13 @@ class Localization(ChunkFeature):
             )
             return torch.column_stack((x, y, z_abs, alpha, z_rel))
         else:
-            xs, ys, z_rels, z_abss, alphas = localize_index.localize_ptps_index(
+            (
+                xs,
+                ys,
+                z_rels,
+                z_abss,
+                alphas,
+            ) = localize_index.localize_ptps_index(
                 ptps,
                 self.geom,
                 max_channels,
@@ -453,7 +459,9 @@ class TPCA(ChunkFeature):
 
     def to(self, device):
         self.mean_ = torch.as_tensor(self.tpca.mean_, device=device)
-        self.components_ = torch.as_tensor(self.tpca.components_, device=device)
+        self.components_ = torch.as_tensor(
+            self.tpca.components_, device=device
+        )
         self.whiten = self.tpca.whiten
         self.whitener = torch.as_tensor(self.whitener, device=device)
         self.channel_index = torch.as_tensor(self.channel_index, device=device)
@@ -567,15 +575,23 @@ class TPCA(ChunkFeature):
             in_probe_index = self.channel_index < self.channel_index.shape[0]
             wfs_in_probe = wfs_in_probe[in_probe_index[max_channels]]
         else:
-            distances_channels = np.sqrt((geom[:, None] - geom[None, :])**2).sum(2)
-            distances_channels = np.pad(distances_channels, ((0, 0), (0, 1)), mode='constant', constant_values=training_radius*2)
-            distances_channels = distances_channels[np.repeat(np.arange(geom.shape[0]), C), self.channel_index.flatten()].reshape((geom.shape[0], C))
+            distances_channels = np.sqrt(
+                (geom[:, None] - geom[None, :]) ** 2
+            ).sum(2)
+            distances_channels = np.pad(
+                distances_channels,
+                ((0, 0), (0, 1)),
+                mode="constant",
+                constant_values=training_radius * 2,
+            )
+            distances_channels = distances_channels[
+                np.repeat(np.arange(geom.shape[0]), C),
+                self.channel_index.flatten(),
+            ].reshape((geom.shape[0], C))
             in_probe_index = distances_channels < training_radius
             wfs_in_probe = wfs_in_probe[in_probe_index[max_channels]]
             del distances_channels
-           
-        print("wfs Shape")
-        print(wfs_in_probe.shape)
+
         if self.centered:
             self.tpca.fit(wfs_in_probe)
         else:
