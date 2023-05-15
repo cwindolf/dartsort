@@ -9,8 +9,8 @@ from .waveform_utils import channel_index_subset
 
 # box constraint on optimization x, y, z (z relative to max chan)
 # BOUNDS = [(-100, 170), (1e-4, 250), (-100, 100)]
-DX = 100
-DZ = 100
+DX = 10000
+DZ = 10000
 
 # how to initialize y?
 Y0 = 20.0
