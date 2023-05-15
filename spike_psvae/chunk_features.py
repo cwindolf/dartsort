@@ -384,8 +384,6 @@ class Localization(ChunkFeature):
                 n_channels=self.loc_n_chans,
                 radius=self.loc_radius,
                 logbarrier=self.localization_kind == "logbarrier",
-                model=self.localizaton_model,
-                optimizer=self.opt,
             )
             return torch.column_stack((x, y, z_abs, alpha, z_rel))
         else:
