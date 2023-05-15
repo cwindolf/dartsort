@@ -32,7 +32,7 @@ def final_split(spt, z_reg, x):
     return labels_split
 
 
-def final_split_merge(spt, z_abs, x, displacement_rigidgeom, raw_data_bin, threshold_resid=0.25):
+def final_split_merge(spt, z_abs, x, displacement_rigid, geom, raw_data_bin, threshold_resid=0.25):
     
     z_reg = z_abs - displacement_rigid[spt[:, 0]//30000]
     labels_split = final_split(spt, z_reg, x)
