@@ -181,8 +181,6 @@ def localize_ptps_index(
 
 # -- a pytorch impl of batched newton method
 
-try: 
+if have_vmap:
     vgrad_and_func = vmap(grad_and_value(mse))
     vhess = vmap(hessian(mse))
-except:
-    pass
