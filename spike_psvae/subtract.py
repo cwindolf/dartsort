@@ -58,6 +58,7 @@ def subtraction(
     box_norm_p=np.inf,
     dedup_spatial_radius=70,
     enforce_decrease_kind="radial",
+    do_phaseshift = True,
     # what to save?
     save_residual=False,
     save_subtracted_waveforms=False,
@@ -766,6 +767,7 @@ def subtraction_batch(
     radial_parents,
     geom,
     do_enforce_decrease,
+    do_phaseshift,
     peak_sign,
     dtype,
     extra_features,
@@ -889,6 +891,7 @@ def subtraction_batch(
             spike_length_samples=spike_length_samples,
             device=device,
             do_enforce_decrease=do_enforce_decrease,
+            do_phaseshift=do_phaseshift
         )
         if len(spind):
             subtracted_wfs.append(subwfs)
@@ -1124,6 +1127,7 @@ def train_featurizers(
             radial_parents=radial_parents,
             geom=geom,
             do_enforce_decrease=do_enforce_decrease,
+            do_phaseshift = do_phaseshift,
             peak_sign=peak_sign,
             dtype=dtype,
             extra_features=[],
@@ -1227,6 +1231,7 @@ def detect_and_subtract(
     spike_length_samples=121,
     device="cpu",
     do_enforce_decrease=True,
+    do_phaseshift = True
 ):
     """Detect and subtract
 
@@ -1294,6 +1299,7 @@ def detect_and_subtract(
         extract_channel_index,
         radial_parents,
         do_enforce_decrease=do_enforce_decrease,
+        do_phaseshift=do_phaseshift,
         tpca=tpca,
         device=device,
         denoiser=denoiser,
@@ -1334,6 +1340,8 @@ def full_denoising(
     extract_channel_index,
     radial_parents=None,
     do_enforce_decrease=True,
+    do_phaseshift=True,
+    geom = None,
     probe=None,
     tpca=None,
     device=None,
@@ -1347,29 +1355,35 @@ def full_denoising(
     N, T, C = waveforms.shape
     assert not align  # still working on that
 
-    waveforms = torch.as_tensor(waveforms, device=device, dtype=torch.float)
+    
+    if do_phaseshift:
+        if geom == None:
+            raise ValueError('Phase-shift denoising needs geom input!')
+        waveforms = multichan_phase_shift_denoise(waveforms, geom, extract_channel_index, denoiser, maxchans = maxchans)
+    else:
+        waveforms = torch.as_tensor(waveforms, device=device, dtype=torch.float)
 
-    if not waveforms.numel():
-        if return_tpca_embedding:
-            embed = np.full((0, C, tpca.n_components), np.nan, dtype=tpca.dtype)
-            return waveforms, embed
-        return waveforms
+        if not waveforms.numel():
+            if return_tpca_embedding:
+                embed = np.full((0, C, tpca.n_components), np.nan, dtype=tpca.dtype)
+                return waveforms, embed
+            return waveforms
 
-    # in new pipeline, some channels are off the edge of the probe
-    # those are filled with NaNs, which will blow up PCA. so, here
-    # we grab just the non-NaN channels.
-    in_probe_channel_index = (
-        torch.as_tensor(extract_channel_index, device=device) < num_channels
-    )
-    in_probe_index = in_probe_channel_index[maxchans]
-    waveforms = waveforms.permute(0, 2, 1)
-    wfs_in_probe = waveforms[in_probe_index]
+        # in new pipeline, some channels are off the edge of the probe
+        # those are filled with NaNs, which will blow up PCA. so, here
+        # we grab just the non-NaN channels.
+        in_probe_channel_index = (
+            torch.as_tensor(extract_channel_index, device=device) < num_channels
+        )
+        in_probe_index = in_probe_channel_index[maxchans]
+        waveforms = waveforms.permute(0, 2, 1)
+        wfs_in_probe = waveforms[in_probe_index]
 
-    # Apply NN denoiser (skip if None) #doesn't matter if wf on channels or everywhere
-    if denoiser is not None:
-        for bs in range(0, wfs_in_probe.shape[0], batch_size):
-            be = min(bs + batch_size, N * C)
-            wfs_in_probe[bs:be] = denoiser(wfs_in_probe[bs:be])
+        # Apply NN denoiser (skip if None) #doesn't matter if wf on channels or everywhere
+        if denoiser is not None:
+            for bs in range(0, wfs_in_probe.shape[0], batch_size):
+                be = min(bs + batch_size, N * C)
+                wfs_in_probe[bs:be] = denoiser(wfs_in_probe[bs:be])
 
     # Temporal PCA while we are still transposed
     if tpca is not None:
