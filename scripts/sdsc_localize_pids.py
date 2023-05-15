@@ -15,7 +15,7 @@ import subprocess
 from brainbox.io.one import SpikeSortingLoader
 from spike_psvae.spike_train_utils import clean_align_and_get_templates
 from spike_psvae.grab_and_localize import grab_and_localize
-
+import spikeglx
 
 
 sdsc_base_path = Path("/mnt/sdceph/users/ibl/data")
@@ -154,8 +154,9 @@ if __name__ == "__main__":
         )
 
         # run destriping
-        destriped_cbin = dscache / f"destriped_{cbin_rel}"
-        if not destriped_cbin.exists():
+        destriped_bin = dscache / f"destriped_{cbin_rel}"
+        destriped_bin = destriped_bin.with_suffix(".bin")
+        if not destriped_bin.exists():
             shutil.copyfile(cbin_path, dscache / cbin_rel)
             shutil.copyfile(meta_path, dscache / meta_rel)
             shutil.copyfile(ch_path, dscache / ch_rel)
@@ -177,15 +178,16 @@ if __name__ == "__main__":
                     (dscache / f"destriped_{cbin_rel}").unlink()
                 continue
             finally:
-                for pfile in (cbin_rel, meta_rel, ch_rel):
-                    if (dscache / pfile).exists():
-                        (dscache / pfile).unlink()
+                pass
+                # for pfile in (cbin_rel, meta_rel, ch_rel):
+                #     if (dscache / pfile).exists():
+                #         (dscache / pfile).unlink()
 
-        assert destriped_cbin.exists()
-
+        assert destriped_bin.exists()
+        
         rec = sc.read_binary(
-            destriped_cbin,
-            rec_cbin.sampling_frequency,
+            destriped_bin,
+            rec_cbin.get_sampling_frequency(),
             rec_cbin.get_num_channels(),
             dtype="float32",
         )
