@@ -521,6 +521,7 @@ def subtraction(
                     spike_length_samples,
                     extract_channel_index,
                     do_clean,
+                    residnorm_decrease,
                     save_residual,
                     radial_parents,
                     geom,
@@ -695,7 +696,8 @@ def _subtraction_batch_init(
 
     torch.set_grad_enabled(False)
     if device.type == "cuda":
-        print("num gpus:", torch.cuda.device_count())
+        if not rank:
+            print("num gpus:", torch.cuda.device_count())
         if torch.cuda.device_count() > 1:
             device = torch.device(
                 "cuda", index=rank % torch.cuda.device_count()
@@ -860,7 +862,7 @@ def subtraction_batch(
     residual = recording.get_traces(start_frame=load_start, end_frame=load_end)
     residual = residual.astype(dtype)
     assert np.isfinite(residual).all()
-    prefix = f"{s_start:10d}_"
+    prefix = f"{s_start:010d}_"
 
     # 0 padding if we were at the edge of the data
     pad_left = pad_right = 0
@@ -1324,7 +1326,7 @@ def detect_and_subtract(
         
         waveforms = waveforms[decreased]
         decreased_np = decreased.cpu().numpy()
-        print(f"{threshold=} {len(decreased_np)=} {decreased_np.mean()=}")
+        # print(f"{threshold=} {len(decreased_np)=} {decreased_np.mean()=}")
         spike_index = spike_index[decreased_np]
         time_ix = spike_index[:, 0, None] + time_range[None, :]
         chan_ix = extract_channel_index[spike_index[:, 1]]
