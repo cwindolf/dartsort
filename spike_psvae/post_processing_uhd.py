@@ -77,7 +77,7 @@ def post_deconv_split(spt_no_outliers, x, z_reg, isosplit_th=1, n_iter=2):
         cmp = spt_no_outliers[:, 1].max()+1
         for unit in range(spt_no_outliers[:, 1].max()+1):
             idx_unit = np.flatnonzero(spt_no_outliers[:, 1]==unit)
-            features = np.concatenate((z_reg[idx_unit, None], x[idx_unit, None]*), axis=1)
+            features = np.concatenate((z_reg[idx_unit, None], x[idx_unit, None]), axis=1)
 
             pca_features = PCA(1)
             feat_pca = pca_features.fit_transform(features)[:, 0]
