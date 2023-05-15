@@ -6,7 +6,41 @@ from spike_psvae.isocut5 import isocut5 as isocut
 from spike_psvae.drifty_deconv_uhd import superres_denoised_templates, shift_superres_templates
 from spike_psvae.deconv_resid_merge import resid_dist_multiple
 from scipy.cluster.hierarchy import complete, fcluster
+from spike_psvae.uhd_split_merge import template_deconv_merge
 
+def final_split(spt, z_reg, x):
+    
+    iterate = True
+    n_iter = 0
+    labels_split = spt[:, 1].copy()
+    while iterate:
+        max_values = labels_split.max()+1
+        cmp = labels_split.max()+1
+        for unit in np.unique(labels_split):
+            in_unit = np.flatnonzero(labels_split==unit)
+
+            rescale_x = z_reg[in_unit].std()/x[in_unit].std()
+            features = np.c_[z_reg[in_unit], rescale_x*x[in_unit]]
+            oned_features = PCA(n_components=1).fit_transform(features)[:, 0]
+            dipscore, cutpoint = isocut(oned_features)
+            if dipscore>1:
+                labels_split[in_unit[oned_features>cutpoint]] = cmp
+                cmp+=1
+        if cmp == max_values:
+            iterate = False
+
+    return labels_split
+
+
+def final_split_merge(spt, z_abs, x, displacement_rigid, geom, raw_data_bin, threshold_resid=0.25):
+    
+    z_reg = z_abs - displacement_rigid[spt[:, 0]//30000]
+    labels_split = final_split(spt, z_reg, x)
+    
+    labels_final = template_deconv_merge(spt, labels_split, z_abs, z_reg, x, geom, raw_data_bin, threshold_resid=threshold_resid)
+    
+    return labels_final
+    
 
 # %%
 def correct_outliers(spt, x, z_reg, disp, units_to_clean = None, prob_min = 0.1):
