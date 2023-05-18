@@ -378,6 +378,7 @@ def subtraction(
                 do_nn_denoise=do_nn_denoise,
                 residnorm_decrease=residnorm_decrease,
                 do_enforce_decrease=do_enforce_decrease,
+                do_phaseshift = do_phaseshift,
                 denoiser_init_kwargs=denoiser_init_kwargs,
                 denoiser_weights_path=denoiser_weights_path,
                 n_sec_pca=n_sec_pca,
@@ -417,6 +418,7 @@ def subtraction(
                 do_nn_denoise=do_nn_denoise,
                 residnorm_decrease=residnorm_decrease,
                 do_enforce_decrease=do_enforce_decrease,
+                do_phaseshift = do_phaseshift,
                 denoiser_init_kwargs=denoiser_init_kwargs,
                 denoiser_weights_path=denoiser_weights_path,
                 n_sec_pca=n_sec_pca,
@@ -527,6 +529,7 @@ def subtraction(
                     radial_parents,
                     geom,
                     do_enforce_decrease,
+                    do_phaseshift,
                     peak_sign,
                     dtype,
                 )
@@ -900,6 +903,7 @@ def subtraction_batch(
             device=device,
             do_enforce_decrease=do_enforce_decrease,
             do_phaseshift=do_phaseshift,
+            geom = geom,
             residnorm_decrease=residnorm_decrease,
         )
         if len(spind):
@@ -999,13 +1003,15 @@ def subtraction_batch(
                     batch_data_folder / f"{prefix}{f.name}.npy",
                     feat,
                 )
-
+        # print(np.shape(cleaned_wfs))
         denoised_wfs = full_denoising(
             cleaned_wfs,
             spike_index[:, 1],
             extract_channel_index,
             radial_parents,
             do_enforce_decrease=do_enforce_decrease,
+            do_phaseshift = do_phaseshift,
+            geom = geom,
             # tpca=subtracted_tpca,
             tpca=denoised_tpca,
             device=device,
@@ -1067,6 +1073,7 @@ def train_featurizers(
     do_nn_denoise=True,
     residnorm_decrease=False,
     do_enforce_decrease=True,
+    do_phaseshift = True,
     n_sec_pca=10,
     pca_t_start=0,
     pca_t_end=None,
@@ -1197,12 +1204,16 @@ def train_featurizers(
             axis=0,
         )
         cleaned_waveforms += waveforms
+        
+        # print(np.shape(cleaned_waveforms))
         denoised_waveforms = full_denoising(
             cleaned_waveforms,
             spike_index[:, 1],
             extract_channel_index,
             radial_parents,
             do_enforce_decrease=do_enforce_decrease,
+            do_phaseshift = do_phaseshift,
+            geom = geom,
             tpca=None,
             device=device,
             denoiser=denoiser,
@@ -1243,6 +1254,7 @@ def detect_and_subtract(
     device="cpu",
     do_enforce_decrease=True,
     do_phaseshift = True,
+    geom = None,
     residnorm_decrease=False,
 ):
     """Detect and subtract
@@ -1305,7 +1317,7 @@ def detect_and_subtract(
     waveforms = padded_raw[time_ix[:, :, None], chan_ix[:, None, :]]
     if residnorm_decrease:
         resids = waveforms.clone()
-
+    # print(np.shape(waveforms))
     # -- denoising
     waveforms, tpca_proj = full_denoising(
         waveforms,
@@ -1314,6 +1326,7 @@ def detect_and_subtract(
         radial_parents,
         do_enforce_decrease=do_enforce_decrease,
         do_phaseshift=do_phaseshift,
+        geom = geom,
         tpca=tpca,
         device=device,
         denoiser=denoiser,
@@ -1390,9 +1403,18 @@ def full_denoising(
 
     
     if do_phaseshift:
-        if geom == None:
+        if geom is None:
             raise ValueError('Phase-shift denoising needs geom input!')
-        waveforms = multichan_phase_shift_denoise(waveforms, geom, extract_channel_index, denoiser, maxchans = maxchans)
+        waveforms = torch.as_tensor(waveforms, device=device, dtype=torch.float)
+        waveforms = denoise.multichan_phase_shift_denoise(waveforms, geom, extract_channel_index, denoiser, maxchans = maxchans)
+        waveforms = torch.as_tensor(waveforms, device=device, dtype=torch.float)
+        in_probe_channel_index = (
+            torch.as_tensor(extract_channel_index, device=device) < num_channels
+        )
+        in_probe_index = in_probe_channel_index[maxchans]
+        
+        waveforms = waveforms.permute(0, 2, 1)
+        wfs_in_probe = waveforms[in_probe_index]
     else:
         waveforms = torch.as_tensor(waveforms, device=device, dtype=torch.float)
 
@@ -1655,6 +1677,7 @@ def subtract_and_localize_numpy(
         spike_index[:, 1],
         extract_channel_index,
         radial_parents,
+        geom = geom,
         probe=probe,
         tpca=tpca,
         device=device,
