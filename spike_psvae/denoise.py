@@ -50,8 +50,8 @@ class SingleChanDenoiser(nn.Module):
         return self
     
 
-def phase_shift_denoise(chan_wfs, phase_shift, dn, chan_ci_idx, spk_sign, offset=42, small_threshold = 2, corr_th = 0.8):
-    wfs_to_denoise = np.roll(chan_wfs, - phase_shift)
+def denoise_with_phase_shift(chan_wfs, phase_shift, dn, chan_ci_idx, spk_sign, offset=42, small_threshold = 2, corr_th = 0.8):
+    wfs_to_denoise = torch.roll(chan_wfs, - phase_shift)
     wfs = wfs_to_denoise[None, None, :]
     wfs_denoised = dn(torch.FloatTensor(wfs).reshape(-1, 121)).reshape(wfs.shape)
     wfs_denoised = wfs_denoised.detach().numpy()
@@ -83,10 +83,12 @@ def multichan_phase_shift_denoise(waveforms, geom, extract_channel_index, SinglC
     
     for i in range(len(maxchans)):
         mcs = int(maxchans[i])
-        ci = extract_channel_index[i]
+        ci = extract_channel_index[mcs]
         non_nan_idx = np.where(ci<CH_N)[0]
         
-        full_wfs = wfs_traveler[i, :, non_nan_idx].T
+        full_wfs = waveforms[i, :, non_nan_idx]#.T
+        
+        # print(np.shape(full_wfs))
 
         ci = ci[non_nan_idx]
         l = len(ci)
@@ -100,17 +102,28 @@ def multichan_phase_shift_denoise(waveforms, geom, extract_channel_index, SinglC
                                ((np.abs(ci_geom[:,0] - ci_geom[ch,0]) == 0) & (np.abs(ci_geom[:,1] - ci_geom[ch,1]) == 2 * y_pitch)) |
                                ((np.abs(ci_geom[:,0] - ci_geom[ch,0]) == 2 * x_pitch) & (np.abs(ci_geom[:,1] - ci_geom[ch,1]) == 0)))[0]
             ci_graph[ch] = group
+            
+        # print(mcs)
+        # print(ci)
 
 
         mc_neighbor_idx = np.concatenate((ci_graph[mc_idx[0]], mc_idx))
         
         
-        wfs_mc_neighbors = np.swapaxes(waveforms[i,:, mc_neighbor_idx], 1, 2)
-        wfs_denoised_mc_neighbors = SinglChanDenoiser(torch.FloatTensor(wfs_mc_neighbors).reshape(-1, 121)).reshape(wfs.shape)
+        wfs_mc_neighbors = torch.swapaxes(waveforms[i,:, mc_neighbor_idx], 0, 1)[None, :, :]
+        # print(np.shape(wfs_mc_neighbors))
+        wfs_denoised_mc_neighbors = SinglChanDenoiser(torch.FloatTensor(wfs_mc_neighbors).reshape(-1, 121)).reshape(wfs_mc_neighbors.shape)
         wfs_denoised_mc_neighbors = wfs_denoised_mc_neighbors.detach().numpy()
-        
-        real_maxCH = mc_neighbor_idx[np.argmax(np.ptp(wfs_denoised_mc_neighbors, 2))]
-        mcs_idx = real_maxCH
+        # print(np.shape(wfs_denoised_mc_neighbors))
+        try:
+            real_maxCH = mc_neighbor_idx[np.argmax(np.ptp(wfs_denoised_mc_neighbors, 2))]
+        except:
+            print(np.shape(ci_graph[mc_idx[0]]))
+            print(np.shape(wfs_mc_neighbors))
+            print(np.shape(wfs_denoised_mc_neighbors))
+            real_maxCH = mc_idx[0]
+        # print(np.shape(real_maxCH))    
+        mcs_idx = np.squeeze(real_maxCH)
 
         for ch in range(l):
             group = ci_graph[ch]
@@ -125,13 +138,14 @@ def multichan_phase_shift_denoise(waveforms, geom, extract_channel_index, SinglC
 
         spk_denoised_wfs = np.zeros((T, l))
 
-        full_wfs = wfs_traveler[i, :, non_nan_idx].T
+        full_wfs = waveforms[i, :, non_nan_idx]
 
         mcs_wfs = full_wfs[:, mcs_idx]
 
         wfs = mcs_wfs[None, None, :]
-        wfs_denoised = dn(torch.FloatTensor(wfs).reshape(-1, 121)).reshape(wfs.shape)
+        wfs_denoised = SinglChanDenoiser(torch.FloatTensor(wfs).reshape(-1, 121)).reshape(wfs.shape)
         wfs_denoised = np.squeeze(wfs_denoised.detach().numpy())
+        # print(np.shape(wfs_denoised))
         spk_denoised_wfs[:,mcs_idx] = wfs_denoised
 
         mcs_phase_shift = np.argmax(np.abs(wfs_denoised)) - offset
@@ -189,7 +203,7 @@ def multichan_phase_shift_denoise(waveforms, geom, extract_channel_index, SinglC
                             q_partial.insert(0,z)
                             halluci_idx[z] = 1
                             
-        DenoisedWF[i,:,:] = spk_denoised_wfs
+        DenoisedWF[i,:,non_nan_idx] = spk_denoised_wfs.T
     return DenoisedWF
 
 def temporal_align(waveforms, maxchans=None, offset=42):
