@@ -694,7 +694,7 @@ def merge_filtered_files(filtered_location, output_directory):
     f_out = os.path.join(output_directory, "standardized.bin")
 
     f = open(f_out, 'wb')
-    for fname in filenames_sorted:
+    for fname in tqdm(filenames_sorted):
         res = np.load(os.path.join(filtered_location, fname))
         res.tofile(f)
         os.remove(os.path.join(filtered_location, fname))
