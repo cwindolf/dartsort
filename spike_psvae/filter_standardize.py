@@ -204,9 +204,9 @@ def filter_standardize_rec_mp(output_directory, filename_raw, dtype_raw,
             for res in tqdm(
                 pool.imap_unordered(
                     mp_object.filter_standardize_batch_mp,
-                    my_batches,
+                    all_batches,
                 ),
-                total=len(my_batches),
+                total=len(all_batches),
                 desc="Preprocessing",
             ):
                 pass    
