@@ -149,6 +149,11 @@ def localize_ptps_index(
 
     # -- torch optimize
     # initialize with center of mass
+    xcom = xcom.cpu()
+    zcom = zcom.cpu()
+    ptps = ptps.cpu()
+    geom = geom.cpu()
+    nptps, nan_mask, local_geoms = nptps.cpu(), nan_mask.cpu(), local_geoms.cpu()
     locs = torch.column_stack((xcom, torch.full_like(xcom, y0), zcom))
     locs, nevals, i = batched_newton(
         locs,
@@ -176,8 +181,6 @@ def localize_ptps_index(
 
 # -- a pytorch impl of batched newton method
 
-try: 
+if have_vmap:
     vgrad_and_func = vmap(grad_and_value(mse))
     vhess = vmap(hessian(mse))
-except:
-    pass

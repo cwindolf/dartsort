@@ -33,6 +33,7 @@ default_extra_feats = [
 def subtraction(
     recording,
     out_folder,
+    out_filename="subtraction.h5",
     # should we start over?
     overwrite=False,
     # waveform args
@@ -51,6 +52,7 @@ def subtraction(
     nn_detect=False,
     denoise_detect=False,
     do_nn_denoise=True,
+    residnorm_decrease=False,
     # waveform extraction channels
     neighborhood_kind="circle",
     extract_box_radius=200,
@@ -58,6 +60,7 @@ def subtraction(
     box_norm_p=np.inf,
     dedup_spatial_radius=70,
     enforce_decrease_kind="radial",
+    do_phaseshift = True,
     # what to save?
     save_residual=False,
     save_subtracted_waveforms=False,
@@ -161,7 +164,8 @@ def subtraction(
     out_folder.mkdir(exist_ok=True)
     batch_data_folder = out_folder / f"subtraction_batches"
     batch_data_folder.mkdir(exist_ok=True)
-    out_h5 = out_folder / f"subtraction.h5"
+    assert out_filename.endswith(".h5"), "Nice try."
+    out_h5 = out_folder / out_filename
     if save_residual:
         residual_bin = out_folder / f"residual.bin"
     try:
@@ -372,7 +376,9 @@ def subtraction(
                 subtracted_tpca=None,
                 peak_sign=peak_sign,
                 do_nn_denoise=do_nn_denoise,
+                residnorm_decrease=residnorm_decrease,
                 do_enforce_decrease=do_enforce_decrease,
+                do_phaseshift = do_phaseshift,
                 denoiser_init_kwargs=denoiser_init_kwargs,
                 denoiser_weights_path=denoiser_weights_path,
                 n_sec_pca=n_sec_pca,
@@ -410,7 +416,9 @@ def subtraction(
                 extra_features=extra_features + fit_feats,
                 peak_sign=peak_sign,
                 do_nn_denoise=do_nn_denoise,
+                residnorm_decrease=residnorm_decrease,
                 do_enforce_decrease=do_enforce_decrease,
+                do_phaseshift = do_phaseshift,
                 denoiser_init_kwargs=denoiser_init_kwargs,
                 denoiser_weights_path=denoiser_weights_path,
                 n_sec_pca=n_sec_pca,
@@ -516,10 +524,12 @@ def subtraction(
                     spike_length_samples,
                     extract_channel_index,
                     do_clean,
+                    residnorm_decrease,
                     save_residual,
                     radial_parents,
                     geom,
                     do_enforce_decrease,
+                    do_phaseshift,
                     peak_sign,
                     dtype,
                 )
@@ -690,7 +700,8 @@ def _subtraction_batch_init(
 
     torch.set_grad_enabled(False)
     if device.type == "cuda":
-        print("num gpus:", torch.cuda.device_count())
+        if not rank:
+            print("num gpus:", torch.cuda.device_count())
         if torch.cuda.device_count() > 1:
             device = torch.device(
                 "cuda", index=rank % torch.cuda.device_count()
@@ -762,10 +773,12 @@ def subtraction_batch(
     spike_length_samples,
     extract_channel_index,
     do_clean,
+    residnorm_decrease,
     save_residual,
     radial_parents,
     geom,
     do_enforce_decrease,
+    do_phaseshift,
     peak_sign,
     dtype,
     extra_features,
@@ -854,7 +867,7 @@ def subtraction_batch(
     residual = recording.get_traces(start_frame=load_start, end_frame=load_end)
     residual = residual.astype(dtype)
     assert np.isfinite(residual).all()
-    prefix = f"{s_start:10d}_"
+    prefix = f"{s_start:010d}_"
 
     # 0 padding if we were at the edge of the data
     pad_left = pad_right = 0
@@ -889,6 +902,9 @@ def subtraction_batch(
             spike_length_samples=spike_length_samples,
             device=device,
             do_enforce_decrease=do_enforce_decrease,
+            do_phaseshift=do_phaseshift,
+            geom = geom,
+            residnorm_decrease=residnorm_decrease,
         )
         if len(spind):
             subtracted_wfs.append(subwfs)
@@ -987,13 +1003,15 @@ def subtraction_batch(
                     batch_data_folder / f"{prefix}{f.name}.npy",
                     feat,
                 )
-
+        # print(np.shape(cleaned_wfs))
         denoised_wfs = full_denoising(
             cleaned_wfs,
             spike_index[:, 1],
             extract_channel_index,
             radial_parents,
             do_enforce_decrease=do_enforce_decrease,
+            do_phaseshift = do_phaseshift,
+            geom = geom,
             # tpca=subtracted_tpca,
             tpca=denoised_tpca,
             device=device,
@@ -1053,7 +1071,9 @@ def train_featurizers(
     subtracted_tpca=None,
     peak_sign="neg",
     do_nn_denoise=True,
+    residnorm_decrease=False,
     do_enforce_decrease=True,
+    do_phaseshift = True,
     n_sec_pca=10,
     pca_t_start=0,
     pca_t_end=None,
@@ -1120,10 +1140,12 @@ def train_featurizers(
             spike_length_samples=spike_length_samples,
             extract_channel_index=extract_channel_index,
             do_clean=False,
+            residnorm_decrease=residnorm_decrease,
             save_residual=False,
             radial_parents=radial_parents,
             geom=geom,
             do_enforce_decrease=do_enforce_decrease,
+            do_phaseshift = do_phaseshift,
             peak_sign=peak_sign,
             dtype=dtype,
             extra_features=[],
@@ -1182,12 +1204,16 @@ def train_featurizers(
             axis=0,
         )
         cleaned_waveforms += waveforms
+        
+        # print(np.shape(cleaned_waveforms))
         denoised_waveforms = full_denoising(
             cleaned_waveforms,
             spike_index[:, 1],
             extract_channel_index,
             radial_parents,
             do_enforce_decrease=do_enforce_decrease,
+            do_phaseshift = do_phaseshift,
+            geom = geom,
             tpca=None,
             device=device,
             denoiser=denoiser,
@@ -1227,6 +1253,9 @@ def detect_and_subtract(
     spike_length_samples=121,
     device="cpu",
     do_enforce_decrease=True,
+    do_phaseshift = True,
+    geom = None,
+    residnorm_decrease=False,
 ):
     """Detect and subtract
 
@@ -1286,7 +1315,9 @@ def detect_and_subtract(
     time_ix = spike_index[:, 0, None] + time_range[None, :]
     chan_ix = extract_channel_index[spike_index[:, 1]]
     waveforms = padded_raw[time_ix[:, :, None], chan_ix[:, None, :]]
-
+    if residnorm_decrease:
+        resids = waveforms.clone()
+    # print(np.shape(waveforms))
     # -- denoising
     waveforms, tpca_proj = full_denoising(
         waveforms,
@@ -1294,11 +1325,32 @@ def detect_and_subtract(
         extract_channel_index,
         radial_parents,
         do_enforce_decrease=do_enforce_decrease,
+        do_phaseshift=do_phaseshift,
+        geom = geom,
         tpca=tpca,
         device=device,
         denoiser=denoiser,
         return_tpca_embedding=True,
     )
+    
+    # test residual norm decrease
+    if residnorm_decrease:
+        residthresh = 0.0
+        if isinstance(residnorm_decrease, (int, float)):
+            residthresh = residnorm_decrease
+        residnorms0 = torch.linalg.norm(torch.nan_to_num(resids), dim=(1, 2))
+        resids -= waveforms
+        residnorms1 = torch.linalg.norm(torch.nan_to_num(resids), dim=(1, 2))
+        decreased = residnorms1 + residthresh < residnorms0
+        
+        waveforms = waveforms[decreased]
+        decreased_np = decreased.cpu().numpy()
+        # print(f"{threshold=} {len(decreased_np)=} {decreased_np.mean()=}")
+        spike_index = spike_index[decreased_np]
+        time_ix = spike_index[:, 0, None] + time_range[None, :]
+        chan_ix = extract_channel_index[spike_index[:, 1]]
+        if tpca_proj is not None:
+            tpca_proj = tpca_proj[decreased_np]
 
     # -- the actual subtraction
     # have to use subtract.at since -= will only subtract once in the overlaps,
@@ -1334,6 +1386,8 @@ def full_denoising(
     extract_channel_index,
     radial_parents=None,
     do_enforce_decrease=True,
+    do_phaseshift=True,
+    geom = None,
     probe=None,
     tpca=None,
     device=None,
@@ -1347,29 +1401,44 @@ def full_denoising(
     N, T, C = waveforms.shape
     assert not align  # still working on that
 
-    waveforms = torch.as_tensor(waveforms, device=device, dtype=torch.float)
+    
+    if do_phaseshift:
+        if geom is None:
+            raise ValueError('Phase-shift denoising needs geom input!')
+        waveforms = torch.as_tensor(waveforms, device=device, dtype=torch.float)
+        waveforms = denoise.multichan_phase_shift_denoise(waveforms, geom, extract_channel_index, denoiser, maxchans = maxchans)
+        waveforms = torch.as_tensor(waveforms, device=device, dtype=torch.float)
+        in_probe_channel_index = (
+            torch.as_tensor(extract_channel_index, device=device) < num_channels
+        )
+        in_probe_index = in_probe_channel_index[maxchans]
+        
+        waveforms = waveforms.permute(0, 2, 1)
+        wfs_in_probe = waveforms[in_probe_index]
+    else:
+        waveforms = torch.as_tensor(waveforms, device=device, dtype=torch.float)
 
-    if not waveforms.numel():
-        if return_tpca_embedding:
-            embed = np.full((0, C, tpca.n_components), np.nan, dtype=tpca.dtype)
-            return waveforms, embed
-        return waveforms
+        if not waveforms.numel():
+            if return_tpca_embedding:
+                embed = np.full((0, C, tpca.n_components), np.nan, dtype=tpca.dtype)
+                return waveforms, embed
+            return waveforms
 
-    # in new pipeline, some channels are off the edge of the probe
-    # those are filled with NaNs, which will blow up PCA. so, here
-    # we grab just the non-NaN channels.
-    in_probe_channel_index = (
-        torch.as_tensor(extract_channel_index, device=device) < num_channels
-    )
-    in_probe_index = in_probe_channel_index[maxchans]
-    waveforms = waveforms.permute(0, 2, 1)
-    wfs_in_probe = waveforms[in_probe_index]
+        # in new pipeline, some channels are off the edge of the probe
+        # those are filled with NaNs, which will blow up PCA. so, here
+        # we grab just the non-NaN channels.
+        in_probe_channel_index = (
+            torch.as_tensor(extract_channel_index, device=device) < num_channels
+        )
+        in_probe_index = in_probe_channel_index[maxchans]
+        waveforms = waveforms.permute(0, 2, 1)
+        wfs_in_probe = waveforms[in_probe_index]
 
-    # Apply NN denoiser (skip if None) #doesn't matter if wf on channels or everywhere
-    if denoiser is not None:
-        for bs in range(0, wfs_in_probe.shape[0], batch_size):
-            be = min(bs + batch_size, N * C)
-            wfs_in_probe[bs:be] = denoiser(wfs_in_probe[bs:be])
+        # Apply NN denoiser (skip if None) #doesn't matter if wf on channels or everywhere
+        if denoiser is not None:
+            for bs in range(0, wfs_in_probe.shape[0], batch_size):
+                be = min(bs + batch_size, N * C)
+                wfs_in_probe[bs:be] = denoiser(wfs_in_probe[bs:be])
 
     # Temporal PCA while we are still transposed
     if tpca is not None:
@@ -1608,6 +1677,7 @@ def subtract_and_localize_numpy(
         spike_index[:, 1],
         extract_channel_index,
         radial_parents,
+        geom = geom,
         probe=probe,
         tpca=tpca,
         device=device,
