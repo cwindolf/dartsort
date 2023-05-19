@@ -1,5 +1,6 @@
 # %%
 import os
+from tqdm.auto import tqdm, trange
 import numpy as np
 import multiprocessing
 from .multiprocessing_utils import get_pool, MockQueue
