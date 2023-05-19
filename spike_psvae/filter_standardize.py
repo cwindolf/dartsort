@@ -159,7 +159,7 @@ def filter_standardize_rec_mp(output_directory, filename_raw, dtype_raw,
 
 
     if n_jobs <= 1:
-        filter_standardize_for_loop.run(all_batches,
+        filter_standardize_for_loop(all_batches,
             filename_raw,
             fname_mean_sd,
             apply_filter,
