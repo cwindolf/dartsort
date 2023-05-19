@@ -59,7 +59,8 @@ def cluster_5_min(cluster_output_directory, raw_data_bin, geom, T_START, T_END, 
             geom.shape[0],
             frame_dedup=frame_dedup_cluster,
         )
-        clusterer.labels_[removed_ix] = -1
+        if len(removed_ix):
+            clusterer.labels_[removed_ix.astype('int')] = -1
         clusterer.labels_ = spike_train_utils.make_labels_contiguous(
             clusterer.labels_
         )
