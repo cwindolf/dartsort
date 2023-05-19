@@ -1,6 +1,7 @@
 # %%
 import os
 import numpy as np
+import multiprocessing
 from .multiprocessing_utils import get_pool, MockQueue
 from scipy.signal import butter, filtfilt
 from spike_psvae import spikeio
