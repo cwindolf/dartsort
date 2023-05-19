@@ -24,7 +24,10 @@ from sklearn.decomposition import PCA
 
 from spikeinterface.extractors import NumpySorting
 from spikeinterface.comparison import compare_sorter_to_ground_truth
-from spike_psvae.denoise import denoise_wf_nn_tmp_single_channel, SingleChanDenoiser
+from spike_psvae.denoise import (
+    denoise_wf_nn_tmp_single_channel,
+    SingleChanDenoiser,
+)
 
 from spike_psvae.spikeio import get_binary_length, read_waveforms
 
@@ -110,7 +113,9 @@ class Sorting:
         self.unit_labels, self.unit_spike_counts = np.unique(
             self.spike_labels, return_counts=True
         )
-        self.unit_label_to_index = dict((v, k) for k, v in enumerate(self.unit_labels))
+        self.unit_label_to_index = dict(
+            (v, k) for k, v in enumerate(self.unit_labels)
+        )
         self.n_units = self.unit_labels.size
         full_spike_counts = np.zeros(self.unit_labels.max() + 1, dtype=int)
         full_spike_counts[self.unit_labels] = self.unit_spike_counts
@@ -188,7 +193,7 @@ class Sorting:
                 loc_ = np.zeros_like(self.template_maxptps)
                 loc_[full_spike_counts > 0] = loc
                 self.template_locs[i] = loc_
-                
+
             self.template_xzptp = np.c_[
                 self.template_locs[0],
                 self.template_locs[3],
@@ -304,9 +309,7 @@ class Sorting:
     @property
     def norm_template_residuals(self):
         if self._norm_template_residuals is None:
-            thresh, dists = self.resid_matrix(
-                self.unit_labels, normalized=True
-            )
+            thresh, dists = self.resid_matrix(self.unit_labels, normalized=True)
             self._norm_template_residuals = dists
         return self._norm_template_residuals
 
@@ -418,7 +421,7 @@ class Sorting:
             zlim = (self.geom.min() - 50, self.geom.max() + 50)
         pct_shown = 100
         if self.n_spikes > max_n_spikes:
-            sample = np.runit_summary_figandom.default_rng(0).choice(
+            sample = np.random.default_rng(0).choice(
                 self.n_spikes, size=max_n_spikes, replace=False
             )
             sample.sort()
@@ -651,9 +654,7 @@ class Sorting:
         show_scatter = show_scatter and self.spike_xzptp is not None
         height_ratios = [1, 1, 1, 2, 5] if show_scatter else [1, 1, 1, 5]
         fig, axes = plt.subplot_mosaic(
-            "aat\nbbt\ncct\nxyz\nddd"
-            if show_scatter
-            else "aat\nbbt\ncct\nddd",
+            "aat\nbbt\ncct\nxyz\nddd" if show_scatter else "aat\nbbt\ncct\nddd",
             gridspec_kw=dict(
                 height_ratios=height_ratios,
             ),
@@ -724,9 +725,7 @@ class Sorting:
         if in_unit.size > n_wfs_max:
             choices = np.random.choice(in_unit.size, n_wfs_max, replace=False)
             choices.sort()
-        maxchans = self.template_maxchans[
-            self.spike_train[in_unit[choices], 1]
-        ]
+        maxchans = self.template_maxchans[self.spike_train[in_unit[choices], 1]]
 
         # load waveforms: either from h5 (stored_*) or disk
         kept = np.arange(len(in_unit[choices]))
@@ -864,9 +863,9 @@ class Sorting:
         # pca plot
         if kept.size:
             pca_chans = np.flatnonzero(
-                cdist(
-                    self.geom[self.template_maxchans[unit]][None], self.geom
-                )[0]
+                cdist(self.geom[self.template_maxchans[unit]][None], self.geom)[
+                    0
+                ]
                 < 75
             )
             pca_wfs = waveform_utils.restrict_wfs_to_chans(
@@ -1149,8 +1148,7 @@ class HybridComparison:
             ).astype(float)
             # average metrics, weighting each unit by its spike count
             self.weighted_average_performance = (
-                self.performance_by_unit
-                * gt_sorting.unit_spike_counts[:, None]
+                self.performance_by_unit * gt_sorting.unit_spike_counts[:, None]
             ).sum(0) / gt_sorting.unit_spike_counts.sum()
 
         # unsorted performance
@@ -1444,9 +1442,7 @@ def near_gt_scatter_vs(step_comparisons, vs_comparison, gt_unit, dz=100):
         matchstr = "no match"
         if u >= 0:
             matchstr = f"matching unit {u}"
-        axes[i, 1].set_title(
-            f"{comp.new_sorting.name}, {matchstr}", fontsize=8
-        )
+        axes[i, 1].set_title(f"{comp.new_sorting.name}, {matchstr}", fontsize=8)
 
         if i < nrows - 1:
             for ax in axes[i]:
@@ -1616,9 +1612,7 @@ def plot_agreement_matrix(
         fig, axes = plt.subplots(2, 3, figsize=(12, 8))
         oa = hybrid_comparison.ordered_agreement.copy()
         oa.values[oa.values == 0] = np.inf
-        sns.heatmap(
-            oa, vmin=0, vmax=1.0, cmap=plt.cm.gnuplot2_r, ax=axes[0, 0]
-        )
+        sns.heatmap(oa, vmin=0, vmax=1.0, cmap=plt.cm.gnuplot2_r, ax=axes[0, 0])
         axes[0, 0].set_title("spike train agreement")
 
         sns.heatmap(
@@ -1712,9 +1706,7 @@ def gtunit_resid_study(
 
     fig, axes = plt.subplot_mosaic(
         "a.b\n...\nccc",
-        gridspec_kw=dict(
-            height_ratios=[1.5, 0.1, 4], width_ratios=[1, 0.1, 1]
-        ),
+        gridspec_kw=dict(height_ratios=[1.5, 0.1, 4], width_ratios=[1, 0.1, 1]),
         figsize=(4, 8),
     )
 
@@ -1795,3 +1787,56 @@ def gtunit_resid_study(
     axes["c"].set_title("templates of nearby units around GT maxchan")
 
     return fig, axes
+
+
+def calc_template_snrs(
+    templates,
+    spike_train,
+    raw_binary_file,
+    trough_offset=42,
+    spike_length_samples=121,
+    max_spikes_per_unit=10000,
+    seed=0,
+):
+    snrs = []
+    rg = np.random.default_rng(seed)
+    wf_buffer = np.empty(
+        (max_spikes_per_unit, *templates.shape[1:]), dtype=templates.dtype
+    )
+    C = templates.shape[2]
+    T_samples, _ = get_binary_length(raw_binary_file, C, 1)
+
+    for u, t in enumerate(tqdm(templates)):
+        in_unit = np.flatnonzero(spike_train[:, 1] == u)
+        if in_unit.size > max_spikes_per_unit:
+            in_unit = rg.choice(
+                in_unit, replace=False, size=max_spikes_per_unit
+            )
+        random_times = rg.choice(
+            np.arange(trough_offset, T_samples - spike_length_samples),
+            size=max_spikes_per_unit,
+            replace=False,
+        )
+
+        wfs, _ = read_waveforms(
+            spike_train[in_unit, 0],
+            raw_binary_file,
+            C,
+            trough_offset=trough_offset,
+            spike_length_samples=spike_length_samples,
+            buffer=wf_buffer,
+        )
+        numerator = np.abs(np.einsum("ij,nij->n", t, wfs) / C).mean()
+
+        noise, _ = read_waveforms(
+            random_times,
+            raw_binary_file,
+            C,
+            trough_offset=trough_offset,
+            spike_length_samples=spike_length_samples,
+            buffer=wf_buffer,
+        )
+        denominator = np.abs(np.einsum("ij,nij->n", t, noise) / C).mean()
+        snrs.append(numerator / denominator)
+
+    return np.array(snrs)

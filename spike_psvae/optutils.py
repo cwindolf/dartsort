@@ -66,9 +66,9 @@ def batched_newton(
 ):
     x = x.clone()
     n, p = x.shape
-    nfevals = torch.ones(n, dtype=torch.int)
-    nsteps = torch.zeros(n, dtype=torch.int)
-    active = torch.arange(n)
+    nfevals = torch.ones(n, dtype=torch.int, device=x.device)
+    nsteps = torch.zeros(n, dtype=torch.int, device=x.device)
+    active = torch.arange(n, device=x.device)
 
     g, f = vgradfunc(x, *extra_args)
     xa = x
