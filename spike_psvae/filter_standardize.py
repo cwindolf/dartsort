@@ -175,7 +175,7 @@ def filter_standardize_rec_mp(output_directory, filename_raw, dtype_raw,
             sampling_frequency,
             channels_to_remove,
             adcshift_correction,
-            median_subtraction)
+            median_subtraction,
         )
     else:
         mp_object = multi_proc_object(
