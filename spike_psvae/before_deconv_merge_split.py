@@ -1073,6 +1073,7 @@ def split_worker_init(
     waveforms_kind,
     raw_data_bin,
     relocated,
+    loc_feature,
 ):
     """
     Loads hdf5 datasets on each worker process, rather than
@@ -1087,6 +1088,7 @@ def split_worker_init(
         log_c=log_c,
         feature_scales=feature_scales,
         waveforms_kind=waveforms_kind,
+        loc_feature=loc_feature,
     )
     p.relocated = relocated
 
