@@ -1405,9 +1405,10 @@ def full_denoising(
     if do_phaseshift:
         if geom is None:
             raise ValueError('Phase-shift denoising needs geom input!')
+        ci_graph_on_probe, maxCH_neighbor = denoise.make_ci_graph(extract_channel_index, geom)
         waveforms = torch.as_tensor(waveforms, device=device, dtype=torch.float)
-        waveforms = denoise.multichan_phase_shift_denoise(waveforms, geom, extract_channel_index, denoiser, maxchans = maxchans)
-        waveforms = torch.as_tensor(waveforms, device=device, dtype=torch.float)
+        waveforms = denoise.multichan_phase_shift_denoise(waveforms, ci_graph_on_probe, torch.tensor(maxCH_neighbor).type(torch.LongTensor), denoiser, maxchans = maxchans)
+        # waveforms = torch.as_tensor(waveforms, device=device, dtype=torch.float)
         in_probe_channel_index = (
             torch.as_tensor(extract_channel_index, device=device) < num_channels
         )
