@@ -1,4 +1,4 @@
-# spike-psvae
+# dartsort
 
 Install an environment for running this stuff with:
 
@@ -15,5 +15,5 @@ pip install matplotlib_venn
 pip install ibllib
 
 # definitely not optional :)
-pip install -e ~/spike-psvae/
+pip install -e ~/dartsort/
 ```
