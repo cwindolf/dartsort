@@ -1386,7 +1386,7 @@ def full_denoising(
     extract_channel_index,
     radial_parents=None,
     do_enforce_decrease=True,
-    do_phaseshift=True,
+    do_phaseshift=False,
     geom = None,
     probe=None,
     tpca=None,
