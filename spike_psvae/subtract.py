@@ -60,7 +60,7 @@ def subtraction(
     box_norm_p=np.inf,
     dedup_spatial_radius=70,
     enforce_decrease_kind="radial",
-    do_phaseshift = True,
+    do_phaseshift = False,
     # what to save?
     save_residual=False,
     save_subtracted_waveforms=False,
@@ -1073,7 +1073,7 @@ def train_featurizers(
     do_nn_denoise=True,
     residnorm_decrease=False,
     do_enforce_decrease=True,
-    do_phaseshift = True,
+    do_phaseshift = False,
     n_sec_pca=10,
     pca_t_start=0,
     pca_t_end=None,
@@ -1253,7 +1253,7 @@ def detect_and_subtract(
     spike_length_samples=121,
     device="cpu",
     do_enforce_decrease=True,
-    do_phaseshift = True,
+    do_phaseshift = False,
     geom = None,
     residnorm_decrease=False,
 ):
