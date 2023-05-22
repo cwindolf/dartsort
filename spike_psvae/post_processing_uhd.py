@@ -16,7 +16,8 @@ def final_split(spt, z_reg, x):
     while iterate:
         max_values = labels_split.max()+1
         cmp = labels_split.max()+1
-        for unit in np.unique(labels_split):
+        all_units = np.unique(labels_split)
+        for unit in all_units:
             in_unit = np.flatnonzero(labels_split==unit)
 
             rescale_x = z_reg[in_unit].std()/x[in_unit].std()
