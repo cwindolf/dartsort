@@ -46,12 +46,17 @@ class H5Extractor:
         log_c=5,
         feature_scales=(1, 1, 50),
         waveforms_kind="cleaned",
+        loc_feature=None,
     ):
         self.raw_data_bin = raw_data_bin
 
         # get the clustering features in memory
         h5 = h5py.File(h5_path)
-        self.x = x = h5["localizations"][:, 0]
+        if loc_feature is None:
+            str_loc = "localizations"
+        else:
+            str_loc = "localizations{}".format(loc_feature)
+        self.x = x = h5[str_loc][:, 0]
         self.z = z = h5["z_reg"][:]
         self.maxptp = maxptp = h5["maxptps"][:]
         self.spike_times, self.max_channels = h5["spike_index"][:].T
@@ -62,7 +67,7 @@ class H5Extractor:
         self.geom = h5["geom"][:]
 
         # things we will need if doing relocated clustering
-        self.y, self.z_abs, self.alpha = h5["localizations"][:, 1:4].T
+        self.y, self.z_abs, self.alpha = h5[str_loc][:, 1:4].T
         self.log_c = log_c
         self.feature_scales = feature_scales
 
@@ -540,6 +545,7 @@ def split_clusters(
     recursive_steps=(False, True, True),
     split_step_kwargs=None,
     relocated=False,
+    loc_feature=None,
 ):
     contig = labels.max() + 1 == np.unique(labels[labels >= 0]).size
     if not contig:
@@ -577,6 +583,7 @@ def split_clusters(
             waveforms_kind,
             raw_data_bin,
             relocated,
+            loc_feature,
         ),
     ) as pool:
         # we will do each split step one after the other, each
@@ -1066,6 +1073,7 @@ def split_worker_init(
     waveforms_kind,
     raw_data_bin,
     relocated,
+    loc_feature,
 ):
     """
     Loads hdf5 datasets on each worker process, rather than
@@ -1080,6 +1088,7 @@ def split_worker_init(
         log_c=log_c,
         feature_scales=feature_scales,
         waveforms_kind=waveforms_kind,
+        loc_feature=loc_feature,
     )
     p.relocated = relocated
 
