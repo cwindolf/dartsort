@@ -547,13 +547,13 @@ if __name__ == "__main__":
 
         print("Split/Merge...")
 
-    #     labels_split_merge = run_full_merge_split(deconv_h5, spt, spike_index, 
-    #                          channel_index, geom, raw_data_name,
-    #                          z, z_reg, x)
+        labels_split_merge = run_full_merge_split(deconv_h5, spt, spike_index, 
+                             channel_index, geom, raw_data_name,
+                             z, z_reg, x)
 
-    #     np.save(split_merge_dir / "labels_input_split_merged.npy", labels_split_merge)
+        np.save(split_merge_dir / "labels_input_split_merged.npy", labels_split_merge)
 
-        labels_split_merge = np.load(split_merge_dir / "labels_input_split_merged.npy")
+#         labels_split_merge = np.load(split_merge_dir / "labels_input_split_merged.npy")
         spt[:, 1] = labels_split_merge
 
         print("Second Deconv...")
