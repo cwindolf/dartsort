@@ -691,7 +691,7 @@ def _subtraction_batch_init(
     rank = id_queue.get()
 
     torch.set_grad_enabled(False)
-    if device.type == "cuda":
+    if device.type == "cuda" and device.index is None:
         print("num gpus:", torch.cuda.device_count())
         if torch.cuda.device_count() > 1:
             device = torch.device(
@@ -701,7 +701,8 @@ def _subtraction_batch_init(
                 f"Worker {rank} using GPU {rank % torch.cuda.device_count()} "
                 f"out of {torch.cuda.device_count()} available."
             )
-        torch.cuda._lazy_init()
+    elif device.type == "cuda" and device.index is not None and not rank:
+        print(f"All workers will live on {device} since a specific GPU was chosen")
     _subtraction_batch.device = device
 
     time.sleep(rank / 20)
