@@ -55,6 +55,8 @@ def cluster_scatter(
     s=1,
     alpha=0.5,
     do_ellipse=True,
+    fontsize=None,
+    linewidth_ellipse=1.,
 ):
     ax = ax or plt.gca()
     # scatter and collect gaussian info
@@ -69,7 +71,10 @@ def cluster_scatter(
         if k not in excluded_ids:
             if do_ellipse:
                 x_mean, y_mean = xk.mean(), yk.mean()
-                ax.annotate(str(k), (x_mean, y_mean))
+                if fontsize is None:
+                    ax.annotate(str(k), (x_mean, y_mean))
+                else:
+                    ax.annotate(str(k), (x_mean, y_mean), fontsize=fontsize)
                 xycov = np.cov(xk, yk)
                 means[k] = x_mean, y_mean
                 covs[k] = xycov
@@ -78,6 +83,7 @@ def cluster_scatter(
         return
 
     for k in means.keys():
+        
         mean_x, mean_y = means[k]
         cov = covs[k]
 
@@ -94,7 +100,7 @@ def cluster_scatter(
             height=2 * np.sqrt(1 - rho),
             facecolor=(0, 0, 0, 0),
             edgecolor=color,
-            linewidth=1,
+            linewidth=linewidth_ellipse,
         )
         transform = (
             transforms.Affine2D()
