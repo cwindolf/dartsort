@@ -26,6 +26,7 @@ folder = binary.parent
 output_dtype = np.dtype(args.output_dtype).type
 
 standardized_file = folder / f"destriped_{binary.name}"
+standardized_file = standardized_file.with_suffix(".bin")
 if args.output_binary is not None:
     standardized_file = Path(args.output_binary)
     assert standardized_file.parent.exists()
