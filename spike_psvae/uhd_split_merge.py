@@ -129,13 +129,14 @@ def uhd_split(spt, wfs_mc, spread, x, z_reg, min_cluster_size=25, cluster_select
 
     return labels_split
 
-def template_deconv_merge(spt, labels_split, z_abs, z_reg, x, geom, raw_data_bin, threshold_resid=0.25, su_chan_vis=1.5, bin_size_um=3, zero_radius_um=70, n_jobs=-1, sampling_rate=30000, dist_proposed_pairs=None):
+def template_deconv_merge(spt, labels_split, z_abs, z_reg, x, geom, raw_data_bin, threshold_resid=0.25, su_chan_vis=1.5, bin_size_um=None, zero_radius_um=70, n_jobs=-1, sampling_rate=30000, dist_proposed_pairs=None):
 
     labels_merge = labels_split.copy()
     
     pitch = get_pitch(geom)
     if bin_size_um is None:
         bin_size_um = pitch//2
+    print("BIN SIZE : " + str(bin_size_um))
         
     if dist_proposed_pairs is None:
         dist_proposed_pairs=pitch

@@ -58,6 +58,7 @@ def extract_deconv(
     n_jobs=1,
     sampling_rate=30_000,
     n_sec_train_feats=40,
+    n_spikes_max=None,
     device=None,
     trough_offset=42,
     overwrite=True,
@@ -276,7 +277,7 @@ def extract_deconv(
             n_sec_train_feats,
             tpca_weighted=tpca_weighted,
             n_sec_chunk=n_sec_chunk,
-            n_jobs=n_jobs,
+            n_jobs=1, #enforce for fitting featurizers 
             sampling_rate=sampling_rate,
             device=device,
             trough_offset=trough_offset,
@@ -285,6 +286,7 @@ def extract_deconv(
             t_start=t_start,
             t_end=t_end,
             tpca_training_radius=tpca_training_radius,
+            n_spikes_max=n_spikes_max,
         )
 
         if last_batch_end > 0:
@@ -770,6 +772,7 @@ def load_or_fit_featurizers(
     t_end=None,
     tpca_centered=True,
     tpca_training_radius=None,
+    n_spikes_max=None,
 ):
     if not any(f.needs_fit for f in featurizers):
         return
@@ -813,15 +816,19 @@ def load_or_fit_featurizers(
     # to fit the featurizers on
 
     # -- restrict the spike train to some randomly chosen seconds
-    t_min = np.ceil(spike_train_up[:, 0].min() / sampling_rate)
-    t_max = np.floor(spike_train_up[:, 0].max() / sampling_rate)
-    # Select good times here!! 
-    valid_times = np.random.default_rng(seed).choice(
-        np.arange(t_min, t_max),
-        size=min(n_sec_train_feats, int(t_max - t_min)),
-        replace=False,
-    )
-    which_mini = (np.isin(spike_train_up[:, 0] // sampling_rate, valid_times),)
+    if n_spikes_max is None:
+        t_min = np.ceil(spike_train_up[:, 0].min() / sampling_rate)
+        t_max = np.floor(spike_train_up[:, 0].max() / sampling_rate)
+        # Select good times here!! 
+        valid_times = np.random.default_rng(seed).choice(
+            np.arange(t_min, t_max),
+            size=min(n_sec_train_feats, int(t_max - t_min)),
+            replace=False,
+        )
+        which_mini = (np.isin(spike_train_up[:, 0] // sampling_rate, valid_times),)
+    else:
+        which_mini = np.random.choice(len(spike_train_up), min(n_spikes_max, len(spike_train_up)), replace = False)
+        which_mini.sort()
     spike_train_up_mini = spike_train_up[which_mini]
     scalings_mini = scalings[which_mini]
 
