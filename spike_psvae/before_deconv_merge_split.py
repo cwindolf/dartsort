@@ -103,6 +103,7 @@ def herding_split(
     relocated=False,
     extractor=None,
     use_features=True,
+    return_features=False,
 ):
     n_spikes = in_unit.size
 
@@ -133,7 +134,7 @@ def herding_split(
 
     # get pca projections on channel subset
     if relocated:
-        unit_features, relocated_maxptps = get_relocated_wfs_on_channel_subset(
+        unit_waveform_features, relocated_maxptps = get_relocated_wfs_on_channel_subset(
             in_unit,
             extractor.tpca_projs,
             extractor.max_channels,
@@ -149,7 +150,7 @@ def herding_split(
             T=extractor.T,
         )
     else:
-        unit_features = get_pca_projs_on_channel_subset(
+        unit_waveform_features = get_pca_projs_on_channel_subset(
             in_unit,
             extractor.tpca_projs,
             extractor.max_channels,
@@ -160,19 +161,19 @@ def herding_split(
     # some spikes may not exist on all these channels.
     # this should be exceedingly rare but everything that can
     # happen will. for now, let's triage them away
-    too_far = np.isnan(unit_features).any(axis=(1, 2))
+    too_far = np.isnan(unit_waveform_features).any(axis=(1, 2))
     new_labels[too_far] = -1
     kept = np.flatnonzero(new_labels >= 0)
 
     # bail if too small
-    if kept.size < min_size_split:
+    if kept.size < min_size_split and not return_features:
         return False, None, None
 
     # fit a pca projection to what we got
     pca_projs = PCA(n_pca_features, whiten=True).fit_transform(
-        unit_features[kept].reshape(kept.size, -1)
+        unit_waveform_features[kept].reshape(kept.size, -1)
     )
-    del unit_features
+    del unit_waveform_features
 
     # create features for hdbscan, scaling pca projs to match
     # the current feature set
@@ -184,6 +185,10 @@ def herding_split(
         unit_features = np.c_[unit_features, pca_projs]
     else:
         unit_features = pca_projs
+
+    # if user requested the features we can get here while too small
+    if kept.size < min_size_split:
+        return False, None, None, unit_features
 
     # run hdbscan
     if clusterer == "hdbscan":
@@ -232,6 +237,8 @@ def herding_split(
             for labels, _ in map(isosplit1d, map(np.unique, unit_features.T))
         )
         if k <= 1:
+            if unit_features:
+                return False, None, None, unit_features
             return False, None, None
         # fit a GMM
         clust = GaussianMixture(n_components=k)
@@ -241,6 +248,8 @@ def herding_split(
         raise ValueError(f"{clusterer=} not understood.")
 
     is_split = np.setdiff1d(np.unique(new_labels), [-1]).size > 1
+    if return_features:
+        return is_split, new_labels, in_unit, unit_features
     return is_split, new_labels, in_unit
 
 
