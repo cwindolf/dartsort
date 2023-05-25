@@ -88,7 +88,7 @@ def make_ci_graph(channel_index, geom, CH_N=384):
     
     
     ci_graph_all = dict()
-    maxCH_neighbor = np.ones((CH_N, 7))*(L-1) # used a hack here, to make sure the maxchan neighbor wfs is zero if index out of the probe
+    maxCH_neighbor = np.ones((CH_N, 8))*(L-1) # used a hack here, to make sure the maxchan neighbor wfs is zero if index out of the probe
     for i in range(N):
         ci = channel_index[i]
         non_nan_idx = np.where(ci<CH_N)[0]
@@ -105,7 +105,7 @@ def make_ci_graph(channel_index, geom, CH_N=384):
         maxCH_idx = np.where(ci == i)[0]
         # print(maxCH_idx)
         maxCH_n = ci_graph[maxCH_idx[0]]
-        maxCH_neighbor[i, 0:len(maxCH_n)] = maxCH_n
+        maxCH_neighbor[i, 0:(len(maxCH_n)+1)] = np.insert(maxCH_n, 0, maxCH_idx)
         
         ci_graph_all[i] = ci_graph
     
@@ -121,7 +121,7 @@ def ptp(t, axis):
 
 
         
-def multichan_phase_shift_denoise(waveforms, ci_graph_on_probe, maxCH_neighbor, SinglChanDenoiser, maxchans, CH_N=384, offset=42):
+def multichan_phase_shift_denoise(waveforms, ci_graph_on_probe, maxCH_neighbor, Denoiser, maxchans, CH_N=384, offset=42):
     N, T, C = waveforms.shape
     DenoisedWF = torch.zeros(waveforms.shape)
     # if maxchans is None:
@@ -129,9 +129,9 @@ def multichan_phase_shift_denoise(waveforms, ci_graph_on_probe, maxCH_neighbor, 
         
 
     col_idx = maxCH_neighbor[maxchans, :]
-    row_idx = np.repeat(np.arange(N)[None,:], 7,  axis=1)
+    row_idx = np.repeat(np.arange(N)[None,:], 8,  axis=1)
     maxCH_neighbor_wfs = waveforms[np.reshape(row_idx, -1), : , np.reshape(col_idx, -1)]
-    wfs_denoised_mc_neighbors = SinglChanDenoiser(maxCH_neighbor_wfs).reshape([N, 7, T])
+    wfs_denoised_mc_neighbors = Denoiser(maxCH_neighbor_wfs).reshape([N, 8, T])
     # wfs_denoised_mc_neighbors = torch.nan_to_num(wfs_denoised_mc_neighbors, nan=0.0)
     max_neighbor_ptps = ptp(wfs_denoised_mc_neighbors, 2)
     real_maxCH_info = torch.max(max_neighbor_ptps, dim = 1)
@@ -145,6 +145,7 @@ def multichan_phase_shift_denoise(waveforms, ci_graph_on_probe, maxCH_neighbor, 
     # plt.plot(wfs_denoised.T)
     if torch.sum(torch.isnan(wfs_denoised)):
         print('wrong max channel!')
+    
     
     DenoisedWF[range(N), : ,real_maxCH] = wfs_denoised # denoise all maxCH in one batch
     
@@ -168,9 +169,11 @@ def multichan_phase_shift_denoise(waveforms, ci_graph_on_probe, maxCH_neighbor, 
     
     # print(wfs_denoised.shape)
     wfs_ptp[range(N), real_maxCH] = max_neighbor_ptps[range(N), real_maxCH_idx]
-    CH_checked[np.arange(N), real_maxCH] = 1
     
     real_maxCH = real_maxCH.detach().numpy()
+    
+    CH_checked[np.arange(N), real_maxCH] = 1
+    
     Q = dict()
     for i in range(N):
         Q[i] = []
@@ -181,7 +184,7 @@ def multichan_phase_shift_denoise(waveforms, ci_graph_on_probe, maxCH_neighbor, 
 # create neighboring graph that is seperated  by the max channel    
     ci_graph_all = dict()
     for i in range(N):
-        ci_graph =  ci_graph_on_probe[maxchans[i]]
+        ci_graph =  ci_graph_on_probe[maxchans[i]].copy()
         l = len(ci_graph)
         mcs_idx = real_maxCH[i]
         for ch in range(l):
@@ -202,46 +205,79 @@ def multichan_phase_shift_denoise(waveforms, ci_graph_on_probe, maxCH_neighbor, 
             return DenoisedWF
         
         Q_neighbors = dict()
-        
+        last  = np.zeros(N)
         for i in range(N):
             q = Q[i]
-            Q_neighbors[i] = []
             if len(q)>0:
                 ci_graph = ci_graph_all[i]
 
                 u = q.pop()
-                # try:
+                last[i] = u
                 v = ci_graph[u]
-                # except:
-                #     maxCH_neighbor_wfs = torch.reshape(maxCH_neighbor_wfs, [7, N, T])
-                #     plt.plot(maxCH_neighbor_wfs[real_maxCH_idx[i],i,:])
-                #     print(ci_graph)
-                #     print(q)
-                    # print(real_maxCH_idx[i])
-                # print((CH_checked[v] == 0).shape)
-                Q_neighbors[i] = Q_neighbors[i] + list(v[CH_checked[i, v] == 0])
-
-        # nodes_to_check = zip_longest(*Q_neighbors.values())
-        # print(N)
-        # print(list(nodes_to_check))
+                
+                Q_neighbors[i] = list(v[CH_checked[i, v] == 0])
+            else:
+                Q_neighbors[i] = []
+                
+  
         #####
-        for nodes in zip_longest(*Q_neighbors.values()):
+        l = 0
+        for nodes in zip_longest(*(Q_neighbors[i] for i in range(N))):
             # nodes = nodes_to_check[i] #deal with the None values
             keep_N_idx = np.where(np.array(nodes) != None)[0]
             # print(keep_N_idx)
+            # print(len(nodes))
             for j in keep_N_idx:
                 # print(nodes[j])
-                k = nodes[j]
+                k = nodes[j] #ci_graph_all[j][last[j]][l]#
                 Q[j].insert(0, k)
                     
                 neighbors = ci_graph_all[j][k]
                 checked_neighbors = neighbors[CH_checked[j, neighbors] == 1]
                 
                 try:
+
                     phase_shift_ref = torch.argmax(wfs_ptp[j,checked_neighbors])
                 except:
-                    print(neighbors)
-                    print(checked_neighbors)
+                    print(j)
+                    print('nodes:')
+                    print(nodes)
+                    print('Q neighbors:')
+                    print(list(Q_neighbors[i][l] for i in range(N)))
+                    print('nodes(j):')
+                    print(k)
+                    print(real_maxCH[j])
+                    print(np.where(CH_checked[j,:]))
+                    print('node neighbor:')
+                    print(ci_graph_all[j][k])
+                    print('Q neighbors [j]:')
+                    print(Q_neighbors[j][l])
+                    print('ci parent:')
+                    print(last[j])
+                    print('ci parent neighbor:')
+                    print(ci_graph_all[j][last[j]])
+                    print(ci_graph_all[j])
+                    print(maxchans[j])
+
+                #     # print(neighborsneighbors)
+                #     print(len(Q_neighbors))
+                #     print('nodes:')
+                #     print(nodes)
+                #     print('j:')
+                #     print(j)
+                #     print('keep_N_idx:')
+                #     print(keep_N_idx)
+                #     # print()
+                #     # print(np.where(CH_checked[j,:]))
+                #     print('k:')
+                #     print(k)
+                #     print('parent:')
+                #     print(last[j])
+                #     print('parents neighbor:')
+                #     print(ci_graph_all[j][last[j]])
+                #     print(Q_neighbors[j])
+                #     print(' ')
+                    # raise('oops!')
                 ####
                 rest_phase_shift = np.delete(parent_peak_phase[j,:], checked_neighbors[phase_shift_ref])
                 if (wfs_ptp[j, checked_neighbors[phase_shift_ref]] > thresholds[j]) & (torch.min(torch.abs(rest_phase_shift - CH_phase_shift[j, checked_neighbors[phase_shift_ref]]))<=5):
@@ -251,6 +287,7 @@ def multichan_phase_shift_denoise(waveforms, ci_graph_on_probe, maxCH_neighbor, 
 
                 parent[j, k] = checked_neighbors[phase_shift_ref]
                 CH_checked[j, k] = 1
+            l = l+1
                 
 #             print(nodes)
             nodes = np.array(nodes)
@@ -263,7 +300,7 @@ def multichan_phase_shift_denoise(waveforms, ci_graph_on_probe, maxCH_neighbor, 
             
             wfs = waveforms[keep_N_idx, : , CH_idx]
             
-            spk_denoised_wfs, CH_phase_shift[keep_N_idx, CH_idx], halluci_idx[keep_N_idx, CH_idx] = denoise_with_phase_shift(wfs, parent_peak_phase[keep_N_idx, CH_idx], SinglChanDenoiser, spk_signs[keep_N_idx])
+            spk_denoised_wfs, CH_phase_shift[keep_N_idx, CH_idx], halluci_idx[keep_N_idx, CH_idx] = denoise_with_phase_shift(wfs, parent_peak_phase[keep_N_idx, CH_idx], Denoiser, spk_signs[keep_N_idx])
                     
             
             DenoisedWF[np.array(keep_N_idx), : , CH_idx] = spk_denoised_wfs

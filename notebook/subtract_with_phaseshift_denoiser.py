@@ -48,16 +48,17 @@ sub_h5 = subtract.subtraction(
                         save_denoised_waveforms=True,
                         do_phaseshift = True,
                         n_jobs=14,
-                        loc_workers=1,
+                        loc_workers=4,
                         overwrite=False,
+                        device = "cuda",
                         # n_sec_chunk=args.batchlen,
                         save_cleaned_pca_projs_on_n_channels=None,
-                        loc_feature=("ptp", "peak"),
-                        out_filename="test_parallelized_subtraction.h5", 
+                        loc_feature= ("ptp", "peak"),
+                        out_filename="test_n_14_parallelized_subtraction_again.h5", 
                         enforce_decrease_kind="none"
                     )
 
-# %%
+# %% jupyter={"outputs_hidden": true}
 import numpy as np
 N = 100
 row_idx = np.repeat(np.arange(N)[None,:], 7,  axis=1)
@@ -65,7 +66,10 @@ np.reshape(row_idx, -1)
 
 # %%
 import h5py
-h5_dir = cbin_dir + '/phase-shift_subtraction.h5'
+import numpy as np
+import matplotlib.pyplot as plt
+import matplotlib as mpl
+h5_dir = cbin_dir + '/test_n_14_parallelized_subtraction.h5'
 with h5py.File(h5_dir) as h5:
     x_ps = h5['localizations'][:, 0]
     z_ps = h5['localizations'][:, 2]
@@ -111,7 +115,7 @@ axs[2].set_ylim([0,3900])
 axs[2].set_title('no decrease')
 
 
-h5_dir = cbin_dir + '/phase-shift_subtraction.h5'
+h5_dir = cbin_dir + '/test_n_14_parallelized_subtraction.h5'
 with h5py.File(h5_dir) as h5:
     x_ps = h5['localizationspeak'][:, 0]
     z_ps = h5['localizationspeak'][:, 2]
@@ -156,7 +160,7 @@ axs[5].set_xlim([-50,90])
 axs[5].set_ylim([0,3900])
 axs[5].set_title('no decrease peak')
 
-plt.savefig(cbin_dir + '/localization_compare.png', dpi = 300)
+# plt.savefig(cbin_dir + '/localization_compare.png', dpi = 300)
 
 # %%
 import h5py
