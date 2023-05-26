@@ -1,15 +1,12 @@
-# %%
 import numpy as np
-from tqdm.auto import tqdm, trange
+from tqdm.auto import tqdm
 from joblib import Parallel, delayed
 from scipy.cluster.hierarchy import complete, fcluster
 
-# %%
 from .deconvolve import MatchPursuitObjectiveUpsample
-from .snr_templates import get_single_templates, get_templates
+from .snr_templates import get_templates
 
 
-# %%
 def resid_dist(
     target_template,
     search_templates,
@@ -21,6 +18,7 @@ def resid_dist(
     multi_processing=False,
     lambd=0.001,
     allowed_scale=0.1,
+    distance_kind="rms",
 ):
     T, C = target_template.shape
     if search_templates.ndim == 2:
@@ -73,10 +71,18 @@ def resid_dist(
         )
 
     match_ix = int(deconv_st[0, 1] / max_upsample)
-    dist = np.abs(target_recording).max()
+    if distance_kind == "rms":
+        dist = np.sqrt(
+            np.square(target_recording).sum() / (np.abs(target_recording) > 0).sum()
+        )
+    elif distance_kind == "max":
+        dist = np.abs(target_recording).max()
+    else:
+        assert False
     shift = deconv_st[0, 0] - T
 
     return match_ix, dist, shift
+
 
 def resid_dist_multiple(
     target_templates,
@@ -88,7 +94,8 @@ def resid_dist_multiple(
     multi_processing=False,
     lambd=0.001,
     allowed_scale=0.1,
-#     deconv_threshold=100,
+    deconv_threshold=None,
+    distance_kind="rms",
 ):
     N, T, C = target_templates.shape
     if search_templates.ndim == 2:
@@ -97,9 +104,11 @@ def resid_dist_multiple(
     assert T == T_ and C == C_ and N == N_
 
     # pad target so that the deconv can find arbitrary offset
-    target_recording = np.pad(target_templates.reshape((N*T, C)), [(T, T), (0, 0)])
-    
-    deconv_threshold = 0.5*(target_templates**2).sum((1, 2)).min()
+    target_recording = np.pad(
+        target_templates.reshape((N * T, C)), [(T, T), (0, 0)]
+    )
+    if deconv_threshold is None:
+        deconv_threshold = 0.5 * (target_templates**2).sum((1, 2)).min()
 
     mp_object = MatchPursuitObjectiveUpsample(
         templates=search_templates,
@@ -142,270 +151,19 @@ def resid_dist_multiple(
             deconv_scalings[i] * templates_up[labels_up[i]]
         )
 
-#     dist = np.abs(target_recording).max()
-#     dist = np.abs(target_recording).max()
-    dist = np.sqrt(np.square(target_recording).sum()/(target_recording != 0).sum())
-    shift = np.median(deconv_st[:, 0] - T*np.arange(1, len(deconv_st)+1))
-
-    return dist, shift
-
-
-# %%
-def find_original_merges(
-    templates_cleaned,
-    dist_argsort,
-    deconv_threshold,
-    max_upsample=8,
-    n_pairs_proposed=10,
-    sampling_rate=30000,
-    conv_approx_rank=5,
-    lambd=0.001,
-    allowed_scale=0.01,
-    n_proposals=20,
-    n_jobs=-1,
-):
-    N, T, C = templates_cleaned.shape
-
-    max_values = []
-    units = []
-    units_matched = []
-    shifts = []
-
-    def job(i):
-        templates_cleaned_closest = templates_cleaned[
-            dist_argsort[i][:n_pairs_proposed]
-        ]
-        match_ix, dist, shift = resid_dist(
-            templates_cleaned[i],
-            templates_cleaned_closest,
-            deconv_threshold,
-            max_upsample=max_upsample,
-            sampling_rate=sampling_rate,
-            conv_approx_rank=conv_approx_rank,
-            n_processors=1,
-            multi_processing=False,
-            lambd=lambd,
-            allowed_scale=allowed_scale,
+    if distance_kind == "rms":
+        dist = np.sqrt(
+            np.square(target_recording).sum() / (target_recording != 0).sum()
         )
-        return i, match_ix, dist, shift
-
-    with Parallel(n_jobs) as p:
-        for i, match_ix, dist, shift in p(
-            delayed(job)(i)
-            for i in trange(templates_cleaned.shape[0], desc="Original merges")
-        ):
-            max_values.append(dist)
-            units.append(i)
-            units_matched.append(dist_argsort[i][match_ix])
-            shifts.append(shift)
-
-    return (
-        np.array(max_values),
-        np.array(units),
-        np.array(units_matched),
-        np.array(shifts),
-    )
-
-
-# %%
-def check_additional_merge(
-    temp_to_input,
-    temp_to_deconv,
-    deconv_threshold,
-    max_upsample=8,
-    n_pairs_proposed=10,
-    sampling_rate=30000,
-    conv_approx_rank=5,
-    lambd=0.001,
-    allowed_scale=0.1,
-):
-    match_ix, dist, shift = resid_dist(
-        temp_to_deconv,
-        temp_to_input,
-        deconv_threshold,
-        max_upsample=max_upsample,
-        sampling_rate=sampling_rate,
-        conv_approx_rank=conv_approx_rank,
-        lambd=lambd,
-        allowed_scale=allowed_scale,
-    )
+    elif distance_kind == "max":
+        np.abs(target_recording).max()
+    else:
+        assert False
+    shift = np.median(deconv_st[:, 0] - T * np.arange(1, len(deconv_st) + 1))
 
     return dist, shift
 
 
-# %%
-def merge_units_temp_deconv(
-    units,
-    units_matched,
-    max_values,
-    shifts,
-    templates_cleaned,
-    labels,
-    spike_times,
-    deconv_threshold,
-    geom,
-    raw_bin,
-    tpca,
-    merge_resid_threshold=1.5,
-):
-    templates_updated = templates_cleaned.copy()
-    labels_updated = labels.copy()
-    spike_times = spike_times.copy()
-
-    units_already_merged = []
-    unit_reference = np.arange(templates_cleaned.shape[0])
-
-    units = units[max_values <= merge_resid_threshold]
-    units_matched = units_matched[max_values <= merge_resid_threshold]
-    shifts = shifts[max_values <= merge_resid_threshold]
-    max_values = max_values[max_values <= merge_resid_threshold]
-
-    idx = max_values.argsort()
-
-    units = units[idx]
-    units_matched = units_matched[idx]
-    max_values = max_values[idx]
-    shifts = shifts[idx]
-
-    for j, unit, matched in tqdm(
-        zip(range(len(units)), units, units_matched),
-        desc="Deconv merge",
-        total=len(units),
-    ):
-        if ~np.isin(unit, units_already_merged) and ~np.isin(
-            matched, units_already_merged
-        ):
-            # MERGE unit, units_matched[j]
-            units_already_merged.append(unit)
-            units_already_merged.append(matched)
-            unit_reference[matched] = unit
-            labels_updated[labels_updated == matched] = unit
-
-            # Update spike times
-            spike_times[labels == matched] -= shifts[j]
-            # Update template
-            spike_times_test = spike_times[np.isin(labels, [matched, unit])]
-            temp_merge = get_single_templates(
-                spike_times_test, geom, raw_bin, tpca
-            )
-            templates_updated[matched] = temp_merge
-            templates_updated[unit] = temp_merge
-
-        elif np.isin(unit, units_already_merged) and ~np.isin(
-            matched, units_already_merged
-        ):
-            # check MERGE matched to unit
-            unit_ref = unit_reference[unit]
-            temp_to_input = templates_cleaned[matched]
-            temp_to_deconv = templates_updated[unit_ref]
-            maxresid, shift = check_additional_merge(
-                temp_to_input, temp_to_deconv, deconv_threshold
-            )
-
-            if maxresid < merge_resid_threshold:
-                units_already_merged.append(matched)
-                unit_reference[matched] = unit_ref
-
-                # Update spike times
-                spike_times[labels_updated == matched] -= shift
-                spike_times_test = spike_times[
-                    np.isin(labels, [matched, unit, unit_ref])
-                ]
-                temp_merge = get_single_templates(
-                    spike_times_test, geom, raw_bin, tpca
-                )
-                templates_updated[matched] = temp_merge
-                templates_updated[unit] = temp_merge
-                templates_updated[unit_ref] = temp_merge
-                labels_updated[labels_updated == matched] = unit_ref
-
-        elif ~np.isin(unit, units_already_merged) and np.isin(
-            matched, units_already_merged
-        ):
-            # check MERGE unit to matched
-            unit_ref = unit_reference[matched]
-            temp_to_input = templates_cleaned[unit_ref]
-            temp_to_deconv = templates_updated[unit]
-
-            maxresid, shift = check_additional_merge(
-                temp_to_input, temp_to_deconv, deconv_threshold
-            )
-
-            if maxresid < merge_resid_threshold:
-                units_already_merged.append(unit)
-                unit_reference[unit] = unit_ref
-
-                # Update spike times
-                # spike_times[labels_updated == unit] += shifts[j]
-                spike_times[labels_updated == unit] += shift
-                spike_times_test = spike_times[
-                    np.isin(labels, [matched, unit, unit_ref])
-                ]
-                temp_merge = get_single_templates(
-                    spike_times_test, geom, raw_bin, tpca
-                )
-                templates_updated[matched] = temp_merge
-                templates_updated[unit] = temp_merge
-                templates_updated[unit_ref] = temp_merge
-                labels_updated[labels_updated == unit] = unit_ref
-
-        else:
-            # check MERGE unit_reference[matched] to unit_reference[unit]
-            temp_to_input = templates_cleaned[unit_reference[matched]]
-            temp_to_deconv = templates_updated[unit_reference[unit]]
-
-            maxresid, shift = check_additional_merge(
-                temp_to_input, temp_to_deconv, deconv_threshold
-            )
-
-            if maxresid < merge_resid_threshold:
-                unit_reference[matched] = unit_reference[unit]
-                unit_reference[unit_reference[matched]] = unit_reference[unit]
-
-                # Update spike times
-                spike_times[labels_updated == unit_reference[matched]] -= shift
-                # ] -= shifts[j]
-                spike_times_test = spike_times[
-                    np.isin(
-                        labels,
-                        [
-                            matched,
-                            unit,
-                            unit_reference[unit],
-                            unit_reference[matched],
-                        ],
-                    ),
-                ]
-                temp_merge = get_single_templates(
-                    spike_times_test, geom, raw_bin, tpca
-                )
-                templates_updated[matched] = temp_merge
-                templates_updated[unit] = temp_merge
-                templates_updated[unit_reference[unit]] = temp_merge
-                templates_updated[unit_reference[matched]] = temp_merge
-                labels_updated[labels_updated == matched] = unit_reference[
-                    unit
-                ]
-                labels_updated[
-                    labels_updated == unit_reference[matched]
-                ] = unit_reference[unit]
-
-    return templates_updated, spike_times, labels_updated, unit_reference
-
-
-# %%
-def resid_dist__(temp_a, temp_b, thresh, lambd=0.001, allowed_scale=0.1):
-    maxres_a, shift_a = check_additional_merge(
-        temp_a, temp_b, thresh, lambd=lambd, allowed_scale=allowed_scale
-    )
-    # maxres_b, shift_b = deconv_resid_merge.check_additional_merge(
-    #     temp_b, temp_a, thresh, lambd=lambd, allowed_scale=allowed_scale
-    # )
-    # shift from a -> b
-    return maxres_a, shift_a
-
-
-# %%
 def calc_resid_matrix(
     templates_a,
     units_a,
@@ -417,9 +175,13 @@ def calc_resid_matrix(
     vis_ptp_thresh=1,
     auto=False,
     pbar=True,
+    max_upsample=8,
     lambd=0.001,
     allowed_scale=0.1,
     normalized=False,
+    sampling_rate=30000,
+    conv_approx_rank=5,
+    distance_kind="rms",
 ):
     if auto and thresh is None:
         thresh = thresh_mul * np.min(np.square(templates_a).sum(axis=(1, 2)))
@@ -436,13 +198,17 @@ def calc_resid_matrix(
         return (
             i,
             j,
-            *resid_dist__(
+            *resid_dist(
                 templates_a[i],
                 templates_b[j],
                 thresh,
+                max_upsample=max_upsample,
+                sampling_rate=sampling_rate,
+                conv_approx_rank=conv_approx_rank,
                 lambd=lambd,
                 allowed_scale=allowed_scale,
-            ),
+                distance_kind=distance_kind,
+            )
         )
 
     jobs = []
@@ -459,7 +225,7 @@ def calc_resid_matrix(
 
     if pbar:
         jobs = tqdm(jobs, desc="Resid matrix")
-    for i, j, dist, shift in Parallel(n_jobs)(jobs):
+    for i, j, match_ix, dist, shift in Parallel(n_jobs)(jobs):
         resid_matrix[i, j] = dist
         shift_matrix[i, j] = shift
 
@@ -481,7 +247,12 @@ def calc_resid_matrix(
         )
 
         # normalize by a factor to make things dimensionless
-        normresids = resid_matrix / np.sqrt(rms_a[:, None] * rms_b[None, :])
+        if distance_kind == "max":
+            normresids = resid_matrix / np.sqrt(rms_a[:, None] * rms_b[None, :])
+        elif distance_kind == "rms":
+            normresids = resid_matrix / rms_a[:, None]
+        else:
+            assert False
         del resid_matrix
 
         # symmetrize resids and get corresponding best shifts
@@ -496,7 +267,6 @@ def calc_resid_matrix(
     return resid_matrix, shift_matrix
 
 
-# %%
 def run_deconv_merge(
     spike_train,
     geom,
