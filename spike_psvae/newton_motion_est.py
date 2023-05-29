@@ -308,21 +308,37 @@ def get_weights(
 def threshold_correlation_matrix(
     Cs,
     mincorr=0.0,
+    mincorr_percentile=None,
+    mincorr_percentile_nneighbs=20,
     max_dt_s=0,
     in_place=False,
     bin_s=1,
     T=None,
+    soft=True,
 ):
-    if np.size(mincorr) > 1:
-        assert mincorr.size == Cs.shape[1]
-        mincorr = np.minimum(mincorr[:, None], mincorr[None, :])[None]
+    if mincorr_percentile is not None:
+        diags = [
+            np.diagonal(Cs, offset=j, axis1=1, axis2=2).ravel()
+            for j in range(1, mincorr_percentile_nneighbs)
+        ]
+        mincorr = np.percentile(
+            np.concatenate(diags),
+            mincorr_percentile,
+        )
+
     # need abs to avoid -0.0s which cause numerical issues
     if in_place:
         Ss = Cs
-        Ss[Ss < mincorr] = 0
+        if soft:
+            Ss[Ss < mincorr] = 0
+        else:
+            Ss = (Ss >= mincorr).astype(Cs.dtype)
         np.square(Ss, out=Ss)
     else:
-        Ss = np.square((Cs >= mincorr) * Cs)
+        if soft:
+            Ss = np.square((Cs >= mincorr) * Cs)
+        else:
+            Ss = (Cs >= mincorr).astype(Cs.dtype)
     if max_dt_s is not None and max_dt_s > 0 and T is not None and max_dt_s < T:
         mask = la.toeplitz(
             np.r_[
@@ -331,7 +347,7 @@ def threshold_correlation_matrix(
             ]
         )
         Ss *= mask[None]
-    return Ss
+    return Ss, mincorr
 
 
 def weight_correlation_matrix(
@@ -343,7 +359,6 @@ def weight_correlation_matrix(
     windows,
     mincorr=0.0,
     mincorr_percentile=None,
-    adaptive_mincorr_percentile=None,
     mincorr_percentile_nneighbs=20,
     max_dt_s=None,
     lambda_t=1,
@@ -372,42 +387,17 @@ def weight_correlation_matrix(
     assert (T + 1,) == time_bin_edges_s.shape
     extra = {}
 
-    if mincorr_percentile is not None:
-        diags = [
-            np.diagonal(Cs, offset=j, axis1=1, axis2=2).ravel()
-            for j in range(1, mincorr_percentile_nneighbs)
-        ]
-        mincorr = np.percentile(
-            np.concatenate(diags),
-            mincorr_percentile,
-        )
-        print(f"Adaptive {mincorr_percentile=} gave {mincorr=}.")
-
-    if adaptive_mincorr_percentile is not None:
-        mincorr = np.empty(T)
-        for j in range(T):
-            my_corrs = []
-            if j > 0:
-                my_corrs.extend(
-                    [
-                        Cs[:, j, j - mincorr_percentile_nneighbs : j - 1].ravel(),
-                        Cs[:, j - mincorr_percentile_nneighbs : j - 1, j].ravel(),
-                    ]
-                )
-            if j < T:
-                my_corrs.extend(
-                    [
-                        Cs[:, j, j + 1 : j + mincorr_percentile_nneighbs].ravel(),
-                        Cs[:, j + 1 : j + mincorr_percentile_nneighbs, j].ravel(),
-                    ]
-                )
-            mincorr[j] = np.percentile(np.concatenate(my_corrs), adaptive_mincorr_percentile)
-    extra["mincorr"] = mincorr
-
-    Ss = threshold_correlation_matrix(
-        Cs, mincorr=mincorr, max_dt_s=max_dt_s, bin_s=bin_s, T=T
+    Ss, mincorr = threshold_correlation_matrix(
+        Cs,
+        mincorr=mincorr,
+        mincorr_percentile=mincorr_percentile,
+        mincorr_percentile_nneighbs=mincorr_percentile_nneighbs,
+        max_dt_s=max_dt_s,
+        bin_s=bin_s,
+        T=T,
     )
     extra["S"] = Ss
+    extra["mincorr"] = mincorr
 
     if not do_window_weights:
         return Ss, extra
@@ -642,6 +632,8 @@ default_weights_kw_lfp = dict(
     mincorr=0.8,
     max_dt_s=None,
     do_window_weights=False,
+    mincorr_percentile_nneighbs=20,
+    soft=False,
 )
 
 
@@ -658,6 +650,7 @@ def register_online_lfp(
     xcorr_kw=default_xcorr_kw,
     weights_kw=default_weights_kw_lfp,
     upsample_to_histogram_bin=False,
+    save_full=False,
     device=None,
     pbar=True,
 ):
@@ -672,9 +665,9 @@ def register_online_lfp(
 
     # kwarg defaults and handling
     # need lfp-specific defaults
-    weights_kw = weights_kw | default_weights_kw_lfp
-    xcorr_kw = xcorr_kw | default_xcorr_kw
-    thomas_kw = thomas_kw | default_thomas_kw
+    weights_kw = default_weights_kw_lfp | weights_kw
+    xcorr_kw = default_xcorr_kw | xcorr_kw
+    thomas_kw = default_thomas_kw | thomas_kw
     full_xcorr_kw = dict(
         rigid=rigid,
         bin_um=np.median(np.diff(geom[:, 1])),
@@ -683,12 +676,17 @@ def register_online_lfp(
         xcorr_kw=xcorr_kw,
         device=device,
     )
+    mincorr_percentile = None
+    mincorr = weights_kw["mincorr"]
     threshold_kw = dict(
-        mincorr=weights_kw["mincorr"],
+        mincorr_percentile_nneighbs=weights_kw["mincorr_percentile_nneighbs"],
         max_dt_s=weights_kw["max_dt_s"],
         bin_s=1 / fs,
         in_place=True,
+        soft=weights_kw["soft"],
     )
+    if "mincorr_percentile" in weights_kw:
+        mincorr_percentile = weights_kw["mincorr_percentile"]
 
     # get windows
     windows, window_centers = get_windows(
@@ -713,7 +711,17 @@ def register_online_lfp(
         traces0.T, windows, geom[:, 1], win_scale_um, **full_xcorr_kw
     )
     full_xcorr_kw["max_disp_um"] = max_disp_um
-    Ss0 = threshold_correlation_matrix(Cs0, **threshold_kw)
+    Ss0, mincorr0 = threshold_correlation_matrix(
+        Cs0, mincorr_percentile=mincorr_percentile, mincorr=mincorr, **threshold_kw
+    )
+    if save_full:
+        extra["D"] = [Ds0]
+        extra["C"] = [Cs0]
+        extra["S"] = [Ss0]
+        extra["D01"] = []
+        extra["C01"] = []
+        extra["S01"] = []
+    extra["mincorrs"] = [mincorr0]
     extra["max_disp_um"] = max_disp_um
     P_online[:, t0:t1], _ = thomas_solve(Ds0, Ss0, **thomas_kw)
 
@@ -735,7 +743,6 @@ def register_online_lfp(
             raster_b=traces0.T,
             **full_xcorr_kw,
         )
-        Ss10 = threshold_correlation_matrix(Cs10, **threshold_kw)
         # Ds01, Cs01, _ = xcorr_windows(
         #     traces0.T,
         #     windows,
@@ -750,7 +757,19 @@ def register_online_lfp(
         Ds1, Cs1, _ = xcorr_windows(
             traces1.T, windows, geom[:, 1], win_scale_um, **full_xcorr_kw
         )
-        Ss1 = threshold_correlation_matrix(Cs1, **threshold_kw)
+        Ss1, mincorr1 = threshold_correlation_matrix(
+            Cs1, mincorr_percentile=mincorr_percentile, mincorr=mincorr, **threshold_kw
+        )
+        Ss10, _ = threshold_correlation_matrix(Cs10, mincorr=mincorr1, **threshold_kw)
+        extra["mincorrs"].append(mincorr1)
+
+        if save_full:
+            extra["D"].append(Ds1)
+            extra["C"].append(Cs1)
+            extra["S"].append(Ss1)
+            extra["D01"].append(Ds10)
+            extra["C01"].append(Cs10)
+            extra["S01"].append(Ss10)
 
         # solve online problem
         P_online[:, t1:t2], _ = thomas_solve(
@@ -759,7 +778,7 @@ def register_online_lfp(
             P_prev=P_online[:, t0:t1],
             Ds_curprev=Ds10,
             Us_curprev=Ss10,
-            Ds_prevcur=Ds10.transpose(0, 2, 1),
+            Ds_prevcur=-Ds10.transpose(0, 2, 1),
             Us_prevcur=Ss10.transpose(0, 2, 1),
             # Ds_prevcur=Ds01,
             # Us_prevcur=Ss01,

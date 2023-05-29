@@ -222,6 +222,26 @@ def get_motion_estimate(
     )
 
 
+def speed_limit_filter(me, speed_limit_um_per_s=5000.0):
+    displacement = np.atleast_2d(me.displacement)
+    speed = np.abs(np.gradient(displacement, me.time_bin_centers_s, axis=1))
+    valid = speed <= speed_limit_um_per_s
+    valid[[0, -1]] = True
+    print(f"{valid.mean()=}")
+    if valid.all():
+        return me
+    valid_lerp = [interp1d(me.time_bin_centers_s[v], d[v]) for v, d in zip(valid, displacement)]
+    filtered_displacement = [vl(me.time_bin_centers_s) for vl in valid_lerp]
+
+    return get_motion_estimate(
+        filtered_displacement,
+        time_bin_edges_s=me.time_bin_edges_s,
+        time_bin_centers_s=me.time_bin_centers_s,
+        spatial_bin_edges_um=me.spatial_bin_edges_um,
+        spatial_bin_centers_um=me.spatial_bin_centers_um,
+    )
+
+
 def show_raster(raster, spatial_bin_edges_um, time_bin_edges_s, ax, **imshow_kwargs):
     ax.imshow(
         raster,
