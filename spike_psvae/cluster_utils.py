@@ -497,6 +497,7 @@ def cluster_spikes(
     spike_index,
     min_cluster_size=25,
     min_samples=25,
+    cluster_selection_epsilon=15, 
     scales=(1, 1, 50),
     frames_dedup=12,
     triage_quantile=80,
@@ -570,7 +571,9 @@ def cluster_spikes(
     # create feature set for clustering
     features = np.c_[x * scales[0], z * scales[1], np.log(log_c + maxptps) * scales[2]]
     clusterer = hdbscan.HDBSCAN(
+        # min_cluster_size=min_cluster_size,
         min_cluster_size=min_cluster_size,
+        # cluster_selection_epsilon=cluster_selection_epsilon,
         min_samples=min_samples,
         core_dist_n_jobs=-1,
     )

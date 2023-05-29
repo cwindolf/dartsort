@@ -446,26 +446,27 @@ def shift_superres_templates(
 
             n_temp = (superres_label_to_orig_label==unit).sum()
             if bins_shift_rem<0:
-                if bins_shift_rem<-pitch/2 or n_temp>pitch/2:
-                    idx_mod_shift = np.flatnonzero(np.isin(superres_label_to_bin_id[superres_label_to_orig_label==unit], superres_label_to_bin_id[superres_label_to_orig_label==unit].min()-np.arange(-bins_shift_rem)+bins_per_pitch-1))
-                    n_temp_shift = len(idx_mod_shift)
-                    if n_temp_shift:
-                        shifted_templates_unit[-n_temp_shift:] = pitch_shift_templates(
-                            -1, geom, shifted_templates_unit[idx_mod_shift], fill_value=fill_value
-                        ) 
+                # if bins_shift_rem<-pitch/2 or n_temp>pitch/2:
+                idx_mod_shift = np.flatnonzero(np.isin(superres_label_to_bin_id[superres_label_to_orig_label==unit], superres_label_to_bin_id[superres_label_to_orig_label==unit].min()-np.arange(-bins_shift_rem)+bins_per_pitch-1))
+                n_temp_shift = len(idx_mod_shift)
+                if n_temp_shift:
+                    shifted_templates_unit[-n_temp_shift:] = pitch_shift_templates(
+                        -1, geom, shifted_templates_unit[idx_mod_shift], fill_value=fill_value
+                    ) 
 
                         # The rest of the shift is handled by updating bin ids
                         # This part doesn't matter for the recovered spike train, since
                         # the template doesn't change, but it could matter for z tracking
-                        superres_label_to_bin_id[superres_label_to_orig_label==unit] = np.roll(superres_label_to_bin_id[superres_label_to_orig_label==unit], -len(idx_mod_shift))
+                    # shifted_templates_unit = np.roll(shifted_templates_unit, -n_temp_shift, axis = 0)
+                    superres_label_to_bin_id[superres_label_to_orig_label==unit] = np.roll(superres_label_to_bin_id[superres_label_to_orig_label==unit], -len(idx_mod_shift))
             elif bins_shift_rem>0:
-                if bins_shift_rem>pitch/2 or n_temp>pitch/2:
-                    idx_mod_shift = np.flatnonzero(np.isin(superres_label_to_bin_id[superres_label_to_orig_label==unit], superres_label_to_bin_id[superres_label_to_orig_label==unit].max()+np.arange(bins_shift_rem)-bins_per_pitch+1))
-                    n_temp_shift = len(idx_mod_shift)
-                    if n_temp_shift:
-                        shifted_templates_unit[:n_temp_shift] = pitch_shift_templates(
-                            1, geom, shifted_templates_unit[idx_mod_shift], fill_value=fill_value
-                        ) #shift by 1 pitch as we taked templates that are at max()+shift-pitch
+                # if bins_shift_rem>pitch/2 or n_temp>pitch/2: #change!!!
+                idx_mod_shift = np.flatnonzero(np.isin(superres_label_to_bin_id[superres_label_to_orig_label==unit], superres_label_to_bin_id[superres_label_to_orig_label==unit].max()+np.arange(bins_shift_rem)-bins_per_pitch+1))
+                n_temp_shift = len(idx_mod_shift)
+                if n_temp_shift:
+                    shifted_templates_unit[:n_temp_shift] = pitch_shift_templates(
+                        1, geom, shifted_templates_unit[idx_mod_shift], fill_value=fill_value
+                    ) #shift by 1 pitch as we taked templates that are at max()+shift-pitch
                         # update bottom templates - we remove <= "space" at the bottom than we add on top
 
                         # The rest of the shift is handled by updating bin ids
@@ -473,7 +474,9 @@ def shift_superres_templates(
                         # the template doesn't change, but it could matter for z tracking
 
                         # !!! That's an approximation - maybe we'll need to change if we do z tracking, shoul;d be fine for now - is ok if we have bins that are "continuous" per unit
-                        superres_label_to_bin_id[superres_label_to_orig_label==unit] = np.roll(superres_label_to_bin_id[superres_label_to_orig_label==unit], n_temp_shift)
+                    # print(shifted_templates_unit.shape)
+                    # shifted_templates_unit = np.roll(shifted_templates_unit, -n_temp_shift, axis = 0)
+                    superres_label_to_bin_id[superres_label_to_orig_label==unit] = np.roll(superres_label_to_bin_id[superres_label_to_orig_label==unit], n_temp_shift)
             shifted_templates[superres_label_to_orig_label==unit]=shifted_templates_unit
 
     return shifted_templates #, superres_label_to_bin_id
@@ -504,6 +507,7 @@ def shift_deconv(
     su_chan_vis=1.5, #Important param to validate
     su_temp_on=None,
     save_temps=False, #if false, less memory is taken
+    rerun_deconv=True, #if false, doesn't rerun deconv but recompute obj + temps etc...
 ):
     #multiprocessing needs to be fixed 
     n_processors = n_jobs
@@ -565,48 +569,53 @@ def shift_deconv(
     for shiftix, (shift, temps) in enumerate(
         zip(unique_shifts, tqdm(shifted_templates, desc="Shifts"))
     ):
-        mp_object = deconvolve.MatchPursuitObjectiveUpsample(
-            templates=temps,
-            deconv_dir=deconv_dir,
-            standardized_bin=raw_bin,
-            t_start=t_start,
-            t_end=t_end,
-            n_sec_chunk=1,
-            sampling_rate=pfs,
-            max_iter=1000,
-            threshold=deconv_threshold,
-            vis_su=su_chan_vis,
-            conv_approx_rank=5,
-            n_processors=n_processors,
-            multi_processing=n_jobs > 1,
-            upsample=max_upsample,
-            lambd=0,
-            allowed_scale=0,
-            template_index_to_unit_id=superres_label_to_orig_label,
-            refractory_period_frames=refractory_period_frames,
-        )
+        
         my_batches = np.flatnonzero(bin_shifts == shift)
         for bid in my_batches:
             batch2shiftix[bid] = shiftix
         my_fnames = [
             deconv_dir / f"seg_{bid:06d}_deconv.npz" for bid in my_batches
         ]
-        if n_jobs <= 1:
-            mp_object.run(my_batches, my_fnames)
-        else:
-            with ctx.Pool(
-                n_jobs,
-                initializer=mp_object.load_saved_state,
-            ) as pool:
-                for res in tqdm(
-                    pool.imap_unordered(
-                        mp_object._run_batch,
-                        zip(my_batches, my_fnames),
-                    ),
-                    total=len(my_batches),
-                    desc="Template matching",
-                ):
-                    pass
+                        
+        if rerun_deconv:
+            
+            mp_object = deconvolve.MatchPursuitObjectiveUpsample(
+                templates=temps,
+                deconv_dir=deconv_dir,
+                standardized_bin=raw_bin,
+                t_start=t_start,
+                t_end=t_end,
+                n_sec_chunk=1,
+                sampling_rate=pfs,
+                max_iter=1000,
+                threshold=deconv_threshold,
+                vis_su=su_chan_vis,
+                conv_approx_rank=5,
+                n_processors=n_processors,
+                multi_processing=n_jobs > 1,
+                upsample=max_upsample,
+                lambd=0,
+                allowed_scale=0,
+                template_index_to_unit_id=superres_label_to_orig_label,
+                refractory_period_frames=refractory_period_frames,
+            )
+            
+            if n_jobs <= 1:
+                mp_object.run(my_batches, my_fnames)
+            else:
+                with ctx.Pool(
+                    n_jobs,
+                    initializer=mp_object.load_saved_state,
+                ) as pool:
+                    for res in tqdm(
+                        pool.imap_unordered(
+                            mp_object._run_batch,
+                            zip(my_batches, my_fnames),
+                        ),
+                        total=len(my_batches),
+                        desc="Template matching",
+                    ):
+                        pass
 
         if save_temps:
         # for each shift, get shifted templates
@@ -656,8 +665,17 @@ def shift_deconv(
     deconv_scalings = []
     deconv_dist_metrics = []
     print("gathering deconvolution results")
+    if rerun_deconv:
+        n_batches = mp_object.n_batches
+    else:
+        # Make sure t_end is not None
+        # change n_sec_chunk n_sec_chunk=1 here
+        n_batches = np.ceil(
+                        (t_end * pfs - t_start * pfs) / (1 * pfs)
+                    ).astype(int)
+    
     if save_temps:
-        for bid in range(mp_object.n_batches):
+        for bid in range(n_batches):
             which_shiftix = batch2shiftix[bid]
 
             fname_out = deconv_dir / f"seg_{bid:06d}_deconv.npz"
@@ -700,7 +718,7 @@ def shift_deconv(
                         f"{bin_shifts[np.unique((st_up[:, 0] - trough_offset) // pfs - t_start)]=}"
                     )
     else:
-        for bid in range(mp_object.n_batches):
+        for bid in range(n_batches):
             which_shiftix = batch2shiftix[bid]
 
             fname_out = deconv_dir / f"seg_{bid:06d}_deconv.npz"
@@ -797,6 +815,7 @@ def superres_deconv_chunk(
     adaptive_th_for_temp_computation=False,
     outliers_tracking=None,
     save_temps=False,
+    rerun_deconv=True,
 ):
 
     Path(deconv_dir).mkdir(exist_ok=True)
@@ -874,6 +893,7 @@ def superres_deconv_chunk(
         su_chan_vis=su_chan_vis,
         su_temp_on=su_temp_on,
         save_temps=save_temps, #if false, less memory is taken
+        rerun_deconv=rerun_deconv,
     )
 
     # unpack results
@@ -965,6 +985,7 @@ def extract_superres_shifted_deconv(
     bins_sizes_um=None,
     registered_medians=None,
     medians_at_computation=None,
+    n_spikes_max=None,
 ):
     """
     This is a wrapper that helps us deal with the bookkeeping for proposed
@@ -1033,6 +1054,7 @@ def extract_superres_shifted_deconv(
         nn_denoise=nn_denoise,
         seed=0,
         tpca_training_radius=tpca_training_radius,
+        n_spikes_max=n_spikes_max,
     )
 #     else:
 
@@ -1182,6 +1204,7 @@ def full_deconv_with_update(
     loc_radius=100,
     loc_feature="peak",
     n_sec_train_feats=10,
+    n_spikes_max=10000,
     n_sec_chunk=1,
     overwrite=True,
     p_bar=True,
@@ -1194,7 +1217,10 @@ def full_deconv_with_update(
     save_denoised_tpca_projs=True,
     tpca_training_radius=40,
     save_temps=False,
+    rerun_deconv=True,
 ):
+    if not rerun_deconv:
+        print("NO OVERWRITE!!")
 
     Path(extract_dir).mkdir(exist_ok=True)
 
@@ -1264,6 +1290,7 @@ def full_deconv_with_update(
         adaptive_th_for_temp_computation=adaptive_th_for_temp_computation,
         outliers_tracking=outliers_tracking,
         save_temps=save_temps,
+        rerun_deconv=rerun_deconv,
     )
     print("EXTRACT DECONV....")
     extract_deconv_chunk = extract_superres_shifted_deconv(
@@ -1274,6 +1301,7 @@ def full_deconv_with_update(
         output_directory=extract_dir,
         extract_radius_um=extract_radius_um,
         n_sec_train_feats=n_sec_train_feats, #HAVE TPCA READY BEFORE / subtraction h5
+        n_spikes_max=n_spikes_max,
         localize=True,
         loc_radius=loc_radius,
         # usual suspects
