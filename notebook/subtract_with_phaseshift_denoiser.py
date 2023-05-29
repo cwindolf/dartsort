@@ -35,6 +35,14 @@ rec.set_probe(rec_cbin.get_probe(), in_place=True)
 fs = rec.get_sampling_frequency()
 
 # %%
+# ..import torch
+# col_idx = maxCH_neighbor[maxchans, :]
+row_idx = torch.arange(10)[None,:].repeat(8, 1)
+
+# %%
+torch.reshape(row_idx.T,(-1,))
+
+# %%
 sub_h5 = subtract.subtraction(
                         rec,
                         out_folder=cbin_dir,
@@ -57,6 +65,8 @@ sub_h5 = subtract.subtraction(
                         out_filename="test_n_14_parallelized_subtraction_again.h5", 
                         enforce_decrease_kind="none"
                     )
+
+# %%
 
 # %% jupyter={"outputs_hidden": true}
 import numpy as np
