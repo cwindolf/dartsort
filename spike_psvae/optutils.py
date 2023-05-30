@@ -139,6 +139,93 @@ def batched_newton(
     return x, nfevals, nsteps
 
 
+def batched_levenberg_marquardt(
+    x,
+    vgradfunc,
+    vhess,
+    extra_args=(),
+    lambd=100.,
+    tikhonov=0.0,
+    nu=10.0,
+    max_steps=100,
+    scale_problem="hessian",
+    min_scale=1e-2,
+    convergence_g=1e-7,
+    convergence_err=1e-7,
+):
+    x = x.clone()
+    n, p = x.shape
+    nsteps = torch.zeros(n, dtype=torch.int, device=x.device)
+    active = torch.arange(n, device=x.device)
+
+    g, f = vgradfunc(x, *extra_args)
+    xa = x
+    eargsa = extra_args
+    lambd = torch.full_like(f, lambd)
+    min_scale = torch.tensor(min_scale, dtype=x.dtype, device=x.device)
+
+    for it in range(max_steps):
+        # get hessians for all active problems
+        H = vhess(xa, *eargsa)
+
+        if scale_problem == "hessian":
+            diag = H.diagonal(dim1=1, dim2=2).abs()
+            H.diagonal(dim1=1, dim2=2).add_(lambd[:, None] * torch.maximum(diag, min_scale))
+        elif scale_problem == "none":
+            H.diagonal(dim1=1, dim2=2).add_(lambd[:, None])
+        else:
+            assert False
+        if tikhonov > 0:
+            H.diagonal(dim1=1, dim2=2).add_(tikhonov)
+
+        # find the search direction `d`
+        # use cholesky to find which Hessians are pd
+        # cholesky_solve to get search directions for those,
+        # and use gradient elsewhere
+        L, info = torch.linalg.cholesky_ex(H)
+        d = -g
+        ill = info != 0
+        nice = info == 0
+        if nice.any():
+            d[nice] = torch.cholesky_solve(d[nice][..., None], L[nice])[..., 0]
+        if ill.any():
+            d[ill] /= lambd[ill, None]
+
+        # check success, step, update lambd
+        gnew, fnew = vgradfunc(xa + d, *eargsa)
+        df = fnew - f
+        shrink = df <= 0
+        ill = ill | ~shrink
+
+        # accept shrink steps
+        if shrink.any():
+            x[active[shrink]] += d[shrink]
+            f[shrink] = fnew[shrink]
+            g[shrink] = gnew[shrink]
+
+        # check stopping conditions
+        converged_g = g.square().sum(dim=1) < convergence_g
+        converged_f = df.abs() < convergence_err
+        converged = shrink & converged_f & converged_g
+
+        # change lambd based on ill
+        lambd = torch.where(ill, lambd * nu, lambd / nu)
+
+        # update active set
+        remain = ~converged
+        active = active[remain]
+        if not active.numel():
+            break
+        xa = x[active]
+        eargsa = tuple(ea[remain] for ea in eargsa)
+        lambd = lambd[remain]
+        f = f[remain]
+        g = g[remain]
+        nsteps[active] += 1
+
+    return x, nsteps
+
+
 # -- batched versions of torch lbfgs' line search routine
 
 
