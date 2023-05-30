@@ -1,7 +1,6 @@
 import numpy as np
 import torch
 from sklearn.decomposition import PCA, TruncatedSVD
-
 from spike_psvae import localize_index, localize_torch, waveform_utils
 
 
@@ -376,7 +375,7 @@ class Localization(ChunkFeature):
             raise NameError("Use ptp or peak value for localization.")
 
         if torch.is_tensor(ptps):
-            x, y, z_rel, z_abs, alpha = localize_torch.localize_ptps_index(
+            x, y, z_rel, z_abs, alpha = localize_torch.localize_ptps_index_lm(
                 ptps,
                 self.geom,
                 max_channels,
