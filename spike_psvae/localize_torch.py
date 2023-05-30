@@ -1,20 +1,17 @@
-"""Localization with channel subsetting based on channel index
-"""
 import torch
 import torch.nn.functional as F
-from torch.optim import LBFGS, Adam
-from .optutils import batched_newton
+
+from .optutils import batched_levenberg_marquardt, batched_newton
+from .waveform_utils import binary_subset_to_relative, channel_index_subset
 
 have_vmap = False
 try:
     from torch import vmap
-    from torch.func import grad, hessian, grad_and_value
+    from torch.func import hessian, grad_and_value
 
     have_vmap = True
 except ImportError:
     pass
-
-from .waveform_utils import channel_index_subset, binary_subset_to_relative
 
 
 def bptp_at(x, y, z, alpha, local_geoms):
@@ -70,7 +67,7 @@ def mse(loc, nptp, nan_mask, local_geom, logbarrier=True):
     return ret
 
 
-def localize_ptps_index(
+def localize_ptps_index_newton(
     ptps,
     geom,
     maxchans,
@@ -153,7 +150,11 @@ def localize_ptps_index(
     zcom = zcom.cpu()
     ptps = ptps.cpu()
     geom = geom.cpu()
-    nptps, nan_mask, local_geoms = nptps.cpu(), nan_mask.cpu(), local_geoms.cpu()
+    nptps, nan_mask, local_geoms = (
+        nptps.cpu(),
+        nan_mask.cpu(),
+        local_geoms.cpu(),
+    )
     locs = torch.column_stack((xcom, torch.full_like(xcom, y0), zcom))
     locs, nevals, i = batched_newton(
         locs,
@@ -168,6 +169,110 @@ def localize_ptps_index(
         max_ls=max_ls,
         wolfe_c1=wolfe_c1,
         wolfe_c2=wolfe_c2,
+    )
+
+    # finish: get alpha closed form
+    x, y0, z_rel = locs.T
+    y = F.softplus(y0)
+    alpha = bfind_alpha(ptps, nan_mask, x, y, z_rel, local_geoms)
+    z_abs = z_rel + geom[maxchans, 1]
+
+    return x, y, z_rel, z_abs, alpha
+
+
+def localize_ptps_index_lm(
+    ptps,
+    geom,
+    maxchans,
+    channel_index,
+    n_channels=None,
+    radius=None,
+    logbarrier=True,
+    model="pointsource",
+    dtype=torch.double,
+    y0=1.0,
+    max_steps=100,
+    convergence_err=1e-7,
+    convergence_g=1e-7,
+    scale_problem="hessian",
+):
+    """Localize a bunch of PTPs with torch
+
+    Returns
+    -------
+    xs, ys, z_rels, z_abss, alphas
+    """
+    N, C = ptps.shape
+
+    # handle channel subsetting
+    nc = len(channel_index)
+    subset = channel_index_subset(
+        geom, channel_index, n_channels=n_channels, radius=radius
+    )
+    subset = binary_subset_to_relative(subset)
+    channel_index_pad = F.pad(
+        torch.as_tensor(channel_index), (0, 1, 0, 0), value=nc
+    )
+    channel_index = channel_index_pad[torch.arange(nc)[:, None], subset]
+    # pad with 0s rather than nans, we will mask below.
+    ptps = F.pad(ptps, (0, 1, 0, 0))[
+        torch.arange(N)[:, None], subset[maxchans]
+    ]
+
+    # torch everyone
+    device = ptps.device
+    ptps = torch.as_tensor(ptps, dtype=dtype, device=device)
+    geom = torch.as_tensor(geom, dtype=dtype, device=device)
+    channel_index = torch.as_tensor(channel_index, device=device)
+
+    # nan to num to avoid some masking
+    ptps = torch.nan_to_num(ptps)
+
+    # figure out which chans are outside the probe
+    in_probe_channel_index = (channel_index < nc).to(dtype)
+    nan_mask = in_probe_channel_index[maxchans]
+
+    # local geometries in each ptp
+    geom_pad = F.pad(geom, (0, 0, 0, 1))
+    local_geoms = geom_pad[channel_index[maxchans]]
+    local_geoms[:, :, 1] -= geom[maxchans, 1][:, None]
+
+    # center of mass initialization
+    com = (ptps[:, :, None] * local_geoms).sum(1) / ptps.sum(1)[:, None]
+    xcom, zcom = com.T
+
+    if model == "com":
+        z_abs_com = zcom + geom[maxchans, 1]
+        nancom = torch.full_like(xcom, torch.nan)
+        return xcom, nancom, zcom, z_abs_com, nancom
+    else:
+        assert model == "pointsource"
+
+    # normalized PTP vectors
+    maxptps, _ = torch.max(ptps, dim=1)
+    nptps = ptps / maxptps[:, None]
+
+    # -- torch optimize
+    # initialize with center of mass
+    xcom = xcom.cpu()
+    zcom = zcom.cpu()
+    ptps = ptps.cpu()
+    geom = geom.cpu()
+    nptps, nan_mask, local_geoms = (
+        nptps.cpu(),
+        nan_mask.cpu(),
+        local_geoms.cpu(),
+    )
+    locs = torch.column_stack((xcom, torch.full_like(xcom, y0), zcom))
+    locs, i = batched_levenberg_marquardt(
+        locs,
+        vgrad_and_func,
+        vhess,
+        extra_args=(nptps, nan_mask, local_geoms),
+        max_steps=max_steps,
+        convergence_err=convergence_err,
+        convergence_g=convergence_g,
+        scale_problem=scale_problem,
     )
 
     # finish: get alpha closed form
