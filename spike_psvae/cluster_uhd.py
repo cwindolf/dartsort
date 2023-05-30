@@ -208,7 +208,6 @@ def ensemble_hdbscan_clustering(t_start, t_end, K_LEN, displacement_rigid, spt_a
                 if counts_[np.flatnonzero(units_==unit_to_relabel)][0]==1:
                     idx_to_relabel = np.flatnonzero(spt_1[:, 1]==unit_to_relabel)
                     spt_1[idx_to_relabel, 1] = np.unique(spt_2[:, 1])[1:][dist_forward == unit_to_relabel]
-
             #Backwards pass
             vec_new_units = np.unique(spt_1[:, 1])
             units_not_matched = vec_new_units[np.logical_and(vec_new_units>-1, vec_new_units<unit_label_shift)]
@@ -318,7 +317,7 @@ def run_full_clustering(t_start, t_end, cluster_output_directory, raw_data_bin, 
                         localizations, maxptps, displacement_rigid, len_chunks=300, threshold_ptp=3,
                         fs=30000, triage_quantile_cluster=100, frame_dedup_cluster=20, log_c=5, scales=(1, 1, 50), 
                         time_temp_comp_merge=0, deconv_resid_th=0.25,
-                        savefigs=True):
+                        savefigs=True, zlim=None,bin_size_um_merge=None):
 
     Path(cluster_output_directory).mkdir(exist_ok=True)
     
@@ -346,7 +345,7 @@ def run_full_clustering(t_start, t_end, cluster_output_directory, raw_data_bin, 
         std_z[k] = z_reg[idx_k].std()
         std_x[k] = x[idx_k].std()
     
-    spt[:, 1] = template_deconv_merge(spt, spt[:, 1], z_abs, z_reg, x, geom, raw_data_bin)
+    spt[:, 1] = template_deconv_merge(spt, spt[:, 1], z_abs, z_reg, x, geom, raw_data_bin, bin_size_um=bin_size_um_merge)
 
     print("Relabel by Depth")
     spt = relabel_by_depth(spt, z_abs)
@@ -366,9 +365,11 @@ def run_full_clustering(t_start, t_end, cluster_output_directory, raw_data_bin, 
     if savefigs:
         print("Save Figure")
         figname = Path(cluster_output_directory) / "final_clustering_scatter_plot.png"
+        if zlim is None:
+            zlim = (-50, 350)
         fig, axes = cluster_viz.array_scatter(
           spt[:, 1], geom, x, z_abs - displacement_rigid[spt[:, 0]//30000], max_ptps,
-          zlim=(-50, 350), do_ellipse=True
+          zlim=zlim, do_ellipse=True
         )
         plt.savefig(figname)
         plt.close()
