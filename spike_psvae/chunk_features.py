@@ -431,6 +431,7 @@ class TPCA(ChunkFeature):
         self.C = channel_index.shape[1]
         self.out_shape = (self.rank, self.C)
         self.centered = centered
+        self.random_state = random_state
         self.tpca = PCA(self.rank, random_state=random_state, copy=False)
 
     @classmethod
@@ -474,7 +475,7 @@ class TPCA(ChunkFeature):
         if self.centered:
             self.tpca.fit(wfs)
         else:
-            tsvd = TruncatedSVD(self.rank).fit(wfs)
+            tsvd = TruncatedSVD(self.rank, random_state=self.random_state).fit(wfs)
             self.tpca.mean_ = np.zeros_like(wfs[0])
             self.tpca.components_ = tsvd.components_
 
@@ -513,11 +514,11 @@ class TPCA(ChunkFeature):
             group.create_dataset("tpca_whiten", data=self.whiten)
             group.create_dataset("tpca_whitener", data=self.whitener)
 
-    def from_h5(self, h5):
+    def from_h5(self, h5, random_state=0):
         try:
             group = h5[f"{self.which_waveforms}_tpca"]
             self.T = group["T"][()]
-            self.tpca = PCA(self.rank)
+            self.tpca = PCA(self.rank, random_state=random_state)
             self.tpca.mean_ = group["tpca_mean"][:]
             self.tpca.components_ = group["tpca_components"][:]
             self.n_components = self.tpca.n_components
