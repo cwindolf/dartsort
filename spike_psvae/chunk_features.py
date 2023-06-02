@@ -354,7 +354,7 @@ class Localization(ChunkFeature):
                     ptps = ptps.cpu().numpy()
             else:
                 ptps = wfs.ptp(1)
-        elif self.feature == "peak":
+        elif "peak" in self.feature:
             if torch.is_tensor(wfs):
                 abswfs = torch.abs(wfs)
                 peaks, argpeaks = abswfs.max(dim=1)
