@@ -81,6 +81,7 @@ def subtraction(
     localize_firstchan_n_channels=20,
     loc_workers=4,
     loc_feature="ptp",
+    loc_ptp_precision_decimals=None,
     # want to compute any other features of the waveforms?
     extra_features="default",
     # misc kwargs
@@ -298,6 +299,7 @@ def subtraction(
                     localization_kind=localization_kind,
                     localization_model=localization_model,
                     feature=lf,
+                    ptp_precision_decimals=loc_ptp_precision_decimals,
                 )
             ]
     else:
