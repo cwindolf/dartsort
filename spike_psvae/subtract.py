@@ -274,6 +274,15 @@ def subtraction(
     else:
         print("Skipping enforce decrease.")
         do_enforce_decrease = False
+    
+    maxCH_neighbor = None
+    ci_graph_all_maxCH_uniq = None    
+    if do_phaseshift == True:
+        ci_graph_on_probe, maxCH_neighbor = denoise.make_ci_graph(extract_channel_index, geom, device)
+        ci_graph_all_maxCH_uniq = denoise.make_ci_graph_all_maxCH(ci_graph_on_probe, maxCH_neighbor, device)
+    else:
+        print("No phase-shift.")
+        do_phaseshift = False
 
     # check localization arg
     if localization_model not in ("pointsource", "CoM", "dipole"):
@@ -379,6 +388,8 @@ def subtraction(
                 residnorm_decrease=residnorm_decrease,
                 do_enforce_decrease=do_enforce_decrease,
                 do_phaseshift = do_phaseshift,
+                ci_graph_all_maxCH_uniq = ci_graph_all_maxCH_uniq,
+                maxCH_neighbor = maxCH_neighbor,
                 denoiser_init_kwargs=denoiser_init_kwargs,
                 denoiser_weights_path=denoiser_weights_path,
                 n_sec_pca=n_sec_pca,
@@ -419,6 +430,8 @@ def subtraction(
                 residnorm_decrease=residnorm_decrease,
                 do_enforce_decrease=do_enforce_decrease,
                 do_phaseshift = do_phaseshift,
+                ci_graph_all_maxCH_uniq = ci_graph_all_maxCH_uniq,
+                maxCH_neighbor = maxCH_neighbor,
                 denoiser_init_kwargs=denoiser_init_kwargs,
                 denoiser_weights_path=denoiser_weights_path,
                 n_sec_pca=n_sec_pca,
@@ -530,6 +543,8 @@ def subtraction(
                     geom,
                     do_enforce_decrease,
                     do_phaseshift,
+                    ci_graph_all_maxCH_uniq,
+                    maxCH_neighbor,
                     peak_sign,
                     dtype,
                 )
@@ -780,6 +795,8 @@ def subtraction_batch(
     geom,
     do_enforce_decrease,
     do_phaseshift,
+    ci_graph_all_maxCH_uniq,
+    maxCH_neighbor,
     peak_sign,
     dtype,
     extra_features,
@@ -904,6 +921,8 @@ def subtraction_batch(
             device=device,
             do_enforce_decrease=do_enforce_decrease,
             do_phaseshift=do_phaseshift,
+            ci_graph_all_maxCH_uniq = ci_graph_all_maxCH_uniq,
+            maxCH_neighbor = maxCH_neighbor,
             geom = geom,
             residnorm_decrease=residnorm_decrease,
         )
@@ -1012,6 +1031,8 @@ def subtraction_batch(
             radial_parents,
             do_enforce_decrease=do_enforce_decrease,
             do_phaseshift = do_phaseshift,
+            ci_graph_all_maxCH_uniq = ci_graph_all_maxCH_uniq,
+            maxCH_neighbor = maxCH_neighbor,
             geom = geom,
             # tpca=subtracted_tpca,
             tpca=denoised_tpca,
@@ -1075,6 +1096,8 @@ def train_featurizers(
     residnorm_decrease=False,
     do_enforce_decrease=True,
     do_phaseshift = False,
+    ci_graph_all_maxCH_uniq = None,
+    maxCH_neighbor = None,
     n_sec_pca=10,
     pca_t_start=0,
     pca_t_end=None,
@@ -1213,7 +1236,9 @@ def train_featurizers(
             extract_channel_index,
             radial_parents,
             do_enforce_decrease=do_enforce_decrease,
-            do_phaseshift = False,#do_phaseshift,
+            do_phaseshift = do_phaseshift,
+            ci_graph_all_maxCH_uniq = ci_graph_all_maxCH_uniq,
+            maxCH_neighbor = maxCH_neighbor,
             geom = geom,
             tpca=None,
             device=device,
@@ -1255,6 +1280,8 @@ def detect_and_subtract(
     device="cpu",
     do_enforce_decrease=True,
     do_phaseshift = False,
+    ci_graph_all_maxCH_uniq = None,
+    maxCH_neighbor = None,
     geom = None,
     residnorm_decrease=False,
 ):
@@ -1325,6 +1352,8 @@ def detect_and_subtract(
         spike_index[:, 1],
         extract_channel_index,
         radial_parents,
+        ci_graph_all_maxCH_uniq,
+        maxCH_neighbor,
         do_enforce_decrease=do_enforce_decrease,
         do_phaseshift=do_phaseshift,
         geom = geom,
@@ -1386,6 +1415,8 @@ def full_denoising(
     maxchans,
     extract_channel_index,
     radial_parents=None,
+    ci_graph_all_maxCH_uniq=None,
+    maxCH_neighbor = None,
     do_enforce_decrease=True,
     do_phaseshift=False,
     geom = None,
@@ -1402,13 +1433,16 @@ def full_denoising(
     N, T, C = waveforms.shape
     assert not align  # still working on that
 
-    
+    torch.cuda.empty_cache()
     if do_phaseshift:
         if geom is None:
             raise ValueError('Phase-shift denoising needs geom input!')
-        ci_graph_on_probe, maxCH_neighbor = denoise.make_ci_graph(extract_channel_index, geom, device = device)
+        if ci_graph_all_maxCH_uniq is None:
+            raise ValueError('Needs channel graph for neighbor searching!')
+        # ci_graph_on_probe, maxCH_neighbor = denoise.make_ci_graph(extract_channel_index, geom, device = device)
         waveforms = torch.as_tensor(waveforms, device=device, dtype=torch.float)
-        waveforms = denoise.multichan_phase_shift_denoise(waveforms, ci_graph_on_probe, maxCH_neighbor.long(), denoiser, maxchans = maxchans)
+        maxchans = torch.tensor(maxchans, device=device)
+        waveforms = denoise.multichan_phase_shift_denoise_preshift(waveforms, ci_graph_all_maxCH_uniq, maxCH_neighbor, denoiser, maxchans, device)
         # waveforms = torch.as_tensor(waveforms, device=device, dtype=torch.float)
         in_probe_channel_index = (
             torch.as_tensor(extract_channel_index, device=device) < num_channels
