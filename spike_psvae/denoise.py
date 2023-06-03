@@ -190,7 +190,7 @@ def multichan_phase_shift_denoise_preshift(waveforms, ci_graph_all_maxCH_uniq, m
     
     phase_shift_array = torch.tensor([0, 15, 12, 9, 6, 3, -3, -6, -9, -12, -15], device = device)
     S = phase_shift_array.shape[0]
-    # pick_idx = torch.full((N, C), S, dtype=torch.long)
+
     pick_idx = torch.zeros((N, C, phase_shift_array.shape[0]), device = device)
     pick_idx = F.pad(pick_idx, (0, 1), 'constant', S) # one-hot array to pick the correct phase-shift, default: pick all 0 waveforms 
 
@@ -210,7 +210,7 @@ def multichan_phase_shift_denoise_preshift(waveforms, ci_graph_all_maxCH_uniq, m
                                     torch.roll(waveforms, 12, 1), 
                                     torch.roll(waveforms, 15, 1)),
                                     2)
-    # print(waveforms_roll_all.shape)
+
 
     waveforms_roll_all = waveforms_roll_all.permute(0, 2, 1)
     
@@ -221,13 +221,13 @@ def multichan_phase_shift_denoise_preshift(waveforms, ci_graph_all_maxCH_uniq, m
                                    
     for i in range(S):
         waveforms_roll_denoise[:,:,:,i] = torch.roll(waveforms_roll_denoise[:,:,:,i], int(phase_shift_array[i]), 1)
-    # return waveforms_roll_denoise, waveforms_roll_all
+
     waveforms_roll_denoise = F.pad(waveforms_roll_denoise, (0, 1), 'constant', 0) # NxTxCx12
     waveforms_ptp_denoise = ptp(waveforms_roll_denoise, 1) # NxCx12
     
     col_idx = maxCH_neighbor[maxchans,:] #shape: N x 8
     row_idx = torch.arange(N, device = device)[:, None].repeat(1, 8).reshape(-1)
-    # print(row_idx)
+
     maxCH_denoised_ptp = waveforms_ptp_denoise[row_idx, torch.flatten(col_idx), 0].reshape(N, 8)
     real_maxCH_info = torch.max(maxCH_denoised_ptp, dim = 1)
     
@@ -243,9 +243,7 @@ def multichan_phase_shift_denoise_preshift(waveforms, ci_graph_all_maxCH_uniq, m
     
     phase_shift = F.pad(phase_shift, (0, 1), 'constant', 0) # pad for the additional values
     halluci_idx = F.pad(halluci_idx, (0, 1), 'constant', 0)  
-    # print(phase_shift)
-    # print(halluci_idx)
-    # halluci_idx[:, :, 0] = 0
+    
     # ci_graph_idx = ci_graph_all_maxCH_uniq[maxchans, :, :, real_maxCH_idx] # picks the right ci_graph to use, size: N x C x L
     
        
@@ -253,7 +251,7 @@ def multichan_phase_shift_denoise_preshift(waveforms, ci_graph_all_maxCH_uniq, m
     pick_idx[range(N), real_maxCH, 0] = 1
     pick_idx[range(N), real_maxCH, S] = 0
                                    
-    # peak_shift[range(N), real_maxCH] = mcs_phase_shift
+    
     thresholds = torch.max(0.3*real_maxCH_info[0], torch.tensor(3))
     
     CH_checked[range(N), real_maxCH] = 1
@@ -265,48 +263,38 @@ def multichan_phase_shift_denoise_preshift(waveforms, ci_graph_all_maxCH_uniq, m
                                
     while True:
         if all(len(v)==0 for v in Q):
-            return torch.einsum("itjk,ijk->itj", waveforms_roll_denoise, pick_idx)[:, :, range(40)]#, waveforms_roll_denoise, pick_idx, phase_shift#torch.matmul(waveforms_roll_denoise, pick_idx)                          
+            return torch.einsum("itjk,ijk->itj", waveforms_roll_denoise, pick_idx)[:, :, range(40)], waveforms_roll_denoise[:,:,range(40),0]               
         u = Q.pop()
-        # print(u)
-        # CH_checked[u[:,0], u[:,1]] = 1
+
         
         Q_neighbors = ci_graph_all_maxCH_uniq[maxchans[u[:,0]], u[:,1], :, real_maxCH_idx[u[:,0]]] # picks the right ci_graph to use, size: N x C x L ci_graph_idx[u[:,0], u[:,1], :] #size: ? x L
-        # print(Q_neighbors)
                         
         
         b = Q_neighbors.shape[1]
 
         unfold_idx = u[:,0][:, None].repeat(1, b).reshape(-1)
-        # print(unfold_idx)                           
+                     
         Q_neighbors = Q_neighbors.reshape(-1)  # ?*L
-        # print(Q_neighbors)
+
         neighbor_check = CH_checked[unfold_idx, Q_neighbors]
         
         unchecked = (neighbor_check == 0)
         unchecked_idx = torch.squeeze(torch.nonzero(unchecked), 1)
                                    
-        # print(unchecked_idx.shape)
         unfold_idx_unchecked = unfold_idx[unchecked_idx]
         Q_neighbors_unchecked = Q_neighbors[unchecked_idx]        # unfold the indeces to be a long array               
         
-        # if unfold_idx_unchecked.nelement() == 0:
-        #     # print(unfold_idx_unchecked)
-        #     continue
             
         CH_checked[unfold_idx_unchecked, Q_neighbors_unchecked] = 1
                                    
         Q_neighbors_neighbors = ci_graph_all_maxCH_uniq[maxchans[unfold_idx_unchecked], Q_neighbors_unchecked, :, real_maxCH_idx[unfold_idx_unchecked]] #ci_graph_idx[unfold_idx_unchecked, Q_neighbors_unchecked, :]
-        # print(unfold_idx_unchecked.shape)
+
         unfold_neighbor_idx = unfold_idx_unchecked[:, None].repeat(1, b).reshape(-1)
 
-            
-
-        
         #√√√√√√√
-        # print(torch.matmul(waveforms_ptp_denoise, pick_idx.permute(0, 2, 1)).shape)
-                                              # NxCxS * NxCxS
+        
         ptp_neighbors_neighbors = torch.einsum("ijk,ijk->ij", waveforms_ptp_denoise, pick_idx)[unfold_neighbor_idx, Q_neighbors_neighbors.reshape(-1)]
-        # ptp_neighbors_neighbors = torch.matmul(waveforms_ptp_denoise.reshape(-1,S), pick_idx.reshape(-1,S))[unfold_neighbor_idx, torch.reshape(Q_neighbors_neighbors, -1), :]
+
         ptp_neighbors_neighbors = torch.reshape(ptp_neighbors_neighbors, (-1, b)) #size: ?*L x L
         
         max_ptp_info  = torch.max(ptp_neighbors_neighbors, 1) #size: ?*L
@@ -315,38 +303,30 @@ def multichan_phase_shift_denoise_preshift(waveforms, ci_graph_all_maxCH_uniq, m
         max_ptp_idx = max_ptp_info[1]                   
         threshold_accept_idx = (neighbor_max_ptps > thresholds[unfold_idx_unchecked])
         
-        # print(threshold_accept_idx)
-        # print(pick_idx.shape)
+
         phase_shift_all = torch.einsum("ijk,ijk->ij", phase_shift.float(), pick_idx) # N x C
         
-        # print(phase_shift_all.shape)
-        # print(Q_neighbors_neighbors.shape)
-        # print(Q_neighbors_neighbors[range(len(max_ptp_idx)),max_ptp_idx].shape)
-        # print(unfold_idx_unchecked.shape)
         neighbor_phaseshift = phase_shift_all[unfold_idx_unchecked, Q_neighbors_neighbors[range(len(max_ptp_idx)),max_ptp_idx]]
         
         
-        # print(phase_shift_all.shape)
         phase_accept_idx = (torch.min(torch.abs(phase_shift_all[unfold_idx_unchecked,:] - neighbor_phaseshift[:, None]), 1)[0]<=5)
      
         pick_phaseshift_info = torch.min(torch.abs(neighbor_phaseshift[:, None] - phase_shift_array[None,:]), 1)
         pick_phaseshift_idx = pick_phaseshift_info[1]
-        
-        # print(pick_phaseshift_idx)
-        accept_idx = torch.squeeze(torch.nonzero(phase_accept_idx & threshold_accept_idx))
-        unaccept_idx = torch.squeeze(torch.nonzero((phase_accept_idx & threshold_accept_idx) == 0))
+
+        accept_idx = torch.squeeze(torch.nonzero(phase_accept_idx & threshold_accept_idx), 1)
+        unaccept_idx = torch.squeeze(torch.nonzero((phase_accept_idx & threshold_accept_idx) == 0), 1)
         pick_idx[unfold_idx_unchecked, Q_neighbors_unchecked, S] = 0
         pick_idx[unfold_idx_unchecked[accept_idx], Q_neighbors_unchecked[accept_idx], pick_phaseshift_idx[accept_idx]] = 1
         pick_idx[unfold_idx_unchecked[unaccept_idx], Q_neighbors_unchecked[unaccept_idx], 0] = 1
         
-        # print(unfold_neighbor_idx.shape)
-        # print(Q_neighbors_neighbors.shape)
+
         halluci_idx_neighbors = torch.einsum("ijk,ijk->ij", halluci_idx.float(), pick_idx)[unfold_idx, Q_neighbors].reshape(-1, b)
         halluci_keep_spike_idx = (torch.sum(halluci_idx_neighbors, 1)<3)
         
         halluci_keep_spike_idx = halluci_keep_spike_idx[:, None].repeat(1, b).reshape(-1)
 
-        seek_idx = torch.squeeze(torch.nonzero(unchecked & halluci_keep_spike_idx))
+        seek_idx = torch.squeeze(torch.nonzero(unchecked & halluci_keep_spike_idx), 1)
         try:
             Q.insert(0, torch.cat((unfold_idx[seek_idx][:, None], Q_neighbors[seek_idx][:, None]), 1))
         except:
