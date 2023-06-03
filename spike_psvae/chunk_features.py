@@ -316,6 +316,7 @@ class Localization(ChunkFeature):
         which_waveforms="denoised",
         feature="ptp",
         name_extra="",
+        ptp_precision_decimals=None,
     ):
         super().__init__()
         assert channel_index.shape[0] == geom.shape[0]
@@ -333,6 +334,7 @@ class Localization(ChunkFeature):
         self.name = f"localizations{name_extra}"
         self.dogpu = "gpu" in feature
         self.opt = "lbfgs"
+        self.ptp_precision_decimals = ptp_precision_decimals
         if "adam" in feature:
             self.opt = "adam"
 
@@ -354,7 +356,7 @@ class Localization(ChunkFeature):
                     ptps = ptps.cpu().numpy()
             else:
                 ptps = wfs.ptp(1)
-        elif self.feature == "peak":
+        elif "peak" in self.feature:
             if torch.is_tensor(wfs):
                 abswfs = torch.abs(wfs)
                 peaks, argpeaks = abswfs.max(dim=1)
@@ -375,6 +377,8 @@ class Localization(ChunkFeature):
             raise NameError("Use ptp or peak value for localization.")
 
         if torch.is_tensor(ptps):
+            if self.ptp_precision_decimals is not None:
+                ptps = torch.round(ptps, decimals=self.ptp_precision_decimals)
             x, y, z_rel, z_abs, alpha = localize_torch.localize_ptps_index_lm(
                 ptps,
                 self.geom,
@@ -386,6 +390,8 @@ class Localization(ChunkFeature):
             )
             return torch.column_stack((x, y, z_abs, alpha, z_rel))
         else:
+            if self.ptp_precision_decimals is not None:
+                ptps = np.round(ptps, decimals=self.ptp_precision_decimals)
             (
                 xs,
                 ys,
@@ -431,6 +437,7 @@ class TPCA(ChunkFeature):
         self.C = channel_index.shape[1]
         self.out_shape = (self.rank, self.C)
         self.centered = centered
+        self.random_state = random_state
         self.tpca = PCA(self.rank, random_state=random_state, copy=False)
 
     @classmethod
@@ -474,7 +481,7 @@ class TPCA(ChunkFeature):
         if self.centered:
             self.tpca.fit(wfs)
         else:
-            tsvd = TruncatedSVD(self.rank).fit(wfs)
+            tsvd = TruncatedSVD(self.rank, random_state=self.random_state).fit(wfs)
             self.tpca.mean_ = np.zeros_like(wfs[0])
             self.tpca.components_ = tsvd.components_
 
@@ -513,11 +520,11 @@ class TPCA(ChunkFeature):
             group.create_dataset("tpca_whiten", data=self.whiten)
             group.create_dataset("tpca_whitener", data=self.whitener)
 
-    def from_h5(self, h5):
+    def from_h5(self, h5, random_state=0):
         try:
             group = h5[f"{self.which_waveforms}_tpca"]
             self.T = group["T"][()]
-            self.tpca = PCA(self.rank)
+            self.tpca = PCA(self.rank, random_state=random_state)
             self.tpca.mean_ = group["tpca_mean"][:]
             self.tpca.components_ = group["tpca_components"][:]
             self.n_components = self.tpca.n_components
