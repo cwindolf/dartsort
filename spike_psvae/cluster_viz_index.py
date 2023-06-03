@@ -1,19 +1,20 @@
-import numpy as np
 from pathlib import Path
+
+import colorcet as cc
 import h5py
 import matplotlib.pyplot as plt
-import colorcet as cc
+import matplotlib.transforms as transforms
+import numpy as np
+from matplotlib.patches import Ellipse, Rectangle
+from matplotlib_venn import venn2
 from scipy.spatial.distance import cdist
 from spikeinterface import NumpySorting
-from spikeinterface.postprocessing import compute_correlograms
 from spikeinterface.comparison import compare_two_sorters
-from matplotlib_venn import venn2
+from spikeinterface.postprocessing import compute_correlograms
 from tqdm.auto import tqdm
-from . import spikeio, waveform_utils, chunk_features
-from .pyks_ccg import ccg
 
-import matplotlib.transforms as transforms
-from matplotlib.patches import Ellipse, Rectangle
+from . import chunk_features, spikeio, waveform_utils
+from .pyks_ccg import ccg
 
 ccolors = cc.glasbey[:31]
 
@@ -178,13 +179,16 @@ def pgeom(
     lw=None,
     ls=None,
     show_zero=True,
+    show_zero_kwargs=None,
     max_abs_amp=None,
     show_chan_label=False,
     chan_labels=None,
     linestyle=None,
     xlim_factor=1,
     subar=False,
-    zlim="auto",
+    msbar=False,
+    zlim="tight",
+    rasterized=False,
 ):
     """Plot waveforms according to geometry using channel index"""
     assert geom is not None
@@ -269,18 +273,22 @@ def pgeom(
     )
     for c in unique_chans:
         if show_zero:
-            ax.axhline(geom_plot[c, 1], color="gray", lw=1, linestyle="--")
+            if show_zero_kwargs is None:
+                show_zero_kwargs = dict(color="gray", lw=1, linestyle="--")
+            ax.axhline(geom_plot[c, 1], **show_zero_kwargs)
         if show_chan_label:
             ax.annotate(
                 chan_labels[c], geom_plot[c] + ann_offset, size=6, color="gray"
             )
     linestyle = linestyle or ls
     lines = ax.plot(
-        *draw, alpha=alpha, color=color, lw=lw, linestyle=linestyle
+        *draw, alpha=alpha, color=color, lw=lw, linestyle=linestyle, rasterized=rasterized
     )
 
     if subar:
         min_z = min(geom_plot[c, 1] for c in unique_chans)
+        if msbar:
+            min_z += max_abs_amp
         ax.add_patch(
             Rectangle(
                 [
@@ -303,6 +311,27 @@ def pgeom(
             rotation=-90,
         )
 
+    if msbar:
+        min_z = min(geom_plot[c, 1] for c in unique_chans)
+        ax.plot(
+            [
+                geom_plot[:, 0].max() + T // 2 - 30,
+                geom_plot[:, 0].max() + T // 2,
+            ],
+            2 * [min_z - max_abs_amp / 2],
+            color="k",
+            lw=2,
+        )
+        ax.text(
+            geom_plot[:, 0].max() + T // 2 - 15,
+            min_z - max_abs_amp / 2 + max_abs_amp / 10,
+            "1ms",
+            transform=ax.transData,
+            fontsize=5,
+            ha="center",
+            va="bottom",
+        )
+
     if zlim is None:
         pass
     elif zlim == "auto":
@@ -310,6 +339,16 @@ def pgeom(
         max_z = max(geom_plot[c, 1] for c in unique_chans)
         if np.isfinite([min_z, max_z]).all():
             ax.set_ylim([min_z - 2 * max_abs_amp, max_z + 2 * max_abs_amp])
+    elif zlim == "tight":
+        min_z = min(geom_plot[c, 1] for c in unique_chans)
+        max_z = max(geom_plot[c, 1] for c in unique_chans)
+        if np.isfinite([min_z, max_z]).all():
+            ax.set_ylim([min_z - max_abs_amp, max_z + max_abs_amp])
+    elif isinstance(zlim, float):
+        min_z = min(geom_plot[c, 1] for c in unique_chans)
+        max_z = max(geom_plot[c, 1] for c in unique_chans)
+        if np.isfinite([min_z, max_z]).all():
+            ax.set_ylim([min_z - max_abs_amp * zlim, max_z + max_abs_amp * zlim])
 
     return lines
 
