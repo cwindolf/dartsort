@@ -16,7 +16,7 @@ from .motion_utils import (
 default_raster_kw = dict(
     amp_scale_fn=None,
     post_transform=np.log1p,
-    gaussian_smoothing_sigma_um=3,
+    gaussian_smoothing_sigma_um=1,
 )
 
 

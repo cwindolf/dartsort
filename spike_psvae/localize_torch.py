@@ -191,10 +191,13 @@ def localize_ptps_index_lm(
     model="pointsource",
     dtype=torch.double,
     y0=1.0,
-    max_steps=100,
-    convergence_err=1e-7,
-    convergence_g=1e-7,
+    max_steps=250,
+    convergence_err=1e-10,
+    convergence_g=1e-10,
     scale_problem="hessian",
+    lambd=100.0,
+    nu=10.0,
+    min_scale=1e-2,
 ):
     """Localize a bunch of PTPs with torch
 
@@ -209,9 +212,9 @@ def localize_ptps_index_lm(
     subset = channel_index_subset(
         geom, channel_index, n_channels=n_channels, radius=radius
     )
-    subset = binary_subset_to_relative(subset)
+    subset = torch.as_tensor(binary_subset_to_relative(subset), device=ptps.device)
     channel_index_pad = F.pad(
-        torch.as_tensor(channel_index), (0, 1, 0, 0), value=nc
+        torch.as_tensor(channel_index, device=ptps.device), (0, 1, 0, 0), value=nc
     )
     channel_index = channel_index_pad[torch.arange(nc)[:, None], subset]
     # pad with 0s rather than nans, we will mask below.
@@ -254,15 +257,6 @@ def localize_ptps_index_lm(
 
     # -- torch optimize
     # initialize with center of mass
-    xcom = xcom.cpu()
-    zcom = zcom.cpu()
-    ptps = ptps.cpu()
-    geom = geom.cpu()
-    nptps, nan_mask, local_geoms = (
-        nptps.cpu(),
-        nan_mask.cpu(),
-        local_geoms.cpu(),
-    )
     locs = torch.column_stack((xcom, torch.full_like(xcom, y0), zcom))
     locs, i = batched_levenberg_marquardt(
         locs,
@@ -273,6 +267,9 @@ def localize_ptps_index_lm(
         convergence_err=convergence_err,
         convergence_g=convergence_g,
         scale_problem=scale_problem,
+        nu=nu,
+        lambd=lambd,
+        min_scale=min_scale,
     )
 
     # finish: get alpha closed form
