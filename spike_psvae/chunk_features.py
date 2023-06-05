@@ -749,7 +749,8 @@ class STPCA(ChunkFeature):
         self.mean_ = torch.as_tensor(self.pca.mean_, device=device)
         self.components_ = torch.as_tensor(self.pca.components_, device=device)
         self.whiten = self.pca.whiten
-        self.whitener = torch.as_tensor(self.whitener, device=device)
+        if self.whiten:
+            self.whitener = torch.as_tensor(self.whitener, device=device)
         return self
 
     def raw_transform(self, X):
@@ -766,6 +767,8 @@ class STPCA(ChunkFeature):
         group.create_dataset("T", data=self.T)
         group.create_dataset("pca_mean", data=self.pca.mean_)
         group.create_dataset("pca_components", data=self.pca.components_)
+        if self.whiten:
+            group.create_dataset("pca_whitener", data=self.pca.components_)
 
     def from_h5(self, h5):
         try:
