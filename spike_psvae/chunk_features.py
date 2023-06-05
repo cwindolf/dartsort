@@ -316,6 +316,7 @@ class Localization(ChunkFeature):
         which_waveforms="denoised",
         feature="ptp",
         name_extra="",
+        ptp_precision_decimals=None,
     ):
         super().__init__()
         assert channel_index.shape[0] == geom.shape[0]
@@ -333,6 +334,7 @@ class Localization(ChunkFeature):
         self.name = f"localizations{name_extra}"
         self.dogpu = "gpu" in feature
         self.opt = "lbfgs"
+        self.ptp_precision_decimals = ptp_precision_decimals
         if "adam" in feature:
             self.opt = "adam"
 
@@ -354,7 +356,7 @@ class Localization(ChunkFeature):
                     ptps = ptps.cpu().numpy()
             else:
                 ptps = wfs.ptp(1)
-        elif self.feature == "peak":
+        elif "peak" in self.feature:
             if torch.is_tensor(wfs):
                 abswfs = torch.abs(wfs)
                 peaks, argpeaks = abswfs.max(dim=1)
@@ -375,6 +377,8 @@ class Localization(ChunkFeature):
             raise NameError("Use ptp or peak value for localization.")
 
         if torch.is_tensor(ptps):
+            if self.ptp_precision_decimals is not None:
+                ptps = torch.round(ptps, decimals=self.ptp_precision_decimals)
             x, y, z_rel, z_abs, alpha = localize_torch.localize_ptps_index_lm(
                 ptps,
                 self.geom,
@@ -386,6 +390,8 @@ class Localization(ChunkFeature):
             )
             return torch.column_stack((x, y, z_abs, alpha, z_rel))
         else:
+            if self.ptp_precision_decimals is not None:
+                ptps = np.round(ptps, decimals=self.ptp_precision_decimals)
             (
                 xs,
                 ys,
