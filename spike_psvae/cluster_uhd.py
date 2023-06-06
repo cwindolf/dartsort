@@ -7,7 +7,7 @@ from spike_psvae.isocut5 import isocut5 as isocut
 from pathlib import Path
 import matplotlib.pyplot as plt
 from spike_psvae.uhd_split_merge import template_deconv_merge
-import spikeinterface.full as si
+# import spikeinterface.full as si
 # %%
 def cluster_5_min(cluster_output_directory, raw_data_bin, geom, T_START, T_END, maxptps, x, z, spike_index, displacement_rigid, 
                   threshold_ptp=3, fs=30000, triage_quantile_cluster=100,
@@ -319,7 +319,7 @@ def run_full_clustering(t_start, t_end, cluster_output_directory, raw_data_bin, 
                         fs=30000, triage_quantile_cluster=100, frame_dedup_cluster=20, log_c=5, scales=(1, 1, 50), 
                         time_temp_comp_merge=0, deconv_resid_th=0.25,
                         savefigs=True, zlim=None,bin_size_um_merge=None, gt_sort=None):
-    get_acc = False
+    # get_acc = False
     Path(cluster_output_directory).mkdir(exist_ok=True)
     
     print("Initial clustering")
@@ -332,14 +332,14 @@ def run_full_clustering(t_start, t_end, cluster_output_directory, raw_data_bin, 
 
     print("Ensembling")
     spt, spike_index, max_ptps, x, z_abs = gather_all_results_clustering(cluster_output_directory, t_start, t_end, len_chunks)
-    if get_acc:
-        cluster_sort = si.numpyextractors.NumpySorting.from_times_labels(
-            times_list=spt[:,0].astype("int"),
-            labels_list=spt[:,1].astype("int"),
-            sampling_frequency=fs,
-        )
-        cluster_cmp = si.compare_sorter_to_ground_truth(gt_sort, cluster_sort, exhaustive_gt=True, match_score=.1)
-        print(cluster_cmp.get_performance('pooled_with_average'))
+#     if get_acc:
+#         cluster_sort = si.numpyextractors.NumpySorting.from_times_labels(
+#             times_list=spt[:,0].astype("int"),
+#             labels_list=spt[:,1].astype("int"),
+#             sampling_frequency=fs,
+#         )
+#         cluster_cmp = si.compare_sorter_to_ground_truth(gt_sort, cluster_sort, exhaustive_gt=True, match_score=.1)
+#         print(cluster_cmp.get_performance('pooled_with_average'))
     
     
     spt = ensemble_hdbscan_clustering(t_start, t_end, len_chunks, displacement_rigid, spt, max_ptps, x, z_abs, scales, log_c, fs)
@@ -357,25 +357,25 @@ def run_full_clustering(t_start, t_end, cluster_output_directory, raw_data_bin, 
         std_x[k] = x[idx_k].std()
     
     spt[:, 1] = template_deconv_merge(spt, spt[:, 1], z_abs, z_reg, x, geom, raw_data_bin, bin_size_um=bin_size_um_merge)
-    if get_acc:
-        cluster_sort = si.numpyextractors.NumpySorting.from_times_labels(
-            times_list=spt[:,0].astype("int"),
-            labels_list=spt[:,1].astype("int"),
-            sampling_frequency=fs,
-        )
-        cluster_cmp = si.compare_sorter_to_ground_truth(gt_sort, cluster_sort, exhaustive_gt=True, match_score=.1)
-        print(cluster_cmp.get_performance('pooled_with_average'))
+    # if get_acc:
+    #     cluster_sort = si.numpyextractors.NumpySorting.from_times_labels(
+    #         times_list=spt[:,0].astype("int"),
+    #         labels_list=spt[:,1].astype("int"),
+    #         sampling_frequency=fs,
+    #     )
+    #     cluster_cmp = si.compare_sorter_to_ground_truth(gt_sort, cluster_sort, exhaustive_gt=True, match_score=.1)
+    #     print(cluster_cmp.get_performance('pooled_with_average'))
 
     print("Relabel by Depth")
     spt = relabel_by_depth(spt, z_abs)
-    if get_acc:
-        cluster_sort = si.numpyextractors.NumpySorting.from_times_labels(
-            times_list=spt[:,0].astype("int"),
-            labels_list=spt[:,1].astype("int"),
-            sampling_frequency=fs,
-        )
-        cluster_cmp = si.compare_sorter_to_ground_truth(gt_sort, cluster_sort, exhaustive_gt=True, match_score=.1)
-        print(cluster_cmp.get_performance('pooled_with_average'))
+    # if get_acc:
+    #     cluster_sort = si.numpyextractors.NumpySorting.from_times_labels(
+    #         times_list=spt[:,0].astype("int"),
+    #         labels_list=spt[:,1].astype("int"),
+    #         sampling_frequency=fs,
+    #     )
+    #     cluster_cmp = si.compare_sorter_to_ground_truth(gt_sort, cluster_sort, exhaustive_gt=True, match_score=.1)
+    #     print(cluster_cmp.get_performance('pooled_with_average'))
     
     fname_spt_cluster = Path(cluster_output_directory) / "spt_full_cluster.npy"
     fname_x = Path(cluster_output_directory) / "x_full_cluster.npy"
