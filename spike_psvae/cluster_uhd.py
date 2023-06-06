@@ -7,7 +7,7 @@ from spike_psvae.isocut5 import isocut5 as isocut
 from pathlib import Path
 import matplotlib.pyplot as plt
 from spike_psvae.uhd_split_merge import template_deconv_merge
-
+import spikeinterface.full as si
 # %%
 def cluster_5_min(cluster_output_directory, raw_data_bin, geom, T_START, T_END, maxptps, x, z, spike_index, displacement_rigid, 
                   threshold_ptp=3, fs=30000, triage_quantile_cluster=100,
@@ -144,15 +144,16 @@ def gather_all_results_clustering(cluster_output_directory, t_start, t_end, K_LE
 # %%
 
 # %%
+
 def ensemble_hdbscan_clustering(t_start, t_end, K_LEN, displacement_rigid, spt_all, max_ptps_all, x_all, z_all_abs, 
-                               scales, log_c):
+                               scales, log_c, fs):
     
-    z_reg_all = z_all_abs - displacement_rigid[spt_all[:, 0]//30000]
+    z_reg_all = z_all_abs - displacement_rigid[spt_all[:, 0]//fs]
     
     for T_START in np.arange(t_start, t_end-K_LEN, K_LEN):
         T_END = T_START+K_LEN
-        idx_1 = np.flatnonzero(np.logical_and(spt_all[:, 0]/30000>t_start, spt_all[:, 0]/30000<T_END))
-        idx_2 = np.flatnonzero(np.logical_and(spt_all[:, 0]/30000>T_START+K_LEN, spt_all[:, 0]/30000<T_END+K_LEN))
+        idx_1 = np.flatnonzero(np.logical_and(spt_all[:, 0]/fs>t_start, spt_all[:, 0]/fs<T_END))
+        idx_2 = np.flatnonzero(np.logical_and(spt_all[:, 0]/fs>T_START+K_LEN, spt_all[:, 0]/fs<T_END+K_LEN))
         if len(idx_1) and len(idx_2):
             spt_1 = spt_all[idx_1]
             max_ptps_1 = scales[2]*np.log(log_c+max_ptps_all[idx_1])
@@ -247,7 +248,7 @@ def ensemble_hdbscan_clustering(t_start, t_end, K_LEN, displacement_rigid, spt_a
             labels_1_2 = spike_train_utils.make_labels_contiguous(
                 labels_1_2
             )
-            idx_all = np.flatnonzero(np.logical_and(spt_all[:, 0]/30000>t_start, spt_all[:, 0]/30000<T_END+K_LEN))
+            idx_all = np.flatnonzero(np.logical_and(spt_all[:, 0]/fs>t_start, spt_all[:, 0]/fs<T_END+K_LEN))
             spt_all[idx_all, 1] = labels_1_2
         
     return spt_all
@@ -317,8 +318,8 @@ def run_full_clustering(t_start, t_end, cluster_output_directory, raw_data_bin, 
                         localizations, maxptps, displacement_rigid, len_chunks=300, threshold_ptp=3,
                         fs=30000, triage_quantile_cluster=100, frame_dedup_cluster=20, log_c=5, scales=(1, 1, 50), 
                         time_temp_comp_merge=0, deconv_resid_th=0.25,
-                        savefigs=True, zlim=None,bin_size_um_merge=None):
-
+                        savefigs=True, zlim=None,bin_size_um_merge=None, gt_sort=None):
+    get_acc = False
     Path(cluster_output_directory).mkdir(exist_ok=True)
     
     print("Initial clustering")
@@ -331,10 +332,20 @@ def run_full_clustering(t_start, t_end, cluster_output_directory, raw_data_bin, 
 
     print("Ensembling")
     spt, spike_index, max_ptps, x, z_abs = gather_all_results_clustering(cluster_output_directory, t_start, t_end, len_chunks)
-    spt = ensemble_hdbscan_clustering(t_start, t_end, len_chunks, displacement_rigid, spt, max_ptps, x, z_abs, scales, log_c)
+    if get_acc:
+        cluster_sort = si.numpyextractors.NumpySorting.from_times_labels(
+            times_list=spt[:,0].astype("int"),
+            labels_list=spt[:,1].astype("int"),
+            sampling_frequency=fs,
+        )
+        cluster_cmp = si.compare_sorter_to_ground_truth(gt_sort, cluster_sort, exhaustive_gt=True, match_score=.1)
+        print(cluster_cmp.get_performance('pooled_with_average'))
+    
+    
+    spt = ensemble_hdbscan_clustering(t_start, t_end, len_chunks, displacement_rigid, spt, max_ptps, x, z_abs, scales, log_c, fs)
 
     print("Split")
-    z_reg = z_abs - displacement_rigid[spt[:, 0]//30000]
+    z_reg = z_abs - displacement_rigid[spt[:, 0]//fs]
     spt = pre_deconv_split(spt, max_ptps, x, z_reg)
     
     n_units = spt[:, 1].max()+1
@@ -346,9 +357,25 @@ def run_full_clustering(t_start, t_end, cluster_output_directory, raw_data_bin, 
         std_x[k] = x[idx_k].std()
     
     spt[:, 1] = template_deconv_merge(spt, spt[:, 1], z_abs, z_reg, x, geom, raw_data_bin, bin_size_um=bin_size_um_merge)
+    if get_acc:
+        cluster_sort = si.numpyextractors.NumpySorting.from_times_labels(
+            times_list=spt[:,0].astype("int"),
+            labels_list=spt[:,1].astype("int"),
+            sampling_frequency=fs,
+        )
+        cluster_cmp = si.compare_sorter_to_ground_truth(gt_sort, cluster_sort, exhaustive_gt=True, match_score=.1)
+        print(cluster_cmp.get_performance('pooled_with_average'))
 
     print("Relabel by Depth")
     spt = relabel_by_depth(spt, z_abs)
+    if get_acc:
+        cluster_sort = si.numpyextractors.NumpySorting.from_times_labels(
+            times_list=spt[:,0].astype("int"),
+            labels_list=spt[:,1].astype("int"),
+            sampling_frequency=fs,
+        )
+        cluster_cmp = si.compare_sorter_to_ground_truth(gt_sort, cluster_sort, exhaustive_gt=True, match_score=.1)
+        print(cluster_cmp.get_performance('pooled_with_average'))
     
     fname_spt_cluster = Path(cluster_output_directory) / "spt_full_cluster.npy"
     fname_x = Path(cluster_output_directory) / "x_full_cluster.npy"
@@ -368,7 +395,7 @@ def run_full_clustering(t_start, t_end, cluster_output_directory, raw_data_bin, 
         if zlim is None:
             zlim = (-50, 350)
         fig, axes = cluster_viz.array_scatter(
-          spt[:, 1], geom, x, z_abs - displacement_rigid[spt[:, 0]//30000], max_ptps,
+          spt[:, 1], geom, x, z_abs - displacement_rigid[spt[:, 0]//fs], max_ptps,
           zlim=zlim, do_ellipse=True
         )
         plt.savefig(figname)

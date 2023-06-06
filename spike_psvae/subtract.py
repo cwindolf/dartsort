@@ -13,6 +13,7 @@ import spikeinterface.core as sc
 import torch
 import torch.nn.functional as F
 from tqdm.auto import tqdm
+import time 
 
 from . import chunk_features, denoise, detect, localize_index
 from .multiprocessing_utils import MockQueue, ProcessPoolExecutor, get_pool
@@ -61,6 +62,8 @@ def subtraction(
     dedup_spatial_radius=70,
     enforce_decrease_kind="radial",
     do_phaseshift=False,
+    ci_graph_all_maxCH_uniq=None,
+    maxCH_neighbor=None,
     # what to save?
     save_residual=False,
     save_subtracted_waveforms=False,
@@ -159,6 +162,8 @@ def subtraction(
     batch_len_samples = int(
         np.floor(n_sec_chunk * recording.get_sampling_frequency())
     )
+    
+    print(device)
 
     # prepare output dir
     out_folder = Path(out_folder)
@@ -819,7 +824,6 @@ def subtraction_batch(
     dn_detector,
 ):
     """Runs subtraction on a batch
-
         This function handles the logic of loading data from disk
         (padding it with a buffer where necessary), running the loop
         over thresholds for `detect_and_subtract`, handling spikes
@@ -1033,7 +1037,6 @@ def subtraction_batch(
                     batch_data_folder / f"{prefix}{f.name}.npy",
                     feat,
                 )
-        # print(np.shape(cleaned_wfs))
         denoised_wfs = full_denoising(
             cleaned_wfs,
             spike_index[:, 1],
@@ -1163,6 +1166,7 @@ def train_featurizers(
     spike_indices = []
     waveforms = []
     residuals = []
+    
     for s_start in tqdm(starts, "PCA training subtraction"):
         spind, wfs, residual_singlebuf = subtraction_batch(
             batch_data_folder=None,
@@ -1357,21 +1361,24 @@ def detect_and_subtract(
         resids = waveforms.clone()
     # print(np.shape(waveforms))
     # -- denoising
+    # start_time = time.time()
     waveforms, tpca_proj = full_denoising(
         waveforms,
         spike_index[:, 1],
         extract_channel_index,
         radial_parents,
-        ci_graph_all_maxCH_uniq,
-        maxCH_neighbor,
         do_enforce_decrease=do_enforce_decrease,
         do_phaseshift=do_phaseshift,
+        ci_graph_all_maxCH_uniq=ci_graph_all_maxCH_uniq,
+        maxCH_neighbor=maxCH_neighbor,
         geom=geom,
         tpca=tpca,
         device=device,
         denoiser=denoiser,
         return_tpca_embedding=True,
     )
+    # end_time = time.time()
+    # execution_time = end_time - start_time
 
     # test residual norm decrease
     if residnorm_decrease:
@@ -1425,10 +1432,10 @@ def full_denoising(
     maxchans,
     extract_channel_index,
     radial_parents=None,
-    ci_graph_all_maxCH_uniq=None,
-    maxCH_neighbor=None,
     do_enforce_decrease=True,
     do_phaseshift=False,
+    ci_graph_all_maxCH_uniq=None,
+    maxCH_neighbor=None,
     geom=None,
     probe=None,
     tpca=None,
