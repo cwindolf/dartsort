@@ -24,7 +24,9 @@ def final_split(spt, z_reg, x, dipscore_th=5):
                 rescale_x = z_reg[in_unit].std()/x[in_unit].std()
                 features = np.c_[z_reg[in_unit], rescale_x*x[in_unit]]
                 oned_features = PCA(n_components=1).fit_transform(features)[:, 0]
-                dipscore, cutpoint = isocut(oned_features)
+                values, counts = np.unique(oned_features,return_counts=True)
+                dipscore, cutpoint = isocut(values, sample_weights=counts.astype('float64'))
+                #dipscore, cutpoint = isocut(oned_features)
                 if dipscore>dipscore_th:
                     labels_split[in_unit[oned_features>cutpoint]] = cmp
                     cmp+=1
