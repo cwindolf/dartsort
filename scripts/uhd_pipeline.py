@@ -132,8 +132,8 @@ if __name__ == "__main__":
     #Deconv parameters
     deconvolve=True
     t_start_deconv=0
-    t_end_deconv=3500
-    n_sec_temp_update=4000 #Keep that to the full time - does nto work for now :) 
+    t_end_deconv=None
+    n_sec_temp_update=rec_len_sec #Keep that to the full time - does nto work for now :) 
     bin_size_um=3
     adaptive_bin_size_selection=False
     n_jobs_deconv=4
