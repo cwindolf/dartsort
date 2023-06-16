@@ -39,7 +39,10 @@ def final_split(spt, z_reg, x, dipscore_th=5):
 def final_split_merge(spt, z_abs, x, displacement_rigid, geom, raw_data_bin, threshold_resid=0.25, dipscore_th=5, dist_proposed_pairs=None, bin_size_um=None):
     
     if bin_size_um is None:
-        bin_size_um = get_pitch(geom)//4
+        pitch = get_pitch(geom)
+        bin_size_um = pitch//4
+        if pitch//4 != pitch/4:
+            bin_size_um = pitch//3
     if dist_proposed_pairs is None:
         dist_proposed_pairs=get_pitch(geom)
     
