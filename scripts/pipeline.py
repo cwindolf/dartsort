@@ -327,7 +327,7 @@ if __name__ == "__main__":
         plt.plot(np.arange(t_start_detect, t_end_detect), displacement_rigid[t_start_detect:t_end_detect]-displacement_rigid[t_start_detect], color = 'red')
         plt.plot(np.arange(t_start_detect, t_end_detect), displacement_rigid[t_start_detect:t_end_detect]-displacement_rigid[t_start_detect]+100, color = 'red')
         plt.plot(np.arange(t_start_detect, t_end_detect), displacement_rigid[t_start_detect:t_end_detect]-displacement_rigid[t_start_detect]+200, color = 'red')
-        plt.ylim((geom.min()-2*pitch, geom.min()+2*pitch))
+        plt.ylim((geom.min()-2*pitch, geom.max()+2*pitch))
         plt.savefig(fname_detect_fig)
         plt.close()
 
