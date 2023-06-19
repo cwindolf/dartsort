@@ -349,7 +349,7 @@ if __name__ == "__main__":
                                                     localization_results, maxptps, displacement_rigid, len_chunks=len_chunks_cluster, threshold_ptp=threshold_ptp_cluster,
                                                     fs=sampling_rate, triage_quantile_cluster=triage_quantile_cluster, frame_dedup_cluster=frame_dedup_cluster, 
                                                     time_temp_comp_merge=time_temp_computation, log_c=log_c, scales=scales, savefigs=savefigs, deconv_resid_th=0.25, 
-                                                    zlim=(geom.min()-2*pitch, geom.min()+2*pitch))
+                                                    zlim=(geom.min()-2*pitch, geom.max()+2*pitch))
     
     else:
         fname_spt_cluster = Path(cluster_dir) / "spt_full_cluster.npy"
