@@ -1200,7 +1200,9 @@ def train_featurizers(
             dn_detector=dn_detector,
         )
         spike_indices.append(spind)
-        waveforms.append(wfs.cpu().numpy())
+        if torch.is_tensor(wfs):
+            wfs = wfs.cpu().numpy()
+        waveforms.append(wfs)
         residuals.append(residual_singlebuf.cpu().numpy())
 
     try:
