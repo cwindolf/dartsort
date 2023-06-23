@@ -1,16 +1,14 @@
-# %%
-import numpy as np
-from tqdm.auto import tqdm
 import multiprocessing
 from concurrent.futures import ProcessPoolExecutor
-from .multiprocessing_utils import MockPoolExecutor, MockQueue
+
+import numpy as np
 import torch
+from tqdm.auto import tqdm
 
-# %%
 from . import denoise, spikeio, waveform_utils
+from .multiprocessing_utils import MockPoolExecutor, MockQueue
 
 
-# %%
 def get_templates(
     spike_train,
     geom,
@@ -40,6 +38,7 @@ def get_templates(
     n_jobs=-1,
     raw_only=False,
     dtype=np.float32,
+    edge_behavior="saturate",
 ):
     """Get denoised templates
 
@@ -87,6 +86,7 @@ def get_templates(
                 pbar=pbar,
                 seed=seed,
                 n_jobs=n_jobs,
+                max_spikes_per_unit=max_spikes_per_unit,
             )
             .ptp(1)
             .argmax(1)
@@ -192,7 +192,11 @@ def get_templates(
 
     # SNR-weighted combination to create the template
     weights = denoised_weights(
-        snr_by_channel, spike_length_samples, trough_offset, snr_threshold
+        snr_by_channel,
+        spike_length_samples,
+        trough_offset,
+        snr_threshold,
+        edge_behavior=edge_behavior,
     )
     templates = weights * raw_templates + (1 - weights) * denoised_templates
     extra["weights"] = weights
@@ -213,7 +217,6 @@ def get_templates(
     return templates, extra
 
 
-# %%
 def get_raw_templates(
     spike_train,
     geom,
@@ -244,7 +247,6 @@ def get_raw_templates(
     return raw_templates
 
 
-# %%
 def get_denoised_template_single(
     spike_times,
     geom,
@@ -268,6 +270,7 @@ def get_denoised_template_single(
     device=None,
     batch_size=1024,
     seed=0,
+    edge_behavior="saturate",
 ):
     (
         raw_template,
@@ -294,7 +297,11 @@ def get_denoised_template_single(
 
     # SNR-weighted combination to create the template
     weights = denoised_weights_single(
-        snr_by_channel, spike_length_samples, trough_offset, snr_threshold
+        snr_by_channel,
+        spike_length_samples,
+        trough_offset,
+        snr_threshold,
+        edge_behavior=edge_behavior,
     )
     template = weights * raw_template + (1 - weights) * denoised_template
 
@@ -310,11 +317,9 @@ def get_denoised_template_single(
     return template
 
 
-# %%
 get_single_templates = get_denoised_template_single
 
 
-# %%
 def get_raw_denoised_template_single(
     spike_times,
     geom,
@@ -411,7 +416,6 @@ def get_raw_denoised_template_single(
     return raw_template, denoised_template, snr_by_channel
 
 
-# %%
 def get_raw_template_single(
     spike_times,
     raw_binary_file,
@@ -442,7 +446,6 @@ def get_raw_template_single(
     return reducer(waveforms, axis=0)
 
 
-# %%
 def denoised_weights(
     snrs,
     spike_length_samples,
@@ -451,6 +454,7 @@ def denoised_weights(
     a=12.0,
     b=12.0,
     d=6.0,
+    edge_behavior="saturate",
 ):
     # v shaped function for time weighting
     vt = np.abs(np.arange(spike_length_samples) - trough_offset, dtype=float)
@@ -460,7 +464,14 @@ def denoised_weights(
         vt[:trough_offset] = vt[:trough_offset] / vt[:trough_offset].max()
 
     # snr weighting per channel
-    sc = np.minimum(snrs, snr_threshold) / snr_threshold
+    if edge_behavior == "saturate":
+        sc = np.minimum(snrs, snr_threshold) / snr_threshold
+    if edge_behavior == "inf":
+        sc = np.minimum(snrs, snr_threshold) / snr_threshold
+        sc[sc >= 1.0] = np.inf
+    elif edge_behavior == "raw":
+        sc = snrs
+    # should this be inf when > snr threshold? (note it gets -)
 
     # pass it through a hand picked squashing function
     wtc = 1.0 / (1.0 + np.exp(d + a * vt[None, :, None] - b * sc[:, None, :]))
@@ -468,7 +479,6 @@ def denoised_weights(
     return wtc
 
 
-# %%
 def denoised_weights_single(
     snrs,
     spike_length_samples,
@@ -477,6 +487,7 @@ def denoised_weights_single(
     a=12.0,
     b=12.0,
     d=6.0,
+    edge_behavior="saturate",
 ):
     # v shaped function for time weighting
     vt = np.abs(np.arange(spike_length_samples) - trough_offset, dtype=float)
@@ -486,18 +497,22 @@ def denoised_weights_single(
         vt[:trough_offset] = vt[:trough_offset] / vt[:trough_offset].max()
 
     # snr weighting per channel
-    sc = np.minimum(snrs, snr_threshold) / snr_threshold
+    if edge_behavior == "saturate":
+        sc = np.minimum(snrs, snr_threshold) / snr_threshold
+    if edge_behavior == "inf":
+        sc = np.minimum(snrs, snr_threshold) / snr_threshold
+        sc[sc >= 1.0] = np.inf
+    elif edge_behavior == "raw":
+        sc = snrs
     # pass it through a hand picked squashing function
     wtc = 1.0 / (1.0 + np.exp(d + a * vt[:, None] - b * sc[None, :]))
 
     return wtc
 
 
-# %% [markdown]
 # -- parallelism helpers
 
 
-# %%
 def template_worker(unit):
     # parameters set by init below
     p = template_worker
@@ -544,7 +559,6 @@ def template_worker(unit):
     return unit, raw_template, denoised_template, snr_by_channel
 
 
-# %%
 def template_worker_init(
     id_queue,
     seed,
@@ -585,10 +599,9 @@ def template_worker_init(
     p.denoiser_weights_path = denoiser_weights_path
     p.device = device
     p.batch_size = batch_size
-    p.dtype=dtype
+    p.dtype = dtype
 
 
-# %%
 def xqdm(iterator, pbar=True, **kwargs):
     if pbar:
         return tqdm(iterator, **kwargs)
