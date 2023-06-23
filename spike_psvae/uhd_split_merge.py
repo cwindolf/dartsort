@@ -251,7 +251,11 @@ def run_full_merge_split(h5_path, spt, spike_index,
     batch_size=10000, waveform_type = "denoised", max_value_dist=70, 
     min_cluster_size=50, cluster_selection_epsilon=25, 
     threshold_resid=0.25, su_chan_vis=1.5, 
-    bin_size_um=3, n_jobs=-1):
+    bin_size_um=None, n_jobs=-1):
+    
+    pitch = get_pitch(geom)
+    if bin_size_um is None:
+        bin_size_um = pitch//2
 
     wfs_mc, spread = get_spread_mc_wf(h5_path, spike_index, channel_index, geom, batch_size=batch_size, waveform_type = waveform_type, max_value_dist=max_value_dist)
     print("Split...")

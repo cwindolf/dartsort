@@ -24,7 +24,9 @@ def final_split(spt, z_reg, x, dipscore_th=5):
                 rescale_x = z_reg[in_unit].std()/x[in_unit].std()
                 features = np.c_[z_reg[in_unit], rescale_x*x[in_unit]]
                 oned_features = PCA(n_components=1).fit_transform(features)[:, 0]
-                dipscore, cutpoint = isocut(oned_features)
+                values, counts = np.unique(oned_features,return_counts=True)
+                dipscore, cutpoint = isocut(values, sample_weights=counts.astype('float64'))
+                #dipscore, cutpoint = isocut(oned_features)
                 if dipscore>dipscore_th:
                     labels_split[in_unit[oned_features>cutpoint]] = cmp
                     cmp+=1
@@ -37,7 +39,10 @@ def final_split(spt, z_reg, x, dipscore_th=5):
 def final_split_merge(spt, z_abs, x, displacement_rigid, geom, raw_data_bin, threshold_resid=0.25, dipscore_th=5, dist_proposed_pairs=None, bin_size_um=None):
     
     if bin_size_um is None:
-        bin_size_um = get_pitch(geom)//4
+        pitch = get_pitch(geom)
+        bin_size_um = pitch//4
+        if pitch//4 != pitch/4:
+            bin_size_um = pitch//3
     if dist_proposed_pairs is None:
         dist_proposed_pairs=get_pitch(geom)
     

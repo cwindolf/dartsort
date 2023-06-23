@@ -1200,7 +1200,9 @@ def train_featurizers(
             dn_detector=dn_detector,
         )
         spike_indices.append(spind)
-        waveforms.append(wfs.cpu().numpy())
+        if torch.is_tensor(wfs):
+            wfs = wfs.cpu().numpy()
+        waveforms.append(wfs)
         residuals.append(residual_singlebuf.cpu().numpy())
 
     try:
@@ -1655,8 +1657,6 @@ def subtract_and_localize_numpy(
     spike_length_samples=121,
     loc_workers=1,
 ):
-    # we will run in this buffer and return it after subtraction
-    residual = raw.copy()
 
     # probe geometry helper structures
     dedup_channel_index = make_channel_index(
@@ -1677,6 +1677,10 @@ def subtract_and_localize_numpy(
     # load neural nets
     if device is None:
         device = "cuda" if torch.cuda.is_available else "cpu"
+        # we will run in this buffer and return it after subtraction
+    raw = torch.from_numpy(raw)
+    raw.to(device)
+    residual = raw.clone()
     device = torch.device(device)
     denoiser = denoise.SingleChanDenoiser()
     denoiser.load()
@@ -1700,7 +1704,7 @@ def subtract_and_localize_numpy(
             trough_offset=trough_offset,
             spike_length_samples=spike_length_samples,
             device=device,
-            probe=probe,
+            geom=geom,
         )
         _logger.debug(
             f"Detected and subtracted {spind.shape[0]} spikes "
@@ -1710,7 +1714,7 @@ def subtract_and_localize_numpy(
             subtracted_wfs.append(subwfs)
             spike_index.append(spind)
 
-    subtracted_wfs = np.concatenate(subtracted_wfs, axis=0)
+    subtracted_wfs = torch.cat(subtracted_wfs, dim=0)
     spike_index = np.concatenate(spike_index, axis=0)
     _logger.debug(
         f"Detected and subtracted {spike_index.shape[0]} spikes Total"
@@ -1723,7 +1727,6 @@ def subtract_and_localize_numpy(
 
     _logger.debug(f"Denoising waveforms...")
     # "collision-cleaned" wfs
-
     cleaned_wfs = read_waveforms_in_memory(
         residual,
         spike_index,
@@ -1747,9 +1750,12 @@ def subtract_and_localize_numpy(
 
     # localize
     _logger.debug(f"Localisation...")
-    locptps = cleaned_wfs.ptp(1)
+    ptp = chunk_features.PTPVector(which_waveforms="denoised").transform(
+        spike_index[:, 1],
+        denoised_wfs=cleaned_wfs,
+    )
     xs, ys, z_rels, z_abss, alphas = localize_index.localize_ptps_index(
-        locptps,
+        ptp,
         geom,
         spike_index[:, 1],
         extract_channel_index,
@@ -1769,4 +1775,4 @@ def subtract_and_localize_numpy(
         ],
         columns=["sample", "trace", "x", "y", "z", "alpha"],
     )
-    return df_localisation, cleaned_wfs
+    return df_localisation, cleaned_wfs.to('cpu')
