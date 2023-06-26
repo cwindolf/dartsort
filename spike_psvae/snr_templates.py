@@ -225,6 +225,7 @@ def get_raw_templates(
     pbar=True,
     seed=0,
     n_jobs=-1,
+    dtype=np.float32,
 ):
     raw_templates, _ = get_templates(
         spike_train,
@@ -240,6 +241,7 @@ def get_raw_templates(
         pbar=True,
         seed=seed,
         n_jobs=n_jobs,
+        dtype=dtype,
     )
     return raw_templates
 
