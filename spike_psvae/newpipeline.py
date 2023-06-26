@@ -78,7 +78,7 @@ def reloc_maxchan_augmented_geom(spike_index, p, geom, pfs=30000, offset=None, d
         else:
             regmc_batch = cdist(pos[(batch_size * i):None], aug_geom[aug_which]).argmin(1)
 
-    regmc = np.append(regmc, regmc_batch)
+        regmc = np.int32(np.append(regmc, regmc_batch))
     regmc = aug_which[regmc]
     return regmc
 

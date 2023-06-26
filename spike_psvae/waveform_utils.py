@@ -1,8 +1,8 @@
 import numpy as np
-from scipy.spatial.distance import cdist, pdist, squareform
-from sklearn.decomposition import PCA, TruncatedSVD
 import torch
 import torch.nn.functional as F
+from scipy.spatial.distance import cdist, pdist, squareform
+from sklearn.decomposition import PCA, TruncatedSVD
 
 from . import spikeio
 
@@ -274,18 +274,32 @@ def make_contiguous_channel_index(n_channels, n_neighbors=40):
     return channel_index
 
 
+def make_pitch_channel_index(geom, n_neighbor_rows=1, pitch=None):
+    n_channels = geom.shape[0]
+    if pitch is None:
+        pitch = get_pitch(geom)
+    neighbors = np.abs(geom[:, 1][:, None] - geom[:, 1][None, :]) <= n_neighbor_rows * pitch
+    channel_index = np.full((n_channels, neighbors.sum(1).max()), n_channels)
+    for c in range(n_channels):
+        my_neighbors = np.flatnonzero(neighbors[c])
+        channel_index[c, :my_neighbors.size] = my_neighbors
+    return channel_index
+
+
 def full_channel_index(n_channels):
     return (
         np.arange(n_channels)[None, :] * np.ones(n_channels, dtype=int)[:, None]
     )
 
 
-def make_channel_index(geom, radius, steps=1, distance_order=False, p=2):
+def make_channel_index(geom, radius, steps=1, distance_order=False, p=2, pad_val = None):
     """
     Compute an array whose whose ith row contains the ordered
     (by distance) neighbors for the ith channel
     """
     C = geom.shape[0]
+    if pad_val == None:
+        pad_val = C
 
     # get neighbors matrix
     neighbors = squareform(pdist(geom, metric="minkowski", p=p)) <= radius
@@ -299,7 +313,7 @@ def make_channel_index(geom, radius, steps=1, distance_order=False, p=2):
     # others will be filled with the total number of channels
     # (an invalid index into the recording, but this behavior
     # is useful e.g. in the spatial max pooling for deduplication)
-    channel_index = np.full((C, n_neighbors), C, dtype=int)
+    channel_index = np.full((C, n_neighbors), pad_val, dtype=int)
 
     # fill every row in the matrix (one per channel)
     for current in range(C):
