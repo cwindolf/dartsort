@@ -273,12 +273,12 @@ def run_deconv_merge(
     raw_binary_file,
     unit_max_channels=None,
     deconv_threshold_mul=0.9,
-    # 2 is conservative, 2.5 is nice, 3 is aggressive when normalized
-    merge_resid_threshold=2.5,
+    merge_resid_threshold=0.25,
     tpca=None,
     trough_offset=42,
     spike_length_samples=121,
     normalized=True,
+    distance_kind="rms",
 ):
     templates_cleaned, extra = get_templates(
         spike_train,
@@ -308,6 +308,7 @@ def run_deconv_merge(
         lambd=0.001,
         allowed_scale=0.1,
         normalized=normalized,
+        distance_kind=distance_kind,
     )
     # shifts[i, j] is like trough[j] - trough[i]
 
