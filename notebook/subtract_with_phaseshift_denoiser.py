@@ -35,6 +35,16 @@ rec.set_probe(rec_cbin.get_probe(), in_place=True)
 fs = rec.get_sampling_frequency()
 
 # %%
+import cProfile
+
+# %%
+import torch
+torch.cuda.is_available()
+
+# %% jupyter={"outputs_hidden": true}
+cProfile.run("sub_h5 = subtract.subtraction(rec,out_folder=cbin_dir,thresholds=[12, 10, 8, 6, 5],n_sec_pca=40,save_subtracted_tpca_projs=False,save_cleaned_tpca_projs=False,save_denoised_tpca_projs=False,save_denoised_waveforms=True,do_phaseshift = True,n_jobs=1,loc_workers=4,overwrite=True,device = \"cuda\",save_cleaned_pca_projs_on_n_channels=None,loc_feature= (\"ptp\", \"peak\"),out_filename=\"test_n_14_parallelized_subtraction_again.h5\", enforce_decrease_kind=\"none\")", "restats")
+
+# %%
 sub_h5 = subtract.subtraction(
                         rec,
                         out_folder=cbin_dir,
