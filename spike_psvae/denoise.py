@@ -181,6 +181,8 @@ def ptp(t, axis):
     return t.max(axis).values - t.min(axis).values
 
 
+
+
 def multichan_phase_shift_denoise_preshift(waveforms, ci_graph_all_maxCH_uniq, maxCH_neighbor, Denoiser, maxchans, device, CH_N=384, offset=42):
     N, T, C = waveforms.shape
     waveforms = F.pad(waveforms, (0, 1), 'constant', 0) #waveforms.shape = NxTx(C+1)
@@ -189,6 +191,7 @@ def multichan_phase_shift_denoise_preshift(waveforms, ci_graph_all_maxCH_uniq, m
     ci_graph_all_maxCH_uniq = F.pad(ci_graph_all_maxCH_uniq, (0, 0, 0, 0, 0, 1), 'constant', C - 1)
     
     phase_shift_array = torch.tensor([0, 15, 12, 9, 6, 3, -3, -6, -9, -12, -15], device = device)
+    # phase_shift_array = torch.tensor([0, 15, 10, 5, -5, 10, 15], device = device)
     S = phase_shift_array.shape[0]
 
     pick_idx = torch.zeros((N, C, phase_shift_array.shape[0]), device = device)
@@ -211,10 +214,10 @@ def multichan_phase_shift_denoise_preshift(waveforms, ci_graph_all_maxCH_uniq, m
                                     torch.roll(waveforms, 15, 1)),
                                     2)
 
-
+    # phase_shift_array = F.pad(phase_shift_array, (0, 1), 'constant', 0)
     waveforms_roll_all = waveforms_roll_all.permute(0, 2, 1)
     
-    waveforms_roll_denoise = Denoiser(waveforms_roll_all.reshape(-1, T)).reshape([N, phase_shift_array.shape[0], C, T])
+    waveforms_roll_denoise = Denoiser(waveforms_roll_all.reshape(-1, T)).reshape([N, S, C, T])
     
     waveforms_roll_denoise = waveforms_roll_denoise.permute(0, 3, 2, 1)#waveforms_roll_denoise.permute(0, 3, 1, 2) # NxTxCx11
     waveforms_roll_all = waveforms_roll_all.permute(0, 2, 1).reshape(N, T, -1, C).permute(0, 1, 3, 2)                             
@@ -238,8 +241,11 @@ def multichan_phase_shift_denoise_preshift(waveforms, ci_graph_all_maxCH_uniq, m
     spk_signs = torch.sign(waveforms_roll_denoise[range(N), offset, real_maxCH, 0])
                                    
     
-    phase_shift, halluci_idx = phase_shift_and_hallucination_idx_preshift(waveforms_roll_denoise[:, :, :, :11], waveforms_roll_all, spk_signs)
+    phase_shift, halluci_idx = phase_shift_and_hallucination_idx_preshift(waveforms_roll_denoise[:, :, :, :S], waveforms_roll_all, spk_signs)
     #compute phase-shift and hallucination index for all waveforms denoised at all phase-shifts                               
+    
+    del(waveforms_roll_all)
+    del(waveforms)
     
     phase_shift = F.pad(phase_shift, (0, 1), 'constant', 0) # pad for the additional values
     halluci_idx = F.pad(halluci_idx, (0, 1), 'constant', 0)  
@@ -251,6 +257,7 @@ def multichan_phase_shift_denoise_preshift(waveforms, ci_graph_all_maxCH_uniq, m
     pick_idx[range(N), real_maxCH, 0] = 1
     pick_idx[range(N), real_maxCH, S] = 0
                                    
+    previous_pick_idx = pick_idx.clone().detach()
     
     thresholds = torch.max(0.3*real_maxCH_info[0], torch.tensor(3))
     
@@ -263,7 +270,7 @@ def multichan_phase_shift_denoise_preshift(waveforms, ci_graph_all_maxCH_uniq, m
                                
     while True:
         if all(len(v)==0 for v in Q):
-            return torch.einsum("itjk,ijk->itj", waveforms_roll_denoise, pick_idx)[:, :, range(40)], waveforms_roll_denoise[:,:,range(40),0]               
+            return torch.einsum("itjk,ijk->itj", waveforms_roll_denoise, pick_idx)[:, :, range(40)]#, waveforms_roll_denoise[:,:,range(40),0]               
         u = Q.pop()
 
         
@@ -303,16 +310,22 @@ def multichan_phase_shift_denoise_preshift(waveforms, ci_graph_all_maxCH_uniq, m
         max_ptp_idx = max_ptp_info[1]                   
         threshold_accept_idx = (neighbor_max_ptps > thresholds[unfold_idx_unchecked])
         
-
+        #check!!!
         phase_shift_all = torch.einsum("ijk,ijk->ij", phase_shift.float(), pick_idx) # N x C
+        # print()
+        # phase_shift_all = torch.einsum("k,ijk->ij", phase_shift_array.float(), pick_idx) # N x C
         
         neighbor_phaseshift = phase_shift_all[unfold_idx_unchecked, Q_neighbors_neighbors[range(len(max_ptp_idx)),max_ptp_idx]]
         
+        phase_shift_previous = torch.einsum("ijk,ijk->ij", phase_shift.float(), previous_pick_idx) # N x C
+        # print(neighbor_phaseshift)
         
-        phase_accept_idx = (torch.min(torch.abs(phase_shift_all[unfold_idx_unchecked,:] - neighbor_phaseshift[:, None]), 1)[0]<=5)
+        phase_accept_idx = (torch.min(torch.abs(phase_shift_previous[unfold_idx_unchecked,:] - neighbor_phaseshift[:, None]), 1)[0]<=10)
      
         pick_phaseshift_info = torch.min(torch.abs(neighbor_phaseshift[:, None] - phase_shift_array[None,:]), 1)
         pick_phaseshift_idx = pick_phaseshift_info[1]
+        
+        previous_pick_idx = pick_idx.clone().detach()
 
         accept_idx = torch.squeeze(torch.nonzero(phase_accept_idx & threshold_accept_idx), 1)
         unaccept_idx = torch.squeeze(torch.nonzero((phase_accept_idx & threshold_accept_idx) == 0), 1)
@@ -327,12 +340,15 @@ def multichan_phase_shift_denoise_preshift(waveforms, ci_graph_all_maxCH_uniq, m
         halluci_keep_spike_idx = halluci_keep_spike_idx[:, None].repeat(1, b).reshape(-1)
 
         seek_idx = torch.squeeze(torch.nonzero(unchecked & halluci_keep_spike_idx), 1)
-        try:
-            Q.insert(0, torch.cat((unfold_idx[seek_idx][:, None], Q_neighbors[seek_idx][:, None]), 1))
-        except:
-            print(unfold_idx)
-        
-        
+
+        Q.insert(0, torch.cat((unfold_idx[seek_idx][:, None], Q_neighbors[seek_idx][:, None]), 1))
+
+            
+            
+
+
+    
+    
 def multichan_phase_shift_denoise(waveforms, ci_graph_on_probe, maxCH_neighbor, Denoiser, maxchans, CH_N=384, offset=42):
     t = time.time()
     N, T, C = waveforms.shape
@@ -484,6 +500,8 @@ def multichan_phase_shift_denoise(waveforms, ci_graph_on_probe, maxCH_neighbor, 
                             halluci_idx[i, z] = 1
 
 
+# def denoise_phaseshift_two_split(waveforms):
+    
 
 def temporal_align(waveforms, maxchans=None, offset=42):
     N, T, C = waveforms.shape
