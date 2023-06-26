@@ -316,6 +316,7 @@ class Localization(ChunkFeature):
         which_waveforms="denoised",
         feature="ptp",
         name_extra="",
+        ptp_precision_decimals=None,
     ):
         super().__init__()
         assert channel_index.shape[0] == geom.shape[0]
@@ -333,6 +334,7 @@ class Localization(ChunkFeature):
         self.name = f"localizations{name_extra}"
         self.dogpu = "gpu" in feature
         self.opt = "lbfgs"
+        self.ptp_precision_decimals = ptp_precision_decimals
         if "adam" in feature:
             self.opt = "adam"
 
@@ -354,7 +356,7 @@ class Localization(ChunkFeature):
                     ptps = ptps.cpu().numpy()
             else:
                 ptps = wfs.ptp(1)
-        elif self.feature == "peak":
+        elif "peak" in self.feature:
             if torch.is_tensor(wfs):
                 abswfs = torch.abs(wfs)
                 peaks, argpeaks = abswfs.max(dim=1)
@@ -375,6 +377,8 @@ class Localization(ChunkFeature):
             raise NameError("Use ptp or peak value for localization.")
 
         if torch.is_tensor(ptps):
+            if self.ptp_precision_decimals is not None:
+                ptps = torch.round(ptps, decimals=self.ptp_precision_decimals)
             x, y, z_rel, z_abs, alpha = localize_torch.localize_ptps_index_lm(
                 ptps,
                 self.geom,
@@ -386,6 +390,8 @@ class Localization(ChunkFeature):
             )
             return torch.column_stack((x, y, z_abs, alpha, z_rel))
         else:
+            if self.ptp_precision_decimals is not None:
+                ptps = np.round(ptps, decimals=self.ptp_precision_decimals)
             (
                 xs,
                 ys,
@@ -743,7 +749,8 @@ class STPCA(ChunkFeature):
         self.mean_ = torch.as_tensor(self.pca.mean_, device=device)
         self.components_ = torch.as_tensor(self.pca.components_, device=device)
         self.whiten = self.pca.whiten
-        self.whitener = torch.as_tensor(self.whitener, device=device)
+        if self.whiten:
+            self.whitener = torch.as_tensor(self.whitener, device=device)
         return self
 
     def raw_transform(self, X):
@@ -760,6 +767,8 @@ class STPCA(ChunkFeature):
         group.create_dataset("T", data=self.T)
         group.create_dataset("pca_mean", data=self.pca.mean_)
         group.create_dataset("pca_components", data=self.pca.components_)
+        if self.whiten:
+            group.create_dataset("pca_whitener", data=self.pca.components_)
 
     def from_h5(self, h5):
         try:

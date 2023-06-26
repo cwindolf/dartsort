@@ -13,6 +13,7 @@ import spikeinterface.core as sc
 import torch
 import torch.nn.functional as F
 from tqdm.auto import tqdm
+import time
 
 from . import chunk_features, denoise, detect, localize_index
 from .multiprocessing_utils import MockQueue, ProcessPoolExecutor, get_pool
@@ -61,6 +62,8 @@ def subtraction(
     dedup_spatial_radius=70,
     enforce_decrease_kind="radial",
     do_phaseshift=False,
+    ci_graph_all_maxCH_uniq=None,
+    maxCH_neighbor=None,
     # what to save?
     save_residual=False,
     save_subtracted_waveforms=False,
@@ -81,6 +84,7 @@ def subtraction(
     localize_firstchan_n_channels=20,
     loc_workers=4,
     loc_feature="ptp",
+    loc_ptp_precision_decimals=None,
     # want to compute any other features of the waveforms?
     extra_features="default",
     # misc kwargs
@@ -141,9 +145,7 @@ def subtraction(
     """
     # validate and process args
     if neighborhood_kind not in ("firstchan", "box", "circle"):
-        raise ValueError(
-            "Neighborhood kind", neighborhood_kind, "not understood."
-        )
+        raise ValueError("Neighborhood kind", neighborhood_kind, "not understood.")
     if enforce_decrease_kind not in ("columns", "radial", "none"):
         raise ValueError(
             "Enforce decrease method", enforce_decrease_kind, "not understood."
@@ -155,9 +157,9 @@ def subtraction(
         neighborhood_kind = "box"
         box_norm_p = 2
 
-    batch_len_samples = int(
-        np.floor(n_sec_chunk * recording.get_sampling_frequency())
-    )
+    batch_len_samples = int(np.floor(n_sec_chunk * recording.get_sampling_frequency()))
+
+    print(device)
 
     # prepare output dir
     out_folder = Path(out_folder)
@@ -218,9 +220,7 @@ def subtraction(
     # channel indexes for extraction, NN detection, deduplication
     geom = recording.get_channel_locations()
     print(f"{geom.shape=}")
-    dedup_channel_index = make_channel_index(
-        geom, dedup_spatial_radius, steps=2
-    )
+    dedup_channel_index = make_channel_index(geom, dedup_spatial_radius, steps=2)
     nn_channel_index = make_channel_index(geom, dedup_spatial_radius, steps=1)
     if neighborhood_kind == "box":
         extract_channel_index = make_channel_index(
@@ -246,13 +246,9 @@ def subtraction(
     )
     if extra_features == "default":
         feat_wfs = "denoised" if do_clean else "subtracted"
-        extra_features = [
-            F(which_waveforms=feat_wfs) for F in default_extra_feats
-        ]
+        extra_features = [F(which_waveforms=feat_wfs) for F in default_extra_feats]
     if save_denoised_ptp_vectors:
-        extra_features += [
-            chunk_features.PTPVector(which_waveforms="denoised")
-        ]
+        extra_features += [chunk_features.PTPVector(which_waveforms="denoised")]
     if save_cleaned_pca_projs_on_n_channels:
         extra_features += [
             chunk_features.STPCA(
@@ -277,6 +273,19 @@ def subtraction(
         print("Skipping enforce decrease.")
         do_enforce_decrease = False
 
+    maxCH_neighbor = None
+    ci_graph_all_maxCH_uniq = None
+    if do_phaseshift == True:
+        ci_graph_on_probe, maxCH_neighbor = denoise.make_ci_graph(
+            extract_channel_index, geom, device
+        )
+        ci_graph_all_maxCH_uniq = denoise.make_ci_graph_all_maxCH(
+            ci_graph_on_probe, maxCH_neighbor, device
+        )
+    else:
+        print("No phase-shift.")
+        do_phaseshift = False
+
     # check localization arg
     if localization_model not in ("pointsource", "CoM", "dipole"):
         raise ValueError(f"Unknown localization model: {localization_model}")
@@ -298,6 +307,7 @@ def subtraction(
                     localization_kind=localization_kind,
                     localization_model=localization_model,
                     feature=lf,
+                    ptp_precision_decimals=loc_ptp_precision_decimals,
                 )
             ]
     else:
@@ -381,6 +391,8 @@ def subtraction(
                 residnorm_decrease=residnorm_decrease,
                 do_enforce_decrease=do_enforce_decrease,
                 do_phaseshift=do_phaseshift,
+                ci_graph_all_maxCH_uniq=ci_graph_all_maxCH_uniq,
+                maxCH_neighbor=maxCH_neighbor,
                 denoiser_init_kwargs=denoiser_init_kwargs,
                 denoiser_weights_path=denoiser_weights_path,
                 n_sec_pca=n_sec_pca,
@@ -421,6 +433,8 @@ def subtraction(
                 residnorm_decrease=residnorm_decrease,
                 do_enforce_decrease=do_enforce_decrease,
                 do_phaseshift=do_phaseshift,
+                ci_graph_all_maxCH_uniq=ci_graph_all_maxCH_uniq,
+                maxCH_neighbor=maxCH_neighbor,
                 denoiser_init_kwargs=denoiser_init_kwargs,
                 denoiser_weights_path=denoiser_weights_path,
                 n_sec_pca=n_sec_pca,
@@ -510,9 +524,7 @@ def subtraction(
 
             # if we're resuming, filter out jobs we already did
             jobs = [
-                (batch_id, start)
-                for batch_id, start in jobs
-                if start >= last_sample
+                (batch_id, start) for batch_id, start in jobs if start >= last_sample
             ]
             n_batches = len(jobs)
             jobs = (
@@ -532,6 +544,8 @@ def subtraction(
                     geom,
                     do_enforce_decrease,
                     do_phaseshift,
+                    ci_graph_all_maxCH_uniq,
+                    maxCH_neighbor,
                     peak_sign,
                     dtype,
                 )
@@ -576,9 +590,7 @@ def subtraction(
                     Path(result.spike_index).unlink()
                     for f, dset in zip(extra_features, feature_dsets):
                         dset.resize(N + N_new, axis=0)
-                        fnpy = (
-                            batch_data_folder / f"{result.prefix}{f.name}.npy"
-                        )
+                        fnpy = batch_data_folder / f"{result.prefix}{f.name}.npy"
                         if N_new > 0:
                             dset[N:] = np.load(fnpy)
                         Path(fnpy).unlink()
@@ -586,9 +598,7 @@ def subtraction(
                     N += N_new
 
                 count += 1
-                pbar.set_description(
-                    f"{n_sec_chunk}s/it [spk/it={N / count:0.1f}]"
-                )
+                pbar.set_description(f"{n_sec_chunk}s/it [spk/it={N / count:0.1f}]")
 
     # -- done!
     if save_residual:
@@ -637,9 +647,7 @@ def subtraction_binary(
     )
 
     # set geometry
-    recording.set_dummy_probe_from_locations(
-        geom, shape_params=dict(radius=10)
-    )
+    recording.set_dummy_probe_from_locations(geom, shape_params=dict(radius=10))
 
     if nsync > 0:
         recording = recording.channel_slice(
@@ -650,9 +658,7 @@ def subtraction_binary(
     T_sec = T_samples / recording.get_sampling_frequency()
     assert t_start >= 0 and (t_end is None or t_end <= T_sec)
     start_sample = int(np.floor(t_start * sampling_rate))
-    end_sample = (
-        T_samples if t_end is None else int(np.floor(t_end * sampling_rate))
-    )
+    end_sample = T_samples if t_end is None else int(np.floor(t_end * sampling_rate))
     if start_sample > 0 or end_sample < T_samples:
         recording = recording.frame_slice(
             start_frame=start_sample, end_frame=end_sample
@@ -708,17 +714,13 @@ def _subtraction_batch_init(
         if not rank:
             print("num gpus:", torch.cuda.device_count())
         if torch.cuda.device_count() > 1:
-            device = torch.device(
-                "cuda", index=rank % torch.cuda.device_count()
-            )
+            device = torch.device("cuda", index=rank % torch.cuda.device_count())
             print(
                 f"Worker {rank} using GPU {rank % torch.cuda.device_count()} "
                 f"out of {torch.cuda.device_count()} available."
             )
     elif device.type == "cuda" and device.index is not None and not rank:
-        print(
-            f"All workers will live on {device} since a specific GPU was chosen"
-        )
+        print(f"All workers will live on {device} since a specific GPU was chosen")
     _subtraction_batch.device = device
 
     time.sleep(rank / 20)
@@ -750,9 +752,7 @@ def _subtraction_batch_init(
         dn_detector.to(device)
     _subtraction_batch.dn_detector = dn_detector
 
-    _subtraction_batch.extra_features = [
-        ef.to(device) for ef in extra_features
-    ]
+    _subtraction_batch.extra_features = [ef.to(device) for ef in extra_features]
     _subtraction_batch.subtracted_tpca = subtracted_tpca.to(device)
     if denoised_tpca is not None:
         denoised_tpca = denoised_tpca.to(device)
@@ -763,10 +763,7 @@ def _subtraction_batch_init(
     for d in stack:
         for k, v in d.items():
             if isinstance(v, dict):
-                if (
-                    "class" in v
-                    and "IblStreamingRecordingExtractor" in v["class"]
-                ):
+                if "class" in v and "IblStreamingRecordingExtractor" in v["class"]:
                     v["kwargs"]["cache_folder"] = (
                         Path(v["kwargs"]["cache_folder"]) / f"cache{rank}"
                     )
@@ -792,6 +789,8 @@ def subtraction_batch(
     geom,
     do_enforce_decrease,
     do_phaseshift,
+    ci_graph_all_maxCH_uniq,
+    maxCH_neighbor,
     peak_sign,
     dtype,
     extra_features,
@@ -804,62 +803,61 @@ def subtraction_batch(
     dn_detector,
 ):
     """Runs subtraction on a batch
+            This function handles the logic of loading data from disk
+            (padding it with a buffer where necessary), running the loop
+            over thresholds for `detect_and_subtract`, handling spikes
+            that were in the buffer, and applying the denoising pipeline.
 
-    This function handles the logic of loading data from disk
-    (padding it with a buffer where necessary), running the loop
-    over thresholds for `detect_and_subtract`, handling spikes
-    that were in the buffer, and applying the denoising pipeline.
+            A note on buffer logic:
+             - We load a buffer of twice the spike length.
+             - The outer buffer of size spike length is to ensure that
+               spikes inside the inner buffer of size spike length can be
+               loaded
+             - We subtract spikes inside the inner buffer in `detect_and_subtract`
+               to ensure consistency of the residual across batches.
 
-    A note on buffer logic:
-     - We load a buffer of twice the spike length.
-     - The outer buffer of size spike length is to ensure that
-       spikes inside the inner buffer of size spike length can be
-       loaded
-     - We subtract spikes inside the inner buffer in `detect_and_subtract`
-       to ensure consistency of the residual across batches.
-
-    Arguments
-    ---------
-    batch_data_folder : string
-        Where temporary results are being stored
-    s_start : int
-        The batch's starting time in samples
-    batch_len_samples : int
-        The length of a batch in samples
-    standardized_bin : int
-        The path to the standardized binary file
-    thresholds : list of int
-        Voltage thresholds for subtraction
-    tpca : sklearn PCA object or None
-        A pre-trained temporal PCA (or None in which case no PCA
-        is applied)
-    trough_offset : int
-        42 in practice, the alignment of the max channel's trough
-        in the extracted waveforms
-    dedup_channel_index : int array (num_channels, num_neighbors)
-        Spatial neighbor structure for deduplication
-    spike_length_samples : int
-        121 in practice, temporal length of extracted waveforms
-    extract_channel_index : int array (num_channels, extract_channels)
-        Channel neighborhoods for extracted waveforms
-    device : string or torch.device
-    start_sample, end_sample : int
-        Temporal boundary of the region of the recording being
-        considered (in samples)
-    radial_parents
-        Helper data structure for enforce_decrease
-    localization_kind : str
+            Arguments
+            ---------
+            batch_data_folder : string
+                Where temporary results are being stored
+            s_start : int
+                The batch's starting time in samples
+            batch_len_samples : int
+                The length of a batch in samples
+            standardized_bin : int
+                The path to the standardized binary file
+            thresholds : list of int
+                Voltage thresholds for subtraction
+            tpca : sklearn PCA object or None
+                A pre-trained temporal PCA (or None in which case no PCA
+                is applied)
+            trough_offset : int
+                42 in practice, the alignment of the max channel's trough
+                in the extracted waveforms
+            dedup_channel_index : int array (num_channels, num_neighbors)
+                Spatial neighbor structure for deduplication
+            spike_length_samples : int
+                121 in practice, temporal length of extracted waveforms
+            extract_channel_index : int array (num_channels, extract_channels)
+                Channel neighborhoods for extracted waveforms
+            device : string or torch.device
+            start_sample, end_sample : int
+                Temporal boundary of the region of the recording being
+                considered (in samples)
+            radial_parents
+                Helper data structure for enforce_decrease
+            localization_kind : str
     How should we run localization?
-    loc_workers : int
+            loc_workers : int
     on how many threads?
-    geom : array
-        The probe geometry
-    denoiser, detector : torch nns or None
-    probe : string or None
+            geom : array
+                The probe geometry
+            denoiser, detector : torch nns or None
+            probe : string or None
 
-    Returns
-    -------
-    res : SubtractionBatchResult
+            Returns
+            -------
+            res : SubtractionBatchResult
     """
     # we use a double buffer: inner buffer of length spike_length,
     # outer buffer of length spike_length
@@ -889,9 +887,7 @@ def subtraction_batch(
     if load_end == recording.get_num_samples():
         pad_right = buffer - (recording.get_num_samples() - s_end)
     if pad_left != 0 or pad_right != 0:
-        residual = np.pad(
-            residual, [(pad_left, pad_right), (0, 0)], mode="edge"
-        )
+        residual = np.pad(residual, [(pad_left, pad_right), (0, 0)], mode="edge")
 
     # now, no matter where we were, the data has the following shape
     assert residual.shape == (2 * buffer + s_end - s_start, n_channels)
@@ -916,6 +912,8 @@ def subtraction_batch(
             device=device,
             do_enforce_decrease=do_enforce_decrease,
             do_phaseshift=do_phaseshift,
+            ci_graph_all_maxCH_uniq=ci_graph_all_maxCH_uniq,
+            maxCH_neighbor=maxCH_neighbor,
             geom=geom,
             residnorm_decrease=residnorm_decrease,
         )
@@ -1016,7 +1014,7 @@ def subtraction_batch(
                     batch_data_folder / f"{prefix}{f.name}.npy",
                     feat,
                 )
-        # print(np.shape(cleaned_wfs))
+
         denoised_wfs = full_denoising(
             cleaned_wfs,
             spike_index[:, 1],
@@ -1024,6 +1022,8 @@ def subtraction_batch(
             radial_parents,
             do_enforce_decrease=do_enforce_decrease,
             do_phaseshift=do_phaseshift,
+            ci_graph_all_maxCH_uniq=ci_graph_all_maxCH_uniq,
+            maxCH_neighbor=maxCH_neighbor,
             geom=geom,
             # tpca=subtracted_tpca,
             tpca=denoised_tpca,
@@ -1087,6 +1087,8 @@ def train_featurizers(
     residnorm_decrease=False,
     do_enforce_decrease=True,
     do_phaseshift=False,
+    ci_graph_all_maxCH_uniq=None,
+    maxCH_neighbor=None,
     n_sec_pca=10,
     pca_t_start=0,
     pca_t_end=None,
@@ -1142,6 +1144,7 @@ def train_featurizers(
     spike_indices = []
     waveforms = []
     residuals = []
+
     for s_start in tqdm(starts, "PCA training subtraction"):
         spind, wfs, residual_singlebuf = subtraction_batch(
             batch_data_folder=None,
@@ -1159,6 +1162,8 @@ def train_featurizers(
             geom=geom,
             do_enforce_decrease=do_enforce_decrease,
             do_phaseshift=do_phaseshift,
+            ci_graph_all_maxCH_uniq=ci_graph_all_maxCH_uniq,
+            maxCH_neighbor=maxCH_neighbor,
             peak_sign=peak_sign,
             dtype=dtype,
             extra_features=[],
@@ -1173,7 +1178,9 @@ def train_featurizers(
             dn_detector=dn_detector,
         )
         spike_indices.append(spind)
-        waveforms.append(wfs.cpu().numpy())
+        if torch.is_tensor(wfs):
+            wfs = wfs.cpu().numpy()
+        waveforms.append(wfs)
         residuals.append(residual_singlebuf.cpu().numpy())
 
     try:
@@ -1217,7 +1224,6 @@ def train_featurizers(
             axis=0,
         )
         cleaned_waveforms += waveforms
-
         # print(np.shape(cleaned_waveforms))
         denoised_waveforms = full_denoising(
             cleaned_waveforms,
@@ -1225,12 +1231,16 @@ def train_featurizers(
             extract_channel_index,
             radial_parents,
             do_enforce_decrease=do_enforce_decrease,
-            do_phaseshift=False,  # do_phaseshift,
+            do_phaseshift=do_phaseshift,
+            ci_graph_all_maxCH_uniq=ci_graph_all_maxCH_uniq,
+            maxCH_neighbor=maxCH_neighbor,
             geom=geom,
             tpca=None,
             device=device,
             denoiser=denoiser,
         )
+    if denoised_waveforms != None:
+        denoised_waveforms = denoised_waveforms.to(device)
 
     # train extra featurizers if necessary
     extra_features = [] if extra_features is None else extra_features
@@ -1265,6 +1275,8 @@ def detect_and_subtract(
     device="cpu",
     do_enforce_decrease=True,
     do_phaseshift=False,
+    ci_graph_all_maxCH_uniq=None,
+    maxCH_neighbor=None,
     geom=None,
     residnorm_decrease=False,
 ):
@@ -1337,12 +1349,16 @@ def detect_and_subtract(
         radial_parents,
         do_enforce_decrease=do_enforce_decrease,
         do_phaseshift=do_phaseshift,
+        ci_graph_all_maxCH_uniq=ci_graph_all_maxCH_uniq,
+        maxCH_neighbor=maxCH_neighbor,
         geom=geom,
         tpca=tpca,
         device=device,
         denoiser=denoiser,
         return_tpca_embedding=True,
     )
+
+    waveforms = waveforms.to(device)
 
     # test residual norm decrease
     if residnorm_decrease:
@@ -1397,6 +1413,8 @@ def full_denoising(
     radial_parents=None,
     do_enforce_decrease=True,
     do_phaseshift=False,
+    ci_graph_all_maxCH_uniq=None,
+    maxCH_neighbor=None,
     geom=None,
     probe=None,
     tpca=None,
@@ -1412,40 +1430,56 @@ def full_denoising(
     assert not align  # still working on that
 
     if do_phaseshift:
-        if geom is None:
-            raise ValueError("Phase-shift denoising needs geom input!")
-        ci_graph_on_probe, maxCH_neighbor = denoise.make_ci_graph(
-            extract_channel_index, geom, device=device
-        )
-        waveforms = torch.as_tensor(
-            waveforms, device=device, dtype=torch.float
-        )
-        waveforms = denoise.multichan_phase_shift_denoise(
-            waveforms,
-            ci_graph_on_probe,
-            maxCH_neighbor.long(),
-            denoiser,
-            maxchans=maxchans,
-        )
+        if device == "cuda":
+            torch.cuda.empty_cache()
+        maxCH_neighbor = maxCH_neighbor.to(device)
+        # if geom is None:
+        #     raise ValueError('Phase-shift denoising needs geom input!')
+        if ci_graph_all_maxCH_uniq is None:
+            raise ValueError("Needs channel graph for neighbor searching!")
+        # ci_graph_on_probe, maxCH_neighbor = denoise.make_ci_graph(extract_channel_index, geom, device = device)
+        ci_graph_all_maxCH_uniq = ci_graph_all_maxCH_uniq.to(device)
+        waveforms = torch.as_tensor(waveforms, device=device, dtype=torch.float)
+        maxchans = torch.tensor(maxchans, device=device)
+
+        if device == "cuda":
+            waveforms = denoise.multichan_phase_shift_denoise_preshift(
+                waveforms,
+                ci_graph_all_maxCH_uniq,
+                maxCH_neighbor,
+                denoiser,
+                maxchans,
+                device,
+            )
+        else:
+            for bs in range(0, N, batch_size):
+                torch.cuda.empty_cache()
+                be = min(bs + batch_size, N)
+                bs = torch.as_tensor(bs, device=device)
+                be = torch.as_tensor(be, device=device)
+                waveforms[bs:be, :, :] = denoise.multichan_phase_shift_denoise_preshift(
+                    waveforms[bs:be, :, :],
+                    ci_graph_all_maxCH_uniq,
+                    maxCH_neighbor,
+                    denoiser,
+                    maxchans[bs:be],
+                    device,
+                )
+
         # waveforms = torch.as_tensor(waveforms, device=device, dtype=torch.float)
         in_probe_channel_index = (
-            torch.as_tensor(extract_channel_index, device=device)
-            < num_channels
+            torch.as_tensor(extract_channel_index, device=device) < num_channels
         )
         in_probe_index = in_probe_channel_index[maxchans]
 
         waveforms = waveforms.permute(0, 2, 1)
         wfs_in_probe = waveforms[in_probe_index]
     else:
-        waveforms = torch.as_tensor(
-            waveforms, device=device, dtype=torch.float
-        )
+        waveforms = torch.as_tensor(waveforms, device=device, dtype=torch.float)
 
         if not waveforms.numel():
             if return_tpca_embedding:
-                embed = np.full(
-                    (0, C, tpca.n_components), np.nan, dtype=tpca.dtype
-                )
+                embed = np.full((0, C, tpca.n_components), np.nan, dtype=tpca.dtype)
                 return waveforms, embed
             return waveforms
 
@@ -1453,8 +1487,7 @@ def full_denoising(
         # those are filled with NaNs, which will blow up PCA. so, here
         # we grab just the non-NaN channels.
         in_probe_channel_index = (
-            torch.as_tensor(extract_channel_index, device=device)
-            < num_channels
+            torch.as_tensor(extract_channel_index, device=device) < num_channels
         )
         in_probe_index = in_probe_channel_index[maxchans]
         waveforms = waveforms.permute(0, 2, 1)
@@ -1468,6 +1501,7 @@ def full_denoising(
 
     # Temporal PCA while we are still transposed
     if tpca is not None:
+        tpca = tpca.to(device)
         tpca_embeds = tpca.raw_transform(wfs_in_probe)
         wfs_in_probe = tpca.raw_inverse_transform(tpca_embeds)
         if not return_tpca_embedding:
@@ -1502,9 +1536,7 @@ def full_denoising(
             pass
 
     if return_tpca_embedding and tpca is not None:
-        tpca_embeddings = np.full(
-            (N, C, tpca.n_components), np.nan, dtype=tpca.dtype
-        )
+        tpca_embeddings = np.full((N, C, tpca.n_components), np.nan, dtype=tpca.dtype)
         # run tpca only on channels that matter!
         tpca_embeddings[in_probe_index.cpu()] = tpca_embeds.cpu()
         return waveforms, tpca_embeddings.transpose(0, 2, 1)
@@ -1543,9 +1575,7 @@ def get_output_h5(
 
         # initialize datasets
         output_h5.create_dataset("fs", data=recording.get_sampling_frequency())
-        output_h5.create_dataset(
-            "geom", data=recording.get_channel_locations()
-        )
+        output_h5.create_dataset("geom", data=recording.get_channel_locations())
         output_h5.create_dataset("start_time", data=recording.get_times()[0])
         output_h5.create_dataset("channel_index", data=extract_channel_index)
 
@@ -1569,6 +1599,7 @@ def get_output_h5(
             f.to_h5(output_h5)
         if fit_features is not None:
             for f in fit_features:
+                # f.to('cpu')
                 f.to_h5(output_h5)
 
     done_percent = 100 * last_sample / recording.get_num_samples()
@@ -1622,13 +1653,8 @@ def subtract_and_localize_numpy(
     spike_length_samples=121,
     loc_workers=1,
 ):
-    # we will run in this buffer and return it after subtraction
-    residual = raw.copy()
-
     # probe geometry helper structures
-    dedup_channel_index = make_channel_index(
-        geom, dedup_spatial_radius, steps=2
-    )
+    dedup_channel_index = make_channel_index(geom, dedup_spatial_radius, steps=2)
     extract_channel_index = make_channel_index(
         geom, extract_radius, distance_order=False
     )
@@ -1644,6 +1670,10 @@ def subtract_and_localize_numpy(
     # load neural nets
     if device is None:
         device = "cuda" if torch.cuda.is_available else "cpu"
+        # we will run in this buffer and return it after subtraction
+    raw = torch.from_numpy(raw)
+    raw.to(device)
+    residual = raw.clone()
     device = torch.device(device)
     denoiser = denoise.SingleChanDenoiser()
     denoiser.load()
@@ -1667,7 +1697,7 @@ def subtract_and_localize_numpy(
             trough_offset=trough_offset,
             spike_length_samples=spike_length_samples,
             device=device,
-            probe=probe,
+            geom=geom,
         )
         _logger.debug(
             f"Detected and subtracted {spind.shape[0]} spikes "
@@ -1677,11 +1707,9 @@ def subtract_and_localize_numpy(
             subtracted_wfs.append(subwfs)
             spike_index.append(spind)
 
-    subtracted_wfs = np.concatenate(subtracted_wfs, axis=0)
+    subtracted_wfs = torch.cat(subtracted_wfs, dim=0)
     spike_index = np.concatenate(spike_index, axis=0)
-    _logger.debug(
-        f"Detected and subtracted {spike_index.shape[0]} spikes Total"
-    )
+    _logger.debug(f"Detected and subtracted {spike_index.shape[0]} spikes Total")
 
     # sort so time increases
     sort = np.argsort(spike_index[:, 0])
@@ -1690,7 +1718,6 @@ def subtract_and_localize_numpy(
 
     _logger.debug(f"Denoising waveforms...")
     # "collision-cleaned" wfs
-
     cleaned_wfs = read_waveforms_in_memory(
         residual,
         spike_index,
@@ -1714,9 +1741,12 @@ def subtract_and_localize_numpy(
 
     # localize
     _logger.debug(f"Localisation...")
-    locptps = cleaned_wfs.ptp(1)
+    ptp = chunk_features.PTPVector(which_waveforms="denoised").transform(
+        spike_index[:, 1],
+        denoised_wfs=cleaned_wfs,
+    )
     xs, ys, z_rels, z_abss, alphas = localize_index.localize_ptps_index(
-        locptps,
+        ptp,
         geom,
         spike_index[:, 1],
         extract_channel_index,
@@ -1736,6 +1766,4 @@ def subtract_and_localize_numpy(
         ],
         columns=["sample", "trace", "x", "y", "z", "alpha"],
     )
-    return df_localisation, cleaned_wfs
-
-
+    return df_localisation, cleaned_wfs.to("cpu")
