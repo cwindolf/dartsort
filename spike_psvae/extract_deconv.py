@@ -52,6 +52,7 @@ def extract_deconv(
     reassignment_norm_p=np.inf,
     localize=True,
     loc_radius=100,
+    loc_ptp_precision_decimals=None,
     n_sec_chunk=1,
     t_start=0,
     t_end=None,
@@ -253,7 +254,11 @@ def extract_deconv(
     if localize:
         featurizers.append(
             chunk_features.Localization(
-                geom, channel_index, loc_radius=loc_radius, feature=loc_feature
+                geom, 
+                channel_index, 
+                loc_radius=loc_radius, 
+                feature=loc_feature, 
+                ptp_precision_decimals=loc_ptp_precision_decimals,
             )
         )
         featurizers.append(chunk_features.MaxPTP())

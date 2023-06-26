@@ -23,7 +23,7 @@ if __name__ == "__main__":
     ap.add_argument("--locworkers", type=int, default=2)
 
     args = ap.parse_args()
-    
+
     import torch
     print(f"{torch.cuda.is_available()=}")
 
@@ -36,7 +36,7 @@ if __name__ == "__main__":
     # %%
     sessions_rep_site = one.alyx.rest('sessions', 'list', dataset_types='spikes.times', tag='2022_Q2_IBL_et_al_RepeatedSite')
     sessions_rep_site = list(sorted(sessions_rep_site, key=lambda session: session['id']))
-    
+
     minix = args.minix
     maxix = args.maxix
     if maxix is None:
