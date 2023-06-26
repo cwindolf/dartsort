@@ -1037,11 +1037,7 @@ def subtraction_batch(
                     batch_data_folder / f"{prefix}{f.name}.npy",
                     feat,
                 )
-<<<<<<< HEAD
-        # print(np.shape(cleaned_wfs))
-        # print(device)
-=======
->>>>>>> 56738b818aa1643e0e5e32078b60a67d95d174f3
+
         denoised_wfs = full_denoising(
             cleaned_wfs,
             spike_index[:, 1],
