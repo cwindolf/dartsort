@@ -11,9 +11,12 @@ from sklearn.decomposition import PCA
 from torch import nn
 from tqdm.auto import trange
 
-from .denoise_temporal_decrease import (
-    _enforce_temporal_decrease_right, _enforce_temporal_decrease_left
-)
+try:
+    from .denoise_temporal_decrease import (
+        _enforce_temporal_decrease_right, _enforce_temporal_decrease_left
+    )
+except ImportError:
+    pass
 
 from itertools import zip_longest
 import multiprocessing
