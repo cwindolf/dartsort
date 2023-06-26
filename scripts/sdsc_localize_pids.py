@@ -1,23 +1,24 @@
-# %%
-import warnings
-
-warnings.simplefilter("ignore", category=DeprecationWarning)
-
-import numpy as np
-from one.api import ONE
-import spikeinterface.core as sc
-import spikeinterface.extractors as se
-from spike_psvae import subtract
-from pathlib import Path
+import argparse
 import pickle
 import shutil
-import argparse
 import subprocess
+import warnings
+from pathlib import Path
+
 import h5py
+import numpy as np
+import one.alf.io as alfio
+import spikeinterface.core as sc
+import spikeinterface.extractors as se
 from brainbox.io.one import SpikeSortingLoader
-from spike_psvae.spike_train_utils import clean_align_and_get_templates
-from spike_psvae.grab_and_localize import grab_and_localize
 from dredge import dredge_ap
+from dredge import motion_util as mu
+from one.api import ONE
+from spike_psvae import subtract
+from spike_psvae.grab_and_localize import grab_and_localize
+from spike_psvae.spike_train_utils import clean_align_and_get_templates
+
+warnings.simplefilter("ignore", category=DeprecationWarning)
 
 
 sdsc_base_path = Path("/mnt/sdceph/users/ibl/data")
@@ -57,6 +58,7 @@ if __name__ == "__main__":
     ap.add_argument("--batchlen", type=float, default=1)
     ap.add_argument("--locworkers", type=int, default=2)
     ap.add_argument("--ksreloc", action="store_true")
+    ap.add_argument("--ksmotion", action="store_true")
     ap.add_argument("--residnorm-decrease", type=float, default=10.0)
     ap.add_argument("--tmp-parent", type=str, default="/tmp")
     ap.add_argument("--no-overwrite", action="store_true")
@@ -237,18 +239,23 @@ if __name__ == "__main__":
                     spike_times = h5["spike_index"][:, 0] + (
                         h5["start_time"][()] * 30_000
                     )
+                    x = h5["localizations"][:, 0]
                     z = h5["localizations"][:, 2]
                     maxptp = h5["maxptps"][:]
                     geom = h5["geom"][:]
+                    t = spike_times / 30000
 
-                    wh = (z > geom[:, 1].min() - 250) & (
-                        z < geom[:, 1].max() + 250
+                    wh = (
+                        (z > geom[:, 1].min() - 250)
+                        & (z < geom[:, 1].max() + 250)
+                        & (x > geom[:, 0].min() - 250)
+                        & (x < geom[:, 0].max() + 250)
                     )
 
-                    tme, extra = dredge_ap.register(
+                    tme, _ = dredge_ap.register(
                         maxptp[wh],
                         z[wh],
-                        spike_times[wh] / 30000,
+                        t[wh],
                         raster_kw=dict(
                             gaussian_smoothing_sigma_um=1,
                             gaussian_smoothing_sigma_s=1,
@@ -265,6 +272,30 @@ if __name__ == "__main__":
                     )
                     z_reg = tme.correct_s(spike_times / 30000, z)
                     h5.create_dataset("z_reg", data=z_reg)
+
+                    # ks' drift correction
+                    if args.ksmotion:
+                        ssl = SpikeSortingLoader(one=one, pid=pid)
+                        ssl.download_spike_sorting_object("drift")
+                        drift = alfio.load_object(
+                            ssl.files["drift"], wildcards=ssl.one.wildcards
+                        )
+                        drift_samples = ssl.samples2times(drift["times"], direction="reverse")
+
+                        # code from pyks. get the centers of the bins that they used
+                        nblocks = (drift["um"].shape[1] + 1) // 2
+                        yl = np.floor(geom[:, 1].max() / nblocks).astype("int") - 1
+                        mins = np.linspace(0, geom[:, 1].max() - yl - 1, 2 * nblocks - 1)
+                        maxs = mins + yl
+                        centers = (mins + maxs) / 2
+                        print(f"{centers.shape=} {drift_samples.shape=} {drift['um'].shape=}")
+                        ksme = mu.NonrigidMotionEstimate(
+                            -drift["um"].T,
+                            time_bin_centers_s=drift_samples / fs,
+                            spatial_bin_centers_um=centers,
+                        )
+                        z_reg_ks = ksme.correct_s(t, z)
+                        h5.create_dataset("z_reg_ks", data=z_reg_ks)
 
                 shutil.copy(sub_h5, sessdir)
             except Exception as e:
