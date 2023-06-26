@@ -280,12 +280,14 @@ def full_channel_index(n_channels):
     )
 
 
-def make_channel_index(geom, radius, steps=1, distance_order=False, p=2):
+def make_channel_index(geom, radius, steps=1, distance_order=False, p=2, pad_val = None):
     """
     Compute an array whose whose ith row contains the ordered
     (by distance) neighbors for the ith channel
     """
     C = geom.shape[0]
+    if pad_val == None:
+        pad_val = C
 
     # get neighbors matrix
     neighbors = squareform(pdist(geom, metric="minkowski", p=p)) <= radius
@@ -299,7 +301,7 @@ def make_channel_index(geom, radius, steps=1, distance_order=False, p=2):
     # others will be filled with the total number of channels
     # (an invalid index into the recording, but this behavior
     # is useful e.g. in the spatial max pooling for deduplication)
-    channel_index = np.full((C, n_neighbors), C, dtype=int)
+    channel_index = np.full((C, n_neighbors), pad_val, dtype=int)
 
     # fill every row in the matrix (one per channel)
     for current in range(C):
