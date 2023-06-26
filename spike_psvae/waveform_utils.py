@@ -1,8 +1,8 @@
 import numpy as np
-from scipy.spatial.distance import cdist, pdist, squareform
-from sklearn.decomposition import PCA, TruncatedSVD
 import torch
 import torch.nn.functional as F
+from scipy.spatial.distance import cdist, pdist, squareform
+from sklearn.decomposition import PCA, TruncatedSVD
 
 from . import spikeio
 
@@ -271,6 +271,18 @@ def make_contiguous_channel_index(n_channels, n_neighbors=40):
         channel_index.append(np.arange(low, low + n_neighbors))
     channel_index = np.array(channel_index)
 
+    return channel_index
+
+
+def make_pitch_channel_index(geom, n_neighbor_rows=1, pitch=None):
+    n_channels = geom.shape[0]
+    if pitch is None:
+        pitch = get_pitch(geom)
+    neighbors = np.abs(geom[:, 1][:, None] - geom[:, 1][None, :]) <= n_neighbor_rows * pitch
+    channel_index = np.full((n_channels, neighbors.sum(1).max()), n_channels)
+    for c in range(n_channels):
+        my_neighbors = np.flatnonzero(neighbors[c])
+        channel_index[c, :my_neighbors.size] = my_neighbors
     return channel_index
 
 
