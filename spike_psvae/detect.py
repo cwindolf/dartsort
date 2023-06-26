@@ -168,7 +168,6 @@ class Detect(nn.Module):
         return self
 
 
-@torch.no_grad()
 def nn_detect_and_deduplicate(
     recording,
     energy_threshold,
@@ -297,7 +296,6 @@ def voltage_threshold(recording, threshold, peak_sign="neg", order=5):
     return spike_index[which], np.abs(energy[which])
 
 
-@torch.no_grad()
 def deduplicate_torch(
     spike_index,
     energy,
@@ -349,7 +347,6 @@ def deduplicate_torch(
     return spike_index_dedup, energy_dedup
 
 
-@torch.no_grad()
 def torch_voltage_detect_dedup(
     recording,
     threshold,
@@ -562,7 +559,6 @@ class DenoiserDetect(nn.Module):
         return self.ff(recording_tensor.T[:, None, :]).T
 
 
-@torch.no_grad()
 def denoiser_detect_dedup(
     recording,
     ptp_threshold,
