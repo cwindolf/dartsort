@@ -1036,6 +1036,7 @@ def subtraction_batch(
                     feat,
                 )
         # print(np.shape(cleaned_wfs))
+        # print(device)
         denoised_wfs = full_denoising(
             cleaned_wfs,
             spike_index[:, 1],
@@ -1182,6 +1183,8 @@ def train_featurizers(
             geom=geom,
             do_enforce_decrease=do_enforce_decrease,
             do_phaseshift=do_phaseshift,
+            ci_graph_all_maxCH_uniq=ci_graph_all_maxCH_uniq,
+            maxCH_neighbor=maxCH_neighbor,
             peak_sign=peak_sign,
             dtype=dtype,
             extra_features=[],
@@ -1240,7 +1243,6 @@ def train_featurizers(
             axis=0,
         )
         cleaned_waveforms += waveforms
-
         # print(np.shape(cleaned_waveforms))
         denoised_waveforms = full_denoising(
             cleaned_waveforms,
@@ -1256,7 +1258,9 @@ def train_featurizers(
             device=device,
             denoiser=denoiser,
         )
-
+    if denoised_waveforms != None:
+        denoised_waveforms = denoised_waveforms.to(device)
+    
     # train extra featurizers if necessary
     extra_features = [] if extra_features is None else extra_features
     for f in extra_features:
@@ -1357,6 +1361,8 @@ def detect_and_subtract(
         resids = waveforms.clone()
     # print(np.shape(waveforms))
     # -- denoising
+    # print(device)
+    # denoiser.to("cuda")
     waveforms, tpca_proj = full_denoising(
         waveforms,
         spike_index[:, 1],
@@ -1372,7 +1378,9 @@ def detect_and_subtract(
         denoiser=denoiser,
         return_tpca_embedding=True,
     )
-
+    waveforms = waveforms.to(device)
+    # if tpca_proj!= None:
+    #     tpca_proj.to(device)
     # test residual norm decrease
     if residnorm_decrease:
         residthresh = 0.0
@@ -1434,7 +1442,7 @@ def full_denoising(
     tpca=None,
     device=None,
     denoiser=None,
-    batch_size=2**10,
+    batch_size=2**14,
     align=False,
     return_tpca_embedding=False,
 ):
@@ -1443,16 +1451,27 @@ def full_denoising(
     N, T, C = waveforms.shape
     assert not align  # still working on that
 
-    torch.cuda.empty_cache()
+    if device == "cuda":
+        torch.cuda.empty_cache()
     if do_phaseshift:
+        maxCH_neighbor = maxCH_neighbor.to(device)
         # if geom is None:
         #     raise ValueError('Phase-shift denoising needs geom input!')
         if ci_graph_all_maxCH_uniq is None:
             raise ValueError('Needs channel graph for neighbor searching!')
         # ci_graph_on_probe, maxCH_neighbor = denoise.make_ci_graph(extract_channel_index, geom, device = device)
+        ci_graph_all_maxCH_uniq = ci_graph_all_maxCH_uniq.to(device)
         waveforms = torch.as_tensor(waveforms, device=device, dtype=torch.float)
         maxchans = torch.tensor(maxchans, device=device)
-        waveforms = denoise.multichan_phase_shift_denoise_preshift(waveforms, ci_graph_all_maxCH_uniq, maxCH_neighbor, denoiser, maxchans, device)
+        if device == "cuda":
+            waveforms= denoise.multichan_phase_shift_denoise_preshift(waveforms, ci_graph_all_maxCH_uniq, maxCH_neighbor, denoiser, maxchans, device)
+        else:
+            for bs in range(0, N, batch_size):
+                torch.cuda.empty_cache() 
+                be = min(bs + batch_size, N)
+                bs = torch.as_tensor(bs,  device=device)
+                be = torch.as_tensor(be,  device=device)
+                waveforms[bs:be,:,:] = denoise.multichan_phase_shift_denoise_preshift(waveforms[bs:be,:,:], ci_graph_all_maxCH_uniq, maxCH_neighbor, denoiser, maxchans[bs:be], device)
         # waveforms = torch.as_tensor(waveforms, device=device, dtype=torch.float)
         in_probe_channel_index = (
             torch.as_tensor(extract_channel_index, device=device)
@@ -1494,6 +1513,7 @@ def full_denoising(
 
     # Temporal PCA while we are still transposed
     if tpca is not None:
+        tpca = tpca.to(device)
         tpca_embeds = tpca.raw_transform(wfs_in_probe)
         wfs_in_probe = tpca.raw_inverse_transform(tpca_embeds)
         if not return_tpca_embedding:
@@ -1595,6 +1615,7 @@ def get_output_h5(
             f.to_h5(output_h5)
         if fit_features is not None:
             for f in fit_features:
+                # f.to('cpu')
                 f.to_h5(output_h5)
 
     done_percent = 100 * last_sample / recording.get_num_samples()
