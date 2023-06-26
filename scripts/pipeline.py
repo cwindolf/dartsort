@@ -1,32 +1,48 @@
 # %%
-import os
-from pathlib import Path
+# %%
 import numpy as np
+from pathlib import Path
+from scipy.signal import resample
 import h5py
-import scipy.io
-import time
-import torch
+from tqdm.auto import tqdm, trange
+import pickle
 import shutil
 
-from sklearn.decomposition import PCA
-from spike_psvae import filter_standardize
+# %%
+from spike_psvae import (
+    subtract,
+    cluster_utils,
+    cluster_viz_index,
+    ibme,
+    ibme_corr,
+    newms,
+    waveform_utils,
+    chunk_features,
+    drifty_deconv,
+    deconvolve,
+    spike_train_utils,
+    snr_templates,
+    extract_deconv,
+    localize_index,
+    outliers,
+    before_deconv_merge_split,
+)
+
 from spike_psvae.cluster_uhd import run_full_clustering
-from spike_psvae.drifty_deconv_uhd import full_deconv_with_update, get_registered_pos
-from spike_psvae import subtract, ibme
-from spike_psvae.ibme import register_nonrigid
-from spike_psvae.ibme_corr import calc_corr_decent
-from spike_psvae.ibme import fast_raster
-from spike_psvae.ibme_corr import psolvecorr
-from spike_psvae.waveform_utils import get_pitch
 from spike_psvae.uhd_split_merge import run_full_merge_split
 from spike_psvae.post_processing_uhd import full_post_processing
-import spike_psvae.newton_motion_est as newt
 from spike_psvae.waveform_utils import get_pitch
-from spike_psvae.post_processing_uhd import final_split_merge
-
+from spike_psvae.drifty_deconv_uhd import full_deconv_with_update, get_registered_pos
+from spike_psvae import newton_motion_est as newt
 # %%
-from spikeinterface.preprocessing import highpass_filter, common_reference, zscore, phase_shift 
-import spikeinterface.core as sc
+# %%
+from sklearn.decomposition import PCA
+from scipy.io import loadmat
+from scipy import linalg as la
+
+import torch
+
+import spikeinterface.full as si
 
 if __name__ == "__main__":
 
@@ -41,8 +57,9 @@ if __name__ == "__main__":
     dtype_raw = 'int16' #dtype of raw rec
     output_all = "data_set_name" #everything will be saved here
     Path(output_all).mkdir(exist_ok=True)
-    geom_path = 'geom.npy'
+    geom_path = 'geom.npy' #path to geometry array
     geom = np.load(geom_path)
+    pitch = get_pitch(geom)
     rec_len_sec = 4000 #length of rec in seconds
     n_channels = 385 #number of channels (before preprocessing)
     sampling_rate = 30000
@@ -92,8 +109,8 @@ if __name__ == "__main__":
     save_subtracted_tpca_projs = False
     save_cleaned_tpca_projs = True
     save_denoised_ptp_vectors = False
-    thresholds_subtract = [12, 9, 6] #thresholds for subtraction
-    peak_sign = "neg" #Important
+    thresholds_subtract = [12, 10, 8, 6, 5, 4] #thresholds for subtraction
+    peak_sign = "both" #Important
     nn_detect=False
     denoise_detect=False
     save_denoised_tpca_projs = False
@@ -101,14 +118,14 @@ if __name__ == "__main__":
     enforce_decrease_kind = "radial"
     extract_box_radius = 100
     tpca_rank = 8
-    n_sec_pca = 20
+    n_sec_pca = 50
     n_sec_chunk_detect = 1
     nsync = 0
-    n_jobs_detect = 4 # set to 0 if multiprocessing doesn't work
-    n_loc_workers = 4 #recommend setting these to n_cpus/4
+    n_jobs_detect = 8 # set to 0 if multiprocessing doesn't work
+    n_loc_workers = 8 #recommend setting these to n_cpus/4
     localization_kind = "logbarrier"
     localize_radius = 100
-    loc_feature="peak" # change to "peak" to try new loc idea
+    loc_feature="peak"
 
     # Registration parameters 
     registration=True
@@ -121,7 +138,7 @@ if __name__ == "__main__":
     # Clustering parameters 
     clustering=True
     t_start_clustering=0
-    t_end_clustering=3000 # AVOID areas with artefacts in initial clustering (i.e. strokes etc...)
+    t_end_clustering=None # AVOID areas with artefacts in initial clustering (i.e. strokes etc...)
     len_chunks_cluster=300 # 5 min
     threshold_ptp_cluster=3
     triage_quantile_cluster=100
@@ -129,20 +146,20 @@ if __name__ == "__main__":
     log_c=5 #to make clusters isotropic
     scales=(1, 1, 50)
 
-    #Deconv parameters
+
     deconvolve=True
     t_start_deconv=0
-    t_end_deconv=None
-    n_sec_temp_update=rec_len_sec #Keep that to the full time - does nto work for now :) 
-    bin_size_um=3
+    t_end_deconv=None 
+    n_sec_temp_update=t_end_deconv #Keep that to the full time - does not work for now :) 
+    bin_size_um=pitch//8 
     adaptive_bin_size_selection=False
-    n_jobs_deconv=4
-    n_jobs_extract_deconv=2
+    n_jobs_deconv=8
+    n_jobs_extract_deconv=8
     max_upsample=8
     refractory_period_frames=10
     min_spikes_bin=None
     max_spikes_per_unit=250
-    deconv_threshold=250 #1000
+    deconv_threshold=100 #1000 # try slightly higher
     su_chan_vis=1.5
     su_temp_on=None
     deconv_th_for_temp_computation=1000 #
@@ -161,7 +178,7 @@ if __name__ == "__main__":
     
     # %%
     preprocessing_dir = Path(output_all) / "preprocessing"
-    # Don't trust spikeinterface preprocessing :( ... 
+
     if preprocessing:
         print("Preprocessing...")
         preprocessing_dir = Path(output_all) / "preprocessing_test"
@@ -182,37 +199,6 @@ if __name__ == "__main__":
     else:
         raw_data_name = Path(preprocessing_dir) / "standardized.bin"
         dtype_raw = "float32"    
-
-        """
-        spike interface preprocessing does not work... 
-        recording = sc.read_binary(
-            raw_data_name,
-            sampling_rate,
-            n_channels_before_preprocessing,
-            dtype_raw,
-            time_axis=0,
-            is_filtered=False,
-        )
-        recording = recording._remove_channels(channels_to_remove)
-        # set geometry
-        recording.set_dummy_probe_from_locations(
-            geom, shape_params=dict(radius=10)
-        )
-        if t_end_preproc is not None:
-            recording = recording.frame_slice(start_frame=int(sampling_rate * t_start_preproc), end_frame=int(sampling_rate * t_end_preproc))
-
-        if apply_filter:
-            recording = highpass_filter(recording, freq_min=low_frequency, filter_order=order)
-        if standardize:
-            recording = zscore(recording)
-        if adcshift_correction:
-            sampShifts = npSampShifts()
-            recording = phase_shift(recording, inter_sample_shift=sampShifts)
-        if median_subtraction:
-            recording = common_reference(recording)
-
-        recording.save(folder=preprocessing_dir, n_jobs=n_job_preprocessing, chunk_size=sampling_rate*n_sec_chunk_preprocessing, progressbar=True)
-        """
         
     # %%
     # Subtraction 
@@ -293,8 +279,8 @@ if __name__ == "__main__":
     z_bound_low = geom[:, 1].min()
     z_bound_high = geom[:, 1].max()
     idx_remove_too_far = np.flatnonzero(np.logical_and(
-        np.logical_and(z>z_bound_low-100, z<z_bound_high+100),
-        np.logical_and(x>x_bound_low-100, x<x_bound_high+100)))
+        np.logical_and(z>z_bound_low-2*pitch, z<z_bound_high+2*pitch),
+        np.logical_and(x>x_bound_low-2*pitch, x<x_bound_high+2*pitch)))
 
     # %%
     maxptps = maxptps[idx_remove_too_far]
@@ -306,20 +292,13 @@ if __name__ == "__main__":
     if registration:
         print("Registration...")
 
-        device_reg = "cpu"
+        device_reg = "cpu" #run on cpu for now, should be ready for gpu? 
         motion_est, extra = newt.register(
                 maxptps,
                 z,
                 spike_index[:, 0]/sampling_rate,
-                rigid=True,
-                win_step_um=50, 
-                win_scale_um=150,
-                win_margin_um=-75,
-                raster_kw=dict(gaussian_smoothing_sigma_um=1,post_transform=None,amp_scale_fn=None,avg_in_bin=True),
-                weights_kw=dict(weights_threshold_low=0.2, weights_threshold_high=0.2, mincorr=0.1, max_dt_s=100),
-                thomas_kw=dict(lambda_s=0, lambda_t=1),
-                max_disp_um=100,
-                device=device_reg,
+                rigid=True, #This should be updated soon :) 
+                device=device,
                 pbar=False,
         )
 
@@ -348,6 +327,7 @@ if __name__ == "__main__":
         plt.plot(np.arange(t_start_detect, t_end_detect), displacement_rigid[t_start_detect:t_end_detect]-displacement_rigid[t_start_detect], color = 'red')
         plt.plot(np.arange(t_start_detect, t_end_detect), displacement_rigid[t_start_detect:t_end_detect]-displacement_rigid[t_start_detect]+100, color = 'red')
         plt.plot(np.arange(t_start_detect, t_end_detect), displacement_rigid[t_start_detect:t_end_detect]-displacement_rigid[t_start_detect]+200, color = 'red')
+        plt.ylim((geom.min()-2*pitch, geom.max()+2*pitch))
         plt.savefig(fname_detect_fig)
         plt.close()
 
@@ -368,7 +348,8 @@ if __name__ == "__main__":
         spt, maxptps, x, z, spike_index = run_full_clustering(t_start_clustering, t_end_clustering, cluster_dir, raw_data_name, geom, spike_index,
                                                     localization_results, maxptps, displacement_rigid, len_chunks=len_chunks_cluster, threshold_ptp=threshold_ptp_cluster,
                                                     fs=sampling_rate, triage_quantile_cluster=triage_quantile_cluster, frame_dedup_cluster=frame_dedup_cluster, 
-                                                    time_temp_comp_merge=time_temp_computation, log_c=log_c, scales=scales, savefigs=savefigs, deconv_resid_th=0.5)
+                                                    time_temp_comp_merge=time_temp_computation, log_c=log_c, scales=scales, savefigs=savefigs, deconv_resid_th=0.25, 
+                                                    zlim=(geom.min()-2*pitch, geom.max()+2*pitch))
     
     else:
         fname_spt_cluster = Path(cluster_dir) / "spt_full_cluster.npy"
@@ -698,7 +679,6 @@ if __name__ == "__main__":
 
     labels_final = final_split_merge(spt, z_abs, x, displacement_rigid, geom, raw_data_name)
     np.save(Path(deconv_dir_all) / "labels_final.npy", labels_final)
-        
         
         
         
