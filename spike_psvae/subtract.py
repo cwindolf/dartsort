@@ -41,7 +41,7 @@ def subtraction(
     spike_length_samples=121,
     # tpca args
     tpca_rank=8,
-    n_sec_pca=10,
+    n_sec_pca=40,
     pca_t_start=0,
     pca_t_end=None,
     # time / input binary details
@@ -52,7 +52,7 @@ def subtraction(
     nn_detect=False,
     denoise_detect=False,
     do_nn_denoise=True,
-    residnorm_decrease=False,
+    residnorm_decrease=np.sqrt(10.0),
     # waveform extraction channels
     neighborhood_kind="circle",
     extract_box_radius=200,
@@ -66,10 +66,10 @@ def subtraction(
     save_subtracted_waveforms=False,
     save_cleaned_waveforms=False,
     save_denoised_waveforms=False,
-    save_subtracted_tpca_projs=True,
+    save_subtracted_tpca_projs=False,
     save_cleaned_tpca_projs=True,
-    save_denoised_tpca_projs=True,
-    save_denoised_ptp_vectors=False,
+    save_denoised_tpca_projs=False,
+    save_denoised_ptp_vectors=True,
     # we will save spatiotemporal PCA embeds if this is >0
     save_cleaned_pca_projs_on_n_channels=None,
     save_cleaned_pca_projs_rank=5,
@@ -586,10 +586,9 @@ def subtraction(
                     N += N_new
 
                 count += 1
-                if not count % 100:
-                    pbar.set_description(
-                        f"{n_sec_chunk}s/it [spk/it={N / count:0.1f}]"
-                    )
+                pbar.set_description(
+                    f"{n_sec_chunk}s/it [spk/it={N / count:0.1f}]"
+                )
 
     # -- done!
     if save_residual:
@@ -732,6 +731,7 @@ def _subtraction_batch_init(
             denoiser.load(fname_model=denoiser_weights_path)
         else:
             denoiser.load()
+        denoiser.requires_grad_(False)
         denoiser.to(device)
     _subtraction_batch.denoiser = denoiser
 
@@ -739,12 +739,14 @@ def _subtraction_batch_init(
     if nn_detector_path:
         detector = detect.Detect(nn_channel_index)
         detector.load(nn_detector_path)
+        detector.requires_grad_(False)
         detector.to(device)
     _subtraction_batch.detector = detector
 
     dn_detector = None
     if denoise_detect:
         dn_detector = detect.DenoiserDetect(denoiser)
+        dn_detector.requires_grad_(False)
         dn_detector.to(device)
     _subtraction_batch.dn_detector = dn_detector
 
@@ -1388,7 +1390,6 @@ def detect_and_subtract(
     return waveforms, tpca_proj, subtracted_raw, spike_index
 
 
-@torch.no_grad()
 def full_denoising(
     waveforms,
     maxchans,
@@ -1401,7 +1402,7 @@ def full_denoising(
     tpca=None,
     device=None,
     denoiser=None,
-    batch_size=2**10,
+    batch_size=128,
     align=False,
     return_tpca_embedding=False,
 ):
@@ -1736,3 +1737,5 @@ def subtract_and_localize_numpy(
         columns=["sample", "trace", "x", "y", "z", "alpha"],
     )
     return df_localisation, cleaned_wfs
+
+
