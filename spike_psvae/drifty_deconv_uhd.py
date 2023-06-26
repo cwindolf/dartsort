@@ -964,6 +964,7 @@ def extract_superres_shifted_deconv(
     # what to save / do?
     localize=True,
     loc_radius=100,
+    loc_ptp_precision_decimals=None,
     # usual suspects
     sampling_rate=30000,
     n_sec_chunk=1,
@@ -1041,6 +1042,7 @@ def extract_superres_shifted_deconv(
         localize=localize,
         loc_radius=loc_radius,
         loc_feature=loc_feature,
+        loc_ptp_precision_decimals=loc_ptp_precision_decimals,
         n_sec_train_feats=n_sec_train_feats,
         n_jobs=n_jobs,
         n_sec_chunk=n_sec_chunk,
@@ -1203,6 +1205,7 @@ def full_deconv_with_update(
     extract_radius_um=100,
     loc_radius=100,
     loc_feature="peak",
+    loc_ptp_precision_decimals=None,
     n_sec_train_feats=10,
     n_spikes_max=10000,
     n_sec_chunk=1,
@@ -1323,6 +1326,7 @@ def full_deconv_with_update(
         bins_sizes_um=bins_sizes_um,
         registered_medians=registered_medians,
         medians_at_computation=medians_at_computation,
+        loc_ptp_precision_decimals=loc_ptp_precision_decimals,
     )
     
     return extract_deconv_chunk

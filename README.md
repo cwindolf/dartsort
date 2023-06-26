@@ -10,6 +10,10 @@ mamba activate a
 mamba install pytorch torchvision torchaudio -c pytorch
 
 pip install matplotlib_venn
+pip install spikeinterface
+
+# You might need to specify this
+pip install pillow==9.0.0
 
 # For using jupyter
 pip install jupyterlab-sublime jupyterlab-code-formatter
