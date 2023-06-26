@@ -166,6 +166,10 @@ pitch = get_pitch(geom_pat_2)
     n_jobs=0,
 )
 
+N, T, C = superres_templates_pat_2.shape
+superres_templates_pat_2 = superres_templates_pat_2.transpose(1, 0, 2).reshape((T, -1))
+superres_templates_pat_2[:, np.flatnonzero(superres_templates_pat_2.ptp(0)<3)]=0
+superres_templates_pat_2 = superres_templates_pat_2.reshape((T, N, C)).transpose(1, 0, 2)
 
 
 n_units = spt[:, 1].max()+1
@@ -204,8 +208,8 @@ for unit in range(n_units):
             bin_id = (z_wf-z*pitch)//bin_size_um
             if np.isin(bin_id, superres_label_to_bin_id_pat_2[superres_label_to_orig_label_pat_2==unit]):
                 temp = shifted_temp[superres_label_to_bin_id_pat_2[superres_label_to_orig_label_pat_2==unit]==bin_id]
-                SNR_val_wf_pat_2[unit] += np.abs(np.dot(temp.flatten(), wf.flatten())/(384))
-                SNR_val_rand_pat_2[unit] += np.abs(np.dot(temp.flatten(), wf_rand.flatten())/(384))
+                SNR_val_wf_pat_2[unit] += np.dot(temp.flatten(), wf.flatten())
+                SNR_val_rand_pat_2[unit] += np.abs(np.dot(temp.flatten(), wf_rand.flatten()))
                 cmp+=1
     SNR_val_wf_pat_2[unit] /= cmp
     SNR_val_rand_pat_2[unit] /= cmp
