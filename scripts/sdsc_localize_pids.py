@@ -24,6 +24,11 @@ warnings.simplefilter("ignore", category=DeprecationWarning)
 sdsc_base_path = Path("/mnt/sdceph/users/ibl/data")
 
 
+def save_motion_est(path, name, me):
+    with open(path / f"{name}_motion_est.pkl", "wb") as jar:
+        pickle.dump(me, jar)
+
+
 def eid2sdscpath(eid):
     pids, probes = one.eid2pid(eid)
     print(pids, probes)
@@ -256,20 +261,10 @@ if __name__ == "__main__":
                         maxptp[wh],
                         z[wh],
                         t[wh],
-                        raster_kw=dict(
-                            gaussian_smoothing_sigma_um=1,
-                            gaussian_smoothing_sigma_s=1,
-                        ),
-                        weights_kw=dict(
-                            weights_threshold_low=0.2,
-                            weights_threshold_high=0.2,
-                            mincorr=0.1,
-                            max_dt_s=1000,
-                        ),
-                        thomas_kw=dict(eps=1e-3),
                         max_disp_um=50,
                         pbar=False,
                     )
+                    save_motion_est(sessdir, "dredge_ap", tme)
                     z_reg = tme.correct_s(spike_times / 30000, z)
                     h5.create_dataset("z_reg", data=z_reg)
 
@@ -294,6 +289,7 @@ if __name__ == "__main__":
                             time_bin_centers_s=drift_samples / fs,
                             spatial_bin_centers_um=centers,
                         )
+                        save_motion_est(sessdir, "ks", ksme)
                         z_reg_ks = ksme.correct_s(t, z)
                         h5.create_dataset("z_reg_ks", data=z_reg_ks)
 
