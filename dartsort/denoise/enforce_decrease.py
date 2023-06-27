@@ -44,9 +44,7 @@ class EnforceDecrease(torch.nn.Module):
             torch.arange(n)[:, None, None],
             self.parents_index[max_channels],
         ]
-        print(self.parents_index[max_channels[0]])
         parent_min_ptps = parent_ptps.min(dim=2).values
-        print(parent_min_ptps[0])
 
         # what would we need to multiply by to ensure my amp is <= all parents?
         rescaling = torch.minimum(parent_min_ptps / ptps, self._1)
