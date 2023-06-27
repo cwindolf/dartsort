@@ -67,6 +67,7 @@ if __name__ == "__main__":
     ap.add_argument("--residnorm-decrease", type=float, default=10.0)
     ap.add_argument("--tmp-parent", type=str, default="/tmp")
     ap.add_argument("--no-overwrite", action="store_true")
+    ap.add_argument("--rerun-errors", action="store_true")
 
     args = ap.parse_args()
 
@@ -122,11 +123,15 @@ if __name__ == "__main__":
                             metadata,
                         )
                     # continue
-                if "subtraction_error" in meta:
+                if "subtraction_error" in meta and not args.rerun_errs:
                     print(
                         "This one had a problem during subtraction in a previous run. Skipping"
                     )
                     continue
+                if "subtraction_error" in meta and args.rerun_errs:
+                    print(
+                        "This one had a problem during subtraction in a previous run. Rerunning."
+                    )
 
         with open(sessdir / "metadata.pkl", "wb") as sess_jar:
             pickle.dump(metadata, sess_jar)
