@@ -123,12 +123,12 @@ if __name__ == "__main__":
                             metadata,
                         )
                     # continue
-                if "subtraction_error" in meta and not args.rerun_errs:
+                if "subtraction_error" in meta and not args.rerun_errors:
                     print(
                         "This one had a problem during subtraction in a previous run. Skipping"
                     )
                     continue
-                if "subtraction_error" in meta and args.rerun_errs:
+                if "subtraction_error" in meta and args.rerun_errors:
                     print(
                         "This one had a problem during subtraction in a previous run. Rerunning."
                     )
