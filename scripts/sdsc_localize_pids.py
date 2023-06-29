@@ -68,7 +68,7 @@ if __name__ == "__main__":
     ap.add_argument("--locworkers", type=int, default=2)
     ap.add_argument("--ksreloc", action="store_true")
     ap.add_argument("--ksmotion", action="store_true")
-    ap.add_argument("--residnorm-decrease", type=float, default=10.0)
+    ap.add_argument("--residnorm-decrease", type=float, default=np.sqrt(10.0))
     ap.add_argument("--tmp-parent", type=str, default="/tmp")
     ap.add_argument("--no-overwrite", action="store_true")
     ap.add_argument("--rerun-errors", action="store_true")
