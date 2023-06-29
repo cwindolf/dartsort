@@ -22,6 +22,6 @@ ext_modules = None
 setup(
     name="spike_psvae",
     version="0.1",
-    packages=["spike_psvae"],
+    packages=["spike_psvae", "dartsort"],
     ext_modules=ext_modules,
 )

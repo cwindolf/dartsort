@@ -13,13 +13,17 @@ import spikeinterface.core as sc
 import torch
 import torch.nn.functional as F
 from tqdm.auto import tqdm
-import time
 
 from . import chunk_features, denoise, detect, localize_index
 from .multiprocessing_utils import MockQueue, ProcessPoolExecutor, get_pool
 from .py_utils import noint, timer
 from .spikeio import read_waveforms_in_memory
 from .waveform_utils import make_channel_index, make_contiguous_channel_index
+
+try:
+    from dartsort.denoise.enforce_decrease import EnforceDecrease
+except ImportError:
+    pass
 
 _logger = logging.getLogger(__name__)
 
@@ -146,7 +150,7 @@ def subtraction(
     # validate and process args
     if neighborhood_kind not in ("firstchan", "box", "circle"):
         raise ValueError("Neighborhood kind", neighborhood_kind, "not understood.")
-    if enforce_decrease_kind not in ("columns", "radial", "none"):
+    if enforce_decrease_kind not in ("columns", "radial", "none", "new"):
         raise ValueError(
             "Enforce decrease method", enforce_decrease_kind, "not understood."
         )
@@ -263,12 +267,15 @@ def subtraction(
     # helper data structure for radial enforce decrease
     do_enforce_decrease = True
     radial_parents = None
+    enfdec = None
     if enforce_decrease_kind == "radial":
         radial_parents = denoise.make_radial_order_parents(
             geom, extract_channel_index, n_jumps_per_growth=1, n_jumps_parent=3
         )
     elif enforce_decrease_kind == "columns":
         pass
+    elif enforce_decrease_kind == "new":
+        enfdec = EnforceDecrease(geom, extract_channel_index)
     else:
         print("Skipping enforce decrease.")
         do_enforce_decrease = False
@@ -379,6 +386,7 @@ def subtraction(
                 extract_channel_index,
                 geom,
                 radial_parents,
+                enfdec,
                 dedup_channel_index,
                 thresholds,
                 nn_detector_path=nn_detector_path,
@@ -421,6 +429,7 @@ def subtraction(
                 extract_channel_index,
                 geom,
                 radial_parents,
+                enfdec,
                 dedup_channel_index,
                 thresholds,
                 nn_detector_path,
@@ -516,6 +525,7 @@ def subtraction(
                 extra_features,
                 subtracted_tpca_feat,
                 denoised_tpca_feat if do_clean else None,
+                enfdec,
             ),
         ) as pool:
             spike_index = output_h5["spike_index"]
@@ -689,6 +699,7 @@ def _subtraction_batch(args):
         _subtraction_batch.denoiser,
         _subtraction_batch.detector,
         _subtraction_batch.dn_detector,
+        _subtraction_batch.enfdec,
     )
 
 
@@ -705,6 +716,7 @@ def _subtraction_batch_init(
     extra_features,
     subtracted_tpca,
     denoised_tpca,
+    enfdec,
 ):
     """Thread/process initializer -- loads up neural nets"""
     rank = id_queue.get()
@@ -758,6 +770,10 @@ def _subtraction_batch_init(
         denoised_tpca = denoised_tpca.to(device)
     _subtraction_batch.denoised_tpca = denoised_tpca
 
+    _subtraction_batch.enfdec = enfdec
+    if enfdec is not None:
+        _subtraction_batch.enfdec.to(device)
+
     # this is a hack to fix ibl streaming in parallel
     stack = [recording_dict]
     for d in stack:
@@ -801,6 +817,7 @@ def subtraction_batch(
     denoiser,
     detector,
     dn_detector,
+    enfdec,
 ):
     """Runs subtraction on a batch
             This function handles the logic of loading data from disk
@@ -900,6 +917,7 @@ def subtraction_batch(
             residual,
             threshold,
             radial_parents,
+            enfdec,
             subtracted_tpca,
             dedup_channel_index,
             extract_channel_index,
@@ -1020,6 +1038,7 @@ def subtraction_batch(
             spike_index[:, 1],
             extract_channel_index,
             radial_parents,
+            enfdec,
             do_enforce_decrease=do_enforce_decrease,
             do_phaseshift=do_phaseshift,
             ci_graph_all_maxCH_uniq=ci_graph_all_maxCH_uniq,
@@ -1075,6 +1094,7 @@ def train_featurizers(
     extract_channel_index,
     geom,
     radial_parents,
+    enfdec,
     dedup_channel_index,
     thresholds,
     nn_detector_path=None,
@@ -1176,6 +1196,7 @@ def train_featurizers(
             denoiser=denoiser,
             detector=detector,
             dn_detector=dn_detector,
+            enfdec=enfdec,
         )
         spike_indices.append(spind)
         if torch.is_tensor(wfs):
@@ -1230,6 +1251,7 @@ def train_featurizers(
             spike_index[:, 1],
             extract_channel_index,
             radial_parents,
+            enfdec=enfdec,
             do_enforce_decrease=do_enforce_decrease,
             do_phaseshift=do_phaseshift,
             ci_graph_all_maxCH_uniq=ci_graph_all_maxCH_uniq,
@@ -1261,6 +1283,7 @@ def detect_and_subtract(
     raw,
     threshold,
     radial_parents,
+    enfdec,
     tpca,
     dedup_channel_index,
     extract_channel_index,
@@ -1347,6 +1370,7 @@ def detect_and_subtract(
         spike_index[:, 1],
         extract_channel_index,
         radial_parents,
+        enfdec=enfdec,
         do_enforce_decrease=do_enforce_decrease,
         do_phaseshift=do_phaseshift,
         ci_graph_all_maxCH_uniq=ci_graph_all_maxCH_uniq,
@@ -1411,6 +1435,7 @@ def full_denoising(
     maxchans,
     extract_channel_index,
     radial_parents=None,
+    enfdec=None,
     do_enforce_decrease=True,
     do_phaseshift=False,
     ci_graph_all_maxCH_uniq=None,
@@ -1513,20 +1538,8 @@ def full_denoising(
 
     # enforce decrease
     if do_enforce_decrease:
-        if radial_parents is None and probe is not None:
-            rel_maxchans = maxchans - extract_channel_index[maxchans, 0]
-            if probe == "np1":
-                for i in range(N):
-                    denoise.enforce_decrease_np1(
-                        waveforms[i], max_chan=rel_maxchans[i], in_place=True
-                    )
-            elif probe == "np2":
-                for i in range(N):
-                    denoise.enforce_decrease(
-                        waveforms[i], max_chan=rel_maxchans[i], in_place=True
-                    )
-            else:
-                assert False
+        if enfdec is not None:
+            waveforms, decreasing_ptps = enfdec(waveforms, maxchans)
         elif radial_parents is not None:
             denoise.enforce_decrease_shells(
                 waveforms, maxchans, radial_parents, in_place=True
