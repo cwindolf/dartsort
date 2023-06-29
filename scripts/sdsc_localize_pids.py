@@ -29,6 +29,10 @@ def save_motion_est(path, name, me):
         pickle.dump(me, jar)
 
 
+def rsync(src, dest):
+    subprocess.run(["rsync", "-avP", str(src), str(dest)])
+
+
 def eid2sdscpath(eid):
     pids, probes = one.eid2pid(eid)
     print(pids, probes)
@@ -177,7 +181,7 @@ if __name__ == "__main__":
         destriped_bin = dscache / f"destriped_{cbin_rel}"
         destriped_bin = destriped_bin.with_suffix(".bin")
         if not destriped_bin.exists():
-            shutil.copyfile(cbin_path, dscache / cbin_rel)
+            rsync(cbin_path, dscache / cbin_rel)
             shutil.copyfile(meta_path, dscache / meta_rel)
             shutil.copyfile(ch_path, dscache / ch_rel)
 
@@ -187,6 +191,7 @@ if __name__ == "__main__":
                         "python",
                         str(Path(__file__).parent / "destripe.py"),
                         str(dscache / cbin_rel),
+                        f"--njobs={args.njobs}",
                     ],
                     check=True,
                 )
