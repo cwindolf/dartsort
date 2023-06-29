@@ -1,21 +1,17 @@
 # %%
+import shutil
+from collections import namedtuple
+from multiprocessing.pool import Pool
+from pathlib import Path
+
 import h5py
 import numpy as np
 import torch
-from collections import namedtuple
-from multiprocessing.pool import Pool
-from .multiprocessing_utils import get_pool
-from pathlib import Path
-import shutil
+from spike_psvae import (chunk_features, denoise, reassignment, spikeio,
+                         subtract, waveform_utils)
 from tqdm.auto import tqdm
-from spike_psvae import (
-    denoise,
-    subtract,
-    spikeio,
-    waveform_utils,
-    chunk_features,
-    reassignment,
-)
+
+from .multiprocessing_utils import get_pool
 
 
 # %%
@@ -69,6 +65,7 @@ def extract_deconv(
     tpca_training_radius=None,
     seed=0,
 ):
+    torch.set_grad_enabled(False)
     standardized_bin = Path(standardized_bin)
     output_directory = Path(output_directory)
     
@@ -714,11 +711,15 @@ def _extract_deconv_init(
     save_reassignment_residuals,
     featurizers,
 ):
+    torch.set_grad_enabled(False)
+
     if device is None:
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     denoiser = None
     if nn_denoise:
-        denoiser = denoise.SingleChanDenoiser().load().to(device)
+        denoiser = denoise.SingleChanDenoiser().load()
+        denoiser = denoiser.requires_grad_(False)
+        denoiser.to(device)
 
     p = _extract_deconv_worker
     p.geom = geom
