@@ -1,10 +1,13 @@
 import numpy as np
 import torch
 import torch.nn.functional as F
+from dartsort.util import spiketorch
 from scipy.spatial.distance import cdist
 
+from .base import BaseWaveformDenoiser
 
-class EnforceDecrease(torch.nn.Module):
+
+class EnforceDecrease(BaseWaveformDenoiser):
     """A torch module for enforcing spatial decrease of amplitudes
 
     Calling an instance of this class on a N,T,C batch of waveforms
@@ -34,7 +37,7 @@ class EnforceDecrease(torch.nn.Module):
         assert waveforms.shape[2] == self.parents_index.shape[1]
 
         # get peak to peak amplitudes -- (N, c) shaped
-        ptps = waveforms.max(dim=1).values - waveforms.min(dim=1).values
+        ptps = spiketorch.ptp(waveforms)
 
         # pad with an extra channel to support indexing tricks
         pad_ptps = F.pad(ptps, (0, 1), value=torch.inf)
@@ -48,9 +51,9 @@ class EnforceDecrease(torch.nn.Module):
 
         # what would we need to multiply by to ensure my amp is <= all parents?
         rescaling = torch.minimum(parent_min_ptps / ptps, self._1)
-        decreasing_ptps = ptps * rescaling
+        # decreasing_ptps = ptps * rescaling
         decreasing_waveforms = waveforms * rescaling[:, None, :]
-        return decreasing_waveforms, decreasing_ptps
+        return decreasing_waveforms
 
 
 def make_parents_index(geom, channel_index):
@@ -104,12 +107,14 @@ def make_parents_index(geom, channel_index):
         g_par_to_child = g[:, None] - g[None, :]
         # segments BC (parent on first+only axis)
         g_par_to_detect = g_detect - g
-        cos_across_parent = np.sum(g_par_to_detect[None] * g_par_to_child, axis=2)
+        cos_across_parent = np.sum(
+            g_par_to_detect[None] * g_par_to_child, axis=2
+        )
         cos_across_parent[:, i_rel] = -1
         # don't need to normalize this one since we just care about sign of cosine
 
         # check valid -- child on first axis, candidate parent on second
-        is_parent = (cos_across_detect >= np.cos(np.pi / 4))
+        is_parent = cos_across_detect >= np.cos(np.pi / 4)
         is_parent &= cos_across_parent < 0
         for j in range(c):
             my_parents = np.setdiff1d(np.flatnonzero(is_parent[j]), [j])
