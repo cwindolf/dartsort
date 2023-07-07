@@ -5,12 +5,111 @@ waveforms are extracted on.
 import numpy as np
 import torch
 import torch.nn.functional as F
-from scipy.spatial.distance import cdist
+from scipy.spatial.distance import cdist, pdist, squareform
+
+# -- geometry utils
+
+
+def get_pitch(geom):
+    """Guess the pitch, even for probes with gaps or channels missing at random
+
+    This is the unit at which the probe repeats itself, computed as the
+    vertical distance between electrodes in the same column. Of course, this
+    makes little sense for probes with non-lattice layouts, or even worse,
+    horizontal probes (i.e., x positions are unique) where it cannot be defined.
+
+    So for NP1, it's not every row, but every 2 rows! And for a probe with a
+    zig-zag arrangement, it would be also 2 vertical distances between channels.
+    """
+    x_uniq = np.unique(geom[:, 0])
+
+    pitch = np.inf
+    for x in x_uniq:
+        y_uniq_at_x = np.unique(geom[geom[:, 0] == x, 1])
+        if y_uniq_at_x.size > 1:
+            pitch = min(pitch, np.diff(y_uniq_at_x).min())
+
+    if np.isinf(pitch):
+        raise ValueError("Horizontal probe.")
+
+    return pitch
+
 
 # -- channel index creation
 
 
+def make_channel_index(
+    geom, radius, steps=1, distance_order=False, p=2, pad_val=None
+):
+    """
+    Compute an array whose whose ith row contains the ordered
+    (by distance) neighbors for the ith channel
+    """
+    C = geom.shape[0]
+    if pad_val is None:
+        pad_val = C
+
+    # get neighbors matrix
+    neighbors = squareform(pdist(geom, metric="minkowski", p=p)) <= radius
+
+    # max number of neighbors for all channels
+    n_neighbors = np.max(np.sum(neighbors, 0))
+
+    # initialize channel index
+    # entries for channels which don't have as many neighbors as
+    # others will be filled with the total number of channels
+    # (an invalid index into the recording, but this behavior
+    # is useful e.g. in the spatial max pooling for deduplication)
+    channel_index = np.full((C, n_neighbors), pad_val, dtype=int)
+
+    # fill every row in the matrix (one per channel)
+    for c in range(C):
+        # indices of c's neighbors
+        ch_idx = np.flatnonzero(neighbors[c])
+        channel_index[c, : ch_idx.shape[0]] = ch_idx
+
+    return channel_index
+
+
+def make_contiguous_channel_index(n_channels, n_neighbors=40):
+    """Channel index with linear neighborhoods in channel id space"""
+    channel_index = []
+    for c in range(n_channels):
+        low = max(0, c - n_neighbors // 2)
+        low = min(n_channels - n_neighbors, low)
+        channel_index.append(np.arange(low, low + n_neighbors))
+    channel_index = np.array(channel_index)
+
+    return channel_index
+
+
+def make_pitch_channel_index(geom, n_neighbor_rows=1, pitch=None):
+    """Channel neighborhoods which are whole pitches"""
+    n_channels = geom.shape[0]
+    if pitch is None:
+        pitch = get_pitch(geom)
+    neighbors = (
+        np.abs(geom[:, 1][:, None] - geom[:, 1][None, :])
+        <= n_neighbor_rows * pitch
+    )
+    channel_index = np.full((n_channels, neighbors.sum(1).max()), n_channels)
+    for c in range(n_channels):
+        my_neighbors = np.flatnonzero(neighbors[c])
+        channel_index[c, : my_neighbors.size] = my_neighbors
+    return channel_index
+
+
+def full_channel_index(n_channels):
+    """Everyone is everone's neighbor"""
+    return (
+        np.arange(n_channels)[None, :]
+        * np.ones(n_channels, dtype=int)[:, None]
+    )
+
+
 # -- extracting single channels which were not part of padding
+
+
 # This is used heavily in dartsort.transform, where for instance
 # we might want to avoid the nans used as padding channels when
 # fitting models.
