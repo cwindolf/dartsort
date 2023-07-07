@@ -13,16 +13,14 @@ class BaseTemporalPCA(BaseWaveformModule):
         self,
         rank,
         channel_index,
+        name=None,
         whiten=False,
         centered=True,
         fit_radius=None,
         geom=None,
-        components=None,
-        mean=None,
-        whitener=None,
         random_state=0,
     ):
-        super().__init__()
+        super().__init__(name)
         self.rank = rank
         self.needs_fit = True
         self.random_state = random_state
@@ -34,19 +32,10 @@ class BaseTemporalPCA(BaseWaveformModule):
                     "TemporalPCA with fit_radius!=None requires geom."
                 )
         self.fit_radius = fit_radius
-        if components is not None:
-            self.register_buffer("components", components)
-            self.needs_fit = False
-
         self.centered = centered
-        if mean is not None:
-            self.register_buffer("mean", mean)
-
         self.whiten = whiten
         if whiten:
             assert self.centered
-        if whitener is not None:
-            self.register_buffer("whitener", whitener)
 
     def fit(self, waveforms, max_channels):
         train_channel_index = self.channel_index
@@ -122,6 +111,8 @@ class BaseTemporalPCA(BaseWaveformModule):
 
 
 class TemporalPCADenoiser(BaseTemporalPCA, BaseWaveformDenoiser):
+    default_name = "temporal_pca"
+
     def forward(self, waveforms, max_channels):
         (
             channels_in_probe,
@@ -136,6 +127,8 @@ class TemporalPCADenoiser(BaseTemporalPCA, BaseWaveformDenoiser):
 
 
 class TemporalPCAFeaturizer(BaseTemporalPCA, BaseWaveformFeaturizer):
+    default_name = "tpca_features"
+
     @property
     def shape(self):
         return (

@@ -15,8 +15,10 @@ class EnforceDecrease(BaseWaveformDenoiser):
     as you move away from the detection channel.
     """
 
-    def __init__(self, geom, channel_index):
-        super().__init__()
+    default_name = "enforce_decrease"
+
+    def __init__(self, geom, channel_index, name=None):
+        super().__init__(name)
         self.register_buffer(
             "parents_index",
             torch.LongTensor(make_parents_index(geom, channel_index)),
