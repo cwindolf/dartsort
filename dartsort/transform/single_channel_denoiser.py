@@ -13,9 +13,17 @@ pretrained_path = (
 
 
 class SingleChannelWaveformDenoiser(BaseWaveformDenoiser):
+    default_name = "single_chan_denoiser"
+
     def __init__(
-        self, denoiser, channel_index, batch_size=128, in_place=False
+        self,
+        denoiser,
+        channel_index,
+        batch_size=128,
+        in_place=False,
+        name=None,
     ):
+        super().__init__(name)
         self.denoiser = denoiser
         self.channel_index = channel_index
         self.batch_size = batch_size

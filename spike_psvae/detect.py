@@ -11,13 +11,13 @@ data. So let's batch up the spatial max pool to limit the memory
 consumption by MAXCOPYx. Thus we batch up into batches of length
     30000 / (channel_index.shape[1] / MAXCOPY)
 """
-import numpy as np
-import torch
-from scipy.signal import argrelmin
-from torch import nn
-import torch.nn.functional as F
 from copy import deepcopy
 
+import numpy as np
+import torch
+import torch.nn.functional as F
+from scipy.signal import argrelmin
+from torch import nn
 
 MAXCOPY = 8
 DEFAULT_DEDUP_T = 7
@@ -261,11 +261,15 @@ def voltage_detect_and_deduplicate(
             max_window=max_window,
         )
         if times.numel():
-            spike_index = torch.stack((torch.atleast_1d(times), torch.atleast_1d(chans)), dim=1)
+            spike_index = torch.stack(
+                (torch.atleast_1d(times), torch.atleast_1d(chans)), dim=1
+            )
         else:
             return np.array([]), np.array([])
     else:
-        spike_index, energy = voltage_threshold(recording, threshold, peak_sign=peak_sign)
+        spike_index, energy = voltage_threshold(
+            recording, threshold, peak_sign=peak_sign
+        )
         if not len(spike_index):
             return np.array([]), np.array([])
         spike_index, energy = deduplicate_torch(
@@ -387,9 +391,9 @@ def torch_voltage_detect_dedup(
             -recording, device=device, dtype=torch.float
         )
     elif peak_sign == "both":
-        neg_recording = torch.abs(torch.as_tensor(
-            recording, device=device, dtype=torch.float
-        ))
+        neg_recording = torch.abs(
+            torch.as_tensor(recording, device=device, dtype=torch.float)
+        )
     else:
         assert False
     max_energies, inds = F.max_pool2d_with_indices(
@@ -469,7 +473,7 @@ def torch_voltage_detect_dedup(
         times = times[dedup]
         chans = chans[dedup]
         energies = energies[dedup]
-    
+
     times = torch.atleast_1d(times)
     chans = torch.atleast_1d(chans)
     energies = torch.atleast_1d(energies)
@@ -493,6 +497,7 @@ class PeakToPeak(nn.Module):
             torch.max(input, dim=self.dim)[0]
             - torch.min(input, dim=self.dim)[0]
         )
+
 
 # a torch debugging classic
 # class Shape(nn.Module):
