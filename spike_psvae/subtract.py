@@ -537,78 +537,79 @@ def subtraction(
                 (batch_id, start) for batch_id, start in jobs if start >= last_sample
             ]
             n_batches = len(jobs)
-            jobs = (
-                (
-                    batch_data_folder,
-                    batch_len_samples,
-                    s_start,
-                    thresholds,
-                    dedup_channel_index,
-                    trough_offset,
-                    spike_length_samples,
-                    extract_channel_index,
-                    do_clean,
-                    residnorm_decrease,
-                    save_residual,
-                    radial_parents,
-                    geom,
-                    do_enforce_decrease,
-                    do_phaseshift,
-                    ci_graph_all_maxCH_uniq,
-                    maxCH_neighbor,
-                    peak_sign,
-                    dtype,
+            
+            if n_batches > 0:
+                jobs = (
+                    (
+                        batch_data_folder,
+                        batch_len_samples,
+                        s_start,
+                        thresholds,
+                        dedup_channel_index,
+                        trough_offset,
+                        spike_length_samples,
+                        extract_channel_index,
+                        do_clean,
+                        residnorm_decrease,
+                        save_residual,
+                        radial_parents,
+                        geom,
+                        do_enforce_decrease,
+                        do_phaseshift,
+                        ci_graph_all_maxCH_uniq,
+                        maxCH_neighbor,
+                        peak_sign,
+                        dtype,
+                    )
+                    for batch_id, s_start in jobs
                 )
-                for batch_id, s_start in jobs
-            )
 
-            count = sum(
-                s < last_sample
-                for s in range(
-                    0,
-                    recording.get_num_samples(),
-                    batch_len_samples,
+                count = sum(
+                    s < last_sample
+                    for s in range(
+                        0,
+                        recording.get_num_samples(),
+                        batch_len_samples,
+                    )
                 )
-            )
 
-            # now run subtraction in parallel
-            pbar = tqdm(
-                pool.map(_subtraction_batch, jobs),
-                total=n_batches,
-                desc="Batches",
-                smoothing=0.01,
-            )
-            for result in pbar:
-                with noint:
-                    N_new = result.N_new
+                # now run subtraction in parallel
+                pbar = tqdm(
+                    pool.map(_subtraction_batch, jobs),
+                    total=n_batches,
+                    desc="Batches",
+                    smoothing=0.01,
+                )
+                for result in pbar:
+                    with noint:
+                        N_new = result.N_new
 
-                    # write new residual
-                    if save_residual:
-                        np.load(result.residual).tofile(residual)
-                        Path(result.residual).unlink()
+                        # write new residual
+                        if save_residual:
+                            np.load(result.residual).tofile(residual)
+                            Path(result.residual).unlink()
 
-                    if result.spike_index is None:
-                        continue
+                        if result.spike_index is None:
+                            continue
 
-                    if result.spike_index is None and N_new == 0:
-                        continue
-
-                    # grow arrays as necessary and write results
-                    spike_index.resize(N + N_new, axis=0)
-                    if N_new > 0:
-                        spike_index[N:] = np.load(result.spike_index)
-                    Path(result.spike_index).unlink()
-                    for f, dset in zip(extra_features, feature_dsets):
-                        dset.resize(N + N_new, axis=0)
-                        fnpy = batch_data_folder / f"{result.prefix}{f.name}.npy"
+                        # grow arrays as necessary and write results
                         if N_new > 0:
-                            dset[N:] = np.load(fnpy)
-                        Path(fnpy).unlink()
-                    # update spike count
-                    N += N_new
+                            spike_index.resize(N + N_new, axis=0)
+                            spike_index[N:] = np.load(result.spike_index)
+                        if Path(result.spike_index).exists():
+                            Path(result.spike_index).unlink()
+                        for f, dset in zip(extra_features, feature_dsets):
+                            fnpy = batch_data_folder / f"{result.prefix}{f.name}.npy"
+                            if N_new > 0:
+                                dset.resize(N + N_new, axis=0)
+                                dset[N:] = np.load(fnpy)
+                            if Path(fnpy).exists():
+                                Path(fnpy).unlink()
+                        # update spike count
+                        N += N_new
 
-                count += 1
-                pbar.set_description(f"{n_sec_chunk}s/it [spk/it={N / count:0.1f}]")
+                    count += 1
+                    pbar.set_description(f"{n_sec_chunk}s/it [spk/it={N / count:0.1f}]")
 
     # -- done!
     if save_residual:
@@ -990,6 +991,16 @@ def subtraction_batch(
     if batch_data_folder is None:
         return spike_index, subtracted_wfs, residual_singlebuf
 
+    if not np.prod(spike_index.shape):
+        return SubtractionBatchResult(
+            N_new=0,
+            s_start=s_start,
+            s_end=s_end,
+            spike_index=None,
+            residual=batch_data_folder / f"{prefix}res.npy",
+            prefix=prefix,
+        )
+
     # compute and save features for subtracted wfs
     for f in extra_features:
         feat = f.transform(
@@ -1164,6 +1175,8 @@ def train_featurizers(
     spike_indices = []
     waveforms = []
     residuals = []
+    n_empty_batches = 0
+    print("zzz")
 
     for s_start in tqdm(starts, "PCA training subtraction"):
         spind, wfs, residual_singlebuf = subtraction_batch(
@@ -1198,12 +1211,16 @@ def train_featurizers(
             dn_detector=dn_detector,
             enfdec=enfdec,
         )
+        if (torch.is_tensor(spind) and not spind.numel()) or not len(spind) or not spind.size:
+            n_empty_batches += 1
+            continue
         spike_indices.append(spind)
         if torch.is_tensor(wfs):
             wfs = wfs.cpu().numpy()
         waveforms.append(wfs)
         residuals.append(residual_singlebuf.cpu().numpy())
-
+    if n_empty_batches:
+        print("Got", n_empty_batches, "empty batches")
     try:
         # this can raise value error
         spike_index = np.concatenate(spike_indices, axis=0)
