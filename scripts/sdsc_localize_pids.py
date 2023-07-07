@@ -224,6 +224,7 @@ if __name__ == "__main__":
             end_frame=rec.get_num_samples() // 2 + 1000,
         )
         print(f"{ttt.min()=} {ttt.max()=}")
+        
 
         # if subcache.exists():
         #     shutil.rmtree(subcache)
@@ -231,6 +232,9 @@ if __name__ == "__main__":
         if not (sessdir / "subtraction.h5").exists():
             print("Subtracting")
             try:
+                if np.abs(ttt).max() > 1e5:
+                    print("Data values are weird!")
+                    raise ValueError("skip")
                 sub_h5 = subtract.subtraction(
                     rec,
                     out_folder=subcache,
@@ -311,7 +315,8 @@ if __name__ == "__main__":
                 shutil.rmtree(dscache)
                 continue
             finally:
-                shutil.rmtree(subcache)
+                if subcache.exists():
+                    shutil.rmtree(subcache)
 
         if args.ksreloc and not (sessdir / "ks_relocalizations.npz").exists():
             print("Relocalizing KS")
