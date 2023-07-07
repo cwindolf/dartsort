@@ -1,14 +1,12 @@
 import argparse
-import numpy as np
 import shutil
-
 from pathlib import Path
-from tqdm.auto import trange
 
-from neurodsp import voltage, utils
+import numpy as np
 # from brainbox.io import spikeglx
 import spikeglx
-
+from neurodsp import utils, voltage
+from tqdm.auto import trange
 
 ap = argparse.ArgumentParser()
 
@@ -17,6 +15,7 @@ ap.add_argument("--output-binary", type=str, default=None)
 ap.add_argument("--no-bad-channels", action="store_true")
 ap.add_argument("--output-dtype", default="float32")
 ap.add_argument("--robust", default="float32")
+ap.add_argument("--n-jobs", type=int, default=1)
 
 args = ap.parse_args()
 
@@ -65,6 +64,7 @@ if not standardized_file.exists():
         dtype=output_dtype,
         nc_out=sr.nc - sr.nsync,
         reject_channels=not args.no_bad_channels,
+        nprocesses=args.n_jobs,
     )
 
     # also copy the companion meta-data file
