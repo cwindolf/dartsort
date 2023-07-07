@@ -49,7 +49,6 @@ class MockQueue:
         self.get = lambda: self.q.pop(0)
 
 
-
 def apply_cloudpickle(fn, /, *args, **kwargs):
     fn = cloudpickle.loads(fn)
     return fn(*args, **kwargs)
