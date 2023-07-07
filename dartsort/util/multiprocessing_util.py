@@ -1,5 +1,7 @@
-from multiprocessing import get_context
+import multiprocessing
 from concurrent.futures import ProcessPoolExecutor
+from multiprocessing import get_context
+
 import cloudpickle
 
 
@@ -56,10 +58,27 @@ def apply_cloudpickle(fn, /, *args, **kwargs):
 
 class CloudpicklePoolExecutor(ProcessPoolExecutor):
     def submit(self, fn, /, *args, **kwargs):
-        return super().submit(apply_cloudpickle, cloudpickle.dumps(fn), *args, **kwargs)
+        return super().submit(
+            apply_cloudpickle, cloudpickle.dumps(fn), *args, **kwargs
+        )
 
 
-def get_pool(n_jobs, context="spawn", cls=CloudpicklePoolExecutor):
-    Executor = cls if (n_jobs and n_jobs > 1) else MockPoolExecutor
+def get_pool(
+    n_jobs, context="spawn", cls=ProcessPoolExecutor, with_rank_queue=False
+):
+    if n_jobs == -1:
+        n_jobs = multiprocessing.cpu_count()
+    do_parallel = n_jobs >= 1
+    n_jobs = max(1, n_jobs)
+    Executor = cls if do_parallel else MockPoolExecutor
     context = get_context(context)
-    return Executor, context
+    if with_rank_queue:
+        if do_parallel:
+            manager = context.Manager()
+            rank_queue = manager.Queue()
+        else:
+            rank_queue = MockQueue()
+        for rank in range(n_jobs):
+            rank_queue.put(rank)
+        return n_jobs, Executor, context, rank_queue
+    return n_jobs, Executor, context
