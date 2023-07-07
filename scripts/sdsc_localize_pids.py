@@ -191,7 +191,7 @@ if __name__ == "__main__":
                         "python",
                         str(Path(__file__).parent / "destripe.py"),
                         str(dscache / cbin_rel),
-                        f"--njobs={args.njobs}",
+                        f"--n-jobs={args.njobs}",
                     ],
                     check=True,
                 )
