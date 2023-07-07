@@ -274,25 +274,33 @@ def make_contiguous_channel_index(n_channels, n_neighbors=40):
     return channel_index
 
 
+def vertical_dist_channel_index(geom, vertical_dist):
+    neighbors = (
+        np.abs(geom[:, 1][:, None] - geom[:, 1][None, :]) <= vertical_dist
+    )
+    channel_index = np.full((len(geom), neighbors.sum(1).max()), len(geom))
+    for c in range(len(geom)):
+        my_neighbors = np.flatnonzero(neighbors[c])
+        channel_index[c, : my_neighbors.size] = my_neighbors
+    return channel_index
+
+
 def make_pitch_channel_index(geom, n_neighbor_rows=1, pitch=None):
-    n_channels = geom.shape[0]
     if pitch is None:
         pitch = get_pitch(geom)
-    neighbors = np.abs(geom[:, 1][:, None] - geom[:, 1][None, :]) <= n_neighbor_rows * pitch
-    channel_index = np.full((n_channels, neighbors.sum(1).max()), n_channels)
-    for c in range(n_channels):
-        my_neighbors = np.flatnonzero(neighbors[c])
-        channel_index[c, :my_neighbors.size] = my_neighbors
-    return channel_index
+    return vertical_dist_channel_index(geom, n_neighbor_rows * pitch)
 
 
 def full_channel_index(n_channels):
     return (
-        np.arange(n_channels)[None, :] * np.ones(n_channels, dtype=int)[:, None]
+        np.arange(n_channels)[None, :]
+        * np.ones(n_channels, dtype=int)[:, None]
     )
 
 
-def make_channel_index(geom, radius, steps=1, distance_order=False, p=2, pad_val = None):
+def make_channel_index(
+    geom, radius, steps=1, distance_order=False, p=2, pad_val=None
+):
     """
     Compute an array whose whose ith row contains the ordered
     (by distance) neighbors for the ith channel
