@@ -1,7 +1,7 @@
 from dartsort.config import FeaturizationConfig, SubtractionConfig
 from dartsort.peel.subtract import SubtractionPeeler
 from dartsort.transform import WaveformPipeline
-from dartsort.util.data_util import SpikeTrain
+from dartsort.util.data_util import DARTsortSorting
 from dartsort.util.waveform_util import make_channel_index
 
 default_featurization_config = FeaturizationConfig()
@@ -77,4 +77,4 @@ def subtract(
         show_progress=show_progress,
     )
 
-    return SpikeTrain.from_peeling_hdf5(output_hdf5_filename)
+    return DARTsortSorting.from_peeling_hdf5(output_hdf5_filename)
