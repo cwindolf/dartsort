@@ -77,4 +77,4 @@ def subtract(
         show_progress=show_progress,
     )
 
-    return SpikeTrain
+    return SpikeTrain.from_peeling_hdf5(output_hdf5_filename)
