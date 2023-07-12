@@ -1,5 +1,6 @@
 from collections import namedtuple
 
+import h5py
 import numpy as np
 from spikeinterface.core import NumpySorting
 
@@ -43,3 +44,20 @@ class DARTsortSorting:
         return NumpySorting.from_times_labels(
             times=self.times, labels=self.labels
         )
+
+    @classmethod
+    def from_peeling_hdf5(
+        cls,
+        peeling_hdf5_filename,
+        times_dataset="times",
+        channels_dataset="channels",
+        labels_dataset="labels",
+    ):
+        channels = labels = None
+        with h5py.File(peeling_hdf5_filename, "r") as h5:
+            times = h5[times_dataset][()]
+            if channels_dataset in h5:
+                channels = h5[channels_dataset][()]
+            if labels_dataset in h5:
+                labels = h5[labels_dataset][()]
+        return cls(times, channels=channels, labels=labels)
