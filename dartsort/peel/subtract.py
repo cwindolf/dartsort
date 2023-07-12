@@ -3,7 +3,9 @@ from collections import namedtuple
 import torch
 import torch.nn.functional as F
 from dartsort.detect import detect_and_deduplicate
+from dartsort.transform import WaveformPipeline
 from dartsort.util import spiketorch
+from dartsort.util.waveform_util import make_channel_index
 
 from .base import BasePeeler
 
@@ -59,6 +61,45 @@ class SubtractionPeeler(BasePeeler):
         # we may be featurizing during subtraction, register the features
         for transformer in self.subtraction_denoising_pipeline.transformers:
             self.out_datasets.append(transformer.spike_dataset)
+
+    @classmethod
+    def from_config(
+        cls, recording, subtraction_config, featurization_config, device=None
+    ):
+        # construct denoising and featurization pipelines
+        subtraction_denoising_pipeline = WaveformPipeline.from_config(
+            subtraction_config.subtraction_denoising_config
+        )
+        featurization_pipeline = WaveformPipeline.from_config(
+            featurization_config
+        )
+
+        # waveform extraction channel neighborhoods
+        channel_index = make_channel_index(
+            recording.get_channel_locations(),
+            subtraction_config.extract_radius,
+        )
+        # per-threshold spike event deduplication channel neighborhoods
+        spatial_dedup_channel_index = make_channel_index(
+            recording.get_channel_locations(),
+            subtraction_config.spatial_dedup_radius,
+        )
+
+        return cls(
+            recording,
+            channel_index,
+            subtraction_denoising_pipeline,
+            featurization_pipeline,
+            trough_offset_samples=subtraction_config.trough_offset_samples,
+            spike_length_samples=subtraction_config.spike_length_samples,
+            detection_thresholds=subtraction_config.detection_thresholds,
+            chunk_length_samples=subtraction_config.chunk_length_samples,
+            peak_sign=subtraction_config.peak_sign,
+            spatial_dedup_channel_index=spatial_dedup_channel_index,
+            n_seconds_fit=subtraction_config.n_seconds_fit,
+            fit_subsampling_random_state=subtraction_config.fit_subsampling_random_state,
+            device=device,
+        )
 
     def peel_chunk(
         self,
