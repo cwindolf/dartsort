@@ -1,3 +1,4 @@
+import numpy as np
 import torch
 from dartsort.util.torch_waveform_util import (channel_subset_by_radius,
                                                get_channels_in_probe,
@@ -13,14 +14,15 @@ class BaseTemporalPCA(BaseWaveformModule):
         self,
         rank,
         channel_index,
-        name=None,
         whiten=False,
         centered=True,
         fit_radius=None,
         geom=None,
         random_state=0,
+        name=None,
+        name_prefix="",
     ):
-        super().__init__(name)
+        super().__init__(name=name, name_prefix=name_prefix)
         self.rank = rank
         self.needs_fit = True
         self.random_state = random_state
@@ -108,6 +110,18 @@ class BaseTemporalPCA(BaseWaveformModule):
             waveforms_in_probe - self.mean,
             self.components.T @ self.components,
         )
+
+    def to_sklearn(self):
+        pca = PCA(
+            self.rank,
+            random_state=self.random_state,
+            whiten=self.whiten,
+        )
+        pca.mean_ = self.mean.numpy()
+        pca.components_ = self.components.numpy()
+        if hasattr(self, "whitener"):
+            pca.explained_variance_ = np.square(self.whitener.numpy())
+        return pca
 
 
 class TemporalPCADenoiser(BaseTemporalPCA, BaseWaveformDenoiser):

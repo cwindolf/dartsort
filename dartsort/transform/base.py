@@ -9,10 +9,10 @@ class BaseWaveformModule(torch.nn.Module):
     is_featurizer = False
     default_name = ""
 
-    def __init__(self, name):
+    def __init__(self, name, name_prefix=""):
         self.name = name
         if name is None:
-            name = self.default_name
+            name = f"{name_prefix}_{self.default_name}"
 
     def fit(self, waveforms, max_channels=None):
         pass
@@ -50,10 +50,18 @@ class IdentityWaveformDenoiser(BaseWaveformDenoiser):
         return waveforms
 
 
-class WaveformFeaturizer(BaseWaveformFeaturizer):
+class Waveform(BaseWaveformFeaturizer):
+    default_name = "waveforms"
+
     def __init__(
-        self, channel_index, spike_length_samples=121, dtype=torch.float
+        self,
+        channel_index,
+        spike_length_samples=121,
+        dtype=torch.float,
+        name=None,
+        name_prefix="",
     ):
+        super().__init__(name=name, name_prefix=name_prefix)
         self.shape = (spike_length_samples, channel_index.shape[1])
         self.dtype = dtype
 
@@ -64,6 +72,7 @@ class WaveformFeaturizer(BaseWaveformFeaturizer):
 class ZerosWaveformFeaturizer(BaseWaveformModule):
     shape = ()
     dtype = torch.float
+    default_name = "zeros_like_waveforms"
 
     def transform(self, waveforms, max_channels=None):
         return torch.zeros(
