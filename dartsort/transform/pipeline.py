@@ -2,15 +2,35 @@
 """
 import torch
 
+from .all_transformers import transformers_by_class_name
+
 
 class WaveformPipeline(torch.nn.Module):
     def __init__(self, transformers):
         super().__init__()
         self.transformers = transformers
-        self.check_feature_names()
         # register the modules so torch's .to() etc work
         for transformer in self.transformers:
             self.add_module(transformer.name, transformer)
+
+    @classmethod
+    def from_class_names_and_kwargs(
+        cls, channel_index, class_names_and_kwargs
+    ):
+        return cls(
+            [
+                transformers_by_class_name[name](
+                    channel_index=channel_index, **kwargs
+                )
+                for name, kwargs in class_names_and_kwargs
+            ]
+        )
+
+    @classmethod
+    def from_config(cls, channel_index, featurization_config):
+        return cls.from_class_names_and_kwargs(
+            channel_index, featurization_config.to_class_names_and_kwargs()
+        )
 
     @property
     def needs_fit(self):
@@ -28,12 +48,12 @@ class WaveformPipeline(torch.nn.Module):
         for transformer in self.transformers:
             # didn't figure out both at once yet bc we don't use it
             assert not (transformer.is_denoiser and transformer.is_featurizer)
-            if transformer.is_denoiser:
-                waveforms = transformer(waveforms, max_channels=max_channels)
             if transformer.is_featurizer:
                 features[transformer.name] = transformer.transform(
                     waveforms, max_channels=max_channels
                 )
+            if transformer.is_denoiser:
+                waveforms = transformer(waveforms, max_channels=max_channels)
 
         return waveforms, features
 
@@ -45,7 +65,3 @@ class WaveformPipeline(torch.nn.Module):
             transformer.fit(waveforms, max_channels=max_channels)
             if transformer.is_denoiser:
                 waveforms = transformer(waveforms, max_channels=max_channels)
-
-    def check_feature_names(self):
-        featurizers = [t for t in self.transformers if t.is_featurizer]
-        assert len(set(f.name for f in featurizers)) == len(featurizers)
