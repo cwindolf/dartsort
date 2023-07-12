@@ -147,13 +147,14 @@ def channel_subset_by_radius(
     max_channels,
     channel_index,
     geom,
-    radius,
+    radius=None,
+    n_channels_subset=None,
     fill_value=torch.nan,
     return_new_channel_index=True,
 ):
     """Restrict waveforms (or amplitude vectors) to channels inside a radius"""
     channel_index_mask = get_channel_index_mask(
-        geom, channel_index, radius=radius
+        geom, channel_index, radius=radius, n_channels_subset=n_channels_subset
     )
     waveforms_subset = get_channel_subset(
         waveforms, max_channels, channel_index_mask
@@ -187,7 +188,9 @@ def channel_subset_by_index(
     return get_channel_subset(waveforms, max_channels, channel_index_mask)
 
 
-def get_channel_index_mask(geom, channel_index, radius=None, n_channels=None):
+def get_channel_index_mask(
+    geom, channel_index, radius=None, n_channels_subset=None
+):
     """Get a boolean mask showing if channels are inside a radial/linear subset
 
     Subsetting is controlled by a radius or by a number of channels. Radius
@@ -201,10 +204,10 @@ def get_channel_index_mask(geom, channel_index, radius=None, n_channels=None):
         if radius is not None:
             dists = cdist([geom[c]], pgeom[channel_index[c]]).ravel()
             subset[c] = dists <= radius
-        elif n_channels is not None:
-            low = max(0, c - n_channels // 2)
-            low = min(len(geom) - n_channels, low)
-            high = min(len(geom), low + n_channels)
+        elif n_channels_subset is not None:
+            low = max(0, c - n_channels_subset // 2)
+            low = min(len(geom) - n_channels_subset, low)
+            high = min(len(geom), low + n_channels_subset)
             subset[c] = (low <= channel_index[c]) & (channel_index[c] < high)
         else:
             subset[c] = True

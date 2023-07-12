@@ -7,7 +7,7 @@ from torch import nn
 
 from .base import BaseWaveformDenoiser
 
-pretrained_path = (
+default_pretrained_path = (
     Path(__file__).parent.parent.parent / "pretrained/single_chan_denoiser.pt"
 )
 
@@ -17,31 +17,24 @@ class SingleChannelWaveformDenoiser(BaseWaveformDenoiser):
 
     def __init__(
         self,
-        denoiser,
         channel_index,
+        denoiser,
         batch_size=128,
         in_place=False,
+        pretrained_path=default_pretrained_path,
         name=None,
+        name_prefix="",
     ):
-        super().__init__(name)
+        super().__init__(name=name, name_prefix=name_prefix)
         self.denoiser = denoiser
         self.channel_index = channel_index
         self.batch_size = batch_size
         self.in_place = in_place
 
-    @classmethod
-    def load_pretrained(
-        cls,
-        channel_index,
-        pretrained_path=pretrained_path,
-        batch_size=128,
-        in_place=False,
-    ):
-        denoiser = SingleChannelDenoiser().load(pretrained_path)
-        denoiser.eval()
-        return cls(
-            channel_index, denoiser, batch_size=batch_size, in_place=in_place
-        )
+        if denoiser is None:
+            denoiser = SingleChannelDenoiser().load(pretrained_path)
+            denoiser.eval()
+            self.denoiser = denoiser
 
     def forward(self, waveforms, max_channels=None):
         (
@@ -92,7 +85,7 @@ class SingleChannelDenoiser(nn.Module):
         x = x.view(x.shape[0], -1)
         return self.out(x)
 
-    def load(self, fname_model=pretrained_path):
-        checkpoint = torch.load(fname_model, map_location="cpu")
+    def load(self, pretrained_path=default_pretrained_path):
+        checkpoint = torch.load(pretrained_path, map_location="cpu")
         self.load_state_dict(checkpoint)
         return self
