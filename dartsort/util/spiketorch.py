@@ -63,6 +63,33 @@ def add_at_(dest, ix, src, sign=1):
     )
 
 
+def grab_spikes(
+    traces,
+    trough_times,
+    max_channels,
+    channel_index,
+    trough_offset=42,
+    spike_length_samples=121,
+    buffer=0,
+    already_padded=True,
+    pad_value=torch.nan,
+):
+    """Grab spikes from a tensor of traces"""
+    assert max_channels.shape == trough_times.shape
+
+    if not already_padded:
+        traces = F.pad(traces, (0, 1), value=pad_value)
+
+    spike_sample_offsets = torch.arange(
+        buffer - trough_offset,
+        buffer - trough_offset + spike_length_samples,
+        device=trough_times.device,
+    )
+    time_ix = trough_times[:, None, None] + spike_sample_offsets[None, :, None]
+    chan_ix = channel_index[max_channels][:, None, :]
+    return traces[time_ix[:, :, None], chan_ix[:, None, :]]
+
+
 def add_spikes_(
     traces,
     trough_times,

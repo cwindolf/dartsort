@@ -1,4 +1,3 @@
-# TODO compare with spatial dedup before temporal dedup
 import torch
 import torch.nn.functional as F
 
