@@ -129,6 +129,7 @@ class SubtractionConfig:
     spatial_dedup_radius: float = 150.0
     extract_radius: float = 200.0
     n_seconds_fit: int = 40
+    fit_subsampling_random_state: int = 0
 
     # how will waveforms be denoised before subtraction?
     # users can also save waveforms/features during subtraction
