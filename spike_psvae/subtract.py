@@ -285,7 +285,9 @@ def subtraction(
     elif enforce_decrease_kind == "columns":
         pass
     elif enforce_decrease_kind == "new":
-        enfdec = EnforceDecrease(geom, extract_channel_index)
+        enfdec = EnforceDecrease(
+            channel_index=extract_channel_index, geom=geom
+        )
     else:
         print("Skipping enforce decrease.")
         do_enforce_decrease = False
@@ -1851,4 +1853,3 @@ def subtract_and_localize_numpy(
         columns=["sample", "trace", "x", "y", "z", "alpha"],
     )
     return df_localisation, cleaned_wfs.to("cpu")
-
