@@ -19,15 +19,22 @@ class EnforceDecrease(BaseWaveformDenoiser):
 
     def __init__(
         self,
-        geom,
         channel_index,
+        geom,
         name=None,
         name_prefix="",
     ):
-        super().__init__(name=name, name_prefix=name_prefix)
+        super().__init__(
+            geom=geom,
+            channel_index=channel_index,
+            name=name,
+            name_prefix=name_prefix,
+        )
         self.register_buffer(
             "parents_index",
-            torch.LongTensor(make_parents_index(geom, channel_index)),
+            torch.LongTensor(
+                make_parents_index(np.array(geom), np.array(channel_index))
+            ),
         )
         self.register_buffer(
             "_1",

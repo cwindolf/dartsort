@@ -55,6 +55,7 @@ class FeaturizationConfig:
     nn_denoiser_class_name: str = "SingleChannelWaveformDenoiser"
     # optionally restrict how many channels TPCA are fit on
     tpca_fit_radius: Optional[float] = None
+    tpca_rank: int = 8
 
     # used when naming datasets saved to h5 files
     input_waveforms_name: str = "collisioncleaned"
@@ -72,26 +73,30 @@ class FeaturizationConfig:
             class_names_and_kwargs.append(
                 ("Waveform", {"name_prefix": self.input_waveforms_name})
             )
-
         if self.do_featurization and self.save_input_tpca_projs:
             class_names_and_kwargs.append(
                 (
                     "TemporalPCAFeaturizer",
-                    {"name_prefix": self.input_waveforms_name},
+                    {
+                        "rank": self.tpca_rank,
+                        "name_prefix": self.input_waveforms_name,
+                    },
                 )
             )
-
         if self.do_nn_denoise:
             class_names_and_kwargs.append((self.nn_denoiser_class_name, {}))
-
         if self.do_tpca_denoise:
             class_names_and_kwargs.append(
-                ("TemporalPCADenoiser", {"fit_radius": self.tpca_fit_radius})
+                (
+                    "TemporalPCADenoiser",
+                    {
+                        "rank": self.tpca_rank,
+                        "fit_radius": self.tpca_fit_radius,
+                    },
+                )
             )
-
         if self.do_enforce_decrease:
             class_names_and_kwargs.append(("EnforceDecrease", {}))
-
         if self.do_featurization and self.save_output_waveforms:
             class_names_and_kwargs.append(
                 (
@@ -99,15 +104,16 @@ class FeaturizationConfig:
                     {"name_prefix": self.output_waveforms_name},
                 )
             )
-
         if self.do_featurization and self.save_output_tpca_projs:
             class_names_and_kwargs.append(
                 (
                     "TemporalPCAFeaturizer",
-                    {"name_prefix": self.output_waveforms_name},
+                    {
+                        "rank": self.tpca_rank,
+                        "name_prefix": self.output_waveforms_name,
+                    },
                 )
             )
-
         if self.do_featurization and self.do_localization:
             class_names_and_kwargs.append(
                 (
@@ -123,7 +129,7 @@ class FeaturizationConfig:
 class SubtractionConfig:
     trough_offset_samples: int = 42
     spike_length_samples: int = 121
-    detection_thresholds: List[int] = [12, 10, 8, 6, 5, 4]
+    detection_thresholds: List[int] = (12, 10, 8, 6, 5, 4)
     chunk_length_samples: int = 30_000
     peak_sign: str = "neg"
     spatial_dedup_radius: float = 150.0

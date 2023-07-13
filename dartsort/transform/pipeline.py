@@ -15,21 +15,23 @@ class WaveformPipeline(torch.nn.Module):
 
     @classmethod
     def from_class_names_and_kwargs(
-        cls, channel_index, class_names_and_kwargs
+        cls, geom, channel_index, class_names_and_kwargs
     ):
         return cls(
             [
                 transformers_by_class_name[name](
-                    channel_index=channel_index, **kwargs
+                    geom=geom, channel_index=channel_index, **kwargs
                 )
                 for name, kwargs in class_names_and_kwargs
             ]
         )
 
     @classmethod
-    def from_config(cls, channel_index, featurization_config):
+    def from_config(cls, geom, channel_index, featurization_config):
         return cls.from_class_names_and_kwargs(
-            channel_index, featurization_config.to_class_names_and_kwargs()
+            geom,
+            channel_index,
+            featurization_config.to_class_names_and_kwargs(),
         )
 
     @property
