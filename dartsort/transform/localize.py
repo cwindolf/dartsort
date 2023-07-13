@@ -14,8 +14,8 @@ class PointSourceLocalization(BaseWaveformFeaturizer):
 
     def __init__(
         self,
-        channel_index,
         geom,
+        channel_index,
         radius=None,
         n_channels_subset=None,
         logbarrier=True,
@@ -24,7 +24,12 @@ class PointSourceLocalization(BaseWaveformFeaturizer):
         name_prefix="",
     ):
         assert amplitude_kind in ("peak", "ptp")
-        super().__init__(name=name, name_prefix=name_prefix)
+        super().__init__(
+            geom=geom,
+            channel_index=channel_index,
+            name=name,
+            name_prefix=name_prefix,
+        )
         self.amplitude_kind = amplitude_kind
         self.radius = radius
         self.n_channels_subset = n_channels_subset
