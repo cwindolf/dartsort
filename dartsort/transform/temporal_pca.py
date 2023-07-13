@@ -1,8 +1,8 @@
 import numpy as np
 import torch
-from dartsort.util.torch_waveform_util import (channel_subset_by_radius,
-                                               get_channels_in_probe,
-                                               set_channels_in_probe)
+from dartsort.util.waveform_util import (channel_subset_by_radius,
+                                         get_channels_in_probe,
+                                         set_channels_in_probe)
 from sklearn.decomposition import PCA, TruncatedSVD
 
 from .base import (BaseWaveformDenoiser, BaseWaveformFeaturizer,
@@ -12,8 +12,8 @@ from .base import (BaseWaveformDenoiser, BaseWaveformFeaturizer,
 class BaseTemporalPCA(BaseWaveformModule):
     def __init__(
         self,
-        rank,
         channel_index,
+        rank=8,
         whiten=False,
         centered=True,
         fit_radius=None,
@@ -27,12 +27,14 @@ class BaseTemporalPCA(BaseWaveformModule):
         self.needs_fit = True
         self.random_state = random_state
         self.geom = geom
-        self.channel_index = channel_index
+        self.register_buffer("channel_index", channel_index)
+        self.shape = (rank, channel_index.shape[1])
         if fit_radius is not None:
             if geom is None or channel_index is None:
                 raise ValueError(
                     "TemporalPCA with fit_radius!=None requires geom."
                 )
+                self.register_buffer("geom", geom)
         self.fit_radius = fit_radius
         self.centered = centered
         self.whiten = whiten
@@ -53,6 +55,7 @@ class BaseTemporalPCA(BaseWaveformModule):
             waveforms, max_channels, train_channel_index
         )
         waveforms_fit = waveforms_fit.cpu().numpy()
+        self.dtype = waveforms.dtype
 
         if self.centered:
             pca = PCA(
@@ -124,7 +127,7 @@ class BaseTemporalPCA(BaseWaveformModule):
         return pca
 
 
-class TemporalPCADenoiser(BaseTemporalPCA, BaseWaveformDenoiser):
+class TemporalPCADenoiser(BaseWaveformDenoiser, BaseTemporalPCA):
     default_name = "temporal_pca"
 
     def forward(self, waveforms, max_channels):
@@ -140,19 +143,8 @@ class TemporalPCADenoiser(BaseTemporalPCA, BaseWaveformDenoiser):
         )
 
 
-class TemporalPCAFeaturizer(BaseTemporalPCA, BaseWaveformFeaturizer):
+class TemporalPCAFeaturizer(BaseWaveformFeaturizer, BaseTemporalPCA):
     default_name = "tpca_features"
-
-    @property
-    def shape(self):
-        return (
-            self.rank,
-            self.channel_index.shape[1],
-        )
-
-    @property
-    def dtype(self):
-        return self.components.dtype
 
     def transform(self, waveforms, max_channels):
         (
