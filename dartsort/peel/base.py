@@ -65,7 +65,8 @@ class BasePeeler(torch.nn.Module):
             SpikeDataset(name="channels", shape_per_spike=(), dtype=int),
         ]
         for transformer in self.featurization_pipeline.transformers:
-            self.out_datasets.append(transformer.spike_dataset)
+            if transformer.is_featurizer:
+                self.out_datasets.append(transformer.spike_dataset)
 
         # subclasses can append to this if they want to store more fixed
         # arrays in the output h5 file
@@ -303,7 +304,7 @@ class BasePeeler(torch.nn.Module):
     def fit_featurization_pipeline(self):
         # make copy of self with featurization_pipeline
         # run copy.peel() on random (with seed) subset of chunks
-        pass
+        raise NotImplementedError
 
     def save_models(self, save_folder):
         torch.save(

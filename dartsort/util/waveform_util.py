@@ -39,7 +39,13 @@ def get_pitch(geom):
 
 
 def make_channel_index(
-    geom, radius, steps=1, distance_order=False, p=2, pad_val=None
+    geom,
+    radius,
+    steps=1,
+    distance_order=False,
+    p=2,
+    pad_val=None,
+    to_torch=False,
 ):
     """
     Compute an array whose whose ith row contains the ordered
@@ -67,6 +73,9 @@ def make_channel_index(
         # indices of c's neighbors
         ch_idx = np.flatnonzero(neighbors[c])
         channel_index[c, : ch_idx.shape[0]] = ch_idx
+
+    if to_torch:
+        channel_index = torch.LongTensor(channel_index)
 
     return channel_index
 

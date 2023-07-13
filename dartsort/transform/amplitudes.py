@@ -12,11 +12,17 @@ class AmplitudeVector(BaseWaveformFeaturizer):
         channel_index,
         kind="peak",
         dtype=torch.float,
+        geom=None,
         name=None,
         name_prefix="",
     ):
         assert kind in ("peak", "ptp")
-        super().__init__(name=name, name_prefix=name_prefix)
+        super().__init__(
+            geom=geom,
+            channel_index=channel_index,
+            name=name,
+            name_prefix=name_prefix,
+        )
         self.kind = kind
         self.shape = (channel_index.shape[1],)
         self.dtype = dtype
@@ -38,9 +44,16 @@ class MaxAmplitude(BaseWaveformFeaturizer):
         dtype=torch.float,
         name=None,
         name_prefix="",
+        geom=None,
+        channel_index=None,
     ):
         assert kind in ("peak", "ptp")
-        super().__init__(name=name, name_prefix=name_prefix)
+        super().__init__(
+            geom=geom,
+            channel_index=channel_index,
+            name=name,
+            name_prefix=name_prefix,
+        )
         self.kind = kind
         self.dtype = dtype
 

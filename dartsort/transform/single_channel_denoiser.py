@@ -1,8 +1,8 @@
 from pathlib import Path
 
 import torch
-from dartsort.util.torch_waveform_util import (get_channels_in_probe,
-                                               set_channels_in_probe)
+from dartsort.util.waveform_util import (get_channels_in_probe,
+                                         set_channels_in_probe)
 from torch import nn
 
 from .base import BaseWaveformDenoiser
@@ -24,6 +24,7 @@ class SingleChannelWaveformDenoiser(BaseWaveformDenoiser):
         pretrained_path=default_pretrained_path,
         name=None,
         name_prefix="",
+        geom=None,
     ):
         super().__init__(name=name, name_prefix=name_prefix)
         self.denoiser = denoiser

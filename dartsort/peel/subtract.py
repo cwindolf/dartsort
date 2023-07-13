@@ -29,7 +29,7 @@ class SubtractionPeeler(BasePeeler):
         fit_subsampling_random_state=0,
         device=None,
     ):
-        super().___init__(
+        super().__init__(
             recording=recording,
             channel_index=channel_index,
             featurization_pipeline=featurization_pipeline,
@@ -60,30 +60,34 @@ class SubtractionPeeler(BasePeeler):
         )
         # we may be featurizing during subtraction, register the features
         for transformer in self.subtraction_denoising_pipeline.transformers:
-            self.out_datasets.append(transformer.spike_dataset)
+            if transformer.is_featurizer:
+                self.out_datasets.append(transformer.spike_dataset)
 
     @classmethod
     def from_config(
         cls, recording, subtraction_config, featurization_config, device=None
     ):
-        # construct denoising and featurization pipelines
-        subtraction_denoising_pipeline = WaveformPipeline.from_config(
-            subtraction_config.subtraction_denoising_config
-        )
-        featurization_pipeline = WaveformPipeline.from_config(
-            featurization_config
-        )
-
         # waveform extraction channel neighborhoods
+        geom = torch.tensor(recording.get_channel_locations())
         channel_index = make_channel_index(
-            recording.get_channel_locations(),
-            subtraction_config.extract_radius,
+            geom, subtraction_config.extract_radius, to_torch=True
         )
         # per-threshold spike event deduplication channel neighborhoods
         spatial_dedup_channel_index = make_channel_index(
-            recording.get_channel_locations(),
-            subtraction_config.spatial_dedup_radius,
+            geom, subtraction_config.spatial_dedup_radius, to_torch=True
         )
+
+        # construct denoising and featurization pipelines
+        subtraction_denoising_pipeline = WaveformPipeline.from_config(
+            geom,
+            channel_index,
+            subtraction_config.subtraction_denoising_config,
+        )
+        featurization_pipeline = WaveformPipeline.from_config(
+            geom, channel_index, featurization_config
+        )
+        print(subtraction_denoising_pipeline)
+        print(featurization_pipeline)
 
         return cls(
             recording,

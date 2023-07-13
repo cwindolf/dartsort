@@ -9,10 +9,15 @@ class BaseWaveformModule(torch.nn.Module):
     is_featurizer = False
     default_name = ""
 
-    def __init__(self, name, name_prefix=""):
-        self.name = name
+    def __init__(
+        self, channel_index=None, geom=None, name=None, name_prefix=""
+    ):
+        super().__init__()
         if name is None:
-            name = f"{name_prefix}_{self.default_name}"
+            name = self.default_name
+            if name_prefix:
+                name = name_prefix + "_" + name
+        self.name = name
 
     def fit(self, waveforms, max_channels=None):
         pass
@@ -37,6 +42,8 @@ class BaseWaveformFeaturizer(BaseWaveformModule):
 
     @property
     def spike_dataset(self):
+        print("Hi from spike_dataset", self)
+        print(self.dtype)
         torch_dtype_as_str = str(self.dtype).split(".")[1]
         return SpikeDataset(
             name=self.name,
@@ -56,12 +63,18 @@ class Waveform(BaseWaveformFeaturizer):
     def __init__(
         self,
         channel_index,
+        geom=None,
         spike_length_samples=121,
         dtype=torch.float,
         name=None,
         name_prefix="",
     ):
-        super().__init__(name=name, name_prefix=name_prefix)
+        super().__init__(
+            geom=geom,
+            channel_index=channel_index,
+            name=name,
+            name_prefix=name_prefix,
+        )
         self.shape = (spike_length_samples, channel_index.shape[1])
         self.dtype = dtype
 
