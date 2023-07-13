@@ -33,7 +33,9 @@ class EnforceDecrease(BaseWaveformDenoiser):
         self.register_buffer(
             "parents_index",
             torch.LongTensor(
-                make_parents_index(np.array(geom), np.array(channel_index))
+                make_parents_index(
+                    np.array(geom).astype(float), np.array(channel_index)
+                )
             ),
         )
         self.register_buffer(
