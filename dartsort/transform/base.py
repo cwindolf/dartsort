@@ -3,8 +3,6 @@ from dartsort.util.data_util import SpikeDataset
 
 
 class BaseWaveformModule(torch.nn.Module):
-    # if this is True, then model fitting+saving+loading will happen
-    needs_fit = False
     is_denoiser = False
     is_featurizer = False
     default_name = ""
@@ -18,9 +16,18 @@ class BaseWaveformModule(torch.nn.Module):
             if name_prefix:
                 name = name_prefix + "_" + name
         self.name = name
+        if channel_index is not None:
+            self.register_buffer(
+                "channel_index", torch.LongTensor(channel_index)
+            )
+        if geom is not None:
+            self.register_buffer("geom", torch.DoubleTensor(geom))
 
     def fit(self, waveforms, max_channels=None):
         pass
+
+    def needs_fit(self):
+        return False
 
 
 class BaseWaveformDenoiser(BaseWaveformModule):
@@ -42,8 +49,6 @@ class BaseWaveformFeaturizer(BaseWaveformModule):
 
     @property
     def spike_dataset(self):
-        print("Hi from spike_dataset", self)
-        print(self.dtype)
         torch_dtype_as_str = str(self.dtype).split(".")[1]
         return SpikeDataset(
             name=self.name,
@@ -78,7 +83,7 @@ class Waveform(BaseWaveformFeaturizer):
         self.shape = (spike_length_samples, channel_index.shape[1])
         self.dtype = dtype
 
-    def forward(self, waveforms, max_channels=None):
+    def transform(self, waveforms, max_channels=None):
         return waveforms
 
 
