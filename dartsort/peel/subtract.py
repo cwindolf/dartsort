@@ -1,9 +1,11 @@
 from collections import namedtuple
+from pathlib import Path
 
+import h5py
 import torch
 import torch.nn.functional as F
 from dartsort.detect import detect_and_deduplicate
-from dartsort.transform import WaveformPipeline
+from dartsort.transform import Waveform, WaveformPipeline
 from dartsort.util import spiketorch
 from dartsort.util.waveform_util import make_channel_index
 
@@ -11,8 +13,6 @@ from .base import BasePeeler
 
 
 class SubtractionPeeler(BasePeeler):
-    peeling_needs_fit = True
-
     def __init__(
         self,
         recording,
@@ -25,7 +25,7 @@ class SubtractionPeeler(BasePeeler):
         chunk_length_samples=30_000,
         peak_sign="neg",
         spatial_dedup_channel_index=None,
-        n_seconds_fit=40,
+        n_chunks_fit=40,
         fit_subsampling_random_state=0,
         device=None,
     ):
@@ -34,11 +34,8 @@ class SubtractionPeeler(BasePeeler):
             channel_index=channel_index,
             featurization_pipeline=featurization_pipeline,
             chunk_length_samples=chunk_length_samples,
-            chunk_margin_samples=max(
-                trough_offset_samples,
-                spike_length_samples - trough_offset_samples,
-            ),
-            n_seconds_fit=n_seconds_fit,
+            chunk_margin_samples=2 * spike_length_samples,
+            n_chunks_fit=n_chunks_fit,
             fit_subsampling_random_state=fit_subsampling_random_state,
             device=device,
         )
@@ -58,10 +55,19 @@ class SubtractionPeeler(BasePeeler):
         self.add_module(
             "subtraction_denoising_pipeline", subtraction_denoising_pipeline
         )
+
+    def out_datasets(self):
+        datasets = super().out_datasets()
+
         # we may be featurizing during subtraction, register the features
         for transformer in self.subtraction_denoising_pipeline.transformers:
             if transformer.is_featurizer:
-                self.out_datasets.append(transformer.spike_dataset)
+                datasets.append(transformer.spike_dataset)
+
+        return datasets
+
+    def peeling_needs_fit(self):
+        return self.subtraction_denoising_pipeline.needs_fit()
 
     @classmethod
     def from_config(
@@ -86,8 +92,6 @@ class SubtractionPeeler(BasePeeler):
         featurization_pipeline = WaveformPipeline.from_config(
             geom, channel_index, featurization_config
         )
-        print(subtraction_denoising_pipeline)
-        print(featurization_pipeline)
 
         return cls(
             recording,
@@ -100,7 +104,7 @@ class SubtractionPeeler(BasePeeler):
             chunk_length_samples=subtraction_config.chunk_length_samples,
             peak_sign=subtraction_config.peak_sign,
             spatial_dedup_channel_index=spatial_dedup_channel_index,
-            n_seconds_fit=subtraction_config.n_seconds_fit,
+            n_chunks_fit=subtraction_config.n_chunks_fit,
             fit_subsampling_random_state=subtraction_config.fit_subsampling_random_state,
             device=device,
         )
@@ -119,12 +123,11 @@ class SubtractionPeeler(BasePeeler):
             self.subtraction_denoising_pipeline,
             trough_offset_samples=self.trough_offset_samples,
             spike_length_samples=self.spike_length_samples,
-            left_margin=0,
-            right_margin=0,
-            detection_thresholds=[12, 10, 8, 6, 5, 4],
-            peak_sign="neg",
-            spatial_dedup_channel_index=None,
-            in_place=True,
+            left_margin=left_margin,
+            right_margin=right_margin,
+            detection_thresholds=self.detection_thresholds,
+            peak_sign=self.peak_sign,
+            spatial_dedup_channel_index=self.spatial_dedup_channel_index,
         )
 
         peel_result = dict(
@@ -138,6 +141,85 @@ class SubtractionPeeler(BasePeeler):
             peel_result["residual"] = subtraction_result.residual
 
         return peel_result
+
+    def fit_peeler(self, save_folder, n_jobs=0, device=None):
+        # when fitting peelers for subtraction, there are basically
+        # two cases. fitting featurizers is easy -- they don't modify
+        # the waveforms. fitting denoisers is hard -- they do. each
+        # denoiser that needs fitting will affect any transformer
+        # that comes after it in the pipeline.
+
+        # but, we usually only have one denoiser that needs fitting
+        # in the pipeline, which is temporal PCA (after pretrained NN)
+        # so we will cheat for now:
+        # just remove all the denoisers that need fitting, run peeling,
+        # and fit everything
+
+        self.fit_peeling_transformers(
+            save_folder, n_jobs=n_jobs, device=device, which="denoisers"
+        )
+        self.fit_peeling_transformers(
+            save_folder, n_jobs=n_jobs, device=device, which="featurizers"
+        )
+
+    def fit_peeling_transformers(
+        self, save_folder, n_jobs=0, device=None, which="denoisers"
+    ):
+        """Handle fitting either denoisers or featurizers since the logic is similar"""
+        if not any(
+            (
+                (t.is_denoiser if which == "denoisers" else t.is_featurizer)
+                and t.needs_fit()
+            )
+            for t in self.subtraction_denoising_pipeline
+        ):
+            return
+
+        orig_denoise = self.subtraction_denoising_pipeline
+        init_waveform_feature = Waveform(
+            channel_index=self.channel_index,
+            name="subtract_fit_waveforms",
+        )
+        if which == "denoisers":
+            self.subtraction_denoising_pipeline = WaveformPipeline(
+                [init_waveform_feature]
+                + [
+                    t
+                    for t in orig_denoise
+                    if (t.is_denoiser and not t.needs_fit())
+                ]
+            )
+        else:
+            self.subtraction_denoising_pipeline = WaveformPipeline(
+                [init_waveform_feature]
+                + [t for t in orig_denoise if t.is_denoiser]
+            )
+
+        # and we don't need any features for this
+        orig_featurization_pipeline = self.featurization_pipeline
+        self.featurization_pipeline = WaveformPipeline([])
+
+        # run mini subtraction
+        temp_hdf5_filename = Path(save_folder) / "subtraction_denoiser_fit.h5"
+        self.run_subsampled_peeling(
+            temp_hdf5_filename,
+            n_jobs=n_jobs,
+            device=device,
+            task_name="Fit subtraction denoisers",
+        )
+
+        # fit featurization pipeline and reassign
+        # work in a try finally so we can delete the temp file
+        # in case of an issue or a keyboard interrupt
+        try:
+            with h5py.File(temp_hdf5_filename) as h5:
+                waveforms = torch.tensor(h5["subtract_fit_waveforms"][:])
+                channels = torch.tensor(h5["channels"][:])
+            orig_denoise.fit(waveforms, max_channels=channels)
+            self.subtraction_denoising_pipeline = orig_denoise
+            self.featurization_pipeline = orig_featurization_pipeline
+        finally:
+            temp_hdf5_filename.unlink()
 
 
 ChunkSubtractionResult = namedtuple(
@@ -164,14 +246,25 @@ def subtract_chunk(
     detection_thresholds=[12, 10, 8, 6, 5, 4],
     peak_sign="neg",
     spatial_dedup_channel_index=None,
+    residnorm_decrease_threshold=3.162,  # sqrt(10)
 ):
     """Core peeling routine for subtraction"""
+    # validate arguments to avoid confusing error messages later
     assert 0 <= left_margin < traces.shape[0]
     assert 0 <= right_margin < traces.shape[0]
     assert traces.shape[1] == channel_index.shape[0]
     if spatial_dedup_channel_index is not None:
         assert traces.shape[1] == spatial_dedup_channel_index.shape[0]
-    assert detection_thresholds == sorted(detection_thresholds)
+    assert all(
+        detection_thresholds[i] > detection_thresholds[i + 1]
+        for i in range(len(detection_thresholds) - 1)
+    )
+
+    # can only subtract spikes with trough time >=trough_offset and <max_trough
+    traces_length_samples = traces.shape[0]
+    post_trough_samples = spike_length_samples - trough_offset_samples
+    max_trough_time = traces_length_samples - post_trough_samples
+
     # initialize residual, it needs to be padded to support
     # our channel indexing convention. this copies the input.
     residual = F.pad(traces, (0, 1), value=torch.nan)
@@ -181,11 +274,15 @@ def subtract_chunk(
     spike_channels = []
     spike_features = []
 
+    # TODO handle double buffering
+    # need one buffer for spike wfs in main extending outside
+    # and another outer buffer for spikes which would overlap with the first buffer
+
     for threshold in detection_thresholds:
         # -- detect and extract waveforms
         # detection has more args which we don't expose right now
         times, channels = detect_and_deduplicate(
-            residual,
+            residual[:, :-1],
             threshold,
             dedup_channel_index=spatial_dedup_channel_index,
             peak_sign=peak_sign,
@@ -193,8 +290,14 @@ def subtract_chunk(
         if not times.numel():
             continue
 
-        spike_times.append(times)
-        spike_channels.append(channels)
+        # throw away spikes which cannot be subtracted
+        keep = (times >= trough_offset_samples) & (times < max_trough_time)
+        times = times[keep]
+        if not times.numel():
+            continue
+        channels = channels[keep]
+
+        # read waveforms, denoise, and test residnorm decrease
         waveforms = spiketorch.grab_spikes(
             residual,
             times,
@@ -205,9 +308,24 @@ def subtract_chunk(
             buffer=0,
             already_padded=True,
         )
+        if residnorm_decrease_threshold:
+            residuals = torch.nan_to_num(waveforms)
+        waveforms, features = denoising_pipeline(waveforms, channels)
+        # TODO: test residnorm decrease
+        if residnorm_decrease_threshold:
+            orig_norm = torch.linalg.norm(residuals, dim=(1, 2))
+            residuals -= torch.nan_to_num(waveforms)
+            sub_norm = torch.linalg.norm(residuals, dim=(1, 2))
+            keep = sub_norm < orig_norm - residnorm_decrease_threshold
+            waveforms = waveforms[keep]
+            times = times[keep]
+            channels = channels[keep]
+            if not times.numel():
+                continue
 
-        # -- denoise
-        waveforms, features = denoising_pipeline(waveforms)
+        # store this threshold's outputs
+        spike_times.append(times)
+        spike_channels.append(channels)
         subtracted_waveforms.append(waveforms)
         spike_features.append(features)
 
@@ -219,10 +337,17 @@ def subtract_chunk(
             channel_index,
             waveforms,
             trough_offset=trough_offset_samples,
-            spike_length_samples=spike_length_samples,
             buffer=0,
             already_padded=True,
             in_place=True,
+        )
+
+    # check if we got no spikes
+    if not any(t.numel() for t in spike_times):
+        return empty_result(
+            spike_length_samples,
+            channel_index,
+            residual[left_margin : traces.shape[0] - right_margin, :-1],
         )
 
     subtracted_waveforms = torch.concatenate(subtracted_waveforms)
@@ -233,11 +358,18 @@ def subtract_chunk(
         for k in spike_features[0].keys()
     }
 
-    # discard spikes in the margins
+    # discard spikes in the margins, sort times for caller
     keep = torch.nonzero(
         (spike_times >= left_margin)
         & (spike_times < traces.shape[0] - right_margin)
-    )
+    ).squeeze()
+    if not keep.any():
+        return empty_result(
+            spike_length_samples,
+            channel_index,
+            residual[left_margin : traces.shape[0] - right_margin, :-1],
+        )
+    keep = keep[torch.argsort(spike_times[keep])]
     subtracted_waveforms = subtracted_waveforms[keep]
     spike_times = spike_times[keep]
     spike_channels = spike_channels[keep]
@@ -269,4 +401,20 @@ def subtract_chunk(
         collisioncleaned_waveforms=collisioncleaned_waveforms,
         residual=residual,
         features=spike_features,
+    )
+
+
+def empty_result(spike_length_samples, channel_index, residual):
+    empty_waveforms = torch.empty(
+        (0, spike_length_samples, channel_index.shape[1]),
+        dtype=residual.dtype,
+    )
+    empty_times_or_chans = torch.empty((0,), dtype=torch.long)
+    return ChunkSubtractionResult(
+        n_spikes=0,
+        times=empty_times_or_chans,
+        channels=empty_times_or_chans,
+        collisioncleaned_waveforms=empty_waveforms,
+        residual=residual,
+        features={},
     )

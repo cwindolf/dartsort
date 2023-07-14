@@ -34,13 +34,12 @@ class WaveformPipeline(torch.nn.Module):
             featurization_config.to_class_names_and_kwargs(),
         )
 
-    @property
     def needs_fit(self):
-        return any(t.transformer.needs_fit for t in self.named_transformers)
+        return any(t.needs_fit() for t in self.transformers)
 
-    def forward(self, waveforms, max_channels=None):
-        if max_channels is not None:
-            assert (waveforms.shape[0],) == max_channels.shape
+    def forward(self, waveforms, max_channels):
+        assert waveforms.ndim == 3
+        assert max_channels.shape[0] == waveforms.shape[0]
 
         features = {}
 
@@ -48,8 +47,6 @@ class WaveformPipeline(torch.nn.Module):
             return waveforms, features
 
         for transformer in self.transformers:
-            # didn't figure out both at once yet bc we don't use it
-            assert not (transformer.is_denoiser and transformer.is_featurizer)
             if transformer.is_featurizer:
                 features[transformer.name] = transformer.transform(
                     waveforms, max_channels=max_channels
@@ -59,11 +56,17 @@ class WaveformPipeline(torch.nn.Module):
 
         return waveforms, features
 
-    def fit(self, waveforms, max_channels=None):
-        if not self.needs_fit:
+    def fit(self, waveforms, max_channels):
+        assert waveforms.ndim == 3
+        assert max_channels.shape[0] == waveforms.shape[0]
+
+        if not self.needs_fit():
             return
 
-        for name, transformer in self.named_transformers:
+        for transformer in self.transformers:
             transformer.fit(waveforms, max_channels=max_channels)
             if transformer.is_denoiser:
                 waveforms = transformer(waveforms, max_channels=max_channels)
+
+    def __iter__(self):
+        return iter(self.transformers)

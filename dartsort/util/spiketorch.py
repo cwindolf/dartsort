@@ -75,6 +75,7 @@ def grab_spikes(
     pad_value=torch.nan,
 ):
     """Grab spikes from a tensor of traces"""
+    assert trough_times.ndim == 1
     assert max_channels.shape == trough_times.shape
 
     if not already_padded:
@@ -85,9 +86,10 @@ def grab_spikes(
         buffer - trough_offset + spike_length_samples,
         device=trough_times.device,
     )
-    time_ix = trough_times[:, None, None] + spike_sample_offsets[None, :, None]
-    chan_ix = channel_index[max_channels][:, None, :]
-    return traces[time_ix[:, :, None], chan_ix[:, None, :]]
+    time_ix = trough_times[:, None] + spike_sample_offsets[None, :]
+    chan_ix = channel_index[max_channels]
+    grab_res = traces[time_ix[:, :, None], chan_ix[:, None, :]]
+    return grab_res
 
 
 def add_spikes_(
@@ -117,6 +119,7 @@ def add_spikes_(
     # traces may be padded with an extra chan, so C is the real n_chans
     C = C_ - int(already_padded)
     assert channel_index.shape == (C, spike_n_chans)
+    assert trough_times.ndim == 1
     assert max_channels.shape == trough_times.shape == (n_spikes,)
 
     if not already_padded:
