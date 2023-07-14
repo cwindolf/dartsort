@@ -8,7 +8,7 @@ from neuropixel import dense_layout
 
 
 def test_fakedata_nonn():
-    # generate fake neuropixels data with sin/cos templates
+    # generate fake neuropixels data with artificial templates
     T_s = 49.5
     fs = 30000
     T_samples = int(fs * T_s)
@@ -19,10 +19,10 @@ def test_fakedata_nonn():
     geom = np.c_[h["x"], h["y"]]
 
     # template main channel traces
-    t0 = np.sin(np.arange(121) / np.pi)
-    t1 = np.sin(np.arange(121) / np.pi)
-    t2 = np.sin(0.5 * np.arange(121) / np.pi)
-    t3 = np.cos(0.5 * np.arange(121) / np.pi)
+    t0 = np.exp(-(((np.arange(121) - 42) / 10) ** 2))
+    t1 = np.exp(-(((np.arange(121) - 42) / 30) ** 2))
+    t2 = t0 - 0.5 * np.exp(-(((np.arange(121) - 46) / 10) ** 2))
+    t3 = t0 - 0.5 * np.exp(-(((np.arange(121) - 46) / 30) ** 2))
 
     # fake main channels, positions, brightnesses
     chans = rg.integers(0, len(geom), size=4)
@@ -44,9 +44,13 @@ def test_fakedata_nonn():
     ]
 
     # combine to make templates
-    templates = 50 * np.array(
+    templates = np.array(
         [t[:, None] * a[None, :] for t, a in zip((t0, t1, t2, t3), amps)]
     )
+    templates[0] *= 100 / np.abs(templates[0]).max()
+    templates[1] *= 50 / np.abs(templates[0]).max()
+    templates[2] *= 100 / np.abs(templates[0]).max()
+    templates[3] *= 50 / np.abs(templates[0]).max()
 
     # make fake spike trains
     spikes_per_unit = 500
@@ -64,27 +68,34 @@ def test_fakedata_nonn():
     labels = np.concatenate(labels)
 
     # inject the spikes into a noise background
-    rec = rg.normal(size=(T_samples, len(geom))).astype(np.float32)
+    rec = 0.1 * rg.normal(size=(T_samples, len(geom))).astype(np.float32)
     for t, l in zip(times, labels):
         rec[t : t + 121] += templates[l]
+    assert np.sum(np.abs(rec) > 80) >= 1000
+    assert np.sum(np.abs(rec) > 40) >= 2000
 
     # make into spikeinterface
     rec = sc.NumpyRecording(rec, fs)
     rec.set_dummy_probe_from_locations(geom)
 
     subconf = SubtractionConfig(
+        detection_thresholds=(80, 40),
+        peak_sign="both",
         subtraction_denoising_config=FeaturizationConfig(
             do_nn_denoise=False, do_featurization=False
-        )
+        ),
     )
     featconf = FeaturizationConfig(do_nn_denoise=False)
-    print(subconf)
-    print(featconf)
 
     st = subtract(
         rec,
-        "/tmp/test.h5",
+        "/tmp/test_sub",
         featurization_config=featconf,
         subtraction_config=subconf,
+        overwrite=True,
     )
     print(st)
+
+
+if __name__ == "__main__":
+    test_fakedata_nonn()

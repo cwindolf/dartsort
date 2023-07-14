@@ -45,6 +45,12 @@ class DARTsortSorting:
             times=self.times, labels=self.labels
         )
 
+    def __str__(self):
+        name = self.__class__.__name__
+        nspikes = self.times.size
+        labels_str = "unlabeled" if self.labels is None else "labeled"
+        return f"{name}: {nspikes} {labels_str} spikes."
+
     @classmethod
     def from_peeling_hdf5(
         cls,

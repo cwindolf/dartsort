@@ -17,12 +17,7 @@ class AmplitudeVector(BaseWaveformFeaturizer):
         name_prefix="",
     ):
         assert kind in ("peak", "ptp")
-        super().__init__(
-            geom=geom,
-            channel_index=channel_index,
-            name=name,
-            name_prefix=name_prefix,
-        )
+        super().__init__(name=name, name_prefix=name_prefix)
         self.kind = kind
         self.shape = (channel_index.shape[1],)
         self.dtype = dtype
@@ -48,12 +43,7 @@ class MaxAmplitude(BaseWaveformFeaturizer):
         channel_index=None,
     ):
         assert kind in ("peak", "ptp")
-        super().__init__(
-            geom=geom,
-            channel_index=channel_index,
-            name=name,
-            name_prefix=name_prefix,
-        )
+        super().__init__(name=name, name_prefix=name_prefix)
         self.kind = kind
         self.dtype = dtype
 
