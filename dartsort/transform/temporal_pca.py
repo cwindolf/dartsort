@@ -22,19 +22,22 @@ class BaseTemporalPCA(BaseWaveformModule):
         name=None,
         name_prefix="",
     ):
-        super().__init__(name=name, name_prefix=name_prefix)
+        super().__init__(
+            channel_index=channel_index,
+            geom=geom,
+            name=name,
+            name_prefix=name_prefix,
+        )
         self.rank = rank
-        self.needs_fit = True
+        self._needs_fit = True
         self.random_state = random_state
         self.geom = geom
-        self.register_buffer("channel_index", channel_index)
         self.shape = (rank, channel_index.shape[1])
         if fit_radius is not None:
             if geom is None or channel_index is None:
                 raise ValueError(
                     "TemporalPCA with fit_radius!=None requires geom."
                 )
-                self.register_buffer("geom", geom)
         self.fit_radius = fit_radius
         self.centered = centered
         self.whiten = whiten
@@ -75,7 +78,7 @@ class BaseTemporalPCA(BaseWaveformModule):
             self.register_buffer(
                 "whitener",
                 torch.sqrt(
-                    torch.tensor(pca.explained_variance_.to(waveforms.dtype))
+                    torch.tensor(pca.explained_variance_).to(waveforms.dtype)
                 ),
             )
         else:
@@ -90,7 +93,10 @@ class BaseTemporalPCA(BaseWaveformModule):
                 torch.tensor(tsvd.components_).to(waveforms.dtype),
             )
 
-        self.needs_fit = False
+        self._needs_fit = False
+
+    def needs_fit(self):
+        return self._needs_fit
 
     def _transform_in_probe(self, waveforms_in_probe):
         if self.centered:

@@ -35,10 +35,10 @@ class PointSourceLocalization(BaseWaveformFeaturizer):
         self.n_channels_subset = n_channels_subset
         self.logbarrier = logbarrier
 
-    def forward(self, waveforms, max_channels=None):
+    def transform(self, waveforms, max_channels=None):
         # get amplitude vectors
         if self.amplitude_kind == "peak":
-            ampvecs = waveforms.abs().max(dim=2).values
+            ampvecs = waveforms.abs().max(dim=1).values
         elif self.amplitude_kind == "ptp":
             ampvecs = ptp(waveforms, dim=1)
 
