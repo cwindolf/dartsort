@@ -88,8 +88,7 @@ def grab_spikes(
     )
     time_ix = trough_times[:, None] + spike_sample_offsets[None, :]
     chan_ix = channel_index[max_channels]
-    grab_res = traces[time_ix[:, :, None], chan_ix[:, None, :]]
-    return grab_res
+    return traces[time_ix[:, :, None], chan_ix[:, None, :]]
 
 
 def add_spikes_(
