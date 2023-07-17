@@ -19,7 +19,7 @@ class DARTsortSorting:
     Export me to a SpikeInterface NumpySorting with .to_numpy_sorting()
     """
 
-    def __init__(self, times, channels, labels=None):
+    def __init__(self, times, channels, labels=None, sampling_frequency=30000):
         """
         Arguments
         ---------
@@ -33,6 +33,7 @@ class DARTsortSorting:
         self.times = np.array(times, dtype=int)
         self.channels = channels
         self.labels = labels
+        self.sampling_frequency = sampling_frequency
         if labels is None:
             self.labels = np.zeros_like(times)
 
@@ -42,7 +43,8 @@ class DARTsortSorting:
 
     def to_numpy_sorting(self):
         return NumpySorting.from_times_labels(
-            times=self.times, labels=self.labels
+            times_list=self.times, labels_list=self.labels, 
+            sampling_frequency=self.sampling_frequency
         )
 
     def __str__(self):
