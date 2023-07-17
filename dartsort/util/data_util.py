@@ -48,8 +48,13 @@ class DARTsortSorting:
     def __str__(self):
         name = self.__class__.__name__
         nspikes = self.times.size
-        labels_str = "unlabeled" if self.labels is None else "labeled"
-        return f"{name}: {nspikes} {labels_str} spikes."
+        units = np.unique(self.labels)
+        units = units[units >= 0]
+        unit_str = f"{units.size} unit" + ("s" if units.size > 1 else "")
+        return f"{name}: {nspikes} spikes, {unit_str}."
+
+    def __len__(self):
+        return self.times.size
 
     @classmethod
     def from_peeling_hdf5(

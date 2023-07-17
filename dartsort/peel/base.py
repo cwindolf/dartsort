@@ -1,3 +1,4 @@
+from contextlib import contextmanager
 from pathlib import Path
 
 import h5py
@@ -100,15 +101,9 @@ class BasePeeler(torch.nn.Module):
         if task_name is None:
             task_name = self.peel_kind
 
-        (
-            last_chunk_start,
-            output_h5,
-            h5_spike_datasets,
-            save_residual,
-            residual_file,
-        ) = self.initialize_files(
+        # this is -1 if we haven't started yet
+        last_chunk_start = self.check_resuming(
             output_hdf5_filename,
-            residual_filename=residual_filename,
             overwrite=overwrite,
         )
 
@@ -123,7 +118,8 @@ class BasePeeler(torch.nn.Module):
             start for start in chunk_starts_samples if start > last_chunk_start
         ]
         if not chunks_to_do:
-            output_h5.close()
+            return output_hdf5_filename
+        save_residual = residual_filename is not None
 
         # main peeling loop
         # wrap in try/finally to ensure file handles get closed if there
@@ -139,7 +135,8 @@ class BasePeeler(torch.nn.Module):
                 initializer=_peeler_process_init,
                 initargs=(self, device, rank_queue, save_residual),
             ) as pool:
-                results = pool.map(_peeler_process_job, chunk_starts_samples)
+                # launch the jobs and wrap in a progress bar
+                results = pool.map(_peeler_process_job, chunks_to_do)
                 if show_progress:
                     n_sec_chunk = (
                         self.chunk_length_samples
@@ -153,31 +150,40 @@ class BasePeeler(torch.nn.Module):
                         desc=f"{task_name} {n_sec_chunk:.1f}s/it [spk/it=%%%]",
                     )
 
-                batch_count = 0
-                n_spikes = 0
-                for chunk_start_samples, result in zip(chunks_to_do, results):
-                    n_new_spikes = self.gather_chunk_result(
-                        n_spikes,
-                        chunk_start_samples,
-                        result,
-                        h5_spike_datasets,
-                        output_h5,
-                        residual_file,
-                    )
-                    batch_count += 1
-                    n_spikes += n_new_spikes
-                    if show_progress:
-                        results.set_description(
-                            f"{self.peel_kind} {n_sec_chunk:.1f}s/batch "
-                            f"[spk/batch={n_spikes / batch_count:0.1f}]"
+                # construct h5 after forking to avoid pickling it
+                with self.initialize_files(
+                    output_hdf5_filename,
+                    residual_filename=residual_filename,
+                    overwrite=overwrite,
+                ) as (
+                    output_h5,
+                    h5_spike_datasets,
+                    save_residual,
+                    residual_file,
+                ):
+                    batch_count = 0
+                    n_spikes = 0
+                    for result, chunk_start_samples in zip(
+                        results, chunks_to_do
+                    ):
+                        n_new_spikes = self.gather_chunk_result(
+                            n_spikes,
+                            chunk_start_samples,
+                            result,
+                            h5_spike_datasets,
+                            output_h5,
+                            residual_file,
                         )
+                        batch_count += 1
+                        n_spikes += n_new_spikes
+                        if show_progress:
+                            results.set_description(
+                                f"{task_name} {n_sec_chunk:.1f}s/batch "
+                                f"[spk/batch={n_spikes / batch_count:0.1f}]"
+                            )
         finally:
-            with delay_keyboard_interrupt:
-                output_h5.close()
-                if save_residual:
-                    residual_file.close()
-                torch.set_grad_enabled(had_grad)
-                self.to("cpu")
+            torch.set_grad_enabled(had_grad)
+            self.to("cpu")
 
         return output_hdf5_filename
 
@@ -206,7 +212,7 @@ class BasePeeler(torch.nn.Module):
 
         raise NotImplementedError
 
-    def fit_peeler(self, save_folder):
+    def fit_peeler_models(self, save_folder):
         # subclasses should override if they need to fit models for peeling
         assert not self.peeling_needs_fit()
 
@@ -241,10 +247,14 @@ class BasePeeler(torch.nn.Module):
 
         Main function called in peeling workers
         """
+        chunk_end_samples = min(
+            self.recording.get_num_samples(),
+            chunk_start_samples + self.chunk_length_samples,
+        )
         chunk, left_margin, right_margin = get_chunk_with_margin(
             self.recording._recording_segments[0],
             start_frame=chunk_start_samples,
-            end_frame=chunk_start_samples + self.chunk_length_samples,
+            end_frame=chunk_end_samples,
             channel_indices=None,
             margin=self.chunk_margin_samples,
         )
@@ -310,7 +320,7 @@ class BasePeeler(torch.nn.Module):
 
     def fit_models(self, save_folder, n_jobs=0, device=None):
         if self.peeling_needs_fit():
-            self.fit_peeler(
+            self.fit_peeler_models(
                 save_folder=save_folder, n_jobs=n_jobs, device=device
             )
         self.fit_featurization_pipeline(
@@ -384,10 +394,18 @@ class BasePeeler(torch.nn.Module):
     def load_models(self, save_folder):
         feats_pt = Path(save_folder) / "featurization_pipeline.pt"
         if feats_pt.exists():
-            self.featurization_pipeline = torch.load(
-                Path(save_folder) / "featurization_pipeline.pt"
-            )
+            self.featurization_pipeline = torch.load(feats_pt)
 
+    def check_resuming(self, output_hdf5_filename, overwrite=False):
+        output_hdf5_filename = Path(output_hdf5_filename)
+        exists = output_hdf5_filename.exists()
+        last_chunk_start = -1
+        if exists and not overwrite:
+            with h5py.File(output_hdf5_filename, "r") as h5:
+                last_chunk_start = h5["last_chunk_start"][()]
+        return last_chunk_start
+
+    @contextmanager
     def initialize_files(
         self,
         output_hdf5_filename,
@@ -398,17 +416,19 @@ class BasePeeler(torch.nn.Module):
         """Create, overwrite, or re-open output files"""
         output_hdf5_filename = Path(output_hdf5_filename)
         exists = output_hdf5_filename.exists()
+        n_spikes = 0
         if exists and overwrite:
             output_hdf5_filename.unlink()
             output_h5 = h5py.File(output_hdf5_filename, "w")
-            output_h5.create_dataset("last_chunk_start", data=0)
+            output_h5.create_dataset("last_chunk_start", data=-1)
         elif exists:
             # exists and not overwrite
             output_h5 = h5py.File(output_hdf5_filename, "r+")
+            n_spikes = len(output_h5["times"])
         else:
             # didn't exist, so overwrite does not matter
             output_h5 = h5py.File(output_hdf5_filename, "w")
-            output_h5.create_dataset("last_chunk_start", data=0)
+            output_h5.create_dataset("last_chunk_start", data=-1)
         last_chunk_start = output_h5["last_chunk_start"][()]
 
         # write some fixed arrays that are useful to have around
@@ -423,7 +443,7 @@ class BasePeeler(torch.nn.Module):
             h5_spike_datasets[ds.name] = output_h5.require_dataset(
                 ds.name,
                 dtype=ds.dtype,
-                shape=(0, *ds.shape_per_spike),
+                shape=(n_spikes, *ds.shape_per_spike),
                 maxshape=(None, *ds.shape_per_spike),
                 chunks=(chunk_size, *ds.shape_per_spike),
                 exact=True,
@@ -434,18 +454,22 @@ class BasePeeler(torch.nn.Module):
         residual_file = None
         if save_residual:
             residual_mode = "wb"
-            if last_chunk_start > 0:
+            if last_chunk_start >= 0:
                 residual_mode = "ab"
                 assert Path(residual_filename).exists()
             residual_file = open(residual_filename, mode=residual_mode)
 
-        return (
-            last_chunk_start,
-            output_h5,
-            h5_spike_datasets,
-            save_residual,
-            residual_file,
-        )
+        try:
+            yield (
+                output_h5,
+                h5_spike_datasets,
+                save_residual,
+                residual_file,
+            )
+        finally:
+            output_h5.close()
+            if save_residual:
+                residual_file.close()
 
 
 # -- helper functions and objects for parallelism

@@ -13,6 +13,8 @@ from .base import BasePeeler
 
 
 class SubtractionPeeler(BasePeeler):
+    peel_kind = "Subtraction"
+
     def __init__(
         self,
         recording,
@@ -68,6 +70,23 @@ class SubtractionPeeler(BasePeeler):
 
     def peeling_needs_fit(self):
         return self.subtraction_denoising_pipeline.needs_fit()
+
+    def save_models(self, save_folder):
+        super().save_models(save_folder)
+
+        sub_denoise_pt = (
+            Path(save_folder) / "subtraction_denoising_pipeline.pt"
+        )
+        torch.save(self.subtraction_denoising_pipeline, sub_denoise_pt)
+
+    def load_models(self, save_folder):
+        super().load_models(save_folder)
+
+        sub_denoise_pt = (
+            Path(save_folder) / "subtraction_denoising_pipeline.pt"
+        )
+        if sub_denoise_pt.exists():
+            self.subtraction_denoising_pipeline = torch.load(sub_denoise_pt)
 
     @classmethod
     def from_config(
@@ -142,7 +161,7 @@ class SubtractionPeeler(BasePeeler):
 
         return peel_result
 
-    def fit_peeler(self, save_folder, n_jobs=0, device=None):
+    def fit_peeler_models(self, save_folder, n_jobs=0, device=None):
         # when fitting peelers for subtraction, there are basically
         # two cases. fitting featurizers is easy -- they don't modify
         # the waveforms. fitting denoisers is hard -- they do. each
@@ -154,15 +173,14 @@ class SubtractionPeeler(BasePeeler):
         # so we will cheat for now:
         # just remove all the denoisers that need fitting, run peeling,
         # and fit everything
-
-        self.fit_peeling_transformers(
+        self._fit_subtraction_transformers(
             save_folder, n_jobs=n_jobs, device=device, which="denoisers"
         )
-        self.fit_peeling_transformers(
+        self._fit_subtraction_transformers(
             save_folder, n_jobs=n_jobs, device=device, which="featurizers"
         )
 
-    def fit_peeling_transformers(
+    def _fit_subtraction_transformers(
         self, save_folder, n_jobs=0, device=None, which="denoisers"
     ):
         """Handle fitting either denoisers or featurizers since the logic is similar"""

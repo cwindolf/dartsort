@@ -49,13 +49,15 @@ def subtract(
 
     # fit models if needed
     model_dir = output_directory / "subtraction_models"
+    if overwrite and model_dir.exists():
+        for pt_file in model_dir.glob("*pipeline.pt"):
+            pt_file.unlink()
     model_dir.mkdir(exist_ok=True)
     subtraction_peeler.load_or_fit_and_save_models(
         model_dir, n_jobs=n_jobs, device=device
     )
 
     # run main
-    print("main peeling")
     subtraction_peeler.peel(
         output_directory / hdf5_filename,
         chunk_starts_samples=chunk_starts_samples,
