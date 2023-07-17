@@ -1,3 +1,5 @@
+import tempfile
+
 import numpy as np
 import spikeinterface.core as sc
 import torch
@@ -87,14 +89,39 @@ def test_fakedata_nonn():
     )
     featconf = FeaturizationConfig(do_nn_denoise=False)
 
-    st = subtract(
-        rec,
-        "/tmp/test_sub",
-        featurization_config=featconf,
-        subtraction_config=subconf,
-        overwrite=True,
-    )
-    print(st)
+    with tempfile.TemporaryDirectory() as tempdir:
+        st = subtract(
+            rec,
+            tempdir,
+            featurization_config=featconf,
+            subtraction_config=subconf,
+            overwrite=True,
+        )
+        ns0 = len(st)
+        # add asserts to test that datasets are there
+
+        # test that resuming works
+        st = subtract(
+            rec,
+            tempdir,
+            featurization_config=featconf,
+            subtraction_config=subconf,
+            overwrite=False,
+        )
+        ns1 = len(st)
+        assert ns0 == ns1
+
+        # test parallel
+        st = subtract(
+            rec,
+            tempdir,
+            featurization_config=featconf,
+            subtraction_config=subconf,
+            overwrite=True,
+            n_jobs=2,
+        )
+        ns2 = len(st)
+        assert ns0 == ns2
 
 
 if __name__ == "__main__":
