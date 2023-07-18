@@ -255,9 +255,11 @@ def get_channel_subset(
     """Given a binary mask indicating which channels to keep, grab those channels"""
     if waveforms.ndim == 3:
         N, T, C = waveforms.shape
+        pads = [(0, 0), (0, 0)]
     elif waveforms.ndim == 2:
         # for instance, amplitudes
         N, C = waveforms.shape
+        pads = [(0, 0)]
     else:
         assert False
     n_channels, C_ = channel_index_mask.shape
@@ -271,7 +273,7 @@ def get_channel_subset(
     else:
         npx = np
         waveforms = np.pad(
-            waveforms, [(0, 0), (0, 0), (0, 1)], constant_values=fill_value
+            waveforms, [*pads, (0, 1)], constant_values=fill_value
         )
 
     if waveforms.ndim == 3:
@@ -283,6 +285,6 @@ def get_channel_subset(
 
     # waveforms.ndim == 2:
     return waveforms[
-        npx.arange(N)[:, None, None],
-        rel_sub_channel_index[max_channels][:, None, :],
+        npx.arange(N)[:, None],
+        rel_sub_channel_index[max_channels][:, :],
     ]

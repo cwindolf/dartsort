@@ -70,6 +70,7 @@ def localize_amplitude_vectors(
 
     # handle channel subsetting
     if radius is not None or n_channels_subset is not None:
+        print(f"before {amplitude_vectors.shape} {channel_index.shape}")
         amplitude_vectors, channel_index = channel_subset_by_radius(
             amplitude_vectors,
             main_channels,
@@ -78,12 +79,14 @@ def localize_amplitude_vectors(
             radius=radius,
             n_channels_subset=n_channels_subset,
         )
+        print(f"after {amplitude_vectors.shape} {channel_index.shape}")
 
     # torch everyone
-    device = amplitude_vectors.device
     amplitude_vectors = torch.as_tensor(
-        amplitude_vectors, dtype=dtype, device=device
+        amplitude_vectors,
+        dtype=dtype,
     )
+    device = amplitude_vectors.device
     geom = torch.as_tensor(geom, dtype=dtype, device=device)
     channel_index = torch.as_tensor(channel_index, device=device)
 
