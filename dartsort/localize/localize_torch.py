@@ -1,7 +1,8 @@
 import torch
 import torch.nn.functional as F
 from dartsort.util.torch_optimization_util import batched_levenberg_marquardt
-from dartsort.util.waveform_util import channel_subset_by_radius
+from dartsort.util.waveform_util import (channel_subset_by_radius,
+                                         full_channel_index)
 from torch import vmap
 from torch.func import grad_and_value, hessian
 
@@ -10,7 +11,7 @@ def localize_amplitude_vectors(
     amplitude_vectors,
     geom,
     main_channels,
-    channel_index,
+    channel_index=None,
     radius=None,
     n_channels_subset=None,
     logbarrier=True,
@@ -61,6 +62,9 @@ def localize_amplitude_vectors(
     assert model in ("com", "pointsource")
     n_spikes, c = amplitude_vectors.shape
     n_channels_tot = len(geom)
+    if channel_index is None:
+        assert c == n_channels_tot
+        channel_index = full_channel_index(n_channels_tot)
     assert channel_index.shape == (n_channels_tot, c)
     assert main_channels.shape == (n_spikes,)
 
