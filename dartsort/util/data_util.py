@@ -43,8 +43,9 @@ class DARTsortSorting:
 
     def to_numpy_sorting(self):
         return NumpySorting.from_times_labels(
-            times_list=self.times, labels_list=self.labels, 
-            sampling_frequency=self.sampling_frequency
+            times_list=self.times,
+            labels_list=self.labels,
+            sampling_frequency=self.sampling_frequency,
         )
 
     def __str__(self):
@@ -69,8 +70,14 @@ class DARTsortSorting:
         channels = labels = None
         with h5py.File(peeling_hdf5_filename, "r") as h5:
             times = h5[times_dataset][()]
+            sampling_frequency = h5["sampling_frequency"][()]
             if channels_dataset in h5:
                 channels = h5[channels_dataset][()]
             if labels_dataset in h5:
                 labels = h5[labels_dataset][()]
-        return cls(times, channels=channels, labels=labels)
+        return cls(
+            times,
+            channels=channels,
+            labels=labels,
+            sampling_frequency=sampling_frequency,
+        )
