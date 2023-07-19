@@ -55,7 +55,7 @@ class BasePeeler(torch.nn.Module):
         # subclasses can append to this if they want to store more fixed
         # arrays in the output h5 file
         self.fixed_output_data = [
-            ("fs", self.recording.get_sampling_frequency()),
+            ("sampling_frequency", self.recording.get_sampling_frequency()),
             ("geom", self.recording.get_channel_locations()),
             ("channel_index", self.channel_index),
         ]
