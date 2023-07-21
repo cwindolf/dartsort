@@ -13,12 +13,13 @@ def test_fakedata_nonn():
     # generate fake neuropixels data with artificial templates
     T_s = 49.5
     fs = 30000
+    n_channels = 50
     T_samples = int(fs * T_s)
     rg = np.random.default_rng(0)
 
     # np1 geom
     h = dense_layout()
-    geom = np.c_[h["x"], h["y"]]
+    geom = np.c_[h["x"], h["y"]][:n_channels]
 
     # template main channel traces
     t0 = np.exp(-(((np.arange(121) - 42) / 10) ** 2))

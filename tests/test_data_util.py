@@ -1,18 +1,18 @@
-from dartsort.util.data_util import DARTsortSorting
-import spikeinterface.core as sc
-import numpy as np
-import h5py
-import tempfile
-from pathlib import Path
-
 """
 Test conversions among DARTsortSorting, NumpySorting, and HDF5 formats.
 """
+import tempfile
+from pathlib import Path
 
-times = np.arange(0,1000,10)
+import h5py
+import numpy as np
+from dartsort.util.data_util import DARTsortSorting
+
+times = np.arange(0, 1000, 10)
 rng = np.random.default_rng(0)
 channels = rng.integers(0, 384, size=(100,))
 labels = rng.integers(0, 10, size=(100,))
+
 
 def test_to_numpy_sorting():
     """
@@ -24,7 +24,8 @@ def test_to_numpy_sorting():
     si_times, si_labels = npsorting.get_all_spike_trains()[0]
     assert np.array_equal(si_times, times)
     assert np.array_equal(si_labels, labels)
-    assert np.array_equal(npsorting.get_unit_ids(), np.arange(0,10))
+    assert np.array_equal(npsorting.get_unit_ids(), np.arange(0, 10))
+
 
 def test_from_peeling():
     """
@@ -33,6 +34,7 @@ def test_from_peeling():
     with tempfile.TemporaryDirectory() as tempdir:
         peeling_h5 = Path(tempdir) / "test.h5"
         with h5py.File(peeling_h5, "w") as h:
+            h.create_dataset("sampling_frequency", data=1)
             h.create_dataset("times", data=times)
             h.create_dataset("channels", data=channels)
             h.create_dataset("labels", data=labels)
@@ -41,4 +43,3 @@ def test_from_peeling():
         assert np.array_equal(dsorting.times, times)
         assert np.array_equal(dsorting.channels, channels)
         assert np.array_equal(dsorting.labels, labels)
-
