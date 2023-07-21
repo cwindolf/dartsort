@@ -372,7 +372,9 @@ class BasePeeler(torch.nn.Module):
         n_full_chunks = T_samples // self.chunk_length_samples
         rg = np.random.default_rng(self.fit_subsampling_random_state)
         chunk_starts = self.chunk_length_samples * rg.choice(
-            n_full_chunks, size=self.n_chunks_fit, replace=False
+            n_full_chunks,
+            size=min(n_full_chunks, self.n_chunks_fit),
+            replace=False,
         )
 
         # run peeling on these chunks to the temp folder
