@@ -45,20 +45,21 @@ class BaseTemporalPCA(BaseWaveformModule):
             assert self.centered
 
     def fit(self, waveforms, max_channels):
-        train_channel_index = self.channel_index
+        self.dtype = waveforms.dtype
+        train_channel_index = self.channel_index.cpu().numpy()
+        max_channels = max_channels.cpu().numpy()
         if self.fit_radius is not None:
-            waveforms_subset, train_channel_index = channel_subset_by_radius(
+            waveforms, train_channel_index = channel_subset_by_radius(
                 waveforms,
                 max_channels,
-                self.channel_index,
-                self.geom,
+                self.channel_index.cpu().numpy(),
+                self.geom.cpu().numpy(),
                 self.fit_radius,
             )
         _, waveforms_fit = get_channels_in_probe(
             waveforms, max_channels, train_channel_index
         )
         waveforms_fit = waveforms_fit.cpu().numpy()
-        self.dtype = waveforms.dtype
 
         if self.centered:
             pca = PCA(

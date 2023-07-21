@@ -8,6 +8,7 @@ from .all_transformers import transformers_by_class_name
 class WaveformPipeline(torch.nn.Module):
     def __init__(self, transformers):
         super().__init__()
+        check_unique_feature_names(transformers)
         self.transformers = transformers
         # register the modules so torch's .to() etc work
         for transformer in self.transformers:
@@ -70,3 +71,9 @@ class WaveformPipeline(torch.nn.Module):
 
     def __iter__(self):
         return iter(self.transformers)
+
+
+def check_unique_feature_names(transformers):
+    fnames = [f.name for f in transformers if f.is_featurizer]
+    if not len(fnames) == len(set(fnames)):
+        raise ValueError("Featurizer name collision in a WaveformPipeline")
