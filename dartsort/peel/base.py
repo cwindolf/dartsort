@@ -420,7 +420,9 @@ class BasePeeler(torch.nn.Module):
         if exists and overwrite:
             output_hdf5_filename.unlink()
             output_h5 = h5py.File(output_hdf5_filename, "w")
-            output_h5.create_dataset("last_chunk_start", data=-1)
+            output_h5.create_dataset(
+                "last_chunk_start", data=-1, dtype=np.int64
+            )
         elif exists:
             # exists and not overwrite
             output_h5 = h5py.File(output_hdf5_filename, "r+")
@@ -428,13 +430,15 @@ class BasePeeler(torch.nn.Module):
         else:
             # didn't exist, so overwrite does not matter
             output_h5 = h5py.File(output_hdf5_filename, "w")
-            output_h5.create_dataset("last_chunk_start", data=-1)
+            output_h5.create_dataset(
+                "last_chunk_start", data=-1, dtype=np.int64
+            )
         last_chunk_start = output_h5["last_chunk_start"][()]
 
         # write some fixed arrays that are useful to have around
-        for name, array in self.fixed_output_data:
+        for name, value in self.fixed_output_data:
             if name not in output_h5:
-                output_h5.create_dataset(name, data=array)
+                output_h5.create_dataset(name, data=value)
 
         # create per-spike datasets
         # use chunks to support growing the dataset as we find spikes
