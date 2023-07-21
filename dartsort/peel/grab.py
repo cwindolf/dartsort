@@ -7,6 +7,8 @@ from .base import BasePeeler
 class GrabAndFeaturize(BasePeeler):
     """Extract and featurize raw waveform snippets at known times."""
 
+    peel_kind = "Grab and featurize"
+
     def __init__(
         self,
         recording,
@@ -49,6 +51,8 @@ class GrabAndFeaturize(BasePeeler):
             (self.times >= chunk_start_samples)
             & (self.times < chunk_start_samples + self.chunk_length_samples)
         ).squeeze()
+        if not in_chunk.numel():
+            return dict(n_spikes=0)
         times = self.times[in_chunk] - chunk_start_samples
         channels = self.channels[in_chunk]
 
