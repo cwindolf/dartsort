@@ -58,6 +58,7 @@ def subtract(
     )
 
     # run main
+    output_hdf5_filename = output_directory / hdf5_filename
     subtraction_peeler.peel(
         output_directory / hdf5_filename,
         chunk_starts_samples=chunk_starts_samples,
@@ -67,4 +68,7 @@ def subtract(
         show_progress=show_progress,
     )
 
-    return DARTsortSorting.from_peeling_hdf5(output_directory / hdf5_filename)
+    return (
+        DARTsortSorting.from_peeling_hdf5(output_hdf5_filename),
+        output_hdf5_filename,
+    )

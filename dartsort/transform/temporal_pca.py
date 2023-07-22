@@ -46,8 +46,7 @@ class BaseTemporalPCA(BaseWaveformModule):
 
     def fit(self, waveforms, max_channels):
         self.dtype = waveforms.dtype
-        train_channel_index = self.channel_index.cpu().numpy()
-        max_channels = max_channels.cpu().numpy()
+        train_channel_index = self.channel_index
         if self.fit_radius is not None:
             waveforms, train_channel_index = channel_subset_by_radius(
                 waveforms,
