@@ -80,7 +80,7 @@ def grab_spikes(
 
     if not already_padded:
         traces = F.pad(traces, (0, 1), value=pad_value)
-
+        
     spike_sample_offsets = torch.arange(
         buffer - trough_offset,
         buffer - trough_offset + spike_length_samples,
