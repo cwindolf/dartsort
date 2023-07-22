@@ -26,9 +26,8 @@ class SingleChannelWaveformDenoiser(BaseWaveformDenoiser):
         name_prefix="",
         geom=None,
     ):
-        super().__init__(name=name, name_prefix=name_prefix)
+        super().__init__(channel_index=channel_index, name=name, name_prefix=name_prefix)
         self.denoiser = denoiser
-        self.channel_index = channel_index
         self.batch_size = batch_size
         self.in_place = in_place
 
