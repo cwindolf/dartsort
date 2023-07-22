@@ -44,7 +44,6 @@ def subtract(
         recording,
         subtraction_config=subtraction_config,
         featurization_config=featurization_config,
-        device=device,
     )
 
     # fit models if needed
