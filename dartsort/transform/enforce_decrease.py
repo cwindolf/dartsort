@@ -4,7 +4,7 @@ import torch.nn.functional as F
 from dartsort.util import spiketorch
 from scipy.spatial.distance import cdist
 
-from .base import BaseWaveformDenoiser
+from .transform_base import BaseWaveformDenoiser
 
 
 class EnforceDecrease(BaseWaveformDenoiser):

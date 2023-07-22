@@ -1,7 +1,7 @@
 import torch
 from dartsort.util.spiketorch import ptp
 
-from .base import BaseWaveformFeaturizer
+from .transform_base import BaseWaveformFeaturizer
 
 
 class AmplitudeVector(BaseWaveformFeaturizer):
