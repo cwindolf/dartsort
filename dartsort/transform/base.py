@@ -85,14 +85,3 @@ class Waveform(BaseWaveformFeaturizer):
 
     def transform(self, waveforms, max_channels=None):
         return waveforms
-
-
-class ZerosWaveformFeaturizer(BaseWaveformModule):
-    shape = ()
-    dtype = torch.float
-    default_name = "zeros_like_waveforms"
-
-    def transform(self, waveforms, max_channels=None):
-        return torch.zeros(
-            waveforms.shape[0], device=waveforms.device, dtype=torch.float
-        )
