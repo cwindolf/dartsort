@@ -22,6 +22,11 @@ class BaseTemporalPCA(BaseWaveformModule):
         name=None,
         name_prefix="",
     ):
+        if fit_radius is not None:
+            if geom is None or channel_index is None:
+                raise ValueError(
+                    "TemporalPCA with fit_radius!=None requires geom."
+                )
         super().__init__(
             channel_index=channel_index,
             geom=geom,
@@ -31,13 +36,7 @@ class BaseTemporalPCA(BaseWaveformModule):
         self.rank = rank
         self._needs_fit = True
         self.random_state = random_state
-        self.geom = geom
         self.shape = (rank, channel_index.shape[1])
-        if fit_radius is not None:
-            if geom is None or channel_index is None:
-                raise ValueError(
-                    "TemporalPCA with fit_radius!=None requires geom."
-                )
         self.fit_radius = fit_radius
         self.centered = centered
         self.whiten = whiten

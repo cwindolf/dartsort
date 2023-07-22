@@ -43,7 +43,7 @@ class SubtractionPeeler(BasePeeler):
         self.trough_offset_samples = trough_offset_samples
         self.spike_length_samples = spike_length_samples
         self.peak_sign = peak_sign
-        if spatial_dedup_channel_index is None:
+        if spatial_dedup_channel_index is not None:
             self.register_buffer(
                 "spatial_dedup_channel_index",
                 spatial_dedup_channel_index,
@@ -87,9 +87,7 @@ class SubtractionPeeler(BasePeeler):
             self.subtraction_denoising_pipeline = torch.load(sub_denoise_pt)
 
     @classmethod
-    def from_config(
-        cls, recording, subtraction_config, featurization_config
-    ):
+    def from_config(cls, recording, subtraction_config, featurization_config):
         # waveform extraction channel neighborhoods
         geom = torch.tensor(recording.get_channel_locations())
         channel_index = make_channel_index(

@@ -9,10 +9,7 @@ class WaveformPipeline(torch.nn.Module):
     def __init__(self, transformers):
         super().__init__()
         check_unique_feature_names(transformers)
-        self.transformers = transformers
-        # register the modules so torch's .to() etc work
-        for transformer in self.transformers:
-            self.add_module(transformer.name, transformer)
+        self.transformers = torch.nn.ModuleList(transformers)
 
     @classmethod
     def from_class_names_and_kwargs(
