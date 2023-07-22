@@ -503,7 +503,8 @@ def _peeler_process_init(peeler, device, rank_queue, save_residual):
     # figure out what device to work on
     my_rank = rank_queue.get()
     if device is None:
-        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+    device = torch.device(device)
     if device.type == "cuda" and device.index is None:
         if torch.cuda.device_count() > 1:
             device = torch.device(
