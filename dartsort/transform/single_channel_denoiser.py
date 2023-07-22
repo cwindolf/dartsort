@@ -26,15 +26,16 @@ class SingleChannelWaveformDenoiser(BaseWaveformDenoiser):
         name_prefix="",
         geom=None,
     ):
-        super().__init__(channel_index=channel_index, name=name, name_prefix=name_prefix)
-        self.denoiser = denoiser
+        super().__init__(
+            channel_index=channel_index, name=name, name_prefix=name_prefix
+        )
         self.batch_size = batch_size
         self.in_place = in_place
 
         if denoiser is None:
             denoiser = SingleChannelDenoiser().load(pretrained_path)
             denoiser.eval()
-            self.denoiser = denoiser
+        self.denoiser = denoiser
 
     def forward(self, waveforms, max_channels=None):
         (
