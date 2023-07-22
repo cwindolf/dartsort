@@ -33,7 +33,6 @@ class BasePeeler(torch.nn.Module):
         chunk_margin_samples=0,
         n_chunks_fit=40,
         fit_subsampling_random_state=0,
-        device=None,
     ):
         assert recording.get_num_channels() == channel_index.shape[0]
         if recording.get_num_segments() > 1:
@@ -48,7 +47,6 @@ class BasePeeler(torch.nn.Module):
         self.fit_subsampling_random_state = np.random.default_rng(
             fit_subsampling_random_state
         )
-        self.device = device
         self.register_buffer("channel_index", channel_index)
         self.add_module("featurization_pipeline", featurization_pipeline)
 
@@ -258,7 +256,7 @@ class BasePeeler(torch.nn.Module):
             channel_indices=None,
             margin=self.chunk_margin_samples,
         )
-        chunk = torch.tensor(chunk, device=self.device)
+        chunk = torch.tensor(chunk, device=self.channel_index.device)
         peel_result = self.peel_chunk(
             chunk,
             chunk_start_samples=chunk_start_samples,
@@ -486,9 +484,8 @@ class BasePeeler(torch.nn.Module):
 
 
 class ProcessContext:
-    def __init__(self, peeler, device, save_residual):
+    def __init__(self, peeler, save_residual):
         self.peeler = peeler
-        self.device = device
         self.save_residual = save_residual
 
 
@@ -518,7 +515,7 @@ def _peeler_process_init(peeler, device, rank_queue, save_residual):
     peeler.eval()
 
     # update process-local variables
-    _peeler_process_context = ProcessContext(peeler, device, save_residual)
+    _peeler_process_context = ProcessContext(peeler, save_residual)
 
 
 def _peeler_process_job(chunk_start_samples):

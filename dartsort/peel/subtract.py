@@ -29,7 +29,6 @@ class SubtractionPeeler(BasePeeler):
         spatial_dedup_channel_index=None,
         n_chunks_fit=40,
         fit_subsampling_random_state=0,
-        device=None,
     ):
         super().__init__(
             recording=recording,
@@ -39,7 +38,6 @@ class SubtractionPeeler(BasePeeler):
             chunk_margin_samples=2 * spike_length_samples,
             n_chunks_fit=n_chunks_fit,
             fit_subsampling_random_state=fit_subsampling_random_state,
-            device=device,
         )
 
         self.trough_offset_samples = trough_offset_samples
@@ -90,7 +88,7 @@ class SubtractionPeeler(BasePeeler):
 
     @classmethod
     def from_config(
-        cls, recording, subtraction_config, featurization_config, device=None
+        cls, recording, subtraction_config, featurization_config
     ):
         # waveform extraction channel neighborhoods
         geom = torch.tensor(recording.get_channel_locations())
@@ -125,7 +123,6 @@ class SubtractionPeeler(BasePeeler):
             spatial_dedup_channel_index=spatial_dedup_channel_index,
             n_chunks_fit=subtraction_config.n_chunks_fit,
             fit_subsampling_random_state=subtraction_config.fit_subsampling_random_state,
-            device=device,
         )
 
     def peel_chunk(

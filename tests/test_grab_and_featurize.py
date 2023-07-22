@@ -52,6 +52,21 @@ def test_grab_and_featurize():
             assert np.array_equal(h5["geom"][()], geom)
             assert np.array_equal(h5["channel_index"][()], channel_index)
             assert h5["last_chunk_start"][()] == 90_000
+            
+            
+        grab.peel(Path(tempdir) / "grab.h5", overwrite=True, n_jobs=2)
+
+        with h5py.File(Path(tempdir) / "grab.h5") as h5:
+            assert h5["times"].shape == (n_spikes,)
+            assert h5["channels"].shape == (n_spikes,)
+            assert h5["waveforms"].shape == (
+                n_spikes,
+                121,
+                channel_index.shape[1],
+            )
+            assert np.array_equal(h5["geom"][()], geom)
+            assert np.array_equal(h5["channel_index"][()], channel_index)
+            assert h5["last_chunk_start"][()] == 90_000
 
     # try one with TPCA
     channel_index = make_channel_index(geom, 20)
@@ -87,6 +102,86 @@ def test_grab_and_featurize():
                 channel_index.shape[1],
             )
             assert h5["tpca_waveforms"].shape == (
+                n_spikes,
+                121,
+                channel_index.shape[1],
+            )
+            assert np.array_equal(h5["geom"][()], geom)
+            assert np.array_equal(h5["channel_index"][()], channel_index)
+            assert h5["last_chunk_start"][()] == 90_000
+            
+    with tempfile.TemporaryDirectory() as tempdir:
+        grab.fit_models(tempdir, n_jobs=2)
+        grab.peel(Path(tempdir) / "grab.h5", n_jobs=2)
+
+        with h5py.File(Path(tempdir) / "grab.h5") as h5:
+            assert h5["times"].shape == (n_spikes,)
+            assert h5["channels"].shape == (n_spikes,)
+            assert h5["waveforms"].shape == (
+                n_spikes,
+                121,
+                channel_index.shape[1],
+            )
+            assert np.array_equal(h5["geom"][()], geom)
+            assert np.array_equal(h5["channel_index"][()], channel_index)
+            assert h5["last_chunk_start"][()] == 90_000
+
+    # try one with TPCA F/D and NN
+    channel_index = make_channel_index(geom, 20)
+    pipeline = transform.WaveformPipeline(
+        [
+            transform.TemporalPCAFeaturizer(
+                channel_index=torch.tensor(channel_index),
+                geom=torch.tensor(geom),
+                fit_radius=10,
+            ),
+            transform.Waveform(channel_index),
+            transform.SingleChannelWaveformDenoiser(channel_index),
+            transform.TemporalPCADenoiser(
+                channel_index=torch.tensor(channel_index),
+                geom=torch.tensor(geom),
+                fit_radius=10,
+            ),
+            transform.Waveform(channel_index, name="tpca_waveforms"),
+        ]
+    )
+    grab = GrabAndFeaturize(
+        rec,
+        torch.as_tensor(channel_index),
+        pipeline,
+        torch.as_tensor(times),
+        torch.as_tensor(channels),
+    )
+
+    with tempfile.TemporaryDirectory() as tempdir:
+        grab.fit_models(tempdir)
+        grab.peel(Path(tempdir) / "grab.h5")
+
+        with h5py.File(Path(tempdir) / "grab.h5") as h5:
+            assert h5["times"].shape == (n_spikes,)
+            assert h5["channels"].shape == (n_spikes,)
+            assert h5["waveforms"].shape == (
+                n_spikes,
+                121,
+                channel_index.shape[1],
+            )
+            assert h5["tpca_waveforms"].shape == (
+                n_spikes,
+                121,
+                channel_index.shape[1],
+            )
+            assert np.array_equal(h5["geom"][()], geom)
+            assert np.array_equal(h5["channel_index"][()], channel_index)
+            assert h5["last_chunk_start"][()] == 90_000
+
+    with tempfile.TemporaryDirectory() as tempdir:
+        grab.fit_models(tempdir, n_jobs=2)
+        grab.peel(Path(tempdir) / "grab.h5", n_jobs=2)
+
+        with h5py.File(Path(tempdir) / "grab.h5") as h5:
+            assert h5["times"].shape == (n_spikes,)
+            assert h5["channels"].shape == (n_spikes,)
+            assert h5["waveforms"].shape == (
                 n_spikes,
                 121,
                 channel_index.shape[1],
