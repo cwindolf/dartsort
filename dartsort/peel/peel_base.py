@@ -266,9 +266,11 @@ class BasePeeler(torch.nn.Module):
             right_margin=right_margin,
             return_residual=return_residual,
         )
+
         features = self.featurize_collisioncleaned_waveforms(
             peel_result["collisioncleaned_waveforms"], peel_result["channels"]
         )
+
         assert not any(k in features for k in peel_result)
         chunk_result = {**peel_result, **features}
         chunk_result = {
@@ -319,13 +321,14 @@ class BasePeeler(torch.nn.Module):
         )
 
     def fit_models(self, save_folder, n_jobs=0, device=None):
-        if self.peeling_needs_fit():
-            self.fit_peeler_models(
+        with torch.no_grad():
+            if self.peeling_needs_fit():
+                self.fit_peeler_models(
+                    save_folder=save_folder, n_jobs=n_jobs, device=device
+                )
+            self.fit_featurization_pipeline(
                 save_folder=save_folder, n_jobs=n_jobs, device=device
             )
-        self.fit_featurization_pipeline(
-            save_folder=save_folder, n_jobs=n_jobs, device=device
-        )
         assert not self.needs_fit()
 
     def fit_featurization_pipeline(self, save_folder, n_jobs=0, device=None):
@@ -473,6 +476,7 @@ class BasePeeler(torch.nn.Module):
                 residual_file,
             )
         finally:
+            self.to("cpu")
             output_h5.close()
             if save_residual:
                 residual_file.close()

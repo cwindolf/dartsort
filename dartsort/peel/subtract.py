@@ -9,7 +9,7 @@ from dartsort.transform import Waveform, WaveformPipeline
 from dartsort.util import spiketorch
 from dartsort.util.waveform_util import make_channel_index
 
-from .base import BasePeeler
+from .peel_base import BasePeeler
 
 
 class SubtractionPeeler(BasePeeler):
@@ -326,9 +326,11 @@ def subtract_chunk(
             buffer=0,
             already_padded=True,
         )
+
         if residnorm_decrease_threshold:
             residuals = torch.nan_to_num(waveforms)
         waveforms, features = denoising_pipeline(waveforms, channels)
+
         # TODO: test residnorm decrease
         if residnorm_decrease_threshold:
             orig_norm = torch.linalg.norm(residuals, dim=(1, 2))
@@ -338,6 +340,7 @@ def subtract_chunk(
             waveforms = waveforms[keep]
             times = times[keep]
             channels = channels[keep]
+            features = {k: v[keep] for k, v in features.items()}
             if not times.numel():
                 continue
 
