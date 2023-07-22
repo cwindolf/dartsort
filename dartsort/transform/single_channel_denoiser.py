@@ -5,7 +5,7 @@ from dartsort.util.waveform_util import (get_channels_in_probe,
                                          set_channels_in_probe)
 from torch import nn
 
-from .base import BaseWaveformDenoiser
+from .transform_base import BaseWaveformDenoiser
 
 default_pretrained_path = (
     Path(__file__).parent.parent.parent / "pretrained/single_chan_denoiser.pt"
