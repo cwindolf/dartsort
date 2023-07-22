@@ -71,7 +71,7 @@ def get_pool(
     do_parallel = n_jobs >= 1
     n_jobs = max(1, n_jobs)
     Executor = cls if do_parallel else MockPoolExecutor
-    context = get_context(context)
+    context = get_context(context) if do_parallel else None
     if with_rank_queue:
         if do_parallel:
             manager = context.Manager()
