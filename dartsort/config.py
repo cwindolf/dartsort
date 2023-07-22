@@ -18,7 +18,7 @@ from dataclasses import dataclass
 from typing import List, Optional
 
 
-@dataclass
+@dataclass(frozen=True)
 class FeaturizationConfig:
     """Featurization and denoising configuration
 
@@ -125,7 +125,7 @@ class FeaturizationConfig:
         return class_names_and_kwargs
 
 
-@dataclass
+@dataclass(frozen=True)
 class SubtractionConfig:
     trough_offset_samples: int = 42
     spike_length_samples: int = 121
