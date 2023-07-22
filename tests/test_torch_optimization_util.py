@@ -8,7 +8,7 @@ from torch.func import grad_and_value, hessian
 def test_lm_basic():
     n = 10
     p = 11
-    x0 = torch.ones((n, p))
+    x0 = torch.ones((n, p)).double()
 
     # just checking we can minimize the norm
     def obj(z):
