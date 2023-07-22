@@ -15,7 +15,10 @@ object can then be passed into the high level functions like
 `subtract(...)`.
 """
 from dataclasses import dataclass
+from pathlib import Path
 from typing import List, Optional
+
+repo_root = Path(__file__).parent.parent
 
 
 @dataclass(frozen=True)
@@ -53,6 +56,9 @@ class FeaturizationConfig:
     # -- further info about denoising
     # in the future we may add multi-channel or other nns
     nn_denoiser_class_name: str = "SingleChannelWaveformDenoiser"
+    nn_denoiser_pretrained_path: str = str(
+        repo_root / "pretrained" / "single_chan_denoiser.pt"
+    )
     # optionally restrict how many channels TPCA are fit on
     tpca_fit_radius: Optional[float] = None
     tpca_rank: int = 8
@@ -84,7 +90,12 @@ class FeaturizationConfig:
                 )
             )
         if self.do_nn_denoise:
-            class_names_and_kwargs.append((self.nn_denoiser_class_name, {}))
+            class_names_and_kwargs.append(
+                (
+                    self.nn_denoiser_class_name,
+                    {"pretrained_path": self.nn_denoiser_pretrained_path},
+                )
+            )
         if self.do_tpca_denoise:
             class_names_and_kwargs.append(
                 (

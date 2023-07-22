@@ -1,7 +1,7 @@
 import torch
 from dartsort.util import spiketorch
 
-from .base import BasePeeler
+from .peel_base import BasePeeler
 
 
 class GrabAndFeaturize(BasePeeler):

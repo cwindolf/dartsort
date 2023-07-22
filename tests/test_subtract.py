@@ -1,5 +1,6 @@
 import tempfile
 
+import h5py
 import numpy as np
 import spikeinterface.core as sc
 import torch
@@ -91,7 +92,7 @@ def test_fakedata_nonn():
     featconf = FeaturizationConfig(do_nn_denoise=False)
 
     with tempfile.TemporaryDirectory() as tempdir:
-        st = subtract(
+        st, out_h5 = subtract(
             rec,
             tempdir,
             featurization_config=featconf,
@@ -102,7 +103,7 @@ def test_fakedata_nonn():
         # add asserts to test that datasets are there
 
         # test that resuming works
-        st = subtract(
+        st, out_h5 = subtract(
             rec,
             tempdir,
             featurization_config=featconf,
@@ -113,7 +114,7 @@ def test_fakedata_nonn():
         assert ns0 == ns1
 
         # test parallel
-        st = subtract(
+        st, out_h5 = subtract(
             rec,
             tempdir,
             featurization_config=featconf,
@@ -125,5 +126,40 @@ def test_fakedata_nonn():
         assert ns0 == ns2
 
 
+def test_small_default_config():
+    # noise recording
+    T_samples = 100_100
+    n_channels = 50
+    rg = np.random.default_rng(0)
+    noise = rg.normal(size=(T_samples, n_channels)).astype(np.float32)
+
+    # add a spike every 50 samples
+    template = 20 * np.exp(-(((np.arange(121) - 42) / 10) ** 2))
+    for t in range(0, 100_100 - 121, 50):
+        random_channel = rg.integers(n_channels)
+        noise[t : t + 121, random_channel] += template
+
+    h = dense_layout()
+    geom = np.c_[h["x"], h["y"]][:n_channels]
+    rec = sc.NumpyRecording(noise, 10_000)
+    rec.set_dummy_probe_from_locations(geom)
+
+    with tempfile.TemporaryDirectory() as tempdir:
+        # test default config
+        st, out_h5 = subtract(
+            rec,
+            tempdir,
+            overwrite=True,
+            n_jobs=2,
+        )
+        with h5py.File(out_h5) as h5:
+            lens = []
+            for k in h5.keys():
+                if k not in ("channel_index", "geom") and h5[k].ndim >= 1:
+                    lens.append(h5[k].shape[0])
+            assert np.unique(lens).size == 1
+
+
 if __name__ == "__main__":
-    test_fakedata_nonn()
+    test_small_default_config()
+    # test_fakedata_nonn()

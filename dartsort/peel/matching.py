@@ -1,4 +1,4 @@
-from .base import BasePeeler
+from .peel_base import BasePeeler
 
 
 class ResidualUpdateMatching(BasePeeler):

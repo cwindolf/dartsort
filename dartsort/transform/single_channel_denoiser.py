@@ -18,7 +18,7 @@ class SingleChannelWaveformDenoiser(BaseWaveformDenoiser):
     def __init__(
         self,
         channel_index,
-        denoiser,
+        denoiser=None,
         batch_size=128,
         in_place=False,
         pretrained_path=default_pretrained_path,
