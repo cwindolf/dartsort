@@ -5,8 +5,8 @@ from dartsort.util.waveform_util import (channel_subset_by_radius,
                                          set_channels_in_probe)
 from sklearn.decomposition import PCA, TruncatedSVD
 
-from .base import (BaseWaveformDenoiser, BaseWaveformFeaturizer,
-                   BaseWaveformModule)
+from .transform_base import (BaseWaveformDenoiser, BaseWaveformFeaturizer,
+                             BaseWaveformModule)
 
 
 class BaseTemporalPCA(BaseWaveformModule):

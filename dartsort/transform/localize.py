@@ -2,7 +2,7 @@ import torch
 from dartsort.localize.localize_torch import localize_amplitude_vectors
 from dartsort.util.spiketorch import ptp
 
-from .base import BaseWaveformFeaturizer
+from .transform_base import BaseWaveformFeaturizer
 
 
 class PointSourceLocalization(BaseWaveformFeaturizer):
