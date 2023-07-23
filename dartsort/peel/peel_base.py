@@ -343,25 +343,25 @@ class BasePeeler(torch.nn.Module):
         )
 
         temp_hdf5_filename = Path(save_folder) / "peeler_fit.h5"
-        self.run_subsampled_peeling(
-            temp_hdf5_filename,
-            n_jobs=n_jobs,
-            device=device,
-            task_name="Fit features",
-        )
-
-        # fit featurization pipeline and reassign
-        # work in a try finally so we can delete the temp file
-        # in case of an issue or a keyboard interrupt
         try:
+            self.run_subsampled_peeling(
+                temp_hdf5_filename,
+                n_jobs=n_jobs,
+                device=device,
+                task_name="Fit features",
+            )
+
+            # fit featurization pipeline and reassign
+            # work in a try finally so we can delete the temp file
+            # in case of an issue or a keyboard interrupt
             with h5py.File(temp_hdf5_filename) as h5:
                 waveforms = torch.tensor(h5["peeled_waveforms_fit"][:])
                 channels = torch.tensor(h5["channels"][:])
             featurization_pipeline.fit(waveforms, max_channels=channels)
             self.featurization_pipeline = featurization_pipeline
         finally:
-            # pass
-            temp_hdf5_filename.unlink()
+            if temp_hdf5_filename.exists():
+                temp_hdf5_filename.unlink()
 
     def run_subsampled_peeling(
         self, hdf5_filename, n_jobs=0, device=None, task_name=None
