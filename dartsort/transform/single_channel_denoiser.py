@@ -35,6 +35,7 @@ class SingleChannelWaveformDenoiser(BaseWaveformDenoiser):
         if denoiser is None:
             denoiser = SingleChannelDenoiser().load(pretrained_path)
             denoiser.eval()
+            denoiser.requires_grad_(False)
         self.denoiser = denoiser
 
     def forward(self, waveforms, max_channels=None):
