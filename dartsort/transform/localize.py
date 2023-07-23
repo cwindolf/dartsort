@@ -42,16 +42,17 @@ class PointSourceLocalization(BaseWaveformFeaturizer):
         elif self.amplitude_kind == "ptp":
             ampvecs = ptp(waveforms, dim=1)
 
-        loc_result = localize_amplitude_vectors(
-            ampvecs,
-            self.geom,
-            max_channels,
-            self.channel_index,
-            radius=self.radius,
-            n_channels_subset=self.n_channels_subset,
-            logbarrier=self.logbarrier,
-            dtype=self.dtype,
-        )
+        with torch.enable_grad():
+            loc_result = localize_amplitude_vectors(
+                ampvecs,
+                self.geom,
+                max_channels,
+                self.channel_index,
+                radius=self.radius,
+                n_channels_subset=self.n_channels_subset,
+                logbarrier=self.logbarrier,
+                dtype=self.dtype,
+            )
 
         localizations = torch.column_stack(
             [

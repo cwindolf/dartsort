@@ -52,8 +52,7 @@ def test_grab_and_featurize():
             assert np.array_equal(h5["geom"][()], geom)
             assert np.array_equal(h5["channel_index"][()], channel_index)
             assert h5["last_chunk_start"][()] == 90_000
-            
-            
+
         grab.peel(Path(tempdir) / "grab.h5", overwrite=True, n_jobs=2)
 
         with h5py.File(Path(tempdir) / "grab.h5") as h5:
@@ -109,7 +108,7 @@ def test_grab_and_featurize():
             assert np.array_equal(h5["geom"][()], geom)
             assert np.array_equal(h5["channel_index"][()], channel_index)
             assert h5["last_chunk_start"][()] == 90_000
-            
+
     with tempfile.TemporaryDirectory() as tempdir:
         grab.fit_models(tempdir, n_jobs=2)
         grab.peel(Path(tempdir) / "grab.h5", n_jobs=2)
@@ -126,7 +125,7 @@ def test_grab_and_featurize():
             assert np.array_equal(h5["channel_index"][()], channel_index)
             assert h5["last_chunk_start"][()] == 90_000
 
-    # try one with TPCA F/D and NN
+    # try one with TPCA F/D, NN, localization
     channel_index = make_channel_index(geom, 20)
     pipeline = transform.WaveformPipeline(
         [
@@ -143,6 +142,9 @@ def test_grab_and_featurize():
                 fit_radius=10,
             ),
             transform.Waveform(channel_index, name="tpca_waveforms"),
+            transform.PointSourceLocalization(
+                geom, channel_index, radius=50.0
+            ),
         ]
     )
     grab = GrabAndFeaturize(
