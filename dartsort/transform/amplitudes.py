@@ -22,9 +22,9 @@ class AmplitudeVector(BaseWaveformFeaturizer):
         self.shape = (channel_index.shape[1],)
         self.dtype = dtype
 
-    def forward(self, waveforms, max_channels=None):
+    def transform(self, waveforms, max_channels=None):
         if self.kind == "peak":
-            return waveforms.abs().max(dim=2).values
+            return waveforms.abs().max(dim=1).values
         elif self.kind == "ptp":
             return ptp(waveforms, dim=1)
 
@@ -35,7 +35,7 @@ class MaxAmplitude(BaseWaveformFeaturizer):
 
     def __init__(
         self,
-        kind="peak",
+        kind="ptp",
         dtype=torch.float,
         name=None,
         name_prefix="",
@@ -47,7 +47,7 @@ class MaxAmplitude(BaseWaveformFeaturizer):
         self.kind = kind
         self.dtype = dtype
 
-    def forward(self, waveforms, max_channels=None):
+    def transform(self, waveforms, max_channels=None):
         if self.kind == "peak":
             return torch.nan_to_num(waveforms.abs()).max(dim=(1, 2)).values
         elif self.kind == "ptp":
