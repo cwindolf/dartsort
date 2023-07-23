@@ -98,6 +98,7 @@ def test_channel_subsetting():
         channel_index[max_channels][:, None, :],
     ]
 
+    # waveforms are torch here, but ci/geom are not
     (
         waveforms_small,
         small_channel_index,
@@ -106,6 +107,22 @@ def test_channel_subsetting():
         max_channels,
         channel_index,
         geom,
+        100,
+    )
+    assert waveforms_small.shape == (
+        *waveforms.shape[:2],
+        small_channel_index.shape[1],
+    )
+
+    # full torch
+    (
+        waveforms_small,
+        small_channel_index,
+    ) = waveform_util.channel_subset_by_radius(
+        waveforms,
+        max_channels,
+        torch.tensor(channel_index),
+        torch.tensor(geom),
         100,
     )
     assert waveforms_small.shape == (
