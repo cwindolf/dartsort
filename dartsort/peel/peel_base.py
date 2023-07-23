@@ -123,7 +123,6 @@ class BasePeeler(torch.nn.Module):
         # wrap in try/finally to ensure file handles get closed if there
         # is some unforseen error
         try:
-            had_grad = torch.is_grad_enabled()
             n_jobs, Executor, context, rank_queue = get_pool(
                 n_jobs, with_rank_queue=True
             )
@@ -180,7 +179,6 @@ class BasePeeler(torch.nn.Module):
                                 f"[spk/batch={n_spikes / batch_count:0.1f}]"
                             )
         finally:
-            torch.set_grad_enabled(had_grad)
             self.to("cpu")
 
         return output_hdf5_filename
@@ -496,9 +494,6 @@ _peeler_process_context = None
 
 def _peeler_process_init(peeler, device, rank_queue, save_residual):
     global _peeler_process_context
-    # if we are not running in parallel, this state is restored
-    # in the logic in .peel
-    torch.set_grad_enabled(False)
 
     # figure out what device to work on
     my_rank = rank_queue.get()
@@ -523,7 +518,8 @@ def _peeler_process_job(chunk_start_samples):
     peeler = _peeler_process_context.peeler
     # by returning here, we are implicitly relying on pickle
     # we can replace this with cloudpickle or manual np.save if helpful
-    return peeler.process_chunk(
-        chunk_start_samples,
-        return_residual=_peeler_process_context.save_residual,
-    )
+    with torch.no_grad():
+        return peeler.process_chunk(
+            chunk_start_samples,
+            return_residual=_peeler_process_context.save_residual,
+        )

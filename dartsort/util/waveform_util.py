@@ -207,12 +207,14 @@ def get_channel_index_mask(
     """
     assert geom.ndim == channel_index.ndim == 2
     assert geom.shape[0] == channel_index.shape[0]
+    npx = torch if torch.is_tensor(channel_index) else np
+
     subset = np.zeros(shape=channel_index.shape, dtype=bool)
     pgeom = np.pad(geom, [(0, 1), (0, 0)], constant_values=-2 * geom.max())
     for c in range(len(geom)):
         if radius is not None:
-            dists = cdist([geom[c]], pgeom[channel_index[c]]).ravel()
-            subset[c] = dists <= radius
+            dists = npx.square(geom[c][None] - pgeom[channel_index[c]]).sum(1)
+            subset[c] = dists <= radius**2
         elif n_channels_subset is not None:
             low = max(0, c - n_channels_subset // 2)
             low = min(len(geom) - n_channels_subset, low)
@@ -220,6 +222,9 @@ def get_channel_index_mask(
             subset[c] = (low <= channel_index[c]) & (channel_index[c] < high)
         else:
             subset[c] = True
+
+    if torch.is_tensor(channel_index):
+        subset = torch.tensor(subset, device=channel_index.device)
     return subset
 
 
