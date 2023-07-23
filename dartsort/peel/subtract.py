@@ -214,17 +214,17 @@ class SubtractionPeeler(BasePeeler):
 
         # run mini subtraction
         temp_hdf5_filename = Path(save_folder) / "subtraction_denoiser_fit.h5"
-        self.run_subsampled_peeling(
-            temp_hdf5_filename,
-            n_jobs=n_jobs,
-            device=device,
-            task_name="Fit subtraction denoisers",
-        )
-
-        # fit featurization pipeline and reassign
-        # work in a try finally so we can delete the temp file
-        # in case of an issue or a keyboard interrupt
         try:
+            self.run_subsampled_peeling(
+                temp_hdf5_filename,
+                n_jobs=n_jobs,
+                device=device,
+                task_name="Fit subtraction denoisers",
+            )
+
+            # fit featurization pipeline and reassign
+            # work in a try finally so we can delete the temp file
+            # in case of an issue or a keyboard interrupt
             with h5py.File(temp_hdf5_filename) as h5:
                 waveforms = torch.tensor(h5["subtract_fit_waveforms"][:])
                 channels = torch.tensor(h5["channels"][:])
@@ -232,7 +232,8 @@ class SubtractionPeeler(BasePeeler):
             self.subtraction_denoising_pipeline = orig_denoise
             self.featurization_pipeline = orig_featurization_pipeline
         finally:
-            temp_hdf5_filename.unlink()
+            if temp_hdf5_filename.exists():
+                temp_hdf5_filename.unlink()
 
 
 ChunkSubtractionResult = namedtuple(
