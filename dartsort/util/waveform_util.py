@@ -1,11 +1,15 @@
 """
 A collection of helper functions for dealing with which channels
 waveforms are extracted on.
+
+Right now, this file is a mix of numpy and torch, and it could be
+a bit confusing which functions are torch/numpy-compatible.
+Ideally they should all be both.
 """
 import numpy as np
 import torch
 import torch.nn.functional as F
-from scipy.spatial.distance import cdist, pdist, squareform
+from scipy.spatial.distance import pdist, squareform
 
 # -- geometry utils
 
@@ -207,10 +211,18 @@ def get_channel_index_mask(
     """
     assert geom.ndim == channel_index.ndim == 2
     assert geom.shape[0] == channel_index.shape[0]
-    npx = torch if torch.is_tensor(channel_index) else np
+    is_tensor = torch.is_tensor(channel_index)
+    npx = torch if is_tensor else np
 
-    subset = np.zeros(shape=channel_index.shape, dtype=bool)
-    pgeom = np.pad(geom, [(0, 1), (0, 0)], constant_values=-2 * geom.max())
+    if is_tensor:
+        subset = torch.zeros(
+            size=channel_index.shape, device=channel_index.device, dtype=bool
+        )
+        pgeom = F.pad(geom, (0, 0, 0, 1), value=torch.nan)
+    else:
+        subset = np.zeros(shape=channel_index.shape, dtype=bool)
+        pgeom = np.pad(geom, [(0, 1), (0, 0)], constant_values=np.nan)
+
     for c in range(len(geom)):
         if radius is not None:
             dists = npx.square(geom[c][None] - pgeom[channel_index[c]]).sum(1)
@@ -223,21 +235,37 @@ def get_channel_index_mask(
         else:
             subset[c] = True
 
-    if torch.is_tensor(channel_index):
-        subset = torch.tensor(subset, device=channel_index.device)
     return subset
 
 
 def mask_to_relative(channel_index_mask):
     assert channel_index_mask.ndim == 2
-    rel_sub_channel_index = []
     max_sub_chans = channel_index_mask.sum(axis=1).max()
-    C = channel_index_mask.shape[1]
-    for mask in channel_index_mask:
-        s = np.flatnonzero(mask)
-        s = list(s) + [C] * (max_sub_chans - len(s))
-        rel_sub_channel_index.append(s)
-    rel_sub_channel_index = np.array(rel_sub_channel_index)
+    original_max_neighbs = channel_index_mask.shape[1]
+    n_channels_tot = channel_index_mask.shape[0]
+
+    is_tensor = torch.is_tensor(channel_index_mask)
+    if is_tensor:
+        rel_sub_channel_index = torch.full(
+            (n_channels_tot, max_sub_chans),
+            original_max_neighbs,
+            device=channel_index_mask.device,
+        )
+    else:
+        rel_sub_channel_index = np.full(
+            (n_channels_tot, max_sub_chans), original_max_neighbs
+        )
+
+    for i, mask in enumerate(channel_index_mask):
+        if is_tensor:
+            nz = mask.nonzero().squeeze()
+            nnz = nz.numel()
+        else:
+            nz = np.flatnonzero(mask)
+            nnz = nz.size
+        if nnz:
+            rel_sub_channel_index[i, : nnz] = nz
+
     return rel_sub_channel_index
 
 
@@ -245,12 +273,28 @@ def mask_to_channel_index(channel_index, channel_index_mask):
     assert channel_index.shape == channel_index_mask.shape
     max_sub_chans = channel_index_mask.sum(axis=1).max()
     n_channels = channel_index.shape[0]
-    new_channel_index = np.full(
-        (n_channels, max_sub_chans), fill_value=n_channels
-    )
+
+    is_tensor = torch.is_tensor(channel_index_mask)
+    if is_tensor:
+        new_channel_index = torch.full(
+            (n_channels, max_sub_chans),
+            n_channels,
+            device=channel_index_mask.device,
+        )
+    else:
+        new_channel_index = np.full(
+            (n_channels, max_sub_chans), fill_value=n_channels
+        )
+
     for i, mask in enumerate(channel_index_mask):
-        which = np.flatnonzero(mask)
-        new_channel_index[i, : which.size] = channel_index[i][which]
+        if is_tensor:
+            which = mask.nonzero().squeeze()
+            nnz = which.numel()
+        else:
+            which = np.flatnonzero(mask)
+            nnz = which.size
+        if nnz:
+            new_channel_index[i, : nnz] = channel_index[i][which]
     return new_channel_index
 
 
