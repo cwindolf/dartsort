@@ -113,6 +113,11 @@ def test_channel_subsetting():
         *waveforms.shape[:2],
         small_channel_index.shape[1],
     )
+    assert (small_channel_index < len(geom)).sum(1).min() >= 1
+    assert np.array_equal(
+        np.isnan(waveforms_small[:, 0, :]),
+        small_channel_index[max_channels] == len(geom),
+    )
 
     # full torch
     (
@@ -129,15 +134,42 @@ def test_channel_subsetting():
         *waveforms.shape[:2],
         small_channel_index.shape[1],
     )
-
-    (
-        channels_in_probe_small,
-        waveforms_in_probe_small,
-    ) = waveform_util.get_channels_in_probe(
-        waveforms_small,
-        max_channels,
-        small_channel_index,
+    assert (small_channel_index < len(geom)).sum(1).min() >= 1
+    assert np.array_equal(
+        np.isnan(waveforms_small[:, 0, :]),
+        small_channel_index[max_channels] == len(geom),
     )
+
+    # GPU
+    if torch.cuda.is_available():
+        (
+            waveforms_small,
+            small_channel_index,
+        ) = waveform_util.channel_subset_by_radius(
+            waveforms.cuda(),
+            max_channels.cuda(),
+            torch.tensor(channel_index).cuda(),
+            torch.tensor(geom).cuda(),
+            100,
+        )
+        assert waveforms_small.shape == (
+            *waveforms.shape[:2],
+            small_channel_index.shape[1],
+        )
+
+        (
+            channels_in_probe_small,
+            waveforms_in_probe_small,
+        ) = waveform_util.get_channels_in_probe(
+            waveforms_small,
+            max_channels,
+            small_channel_index,
+        )
+        assert (small_channel_index < len(geom)).sum(1).min() >= 1
+        assert np.array_equal(
+            np.isnan(waveforms_small.cpu()[:, 0, :]),
+            small_channel_index[max_channels].cpu() == len(geom),
+        )
 
     assert not torch.isnan(waveforms_in_probe_small).any()
 
