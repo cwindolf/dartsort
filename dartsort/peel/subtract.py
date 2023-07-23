@@ -287,10 +287,6 @@ def subtract_chunk(
     spike_channels = []
     spike_features = []
 
-    # TODO handle double buffering
-    # need one buffer for spike wfs in main extending outside
-    # and another outer buffer for spikes which would overlap with the first buffer
-
     for threshold in detection_thresholds:
         # -- detect and extract waveforms
         # detection has more args which we don't expose right now
@@ -335,7 +331,8 @@ def subtract_chunk(
             waveforms = waveforms[keep]
             times = times[keep]
             channels = channels[keep]
-            features = {k: v[keep] for k, v in features.items()}
+            for k in features:
+                features[k] = features[k][keep]
             if not times.numel():
                 continue
 
@@ -357,30 +354,39 @@ def subtract_chunk(
             already_padded=True,
             in_place=True,
         )
+        del times, channels, waveforms, features
 
     # check if we got no spikes
     if not any(t.numel() for t in spike_times):
-        return empty_result(
+        return empty_chunk_subtraction_result(
             spike_length_samples,
             channel_index,
             residual[left_margin : traces.shape[0] - right_margin, :-1],
         )
 
+    # concatenate all of the thresholds together into single tensors
     subtracted_waveforms = torch.concatenate(subtracted_waveforms)
     spike_times = torch.concatenate(spike_times)
     spike_channels = torch.concatenate(spike_channels)
-    spike_features = {
-        k: torch.concatenate([f[k] for f in spike_features])
-        for k in spike_features[0].keys()
-    }
+    spike_features_list = spike_features
+    spike_features = {}
+    feature_keys = list(spike_features_list[0].keys())
+    for k in feature_keys:
+        this_feature_list = []
+        for f in spike_features_list:
+            this_feature_list.append(f[k])
+            del f[k]
+        spike_features[k] = torch.concatenate(this_feature_list)
+        del this_feature_list
+    del spike_features_list
 
-    # discard spikes in the margins, sort times for caller
+    # discard spikes in the margins and sort times for caller
     keep = torch.nonzero(
         (spike_times >= left_margin)
         & (spike_times < traces.shape[0] - right_margin)
     ).squeeze()
     if not keep.any():
-        return empty_result(
+        return empty_chunk_subtraction_result(
             spike_length_samples,
             channel_index,
             residual[left_margin : traces.shape[0] - right_margin, :-1],
@@ -389,7 +395,8 @@ def subtract_chunk(
     subtracted_waveforms = subtracted_waveforms[keep]
     spike_times = spike_times[keep]
     spike_channels = spike_channels[keep]
-    spike_features = {k: v[keep] for k, v in spike_features.items()}
+    for k in spike_features:
+        spike_features[k] = spike_features[k][keep]
 
     # construct collision-cleaned waveforms
     collisioncleaned_waveforms = spiketorch.grab_spikes(
@@ -420,7 +427,7 @@ def subtract_chunk(
     )
 
 
-def empty_result(spike_length_samples, channel_index, residual):
+def empty_chunk_subtraction_result(spike_length_samples, channel_index, residual):
     empty_waveforms = torch.empty(
         (0, spike_length_samples, channel_index.shape[1]),
         dtype=residual.dtype,
