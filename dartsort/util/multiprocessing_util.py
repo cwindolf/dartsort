@@ -1,6 +1,7 @@
 import multiprocessing
 from concurrent.futures import ProcessPoolExecutor
 from multiprocessing import get_context
+import sys
 
 import cloudpickle
 
@@ -64,8 +65,14 @@ class CloudpicklePoolExecutor(ProcessPoolExecutor):
 
 
 def get_pool(
-    n_jobs, context="spawn", cls=ProcessPoolExecutor, with_rank_queue=False
+    n_jobs, context=None, cls=ProcessPoolExecutor, with_rank_queue=False
 ):
+    if context is None:
+        # spawn is having problems on Linux
+        context = "forkserver"
+        if sys.platform == "darwin":
+            context = "spawn"
+        # TODO: test parallelism on Windows
     if n_jobs == -1:
         n_jobs = multiprocessing.cpu_count()
     do_parallel = n_jobs >= 1
