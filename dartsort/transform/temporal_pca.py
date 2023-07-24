@@ -13,11 +13,11 @@ class BaseTemporalPCA(BaseWaveformModule):
     def __init__(
         self,
         channel_index,
+        geom=None,
         rank=8,
         whiten=False,
         centered=True,
         fit_radius=None,
-        geom=None,
         random_state=0,
         name=None,
         name_prefix="",

@@ -34,10 +34,10 @@ def localize_hdf5(
     device = torch.device(device)
 
     with h5py.File(hdf5_filename, "r+") as h5:
-        channels = h5[main_channels_dataset_name][()]
+        channels = h5[main_channels_dataset_name][:]
         amp_vecs = h5[amplitude_vectors_dataset_name]
-        channel_index = h5[channel_index_dataset_name][()]
-        geom = h5[geometry_dataset_name][()]
+        channel_index = h5[channel_index_dataset_name][:]
+        geom = h5[geometry_dataset_name][:]
 
         n_spikes = channels.shape[0]
         assert geom.shape == (channel_index.shape[0], 2)
@@ -50,16 +50,12 @@ def localize_hdf5(
                     f"The {output_dataset_name} dataset in {hdf5_filename} "
                     "has an unexpected shape."
                 )
-            warnings.warn(
-                f"{hdf5_filename} already contains {output_dataset_name}, "
-                "but localize_hdf5 is being run. Skipping it, since the shape "
-                "of the dataset is okay."
-            )
+            # else, we are resuming
             return
 
-        geom = torch.tensor(geom, device=device).double()
-        channel_index = torch.tensor(channel_index, device=device).long()
-        channels = torch.tensor(channels, device=device).long()
+        geom = torch.tensor(geom, device=device)
+        channel_index = torch.tensor(channel_index, device=device)
+        channels = torch.tensor(channels, device=device)
 
         localizations_dataset = h5.create_dataset(
             output_dataset_name,
@@ -85,11 +81,6 @@ def localize_hdf5(
                 channel_index=channel_index,
                 radius=radius,
                 n_channels_subset=n_channels_subset,
-                logbarrier=True,
-                model="pointsource",
-                dtype=torch.double,
-                y0=1.0,
-                levenberg_marquardt_kwargs=None,
             )
             xyza_batch = np.c_[
                 locs["x"].cpu().numpy(),
