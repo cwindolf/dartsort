@@ -18,10 +18,10 @@ class BaseWaveformModule(torch.nn.Module):
         self.name = name
         if channel_index is not None:
             self.register_buffer(
-                "channel_index", torch.LongTensor(channel_index)
+                "channel_index", torch.asarray(channel_index, copy=True)
             )
         if geom is not None:
-            self.register_buffer("geom", torch.DoubleTensor(geom))
+            self.register_buffer("geom", torch.asarray(geom, copy=True))
 
     def fit(self, waveforms, max_channels=None):
         pass

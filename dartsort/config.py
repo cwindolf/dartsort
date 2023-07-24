@@ -42,16 +42,18 @@ class FeaturizationConfig:
     do_nn_denoise: bool = True
     do_tpca_denoise: bool = True
     do_enforce_decrease: bool = True
+    # turn off features below
+    denoise_only: bool = False
 
     # -- featurization configuration
-    # global feature toggle, will override individual ones below
-    do_featurization: bool = True
     save_input_waveforms: bool = False
     save_input_tpca_projs: bool = True
     save_output_waveforms: bool = False
     save_output_tpca_projs: bool = False
+    save_amplitudes: bool = True
     # localization runs on output waveforms
     do_localization: bool = True
+    localization_radius: float = 100.0
 
     # -- further info about denoising
     # in the future we may add multi-channel or other nns
@@ -75,11 +77,13 @@ class FeaturizationConfig:
         """
         class_names_and_kwargs = []
 
-        if self.do_featurization and self.save_input_waveforms:
+        do_feats = not self.denoise_only
+
+        if do_feats and self.save_input_waveforms:
             class_names_and_kwargs.append(
                 ("Waveform", {"name_prefix": self.input_waveforms_name})
             )
-        if self.do_featurization and self.save_input_tpca_projs:
+        if do_feats and self.save_input_tpca_projs:
             class_names_and_kwargs.append(
                 (
                     "TemporalPCAFeaturizer",
@@ -108,14 +112,14 @@ class FeaturizationConfig:
             )
         if self.do_enforce_decrease:
             class_names_and_kwargs.append(("EnforceDecrease", {}))
-        if self.do_featurization and self.save_output_waveforms:
+        if do_feats and self.save_output_waveforms:
             class_names_and_kwargs.append(
                 (
                     "Waveform",
                     {"name_prefix": self.output_waveforms_name},
                 )
             )
-        if self.do_featurization and self.save_output_tpca_projs:
+        if do_feats and self.save_output_tpca_projs:
             class_names_and_kwargs.append(
                 (
                     "TemporalPCAFeaturizer",
@@ -125,10 +129,17 @@ class FeaturizationConfig:
                     },
                 )
             )
-        if self.do_featurization and self.do_localization:
+        if do_feats and self.do_localization:
             class_names_and_kwargs.append(
                 (
-                    "PointSourceLocalization",
+                    "AmplitudeVector",
+                    {"name_prefix": self.output_waveforms_name},
+                )
+            )
+        if do_feats and self.save_amplitudes:
+            class_names_and_kwargs.append(
+                (
+                    "MaxAmplitude",
                     {"name_prefix": self.output_waveforms_name},
                 )
             )
@@ -151,7 +162,7 @@ class SubtractionConfig:
     # how will waveforms be denoised before subtraction?
     # users can also save waveforms/features during subtraction
     subtraction_denoising_config: FeaturizationConfig = FeaturizationConfig(
-        do_featurization=False,
+        denoise_only=True,
         input_waveforms_name="raw",
         output_waveforms_name="subtracted",
     )

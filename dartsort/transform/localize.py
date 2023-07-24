@@ -14,8 +14,8 @@ class PointSourceLocalization(BaseWaveformFeaturizer):
 
     def __init__(
         self,
-        geom,
         channel_index,
+        geom,
         radius=None,
         n_channels_subset=None,
         logbarrier=True,
@@ -47,7 +47,7 @@ class PointSourceLocalization(BaseWaveformFeaturizer):
                 ampvecs,
                 self.geom,
                 max_channels,
-                self.channel_index,
+                channel_index=self.channel_index,
                 radius=self.radius,
                 n_channels_subset=self.n_channels_subset,
                 logbarrier=self.logbarrier,
