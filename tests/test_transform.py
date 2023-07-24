@@ -15,13 +15,15 @@ def test_all_transformers():
     n_spikes = 1001
     spike_length_samples = 11
     waveforms = rg.normal(
-        (n_spikes, spike_length_samples, channel_index.shape[1])
+        size=(n_spikes, spike_length_samples, channel_index.shape[1])
     )
     waveforms = waveforms.astype(np.float32)
     channels = rg.integers(0, len(geom), size=n_spikes)
     # set channels to nan as they would be in a real context
     for i in range(n_spikes):
-        waveforms[i][:, channel_index[channels[i]] == len(geom)] = np.nan
+        rel_chans = channel_index[channels[i]] + 0
+        rel_chans[rel_chans < len(geom)] -= channel_index[channels[i]][0]
+        waveforms[i, :, rel_chans == len(geom)] = np.nan
     assert np.isnan(waveforms).any()
     assert not np.isnan(waveforms).all(axis=(1, 2)).any()
 
@@ -31,5 +33,10 @@ def test_all_transformers():
         [(name, {}) for name in transformers_by_class_name],
     )
 
+    # TODO
     # check shapes, dtype, etc match as they should
     # check no nans coming through
+
+
+if __name__ == "__main__":
+    test_all_transformers()

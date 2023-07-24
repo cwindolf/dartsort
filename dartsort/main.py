@@ -1,6 +1,7 @@
 from pathlib import Path
 
 from dartsort.config import FeaturizationConfig, SubtractionConfig
+from dartsort.localize.localize_util import localize_hdf5
 from dartsort.peel import SubtractionPeeler
 from dartsort.util.data_util import DARTsortSorting
 
@@ -59,13 +60,24 @@ def subtract(
     # run main
     output_hdf5_filename = output_directory / hdf5_filename
     subtraction_peeler.peel(
-        output_directory / hdf5_filename,
+        output_hdf5_filename,
         chunk_starts_samples=chunk_starts_samples,
         n_jobs=n_jobs,
         overwrite=overwrite,
         residual_filename=residual_filename,
         show_progress=show_progress,
     )
+
+    # do localization
+    if featurization_config.do_localization:
+        wf_name = featurization_config.output_waveforms_name
+        localize_hdf5(
+            output_hdf5_filename,
+            radius=featurization_config.localization_radius,
+            amplitude_vectors_dataset_name=f"{wf_name}_amplitude_vectors",
+            show_progress=show_progress,
+            device=device,
+        )
 
     return (
         DARTsortSorting.from_peeling_hdf5(output_hdf5_filename),

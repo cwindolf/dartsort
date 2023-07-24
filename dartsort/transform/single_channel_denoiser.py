@@ -18,13 +18,13 @@ class SingleChannelWaveformDenoiser(BaseWaveformDenoiser):
     def __init__(
         self,
         channel_index,
+        geom=None,
         denoiser=None,
         batch_size=128,
         in_place=False,
         pretrained_path=default_pretrained_path,
         name=None,
         name_prefix="",
-        geom=None,
     ):
         super().__init__(
             channel_index=channel_index, name=name, name_prefix=name_prefix

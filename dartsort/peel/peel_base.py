@@ -55,7 +55,7 @@ class BasePeeler(torch.nn.Module):
         self.fixed_output_data = [
             ("sampling_frequency", self.recording.get_sampling_frequency()),
             ("geom", self.recording.get_channel_locations()),
-            ("channel_index", self.channel_index.detach().cpu().numpy()),
+            ("channel_index", self.channel_index.numpy(force=True).copy()),
         ]
 
     # -- main functions for users to call
