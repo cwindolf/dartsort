@@ -226,8 +226,8 @@ class SubtractionPeeler(BasePeeler):
             # work in a try finally so we can delete the temp file
             # in case of an issue or a keyboard interrupt
             with h5py.File(temp_hdf5_filename) as h5:
-                waveforms = torch.tensor(h5["subtract_fit_waveforms"][:])
-                channels = torch.tensor(h5["channels"][:])
+                waveforms = torch.from_numpy(h5["subtract_fit_waveforms"][:])
+                channels = torch.from_numpy(h5["channels"][:])
             orig_denoise.fit(waveforms, max_channels=channels)
             self.subtraction_denoising_pipeline = orig_denoise
             self.featurization_pipeline = orig_featurization_pipeline
@@ -323,7 +323,7 @@ def subtract_chunk(
             residuals = torch.nan_to_num(waveforms)
         waveforms, features = denoising_pipeline(waveforms, channels)
 
-        # TODO: test residnorm decrease
+        # test residual norm decrease
         if residnorm_decrease_threshold:
             orig_norm = torch.linalg.norm(residuals, dim=(1, 2))
             residuals -= torch.nan_to_num(waveforms)
@@ -428,7 +428,9 @@ def subtract_chunk(
     )
 
 
-def empty_chunk_subtraction_result(spike_length_samples, channel_index, residual):
+def empty_chunk_subtraction_result(
+    spike_length_samples, channel_index, residual
+):
     empty_waveforms = torch.empty(
         (0, spike_length_samples, channel_index.shape[1]),
         dtype=residual.dtype,

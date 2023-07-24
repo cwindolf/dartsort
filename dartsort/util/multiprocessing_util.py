@@ -1,7 +1,7 @@
 import multiprocessing
+import sys
 from concurrent.futures import ProcessPoolExecutor
 from multiprocessing import get_context
-import sys
 
 import cloudpickle
 

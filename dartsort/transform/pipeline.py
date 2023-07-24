@@ -18,7 +18,9 @@ class WaveformPipeline(torch.nn.Module):
         return cls(
             [
                 transformers_by_class_name[name](
-                    geom=geom, channel_index=channel_index, **kwargs
+                    channel_index=torch.as_tensor(channel_index),
+                    geom=torch.as_tensor(geom),
+                    **kwargs
                 )
                 for name, kwargs in class_names_and_kwargs
             ]

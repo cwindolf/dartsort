@@ -171,7 +171,7 @@ def test_channel_subsetting():
             small_channel_index[max_channels].cpu() == len(geom),
         )
 
-    assert not torch.isnan(waveforms_in_probe_small).any()
+        assert not torch.isnan(waveforms_in_probe_small).any()
 
 
 if __name__ == "__main__":
