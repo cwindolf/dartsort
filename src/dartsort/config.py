@@ -18,7 +18,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import List, Optional
 
-repo_root = Path(__file__).parent.parent
+repo_root = Path(__file__).parent.parent.parent
 
 
 @dataclass(frozen=True)
