@@ -8,7 +8,8 @@ from torch import nn
 from .transform_base import BaseWaveformDenoiser
 
 default_pretrained_path = (
-    Path(__file__).parent.parent.parent / "pretrained/single_chan_denoiser.pt"
+    Path(__file__).parent.parent.parent.parent
+    / "pretrained/single_chan_denoiser.pt"
 )
 
 
