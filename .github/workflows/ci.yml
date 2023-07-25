@@ -24,7 +24,8 @@ jobs:
         
       - name: Setup Mamba
         uses: mamba-org/setup-micromamba@v1
-        environment-file: environment.yml
+        with:
+          environment-file: environment.yml
 
       - name: Install Torch (CPU)
         run: |
