@@ -12,6 +12,9 @@ jobs:
 
   build:
     runs-on: "ubuntu-latest"
+    defaults:
+      run:
+        shell: bash -l {0}
 
     steps:
       
@@ -36,6 +39,9 @@ jobs:
       - name: Install DARTsort
         run: |
           python -m pip install -e .
+
+      - name: Which Python
+        run: |
           which python
 
       - name: Pytest
