@@ -4,10 +4,11 @@
 
 `mamba` is the recommended package manager for using DARTsort. It is a drop-in replacement for `conda` and can be installed from [here](https://mamba.readthedocs.io/en/latest/installation.html).
 
-After cloning the repository, create the `mamba`/`conda` environment from the configuration file provided as follows:
+After cloning the repository, create and activate the `mamba`/`conda` environment from the configuration file provided as follows:
 
 ```bash
 $ mamba create -f environment.yml -n dartsort
+$ mamba activate dartsort
 ```
 
 Next, visit https://pytorch.org/get-started/locally/ and follow the `PyTorch` install instructions for your specific OS and hardware needs.
