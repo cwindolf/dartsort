@@ -19,7 +19,7 @@ def localize_hdf5(
     amplitude_vectors_dataset_name="amplitude_vectors",
     channel_index_dataset_name="channel_index",
     geometry_dataset_name="geom",
-    spikes_per_batch=10_000,
+    spikes_per_batch=100_000,
     show_progress=True,
     device=None,
 ):
@@ -72,7 +72,7 @@ def localize_hdf5(
             end_ix = min(n_spikes, start_ix + spikes_per_batch)
 
             channels_batch = channels[start_ix:end_ix]
-            amp_vecs_batch = amp_vecs[start_ix:end_ix]
+            amp_vecs_batch = torch.tensor(amp_vecs[start_ix:end_ix], device=device)
 
             locs = localize_amplitude_vectors(
                 amp_vecs_batch,
