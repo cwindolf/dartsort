@@ -35,7 +35,7 @@ jobs:
 
       - name: Install DARTsort
         run: |
-          python -m install -e .
+          python -m pip install -e .
           which python
 
       - name: Pytest
