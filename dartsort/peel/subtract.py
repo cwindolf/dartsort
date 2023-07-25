@@ -144,9 +144,12 @@ class SubtractionPeeler(BasePeeler):
             spatial_dedup_channel_index=self.spatial_dedup_channel_index,
         )
 
+        # add in chunk_start_samples
+        times = subtraction_result.times + chunk_start_samples
+        
         peel_result = dict(
             n_spikes=subtraction_result.n_spikes,
-            times=subtraction_result.times,
+            times=times,
             channels=subtraction_result.channels,
             collisioncleaned_waveforms=subtraction_result.collisioncleaned_waveforms,
         )
