@@ -9,7 +9,7 @@
 After cloning the repository, create and activate the `mamba`/`conda` environment from the configuration file provided as follows:
 
 ```bash
-$ mamba create -f environment.yml -n dartsort
+$ mamba env create -f environment.yml -n dartsort
 $ mamba activate dartsort
 ```
 
@@ -18,14 +18,22 @@ Next, visit https://pytorch.org/get-started/locally/ and follow the `PyTorch` in
 For example, on a Linux workstation or cluster with NVIDIA GPUs available, one might use (dropping in `mamba` for `conda` commands):
 
 ```bash
-$ (dartsort) mamba install pytorch torchvision torchaudio pytorch-cuda=11.8 -c pytorch -c nvidia
+(dartsort) $ mamba install pytorch torchvision torchaudio pytorch-cuda=11.8 -c pytorch -c nvidia
 ```
 
 Finally, install the remaining `pip` dependencies:
 
 ```bash
-$ (dartsort) pip install -r requirements.txt
+(dartsort) $ pip install -r requirements.txt
 ```
+
+And `dartsort` itself:
+
+```bash
+(dartsort) $ pip install -e .
+```
+
+Soon we will have a package on PyPI so that this is just a `pip install dartsort`.
 
 Make sure everything works:
 
