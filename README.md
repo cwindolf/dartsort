@@ -1,3 +1,5 @@
+![example branch parameter](https://github.com/cwindolf/dartsort/actions/workflows/ci.yml/badge.svg?branch=main)
+
 # dartsort
 
 ## Suggested install steps:
