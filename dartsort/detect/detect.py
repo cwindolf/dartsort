@@ -75,11 +75,7 @@ def detect_and_deduplicate(
         output_size=energies.shape,
     )
     # remove peaks smaller than our threshold
-    energies[energies < threshold] = 0.0
-    # could early exit if no peaks found
-    # probably don't need to optimize for this case
-    # if energies.max() == 0.0:
-    #     return torch.tensor([]), torch.tensor([])
+    F.threshold_(energies, threshold, 0.0)
 
     # -- temporal deduplication
     max_energies, indices = F.max_pool2d_with_indices(
@@ -110,5 +106,4 @@ def detect_and_deduplicate(
 
     # sparsify and return
     times, chans = torch.nonzero(max_energies, as_tuple=True)
-    # amplitudes = max_energies[times, chans]
     return times, chans
