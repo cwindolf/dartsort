@@ -14,26 +14,20 @@ $ mamba activate dartsort
 ```
 
 Next, visit https://pytorch.org/get-started/locally/ and follow the `PyTorch` install instructions for your specific OS and hardware needs.
-
 For example, on a Linux workstation or cluster with NVIDIA GPUs available, one might use (dropping in `mamba` for `conda` commands):
 
 ```bash
 (dartsort) $ mamba install pytorch torchvision torchaudio pytorch-cuda=11.8 -c pytorch -c nvidia
 ```
 
-Finally, install the remaining `pip` dependencies:
+Finally, install the remaining `pip` dependencies and `dartsort` itself:
 
 ```bash
 (dartsort) $ pip install -r requirements.txt
-```
-
-And `dartsort` itself:
-
-```bash
 (dartsort) $ pip install -e .
 ```
 
-Soon we will have a package on PyPI so that this is just a `pip install dartsort`.
+Soon we will have a package on PyPI so that the last two steps will be just a `pip install dartsort`.
 
 Make sure everything works:
 
