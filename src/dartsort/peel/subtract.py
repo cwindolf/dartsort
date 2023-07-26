@@ -388,7 +388,7 @@ def subtract_chunk(
     keep = torch.nonzero(
         (spike_times >= left_margin)
         & (spike_times < traces.shape[0] - right_margin)
-    ).squeeze()
+    )[:, 0]
     if not keep.any():
         return empty_chunk_subtraction_result(
             spike_length_samples,
