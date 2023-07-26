@@ -2,7 +2,9 @@ from collections import namedtuple
 
 import h5py
 import numpy as np
-from spikeinterface.core import NumpySorting
+from spikeinterface.core import NumpySorting, get_random_data_chunks
+from dartsort.detect import detect_and_deduplicate
+from warnings import warn
 
 # this is a data type used in the peeling code to store info about
 # the datasets which are being computed
@@ -81,3 +83,31 @@ class DARTsortSorting:
             labels=labels,
             sampling_frequency=sampling_frequency,
         )
+
+def check_recording(rec, threshold=5, expected_value_range=1e4):
+    """
+    """
+
+    
+    random_chunks = get_random_data_chunks(rec, num_chunks_per_segment=5,
+                                           chunk_size=rec.get_sampling_frequency(),
+                                           concatenated=False)
+    
+    # perform detection test
+    spike_rates = []
+    for chunk in random_chunks:
+        times, _ = detect_and_deduplicate(chunk, threshold=threshold,
+                                                 peak_sign="both")
+        spike_rates.append(times.shape[0])
+
+    avg_detections_per_second = sum(spike_rates) / 5
+
+    if avg_detections_per_second > 1e4:
+        warn(f"Average spike detections per second: {avg_detections_per_second}."
+             "Running on a full dataset could lead to an out-of-memory error."
+             "(Is this data normalized?)")
+        
+    
+    
+    
+
