@@ -89,28 +89,28 @@ def check_recording(rec, threshold=5,
                     expected_value_range=1e4,
                     expected_spikes_per_sec=1e4):
     """
+    Sanity check spike detection rate and data range of input recording.
     """
-
     
+    # grab random traces from throughout rec
     random_chunks = get_random_data_chunks(rec, num_chunks_per_segment=5,
                                            chunk_size=rec.get_sampling_frequency(),
                                            concatenated=False)
     
-    # perform detection test
+    # run detection and compute spike detection rate and data range
     spike_rates = []
     for chunk in random_chunks:
         times, _ = detect_and_deduplicate(torch.tensor(chunk), threshold=threshold,
                                                  peak_sign="both")
         spike_rates.append(times.shape[0])
 
-    avg_detections_per_second = sum(spike_rates) / 5
+    avg_detections_per_second = sum(spike_rates) / 5    
+    max_abs = np.amax(np.concatenate(random_chunks, axis=0))
 
     if avg_detections_per_second > expected_spikes_per_sec:
         warn(f"Average spike detections per second: {avg_detections_per_second}."
-             "Running on a full dataset could lead to an out-of-memory error."
-             "(Is this data normalized?)", RuntimeWarning)
-        
-    max_abs = np.amax(np.concatenate(random_chunks, axis=0))
+            "Running on a full dataset could lead to an out-of-memory error."
+            "(Is this data normalized?)", RuntimeWarning)
 
     if max_abs > expected_value_range:
         warn(f"Data range exceeds |1e4|.", RuntimeWarning)
