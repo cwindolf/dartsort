@@ -5,6 +5,7 @@ import numpy as np
 from spikeinterface.core import NumpySorting, get_random_data_chunks
 from dartsort.detect import detect_and_deduplicate
 from warnings import warn
+import torch
 
 # this is a data type used in the peeling code to store info about
 # the datasets which are being computed
@@ -84,7 +85,9 @@ class DARTsortSorting:
             sampling_frequency=sampling_frequency,
         )
 
-def check_recording(rec, threshold=5, expected_value_range=1e4):
+def check_recording(rec, threshold=5, 
+                    expected_value_range=1e4,
+                    expected_spikes_per_sec=1e4):
     """
     """
 
@@ -96,16 +99,25 @@ def check_recording(rec, threshold=5, expected_value_range=1e4):
     # perform detection test
     spike_rates = []
     for chunk in random_chunks:
-        times, _ = detect_and_deduplicate(chunk, threshold=threshold,
+        times, _ = detect_and_deduplicate(torch.tensor(chunk), threshold=threshold,
                                                  peak_sign="both")
         spike_rates.append(times.shape[0])
 
     avg_detections_per_second = sum(spike_rates) / 5
 
-    if avg_detections_per_second > 1e4:
+    if avg_detections_per_second > expected_spikes_per_sec:
         warn(f"Average spike detections per second: {avg_detections_per_second}."
              "Running on a full dataset could lead to an out-of-memory error."
-             "(Is this data normalized?)")
+             "(Is this data normalized?)", RuntimeWarning)
+        
+    max_abs = np.amax(np.concatenate(random_chunks, axis=0))
+
+    if max_abs > expected_value_range:
+        warn(f"Data range exceeds |1e4|.", RuntimeWarning)
+
+    return avg_detections_per_second, max_abs
+        
+    
         
     
     

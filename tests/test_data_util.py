@@ -6,7 +6,9 @@ from pathlib import Path
 
 import h5py
 import numpy as np
-from dartsort.util.data_util import DARTsortSorting
+from dartsort.util.data_util import DARTsortSorting, check_recording
+from spikeinterface import NumpyRecording
+import pytest
 
 times = np.arange(0, 1000, 10)
 rng = np.random.default_rng(0)
@@ -43,3 +45,24 @@ def test_from_peeling():
         assert np.array_equal(dsorting.times, times)
         assert np.array_equal(dsorting.channels, channels)
         assert np.array_equal(dsorting.labels, labels)
+
+def test_check_recording():
+    """
+    Test spike rate and data range sanity 
+    checks performed by this method.
+    """
+
+    x = rng.normal(size=(5*30000, 384)).astype(np.float32) * 1e4
+    rec = NumpyRecording(x, sampling_frequency=30000)
+
+    with pytest.warns(Warning) as warninfo:
+        check_recording(rec)
+    warnings = {(w.category, w.message.args[0][:12]) for w in warninfo}
+    expected = {
+                    (RuntimeWarning, "Data range e"),
+                    (RuntimeWarning, "Average spik")
+                }
+    
+    assert warnings == expected
+
+
