@@ -48,7 +48,7 @@ ___   o   o ____
 ```
 
 Each unit's spikes will be shifted to land inside the central
-pitch before averaging. Then, during deconvolution, a probe-
+probe before averaging. Then, during deconvolution, a probe-
 length portion (i.e., $P$ pitches) channels of the template
 computed on the virtual probe should be extracted at each time
 point according to the drift at that time point and at the
@@ -182,11 +182,11 @@ of large drifts.
 Assume now that we have chosen $k_i$ and $b_i$ somehow according to
 the previous section. How do we compute a template?
 
-For each occupied bin $b$, let $I_b = \{ i : b_i = b \}$ be the indices
+For each occupied bin $b$, let $I_b = \lbrace i : b_i = b \rbrace$ be the indices
 of waveforms in this bin.
 
 For each waveform, we want to pad to the full $3P-2$ pitch virtual
-probe according to $k_i$ so that it is centered on the central pitch.
+probe according to $k_i$ so that it is centered on the central probe.
 If $k_i$ is positive, we want to shift down by $k_i$ pitches.
 This means that we pad above by $P + k_i - 1$ pitches, and we pad below
 by $P - k_i - 1$ pitches, for a total of $3P-2$. Define the padded waveform
