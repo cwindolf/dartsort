@@ -3,7 +3,7 @@ import numpy as np
 import torch
 
 from collections import namedtuple
-from .multiprocessing_utils import get_pool, MockQueue
+from multiprocessing.pool import Pool
 from pathlib import Path
 from tqdm.auto import tqdm
 
@@ -15,7 +15,6 @@ def grab_and_localize(
     binary_file,
     geom,
     trough_offset=42,
-    spike_length_samples=121,
     loc_radius=100,
     nn_denoise=True,
     enforce_decrease=True,
@@ -50,23 +49,11 @@ def grab_and_localize(
         spike_index[:, 0].max(),
         chunk_size,
     )
-
-    Executor, context = get_pool(n_jobs)
-    manager = context.Manager() if n_jobs > 1 else None
-    id_queue = manager.Queue() if n_jobs > 1 else MockQueue()
-
-    n_jobs = n_jobs or 1
-    if n_jobs < 0:
-        n_jobs = multiprocessing.cpu_count() - 1
-
-    for id in range(n_jobs):
-        id_queue.put(id)
-
-    with Executor(
-        max_workers=n_jobs,
+    ctx = multiprocessing.get_context("spawn")
+    with Pool(
+        n_jobs,
         initializer=_job_init,
         initargs=(
-            id_queue,
             geom,
             nn_denoise,
             enforce_decrease,
@@ -78,12 +65,11 @@ def grab_and_localize(
             binary_file,
             len_data_samples,
             trough_offset,
-            spike_length_samples,
         ),
-        mp_context=context,
+        context=ctx,
     ) as pool:
         for result in tqdm(
-            pool.map(_job, starts),
+            pool.imap(_job, starts),
             desc="grab and localize",
             smoothing=0,
             total=len(starts),
@@ -119,20 +105,17 @@ def _job(batch_start):
     rec = spikeio.read_data(
         p.binary_file,
         np.float32,
-        max(0, batch_start - p.trough_offset),
-        min(
-            p.len_data_samples,
-            batch_start + p.chunk_size + p.spike_length_samples - p.trough_offset,
-        ),
+        max(0, batch_start - 42),
+        min(p.len_data_samples, batch_start + p.chunk_size + 79),
         len(p.geom),
     )
     waveforms = spikeio.read_waveforms_in_memory(
         rec,
         spike_index,
-        spike_length_samples=p.spike_length_samples,
+        spike_length_samples=121,
         channel_index=p.channel_index,
         trough_offset=p.trough_offset,
-        buffer=-batch_start + p.trough_offset * (batch_start > 0),
+        buffer=-batch_start + 42 * (batch_start > 0),
     )
 
     # -- denoise
@@ -146,8 +129,6 @@ def _job(batch_start):
         device=p.device,
         denoiser=p.denoiser,
     )
-    if torch.is_tensor(waveforms):
-        waveforms = waveforms.cpu().numpy()
 
     # -- localize and return
     ptps = waveforms.ptp(1)
@@ -156,7 +137,9 @@ def _job(batch_start):
         ptps, p.geom, spike_index[:, 1], p.channel_index, pbar=False
     )
 
-    return JobResult(which, np.c_[x, y, z_rel, z_abs, alpha], np.nanmax(ptps, axis=1))
+    return JobResult(
+        which, np.c_[x, y, z_rel, z_abs, alpha], np.nanmax(ptps, axis=1)
+    )
 
 
 JobData = namedtuple(
@@ -173,13 +156,11 @@ JobData = namedtuple(
         "device",
         "len_data_samples",
         "trough_offset",
-        "spike_length_samples",
     ],
 )
 
 
 def _job_init(
-    id_queue,
     geom,
     nn_denoise,
     enforce_decrease,
@@ -191,21 +172,7 @@ def _job_init(
     binary_file,
     len_data_samples,
     trough_offset,
-    spike_length_samples,
 ):
-    rank = id_queue.get()
-
-    torch.set_grad_enabled(False)
-    if torch.device(device).type == "cuda":
-        print("num gpus:", torch.cuda.device_count())
-        if torch.cuda.device_count() > 1:
-            device = torch.device("cuda", index=rank % torch.cuda.device_count())
-            print(
-                f"Worker {rank} using GPU {rank % torch.cuda.device_count()} "
-                f"out of {torch.cuda.device_count()} available."
-            )
-        torch.cuda._lazy_init()
-
     denoiser = radial_parents = None
     if nn_denoise:
         denoiser = denoise.SingleChanDenoiser().load().to(device)
@@ -225,5 +192,4 @@ def _job_init(
         device,
         len_data_samples,
         trough_offset,
-        spike_length_samples,
     )
