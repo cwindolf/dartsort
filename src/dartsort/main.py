@@ -3,7 +3,7 @@ from pathlib import Path
 from dartsort.config import FeaturizationConfig, SubtractionConfig
 from dartsort.localize.localize_util import localize_hdf5
 from dartsort.peel import SubtractionPeeler
-from dartsort.util.data_util import DARTsortSorting
+from dartsort.util.data_util import DARTsortSorting, check_recording
 
 default_featurization_config = FeaturizationConfig()
 default_subtraction_config = SubtractionConfig()
@@ -46,6 +46,9 @@ def subtract(
         subtraction_config=subtraction_config,
         featurization_config=featurization_config,
     )
+
+    # sanity check recording
+    check_recording(recording)
 
     # fit models if needed
     model_dir = output_directory / "subtraction_models"
