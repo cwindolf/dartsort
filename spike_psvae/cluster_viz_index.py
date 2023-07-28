@@ -47,7 +47,9 @@ def cluster_scatter(
         xk = xs[where]
         yk = ys[where]
         color = get_ccolor(k)
-        ax.scatter(xk, yk, s=s, color=color, alpha=alpha, marker=".", rasterized=True)
+        ax.scatter(
+            xk, yk, s=s, color=color, alpha=alpha, marker=".", rasterized=True
+        )
         if k not in excluded_ids:
             if do_ellipse:
                 x_mean, y_mean = xk.mean(), yk.mean()
@@ -282,7 +284,12 @@ def pgeom(
             )
     linestyle = linestyle or ls
     lines = ax.plot(
-        *draw, alpha=alpha, color=color, lw=lw, linestyle=linestyle, rasterized=rasterized
+        *draw,
+        alpha=alpha,
+        color=color,
+        lw=lw,
+        linestyle=linestyle,
+        rasterized=rasterized,
     )
 
     if subar:
@@ -315,16 +322,17 @@ def pgeom(
         min_z = min(geom_plot[c, 1] for c in unique_chans)
         ax.plot(
             [
-                geom_plot[:, 0].max() + T // 2 - 30,
-                geom_plot[:, 0].max() + T // 2,
+                geom_plot[:, 0].max() - 30,
+                geom_plot[:, 0].max(),
             ],
-            2 * [min_z - max_abs_amp / 2],
+            2 * [min_z - max_abs_amp],
             color="k",
             lw=2,
+            zorder=890,
         )
         ax.text(
-            geom_plot[:, 0].max() + T // 2 - 15,
-            min_z - max_abs_amp / 2 + max_abs_amp / 10,
+            geom_plot[:, 0].max() - 15,
+            min_z - max_abs_amp + max_abs_amp / 10,
             "1ms",
             transform=ax.transData,
             fontsize=5,
@@ -348,7 +356,9 @@ def pgeom(
         min_z = min(geom_plot[c, 1] for c in unique_chans)
         max_z = max(geom_plot[c, 1] for c in unique_chans)
         if np.isfinite([min_z, max_z]).all():
-            ax.set_ylim([min_z - max_abs_amp * zlim, max_z + max_abs_amp * zlim])
+            ax.set_ylim(
+                [min_z - max_abs_amp * zlim, max_z + max_abs_amp * zlim]
+            )
 
     return lines
 
@@ -775,7 +785,9 @@ def reassignments_viz(
     output_directory.mkdir(exist_ok=True, parents=True)
     if units is None:
         units = np.arange(spike_train_orig[:, 1].max() + 1)
-    units = np.intersect1d(units, np.setdiff1d(np.unique(spike_train_orig[:, 1]), [-1]))
+    units = np.intersect1d(
+        units, np.setdiff1d(np.unique(spike_train_orig[:, 1]), [-1])
+    )
     for orig_label in tqdm(units):
         fig, ax = reassignment_viz(
             orig_label,
