@@ -110,7 +110,7 @@ def test_fakedata_nonn():
         )
         ns0 = len(st)
         with h5py.File(out_h5) as h5:
-            assert h5["times"].shape == (ns0,)
+            assert h5["times_samples"].shape == (ns0,)
             assert h5["channels"].shape == (ns0,)
             assert h5["point_source_localizations"].shape == (ns0, 4)
             assert np.array_equal(h5["channel_index"][:], channel_index)
@@ -134,7 +134,7 @@ def test_fakedata_nonn():
         ns1 = len(st)
         assert ns0 == ns1
         with h5py.File(out_h5) as h5:
-            assert h5["times"].shape == (ns0,)
+            assert h5["times_samples"].shape == (ns0,)
             assert h5["channels"].shape == (ns0,)
             assert h5["point_source_localizations"].shape == (ns0, 4)
             assert np.array_equal(h5["channel_index"][:], channel_index)
@@ -158,7 +158,7 @@ def test_fakedata_nonn():
         ns2 = len(st)
         assert ns0 == ns2
         with h5py.File(out_h5) as h5:
-            assert h5["times"].shape == (ns0,)
+            assert h5["times_samples"].shape == (ns0,)
             assert h5["channels"].shape == (ns0,)
             assert h5["point_source_localizations"].shape == (ns0, 4)
             assert np.array_equal(h5["channel_index"][:], channel_index)
@@ -182,7 +182,7 @@ def test_fakedata_nonn():
         )
         ns0 = len(st)
         with h5py.File(out_h5) as h5:
-            assert h5["times"].shape == (ns0,)
+            assert h5["times_samples"].shape == (ns0,)
             assert h5["channels"].shape == (ns0,)
             assert h5["point_source_localizations"].shape == (ns0, 4)
             assert np.array_equal(h5["channel_index"][:], channel_index)
@@ -207,7 +207,7 @@ def test_fakedata_nonn():
         ns1 = len(st)
         assert ns0 == ns1
         with h5py.File(out_h5) as h5:
-            assert h5["times"].shape == (ns0,)
+            assert h5["times_samples"].shape == (ns0,)
             assert h5["channels"].shape == (ns0,)
             assert h5["point_source_localizations"].shape == (ns0, 4)
             assert np.array_equal(h5["channel_index"][:], channel_index)
@@ -232,7 +232,7 @@ def test_fakedata_nonn():
         ns2 = len(st)
         assert ns0 == ns2
         with h5py.File(out_h5) as h5:
-            assert h5["times"].shape == (ns0,)
+            assert h5["times_samples"].shape == (ns0,)
             assert h5["channels"].shape == (ns0,)
             assert h5["point_source_localizations"].shape == (ns0, 4)
             assert np.array_equal(h5["channel_index"][:], channel_index)

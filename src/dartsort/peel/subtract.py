@@ -145,11 +145,11 @@ class SubtractionPeeler(BasePeeler):
         )
 
         # add in chunk_start_samples
-        times = subtraction_result.times + chunk_start_samples
-        
+        times_samples = subtraction_result.times_samples + chunk_start_samples
+
         peel_result = dict(
             n_spikes=subtraction_result.n_spikes,
-            times=times,
+            times_samples=times_samples,
             channels=subtraction_result.channels,
             collisioncleaned_waveforms=subtraction_result.collisioncleaned_waveforms,
         )
@@ -243,7 +243,7 @@ ChunkSubtractionResult = namedtuple(
     "ChunkSubtractionResult",
     [
         "n_spikes",
-        "times",
+        "times_samples",
         "channels",
         "collisioncleaned_waveforms",
         "residual",
@@ -294,26 +294,28 @@ def subtract_chunk(
     for threshold in detection_thresholds:
         # -- detect and extract waveforms
         # detection has more args which we don't expose right now
-        times, channels = detect_and_deduplicate(
+        times_samples, channels = detect_and_deduplicate(
             residual[:, :-1],
             threshold,
             dedup_channel_index=spatial_dedup_channel_index,
             peak_sign=peak_sign,
         )
-        if not times.numel():
+        if not times_samples.numel():
             continue
 
         # throw away spikes which cannot be subtracted
-        keep = (times >= trough_offset_samples) & (times < max_trough_time)
-        times = times[keep]
-        if not times.numel():
+        keep = (times_samples >= trough_offset_samples) & (
+            times_samples < max_trough_time
+        )
+        times_samples = times_samples[keep]
+        if not times_samples.numel():
             continue
         channels = channels[keep]
 
         # read waveforms, denoise, and test residnorm decrease
         waveforms = spiketorch.grab_spikes(
             residual,
-            times,
+            times_samples,
             channels,
             channel_index,
             trough_offset=trough_offset_samples,
@@ -333,15 +335,15 @@ def subtract_chunk(
             sub_norm = torch.linalg.norm(residuals, dim=(1, 2))
             keep = sub_norm < orig_norm - residnorm_decrease_threshold
             waveforms = waveforms[keep]
-            times = times[keep]
+            times_samples = times_samples[keep]
             channels = channels[keep]
             for k in features:
                 features[k] = features[k][keep]
-            if not times.numel():
+            if not times_samples.numel():
                 continue
 
         # store this threshold's outputs
-        spike_times.append(times)
+        spike_times.append(times_samples)
         spike_channels.append(channels)
         subtracted_waveforms.append(waveforms)
         spike_features.append(features)
@@ -349,7 +351,7 @@ def subtract_chunk(
         # -- subtract in place
         spiketorch.subtract_spikes_(
             residual,
-            times,
+            times_samples,
             channels,
             channel_index,
             waveforms,
@@ -358,7 +360,7 @@ def subtract_chunk(
             already_padded=True,
             in_place=True,
         )
-        del times, channels, waveforms, features
+        del times_samples, channels, waveforms, features
 
     # check if we got no spikes
     if not any(t.numel() for t in spike_times):
@@ -384,7 +386,7 @@ def subtract_chunk(
         del this_feature_list
     del spike_features_list
 
-    # discard spikes in the margins and sort times for caller
+    # discard spikes in the margins and sort times_samples for caller
     keep = torch.nonzero(
         (spike_times >= left_margin)
         & (spike_times < traces.shape[0] - right_margin)
@@ -415,7 +417,7 @@ def subtract_chunk(
     )
     collisioncleaned_waveforms += subtracted_waveforms
 
-    # offset spike times according to margin
+    # offset spike times_samples according to margin
     spike_times -= left_margin
 
     # strip margin and padding channel off the residual
@@ -423,7 +425,7 @@ def subtract_chunk(
 
     return ChunkSubtractionResult(
         n_spikes=spike_times.numel(),
-        times=spike_times,
+        times_samples=spike_times,
         channels=spike_channels,
         collisioncleaned_waveforms=collisioncleaned_waveforms,
         residual=residual,
@@ -441,7 +443,7 @@ def empty_chunk_subtraction_result(
     empty_times_or_chans = torch.empty((0,), dtype=torch.long)
     return ChunkSubtractionResult(
         n_spikes=0,
-        times=empty_times_or_chans,
+        times_samples=empty_times_or_chans,
         channels=empty_times_or_chans,
         collisioncleaned_waveforms=empty_waveforms,
         residual=residual,
