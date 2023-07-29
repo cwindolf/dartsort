@@ -14,7 +14,7 @@ class GrabAndFeaturize(BasePeeler):
         recording,
         channel_index,
         featurization_pipeline,
-        times,
+        times_samples,
         channels,
         trough_offset_samples=42,
         spike_length_samples=121,
@@ -33,7 +33,7 @@ class GrabAndFeaturize(BasePeeler):
         )
         self.trough_offset_samples = trough_offset_samples
         self.spike_length_samples = spike_length_samples
-        self.register_buffer("times", times)
+        self.register_buffer("times_samples", times_samples)
         self.register_buffer("channels", channels)
 
     def peel_chunk(
@@ -46,17 +46,20 @@ class GrabAndFeaturize(BasePeeler):
     ):
         assert not return_residual
         in_chunk = torch.nonzero(
-            (self.times >= chunk_start_samples)
-            & (self.times < chunk_start_samples + self.chunk_length_samples)
+            (self.times_samples >= chunk_start_samples)
+            & (
+                self.times_samples
+                < chunk_start_samples + self.chunk_length_samples
+            )
         ).squeeze()
         if not in_chunk.numel():
             return dict(n_spikes=0)
-        times = self.times[in_chunk] - chunk_start_samples
+        times_samples = self.times_samples[in_chunk] - chunk_start_samples
         channels = self.channels[in_chunk]
 
         waveforms = spiketorch.grab_spikes(
             traces,
-            times,
+            times_samples,
             channels,
             self.channel_index,
             trough_offset=self.trough_offset_samples,
@@ -67,7 +70,7 @@ class GrabAndFeaturize(BasePeeler):
 
         return dict(
             n_spikes=in_chunk.numel(),
-            times=times,
+            times_samples=times_samples,
             channels=channels,
             collisioncleaned_waveforms=waveforms,
         )

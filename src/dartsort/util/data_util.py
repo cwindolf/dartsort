@@ -1,11 +1,13 @@
 from collections import namedtuple
+from warnings import warn
 
 import h5py
 import numpy as np
-from spikeinterface.core import NumpySorting, get_random_data_chunks
-from dartsort.detect import detect_and_deduplicate
-from warnings import warn
 import torch
+from dartsort.detect import detect_and_deduplicate
+from spikeinterface.core import NumpySorting, get_random_data_chunks
+
+from .waveform_util import make_channel_index
 
 # this is a data type used in the peeling code to store info about
 # the datasets which are being computed
@@ -22,98 +24,127 @@ class DARTsortSorting:
     Export me to a SpikeInterface NumpySorting with .to_numpy_sorting()
     """
 
-    def __init__(self, times, channels, labels=None, sampling_frequency=30000):
+    def __init__(
+        self, times_samples, channels, labels=None, sampling_frequency=30000
+    ):
         """
         Arguments
         ---------
-        times : np.array
-            Array of spike times in samples
+        times_samples : np.array
+            Array of spike times_samples in samples
         channels : np.array
             Array of spike detection channel indices
         labels : optional, np.array
             Array of unit labels
         """
-        self.times = np.array(times, dtype=int)
+        self.times_samples = np.array(times_samples, dtype=int)
         self.channels = channels
         self.labels = labels
         self.sampling_frequency = sampling_frequency
         if labels is None:
-            self.labels = np.zeros_like(times)
+            self.labels = np.zeros_like(times_samples)
 
         if channels is not None:
             self.channels = np.array(channels, dtype=int)
-            assert self.times.shape == self.channels.shape
+            assert self.times_samples.shape == self.channels.shape
 
     def to_numpy_sorting(self):
         return NumpySorting.from_times_labels(
-            times_list=self.times,
+            times_list=self.times_samples,
             labels_list=self.labels,
             sampling_frequency=self.sampling_frequency,
         )
 
     def __str__(self):
         name = self.__class__.__name__
-        nspikes = self.times.size
+        nspikes = self.times_samples.size
         units = np.unique(self.labels)
         units = units[units >= 0]
         unit_str = f"{units.size} unit" + ("s" if units.size > 1 else "")
         return f"{name}: {nspikes} spikes, {unit_str}."
 
+    def __repr__(self):
+        return str(self)
+
     def __len__(self):
-        return self.times.size
+        return self.times_samples.size
 
     @classmethod
     def from_peeling_hdf5(
         cls,
         peeling_hdf5_filename,
-        times_dataset="times",
+        times_samples_dataset="times_samples",
         channels_dataset="channels",
         labels_dataset="labels",
     ):
         channels = labels = None
         with h5py.File(peeling_hdf5_filename, "r") as h5:
-            times = h5[times_dataset][()]
+            times_samples = h5[times_samples_dataset][()]
             sampling_frequency = h5["sampling_frequency"][()]
             if channels_dataset in h5:
                 channels = h5[channels_dataset][()]
             if labels_dataset in h5:
                 labels = h5[labels_dataset][()]
         return cls(
-            times,
+            times_samples,
             channels=channels,
             labels=labels,
             sampling_frequency=sampling_frequency,
         )
 
 
-def check_recording(rec, threshold=5, 
-                    expected_value_range=1e4,
-                    expected_spikes_per_sec=1e4):
-    """
-    Sanity check spike detection rate and data range of input recording.
-    """
-    
+def check_recording(
+    rec,
+    threshold=5,
+    dedup_spatial_radius=75,
+    expected_value_range=1e4,
+    expected_spikes_per_sec=10_000,
+    num_chunks_per_segment=5,
+):
+    """Sanity check spike detection rate and data range of input recording."""
+
     # grab random traces from throughout rec
-    random_chunks = get_random_data_chunks(rec, num_chunks_per_segment=5,
-                                           chunk_size=int(rec.sampling_frequency),
-                                           concatenated=False)
-    
+    random_chunks = get_random_data_chunks(
+        rec,
+        num_chunks_per_segment=num_chunks_per_segment,
+        chunk_size=int(rec.sampling_frequency),
+        concatenated=False,
+    )
+    dedup_channel_index = None
+    if dedup_spatial_radius:
+        dedup_channel_index = make_channel_index(
+            rec.get_channel_locations(), dedup_spatial_radius
+        )
+
     # run detection and compute spike detection rate and data range
     spike_rates = []
     for chunk in random_chunks:
-        times, _ = detect_and_deduplicate(torch.tensor(chunk), threshold=threshold,
-                                                 peak_sign="both")
+        times, _ = detect_and_deduplicate(
+            torch.tensor(chunk),
+            threshold=threshold,
+            peak_sign="both",
+            dedup_channel_index=torch.tensor(dedup_channel_index),
+        )
         spike_rates.append(times.shape[0])
 
-    avg_detections_per_second = sum(spike_rates) / 5
+    avg_detections_per_second = np.mean(spike_rates)
     max_abs = np.max(random_chunks)
 
     if avg_detections_per_second > expected_spikes_per_sec:
-        warn(f"Average spike detections per second: {avg_detections_per_second}."
-            "Running on a full dataset could lead to an out-of-memory error."
-            "(Is this data normalized?)", RuntimeWarning)
+        warn(
+            f"Detected {avg_detections_per_second:0.1f} spikes/s, which is "
+            "large. You may want to check that your data has been preprocessed, "
+            "including standardization. If it seems right, then you may need to "
+            "shrink the chunk_length_samples parameters in the configuration if "
+            "you experience memory issues.",
+            RuntimeWarning,
+        )
 
     if max_abs > expected_value_range:
-        warn(f"Data range exceeds |1e4|.", RuntimeWarning)
+        warn(
+            f"Recording values exceed |{expected_value_range}|. You may want to "
+            "check that your data has been preprocessed, including standardization.",
+            RuntimeWarning,
+        )
 
     return avg_detections_per_second, max_abs
