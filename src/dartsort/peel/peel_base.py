@@ -198,7 +198,7 @@ class BasePeeler(torch.nn.Module):
         # they should return a dictionary with keys:
         #  - n_spikes
         #  - collisioncleaned_waveforms
-        #  - times (relative to start of traces)
+        #  - times_samples (relative to start of traces)
         #  - channels
         #  - residual if requested
         #  - arbitrary subclass-specific stuff which should have keys in out_datasets()
@@ -220,7 +220,8 @@ class BasePeeler(torch.nn.Module):
     # in featurization_pipeline
     def out_datasets(self):
         datasets = [
-            SpikeDataset(name="times", shape_per_spike=(), dtype=int),
+            SpikeDataset(name="times_samples", shape_per_spike=(), dtype=int),
+            SpikeDataset(name="times_seconds", shape_per_spike=(), dtype=int),
             SpikeDataset(name="channels", shape_per_spike=(), dtype=int),
         ]
         for transformer in self.featurization_pipeline.transformers:
@@ -273,6 +274,12 @@ class BasePeeler(torch.nn.Module):
             k: v.cpu().numpy() if torch.is_tensor(v) else v
             for k, v in chunk_result.items()
         }
+
+        # add times in seconds
+        segment = self.recording._recording_segments[0]
+        chunk_result["times_seconds"] = segment.sample_index_to_time(
+            chunk_result["times_samples"]
+        )
         return chunk_result
 
     def gather_chunk_result(
@@ -427,7 +434,7 @@ class BasePeeler(torch.nn.Module):
         elif exists:
             # exists and not overwrite
             output_h5 = h5py.File(output_hdf5_filename, "r+")
-            n_spikes = len(output_h5["times"])
+            n_spikes = len(output_h5["times_samples"])
         else:
             # didn't exist, so overwrite does not matter
             output_h5 = h5py.File(output_hdf5_filename, "w")
