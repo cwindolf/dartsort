@@ -1,30 +1,43 @@
 """Utility functions for dealing with drifting channels
 
-The main concept here is the "extended geometry" made by the
-function `extended_geometry`. The idea is to extend the
+The main concept here is the "registered geometry" made by the
+function `registered_geometry`. The idea is to extend the
 probe geometry to cover the range of drift experienced in the
 recording. The probe's pitch (unit at which its geometry repeats
 vertically) is the integer unit at which we shift channels when
-extending the geometry, so that the extended probe contains the
+extending the geometry, so that the registered probe contains the
 original probe as a subset, as well as copies of the probe shifted
 by integer numbers of pitches. As many shifted copies are created
 as needed to capture all the drift.
 """
 import numpy as np
+from scipy.spatial import KDTree
+from scipy.spatial.distance import pdist
 
 from .waveform_util import get_pitch
 
-# -- extended geometry and templates helpers
+# -- registered geometry and templates helpers
 
 
-def extended_geometry(geom, motion_est):
+def registered_geometry(
+    geom,
+    motion_est=None,
+    upward_drift=None,
+    downward_drift=None,
+):
     """Extend the probe's channel positions according to the range of motion"""
     assert geom.ndim == 2
     pitch = get_pitch(geom)
 
     # figure out how much upward and downward motion there is
-    upward_drift = max(0, motion_est.displacement.max())
-    downward_drift = max(0, -motion_est.displacement.min())
+    if motion_est is not None:
+        upward_drift = max(0, motion_est.displacement.max())
+        downward_drift = max(0, -motion_est.displacement.min())
+    else:
+        assert upward_drift is not None
+        assert downward_drift is not None
+    assert upward_drift >= 0
+    assert downward_drift >= 0
 
     # pad with an integral number of pitches for simplicity
     # the spikes' registered positions are the result of subtracting
@@ -34,24 +47,53 @@ def extended_geometry(geom, motion_est):
     # and the bottom according to the upward drift!
     pitches_pad_up = int(np.ceil(downward_drift / pitch))
     pitches_pad_down = int(np.ceil(upward_drift / pitch))
-    shifted_geoms = [
-        geom + [0, pitch * k]
-        for k in range(-pitches_pad_down, pitches_pad_up + 1)
-    ]
 
-    # all extended site positions
-    unique_shifted_positions = np.unique(np.concatenate(shifted_geoms), axis=0)
+    # we have to be careful about floating point error here
+    # two sites may be different due to floating point error
+    # we know they are the same if their distance is smaller than:
+    min_distance = pdist(geom, metric="sqeuclidean").min() / 2
+
+    # find all registered site positions
+    # TODO make this not quadratic
+    unique_shifted_positions = list(geom)
+    for shift in range(-pitches_pad_down, pitches_pad_up + 1):
+        shifted_geom = geom + [0, pitch * shift]
+        for site in shifted_geom:
+            if not any(
+                np.square(p - site).sum() < min_distance
+                for p in unique_shifted_positions
+            ):
+                unique_shifted_positions.append(site)
+    unique_shifted_positions = np.array(unique_shifted_positions)
+
     # order by depth first, then horizontal position (unique goes the other way)
-    extended_geom = unique_shifted_positions[
+    registered_geom = unique_shifted_positions[
         np.lexsort(unique_shifted_positions.T)
     ]
+    assert np.isclose(get_pitch(registered_geom), pitch)
 
-    return extended_geom
+    return registered_geom
 
 
-def occupied_extended_channel_index(times_s, channels, labels, motion_est):
-    """Figure out which extended channels each unit appears on"""
-    pass
+def registered_channels(channels, geom, n_pitches_shift, registered_geom):
+    """What registered channels do `channels` land on after shifting by `n_pitches_shift`?"""
+    pitch = get_pitch(geom)
+    shifted_positions = geom.copy()[channels]
+    shifted_positions[:, 1] += n_pitches_shift * pitch
+
+    registered_kdtree = KDTree(registered_geom)
+    min_distance = pdist(registered_geom, metric="sqeuclidean").min() / 2
+    distances, registered_channels = registered_kdtree.query(
+        shifted_positions, distance_upper_bound=min_distance
+    )
+    # make sure there were no unmatched points
+    assert np.all(registered_channels < len(registered_geom))
+
+    return registered_channels
+
+
+def registered_channel_index(channel_index, geom, registered_geom):
+    """ """
 
 
 def get_spike_pitch_shifts(times_s, depths_um, geom, motion_est):
@@ -59,7 +101,7 @@ def get_spike_pitch_shifts(times_s, depths_um, geom, motion_est):
     pass
 
 
-def extended_average():
+def registered_average():
     pass
 
 
@@ -70,6 +112,7 @@ def shifted_channel_neighborhood(
     n_pitches_shift,
     target_channels,
     geom,
+    registered_geom=None,
 ):
     """Determine a drifting channel neighborhood
 
@@ -93,10 +136,13 @@ def shifted_channel_neighborhood(
     shifted_channels : 1d integer array of size == target_channels.size
     """
     pitch = get_pitch(geom)
-    target_positions = geom[target_channels] + [0, n_pitches_shift * pitch]
+    if registered_geom is None:
+        registered_geom = geom
+    offset = [0, n_pitches_shift * pitch]
+    target_positions = registered_geom[target_channels] + offset
     shifted_channels = []
     for target in target_positions:
-        match = np.flatnonzero((geom == target).all(axis=1))
+        match = np.flatnonzero(np.isclose(geom, target).all(axis=1))
         if not match.size:
             shifted_channels.append(len(geom))
         elif match.size == 1:
@@ -115,6 +161,7 @@ def get_waveforms_on_shifted_channel_subset(
     target_channels,
     n_pitches_shift,
     geom,
+    registered_geom=None,
     fill_value=np.nan,
 ):
     """Load a set of waveforms on a static subset of channels, even under drift
@@ -160,6 +207,8 @@ def get_waveforms_on_shifted_channel_subset(
     assert n_pitches_shift.shape == (n_spikes,)
     assert geom.ndim == 2 and geom.shape[0] == n_channels_tot
     assert target_channels.ndim == 1
+    if registered_geom is None:
+        registered_geom = geom
 
     out_waveforms = np.full(
         (n_spikes, t, target_channels.size),
@@ -177,6 +226,7 @@ def get_waveforms_on_shifted_channel_subset(
             pitch_shift,
             target_channels,
             geom,
+            registered_geom=registered_geom,
         )
         out_waveforms[in_batch] = get_waveforms_on_fixed_channel_subset(
             waveforms[in_batch],
