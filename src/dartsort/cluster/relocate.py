@@ -23,11 +23,14 @@ def relocated_waveforms_on_fixed_channel_subset(
     xyza_from,
     z_to,
     geom,
+    registered_geom=None,
     fill_value=np.nan,
 ):
     """Compute relocated waveforms"""
     pitch = get_pitch(geom)
     x, y, z_from, alpha = xyza_from.T
+    if registered_geom is None:
+        registered_geom = geom
 
     # -- handle coarse drift (larger than a pitch)
     displacement = z_to - z_from
@@ -43,6 +46,7 @@ def relocated_waveforms_on_fixed_channel_subset(
         target_channels,
         n_pitches_shift,
         geom,
+        registered_geom=registered_geom,
         fill_value=fill_value,
     )
 
@@ -50,10 +54,10 @@ def relocated_waveforms_on_fixed_channel_subset(
     # account for the already applied coarse drift correction
     z_from = z_from - pitch * n_pitches_shift
     original_amplitudes = point_source_amplitude_vectors(
-        x, y, z_from, alpha, geom, channels=target_channels
+        x, y, z_from, alpha, registered_geom, channels=target_channels
     )
     target_amplitudes = point_source_amplitude_vectors(
-        x, y, z_to, alpha, geom, channels=target_channels
+        x, y, z_to, alpha, registered_geom, channels=target_channels
     )
     rescaling = target_amplitudes / original_amplitudes
     shifted_waveforms *= rescaling[:, None, :]
