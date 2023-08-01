@@ -19,7 +19,7 @@ from . import cluster_util
 def cluster_chunk(
     peeling_hdf5_filename,
     motion_est=None,
-    strategy="registered_channel",
+    strategy="closest_registered_channels",
 ):
     """Cluster spikes from a single segment
 
@@ -27,22 +27,22 @@ def cluster_chunk(
     ---------
     peeling_hdf5_filename : str or Path
     motion_est : optional dredge.motion_util.MotionEstimate
-    strategy : one of "registered_channel" or other choices tba
+    strategy : one of "closest_registered_channels" or other choices tba
 
     Returns
     -------
     sorting : DARTsortSorting
     """
-    assert strategy in ("registered_channel",)
+    assert strategy in ("closest_registered_channels",)
 
-    if strategy == "registered_channel":
+    if strategy == "closest_registered_channels":
         with h5py.File(peeling_hdf5_filename, "r") as h5:
             times_samples = h5["times_samples"][:]
             channels = h5["channels"][:]
             times_s = h5["times_seconds"][:]
             xyza = h5["point_source_localizations"][:]
             geom = h5["geom"][:]
-        labels = cluster_util.registered_channels(
+        labels = cluster_util.closest_registered_channels(
             times_s, xyza[:, 0], xyza[:, 2], geom, motion_est
         )
         sorting = DARTsortSorting(
