@@ -25,14 +25,29 @@ def registered_geometry(
     upward_drift=None,
     downward_drift=None,
 ):
-    """Extend the probe's channel positions according to the range of motion"""
+    """Extend the probe's channel positions according to the range of motion
+
+    The probe will be extended upwards according to the amount of upward
+    drift and downward according to the amount of downward drift, where
+    here we mean drift of the probe relative to the spikes.
+
+    But, the convention for motion estimation is the opposite: motion of
+    the spikes relative to the probe. In other words, the displacement
+    in motion_est is such that
+        registered z = original z - displacement
+    So, if the probe moved up from t1->t2 (so that z(t2) < z(t1), since z
+    is the spike's absolute position on the probe), this would register
+    as a negative displacement. So, upward motion of the probe means a
+    negative displacement value estimated from spikes!
+    """
     assert geom.ndim == 2
     pitch = get_pitch(geom)
 
     # figure out how much upward and downward motion there is
     if motion_est is not None:
-        upward_drift = max(0, motion_est.displacement.max())
-        downward_drift = max(0, -motion_est.displacement.min())
+        # these look flipped! why? see __doc__
+        downward_drift = max(0, motion_est.displacement.max())
+        upward_drift = max(0, -motion_est.displacement.min())
     else:
         assert upward_drift is not None
         assert downward_drift is not None
@@ -40,13 +55,8 @@ def registered_geometry(
     assert downward_drift >= 0
 
     # pad with an integral number of pitches for simplicity
-    # the spikes' registered positions are the result of subtracting
-    # estimated motion. so, a spike at the bottom of the probe (z=0)
-    # could move down as far as z=-upward_drift
-    # that's why we pad the top according to the downward drift
-    # and the bottom according to the upward drift!
-    pitches_pad_up = int(np.ceil(downward_drift / pitch))
-    pitches_pad_down = int(np.ceil(upward_drift / pitch))
+    pitches_pad_up = int(np.ceil(upward_drift / pitch))
+    pitches_pad_down = int(np.ceil(downward_drift / pitch))
 
     # we have to be careful about floating point error here
     # two sites may be different due to floating point error
@@ -139,10 +149,11 @@ def shifted_channel_neighborhood(
     if registered_geom is None:
         registered_geom = geom
     offset = [0, n_pitches_shift * pitch]
-    target_positions = registered_geom[target_channels] + offset
+    shifted_geom = geom + offset
+    target_positions = registered_geom[target_channels]
     shifted_channels = []
     for target in target_positions:
-        match = np.flatnonzero(np.isclose(geom, target).all(axis=1))
+        match = np.flatnonzero(np.isclose(shifted_geom, target).all(axis=1))
         if not match.size:
             shifted_channels.append(len(geom))
         elif match.size == 1:
@@ -278,6 +289,7 @@ def get_waveforms_on_fixed_channel_subset(
     n_channels_tot, c_ = channel_index.shape
     assert c_ == c
     assert main_channels.shape == (n_spikes,)
+    assert main_channels.dtype.kind == "i"
     assert target_channels.ndim == 1
 
     out_waveforms = np.full(
