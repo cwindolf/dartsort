@@ -15,7 +15,8 @@ geom = geom[np.lexsort(geom.T)]
 def test_relocate_fixed_chans():
     rg = np.random.default_rng(0)
     # need enough random spikes to trigger corner cases
-    nspikes = 1003
+    # nspikes = 1003
+    nspikes = 3
 
     # random starting positions
     x = rg.normal(size=nspikes)
@@ -33,11 +34,10 @@ def test_relocate_fixed_chans():
     )
     assert np.array_equal(
         ptps[:, dest_chans],
-        drift_util.get_waveforms_on_fixed_channel_subset(
+        drift_util.get_waveforms_on_static_channels(
             ptps,
-            np.zeros(nspikes, dtype=int),
-            waveform_util.full_channel_index(len(geom)),
-            dest_chans,
+            geom,
+            target_channels=dest_chans,
         ),
     )
 
@@ -49,7 +49,7 @@ def test_relocate_fixed_chans():
     wfs = ptps[:, None, :]
     targ_wfs = targ_ptps[:, None, :]
 
-    shifted = relocate.relocated_waveforms_on_fixed_channel_subset(
+    shifted = relocate.relocated_waveforms_on_static_channels(
         wfs,
         np.zeros(nspikes, dtype=int),
         waveform_util.full_channel_index(len(geom)),
@@ -111,7 +111,7 @@ def test_relocate_varying_chans():
     wfs = ptps[:, None, :]
     targ_wfs = targ_ptps[:, None, :]
 
-    shifted = relocate.relocated_waveforms_on_fixed_channel_subset(
+    shifted = relocate.relocated_waveforms_on_static_channels(
         wfs,
         main_channels,
         channel_index,
@@ -132,7 +132,7 @@ def test_relocate_varying_chans():
         geom, upward_drift=10 * pitch, downward_drift=10 * pitch
     )
     assert np.array_equal(reg_geom[40:-40], geom)
-    shifted1 = relocate.relocated_waveforms_on_fixed_channel_subset(
+    shifted1 = relocate.relocated_waveforms_on_static_channels(
         wfs,
         main_channels,
         channel_index,

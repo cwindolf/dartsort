@@ -92,7 +92,7 @@ def registered_channels(channels, geom, n_pitches_shift, registered_geom):
     shifted_positions[:, 1] += n_pitches_shift * pitch
 
     registered_kdtree = KDTree(registered_geom)
-    min_distance = pdist(registered_geom, metric="sqeuclidean").min() / 2
+    min_distance = pdist(registered_geom).min() / 2
     distances, registered_channels = registered_kdtree.query(
         shifted_positions, distance_upper_bound=min_distance
     )
@@ -102,210 +102,169 @@ def registered_channels(channels, geom, n_pitches_shift, registered_geom):
     return registered_channels
 
 
-def registered_channel_index(channel_index, geom, registered_geom):
-    """ """
-
-
-def get_spike_pitch_shifts(times_s, depths_um, geom, motion_est):
-    """"""
-    pass
-
-
-def registered_average():
-    pass
-
-
-# -- waveform channel neighborhood shifting helpers
-
-
-def shifted_channel_neighborhood(
+def registered_average(
+    waveforms,
     n_pitches_shift,
-    target_channels,
     geom,
-    registered_geom=None,
+    registered_geom,
+    main_channels=None,
+    channel_index=None,
+    reducer=np.nanmedian,
+    pad_value=0.0,
 ):
-    """Determine a drifting channel neighborhood
+    static_waveforms = get_waveforms_on_static_channels(
+        waveforms,
+        geom,
+        main_channels=main_channels,
+        channel_index=channel_index,
+        n_pitches_shift=n_pitches_shift,
+        registered_geom=registered_geom,
+        fill_value=np.nan,
+    )
 
-    If the channels in target_channels shifted by n_pitches_shift
-    pitches, what channels would they land on?
+    # take the mean and return
+    average = reducer(static_waveforms, axis=0)
+    if not np.isnan(pad_value):
+        average = np.nan_to_num(average, copy=False, nan=pad_value)
 
-    These are the channels at the positions of the target_channels,
-    displaced by n_pitches_shift * pitch. These might not exist,
-    so the shifted channel neighborhood could be smaller than the
-    target channel neighborhood. In that case, channels which were
-    missed are replaced with n_channels_tot.
+    return average
 
-    Arguments
-    ---------
-    n_pitches_shift : int
-    target_channels : 1d integer array
-    geom : (n_channels_tot, 2) array
 
-    Returns
-    -------
-    shifted_channels : 1d integer array of size == target_channels.size
+def get_spike_pitch_shifts(
+    depths_um, geom, registered_depths_um=None, times_s=None, motion_est=None
+):
+    """Figure out coarse pitch shifts based on spike positions
+
+    Determine the number of pitches the probe would need to shift in
+    order to coarsely align a waveform to its registered position.
     """
     pitch = get_pitch(geom)
-    if registered_geom is None:
-        registered_geom = geom
-    offset = [0, n_pitches_shift * pitch]
-    shifted_geom = geom + offset
-    target_positions = registered_geom[target_channels]
-    shifted_channels = []
-    for target in target_positions:
-        match = np.flatnonzero(np.isclose(shifted_geom, target).all(axis=1))
-        if not match.size:
-            shifted_channels.append(len(geom))
-        elif match.size == 1:
-            shifted_channels.append(match[0])
-        else:
-            assert False
+    if registered_depths_um is None:
+        displacement = -motion_est.disp_at_s(times_s, depths_um)
+    else:
+        displacement = registered_depths_um - depths_um
 
-    shifted_channels = np.array(shifted_channels)
-    return shifted_channels
+    # if displacement > 0, then the registered position is below the original
+    # and, to be conservative, round towards 0 rather than using //
+    n_pitches_shift = (displacement / pitch).astype(int)
+
+    return n_pitches_shift
 
 
-def get_waveforms_on_shifted_channel_subset(
+# -- waveform channel neighborhood shifting
+
+
+def get_waveforms_on_static_channels(
     waveforms,
-    main_channels,
-    channel_index,
-    target_channels,
-    n_pitches_shift,
     geom,
+    main_channels=None,
+    channel_index=None,
+    target_channels=None,
+    n_pitches_shift=None,
     registered_geom=None,
     fill_value=np.nan,
 ):
-    """Load a set of waveforms on a static subset of channels, even under drift
-
-    waveforms[i] lives on the channels in channel_index[main_channels[i]], and we
-    want to load it on a target set of channels `target_channels`. That's easy to
-    do without drift: just restrict to the intersection of target_channels and
-    channel_index[main_channels[i]] (say, using waveform_util.get_channel_subset).
-    But with drift, we no longer want to load a static subset of channels. Rather,
-    each waveform needs to be loaded on a subset of channels determined by
-    n_pitches_shift[i], obtained by the function `shifted_channel_neighborhood`
-
-    This function restricts each waveform to the intersection of its channels,
-    channel_index[main_channels[i]], and the channels at the positions of
-    target_channels shifted vertically by n_pitches_shift[i] * pitch
+    """Load a set of drifting waveforms on a static set of channels
 
     Arguments
     ---------
     waveforms : (n_spikes, t (optional), c) array
+    geom : (n_channels_tot, probe_dim) array
+        Original channel positions
     main_channels : int (n_spikes,) array
+        `waveforms[i]` lives on channels `channel_index[main_channels[i]]`
+        in the original geometry array `geom`
     channel_index : int (n_channels_tot, c) array
     target_channels : int (n_channels_target,) array
+        Optional subset of channels to restrict to
+        `waveforms[i]` will be restricted to the intersection of its channels
+        and this channel subset, after correcting from drift
     n_pitches_shift : int (n_spikes,) array
-    geom : (n_channels_tot, probe_dim) array
+        The number of probe pitches (see `get_pitch`) by which each spike's
+        channel neighborhood will be shifted before matching with target channels
+    registered_geom : (n_registered_channels, probe_dim) array
+        If supplied, the target channel positions are loaded from here
     fill_value : float
         The value to impute when a target channel does not land on a channel
         when shifted according to n_pitches_shift
 
     Returns
     -------
-    out_waveforms : (n_spikes, t (optional), n_channels_target) array
+    static_waveforms : (n_spikes, t (optional), n_channels_target) array
     """
+    # this supports amplitude vectors (i.e., 2d arrays)
+    two_d = waveforms.ndim == 2
+
     # validate inputs to avoid confusing errors
     assert waveforms.ndim in (2, 3)
-    # this also supports amplitude vectors (i.e., 2d arrays)
-    two_d = waveforms.ndim == 2
     if two_d:
         waveforms = waveforms[:, None, :]
     n_spikes, t, c = waveforms.shape
-    n_channels_tot, c_ = channel_index.shape
-    assert c_ == c
-    assert main_channels.shape == (n_spikes,)
-    assert n_pitches_shift.shape == (n_spikes,)
-    assert geom.ndim == 2 and geom.shape[0] == n_channels_tot
-    assert target_channels.ndim == 1
-    if registered_geom is None:
-        registered_geom = geom
+    assert geom.ndim == 2
+    n_channels_tot = geom.shape[0]
+    if main_channels is not None:
+        assert channel_index is not None
+        n_channels_tot_, c_ = channel_index.shape
+        assert c_ == c and n_channels_tot_ == n_channels_tot
+        assert main_channels.shape == (n_spikes,)
+    else:
+        # if per-wf channels are not supplied, then we assume
+        # that waveforms live on all channels
+        assert c == n_channels_tot
+    if n_pitches_shift is not None:
+        assert n_pitches_shift.shape == (n_spikes,)
 
-    out_waveforms = np.full(
-        (n_spikes, t, target_channels.size),
-        fill_value,
+    # grab the positions of the channels that we are targeting
+    target_geom = geom
+    if registered_geom is not None:
+        target_geom = registered_geom
+    if target_channels is not None:
+        target_geom = target_geom[target_channels]
+
+    # figure out the positions of the channels that the waveforms live on
+    pitch = get_pitch(geom)
+    if n_pitches_shift is None:
+        n_pitches_shift = np.zeros(n_spikes)
+    shifts = np.c_[np.zeros(n_spikes), n_pitches_shift * pitch]
+    if main_channels is None:
+        # the case where all waveforms live on all channels, but
+        # these channels may be shifting
+        # shape is n_spikes, len(geom), spatial dim
+        moving_positions = geom[None, :, :] + shifts[:, None, :]
+    else:
+        # the case where each waveform lives on its own channels
+        # nans will never be matched in k-d query below
+        padded_geom = np.pad(
+            geom.astype(float), [(0, 1), (0, 0)], constant_values=np.nan
+        )
+        # shape is n_spikes, c, spatial dim
+        moving_positions = (
+            padded_geom[channel_index[main_channels]] + shifts[:, None, :]
+        )
+
+    # find where each moving position lands using a k-d tree
+    target_kdtree = KDTree(target_geom)
+    match_distance = pdist(geom).min() / 2
+    _, shifted_channels = target_kdtree.query(
+        moving_positions.reshape(n_spikes * c, geom.shape[1]),
+        distance_upper_bound=match_distance,
+    )
+    shifted_channels = shifted_channels.reshape(n_spikes, c)
+
+    # scatter the waveforms into their static channel neighborhoods
+    n_static_channels = len(target_geom)
+    static_waveforms = np.full(
+        (n_spikes, t, n_static_channels + 1),
+        fill_value=fill_value,
         dtype=waveforms.dtype,
     )
-
-    # figure out what shifts are being performed
-    pitches_shift_uniq = np.unique(n_pitches_shift)
-
-    # restrict each set of waveforms to the correct shifted channels
-    for i, pitch_shift in enumerate(pitches_shift_uniq):
-        in_batch = np.flatnonzero(n_pitches_shift == pitch_shift)
-        shifted_target_channels = shifted_channel_neighborhood(
-            pitch_shift,
-            target_channels,
-            geom,
-            registered_geom=registered_geom,
-        )
-        out_waveforms[in_batch] = get_waveforms_on_fixed_channel_subset(
-            waveforms[in_batch],
-            main_channels=main_channels[in_batch],
-            channel_index=channel_index,
-            target_channels=shifted_target_channels,
-            fill_value=fill_value,
-        )
+    spike_ix = np.arange(n_spikes)[:, None, None]
+    time_ix = np.arange(t)[None, :, None]
+    chan_ix = shifted_channels[:, None, :]
+    static_waveforms[spike_ix, time_ix, chan_ix] = waveforms
+    static_waveforms = static_waveforms[:, :, :n_static_channels]
 
     if two_d:
-        out_waveforms = out_waveforms[:, 0, :]
+        static_waveforms = static_waveforms[:, 0, :]
 
-    return out_waveforms
-
-
-def get_waveforms_on_fixed_channel_subset(
-    waveforms,
-    main_channels,
-    channel_index,
-    target_channels,
-    fill_value=np.nan,
-):
-    """Restrict waveforms on varying channels to a fixed channel neighborhood
-
-    waveforms[i] lived on channel_index[main_channels[i]]?
-    Well, now it lives on target_channels with its friends j \\neq i.
-
-    Arguments
-    ---------
-    waveforms : (n_spikes, t (optional), c) array
-    main_channels : int (n_spikes,) array
-    channel_index : int (n_channels_tot, c) array
-    target_channels : int (n_channels_target,) array
-    fill_value : float
-        The value to impute where a target channel is not present in
-        channel_index[main_channels[i]]
-
-    Returns
-    -------
-    out_waveforms : (n_spikes, t (optional), n_channels_target) array
-    """
-    # validate inputs to avoid confusing errors
-    assert waveforms.ndim in (2, 3)
-    # this also supports amplitude vectors (i.e., 2d arrays)
-    two_d = waveforms.ndim == 2
-    if two_d:
-        waveforms = waveforms[:, None, :]
-    n_spikes, t, c = waveforms.shape
-    n_channels_tot, c_ = channel_index.shape
-    assert c_ == c
-    assert main_channels.shape == (n_spikes,)
-    assert main_channels.dtype.kind == "i"
-    assert target_channels.ndim == 1
-
-    out_waveforms = np.full(
-        (n_spikes, t, target_channels.size),
-        fill_value,
-        dtype=waveforms.dtype,
-    )
-
-    for i in range(n_spikes):
-        my_target_chans, targets_found = np.nonzero(
-            channel_index[main_channels[i]].reshape(-1, 1)
-            == target_channels.reshape(1, -1)
-        )
-        out_waveforms[i, :, targets_found] = waveforms[i, :, my_target_chans]
-
-    if two_d:
-        out_waveforms = out_waveforms[:, 0, :]
-
-    return out_waveforms
+    return static_waveforms
