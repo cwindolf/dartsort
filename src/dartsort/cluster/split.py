@@ -1,15 +1,26 @@
-from pathlib import Path
+from dataclasses import dataclass
+from typing import Optional
 
 import h5py
 import numpy as np
 import torch
+from dartsort.util import drift_util, waveform_util
+from dartsort.util.data_util import DARTsortSorting
+from dartsort.util.multiprocessing_util import get_pool
 from hdbscan.hdbscan import HDBSCAN
+from sklearn.decomposition import PCA
+from tqdm.auto import tqdm
+
+from . import relocate
 
 
 def split_clusters(
     sorting,
-    split_strategy="HDBSCANSplit",
-    split_step_kwargs=None,
+    split_strategy="FeatureSplit",
+    split_strategy_kwargs=None,
+    recursive=False,
+    show_progress=True,
+    n_jobs=0,
 ):
     """Parallel split step runner function
 
@@ -24,6 +35,60 @@ def split_clusters(
     -------
     split_sorting : DARTsortSorting
     """
+    # initialize split state
+    labels = sorting.labels.copy()
+    labels_to_process = np.unique(labels)
+    labels_to_process = list(labels_to_process[labels_to_process > 0])
+    cur_max_label = labels_to_process.max()
+
+    n_jobs, Executor, context = get_pool(n_jobs)
+    with Executor(
+        max_workers=n_jobs,
+        mp_context=context,
+        initializer=_split_job_init,
+        initargs=(split_strategy, split_strategy_kwargs),
+    ) as pool:
+        iterator = [
+            pool.submit(_split_job, np.flatnonzero(labels == i))
+            for i in labels_to_process
+        ]
+        if show_progress:
+            iterator = tqdm(
+                iterator,
+                desc=split_strategy,
+                total=len(labels_to_process),
+                smoothing=0,
+            )
+        for future in iterator:
+            split_result = future.result()
+            if not split_result.is_split:
+                continue
+
+            # assign new labels. -1 -> -1, 0 keeps current label,
+            # others start at cur_max_label + 1
+            in_unit = split_result.in_unit
+            new_labels = split_result.new_labels
+            triaged = split_result.new_labels < 0
+            labels[in_unit[triaged]] = new_labels[triaged]
+            labels[in_unit[new_labels > 0]] = (
+                cur_max_label + new_labels[new_labels > 0]
+            )
+            new_untriaged_labels = labels[in_unit[new_labels >= 0]]
+            cur_max_label = new_untriaged_labels.max()
+
+            # submit recursive jobs to the pool, if any
+            if recursive:
+                new_units = np.unique(new_untriaged_labels)
+                for i in new_units:
+                    iterator.extend(
+                        pool.submit(_split_job, np.flatnonzero(labels == i))
+                    )
+                if show_progress:
+                    iterator.total += len(new_units)
+
+    return DARTsortSorting(
+        times=sorting.times, channels=sorting.channels, labels=labels
+    )
 
 
 # -- split steps
@@ -34,6 +99,23 @@ def split_clusters(
 # we only have one split step so it is a bit silly to have the superclass,
 # but it's just to illustrate the interface that's actually used by the
 # main function split_clusters, in case someone wants to write another
+
+
+@dataclass
+class SplitResult:
+    """If not is_split, it is fine to leave other fields as None"""
+
+    is_split: bool = False
+    in_unit: Optional[np.ndarray] = None
+    new_labels: Optional[np.ndarray] = None
+
+    def __post_init__(self):
+        """Runs after a SplitResult is constructed, check valid"""
+        if self.is_split:
+            assert self.in_unit is not None
+            assert self.new_labels is not None
+            assert self.in_unit.ndim == 1
+            assert self.in_unit.shape == self.new_labels.shape
 
 
 class SplitStrategy:
@@ -47,13 +129,12 @@ class SplitStrategy:
 
         Returns
         -------
-        is_split : bool
-        labels : array of labels, like in_unit
+        split_result : a SplitResult object
         """
         raise NotImplementedError
 
 
-class HDBSCANSplit(SplitStrategy):
+class FeatureSplit(SplitStrategy):
     def __init__(
         self,
         peeling_hdf5_filename,
@@ -67,9 +148,9 @@ class HDBSCANSplit(SplitStrategy):
         min_cluster_size=25,
         min_samples=25,
         cluster_selection_epsilon=25,
-        tpca_features_dataset_name="collisioncleaned_tpca_features",
-        localizations_dataset_name="point_source_localizations",
-        amplitudes_dataset_name="denoised_amplitudes",
+        remove_outliers=False,
+        random_state=0,
+        **dataset_name_kwargs,
     ):
         """Split clusters based on per-cluster PCA and localization features
 
@@ -108,6 +189,9 @@ class HDBSCANSplit(SplitStrategy):
         self.use_localization_features = use_localization_features
         self.n_pca_features = n_pca_features
         self.relocated = relocated and motion_est is not None
+        self.motion_est = motion_est
+        self.localization_feature_scales = localization_feature_scales
+        self.random_state = random_state
 
         # hdbscan parameters
         self.min_cluster_size = min_cluster_size
@@ -115,25 +199,156 @@ class HDBSCANSplit(SplitStrategy):
         self.cluster_selection_epsilon = cluster_selection_epsilon
 
         # load up the required h5 datasets
+        self.initialize_from_h5(
+            peeling_hdf5_filename,
+            peeling_featurization_pt,
+            **dataset_name_kwargs,
+        )
+
+    def split_cluster(self, in_unit):
+        n_spikes = in_unit.size
+        if n_spikes < self.min_cluster_size:
+            return SplitResult()
+
+        features = []
+        kept = np.arange(n_spikes)
+        if self.use_localization_features:
+            loc_features = self.localization_features[in_unit]
+            features.appendloc_features
+        if self.n_pca_features > 0:
+            enough_good_spikes, kept, pca_embeds = self.pca_features(in_unit)
+            if not enough_good_spikes:
+                return SplitResult()
+            # scale pc features to match localization features
+            if self.use_localization_features:
+                pca_embeds *= loc_features.std(axis=0).mean()
+            features.append(pca_embeds)
+        features = np.column_stack([f[kept] for f in features])
+
+        clust = HDBSCAN(
+            min_cluster_size=self.min_cluster_size,
+            min_samples=self.min_samples,
+            cluster_selection_epsilon=self.cluster_selection_epsilon,
+        )
+        clust.fit(features)
+
+        is_split = np.setdiff1d(np.unique(clust.labels_), [-1]).size > 1
+        new_labels = None
+        if is_split:
+            new_labels = np.full(n_spikes, -1)
+            new_labels[kept] = clust.labels_
+
+        return SplitResult(
+            is_split=is_split, in_unit=in_unit, new_labels=new_labels
+        )
+
+    def pca_features(self, in_unit):
+        """Compute relocated PCA features on a drift-invariant channel set"""
+        # figure out which set of channels to use
+        # we use the stored amplitudes to do this rather than computing a
+        # template, which can be expensive
+        n_pitches_shift = drift_util.get_spike_pitch_shifts(
+            self.t_s[in_unit],
+            self.z[in_unit],
+            registered_depths_um=self.z_reg[in_unit],
+        )
+        amp_vecs = self.amplitude_vectors[in_unit]
+        amplitude_template = drift_util.registered_average(
+            amp_vecs,
+            n_pitches_shift,
+            self.geom,
+            self.registered_geom,
+            main_channels=self.channels[in_unit],
+            channel_index=self.channel_index,
+        )
+        max_registered_channel = amplitude_template.argmax()
+        pca_channels = self.registered_channel_index[max_registered_channel]
+        pca_channels = pca_channels[pca_channels < len(self.registered_geom)]
+
+        # load waveform embeddings and invert TPCA if we are relocating
+        waveforms = self.tpca_features[self.in_unit]
+        n, t, c = waveforms.shape
+        if self.relocated:
+            waveforms = waveforms.transpose(0, 2, 1).reshape(n * c, t)
+            waveforms = self.tpca.inverse_transform(waveforms)
+            waveforms = waveforms.reshape(n, c, t).transpose(0, 2, 1)
+
+        # relocate or just restrict to channel subset
+        if self.relocated:
+            waveforms = relocate.relocated_waveforms_on_static_channels(
+                waveforms,
+                main_channels=self.channels[in_unit],
+                channel_index=self.channel_index,
+                target_channels=pca_channels,
+                xyza_from=self.xyza,
+                z_to=self.z_reg,
+                geom=self.geom,
+                registered_geom=self.registered_geom,
+            )
+        else:
+            waveforms = drift_util.get_waveforms_on_static_channels(
+                waveforms,
+                self.geom,
+                main_channels=self.channels[in_unit],
+                channel_index=self.channel_index,
+                target_channels=pca_channels,
+                n_pitches_shift=n_pitches_shift,
+                registered_geom=self.registered_geom,
+            )
+        # ravel t,c dims -- everything below is spatiotemporal
+        waveforms = waveforms.reshape(n, t * c)
+
+        # figure out which waveforms actually overlap with the requested channels
+        no_nan = np.flatnonzero(~np.isnan(waveforms).any(axis=1))
+        if no_nan.size < self.n_pca_features:
+            return False, no_nan, None
+
+        # fit pca and embed
+        pca = PCA(
+            self.n_pca_features, random_state=self.random_state, whiten=True
+        )
+        pca_projs = np.full(
+            (n, self.n_pca_features), np.nan, dtype=waveforms.dtype
+        )
+        pca_projs[no_nan] = pca.fit_transform(waveforms[no_nan])
+
+        return True, no_nan, pca_projs
+
+    def initialize_from_h5(
+        self,
+        peeling_hdf5_filename,
+        peeling_featurization_pt,
+        tpca_features_dataset_name="collisioncleaned_tpca_features",
+        localizations_dataset_name="point_source_localizations",
+        amplitudes_dataset_name="denoised_amplitudes",
+        amplitude_vectors_dataset_name="denoised_amplitude_vectors",
+    ):
         h5 = h5py.File(peeling_hdf5_filename, "r")
         self.geom = h5["geom"][:]
         self.channel_index = h5["channel_index"][:]
+
         if self.use_localization_features or self.relocated:
             self.xyza = h5[localizations_dataset_name][:]
             self.amplitudes = h5[amplitudes_dataset_name][:]
-            t_s = h5["times_seconds"][:]
+            self.t_s = h5["times_seconds"][:]
             # registered spike positions (=originals if not relocated)
-            self.z_reg = self.xyza[:, 2]
+            self.z_reg = self.z = self.xyza[:, 2]
             if self.relocated:
-                self.z_reg = motion_est.correct_s(t_s, self.z_reg)
+                self.z_reg = self.motion_est.correct_s(self.t_s, self.z)
+
         if self.use_localization_features:
             self.localization_features = np.c[
                 self.xyza[:, 0], self.z_reg, self.amplitudes
             ]
-            self.localization_features *= localization_feature_scales
+            self.localization_features *= self.localization_feature_scales
+
         if self.n_pca_features > 0:
-            # don't load this one into memory, since it's a bit heavier
+            self.channels = h5["channels"][:]
+            # don't load these one into memory, since it's a bit heavier
             self.tpca_features = h5[tpca_features_dataset_name]
+            # this is used to pick channel neighborhoods for PCA computation
+            self.amplitude_vectors = h5[amplitude_vectors_dataset_name]
+
         if self.n_pca_features > 0 and self.relocated:
             # load up featurization pipeline for tpca inversion
             assert peeling_featurization_pt is not None
@@ -146,9 +361,19 @@ class HDBSCANSplit(SplitStrategy):
             assert len(tpca_feature) == 1
             self.tpca = tpca_feature.to_sklearn()
 
+        self.registered_geom = self.geom
+        self.registered_channel_index = self.channel_index
+        if self.relocated:
+            self.registered_geom = drift_util.registered_geometry(
+                self.geom, self.motion_est
+            )
+            self.registered_channel_index = waveform_util.make_channel_index(
+                self.registered_geom, self.channel_selection_radius
+            )
+
 
 # this is to help split_clusters take a string argument
-all_split_strategies = [HDBSCANSplit]
+all_split_strategies = [FeatureSplit]
 split_strategies_by_class_name = {
     cls.__name__: cls for cls in all_split_strategies
 }
@@ -157,9 +382,21 @@ split_strategies_by_class_name = {
 # -- parallelism widgets
 
 
-def _split_job_init():
-    pass
+class SplitJobContext:
+    def __init__(self, split_strategy):
+        self.split_strategy = split_strategy
 
 
-def _split_job():
-    pass
+_split_job_context = None
+
+
+def _split_job_init(split_strategy_class_name, split_strategy_kwargs):
+    global _split_job_context
+    split_strategy = split_strategies_by_class_name[split_strategy_class_name]
+    _split_job_context = SplitJobContext(
+        split_strategy(**split_strategy_kwargs)
+    )
+
+
+def _split_job(self, in_unit):
+    return _split_job_context.split_cluster(in_unit)
