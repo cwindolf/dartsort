@@ -452,14 +452,16 @@ class BasePeeler(torch.nn.Module):
         # use chunks to support growing the dataset as we find spikes
         h5_spike_datasets = {}
         for ds in self.out_datasets():
-            h5_spike_datasets[ds.name] = output_h5.require_dataset(
-                ds.name,
-                dtype=ds.dtype,
-                shape=(n_spikes, *ds.shape_per_spike),
-                maxshape=(None, *ds.shape_per_spike),
-                chunks=(chunk_size, *ds.shape_per_spike),
-                exact=True,
-            )
+            if ds.name in output_h5:
+                h5_spike_datasets[ds.name] = output_h5[ds.name]
+            else:
+                h5_spike_datasets[ds.name] = output_h5.create_dataset(
+                    ds.name,
+                    dtype=ds.dtype,
+                    shape=(n_spikes, *ds.shape_per_spike),
+                    maxshape=(None, *ds.shape_per_spike),
+                    chunks=(chunk_size, *ds.shape_per_spike),
+                )
 
         # residual file ignore/open/overwrite logic
         save_residual = residual_filename is not None
