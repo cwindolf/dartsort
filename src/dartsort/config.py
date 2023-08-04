@@ -54,6 +54,8 @@ class FeaturizationConfig:
     # localization runs on output waveforms
     do_localization: bool = True
     localization_radius: float = 100.0
+    # these are saved always if do_localization
+    save_amplitude_vectors: bool = True
 
     # -- further info about denoising
     # in the future we may add multi-channel or other nns
@@ -129,7 +131,7 @@ class FeaturizationConfig:
                     },
                 )
             )
-        if do_feats and self.do_localization:
+        if do_feats and (self.do_localization or self.save_amplitude_vectors):
             class_names_and_kwargs.append(
                 (
                     "AmplitudeVector",
