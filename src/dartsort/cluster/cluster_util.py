@@ -23,8 +23,11 @@ def closest_registered_channels(
 
 def knn_reassign_outliers(labels, features):
     outliers = labels < 0
+    outliers_idx = np.flatnonzero(outliers)
+    if not outliers_idx.size:
+        return labels
     knn = KNeighborsClassifier()
     knn.fit(features[~outliers], labels[~outliers])
     new_labels = labels.copy()
-    new_labels[outliers] = knn.predict(features[outliers])
+    new_labels[outliers_idx] = knn.predict(features[outliers_idx])
     return new_labels
