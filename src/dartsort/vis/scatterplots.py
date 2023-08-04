@@ -7,6 +7,8 @@ import numpy as np
 def scatter_spike_features(
     hdf5_filename=None,
     sorting=None,
+    motion_est=None,
+    registered=False,
     times_s=None,
     depths_um=None,
     x_um=None,
@@ -47,10 +49,13 @@ def scatter_spike_features(
     _, s_x = scatter_x_vs_depth(
         x=x,
         depths_um=depths_um,
+        times_s=times_s,
         amplitudes=amplitudes,
         show_geom=show_geom,
         geom_scatter_kw=geom_scatter_kw,
         sorting=sorting,
+        motion_est=motion_est,
+        registered=registered,
         geom=geom,
         probe_margin_um=probe_margin_um,
         ax=axes.flat[0],
@@ -65,8 +70,11 @@ def scatter_spike_features(
     _, s_a = scatter_amplitudes_vs_depth(
         depths_um=depths_um,
         amplitudes=amplitudes,
+        times_s=times_s,
         semilog_amplitudes=semilog_amplitudes,
         sorting=sorting,
+        motion_est=motion_est,
+        registered=registered,
         geom=geom,
         probe_margin_um=probe_margin_um,
         ax=axes.flat[1],
@@ -83,6 +91,8 @@ def scatter_spike_features(
         depths_um=depths_um,
         amplitudes=amplitudes,
         sorting=sorting,
+        motion_est=motion_est,
+        registered=registered,
         geom=geom,
         probe_margin_um=probe_margin_um,
         ax=axes.flat[2],
@@ -99,11 +109,13 @@ def scatter_spike_features(
 
 def scatter_time_vs_depth(
     hdf5_filename=None,
+    sorting=None,
+    motion_est=None,
+    registered=False,
     times_s=None,
     depths_um=None,
     amplitudes=None,
     labels=None,
-    sorting=None,
     geom=None,
     probe_margin_um=100,
     ax=None,
@@ -131,8 +143,11 @@ def scatter_time_vs_depth(
     return scatter_feature_vs_depth(
         times_s,
         depths_um,
+        times_s=times_s,
         amplitudes=amplitudes,
         sorting=sorting,
+        motion_est=motion_est,
+        registered=registered,
         geom=geom,
         ax=ax,
         max_spikes_plot=max_spikes_plot,
@@ -147,13 +162,16 @@ def scatter_time_vs_depth(
 
 def scatter_x_vs_depth(
     hdf5_filename=None,
+    sorting=None,
+    motion_est=None,
+    registered=False,
     x=None,
     depths_um=None,
     amplitudes=None,
+    times_s=None,
     labels=None,
     show_geom=True,
     geom_scatter_kw=dict(s=5, color="k", lw=0),
-    sorting=None,
     geom=None,
     probe_margin_um=100,
     ax=None,
@@ -167,6 +185,7 @@ def scatter_x_vs_depth(
     """Scatter plot of spike horizontal pos vs spike depth (vertical position on probe)"""
     if hdf5_filename is not None:
         with h5py.File(hdf5_filename, "r") as h5:
+            times_s = h5["times_seconds"][:]
             x = h5["point_source_localizations"][:, 0]
             depths_um = h5["point_source_localizations"][:, 2]
             amplitudes = h5["denoised_amplitudes"][:]
@@ -181,8 +200,11 @@ def scatter_x_vs_depth(
     ax, s1 = scatter_feature_vs_depth(
         x,
         depths_um,
+        times_s=times_s,
         amplitudes=amplitudes,
         sorting=sorting,
+        motion_est=motion_est,
+        registered=registered,
         geom=geom,
         ax=ax,
         max_spikes_plot=max_spikes_plot,
@@ -201,11 +223,14 @@ def scatter_x_vs_depth(
 
 def scatter_amplitudes_vs_depth(
     hdf5_filename=None,
+    sorting=None,
+    motion_est=None,
+    registered=False,
     depths_um=None,
     amplitudes=None,
+    times_s=None,
     labels=None,
     semilog_amplitudes=True,
-    sorting=None,
     geom=None,
     probe_margin_um=100,
     ax=None,
@@ -219,6 +244,7 @@ def scatter_amplitudes_vs_depth(
     """Scatter plot of spike horizontal pos vs spike depth (vertical position on probe)"""
     if hdf5_filename is not None:
         with h5py.File(hdf5_filename, "r") as h5:
+            times_s = h5["times_seconds"][:]
             depths_um = h5["point_source_localizations"][:, 2]
             amplitudes = h5["denoised_amplitudes"][:]
             geom = h5["geom"][:]
@@ -226,8 +252,11 @@ def scatter_amplitudes_vs_depth(
     ax, s = scatter_feature_vs_depth(
         amplitudes,
         depths_um,
+        times_s=times_s,
         amplitudes=amplitudes,
         sorting=sorting,
+        motion_est=motion_est,
+        registered=registered,
         geom=geom,
         ax=ax,
         max_spikes_plot=max_spikes_plot,
@@ -248,6 +277,9 @@ def scatter_feature_vs_depth(
     depths_um,
     amplitudes=None,
     sorting=None,
+    times_s=None,
+    motion_est=None,
+    registered=False,
     geom=None,
     ax=None,
     max_spikes_plot=500_000,
@@ -279,6 +311,11 @@ def scatter_feature_vs_depth(
     if len(to_show) > max_spikes_plot:
         rg = np.random.default_rng(random_seed)
         to_show = rg.choice(to_show, size=max_spikes_plot, replace=False)
+
+    if registered:
+        assert motion_est is not None
+        assert times_s is not None
+        depths_um = motion_est.correct_s(times_s, depths_um)
 
     # order by amplitude so that high amplitude units show up
     if amplitudes is not None:
