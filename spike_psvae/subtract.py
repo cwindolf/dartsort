@@ -668,8 +668,8 @@ def subtraction_binary(
     recording = sc.read_binary(
         standardized_bin,
         sampling_rate,
-        n_channels,
-        binary_dtype,
+        num_channels=n_channels,
+        dtype=binary_dtype,
         time_axis=time_axis,
         is_filtered=True,
     )
