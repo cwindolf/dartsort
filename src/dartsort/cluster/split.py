@@ -12,7 +12,7 @@ from hdbscan.prediction import approximate_predict
 from sklearn.decomposition import PCA
 from tqdm.auto import tqdm
 
-from . import relocate
+from . import cluster_util, relocate
 
 
 def split_clusters(
@@ -243,13 +243,11 @@ class FeatureSplit(SplitStrategy):
         hdb_labels = clust.fit_predict(features)
 
         is_split = np.setdiff1d(np.unique(hdb_labels), [-1]).size > 1
-        
+
         if is_split and self.reassign_outliers:
-            triaged = np.flatnonzero(hdb_labels < 0)
-            if triaged.size:
-                hdb_labels[triaged], probs = approximate_predict(
-                    clust, features[triaged]
-                )
+            hdb_labels = cluster_util.knn_reassign_outliers(
+                hdb_labels, features
+            )
 
         new_labels = None
         if is_split:
@@ -420,6 +418,7 @@ def _split_job(in_unit):
 
 
 # -- h5 helper... slow reading...
+
 
 def batched_h5_read(dataset, indices, batch_size=1000):
     if indices.size < batch_size:
