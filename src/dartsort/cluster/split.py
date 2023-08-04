@@ -30,6 +30,10 @@ def split_clusters(
     split_step_class_name : str
         One of split_steps_by_class_name.keys()
     split_step_kwargs : dictionary
+    recursive : bool
+        If True, attempt to split newly created clusters again
+    show_progress : bool
+    n_jobs : int
 
     Returns
     -------
