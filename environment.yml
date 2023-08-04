@@ -1,0 +1,8 @@
+name: dartsort
+dependencies:
+  - python=3.11
+  - numpy
+  - scipy
+  - h5py
+  - tqdm
+  - scikit-learn
