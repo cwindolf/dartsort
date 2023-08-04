@@ -2,6 +2,7 @@ import numpy as np
 from dartsort.util import drift_util
 from dredge.motion_util import IdentityMotionEstimate
 from scipy.spatial import KDTree
+from sklearn.neighbors import KNeighborsClassifier
 
 
 def closest_registered_channels(
@@ -18,3 +19,12 @@ def closest_registered_channels(
     distances, reg_channels = registered_kdt.query(reg_pos)
 
     return reg_channels
+
+
+def knn_reassign_outliers(labels, features):
+    outliers = labels < 0
+    knn = KNeighborsClassifier()
+    knn.fit(features[~outliers], labels[~outliers])
+    new_labels = labels.copy()
+    new_labels[outliers] = knn.predict(features[outliers])
+    return new_labels
