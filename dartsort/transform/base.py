@@ -10,6 +10,7 @@ class BaseWaveformModule(torch.nn.Module):
     default_name = ""
 
     def __init__(self, name):
+        super().__init__()
         self.name = name
         if name is None:
             name = self.default_name
