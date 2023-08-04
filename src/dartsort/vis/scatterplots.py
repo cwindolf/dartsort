@@ -20,7 +20,7 @@ def scatter_spike_features(
     geom_scatter_kw=dict(s=5, color="k", lw=0),
     amplitude_color_cutoff=15,
     max_spikes_plot=500_000,
-    depth_margin_um=100,
+    probe_margin_um=100,
     s=1,
     linewidth=0,
     random_seed=0,
@@ -52,7 +52,7 @@ def scatter_spike_features(
         geom_scatter_kw=geom_scatter_kw,
         sorting=sorting,
         geom=geom,
-        depth_margin_um=depth_margin_um,
+        probe_margin_um=probe_margin_um,
         ax=axes.flat[0],
         max_spikes_plot=max_spikes_plot,
         amplitude_color_cutoff=amplitude_color_cutoff,
@@ -68,7 +68,7 @@ def scatter_spike_features(
         semilog_amplitudes=semilog_amplitudes,
         sorting=sorting,
         geom=geom,
-        depth_margin_um=depth_margin_um,
+        probe_margin_um=probe_margin_um,
         ax=axes.flat[1],
         max_spikes_plot=max_spikes_plot,
         amplitude_color_cutoff=amplitude_color_cutoff,
@@ -84,7 +84,7 @@ def scatter_spike_features(
         amplitudes=amplitudes,
         sorting=sorting,
         geom=geom,
-        depth_margin_um=depth_margin_um,
+        probe_margin_um=probe_margin_um,
         ax=axes.flat[2],
         max_spikes_plot=max_spikes_plot,
         amplitude_color_cutoff=amplitude_color_cutoff,
@@ -105,7 +105,7 @@ def scatter_time_vs_depth(
     labels=None,
     sorting=None,
     geom=None,
-    depth_margin_um=100,
+    probe_margin_um=100,
     ax=None,
     max_spikes_plot=500_000,
     amplitude_color_cutoff=15,
@@ -137,7 +137,7 @@ def scatter_time_vs_depth(
         ax=ax,
         max_spikes_plot=max_spikes_plot,
         amplitude_color_cutoff=amplitude_color_cutoff,
-        depth_margin_um=depth_margin_um,
+        probe_margin_um=probe_margin_um,
         s=s,
         linewidth=linewidth,
         random_seed=random_seed,
@@ -155,7 +155,7 @@ def scatter_x_vs_depth(
     geom_scatter_kw=dict(s=5, color="k", lw=0),
     sorting=None,
     geom=None,
-    depth_margin_um=100,
+    probe_margin_um=100,
     ax=None,
     max_spikes_plot=500_000,
     amplitude_color_cutoff=15,
@@ -172,6 +172,12 @@ def scatter_x_vs_depth(
             amplitudes = h5["denoised_amplitudes"][:]
             geom = h5["geom"][:]
 
+    if geom is not None:
+        to_show = np.flatnonzero(
+            (x > geom[:, 0].min() - probe_margin_um)
+            & (x < geom[:, 0].max() + probe_margin_um)
+        )
+
     ax, s1 = scatter_feature_vs_depth(
         x,
         depths_um,
@@ -181,10 +187,11 @@ def scatter_x_vs_depth(
         ax=ax,
         max_spikes_plot=max_spikes_plot,
         amplitude_color_cutoff=amplitude_color_cutoff,
-        depth_margin_um=depth_margin_um,
+        probe_margin_um=probe_margin_um,
         s=s,
         linewidth=linewidth,
         random_seed=random_seed,
+        to_show=to_show,
         **scatter_kw,
     )
     if show_geom and geom is not None:
@@ -200,7 +207,7 @@ def scatter_amplitudes_vs_depth(
     semilog_amplitudes=True,
     sorting=None,
     geom=None,
-    depth_margin_um=100,
+    probe_margin_um=100,
     ax=None,
     max_spikes_plot=500_000,
     amplitude_color_cutoff=15,
@@ -225,7 +232,7 @@ def scatter_amplitudes_vs_depth(
         ax=ax,
         max_spikes_plot=max_spikes_plot,
         amplitude_color_cutoff=amplitude_color_cutoff,
-        depth_margin_um=depth_margin_um,
+        probe_margin_um=probe_margin_um,
         s=s,
         linewidth=linewidth,
         random_seed=random_seed,
@@ -245,10 +252,11 @@ def scatter_feature_vs_depth(
     ax=None,
     max_spikes_plot=500_000,
     amplitude_color_cutoff=15,
-    depth_margin_um=100,
+    probe_margin_um=100,
     s=1,
     linewidth=0,
     random_seed=0,
+    to_show=None,
     **scatter_kw,
 ):
     assert feature.shape == depths_um.shape
@@ -261,12 +269,13 @@ def scatter_feature_vs_depth(
 
     # subset spikes according to margin and sampling
     n_spikes = len(feature)
-    to_show = np.arange(n_spikes)
+    if to_show is None:
+        to_show = np.arange(n_spikes)
     if geom is not None:
-        to_show = np.flatnonzero(
-            (depths_um > geom[:, 1].min() - depth_margin_um)
-            & (depths_um < geom[:, 1].max() + depth_margin_um)
-        )
+        to_show = to_show[
+            (depths_um[to_show] > geom[:, 1].min() - probe_margin_um)
+            & (depths_um[to_show] < geom[:, 1].max() + probe_margin_um)
+        ]
     if len(to_show) > max_spikes_plot:
         rg = np.random.default_rng(random_seed)
         to_show = rg.choice(to_show, size=max_spikes_plot, replace=False)
