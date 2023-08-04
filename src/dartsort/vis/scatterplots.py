@@ -10,7 +10,7 @@ def scatter_time_vs_depth(
     amplitudes=None,
     labels=None,
     hdf5_filename=None,
-    color_by="amplitude",
+    sorting=None,
     geom=None,
     depth_margin_um=100,
     ax=None,
@@ -28,14 +28,9 @@ def scatter_time_vs_depth(
     alternatively, these can be left unset and they will be loaded from
     hdf5_filename when it is supplied.
     """
-    assert color_by in ("amplitude", "label")
-
-    if color_by == "label":
-        raise NotImplementedError("coming soon")
-
     if hdf5_filename is not None:
         with h5py.File(hdf5_filename, "r") as h5:
-            times_s = h5["times"][:] / h5["sampling_frequency"][()]
+            times_s = h5["times_seconds"][:]
             depths_um = h5["point_source_localizations"][:, 2]
             amplitudes = h5["denoised_amplitudes"][:]
             geom = h5["geom"][:]
@@ -60,11 +55,31 @@ def scatter_time_vs_depth(
 
     # order by amplitude so that high amplitude units show up
     to_show = to_show[np.argsort(amplitudes[to_show])]
+    
+    if sorting is not None:
+        labels = sorting.labels
+    if labels is None:
+        c = np.clip(amplitudes[to_show], 0, amplitude_color_cutoff)
+        cmap = plt.cm.viridis
+    else:
+        c = labels
+        cmap = colorcet.m_glasbey_light
+        kept = labels[to_show] >= 0
+        ax.scatter(
+            times_s[to_show[~kept]],
+            depths_um[to_show[~kept]],
+            color="dimgray",
+            s=s,
+            linewidth=linewidth,
+            **scatter_kw,
+        )
+        to_show = to_show[kept]
 
     s = ax.scatter(
         times_s[to_show],
         depths_um[to_show],
-        c=np.clip(amplitudes[to_show], 0, amplitude_color_cutoff),
+        c=c[to_show],
+        cmap=cmap,
         s=s,
         linewidth=linewidth,
         **scatter_kw,

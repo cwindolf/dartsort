@@ -13,6 +13,7 @@ as needed to capture all the drift.
 import numpy as np
 from scipy.spatial import KDTree
 from scipy.spatial.distance import pdist
+import warnings
 
 from .waveform_util import get_pitch
 
@@ -123,7 +124,10 @@ def registered_average(
     )
 
     # take the mean and return
-    average = reducer(static_waveforms, axis=0)
+    # suppress all-NaN slice warning
+    with warnings.catch_warnings():
+        warnings.filterwarnings('ignore', r'All-NaN (slice|axis) encountered')
+        average = reducer(static_waveforms, axis=0)
     if not np.isnan(pad_value):
         average = np.nan_to_num(average, copy=False, nan=pad_value)
 
@@ -245,8 +249,11 @@ def get_waveforms_on_static_channels(
     # find where each moving position lands using a k-d tree
     target_kdtree = KDTree(target_geom)
     match_distance = pdist(geom).min() / 2
-    _, shifted_channels = target_kdtree.query(
-        moving_positions.reshape(n_spikes * c, geom.shape[1]),
+    moving_positions = moving_positions.reshape(n_spikes * c, geom.shape[1])
+    valid_chan = ~np.isnan(moving_positions).any(axis=1)
+    shifted_channels = np.full(n_spikes * c, target_kdtree.n)
+    _, shifted_channels[valid_chan] = target_kdtree.query(
+        moving_positions[valid_chan],
         distance_upper_bound=match_distance,
     )
     shifted_channels = shifted_channels.reshape(n_spikes, c)
