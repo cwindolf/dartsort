@@ -1,26 +1,36 @@
+![example branch parameter](https://github.com/cwindolf/dartsort/actions/workflows/ci.yml/badge.svg?branch=main)
+
 # dartsort
 
-Install an environment for running this stuff with:
+## Suggested install steps:
+
+`mamba` is the recommended package manager for using DARTsort. It is a drop-in replacement for `conda` and can be installed from [here](https://mamba.readthedocs.io/en/latest/installation.html).
+
+After cloning the repository, create and activate the `mamba`/`conda` environment from the configuration file provided as follows:
 
 ```bash
-mamba create -n a python=3.10 numba seaborn scikit-learn scikit-image ipywidgets h5py colorcet tqdm joblib hdbscan cython jupyterlab jupytext ipywidgets widgetsnbextension nodejs nb_conda_kernels python-lsp-server black pyright jupyterlab-lsp
-mamba activate a
+$ mamba env create -f environment.yml -n dartsort
+$ mamba activate dartsort
+```
 
-# go to pytorch.org and find install instructions if you want gpu!
-mamba install pytorch torchvision torchaudio -c pytorch
+Next, visit https://pytorch.org/get-started/locally/ and follow the `PyTorch` install instructions for your specific OS and hardware needs.
+For example, on a Linux workstation or cluster with NVIDIA GPUs available, one might use (dropping in `mamba` for `conda` commands):
 
-pip install matplotlib_venn
-pip install spikeinterface
+```bash
+(dartsort) $ mamba install pytorch torchvision torchaudio pytorch-cuda=11.8 -c pytorch -c nvidia
+```
 
-# You might need to specify this
-pip install pillow==9.0.0
+Finally, install the remaining `pip` dependencies and `dartsort` itself:
 
-# For using jupyter
-pip install jupyterlab-sublime jupyterlab-code-formatter
+```bash
+(dartsort) $ pip install -r requirements.txt
+(dartsort) $ pip install -e .
+```
 
-# optional
-pip install ibllib
+Soon we will have a package on PyPI so that the last two steps will be just a `pip install dartsort`.
 
-# definitely not optional :)
-pip install -e ~/dartsort/
+Make sure everything works:
+
+```bash
+$ (dartsort) pytest tests/*
 ```
