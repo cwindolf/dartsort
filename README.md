@@ -4,9 +4,9 @@
 
 ## :warning: Work in progress code repository
 
-We do not currently recommend DARTsort for production spike sorting purposes. We are in the process of implementing a robust and documented pipeline in [`src/dartsort`](src/dartsort), and will update this page accordingly.
+We do not currently recommend DARTsort for production spike sorting purposes. We are in the process of implementing a robust and documented pipeline in [`src/dartsort`](src/dartsort), and we will update this page accordingly.
 
-A workflow described in our preprint (https://www.biorxiv.org/content/10.1101/2023.08.11.553023v1) is implemented in [uhd_pipline.py](scripts/uhd_pipeline.py), which is implemented using the legacy code in [`src/spike_psvae`](src/spike_psvae).
+A workflow described in our preprint (https://www.biorxiv.org/content/10.1101/2023.08.11.553023v1) is in [uhd_pipline.py](scripts/uhd_pipeline.py), which is implemented using the legacy code in [`src/spike_psvae`](src/spike_psvae).
 
 
 ## Suggested install steps:
