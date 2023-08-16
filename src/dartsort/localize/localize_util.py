@@ -1,7 +1,5 @@
 """Helper functions for localizing things other than torch Tensors
 """
-import warnings
-
 import h5py
 import numpy as np
 import torch
@@ -48,7 +46,7 @@ def localize_hdf5(
             if shape != (n_spikes, 4):
                 raise ValueError(
                     f"The {output_dataset_name} dataset in {hdf5_filename} "
-                    "has an unexpected shape."
+                    f"has unexpected shape {shape}, where we expected {(n_spikes, 4)}."
                 )
             # else, we are resuming
             return
