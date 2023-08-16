@@ -221,7 +221,7 @@ class BasePeeler(torch.nn.Module):
     def out_datasets(self):
         datasets = [
             SpikeDataset(name="times_samples", shape_per_spike=(), dtype=int),
-            SpikeDataset(name="times_seconds", shape_per_spike=(), dtype=int),
+            SpikeDataset(name="times_seconds", shape_per_spike=(), dtype=float),
             SpikeDataset(name="channels", shape_per_spike=(), dtype=int),
         ]
         for transformer in self.featurization_pipeline.transformers:
