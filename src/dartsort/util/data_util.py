@@ -25,7 +25,12 @@ class DARTsortSorting:
     """
 
     def __init__(
-        self, times_samples, channels, labels=None, sampling_frequency=30000
+        self,
+        times_samples,
+        channels,
+        labels=None,
+        sampling_frequency=30000,
+        extra_features=None,
     ):
         """
         Arguments
@@ -48,6 +53,13 @@ class DARTsortSorting:
             self.channels = np.array(channels, dtype=int)
             assert self.times_samples.shape == self.channels.shape
 
+        self.extra_feature_names = []
+        if extra_features is not None:
+            for k, v in extra_features.items():
+                self.extra_feature_names.append(k)
+                assert v.shape[0] == len(self.times_samples)
+                setattr(self, k, v)
+
     def to_numpy_sorting(self):
         return NumpySorting.from_times_labels(
             times_list=self.times_samples,
@@ -61,7 +73,11 @@ class DARTsortSorting:
         units = np.unique(self.labels)
         units = units[units >= 0]
         unit_str = f"{units.size} unit" + ("s" if units.size > 1 else "")
-        return f"{name}: {nspikes} spikes, {unit_str}."
+        feat_str = ""
+        if self.extra_feature_names:
+            feat_str = ", ".join(self.extra_feature_names)
+            feat_str = f" extra features: {feat_str}."
+        return f"{name}: {nspikes} spikes, {unit_str}.{feat_str}"
 
     def __repr__(self):
         return str(self)
@@ -76,6 +92,7 @@ class DARTsortSorting:
         times_samples_dataset="times_samples",
         channels_dataset="channels",
         labels_dataset="labels",
+        load_simple_features=False,
     ):
         channels = labels = None
         with h5py.File(peeling_hdf5_filename, "r") as h5:
@@ -85,11 +102,26 @@ class DARTsortSorting:
                 channels = h5[channels_dataset][()]
             if labels_dataset in h5:
                 labels = h5[labels_dataset][()]
+
+            n_spikes = len(times_samples)
+            extra_features = None
+            if load_simple_features:
+                extra_features = {}
+                loaded = (times_samples_dataset, channels_dataset, labels_dataset)
+                for k in h5:
+                    if (
+                        k not in loaded
+                        and 1 <= h5[k].ndim <= 2
+                        and h5[k].shape[0] == n_spikes
+                    ):
+                        extra_features[k] = h5[k][:]
+
         return cls(
             times_samples,
             channels=channels,
             labels=labels,
             sampling_frequency=sampling_frequency,
+            extra_features=extra_features,
         )
 
 
