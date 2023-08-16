@@ -30,6 +30,13 @@ def scatter_spike_features(
     random_seed=0,
     **scatter_kw,
 ):
+    """3-axis scatter plot of spike depths vs. horizontal pos, amplitude, and time
+
+    Returns
+    -------
+    figure, axes, (s_x, s_a, s_t)
+        Matplotlib figure, axes array, and 3-tuple of scatterplot PathCollections
+    """
     if axes is not None:
         assert axes.size == 3
         figure = axes.flat[0].figure
