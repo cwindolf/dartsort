@@ -1,7 +1,53 @@
 """Compute template waveforms, including accounting for drift and denoising
 
 This file is low-level: functions return arrays. The classes in templates.py
+provide a more convenient interface.
 
+
+ // About get_templates
+
+get_templates has been written in such a way that it can realign and denoise
+templates in a single pass through the data, making use of the GrabAndFeaturize
+peeler to store temporary waveforms in an HDF5 file.
+
+This makes the logic a bit complicated to follow just right off the bat reading
+the code. So here's what is going on and why.
+
+The steps of the algorithm are:
+
+ - Grab raw waveforms corresponding to the input spike trains in `sorting`
+    - The sorting is subsampled to at most spikes_per_unit spikes
+        - But, if low_rank_denoising=True, we need to make sure that we
+          extract at least denoising_spikes_fit waveforms. So we keep around
+          some extra waveforms with label -1.
+    - If realign_peaks is True, these waveforms are padded according to
+      realign_max_shift. After extracting all the waveforms for a unit,
+      we search for its new peak/trough (see next bullet), and this padding
+      ensures that we can still extract a full-length (spike_length_samples)
+      waveform after realigning to the new peak
+ - Realignment
+    - The padded raw waveforms are averaged, and we search for the template's
+      max abs value sample in a radius of realign_max_shift around the current
+      putative trough/peak time (trough_offset_samples)
+    - The templates are cropped such that the new peak lands at trough_offset_samples
+    - The sorting is also realigned according to these shifts
+        > Note, the sorting might not be sorted by time after this step.
+          Our pipeline should never assume that sortings are ordered by time,
+          but we will output time-ordered sortings from peeling operations
+          and at the end of the pipeline
+ - If low_rank_denoising=False, return
+    - We return the aligned spike train and templates
+    - Also, if the user passed in output_hdf5_filename and
+      keep_waveforms_in_hdf5=True, we align the waveforms in the hdf5
+      file for the user. This means cropping each waveform according
+      to its unit's shift
+ - Otherwise, low_rank_denoising=True, so we apply the following denoising:
+    - First, fit a temporal PCA to the extracted raw waveform traces.
+      We need these to be aligned and of length spike_length_samples,
+      so we run the individual waveform cropping routine of the previous
+      bullet
+    - Next, apply the temporal PCA to all the waveforms
+    - Finally, weighted averaging is applied
 """
 import tempfile
 from pathlib import Path
@@ -22,7 +68,8 @@ def get_templates(
     spike_length_samples=121,
     spikes_per_unit=500,
     low_rank_denoising=True,
-    denoising_model=None,
+    denoising_tpca=None,
+    denoising_centered=False,
     denoising_rank=5,
     denoising_fit_radius=75,
     denoising_spikes_fit=50_000,
@@ -39,6 +86,9 @@ def get_templates(
 
     Low-level helper function which does the work of template computation for
     the template classes elsewhere in this folder
+
+    The file this function lives in has an explanation of the steps taken to
+    compute the templates in __doc__
 
     Arguments
     ---------
@@ -81,28 +131,41 @@ def get_templates(
         This is where a temporary directory will be made for intermediate
         computations, if output_hdf5_filename is None. If it's left blank,
         the tempfile default directory is used. If output_hdf5_file is not
-        None, that hdf5 file is used.
+        None, that hdf5 file is used and this argument is ignored.
 
     Returns
     -------
     dict whose keys vary based on the above arguments
      - "raw_templates" (always)
      - "denoised_templates" if low_rank_denoising
+     - "tpca" (sklearn PCA or TruncatedSVD object) if low_rank_denoising
      - "sorting", which is the realigned sorting if realign_peaks is True
        and otherwise just the one you passed in
      - "output_hdf5_filename" if output_hdf5_filename is not None
        This hdf5 file will contain datasets raw_templates and optionally
-       denoised_templates, and also "waveforms", "channel_index", etc
-       if keep_waveforms_in_hdf5
+       denoised_templates, and also "waveforms", "channel_index", "labels",
+       "channels", etc if keep_waveforms_in_hdf5 (corresponding to the
+       subsampled spike train)
     """
+    # See this file's __doc__str at the very top of the file for
+    # details about why this function performs the steps below
+
     # validate arguments
     if low_rank_denoising and denoising_fit_radius is not None:
         assert geom is not None
 
+    raw_only = not low_rank_denoising
+
+    # figure out if hdf5 output is requested, and where to store
+    # a temporary hdf5 file for extracting waveforms if not
     return_hdf5 = output_hdf5_filename is not None
     if return_hdf5:
         output_hdf5_filename = Path(output_hdf5_filename)
-        scratch_dir = output_hdf5_filename.parent
+    else:
+        tempdir = tempfile.TemporaryDirectory(
+            dir=scratch_dir, prefix="dartsort_templates"
+        )
+        output_hdf5_filename = tempdir / "dartsort_templates.h5"
 
     # estimate peak sample times and realign spike train
     if realign_peaks:
@@ -135,8 +198,10 @@ def get_templates(
             spike_length_samples=spike_length_samples,
         )
 
-        if not low_rank_denoising:
-            return
+        if raw_only:
+            # overwrite template dataset with aligned ones
+            # handle keep_waveforms_in_hdf5
+            return dict(sorting=sorting, raw_templates=templates)
 
 
 def get_raw_templates(
@@ -156,15 +221,5 @@ def get_raw_templates(
     keep_waveforms_in_hdf5=False,
     scratch_dir=None,
     n_jobs=0,
-):
-    pass
-
-
-def realign_sorting(
-    sorting,
-    templates,
-    max_shift=20,
-    trough_offset_samples=42,
-    spike_length_samples=121,
 ):
     pass
