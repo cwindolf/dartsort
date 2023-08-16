@@ -154,6 +154,7 @@ def array_scatter(
         s=10,
         marker=".",
         cmap=plt.cm.viridis,
+        rasterized=True,
     )
     if geom is not None:
         axes[2].scatter(*geom.T, c="orange", marker="s", s=10)

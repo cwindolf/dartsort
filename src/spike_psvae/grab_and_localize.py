@@ -119,18 +119,20 @@ def _job(batch_start):
     )
 
     # -- denoise
-    waveforms = subtract.full_denoising(
-        waveforms,
-        spike_index[:, 1],
-        p.channel_index,
-        radial_parents=p.radial_parents,
-        do_enforce_decrease=p.radial_parents is not None,
-        tpca=p.tpca,
-        device=p.device,
-        denoiser=p.denoiser,
-    )
+    with torch.no_grad():
+        waveforms = subtract.full_denoising(
+            waveforms,
+            spike_index[:, 1],
+            p.channel_index,
+            radial_parents=p.radial_parents,
+            do_enforce_decrease=p.radial_parents is not None,
+            tpca=p.tpca,
+            device=p.device,
+            denoiser=p.denoiser,
+        )
 
     # -- localize and return
+    waveforms = waveforms.cpu().numpy()
     ptps = waveforms.ptp(1)
     del waveforms
     x, y, z_rel, z_abs, alpha = localize_index.localize_ptps_index(
@@ -174,8 +176,9 @@ def _job_init(
     trough_offset,
 ):
     denoiser = radial_parents = None
+    torch.set_grad_enabled(False)
     if nn_denoise:
-        denoiser = denoise.SingleChanDenoiser().load().to(device)
+        denoiser = denoise.SingleChanDenoiser().load().eval().to(device)
     if enforce_decrease:
         radial_parents = denoise.make_radial_order_parents(
             geom, channel_index, n_jumps_per_growth=1, n_jumps_parent=3
