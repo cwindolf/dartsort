@@ -11,7 +11,7 @@ def scatter_spike_features(
     registered=False,
     times_s=None,
     depths_um=None,
-    x_um=None,
+    x=None,
     amplitudes=None,
     geom=None,
     figure=None,
@@ -19,18 +19,20 @@ def scatter_spike_features(
     width_ratios=(1, 1, 3),
     semilog_amplitudes=True,
     show_geom=True,
-    geom_scatter_kw=dict(s=5, color="k", lw=0),
+    geom_scatter_kw=dict(s=5, marker="s", color="k", lw=0),
     amplitude_color_cutoff=15,
     max_spikes_plot=500_000,
     probe_margin_um=100,
     s=1,
     linewidth=0,
+    limits="probe_margin",
+    label_axes=True,
     random_seed=0,
     **scatter_kw,
 ):
     if axes is not None:
         assert axes.size == 3
-        figure = axes.flat[0]
+        figure = axes.flat[0].figure
     if figure is None:
         figure = plt.gcf()
     if axes is None:
@@ -103,6 +105,12 @@ def scatter_spike_features(
         linewidth=linewidth,
         **scatter_kw,
     )
+    
+    if label_axes:
+        axes[0].set_ylabel("depth (um)")
+        axes[0].set_xlabel("x (um)")
+        axes[1].set_xlabel("amplitude (su)")
+        axes[2].set_xlabel("time (s)")
 
     return figure, axes, (s_x, s_a, s_t)
 
@@ -121,6 +129,7 @@ def scatter_time_vs_depth(
     ax=None,
     max_spikes_plot=500_000,
     amplitude_color_cutoff=15,
+    limits="probe_margin",
     random_seed=0,
     s=1,
     linewidth=0,
@@ -171,12 +180,13 @@ def scatter_x_vs_depth(
     times_s=None,
     labels=None,
     show_geom=True,
-    geom_scatter_kw=dict(s=5, color="k", lw=0),
+    geom_scatter_kw=dict(s=5, marker="s", color="k", lw=0),
     geom=None,
     probe_margin_um=100,
     ax=None,
     max_spikes_plot=500_000,
     amplitude_color_cutoff=15,
+    limits="probe_margin",
     random_seed=0,
     s=1,
     linewidth=0,
@@ -218,6 +228,8 @@ def scatter_x_vs_depth(
     )
     if show_geom and geom is not None:
         ax.scatter(*geom.T, **geom_scatter_kw)
+    if limits == "probe_margin" and geom is not None:
+        ax.set_xlim([geom[:, 0].min() - probe_margin_um, geom[:, 0].max() + probe_margin_um])
     return ax, s1
 
 
@@ -236,6 +248,7 @@ def scatter_amplitudes_vs_depth(
     ax=None,
     max_spikes_plot=500_000,
     amplitude_color_cutoff=15,
+    limits="probe_margin",
     random_seed=0,
     s=1,
     linewidth=0,
@@ -278,6 +291,7 @@ def scatter_feature_vs_depth(
     amplitudes=None,
     sorting=None,
     times_s=None,
+    labels=None,
     motion_est=None,
     registered=False,
     geom=None,
@@ -287,6 +301,7 @@ def scatter_feature_vs_depth(
     probe_margin_um=100,
     s=1,
     linewidth=0,
+    limits="probe_margin",
     random_seed=0,
     to_show=None,
     **scatter_kw,
@@ -324,7 +339,7 @@ def scatter_feature_vs_depth(
     if sorting is not None:
         labels = sorting.labels
     if labels is None:
-        c = np.clip(amplitudes[to_show], 0, amplitude_color_cutoff)
+        c = np.clip(amplitudes, 0, amplitude_color_cutoff)
         cmap = plt.cm.viridis
     else:
         c = labels
@@ -349,4 +364,6 @@ def scatter_feature_vs_depth(
         linewidth=linewidth,
         **scatter_kw,
     )
+    if limits == "probe_margin" and geom is not None:
+        ax.set_ylim([geom[:, 1].min() - probe_margin_um, geom[:, 1].max() + probe_margin_um])
     return ax, s
