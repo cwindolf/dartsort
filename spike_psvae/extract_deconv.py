@@ -67,6 +67,7 @@ def extract_deconv(
     loc_feature="ptp",
     tpca_training_radius=None,
     seed=0,
+    localization_model="pointsource",
 ):
     standardized_bin = Path(standardized_bin)
     output_directory = Path(output_directory)
@@ -253,7 +254,7 @@ def extract_deconv(
     if localize:
         featurizers.append(
             chunk_features.Localization(
-                geom, channel_index, loc_radius=loc_radius, feature=loc_feature
+                geom, channel_index, loc_radius=loc_radius, feature=loc_feature, localization_model=localization_model,
             )
         )
         featurizers.append(chunk_features.MaxPTP())

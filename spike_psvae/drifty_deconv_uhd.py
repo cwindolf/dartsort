@@ -216,7 +216,7 @@ def superres_denoised_templates(
     snr_threshold=5.0 * np.sqrt(100),
     spike_length_samples=121,
     trough_offset=42,
-    do_tpca=True,
+    do_tpca=True, #Put it to True
     tpca=None,
     tpca_rank=5,
     tpca_radius=20,
@@ -986,6 +986,7 @@ def extract_superres_shifted_deconv(
     registered_medians=None,
     medians_at_computation=None,
     n_spikes_max=None,
+    localization_model="pointsource",
 ):
     """
     This is a wrapper that helps us deal with the bookkeeping for proposed
@@ -1055,6 +1056,7 @@ def extract_superres_shifted_deconv(
         seed=0,
         tpca_training_radius=tpca_training_radius,
         n_spikes_max=n_spikes_max,
+        localization_model=localization_model,
     )
 #     else:
 
@@ -1203,6 +1205,7 @@ def full_deconv_with_update(
     extract_radius_um=100,
     loc_radius=100,
     loc_feature="peak",
+    localization_model="pointsource",
     n_sec_train_feats=10,
     n_spikes_max=10000,
     n_sec_chunk=1,
@@ -1323,6 +1326,7 @@ def full_deconv_with_update(
         bins_sizes_um=bins_sizes_um,
         registered_medians=registered_medians,
         medians_at_computation=medians_at_computation,
+        localization_model=localization_model,
     )
     
     return extract_deconv_chunk
