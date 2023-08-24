@@ -1,8 +1,4 @@
-PyWavelets
-cython
-h5py
+pytest
 ibl-neuropixel
-parmap
-scikit-image
-torch
-viewephys
+spikeinterface
+cloudpickle
