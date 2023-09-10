@@ -54,6 +54,7 @@ def cluster_scatter(
     excluded_ids={-1},
     s=1,
     alpha=0.5,
+    lw=0,
     do_ellipse=True,
     fontsize=None,
     linewidth_ellipse=1.,
@@ -67,7 +68,7 @@ def cluster_scatter(
         xk = xs[where]
         yk = ys[where]
         color = get_ccolor(k)
-        ax.scatter(xk, yk, s=s, color=color, alpha=alpha, marker=".")
+        ax.scatter(xk, yk, s=s, color=color, lw=lw, marker=".", rasterized=True)
         if k not in excluded_ids:
             if do_ellipse:
                 x_mean, y_mean = xk.mean(), yk.mean()
