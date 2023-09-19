@@ -160,6 +160,7 @@ class SubtractionConfig:
     extract_radius: float = 200.0
     n_chunks_fit: int = 40
     fit_subsampling_random_state: int = 0
+    residnorm_decrease_threshold: float = 3.162  # sqrt(10)
 
     # how will waveforms be denoised before subtraction?
     # users can also save waveforms/features during subtraction
