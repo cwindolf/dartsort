@@ -52,6 +52,7 @@ class SubtractionPeeler(BasePeeler):
         else:
             self.spatial_dedup_channel_index = None
         self.detection_thresholds = detection_thresholds
+        self.residnorm_decrease_threshold = residnorm_decrease_threshold
 
         self.add_module(
             "subtraction_denoising_pipeline", subtraction_denoising_pipeline
