@@ -473,7 +473,7 @@ class BasePeeler(torch.nn.Module):
 # -- helper functions and objects for parallelism
 
 
-class ProcessContext:
+class PeelerProcessContext:
     def __init__(self, peeler, save_residual):
         self.peeler = peeler
         self.save_residual = save_residual
@@ -501,7 +501,7 @@ def _peeler_process_init(peeler, device, rank_queue, save_residual):
     peeler.eval()
 
     # update process-local variables
-    _peeler_process_context = ProcessContext(peeler, save_residual)
+    _peeler_process_context = PeelerProcessContext(peeler, save_residual)
 
 
 def _peeler_process_job(chunk_start_samples):
