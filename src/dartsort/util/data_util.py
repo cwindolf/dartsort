@@ -1,4 +1,6 @@
 from collections import namedtuple
+from dataclasses import dataclass, field
+from typing import Optional
 from warnings import warn
 
 import h5py
@@ -16,6 +18,7 @@ from .waveform_util import make_channel_index
 SpikeDataset = namedtuple("SpikeDataset", ["name", "shape_per_spike", "dtype"])
 
 
+@dataclass
 class DARTsortSorting:
     """Class which holds spike times, channels, and labels
 
@@ -23,42 +26,35 @@ class DARTsortSorting:
     Initially the sorter doesn't have unit labels, so these are optional.
     Export me to a SpikeInterface NumpySorting with .to_numpy_sorting()
     """
+    times_samples : np.ndarray
+    channels : np.ndarray
+    labels : Optional[np.ndarray] = None
+    sampling_frequency : Optional[float] = 30_000.0
+    # entries in this dictionary will also be set as properties
+    extra_features: Optional[dict[str, np.ndarray]] = None
 
-    def __init__(
-        self,
-        times_samples,
-        channels,
-        labels=None,
-        sampling_frequency=30000,
-        extra_features=None,
-    ):
-        """
-        Arguments
-        ---------
-        times_samples : np.array
-            Array of spike times_samples in samples
-        channels : np.array
-            Array of spike detection channel indices
-        labels : optional, np.array
-            Array of unit labels
-        """
-        self.times_samples = np.array(times_samples, dtype=int)
-        self.channels = channels
-        self.labels = labels
-        self.sampling_frequency = sampling_frequency
-        if labels is None:
-            self.labels = np.zeros_like(times_samples)
+    # automatically set
+    n_spikes: int = field(init=False)
+    extra_feature_names: list = field(init=False)
 
-        if channels is not None:
-            self.channels = np.array(channels, dtype=int)
-            assert self.times_samples.shape == self.channels.shape
+    def __post_init__(self):
+        self.times_samples = np.asarray(self.times_samples, dtype=int)
+
+        if self.labels is None:
+            self.labels = np.zeros_like(self.times_samples)
+        self.labels = np.asarray(self.labels, dtype=int)
+
+        self.channels = np.asarray(self.channels, dtype=int)
+        assert self.times_samples.shape == self.channels.shape
 
         self.extra_feature_names = []
-        if extra_features is not None:
-            for k, v in extra_features.items():
+        if self.extra_features is not None:
+            for k, v in self.extra_features.items():
                 self.extra_feature_names.append(k)
                 assert v.shape[0] == len(self.times_samples)
                 setattr(self, k, v)
+
+        self.n_spikes = self.times_samples.size
 
     def to_numpy_sorting(self):
         return NumpySorting.from_times_labels(
@@ -83,7 +79,7 @@ class DARTsortSorting:
         return str(self)
 
     def __len__(self):
-        return self.times_samples.size
+        return self.n_spikes
 
     @classmethod
     def from_peeling_hdf5(

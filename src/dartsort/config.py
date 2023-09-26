@@ -13,12 +13,17 @@ featurization_config = FeaturizationConfig(do_nn_denoise=False)
 This will use all the other parameters' default values. This
 object can then be passed into the high level functions like
 `subtract(...)`.
+
+TODO: Add a CommonConfig for parameters which show up in multiple
+      of the below classes, so that users don't forget to change
+      them in multiple places. Then the rest of the configs eat
+      a commonconfig.
 """
 from dataclasses import dataclass
 from pathlib import Path
 from typing import List, Optional
 
-repo_root = Path(__file__).parent.parent.parent
+__repo_root__ = Path(__file__).parent.parent.parent
 
 
 @dataclass(frozen=True)
@@ -61,7 +66,7 @@ class FeaturizationConfig:
     # in the future we may add multi-channel or other nns
     nn_denoiser_class_name: str = "SingleChannelWaveformDenoiser"
     nn_denoiser_pretrained_path: str = str(
-        repo_root / "pretrained" / "single_chan_denoiser.pt"
+        __repo_root__ / "pretrained" / "single_chan_denoiser.pt"
     )
     # optionally restrict how many channels TPCA are fit on
     tpca_fit_radius: Optional[float] = None
@@ -169,3 +174,26 @@ class SubtractionConfig:
         input_waveforms_name="raw",
         output_waveforms_name="subtracted",
     )
+
+
+@dataclass(frozen=True)
+class MatchingConfig:
+    trough_offset_samples: int = 42
+    spike_length_samples: int = 121
+    chunk_length_samples: int = 30_000
+    extract_radius: float = 100.0
+    n_chunks_fit: int = 40
+    fit_subsampling_random_state: int = 0
+
+    # template construction parameters
+    superres_strategy: str = "drift_pitch_loc_bin"
+    superres_bin_size: float = 10.0
+    low_rank_denoising: bool = True
+    low_rank_denoising_rank: int = 5
+    realign_peaks: bool = True  # TODO: maybe this should be done in clustering
+    realign_max_sample_shift: int = 20
+
+    # template matching parameters
+    threshold: float = 30.0
+    template_svd_compression_rank: Optional[int] = None
+    template_temporal_upsampling_factor: int = 8
