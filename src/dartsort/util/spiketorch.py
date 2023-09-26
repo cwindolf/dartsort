@@ -1,5 +1,6 @@
 import torch
 import torch.nn.functional as F
+from torch.fft import irfft, rfft
 
 
 def ptp(waveforms, dim=1):
@@ -23,18 +24,14 @@ def ravel_multi_index(multi_index, dims):
         Indices into the flattened tensor of shape `dims`
     """
     assert len(multi_index) == len(dims)
-    if any(
-        torch.any((ix < 0) | (ix >= d)) for ix, d in zip(multi_index, dims)
-    ):
+    if any(torch.any((ix < 0) | (ix >= d)) for ix, d in zip(multi_index, dims)):
         raise ValueError("Out of bounds indices in ravel_multi_index")
 
     # collect multi indices
     multi_index = torch.broadcast_tensors(*multi_index)
     multi_index = torch.stack(multi_index)
     # stride along each axis
-    strides = (
-        multi_index.new_tensor([1, *reversed(dims[1:])]).cumprod(0).flip(0)
-    )
+    strides = multi_index.new_tensor([1, *reversed(dims[1:])]).cumprod(0).flip(0)
     # apply strides (along first axis) and reshape
     strides = strides.view(-1, *([1] * (multi_index.ndim - 1)))
     raveled_indices = (strides * multi_index).sum(0)
@@ -80,7 +77,7 @@ def grab_spikes(
 
     if not already_padded:
         traces = F.pad(traces, (0, 1), value=pad_value)
-        
+
     spike_sample_offsets = torch.arange(
         buffer - trough_offset,
         buffer - trough_offset + spike_length_samples,
@@ -181,3 +178,43 @@ def reduce_at_(dest, ix, src, reduce, include_self=True):
         reduce=reduce,
         include_self=include_self,
     )
+
+
+_cdtypes = {torch.float32: torch.complex64, torch.float64: torch.complex128}
+
+
+def real_resample(x, num, dim=0):
+    """torch version of a special case of scipy.signal.resample
+
+    Resamples x to have num elements on dim=dim. This is a direct
+    copy of the scipy code in the case where there is no window
+    and the data is not complex.
+    """
+    Nx = x.shape[dim]
+    # f = rfft(x, dim=dim)
+    cdtype = _cdtypes[x.dtype]
+
+    # pad output spectrum
+    newshape = list(x.shape)
+    newshape[dim] = num // 2 + 1
+    g = torch.zeros(newshape, dtype=cdtype, device=x.device)
+    N = min(num, Nx)
+    nyq = N // 2 + 1
+    sl = [slice(None)] * x.ndim
+    sl[dim] = slice(0, nyq)
+    rfft(x, dim=dim, out=g[tuple(sl)])
+    # g[tuple(sl)] = f[tuple(sl)]
+
+    # split/join nyquist components if present
+    if N % 2 == 0:
+        sl[dim] = slice(N // 2, N // 2 + 1)
+        if num < Nx:  # downsampling
+            g[tuple(sl)] *= 2.0
+        elif num > Nx:  # upsampling
+            g[tuple(sl)] *= 0.5
+
+    # inverse transform
+    y = irfft(g, num, dim=dim)
+    y *= (float(num) / float(Nx))
+
+    return y

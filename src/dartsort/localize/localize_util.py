@@ -8,6 +8,29 @@ from tqdm.auto import trange
 from .localize_torch import localize_amplitude_vectors
 
 
+def localize_waveforms(
+    waveforms,
+    geom,
+    main_channels=None,
+    channel_index=None,
+    radius=None,
+    n_channels_subset=None,
+):
+    C, dim = geom.shape
+    amp_vecs = waveforms.ptp(1)
+    if main_channels is None:
+        main_channels = amp_vecs.argmax(1)
+
+    return localize_amplitude_vectors(
+        amp_vecs,
+        geom,
+        main_channels,
+        channel_index=channel_index,
+        radius=radius,
+        n_channels_subset=n_channels_subset,
+    )
+
+
 def localize_hdf5(
     hdf5_filename,
     radius=None,
@@ -63,9 +86,7 @@ def localize_hdf5(
 
         batches = range(0, n_spikes, spikes_per_batch)
         if show_progress:
-            batches = trange(
-                0, n_spikes, spikes_per_batch, desc="Localization"
-            )
+            batches = trange(0, n_spikes, spikes_per_batch, desc="Localization")
         for start_ix in batches:
             end_ix = min(n_spikes, start_ix + spikes_per_batch)
 
