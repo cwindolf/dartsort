@@ -10,10 +10,11 @@ original probe as a subset, as well as copies of the probe shifted
 by integer numbers of pitches. As many shifted copies are created
 as needed to capture all the drift.
 """
+import warnings
+
 import numpy as np
 from scipy.spatial import KDTree
 from scipy.spatial.distance import pdist
-import warnings
 
 from .waveform_util import get_pitch
 
@@ -78,9 +79,7 @@ def registered_geometry(
     unique_shifted_positions = np.array(unique_shifted_positions)
 
     # order by depth first, then horizontal position (unique goes the other way)
-    registered_geom = unique_shifted_positions[
-        np.lexsort(unique_shifted_positions.T)
-    ]
+    registered_geom = unique_shifted_positions[np.lexsort(unique_shifted_positions.T)]
     assert np.isclose(get_pitch(registered_geom), pitch)
 
     return registered_geom
@@ -126,7 +125,7 @@ def registered_average(
     # take the mean and return
     # suppress all-NaN slice warning
     with warnings.catch_warnings():
-        warnings.filterwarnings('ignore', r'All-NaN (slice|axis) encountered')
+        warnings.filterwarnings("ignore", r"All-NaN (slice|axis) encountered")
         average = reducer(static_waveforms, axis=0)
     if not np.isnan(pad_value):
         average = np.nan_to_num(average, copy=False, nan=pad_value)
@@ -135,24 +134,52 @@ def registered_average(
 
 
 def get_spike_pitch_shifts(
-    depths_um, geom, registered_depths_um=None, times_s=None, motion_est=None
+    depths_um,
+    geom=None,
+    registered_depths_um=None,
+    times_s=None,
+    motion_est=None,
+    pitch=None,
 ):
     """Figure out coarse pitch shifts based on spike positions
 
     Determine the number of pitches the probe would need to shift in
     order to coarsely align a waveform to its registered position.
     """
-    pitch = get_pitch(geom)
+    if pitch is None:
+        pitch = get_pitch(geom)
     if registered_depths_um is None:
-        displacement = -motion_est.disp_at_s(times_s, depths_um)
+        probe_displacement = -motion_est.disp_at_s(times_s, depths_um)
     else:
-        displacement = registered_depths_um - depths_um
+        probe_displacement = registered_depths_um - depths_um
 
-    # if displacement > 0, then the registered position is below the original
+    # if probe_displacement > 0, then the registered position is below the original
     # and, to be conservative, round towards 0 rather than using //
-    n_pitches_shift = (displacement / pitch).astype(int)
+    n_pitches_shift = (probe_displacement / pitch).astype(int)
 
     return n_pitches_shift
+
+
+def invert_motion_estimate(motion_est, t_s, registered_depths_um):
+    """ """
+    assert np.isscalar(t_s)
+
+    if (
+        hasattr(motion_est, "spatial_bin_centers_um")
+        and motion_est.spatial_bin_centers_um is not None
+    ):
+        bin_centers = motion_est.spatial_bin_centers_um
+        bin_center_disps = motion_est.disp_at_s(t_s, depth_um=bin_centers)
+        # registered_bin_centers = motion_est.correct_s(t_s, depths_um=bin_centers)
+        registered_bin_centers = bin_centers - bin_center_disps
+        assert np.all(np.diff(registered_bin_centers) > 0), "Invertibility issue."
+        disps = np.interp(
+            registered_depths_um, registered_bin_centers, bin_center_disps
+        )
+    else:
+        disps = motion_est.disp_at_s(t_s)
+
+    return registered_depths_um + disps
 
 
 # -- waveform channel neighborhood shifting
