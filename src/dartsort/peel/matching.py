@@ -13,8 +13,10 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 from dartsort.detect import detect_and_deduplicate
+from dartsort.transform import WaveformPipeline
 from dartsort.util import spiketorch
 from dartsort.util.data_util import SpikeDataset
+from dartsort.util.waveform_util import make_channel_index
 
 from . import template_util
 from .peel_base import BasePeeler
@@ -26,12 +28,9 @@ class ResidualUpdateTemplateMatchingPeeler(BasePeeler):
     def __init__(
         self,
         recording,
-        templates,
+        template_data,
         channel_index,
         featurization_pipeline,
-        unit_ids=None,
-        registered_geom=None,
-        registered_template_depths_um=None,
         motion_est=None,
         svd_compression_rank=10,
         temporal_upsampling_factor=8,
@@ -47,7 +46,7 @@ class ResidualUpdateTemplateMatchingPeeler(BasePeeler):
         fit_subsampling_random_state=0,
         max_iter=1000,
     ):
-        n_templates, spike_length_samples = templates.shape[:2]
+        n_templates, spike_length_samples = template_data.templates.shape[:2]
         super().__init__(
             recording=recording,
             channel_index=channel_index,
@@ -64,7 +63,7 @@ class ResidualUpdateTemplateMatchingPeeler(BasePeeler):
             singular_values,
             spatial_components,
         ) = template_util.svd_compress_templates(
-            templates,
+            template_data.templates,
             min_channel_amplitude=min_channel_amplitude,
             rank=svd_compression_rank,
         )
@@ -85,12 +84,14 @@ class ResidualUpdateTemplateMatchingPeeler(BasePeeler):
         self.n_channels = len(self.geom)
         self.obj_pad_len = max(refractory_radius_frames, upsampling_peak_window_radius)
         self.n_registered_channels = (
-            len(registered_geom) if registered_geom is not None else self.n_channels
+            len(template_data.registered_geom)
+            if template_data.registered_geom is not None
+            else self.n_channels
         )
 
         # waveform extraction
         self.channel_index = channel_index
-        self.registered_template_ampvecs = templates.ptp(1)
+        self.registered_template_ampvecs = template_data.templates.ptp(1)
 
         # torch buffers
         self.register_buffer("temporal_components", torch.tensor(temporal_components))
@@ -109,10 +110,10 @@ class ResidualUpdateTemplateMatchingPeeler(BasePeeler):
 
         # drift-related properties
         self.is_drifting = motion_est is not None
-        self.registered_geom = registered_geom
-        self.registered_template_depths_um = registered_template_depths_um
+        self.registered_geom = template_data.registered_geom
+        self.registered_template_depths_um = template_data.registered_template_depths_um
 
-        self.handle_template_groups(unit_ids)
+        self.handle_template_groups(template_data.unit_ids)
         self.check_shapes()
 
         self.fixed_output_data += [
@@ -123,8 +124,11 @@ class ResidualUpdateTemplateMatchingPeeler(BasePeeler):
                 "upsampled_temporal_components",
                 self.upsampled_temporal_components.numpy(force=True).copy(),
             ),
-            ("registered_geom", registered_geom)
         ]
+        if self.is_drifting:
+            self.fixed_output_data.append(
+                ("registered_geom", template_data.registered_geom)
+            )
 
     def out_datasets(self):
         datasets = super().out_datasets()
@@ -161,11 +165,8 @@ class ResidualUpdateTemplateMatchingPeeler(BasePeeler):
         assert self.unit_ids.shape == (self.n_templates,)
 
     def handle_template_groups(self, unit_ids):
+        self.unit_ids = unit_ids
         self.grouped_temps = True
-        if unit_ids is None:
-            self.grouped_temps = False
-            self.unit_ids = np.arange(self.n_templates)
-
         unique_units = np.unique(unit_ids)
         if unique_units.size == unit_ids.size:
             self.grouped_temps = False
@@ -234,8 +235,38 @@ class ResidualUpdateTemplateMatchingPeeler(BasePeeler):
     @classmethod
     def from_config(
         cls,
+        recording,
+        matching_config,
+        featurization_config,
+        template_data,
+        motion_est=None,
     ):
-        pass
+        geom = torch.tensor(recording.get_channel_locations())
+        channel_index = make_channel_index(
+            geom, matching_config.extract_radius, to_torch=True
+        )
+        featurization_pipeline = WaveformPipeline.from_config(
+            geom, channel_index, featurization_config
+        )
+        return cls(
+            recording,
+            template_data,
+            channel_index,
+            featurization_pipeline,
+            motion_est=motion_est,
+            svd_compression_rank=matching_config.template_svd_compression_rank,
+            temporal_upsampling_factor=matching_config.template_temporal_upsampling_factor,
+            min_channel_amplitude=matching_config.template_min_channel_amplitude,
+            refractory_radius_frames=matching_config.refractory_radius_frames,
+            amplitude_scaling_variance=matching_config.amplitude_scaling_variance,
+            amplitude_scaling_boundary=matching_config.amplitude_scaling_boundary,
+            trough_offset_samples=matching_config.trough_offset_samples,
+            threshold=matching_config.threshold,
+            chunk_length_samples=matching_config.chunk_length_samples,
+            n_chunks_fit=matching_config.n_chunks_fit,
+            fit_subsampling_random_state=matching_config.fit_subsampling_random_state,
+            max_iter=matching_config.max_iter,
+        )
 
     def peel_chunk(
         self,
@@ -493,18 +524,16 @@ class ResidualUpdateTemplateMatchingPeeler(BasePeeler):
             buffer=0,
             already_padded=True,
         )
-        waveforms += torch.einsum(
-            "nrc,ntr->ntc",
-            compressed_template_data.spatial_singular[
-                peaks.template_indices[:, None, None],
-                :,
-                self.channel_index[channels][:, None, :],
-            ],
-            compressed_template_data.upsampled_temporal_components[
-                peaks.template_indices,
-                peaks.upsampling_indices,
-            ],
-        )
+        spatial = compressed_template_data.spatial_singular[
+            peaks.template_indices[:, None, None],
+            :,
+            self.channel_index[channels][:, None, :],
+        ]
+        temporal = compressed_template_data.upsampled_temporal_components[
+            peaks.template_indices,
+            peaks.upsampling_indices,
+        ]
+        torch.baddbmm(waveforms, temporal, spatial, out=waveforms)
         return channels, waveforms
 
 
@@ -563,10 +592,8 @@ class CompressedTemplateData:
                 rec_spatial[None], temporal[:, None, :], groups=self.n_templates
             )
 
-        # units x time
-        out = out[0]
-
-        return out
+        # back to units x time (remove extra dim used for conv1d)
+        return out[0]
 
     def subtract(
         self,
