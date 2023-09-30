@@ -26,6 +26,21 @@ from typing import List, Optional
 __repo_root__ = Path(__file__).parent.parent.parent
 
 
+# TODO: integrate this in the other configs
+@dataclass(frozen=True)
+class WaveformConfig:
+    """Defaults yield 42 sample trough offset and 121 total at 30kHz."""
+    ms_before: float = 1.4
+    ms_after: float = 2.6
+
+    def trough_offset_samples(self, sampling_frequency=30_000):
+        return int(self.ms_before * (sampling_frequency / 1000))
+
+    def spike_length_samples(self, sampling_frequency=30_000):
+        spike_len_ms = self.ms_before + self.ms_after
+        return int(spike_len_ms * (sampling_frequency / 1000))
+
+
 @dataclass(frozen=True)
 class FeaturizationConfig:
     """Featurization and denoising configuration
@@ -177,6 +192,34 @@ class SubtractionConfig:
 
 
 @dataclass(frozen=True)
+class TemplateConfig:
+    trough_offset_samples: int = 42
+    spike_length_samples: int = 121
+    spikes_per_unit = 500
+
+    # -- template construction parameters
+    # registered templates?
+    registered_templates: bool = True
+    registered_template_localization_radius_um: float = 100.0
+
+    # superresolved templates
+    superres_templates: bool = True
+    superres_bin_size_um: float = 10.0
+    superres_strategy: str = "drift_pitch_loc_bin"
+
+    # low rank denoising?
+    low_rank_denoising: bool = True
+    denoising_rank: int = 5
+    denoising_snr_threshold: float = 50.0
+    denoising_fit_radius: float = 75.0
+
+    # realignment
+    # TODO: maybe this should be done in clustering?
+    realign_peaks: bool = True
+    realign_max_sample_shift: int = 20
+
+
+@dataclass(frozen=True)
 class MatchingConfig:
     trough_offset_samples: int = 42
     spike_length_samples: int = 121
@@ -185,15 +228,12 @@ class MatchingConfig:
     n_chunks_fit: int = 40
     fit_subsampling_random_state: int = 0
 
-    # template construction parameters
-    superres_strategy: str = "drift_pitch_loc_bin"
-    superres_bin_size: float = 10.0
-    low_rank_denoising: bool = True
-    low_rank_denoising_rank: int = 5
-    realign_peaks: bool = True  # TODO: maybe this should be done in clustering
-    realign_max_sample_shift: int = 20
-
     # template matching parameters
     threshold: float = 30.0
-    template_svd_compression_rank: Optional[int] = None
+    template_svd_compression_rank: int = 10
     template_temporal_upsampling_factor: int = 8
+    template_min_channel_amplitude: float = 1.0
+    refractory_radius_frames: int = 10
+    amplitude_scaling_variance: float = 0.0
+    amplitude_scaling_boundary: float = 0.5
+    max_iter: int = 1000
