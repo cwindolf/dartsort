@@ -25,6 +25,13 @@ class DARTsortSorting:
     This class holds our algorithm state.
     Initially the sorter doesn't have unit labels, so these are optional.
     Export me to a SpikeInterface NumpySorting with .to_numpy_sorting()
+
+    When you instantiate this with from_peeling_hdf5, if the
+    flag load_simple_features is True (default), then additional
+    features of spikes will be loaded into memory -- like localizations,
+    which you can access like `sorting.point_source_localizations[...]`
+    If you instantiate with __init__(), you can pass these in with
+    `extra_features`, and they will also be available as .properties.
     """
     times_samples : np.ndarray
     channels : np.ndarray
@@ -88,7 +95,7 @@ class DARTsortSorting:
         times_samples_dataset="times_samples",
         channels_dataset="channels",
         labels_dataset="labels",
-        load_simple_features=False,
+        load_simple_features=True,
     ):
         channels = labels = None
         with h5py.File(peeling_hdf5_filename, "r") as h5:
