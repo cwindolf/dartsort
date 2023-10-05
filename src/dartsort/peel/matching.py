@@ -13,12 +13,12 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 from dartsort.detect import detect_and_deduplicate
+from dartsort.templates import template_util
 from dartsort.transform import WaveformPipeline
 from dartsort.util import spiketorch
 from dartsort.util.data_util import SpikeDataset
 from dartsort.util.waveform_util import make_channel_index
 
-from . import template_util
 from .peel_base import BasePeeler
 
 
