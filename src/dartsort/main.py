@@ -1,12 +1,17 @@
 from pathlib import Path
 
-from dartsort.config import FeaturizationConfig, SubtractionConfig
+from dartsort.config import (FeaturizationConfig, MatchingConfig,
+                             SubtractionConfig, TemplateConfig)
 from dartsort.localize.localize_util import localize_hdf5
-from dartsort.peel import SubtractionPeeler
+from dartsort.peel import (ResidualUpdateTemplateMatchingPeeler,
+                           SubtractionPeeler)
+from dartsort.templates import TemplateData
 from dartsort.util.data_util import DARTsortSorting, check_recording
 
 default_featurization_config = FeaturizationConfig()
 default_subtraction_config = SubtractionConfig()
+default_template_config = TemplateConfig()
+default_matching_config = MatchingConfig()
 
 
 def dartsort(
@@ -37,9 +42,12 @@ def subtract(
     show_progress=True,
     device=None,
     hdf5_filename="subtraction.h5",
+    model_subdir="subtraction_models",
 ):
     output_directory = Path(output_directory)
     output_directory.mkdir(exist_ok=True)
+    model_dir = output_directory / "subtraction_models"
+    output_hdf5_filename = output_directory / hdf5_filename
 
     subtraction_peeler = SubtractionPeeler.from_config(
         recording,
@@ -51,7 +59,6 @@ def subtract(
     check_recording(recording)
 
     # fit models if needed
-    model_dir = output_directory / "subtraction_models"
     if overwrite and model_dir.exists():
         for pt_file in model_dir.glob("*pipeline.pt"):
             pt_file.unlink()
@@ -61,8 +68,88 @@ def subtract(
     )
 
     # run main
-    output_hdf5_filename = output_directory / hdf5_filename
     subtraction_peeler.peel(
+        output_hdf5_filename,
+        chunk_starts_samples=chunk_starts_samples,
+        n_jobs=n_jobs,
+        overwrite=overwrite,
+        residual_filename=residual_filename,
+        show_progress=show_progress,
+    )
+
+    # do localization
+    if featurization_config.do_localization:
+        wf_name = featurization_config.output_waveforms_name
+        localize_hdf5(
+            output_hdf5_filename,
+            radius=featurization_config.localization_radius,
+            amplitude_vectors_dataset_name=f"{wf_name}_amplitude_vectors",
+            show_progress=show_progress,
+            device=device,
+        )
+
+    return (
+        DARTsortSorting.from_peeling_hdf5(output_hdf5_filename),
+        output_hdf5_filename,
+    )
+
+
+def cluster(*args):
+    # coming soon
+    pass
+
+
+def match(
+    recording,
+    sorting,
+    output_directory,
+    motion_est=None,
+    template_config=default_template_config,
+    featurization_config=default_featurization_config,
+    matching_config=default_matching_config,
+    chunk_starts_samples=None,
+    n_jobs=0,
+    overwrite=False,
+    residual_filename=None,
+    show_progress=True,
+    device=None,
+    hdf5_filename="matching0.h5",
+    model_subdir="matching_models_0"
+):
+    output_directory = Path(output_directory)
+    output_directory.mkdir(exist_ok=True)
+    model_dir = output_directory / model_subdir
+    output_hdf5_filename = output_directory / hdf5_filename
+
+    # compute templates
+    template_data = TemplateData.from_config(
+        recording,
+        sorting,
+        template_config,
+        motion_est=motion_est,
+        n_jobs=n_jobs,
+    )
+
+    # instantiate peeler
+    matching_peeler = ResidualUpdateTemplateMatchingPeeler.from_config(
+        recording,
+        matching_config,
+        featurization_config,
+        template_data,
+        motion_est=motion_est,
+    )
+
+    # fit models if needed
+    if overwrite and model_dir.exists():
+        for pt_file in model_dir.glob("*pipeline.pt"):
+            pt_file.unlink()
+    model_dir.mkdir(exist_ok=True)
+    matching_peeler.load_or_fit_and_save_models(
+        model_dir, n_jobs=n_jobs, device=device
+    )
+
+    # run main
+    matching_peeler.peel(
         output_hdf5_filename,
         chunk_starts_samples=chunk_starts_samples,
         n_jobs=n_jobs,
