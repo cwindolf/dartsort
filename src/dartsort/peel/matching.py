@@ -709,7 +709,3 @@ class MatchingPeaks:
         self._scalings[self.n_spikes : new_n_spikes] = other.scalings
         self._scores[self.n_spikes : new_n_spikes] = other.scores
         self.n_spikes = new_n_spikes
-
-
-def subtract_compressed_templates(traces, spatial_singular, temporal_components):
-    """"""
