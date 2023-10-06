@@ -51,7 +51,9 @@ def cluster_chunk(
             channels=channels,
             labels=labels,
             extra_features=dict(
-                point_source_localizations=xyza, denoised_amplitudes=amps
+                point_source_localizations=xyza,
+                denoised_amplitudes=amps,
+                times_seconds=times_s,
             ),
         )
     elif strategy == "hdbscan":
