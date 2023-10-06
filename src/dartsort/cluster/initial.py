@@ -41,12 +41,26 @@ def cluster_chunk(
             channels = h5["channels"][:]
             times_s = h5["times_seconds"][:]
             xyza = h5["point_source_localizations"][:]
+            amps = h5["denoised_amplitudes"][:]
             geom = h5["geom"][:]
         labels = cluster_util.closest_registered_channels(
             times_s, xyza[:, 0], xyza[:, 2], geom, motion_est
         )
         sorting = DARTsortSorting(
-            times_samples=times_samples, channels=channels, labels=labels
+            times_samples=times_samples,
+            channels=channels,
+            labels=labels,
+            extra_features=dict(
+                point_source_localizations=xyza, denoised_amplitudes=amps
+            ),
         )
+    elif strategy == "hdbscan":
+        pass
+    else:
+        raise ValueError
 
     return sorting
+
+
+def ensemble_chunks():
+    pass

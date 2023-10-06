@@ -9,7 +9,7 @@ from .template_util import get_registered_templates
 
 _motion_error_prefix = (
     "If template_config has registered_templates==True "
-    "or superres_templates=True, then"
+    "or superres_templates=True, then "
 )
 
 
