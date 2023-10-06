@@ -44,54 +44,26 @@ def subtract(
     hdf5_filename="subtraction.h5",
     model_subdir="subtraction_models",
 ):
-    output_directory = Path(output_directory)
-    output_directory.mkdir(exist_ok=True)
-    model_dir = output_directory / "subtraction_models"
-    output_hdf5_filename = output_directory / hdf5_filename
-
+    check_recording(recording)
     subtraction_peeler = SubtractionPeeler.from_config(
         recording,
         subtraction_config=subtraction_config,
         featurization_config=featurization_config,
     )
-
-    # sanity check recording
-    check_recording(recording)
-
-    # fit models if needed
-    if overwrite and model_dir.exists():
-        for pt_file in model_dir.glob("*pipeline.pt"):
-            pt_file.unlink()
-    model_dir.mkdir(exist_ok=True)
-    subtraction_peeler.load_or_fit_and_save_models(
-        model_dir, n_jobs=n_jobs, device=device
-    )
-
-    # run main
-    subtraction_peeler.peel(
-        output_hdf5_filename,
+    detections, output_hdf5_filename = _run_peeler(
+        subtraction_peeler,
+        output_directory,
+        hdf5_filename,
+        model_subdir,
+        featurization_config,
         chunk_starts_samples=chunk_starts_samples,
-        n_jobs=n_jobs,
         overwrite=overwrite,
+        n_jobs=n_jobs,
         residual_filename=residual_filename,
         show_progress=show_progress,
+        device=device,
     )
-
-    # do localization
-    if featurization_config.do_localization:
-        wf_name = featurization_config.output_waveforms_name
-        localize_hdf5(
-            output_hdf5_filename,
-            radius=featurization_config.localization_radius,
-            amplitude_vectors_dataset_name=f"{wf_name}_amplitude_vectors",
-            show_progress=show_progress,
-            device=device,
-        )
-
-    return (
-        DARTsortSorting.from_peeling_hdf5(output_hdf5_filename),
-        output_hdf5_filename,
-    )
+    return detections, output_hdf5_filename
 
 
 def cluster(*args):
@@ -114,13 +86,8 @@ def match(
     show_progress=True,
     device=None,
     hdf5_filename="matching0.h5",
-    model_subdir="matching_models_0"
+    model_subdir="matching_models_0",
 ):
-    output_directory = Path(output_directory)
-    output_directory.mkdir(exist_ok=True)
-    model_dir = output_directory / model_subdir
-    output_hdf5_filename = output_directory / hdf5_filename
-
     # compute templates
     template_data = TemplateData.from_config(
         recording,
@@ -129,7 +96,6 @@ def match(
         motion_est=motion_est,
         n_jobs=n_jobs,
     )
-
     # instantiate peeler
     matching_peeler = ResidualUpdateTemplateMatchingPeeler.from_config(
         recording,
@@ -138,18 +104,50 @@ def match(
         template_data,
         motion_est=motion_est,
     )
+    sorting, output_hdf5_filename = _run_peeler(
+        matching_peeler,
+        output_directory,
+        hdf5_filename,
+        model_subdir,
+        featurization_config,
+        chunk_starts_samples=chunk_starts_samples,
+        overwrite=overwrite,
+        n_jobs=n_jobs,
+        residual_filename=residual_filename,
+        show_progress=show_progress,
+        device=device,
+    )
+    return sorting, output_hdf5_filename
+
+
+# -- helper function
+
+
+def _run_peeler(
+    peeler,
+    output_directory,
+    hdf5_filename,
+    model_subdir,
+    featurization_config,
+    chunk_starts_samples=None,
+    overwrite=False,
+    n_jobs=0,
+    residual_filename=None,
+    show_progress=True,
+    device=None,
+):
+    output_directory = Path(output_directory)
+    output_directory.mkdir(exist_ok=True)
+    model_dir = output_directory / model_subdir
+    output_hdf5_filename = output_directory / hdf5_filename
 
     # fit models if needed
-    if overwrite and model_dir.exists():
-        for pt_file in model_dir.glob("*pipeline.pt"):
-            pt_file.unlink()
-    model_dir.mkdir(exist_ok=True)
-    matching_peeler.load_or_fit_and_save_models(
-        model_dir, n_jobs=n_jobs, device=device
+    peeler.load_or_fit_and_save_models(
+        model_dir, overwrite=overwrite, n_jobs=n_jobs, device=device
     )
 
     # run main
-    matching_peeler.peel(
+    peeler.peel(
         output_hdf5_filename,
         chunk_starts_samples=chunk_starts_samples,
         n_jobs=n_jobs,
