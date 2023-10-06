@@ -61,17 +61,22 @@ class BasePeeler(torch.nn.Module):
     # subtract.py and similar functions in the other .py files here, but these
     # are the main API methods for this class
 
-    def load_or_fit_and_save_models(self, save_folder, n_jobs=0, device=None):
+    def load_or_fit_and_save_models(self, save_folder, overwrite=False, n_jobs=0, device=None):
         """Load fitted models from save_folder if possible, or fit and save
 
         If the peeler has models that need to be trained, this function ensures
         that the models are fitted and that their fitted parameters are saved
         to `save_folder`
         """
+        save_folder = Path(save_folder)
+        if overwrite and save_folder.exists():
+            for pt_file in save_folder.glob("*pipeline.pt"):
+                pt_file.unlink()
         if self.needs_fit():
             self.load_models(save_folder)
         if self.needs_fit():
             self.fit_models(save_folder, n_jobs=n_jobs, device=device)
+            save_folder.mkdir(exist_ok=True)
             self.save_models(save_folder)
         assert not self.needs_fit()
 
