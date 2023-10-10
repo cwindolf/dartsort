@@ -64,6 +64,7 @@ def extract_deconv(
     loc_feature="ptp",
     tpca_training_radius=None,
     seed=0,
+    localization_model="pointsource",
 ):
     torch.set_grad_enabled(False)
     standardized_bin = Path(standardized_bin)

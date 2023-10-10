@@ -13,12 +13,32 @@ featurization_config = FeaturizationConfig(do_nn_denoise=False)
 This will use all the other parameters' default values. This
 object can then be passed into the high level functions like
 `subtract(...)`.
+
+TODO: Add a CommonConfig for parameters which show up in multiple
+      of the below classes, so that users don't forget to change
+      them in multiple places. Then the rest of the configs eat
+      a commonconfig.
 """
 from dataclasses import dataclass
 from pathlib import Path
 from typing import List, Optional
 
-repo_root = Path(__file__).parent.parent.parent
+__repo_root__ = Path(__file__).parent.parent.parent
+
+
+# TODO: integrate this in the other configs
+@dataclass(frozen=True)
+class WaveformConfig:
+    """Defaults yield 42 sample trough offset and 121 total at 30kHz."""
+    ms_before: float = 1.4
+    ms_after: float = 2.6
+
+    def trough_offset_samples(self, sampling_frequency=30_000):
+        return int(self.ms_before * (sampling_frequency / 1000))
+
+    def spike_length_samples(self, sampling_frequency=30_000):
+        spike_len_ms = self.ms_before + self.ms_after
+        return int(spike_len_ms * (sampling_frequency / 1000))
 
 
 @dataclass(frozen=True)
@@ -54,12 +74,14 @@ class FeaturizationConfig:
     # localization runs on output waveforms
     do_localization: bool = True
     localization_radius: float = 100.0
+    # these are saved always if do_localization
+    save_amplitude_vectors: bool = True
 
     # -- further info about denoising
     # in the future we may add multi-channel or other nns
     nn_denoiser_class_name: str = "SingleChannelWaveformDenoiser"
     nn_denoiser_pretrained_path: str = str(
-        repo_root / "pretrained" / "single_chan_denoiser.pt"
+        __repo_root__ / "pretrained" / "single_chan_denoiser.pt"
     )
     # optionally restrict how many channels TPCA are fit on
     tpca_fit_radius: Optional[float] = None
@@ -68,83 +90,6 @@ class FeaturizationConfig:
     # used when naming datasets saved to h5 files
     input_waveforms_name: str = "collisioncleaned"
     output_waveforms_name: str = "denoised"
-
-    def to_class_names_and_kwargs(self):
-        """Convert this config into a list of waveform transformer classes and arguments
-
-        Used by WaveformPipeline.from_config(...) to construct WaveformPipelines
-        from FeaturizationConfig objects.
-        """
-        class_names_and_kwargs = []
-
-        do_feats = not self.denoise_only
-
-        if do_feats and self.save_input_waveforms:
-            class_names_and_kwargs.append(
-                ("Waveform", {"name_prefix": self.input_waveforms_name})
-            )
-        if do_feats and self.save_input_tpca_projs:
-            class_names_and_kwargs.append(
-                (
-                    "TemporalPCAFeaturizer",
-                    {
-                        "rank": self.tpca_rank,
-                        "name_prefix": self.input_waveforms_name,
-                    },
-                )
-            )
-        if self.do_nn_denoise:
-            class_names_and_kwargs.append(
-                (
-                    self.nn_denoiser_class_name,
-                    {"pretrained_path": self.nn_denoiser_pretrained_path},
-                )
-            )
-        if self.do_tpca_denoise:
-            class_names_and_kwargs.append(
-                (
-                    "TemporalPCADenoiser",
-                    {
-                        "rank": self.tpca_rank,
-                        "fit_radius": self.tpca_fit_radius,
-                    },
-                )
-            )
-        if self.do_enforce_decrease:
-            class_names_and_kwargs.append(("EnforceDecrease", {}))
-        if do_feats and self.save_output_waveforms:
-            class_names_and_kwargs.append(
-                (
-                    "Waveform",
-                    {"name_prefix": self.output_waveforms_name},
-                )
-            )
-        if do_feats and self.save_output_tpca_projs:
-            class_names_and_kwargs.append(
-                (
-                    "TemporalPCAFeaturizer",
-                    {
-                        "rank": self.tpca_rank,
-                        "name_prefix": self.output_waveforms_name,
-                    },
-                )
-            )
-        if do_feats and self.do_localization:
-            class_names_and_kwargs.append(
-                (
-                    "AmplitudeVector",
-                    {"name_prefix": self.output_waveforms_name},
-                )
-            )
-        if do_feats and self.save_amplitudes:
-            class_names_and_kwargs.append(
-                (
-                    "MaxAmplitude",
-                    {"name_prefix": self.output_waveforms_name},
-                )
-            )
-
-        return class_names_and_kwargs
 
 
 @dataclass(frozen=True)
@@ -158,6 +103,7 @@ class SubtractionConfig:
     extract_radius: float = 200.0
     n_chunks_fit: int = 40
     fit_subsampling_random_state: int = 0
+    residnorm_decrease_threshold: float = 3.162  # sqrt(10)
 
     # how will waveforms be denoised before subtraction?
     # users can also save waveforms/features during subtraction
@@ -166,3 +112,51 @@ class SubtractionConfig:
         input_waveforms_name="raw",
         output_waveforms_name="subtracted",
     )
+
+
+@dataclass(frozen=True)
+class TemplateConfig:
+    trough_offset_samples: int = 42
+    spike_length_samples: int = 121
+    spikes_per_unit = 500
+
+    # -- template construction parameters
+    # registered templates?
+    registered_templates: bool = True
+    registered_template_localization_radius_um: float = 100.0
+
+    # superresolved templates
+    superres_templates: bool = True
+    superres_bin_size_um: float = 10.0
+    superres_strategy: str = "drift_pitch_loc_bin"
+
+    # low rank denoising?
+    low_rank_denoising: bool = True
+    denoising_rank: int = 5
+    denoising_snr_threshold: float = 50.0
+    denoising_fit_radius: float = 75.0
+
+    # realignment
+    # TODO: maybe this should be done in clustering?
+    realign_peaks: bool = True
+    realign_max_sample_shift: int = 20
+
+
+@dataclass(frozen=True)
+class MatchingConfig:
+    trough_offset_samples: int = 42
+    spike_length_samples: int = 121
+    chunk_length_samples: int = 30_000
+    extract_radius: float = 100.0
+    n_chunks_fit: int = 40
+    fit_subsampling_random_state: int = 0
+
+    # template matching parameters
+    threshold: float = 30.0
+    template_svd_compression_rank: int = 10
+    template_temporal_upsampling_factor: int = 8
+    template_min_channel_amplitude: float = 1.0
+    refractory_radius_frames: int = 10
+    amplitude_scaling_variance: float = 0.0
+    amplitude_scaling_boundary: float = 0.5
+    max_iter: int = 1000

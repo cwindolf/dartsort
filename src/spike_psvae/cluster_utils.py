@@ -500,7 +500,7 @@ def cluster_spikes(
     cluster_selection_epsilon=15, 
     scales=(1, 1, 50),
     frames_dedup=12,
-    triage_quantile=80,
+    triage_quantile=100,
     region_size=25,
     bin_size=5,
     ptp_low_threshold=3,
