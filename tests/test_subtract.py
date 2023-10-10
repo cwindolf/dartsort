@@ -1,3 +1,4 @@
+import dataclasses
 import tempfile
 
 import h5py
@@ -14,9 +15,9 @@ from neuropixel import dense_layout
 def test_fakedata_nonn():
     print("test_fakedata_nonn")
     # generate fake neuropixels data with artificial templates
-    T_s = 49.5
+    T_s = 89.5
     fs = 30000
-    n_channels = 50
+    n_channels = 25
     T_samples = int(fs * T_s)
     rg = np.random.default_rng(0)
 
@@ -41,9 +42,7 @@ def test_fakedata_nonn():
 
     # fake amplitude distributions
     amps = [
-        point_source_amplitude_at(
-            x, y, z, alpha, torch.as_tensor(geom)
-        ).numpy()
+        point_source_amplitude_at(x, y, z, alpha, torch.as_tensor(geom)).numpy()
         for x, y, z, alpha in torch.column_stack(
             list(map(torch.as_tensor, [xs, ys, z_abss, alphas]))
         )
@@ -59,7 +58,7 @@ def test_fakedata_nonn():
     templates[3] *= 50 / np.abs(templates[0]).max()
 
     # make fake spike trains
-    spikes_per_unit = 500
+    spikes_per_unit = 1000
     sts = []
     labels = []
     for i in range(len(templates)):
@@ -92,9 +91,7 @@ def test_fakedata_nonn():
         ),
     )
     featconf = FeaturizationConfig(do_nn_denoise=False)
-    channel_index = waveform_util.make_channel_index(
-        geom, subconf.extract_radius
-    )
+    channel_index = waveform_util.make_channel_index(geom, subconf.extract_radius)
     assert channel_index.shape[0] == len(geom)
     assert channel_index.max() == len(geom)
     assert channel_index.min() == 0
@@ -243,6 +240,72 @@ def test_fakedata_nonn():
                 featconf.tpca_rank,
                 channel_index.shape[1],
             )
+
+    # simulate resuming a job that got cancelled in the middle
+    print("test resume1")
+    # this one needs to be more deterministic
+    subconf = dataclasses.replace(
+        subconf,
+        subtraction_denoising_config=dataclasses.replace(
+            subconf.subtraction_denoising_config, do_tpca_denoise=False
+        ),
+    )
+    with tempfile.TemporaryDirectory() as tempdir:
+        st0, out_h5 = subtract(
+            rec,
+            tempdir,
+            featurization_config=dataclasses.replace(featconf, do_localization=False),
+            subtraction_config=subconf,
+        )
+        ns0 = len(st0)
+
+    with tempfile.TemporaryDirectory() as tempdir:
+        sta, out_h5 = subtract(
+            rec.frame_slice(start_frame=0, end_frame=int(20 * fs)),
+            tempdir,
+            featurization_config=dataclasses.replace(featconf, do_localization=False),
+            subtraction_config=subconf,
+        )
+        stb, out_h5 = subtract(
+            rec,
+            tempdir,
+            featurization_config=featconf,
+            subtraction_config=subconf,
+        )
+        assert len(sta) < ns0
+        assert len(stb) == ns0
+
+    with tempfile.TemporaryDirectory() as tempdir:
+        sta, out_h5 = subtract(
+            rec.frame_slice(start_frame=0, end_frame=int(25 * fs)),
+            tempdir,
+            featurization_config=dataclasses.replace(featconf, do_localization=False),
+            subtraction_config=subconf,
+        )
+        stb, out_h5 = subtract(
+            rec,
+            tempdir,
+            featurization_config=featconf,
+            subtraction_config=subconf,
+        )
+        assert len(sta) < ns0
+        assert len(stb) == ns0
+
+    with tempfile.TemporaryDirectory() as tempdir:
+        sta, out_h5 = subtract(
+            rec.frame_slice(start_frame=0, end_frame=int(30 * fs)),
+            tempdir,
+            featurization_config=dataclasses.replace(featconf, do_localization=False),
+            subtraction_config=subconf,
+        )
+        stb, out_h5 = subtract(
+            rec,
+            tempdir,
+            featurization_config=featconf,
+            subtraction_config=subconf,
+        )
+        assert len(sta) < ns0
+        assert len(stb) == ns0
 
 
 def test_small_nonn():
