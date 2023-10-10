@@ -57,6 +57,7 @@ class TemplateData:
             geom = recording.get_channel_locations()
 
         # handle superresolved templates
+        # TODO: should we re-align the original spike train or the superres?
         if template_config.superres_templates:
             unit_ids, sorting = superres_sorting(
                 sorting,
