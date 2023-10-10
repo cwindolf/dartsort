@@ -1,15 +1,16 @@
 # %%
+import multiprocessing
+import os
+import pickle
+import time
+from itertools import repeat
+from pathlib import Path
+
 import numpy as np
 from scipy import signal
-import time
-import os
-import multiprocessing
-from itertools import repeat
-from tqdm.auto import tqdm, trange
-import pickle
-from spike_psvae.spikeio import read_data, read_waveforms
-from pathlib import Path
 from spike_psvae import snr_templates
+from spike_psvae.spikeio import read_data, read_waveforms
+from tqdm.auto import tqdm, trange
 
 
 # %%
@@ -179,17 +180,17 @@ class MatchPursuitObjectiveUpsample:
 
         # Single time preperation for high resolution matches
         # matching indeces of peaks to indices of upsampled templates
-        factor = self.up_factor
-        radius = factor // 2 + factor % 2
-        self.up_window = np.arange(-radius, radius + 1)[:, None]
-        self.up_window_len = len(self.up_window)
+        factor = self.up_factor  # 8
+        radius = factor // 2 + factor % 2  # 4
+        self.up_window = np.arange(-radius, radius + 1)[:, None]  # [-4, 4]  up-> [-32, 32]
+        self.up_window_len = len(self.up_window)  # 16
 
         # Indices of single time window the window around peak after upsampling
-        self.zoom_index = radius * factor + np.arange(-radius, radius + 1)
-        self.peak_to_template_idx = np.concatenate(
+        self.zoom_index = radius * factor + np.arange(-radius, radius + 1)  # 8*4 + [-4, 4] = [32 - 4, 32 + 4] ->(in up space) = [-4, 4]
+        self.peak_to_template_idx = np.concatenate(                         # [4, 3, 2, 1, 0, 7, 6, 5, 4]
             (np.arange(radius, -1, -1), (factor - 1) - np.arange(radius))
         )
-        self.peak_time_jitter = np.concatenate(
+        self.peak_time_jitter = np.concatenate(                             # [0, 0, 0, 0, 0, 1, 1, 1, 1]
             ([0], np.array([0, 1]).repeat(radius))
         )
 

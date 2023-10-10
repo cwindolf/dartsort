@@ -31,7 +31,7 @@ class WaveformPipeline(torch.nn.Module):
         return cls.from_class_names_and_kwargs(
             geom,
             channel_index,
-            featurization_config.to_class_names_and_kwargs(),
+            featurization_config_to_class_names_and_kwargs(featurization_config),
         )
 
     def needs_fit(self):
@@ -76,3 +76,81 @@ def check_unique_feature_names(transformers):
     fnames = [f.name for f in transformers if f.is_featurizer]
     if not len(fnames) == len(set(fnames)):
         raise ValueError("Featurizer name collision in a WaveformPipeline")
+
+
+def featurization_config_to_class_names_and_kwargs(fconf):
+    """Convert this config into a list of waveform transformer classes and arguments
+
+    Used by WaveformPipeline.from_config(...) to construct WaveformPipelines
+    from FeaturizationConfig objects.
+    """
+    class_names_and_kwargs = []
+
+    do_feats = not fconf.denoise_only
+
+    if do_feats and fconf.save_input_waveforms:
+        class_names_and_kwargs.append(
+            ("Waveform", {"name_prefix": fconf.input_waveforms_name})
+        )
+    if do_feats and fconf.save_input_tpca_projs:
+        class_names_and_kwargs.append(
+            (
+                "TemporalPCAFeaturizer",
+                {
+                    "rank": fconf.tpca_rank,
+                    "name_prefix": fconf.input_waveforms_name,
+                },
+            )
+        )
+    if fconf.do_nn_denoise:
+        class_names_and_kwargs.append(
+            (
+                fconf.nn_denoiser_class_name,
+                {"pretrained_path": fconf.nn_denoiser_pretrained_path},
+            )
+        )
+    if fconf.do_tpca_denoise:
+        class_names_and_kwargs.append(
+            (
+                "TemporalPCADenoiser",
+                {
+                    "rank": fconf.tpca_rank,
+                    "fit_radius": fconf.tpca_fit_radius,
+                },
+            )
+        )
+    if fconf.do_enforce_decrease:
+        class_names_and_kwargs.append(("EnforceDecrease", {}))
+    if do_feats and fconf.save_output_waveforms:
+        class_names_and_kwargs.append(
+            (
+                "Waveform",
+                {"name_prefix": fconf.output_waveforms_name},
+            )
+        )
+    if do_feats and fconf.save_output_tpca_projs:
+        class_names_and_kwargs.append(
+            (
+                "TemporalPCAFeaturizer",
+                {
+                    "rank": fconf.tpca_rank,
+                    "name_prefix": fconf.output_waveforms_name,
+                },
+            )
+        )
+    if do_feats and (fconf.do_localization or fconf.save_amplitude_vectors):
+        class_names_and_kwargs.append(
+            (
+                "AmplitudeVector",
+                {"name_prefix": fconf.output_waveforms_name},
+            )
+        )
+    if do_feats and fconf.save_amplitudes:
+        class_names_and_kwargs.append(
+            (
+                "MaxAmplitude",
+                {"name_prefix": fconf.output_waveforms_name},
+            )
+        )
+
+    return class_names_and_kwargs

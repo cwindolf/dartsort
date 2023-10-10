@@ -10,14 +10,11 @@ original probe as a subset, as well as copies of the probe shifted
 by integer numbers of pitches. As many shifted copies are created
 as needed to capture all the drift.
 """
-import warnings
-
 import numpy as np
 from scipy.spatial import KDTree
 from scipy.spatial.distance import pdist
 
-from .waveform_util import get_pitch, fast_nanmedian
-
+from .waveform_util import fast_nanmedian, get_pitch
 
 # -- registered geometry and templates helpers
 
@@ -102,13 +99,6 @@ def registered_channels(channels, geom, n_pitches_shift, registered_geom):
 
     return registered_channels
 
-    uniq_shifts = np.unique(n_pitches_shift)
-    drifty_templates = np.zeros(
-        (len(uniq_shifts), *waveforms.shape[1:]), dtype=waveforms.dtype
-    )
-    for i, u in enumerate(uniq_shifts):
-        drifty_templates[i] = reducer(waveforms[n_pitches_shift == u], axis=0)
-
 
 def registered_average(
     waveforms,
@@ -151,11 +141,14 @@ def registered_template(
     registered_geom,
     registered_kdtree=None,
     match_distance=None,
-    pad_value=np.nan,
+    pad_value=0.0,
     reducer=fast_nanmedian,
 ):
     """registered_average of waveforms would be more accurate if reducer=median, but slow."""
-    uniq_shifts, counts = np.unique(n_pitches_shift, )
+    two_d = waveforms.ndim == 2
+    if two_d:
+        waveforms = waveforms[:, None, :]
+    uniq_shifts, counts = np.unique(n_pitches_shift, return_counts=True)
     drifty_templates = np.zeros(
         (len(uniq_shifts), *waveforms.shape[1:]), dtype=waveforms.dtype
     )
@@ -171,16 +164,20 @@ def registered_template(
         match_distance=match_distance,
         fill_value=np.nan,
     )
-    
+
     # weighted mean is easier than weighted median, and we want this to be weighted
     valid = ~np.isnan(static_templates[:, 0, :])
     weights = valid * counts[:, None, None]
-    weights /= weights
-    template = (np.nan_to_num(static_templates) * weights[:, None, :]).sum(0)
-    template[valid[:, None, :]] = np.nan
+    weights = weights / np.maximum(weights.sum(0), 1)
+    template = (np.nan_to_num(static_templates) * weights).sum(0)
+    template[:, ~valid.any(0)] = np.nan
     if not np.isnan(pad_value):
         template = np.nan_to_num(template, copy=False, nan=pad_value)
-    
+
+    assert template.ndim == 2
+    if two_d:
+        template = template[0, :]
+
     return template
 
 
@@ -351,14 +348,13 @@ def get_waveforms_on_static_channels(
     # valid_chan = ~np.isnan(moving_positions).any(axis=1)
     valid_chan = channel_index[main_channels] < n_channels_tot
 
-    moving_positions = moving_positions.reshape(n_spikes * c, geom.shape[1])
     _, shifted_channels = target_kdtree.query(
-        moving_positions[valid_chan],
+        moving_positions[valid_chan[:, :]],
         distance_upper_bound=match_distance,
     )
-    if main_channels is not None:
+    if shifted_channels.size < n_spikes * c:
         shifted_channels_ = shifted_channels
-        shifted_channels = np.full(n_spikes * c, target_kdtree.n)
+        shifted_channels = np.full((n_spikes, c), target_kdtree.n)
         shifted_channels[valid_chan] = shifted_channels_
     shifted_channels = shifted_channels.reshape(n_spikes, c)
 
@@ -411,7 +407,6 @@ def _full_probe_shifting_fast(
     unps, shift_inverse = np.unique(n_pitches_shift, return_inverse=True)
     shifted_channels = np.full((len(unps), waveforms.shape[2]), target_kdtree.n)
     for i, nps in enumerate(unps):
-        which = slice(None) if no_shift else np.flatnonzero(n_pitches_shift == nps)
         moving_geom = geom + [0, pitch * nps]
         _, shifted_channels[i] = target_kdtree.query(
             moving_geom, distance_upper_bound=match_distance
