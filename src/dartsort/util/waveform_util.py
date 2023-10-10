@@ -335,3 +335,9 @@ def get_channel_subset(
         npx.arange(N)[:, None],
         rel_sub_channel_index[max_channels][:, :],
     ]
+
+
+# -- general util
+
+def fast_nanmedian(x, axis=-1):
+    return torch.nanmedian(torch.as_tensor(x), dim=axis).values.numpy()
