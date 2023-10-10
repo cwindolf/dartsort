@@ -340,4 +340,9 @@ def get_channel_subset(
 # -- general util
 
 def fast_nanmedian(x, axis=-1):
-    return torch.nanmedian(torch.as_tensor(x), dim=axis).values.numpy()
+    is_tensor = torch.is_tensor(x)
+    x = torch.nanmedian(torch.as_tensor(x), dim=axis).values
+    if is_tensor:
+        return x
+    else:
+        return x.numpy()

@@ -12,6 +12,7 @@ def superres_sorting(
     motion_est=None,
     strategy="drift_pitch_loc_bin",
     superres_bin_size_um=10.0,
+    min_spikes_per_bin=5,
 ):
     """Construct the spatially superresolved spike train
 
@@ -48,7 +49,14 @@ def superres_sorting(
     """
     pitch = drift_util.get_pitch(geom)
     labels = sorting.labels
+    
+    # handle triaging
+    kept = np.flatnonzero(labels >= 0)
+    labels = labels[kept]
+    spike_times_s = spike_times_s[kept]
+    spike_depths_um = spike_depths_um[kept]
 
+    # make superres spike train
     if strategy in ("none", None):
         superres_to_original = np.arange(labels.max() + 1)
         superres_sorting = sorting
@@ -72,8 +80,17 @@ def superres_sorting(
         )
     else:
         raise ValueError(f"Unknown superres {strategy=}")
+    
+    # handle too-small units
+    superres_labels, superres_to_original = remove_small_superres_units(
+        superres_labels, superres_to_original, min_spikes_per_bin=min_spikes_per_bin
+    )
+        
+    # handle triaging again
+    full_superres_labels = sorting.labels.copy()
+    full_superres_labels[kept] = superres_labels
 
-    superres_sorting = replace(sorting, labels=superres_labels)
+    superres_sorting = replace(sorting, labels=full_superres_labels)
     return superres_to_original, superres_sorting
 
 
@@ -115,4 +132,24 @@ def drift_pitch_loc_bin_strategy(
         np.c_[original_labels, bin_ids], axis=0, return_inverse=True
     )
     superres_to_original = orig_label_and_bin[:, 0]
+    return superres_labels, superres_to_original
+
+
+
+def remove_small_superres_units(superres_labels, superres_to_original, min_spikes_per_bin):
+    if not min_spikes_per_bin:
+        return superres_labels, superres_to_original
+
+    slabels, scounts = np.unique(superres_labels, return_counts=True)
+
+    # new labels
+    kept = scounts >= min_spikes_per_bin
+    kept_labels = slabels[kept]
+    relabeling = np.full_like(slabels, -1)
+    relabeling[kept] = np.arange(kept_labels.size)
+
+    # relabel
+    superres_labels = relabeling[superres_labels]
+    superres_to_original = superres_to_original[kept_labels]
+
     return superres_labels, superres_to_original

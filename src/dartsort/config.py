@@ -128,6 +128,7 @@ class TemplateConfig:
     # superresolved templates
     superres_templates: bool = True
     superres_bin_size_um: float = 10.0
+    superres_bin_min_spikes: int = 5
     superres_strategy: str = "drift_pitch_loc_bin"
 
     # low rank denoising?
