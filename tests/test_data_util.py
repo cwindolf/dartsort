@@ -21,7 +21,9 @@ def test_to_numpy_sorting():
     dsorting = DARTsortSorting(times_samples, channels, labels=labels)
     npsorting = dsorting.to_numpy_sorting()
 
-    si_times, si_labels = npsorting.get_all_spike_trains()[0]
+    si_spiketrain = npsorting.to_spike_vector()
+    si_times = si_spiketrain['sample_index']
+    si_labels = si_spiketrain['unit_index']
     assert np.array_equal(si_times, times_samples)
     assert np.array_equal(si_labels, labels)
     assert np.array_equal(npsorting.get_unit_ids(), np.arange(0, 10))
