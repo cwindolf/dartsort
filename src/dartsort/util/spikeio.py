@@ -18,12 +18,12 @@ def read_full_waveforms(
 ):
     assert times_samples.ndim == 1
     assert times_samples.dtype.kind == "i"
-    assert np.all(times_samples >= trough_offset_samples)
-    assert np.all(
-        times_samples
+    assert (
+        times_samples.max()
         < recording.get_num_samples()
         - (spike_length_samples - trough_offset_samples)
     )
+    n_channels = recording.get_num_channels()
     n_channels = recording.get_num_channels()
 
     if recording.binary_compatible_with(
@@ -88,9 +88,8 @@ def read_subset_waveforms(
 ):
     assert times_samples.ndim == 1
     assert times_samples.dtype.kind == "i"
-    assert np.all(times_samples >= trough_offset_samples)
-    assert np.all(
-        times_samples
+    assert (
+        times_samples.max()
         < recording.get_num_samples()
         - (spike_length_samples - trough_offset_samples)
     )
@@ -163,21 +162,21 @@ def read_waveforms_channel_index(
 ):
     assert times_samples.ndim == 1
     assert times_samples.dtype.kind == "i"
-    assert np.all(times_samples >= trough_offset_samples)
-    assert np.all(
-        times_samples
+    assert times_samples.min() >= trough_offset_samples
+    assert (
+        times_samples.max()
         < recording.get_num_samples()
         - (spike_length_samples - trough_offset_samples)
     )
     n_channels = recording.get_num_channels()
 
     if recording.binary_compatible_with(
-        file_offset=0, time_axis=0, file_paths_lenght=1
+        file_offset=0, time_axis=0, file_paths_lenght=1  # sic
     ):
         # fast path (with spikeinterface typo). this is like 2x as fast
         # as the read_traces for loop below, but requires a recording on disk
         binary_path = recording.get_binary_description()["file_paths"][0]
-        return _read_subset_waveforms_binary(
+        return _read_waveforms_binary_channel_index(
             binary_path,
             times_samples,
             channel_index=channel_index,
