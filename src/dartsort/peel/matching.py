@@ -110,6 +110,7 @@ class ResidualUpdateTemplateMatchingPeeler(BasePeeler):
 
         # drift-related properties
         self.is_drifting = motion_est is not None
+        self.motion_est = motion_est
         self.registered_geom = template_data.registered_geom
         self.registered_template_depths_um = template_data.registered_template_depths_um
 
@@ -184,7 +185,7 @@ class ResidualUpdateTemplateMatchingPeeler(BasePeeler):
         # are part of its group. so that the array is not ragged,
         # we pad rows with -1s when their group is smaller than the
         # largest group.
-        group_index = np.full((self.n_unit, max_group_size), -1)
+        group_index = np.full((self.n_templates, max_group_size), -1)
         for j, row in enumerate(group_index):
             group_index[j, : len(row)] = row
         self.group_index = torch.tensor(group_index)
@@ -198,7 +199,7 @@ class ResidualUpdateTemplateMatchingPeeler(BasePeeler):
         self.temporal_upsampling_factor = temporal_upsampling_factor
         upsampled_temporal_components = temporal_components
         if temporal_upsampling_factor > 1:
-            upsampled_temporal_components = template_util.temporally_upsampled_indices(
+            upsampled_temporal_components = template_util.temporally_upsample_templates(
                 temporal_components,
                 temporal_upsampling_factor=temporal_upsampling_factor,
             )
@@ -278,7 +279,9 @@ class ResidualUpdateTemplateMatchingPeeler(BasePeeler):
     ):
         # get current template set
         chunk_center_samples = chunk_start_samples + self.chunk_length_samples // 2
-        chunk_center_seconds = self.recording.sample_index_to_time(chunk_center_samples)
+        
+        segment = self.recording._recording_segments[0]
+        chunk_center_seconds = segment.sample_index_to_time(chunk_center_samples)
         compressed_template_data = self.templates_at_time(chunk_center_seconds)
 
         # deconvolve
