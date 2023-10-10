@@ -74,7 +74,7 @@ if __name__ == "__main__":
     t_start_preproc=0
     t_end_preproc=None
     #Multi processing params
-    n_job_preprocessing=-1
+    n_job_preprocessing=4
     n_sec_chunk_preprocessing=1
 
     # Initial Detection - Localization parameters 

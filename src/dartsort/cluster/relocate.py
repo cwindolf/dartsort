@@ -11,11 +11,10 @@ in transform/ which has torch-based stuff for use during
 peeling.
 """
 import numpy as np
-from dartsort.util.drift_util import (get_pitch,
-                                      get_waveforms_on_shifted_channel_subset)
+from dartsort.util import drift_util
 
 
-def relocated_waveforms_on_fixed_channel_subset(
+def relocated_waveforms_on_static_channels(
     waveforms,
     main_channels,
     channel_index,
@@ -23,37 +22,38 @@ def relocated_waveforms_on_fixed_channel_subset(
     xyza_from,
     z_to,
     geom,
+    registered_geom=None,
     fill_value=np.nan,
 ):
     """Compute relocated waveforms"""
-    pitch = get_pitch(geom)
     x, y, z_from, alpha = xyza_from.T
+    if registered_geom is None:
+        registered_geom = geom
 
     # -- handle coarse drift (larger than a pitch)
-    displacement = z_to - z_from
-    # if displacement > 0, then the registered position is above the original
-    # in this case, we need to shift the target channel neighborhood down!
-    # this is the reason for the important - sign in the next line
-    # and, we want to round things towards 0, not take the floor (//)
-    n_pitches_shift = -(displacement / pitch).astype(int)
-    shifted_waveforms = get_waveforms_on_shifted_channel_subset(
+    n_pitches_shift = drift_util.get_spike_pitch_shifts(
+        z_from, geom, registered_depths_um=z_to
+    )
+    shifted_waveforms = drift_util.get_waveforms_on_static_channels(
         waveforms,
-        main_channels,
-        channel_index,
-        target_channels,
-        n_pitches_shift,
-        geom,
+        main_channels=main_channels,
+        channel_index=channel_index,
+        target_channels=target_channels,
+        n_pitches_shift=n_pitches_shift,
+        geom=geom,
+        registered_geom=registered_geom,
         fill_value=fill_value,
     )
 
     # -- handle sub-pitch drift
     # account for the already applied coarse drift correction
-    z_from = z_from - pitch * n_pitches_shift
+    pitch = drift_util.get_pitch(geom)
+    z_from = z_from + pitch * n_pitches_shift
     original_amplitudes = point_source_amplitude_vectors(
-        x, y, z_from, alpha, geom, channels=target_channels
+        x, y, z_from, alpha, registered_geom, channels=target_channels
     )
     target_amplitudes = point_source_amplitude_vectors(
-        x, y, z_to, alpha, geom, channels=target_channels
+        x, y, z_to, alpha, registered_geom, channels=target_channels
     )
     rescaling = target_amplitudes / original_amplitudes
     shifted_waveforms *= rescaling[:, None, :]
