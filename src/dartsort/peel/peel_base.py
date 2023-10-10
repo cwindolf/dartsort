@@ -75,8 +75,8 @@ class BasePeeler(torch.nn.Module):
         if self.needs_fit():
             self.load_models(save_folder)
         if self.needs_fit():
-            self.fit_models(save_folder, n_jobs=n_jobs, device=device)
             save_folder.mkdir(exist_ok=True)
+            self.fit_models(save_folder, n_jobs=n_jobs, device=device)
             self.save_models(save_folder)
         assert not self.needs_fit()
 

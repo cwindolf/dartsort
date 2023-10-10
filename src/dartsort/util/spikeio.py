@@ -17,6 +17,7 @@ def read_full_waveforms(
     spike_length_samples=121,
 ):
     assert times_samples.ndim == 1
+    assert times_samples.size > 0
     assert times_samples.dtype.kind == "i"
     assert (
         times_samples.max()
@@ -87,6 +88,7 @@ def read_subset_waveforms(
     spike_length_samples=121,
 ):
     assert times_samples.ndim == 1
+    assert times_samples.size > 0
     assert times_samples.dtype.kind == "i"
     assert (
         times_samples.max()
@@ -161,6 +163,7 @@ def read_waveforms_channel_index(
     spike_length_samples=121,
 ):
     assert times_samples.ndim == 1
+    assert times_samples.size > 0
     assert times_samples.dtype.kind == "i"
     assert times_samples.min() >= trough_offset_samples
     assert (

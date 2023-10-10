@@ -42,7 +42,6 @@ class DARTsortSorting:
 
     # automatically set
     n_spikes: int = field(init=False)
-    extra_feature_names: list = field(init=False)
 
     def __post_init__(self):
         self.times_samples = np.asarray(self.times_samples, dtype=int)
@@ -54,12 +53,12 @@ class DARTsortSorting:
         self.channels = np.asarray(self.channels, dtype=int)
         assert self.times_samples.shape == self.channels.shape
 
-        self.extra_feature_names = []
-        if self.extra_features is not None:
-            for k, v in self.extra_features.items():
-                self.extra_feature_names.append(k)
+        if self.extra_features:
+            for k in self.extra_features:
+                v = self.extra_features[k] = np.asarray(self.extra_features[k])
                 assert v.shape[0] == len(self.times_samples)
-                setattr(self, k, v)
+                assert not hasattr(self, k)
+                self.__dict__[k] = v
 
         self.n_spikes = self.times_samples.size
 
@@ -77,8 +76,8 @@ class DARTsortSorting:
         units = units[units >= 0]
         unit_str = f"{units.size} unit" + ("s" if units.size > 1 else "")
         feat_str = ""
-        if self.extra_feature_names:
-            feat_str = ", ".join(self.extra_feature_names)
+        if self.extra_features:
+            feat_str = ", ".join(self.extra_features.keys())
             feat_str = f" extra features: {feat_str}."
         return f"{name}: {nspikes} spikes, {unit_str}.{feat_str}"
 

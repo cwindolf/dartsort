@@ -11,6 +11,7 @@ _motion_error_prefix = (
     "If template_config has registered_templates==True "
     "or superres_templates=True, then "
 )
+_aware_error = "motion_est must be passed to TemplateData.from_config()"
 
 
 @dataclass
@@ -34,10 +35,7 @@ class TemplateData:
             template_config.registered_templates or template_config.superres_templates
         )
         if motion_aware and motion_est is None:
-            raise ValueError(
-                f"{_motion_error_prefix}"
-                "motion_est must be passed to TemplateData.from_config()"
-            )
+            raise ValueError(_motion_error_prefix + _aware_error)
         has_localizations = hasattr(sorting, localizations_dataset_name)
         if motion_aware and not has_localizations:
             raise ValueError(
