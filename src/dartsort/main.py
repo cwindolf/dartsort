@@ -87,7 +87,7 @@ def match(
     show_progress=True,
     device=None,
     hdf5_filename="matching0.h5",
-    model_subdir="matching_models_0",
+    model_subdir="matching0_models",
 ):
     # compute templates
     template_data = TemplateData.from_config(
@@ -96,6 +96,8 @@ def match(
         template_config,
         motion_est=motion_est,
         n_jobs=n_jobs_templates,
+        save_folder=output_directory,
+        overwrite=overwrite,
     )
     # instantiate peeler
     matching_peeler = ResidualUpdateTemplateMatchingPeeler.from_config(
