@@ -105,6 +105,19 @@ def get_registered_templates(
     return results
 
 
+def get_realigned_sorting(
+    recording,
+    sorting,
+    **kwargs,
+):
+    results = get_templates(
+        recording,
+        sorting,
+        **kwargs,
+    )
+    return results["sorting"]
+
+
 # -- template drift handling
 
 
@@ -181,6 +194,7 @@ def temporally_upsample_templates(
     tp = np.arange(t).astype(float)
     erp = interp1d(tp, templates, axis=1, bounds_error=True)
     tup = np.arange(t, step=1. / temporal_upsampling_factor)
+    tup.clip(0, t - 1, out=tup)
     upsampled_templates = erp(tup)
     upsampled_templates = upsampled_templates.reshape(n, t, temporal_upsampling_factor, c)
     return upsampled_templates
