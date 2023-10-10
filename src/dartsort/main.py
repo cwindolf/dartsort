@@ -80,7 +80,8 @@ def match(
     featurization_config=default_featurization_config,
     matching_config=default_matching_config,
     chunk_starts_samples=None,
-    n_jobs=0,
+    n_jobs_templates=0,
+    n_jobs_match=0,
     overwrite=False,
     residual_filename=None,
     show_progress=True,
@@ -94,7 +95,7 @@ def match(
         sorting,
         template_config,
         motion_est=motion_est,
-        n_jobs=n_jobs,
+        n_jobs=n_jobs_templates,
     )
     # instantiate peeler
     matching_peeler = ResidualUpdateTemplateMatchingPeeler.from_config(
@@ -112,7 +113,7 @@ def match(
         featurization_config,
         chunk_starts_samples=chunk_starts_samples,
         overwrite=overwrite,
-        n_jobs=n_jobs,
+        n_jobs=n_jobs_match,
         residual_filename=residual_filename,
         show_progress=show_progress,
         device=device,

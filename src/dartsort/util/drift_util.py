@@ -16,7 +16,8 @@ import numpy as np
 from scipy.spatial import KDTree
 from scipy.spatial.distance import pdist
 
-from .waveform_util import get_pitch
+from .waveform_util import get_pitch, fast_nanmedian
+
 
 # -- registered geometry and templates helpers
 
@@ -101,15 +102,25 @@ def registered_channels(channels, geom, n_pitches_shift, registered_geom):
 
     return registered_channels
 
+    uniq_shifts = np.unique(n_pitches_shift)
+    drifty_templates = np.zeros(
+        (len(uniq_shifts), *waveforms.shape[1:]), dtype=waveforms.dtype
+    )
+    for i, u in enumerate(uniq_shifts):
+        drifty_templates[i] = reducer(waveforms[n_pitches_shift == u], axis=0)
+
 
 def registered_average(
     waveforms,
     n_pitches_shift,
     geom,
     registered_geom,
+    registered_kdtree=None,
+    match_distance=None,
     main_channels=None,
     channel_index=None,
-    reducer=np.nanmedian,
+    reducer=fast_nanmedian,
+    work_buffer=None,
     pad_value=0.0,
 ):
     static_waveforms = get_waveforms_on_static_channels(
@@ -119,18 +130,58 @@ def registered_average(
         channel_index=channel_index,
         n_pitches_shift=n_pitches_shift,
         registered_geom=registered_geom,
+        target_kdtree=registered_kdtree,
+        match_distance=match_distance,
+        out=work_buffer,
         fill_value=np.nan,
     )
 
     # take the mean and return
-    # suppress all-NaN slice warning
-    with warnings.catch_warnings():
-        warnings.filterwarnings("ignore", r"All-NaN (slice|axis) encountered")
-        average = reducer(static_waveforms, axis=0)
+    average = reducer(static_waveforms, axis=0)
     if not np.isnan(pad_value):
         average = np.nan_to_num(average, copy=False, nan=pad_value)
 
     return average
+
+
+def registered_template(
+    waveforms,
+    n_pitches_shift,
+    geom,
+    registered_geom,
+    registered_kdtree=None,
+    match_distance=None,
+    pad_value=np.nan,
+    reducer=fast_nanmedian,
+):
+    """registered_average of waveforms would be more accurate if reducer=median, but slow."""
+    uniq_shifts, counts = np.unique(n_pitches_shift, )
+    drifty_templates = np.zeros(
+        (len(uniq_shifts), *waveforms.shape[1:]), dtype=waveforms.dtype
+    )
+    for i, u in enumerate(uniq_shifts):
+        drifty_templates[i] = reducer(waveforms[n_pitches_shift == u], axis=0)
+
+    static_templates = get_waveforms_on_static_channels(
+        drifty_templates,
+        geom,
+        n_pitches_shift=uniq_shifts,
+        registered_geom=registered_geom,
+        target_kdtree=registered_kdtree,
+        match_distance=match_distance,
+        fill_value=np.nan,
+    )
+    
+    # weighted mean is easier than weighted median, and we want this to be weighted
+    valid = ~np.isnan(static_templates[:, 0, :])
+    weights = valid * counts[:, None, None]
+    weights /= weights
+    template = (np.nan_to_num(static_templates) * weights[:, None, :]).sum(0)
+    template[valid[:, None, :]] = np.nan
+    if not np.isnan(pad_value):
+        template = np.nan_to_num(template, copy=False, nan=pad_value)
+    
+    return template
 
 
 def get_spike_pitch_shifts(
@@ -193,6 +244,9 @@ def get_waveforms_on_static_channels(
     target_channels=None,
     n_pitches_shift=None,
     registered_geom=None,
+    target_kdtree=None,
+    match_distance=None,
+    out=None,
     fill_value=np.nan,
 ):
     """Load a set of drifting waveforms on a static set of channels
@@ -252,6 +306,17 @@ def get_waveforms_on_static_channels(
     if target_channels is not None:
         target_geom = target_geom[target_channels]
 
+    # make kdtree
+    if target_kdtree is None:
+        target_kdtree = KDTree(target_geom)
+    else:
+        assert target_kdtree.n == len(target_geom)
+    n_static_channels = len(target_geom)
+
+    # find where each moving position lands using a k-d tree
+    if match_distance is None:
+        match_distance = pdist(geom).min() / 2
+
     # figure out the positions of the channels that the waveforms live on
     pitch = get_pitch(geom)
     if n_pitches_shift is None:
@@ -261,44 +326,102 @@ def get_waveforms_on_static_channels(
         # the case where all waveforms live on all channels, but
         # these channels may be shifting
         # shape is n_spikes, len(geom), spatial dim
-        moving_positions = geom[None, :, :] + shifts[:, None, :]
-    else:
-        # the case where each waveform lives on its own channels
-        # nans will never be matched in k-d query below
-        padded_geom = np.pad(
-            geom.astype(float), [(0, 1), (0, 0)], constant_values=np.nan
+        static_waveforms = _full_probe_shifting_fast(
+            waveforms,
+            geom,
+            pitch,
+            target_kdtree,
+            n_pitches_shift,
+            match_distance,
+            fill_value,
+            out=out,
         )
-        # shape is n_spikes, c, spatial dim
-        moving_positions = (
-            padded_geom[channel_index[main_channels]] + shifts[:, None, :]
-        )
+        if two_d:
+            static_waveforms = static_waveforms[:, 0, :]
+        return static_waveforms
+        # moving_positions = geom[None, :, :] + shifts[:, None, :]
+        # valid_chan = slice(None)
+    # else:
 
-    # find where each moving position lands using a k-d tree
-    target_kdtree = KDTree(target_geom)
-    match_distance = pdist(geom).min() / 2
+    # the case where each waveform lives on its own channels
+    # nans will never be matched in k-d query below
+    padded_geom = np.pad(geom.astype(float), [(0, 1), (0, 0)], constant_values=np.nan)
+    # shape is n_spikes, c, spatial dim
+    moving_positions = padded_geom[channel_index[main_channels]] + shifts[:, None, :]
+    # valid_chan = ~np.isnan(moving_positions).any(axis=1)
+    valid_chan = channel_index[main_channels] < n_channels_tot
+
     moving_positions = moving_positions.reshape(n_spikes * c, geom.shape[1])
-    valid_chan = ~np.isnan(moving_positions).any(axis=1)
-    shifted_channels = np.full(n_spikes * c, target_kdtree.n)
-    _, shifted_channels[valid_chan] = target_kdtree.query(
+    _, shifted_channels = target_kdtree.query(
         moving_positions[valid_chan],
         distance_upper_bound=match_distance,
     )
+    if main_channels is not None:
+        shifted_channels_ = shifted_channels
+        shifted_channels = np.full(n_spikes * c, target_kdtree.n)
+        shifted_channels[valid_chan] = shifted_channels_
     shifted_channels = shifted_channels.reshape(n_spikes, c)
 
     # scatter the waveforms into their static channel neighborhoods
-    n_static_channels = len(target_geom)
-    static_waveforms = np.full(
-        (n_spikes, t, n_static_channels + 1),
-        fill_value=fill_value,
-        dtype=waveforms.dtype,
-    )
+    if out is None:
+        static_waveforms = np.full(
+            (n_spikes, t, n_static_channels + 1),
+            fill_value=fill_value,
+            dtype=waveforms.dtype,
+        )
+    else:
+        assert out.shape == (n_spikes, t, n_static_channels + 1)
+        out.fill(fill_value)
+        static_waveforms = out
     spike_ix = np.arange(n_spikes)[:, None, None]
     time_ix = np.arange(t)[None, :, None]
     chan_ix = shifted_channels[:, None, :]
     static_waveforms[spike_ix, time_ix, chan_ix] = waveforms
     static_waveforms = static_waveforms[:, :, :n_static_channels]
-
     if two_d:
         static_waveforms = static_waveforms[:, 0, :]
 
     return static_waveforms
+
+
+def _full_probe_shifting_fast(
+    waveforms,
+    geom,
+    pitch,
+    target_kdtree,
+    n_pitches_shift,
+    match_distance,
+    fill_value,
+    out=None,
+):
+    if out is None:
+        static_waveforms = np.full(
+            (*waveforms.shape[:2], target_kdtree.n + 1),
+            fill_value=fill_value,
+            dtype=waveforms.dtype,
+        )
+    else:
+        assert out.shape == (*waveforms.shape[:2], target_kdtree.n + 1)
+        out.fill(fill_value)
+        static_waveforms = out
+
+    no_shift = n_pitches_shift is None
+    if no_shift:
+        n_pitches_shift = [0]
+    unps, shift_inverse = np.unique(n_pitches_shift, return_inverse=True)
+    shifted_channels = np.full((len(unps), waveforms.shape[2]), target_kdtree.n)
+    for i, nps in enumerate(unps):
+        which = slice(None) if no_shift else np.flatnonzero(n_pitches_shift == nps)
+        moving_geom = geom + [0, pitch * nps]
+        _, shifted_channels[i] = target_kdtree.query(
+            moving_geom, distance_upper_bound=match_distance
+        )
+        # static_waveforms[which[:, None, None], tix[None, :, None], shifted_channels[None, None, :]] = waveforms[which]
+    nix = np.arange(waveforms.shape[0])
+    tix = np.arange(waveforms.shape[1])
+    static_waveforms[
+        nix[:, None, None],
+        tix[None, :, None],
+        shifted_channels[shift_inverse][:, None, :],
+    ] = waveforms
+    return static_waveforms[:, :, : target_kdtree.n]
