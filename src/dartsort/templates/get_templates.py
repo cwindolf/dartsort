@@ -9,7 +9,7 @@ import numpy as np
 from dartsort.util import spikeio
 from dartsort.util.drift_util import registered_template
 from dartsort.util.multiprocessing_util import get_pool
-from dartsort.util.waveform_util import make_channel_index, fast_nanmedian
+from dartsort.util.waveform_util import fast_nanmedian, make_channel_index
 from scipy.spatial import KDTree
 from scipy.spatial.distance import pdist
 from sklearn.decomposition import TruncatedSVD
@@ -94,7 +94,6 @@ def get_templates(
     """
     # validate arguments
     raw_only = not low_rank_denoising
-    geom = recording.get_channel_locations()
 
     # estimate peak sample times and realign spike train
     if realign_peaks:
@@ -136,7 +135,6 @@ def get_templates(
         denoising_tsvd = fit_tsvd(
             recording,
             sorting,
-            geom=geom,
             denoising_rank=denoising_rank,
             denoising_fit_radius=denoising_fit_radius,
             denoising_spikes_fit=denoising_spikes_fit,
@@ -150,7 +148,6 @@ def get_templates(
     res = get_all_shifted_raw_and_low_rank_templates(
         recording,
         sorting,
-        geom=geom,
         registered_geom=registered_geom,
         denoising_tsvd=denoising_tsvd,
         pitch_shifts=pitch_shifts,
@@ -270,7 +267,6 @@ def realign_sorting(
 def fit_tsvd(
     recording,
     sorting,
-    geom,
     denoising_rank=5,
     denoising_fit_radius=75,
     denoising_spikes_fit=50_000,
@@ -279,6 +275,7 @@ def fit_tsvd(
     random_seed=0,
 ):
     # read spikes on channel neighborhood
+    geom = recording.get_channel_locations()
     tsvd_channel_index = make_channel_index(geom, denoising_fit_radius)
 
     # subset spikes used to fit tsvd
@@ -301,7 +298,7 @@ def fit_tsvd(
     )
 
     # reshape, fit tsvd, and done
-    tsvd = TruncatedSVD(n_components=denoising_rank, random_seed=random_seed)
+    tsvd = TruncatedSVD(n_components=denoising_rank, random_state=random_seed)
     tsvd.fit(waveforms.transpose(0, 2, 1).reshape(len(waveforms), -1))
 
     return tsvd
@@ -345,7 +342,6 @@ def denoising_weights(
 def get_all_shifted_raw_and_low_rank_templates(
     recording,
     sorting,
-    geom=None,
     registered_geom=None,
     denoising_tsvd=None,
     pitch_shifts=None,
@@ -378,8 +374,10 @@ def get_all_shifted_raw_and_low_rank_templates(
             (n_units, spike_length_samples, n_template_channels)
         )
     snrs_by_channel = np.zeros((n_units, n_template_channels))
-    
-    unit_id_chunks = [unit_ids[i : i + units_per_job] for i in range(0, n_units, units_per_job)]
+
+    unit_id_chunks = [
+        unit_ids[i : i + units_per_job] for i in range(0, n_units, units_per_job)
+    ]
 
     with Executor(
         max_workers=n_jobs,
@@ -390,7 +388,6 @@ def get_all_shifted_raw_and_low_rank_templates(
             random_seed,
             recording,
             sorting,
-            geom,
             registered_kdtree,
             denoising_tsvd,
             pitch_shifts,
@@ -429,7 +426,6 @@ class TemplateProcessContext:
         rg,
         recording,
         sorting,
-        geom,
         registered_kdtree,
         denoising_tsvd,
         pitch_shifts,
@@ -438,23 +434,28 @@ class TemplateProcessContext:
         trough_offset_samples,
         spike_length_samples,
     ):
+        self.n_channels = recording.get_num_channels()
+        self.registered = registered_kdtree is not None
+
         self.rg = rg
         self.recording = recording
         self.sorting = sorting
-        self.geom = geom
-        self.registered_geom = registered_kdtree.data
-        self.registered_kdtree = registered_kdtree
         self.denoising_tsvd = denoising_tsvd
-        self.pitch_shifts = pitch_shifts
         self.spikes_per_unit = spikes_per_unit
         self.reducer = reducer
         self.trough_offset_samples = trough_offset_samples
         self.spike_length_samples = spike_length_samples
-        self.match_distance = pdist(geom).min() / 2
-        self.max_spike_time = recording.get_num_samples() - (spike_length_samples - spike_length_samples)
+        self.max_spike_time = recording.get_num_samples() - (
+            spike_length_samples - spike_length_samples
+        )
 
-        self.n_channels = recording.get_num_channels()
-        self.registered = registered_kdtree is not None
+        if self.registered:
+            self.geom = recording.get_channel_locations()
+            self.match_distance = pdist(self.geom).min() / 2
+            self.registered_geom = registered_kdtree.data
+            self.registered_kdtree = registered_kdtree
+            self.pitch_shifts = pitch_shifts
+
 
 _template_process_context = None
 
@@ -464,7 +465,6 @@ def _template_process_init(
     random_seed,
     recording,
     sorting,
-    geom,
     registered_kdtree,
     denoising_tsvd,
     pitch_shifts,
@@ -481,7 +481,6 @@ def _template_process_init(
         rg,
         recording,
         sorting,
-        geom,
         registered_kdtree,
         denoising_tsvd,
         pitch_shifts,
@@ -497,7 +496,7 @@ def _template_job(unit_ids):
 
     in_units_full = np.flatnonzero(np.isin(p.sorting.labels, unit_ids))
     labels_full = p.sorting.labels[in_units_full]
-    
+
     # only so many spikes per unit
     uids, counts = np.unique(labels_full, return_counts=True)
     n_spikes_grab = np.minimum(counts, p.spikes_per_unit).sum()
@@ -560,8 +559,8 @@ def _template_job(unit_ids):
                 )
             )
         else:
-            raw_templates.append(p.reducer(waveforms, axis=0))
-            counts.append(n)
+            raw_templates.append(p.reducer(waveforms[in_unit], axis=0))
+            counts.append(in_unit.size)
     snrs_by_chan = [rt.ptp(0) * c for rt, c in zip(raw_templates, counts)]
 
     if p.denoising_tsvd is None:
@@ -569,9 +568,11 @@ def _template_job(unit_ids):
 
     # apply denoising
     waveforms = waveforms.transpose(0, 2, 1).reshape(n, t * c)
-    waveforms = p.denoising_tsvd.transform(waveforms)
+    waveforms = p.denoising_tsvd.inverse_transform(
+        p.denoising_tsvd.transform(waveforms)
+    )
     waveforms = waveforms.reshape(n, c, t).transpose(0, 2, 1)
-    
+
     # get low rank templates
     low_rank_templates = []
     for u in uids:
@@ -590,6 +591,6 @@ def _template_job(unit_ids):
                 )
             )
         else:
-            low_rank_templates.append(p.reducer(waveforms, axis=0))
+            low_rank_templates.append(p.reducer(waveforms[in_unit], axis=0))
 
     return uids, raw_templates, low_rank_templates, snrs_by_chan
