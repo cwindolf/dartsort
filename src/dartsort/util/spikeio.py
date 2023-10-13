@@ -161,6 +161,7 @@ def read_waveforms_channel_index(
     main_channels,
     trough_offset_samples=42,
     spike_length_samples=121,
+    fill_value=np.nan,
 ):
     assert times_samples.ndim == 1
     assert times_samples.size > 0
@@ -188,6 +189,7 @@ def read_waveforms_channel_index(
             dtype=recording.dtype,
             trough_offset_samples=trough_offset_samples,
             spike_length_samples=spike_length_samples,
+            fill_value=fill_value,
         )
 
     n_spikes = times_samples.size
@@ -213,10 +215,11 @@ def _read_waveforms_binary_channel_index(
     main_channels,
     trough_offset_samples=42,
     spike_length_samples=121,
+    fill_value=np.nan,
 ):
     n_spikes = times_samples.size
-    waveforms = np.empty(
-        (n_spikes, spike_length_samples, channel_index.shape[1]), dtype=dtype
+    waveforms = np.full(
+        (n_spikes, spike_length_samples, channel_index.shape[1]), fill_value, dtype=dtype
     )
     load_times = times_samples - trough_offset_samples
     offsets = load_times * np.dtype(dtype).itemsize * n_channels
@@ -228,5 +231,7 @@ def _read_waveforms_binary_channel_index(
                 dtype=dtype,
                 count=spike_length_samples * n_channels,
             ).reshape(spike_length_samples, n_channels)
-            waveforms[i] = wf[:, channel_index[main_channels[i]]]
+            chans = channel_index[main_channels[i]]
+            good = chans < n_channels
+            waveforms[i, :, good] = wf.T[chans[good]]
     return waveforms

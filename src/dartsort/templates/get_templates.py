@@ -6,6 +6,7 @@ where you can get templates using the TemplateConfig in config.py.
 from dataclasses import replace
 
 import numpy as np
+import torch
 from dartsort.util import spikeio
 from dartsort.util.drift_util import registered_template
 from dartsort.util.multiprocessing_util import get_pool
@@ -32,12 +33,12 @@ def get_templates(
     denoising_fit_radius=75,
     denoising_spikes_fit=50_000,
     denoising_snr_threshold=50.0,
-    zero_radius_um=None,
     reducer=fast_nanmedian,
     random_seed=0,
-    units_per_job=4,
+    units_per_job=8,
     n_jobs=0,
     show_progress=True,
+    device=None,
 ):
     """Raw, denoised, and shifted templates
 
@@ -115,13 +116,14 @@ def get_templates(
             random_seed=random_seed,
             n_jobs=n_jobs,
             show_progress=show_progress,
+            device=device,
         )
         sorting, templates = realign_sorting(
             sorting,
             raw_results["raw_templates"],
             max_shift=realign_max_sample_shift,
             trough_offset_samples=trough_offset_samples,
-            sample_upper_limit=recording.get_num_samples(),
+            recording_length_samples=recording.get_num_samples(),
         )
         if raw_only:
             # overwrite template dataset with aligned ones
@@ -159,6 +161,7 @@ def get_templates(
         show_progress=show_progress,
         trough_offset_samples=trough_offset_samples,
         spike_length_samples=spike_length_samples,
+        device=device,
     )
     raw_templates, low_rank_templates, snrs_by_channel = res
 
@@ -202,6 +205,7 @@ def get_raw_templates(
     random_seed=0,
     n_jobs=0,
     show_progress=True,
+    device=None,
 ):
     return get_templates(
         recording,
@@ -218,6 +222,7 @@ def get_raw_templates(
         random_seed=random_seed,
         n_jobs=n_jobs,
         show_progress=show_progress,
+        device=device,
     )
 
 
@@ -229,7 +234,7 @@ def realign_sorting(
     templates,
     max_shift=20,
     trough_offset_samples=42,
-    sample_limit_upper=None,
+    recording_length_samples=None,
 ):
     n, t, c = templates.shape
 
@@ -248,8 +253,8 @@ def realign_sorting(
     # create aligned spike train
     new_times = sorting.times_samples + template_shifts[sorting.labels]
     labels = sorting.labels
-    if sample_limit_upper is not None:
-        highlim = sample_limit_upper - (t - trough_offset_samples)
+    if recording_length_samples is not None:
+        highlim = recording_length_samples - (t - trough_offset_samples)
         labels[(new_times < trough_offset_samples) & (new_times >= highlim)] = -1
     aligned_sorting = replace(sorting, labels=labels, times_samples=new_times)
 
@@ -280,9 +285,9 @@ def fit_tsvd(
 
     # subset spikes used to fit tsvd
     rg = np.random.default_rng(random_seed)
-    choices = slice(None)
-    if sorting.n_spikes > denoising_spikes_fit:
-        choices = rg.choice(sorting.n_spikes, denoising_spikes_fit, replace=False)
+    choices = np.flatnonzero(sorting.labels >= 0)
+    if choices.size > denoising_spikes_fit:
+        choices = rg.choice(choices, denoising_spikes_fit, replace=False)
         choices.sort()
     times = sorting.times_samples[choices]
     channels = sorting.channels[choices]
@@ -295,11 +300,16 @@ def fit_tsvd(
         channels,
         trough_offset_samples=trough_offset_samples,
         spike_length_samples=spike_length_samples,
+        fill_value=0.0,  # all-0 rows don't change SVD basis
     )
 
     # reshape, fit tsvd, and done
     tsvd = TruncatedSVD(n_components=denoising_rank, random_state=random_seed)
-    tsvd.fit(waveforms.transpose(0, 2, 1).reshape(len(waveforms), -1))
+    tsvd.fit(
+        waveforms.transpose(0, 2, 1).reshape(
+            len(times) * tsvd_channel_index.shape[1], -1
+        )
+    )
 
     return tsvd
 
@@ -353,6 +363,7 @@ def get_all_shifted_raw_and_low_rank_templates(
     show_progress=True,
     trough_offset_samples=42,
     spike_length_samples=121,
+    device=None,
 ):
     n_jobs, Executor, context, rank_queue = get_pool(n_jobs, with_rank_queue=True)
     unit_ids = np.unique(sorting.labels)
@@ -395,6 +406,8 @@ def get_all_shifted_raw_and_low_rank_templates(
             reducer,
             trough_offset_samples,
             spike_length_samples,
+            device,
+            units_per_job,
         ),
     ) as pool:
         # launch the jobs and wrap in a progress bar
@@ -403,7 +416,7 @@ def get_all_shifted_raw_and_low_rank_templates(
             pbar = tqdm(
                 smoothing=0.01,
                 desc=f"{prefix} templates",
-                total=n_units,
+                total=unit_ids.size,
                 unit="template",
             )
         for res in results:
@@ -433,20 +446,34 @@ class TemplateProcessContext:
         reducer,
         trough_offset_samples,
         spike_length_samples,
+        device,
+        units_per_job,
     ):
         self.n_channels = recording.get_num_channels()
         self.registered = registered_kdtree is not None
 
         self.rg = rg
+        self.device = device
         self.recording = recording
         self.sorting = sorting
         self.denoising_tsvd = denoising_tsvd
+        if denoising_tsvd is not None:
+            self.denoising_tsvd = TorchSVDProjector(
+                torch.from_numpy(denoising_tsvd.components_.astype(recording.dtype))
+            )
+            self.denoising_tsvd.to(self.device)
         self.spikes_per_unit = spikes_per_unit
         self.reducer = reducer
         self.trough_offset_samples = trough_offset_samples
         self.spike_length_samples = spike_length_samples
         self.max_spike_time = recording.get_num_samples() - (
-            spike_length_samples - spike_length_samples
+            spike_length_samples - trough_offset_samples
+        )
+        
+        self.spike_buffer = torch.zeros(
+            (spikes_per_unit * units_per_job, spike_length_samples, self.n_channels),
+            device=device,
+            dtype=torch.from_numpy(np.zeros(1, dtype=recording.dtype)).dtype,
         )
 
         if self.registered:
@@ -472,10 +499,20 @@ def _template_process_init(
     reducer,
     trough_offset_samples,
     spike_length_samples,
+    device,
+    units_per_job,
 ):
     global _template_process_context
 
     rank = rank_queue.get()
+    if device is None:
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+    device = torch.device(device)
+    if device.type == "cuda" and device.index is None:
+        if torch.cuda.device_count() > 1:
+            device = torch.device("cuda", index=rank % torch.cuda.device_count())
+    torch.set_grad_enabled(False)
+
     rg = np.random.default_rng(random_seed + rank)
     _template_process_context = TemplateProcessContext(
         rg,
@@ -488,6 +525,8 @@ def _template_process_init(
         reducer,
         trough_offset_samples,
         spike_length_samples,
+        device,
+        units_per_job,
     )
 
 
@@ -520,13 +559,22 @@ def _template_job(unit_ids):
 
     # read waveforms for all units
     times = p.sorting.times_samples[in_units]
-    times = times[(times >= p.trough_offset_samples) & (times < p.max_spike_time)]
+    valid = np.flatnonzero(
+        (times >= p.trough_offset_samples) & (times < p.max_spike_time)
+    )
+    if not valid.size:
+        return uids, 0, 0, 0
+    in_units = in_units[valid]
+    labels = labels[valid]
+    times = times[valid]
     waveforms = spikeio.read_full_waveforms(
         p.recording,
         times,
         trough_offset_samples=p.trough_offset_samples,
         spike_length_samples=p.spike_length_samples,
     )
+    p.spike_buffer[:times.size] = torch.from_numpy(waveforms)
+    waveforms = p.spike_buffer[:times.size]
     n, t, c = waveforms.shape
 
     # compute raw templates and spike counts per channel
@@ -534,6 +582,10 @@ def _template_job(unit_ids):
     counts = []
     for u in uids:
         in_unit = np.flatnonzero(labels == u)
+        if not in_unit.size:
+            raw_templates.append(np.zeros(1))
+            counts.append(0)
+            continue
         in_unit_orig = in_units[labels == u]
         if p.registered:
             raw_templates.append(
@@ -567,16 +619,17 @@ def _template_job(unit_ids):
         return uids, raw_templates, None, snrs_by_chan
 
     # apply denoising
-    waveforms = waveforms.transpose(0, 2, 1).reshape(n, t * c)
-    waveforms = p.denoising_tsvd.inverse_transform(
-        p.denoising_tsvd.transform(waveforms)
-    )
-    waveforms = waveforms.reshape(n, c, t).transpose(0, 2, 1)
+    waveforms = waveforms.permute(0, 2, 1).reshape(n * c, t)
+    waveforms = p.denoising_tsvd(waveforms, in_place=True)
+    waveforms = waveforms.reshape(n, c, t).permute(0, 2, 1)
 
     # get low rank templates
     low_rank_templates = []
     for u in uids:
         in_unit = np.flatnonzero(labels == u)
+        if not in_unit.size:
+            low_rank_templates.append(0)
+            continue
         in_unit_orig = in_units[labels == u]
         if p.registered:
             low_rank_templates.append(
@@ -594,3 +647,14 @@ def _template_job(unit_ids):
             low_rank_templates.append(p.reducer(waveforms[in_unit], axis=0))
 
     return uids, raw_templates, low_rank_templates, snrs_by_chan
+
+
+class TorchSVDProjector(torch.nn.Module):
+    def __init__(self, components):
+        super().__init__()
+        self.register_buffer("components", components)
+
+    def forward(self, x, in_place=False):
+        embed = x @ self.components.T
+        out = x if in_place else None
+        return torch.matmul(embed, self.components, out=out)
