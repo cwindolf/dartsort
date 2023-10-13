@@ -20,6 +20,7 @@ def cluster_chunk(
     peeling_hdf5_filename,
     motion_est=None,
     strategy="closest_registered_channels",
+    chunk_size_s=300,
 ):
     """Cluster spikes from a single segment
 
@@ -33,7 +34,8 @@ def cluster_chunk(
     -------
     sorting : DARTsortSorting
     """
-    assert strategy in ("closest_registered_channels",)
+    assert strategy in ("closest_registered_channels","hdbscan","ensembling_hdbscan",)
+    
 
     if strategy == "closest_registered_channels":
         with h5py.File(peeling_hdf5_filename, "r") as h5:
@@ -57,12 +59,48 @@ def cluster_chunk(
             ),
         )
     elif strategy == "hdbscan":
-        pass
+        with h5py.File(peeling_hdf5_filename, "r") as h5:
+            times_samples = h5["times_samples"][:]
+            channels = h5["channels"][:]
+            times_s = h5["times_seconds"][:]
+            xyza = h5["point_source_localizations"][:]
+            amps = h5["denoised_amplitudes"][:]
+            geom = h5["geom"][:]
+        labels = cluster_util.hdbscan_clustering(
+            times_s, xyza[:, 0], xyza[:, 2], geom, amps, motion_est
+        )
+        sorting = DARTsortSorting(
+            times_samples=times_samples,
+            channels=channels,
+            labels=labels,
+            extra_features=dict(
+                point_source_localizations=xyza,
+                denoised_amplitudes=amps,
+                times_seconds=times_s,
+            ),
+        )
+    elif strategy == "ensembling_hdbscan":
+        with h5py.File(peeling_hdf5_filename, "r") as h5:
+            times_samples = h5["times_samples"][:]
+            channels = h5["channels"][:]
+            times_s = h5["times_seconds"][:]
+            xyza = h5["point_source_localizations"][:]
+            amps = h5["denoised_amplitudes"][:]
+            geom = h5["geom"][:]
+        labels = cluster_util.ensembling_hdbscan(
+            times_s, xyza[:, 0], xyza[:, 2], geom, amps, motion_est, chunk_size_s,
+        )
+        sorting = DARTsortSorting(
+            times_samples=times_samples,
+            channels=channels,
+            labels=labels,
+            extra_features=dict(
+                point_source_localizations=xyza,
+                denoised_amplitudes=amps,
+                times_seconds=times_s,
+            ),
+        )
     else:
         raise ValueError
-
     return sorting
 
-
-def ensemble_chunks():
-    pass
