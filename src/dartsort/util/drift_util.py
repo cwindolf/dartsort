@@ -11,6 +11,7 @@ by integer numbers of pitches. As many shifted copies are created
 as needed to capture all the drift.
 """
 import numpy as np
+import torch
 from scipy.spatial import KDTree
 from scipy.spatial.distance import pdist
 
@@ -149,11 +150,24 @@ def registered_template(
     if two_d:
         waveforms = waveforms[:, None, :]
     uniq_shifts, counts = np.unique(n_pitches_shift, return_counts=True)
-    drifty_templates = np.zeros(
-        (len(uniq_shifts), *waveforms.shape[1:]), dtype=waveforms.dtype
-    )
+    is_tensor = torch.is_tensor(waveforms)
+    if is_tensor:
+        drifty_templates = torch.zeros(
+            (len(uniq_shifts), *waveforms.shape[1:]),
+            dtype=waveforms.dtype,
+            device=waveforms.device,
+        )
+    else:
+        drifty_templates = np.zeros(
+            (len(uniq_shifts), *waveforms.shape[1:]),
+            dtype=waveforms.dtype,
+        )
+    if is_tensor:
+        n_pitches_shift = torch.as_tensor(n_pitches_shift, device=waveforms.device)
     for i, u in enumerate(uniq_shifts):
         drifty_templates[i] = reducer(waveforms[n_pitches_shift == u], axis=0)
+    if is_tensor:
+        drifty_templates = drifty_templates.numpy(force=True)
 
     static_templates = get_waveforms_on_static_channels(
         drifty_templates,
@@ -167,7 +181,7 @@ def registered_template(
 
     # weighted mean is easier than weighted median, and we want this to be weighted
     valid = ~np.isnan(static_templates[:, 0, :])
-    weights = valid * counts[:, None, None]
+    weights = valid[:, None, :] * counts[:, None, None]
     weights = weights / np.maximum(weights.sum(0), 1)
     template = (np.nan_to_num(static_templates) * weights).sum(0)
     template[:, ~valid.any(0)] = np.nan
