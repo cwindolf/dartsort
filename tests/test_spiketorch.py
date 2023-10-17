@@ -2,6 +2,7 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 from dartsort.util import spiketorch
+from scipy.signal import resample
 
 
 def test_ptp():
@@ -123,3 +124,11 @@ def test_add_spikes_():
     assert -recording[19, 3] == 2
     assert -recording[19, 1] == 0
     assert -recording[21, 3] == 1
+
+
+def test_resample():
+    rg = np.random.default_rng(0)
+    x = rg.normal(size=(10, 101, 3))
+    xup_scipy = resample(x, 80)
+    xup_torch = spiketorch.real_resample(torch.as_tensor(x), 80)
+    assert np.isclose(xup_scipy, xup_torch).all()

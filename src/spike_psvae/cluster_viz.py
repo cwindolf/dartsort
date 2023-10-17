@@ -1,33 +1,28 @@
 # %%
-import numpy as np
+import colorcet as cc
 import matplotlib
+import matplotlib.gridspec as gridspec
 import matplotlib.pyplot as plt
-import colorcet
-from matplotlib.patches import Ellipse
 import matplotlib.transforms as transforms
-
+import numpy as np
+import seaborn as sns
+from matplotlib.patches import Ellipse
 # %%
 # matplotlib.use('Agg')
 from matplotlib_venn import venn2
-from spikeinterface.extractors import NumpySorting
-from spikeinterface.postprocessing import compute_correlograms
-from spikeinterface.comparison import compare_two_sorters
-from spikeinterface.widgets import plot_agreement_matrix
-import seaborn as sns
-import matplotlib.gridspec as gridspec
-from sklearn.discriminant_analysis import LinearDiscriminantAnalysis as LDA
 from sklearn.decomposition import PCA
-
+from sklearn.discriminant_analysis import LinearDiscriminantAnalysis as LDA
+from spike_psvae.cluster_utils import (compute_spiketrain_agreement,
+                                       get_closest_clusters_hdbscan,
+                                       get_closest_clusters_kilosort,
+                                       get_unit_similarities)
+from spike_psvae.denoise import denoise_wf_nn_tmp_single_channel
 # %%
 from spike_psvae.spikeio import read_waveforms
-from spike_psvae.cluster_utils import (
-    compute_spiketrain_agreement,
-    get_unit_similarities,
-    get_closest_clusters_kilosort,
-    get_closest_clusters_hdbscan,
-)
-from spike_psvae.denoise import denoise_wf_nn_tmp_single_channel
-import colorcet as cc
+from spikeinterface.comparison import compare_two_sorters
+from spikeinterface.extractors import NumpySorting
+from spikeinterface.postprocessing import compute_correlograms
+from spikeinterface.widgets import plot_agreement_matrix
 
 # %%
 plt.rcParams["axes.xmargin"] = 0
@@ -54,6 +49,7 @@ def cluster_scatter(
     excluded_ids={-1},
     s=1,
     alpha=0.5,
+    lw=0,
     do_ellipse=True,
     fontsize=None,
     linewidth_ellipse=1.,
@@ -67,7 +63,7 @@ def cluster_scatter(
         xk = xs[where]
         yk = ys[where]
         color = get_ccolor(k)
-        ax.scatter(xk, yk, s=s, color=color, alpha=alpha, marker=".")
+        ax.scatter(xk, yk, s=s, color=color, lw=lw, marker=".", rasterized=True)
         if k not in excluded_ids:
             if do_ellipse:
                 x_mean, y_mean = xk.mean(), yk.mean()

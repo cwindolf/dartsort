@@ -1,4 +1,4 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Optional
 
 import h5py
@@ -8,7 +8,6 @@ from dartsort.util import drift_util, waveform_util
 from dartsort.util.data_util import DARTsortSorting
 from dartsort.util.multiprocessing_util import get_pool
 from hdbscan import HDBSCAN
-from hdbscan.prediction import approximate_predict
 from sklearn.decomposition import PCA
 from tqdm.auto import tqdm
 
@@ -91,11 +90,8 @@ def split_clusters(
                 if show_progress:
                     iterator.total += len(new_units)
 
-    return DARTsortSorting(
-        times_samples=sorting.times_samples,
-        channels=sorting.channels,
-        labels=labels,
-    )
+    new_sorting = replace(sorting, labels=labels)
+    return new_sorting
 
 
 # -- split steps
