@@ -40,7 +40,7 @@ class ResidualUpdateTemplateMatchingPeeler(BasePeeler):
         amplitude_scaling_variance=0.0,
         amplitude_scaling_boundary=0.5,
         trough_offset_samples=42,
-        threshold=30.0,
+        threshold=50.0,
         chunk_length_samples=30_000,
         n_chunks_fit=40,
         fit_subsampling_random_state=0,
@@ -67,6 +67,9 @@ class ResidualUpdateTemplateMatchingPeeler(BasePeeler):
             min_channel_amplitude=min_channel_amplitude,
             rank=svd_compression_rank,
         )
+        temporal_components = temporal_components.astype(recording.dtype)
+        singular_values = singular_values.astype(recording.dtype)
+        spatial_components = spatial_components.astype(recording.dtype)
         self.handle_upsampling(
             temporal_components,
             temporal_upsampling_factor=temporal_upsampling_factor,
@@ -78,6 +81,7 @@ class ResidualUpdateTemplateMatchingPeeler(BasePeeler):
         self.refractory_radius_frames = refractory_radius_frames
         self.max_iter = max_iter
         self.n_templates = n_templates
+        self.trough_offset_samples = trough_offset_samples
         self.spike_length_samples = spike_length_samples
         self.geom = recording.get_channel_locations()
         self.svd_compression_rank = svd_compression_rank
@@ -101,6 +105,7 @@ class ResidualUpdateTemplateMatchingPeeler(BasePeeler):
             "_refrac_ix",
             torch.arange(-refractory_radius_frames, refractory_radius_frames + 1),
         )
+        self.register_buffer("_rank_ix", torch.arange(svd_compression_rank))
 
         # amplitude scaling properties
         self.is_scaling = bool(amplitude_scaling_variance)
@@ -166,7 +171,7 @@ class ResidualUpdateTemplateMatchingPeeler(BasePeeler):
         assert self.unit_ids.shape == (self.n_templates,)
 
     def handle_template_groups(self, unit_ids):
-        self.unit_ids = unit_ids
+        self.register_buffer("unit_ids", torch.from_numpy(unit_ids))
         self.grouped_temps = True
         unique_units = np.unique(unit_ids)
         if unique_units.size == unit_ids.size:
@@ -188,7 +193,7 @@ class ResidualUpdateTemplateMatchingPeeler(BasePeeler):
         group_index = np.full((self.n_templates, max_group_size), -1)
         for j, row in enumerate(group_index):
             group_index[j, : len(row)] = row
-        self.group_index = torch.tensor(group_index)
+        self.register_buffer("group_index", torch.from_numpy(group_index))
 
     def handle_upsampling(
         self,
@@ -197,41 +202,46 @@ class ResidualUpdateTemplateMatchingPeeler(BasePeeler):
         upsampling_peak_window_radius=8,
     ):
         self.temporal_upsampling_factor = temporal_upsampling_factor
-        upsampled_temporal_components = temporal_components
-        if temporal_upsampling_factor > 1:
-            upsampled_temporal_components = template_util.temporally_upsample_templates(
-                temporal_components,
-                temporal_upsampling_factor=temporal_upsampling_factor,
-            )
+        if temporal_upsampling_factor == 1:
+            upsampled_temporal_components = temporal_components[:, :, None, :]
             self.register_buffer(
                 "upsampled_temporal_components",
                 torch.tensor(upsampled_temporal_components),
             )
-            self.register_buffer(
-                "upsampling_window",
-                torch.arange(
-                    -upsampling_peak_window_radius, upsampling_peak_window_radius + 1
-                ),
-            )
-            self.upsampling_window_len = 2 * upsampling_peak_window_radius
-            center = upsampling_peak_window_radius * temporal_upsampling_factor
-            radius = temporal_upsampling_factor // 2 + temporal_upsampling_factor % 2
-            self.register_buffer(
-                "upsampled_peak_search_window",
-                torch.arange(center - radius, center + radius + 1),
-            )
-            self.register_buffer(
-                "peak_to_upsampling_index",
-                torch.concatenate(
-                    [
-                        torch.arange(radius, -1, -1),
-                        (temporal_upsampling_factor - 1) - torch.arange(radius),
-                    ]
-                ),
-            )
-            self.register_buffer(
-                "peak_to_time_shift", torch.tensor([0] * (radius + 1) + [1] * radius)
-            )
+            return
+
+        upsampled_temporal_components = template_util.temporally_upsample_templates(
+            temporal_components,
+            temporal_upsampling_factor=temporal_upsampling_factor,
+        )
+        self.register_buffer(
+            "upsampled_temporal_components", torch.tensor(upsampled_temporal_components)
+        )
+        self.register_buffer(
+            "upsampling_window",
+            torch.arange(
+                -upsampling_peak_window_radius, upsampling_peak_window_radius + 1
+            ),
+        )
+        self.upsampling_window_len = 2 * upsampling_peak_window_radius
+        center = upsampling_peak_window_radius * temporal_upsampling_factor
+        radius = temporal_upsampling_factor // 2 + temporal_upsampling_factor % 2
+        self.register_buffer(
+            "upsampled_peak_search_window",
+            torch.arange(center - radius, center + radius + 1),
+        )
+        self.register_buffer(
+            "peak_to_upsampling_index",
+            torch.concatenate(
+                [
+                    torch.arange(radius, -1, -1),
+                    (temporal_upsampling_factor - 1) - torch.arange(radius),
+                ]
+            ),
+        )
+        self.register_buffer(
+            "peak_to_time_shift", torch.tensor([0] * (radius + 1) + [1] * radius)
+        )
 
     @classmethod
     def from_config(
@@ -279,7 +289,7 @@ class ResidualUpdateTemplateMatchingPeeler(BasePeeler):
     ):
         # get current template set
         chunk_center_samples = chunk_start_samples + self.chunk_length_samples // 2
-        
+
         segment = self.recording._recording_segments[0]
         chunk_center_seconds = segment.sample_index_to_time(chunk_center_samples)
         compressed_template_data = self.templates_at_time(chunk_center_seconds)
@@ -302,21 +312,21 @@ class ResidualUpdateTemplateMatchingPeeler(BasePeeler):
     def templates_at_time(self, t_s):
         """Extract the right spatial components for each unit."""
         if self.is_drifting:
-            cur_spatial = template_util.templates_at_time(
+            pitch_shifts, cur_spatial = template_util.templates_at_time(
                 t_s,
                 self.spatial_components,
                 self.geom,
                 registered_template_depths_um=self.registered_template_depths_um,
                 registered_geom=self.registered_geom,
                 motion_est=self.motion_est,
+                return_pitch_shifts=True,
             )
-            cur_ampvecs = template_util.templates_at_time(
-                t_s,
+            cur_ampvecs = drift_util.get_waveforms_on_static_channels(
                 self.registered_template_ampvecs[:, None, :],
-                self.geom,
-                registered_template_depths_um=self.registered_template_depths_um,
-                registered_geom=self.registered_geom,
-                motion_est=self.motion_est,
+                self.registered_geom,
+                n_pitches_shift=pitch_shifts,
+                registered_geom=self.geom,
+                fill_value=0.0,
             )
             max_channels = cur_ampvecs[:, 0, :].argmax(1)
         else:
@@ -328,7 +338,7 @@ class ResidualUpdateTemplateMatchingPeeler(BasePeeler):
             self.singular_values,
             self.temporal_components,
             self.upsampled_temporal_components,
-            max_channels,
+            torch.tensor(max_channels, device=cur_spatial.device),
         )
 
     def match_chunk(
@@ -348,57 +358,89 @@ class ResidualUpdateTemplateMatchingPeeler(BasePeeler):
         residual = residual_padded[:, :-1]
 
         # name objective variables so that we can update them in-place later
-        conv = None
         conv_len = traces.shape[0] - self.spike_length_samples + 1
         padded_obj_len = conv_len + 2 * self.obj_pad_len
+        padded_conv = torch.zeros(
+            self.n_templates,
+            padded_obj_len,
+            dtype=traces.dtype,
+            device=traces.device,
+        )
         padded_objective = torch.zeros(
             self.n_templates + 1,
             padded_obj_len,
             dtype=traces.dtype,
             device=traces.device,
         )
+        refrac_mask = torch.zeros_like(padded_objective)
         # padded objective has an extra unit (for group_index) and refractory
         # padding (for easier implementation of enforce_refractory)
-        objective = padded_objective[
-            :-1, self.refractory_radius_frames : -self.refractory_radius_frames
-        ]
         neg_temp_normsq = -compressed_template_data.template_norms_squared[:, None]
 
         # manages buffers for spike train data (peak times, labels, etc)
-        peaks = MatchingPeaks()
-
+        peaks = MatchingPeaks(device=traces.device)
         # main loop
-        for _ in range(self.max_iter):
+        print("start")
+        for it in range(self.max_iter):
             # update objective
-            conv = compressed_template_data.convolve(residual, out=conv)
+            compressed_template_data.convolve(
+                residual, padding=self.obj_pad_len, out=padded_conv
+            )
             # unscaled objective for coarse peaks, scaled when finding high res peak
-            torch.add(neg_temp_normsq, conv, alpha=2.0, out=objective)
+            torch.add(
+                neg_temp_normsq, padded_conv, alpha=2.0, out=padded_objective[:-1]
+            )
 
             # find high-res peaks
-            new_peaks = self.find_peaks(conv, padded_objective, peaks, neg_temp_normsq)
+            print('before find')
+            new_peaks = self.find_peaks(
+                padded_conv, padded_objective, refrac_mask, neg_temp_normsq
+            )
             if new_peaks is None:
                 break
+            # print("----------")
+            # if not it % 1:
+            # if new_peaks.n_spikes > 1:
+            #     print(
+            #         f"{it=} {new_peaks.n_spikes=} {new_peaks.scores.mean().numpy(force=True)=} {torch.diff(new_peaks.times).min()=}"
+            #     )
+            # tq = new_peaks.times.numpy(force=True)
+            # print(f"{np.diff(tq).min()=} {tq=}")
+
+            # enforce refractoriness
+            self.enforce_refractory(
+                refrac_mask,
+                new_peaks.times + self.obj_pad_len,
+                new_peaks.template_indices,
+            )
 
             # subtract them
-            # offset times: conv result peaks with valid padding are offset
-            # by spike len - 1 samples from the corresponding trace peaks
-            sample_times = new_peaks.times + self.spike_length_samples - 1
+            # old_norm = torch.linalg.norm(residual) ** 2
             compressed_template_data.subtract(
-                residual,
-                sample_times,
+                residual_padded,
+                new_peaks.times,
                 new_peaks.template_indices,
                 new_peaks.upsampling_indices,
                 new_peaks.scalings,
             )
+
+            # new_norm = torch.linalg.norm(residual) ** 2
+            # print(f"{it=} {new_norm=}")
+            # print(f"{(new_norm-old_norm)=}")
+            # print(f"{new_peaks.scores.sum().numpy(force=True)=}")
+            # print("----------")
 
             # update spike train
             peaks.extend(new_peaks)
         peaks.sort()
 
         # extract collision-cleaned waveforms on small neighborhoods
-        channels, waveforms = self.get_collisioncleaned_waveforms()
+        channels, waveforms = self.get_collisioncleaned_waveforms(
+            residual_padded, peaks, compressed_template_data
+        )
 
         return dict(
+            n_spikes=peaks.n_spikes,
             times_samples=peaks.times + self.trough_offset_samples,
             channels=channels,
             labels=self.unit_ids[peaks.template_indices],
@@ -409,38 +451,35 @@ class ResidualUpdateTemplateMatchingPeeler(BasePeeler):
             collisioncleaned_waveforms=waveforms,
         )
 
-    def find_peaks(self, conv, padded_objective, peaks, neg_temp_normsq):
-        # zeroth step: enforce refractoriness.
-        self.enforce_refractory(
-            padded_objective,
-            peaks.times + self.obj_pad_len,
-            peaks.template_indices,
-        )
-
+    def find_peaks(self, padded_conv, padded_objective, refrac_mask, neg_temp_normsq):
         # first step: coarse peaks. not temporally upsampled or amplitude-scaled.
-        objective = padded_objective[:-1, self.obj_pad_len : -self.obj_pad_len]
-        times, template_indices = detect_and_deduplicate(
-            objective.T,
-            self.threshold,
-            dedup_channel_index=None,
-            peak_sign="pos",
-            # add 1 here to account for possible time_shifts later
-            relative_peak_radius=self.spike_length_samples + 1,
-            dedup_temporal_radius=0,
-            # dedup_temporal_radius=self.spike_length_samples + 1,
-        )
+        padded_obj_len = padded_objective.shape[1]
+        objective = (padded_objective + refrac_mask)[
+            :-1, self.obj_pad_len : -self.obj_pad_len
+        ]
+        # formerly used detect_and_deduplicate, but that was slow.
+        objective_max, max_template = objective.max(dim=0)
+        times = argrelmax(objective_max, self.spike_length_samples, self.threshold)
+        # tt = times.numpy(force=True)
+        # print(f"{np.diff(tt).min()=} {tt=}")
+        template_indices = max_template[times]
+        # remove peaks inside the padding
         if not times.numel():
             return None
 
         # second step: high-res peaks (upsampled and/or amp-scaled)
         time_shifts, upsampling_indices, scalings, scores = self.find_fancy_peaks(
-            conv, objective, times, template_indices, neg_temp_normsq
+            padded_conv,
+            padded_objective,
+            times + self.obj_pad_len,
+            template_indices,
+            neg_temp_normsq,
         )
         if time_shifts is not None:
             times += time_shifts
 
         return MatchingPeaks(
-            n_spikes=times.size,
+            n_spikes=times.numel(),
             times=times,
             template_indices=template_indices,
             upsampling_indices=upsampling_indices,
@@ -449,13 +488,15 @@ class ResidualUpdateTemplateMatchingPeeler(BasePeeler):
         )
 
     def enforce_refractory(self, objective, times, template_indices):
+        if not times.numel():
+            return
         # overwrite objective with -inf to enforce refractoriness
-        time_ix = times[None, :] + self._refrac_ix[:, None]
+        time_ix = times[:, None] + self._refrac_ix[None, :]
         if self.grouped_temps:
             unit_ix = self.group_index[template_indices]
         else:
-            unit_ix = template_indices[:, None]
-        objective[unit_ix, time_ix] = -torch.inf
+            unit_ix = template_indices[:, None, None]
+        objective[unit_ix[:, :, None], time_ix[:, None, :]] = -torch.inf
 
     def find_fancy_peaks(
         self, conv, objective, times, template_indices, neg_temp_normsq
@@ -466,10 +507,10 @@ class ResidualUpdateTemplateMatchingPeeler(BasePeeler):
         # use one of the upsampled templates, no problem. when the peak
         # comes to the left, it's different: it came from one of the upsampled
         # templates shifted one sample (spike time += 1).
-        if self.up_factor == 1 and not self.is_scaling:
+        if self.temporal_upsampling_factor == 1 and not self.is_scaling:
             return None, None, None, objective[template_indices, times]
 
-        if self.is_scaling and self.up_factor == 1:
+        if self.is_scaling and self.temporal_upsampling_factor == 1:
             inv_lambda = 1 / self.amplitude_scaling_variance
             b = conv[times, template_indices] + inv_lambda
             a = neg_temp_normsq[template_indices] + inv_lambda
@@ -509,7 +550,7 @@ class ResidualUpdateTemplateMatchingPeeler(BasePeeler):
             high_res_obj[:, self.upsampled_peak_search_window], dim=1
         )
         upsampling_indices = self.peak_to_upsampling_index[zoom_peak]
-        time_shifts = self.peak_to_time_shifts[zoom_peak]
+        time_shifts = self.peak_to_time_shift[zoom_peak]
 
         return time_shifts, upsampling_indices, scalings, scores
 
@@ -527,14 +568,14 @@ class ResidualUpdateTemplateMatchingPeeler(BasePeeler):
             buffer=0,
             already_padded=True,
         )
-        spatial = compressed_template_data.spatial_singular[
+        padded_spatial = F.pad(compressed_template_data.spatial_singular, (0, 1))
+        spatial = padded_spatial[
             peaks.template_indices[:, None, None],
-            :,
+            self._rank_ix[None, :, None],
             self.channel_index[channels][:, None, :],
         ]
         temporal = compressed_template_data.upsampled_temporal_components[
-            peaks.template_indices,
-            peaks.upsampling_indices,
+            peaks.template_indices, :, peaks.upsampling_indices
         ]
         torch.baddbmm(waveforms, temporal, spatial, out=waveforms)
         return channels, waveforms
@@ -556,6 +597,14 @@ class CompressedTemplateData:
             self.spike_length_samples,
             self.rank,
         ) = self.temporal_components.shape
+        assert self.spatial_components.shape[:2] == (self.n_templates, self.rank)
+        assert self.upsampled_temporal_components.shape == (
+            self.n_templates,
+            self.spike_length_samples,
+            self.upsampled_temporal_components.shape[2],
+            self.rank,
+        )
+        assert self.singular_values.shape == (self.n_templates, self.rank)
         # squared l2 norms are the sums of squared singular values
         self.template_norms_squared = torch.square(self.singular_values).sum(1)
         self.spatial_singular = (
@@ -568,21 +617,15 @@ class CompressedTemplateData:
             self.spike_length_samples, device=self.spatial_components.device
         )
 
-    def convolve(self, traces, out=None):
+    def convolve(self, traces, padding=0, out=None):
         """This is not the fastest strategy on GPU, but it's low-memory and fast on CPU."""
+        out_len = traces.shape[0] + 2 * padding - self.spike_length_samples + 1
         if out is None:
             out = torch.zeros(
-                1,
-                self.n_templates,
-                traces.shape[0] - self.spike_length_samples + 1,
-                dtype=traces.dtype,
-                device=traces.device,
+                1, self.n_templates, out_len, dtype=traces.dtype, device=traces.device
             )
         else:
-            assert out.shape == (
-                self.n_templates,
-                traces.shape[0] - self.spike_length_samples + 1,
-            )
+            assert out.shape == (self.n_templates, out_len)
             out = out[None]
 
         for q in range(self.rank):
@@ -591,9 +634,16 @@ class CompressedTemplateData:
             # convolve with temporal components -- units x time
             temporal = self.temporal_components[:, :, q]
             # conv1d with groups! only convolve each unit with its own temporal filter.
-            out += F.conv1d(
-                rec_spatial[None], temporal[:, None, :], groups=self.n_templates
+            conv = F.conv1d(
+                rec_spatial[None],
+                temporal[:, None, :],
+                groups=self.n_templates,
+                padding=padding,
             )
+            if q:
+                out += conv
+            else:
+                out.copy_(conv)
 
         # back to units x time (remove extra dim used for conv1d)
         return out[0]
@@ -607,10 +657,10 @@ class CompressedTemplateData:
         scalings,
     ):
         batch_templates = torch.einsum(
-            "n,nrc,ntr",
+            "n,nrc,ntr->ntc",
             scalings,
             self.spatial_singular[template_indices],
-            self.upsampled_temporal_components[template_indices, upsampling_indices],
+            self.upsampled_temporal_components[template_indices, :, upsampling_indices],
         )
         time_ix = times[:, None, None] + self.time_ix[None, :, None]
         spiketorch.add_at_(
@@ -619,7 +669,7 @@ class CompressedTemplateData:
 
 
 class MatchingPeaks:
-    BUFFER_INIT: int = 1000
+    BUFFER_INIT: int = 1500
     BUFFER_GROWTH: float = 1.5
 
     def __init__(
@@ -630,22 +680,35 @@ class MatchingPeaks:
         upsampling_indices: Optional[torch.LongTensor] = None,
         scalings: Optional[torch.Tensor] = None,
         scores: Optional[torch.Tensor] = None,
+        device=None,
     ):
         self.n_spikes = n_spikes
+        self._times = times
+        self._template_indices = template_indices
+        self._upsampling_indices = upsampling_indices
+        self._scalings = scalings
+        self._scores = scores
+
+        if device is None and times is not None:
+            device = times.device
         if times is None:
-            cur_buf_size = self.BUFFER_INIT
-            self._times = torch.zeros(cur_buf_size, dtype=int)
+            self.cur_buf_size = self.BUFFER_INIT
+            self._times = torch.zeros(self.cur_buf_size, dtype=int, device=device)
         else:
-            cur_buf_size = times.size
-            assert cur_buf_size == n_spikes
+            self.cur_buf_size = times.numel()
+            assert self.cur_buf_size == n_spikes
         if template_indices is None:
-            self._template_indices = torch.zeros(cur_buf_size, dtype=int)
+            self._template_indices = torch.zeros(
+                self.cur_buf_size, dtype=int, device=device
+            )
         if scalings is None:
-            self._scalings = torch.zeros(cur_buf_size)
+            self._scalings = torch.ones(self.cur_buf_size, device=device)
         if upsampling_indices is None:
-            self._upsampling_indices = torch.zeros(cur_buf_size, dtype=int)
+            self._upsampling_indices = torch.zeros(
+                self.cur_buf_size, dtype=int, device=device
+            )
         if scores is None:
-            self._scores = torch.zeros(cur_buf_size)
+            self._scores = torch.zeros(self.cur_buf_size, device=device)
 
     @property
     def times(self):
@@ -668,29 +731,14 @@ class MatchingPeaks:
         return self._scores[: self.n_spikes]
 
     def grow_buffers(self, min_size=0):
-        new_buf_size = max(min_size, int(self.cur_buf_size * self.BUFFER_GROWTH))
-        new_times = torch.zeros(new_buf_size, dtype=self._times.dtype)
-        new_template_indices = torch.zeros(
-            new_buf_size, dtype=self._template_indices.dtype
-        )
-        new_upsampling_indices = torch.zeros(
-            new_buf_size, dtype=self._upsampling_indices.dtype
-        )
-        new_scalings = torch.zeros(new_buf_size, dtype=self._scalings.dtype)
-        new_scores = torch.zeros(new_buf_size, dtype=self._scores.dtype)
-
-        new_times[: self.n_spikes] = self.times
-        new_template_indices[: self.n_spikes] = self.template_indices
-        new_upsampling_indices[: self.n_spikes] = self.upsampling_indices
-        new_scalings[: self.n_spikes] = self.scalings
-        new_scores[: self.n_spikes] = self.scores
-
-        self.cur_buf_size = new_buf_size
-        self._times = new_times
-        self._template_indices = new_template_indices
-        self._upsampling_indices = new_upsampling_indices
-        self._scalings = new_scalings
-        self._scores = new_scores
+        sz = max(min_size, int(self.cur_buf_size * self.BUFFER_GROWTH))
+        k = self.n_spikes
+        self._times = _grow_buffer(self._times, k, sz)
+        self._template_indices = _grow_buffer(self._template_indices, k, sz)
+        self._upsampling_indices = _grow_buffer(self._upsampling_indices, k, sz)
+        self._scalings = _grow_buffer(self._scalings, k, sz)
+        self._scores = _grow_buffer(self._scores, k, sz)
+        self.cur_buf_size = sz
 
     def sort(self):
         order = torch.argsort(self.times[: self.n_spikes])
@@ -712,3 +760,24 @@ class MatchingPeaks:
         self._scalings[self.n_spikes : new_n_spikes] = other.scalings
         self._scores[self.n_spikes : new_n_spikes] = other.scores
         self.n_spikes = new_n_spikes
+
+
+def _grow_buffer(x, old_length, new_size):
+    new = torch.empty(new_size, dtype=x.dtype, device=x.device)
+    new[:old_length] = x[:old_length]
+    return new
+
+
+def argrelmax(x, radius, threshold, exclude_edge=True):
+    x1 = F.max_pool1d(
+        x[None, None],
+        kernel_size=2 * radius + 1,
+        padding=radius,
+        stride=1,
+    )[0, 0]
+    x1[x < x1] = 0
+    F.threshold_(x1, threshold, 0.0)
+    ix = torch.nonzero(x1)[:, 0]
+    if exclude_edge:
+        return ix[(ix > 0) & (ix < x.numel() - 1)]
+    return ix
