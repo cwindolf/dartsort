@@ -10,6 +10,7 @@ def detect_and_deduplicate(
     relative_peak_radius=5,
     dedup_temporal_radius=7,
     spatial_dedup_batch_size=512,
+    exclude_edges=True,
 ):
     """Detect and deduplicate peaks
 
@@ -78,12 +79,14 @@ def detect_and_deduplicate(
     F.threshold_(energies, threshold, 0.0)
 
     # -- temporal deduplication
-    max_energies, indices = F.max_pool2d_with_indices(
-        energies,
-        kernel_size=[2 * dedup_temporal_radius + 1, 1],
-        stride=1,
-        padding=[dedup_temporal_radius, 0],
-    )
+    max_energies = energies
+    if dedup_temporal_radius > 0:
+        max_energies, indices = F.max_pool2d_with_indices(
+            energies,
+            kernel_size=[2 * dedup_temporal_radius + 1, 1],
+            stride=1,
+            padding=[dedup_temporal_radius, 0],
+        )
     # back to TC
     energies = energies[0, 0]
     max_energies = max_energies[0, 0]
@@ -102,8 +105,12 @@ def detect_and_deduplicate(
         max_energies = max_energies[:, :nchans]
 
     # if temporal/spatial max made you grow, you were not a peak!
-    max_energies[max_energies > energies] = 0.0
+    if (dedup_temporal_radius > 0) or (dedup_channel_index is not None):
+        max_energies[max_energies > energies] = 0.0
 
     # sparsify and return
+    if exclude_edges:
+        max_energies[[0, -1], :] = 0.0
     times, chans = torch.nonzero(max_energies, as_tuple=True)
+
     return times, chans
