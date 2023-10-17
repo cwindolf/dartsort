@@ -153,7 +153,7 @@ class MatchingConfig:
     fit_subsampling_random_state: int = 0
 
     # template matching parameters
-    threshold: float = 30.0
+    threshold: float = 50.0
     template_svd_compression_rank: int = 10
     template_temporal_upsampling_factor: int = 8
     template_min_channel_amplitude: float = 1.0
