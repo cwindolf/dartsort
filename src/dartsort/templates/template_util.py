@@ -118,6 +118,22 @@ def get_realigned_sorting(
     return results["sorting"]
 
 
+def weighted_average(unit_ids, templates, weights):
+    n_out = unit_ids.max() + 1
+    n_in, t, c = templates.shape
+    out = np.zeros((n_out, t, c), dtype=templates.dtype)
+    for i in range(n_out):
+        which_in = np.flatnonzero(unit_ids == i)
+        if not which_in.size:
+            continue
+
+        w = weights[which_in][:, None, None]
+        w /= w.sum()
+        out[i] = (w * templates[which_in]).sum(0)
+    
+    return out
+
+
 # -- template drift handling
 
 
@@ -126,6 +142,7 @@ def get_template_depths(templates, geom, localization_radius_um=100):
         templates, geom=geom, radius=localization_radius_um
     )
     template_depths_um = template_locs["z_abs"]
+
     return template_depths_um
 
 
@@ -136,6 +153,7 @@ def templates_at_time(
     registered_template_depths_um=None,
     registered_geom=None,
     motion_est=None,
+    return_pitch_shifts=False,
 ):
     if registered_geom is None:
         return registered_templates
@@ -161,8 +179,8 @@ def templates_at_time(
         registered_geom=geom,
         fill_value=np.nan,
     )
-    assert not np.isnan(unregistered_templates).any()
-
+    if return_pitch_shifts:
+        return pitch_shifts, unregistered_templates
     return unregistered_templates
 
 
@@ -180,9 +198,9 @@ def svd_compress_templates(templates, min_channel_amplitude=1.0, rank=5):
     vis_templates = templates * vis_mask
     U, s, Vh = np.linalg.svd(vis_templates, full_matrices=False)
     # s is descending.
-    temporal_components = U[..., :, :rank]
-    singular_values = s[..., :rank]
-    spatial_components = Vh[..., :rank, :]
+    temporal_components = U[:, :, :rank]
+    singular_values = s[:, :rank]
+    spatial_components = Vh[:, :rank, :]
     return temporal_components, singular_values, spatial_components
 
 
@@ -197,4 +215,5 @@ def temporally_upsample_templates(
     tup.clip(0, t - 1, out=tup)
     upsampled_templates = erp(tup)
     upsampled_templates = upsampled_templates.reshape(n, t, temporal_upsampling_factor, c)
+    upsampled_templates = upsampled_templates.astype(templates.dtype)
     return upsampled_templates
