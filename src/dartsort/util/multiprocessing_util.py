@@ -1,9 +1,11 @@
 import multiprocessing
-import sys
 from concurrent.futures import ProcessPoolExecutor
 from multiprocessing import get_context
 
-import cloudpickle
+try:
+    import cloudpickle
+except ImportError:
+    pass
 
 
 class MockFuture:

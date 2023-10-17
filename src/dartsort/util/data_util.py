@@ -1,4 +1,6 @@
 from collections import namedtuple
+from dataclasses import dataclass, field
+from typing import Optional
 from warnings import warn
 
 import h5py
@@ -16,37 +18,49 @@ from .waveform_util import make_channel_index
 SpikeDataset = namedtuple("SpikeDataset", ["name", "shape_per_spike", "dtype"])
 
 
+@dataclass
 class DARTsortSorting:
     """Class which holds spike times, channels, and labels
 
     This class holds our algorithm state.
     Initially the sorter doesn't have unit labels, so these are optional.
     Export me to a SpikeInterface NumpySorting with .to_numpy_sorting()
+
+    When you instantiate this with from_peeling_hdf5, if the
+    flag load_simple_features is True (default), then additional
+    features of spikes will be loaded into memory -- like localizations,
+    which you can access like `sorting.point_source_localizations[...]`
+    If you instantiate with __init__(), you can pass these in with
+    `extra_features`, and they will also be available as .properties.
     """
+    times_samples : np.ndarray
+    channels : np.ndarray
+    labels : Optional[np.ndarray] = None
+    sampling_frequency : Optional[float] = 30_000.0
+    # entries in this dictionary will also be set as properties
+    extra_features: Optional[dict[str, np.ndarray]] = None
 
-    def __init__(
-        self, times_samples, channels, labels=None, sampling_frequency=30000
-    ):
-        """
-        Arguments
-        ---------
-        times_samples : np.array
-            Array of spike times_samples in samples
-        channels : np.array
-            Array of spike detection channel indices
-        labels : optional, np.array
-            Array of unit labels
-        """
-        self.times_samples = np.array(times_samples, dtype=int)
-        self.channels = channels
-        self.labels = labels
-        self.sampling_frequency = sampling_frequency
-        if labels is None:
-            self.labels = np.zeros_like(times_samples)
+    # automatically set
+    n_spikes: int = field(init=False)
 
-        if channels is not None:
-            self.channels = np.array(channels, dtype=int)
-            assert self.times_samples.shape == self.channels.shape
+    def __post_init__(self):
+        self.times_samples = np.asarray(self.times_samples, dtype=int)
+
+        if self.labels is None:
+            self.labels = np.zeros_like(self.times_samples)
+        self.labels = np.asarray(self.labels, dtype=int)
+
+        self.channels = np.asarray(self.channels, dtype=int)
+        assert self.times_samples.shape == self.channels.shape
+
+        if self.extra_features:
+            for k in self.extra_features:
+                v = self.extra_features[k] = np.asarray(self.extra_features[k])
+                assert v.shape[0] == len(self.times_samples)
+                assert not hasattr(self, k)
+                self.__dict__[k] = v
+
+        self.n_spikes = self.times_samples.size
 
     def to_numpy_sorting(self):
         return NumpySorting.from_times_labels(
@@ -61,13 +75,17 @@ class DARTsortSorting:
         units = np.unique(self.labels)
         units = units[units >= 0]
         unit_str = f"{units.size} unit" + ("s" if units.size > 1 else "")
-        return f"{name}: {nspikes} spikes, {unit_str}."
+        feat_str = ""
+        if self.extra_features:
+            feat_str = ", ".join(self.extra_features.keys())
+            feat_str = f" extra features: {feat_str}."
+        return f"{name}: {nspikes} spikes, {unit_str}.{feat_str}"
 
     def __repr__(self):
         return str(self)
 
     def __len__(self):
-        return self.times_samples.size
+        return self.n_spikes
 
     @classmethod
     def from_peeling_hdf5(
@@ -76,6 +94,7 @@ class DARTsortSorting:
         times_samples_dataset="times_samples",
         channels_dataset="channels",
         labels_dataset="labels",
+        load_simple_features=True,
     ):
         channels = labels = None
         with h5py.File(peeling_hdf5_filename, "r") as h5:
@@ -85,11 +104,26 @@ class DARTsortSorting:
                 channels = h5[channels_dataset][()]
             if labels_dataset in h5:
                 labels = h5[labels_dataset][()]
+
+            n_spikes = len(times_samples)
+            extra_features = None
+            if load_simple_features:
+                extra_features = {}
+                loaded = (times_samples_dataset, channels_dataset, labels_dataset)
+                for k in h5:
+                    if (
+                        k not in loaded
+                        and 1 <= h5[k].ndim <= 2
+                        and h5[k].shape[0] == n_spikes
+                    ):
+                        extra_features[k] = h5[k][:]
+
         return cls(
             times_samples,
             channels=channels,
             labels=labels,
             sampling_frequency=sampling_frequency,
+            extra_features=extra_features,
         )
 
 

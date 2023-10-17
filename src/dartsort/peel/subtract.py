@@ -29,6 +29,7 @@ class SubtractionPeeler(BasePeeler):
         spatial_dedup_channel_index=None,
         n_chunks_fit=40,
         fit_subsampling_random_state=0,
+        residnorm_decrease_threshold=3.162,
     ):
         super().__init__(
             recording=recording,
@@ -51,6 +52,7 @@ class SubtractionPeeler(BasePeeler):
         else:
             self.spatial_dedup_channel_index = None
         self.detection_thresholds = detection_thresholds
+        self.residnorm_decrease_threshold = residnorm_decrease_threshold
 
         self.add_module(
             "subtraction_denoising_pipeline", subtraction_denoising_pipeline
@@ -121,6 +123,7 @@ class SubtractionPeeler(BasePeeler):
             spatial_dedup_channel_index=spatial_dedup_channel_index,
             n_chunks_fit=subtraction_config.n_chunks_fit,
             fit_subsampling_random_state=subtraction_config.fit_subsampling_random_state,
+            residnorm_decrease_threshold=subtraction_config.residnorm_decrease_threshold,
         )
 
     def peel_chunk(
@@ -142,6 +145,7 @@ class SubtractionPeeler(BasePeeler):
             detection_thresholds=self.detection_thresholds,
             peak_sign=self.peak_sign,
             spatial_dedup_channel_index=self.spatial_dedup_channel_index,
+            residnorm_decrease_threshold=self.residnorm_decrease_threshold,
         )
 
         # add in chunk_start_samples
