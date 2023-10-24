@@ -161,3 +161,17 @@ class MatchingConfig:
     amplitude_scaling_variance: float = 0.0
     amplitude_scaling_boundary: float = 0.5
     max_iter: int = 1000
+
+@dataclass(frozen=True)
+class ClusteringConfig:
+    # -- initial clustering
+    # hdbscan parameters
+    cluster_strategy: str = "closest_registered_channels"
+    min_cluster_size: int = 25
+    min_samples: int = 25
+    cluster_selection_epsilon: int = 121 
+
+    # -- ensembling
+    ensemble_strategy: Optional[str] = None
+    chunk_size_s: int = 300
+    # forward-backward
