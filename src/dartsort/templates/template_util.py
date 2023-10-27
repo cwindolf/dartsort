@@ -154,6 +154,7 @@ def templates_at_time(
     registered_geom=None,
     motion_est=None,
     return_pitch_shifts=False,
+    # TODO: geom kdtree
 ):
     if registered_geom is None:
         return registered_templates
