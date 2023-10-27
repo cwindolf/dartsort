@@ -128,7 +128,7 @@ def scatter_spike_features(
         to_show=to_show,
         **scatter_kw,
     )
-    
+
     if label_axes:
         axes[0].set_ylabel("depth (um)")
         axes[0].set_xlabel("x (um)")
@@ -166,6 +166,8 @@ def scatter_time_vs_depth(
     the times_s, depths_um, and (one of) amplitudes or labels as arrays, or
     alternatively, these can be left unset and they will be loaded from
     hdf5_filename when it is supplied.
+
+    Returns: axis, scatter
     """
     if hdf5_filename is not None:
         with h5py.File(hdf5_filename, "r") as h5:
