@@ -1,17 +1,13 @@
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Optional
 
 import numpy as np
-from pathlib import Path
+from dartsort.util import drift_util
 
 from .get_templates import get_templates
 from .superres_util import superres_sorting
-from .template_util import (
-    get_registered_templates,
-    get_realigned_sorting,
-    get_template_depths,
-)
-from dartsort.util import drift_util
+from .template_util import get_realigned_sorting, get_template_depths
 
 _motion_error_prefix = (
     "If template_config has registered_templates==True "

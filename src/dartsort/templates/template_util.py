@@ -130,7 +130,7 @@ def weighted_average(unit_ids, templates, weights):
         w = weights[which_in][:, None, None]
         w /= w.sum()
         out[i] = (w * templates[which_in]).sum(0)
-    
+
     return out
 
 
