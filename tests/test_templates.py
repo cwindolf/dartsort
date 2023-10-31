@@ -130,17 +130,25 @@ def test_main_object():
         labels=[0, 0, 1, 1],
         channels=[0, 0, 0, 0],
         sampling_frequency=1,
-        extra_features=dict(point_source_localizations=np.zeros((4, 4)), times_seconds=[0, 2, 6, 8]),
+        extra_features=dict(
+            point_source_localizations=np.zeros((4, 4)), times_seconds=[0, 2, 6, 8]
+        ),
     )
     tdata = templates.TemplateData.from_config(
         rec,
         sorting,
-        config.TemplateConfig(trough_offset_samples=0, spike_length_samples=2, realign_peaks=False),
+        config.TemplateConfig(
+            trough_offset_samples=0,
+            spike_length_samples=2,
+            realign_peaks=False,
+            superres_templates=False,
+            denoising_rank=2,
+        ),
         motion_est=me,
     )
 
 
 if __name__ == "__main__":
-    test_static_templates()
-    test_drifting_templates()
+    # test_static_templates()
+    # test_drifting_templates()
     test_main_object()

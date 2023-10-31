@@ -3,7 +3,19 @@ import torch.nn.functional as F
 from torch.fft import irfft, rfft
 
 
+def fast_nanmedian(x, axis=-1):
+    is_tensor = torch.is_tensor(x)
+    x = torch.nanmedian(torch.as_tensor(x), dim=axis).values
+    if is_tensor:
+        return x
+    else:
+        return x.numpy()
+
+
 def ptp(waveforms, dim=1):
+    is_tensor = torch.is_tensor(waveforms)
+    if not is_tensor:
+        return waveforms.ptp(axis=dim)
     return waveforms.max(dim=dim).values - waveforms.min(dim=dim).values
 
 

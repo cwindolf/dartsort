@@ -10,7 +10,8 @@ import torch
 from dartsort.util import spikeio
 from dartsort.util.drift_util import registered_template
 from dartsort.util.multiprocessing_util import get_pool
-from dartsort.util.waveform_util import fast_nanmedian, make_channel_index
+from dartsort.util.spiketorch import fast_nanmedian, ptp
+from dartsort.util.waveform_util import make_channel_index
 from scipy.spatial import KDTree
 from scipy.spatial.distance import pdist
 from sklearn.decomposition import TruncatedSVD
@@ -469,7 +470,7 @@ class TemplateProcessContext:
         self.max_spike_time = recording.get_num_samples() - (
             spike_length_samples - trough_offset_samples
         )
-        
+
         self.spike_buffer = torch.zeros(
             (spikes_per_unit * units_per_job, spike_length_samples, self.n_channels),
             device=device,
@@ -573,8 +574,8 @@ def _template_job(unit_ids):
         trough_offset_samples=p.trough_offset_samples,
         spike_length_samples=p.spike_length_samples,
     )
-    p.spike_buffer[:times.size] = torch.from_numpy(waveforms)
-    waveforms = p.spike_buffer[:times.size]
+    p.spike_buffer[: times.size] = torch.from_numpy(waveforms)
+    waveforms = p.spike_buffer[: times.size]
     n, t, c = waveforms.shape
 
     # compute raw templates and spike counts per channel
@@ -611,9 +612,11 @@ def _template_job(unit_ids):
                 )
             )
         else:
-            raw_templates.append(p.reducer(waveforms[in_unit], axis=0))
+            raw_templates.append(
+                p.reducer(waveforms[in_unit], axis=0).numpy(force=True)
+            )
             counts.append(in_unit.size)
-    snrs_by_chan = [rt.ptp(0) * c for rt, c in zip(raw_templates, counts)]
+    snrs_by_chan = [ptp(rt, 0) * c for rt, c in zip(raw_templates, counts)]
 
     if p.denoising_tsvd is None:
         return uids, raw_templates, None, snrs_by_chan
@@ -644,7 +647,9 @@ def _template_job(unit_ids):
                 )
             )
         else:
-            low_rank_templates.append(p.reducer(waveforms[in_unit], axis=0))
+            low_rank_templates.append(
+                p.reducer(waveforms[in_unit], axis=0).numpy(force=True)
+            )
 
     return uids, raw_templates, low_rank_templates, snrs_by_chan
 
