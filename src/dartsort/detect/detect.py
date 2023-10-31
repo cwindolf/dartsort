@@ -41,7 +41,7 @@ def detect_and_deduplicate(
         with corresponding channels
     """
     nsamples, nchans = traces.shape
-    if dedup_channel_index == "all":
+    if isinstance(dedup_channel_index, str) and dedup_channel_index == "all":
         pass
     elif dedup_channel_index is not None:
         assert dedup_channel_index.shape[0] == nchans
