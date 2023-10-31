@@ -81,9 +81,13 @@ def sparse_pairwise_conv(
 
     # check if the convolutions need to be drift-aware
     # they do if we need to do any channel selection
-    is_drifting = np.array_equal(temp_shift_index.all_pitch_shifts, [0])
+    print(f"{temp_shift_index.all_pitch_shifts=}")
+    is_drifting = not np.array_equal(temp_shift_index.all_pitch_shifts, [0])
+    print(f"A {is_drifting=}")
     if template_data.registered_geom is not None:
-        is_drifting &= np.array_equal(geom, template_data.registered_geom)
+        print(f"{np.array_equal(geom, template_data.registered_geom)=}")
+        is_drifting |= not np.array_equal(geom, template_data.registered_geom)
+    print(f"B {is_drifting=}")
 
     # initialize pairwise conv data structures
     # index_table[shifted_temp_ix(i), shifted_temp_ix(j)] = pconvix(i,j)
@@ -99,6 +103,7 @@ def sparse_pairwise_conv(
         pconv = h5.create_dataset(
             "pconv",
             dtype=np.float32,
+            shape=(1, upsampling_factor, 2 * spike_length_samples - 1),
             maxshape=(None, upsampling_factor, 2 * spike_length_samples - 1),
             chunks=(128, upsampling_factor, 2 * spike_length_samples - 1),
         )
@@ -116,6 +121,7 @@ def sparse_pairwise_conv(
             temp_shift_index.shifted_temp_ix_to_temp_ix,
             temp_shift_index.shifted_temp_ix_to_shift,
             geom,
+            cooccurrence=temp_shift_index.cooccurrence,
             conv_ignore_threshold=conv_ignore_threshold,
             coarse_approx_error_threshold=coarse_approx_error_threshold,
             min_channel_amplitude=min_channel_amplitude,
@@ -128,15 +134,16 @@ def sparse_pairwise_conv(
             store_conv=True,
             compute_max=False,
         ):
+            if res is None:
+                continue
             new_conv_ix = res.cconv_ix
-            ixnz = new_conv_ix > 0
-            new_conv_ix[ixnz] += cur_pconv_ix
+            new_conv_ix += cur_pconv_ix
             pconv_index_table[
                 res.shifted_temp_ix_a, res.shifted_temp_ix_b
             ] = new_conv_ix
-            pconv.resize(cur_pconv_ix + ixnz.size, axis=0)
-            pconv[new_conv_ix[ixnz]] = res.pconv[ixnz]
-            cur_pconv_ix += ixnz.size
+            pconv.resize(cur_pconv_ix + new_conv_ix.size, axis=0)
+            pconv[new_conv_ix] = res.cconv_up
+            cur_pconv_ix += new_conv_ix.size
 
         # smaller datasets all at once
         h5.create_dataset(
@@ -156,7 +163,7 @@ def sparse_pairwise_conv(
             data=template_data.unit_ids[temp_shift_index.shifted_temp_ix_to_temp_ix],
         )
 
-    return SparsePairwiseConv.from_h5(output_hdf5_filename)
+    return output_hdf5_filename  # SparsePairwiseConv.from_h5(output_hdf5_filename)
 
 
 @dataclass
@@ -250,6 +257,7 @@ def compute_pairwise_convs(
     shifted_temp_ix_to_temp_ix,
     shifted_temp_ix_to_shift,
     geom,
+    cooccurrence,
     conv_ignore_threshold=0.0,
     coarse_approx_error_threshold=0.0,
     min_channel_amplitude=1.0,
@@ -271,7 +279,9 @@ def compute_pairwise_convs(
             end_b = min(start_b + units_per_chunk, units.size)
             jobs.append((units[start_a:end_a], units[start_b:end_b]))
     if show_progress:
-        jobs = tqdm(jobs)
+        jobs = tqdm(
+            jobs, smoothing=0.01, desc="Pairwise convolution", unit="pair block"
+        )
 
     # compute the coarse templates if needed
     if units.size == template_data.unit_ids.size:
@@ -281,23 +291,24 @@ def compute_pairwise_convs(
         coarse_templates = template_util.weighted_average(
             template_data.unit_ids, template_data.templates, template_data.spike_counts
         )
+        print(f"{coarse_templates.shape=}")
         (
-            coarse_spatial,
-            coarse_singular,
             coarse_temporal,
+            coarse_singular,
+            coarse_spatial,
         ) = template_util.svd_compress_templates(
             coarse_templates,
-            rank=spatial.shape[2],
+            rank=singular.shape[1],
             min_channel_amplitude=min_channel_amplitude,
         )
 
     # template data to torch
-    spatial_singular = torch.as_tensor(spatial * singular[:, None, :])
+    spatial_singular = torch.as_tensor(spatial * singular[:, :, None])
     temporal = torch.as_tensor(temporal)
     temporal_up = torch.as_tensor(temporal_up)
     if coarse_approx_error_threshold > 0:
         coarse_spatial_singular = torch.as_tensor(
-            coarse_spatial * coarse_singular[:, None, :]
+            coarse_spatial * coarse_singular[:, :, None]
         )
         coarse_temporal = torch.as_tensor(coarse_temporal)
     else:
@@ -321,6 +332,8 @@ def compute_pairwise_convs(
         unit_ids=template_data.unit_ids,
         shifted_temp_ix_to_shift=shifted_temp_ix_to_shift,
         shifted_temp_ix_to_temp_ix=shifted_temp_ix_to_temp_ix,
+        shifted_temp_ix_to_unit=template_data.unit_ids[shifted_temp_ix_to_temp_ix],
+        cooccurrence=cooccurrence,
         geom=geom,
         registered_geom=template_data.registered_geom,
     )
@@ -356,11 +369,13 @@ class PairwiseConvContext:
     temporal_up: torch.Tensor
     coarse_spatial_singular: Optional[torch.Tensor]
     coarse_temporal: Optional[torch.Tensor]
+    cooccurrence: torch.Tensor
 
     # template indexing helper arrays
     unit_ids: np.ndarray
     shifted_temp_ix_to_temp_ix: np.ndarray
     shifted_temp_ix_to_shift: np.ndarray
+    shifted_temp_ix_to_unit: np.ndarray
 
     # only needed if is_drifting
     geom: np.ndarray
@@ -420,13 +435,11 @@ class ConvBatchResult:
     best_shift: Optional[int]
 
 
-def _pairwise_conv_job(
-    units_a,
-    units_b,
-):
-    """units_a,b are chunks of original (non-superres) unit labels"""
+def _pairwise_conv_job(unit_chunk):
     global _pairwise_conv_context
     p = _pairwise_conv_context
+
+    units_a, units_b = unit_chunk
 
     # this job consists of pairs of coarse units
     # lets get all shifted superres template indices corresponding to those pairs,
@@ -443,6 +456,7 @@ def _pairwise_conv_job(
     # get shifted spatial components
     spatial_a = p.spatial_singular[temp_ix_a]
     spatial_b = p.spatial_singular[temp_ix_b]
+    # print(f"{p.is_drifting=} old {spatial_a.shape=}")
     if p.is_drifting:
         spatial_a = drift_util.get_waveforms_on_static_channels(
             spatial_a,
@@ -453,6 +467,7 @@ def _pairwise_conv_job(
             match_distance=p.match_distance,
             fill_value=0.0,
         )
+        # print(f"new {spatial_a.shape=} {p.target_kdtree=}")
         spatial_b = drift_util.get_waveforms_on_static_channels(
             spatial_b,
             p.registered_geom,
@@ -470,7 +485,7 @@ def _pairwise_conv_job(
     temporal_up_b = p.temporal_up[temp_ix_b].to(p.device)
 
     # convolve valid pairs
-    pair_mask = p.cooccurence[shifted_temp_ix_a[:, None], shifted_temp_ix_b[None, :]]
+    pair_mask = p.cooccurrence[shifted_temp_ix_a[:, None], shifted_temp_ix_b[None, :]]
     pair_mask = pair_mask * (shifted_temp_ix_a[:, None] <= shifted_temp_ix_b[None, :])
     pair_mask = torch.as_tensor(pair_mask, device=p.device)
     conv_ix_a, conv_ix_b, cconv = ccorrelate_up(
@@ -482,55 +497,35 @@ def _pairwise_conv_job(
         max_shift=p.max_shift,
         covisible_mask=pair_mask,
     )
+    if conv_ix_a is None:
+        return None
     nco = conv_ix_a.numel()
+    if not nco:
+        return None
     cconv_ix = np.arange(nco)
+    
+    # shifts may not matter
+    if p.is_drifting:
+        cconv, cconv_ix_subset = _shift_normalize(
+            cconv,
+            cconv_ix,
+            temp_ix_a[conv_ix_a.cpu()],
+            shift_a[conv_ix_a.cpu()],
+            temp_ix_b[conv_ix_b.cpu()],
+            shift_b[conv_ix_b.cpu()],
+        )
+        conv_ix_a = conv_ix_a[cconv_ix_subset]
+        conv_ix_b = conv_ix_b[cconv_ix_subset]
+        cconv_ix = np.arange(len(cconv_ix_subset))
 
     # summarize units by coarse pconv when possible
     if p.coarse_approx_error_threshold > 0:
-        # figure out coarse templates to correlate
-        conv_unit_a = unit_a[conv_ix_a]
-        conv_unit_b = unit_b[conv_ix_b]
-        coarse_units_a, coarse_units_b = np.unique(
-            np.c_[conv_unit_a, conv_unit_b],
-            axis=0,
-        ).T
-
-        # correlate them
-        coarse_ix_a, coarse_ix_b, coarse_cconv = ccorrelate_up(
-            p.coarse_spatial_singular[coarse_units_a],
-            p.coarse_temporal[temp_ix_a],
-            p.coarse_spatial_singular[coarse_units_b],
-            p.coarse_temporal[temp_ix_b].unsqueeze(2),
-            conv_ignore_threshold=p.conv_ignore_threshold,
-            max_shift=p.max_shift,
+        cconv, cconv_ix_subset = _coarse_approx(
+            cconv, cconv_ix, conv_ix_a, conv_ix_b, unit_a, unit_b, p
         )
-        # i feel like this should hold so assert for now
-        assert coarse_ix_a.size == coarse_units_a.size
-
-        # find coarse units which well summarize the fine cconvs
-        for coarse_unit_a, coarse_unit_b, conv in zip(
-            coarse_units_a, coarse_units_b, coarse_cconv
-        ):
-            # check good approx. if not, continue
-            in_pair = np.flatnonzero(
-                (conv_unit_a == coarse_unit_a) & (conv_unit_b == coarse_unit_b)
-            )
-            assert in_pair.size
-            fine_cconvs = cconv[in_pair]
-            approx_err = (fine_cconvs - conv[None]).abs().max()
-            if not approx_err < p.coarse_approx_error_threshold:
-                continue
-
-            # replace first fine cconv with the coarse cconv
-            fine_cconvs[in_pair[0]] = conv
-            # set all fine cconv ix to the index of that first one
-            cconv_ix[in_pair] = cconv_ix[in_pair[0]]
-
-        # re-index and subset cconvs
-        cconv_ix = np.unique(cconv_ix)
-        conv_ix_a = conv_ix_a[cconv_ix]
-        conv_ix_b = conv_ix_b[cconv_ix]
-        cconv = cconv[cconv_ix]
+        conv_ix_a = conv_ix_a[cconv_ix_subset]
+        conv_ix_b = conv_ix_b[cconv_ix_subset]
+        cconv_ix = np.arange(len(cconv_ix_subset))
 
     # for use in deconv residual distance merge
     # TODO: actually probably need to do the real objective here with
@@ -549,11 +544,11 @@ def _pairwise_conv_job(
         best_shift += np.rint(max_up / cconv.shape[1]).astype(int)
 
     return ConvBatchResult(
-        shifted_temp_ix_a[conv_ix_a].numpy(force=True),
-        shifted_temp_ix_b[conv_ix_b].numpy(force=True),
+        shifted_temp_ix_a[conv_ix_a.numpy(force=True)],
+        shifted_temp_ix_b[conv_ix_b.numpy(force=True)],
         cconv_ix,
-        cconv.numpy(force=True),
-        max_conv.numpy(force=True),
+        cconv.numpy(force=True) if cconv is not None else None,
+        max_conv.numpy(force=True) if max_conv is not None else None,
         best_shift,
     )
 
@@ -561,11 +556,6 @@ def _pairwise_conv_job(
 # -- library code
 # template index and shift pairs
 # pairwise low-rank cross-correlation
-
-
-# this dtype lets us use np.union1d to find unique
-# template index + pitch shift pairs below
-template_shift_pair = np.dtype([("template_ix", int), ("shift", int)])
 
 
 @dataclass
@@ -578,7 +568,7 @@ class TemplateShiftIndex:
     # (template ix, shift index) -> shifted template index
     template_shift_index: np.ndarray
     # (shifted temp ix, shifted temp ix) -> did these appear at the same time
-    cooccurence: np.ndarray
+    cooccurrence: np.ndarray
     shifted_temp_ix_to_temp_ix: np.ndarray
     shifted_temp_ix_to_shift: np.ndarray
 
@@ -602,6 +592,7 @@ def get_shift_and_unit_pairs(
     motion_est=None,
 ):
     n_templates = len(template_data.templates)
+    print(f"get_shift_and_unit_pairs {motion_est=}")
     if motion_est is None:
         # no motion case
         return static_template_shift_index(n_templates)
@@ -610,63 +601,73 @@ def get_shift_and_unit_pairs(
     all_pitch_shifts = np.empty(shape=(), dtype=int)
     temp_ixs = np.arange(n_templates)
     # set of (template idx, shift)
-    template_shift_pairs = np.empty(shape=(), dtype=template_shift_pair)
+    template_shift_pairs = np.empty(shape=(0, 2), dtype=int)
+    pitch = drift_util.get_pitch(geom)
 
     for t_s in chunk_time_centers_s:
         # see the fn `templates_at_time`
         unregistered_depths_um = drift_util.invert_motion_estimate(
             motion_est, t_s, template_data.registered_template_depths_um
         )
+        diff = np.abs(
+            unregistered_depths_um - template_data.registered_template_depths_um
+        )
         pitch_shifts = drift_util.get_spike_pitch_shifts(
             depths_um=template_data.registered_template_depths_um,
-            geom=geom,
+            pitch=pitch,
             registered_depths_um=unregistered_depths_um,
         )
         pitch_shifts = pitch_shifts.astype(int)
 
         # get unique pitch/unit shift pairs in chunk
         template_shift = np.c_[temp_ixs, pitch_shifts]
-        template_shift = template_shift.view(template_shift_pair)[:, 0]
-        assert template_shift.shape == (n_templates,)
 
         # update full set
         all_pitch_shifts = np.union1d(all_pitch_shifts, pitch_shifts)
-        template_shift_pairs = np.union1d(template_shift_pairs, template_shift)
+        template_shift_pairs = np.unique(
+            np.concatenate((template_shift_pairs, template_shift), axis=0), axis=0
+        )
+    print(f"get_shift_and_unit_pairs {all_pitch_shifts=}")
 
     n_shifts = len(all_pitch_shifts)
     n_template_shift_pairs = len(template_shift_pairs)
 
     # index template/shift pairs: template_shift_index[template_ix, shift_ix] = shifted template index
     # fill with an invalid index
-    template_shift_index = np.full((n_templates, n_shifts), n_template_shift_pairs + 1)
-    template_shift_index[
-        template_shift_pairs["template_ix"], template_shift_pairs["shift"]
-    ] = np.arange(n_template_shift_pairs)
-    shifted_temp_ix_to_temp_ix = template_shift_pairs["template_ix"]
-    shifted_temp_ix_to_shift = template_shift_pairs["shift"]
+    template_shift_index = np.full((n_templates, n_shifts), n_template_shift_pairs)
+    shift_ix = np.searchsorted(all_pitch_shifts, template_shift_pairs[:, 1])
+    assert np.array_equal(all_pitch_shifts[shift_ix], template_shift_pairs[:, 1])
+    print(f"{template_shift_pairs[:, 0]=}, {shift_ix=} {np.unique(shift_ix)=}")
+    template_shift_index[template_shift_pairs[:, 0], shift_ix] = np.arange(
+        n_template_shift_pairs
+    )
+    shifted_temp_ix_to_temp_ix = template_shift_pairs[:, 0]
+    shifted_temp_ix_to_shift = template_shift_pairs[:, 1]
 
     # co-occurrence matrix: do these shifted templates appear together?
-    cooccurence = np.zeros((n_template_shift_pairs, n_template_shift_pairs), dtype=bool)
+    cooccurrence = np.zeros(
+        (n_template_shift_pairs, n_template_shift_pairs), dtype=bool
+    )
     for t_s in chunk_time_centers_s:
-        # see the fn `templates_at_time`
         unregistered_depths_um = drift_util.invert_motion_estimate(
             motion_est, t_s, template_data.registered_template_depths_um
         )
         pitch_shifts = drift_util.get_spike_pitch_shifts(
             depths_um=template_data.registered_template_depths_um,
-            geom=geom,
+            pitch=pitch,
             registered_depths_um=unregistered_depths_um,
         )
         pitch_shifts = pitch_shifts.astype(int)
+        pitch_shift_ix = np.searchsorted(all_pitch_shifts, pitch_shifts)
 
-        shifted_temp_ixs = template_shift_index[temp_ixs, pitch_shifts]
-        cooccurence[shifted_temp_ixs[:, None], shifted_temp_ixs[None, :]] = 1
+        shifted_temp_ixs = template_shift_index[temp_ixs, pitch_shift_ix]
+        cooccurrence[shifted_temp_ixs[:, None], shifted_temp_ixs[None, :]] = 1
 
     return TemplateShiftIndex(
         n_template_shift_pairs,
         all_pitch_shifts,
         template_shift_index,
-        cooccurence,
+        cooccurrence,
         shifted_temp_ix_to_temp_ix,
         shifted_temp_ix_to_shift,
     )
@@ -680,6 +681,7 @@ def ccorrelate_up(
     conv_ignore_threshold=0.0,
     max_shift="full",
     covisible_mask=None,
+    batch_size=128,
 ):
     """Convolve all pairs of low-rank templates
 
@@ -719,42 +721,161 @@ def ccorrelate_up(
     if covisible_mask is not None:
         assert covisible_mask.shape == (na, nb)
 
-    # this is covisible with ignore threshold 0
-    # no need to convolve templates which do not overlap
-    covisible = spatial_a.max(1).values @ spatial_b.max(1).values.T
+    # no need to convolve templates which do not overlap enough
+    covisible = (
+        torch.sqrt(torch.square(spatial_a).sum(1))
+        @ torch.sqrt(torch.square(spatial_b).sum(1)).T
+    )
+    covisible = covisible > conv_ignore_threshold
+    # print(f"{covisible.shape=}")
     if covisible_mask is not None:
         covisible *= covisible_mask
     covisible_a, covisible_b = torch.nonzero(covisible, as_tuple=True)
     nco = covisible_a.numel()
-    # TODO: can batch over nco dims below if memory issues arise
+    if not nco:
+        return None, None, None
+    # print(f"{(nco/covisible.numel())=}")
 
-    Sa = spatial_a[covisible_a].reshape(nco * rank, nchan)
-    Sb = spatial_b[covisible_b].reshape(nco * rank, nchan)
-    spatial_outer = torch.vecdot(Sa, Sb)
-    spatial_outer = spatial_outer.reshape(nco, rank)
-    assert spatial_outer.shape == (nco, rank)
+    # batch over nco for memory reasons
+    cconv = torch.zeros(
+        (nco, nup, 2 * max_shift + 1), dtype=spatial_a.dtype, device=spatial_a.device
+    )
+    for istart in range(0, nco, batch_size):
+        iend = min(istart + batch_size, nco)
+        co_a = covisible_a[istart:iend]
+        co_b = covisible_b[istart:iend]
+        nco_ = iend - istart
 
-    # want conv filter: nco, rank, t
-    spatial_outer_co = spatial_outer[covisible_a, covisible_b]
-    conv_filt = spatial_outer_co[:, None, :] * temporal_a.permute(0, 2, 1)[None]
-    assert conv_filt.shape == (nco, rank, t)
+        # want conv filter: nco, 1, rank, t
+        template_a = torch.bmm(temporal_a, spatial_a)
+        conv_filt = torch.bmm(spatial_b[co_b], template_a[co_a].mT)
+        conv_filt = conv_filt[:, None]  # (nco, 1, rank, t)
 
-    # nup, nco, rank, t
-    conv_in = temporal_b[covisible_b].permute(2, 0, 3, 1)
+        # nup, nco, rank, t
+        conv_in = temporal_b[co_b].permute(2, 0, 3, 1)
 
-    # conv2d:
-    # depthwise, chans=nco. batch=1. h=rank. w=t. out: nup, nco, 1, 2p+1.
-    # input (conv_left): nup, nco, rank, t.
-    # filters (conv_right): nco, 1, rank, t. (groups=nco).
-    cconv = F.conv2d(conv_in, conv_filt, padding=max_shift, groups=nco)
-    assert cconv.shape == (nup, nco, 1, 2 * max_shift + 1)
-    cconv = cconv[:, :, 0, :].permute(1, 0, 2)
+        # conv2d:
+        # depthwise, chans=nco. batch=1. h=rank. w=t. out: nup, nco, 1, 2p+1.
+        # input (conv_in): nup, nco, rank, t.
+        # filters (conv_filt): nco, 1, rank, t. (groups=nco).
+        cconv_ = F.conv2d(conv_in, conv_filt, padding=(0, max_shift), groups=nco_)
+        cconv[istart:iend] = cconv_[:, :, 0, :].permute(1, 0, 2)  # nco, nup, time
 
     # more stringent covisibility
     if conv_ignore_threshold > 0:
-        vis = cconv.abs().max(dim=(0, 2)).values > conv_ignore_threshold
+        max_val = cconv.reshape(nco, -1).abs().max(dim=1).values
+        vis = max_val > conv_ignore_threshold
         cconv = cconv[vis]
         covisible_a = covisible_a[vis]
         covisible_b = covisible_b[vis]
+    # print(f"{(covisible_b.numel()/covisible.numel())=}")
 
     return covisible_a, covisible_b, cconv
+
+
+# -- helpers
+
+
+def _coarse_approx(cconv, cconv_ix, conv_ix_a, conv_ix_b, unit_a, unit_b, p):
+    # figure out coarse templates to correlate
+    conv_ix_a = conv_ix_a.cpu()
+    conv_ix_b = conv_ix_b.cpu()
+    conv_unit_a = unit_a[conv_ix_a]
+    conv_unit_b = unit_b[conv_ix_b]
+    coarse_units_a = np.unique(conv_unit_a)
+    coarse_units_b = np.unique(conv_unit_b)
+    coarsecovis = np.zeros((coarse_units_a.size, coarse_units_b.size), dtype=bool)
+    coarsecovis[
+        np.searchsorted(coarse_units_a, conv_unit_a),
+        np.searchsorted(coarse_units_b, conv_unit_b),
+    ] = True
+
+    # correlate them
+    coarse_ix_a, coarse_ix_b, coarse_cconv = ccorrelate_up(
+        p.coarse_spatial_singular[coarse_units_a].to(p.device),
+        p.coarse_temporal[coarse_units_a].to(p.device),
+        p.coarse_spatial_singular[coarse_units_b].to(p.device),
+        p.coarse_temporal[coarse_units_b].unsqueeze(2).to(p.device),
+        conv_ignore_threshold=p.conv_ignore_threshold,
+        max_shift=p.max_shift,
+        covisible_mask=torch.as_tensor(coarsecovis, device=p.device),
+    )
+    if coarse_ix_a is None:
+        return cconv, cconv_ix
+
+    coarse_units_a = np.atleast_1d(coarse_units_a[coarse_ix_a.cpu()])
+    coarse_units_b = np.atleast_1d(coarse_units_b[coarse_ix_b.cpu()])
+
+    # find coarse units which well summarize the fine cconvs
+    for coarse_unit_a, coarse_unit_b, conv in zip(
+        coarse_units_a, coarse_units_b, coarse_cconv
+    ):
+        # check good approx. if not, continue
+        in_pair = np.flatnonzero(
+            (conv_unit_a == coarse_unit_a) & (conv_unit_b == coarse_unit_b)
+        )
+        assert in_pair.size
+        fine_cconvs = cconv[cconv_ix[in_pair]]
+        approx_err = (fine_cconvs - conv[None]).abs().max()
+        if not approx_err < p.coarse_approx_error_threshold:
+            continue
+
+        # replace first fine cconv with the coarse cconv
+        cconv[cconv_ix[in_pair[0]]] = conv
+        # set all fine cconv ix to the index of that first one
+        cconv_ix[in_pair] = cconv_ix[in_pair[0]]
+
+    # re-index and subset cconvs
+    cconv_ix_subset = np.unique(cconv_ix)
+    conv_ix_a = conv_ix_a[cconv_ix_subset]
+    conv_ix_b = conv_ix_b[cconv_ix_subset]
+    cconv = cconv[cconv_ix_subset]
+    return cconv, cconv_ix_subset
+
+def _shift_normalize(cconv, cconv_ix, temp_ix_a, shift_a, temp_ix_b, shift_b, atol=1e-1):
+    pairs_done = set()
+    for ua, ub in zip(temp_ix_a, temp_ix_b):
+        if (ua, ub) in pairs_done:
+            continue
+        pairs_done.add((ua, ub))
+
+        in_pair = np.flatnonzero(
+            (temp_ix_a == ua) & (temp_ix_b == ub)
+        )
+        diffs = shift_a[in_pair] - shift_b[in_pair]
+        changed = False
+        for diff in np.unique(diffs):
+            in_diff = in_pair[diffs == diff]
+            
+            cconvs = cconv[cconv_ix[in_diff]]
+            meanconv = cconvs.mean(0, keepdims=True)
+            err = (cconvs - meanconv).abs().max()
+            if err > atol:
+                continue
+            changed = True
+            cconv[cconv_ix[in_diff[0]]] = meanconv
+            cconv_ix[in_diff] = cconv_ix[in_diff[0]]
+        if changed:
+            pairs_done.remove((ua, ub))
+
+    for ua, ub in zip(temp_ix_a, temp_ix_b):
+        if (ua, ub) in pairs_done:
+            continue
+        pairs_done.add((ua, ub))
+
+        in_pair = np.flatnonzero(
+            (temp_ix_a == ua) & (temp_ix_b == ub)
+        )
+        cconvs = cconv[cconv_ix[in_pair]]
+        meanconv = cconvs.mean(0, keepdims=True)
+        err = (cconvs - meanconv).abs().max()
+        if err > atol:
+            continue
+
+        cconv[cconv_ix[in_pair[0]]] = meanconv
+        cconv_ix[in_pair] = cconv_ix[in_pair[0]]
+
+    # re-index and subset cconvs
+    cconv_ix_subset = np.unique(cconv_ix)
+    cconv = cconv[cconv_ix_subset]
+    return cconv, cconv_ix_subset
