@@ -15,7 +15,8 @@ import torch
 from scipy.spatial import KDTree
 from scipy.spatial.distance import pdist
 
-from .waveform_util import fast_nanmedian, get_pitch
+from .spiketorch import fast_nanmedian
+from .waveform_util import get_pitch
 
 # -- registered geometry and templates helpers
 

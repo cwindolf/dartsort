@@ -12,7 +12,6 @@ from typing import Optional
 import numpy as np
 import torch
 import torch.nn.functional as F
-from dartsort.detect import detect_and_deduplicate
 from dartsort.templates import template_util
 from dartsort.transform import WaveformPipeline
 from dartsort.util import spiketorch
@@ -22,7 +21,7 @@ from dartsort.util.waveform_util import make_channel_index
 from .peel_base import BasePeeler
 
 
-class ResidualUpdateTemplateMatchingPeeler(BasePeeler):
+class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
     peel_kind = "TemplateMatching"
 
     def __init__(
@@ -583,7 +582,7 @@ class ResidualUpdateTemplateMatchingPeeler(BasePeeler):
 
 @dataclass
 class CompressedTemplateData:
-    """Objects of this class are returned by ResidualUpdateTemplateMatchingPeeler.templates_at_time()"""
+    """Objects of this class are returned by ObjectiveUpdateTemplateMatchingPeeler.templates_at_time()"""
 
     spatial_components: torch.Tensor
     singular_values: torch.Tensor
