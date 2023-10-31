@@ -3,7 +3,7 @@ from pathlib import Path
 from dartsort.config import (FeaturizationConfig, MatchingConfig,
                              SubtractionConfig, TemplateConfig)
 from dartsort.localize.localize_util import localize_hdf5
-from dartsort.peel import (ResidualUpdateTemplateMatchingPeeler,
+from dartsort.peel import (ObjectiveUpdateTemplateMatchingPeeler,
                            SubtractionPeeler)
 from dartsort.templates import TemplateData
 from dartsort.util.data_util import DARTsortSorting, check_recording
@@ -104,7 +104,7 @@ def match(
     )
 
     # instantiate peeler
-    matching_peeler = ResidualUpdateTemplateMatchingPeeler.from_config(
+    matching_peeler = ObjectiveUpdateTemplateMatchingPeeler.from_config(
         recording,
         matching_config,
         featurization_config,

@@ -2,7 +2,7 @@ import numpy as np
 from dartsort.localize.localize_util import localize_waveforms
 from dartsort.util import drift_util
 from dartsort.util.data_util import DARTsortSorting
-from dartsort.util.waveform_util import fast_nanmedian
+from dartsort.util.spiketorch import fast_nanmedian
 from scipy.interpolate import interp1d
 
 from .get_templates import get_raw_templates, get_templates
@@ -55,7 +55,6 @@ def get_registered_templates(
     denoising_fit_radius=75,
     denoising_spikes_fit=50_000,
     denoising_snr_threshold=50.0,
-    zero_radius_um=None,
     reducer=fast_nanmedian,
     random_seed=0,
     n_jobs=0,
@@ -84,7 +83,6 @@ def get_registered_templates(
         denoising_fit_radius=denoising_fit_radius,
         denoising_spikes_fit=denoising_spikes_fit,
         denoising_snr_threshold=denoising_snr_threshold,
-        zero_radius_um=zero_radius_um,
         reducer=reducer,
         random_seed=random_seed,
         n_jobs=n_jobs,

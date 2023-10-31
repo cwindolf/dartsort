@@ -73,6 +73,7 @@ class DARTsortSorting:
         name = self.__class__.__name__
         nspikes = self.times_samples.size
         nunits = (np.unique(self.labels) >= 0).sum()
+        print(f"{nunits=}")
         unit_str = f"{nunits} unit" + "s" * (nunits > 1)
         feat_str = ""
         if self.extra_features:
