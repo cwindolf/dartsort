@@ -230,6 +230,7 @@ def invert_motion_estimate(motion_est, t_s, registered_depths_um):
         hasattr(motion_est, "spatial_bin_centers_um")
         and motion_est.spatial_bin_centers_um is not None
     ):
+        # nonrigid motion
         bin_centers = motion_est.spatial_bin_centers_um
         t_s = np.full(bin_centers.shape, t_s)
         bin_center_disps = motion_est.disp_at_s(t_s, depth_um=bin_centers)
@@ -240,6 +241,7 @@ def invert_motion_estimate(motion_est, t_s, registered_depths_um):
             registered_depths_um, registered_bin_centers, bin_center_disps
         )
     else:
+        # rigid motion
         disps = motion_est.disp_at_s(t_s)
 
     return registered_depths_um + disps
@@ -414,7 +416,7 @@ def _full_probe_shifting_fast(
     out=None,
 ):
     is_tensor = torch.is_tensor(waveforms)
-    
+
     if out is None:
         if is_tensor:
             static_waveforms = torch.full(
