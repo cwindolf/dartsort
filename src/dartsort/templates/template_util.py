@@ -122,6 +122,7 @@ def weighted_average(unit_ids, templates, weights):
     n_out = unit_ids.max() + 1
     n_in, t, c = templates.shape
     out = np.zeros((n_out, t, c), dtype=templates.dtype)
+    weights = weights.astype(float)
     for i in range(n_out):
         which_in = np.flatnonzero(unit_ids == i)
         if not which_in.size:
@@ -188,7 +189,7 @@ def templates_at_time(
 # -- template numerical processing
 
 
-def svd_compress_templates(templates, min_channel_amplitude=1.0, rank=5):
+def svd_compress_templates(templates, min_channel_amplitude=1.0, rank=5, channel_sparse=True):
     """
     Returns:
     temporal_components: n_units, spike_length_samples, rank
@@ -197,11 +198,35 @@ def svd_compress_templates(templates, min_channel_amplitude=1.0, rank=5):
     """
     vis_mask = templates.ptp(axis=1, keepdims=True) > min_channel_amplitude
     vis_templates = templates * vis_mask
-    U, s, Vh = np.linalg.svd(vis_templates, full_matrices=False)
-    # s is descending.
-    temporal_components = U[:, :, :rank]
-    singular_values = s[:, :rank]
-    spatial_components = Vh[:, :rank, :]
+    dtype = templates.dtype
+    
+    if not channel_sparse:
+        U, s, Vh = np.linalg.svd(vis_templates, full_matrices=False)
+        # s is descending.
+        temporal_components = U[:, :, :rank].astype(dtype)
+        singular_values = s[:, :rank].astype(dtype)
+        spatial_components = Vh[:, :rank, :].astype(dtype)
+        return temporal_components, singular_values, spatial_components
+    
+    # channel sparse: only SVD the nonzero channels
+    # this encodes the same exact subspace as above, and the reconstruction
+    # error is the same as above as a function of rank. it's just that
+    # we can zero out some spatial components, which is a useful property
+    # (used in pairwise convolutions for instance)
+    n, t, c = templates.shape
+    temporal_components = np.zeros((n, t, rank), dtype=dtype)
+    singular_values = np.zeros((n, rank), dtype=dtype)
+    spatial_components = np.zeros((n, rank, c), dtype=dtype)
+    for i in range(len(templates)):
+        template = templates[i]
+        mask = np.flatnonzero(vis_mask[i, 0])
+        k = min(rank, mask.size)
+        if not k:
+            continue
+        U, s, Vh = np.linalg.svd(template[:, mask], full_matrices=False)
+        temporal_components[i, :, :k] = U[:, :rank]
+        singular_values[i, :k] = s[:rank]
+        spatial_components[i, :k, mask] = Vh[:rank].T
     return temporal_components, singular_values, spatial_components
 
 

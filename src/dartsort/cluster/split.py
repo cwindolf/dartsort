@@ -323,7 +323,7 @@ class FeatureSplit(SplitStrategy):
         amplitudes_dataset_name="denoised_amplitudes",
         amplitude_vectors_dataset_name="denoised_amplitude_vectors",
     ):
-        h5 = h5py.File(peeling_hdf5_filename, "r")
+        h5 = h5py.File(peeling_hdf5_filename, "r", locking=False)
         self.geom = h5["geom"][:]
         self.channel_index = h5["channel_index"][:]
 
