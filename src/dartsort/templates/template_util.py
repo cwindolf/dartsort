@@ -187,7 +187,9 @@ def templates_at_time(
 # -- template numerical processing
 
 
-def svd_compress_templates(templates, min_channel_amplitude=1.0, rank=5, channel_sparse=True):
+def svd_compress_templates(
+    templates, min_channel_amplitude=1.0, rank=5, channel_sparse=True
+):
     """
     Returns:
     temporal_components: n_units, spike_length_samples, rank
@@ -197,7 +199,7 @@ def svd_compress_templates(templates, min_channel_amplitude=1.0, rank=5, channel
     vis_mask = templates.ptp(axis=1, keepdims=True) > min_channel_amplitude
     vis_templates = templates * vis_mask
     dtype = templates.dtype
-    
+
     if not channel_sparse:
         U, s, Vh = np.linalg.svd(vis_templates, full_matrices=False)
         # s is descending.
@@ -205,7 +207,7 @@ def svd_compress_templates(templates, min_channel_amplitude=1.0, rank=5, channel
         singular_values = s[:, :rank].astype(dtype)
         spatial_components = Vh[:, :rank, :].astype(dtype)
         return temporal_components, singular_values, spatial_components
-    
+
     # channel sparse: only SVD the nonzero channels
     # this encodes the same exact subspace as above, and the reconstruction
     # error is the same as above as a function of rank. it's just that
@@ -234,10 +236,12 @@ def temporally_upsample_templates(
     """Note, also works on temporal components thanks to compatible shape."""
     n, t, c = templates.shape
     tp = np.arange(t).astype(float)
-    erp = interp1d(tp, templates, axis=1, bounds_error=True)
-    tup = np.arange(t, step=1. / temporal_upsampling_factor)
+    erp = interp1d(tp, templates, axis=1, bounds_error=True, kind=kind)
+    tup = np.arange(t, step=1.0 / temporal_upsampling_factor)
     tup.clip(0, t - 1, out=tup)
     upsampled_templates = erp(tup)
-    upsampled_templates = upsampled_templates.reshape(n, t, temporal_upsampling_factor, c)
+    upsampled_templates = upsampled_templates.reshape(
+        n, t, temporal_upsampling_factor, c
+    )
     upsampled_templates = upsampled_templates.astype(templates.dtype)
     return upsampled_templates

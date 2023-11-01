@@ -109,6 +109,7 @@ class TemplateData:
             trough_offset_samples=template_config.trough_offset_samples,
             spike_length_samples=template_config.spike_length_samples,
             spikes_per_unit=template_config.spikes_per_unit,
+            # realign handled in advance below, not needed in kwargs
             # realign_peaks=template_config.realign_peaks,
             realign_max_sample_shift=template_config.realign_max_sample_shift,
             denoising_rank=template_config.denoising_rank,
