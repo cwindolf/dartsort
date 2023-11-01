@@ -41,9 +41,8 @@ def detect_and_deduplicate(
         with corresponding channels
     """
     nsamples, nchans = traces.shape
-    if isinstance(dedup_channel_index, str) and dedup_channel_index == "all":
-        pass
-    elif dedup_channel_index is not None:
+    all_dedup = isinstance(dedup_channel_index, str) and dedup_channel_index == "all"
+    if not all_dedup and dedup_channel_index is not None:
         assert dedup_channel_index.shape[0] == nchans
 
     # -- handle peak sign. we use max pool below, so make peaks positive
@@ -99,7 +98,7 @@ def detect_and_deduplicate(
     # -- spatial deduplication
     # we would like to max pool again on the other axis,
     # but that doesn't support any old radial neighborhood
-    if dedup_channel_index == "all":
+    if all_dedup:
         max_energies[:] = max_energies.max(dim=1, keepdim=True).values
     elif dedup_channel_index is not None:
         # pad channel axis with extra chan of 0s
