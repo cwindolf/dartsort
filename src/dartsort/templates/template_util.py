@@ -245,3 +245,64 @@ def temporally_upsample_templates(
     )
     upsampled_templates = upsampled_templates.astype(templates.dtype)
     return upsampled_templates
+
+
+def default_n_upsamples_map(ptps):
+    return 4 ** (ptps // 2)
+
+
+def sparse_upsampled_templates(
+    templates,
+    ptps=None,
+    max_upsample=8,
+    n_upsamples_map=default_n_upsamples_map,
+    kind="cubic",
+):
+    """Sparsely store fewer temporally upsampled copies of lower amplitude templates
+
+    Returns
+    -------
+    sparse_upsampled_templates : array (n_sparse_upsampled_templates, spike_length_samples)
+    sparse_upsampling_map : array (n_templates, max_upsample)
+        sparse_upsampled_templates[sparse_upsampling_map[unit, j]] is an approximation
+        of the jth upsampled template for this unit. for low-amplitude units,
+        sparse_upsampling_map[unit] will have fewer unique entries, corresponding
+        to fewer saved upsampled copies for that unit.
+    """
+    n_templates = templates.shape[0]
+
+    # how many copies should each unit get?
+    # sometimes users may pass temporal SVD components in instead of templates,
+    # so we allow them to pass in the amplitudes of the actual templates
+    if ptps is None:
+        ptps = templates.ptp(1).max(1)
+    assert ptps.shape == (n_templates,)
+    if n_upsamples_map is None:
+        n_upsamples = np.full(n_templates, max_upsample)
+    else:
+        n_upsamples = np.clip(n_upsamples_map(ptps), 1, max_upsample).astype(int)
+
+    # build the sparse upsampling map
+    sparse_upsampling_map = np.zeros((n_templates, max_upsample), dtype=int)
+    upsampling_indices = []
+    template_indices = []
+    current_sparse_index = 0
+    for i, nup in enumerate(n_upsamples):
+        compression = max_upsample // nup
+        nup = max_upsample // compression  # handle divisibility failure
+
+        # new sparse indices
+        sparse_upsampling_map[i] = current_sparse_index + np.arange(nup).repeat(compression)
+        current_sparse_index += nup
+
+        # indices of the templates to keep in the full array of upsampled templates
+        upsampling_indices.extend(compression * np.arange(nup))
+        template_indices.extend([i] * nup)
+
+    # get the upsampled templates
+    all_upsampled_templates = temporally_upsample_templates(
+        templates, temporal_upsampling_factor=max_upsample, kind=kind
+    )
+    sparse_upsampled_templates = all_upsampled_templates[template_indices, upsampling_indices]
+
+    return sparse_upsampled_templates, sparse_upsampling_map
