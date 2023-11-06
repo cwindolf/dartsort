@@ -68,6 +68,9 @@ def localize_amplitude_vectors(
         channel_index = full_channel_index(n_channels_tot)
     assert channel_index.shape == (n_channels_tot, c)
     assert main_channels.shape == (n_spikes,)
+    # we'll return numpy if user sent numpy
+     is_numpy = not torch.is_tensor(amplitude_vectors)
+
 
     # handle channel subsetting
     if radius is not None or n_channels_subset is not None:
@@ -146,7 +149,13 @@ def localize_amplitude_vectors(
             amplitude_vectors, in_probe_mask, x, y, z_rel, local_geoms
         )
         z_abs = z_rel + geom[main_channels, 1]
-
+        
+        if is_numpy:
+            x = x.numpy(force=True)
+            y = y.numpy(force=True)
+            z_rel = z_rel.numpy(force=True)
+            z_abs = z_abs.numpy(force=True)
+            alpha = alpha.numpy(force=True)
         return dict(x=x, y=y, z_rel=z_rel, z_abs=z_abs, alpha=alpha)
     
     if model == "dipole":
@@ -186,6 +195,13 @@ def localize_amplitude_vectors(
         
         z_abs = z_rel + geom[main_channels, 1]
         
+        if is_numpy:
+            x = x.numpy(force=True)
+            y = y.numpy(force=True)
+            z_rel = z_rel.numpy(force=True)
+            z_abs = z_abs.numpy(force=True)
+            alpha = alpha.numpy(force=True)
+
         return dict(x=x, y=y, z_rel=z_rel, z_abs=z_abs, alpha=projected_dist)
 
 
