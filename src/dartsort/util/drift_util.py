@@ -15,7 +15,8 @@ import torch
 from scipy.spatial import KDTree
 from scipy.spatial.distance import pdist
 
-from .waveform_util import fast_nanmedian, get_pitch
+from .spiketorch import fast_nanmedian
+from .waveform_util import get_pitch
 
 # -- registered geometry and templates helpers
 
@@ -230,7 +231,9 @@ def invert_motion_estimate(motion_est, t_s, registered_depths_um):
         hasattr(motion_est, "spatial_bin_centers_um")
         and motion_est.spatial_bin_centers_um is not None
     ):
+        # nonrigid motion
         bin_centers = motion_est.spatial_bin_centers_um
+        t_s = np.full(bin_centers.shape, t_s)
         bin_center_disps = motion_est.disp_at_s(t_s, depth_um=bin_centers)
         # registered_bin_centers = motion_est.correct_s(t_s, depths_um=bin_centers)
         registered_bin_centers = bin_centers - bin_center_disps
@@ -239,6 +242,7 @@ def invert_motion_estimate(motion_est, t_s, registered_depths_um):
             registered_depths_um, registered_bin_centers, bin_center_disps
         )
     else:
+        # rigid motion
         disps = motion_est.disp_at_s(t_s)
 
     return registered_depths_um + disps
@@ -374,11 +378,19 @@ def get_waveforms_on_static_channels(
 
     # scatter the waveforms into their static channel neighborhoods
     if out is None:
-        static_waveforms = np.full(
-            (n_spikes, t, n_static_channels + 1),
-            fill_value=fill_value,
-            dtype=waveforms.dtype,
-        )
+        if torch.is_tensor(waveforms):
+            static_waveforms = torch.full(
+                (n_spikes, t, n_static_channels + 1),
+                fill_value=fill_value,
+                dtype=waveforms.dtype,
+                device=waveforms.device,
+            )
+        else:
+            static_waveforms = np.full(
+                (n_spikes, t, n_static_channels + 1),
+                fill_value=fill_value,
+                dtype=waveforms.dtype,
+            )
     else:
         assert out.shape == (n_spikes, t, n_static_channels + 1)
         out.fill(fill_value)
@@ -404,12 +416,22 @@ def _full_probe_shifting_fast(
     fill_value,
     out=None,
 ):
+    is_tensor = torch.is_tensor(waveforms)
+
     if out is None:
-        static_waveforms = np.full(
-            (*waveforms.shape[:2], target_kdtree.n + 1),
-            fill_value=fill_value,
-            dtype=waveforms.dtype,
-        )
+        if is_tensor:
+            static_waveforms = torch.full(
+                (*waveforms.shape[:2], target_kdtree.n + 1),
+                fill_value=fill_value,
+                dtype=waveforms.dtype,
+                device=waveforms.device,
+            )
+        else:
+            static_waveforms = np.full(
+                (*waveforms.shape[:2], target_kdtree.n + 1),
+                fill_value=fill_value,
+                dtype=waveforms.dtype,
+            )
     else:
         assert out.shape == (*waveforms.shape[:2], target_kdtree.n + 1)
         out.fill(fill_value)
