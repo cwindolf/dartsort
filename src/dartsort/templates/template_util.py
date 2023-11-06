@@ -2,7 +2,7 @@ import numpy as np
 from dartsort.localize.localize_util import localize_waveforms
 from dartsort.util import drift_util
 from dartsort.util.data_util import DARTsortSorting
-from dartsort.util.waveform_util import fast_nanmedian
+from dartsort.util.spiketorch import fast_nanmedian
 from scipy.interpolate import interp1d
 
 from .get_templates import get_raw_templates, get_templates
@@ -55,7 +55,6 @@ def get_registered_templates(
     denoising_fit_radius=75,
     denoising_spikes_fit=50_000,
     denoising_snr_threshold=50.0,
-    zero_radius_um=None,
     reducer=fast_nanmedian,
     random_seed=0,
     n_jobs=0,
@@ -84,7 +83,6 @@ def get_registered_templates(
         denoising_fit_radius=denoising_fit_radius,
         denoising_spikes_fit=denoising_spikes_fit,
         denoising_snr_threshold=denoising_snr_threshold,
-        zero_radius_um=zero_radius_um,
         reducer=reducer,
         random_seed=random_seed,
         n_jobs=n_jobs,
@@ -118,6 +116,23 @@ def get_realigned_sorting(
     return results["sorting"]
 
 
+def weighted_average(unit_ids, templates, weights):
+    n_out = unit_ids.max() + 1
+    n_in, t, c = templates.shape
+    out = np.zeros((n_out, t, c), dtype=templates.dtype)
+    weights = weights.astype(float)
+    for i in range(n_out):
+        which_in = np.flatnonzero(unit_ids == i)
+        if not which_in.size:
+            continue
+
+        w = weights[which_in][:, None, None]
+        w /= w.sum()
+        out[i] = (w * templates[which_in]).sum(0)
+
+    return out
+
+
 # -- template drift handling
 
 
@@ -126,6 +141,7 @@ def get_template_depths(templates, geom, localization_radius_um=100):
         templates, geom=geom, radius=localization_radius_um
     )
     template_depths_um = template_locs["z_abs"]
+
     return template_depths_um
 
 
@@ -136,6 +152,8 @@ def templates_at_time(
     registered_template_depths_um=None,
     registered_geom=None,
     motion_est=None,
+    return_pitch_shifts=False,
+    # TODO: geom kdtree
 ):
     if registered_geom is None:
         return registered_templates
@@ -161,15 +179,17 @@ def templates_at_time(
         registered_geom=geom,
         fill_value=np.nan,
     )
-    assert not np.isnan(unregistered_templates).any()
-
+    if return_pitch_shifts:
+        return pitch_shifts, unregistered_templates
     return unregistered_templates
 
 
 # -- template numerical processing
 
 
-def svd_compress_templates(templates, min_channel_amplitude=1.0, rank=5):
+def svd_compress_templates(
+    templates, min_channel_amplitude=1.0, rank=5, channel_sparse=True
+):
     """
     Returns:
     temporal_components: n_units, spike_length_samples, rank
@@ -178,11 +198,35 @@ def svd_compress_templates(templates, min_channel_amplitude=1.0, rank=5):
     """
     vis_mask = templates.ptp(axis=1, keepdims=True) > min_channel_amplitude
     vis_templates = templates * vis_mask
-    U, s, Vh = np.linalg.svd(vis_templates, full_matrices=False)
-    # s is descending.
-    temporal_components = U[..., :, :rank]
-    singular_values = s[..., :rank]
-    spatial_components = Vh[..., :rank, :]
+    dtype = templates.dtype
+
+    if not channel_sparse:
+        U, s, Vh = np.linalg.svd(vis_templates, full_matrices=False)
+        # s is descending.
+        temporal_components = U[:, :, :rank].astype(dtype)
+        singular_values = s[:, :rank].astype(dtype)
+        spatial_components = Vh[:, :rank, :].astype(dtype)
+        return temporal_components, singular_values, spatial_components
+
+    # channel sparse: only SVD the nonzero channels
+    # this encodes the same exact subspace as above, and the reconstruction
+    # error is the same as above as a function of rank. it's just that
+    # we can zero out some spatial components, which is a useful property
+    # (used in pairwise convolutions for instance)
+    n, t, c = templates.shape
+    temporal_components = np.zeros((n, t, rank), dtype=dtype)
+    singular_values = np.zeros((n, rank), dtype=dtype)
+    spatial_components = np.zeros((n, rank, c), dtype=dtype)
+    for i in range(len(templates)):
+        template = templates[i]
+        mask = np.flatnonzero(vis_mask[i, 0])
+        k = min(rank, mask.size)
+        if not k:
+            continue
+        U, s, Vh = np.linalg.svd(template[:, mask], full_matrices=False)
+        temporal_components[i, :, :k] = U[:, :rank]
+        singular_values[i, :k] = s[:rank]
+        spatial_components[i, :k, mask] = Vh[:rank].T
     return temporal_components, singular_values, spatial_components
 
 
@@ -192,9 +236,12 @@ def temporally_upsample_templates(
     """Note, also works on temporal components thanks to compatible shape."""
     n, t, c = templates.shape
     tp = np.arange(t).astype(float)
-    erp = interp1d(tp, templates, axis=1, bounds_error=True)
-    tup = np.arange(t, step=1. / temporal_upsampling_factor)
+    erp = interp1d(tp, templates, axis=1, bounds_error=True, kind=kind)
+    tup = np.arange(t, step=1.0 / temporal_upsampling_factor)
     tup.clip(0, t - 1, out=tup)
     upsampled_templates = erp(tup)
-    upsampled_templates = upsampled_templates.reshape(n, t, temporal_upsampling_factor, c)
+    upsampled_templates = upsampled_templates.reshape(
+        n, t, temporal_upsampling_factor, c
+    )
+    upsampled_templates = upsampled_templates.astype(templates.dtype)
     return upsampled_templates

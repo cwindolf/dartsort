@@ -1,3 +1,4 @@
+---
 name: dartsort
 dependencies:
   - python=3.11
@@ -6,3 +7,4 @@ dependencies:
   - h5py
   - tqdm
   - scikit-learn
+  - colorcet
