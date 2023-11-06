@@ -3,7 +3,7 @@ from pathlib import Path
 from dartsort.config import (FeaturizationConfig, MatchingConfig,
                              SubtractionConfig, TemplateConfig)
 from dartsort.localize.localize_util import localize_hdf5
-from dartsort.peel import (ResidualUpdateTemplateMatchingPeeler,
+from dartsort.peel import (ObjectiveUpdateTemplateMatchingPeeler,
                            SubtractionPeeler)
 from dartsort.templates import TemplateData
 from dartsort.util.data_util import DARTsortSorting, check_recording
@@ -86,6 +86,7 @@ def match(
     residual_filename=None,
     show_progress=True,
     device=None,
+    template_npz_filename="matching0_templates.npz",
     hdf5_filename="matching0.h5",
     model_subdir="matching0_models",
 ):
@@ -98,9 +99,12 @@ def match(
         n_jobs=n_jobs_templates,
         save_folder=output_directory,
         overwrite=overwrite,
+        device=device,
+        save_npz_name=template_npz_filename,
     )
+
     # instantiate peeler
-    matching_peeler = ResidualUpdateTemplateMatchingPeeler.from_config(
+    matching_peeler = ObjectiveUpdateTemplateMatchingPeeler.from_config(
         recording,
         matching_config,
         featurization_config,
@@ -157,6 +161,7 @@ def _run_peeler(
         overwrite=overwrite,
         residual_filename=residual_filename,
         show_progress=show_progress,
+        device=device,
     )
 
     # do localization

@@ -108,6 +108,7 @@ def motion_estimate_strategy(
     displacements = motion_est.disp_at_s(spike_times_s, spike_depths_um)
     mod_positions = displacements % pitch
     bin_ids = mod_positions // superres_bin_size_um
+    bin_ids = bin_ids.astype(int)
     orig_label_and_bin, superres_labels = np.unique(
         np.c_[original_labels, bin_ids], axis=0, return_inverse=True
     )
@@ -128,6 +129,10 @@ def drift_pitch_loc_bin_strategy(
     )
     coarse_reg_depths = spike_depths_um + n_pitches_shift * pitch
     bin_ids = coarse_reg_depths // superres_bin_size_um
+    print(f"{np.isnan(n_pitches_shift).any()=} {np.isfinite(bin_ids).all()=} {superres_bin_size_um=}")
+    print(f"{bin_ids.min()=} {bin_ids.max()=} {bin_ids.shape=}")
+    print(f"{original_labels.min()=} {original_labels.max()=} {original_labels.shape=}")
+    bin_ids = bin_ids.astype(int)
     orig_label_and_bin, superres_labels = np.unique(
         np.c_[original_labels, bin_ids], axis=0, return_inverse=True
     )
