@@ -3,7 +3,7 @@ from __future__ import annotations  # allow forward type references
 from collections import namedtuple
 from dataclasses import dataclass, fields
 from pathlib import Path
-from typing import Iterator, Optional
+from typing import Iterator, Optional, Union
 
 import h5py
 import numpy as np
@@ -59,10 +59,15 @@ def compressed_convolve_to_h5(
         template_shift_index, compressed_upsampled_temporal
     )
 
+    print(f"{template_shift_index=}")
+    print(f"{upsampled_shifted_template_index=}")
+
     chunk_res_iterator = iterate_compressed_pairwise_convolutions(
         template_data=template_data,
         low_rank_templates=low_rank_templates,
         compressed_upsampled_temporal=compressed_upsampled_temporal,
+        template_shift_index=template_shift_index,
+        upsampled_shifted_template_index=upsampled_shifted_template_index,
         geom=geom,
         reg_geom=reg_geom,
         conv_ignore_threshold=conv_ignore_threshold,
@@ -118,7 +123,7 @@ def compressed_convolve_to_h5(
             # store new pconvs
             n_new_pconvs = chunk_res.compressed_conv.shape[0]
             pconv.resize(n_pconvs + n_new_pconvs, axis=0)
-            pconv[n_pconvs:] = chunk_res.pconv
+            pconv[n_pconvs:] = chunk_res.compressed_conv
 
             n_pconvs += n_new_pconvs
 
@@ -163,6 +168,8 @@ def iterate_compressed_pairwise_convolutions(
     do_shifting = n_shifts > 1
     geom_kdtree = reg_geom_kdtree = match_distance = None
     if do_shifting:
+        assert geom is not None
+        assert reg_geom is not None
         geom_kdtree = KDTree(geom)
         reg_geom_kdtree = KDTree(reg_geom)
         match_distance = pdist(geom).min() / 2
@@ -196,7 +203,6 @@ def iterate_compressed_pairwise_convolutions(
         coarse_approx_error_threshold=coarse_approx_error_threshold,
         max_shift=max_shift,
         batch_size=conv_batch_size,
-        device=device,
     )
 
     n_jobs, Executor, context, rank_queue = get_pool(n_jobs, with_rank_queue=True)
@@ -351,18 +357,18 @@ def compressed_convolve_pairs(
     # run convolutions
     temporal_a = low_rank_templates.temporal_components[temp_ix_a]
     pconv, kept = correlate_pairs_lowrank(
-        spatial_singular_a[ix_a[conv_ix]].to(device),
-        spatial_singular_b[ix_b[conv_ix]].to(device),
-        temporal_a[ix_a[conv_ix]].to(device),
-        conv_temporal_components_up_b.to(device),
+        torch.as_tensor(spatial_singular_a[ix_a[conv_ix]]).to(device),
+        torch.as_tensor(spatial_singular_b[ix_b[conv_ix]]).to(device),
+        torch.as_tensor(temporal_a[ix_a[conv_ix]]).to(device),
+        torch.as_tensor(conv_temporal_components_up_b).to(device),
         max_shift=max_shift,
         conv_ignore_threshold=conv_ignore_threshold,
         batch_size=batch_size,
     )
-    if not kept.size:
-        return None
     kept_pairs = np.isin(conv_ix[compression_index], conv_ix[kept])
     conv_ix = conv_ix[kept]
+    if not conv_ix.size:
+        return None
     compression_index = compression_index[kept_pairs]
     ix_a = ix_a[kept_pairs]
     ix_b = ix_b[kept_pairs]
@@ -463,17 +469,17 @@ def correlate_pairs_lowrank(
         conv_filt = torch.bmm(spatial_b[ix], template_a.mT)
         conv_filt = conv_filt[:, None]  # (nco, 1, rank, t)
 
-        # nup, nco, rank, t
-        conv_in = temporal_b[ix].permute(2, 0, 3, 1)
+        # 1, nco, rank, t
+        conv_in = temporal_b[ix].mT[None]
 
         # conv2d:
-        # depthwise, chans=nco. batch=1. h=rank. w=t. out: nup, nco, 1, 2p+1.
+        # depthwise, chans=nco. batch=1. h=rank. w=t. out: nup=1, nco, 1, 2p+1.
         # input (conv_in): nup, nco, rank, t.
         # filters (conv_filt): nco, 1, rank, t. (groups=nco).
         pconv_ = F.conv2d(
             conv_in, conv_filt, padding=(0, max_shift), groups=iend - istart
         )
-        pconv[istart:iend] = pconv_[:, :, 0, :].permute(1, 0, 2)  # nco, nup, time
+        pconv[istart:iend] = pconv_[0, :, 0, :]  # nco, nup, time
 
     # more stringent covisibility
     kept = slice(None)
@@ -555,8 +561,6 @@ def shift_deduplicated_pairs(
     Some pairs of shifted templates don't overlap, so we don't need to convolve them.
     Some pairs of shifted templates never show up in the recording at the same time
     (what this code calls "cooccurrence"), so we don't need to convolve them.
-    We don't need to convolve the same pair of templates twice, just where the indices
-    are ordered (shifted_temp_ix_a <= shifted_temp_ix_b).
 
     More complicated: for each shift, a certain set of registered template channels
     survives. Given that the some set of visible channels has survived for a pair of
@@ -591,8 +595,6 @@ def shift_deduplicated_pairs(
     # co-occurrence
     pair *= template_shift_index.cooccurrence
 
-    # mask out lower triangle
-    pair *= shifted_temp_ix_a[:, None] <= shifted_temp_ix_b[None, :]
     pair_ix_a, pair_ix_b = torch.nonzero(pair, as_tuple=True)
     nco = pair_ix_a.numel()
     if not nco:
@@ -601,7 +603,6 @@ def shift_deduplicated_pairs(
     # if no shifting, deduplication is the identity
     do_shifting = template_shift_index.all_pitch_shifts.size > 1
     if not do_shifting:
-        assert shift_b is None
         nco_range = torch.arange(nco, device=pair_ix_a.device)
         return pair_ix_a, pair_ix_b, nco_range, nco_range
 
@@ -696,7 +697,7 @@ def get_upsampled_shifted_template_index(
     """
     n_shifted_templates = template_shift_index.n_shifted_templates
     n_templates, n_shifts = template_shift_index.template_shift_index.shape
-    max_upsample = compressed_upsampled_temporal.compressed_usampling_map.shape[1]
+    max_upsample = compressed_upsampled_temporal.compressed_upsampling_map.shape[1]
 
     cur_up_shift_temp_ix = 0
     # fill with an invalid index
@@ -710,11 +711,11 @@ def get_upsampled_shifted_template_index(
         shifted_temps = template_shift_index.template_shift_index[i]
         valid_shifts = np.flatnonzero(shifted_temps < n_shifted_templates)
 
-        upsampled_temps = compressed_upsampled_temporal.compressed_usampling_map[i]
+        upsampled_temps = compressed_upsampled_temporal.compressed_upsampling_map[i]
         unique_comp_up_inds, inverse = np.unique(upsampled_temps, return_inverse=True)
 
         for j in valid_shifts:
-            up_shift_inds = unique_comp_up_inds + cur_up_shift_temp_ix
+            up_shift_inds = cur_up_shift_temp_ix + np.arange(unique_comp_up_inds.size)
             upsampled_shifted_template_index[i, j] = up_shift_inds[inverse]
             cur_up_shift_temp_ix += up_shift_inds.size
 
@@ -753,9 +754,9 @@ def compressed_upsampled_pairs(
 
     We will upsample the templates in the RHS (b) in a compressed way.
     """
-    up_factor = compressed_upsampled_temporal.compressed_usampling_map.shape[1]
+    up_factor = compressed_upsampled_temporal.compressed_upsampling_map.shape[1]
     if up_factor == 1:
-        upinds = np.zeros(conv_ix.size, dtype=int)
+        upinds = np.zeros(len(conv_ix), dtype=int)
         temp_comps = compressed_upsampled_temporal.compressed_upsampled_templates[
             temp_ix_b[ix_b[conv_ix]]
         ]
@@ -873,9 +874,11 @@ def coarse_approximate(
                     cur_new_ix += 1
                     continue
                 # else:
+                #     # if we don't want the factorized thing...
                 #     new_pconv.append(convs)
                 #     old_ix_to_new_ix[inshift] = np.arange(cur_new_ix, cur_new_ix + inshift.size)
                 #     cur_new_ix += inshift.size
+                #     continue
 
                 active_temp_a = temp_ix_a[inshift]
                 unique_active_temp_a = np.unique(active_temp_a)
@@ -894,14 +897,14 @@ def coarse_approximate(
                     meanconv = supconvs.mean(dim=0, keepdims=True)
                     if (convs - meanconv).abs().max() < coarse_approx_error_threshold:
                         new_pconv.append(meanconv)
-                        old_ix_to_new_ix[insup] = cur_new_ix
+                        old_ix_to_new_ix[inshift[insup]] = cur_new_ix
                         cur_new_ix += 1
                     else:
                         new_pconv.append(supconvs)
-                        old_ix_to_new_ix[insup] = np.arange(
-                            cur_new_ix, cur_new_ix + insup.size
+                        old_ix_to_new_ix[inshift[insup]] = np.arange(
+                            cur_new_ix, cur_new_ix + insup.sum()
                         )
-                        cur_new_ix += insup.size
+                        cur_new_ix += insup.sum()
 
     new_pconv = torch.cat(new_pconv)
     return new_pconv, old_ix_to_new_ix
@@ -922,11 +925,11 @@ class ConvWorkerContext:
     geom_kdtree: Optional[KDTree] = None
     reg_geom_kdtree: Optional[KDTree] = None
     match_distance: Optional[float] = None
-    conv_ignore_threshold = 0.0
-    coarse_approx_error_threshold = 0.0
-    max_shift = "full"
-    batch_size = 128
-    device = None
+    conv_ignore_threshold: float = 0.0
+    coarse_approx_error_threshold: float = 0.0
+    max_shift: Union[int, str] = "full"
+    batch_size: int = 128
+    device: Optional[torch.device] = None
 
 
 _conv_worker_context = None
@@ -947,10 +950,10 @@ def _conv_worker_init(rank_queue, device, kwargs):
 
 
 def _conv_job(unit_chunk):
-    global _pairwise_conv_context
+    global _conv_worker_context
     units_a, units_b = unit_chunk
     return compressed_convolve_pairs(
-        units_a=units_a, units_b=units_b, **asdict_shallow(_pairwise_conv_context)
+        units_a=units_a, units_b=units_b, **asdict_shallow(_conv_worker_context)
     )
 
 
