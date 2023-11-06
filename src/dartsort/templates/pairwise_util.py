@@ -26,7 +26,6 @@ def compressed_convolve_to_h5(
     chunk_time_centers_s: Optional[np.ndarray] = None,
     motion_est=None,
     geom: Optional[np.ndarray] = None,
-    reg_geom: Optional[np.ndarray] = None,
     conv_ignore_threshold=0.0,
     coarse_approx_error_threshold=0.0,
     conv_batch_size=128,
@@ -69,7 +68,6 @@ def compressed_convolve_to_h5(
         template_shift_index=template_shift_index,
         upsampled_shifted_template_index=upsampled_shifted_template_index,
         geom=geom,
-        reg_geom=reg_geom,
         conv_ignore_threshold=conv_ignore_threshold,
         coarse_approx_error_threshold=coarse_approx_error_threshold,
         max_shift="full",
@@ -143,7 +141,6 @@ def iterate_compressed_pairwise_convolutions(
     template_shift_index: drift_util.TemplateShiftIndex,
     upsampled_shifted_template_index: UpsampledShiftedTemplateIndex,
     geom: Optional[np.ndarray] = None,
-    reg_geom: Optional[np.ndarray] = None,
     conv_ignore_threshold=0.0,
     coarse_approx_error_threshold=0.0,
     max_shift="full",
@@ -167,6 +164,7 @@ def iterate_compressed_pairwise_convolutions(
     n_shifts = template_shift_index.all_pitch_shifts.size
     do_shifting = n_shifts > 1
     geom_kdtree = reg_geom_kdtree = match_distance = None
+    reg_geom = template_data.registered_geom
     if do_shifting:
         assert geom is not None
         assert reg_geom is not None
