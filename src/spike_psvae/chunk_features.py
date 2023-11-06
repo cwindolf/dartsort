@@ -392,6 +392,7 @@ class Localization(ChunkFeature):
         else:
             if self.ptp_precision_decimals is not None:
                 ptps = np.round(ptps, decimals=self.ptp_precision_decimals)
+                
             (
                 xs,
                 ys,
@@ -487,7 +488,7 @@ class TPCA(ChunkFeature):
 
         self.needs_fit = False
         self.dtype = self.tpca.components_.dtype
-        self.n_components = self.tpca.n_components
+        self.n_components = self.n_components
         self.components_ = self.tpca.components_
         self.mean_ = self.tpca.mean_
         if self.centered:  # otherwise SVD
