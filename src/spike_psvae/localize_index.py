@@ -65,9 +65,9 @@ def localize_ptp_index(ptp, local_geom, logbarrier=True, model="pointsource"):
             )
             - 1
             / np.sqrt(
-                np.square(x2 - local_geom[:, 0])
-                + np.square(z2 - local_geom[:, 1])
-                + np.square(y2)
+                np.square(x2 + x1 - local_geom[:, 0])
+                + np.square(z2 + z1 - local_geom[:, 1])
+                + np.square(y2 + y1)
             )
         )
         return ptp_dipole_out
@@ -107,18 +107,24 @@ def localize_ptp_index(ptp, local_geom, logbarrier=True, model="pointsource"):
     #         - (np.log1p(10.0 * y) / 10000.0 if logbarrier else 0)
     #     )
 
-    def mse_dipole(x_in):
-        x1 = x_in[0]
-        y1 = x_in[1]
-        z1 = x_in[2]
-        x2 = x_in[3]
-        y2 = x_in[4]
-        z2 = x_in[5]
-        q = ptp_at_dipole(x1, y1, z1, 1.0, x2, y2, z2)
-        alpha = (q * ptp).sum() / (q * q).sum()
-        return np.square(
-            ptp - ptp_at_dipole(x1, y1, z1, alpha, x2, y2, z2)
-        ).mean() - (np.log1p(10.0 * y1) / 10000.0 if logbarrier else 0)
+    def mse_dipole(loc):
+        x, y, z = loc
+        # q = ptp_at(x, y, z, 1.0)
+        # alpha = (q * (ptp / maxptp - delta)).sum() / (q * q).sum()
+        duv = np.c_[
+            x - local_geom[:, 0],
+            np.broadcast_to(y, ptp.shape),
+            z - local_geom[:, 1],
+        ]
+        X = duv / np.power(np.square(duv).sum(axis=1, keepdims=True), 3/2)
+        beta = np.linalg.solve(X.T @ X, X.T @ (ptp / maxptp))
+        qtq = X @ beta
+        return (
+            np.square(ptp / maxptp - qtq).mean()
+            # np.square(ptp / maxptp - delta - ptp_at(x, y, z, alpha)).mean()
+            # np.square(np.maximum(0, ptp / maxptp - ptp_at(x, y, z, alpha))).mean()
+            - np.log1p(10.0 * y) / 10000.0
+        )
 
     if model == "pointsource":
         result = minimize(
@@ -146,24 +152,51 @@ def localize_ptp_index(ptp, local_geom, logbarrier=True, model="pointsource"):
 
         result = minimize(
             mse_dipole,
-            x0=[xcom, Y0, zcom, xcom + 1, Y0 + 1, zcom + 1],
+            x0=[xcom, Y0, zcom],
             bounds=[
                 (local_geom[:, 0].min() - DX, local_geom[:, 0].max() + DX),
                 (1e-4, 250),
                 (-DZ, DZ),
-                (-100, 100),
-                (-100, 100),
-                (-100, 100),
             ],
         )
 
         # print(result)
-        bx, by, bz_rel, bpx, bpy, bpz = result.x
-
-        q = ptp_at_dipole(bx, by, bz_rel, 1.0, bpx, bpy, bpz)
-
-        balpha = (q * ptp).sum() / (q * q).sum()
-        return bx, by, bz_rel, balpha
+        bx, by, bz_rel = result.x
+        
+        duv = np.c_[
+            bx - local_geom[:, 0],
+            np.broadcast_to(by, ptp.shape),
+            bz_rel - local_geom[:, 1],
+        ]
+        X = duv / np.power(np.square(duv).sum(axis=1, keepdims=True), 3/2)
+        beta = np.linalg.solve(X.T @ X, X.T @ (ptp / maxptp))
+        beta /= np.sqrt(np.square(beta).sum())
+        dipole_planar_direction = np.sqrt(np.square(beta[[0, 2]]).sum())
+        closest_chan = np.square(duv).sum(1).argmin()
+        min_duv = duv[closest_chan]
+        
+        val_th = np.sqrt(np.square(min_duv).sum())/dipole_planar_direction
+        
+        # reparameterized_dist = np.sqrt(np.square(min_duv[0]/beta[2]) + np.square(min_duv[2]/beta[0]) 
+        #                                 + np.square(min_duv[1]/beta[1]))
+        
+        if val_th<250:
+            return bx, by, bz_rel, val_th
+        else:
+            result = minimize(
+                mse,
+                x0=[xcom, Y0, zcom],
+                bounds=[
+                    (local_geom[:, 0].min() - DX, local_geom[:, 0].max() + DX),
+                    (1e-4, 250),
+                    (-DZ, DZ),
+                ],
+            )
+            # print(result)
+            bx, by, bz_rel = result.x
+            q = ptp_at(bx, by, bz_rel, 1.0)
+            balpha = (ptp * q).sum() / np.square(q).sum()
+            return bx, by, bz_rel, val_th
 
     else:
         raise NameError("Wrong localization model")
@@ -230,6 +263,5 @@ def localize_ptps_index(
             ys[n] = y
             z_rels[n] = z_rel
             alphas[n] = alpha
-
     z_abss = z_rels + geom[maxchans, 1]
     return xs, ys, z_rels, z_abss, alphas
