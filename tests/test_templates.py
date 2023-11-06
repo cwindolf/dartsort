@@ -4,8 +4,8 @@ from pathlib import Path
 import numpy as np
 import spikeinterface.core as sc
 from dartsort import config
-from dartsort.templates import (get_templates, pairwise, template_util,
-                                templates)
+from dartsort.templates import (get_templates, pairwise, pairwise_util,
+                                template_util, templates)
 from dartsort.util import drift_util
 from dartsort.util.data_util import DARTsortSorting
 from dredge.motion_util import get_motion_estimate
@@ -185,20 +185,23 @@ def test_pconv():
         registered_geom=None,
         registered_template_depths_um=None,
     )
-    temp, sv, spat = template_util.svd_compress_templates(temps, rank=1)
-    tempup = temp.reshape(5, t, 1, 1)
+    svd_compressed = template_util.svd_compress_templates(temps, rank=1)
+    ctempup = template_util.compressed_upsampled_templates(
+        svd_compressed.temporal_components,
+        ptps=temps.ptp(1).max(1),
+        max_upsample=1,
+        kind="cubic",
+    )
 
     with tempfile.TemporaryDirectory() as tdir:
-        pconvdb_path = pairwise.sparse_pairwise_conv(
+        pconvdb_path = pairwise_util.compressed_convolve_to_h5(
             Path(tdir) / "test.h5",
-            geom,
-            tdata,
-            temp,
-            tempup,
-            sv,
-            spat,
+            geom=geom,
+            template_data=tdata,
+            low_rank_templates=svd_compressed,
+            compressed_upsampled_temporal=ctempup,
         )
-        pconvdb = pairwise.SparsePairwiseConv.from_h5(pconvdb_path)
+        pconvdb = pairwise.CompressedPairwiseConv.from_h5(pconvdb_path)
         assert np.all(pconvdb.pconv[0] == 0)
         print(f"{pconvdb.pconv.shape=}")
 
@@ -220,7 +223,7 @@ def test_pconv():
     # same templates but padded
     print(f"--------- rigid drift")
     tempspad = np.pad(temps, [(0, 0), (0, 0), (1, 1)])
-    temp, sv, spat = template_util.svd_compress_templates(tempspad, rank=1)
+    svd_compressed = template_util.svd_compress_templates(tempspad, rank=1)
     reg_geom = np.c_[np.zeros(c + 2), np.arange(c + 2).astype(float)]
     tdata = templates.TemplateData(
         templates=tempspad,
@@ -246,21 +249,19 @@ def test_pconv():
     #         print(f"{spatial_shifted=}")
 
     with tempfile.TemporaryDirectory() as tdir:
-        pconvdb_path = pairwise.sparse_pairwise_conv(
+        pconvdb_path = pairwise_util.compressed_convolve_to_h5(
             Path(tdir) / "test.h5",
-            geom,
-            tdata,
-            temp,
-            tempup,
-            sv,
-            spat,
+            geom=geom,
+            reg_geom=reg_geom,
+            template_data=tdata,
+            low_rank_templates=svd_compressed,
+            compressed_upsampled_temporal=ctempup,
             motion_est=motion_est,
             chunk_time_centers_s=[0, 1, 2],
         )
-        pconvdb = pairwise.SparsePairwiseConv.from_h5(pconvdb_path)
+        pconvdb = pairwise.CompressedPairwiseConv.from_h5(pconvdb_path)
         assert np.all(pconvdb.pconv[0] == 0)
         print(f"{pconvdb.pconv.shape=}")
-        print(f"{pconvdb.template_shift_index=}")
 
         for tixa in range(5):
             for tixb in range(5):
