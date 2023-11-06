@@ -252,7 +252,6 @@ def test_pconv():
         pconvdb_path = pairwise_util.compressed_convolve_to_h5(
             Path(tdir) / "test.h5",
             geom=geom,
-            reg_geom=reg_geom,
             template_data=tdata,
             low_rank_templates=svd_compressed,
             compressed_upsampled_temporal=ctempup,
