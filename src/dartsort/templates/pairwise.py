@@ -60,6 +60,9 @@ class CompressedPairwiseConv:
         shifts_b=None,
         return_zero_convs=False,
     ):
+        template_indices_a = np.atleast_1d(template_indices_a)
+        template_indices_b = np.atleast_1d(template_indices_b)
+
         # handle no shifting
         no_shifting = shifts_a is None or shifts_b is None
         shifted_template_index = self.shifted_template_index
