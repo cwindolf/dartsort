@@ -173,6 +173,7 @@ def _run_peeler(
             amplitude_vectors_dataset_name=f"{wf_name}_amplitude_vectors",
             show_progress=show_progress,
             device=device,
+            localization_model=featurization_config.localization_model
         )
 
     return (
