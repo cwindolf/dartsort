@@ -125,10 +125,6 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
             ("temporal_components", temporal_components),
             ("singular_values", singular_values),
             ("spatial_components", spatial_components),
-            (
-                "upsampled_temporal_components",
-                self.upsampled_temporal_components.numpy(force=True).copy(),
-            ),
         ]
         if self.is_drifting:
             self.fixed_output_data.append(

@@ -4,8 +4,8 @@ from pathlib import Path
 import numpy as np
 import spikeinterface.core as sc
 from dartsort import config
-from dartsort.templates import (get_templates, pairwise, template_util,
-                                templates)
+from dartsort.templates import (get_templates, pairwise, pairwise_util,
+                                template_util, templates)
 from dartsort.util import drift_util
 from dartsort.util.data_util import DARTsortSorting
 from dredge.motion_util import get_motion_estimate
@@ -177,6 +177,7 @@ def test_pconv():
     overlaps[(1, 2)] = overlaps[(2, 1)] = (temps[1] * temps[2]).sum()
     overlaps[(2, 3)] = overlaps[(3, 2)] = (temps[3] * temps[2]).sum()
 
+    print(f"--------- no drift")
     tdata = templates.TemplateData(
         templates=temps,
         unit_ids=np.array([0, 0, 1, 1, 2]),
@@ -184,22 +185,25 @@ def test_pconv():
         registered_geom=None,
         registered_template_depths_um=None,
     )
-    temp, sv, spat = template_util.svd_compress_templates(temps, rank=1)
-    print(f"{temp=} {sv=} {spat=}")
-    tempup = temp.reshape(5, t, 1, 1)
+    svd_compressed = template_util.svd_compress_templates(temps, rank=1)
+    ctempup = template_util.compressed_upsampled_templates(
+        svd_compressed.temporal_components,
+        ptps=temps.ptp(1).max(1),
+        max_upsample=1,
+        kind="cubic",
+    )
 
     with tempfile.TemporaryDirectory() as tdir:
-        pconvdb_path = pairwise.sparse_pairwise_conv(
+        pconvdb_path = pairwise_util.compressed_convolve_to_h5(
             Path(tdir) / "test.h5",
-            geom,
-            tdata,
-            temp,
-            tempup,
-            sv,
-            spat,
+            geom=geom,
+            template_data=tdata,
+            low_rank_templates=svd_compressed,
+            compressed_upsampled_temporal=ctempup,
         )
-        pconvdb = pairwise.SparsePairwiseConv.from_h5(pconvdb_path)
+        pconvdb = pairwise.CompressedPairwiseConv.from_h5(pconvdb_path)
         assert np.all(pconvdb.pconv[0] == 0)
+        print(f"{pconvdb.pconv.shape=}")
 
         for tixa in range(5):
             for tixb in range(5):
@@ -217,10 +221,9 @@ def test_pconv():
     # drifting version
     # rigid drift from -1 to 0 to 1, note pitch=1
     # same templates but padded
+    print(f"--------- rigid drift")
     tempspad = np.pad(temps, [(0, 0), (0, 0), (1, 1)])
-    print(f"{tempspad.shape=}")
-    temp, sv, spat = template_util.svd_compress_templates(tempspad, rank=1)
-    print(f"{temp.shape=} {sv.shape=} {spat.shape=}")
+    svd_compressed = template_util.svd_compress_templates(tempspad, rank=1)
     reg_geom = np.c_[np.zeros(c + 2), np.arange(c + 2).astype(float)]
     tdata = templates.TemplateData(
         templates=tempspad,
@@ -233,45 +236,31 @@ def test_pconv():
     motion_est = get_motion_estimate(time_bin_centers_s=np.array([0., 1, 2]), displacement=[-1., 0, 1])
 
     # visualize shifted temps
-    for tix in range(5):
-        print("------------------")
-        print(f"{tix=}")
-        for shift in (-1, 0, 1):
-            spatial_shifted = drift_util.get_waveforms_on_static_channels(
-                spat[tix][None],
-                reg_geom,
-                n_pitches_shift=np.array([shift]),
-                registered_geom=geom,
-                fill_value=0.0,
-            )
-            print(f"{shift=}")
-            print(f"{spatial_shifted=}")
-
-    print()
-    print()
-    print('-=' * 30)
-    print('=-' * 30)
-    print('-=' * 30)
-    print('=-' * 30)
-    print()
-    print()
+    # for tix in range(5):
+    #     for shift in (-1, 0, 1):
+    #         spatial_shifted = drift_util.get_waveforms_on_static_channels(
+    #             spat[tix][None],
+    #             reg_geom,
+    #             n_pitches_shift=np.array([shift]),
+    #             registered_geom=geom,
+    #             fill_value=0.0,
+    #         )
+    #         print(f"{shift=}")
+    #         print(f"{spatial_shifted=}")
 
     with tempfile.TemporaryDirectory() as tdir:
-        pconvdb_path = pairwise.sparse_pairwise_conv(
+        pconvdb_path = pairwise_util.compressed_convolve_to_h5(
             Path(tdir) / "test.h5",
-            geom,
-            tdata,
-            temp,
-            tempup,
-            sv,
-            spat,
+            geom=geom,
+            template_data=tdata,
+            low_rank_templates=svd_compressed,
+            compressed_upsampled_temporal=ctempup,
             motion_est=motion_est,
             chunk_time_centers_s=[0, 1, 2],
         )
-        pconvdb = pairwise.SparsePairwiseConv.from_h5(pconvdb_path)
+        pconvdb = pairwise.CompressedPairwiseConv.from_h5(pconvdb_path)
         assert np.all(pconvdb.pconv[0] == 0)
-
-        print(f"{pconvdb.template_shift_index=}")
+        print(f"{pconvdb.pconv.shape=}")
 
         for tixa in range(5):
             for tixb in range(5):
