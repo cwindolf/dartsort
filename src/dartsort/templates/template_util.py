@@ -336,9 +336,13 @@ def compressed_upsampled_templates(
     all_upsampled_templates = temporally_upsample_templates(
         templates, temporal_upsampling_factor=max_upsample, kind=kind
     )
-    compressed_upsampled_templates = all_upsampled_templates[
-        template_indices, upsampling_indices
-    ]
+    # n, up, t, c
+    all_upsampled_templates = all_upsampled_templates.transpose(0, 2, 1, 3)
+    rix = np.ravel_multi_index((template_indices, upsampling_indices), all_upsampled_templates.shape[:2])
+    all_upsampled_templates = all_upsampled_templates.reshape(
+        n_templates * max_upsample, templates.shape[1], templates.shape[2]
+    )
+    compressed_upsampled_templates = all_upsampled_templates[rix]
 
     return CompressedUpsampledTemplates(
         compressed_upsampled_templates,
