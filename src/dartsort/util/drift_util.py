@@ -557,10 +557,10 @@ def get_shift_and_unit_pairs(
         )
         pitch_shifts = pitch_shifts.astype(int)
         pitch_shift_ix = np.searchsorted(all_pitch_shifts, pitch_shifts)
-
+        
         shifted_temp_ixs = template_shift_index[temp_ixs, pitch_shift_ix]
         cooccurrence[shifted_temp_ixs[:, None], shifted_temp_ixs[None, :]] = 1
-
+    
     return TemplateShiftIndex(
         n_template_shift_pairs,
         all_pitch_shifts,
