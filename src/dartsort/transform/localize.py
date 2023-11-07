@@ -66,3 +66,5 @@ class Localization(BaseWaveformFeaturizer):
             ]
         )
         return localizations
+
+PointSourceLocalization = Localization
