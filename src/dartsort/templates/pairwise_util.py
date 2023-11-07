@@ -400,19 +400,19 @@ def compressed_convolve_pairs(
         conv_ignore_threshold=conv_ignore_threshold,
         batch_size=batch_size,
     )
-    # print(f"-----------")
-    # print(f"after corr {pconv.shape=} {kept.shape=}")
+    print(f"-----------")
+    print(f"after corr {pconv.shape=} {conv_ix[kept].shape=}")
     conv_ix = conv_ix[kept]
     if not conv_ix.size:
         return None
     kept_pairs = np.flatnonzero(np.isin(compression_index, kept))
-    # print(f"-----------")
-    # print(f"kept {pconv.shape=} {conv_ix.shape=} {compression_index.shape=}")
-    # print(f"{compression_index.min()=} {compression_index.max()=}")
-    # print(f"{compression_index[kept_pairs].min()=} {compression_index[kept_pairs].max()=}")
-    # print(f"{ix_a.shape=} {ix_b.shape=}")
-    # print(f"{kept.shape=} {kept.dtype=} {kept.min()=} {kept.max()=}")
-    # print(f"{kept_pairs.shape=} {kept_pairs.dtype=} {kept_pairs.min()=} {kept_pairs.max()=}")
+    print(f"-----------")
+    print(f"kept {pconv.shape=} {conv_ix.shape=} {compression_index.shape=}")
+    print(f"{compression_index.min()=} {compression_index.max()=}")
+    print(f"{compression_index[kept_pairs].min()=} {compression_index[kept_pairs].max()=}")
+    print(f"{ix_a.shape=} {ix_b.shape=}")
+    print(f"{kept.shape=} {kept.dtype=} {kept.min()=} {kept.max()=}")
+    print(f"{kept_pairs.shape=} {kept_pairs.dtype=} {kept_pairs.min()=} {kept_pairs.max()=}")
     compression_index = np.searchsorted(kept, compression_index[kept_pairs])
     conv_ix = np.searchsorted(kept_pairs, conv_ix)
     ix_a = ix_a[kept_pairs]
@@ -538,12 +538,13 @@ def correlate_pairs_lowrank(
         pconv[istart:iend] = pconv_[0, :, 0, :]  # nco, nup, time
 
     # more stringent covisibility
-    kept = slice(None)
     if conv_ignore_threshold > 0:
         max_val = pconv.reshape(n_pairs, -1).abs().max(dim=1).values
         kept = max_val > conv_ignore_threshold
         pconv = pconv[kept]
         kept = np.flatnonzero(kept.numpy(force=True))
+    else:
+        kept = np.arange(len(pconv))
 
     return pconv, kept
 
