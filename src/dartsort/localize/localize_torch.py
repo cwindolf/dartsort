@@ -113,26 +113,22 @@ def localize_amplitude_vectors(
 
     if model == "com":
         z_abs_com = zcom + geom[main_channels, 1]
-        nancom = torch.full_like(xcom, torch.nan)
-        return dict(
-            x=xcom, y=nancom, z_rel=zcom, z_abs=z_abs_com, alpha=nancom
-        )
+        return dict(x=xcom, z_rel=zcom, z_abs=z_abs_com)
 
     # normalized PTP vectors
     # this helps to keep the objective in a similar range, so we can use
     # fixed constants in regularizers like the log barrier
     max_amplitudes = torch.max(amplitude_vectors, dim=1).values
     normalized_amp_vecs = amplitude_vectors / max_amplitudes[:, None]
-    
+
     # -- torch optimize
+    if levenberg_marquardt_kwargs is None:
+        levenberg_marquardt_kwargs = {}
+
     # initialize with center of mass
     locs = torch.column_stack((xcom, torch.full_like(xcom, y0), zcom))
 
-    
     if model == "pointsource":
-
-        if levenberg_marquardt_kwargs is None:
-            levenberg_marquardt_kwargs = {}
         locs, i = batched_levenberg_marquardt(
             locs,
             vmap_point_source_grad_and_mse,
@@ -148,18 +144,13 @@ def localize_amplitude_vectors(
             amplitude_vectors, in_probe_mask, x, y, z_rel, local_geoms
         )
         z_abs = z_rel + geom[main_channels, 1]
-        
+
+        results = dict(x=x, y=y, z_rel=z_rel, z_abs=z_abs, alpha=alpha)
         if is_numpy:
-            x = x.numpy(force=True)
-            y = y.numpy(force=True)
-            z_rel = z_rel.numpy(force=True)
-            z_abs = z_abs.numpy(force=True)
-            alpha = alpha.numpy(force=True)
-        return dict(x=x, y=y, z_rel=z_rel, z_abs=z_abs, alpha=alpha)
-    
-    if model == "dipole":
-        if levenberg_marquardt_kwargs is None:
-            levenberg_marquardt_kwargs = {}
+            results = {k: v.numpy(force=True) for k, v in results.items()}
+        return results
+
+    elif model == "dipole":
         locs, i = batched_levenberg_marquardt(
             locs,
             vmap_dipole_grad_and_mse,
@@ -167,7 +158,7 @@ def localize_amplitude_vectors(
             extra_args=(normalized_amp_vecs, local_geoms),
             **levenberg_marquardt_kwargs,
         )
-        
+
         x, y0, z_rel = locs.T
         y = F.softplus(y0)
         projected_dist = vmap_dipole_find_projection_distance(
@@ -175,7 +166,7 @@ def localize_amplitude_vectors(
         )     
 
         z_abs = z_rel + geom[main_channels, 1]
-        
+
         if is_numpy:
             x = x.numpy(force=True)
             y = y.numpy(force=True)
@@ -184,6 +175,9 @@ def localize_amplitude_vectors(
             alpha = alpha.numpy(force=True)
 
         return dict(x=x, y=y, z_rel=z_rel, z_abs=z_abs, alpha=projected_dist)
+
+    else:
+        assert False
 
 
 # -- point source / dipole model library functions
@@ -221,9 +215,7 @@ def dipole_find_projection_distance(normalized_amp_vec, x, y, z, local_geom):
     val_th = torch.sqrt(torch.square(min_duv).sum())/dipole_planar_direction
     return val_th
 
-def point_source_mse(
-    loc, amplitude_vector, channel_mask, local_geom, logbarrier=True
-):
+def point_source_mse(loc, amplitude_vector, channel_mask, local_geom, logbarrier=True):
     """Objective in point source model
 
     Arguments
@@ -246,12 +238,9 @@ def point_source_mse(
     x, y0, z = loc
     y = F.softplus(y0)
 
-    alpha = point_source_find_alpha(
-        amplitude_vector, channel_mask, x, y, z, local_geom
-    )
+    alpha = point_source_find_alpha(amplitude_vector, channel_mask, x, y, z, local_geom)
     obj = torch.square(
-        amplitude_vector
-        - point_source_amplitude_at(x, y, z, alpha, local_geom)
+        amplitude_vector - point_source_amplitude_at(x, y, z, alpha, local_geom)
     ).mean()
     if logbarrier:
         obj -= torch.log(10.0 * y) / 10000.0
@@ -259,9 +248,29 @@ def point_source_mse(
         # obj -= torch.log(1000.0 - torch.sqrt(torch.square(x) + torch.square(z))).sum() / 10000.0
     return obj
 
+
+def dipole_find_projection_distance(normalized_amp_vec, x, y, z, local_geom):
+    """We can solve for the brightness (alpha) of the source in closed form given x,y,z"""
+
+    dxs = x - local_geom[:, 0]
+    dzs = z - local_geom[:, 1]
+    dys = y
+    duv = torch.tensor([dxs, dys, dzs])
+    X = duv / torch.pow(torch.sum(torch.square(duv)), 3 / 2)
+    beta = torch.linalg.solve(
+        torch.matmul(X.T, X), torch.matmul(X.T, normalized_amp_vec)
+    )
+    beta /= torch.sqrt(torch.square(beta).sum())
+    dipole_planar_direction = torch.sqrt(np.torch(beta[[0, 2]]).sum())
+    closest_chan = torch.square(duv).sum(1).argmin()
+    min_duv = duv[closest_chan]
+    val_th = torch.sqrt(torch.square(min_duv).sum()) / dipole_planar_direction
+    return val_th
+
+
 def dipole_mse(loc, amplitude_vector, local_geom, logbarrier=True):
     """Dipole model predicted amplitude at local_geom given location"""
-    
+
     x, y0, z = loc
     y = F.softplus(y0)
 

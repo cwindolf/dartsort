@@ -10,6 +10,8 @@ original probe as a subset, as well as copies of the probe shifted
 by integer numbers of pitches. As many shifted copies are created
 as needed to capture all the drift.
 """
+from dataclasses import dataclass
+
 import numpy as np
 import torch
 from scipy.spatial import KDTree
@@ -456,3 +458,114 @@ def _full_probe_shifting_fast(
         shifted_channels[shift_inverse][:, None, :],
     ] = waveforms
     return static_waveforms[:, :, : target_kdtree.n]
+
+
+# -- which templates appear at which shifts in a recording?
+#    and, which pairs of shifted templates appear together?
+
+
+@dataclass
+class TemplateShiftIndex:
+    """Return value for get_shift_and_unit_pairs"""
+
+    n_shifted_templates: int
+    # shift index -> shift
+    all_pitch_shifts: np.ndarray
+    # (template ix, shift index) -> shifted template index
+    template_shift_index: np.ndarray
+    # (shifted temp ix, shifted temp ix) -> did these appear at the same time
+    cooccurrence: np.ndarray
+    shifted_temp_ix_to_temp_ix: np.ndarray
+    shifted_temp_ix_to_shift: np.ndarray
+
+
+def static_template_shift_index(n_templates):
+    temp_ixs = np.arange(n_templates)
+    return TemplateShiftIndex(
+        n_templates,
+        np.zeros(1),
+        temp_ixs[:, None],
+        np.ones((n_templates, n_templates), dtype=bool),
+        temp_ixs,
+        np.zeros_like(temp_ixs),
+    )
+
+
+def get_shift_and_unit_pairs(
+    chunk_time_centers_s,
+    geom,
+    template_data,
+    motion_est=None,
+):
+    n_templates = len(template_data.templates)
+    if motion_est is None:
+        # no motion case
+        return static_template_shift_index(n_templates)
+
+    # all observed pitch shift values
+    all_pitch_shifts = np.empty(shape=(0,), dtype=int)
+    temp_ixs = np.arange(n_templates)
+    # set of (template idx, shift)
+    template_shift_pairs = np.empty(shape=(0, 2), dtype=int)
+    pitch = get_pitch(geom)
+
+    for t_s in chunk_time_centers_s:
+        # see the fn `templates_at_time`
+        unregistered_depths_um = invert_motion_estimate(
+            motion_est, t_s, template_data.registered_template_depths_um
+        )
+        pitch_shifts = get_spike_pitch_shifts(
+            depths_um=template_data.registered_template_depths_um,
+            pitch=pitch,
+            registered_depths_um=unregistered_depths_um,
+        )
+        pitch_shifts = pitch_shifts.astype(int)
+
+        # get unique pitch/unit shift pairs in chunk
+        template_shift = np.c_[temp_ixs, pitch_shifts]
+
+        # update full set
+        all_pitch_shifts = np.union1d(all_pitch_shifts, pitch_shifts)
+        template_shift_pairs = np.unique(
+            np.concatenate((template_shift_pairs, template_shift), axis=0), axis=0
+        )
+
+    n_shifts = len(all_pitch_shifts)
+    n_template_shift_pairs = len(template_shift_pairs)
+
+    # index template/shift pairs: template_shift_index[template_ix, shift_ix] = shifted template index
+    # fill with an invalid index
+    template_shift_index = np.full((n_templates, n_shifts), n_template_shift_pairs)
+    shift_ix = np.searchsorted(all_pitch_shifts, template_shift_pairs[:, 1])
+    assert np.array_equal(all_pitch_shifts[shift_ix], template_shift_pairs[:, 1])
+    template_shift_index[template_shift_pairs[:, 0], shift_ix] = np.arange(
+        n_template_shift_pairs
+    )
+    shifted_temp_ix_to_temp_ix = template_shift_pairs[:, 0]
+    shifted_temp_ix_to_shift = template_shift_pairs[:, 1]
+
+    # co-occurrence matrix: do these shifted templates appear together?
+    cooccurrence = np.eye(n_template_shift_pairs, dtype=bool)
+    for t_s in chunk_time_centers_s:
+        unregistered_depths_um = invert_motion_estimate(
+            motion_est, t_s, template_data.registered_template_depths_um
+        )
+        pitch_shifts = get_spike_pitch_shifts(
+            depths_um=template_data.registered_template_depths_um,
+            pitch=pitch,
+            registered_depths_um=unregistered_depths_um,
+        )
+        pitch_shifts = pitch_shifts.astype(int)
+        pitch_shift_ix = np.searchsorted(all_pitch_shifts, pitch_shifts)
+
+        shifted_temp_ixs = template_shift_index[temp_ixs, pitch_shift_ix]
+        cooccurrence[shifted_temp_ixs[:, None], shifted_temp_ixs[None, :]] = 1
+
+    return TemplateShiftIndex(
+        n_template_shift_pairs,
+        all_pitch_shifts,
+        template_shift_index,
+        cooccurrence,
+        shifted_temp_ix_to_temp_ix,
+        shifted_temp_ix_to_shift,
+    )
