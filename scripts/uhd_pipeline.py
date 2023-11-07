@@ -164,7 +164,7 @@ if __name__ == "__main__":
     # Don't trust spikeinterface preprocessing :( ... 
     if preprocessing:
         print("Preprocessing...")
-        preprocessing_dir = Path(output_all) / "preprocessing_test"
+        preprocessing_dir = Path(output_all) / "preprocessing"
         Path(preprocessing_dir).mkdir(exist_ok=True)
         if t_end_preproc is None:
             t_end_preproc=rec_len_sec
