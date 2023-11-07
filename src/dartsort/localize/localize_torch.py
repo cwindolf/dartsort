@@ -206,7 +206,6 @@ def dipole_find_projection_distance(normalized_amp_vec, x, y, z, local_geom):
     dys = y.expand(dzs.size())
     duv = torch.stack([dxs, dys, dzs], dim=1)
     X = duv / torch.pow(torch.sum(torch.square(duv), dim=1), 3/2)[:, None]
-    # beta = torch.linalg.lstsq(X, amplitude_vector[:, None])[0]
     beta = torch.matmul(torch.linalg.pinv(torch.matmul(X.T, X)), torch.matmul(X.T, normalized_amp_vec))
     beta /= torch.sqrt(torch.square(beta).sum())
     dipole_planar_direction = torch.sqrt(torch.square(beta[[0, 2]]).sum())
@@ -247,25 +246,6 @@ def point_source_mse(loc, amplitude_vector, channel_mask, local_geom, logbarrier
         # idea for logbarrier on points which run away
         # obj -= torch.log(1000.0 - torch.sqrt(torch.square(x) + torch.square(z))).sum() / 10000.0
     return obj
-
-
-def dipole_find_projection_distance(normalized_amp_vec, x, y, z, local_geom):
-    """We can solve for the brightness (alpha) of the source in closed form given x,y,z"""
-
-    dxs = x - local_geom[:, 0]
-    dzs = z - local_geom[:, 1]
-    dys = y
-    duv = torch.tensor([dxs, dys, dzs])
-    X = duv / torch.pow(torch.sum(torch.square(duv)), 3 / 2)
-    beta = torch.linalg.solve(
-        torch.matmul(X.T, X), torch.matmul(X.T, normalized_amp_vec)
-    )
-    beta /= torch.sqrt(torch.square(beta).sum())
-    dipole_planar_direction = torch.sqrt(np.torch(beta[[0, 2]]).sum())
-    closest_chan = torch.square(duv).sum(1).argmin()
-    min_duv = duv[closest_chan]
-    val_th = torch.sqrt(torch.square(min_duv).sum()) / dipole_planar_direction
-    return val_th
 
 
 def dipole_mse(loc, amplitude_vector, local_geom, logbarrier=True):
