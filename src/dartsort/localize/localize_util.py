@@ -43,6 +43,7 @@ def localize_hdf5(
     spikes_per_batch=100_000,
     show_progress=True,
     device=None,
+    localization_model="pointsource",
 ):
     """Run localization on a HDF5 file with stored amplitude vectors
 
@@ -100,6 +101,7 @@ def localize_hdf5(
                 channel_index=channel_index,
                 radius=radius,
                 n_channels_subset=n_channels_subset,
+                model=localization_model,
             )
             xyza_batch = np.c_[
                 locs["x"].cpu().numpy(),
