@@ -14,6 +14,7 @@ all_transformers = [
     TemporalPCADenoiser,
     TemporalPCAFeaturizer,
     Localization,
+    PointSourceLocalization,
 ]
 
 transformers_by_class_name = {cls.__name__: cls for cls in all_transformers}
