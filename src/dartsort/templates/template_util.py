@@ -1,3 +1,5 @@
+from collections import namedtuple
+
 import numpy as np
 from dartsort.localize.localize_util import localize_waveforms
 from dartsort.util import drift_util
@@ -187,6 +189,11 @@ def templates_at_time(
 # -- template numerical processing
 
 
+LowRankTemplates = namedtuple(
+    "LowRankTemplates", ["temporal_components", "singular_values", "spatial_components"]
+)
+
+
 def svd_compress_templates(
     templates, min_channel_amplitude=1.0, rank=5, channel_sparse=True
 ):
@@ -227,7 +234,8 @@ def svd_compress_templates(
         temporal_components[i, :, :k] = U[:, :rank]
         singular_values[i, :k] = s[:rank]
         spatial_components[i, :k, mask] = Vh[:rank].T
-    return temporal_components, singular_values, spatial_components
+
+    return LowRankTemplates(temporal_components, singular_values, spatial_components)
 
 
 def temporally_upsample_templates(
@@ -245,3 +253,96 @@ def temporally_upsample_templates(
     )
     upsampled_templates = upsampled_templates.astype(templates.dtype)
     return upsampled_templates
+
+
+CompressedUpsampledTemplates = namedtuple(
+    "CompressedUpsampledTemplates",
+    [
+        "compressed_upsampled_templates",
+        "compressed_upsampling_map",
+        "compressed_index_to_template_index",
+        "compressed_index_to_upsampling_index",
+    ],
+)
+
+
+def default_n_upsamples_map(ptps):
+    return 4 ** (ptps // 2)
+
+
+def compressed_upsampled_templates(
+    templates,
+    ptps=None,
+    max_upsample=8,
+    n_upsamples_map=default_n_upsamples_map,
+    kind="cubic",
+):
+    """compressedly store fewer temporally upsampled copies of lower amplitude templates
+
+    Returns
+    -------
+    A CompressedUpsampledTemplates object with fields:
+        compressed_upsampled_templates : array (n_compressed_upsampled_templates, spike_length_samples)
+        compressed_upsampling_map : array (n_templates, max_upsample)
+            compressed_upsampled_templates[compressed_upsampling_map[unit, j]] is an approximation
+            of the jth upsampled template for this unit. for low-amplitude units,
+            compressed_upsampling_map[unit] will have fewer unique entries, corresponding
+            to fewer saved upsampled copies for that unit.
+        compressed_index_to_template_index
+        compressed_index_to_upsampling_index
+    """
+    n_templates = templates.shape[0]
+    if max_upsample == 1:
+        return CompressedUpsampledTemplates(
+            templates,
+            np.arange(n_templates)[:, None],
+            np.arange(n_templates),
+            np.zeros(n_templates, dtype=int)
+        )
+
+    # how many copies should each unit get?
+    # sometimes users may pass temporal SVD components in instead of templates,
+    # so we allow them to pass in the amplitudes of the actual templates
+    if ptps is None:
+        ptps = templates.ptp(1).max(1)
+    assert ptps.shape == (n_templates,)
+    if n_upsamples_map is None:
+        n_upsamples = np.full(n_templates, max_upsample)
+    else:
+        n_upsamples = np.clip(n_upsamples_map(ptps), 1, max_upsample).astype(int)
+
+    # build the compressed upsampling map
+    compressed_upsampling_map = np.zeros((n_templates, max_upsample), dtype=int)
+    template_indices = []
+    upsampling_indices = []
+    current_compressed_index = 0
+    for i, nup in enumerate(n_upsamples):
+        compression = max_upsample // nup
+        nup = max_upsample // compression  # handle divisibility failure
+
+        # new compressed indices
+        compressed_upsampling_map[i] = current_compressed_index + np.arange(nup).repeat(
+            compression
+        )
+        current_compressed_index += nup
+
+        # indices of the templates to keep in the full array of upsampled templates
+        template_indices.extend([i] * nup)
+        upsampling_indices.extend(compression * np.arange(nup))
+    template_indices = np.array(template_indices)
+    upsampling_indices = np.array(upsampling_indices)
+
+    # get the upsampled templates
+    all_upsampled_templates = temporally_upsample_templates(
+        templates, temporal_upsampling_factor=max_upsample, kind=kind
+    )
+    compressed_upsampled_templates = all_upsampled_templates[
+        template_indices, upsampling_indices
+    ]
+
+    return CompressedUpsampledTemplates(
+        compressed_upsampled_templates,
+        compressed_upsampling_map,
+        template_indices,
+        upsampling_indices,
+    )
