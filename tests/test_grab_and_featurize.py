@@ -143,7 +143,7 @@ def test_grab_and_featurize():
                 fit_radius=10,
             ),
             transform.Waveform(channel_index, name="tpca_waveforms"),
-            transform.PointSourceLocalization(
+            transform.Localization(
                 channel_index=channel_index, geom=geom, radius=50.0
             ),
         ]
