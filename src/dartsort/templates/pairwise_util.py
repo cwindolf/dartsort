@@ -58,9 +58,6 @@ def compressed_convolve_to_h5(
         template_shift_index, compressed_upsampled_temporal
     )
 
-    print(f"{template_shift_index=}")
-    print(f"{upsampled_shifted_template_index=}")
-
     chunk_res_iterator = iterate_compressed_pairwise_convolutions(
         template_data=template_data,
         low_rank_templates=low_rank_templates,
@@ -108,11 +105,13 @@ def compressed_convolve_to_h5(
             ]
 
             # upsampled shifted template indices for B
-            up_shifted_temp_ix_b = upsampled_shifted_template_index.upsampled_shifted_template_index[
-                chunk_res.template_indices_b,
-                chunk_res.shift_indices_b,
-                chunk_res.upsampling_indices_b,
-            ]
+            up_shifted_temp_ix_b = (
+                upsampled_shifted_template_index.upsampled_shifted_template_index[
+                    chunk_res.template_indices_b,
+                    chunk_res.shift_indices_b,
+                    chunk_res.upsampling_indices_b,
+                ]
+            )
 
             # store new set of indices
             new_pconv_indices = chunk_res.compression_index + n_pconvs
@@ -127,8 +126,13 @@ def compressed_convolve_to_h5(
 
         # write fixed size outputs
         h5.create_dataset("shifts", data=template_shift_index.all_pitch_shifts)
-        h5.create_dataset("shifted_template_index", data=template_shift_index.template_shift_index)
-        h5.create_dataset("upsampled_shifted_template_index", data=upsampled_shifted_template_index.upsampled_shifted_template_index)
+        h5.create_dataset(
+            "shifted_template_index", data=template_shift_index.template_shift_index
+        )
+        h5.create_dataset(
+            "upsampled_shifted_template_index",
+            data=upsampled_shifted_template_index.upsampled_shifted_template_index,
+        )
         h5.create_dataset("pconv_index", data=pconv_index)
 
     return output_hdf5_filename
@@ -180,10 +184,6 @@ def iterate_compressed_pairwise_convolutions(
         for start_b in range(start_a, units.size, units_batch_size):
             end_b = min(start_b + units_batch_size, units.size)
             jobs.append((units[start_a:end_a], units[start_b:end_b]))
-    if show_progress:
-        jobs = tqdm(
-            jobs, smoothing=0.01, desc="Pairwise convolution", unit="pair block"
-        )
 
     # worker kwargs
     kwargs = dict(
@@ -210,7 +210,16 @@ def iterate_compressed_pairwise_convolutions(
         initializer=_conv_worker_init,
         initargs=(rank_queue, device, kwargs),
     ) as pool:
-        yield from pool.map(_conv_job, jobs)
+        it = pool.map(_conv_job, jobs)
+        if show_progress:
+            it = tqdm(
+                it,
+                smoothing=0.01,
+                desc="Pairwise convolution",
+                unit="pair block",
+                total=len(jobs),
+            )
+        yield from it
 
 
 @dataclass
@@ -271,6 +280,10 @@ def compressed_convolve_pairs(
     shifts, superres templates, and upsamples. Some of these may be zero or may
     be duplicates, so the return value is a sparse representation. See below.
     """
+    # print(f"{units_a.shape=}")
+    # print(f"{units_b.shape=}")
+    # print(f"{(units_a.size * units_b.size)=}")
+
     # what pairs, shifts, etc are we convolving?
     shifted_temp_ix_a, temp_ix_a, shift_a, unit_a = handle_shift_indices(
         units_a, template_data.unit_ids, template_shift_index
@@ -278,6 +291,8 @@ def compressed_convolve_pairs(
     shifted_temp_ix_b, temp_ix_b, shift_b, unit_b = handle_shift_indices(
         units_b, template_data.unit_ids, template_shift_index
     )
+    # print(f"{shifted_temp_ix_a.shape=}")
+    # print(f"{shifted_temp_ix_b.shape=}")
 
     # get (shifted) spatial components * singular values
     spatial_singular_a = get_shifted_spatial_singular(
@@ -323,6 +338,15 @@ def compressed_convolve_pairs(
     if pairs_ret is None:
         return None
     ix_a, ix_b, compression_index, conv_ix = pairs_ret
+    # print(f"A {ix_a.shape=}")
+    # print(f"A {ix_b.shape=}")
+    # print(f"A {compression_index.shape=}")
+    # print(f"A {conv_ix.shape=}")
+
+    # print(f"-----------")
+    # print(f"after pairs {conv_ix.shape=} {compression_index.shape=}")
+    # print(f"{compression_index.min()=} {compression_index.max()=}")
+    # print(f"{ix_a.shape=} {ix_b.shape=}")
 
     # handle upsampling
     # each pair will be duplicated by the b unit's number of upsampled copies
@@ -343,6 +367,15 @@ def compressed_convolve_pairs(
         upsampled_shifted_template_index,
         compressed_upsampled_temporal,
     )
+    # print(f"B {ix_a.shape=}")
+    # print(f"B {ix_b.shape=}")
+    # print(f"B {compression_index.shape=}")
+    # print(f"B {conv_ix.shape=}")
+
+    # print(f"-----------")
+    # print(f"after up {conv_ix.shape=} {compression_index.shape=}")
+    # print(f"{compression_index.min()=} {compression_index.max()=}")
+    # print(f"{ix_a.shape=} {ix_b.shape=}")
 
     # # now, these arrays all have length n_pairs
     # shifted_temp_ix_a = shifted_temp_ix_a[ix_a]
@@ -354,6 +387,10 @@ def compressed_convolve_pairs(
 
     # run convolutions
     temporal_a = low_rank_templates.temporal_components[temp_ix_a]
+    # print(f"{spatial_singular_a[ix_a[conv_ix]].shape=}")
+    # print(f"{spatial_singular_b[ix_b[conv_ix]].shape=}")
+    # print(f"{temporal_a[ix_a[conv_ix]].shape=}")
+    # print(f"{conv_temporal_components_up_b.shape=}")
     pconv, kept = correlate_pairs_lowrank(
         torch.as_tensor(spatial_singular_a[ix_a[conv_ix]]).to(device),
         torch.as_tensor(spatial_singular_b[ix_b[conv_ix]]).to(device),
@@ -363,17 +400,33 @@ def compressed_convolve_pairs(
         conv_ignore_threshold=conv_ignore_threshold,
         batch_size=batch_size,
     )
-    kept_pairs = np.isin(conv_ix[compression_index], conv_ix[kept])
+    # print(f"-----------")
+    # print(f"after corr {pconv.shape=} {kept.shape=}")
     conv_ix = conv_ix[kept]
     if not conv_ix.size:
         return None
-    compression_index = compression_index[kept_pairs]
+    kept_pairs = np.flatnonzero(np.isin(compression_index, kept))
+    # print(f"-----------")
+    # print(f"kept {pconv.shape=} {conv_ix.shape=} {compression_index.shape=}")
+    # print(f"{compression_index.min()=} {compression_index.max()=}")
+    # print(f"{compression_index[kept_pairs].min()=} {compression_index[kept_pairs].max()=}")
+    # print(f"{ix_a.shape=} {ix_b.shape=}")
+    # print(f"{kept.shape=} {kept.dtype=} {kept.min()=} {kept.max()=}")
+    # print(f"{kept_pairs.shape=} {kept_pairs.dtype=} {kept_pairs.min()=} {kept_pairs.max()=}")
+    compression_index = np.searchsorted(kept, compression_index[kept_pairs])
+    conv_ix = np.searchsorted(kept_pairs, conv_ix)
     ix_a = ix_a[kept_pairs]
     ix_b = ix_b[kept_pairs]
     # compression_index = compression_index[kept]
     pconv = pconv.cpu()
+    # print(f"-----------")
+    # print(f"after searchsorted {pconv.shape=} {conv_ix.shape=} {compression_index.shape=}")
+    # print(f"{compression_index.min()=} {compression_index.max()=}")
+    # print(f"{ix_a.shape=} {ix_b.shape=}")
 
     # coarse approx
+    # print(f"-----------")
+    # print(f"before approx {pconv.shape=} {conv_ix.shape=} {compression_index.shape=}")
     pconv, old_ix_to_new_ix = coarse_approximate(
         pconv,
         unit_a[ix_a[conv_ix]],
@@ -383,9 +436,14 @@ def compressed_convolve_pairs(
         shift_b[ix_b[conv_ix]],
         coarse_approx_error_threshold=coarse_approx_error_threshold,
     )
+    # print(f"-----------")
+    # print(f"after approx")
+    # print(f"{pconv.shape=} {conv_ix.shape=} {old_ix_to_new_ix.shape=} {compression_index.shape=}")
+    # print(f"{compression_index.min()=} {compression_index.max()=}")
+    # print(f"{old_ix_to_new_ix.min()=} {old_ix_to_new_ix.max()=}")
+    compression_index = old_ix_to_new_ix[compression_index]
     # above function invalidates the whole idea of conv_ix
     del conv_ix
-    compression_index = old_ix_to_new_ix[compression_index]
 
     # recover metadata
     temp_ix_a = temp_ix_a[ix_a]
@@ -575,7 +633,7 @@ def shift_deduplicated_pairs(
         co-visible. So, these are subsets of shifted_temp_ix_a,b
     compression_index
         Size == pair_ix_a,b size
-        Subsets of conv_ix_a,b, so that the xcorr of templates
+        Arrays with shape matching pair_ix_a,b, so that the xcorr of templates
         shifted_temp_ix_a[pair_ix_a[i]], shifted_temp_ix_b[pair_ix_b[i]]
         is the same as that of
         shifted_temp_ix_a[pair_ix_a[conv_ix[compression_index[i]]],
@@ -589,14 +647,22 @@ def shift_deduplicated_pairs(
     chan_amp_b = torch.sqrt(torch.square(spatialsing_b).sum(1))
     pair = chan_amp_a @ chan_amp_b.T
     pair = pair > conv_ignore_threshold
+    pair = pair.cpu()
+    # print(f"___ after overlaps {pair.sum()=}")
 
     # co-occurrence
-    pair *= template_shift_index.cooccurrence
+    cooccurrence = template_shift_index.cooccurrence[
+        shifted_temp_ix_a[:, None],
+        shifted_temp_ix_b[None, :],
+    ]
+    pair *= torch.as_tensor(cooccurrence, device=pair.device)
+    # print(f"___ after cooccur {pair.sum()=}")
 
     pair_ix_a, pair_ix_b = torch.nonzero(pair, as_tuple=True)
     nco = pair_ix_a.numel()
     if not nco:
         return None
+    # print(f"___ {nco=}")
 
     # if no shifting, deduplication is the identity
     do_shifting = template_shift_index.all_pitch_shifts.size > 1
@@ -633,8 +699,16 @@ def shift_deduplicated_pairs(
         fill_value=0,
     )
     # 2: assign IDs to each such vector
-    _, active_chan_ids_a = np.unique(active_chans_a, axis=0, return_inverse=True)
-    _, active_chan_ids_b = np.unique(active_chans_b, axis=0, return_inverse=True)
+    chanset_a, active_chan_ids_a = np.unique(
+        active_chans_a, axis=0, return_inverse=True
+    )
+    chanset_b, active_chan_ids_b = np.unique(
+        active_chans_b, axis=0, return_inverse=True
+    )
+    # print(f"___ {chanset_a.sum(1)=}")
+    # print(f"___ {chanset_b.sum(1)=}")
+    # print(f"___ {active_chan_ids_a.shape=} {np.unique(active_chan_ids_a).shape=}")
+    # print(f"___ {active_chan_ids_b.shape=} {np.unique(active_chan_ids_b).shape=}")
 
     # 3
     temp_ix_a = temp_ix_a[pair_ix_a]
@@ -643,6 +717,13 @@ def shift_deduplicated_pairs(
     shift_a = shift_a[pair_ix_a]
     shift_b = shift_b[pair_ix_b]
     shift_diff = shift_a - shift_b
+    # print(f"{temp_ix_a=}")
+    # print(f"{shift_a=}")
+    # print(f"{active_chan_ids_a[pair_ix_a]=}")
+    # print(f"{temp_ix_b=}")
+    # print(f"{shift_b=}")
+    # print(f"{active_chan_ids_b[pair_ix_b]=}")
+    # print(f"{shift_diff=}")
 
     # figure out combinations
     conv_determiners = np.c_[
@@ -652,6 +733,7 @@ def shift_deduplicated_pairs(
         active_chan_ids_b[pair_ix_b],
         shift_diff,
     ]
+    # print(f"{conv_determiners=}")
     # conv_ix: indices of unique determiners
     # compression_index: which representative does each pair belong to
     _, conv_ix, compression_index = np.unique(
@@ -809,7 +891,7 @@ def compressed_upsampled_pairs(
         ]
     )
     conv_temporal_components_up_b = (
-        compressed_upsampled_temporal.compressed_index_to_upsampling_index[
+        compressed_upsampled_temporal.compressed_upsampled_templates[
             conv_compressed_upsampled_ix
         ]
     )
