@@ -162,3 +162,5 @@ class MatchingConfig:
     amplitude_scaling_variance: float = 0.0
     amplitude_scaling_boundary: float = 0.5
     max_iter: int = 1000
+    conv_ignore_threshold: float = 5.0
+    coarse_approx_error_threshold: float = 5.0
