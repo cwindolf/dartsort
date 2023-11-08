@@ -155,7 +155,8 @@ def templates_at_time(
     registered_geom=None,
     motion_est=None,
     return_pitch_shifts=False,
-    # TODO: geom kdtree
+    geom_kdtree=None,
+    match_distance=None,
 ):
     if registered_geom is None:
         return registered_templates
@@ -180,6 +181,8 @@ def templates_at_time(
         n_pitches_shift=pitch_shifts,
         registered_geom=geom,
         fill_value=np.nan,
+        target_kdtree=geom_kdtree,
+        match_distance=match_distance,
     )
     if return_pitch_shifts:
         return pitch_shifts, unregistered_templates
@@ -282,7 +285,7 @@ def compressed_upsampled_templates(
     Returns
     -------
     A CompressedUpsampledTemplates object with fields:
-        compressed_upsampled_templates : array (n_compressed_upsampled_templates, spike_length_samples)
+        compressed_upsampled_templates : array (n_compressed_upsampled_templates, spike_length_samples, n_channels)
         compressed_upsampling_map : array (n_templates, max_upsample)
             compressed_upsampled_templates[compressed_upsampling_map[unit, j]] is an approximation
             of the jth upsampled template for this unit. for low-amplitude units,

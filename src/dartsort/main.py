@@ -86,10 +86,12 @@ def match(
     residual_filename=None,
     show_progress=True,
     device=None,
-    template_npz_filename="matching0_templates.npz",
     hdf5_filename="matching0.h5",
     model_subdir="matching0_models",
+    template_npz_filename="template_data.npz",
 ):
+    model_dir = Path(output_directory) / model_subdir
+
     # compute templates
     template_data = TemplateData.from_config(
         recording,
@@ -97,7 +99,7 @@ def match(
         template_config,
         motion_est=motion_est,
         n_jobs=n_jobs_templates,
-        save_folder=output_directory,
+        save_folder=model_dir,
         overwrite=overwrite,
         device=device,
         save_npz_name=template_npz_filename,
