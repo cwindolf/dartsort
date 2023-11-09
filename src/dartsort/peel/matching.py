@@ -218,6 +218,10 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
         temporal_components = low_rank_templates.temporal_components.astype(dtype)
         singular_values = low_rank_templates.singular_values.astype(dtype)
         spatial_components = low_rank_templates.spatial_components.astype(dtype)
+        print(f"{template_data.templates.dtype=}")
+        print(f"{temporal_components.dtype=}")
+        print(f"{singular_values.dtype=}")
+        print(f"{spatial_components.dtype=}")
         self.register_buffer("temporal_components", torch.tensor(temporal_components))
         self.register_buffer("singular_values", torch.tensor(singular_values))
         self.register_buffer("spatial_components", torch.tensor(spatial_components))
@@ -236,16 +240,20 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
         chunk_centers_s = self.recording._recording_segments[0].sample_index_to_time(
             chunk_centers_samples
         )
+        print(f"build_template_data {device=}")
+        print(f"{chunk_centers_s.shape=} {chunk_centers_s[:10]=}")
         self.pairwise_conv_db = CompressedPairwiseConv.from_template_data(
             save_folder / "pconv.h5",
             template_data=template_data,
             low_rank_templates=low_rank_templates,
             compressed_upsampled_temporal=compressed_upsampled_temporal,
             chunk_time_centers_s=chunk_centers_s,
-            motion_est=motion_est,
+            motion_est=self.motion_est,
             geom=self.geom,
             conv_ignore_threshold=self.conv_ignore_threshold,
             coarse_approx_error_threshold=self.coarse_approx_error_threshold,
+            device=device,
+            n_jobs=n_jobs,
         )
 
         self.fixed_output_data += [
@@ -258,7 +266,7 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
             ),
             (
                 "compressed_upsampled_temporal",
-                compressed_upsampled_temporal.compressed_upsampled_temporal,
+                compressed_upsampled_temporal.compressed_upsampled_templates,
             ),
         ]
 
@@ -274,13 +282,14 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
             ptps=ptps,
             max_upsample=temporal_upsampling_factor,
         )
+        print(f"{compressed_upsampled_temporal.compressed_upsampled_templates.dtype=}")
         self.register_buffer(
             "compressed_upsampling_map",
-            compressed_upsampled_temporal.compressed_upsampling_map,
+            torch.tensor(compressed_upsampled_temporal.compressed_upsampling_map),
         )
         self.register_buffer(
             "compressed_upsampled_temporal",
-            compressed_upsampled_temporal.compressed_upsampled_temporal,
+            torch.tensor(compressed_upsampled_temporal.compressed_upsampled_templates),
         )
         if temporal_upsampling_factor == 1:
             return compressed_upsampled_temporal

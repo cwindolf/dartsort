@@ -79,13 +79,14 @@ class CompressedPairwiseConv:
         geom: Optional[np.ndarray] = None,
         conv_ignore_threshold=0.0,
         coarse_approx_error_threshold=0.0,
-        conv_batch_size=128,
+        conv_batch_size=1024,
         units_batch_size=8,
         overwrite=False,
         device=None,
         n_jobs=0,
         show_progress=True,
     ):
+        print(f"pairwise from_template_data {device=}")
         compressed_convolve_to_h5(
             hdf5_filename,
             template_data=template_data,
