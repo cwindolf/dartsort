@@ -516,11 +516,10 @@ def _peeler_process_init(peeler, device, rank_queue, save_residual):
 
 
 def _peeler_process_job(chunk_start_samples):
-    peeler = _peeler_process_context.peeler
     # by returning here, we are implicitly relying on pickle
     # we can replace this with cloudpickle or manual np.save if helpful
     with torch.no_grad():
-        return peeler.process_chunk(
+        return _peeler_process_context.peeler.process_chunk(
             chunk_start_samples,
             return_residual=_peeler_process_context.save_residual,
         )
