@@ -187,6 +187,8 @@ def registered_template(
     weights = valid[:, None, :] * counts[:, None, None]
     weights = weights / np.maximum(weights.sum(0), 1)
     template = (np.nan_to_num(static_templates) * weights).sum(0)
+    dtype = str(waveforms.dtype).split(".")[1] if is_tensor else waveforms.dtype
+    template = template.astype(dtype)
     template[:, ~valid.any(0)] = np.nan
     if not np.isnan(pad_value):
         template = np.nan_to_num(template, copy=False, nan=pad_value)

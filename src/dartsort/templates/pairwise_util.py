@@ -28,7 +28,7 @@ def compressed_convolve_to_h5(
     geom: Optional[np.ndarray] = None,
     conv_ignore_threshold=0.0,
     coarse_approx_error_threshold=0.0,
-    conv_batch_size=128,
+    conv_batch_size=1024,
     units_batch_size=8,
     overwrite=False,
     device=None,
@@ -57,6 +57,7 @@ def compressed_convolve_to_h5(
     upsampled_shifted_template_index = get_upsampled_shifted_template_index(
         template_shift_index, compressed_upsampled_temporal
     )
+    print(f"compressed_convolve_to_h5 {conv_batch_size=} {units_batch_size=} {device=}")
 
     chunk_res_iterator = iterate_compressed_pairwise_convolutions(
         template_data=template_data,
@@ -148,7 +149,7 @@ def iterate_compressed_pairwise_convolutions(
     conv_ignore_threshold=0.0,
     coarse_approx_error_threshold=0.0,
     max_shift="full",
-    conv_batch_size=128,
+    conv_batch_size=1024,
     units_batch_size=8,
     device=None,
     n_jobs=0,
@@ -165,6 +166,7 @@ def iterate_compressed_pairwise_convolutions(
     process the results differently.
     """
     # construct drift-related helper data if needed
+    print(f"iterate_compressed_pairwise_convolutions {conv_batch_size=} {units_batch_size=} {device=}")
     n_shifts = template_shift_index.all_pitch_shifts.size
     do_shifting = n_shifts > 1
     geom_kdtree = reg_geom_kdtree = match_distance = None
@@ -267,7 +269,7 @@ def compressed_convolve_pairs(
     conv_ignore_threshold=0.0,
     coarse_approx_error_threshold=0.0,
     max_shift="full",
-    batch_size=128,
+    batch_size=1024,
     device=None,
 ) -> Optional[CompressedConvResult]:
     """Compute compressed pairwise convolutions between template pairs
@@ -280,9 +282,11 @@ def compressed_convolve_pairs(
     shifts, superres templates, and upsamples. Some of these may be zero or may
     be duplicates, so the return value is a sparse representation. See below.
     """
+    # print(f"compressed_convolve_pairs {device=}")
     # print(f"{units_a.shape=}")
     # print(f"{units_b.shape=}")
     # print(f"{(units_a.size * units_b.size)=}")
+    # print(f"compressed_convolve_pairs {batch_size=} {units_a.size=} {device=}")
 
     # what pairs, shifts, etc are we convolving?
     shifted_temp_ix_a, temp_ix_a, shift_a, unit_a = handle_shift_indices(
@@ -317,6 +321,9 @@ def compressed_convolve_pairs(
         match_distance=match_distance,
         device=device,
     )
+    # print(f"{low_rank_templates.spatial_components.dtype=} {low_rank_templates.singular_values.dtype=}")
+    # print(f"{compressed_upsampled_temporal.compressed_upsampled_templates.dtype=}")
+    # print(f"{spatial_singular_a.dtype=} {spatial_singular_b.dtype=}")
 
     # figure out pairs of shifted templates to convolve in a deduplicated way
     pairs_ret = shift_deduplicated_pairs(
@@ -392,27 +399,27 @@ def compressed_convolve_pairs(
     # print(f"{temporal_a[ix_a[conv_ix]].shape=}")
     # print(f"{conv_temporal_components_up_b.shape=}")
     pconv, kept = correlate_pairs_lowrank(
-        torch.as_tensor(spatial_singular_a[ix_a[conv_ix]]).to(device),
-        torch.as_tensor(spatial_singular_b[ix_b[conv_ix]]).to(device),
-        torch.as_tensor(temporal_a[ix_a[conv_ix]]).to(device),
-        torch.as_tensor(conv_temporal_components_up_b).to(device),
+        torch.as_tensor(spatial_singular_a[ix_a[conv_ix]], device=device),
+        torch.as_tensor(spatial_singular_b[ix_b[conv_ix]], device=device),
+        torch.as_tensor(temporal_a[ix_a[conv_ix]], device=device),
+        torch.as_tensor(conv_temporal_components_up_b, device=device),
         max_shift=max_shift,
         conv_ignore_threshold=conv_ignore_threshold,
         batch_size=batch_size,
     )
-    print(f"-----------")
-    print(f"after corr {pconv.shape=} {conv_ix[kept].shape=}")
+    # print(f"-----------")
+    # print(f"after corr {pconv.shape=} {conv_ix[kept].shape=}")
     conv_ix = conv_ix[kept]
     if not conv_ix.size:
         return None
     kept_pairs = np.flatnonzero(np.isin(compression_index, kept))
-    print(f"-----------")
-    print(f"kept {pconv.shape=} {conv_ix.shape=} {compression_index.shape=}")
-    print(f"{compression_index.min()=} {compression_index.max()=}")
-    print(f"{compression_index[kept_pairs].min()=} {compression_index[kept_pairs].max()=}")
-    print(f"{ix_a.shape=} {ix_b.shape=}")
-    print(f"{kept.shape=} {kept.dtype=} {kept.min()=} {kept.max()=}")
-    print(f"{kept_pairs.shape=} {kept_pairs.dtype=} {kept_pairs.min()=} {kept_pairs.max()=}")
+    # print(f"-----------")
+    # print(f"kept {pconv.shape=} {conv_ix.shape=} {compression_index.shape=}")
+    # print(f"{compression_index.min()=} {compression_index.max()=}")
+    # print(f"{compression_index[kept_pairs].min()=} {compression_index[kept_pairs].max()=}")
+    # print(f"{ix_a.shape=} {ix_b.shape=}")
+    # print(f"{kept.shape=} {kept.dtype=} {kept.min()=} {kept.max()=}")
+    # print(f"{kept_pairs.shape=} {kept_pairs.dtype=} {kept_pairs.min()=} {kept_pairs.max()=}")
     compression_index = np.searchsorted(kept, compression_index[kept_pairs])
     conv_ix = np.searchsorted(kept_pairs, conv_ix)
     ix_a = ix_a[kept_pairs]
@@ -472,7 +479,7 @@ def correlate_pairs_lowrank(
     temporal_b,
     max_shift="full",
     conv_ignore_threshold=0.0,
-    batch_size=128,
+    batch_size=1024,
 ):
     """Convolve pairs of low rank templates
 
@@ -504,6 +511,8 @@ def correlate_pairs_lowrank(
     assert n_pairs == n_pairs_
     assert t == t_
     assert rank == rank_
+    # print(f"{spatial_a.device=} {spatial_b.device=} {temporal_a.device=} {temporal_b.device=}")
+    # print(f"compressed_convolve_pairs {batch_size=} {n_pairs=} {spatial_a.device=}")
 
     if max_shift == "full":
         max_shift = t - 1
