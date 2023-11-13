@@ -13,6 +13,7 @@ def superres_sorting(
     strategy="drift_pitch_loc_bin",
     superres_bin_size_um=10.0,
     min_spikes_per_bin=5,
+    probe_margin_um=200.0,
 ):
     """Construct the spatially superresolved spike train
 
@@ -48,11 +49,20 @@ def superres_sorting(
     superres_sorting : DARTsortSorting
     """
     pitch = drift_util.get_pitch(geom)
-    labels = sorting.labels
-    
+    full_labels = sorting.labels.copy()
+
+    # remove spikes far away from the probe
+    if probe_margin_um is not None:
+        valid = spike_depths_um == np.clip(
+            spike_depths_um,
+            geom[:, 1].min() - probe_margin_um,
+            geom[:, 1].max() + probe_margin_um,
+        )
+        full_labels[~valid] = -1
+
     # handle triaging
-    kept = np.flatnonzero(labels >= 0)
-    labels = labels[kept]
+    kept = np.flatnonzero(full_labels >= 0)
+    labels = full_labels[kept]
     spike_times_s = spike_times_s[kept]
     spike_depths_um = spike_depths_um[kept]
 
@@ -80,17 +90,15 @@ def superres_sorting(
         )
     else:
         raise ValueError(f"Unknown superres {strategy=}")
-    
+
     # handle too-small units
     superres_labels, superres_to_original = remove_small_superres_units(
         superres_labels, superres_to_original, min_spikes_per_bin=min_spikes_per_bin
     )
-        
-    # handle triaging again
-    full_superres_labels = sorting.labels.copy()
-    full_superres_labels[kept] = superres_labels
 
-    superres_sorting = replace(sorting, labels=full_superres_labels)
+    # back to un-triaged label space
+    full_labels[kept] = superres_labels
+    superres_sorting = replace(sorting, labels=full_labels)
     return superres_to_original, superres_sorting
 
 
@@ -108,6 +116,7 @@ def motion_estimate_strategy(
     displacements = motion_est.disp_at_s(spike_times_s, spike_depths_um)
     mod_positions = displacements % pitch
     bin_ids = mod_positions // superres_bin_size_um
+    bin_ids = bin_ids.astype(int)
     orig_label_and_bin, superres_labels = np.unique(
         np.c_[original_labels, bin_ids], axis=0, return_inverse=True
     )
@@ -128,6 +137,12 @@ def drift_pitch_loc_bin_strategy(
     )
     coarse_reg_depths = spike_depths_um + n_pitches_shift * pitch
     bin_ids = coarse_reg_depths // superres_bin_size_um
+    print(
+        f"{np.isnan(n_pitches_shift).any()=} {np.isfinite(bin_ids).all()=} {superres_bin_size_um=}"
+    )
+    print(f"{bin_ids.min()=} {bin_ids.max()=} {bin_ids.shape=}")
+    print(f"{original_labels.min()=} {original_labels.max()=} {original_labels.shape=}")
+    bin_ids = bin_ids.astype(int)
     orig_label_and_bin, superres_labels = np.unique(
         np.c_[original_labels, bin_ids], axis=0, return_inverse=True
     )
@@ -135,8 +150,9 @@ def drift_pitch_loc_bin_strategy(
     return superres_labels, superres_to_original
 
 
-
-def remove_small_superres_units(superres_labels, superres_to_original, min_spikes_per_bin):
+def remove_small_superres_units(
+    superres_labels, superres_to_original, min_spikes_per_bin
+):
     if not min_spikes_per_bin:
         return superres_labels, superres_to_original
 

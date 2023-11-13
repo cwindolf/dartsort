@@ -3,7 +3,7 @@ from pathlib import Path
 from dartsort.config import (FeaturizationConfig, MatchingConfig,
                              SubtractionConfig, TemplateConfig)
 from dartsort.localize.localize_util import localize_hdf5
-from dartsort.peel import (ResidualUpdateTemplateMatchingPeeler,
+from dartsort.peel import (ObjectiveUpdateTemplateMatchingPeeler,
                            SubtractionPeeler)
 from dartsort.templates import TemplateData
 from dartsort.util.data_util import DARTsortSorting, check_recording
@@ -88,7 +88,10 @@ def match(
     device=None,
     hdf5_filename="matching0.h5",
     model_subdir="matching0_models",
+    template_npz_filename="template_data.npz",
 ):
+    model_dir = Path(output_directory) / model_subdir
+
     # compute templates
     template_data = TemplateData.from_config(
         recording,
@@ -96,11 +99,14 @@ def match(
         template_config,
         motion_est=motion_est,
         n_jobs=n_jobs_templates,
-        save_folder=output_directory,
+        save_folder=model_dir,
         overwrite=overwrite,
+        device=device,
+        save_npz_name=template_npz_filename,
     )
+
     # instantiate peeler
-    matching_peeler = ResidualUpdateTemplateMatchingPeeler.from_config(
+    matching_peeler = ObjectiveUpdateTemplateMatchingPeeler.from_config(
         recording,
         matching_config,
         featurization_config,
@@ -157,6 +163,7 @@ def _run_peeler(
         overwrite=overwrite,
         residual_filename=residual_filename,
         show_progress=show_progress,
+        device=device,
     )
 
     # do localization
@@ -168,6 +175,7 @@ def _run_peeler(
             amplitude_vectors_dataset_name=f"{wf_name}_amplitude_vectors",
             show_progress=show_progress,
             device=device,
+            localization_model=featurization_config.localization_model
         )
 
     return (

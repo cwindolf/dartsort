@@ -668,8 +668,8 @@ def subtraction_binary(
     n_channels = geom.shape[0]
 
     recording = sc.read_binary(
-        standardized_bin,
-        sampling_rate,
+        file_paths=standardized_bin,
+        sampling_frequency=sampling_rate,
         num_channels=n_channels,
         dtype=binary_dtype,
         time_axis=time_axis,
@@ -1077,7 +1077,7 @@ def subtraction_batch(
                     batch_data_folder / f"{prefix}{f.name}.npy",
                     feat,
                 )
-
+        
         denoised_wfs = full_denoising(
             cleaned_wfs,
             spike_index[:, 1],
