@@ -163,6 +163,7 @@ class TemplateData:
 
         # main!
         results = get_templates(recording, sorting, **kwargs)
+        print(f"{[(k,v.dtype) for k,v in results.items() if (isinstance(v, np.ndarray))]=}")
 
         # handle registered templates
         if template_config.registered_templates:

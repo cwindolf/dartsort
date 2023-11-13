@@ -672,7 +672,7 @@ def subtraction_binary(
         sampling_frequency=sampling_rate,
         num_channels=n_channels,
         dtype=binary_dtype,
-        time_axis=0,
+        time_axis=time_axis,
         is_filtered=True,
     )
 
