@@ -3,7 +3,19 @@ import torch.nn.functional as F
 from torch.fft import irfft, rfft
 
 
+def fast_nanmedian(x, axis=-1):
+    is_tensor = torch.is_tensor(x)
+    x = torch.nanmedian(torch.as_tensor(x), dim=axis).values
+    if is_tensor:
+        return x
+    else:
+        return x.numpy()
+
+
 def ptp(waveforms, dim=1):
+    is_tensor = torch.is_tensor(waveforms)
+    if not is_tensor:
+        return waveforms.ptp(axis=dim)
     return waveforms.max(dim=dim).values - waveforms.min(dim=dim).values
 
 
@@ -24,8 +36,6 @@ def ravel_multi_index(multi_index, dims):
         Indices into the flattened tensor of shape `dims`
     """
     assert len(multi_index) == len(dims)
-    if any(torch.any((ix < 0) | (ix >= d)) for ix, d in zip(multi_index, dims)):
-        raise ValueError("Out of bounds indices in ravel_multi_index")
 
     # collect multi indices
     multi_index = torch.broadcast_tensors(*multi_index)
@@ -53,9 +63,10 @@ def add_at_(dest, ix, src, sign=1):
         src = src.neg()
     elif sign != 1:
         src = sign * src
+    flat_ix = ravel_multi_index(ix, dest.shape)
     dest.view(-1).scatter_add_(
         0,
-        ravel_multi_index(ix, dest.shape),
+        flat_ix,
         src.reshape(-1),
     )
 
@@ -218,3 +229,49 @@ def real_resample(x, num, dim=0):
     y *= (float(num) / float(Nx))
 
     return y
+
+
+def depthwise_oaconv1d(input, weight, f2=None, padding=0):
+    """Depthwise correlation (F.conv1d with groups=in_chans) with overlap-add
+    """
+    # conv on last axis
+    # assert input.ndim == weight.ndim == 2
+    n1 = input.shape[0]
+    n2 = weight.shape[0]
+    # assert n1 == n2
+    s1 = input.shape[1]
+    s2 = weight.shape[1]
+    # assert s1 >= s2
+
+    shape_final = s1 + s2 - 1
+    block_size, overlap, in1_step, in2_step = _calc_oa_lens(s1, s2)
+    nstep1, pad1, nstep2, pad2 = steps_and_pad(s1, in1_step, s2, in2_step, block_size, overlap)
+
+    if pad1 > 0:
+        input = F.pad(input, (0, pad1))
+    input = input.reshape(n1, nstep1, in1_step)
+
+    # freq domain correlation
+    f1 = torch.fft.rfft(input, n=block_size)
+    if f2 is None:
+        f2 = torch.fft.rfft(weight, n=block_size)
+    # .conj() here to do cross-correlation instead of convolution (time reversal property of rfft)
+    f1.mul_(f2.conj()[:, None, :])
+    res = torch.fft.irfft(f1, n=block_size)
+
+    # overlap add part with torch
+    fold_input = res.reshape(n1, nstep1, block_size).permute(0, 2, 1)
+    fold_out_len = nstep1 * in1_step + overlap
+    fold_res = F.fold(
+        fold_input,
+        output_size=(1, fold_out_len),
+        kernel_size=(1, block_size),
+        stride=(1, in1_step),
+    )
+    assert fold_res.shape == (n1, 1, 1, fold_out_len)
+
+    oa = fold_res.reshape(n1, fold_out_len)
+    # this is the full convolution
+    oa = oa[:, :shape_final - pad1]
+
+    return oa
