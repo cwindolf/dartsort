@@ -207,6 +207,14 @@ class BasePeeler(torch.nn.Module):
 
         raise NotImplementedError
 
+    def peeling_needs_fit(self):
+        return False
+
+    def precompute_peeling_data(self, save_folder, n_jobs=0, device=None):
+        # subclasses should override if they need to cache data for peeling
+        # runs before fit_peeler_models()
+        pass
+
     def fit_peeler_models(self, save_folder):
         # subclasses should override if they need to fit models for peeling
         assert not self.peeling_needs_fit()
@@ -270,7 +278,7 @@ class BasePeeler(torch.nn.Module):
         assert not any(k in features for k in peel_result)
         chunk_result = {**peel_result, **features}
         chunk_result = {
-            k: v.cpu().numpy() if torch.is_tensor(v) else v
+            k: v.numpy(force=True) if torch.is_tensor(v) else v
             for k, v in chunk_result.items()
         }
 
@@ -310,15 +318,15 @@ class BasePeeler(torch.nn.Module):
 
         return n_new_spikes
 
-    def peeling_needs_fit(self):
-        return False
-
     def needs_fit(self):
         return self.peeling_needs_fit() or self.featurization_pipeline.needs_fit()
 
     def fit_models(self, save_folder, n_jobs=0, device=None):
         with torch.no_grad():
             if self.peeling_needs_fit():
+                self.precompute_peeling_data(
+                    save_folder=save_folder, n_jobs=n_jobs, device=device
+                )
                 self.fit_peeler_models(
                     save_folder=save_folder, n_jobs=n_jobs, device=device
                 )

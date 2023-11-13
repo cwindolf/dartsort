@@ -5,7 +5,7 @@ from dartsort.util.spiketorch import ptp
 from .transform_base import BaseWaveformFeaturizer
 
 
-class PointSourceLocalization(BaseWaveformFeaturizer):
+class Localization(BaseWaveformFeaturizer):
     """Order of output columns: x, y, z_abs, alpha"""
 
     default_name = "point_source_localizations"
@@ -22,6 +22,7 @@ class PointSourceLocalization(BaseWaveformFeaturizer):
         amplitude_kind="peak",
         name=None,
         name_prefix="",
+        localization_model="pointsource",
     ):
         assert amplitude_kind in ("peak", "ptp")
         super().__init__(
@@ -34,6 +35,7 @@ class PointSourceLocalization(BaseWaveformFeaturizer):
         self.radius = radius
         self.n_channels_subset = n_channels_subset
         self.logbarrier = logbarrier
+        self.localization_model = localization_model
 
     def transform(self, waveforms, max_channels=None):
         # get amplitude vectors
@@ -52,6 +54,7 @@ class PointSourceLocalization(BaseWaveformFeaturizer):
                 n_channels_subset=self.n_channels_subset,
                 logbarrier=self.logbarrier,
                 dtype=self.dtype,
+                model=self.localization_model,
             )
 
         localizations = torch.column_stack(
@@ -63,3 +66,5 @@ class PointSourceLocalization(BaseWaveformFeaturizer):
             ]
         )
         return localizations
+
+PointSourceLocalization = Localization

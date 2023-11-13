@@ -1,6 +1,6 @@
 from .amplitudes import AmplitudeVector, MaxAmplitude
 from .enforce_decrease import EnforceDecrease
-from .localize import PointSourceLocalization
+from .localize import Localization, PointSourceLocalization
 from .single_channel_denoiser import SingleChannelWaveformDenoiser
 from .temporal_pca import TemporalPCADenoiser, TemporalPCAFeaturizer
 from .transform_base import Waveform
@@ -13,6 +13,7 @@ all_transformers = [
     SingleChannelWaveformDenoiser,
     TemporalPCADenoiser,
     TemporalPCAFeaturizer,
+    Localization,
     PointSourceLocalization,
 ]
 
