@@ -30,19 +30,20 @@ class CompressedPairwiseConv:
 
     # shape: (n_shifts,)
     # shift_ix -> shift (pitch shift, an integer)
-    shifts: np.ndarray
+    shifts_a: np.ndarray
+    shifts_b: np.ndarray
 
-    # shape: (n_templates, n_shifts)
+    # shape: (n_templates_a, n_shifts_a)
     # (template_ix, shift_ix) -> shifted_template_ix
     # shifted_template_ix can be either invalid (this template does not occur
-    # at this shift), or it can range from 0, ..., n_shifted_templates-1
-    shifted_template_index: np.ndarray
+    # at this shift), or it can range from 0, ..., n_shifted_templates_a-1
+    shifted_template_index_a: np.ndarray
 
-    # shape: (n_templates, n_shifts, upsampling_factor)
+    # shape: (n_templates_b, n_shifts_b, upsampling_factor)
     # (template_ix, shift_ix, upsampling_ix) -> upsampled_shifted_template_ix
-    upsampled_shifted_template_index: np.ndarray
+    upsampled_shifted_template_index_b: np.ndarray
 
-    # shape: (n_shifted_templates, n_upsampled_shifted_templates)
+    # shape: (n_shifted_templates_a, n_upsampled_shifted_templates_b)
     # (shifted_template_ix, upsampled_shifted_template_ix) -> pconv_ix
     pconv_index: np.ndarray
 
@@ -52,12 +53,9 @@ class CompressedPairwiseConv:
     pconv: np.ndarray
 
     def __post_init__(self):
-        assert self.shifts.ndim == 1
-        assert self.shifts.size == self.shifted_template_index.shape[1]
-        assert (
-            self.shifted_template_index.shape
-            == self.upsampled_shifted_template_index.shape[:2]
-        )
+        assert self.shifts_a.ndim == self.shifts_b.ndim == 1
+        assert self.shifts_a.size == self.shifted_template_index_a.shape[1]
+        assert self.shifts_b.size == self.upsampled_shifted_template_index_b.shape[1]
         self._is_torch = False
 
     @classmethod
@@ -106,26 +104,26 @@ class CompressedPairwiseConv:
         )
         return cls.from_h5(hdf5_filename)
 
-    def at_shifts(self, shifts=None):
+    def at_shifts(self, shifts_a=None):
         """Subset this database to one set of shifts.
 
         The database becomes shiftless (not in the pejorative sense).
         """
-        if shifts is None:
-            assert self.shifts.shape == (1,)
+        if shifts_a is None:
+            assert self.shifts_a.shape == (1,)
             return self
 
-        assert shifts.shape == len(self.shifted_template_index)
+        assert shifts_a.shape == len(self.shifted_template_index_a)
         n_shifted_temps, n_up_shifted_temps = self.pconv_index.shape
 
         # active shifted and upsampled indices
-        shift_ix = np.searchsorted(self.shifts, shifts)
-        sub_shifted_temp_index = self.shifted_template_index[
-            np.arange(len(self.shifted_template_index)),
+        shift_ix = np.searchsorted(self.shifts_a, shifts_a)
+        sub_shifted_temp_index = self.shifted_template_index_a[
+            np.arange(len(self.shifted_template_index_a)),
             shift_ix,
         ]
-        sub_up_shifted_temp_index = self.upsampled_shifted_template_index[
-            np.arange(len(self.shifted_template_index)),
+        sub_up_shifted_temp_index = self.upsampled_shifted_template_index_b[
+            np.arange(len(self.shifted_template_index_a)),
             shift_ix,
         ]
 
@@ -185,35 +183,36 @@ class CompressedPairwiseConv:
         if template_indices_a is None:
             if self._is_torch:
                 template_indices_a = torch.arange(
-                    len(self.shifted_template_index), device=self.device
+                    len(self.shifted_template_index_a), device=self.device
                 )
             else:
-                template_indices_a = np.arange(len(self.shifted_template_index))
+                template_indices_a = np.arange(len(self.shifted_template_index_a))
         if not self._is_torch:
             template_indices_a = np.atleast_1d(template_indices_a)
             template_indices_b = np.atleast_1d(template_indices_b)
 
         # handle no shifting
         no_shifting = shifts_a is None or shifts_b is None
-        shifted_template_index = self.shifted_template_index
-        upsampled_shifted_template_index = self.upsampled_shifted_template_index
+        shifted_template_index = self.shifted_template_index_a
+        upsampled_shifted_template_index = self.upsampled_shifted_template_index_b
         if no_shifting:
             assert shifts_a is None and shifts_b is None
-            assert self.shifts.shape == (1,)
+            assert self.shifts_a.shape == (1,)
+            assert self.shifts_b.shape == (1,)
             a_ix = (template_indices_a,)
             b_ix = (template_indices_b,)
             shifted_template_index = shifted_template_index[:, 0]
             upsampled_shifted_template_index = upsampled_shifted_template_index[:, 0]
         else:
-            shift_indices_a = np.searchsorted(self.shifts, shifts_a)
-            shift_indices_b = np.searchsorted(self.shifts, shifts_b)
+            shift_indices_a = np.searchsorted(self.shifts_a, shifts_a)
+            shift_indices_b = np.searchsorted(self.shifts_b, shifts_b)
             a_ix = (template_indices_a, shift_indices_a)
             b_ix = (template_indices_b, shift_indices_b)
 
         # handle no upsampling
         no_upsampling = upsampling_indices_b is None
         if no_upsampling:
-            assert self.upsampled_shifted_template_index.shape[2] == 1
+            assert self.upsampled_shifted_template_index_b.shape[2] == 1
             upsampled_shifted_template_index = upsampled_shifted_template_index[..., 0]
         else:
             b_ix = b_ix + (upsampling_indices_b,)

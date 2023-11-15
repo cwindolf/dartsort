@@ -129,7 +129,7 @@ def match(
     return sorting, output_hdf5_filename
 
 
-# -- helper function
+# -- helper function for subtract, match
 
 
 def _run_peeler(
