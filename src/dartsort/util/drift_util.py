@@ -476,9 +476,32 @@ class TemplateShiftIndex:
     # (template ix, shift index) -> shifted template index
     template_shift_index: np.ndarray
     # (shifted temp ix, shifted temp ix) -> did these appear at the same time
-    cooccurrence: np.ndarray
     shifted_temp_ix_to_temp_ix: np.ndarray
     shifted_temp_ix_to_shift: np.ndarray
+
+    @classmethod
+    def from_shift_matrix(cls, shifts):
+        """shift: n_times x n_templates"""
+        all_shifts = np.unique(shifts)
+        n_templates = shifts.shape[1]
+        pairs = np.stack(np.broadcast_arrays(np.arange(n_templates)[None, :], shifts), axis=2)
+        pairs = np.unique(pairs.reshape(shifts.size, 2), axis=0)
+        n_shifted_templates = len(pairs)
+        shift_ix = np.searchsorted(all_shifts, pairs[:, 1])
+        template_shift_index = np.full(
+            (n_templates, len(all_shifts)), n_shifted_templates
+        )
+        template_shift_index[pairs[:, 0], shift_ix] = np.arange(n_shifted_templates)
+        return cls(
+            n_shifted_templates,
+            all_shifts,
+            template_shift_index,
+            *pairs.T,
+        )
+
+    def shifts_to_shifted_ids(self, template_ids, shifts):
+        shift_ixs = np.searchsorted(self.all_pitch_shifts, shifts)
+        return self.template_shift_index[template_ids, shift_ixs]
 
 
 def static_template_shift_index(n_templates):
@@ -487,7 +510,6 @@ def static_template_shift_index(n_templates):
         n_templates,
         np.zeros(1),
         temp_ixs[:, None],
-        np.ones((n_templates, n_templates), dtype=bool),
         temp_ixs,
         np.zeros_like(temp_ixs),
     )
@@ -496,78 +518,69 @@ def static_template_shift_index(n_templates):
 def get_shift_and_unit_pairs(
     chunk_time_centers_s,
     geom,
-    template_data,
+    template_data_a,
+    template_data_b=None,
     motion_est=None,
 ):
-    n_templates = len(template_data.templates)
+    if template_data_b is None:
+        template_data_b = template_data_a
+
+    na = template_data_a.templates.shape[0]
+    nb = template_data_b.templates.shape[0]
+
     if motion_est is None:
-        # no motion case
-        return static_template_shift_index(n_templates)
+        shift_index_a = static_template_shift_index(na)
+        shift_index_b = static_template_shift_index(nb)
+        cooccurrence = np.ones((na, nb), dtype=bool)
+        return shift_index_a, shift_index_b, cooccurrence
 
-    # all observed pitch shift values
-    all_pitch_shifts = np.empty(shape=(0,), dtype=int)
-    temp_ixs = np.arange(n_templates)
-    # set of (template idx, shift)
-    template_shift_pairs = np.empty(shape=(0, 2), dtype=int)
-    pitch = get_pitch(geom)
+    reg_depths_um_a = template_data_a.registered_template_depths_um
+    reg_depths_um_b = template_data_b.registered_template_depths_um
+    same = np.array_equal(reg_depths_um_a, reg_depths_um_b)
+    if same:
+        reg_depths_um = reg_depths_um_a
+    else:
+        reg_depths_um = np.concatenate((reg_depths_um_a, reg_depths_um_b))
 
-    for t_s in chunk_time_centers_s:
-        # see the fn `templates_at_time`
-        unregistered_depths_um = invert_motion_estimate(
-            motion_est, t_s, template_data.registered_template_depths_um
-        )
-        pitch_shifts = get_spike_pitch_shifts(
-            depths_um=template_data.registered_template_depths_um,
-            pitch=pitch,
-            registered_depths_um=unregistered_depths_um,
-        )
-        pitch_shifts = pitch_shifts.astype(int)
-
-        # get unique pitch/unit shift pairs in chunk
-        template_shift = np.c_[temp_ixs, pitch_shifts]
-
-        # update full set
-        all_pitch_shifts = np.union1d(all_pitch_shifts, pitch_shifts)
-        template_shift_pairs = np.unique(
-            np.concatenate((template_shift_pairs, template_shift), axis=0), axis=0
-        )
-
-    n_shifts = len(all_pitch_shifts)
-    n_template_shift_pairs = len(template_shift_pairs)
-
-    # index template/shift pairs: template_shift_index[template_ix, shift_ix] = shifted template index
-    # fill with an invalid index
-    template_shift_index = np.full((n_templates, n_shifts), n_template_shift_pairs)
-    shift_ix = np.searchsorted(all_pitch_shifts, template_shift_pairs[:, 1])
-    assert np.array_equal(all_pitch_shifts[shift_ix], template_shift_pairs[:, 1])
-    template_shift_index[template_shift_pairs[:, 0], shift_ix] = np.arange(
-        n_template_shift_pairs
+    # figure out all shifts for all units at all times
+    unreg_depths_um = np.concatenate(
+        [
+            motion_est.disp_at_s(t_s, depth_um=reg_depths_um, grid=True).T
+            for t_s in chunk_time_centers_s
+        ],
+        axis=0,
     )
-    shifted_temp_ix_to_temp_ix = template_shift_pairs[:, 0]
-    shifted_temp_ix_to_shift = template_shift_pairs[:, 1]
+    assert unreg_depths_um.shape == (len(chunk_time_centers_s), len(reg_depths_um))
+    pitch_shifts = get_spike_pitch_shifts(
+        depths_um=reg_depths_um,
+        pitch=get_pitch(geom),
+        registered_depths_um=unreg_depths_um,
+    )
+    if same:
+        shifts_a = shifts_b = pitch_shifts
+    else:
+        shifts_a = pitch_shifts[:, :na]
+        shifts_b = pitch_shifts[:, na:]
+
+    # assign ids to pitch/shift pairs
+    template_shift_index_a = TemplateShiftIndex.from_shift_matrix(shifts_a)
+    if same:
+        template_shift_index_b = template_shift_index_a
+    else:
+        template_shift_index_b = TemplateShiftIndex.from_shift_matrix(shifts_b)
 
     # co-occurrence matrix: do these shifted templates appear together?
-    cooccurrence = np.eye(n_template_shift_pairs, dtype=bool)
-    for t_s in chunk_time_centers_s:
-        unregistered_depths_um = invert_motion_estimate(
-            motion_est, t_s, template_data.registered_template_depths_um
-        )
-        pitch_shifts = get_spike_pitch_shifts(
-            depths_um=template_data.registered_template_depths_um,
-            pitch=pitch,
-            registered_depths_um=unregistered_depths_um,
-        )
-        pitch_shifts = pitch_shifts.astype(int)
-        pitch_shift_ix = np.searchsorted(all_pitch_shifts, pitch_shifts)
-        
-        shifted_temp_ixs = template_shift_index[temp_ixs, pitch_shift_ix]
-        cooccurrence[shifted_temp_ixs[:, None], shifted_temp_ixs[None, :]] = 1
-    
-    return TemplateShiftIndex(
-        n_template_shift_pairs,
-        all_pitch_shifts,
-        template_shift_index,
-        cooccurrence,
-        shifted_temp_ix_to_temp_ix,
-        shifted_temp_ix_to_shift,
-    )
+    cooccurrence = np.zeros(
+        (template_shift_index_a.n_shifted_templates, template_shift_index_b.n_shifted_templates),
+        dtype=bool)
+    temps_a = np.arange(na)
+    temps_b = np.arange(nb)
+    for j in range(len(chunk_time_centers_s)):
+        shifted_ids_a = template_shift_index_a.shifts_to_shifted_ids(temps_a, shifts_a[j])
+        if same:
+            shifted_ids_b = shifted_ids_a
+        else:
+            shifted_ids_b = template_shift_index_b.shifts_to_shifted_ids(temps_b, shifts_b[j])
+        cooccurrence[shifted_ids_a[:, None], shifted_ids_b[None, :]] = 1
+
+    return template_shift_index_a, template_shift_index_b, cooccurrence
