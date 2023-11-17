@@ -233,6 +233,7 @@ def ensemble_hdbscan_clustering(t_start, t_end, K_LEN, displacement_rigid, spt_a
                         feat_s = np.c_[x_s_to_update[j], z_s_to_update[j], ptps_s_to_update[j]]
                         spt_2[s, 1] = units_to_match_to[((feat_s - features_to_match_to)**2).sum(1).argmin()]
 
+                        
             features_all_1 = np.c_[np.median(x_1[spt_1[:, 1]==np.unique(spt_1[:, 1])[1]]), 
                                    np.median(z_1_reg[spt_1[:, 1]==np.unique(spt_1[:, 1])[1]]), 
                                    np.median(max_ptps_1[spt_1[:, 1]==np.unique(spt_1[:, 1])[1]])]
@@ -243,6 +244,7 @@ def ensemble_hdbscan_clustering(t_start, t_end, K_LEN, displacement_rigid, spt_a
                                                       np.median(max_ptps_1[spt_1[:, 1]==u])]))
 
             distance_inter = ((features_all_1[:, :, None]-features_all_1.T[None])**2).sum(1)
+            
 
             labels_1_2 = np.concatenate((spt_1[:, 1], spt_2[:, 1]))
             labels_1_2 = spike_train_utils.make_labels_contiguous(
@@ -343,7 +345,10 @@ def run_full_clustering(t_start, t_end, cluster_output_directory, raw_data_bin, 
     
     
     spt = ensemble_hdbscan_clustering(t_start, t_end, len_chunks, displacement_rigid, spt, max_ptps, x, z_abs, scales, log_c, fs)
+    
+    return spt, max_ptps, x, z_abs, spike_index
 
+"""
     print("Split")
     z_reg = z_abs - displacement_rigid[spt[:, 0]//fs]
     spt = pre_deconv_split(spt, max_ptps, x, z_reg)
@@ -403,4 +408,4 @@ def run_full_clustering(t_start, t_end, cluster_output_directory, raw_data_bin, 
         print("figure saved")
     return spt, max_ptps, x, z_abs, spike_index
 
-
+"""
