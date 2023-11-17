@@ -1,9 +1,12 @@
 import numpy as np
-from dartsort.util import drift_util
+from dartsort.util import drift_util, spikeio
 from dredge.motion_util import IdentityMotionEstimate
 from scipy.spatial import KDTree
 from sklearn.neighbors import KNeighborsClassifier
-
+import hdbscan
+import spikeinterface
+from spikeinterface.comparison import compare_two_sorters
+from tqdm.auto import tqdm
 
 def closest_registered_channels(
     times_seconds, x, z_abs, geom, motion_est=None
@@ -20,13 +23,17 @@ def closest_registered_channels(
 
     return reg_channels
 
-def hdbscan_clustering(
-    times_seconds, x, z_abs, geom, amps, motion_est=None,
+def hdbscan_clustering(recording,
+    times_seconds, times_samples, x, z_abs, geom, amps, motion_est=None,
     min_cluster_size=25,
     min_samples=25,
     cluster_selection_epsilon=15, 
     scales=(1, 1, 50),
     log_c=5,
+    split_big=True,
+    do_remove_dups=True,
+    frames_dedup=12,
+    frame_dedup_cluster=20,
 ):
     """
     Run HDBSCAN
@@ -36,7 +43,7 @@ def hdbscan_clustering(
         motion_est == IdentityMotionEstimate()
     
     z_reg = motion_est.correct_s(times_seconds, z_abs)
-    features = np.c_[x * scales[0], z_reg * scales[1], np.log(log_c + maxptps) * scales[2]]
+    features = np.c_[x * scales[0], z_reg * scales[1], np.log(log_c + amps) * scales[2]]
     clusterer = hdbscan.HDBSCAN(
         min_cluster_size=min_cluster_size,
         cluster_selection_epsilon=cluster_selection_epsilon,
@@ -45,11 +52,51 @@ def hdbscan_clustering(
     )
     clusterer.fit(features)
     
+    if do_remove_dups:
+        (
+            clusterer,
+            duplicate_indices,
+            duplicate_spikes,
+        ) = remove_duplicate_spikes(
+            clusterer, times_samples, amps, frames_dedup=frames_dedup
+        )
+        
+        kept_ix, removed_ix = remove_self_duplicates(
+            times_samples,
+            clusterer.labels_,
+            recording,
+            geom.shape[0],
+            frame_dedup=frame_dedup_cluster,
+        )
+        if len(removed_ix):
+            clusterer.labels_[removed_ix.astype('int')] = -1
+    
+    if not split_big:
+        return clusterer.labels_
+    
+    else:
+    
+        labels_all = clusterer.labels_.astype('int')
+        _, labels_all[labels_all>-1] = np.unique(labels_all[labels_all>-1], return_inverse=True)
+
+        cmp = labels_all.max()+1
+        labels_split = labels_all.copy()
+
+        for unit in range(labels_all.max()+1):
+            idx = labels_all == unit
+            clusterer.fit(np.c_[scales[0]*x[idx], scales[1]*z_reg[idx], scales[2]*np.log(log_c+amps[idx])])
+
+            if clusterer.labels_.max()>-1 and (clusterer.labels_ == -1).sum()/len(clusterer.labels_)<0.5:
+                for k in np.arange(1, clusterer.labels_.max()+1):
+                    which = np.where(idx)[0][clusterer.labels_ == k]
+                    labels_split[which] = cmp
+                    cmp+=1
+                which = np.where(idx)[0][clusterer.labels_ == -1]
+                labels_split[which] = -1    
+        return labels_split.astype('int')
+
     # Implement deduplication here cluster_utils.remove_duplicate_spikes then cluster_utils.remove_self_duplicates
     # How to deal with outliers?
-    
-    return clusterer.labels_
-
 
 def knn_reassign_outliers(labels, features):
     outliers = labels < 0
@@ -69,7 +116,7 @@ Functions below are not  used yet - need some updating before plugging them in
 def remove_self_duplicates(
     spike_times,
     spike_labels,
-    binary_file,
+    recording,
     n_channels,
     frame_dedup=20,
     n_samples=250,
@@ -90,7 +137,7 @@ def remove_self_duplicates(
     unit_labels = unit_labels[unit_labels >= 0]
     rg = np.random.default_rng(seed)
 
-    for unit in tqdm(unit_labels, desc="Remove self violations"):
+    for unit in unit_labels:
         in_unit = np.flatnonzero(spike_labels == unit)
 
         spike_times_unit = spike_times[in_unit]
@@ -106,11 +153,11 @@ def remove_self_duplicates(
             indices_to_remove.extend(in_unit[ix_remove_unit])
 
         elif violations.mean() > too_contaminated:
-            print("super contaminated unit.")
+            # print("super contaminated unit.")
             indices_to_remove.extend(in_unit)
 
         elif violations.any():
-            print(f"{unit=} {in_unit.size=} {violations.mean()=}")
+            # print(f"{unit=} {in_unit.size=} {violations.mean()=}")
             # we'll remove either an index in first_viol_ix,
             # or that index + 1, depending on template agreement
             first_viol_ix = np.flatnonzero(violations)
@@ -126,8 +173,8 @@ def remove_self_duplicates(
                 # we can compute template just from unviolated wfs
                 which_unviol = rg.choice(unviol.size, n_samples, replace=False)
                 which_unviol.sort()
-                wfs_unit, _ = read_waveforms(
-                    spike_times_unit[which_unviol], binary_file, n_channels
+                wfs_unit = spikeio.read_full_waveforms(
+                    recording, spike_times_unit[which_unviol]
                 )
             else:
                 n_viol_load = min(all_viol_ix.size, n_samples - unviol.size)
@@ -138,8 +185,8 @@ def remove_self_duplicates(
                     ]
                 )
                 load_ix.sort()
-                wfs_unit, _ = read_waveforms(
-                    spike_times_unit[load_ix], binary_file, n_channels
+                wfs_unit = spikeio.read_full_waveforms(
+                    recording, spike_times_unit[load_ix]
                 )
 
             # reshape to NxT
@@ -150,18 +197,16 @@ def remove_self_duplicates(
 
             # get subsets of wfs -- will we remove leading (wfs_1)
             # or trailing (wfs_2) waveform in each case?
-            wfs_1, _ = read_waveforms(
+            wfs_1 = spikeio.read_subset_waveforms(
+                recording,
                 spike_times_unit[first_viol_ix],
-                binary_file,
-                n_channels,
-                channels=[mc],
+                load_channels=np.array([mc]),
             )
             wfs_1 = wfs_1[:, :, 0]
-            wfs_2, _ = read_waveforms(
+            wfs_2 = spikeio.read_subset_waveforms(
+                recording,
                 spike_times_unit[first_viol_ix + 1],
-                binary_file,
-                n_channels,
-                channels=[mc],
+                load_channels=np.array([mc]),
             )
             wfs_2 = wfs_2[:, :, 0]
 
@@ -203,7 +248,7 @@ def remove_duplicate_spikes(
     )
     removed_cluster_ids = set()
     remove_spikes = []
-    for cluster_id in tqdm(sorting.get_unit_ids(), desc="Remove pair dups"):
+    for cluster_id in sorting.get_unit_ids():
         possible_matches = cmp_self.possible_match_12[cluster_id]
         # possible_matches[possible_matches!=cluster_id])
         if len(possible_matches) == 2:
@@ -246,6 +291,26 @@ def remove_duplicate_spikes(
         remove_indices_list.append(remove_indices)
 
     # make contiguous
-    clusterer.labels_ = make_labels_contiguous(clusterer.labels_)
+    _, clusterer.labels_ = np.unique(clusterer.labels_, return_inverse=True)
 
     return clusterer, remove_indices_list, remove_spikes
+
+
+def make_sorting_from_labels_frames(
+    labels, spike_frames, sampling_frequency=30000
+):
+    # times_list = []
+    # labels_list = []
+    # for cluster_id in np.unique(labels):
+    #     spike_train = spike_frames[np.where(labels==cluster_id)]
+    #     times_list.append(spike_train)
+    #     labels_list.append(np.zeros(spike_train.shape[0])+cluster_id)
+    # times_array = np.concatenate(times_list).astype('int')
+    # labels_array = np.concatenate(labels_list).astype('int')
+    sorting = spikeinterface.numpyextractors.NumpySorting.from_times_labels(
+        times_list=spike_frames.astype("int"),
+        labels_list=labels.astype("int"),
+        sampling_frequency=sampling_frequency,
+    )
+    return sorting
+

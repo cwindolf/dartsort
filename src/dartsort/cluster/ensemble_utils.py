@@ -1,7 +1,8 @@
 import numpy as np
+from .cluster_util import hdbscan_clustering
 
-def ensembling_hdbscan(
-    times_seconds, x, z_abs, geom, amps, motion_est=None,
+def ensembling_hdbscan(recording,
+    times_seconds, times_samples, x, z_abs, geom, amps, motion_est=None,
     chunk_size_s=300, 
     min_cluster_size=25,
     min_samples=25,
@@ -14,26 +15,31 @@ def ensembling_hdbscan(
     triaging/subsampling/copying/splitting big clusters not implemented since we don't use it (so far)
     """
     
-    n_chunks = (times_seconds.max() - times_seconds.min())// chunk_size_s
+    n_chunks = int((times_seconds.max() - times_seconds.min())// chunk_size_s)
     if n_chunks == 0 or n_chunks == 1:
-        return hdbscan_clustering(
-            times_seconds, x, z_abs, geom, amps, motion_est, min_cluster_size, min_samples, 
+        return hdbscan_clustering(recording,
+            times_seconds, times_samples, x, z_abs, geom, amps, motion_est, min_cluster_size, min_samples, 
             cluster_selection_epsilon, scales, log_c,
         )
     else:
-        min_time_s = times_seconds.min()
+        min_time_s = int(times_seconds.min())
         labels_all_chunks = []
         idx_all_chunks = []
+        labels_all = -1*np.ones(times_seconds.shape[0])
         for k in range(n_chunks):
             idx_chunk = np.flatnonzero(np.logical_and(times_seconds>=min_time_s+k*chunk_size_s, times_seconds<min_time_s+(k+1)*chunk_size_s))
             idx_all_chunks.append(idx_chunk)
-            labels_chunk = hdbscan_clustering(
-                times_seconds, x, z_abs, geom, amps, motion_est, min_cluster_size, min_samples, 
+            labels_chunk = hdbscan_clustering(recording,
+                times_seconds[idx_chunk], times_samples[idx_chunk], x[idx_chunk], z_abs[idx_chunk], geom, amps[idx_chunk], motion_est, min_cluster_size, min_samples, 
                 cluster_selection_epsilon, scales, log_c,
             )
-            labels_all_chunks.append(labels_chunk)
+            _, labels_chunk[labels_chunk>-1] = np.unique(labels_chunk[labels_chunk>-1], return_inverse=True)
+            labels_all_chunks.append(labels_chunk.astype('int'))
+            labels_all[idx_chunk] = labels_chunk
         
         z_reg = motion_est.correct_s(times_seconds, z_abs)
+         
+        labels_all = labels_all.astype('int')
         
         for k in range(n_chunks-1):
             
@@ -46,9 +52,9 @@ def ensembling_hdbscan(
             z_2 = scales[1]*z_reg[idx_2]
             amps_1 = scales[2]*np.log(log_c+amps[idx_1])
             amps_2 = scales[2]*np.log(log_c+amps[idx_2])
-            labels_1 = labels_chunk[k]
-            labels_2 = labels_chunk[k+1]
-            unit_label_shift = labels_1.max()+1
+            labels_1 = labels_all[idx_1].copy().astype('int')
+            labels_2 = labels_all_chunks[k+1].copy()
+            unit_label_shift = int(labels_1.max()+1)
             labels_2[labels_2>-1]+=unit_label_shift
 
             units_1 = np.unique(labels_1)
@@ -57,7 +63,7 @@ def ensembling_hdbscan(
             units_2 = units_2[units_2>-1]
             
             # FORWARD PASS
-            
+                        
             dist_matrix = np.zeros((units_1.shape[0], units_2.shape[0]))
             
             # Speed up this code - this matrix can be sparse (only compute distance for "neighboring" units) - OK for now, still pretty fast
@@ -78,9 +84,9 @@ def ensembling_hdbscan(
                 features_to_match_to = np.c_[np.median(x_2[labels_2==units_to_match_to[0]]), np.median(z_2[labels_2==units_to_match_to[0]]), np.median(amps_2[labels_2==units_to_match_to[0]])]
                 for u in units_to_match_to[1:]:
                     features_to_match_to = np.concatenate((features_to_match_to, 
-                        np.c_[np.median(x_2[spt_2[:, 1]==u]), 
-                        np.median(z_2_reg[spt_2[:, 1]==u]), 
-                        np.median(max_ptps_2[spt_2[:, 1]==u])])
+                        np.c_[np.median(x_2[labels_2==u]), 
+                        np.median(z_2[labels_2==u]), 
+                        np.median(amps_2[labels_2==u])])
                     )
                 spikes_to_update = np.flatnonzero(labels_1==unit_to_split)
                 x_s_to_update = x_1[spikes_to_update]
@@ -119,33 +125,29 @@ def ensembling_hdbscan(
                         )
                     spikes_to_update = np.flatnonzero(labels_2==unit_to_split)
                     x_s_to_update = x_2[spikes_to_update]
-                    z_s_to_update = z_2_reg[spikes_to_update]
+                    z_s_to_update = z_2[spikes_to_update]
                     amps_s_to_update = amps_2[spikes_to_update]
                     for j, s in enumerate(spikes_to_update):
                         feat_s = np.c_[x_s_to_update[j], z_s_to_update[j], amps_s_to_update[j]]
                         labels_2[s] = units_to_match_to[((feat_s - features_to_match_to)**2).sum(1).argmin()]
 
 #           Do we need to "regularize" and make sure the distance intra units after merging is smaller than the distance inter units before merging 
-#           all_labels_1 = np.unique(labels_1)
-#           all_labels_1 = all_labels_1[all_labels_1>-1]
-#           features_all_1 = np.c_[np.median(x_1[labels_1==all_labels_1[0]]), #WHY [1]?
-#                                  np.median(z_1[labels_1==all_labels_1[0]]), 
-#                                  np.median(amps_1[labels_1==all_labels_1[0]])]
-#           for u in all_labels_1[1:]:
-#               features_all_1 = np.concatenate((features_all_1, 
-#                                                     np.c_[np.median(x_1[labels_1==u]), 
-#                                                     np.median(z_1_reg[labels_1==u]), 
-#                                                     np.median(amps_1[labels_1==u])]))
+            all_labels_1 = np.unique(labels_1)
+            all_labels_1 = all_labels_1[all_labels_1>-1]
+            
+            features_all_1 = np.c_[np.median(x_1[labels_1==all_labels_1[0]]), #WHY [1]?
+np.median(z_1[labels_1==all_labels_1[0]]), 
+np.median(amps_1[labels_1==all_labels_1[0]])]
+            for u in all_labels_1[1:]:
+                features_all_1 = np.concatenate((features_all_1, np.c_[np.median(x_1[labels_1==u]), np.median(z_1[labels_1==u]), np.median(amps_1[labels_1==u])]))
 
-#           distance_inter = ((features_all_1[:, :, None]-features_all_1.T[None])**2).sum(1)
-
+            distance_inter = ((features_all_1[:, :, None]-features_all_1.T[None])**2).sum(1)
+            
             labels_12 = np.concatenate((labels_1, labels_2))
-            labels_12 = spike_train_utils.make_labels_contiguous(
-                labels_12
-            )
-            idx_all = np.flatnonzero(times_seconds<times_seconds.min()+n_chunks*chunk_size_s)
-            labels_all = -1*np.ones(times_seconds.shape[0])
-            labels_all[idx_all] = labels_1_2
+            _, labels_12[labels_12>-1] = np.unique(labels_12[labels_12>-1], return_inverse=True) #Make contiguous
+            idx_all = np.flatnonzero(times_seconds<min_time_s+(k+2)*chunk_size_s)
+            labels_all = -1*np.ones(times_seconds.shape[0]) #discard all spikes at the end for now
+            labels_all[idx_all] = labels_12.astype('int')
         
     return labels_all
 
