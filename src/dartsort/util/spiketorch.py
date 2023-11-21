@@ -1,5 +1,8 @@
+import math
+
 import torch
 import torch.nn.functional as F
+from scipy.signal._signaltools import _calc_oa_lens
 from torch.fft import irfft, rfft
 
 
@@ -97,6 +100,25 @@ def grab_spikes(
     time_ix = trough_times[:, None] + spike_sample_offsets[None, :]
     chan_ix = channel_index[max_channels]
     return traces[time_ix[:, :, None], chan_ix[:, None, :]]
+
+
+def grab_spikes_full(
+    traces,
+    trough_times,
+    trough_offset=42,
+    spike_length_samples=121,
+    buffer=0,
+):
+    """Grab spikes from a tensor of traces"""
+    assert trough_times.ndim == 1
+    spike_sample_offsets = torch.arange(
+        buffer - trough_offset,
+        buffer - trough_offset + spike_length_samples,
+        device=trough_times.device,
+    )
+    time_ix = trough_times[:, None] + spike_sample_offsets[None, :]
+    chan_ix = torch.arange(traces.shape[1], device=traces.device)
+    return traces[time_ix[:, :, None], chan_ix[None, None, :]]
 
 
 def add_spikes_(
@@ -226,26 +248,52 @@ def real_resample(x, num, dim=0):
 
     # inverse transform
     y = irfft(g, num, dim=dim)
-    y *= (float(num) / float(Nx))
+    y *= float(num) / float(Nx)
 
     return y
 
 
+def steps_and_pad(s1, in1_step, s2, in2_step, block_size, overlap):
+    shape_final = s1 + s2 - 1
+    # figure out n steps and padding
+    if s1 > in1_step:
+        nstep1 = math.ceil((s1 + 1) / in1_step)
+        if (block_size - overlap) * nstep1 < shape_final:
+            nstep1 += 1
+
+        pad1 = nstep1 * in1_step - s1
+    else:
+        nstep1 = 1
+        pad1 = 0
+
+    if s2 > in2_step:
+        nstep2 = math.ceil((s2 + 1) / in2_step)
+        if (block_size - overlap) * nstep2 < shape_final:
+            nstep2 += 1
+
+        pad2 = nstep2 * in2_step - s2
+    else:
+        nstep2 = 1
+        pad2 = 0
+    return nstep1, pad1, nstep2, pad2
+
+
 def depthwise_oaconv1d(input, weight, f2=None, padding=0):
-    """Depthwise correlation (F.conv1d with groups=in_chans) with overlap-add
-    """
+    """Depthwise correlation (F.conv1d with groups=in_chans) with overlap-add"""
     # conv on last axis
     # assert input.ndim == weight.ndim == 2
     n1 = input.shape[0]
     n2 = weight.shape[0]
-    # assert n1 == n2
+    assert n1 == n2
     s1 = input.shape[1]
     s2 = weight.shape[1]
-    # assert s1 >= s2
+    assert s1 >= s2
 
     shape_final = s1 + s2 - 1
     block_size, overlap, in1_step, in2_step = _calc_oa_lens(s1, s2)
-    nstep1, pad1, nstep2, pad2 = steps_and_pad(s1, in1_step, s2, in2_step, block_size, overlap)
+    nstep1, pad1, nstep2, pad2 = steps_and_pad(
+        s1, in1_step, s2, in2_step, block_size, overlap
+    )
 
     if pad1 > 0:
         input = F.pad(input, (0, pad1))
@@ -272,6 +320,10 @@ def depthwise_oaconv1d(input, weight, f2=None, padding=0):
 
     oa = fold_res.reshape(n1, fold_out_len)
     # this is the full convolution
-    oa = oa[:, :shape_final - pad1]
+    oa = oa[:, : shape_final - pad1]
+    # extract correct padding
+    padding = padding + s2 - 1
+    assert oa.shape[1] > 2 * padding
+    oa = oa[:, padding:oa.shape[1] - padding]
 
     return oa
