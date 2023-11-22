@@ -1,4 +1,4 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Optional
 
@@ -7,7 +7,8 @@ from dartsort.util import drift_util
 
 from .get_templates import get_templates
 from .superres_util import superres_sorting
-from .template_util import get_realigned_sorting, get_template_depths
+from .template_util import (get_realigned_sorting, get_template_depths,
+                            weighted_average)
 
 _motion_error_prefix = (
     "If template_config has registered_templates==True "
@@ -27,25 +28,12 @@ class TemplateData:
 
     registered_geom: Optional[np.ndarray] = None
     registered_template_depths_um: Optional[np.ndarray] = None
+    localization_radius_um: float = 100.0
 
     @classmethod
     def from_npz(cls, npz_path):
-        with np.load(npz_path) as npz:
-            templates = npz["templates"]
-            unit_ids = npz["unit_ids"]
-            spike_counts = npz["spike_counts"]
-            registered_geom = registered_template_depths_um = None
-            if "registered_geom" in npz:
-                registered_geom = npz["registered_geom"]
-            if "registered_template_depths_um" in npz:
-                registered_template_depths_um = npz["registered_template_depths_um"]
-        return cls(
-            templates,
-            unit_ids,
-            spike_counts,
-            registered_geom,
-            registered_template_depths_um,
-        )
+        with np.load(npz_path) as data:
+            return cls(**data)
 
     def to_npz(self, npz_path):
         to_save = dict(
@@ -60,6 +48,30 @@ class TemplateData:
                 "registered_template_depths_um"
             ] = self.registered_template_depths_um
         np.savez(npz_path, **to_save)
+
+    def coarsen(self):
+        """Weighted average all templates that share a unit id and re-localize."""
+        # update templates
+        templates = weighted_average(self.unit_ids, self.templates, self.spike_counts)
+
+        # collect spike counts
+        spike_counts = np.zeros(len(templates))
+        np.add.at(spike_counts, self.unit_ids, self.spike_counts)
+
+        # re-localize
+        registered_template_depths_um = get_template_depths(
+            templates,
+            self.registered_geom,
+            localization_radius_um=self.localization_radius_um,
+        )
+
+        return replace(
+            self,
+            templates=templates,
+            unit_ids=np.arange(len(templates)),
+            spike_counts=spike_counts,
+            registered_template_depths_um=registered_template_depths_um,
+        )
 
     @classmethod
     def from_config(
@@ -163,7 +175,9 @@ class TemplateData:
 
         # main!
         results = get_templates(recording, sorting, **kwargs)
-        print(f"{[(k,v.dtype) for k,v in results.items() if (isinstance(v, np.ndarray))]=}")
+        print(
+            f"{[(k,v.dtype) for k,v in results.items() if (isinstance(v, np.ndarray))]=}"
+        )
 
         # handle registered templates
         if template_config.registered_templates:
@@ -178,6 +192,7 @@ class TemplateData:
                 spike_counts,
                 kwargs["registered_geom"],
                 registered_template_depths_um,
+                localization_radius_um=template_config.registered_template_localization_radius_um,
             )
         else:
             obj = cls(

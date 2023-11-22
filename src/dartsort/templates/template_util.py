@@ -264,6 +264,7 @@ def temporally_upsample_templates(
 class CompressedUpsampledTemplates:
     compressed_upsampled_templates: np.ndarray
     compressed_upsampling_map: np.ndarray
+    compressed_upsampling_index: np.ndarray
     compressed_index_to_template_index: np.ndarray
     compressed_index_to_upsampling_index: np.ndarray
 
@@ -290,13 +291,18 @@ def compressed_upsampled_templates(
             of the jth upsampled template for this unit. for low-amplitude units,
             compressed_upsampling_map[unit] will have fewer unique entries, corresponding
             to fewer saved upsampled copies for that unit.
+        compressed_upsampling_index : array (n_templates, max_upsample)
+            A n_compressed_upsampled_templates-padded ragged array mapping each
+            template index to its compressed upsampled indices
         compressed_index_to_template_index
         compressed_index_to_upsampling_index
     """
     n_templates = templates.shape[0]
     if max_upsample == 1:
         return CompressedUpsampledTemplates(
+            n_templates,
             templates,
+            np.arange(n_templates)[:, None],
             np.arange(n_templates)[:, None],
             np.arange(n_templates),
             np.zeros(n_templates, dtype=int),
@@ -315,6 +321,7 @@ def compressed_upsampled_templates(
 
     # build the compressed upsampling map
     compressed_upsampling_map = np.zeros((n_templates, max_upsample), dtype=int)
+    compressed_upsampling_index = np.full((n_templates, max_upsample), -1, dtype=int)
     template_indices = []
     upsampling_indices = []
     current_compressed_index = 0
@@ -326,6 +333,7 @@ def compressed_upsampled_templates(
         compressed_upsampling_map[i] = current_compressed_index + np.arange(nup).repeat(
             compression
         )
+        compressed_upsampling_index[i, :nup] = current_compressed_index + np.arange(nup)
         current_compressed_index += nup
 
         # indices of the templates to keep in the full array of upsampled templates
@@ -333,6 +341,7 @@ def compressed_upsampled_templates(
         upsampling_indices.extend(compression * np.arange(nup))
     template_indices = np.array(template_indices)
     upsampling_indices = np.array(upsampling_indices)
+    compressed_upsampling_index[compressed_upsampling_index < 0] = current_compressed_index
 
     # get the upsampled templates
     all_upsampled_templates = temporally_upsample_templates(
@@ -349,8 +358,10 @@ def compressed_upsampled_templates(
     compressed_upsampled_templates = all_upsampled_templates[rix]
 
     return CompressedUpsampledTemplates(
+        current_compressed_index,
         compressed_upsampled_templates,
         compressed_upsampling_map,
+        compressed_upsampling_index,
         template_indices,
         upsampling_indices,
     )
