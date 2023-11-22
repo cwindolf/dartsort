@@ -2,7 +2,6 @@ from __future__ import annotations  # allow forward type references
 
 from collections import namedtuple
 from dataclasses import dataclass, fields
-from pathlib import Path
 from typing import Iterator, Optional, Union
 
 import h5py
@@ -23,6 +22,8 @@ def compressed_convolve_to_h5(
     template_data: templates.TemplateData,
     low_rank_templates: template_util.LowRankTemplates,
     compressed_upsampled_temporal: template_util.CompressedUpsampledTemplates,
+    template_data_b: Optional[templates.TemplateData] = None,
+    low_rank_templates_b: Optional[templates.TemplateData] = None,
     chunk_time_centers_s: Optional[np.ndarray] = None,
     motion_est=None,
     geom: Optional[np.ndarray] = None,
@@ -48,23 +49,32 @@ def compressed_convolve_to_h5(
         pass  # TODO
 
     # construct indexing helpers
-    template_shift_index = drift_util.get_shift_and_unit_pairs(
+    (
+        template_shift_index_a,
+        template_shift_index_b,
+        upsampled_shifted_template_index,
+        cooccurrence,
+    ) = construct_shift_indices(
         chunk_time_centers_s,
         geom,
         template_data,
+        compressed_upsampled_temporal,
+        template_data_b=template_data_b,
         motion_est=motion_est,
-    )
-    upsampled_shifted_template_index = get_upsampled_shifted_template_index(
-        template_shift_index, compressed_upsampled_temporal
     )
     print(f"compressed_convolve_to_h5 {conv_batch_size=} {units_batch_size=} {device=}")
 
     chunk_res_iterator = iterate_compressed_pairwise_convolutions(
-        template_data=template_data,
-        low_rank_templates=low_rank_templates,
+        template_data_a=template_data,
+        low_rank_templates_a=low_rank_templates,
+        template_data_b=template_data_b,
+        low_rank_templates_b=low_rank_templates_b,
         compressed_upsampled_temporal=compressed_upsampled_temporal,
-        template_shift_index=template_shift_index,
+        template_shift_index_a=template_shift_index_a,
+        template_shift_index_b=template_shift_index_b,
+        cooccurrence=cooccurrence,
         upsampled_shifted_template_index=upsampled_shifted_template_index,
+        do_shifting=motion_est is not None,
         geom=geom,
         conv_ignore_threshold=conv_ignore_threshold,
         coarse_approx_error_threshold=coarse_approx_error_threshold,
@@ -78,7 +88,7 @@ def compressed_convolve_to_h5(
 
     pconv_index = np.zeros(
         (
-            template_shift_index.n_shifted_templates,
+            template_shift_index_a.n_shifted_templates,
             upsampled_shifted_template_index.n_upsampled_shifted_templates,
         ),
         dtype=int,
@@ -100,7 +110,7 @@ def compressed_convolve_to_h5(
                 continue
 
             # get shifted template indices for A
-            shifted_temp_ix_a = template_shift_index.template_shift_index[
+            shifted_temp_ix_a = template_shift_index_a.template_shift_index[
                 chunk_res.template_indices_a,
                 chunk_res.shift_indices_a,
             ]
@@ -126,12 +136,13 @@ def compressed_convolve_to_h5(
             n_pconvs += n_new_pconvs
 
         # write fixed size outputs
-        h5.create_dataset("shifts", data=template_shift_index.all_pitch_shifts)
+        h5.create_dataset("shifts_a", data=template_shift_index_a.all_pitch_shifts)
+        h5.create_dataset("shifts_b", data=template_shift_index_b.all_pitch_shifts)
         h5.create_dataset(
-            "shifted_template_index", data=template_shift_index.template_shift_index
+            "shifted_template_index_a", data=template_shift_index_a.template_shift_index
         )
         h5.create_dataset(
-            "upsampled_shifted_template_index",
+            "upsampled_shifted_template_index_b",
             data=upsampled_shifted_template_index.upsampled_shifted_template_index,
         )
         h5.create_dataset("pconv_index", data=pconv_index)
@@ -140,11 +151,16 @@ def compressed_convolve_to_h5(
 
 
 def iterate_compressed_pairwise_convolutions(
-    template_data: templates.TemplateData,
-    low_rank_templates: template_util.LowRankTemplates,
+    template_data_a: templates.TemplateData,
+    low_rank_templates_a: template_util.LowRankTemplates,
+    template_data_b: templates.TemplateData,
+    low_rank_templates_b: template_util.LowRankTemplates,
     compressed_upsampled_temporal: template_util.CompressedUpsampledTemplates,
-    template_shift_index: drift_util.TemplateShiftIndex,
+    template_shift_index_a: drift_util.TemplateShiftIndex,
+    template_shift_index_b: drift_util.TemplateShiftIndex,
+    cooccurrence: np.ndarray,
     upsampled_shifted_template_index: UpsampledShiftedTemplateIndex,
+    do_shifting: bool = True,
     geom: Optional[np.ndarray] = None,
     conv_ignore_threshold=0.0,
     coarse_approx_error_threshold=0.0,
@@ -157,7 +173,6 @@ def iterate_compressed_pairwise_convolutions(
 ) -> Iterator[Optional[CompressedConvResult]]:
     """A generator of CompressedConvResults capturing all pairs of templates
 
-
     Runs the function compressed_convolve_pairs on chunks of units.
 
     This is a helper function for parallelizing computation of cross correlations
@@ -165,6 +180,13 @@ def iterate_compressed_pairwise_convolutions(
     memory, so this is a generator yielding a chunk at a time. Callers may
     process the results differently.
     """
+    reg_geom = template_data_a.registered_geom
+    if template_data_b is None:
+        template_data_b = template_data_a
+        assert low_rank_templates_b is None
+        low_rank_templates_b = low_rank_templates_a
+    assert np.array_equal(reg_geom, template_data_b.registered_geom)
+
     # construct drift-related helper data if needed
     print(
         f"iterate_compressed_pairwise_convolutions {conv_batch_size=} {units_batch_size=} {device=}"
@@ -172,30 +194,32 @@ def iterate_compressed_pairwise_convolutions(
     n_shifts = template_shift_index.all_pitch_shifts.size
     do_shifting = n_shifts > 1
     geom_kdtree = reg_geom_kdtree = match_distance = None
-    reg_geom = template_data.registered_geom
     if do_shifting:
-        assert geom is not None
-        assert reg_geom is not None
         geom_kdtree = KDTree(geom)
         reg_geom_kdtree = KDTree(reg_geom)
         match_distance = pdist(geom).min() / 2
 
     # make chunks
-    units = np.unique(template_data.unit_ids)
+    units_a = np.unique(template_data_a.unit_ids)
+    units_b = np.unique(template_data_b.unit_ids)
     jobs = []
-    for start_a in range(0, units.size, units_batch_size):
-        end_a = min(start_a + units_batch_size, units.size)
-        for start_b in range(start_a, units.size, units_batch_size):
-            end_b = min(start_b + units_batch_size, units.size)
-            jobs.append((units[start_a:end_a], units[start_b:end_b]))
+    for start_a in range(0, units_a.size, units_batch_size):
+        end_a = min(start_a + units_batch_size, units_a.size)
+        for start_b in range(0, units_b.size, units_batch_size):
+            end_b = min(start_b + units_batch_size, units_b.size)
+            jobs.append((units_a[start_a:end_a], units_b[start_b:end_b]))
 
     # worker kwargs
     kwargs = dict(
-        unit_ids=template_data.unit_ids,
-        low_rank_templates=low_rank_templates,
+        template_data_a=template_data_a,
+        template_data_b=template_data_b,
+        low_rank_templates_a=low_rank_templates_a,
+        low_rank_templates_b=low_rank_templates_b,
         compressed_upsampled_temporal=compressed_upsampled_temporal,
-        template_shift_index=template_shift_index,
+        template_shift_index_a=template_shift_index_a,
+        template_shift_index_b=template_shift_index_b,
         upsampled_shifted_template_index=upsampled_shifted_template_index,
+        cooccurrence=cooccurrence,
         geom=geom,
         reg_geom=reg_geom,
         geom_kdtree=geom_kdtree,
@@ -256,11 +280,15 @@ class CompressedConvResult:
 
 
 def compressed_convolve_pairs(
-    unit_ids: np.ndarray,
-    low_rank_templates: template_util.LowRankTemplates,
+    template_data_a: templates.TemplateData,
+    template_data_b: templates.TemplateData,
+    low_rank_templates_a: template_util.LowRankTemplates,
+    low_rank_templates_b: template_util.LowRankTemplates,
     compressed_upsampled_temporal: template_util.CompressedUpsampledTemplates,
-    template_shift_index: drift_util.TemplateShiftIndex,
+    template_shift_index_a: drift_util.TemplateShiftIndex,
+    template_shift_index_b: drift_util.TemplateShiftIndex,
     upsampled_shifted_template_index: UpsampledShiftedTemplateIndex,
+    cooccurrence: np.ndarray,
     geom: Optional[np.ndarray] = None,
     reg_geom: Optional[np.ndarray] = None,
     geom_kdtree: Optional[KDTree] = None,
@@ -292,10 +320,10 @@ def compressed_convolve_pairs(
 
     # what pairs, shifts, etc are we convolving?
     shifted_temp_ix_a, temp_ix_a, shift_a, unit_a = handle_shift_indices(
-        units_a, unit_ids, template_shift_index
+        units_a, template_data_a.unit_ids, template_shift_index_a
     )
     shifted_temp_ix_b, temp_ix_b, shift_b, unit_b = handle_shift_indices(
-        units_b, unit_ids, template_shift_index
+        units_b, template_data_b.unit_ids, template_shift_index_b
     )
     # print(f"0 {shifted_temp_ix_a.shape=} {(shifted_temp_ix_a.size / np.unique(unit_a).size)=}")
     # print(f"0 {shifted_temp_ix_b.shape=} {(shifted_temp_ix_b.size / np.unique(unit_b).size)=}")
@@ -304,8 +332,8 @@ def compressed_convolve_pairs(
     spatial_singular_a = get_shifted_spatial_singular(
         temp_ix_a,
         shift_a,
-        template_shift_index,
-        low_rank_templates,
+        template_shift_index_a,
+        low_rank_templates_a,
         geom=geom,
         registered_geom=reg_geom,
         geom_kdtree=geom_kdtree,
@@ -315,8 +343,8 @@ def compressed_convolve_pairs(
     spatial_singular_b = get_shifted_spatial_singular(
         temp_ix_b,
         shift_b,
-        template_shift_index,
-        low_rank_templates,
+        template_shift_index_b,
+        low_rank_templates_b,
         geom=geom,
         registered_geom=reg_geom,
         geom_kdtree=geom_kdtree,
@@ -335,9 +363,9 @@ def compressed_convolve_pairs(
         spatial_singular_b,
         temp_ix_a,
         temp_ix_b,
+        cooccurrence=cooccurrence,
         shift_a=shift_a,
         shift_b=shift_b,
-        template_shift_index=template_shift_index,
         conv_ignore_threshold=conv_ignore_threshold,
         geom=geom,
         registered_geom=reg_geom,
@@ -397,7 +425,7 @@ def compressed_convolve_pairs(
     # shift_b = shift_b[ix_b]
 
     # run convolutions
-    temporal_a = low_rank_templates.temporal_components[temp_ix_a]
+    temporal_a = low_rank_templates_a.temporal_components[temp_ix_a]
     # print(f"{spatial_singular_a[ix_a[conv_ix]].shape=}")
     # print(f"{spatial_singular_b[ix_b[conv_ix]].shape=}")
     # print(f"{temporal_a[ix_a[conv_ix]].shape=}")
@@ -453,9 +481,9 @@ def compressed_convolve_pairs(
 
     # recover metadata
     temp_ix_a = temp_ix_a[ix_a]
-    shift_ix_a = np.searchsorted(template_shift_index.all_pitch_shifts, shift_a[ix_a])
+    shift_ix_a = np.searchsorted(template_shift_index_a.all_pitch_shifts, shift_a[ix_a])
     temp_ix_b = temp_ix_b[ix_b]
-    shift_ix_b = np.searchsorted(template_shift_index.all_pitch_shifts, shift_b[ix_b])
+    shift_ix_b = np.searchsorted(template_shift_index_b.all_pitch_shifts, shift_b[ix_b])
 
     return CompressedConvResult(
         template_indices_a=temp_ix_a,
@@ -559,7 +587,38 @@ def correlate_pairs_lowrank(
     return pconv, kept
 
 
+def construct_shift_indices(
+    chunk_time_centers_s,
+    geom,
+    template_data_a,
+    compressed_upsampled_temporal,
+    template_data_b=None,
+    motion_est=None,
+):
+    (
+        template_shift_index_a,
+        template_shift_index_b,
+        cooccurrence,
+    ) = drift_util.get_shift_and_unit_pairs(
+        chunk_time_centers_s,
+        geom,
+        template_data_a,
+        template_data_b=template_data_b,
+        motion_est=motion_est,
+    )
+    upsampled_shifted_template_index = get_upsampled_shifted_template_index(
+        template_shift_index_b, compressed_upsampled_temporal
+    )
+    return (
+        template_shift_index_a,
+        template_shift_index_b,
+        upsampled_shifted_template_index,
+        cooccurrence,
+    )
+
+
 def handle_shift_indices(units, unit_ids, template_shift_index):
+    """Determine shifted template indices belonging to a set of units."""
     shifted_temp_ix_to_unit = unit_ids[template_shift_index.shifted_temp_ix_to_temp_ix]
     if units is None:
         shifted_temp_ix = np.arange(template_shift_index.n_shifted_templates)
@@ -614,9 +673,9 @@ def shift_deduplicated_pairs(
     spatialsing_b,
     temp_ix_a,
     temp_ix_b,
+    cooccurrence,
     shift_a=None,
     shift_b=None,
-    template_shift_index=None,
     conv_ignore_threshold=0.0,
     geom=None,
     registered_geom=None,
@@ -662,7 +721,7 @@ def shift_deduplicated_pairs(
     # print(f"___ after overlaps {pair.sum()=}")
 
     # co-occurrence
-    cooccurrence = template_shift_index.cooccurrence[
+    cooccurrence = cooccurrence[
         shifted_temp_ix_a[:, None],
         shifted_temp_ix_b[None, :],
     ]
@@ -676,7 +735,7 @@ def shift_deduplicated_pairs(
     # print(f"___ {nco=}")
 
     # if no shifting, deduplication is the identity
-    do_shifting = template_shift_index.all_pitch_shifts.size > 1
+    do_shifting = reg_geom_kdtree is not None
     if not do_shifting:
         nco_range = torch.arange(nco, device=pair_ix_a.device)
         return pair_ix_a, pair_ix_b, nco_range, nco_range, np.zeros(nco, dtype=int)
@@ -1006,6 +1065,11 @@ def coarse_approximate(
 
                 active_temp_a = temp_ix_a[inshift]
                 unique_active_temp_a = np.unique(active_temp_a)
+
+                # TODO just upsampling dedup
+                # active_temp_b = temp_ix_b[inshift]
+                # unique_active_temp_b = np.unique(active_temp_b)
+                # if unique_active_temp_a.size == unique_active_temp_b.size == 1:
                 if unique_active_temp_a.size == 1:
                     new_pconv.append(convs)
                     old_ix_to_new_ix[inshift] = np.arange(
@@ -1039,10 +1103,14 @@ def coarse_approximate(
 
 @dataclass
 class ConvWorkerContext:
-    unit_ids: np.ndarray
-    low_rank_templates: template_util.LowRankTemplates
+    template_data_a: templates.TemplateData
+    template_data_b: templates.TemplateData
+    low_rank_templates_a: template_util.LowRankTemplates
+    low_rank_templates_b: template_util.LowRankTemplates
     compressed_upsampled_temporal: template_util.CompressedUpsampledTemplates
-    template_shift_index: drift_util.TemplateShiftIndex
+    template_shift_index_a: drift_util.TemplateShiftIndex
+    template_shift_index_b: drift_util.TemplateShiftIndex
+    cooccurrence: np.ndarray
     upsampled_shifted_template_index: UpsampledShiftedTemplateIndex
     geom: Optional[np.ndarray] = None
     reg_geom: Optional[np.ndarray] = None
