@@ -1,4 +1,4 @@
-from collections import namedtuple
+from dataclasses import dataclass
 
 import numpy as np
 from dartsort.localize.localize_util import localize_waveforms
@@ -192,9 +192,11 @@ def templates_at_time(
 # -- template numerical processing
 
 
-LowRankTemplates = namedtuple(
-    "LowRankTemplates", ["temporal_components", "singular_values", "spatial_components"]
-)
+@dataclass
+class LowRankTemplates:
+    temporal_components: np.ndarray
+    singular_values: np.ndarray
+    spatial_components: np.ndarray
 
 
 def svd_compress_templates(
@@ -258,15 +260,12 @@ def temporally_upsample_templates(
     return upsampled_templates
 
 
-CompressedUpsampledTemplates = namedtuple(
-    "CompressedUpsampledTemplates",
-    [
-        "compressed_upsampled_templates",
-        "compressed_upsampling_map",
-        "compressed_index_to_template_index",
-        "compressed_index_to_upsampling_index",
-    ],
-)
+@dataclass
+class CompressedUpsampledTemplates:
+    compressed_upsampled_templates: np.ndarray
+    compressed_upsampling_map: np.ndarray
+    compressed_index_to_template_index: np.ndarray
+    compressed_index_to_upsampling_index: np.ndarray
 
 
 def default_n_upsamples_map(ptps):
@@ -300,7 +299,7 @@ def compressed_upsampled_templates(
             templates,
             np.arange(n_templates)[:, None],
             np.arange(n_templates),
-            np.zeros(n_templates, dtype=int)
+            np.zeros(n_templates, dtype=int),
         )
 
     # how many copies should each unit get?
@@ -341,7 +340,9 @@ def compressed_upsampled_templates(
     )
     # n, up, t, c
     all_upsampled_templates = all_upsampled_templates.transpose(0, 2, 1, 3)
-    rix = np.ravel_multi_index((template_indices, upsampling_indices), all_upsampled_templates.shape[:2])
+    rix = np.ravel_multi_index(
+        (template_indices, upsampling_indices), all_upsampled_templates.shape[:2]
+    )
     all_upsampled_templates = all_upsampled_templates.reshape(
         n_templates * max_upsample, templates.shape[1], templates.shape[2]
     )
