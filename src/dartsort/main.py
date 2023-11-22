@@ -129,7 +129,7 @@ def match(
     return sorting, output_hdf5_filename
 
 
-# -- helper function
+# -- helper function for subtract, match
 
 
 def _run_peeler(
@@ -149,6 +149,8 @@ def _run_peeler(
     output_directory.mkdir(exist_ok=True)
     model_dir = output_directory / model_subdir
     output_hdf5_filename = output_directory / hdf5_filename
+    if residual_filename is not None:
+        residual_filename = output_directory / residual_filename
 
     # fit models if needed
     peeler.load_or_fit_and_save_models(
