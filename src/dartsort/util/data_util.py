@@ -148,6 +148,7 @@ def check_recording(
         dedup_channel_index = make_channel_index(
             rec.get_channel_locations(), dedup_spatial_radius
         )
+    failed = False
 
     # run detection and compute spike detection rate and data range
     spike_rates = []
@@ -172,6 +173,7 @@ def check_recording(
             "you experience memory issues.",
             RuntimeWarning,
         )
+        failed = True
 
     if max_abs > expected_value_range:
         warn(
@@ -179,5 +181,6 @@ def check_recording(
             "check that your data has been preprocessed, including standardization.",
             RuntimeWarning,
         )
+        failed = True
 
-    return avg_detections_per_second, max_abs
+    return failed, avg_detections_per_second, max_abs
