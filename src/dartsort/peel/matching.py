@@ -129,7 +129,6 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
             n_jobs=n_jobs,
             device=device,
         )
-        self.handle_template_groups(self.template_data.unit_ids)
         # couple more torch buffers
         self.register_buffer(
             "_refrac_ix",
@@ -175,7 +174,7 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
         )
         assert self.unit_ids.shape == (self.n_templates,)
 
-    def handle_template_groups(self, unit_ids):
+    def handle_template_groups(self, obj_unit_ids, unit_ids):
         """Grouped templates in objective
 
         If not coarse_objective, then several rows of the objective may
@@ -183,6 +182,9 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
         refractory conditions.
         """
         self.register_buffer("unit_ids", torch.from_numpy(unit_ids))
+        self.register_buffer("obj_unit_ids", torch.from_numpy(obj_unit_ids))
+        units, counts, fine_to_coarse = np.unique(unit_ids, return_counts=True, return_inverse=True)
+        self.register_buffer("fine_to_coarse", torch.from_numpy(fine_to_coarse))
         self.grouped_temps = True
         unique_units = np.unique(unit_ids)
         if unique_units.size == unit_ids.size:
@@ -193,11 +195,10 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
             return
         assert unit_ids.shape == (self.n_templates,)
 
-        units, counts = np.unique(self.unit_ids, return_counts=True)
-        superres_index = np.full((self.n_templates, counts.max()), self.n_templates, -1)
-        for u in units:
-            my_sup = np.flatnonzero(self.unit_ids == u)
-            superres_index[u, : len(my_sup)] = my_sup
+        superres_index = np.full((len(obj_unit_ids), counts.max()), self.n_templates, -1)
+        for j, u in enumerate(obj_unit_ids):
+            my_sup = np.flatnonzero(unit_ids == u)
+            superres_index[j, : len(my_sup)] = my_sup
         self.register_buffer("superres_index", torch.from_numpy(superres_index))
 
         if self.coarse_objective:
@@ -283,6 +284,7 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
             self.register_buffer(
                 "objective_spatial_components", self.spatial_components
             )
+        self.handle_template_groups(coarse_template_data.unit_ids, self.template_data.unit_ids)
 
         half_chunk = self.chunk_length_samples // 2
         chunk_centers_samples = np.arange(
@@ -463,7 +465,7 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
             objective_spatial_components=cur_obj_spatial,
             objective_singular_values=self.objective_singular_values,
             objective_temporal_components=self.objective_temporal_components,
-            unit_ids=self.unit_ids,
+            fine_to_coarse=self.fine_to_coarse,
             coarse_objective=self.coarse_objective,
             spatial_components=cur_spatial,
             singular_values=self.singular_values,
@@ -654,14 +656,14 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
         # overwrite objective with -inf to enforce refractoriness
         time_ix = times[:, None] + self._refrac_ix[None, :]
         if not self.grouped_temps:
-            unit_ix = template_indices[:, None, None]
+            row_ix = template_indices[:, None, None]
         elif self.coarse_objective:
-            unit_ix = self.unit_ids[template_indices][:, None, None]
+            row_ix = self.fine_to_coarse[template_indices][:, None, None]
         elif self.grouped_temps:
-            unit_ix = self.group_index[template_indices]
+            row_ix = self.group_index[template_indices]
         else:
             assert False
-        objective[unit_ix[:, :, None], time_ix[:, None, :]] = -torch.inf
+        objective[row_ix[:, :, None], time_ix[:, None, :]] = -torch.inf
 
 
 @dataclass
@@ -676,7 +678,7 @@ class MatchingTemplateData:
     objective_spatial_components: torch.Tensor
     objective_singular_values: torch.Tensor
     objective_temporal_components: torch.Tensor
-    unit_ids: torch.LongTensor
+    fine_to_coarse: torch.LongTensor
     coarse_objective: bool
     spatial_components: torch.Tensor
     singular_values: torch.Tensor
