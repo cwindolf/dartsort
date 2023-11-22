@@ -191,8 +191,6 @@ def iterate_compressed_pairwise_convolutions(
     print(
         f"iterate_compressed_pairwise_convolutions {conv_batch_size=} {units_batch_size=} {device=}"
     )
-    n_shifts = template_shift_index.all_pitch_shifts.size
-    do_shifting = n_shifts > 1
     geom_kdtree = reg_geom_kdtree = match_distance = None
     if do_shifting:
         geom_kdtree = KDTree(geom)
@@ -1131,14 +1129,23 @@ class ConvWorkerContext:
                 device=self.device,
             )
         )
-        self.low_rank_templates.spatial_components = torch.as_tensor(
-            self.low_rank_templates.spatial_components, device=self.device
+        self.low_rank_templates_a.spatial_components = torch.as_tensor(
+            self.low_rank_templates_a.spatial_components, device=self.device
         )
-        self.low_rank_templates.singular_values = torch.as_tensor(
-            self.low_rank_templates.singular_values, device=self.device
+        self.low_rank_templates_a.singular_values = torch.as_tensor(
+            self.low_rank_templates_a.singular_values, device=self.device
         )
-        self.low_rank_templates.temporal_components = torch.as_tensor(
-            self.low_rank_templates.temporal_components, device=self.device
+        self.low_rank_templates_a.temporal_components = torch.as_tensor(
+            self.low_rank_templates_a.temporal_components, device=self.device
+        )
+        self.low_rank_templates_b.spatial_components = torch.as_tensor(
+            self.low_rank_templates_b.spatial_components, device=self.device
+        )
+        self.low_rank_templates_b.singular_values = torch.as_tensor(
+            self.low_rank_templates_b.singular_values, device=self.device
+        )
+        self.low_rank_templates_b.temporal_components = torch.as_tensor(
+            self.low_rank_templates_b.temporal_components, device=self.device
         )
 
 
