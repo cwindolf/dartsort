@@ -262,6 +262,7 @@ def temporally_upsample_templates(
 
 @dataclass
 class CompressedUpsampledTemplates:
+    n_compressed_upsampled_templates: int
     compressed_upsampled_templates: np.ndarray
     compressed_upsampling_map: np.ndarray
     compressed_upsampling_index: np.ndarray
