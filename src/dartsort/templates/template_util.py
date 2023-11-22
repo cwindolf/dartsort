@@ -264,6 +264,7 @@ CompressedUpsampledTemplates = namedtuple(
         "n_compressed_upsampled_templates",
         "compressed_upsampled_templates",
         "compressed_upsampling_map",
+        "compressed_upsampling_index",
         "compressed_index_to_template_index",
         "compressed_index_to_upsampling_index",
     ],
@@ -360,6 +361,7 @@ def compressed_upsampled_templates(
         current_compressed_index,
         compressed_upsampled_templates,
         compressed_upsampling_map,
+        compressed_upsampling_index,
         template_indices,
         upsampling_indices,
     )

@@ -1031,6 +1031,11 @@ def coarse_approximate(
 
                 active_temp_a = temp_ix_a[inshift]
                 unique_active_temp_a = np.unique(active_temp_a)
+
+                # TODO just upsampling dedup
+                # active_temp_b = temp_ix_b[inshift]
+                # unique_active_temp_b = np.unique(active_temp_b)
+                # if unique_active_temp_a.size == unique_active_temp_b.size == 1:
                 if unique_active_temp_a.size == 1:
                     new_pconv.append(convs)
                     old_ix_to_new_ix[inshift] = np.arange(
