@@ -3,6 +3,7 @@ from __future__ import annotations  # allow forward type references
 from collections import namedtuple
 from dataclasses import dataclass, fields
 from typing import Iterator, Optional, Union
+from pathlib import Path
 
 import h5py
 import numpy as np
@@ -45,8 +46,12 @@ def compressed_convolve_to_h5(
     of unit pairs, so that it's not all done in memory at one time,
     and so that it can be done in parallel.
     """
-    if overwrite:
-        pass  # TODO
+    output_hdf5_filename = Path(output_hdf5_filename)
+    if not overwrite and output_hdf5_filename.exists():
+        with h5py.File(output_hdf5_filename, "r") as h5:
+            if "pconv_index" in h5:
+                return output_hdf5_filename
+        del h5
 
     # construct indexing helpers
     (
@@ -918,7 +923,7 @@ def compressed_upsampled_pairs(
 
     # each conv_ix needs to be duplicated as many times as its b template has
     # upsampled copies
-    conv_shifted_temp_ix_b = shifted_temp_ix_b[ix_b[conv_ix]]
+    conv_shifted_temp_ix_b = np.atleast_1d(shifted_temp_ix_b[ix_b[conv_ix]])
     upsampling_mask = (
         conv_shifted_temp_ix_b[:, None]
         == upsampled_shifted_template_index.up_shift_temp_ix_to_shift_temp_ix[None, :]
@@ -1030,8 +1035,8 @@ def coarse_approximate(
 
     This needs to tell the caller how to update its bookkeeping.
     """
-    if not pconv.numel():
-        return pconv, slice(None)
+    if not pconv.numel() or not coarse_approx_error_threshold:
+        return pconv, np.arange(len(pconv))
 
     new_pconv = []
     old_ix_to_new_ix = np.full(len(pconv), -1)
