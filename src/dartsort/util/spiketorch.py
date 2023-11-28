@@ -289,7 +289,7 @@ def depthwise_oaconv1d(input, weight, f2=None, padding=0):
     s2 = weight.shape[1]
     assert s1 >= s2
 
-    shape_final = s1 + s2 - 1
+    # shape_full = s1 + s2 - 1
     block_size, overlap, in1_step, in2_step = _calc_oa_lens(s1, s2)
     nstep1, pad1, nstep2, pad2 = steps_and_pad(
         s1, in1_step, s2, in2_step, block_size, overlap
@@ -320,15 +320,11 @@ def depthwise_oaconv1d(input, weight, f2=None, padding=0):
 
     oa = fold_res.reshape(n1, fold_out_len)
     # this is the full convolution
-    print(f"oaconv orig {oa.shape=}")
     # oa = oa[:, : shape_final]
-    print(f"oaconv full {oa.shape=}")
     # extract correct padding
     valid_len = s1 - s2 + 1
     valid_start = s2 - 1
     assert valid_start >= padding
     oa = oa[:, valid_start - padding:valid_start + valid_len + padding]
-    print(f"oaconv {oa.shape=} {valid_len=} {valid_start=} {padding=}")
-    print(f"oaconv {(valid_start - padding)=} {(valid_start + valid_len + padding)=}")
 
     return oa
