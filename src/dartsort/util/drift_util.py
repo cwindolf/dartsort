@@ -220,9 +220,13 @@ def get_spike_pitch_shifts(
     else:
         probe_displacement = registered_depths_um - depths_um
 
+    print(f"get_spike_pitch_shifts {pitch=}")
+    print(f"get_spike_pitch_shifts {probe_displacement.min()=} {probe_displacement.max()=}")
+
     # if probe_displacement > 0, then the registered position is below the original
     # and, to be conservative, round towards 0 rather than using //
     n_pitches_shift = (probe_displacement / pitch).astype(int)
+    print(f"get_spike_pitch_shifts {n_pitches_shift.min()=} {n_pitches_shift.max()=}")
 
     return n_pitches_shift
 
@@ -543,22 +547,29 @@ def get_shift_and_unit_pairs(
         reg_depths_um = np.concatenate((reg_depths_um_a, reg_depths_um_b))
 
     # figure out all shifts for all units at all times
-    print(f"{chunk_time_centers_s.min()=} {chunk_time_centers_s.max()=}")
-    print(f"{reg_depths_um.min()=} {reg_depths_um.max()=}")
-    print(f"{reg_depths_um_a.min()=} {reg_depths_um_a.max()=}")
-    print(f"{reg_depths_um_b.min()=} {reg_depths_um_b.max()=}")
-    print(f"{motion_est.time_bin_centers_s.min()=}")
-    print(f"{motion_est.time_bin_centers_s.max()=}")
-    print(f"{motion_est.spatial_bin_centers_um.min()=}")
-    print(f"{motion_est.spatial_bin_centers_um.max()=}")
-    unreg_depths_um = np.concatenate(
+    print(f"get_shift_and_unit_pairs {np.min(chunk_time_centers_s)=} {np.max(chunk_time_centers_s)=}")
+    print(f"get_shift_and_unit_pairs {reg_depths_um.min()=} {reg_depths_um.max()=}")
+    print(f"get_shift_and_unit_pairs {reg_depths_um_a.shape=} {reg_depths_um_b.shape=}")
+    print(f"get_shift_and_unit_pairs {reg_depths_um_a.min()=} {reg_depths_um_a.max()=}")
+    print(f"get_shift_and_unit_pairs {reg_depths_um_b.min()=} {reg_depths_um_b.max()=}")
+    print(f"get_shift_and_unit_pairs {motion_est.time_bin_centers_s.min()=}")
+    print(f"get_shift_and_unit_pairs {motion_est.time_bin_centers_s.max()=}")
+    print(f"get_shift_and_unit_pairs {motion_est.spatial_bin_centers_um.min()=}")
+    print(f"get_shift_and_unit_pairs {motion_est.spatial_bin_centers_um.max()=}")
+    unreg_depths_um = np.stack(
         [
-            motion_est.disp_at_s(t_s, depth_um=reg_depths_um, grid=True).T
+            invert_motion_estimate(
+                motion_est, t_s, reg_depths_um
+            )
             for t_s in chunk_time_centers_s
         ],
         axis=0,
     )
+    print(f"get_shift_and_unit_pairs {reg_depths_um.shape=} {unreg_depths_um.shape=}")
     assert unreg_depths_um.shape == (len(chunk_time_centers_s), len(reg_depths_um))
+    diff = reg_depths_um - unreg_depths_um
+    print(f"get_shift_and_unit_pairs {unreg_depths_um.min()=} {unreg_depths_um.max()=}")
+    print(f"get_shift_and_unit_pairs {diff.min()=} {diff.max()=}")
     pitch_shifts = get_spike_pitch_shifts(
         depths_um=reg_depths_um,
         pitch=get_pitch(geom),
@@ -569,6 +580,9 @@ def get_shift_and_unit_pairs(
     else:
         shifts_a = pitch_shifts[:, :na]
         shifts_b = pitch_shifts[:, na:]
+    print(f"get_shift_and_unit_pairs {shifts_a.min()=} {shifts_a.max()=}")
+    print(f"get_shift_and_unit_pairs {shifts_b.min()=} {shifts_b.max()=}")
+    print(f"get_shift_and_unit_pairs {shifts_a.shape=} {shifts_b.shape=}")
 
     # assign ids to pitch/shift pairs
     template_shift_index_a = TemplateShiftIndex.from_shift_matrix(shifts_a)

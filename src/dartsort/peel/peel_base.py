@@ -215,7 +215,7 @@ class BasePeeler(torch.nn.Module):
         # runs before fit_peeler_models()
         pass
 
-    def fit_peeler_models(self, save_folder):
+    def fit_peeler_models(self, save_folder, n_jobs=0, device=None):
         # subclasses should override if they need to fit models for peeling
         assert not self.peeling_needs_fit()
 

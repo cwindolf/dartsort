@@ -108,62 +108,83 @@ class CompressedPairwiseConv:
         )
         return cls.from_h5(hdf5_filename)
 
-    def at_shifts(self, shifts_a=None):
+    def at_shifts(self, shifts_a=None, shifts_b=None):
         """Subset this database to one set of shifts.
 
         The database becomes shiftless (not in the pejorative sense).
         """
-        if shifts_a is None:
+        if shifts_a is None or shifts_b is None:
+            assert shifts_a is shifts_b
             assert self.shifts_a.shape == (1,)
+            assert self.shifts_b.shape == (1,)
             return self
 
-        assert shifts_a.shape == len(self.shifted_template_index_a)
-        n_shifted_temps, n_up_shifted_temps = self.pconv_index.shape
+        assert shifts_a.shape == (len(self.shifted_template_index_a),)
+        assert shifts_b.shape == (len(self.upsampled_shifted_template_index_b),)
+        n_shifted_temps_a, n_up_shifted_temps_b = self.pconv_index.shape
 
         # active shifted and upsampled indices
-        shift_ix = np.searchsorted(self.shifts_a, shifts_a)
-        sub_shifted_temp_index = self.shifted_template_index_a[
-            np.arange(len(self.shifted_template_index_a)),
-            shift_ix,
+        shift_ix_a = np.searchsorted(self.shifts_a, shifts_a)
+        shift_ix_b = np.searchsorted(self.shifts_b, shifts_b)
+        print(
+            f"at_shifts {self.shifts_a.shape=} {self.shifts_a.min()=} {self.shifts_a.max()=}"
+        )
+        print(f"at_shifts {shifts_a.shape=} {shifts_a.min()=} {shifts_a.max()=}")
+        print(f"{shift_ix_a.shape=} {shift_ix_a.min()=} {shift_ix_a.max()=}")
+
+        print(
+            f"at_shifts {self.shifts_b.shape=} {self.shifts_b.min()=} {self.shifts_b.max()=}"
+        )
+        print(f"at_shifts {shifts_b.shape=} {shifts_b.min()=} {shifts_b.max()=}")
+        print(f"at_shifts {shift_ix_b.shape=} {shift_ix_b.min()=} {shift_ix_b.max()=}")
+
+        print(f"at_shifts {self.shifted_template_index_a.shape=}")
+        print(f"at_shifts {self.upsampled_shifted_template_index_b.shape=}")
+        sub_shifted_temp_index_a = self.shifted_template_index_a[
+            np.arange(len(self.shifted_template_index_a))[:, None],
+            shift_ix_a[:, None],
         ]
-        sub_up_shifted_temp_index = self.upsampled_shifted_template_index_b[
-            np.arange(len(self.shifted_template_index_a)),
-            shift_ix,
+        sub_up_shifted_temp_index_b = self.upsampled_shifted_template_index_b[
+            np.arange(len(self.upsampled_shifted_template_index_b))[:, None],
+            shift_ix_b[:, None],
         ]
+        print(f"at_shifts {sub_shifted_temp_index_a.shape=}")
+        print(f"at_shifts {sub_up_shifted_temp_index_b.shape=}")
 
         # in flat form for indexing into pconv_index. also, reindex.
-        valid_shifted = sub_shifted_temp_index < n_shifted_temps
-        shifted_temp_ixs, new_shifted_temp_ixs = np.unique(
-            sub_shifted_temp_index[valid_shifted]
+        valid_a = sub_shifted_temp_index_a < n_shifted_temps_a
+        shifted_temp_ixs_a, new_shifted_temp_ixs_a = np.unique(
+            sub_shifted_temp_index_a[valid_a], return_inverse=True
         )
-        valid_up_shifted = sub_up_shifted_temp_index < n_up_shifted_temps
-        up_shifted_temp_ixs, new_up_shifted_temp_ixs = np.unique(
-            sub_up_shifted_temp_index[valid_up_shifted], return_inverse=True
+        valid_b = sub_up_shifted_temp_index_b < n_up_shifted_temps_b
+        up_shifted_temp_ixs_b, new_up_shifted_temp_ixs_b = np.unique(
+            sub_up_shifted_temp_index_b[valid_b], return_inverse=True
         )
 
         # get relevant pconv subset and reindex
         sub_pconv_indices, new_pconv_indices = np.unique(
             self.pconv_index[
-                shifted_temp_ixs[:, None],
-                up_shifted_temp_ixs.ravel()[None, :],
+                shifted_temp_ixs_a[:, None],
+                up_shifted_temp_ixs_b.ravel()[None, :],
             ],
             return_inverse=True,
         )
         sub_pconv = self.pconv[sub_pconv_indices]
 
         # reindexing
-        n_sub_shifted_temps = len(shifted_temp_ixs)
-        n_sub_up_shifted_temps = len(up_shifted_temp_ixs)
+        n_sub_shifted_temps_a = len(shifted_temp_ixs_a)
+        n_sub_up_shifted_temps_b = len(up_shifted_temp_ixs_b)
         sub_pconv_index = new_pconv_indices.reshape(
-            n_sub_shifted_temps, n_sub_up_shifted_temps
+            n_sub_shifted_temps_a, n_sub_up_shifted_temps_b
         )
-        sub_shifted_temp_index[valid_shifted] = new_shifted_temp_ixs
-        sub_up_shifted_temp_index[valid_shifted] = new_up_shifted_temp_ixs
+        sub_shifted_temp_index_a[valid_a] = new_shifted_temp_ixs_a
+        sub_up_shifted_temp_index_b[valid_b] = new_up_shifted_temp_ixs_b
 
         return self.__class__(
-            shifts=np.zeros(1),
-            shifted_template_index=sub_shifted_temp_index,
-            upsampled_shifted_template_index=sub_up_shifted_temp_index,
+            shifts_a=np.zeros(1),
+            shifts_b=np.zeros(1),
+            shifted_template_index_a=sub_shifted_temp_index_a,
+            upsampled_shifted_template_index_b=sub_up_shifted_temp_index_b,
             pconv_index=sub_pconv_index,
             pconv=sub_pconv,
         )
@@ -171,8 +192,10 @@ class CompressedPairwiseConv:
     def to(self, device=None):
         """Become torch tensors on device."""
         for f in fields(self):
-            self.setattr(f.name, torch.as_tensor(getattr(self, f.name), device=device))
+            setattr(self, f.name, torch.as_tensor(getattr(self, f.name), device=device))
         self.device = device
+        self._is_torch = True
+        return self
 
     def query(
         self,
@@ -181,6 +204,8 @@ class CompressedPairwiseConv:
         upsampling_indices_b=None,
         shifts_a=None,
         shifts_b=None,
+        scalings_b=None,
+        times_b=None,
         return_zero_convs=False,
         grid=False,
     ):
@@ -229,16 +254,29 @@ class CompressedPairwiseConv:
 
         # return convolutions between all ai,bj or just ai,bi?
         if grid:
-            pconv_indices = self.pconv_index[shifted_temp_ix_a[:, None], up_shifted_temp_ix_b[None, :]]
+            pconv_indices = self.pconv_index[
+                shifted_temp_ix_a[:, None], up_shifted_temp_ix_b[None, :]
+            ]
             if self._is_torch:
                 template_indices_a, template_indices_b = torch.cartesian_prod(
                     template_indices_a, template_indices_b
                 ).T
+                if scalings_b is not None:
+                    print(f"{scalings_b.shape=} {pconv_indices.shape=}")
+                    scalings_b = torch.broadcast_to(scalings_b[None], pconv_indices.shape).reshape(-1)
+                if times_b is not None:
+                    times_b = torch.broadcast_to(times_b[None], pconv_indices.shape).reshape(-1)
                 pconv_indices = pconv_indices.view(-1)
             else:
-                template_indices_a, template_indices_b = np.meshgrid(template_indices_a, template_indices_b, indexing="ij")
+                template_indices_a, template_indices_b = np.meshgrid(
+                    template_indices_a, template_indices_b, indexing="ij"
+                )
                 template_indices_a = template_indices_a.ravel()
                 template_indices_b = template_indices_b.ravel()
+                if scalings_b is not None:
+                    scalings_b = np.broadcast_to(scalings_b[None], pconv_indices.shape).ravel()
+                if times_b is not None:
+                    times_b = np.broadcast_to(times_b[None], pconv_indices.shape).ravel()
                 pconv_indices = pconv_indices.ravel()
         else:
             pconv_indices = self.pconv_index[shifted_temp_ix_a, up_shifted_temp_ix_b]
@@ -249,5 +287,16 @@ class CompressedPairwiseConv:
             pconv_indices = pconv_indices[which]
             template_indices_a = template_indices_a[which]
             template_indices_b = template_indices_b[which]
+            if scalings_b is not None:
+                scalings_b = scalings_b[which]
+            if times_b is not None:
+                times_b = times_b[which]
 
-        return template_indices_a, template_indices_b, self.pconv[pconv_indices]
+        pconvs = self.pconv[pconv_indices]
+        if scalings_b is not None:
+            pconvs.mul_(scalings_b[:, None])
+
+        if times_b is not None:
+            return template_indices_a, template_indices_b, times_b, pconvs
+
+        return template_indices_a, template_indices_b, pconvs
