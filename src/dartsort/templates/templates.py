@@ -52,18 +52,12 @@ class TemplateData:
     def coarsen(self):
         """Weighted average all templates that share a unit id and re-localize."""
         # update templates
-        print(f"a {np.isnan(self.templates).any()=}")
-        print(f"b {np.equal(self.templates, 0).all(axis=(1,2)).sum()=}")
         unit_ids_unique, flat_ids = np.unique(self.unit_ids, return_inverse=True)
         templates = weighted_average(flat_ids, self.templates, self.spike_counts)
-        print(f"b {np.isnan(templates).any()=}")
-        print(f"b {np.equal(templates, 0).all(axis=(1,2)).sum()=}")
 
         # collect spike counts
         spike_counts = np.zeros(len(templates))
-        np.add.at(spike_counts, np.arange(unit_ids_unique.size), self.spike_counts)
-        print(f"b {np.isnan(spike_counts).any()=}")
-        print(f"b {np.isnan(self.registered_geom).any()=}")
+        np.add.at(spike_counts, flat_ids, self.spike_counts)
 
         # re-localize
         registered_template_depths_um = get_template_depths(
@@ -71,7 +65,9 @@ class TemplateData:
             self.registered_geom,
             localization_radius_um=self.localization_radius_um,
         )
-        print(f"b {np.isnan(registered_template_depths_um).any()=}")
+        print(f"coarsen {self.registered_geom[:,1].min()=} {self.registered_geom[:,1].max()=}")
+        print(f"coarsen {self.registered_template_depths_um.min()=} {self.registered_template_depths_um.max()=}")
+        print(f"coarsen {registered_template_depths_um.min()=} {registered_template_depths_um.max()=}")
 
         return replace(
             self,
