@@ -65,9 +65,6 @@ class TemplateData:
             self.registered_geom,
             localization_radius_um=self.localization_radius_um,
         )
-        print(f"coarsen {self.registered_geom[:,1].min()=} {self.registered_geom[:,1].max()=}")
-        print(f"coarsen {self.registered_template_depths_um.min()=} {self.registered_template_depths_um.max()=}")
-        print(f"coarsen {registered_template_depths_um.min()=} {registered_template_depths_um.max()=}")
 
         return replace(
             self,
@@ -179,11 +176,10 @@ class TemplateData:
 
         # main!
         results = get_templates(recording, sorting, **kwargs)
-        print(
-            f"{[(k,v.dtype) for k,v in results.items() if (isinstance(v, np.ndarray))]=}"
-        )
 
         # handle registered templates
+        print(f"{results['templates'].shape=}")
+        print(f"{kwargs['registered_geom'].shape=}")
         if template_config.registered_templates:
             registered_template_depths_um = get_template_depths(
                 results["templates"],

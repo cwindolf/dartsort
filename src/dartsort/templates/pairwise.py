@@ -86,7 +86,6 @@ class CompressedPairwiseConv:
         n_jobs=0,
         show_progress=True,
     ):
-        print(f"pairwise from_template_data {device=}")
         compressed_convolve_to_h5(
             hdf5_filename,
             template_data=template_data,
@@ -124,22 +123,9 @@ class CompressedPairwiseConv:
         n_shifted_temps_a, n_up_shifted_temps_b = self.pconv_index.shape
 
         # active shifted and upsampled indices
+        print(f"{self.shifts_a=} {shifts_a.min()=} {shifts_a.max()=}")
         shift_ix_a = np.searchsorted(self.shifts_a, shifts_a)
         shift_ix_b = np.searchsorted(self.shifts_b, shifts_b)
-        print(
-            f"at_shifts {self.shifts_a.shape=} {self.shifts_a.min()=} {self.shifts_a.max()=}"
-        )
-        print(f"at_shifts {shifts_a.shape=} {shifts_a.min()=} {shifts_a.max()=}")
-        print(f"{shift_ix_a.shape=} {shift_ix_a.min()=} {shift_ix_a.max()=}")
-
-        print(
-            f"at_shifts {self.shifts_b.shape=} {self.shifts_b.min()=} {self.shifts_b.max()=}"
-        )
-        print(f"at_shifts {shifts_b.shape=} {shifts_b.min()=} {shifts_b.max()=}")
-        print(f"at_shifts {shift_ix_b.shape=} {shift_ix_b.min()=} {shift_ix_b.max()=}")
-
-        print(f"at_shifts {self.shifted_template_index_a.shape=}")
-        print(f"at_shifts {self.upsampled_shifted_template_index_b.shape=}")
         sub_shifted_temp_index_a = self.shifted_template_index_a[
             np.arange(len(self.shifted_template_index_a))[:, None],
             shift_ix_a[:, None],
@@ -148,8 +134,6 @@ class CompressedPairwiseConv:
             np.arange(len(self.upsampled_shifted_template_index_b))[:, None],
             shift_ix_b[:, None],
         ]
-        print(f"at_shifts {sub_shifted_temp_index_a.shape=}")
-        print(f"at_shifts {sub_up_shifted_temp_index_b.shape=}")
 
         # in flat form for indexing into pconv_index. also, reindex.
         valid_a = sub_shifted_temp_index_a < n_shifted_temps_a
@@ -262,7 +246,6 @@ class CompressedPairwiseConv:
                     template_indices_a, template_indices_b
                 ).T
                 if scalings_b is not None:
-                    print(f"{scalings_b.shape=} {pconv_indices.shape=}")
                     scalings_b = torch.broadcast_to(scalings_b[None], pconv_indices.shape).reshape(-1)
                 if times_b is not None:
                     times_b = torch.broadcast_to(times_b[None], pconv_indices.shape).reshape(-1)
