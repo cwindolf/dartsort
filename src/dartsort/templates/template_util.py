@@ -168,12 +168,17 @@ def templates_at_time(
     unregistered_depths_um = drift_util.invert_motion_estimate(
         motion_est, t_s, registered_template_depths_um
     )
+    print(f"templates_at_time {registered_template_depths_um.min()=} {registered_template_depths_um.max()=}")
+    print(f"templates_at_time {unregistered_depths_um.min()=} {unregistered_depths_um.max()=}")
+    diff = unregistered_depths_um - registered_template_depths_um
+    print(f"templates_at_time {diff.min()=} {diff.max()=}")
     # reverse arguments to pitch shifts since we are going the other direction
     pitch_shifts = drift_util.get_spike_pitch_shifts(
         depths_um=registered_template_depths_um,
         geom=geom,
         registered_depths_um=unregistered_depths_um,
     )
+    print(f"templates_at_time {pitch_shifts.min()=} {pitch_shifts.max()=}")
     # extract relevant channel neighborhoods, also by reversing args to a drift helper
     unregistered_templates = drift_util.get_waveforms_on_static_channels(
         registered_templates,
