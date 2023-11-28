@@ -169,7 +169,7 @@ def _run_peeler(
     )
 
     # do localization
-    if featurization_config.do_localization:
+    if not featurization_config.denoise_only and featurization_config.do_localization:
         wf_name = featurization_config.output_waveforms_name
         localize_hdf5(
             output_hdf5_filename,
