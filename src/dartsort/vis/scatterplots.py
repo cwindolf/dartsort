@@ -24,6 +24,8 @@ def scatter_spike_features(
     amplitude_cmap=plt.cm.viridis,
     max_spikes_plot=500_000,
     probe_margin_um=100,
+    t_min=-np.inf,
+    t_max=np.inf,
     s=1,
     linewidth=0,
     limits="probe_margin",
@@ -56,14 +58,14 @@ def scatter_spike_features(
             amplitudes = h5["denoised_amplitudes"][:]
             geom = h5["geom"][:]
 
-    to_show = None
+    to_show = np.flatnonzero(np.clip(times_s, t_min, t_max) == times_s)
     if geom is not None:
-        to_show = np.flatnonzero(
-            (depths_um > geom[:, 1].min() - probe_margin_um)
-            & (depths_um < geom[:, 1].max() + probe_margin_um)
-            & (x > geom[:, 0].min() - probe_margin_um)
-            & (x < geom[:, 0].max() + probe_margin_um)
-        )
+        to_show = to_show[
+            (depths_um[to_show] > geom[:, 1].min() - probe_margin_um)
+            & (depths_um[to_show] < geom[:, 1].max() + probe_margin_um)
+            & (x[to_show] > geom[:, 0].min() - probe_margin_um)
+            & (x[to_show] < geom[:, 0].max() + probe_margin_um)
+        ]
 
     _, s_x = scatter_x_vs_depth(
         x=x,
