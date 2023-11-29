@@ -112,10 +112,10 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
             self.match_distance = pdist(self.geom).min() / 2.0
 
         # some parts of this constructor are deferred to precompute_peeling_data
-        self._peeling_needs_fit = True
+        self._needs_precompute = True
 
     def peeling_needs_fit(self):
-        return self._peeling_needs_fit
+        return self._needs_precompute
 
     def precompute_peeling_data(self, save_folder, n_jobs=0, device=None):
         self.build_template_data(
@@ -138,7 +138,7 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
         )
         self.register_buffer("_rank_ix", torch.arange(self.svd_compression_rank))
         self.check_shapes()
-        self._peeling_needs_fit = False
+        self._needs_precompute = False
 
     def out_datasets(self):
         datasets = super().out_datasets()
@@ -426,6 +426,7 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
     def templates_at_time(self, t_s):
         """Handle drift -- grab the right spatial neighborhoods."""
         pconvdb = self.pairwise_conv_db
+        pitch_shifts_a=pitch_shifts_b=None
         if self.is_drifting:
             pitch_shifts_b, cur_spatial = template_util.templates_at_time(
                 t_s,
@@ -463,14 +464,17 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
                 fill_value=0.0,
             )
             max_channels = cur_ampvecs[:, 0, :].argmax(1)
-            pconvdb = pconvdb.at_shifts(pitch_shifts_a, pitch_shifts_b)
+            # pconvdb = pconvdb.at_shifts(pitch_shifts_a, pitch_shifts_b)
+            pitch_shifts_a = torch.as_tensor(pitch_shifts_a, device=cur_obj_spatial.device)
+            pitch_shifts_b = torch.as_tensor(pitch_shifts_b, device=cur_obj_spatial.device)
         else:
             cur_spatial = self.spatial_components
             cur_obj_spatial = self.objective_spatial_components
             max_channels = self.registered_template_ampvecs.argmax(1)
 
-        if not pconvdb._is_torch:
-            pconvdb.to(cur_obj_spatial.device)
+        # if not pconvdb._is_torch:
+        #     # pconvdb.to("cpu")
+        pconvdb.to(cur_obj_spatial.device)
 
         return MatchingTemplateData(
             objective_spatial_components=cur_obj_spatial,
@@ -488,6 +492,8 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
             compressed_upsampled_temporal=self.compressed_upsampled_temporal,
             max_channels=torch.as_tensor(max_channels, device=cur_obj_spatial.device),
             pairwise_conv_db=pconvdb,
+            shifts_a=pitch_shifts_a,
+            shifts_b=pitch_shifts_b,
         )
 
     def match_chunk(
@@ -548,6 +554,7 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
             self.enforce_refractory(
                 refrac_mask,
                 new_peaks.times + self.obj_pad_len,
+                new_peaks.objective_template_indices,
                 new_peaks.template_indices,
             )
 
@@ -665,21 +672,22 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
         return MatchingPeaks(
             n_spikes=times.numel(),
             times=times,
+            objective_template_indices=obj_template_indices,
             template_indices=template_indices,
             upsampling_indices=upsampling_indices,
             scalings=scalings,
             scores=scores,
         )
 
-    def enforce_refractory(self, objective, times, template_indices):
+    def enforce_refractory(self, objective, times, objective_template_indices, template_indices):
         if not times.numel():
             return
         # overwrite objective with -inf to enforce refractoriness
         time_ix = times[:, None] + self._refrac_ix[None, :]
         if not self.grouped_temps:
-            row_ix = template_indices[:, None, None]
+            row_ix = template_indices[:, None]
         elif self.coarse_objective:
-            row_ix = self.fine_to_coarse[template_indices][:, None, None]
+            row_ix = objective_template_indices[:, None]
         elif self.grouped_temps:
             row_ix = self.group_index[template_indices]
         else:
@@ -711,6 +719,8 @@ class MatchingTemplateData:
     compressed_upsampled_temporal: torch.Tensor
     max_channels: torch.LongTensor
     pairwise_conv_db: CompressedPairwiseConv
+    shifts_a: Optional[torch.Tensor]
+    shifts_b: Optional[torch.Tensor]
 
     def __post_init__(self):
         (
@@ -802,6 +812,9 @@ class MatchingTemplateData:
             scalings_b=scalings,
             times_b=times,
             grid=True,
+            device=conv.device,
+            shifts_a=self.shifts_a,
+            shifts_b=self.shifts_b[template_indices] if self.shifts_b is not None else None,
         )
         ix_template = template_indices_a[:, None]
         ix_time = times[:, None] + (conv_pad_len + self.conv_lags)[None, :]
@@ -1002,6 +1015,7 @@ class MatchingPeaks:
         self,
         n_spikes: int = 0,
         times: Optional[torch.LongTensor] = None,
+        objective_template_indices: Optional[torch.LongTensor] = None,
         template_indices: Optional[torch.LongTensor] = None,
         upsampling_indices: Optional[torch.LongTensor] = None,
         scalings: Optional[torch.Tensor] = None,
@@ -1011,6 +1025,7 @@ class MatchingPeaks:
         self.n_spikes = n_spikes
         self._times = times
         self._template_indices = template_indices
+        self._objective_template_indices = objective_template_indices
         self._upsampling_indices = upsampling_indices
         self._scalings = scalings
         self._scores = scores
@@ -1025,6 +1040,10 @@ class MatchingPeaks:
             assert self.cur_buf_size == n_spikes
         if template_indices is None:
             self._template_indices = torch.zeros(
+                self.cur_buf_size, dtype=int, device=device
+            )
+        if objective_template_indices is None:
+            self._objective_template_indices = torch.zeros(
                 self.cur_buf_size, dtype=int, device=device
             )
         if scalings is None:
@@ -1043,6 +1062,9 @@ class MatchingPeaks:
     @property
     def template_indices(self):
         return self._template_indices[: self.n_spikes]
+    @property
+    def objective_template_indices(self):
+        return self._objective_template_indices[: self.n_spikes]
 
     @property
     def upsampling_indices(self):
@@ -1061,6 +1083,7 @@ class MatchingPeaks:
         k = self.n_spikes
         self._times = _grow_buffer(self._times, k, sz)
         self._template_indices = _grow_buffer(self._template_indices, k, sz)
+        self._objective_template_indices = _grow_buffer(self._objective_template_indices, k, sz)
         self._upsampling_indices = _grow_buffer(self._upsampling_indices, k, sz)
         self._scalings = _grow_buffer(self._scalings, k, sz)
         self._scores = _grow_buffer(self._scores, k, sz)
@@ -1070,6 +1093,7 @@ class MatchingPeaks:
         order = torch.argsort(self.times[: self.n_spikes])
         self._times[: self.n_spikes] = self.times[order]
         self._template_indices[: self.n_spikes] = self.template_indices[order]
+        self._objective_template_indices[: self.n_spikes] = self.objective_template_indices[order]
         self._upsampling_indices[: self.n_spikes] = self.upsampling_indices[order]
         self._scalings[: self.n_spikes] = self.scalings[order]
         self._scores[: self.n_spikes] = self.scores[order]
@@ -1080,6 +1104,7 @@ class MatchingPeaks:
             self.grow_buffers(min_size=new_n_spikes)
         self._times[self.n_spikes : new_n_spikes] = other.times
         self._template_indices[self.n_spikes : new_n_spikes] = other.template_indices
+        self._objective_template_indices[self.n_spikes : new_n_spikes] = other.objective_template_indices
         self._upsampling_indices[
             self.n_spikes : new_n_spikes
         ] = other.upsampling_indices
