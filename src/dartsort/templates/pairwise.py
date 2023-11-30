@@ -282,7 +282,7 @@ class CompressedPairwiseConv:
             pconvs = torch.from_numpy(batched_h5_read(self.pconv, pconv_indices.numpy(force=True)))
         if device is not None:
             pconvs = pconvs.to(device)
-        
+
         if scalings_b is not None:
             pconvs.mul_(scalings_b[:, None])
 
