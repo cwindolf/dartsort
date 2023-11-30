@@ -915,7 +915,7 @@ class MatchingTemplateData:
 
         # unpack the current traces and the traces one step back
         snips_prev = residual_snips[:, :-1]
-        snips_dt = torch.stack((snips_prev, snips), dim=3)
+        # snips_dt = torch.stack((snips_prev, snips), dim=3)
 
         # now, upsampling
         # repeat the superres logic, the comp up index acts the same
@@ -924,34 +924,56 @@ class MatchingTemplateData:
             comp_up_ix < self.n_compressed_upsampled_templates
         ).nonzero(as_tuple=True)
         comp_up_indices = comp_up_ix[dup_ix, column_ix]
-        convs = torch.einsum(
-            "jtcd,jrc,jtr->jd",
-            snips_dt[dup_ix],
-            self.spatial_singular[template_indices[dup_ix]],
+        # convs = torch.einsum(
+        #     "jtcd,jrc,jtr->jd",
+        #     snips_dt[dup_ix],
+        #     self.spatial_singular[template_indices[dup_ix]],
+        #     self.compressed_upsampled_temporal[comp_up_indices],
+        # )
+        temps = torch.bmm(
             self.compressed_upsampled_temporal[comp_up_indices],
-        )
+            self.spatial_singular[template_indices[dup_ix]],
+        ).view(len(comp_up_indices), -1)
+        convs = torch.linalg.vecdot(snips[dup_ix].view(len(temps), -1), temps)
+        convs_prev = torch.linalg.vecdot(snips_prev[dup_ix].view(len(temps), -1), temps)
+        # convs = torch.einsum(
+        #     "jtc,jrc,jtr->j",
+        #     snips[dup_ix],
+        #     self.spatial_singular[template_indices[dup_ix]],
+        #     self.compressed_upsampled_temporal[comp_up_indices],
+        # )
+        # convs_prev = torch.einsum(
+        #     "jtc,jrc,jtr->j",
+        #     snips_prev[dup_ix],
+        #     self.spatial_singular[template_indices[dup_ix]],
+        #     self.compressed_upsampled_temporal[comp_up_indices],
+        # )
+        better = convs >= convs_prev
+        convs = torch.maximum(convs, convs_prev)
+
         norms = norms[dup_ix]
-        objs = torch.full((*comp_up_ix.shape, 2), -torch.inf, device=convs.device)
+        objs = torch.full(comp_up_ix.shape, -torch.inf, device=convs.device)
         if amp_scale_variance:
             inv_lambda = 1 / amp_scale_variance
             b = convs + inv_lambda
-            a = norms[:, None] + inv_lambda
+            a = norms + inv_lambda
             scalings = torch.clip(b / a, amp_scale_min, amp_scale_max)
             objs[dup_ix, column_ix] = (
                 2 * scalings * b - torch.square(scalings) * a - inv_lambda
             )
         else:
-            objs[dup_ix, column_ix] = 2 * convs - norms[:, None]
+            objs[dup_ix, column_ix] = 2 * convs - norms
             scalings = None
-        objs, best_column_dt_ix = objs.reshape(len(objs), comp_up_ix.shape[1] * 2).max(dim=1)
+        objs, best_column_ix = objs.max(dim=1)
 
-        best_column_ix = best_column_dt_ix // 2
         row_ix = torch.arange(len(objs), device=best_column_ix.device)
         comp_up_indices = comp_up_ix[row_ix, best_column_ix]
         upsampling_indices = self.compressed_index_to_upsampling_index[comp_up_indices]
 
-        # even positions have were one step earlier
-        time_shifts = best_column_dt_ix % 2 - 1
+        # prev convs were one step earlier
+        time_shifts = torch.full(comp_up_ix.shape, -1, device=convs.device)
+        time_shifts[dup_ix, column_ix] += better
+        time_shifts = time_shifts[row_ix, best_column_ix]
 
         return time_shifts, upsampling_indices, scalings, template_indices, objs
 
