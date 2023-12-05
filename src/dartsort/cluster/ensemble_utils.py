@@ -11,9 +11,9 @@ def ensembling_hdbscan(recording,
     amps, 
     motion_est=None,
     chunk_size_s=300, 
-    min_cluster_size=15,
-    min_samples=15,
-    cluster_selection_epsilon=5, 
+    min_cluster_size=25,
+    min_samples=25,
+    cluster_selection_epsilon=1, 
     scales=(1, 1, 50),
     log_c=5,
 ):
@@ -23,6 +23,13 @@ def ensembling_hdbscan(recording,
     """
     
     n_chunks = int((times_seconds.max() - times_seconds.min())// chunk_size_s)
+    leftover_time = int(times_seconds.max())-chunk_size_s*n_chunks
+    if leftover_time>chunk_size_s*2/3:
+        n_chunks+=1
+    # TODO: extend to overlapping bins
+    # shift = (int(times_seconds.max())-chunk_size_s) // n_chunks
+    # n_chunks+=1
+    
     if n_chunks == 0 or n_chunks == 1:
         return hdbscan_clustering(recording,
             times_seconds, times_samples, x, z_abs, geom, amps, motion_est, min_cluster_size, min_samples, 
@@ -35,22 +42,26 @@ def ensembling_hdbscan(recording,
         labels_all = -1*np.ones(times_seconds.shape[0])
         for k in  trange(n_chunks, desc="Per-chunk clustering"):
             idx_chunk = np.flatnonzero(np.logical_and(times_seconds>=min_time_s+k*chunk_size_s, times_seconds<min_time_s+(k+1)*chunk_size_s))
+            # idx_chunk = np.flatnonzero(np.logical_and(times_seconds>=min_time_s+k*shift, times_seconds<min_time_s+k*shift+chunk_size_s))
             idx_all_chunks.append(idx_chunk)
             labels_chunk = hdbscan_clustering(recording,
-                times_seconds[idx_chunk], times_samples[idx_chunk], x[idx_chunk], z_abs[idx_chunk], geom, amps[idx_chunk], motion_est, min_cluster_size, min_samples, 
+                times_seconds[idx_chunk], times_samples[idx_chunk], x[idx_chunk], z_abs[idx_chunk], geom, amps[idx_chunk], motion_est, 
+                min_cluster_size, min_samples, 
                 cluster_selection_epsilon, scales, log_c,
             )
             _, labels_chunk[labels_chunk>-1] = np.unique(labels_chunk[labels_chunk>-1], return_inverse=True)
             labels_all_chunks.append(labels_chunk.astype('int'))
+            # if k == 0:
             labels_all[idx_chunk] = labels_chunk
         
         z_reg = motion_est.correct_s(times_seconds, z_abs)
          
         labels_all = labels_all.astype('int')
         
-        for k in  trange(n_chunks-1, desc="Enesmebling chunks"):
+        for k in  trange(n_chunks-1, desc="Ensembling chunks"):
             
             #CHANGE THE 1 ---
+            # idx_1 = np.flatnonzero(np.logical_and(times_seconds>=min_time_s, times_seconds<min_time_s+k*shift+chunk_size_s))
             idx_1 = np.flatnonzero(np.logical_and(times_seconds>=min_time_s, times_seconds<min_time_s+(k+1)*chunk_size_s))
             idx_2 = idx_all_chunks[k+1]
             x_1 = scales[0]*x[idx_1]
