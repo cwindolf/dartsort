@@ -3,8 +3,8 @@ from pathlib import Path
 from dartsort.config import (FeaturizationConfig, ClusteringConfig, MatchingConfig,
                              SubtractionConfig, TemplateConfig)
 from dartsort.localize.localize_util import localize_hdf5
-from dartsort.peel import (ResidualUpdateTemplateMatchingPeeler,
-                           SubtractionPeeler)
+# from dartsort.peel import (ResidualUpdateTemplateMatchingPeeler,
+#                            SubtractionPeeler)
 from dartsort.cluster.initial import ensemble_chunks
 from dartsort.templates import TemplateData
 from dartsort.util.data_util import DARTsortSorting, check_recording
@@ -70,9 +70,12 @@ def subtract(
 
 def cluster(
     hdf5_filename,
+    recording,
     motion_est=None,
-    clustering_config=default_clustering_config):
+    clustering_config=default_clustering_config,
+):
     sorting = ensemble_chunks(hdf5_filename,
+                              recording,
                               chunk_size_s=default_clustering_config.chunk_size_s,
                               motion_est=motion_est,
                               ensemble_strategy=default_clustering_config.ensemble_strategy,
