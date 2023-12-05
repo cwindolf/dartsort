@@ -93,6 +93,7 @@ def cluster_chunk(
 
 def ensemble_chunks(
     peeling_hdf5_filename,
+    recording,
     chunk_size_s=300,
     motion_est=None,
     ensemble_strategy="forward_backward",
@@ -112,27 +113,28 @@ def ensemble_chunks(
     -------
       : DARTsortSorting
     """
-    
     if ensemble_strategy is None:
+        raise ValueError
+        # Or do we want to do regular clustering here?
         #cluster full chunk with no ensembling
-        sorting = cluster_chunk(peeling_hdf5_filename, 
-                                chunk_time_range_s=None,
-                                motion_est=motion_est,
-                                strategy=cluster_strategy,
-                            )
+        # sorting = cluster_chunk(peeling_hdf5_filename, 
+        #                         chunk_time_range_s=None,
+        #                         motion_est=motion_est,
+        #                         strategy=cluster_strategy,
+        #                     )
     else:
         assert ensemble_strategy in ("forward_backward","meet")
         #for loop cluster chunks
         if ensemble_strategy == "forward_backward":
             with h5py.File(peeling_hdf5_filename, "r") as h5:
                 times_samples = h5["times_samples"][:]
+                times_seconds = h5["times_seconds"][:]
                 channels = h5["channels"][:]
-                times_s = h5["times_seconds"][:]
                 xyza = h5["point_source_localizations"][:]
                 amps = h5["denoised_amplitudes"][:]
                 geom = h5["geom"][:]
             labels = ensemble_utils.ensembling_hdbscan(
-                times_s, xyza[:, 0], xyza[:, 2], geom, amps, motion_est, chunk_size_s,
+                recording, times_seconds, times_samples, xyza[:, 0], xyza[:, 2], geom, amps, motion_est, chunk_size_s,
             )
             sorting = DARTsortSorting(
                 times_samples=times_samples,
@@ -141,12 +143,8 @@ def ensemble_chunks(
                 extra_features=dict(
                     point_source_localizations=xyza,
                     denoised_amplitudes=amps,
-                    times_seconds=times_s,
+                    times_seconds=times_seconds,
                 ),
             )
-        if ensemble_strategy == "meet":
-            raise ValueError("WIP")
-        else:
-            raise ValueError
     return sorting
 

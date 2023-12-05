@@ -1,12 +1,19 @@
 import numpy as np
 from .cluster_util import hdbscan_clustering
+from tqdm.auto import trange
 
 def ensembling_hdbscan(recording,
-    times_seconds, times_samples, x, z_abs, geom, amps, motion_est=None,
+    times_seconds, 
+    times_samples, 
+    x, 
+    z_abs, 
+    geom, 
+    amps, 
+    motion_est=None,
     chunk_size_s=300, 
-    min_cluster_size=25,
-    min_samples=25,
-    cluster_selection_epsilon=15, 
+    min_cluster_size=15,
+    min_samples=15,
+    cluster_selection_epsilon=5, 
     scales=(1, 1, 50),
     log_c=5,
 ):
@@ -26,7 +33,7 @@ def ensembling_hdbscan(recording,
         labels_all_chunks = []
         idx_all_chunks = []
         labels_all = -1*np.ones(times_seconds.shape[0])
-        for k in range(n_chunks):
+        for k in  trange(n_chunks, desc="Per-chunk clustering"):
             idx_chunk = np.flatnonzero(np.logical_and(times_seconds>=min_time_s+k*chunk_size_s, times_seconds<min_time_s+(k+1)*chunk_size_s))
             idx_all_chunks.append(idx_chunk)
             labels_chunk = hdbscan_clustering(recording,
@@ -41,7 +48,7 @@ def ensembling_hdbscan(recording,
          
         labels_all = labels_all.astype('int')
         
-        for k in range(n_chunks-1):
+        for k in  trange(n_chunks-1, desc="Enesmebling chunks"):
             
             #CHANGE THE 1 ---
             idx_1 = np.flatnonzero(np.logical_and(times_seconds>=min_time_s, times_seconds<min_time_s+(k+1)*chunk_size_s))

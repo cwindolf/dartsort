@@ -166,12 +166,12 @@ class MatchingConfig:
 class ClusteringConfig:
     # -- initial clustering
     # hdbscan parameters
-    cluster_strategy: str = "closest_registered_channels"
-    min_cluster_size: int = 25
-    min_samples: int = 25
-    cluster_selection_epsilon: int = 121 
+    cluster_strategy: str = "hdbscan"
+    min_cluster_size: int = 15
+    min_samples: int = 15
+    cluster_selection_epsilon: int = 5 
 
     # -- ensembling
-    ensemble_strategy: Optional[str] = None
+    ensemble_strategy: Optional[str] = "forward_backward"
     chunk_size_s: int = 300
     # forward-backward
