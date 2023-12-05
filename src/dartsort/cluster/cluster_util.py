@@ -296,6 +296,48 @@ def remove_duplicate_spikes(
     return clusterer, remove_indices_list, remove_spikes
 
 
+def compute_spiketrain_agreement(st_1, st_2, delta_frames=12):
+    # create figure for each match
+    times_concat = np.concatenate((st_1, st_2))
+    membership = np.concatenate(
+        (np.ones(st_1.shape) * 1, np.ones(st_2.shape) * 2)
+    )
+    indices = times_concat.argsort()
+    times_concat_sorted = times_concat[indices]
+    membership_sorted = membership[indices]
+    diffs = times_concat_sorted[1:] - times_concat_sorted[:-1]
+    inds = np.flatnonzero(
+        (diffs <= delta_frames)
+        & (membership_sorted[:-1] != membership_sorted[1:])
+    )
+
+    if len(inds) > 0:
+        inds2 = inds[np.where(inds[:-1] + 1 != inds[1:])[0]] + 1
+        inds2 = np.concatenate((inds2, [inds[-1]]))
+        times_matched = times_concat_sorted[inds2]
+        # # find and label closest spikes
+        ind_st1 = np.array(
+            [np.abs(st_1 - tm).argmin() for tm in times_matched]
+        )
+        ind_st2 = np.array(
+            [np.abs(st_2 - tm).argmin() for tm in times_matched]
+        )
+        not_match_ind_st1 = np.ones(st_1.shape[0], bool)
+        not_match_ind_st1[ind_st1] = False
+        not_match_ind_st1 = np.where(not_match_ind_st1)[0]
+        not_match_ind_st2 = np.ones(st_2.shape[0], bool)
+        not_match_ind_st2[ind_st2] = False
+        not_match_ind_st2 = np.where(not_match_ind_st2)[0]
+    else:
+        ind_st1 = np.array([], dtype=int)
+        ind_st2 = np.array([], dtype=int)
+        not_match_ind_st1 = np.arange(len(st_1))
+        not_match_ind_st2 = np.arange(len(st_2))
+
+    return ind_st1, ind_st2, not_match_ind_st1, not_match_ind_st2
+
+
+
 def make_sorting_from_labels_frames(
     labels, spike_frames, sampling_frequency=30000
 ):
