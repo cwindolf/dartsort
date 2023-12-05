@@ -25,9 +25,9 @@ def closest_registered_channels(
 
 def hdbscan_clustering(recording,
     times_seconds, times_samples, x, z_abs, geom, amps, motion_est=None,
-    min_cluster_size=25,
-    min_samples=25,
-    cluster_selection_epsilon=15, 
+    min_cluster_size=15,
+    min_samples=15,
+    cluster_selection_epsilon=5, 
     scales=(1, 1, 50),
     log_c=5,
     split_big=True,
