@@ -135,8 +135,8 @@ def array_scatter(
         z,
         labels,
         ax=axes[0],
-        s=10,
-        alpha=0.05,
+        s=1,
+        alpha=0.1,
         excluded_ids=excluded_ids,
         do_ellipse=do_ellipse,
     )
@@ -153,8 +153,8 @@ def array_scatter(
         z,
         labels,
         ax=axes[1],
-        s=10,
-        alpha=0.05,
+        s=1,
+        alpha=0.1,
         excluded_ids=excluded_ids,
         do_ellipse=do_ellipse,
     )
@@ -165,6 +165,7 @@ def array_scatter(
         x,
         z,
         c=np.clip(maxptp, 3, 15),
+        s=1,
         alpha=0.1,
         marker=".",
         cmap=plt.cm.jet,
@@ -176,6 +177,7 @@ def array_scatter(
     axes[2].set_ylim(zlim)
     if xlim is not None:
         axes[0].set_xlim(xlim)
+        axes[2].set_xlim(xlim)
     if ptplim is not None:
         axes[1].set_xlim(ptplim)
 
