@@ -76,10 +76,11 @@ def cluster(
 ):
     sorting = ensemble_chunks(hdf5_filename,
                               recording,
-                              chunk_size_s=default_clustering_config.chunk_size_s,
+                              chunk_size_s=clustering_config.chunk_size_s,
                               motion_est=motion_est,
-                              ensemble_strategy=default_clustering_config.ensemble_strategy,
-                              cluster_strategy=default_clustering_config.cluster_strategy,
+                              ensemble_strategy=clustering_config.ensemble_strategy,
+                              cluster_strategy=clustering_config.cluster_strategy,
+                              
                          )
     return sorting
 

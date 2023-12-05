@@ -25,12 +25,12 @@ def closest_registered_channels(
 
 def hdbscan_clustering(recording,
     times_seconds, times_samples, x, z_abs, geom, amps, motion_est=None,
-    min_cluster_size=15,
-    min_samples=15,
-    cluster_selection_epsilon=5, 
+    min_cluster_size=25,
+    min_samples=25,
+    cluster_selection_epsilon=1, 
     scales=(1, 1, 50),
     log_c=5,
-    split_big=True,
+    recursive=True,
     do_remove_dups=True,
     frames_dedup=12,
     frame_dedup_cluster=20,
@@ -70,8 +70,9 @@ def hdbscan_clustering(recording,
         )
         if len(removed_ix):
             clusterer.labels_[removed_ix.astype('int')] = -1
-    
-    if not split_big:
+
+    # recursive is just one pass right now -> want to extend this
+    if not recursive:
         return clusterer.labels_
     
     else:
