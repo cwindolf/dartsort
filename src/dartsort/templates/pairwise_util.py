@@ -2,8 +2,8 @@ from __future__ import annotations  # allow forward type references
 
 from collections import namedtuple
 from dataclasses import dataclass, fields
-from typing import Iterator, Optional, Union
 from pathlib import Path
+from typing import Iterator, Optional, Union
 
 import h5py
 import numpy as np
@@ -169,6 +169,9 @@ def iterate_compressed_pairwise_convolutions(
     conv_ignore_threshold=0.0,
     coarse_approx_error_threshold=0.0,
     max_shift="full",
+    amplitude_scaling_variance=0.0,
+    amplitude_scaling_boundary=0.5,
+    reduce_deconv_resid_norm=False,
     conv_batch_size=1024,
     units_batch_size=8,
     device=None,
@@ -228,6 +231,9 @@ def iterate_compressed_pairwise_convolutions(
         coarse_approx_error_threshold=coarse_approx_error_threshold,
         max_shift=max_shift,
         batch_size=conv_batch_size,
+        amplitude_scaling_variance=amplitude_scaling_variance,
+        amplitude_scaling_boundary=amplitude_scaling_boundary,
+        reduce_deconv_resid_norm=reduce_deconv_resid_norm,
     )
 
     n_jobs, Executor, context, rank_queue = get_pool(n_jobs, with_rank_queue=True)
@@ -251,7 +257,9 @@ def iterate_compressed_pairwise_convolutions(
 
 @dataclass
 class CompressedConvResult:
-    """Return type of compressed_convolve_pairs
+    """Main return type of compressed_convolve_pairs
+
+    If reduce_deconv_resid_norm=True, a DeconvResidResult is returned.
 
     After convolving a bunch of template pairs, some convolutions
     may be zero. Let n_pairs be the number of nonzero convolutions.
@@ -278,6 +286,94 @@ class CompressedConvResult:
     compressed_conv: np.ndarray
 
 
+@dataclass
+class DeconvResidResult:
+    """Return type of compressed_convolve_pairs
+
+    After convolving a bunch of template pairs, some convolutions
+    may be zero. Let n_pairs be the number of nonzero convolutions.
+    We don't store the zero ones.
+    """
+
+    # arrays of shape n_pairs,
+    # For each convolved pair, these document which templates were
+    # in the pair, what their relative shifts were, and what the
+    # upsampling was (we only upsample the RHS)
+    template_indices_a: np.ndarray
+    template_indices_b: np.ndarray
+
+    # norm after subtracting best upsampled/scaled/shifted B template from A template
+    deconv_resid_norms: np.ndarray
+
+    # ints. B trough - A trough
+    shifts: np.ndarray
+
+    # for caller to implement different metrics
+    template_a_norms: np.ndarray
+
+    # TODO: how to handle the nnz normalization we used to do?
+    #       that one was done wrong -- the residual was not restricted
+    #       to high amplitude channels.
+
+
+def conv_to_resid(
+    template_data_a: templates.TemplateData,
+    template_data_b: templates.TemplateData,
+    conv_result: CompressedConvResult,
+    amplitude_scaling_variance=0.0,
+    amplitude_scaling_boundary=0.5,
+) -> DeconvResidResult:
+    # decompress
+    pconvs = conv_result.compressed_conv[conv_result.compression_index]
+    full_length = pconvs.shape[1]
+    center = full_length // 2
+
+    # here, we just care about pairs of (superres) templates, not upsampling
+    # or shifting. so, get unique such pairs.
+    pairs = np.c_[conv_result.template_indices_a, conv_result.template_indices_b]
+    pairs = np.unique(pairs, axis=0)
+    n_pairs = len(pairs)
+
+    # for loop to reduce over all (upsampled etc) member templates
+    deconv_resid_norms = np.zeros(n_pairs)
+    shifts = np.zeros(n_pairs, dtype=int)
+    template_indices_a, template_indices_b = pairs.T
+    templates_a = template_data_a.templates[template_indices_a].numpy(force=True)
+    templates_b = template_data_b.templates[template_indices_b].numpy(force=True)
+    template_a_norms = np.linalg.norm(templates_a, axis=(1, 2))
+    template_b_norms = np.linalg.norm(templates_b, axis=(1, 2))
+    for j, (ix_a, ix_b) in enumerate(pairs):
+        in_a = conv_result.template_indices_a == ix_a
+        in_b = conv_result.template_indices_b == ix_b
+        in_pair = np.flatnonzero(in_a & in_b)
+
+        # reduce over fine templates
+        pair_conv = pconvs[in_pair].max(dim=0).values
+        best_conv, lag_index = pair_conv.max()
+        shifts[j] = lag_index - center
+
+        # figure out scaling
+        if amplitude_scaling_variance:
+            amp_scale_min = 1 / (1 + amplitude_scaling_boundary)
+            amp_scale_max = 1 + amplitude_scaling_boundary
+            inv_lambda = 1 / amplitude_scaling_variance
+            b = best_conv + inv_lambda
+            a = template_a_norms[j] + inv_lambda
+            scaling = torch.clip(b / a, amp_scale_min, amp_scale_max)
+            norm_reduction = 2 * scaling * b - torch.square(scaling) * a - inv_lambda
+        else:
+            norm_reduction = 2 * best_conv - template_b_norms[j]
+        deconv_resid_norms[j] = template_a_norms[j] - norm_reduction
+
+    return DeconvResidResult(
+        template_indices_a,
+        template_indices_b,
+        deconv_resid_norms,
+        shifts,
+        template_a_norms,
+    )
+
+
 def compressed_convolve_pairs(
     template_data_a: templates.TemplateData,
     template_data_b: templates.TemplateData,
@@ -297,6 +393,9 @@ def compressed_convolve_pairs(
     units_b: Optional[np.ndarray] = None,
     conv_ignore_threshold=0.0,
     coarse_approx_error_threshold=0.0,
+    amplitude_scaling_variance=0.0,
+    amplitude_scaling_boundary=0.5,
+    reduce_deconv_resid_norm=False,
     max_shift="full",
     batch_size=1024,
     device=None,
@@ -363,7 +462,7 @@ def compressed_convolve_pairs(
     if pairs_ret is None:
         return None
     ix_a, ix_b, compression_index, conv_ix, spatial_shift_ids = pairs_ret
-    
+
     # handle upsampling
     # each pair will be duplicated by the b unit's number of upsampled copies
     (
@@ -427,7 +526,7 @@ def compressed_convolve_pairs(
     temp_ix_b = temp_ix_b[ix_b]
     shift_ix_b = np.searchsorted(template_shift_index_b.all_pitch_shifts, shift_b[ix_b])
 
-    return CompressedConvResult(
+    res = CompressedConvResult(
         template_indices_a=temp_ix_a,
         template_indices_b=temp_ix_b,
         shift_indices_a=shift_ix_a,
@@ -436,6 +535,15 @@ def compressed_convolve_pairs(
         compression_index=compression_index,
         compressed_conv=pconv.numpy(force=True),
     )
+    if reduce_deconv_resid_norm:
+        return conv_to_resid(
+            template_data_a,
+            template_data_b,
+            res,
+            amplitude_scaling_variance=amplitude_scaling_variance,
+            amplitude_scaling_boundary=amplitude_scaling_boundary,
+        )
+    return res
 
 
 # -- helpers
@@ -480,7 +588,7 @@ def correlate_pairs_lowrank(
     assert n_pairs == n_pairs_
     assert t == t_
     assert rank == rank_
-    
+
     if max_shift == "full":
         max_shift = t - 1
     elif max_shift == "valid":
@@ -514,7 +622,7 @@ def correlate_pairs_lowrank(
         pconv[istart:iend] = pconv_[0, :, 0, :]  # nco, nup, time
 
     # more stringent covisibility
-    if conv_ignore_threshold > 0:
+    if conv_ignore_threshold is not None:
         max_val = pconv.reshape(n_pairs, -1).abs().max(dim=1).values
         kept = max_val > conv_ignore_threshold
         pconv = pconv[kept]
@@ -1007,6 +1115,9 @@ class ConvWorkerContext:
     match_distance: Optional[float] = None
     conv_ignore_threshold: float = 0.0
     coarse_approx_error_threshold: float = 0.0
+    amplitude_scaling_variance: float = 0.0
+    amplitude_scaling_boundary: float = 0.5
+    reduce_deconv_resid_norm: bool = False
     max_shift: Union[int, str] = "full"
     batch_size: int = 128
     device: Optional[torch.device] = None
