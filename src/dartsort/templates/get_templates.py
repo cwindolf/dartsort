@@ -102,6 +102,7 @@ def get_templates(
         # pad the trough_offset_samples and spike_length_samples so that
         # if the user did not request denoising we can just return the
         # raw templates right away
+        print("realign")
         trough_offset_load = trough_offset_samples + realign_max_sample_shift
         spike_length_load = spike_length_samples + 2 * realign_max_sample_shift
         raw_results = get_raw_templates(
@@ -165,6 +166,7 @@ def get_templates(
         device=device,
     )
     raw_templates, low_rank_templates, snrs_by_channel = res
+    print(f"{raw_templates.ptp(1).max(1)=}")
 
     if raw_only:
         return dict(
@@ -571,8 +573,11 @@ def _template_job(unit_ids):
     # read waveforms for all units
     times = p.sorting.times_samples[in_units]
     valid = np.flatnonzero(
-        (times >= p.trough_offset_samples) & (times < p.max_spike_time)
+        (times >= p.trough_offset_samples) & (times <= p.max_spike_time)
     )
+    print(f"{times=} {valid=}")
+    print(f"{p.trough_offset_samples=} {p.max_spike_time}")
+    print(f"{times.shape=} {valid.shape=}")
     if not valid.size:
         return
     in_units = in_units[valid]
