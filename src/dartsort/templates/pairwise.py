@@ -206,7 +206,6 @@ class CompressedPairwiseConv:
 
     def to(self, device=None, incl_pconv=False, pin=False):
         """Become torch tensors on device."""
-        print(f"to {device=}")
         for name in ["offset_shift_a_to_ix", "offset_shift_b_to_ix"] + [
             f.name for f in fields(self)
         ]:
@@ -280,9 +279,6 @@ class CompressedPairwiseConv:
         up_shifted_temp_ix_b = upsampled_shifted_template_index[b_ix]
 
         # return convolutions between all ai,bj or just ai,bi?
-        print(f"{shifted_temp_ix_a.device=} {up_shifted_temp_ix_b.device=}")
-        print(f"{self.device=} {self.shifts_a.device=}")
-        print(f"{template_indices_a.device=} {template_indices_b.device=}")
         if grid:
             pconv_indices = self.pconv_index[
                 shifted_temp_ix_a[:, None], up_shifted_temp_ix_b[None, :]
