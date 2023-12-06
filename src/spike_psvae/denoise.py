@@ -95,7 +95,9 @@ def phase_shift_and_hallucination_idx_preshift(waveforms_roll_denoise, waveforms
     
     which = slice(offset-10, offset+10)
     
-    d_s_corr = wfs_corr(waveforms_roll_denoise[:, which], waveforms_roll[:, which])#torch.sum(wfs_denoised[which]*chan_wfs[which], 1)/torch.sqrt(torch.sum(chan_wfs[which]*chan_wfs[which],1) * torch.sum(wfs_denoised[which]*wfs_denoised[which],1)) ## didn't use which at the beginning! check whether this changes the results
+    d_s_corr = wfs_corr(waveforms_roll_denoise[:, which], waveforms_roll[:, which])
+    # torch.sum(wfs_denoised[which]*chan_wfs[which], 1)/torch.sqrt(torch.sum(chan_wfs[which]*chan_wfs[which],1) * torch.sum(wfs_denoised[which]*wfs_denoised[which],1)) 
+    # didn't use which at the beginning! check whether this changes the results
     
     halu_idx = (ptp(waveforms_roll_denoise, 1)<small_threshold) & (d_s_corr<corr_th)
     halu_idx = halu_idx.long()
@@ -201,6 +203,7 @@ def multichan_phase_shift_denoise_preshift(waveforms, ci_graph_all_maxCH_uniq, m
     
     CH_checked = F.pad(CH_checked, (0, 1), 'constant', 1)
     
+    #DO YOU NEED AS MUCH ROLL?
     waveforms_roll_all = torch.cat((waveforms,
                                     torch.roll(waveforms, -15, 1),
                                     torch.roll(waveforms, -12, 1), 
@@ -342,9 +345,6 @@ def multichan_phase_shift_denoise_preshift(waveforms, ci_graph_all_maxCH_uniq, m
         seek_idx = torch.squeeze(torch.nonzero(unchecked & halluci_keep_spike_idx), 1)
 
         Q.insert(0, torch.cat((unfold_idx[seek_idx][:, None], Q_neighbors[seek_idx][:, None]), 1))
-
-            
-            
 
 
     
@@ -764,7 +764,11 @@ def make_radial_order_parents(
 def enforce_decrease_shells(
     waveforms, maxchans, radial_parents, in_place=False
 ):
-    """Radial enforce decrease"""
+    """
+    Radial enforce decrease
+    What if we localize with peak?
+    """
+    
     N, T, C = waveforms.shape
     assert maxchans.shape == (N,)
 
@@ -783,9 +787,11 @@ def enforce_decrease_shells(
         for c, parents_rel in radial_parents[maxchans[i]]:
             if decr_ptp[c] > decr_ptp[parents_rel].max():
                 decr_ptp[c] *= decr_ptp[parents_rel].max() / decr_ptp[c]
+        # decreasing_ptps[i] = decr_ptp
 
     # apply decreasing ptps to the original waveforms
     rescale = (decreasing_ptps / orig_ptps)[:, None, :]
+    
     if is_torch:
         rescale = torch.as_tensor(rescale, device=waveforms.device)
     if in_place:

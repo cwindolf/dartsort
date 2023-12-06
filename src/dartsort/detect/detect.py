@@ -41,7 +41,8 @@ def detect_and_deduplicate(
         with corresponding channels
     """
     nsamples, nchans = traces.shape
-    if dedup_channel_index is not None:
+    all_dedup = isinstance(dedup_channel_index, str) and dedup_channel_index == "all"
+    if not all_dedup and dedup_channel_index is not None:
         assert dedup_channel_index.shape[0] == nchans
 
     # -- handle peak sign. we use max pool below, so make peaks positive
@@ -79,14 +80,17 @@ def detect_and_deduplicate(
     F.threshold_(energies, threshold, 0.0)
 
     # -- temporal deduplication
-    max_energies = energies
     if dedup_temporal_radius > 0:
-        max_energies, indices = F.max_pool2d_with_indices(
+        max_energies = F.max_pool2d(
             energies,
             kernel_size=[2 * dedup_temporal_radius + 1, 1],
             stride=1,
             padding=[dedup_temporal_radius, 0],
         )
+    elif dedup_channel_index is not None:
+        max_energies = energies.clone()
+    else:
+        max_energies = energies
     # back to TC
     energies = energies[0, 0]
     max_energies = max_energies[0, 0]
@@ -94,7 +98,9 @@ def detect_and_deduplicate(
     # -- spatial deduplication
     # we would like to max pool again on the other axis,
     # but that doesn't support any old radial neighborhood
-    if dedup_channel_index is not None:
+    if all_dedup:
+        max_energies[:] = max_energies.max(dim=1, keepdim=True).values
+    elif dedup_channel_index is not None:
         # pad channel axis with extra chan of 0s
         max_energies = F.pad(max_energies, (0, 1))
         for batch_start in range(0, nsamples, spatial_dedup_batch_size):
