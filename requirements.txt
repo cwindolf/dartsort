@@ -2,4 +2,3 @@ pytest
 ibl-neuropixel
 spikeinterface
 cloudpickle
-hdbscan
