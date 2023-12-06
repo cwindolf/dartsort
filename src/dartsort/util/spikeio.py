@@ -21,7 +21,7 @@ def read_full_waveforms(
     assert times_samples.dtype.kind == "i"
     assert (
         times_samples.max()
-        < recording.get_num_samples()
+        <= recording.get_num_samples()
         - (spike_length_samples - trough_offset_samples)
     )
     n_channels = recording.get_num_channels()
@@ -92,7 +92,7 @@ def read_subset_waveforms(
     assert times_samples.dtype.kind == "i"
     assert (
         times_samples.max()
-        < recording.get_num_samples()
+        <= recording.get_num_samples()
         - (spike_length_samples - trough_offset_samples)
     )
     n_channels = recording.get_num_channels()
@@ -169,7 +169,7 @@ def read_waveforms_channel_index(
     assert times_samples.min() >= trough_offset_samples
     assert (
         times_samples.max()
-        < recording.get_num_samples()
+        <= recording.get_num_samples()
         - (spike_length_samples - trough_offset_samples)
     )
     n_channels = recording.get_num_channels()
