@@ -427,7 +427,8 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
         """Handle drift -- grab the right spatial neighborhoods."""
         pconvdb = self.pairwise_conv_db
         pitch_shifts_a = pitch_shifts_b = None
-        pconvdb.to(self.objective_spatial_components.device, pin=True)
+        if self.objective_spatial_components.device.type == "cuda" and not pconvdb.device.type == "cuda":
+            pconvdb.to(self.objective_spatial_components.device)
         if self.is_drifting:
             pitch_shifts_b, cur_spatial = template_util.templates_at_time(
                 t_s,

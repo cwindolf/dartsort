@@ -47,6 +47,8 @@ class TemplateData:
             to_save[
                 "registered_template_depths_um"
             ] = self.registered_template_depths_um
+        if not npz_path.parent.exists():
+            npz_path.parent.mkdir()
         np.savez(npz_path, **to_save)
 
     def coarsen(self, with_locs=True):
@@ -171,7 +173,6 @@ class TemplateData:
         else:
             # we don't skip empty units
             unit_ids = np.arange(sorting.labels.max() + 1)
-        print(f"post superres {sorting.times_samples=} {sorting.labels=}")
 
         # count spikes in each template
         spike_counts = np.zeros_like(unit_ids)
