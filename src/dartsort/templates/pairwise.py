@@ -69,9 +69,11 @@ class CompressedPairwiseConv:
         )
 
     def get_shift_ix_a(self, shifts_a):
+        shifts_a = torch.atleast_1d(torch.as_tensor(shifts_a))
         return self.offset_shift_a_to_ix[shifts_a.to(int) + self.a_shift_offset]
 
     def get_shift_ix_b(self, shifts_b):
+        shifts_b = torch.atleast_1d(torch.as_tensor(shifts_b))
         return self.offset_shift_b_to_ix[shifts_b.to(int) + self.b_shift_offset]
 
     @classmethod
@@ -206,7 +208,6 @@ class CompressedPairwiseConv:
 
     def to(self, device=None, incl_pconv=False, pin=False):
         """Become torch tensors on device."""
-        print(f"to {device=}")
         for name in ["offset_shift_a_to_ix", "offset_shift_b_to_ix"] + [
             f.name for f in fields(self)
         ]:
@@ -244,8 +245,8 @@ class CompressedPairwiseConv:
             template_indices_a = torch.arange(
                 len(self.shifted_template_index_a), device=self.device
             )
-        template_indices_a = torch.atleast_1d(template_indices_a)
-        template_indices_b = torch.atleast_1d(template_indices_b)
+        template_indices_a = torch.atleast_1d(torch.as_tensor(template_indices_a))
+        template_indices_b = torch.atleast_1d(torch.as_tensor(template_indices_b))
 
         # handle no shifting
         no_shifting = shifts_a is None or shifts_b is None
@@ -271,18 +272,16 @@ class CompressedPairwiseConv:
             assert self.upsampled_shifted_template_index_b.shape[2] == 1
             upsampled_shifted_template_index = upsampled_shifted_template_index[..., 0]
         else:
-            b_ix = b_ix + (upsampling_indices_b,)
+            b_ix = b_ix + (torch.atleast_1d(torch.as_tensor(upsampling_indices_b)),)
 
         # get shifted template indices for A
+        print(f"{a_ix=}")
         shifted_temp_ix_a = shifted_template_index[a_ix]
 
         # upsampled shifted template indices for B
         up_shifted_temp_ix_b = upsampled_shifted_template_index[b_ix]
 
         # return convolutions between all ai,bj or just ai,bi?
-        print(f"{shifted_temp_ix_a.device=} {up_shifted_temp_ix_b.device=}")
-        print(f"{self.device=} {self.shifts_a.device=}")
-        print(f"{template_indices_a.device=} {template_indices_b.device=}")
         if grid:
             pconv_indices = self.pconv_index[
                 shifted_temp_ix_a[:, None], up_shifted_temp_ix_b[None, :]
