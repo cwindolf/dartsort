@@ -338,20 +338,21 @@ def conv_to_resid(
     deconv_resid_norms = np.zeros(n_pairs)
     shifts = np.zeros(n_pairs, dtype=int)
     template_indices_a, template_indices_b = pairs.T
-    templates_a = template_data_a.templates[template_indices_a].numpy(force=True)
-    templates_b = template_data_b.templates[template_indices_b].numpy(force=True)
-    template_a_norms = np.linalg.norm(templates_a, axis=(1, 2))
-    template_b_norms = np.linalg.norm(templates_b, axis=(1, 2))
+    templates_a = template_data_a.templates[template_indices_a]
+    templates_b = template_data_b.templates[template_indices_b]
+    template_a_norms = np.linalg.norm(templates_a, axis=(1, 2)) ** 2
+    template_b_norms = np.linalg.norm(templates_b, axis=(1, 2)) ** 2
     for j, (ix_a, ix_b) in enumerate(pairs):
         in_a = conv_result.template_indices_a == ix_a
         in_b = conv_result.template_indices_b == ix_b
         in_pair = np.flatnonzero(in_a & in_b)
 
         # reduce over fine templates
-        pair_conv = pconvs[in_pair].max(dim=0).values
-        best_conv, lag_index = pair_conv.max()
+        pair_conv = pconvs[in_pair].max(axis=0)
+        lag_index = np.argmax(pair_conv)
+        best_conv = pair_conv[lag_index]
         shifts[j] = lag_index - center
-
+        
         # figure out scaling
         if amplitude_scaling_variance:
             amp_scale_min = 1 / (1 + amplitude_scaling_boundary)
@@ -359,11 +360,12 @@ def conv_to_resid(
             inv_lambda = 1 / amplitude_scaling_variance
             b = best_conv + inv_lambda
             a = template_a_norms[j] + inv_lambda
-            scaling = torch.clip(b / a, amp_scale_min, amp_scale_max)
-            norm_reduction = 2 * scaling * b - torch.square(scaling) * a - inv_lambda
+            scaling = np.clip(b / a, amp_scale_min, amp_scale_max)
+            norm_reduction = 2 * scaling * b - np.square(scaling) * a - inv_lambda
         else:
             norm_reduction = 2 * best_conv - template_b_norms[j]
         deconv_resid_norms[j] = template_a_norms[j] - norm_reduction
+        assert deconv_resid_norms[j] >= 0
 
     return DeconvResidResult(
         template_indices_a,

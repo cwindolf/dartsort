@@ -6,7 +6,7 @@ from dartsort.config import TemplateConfig
 from dartsort.templates import TemplateData, template_util
 from dartsort.templates.pairwise_util import (
     construct_shift_indices, iterate_compressed_pairwise_convolutions)
-from dartsort.util import DARTsortSorting
+from dartsort.util.data_util import DARTsortSorting
 from scipy.cluster.hierarchy import complete, fcluster
 
 
@@ -33,7 +33,28 @@ def merge_templates(
     overwrite_templates=False,
     show_progress=True,
     template_npz_filename="template_data.npz",
-):
+) -> DARTsortSorting:
+    """Template distance based merge
+    
+    Pass in a sorting, recording and template config to make templates,
+    and this will merge them (with superres). Or, if you have templates
+    already, pass them into template_data and we can skip the template
+    construction.
+    
+    Arguments
+    ---------
+    max_shift_samples
+        Max offset during matching
+    superres_linkage
+        How to combine distances between two units' superres templates
+        By default, it's the max.
+    amplitude_scaling_*
+        Optionally allow scaling during matching
+    
+    Returns
+    -------
+    A new DARTsortSorting
+    """
     if template_data is None:
         template_data = TemplateData.from_config(
             recording,
@@ -50,7 +71,7 @@ def merge_templates(
     # allocate distance + shift matrices. shifts[i,j] is trough[j]-trough[i].
     n_templates = template_data.templates.shape[0]
     sup_dists = np.full((n_templates, n_templates), np.inf)
-    sup_shifts = np.zero((n_templates, n_templates), dtype=int)
+    sup_shifts = np.zeros((n_templates, n_templates), dtype=int)
 
     # build distance matrix
     dec_res_iter = get_deconv_resid_norm_iter(
@@ -78,7 +99,7 @@ def merge_templates(
     units = np.unique(template_data.unit_ids)
     if units.size < n_templates:
         dists = np.full((units.size, units.size), np.inf)
-        shifts = np.zero((units.size, units.size), dtype=int)
+        shifts = np.zeros((units.size, units.size), dtype=int)
         for ia, ua in enumerate(units):
             in_ua = np.flatnonzero(template_data.unit_ids == ua)
             for ib, ub in enumerate(units):
@@ -98,6 +119,7 @@ def merge_templates(
     # now run hierarchical clustering
     return recluster(
         sorting,
+        units,
         dists,
         shifts,
         template_snrs,
@@ -105,7 +127,7 @@ def merge_templates(
     )
 
 
-def recluster(sorting, dists, shifts, template_snrs, merge_distance_threshold=0.25):
+def recluster(sorting, units, dists, shifts, template_snrs, merge_distance_threshold=0.25):
     # upper triangle not including diagonal, aka condensed distance matrix in scipy
     pdist = dists[np.triu_indices(dists.shape[0], k=1)]
     # scipy hierarchical clustering only supports finite values, so let's just
@@ -118,8 +140,9 @@ def recluster(sorting, dists, shifts, template_snrs, merge_distance_threshold=0.
 
     # update labels
     labels_updated = sorting.labels.copy()
-    kept = np.flatnonzero(labels_updated >= 0)
-    labels_updated[kept] = new_labels[labels_updated[kept]]
+    kept = np.flatnonzero(np.isin(sorting.labels, units))
+    _, flat_labels = np.unique(labels_updated[kept], return_inverse=True)
+    labels_updated[kept] = new_labels[flat_labels]
 
     # update times according to shifts
     times_updated = sorting.times_samples.copy()
@@ -199,7 +222,7 @@ def get_deconv_resid_norm_iter(
         upsampled_shifted_template_index,
         do_shifting=False,
         reduce_deconv_resid_norm=True,
-        geom=template_data.registered_geometry,
+        geom=template_data.registered_geom,
         conv_ignore_threshold=0.0,
         coarse_approx_error_threshold=0.0,
         amplitude_scaling_variance=amplitude_scaling_variance,
