@@ -72,9 +72,8 @@ class DARTsortSorting:
     def __str__(self):
         name = self.__class__.__name__
         nspikes = self.times_samples.size
-        units = np.unique(self.labels)
-        units = units[units >= 0]
-        unit_str = f"{units.size} unit" + ("s" if units.size > 1 else "")
+        nunits = (np.unique(self.labels) >= 0).sum()
+        unit_str = f"{nunits} unit" + "s" * (nunits > 1)
         feat_str = ""
         if self.extra_features:
             feat_str = ", ".join(self.extra_features.keys())
@@ -149,6 +148,7 @@ def check_recording(
         dedup_channel_index = make_channel_index(
             rec.get_channel_locations(), dedup_spatial_radius
         )
+    failed = False
 
     # run detection and compute spike detection rate and data range
     spike_rates = []
@@ -173,6 +173,7 @@ def check_recording(
             "you experience memory issues.",
             RuntimeWarning,
         )
+        failed = True
 
     if max_abs > expected_value_range:
         warn(
@@ -180,5 +181,6 @@ def check_recording(
             "check that your data has been preprocessed, including standardization.",
             RuntimeWarning,
         )
+        failed = True
 
-    return avg_detections_per_second, max_abs
+    return failed, avg_detections_per_second, max_abs
