@@ -275,6 +275,7 @@ class FeatureSplit(SplitStrategy):
                 main_channels=self.channels[in_unit],
                 channel_index=self.channel_index,
                 xyza_from=self.xyza[in_unit],
+                target_channels=self.registered_channel_index[max_registered_channel],
                 z_to=self.z_reg[in_unit],
                 geom=self.geom,
                 registered_geom=self.registered_geom,
