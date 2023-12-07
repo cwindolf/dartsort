@@ -107,6 +107,139 @@ def cluster_scatter(
         ell.set_transform(transform + ax.transData)
         ax.add_patch(ell)
 
+def array_scatter_5_features(
+    labels,
+    geom,
+    x,
+    z,
+    maxptp,
+    trough_val,
+    trough_time,
+    tip_val,
+    zlim=(-50, 3900),
+    xlim=None,
+    ptplim=None,
+    maxptp_c=None,
+    title=None,
+    axes=None,
+    do_ellipse=True,
+    figsize = (15, 15),
+    s_dot=1,
+    s_size_geom = 3,
+):
+    fig = None
+    if axes is None:
+        fig, axes = plt.subplots(1, 6, sharey=True, figsize=figsize)
+
+    if title is not None:
+        fig.suptitle(title)
+
+    excluded_ids = {-1}
+    if not do_ellipse:
+        excluded_ids = np.unique(labels)
+
+    cluster_scatter(
+        x,
+        z,
+        labels,
+        ax=axes[0],
+        s=s_dot,
+        alpha=0.1,
+        excluded_ids=excluded_ids,
+        do_ellipse=do_ellipse,
+    )
+    axes[0].scatter(*geom.T, c="orange", marker="s", s=s_size_geom)
+    axes[0].scatter(geom[0, 0], geom[0, 1], c="orange", marker="s", s=10, label='Channel Locations')
+    axes[0].set_ylabel("Registered Depth (um)", fontsize=14)
+    axes[0].set_xlabel("x (um)", fontsize=14)
+    axes[0].legend(fontsize=14, loc='upper left')
+    axes[0].tick_params(axis='x', labelsize=14)
+    axes[0].tick_params(axis='y', labelsize=14)
+
+    if maxptp_c is None:
+        maxptp_c = np.clip(maxptp, 3, 15)    
+    axes[1].scatter(
+        x,
+        z,
+        c=maxptp_c,
+        s=s_dot,
+        alpha=0.1,
+        marker=".",
+        cmap=plt.cm.jet,
+    )
+    axes[1].scatter(*geom.T, c="orange", marker="s", s=s_size_geom)
+    axes[1].set_title("colored by ptps")
+
+    cluster_scatter(
+        maxptp,
+        z,
+        labels,
+        ax=axes[2],
+        s=s_dot,
+        alpha=0.1,
+        excluded_ids=excluded_ids,
+        do_ellipse=do_ellipse,
+    )
+    axes[2].set_xlabel("Amplitude (s.u.)", fontsize=16)
+    axes[2].tick_params(axis='x', labelsize=16)
+
+    cluster_scatter(
+        trough_val,
+        z,
+        labels,
+        ax=axes[3],
+        s=s_dot,
+        alpha=0.1,
+        excluded_ids=excluded_ids,
+        do_ellipse=do_ellipse,
+    )
+    axes[3].set_xlabel("Trough Val (s.u.)", fontsize=16)
+    axes[3].tick_params(axis='x', labelsize=16)
+    
+    cluster_scatter(
+        trough_time,
+        z,
+        labels,
+        ax=axes[4],
+        s=s_dot,
+        alpha=0.1,
+        excluded_ids=excluded_ids,
+        do_ellipse=do_ellipse,
+    )
+    axes[4].set_xlabel("Trough Time (1/30ms)", fontsize=16)
+    axes[4].tick_params(axis='x', labelsize=16)
+
+    cluster_scatter(
+        tip_val,
+        z,
+        labels,
+        ax=axes[5],
+        s=s_dot,
+        alpha=0.1,
+        excluded_ids=excluded_ids,
+        do_ellipse=do_ellipse,
+    )
+    axes[5].set_xlabel("Tip Val (s.u.)", fontsize=16)
+    axes[5].tick_params(axis='x', labelsize=16)
+
+    axes[0].set_ylim(zlim)
+    axes[1].set_ylim(zlim)
+    axes[2].set_ylim(zlim)
+    axes[3].set_ylim(zlim)
+    axes[4].set_ylim(zlim)
+    axes[5].set_ylim(zlim)
+
+    if xlim is not None:
+        axes[0].set_xlim(xlim)
+        axes[1].set_xlim(xlim)
+    if ptplim is not None:
+        axes[2].set_xlim(ptplim)
+
+    # if fig is not None:
+    #     plt.tight_layout()
+
+    return fig, axes
+
 
 # %%
 def array_scatter(
