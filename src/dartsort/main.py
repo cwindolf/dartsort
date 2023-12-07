@@ -1,17 +1,14 @@
 from pathlib import Path
 
-from dartsort.config import (FeaturizationConfig, MatchingConfig,
-                             SubtractionConfig, TemplateConfig)
+from dartsort.config import (default_featurization_config,
+                             default_matching_config,
+                             default_subtraction_config,
+                             default_template_config)
 from dartsort.localize.localize_util import localize_hdf5
 from dartsort.peel import (ObjectiveUpdateTemplateMatchingPeeler,
                            SubtractionPeeler)
 from dartsort.templates import TemplateData
 from dartsort.util.data_util import DARTsortSorting, check_recording
-
-default_featurization_config = FeaturizationConfig()
-default_subtraction_config = SubtractionConfig()
-default_template_config = TemplateConfig()
-default_matching_config = MatchingConfig()
 
 
 def dartsort(
