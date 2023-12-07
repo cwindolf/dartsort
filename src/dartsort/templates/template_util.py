@@ -321,7 +321,7 @@ def compressed_upsampled_templates(
         n_upsamples = np.clip(n_upsamples_map(ptps), 1, max_upsample).astype(int)
 
     # build the compressed upsampling map
-    compressed_upsampling_map = np.zeros((n_templates, max_upsample), dtype=int)
+    compressed_upsampling_map = np.full((n_templates, max_upsample), -1, dtype=int)
     compressed_upsampling_index = np.full((n_templates, max_upsample), -1, dtype=int)
     template_indices = []
     upsampling_indices = []
@@ -340,9 +340,19 @@ def compressed_upsampled_templates(
         # indices of the templates to keep in the full array of upsampled templates
         template_indices.extend([i] * nup)
         upsampling_indices.extend(compression * np.arange(nup))
+    assert (compressed_upsampling_map >= 0).all()
+    assert (
+        np.unique(compressed_upsampling_map).size
+        == (compressed_upsampling_index >= 0).sum()
+        == compressed_upsampling_map.max() + 1
+        == compressed_upsampling_index.max() + 1
+        == current_compressed_index
+    )
     template_indices = np.array(template_indices)
     upsampling_indices = np.array(upsampling_indices)
-    compressed_upsampling_index[compressed_upsampling_index < 0] = current_compressed_index
+    compressed_upsampling_index[
+        compressed_upsampling_index < 0
+    ] = current_compressed_index
 
     # get the upsampled templates
     all_upsampled_templates = temporally_upsample_templates(

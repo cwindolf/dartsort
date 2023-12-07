@@ -52,20 +52,37 @@ class CompressedPairwiseConv:
     # the 0 index is special: pconv[0] === 0.
     pconv: np.ndarray
     in_memory: bool = False
+    device: torch.device = torch.device("cpu")
 
     def __post_init__(self):
         assert self.shifts_a.ndim == self.shifts_b.ndim == 1
         assert self.shifts_a.shape == (self.shifted_template_index_a.shape[1],)
-        assert self.shifts_b.shape == (self.upsampled_shifted_template_index_b.shape[1],)
+        assert self.shifts_b.shape == (
+            self.upsampled_shifted_template_index_b.shape[1],
+        )
+
+        self.a_shift_offset, self.offset_shift_a_to_ix = _get_shift_indexer(
+            self.shifts_a
+        )
+        self.b_shift_offset, self.offset_shift_b_to_ix = _get_shift_indexer(
+            self.shifts_b
+        )
+
+    def get_shift_ix_a(self, shifts_a):
+        shifts_a = torch.atleast_1d(torch.as_tensor(shifts_a))
+        return self.offset_shift_a_to_ix[shifts_a.to(int) + self.a_shift_offset]
+
+    def get_shift_ix_b(self, shifts_b):
+        shifts_b = torch.atleast_1d(torch.as_tensor(shifts_b))
+        return self.offset_shift_b_to_ix[shifts_b.to(int) + self.b_shift_offset]
 
     @classmethod
     def from_h5(cls, hdf5_filename, in_memory=True):
-        ff = [f for f in fields(cls) if not f.name == "in_memory"]
+        ff = [f for f in fields(cls) if f.name not in ("in_memory", "device")]
         if in_memory:
             with h5py.File(hdf5_filename, "r") as h5:
                 data = {f.name: torch.from_numpy(h5[f.name][:]) for f in ff}
             return cls(**data, in_memory=in_memory)
-        
         _h5 = h5py.File(hdf5_filename, "r")
         data = {}
         for f in ff:
@@ -117,7 +134,7 @@ class CompressedPairwiseConv:
         )
         return cls.from_h5(hdf5_filename)
 
-    def at_shifts(self, shifts_a=None, shifts_b=None):
+    def at_shifts(self, shifts_a=None, shifts_b=None, device=None):
         """Subset this database to one set of shifts.
 
         The database becomes shiftless (not in the pejorative sense).
@@ -133,8 +150,8 @@ class CompressedPairwiseConv:
         n_shifted_temps_a, n_up_shifted_temps_b = self.pconv_index.shape
 
         # active shifted and upsampled indices
-        shift_ix_a = torch.searchsorted(self.shifts_a, shifts_a)
-        shift_ix_b = torch.searchsorted(self.shifts_b, shifts_b)
+        shift_ix_a = self.get_shift_ix_a(shifts_a)
+        shift_ix_b = self.get_shift_ix_b(shifts_b)
         sub_shifted_temp_index_a = self.shifted_template_index_a[
             torch.arange(len(self.shifted_template_index_a))[:, None],
             shift_ix_a[:, None],
@@ -166,6 +183,8 @@ class CompressedPairwiseConv:
             sub_pconv = self.pconv[sub_pconv_indices.to(self.pconv.device)]
         else:
             sub_pconv = torch.from_numpy(batched_h5_read(self.pconv, sub_pconv_indices))
+        if device is not None:
+            sub_pconv = sub_pconv.to(device)
 
         # reindexing
         n_sub_shifted_temps_a = len(shifted_temp_ixs_a)
@@ -184,17 +203,29 @@ class CompressedPairwiseConv:
             pconv_index=sub_pconv_index,
             pconv=sub_pconv,
             in_memory=True,
+            device=self.device,
         )
 
-    def to(self, device=None, incl_pconv=False):
+    def to(self, device=None, incl_pconv=False, pin=False):
         """Become torch tensors on device."""
-        for f in fields(self):
-            if f.name == "pconv":
+        for name in ["offset_shift_a_to_ix", "offset_shift_b_to_ix"] + [
+            f.name for f in fields(self)
+        ]:
+            if name == "pconv" and not incl_pconv:
                 continue
-            v = getattr(self, f.name)
+            v = getattr(self, name)
             if isinstance(v, np.ndarray) or torch.is_tensor(v):
-                setattr(self, f.name, torch.as_tensor(v, device=device))
+                setattr(self, name, torch.as_tensor(v, device=device))
         self.device = device
+        if pin and self.device.type == "cuda" and torch.cuda.is_available() and not self.pconv.is_pinned():
+            # self.pconv.share_memory_()
+            print("pin")
+            torch.cuda.cudart().cudaHostRegister(
+                self.pconv.data_ptr(), self.pconv.numel() * self.pconv.element_size(), 0
+            )
+            # assert x.is_shared()
+            assert self.pconv.is_pinned()
+            # self.pconv = self.pconv.pin_memory()
         return self
 
     def query(
@@ -211,11 +242,11 @@ class CompressedPairwiseConv:
         device=None,
     ):
         if template_indices_a is None:
-                template_indices_a = torch.arange(
-                    len(self.shifted_template_index_a), device=self.device
-                )
-        template_indices_a = torch.atleast_1d(template_indices_a)
-        template_indices_b = torch.atleast_1d(template_indices_b)
+            template_indices_a = torch.arange(
+                len(self.shifted_template_index_a), device=self.device
+            )
+        template_indices_a = torch.atleast_1d(torch.as_tensor(template_indices_a))
+        template_indices_b = torch.atleast_1d(torch.as_tensor(template_indices_b))
 
         # handle no shifting
         no_shifting = shifts_a is None or shifts_b is None
@@ -230,8 +261,8 @@ class CompressedPairwiseConv:
             shifted_template_index = shifted_template_index[:, 0]
             upsampled_shifted_template_index = upsampled_shifted_template_index[:, 0]
         else:
-            shift_indices_a = torch.searchsorted(self.shifts_a, shifts_a)
-            shift_indices_b = torch.searchsorted(self.shifts_b, shifts_b)
+            shift_indices_a = self.get_shift_ix_a(shifts_a)
+            shift_indices_b = self.get_shift_ix_a(shifts_b)
             a_ix = (template_indices_a, shift_indices_a)
             b_ix = (template_indices_b, shift_indices_b)
 
@@ -241,9 +272,10 @@ class CompressedPairwiseConv:
             assert self.upsampled_shifted_template_index_b.shape[2] == 1
             upsampled_shifted_template_index = upsampled_shifted_template_index[..., 0]
         else:
-            b_ix = b_ix + (upsampling_indices_b,)
+            b_ix = b_ix + (torch.atleast_1d(torch.as_tensor(upsampling_indices_b)),)
 
         # get shifted template indices for A
+        print(f"{a_ix=}")
         shifted_temp_ix_a = shifted_template_index[a_ix]
 
         # upsampled shifted template indices for B
@@ -258,9 +290,13 @@ class CompressedPairwiseConv:
                 template_indices_a, template_indices_b
             ).T
             if scalings_b is not None:
-                scalings_b = torch.broadcast_to(scalings_b[None], pconv_indices.shape).reshape(-1)
+                scalings_b = torch.broadcast_to(
+                    scalings_b[None], pconv_indices.shape
+                ).reshape(-1)
             if times_b is not None:
-                times_b = torch.broadcast_to(times_b[None], pconv_indices.shape).reshape(-1)
+                times_b = torch.broadcast_to(
+                    times_b[None], pconv_indices.shape
+                ).reshape(-1)
             pconv_indices = pconv_indices.view(-1)
         else:
             pconv_indices = self.pconv_index[shifted_temp_ix_a, up_shifted_temp_ix_b]
@@ -279,7 +315,9 @@ class CompressedPairwiseConv:
         if self.in_memory:
             pconvs = self.pconv[pconv_indices.to(self.pconv.device)]
         else:
-            pconvs = torch.from_numpy(batched_h5_read(self.pconv, pconv_indices.numpy(force=True)))
+            pconvs = torch.from_numpy(
+                batched_h5_read(self.pconv, pconv_indices.numpy(force=True))
+            )
         if device is not None:
             pconvs = pconvs.to(device)
 
@@ -291,6 +329,7 @@ class CompressedPairwiseConv:
 
         return template_indices_a, template_indices_b, pconvs
 
+
 def batched_h5_read(dataset, indices, batch_size=1000):
     if indices.size < batch_size:
         return dataset[indices]
@@ -300,3 +339,18 @@ def batched_h5_read(dataset, indices, batch_size=1000):
             be = min(indices.size, bs + batch_size)
             out[bs:be] = dataset[indices[bs:be]]
         return out
+
+
+def _get_shift_indexer(shifts):
+    assert torch.equal(shifts, torch.sort(shifts).values)
+    shift_offset = -int(shifts[0])
+    offset_shift_to_ix = []
+    for j, shift in enumerate(shifts):
+        ix = shift + shift_offset
+        assert len(offset_shift_to_ix) <= ix
+        assert 0 <= ix < len(shifts)
+        while len(offset_shift_to_ix) < ix:
+            offset_shift_to_ix.append(len(shifts))
+        offset_shift_to_ix.append(j)
+    offset_shift_to_ix = torch.tensor(offset_shift_to_ix, device=shifts.device)
+    return shift_offset, offset_shift_to_ix
