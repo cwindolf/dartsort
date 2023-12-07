@@ -426,7 +426,9 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
     def templates_at_time(self, t_s):
         """Handle drift -- grab the right spatial neighborhoods."""
         pconvdb = self.pairwise_conv_db
-        pitch_shifts_a=pitch_shifts_b=None
+        pitch_shifts_a = pitch_shifts_b = None
+        if self.objective_spatial_components.device.type == "cuda" and not pconvdb.device.type == "cuda":
+            pconvdb.to(self.objective_spatial_components.device)
         if self.is_drifting:
             pitch_shifts_b, cur_spatial = template_util.templates_at_time(
                 t_s,
@@ -464,17 +466,22 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
                 fill_value=0.0,
             )
             max_channels = cur_ampvecs[:, 0, :].argmax(1)
-            # pconvdb = pconvdb.at_shifts(pitch_shifts_a, pitch_shifts_b)
+            # pitch_shifts_a = torch.as_tensor(pitch_shifts_a)
+            # pitch_shifts_b = torch.as_tensor(pitch_shifts_b)
             pitch_shifts_a = torch.as_tensor(pitch_shifts_a, device=cur_obj_spatial.device)
             pitch_shifts_b = torch.as_tensor(pitch_shifts_b, device=cur_obj_spatial.device)
+            pconvdb = pconvdb.at_shifts(pitch_shifts_a, pitch_shifts_b)
+            # pitch_shifts_a = torch.as_tensor(pitch_shifts_a, device=cur_obj_spatial.device)
+            # pitch_shifts_b = torch.as_tensor(pitch_shifts_b, device=cur_obj_spatial.device)
         else:
             cur_spatial = self.spatial_components
             cur_obj_spatial = self.objective_spatial_components
             max_channels = self.registered_template_ampvecs.argmax(1)
 
         # if not pconvdb._is_torch:
-        #     # pconvdb.to("cpu")
-        pconvdb.to(cur_obj_spatial.device)
+            # pconvdb.to("cpu")
+        # if cur_obj_spatial.device.type == "cuda" and not pconvdb.device.type == "cuda":
+        #     pconvdb.to(cur_obj_spatial.device, pin=True)
 
         return MatchingTemplateData(
             objective_spatial_components=cur_obj_spatial,
@@ -492,8 +499,10 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
             compressed_upsampled_temporal=self.compressed_upsampled_temporal,
             max_channels=torch.as_tensor(max_channels, device=cur_obj_spatial.device),
             pairwise_conv_db=pconvdb,
-            shifts_a=pitch_shifts_a,
-            shifts_b=pitch_shifts_b,
+            shifts_a=None,
+            shifts_b=None,
+            # shifts_a=pitch_shifts_a,
+            # shifts_b=pitch_shifts_b,
         )
 
     def match_chunk(
@@ -560,6 +569,13 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
 
             # subtract them
             # old_norm = torch.linalg.norm(residual) ** 2
+            compressed_template_data.subtract(
+                residual_padded,
+                new_peaks.times,
+                new_peaks.template_indices,
+                new_peaks.upsampling_indices,
+                new_peaks.scalings,
+            )
             compressed_template_data.subtract_conv(
                 padded_conv,
                 new_peaks.times,
@@ -567,13 +583,6 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
                 new_peaks.upsampling_indices,
                 new_peaks.scalings,
                 conv_pad_len=self.obj_pad_len,
-            )
-            compressed_template_data.subtract(
-                residual_padded,
-                new_peaks.times,
-                new_peaks.template_indices,
-                new_peaks.upsampling_indices,
-                new_peaks.scalings,
             )
 
             # new_norm = torch.linalg.norm(residual) ** 2
@@ -627,7 +636,7 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
             alpha=2.0,
             out=padded_objective[:-1],
         )
-        
+
         # first step: coarse peaks. not temporally upsampled or amplitude-scaled.
         objective = (padded_objective + refrac_mask)[
             :-1, self.obj_pad_len : -self.obj_pad_len
@@ -668,7 +677,7 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
         )
         if time_shifts is not None:
             times += time_shifts
-        
+
         return MatchingPeaks(
             n_spikes=times.numel(),
             times=times,
@@ -884,12 +893,17 @@ class MatchingTemplateData:
             superres_ix = superres_index[objective_template_indices]
             dup_ix, column_ix = (superres_ix < self.n_templates).nonzero(as_tuple=True)
             template_indices = superres_ix[dup_ix, column_ix]
-            convs = torch.einsum(
-                "jtc,jrc,jtr->j",
-                snips[dup_ix],
-                self.spatial_singular[template_indices],
+            convs = torch.baddbmm(
                 self.temporal_components[template_indices],
-            )
+                snips[dup_ix],
+                self.spatial_singular[template_indices].mT,
+            ).sum((1, 2))
+            # convs = torch.einsum(
+            #     "jtc,jrc,jtr->j",
+            #     snips[dup_ix],
+            #     self.spatial_singular[template_indices],
+            #     self.temporal_components[template_indices],
+            # )
             norms = self.template_norms_squared[template_indices]
             objs = torch.full(superres_ix.shape, -torch.inf, device=convs.device)
             objs[dup_ix, column_ix] = 2 * convs - norms

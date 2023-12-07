@@ -47,9 +47,11 @@ class TemplateData:
             to_save[
                 "registered_template_depths_um"
             ] = self.registered_template_depths_um
+        if not npz_path.parent.exists():
+            npz_path.parent.mkdir()
         np.savez(npz_path, **to_save)
 
-    def coarsen(self):
+    def coarsen(self, with_locs=True):
         """Weighted average all templates that share a unit id and re-localize."""
         # update templates
         unit_ids_unique, flat_ids = np.unique(self.unit_ids, return_inverse=True)
@@ -60,11 +62,13 @@ class TemplateData:
         np.add.at(spike_counts, flat_ids, self.spike_counts)
 
         # re-localize
-        registered_template_depths_um = get_template_depths(
-            templates,
-            self.registered_geom,
-            localization_radius_um=self.localization_radius_um,
-        )
+        registered_template_depths_um = None
+        if with_locs:
+            registered_template_depths_um = get_template_depths(
+                templates,
+                self.registered_geom,
+                localization_radius_um=self.localization_radius_um,
+            )
 
         return replace(
             self,
@@ -167,6 +171,7 @@ class TemplateData:
                 min_spikes_per_bin=template_config.superres_bin_min_spikes,
             )
         else:
+            # we don't skip empty units
             unit_ids = np.arange(sorting.labels.max() + 1)
 
         # count spikes in each template
@@ -178,8 +183,6 @@ class TemplateData:
         results = get_templates(recording, sorting, **kwargs)
 
         # handle registered templates
-        print(f"{results['templates'].shape=}")
-        print(f"{kwargs['registered_geom'].shape=}")
         if template_config.registered_templates:
             registered_template_depths_um = get_template_depths(
                 results["templates"],

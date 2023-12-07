@@ -97,7 +97,7 @@ class FeaturizationConfig:
 class SubtractionConfig:
     trough_offset_samples: int = 42
     spike_length_samples: int = 121
-    detection_thresholds: List[int] = (12, 10, 8, 6, 5, 4)
+    detection_thresholds: List[int] = (12, 9, 6)
     chunk_length_samples: int = 30_000
     peak_sign: str = "neg"
     spatial_dedup_radius: float = 150.0

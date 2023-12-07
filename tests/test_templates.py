@@ -8,7 +8,31 @@ from dartsort.templates import (get_templates, pairwise, pairwise_util,
                                 template_util, templates)
 from dartsort.util import drift_util
 from dartsort.util.data_util import DARTsortSorting
-from dredge.motion_util import get_motion_estimate
+from dredge.motion_util import IdentityMotionEstimate, get_motion_estimate
+from test_util import no_overlap_recording_sorting
+
+
+def test_roundtrip(tmp_path):
+    rg = np.random.default_rng(0)
+    temps = rg.normal(size=(11, 121, 384)).astype(np.float32)
+    template_data = templates.TemplateData.from_config(
+        *no_overlap_recording_sorting(temps, pad=0),
+        template_config=config.TemplateConfig(
+            low_rank_denoising=False,
+            superres_bin_min_spikes=0,
+            realign_peaks=False,
+        ),
+        motion_est=IdentityMotionEstimate(),
+        n_jobs=0,
+        save_folder=tmp_path,
+        overwrite=True,
+    )
+    print(f"{np.abs(template_data.templates - temps).max()=}")
+    print(f"{np.abs(template_data.templates - temps).mean()=}")
+    print(f"{np.abs(template_data.templates - temps).min()=}")
+    print(f"{template_data.templates.ptp(1).max(1)=}")
+    print(f"{temps.ptp(1).max(1)=}")
+    assert np.array_equal(template_data.templates, temps)
 
 
 def test_static_templates():
@@ -202,16 +226,15 @@ def test_pconv():
             compressed_upsampled_temporal=ctempup,
         )
         pconvdb = pairwise.CompressedPairwiseConv.from_h5(pconvdb_path)
-        assert np.all(pconvdb.pconv[0] == 0)
-        print(f"{pconvdb.pconv.shape=}")
+        assert (pconvdb.pconv[0] == 0.0).all()
 
         for tixa in range(5):
             for tixb in range(5):
                 ixa, ixb, pconv = pconvdb.query(tixa, tixb)
                 if (tixa, tixb) not in overlaps:
-                    assert not ixa.size
-                    assert not ixb.size
-                    assert not pconv.size
+                    assert not ixa.numel()
+                    assert not ixb.numel()
+                    assert not pconv.numel()
                     continue
 
                 olap = overlaps[tixa, tixb]
@@ -259,7 +282,7 @@ def test_pconv():
             chunk_time_centers_s=[0, 1, 2],
         )
         pconvdb = pairwise.CompressedPairwiseConv.from_h5(pconvdb_path)
-        assert np.all(pconvdb.pconv[0] == 0)
+        assert (pconvdb.pconv[0] == 0.0).all()
         print(f"{pconvdb.pconv.shape=}")
 
         for tixa in range(5):
@@ -267,9 +290,9 @@ def test_pconv():
                 ixa, ixb, pconv = pconvdb.query(tixa, tixb, shifts_a=0, shifts_b=0)
 
                 if (tixa, tixb) not in overlaps:
-                    assert not ixa.size
-                    assert not ixb.size
-                    assert not pconv.size
+                    assert not ixa.numel()
+                    assert not ixb.numel()
+                    assert not pconv.numel()
                     continue
 
                 olap = overlaps[tixa, tixb]
@@ -279,24 +302,24 @@ def test_pconv():
         for tixb in range(5):
             for shiftb in (-1, 0, 1):
                 ixa, ixb, pconv = pconvdb.query(0, tixb, shifts_a=-1, shifts_b=shiftb)
-                assert not ixa.size
-                assert not ixb.size
-                assert not pconv.size
+                assert not ixa.numel()
+                assert not ixb.numel()
+                assert not pconv.numel()
 
         for tixb in range(5):
             for shift in (-1, 0, 1):
                 ixa, ixb, pconv = pconvdb.query(4, tixb, shifts_a=shift, shifts_b=shift)
                 if tixb != 4 or shift == 1:
-                    assert not ixa.size
-                    assert not ixb.size
-                    assert not pconv.size
+                    assert not ixa.numel()
+                    assert not ixb.numel()
+                    assert not pconv.numel()
                 else:
                     assert np.isclose(pconv.max(), 4 if shift < 1 else 0)
                 ixa, ixb, pconv = pconvdb.query(tixb, 4, shifts_a=shift, shifts_b=shift)
                 if tixb != 4 or shift == 1:
-                    assert not ixa.size
-                    assert not ixb.size
-                    assert not pconv.size
+                    assert not ixa.numel()
+                    assert not ixb.numel()
+                    assert not pconv.numel()
                 else:
                     assert np.isclose(pconv.max(), 4)
 
@@ -307,13 +330,18 @@ def test_pconv():
                         ixa, ixb, pconv = pconvdb.query(tixa, tixb, shifts_a=shifta, shifts_b=shiftb)
                         if shifta != shiftb:
                             # this is because we are rigid here
-                            assert not ixa.size
-                            assert not ixb.size
-                            assert not pconv.size
+                            assert not ixa.numel()
+                            assert not ixb.numel()
+                            assert not pconv.numel()
 
 
 if __name__ == "__main__":
-    test_static_templates()
-    test_drifting_templates()
-    test_main_object()
-    test_pconv()
+    import tempfile
+    from pathlib import Path
+
+    with tempfile.TemporaryDirectory() as tdir:
+        test_roundtrip(Path(tdir))
+    # test_static_templates()
+    # test_drifting_templates()
+    # test_main_object()
+    # test_pconv()

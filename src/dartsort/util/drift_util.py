@@ -564,8 +564,6 @@ def get_shift_and_unit_pairs(
     else:
         shifts_a = pitch_shifts[:, :na]
         shifts_b = pitch_shifts[:, na:]
-    print(f"{shifts_a.min()=} {shifts_a.max()=}")
-    print(f"{shifts_b.min()=} {shifts_b.max()=}")
 
     # assign ids to pitch/shift pairs
     template_shift_index_a = TemplateShiftIndex.from_shift_matrix(shifts_a)
