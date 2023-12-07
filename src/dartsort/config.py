@@ -30,6 +30,7 @@ __repo_root__ = Path(__file__).parent.parent.parent
 @dataclass(frozen=True)
 class WaveformConfig:
     """Defaults yield 42 sample trough offset and 121 total at 30kHz."""
+
     ms_before: float = 1.4
     ms_after: float = 2.6
 
@@ -164,3 +165,9 @@ class MatchingConfig:
     max_iter: int = 1000
     conv_ignore_threshold: float = 5.0
     coarse_approx_error_threshold: float = 5.0
+
+
+default_featurization_config = FeaturizationConfig()
+default_subtraction_config = SubtractionConfig()
+default_template_config = TemplateConfig()
+default_matching_config = MatchingConfig()
