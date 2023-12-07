@@ -210,18 +210,19 @@ class FeatureSplit(SplitStrategy):
         if n_spikes < self.min_cluster_size:
             return SplitResult()
 
+        max_registered_channel, n_pitches_shift, reloc_amplitudes, kept = self.get_registered_channels(in_unit)
+        if not kept.size:
+            return SplitResult()
+        
         features = []
-        kept = np.arange(n_spikes)
         if self.use_localization_features:
             loc_features = self.localization_features[in_unit]
+            if self.relocated:
+                loc_features[kept, 2] = reloc_amplitudes
             features.append(loc_features)
 
-        max_registered_channel, n_pitches_shift, reloc_amplitudes = self.get_registered_channels(in_unit)
-        if self.relocated:
-            loc_features[:, 2] = reloc_amplitudes
-
         if self.n_pca_features > 0:
-            enough_good_spikes, kept, pca_embeds = self.pca_features(in_unit, max_registered_channel=max_registered_channel)
+            enough_good_spikes, kept, pca_embeds = self.pca_features(in_unit, max_registered_channel, n_pitches_shift)
             if not enough_good_spikes:
                 return SplitResult()
             # scale pc features to match localization features
@@ -268,21 +269,26 @@ class FeatureSplit(SplitStrategy):
         )
         max_registered_channel = amplitude_template.argmax()
 
-        reloc_amplitudes = None
         if self.relocated:
+            targ_chans = self.registered_channel_index[max_registered_channel]
+            targ_chans = targ_chans[targ_chans < len(self.registered_geom)]
             reloc_amp_vecs = relocate.relocated_waveforms_on_static_channels(
                 amp_vecs,
                 main_channels=self.channels[in_unit],
                 channel_index=self.channel_index,
                 xyza_from=self.xyza[in_unit],
-                target_channels=self.registered_channel_index[max_registered_channel],
+                target_channels=targ_chans,
                 z_to=self.z_reg[in_unit],
                 geom=self.geom,
                 registered_geom=self.registered_geom,
             )
-            reloc_amplitudes = np.nanmax(reloc_amp_vecs, axis=(1, 2))
+            kept = np.flatnonzero(~np.isnan(reloc_amp_vecs).any(axis=1))
+            reloc_amplitudes = np.nanmax(reloc_amp_vecs[kept], axis=1)
+        else:
+            reloc_amplitudes = None
+            kept = np.arange(in_unit.size)
 
-        return max_registered_channel, n_pitches_shift, reloc_amplitudes
+        return max_registered_channel, n_pitches_shift, reloc_amplitudes, kept
 
     def pca_features(self, in_unit, max_registered_channel, n_pitches_shift):
         """Compute relocated PCA features on a drift-invariant channel set"""
@@ -294,10 +300,11 @@ class FeatureSplit(SplitStrategy):
 
         # load waveform embeddings and invert TPCA if we are relocating
         waveforms = batched_h5_read(self.tpca_features, in_unit)
-        n, t, c = waveforms.shape
+        n, rank, c = waveforms.shape
         if self.relocated:
-            waveforms = waveforms.transpose(0, 2, 1).reshape(n * c, t)
+            waveforms = waveforms.transpose(0, 2, 1).reshape(n * c, rank)
             waveforms = self.tpca.inverse_transform(waveforms)
+            t = waveforms.shape[1]
             waveforms = waveforms.reshape(n, c, t).transpose(0, 2, 1)
 
         # relocate or just restrict to channel subset
@@ -346,7 +353,7 @@ class FeatureSplit(SplitStrategy):
         amplitudes_dataset_name="denoised_amplitudes",
         amplitude_vectors_dataset_name="denoised_amplitude_vectors",
     ):
-        h5 = h5py.File(peeling_hdf5_filename, "r", locking=False)
+        h5 = h5py.File(peeling_hdf5_filename, "r")
         self.geom = h5["geom"][:]
         self.channel_index = h5["channel_index"][:]
         self.channels = h5["channels"][:]
@@ -392,7 +399,7 @@ class FeatureSplit(SplitStrategy):
                 if f.name == tpca_features_dataset_name
             ]
             assert len(tpca_feature) == 1
-            self.tpca = tpca_feature.to_sklearn()
+            self.tpca = tpca_feature[0].to_sklearn()
 
 
 # this is to help split_clusters take a string argument

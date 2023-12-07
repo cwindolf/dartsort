@@ -26,6 +26,9 @@ def relocated_waveforms_on_static_channels(
     fill_value=np.nan,
 ):
     """Compute relocated waveforms"""
+    two_d = waveforms.ndim == 2
+    if two_d:
+        waveforms = waveforms[:, None, :]
     x, y, z_from, alpha = xyza_from.T
     if registered_geom is None:
         registered_geom = geom
@@ -57,6 +60,9 @@ def relocated_waveforms_on_static_channels(
     )
     rescaling = target_amplitudes / original_amplitudes
     shifted_waveforms *= rescaling[:, None, :]
+    
+    if two_d:
+        shifted_waveforms = shifted_waveforms[:, 0, :]
 
     return shifted_waveforms
 
