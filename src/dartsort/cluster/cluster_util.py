@@ -74,9 +74,7 @@ def hdbscan_clustering(recording,
     # recursive is just one pass right now -> want to extend this
     if not recursive:
         return clusterer.labels_
-    
     else:
-    
         labels_all = clusterer.labels_.astype('int')
         _, labels_all[labels_all>-1] = np.unique(labels_all[labels_all>-1], return_inverse=True)
 

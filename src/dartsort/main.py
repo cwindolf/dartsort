@@ -76,14 +76,10 @@ def cluster(
 ):
     sorting = ensemble_chunks(hdf5_filename,
                               recording,
-                              chunk_size_s=clustering_config.chunk_size_s,
+                              clustering_config=clustering_config,
                               motion_est=motion_est,
-                              ensemble_strategy=clustering_config.ensemble_strategy,
-                              cluster_strategy=clustering_config.cluster_strategy,
-                              
-                         )
+                          )
     return sorting
-
 
 def match(
     recording,

@@ -165,13 +165,14 @@ class MatchingConfig:
 @dataclass(frozen=True)
 class ClusteringConfig:
     # -- initial clustering
+    feature_scales = (1, 1, 50)
+    log_c: int = 5
     # hdbscan parameters
     cluster_strategy: str = "hdbscan"
-    min_cluster_size: int = 15
-    min_samples: int = 15
-    cluster_selection_epsilon: int = 5 
-
+    min_cluster_size: int = 25
+    min_samples: int = 25
+    cluster_selection_epsilon: int = 1 
     # -- ensembling
     ensemble_strategy: Optional[str] = "forward_backward"
-    chunk_size_s: int = 300
+    chunk_size_s: int = 150
     # forward-backward
