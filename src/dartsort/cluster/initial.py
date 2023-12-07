@@ -19,9 +19,9 @@ import numpy as np
 
 def cluster_chunk(
     peeling_hdf5_filename,
+    clustering_config,
     chunk_time_range_s=None,
     motion_est=None,
-    strategy="closest_registered_channels",
 ):
     """Cluster spikes from a single segment
 
@@ -30,14 +30,15 @@ def cluster_chunk(
     peeling_hdf5_filename : str or Path
     chunk_time_range_s : start and end time of chunk (seconds) in an iterable
     motion_est : optional dredge.motion_util.MotionEstimate
-    strategy : one of "closest_registered_channels" or other choices tba
+    clustering_config: ClusteringConfig
 
     Returns
     -------
     sorting : DARTsortSorting
     """
+    strategy = clustering_config.cluster_strategy
+    feature_scales = clustering_config.feature_scales
     assert strategy in ("closest_registered_channels","hdbscan","ensembling_hdbscan",)
-        
     if strategy == "closest_registered_channels":
         with h5py.File(peeling_hdf5_filename, "r") as h5:
             times_samples = h5["times_samples"][:]
@@ -64,18 +65,29 @@ def cluster_chunk(
             ),
         )
     elif strategy == "hdbscan":
+        #hdbscan specific parameters
+        min_cluster_size = clustering_config.min_cluster_size
+        min_samples = clustering_config.min_samples
+        cluster_selection_epsilon = clustering_config.cluster_selection_epsilon
         with h5py.File(peeling_hdf5_filename, "r") as h5:
             times_samples = h5["times_samples"][:]
             channels = h5["channels"][:]
             times_s = h5["times_seconds"][:]
             xyza = h5["point_source_localizations"][:]
             amps = h5["denoised_amplitudes"][:]
-            geom = h5["geom"][:]
-            
+            geom = h5["geom"][:]  
         in_chunk = ensemble_utils.get_indices_in_chunk(times_s, chunk_time_range_s)
         labels = -1 * np.ones(len(times_samples))
         labels[in_chunk]  = cluster_util.hdbscan_clustering(
-            times_s[in_chunk] , xyza[in_chunk, 0], xyza[in_chunk, 2], geom, amps[in_chunk], motion_est
+            times_s[in_chunk], 
+            xyza[in_chunk, 0], 
+            xyza[in_chunk, 2], 
+            geom, amps[in_chunk], 
+            motion_est, 
+            min_cluster_size=min_cluster_size, 
+            min_samples=min_samples, 
+            cluster_selection_epsilon=cluster_selection_epsilon,
+            scales=feature_scales,
         )
         sorting = DARTsortSorting(
             times_samples=times_samples,
@@ -94,37 +106,34 @@ def cluster_chunk(
 def ensemble_chunks(
     peeling_hdf5_filename,
     recording,
-    chunk_size_s=300,
+    clustering_config,
     motion_est=None,
-    ensemble_strategy="forward_backward",
-    cluster_strategy="closest_registered_channels",
 ):
-    """Cluster spikes from a single segment
+    """Initial clustering combined across chunks of time
 
     Arguments
     ---------
     peeling_hdf5_filename : str or Path
-    chunk_size_s : time in seconds for each chunk to be clustered and ensembled
+    recording: RecordingExtractor
+    clustering_config: ClusteringConfig
     motion_est : optional dredge.motion_util.MotionEstimate
-    ensemble_strategy : one of "forward_backward" or other choices tba
-    cluster_strategy : one of "closest_registered_channels" or other choices tba
     
     Returns
     -------
-      : DARTsortSorting
+      : DARTsortSorting  
     """
+    #get params from config
+    ensemble_strategy = clustering_config.ensemble_strategy
     if ensemble_strategy is None:
-        raise ValueError
-        # Or do we want to do regular clustering here?
-        #cluster full chunk with no ensembling
-        # sorting = cluster_chunk(peeling_hdf5_filename, 
-        #                         chunk_time_range_s=None,
-        #                         motion_est=motion_est,
-        #                         strategy=cluster_strategy,
-        #                     )
+        sorting = cluster_chunk(peeling_hdf5_filename, 
+                                clustering_config,
+                                chunk_time_range_s=None,
+                                motion_est=motion_est,
+                            )
     else:
         assert ensemble_strategy in ("forward_backward","meet")
         #for loop cluster chunks
+        chunk_size_s = clustering_config.chunk_size_s
         if ensemble_strategy == "forward_backward":
             with h5py.File(peeling_hdf5_filename, "r") as h5:
                 times_samples = h5["times_samples"][:]
@@ -134,7 +143,15 @@ def ensemble_chunks(
                 amps = h5["denoised_amplitudes"][:]
                 geom = h5["geom"][:]
             labels = ensemble_utils.ensembling_hdbscan(
-                recording, times_seconds, times_samples, xyza[:, 0], xyza[:, 2], geom, amps, motion_est, chunk_size_s,
+                recording, 
+                times_seconds, 
+                times_samples, 
+                xyza[:, 0], 
+                xyza[:, 2], 
+                geom, 
+                amps, 
+                clustering_config, 
+                motion_est,
             )
             sorting = DARTsortSorting(
                 times_samples=times_samples,

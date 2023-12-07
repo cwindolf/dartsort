@@ -8,28 +8,28 @@ def ensembling_hdbscan(recording,
     x, 
     z_abs, 
     geom, 
-    amps, 
+    amps,
+    clustering_config,
     motion_est=None,
-    chunk_size_s=300, 
-    min_cluster_size=25,
-    min_samples=25,
-    cluster_selection_epsilon=1, 
-    scales=(1, 1, 50),
-    log_c=5,
 ):
     """
     Ensemble over HDBSCAN clustering
     triaging/subsampling/copying/splitting big clusters not implemented since we don't use it (so far)
     """
-    
+    chunk_size_s = clustering_config.chunk_size_s
+    min_cluster_size = clustering_config.min_cluster_size
+    min_samples = clustering_config.min_samples
+    cluster_selection_epsilon = clustering_config.cluster_selection_epsilon 
+    scales = clustering_config.feature_scales
+    log_c = clustering_config.log_c
     n_chunks = int((times_seconds.max() - times_seconds.min())// chunk_size_s)
     leftover_time = int(times_seconds.max())-chunk_size_s*n_chunks
+    #if last chunk is at least 2/3 of chunk size, still ensemble
     if leftover_time>chunk_size_s*2/3:
-        n_chunks+=1
+        n_chunks+=1     
     # TODO: extend to overlapping bins
     # shift = (int(times_seconds.max())-chunk_size_s) // n_chunks
     # n_chunks+=1
-    
     if n_chunks == 0 or n_chunks == 1:
         return hdbscan_clustering(recording,
             times_seconds, times_samples, x, z_abs, geom, amps, motion_est, min_cluster_size, min_samples, 
