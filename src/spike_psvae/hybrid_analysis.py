@@ -1836,7 +1836,7 @@ def calc_template_snrs(
             spike_length_samples=spike_length_samples,
             buffer=wf_buffer,
         )
-        denominator = np.abs(np.einsum("ij,nij->n", t, noise) / C).mean()
+        denominator = np.abs(np.einsum("ij,nij->n", t, noise) / C).std()#.mean()
         snrs.append(numerator / denominator)
 
     return np.array(snrs)

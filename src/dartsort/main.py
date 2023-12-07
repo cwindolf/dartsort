@@ -3,9 +3,9 @@ from pathlib import Path
 from dartsort.config import (FeaturizationConfig, ClusteringConfig, MatchingConfig,
                              SubtractionConfig, TemplateConfig)
 from dartsort.localize.localize_util import localize_hdf5
-# from dartsort.peel import (ResidualUpdateTemplateMatchingPeeler,
-#                            SubtractionPeeler)
 from dartsort.cluster.initial import ensemble_chunks
+from dartsort.peel import (ObjectiveUpdateTemplateMatchingPeeler,
+                           SubtractionPeeler)
 from dartsort.templates import TemplateData
 from dartsort.util.data_util import DARTsortSorting, check_recording
 
@@ -98,7 +98,10 @@ def match(
     device=None,
     hdf5_filename="matching0.h5",
     model_subdir="matching0_models",
+    template_npz_filename="template_data.npz",
 ):
+    model_dir = Path(output_directory) / model_subdir
+
     # compute templates
     template_data = TemplateData.from_config(
         recording,
@@ -106,11 +109,14 @@ def match(
         template_config,
         motion_est=motion_est,
         n_jobs=n_jobs_templates,
-        save_folder=output_directory,
+        save_folder=model_dir,
         overwrite=overwrite,
+        device=device,
+        save_npz_name=template_npz_filename,
     )
+
     # instantiate peeler
-    matching_peeler = ResidualUpdateTemplateMatchingPeeler.from_config(
+    matching_peeler = ObjectiveUpdateTemplateMatchingPeeler.from_config(
         recording,
         matching_config,
         featurization_config,
@@ -133,7 +139,7 @@ def match(
     return sorting, output_hdf5_filename
 
 
-# -- helper function
+# -- helper function for subtract, match
 
 
 def _run_peeler(
@@ -153,6 +159,8 @@ def _run_peeler(
     output_directory.mkdir(exist_ok=True)
     model_dir = output_directory / model_subdir
     output_hdf5_filename = output_directory / hdf5_filename
+    if residual_filename is not None:
+        residual_filename = output_directory / residual_filename
 
     # fit models if needed
     peeler.load_or_fit_and_save_models(
@@ -167,10 +175,11 @@ def _run_peeler(
         overwrite=overwrite,
         residual_filename=residual_filename,
         show_progress=show_progress,
+        device=device,
     )
 
     # do localization
-    if featurization_config.do_localization:
+    if not featurization_config.denoise_only and featurization_config.do_localization:
         wf_name = featurization_config.output_waveforms_name
         localize_hdf5(
             output_hdf5_filename,
@@ -178,6 +187,7 @@ def _run_peeler(
             amplitude_vectors_dataset_name=f"{wf_name}_amplitude_vectors",
             show_progress=show_progress,
             device=device,
+            localization_model=featurization_config.localization_model
         )
 
     return (

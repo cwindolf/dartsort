@@ -76,6 +76,7 @@ class FeaturizationConfig:
     localization_radius: float = 100.0
     # these are saved always if do_localization
     save_amplitude_vectors: bool = True
+    localization_model = "dipole"
 
     # -- further info about denoising
     # in the future we may add multi-channel or other nns
@@ -153,7 +154,7 @@ class MatchingConfig:
     fit_subsampling_random_state: int = 0
 
     # template matching parameters
-    threshold: float = 30.0
+    threshold: float = 50.0
     template_svd_compression_rank: int = 10
     template_temporal_upsampling_factor: int = 8
     template_min_channel_amplitude: float = 1.0
@@ -161,6 +162,8 @@ class MatchingConfig:
     amplitude_scaling_variance: float = 0.0
     amplitude_scaling_boundary: float = 0.5
     max_iter: int = 1000
+    conv_ignore_threshold: float = 5.0
+    coarse_approx_error_threshold: float = 5.0
 
 @dataclass(frozen=True)
 class ClusteringConfig:
