@@ -118,6 +118,8 @@ def array_scatter(
     zlim=(-50, 3900),
     xlim=None,
     ptplim=None,
+    maxptp_c=None,
+    title=None,
     axes=None,
     do_ellipse=True,
     figsize = (15, 15),
@@ -125,6 +127,9 @@ def array_scatter(
     fig = None
     if axes is None:
         fig, axes = plt.subplots(1, 3, sharey=True, figsize=figsize)
+
+    if title is not None:
+        fig.suptitle(title)
 
     excluded_ids = {-1}
     if not do_ellipse:
@@ -160,11 +165,13 @@ def array_scatter(
     )
     axes[1].set_xlabel("Amplitude (s.u.)", fontsize=16)
     axes[1].tick_params(axis='x', labelsize=16)
-    
+
+    if maxptp_c is None:
+        maxptp_c = np.clip(maxptp, 3, 15)    
     axes[2].scatter(
         x,
         z,
-        c=np.clip(maxptp, 3, 15),
+        c=maxptp_c,
         s=1,
         alpha=0.1,
         marker=".",
