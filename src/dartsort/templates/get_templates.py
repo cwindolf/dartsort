@@ -10,7 +10,8 @@ import torch
 from dartsort.util import spikeio
 from dartsort.util.drift_util import registered_template
 from dartsort.util.multiprocessing_util import get_pool
-from dartsort.util.waveform_util import fast_nanmedian, make_channel_index
+from dartsort.util.spiketorch import fast_nanmedian, ptp
+from dartsort.util.waveform_util import make_channel_index
 from scipy.spatial import KDTree
 from scipy.spatial.distance import pdist
 from sklearn.decomposition import TruncatedSVD
@@ -180,6 +181,7 @@ def get_templates(
         snr_threshold=denoising_snr_threshold,
     )
     templates = weights * raw_templates + (1 - weights) * low_rank_templates
+    templates = templates.astype(recording.dtype)
 
     return dict(
         sorting=sorting,
@@ -378,13 +380,16 @@ def get_all_shifted_raw_and_low_rank_templates(
         registered_kdtree = KDTree(registered_geom)
 
     n_units = sorting.labels.max() + 1
-    raw_templates = np.zeros((n_units, spike_length_samples, n_template_channels))
+    raw_templates = np.zeros(
+        (n_units, spike_length_samples, n_template_channels), dtype=recording.dtype
+    )
     low_rank_templates = None
     if not raw:
         low_rank_templates = np.zeros(
-            (n_units, spike_length_samples, n_template_channels)
+            (n_units, spike_length_samples, n_template_channels),
+            dtype=recording.dtype,
         )
-    snrs_by_channel = np.zeros((n_units, n_template_channels))
+    snrs_by_channel = np.zeros((n_units, n_template_channels), dtype=recording.dtype)
 
     unit_id_chunks = [
         unit_ids[i : i + units_per_job] for i in range(0, n_units, units_per_job)
@@ -420,6 +425,8 @@ def get_all_shifted_raw_and_low_rank_templates(
                 unit="template",
             )
         for res in results:
+            if res is None:
+                continue
             units_chunk, raw_temps_chunk, low_rank_temps_chunk, snrs_chunk = res
             raw_templates[units_chunk] = raw_temps_chunk
             if not raw:
@@ -469,19 +476,21 @@ class TemplateProcessContext:
         self.max_spike_time = recording.get_num_samples() - (
             spike_length_samples - trough_offset_samples
         )
-        
+
         self.spike_buffer = torch.zeros(
             (spikes_per_unit * units_per_job, spike_length_samples, self.n_channels),
             device=device,
             dtype=torch.from_numpy(np.zeros(1, dtype=recording.dtype)).dtype,
         )
 
+        self.n_template_channels = self.n_channels
         if self.registered:
             self.geom = recording.get_channel_locations()
             self.match_distance = pdist(self.geom).min() / 2
             self.registered_geom = registered_kdtree.data
             self.registered_kdtree = registered_kdtree
             self.pitch_shifts = pitch_shifts
+            self.n_template_channels = len(self.registered_geom)
 
 
 _template_process_context = None
@@ -534,6 +543,8 @@ def _template_job(unit_ids):
     p = _template_process_context
 
     in_units_full = np.flatnonzero(np.isin(p.sorting.labels, unit_ids))
+    if not in_units_full.size:
+        return
     labels_full = p.sorting.labels[in_units_full]
 
     # only so many spikes per unit
@@ -563,7 +574,7 @@ def _template_job(unit_ids):
         (times >= p.trough_offset_samples) & (times < p.max_spike_time)
     )
     if not valid.size:
-        return uids, 0, 0, 0
+        return
     in_units = in_units[valid]
     labels = labels[valid]
     times = times[valid]
@@ -573,19 +584,19 @@ def _template_job(unit_ids):
         trough_offset_samples=p.trough_offset_samples,
         spike_length_samples=p.spike_length_samples,
     )
-    p.spike_buffer[:times.size] = torch.from_numpy(waveforms)
-    waveforms = p.spike_buffer[:times.size]
+    p.spike_buffer[: times.size] = torch.from_numpy(waveforms)
+    waveforms = p.spike_buffer[: times.size]
     n, t, c = waveforms.shape
 
     # compute raw templates and spike counts per channel
     raw_templates = []
     counts = []
+    units_chunk = []
     for u in uids:
         in_unit = np.flatnonzero(labels == u)
         if not in_unit.size:
-            raw_templates.append(np.zeros(1))
-            counts.append(0)
             continue
+        units_chunk.append(u)
         in_unit_orig = in_units[labels == u]
         if p.registered:
             raw_templates.append(
@@ -611,12 +622,15 @@ def _template_job(unit_ids):
                 )
             )
         else:
-            raw_templates.append(p.reducer(waveforms[in_unit], axis=0))
+            raw_templates.append(
+                p.reducer(waveforms[in_unit], axis=0).numpy(force=True)
+            )
             counts.append(in_unit.size)
-    snrs_by_chan = [rt.ptp(0) * c for rt, c in zip(raw_templates, counts)]
+    snrs_by_chan = [ptp(rt, 0) * c for rt, c in zip(raw_templates, counts)]
+    raw_templates = np.array(raw_templates)
 
     if p.denoising_tsvd is None:
-        return uids, raw_templates, None, snrs_by_chan
+        return units_chunk, raw_templates, None, snrs_by_chan
 
     # apply denoising
     waveforms = waveforms.permute(0, 2, 1).reshape(n * c, t)
@@ -625,11 +639,8 @@ def _template_job(unit_ids):
 
     # get low rank templates
     low_rank_templates = []
-    for u in uids:
+    for u in units_chunk:
         in_unit = np.flatnonzero(labels == u)
-        if not in_unit.size:
-            low_rank_templates.append(0)
-            continue
         in_unit_orig = in_units[labels == u]
         if p.registered:
             low_rank_templates.append(
@@ -644,9 +655,12 @@ def _template_job(unit_ids):
                 )
             )
         else:
-            low_rank_templates.append(p.reducer(waveforms[in_unit], axis=0))
+            low_rank_templates.append(
+                p.reducer(waveforms[in_unit], axis=0).numpy(force=True)
+            )
+    low_rank_templates = np.array(low_rank_templates)
 
-    return uids, raw_templates, low_rank_templates, snrs_by_chan
+    return units_chunk, raw_templates, low_rank_templates, snrs_by_chan
 
 
 class TorchSVDProjector(torch.nn.Module):

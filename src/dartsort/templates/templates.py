@@ -1,17 +1,14 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
+from pathlib import Path
 from typing import Optional
 
 import numpy as np
-from pathlib import Path
+from dartsort.util import drift_util
 
 from .get_templates import get_templates
 from .superres_util import superres_sorting
-from .template_util import (
-    get_registered_templates,
-    get_realigned_sorting,
-    get_template_depths,
-)
-from dartsort.util import drift_util
+from .template_util import (get_realigned_sorting, get_template_depths,
+                            weighted_average)
 
 _motion_error_prefix = (
     "If template_config has registered_templates==True "
@@ -22,31 +19,61 @@ _aware_error = "motion_est must be passed to TemplateData.from_config()"
 
 @dataclass
 class TemplateData:
+    # (n_templates, spike_length_samples, n_registered_channels or n_channels)
     templates: np.ndarray
+    # (n_templates,) maps template index to unit index (multiple templates can share a unit index)
     unit_ids: np.ndarray
+    # (n_templates,) spike count for each template
+    spike_counts: np.ndarray
+
     registered_geom: Optional[np.ndarray] = None
     registered_template_depths_um: Optional[np.ndarray] = None
-    
+    localization_radius_um: float = 100.0
+
     @classmethod
     def from_npz(cls, npz_path):
-        with np.load(npz_path) as npz:
-            templates = npz["templates"]
-            unit_ids = npz["unit_ids"]
-            registered_geom = registered_template_depths_um = None
-            if "registered_geom" in npz:
-                registered_geom = npz["registered_geom"]
-            if "registered_template_depths_um" in npz:
-                registered_template_depths_um = npz["registered_template_depths_um"]
-        return cls(templates, unit_ids, registered_geom, registered_template_depths_um)
-    
+        with np.load(npz_path) as data:
+            return cls(**data)
+
     def to_npz(self, npz_path):
-        to_save = dict(templates=self.templates, unit_ids=self.unit_ids)
+        to_save = dict(
+            templates=self.templates,
+            unit_ids=self.unit_ids,
+            spike_counts=self.spike_counts,
+        )
         if self.registered_geom is not None:
             to_save["registered_geom"] = self.registered_geom
         if self.registered_template_depths_um is not None:
-            to_save["registered_template_depths_um"] = self.registered_template_depths_um
+            to_save[
+                "registered_template_depths_um"
+            ] = self.registered_template_depths_um
         np.savez(npz_path, **to_save)
-    
+
+    def coarsen(self):
+        """Weighted average all templates that share a unit id and re-localize."""
+        # update templates
+        unit_ids_unique, flat_ids = np.unique(self.unit_ids, return_inverse=True)
+        templates = weighted_average(flat_ids, self.templates, self.spike_counts)
+
+        # collect spike counts
+        spike_counts = np.zeros(len(templates))
+        np.add.at(spike_counts, flat_ids, self.spike_counts)
+
+        # re-localize
+        registered_template_depths_um = get_template_depths(
+            templates,
+            self.registered_geom,
+            localization_radius_um=self.localization_radius_um,
+        )
+
+        return replace(
+            self,
+            templates=templates,
+            unit_ids=unit_ids_unique,
+            spike_counts=spike_counts,
+            registered_template_depths_um=registered_template_depths_um,
+        )
+
     @classmethod
     def from_config(
         cls,
@@ -59,7 +86,7 @@ class TemplateData:
         save_npz_name="template_data.npz",
         localizations_dataset_name="point_source_localizations",
         n_jobs=0,
-        device=None,        
+        device=None,
     ):
         if save_folder is not None:
             save_folder = Path(save_folder)
@@ -67,8 +94,8 @@ class TemplateData:
                 save_folder.mkdir()
             npz_path = save_folder / save_npz_name
             if npz_path.exists() and not overwrite:
-                return cls.from_npz(npz_path)   
-        
+                return cls.from_npz(npz_path)
+
         motion_aware = (
             template_config.registered_templates or template_config.superres_templates
         )
@@ -95,6 +122,7 @@ class TemplateData:
             trough_offset_samples=template_config.trough_offset_samples,
             spike_length_samples=template_config.spike_length_samples,
             spikes_per_unit=template_config.spikes_per_unit,
+            # realign handled in advance below, not needed in kwargs
             # realign_peaks=template_config.realign_peaks,
             realign_max_sample_shift=template_config.realign_max_sample_shift,
             denoising_rank=template_config.denoising_rank,
@@ -141,9 +169,17 @@ class TemplateData:
         else:
             unit_ids = np.arange(sorting.labels.max() + 1)
 
+        # count spikes in each template
+        spike_counts = np.zeros_like(unit_ids)
+        ix, counts = np.unique(sorting.labels, return_counts=True)
+        spike_counts[ix[ix >= 0]] = counts[ix >= 0]
+
+        # main!
         results = get_templates(recording, sorting, **kwargs)
 
         # handle registered templates
+        print(f"{results['templates'].shape=}")
+        print(f"{kwargs['registered_geom'].shape=}")
         if template_config.registered_templates:
             registered_template_depths_um = get_template_depths(
                 results["templates"],
@@ -153,15 +189,18 @@ class TemplateData:
             obj = cls(
                 results["templates"],
                 unit_ids,
+                spike_counts,
                 kwargs["registered_geom"],
                 registered_template_depths_um,
+                localization_radius_um=template_config.registered_template_localization_radius_um,
             )
         else:
-            obj =  cls(
+            obj = cls(
                 results["templates"],
                 unit_ids,
+                spike_counts,
             )
-        
+
         if save_folder is not None:
             obj.to_npz(npz_path)
 
