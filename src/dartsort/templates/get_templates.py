@@ -571,7 +571,7 @@ def _template_job(unit_ids):
     # read waveforms for all units
     times = p.sorting.times_samples[in_units]
     valid = np.flatnonzero(
-        (times >= p.trough_offset_samples) & (times < p.max_spike_time)
+        (times >= p.trough_offset_samples) & (times <= p.max_spike_time)
     )
     if not valid.size:
         return
