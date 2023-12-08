@@ -289,7 +289,6 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
         block_size, *_ = spiketorch._calc_oa_lens(convlen, self.spike_length_samples)
         self.register_buffer("objective_temporalf", torch.fft.rfft(self.objective_temporal_components, dim=1, n=block_size))
 
-        half_chunk = self.chunk_length_samples // 2
         chunk_starts = np.arange(
             0, self.recording.get_num_samples(), self.chunk_length_samples
         )
@@ -470,9 +469,7 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
             # pitch_shifts_b = torch.as_tensor(pitch_shifts_b)
             pitch_shifts_a = torch.as_tensor(pitch_shifts_a, device=cur_obj_spatial.device)
             pitch_shifts_b = torch.as_tensor(pitch_shifts_b, device=cur_obj_spatial.device)
-            pconvdb = pconvdb.at_shifts(pitch_shifts_a, pitch_shifts_b)
-            # pitch_shifts_a = torch.as_tensor(pitch_shifts_a, device=cur_obj_spatial.device)
-            # pitch_shifts_b = torch.as_tensor(pitch_shifts_b, device=cur_obj_spatial.device)
+            # pconvdb = pconvdb.at_shifts(pitch_shifts_a, pitch_shifts_b)
         else:
             cur_spatial = self.spatial_components
             cur_obj_spatial = self.objective_spatial_components
@@ -499,10 +496,10 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
             compressed_upsampled_temporal=self.compressed_upsampled_temporal,
             max_channels=torch.as_tensor(max_channels, device=cur_obj_spatial.device),
             pairwise_conv_db=pconvdb,
-            shifts_a=None,
-            shifts_b=None,
-            # shifts_a=pitch_shifts_a,
-            # shifts_b=pitch_shifts_b,
+            # shifts_a=None,
+            # shifts_b=None,
+            shifts_a=pitch_shifts_a,
+            shifts_b=pitch_shifts_b,
         )
 
     def match_chunk(
@@ -653,7 +650,7 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
         if self.coarse_objective or self.temporal_upsampling_factor > 1:
             residual_snips = spiketorch.grab_spikes_full(
                 residual,
-                times - 1,
+                times,
                 trough_offset=0,
                 spike_length_samples=self.spike_length_samples + 1,
             )
@@ -670,6 +667,7 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
             objective_max[times],
             residual_snips,
             obj_template_indices,
+            times,
             amp_scale_variance=self.amplitude_scaling_variance,
             amp_scale_min=self.amp_scale_min,
             amp_scale_max=self.amp_scale_max,
@@ -840,6 +838,7 @@ class MatchingTemplateData:
         objs,
         residual_snips,
         objective_template_indices,
+        times,
         amp_scale_variance=0.0,
         amp_scale_min=None,
         amp_scale_max=None,
@@ -950,6 +949,9 @@ class MatchingTemplateData:
         ).view(len(comp_up_indices), -1)
         convs = torch.linalg.vecdot(snips[dup_ix].view(len(temps), -1), temps)
         convs_prev = torch.linalg.vecdot(snips_prev[dup_ix].view(len(temps), -1), temps)
+
+        convs_r = torch.round(convs).to(int).numpy()
+        convs_prev_r = torch.round(convs_prev).to(int).numpy()
         # convs = torch.einsum(
         #     "jtc,jrc,jtr->j",
         #     snips[dup_ix],
@@ -985,11 +987,11 @@ class MatchingTemplateData:
         upsampling_indices = self.compressed_index_to_upsampling_index[comp_up_indices]
 
         # prev convs were one step earlier
-        time_shifts = torch.full(comp_up_ix.shape, -1, device=convs.device)
-        time_shifts[dup_ix, column_ix] += better
+        # time_shifts = torch.full(comp_up_ix.shape, -1, device=convs.device)
+        # time_shifts[dup_ix, column_ix] += better
+        time_shifts = torch.full(comp_up_ix.shape, 0, device=convs.device)
+        time_shifts[dup_ix, column_ix] += better.to(int)
         time_shifts = time_shifts[row_ix, best_column_ix]
-        print(f"{better=}")
-        print(f"{time_shifts=}")
 
         return time_shifts, upsampling_indices, scalings, template_indices, objs
 
