@@ -154,12 +154,11 @@ def test_tiny_up(tmp_path, up_factor=8):
 
     # spike train
     # fmt: off
-    # start = 50
+    start = 50
     # tclu = []
     # for i in range(up_factor):
     #     tclu.extend((start + 200 * i, 0, 0, i))
-        # tclu.extend((start + 1 + 200 * i, 0, 1, i))
-    tclu = [50, 0, 0, 0]
+    tclu = [50, 0, 0, 7]
     # fmt: on
     times, channels, labels, upsampling_indices = np.array(tclu).reshape(-1, 4).T
     rec = np.zeros((recording_length_samples, n_channels), dtype="float32")
@@ -256,8 +255,8 @@ def test_tiny_up(tmp_path, up_factor=8):
     print(f'{res["n_spikes"]=} {len(times)=}')
     print(f"{cupts.compressed_upsampled_templates.ptp(1).max(1)=}")
     print(f'{res["collisioncleaned_waveforms"].numpy(force=True).ptp(1).max(1)=}')
-    print(f'{np.c_[res["times_samples"], res["labels"]]=}')
-    print(f"{np.c_[times, labels]=}")
+    print(f'{np.c_[res["times_samples"], res["labels"], res["upsampling_indices"]]=}')
+    print(f"{np.c_[times, labels, upsampling_indices]=}")
     print(f'{torch.square(res["residual"]).mean()=}')
     print(f'{torch.square(res["conv"]).mean()=}')
     assert res["n_spikes"] == len(times)
@@ -601,20 +600,24 @@ if __name__ == "__main__":
     import tempfile
     from pathlib import Path
 
+    print("\n"*5)
     print("test tiny")
     with tempfile.TemporaryDirectory() as tdir:
         test_tiny(Path(tdir))
 
+    print("\n"*5)
     print("test tiny_up")
     with tempfile.TemporaryDirectory() as tdir:
         test_tiny_up(Path(tdir))
 
     print()
+    print("\n"*5)
     print("test test_static_noup")
     with tempfile.TemporaryDirectory() as tdir:
         test_static_noup(Path(tdir))
 
     print()
+    print("\n"*5)
     print("test test_static_up")
     with tempfile.TemporaryDirectory() as tdir:
         test_static_up(Path(tdir))
