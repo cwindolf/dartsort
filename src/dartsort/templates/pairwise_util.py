@@ -52,6 +52,8 @@ def compressed_convolve_to_h5(
             if "pconv_index" in h5:
                 return output_hdf5_filename
         del h5
+    elif overwrite and output_hdf5_filename.exists():
+        output_hdf5_filename.unlink()
 
     # construct indexing helpers
     (
