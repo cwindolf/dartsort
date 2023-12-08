@@ -275,7 +275,6 @@ class CompressedPairwiseConv:
             b_ix = b_ix + (torch.atleast_1d(torch.as_tensor(upsampling_indices_b)),)
 
         # get shifted template indices for A
-        print(f"{a_ix=}")
         shifted_temp_ix_a = shifted_template_index[a_ix]
 
         # upsampled shifted template indices for B
