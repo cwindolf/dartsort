@@ -117,7 +117,7 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
     def peeling_needs_fit(self):
         return self._needs_precompute
 
-    def precompute_peeling_data(self, save_folder, n_jobs=0, device=None):
+    def precompute_peeling_data(self, save_folder, overwrite=False, n_jobs=0, device=None):
         self.build_template_data(
             save_folder,
             self.template_data,
@@ -126,6 +126,7 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
             svd_compression_rank=self.svd_compression_rank,
             min_channel_amplitude=self.min_channel_amplitude,
             dtype=self.recording.dtype,
+            overwrite=overwrite,
             n_jobs=n_jobs,
             device=device,
         )
@@ -221,6 +222,7 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
         svd_compression_rank=10,
         min_channel_amplitude=1.0,
         dtype=np.float32,
+        overwrite=False,
         n_jobs=0,
         device=None,
     ):
@@ -307,6 +309,7 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
             chunk_time_centers_s=chunk_centers_s,
             motion_est=self.motion_est,
             geom=self.geom,
+            overwrite=overwrite,
             conv_ignore_threshold=self.conv_ignore_threshold,
             coarse_approx_error_threshold=self.coarse_approx_error_threshold,
             device=device,
@@ -667,7 +670,7 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
             objective_max[times],
             residual_snips,
             obj_template_indices,
-            times,
+            # times,
             amp_scale_variance=self.amplitude_scaling_variance,
             amp_scale_min=self.amp_scale_min,
             amp_scale_max=self.amp_scale_max,
@@ -838,7 +841,7 @@ class MatchingTemplateData:
         objs,
         residual_snips,
         objective_template_indices,
-        times,
+        # times,
         amp_scale_variance=0.0,
         amp_scale_min=None,
         amp_scale_max=None,
@@ -950,8 +953,8 @@ class MatchingTemplateData:
         convs = torch.linalg.vecdot(snips[dup_ix].view(len(temps), -1), temps)
         convs_prev = torch.linalg.vecdot(snips_prev[dup_ix].view(len(temps), -1), temps)
 
-        convs_r = torch.round(convs).to(int).numpy()
-        convs_prev_r = torch.round(convs_prev).to(int).numpy()
+        # convs_r = torch.round(convs).to(int).numpy()
+        # convs_prev_r = torch.round(convs_prev).to(int).numpy()
         # convs = torch.einsum(
         #     "jtc,jrc,jtr->j",
         #     snips[dup_ix],

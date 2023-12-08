@@ -76,7 +76,7 @@ class BasePeeler(torch.nn.Module):
             self.load_models(save_folder)
         if self.needs_fit():
             save_folder.mkdir(exist_ok=True)
-            self.fit_models(save_folder, n_jobs=n_jobs, device=device)
+            self.fit_models(save_folder, overwrite=overwrite, n_jobs=n_jobs, device=device)
             self.save_models(save_folder)
         assert not self.needs_fit()
 
@@ -210,7 +210,7 @@ class BasePeeler(torch.nn.Module):
     def peeling_needs_fit(self):
         return False
 
-    def precompute_peeling_data(self, save_folder, n_jobs=0, device=None):
+    def precompute_peeling_data(self, save_folder, overwrite=False, n_jobs=0, device=None):
         # subclasses should override if they need to cache data for peeling
         # runs before fit_peeler_models()
         pass
@@ -321,11 +321,11 @@ class BasePeeler(torch.nn.Module):
     def needs_fit(self):
         return self.peeling_needs_fit() or self.featurization_pipeline.needs_fit()
 
-    def fit_models(self, save_folder, n_jobs=0, device=None):
+    def fit_models(self, save_folder, overwrite=False, n_jobs=0, device=None):
         with torch.no_grad():
             if self.peeling_needs_fit():
                 self.precompute_peeling_data(
-                    save_folder=save_folder, n_jobs=n_jobs, device=device
+                    save_folder=save_folder, overwrite=overwrite, n_jobs=n_jobs, device=device
                 )
                 self.fit_peeler_models(
                     save_folder=save_folder, n_jobs=n_jobs, device=device
