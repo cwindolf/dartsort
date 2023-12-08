@@ -988,6 +988,8 @@ class MatchingTemplateData:
         time_shifts = torch.full(comp_up_ix.shape, -1, device=convs.device)
         time_shifts[dup_ix, column_ix] += better
         time_shifts = time_shifts[row_ix, best_column_ix]
+        print(f"{better=}")
+        print(f"{time_shifts=}")
 
         return time_shifts, upsampling_indices, scalings, template_indices, objs
 
