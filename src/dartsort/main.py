@@ -164,6 +164,8 @@ def _run_peeler(
         show_progress=show_progress,
         device=device,
     )
+    del peeler
+    _gc(n_jobs, device)
 
     # do localization
     if not featurization_config.denoise_only and featurization_config.do_localization:
@@ -176,8 +178,23 @@ def _run_peeler(
             device=device,
             localization_model=featurization_config.localization_model
         )
+        _gc(0, device)
 
     return (
         DARTsortSorting.from_peeling_hdf5(output_hdf5_filename),
         output_hdf5_filename,
     )
+
+def _gc(n_jobs, device):
+    if n_jobs:
+        # work happened off main process
+        return
+
+    import gc, torch
+    gc.collect()
+    
+    if (
+        torch.device(device).type == "cuda"
+        or (torch.cuda.is_available() and device is None)
+    ):
+        torch.cuda.empty_cache()
