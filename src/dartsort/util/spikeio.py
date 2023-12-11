@@ -198,10 +198,12 @@ def read_waveforms_channel_index(
     )
     read_times = times_samples - trough_offset_samples
     for i, t in enumerate(read_times):
-        load_channel_ids = recording.channel_ids[channel_index[main_channels[i]]]
-        waveforms[i] = recording.get_traces(
+        chans = channel_index[main_channels[i]]
+        good = chans < n_channels
+        load_channel_ids = recording.channel_ids[chans[good]]
+        waveforms[i, :, good] = recording.get_traces(
             0, start_frame=t, end_frame=t + spike_length_samples, channel_ids=load_channel_ids
-        )
+        ).T
 
     return waveforms
 

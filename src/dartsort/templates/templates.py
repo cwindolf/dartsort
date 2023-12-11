@@ -63,7 +63,7 @@ class TemplateData:
 
         # re-localize
         registered_template_depths_um = None
-        if with_locs:
+        if with_locs and self.registered_geom is not None:
             registered_template_depths_um = get_template_depths(
                 templates,
                 self.registered_geom,
