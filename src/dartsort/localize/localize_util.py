@@ -37,10 +37,11 @@ def localize_hdf5(
     n_channels_subset=None,
     output_dataset_name="point_source_localizations",
     main_channels_dataset_name="channels",
-    amplitude_vectors_dataset_name="amplitude_vectors",
+    amplitude_vectors_dataset_name="denoised_amplitude_vectors",
     channel_index_dataset_name="channel_index",
     geometry_dataset_name="geom",
     spikes_per_batch=100_000,
+    overwrite=False,
     show_progress=True,
     device=None,
     localization_model="pointsource",
@@ -64,16 +65,18 @@ def localize_hdf5(
         n_spikes = channels.shape[0]
         assert geom.shape == (channel_index.shape[0], 2)
         assert amp_vecs.shape == (*channels.shape, channel_index.shape[1])
-
         if output_dataset_name in h5:
             shape = h5[output_dataset_name].shape
-            if shape != (n_spikes, 4):
+            if overwrite:
+                del h5[output_dataset_name]
+            elif shape != (n_spikes, 4):
                 raise ValueError(
                     f"The {output_dataset_name} dataset in {hdf5_filename} "
                     f"has unexpected shape {shape}, where we expected {(n_spikes, 4)}."
                 )
-            # else, we are resuming
-            return
+            else:
+                # else, we are resuming
+                return
 
         geom = torch.tensor(geom, device=device)
         channel_index = torch.tensor(channel_index, device=device)
