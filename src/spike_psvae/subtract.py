@@ -38,6 +38,7 @@ default_extra_feats = [
 def subtraction(
     recording,
     out_folder,
+    geom=None, # (nc, 2) numpy array containing channel locations. if None, will try to load from spike interface recording
     out_filename="subtraction.h5",
     # should we start over?
     overwrite=False,
@@ -226,7 +227,7 @@ def subtraction(
 
     # compute helper data structures
     # channel indexes for extraction, NN detection, deduplication
-    geom = recording.get_channel_locations()
+    geom = recording.get_channel_locations() if geom is None else geom
     print(f"{geom.shape=}")
     dedup_channel_index = make_channel_index(
         geom, dedup_spatial_radius, steps=2
@@ -500,6 +501,7 @@ def subtraction(
         fit_features=[subtracted_tpca_feat] + fit_feats,
         overwrite=overwrite,
         dtype=dtype,
+        geom=geom,
     ) as (output_h5, last_sample):
         # residual binary file -- append if we're resuming
         if save_residual:
@@ -1639,7 +1641,9 @@ def get_output_h5(
     overwrite=False,
     chunk_len=1024,
     dtype=np.float32,
+    geom=None,
 ):
+    geom = recording.get_channel_locations() if geom is None else geom
     h5_exists = Path(out_h5).exists()
     last_sample = 0
     if h5_exists and not overwrite:
@@ -1655,9 +1659,7 @@ def get_output_h5(
 
         # initialize datasets
         output_h5.create_dataset("fs", data=recording.get_sampling_frequency())
-        output_h5.create_dataset(
-            "geom", data=recording.get_channel_locations()
-        )
+        output_h5.create_dataset("geom", data=geom)
         output_h5.create_dataset("start_time", data=recording.get_times()[0])
         output_h5.create_dataset("channel_index", data=extract_channel_index)
 
@@ -1772,6 +1774,7 @@ def subtract_and_localize_numpy(
             residual,
             threshold,
             radial_parents,
+            None,  # enfdec
             tpca,
             dedup_channel_index,
             extract_channel_index,
