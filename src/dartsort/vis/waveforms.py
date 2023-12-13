@@ -1,5 +1,6 @@
 import matplotlib.pyplot as plt
 import numpy as np
+from matplotlib.patches import Rectangle
 
 
 def geomplot(
@@ -161,13 +162,13 @@ def geomplot(
         if np.isfinite([min_z, max_z]).all():
             ax.set_ylim([min_z - 2 * max_abs_amp, max_z + 2 * max_abs_amp])
     elif zlim == "tight":
-        min_z = min(xz_plot[c, 1] for c in unique_chans)
-        max_z = max(xz_plot[c, 1] for c in unique_chans)
+        min_z = min(geom_plot[c, 1] for c in unique_chans)
+        max_z = max(geom_plot[c, 1] for c in unique_chans)
         if np.isfinite([min_z, max_z]).all():
             ax.set_ylim([min_z - max_abs_amp, max_z + max_abs_amp])
     elif isinstance(zlim, float):
-        min_z = min(xz_plot[c, 1] for c in unique_chans)
-        max_z = max(xz_plot[c, 1] for c in unique_chans)
+        min_z = min(geom_plot[c, 1] for c in unique_chans)
+        max_z = max(geom_plot[c, 1] for c in unique_chans)
         if np.isfinite([min_z, max_z]).all():
             ax.set_ylim([min_z - max_abs_amp * zlim, max_z + max_abs_amp * zlim])
 
