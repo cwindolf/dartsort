@@ -170,4 +170,5 @@ class MatchingConfig:
 default_featurization_config = FeaturizationConfig()
 default_subtraction_config = SubtractionConfig()
 default_template_config = TemplateConfig()
+coarse_template_config = TemplateConfig(superres_templates=False)
 default_matching_config = MatchingConfig()
