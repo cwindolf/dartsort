@@ -3,6 +3,15 @@ import time
 
 
 class timer:
+    """
+    with timer("hi"):
+        bubblesort(np.arange(1e6)[::-1])
+    # prints: hi took <> s
+    with timer("zoom") as tic:
+        pass
+    assert np.isclose(tic.dt, 0)
+    """
+
     def __init__(self, name="timer"):
         self.name = name
 
@@ -11,8 +20,8 @@ class timer:
         return self
 
     def __exit__(self, *args):
-        self.t = time.time() - self.start
-        print(self.name, "took", self.t, "s")
+        self.dt = time.time() - self.start
+        print(self.name, "took", self.dt, "s")
 
 
 class NoKeyboardInterrupt:

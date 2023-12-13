@@ -5,7 +5,6 @@ import h5py
 import numpy as np
 import torch
 from dartsort.util import drift_util, waveform_util
-from dartsort.util.data_util import DARTsortSorting
 from dartsort.util.multiprocessing_util import get_pool
 from hdbscan import HDBSCAN
 from sklearn.decomposition import PCA
@@ -210,10 +209,15 @@ class FeatureSplit(SplitStrategy):
         if n_spikes < self.min_cluster_size:
             return SplitResult()
 
-        max_registered_channel, n_pitches_shift, reloc_amplitudes, kept = self.get_registered_channels(in_unit)
+        (
+            max_registered_channel,
+            n_pitches_shift,
+            reloc_amplitudes,
+            kept,
+        ) = self.get_registered_channels(in_unit)
         if not kept.size:
             return SplitResult()
-        
+
         features = []
         if self.use_localization_features:
             loc_features = self.localization_features[in_unit]
@@ -222,7 +226,9 @@ class FeatureSplit(SplitStrategy):
             features.append(loc_features)
 
         if self.n_pca_features > 0:
-            enough_good_spikes, kept, pca_embeds = self.pca_features(in_unit, max_registered_channel, n_pitches_shift)
+            enough_good_spikes, kept, pca_embeds = self.pca_features(
+                in_unit, max_registered_channel, n_pitches_shift
+            )
             if not enough_good_spikes:
                 return SplitResult()
             # scale pc features to match localization features
