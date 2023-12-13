@@ -8,9 +8,14 @@ Relies on the DARTsortAnalysis object of utils/analysis.py to do most of
 the data work so that this file can focus on plotting (sort of MVC).
 """
 from collections import namedtuple
+from pathlib import Path
 
 import matplotlib.pyplot as plt
 import numpy as np
+from tqdm.auto import tqdm
+
+from ..multiprocessing_util import get_pool
+from .waveforms import geomplot
 
 # -- main class. see fn make_unit_summary below to make lots of UnitPlots.
 
@@ -78,7 +83,9 @@ class XZScatter(UnitPlot):
         in_unit = sorting_analysis.in_unit(unit_id)
         x = sorting_analysis.x(which=in_unit)
         z = sorting_analysis.z(which=in_unit, registered=self.registered)
-        amps = sorting_analysis.amplitudes(which=in_unit, relocated=self.relocate_amplitudes)
+        amps = sorting_analysis.amplitudes(
+            which=in_unit, relocated=self.relocate_amplitudes
+        )
         s = axis.scatter(x, z, c=np.minimum(amps, self.max_amplitude), lw=0, s=3)
         self.set_xlabel("x (um)")
         reg_str = "registered " * self.registered
@@ -97,14 +104,19 @@ class PCAScatter(UnitPlot):
 
     def draw(self, axis, sorting_analysis, unit_id):
         in_unit = sorting_analysis.in_unit(unit_id)
-        loadings = sorting_analysis.pca_features(which=in_unit, relocated=self.relocated)
-        amps = sorting_analysis.amplitudes(which=in_unit, relocated=self.relocate_amplitudes)
+        loadings = sorting_analysis.pca_features(
+            which=in_unit, relocated=self.relocated
+        )
+        amps = sorting_analysis.amplitudes(
+            which=in_unit, relocated=self.relocate_amplitudes
+        )
         s = axis.scatter(*loadings.T, c=np.minimum(amps, self.max_amplitude), lw=0, s=3)
         reloc_str = "relocated " * self.relocated
         self.set_xlabel(reloc_str + "per-unit PC1 (um)")
         self.set_ylabel(reloc_str + "per-unit PC2 (um)")
         reloc_amp_str = "relocated " * self.relocate_amplitudes
         plt.colorbar(s, ax=axis, shrink=0.5, label=reloc_amp_str + "amplitude (su)")
+
 
 # -- wide scatter plots
 
@@ -122,7 +134,9 @@ class TZScatter(UnitPlot):
         in_unit = sorting_analysis.in_unit(unit_id)
         t = sorting_analysis.times_seconds(which=in_unit)
         z = sorting_analysis.z(which=in_unit, registered=self.registered)
-        amps = sorting_analysis.amplitudes(which=in_unit, relocated=self.relocate_amplitudes)
+        amps = sorting_analysis.amplitudes(
+            which=in_unit, relocated=self.relocate_amplitudes
+        )
         s = axis.scatter(t, z, c=np.minimum(amps, self.max_amplitude), lw=0, s=3)
         self.set_xlabel("time (seconds)")
         reg_str = "registered " * self.registered
@@ -135,7 +149,13 @@ class TFeatScatter(UnitPlot):
     kind = "widescatter"
     width = 2
 
-    def __init__(self, feat_name, color_by_amplitude=True, relocate_amplitudes=False, max_amplitude=15):
+    def __init__(
+        self,
+        feat_name,
+        color_by_amplitude=True,
+        relocate_amplitudes=False,
+        max_amplitude=15,
+    ):
         self.relocate_amplitudes = relocate_amplitudes
         self.feat_name = feat_name
         self.max_amplitude = max_amplitude
@@ -147,7 +167,9 @@ class TFeatScatter(UnitPlot):
         z = sorting_analysis.named_feature(self.feat_name, which=in_unit)
         c = None
         if self.color_by_amplitude:
-            amps = sorting_analysis.amplitudes(which=in_unit, relocated=self.relocate_amplitudes)
+            amps = sorting_analysis.amplitudes(
+                which=in_unit, relocated=self.relocate_amplitudes
+            )
             c = np.minimum(amps, self.max_amplitude)
         s = axis.scatter(t, z, c=c, lw=0, s=3)
         self.set_xlabel("time (seconds)")
@@ -168,7 +190,9 @@ class TAmpScatter(UnitPlot):
     def draw(self, axis, sorting_analysis, unit_id):
         in_unit = sorting_analysis.in_unit(unit_id)
         t = sorting_analysis.times_seconds(which=in_unit)
-        amps = sorting_analysis.amplitudes(which=in_unit, relocated=self.relocate_amplitudes)
+        amps = sorting_analysis.amplitudes(
+            which=in_unit, relocated=self.relocate_amplitudes
+        )
         axis.scatter(t, amps, c="k", lw=0, s=3)
         self.set_xlabel("time (seconds)")
         reloc_str = "relocated " * self.relocate_amplitudes
@@ -178,11 +202,69 @@ class TAmpScatter(UnitPlot):
 # -- waveform plots
 
 
+class WaveformPlot(UnitPlot):
+    kind = "waveform"
+    width = 2
+    height = 2
 
+    def __init__(
+        self,
+        trough_offset_samples=42,
+        spike_length_samples=121,
+        count=250,
+        show_radius_um=75,
+        relocated=False,
+        color="k",
+    ):
+        self.count = count
+        self.show_radius_um = show_radius_um
+        self.relocated = relocated
+        self.color = color
+        self.trough_offset_samples = trough_offset_samples
+        self.spike_length_samples = spike_length_samples
+
+    def get_waveforms(self, sorting_analysis, unit_id):
+        raise NotImplementedError
+
+    def draw(self, axis, sorting_analysis, unit_id):
+        waveforms, max_chan, geom, ci = self.get_waveforms(sorting_analysis, unit_id)
+        geomplot(
+            waveforms,
+            max_channels=np.full(len(waveforms), max_chan),
+            channel_index=ci,
+            geom=geom,
+            ax=axis,
+            show_zero=False,
+            subar=True,
+            msbar=False,
+            zlim="tight",
+            color=self.color,
+        )
+
+
+class RawWaveformPlot(WaveformPlot):
+    def get_waveforms(self, sorting_analysis, unit_id):
+        return sorting_analysis.unit_raw_waveforms(
+            unit_id,
+            max_count=self.count,
+            show_radius_um=self.show_radius_um,
+            trough_offset_samples=self.trough_offset_samples,
+            spike_length_samples=self.spike_length_samples,
+            relocated=self.relocated,
+        )
+
+
+class TPCAWaveformPlot(WaveformPlot):
+    def get_waveforms(self, sorting_analysis, unit_id):
+        return sorting_analysis.unit_tpca_waveforms(
+            unit_id,
+            max_count=self.count,
+            show_radius_um=self.show_radius_um,
+            relocated=self.relocated,
+        )
 
 
 # -- main routines
-
 
 default_plots = (
     ACG(),
@@ -193,6 +275,8 @@ default_plots = (
     TZScatter(registered=False),
     TAmpScatter(),
     TAmpScatter(relocate_amplitudes=True),
+    RawWaveformPlot(),
+    TPCAWaveformPlot(),
 )
 
 
@@ -203,14 +287,8 @@ def make_unit_summary(
     max_height=4,
     figsize=(11, 8.5),
 ):
-    plots_by_kind = {}
-    for plot in plots:
-        if plot.kind not in plots_by_kind:
-            plots_by_kind[plot.kind] = []
-        plots_by_kind[plot.kind].append(plot)
-
     # -- lay out the figure
-    columns = summary_layout(plots_by_kind, max_height=max_height)
+    columns = summary_layout(plots, max_height=max_height)
 
     # -- draw the figure
     width_ratios = [column[0].width for column in columns]
@@ -245,9 +323,43 @@ def make_unit_summary(
 
 
 def make_all_summaries(
-    sorting_analysis, save_folder, max_height=4, figsize=(11, 8.5), dpi=200
+    sorting_analysis,
+    save_folder,
+    plots=default_plots,
+    max_height=4,
+    figsize=(11, 8.5),
+    dpi=200,
+    image_ext="png",
+    n_jobs=0,
+    show_progress=True,
 ):
-    pass
+    save_folder = Path(save_folder)
+    save_folder.mkdir(exist_ok=True)
+
+    n_jobs, Executor, context = get_pool(n_jobs)
+    with Executor(
+        max_workers=n_jobs,
+        mp_context=context,
+        initializer=_summary_init,
+        initargs=(
+            sorting_analysis,
+            plots,
+            max_height,
+            figsize,
+            dpi,
+            save_folder,
+            image_ext,
+        ),
+    ) as pool:
+        jobs = sorting_analysis.unit_ids
+        if show_progress:
+            jobs = tqdm(
+                jobs,
+                desc="Unit summaries",
+                smoothing=0,
+            )
+        for res in pool.map(_summary_job, jobs):
+            pass
 
 
 # -- utilities
@@ -280,7 +392,13 @@ def correlogram(times_a, times_b=None, max_lag=50):
 Card = namedtuple("Card", ["kind", "width", "height", "plots"])
 
 
-def summary_layout(plots_by_kind, max_height=4):
+def summary_layout(plots, max_height=4):
+    plots_by_kind = {}
+    for plot in plots:
+        if plot.kind not in plots_by_kind:
+            plots_by_kind[plot.kind] = []
+        plots_by_kind[plot.kind].append(plot)
+
     # break plots into groups ("cards") by kind
     cards = []
     for kind, plots in plots_by_kind.items():
@@ -313,3 +431,42 @@ def summary_layout(plots_by_kind, max_height=4):
             columns.append([card])
 
     return columns
+
+
+# -- parallelism helpers
+
+
+class SummaryJobContext:
+    def __init__(
+        self, sorting_analysis, plots, max_height, figsize, dpi, save_folder, image_ext
+    ):
+        self.sorting_analysis = sorting_analysis
+        self.plots = plots
+        self.max_height = max_height
+        self.figsize = figsize
+        self.dpi = dpi
+        self.save_folder = save_folder
+        self.image_ext = image_ext
+
+
+_summary_job_context = None
+
+
+def _summary_init(*args):
+    global _summary_job_context
+    _summary_job_context = SummaryJobContext(*args)
+
+
+def _summary_job(unit_id):
+    fig = make_unit_summary(
+        _summary_job_context.orting_analysis,
+        unit_id,
+        plots=_summary_job_context.plots,
+        max_height=_summary_job_context.max_height,
+        figsize=_summary_job_context.figsize,
+    )
+    ext = _summary_job_context.image_ext
+    fig.savefig(
+        _summary_job_context.save_folder / f"unit{unit_id:04d}.{ext}",
+        dpi=_summary_job_context.dpi,
+    )
