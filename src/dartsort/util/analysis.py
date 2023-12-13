@@ -14,6 +14,7 @@ from typing import Optional
 import h5py
 import numpy as np
 import spikeinterface.core as sc
+import torch
 from dredge.motion_util import MotionEstimate
 from sklearn.decomposition import PCA
 
