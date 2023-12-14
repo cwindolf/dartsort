@@ -19,6 +19,8 @@ def geomplot(
     xlim_factor=1,
     subar=False,
     msbar=False,
+    bar_color="k",
+    bar_background="w",
     zlim="tight",
     **plot_kwargs,
 ):
@@ -27,6 +29,9 @@ def geomplot(
     ax = ax or plt.gca()
 
     # -- validate shapes
+    if waveforms.ndim == 2:
+        waveforms = waveforms[None]
+    assert waveforms.ndim == 3
     if max_channels is None and channel_index is None:
         max_channels = np.zeros(waveforms.shape[0], dtype=int)
         channel_index = (
@@ -34,15 +39,11 @@ def geomplot(
             * np.ones(geom.shape[0], dtype=int)[:, None]
         )
     max_channels = np.atleast_1d(max_channels)
-    if waveforms.ndim == 2:
-        waveforms = waveforms[None]
-    else:
-        assert waveforms.ndim == 3
     n_channels, C = channel_index.shape
     assert geom.shape == (n_channels, 2)
     T = waveforms.shape[1]
     if waveforms.shape != (*max_channels.shape, T, C):
-        raise ValueError(f"Bad shapes: {waveforms.shape=}, {max_channels.shape=}")
+        raise ValueError(f"Bad shapes: {waveforms.shape=}, {max_channels.shape=}, {C=}")
 
     # -- figure out units for plotting
     z_uniq, z_ix = np.unique(geom[:, 1], return_inverse=True)
@@ -93,7 +94,7 @@ def geomplot(
     for c in unique_chans:
         if show_zero:
             if show_zero_kwargs is None:
-                show_zero_kwargs = dict(color="gray", lw=1, linestyle="--")
+                show_zero_kwargs = dict(color="gray", lw=0.8, linestyle="--")
             ax.axhline(geom_plot[c, 1], **show_zero_kwargs)
         if show_chan_label:
             ax.annotate(chan_labels[c], geom_plot[c] + ann_offset, size=6, color="gray")
@@ -110,6 +111,20 @@ def geomplot(
         min_z = min(geom_plot[c, 1] for c in unique_chans)
         if msbar:
             min_z += max_abs_amp
+        if bar_background:
+            ax.add_patch(
+                Rectangle(
+                    [
+                        geom_plot[:, 0].max() + T // 4 - 2,
+                        min_z - max_abs_amp / 2 - subar / 10,
+                    ],
+                    4 + 7 + 2,
+                    subar + subar / 5,
+                    fc=bar_background,
+                    zorder=11,
+                    alpha=0.8,
+                )
+            )
         ax.add_patch(
             Rectangle(
                 [
@@ -118,11 +133,12 @@ def geomplot(
                 ],
                 4,
                 subar,
-                fc="k",
+                fc=bar_color,
+                zorder=12,
             )
         )
         ax.text(
-            geom_plot[:, 0].max() + T // 4 + 4 + 5,
+            geom_plot[:, 0].max() + T // 4 + 5,
             min_z - max_abs_amp / 2 + subar / 2,
             f"{subar} s.u.",
             transform=ax.transData,
@@ -130,6 +146,8 @@ def geomplot(
             ha="left",
             va="center",
             rotation=-90,
+            color=bar_color,
+            zorder=12,
         )
 
     if msbar:
@@ -140,7 +158,7 @@ def geomplot(
                 geom_plot[:, 0].max(),
             ],
             2 * [min_z - max_abs_amp],
-            color="k",
+            color=bar_color,
             lw=2,
             zorder=890,
         )
@@ -152,6 +170,7 @@ def geomplot(
             fontsize=5,
             ha="center",
             va="bottom",
+            color=bar_color,
         )
 
     if zlim is None:

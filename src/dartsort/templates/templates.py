@@ -29,6 +29,8 @@ class TemplateData:
     registered_geom: Optional[np.ndarray] = None
     registered_template_depths_um: Optional[np.ndarray] = None
     localization_radius_um: float = 100.0
+    trough_offset_samples: int = 42
+    spike_length_samples: int = 121
 
     @classmethod
     def from_npz(cls, npz_path):
@@ -77,6 +79,9 @@ class TemplateData:
             spike_counts=spike_counts,
             registered_template_depths_um=registered_template_depths_um,
         )
+    
+    def unit_templates(self, unit_id):
+        return self.templates[self.unit_ids == unit_id]
 
     @classmethod
     def from_config(
@@ -196,12 +201,16 @@ class TemplateData:
                 kwargs["registered_geom"],
                 registered_template_depths_um,
                 localization_radius_um=template_config.registered_template_localization_radius_um,
+                trough_offset_samples=template_config.trough_offset_samples,
+                spike_length_samples=template_config.spike_length_samples,
             )
         else:
             obj = cls(
                 results["templates"],
                 unit_ids,
                 spike_counts,
+                trough_offset_samples=template_config.trough_offset_samples,
+                spike_length_samples=template_config.spike_length_samples,
             )
 
         if save_folder is not None:
