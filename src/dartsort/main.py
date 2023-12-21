@@ -1,15 +1,17 @@
 from pathlib import Path
 
-from dartsort.config import (default_featurization_config,
+from dartsort.cluster.initial import ensemble_chunks
+from dartsort.config import (default_clustering_config,
+                             default_featurization_config,
                              default_matching_config,
                              default_subtraction_config,
                              default_template_config)
 from dartsort.localize.localize_util import localize_hdf5
-from dartsort.cluster.initial import ensemble_chunks
 from dartsort.peel import (ObjectiveUpdateTemplateMatchingPeeler,
                            SubtractionPeeler)
 from dartsort.templates import TemplateData
 from dartsort.util.data_util import DARTsortSorting, check_recording
+
 
 def dartsort(
     recording,
@@ -69,12 +71,14 @@ def cluster(
     motion_est=None,
     clustering_config=default_clustering_config,
 ):
-    sorting = ensemble_chunks(hdf5_filename,
-                              recording,
-                              clustering_config=clustering_config,
-                              motion_est=motion_est,
-                          )
+    sorting = ensemble_chunks(
+        hdf5_filename,
+        recording,
+        clustering_config=clustering_config,
+        motion_est=motion_est,
+    )
     return sorting
+
 
 def match(
     recording,
@@ -184,7 +188,7 @@ def _run_peeler(
             amplitude_vectors_dataset_name=f"{wf_name}_amplitude_vectors",
             show_progress=show_progress,
             device=device,
-            localization_model=featurization_config.localization_model
+            localization_model=featurization_config.localization_model,
         )
         _gc(0, device)
 
@@ -193,16 +197,20 @@ def _run_peeler(
         output_hdf5_filename,
     )
 
+
 def _gc(n_jobs, device):
     if n_jobs:
         # work happened off main process
         return
 
-    import gc, torch
+    import gc
+    import torch
+
     gc.collect()
-    
-    if (
-        torch.device(device).type == "cuda"
-        or (torch.cuda.is_available() and device is None)
+
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+
+    if torch.device(device).type == "cuda" or (
+        torch.cuda.is_available() and device is None
     ):
         torch.cuda.empty_cache()

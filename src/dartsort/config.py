@@ -98,7 +98,7 @@ class FeaturizationConfig:
 class SubtractionConfig:
     trough_offset_samples: int = 42
     spike_length_samples: int = 121
-    detection_thresholds: List[int] = (12, 9, 6)
+    detection_thresholds: List[int] = (10, 8, 6, 5, 4)
     chunk_length_samples: int = 30_000
     peak_sign: str = "neg"
     spatial_dedup_radius: float = 150.0
@@ -166,6 +166,7 @@ class MatchingConfig:
     conv_ignore_threshold: float = 5.0
     coarse_approx_error_threshold: float = 5.0
 
+
 @dataclass(frozen=True)
 class ClusteringConfig:
     # -- initial clustering
@@ -175,15 +176,16 @@ class ClusteringConfig:
     cluster_strategy: str = "hdbscan"
     min_cluster_size: int = 25
     min_samples: int = 25
-    cluster_selection_epsilon: int = 1 
+    cluster_selection_epsilon: int = 1
     # -- ensembling
     ensemble_strategy: Optional[str] = "forward_backward"
     chunk_size_s: int = 150
     # forward-backward
 
+
 default_featurization_config = FeaturizationConfig()
 default_subtraction_config = SubtractionConfig()
 default_template_config = TemplateConfig()
+default_clustering_config = ClusteringConfig()
 coarse_template_config = TemplateConfig(superres_templates=False)
 default_matching_config = MatchingConfig()
-

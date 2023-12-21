@@ -143,9 +143,7 @@ def test_grab_and_featurize():
                 fit_radius=10,
             ),
             transform.Waveform(channel_index, name="tpca_waveforms"),
-            transform.Localization(
-                channel_index=channel_index, geom=geom, radius=50.0
-            ),
+            transform.Localization(channel_index=channel_index, geom=geom, radius=50.0),
         ]
     )
     grab = GrabAndFeaturize(
@@ -228,7 +226,11 @@ def test_grab_and_featurize():
         grab.fit_models(tempdir)
         grab.peel(Path(tempdir) / "grab.h5", device="cpu")
 
-        localize_hdf5(Path(tempdir) / "grab.h5", radius=50.0)
+        localize_hdf5(
+            Path(tempdir) / "grab.h5",
+            radius=50.0,
+            amplitude_vectors_dataset_name="amplitude_vectors",
+        )
 
         with h5py.File(Path(tempdir) / "grab.h5") as h5:
             assert h5["times_samples"].shape == (n_spikes,)
@@ -254,7 +256,7 @@ def test_grab_and_featurize():
     if not torch.cuda.is_available():
         assert np.array_equal(locs0, locs1)
     else:
-        valid = np.clip(locs1[:, 2], geom[:,1].min(), geom[:,1].max())
+        valid = np.clip(locs1[:, 2], geom[:, 1].min(), geom[:, 1].max())
         valid = locs1[:, 2] == valid
         assert np.isclose(locs0[valid], locs1[valid], atol=1e-6).all()
 
