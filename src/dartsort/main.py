@@ -1,20 +1,15 @@
 from pathlib import Path
 
-from dartsort.config import (FeaturizationConfig, ClusteringConfig, MatchingConfig,
-                             SubtractionConfig, TemplateConfig)
+from dartsort.config import (default_featurization_config,
+                             default_matching_config,
+                             default_subtraction_config,
+                             default_template_config)
 from dartsort.localize.localize_util import localize_hdf5
 from dartsort.cluster.initial import ensemble_chunks
 from dartsort.peel import (ObjectiveUpdateTemplateMatchingPeeler,
                            SubtractionPeeler)
 from dartsort.templates import TemplateData
 from dartsort.util.data_util import DARTsortSorting, check_recording
-
-default_featurization_config = FeaturizationConfig()
-default_subtraction_config = SubtractionConfig()
-default_clustering_config = ClusteringConfig()
-default_template_config = TemplateConfig()
-default_matching_config = MatchingConfig()
-
 
 def dartsort(
     recording,
@@ -177,6 +172,8 @@ def _run_peeler(
         show_progress=show_progress,
         device=device,
     )
+    del peeler
+    _gc(n_jobs, device)
 
     # do localization
     if not featurization_config.denoise_only and featurization_config.do_localization:
@@ -189,8 +186,23 @@ def _run_peeler(
             device=device,
             localization_model=featurization_config.localization_model
         )
+        _gc(0, device)
 
     return (
         DARTsortSorting.from_peeling_hdf5(output_hdf5_filename),
         output_hdf5_filename,
     )
+
+def _gc(n_jobs, device):
+    if n_jobs:
+        # work happened off main process
+        return
+
+    import gc, torch
+    gc.collect()
+    
+    if (
+        torch.device(device).type == "cuda"
+        or (torch.cuda.is_available() and device is None)
+    ):
+        torch.cuda.empty_cache()

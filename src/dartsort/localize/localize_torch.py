@@ -103,8 +103,6 @@ def localize_amplitude_vectors(
     geom_pad = F.pad(geom, (0, 0, 0, 1))
     local_geoms = geom_pad[channel_index[main_channels]]
     local_geoms[:, :, 1] -= geom[main_channels, 1][:, None]
-    print(f"{amplitude_vectors.shape=}")
-    print(f"{local_geoms.shape=}")
 
     # center of mass initialization
     com = torch.divide(

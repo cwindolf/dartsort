@@ -30,6 +30,7 @@ __repo_root__ = Path(__file__).parent.parent.parent
 @dataclass(frozen=True)
 class WaveformConfig:
     """Defaults yield 42 sample trough offset and 121 total at 30kHz."""
+
     ms_before: float = 1.4
     ms_after: float = 2.6
 
@@ -179,3 +180,10 @@ class ClusteringConfig:
     ensemble_strategy: Optional[str] = "forward_backward"
     chunk_size_s: int = 150
     # forward-backward
+
+default_featurization_config = FeaturizationConfig()
+default_subtraction_config = SubtractionConfig()
+default_template_config = TemplateConfig()
+coarse_template_config = TemplateConfig(superres_templates=False)
+default_matching_config = MatchingConfig()
+

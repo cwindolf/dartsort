@@ -5,7 +5,6 @@ import h5py
 import numpy as np
 import torch
 from dartsort.util import drift_util, waveform_util
-from dartsort.util.data_util import DARTsortSorting
 from dartsort.util.multiprocessing_util import get_pool
 from hdbscan import HDBSCAN
 from sklearn.decomposition import PCA
@@ -210,13 +209,26 @@ class FeatureSplit(SplitStrategy):
         if n_spikes < self.min_cluster_size:
             return SplitResult()
 
+        (
+            max_registered_channel,
+            n_pitches_shift,
+            reloc_amplitudes,
+            kept,
+        ) = self.get_registered_channels(in_unit)
+        if not kept.size:
+            return SplitResult()
+
         features = []
-        kept = np.arange(n_spikes)
         if self.use_localization_features:
             loc_features = self.localization_features[in_unit]
+            if self.relocated:
+                loc_features[kept, 2] = reloc_amplitudes
             features.append(loc_features)
+
         if self.n_pca_features > 0:
-            enough_good_spikes, kept, pca_embeds = self.pca_features(in_unit)
+            enough_good_spikes, kept, pca_embeds = self.pca_features(
+                in_unit, max_registered_channel, n_pitches_shift
+            )
             if not enough_good_spikes:
                 return SplitResult()
             # scale pc features to match localization features
@@ -246,11 +258,7 @@ class FeatureSplit(SplitStrategy):
 
         return SplitResult(is_split=is_split, in_unit=in_unit, new_labels=new_labels)
 
-    def pca_features(self, in_unit):
-        """Compute relocated PCA features on a drift-invariant channel set"""
-        # figure out which set of channels to use
-        # we use the stored amplitudes to do this rather than computing a
-        # template, which can be expensive
+    def get_registered_channels(self, in_unit):
         n_pitches_shift = drift_util.get_spike_pitch_shifts(
             self.z[in_unit],
             geom=self.geom,
@@ -266,15 +274,43 @@ class FeatureSplit(SplitStrategy):
             channel_index=self.channel_index,
         )
         max_registered_channel = amplitude_template.argmax()
+
+        if self.relocated:
+            targ_chans = self.registered_channel_index[max_registered_channel]
+            targ_chans = targ_chans[targ_chans < len(self.registered_geom)]
+            reloc_amp_vecs = relocate.relocated_waveforms_on_static_channels(
+                amp_vecs,
+                main_channels=self.channels[in_unit],
+                channel_index=self.channel_index,
+                xyza_from=self.xyza[in_unit],
+                target_channels=targ_chans,
+                z_to=self.z_reg[in_unit],
+                geom=self.geom,
+                registered_geom=self.registered_geom,
+            )
+            kept = np.flatnonzero(~np.isnan(reloc_amp_vecs).any(axis=1))
+            reloc_amplitudes = np.nanmax(reloc_amp_vecs[kept], axis=1)
+        else:
+            reloc_amplitudes = None
+            kept = np.arange(in_unit.size)
+
+        return max_registered_channel, n_pitches_shift, reloc_amplitudes, kept
+
+    def pca_features(self, in_unit, max_registered_channel, n_pitches_shift):
+        """Compute relocated PCA features on a drift-invariant channel set"""
+        # figure out which set of channels to use
+        # we use the stored amplitudes to do this rather than computing a
+        # template, which can be expensive
         pca_channels = self.registered_channel_index[max_registered_channel]
         pca_channels = pca_channels[pca_channels < len(self.registered_geom)]
 
         # load waveform embeddings and invert TPCA if we are relocating
         waveforms = batched_h5_read(self.tpca_features, in_unit)
-        n, t, c = waveforms.shape
+        n, rank, c = waveforms.shape
         if self.relocated:
-            waveforms = waveforms.transpose(0, 2, 1).reshape(n * c, t)
+            waveforms = waveforms.transpose(0, 2, 1).reshape(n * c, rank)
             waveforms = self.tpca.inverse_transform(waveforms)
+            t = waveforms.shape[1]
             waveforms = waveforms.reshape(n, c, t).transpose(0, 2, 1)
 
         # relocate or just restrict to channel subset
@@ -284,8 +320,8 @@ class FeatureSplit(SplitStrategy):
                 main_channels=self.channels[in_unit],
                 channel_index=self.channel_index,
                 target_channels=pca_channels,
-                xyza_from=self.xyza,
-                z_to=self.z_reg,
+                xyza_from=self.xyza[in_unit],
+                z_to=self.z_reg[in_unit],
                 geom=self.geom,
                 registered_geom=self.registered_geom,
             )
@@ -323,18 +359,30 @@ class FeatureSplit(SplitStrategy):
         amplitudes_dataset_name="denoised_amplitudes",
         amplitude_vectors_dataset_name="denoised_amplitude_vectors",
     ):
-        h5 = h5py.File(peeling_hdf5_filename, "r", locking=False)
+        h5 = h5py.File(peeling_hdf5_filename, "r")
         self.geom = h5["geom"][:]
         self.channel_index = h5["channel_index"][:]
+        self.channels = h5["channels"][:]
 
         if self.use_localization_features or self.relocated:
             self.xyza = h5[localizations_dataset_name][:]
-            self.amplitudes = h5[amplitudes_dataset_name][:]
             self.t_s = h5["times_seconds"][:]
             # registered spike positions (=originals if not relocated)
             self.z_reg = self.z = self.xyza[:, 2]
+
+            self.amplitudes = h5[amplitudes_dataset_name][:]
+            self.registered_geom = self.geom
+            self.registered_channel_index = self.channel_index
             if self.relocated:
                 self.z_reg = self.motion_est.correct_s(self.t_s, self.z)
+                self.registered_geom = drift_util.registered_geometry(
+                    self.geom, self.motion_est
+                )
+                self.registered_channel_index = waveform_util.make_channel_index(
+                    self.registered_geom, self.channel_selection_radius
+                )
+        if (self.use_localization_features and self.relocated) or self.n_pca_features:
+            self.amplitude_vectors = h5[amplitude_vectors_dataset_name]
 
         if self.use_localization_features:
             self.localization_features = np.c_[
@@ -342,14 +390,12 @@ class FeatureSplit(SplitStrategy):
             ]
             self.localization_features *= self.localization_feature_scales
 
-        if self.n_pca_features > 0:
-            self.channels = h5["channels"][:]
+        if self.n_pca_features:
             # don't load these one into memory, since it's a bit heavier
             self.tpca_features = h5[tpca_features_dataset_name]
             # this is used to pick channel neighborhoods for PCA computation
-            self.amplitude_vectors = h5[amplitude_vectors_dataset_name]
 
-        if self.n_pca_features > 0 and self.relocated:
+        if self.n_pca_features and self.relocated:
             # load up featurization pipeline for tpca inversion
             assert peeling_featurization_pt is not None
             feature_pipeline = torch.load(peeling_featurization_pt)
@@ -359,17 +405,7 @@ class FeatureSplit(SplitStrategy):
                 if f.name == tpca_features_dataset_name
             ]
             assert len(tpca_feature) == 1
-            self.tpca = tpca_feature.to_sklearn()
-
-        self.registered_geom = self.geom
-        self.registered_channel_index = self.channel_index
-        if self.relocated:
-            self.registered_geom = drift_util.registered_geometry(
-                self.geom, self.motion_est
-            )
-            self.registered_channel_index = waveform_util.make_channel_index(
-                self.registered_geom, self.channel_selection_radius
-            )
+            self.tpca = tpca_feature[0].to_sklearn()
 
 
 # this is to help split_clusters take a string argument
