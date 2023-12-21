@@ -122,6 +122,7 @@ def get_templates(
         sorting, templates = realign_sorting(
             sorting,
             raw_results["raw_templates"],
+            raw_results["snrs_by_channel"],
             max_shift=realign_max_sample_shift,
             trough_offset_samples=trough_offset_samples,
             recording_length_samples=recording.get_num_samples(),
@@ -234,6 +235,7 @@ def get_raw_templates(
 def realign_sorting(
     sorting,
     templates,
+    snrs_by_channel,
     max_shift=20,
     trough_offset_samples=42,
     recording_length_samples=None,
@@ -244,7 +246,7 @@ def realign_sorting(
         return sorting, templates
 
     # find template peak time
-    template_maxchans = templates.ptp(1).argmax(1)
+    template_maxchans = snrs_by_channel.argmax(1)
     template_maxchan_traces = templates[np.arange(n), :, template_maxchans]
     template_peak_times = np.abs(template_maxchan_traces).argmax(1)
 
@@ -254,10 +256,10 @@ def realign_sorting(
 
     # create aligned spike train
     new_times = sorting.times_samples + template_shifts[sorting.labels]
-    labels = sorting.labels
+    labels = sorting.labels.copy()
     if recording_length_samples is not None:
         highlim = recording_length_samples - (t - trough_offset_samples)
-        labels[(new_times < trough_offset_samples) & (new_times >= highlim)] = -1
+        labels[(new_times < trough_offset_samples) & (new_times > highlim)] = -1
     aligned_sorting = replace(sorting, labels=labels, times_samples=new_times)
 
     # trim templates
@@ -567,7 +569,7 @@ def _template_job(unit_ids):
     order = np.argsort(in_units)
     in_units = in_units[order]
     labels = labels[order]
-
+    
     # read waveforms for all units
     times = p.sorting.times_samples[in_units]
     valid = np.flatnonzero(

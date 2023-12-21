@@ -52,6 +52,8 @@ def compressed_convolve_to_h5(
             if "pconv_index" in h5:
                 return output_hdf5_filename
         del h5
+    elif overwrite and output_hdf5_filename.exists():
+        output_hdf5_filename.unlink()
 
     # construct indexing helpers
     (
@@ -848,6 +850,8 @@ def shift_deduplicated_pairs(
     _, conv_ix, compression_index = np.unique(
         conv_determiners, axis=0, return_index=True, return_inverse=True
     )
+    conv_ix = np.atleast_1d(conv_ix)
+    compression_index = np.atleast_1d(compression_index)
 
     return pair_ix_a, pair_ix_b, compression_index, conv_ix, spatial_shift_ids
 
@@ -948,7 +952,7 @@ def compressed_upsampled_pairs(
     if up_factor == 1:
         upinds = np.zeros(len(conv_ix), dtype=int)
         temp_comps = compressed_upsampled_temporal.compressed_upsampled_templates[
-            temp_ix_b[ix_b[conv_ix]]
+            np.atleast_1d(temp_ix_b[ix_b[conv_ix]])
         ]
         return ix_b, compression_index, conv_ix, upinds, temp_comps, compression_dup_ix
 
