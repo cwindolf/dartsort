@@ -134,77 +134,77 @@ class CompressedPairwiseConv:
         )
         return cls.from_h5(hdf5_filename)
 
-    def at_shifts(self, shifts_a=None, shifts_b=None, device=None):
-        """Subset this database to one set of shifts.
+    # def at_shifts(self, shifts_a=None, shifts_b=None, device=None):
+    #     """Subset this database to one set of shifts.
 
-        The database becomes shiftless (not in the pejorative sense).
-        """
-        if shifts_a is None or shifts_b is None:
-            assert shifts_a is shifts_b
-            assert self.shifts_a.shape == (1,)
-            assert self.shifts_b.shape == (1,)
-            return self
+    #     The database becomes shiftless (not in the pejorative sense).
+    #     """
+    #     if shifts_a is None or shifts_b is None:
+    #         assert shifts_a is shifts_b
+    #         assert self.shifts_a.shape == (1,)
+    #         assert self.shifts_b.shape == (1,)
+    #         return self
 
-        assert shifts_a.shape == (len(self.shifted_template_index_a),)
-        assert shifts_b.shape == (len(self.upsampled_shifted_template_index_b),)
-        n_shifted_temps_a, n_up_shifted_temps_b = self.pconv_index.shape
+    #     assert shifts_a.shape == (len(self.shifted_template_index_a),)
+    #     assert shifts_b.shape == (len(self.upsampled_shifted_template_index_b),)
+    #     n_shifted_temps_a, n_up_shifted_temps_b = self.pconv_index.shape
 
-        # active shifted and upsampled indices
-        shift_ix_a = self.get_shift_ix_a(shifts_a)
-        shift_ix_b = self.get_shift_ix_b(shifts_b)
-        sub_shifted_temp_index_a = self.shifted_template_index_a[
-            torch.arange(len(self.shifted_template_index_a))[:, None],
-            shift_ix_a[:, None],
-        ]
-        sub_up_shifted_temp_index_b = self.upsampled_shifted_template_index_b[
-            torch.arange(len(self.upsampled_shifted_template_index_b))[:, None],
-            shift_ix_b[:, None],
-        ]
+    #     # active shifted and upsampled indices
+    #     shift_ix_a = self.get_shift_ix_a(shifts_a)
+    #     shift_ix_b = self.get_shift_ix_b(shifts_b)
+    #     sub_shifted_temp_index_a = self.shifted_template_index_a[
+    #         torch.arange(len(self.shifted_template_index_a))[:, None],
+    #         shift_ix_a[:, None],
+    #     ]
+    #     sub_up_shifted_temp_index_b = self.upsampled_shifted_template_index_b[
+    #         torch.arange(len(self.upsampled_shifted_template_index_b))[:, None],
+    #         shift_ix_b[:, None],
+    #     ]
 
-        # in flat form for indexing into pconv_index. also, reindex.
-        valid_a = sub_shifted_temp_index_a < n_shifted_temps_a
-        shifted_temp_ixs_a, new_shifted_temp_ixs_a = torch.unique(
-            sub_shifted_temp_index_a[valid_a], return_inverse=True
-        )
-        valid_b = sub_up_shifted_temp_index_b < n_up_shifted_temps_b
-        up_shifted_temp_ixs_b, new_up_shifted_temp_ixs_b = torch.unique(
-            sub_up_shifted_temp_index_b[valid_b], return_inverse=True
-        )
+    #     # in flat form for indexing into pconv_index. also, reindex.
+    #     valid_a = sub_shifted_temp_index_a < n_shifted_temps_a
+    #     shifted_temp_ixs_a, new_shifted_temp_ixs_a = torch.unique(
+    #         sub_shifted_temp_index_a[valid_a], return_inverse=True
+    #     )
+    #     valid_b = sub_up_shifted_temp_index_b < n_up_shifted_temps_b
+    #     up_shifted_temp_ixs_b, new_up_shifted_temp_ixs_b = torch.unique(
+    #         sub_up_shifted_temp_index_b[valid_b], return_inverse=True
+    #     )
 
-        # get relevant pconv subset and reindex
-        sub_pconv_indices, new_pconv_indices = torch.unique(
-            self.pconv_index[
-                shifted_temp_ixs_a[:, None],
-                up_shifted_temp_ixs_b.ravel()[None, :],
-            ],
-            return_inverse=True,
-        )
-        if self.in_memory:
-            sub_pconv = self.pconv[sub_pconv_indices.to(self.pconv.device)]
-        else:
-            sub_pconv = torch.from_numpy(batched_h5_read(self.pconv, sub_pconv_indices))
-        if device is not None:
-            sub_pconv = sub_pconv.to(device)
+    #     # get relevant pconv subset and reindex
+    #     sub_pconv_indices, new_pconv_indices = torch.unique(
+    #         self.pconv_index[
+    #             shifted_temp_ixs_a[:, None],
+    #             up_shifted_temp_ixs_b.ravel()[None, :],
+    #         ],
+    #         return_inverse=True,
+    #     )
+    #     if self.in_memory:
+    #         sub_pconv = self.pconv[sub_pconv_indices.to(self.pconv.device)]
+    #     else:
+    #         sub_pconv = torch.from_numpy(batched_h5_read(self.pconv, sub_pconv_indices))
+    #     if device is not None:
+    #         sub_pconv = sub_pconv.to(device)
 
-        # reindexing
-        n_sub_shifted_temps_a = len(shifted_temp_ixs_a)
-        n_sub_up_shifted_temps_b = len(up_shifted_temp_ixs_b)
-        sub_pconv_index = new_pconv_indices.view(
-            n_sub_shifted_temps_a, n_sub_up_shifted_temps_b
-        )
-        sub_shifted_temp_index_a[valid_a] = new_shifted_temp_ixs_a
-        sub_up_shifted_temp_index_b[valid_b] = new_up_shifted_temp_ixs_b
+    #     # reindexing
+    #     n_sub_shifted_temps_a = len(shifted_temp_ixs_a)
+    #     n_sub_up_shifted_temps_b = len(up_shifted_temp_ixs_b)
+    #     sub_pconv_index = new_pconv_indices.view(
+    #         n_sub_shifted_temps_a, n_sub_up_shifted_temps_b
+    #     )
+    #     sub_shifted_temp_index_a[valid_a] = new_shifted_temp_ixs_a
+    #     sub_up_shifted_temp_index_b[valid_b] = new_up_shifted_temp_ixs_b
 
-        return self.__class__(
-            shifts_a=torch.zeros(1),
-            shifts_b=torch.zeros(1),
-            shifted_template_index_a=sub_shifted_temp_index_a,
-            upsampled_shifted_template_index_b=sub_up_shifted_temp_index_b,
-            pconv_index=sub_pconv_index,
-            pconv=sub_pconv,
-            in_memory=True,
-            device=self.device,
-        )
+    #     return self.__class__(
+    #         shifts_a=torch.zeros(1),
+    #         shifts_b=torch.zeros(1),
+    #         shifted_template_index_a=sub_shifted_temp_index_a,
+    #         upsampled_shifted_template_index_b=sub_up_shifted_temp_index_b,
+    #         pconv_index=sub_pconv_index,
+    #         pconv=sub_pconv,
+    #         in_memory=True,
+    #         device=self.device,
+    #     )
 
     def to(self, device=None, incl_pconv=False, pin=False):
         """Become torch tensors on device."""
@@ -275,7 +275,6 @@ class CompressedPairwiseConv:
             b_ix = b_ix + (torch.atleast_1d(torch.as_tensor(upsampling_indices_b)),)
 
         # get shifted template indices for A
-        print(f"{a_ix=}")
         shifted_temp_ix_a = shifted_template_index[a_ix]
 
         # upsampled shifted template indices for B

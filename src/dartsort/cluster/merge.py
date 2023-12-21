@@ -35,12 +35,12 @@ def merge_templates(
     template_npz_filename="template_data.npz",
 ) -> DARTsortSorting:
     """Template distance based merge
-    
+
     Pass in a sorting, recording and template config to make templates,
     and this will merge them (with superres). Or, if you have templates
     already, pass them into template_data and we can skip the template
     construction.
-    
+
     Arguments
     ---------
     max_shift_samples
@@ -50,7 +50,7 @@ def merge_templates(
         By default, it's the max.
     amplitude_scaling_*
         Optionally allow scaling during matching
-    
+
     Returns
     -------
     A new DARTsortSorting
@@ -127,7 +127,17 @@ def merge_templates(
     )
 
 
-def recluster(sorting, units, dists, shifts, template_snrs, merge_distance_threshold=0.25):
+def recluster(
+    sorting,
+    units,
+    dists,
+    shifts,
+    template_snrs,
+    merge_distance_threshold=0.25,
+    sym_function=np.minimum,
+):
+    dists = sym_function(dists, dists.T)
+
     # upper triangle not including diagonal, aka condensed distance matrix in scipy
     pdist = dists[np.triu_indices(dists.shape[0], k=1)]
     # scipy hierarchical clustering only supports finite values, so let's just

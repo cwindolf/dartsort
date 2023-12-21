@@ -117,7 +117,9 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
     def peeling_needs_fit(self):
         return self._needs_precompute
 
-    def precompute_peeling_data(self, save_folder, n_jobs=0, device=None):
+    def precompute_peeling_data(
+        self, save_folder, overwrite=False, n_jobs=0, device=None
+    ):
         self.build_template_data(
             save_folder,
             self.template_data,
@@ -126,6 +128,7 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
             svd_compression_rank=self.svd_compression_rank,
             min_channel_amplitude=self.min_channel_amplitude,
             dtype=self.recording.dtype,
+            overwrite=overwrite,
             n_jobs=n_jobs,
             device=device,
         )
@@ -221,6 +224,7 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
         svd_compression_rank=10,
         min_channel_amplitude=1.0,
         dtype=np.float32,
+        overwrite=False,
         n_jobs=0,
         device=None,
     ):
@@ -287,13 +291,17 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
         )
         convlen = self.chunk_length_samples + self.chunk_margin_samples
         block_size, *_ = spiketorch._calc_oa_lens(convlen, self.spike_length_samples)
-        self.register_buffer("objective_temporalf", torch.fft.rfft(self.objective_temporal_components, dim=1, n=block_size))
+        self.register_buffer(
+            "objective_temporalf",
+            torch.fft.rfft(self.objective_temporal_components, dim=1, n=block_size),
+        )
 
-        half_chunk = self.chunk_length_samples // 2
         chunk_starts = np.arange(
             0, self.recording.get_num_samples(), self.chunk_length_samples
         )
-        chunk_ends = np.minimum(chunk_starts + self.chunk_length_samples, self.recording.get_num_samples())
+        chunk_ends = np.minimum(
+            chunk_starts + self.chunk_length_samples, self.recording.get_num_samples()
+        )
         chunk_centers_samples = (chunk_starts + chunk_ends) / 2
         chunk_centers_s = self.recording._recording_segments[0].sample_index_to_time(
             chunk_centers_samples
@@ -308,6 +316,7 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
             chunk_time_centers_s=chunk_centers_s,
             motion_est=self.motion_est,
             geom=self.geom,
+            overwrite=overwrite,
             conv_ignore_threshold=self.conv_ignore_threshold,
             coarse_approx_error_threshold=self.coarse_approx_error_threshold,
             device=device,
@@ -427,7 +436,10 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
         """Handle drift -- grab the right spatial neighborhoods."""
         pconvdb = self.pairwise_conv_db
         pitch_shifts_a = pitch_shifts_b = None
-        if self.objective_spatial_components.device.type == "cuda" and not pconvdb.device.type == "cuda":
+        if (
+            self.objective_spatial_components.device.type == "cuda"
+            and not pconvdb.device.type == "cuda"
+        ):
             pconvdb.to(self.objective_spatial_components.device)
         if self.is_drifting:
             pitch_shifts_b, cur_spatial = template_util.templates_at_time(
@@ -468,18 +480,20 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
             max_channels = cur_ampvecs[:, 0, :].argmax(1)
             # pitch_shifts_a = torch.as_tensor(pitch_shifts_a)
             # pitch_shifts_b = torch.as_tensor(pitch_shifts_b)
-            pitch_shifts_a = torch.as_tensor(pitch_shifts_a, device=cur_obj_spatial.device)
-            pitch_shifts_b = torch.as_tensor(pitch_shifts_b, device=cur_obj_spatial.device)
-            pconvdb = pconvdb.at_shifts(pitch_shifts_a, pitch_shifts_b)
-            # pitch_shifts_a = torch.as_tensor(pitch_shifts_a, device=cur_obj_spatial.device)
-            # pitch_shifts_b = torch.as_tensor(pitch_shifts_b, device=cur_obj_spatial.device)
+            pitch_shifts_a = torch.as_tensor(
+                pitch_shifts_a, device=cur_obj_spatial.device
+            )
+            pitch_shifts_b = torch.as_tensor(
+                pitch_shifts_b, device=cur_obj_spatial.device
+            )
+            # pconvdb = pconvdb.at_shifts(pitch_shifts_a, pitch_shifts_b)
         else:
             cur_spatial = self.spatial_components
             cur_obj_spatial = self.objective_spatial_components
             max_channels = self.registered_template_ampvecs.argmax(1)
 
         # if not pconvdb._is_torch:
-            # pconvdb.to("cpu")
+        # pconvdb.to("cpu")
         # if cur_obj_spatial.device.type == "cuda" and not pconvdb.device.type == "cuda":
         #     pconvdb.to(cur_obj_spatial.device, pin=True)
 
@@ -499,10 +513,10 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
             compressed_upsampled_temporal=self.compressed_upsampled_temporal,
             max_channels=torch.as_tensor(max_channels, device=cur_obj_spatial.device),
             pairwise_conv_db=pconvdb,
-            shifts_a=None,
-            shifts_b=None,
-            # shifts_a=pitch_shifts_a,
-            # shifts_b=pitch_shifts_b,
+            # shifts_a=None,
+            # shifts_b=None,
+            shifts_a=pitch_shifts_a,
+            shifts_b=pitch_shifts_b,
         )
 
     def match_chunk(
@@ -554,7 +568,11 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
         for it in range(self.max_iter):
             # find high-res peaks
             new_peaks = self.find_peaks(
-                residual, padded_conv, padded_objective, refrac_mask, compressed_template_data
+                residual,
+                padded_conv,
+                padded_objective,
+                refrac_mask,
+                compressed_template_data,
             )
             if new_peaks is None:
                 break
@@ -653,7 +671,7 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
         if self.coarse_objective or self.temporal_upsampling_factor > 1:
             residual_snips = spiketorch.grab_spikes_full(
                 residual,
-                times - 1,
+                times,
                 trough_offset=0,
                 spike_length_samples=self.spike_length_samples + 1,
             )
@@ -670,6 +688,7 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
             objective_max[times],
             residual_snips,
             obj_template_indices,
+            # times,
             amp_scale_variance=self.amplitude_scaling_variance,
             amp_scale_min=self.amp_scale_min,
             amp_scale_max=self.amp_scale_max,
@@ -688,7 +707,9 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
             scores=scores,
         )
 
-    def enforce_refractory(self, objective, times, objective_template_indices, template_indices):
+    def enforce_refractory(
+        self, objective, times, objective_template_indices, template_indices
+    ):
         if not times.numel():
             return
         # overwrite objective with -inf to enforce refractoriness
@@ -786,7 +807,7 @@ class MatchingTemplateData:
             rec_spatial = self.objective_spatial_singular[:, q, :] @ traces.T
             # convolve with temporal components -- units x time
             temporal = self.objective_temporal_components[:, :, q]
-            temporalf = self.objective_temporalf[:, :, q]
+            # temporalf = self.objective_temporalf[:, :, q]
             # conv1d with groups! only convolve each unit with its own temporal filter.
             conv = F.conv1d(
                 rec_spatial[None],
@@ -814,7 +835,12 @@ class MatchingTemplateData:
         scalings,
         conv_pad_len=0,
     ):
-        template_indices_a, template_indices_b, times, pconvs = self.pairwise_conv_db.query(
+        (
+            template_indices_a,
+            template_indices_b,
+            times,
+            pconvs,
+        ) = self.pairwise_conv_db.query(
             template_indices_a=None,
             template_indices_b=template_indices,
             upsampling_indices_b=upsampling_indices,
@@ -823,7 +849,9 @@ class MatchingTemplateData:
             grid=True,
             device=conv.device,
             shifts_a=self.shifts_a,
-            shifts_b=self.shifts_b[template_indices] if self.shifts_b is not None else None,
+            shifts_b=self.shifts_b[template_indices]
+            if self.shifts_b is not None
+            else None,
         )
         ix_template = template_indices_a[:, None]
         ix_time = times[:, None] + (conv_pad_len + self.conv_lags)[None, :]
@@ -840,6 +868,7 @@ class MatchingTemplateData:
         objs,
         residual_snips,
         objective_template_indices,
+        # times,
         amp_scale_variance=0.0,
         amp_scale_min=None,
         amp_scale_max=None,
@@ -878,7 +907,7 @@ class MatchingTemplateData:
             # snips is a window padded by one sample, so that we have the
             # traces snippets at the current times and one step back
             n_spikes, window_length_samples, n_chans = residual_snips.shape
-            spike_length_samples = window_length_samples - 1
+            # spike_length_samples = window_length_samples - 1
             # grab the current traces
             snips = residual_snips[:, 1:]
             # snips_dt = F.unfold(
@@ -950,6 +979,9 @@ class MatchingTemplateData:
         ).view(len(comp_up_indices), -1)
         convs = torch.linalg.vecdot(snips[dup_ix].view(len(temps), -1), temps)
         convs_prev = torch.linalg.vecdot(snips_prev[dup_ix].view(len(temps), -1), temps)
+
+        # convs_r = torch.round(convs).to(int).numpy()
+        # convs_prev_r = torch.round(convs_prev).to(int).numpy()
         # convs = torch.einsum(
         #     "jtc,jrc,jtr->j",
         #     snips[dup_ix],
@@ -985,8 +1017,10 @@ class MatchingTemplateData:
         upsampling_indices = self.compressed_index_to_upsampling_index[comp_up_indices]
 
         # prev convs were one step earlier
-        time_shifts = torch.full(comp_up_ix.shape, -1, device=convs.device)
-        time_shifts[dup_ix, column_ix] += better
+        # time_shifts = torch.full(comp_up_ix.shape, -1, device=convs.device)
+        # time_shifts[dup_ix, column_ix] += better
+        time_shifts = torch.full(comp_up_ix.shape, 0, device=convs.device)
+        time_shifts[dup_ix, column_ix] += better.to(int)
         time_shifts = time_shifts[row_ix, best_column_ix]
 
         return time_shifts, upsampling_indices, scalings, template_indices, objs
@@ -1098,6 +1132,7 @@ class MatchingPeaks:
     @property
     def template_indices(self):
         return self._template_indices[: self.n_spikes]
+
     @property
     def objective_template_indices(self):
         return self._objective_template_indices[: self.n_spikes]
@@ -1119,7 +1154,9 @@ class MatchingPeaks:
         k = self.n_spikes
         self._times = _grow_buffer(self._times, k, sz)
         self._template_indices = _grow_buffer(self._template_indices, k, sz)
-        self._objective_template_indices = _grow_buffer(self._objective_template_indices, k, sz)
+        self._objective_template_indices = _grow_buffer(
+            self._objective_template_indices, k, sz
+        )
         self._upsampling_indices = _grow_buffer(self._upsampling_indices, k, sz)
         self._scalings = _grow_buffer(self._scalings, k, sz)
         self._scores = _grow_buffer(self._scores, k, sz)
@@ -1129,7 +1166,9 @@ class MatchingPeaks:
         order = torch.argsort(self.times[: self.n_spikes])
         self._times[: self.n_spikes] = self.times[order]
         self._template_indices[: self.n_spikes] = self.template_indices[order]
-        self._objective_template_indices[: self.n_spikes] = self.objective_template_indices[order]
+        self._objective_template_indices[
+            : self.n_spikes
+        ] = self.objective_template_indices[order]
         self._upsampling_indices[: self.n_spikes] = self.upsampling_indices[order]
         self._scalings[: self.n_spikes] = self.scalings[order]
         self._scores[: self.n_spikes] = self.scores[order]
@@ -1140,7 +1179,9 @@ class MatchingPeaks:
             self.grow_buffers(min_size=new_n_spikes)
         self._times[self.n_spikes : new_n_spikes] = other.times
         self._template_indices[self.n_spikes : new_n_spikes] = other.template_indices
-        self._objective_template_indices[self.n_spikes : new_n_spikes] = other.objective_template_indices
+        self._objective_template_indices[
+            self.n_spikes : new_n_spikes
+        ] = other.objective_template_indices
         self._upsampling_indices[
             self.n_spikes : new_n_spikes
         ] = other.upsampling_indices
