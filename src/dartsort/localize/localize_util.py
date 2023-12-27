@@ -40,7 +40,7 @@ def localize_hdf5(
     amplitude_vectors_dataset_name="denoised_amplitude_vectors",
     channel_index_dataset_name="channel_index",
     geometry_dataset_name="geom",
-    spikes_per_batch=100_000,
+    spikes_per_batch=10_000,
     overwrite=False,
     show_progress=True,
     device=None,
