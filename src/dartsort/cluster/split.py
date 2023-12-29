@@ -296,58 +296,75 @@ class FeatureSplit(SplitStrategy):
 
         return max_registered_channel, n_pitches_shift, reloc_amplitudes, kept
 
-    def pca_features(self, in_unit, max_registered_channel, n_pitches_shift):
+    def pca_features(self, in_unit, max_registered_channel, n_pitches_shift, batch_size=20_000, max_pca_batch=50_000):
         """Compute relocated PCA features on a drift-invariant channel set"""
         # figure out which set of channels to use
         # we use the stored amplitudes to do this rather than computing a
         # template, which can be expensive
+        # max_batch_size set to avoid memory errors
         pca_channels = self.registered_channel_index[max_registered_channel]
         pca_channels = pca_channels[pca_channels < len(self.registered_geom)]
-
+ 
         # load waveform embeddings and invert TPCA if we are relocating
-        waveforms = batched_h5_read(self.tpca_features, in_unit)
-        n, rank, c = waveforms.shape
-        if self.relocated:
-            waveforms = waveforms.transpose(0, 2, 1).reshape(n * c, rank)
-            waveforms = self.tpca.inverse_transform(waveforms)
-            t = waveforms.shape[1]
-            waveforms = waveforms.reshape(n, c, t).transpose(0, 2, 1)
 
-        # relocate or just restrict to channel subset
-        if self.relocated:
-            waveforms = relocate.relocated_waveforms_on_static_channels(
-                waveforms,
-                main_channels=self.channels[in_unit],
-                channel_index=self.channel_index,
-                target_channels=pca_channels,
-                xyza_from=self.xyza[in_unit],
-                z_to=self.z_reg[in_unit],
-                geom=self.geom,
-                registered_geom=self.registered_geom,
-            )
-        else:
-            waveforms = drift_util.get_waveforms_on_static_channels(
-                waveforms,
-                self.geom,
-                main_channels=self.channels[in_unit],
-                channel_index=self.channel_index,
-                target_channels=pca_channels,
-                n_pitches_shift=n_pitches_shift,
-                registered_geom=self.registered_geom,
-            )
-        # ravel t,c dims -- everything below is spatiotemporal
-        waveforms = waveforms.reshape(n, t * waveforms.shape[2])
+        waveforms_all = batched_h5_read(self.tpca_features, in_unit) #in tpca manifold
+        n, rank, c = waveforms_all.shape
+
+        for bs in range(0, n, batch_size):
+            be = min(n, bs + batch_size)
+            waveforms = waveforms_all[bs:be]
+            n_batch = int(be-bs)
+            if self.relocated:
+                waveforms = waveforms.transpose(0, 2, 1).reshape(n_batch * c, rank)
+                waveforms = self.tpca.inverse_transform(waveforms) #breaks here if too many waveforms
+                t = waveforms.shape[1]
+                waveforms = waveforms.reshape(n_batch, c, t).transpose(0, 2, 1)
+    
+            # relocate or just restrict to channel subset
+            if self.relocated:
+                waveforms = relocate.relocated_waveforms_on_static_channels(
+                    waveforms,
+                    main_channels=self.channels[in_unit][bs:be],
+                    channel_index=self.channel_index,
+                    target_channels=pca_channels,
+                    xyza_from=self.xyza[in_unit][bs:be],
+                    z_to=self.z_reg[in_unit][bs:be],
+                    geom=self.geom,
+                    registered_geom=self.registered_geom,
+                )
+            else:
+                waveforms = drift_util.get_waveforms_on_static_channels(
+                    waveforms,
+                    self.geom,
+                    main_channels=self.channels[in_unit][bs:be],
+                    channel_index=self.channel_index,
+                    target_channels=pca_channels,
+                    n_pitches_shift=n_pitches_shift,
+                    registered_geom=self.registered_geom,
+                )
+            # ravel t,c dims -- everything below is spatiotemporal
+            if bs==0:
+                wfs_out = np.empty((n, t*len(pca_channels)), dtype=waveforms.dtype)
+            wfs_out[bs:be] = waveforms.reshape(n_batch, t * waveforms.shape[2])
 
         # figure out which waveforms actually overlap with the requested channels
-        no_nan = np.flatnonzero(~np.isnan(waveforms).any(axis=1))
+        no_nan = np.flatnonzero(~np.isnan(wfs_out).any(axis=1))
         if no_nan.size < max(self.min_cluster_size, self.n_pca_features):
             return False, no_nan, None
 
         # fit pca and embed
         pca = PCA(self.n_pca_features, random_state=self.random_state, whiten=True)
-        pca_projs = np.full((n, self.n_pca_features), np.nan, dtype=waveforms.dtype)
-        pca_projs[no_nan] = pca.fit_transform(waveforms[no_nan])
-
+        pca_projs = np.full((n, self.n_pca_features), np.nan, dtype=wfs_out.dtype)
+        
+        if len(no_nan)>max_pca_batch:
+            idx_pca = np.random.choice(no_nan, max_pca_batch, replace=False)
+            pca.fit(wfs_out[idx_pca])
+            for bs in range(0, len(no_nan), max_pca_batch):
+                be = min(len(no_nan), bs + max_pca_batch)
+                idx_pca = no_nan[bs:be]
+                pca_projs[idx_pca] = pca.transform(wfs_out[idx_pca])
+        else:
+            pca_projs[no_nan] = pca.fit_transform(wfs_out[no_nan])
         return True, no_nan, pca_projs
 
     def initialize_from_h5(

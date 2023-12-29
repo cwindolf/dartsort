@@ -30,7 +30,7 @@ def compressed_convolve_to_h5(
     geom: Optional[np.ndarray] = None,
     conv_ignore_threshold=0.0,
     coarse_approx_error_threshold=0.0,
-    conv_batch_size=1024,
+    conv_batch_size=128,
     units_batch_size=8,
     overwrite=False,
     device=None,
@@ -174,7 +174,7 @@ def iterate_compressed_pairwise_convolutions(
     amplitude_scaling_variance=0.0,
     amplitude_scaling_boundary=0.5,
     reduce_deconv_resid_norm=False,
-    conv_batch_size=1024,
+    conv_batch_size=128,
     units_batch_size=8,
     device=None,
     n_jobs=0,
@@ -401,7 +401,7 @@ def compressed_convolve_pairs(
     amplitude_scaling_boundary=0.5,
     reduce_deconv_resid_norm=False,
     max_shift="full",
-    batch_size=1024,
+    batch_size=128,
     device=None,
 ) -> Optional[CompressedConvResult]:
     """Compute compressed pairwise convolutions between template pairs
@@ -469,12 +469,14 @@ def compressed_convolve_pairs(
 
     # handle upsampling
     # each pair will be duplicated by the b unit's number of upsampled copies
+
     (
         ix_b,
         compression_index,
         conv_ix,
         conv_upsampling_indices_b,
-        conv_temporal_components_up_b,
+        conv_temporal_components_up_b, #Need to change this conv_temporal_components_up_b[conv_compressed_upsampled_ix_b]
+        conv_compressed_upsampled_ix_b,
         compression_dup_ix,
     ) = compressed_upsampled_pairs(
         ix_b,
@@ -491,10 +493,14 @@ def compressed_convolve_pairs(
     # run convolutions
     temporal_a = low_rank_templates_a.temporal_components[temp_ix_a]
     pconv, kept = correlate_pairs_lowrank(
-        torch.as_tensor(spatial_singular_a[ix_a[conv_ix]], device=device),
-        torch.as_tensor(spatial_singular_b[ix_b[conv_ix]], device=device),
-        torch.as_tensor(temporal_a[ix_a[conv_ix]], device=device),
+        torch.as_tensor(spatial_singular_a, device=device),
+        torch.as_tensor(spatial_singular_b, device=device),
+        torch.as_tensor(temporal_a, device=device),
         torch.as_tensor(conv_temporal_components_up_b, device=device),
+        ix_a=ix_a,
+        ix_b=ix_b,
+        conv_ix=conv_ix,
+        conv_compressed_upsampled_ix_b=conv_compressed_upsampled_ix_b,
         max_shift=max_shift,
         conv_ignore_threshold=conv_ignore_threshold,
         batch_size=batch_size,
@@ -558,9 +564,13 @@ def correlate_pairs_lowrank(
     spatial_b,
     temporal_a,
     temporal_b,
+    ix_a,
+    ix_b,
+    conv_ix,
+    conv_compressed_upsampled_ix_b,
     max_shift="full",
     conv_ignore_threshold=0.0,
-    batch_size=1024,
+    batch_size=128,
 ):
     """Convolve pairs of low rank templates
 
@@ -580,15 +590,19 @@ def correlate_pairs_lowrank(
     -------
     pconv, kept
     """
-    n_pairs, rank, nchan = spatial_a.shape
-    n_pairs_, rank_, nchan_ = spatial_b.shape
+
+    # Now need to take ix_a/b[conv_ix] of spatial_a, spatial_b, temporal_a
+    _, rank, nchan = spatial_a.shape
+    _, rank_, nchan_ = spatial_b.shape
+    n_pairs = conv_ix.shape[0]
     assert rank == rank_
     assert nchan == nchan_
-    assert n_pairs == n_pairs_
-    n_pairs_, t, rank_ = temporal_a.shape
-    assert n_pairs == n_pairs_
+    # assert n_pairs == n_pairs_
+    _, t, rank_ = temporal_a.shape
+    # assert n_pairs == n_pairs_
     assert rank_ == rank
-    n_pairs_, t_, rank_ = temporal_b.shape
+    _, t_, rank_ = temporal_b.shape
+    n_pairs_ = conv_compressed_upsampled_ix_b.shape[0]
     assert n_pairs == n_pairs_
     assert t == t_
     assert rank == rank_
@@ -609,12 +623,12 @@ def correlate_pairs_lowrank(
         ix = slice(istart, iend)
 
         # want conv filter: nco, 1, rank, t
-        template_a = torch.bmm(temporal_a[ix], spatial_a[ix])
-        conv_filt = torch.bmm(spatial_b[ix], template_a.mT)
+        template_a = torch.bmm(temporal_a[ix_a[conv_ix][ix]], spatial_a[ix_a[conv_ix][ix]])
+        conv_filt = torch.bmm(spatial_b[ix_b[conv_ix][ix]], template_a.mT)
         conv_filt = conv_filt[:, None]  # (nco, 1, rank, t)
 
         # 1, nco, rank, t
-        conv_in = temporal_b[ix].mT[None]
+        conv_in = temporal_b[conv_compressed_upsampled_ix_b[ix]].mT[None]
 
         # conv2d:
         # depthwise, chans=nco. batch=1. h=rank. w=t. out: nup=1, nco, 1, 2p+1.
@@ -951,10 +965,10 @@ def compressed_upsampled_pairs(
     compression_dup_ix = slice(None)
     if up_factor == 1:
         upinds = np.zeros(len(conv_ix), dtype=int)
-        temp_comps = compressed_upsampled_temporal.compressed_upsampled_templates[
-            np.atleast_1d(temp_ix_b[ix_b[conv_ix]])
-        ]
-        return ix_b, compression_index, conv_ix, upinds, temp_comps, compression_dup_ix
+        # temp_comps = compressed_upsampled_temporal.compressed_upsampled_templates[
+        #     np.atleast_1d(temp_ix_b[ix_b[conv_ix]])
+        # ]
+        return ix_b, compression_index, conv_ix, upinds, compressed_upsampled_temporal.compressed_upsampled_templates, np.atleast_1d(temp_ix_b[ix_b[conv_ix]]), compression_dup_ix
 
     # each conv_ix needs to be duplicated as many times as its b template has
     # upsampled copies
@@ -991,18 +1005,16 @@ def compressed_upsampled_pairs(
             conv_compressed_upsampled_ix
         ]
     )
-    conv_temporal_components_up_b = (
-        compressed_upsampled_temporal.compressed_upsampled_templates[
-            conv_compressed_upsampled_ix
-        ]
-    )
+    
+    # conv_temporal_components_up_b = compressed_upsampled_temporal.compressed_upsampled_templates
     
     return (
         ix_b_up,
         compression_index_up,
         conv_ix_up,
         conv_upsampling_indices_b,
-        conv_temporal_components_up_b,
+        compressed_upsampled_temporal.compressed_upsampled_templates,
+        conv_compressed_upsampled_ix,
         compression_dup_ix,
     )
 
