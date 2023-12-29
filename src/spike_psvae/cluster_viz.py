@@ -5,7 +5,7 @@ import matplotlib.gridspec as gridspec
 import matplotlib.pyplot as plt
 import matplotlib.transforms as transforms
 import numpy as np
-import seaborn as sns
+# import seaborn as sns
 from matplotlib.patches import Ellipse
 # %%
 # matplotlib.use('Agg')
