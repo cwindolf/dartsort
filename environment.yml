@@ -7,4 +7,5 @@ dependencies:
   - h5py
   - tqdm
   - scikit-learn
+  - hdbscan
   - colorcet
