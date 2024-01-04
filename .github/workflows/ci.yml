@@ -51,10 +51,6 @@ jobs:
         run: |
           pip install dartsort/
 
-      - name: Debug
-        run: |
-          python -c "from importlib.resources import files; print(files('dartsort.pretrained'))"  
-
       - name: Pytest
         run: |
           pytest dartsort/tests/
