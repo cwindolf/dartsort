@@ -39,11 +39,13 @@ jobs:
         run: |
           python -m pip install .
 
-      - name: Install DREDge
+      - name: Get DREDge
         uses: actions/checkout@v4
         with:
           repository: evarol/dredge
           path: dredge
+
+      - name: Install DREDge
         run: |
           python -m pip install dredge/
 
