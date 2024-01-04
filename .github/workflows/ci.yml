@@ -19,7 +19,7 @@ jobs:
     steps:
       
       - name: Checkout
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
 
       - name: Setup Mamba
         uses: mamba-org/setup-micromamba@v1
@@ -37,7 +37,15 @@ jobs:
 
       - name: Install DARTsort
         run: |
-          python -m pip install -e .
+          python -m pip install .
+
+      - name: Install DREDge
+        uses: actions/checkout@v4
+        with:
+          repository: evarol/dredge
+          path: dredge
+        run: |
+          python -m pip install dredge/
 
       - name: Pytest
         run: |
