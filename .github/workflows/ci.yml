@@ -31,15 +31,11 @@ jobs:
 
       - name: Install Torch (CPU)
         run: |
-          python -m pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
+          pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
         
       - name: Install Pip Requirements
         run: |
-          python -m pip install -r dartsort/requirements.txt
-
-      - name: Install DARTsort
-        run: |
-          python -m pip install dartsort/
+          pip install -r dartsort/requirements.txt
 
       - name: Get DREDge
         uses: actions/checkout@v4
@@ -49,8 +45,16 @@ jobs:
 
       - name: Install DREDge
         run: |
-          python -m pip install dredge/
+          pip install dredge/
+
+      - name: Install DARTsort
+        run: |
+          pip install dartsort/
+
+      - name: Debug
+        run: |
+          python -c "from importlib.resources import files; print(files('dartsort.pretrained'))"  
 
       - name: Pytest
         run: |
-          python -m pytest dartsort/tests/*
+          pytest dartsort/tests/
