@@ -1,3 +1,4 @@
+import math
 from dataclasses import dataclass
 
 import numpy as np
@@ -270,8 +271,12 @@ class CompressedUpsampledTemplates:
     compressed_index_to_upsampling_index: np.ndarray
 
 
-def default_n_upsamples_map(ptps):
-    return 4 ** (ptps // 2)
+def default_n_upsamples_map(ptps, max_upsample=8):
+    # avoid overflow in 4 ** by trimming ptp range in advance
+    max_ptp = 1 + 2 * math.log(max_upsample, 4)
+    ptps = np.minimum(ptps, max_ptp)
+    upsamples = 4 ** (ptps // 2)
+    return np.clip(upsamples, 1, max_upsample).astype(int)
 
 
 def compressed_upsampled_templates(
@@ -318,7 +323,7 @@ def compressed_upsampled_templates(
     if n_upsamples_map is None:
         n_upsamples = np.full(n_templates, max_upsample)
     else:
-        n_upsamples = np.clip(n_upsamples_map(ptps), 1, max_upsample).astype(int)
+        n_upsamples = n_upsamples_map(ptps, max_upsample=max_upsample)
 
     # build the compressed upsampling map
     compressed_upsampling_map = np.full((n_templates, max_upsample), -1, dtype=int)
