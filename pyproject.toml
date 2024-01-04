@@ -20,3 +20,6 @@ classifiers = [
 [project.urls]
 "Homepage" = "https://github.com/cwindolf/dartsort"
 "Bug Tracker" = "https://github.com/cwindolf/dartsort/issues"
+
+[tool.setuptools.package-data]
+"dartsort.pretrained" = ["*.pt"]
