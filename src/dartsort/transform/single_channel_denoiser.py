@@ -1,5 +1,3 @@
-from pathlib import Path
-
 import torch
 from dartsort.util.waveform_util import (get_channels_in_probe,
                                          set_channels_in_probe)
@@ -7,10 +5,16 @@ from torch import nn
 
 from .transform_base import BaseWaveformDenoiser
 
-default_pretrained_path = (
-    Path(__file__).parent.parent.parent.parent
-    / "pretrained/single_chan_denoiser.pt"
-)
+try:
+    from importlib.resources import files
+except ImportError:
+    try:
+        from importlib_resources import files
+    except ImportError:
+        raise ValueError("Need python>=3.10 or pip install importlib_resources.")
+
+default_pretrained_path = files("dartsort.pretrained")
+default_pretrained_path = default_pretrained_path.joinpath("single_chan_denoiser.pt")
 
 
 class SingleChannelWaveformDenoiser(BaseWaveformDenoiser):
