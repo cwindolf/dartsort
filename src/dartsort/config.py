@@ -20,10 +20,19 @@ TODO: Add a CommonConfig for parameters which show up in multiple
       a commonconfig.
 """
 from dataclasses import dataclass
-from pathlib import Path
 from typing import List, Optional
 
-__repo_root__ = Path(__file__).parent.parent.parent
+try:
+    from importlib.resources import files
+except ImportError:
+    try:
+        from importlib_resources import files
+    except ImportError:
+        raise ValueError("Need python>=3.10 or pip install importlib_resources.")
+
+default_pretrained_path = files("dartsort.pretrained")
+default_pretrained_path = default_pretrained_path.joinpath("single_chan_denoiser.pt")
+
 
 
 # TODO: integrate this in the other configs
@@ -82,9 +91,7 @@ class FeaturizationConfig:
     # -- further info about denoising
     # in the future we may add multi-channel or other nns
     nn_denoiser_class_name: str = "SingleChannelWaveformDenoiser"
-    nn_denoiser_pretrained_path: str = str(
-        __repo_root__ / "pretrained" / "single_chan_denoiser.pt"
-    )
+    nn_denoiser_pretrained_path: str = default_pretrained_path
     # optionally restrict how many channels TPCA are fit on
     tpca_fit_radius: Optional[float] = None
     tpca_rank: int = 8
