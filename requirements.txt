@@ -1,4 +1,1 @@
-pytest
-ibl-neuropixel
 spikeinterface
-cloudpickle

@@ -1,14 +1,13 @@
-import neuropixel
 import numpy as np
-import torch
 from dartsort.transform import WaveformPipeline, transformers_by_class_name
 from dartsort.util.waveform_util import make_channel_index
+from test_util import dense_layout
 
 
 def test_all_transformers():
     # make a bunch of fake waveforms, put all of the transformers into
     # one long pipeline, and try running its fit and forward
-    h = neuropixel.dense_layout()
+    h = dense_layout()
     geom = np.c_[h["x"], h["y"]]
     channel_index = make_channel_index(geom, 100)
     rg = np.random.default_rng(0)

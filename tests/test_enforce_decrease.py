@@ -3,7 +3,7 @@ import torch
 from dartsort.transform.enforce_decrease import (EnforceDecrease,
                                                  make_parents_index)
 from dartsort.util.waveform_util import make_channel_index
-from neuropixel import dense_layout
+from test_util import dense_layout
 
 
 def test_make_parents_index():
@@ -13,7 +13,5 @@ def test_make_parents_index():
     parents_index = make_parents_index(geom, channel_index)
     assert parents_index.shape[0] == channel_index.shape[0]
 
-    enfdec = EnforceDecrease(
-        torch.as_tensor(channel_index), torch.as_tensor(geom)
-    )
+    enfdec = EnforceDecrease(torch.as_tensor(channel_index), torch.as_tensor(geom))
     assert enfdec is not None
