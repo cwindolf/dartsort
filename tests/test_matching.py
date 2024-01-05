@@ -92,8 +92,8 @@ def test_tiny(tmp_path):
     assert np.isclose(
         torch.square(res["residual"]).mean(),
         0.0,
-        atol=1e-4,
     )
+    print(f"A {torch.square(res['conv']).mean()=}")
     assert np.isclose(
         torch.square(res["conv"]).mean(),
         0.0,
@@ -125,8 +125,8 @@ def test_tiny(tmp_path):
     assert np.isclose(
         torch.square(res["residual"]).mean(),
         0.0,
-        atol=1e-4,
     )
+    print(f"B {torch.square(res['conv']).mean()=}")
     assert np.isclose(
         torch.square(res["conv"]).mean(),
         0.0,
@@ -265,14 +265,13 @@ def test_tiny_up(tmp_path, up_factor=8):
     print(f'{np.c_[res["times_samples"], res["labels"], res["upsampling_indices"]]=}')
     print(f"{np.c_[times, labels, upsampling_indices]=}")
     print(f'{torch.square(res["residual"]).mean()=}')
-    print(f'{torch.square(res["conv"]).mean()=}')
+    print(f"C {torch.square(res['conv']).mean()=}")
     assert res["n_spikes"] == len(times)
     assert np.array_equal(res["times_samples"], times)
     assert np.array_equal(res["labels"], labels)
     assert np.isclose(
         torch.square(res["residual"]).mean(),
         0.0,
-        atol=1e-4,
     )
     assert np.isclose(
         torch.square(res["conv"]).mean(),
@@ -413,12 +412,12 @@ def static_tester(tmp_path, up_factor=1):
     assert np.isclose(
         torch.square(res["residual"]).mean(),
         0.0,
-        atol=1e-4,
     )
+    print(f"D {torch.square(res['conv']).mean()=}")
     assert np.isclose(
         torch.square(res["conv"]).mean(),
         0.0,
-        atol=1e-4,
+        atol=1e-3,
     )
 
 

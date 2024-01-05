@@ -15,7 +15,7 @@ def test_shifted_waveforms():
     assert np.array_equal(np.unique(reg_geom[:, 1]), [1, 2, 3, 4, 5, 6, 7])
 
     # fixed check
-    waveforms = np.arange(15).reshape(5, 3)[:, None, :]
+    waveforms = np.arange(15).reshape(5, 3)[:, None, :].astype(np.float32)
     w = drift_util.get_waveforms_on_static_channels(waveforms, geom=geom)
     assert np.array_equal(w, waveforms)
     w = drift_util.get_waveforms_on_static_channels(
