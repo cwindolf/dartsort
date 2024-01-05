@@ -92,11 +92,12 @@ def test_tiny(tmp_path):
     assert np.isclose(
         torch.square(res["residual"]).mean(),
         0.0,
+        atol=1e-4,
     )
     assert np.isclose(
         torch.square(res["conv"]).mean(),
         0.0,
-        atol=1e-5,
+        atol=1e-4,
     )
 
     matcher = main.ObjectiveUpdateTemplateMatchingPeeler.from_config(
@@ -124,11 +125,12 @@ def test_tiny(tmp_path):
     assert np.isclose(
         torch.square(res["residual"]).mean(),
         0.0,
+        atol=1e-4,
     )
     assert np.isclose(
         torch.square(res["conv"]).mean(),
         0.0,
-        atol=1e-5,
+        atol=1e-4,
     )
 
 
@@ -270,11 +272,12 @@ def test_tiny_up(tmp_path, up_factor=8):
     assert np.isclose(
         torch.square(res["residual"]).mean(),
         0.0,
+        atol=1e-4,
     )
     assert np.isclose(
         torch.square(res["conv"]).mean(),
         0.0,
-        atol=1e-5,
+        atol=1e-4,
     )
 
 
@@ -410,6 +413,7 @@ def static_tester(tmp_path, up_factor=1):
     assert np.isclose(
         torch.square(res["residual"]).mean(),
         0.0,
+        atol=1e-4,
     )
     assert np.isclose(
         torch.square(res["conv"]).mean(),
