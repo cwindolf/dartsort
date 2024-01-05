@@ -13,11 +13,6 @@ featurization_config = FeaturizationConfig(do_nn_denoise=False)
 This will use all the other parameters' default values. This
 object can then be passed into the high level functions like
 `subtract(...)`.
-
-TODO: Add a CommonConfig for parameters which show up in multiple
-      of the below classes, so that users don't forget to change
-      them in multiple places. Then the rest of the configs eat
-      a commonconfig.
 """
 from dataclasses import dataclass
 from typing import List, Optional
@@ -32,7 +27,6 @@ except ImportError:
 
 default_pretrained_path = files("dartsort.pretrained")
 default_pretrained_path = default_pretrained_path.joinpath("single_chan_denoiser.pt")
-
 
 
 # TODO: integrate this in the other configs
@@ -51,6 +45,7 @@ class WaveformConfig:
         return int(spike_len_ms * (sampling_frequency / 1000))
 
 
+# TODO: remove this from other configs
 @dataclass(frozen=True)
 class FeaturizationConfig:
     """Featurization and denoising configuration
