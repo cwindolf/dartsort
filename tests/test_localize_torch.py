@@ -2,7 +2,7 @@ import numpy as np
 import torch
 from dartsort.localize import localize_torch
 from dartsort.util.waveform_util import make_channel_index
-from neuropixel import dense_layout
+from test_util import dense_layout
 
 
 def test_localize_torch():
