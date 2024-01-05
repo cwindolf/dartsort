@@ -2,7 +2,7 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 from dartsort.util import waveform_util
-from neuropixel import dense_layout
+from test_util import dense_layout
 
 
 def test_make_channel_index():
