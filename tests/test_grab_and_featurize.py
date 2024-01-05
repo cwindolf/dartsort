@@ -253,7 +253,11 @@ def test_grab_and_featurize():
 
     # this is kind of a good test of reproducibility
     # totally reproducible on CPU, suprprisingly large diffs on GPU
-    if not torch.cuda.is_available():
+    # reproducibility is fine on some BLAS but not MKL?
+    repro = (not torch.cuda.is_available()) and (
+        "BLAS_INFO=mkl" not in torch.__config__.show()
+    )
+    if repro:
         assert np.array_equal(locs0, locs1)
     else:
         valid = np.clip(locs1[:, 2], geom[:, 1].min(), geom[:, 1].max())
