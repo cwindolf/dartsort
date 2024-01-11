@@ -26,6 +26,7 @@ Next, visit https://pytorch.org/get-started/locally/ and follow the `PyTorch` in
 For example, on a Linux workstation or cluster with NVIDIA GPUs available, one might use (dropping in `mamba` for `conda` commands):
 
 ```bash
+# Example -- see https://pytorch.org/get-started/locally/ to find your platform's command.
 (dartsort) $ mamba install pytorch torchvision torchaudio pytorch-cuda=11.8 -c pytorch -c nvidia
 ```
 
