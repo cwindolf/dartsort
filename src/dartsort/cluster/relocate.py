@@ -23,6 +23,8 @@ def relocated_waveforms_on_static_channels(
     z_to,
     geom,
     registered_geom=None,
+    target_kdtree=None,
+    match_distance=None,
     fill_value=np.nan,
 ):
     """Compute relocated waveforms"""
@@ -45,6 +47,8 @@ def relocated_waveforms_on_static_channels(
         n_pitches_shift=n_pitches_shift,
         geom=geom,
         registered_geom=registered_geom,
+        target_kdtree=target_kdtree,
+        match_distance=match_distance,
         fill_value=fill_value,
     )
 
