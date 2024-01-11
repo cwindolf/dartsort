@@ -18,7 +18,7 @@ To install DARTsort, first clone this GitHub repository.
 After cloning the repository, create and activate the `mamba`/`conda` environment from the configuration file provided as follows:
 
 ```bash
-$ mamba env create -f environment.yml -n dartsort
+$ mamba env create -f environment.yml
 $ mamba activate dartsort
 ```
 
