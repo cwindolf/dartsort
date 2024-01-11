@@ -11,7 +11,7 @@ A workflow described in our preprint (https://www.biorxiv.org/content/10.1101/20
 
 ## Suggested install steps:
 
-If you don't already have Python and Pytorch 2 installed, we recommend doing this with the Miniforge distribution of `conda`. You can find info and installers for your platform [at Miniforge's GitHub repository](https://github.com/conda-forge/miniforge). After installing Miniforge, `conda` will be available on your computer for installing Python packages, as well as the newer and faster conda replacement tool `mamba`. We recommend using `mamba` instead of `conda` below, since the installation tends to be a lot faster with `mamba`.
+If you don't already have Python and PyTorch 2 installed, we recommend doing this with the Miniforge distribution of `conda`. You can find info and installers for your platform [at Miniforge's GitHub repository](https://github.com/conda-forge/miniforge). After installing Miniforge, `conda` will be available on your computer for installing Python packages, as well as the newer and faster conda replacement tool `mamba`. We recommend using `mamba` instead of `conda` below, since the installation tends to be a lot faster with `mamba`.
 
 To install DARTsort, first clone this GitHub repository.
 
