@@ -152,7 +152,7 @@ class MatchingConfig:
     trough_offset_samples: int = 42
     spike_length_samples: int = 121
     chunk_length_samples: int = 30_000
-    extract_radius: float = 100.0
+    extract_radius: float = 200.0
     n_chunks_fit: int = 40
     fit_subsampling_random_state: int = 0
 
