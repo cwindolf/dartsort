@@ -11,9 +11,8 @@ from collections import namedtuple
 from pathlib import Path
 
 import matplotlib.pyplot as plt
-from matplotlib.legend_handler import HandlerTuple
-from matplotlib.figure import Figure
 import numpy as np
+from matplotlib.legend_handler import HandlerTuple
 from tqdm.auto import tqdm
 
 from ..util.multiprocessing_util import get_pool
@@ -28,6 +27,12 @@ class UnitPlot:
     height = 1
 
     def draw(self, axis, sorting_analysis, unit_id):
+        raise NotImplementedError
+
+
+class UnitMultiPlot:
+    def unit_plots(self, sorting_analysis, unit_id):
+        # return [UnitPlot()]
         raise NotImplementedError
 
 
@@ -164,7 +169,7 @@ class PCAScatter(UnitPlot):
 # -- wide scatter plots
 
 
-class TZScatter(UnitPlot):
+class TimeZScatter(UnitPlot):
     kind = "widescatter"
     width = 2
 
@@ -234,7 +239,7 @@ class TFeatScatter(UnitPlot):
             plt.colorbar(s, ax=axis, shrink=0.5, label=reloc_str + "amplitude (su)")
 
 
-class TAmpScatter(UnitPlot):
+class TimeAmpScatter(UnitPlot):
     kind = "widescatter"
     width = 2
 
@@ -278,6 +283,7 @@ class WaveformPlot(UnitPlot):
         template_color="orange",
         max_abs_template_scale=1.35,
         legend=True,
+        template_index=None,
     ):
         self.count = count
         self.show_radius_um = show_radius_um
@@ -292,6 +298,7 @@ class WaveformPlot(UnitPlot):
         self.superres_template_cmap = superres_template_cmap
         self.legend = legend
         self.max_abs_template_scale = max_abs_template_scale
+        self.template_index = template_index
 
     def get_waveforms(self, sorting_analysis, unit_id):
         raise NotImplementedError
@@ -301,9 +308,18 @@ class WaveformPlot(UnitPlot):
 
         max_abs_amp = None
         show_template = self.show_template
-        if show_template:
+        template_color = self.template_color
+        if self.template_index is None and show_template:
             templates = sorting_analysis.coarse_template_data.unit_templates(unit_id)
             show_template = bool(templates.size)
+        if self.template_index is not None and show_template:
+            templates = sorting_analysis.template_data.templates[self.template_index]
+            show_template = bool(templates.size)
+            sup_temp_ids = sorting_analysis.unit_template_indices(unit_id)
+            template_color = self.superres_template_cmap(
+                np.linspace(0, 1, num=sup_temp_ids.size)
+            )
+            template_color = template_color[sup_temp_ids == self.template_index]
         if show_template:
             templates = trim_waveforms(
                 templates,
@@ -312,7 +328,7 @@ class WaveformPlot(UnitPlot):
                 new_length=self.spike_length_samples,
             )
             max_abs_amp = self.max_abs_template_scale * np.abs(templates).max()
-        show_superres_templates = self.show_superres_templates
+        show_superres_templates = self.show_superres_templates and self.template_index is None
         if show_superres_templates:
             suptemplates = sorting_analysis.template_data.unit_templates(unit_id)
             show_superres_templates = bool(suptemplates.size)
@@ -376,7 +392,7 @@ class WaveformPlot(UnitPlot):
                 ax=axis,
                 show_zero=False,
                 zlim="tight",
-                color=self.template_color,
+                color=template_color,
                 alpha=1,
                 max_abs_amp=max_abs_amp,
                 lw=1,
@@ -407,6 +423,7 @@ class RawWaveformPlot(WaveformPlot):
     def get_waveforms(self, sorting_analysis, unit_id):
         return sorting_analysis.unit_raw_waveforms(
             unit_id,
+            template_index=self.template_index,
             max_count=self.count,
             show_radius_um=self.show_radius_um,
             trough_offset_samples=self.trough_offset_samples,
@@ -421,10 +438,77 @@ class TPCAWaveformPlot(WaveformPlot):
     def get_waveforms(self, sorting_analysis, unit_id):
         return sorting_analysis.unit_tpca_waveforms(
             unit_id,
+            template_index=self.template_index,
             max_count=self.count,
             show_radius_um=self.show_radius_um,
             relocated=self.relocated,
         )
+
+
+# -- multi plots
+# these have multiple plots per unit, and we don't know in advance how many
+# for instance, making separate plots of spikes belonging to each superres template
+
+
+class SuperresWaveformMultiPlot(UnitMultiPlot):
+    def __init__(
+        self,
+        kind="raw",
+        trough_offset_samples=42,
+        spike_length_samples=121,
+        count=250,
+        show_radius_um=50,
+        relocated=False,
+        color="k",
+        alpha=0.1,
+        show_superres_templates=True,
+        superres_template_cmap=plt.cm.winter,
+        show_template=True,
+        template_color="orange",
+        max_abs_template_scale=1.35,
+        legend=True,
+    ):
+        self.kind = kind
+        self.count = count
+        self.show_radius_um = show_radius_um
+        self.relocated = relocated
+        self.color = color
+        self.trough_offset_samples = trough_offset_samples
+        self.spike_length_samples = spike_length_samples
+        self.alpha = alpha
+        self.show_template = show_template
+        self.template_color = template_color
+        self.show_superres_templates = show_superres_templates
+        self.superres_template_cmap = superres_template_cmap
+        self.legend = legend
+        self.max_abs_template_scale = max_abs_template_scale
+
+    def unit_plots(self, sorting_analysis, unit_id):
+        if self.kind == "raw":
+            plot_cls = RawWaveformPlot
+        elif self.kind == "tpca":
+            plot_cls = TPCAWaveformPlot
+        else:
+            assert False
+        return [
+            plot_cls(
+                count=self.count,
+                show_radius_um=self.show_radius_um,
+                relocated=self.relocated,
+                color=self.color,
+                trough_offset_samples=self.trough_offset_samples,
+                spike_length_samples=self.spike_length_samples,
+                alpha=self.alpha,
+                show_template=self.show_template,
+                template_color=self.template_color,
+                show_superres_templates=self.show_superres_templates,
+                superres_template_cmap=self.superres_template_cmap,
+                legend=self.legend,
+                max_abs_template_scale=self.max_abs_template_scale,
+                template_index=template_index,
+            )
+            for template_index in sorting_analysis.unit_template_indices(unit_id)
+        ]
 
 
 # -- main routines
@@ -435,12 +519,19 @@ default_plots = (
     ISIHistogram(),
     XZScatter(),
     PCAScatter(),
-    TZScatter(),
-    TZScatter(registered=False),
-    TAmpScatter(),
-    TAmpScatter(relocate_amplitudes=True),
+    TimeZScatter(),
+    TimeZScatter(registered=False),
+    TimeAmpScatter(),
+    TimeAmpScatter(relocate_amplitudes=True),
     RawWaveformPlot(),
     TPCAWaveformPlot(relocated=True),
+)
+
+
+template_assignment_plots = (
+    TextInfo(),
+    RawWaveformPlot(),
+    SuperresWaveformMultiPlot(),
 )
 
 
@@ -453,7 +544,9 @@ def make_unit_summary(
     figure=None,
 ):
     # -- lay out the figure
-    columns = summary_layout(plots, max_height=max_height)
+    columns = summary_layout(
+        plots, max_height=max_height, sorting_analysis=sorting_analysis, unit_id=unit_id
+    )
 
     # -- draw the figure
     width_ratios = [column[0].width for column in columns]
@@ -575,7 +668,19 @@ def trim_waveforms(waveforms, old_offset=42, new_offset=42, new_length=121):
 Card = namedtuple("Card", ["kind", "width", "height", "plots"])
 
 
-def summary_layout(plots, max_height=4):
+def summary_layout(plots, max_height=4, sorting_analysis=None, unit_id=None):
+    all_plots = []
+    for plot in plots:
+        if isinstance(plot, UnitPlot):
+            all_plots.append(plot)
+        elif isinstance(plot, UnitMultiPlot):
+            all_plots.extend(
+                plot.unit_plots(sorting_analysis=sorting_analysis, unit_id=unit_id)
+            )
+        else:
+            assert False
+    plots = all_plots
+
     plots_by_kind = {}
     for plot in plots:
         if plot.kind not in plots_by_kind:
