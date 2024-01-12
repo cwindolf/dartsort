@@ -45,7 +45,6 @@ class WaveformConfig:
         return int(spike_len_ms * (sampling_frequency / 1000))
 
 
-# TODO: remove this from other configs
 @dataclass(frozen=True)
 class FeaturizationConfig:
     """Featurization and denoising configuration
@@ -81,7 +80,7 @@ class FeaturizationConfig:
     localization_radius: float = 100.0
     # these are saved always if do_localization
     save_amplitude_vectors: bool = True
-    localization_model = "dipole"
+    localization_model = "pointsource"
 
     # -- further info about denoising
     # in the future we may add multi-channel or other nns
@@ -102,7 +101,7 @@ class SubtractionConfig:
     spike_length_samples: int = 121
     detection_thresholds: List[int] = (10, 8, 6, 5, 4)
     chunk_length_samples: int = 30_000
-    peak_sign: str = "neg"
+    peak_sign: str = "both"
     spatial_dedup_radius: float = 150.0
     extract_radius: float = 200.0
     n_chunks_fit: int = 40
