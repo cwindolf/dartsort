@@ -11,14 +11,14 @@ A workflow described in our preprint (https://www.biorxiv.org/content/10.1101/20
 
 ## Suggested install steps:
 
-If you don't already have Python and Pytorch 2 installed, we recommend doing this with the Miniforge distribution of `conda`. You can find info and installers for your platform [at Miniforge's GitHub repository](https://github.com/conda-forge/miniforge). After installing Miniforge, `conda` will be available on your computer for installing Python packages, as well as the newer and faster conda replacement tool `mamba`. We recommend using `mamba` instead of `conda` below, since the installation tends to be a lot faster with `mamba`.
+If you don't already have Python and PyTorch 2 installed, we recommend doing this with the Miniforge distribution of `conda`. You can find info and installers for your platform [at Miniforge's GitHub repository](https://github.com/conda-forge/miniforge). After installing Miniforge, `conda` will be available on your computer for installing Python packages, as well as the newer and faster conda replacement tool `mamba`. We recommend using `mamba` instead of `conda` below, since the installation tends to be a lot faster with `mamba`.
 
 To install DARTsort, first clone this GitHub repository.
 
 After cloning the repository, create and activate the `mamba`/`conda` environment from the configuration file provided as follows:
 
 ```bash
-$ mamba env create -f environment.yml -n dartsort
+$ mamba env create -f environment.yml
 $ mamba activate dartsort
 ```
 
@@ -26,6 +26,7 @@ Next, visit https://pytorch.org/get-started/locally/ and follow the `PyTorch` in
 For example, on a Linux workstation or cluster with NVIDIA GPUs available, one might use (dropping in `mamba` for `conda` commands):
 
 ```bash
+# Example -- see https://pytorch.org/get-started/locally/ to find your platform's command.
 (dartsort) $ mamba install pytorch torchvision torchaudio pytorch-cuda=11.8 -c pytorch -c nvidia
 ```
 
