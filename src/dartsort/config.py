@@ -80,7 +80,7 @@ class FeaturizationConfig:
     localization_radius: float = 100.0
     # these are saved always if do_localization
     save_amplitude_vectors: bool = True
-    localization_model = "pointsource"
+    localization_model: str = "pointsource"
 
     # -- further info about denoising
     # in the future we may add multi-channel or other nns
