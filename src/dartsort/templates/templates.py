@@ -79,7 +79,7 @@ class TemplateData:
             spike_counts=spike_counts,
             registered_template_depths_um=registered_template_depths_um,
         )
-    
+
     def unit_templates(self, unit_id):
         return self.templates[self.unit_ids == unit_id]
 
