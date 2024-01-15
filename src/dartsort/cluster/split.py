@@ -357,7 +357,11 @@ class FeatureSplit(SplitStrategy):
             return False, no_nan, None
 
         # fit the per-cluster small rank PCA
-        pca = PCA(self.n_pca_features, random_state=np.random.RandomState(seed=self.rg), whiten=True)
+        pca = PCA(
+            self.n_pca_features,
+            random_state=np.random.RandomState(seed=self.rg.bit_generator),
+            whiten=True,
+        )
         fit_indices = no_nan
         if fit_indices.size > max_samples_pca:
             fit_indices = self.rg.choice(fit_indices, size=max_samples_pca, replace=False)

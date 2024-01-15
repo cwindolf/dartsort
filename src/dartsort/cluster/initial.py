@@ -40,6 +40,7 @@ def cluster_chunk(
     """
     assert clustering_config.cluster_strategy in (
         "closest_registered_channels",
+        "grid_snap",
         "hdbscan",
     )
 
@@ -128,7 +129,7 @@ def cluster_chunks(
     # evenly divide the recording into chunks
     assert recording.get_num_segments() == 1
     start_time_s, end_time_s = recording._recording_segments[0].sample_index_to_time(
-        [0, recording.get_num_samples() - 1]
+        np.array([0, recording.get_num_samples() - 1])
     )
     chunk_times_s = np.linspace(start_time_s, end_time_s, num=n_chunks + 1)
     chunk_time_ranges_s = list(zip(chunk_times_s[:-1], chunk_times_s[1:]))
