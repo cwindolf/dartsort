@@ -13,9 +13,11 @@ featurization_config = FeaturizationConfig(do_nn_denoise=False)
 This will use all the other parameters' default values. This
 object can then be passed into the high level functions like
 `subtract(...)`.
+
+TODO: change n_chunks_fit to n_spikes_fit, max_chunks_fit
 """
 from dataclasses import dataclass
-from typing import List, Optional
+from typing import List, Optional, Tuple
 
 try:
     from importlib.resources import files
@@ -171,17 +173,18 @@ class MatchingConfig:
 @dataclass(frozen=True)
 class ClusteringConfig:
     # -- initial clustering
-    feature_scales = (1, 1, 50)
-    log_c: int = 5
-    # hdbscan parameters
     cluster_strategy: str = "hdbscan"
+
+    # hdbscan parameters
     min_cluster_size: int = 25
     min_samples: int = 25
     cluster_selection_epsilon: int = 1
+    feature_scales: Tuple[float] = (1.0, 1.0, 50.0)
+    log_c: float = 5.0
+
     # -- ensembling
     ensemble_strategy: Optional[str] = "forward_backward"
     chunk_size_s: int = 150
-    # forward-backward
 
 
 default_featurization_config = FeaturizationConfig()
