@@ -31,7 +31,6 @@ def scatter_spike_features(
     limits="probe_margin",
     label_axes=True,
     random_seed=0,
-    figsize=None,
     **scatter_kw,
 ):
     """3-axis scatter plot of spike depths vs. horizontal pos, amplitude, and time
@@ -51,7 +50,6 @@ def scatter_spike_features(
             ncols=3,
             sharey=True,
             gridspec_kw=dict(width_ratios=width_ratios),
-            figsize=figsize,
         )
 
     if hdf5_filename is not None:
