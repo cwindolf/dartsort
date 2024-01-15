@@ -42,66 +42,47 @@ def cluster_chunk(
         "closest_registered_channels",
         "hdbscan",
     )
-    if clustering_config.cluster_strategy == "closest_registered_channels":
-        with h5py.File(peeling_hdf5_filename, "r") as h5:
-            times_samples = h5["times_samples"][:]
-            channels = h5["channels"][:]
-            times_s = h5["times_seconds"][:]
-            xyza = h5["point_source_localizations"][:]
-            amps = h5["denoised_amplitudes"][:]
-            geom = h5["geom"][:]
 
-        in_chunk = ensemble_utils.get_indices_in_chunk(times_s, chunk_time_range_s)
-        labels = -1 * np.ones(len(times_samples))
+    with h5py.File(peeling_hdf5_filename, "r") as h5:
+        times_samples = h5["times_samples"][:]
+        channels = h5["channels"][:]
+        times_s = h5["times_seconds"][:]
+        xyza = h5["point_source_localizations"][:]
+        amps = h5["denoised_amplitudes"][:]
+        geom = h5["geom"][:]
+    in_chunk = ensemble_utils.get_indices_in_chunk(times_s, chunk_time_range_s)
+    labels = -1 * np.ones(len(times_samples))
+
+    if clustering_config.cluster_strategy == "closest_registered_channels":
         labels[in_chunk] = cluster_util.closest_registered_channels(
             times_s[in_chunk], xyza[in_chunk, 0], xyza[in_chunk, 2], geom, motion_est
         )
-        # triaging here maybe
-        sorting = DARTsortSorting(
-            times_samples=times_samples,
-            channels=channels,
-            labels=labels,
-            extra_features=dict(
-                point_source_localizations=xyza,
-                denoised_amplitudes=amps,
-                times_seconds=times_s,
-            ),
-        )
     elif clustering_config.cluster_strategy == "hdbscan":
-        # hdbscan specific parameters
-        with h5py.File(peeling_hdf5_filename, "r") as h5:
-            times_samples = h5["times_samples"][:]
-            channels = h5["channels"][:]
-            times_s = h5["times_seconds"][:]
-            xyza = h5["point_source_localizations"][:]
-            amps = h5["denoised_amplitudes"][:]
-            geom = h5["geom"][:]
-        in_chunk = ensemble_utils.get_indices_in_chunk(times_s, chunk_time_range_s)
-        labels = np.full_like(times_samples, -1)
         labels[in_chunk] = cluster_util.hdbscan_clustering(
             times_s[in_chunk],
             xyza[in_chunk, 0],
             xyza[in_chunk, 2],
-            geom,
             amps[in_chunk],
+            geom,
             motion_est,
             min_cluster_size=clustering_config.min_cluster_size,
             min_samples=clustering_config.min_samples,
             cluster_selection_epsilon=clustering_config.cluster_selection_epsilon,
             scales=clustering_config.feature_scales,
         )
-        sorting = DARTsortSorting(
-            times_samples=times_samples,
-            channels=channels,
-            labels=labels,
-            extra_features=dict(
-                point_source_localizations=xyza,
-                denoised_amplitudes=amps,
-                times_seconds=times_s,
-            ),
-        )
     else:
         assert False
+
+    sorting = DARTsortSorting(
+        times_samples=times_samples,
+        channels=channels,
+        labels=labels,
+        extra_features=dict(
+            point_source_localizations=xyza,
+            denoised_amplitudes=amps,
+            times_seconds=times_s,
+        ),
+    )
 
     return sorting
 
