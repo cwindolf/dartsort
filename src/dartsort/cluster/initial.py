@@ -57,6 +57,16 @@ def cluster_chunk(
         labels[in_chunk] = cluster_util.closest_registered_channels(
             times_s[in_chunk], xyza[in_chunk, 0], xyza[in_chunk, 2], geom, motion_est
         )
+    elif clustering_config.cluster_strategy == "grid_snap":
+        labels[in_chunk] = cluster_util.grid_snap(
+            times_s[in_chunk],
+            xyza[in_chunk, 0],
+            xyza[in_chunk, 2],
+            geom,
+            grid_dx=clustering_config.grid_dx,
+            grid_dz=clustering_config.grid_dz,
+            motion_est=motion_est,
+        )
     elif clustering_config.cluster_strategy == "hdbscan":
         labels[in_chunk] = cluster_util.hdbscan_clustering(
             times_s[in_chunk],
@@ -69,6 +79,8 @@ def cluster_chunk(
             min_samples=clustering_config.min_samples,
             cluster_selection_epsilon=clustering_config.cluster_selection_epsilon,
             scales=clustering_config.feature_scales,
+            recursive=clustering_config.recursive,
+            remove_duplicates=clustering_config.remove_duplicates,
         )
     else:
         assert False
@@ -100,17 +112,25 @@ def cluster_chunks(
     """
     chunk_samples = recording.sampling_frequency * clustering_config.chunk_size_s
 
-    # determine number of chunks, and we'll count the extra if it's at least 2/3
-    n_chunks = recording.get_num_samples() / chunk_samples
-    n_chunks = np.floor(n_chunks) + (n_chunks - np.floor(n_chunks) > 0.66)
-    n_chunks = int(max(1, n_chunks))
+    # determine number of chunks
+    # if we're not ensembling, that's 1 chunk.
+    if (
+        not clustering_config.ensemble_strategy
+        or clustering_config.ensemble_strategy.lower() == "none"
+    ):
+        n_chunks = 1
+    else:
+        n_chunks = recording.get_num_samples() / chunk_samples
+        # we'll count the remainder as a chunk if it's at least 2/3 of one
+        n_chunks = np.floor(n_chunks) + (n_chunks - np.floor(n_chunks) > 0.66)
+        n_chunks = int(max(1, n_chunks))
 
     # evenly divide the recording into chunks
     assert recording.get_num_segments() == 1
     start_time_s, end_time_s = recording._recording_segments[0].sample_index_to_time(
         [0, recording.get_num_samples() - 1]
     )
-    chunk_times_s = np.linspace(start_time_s, end_time_s, num=n_chunks)
+    chunk_times_s = np.linspace(start_time_s, end_time_s, num=n_chunks + 1)
     chunk_time_ranges_s = list(zip(chunk_times_s[:-1], chunk_times_s[1:]))
 
     # cluster each chunk. can be parallelized in the future.

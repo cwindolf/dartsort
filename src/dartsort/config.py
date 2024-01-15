@@ -181,10 +181,16 @@ class ClusteringConfig:
     cluster_selection_epsilon: int = 1
     feature_scales: Tuple[float] = (1.0, 1.0, 50.0)
     log_c: float = 5.0
+    recursive: bool = True
+    remove_duplicates: bool = True
+
+    # grid snap parameters
+    grid_dx: float = 15.0
+    grid_dz: float = 15.0
 
     # -- ensembling
     ensemble_strategy: Optional[str] = "forward_backward"
-    chunk_size_s: int = 150
+    chunk_size_s: float = 150.0
 
 
 default_featurization_config = FeaturizationConfig()
