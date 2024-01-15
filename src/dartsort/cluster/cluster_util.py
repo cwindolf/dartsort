@@ -23,6 +23,30 @@ def closest_registered_channels(times_seconds, x, z_abs, geom, motion_est=None):
     return reg_channels
 
 
+def grid_snap(times_seconds, x, z_abs, geom, grid_dx=15, grid_dz=15, motion_est=None):
+    if motion_est is None:
+        motion_est == IdentityMotionEstimate()
+    z_reg = motion_est.correct_s(times_seconds, z_abs)
+    reg_pos = np.c_[x, z_reg]
+
+    # make a grid inside the registered geom bounding box
+    registered_geom = drift_util.registered_geometry(geom, motion_est)
+    min_x, max_x = registered_geom[:, 0].min(), registered_geom[:, 0].max()
+    min_z, max_z = registered_geom[:, 1].min(), registered_geom[:, 1].max()
+    grid_x = np.arange(min_x, max_x, grid_dx)
+    grid_x += (min_x + max_x) / 2 - grid_x.mean()
+    grid_z = np.arange(min_z, max_z, grid_dz)
+    grid_z += (min_z + max_z) / 2 - grid_z.mean()
+    grid_xx, grid_zz = np.meshgrid(grid_x, grid_z, indexing="ij")
+    grid = np.c_[grid_xx.ravel(), grid_zz.ravel()]
+
+    # snap to closest grid point
+    registered_kdt = KDTree(grid)
+    distances, reg_channels = registered_kdt.query(reg_pos)
+
+    return reg_channels
+
+
 def hdbscan_clustering(
     recording,
     times_seconds,
@@ -38,7 +62,7 @@ def hdbscan_clustering(
     scales=(1, 1, 50),
     log_c=5,
     recursive=True,
-    do_remove_dups=True,
+    remove_duplicates=True,
     frames_dedup=12,
     frame_dedup_cluster=20,
 ):
@@ -60,7 +84,7 @@ def hdbscan_clustering(
     )
     clusterer.fit(features)
 
-    if do_remove_dups:
+    if remove_duplicates:
         (
             clusterer,
             duplicate_indices,
