@@ -31,6 +31,7 @@ def scatter_spike_features(
     limits="probe_margin",
     label_axes=True,
     random_seed=0,
+    figsize=None,
     **scatter_kw,
 ):
     """3-axis scatter plot of spike depths vs. horizontal pos, amplitude, and time
@@ -47,7 +48,10 @@ def scatter_spike_features(
         figure = plt.gcf()
     if axes is None:
         axes = figure.subplots(
-            ncols=3, sharey=True, gridspec_kw=dict(width_ratios=width_ratios)
+            ncols=3,
+            sharey=True,
+            gridspec_kw=dict(width_ratios=width_ratios),
+            figsize=figsize,
         )
 
     if hdf5_filename is not None:
@@ -263,7 +267,9 @@ def scatter_x_vs_depth(
     if show_geom and geom is not None:
         ax.scatter(*geom.T, **geom_scatter_kw)
     if limits == "probe_margin" and geom is not None:
-        ax.set_xlim([geom[:, 0].min() - probe_margin_um, geom[:, 0].max() + probe_margin_um])
+        ax.set_xlim(
+            [geom[:, 0].min() - probe_margin_um, geom[:, 0].max() + probe_margin_um]
+        )
     return ax, s1
 
 
@@ -407,5 +413,7 @@ def scatter_feature_vs_depth(
         **scatter_kw,
     )
     if limits == "probe_margin" and geom is not None:
-        ax.set_ylim([geom[:, 1].min() - probe_margin_um, geom[:, 1].max() + probe_margin_um])
+        ax.set_ylim(
+            [geom[:, 1].min() - probe_margin_um, geom[:, 1].max() + probe_margin_um]
+        )
     return ax, s
