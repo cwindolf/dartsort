@@ -215,7 +215,9 @@ def get_spike_pitch_shifts(
     """
     if pitch is None:
         pitch = get_pitch(geom)
-    if registered_depths_um is None:
+    if registered_depths_um is None and motion_est is None:
+        probe_displacement = np.zeros_like(depths_um)
+    elif registered_depths_um is None:
         probe_displacement = -motion_est.disp_at_s(times_s, depths_um)
     else:
         probe_displacement = registered_depths_um - depths_um
