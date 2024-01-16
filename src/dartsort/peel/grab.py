@@ -70,7 +70,7 @@ class GrabAndFeaturize(BasePeeler):
 
         return dict(
             n_spikes=in_chunk.numel(),
-            times_samples=times_samples,
+            times_samples=self.times_samples[in_chunk],
             channels=channels,
             collisioncleaned_waveforms=waveforms,
         )
