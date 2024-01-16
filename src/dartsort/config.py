@@ -193,9 +193,21 @@ class ClusteringConfig:
     chunk_size_s: float = 150.0
 
 
+@dataclass(frozen=True)
+class SplitMergeConfig:
+    # -- split
+    split_strategy: str = "FeatureSplit"
+    recursive_split: bool = True
+
+    # -- merge
+    merge_template_config: TemplateConfig = TemplateConfig(superres_templates=False)
+    merge_distance_threshold: float = 0.25
+
+
 default_featurization_config = FeaturizationConfig()
 default_subtraction_config = SubtractionConfig()
 default_template_config = TemplateConfig()
 default_clustering_config = ClusteringConfig()
+default_split_merge_config = SplitMergeConfig()
 coarse_template_config = TemplateConfig(superres_templates=False)
 default_matching_config = MatchingConfig()
