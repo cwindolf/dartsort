@@ -51,6 +51,8 @@ def localize_hdf5(
     When this is run after a peeling pipeline which includes an AmplitudeVector
     feature, that's equivalent to having had a PointSourceLocalization feature.
     But, it's faster to do this after the fact.
+
+    TODO: slow on UHD
     """
     if device is None:
         device = "cuda" if torch.cuda.is_available() else "cpu"
