@@ -55,6 +55,7 @@ class EnforceDecrease(BaseWaveformDenoiser):
         # pad with an extra channel to support indexing tricks
         pad_ptps = F.pad(ptps, (0, 1), value=torch.inf)
         # get amplitudes of all parents for all channels -- (N, c, <=c-1)
+        # TODO batch this?
         # TODO it may be possible to refactor using the new torch.Tensor.scatter_reduce_!
         parent_ptps = pad_ptps[
             torch.arange(n)[:, None, None],
