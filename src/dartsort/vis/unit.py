@@ -151,12 +151,11 @@ class PCAScatter(UnitPlot):
         self.max_amplitude = max_amplitude
 
     def draw(self, axis, sorting_analysis, unit_id):
-        in_unit = sorting_analysis.in_unit(unit_id)
-        loadings = sorting_analysis.unit_pca_features(
+        which, loadings = sorting_analysis.unit_pca_features(
             unit_id=unit_id, relocated=self.relocated
         )
         amps = sorting_analysis.amplitudes(
-            which=in_unit, relocated=self.relocate_amplitudes
+            which=which, relocated=self.relocate_amplitudes
         )
         s = axis.scatter(*loadings.T, c=np.minimum(amps, self.max_amplitude), lw=0, s=3)
         reloc_str = "relocated " * self.relocated
@@ -304,7 +303,7 @@ class WaveformPlot(UnitPlot):
         raise NotImplementedError
 
     def draw(self, axis, sorting_analysis, unit_id):
-        waveforms, max_chan, geom, ci = self.get_waveforms(sorting_analysis, unit_id)
+        which, waveforms, max_chan, geom, ci = self.get_waveforms(sorting_analysis, unit_id)
 
         max_abs_amp = None
         show_template = self.show_template
