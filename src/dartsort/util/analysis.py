@@ -318,8 +318,6 @@ class DARTsortAnalysis:
             spike_length_samples=spike_length_samples,
             fill_value=np.nan,
         )
-        print(f"analysis unit_raw_waveforms {waveforms.shape=} {load_ci.shape=}")
-        print(f"analysis unit_raw_waveforms {self.shifting=}")
         if not self.shifting:
             return which, waveforms
 
@@ -433,8 +431,6 @@ class DARTsortAnalysis:
         show_chans = show_channel_index[max_chan]
         show_chans = show_chans[show_chans < len(show_geom)]
         show_channel_index = np.broadcast_to(show_chans[None], (len(show_geom), show_chans.size))
-
-        print(f"analysis relocate {load_channel_index.shape=} {show_chans.shape=}")
 
         if not self.shifting:
             return waveforms, max_chan, show_geom, show_channel_index
