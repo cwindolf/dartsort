@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from ..localization.localize_util import localize_hdf5
+from ..localize.localize_util import localize_hdf5
 from .data_util import DARTsortSorting
 
 
