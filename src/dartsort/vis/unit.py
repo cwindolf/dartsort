@@ -341,8 +341,6 @@ class WaveformPlot(UnitPlot):
             show_superres_templates = suptemplates.shape[0] > 1
             max_abs_amp = self.max_abs_template_scale * np.abs(suptemplates).max()
 
-        print(f"{waveforms.shape=} {ci.shape=}")
-
         ls = geomplot(
             waveforms,
             max_channels=np.full(len(waveforms), max_chan),
@@ -574,7 +572,6 @@ def make_unit_summary(
             axes = cardfig.subplots(nrows=len(card.plots), ncols=1)
             axes = np.atleast_1d(axes)
             for plot, axis in zip(card.plots, axes):
-                print(f"{plot=} {unit_id=}")
                 plot.draw(axis, sorting_analysis, unit_id)
 
     # clean up the panels, or else things get clipped
