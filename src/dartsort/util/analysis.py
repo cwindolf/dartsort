@@ -55,6 +55,11 @@ class DARTsortAnalysis:
     tpca_features_dataset = "collisioncleaned_tpca_features"
     template_indices_dataset = "collisioncleaned_tpca_features"
 
+    def __post_init__(self):
+        if self.featurization_pipeline is not None:
+            assert not self.featurization_pipeline.needs_fit()
+        assert np.isin(self.template_data.unit_ids, np.unique(self.sorting.labels)).all()
+
     # helper constructors
 
     @classmethod
