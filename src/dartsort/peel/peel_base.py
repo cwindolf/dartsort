@@ -61,7 +61,9 @@ class BasePeeler(torch.nn.Module):
     # subtract.py and similar functions in the other .py files here, but these
     # are the main API methods for this class
 
-    def load_or_fit_and_save_models(self, save_folder, overwrite=False, n_jobs=0, device=None):
+    def load_or_fit_and_save_models(
+        self, save_folder, overwrite=False, n_jobs=0, device=None
+    ):
         """Load fitted models from save_folder if possible, or fit and save
 
         If the peeler has models that need to be trained, this function ensures
@@ -76,7 +78,9 @@ class BasePeeler(torch.nn.Module):
             self.load_models(save_folder)
         if self.needs_fit():
             save_folder.mkdir(exist_ok=True)
-            self.fit_models(save_folder, overwrite=overwrite, n_jobs=n_jobs, device=device)
+            self.fit_models(
+                save_folder, overwrite=overwrite, n_jobs=n_jobs, device=device
+            )
             self.save_models(save_folder)
         assert not self.needs_fit()
 
@@ -210,7 +214,9 @@ class BasePeeler(torch.nn.Module):
     def peeling_needs_fit(self):
         return False
 
-    def precompute_peeling_data(self, save_folder, overwrite=False, n_jobs=0, device=None):
+    def precompute_peeling_data(
+        self, save_folder, overwrite=False, n_jobs=0, device=None
+    ):
         # subclasses should override if they need to cache data for peeling
         # runs before fit_peeler_models()
         pass
@@ -271,9 +277,12 @@ class BasePeeler(torch.nn.Module):
             return_residual=return_residual,
         )
 
-        features = self.featurize_collisioncleaned_waveforms(
-            peel_result["collisioncleaned_waveforms"], peel_result["channels"]
-        )
+        if peel_result["n_spikes"] > 0:
+            features = self.featurize_collisioncleaned_waveforms(
+                peel_result["collisioncleaned_waveforms"], peel_result["channels"]
+            )
+        else:
+            features = {}
 
         assert not any(k in features for k in peel_result)
         chunk_result = {**peel_result, **features}
@@ -325,7 +334,10 @@ class BasePeeler(torch.nn.Module):
         with torch.no_grad():
             if self.peeling_needs_fit():
                 self.precompute_peeling_data(
-                    save_folder=save_folder, overwrite=overwrite, n_jobs=n_jobs, device=device
+                    save_folder=save_folder,
+                    overwrite=overwrite,
+                    n_jobs=n_jobs,
+                    device=device,
                 )
                 self.fit_peeler_models(
                     save_folder=save_folder, n_jobs=n_jobs, device=device
