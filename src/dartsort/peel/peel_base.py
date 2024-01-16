@@ -293,9 +293,10 @@ class BasePeeler(torch.nn.Module):
 
         # add times in seconds
         segment = self.recording._recording_segments[0]
-        chunk_result["times_seconds"] = segment.sample_index_to_time(
-            chunk_result["times_samples"]
-        )
+        if peel_result["n_spikes"]:
+            chunk_result["times_seconds"] = segment.sample_index_to_time(
+                chunk_result["times_samples"]
+            )
         return chunk_result
 
     def gather_chunk_result(
