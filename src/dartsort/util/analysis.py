@@ -298,8 +298,9 @@ class DARTsortAnalysis:
         if which.size > max_count:
             rg = np.random.default_rng(0)
             which = rg.choice(which, size=max_count, replace=False)
+            which.sort()
         if not which.size:
-            return np.zeros((0, spike_length_samples, 1))
+            return which, None, None, None, None
 
         # read waveforms from disk
         if self.shifting:
@@ -317,10 +318,12 @@ class DARTsortAnalysis:
             spike_length_samples=spike_length_samples,
             fill_value=np.nan,
         )
+        print(f"analysis unit_raw_waveforms {waveforms.shape=} {load_ci.shape=}")
+        print(f"analysis unit_raw_waveforms {self.shifting=}")
         if not self.shifting:
-            return waveforms
+            return which, waveforms
 
-        return self.unit_shift_or_relocate_channels(
+        waveforms, max_chan, show_geom, show_channel_index = self.unit_shift_or_relocate_channels(
             unit_id,
             which,
             waveforms,
@@ -328,6 +331,7 @@ class DARTsortAnalysis:
             show_radius_um=show_radius_um,
             relocated=relocated,
         )
+        return which, waveforms, max_chan, show_geom, show_channel_index
 
     def unit_tpca_waveforms(
         self,
@@ -342,8 +346,12 @@ class DARTsortAnalysis:
         if template_index is not None:
             assert template_index in self.unit_template_indices(unit_id)
             which = self.in_template(template_index)
+        if which.size > max_count:
+            rg = np.random.default_rng(random_seed)
+            which = rg.choice(which, size=max_count, replace=False)
+            which.sort()
         if not which.size:
-            return np.zeros((0, 1, self.channel_index.shape[1]))
+            return which, None, None, None, None
 
         tpca_embeds = self.tpca_features(which=which)
         n, rank, c = tpca_embeds.shape
@@ -352,7 +360,7 @@ class DARTsortAnalysis:
         t = waveforms.shape[1]
         waveforms = waveforms.reshape(n, c, t).transpose(0, 2, 1)
 
-        return self.unit_shift_or_relocate_channels(
+        waveforms, max_chan, show_geom, show_channel_index = self.unit_shift_or_relocate_channels(
             unit_id,
             which,
             waveforms,
@@ -360,26 +368,28 @@ class DARTsortAnalysis:
             show_radius_um=show_radius_um,
             relocated=relocated,
         )
+        return which, waveforms, max_chan, show_geom, show_channel_index
 
     def unit_pca_features(
-        self, unit_id, relocated=True, rank=2, pca_radius_um=75, random_seed=0
+        self, unit_id, relocated=True, rank=2, pca_radius_um=75, random_seed=0, max_count=500
     ):
-        waveforms, max_chan, show_geom, show_channel_index = self.unit_tpca_waveforms(
+        which, waveforms, max_chan, show_geom, show_channel_index = self.unit_tpca_waveforms(
             unit_id,
             relocated=relocated,
             show_radius_um=pca_radius_um,
             random_seed=random_seed,
+            max_count=max_count,
         )
         waveforms = waveforms.reshape(len(waveforms), -1)
 
         no_nan = np.flatnonzero(~np.isnan(waveforms).any(axis=1))
         features = np.full((len(waveforms), rank), np.nan, dtype=waveforms.dtype)
         if no_nan.size < rank:
-            return features
+            return which, features
 
         pca = PCA(rank, random_state=random_seed, whiten=True)
         features[no_nan] = pca.fit_transform(waveforms[no_nan])
-        return features
+        return which, features
 
     def unit_shift_or_relocate_channels(
         self,
@@ -422,6 +432,9 @@ class DARTsortAnalysis:
         show_channel_index = make_channel_index(show_geom, show_radius_um)
         show_chans = show_channel_index[max_chan]
         show_chans = show_chans[show_chans < len(show_geom)]
+        show_channel_index = np.broadcast_to(show_chans[None], (len(show_geom), show_chans.size))
+
+        print(f"analysis relocate {load_channel_index.shape=} {show_chans.shape=}")
 
         if not self.shifting:
             return waveforms, max_chan, show_geom, show_channel_index

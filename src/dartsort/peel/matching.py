@@ -835,6 +835,7 @@ class MatchingTemplateData:
         scalings,
         conv_pad_len=0,
     ):
+        # TODO: may need to batch this.
         (
             template_indices_a,
             template_indices_b,
