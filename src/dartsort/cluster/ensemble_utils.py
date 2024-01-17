@@ -30,6 +30,7 @@ def forward_backward(
         labels_all[ix] = sorting.labels[ix]
 
     # load features that we will need
+    # needs to be all features here
     amps = chunk_sortings[0].denoised_amplitudes
     xyza = chunk_sortings[0].point_source_localizations
     x = xyza[:, 0]
