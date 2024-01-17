@@ -54,7 +54,7 @@ def forward_backward(
         amps_1 = feature_scales[2] * np.log(log_c + amps[idx_1])
         amps_2 = feature_scales[2] * np.log(log_c + amps[idx_2])
         labels_1 = labels_all[idx_1].copy().astype("int")
-        labels_2 = chunk_sortings[k + 1].labels.copy()
+        labels_2 = chunk_sortings[k + 1].labels[idx_2]
         unit_label_shift = int(labels_1.max() + 1)
         labels_2[labels_2 > -1] += unit_label_shift
 
