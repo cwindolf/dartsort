@@ -31,7 +31,7 @@ def forward_backward(
 
     # load features that we will need
     amps = chunk_sortings[0].denoised_amplitudes
-    xyza = chunk_sortings[0].xyza
+    xyza = chunk_sortings[0].point_source_localizations
     x = xyza[:, 0]
     z_reg = z_abs = xyza[:, 2]
     if motion_est is not None:
