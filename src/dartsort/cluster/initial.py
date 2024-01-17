@@ -73,6 +73,7 @@ def cluster_chunk(
         labels[in_chunk] = cluster_util.hdbscan_clustering(
             recording,
             times_s[in_chunk],
+            times_samples[in_chunk],
             xyza[in_chunk, 0],
             xyza[in_chunk, 2],
             amps[in_chunk],
