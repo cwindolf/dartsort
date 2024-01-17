@@ -133,7 +133,7 @@ def hdbscan_clustering(
             scales=scales,
             log_c=log_c,
             recursive=recursive,
-            do_remove_dups=remove_duplicates,
+            remove_duplicates=remove_duplicates,
             frames_dedup=frames_dedup,
             frame_dedup_cluster=frame_dedup_cluster,
         )
