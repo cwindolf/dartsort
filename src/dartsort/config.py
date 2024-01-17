@@ -190,7 +190,7 @@ class ClusteringConfig:
 
     # -- ensembling
     ensemble_strategy: Optional[str] = "forward_backward"
-    chunk_size_s: float = 150.0
+    chunk_size_s: float = 300.0
 
 
 @dataclass(frozen=True)
