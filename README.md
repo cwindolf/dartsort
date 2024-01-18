@@ -11,12 +11,14 @@ A workflow described in our preprint (https://www.biorxiv.org/content/10.1101/20
 
 ## Suggested install steps:
 
-`mamba` is the recommended package manager for using DARTsort. It is a drop-in replacement for `conda` and can be installed from [here](https://mamba.readthedocs.io/en/latest/installation.html).
+If you don't already have Python and PyTorch 2 installed, we recommend doing this with the Miniforge distribution of `conda`. You can find info and installers for your platform [at Miniforge's GitHub repository](https://github.com/conda-forge/miniforge). After installing Miniforge, `conda` will be available on your computer for installing Python packages, as well as the newer and faster conda replacement tool `mamba`. We recommend using `mamba` instead of `conda` below, since the installation tends to be a lot faster with `mamba`.
+
+To install DARTsort, first clone this GitHub repository.
 
 After cloning the repository, create and activate the `mamba`/`conda` environment from the configuration file provided as follows:
 
 ```bash
-$ mamba env create -f environment.yml -n dartsort
+$ mamba env create -f environment.yml
 $ mamba activate dartsort
 ```
 
@@ -24,19 +26,22 @@ Next, visit https://pytorch.org/get-started/locally/ and follow the `PyTorch` in
 For example, on a Linux workstation or cluster with NVIDIA GPUs available, one might use (dropping in `mamba` for `conda` commands):
 
 ```bash
+# Example -- see https://pytorch.org/get-started/locally/ to find your platform's command.
 (dartsort) $ mamba install pytorch torchvision torchaudio pytorch-cuda=11.8 -c pytorch -c nvidia
 ```
 
 Finally, install the remaining `pip` dependencies and `dartsort` itself:
 
 ```bash
-(dartsort) $ pip install -r requirements.txt
+(dartsort) $ pip install -r requirements-full.txt
 (dartsort) $ pip install -e .
 ```
 
-Soon we will have a package on PyPI so that the last two steps will be just a `pip install dartsort`.
+To enable DARTsort's default motion correction algorithm [DREDge](https://www.biorxiv.org/content/10.1101/2023.10.24.563768), clone [its GitHub repository](https://github.com/evarol/dredge), and then `cd dredge/` and install the DREDge package with `pip install -e .`.
 
-Make sure everything works:
+Soon we will have a package on PyPI so that these last steps will be just a `pip install dartsort`.
+
+To make sure everything is working:
 
 ```bash
 $ (dartsort) pytest tests/*

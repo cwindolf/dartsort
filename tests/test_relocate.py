@@ -5,7 +5,7 @@ in drift_util.py
 import numpy as np
 from dartsort.cluster import relocate
 from dartsort.util import drift_util, waveform_util
-from neuropixel import dense_layout
+from test_util import dense_layout
 
 h = dense_layout()
 geom = np.c_[h["x"], h["y"]]

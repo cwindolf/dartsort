@@ -79,7 +79,7 @@ class TemplateData:
             spike_counts=spike_counts,
             registered_template_depths_um=registered_template_depths_um,
         )
-    
+
     def unit_templates(self, unit_id):
         return self.templates[self.unit_ids == unit_id]
 
@@ -108,8 +108,6 @@ class TemplateData:
         motion_aware = (
             template_config.registered_templates or template_config.superres_templates
         )
-        if motion_aware and motion_est is None:
-            raise ValueError(_motion_error_prefix + _aware_error)
         has_localizations = hasattr(sorting, localizations_dataset_name)
         if motion_aware and not has_localizations:
             raise ValueError(
@@ -139,7 +137,7 @@ class TemplateData:
             denoising_snr_threshold=template_config.denoising_snr_threshold,
             device=device,
         )
-        if template_config.registered_templates:
+        if template_config.registered_templates and motion_est is not None:
             kwargs["registered_geom"] = drift_util.registered_geometry(
                 geom, motion_est=motion_est
             )
@@ -188,7 +186,7 @@ class TemplateData:
         results = get_templates(recording, sorting, **kwargs)
 
         # handle registered templates
-        if template_config.registered_templates:
+        if template_config.registered_templates and motion_est is not None:
             registered_template_depths_um = get_template_depths(
                 results["templates"],
                 kwargs["registered_geom"],
