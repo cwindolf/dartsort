@@ -76,6 +76,9 @@ def hdbscan_clustering(
         z_reg = motion_est.correct_s(times_seconds, z_abs)
 
     features = np.c_[x * scales[0], z_reg * scales[1], np.log(log_c + amps) * scales[2]]
+    if features.shape[1]>=features.shape[0]:
+        return -1*np.ones(features.shape[0])
+    
     clusterer = hdbscan.HDBSCAN(
         min_cluster_size=min_cluster_size,
         cluster_selection_epsilon=cluster_selection_epsilon,
@@ -133,19 +136,19 @@ def hdbscan_clustering(
             scales=scales,
             log_c=log_c,
             recursive=recursive,
-            do_remove_dups=do_remove_dups,
+            remove_duplicates=remove_duplicates,
             frames_dedup=frames_dedup,
             frame_dedup_cluster=frame_dedup_cluster,
         )
         labels[in_unit[split_labels < 0]] = split_labels[split_labels < 0]
         labels[in_unit[split_labels >= 0]] = split_labels[split_labels >= 0] + next_label
-        next_label += split_labels[split_labels >= 0].max() + 1
+        # next_label += split_labels[split_labels >= 0].max() + 1
+        next_label += split_labels.max() + 1 #is that ok
 
     # reindex
     _, labels[labels >= 0] = np.unique(labels[labels >= 0], return_inverse=True)
     return labels
 
-# Implement deduplication here cluster_utils.remove_duplicate_spikes then cluster_utils.remove_self_duplicates
 # How to deal with outliers?
 
 

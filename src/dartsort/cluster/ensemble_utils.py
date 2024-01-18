@@ -30,12 +30,13 @@ def forward_backward(
         labels_all[ix] = sorting.labels[ix]
 
     # load features that we will need
+    # needs to be all features here
     amps = chunk_sortings[0].denoised_amplitudes
-    xyza = chunk_sortings[0].xyza
+    xyza = chunk_sortings[0].point_source_localizations
     x = xyza[:, 0]
-    z_reg = z_abs = xyza[:, 2]
+    z_reg = xyza[:, 2]
     if motion_est is not None:
-        z_reg = motion_est.correct_s(times_seconds, z_abs)
+        z_reg = motion_est.correct_s(times_seconds, z_reg)
 
     for k in trange(len(chunk_sortings) - 1, desc="Ensembling chunks"):
         # CHANGE THE 1 ---
@@ -54,7 +55,7 @@ def forward_backward(
         amps_1 = feature_scales[2] * np.log(log_c + amps[idx_1])
         amps_2 = feature_scales[2] * np.log(log_c + amps[idx_2])
         labels_1 = labels_all[idx_1].copy().astype("int")
-        labels_2 = chunk_sortings[k + 1].labels.copy()
+        labels_2 = chunk_sortings[k + 1].labels[idx_2]
         unit_label_shift = int(labels_1.max() + 1)
         labels_2[labels_2 > -1] += unit_label_shift
 
@@ -178,7 +179,7 @@ def forward_backward(
         all_labels_1 = all_labels_1[all_labels_1 > -1]
 
         features_all_1 = np.c_[
-            np.median(x_1[labels_1 == all_labels_1[0]]),  # WHY [1]?
+            np.median(x_1[labels_1 == all_labels_1[0]]), 
             np.median(z_1[labels_1 == all_labels_1[0]]),
             np.median(amps_1[labels_1 == all_labels_1[0]]),
         ]
