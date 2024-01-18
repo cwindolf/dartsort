@@ -45,6 +45,7 @@ class GrabAndFeaturize(BasePeeler):
         return_residual=False,
     ):
         assert not return_residual
+
         in_chunk = torch.nonzero(
             (self.times_samples >= chunk_start_samples)
             & (
@@ -52,14 +53,17 @@ class GrabAndFeaturize(BasePeeler):
                 < chunk_start_samples + self.chunk_length_samples
             )
         ).squeeze()
+
         if not in_chunk.numel():
             return dict(n_spikes=0)
-        times_samples = self.times_samples[in_chunk] - chunk_start_samples
+
+        chunk_left = chunk_start_samples - left_margin
+        times_rel = self.times_samples[in_chunk] - chunk_left
         channels = self.channels[in_chunk]
 
         waveforms = spiketorch.grab_spikes(
             traces,
-            times_samples,
+            times_rel,
             channels,
             self.channel_index,
             trough_offset=self.trough_offset_samples,
@@ -70,7 +74,7 @@ class GrabAndFeaturize(BasePeeler):
 
         return dict(
             n_spikes=in_chunk.numel(),
-            times_samples=times_samples,
+            times_samples=self.times_samples[in_chunk],
             channels=channels,
             collisioncleaned_waveforms=waveforms,
         )

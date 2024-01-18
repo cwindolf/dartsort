@@ -9,7 +9,7 @@ from dartsort.config import FeaturizationConfig, SubtractionConfig
 from dartsort.localize.localize_torch import point_source_amplitude_at
 from dartsort.main import subtract
 from dartsort.util import waveform_util
-from neuropixel import dense_layout
+from test_util import dense_layout
 
 
 def test_fakedata_nonn():

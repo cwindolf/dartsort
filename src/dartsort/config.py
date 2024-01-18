@@ -13,9 +13,11 @@ featurization_config = FeaturizationConfig(do_nn_denoise=False)
 This will use all the other parameters' default values. This
 object can then be passed into the high level functions like
 `subtract(...)`.
+
+TODO: change n_chunks_fit to n_spikes_fit, max_chunks_fit
 """
 from dataclasses import dataclass
-from typing import List, Optional
+from typing import List, Optional, Tuple
 
 try:
     from importlib.resources import files
@@ -45,7 +47,6 @@ class WaveformConfig:
         return int(spike_len_ms * (sampling_frequency / 1000))
 
 
-# TODO: remove this from other configs
 @dataclass(frozen=True)
 class FeaturizationConfig:
     """Featurization and denoising configuration
@@ -81,7 +82,7 @@ class FeaturizationConfig:
     localization_radius: float = 100.0
     # these are saved always if do_localization
     save_amplitude_vectors: bool = True
-    localization_model = "dipole"
+    localization_model: str = "pointsource"
 
     # -- further info about denoising
     # in the future we may add multi-channel or other nns
@@ -102,7 +103,7 @@ class SubtractionConfig:
     spike_length_samples: int = 121
     detection_thresholds: List[int] = (10, 8, 6, 5, 4)
     chunk_length_samples: int = 30_000
-    peak_sign: str = "neg"
+    peak_sign: str = "both"
     spatial_dedup_radius: float = 150.0
     extract_radius: float = 200.0
     n_chunks_fit: int = 40
@@ -152,7 +153,7 @@ class MatchingConfig:
     trough_offset_samples: int = 42
     spike_length_samples: int = 121
     chunk_length_samples: int = 30_000
-    extract_radius: float = 100.0
+    extract_radius: float = 200.0
     n_chunks_fit: int = 40
     fit_subsampling_random_state: int = 0
 
@@ -172,22 +173,41 @@ class MatchingConfig:
 @dataclass(frozen=True)
 class ClusteringConfig:
     # -- initial clustering
-    feature_scales = (1, 1, 50)
-    log_c: int = 5
-    # hdbscan parameters
     cluster_strategy: str = "hdbscan"
+
+    # hdbscan parameters
     min_cluster_size: int = 25
     min_samples: int = 25
     cluster_selection_epsilon: int = 1
+    feature_scales: Tuple[float] = (1.0, 1.0, 50.0)
+    log_c: float = 5.0
+    recursive: bool = True
+    remove_duplicates: bool = True
+
+    # grid snap parameters
+    grid_dx: float = 15.0
+    grid_dz: float = 15.0
+
     # -- ensembling
     ensemble_strategy: Optional[str] = "forward_backward"
-    chunk_size_s: int = 150
-    # forward-backward
+    chunk_size_s: float = 300.0
+
+
+@dataclass(frozen=True)
+class SplitMergeConfig:
+    # -- split
+    split_strategy: str = "FeatureSplit"
+    recursive_split: bool = True
+
+    # -- merge
+    merge_template_config: TemplateConfig = TemplateConfig(superres_templates=False)
+    merge_distance_threshold: float = 0.25
 
 
 default_featurization_config = FeaturizationConfig()
 default_subtraction_config = SubtractionConfig()
 default_template_config = TemplateConfig()
 default_clustering_config = ClusteringConfig()
+default_split_merge_config = SplitMergeConfig()
 coarse_template_config = TemplateConfig(superres_templates=False)
 default_matching_config = MatchingConfig()

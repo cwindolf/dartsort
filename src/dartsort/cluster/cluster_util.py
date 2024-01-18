@@ -1,16 +1,15 @@
+import hdbscan
 import numpy as np
+import spikeinterface
 from dartsort.util import drift_util, spikeio
 from dredge.motion_util import IdentityMotionEstimate
 from scipy.spatial import KDTree
 from sklearn.neighbors import KNeighborsClassifier
-import hdbscan
-import spikeinterface
 from spikeinterface.comparison import compare_two_sorters
 from tqdm.auto import tqdm
 
-def closest_registered_channels(
-    times_seconds, x, z_abs, geom, motion_est=None
-):
+
+def closest_registered_channels(times_seconds, x, z_abs, geom, motion_est=None):
     """Assign spikes to the drift-extended channel closest to their registered position"""
     if motion_est is None:
         motion_est == IdentityMotionEstimate()
@@ -23,15 +22,47 @@ def closest_registered_channels(
 
     return reg_channels
 
-def hdbscan_clustering(recording,
-    times_seconds, times_samples, x, z_abs, geom, amps, motion_est=None,
+
+def grid_snap(times_seconds, x, z_abs, geom, grid_dx=15, grid_dz=15, motion_est=None):
+    if motion_est is None:
+        motion_est == IdentityMotionEstimate()
+    z_reg = motion_est.correct_s(times_seconds, z_abs)
+    reg_pos = np.c_[x, z_reg]
+
+    # make a grid inside the registered geom bounding box
+    registered_geom = drift_util.registered_geometry(geom, motion_est)
+    min_x, max_x = registered_geom[:, 0].min(), registered_geom[:, 0].max()
+    min_z, max_z = registered_geom[:, 1].min(), registered_geom[:, 1].max()
+    grid_x = np.arange(min_x, max_x, grid_dx)
+    grid_x += (min_x + max_x) / 2 - grid_x.mean()
+    grid_z = np.arange(min_z, max_z, grid_dz)
+    grid_z += (min_z + max_z) / 2 - grid_z.mean()
+    grid_xx, grid_zz = np.meshgrid(grid_x, grid_z, indexing="ij")
+    grid = np.c_[grid_xx.ravel(), grid_zz.ravel()]
+
+    # snap to closest grid point
+    registered_kdt = KDTree(grid)
+    distances, reg_channels = registered_kdt.query(reg_pos)
+
+    return reg_channels
+
+
+def hdbscan_clustering(
+    recording,
+    times_seconds,
+    times_samples,
+    x,
+    z_abs,
+    amps,
+    geom,
+    motion_est=None,
     min_cluster_size=25,
     min_samples=25,
-    cluster_selection_epsilon=1, 
+    cluster_selection_epsilon=1,
     scales=(1, 1, 50),
     log_c=5,
     recursive=True,
-    do_remove_dups=True,
+    remove_duplicates=True,
     frames_dedup=12,
     frame_dedup_cluster=20,
 ):
@@ -40,10 +71,14 @@ def hdbscan_clustering(recording,
     triaging/subsampling/copying/splitting big clusters not implemented since we don't use it (so far)
     """
     if motion_est is None:
-        motion_est == IdentityMotionEstimate()
-    
-    z_reg = motion_est.correct_s(times_seconds, z_abs)
+        z_reg = z_abs
+    else:
+        z_reg = motion_est.correct_s(times_seconds, z_abs)
+
     features = np.c_[x * scales[0], z_reg * scales[1], np.log(log_c + amps) * scales[2]]
+    if features.shape[1]>=features.shape[0]:
+        return -1*np.ones(features.shape[0])
+    
     clusterer = hdbscan.HDBSCAN(
         min_cluster_size=min_cluster_size,
         cluster_selection_epsilon=cluster_selection_epsilon,
@@ -51,8 +86,8 @@ def hdbscan_clustering(recording,
         core_dist_n_jobs=-1,
     )
     clusterer.fit(features)
-    
-    if do_remove_dups:
+
+    if remove_duplicates:
         (
             clusterer,
             duplicate_indices,
@@ -60,7 +95,7 @@ def hdbscan_clustering(recording,
         ) = remove_duplicate_spikes(
             clusterer, times_samples, amps, frames_dedup=frames_dedup
         )
-        
+
         kept_ix, removed_ix = remove_self_duplicates(
             times_samples,
             clusterer.labels_,
@@ -69,33 +104,53 @@ def hdbscan_clustering(recording,
             frame_dedup=frame_dedup_cluster,
         )
         if len(removed_ix):
-            clusterer.labels_[removed_ix.astype('int')] = -1
+            clusterer.labels_[removed_ix.astype("int")] = -1
 
-    # recursive is just one pass right now -> want to extend this
     if not recursive:
         return clusterer.labels_
-    else:
-        labels_all = clusterer.labels_.astype('int')
-        _, labels_all[labels_all>-1] = np.unique(labels_all[labels_all>-1], return_inverse=True)
 
-        cmp = labels_all.max()+1
-        labels_split = labels_all.copy()
+    # -- recursively split clusters as long as HDBSCAN keeps finding more than 1
+    # if HDBSCAN only finds one cluster, then be done
+    units = np.unique(clusterer.labels_)
+    if units[units >= 0].size <= 1:
+        # prevent triaging when no split was found
+        return np.zeros_like(clusterer.labels_)
 
-        for unit in range(labels_all.max()+1):
-            idx = labels_all == unit
-            clusterer.fit(np.c_[scales[0]*x[idx], scales[1]*z_reg[idx], scales[2]*np.log(log_c+amps[idx])])
+    # else, recursively enter all labels and split them
+    labels = clusterer.labels_.copy()
+    next_label = units.max() + 1
+    for unit in units[units >= 0]:
+        in_unit = np.flatnonzero(clusterer.labels_ == unit)
+        split_labels = hdbscan_clustering(
+            recording,
+            times_seconds[in_unit],
+            times_samples[in_unit],
+            x[in_unit],
+            z_abs[in_unit],
+            amps[in_unit],
+            geom,
+            motion_est=motion_est,
+            min_cluster_size=min_cluster_size,
+            min_samples=min_samples,
+            cluster_selection_epsilon=cluster_selection_epsilon,
+            scales=scales,
+            log_c=log_c,
+            recursive=recursive,
+            remove_duplicates=remove_duplicates,
+            frames_dedup=frames_dedup,
+            frame_dedup_cluster=frame_dedup_cluster,
+        )
+        labels[in_unit[split_labels < 0]] = split_labels[split_labels < 0]
+        labels[in_unit[split_labels >= 0]] = split_labels[split_labels >= 0] + next_label
+        # next_label += split_labels[split_labels >= 0].max() + 1
+        next_label += split_labels.max() + 1 #is that ok
 
-            if clusterer.labels_.max()>-1 and (clusterer.labels_ == -1).sum()/len(clusterer.labels_)<0.5:
-                for k in np.arange(1, clusterer.labels_.max()+1):
-                    which = np.where(idx)[0][clusterer.labels_ == k]
-                    labels_split[which] = cmp
-                    cmp+=1
-                which = np.where(idx)[0][clusterer.labels_ == -1]
-                labels_split[which] = -1    
-        return labels_split.astype('int')
+    # reindex
+    _, labels[labels >= 0] = np.unique(labels[labels >= 0], return_inverse=True)
+    return labels
 
-    # Implement deduplication here cluster_utils.remove_duplicate_spikes then cluster_utils.remove_self_duplicates
-    # How to deal with outliers?
+# How to deal with outliers?
+
 
 def knn_reassign_outliers(labels, features):
     outliers = labels < 0
@@ -112,6 +167,8 @@ def knn_reassign_outliers(labels, features):
 """
 Functions below are not  used yet - need some updating before plugging them in 
 """
+
+
 def remove_self_duplicates(
     spike_times,
     spike_labels,
@@ -126,7 +183,7 @@ def remove_self_duplicates(
     seed=0,
 ):
     """
-    TODO: change how things are read etc... + is this really useful? 
+    TODO: change how things are read etc... + is this really useful?
 
     """
     indices_to_remove = []
@@ -160,12 +217,8 @@ def remove_self_duplicates(
             # we'll remove either an index in first_viol_ix,
             # or that index + 1, depending on template agreement
             first_viol_ix = np.flatnonzero(violations)
-            all_viol_ix = np.concatenate(
-                [first_viol_ix, [first_viol_ix[-1] + 1]]
-            )
-            unviol = np.setdiff1d(
-                np.arange(spike_times_unit.shape[0]), all_viol_ix
-            )
+            all_viol_ix = np.concatenate([first_viol_ix, [first_viol_ix[-1] + 1]])
+            unviol = np.setdiff1d(np.arange(spike_times_unit.shape[0]), all_viol_ix)
 
             # load as many unviolated wfs as possible
             if unviol.size > n_samples:
@@ -231,6 +284,7 @@ def remove_self_duplicates(
 
     return indices_to_keep, indices_to_remove
 
+
 def remove_duplicate_spikes(
     clusterer,
     spike_frames,
@@ -242,9 +296,7 @@ def remove_duplicate_spikes(
     # normalize agreement by smaller unit and then remove only the spikes with agreement
     sorting = make_sorting_from_labels_frames(clusterer.labels_, spike_frames)
     # remove duplicates
-    cmp_self = compare_two_sorters(
-        sorting, sorting, match_score=0.1, chance_score=0.1
-    )
+    cmp_self = compare_two_sorters(sorting, sorting, match_score=0.1, chance_score=0.1)
     removed_cluster_ids = set()
     remove_spikes = []
     for cluster_id in sorting.get_unit_ids():
@@ -258,9 +310,7 @@ def remove_duplicate_spikes(
                 ind_st2,
                 not_match_ind_st1,
                 not_match_ind_st2,
-            ) = compute_spiketrain_agreement(
-                st_1, st_2, delta_frames=frames_dedup
-            )
+            ) = compute_spiketrain_agreement(st_1, st_2, delta_frames=frames_dedup)
             mean_ptp_matches = [
                 maxptps[clusterer.labels_ == cluster_id].mean()
                 for cluster_id in possible_matches
@@ -277,9 +327,7 @@ def remove_duplicate_spikes(
                 remove_ind = np.concatenate((remove_ind, not_match))
 
             if remove_cluster_id not in removed_cluster_ids:
-                remove_spikes.append(
-                    (remove_cluster_id, possible_matches, remove_ind)
-                )
+                remove_spikes.append((remove_cluster_id, possible_matches, remove_ind))
                 removed_cluster_ids.add(remove_cluster_id)
 
     remove_indices_list = []
@@ -298,16 +346,13 @@ def remove_duplicate_spikes(
 def compute_spiketrain_agreement(st_1, st_2, delta_frames=12):
     # create figure for each match
     times_concat = np.concatenate((st_1, st_2))
-    membership = np.concatenate(
-        (np.ones(st_1.shape) * 1, np.ones(st_2.shape) * 2)
-    )
+    membership = np.concatenate((np.ones(st_1.shape) * 1, np.ones(st_2.shape) * 2))
     indices = times_concat.argsort()
     times_concat_sorted = times_concat[indices]
     membership_sorted = membership[indices]
     diffs = times_concat_sorted[1:] - times_concat_sorted[:-1]
     inds = np.flatnonzero(
-        (diffs <= delta_frames)
-        & (membership_sorted[:-1] != membership_sorted[1:])
+        (diffs <= delta_frames) & (membership_sorted[:-1] != membership_sorted[1:])
     )
 
     if len(inds) > 0:
@@ -315,12 +360,8 @@ def compute_spiketrain_agreement(st_1, st_2, delta_frames=12):
         inds2 = np.concatenate((inds2, [inds[-1]]))
         times_matched = times_concat_sorted[inds2]
         # # find and label closest spikes
-        ind_st1 = np.array(
-            [np.abs(st_1 - tm).argmin() for tm in times_matched]
-        )
-        ind_st2 = np.array(
-            [np.abs(st_2 - tm).argmin() for tm in times_matched]
-        )
+        ind_st1 = np.array([np.abs(st_1 - tm).argmin() for tm in times_matched])
+        ind_st2 = np.array([np.abs(st_2 - tm).argmin() for tm in times_matched])
         not_match_ind_st1 = np.ones(st_1.shape[0], bool)
         not_match_ind_st1[ind_st1] = False
         not_match_ind_st1 = np.where(not_match_ind_st1)[0]
@@ -336,10 +377,7 @@ def compute_spiketrain_agreement(st_1, st_2, delta_frames=12):
     return ind_st1, ind_st2, not_match_ind_st1, not_match_ind_st2
 
 
-
-def make_sorting_from_labels_frames(
-    labels, spike_frames, sampling_frequency=30000
-):
+def make_sorting_from_labels_frames(labels, spike_frames, sampling_frequency=30000):
     # times_list = []
     # labels_list = []
     # for cluster_id in np.unique(labels):
@@ -354,4 +392,3 @@ def make_sorting_from_labels_frames(
         sampling_frequency=sampling_frequency,
     )
     return sorting
-

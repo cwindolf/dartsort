@@ -53,6 +53,12 @@ class DARTsortAnalysis:
     amplitudes_dataset = "denoised_amplitudes"
     amplitude_vectors_dataset = "denoised_amplitude_vectors"
     tpca_features_dataset = "collisioncleaned_tpca_features"
+    template_indices_dataset = "collisioncleaned_tpca_features"
+
+    def __post_init__(self):
+        if self.featurization_pipeline is not None:
+            assert not self.featurization_pipeline.needs_fit()
+        assert np.isin(self.template_data.unit_ids, np.unique(self.sorting.labels)).all()
 
     # helper constructors
 
@@ -131,6 +137,7 @@ class DARTsortAnalysis:
     def clear_cache(self):
         self._xyza = None
         self._max_chan_amplitudes = None
+        self._template_indices = None
         self._amplitude_vectors = None
         self._channel_index = None
         self._geom = None
@@ -142,8 +149,10 @@ class DARTsortAnalysis:
 
     def __getstate__(self):
         # remove cached stuff before pickling
-        return {k: v if not k.startswith("_") else None for k, v in self.__dict__.items()}
-    
+        return {
+            k: v if not k.startswith("_") else None for k, v in self.__dict__.items()
+        }
+
     # cache gizmos
 
     @property
@@ -157,6 +166,12 @@ class DARTsortAnalysis:
         if self._xyza is None:
             self._xyza = self.h5[self.localizations_dataset][:]
         return self._xyza
+
+    @property
+    def template_indices(self):
+        if self._template_indices is None:
+            self._template_indices = self.h5[self.template_indices_dataset][:]
+        return self._template_indices
 
     @property
     def max_chan_amplitudes(self):
@@ -203,7 +218,7 @@ class DARTsortAnalysis:
             self._unit_ids = allunits[allunits >= 0]
             self._spike_counts = counts[allunits >= 0]
         return self._unit_ids
-    
+
     @property
     def spike_counts(self):
         if self._spike_counts is None:
@@ -214,6 +229,12 @@ class DARTsortAnalysis:
 
     def in_unit(self, unit_id):
         return np.flatnonzero(np.isin(self.sorting.labels, unit_id))
+
+    def in_template(self, template_index):
+        return np.flatnonzero(np.isin(self.template_indices, template_index))
+
+    def unit_template_indices(self, unit_id):
+        return np.flatnonzero(self.template_data.unit_ids == self.unit_id)
 
     # spike feature loading methods
 
@@ -232,7 +253,9 @@ class DARTsortAnalysis:
         return z
 
     def times_seconds(self, which=slice(None)):
-        return self.recording._recording_segments[0].sample_index_to_time(self.times_samples(which=which))
+        return self.recording._recording_segments[0].sample_index_to_time(
+            self.times_samples(which=which)
+        )
 
     def times_samples(self, which=slice(None)):
         return self.sorting.times_samples[which]
@@ -265,6 +288,7 @@ class DARTsortAnalysis:
     def unit_raw_waveforms(
         self,
         unit_id,
+        template_index=None,
         max_count=250,
         random_seed=0,
         show_radius_um=75,
@@ -273,11 +297,15 @@ class DARTsortAnalysis:
         relocated=False,
     ):
         which = self.in_unit(unit_id)
+        if template_index is not None:
+            assert template_index in self.unit_template_indices(unit_id)
+            which = self.in_template(template_index)
         if which.size > max_count:
             rg = np.random.default_rng(0)
             which = rg.choice(which, size=max_count, replace=False)
+            which.sort()
         if not which.size:
-            return np.zeros((0, spike_length_samples, 1))
+            return which, None, None, None, None
 
         # read waveforms from disk
         if self.shifting:
@@ -296,9 +324,9 @@ class DARTsortAnalysis:
             fill_value=np.nan,
         )
         if not self.shifting:
-            return waveforms
+            return which, waveforms
 
-        return self.unit_shift_or_relocate_channels(
+        waveforms, max_chan, show_geom, show_channel_index = self.unit_shift_or_relocate_channels(
             unit_id,
             which,
             waveforms,
@@ -306,18 +334,27 @@ class DARTsortAnalysis:
             show_radius_um=show_radius_um,
             relocated=relocated,
         )
+        return which, waveforms, max_chan, show_geom, show_channel_index
 
     def unit_tpca_waveforms(
         self,
         unit_id,
+        template_index=None,
         max_count=250,
         random_seed=0,
         show_radius_um=75,
         relocated=False,
     ):
         which = self.in_unit(unit_id)
+        if template_index is not None:
+            assert template_index in self.unit_template_indices(unit_id)
+            which = self.in_template(template_index)
+        if which.size > max_count:
+            rg = np.random.default_rng(random_seed)
+            which = rg.choice(which, size=max_count, replace=False)
+            which.sort()
         if not which.size:
-            return np.zeros((0, 1, self.channel_index.shape[1]))
+            return which, None, None, None, None
 
         tpca_embeds = self.tpca_features(which=which)
         n, rank, c = tpca_embeds.shape
@@ -326,7 +363,7 @@ class DARTsortAnalysis:
         t = waveforms.shape[1]
         waveforms = waveforms.reshape(n, c, t).transpose(0, 2, 1)
 
-        return self.unit_shift_or_relocate_channels(
+        waveforms, max_chan, show_geom, show_channel_index = self.unit_shift_or_relocate_channels(
             unit_id,
             which,
             waveforms,
@@ -334,26 +371,28 @@ class DARTsortAnalysis:
             show_radius_um=show_radius_um,
             relocated=relocated,
         )
+        return which, waveforms, max_chan, show_geom, show_channel_index
 
     def unit_pca_features(
-        self, unit_id, relocated=True, rank=2, pca_radius_um=75, random_seed=0
+        self, unit_id, relocated=True, rank=2, pca_radius_um=75, random_seed=0, max_count=500
     ):
-        waveforms, max_chan, show_geom, show_channel_index = self.unit_tpca_waveforms(
+        which, waveforms, max_chan, show_geom, show_channel_index = self.unit_tpca_waveforms(
             unit_id,
             relocated=relocated,
             show_radius_um=pca_radius_um,
             random_seed=random_seed,
+            max_count=max_count,
         )
         waveforms = waveforms.reshape(len(waveforms), -1)
 
         no_nan = np.flatnonzero(~np.isnan(waveforms).any(axis=1))
         features = np.full((len(waveforms), rank), np.nan, dtype=waveforms.dtype)
         if no_nan.size < rank:
-            return features
+            return which, features
 
         pca = PCA(rank, random_state=random_seed, whiten=True)
         features[no_nan] = pca.fit_transform(waveforms[no_nan])
-        return features
+        return which, features
 
     def unit_shift_or_relocate_channels(
         self,
@@ -396,7 +435,8 @@ class DARTsortAnalysis:
         show_channel_index = make_channel_index(show_geom, show_radius_um)
         show_chans = show_channel_index[max_chan]
         show_chans = show_chans[show_chans < len(show_geom)]
-        
+        show_channel_index = np.broadcast_to(show_chans[None], (len(show_geom), show_chans.size))
+
         if not self.shifting:
             return waveforms, max_chan, show_geom, show_channel_index
 
@@ -412,7 +452,7 @@ class DARTsortAnalysis:
                 registered_geom=show_geom,
             )
             return waveforms, max_chan, show_geom, show_channel_index
-        
+
         if n_pitches_shift is None:
             n_pitches_shift = get_spike_pitch_shifts(
                 self.z(which=which, registered=False),

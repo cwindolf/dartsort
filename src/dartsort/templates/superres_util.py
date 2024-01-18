@@ -113,7 +113,10 @@ def motion_estimate_strategy(
     """ """
     # reg_pos = pos - disp, pos = reg_pos + disp
     # so, disp is the motion of spikes relative to fixed probe
-    displacements = motion_est.disp_at_s(spike_times_s, spike_depths_um)
+    if motion_est is None:
+        displacements = np.zeros_like(spike_depths_um)
+    else:
+        displacements = motion_est.disp_at_s(spike_times_s, spike_depths_um)
     mod_positions = displacements % pitch
     bin_ids = mod_positions // superres_bin_size_um
     bin_ids = bin_ids.astype(int)

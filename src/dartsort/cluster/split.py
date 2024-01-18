@@ -7,6 +7,8 @@ import torch
 from dartsort.util import drift_util, waveform_util
 from dartsort.util.multiprocessing_util import get_pool
 from hdbscan import HDBSCAN
+from scipy.spatial import KDTree
+from scipy.spatial.distance import pdist
 from sklearn.decomposition import PCA
 from tqdm.auto import tqdm
 
@@ -189,7 +191,7 @@ class FeatureSplit(SplitStrategy):
         self.relocated = relocated and motion_est is not None
         self.motion_est = motion_est
         self.localization_feature_scales = localization_feature_scales
-        self.random_state = random_state
+        self.rg = np.random.default_rng(random_state)
         self.reassign_outliers = reassign_outliers
 
         # hdbscan parameters
@@ -296,7 +298,7 @@ class FeatureSplit(SplitStrategy):
 
         return max_registered_channel, n_pitches_shift, reloc_amplitudes, kept
 
-    def pca_features(self, in_unit, max_registered_channel, n_pitches_shift, batch_size=20_000, max_pca_batch=50_000):
+    def pca_features(self, in_unit, max_registered_channel, n_pitches_shift, batch_size=1_000, max_samples_pca=50_000):
         """Compute relocated PCA features on a drift-invariant channel set"""
         # figure out which set of channels to use
         # we use the stored amplitudes to do this rather than computing a
@@ -304,26 +306,26 @@ class FeatureSplit(SplitStrategy):
         # max_batch_size set to avoid memory errors
         pca_channels = self.registered_channel_index[max_registered_channel]
         pca_channels = pca_channels[pca_channels < len(self.registered_geom)]
- 
+
         # load waveform embeddings and invert TPCA if we are relocating
+        waveforms = None  # will allocate output array when we know it's size
+        for bs in range(0, in_unit.size, batch_size):
+            be = min(in_unit.size, bs + batch_size)
 
-        waveforms_all = batched_h5_read(self.tpca_features, in_unit) #in tpca manifold
-        n, rank, c = waveforms_all.shape
+            batch = batched_h5_read(self.tpca_features, in_unit[bs:be])
+            n_batch, rank, c = batch.shape
 
-        for bs in range(0, n, batch_size):
-            be = min(n, bs + batch_size)
-            waveforms = waveforms_all[bs:be]
-            n_batch = int(be-bs)
+            # invert TPCA for relocation
             if self.relocated:
-                waveforms = waveforms.transpose(0, 2, 1).reshape(n_batch * c, rank)
-                waveforms = self.tpca.inverse_transform(waveforms) #breaks here if too many waveforms
-                t = waveforms.shape[1]
-                waveforms = waveforms.reshape(n_batch, c, t).transpose(0, 2, 1)
-    
+                batch = batch.transpose(0, 2, 1).reshape(n_batch * c, rank)
+                batch = self.tpca.inverse_transform(batch)
+                t = batch.shape[1]
+                batch = batch.reshape(n_batch, c, t).transpose(0, 2, 1)
+
             # relocate or just restrict to channel subset
             if self.relocated:
-                waveforms = relocate.relocated_waveforms_on_static_channels(
-                    waveforms,
+                batch = relocate.relocated_waveforms_on_static_channels(
+                    batch,
                     main_channels=self.channels[in_unit][bs:be],
                     channel_index=self.channel_index,
                     target_channels=pca_channels,
@@ -331,40 +333,46 @@ class FeatureSplit(SplitStrategy):
                     z_to=self.z_reg[in_unit][bs:be],
                     geom=self.geom,
                     registered_geom=self.registered_geom,
+                    match_distance=self.match_distance,
                 )
             else:
-                waveforms = drift_util.get_waveforms_on_static_channels(
-                    waveforms,
+                batch = drift_util.get_waveforms_on_static_channels(
+                    batch,
                     self.geom,
                     main_channels=self.channels[in_unit][bs:be],
                     channel_index=self.channel_index,
                     target_channels=pca_channels,
                     n_pitches_shift=n_pitches_shift,
                     registered_geom=self.registered_geom,
+                    match_distance=self.match_distance,
                 )
-            # ravel t,c dims -- everything below is spatiotemporal
-            if bs==0:
-                wfs_out = np.empty((n, t*len(pca_channels)), dtype=waveforms.dtype)
-            wfs_out[bs:be] = waveforms.reshape(n_batch, t * waveforms.shape[2])
+
+            if waveforms is None:
+                waveforms = np.empty((in_unit.size, t * pca_channels.size), dtype=batch.dtype)
+            waveforms[bs:be] = batch.reshape(n_batch, -1)
 
         # figure out which waveforms actually overlap with the requested channels
-        no_nan = np.flatnonzero(~np.isnan(wfs_out).any(axis=1))
+        no_nan = np.flatnonzero(~np.isnan(waveforms).any(axis=1))
         if no_nan.size < max(self.min_cluster_size, self.n_pca_features):
             return False, no_nan, None
 
-        # fit pca and embed
-        pca = PCA(self.n_pca_features, random_state=self.random_state, whiten=True)
-        pca_projs = np.full((n, self.n_pca_features), np.nan, dtype=wfs_out.dtype)
-        
-        if len(no_nan)>max_pca_batch:
-            idx_pca = np.random.choice(no_nan, max_pca_batch, replace=False)
-            pca.fit(wfs_out[idx_pca])
-            for bs in range(0, len(no_nan), max_pca_batch):
-                be = min(len(no_nan), bs + max_pca_batch)
-                idx_pca = no_nan[bs:be]
-                pca_projs[idx_pca] = pca.transform(wfs_out[idx_pca])
-        else:
-            pca_projs[no_nan] = pca.fit_transform(wfs_out[no_nan])
+        # fit the per-cluster small rank PCA
+        pca = PCA(
+            self.n_pca_features,
+            random_state=np.random.RandomState(seed=self.rg.bit_generator),
+            whiten=True,
+        )
+        fit_indices = no_nan
+        if fit_indices.size > max_samples_pca:
+            fit_indices = self.rg.choice(fit_indices, size=max_samples_pca, replace=False)
+        pca.fit(waveforms[fit_indices])
+
+        # embed into the cluster's PCA space
+        pca_projs = np.full((waveforms.shape[0], self.n_pca_features), np.nan, dtype=waveforms.dtype)
+        for bs in range(0, no_nan.size, batch_size):
+            be = min(no_nan.size, bs + batch_size)
+            pca_projs[no_nan[bs:be]] = pca.transform(waveforms[no_nan[bs:be]])
+
         return True, no_nan, pca_projs
 
     def initialize_from_h5(
@@ -398,6 +406,7 @@ class FeatureSplit(SplitStrategy):
                 self.registered_channel_index = waveform_util.make_channel_index(
                     self.registered_geom, self.channel_selection_radius
                 )
+
         if (self.use_localization_features and self.relocated) or self.n_pca_features:
             self.amplitude_vectors = h5[amplitude_vectors_dataset_name]
 
@@ -410,7 +419,7 @@ class FeatureSplit(SplitStrategy):
         if self.n_pca_features:
             # don't load these one into memory, since it's a bit heavier
             self.tpca_features = h5[tpca_features_dataset_name]
-            # this is used to pick channel neighborhoods for PCA computation
+            self.match_distance = pdist(self.geom).min() / 2
 
         if self.n_pca_features and self.relocated:
             # load up featurization pipeline for tpca inversion
