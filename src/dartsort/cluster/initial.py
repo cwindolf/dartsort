@@ -24,6 +24,7 @@ def cluster_chunk(
     clustering_config,
     chunk_time_range_s=None,
     motion_est=None,
+    recording=None,
 ):
     """Cluster spikes from a single segment
 
@@ -70,7 +71,9 @@ def cluster_chunk(
         )
     elif clustering_config.cluster_strategy == "hdbscan":
         labels[in_chunk] = cluster_util.hdbscan_clustering(
+            recording,
             times_s[in_chunk],
+            times_samples[in_chunk],
             xyza[in_chunk, 0],
             xyza[in_chunk, 2],
             amps[in_chunk],
@@ -78,6 +81,7 @@ def cluster_chunk(
             motion_est,
             min_cluster_size=clustering_config.min_cluster_size,
             min_samples=clustering_config.min_samples,
+            log_c = clustering_config.log_c,
             cluster_selection_epsilon=clustering_config.cluster_selection_epsilon,
             scales=clustering_config.feature_scales,
             recursive=clustering_config.recursive,
@@ -141,6 +145,7 @@ def cluster_chunks(
             clustering_config,
             chunk_time_range_s=chunk_range,
             motion_est=motion_est,
+            recording=recording,
         )
         for chunk_range in chunk_time_ranges_s
     ]
