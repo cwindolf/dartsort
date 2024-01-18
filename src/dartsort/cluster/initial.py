@@ -81,6 +81,7 @@ def cluster_chunk(
             motion_est,
             min_cluster_size=clustering_config.min_cluster_size,
             min_samples=clustering_config.min_samples,
+            log_c = clustering_config.log_c,
             cluster_selection_epsilon=clustering_config.cluster_selection_epsilon,
             scales=clustering_config.feature_scales,
             recursive=clustering_config.recursive,
