@@ -8,4 +8,6 @@ dependencies:
   - tqdm
   - scikit-learn
   - hdbscan
+  - matplotlib
   - colorcet
+  - pytest

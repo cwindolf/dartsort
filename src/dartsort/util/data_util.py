@@ -94,14 +94,15 @@ class DARTsortSorting:
         channels_dataset="channels",
         labels_dataset="labels",
         load_simple_features=True,
+        labels=None,
     ):
-        channels = labels = None
+        channels = None
         with h5py.File(peeling_hdf5_filename, "r") as h5:
             times_samples = h5[times_samples_dataset][()]
             sampling_frequency = h5["sampling_frequency"][()]
             if channels_dataset in h5:
                 channels = h5[channels_dataset][()]
-            if labels_dataset in h5:
+            if labels_dataset in h5 and labels is None:
                 labels = h5[labels_dataset][()]
 
             n_spikes = len(times_samples)
