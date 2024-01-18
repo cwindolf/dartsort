@@ -64,7 +64,7 @@ def relocated_waveforms_on_static_channels(
     )
     rescaling = target_amplitudes / original_amplitudes
     shifted_waveforms *= rescaling[:, None, :]
-    
+
     if two_d:
         shifted_waveforms = shifted_waveforms[:, 0, :]
 
