@@ -34,9 +34,9 @@ def forward_backward(
     amps = chunk_sortings[0].denoised_amplitudes
     xyza = chunk_sortings[0].point_source_localizations
     x = xyza[:, 0]
-    z_reg = z_abs = xyza[:, 2]
+    z_reg = xyza[:, 2]
     if motion_est is not None:
-        z_reg = motion_est.correct_s(times_seconds, z_abs)
+        z_reg = motion_est.correct_s(times_seconds, z_reg)
 
     for k in trange(len(chunk_sortings) - 1, desc="Ensembling chunks"):
         # CHANGE THE 1 ---
@@ -179,7 +179,7 @@ def forward_backward(
         all_labels_1 = all_labels_1[all_labels_1 > -1]
 
         features_all_1 = np.c_[
-            np.median(x_1[labels_1 == all_labels_1[0]]),  # WHY [1]?
+            np.median(x_1[labels_1 == all_labels_1[0]]), 
             np.median(z_1[labels_1 == all_labels_1[0]]),
             np.median(amps_1[labels_1 == all_labels_1[0]]),
         ]
