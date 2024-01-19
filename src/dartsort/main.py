@@ -16,6 +16,13 @@ from dartsort.util.data_util import DARTsortSorting, check_recording
 from dartsort.util.peel_util import run_peeler
 
 
+def dartsort_from_config(
+    recording,
+    config_path,
+):
+    pass
+
+
 def dartsort(
     recording,
     output_directory,
@@ -164,8 +171,8 @@ def split_merge(
 
 def match(
     recording,
-    sorting,
-    output_directory,
+    sorting=None,
+    output_directory=None,
     motion_est=None,
     template_config=default_template_config,
     featurization_config=default_featurization_config,
@@ -181,6 +188,7 @@ def match(
     model_subdir="matching0_models",
     template_npz_filename="template_data.npz",
 ):
+    assert output_directory is not None
     model_dir = Path(output_directory) / model_subdir
 
     # compute templates
