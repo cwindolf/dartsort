@@ -128,6 +128,7 @@ class TemplateData:
             # load spike depths
             # TODO: relying on this index feels wrong
             spike_depths_um = sorting.extra_features[localizations_dataset_name][:, 2]
+            spike_x_um = sorting.extra_features[localizations_dataset_name][:, 0]
             geom = recording.get_channel_locations()
 
         kwargs = dict(
@@ -177,6 +178,8 @@ class TemplateData:
                 strategy=template_config.superres_strategy,
                 superres_bin_size_um=template_config.superres_bin_size_um,
                 min_spikes_per_bin=template_config.superres_bin_min_spikes,
+                spike_x_um=spike_x_um,
+                adaptive_bin_size=template_config.adaptive_bin_size,
             )
         else:
             # we don't skip empty units

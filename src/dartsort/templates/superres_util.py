@@ -14,6 +14,8 @@ def superres_sorting(
     superres_bin_size_um=10.0,
     min_spikes_per_bin=5,
     probe_margin_um=200.0,
+    spike_x_um=None,
+    adaptive_bin_size=False,
 ):
     """Construct the spatially superresolved spike train
 
@@ -78,6 +80,8 @@ def superres_sorting(
             pitch,
             motion_est,
             superres_bin_size_um=superres_bin_size_um,
+            spike_x_um=spike_x_um,
+            adaptive_bin_size=adaptive_bin_size,
         )
     elif strategy == "drift_pitch_loc_bin":
         superres_labels, superres_to_original = drift_pitch_loc_bin_strategy(
@@ -87,6 +91,8 @@ def superres_sorting(
             pitch,
             motion_est,
             superres_bin_size_um=superres_bin_size_um,
+            spike_x_um=spike_x_um,
+            adaptive_bin_size=adaptive_bin_size,
         )
     else:
         raise ValueError(f"Unknown superres {strategy=}")
@@ -109,6 +115,8 @@ def motion_estimate_strategy(
     pitch,
     motion_est,
     superres_bin_size_um=10.0,
+    spike_x_um=None, # x positions of all spikes
+    adaptive_bin_size=False,
 ):
     """ """
     # reg_pos = pos - disp, pos = reg_pos + disp
@@ -118,14 +126,34 @@ def motion_estimate_strategy(
     else:
         displacements = motion_est.disp_at_s(spike_times_s, spike_depths_um)
     mod_positions = displacements % pitch
-    bin_ids = mod_positions // superres_bin_size_um
-    bin_ids = bin_ids.astype(int)
-    orig_label_and_bin, superres_labels = np.unique(
-        np.c_[original_labels, bin_ids], axis=0, return_inverse=True
-    )
-    superres_to_original = orig_label_and_bin[:, 0]
-    return superres_labels, superres_to_original
-
+        
+    if not adaptive_bin_size:
+        bin_ids = mod_positions // superres_bin_size_um
+        bin_ids = bin_ids.astype(int)
+        orig_label_and_bin, superres_labels = np.unique(
+            np.c_[original_labels, bin_ids], axis=0, return_inverse=True
+        )
+        superres_to_original = orig_label_and_bin[:, 0]
+        return superres_labels, superres_to_original
+    else:
+        if spike_x_um is None: 
+            raise ValueError(f"Adaptive bin size with unknown cluster width")
+        else:
+            superres_labels, superres_to_original = np.zeros(original_labels.shape), []
+            cmp = 0
+            for unit in np.unique(original_labels):
+                idx_unit = np.flatnonzero(original_labels == unit)
+                x_spread = np.median(np.abs(spike_x_um[idx_unit] - np.median(spike_x_um[idx_unit])))/0.6745
+                unit_superres_bin_size_um = np.maximum(np.round(2*x_spread/pitch)*pitch/2, 1)
+                bin_ids = mod_positions[idx_unit] // unit_superres_bin_size_um
+                bin_ids = bin_ids.astype(int)
+                orig_label_and_bin, superres_labels_unit = np.unique(
+                    np.c_[original_labels[idx_unit], bin_ids], axis=0, return_inverse=True
+                )
+                superres_to_original.append(orig_label_and_bin[:, 0])
+                superres_labels[idx_unit] = superres_labels_unit+cmp
+                cmp+=superres_labels_unit.max()+1
+            return superres_labels.astype('int'), np.hstack(superres_to_original)
 
 def drift_pitch_loc_bin_strategy(
     original_labels,
@@ -134,19 +162,42 @@ def drift_pitch_loc_bin_strategy(
     pitch,
     motion_est,
     superres_bin_size_um=10.0,
+    spike_x_um=None,
+    adaptive_bin_size=False,
 ):
     n_pitches_shift = drift_util.get_spike_pitch_shifts(
         spike_depths_um, pitch=pitch, times_s=spike_times_s, motion_est=motion_est
     )
     coarse_reg_depths = spike_depths_um + n_pitches_shift * pitch
-    bin_ids = coarse_reg_depths // superres_bin_size_um
-    bin_ids = bin_ids.astype(int)
-    orig_label_and_bin, superres_labels = np.unique(
-        np.c_[original_labels, bin_ids], axis=0, return_inverse=True
-    )
-    superres_to_original = orig_label_and_bin[:, 0]
-    return superres_labels, superres_to_original
 
+    if not adaptive_bin_size:
+        bin_ids = coarse_reg_depths // superres_bin_size_um
+        bin_ids = bin_ids.astype(int)
+        orig_label_and_bin, superres_labels = np.unique(
+            np.c_[original_labels, bin_ids], axis=0, return_inverse=True
+        )
+        superres_to_original = orig_label_and_bin[:, 0]
+        return superres_labels, superres_to_original
+    else:
+        if spike_x_um is None: 
+            raise ValueError(f"Adaptive bin size with unknown cluster width")
+        else:
+            superres_labels, superres_to_original = np.zeros(original_labels.shape), []
+            cmp = 0
+            for unit in np.unique(original_labels):
+                idx_unit = np.flatnonzero(original_labels == unit)
+                x_spread = np.median(np.abs(spike_x_um[idx_unit] - np.median(spike_x_um[idx_unit])))/0.6745
+                unit_superres_bin_size_um = np.maximum(np.round(2*x_spread/pitch)*pitch/2, 1)
+            
+                bin_ids = coarse_reg_depths[idx_unit] // unit_superres_bin_size_um
+                bin_ids = bin_ids.astype(int)
+                orig_label_and_bin, superres_labels_unit = np.unique(
+                    np.c_[original_labels[idx_unit], bin_ids], axis=0, return_inverse=True
+                )
+                superres_to_original.append(orig_label_and_bin[:, 0])
+                superres_labels[idx_unit] = superres_labels_unit+cmp
+                cmp+=superres_labels_unit.max()+1
+            return superres_labels.astype('int'), np.hstack(superres_to_original)
 
 def remove_small_superres_units(
     superres_labels, superres_to_original, min_spikes_per_bin
