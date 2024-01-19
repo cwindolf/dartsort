@@ -84,6 +84,7 @@ def cluster_chunk(
             log_c = clustering_config.log_c,
             cluster_selection_epsilon=clustering_config.cluster_selection_epsilon,
             scales=clustering_config.feature_scales,
+            adaptive_feature_scales=clustering_config.adaptive_feature_scales,
             recursive=clustering_config.recursive,
             remove_duplicates=clustering_config.remove_duplicates,
         )
@@ -192,6 +193,7 @@ def ensemble_chunks(
             chunk_sortings,
             log_c=clustering_config.log_c,
             feature_scales=clustering_config.feature_scales,
+            adaptive_feature_scales=clustering_config.adaptive_feature_scales,
             motion_est=motion_est,
         )
         sorting = replace(chunk_sortings[0], labels=labels)
