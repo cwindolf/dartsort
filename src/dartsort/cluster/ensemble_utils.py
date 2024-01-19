@@ -8,6 +8,7 @@ def forward_backward(
     chunk_sortings,
     log_c=5,
     feature_scales=(1, 1, 50),
+    adaptive_feature_scales=False,
     motion_est=None,
 ):
     """
@@ -16,6 +17,8 @@ def forward_backward(
     """
     if len(chunk_sortings) == 1:
         return chunk_sortings[0]
+
+
 
     times_seconds = chunk_sortings[0].times_seconds
     times_samples = chunk_sortings[0].times_samples
@@ -35,6 +38,11 @@ def forward_backward(
     xyza = chunk_sortings[0].point_source_localizations
     x = xyza[:, 0]
     z_reg = xyza[:, 2]
+
+    if adaptive_feature_scales:
+        feature_scales = (1, 1, np.median(np.abs(x - np.median(x)))/np.median(np.abs(np.log(log_c + amps)-np.median(np.log(log_c + amps))))
+                 )
+
     if motion_est is not None:
         z_reg = motion_est.correct_s(times_seconds, z_reg)
 
