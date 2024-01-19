@@ -135,6 +135,7 @@ class TemplateConfig:
     superres_bin_size_um: float = 10.0
     superres_bin_min_spikes: int = 5
     superres_strategy: str = "drift_pitch_loc_bin"
+    adaptive_bin_size: bool = False
 
     # low rank denoising?
     low_rank_denoising: bool = True
@@ -180,8 +181,9 @@ class ClusteringConfig:
     min_samples: int = 25
     cluster_selection_epsilon: int = 1
     feature_scales: Tuple[float] = (1.0, 1.0, 50.0)
+    adaptive_feature_scales: bool = False
     log_c: float = 5.0
-    recursive: bool = True
+    recursive: bool = False
     remove_duplicates: bool = True
 
     # grid snap parameters

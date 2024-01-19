@@ -60,6 +60,7 @@ def hdbscan_clustering(
     min_samples=25,
     cluster_selection_epsilon=1,
     scales=(1, 1, 50),
+    adaptive_feature_scales=False,
     log_c=5,
     recursive=True,
     remove_duplicates=True,
@@ -74,6 +75,10 @@ def hdbscan_clustering(
         z_reg = z_abs
     else:
         z_reg = motion_est.correct_s(times_seconds, z_abs)
+
+    if adaptive_feature_scales:
+        scales = (1, 1, np.median(np.abs(x - np.median(x)))/np.median(np.abs(np.log(log_c + amps)-np.median(np.log(log_c + amps))))
+                 )
 
     features = np.c_[x * scales[0], z_reg * scales[1], np.log(log_c + amps) * scales[2]]
     if features.shape[1]>=features.shape[0]:
