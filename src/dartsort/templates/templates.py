@@ -105,6 +105,11 @@ class TemplateData:
             if npz_path.exists() and not overwrite:
                 return cls.from_npz(npz_path)
 
+        if sorting is None:
+            raise ValueError(
+                "TemplateData.from_config needs sorting!=None when its .npz file does not exist."
+            )
+
         motion_aware = (
             template_config.registered_templates or template_config.superres_templates
         )

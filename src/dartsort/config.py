@@ -62,6 +62,10 @@ class FeaturizationConfig:
     are computed for the input waveforms, what denoising
     operations are applied, and what features are computed
     for the output (post-denoising) waveforms.
+
+    Users who'd rather do something not covered by this
+    typical case can manually instantiate a WaveformPipeline
+    and pass it into their peeler.
     """
 
     # -- denoising configuration
