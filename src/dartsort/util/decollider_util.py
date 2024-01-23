@@ -1,4 +1,9 @@
+"""
+Note: a lot of the waveforms in this file are NCT rather than NTC, because this
+is the expected input format for conv1ds.
+"""
 import logging
+import time
 from dataclasses import dataclass
 from typing import Optional
 
@@ -51,13 +56,16 @@ def hybrid_train(
     logger = logging.getLogger("decollider:hybrid_train")
 
     # initial validation
-    train_losses = []
+    train_records = []
     val_records = []
 
     opt = torch.optim.Adam(net.parameters())
     criterion = loss_class()
+    examples_seen = 0
     with logging_redirect_tqdm(loggers=(logger,), tqdm_class=tqdm):
         for epoch in trange(max_n_epochs):
+            epoch_dt = 0.0
+
             # get data
             epoch_data = load_epoch_hybrid(
                 recordings,
@@ -75,12 +83,16 @@ def hybrid_train(
 
             # train
             for i0 in range(0, len(epoch_data.waveforms) - batch_size, batch_size):
+                tic = time.perf_counter()
+
                 i1 = i0 + batch_size
                 noised_batch = epoch_data.noised_waveforms[i0:i1]
                 target_batch = epoch_data.waveforms[i0:i1]
                 masks = None
                 if epoch_data.channel_masks is not None:
-                    masks = torch.nonzero(epoch_data.channel_masks[i0:i1], as_tuple=True)
+                    masks = torch.nonzero(
+                        epoch_data.channel_masks[i0:i1], as_tuple=True
+                    )
 
                 opt.zero_grad()
                 pred = net(noised_batch, channel_masks=masks)
@@ -90,7 +102,22 @@ def hybrid_train(
                 loss = criterion(pred, target_batch)
                 loss.backward()
                 opt.step()
-                train_losses.append(loss.numpy(force=True))
+
+                toc = time.perf_counter()
+                batch_dt = toc - tic
+
+                train_records.append(
+                    dict(
+                        loss=loss.numpy(force=True),
+                        wall_dt_s=batch_dt,
+                        epoch=epoch,
+                        samples=examples_seen,
+                    )
+                )
+
+                # learning trackers
+                examples_seen += noised_batch.shape[0]
+                epoch_dt += batch_dt
 
             # evaluate
             val_record = evaluate_hybrid(
@@ -109,6 +136,7 @@ def hybrid_train(
                 summarize=True,
             )
             val_record["epoch"] = epoch
+            val_record["epoch_wall_dt_s"] = epoch_dt
             val_records.append(val_record)
             logger.info(", ".join(f"{k}: {v:0.3f}" for k, v in val_record.items()))
 
@@ -125,8 +153,8 @@ def hybrid_train(
                 )
 
     validation_dataframe = pd.DataFrame.from_records(val_records)
-    train_losses = np.array(train_losses)
-    return net, train_losses, validation_dataframe
+    training_dataframe = pd.DataFrame.from_records(train_records)
+    return net, training_dataframe, validation_dataframe
 
 
 # -- data helpers
