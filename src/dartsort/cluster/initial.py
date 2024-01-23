@@ -87,6 +87,8 @@ def cluster_chunk(
             adaptive_feature_scales=clustering_config.adaptive_feature_scales,
             recursive=clustering_config.recursive,
             remove_duplicates=clustering_config.remove_duplicates,
+            remove_big_units = clustering_config.remove_big_units,
+            zstd_big_units = clustering_config.zstd_big_units,
         )
     else:
         assert False
