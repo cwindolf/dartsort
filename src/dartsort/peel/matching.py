@@ -834,34 +834,37 @@ class MatchingTemplateData:
         upsampling_indices,
         scalings,
         conv_pad_len=0,
+        batch_size=256,
     ):
-        # TODO: may need to batch this.
-        (
-            template_indices_a,
-            template_indices_b,
-            times,
-            pconvs,
-        ) = self.pairwise_conv_db.query(
-            template_indices_a=None,
-            template_indices_b=template_indices,
-            upsampling_indices_b=upsampling_indices,
-            scalings_b=scalings,
-            times_b=times,
-            grid=True,
-            device=conv.device,
-            shifts_a=self.shifts_a,
-            shifts_b=self.shifts_b[template_indices]
-            if self.shifts_b is not None
-            else None,
-        )
-        ix_template = template_indices_a[:, None]
-        ix_time = times[:, None] + (conv_pad_len + self.conv_lags)[None, :]
-        spiketorch.add_at_(
-            conv,
-            (ix_template, ix_time),
-            pconvs,
-            sign=-1,
-        )
+        n_spikes = times.shape[0]
+        for batch_start in range(0, n_spikes, batch_size):
+            batch_end = min(batch_start + batch_size, n_spikes)
+            (
+                template_indices_a,
+                template_indices_b,
+                times_sub,
+                pconvs,
+            ) = self.pairwise_conv_db.query(
+                template_indices_a=None,
+                template_indices_b=template_indices[batch_start:batch_end],
+                upsampling_indices_b=upsampling_indices[batch_start:batch_end],
+                scalings_b=scalings[batch_start:batch_end],
+                times_b=times[batch_start:batch_end],
+                grid=True,
+                device=conv.device,
+                shifts_a=self.shifts_a,
+                shifts_b=self.shifts_b[template_indices[batch_start:batch_end]]
+                if self.shifts_b is not None
+                else None,
+            )
+            ix_template = template_indices_a[:, None]
+            ix_time = times_sub[:, None] + (conv_pad_len + self.conv_lags)[None, :]
+            spiketorch.add_at_(
+                conv,
+                (ix_template, ix_time),
+                pconvs,
+                sign=-1,
+            )
 
     def fine_match(
         self,
