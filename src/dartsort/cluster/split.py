@@ -20,8 +20,11 @@ def split_clusters(
     split_strategy="FeatureSplit",
     split_strategy_kwargs=None,
     recursive=False,
+    split_big=False,
+    split_big_kw=dict(dz=40, dx=48, min_size_split=50),
     show_progress=True,
     n_jobs=0,
+    max_size_wfs=None,
 ):
     """Parallel split step runner function
 
@@ -54,7 +57,7 @@ def split_clusters(
         initargs=(split_strategy, split_strategy_kwargs),
     ) as pool:
         iterator = jobs = [
-            pool.submit(_split_job, np.flatnonzero(labels == i))
+            pool.submit(_split_job, np.flatnonzero(labels == i), max_size_wfs)
             for i in labels_to_process
         ]
         if show_progress:
@@ -83,9 +86,19 @@ def split_clusters(
             if recursive:
                 new_units = np.unique(new_untriaged_labels)
                 for i in new_units:
-                    jobs.append(pool.submit(_split_job, np.flatnonzero(labels == i)))
+                    jobs.append(pool.submit(_split_job, np.flatnonzero(labels == i), max_size_wfs))
                 if show_progress:
                     iterator.total += len(new_units)
+            elif split_big:
+                new_units = np.unique(new_untriaged_labels)
+                for i in new_units:
+                    idx = np.flatnonzero(new_untriaged_labels == i)
+                    tall = split_result.x[idx].ptp() > split_big_kw['dx']
+                    wide = split_result.z_reg[idx].ptp() > split_big_kw['dx']
+                    if (tall or wide) and len(idx) > split_big_kw['min_size_split']:
+                        jobs.append(pool.submit(_split_job, np.flatnonzero(labels == i), max_size_wfs))
+                        if show_progress:
+                            iterator.total += 1
 
     new_sorting = replace(sorting, labels=labels)
     return new_sorting
@@ -108,6 +121,8 @@ class SplitResult:
     is_split: bool = False
     in_unit: Optional[np.ndarray] = None
     new_labels: Optional[np.ndarray] = None
+    x: Optional[np.ndarray] = None
+    z_reg: Optional[np.ndarray] = None
 
     def __post_init__(self):
         """Runs after a SplitResult is constructed, check valid"""
@@ -149,6 +164,7 @@ class FeatureSplit(SplitStrategy):
         min_samples=25,
         cluster_selection_epsilon=25,
         reassign_outliers=False,
+        max_size_wfs=None,
         random_state=0,
         **dataset_name_kwargs,
     ):
@@ -199,6 +215,8 @@ class FeatureSplit(SplitStrategy):
         self.min_samples = min_samples
         self.cluster_selection_epsilon = cluster_selection_epsilon
 
+        self.max_size_wfs = max_size_wfs
+
         # load up the required h5 datasets
         self.initialize_from_h5(
             peeling_hdf5_filename,
@@ -206,8 +224,19 @@ class FeatureSplit(SplitStrategy):
             **dataset_name_kwargs,
         )
 
-    def split_cluster(self, in_unit):
-        n_spikes = in_unit.size
+    def split_cluster(self, in_unit_all, max_size_wfs):
+        
+        
+        n_spikes = in_unit_all.size
+        if max_size_wfs is not None and n_spikes > max_size_wfs:
+            #TODO: max_size_wfs could be chosen automatically based on available memory and number of spikes
+            idx_subsample = np.random.choice(n_spikes, max_size_wfs, replace=False)
+            idx_subsample.sort()
+            in_unit = in_unit_all[idx_subsample]
+            subsampling = True
+        else: 
+            in_unit = in_unit_all
+            subsampling = False
         if n_spikes < self.min_cluster_size:
             return SplitResult()
 
@@ -256,9 +285,12 @@ class FeatureSplit(SplitStrategy):
         new_labels = None
         if is_split:
             new_labels = np.full(n_spikes, -1)
-            new_labels[kept] = hdb_labels
+            if not subsampling:
+                new_labels[kept] = hdb_labels
+            else:
+                new_labels[idx_subsample[kept]] = hdb_labels
 
-        return SplitResult(is_split=is_split, in_unit=in_unit, new_labels=new_labels)
+        return SplitResult(is_split=is_split, in_unit=in_unit_all, new_labels=new_labels, x=loc_features[:, 0], z_reg=loc_features[:, 1])
 
     def get_registered_channels(self, in_unit):
         n_pitches_shift = drift_util.get_spike_pitch_shifts(
@@ -348,7 +380,7 @@ class FeatureSplit(SplitStrategy):
                 )
 
             if waveforms is None:
-                waveforms = np.empty((in_unit.size, t * pca_channels.size), dtype=batch.dtype)
+                waveforms = np.empty((in_unit.size, t * pca_channels.size), dtype=batch.dtype) #POTENTIALLY WAY TOO BIG
             waveforms[bs:be] = batch.reshape(n_batch, -1)
 
         # figure out which waveforms actually overlap with the requested channels
@@ -455,8 +487,8 @@ def _split_job_init(split_strategy_class_name, split_strategy_kwargs):
     _split_job_context = SplitJobContext(split_strategy(**split_strategy_kwargs))
 
 
-def _split_job(in_unit):
-    return _split_job_context.split_strategy.split_cluster(in_unit)
+def _split_job(in_unit, max_size_wfs):
+    return _split_job_context.split_strategy.split_cluster(in_unit, max_size_wfs)
 
 
 # -- h5 helper... slow reading...
