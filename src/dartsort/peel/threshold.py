@@ -6,13 +6,13 @@ from .peel_base import BasePeeler
 
 
 class ThresholdAndFeaturize(BasePeeler):
-    peel_kind = "Subtraction"
+    peel_kind = "Threshold"
 
     def __init__(
         self,
         recording,
         channel_index,
-        featurization_pipeline,
+        featurization_pipeline=None,
         trough_offset_samples=42,
         spike_length_samples=121,
         detection_threshold=5.0,
