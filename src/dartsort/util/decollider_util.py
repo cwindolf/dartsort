@@ -293,7 +293,7 @@ def load_epoch_hybrid(
     )
 
 
-@torch.no_grad
+@torch.no_grad()
 def evaluate_hybrid(
     net,
     recordings,

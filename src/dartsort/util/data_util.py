@@ -1,5 +1,5 @@
 from collections import namedtuple
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Optional
 from warnings import warn
 
@@ -33,10 +33,11 @@ class DARTsortSorting:
     If you instantiate with __init__(), you can pass these in with
     `extra_features`, and they will also be available as .properties.
     """
-    times_samples : np.ndarray
-    channels : np.ndarray
-    labels : Optional[np.ndarray] = None
-    sampling_frequency : Optional[float] = 30_000.0
+
+    times_samples: np.ndarray
+    channels: np.ndarray
+    labels: Optional[np.ndarray] = None
+    sampling_frequency: Optional[float] = 30_000.0
     # entries in this dictionary will also be set as properties
     extra_features: Optional[dict[str, np.ndarray]] = None
 
@@ -109,7 +110,11 @@ class DARTsortSorting:
             extra_features = None
             if load_simple_features:
                 extra_features = {}
-                loaded = (times_samples_dataset, channels_dataset, labels_dataset)
+                loaded = (
+                    times_samples_dataset,
+                    channels_dataset,
+                    labels_dataset,
+                )
                 for k in h5:
                     if (
                         k not in loaded
@@ -185,3 +190,40 @@ def check_recording(
         failed = True
 
     return failed, avg_detections_per_second, max_abs
+
+
+def subset_sorting_by_spike_count(sorting, min_spikes=0):
+    if not min_spikes:
+        return sorting
+
+    units, counts = np.unique(sorting.labels, return_counts=True)
+    small_units = units[counts < min_spikes]
+
+    new_labels = np.where(
+        np.isin(sorting.labels, small_units), -1, sorting.labels
+    )
+
+    return replace(sorting, labels=new_labels)
+
+
+def subset_sorting_by_time_samples(
+    sorting, start_sample=0, end_sample=np.inf, reference_to_start_sample=True
+):
+    new_times = sorting.times_samples.copy()
+    new_labels = sorting.labels.copy()
+
+    in_range = (new_times >= start_sample) & (new_times < end_sample)
+    print(in_range.sum())
+    new_labels[~in_range] = -1
+
+    if reference_to_start_sample:
+        new_times -= start_sample
+
+    return replace(sorting, labels=new_labels, times_samples=new_times)
+
+
+def reindex_sorting_labels(sorting):
+    new_labels = sorting.labels.copy()
+    kept = np.flatnonzero(new_labels >= 0)
+    _, new_labels[kept] = np.unique(new_labels[kept], return_inverse=True)
+    return replace(sorting, labels=new_labels)
