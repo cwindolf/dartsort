@@ -27,6 +27,7 @@ def hybrid_train(
     channel_jitter_index=None,
     examples_per_epoch=10_000,
     noise_same_chans=False,
+    noise2_alpha=1.0,
     trough_offset_samples=42,
     data_random_seed=0,
     noise_max_amplitude=np.inf,
@@ -75,6 +76,7 @@ def hybrid_train(
                 channel_jitter_index=channel_jitter_index,
                 examples_per_epoch=examples_per_epoch,
                 noise_same_chans=noise_same_chans,
+                noise2_alpha=noise2_alpha,
                 trough_offset_samples=trough_offset_samples,
                 data_random_seed=rg,
                 noise_max_amplitude=noise_max_amplitude,
@@ -129,6 +131,7 @@ def hybrid_train(
                 channel_min_amplitude=channel_min_amplitude,
                 channel_jitter_index=channel_jitter_index,
                 noise_same_chans=noise_same_chans,
+                noise2_alpha=noise2_alpha,
                 trough_offset_samples=trough_offset_samples,
                 data_random_seed=rg,
                 noise_max_amplitude=noise_max_amplitude,
@@ -181,6 +184,7 @@ def load_epoch_hybrid(
     examples_per_epoch=10_000,
     n_oversamples=1,
     noise_same_chans=False,
+    noise2_alpha=1.0,
     trough_offset_samples=None,
     data_random_seed=0,
     noise_max_amplitude=np.inf,
@@ -275,6 +279,7 @@ def load_epoch_hybrid(
         dtype=gt_waveforms.dtype,
         rg=rg,
         to_torch=True,
+        alpha=noise2_alpha,
     )
     noised_waveforms += waveforms
 
@@ -301,6 +306,7 @@ def evaluate_hybrid(
     trough_offset_samples=None,
     data_random_seed=0,
     noise_max_amplitude=np.inf,
+    noise2_alpha=1.0,
     device=None,
     summarize=True,
 ):
@@ -313,42 +319,66 @@ def evaluate_hybrid(
         examples_per_epoch=None,
         n_oversamples=n_oversamples,
         noise_same_chans=noise_same_chans,
+        noise2_alpha=noise2_alpha,
         trough_offset_samples=trough_offset_samples,
         data_random_seed=data_random_seed,
         noise_max_amplitude=noise_max_amplitude,
         device=device,
     )
 
-    # supervised task: predict gt_wf from wf
-    preds_sup = net(val_data.waveforms)
-    sup_max_err = torch.abs(preds_sup - val_data.gt_waveforms).max(dim=(1, 2)).values
+    # supervised task: predict gt_wf (template) from wf (template + noise)
+    template_preds_naive = net(val_data.waveforms)
+    naive_sup_max_err = torch.abs(template_preds_naive - val_data.gt_waveforms).max(dim=(1, 2)).values
 
-    # unsupervised task: predict wf from noised_wf
-    preds_unsup = net(val_data.noised_waveforms)
+    # noisier2noise prediction of templates
+    template_preds_n2n = net.n2n_predict(val_data.noised_waveforms, channel_masks=val_data.channel_masks, alpha=noise2_alpha)
+    n2n_sup_max_err = torch.abs(template_preds_naive - val_data.gt_waveforms).max(dim=(1, 2)).values
+
+    # unsupervised task for learning: predict wf from noised_wf
+    preds_noised = net(val_data.noised_waveforms)
 
     if summarize:
-        sup_mean_max_err = sup_max_err.mean()
-        sup_mse = F.mse_loss(preds_sup, val_data.gt_waveforms)
-        unsup_mse = F.mse_loss(preds_unsup, val_data.waveforms)
+        naive_template_mean_max_err = naive_sup_max_err.mean()
+        naive_template_mse = F.mse_loss(template_preds_naive, val_data.gt_waveforms)
+
+        n2n_template_mean_max_err = n2n_sup_max_err.mean()
+        n2n_template_mse = F.mse_loss(template_preds_n2n, val_data.gt_waveforms)
+
+        val_loss = F.mse_loss(preds_noised, val_data.waveforms)
         return dict(
-            sup_mean_max_err=sup_mean_max_err,
-            sup_mse=sup_mse,
-            unsup_mse=unsup_mse,
+            naive_template_mean_max_err=naive_template_mean_max_err,
+            naive_template_mse=naive_template_mse,
+            n2n_template_mean_max_err=n2n_template_mean_max_err,
+            n2n_template_mse=n2n_template_mse,
+            val_loss=val_loss,
         )
 
     # more detailed per-example comparisons
+    # break down some covariates
     gt_amplitude = templates.ptp(1)[val_data.which, val_data.channels]
-    noise_amplitude = val_data.waveforms - val_data.gt_waveforms
-    diff = preds_sup - val_data.gt_waveforms
-    sup_mse = torch.square(diff).mean(dim=(1, 2))
-    sup_max_err = torch.abs(diff).max(dim=(1, 2)).values
+    noise1_norm = torch.linalg.norm(val_data.waveforms - val_data.gt_waveforms, dim=(1, 2))
+    noise2_norm = torch.linalg.norm(val_data.noised_waveforms - val_data.waveforms, dim=(1, 2))
+
+    # errors for naive template prediction
+    naive_diff = template_preds_naive - val_data.gt_waveforms
+    naive_template_mse = torch.square(naive_diff).mean(dim=(1, 2))
+    naive_template_max_err = torch.abs(naive_diff).max(dim=(1, 2)).values
+
+    # errors for noisier2noise template prediction
+    n2n_diff = template_preds_n2n - val_data.gt_waveforms
+    n2n_template_mse = torch.square(n2n_diff).mean(dim=(1, 2))
+    n2n_template_max_err = torch.abs(n2n_diff).max(dim=(1, 2)).values
+
     return pd.DataFrame(
         dict(
             template_indices=val_data.template_indices,
             gt_amplitude=gt_amplitude.numpy(force=True),
-            noise_amplitude=noise_amplitude.numpy(force=True),
-            sup_mse=sup_mse.numpy(force=True),
-            sup_max_err=sup_max_err.numpy(force=True),
+            noise1_norm=noise1_norm.numpy(force=True),
+            noise2_norm=noise2_norm.numpy(force=True),
+            naive_template_mse=naive_template_mse.numpy(force=True),
+            naive_template_max_err=naive_template_max_err.numpy(force=True),
+            n2n_template_mse=n2n_template_mse.numpy(force=True),
+            n2n_template_max_err=n2n_template_max_err.numpy(force=True),
         )
     )
 
@@ -365,6 +395,7 @@ def load_noise(
     n=100,
     max_abs_amp=np.inf,
     dtype=None,
+    alpha=1.0,
     rg=0,
     to_torch=True,
 ):
@@ -390,6 +421,7 @@ def load_noise(
             max_abs_amp=max_abs_amp,
             dtype=dtype,
             rg=rg,
+            alpha=alpha,
             to_torch=False,
         )
 
@@ -408,6 +440,7 @@ def load_noise_singlerec(
     channel_index=None,
     n=100,
     max_abs_amp=np.inf,
+    alpha=1.0,
     dtype=None,
     rg=0,
     to_torch=True,
@@ -456,6 +489,9 @@ def load_noise_singlerec(
 
         noise[needs_load_ix] = wfs[np.argsort(order)]
         needs_load_ix = np.nanmax(np.abs(noise)) > max_abs_amp
+
+    if alpha != 1.0:
+        noise *= alpha
 
     if to_torch:
         device = "cuda" if torch.cuda.is_available() else "cpu"

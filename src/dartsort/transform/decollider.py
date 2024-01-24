@@ -27,6 +27,18 @@ class Decollider(nn.Module):
         self.load_state_dict(data, map_location="cpu")
         return self
 
+    def n2n_predict(self, noisier_waveforms, channel_masks=None, alpha=1.0):
+        """See Noisier2Noise paper. This is their Eq. 6.
+
+        If you plan to use this at inference time, then multiply your noise2 during
+        training by alpha.
+        """
+        expected_noisy_waveforms = self.forward(noisier_waveforms, channel_masks=channel_masks)
+        if alpha == 1.0:
+            return 2.0 * expected_noisy_waveforms - noisier_waveforms
+        alpha2 = alpha * alpha
+        return ((1.0 + alpha2) * expected_noisy_waveforms - noisier_waveforms) / alpha2
+
 
 # -- single channel decolliders
 
@@ -34,7 +46,7 @@ class Decollider(nn.Module):
 class SingleChannelDecollider(Decollider):
     """N1T -> N1T"""
 
-    def forward(self, waveforms):
+    def forward(self, waveforms, channel_masks=None):
         return self.net(waveforms)
 
 
@@ -88,7 +100,7 @@ class MultiChannelDecollider(Decollider):
     masks      NC   ->  N1C1 -> N2CT (broadcast and concat)
     """
 
-    def forward(self, waveforms, channel_masks):
+    def forward(self, waveforms, channel_masks=None):
         # add the masks as an input channel
         # I somehow feel that receiving a "badness indicator" is more useful,
         # and the masks indicate good channels, so hence the flip below
