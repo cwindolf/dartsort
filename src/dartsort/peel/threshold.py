@@ -1,13 +1,6 @@
-from collections import namedtuple
-from pathlib import Path
-
-import h5py
 import torch
-import torch.nn.functional as F
 from dartsort.detect import detect_and_deduplicate
-from dartsort.transform import Waveform, WaveformPipeline
 from dartsort.util import spiketorch
-from dartsort.util.waveform_util import make_channel_index
 
 from .peel_base import BasePeeler
 
