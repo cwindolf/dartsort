@@ -1,0 +1,100 @@
+from collections import namedtuple
+from pathlib import Path
+
+import h5py
+import torch
+import torch.nn.functional as F
+from dartsort.detect import detect_and_deduplicate
+from dartsort.transform import Waveform, WaveformPipeline
+from dartsort.util import spiketorch
+from dartsort.util.waveform_util import make_channel_index
+
+from .peel_base import BasePeeler
+
+
+class ThresholdAndFeaturize(BasePeeler):
+    peel_kind = "Subtraction"
+
+    def __init__(
+        self,
+        recording,
+        channel_index,
+        featurization_pipeline,
+        trough_offset_samples=42,
+        spike_length_samples=121,
+        detection_threshold=5.0,
+        chunk_length_samples=30_000,
+        peak_sign="both",
+        spatial_dedup_channel_index=None,
+        n_chunks_fit=40,
+        fit_subsampling_random_state=0,
+    ):
+        super().__init__(
+            recording=recording,
+            channel_index=channel_index,
+            featurization_pipeline=featurization_pipeline,
+            chunk_length_samples=chunk_length_samples,
+            chunk_margin_samples=spike_length_samples,
+            n_chunks_fit=n_chunks_fit,
+            fit_subsampling_random_state=fit_subsampling_random_state,
+        )
+
+        self.trough_offset_samples = trough_offset_samples
+        self.spike_length_samples = spike_length_samples
+        self.peak_sign = peak_sign
+        if spatial_dedup_channel_index is not None:
+            self.register_buffer(
+                "spatial_dedup_channel_index",
+                spatial_dedup_channel_index,
+            )
+        else:
+            self.spatial_dedup_channel_index = None
+        self.detection_threshold = detection_threshold
+
+    def peel_chunk(
+        self,
+        traces,
+        chunk_start_samples=0,
+        left_margin=0,
+        right_margin=0,
+        return_residual=False,
+    ):
+        times_rel, channels = detect_and_deduplicate(
+            traces,
+            self.detection_threshold,
+            dedup_channel_index=self.spatial_dedup_channel_index,
+            peak_sign=self.peak_sign,
+        )
+        if not times_rel.numel():
+            return dict(n_spikes=0)
+
+        # want only peaks in the chunk
+        max_time = traces.shape[0] - right_margin
+        valid = (times_rel >= left_margin) & (times_rel < max_time)
+        times_rel = times_rel[valid]
+        if not times_rel.numel():
+            return dict(n_spikes=0)
+        channels = channels[valid]
+
+        # load up the waveforms for this chunk
+        waveforms = spiketorch.grab_spikes(
+            traces,
+            times_rel,
+            channels,
+            self.channel_index,
+            trough_offset=self.trough_offset_samples,
+            spike_length_samples=self.spike_length_samples,
+            already_padded=False,
+            pad_value=torch.nan,
+        )
+
+        # get absolute times
+        times_samples = times_rel + chunk_start_samples - left_margin
+
+        peel_result = dict(
+            n_spikes=times_rel.numel(),
+            times_samples=times_samples,
+            channels=channels,
+            collisioncleaned_waveforms=waveforms,
+        )
+        return peel_result

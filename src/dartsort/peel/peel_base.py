@@ -28,7 +28,7 @@ class BasePeeler(torch.nn.Module):
         self,
         recording,
         channel_index,
-        featurization_pipeline,
+        featurization_pipeline=None,
         chunk_length_samples=30_000,
         chunk_margin_samples=0,
         n_chunks_fit=40,
@@ -46,7 +46,10 @@ class BasePeeler(torch.nn.Module):
             fit_subsampling_random_state
         )
         self.register_buffer("channel_index", channel_index)
-        self.add_module("featurization_pipeline", featurization_pipeline)
+        if featurization_pipeline is not None:
+            self.add_module("featurization_pipeline", featurization_pipeline)
+        else:
+            self.featurization_pipeline = None
 
         # subclasses can append to this if they want to store more fixed
         # arrays in the output h5 file
@@ -237,9 +240,10 @@ class BasePeeler(torch.nn.Module):
             SpikeDataset(name="times_seconds", shape_per_spike=(), dtype=float),
             SpikeDataset(name="channels", shape_per_spike=(), dtype=int),
         ]
-        for transformer in self.featurization_pipeline.transformers:
-            if transformer.is_featurizer:
-                datasets.append(transformer.spike_dataset)
+        if self.featurization_pipeline is not None:
+            for transformer in self.featurization_pipeline.transformers:
+                if transformer.is_featurizer:
+                    datasets.append(transformer.spike_dataset)
         return datasets
 
     # -- utility methods which users likely won't touch
@@ -247,6 +251,9 @@ class BasePeeler(torch.nn.Module):
     def featurize_collisioncleaned_waveforms(
         self, collisioncleaned_waveforms, max_channels
     ):
+        if self.featurization_pipeline is None:
+            return {}
+
         waveforms, features = self.featurization_pipeline(
             collisioncleaned_waveforms, max_channels
         )
@@ -329,7 +336,10 @@ class BasePeeler(torch.nn.Module):
         return n_new_spikes
 
     def needs_fit(self):
-        return self.peeling_needs_fit() or self.featurization_pipeline.needs_fit()
+        it_does = self.peeling_needs_fit()
+        if self.featurization_pipeline is not None:
+            it_does = it_does or self.featurization_pipeline.needs_fit()
+        return it_does
 
     def fit_models(self, save_folder, overwrite=False, n_jobs=0, device=None):
         with torch.no_grad():
@@ -349,6 +359,9 @@ class BasePeeler(torch.nn.Module):
         assert not self.needs_fit()
 
     def fit_featurization_pipeline(self, save_folder, n_jobs=0, device=None):
+        if self.featurization_pipeline is None:
+            return
+
         if not self.featurization_pipeline.needs_fit():
             return
 
