@@ -62,8 +62,11 @@ class ThresholdAndFeaturize(BasePeeler):
             return dict(n_spikes=0)
 
         # want only peaks in the chunk
-        max_time = traces.shape[0] - right_margin
-        valid = (times_rel >= left_margin) & (times_rel < max_time)
+        min_time = max(left_margin, self.spike_length_samples)
+        max_time = traces.shape[0] - max(
+            right_margin, self.spike_length_samples - self.trough_offset_samples
+        )
+        valid = (times_rel >= min_time) & (times_rel < max_time)
         times_rel = times_rel[valid]
         if not times_rel.numel():
             return dict(n_spikes=0)
