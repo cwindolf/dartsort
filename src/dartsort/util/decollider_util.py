@@ -77,10 +77,10 @@ def hybrid_train(
     # the NaNs inform masking below
     # these are also padded with an extra channel of NaNs, to help
     # with indexing below
-    templates_train, templates_train_recording_origin = combine_templates(
+    templates_train, templates_train_recording_origin, original_train_template_index = combine_templates(
         templates_train, channel_subsets
     )
-    templates_val, templates_val_recording_origin = combine_templates(
+    templates_val, templates_val_recording_origin, original_val_template_index = combine_templates(
         templates_val, channel_subsets
     )
 
@@ -154,6 +154,7 @@ def hybrid_train(
                 recordings,
                 templates_val=templates_val,
                 template_recording_origin=templates_val_recording_origin,
+                original_template_index=original_val_template_index,
                 n_oversamples=validation_oversamples,
                 channel_index=channel_index,
                 channel_subsets=channel_subsets,
@@ -289,6 +290,7 @@ def evaluate(
     detection_times=None,
     detection_channels=None,
     template_recording_origin=None,
+    original_template_index=None,
     n_oversamples=1,
     channel_index=None,
     channel_min_amplitude=0.0,
@@ -385,7 +387,9 @@ def evaluate(
 
     return pd.DataFrame(
         dict(
-            template_indices=val_data.template_indices,
+            combined_template_index=val_data.template_indices,
+            recording_index=template_recording_origin[val_data.template_indices],
+            original_template_index=original_template_index[val_data.template_indices],
             gt_amplitude=gt_amplitude.numpy(force=True),
             noise1_norm=noise1_norm.numpy(force=True),
             noise2_norm=noise2_norm.numpy(force=True),
@@ -669,3 +673,12 @@ def combine_templates(templates, channel_subsets):
 
     combined = np.full((n, c + 1, t), fill_value=np.nan, dtype=templates[0].dtype)
     template_recording_origin = np.zeros(n, dtype=int)
+    original_template_index = np.zeros(n, dtype=int)
+    i = 0
+    for r, (temps, subset) in enumerate(zip(templates, channel_subsets)):
+        j = i + temps.shape[0]
+        template_recording_origin[i:j] = r
+        original_template_index[i:j] = np.arange(j - i)
+        combined[i:j, subset] = temps
+
+    return combined, template_recording_origin, original_template_index
