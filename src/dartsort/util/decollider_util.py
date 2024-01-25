@@ -14,7 +14,7 @@ import torch.nn.functional as F
 from tqdm.auto import tqdm, trange
 from tqdm.contrib.logging import logging_redirect_tqdm
 
-from ..transform.Decollider import Decollider
+from ..transform.Decollider import SingleChannelPredictor
 from ..transform.single_channel_denoiser import SingleChannelDenoiser
 from . import spikeio
 
@@ -29,7 +29,6 @@ def train_decollider(
     detection_times_val=None,
     detection_channels_val=None,
     channel_index=None,
-    recording_channel_indices=None,
     channel_min_amplitude=0.0,
     channel_jitter_index=None,
     examples_per_epoch=10_000,
@@ -77,8 +76,8 @@ def train_decollider(
     val_records = []
 
     # allow training on recordings with different channels missing
-    recording_channel_indices, channel_subsets = reconcile_channels(
-        recordings, channel_index, recording_channel_indices
+    n_channels_full, recording_channel_indices, channel_subsets = reconcile_channels(
+        recordings, channel_index
     )
 
     # combine templates on different channels using NaN padding
@@ -129,16 +128,17 @@ def train_decollider(
                 spike_length_samples=spike_length_samples,
                 data_random_seed=rg,
                 noise_max_amplitude=noise_max_amplitude,
-                device=device,
             )
 
             # train
-            for i0 in range(0, len(epoch_data.waveforms) - batch_size, batch_size):
+            for i0 in range(
+                0, len(epoch_data.noisy_waveforms) - batch_size, batch_size
+            ):
                 tic = time.perf_counter()
 
                 i1 = i0 + batch_size
-                noised_batch = epoch_data.noised_waveforms[i0:i1]
-                target_batch = epoch_data.waveforms[i0:i1]
+                noised_batch = epoch_data.noisier_waveforms[i0:i1]
+                target_batch = epoch_data.noisy_waveforms[i0:i1]
                 masks = None
                 if epoch_data.channel_masks is not None:
                     masks = torch.nonzero(
@@ -221,9 +221,9 @@ def train_decollider(
 
 @dataclass
 class EpochData:
-    waveforms: torch.Tensor
+    noisy_waveforms: torch.Tensor
     channels: torch.LongTensor
-    noised_waveforms: torch.Tensor
+    noisier_waveforms: torch.Tensor
     channel_masks: Optional[torch.Tensor] = None
 
     # for hybrid experiments
@@ -250,16 +250,14 @@ def load_epoch(
     spike_length_samples=121,
     data_random_seed=0,
     noise_max_amplitude=np.inf,
-    device=None,
 ):
     rg = np.random.default_rng(data_random_seed)
 
     if templates is not None:
         (
             channels,
-            channel_masks,
             gt_waveforms,
-            waveforms,
+            noisy_waveforms,
             noise_chans,
             which_rec,
             which_templates,
@@ -276,13 +274,12 @@ def load_epoch(
             channel_min_amplitude=channel_min_amplitude,
             examples_per_epoch=examples_per_epoch,
             data_random_seed=rg,
-            device=device,
         )
     else:
         assert detection_times is not None
         assert detection_channels is not None
 
-        spikes, channel_masks, channels_chosen, which_rec = load_spikes(
+        spikes, channels_chosen, which_rec = load_spikes(
             recordings,
             times=detection_times,
             channels=detection_channels,
@@ -295,7 +292,7 @@ def load_epoch(
         )
 
     # double noise
-    noised_waveforms = load_noise(
+    noisier_waveforms = load_noise(
         channels=noise_chans,
         which_rec=which_rec,
         channel_index=recording_channel_indices,
@@ -308,11 +305,16 @@ def load_epoch(
         to_torch=True,
         alpha=noise2_alpha,
     )
-    noised_waveforms += waveforms
+    noisier_waveforms += noisy_waveforms
+
+    channel_masks = np.isfinite(noisier_waveforms[:, :, 0])
+    gt_waveforms[channel_masks] = 0.0
+    noisy_waveforms[channel_masks] = 0.0
+    noisier_waveforms[channel_masks] = 0.0
 
     return EpochData(
-        waveforms=waveforms,
-        noised_waveforms=noised_waveforms,
+        noisy_waveforms=noisy_waveforms,
+        noisier_waveforms=noisier_waveforms,
         channels=channels,
         channel_masks=channel_masks,
         gt_waveforms=gt_waveforms,
@@ -352,7 +354,9 @@ def evaluate_decollider(
         channel_index=channel_index,
         channel_min_amplitude=channel_min_amplitude,
         channel_jitter_index=channel_jitter_index,
-        examples_per_epoch=None if templates is not None else n_unsupervised_val_examples,
+        examples_per_epoch=None
+        if templates is not None
+        else n_unsupervised_val_examples,
         n_oversamples=n_oversamples,
         noise_same_chans=noise_same_chans,
         noise2_alpha=noise2_alpha,
@@ -360,13 +364,18 @@ def evaluate_decollider(
         data_random_seed=data_random_seed,
         noise_max_amplitude=noise_max_amplitude,
         spike_length_samples=spike_length_samples,
-        device=device,
     )
 
     # unsupervised task for learning: predict wf from noised_wf
-    preds_noised = net(val_data.noised_waveforms)
+    # preds_noised = net(val_data.noisier_waveforms)
+    preds_noised = batched_infer(
+        net,
+        val_data.noisier_waveforms,
+        channel_masks=val_data.channel_masks,
+        device=device,
+    )
     if summarize:
-        val_loss = F.mse_loss(preds_noised, val_data.waveforms)
+        val_loss = F.mse_loss(preds_noised, val_data.noisy_waveforms)
 
     if templates is None:
         assert summarize
@@ -376,15 +385,28 @@ def evaluate_decollider(
     # so that gt_waveforms exists
 
     # supervised task: predict gt_wf (template) from wf (template + noise)
-    template_preds_naive = net(val_data.waveforms)
+    # template_preds_naive = net(val_data.noisy_waveforms)
+    template_preds_naive = batched_infer(
+        net,
+        val_data.noisy_waveforms,
+        channel_masks=val_data.channel_masks,
+        device=device,
+    )
     naive_sup_max_err = (
         torch.abs(template_preds_naive - val_data.gt_waveforms).max(dim=(1, 2)).values
     )
 
     # noisier2noise prediction of templates
-    template_preds_n2n = net.n2n_predict(
-        val_data.noised_waveforms,
+    # template_preds_n2n = net.n2n_forward(
+    #     val_data.noisier_waveforms,
+    #     channel_masks=val_data.channel_masks,
+    #     alpha=noise2_alpha,
+    # )
+    template_preds_n2n = batched_n2n_infer(
+        net,
+        val_data.noisier_waveforms,
         channel_masks=val_data.channel_masks,
+        device=device,
         alpha=noise2_alpha,
     )
     n2n_sup_max_err = (
@@ -410,10 +432,10 @@ def evaluate_decollider(
     # break down some covariates
     gt_amplitude = templates.ptp(1)[val_data.which, val_data.channels]
     noise1_norm = torch.linalg.norm(
-        val_data.waveforms - val_data.gt_waveforms, dim=(1, 2)
+        val_data.noisy_waveforms - val_data.gt_waveforms, dim=(1, 2)
     )
     noise2_norm = torch.linalg.norm(
-        val_data.noised_waveforms - val_data.waveforms, dim=(1, 2)
+        val_data.noisier_waveforms - val_data.noisy_waveforms, dim=(1, 2)
     )
 
     # errors for naive template prediction
@@ -458,7 +480,6 @@ def get_noised_hybrid_waveforms(
     channel_min_amplitude=0.0,
     examples_per_epoch=10_000,
     data_random_seed=0,
-    device=None,
 ):
     """
     templates are NCT here.
@@ -494,7 +515,7 @@ def get_noised_hybrid_waveforms(
             choices = choices[choices < len(channel_jitter_index)]
             channels[i] = rg.choice(choices)
 
-    # load waveforms
+    # load noisy_waveforms
     if channel_index is None:
         waveform_channels = channels[:, None, None]
         # single channel case
@@ -520,15 +541,13 @@ def get_noised_hybrid_waveforms(
     channel_masks = torch.from_numpy(channel_masks)
 
     # to torch
-    if device is None:
-        device = "cuda" if torch.cuda.is_available() else "cpu"
-    channels = torch.from_numpy(channels).to(device)
-    gt_waveforms = torch.from_numpy(gt_waveforms).to(device)
+    channels = torch.from_numpy(channels)
+    gt_waveforms = torch.from_numpy(gt_waveforms)
 
     # apply noise
     noise_chans = channels if noise_same_chans else None
     which_rec = template_recording_origin[which] if noise_same_chans else None
-    waveforms = load_noise(
+    noisy_waveforms = load_noise(
         channels=noise_chans,
         which_rec=which_rec,
         recording_channel_indices=recording_channel_indices,
@@ -540,13 +559,13 @@ def get_noised_hybrid_waveforms(
         rg=rg,
         to_torch=True,
     )
-    waveforms += gt_waveforms
+    noisy_waveforms += gt_waveforms
 
     return (
         channels,
         channel_masks,
         gt_waveforms,
-        waveforms,
+        noisy_waveforms,
         noise_chans,
         which_rec,
         which,
@@ -560,6 +579,7 @@ def load_noise(
     recordings,
     channels=None,
     which_rec=None,
+    recording_channel_subsets=None,
     recording_channel_indices=None,
     trough_offset_samples=42,
     spike_length_samples=121,
@@ -579,16 +599,28 @@ def load_noise(
     if dtype is None:
         dtype = recordings[0].dtype
 
-    c = recording_channel_indices[0].shape[1] if recording_channel_indices is not None else 1
+    c = (
+        recording_channel_indices[0].shape[1]
+        if recording_channel_indices is not None
+        else 1
+    )
 
     noise = np.full((n, c, spike_length_samples), np.nan, dtype=dtype)
-    channel_masks = np.zeros((n, c), dtype=bool)
     for i, rec in enumerate(recordings):
         mask = np.flatnonzero(which_rec == i)
-        noise[mask], channel_masks[mask] = load_noise_singlerec(
+        rec_channels = None
+        rec_ci = None
+        if channels is not None:
+            rec_ci = recording_channel_indices[i]
+            rec_channels = channels[mask]
+            if recording_channel_subsets is not None:
+                rec_channels = np.searchsorted(
+                    recording_channel_subsets[i], rec_channels
+                )
+        noise[mask] = load_noise_singlerec(
             rec,
-            channels=channels[mask] if channels is not None else None,
-            channel_index=recording_channel_indices[i] if recording_channel_indices is not None else None,
+            channels=rec_channels,
+            channel_index=rec_ci,
             trough_offset_samples=trough_offset_samples,
             spike_length_samples=spike_length_samples,
             n=mask.size,
@@ -600,9 +632,7 @@ def load_noise(
         )
 
     if to_torch:
-        device = "cuda" if torch.cuda.is_available() else "cpu"
-        noise = torch.from_numpy(noise).to(device)
-        channel_masks = torch.from_numpy(channel_masks)
+        noise = torch.from_numpy(noise)
 
     return noise
 
@@ -661,23 +691,18 @@ def load_noise_singlerec(
                 trough_offset_samples=trough_offset_samples,
                 spike_length_samples=spike_length_samples,
             )
+            wfs = wfs.transpose(0, 2, 1)
 
         noise[needs_load_ix] = wfs[np.argsort(order)]
         needs_load_ix = np.nanmax(np.abs(noise)) > max_abs_amp
-
-    # mask out nan channels
-    channel_masks = np.isfinite(noise[:, :, 0])
-    noise[~channel_masks] = 0.0
 
     if alpha != 1.0:
         noise *= alpha
 
     if to_torch:
-        device = "cuda" if torch.cuda.is_available() else "cpu"
-        noise = torch.from_numpy(noise).to(device)
-        channel_masks = torch.from_numpy(channel_masks)
+        noise = torch.from_numpy(noise)
 
-    return noise, channel_masks
+    return noise
 
 
 # -- signal helpers
@@ -689,6 +714,7 @@ def load_spikes(
     channels,
     which_rec=None,
     recording_channel_indices=None,
+    recording_channel_subsets=None,
     trough_offset_samples=42,
     spike_length_samples=121,
     n=100,
@@ -705,22 +731,29 @@ def load_spikes(
     if dtype is None:
         dtype = recordings[0].dtype
 
-    c = recording_channel_indices[0].shape[1] if recording_channel_indices is not None else 1
+    c = (
+        recording_channel_indices[0].shape[1]
+        if recording_channel_indices is not None
+        else 1
+    )
 
     spikes = np.full((n, c, spike_length_samples), np.nan, dtype=dtype)
-    channel_masks = np.zeros((n, c), dtype=bool)
     channels_chosen = np.zeros(n, dtype=int)
     for i, rec in enumerate(recordings):
         mask = np.flatnonzero(which_rec == i)
+
+        rec_ci = None
+        if channels is not None:
+            rec_ci = recording_channel_indices[i]
+
         (
             spikes[mask],
-            channel_masks[mask],
             channels_chosen[mask],
         ) = load_spikes_singlerec(
             rec,
             times=times[i],
             channels=channels[i],
-            channel_index=recording_channel_indices[i] if recording_channel_indices is not None else None,
+            channel_index=rec_ci,
             trough_offset_samples=trough_offset_samples,
             spike_length_samples=spike_length_samples,
             n=mask.size,
@@ -730,11 +763,9 @@ def load_spikes(
         )
 
     if to_torch:
-        device = "cuda" if torch.cuda.is_available() else "cpu"
-        spikes = torch.from_numpy(spikes).to(device)
-        channel_masks = torch.from_numpy(channel_masks)
+        spikes = torch.from_numpy(spikes)
 
-    return spikes, channel_masks, channels_chosen, which_rec
+    return spikes, channels_chosen, which_rec
 
 
 def load_spikes_singlerec(
@@ -777,40 +808,24 @@ def load_spikes_singlerec(
             trough_offset_samples=trough_offset_samples,
             spike_length_samples=spike_length_samples,
         )
+        wfs = wfs.transpose(0, 2, 1)
 
     spikes = wfs[np.argsort(order)]
 
-    # mask out nan channels
-    channel_masks = np.isfinite(spikes[:, :, 0])
-    spikes[~channel_masks] = 0.0
-
     if to_torch:
-        device = "cuda" if torch.cuda.is_available() else "cpu"
-        spikes = torch.from_numpy(spikes).to(device)
-        channel_masks = torch.from_numpy(channel_masks).to(device)
+        spikes = torch.from_numpy(spikes)
 
-    return spikes, channel_masks, channels
+    return spikes, channels
 
 
 # -- multi-recording channel logic
 
 
-def reconcile_channels(recordings, channel_index, recording_channel_indices):
+def reconcile_channels(recordings, channel_index):
     """Validate that the multi-chan setup is workable, reconcile chans across recordings"""
-    if isinstance(recording_channel_indices, list):
-        assert len(recording_channel_indices) == len(recordings)
-    elif recording_channel_indices is None:
-        if channel_index is not None:
-            recording_channel_indices = [channel_index] * len(recordings)
-    else:
-        recording_channel_indices = [recording_channel_indices] * len(recordings)
-
     full_channel_set = recordings[0].channel_ids
-    for rec, ci in zip(recordings, recording_channel_indices):
+    for rec in recordings:
         assert np.array_equal(rec.channel_ids, np.sort(rec.channel_ids))
-        assert rec.channel_ids.size == ci.shape[0]
-        if channel_index is not None:
-            assert ci.shape[1] == channel_index.shape[1]
         full_channel_set = np.union1d(full_channel_set, rec.channel_ids)
     n_channels_full = full_channel_set.size
 
@@ -818,12 +833,28 @@ def reconcile_channels(recordings, channel_index, recording_channel_indices):
         assert n_channels_full == channel_index.shape[0]
 
     channel_subsets = []
+    recording_channel_indices = None
+    if channel_index is not None:
+        recording_channel_indices = []
     for rec in recordings:
-        channel_subsets.append(
-            np.flatnonzero(np.isin(full_channel_set, rec.channel_ids))
-        )
+        subset = np.flatnonzero(np.isin(full_channel_set, rec.channel_ids))
+        channel_subsets.append(subset)
+        if channel_index is not None:
+            subset_ci = subset_recording_channel_index(channel_index, subset)
+            recording_channel_indices.append(subset_ci)
 
     return n_channels_full, recording_channel_indices, channel_subsets
+
+
+def subset_recording_channel_index(full_channel_index, channel_subset):
+    """The output of this function is a channel index containing indices into the
+    recording, but matching full_channel_index, just with holes.
+    """
+    subset_channel_index = np.full_like(full_channel_index, len(channel_subset))
+    for recchan, fullchan in enumerate(channel_subset):
+        full_ci = full_channel_index[fullchan]
+        subset_channel_index[recchan] = np.searchsorted(channel_subset, full_ci)
+    return subset_channel_index
 
 
 def combine_templates(templates, channel_subsets):
@@ -844,10 +875,73 @@ def combine_templates(templates, channel_subsets):
     return combined, template_recording_origin, original_template_index
 
 
+# -- inference utils
+
+
+def batched_infer(
+    net, noisy_waveforms, channel_masks=None, batch_size=512, device=None
+):
+    is_tensor = torch.is_tensor(noisy_waveforms)
+    if is_tensor:
+        out = torch.empty_like(noisy_waveforms)
+    else:
+        out = np.empty_like(noisy_waveforms)
+
+    for batch_start in range(len(noisy_waveforms)):
+        wfs = noisy_waveforms[batch_start : batch_start + batch_size]
+        wfs = torch.as_tensor(wfs).to(device)
+
+        cms = None
+        if channel_masks is not None:
+            cms = channel_masks[batch_start : batch_start + batch_size]
+        if cms is None and wfs.shape[1] > 1 and torch.isnan(wfs).any():
+            cms = torch.isfinite(wfs[:, :, 0])
+
+        wfs = wfs.to(device)
+        wfs = net.predict(wfs, channel_masks=cms)
+
+        if is_tensor:
+            out[batch_start : batch_start + batch_size] = wfs.to(out.device)
+        else:
+            out[batch_start : batch_start + batch_size] = wfs.numpy(force=True)
+
+    return out
+
+
+def batched_n2n_infer(
+    net, noisier_waveforms, channel_masks=None, batch_size=512, device=None, alpha=1.0
+):
+    is_tensor = torch.is_tensor(noisier_waveforms)
+    if is_tensor:
+        out = torch.empty_like(noisier_waveforms)
+    else:
+        out = np.empty_like(noisier_waveforms)
+
+    for batch_start in range(len(noisier_waveforms)):
+        wfs = noisier_waveforms[batch_start : batch_start + batch_size]
+        wfs = torch.as_tensor(wfs).to(device)
+
+        cms = None
+        if channel_masks is not None:
+            cms = channel_masks[batch_start : batch_start + batch_size]
+        if cms is None and wfs.shape[1] > 1 and torch.isnan(wfs).any():
+            cms = torch.isfinite(wfs[:, :, 0])
+
+        wfs = wfs.to(device)
+        wfs = net.n2n_predict(wfs, channel_masks=cms, alpha=alpha)
+
+        if is_tensor:
+            out[batch_start : batch_start + batch_size] = wfs.to(out.device)
+        else:
+            out[batch_start : batch_start + batch_size] = wfs.numpy(force=True)
+
+    return out
+
+
 # -- for testing
 
 
-class SCDAsDecollider(SingleChannelDenoiser, Decollider):
+class SCDAsDecollider(SingleChannelDenoiser, SingleChannelPredictor):
     def forward(self, x):
         """N1T -> N1T"""
         x = self.conv1(x)
