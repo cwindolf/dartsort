@@ -516,6 +516,7 @@ def get_noised_hybrid_waveforms(
 
     # keep this fellow on CPU
     channel_masks = np.isfinite(gt_waveforms[:, :, 0])
+    gt_waveforms[~channel_masks] = 0.0
     channel_masks = torch.from_numpy(channel_masks)
 
     # to torch
