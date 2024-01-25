@@ -36,9 +36,11 @@ def train_decollider(
     noise_same_chans=False,
     noise2_alpha=1.0,
     trough_offset_samples=42,
+    spike_length_samples=121,
     data_random_seed=0,
     noise_max_amplitude=np.inf,
     validation_oversamples=3,
+    n_unsupervised_val_examples=2000,
     max_n_epochs=500,
     early_stop_decrease_epochs=10,
     batch_size=64,
@@ -68,7 +70,7 @@ def train_decollider(
     validation_dataframe : pd.DataFrame
     """
     rg = np.random.default_rng(data_random_seed)
-    logger = logging.getLogger("decollider:hybrid_train")
+    logger = logging.getLogger("decollider:train")
 
     # initial validation
     train_records = []
@@ -83,16 +85,23 @@ def train_decollider(
     # the NaNs inform masking below
     # these are also padded with an extra channel of NaNs, to help
     # with indexing below
-    (
-        templates_train,
-        templates_train_recording_origin,
-        original_train_template_index,
-    ) = combine_templates(templates_train, channel_subsets)
-    (
-        templates_val,
-        templates_val_recording_origin,
-        original_val_template_index,
-    ) = combine_templates(templates_val, channel_subsets)
+    templates_train_recording_origin = original_train_template_index = None
+    if templates_train is not None:
+        (
+            templates_train,
+            templates_train_recording_origin,
+            original_train_template_index,
+        ) = combine_templates(templates_train, channel_subsets)
+        assert spike_length_samples == templates_train.shape[2]
+
+    templates_val_recording_origin = original_val_template_index = None
+    if templates_val is not None:
+        (
+            templates_val,
+            templates_val_recording_origin,
+            original_val_template_index,
+        ) = combine_templates(templates_val, channel_subsets)
+        assert spike_length_samples == templates_val.shape[2]
 
     opt = torch.optim.Adam(net.parameters())
     criterion = loss_class()
@@ -117,6 +126,7 @@ def train_decollider(
                 noise_same_chans=noise_same_chans,
                 noise2_alpha=noise2_alpha,
                 trough_offset_samples=trough_offset_samples,
+                spike_length_samples=spike_length_samples,
                 data_random_seed=rg,
                 noise_max_amplitude=noise_max_amplitude,
                 device=device,
@@ -170,6 +180,7 @@ def train_decollider(
                 template_recording_origin=templates_val_recording_origin,
                 original_template_index=original_val_template_index,
                 n_oversamples=validation_oversamples,
+                n_unsupervised_val_examples=n_unsupervised_val_examples,
                 channel_index=channel_index,
                 channel_subsets=channel_subsets,
                 channel_min_amplitude=channel_min_amplitude,
@@ -177,6 +188,7 @@ def train_decollider(
                 noise_same_chans=noise_same_chans,
                 noise2_alpha=noise2_alpha,
                 trough_offset_samples=trough_offset_samples,
+                spike_length_samples=spike_length_samples,
                 data_random_seed=rg,
                 noise_max_amplitude=noise_max_amplitude,
                 device=device,
@@ -234,7 +246,8 @@ def load_epoch(
     n_oversamples=1,
     noise_same_chans=False,
     noise2_alpha=1.0,
-    trough_offset_samples=None,
+    trough_offset_samples=42,
+    spike_length_samples=121,
     data_random_seed=0,
     noise_max_amplitude=np.inf,
     device=None,
@@ -262,21 +275,32 @@ def load_epoch(
             n_oversamples=n_oversamples,
             channel_min_amplitude=channel_min_amplitude,
             examples_per_epoch=examples_per_epoch,
-            data_random_seed=data_random_seed,
+            data_random_seed=rg,
             device=device,
         )
     else:
         assert detection_times is not None
         assert detection_channels is not None
-        raise NotImplementedError("Unsupervised training.")
+
+        spikes, channel_masks, channels_chosen, which_rec = load_spikes(
+            recordings,
+            times=detection_times,
+            channels=detection_channels,
+            recording_channel_indices=recording_channel_indices,
+            trough_offset_samples=trough_offset_samples,
+            spike_length_samples=spike_length_samples,
+            n=examples_per_epoch,
+            rg=rg,
+            to_torch=True,
+        )
 
     # double noise
     noised_waveforms = load_noise(
         channels=noise_chans,
         which_rec=which_rec,
-        channel_index=channel_index,
+        channel_index=recording_channel_indices,
         trough_offset_samples=trough_offset_samples,
-        spike_length_samples=templates.shape[1],
+        spike_length_samples=spike_length_samples,
         n=gt_waveforms.shape[0],
         max_abs_amp=noise_max_amplitude,
         dtype=gt_waveforms.dtype,
@@ -306,11 +330,13 @@ def evaluate_decollider(
     template_recording_origin=None,
     original_template_index=None,
     n_oversamples=1,
+    n_unsupervised_val_examples=2000,
     channel_index=None,
     channel_min_amplitude=0.0,
     channel_jitter_index=None,
     noise_same_chans=False,
-    trough_offset_samples=None,
+    trough_offset_samples=42,
+    spike_length_samples=121,
     data_random_seed=0,
     noise_max_amplitude=np.inf,
     noise2_alpha=1.0,
@@ -326,13 +352,14 @@ def evaluate_decollider(
         channel_index=channel_index,
         channel_min_amplitude=channel_min_amplitude,
         channel_jitter_index=channel_jitter_index,
-        examples_per_epoch=None,
+        examples_per_epoch=None if templates is not None else n_unsupervised_val_examples,
         n_oversamples=n_oversamples,
         noise_same_chans=noise_same_chans,
         noise2_alpha=noise2_alpha,
         trough_offset_samples=trough_offset_samples,
         data_random_seed=data_random_seed,
         noise_max_amplitude=noise_max_amplitude,
+        spike_length_samples=spike_length_samples,
         device=device,
     )
 
@@ -503,7 +530,7 @@ def get_noised_hybrid_waveforms(
     waveforms = load_noise(
         channels=noise_chans,
         which_rec=which_rec,
-        channel_index=recording_channel_indices,
+        recording_channel_indices=recording_channel_indices,
         trough_offset_samples=trough_offset_samples,
         spike_length_samples=templates.shape[1],
         n=gt_waveforms.shape[0],
@@ -532,7 +559,7 @@ def load_noise(
     recordings,
     channels=None,
     which_rec=None,
-    channel_index=None,
+    recording_channel_indices=None,
     trough_offset_samples=42,
     spike_length_samples=121,
     n=100,
@@ -551,16 +578,16 @@ def load_noise(
     if dtype is None:
         dtype = recordings[0].dtype
 
-    c = channel_index[0].shape[1] if channel_index is not None else 1
+    c = recording_channel_indices[0].shape[1] if recording_channel_indices is not None else 1
 
     noise = np.full((n, c, spike_length_samples), np.nan, dtype=dtype)
-    channel_masks = np.zeros((n, c, spike_length_samples), dtype=bool)
+    channel_masks = np.zeros((n, c), dtype=bool)
     for i, rec in enumerate(recordings):
         mask = np.flatnonzero(which_rec == i)
         noise[mask], channel_masks[mask] = load_noise_singlerec(
             rec,
             channels=channels[mask] if channels is not None else None,
-            channel_index=channel_index,
+            channel_index=recording_channel_indices[i] if recording_channel_indices is not None else None,
             trough_offset_samples=trough_offset_samples,
             spike_length_samples=spike_length_samples,
             n=mask.size,
@@ -573,7 +600,8 @@ def load_noise(
 
     if to_torch:
         device = "cuda" if torch.cuda.is_available() else "cpu"
-        return torch.from_numpy(noise).to(device)
+        noise = torch.from_numpy(noise).to(device)
+        channel_masks = torch.from_numpy(channel_masks)
 
     return noise
 
@@ -645,11 +673,125 @@ def load_noise_singlerec(
 
     if to_torch:
         device = "cuda" if torch.cuda.is_available() else "cpu"
-        return torch.from_numpy(noise).to(device), torch.from_numpy(channel_masks).to(
-            device
-        )
+        noise = torch.from_numpy(noise).to(device)
+        channel_masks = torch.from_numpy(channel_masks)
 
     return noise, channel_masks
+
+
+# -- signal helpers
+
+
+def load_spikes(
+    recordings,
+    times,
+    channels,
+    which_rec=None,
+    recording_channel_indices=None,
+    trough_offset_samples=42,
+    spike_length_samples=121,
+    n=100,
+    dtype=None,
+    rg=0,
+    to_torch=True,
+):
+    """Get NCT noise arrays."""
+    rg = np.random.default_rng(rg)
+
+    if which_rec is None:
+        which_rec = rg.integers(len(recordings), size=n)
+
+    if dtype is None:
+        dtype = recordings[0].dtype
+
+    c = recording_channel_indices[0].shape[1] if recording_channel_indices is not None else 1
+
+    spikes = np.full((n, c, spike_length_samples), np.nan, dtype=dtype)
+    channel_masks = np.zeros((n, c), dtype=bool)
+    channels_chosen = np.zeros(n, dtype=int)
+    for i, rec in enumerate(recordings):
+        mask = np.flatnonzero(which_rec == i)
+        (
+            spikes[mask],
+            channel_masks[mask],
+            channels_chosen[mask],
+        ) = load_spikes_singlerec(
+            rec,
+            times=times[i],
+            channels=channels[i],
+            channel_index=recording_channel_indices[i] if recording_channel_indices is not None else None,
+            trough_offset_samples=trough_offset_samples,
+            spike_length_samples=spike_length_samples,
+            n=mask.size,
+            dtype=dtype,
+            rg=rg,
+            to_torch=False,
+        )
+
+    if to_torch:
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+        spikes = torch.from_numpy(spikes).to(device)
+        channel_masks = torch.from_numpy(channel_masks)
+
+    return spikes, channel_masks, channels_chosen, which_rec
+
+
+def load_spikes_singlerec(
+    recording,
+    times,
+    channels,
+    trough_offset_samples=42,
+    spike_length_samples=121,
+    channel_index=None,
+    n=100,
+    dtype=None,
+    rg=0,
+    to_torch=True,
+):
+    rg = np.random.default_rng(rg)
+
+    if dtype is None:
+        dtype = recording.dtype
+
+    which = rg.choice(times.size, size=n, replace=False)
+    times = times[which]
+    channels = channels[which]
+    order = np.argsort(times)
+
+    if channel_index is None:
+        wfs = spikeio.read_single_channel_waveforms(
+            recording,
+            times[order],
+            channels[order],
+            trough_offset_samples=trough_offset_samples,
+            spike_length_samples=spike_length_samples,
+        )
+        wfs = wfs[:, None, :]
+    else:
+        wfs = spikeio.read_waveforms_channel_index(
+            recording,
+            times[order],
+            channel_index,
+            channels[order],
+            trough_offset_samples=trough_offset_samples,
+            spike_length_samples=spike_length_samples,
+        )
+
+    spikes = wfs[np.argsort(order)]
+
+    # mask out nan channels
+    channel_masks = np.isfinite(spikes[:, :, 0])
+    spikes[~channel_masks] = 0.0
+
+    if to_torch:
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+        spikes = torch.from_numpy(spikes).to(device)
+        channel_masks = torch.from_numpy(channel_masks).to(device)
+
+    return spikes, channel_masks, channels
+
+
+# -- multi-recording channel logic
 
 
 def reconcile_channels(recordings, channel_index, recording_channel_indices):
