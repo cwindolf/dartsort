@@ -27,13 +27,19 @@ class Decollider(nn.Module):
         self.load_state_dict(data, map_location="cpu")
         return self
 
-    def n2n_predict(self, noisier_waveforms, channel_masks=None, alpha=1.0):
+    def predict(self, noisy_waveforms, channel_masks=None):
+        # multi-chan prediction
+        # multi-chan nets below naturally implement this in their
+        # forward(), but single-chan nets need a little logic
+        return self.forward(noisy_waveforms, channel_masks=channel_masks)
+
+    def n2n_forward(self, noisier_waveforms, channel_masks=None, alpha=1.0):
         """See Noisier2Noise paper. This is their Eq. 6.
 
         If you plan to use this at inference time, then multiply your noise2 during
         training by alpha.
         """
-        expected_noisy_waveforms = self.forward(noisier_waveforms, channel_masks=channel_masks)
+        expected_noisy_waveforms = self.predict(noisier_waveforms, channel_masks=channel_masks)
         if alpha == 1.0:
             return 2.0 * expected_noisy_waveforms - noisier_waveforms
         alpha2 = alpha * alpha
@@ -42,11 +48,20 @@ class Decollider(nn.Module):
 
 # -- single channel decolliders
 
+class SingleChannelPredictor(Decollider):
 
-class SingleChannelDecollider(Decollider):
-    """N1T -> N1T"""
+    def predict(self, waveforms, channel_masks=None):
+        """NCT -> NCT"""
+        n, c, t = waveforms.shape
+        waveforms = waveforms.reshape(n * c, 1, t)
+        preds = self.forward(waveforms)
+        return preds.reshape(n, c, t)
+
+
+class SingleChannelDecollider(SingleChannelPredictor):
 
     def forward(self, waveforms, channel_masks=None):
+        """N1T -> N1T"""
         return self.net(waveforms)
 
 
@@ -104,7 +119,10 @@ class MultiChannelDecollider(Decollider):
         # add the masks as an input channel
         # I somehow feel that receiving a "badness indicator" is more useful,
         # and the masks indicate good channels, so hence the flip below
-        masks = torch.logical_not(channel_masks).to(waveforms)
+        if channel_masks is None:
+            masks = torch.ones_like(waveforms[:, :, 0])
+        else:
+            masks = torch.logical_not(channel_masks).to(waveforms)
         # NCT -> N1CT (channels are height in Conv2D NCHW convention)
         waveforms = waveforms[:, None, :, :]
         # NC -> N1CT
