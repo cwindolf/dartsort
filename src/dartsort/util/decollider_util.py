@@ -14,14 +14,20 @@ import torch.nn.functional as F
 from tqdm.auto import tqdm, trange
 from tqdm.contrib.logging import logging_redirect_tqdm
 
+from ..transform.Decollider import Decollider
+from ..transform.single_channel_denoiser import SingleChannelDenoiser
 from . import spikeio
 
 
-def hybrid_train(
+def train_decollider(
     net,
     recordings,
-    templates_train,
-    templates_val,
+    templates_train=None,
+    templates_val=None,
+    detection_times_train=None,
+    detection_channels_train=None,
+    detection_times_val=None,
+    detection_channels_val=None,
     channel_index=None,
     recording_channel_indices=None,
     channel_min_amplitude=0.0,
@@ -94,7 +100,9 @@ def hybrid_train(
             # get data
             epoch_data = load_epoch(
                 recordings,
-                templates_train,
+                templates=templates_train,
+                detection_times=detection_times_train,
+                detection_channels=detection_channels_train,
                 channel_index=channel_index,
                 template_recording_origin=templates_train_recording_origin,
                 recording_channel_indices=recording_channel_indices,
@@ -149,10 +157,12 @@ def hybrid_train(
                 epoch_dt += batch_dt
 
             # evaluate
-            val_record = evaluate(
+            val_record = evaluate_decollider(
                 net,
                 recordings,
-                templates_val=templates_val,
+                templates=templates_val,
+                detection_times=detection_times_val,
+                detection_channels=detection_channels_val,
                 template_recording_origin=templates_val_recording_origin,
                 original_template_index=original_val_template_index,
                 n_oversamples=validation_oversamples,
@@ -283,7 +293,7 @@ def load_epoch(
 
 
 @torch.no_grad()
-def evaluate(
+def evaluate_decollider(
     net,
     recordings,
     templates=None,
@@ -682,3 +692,16 @@ def combine_templates(templates, channel_subsets):
         combined[i:j, subset] = temps
 
     return combined, template_recording_origin, original_template_index
+
+
+# -- for testing
+
+
+class SCDAsDecollider(SingleChannelDenoiser, Decollider):
+    def forward(self, x):
+        """N1T -> N1T"""
+        x = self.conv1(x)
+        x = self.conv2(x)
+        x = x.view(x.shape[0], -1)
+        x = self.out(x)
+        return x[:, None, :]
