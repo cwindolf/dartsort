@@ -83,12 +83,16 @@ def train_decollider(
     # the NaNs inform masking below
     # these are also padded with an extra channel of NaNs, to help
     # with indexing below
-    templates_train, templates_train_recording_origin, original_train_template_index = combine_templates(
-        templates_train, channel_subsets
-    )
-    templates_val, templates_val_recording_origin, original_val_template_index = combine_templates(
-        templates_val, channel_subsets
-    )
+    (
+        templates_train,
+        templates_train_recording_origin,
+        original_train_template_index,
+    ) = combine_templates(templates_train, channel_subsets)
+    (
+        templates_val,
+        templates_val_recording_origin,
+        original_val_template_index,
+    ) = combine_templates(templates_val, channel_subsets)
 
     opt = torch.optim.Adam(net.parameters())
     criterion = loss_class()
@@ -649,6 +653,7 @@ def load_noise_singlerec(
 
 
 def reconcile_channels(recordings, channel_index, recording_channel_indices):
+    """Validate that the multi-chan setup is workable, reconcile chans across recordings"""
     if isinstance(recording_channel_indices, list):
         assert len(recording_channel_indices) == len(recordings)
     elif recording_channel_indices is None:
@@ -661,6 +666,8 @@ def reconcile_channels(recordings, channel_index, recording_channel_indices):
     for rec, ci in zip(recordings, recording_channel_indices):
         assert np.array_equal(rec.channel_ids, np.sort(rec.channel_ids))
         assert rec.channel_ids.size == ci.shape[0]
+        if channel_index is not None:
+            assert ci.shape[1] == channel_index.shape[1]
         full_channel_set = np.union1d(full_channel_set, rec.channel_ids)
     n_channels_full = full_channel_set.size
 
