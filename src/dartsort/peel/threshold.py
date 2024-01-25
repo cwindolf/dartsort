@@ -6,8 +6,6 @@ from .peel_base import BasePeeler
 
 
 class ThresholdAndFeaturize(BasePeeler):
-    peel_kind = "Threshold"
-
     def __init__(
         self,
         recording,
@@ -43,6 +41,7 @@ class ThresholdAndFeaturize(BasePeeler):
         else:
             self.spatial_dedup_channel_index = None
         self.detection_threshold = detection_threshold
+        self.peel_kind = f"Threshold {detection_threshold}"
 
     def peel_chunk(
         self,
