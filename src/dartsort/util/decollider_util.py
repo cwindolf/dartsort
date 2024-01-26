@@ -2,7 +2,6 @@
 Note: a lot of the waveforms in this file are NCT rather than NTC, because this
 is the expected input format for conv1ds.
 """
-import logging
 import time
 from dataclasses import dataclass
 from typing import Optional
@@ -12,9 +11,8 @@ import pandas as pd
 import torch
 import torch.nn.functional as F
 from tqdm.auto import tqdm, trange
-from tqdm.contrib.logging import logging_redirect_tqdm
 
-from ..transform.Decollider import SingleChannelPredictor
+from ..transform.decollider import SingleChannelPredictor
 from ..transform.single_channel_denoiser import SingleChannelDenoiser
 from . import spikeio
 
@@ -41,7 +39,7 @@ def train_decollider(
     validation_oversamples=3,
     n_unsupervised_val_examples=2000,
     max_n_epochs=500,
-    early_stop_decrease_epochs=10,
+    early_stop_decrease_epochs=5,
     batch_size=64,
     loss_class=torch.nn.MSELoss,
     device=None,
@@ -69,16 +67,20 @@ def train_decollider(
     validation_dataframe : pd.DataFrame
     """
     rg = np.random.default_rng(data_random_seed)
-    logger = logging.getLogger("decollider:train")
+
+    device = torch.device(device)
 
     # initial validation
     train_records = []
     val_records = []
 
     # allow training on recordings with different channels missing
-    n_channels_full, recording_channel_indices, channel_subsets = reconcile_channels(
-        recordings, channel_index
-    )
+    (
+        n_channels_full,
+        recording_channel_indices,
+        channel_subsets,
+        channel_index,
+    ) = reconcile_channels(recordings, channel_index)
 
     # combine templates on different channels using NaN padding
     # the NaNs inform masking below
@@ -105,111 +107,123 @@ def train_decollider(
     opt = torch.optim.Adam(net.parameters())
     criterion = loss_class()
     examples_seen = 0
-    with logging_redirect_tqdm(loggers=(logger,), tqdm_class=tqdm):
-        for epoch in trange(max_n_epochs):
-            epoch_dt = 0.0
+    val_losses = []
+    for epoch in trange(max_n_epochs):
+        epoch_dt = 0.0
 
-            # get data
-            epoch_data = load_epoch(
-                recordings,
-                templates=templates_train,
-                detection_times=detection_times_train,
-                detection_channels=detection_channels_train,
-                channel_index=channel_index,
-                template_recording_origin=templates_train_recording_origin,
-                recording_channel_indices=recording_channel_indices,
-                channel_subsets=channel_subsets,
-                channel_min_amplitude=channel_min_amplitude,
-                channel_jitter_index=channel_jitter_index,
-                examples_per_epoch=examples_per_epoch,
-                noise_same_chans=noise_same_chans,
-                noise2_alpha=noise2_alpha,
-                trough_offset_samples=trough_offset_samples,
-                spike_length_samples=spike_length_samples,
-                data_random_seed=rg,
-                noise_max_amplitude=noise_max_amplitude,
-            )
+        # get data
+        tic = time.perf_counter()
+        epoch_data = load_epoch(
+            recordings,
+            templates=templates_train,
+            detection_times=detection_times_train,
+            detection_channels=detection_channels_train,
+            channel_index=channel_index,
+            template_recording_origin=templates_train_recording_origin,
+            recording_channel_indices=recording_channel_indices,
+            channel_min_amplitude=channel_min_amplitude,
+            channel_jitter_index=channel_jitter_index,
+            examples_per_epoch=examples_per_epoch,
+            noise_same_chans=noise_same_chans,
+            noise2_alpha=noise2_alpha,
+            trough_offset_samples=trough_offset_samples,
+            spike_length_samples=spike_length_samples,
+            data_random_seed=rg,
+            noise_max_amplitude=noise_max_amplitude,
+        )
+        toc = time.perf_counter()
+        epoch_data_load_wall_dt_s = toc - tic
 
-            # train
-            for i0 in range(
-                0, len(epoch_data.noisy_waveforms) - batch_size, batch_size
-            ):
-                tic = time.perf_counter()
+        # train
+        epoch_losses = []
+        for i0 in range(
+            0, len(epoch_data.noisy_waveforms) - batch_size, batch_size
+        ):
+            tic = time.perf_counter()
 
-                i1 = i0 + batch_size
-                noised_batch = epoch_data.noisier_waveforms[i0:i1]
-                target_batch = epoch_data.noisy_waveforms[i0:i1]
-                masks = None
-                if epoch_data.channel_masks is not None:
-                    masks = torch.nonzero(
-                        epoch_data.channel_masks[i0:i1], as_tuple=True
-                    )
+            i1 = i0 + batch_size
+            noised_batch = epoch_data.noisier_waveforms[i0:i1].to(device)
+            target_batch = epoch_data.noisy_waveforms[i0:i1].to(device)
+            masks = None
+            if epoch_data.channel_masks is not None:
+                masks = epoch_data.channel_masks[i0:i1].to(device)
 
-                opt.zero_grad()
-                pred = net(noised_batch, channel_masks=masks)
-                if masks is not None:
-                    pred = pred[masks]
-                    target_batch = target_batch[masks]
+            opt.zero_grad()
+            pred = net(noised_batch, channel_masks=masks)
+            if masks is not None:
+                loss = criterion(
+                    pred * masks[:, :, None], target_batch * masks[:, :, None]
+                )
+            else:
                 loss = criterion(pred, target_batch)
-                loss.backward()
-                opt.step()
+            loss.backward()
+            opt.step()
 
-                toc = time.perf_counter()
-                batch_dt = toc - tic
+            toc = time.perf_counter()
+            batch_dt = toc - tic
 
-                train_records.append(
-                    dict(
-                        loss=loss.numpy(force=True),
-                        wall_dt_s=batch_dt,
-                        epoch=epoch,
-                        samples=examples_seen,
-                    )
+            loss = loss.numpy(force=True)
+
+            epoch_losses.append(loss)
+            train_records.append(
+                dict(
+                    loss=loss,
+                    batch_train_wall_dt_s=batch_dt,
+                    epoch=epoch,
+                    samples=examples_seen,
                 )
-
-                # learning trackers
-                examples_seen += noised_batch.shape[0]
-                epoch_dt += batch_dt
-
-            # evaluate
-            val_record = evaluate_decollider(
-                net,
-                recordings,
-                templates=templates_val,
-                detection_times=detection_times_val,
-                detection_channels=detection_channels_val,
-                template_recording_origin=templates_val_recording_origin,
-                original_template_index=original_val_template_index,
-                n_oversamples=validation_oversamples,
-                n_unsupervised_val_examples=n_unsupervised_val_examples,
-                channel_index=channel_index,
-                channel_subsets=channel_subsets,
-                channel_min_amplitude=channel_min_amplitude,
-                channel_jitter_index=channel_jitter_index,
-                noise_same_chans=noise_same_chans,
-                noise2_alpha=noise2_alpha,
-                trough_offset_samples=trough_offset_samples,
-                spike_length_samples=spike_length_samples,
-                data_random_seed=rg,
-                noise_max_amplitude=noise_max_amplitude,
-                device=device,
-                summarize=True,
             )
-            val_record["epoch"] = epoch
-            val_record["epoch_wall_dt_s"] = epoch_dt
-            val_records.append(val_record)
-            logger.info(", ".join(f"{k}: {v:0.3f}" for k, v in val_record.items()))
 
-            # stop early
-            if epoch < early_stop_decrease_epochs:
-                continue
+            # learning trackers
+            examples_seen += noised_batch.shape[0]
+            epoch_dt += batch_dt
 
-            prev_epoch_best_val_mse = min(
-                vr["unsup_mse"] for vr in val_records[-early_stop_decrease_epochs:]
-            )
-            if val_record["unsup_mse"] > prev_epoch_best_val_mse:
-                logger.info(
-                    f"Early stopping at {epoch=}, since {prev_epoch_best_val_mse=} and {val_record['unsup_mse']=}"
-                )
+        # evaluate
+        val_record = evaluate_decollider(
+            net,
+            recordings,
+            templates=templates_val,
+            detection_times=detection_times_val,
+            detection_channels=detection_channels_val,
+            recording_channel_indices=recording_channel_indices,
+            template_recording_origin=templates_val_recording_origin,
+            original_template_index=original_val_template_index,
+            n_oversamples=validation_oversamples,
+            n_unsupervised_val_examples=n_unsupervised_val_examples,
+            channel_index=channel_index,
+            channel_min_amplitude=channel_min_amplitude,
+            channel_jitter_index=channel_jitter_index,
+            noise_same_chans=noise_same_chans,
+            noise2_alpha=noise2_alpha,
+            trough_offset_samples=trough_offset_samples,
+            spike_length_samples=spike_length_samples,
+            data_random_seed=rg,
+            noise_max_amplitude=noise_max_amplitude,
+            device=device,
+            summarize=True,
+        )
+        val_record["epoch"] = epoch
+        val_record["epoch_train_wall_dt_s"] = epoch_dt
+        val_record["epoch_data_load_wall_dt_s"] = epoch_data_load_wall_dt_s
+        val_records.append(val_record)
+        val_losses.append(val_record["val_loss"])
+        summary = f"epoch {epoch}. "
+        summary += f"mean train loss: {np.mean(epoch_losses):0.3f}, "
+        summary += f"init train loss: {epoch_losses[0]:0.3f}, "
+        summary += ", ".join(
+            f"{k}: {v:0.3f}" for k, v in val_record.items() if k != "epoch"
+        )
+        tqdm.write(summary)
+
+        # stop early
+        if epoch < early_stop_decrease_epochs:
+            continue
+
+        # See: Early Stopping -- But When?
+        best_epoch = np.argmin(val_losses)
+        if epoch - best_epoch > early_stop_decrease_epochs:
+            tqdm.write(f"Early stopping at {epoch=}, since {best_epoch=}.")
+            break
 
     validation_dataframe = pd.DataFrame.from_records(val_records)
     training_dataframe = pd.DataFrame.from_records(train_records)
@@ -239,7 +253,6 @@ def load_epoch(
     template_recording_origin=None,
     channel_index=None,
     recording_channel_indices=None,
-    channel_subsets=None,
     channel_min_amplitude=0.0,
     channel_jitter_index=None,
     examples_per_epoch=10_000,
@@ -278,8 +291,9 @@ def load_epoch(
     else:
         assert detection_times is not None
         assert detection_channels is not None
+        which_templates = gt_waveforms = None
 
-        spikes, channels_chosen, which_rec = load_spikes(
+        noisy_waveforms, channels, which_rec = load_spikes(
             recordings,
             times=detection_times,
             channels=detection_channels,
@@ -293,14 +307,15 @@ def load_epoch(
 
     # double noise
     noisier_waveforms = load_noise(
-        channels=noise_chans,
+        recordings,
+        channels=channels if noise_same_chans else None,
         which_rec=which_rec,
-        channel_index=recording_channel_indices,
+        recording_channel_indices=recording_channel_indices,
         trough_offset_samples=trough_offset_samples,
         spike_length_samples=spike_length_samples,
-        n=gt_waveforms.shape[0],
+        n=noisy_waveforms.shape[0],
         max_abs_amp=noise_max_amplitude,
-        dtype=gt_waveforms.dtype,
+        dtype=recordings[0].dtype,
         rg=rg,
         to_torch=True,
         alpha=noise2_alpha,
@@ -308,9 +323,11 @@ def load_epoch(
     noisier_waveforms += noisy_waveforms
 
     channel_masks = np.isfinite(noisier_waveforms[:, :, 0])
-    gt_waveforms[channel_masks] = 0.0
-    noisy_waveforms[channel_masks] = 0.0
-    noisier_waveforms[channel_masks] = 0.0
+    channel_masks = torch.as_tensor(channel_masks, dtype=torch.bool)
+    if gt_waveforms is not None:
+        gt_waveforms[~channel_masks] = 0.0
+    noisy_waveforms[~channel_masks] = 0.0
+    noisier_waveforms[~channel_masks] = 0.0
 
     return EpochData(
         noisy_waveforms=noisy_waveforms,
@@ -329,6 +346,7 @@ def evaluate_decollider(
     templates=None,
     detection_times=None,
     detection_channels=None,
+    recording_channel_indices=None,
     template_recording_origin=None,
     original_template_index=None,
     n_oversamples=1,
@@ -345,6 +363,7 @@ def evaluate_decollider(
     device=None,
     summarize=True,
 ):
+    tic = time.perf_counter()
     val_data = load_epoch(
         recordings,
         templates=templates,
@@ -352,6 +371,7 @@ def evaluate_decollider(
         detection_channels=detection_channels,
         template_recording_origin=template_recording_origin,
         channel_index=channel_index,
+        recording_channel_indices=recording_channel_indices,
         channel_min_amplitude=channel_min_amplitude,
         channel_jitter_index=channel_jitter_index,
         examples_per_epoch=None
@@ -365,21 +385,28 @@ def evaluate_decollider(
         noise_max_amplitude=noise_max_amplitude,
         spike_length_samples=spike_length_samples,
     )
+    toc = time.perf_counter()
+    val_data_load_wall_dt_s = toc - tic
 
+    # metrics timer
     # unsupervised task for learning: predict wf from noised_wf
     # preds_noised = net(val_data.noisier_waveforms)
-    preds_noised = batched_infer(
+    preds_noisy = batched_infer(
         net,
         val_data.noisier_waveforms,
         channel_masks=val_data.channel_masks,
         device=device,
     )
     if summarize:
-        val_loss = F.mse_loss(preds_noised, val_data.noisy_waveforms)
+        val_loss = F.mse_loss(preds_noisy, val_data.noisy_waveforms)
 
     if templates is None:
         assert summarize
-        return dict(val_loss=val_loss)
+        return dict(
+            val_loss=val_loss,
+            val_data_load_wall_dt_s=val_data_load_wall_dt_s,
+            val_metrics_wall_dt_s=time.perf_counter() - tic,
+        )
 
     # below here, summarize is True, and we are working with templates
     # so that gt_waveforms exists
@@ -393,7 +420,9 @@ def evaluate_decollider(
         device=device,
     )
     naive_sup_max_err = (
-        torch.abs(template_preds_naive - val_data.gt_waveforms).max(dim=(1, 2)).values
+        torch.abs(template_preds_naive - val_data.gt_waveforms)
+        .max(dim=(1, 2))
+        .values
     )
 
     # noisier2noise prediction of templates
@@ -410,12 +439,16 @@ def evaluate_decollider(
         alpha=noise2_alpha,
     )
     n2n_sup_max_err = (
-        torch.abs(template_preds_naive - val_data.gt_waveforms).max(dim=(1, 2)).values
+        torch.abs(template_preds_naive - val_data.gt_waveforms)
+        .max(dim=(1, 2))
+        .values
     )
 
     if summarize:
         naive_template_mean_max_err = naive_sup_max_err.mean()
-        naive_template_mse = F.mse_loss(template_preds_naive, val_data.gt_waveforms)
+        naive_template_mse = F.mse_loss(
+            template_preds_naive, val_data.gt_waveforms
+        )
 
         n2n_template_mean_max_err = n2n_sup_max_err.mean()
         n2n_template_mse = F.mse_loss(template_preds_n2n, val_data.gt_waveforms)
@@ -426,6 +459,8 @@ def evaluate_decollider(
             n2n_template_mean_max_err=n2n_template_mean_max_err,
             n2n_template_mse=n2n_template_mse,
             val_loss=val_loss,
+            val_data_load_wall_dt_s=val_data_load_wall_dt_s,
+            val_metrics_wall_dt_s=time.perf_counter() - tic,
         )
 
     # more detailed per-example comparisons
@@ -451,8 +486,12 @@ def evaluate_decollider(
     return pd.DataFrame(
         dict(
             combined_template_index=val_data.template_indices,
-            recording_index=template_recording_origin[val_data.template_indices],
-            original_template_index=original_template_index[val_data.template_indices],
+            recording_index=template_recording_origin[
+                val_data.template_indices
+            ],
+            original_template_index=original_template_index[
+                val_data.template_indices
+            ],
             gt_amplitude=gt_amplitude.numpy(force=True),
             noise1_norm=noise1_norm.numpy(force=True),
             noise2_norm=noise2_norm.numpy(force=True),
@@ -516,24 +555,14 @@ def get_noised_hybrid_waveforms(
             channels[i] = rg.choice(choices)
 
     # load noisy_waveforms
-    if channel_index is None:
-        waveform_channels = channels[:, None, None]
-        # single channel case
-        gt_waveforms = templates[
-            which[:, None, None],
-            waveform_channels,
-            np.arange(templates.shape[2])[None, None, :],
-        ]
-        channel_masks = None
-    else:
-        waveform_channels = channel_index[channels][:, :, None]
-        # multi channel, or i guess you could just have one channel
-        # in your channel index if you're into that kind of thing
-        gt_waveforms = templates[
-            which[:, None, None],
-            waveform_channels,
-            np.arange(templates.shape[1])[None, None, :],
-        ]
+    waveform_channels = channel_index[channels][:, :, None]
+    # multi channel, or i guess you could just have one channel
+    # in your channel index if you're into that kind of thing
+    gt_waveforms = templates[
+        which[:, None, None],
+        waveform_channels,
+        np.arange(templates.shape[1])[None, None, :],
+    ]
 
     # keep this fellow on CPU
     channel_masks = np.isfinite(gt_waveforms[:, :, 0])
@@ -566,7 +595,6 @@ def get_noised_hybrid_waveforms(
         channel_masks,
         gt_waveforms,
         noisy_waveforms,
-        noise_chans,
         which_rec,
         which,
     )
@@ -579,7 +607,6 @@ def load_noise(
     recordings,
     channels=None,
     which_rec=None,
-    recording_channel_subsets=None,
     recording_channel_indices=None,
     trough_offset_samples=42,
     spike_length_samples=121,
@@ -609,14 +636,9 @@ def load_noise(
     for i, rec in enumerate(recordings):
         mask = np.flatnonzero(which_rec == i)
         rec_channels = None
-        rec_ci = None
+        rec_ci = recording_channel_indices[i]
         if channels is not None:
-            rec_ci = recording_channel_indices[i]
             rec_channels = channels[mask]
-            if recording_channel_subsets is not None:
-                rec_channels = np.searchsorted(
-                    recording_channel_subsets[i], rec_channels
-                )
         noise[mask] = load_noise_singlerec(
             rec,
             channels=rec_channels,
@@ -673,25 +695,15 @@ def load_noise_singlerec(
         if channels is None:
             channels = rg.integers(0, nc, size=n_load)
 
-        if channel_index is None:
-            wfs = spikeio.read_single_channel_waveforms(
-                recording,
-                times[order],
-                channels[order],
-                trough_offset_samples=trough_offset_samples,
-                spike_length_samples=spike_length_samples,
-            )
-            wfs = wfs[:, None, :]
-        else:
-            wfs = spikeio.read_waveforms_channel_index(
-                recording,
-                times[order],
-                channel_index,
-                channels[order],
-                trough_offset_samples=trough_offset_samples,
-                spike_length_samples=spike_length_samples,
-            )
-            wfs = wfs.transpose(0, 2, 1)
+        wfs = spikeio.read_waveforms_channel_index(
+            recording,
+            times[order],
+            channel_index,
+            channels[order],
+            trough_offset_samples=trough_offset_samples,
+            spike_length_samples=spike_length_samples,
+        )
+        wfs = wfs.transpose(0, 2, 1)
 
         noise[needs_load_ix] = wfs[np.argsort(order)]
         needs_load_ix = np.nanmax(np.abs(noise)) > max_abs_amp
@@ -714,7 +726,6 @@ def load_spikes(
     channels,
     which_rec=None,
     recording_channel_indices=None,
-    recording_channel_subsets=None,
     trough_offset_samples=42,
     spike_length_samples=121,
     n=100,
@@ -741,10 +752,7 @@ def load_spikes(
     channels_chosen = np.zeros(n, dtype=int)
     for i, rec in enumerate(recordings):
         mask = np.flatnonzero(which_rec == i)
-
-        rec_ci = None
-        if channels is not None:
-            rec_ci = recording_channel_indices[i]
+        rec_ci = recording_channel_indices[i]
 
         (
             spikes[mask],
@@ -790,25 +798,15 @@ def load_spikes_singlerec(
     channels = channels[which]
     order = np.argsort(times)
 
-    if channel_index is None:
-        wfs = spikeio.read_single_channel_waveforms(
-            recording,
-            times[order],
-            channels[order],
-            trough_offset_samples=trough_offset_samples,
-            spike_length_samples=spike_length_samples,
-        )
-        wfs = wfs[:, None, :]
-    else:
-        wfs = spikeio.read_waveforms_channel_index(
-            recording,
-            times[order],
-            channel_index,
-            channels[order],
-            trough_offset_samples=trough_offset_samples,
-            spike_length_samples=spike_length_samples,
-        )
-        wfs = wfs.transpose(0, 2, 1)
+    wfs = spikeio.read_waveforms_channel_index(
+        recording,
+        times[order],
+        channel_index,
+        channels[order],
+        trough_offset_samples=trough_offset_samples,
+        spike_length_samples=spike_length_samples,
+    )
+    wfs = wfs.transpose(0, 2, 1)
 
     spikes = wfs[np.argsort(order)]
 
@@ -825,25 +823,31 @@ def reconcile_channels(recordings, channel_index):
     """Validate that the multi-chan setup is workable, reconcile chans across recordings"""
     full_channel_set = recordings[0].channel_ids
     for rec in recordings:
-        assert np.array_equal(rec.channel_ids, np.sort(rec.channel_ids))
+        ids = [int(i.lstrip("AP")) for i in rec.channel_ids]
+        assert np.array_equal(ids, np.sort(ids))
         full_channel_set = np.union1d(full_channel_set, rec.channel_ids)
     n_channels_full = full_channel_set.size
 
     if channel_index is not None:
         assert n_channels_full == channel_index.shape[0]
+    else:
+        channel_index = np.arange(n_channels_full)[:, None]
 
     channel_subsets = []
     recording_channel_indices = None
-    if channel_index is not None:
-        recording_channel_indices = []
+    recording_channel_indices = []
     for rec in recordings:
         subset = np.flatnonzero(np.isin(full_channel_set, rec.channel_ids))
         channel_subsets.append(subset)
-        if channel_index is not None:
-            subset_ci = subset_recording_channel_index(channel_index, subset)
-            recording_channel_indices.append(subset_ci)
+        subset_ci = subset_recording_channel_index(channel_index, subset)
+        recording_channel_indices.append(subset_ci)
 
-    return n_channels_full, recording_channel_indices, channel_subsets
+    return (
+        n_channels_full,
+        recording_channel_indices,
+        channel_subsets,
+        channel_index,
+    )
 
 
 def subset_recording_channel_index(full_channel_index, channel_subset):
@@ -862,7 +866,9 @@ def combine_templates(templates, channel_subsets):
     c = channel_subsets[0].size
     n = sum(map(len, templates))
 
-    combined = np.full((n, c + 1, t), fill_value=np.nan, dtype=templates[0].dtype)
+    combined = np.full(
+        (n, c + 1, t), fill_value=np.nan, dtype=templates[0].dtype
+    )
     template_recording_origin = np.zeros(n, dtype=int)
     original_template_index = np.zeros(n, dtype=int)
     i = 0
@@ -879,29 +885,40 @@ def combine_templates(templates, channel_subsets):
 
 
 def batched_infer(
-    net, noisy_waveforms, channel_masks=None, batch_size=512, device=None
+    net,
+    noisy_waveforms,
+    channel_masks=None,
+    batch_size=16,
+    device=None,
 ):
     is_tensor = torch.is_tensor(noisy_waveforms)
     if is_tensor:
         out = torch.empty_like(noisy_waveforms)
+        out = out.pin_memory()
     else:
         out = np.empty_like(noisy_waveforms)
 
     for batch_start in range(len(noisy_waveforms)):
         wfs = noisy_waveforms[batch_start : batch_start + batch_size]
-        wfs = torch.as_tensor(wfs).to(device)
+        if not is_tensor:
+            wfs = torch.from_numpy(wfs)
+        wfs = wfs.to(device)
 
         cms = None
         if channel_masks is not None:
             cms = channel_masks[batch_start : batch_start + batch_size]
+            if not is_tensor:
+                cms = torch.from_numpy(cms)
+            cms = cms.to(device)
         if cms is None and wfs.shape[1] > 1 and torch.isnan(wfs).any():
             cms = torch.isfinite(wfs[:, :, 0])
 
-        wfs = wfs.to(device)
         wfs = net.predict(wfs, channel_masks=cms)
 
         if is_tensor:
-            out[batch_start : batch_start + batch_size] = wfs.to(out.device)
+            out[batch_start : batch_start + batch_size].copy_(
+                wfs, non_blocking=True
+            )
         else:
             out[batch_start : batch_start + batch_size] = wfs.numpy(force=True)
 
@@ -909,7 +926,12 @@ def batched_infer(
 
 
 def batched_n2n_infer(
-    net, noisier_waveforms, channel_masks=None, batch_size=512, device=None, alpha=1.0
+    net,
+    noisier_waveforms,
+    channel_masks=None,
+    batch_size=16,
+    device=None,
+    alpha=1.0,
 ):
     is_tensor = torch.is_tensor(noisier_waveforms)
     if is_tensor:
