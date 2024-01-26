@@ -36,8 +36,8 @@ class Decollider(nn.Module):
     def n2n_forward(self, noisier_waveforms, channel_masks=None, alpha=1.0):
         """See Noisier2Noise paper. This is their Eq. 6.
 
-        If you plan to use this at inference time, then multiply your noise2 during
-        training by alpha.
+        If you plan to use this at inference time, then multiply your noise2
+        during training by alpha.
         """
         expected_noisy_waveforms = self.predict(noisier_waveforms, channel_masks=channel_masks)
         if alpha == 1.0:
@@ -132,26 +132,30 @@ class MultiChannelDecollider(Decollider):
         return self.net(combined)
 
 
-class ConvToLinearMultiChannelDecollider(SingleChannelDecollider):
+class ConvToLinearMultiChannelDecollider(MultiChannelDecollider):
     def __init__(
         self,
-        out_channels=(16, 32, 64),
-        kernel_height=4,
-        kernel_lengths=(5, 5, 11),
+        out_channels=(16, 32),
+        kernel_heights=(4, 4),
+        kernel_lengths=(5, 5),
+        hidden_linear_dims=(1024,),
         n_channels=1,
         spike_length_samples=121,
     ):
         super().__init__()
         in_channels = (2,) + out_channels[:-1]
         self.net = nn.Sequential()
-        for ic, oc, k in zip(in_channels, out_channels, kernel_lengths):
-            self.net.append(nn.Conv2d(ic, oc, (kernel_height, k)))
+        for ic, oc, kl, kh in zip(in_channels, out_channels, kernel_lengths, kernel_heights):
+            self.net.append(nn.Conv2d(ic, oc, (kh, kl)))
             self.net.append(nn.ReLU())
         self.net.append(nn.Flatten())
         out_w = spike_length_samples - sum(kernel_lengths) + len(kernel_lengths)
-        out_h = n_channels - len(kernel_lengths) * (1 + kernel_height)
+        out_h = n_channels - sum(kernel_heights) + len(kernel_heights)
         flat_dim = out_channels[-1] * out_w * out_h
-        self.net.append(nn.Linear(flat_dim, spike_length_samples))
+        lin_in_dims = (flat_dim,) + hidden_linear_dims
+        lin_out_dims = hidden_linear_dims + (n_channels * spike_length_samples,)
+        for fin, fout in zip(lin_in_dims, lin_out_dims):
+            self.net.append(nn.Linear(fin, fout))
         self.net.append(nn.Unflatten(1, (n_channels, spike_length_samples)))
 
 
@@ -162,7 +166,7 @@ class MLPMultiChannelDecollider(MultiChannelDecollider):
         super().__init__()
         self.net = nn.Sequential()
         self.net.append(nn.Flatten())
-        input_sizes = (n_channels * spike_length_samples,) + hidden_sizes[:-1]
+        input_sizes = (2 * n_channels * spike_length_samples,) + hidden_sizes[:-1]
         output_sizes = hidden_sizes
         for fin, fout in zip(input_sizes, output_sizes):
             self.net.append(nn.Linear(fin, fout))
