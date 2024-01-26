@@ -9,6 +9,7 @@ from .get_templates import get_templates
 from .superres_util import superres_sorting
 from .template_util import (get_realigned_sorting, get_template_depths,
                             weighted_average)
+from dartsort.localize.localize_util import localize_waveforms
 
 _motion_error_prefix = (
     "If template_config has registered_templates==True "
@@ -79,6 +80,14 @@ class TemplateData:
             spike_counts=spike_counts,
             registered_template_depths_um=registered_template_depths_um,
         )
+
+    def template_locations(self):
+        template_locations = localize_waveforms(self.templates, 
+                                                self.registered_geom, 
+                                                main_channels=self.templates.ptp(1).argmax(1), 
+                                                radius=self.localization_radius_um
+                                               )
+        return template_locations
 
     def unit_templates(self, unit_id):
         return self.templates[self.unit_ids == unit_id]
@@ -218,7 +227,6 @@ class TemplateData:
                 trough_offset_samples=template_config.trough_offset_samples,
                 spike_length_samples=template_config.spike_length_samples,
             )
-
         if save_folder is not None:
             obj.to_npz(npz_path)
 
