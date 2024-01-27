@@ -33,7 +33,7 @@ class Decollider(nn.Module):
         # forward(), but single-chan nets need a little logic
         return self.forward(noisy_waveforms, channel_masks=channel_masks)
 
-    def n2n_forward(self, noisier_waveforms, channel_masks=None, alpha=1.0):
+    def n2n_predict(self, noisier_waveforms, channel_masks=None, alpha=1.0):
         """See Noisier2Noise paper. This is their Eq. 6.
 
         If you plan to use this at inference time, then multiply your noise2
