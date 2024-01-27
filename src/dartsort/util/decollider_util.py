@@ -162,7 +162,7 @@ def train_decollider(
             toc = time.perf_counter()
             batch_dt = toc - tic
 
-            loss = loss.numpy(force=True)
+            loss = float(loss.numpy(force=True))
 
             epoch_losses.append(loss)
             train_records.append(
@@ -403,7 +403,7 @@ def evaluate_decollider(
     if templates is None:
         assert summarize
         return dict(
-            val_loss=val_loss,
+            val_loss=float(val_loss),
             val_data_load_wall_dt_s=val_data_load_wall_dt_s,
             val_metrics_wall_dt_s=time.perf_counter() - tic,
         )
@@ -890,6 +890,7 @@ def batched_infer(
     channel_masks=None,
     batch_size=16,
     device=None,
+    show_progress=False,
 ):
     is_tensor = torch.is_tensor(noisy_waveforms)
     if is_tensor:
@@ -898,6 +899,7 @@ def batched_infer(
     else:
         out = np.empty_like(noisy_waveforms)
 
+    range = trange if show_progress else range
     for batch_start in range(len(noisy_waveforms)):
         wfs = noisy_waveforms[batch_start : batch_start + batch_size]
         if not is_tensor:
@@ -932,6 +934,7 @@ def batched_n2n_infer(
     batch_size=16,
     device=None,
     alpha=1.0,
+    show_progress=False
 ):
     is_tensor = torch.is_tensor(noisier_waveforms)
     if is_tensor:
@@ -939,6 +942,7 @@ def batched_n2n_infer(
     else:
         out = np.empty_like(noisier_waveforms)
 
+    range = trange if show_progress else range
     for batch_start in range(len(noisier_waveforms)):
         wfs = noisier_waveforms[batch_start : batch_start + batch_size]
         wfs = torch.as_tensor(wfs).to(device)
