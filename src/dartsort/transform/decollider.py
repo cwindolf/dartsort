@@ -15,16 +15,18 @@ class Decollider(nn.Module):
 
     def save(self, pt_path):
         data = self.state_dict()
-        data["decollider_subclass"] = self.__class__.name
+        data["decollider_subclass"] = self.__class__.__name__
+        data["decollider_kwargs"] = self._kwargs
         torch.save(data, pt_path)
 
     @classmethod
     def load(cls, pt_path):
-        data = torch.load(pt_path)
+        data = torch.load(pt_path, map_location="cpu")
         cls_name = data.pop("decollider_subclass")
+        kwargs = data.pop("decollider_kwargs")
         subcls = cls.subclasses[cls_name]
-        self = subcls()
-        self.load_state_dict(data, map_location="cpu")
+        self = subcls(**kwargs)
+        self.load_state_dict(data)
         return self
 
     def predict(self, noisy_waveforms, channel_masks=None):
@@ -39,17 +41,21 @@ class Decollider(nn.Module):
         If you plan to use this at inference time, then multiply your noise2
         during training by alpha.
         """
-        expected_noisy_waveforms = self.predict(noisier_waveforms, channel_masks=channel_masks)
+        expected_noisy_waveforms = self.predict(
+            noisier_waveforms, channel_masks=channel_masks
+        )
         if alpha == 1.0:
             return 2.0 * expected_noisy_waveforms - noisier_waveforms
         alpha2 = alpha * alpha
-        return ((1.0 + alpha2) * expected_noisy_waveforms - noisier_waveforms) / alpha2
+        return (
+            (1.0 + alpha2) * expected_noisy_waveforms - noisier_waveforms
+        ) / alpha2
 
 
 # -- single channel decolliders
 
-class SingleChannelPredictor(Decollider):
 
+class SingleChannelPredictor(Decollider):
     def predict(self, waveforms, channel_masks=None):
         """NCT -> NCT"""
         n, c, t = waveforms.shape
@@ -59,7 +65,6 @@ class SingleChannelPredictor(Decollider):
 
 
 class SingleChannelDecollider(SingleChannelPredictor):
-
     def forward(self, waveforms, channel_masks=None):
         """N1T -> N1T"""
         return self.net(waveforms)
@@ -85,6 +90,11 @@ class ConvToLinearSingleChannelDecollider(SingleChannelDecollider):
         self.net.append(nn.Linear(flat_dim, spike_length_samples))
         # add the empty channel dim back in
         self.net.append(nn.Unflatten(1, (1, spike_length_samples)))
+        self._kwargs = dict(
+            out_channels=out_channels,
+            kernel_lengths=kernel_lengths,
+            spike_length_samples=spike_length_samples,
+        )
 
 
 class MLPSingleChannelDecollider(SingleChannelDecollider):
@@ -100,6 +110,10 @@ class MLPSingleChannelDecollider(SingleChannelDecollider):
         self.net.append(nn.Linear(hidden_sizes[-1], spike_length_samples))
         # add the empty channel dim back in
         self.net.append(nn.Unflatten(1, (1, spike_length_samples)))
+        self._kwargs = dict(
+            hidden_sizes=hidden_sizes,
+            spike_length_samples=spike_length_samples,
+        )
 
 
 # -- multi channel decolliders
@@ -145,7 +159,9 @@ class ConvToLinearMultiChannelDecollider(MultiChannelDecollider):
         super().__init__()
         in_channels = (2,) + out_channels[:-1]
         self.net = nn.Sequential()
-        for ic, oc, kl, kh in zip(in_channels, out_channels, kernel_lengths, kernel_heights):
+        for ic, oc, kl, kh in zip(
+            in_channels, out_channels, kernel_lengths, kernel_heights
+        ):
             self.net.append(nn.Conv2d(ic, oc, (kh, kl)))
             self.net.append(nn.ReLU())
         self.net.append(nn.Flatten())
@@ -157,19 +173,39 @@ class ConvToLinearMultiChannelDecollider(MultiChannelDecollider):
         for fin, fout in zip(lin_in_dims, lin_out_dims):
             self.net.append(nn.Linear(fin, fout))
         self.net.append(nn.Unflatten(1, (n_channels, spike_length_samples)))
+        self._kwargs = dict(
+            out_channels=out_channels,
+            kernel_heights=kernel_heights,
+            kernel_lengths=kernel_lengths,
+            hidden_linear_dims=hidden_linear_dims,
+            n_channels=n_channels,
+            spike_length_samples=spike_length_samples,
+        )
 
 
 class MLPMultiChannelDecollider(MultiChannelDecollider):
     def __init__(
-        self, hidden_sizes=(1024, 512, 512), n_channels=1, spike_length_samples=121
+        self,
+        hidden_sizes=(1024, 512, 512),
+        n_channels=1,
+        spike_length_samples=121,
     ):
         super().__init__()
         self.net = nn.Sequential()
         self.net.append(nn.Flatten())
-        input_sizes = (2 * n_channels * spike_length_samples,) + hidden_sizes[:-1]
+        input_sizes = (2 * n_channels * spike_length_samples,) + hidden_sizes[
+            :-1
+        ]
         output_sizes = hidden_sizes
         for fin, fout in zip(input_sizes, output_sizes):
             self.net.append(nn.Linear(fin, fout))
             self.net.append(nn.ReLU())
-        self.net.append(nn.Linear(hidden_sizes[-1], n_channels * spike_length_samples))
+        self.net.append(
+            nn.Linear(hidden_sizes[-1], n_channels * spike_length_samples)
+        )
         self.net.append(nn.Unflatten(1, (n_channels, spike_length_samples)))
+        self._kwargs = dict(
+            hidden_sizes=hidden_sizes,
+            n_channels=n_channels,
+            spike_length_samples=spike_length_samples,
+        )

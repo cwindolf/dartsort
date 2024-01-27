@@ -910,7 +910,7 @@ def batched_infer(
         if channel_masks is not None:
             cms = channel_masks[batch_start : batch_start + batch_size]
             if not is_tensor:
-                cms = torch.from_numpy(cms)
+                cms = torch.from_numpy(cms).to(torch.bool)
             cms = cms.to(device)
         if cms is None and wfs.shape[1] > 1 and torch.isnan(wfs).any():
             cms = torch.isfinite(wfs[:, :, 0])
@@ -950,6 +950,8 @@ def batched_n2n_infer(
         cms = None
         if channel_masks is not None:
             cms = channel_masks[batch_start : batch_start + batch_size]
+            if not is_tensor:
+                cms = torch.from_numpy(cms).to(torch.bool)
         if cms is None and wfs.shape[1] > 1 and torch.isnan(wfs).any():
             cms = torch.isfinite(wfs[:, :, 0])
 
