@@ -46,10 +46,9 @@ class Decollider(nn.Module):
         )
         if alpha == 1.0:
             return 2.0 * expected_noisy_waveforms - noisier_waveforms
-        alpha2 = alpha * alpha
-        return (
-            (1.0 + alpha2) * expected_noisy_waveforms - noisier_waveforms
-        ) / alpha2
+        a2inv = 1.0 / (alpha * alpha)
+        a2p1 = 1.0 + alpha * alpha
+        return a2inv * (a2p1 * expected_noisy_waveforms - noisier_waveforms)
 
 
 # -- single channel decolliders
@@ -77,21 +76,31 @@ class ConvToLinearSingleChannelDecollider(SingleChannelDecollider):
         kernel_lengths=(5, 5, 11),
         hidden_linear_dims=(),
         spike_length_samples=121,
+        sigmoid_final=True,
     ):
         super().__init__()
         in_channels = (1,) + out_channels[:-1]
+        is_hidden = [True] * (len(out_channels) - 1) + [False]
         self.net = nn.Sequential()
-        for ic, oc, k in zip(in_channels, out_channels, kernel_lengths):
+        for ic, oc, k, hid in zip(
+            in_channels, out_channels, kernel_lengths, is_hidden
+        ):
             self.net.append(nn.Conv1d(ic, oc, k))
-            self.net.append(nn.ReLU())
+            if hid:
+                self.net.append(nn.ReLU())
         self.net.append(nn.Flatten())
         flat_dim = out_channels[-1] * (
             spike_length_samples - sum(kernel_lengths) + len(kernel_lengths)
         )
-        
+
         lin_in_dims = (flat_dim,) + hidden_linear_dims
         lin_out_dims = hidden_linear_dims + (spike_length_samples,)
-        for fin, fout in zip(lin_in_dims, lin_out_dims):
+        is_final = [False] * len(hidden_linear_dims) + [True]
+        for fin, fout, fin in zip(lin_in_dims, lin_out_dims, is_final):
+            if fin and sigmoid_final:
+                self.net.append(nn.Sigmoid())
+            else:
+                self.net.append(nn.ReLU())
             self.net.append(nn.Linear(fin, fout))
         # add the empty channel dim back in
         self.net.append(nn.Unflatten(1, (1, spike_length_samples)))
@@ -100,25 +109,36 @@ class ConvToLinearSingleChannelDecollider(SingleChannelDecollider):
             kernel_lengths=kernel_lengths,
             hidden_linear_dims=hidden_linear_dims,
             spike_length_samples=spike_length_samples,
+            sigmoid_final=sigmoid_final,
         )
 
 
 class MLPSingleChannelDecollider(SingleChannelDecollider):
-    def __init__(self, hidden_sizes=(512, 256, 256), spike_length_samples=121):
+    def __init__(
+        self,
+        hidden_sizes=(512, 256, 256),
+        spike_length_samples=121,
+        sigmoid_final=True,
+    ):
         super().__init__()
         self.net = nn.Sequential()
         self.net.append(nn.Flatten())
         input_sizes = (spike_length_samples,) + hidden_sizes[:-1]
         output_sizes = hidden_sizes
-        for fin, fout in zip(input_sizes, output_sizes):
+        is_final = [False] * max(0, len(hidden_sizes) - 1) + [True]
+        for fin, fout, fin in zip(input_sizes, output_sizes, is_final):
             self.net.append(nn.Linear(fin, fout))
-            self.net.append(nn.ReLU())
+            if fin and sigmoid_final:
+                self.net.append(nn.Sigmoid())
+            else:
+                self.net.append(nn.ReLU())
         self.net.append(nn.Linear(hidden_sizes[-1], spike_length_samples))
         # add the empty channel dim back in
         self.net.append(nn.Unflatten(1, (1, spike_length_samples)))
         self._kwargs = dict(
             hidden_sizes=hidden_sizes,
             spike_length_samples=spike_length_samples,
+            sigmoid_final=sigmoid_final,
         )
 
 
@@ -161,22 +181,30 @@ class ConvToLinearMultiChannelDecollider(MultiChannelDecollider):
         hidden_linear_dims=(1024,),
         n_channels=1,
         spike_length_samples=121,
+        sigmoid_final=True,
     ):
         super().__init__()
         in_channels = (2,) + out_channels[:-1]
+        is_hidden = [True] * (len(out_channels) - 1) + [False]
         self.net = nn.Sequential()
-        for ic, oc, kl, kh in zip(
-            in_channels, out_channels, kernel_lengths, kernel_heights
+        for ic, oc, kl, kh, hid in zip(
+            in_channels, out_channels, kernel_lengths, kernel_heights, is_hidden
         ):
             self.net.append(nn.Conv2d(ic, oc, (kh, kl)))
-            self.net.append(nn.ReLU())
+            if hid:
+                self.net.append(nn.ReLU())
         self.net.append(nn.Flatten())
         out_w = spike_length_samples - sum(kernel_lengths) + len(kernel_lengths)
         out_h = n_channels - sum(kernel_heights) + len(kernel_heights)
         flat_dim = out_channels[-1] * out_w * out_h
         lin_in_dims = (flat_dim,) + hidden_linear_dims
         lin_out_dims = hidden_linear_dims + (n_channels * spike_length_samples,)
-        for fin, fout in zip(lin_in_dims, lin_out_dims):
+        is_final = [False] * len(hidden_linear_dims) + [True]
+        for fin, fout, fin in zip(lin_in_dims, lin_out_dims, is_final):
+            if fin and sigmoid_final:
+                self.net.append(nn.Sigmoid())
+            else:
+                self.net.append(nn.ReLU())
             self.net.append(nn.Linear(fin, fout))
         self.net.append(nn.Unflatten(1, (n_channels, spike_length_samples)))
         self._kwargs = dict(
@@ -186,6 +214,7 @@ class ConvToLinearMultiChannelDecollider(MultiChannelDecollider):
             hidden_linear_dims=hidden_linear_dims,
             n_channels=n_channels,
             spike_length_samples=spike_length_samples,
+            sigmoid_final=sigmoid_final,
         )
 
 
@@ -195,6 +224,7 @@ class MLPMultiChannelDecollider(MultiChannelDecollider):
         hidden_sizes=(1024, 512, 512),
         n_channels=1,
         spike_length_samples=121,
+        sigmoid_final=True,
     ):
         super().__init__()
         self.net = nn.Sequential()
@@ -203,9 +233,13 @@ class MLPMultiChannelDecollider(MultiChannelDecollider):
             :-1
         ]
         output_sizes = hidden_sizes
-        for fin, fout in zip(input_sizes, output_sizes):
+        is_final = [False] * max(0, len(hidden_sizes) - 1) + [True]
+        for fin, fout, fin in zip(input_sizes, output_sizes, is_final):
             self.net.append(nn.Linear(fin, fout))
-            self.net.append(nn.ReLU())
+            if fin and sigmoid_final:
+                self.net.append(nn.Sigmoid())
+            else:
+                self.net.append(nn.ReLU())
         self.net.append(
             nn.Linear(hidden_sizes[-1], n_channels * spike_length_samples)
         )
@@ -214,4 +248,5 @@ class MLPMultiChannelDecollider(MultiChannelDecollider):
             hidden_sizes=hidden_sizes,
             n_channels=n_channels,
             spike_length_samples=spike_length_samples,
+            sigmoid_final=sigmoid_final,
         )
