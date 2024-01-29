@@ -75,6 +75,7 @@ class ConvToLinearSingleChannelDecollider(SingleChannelDecollider):
         self,
         out_channels=(16, 32, 64),
         kernel_lengths=(5, 5, 11),
+        hidden_linear_dims=(),
         spike_length_samples=121,
     ):
         super().__init__()
@@ -87,12 +88,17 @@ class ConvToLinearSingleChannelDecollider(SingleChannelDecollider):
         flat_dim = out_channels[-1] * (
             spike_length_samples - sum(kernel_lengths) + len(kernel_lengths)
         )
-        self.net.append(nn.Linear(flat_dim, spike_length_samples))
+        
+        lin_in_dims = (flat_dim,) + hidden_linear_dims
+        lin_out_dims = hidden_linear_dims + (spike_length_samples,)
+        for fin, fout in zip(lin_in_dims, lin_out_dims):
+            self.net.append(nn.Linear(fin, fout))
         # add the empty channel dim back in
         self.net.append(nn.Unflatten(1, (1, spike_length_samples)))
         self._kwargs = dict(
             out_channels=out_channels,
             kernel_lengths=kernel_lengths,
+            hidden_linear_dims=hidden_linear_dims,
             spike_length_samples=spike_length_samples,
         )
 

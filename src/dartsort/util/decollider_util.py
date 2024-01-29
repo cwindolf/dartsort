@@ -216,7 +216,7 @@ def train_decollider(
         tqdm.write(summary)
 
         # stop early
-        if epoch < early_stop_decrease_epochs:
+        if not early_stop_decrease_epochs or epoch < early_stop_decrease_epochs:
             continue
 
         # See: Early Stopping -- But When?
@@ -899,8 +899,8 @@ def batched_infer(
     else:
         out = np.empty_like(noisy_waveforms)
 
-    range = trange if show_progress else range
-    for batch_start in range(len(noisy_waveforms)):
+    xrange = trange if show_progress else range
+    for batch_start in xrange(len(noisy_waveforms)):
         wfs = noisy_waveforms[batch_start : batch_start + batch_size]
         if not is_tensor:
             wfs = torch.from_numpy(wfs)
@@ -942,8 +942,8 @@ def batched_n2n_infer(
     else:
         out = np.empty_like(noisier_waveforms)
 
-    range = trange if show_progress else range
-    for batch_start in range(len(noisier_waveforms)):
+    xrange = trange if show_progress else range
+    for batch_start in xrange(len(noisier_waveforms)):
         wfs = noisier_waveforms[batch_start : batch_start + batch_size]
         wfs = torch.as_tensor(wfs).to(device)
 
