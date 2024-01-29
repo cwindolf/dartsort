@@ -167,6 +167,9 @@ class FeatureSplit(SplitStrategy):
         reassign_outliers=False,
         max_size_wfs=None,
         random_state=0,
+        rescale_all_features=False, 
+        use_ptp=True, 
+        amplitude_normalized=False,
         **dataset_name_kwargs,
     ):
         """Split clusters based on per-cluster PCA and localization features
@@ -219,6 +222,10 @@ class FeatureSplit(SplitStrategy):
 
         self.max_size_wfs = max_size_wfs
 
+        self.rescale_all_features=rescale_all_features, 
+        self.use_ptp=use_ptp, 
+        self.amplitude_normalized=amplitude_normalized
+
         # load up the required h5 datasets
         self.initialize_from_h5(
             peeling_hdf5_filename,
@@ -227,8 +234,7 @@ class FeatureSplit(SplitStrategy):
         )
 
     def split_cluster(self, in_unit_all, max_size_wfs):
-        
-        
+
         n_spikes = in_unit_all.size
         if max_size_wfs is not None and n_spikes > max_size_wfs:
             #TODO: max_size_wfs could be chosen automatically based on available memory and number of spikes
@@ -257,17 +263,31 @@ class FeatureSplit(SplitStrategy):
             if self.relocated:
                 loc_features[kept, 2] = reloc_amplitudes
             features.append(loc_features)
-
+            if self.rescale_all_features:
+                loc_features[kept, 1] *= np.median(np.abs(loc_features[kept, 0]-np.median(loc_features[kept, 0])))/np.median(np.abs(loc_features[kept, 1]-np.median(loc_features[kept, 1])))
+                loc_features[kept, 2] *= np.median(np.abs(loc_features[kept, 0]-np.median(loc_features[kept, 0])))/np.median(np.abs(loc_features[kept, 2]-np.median(loc_features[kept, 2])))
+        if not self.use_ptp:
+            loc_features = loc_features[:, :2]
+                
         if self.n_pca_features > 0:
+            # if self.relocated:
             enough_good_spikes, kept, pca_embeds = self.pca_features(
-                in_unit, max_registered_channel, n_pitches_shift
+                in_unit, max_registered_channel, n_pitches_shift, amplitude_normalized=self.amplitude_normalized, a=self.localization_features[in_unit, 2]
             )
+            # else:
+            #     enough_good_spikes, kept, pca_embeds = self.pca_features(
+            #         in_unit, max_registered_channel, n_pitches_shift, amplitude_normalized=self.amplitude_normalized, a=self.localization_features[in_unit, 2]
+            #     )
             if not enough_good_spikes:
                 return SplitResult()
             # scale pc features to match localization features
-            if self.use_localization_features:
-                pca_embeds *= loc_features.std(axis=0).mean()
+            if self.rescale_all_features:
+                for k in range(self.n_pca_features):
+                    pca_embeds[kept, k] *= np.median(np.abs(loc_features[kept, 0]-np.median(loc_features[kept, 0])))/np.median(np.abs(pca_embeds[kept, k]-np.median(pca_embeds[kept, k])))
+            elif self.use_localization_features:
+                pca_embeds *= np.median(np.abs(loc_features[kept]-np.median(loc_features[kept], axis=0)[None]), axis=0).mean()
             features.append(pca_embeds)
+
         features = np.column_stack([f[kept] for f in features])
 
         clust = HDBSCAN(
@@ -335,7 +355,7 @@ class FeatureSplit(SplitStrategy):
 
         return max_registered_channel, n_pitches_shift, reloc_amplitudes, kept
 
-    def pca_features(self, in_unit, max_registered_channel, n_pitches_shift, batch_size=1_000, max_samples_pca=50_000):
+    def pca_features(self, in_unit, max_registered_channel, n_pitches_shift, batch_size=1_000, max_samples_pca=50_000, amplitude_normalized=False, a=None):
         """Compute relocated PCA features on a drift-invariant channel set"""
         # figure out which set of channels to use
         # we use the stored amplitudes to do this rather than computing a
@@ -402,13 +422,21 @@ class FeatureSplit(SplitStrategy):
         fit_indices = no_nan
         if fit_indices.size > max_samples_pca:
             fit_indices = self.rg.choice(fit_indices, size=max_samples_pca, replace=False)
-        pca.fit(waveforms[fit_indices])
+        if amplitude_normalized:
+            pca.fit(waveforms[fit_indices]/a[fit_indices, None])
+        else:
+            pca.fit(waveforms[fit_indices])
 
         # embed into the cluster's PCA space
         pca_projs = np.full((waveforms.shape[0], self.n_pca_features), np.nan, dtype=waveforms.dtype)
-        for bs in range(0, no_nan.size, batch_size):
-            be = min(no_nan.size, bs + batch_size)
-            pca_projs[no_nan[bs:be]] = pca.transform(waveforms[no_nan[bs:be]])
+        if amplitude_normalized:
+            for bs in range(0, no_nan.size, batch_size):
+                be = min(no_nan.size, bs + batch_size)
+                pca_projs[no_nan[bs:be]] = pca.transform(waveforms[no_nan[bs:be]]/a[no_nan[bs:be], None])
+        else:
+            for bs in range(0, no_nan.size, batch_size):
+                be = min(no_nan.size, bs + batch_size)
+                pca_projs[no_nan[bs:be]] = pca.transform(waveforms[no_nan[bs:be]])
 
         return True, no_nan, pca_projs
 
