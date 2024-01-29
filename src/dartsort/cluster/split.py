@@ -159,6 +159,7 @@ class FeatureSplit(SplitStrategy):
         n_pca_features=2,
         relocated=True,
         localization_feature_scales=(1.0, 1.0, 50.0),
+        log_c=5,
         channel_selection_radius=75.0,
         min_cluster_size=25,
         min_samples=25,
@@ -207,6 +208,7 @@ class FeatureSplit(SplitStrategy):
         self.relocated = relocated and motion_est is not None
         self.motion_est = motion_est
         self.localization_feature_scales = localization_feature_scales
+        self.log_c = log_c
         self.rg = np.random.default_rng(random_state)
         self.reassign_outliers = reassign_outliers
 
@@ -290,7 +292,10 @@ class FeatureSplit(SplitStrategy):
             else:
                 new_labels[idx_subsample[kept]] = hdb_labels
 
-        return SplitResult(is_split=is_split, in_unit=in_unit_all, new_labels=new_labels, x=loc_features[:, 0], z_reg=loc_features[:, 1])
+        if self.use_localization_features:
+            return SplitResult(is_split=is_split, in_unit=in_unit_all, new_labels=new_labels, x=loc_features[:, 0], z_reg=loc_features[:, 1])
+        else:
+            return SplitResult(is_split=is_split, in_unit=in_unit_all, new_labels=new_labels)
 
     def get_registered_channels(self, in_unit):
         n_pitches_shift = drift_util.get_spike_pitch_shifts(
@@ -444,7 +449,7 @@ class FeatureSplit(SplitStrategy):
 
         if self.use_localization_features:
             self.localization_features = np.c_[
-                self.xyza[:, 0], self.z_reg, self.amplitudes
+                self.xyza[:, 0], self.z_reg, np.log(self.log_c + self.amplitudes)
             ]
             self.localization_features *= self.localization_feature_scales
 
