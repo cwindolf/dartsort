@@ -20,9 +20,9 @@ class Localization(BaseWaveformFeaturizer):
         n_channels_subset=None,
         logbarrier=True,
         amplitude_kind="peak",
-        name=None,
-        name_prefix=None,
         localization_model="pointsource",
+        name=None,
+        name_prefix="",
     ):
         assert amplitude_kind in ("peak", "ptp")
         super().__init__(
