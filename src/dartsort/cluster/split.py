@@ -505,8 +505,13 @@ class FeatureSplit(SplitStrategy):
                 )
             waveforms[bs:be] = batch.reshape(n_batch, -1)
 
-        # figure out which waveforms actually overlap with the requested channels
-        no_nan = np.flatnonzero(~np.isnan(waveforms).any(axis=1))
+        # remove channels which are entirely nan
+        not_entirely_nan_channels = np.flatnonzero(np.isfinite(waveforms).any(axis=0))
+        if not_entirely_nan_channels.size < waveforms.shape[1]:
+            waveforms = waveforms[:, not_entirely_nan_channels]
+
+        # figure out which waveforms overlap completely with the remaining channels
+        no_nan = np.flatnonzero(np.isfinite(waveforms).all(axis=1))
         if no_nan.size < max(self.min_cluster_size, self.n_pca_features):
             return False, no_nan, None
 
