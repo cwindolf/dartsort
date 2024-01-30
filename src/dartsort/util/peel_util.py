@@ -45,10 +45,11 @@ def run_peeler(
     # do localization
     if not featurization_config.denoise_only and featurization_config.do_localization:
         wf_name = featurization_config.output_waveforms_name
+        loc_amp_type = featurization_config.localization_amplitude_type
         localize_hdf5(
             output_hdf5_filename,
             radius=featurization_config.localization_radius,
-            amplitude_vectors_dataset_name=f"{wf_name}_amplitude_vectors",
+            amplitude_vectors_dataset_name=f"{wf_name}_{loc_amp_type}_amplitude_vectors",
             show_progress=show_progress,
             device=device,
             localization_model=featurization_config.localization_model,

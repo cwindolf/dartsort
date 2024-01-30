@@ -72,7 +72,7 @@ class Waveform(BaseWaveformFeaturizer):
         spike_length_samples=121,
         dtype=torch.float,
         name=None,
-        name_prefix="",
+        name_prefix=None,
     ):
         super().__init__(
             geom=geom,
