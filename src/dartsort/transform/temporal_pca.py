@@ -20,7 +20,7 @@ class BaseTemporalPCA(BaseWaveformModule):
         fit_radius=None,
         random_state=0,
         name=None,
-        name_prefix="",
+        name_prefix=None,
     ):
         if fit_radius is not None:
             if geom is None or channel_index is None:
