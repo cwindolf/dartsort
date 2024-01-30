@@ -291,7 +291,6 @@ class FeatureSplit(SplitStrategy):
                 max_registered_channel,
                 n_pitches_shift,
                 amplitude_normalized=self.amplitude_normalized,
-                a=self.localization_features[in_unit, 2],
             )
 
             if not enough_good_spikes:
@@ -448,7 +447,6 @@ class FeatureSplit(SplitStrategy):
         batch_size=1_000,
         max_samples_pca=50_000,
         amplitude_normalized=False,
-        a=None,
     ):
         """Compute relocated PCA features on a drift-invariant channel set"""
         # figure out which set of channels to use
@@ -527,7 +525,8 @@ class FeatureSplit(SplitStrategy):
                 fit_indices, size=max_samples_pca, replace=False
             )
         if amplitude_normalized:
-            pca.fit(waveforms[fit_indices] / a[fit_indices, None])
+            amplitudes = self.amplitudes[in_unit][:, None]
+            pca.fit(waveforms[fit_indices] / amplitudes[fit_indices])
         else:
             pca.fit(waveforms[fit_indices])
 
@@ -539,7 +538,7 @@ class FeatureSplit(SplitStrategy):
             for bs in range(0, no_nan.size, batch_size):
                 be = min(no_nan.size, bs + batch_size)
                 pca_projs[no_nan[bs:be]] = pca.transform(
-                    waveforms[no_nan[bs:be]] / a[no_nan[bs:be], None]
+                    waveforms[no_nan[bs:be]] / amplitudes[no_nan[bs:be], None]
                 )
         else:
             for bs in range(0, no_nan.size, batch_size):
