@@ -29,7 +29,7 @@ class SingleChannelWaveformDenoiser(BaseWaveformDenoiser):
         in_place=False,
         pretrained_path=default_pretrained_path,
         name=None,
-        name_prefix=None,
+        name_prefix="",
     ):
         super().__init__(
             channel_index=channel_index, name=name, name_prefix=name_prefix
