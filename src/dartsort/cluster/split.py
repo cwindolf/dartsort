@@ -172,7 +172,6 @@ class FeatureSplit(SplitStrategy):
         min_samples=25,
         cluster_selection_epsilon=25,
         reassign_outliers=False,
-        max_size_wfs=None,
         random_state=0,
         **dataset_name_kwargs,
     ):
@@ -224,8 +223,6 @@ class FeatureSplit(SplitStrategy):
         self.min_samples = min_samples
         self.cluster_selection_epsilon = cluster_selection_epsilon
 
-        self.max_size_wfs = max_size_wfs
-
         # load up the required h5 datasets
         self.initialize_from_h5(
             peeling_hdf5_filename,
@@ -235,7 +232,7 @@ class FeatureSplit(SplitStrategy):
 
     def split_cluster(self, in_unit_all, max_size_wfs):
         n_spikes = in_unit_all.size
-        if max_size_wfs is not None and n_spikes > max_size_wfs:
+        if max_size_wfs and n_spikes > max_size_wfs:
             # TODO: max_size_wfs could be chosen automatically based on available memory and number of spikes
             idx_subsample = np.random.choice(n_spikes, max_size_wfs, replace=False)
             idx_subsample.sort()
@@ -261,7 +258,7 @@ class FeatureSplit(SplitStrategy):
         if self.use_localization_features:
             loc_features = self.localization_features[in_unit]
             if self.relocated:
-                loc_features[kept, 2] = reloc_amplitudes
+                loc_features[kept, 2] = np.log(self.log_c + reloc_amplitudes)
             features.append(loc_features)
 
         if self.n_pca_features > 0:
@@ -343,7 +340,6 @@ class FeatureSplit(SplitStrategy):
             )
             kept = np.flatnonzero(~np.isnan(reloc_amp_vecs).any(axis=1))
             reloc_amplitudes = np.nanmax(reloc_amp_vecs[kept], axis=1)
-            reloc_amplitudes = np.log(self.log_c + reloc_amplitudes)
         else:
             reloc_amplitudes = None
             kept = np.arange(in_unit.size)
@@ -367,7 +363,7 @@ class FeatureSplit(SplitStrategy):
         pca_channels = pca_channels[pca_channels < len(self.registered_geom)]
 
         # load waveform embeddings and invert TPCA if we are relocating
-        waveforms = None  # will allocate output array when we know it's size
+        waveforms = None  # will allocate output array when we know its size
         for bs in range(0, in_unit.size, batch_size):
             be = min(in_unit.size, bs + batch_size)
 
@@ -409,7 +405,7 @@ class FeatureSplit(SplitStrategy):
             if waveforms is None:
                 waveforms = np.empty(
                     (in_unit.size, t * pca_channels.size), dtype=batch.dtype
-                )  # POTENTIALLY WAY TOO BIG
+                )
             waveforms[bs:be] = batch.reshape(n_batch, -1)
 
         # figure out which waveforms actually overlap with the requested channels
@@ -446,8 +442,8 @@ class FeatureSplit(SplitStrategy):
         peeling_featurization_pt,
         tpca_features_dataset_name="collisioncleaned_tpca_features",
         localizations_dataset_name="point_source_localizations",
-        amplitudes_dataset_name="denoised_amplitudes",
-        amplitude_vectors_dataset_name="denoised_amplitude_vectors",
+        amplitudes_dataset_name="denoised_ptp_amplitudes",
+        amplitude_vectors_dataset_name="denoised_ptp_amplitude_vectors",
     ):
         h5 = h5py.File(peeling_hdf5_filename, "r")
         self.geom = h5["geom"][:]

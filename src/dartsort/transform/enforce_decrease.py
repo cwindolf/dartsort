@@ -23,7 +23,7 @@ class EnforceDecrease(BaseWaveformDenoiser):
         geom,
         batch_size=2048,
         name=None,
-        name_prefix="",
+        name_prefix=None,
     ):
         super().__init__(name=name, name_prefix=name_prefix)
         self.register_buffer(
