@@ -177,6 +177,7 @@ class FeatureSplit(SplitStrategy):
         rescale_all_features=False, 
         use_ptp=True, 
         amplitude_normalized=False,
+        use_spread=False,
         **dataset_name_kwargs,
     ):
         """Split clusters based on per-cluster PCA and localization features
@@ -232,6 +233,7 @@ class FeatureSplit(SplitStrategy):
         self.rescale_all_features=rescale_all_features, 
         self.use_ptp=use_ptp, 
         self.amplitude_normalized=amplitude_normalized
+        self.use_spread=use_spread
 
         # load up the required h5 datasets
         self.initialize_from_h5(
@@ -264,6 +266,8 @@ class FeatureSplit(SplitStrategy):
         if not kept.size:
             return SplitResult()
 
+        self.spread_feature(in_unit)
+
         features = []
         if self.use_localization_features:
             loc_features = self.localization_features[in_unit]
@@ -277,14 +281,11 @@ class FeatureSplit(SplitStrategy):
             loc_features = loc_features[:, :2]
                 
         if self.n_pca_features > 0:
-            # if self.relocated:
+
             enough_good_spikes, kept, pca_embeds = self.pca_features(
                 in_unit, max_registered_channel, n_pitches_shift, amplitude_normalized=self.amplitude_normalized, a=self.localization_features[in_unit, 2]
             )
-            # else:
-            #     enough_good_spikes, kept, pca_embeds = self.pca_features(
-            #         in_unit, max_registered_channel, n_pitches_shift, amplitude_normalized=self.amplitude_normalized, a=self.localization_features[in_unit, 2]
-            #     )
+
             if not enough_good_spikes:
                 return SplitResult()
             # scale pc features to match localization features
@@ -295,6 +296,14 @@ class FeatureSplit(SplitStrategy):
                 pca_embeds *= np.median(np.abs(loc_features[kept]-np.median(loc_features[kept], axis=0)[None]), axis=0).mean()
             features.append(pca_embeds)
 
+        if self.use_spread:        
+            spread = self.spread_feature(in_unit)
+            if self.rescale_all_features:
+                spread *= np.median(np.abs(loc_features[kept, 0]-np.median(loc_features[kept, 0])))/np.median(np.abs(spread[kept]-np.median(spread[kept])))
+            elif self.use_localization_features:
+                spread *= np.median(np.abs(loc_features[kept]-np.median(loc_features[kept], axis=0)[None]), axis=0).mean()
+            features.append(spread)
+                
         features = np.column_stack([f[kept] for f in features])
 
         clust = HDBSCAN(
@@ -371,6 +380,28 @@ class FeatureSplit(SplitStrategy):
 
         return max_registered_channel, n_pitches_shift, reloc_amplitudes, kept
 
+    def spread_feature(
+        self,
+        in_unit,
+        max_value_dist=70,
+    ):
+
+        spread = np.zeros(in_unit.shape[0])
+        amp_vecs = batched_h5_read(self.amplitude_vectors, in_unit)
+        main_channels=self.channels[in_unit]
+
+        channel_distances_index = np.sqrt(((np.pad(self.geom, [[0, 1], [0, 0]],mode='constant',constant_values=np.nan)[self.channel_index]-self.geom[:, None])**2).sum(2))
+        
+        for k in range(in_unit.shape[0]):
+            max_chan = main_channels[k]
+            channels_effective = np.flatnonzero(self.channel_index[max_chan]<384)
+            channels_effective = channels_effective[channel_distances_index[max_chan][channels_effective]<max_value_dist]
+            spread[k] = np.nansum(amp_vecs[k, channels_effective] * channel_distances_index[max_chan][channels_effective])/np.nansum(amp_vecs[k, channels_effective])
+
+        return spread
+
+
+    
     def pca_features(
         self,
         in_unit,
@@ -424,11 +455,12 @@ class FeatureSplit(SplitStrategy):
                     main_channels=self.channels[in_unit][bs:be],
                     channel_index=self.channel_index,
                     target_channels=pca_channels,
-                    n_pitches_shift=n_pitches_shift,
+                    n_pitches_shift=n_pitches_shift[bs:be],
                     registered_geom=self.registered_geom,
                     match_distance=self.match_distance,
                 )
-
+                t = batch.shape[1]
+                
             if waveforms is None:
                 waveforms = np.empty(
                     (in_unit.size, t * pca_channels.size), dtype=batch.dtype
