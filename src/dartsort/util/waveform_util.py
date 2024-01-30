@@ -109,6 +109,29 @@ def make_pitch_channel_index(geom, n_neighbor_rows=1, pitch=None):
         channel_index[c, : my_neighbors.size] = my_neighbors
     return channel_index
 
+def make_pitch_channel_index_no_nans_for_plotting(geom, n_neighbor_rows=1, pitch=None):
+    """
+    Channel neighborhoods which are whole pitches
+    This function will select all the n_neighbor_rows inside the probe so that wfs are not nans
+    """
+    n_channels = geom.shape[0]
+    if pitch is None:
+        pitch = get_pitch(geom)
+    neighbors = (
+        np.abs(geom[:, 1][:, None] - geom[:, 1][None, :])
+        <= n_neighbor_rows * pitch
+    )
+    channel_index = np.full((n_channels, neighbors.sum(1).max()), n_channels)
+    for c in range(n_channels):
+        my_neighbors = np.flatnonzero(neighbors[c])
+        channel_index[c, : my_neighbors.size] = my_neighbors
+        if channel_index[c].max()==n_channels:
+            if c>n_channels//2:
+                channel_index[c]=np.arange(n_channels-channel_index.shape[1], n_channels)
+            else:
+                channel_index[c]=np.arange(0, channel_index.shape[1])
+    return channel_index
+
 
 def full_channel_index(n_channels):
     """Everyone is everone's neighbor"""
@@ -149,9 +172,7 @@ def set_channels_in_probe(
     waveforms_full_dest[channels_in_probe] = waveforms_in_probe_src
     return waveforms_full_dest.permute(0, 2, 1)
 
-
 # -- channel subsetting
-
 
 def channel_subset_by_radius(
     waveforms,
