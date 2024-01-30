@@ -51,8 +51,8 @@ class DARTsortAnalysis:
 
     # hdf5 keys
     localizations_dataset = "point_source_localizations"
-    amplitudes_dataset = "denoised_amplitudes"
-    amplitude_vectors_dataset = "denoised_amplitude_vectors"
+    amplitudes_dataset = "denoised_ptp_amplitudes"
+    amplitude_vectors_dataset = "denoised_ptp_amplitude_vectors"
     tpca_features_dataset = "collisioncleaned_tpca_features"
     template_indices_dataset = "collisioncleaned_tpca_features"
 

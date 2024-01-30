@@ -32,7 +32,7 @@ def forward_backward(
 
     # load features that we will need
     # needs to be all features here
-    amps = chunk_sortings[0].denoised_amplitudes
+    amps = chunk_sortings[0].denoised_ptp_amplitudes
     xyza = chunk_sortings[0].point_source_localizations
     x = xyza[:, 0]
     z_reg = xyza[:, 2]
