@@ -21,7 +21,7 @@ class Localization(BaseWaveformFeaturizer):
         logbarrier=True,
         amplitude_kind="peak",
         name=None,
-        name_prefix="",
+        name_prefix=None,
         localization_model="pointsource",
     ):
         assert amplitude_kind in ("peak", "ptp")
@@ -66,5 +66,6 @@ class Localization(BaseWaveformFeaturizer):
             ]
         )
         return localizations
+
 
 PointSourceLocalization = Localization

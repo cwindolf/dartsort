@@ -18,8 +18,6 @@ def forward_backward(
     if len(chunk_sortings) == 1:
         return chunk_sortings[0]
 
-
-
     times_seconds = chunk_sortings[0].times_seconds
     times_samples = chunk_sortings[0].times_samples
     min_time_s = chunk_time_ranges_s[0][0]
