@@ -25,6 +25,7 @@ def cluster_chunk(
     chunk_time_range_s=None,
     motion_est=None,
     recording=None,
+    amplitudes_dataset_name="denoised_ptp_amplitudes",
 ):
     """Cluster spikes from a single segment
 
@@ -50,7 +51,7 @@ def cluster_chunk(
         channels = h5["channels"][:]
         times_s = h5["times_seconds"][:]
         xyza = h5["point_source_localizations"][:]
-        amps = h5["denoised_amplitudes"][:]
+        amps = h5[amplitudes_dataset_name][:]
         geom = h5["geom"][:]
     in_chunk = ensemble_utils.get_indices_in_chunk(times_s, chunk_time_range_s)
     labels = -1 * np.ones(len(times_samples))
@@ -81,14 +82,14 @@ def cluster_chunk(
             motion_est,
             min_cluster_size=clustering_config.min_cluster_size,
             min_samples=clustering_config.min_samples,
-            log_c = clustering_config.log_c,
+            log_c=clustering_config.log_c,
             cluster_selection_epsilon=clustering_config.cluster_selection_epsilon,
             scales=clustering_config.feature_scales,
             adaptive_feature_scales=clustering_config.adaptive_feature_scales,
             recursive=clustering_config.recursive,
             remove_duplicates=clustering_config.remove_duplicates,
-            remove_big_units = clustering_config.remove_big_units,
-            zstd_big_units = clustering_config.zstd_big_units,
+            remove_big_units=clustering_config.remove_big_units,
+            zstd_big_units=clustering_config.zstd_big_units,
         )
     else:
         assert False
@@ -97,11 +98,11 @@ def cluster_chunk(
         times_samples=times_samples,
         channels=channels,
         labels=labels,
-        extra_features=dict(
-            point_source_localizations=xyza,
-            denoised_amplitudes=amps,
-            times_seconds=times_s,
-        ),
+        extra_features={
+            "point_source_localizations": xyza,
+            amplitudes_dataset_name: amps,
+            "times_seconds": times_s,
+        },
     )
 
     return sorting
