@@ -12,7 +12,7 @@ from dartsort.config import (default_clustering_config,
 from dartsort.peel import (ObjectiveUpdateTemplateMatchingPeeler,
                            SubtractionPeeler)
 from dartsort.templates import TemplateData
-from dartsort.util.data_util import DARTsortSorting, check_recording
+from dartsort.util.data_util import check_recording
 from dartsort.util.peel_util import run_peeler
 
 
