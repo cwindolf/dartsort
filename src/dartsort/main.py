@@ -1,3 +1,4 @@
+from dataclasses import asdict
 from pathlib import Path
 
 from dartsort.cluster.initial import ensemble_chunks
@@ -6,20 +7,30 @@ from dartsort.cluster.split import split_clusters
 from dartsort.config import (default_clustering_config,
                              default_featurization_config,
                              default_matching_config,
+                             default_motion_estimation_config,
                              default_split_merge_config,
                              default_subtraction_config,
                              default_template_config)
 from dartsort.peel import (ObjectiveUpdateTemplateMatchingPeeler,
                            SubtractionPeeler)
 from dartsort.templates import TemplateData
-from dartsort.util.data_util import DARTsortSorting, check_recording
+from dartsort.util.data_util import check_recording
 from dartsort.util.peel_util import run_peeler
+from dartsort.util.registration_util import estimate_motion
+
+
+def dartsort_from_config(
+    recording,
+    config_path,
+):
+    pass
 
 
 def dartsort(
     recording,
     output_directory,
     featurization_config=default_featurization_config,
+    motion_estimation_config=default_motion_estimation_config,
     subtraction_config=default_subtraction_config,
     matching_config=default_subtraction_config,
     template_config=default_template_config,
@@ -43,8 +54,9 @@ def dartsort(
         device=device,
     )
     if motion_est is None:
-        # TODO
-        motion_est = estimate_motion()
+        motion_est = estimate_motion(
+            recording, sorting, **asdict(motion_estimation_config)
+        )
     sorting = cluster(
         sub_h5,
         recording,
@@ -164,8 +176,8 @@ def split_merge(
 
 def match(
     recording,
-    sorting,
-    output_directory,
+    sorting=None,
+    output_directory=None,
     motion_est=None,
     template_config=default_template_config,
     featurization_config=default_featurization_config,
@@ -181,6 +193,7 @@ def match(
     model_subdir="matching0_models",
     template_npz_filename="template_data.npz",
 ):
+    assert output_directory is not None
     model_dir = Path(output_directory) / model_subdir
 
     # compute templates

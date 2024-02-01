@@ -66,6 +66,8 @@ def hdbscan_clustering(
     remove_duplicates=True,
     frames_dedup=12,
     frame_dedup_cluster=20,
+    remove_big_units = True,
+    zstd_big_units = 50,
 ):
     """
     Run HDBSCAN
@@ -112,7 +114,19 @@ def hdbscan_clustering(
             clusterer.labels_[removed_ix.astype("int")] = -1
 
     if not recursive:
-        return clusterer.labels_
+        if remove_big_units:
+            labels = clusterer.labels_
+            _, labels[labels >= 0] = np.unique(labels[labels >= 0], return_inverse=True)
+            arr_z_std = np.zeros(labels.max()+1)
+            for k in np.unique(labels[labels>=0]):
+                idx = np.flatnonzero(labels == k)
+                arr_z_std[k] = z_reg[idx].std()
+            bad_units = np.where(arr_z_std>zstd_big_units)
+            labels[np.isin(labels, bad_units)]=-1
+            _, labels[labels >= 0] = np.unique(labels[labels >= 0], return_inverse=True)
+            return labels
+        else:
+            return clusterer.labels_
 
     # -- recursively split clusters as long as HDBSCAN keeps finding more than 1
     # if HDBSCAN only finds one cluster, then be done
