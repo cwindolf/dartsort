@@ -625,6 +625,8 @@ default_plots = (
     TimeAmpScatter(relocate_amplitudes=True),
     RawWaveformPlot(),
     TPCAWaveformPlot(relocated=True),
+    NearbyCoarseTemplatesPlot(),
+    CoarseTemplateDistancePlot(),
 )
 
 
