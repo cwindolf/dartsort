@@ -31,7 +31,6 @@ default_pretrained_path = files("dartsort.pretrained")
 default_pretrained_path = default_pretrained_path.joinpath("single_chan_denoiser.pt")
 
 
-# TODO: integrate this in the other configs
 @dataclass(frozen=True)
 class WaveformConfig:
     """Defaults yield 42 sample trough offset and 121 total at 30kHz."""
@@ -44,7 +43,10 @@ class WaveformConfig:
 
     def spike_length_samples(self, sampling_frequency=30_000):
         spike_len_ms = self.ms_before + self.ms_after
-        return int(spike_len_ms * (sampling_frequency / 1000))
+        length = int(spike_len_ms * (sampling_frequency / 1000))
+        # odd is better for convolution arithmetic elsewhere
+        length = 2 * (length // 2) + 1
+        return length
 
 
 @dataclass(frozen=True)
@@ -103,8 +105,6 @@ class FeaturizationConfig:
 
 @dataclass(frozen=True)
 class SubtractionConfig:
-    trough_offset_samples: int = 42
-    spike_length_samples: int = 121
     detection_thresholds: List[int] = (10, 8, 6, 5, 4)
     chunk_length_samples: int = 30_000
     peak_sign: str = "both"
@@ -147,8 +147,6 @@ class MotionEstimationConfig:
 
 @dataclass(frozen=True)
 class TemplateConfig:
-    trough_offset_samples: int = 42
-    spike_length_samples: int = 121
     spikes_per_unit = 500
 
     # -- template construction parameters
@@ -177,8 +175,6 @@ class TemplateConfig:
 
 @dataclass(frozen=True)
 class MatchingConfig:
-    trough_offset_samples: int = 42
-    spike_length_samples: int = 121
     chunk_length_samples: int = 30_000
     extract_radius: float = 200.0
     n_chunks_fit: int = 40
@@ -235,6 +231,7 @@ class SplitMergeConfig:
     merge_distance_threshold: float = 0.25
 
 
+default_waveform_config = WaveformConfig()
 default_featurization_config = FeaturizationConfig()
 default_subtraction_config = SubtractionConfig()
 default_template_config = TemplateConfig()
@@ -242,3 +239,4 @@ default_clustering_config = ClusteringConfig()
 default_split_merge_config = SplitMergeConfig()
 coarse_template_config = TemplateConfig(superres_templates=False)
 default_matching_config = MatchingConfig()
+default_motion_estimation_config = MotionEstimationConfig()

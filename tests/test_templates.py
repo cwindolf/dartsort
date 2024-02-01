@@ -167,13 +167,13 @@ def test_main_object():
         rec,
         sorting,
         config.TemplateConfig(
-            trough_offset_samples=0,
-            spike_length_samples=2,
             realign_peaks=False,
             superres_templates=False,
             denoising_rank=2,
         ),
         motion_est=me,
+        trough_offset_samples=0,
+        spike_length_samples=2,
     )
 
 
