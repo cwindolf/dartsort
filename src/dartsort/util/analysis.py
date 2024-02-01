@@ -9,7 +9,7 @@ This should also make it easier to compute drift-aware metrics
 """
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Optional
+from typing import Callable, Optional
 
 import h5py
 import numpy as np
@@ -19,7 +19,7 @@ from dredge.motion_util import MotionEstimate
 from sklearn.decomposition import PCA
 from spikeinterface.comparison import GroundTruthComparison
 
-from ..cluster import relocate
+from ..cluster import merge, relocate
 from ..templates import TemplateData
 from ..transform import WaveformPipeline
 from .data_util import DARTsortSorting
@@ -55,6 +55,11 @@ class DARTsortAnalysis:
     amplitude_vectors_dataset = "denoised_ptp_amplitude_vectors"
     tpca_features_dataset = "collisioncleaned_tpca_features"
     template_indices_dataset = "collisioncleaned_tpca_features"
+
+    # configuration for analysis computations not included in above objects
+    device: Optional[str, torch.device] = None
+    merge_distance_templates_kind: str = "coarse"
+    merge_superres_linkage: Callable[[np.ndarray], float] = np.max
 
     # helper constructors
 
@@ -110,7 +115,9 @@ class DARTsortAnalysis:
     def __post_init__(self):
         if self.featurization_pipeline is not None:
             assert not self.featurization_pipeline.needs_fit()
-        assert np.isin(self.template_data.unit_ids, np.unique(self.sorting.labels)).all()
+        assert np.isin(
+            self.template_data.unit_ids, np.unique(self.sorting.labels)
+        ).all()
 
         assert self.hdf5_path.exists()
         self.coarse_template_data = self.template_data.coarsen()
@@ -127,6 +134,7 @@ class DARTsortAnalysis:
                 self.motion_est is not None
                 and self.template_data.registered_geom is not None
             )
+        assert self.coarse_template_data.unit_ids == self.unit_ids
 
         # cached hdf5 pointer
         self._h5 = None
@@ -145,6 +153,7 @@ class DARTsortAnalysis:
         self._sklearn_tpca = None
         self._unit_ids = None
         self._spike_counts = None
+        self._merge_dist = None
         self._feats = {}
 
     def __getstate__(self):
@@ -209,6 +218,12 @@ class DARTsortAnalysis:
             self._sklearn_tpca = tpca_feature[0].to_sklearn()
         return self._sklearn_tpca
 
+    @property
+    def merge_dist(self):
+        if self._merge_dist is None:
+            self._merge_dist = self._calc_merge_dist()
+        return self._merge_dist
+
     # spike train helpers
 
     @property
@@ -235,6 +250,16 @@ class DARTsortAnalysis:
 
     def unit_template_indices(self, unit_id):
         return np.flatnonzero(self.template_data.unit_ids == self.unit_id)
+
+    @property
+    def show_geom(self):
+        show_geom = self.template_data.registered_geom
+        if show_geom is None:
+            show_geom = self.recording.get_channel_locations()
+        return show_geom
+
+    def show_channel_index(self, radius_um=50):
+        return make_channel_index(self.show_geom, radius_um)
 
     # spike feature loading methods
 
@@ -330,7 +355,12 @@ class DARTsortAnalysis:
         if not self.shifting:
             return which, waveforms
 
-        waveforms, max_chan, show_geom, show_channel_index = self.unit_shift_or_relocate_channels(
+        (
+            waveforms,
+            max_chan,
+            show_geom,
+            show_channel_index,
+        ) = self.unit_shift_or_relocate_channels(
             unit_id,
             which,
             waveforms,
@@ -367,7 +397,12 @@ class DARTsortAnalysis:
         t = waveforms.shape[1]
         waveforms = waveforms.reshape(n, c, t).transpose(0, 2, 1)
 
-        waveforms, max_chan, show_geom, show_channel_index = self.unit_shift_or_relocate_channels(
+        (
+            waveforms,
+            max_chan,
+            show_geom,
+            show_channel_index,
+        ) = self.unit_shift_or_relocate_channels(
             unit_id,
             which,
             waveforms,
@@ -378,9 +413,21 @@ class DARTsortAnalysis:
         return which, waveforms, max_chan, show_geom, show_channel_index
 
     def unit_pca_features(
-        self, unit_id, relocated=True, rank=2, pca_radius_um=75, random_seed=0, max_count=500
+        self,
+        unit_id,
+        relocated=True,
+        rank=2,
+        pca_radius_um=75,
+        random_seed=0,
+        max_count=500,
     ):
-        which, waveforms, max_chan, show_geom, show_channel_index = self.unit_tpca_waveforms(
+        (
+            which,
+            waveforms,
+            max_chan,
+            show_geom,
+            show_channel_index,
+        ) = self.unit_tpca_waveforms(
             unit_id,
             relocated=relocated,
             show_radius_um=pca_radius_um,
@@ -439,7 +486,9 @@ class DARTsortAnalysis:
         show_channel_index = make_channel_index(show_geom, show_radius_um)
         show_chans = show_channel_index[max_chan]
         show_chans = show_chans[show_chans < len(show_geom)]
-        show_channel_index = np.broadcast_to(show_chans[None], (len(show_geom), show_chans.size))
+        show_channel_index = np.broadcast_to(
+            show_chans[None], (len(show_geom), show_chans.size)
+        )
 
         if not self.shifting:
             return waveforms, max_chan, show_geom, show_channel_index
@@ -477,6 +526,34 @@ class DARTsortAnalysis:
         )
 
         return waveforms, max_chan, show_geom, show_channel_index
+
+    def nearby_coarse_templates(self, unit_id, n_neighbors=5):
+        unit_ix = np.searchsorted(self.unit_ids, unit_id)
+        unit_dists = self.merge_dist[unit_ix]
+        distance_order = np.argsort(unit_dists)
+        assert distance_order[0] == unit_ix
+        neighbor_ixs = distance_order[:n_neighbors]
+        neighbor_ids = self.unit_ids[:n_neighbors]
+        neighbor_dists = self.merge_dist[neighbor_ixs[:, None], neighbor_ixs[None, :]]
+        neighbor_coarse_templates = self.coarse_template_data.templates[neighbor_ixs]
+        return neighbor_ids, neighbor_dists, neighbor_coarse_templates
+
+    # computation
+
+    def _calc_merge_dist(self):
+        """Compute the merge distance matrix"""
+        merge_td = self.template_data
+        if self.merge_distance_templates_kind == "coarse":
+            merge_td = self.coarse_template_data
+
+        units, dists, shifts, template_snrs = merge.calculate_merge_distances(
+            merge_td,
+            superres_linkage=self.merge_superres_linkage,
+            device=self.device,
+            n_jobs=1,
+        )
+        assert np.array_equal(units, self.unit_ids)
+        self._merge_dist = dists
 
 
 @dataclass
