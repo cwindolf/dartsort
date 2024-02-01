@@ -28,6 +28,7 @@ def estimate_motion(
     max_disp_um: Optional[float] = None,
     localizations_dataset_name="point_source_localizations",
     amplitudes_dataset_name="denoised_ptp_amplitudes",
+    device=None,
 ):
     if not do_motion_estimation:
         return None
@@ -68,6 +69,7 @@ def estimate_motion(
         window_margin_um=window_margin_um,
         max_disp_um=max_disp_um,
         max_dt_s=max_dt_s,
+        device=device,
     )
 
     with open(motion_est_pkl, "wb") as jar:
