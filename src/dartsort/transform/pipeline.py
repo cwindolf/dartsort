@@ -138,11 +138,19 @@ def featurization_config_to_class_names_and_kwargs(fconf):
                 },
             )
         )
-    if do_feats and (fconf.do_localization or fconf.save_amplitude_vectors):
+    if do_feats and fconf.do_localization and fconf.localization_amplitude_type == "peak":
         class_names_and_kwargs.append(
             (
                 "AmplitudeVector",
                 {"name_prefix": fconf.output_waveforms_name},
+            )
+        )
+    if do_feats:
+        # we'll also need a peak-to-peak amplitude vector in other places
+        class_names_and_kwargs.append(
+            (
+                "AmplitudeVector",
+                {"name_prefix": fconf.output_waveforms_name, "kind": "ptp"},
             )
         )
     if do_feats and fconf.save_amplitudes:

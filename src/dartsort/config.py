@@ -62,6 +62,10 @@ class FeaturizationConfig:
     are computed for the input waveforms, what denoising
     operations are applied, and what features are computed
     for the output (post-denoising) waveforms.
+
+    Users who'd rather do something not covered by this
+    typical case can manually instantiate a WaveformPipeline
+    and pass it into their peeler.
     """
 
     # -- denoising configuration
@@ -81,7 +85,7 @@ class FeaturizationConfig:
     do_localization: bool = True
     localization_radius: float = 100.0
     # these are saved always if do_localization
-    save_amplitude_vectors: bool = True
+    localization_amplitude_type: str = "peak"
     localization_model: str = "pointsource"
 
     # -- further info about denoising
@@ -117,6 +121,28 @@ class SubtractionConfig:
         input_waveforms_name="raw",
         output_waveforms_name="subtracted",
     )
+
+
+@dataclass(frozen=True)
+class MotionEstimationConfig:
+    """Configure motion estimation.
+
+    You can also make your own and pass it to dartsort() to bypass this
+    """
+    do_motion_estimation: bool = True
+
+    # sometimes spikes can be localized far away from the probe, causing
+    # issues with motion estimation, we will ignore such spikes
+    probe_boundary_padding_um: float = 100.0
+
+    # DREDge parameters
+    spatial_bin_length_um: float = 1.0
+    temporal_bin_length_s: float = 1.0
+    window_step_um: float = 400.0
+    window_scale_um: float = 450.0
+    window_margin_um: Optional[float] = None
+    max_dt_s: float = 0.1
+    max_disp_um: Optional[float] = None
 
 
 @dataclass(frozen=True)
@@ -185,6 +211,9 @@ class ClusteringConfig:
     log_c: float = 5.0
     recursive: bool = False
     remove_duplicates: bool = True
+    # remove large clusters in hdbscan?
+    remove_big_units: bool = True
+    zstd_big_units: float = 50.0
 
     # grid snap parameters
     grid_dx: float = 15.0
@@ -213,3 +242,4 @@ default_clustering_config = ClusteringConfig()
 default_split_merge_config = SplitMergeConfig()
 coarse_template_config = TemplateConfig(superres_templates=False)
 default_matching_config = MatchingConfig()
+default_motion_estimation_config = MotionEstimationConfig()
