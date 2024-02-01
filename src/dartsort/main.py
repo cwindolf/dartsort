@@ -1,3 +1,4 @@
+from dataclasses import asdict
 from pathlib import Path
 
 from dartsort.cluster.initial import ensemble_chunks
@@ -6,14 +7,16 @@ from dartsort.cluster.split import split_clusters
 from dartsort.config import (default_clustering_config,
                              default_featurization_config,
                              default_matching_config,
+                             default_motion_estimation_config,
                              default_split_merge_config,
                              default_subtraction_config,
-                             default_template_config)
+                             default_template_config, default_waveform_config)
 from dartsort.peel import (ObjectiveUpdateTemplateMatchingPeeler,
                            SubtractionPeeler)
 from dartsort.templates import TemplateData
 from dartsort.util.data_util import check_recording
 from dartsort.util.peel_util import run_peeler
+from dartsort.util.registration_util import estimate_motion
 
 
 def dartsort_from_config(
@@ -26,7 +29,9 @@ def dartsort_from_config(
 def dartsort(
     recording,
     output_directory,
+    waveform_config=default_waveform_config,
     featurization_config=default_featurization_config,
+    motion_estimation_config=default_motion_estimation_config,
     subtraction_config=default_subtraction_config,
     matching_config=default_subtraction_config,
     template_config=default_template_config,
@@ -43,6 +48,7 @@ def dartsort(
     sorting, sub_h5 = subtract(
         recording,
         output_directory,
+        waveform_config=waveform_config,
         featurization_config=featurization_config,
         subtraction_config=subtraction_config,
         n_jobs=n_jobs,
@@ -50,8 +56,14 @@ def dartsort(
         device=device,
     )
     if motion_est is None:
-        # TODO
-        motion_est = estimate_motion()
+        motion_est = estimate_motion(
+            recording,
+            sorting,
+            output_directory,
+            overwrite=overwrite,
+            device=device,
+            **asdict(motion_estimation_config),
+        )
     sorting = cluster(
         sub_h5,
         recording,
@@ -78,6 +90,7 @@ def dartsort(
             output_directory,
             motion_est=motion_est,
             template_config=template_config,
+            waveform_config=waveform_config,
             featurization_config=featurization_config,
             matching_config=matching_config,
             n_jobs_templates=n_jobs,
@@ -95,6 +108,7 @@ def dartsort(
 def subtract(
     recording,
     output_directory,
+    waveform_config=default_waveform_config,
     featurization_config=default_featurization_config,
     subtraction_config=default_subtraction_config,
     chunk_starts_samples=None,
@@ -109,6 +123,7 @@ def subtract(
     check_recording(recording)
     subtraction_peeler = SubtractionPeeler.from_config(
         recording,
+        waveform_config=waveform_config,
         subtraction_config=subtraction_config,
         featurization_config=featurization_config,
     )
@@ -174,6 +189,7 @@ def match(
     sorting=None,
     output_directory=None,
     motion_est=None,
+    waveform_config=default_waveform_config,
     template_config=default_template_config,
     featurization_config=default_featurization_config,
     matching_config=default_matching_config,
@@ -192,21 +208,30 @@ def match(
     model_dir = Path(output_directory) / model_subdir
 
     # compute templates
+    trough_offset_samples = waveform_config.trough_offset_samples(
+        recording.sampling_frequency
+    )
+    spike_length_samples = waveform_config.spike_length_samples(
+        recording.sampling_frequency
+    )
     template_data = TemplateData.from_config(
         recording,
         sorting,
-        template_config,
+        template_config=template_config,
         motion_est=motion_est,
         n_jobs=n_jobs_templates,
         save_folder=model_dir,
         overwrite=overwrite,
         device=device,
         save_npz_name=template_npz_filename,
+        trough_offset_samples=trough_offset_samples,
+        spike_length_samples=spike_length_samples,
     )
 
     # instantiate peeler
     matching_peeler = ObjectiveUpdateTemplateMatchingPeeler.from_config(
         recording,
+        waveform_config,
         matching_config,
         featurization_config,
         template_data,

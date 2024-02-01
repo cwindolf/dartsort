@@ -18,6 +18,7 @@ def merge_templates(
     motion_est=None,
     max_shift_samples=20,
     superres_linkage=np.max,
+    sym_function=np.minimum,
     merge_distance_threshold=0.25,
     temporal_upsampling_factor=8,
     amplitude_scaling_variance=0.0,
@@ -68,6 +69,50 @@ def merge_templates(
             save_npz_name=template_npz_filename,
         )
 
+    units, dists, shifts, template_snrs = calculate_merge_distances(
+        template_data,
+        superres_linkage=superres_linkage,
+        sym_function=sym_function,
+        max_shift_samples=max_shift_samples,
+        temporal_upsampling_factor=temporal_upsampling_factor,
+        amplitude_scaling_variance=amplitude_scaling_variance,
+        amplitude_scaling_boundary=amplitude_scaling_boundary,
+        svd_compression_rank=svd_compression_rank,
+        min_channel_amplitude=min_channel_amplitude,
+        conv_batch_size=conv_batch_size,
+        units_batch_size=units_batch_size,
+        device=device,
+        n_jobs=n_jobs,
+        show_progress=show_progress,
+    )
+
+    # now run hierarchical clustering
+    return recluster(
+        sorting,
+        units,
+        dists,
+        shifts,
+        template_snrs,
+        merge_distance_threshold=merge_distance_threshold,
+    )
+
+
+def calculate_merge_distances(
+    template_data,
+    superres_linkage=np.max,
+    sym_function=np.minimum,
+    max_shift_samples=20,
+    temporal_upsampling_factor=8,
+    amplitude_scaling_variance=0.0,
+    amplitude_scaling_boundary=0.5,
+    svd_compression_rank=10,
+    min_channel_amplitude=0.0,
+    conv_batch_size=128,
+    units_batch_size=8,
+    device=None,
+    n_jobs=0,
+    show_progress=True,
+):
     # allocate distance + shift matrices. shifts[i,j] is trough[j]-trough[i].
     n_templates = template_data.templates.shape[0]
     sup_dists = np.full((n_templates, n_templates), np.inf)
@@ -116,15 +161,9 @@ def merge_templates(
             template_data.templates.ptp(1).max(1) / template_data.spike_counts
         )
 
-    # now run hierarchical clustering
-    return recluster(
-        sorting,
-        units,
-        dists,
-        shifts,
-        template_snrs,
-        merge_distance_threshold=merge_distance_threshold,
-    )
+    dists = sym_function(dists, dists.T)
+
+    return units, dists, shifts, template_snrs
 
 
 def recluster(
@@ -134,9 +173,7 @@ def recluster(
     shifts,
     template_snrs,
     merge_distance_threshold=0.25,
-    sym_function=np.minimum,
 ):
-    dists = sym_function(dists, dists.T)
 
     # upper triangle not including diagonal, aka condensed distance matrix in scipy
     pdist = dists[np.triu_indices(dists.shape[0], k=1)]
