@@ -55,7 +55,7 @@ def dartsort(
     )
     if motion_est is None:
         motion_est = estimate_motion(
-            recording, sorting, **asdict(motion_estimation_config)
+            recording, sorting, overwrite=overwrite, **asdict(motion_estimation_config)
         )
     sorting = cluster(
         sub_h5,
