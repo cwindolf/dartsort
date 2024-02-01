@@ -324,7 +324,7 @@ def test_small_nonn():
 
     h = dense_layout()
     geom = np.c_[h["x"], h["y"]][:n_channels]
-    rec = sc.NumpyRecording(noise, 10_000)
+    rec = sc.NumpyRecording(noise, 30_000)
     rec.set_dummy_probe_from_locations(geom)
 
     subconf = SubtractionConfig(
@@ -405,7 +405,7 @@ def test_small_default_config():
 
     h = dense_layout()
     geom = np.c_[h["x"], h["y"]][:n_channels]
-    rec = sc.NumpyRecording(noise, 10_000)
+    rec = sc.NumpyRecording(noise, 30_000)
     rec.set_dummy_probe_from_locations(geom)
 
     with tempfile.TemporaryDirectory() as tempdir:
