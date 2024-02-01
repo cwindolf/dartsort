@@ -21,6 +21,7 @@ class EnforceDecrease(BaseWaveformDenoiser):
         self,
         channel_index,
         geom,
+        batch_size=2048,
         name=None,
         name_prefix="",
     ):
@@ -38,6 +39,7 @@ class EnforceDecrease(BaseWaveformDenoiser):
             "_1",
             torch.tensor(1.0),
         )
+        self.batch_size = batch_size
 
     def forward(self, waveforms, max_channels):
         """
@@ -54,14 +56,22 @@ class EnforceDecrease(BaseWaveformDenoiser):
 
         # pad with an extra channel to support indexing tricks
         pad_ptps = F.pad(ptps, (0, 1), value=torch.inf)
+        parent_min_ptps = torch.zeros_like(ptps)
         # get amplitudes of all parents for all channels -- (N, c, <=c-1)
-        # TODO batch this?
-        # TODO it may be possible to refactor using the new torch.Tensor.scatter_reduce_!
-        parent_ptps = pad_ptps[
-            torch.arange(n)[:, None, None],
-            self.parents_index[max_channels],
-        ]
-        parent_min_ptps = parent_ptps.min(dim=2).values
+        # this is a gather_reduce, and it would be nice if torch had one.
+        # batching the following:
+        # parent_ptps = pad_ptps[
+        #     torch.arange(n)[:, None, None],
+        #     self.parents_index[max_channels],
+        # ]
+        # parent_min_ptps = parent_ptps.min(dim=2).values
+        for bs in range(0, n, self.batch_size):
+            be = min(n, bs + self.batch_size)
+            parent_ptps = pad_ptps[
+                torch.arange(bs, be)[:, None, None],
+                self.parents_index[max_channels[bs:be]],
+            ]
+            parent_min_ptps[bs:be] = parent_ptps.min(dim=2).values
 
         # what would we need to multiply by to ensure my amp is <= all parents?
         rescaling = torch.minimum(parent_min_ptps / ptps, self._1)

@@ -31,6 +31,7 @@ def scatter_spike_features(
     limits="probe_margin",
     label_axes=True,
     random_seed=0,
+    amplitudes_dataset_name="denoised_ptp_amplitudes",
     **scatter_kw,
 ):
     """3-axis scatter plot of spike depths vs. horizontal pos, amplitude, and time
@@ -57,7 +58,7 @@ def scatter_spike_features(
             times_s = h5["times_seconds"][:]
             x = h5["point_source_localizations"][:, 0]
             depths_um = h5["point_source_localizations"][:, 2]
-            amplitudes = h5["denoised_amplitudes"][:]
+            amplitudes = h5[amplitudes_dataset_name][:]
             geom = h5["geom"][:]
 
     to_show = np.flatnonzero(np.clip(times_s, t_min, t_max) == times_s)
@@ -89,6 +90,7 @@ def scatter_spike_features(
         s=s,
         linewidth=linewidth,
         to_show=to_show,
+        amplitudes_dataset_name=amplitudes_dataset_name,
         **scatter_kw,
     )
 
@@ -110,6 +112,7 @@ def scatter_spike_features(
         s=s,
         linewidth=linewidth,
         to_show=to_show,
+        amplitudes_dataset_name=amplitudes_dataset_name,
         **scatter_kw,
     )
 
@@ -130,6 +133,7 @@ def scatter_spike_features(
         s=s,
         linewidth=linewidth,
         to_show=to_show,
+        amplitudes_dataset_name=amplitudes_dataset_name,
         **scatter_kw,
     )
 
@@ -162,6 +166,7 @@ def scatter_time_vs_depth(
     s=1,
     linewidth=0,
     to_show=None,
+    amplitudes_dataset_name="denoised_ptp_amplitudes",
     **scatter_kw,
 ):
     """Scatter plot of spike time vs spike depth (vertical position on probe)
@@ -177,7 +182,7 @@ def scatter_time_vs_depth(
         with h5py.File(hdf5_filename, "r") as h5:
             times_s = h5["times_seconds"][:]
             depths_um = h5["point_source_localizations"][:, 2]
-            amplitudes = h5["denoised_amplitudes"][:]
+            amplitudes = h5[amplitudes_dataset_name][:]
             geom = h5["geom"][:]
 
     return scatter_feature_vs_depth(
@@ -225,6 +230,7 @@ def scatter_x_vs_depth(
     s=1,
     linewidth=0,
     to_show=None,
+    amplitudes_dataset_name="denoised_ptp_amplitudes",
     **scatter_kw,
 ):
     """Scatter plot of spike horizontal pos vs spike depth (vertical position on probe)"""
@@ -233,7 +239,7 @@ def scatter_x_vs_depth(
             times_s = h5["times_seconds"][:]
             x = h5["point_source_localizations"][:, 0]
             depths_um = h5["point_source_localizations"][:, 2]
-            amplitudes = h5["denoised_amplitudes"][:]
+            amplitudes = h5[amplitudes_dataset_name][:]
             geom = h5["geom"][:]
 
     if to_show is None and geom is not None:
@@ -292,6 +298,7 @@ def scatter_amplitudes_vs_depth(
     s=1,
     linewidth=0,
     to_show=None,
+    amplitudes_dataset_name="denoised_ptp_amplitudes",
     **scatter_kw,
 ):
     """Scatter plot of spike horizontal pos vs spike depth (vertical position on probe)"""
@@ -299,7 +306,7 @@ def scatter_amplitudes_vs_depth(
         with h5py.File(hdf5_filename, "r") as h5:
             times_s = h5["times_seconds"][:]
             depths_um = h5["point_source_localizations"][:, 2]
-            amplitudes = h5["denoised_amplitudes"][:]
+            amplitudes = h5[amplitudes_dataset_name][:]
             geom = h5["geom"][:]
 
     ax, s = scatter_feature_vs_depth(
