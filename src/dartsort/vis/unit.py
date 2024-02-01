@@ -10,6 +10,7 @@ the data work so that this file can focus on plotting (sort of MVC).
 from collections import namedtuple
 from pathlib import Path
 
+import colorcet as cc
 import matplotlib.pyplot as plt
 import numpy as np
 from matplotlib.legend_handler import HandlerTuple
@@ -303,7 +304,9 @@ class WaveformPlot(UnitPlot):
         raise NotImplementedError
 
     def draw(self, axis, sorting_analysis, unit_id):
-        which, waveforms, max_chan, geom, ci = self.get_waveforms(sorting_analysis, unit_id)
+        which, waveforms, max_chan, geom, ci = self.get_waveforms(
+            sorting_analysis, unit_id
+        )
 
         max_abs_amp = None
         show_template = self.show_template
@@ -327,7 +330,9 @@ class WaveformPlot(UnitPlot):
                 new_length=self.spike_length_samples,
             )
             max_abs_amp = self.max_abs_template_scale * np.abs(templates).max()
-        show_superres_templates = self.show_superres_templates and self.template_index is None
+        show_superres_templates = (
+            self.show_superres_templates and self.template_index is None
+        )
         if show_superres_templates:
             suptemplates = sorting_analysis.template_data.unit_templates(unit_id)
             show_superres_templates = bool(suptemplates.size)
@@ -442,6 +447,102 @@ class TPCAWaveformPlot(WaveformPlot):
             show_radius_um=self.show_radius_um,
             relocated=self.relocated,
         )
+
+
+# -- merge-focused plots
+
+
+class NearbyCoarseTemplatesPlot(UnitPlot):
+    title = "nearby coarse templates"
+    kind = "neighbors"
+    width = 2
+    height = 2
+
+    def __init__(self, show_radius_um=50, n_neighbors=5, legend=True):
+        self.show_radius_um = show_radius_um
+        self.n_neighbors = n_neighbors
+        self.legend = legend
+
+    def draw(self, axis, sorting_analysis, unit_id):
+        (
+            neighbor_ids,
+            neighbor_dists,
+            neighbor_coarse_templates,
+        ) = sorting_analysis.nearby_coarse_templates(
+            self, unit_id, n_neighbors=self.n_neighbors
+        )
+        colors = cc.m_glasbey_light[neighbor_ids]
+        assert neighbor_ids[0] == unit_id
+        chan = neighbor_coarse_templates[0].ptp(1).argmax(1)
+        ci = sorting_analysis.show_channel_index(self.show_radius_um)
+        channels = ci[chan]
+        neighbor_coarse_templates = neighbor_coarse_templates[:, :, channels]
+        maxamp = np.abs(neighbor_coarse_templates).max()
+
+        labels = []
+        handles = []
+        for uid, color, template in zip(
+            neighbor_ids, colors, neighbor_coarse_templates
+        ):
+            lines = geomplot(
+                template[None],
+                max_channels=[chan],
+                channel_index=ci,
+                geom=sorting_analysis.show_geom,
+                ax=axis,
+                show_zero=False,
+                max_abs_amp=maxamp,
+                subar=True,
+                bar_color="k",
+                bar_background="w",
+                zlim="tight",
+                color=color,
+            )
+            labels.append(str(uid))
+            handles.append(lines[0])
+        axis.legend(handles=handles, labels=labels, fancybox=False)
+        axis.set_xticks([])
+        axis.set_yticks([])
+
+
+class CoarseTemplateDistancePlot(UnitPlot):
+    title = "coarse template distance"
+    kind = "neighbors"
+    width = 2
+    height = 2
+
+    def __init__(self, show_radius_um=50, n_neighbors=5, dist_vmax=1.0):
+        self.show_radius_um = show_radius_um
+        self.n_neighbors = n_neighbors
+        self.dist_vmax = dist_vmax
+
+    def draw(self, axis, sorting_analysis, unit_id):
+        (
+            neighbor_ids,
+            neighbor_dists,
+            neighbor_coarse_templates,
+        ) = sorting_analysis.nearby_coarse_templates(
+            self, unit_id, n_neighbors=self.n_neighbors
+        )
+        colors = cc.m_glasbey_light[neighbor_ids]
+        assert neighbor_ids[0] == unit_id
+
+        im = axis.imshow(
+            neighbor_dists,
+            vmin=0,
+            vmax=self.dist_vmax,
+            cmap=plt.cm.RdGy,
+            origin="lower",
+            interpolation="none",
+        )
+        plt.colorbar(im, ax=axis)
+        axis.set_xticks(range(len(neighbor_ids)), neighbor_ids)
+        axis.set_yticks(range(len(neighbor_ids)), neighbor_ids)
+        for i, (tx, ty) in enumerate(
+            zip(axis.xaxis.get_ticklabels(), axis.yaxis.get_ticklabels())
+        ):
+            tx.set_color(colors[i])
+            ty.set_color(colors[i])
 
 
 # -- multi plots
