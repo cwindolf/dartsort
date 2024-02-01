@@ -10,7 +10,7 @@ from dartsort.config import (default_clustering_config,
                              default_motion_estimation_config,
                              default_split_merge_config,
                              default_subtraction_config,
-                             default_template_config)
+                             default_template_config, default_waveform_config)
 from dartsort.peel import (ObjectiveUpdateTemplateMatchingPeeler,
                            SubtractionPeeler)
 from dartsort.templates import TemplateData
@@ -29,6 +29,7 @@ def dartsort_from_config(
 def dartsort(
     recording,
     output_directory,
+    waveform_config=default_waveform_config,
     featurization_config=default_featurization_config,
     motion_estimation_config=default_motion_estimation_config,
     subtraction_config=default_subtraction_config,
@@ -47,6 +48,7 @@ def dartsort(
     sorting, sub_h5 = subtract(
         recording,
         output_directory,
+        waveform_config=waveform_config,
         featurization_config=featurization_config,
         subtraction_config=subtraction_config,
         n_jobs=n_jobs,
@@ -55,7 +57,12 @@ def dartsort(
     )
     if motion_est is None:
         motion_est = estimate_motion(
-            recording, sorting, overwrite=overwrite, **asdict(motion_estimation_config)
+            recording,
+            sorting,
+            output_directory,
+            overwrite=overwrite,
+            device=device,
+            **asdict(motion_estimation_config),
         )
     sorting = cluster(
         sub_h5,
@@ -83,6 +90,7 @@ def dartsort(
             output_directory,
             motion_est=motion_est,
             template_config=template_config,
+            waveform_config=waveform_config,
             featurization_config=featurization_config,
             matching_config=matching_config,
             n_jobs_templates=n_jobs,
@@ -100,6 +108,7 @@ def dartsort(
 def subtract(
     recording,
     output_directory,
+    waveform_config=default_waveform_config,
     featurization_config=default_featurization_config,
     subtraction_config=default_subtraction_config,
     chunk_starts_samples=None,
@@ -114,6 +123,7 @@ def subtract(
     check_recording(recording)
     subtraction_peeler = SubtractionPeeler.from_config(
         recording,
+        waveform_config=waveform_config,
         subtraction_config=subtraction_config,
         featurization_config=featurization_config,
     )
@@ -179,6 +189,7 @@ def match(
     sorting=None,
     output_directory=None,
     motion_est=None,
+    waveform_config=default_waveform_config,
     template_config=default_template_config,
     featurization_config=default_featurization_config,
     matching_config=default_matching_config,
@@ -197,21 +208,30 @@ def match(
     model_dir = Path(output_directory) / model_subdir
 
     # compute templates
+    trough_offset_samples = waveform_config.trough_offset_samples(
+        recording.sampling_frequency
+    )
+    spike_length_samples = waveform_config.spike_length_samples(
+        recording.sampling_frequency
+    )
     template_data = TemplateData.from_config(
         recording,
         sorting,
-        template_config,
+        template_config=template_config,
         motion_est=motion_est,
         n_jobs=n_jobs_templates,
         save_folder=model_dir,
         overwrite=overwrite,
         device=device,
         save_npz_name=template_npz_filename,
+        trough_offset_samples=trough_offset_samples,
+        spike_length_samples=spike_length_samples,
     )
 
     # instantiate peeler
     matching_peeler = ObjectiveUpdateTemplateMatchingPeeler.from_config(
         recording,
+        waveform_config,
         matching_config,
         featurization_config,
         template_data,
