@@ -229,7 +229,7 @@ def test_grab_and_featurize():
         localize_hdf5(
             Path(tempdir) / "grab.h5",
             radius=50.0,
-            amplitude_vectors_dataset_name="amplitude_vectors",
+            amplitude_vectors_dataset_name="peak_amplitude_vectors",
         )
 
         with h5py.File(Path(tempdir) / "grab.h5") as h5:

@@ -272,6 +272,14 @@ def get_waveforms_on_static_channels(
 ):
     """Load a set of drifting waveforms on a static set of channels
 
+    Waveforms are by default detected waveforms on the full probe with channel
+    locations stored in geom. If main_channels and channel_index are supplied,
+    then waveforms[i] appears on the channels indexed by channel_index[main_channels[i]].
+
+    Now, the user wants to extract a subset of channels from each waveform such that
+    the same channel in each subsetted waveform is always at the same physical position,
+    accounting for drift. Here, the drift is inputted by n_pitches_shift.
+
     Arguments
     ---------
     waveforms : (n_spikes, t (optional), c) array

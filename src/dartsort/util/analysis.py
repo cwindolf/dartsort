@@ -9,7 +9,7 @@ This should also make it easier to compute drift-aware metrics
 """
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Optional
+from typing import Callable, Optional
 
 import h5py
 import numpy as np
@@ -17,8 +17,9 @@ import spikeinterface.core as sc
 import torch
 from dredge.motion_util import MotionEstimate
 from sklearn.decomposition import PCA
+from spikeinterface.comparison import GroundTruthComparison
 
-from ..cluster import relocate
+from ..cluster import merge, relocate
 from ..templates import TemplateData
 from ..transform import WaveformPipeline
 from .data_util import DARTsortSorting
@@ -42,23 +43,23 @@ class DARTsortAnalysis:
     """
 
     sorting: DARTsortSorting
-    hdf5_path: Path
     recording: sc.BaseRecording
     template_data: TemplateData
+    hdf5_path: Optional[Path] = None
     featurization_pipeline: Optional[WaveformPipeline] = None
     motion_est: Optional[MotionEstimate] = None
 
     # hdf5 keys
     localizations_dataset = "point_source_localizations"
-    amplitudes_dataset = "denoised_amplitudes"
-    amplitude_vectors_dataset = "denoised_amplitude_vectors"
+    amplitudes_dataset = "denoised_ptp_amplitudes"
+    amplitude_vectors_dataset = "denoised_ptp_amplitude_vectors"
     tpca_features_dataset = "collisioncleaned_tpca_features"
     template_indices_dataset = "collisioncleaned_tpca_features"
 
-    def __post_init__(self):
-        if self.featurization_pipeline is not None:
-            assert not self.featurization_pipeline.needs_fit()
-        assert np.isin(self.template_data.unit_ids, np.unique(self.sorting.labels)).all()
+    # configuration for analysis computations not included in above objects
+    device: Optional[str, torch.device] = None
+    merge_distance_templates_kind: str = "coarse"
+    merge_superres_linkage: Callable[[np.ndarray], float] = np.max
 
     # helper constructors
 
@@ -112,6 +113,12 @@ class DARTsortAnalysis:
     # pickle/h5py gizmos
 
     def __post_init__(self):
+        if self.featurization_pipeline is not None:
+            assert not self.featurization_pipeline.needs_fit()
+        assert np.isin(
+            self.template_data.unit_ids, np.unique(self.sorting.labels)
+        ).all()
+
         assert self.hdf5_path.exists()
         self.coarse_template_data = self.template_data.coarsen()
 
@@ -127,6 +134,7 @@ class DARTsortAnalysis:
                 self.motion_est is not None
                 and self.template_data.registered_geom is not None
             )
+        assert self.coarse_template_data.unit_ids == self.unit_ids
 
         # cached hdf5 pointer
         self._h5 = None
@@ -145,6 +153,7 @@ class DARTsortAnalysis:
         self._sklearn_tpca = None
         self._unit_ids = None
         self._spike_counts = None
+        self._merge_dist = None
         self._feats = {}
 
     def __getstate__(self):
@@ -209,6 +218,12 @@ class DARTsortAnalysis:
             self._sklearn_tpca = tpca_feature[0].to_sklearn()
         return self._sklearn_tpca
 
+    @property
+    def merge_dist(self):
+        if self._merge_dist is None:
+            self._merge_dist = self._calc_merge_dist()
+        return self._merge_dist
+
     # spike train helpers
 
     @property
@@ -235,6 +250,16 @@ class DARTsortAnalysis:
 
     def unit_template_indices(self, unit_id):
         return np.flatnonzero(self.template_data.unit_ids == self.unit_id)
+
+    @property
+    def show_geom(self):
+        show_geom = self.template_data.registered_geom
+        if show_geom is None:
+            show_geom = self.recording.get_channel_locations()
+        return show_geom
+
+    def show_channel_index(self, radius_um=50):
+        return make_channel_index(self.show_geom, radius_um)
 
     # spike feature loading methods
 
@@ -288,6 +313,7 @@ class DARTsortAnalysis:
     def unit_raw_waveforms(
         self,
         unit_id,
+        which=None,
         template_index=None,
         max_count=250,
         random_seed=0,
@@ -296,10 +322,13 @@ class DARTsortAnalysis:
         spike_length_samples=121,
         relocated=False,
     ):
-        which = self.in_unit(unit_id)
+        if which is None:
+            which = self.in_unit(unit_id)
         if template_index is not None:
             assert template_index in self.unit_template_indices(unit_id)
             which = self.in_template(template_index)
+        if max_count is None:
+            max_count = which.size
         if which.size > max_count:
             rg = np.random.default_rng(0)
             which = rg.choice(which, size=max_count, replace=False)
@@ -326,7 +355,12 @@ class DARTsortAnalysis:
         if not self.shifting:
             return which, waveforms
 
-        waveforms, max_chan, show_geom, show_channel_index = self.unit_shift_or_relocate_channels(
+        (
+            waveforms,
+            max_chan,
+            show_geom,
+            show_channel_index,
+        ) = self.unit_shift_or_relocate_channels(
             unit_id,
             which,
             waveforms,
@@ -363,7 +397,12 @@ class DARTsortAnalysis:
         t = waveforms.shape[1]
         waveforms = waveforms.reshape(n, c, t).transpose(0, 2, 1)
 
-        waveforms, max_chan, show_geom, show_channel_index = self.unit_shift_or_relocate_channels(
+        (
+            waveforms,
+            max_chan,
+            show_geom,
+            show_channel_index,
+        ) = self.unit_shift_or_relocate_channels(
             unit_id,
             which,
             waveforms,
@@ -374,9 +413,21 @@ class DARTsortAnalysis:
         return which, waveforms, max_chan, show_geom, show_channel_index
 
     def unit_pca_features(
-        self, unit_id, relocated=True, rank=2, pca_radius_um=75, random_seed=0, max_count=500
+        self,
+        unit_id,
+        relocated=True,
+        rank=2,
+        pca_radius_um=75,
+        random_seed=0,
+        max_count=500,
     ):
-        which, waveforms, max_chan, show_geom, show_channel_index = self.unit_tpca_waveforms(
+        (
+            which,
+            waveforms,
+            max_chan,
+            show_geom,
+            show_channel_index,
+        ) = self.unit_tpca_waveforms(
             unit_id,
             relocated=relocated,
             show_radius_um=pca_radius_um,
@@ -435,7 +486,9 @@ class DARTsortAnalysis:
         show_channel_index = make_channel_index(show_geom, show_radius_um)
         show_chans = show_channel_index[max_chan]
         show_chans = show_chans[show_chans < len(show_geom)]
-        show_channel_index = np.broadcast_to(show_chans[None], (len(show_geom), show_chans.size))
+        show_channel_index = np.broadcast_to(
+            show_chans[None], (len(show_geom), show_chans.size)
+        )
 
         if not self.shifting:
             return waveforms, max_chan, show_geom, show_channel_index
@@ -473,6 +526,82 @@ class DARTsortAnalysis:
         )
 
         return waveforms, max_chan, show_geom, show_channel_index
+
+    def nearby_coarse_templates(self, unit_id, n_neighbors=5):
+        unit_ix = np.searchsorted(self.unit_ids, unit_id)
+        unit_dists = self.merge_dist[unit_ix]
+        distance_order = np.argsort(unit_dists)
+        assert distance_order[0] == unit_ix
+        neighbor_ixs = distance_order[:n_neighbors]
+        neighbor_ids = self.unit_ids[:n_neighbors]
+        neighbor_dists = self.merge_dist[neighbor_ixs[:, None], neighbor_ixs[None, :]]
+        neighbor_coarse_templates = self.coarse_template_data.templates[neighbor_ixs]
+        return neighbor_ids, neighbor_dists, neighbor_coarse_templates
+
+    # computation
+
+    def _calc_merge_dist(self):
+        """Compute the merge distance matrix"""
+        merge_td = self.template_data
+        if self.merge_distance_templates_kind == "coarse":
+            merge_td = self.coarse_template_data
+
+        units, dists, shifts, template_snrs = merge.calculate_merge_distances(
+            merge_td,
+            superres_linkage=self.merge_superres_linkage,
+            device=self.device,
+            n_jobs=1,
+        )
+        assert np.array_equal(units, self.unit_ids)
+        self._merge_dist = dists
+
+
+@dataclass
+class DARTsortGroundTruthComparison:
+    gt_analysis: DARTsortAnalysis
+    predicted_analysis: DARTsortAnalysis
+    gt_name: Optional[str] = None
+    predicted_name: Optional[str] = None
+    delta_time: float = 0.4
+    match_score: float = 0.1
+    well_detected_score: float = 0.8
+    exhaustive_gt: bool = False
+    n_jobs: int = -1
+    match_mode: str = "hungarian"
+
+    def __post_init__(self):
+        self.comparison = GroundTruthComparison(
+            gt_sorting=self.gt_analysis.sorting.to_numpy_sorting(),
+            tested_sorting=self.predicted_analysis.sorting.to_numpy_sorting(),
+            gt_name=self.gt_name,
+            predicted_name=self.predicted_name,
+            delta_time=self.delta_time,
+            match_score=self.match_score,
+            well_detected_score=self.well_detected_score,
+            exhaustive_gt=self.exhaustive_gt,
+            n_jobs=self.n_jobs,
+            match_mode=self.match_mode,
+        )
+
+    def get_match(self, gt_unit):
+        pass
+
+    def get_spikes_by_category(self, gt_unit, predicted_unit=None):
+        if predicted_unit is None:
+            predicted_unit = self.get_match(gt_unit)
+
+        return dict(
+            matched_predicted_indices=...,
+            matched_gt_indices=...,
+            only_gt_indices=...,
+            only_predicted_indices=...,
+        )
+
+    def get_performance(self, gt_unit):
+        pass
+
+    def get_waveforms_by_category(self, gt_unit, predicted_unit=None):
+        return ...
 
 
 # -- h5 helper... slow reading...
