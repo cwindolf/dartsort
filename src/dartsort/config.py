@@ -124,6 +124,28 @@ class SubtractionConfig:
 
 
 @dataclass(frozen=True)
+class MotionEstimationConfig:
+    """Configure motion estimation.
+
+    You can also make your own and pass it to dartsort() to bypass this
+    """
+    do_motion_estimation: bool = True
+
+    # sometimes spikes can be localized far away from the probe, causing
+    # issues with motion estimation, we will ignore such spikes
+    probe_boundary_padding_um: float = 100.0
+
+    # DREDge parameters
+    spatial_bin_length_um: float = 1.0
+    temporal_bin_length_s: float = 1.0
+    window_step_um: float = 400.0
+    window_scale_um: float = 450.0
+    window_margin_um: Optional[float] = None
+    max_dt_s: float = 0.1
+    max_disp_um: Optional[float] = None
+
+
+@dataclass(frozen=True)
 class TemplateConfig:
     trough_offset_samples: int = 42
     spike_length_samples: int = 121
@@ -189,7 +211,7 @@ class ClusteringConfig:
     log_c: float = 5.0
     recursive: bool = False
     remove_duplicates: bool = True
-    #remove large clusters in hdbscan?
+    # remove large clusters in hdbscan?
     remove_big_units: bool = True
     zstd_big_units: float = 50.0
 
