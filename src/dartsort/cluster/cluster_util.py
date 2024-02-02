@@ -66,8 +66,8 @@ def hdbscan_clustering(
     remove_duplicates=True,
     frames_dedup=12,
     frame_dedup_cluster=20,
-    remove_big_units = True,
-    zstd_big_units = 50,
+    remove_big_units=True,
+    zstd_big_units=50,
 ):
     """
     Run HDBSCAN
@@ -79,13 +79,17 @@ def hdbscan_clustering(
         z_reg = motion_est.correct_s(times_seconds, z_abs)
 
     if adaptive_feature_scales:
-        scales = (1, 1, np.median(np.abs(x - np.median(x)))/np.median(np.abs(np.log(log_c + amps)-np.median(np.log(log_c + amps))))
-                 )
+        scales = (
+            1,
+            1,
+            np.median(np.abs(x - np.median(x)))
+            / np.median(np.abs(np.log(log_c + amps) - np.median(np.log(log_c + amps)))),
+        )
 
     features = np.c_[x * scales[0], z_reg * scales[1], np.log(log_c + amps) * scales[2]]
-    if features.shape[1]>=features.shape[0]:
-        return -1*np.ones(features.shape[0])
-    
+    if features.shape[1] >= features.shape[0]:
+        return -1 * np.ones(features.shape[0])
+
     clusterer = hdbscan.HDBSCAN(
         min_cluster_size=min_cluster_size,
         cluster_selection_epsilon=cluster_selection_epsilon,
@@ -117,12 +121,12 @@ def hdbscan_clustering(
         if remove_big_units:
             labels = clusterer.labels_
             _, labels[labels >= 0] = np.unique(labels[labels >= 0], return_inverse=True)
-            arr_z_std = np.zeros(labels.max()+1)
-            for k in np.unique(labels[labels>=0]):
+            arr_z_std = np.zeros(labels.max() + 1)
+            for k in np.unique(labels[labels >= 0]):
                 idx = np.flatnonzero(labels == k)
                 arr_z_std[k] = z_reg[idx].std()
-            bad_units = np.where(arr_z_std>zstd_big_units)
-            labels[np.isin(labels, bad_units)]=-1
+            bad_units = np.where(arr_z_std > zstd_big_units)
+            labels[np.isin(labels, bad_units)] = -1
             _, labels[labels >= 0] = np.unique(labels[labels >= 0], return_inverse=True)
             return labels
         else:
@@ -160,13 +164,16 @@ def hdbscan_clustering(
             frame_dedup_cluster=frame_dedup_cluster,
         )
         labels[in_unit[split_labels < 0]] = split_labels[split_labels < 0]
-        labels[in_unit[split_labels >= 0]] = split_labels[split_labels >= 0] + next_label
+        labels[in_unit[split_labels >= 0]] = (
+            split_labels[split_labels >= 0] + next_label
+        )
         # next_label += split_labels[split_labels >= 0].max() + 1
-        next_label += split_labels.max() + 1 #is that ok
+        next_label += split_labels.max() + 1  # is that ok
 
     # reindex
     _, labels[labels >= 0] = np.unique(labels[labels >= 0], return_inverse=True)
     return labels
+
 
 # How to deal with outliers?
 

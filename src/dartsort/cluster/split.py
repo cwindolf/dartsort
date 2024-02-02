@@ -55,7 +55,7 @@ def split_clusters(
         max_workers=n_jobs,
         mp_context=context,
         initializer=_split_job_init,
-        initargs=(split_strategy, split_strategy_kwargs),
+        initargs=(split_strategy, sorting.parent_h5_path, split_strategy_kwargs),
     ) as pool:
         iterator = jobs = [
             pool.submit(_split_job, np.flatnonzero(labels == i))
@@ -729,11 +729,12 @@ class SplitJobContext:
 _split_job_context = None
 
 
-def _split_job_init(split_strategy_class_name, split_strategy_kwargs):
+def _split_job_init(split_strategy_class_name, peeling_hdf5_filename, split_strategy_kwargs):
     global _split_job_context
     split_strategy = split_strategies_by_class_name[split_strategy_class_name]
     if split_strategy_kwargs is None:
         split_strategy_kwargs = {}
+    split_strategy_kwargs["peeling_hdf5_filename"] = peeling_hdf5_filename
     _split_job_context = SplitJobContext(split_strategy(**split_strategy_kwargs))
 
 

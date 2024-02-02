@@ -77,7 +77,7 @@ class DARTsortSorting:
         )
         if self.parent_h5_path:
             data["parent_h5_path"] = np.array(str(self.parent_h5_path))
-            data["feature_keys"] = np.fromiter(self.extra_features.keys())
+            data["feature_keys"] = np.array(list(self.extra_features.keys()))
         np.savez(sorting_npz, **data)
 
     @classmethod
