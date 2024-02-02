@@ -732,6 +732,8 @@ _split_job_context = None
 def _split_job_init(split_strategy_class_name, split_strategy_kwargs):
     global _split_job_context
     split_strategy = split_strategies_by_class_name[split_strategy_class_name]
+    if split_strategy_kwargs is None:
+        split_strategy_kwargs = {}
     _split_job_context = SplitJobContext(split_strategy(**split_strategy_kwargs))
 
 
