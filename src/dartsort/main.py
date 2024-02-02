@@ -4,7 +4,8 @@ from pathlib import Path
 from dartsort.cluster.initial import ensemble_chunks
 from dartsort.cluster.merge import merge_templates
 from dartsort.cluster.split import split_clusters
-from dartsort.config import (default_clustering_config,
+from dartsort.config import (DARTsortConfig, default_clustering_config,
+                             default_dartsort_config,
                              default_featurization_config,
                              default_matching_config,
                              default_motion_estimation_config,
@@ -14,7 +15,7 @@ from dartsort.config import (default_clustering_config,
 from dartsort.peel import (ObjectiveUpdateTemplateMatchingPeeler,
                            SubtractionPeeler)
 from dartsort.templates import TemplateData
-from dartsort.util.data_util import check_recording
+from dartsort.util.data_util import DARTsortSorting, check_recording
 from dartsort.util.peel_util import run_peeler
 from dartsort.util.registration_util import estimate_motion
 
@@ -23,20 +24,14 @@ def dartsort_from_config(
     recording,
     config_path,
 ):
+    # stub for eventual function that reads a config file
     pass
 
 
 def dartsort(
     recording,
     output_directory,
-    waveform_config=default_waveform_config,
-    featurization_config=default_featurization_config,
-    motion_estimation_config=default_motion_estimation_config,
-    subtraction_config=default_subtraction_config,
-    matching_config=default_subtraction_config,
-    template_config=default_template_config,
-    clustering_config=default_clustering_config,
-    split_merge_config=default_split_merge_config,
+    cfg: DARTsortConfig = default_dartsort_config,
     motion_est=None,
     matching_iterations=1,
     n_jobs=0,
@@ -44,13 +39,15 @@ def dartsort(
     show_progress=True,
     device=None,
 ):
+    output_directory = Path(output_directory)
+
     # initialization: subtraction, motion estimation and initial clustering
     sorting, sub_h5 = subtract(
         recording,
         output_directory,
-        waveform_config=waveform_config,
-        featurization_config=featurization_config,
-        subtraction_config=subtraction_config,
+        waveform_config=cfg.waveform_config,
+        featurization_config=cfg.featurization_config,
+        subtraction_config=cfg.subtraction_config,
         n_jobs=n_jobs,
         overwrite=overwrite,
         device=device,
@@ -62,13 +59,15 @@ def dartsort(
             output_directory,
             overwrite=overwrite,
             device=device,
-            **asdict(motion_estimation_config),
+            **asdict(cfg.motion_estimation_config),
         )
     sorting = cluster(
         sub_h5,
         recording,
+        output_directory=output_directory,
+        overwrite=overwrite,
         motion_est=motion_est,
-        clustering_config=clustering_config,
+        clustering_config=cfg.clustering_config,
     )
 
     # E/M iterations
@@ -78,9 +77,13 @@ def dartsort(
             sorting,
             recording,
             motion_est,
-            split_merge_config=split_merge_config,
+            output_directory=output_directory,
+            overwrite=overwrite,
+            split_merge_config=cfg.split_merge_config,
             n_jobs_split=n_jobs,
             n_jobs_merge=n_jobs,
+            split_npz=f"split{step}.npz",
+            merge_npz=f"merge{step}.npz",
         )
 
         # E step: deconvolution
@@ -89,10 +92,10 @@ def dartsort(
             sorting,
             output_directory,
             motion_est=motion_est,
-            template_config=template_config,
-            waveform_config=waveform_config,
-            featurization_config=featurization_config,
-            matching_config=matching_config,
+            template_config=cfg.template_config,
+            waveform_config=cfg.waveform_config,
+            featurization_config=cfg.featurization_config,
+            matching_config=cfg.matching_config,
             n_jobs_templates=n_jobs,
             n_jobs_match=n_jobs,
             overwrite=overwrite,
@@ -146,9 +149,17 @@ def subtract(
 def cluster(
     hdf5_filename,
     recording,
+    output_directory=None,
+    overwrite=False,
     motion_est=None,
     clustering_config=default_clustering_config,
+    output_npz="initial_clustering.npz",
 ):
+    if output_directory is not None:
+        output_npz = Path(output_directory) / output_npz
+        if not overwrite and output_npz.exists():
+            return DARTsortSorting.load(output_npz)
+
     # TODO: have this accept a sorting and expect it to contain basic feats.
     sorting = ensemble_chunks(
         hdf5_filename,
@@ -156,6 +167,10 @@ def cluster(
         clustering_config=clustering_config,
         motion_est=motion_est,
     )
+
+    if output_directory is not None and overwrite:
+        DARTsortSorting.save(output_npz)
+
     return sorting
 
 
@@ -163,24 +178,49 @@ def split_merge(
     sorting,
     recording,
     motion_est,
+    output_directory=None,
+    overwrite=False,
     split_merge_config=default_split_merge_config,
     n_jobs_split=0,
     n_jobs_merge=0,
+    split_npz="split.npz",
+    merge_npz="merge.npz",
 ):
-    split_sorting = split_clusters(
-        sorting,
-        split_strategy=split_merge_config.split_strategy,
-        recursive=split_merge_config.recursive_split,
-        n_jobs=n_jobs_split,
-    )
-    merge_sorting = merge_templates(
-        split_sorting,
-        recording,
-        template_config=split_merge_config.merge_template_config,
-        merge_distance_threshold=split_merge_config.merge_distance_threshold,
-        n_jobs=n_jobs_merge,
-        n_jobs_templates=n_jobs_merge,
-    )
+    split_exists = merge_exists = False
+    if output_directory is not None:
+        split_npz = Path(output_directory) / split_npz
+        split_exists = split_npz.exists()
+        merge_npz = Path(output_directory) / merge_npz
+        merge_exists = merge_npz.exists()
+        if not overwrite and merge_exists:
+            return DARTsortSorting.load(merge_npz)
+
+    if not overwrite and split_exists:
+        split_sorting = DARTsortSorting.load(split_npz)
+    else:
+        split_sorting = split_clusters(
+            sorting,
+            split_strategy=split_merge_config.split_strategy,
+            recursive=split_merge_config.recursive_split,
+            n_jobs=n_jobs_split,
+        )
+        if output_directory is not None and overwrite:
+            split_sorting.save(split_npz)
+
+    if not overwrite and merge_exists:
+        merge_sorting = DARTsortSorting.load(merge_npz)
+    else:
+        merge_sorting = merge_templates(
+            split_sorting,
+            recording,
+            template_config=split_merge_config.merge_template_config,
+            merge_distance_threshold=split_merge_config.merge_distance_threshold,
+            n_jobs=n_jobs_merge,
+            n_jobs_templates=n_jobs_merge,
+        )
+        if output_directory is not None and overwrite:
+            merge_sorting.save(merge_npz)
+
     return merge_sorting
 
 
