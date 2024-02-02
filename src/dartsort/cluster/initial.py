@@ -98,6 +98,7 @@ def cluster_chunk(
         times_samples=times_samples,
         channels=channels,
         labels=labels,
+        parent_h5_path=peeling_hdf5_filename,
         extra_features={
             "point_source_localizations": xyza,
             amplitudes_dataset_name: amps,
