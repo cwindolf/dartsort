@@ -469,11 +469,11 @@ class NearbyCoarseTemplatesPlot(UnitPlot):
             neighbor_dists,
             neighbor_coarse_templates,
         ) = sorting_analysis.nearby_coarse_templates(
-            self, unit_id, n_neighbors=self.n_neighbors
+            unit_id, n_neighbors=self.n_neighbors
         )
-        colors = cc.m_glasbey_light[neighbor_ids]
+        colors = np.array(cc.glasbey_light)[neighbor_ids]
         assert neighbor_ids[0] == unit_id
-        chan = neighbor_coarse_templates[0].ptp(1).argmax(1)
+        chan = neighbor_coarse_templates[0].ptp(0).argmax()
         ci = sorting_analysis.show_channel_index(self.show_radius_um)
         channels = ci[chan]
         neighbor_coarse_templates = neighbor_coarse_templates[:, :, channels]
@@ -503,6 +503,7 @@ class NearbyCoarseTemplatesPlot(UnitPlot):
         axis.legend(handles=handles, labels=labels, fancybox=False)
         axis.set_xticks([])
         axis.set_yticks([])
+        axis.set_title(self.title)
 
 
 class CoarseTemplateDistancePlot(UnitPlot):
@@ -522,9 +523,9 @@ class CoarseTemplateDistancePlot(UnitPlot):
             neighbor_dists,
             neighbor_coarse_templates,
         ) = sorting_analysis.nearby_coarse_templates(
-            self, unit_id, n_neighbors=self.n_neighbors
+            unit_id, n_neighbors=self.n_neighbors
         )
-        colors = cc.m_glasbey_light[neighbor_ids]
+        colors = np.array(cc.glasbey_light)[neighbor_ids]
         assert neighbor_ids[0] == unit_id
 
         im = axis.imshow(
@@ -535,7 +536,7 @@ class CoarseTemplateDistancePlot(UnitPlot):
             origin="lower",
             interpolation="none",
         )
-        plt.colorbar(im, ax=axis)
+        plt.colorbar(im, ax=axis, shrink=0.3)
         axis.set_xticks(range(len(neighbor_ids)), neighbor_ids)
         axis.set_yticks(range(len(neighbor_ids)), neighbor_ids)
         for i, (tx, ty) in enumerate(
@@ -543,7 +544,7 @@ class CoarseTemplateDistancePlot(UnitPlot):
         ):
             tx.set_color(colors[i])
             ty.set_color(colors[i])
-
+        axis.set_title(self.title)
 
 # -- multi plots
 # these have multiple plots per unit, and we don't know in advance how many
