@@ -481,8 +481,8 @@ class NearbyCoarseTemplatesPlot(UnitPlot):
 
         labels = []
         handles = []
-        for uid, color, template in zip(
-            neighbor_ids, colors, neighbor_coarse_templates
+        for uid, color, template in reversed(
+            zip(neighbor_ids, colors, neighbor_coarse_templates)
         ):
             lines = geomplot(
                 template[None],
@@ -545,6 +545,7 @@ class CoarseTemplateDistancePlot(UnitPlot):
             tx.set_color(colors[i])
             ty.set_color(colors[i])
         axis.set_title(self.title)
+
 
 # -- multi plots
 # these have multiple plots per unit, and we don't know in advance how many
