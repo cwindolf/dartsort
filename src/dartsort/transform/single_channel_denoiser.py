@@ -25,7 +25,7 @@ class SingleChannelWaveformDenoiser(BaseWaveformDenoiser):
         channel_index,
         geom=None,
         denoiser=None,
-        batch_size=128,
+        batch_size=32,
         in_place=False,
         pretrained_path=default_pretrained_path,
         name=None,
