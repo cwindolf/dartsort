@@ -208,6 +208,7 @@ class ClusteringConfig:
     log_c: float = 5.0
     recursive: bool = False
     remove_duplicates: bool = True
+
     # remove large clusters in hdbscan?
     remove_big_units: bool = True
     zstd_big_units: float = 50.0
