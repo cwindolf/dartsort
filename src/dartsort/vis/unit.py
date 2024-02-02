@@ -482,7 +482,7 @@ class NearbyCoarseTemplatesPlot(UnitPlot):
         labels = []
         handles = []
         for uid, color, template in reversed(
-            zip(neighbor_ids, colors, neighbor_coarse_templates)
+            list(zip(neighbor_ids, colors, neighbor_coarse_templates))
         ):
             lines = geomplot(
                 template[None],
