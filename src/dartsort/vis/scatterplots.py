@@ -53,13 +53,32 @@ def scatter_spike_features(
             gridspec_kw=dict(width_ratios=width_ratios),
         )
 
-    if hdf5_filename is not None:
+    if sorting is not None:
+        if times_s is None:
+            times_s = getattr(sorting, "times_seconds", None)
+        if x is None:
+            x = getattr(sorting, "point_source_localizations", None)
+            if x is not None:
+                depths_um = x[:, 2]
+                x = x[:, 0]
+        if amplitudes is None:
+            amplitudes = getattr(sorting, amplitudes_dataset_name, None)
+        if hdf5_filename is None:
+            hdf5_filename = sorting.parent_h5_path
+    
+    needs_load = any(v is None for v in (times_s, x, depths_um, amplitudes, geom))
+    if needs_load and hdf5_filename is not None:
         with h5py.File(hdf5_filename, "r") as h5:
-            times_s = h5["times_seconds"][:]
-            x = h5["point_source_localizations"][:, 0]
-            depths_um = h5["point_source_localizations"][:, 2]
-            amplitudes = h5[amplitudes_dataset_name][:]
-            geom = h5["geom"][:]
+            if times_s is None:
+                times_s = h5["times_seconds"][:]
+            if x is None:
+                x = h5["point_source_localizations"][:, 0]
+            if depths_um is None:
+                depths_um = h5["point_source_localizations"][:, 2]
+            if amplitudes is None:
+                amplitudes = h5[amplitudes_dataset_name][:]
+            if geom is None:
+                geom = h5["geom"][:]
 
     to_show = np.flatnonzero(np.clip(times_s, t_min, t_max) == times_s)
     if geom is not None:
@@ -178,12 +197,29 @@ def scatter_time_vs_depth(
 
     Returns: axis, scatter
     """
-    if hdf5_filename is not None:
+    if sorting is not None:
+        if times_s is None:
+            times_s = getattr(sorting, "times_seconds", None)
+        if depths_um is None:
+            depths_um = getattr(sorting, "point_source_localizations", None)
+            if depths_um is not None:
+                depths_um = x[:, 2]
+        if amplitudes is None:
+            amplitudes = getattr(sorting, amplitudes_dataset_name, None)
+        if hdf5_filename is None:
+            hdf5_filename = sorting.parent_h5_path
+    
+    needs_load = any(v is None for v in (times_s, depths_um, amplitudes, geom))
+    if needs_load and hdf5_filename is not None:
         with h5py.File(hdf5_filename, "r") as h5:
-            times_s = h5["times_seconds"][:]
-            depths_um = h5["point_source_localizations"][:, 2]
-            amplitudes = h5[amplitudes_dataset_name][:]
-            geom = h5["geom"][:]
+            if times_s is None:
+                times_s = h5["times_seconds"][:]
+            if depths_um is None:
+                depths_um = h5["point_source_localizations"][:, 2]
+            if amplitudes is None:
+                amplitudes = h5[amplitudes_dataset_name][:]
+            if geom is None:
+                geom = h5["geom"][:]
 
     return scatter_feature_vs_depth(
         times_s,
@@ -234,13 +270,6 @@ def scatter_x_vs_depth(
     **scatter_kw,
 ):
     """Scatter plot of spike horizontal pos vs spike depth (vertical position on probe)"""
-    if hdf5_filename is not None:
-        with h5py.File(hdf5_filename, "r") as h5:
-            times_s = h5["times_seconds"][:]
-            x = h5["point_source_localizations"][:, 0]
-            depths_um = h5["point_source_localizations"][:, 2]
-            amplitudes = h5[amplitudes_dataset_name][:]
-            geom = h5["geom"][:]
 
     if to_show is None and geom is not None:
         to_show = np.flatnonzero(
@@ -301,13 +330,26 @@ def scatter_amplitudes_vs_depth(
     amplitudes_dataset_name="denoised_ptp_amplitudes",
     **scatter_kw,
 ):
-    """Scatter plot of spike horizontal pos vs spike depth (vertical position on probe)"""
-    if hdf5_filename is not None:
+    """Scatter plot of spike amplitude vs spike depth (vertical position on probe)"""
+    if sorting is not None:
+        if depths_um is None:
+            depths_um = getattr(sorting, "point_source_localizations", None)
+            if depths_um is not None:
+                depths_um = x[:, 2]
+        if amplitudes is None:
+            amplitudes = getattr(sorting, amplitudes_dataset_name, None)
+        if hdf5_filename is None:
+            hdf5_filename = sorting.parent_h5_path
+    
+    needs_load = any(v is None for v in (depths_um, amplitudes, geom))
+    if needs_load and hdf5_filename is not None:
         with h5py.File(hdf5_filename, "r") as h5:
-            times_s = h5["times_seconds"][:]
-            depths_um = h5["point_source_localizations"][:, 2]
-            amplitudes = h5[amplitudes_dataset_name][:]
-            geom = h5["geom"][:]
+            if depths_um is None:
+                depths_um = h5["point_source_localizations"][:, 2]
+            if amplitudes is None:
+                amplitudes = h5[amplitudes_dataset_name][:]
+            if geom is None:
+                geom = h5["geom"][:]
 
     ax, s = scatter_feature_vs_depth(
         amplitudes,
