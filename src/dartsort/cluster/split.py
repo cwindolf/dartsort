@@ -391,16 +391,18 @@ class FeatureSplit(SplitStrategy):
                 loc_features = loc_features[:, :2]
             features.append(loc_features)
 
-        if self.n_pca_features > 0:
-            enough_good_spikes, kept, pca_embeds = self.pca_features(
+        do_pca = self.n_pca_features > 0
+        if do_pca:
+            enough_good_spikes, pca_kept, pca_embeds = self.pca_features(
                 in_unit,
                 max_registered_channel,
                 n_pitches_shift,
                 amplitude_normalized=self.amplitude_normalized,
             )
+            do_pca = enough_good_spikes
 
-            if not enough_good_spikes:
-                return SplitResult()
+        if do_pca:
+            kept = pca_kept
             # scale pc features to match localization features
             if self.rescale_all_features:
                 for k in range(self.n_pca_features):
@@ -417,6 +419,7 @@ class FeatureSplit(SplitStrategy):
                     axis=0,
                 ).mean()
             features.append(pca_embeds)
+            
 
         if self.use_spread:
             spread = self.spread_feature(in_unit)
