@@ -3,13 +3,13 @@ from pathlib import Path
 from typing import Optional
 
 import numpy as np
+from dartsort.localize.localize_util import localize_waveforms
 from dartsort.util import drift_util
 
 from .get_templates import get_templates
 from .superres_util import superres_sorting
 from .template_util import (get_realigned_sorting, get_template_depths,
                             weighted_average)
-from dartsort.localize.localize_util import localize_waveforms
 
 _motion_error_prefix = (
     "If template_config has registered_templates==True "
@@ -82,11 +82,12 @@ class TemplateData:
         )
 
     def template_locations(self):
-        template_locations = localize_waveforms(self.templates, 
-                                                self.registered_geom, 
-                                                main_channels=self.templates.ptp(1).argmax(1), 
-                                                radius=self.localization_radius_um
-                                               )
+        template_locations = localize_waveforms(
+            self.templates,
+            self.registered_geom,
+            main_channels=self.templates.ptp(1).argmax(1),
+            radius=self.localization_radius_um,
+        )
         return template_locations
 
     def unit_templates(self, unit_id):
@@ -105,6 +106,8 @@ class TemplateData:
         localizations_dataset_name="point_source_localizations",
         n_jobs=0,
         device=None,
+        trough_offset_samples=42,
+        spike_length_samples=121,
     ):
         if save_folder is not None:
             save_folder = Path(save_folder)
@@ -141,8 +144,8 @@ class TemplateData:
             geom = recording.get_channel_locations()
 
         kwargs = dict(
-            trough_offset_samples=template_config.trough_offset_samples,
-            spike_length_samples=template_config.spike_length_samples,
+            trough_offset_samples=trough_offset_samples,
+            spike_length_samples=spike_length_samples,
             spikes_per_unit=template_config.spikes_per_unit,
             # realign handled in advance below, not needed in kwargs
             # realign_peaks=template_config.realign_peaks,
@@ -216,16 +219,16 @@ class TemplateData:
                 kwargs["registered_geom"],
                 registered_template_depths_um,
                 localization_radius_um=template_config.registered_template_localization_radius_um,
-                trough_offset_samples=template_config.trough_offset_samples,
-                spike_length_samples=template_config.spike_length_samples,
+                trough_offset_samples=trough_offset_samples,
+                spike_length_samples=spike_length_samples,
             )
         else:
             obj = cls(
                 results["templates"],
                 unit_ids,
                 spike_counts,
-                trough_offset_samples=template_config.trough_offset_samples,
-                spike_length_samples=template_config.spike_length_samples,
+                trough_offset_samples=trough_offset_samples,
+                spike_length_samples=spike_length_samples,
             )
         if save_folder is not None:
             obj.to_npz(npz_path)

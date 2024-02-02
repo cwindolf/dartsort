@@ -646,7 +646,7 @@ class FeatureSplit(SplitStrategy):
             for bs in range(0, no_nan.size, batch_size):
                 be = min(no_nan.size, bs + batch_size)
                 pca_projs[no_nan[bs:be]] = pca.transform(
-                    waveforms[no_nan[bs:be]] / amplitudes[no_nan[bs:be], None]
+                    waveforms[no_nan[bs:be]] / amplitudes[no_nan[bs:be]]
                 )
         else:
             for bs in range(0, no_nan.size, batch_size):
