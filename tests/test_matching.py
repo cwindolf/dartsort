@@ -65,6 +65,7 @@ def test_tiny(tmp_path):
 
     matcher = main.ObjectiveUpdateTemplateMatchingPeeler.from_config(
         rec,
+        config.default_waveform_config,
         config.MatchingConfig(
             threshold=0.01,
             template_temporal_upsampling_factor=1,
@@ -102,6 +103,7 @@ def test_tiny(tmp_path):
 
     matcher = main.ObjectiveUpdateTemplateMatchingPeeler.from_config(
         rec,
+        config.default_waveform_config,
         config.MatchingConfig(
             threshold=0.01,
             template_temporal_upsampling_factor=8,
@@ -191,6 +193,7 @@ def test_tiny_up(tmp_path, up_factor=8):
 
     matcher = main.ObjectiveUpdateTemplateMatchingPeeler.from_config(
         rec,
+        config.default_waveform_config,
         config.MatchingConfig(
             threshold=0.01,
             template_temporal_upsampling_factor=up_factor,
@@ -336,6 +339,7 @@ def static_tester(tmp_path, up_factor=1):
 
     matcher = main.ObjectiveUpdateTemplateMatchingPeeler.from_config(
         rec,
+        config.default_waveform_config,
         config.MatchingConfig(
             threshold=0.01,
             template_temporal_upsampling_factor=up_factor,
