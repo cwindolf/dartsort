@@ -231,6 +231,18 @@ class SplitMergeConfig:
     merge_distance_threshold: float = 0.25
 
 
+@dataclass(frozen=True)
+class DARTsortConfig:
+    waveform_config: WaveformConfig = WaveformConfig()
+    featurization_config: FeaturizationConfig = FeaturizationConfig()
+    subtraction_config: SubtractionConfig = SubtractionConfig()
+    template_config: TemplateConfig = TemplateConfig()
+    clustering_config: ClusteringConfig = ClusteringConfig()
+    split_merge_config: SplitMergeConfig = SplitMergeConfig()
+    matching_config: MatchingConfig = MatchingConfig()
+    motion_estimation_config: MotionEstimationConfig = MotionEstimationConfig()
+
+
 default_waveform_config = WaveformConfig()
 default_featurization_config = FeaturizationConfig()
 default_subtraction_config = SubtractionConfig()
@@ -240,3 +252,4 @@ default_split_merge_config = SplitMergeConfig()
 coarse_template_config = TemplateConfig(superres_templates=False)
 default_matching_config = MatchingConfig()
 default_motion_estimation_config = MotionEstimationConfig()
+default_dartsort_config = DARTsortConfig()
