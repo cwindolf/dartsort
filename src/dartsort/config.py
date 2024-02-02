@@ -143,6 +143,7 @@ class MotionEstimationConfig:
     window_margin_um: Optional[float] = None
     max_dt_s: float = 0.1
     max_disp_um: Optional[float] = None
+    rigid: bool = False
 
 
 @dataclass(frozen=True)
