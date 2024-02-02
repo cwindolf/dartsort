@@ -1,3 +1,4 @@
+import pickle
 from typing import Optional
 
 import numpy as np
@@ -14,6 +15,8 @@ except ImportError:
 def estimate_motion(
     recording,
     sorting,
+    output_directory,
+    overwrite=False,
     do_motion_estimation=True,
     probe_boundary_padding_um=100.0,
     spatial_bin_length_um: float = 1.0,
@@ -25,9 +28,15 @@ def estimate_motion(
     max_disp_um: Optional[float] = None,
     localizations_dataset_name="point_source_localizations",
     amplitudes_dataset_name="denoised_ptp_amplitudes",
+    device=None,
 ):
     if not do_motion_estimation:
         return None
+
+    motion_est_pkl = output_directory / "motion_est.pkl"
+    if not overwrite and motion_est_pkl.exists():
+        with open(motion_est_pkl, "rb") as jar:
+            return pickle.load(jar)
 
     if not have_dredge:
         raise ValueError("Please install DREDge to use motion estimation.")
@@ -60,6 +69,10 @@ def estimate_motion(
         window_margin_um=window_margin_um,
         max_disp_um=max_disp_um,
         max_dt_s=max_dt_s,
+        device=device,
     )
+
+    with open(motion_est_pkl, "wb") as jar:
+        pickle.dump(motion_est, jar)
 
     return motion_est
