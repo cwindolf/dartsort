@@ -365,6 +365,7 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
     def from_config(
         cls,
         recording,
+        waveform_config,
         matching_config,
         featurization_config,
         template_data,
@@ -376,6 +377,9 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
         )
         featurization_pipeline = WaveformPipeline.from_config(
             geom, channel_index, featurization_config
+        )
+        trough_offset_samples = waveform_config.trough_offset_samples(
+            recording.sampling_frequency
         )
         return cls(
             recording,
@@ -391,7 +395,7 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
             amplitude_scaling_boundary=matching_config.amplitude_scaling_boundary,
             conv_ignore_threshold=matching_config.conv_ignore_threshold,
             coarse_approx_error_threshold=matching_config.coarse_approx_error_threshold,
-            trough_offset_samples=matching_config.trough_offset_samples,
+            trough_offset_samples=trough_offset_samples,
             threshold=matching_config.threshold,
             chunk_length_samples=matching_config.chunk_length_samples,
             n_chunks_fit=matching_config.n_chunks_fit,
