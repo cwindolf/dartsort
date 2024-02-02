@@ -10,6 +10,7 @@ This should also make it easier to compute drift-aware metrics
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Callable, Optional
+import pickle
 
 import h5py
 import numpy as np
@@ -57,7 +58,7 @@ class DARTsortAnalysis:
     template_indices_dataset = "collisioncleaned_tpca_features"
 
     # configuration for analysis computations not included in above objects
-    device: Optional[str, torch.device] = None
+    device: Optional[torch.device] = None
     merge_distance_templates_kind: str = "coarse"
     merge_superres_linkage: Callable[[np.ndarray], float] = np.max
 
@@ -92,6 +93,7 @@ class DARTsortAnalysis:
         motion_est=None,
         template_data_npz="template_data.npz",
         template_data=None,
+        motion_est_pkl="motion_est.pkl",
         sorting=None,
         **kwargs,
     ):
@@ -105,14 +107,20 @@ class DARTsortAnalysis:
             )
         if template_data is None:
             template_data = TemplateData.from_npz(Path(model_dir) / template_data_npz)
+        if motion_est is None:
+            if (hdf5_path.parent / motion_est_pkl).exists():
+                with open(hdf5_path.parent / motion_est_pkl, "rb") as jar:
+                    motion_est = pickle.load(jar)
         pipeline = torch.load(model_dir / "featurization_pipeline.pt")
         return cls(
-            sorting, hdf5_path, recording, template_data, pipeline, motion_est, **kwargs
+            sorting, recording, template_data, hdf5_path, pipeline, motion_est, **kwargs
         )
 
     # pickle/h5py gizmos
 
     def __post_init__(self):
+        self.clear_cache()
+    
         if self.featurization_pipeline is not None:
             assert not self.featurization_pipeline.needs_fit()
         assert np.isin(
@@ -134,15 +142,13 @@ class DARTsortAnalysis:
                 self.motion_est is not None
                 and self.template_data.registered_geom is not None
             )
-        assert self.coarse_template_data.unit_ids == self.unit_ids
+        assert np.array_equal(self.coarse_template_data.unit_ids, self.unit_ids)
 
         # cached hdf5 pointer
         self._h5 = None
 
-        # cached arrays
-        self.clear_cache()
-
     def clear_cache(self):
+        self._unit_ids = None
         self._xyza = None
         self._max_chan_amplitudes = None
         self._template_indices = None
@@ -533,7 +539,7 @@ class DARTsortAnalysis:
         distance_order = np.argsort(unit_dists)
         assert distance_order[0] == unit_ix
         neighbor_ixs = distance_order[:n_neighbors]
-        neighbor_ids = self.unit_ids[:n_neighbors]
+        neighbor_ids = self.unit_ids[neighbor_ixs]
         neighbor_dists = self.merge_dist[neighbor_ixs[:, None], neighbor_ixs[None, :]]
         neighbor_coarse_templates = self.coarse_template_data.templates[neighbor_ixs]
         return neighbor_ids, neighbor_dists, neighbor_coarse_templates
@@ -553,7 +559,7 @@ class DARTsortAnalysis:
             n_jobs=1,
         )
         assert np.array_equal(units, self.unit_ids)
-        self._merge_dist = dists
+        return dists
 
 
 @dataclass
