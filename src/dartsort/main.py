@@ -168,8 +168,8 @@ def cluster(
         motion_est=motion_est,
     )
 
-    if output_directory is not None and overwrite:
-        DARTsortSorting.save(output_npz)
+    if output_directory is not None:
+        sorting.save(output_npz)
 
     return sorting
 
@@ -204,7 +204,7 @@ def split_merge(
             recursive=split_merge_config.recursive_split,
             n_jobs=n_jobs_split,
         )
-        if output_directory is not None and overwrite:
+        if output_directory is not None:
             split_sorting.save(split_npz)
 
     if not overwrite and merge_exists:
@@ -218,7 +218,7 @@ def split_merge(
             n_jobs=n_jobs_merge,
             n_jobs_templates=n_jobs_merge,
         )
-        if output_directory is not None and overwrite:
+        if output_directory is not None:
             merge_sorting.save(merge_npz)
 
     return merge_sorting
