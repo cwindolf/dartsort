@@ -244,6 +244,9 @@ class DARTsortConfig:
     matching_config: MatchingConfig = MatchingConfig()
     motion_estimation_config: MotionEstimationConfig = MotionEstimationConfig()
 
+    # high level behavior
+    matching_iterations = 1
+
 
 default_waveform_config = WaveformConfig()
 default_featurization_config = FeaturizationConfig()
