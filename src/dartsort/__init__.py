@@ -1,4 +1,4 @@
-from . import vis
+from . import cli, vis
 from .config import *
 from .localize.localize_util import (localize_amplitude_vectors, localize_hdf5,
                                      localize_waveforms)

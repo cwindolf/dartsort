@@ -1,3 +1,4 @@
+import importlib.util
 from dataclasses import asdict
 from pathlib import Path
 
@@ -8,7 +9,6 @@ from dartsort.config import (DARTsortConfig, default_clustering_config,
                              default_dartsort_config,
                              default_featurization_config,
                              default_matching_config,
-                             default_motion_estimation_config,
                              default_split_merge_config,
                              default_subtraction_config,
                              default_template_config, default_waveform_config)
@@ -20,20 +20,11 @@ from dartsort.util.peel_util import run_peeler
 from dartsort.util.registration_util import estimate_motion
 
 
-def dartsort_from_config(
-    recording,
-    config_path,
-):
-    # stub for eventual function that reads a config file
-    pass
-
-
 def dartsort(
     recording,
     output_directory,
     cfg: DARTsortConfig = default_dartsort_config,
     motion_est=None,
-    matching_iterations=1,
     n_jobs=0,
     n_jobs_cluster=0,
     overwrite=False,
@@ -72,7 +63,7 @@ def dartsort(
     )
 
     # E/M iterations
-    for step in range(matching_iterations):
+    for step in range(cfg.matching_iterations):
         # M step: refine clusters
         sorting = split_merge(
             sorting,

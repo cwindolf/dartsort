@@ -50,6 +50,7 @@ class DARTsortSorting:
             self.labels = np.zeros_like(self.times_samples)
         self.labels = np.asarray(self.labels, dtype=int)
         self._n_units = None
+        self.parent_h5_path = self.parent_h5_path.absolute()
 
         self.channels = np.asarray(self.channels, dtype=int)
         assert self.times_samples.shape == self.channels.shape
