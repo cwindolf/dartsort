@@ -10,3 +10,4 @@ from .templates import TemplateData
 from .transform import WaveformPipeline
 from .util.data_util import DARTsortSorting
 from .util.waveform_util import make_channel_index
+from .util.analysis import DARTsortAnalysis
