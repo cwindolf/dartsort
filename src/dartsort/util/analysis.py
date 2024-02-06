@@ -7,6 +7,7 @@ implement a view and controller.
 This should also make it easier to compute drift-aware metrics
 (e.g., d' using registered templates and shifted waveforms).
 """
+
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Callable, Optional
@@ -20,6 +21,7 @@ from sklearn.decomposition import PCA
 from spikeinterface.comparison import GroundTruthComparison
 
 from ..cluster import merge, relocate
+from ..config import default_template_config
 from ..templates import TemplateData
 from ..transform import WaveformPipeline
 from .data_util import DARTsortSorting
@@ -62,6 +64,52 @@ class DARTsortAnalysis:
     merge_superres_linkage: Callable[[np.ndarray], float] = np.max
 
     # helper constructors
+
+    def from_sorting(
+        cls,
+        recording,
+        sorting,
+        motion_est=None,
+        template_config=default_template_config,
+        n_jobs_templates=0,
+    ):
+        """Try to re-load as much info as possible from the sorting itself
+
+        Templates are re-computed if labels are not the same as in h5
+        or if the template npz does not exist.
+        """
+        assert hasattr(sorting, "parent_h5_path")
+        hdf5_path = sorting.parent_hdf5_path
+        model_dir = hdf5_path.parent / f"{hdf5_path.stem}_models"
+        assert model_dir.exists()
+
+        featurization_pipeline = torch.load(model_dir / "featurization_pipeline.pt")
+
+        template_npz = model_dir / "template_data.npz"
+        have_templates = template_npz.exists()
+        if have_templates:
+            with h5py.File(hdf5_path, "r") as h5:
+                same_labels = np.array_equal(sorting.labels, h5["labels"][:])
+            have_templates = have_templates and same_labels
+
+        if not have_templates:
+            template_data = TemplateData.from_config(
+                recording,
+                sorting,
+                template_config,
+                overwrite=False,
+                motion_est=motion_est,
+                n_jobs=n_jobs_templates,
+            )
+
+        return cls(
+            sorting=sorting,
+            recording=recording,
+            template_data=template_data,
+            hdf5_path=hdf5_path,
+            featurization_pipeline=featurization_pipeline,
+            motion_est=motion_est,
+        )
 
     @classmethod
     def from_peeling_hdf5_and_recording(
