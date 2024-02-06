@@ -23,3 +23,7 @@ classifiers = [
 
 [tool.setuptools.package-data]
 "dartsort.pretrained" = ["*.pt"]
+
+[project.scripts]
+"dartsort_binary_folder_config_py" = "dartsort.cli:dartsort_binary_folder_config_py"
+"dartvis_binary_folder_all" = "dartsort.cli:dartvis_binary_folder_all"

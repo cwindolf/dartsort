@@ -65,7 +65,7 @@ def scatter_spike_features(
             amplitudes = getattr(sorting, amplitudes_dataset_name, None)
         if hdf5_filename is None:
             hdf5_filename = sorting.parent_h5_path
-    
+
     needs_load = any(v is None for v in (times_s, x, depths_um, amplitudes, geom))
     if needs_load and hdf5_filename is not None:
         with h5py.File(hdf5_filename, "r") as h5:
