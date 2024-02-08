@@ -489,11 +489,16 @@ class NearbyCoarseTemplatesPlot(UnitPlot):
         ) = sorting_analysis.nearby_coarse_templates(
             unit_id, n_neighbors=self.n_neighbors
         )
-        colors = np.array(cc.glasbey_light)[neighbor_ids]
+        colors = np.array(cc.glasbey_light)[neighbor_ids % len(cc.glasbey_light)]
         assert neighbor_ids[0] == unit_id
         chan = neighbor_coarse_templates[0].ptp(0).argmax()
         ci = sorting_analysis.show_channel_index(self.channel_show_radius_um)
         channels = ci[chan]
+        neighbor_coarse_templates = np.pad(
+            neighbor_coarse_templates,
+            [(0, 0), (0, 0), (0, 1)],
+            constant_values=np.nan,
+        )
         neighbor_coarse_templates = neighbor_coarse_templates[:, :, channels]
         maxamp = np.abs(neighbor_coarse_templates).max()
 
@@ -543,7 +548,7 @@ class CoarseTemplateDistancePlot(UnitPlot):
         ) = sorting_analysis.nearby_coarse_templates(
             unit_id, n_neighbors=self.n_neighbors
         )
-        colors = np.array(cc.glasbey_light)[neighbor_ids]
+        colors = np.array(cc.glasbey_light)[neighbor_ids % len(cc.glasbey_light)]
         assert neighbor_ids[0] == unit_id
 
         im = axis.imshow(
