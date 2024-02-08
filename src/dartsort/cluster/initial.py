@@ -16,7 +16,7 @@ import h5py
 import numpy as np
 from dartsort.util.data_util import DARTsortSorting
 
-from . import cluster_util, ensemble_utils
+from . import cluster_util, ensemble_utils, density
 
 
 def cluster_chunk(
@@ -44,6 +44,7 @@ def cluster_chunk(
         "closest_registered_channels",
         "grid_snap",
         "hdbscan",
+        "density_peaks",
     )
 
     with h5py.File(peeling_hdf5_filename, "r") as h5:
@@ -90,6 +91,22 @@ def cluster_chunk(
             remove_duplicates=clustering_config.remove_duplicates,
             remove_big_units=clustering_config.remove_big_units,
             zstd_big_units=clustering_config.zstd_big_units,
+        )
+    elif clustering_config.cluster_strategy == "density_peaks":
+        z = xyza[in_chunk, 2]
+        if motion_est is not None:
+            z = motion_est.correct_s(times_s[in_chunk], z)
+        scales = clustering_config.feature_scales
+        ampfeat = scales[2] * np.log(clustering_config.log_c + amps[in_chunk])
+        labels[in_chunk] = density.density_peaks_clustering(
+            np.c_[scales[0] * xyza[in_chunk, 0], scales[1] * z, ampfeat],
+            sigma_local=clustering_config.sigma_local,
+            sigma_regional=clustering_config.sigma_regional,
+            n_neighbors_search=clustering_config.n_neighbors_search,
+            radius_search=clustering_config.radius_search,
+            remove_clusters_smaller_than=clustering_config.remove_clusters_smaller_than,
+            noise_density=clustering_config.noise_density,
+            workers=4,
         )
     else:
         assert False

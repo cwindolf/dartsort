@@ -83,9 +83,11 @@ def dartsort_binary_folder_config_py(
 
 
 @click.command()
+@click.argument("binary_folder")
 @click.argument("dartsort_dir")
 @click.argument("visualizations_dir")
 @click.option("--n_jobs", default=0)
+@click.option("--n_jobs_templates", default=0)
 @click.option("--overwrite", default=False, flag_value=True, is_flag=True)
 @click.option("--no_scatterplots", default=False, flag_value=True, is_flag=True)
 @click.option("--no_summaries", default=False, flag_value=True, is_flag=True)
@@ -94,6 +96,7 @@ def dartvis_binary_folder_all(
     dartsort_dir,
     visualizations_dir,
     n_jobs=0,
+    n_jobs_templates=0,
     overwrite=False,
     no_scatterplots=False,
     no_summaries=False,
@@ -106,5 +109,6 @@ def dartvis_binary_folder_all(
         make_scatterplots=not no_scatterplots,
         make_unit_summaries=not no_summaries,
         n_jobs=n_jobs,
+        n_jobs_templates=n_jobs_templates,
         overwrite=overwrite,
     )

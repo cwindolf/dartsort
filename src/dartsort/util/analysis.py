@@ -66,6 +66,7 @@ class DARTsortAnalysis:
 
     # helper constructors
 
+    @classmethod
     def from_sorting(
         cls,
         recording,
@@ -80,7 +81,7 @@ class DARTsortAnalysis:
         or if the template npz does not exist.
         """
         assert hasattr(sorting, "parent_h5_path")
-        hdf5_path = sorting.parent_hdf5_path
+        hdf5_path = sorting.parent_h5_path
         model_dir = hdf5_path.parent / f"{hdf5_path.stem}_models"
         assert model_dir.exists()
 
@@ -194,6 +195,7 @@ class DARTsortAnalysis:
 
         # cached hdf5 pointer
         self._h5 = None
+        self._calc_merge_dist()
 
     def clear_cache(self):
         self._unit_ids = None
@@ -207,7 +209,6 @@ class DARTsortAnalysis:
         self._sklearn_tpca = None
         self._unit_ids = None
         self._spike_counts = None
-        self._merge_dist = None
         self._feats = {}
 
     def __getstate__(self):
@@ -272,12 +273,6 @@ class DARTsortAnalysis:
             self._sklearn_tpca = tpca_feature[0].to_sklearn()
         return self._sklearn_tpca
 
-    @property
-    def merge_dist(self):
-        if self._merge_dist is None:
-            self._merge_dist = self._calc_merge_dist()
-        return self._merge_dist
-
     # spike train helpers
 
     @property
@@ -312,8 +307,8 @@ class DARTsortAnalysis:
             show_geom = self.recording.get_channel_locations()
         return show_geom
 
-    def show_channel_index(self, radius_um=50):
-        return make_channel_index(self.show_geom, radius_um)
+    def show_channel_index(self, channel_channel_show_radius_um=50):
+        return make_channel_index(self.show_geom, channel_channel_show_radius_um)
 
     # spike feature loading methods
 
@@ -371,7 +366,7 @@ class DARTsortAnalysis:
         template_index=None,
         max_count=250,
         random_seed=0,
-        show_radius_um=75,
+        channel_show_radius_um=75,
         trough_offset_samples=42,
         spike_length_samples=121,
         relocated=False,
@@ -395,7 +390,7 @@ class DARTsortAnalysis:
             load_ci = self.channel_index
         if self.shifting:
             load_ci = make_channel_index(
-                self.recording.get_channel_locations(), show_radius_um
+                self.recording.get_channel_locations(), channel_show_radius_um
             )
         waveforms = read_waveforms_channel_index(
             self.recording,
@@ -419,7 +414,7 @@ class DARTsortAnalysis:
             which,
             waveforms,
             load_ci,
-            show_radius_um=show_radius_um,
+            channel_show_radius_um=channel_show_radius_um,
             relocated=relocated,
         )
         return which, waveforms, max_chan, show_geom, show_channel_index
@@ -430,7 +425,7 @@ class DARTsortAnalysis:
         template_index=None,
         max_count=250,
         random_seed=0,
-        show_radius_um=75,
+        channel_show_radius_um=75,
         relocated=False,
     ):
         which = self.in_unit(unit_id)
@@ -461,7 +456,7 @@ class DARTsortAnalysis:
             which,
             waveforms,
             self.channel_index,
-            show_radius_um=show_radius_um,
+            channel_show_radius_um=channel_show_radius_um,
             relocated=relocated,
         )
         return which, waveforms, max_chan, show_geom, show_channel_index
@@ -484,7 +479,7 @@ class DARTsortAnalysis:
         ) = self.unit_tpca_waveforms(
             unit_id,
             relocated=relocated,
-            show_radius_um=pca_radius_um,
+            channel_show_radius_um=pca_radius_um,
             random_seed=random_seed,
             max_count=max_count,
         )
@@ -505,7 +500,7 @@ class DARTsortAnalysis:
         which,
         waveforms,
         load_channel_index,
-        show_radius_um=75,
+        channel_show_radius_um=75,
         relocated=False,
     ):
         geom = self.recording.get_channel_locations()
@@ -537,7 +532,7 @@ class DARTsortAnalysis:
             else:
                 amp_template = np.nanmean(amps, axis=0)
             max_chan = np.nanargmax(amp_template)
-        show_channel_index = make_channel_index(show_geom, show_radius_um)
+        show_channel_index = make_channel_index(show_geom, channel_show_radius_um)
         show_chans = show_channel_index[max_chan]
         show_chans = show_chans[show_chans < len(show_geom)]
         show_channel_index = np.broadcast_to(
@@ -607,7 +602,7 @@ class DARTsortAnalysis:
             n_jobs=1,
         )
         assert np.array_equal(units, self.unit_ids)
-        return dists
+        self.merge_dist = dists
 
 
 @dataclass
