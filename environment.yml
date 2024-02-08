@@ -11,3 +11,4 @@ dependencies:
   - matplotlib
   - colorcet
   - pytest
+  - click
