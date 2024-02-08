@@ -217,6 +217,14 @@ class ClusteringConfig:
     grid_dx: float = 15.0
     grid_dz: float = 15.0
 
+    # density peaks parameters
+    sigma_local: float = 5.0
+    sigma_regional: Optional[float] = None
+    n_neighbors_search: int = 10
+    radius_search: float = 5.0
+    remove_clusters_smaller_than: int = 10
+    noise_density: float = 0.0
+
     # -- ensembling
     ensemble_strategy: Optional[str] = "forward_backward"
     chunk_size_s: float = 300.0

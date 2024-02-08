@@ -32,6 +32,8 @@ def scatter_spike_features(
     label_axes=True,
     random_seed=0,
     amplitudes_dataset_name="denoised_ptp_amplitudes",
+    extra_features=None,
+    show_triaged=True,
     **scatter_kw,
 ):
     """3-axis scatter plot of spike depths vs. horizontal pos, amplitude, and time
@@ -46,9 +48,11 @@ def scatter_spike_features(
         figure = axes.flat[0].figure
     if figure is None:
         figure = plt.gcf()
+    if extra_features is None:
+        extra_features = {}
     if axes is None:
         axes = figure.subplots(
-            ncols=3,
+            ncols=3 + len(extra_features),
             sharey=True,
             gridspec_kw=dict(width_ratios=width_ratios),
         )
@@ -110,6 +114,7 @@ def scatter_spike_features(
         linewidth=linewidth,
         to_show=to_show,
         amplitudes_dataset_name=amplitudes_dataset_name,
+        show_triaged=show_triaged,
         **scatter_kw,
     )
 
@@ -132,8 +137,37 @@ def scatter_spike_features(
         linewidth=linewidth,
         to_show=to_show,
         amplitudes_dataset_name=amplitudes_dataset_name,
+        show_triaged=show_triaged,
         **scatter_kw,
     )
+    
+    extra_scatters = []
+    for j, (featname, feature) in enumerate(extra_features.items()):
+        _, scatter = scatter_feature_vs_depth(
+            feature,
+            depths_um=depths_um,
+            amplitudes=amplitudes,
+            sorting=sorting,
+            times_s=times_s,
+            motion_est=motion_est,
+            registered=registered,
+            geom=geom,
+            ax=axes.flat[2 + j],
+            max_spikes_plot=max_spikes_plot,
+            amplitude_color_cutoff=amplitude_color_cutoff,
+            amplitude_cmap=amplitude_cmap,
+            probe_margin_um=probe_margin_um,
+            s=s,
+            linewidth=linewidth,
+            limits=limits,
+            random_seed=random_seed,
+            to_show=to_show,
+            show_triaged=show_triaged,
+            **scatter_kw,
+        )
+        extra_scatters.append(scatter)
+        if label_axes:
+            axes.flat[2 + j].set_xlabel(featname)
 
     _, s_t = scatter_time_vs_depth(
         times_s=times_s,
@@ -144,7 +178,7 @@ def scatter_spike_features(
         registered=registered,
         geom=geom,
         probe_margin_um=probe_margin_um,
-        ax=axes.flat[2],
+        ax=axes.flat[-1],
         max_spikes_plot=max_spikes_plot,
         amplitude_color_cutoff=amplitude_color_cutoff,
         amplitude_cmap=amplitude_cmap,
@@ -153,6 +187,7 @@ def scatter_spike_features(
         linewidth=linewidth,
         to_show=to_show,
         amplitudes_dataset_name=amplitudes_dataset_name,
+        show_triaged=show_triaged,
         **scatter_kw,
     )
 
@@ -160,9 +195,9 @@ def scatter_spike_features(
         axes[0].set_ylabel(("registered " * registered) + "depth (um)")
         axes[0].set_xlabel("x (um)")
         axes[1].set_xlabel("amplitude (su)")
-        axes[2].set_xlabel("time (s)")
+        axes[-1].set_xlabel("time (s)")
 
-    return figure, axes, (s_x, s_a, s_t)
+    return figure, axes, (s_x, s_a, *extra_scatters, s_t)
 
 
 def scatter_time_vs_depth(
@@ -186,6 +221,7 @@ def scatter_time_vs_depth(
     linewidth=0,
     to_show=None,
     amplitudes_dataset_name="denoised_ptp_amplitudes",
+    show_triaged=True,
     **scatter_kw,
 ):
     """Scatter plot of spike time vs spike depth (vertical position on probe)
@@ -239,6 +275,7 @@ def scatter_time_vs_depth(
         linewidth=linewidth,
         random_seed=random_seed,
         to_show=to_show,
+        show_triaged=show_triaged,
         **scatter_kw,
     )
 
@@ -267,6 +304,7 @@ def scatter_x_vs_depth(
     linewidth=0,
     to_show=None,
     amplitudes_dataset_name="denoised_ptp_amplitudes",
+    show_triaged=True,
     **scatter_kw,
 ):
     """Scatter plot of spike horizontal pos vs spike depth (vertical position on probe)"""
@@ -295,6 +333,7 @@ def scatter_x_vs_depth(
         linewidth=linewidth,
         random_seed=random_seed,
         to_show=to_show,
+        show_triaged=show_triaged,
         **scatter_kw,
     )
     if show_geom and geom is not None:
@@ -328,6 +367,7 @@ def scatter_amplitudes_vs_depth(
     linewidth=0,
     to_show=None,
     amplitudes_dataset_name="denoised_ptp_amplitudes",
+    show_triaged=True,
     **scatter_kw,
 ):
     """Scatter plot of spike amplitude vs spike depth (vertical position on probe)"""
@@ -369,6 +409,7 @@ def scatter_amplitudes_vs_depth(
         linewidth=linewidth,
         random_seed=random_seed,
         to_show=to_show,
+        show_triaged=show_triaged,
         **scatter_kw,
     )
     if semilog_amplitudes:
@@ -397,6 +438,7 @@ def scatter_feature_vs_depth(
     random_seed=0,
     to_show=None,
     rasterized=True,
+    show_triaged=True,
     **scatter_kw,
 ):
     assert feature.shape == depths_um.shape
@@ -434,7 +476,8 @@ def scatter_feature_vs_depth(
     if labels is None:
         c = np.clip(amplitudes, 0, amplitude_color_cutoff)
         cmap = amplitude_cmap
-    else:
+        kept = slice(None)
+    elif show_triaged:
         c = labels
         cmap = colorcet.m_glasbey_light
         kept = labels[to_show] >= 0
@@ -448,11 +491,15 @@ def scatter_feature_vs_depth(
             **scatter_kw,
         )
         to_show = to_show[kept]
+    else:
+        c = labels
+        cmap = colorcet.m_glasbey_light
+        kept = labels[to_show] >= 0
 
     s = ax.scatter(
-        feature[to_show],
-        depths_um[to_show],
-        c=c[to_show],
+        feature[to_show[kept]],
+        depths_um[to_show[kept]],
+        c=c[to_show[kept]],
         cmap=cmap,
         s=s,
         linewidth=linewidth,
@@ -463,4 +510,6 @@ def scatter_feature_vs_depth(
         ax.set_ylim(
             [geom[:, 1].min() - probe_margin_um, geom[:, 1].max() + probe_margin_um]
         )
+    elif limits is not None:
+        ax.set_ylim(limits)
     return ax, s

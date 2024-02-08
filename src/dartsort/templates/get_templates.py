@@ -36,7 +36,7 @@ def get_templates(
     denoising_snr_threshold=50.0,
     reducer=fast_nanmedian,
     random_seed=0,
-    units_per_job=8,
+    units_per_job=16,
     n_jobs=0,
     show_progress=True,
     device=None,
