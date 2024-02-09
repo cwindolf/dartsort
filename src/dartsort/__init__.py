@@ -1,3 +1,5 @@
+import importlib.metadata
+
 from . import cli, vis
 from .config import *
 from .localize.localize_util import (localize_amplitude_vectors, localize_hdf5,
@@ -8,6 +10,8 @@ from .main import (ObjectiveUpdateTemplateMatchingPeeler, SubtractionPeeler,
 from .peel.grab import GrabAndFeaturize
 from .templates import TemplateData
 from .transform import WaveformPipeline
+from .util.analysis import DARTsortAnalysis
 from .util.data_util import DARTsortSorting
 from .util.waveform_util import make_channel_index
-from .util.analysis import DARTsortAnalysis
+
+__version__ = importlib.metadata.version("dartsort")
