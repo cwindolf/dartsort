@@ -72,6 +72,7 @@ def nearest_higher_density_neighbor(
     distances, indices = distances[:, 1:].copy(), indices[:, 1:].copy()
 
     # find lowest distance higher density neighbor
+    print(f"nhdn {density.shape=}")
     density_padded = np.pad(density, (0, 1), constant_values=np.inf)
     is_lower_density = density_padded[indices] <= density[:, None]
     distances[is_lower_density] = np.inf
@@ -151,6 +152,8 @@ def density_peaks_clustering(
     density = get_smoothed_densities(X, inliers=inliers, sigmas=sigmas)
     if sigma_regional is not None:
         density = density[0] / density[1]
+    else:
+        density = density[0]
 
     nhdn, distances, indices = nearest_higher_density_neighbor(
         kdtree,
@@ -181,6 +184,8 @@ def density_peaks_clustering(
 
     if remove_clusters_smaller_than:
         labels = decrumb(labels, min_size=remove_clusters_smaller_than)
+
+    print("dpc", np.unique(labels).size)
 
     if not return_extra:
         return labels
