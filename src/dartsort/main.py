@@ -65,18 +65,19 @@ def dartsort(
     # E/M iterations
     for step in range(cfg.matching_iterations):
         # M step: refine clusters
-        sorting = split_merge(
-            sorting,
-            recording,
-            motion_est,
-            output_directory=output_directory,
-            overwrite=overwrite,
-            split_merge_config=cfg.split_merge_config,
-            n_jobs_split=n_jobs_cluster,
-            n_jobs_merge=n_jobs,
-            split_npz=f"split{step}.npz",
-            merge_npz=f"merge{step}.npz",
-        )
+        if step > 0 or cfg.do_initial_split_merge:
+            sorting = split_merge(
+                sorting,
+                recording,
+                motion_est,
+                output_directory=output_directory,
+                overwrite=overwrite,
+                split_merge_config=cfg.split_merge_config,
+                n_jobs_split=n_jobs_cluster,
+                n_jobs_merge=n_jobs,
+                split_npz=f"split{step}.npz",
+                merge_npz=f"merge{step}.npz",
+            )
 
         # E step: deconvolution
         sorting, match_h5 = match(

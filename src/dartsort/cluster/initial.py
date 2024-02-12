@@ -14,9 +14,10 @@ from dataclasses import replace
 
 import h5py
 import numpy as np
+from dartsort.util import job_util
 from dartsort.util.data_util import DARTsortSorting
 
-from . import cluster_util, ensemble_utils, density
+from . import cluster_util, density, ensemble_utils
 
 
 def cluster_chunk(
@@ -179,6 +180,7 @@ def ensemble_chunks(
     peeling_hdf5_filename,
     recording,
     clustering_config,
+    computation_config=None,
     motion_est=None,
 ):
     """Initial clustering combined across chunks of time
@@ -205,7 +207,9 @@ def ensemble_chunks(
     if len(chunk_sortings) == 1:
         return chunk_sortings[0]
 
-    assert clustering_config.ensemble_strategy in ("forward_backward",)
+    assert clustering_config.ensemble_strategy in ("forward_backward", "split_merge")
+    if computation_config is None:
+        computation_config = job_util.get_global_computation_config()
 
     if clustering_config.ensemble_strategy == "forward_backward":
         labels = ensemble_utils.forward_backward(
@@ -218,5 +222,16 @@ def ensemble_chunks(
             motion_est=motion_est,
         )
         sorting = replace(chunk_sortings[0], labels=labels)
+    elif clustering_config.ensemble_strategy == "split_merge":
+        sorting = ensemble_utils.split_merge_ensemble(
+            recording,
+            chunk_sortings,
+            motion_est=motion_est,
+            split_merge_config=clustering_config.split_merge_config,
+            n_jobs_split=computation_config.n_jobs_cpu,
+            n_jobs_merge=computation_config.actual_n_jobs_gpu,
+            device=None,
+            show_progress=True,
+        )
 
     return sorting
