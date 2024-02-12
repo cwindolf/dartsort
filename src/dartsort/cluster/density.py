@@ -1,10 +1,11 @@
-import numpy as np
 from collections.abc import Sequence
-from scipy.spatial import KDTree
-from scipy.ndimage import gaussian_filter
+
+import numpy as np
 from scipy.interpolate import RegularGridInterpolator
+from scipy.ndimage import gaussian_filter
+from scipy.sparse import coo_array
 from scipy.sparse.csgraph import connected_components
-from scipy import sparse
+from scipy.spatial import KDTree
 
 
 def kdtree_inliers(
@@ -160,10 +161,10 @@ def density_peaks_clustering(
     )
     if noise_density:
         nhdn[density <= noise_density] = n
-    nhdn = nhdn.astype(np.int32)
-    has_nhdn = np.flatnonzero(nhdn < n).astype(np.int32)
+    nhdn = nhdn.astype(np.intc)
+    has_nhdn = np.flatnonzero(nhdn < n).astype(np.intc)
 
-    graph = sparse.coo_array(
+    graph = coo_array(
         (np.ones(has_nhdn.size), (nhdn[has_nhdn], has_nhdn)), shape=(n, n)
     )
     ncc, labels = connected_components(graph)
