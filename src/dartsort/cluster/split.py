@@ -14,7 +14,7 @@ from sklearn.decomposition import PCA
 from tqdm.auto import tqdm
 
 from . import cluster_util, relocate
-from .ensemble_utils import forward_backward
+from .forward_backward import forward_backward
 
 
 def split_clusters(
