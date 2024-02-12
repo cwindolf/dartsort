@@ -19,6 +19,8 @@ TODO: change n_chunks_fit to n_spikes_fit, max_chunks_fit
 from dataclasses import dataclass
 from typing import List, Optional, Tuple
 
+import torch
+
 try:
     from importlib.resources import files
 except ImportError:
@@ -195,6 +197,18 @@ class MatchingConfig:
 
 
 @dataclass(frozen=True)
+class SplitMergeConfig:
+    # -- split
+    split_strategy: str = "FeatureSplit"
+    recursive_split: bool = True
+
+    # -- merge
+    merge_template_config: TemplateConfig = TemplateConfig(superres_templates=False)
+    merge_distance_threshold: float = 0.25
+    cross_merge_distance_threshold: float = 0.5
+
+
+@dataclass(frozen=True)
 class ClusteringConfig:
     # -- initial clustering
     cluster_strategy: str = "hdbscan"
@@ -228,17 +242,7 @@ class ClusteringConfig:
     # -- ensembling
     ensemble_strategy: Optional[str] = "forward_backward"
     chunk_size_s: float = 300.0
-
-
-@dataclass(frozen=True)
-class SplitMergeConfig:
-    # -- split
-    split_strategy: str = "FeatureSplit"
-    recursive_split: bool = True
-
-    # -- merge
-    merge_template_config: TemplateConfig = TemplateConfig(superres_templates=False)
-    merge_distance_threshold: float = 0.25
+    split_merge_ensemble_config: SplitMergeConfig = SplitMergeConfig()
 
 
 @dataclass(frozen=True)
@@ -253,7 +257,27 @@ class DARTsortConfig:
     motion_estimation_config: MotionEstimationConfig = MotionEstimationConfig()
 
     # high level behavior
-    matching_iterations = 1
+    do_initial_split_merge: bool = True
+    matching_iterations: int = 1
+
+
+@dataclass(frozen=True)
+class ComputationConfig:
+    n_jobs_cpu: int = 0
+    n_jobs_gpu: int = 0
+    device: Optional[torch.device] = None
+
+    def __post_init__(self):
+        if self.device is None:
+            have_cuda = torch.cuda.is_available()
+            self.actual_device = torch.device("cuda" if have_cuda else "cpu")
+        else:
+            self.actual_device = torch.device(self.device)
+
+        if self.actual_device.type == "cuda":
+            self.actual_n_jobs_gpu = self.n_jobs_gpu
+        if self.actual_device.type == "cuda":
+            self.actual_n_jobs_gpu = self.n_jobs_cpu
 
 
 default_waveform_config = WaveformConfig()
@@ -266,3 +290,4 @@ coarse_template_config = TemplateConfig(superres_templates=False)
 default_matching_config = MatchingConfig()
 default_motion_estimation_config = MotionEstimationConfig()
 default_dartsort_config = DARTsortConfig()
+default_computation_config  = ComputationConfig()
