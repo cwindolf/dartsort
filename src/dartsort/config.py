@@ -206,7 +206,7 @@ class SplitMergeConfig:
     merge_template_config: TemplateConfig = TemplateConfig(superres_templates=False)
     merge_distance_threshold: float = 0.25
     cross_merge_distance_threshold: float = 0.5
-    min_spatial_cosine: float = 0.5
+    min_spatial_cosine: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -235,7 +235,7 @@ class ClusteringConfig:
     # density peaks parameters
     sigma_local: float = 5.0
     sigma_regional: Optional[float] = None
-    n_neighbors_search: int = 10
+    n_neighbors_search: int = 20
     radius_search: float = 5.0
     remove_clusters_smaller_than: int = 10
     noise_density: float = 0.0
@@ -243,7 +243,9 @@ class ClusteringConfig:
     # -- ensembling
     ensemble_strategy: Optional[str] = "forward_backward"
     chunk_size_s: float = 300.0
-    split_merge_ensemble_config: SplitMergeConfig = SplitMergeConfig()
+    split_merge_ensemble_config: SplitMergeConfig = SplitMergeConfig(
+        merge_template_config=TemplateConfig(superres_templates=False, realign_peaks=False,)
+    )
 
 
 @dataclass(frozen=True)
@@ -280,7 +282,7 @@ class ComputationConfig:
 
         if self.actual_device.type == "cuda":
             self.actual_n_jobs_gpu = self.n_jobs_gpu
-        if self.actual_device.type == "cuda":
+        else:
             self.actual_n_jobs_gpu = self.n_jobs_cpu
 
 

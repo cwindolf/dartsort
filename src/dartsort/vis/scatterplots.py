@@ -239,12 +239,12 @@ def scatter_time_vs_depth(
         if depths_um is None:
             depths_um = getattr(sorting, "point_source_localizations", None)
             if depths_um is not None:
-                depths_um = x[:, 2]
+                depths_um = depths_um[:, 2]
         if amplitudes is None:
             amplitudes = getattr(sorting, amplitudes_dataset_name, None)
         if hdf5_filename is None:
             hdf5_filename = sorting.parent_h5_path
-    
+
     needs_load = any(v is None for v in (times_s, depths_um, amplitudes, geom))
     if needs_load and hdf5_filename is not None:
         with h5py.File(hdf5_filename, "r") as h5:
@@ -473,6 +473,7 @@ def scatter_feature_vs_depth(
 
     if sorting is not None:
         labels = sorting.labels
+
     if labels is None:
         c = np.clip(amplitudes, 0, amplitude_color_cutoff)
         cmap = amplitude_cmap
@@ -490,7 +491,6 @@ def scatter_feature_vs_depth(
             rasterized=rasterized,
             **scatter_kw,
         )
-        to_show = to_show[kept]
     else:
         c = labels
         cmap = colorcet.m_glasbey_light

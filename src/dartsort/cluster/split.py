@@ -1,5 +1,6 @@
 from dataclasses import dataclass, replace
 from typing import Optional
+from pathlib import Path
 
 import h5py
 import numpy as np
@@ -24,6 +25,7 @@ def split_clusters(
     recursive=False,
     split_big=False,
     split_big_kw=dict(dz=40, dx=48, min_size_split=50),
+    motion_est=None,
     show_progress=True,
     n_jobs=0,
 ):
@@ -49,6 +51,11 @@ def split_clusters(
     labels_to_process = np.unique(labels)
     labels_to_process = list(labels_to_process[labels_to_process > 0])
     cur_max_label = max(labels_to_process)
+
+    if split_strategy_kwargs is None:
+        split_strategy_kwargs = {}
+    if motion_est is not None:
+        split_strategy_kwargs["motion_est"] = motion_est
 
     n_jobs, Executor, context = get_pool(n_jobs)
     with Executor(
@@ -667,6 +674,7 @@ class FeatureSplit(SplitStrategy):
         amplitudes_dataset_name="denoised_ptp_amplitudes",
         amplitude_vectors_dataset_name="denoised_ptp_amplitude_vectors",
     ):
+        peeling_hdf5_filename = Path(peeling_hdf5_filename)
         h5 = h5py.File(peeling_hdf5_filename, "r")
         self.geom = h5["geom"][:]
         self.channel_index = h5["channel_index"][:]
@@ -703,6 +711,11 @@ class FeatureSplit(SplitStrategy):
             # don't load these one into memory, since it's a bit heavier
             self.tpca_features = h5[tpca_features_dataset_name]
             self.match_distance = pdist(self.geom).min() / 2
+
+        if peeling_featurization_pt is None:
+            mdir = peeling_hdf5_filename.parent / f"{peeling_hdf5_filename.stem}_models"
+            peeling_featurization_pt = mdir / "featurization_pipeline.pt"
+            assert peeling_featurization_pt.exists()
 
         if self.n_pca_features and self.relocated:
             # load up featurization pipeline for tpca inversion
