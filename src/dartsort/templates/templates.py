@@ -108,6 +108,7 @@ class TemplateData:
         device=None,
         trough_offset_samples=42,
         spike_length_samples=121,
+        return_realigned_sorting=False,
     ):
         if save_folder is not None:
             save_folder = Path(save_folder)
@@ -181,7 +182,7 @@ class TemplateData:
 
         # handle superresolved templates
         if template_config.superres_templates:
-            unit_ids, sorting = superres_sorting(
+            unit_ids, superres_sorting = superres_sorting(
                 sorting,
                 sorting.times_seconds,
                 spike_depths_um,
@@ -194,6 +195,7 @@ class TemplateData:
                 adaptive_bin_size=template_config.adaptive_bin_size,
             )
         else:
+            superres_sorting = sorting
             # we don't skip empty units
             unit_ids = np.arange(sorting.labels.max() + 1)
 
@@ -203,7 +205,7 @@ class TemplateData:
         spike_counts[ix[ix >= 0]] = counts[ix >= 0]
 
         # main!
-        results = get_templates(recording, sorting, **kwargs)
+        results = get_templates(recording, superres_sorting, **kwargs)
 
         # handle registered templates
         if template_config.registered_templates and motion_est is not None:
@@ -232,5 +234,8 @@ class TemplateData:
             )
         if save_folder is not None:
             obj.to_npz(npz_path)
+
+        if return_realigned_sorting:
+            return obj, sorting
 
         return obj
