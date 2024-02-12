@@ -1,8 +1,8 @@
 from collections import namedtuple
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Optional
 from warnings import warn
-from pathlib import Path
 
 import h5py
 import numpy as np
@@ -51,7 +51,8 @@ class DARTsortSorting:
             self.labels = np.zeros_like(self.times_samples)
         self.labels = np.asarray(self.labels, dtype=int)
         self._n_units = None
-        self.parent_h5_path = Path(self.parent_h5_path).absolute()
+        if self.parent_h5_path is not None:
+            self.parent_h5_path = Path(self.parent_h5_path).absolute()
 
         self.channels = np.asarray(self.channels, dtype=int)
         assert self.times_samples.shape == self.channels.shape
