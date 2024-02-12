@@ -271,6 +271,7 @@ def split_merge_ensemble(
         motion_est=motion_est,
         cross_merge_distance_threshold=split_merge_config.cross_merge_distance_threshold,
         within_merge_distance_threshold=split_merge_config.merge_distance_threshold,
+        min_spatial_cosine=split_merge_config.min_spatial_cosine,
         device=device,
         n_jobs=n_jobs_merge,
         n_jobs_templates=n_jobs_merge,

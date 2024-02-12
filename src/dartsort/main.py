@@ -208,6 +208,7 @@ def split_merge(
             recording,
             template_config=split_merge_config.merge_template_config,
             merge_distance_threshold=split_merge_config.merge_distance_threshold,
+            min_spatial_cosine=split_merge_config.min_spatial_cosine,
             n_jobs=n_jobs_merge,
             n_jobs_templates=n_jobs_merge,
         )
