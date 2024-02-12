@@ -243,9 +243,7 @@ class ClusteringConfig:
     # -- ensembling
     ensemble_strategy: Optional[str] = "forward_backward"
     chunk_size_s: float = 300.0
-    split_merge_ensemble_config: SplitMergeConfig = SplitMergeConfig(
-        merge_template_config=TemplateConfig(superres_templates=False, realign_peaks=False,)
-    )
+    split_merge_ensemble_config: SplitMergeConfig = SplitMergeConfig()
 
 
 @dataclass(frozen=True)
