@@ -30,6 +30,7 @@ def compressed_convolve_to_h5(
     geom: Optional[np.ndarray] = None,
     conv_ignore_threshold=0.0,
     coarse_approx_error_threshold=0.0,
+    min_spatial_cosine=0.0,
     conv_batch_size=128,
     units_batch_size=8,
     overwrite=False,
@@ -83,6 +84,7 @@ def compressed_convolve_to_h5(
         do_shifting=motion_est is not None,
         geom=geom,
         conv_ignore_threshold=conv_ignore_threshold,
+        min_spatial_cosine=min_spatial_cosine,
         coarse_approx_error_threshold=coarse_approx_error_threshold,
         max_shift="full",
         conv_batch_size=conv_batch_size,
@@ -170,6 +172,7 @@ def iterate_compressed_pairwise_convolutions(
     geom: Optional[np.ndarray] = None,
     conv_ignore_threshold=0.0,
     coarse_approx_error_threshold=0.0,
+    min_spatial_cosine=0.0,
     max_shift="full",
     amplitude_scaling_variance=0.0,
     amplitude_scaling_boundary=0.5,
@@ -230,6 +233,7 @@ def iterate_compressed_pairwise_convolutions(
         reg_geom_kdtree=reg_geom_kdtree,
         match_distance=match_distance,
         conv_ignore_threshold=conv_ignore_threshold,
+        min_spatial_cosine=min_spatial_cosine,
         coarse_approx_error_threshold=coarse_approx_error_threshold,
         max_shift=max_shift,
         batch_size=conv_batch_size,
@@ -396,6 +400,7 @@ def compressed_convolve_pairs(
     units_a: Optional[np.ndarray] = None,
     units_b: Optional[np.ndarray] = None,
     conv_ignore_threshold=0.0,
+    min_spatial_cosine=0.0,
     coarse_approx_error_threshold=0.0,
     amplitude_scaling_variance=0.0,
     amplitude_scaling_boundary=0.5,
@@ -458,6 +463,7 @@ def compressed_convolve_pairs(
         shift_a=shift_a,
         shift_b=shift_b,
         conv_ignore_threshold=conv_ignore_threshold,
+        min_spatial_cosine=min_spatial_cosine,
         geom=geom,
         registered_geom=reg_geom,
         reg_geom_kdtree=reg_geom_kdtree,
@@ -741,6 +747,7 @@ def shift_deduplicated_pairs(
     shift_a=None,
     shift_b=None,
     conv_ignore_threshold=0.0,
+    min_spatial_cosine=0.0,
     geom=None,
     registered_geom=None,
     reg_geom_kdtree=None,
@@ -779,8 +786,14 @@ def shift_deduplicated_pairs(
     # check spatially overlapping
     chan_amp_a = torch.sqrt(torch.square(spatialsing_a).sum(1))
     chan_amp_b = torch.sqrt(torch.square(spatialsing_b).sum(1))
-    pair = chan_amp_a @ chan_amp_b.T
-    pair = pair > conv_ignore_threshold
+    dot = chan_amp_a @ chan_amp_b.T
+    pair = dot > conv_ignore_threshold
+    if min_spatial_cosine:
+        norm_a = (chan_amp_a * chan_amp_a).sum(1)
+        norm_b = (chan_amp_b * chan_amp_b).sum(1)
+        cos = dot / (norm_a[:, None] * norm_b[None, :])
+        pair = pair & (cos > min_spatial_cosine)
+
     pair = pair.cpu()
 
     # co-occurrence
@@ -1133,6 +1146,7 @@ class ConvWorkerContext:
     match_distance: Optional[float] = None
     conv_ignore_threshold: float = 0.0
     coarse_approx_error_threshold: float = 0.0
+    min_spatial_cosine: float = 0.0
     amplitude_scaling_variance: float = 0.0
     amplitude_scaling_boundary: float = 0.5
     reduce_deconv_resid_norm: bool = False

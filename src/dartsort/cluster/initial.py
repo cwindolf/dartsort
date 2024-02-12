@@ -196,6 +196,10 @@ def ensemble_chunks(
     -------
     sorting  : DARTsortSorting
     """
+    assert clustering_config.ensemble_strategy in ("forward_backward", "split_merge")
+    if computation_config is None:
+        computation_config = job_util.get_global_computation_config()
+
     # get chunk sortings
     chunk_time_ranges_s, chunk_sortings = cluster_chunks(
         peeling_hdf5_filename,
@@ -203,13 +207,8 @@ def ensemble_chunks(
         clustering_config,
         motion_est=motion_est,
     )
-
     if len(chunk_sortings) == 1:
         return chunk_sortings[0]
-
-    assert clustering_config.ensemble_strategy in ("forward_backward", "split_merge")
-    if computation_config is None:
-        computation_config = job_util.get_global_computation_config()
 
     if clustering_config.ensemble_strategy == "forward_backward":
         labels = ensemble_utils.forward_backward(

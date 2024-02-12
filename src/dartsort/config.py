@@ -206,6 +206,7 @@ class SplitMergeConfig:
     merge_template_config: TemplateConfig = TemplateConfig(superres_templates=False)
     merge_distance_threshold: float = 0.25
     cross_merge_distance_threshold: float = 0.5
+    min_spatial_cosine: float = 0.5
 
 
 @dataclass(frozen=True)
