@@ -16,7 +16,7 @@ object can then be passed into the high level functions like
 
 TODO: change n_chunks_fit to n_spikes_fit, max_chunks_fit
 """
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import List, Optional, Tuple
 
 import torch
@@ -262,11 +262,14 @@ class DARTsortConfig:
     matching_iterations: int = 1
 
 
-@dataclass(frozen=True)
+@dataclass
 class ComputationConfig:
     n_jobs_cpu: int = 0
     n_jobs_gpu: int = 0
     device: Optional[torch.device] = None
+
+    actual_device: torch.device = field(init=False)
+    actual_n_jobs_gpu: int = field(init=False)
 
     def __post_init__(self):
         if self.device is None:
