@@ -32,6 +32,7 @@ def split_merge_ensemble(
             split_strategy=split_merge_config.split_strategy,
             recursive=split_merge_config.recursive_split,
             n_jobs=n_jobs_split,
+            motion_est=motion_est,
             show_progress=False
         )
         for sorting in tqdm(chunk_sortings, desc="Split within chunks")

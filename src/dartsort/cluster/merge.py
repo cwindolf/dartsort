@@ -60,8 +60,9 @@ def merge_templates(
     -------
     A new DARTsortSorting
     """
+    print("merge input", np.unique(sorting.labels).size - 1)
     if template_data is None:
-        template_data = TemplateData.from_config(
+        template_data, sorting = TemplateData.from_config(
             recording,
             sorting,
             template_config,
@@ -71,6 +72,7 @@ def merge_templates(
             overwrite=overwrite_templates,
             device=device,
             save_npz_name=template_npz_filename,
+            return_realigned_sorting=True,
         )
 
     units, dists, shifts, template_snrs = calculate_merge_distances(
@@ -246,6 +248,10 @@ def calculate_merge_distances(
         show_progress=show_progress,
     )
     for res in dec_res_iter:
+        if res is None:
+            # all pairs in chunk were ignored for one reason or another
+            continue
+
         tixa = res.template_indices_a
         tixb = res.template_indices_b
         rms_ratio = res.deconv_resid_norms / res.template_a_norms
@@ -359,7 +365,12 @@ def recluster(
     pdist = dists[np.triu_indices(dists.shape[0], k=1)]
     # scipy hierarchical clustering only supports finite values, so let's just
     # drop in a huge value here
-    pdist[~np.isfinite(pdist)] = 1_000_000 + pdist[np.isfinite(pdist)].max()
+    finite = np.isfinite(pdist)
+    if not finite.any():
+        print("no merges")
+        return sorting
+
+    pdist[~finite] = 1_000_000 + pdist[finite].max()
     # complete linkage: max dist between all pairs across clusters.
     Z = complete(pdist)
     # extract flat clustering using our max dist threshold
@@ -378,6 +389,7 @@ def recluster(
     clust_inverse = {i: [] for i in new_labels}
     for orig_label, new_label in enumerate(new_labels):
         clust_inverse[new_label].append(orig_label)
+    print(sum(len(v) - 1 for v in clust_inverse.values()), "merges")
 
     # align to best snr unit
     for new_label, orig_labels in clust_inverse.items():
@@ -409,8 +421,8 @@ def cross_match(
     units_b,
     merge_distance_threshold=0.5,
 ):
-    assert np.array_equal(units_a, sorting_a.units)
-    assert np.array_equal(units_b, sorting_b.units)
+    assert np.array_equal(units_a, sorting_a.unit_ids)
+    assert np.array_equal(units_b, sorting_b.unit_ids)
 
     ia, ib = np.nonzero(dists <= merge_distance_threshold)
     weights = coo_array((-dists[ia, ib], (ia.astype(np.intc), ib.astype(np.intc))))

@@ -196,6 +196,7 @@ def split_merge(
             split_strategy=split_merge_config.split_strategy,
             recursive=split_merge_config.recursive_split,
             n_jobs=n_jobs_split,
+            motion_est=motion_est,
         )
         if output_directory is not None:
             split_sorting.save(split_npz)
@@ -206,6 +207,7 @@ def split_merge(
         merge_sorting = merge_templates(
             split_sorting,
             recording,
+            motion_est=motion_est,
             template_config=split_merge_config.merge_template_config,
             merge_distance_threshold=split_merge_config.merge_distance_threshold,
             min_spatial_cosine=split_merge_config.min_spatial_cosine,
