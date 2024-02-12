@@ -331,6 +331,7 @@ def cross_match_distance_matrix(
     Dab = dists[a_mask[:, None], b_mask[None, :]]
     Dba = dists[b_mask[:, None], a_mask[None, :]]
     Dstack = np.stack((Dab, Dba.T))
+    print(f"{Dstack.shape=} {Dab.shape=} {Dba.shape=}")
     shifts_ab = shifts[a_mask[:, None], b_mask[None, :]]
     shifts_ba = shifts[b_mask[:, None], a_mask[None, :]]
     shifts_stack = np.stack((shifts_ab, -shifts_ba.T))
@@ -341,15 +342,14 @@ def cross_match_distance_matrix(
     # that important, at the end of the day. still, we keep track of it
     # so that we can pick the shift and move on with our lives.
     choices = np.argmin(Dstack, axis=0)
-    dists = Dstack[choices]
-    shifts = shifts_stack[choices]
+    print(f"{choices.shape=}")
+    dists = Dstack[choices, np.arange(choices.shape[0])[:, None], np.arange(choices.shape[1])[None]]
+    shifts = shifts_stack[choices, np.arange(choices.shape[0])[:, None], np.arange(choices.shape[1])[None]]
 
     snrs_a = template_snrs[a_mask]
     snrs_b = template_snrs[b_mask]
-    units_a = units[a_mask]
-    units_b = units[b_mask]
 
-    return dists, shifts, snrs_a, snrs_b, units_a, units_b
+    return dists, shifts, snrs_a, snrs_b, template_data_a.unit_ids, template_data_b.unit_ids
 
 
 def recluster(
@@ -421,11 +421,15 @@ def cross_match(
     units_b,
     merge_distance_threshold=0.5,
 ):
-    assert np.array_equal(units_a, sorting_a.unit_ids)
-    assert np.array_equal(units_b, sorting_b.unit_ids)
+    # assert np.array_equal(units_a, np.arange(units_a.size))
+    # assert np.array_equal(units_b, np.arange(units_b.size))
+    # print(f"{np.unique(sorting_b.labels)=}")
 
     ia, ib = np.nonzero(dists <= merge_distance_threshold)
-    weights = coo_array((-dists[ia, ib], (ia.astype(np.intc), ib.astype(np.intc))))
+    weights = coo_array(
+        (-dists[ia, ib], (ia.astype(np.intc), ib.astype(np.intc))),
+        shape=dists.shape,
+    )
     b_to_a = maximum_bipartite_matching(weights)
     assert b_to_a.shape == units_b.shape
 
@@ -434,32 +438,35 @@ def cross_match(
     # matched B units are given their A-match's label, and unmatched units get labels
     # starting from A's next cluster label
     matched = b_to_a >= 0
+    print(f"{matched.sum()=}")
     next_a_label = units_a.max() + 1
     b_reindex = np.full_like(units_b, -1)
     matched_a_units = units_a[b_to_a[matched]]
     b_reindex[matched] = matched_a_units
     b_reindex[~matched] = next_a_label + np.arange(np.count_nonzero(~matched))
-    b_labels = b_reindex[sorting_b.labels]
+    b_kept = np.flatnonzero(sorting_b.labels >= 0)
+    b_labels = np.full_like(sorting_b.labels, -1)
+    b_labels[b_kept] = b_reindex[sorting_b.labels[b_kept]]
 
     # both sortings' times can change. we shift the lower SNR unit.
     # shifts is like trough[a] - trough[b]. if >0, subtract from a or add to b to realign.
-    matched_b_units = units_b[matched]
-    shifts = shifts[matched_a_units, matched_b_units]
+#     matched_b_units = units_b[matched]
+#     shifts = shifts[matched_a_units, matched_b_units]
 
-    shifts_a = np.zeros_like(sorting_a.times_samples)
-    a_matched = np.flatnonzero(np.isin(sorting_a.labels, matched_a_units))
-    a_match_ix = np.searchsorted(matched_a_units, sorting_a.labels[a_matched])
-    shifts_a[a_matched] = shifts[a_match_ix]
-    times_a = sorting_a.times_samples - shifts_a
+#     shifts_a = np.zeros_like(sorting_a.times_samples)
+#     a_matched = np.flatnonzero(np.isin(sorting_a.labels, matched_a_units))
+#     a_match_ix = np.searchsorted(matched_a_units, sorting_a.labels[a_matched])
+#     shifts_a[a_matched] = shifts[a_match_ix]
+#     times_a = sorting_a.times_samples - shifts_a
 
-    shifts_b = np.zeros_like(sorting_b.times_samples)
-    b_matched = np.flatnonzero(np.isin(sorting_b.labels, matched_b_units))
-    b_match_ix = np.searchsorted(matched_b_units, sorting_b.labels[b_matched])
-    shifts_b[b_matched] = shifts[b_match_ix]
-    times_b = sorting_b.times_samples - shifts_b
+#     shifts_b = np.zeros_like(sorting_b.times_samples)
+#     b_matched = np.flatnonzero(np.isin(sorting_b.labels, matched_b_units))
+#     b_match_ix = np.searchsorted(matched_b_units, sorting_b.labels[b_matched])
+#     shifts_b[b_matched] = shifts[b_match_ix]
+#     times_b = sorting_b.times_samples - shifts_b
 
-    sorting_a = replace(sorting_a, times_samples=times_a)
-    sorting_b = replace(sorting_b, labels=b_labels, times_samples=times_b)
+    # sorting_a = replace(sorting_a)#, times_samples=times_a)
+    sorting_b = replace(sorting_b, labels=b_labels)#, times_samples=times_b)
     return sorting_a, sorting_b
 
 

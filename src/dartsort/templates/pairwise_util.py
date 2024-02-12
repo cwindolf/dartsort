@@ -789,8 +789,8 @@ def shift_deduplicated_pairs(
     dot = chan_amp_a @ chan_amp_b.T
     pair = dot > conv_ignore_threshold
     if min_spatial_cosine:
-        norm_a = (chan_amp_a * chan_amp_a).sum(1)
-        norm_b = (chan_amp_b * chan_amp_b).sum(1)
+        norm_a = torch.sqrt((chan_amp_a * chan_amp_a).sum(1))
+        norm_b = torch.sqrt((chan_amp_b * chan_amp_b).sum(1))
         cos = dot / (norm_a[:, None] * norm_b[None, :])
         pair = pair & (cos > min_spatial_cosine)
 
@@ -801,7 +801,7 @@ def shift_deduplicated_pairs(
         shifted_temp_ix_a[:, None],
         shifted_temp_ix_b[None, :],
     ]
-    pair *= torch.as_tensor(cooccurrence, device=pair.device)
+    pair = pair & torch.as_tensor(cooccurrence, device=pair.device)
 
     pair_ix_a, pair_ix_b = torch.nonzero(pair, as_tuple=True)
     nco = pair_ix_a.numel()
