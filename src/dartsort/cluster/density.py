@@ -1,4 +1,5 @@
 import numpy as np
+from collections.abc import Sequence
 from scipy.spatial import KDTree
 from scipy.ndimage import gaussian_filter
 from scipy.interpolate import RegularGridInterpolator
@@ -41,6 +42,9 @@ def get_smoothed_densities(X, inliers=slice(None), sigmas=None):
     raw_histogram, bin_edges = np.histogramdd(infeats, bins=bin_edges)
     bin_centers = [0.5 * (be[1:] + be[:-1]) for be in bin_edges]
 
+    seq = isinstance(sigmas, Sequence)
+    if not seq:
+        sigmas = (sigmas,)
     kdes = []
     for sigma in list(sigmas):
         hist = raw_histogram
@@ -50,7 +54,7 @@ def get_smoothed_densities(X, inliers=slice(None), sigmas=None):
         lerp = RegularGridInterpolator(bin_centers, hist, bounds_error=False)
         kdes.append(lerp(X))
 
-    kdes = kdes[0] if len(kdes) == 1 else kdes
+    kdes = kdes if seq else kdes[0]
     return kdes
 
 
