@@ -122,11 +122,13 @@ class XZScatter(UnitPlot):
         registered=True,
         amplitude_color_cutoff=15,
         probe_margin_um=100,
+        colorbar=False,
     ):
         self.relocate_amplitudes = relocate_amplitudes
         self.registered = registered
         self.amplitude_color_cutoff = amplitude_color_cutoff
         self.probe_margin_um = probe_margin_um
+        self.colorbar = colorbar
 
     def draw(self, axis, sorting_analysis, unit_id):
         in_unit = sorting_analysis.in_unit(unit_id)
@@ -150,18 +152,21 @@ class XZScatter(UnitPlot):
         reg_str = "registered " * self.registered
         axis.set_ylabel(reg_str + "z (um)")
         reloc_str = "relocated " * self.relocate_amplitudes
-        plt.colorbar(s, ax=axis, shrink=0.5, label=reloc_str + "amplitude (su)")
+        if self.colorbar:
+            plt.colorbar(s, ax=axis, shrink=0.5, label=reloc_str + "amplitude (su)")
 
 
 class PCAScatter(UnitPlot):
     kind = "scatter"
 
     def __init__(
-        self, relocate_amplitudes=False, relocated=True, amplitude_color_cutoff=15
+        self, relocate_amplitudes=False, relocated=True, amplitude_color_cutoff=15,
+        colorbar=False
     ):
         self.relocated = relocated
         self.relocate_amplitudes = relocate_amplitudes
         self.amplitude_color_cutoff = amplitude_color_cutoff
+        self.colorbar = colorbar
 
     def draw(self, axis, sorting_analysis, unit_id):
         which, loadings = sorting_analysis.unit_pca_features(
@@ -177,7 +182,8 @@ class PCAScatter(UnitPlot):
         axis.set_xlabel(reloc_str + "per-unit PC1 (um)")
         axis.set_ylabel(reloc_str + "per-unit PC2 (um)")
         reloc_amp_str = "relocated " * self.relocate_amplitudes
-        plt.colorbar(s, ax=axis, shrink=0.5, label=reloc_amp_str + "amplitude (su)")
+        if self.colorbar:
+            plt.colorbar(s, ax=axis, shrink=0.5, label=reloc_amp_str + "amplitude (su)")
 
 
 # -- wide scatter plots
@@ -535,10 +541,11 @@ class CoarseTemplateDistancePlot(UnitPlot):
     width = 2
     height = 2
 
-    def __init__(self, channel_show_radius_um=50, n_neighbors=5, dist_vmax=1.0):
+    def __init__(self, channel_show_radius_um=50, n_neighbors=5, dist_vmax=1.0, show_values=True):
         self.channel_show_radius_um = channel_show_radius_um
         self.n_neighbors = n_neighbors
         self.dist_vmax = dist_vmax
+        self.show_values = show_values
 
     def draw(self, axis, sorting_analysis, unit_id):
         (
@@ -559,6 +566,9 @@ class CoarseTemplateDistancePlot(UnitPlot):
             origin="lower",
             interpolation="none",
         )
+        if self.show_values:
+            for (j, i), label in np.ndenumerate(neighbor_dists):
+                axis.text(i, j, f"{label:.2f}", ha="center", va="center")
         plt.colorbar(im, ax=axis, shrink=0.3)
         axis.set_xticks(range(len(neighbor_ids)), neighbor_ids)
         axis.set_yticks(range(len(neighbor_ids)), neighbor_ids)
