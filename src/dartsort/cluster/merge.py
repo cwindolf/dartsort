@@ -570,14 +570,17 @@ def combine_templates(template_data_a, template_data_b):
     return template_data, cross_mask, ids_a, ids_b
 
 
-def combine_sortings(sortings):
+def combine_sortings(sortings, dodge=False):
     labels = np.full_like(sortings[0].labels, -1)
     times_samples = sortings[0].times_samples.copy()
 
+    next_label = 0
     for sorting in sortings:
         kept = np.flatnonzero(sorting.labels >= 0)
         assert np.all(labels[kept] < 0)
-        labels[kept] = sorting.labels[kept]
+        labels[kept] = sorting.labels[kept] + next_label
+        if dodge:
+            next_label += 1 + sorting.labels[kept].max()
         times_samples[kept] = sorting.times_samples[kept]
 
     sorting = replace(sortings[0], labels=labels, times_samples=times_samples)

@@ -145,6 +145,7 @@ class MotionEstimationConfig:
     window_margin_um: Optional[float] = None
     max_dt_s: float = 0.1
     max_disp_um: Optional[float] = None
+    correlation_threshold: float = 0.1
     rigid: bool = False
 
 

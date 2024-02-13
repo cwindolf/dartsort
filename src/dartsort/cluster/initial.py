@@ -27,6 +27,7 @@ def cluster_chunk(
     motion_est=None,
     recording=None,
     amplitudes_dataset_name="denoised_ptp_amplitudes",
+    depth_order=True,
 ):
     """Cluster spikes from a single segment
 
@@ -123,6 +124,9 @@ def cluster_chunk(
             "times_seconds": times_s,
         },
     )
+    
+    if depth_order:
+        sorting = cluster_util.reorder_by_depth(sorting, motion_est=motion_est)
 
     return sorting
 

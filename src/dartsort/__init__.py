@@ -6,7 +6,7 @@ from .localize.localize_util import (localize_amplitude_vectors, localize_hdf5,
                                      localize_waveforms)
 from .main import (ObjectiveUpdateTemplateMatchingPeeler, SubtractionPeeler,
                    check_recording, cluster, dartsort, match, run_peeler,
-                   split_merge, subtract)
+                   split_merge, subtract, estimate_motion)
 from .peel.grab import GrabAndFeaturize
 from .templates import TemplateData
 from .transform import WaveformPipeline

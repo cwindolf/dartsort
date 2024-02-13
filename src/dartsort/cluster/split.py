@@ -27,6 +27,7 @@ def split_clusters(
     split_big_kw=dict(dz=40, dx=48, min_size_split=50),
     motion_est=None,
     show_progress=True,
+    depth_order=True,
     n_jobs=0,
 ):
     """Parallel split step runner function
@@ -117,6 +118,8 @@ def split_clusters(
                             iterator.total += 1
 
     new_sorting = replace(sorting, labels=labels)
+    if depth_order:
+        new_sorting = cluster_util.reorder_by_depth(new_sorting, motion_est=motion_est)
     return new_sorting
 
 
