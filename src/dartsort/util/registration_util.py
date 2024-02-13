@@ -24,8 +24,9 @@ def estimate_motion(
     window_step_um: float = 400.0,
     window_scale_um: float = 450.0,
     window_margin_um: Optional[float] = None,
-    max_dt_s: float = 0.1,
+    max_dt_s: float = 1000.0,
     max_disp_um: Optional[float] = None,
+    correlation_threshold: float = 0.1,
     rigid=False,
     localizations_dataset_name="point_source_localizations",
     amplitudes_dataset_name="denoised_ptp_amplitudes",
@@ -71,6 +72,7 @@ def estimate_motion(
         win_margin_um=window_margin_um,
         max_disp_um=max_disp_um,
         max_dt_s=max_dt_s,
+        mincorr=correlation_threshold,
         device=device,
     )
 

@@ -7,6 +7,29 @@ from scipy.spatial import KDTree
 from sklearn.neighbors import KNeighborsClassifier
 from spikeinterface.comparison import compare_two_sorters
 from tqdm.auto import tqdm
+import dataclasses
+
+
+def reorder_by_depth(sorting, motion_est=None):
+    kept = np.flatnonzero(sorting.labels >= 0)
+    kept_labels = sorting.labels[kept]
+    
+    units, kept_labels = np.unique(kept_labels, return_inverse=True)
+
+    depths = sorting.point_source_localizations[kept, 2]
+    if motion_est is not None:
+        depths = motion_est.correct_s(sorting.times_seconds[kept], depths)
+
+    centroids = np.zeros(units.size)
+    for u in range(units.size):
+        inu = np.flatnonzero(kept_labels == u)
+        centroids[u] = np.median(depths[inu])
+
+    labels = sorting.labels.copy()
+    # this one is some food for thought, lol.
+    labels[kept] = np.argsort(np.argsort(centroids))[kept_labels]
+
+    return dataclasses.replace(sorting, labels=labels)
 
 
 def closest_registered_channels(times_seconds, x, z_abs, geom, motion_est=None):

@@ -472,7 +472,8 @@ def scatter_feature_vs_depth(
         to_show = to_show[np.argsort(amplitudes[to_show])]
 
     if sorting is not None:
-        labels = sorting.labels
+        if sorting.labels.max() > 0:
+            labels = sorting.labels
 
     if labels is None:
         c = np.clip(amplitudes, 0, amplitude_color_cutoff)
