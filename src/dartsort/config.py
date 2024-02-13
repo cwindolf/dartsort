@@ -143,7 +143,7 @@ class MotionEstimationConfig:
     window_step_um: float = 400.0
     window_scale_um: float = 450.0
     window_margin_um: Optional[float] = None
-    max_dt_s: float = 0.1
+    max_dt_s: float = 1000.0
     max_disp_um: Optional[float] = None
     correlation_threshold: float = 0.1
     rigid: bool = False
