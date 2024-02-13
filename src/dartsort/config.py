@@ -235,7 +235,9 @@ class ClusteringConfig:
 
     # density peaks parameters
     sigma_local: float = 5.0
+    sigma_local_low: Optional[float] = None
     sigma_regional: Optional[float] = None
+    sigma_regional_low: Optional[float] = None
     n_neighbors_search: int = 20
     radius_search: float = 5.0
     remove_clusters_smaller_than: int = 10

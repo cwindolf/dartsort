@@ -103,7 +103,9 @@ def cluster_chunk(
         labels[in_chunk] = density.density_peaks_clustering(
             np.c_[scales[0] * xyza[in_chunk, 0], scales[1] * z, ampfeat],
             sigma_local=clustering_config.sigma_local,
+            sigma_local_low=clustering_config.sigma_local_low,
             sigma_regional=clustering_config.sigma_regional,
+            sigma_regional_low=clustering_config.sigma_regional_low,
             n_neighbors_search=clustering_config.n_neighbors_search,
             radius_search=clustering_config.radius_search,
             remove_clusters_smaller_than=clustering_config.remove_clusters_smaller_than,

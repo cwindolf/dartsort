@@ -6,6 +6,7 @@ from scipy.ndimage import gaussian_filter
 from scipy.sparse import coo_array
 from scipy.sparse.csgraph import connected_components
 from scipy.spatial import KDTree
+from sklearn.neighbors import KDTree as SKDTree
 
 
 def kdtree_inliers(
@@ -31,31 +32,81 @@ def kdtree_inliers(
     return inliers, kdtree
 
 
-def get_smoothed_densities(X, inliers=slice(None), sigmas=None):
+def get_smoothed_densities(X, inliers=slice(None), sigmas=None, return_hist=False, sigma_lows=None, sigma_ramp_ax=-1, bin_sizes=None, bin_size_ratio=5.0, min_bin_size=1.0, ramp_min_bin_size=5.0):
     """Get RBF density estimates for each X[i] and bandwidth in sigmas
 
     Outliers will be marked with NaN KDEs. Please pass inliers, or else your
     histogram is liable to be way too big.
     """
-    infeats = X[inliers]
-    extents = np.c_[np.floor(infeats.min(0)), np.ceil(infeats.max(0))]
-    bin_edges = [np.arange(e[0], e[1] + 1) for e in extents]
-    raw_histogram, bin_edges = np.histogramdd(infeats, bins=bin_edges)
-    bin_centers = [0.5 * (be[1:] + be[:-1]) for be in bin_edges]
-
+    # figure out what bandwidths we'll be working on
     seq = isinstance(sigmas, Sequence)
     if not seq:
         sigmas = (sigmas,)
+    do_ramp = sigma_lows is not None
+    if not do_ramp:
+        sigma_lows = [None for _ in sigmas]
+    elif not seq:
+        sigma_lows = (sigma_lows,)
+    min_sigma = min(sigmas)
+    if do_ramp:
+        min_sigma = min(min_sigma, min(sigma_lows))
+
+    # histogram bin sizes -- not too big, not too small
+    infeats = X[inliers]
+    bin_sizes = np.full(X.shape[1], min_sigma / bin_size_ratio)
+    bin_sizes = np.maximum(min_bin_size, bin_sizes)
+    if do_ramp:
+        bin_sizes[sigma_ramp_ax] = max(bin_sizes[sigma_ramp_ax], ramp_min_bin_size)
+
+    # select bin edges
+    extents = np.c_[np.floor(infeats.min(0)), np.ceil(infeats.max(0))]
+    nbins = np.ceil(extents.ptp(1) / bin_sizes).astype(int)
+    bin_edges = [np.linspace(e[0], e[1], num=nb) for e, nb in zip(extents, nbins)]
+
+    # compute histogram and figure out how big the bins actually were
+    raw_histogram, bin_edges = np.histogramdd(infeats, bins=bin_edges)
+    bin_sizes = np.array([(be[1] - be[0]) for be in bin_edges])
+    bin_centers = [0.5 * (be[1:] + be[:-1]) for be in bin_edges]
+    
+    # normalize histogram to samples / volume
+    raw_histogram = raw_histogram / bin_sizes.prod()
+
     kdes = []
-    for sigma in list(sigmas):
-        hist = raw_histogram
+    if return_hist:
+        hists = []
+    for sigma, sigma_low in zip(list(sigmas), list(sigma_lows)):
+        # fix up sigma, sigma_low based on bin size
         if sigma is not None:
+            sigma = sigma / bin_sizes
+        if sigma_low is not None:
+            sigma_low = sigma_low / bin_sizes
+
+        # figure out how histogram should be filtered
+        hist = raw_histogram
+        if sigma is not None and sigma_low is None:
             hist = gaussian_filter(raw_histogram, sigma)
+        elif sigma is not None and sigma_low is not None:
+            # filter by a sequence of bandwidths
+            ramp = np.linspace(sigma_low, sigma, num=hist.shape[sigma_ramp_ax])
+            # operate along the ramp axis
+            hist_move = np.moveaxis(hist, sigma_ramp_ax, 0)
+            hist_smoothed = hist_move.copy()
+            for j, sig in enumerate(ramp):
+                sig_move = sig.copy()
+                sig_move[0] = sig[sigma_ramp_ax]
+                sig_move[sigma_ramp_ax] = sig[0]
+                hist_smoothed[j] = gaussian_filter(hist_move, sig_move)[j]
+            hist = np.moveaxis(hist_smoothed, 0, sigma_ramp_ax)
+        if return_hist:
+            hists.append(hist)
 
         lerp = RegularGridInterpolator(bin_centers, hist, bounds_error=False)
         kdes.append(lerp(X))
 
     kdes = kdes if seq else kdes[0]
+    if return_hist:
+        hists = hists if seq else hists[0]
+        return kdes, hists
     return kdes
 
 
@@ -125,7 +176,9 @@ def density_peaks_clustering(
     X,
     kdtree=None,
     sigma_local=5.0,
+    sigma_local_low=None,
     sigma_regional=None,
+    sigma_regional_low=None,
     outlier_neighbor_count=10,
     outlier_radius=25.0,
     n_neighbors_search=10,
@@ -139,6 +192,12 @@ def density_peaks_clustering(
     return_extra=False,
 ):
     n = len(X)
+    
+    print(f"{sigma_local=}")
+    print(f"{sigma_local_low=}")
+    print(f"{sigma_regional=}")
+    print(f"{sigma_regional_low=}")
+    print(f"{noise_density=}")
 
     inliers, kdtree = kdtree_inliers(
         X,
@@ -148,12 +207,11 @@ def density_peaks_clustering(
         workers=workers,
     )
 
-    sigmas = [sigma_local] + ([sigma_regional] * int(sigma_regional is not None))
-    density = get_smoothed_densities(X, inliers=inliers, sigmas=sigmas)
-    if sigma_regional is not None:
-        density = density[0] / density[1]
-    else:
-        density = density[0]
+    do_ratio = int(sigma_regional is not None)
+    density = get_smoothed_densities(X, inliers=inliers, sigmas=sigma_local, sigma_lows=sigma_local_low)
+    if do_ratio:
+        reg_density = get_smoothed_densities(X, inliers=inliers, sigmas=sigma_regional, sigma_lows=sigma_regional_low)
+        density = np.nan_to_num(density / reg_density)
 
     nhdn, distances, indices = nearest_higher_density_neighbor(
         kdtree,
@@ -185,7 +243,7 @@ def density_peaks_clustering(
     if remove_clusters_smaller_than:
         labels = decrumb(labels, min_size=remove_clusters_smaller_than)
 
-    print("dpc", np.unique(labels).size)
+    print("dpc found:", np.unique(labels).size)
 
     if not return_extra:
         return labels
