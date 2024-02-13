@@ -17,7 +17,7 @@ import numpy as np
 from dartsort.util import job_util
 from dartsort.util.data_util import DARTsortSorting
 
-from . import cluster_util, density, ensemble_utils
+from . import cluster_util, density, ensemble_utils, forward_backward
 
 
 def cluster_chunk(
@@ -217,7 +217,7 @@ def ensemble_chunks(
         return chunk_sortings[0]
 
     if clustering_config.ensemble_strategy == "forward_backward":
-        labels = ensemble_utils.forward_backward(
+        labels = forward_backward.forward_backward(
             recording,
             chunk_time_ranges_s,
             chunk_sortings,
