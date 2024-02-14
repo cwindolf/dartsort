@@ -59,8 +59,6 @@ def forward_backward(
     else:
         tbar = range(len(chunk_sortings) - 1)
     for k in tbar:
-        # CHANGE THE 1 ---
-        # idx_1 = np.flatnonzero(np.logical_and(times_seconds>=min_time_s, times_seconds<min_time_s+k*shift+chunk_size_s))
         idx_1 = np.flatnonzero(
             np.logical_and(
                 times_seconds >= min_time_s,
@@ -92,8 +90,6 @@ def forward_backward(
 
             # FORWARD PASS
             dist_matrix = np.zeros((units_1.shape[0], units_2.shape[0]))
-
-            # Speed up this code - this matrix can be sparse (only compute distance for "neighboring" units) - OK for now, still pretty fast
             for i, unit_1 in enumerate(units_1):
                 for j, unit_2 in enumerate(units_2):
                     idxunit1 = np.flatnonzero(labels_1 == unit_1)
@@ -113,12 +109,7 @@ def forward_backward(
 
                 idxunit2 = np.flatnonzero(labels_2 == units_to_match_to[0])
                 features_to_match_to = np.median(features2[idxunit2], axis=0)
-                # features_to_match_to = np.c_[
-                #     np.median(x_2[labels_2 == units_to_match_to[0]]),
-                #     np.median(z_2[labels_2 == units_to_match_to[0]]),
-                #     np.median(amps_2[labels_2 == units_to_match_to[0]]),
-                # ]
-                #CAN CHANGE THIS
+
                 for u in units_to_match_to[1:]:
                     idxunit2 = np.flatnonzero(labels_2 == u)
                     features_to_match_to = np.c_[
@@ -127,13 +118,7 @@ def forward_backward(
                     ]
                 
                 spikes_to_update = np.flatnonzero(labels_1 == unit_to_split)
-                
-                # x_s_to_update = x_1[spikes_to_update]
-                # z_s_to_update = z_1[spikes_to_update]
-                # amps_s_to_update = amps_1[spikes_to_update]
-                # feat_s = np.c_[x_s_to_update, z_s_to_update, amps_s_to_update]
                 feat_s = features1[spikes_to_update]
-
                 labels_1[spikes_to_update] = units_to_match_to[((features_to_match_to.T[:, None] - feat_s[None])** 2).sum(2).argmin(0)]
 
             # Relabel labels_1 and labels_2
@@ -143,7 +128,6 @@ def forward_backward(
                     labels_1[idx_to_relabel] = units_2[dist_forward == unit_to_relabel]
 
             # BACKWARD PASS
-
             units_not_matched = np.unique(labels_1)
             units_not_matched = units_not_matched[units_not_matched > -1]
             units_not_matched = units_not_matched[units_not_matched < unit_label_shift]
@@ -169,10 +153,6 @@ def forward_backward(
                     
                     spikes_to_update = np.flatnonzero(labels_2 == unit_to_split)
                     features2[spikes_to_update]
-                    # x_s_to_update = x_2[spikes_to_update]
-                    # z_s_to_update = z_2[spikes_to_update]
-                    # amps_s_to_update = amps_2[spikes_to_update]
-                    # feat_s = np.c_[x_s_to_update, z_s_to_update, amps_s_to_update]
                     labels_2[spikes_to_update] = units_to_match_to[((features_to_match_to.T[:, None] - features2[spikes_to_update][None])** 2).sum(2).argmin(0)]
                     
             #           Do we need to "regularize" and make sure the distance intra units after merging is smaller than the distance inter units before merging
