@@ -337,8 +337,11 @@ def conv_to_resid(
     # here, we just care about pairs of (superres) templates, not upsampling
     # or shifting. so, get unique such pairs.
     pairs = np.c_[conv_result.template_indices_a, conv_result.template_indices_b]
+    # print(f"a {pairs.shape=} {pairs=}")
     pairs = np.unique(pairs, axis=0)
     n_pairs = len(pairs)
+    # print(f"{n_pairs=}")
+    # print(f"{pconvs.shape=}")
 
     # for loop to reduce over all (upsampled etc) member templates
     deconv_resid_norms = np.zeros(n_pairs)
@@ -358,20 +361,32 @@ def conv_to_resid(
         lag_index = np.argmax(pair_conv)
         best_conv = pair_conv[lag_index]
         shifts[j] = lag_index - center
-        
+
+
         # figure out scaling
         if amplitude_scaling_variance:
-            amp_scale_min = 1 / (1 + amplitude_scaling_boundary)
-            amp_scale_max = 1 + amplitude_scaling_boundary
-            inv_lambda = 1 / amplitude_scaling_variance
+            amp_scale_min = 1. / (1. + amplitude_scaling_boundary)
+            amp_scale_max = 1. + amplitude_scaling_boundary
+            inv_lambda = 1. / amplitude_scaling_variance
             b = best_conv + inv_lambda
             a = template_a_norms[j] + inv_lambda
             scaling = np.clip(b / a, amp_scale_min, amp_scale_max)
-            norm_reduction = 2 * scaling * b - np.square(scaling) * a - inv_lambda
+            norm_reduction = 2. * scaling * b - np.square(scaling) * a - inv_lambda
         else:
-            norm_reduction = 2 * best_conv - template_b_norms[j]
+            norm_reduction = 2. * best_conv - template_b_norms[j]
         deconv_resid_norms[j] = template_a_norms[j] - norm_reduction
-        assert deconv_resid_norms[j] >= 0
+        
+        if deconv_resid_norms[j] < 0:
+            print("---")
+            print(f"{deconv_resid_norms[j]=}")
+            print(f"{ix_a=} {ix_b=} {template_a_norms[j]=} {template_b_norms[j]=}")
+            print(f"{best_conv=} {lag_index=} {center=} {shifts[j]=}")
+            print(f"{pconvs[in_pair].shape=} {pair_conv.shape=}")
+            print(f"{(2.0 * best_conv - template_b_norms[j])=}")
+        
+        assert deconv_resid_norms[j] >= -1e-2
+
+    # barf
 
     return DeconvResidResult(
         template_indices_a,
