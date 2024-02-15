@@ -169,7 +169,7 @@ class DARTsortAnalysis:
 
     def __post_init__(self):
         self.clear_cache()
-    
+
         if self.featurization_pipeline is not None:
             assert not self.featurization_pipeline.needs_fit()
         assert np.isin(
@@ -388,7 +388,7 @@ class DARTsortAnalysis:
         # read waveforms from disk
         if self.shifting:
             load_ci = self.channel_index
-        if self.shifting:
+        else:
             load_ci = make_channel_index(
                 self.recording.get_channel_locations(), channel_show_radius_um
             )
