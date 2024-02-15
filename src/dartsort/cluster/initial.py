@@ -110,6 +110,7 @@ def cluster_chunk(
             radius_search=clustering_config.radius_search,
             remove_clusters_smaller_than=clustering_config.remove_clusters_smaller_than,
             noise_density=clustering_config.noise_density,
+            triage_quantile_per_cluster=clustering_config.triage_quantile_per_cluster,
             workers=4,
         )
     else:

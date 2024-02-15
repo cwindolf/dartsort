@@ -8,7 +8,6 @@ from scipy.sparse.csgraph import connected_components
 from scipy.spatial import KDTree
 from sklearn.neighbors import KDTree as SKDTree
 
-
 def kdtree_inliers(
     X, kdtree=None, n_neighbors=10, distance_upper_bound=25.0, workers=1
 ):
@@ -123,7 +122,7 @@ def nearest_higher_density_neighbor(
     distances, indices = distances[:, 1:].copy(), indices[:, 1:].copy()
 
     # find lowest distance higher density neighbor
-    print(f"nhdn {density.shape=}")
+    # print(f"nhdn {density.shape=}")
     density_padded = np.pad(density, (0, 1), constant_values=np.inf)
     is_lower_density = density_padded[indices] <= density[:, None]
     distances[is_lower_density] = np.inf
@@ -190,15 +189,10 @@ def density_peaks_clustering(
     border_search_neighbors=3,
     workers=1,
     return_extra=False,
+    triage_quantile_per_cluster=0,
 ):
     n = len(X)
     
-    print(f"{sigma_local=}")
-    print(f"{sigma_local_low=}")
-    print(f"{sigma_regional=}")
-    print(f"{sigma_regional_low=}")
-    print(f"{noise_density=}")
-
     inliers, kdtree = kdtree_inliers(
         X,
         kdtree=kdtree,
@@ -242,8 +236,12 @@ def density_peaks_clustering(
 
     if remove_clusters_smaller_than:
         labels = decrumb(labels, min_size=remove_clusters_smaller_than)
-
-    print("dpc found:", np.unique(labels).size)
+    
+    if triage_quantile_per_cluster>0:
+        for k in np.unique(labels[labels>-1]):
+            idx_label = np.flatnonzero(labels == k)
+            q = np.quantile(density[idx_label], triage_quantile_per_cluster)
+            labels[idx_label[density[idx_label]<q]] = -1
 
     if not return_extra:
         return labels
