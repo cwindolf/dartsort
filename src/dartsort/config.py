@@ -243,6 +243,7 @@ class ClusteringConfig:
     remove_clusters_smaller_than: int = 10
     noise_density: float = 0.0
     attach_density_feature: bool = False
+    triage_quantile_per_cluster: float = 0.0
 
     # -- ensembling
     ensemble_strategy: Optional[str] = "forward_backward"

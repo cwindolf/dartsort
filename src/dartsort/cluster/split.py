@@ -14,7 +14,7 @@ from scipy.spatial.distance import pdist
 from sklearn.decomposition import PCA
 from tqdm.auto import tqdm
 
-from . import cluster_util, relocate
+from . import cluster_util, relocate, density
 from .forward_backward import forward_backward
 
 
@@ -180,6 +180,12 @@ class FeatureSplit(SplitStrategy):
         min_cluster_size=25,
         min_samples=25,
         cluster_selection_epsilon=25,
+        sigma_local=5,
+        noise_density=0.1,
+        n_neighbors_search=20,
+        radius_search=10,
+        triage_quantile_per_cluster=0.2,
+        remove_clusters_smaller_than=25,
         reassign_outliers=False,
         random_state=0,
         rescale_all_features=False,
@@ -187,6 +193,7 @@ class FeatureSplit(SplitStrategy):
         amplitude_normalized=False,
         use_spread=False,
         max_size_wfs=None,
+        cluster_alg="hdbscan",
         **dataset_name_kwargs,
     ):
         """Split clusters based on per-cluster PCA and localization features
@@ -238,6 +245,13 @@ class FeatureSplit(SplitStrategy):
         self.min_samples = min_samples
         self.cluster_selection_epsilon = cluster_selection_epsilon
 
+        #DPC parameters
+        self.sigma_local=sigma_local
+        self.noise_density=noise_density
+        self.n_neighbors_search=n_neighbors_search
+        self.radius_search=radius_search
+        self.triage_quantile_per_cluster=triage_quantile_per_cluster
+        self.remove_clusters_smaller_than=remove_clusters_smaller_than
         self.rescale_all_features = rescale_all_features
         self.use_ptp = use_ptp
         self.amplitude_normalized = amplitude_normalized
@@ -257,6 +271,9 @@ class FeatureSplit(SplitStrategy):
             assert (
                 self.chunk_size_s is not None
             ), "Need to input chunk size for ensembling over chunks"
+
+        assert np.isin(cluster_alg, ["hdbscan", "dpc"])
+        self.cluster_alg = cluster_alg
 
         # load up the required h5 datasets
         self.initialize_from_h5(
@@ -368,14 +385,19 @@ class FeatureSplit(SplitStrategy):
         if n_spikes < self.min_cluster_size:
             return SplitResult()
 
-        (
-            max_registered_channel,
-            n_pitches_shift,
-            reloc_amplitudes,
-            kept,
-        ) = self.get_registered_channels(in_unit)
-        if not kept.size:
-            return SplitResult()
+        do_pca = self.n_pca_features > 0
+
+        if do_pca or self.relocated:
+            (
+                max_registered_channel,
+                n_pitches_shift,
+                reloc_amplitudes,
+                kept,
+            ) = self.get_registered_channels(in_unit)
+            if not kept.size:
+                return SplitResult()
+        else:
+            kept = np.arange(in_unit.shape[0])
 
         self.spread_feature(in_unit)
 
@@ -393,7 +415,6 @@ class FeatureSplit(SplitStrategy):
                 loc_features = loc_features[:, :2]
             features.append(loc_features)
 
-        do_pca = self.n_pca_features > 0
         if do_pca:
             enough_good_spikes, pca_kept, pca_embeds = self.pca_features(
                 in_unit,
@@ -425,14 +446,28 @@ class FeatureSplit(SplitStrategy):
 
         features = np.column_stack([f[kept] for f in features])
 
-        clust = HDBSCAN(
-            min_cluster_size=self.min_cluster_size,
-            min_samples=self.min_samples,
-            cluster_selection_epsilon=self.cluster_selection_epsilon,
-            core_dist_n_jobs=1,  # let's just use our parallelism
-            prediction_data=self.reassign_outliers,
-        )
-        hdb_labels = clust.fit_predict(features)
+        if self.cluster_alg == "hdbscan":
+            clust = HDBSCAN(
+                min_cluster_size=self.min_cluster_size,
+                min_samples=self.min_samples,
+                cluster_selection_epsilon=self.cluster_selection_epsilon,
+                core_dist_n_jobs=1,  # let's just use our parallelism
+                prediction_data=self.reassign_outliers,
+            )
+            hdb_labels = clust.fit_predict(features)
+        elif self.cluster_alg == "dpc":
+            hdb_labels = density.density_peaks_clustering(
+                features,
+                sigma_local=self.sigma_local,
+                sigma_regional=None,
+                noise_density=self.noise_density,
+                n_neighbors_search=self.n_neighbors_search,
+                radius_search=self.radius_search,
+                triage_quantile_per_cluster=self.triage_quantile_per_cluster,
+                remove_clusters_smaller_than=self.remove_clusters_smaller_than,
+            )
+        else: 
+            print("cluster_alg needs to be hdbscan or dpc")
 
         is_split = np.setdiff1d(np.unique(hdb_labels), [-1]).size > 1
 
@@ -669,6 +704,7 @@ class FeatureSplit(SplitStrategy):
             self.registered_channel_index = self.channel_index
             if self.motion_est is not None:
                 self.z_reg = self.motion_est.correct_s(self.t_s, self.z)
+            if self.relocated:
                 self.registered_geom = drift_util.registered_geometry(
                     self.geom, self.motion_est
                 )
@@ -676,7 +712,7 @@ class FeatureSplit(SplitStrategy):
                     self.registered_geom, self.channel_selection_radius
                 )
 
-        if (self.use_localization_features and self.relocated) or self.n_pca_features:
+        if (self.use_localization_features and self.relocated) or self.n_pca_features or self.use_ptp:
             self.amplitude_vectors = h5[amplitude_vectors_dataset_name]
 
         if self.use_localization_features:

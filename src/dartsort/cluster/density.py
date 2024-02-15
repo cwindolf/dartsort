@@ -8,7 +8,6 @@ from scipy.sparse.csgraph import connected_components
 from scipy.spatial import KDTree
 from sklearn.neighbors import KDTree as SKDTree
 
-
 def kdtree_inliers(
     X, kdtree=None, n_neighbors=10, distance_upper_bound=25.0, workers=1
 ):
@@ -189,15 +188,10 @@ def density_peaks_clustering(
     border_search_neighbors=3,
     workers=1,
     return_extra=False,
+    triage_quantile_per_cluster=0,
 ):
     n = len(X)
     
-    print(f"{sigma_local=}")
-    print(f"{sigma_local_low=}")
-    print(f"{sigma_regional=}")
-    print(f"{sigma_regional_low=}")
-    print(f"{noise_density=}")
-
     inliers, kdtree = kdtree_inliers(
         X,
         kdtree=kdtree,
@@ -241,8 +235,12 @@ def density_peaks_clustering(
 
     if remove_clusters_smaller_than:
         labels = decrumb(labels, min_size=remove_clusters_smaller_than)
-
-    print("dpc found:", np.unique(labels).size)
+    
+    if triage_quantile_per_cluster>0:
+        for k in np.unique(labels[labels>-1]):
+            idx_label = np.flatnonzero(labels == k)
+            q = np.quantile(density[idx_label], triage_quantile_per_cluster)
+            labels[idx_label[density[idx_label]<q]] = -1
 
     if not return_extra:
         return labels
