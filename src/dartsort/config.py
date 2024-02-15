@@ -242,6 +242,7 @@ class ClusteringConfig:
     radius_search: float = 5.0
     remove_clusters_smaller_than: int = 10
     noise_density: float = 0.0
+    attach_density_feature: bool = False
 
     # -- ensembling
     ensemble_strategy: Optional[str] = "forward_backward"
