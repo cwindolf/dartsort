@@ -145,6 +145,8 @@ def registered_template(
     registered_geom,
     registered_kdtree=None,
     match_distance=None,
+    min_fraction_at_shift=0.1,
+    min_count_at_shift=5,
     pad_value=0.0,
     reducer=fast_nanmedian,
 ):
@@ -184,7 +186,10 @@ def registered_template(
 
     # weighted mean is easier than weighted median, and we want this to be weighted
     valid = ~np.isnan(static_templates[:, 0, :])
-    weights = valid[:, None, :] * counts[:, None, None]
+    counts_ = counts[:, None]
+    fractions = counts_ / counts.sum()
+    valid &= (fractions >= min_fraction_at_shift) | (counts_ >= min_count_at_shift)
+    weights = valid[:, None, :] * counts_[:, None, :]
     weights = weights / np.maximum(weights.sum(0), 1)
     template = (np.nan_to_num(static_templates) * weights).sum(0)
     dtype = str(waveforms.dtype).split(".")[1] if is_tensor else waveforms.dtype
