@@ -581,6 +581,7 @@ def combine_templates(template_data_a, template_data_b):
 def combine_sortings(sortings, dodge=False):
     labels = np.full_like(sortings[0].labels, -1)
     times_samples = sortings[0].times_samples.copy()
+    assert all(s.labels.size == sortings[0].labels.size for s in sortings)
 
     next_label = 0
     for sorting in sortings:
