@@ -11,6 +11,7 @@ def forward_backward(
     adaptive_feature_scales=False,
     motion_est=None,
     verbose=True,
+    min_cluster_size=25,
 ):
     """
     Ensemble over HDBSCAN clustering
@@ -92,8 +93,8 @@ def forward_backward(
             dist_matrix = np.zeros((units_1.shape[0], units_2.shape[0]))
             for i, unit_1 in enumerate(units_1):
                 for j, unit_2 in enumerate(units_2):
-                    idxunit1 = np.flatnonzero(labels_1 == unit_1)
-                    idxunit2 = np.flatnonzero(labels_2 == unit_2)
+                    idxunit1 = np.flatnonzero(labels_1 == unit_1)[-min_cluster_size:]
+                    idxunit2 = np.flatnonzero(labels_2 == unit_2)[:min_cluster_size]
                     feat_1 = np.median(features1[idxunit1], axis=0)
                     feat_2 = np.median(features2[idxunit2], axis=0)
                     dist_matrix[i, j] = ((feat_1 - feat_2) ** 2).sum()
