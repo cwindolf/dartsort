@@ -34,6 +34,8 @@ def get_templates(
     denoising_fit_radius=75,
     denoising_spikes_fit=50_000,
     denoising_snr_threshold=50.0,
+    min_fraction_at_shift=0.1,
+    min_count_at_shift=5,
     reducer=fast_nanmedian,
     random_seed=0,
     units_per_job=8,
@@ -113,6 +115,8 @@ def get_templates(
             trough_offset_samples=trough_offset_load,
             spike_length_samples=spike_length_load,
             spikes_per_unit=spikes_per_unit,
+            min_fraction_at_shift=min_fraction_at_shift,
+            min_count_at_shift=min_count_at_shift,
             reducer=reducer,
             random_seed=random_seed,
             n_jobs=n_jobs,
@@ -163,6 +167,8 @@ def get_templates(
         show_progress=show_progress,
         trough_offset_samples=trough_offset_samples,
         spike_length_samples=spike_length_samples,
+        min_fraction_at_shift=min_fraction_at_shift,
+        min_count_at_shift=min_count_at_shift,
         device=device,
     )
     raw_templates, low_rank_templates, snrs_by_channel = res
@@ -204,6 +210,8 @@ def get_raw_templates(
     registered_geom=None,
     realign_peaks=False,
     realign_max_sample_shift=20,
+    min_fraction_at_shift=0.1,
+    min_count_at_shift=5,
     reducer=fast_nanmedian,
     random_seed=0,
     n_jobs=0,
@@ -220,6 +228,8 @@ def get_raw_templates(
         registered_geom=registered_geom,
         realign_peaks=realign_peaks,
         realign_max_sample_shift=realign_max_sample_shift,
+        min_fraction_at_shift=min_fraction_at_shift,
+        min_count_at_shift=min_count_at_shift,
         low_rank_denoising=False,
         reducer=reducer,
         random_seed=random_seed,
@@ -367,6 +377,8 @@ def get_all_shifted_raw_and_low_rank_templates(
     show_progress=True,
     trough_offset_samples=42,
     spike_length_samples=121,
+    min_fraction_at_shift=0.1,
+    min_count_at_shift=5,
     device=None,
 ):
     n_jobs, Executor, context, rank_queue = get_pool(n_jobs, with_rank_queue=True)
@@ -410,6 +422,8 @@ def get_all_shifted_raw_and_low_rank_templates(
             denoising_tsvd,
             pitch_shifts,
             spikes_per_unit,
+            min_fraction_at_shift,
+            min_count_at_shift,
             reducer,
             trough_offset_samples,
             spike_length_samples,
@@ -452,6 +466,8 @@ class TemplateProcessContext:
         denoising_tsvd,
         pitch_shifts,
         spikes_per_unit,
+        min_fraction_at_shift,
+        min_count_at_shift,
         reducer,
         trough_offset_samples,
         spike_length_samples,
@@ -478,6 +494,8 @@ class TemplateProcessContext:
         self.max_spike_time = recording.get_num_samples() - (
             spike_length_samples - trough_offset_samples
         )
+        self.min_fraction_at_shift = min_fraction_at_shift
+        self.min_count_at_shift = min_count_at_shift
 
         self.spike_buffer = torch.zeros(
             (spikes_per_unit * units_per_job, spike_length_samples, self.n_channels),
@@ -507,6 +525,8 @@ def _template_process_init(
     denoising_tsvd,
     pitch_shifts,
     spikes_per_unit,
+    min_fraction_at_shift,
+    min_count_at_shift,
     reducer,
     trough_offset_samples,
     spike_length_samples,
@@ -533,6 +553,8 @@ def _template_process_init(
         denoising_tsvd,
         pitch_shifts,
         spikes_per_unit,
+        min_fraction_at_shift,
+        min_count_at_shift,
         reducer,
         trough_offset_samples,
         spike_length_samples,
@@ -569,7 +591,7 @@ def _template_job(unit_ids):
     order = np.argsort(in_units)
     in_units = in_units[order]
     labels = labels[order]
-    
+
     # read waveforms for all units
     times = p.sorting.times_samples[in_units]
     valid = np.flatnonzero(
@@ -607,6 +629,8 @@ def _template_job(unit_ids):
                     p.pitch_shifts[in_unit_orig],
                     p.geom,
                     p.registered_geom,
+                    min_fraction_at_shift=p.min_fraction_at_shift,
+                    min_count_at_shift=p.min_count_at_shift,
                     registered_kdtree=p.registered_kdtree,
                     match_distance=p.match_distance,
                     reducer=p.reducer,
@@ -618,6 +642,8 @@ def _template_job(unit_ids):
                     p.pitch_shifts[in_unit_orig],
                     p.geom,
                     p.registered_geom,
+                    min_fraction_at_shift=p.min_fraction_at_shift,
+                    min_count_at_shift=p.min_count_at_shift,
                     registered_kdtree=p.registered_kdtree,
                     match_distance=p.match_distance,
                     reducer=np.nansum,
@@ -633,6 +659,13 @@ def _template_job(unit_ids):
 
     if p.denoising_tsvd is None:
         return units_chunk, raw_templates, None, snrs_by_chan
+
+    # nt, t, ct = raw_templates.shape
+    # low_rank_templates = torch.tensor(raw_templates.transpose(0, 2, 1), device=p.device)
+    # low_rank_templates = low_rank_templates.reshape(nt * ct, t)
+    # low_rank_templates = p.denoising_tsvd(low_rank_templates, in_place=True)
+    # low_rank_templates = low_rank_templates.view(nt, ct, t).permute(0, 2, 1)
+    # low_rank_templates = low_rank_templates.numpy(force=True)
 
     # apply denoising
     waveforms = waveforms.permute(0, 2, 1).reshape(n * c, t)
@@ -651,6 +684,8 @@ def _template_job(unit_ids):
                     p.pitch_shifts[in_unit_orig],
                     p.geom,
                     p.registered_geom,
+                    min_fraction_at_shift=p.min_fraction_at_shift,
+                    min_count_at_shift=p.min_count_at_shift,
                     registered_kdtree=p.registered_kdtree,
                     match_distance=p.match_distance,
                     reducer=p.reducer,
