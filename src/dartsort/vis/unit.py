@@ -742,6 +742,7 @@ def make_all_summaries(
     n_jobs=0,
     show_progress=True,
     overwrite=False,
+    unit_ids=None,
 ):
     save_folder = Path(save_folder)
     save_folder.mkdir(exist_ok=True)
@@ -765,6 +766,8 @@ def make_all_summaries(
         ),
     ) as pool:
         jobs = sorting_analysis.unit_ids
+        if unit_ids is not None:
+            jobs = unit_ids
         results = pool.map(_summary_job, jobs)
         if show_progress:
             results = tqdm(

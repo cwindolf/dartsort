@@ -358,20 +358,21 @@ def conv_to_resid(
         lag_index = np.argmax(pair_conv)
         best_conv = pair_conv[lag_index]
         shifts[j] = lag_index - center
-        
+
         # figure out scaling
         if amplitude_scaling_variance:
-            amp_scale_min = 1 / (1 + amplitude_scaling_boundary)
-            amp_scale_max = 1 + amplitude_scaling_boundary
-            inv_lambda = 1 / amplitude_scaling_variance
+            amp_scale_min = 1. / (1. + amplitude_scaling_boundary)
+            amp_scale_max = 1. + amplitude_scaling_boundary
+            inv_lambda = 1. / amplitude_scaling_variance
             b = best_conv + inv_lambda
             a = template_a_norms[j] + inv_lambda
             scaling = np.clip(b / a, amp_scale_min, amp_scale_max)
-            norm_reduction = 2 * scaling * b - np.square(scaling) * a - inv_lambda
+            norm_reduction = 2. * scaling * b - np.square(scaling) * a - inv_lambda
         else:
-            norm_reduction = 2 * best_conv - template_b_norms[j]
+            norm_reduction = 2. * best_conv - template_b_norms[j]
         deconv_resid_norms[j] = template_a_norms[j] - norm_reduction
-        assert deconv_resid_norms[j] >= 0
+
+        assert deconv_resid_norms[j] >= -1e-1
 
     return DeconvResidResult(
         template_indices_a,

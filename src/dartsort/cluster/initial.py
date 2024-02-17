@@ -58,6 +58,11 @@ def cluster_chunk(
         geom = h5["geom"][:]
     in_chunk = ensemble_utils.get_indices_in_chunk(times_s, chunk_time_range_s)
     labels = -1 * np.ones(len(times_samples))
+    extra_features = {
+        "point_source_localizations": xyza,
+        amplitudes_dataset_name: amps,
+        "times_seconds": times_s,
+    }
 
     if clustering_config.cluster_strategy == "closest_registered_channels":
         labels[in_chunk] = cluster_util.closest_registered_channels(
@@ -100,7 +105,7 @@ def cluster_chunk(
             z = motion_est.correct_s(times_s[in_chunk], z)
         scales = clustering_config.feature_scales
         ampfeat = scales[2] * np.log(clustering_config.log_c + amps[in_chunk])
-        labels[in_chunk] = density.density_peaks_clustering(
+        res = density.density_peaks_clustering(
             np.c_[scales[0] * xyza[in_chunk, 0], scales[1] * z, ampfeat],
             sigma_local=clustering_config.sigma_local,
             sigma_local_low=clustering_config.sigma_local_low,
@@ -113,7 +118,15 @@ def cluster_chunk(
             triage_quantile_per_cluster=clustering_config.triage_quantile_per_cluster,
             revert=clustering_config.triage_quantile_per_cluster,
             workers=4,
+            return_extra=clustering_config.attach_density_feature,
         )
+        
+        if clustering_config.attach_density_feature:
+            labels[in_chunk] = res["labels"]
+            extra_features["density_ratio"] = np.full(labels.size, np.nan)
+            extra_features["density_ratio"][in_chunk] = res["density"]
+        else:
+            labels[in_chunk] = res
     else:
         assert False
 
@@ -122,11 +135,7 @@ def cluster_chunk(
         channels=channels,
         labels=labels,
         parent_h5_path=peeling_hdf5_filename,
-        extra_features={
-            "point_source_localizations": xyza,
-            amplitudes_dataset_name: amps,
-            "times_seconds": times_s,
-        },
+        extra_features=extra_features,
     )
     
     if depth_order:
