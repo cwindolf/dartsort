@@ -27,7 +27,7 @@ def merge_templates(
     amplitude_scaling_variance=0.0,
     amplitude_scaling_boundary=0.5,
     svd_compression_rank=10,
-    min_channel_amplitude=0.0,
+    min_channel_amplitude=1.0,
     min_spatial_cosine=0.0,
     conv_batch_size=128,
     units_batch_size=8,
@@ -216,7 +216,7 @@ def calculate_merge_distances(
     amplitude_scaling_variance=0.0,
     amplitude_scaling_boundary=0.5,
     svd_compression_rank=10,
-    min_channel_amplitude=0.0,
+    min_channel_amplitude=1.0,
     min_spatial_cosine=0.0,
     cooccurrence_mask=None,
     conv_batch_size=128,
@@ -229,6 +229,14 @@ def calculate_merge_distances(
     n_templates = template_data.templates.shape[0]
     sup_dists = np.full((n_templates, n_templates), np.inf)
     sup_shifts = np.zeros((n_templates, n_templates), dtype=int)
+
+    # apply min channel amplitude to templates directly so that it reflects
+    # in the template norms used in the distance computation
+    if min_channel_amplitude:
+        temps = template_data.templates.copy()
+        mask = temps.ptp(axis=1, keepdims=True) > min_channel_amplitude
+        temps *= mask.astype(temps.dtype)
+        template_data = replace(template_data, templates=temps)
 
     # build distance matrix
     dec_res_iter = get_deconv_resid_norm_iter(
@@ -573,6 +581,7 @@ def combine_templates(template_data_a, template_data_b):
 def combine_sortings(sortings, dodge=False):
     labels = np.full_like(sortings[0].labels, -1)
     times_samples = sortings[0].times_samples.copy()
+    assert all(s.labels.size == sortings[0].labels.size for s in sortings)
 
     next_label = 0
     for sorting in sortings:

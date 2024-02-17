@@ -2,6 +2,7 @@ import colorcet
 import h5py
 import matplotlib.pyplot as plt
 import numpy as np
+from .colors import glasbey1024
 
 
 def scatter_spike_features(
@@ -111,6 +112,7 @@ def scatter_spike_features(
         amplitude_cmap=amplitude_cmap,
         random_seed=random_seed,
         s=s,
+        limits=limits,
         linewidth=linewidth,
         to_show=to_show,
         amplitudes_dataset_name=amplitudes_dataset_name,
@@ -134,13 +136,14 @@ def scatter_spike_features(
         amplitude_cmap=amplitude_cmap,
         random_seed=random_seed,
         s=s,
+        limits=limits,
         linewidth=linewidth,
         to_show=to_show,
         amplitudes_dataset_name=amplitudes_dataset_name,
         show_triaged=show_triaged,
         **scatter_kw,
     )
-    
+
     extra_scatters = []
     for j, (featname, feature) in enumerate(extra_features.items()):
         _, scatter = scatter_feature_vs_depth(
@@ -184,6 +187,7 @@ def scatter_spike_features(
         amplitude_cmap=amplitude_cmap,
         random_seed=random_seed,
         s=s,
+        limits=limits,
         linewidth=linewidth,
         to_show=to_show,
         amplitudes_dataset_name=amplitudes_dataset_name,
@@ -272,6 +276,7 @@ def scatter_time_vs_depth(
         amplitude_cmap=amplitude_cmap,
         probe_margin_um=probe_margin_um,
         s=s,
+        limits=limits,
         linewidth=linewidth,
         random_seed=random_seed,
         to_show=to_show,
@@ -330,6 +335,7 @@ def scatter_x_vs_depth(
         amplitude_cmap=amplitude_cmap,
         probe_margin_um=probe_margin_um,
         s=s,
+        limits=limits,
         linewidth=linewidth,
         random_seed=random_seed,
         to_show=to_show,
@@ -406,6 +412,7 @@ def scatter_amplitudes_vs_depth(
         amplitude_cmap=amplitude_cmap,
         probe_margin_um=probe_margin_um,
         s=s,
+        limits=limits,
         linewidth=linewidth,
         random_seed=random_seed,
         to_show=to_show,
@@ -481,7 +488,10 @@ def scatter_feature_vs_depth(
         kept = slice(None)
     elif show_triaged:
         c = labels
-        cmap = colorcet.m_glasbey_light
+        # cmap = colorcet.m_glasbey_light
+        cmap = glasbey1024
+        print("quack")
+        c = cmap[c % len(cmap)]
         kept = labels[to_show] >= 0
         ax.scatter(
             feature[to_show[~kept]],
@@ -494,14 +504,17 @@ def scatter_feature_vs_depth(
         )
     else:
         c = labels
-        cmap = colorcet.m_glasbey_light
+        # cmap = colorcet.m_glasbey_light
+        cmap = glasbey1024
+        print("quack")
+        c = cmap[c % len(cmap)]
         kept = labels[to_show] >= 0
 
     s = ax.scatter(
         feature[to_show[kept]],
         depths_um[to_show[kept]],
         c=c[to_show[kept]],
-        cmap=cmap,
+        # cmap=cmap,
         s=s,
         linewidth=linewidth,
         rasterized=rasterized,

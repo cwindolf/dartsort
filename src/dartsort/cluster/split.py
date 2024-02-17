@@ -95,11 +95,7 @@ def split_clusters(
             if recursive:
                 new_units = np.unique(new_untriaged_labels)
                 for i in new_units:
-                    jobs.append(
-                        pool.submit(
-                            _split_job, np.flatnonzero(labels == i)
-                        )
-                    )
+                    jobs.append(pool.submit(_split_job, np.flatnonzero(labels == i)))
                 if show_progress:
                     iterator.total += len(new_units)
             elif split_big:
@@ -110,9 +106,7 @@ def split_clusters(
                     wide = split_result.z_reg[idx].ptp() > split_big_kw["dx"]
                     if (tall or wide) and len(idx) > split_big_kw["min_size_split"]:
                         jobs.append(
-                            pool.submit(
-                                _split_job, np.flatnonzero(labels == i)
-                            )
+                            pool.submit(_split_job, np.flatnonzero(labels == i))
                         )
                         if show_progress:
                             iterator.total += 1
@@ -260,20 +254,25 @@ class FeatureSplit(SplitStrategy):
         self.radius_search=radius_search
         self.triage_quantile_per_cluster=triage_quantile_per_cluster
         self.remove_clusters_smaller_than=remove_clusters_smaller_than
-
         self.rescale_all_features = rescale_all_features
         self.use_ptp = use_ptp
         self.amplitude_normalized = amplitude_normalized
         self.use_spread = use_spread
 
-        #Check for ensembling
+        # Check for ensembling
         self.ensemble_over_chunks = ensemble_over_chunks
         self.recording = recording
         self.chunk_size_s = chunk_size_s
         if self.ensemble_over_chunks:
-            assert self.use_localization_features, "Need to use loc features for ensembling over chunks"
-            assert self.recording is not None, "Need to input recording for ensembling over chunks"
-            assert self.chunk_size_s is not None, "Need to input chunk size for ensembling over chunks"
+            assert (
+                self.use_localization_features
+            ), "Need to use loc features for ensembling over chunks"
+            assert (
+                self.recording is not None
+            ), "Need to input recording for ensembling over chunks"
+            assert (
+                self.chunk_size_s is not None
+            ), "Need to input chunk size for ensembling over chunks"
 
         assert np.isin(cluster_alg, ["hdbscan", "dpc"]), "cluster_alg needs to be hdbscan or dpc"
         self.cluster_alg = cluster_alg
@@ -291,9 +290,7 @@ class FeatureSplit(SplitStrategy):
         else:
             return self.split_cluster(in_unit)
 
-    def split_cluster_chunks(self, 
-                             in_unit):
-
+    def split_cluster_chunks(self, in_unit):
         chunk_samples = self.recording.sampling_frequency * self.chunk_size_s
 
         n_chunks = self.recording.get_num_samples() / chunk_samples
@@ -303,19 +300,22 @@ class FeatureSplit(SplitStrategy):
 
         # evenly divide the recording into chunks
         assert self.recording.get_num_segments() == 1
-        start_time_s, end_time_s = self.recording._recording_segments[0].sample_index_to_time(
-            np.array([0, self.recording.get_num_samples() - 1])
-        )
+        start_time_s, end_time_s = self.recording._recording_segments[
+            0
+        ].sample_index_to_time(np.array([0, self.recording.get_num_samples() - 1]))
         chunk_times_s = np.linspace(start_time_s, end_time_s, num=n_chunks + 1)
         chunk_time_ranges_s = list(zip(chunk_times_s[:-1], chunk_times_s[1:]))
-        
+
         chunks_indices_unit = [
-            np.flatnonzero(np.logical_and(
-                self.t_s[in_unit]>=chunk_range[0], self.t_s[in_unit]<chunk_range[1]
-            ))
+            np.flatnonzero(
+                np.logical_and(
+                    self.t_s[in_unit] >= chunk_range[0],
+                    self.t_s[in_unit] < chunk_range[1],
+                )
+            )
             for chunk_range in chunk_time_ranges_s
         ]
-    
+
         # cluster each chunk. can be parallelized in the future.
         splits = [
             self.split_cluster(
@@ -329,29 +329,26 @@ class FeatureSplit(SplitStrategy):
             new_labels = np.full(len(in_unit), -1)
             if len(chunks_indices_unit[k]) and splits[k].new_labels is not None:
                 new_labels[chunks_indices_unit[k]] = splits[k].new_labels
+            elif len(chunks_indices_unit[k]) and splits[k].new_labels is None:
+                # moved the 0 logic from split_cluster to here
+                new_labels[chunks_indices_unit[k]] = 0
             new_labels_chunks.append(new_labels)
 
         split_sortings = [
             DARTsortSorting(
-                times_samples = self.t_s[in_unit], #Needed for initialization but not for anything else
-                channels = self.channels[in_unit],
-                labels = new_labels,
+                times_samples=self.t_s[
+                    in_unit
+                ],  # Needed for initialization but not for anything else
+                channels=self.channels[in_unit],
+                labels=new_labels,
                 extra_features={
-                    "point_source_localizations":self.xyza[in_unit],
+                    "point_source_localizations": self.xyza[in_unit],
                     "denoised_ptp_amplitudes": self.amplitudes[in_unit],
                     "times_seconds": self.t_s[in_unit],
                 },
             )
             for new_labels in new_labels_chunks
         ]
-        
-        # split_sortings_no_empty=[]
-        # chunk_time_ranges_s_no_empty=[]
-
-        # for k in range(len(chunk_time_ranges_s)):
-        #     if len(chunks_indices_unit[k]):
-        #         split_sortings_no_empty.append(split_sortings[k])
-        #         chunk_time_ranges_s_no_empty.append(chunk_time_ranges_s[k])
 
         labels_ensembled = forward_backward(
             self.recording,
@@ -365,20 +362,20 @@ class FeatureSplit(SplitStrategy):
         )
 
         is_split = np.setdiff1d(np.unique(labels_ensembled), [-1]).size > 1
-            
+
         return SplitResult(
-                is_split=is_split,
-                in_unit=in_unit,
-                new_labels=labels_ensembled,
-                x=self.localization_features[in_unit, 0],
-                z_reg=self.localization_features[in_unit, 2],
-            )
-        
+            is_split=is_split,
+            in_unit=in_unit,
+            new_labels=labels_ensembled,
+            x=self.localization_features[in_unit, 0],
+            z_reg=self.localization_features[in_unit, 2],
+        )
 
     def split_cluster(self, in_unit_all):
         n_spikes = in_unit_all.size
         if self.max_size_wfs and n_spikes > self.max_size_wfs:
-            # TODO: max_size_wfs could be chosen automatically based on available memory and number of spikes
+            # TODO: max_size_wfs could be chosen automatically
+            # based on available memory and number of spikes
             idx_subsample = np.random.choice(n_spikes, self.max_size_wfs, replace=False)
             idx_subsample.sort()
             in_unit = in_unit_all[idx_subsample]
@@ -409,18 +406,12 @@ class FeatureSplit(SplitStrategy):
         if self.use_localization_features:
             loc_features = self.localization_features[in_unit]
             if self.relocated:
-                loc_features[kept, 2] = self.localization_feature_scales[2]*np.log(self.log_c + reloc_amplitudes)
+                loc_features[kept, 2] = self.localization_feature_scales[2] * np.log(
+                    self.log_c + reloc_amplitudes
+                )
             if self.rescale_all_features:
-                loc_features[kept, 1] *= np.median(
-                    np.abs(loc_features[kept, 0] - np.median(loc_features[kept, 0]))
-                ) / np.median(
-                    np.abs(loc_features[kept, 1] - np.median(loc_features[kept, 1]))
-                )
-                loc_features[kept, 2] *= np.median(
-                    np.abs(loc_features[kept, 0] - np.median(loc_features[kept, 0]))
-                ) / np.median(
-                    np.abs(loc_features[kept, 2] - np.median(loc_features[kept, 2]))
-                )
+                mad0 = mad_sigma(loc_features[kept, 0])
+                loc_features[kept] *= mad0 / mad_sigma(loc_features[kept])
             if not self.use_ptp:
                 loc_features = loc_features[:, :2]
             features.append(loc_features)
@@ -438,35 +429,20 @@ class FeatureSplit(SplitStrategy):
             kept = pca_kept
             # scale pc features to match localization features
             if self.rescale_all_features:
+                mad0 = mad_sigma(loc_features[kept, 0])
                 for k in range(self.n_pca_features):
-                    pca_embeds[kept, k] *= np.median(
-                        np.abs(loc_features[kept, 0] - np.median(loc_features[kept, 0]))
-                    ) / np.median(
-                        np.abs(pca_embeds[kept, k] - np.median(pca_embeds[kept, k]))
-                    )
+                    pca_embeds[kept, k] *= mad0 / mad_sigma(pca_embeds[kept, k])
             elif self.use_localization_features:
-                pca_embeds *= np.median(
-                    np.abs(
-                        loc_features[kept] - np.median(loc_features[kept], axis=0)[None]
-                    ),
-                    axis=0,
-                ).mean()
+                pca_embeds *= mad_sigma(loc_features[kept]).mean()
             features.append(pca_embeds)
-            
 
         if self.use_spread:
             spread = self.spread_feature(in_unit)
             if self.rescale_all_features:
-                spread *= np.median(
-                    np.abs(loc_features[kept, 0] - np.median(loc_features[kept, 0]))
-                ) / np.median(np.abs(spread[kept] - np.median(spread[kept])))
+                mad0 = mad_sigma(loc_features[kept, 0])
+                spread *= mad0 / mad_sigma(spread[kept])
             elif self.use_localization_features:
-                spread *= np.median(
-                    np.abs(
-                        loc_features[kept] - np.median(loc_features[kept], axis=0)[None]
-                    ),
-                    axis=0,
-                ).mean()
+                spread *= mad_sigma(loc_features[kept]).mean()
             features.append(spread)
 
         features = np.column_stack([f[kept] for f in features])
@@ -507,10 +483,8 @@ class FeatureSplit(SplitStrategy):
                 new_labels[kept] = hdb_labels
             else:
                 new_labels[idx_subsample[kept]] = hdb_labels
-        else:
-            new_labels = np.full(n_spikes, 0) #Needed for split ensembling over chunks, cannot be none
 
-        if self.use_localization_features:
+        if self.ensemble_over_chunks and self.use_localization_features:
             return SplitResult(
                 is_split=is_split,
                 in_unit=in_unit_all,
@@ -518,10 +492,10 @@ class FeatureSplit(SplitStrategy):
                 x=loc_features[:, 0],
                 z_reg=loc_features[:, 1],
             )
-        else:
-            return SplitResult(
-                is_split=is_split, in_unit=in_unit_all, new_labels=new_labels
-            )
+
+        return SplitResult(
+            is_split=is_split, in_unit=in_unit_all, new_labels=new_labels
+        )
 
     def get_registered_channels(self, in_unit):
         n_pitches_shift = drift_util.get_spike_pitch_shifts(
@@ -787,7 +761,9 @@ class SplitJobContext:
 _split_job_context = None
 
 
-def _split_job_init(split_strategy_class_name, peeling_hdf5_filename, split_strategy_kwargs):
+def _split_job_init(
+    split_strategy_class_name, peeling_hdf5_filename, split_strategy_kwargs
+):
     global _split_job_context
     split_strategy = split_strategies_by_class_name[split_strategy_class_name]
     if split_strategy_kwargs is None:
@@ -812,3 +788,14 @@ def batched_h5_read(dataset, indices, batch_size=1000):
             be = min(indices.size, bs + batch_size)
             out[bs:be] = dataset[indices[bs:be]]
         return out
+
+
+# other helpers
+
+
+def mad_sigma(x, axis=0, keepdims=False, gauss_correct=True):
+    med = np.median(x, axis=axis, keepdims=True)
+    mad = np.median(np.abs(x - med), axis=axis, keepdims=keepdims)
+    if gauss_correct:
+        mad *= 1.4826
+    return mad

@@ -127,7 +127,6 @@ def nearest_higher_density_neighbor(
     distances, indices = distances[:, 1:].copy(), indices[:, 1:].copy()
 
     # find lowest distance higher density neighbor
-    # print(f"nhdn {density.shape=}")
     density_padded = np.pad(density, (0, 1), constant_values=np.inf)
     is_lower_density = density_padded[indices] <= density[:, None]
     distances[is_lower_density] = np.inf

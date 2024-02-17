@@ -13,7 +13,7 @@ import dataclasses
 def reorder_by_depth(sorting, motion_est=None):
     kept = np.flatnonzero(sorting.labels >= 0)
     kept_labels = sorting.labels[kept]
-    
+
     units, kept_labels = np.unique(kept_labels, return_inverse=True)
 
     depths = sorting.point_source_localizations[kept, 2]
