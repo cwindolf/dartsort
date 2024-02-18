@@ -6,8 +6,10 @@ from multiprocessing import get_context
 
 try:
     import cloudpickle
+    have_cloudpickle = True
 except ImportError:
     pass
+    have_cloudpickle = False
 
 
 class MockFuture:
@@ -69,12 +71,17 @@ class CloudpicklePoolExecutor(ProcessPoolExecutor):
 
 
 def get_pool(
-    n_jobs, context="spawn", cls=ProcessPoolExecutor, with_rank_queue=False
+    n_jobs,
+    context="spawn",
+    cls=ProcessPoolExecutor,
+    with_rank_queue=False,
 ):
     if n_jobs == -1:
         n_jobs = multiprocessing.cpu_count()
     do_parallel = n_jobs >= 1
     n_jobs = max(1, n_jobs)
+    if cls == CloudpicklePoolExecutor and not have_cloudpickle:
+        cls = ProcessPoolExecutor
     Executor = cls if do_parallel else MockPoolExecutor
     context = get_context(context)
     if with_rank_queue:
