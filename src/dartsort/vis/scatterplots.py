@@ -486,29 +486,22 @@ def scatter_feature_vs_depth(
         c = np.clip(amplitudes, 0, amplitude_color_cutoff)
         cmap = amplitude_cmap
         kept = slice(None)
-    elif show_triaged:
-        c = labels
-        # cmap = colorcet.m_glasbey_light
-        cmap = glasbey1024
-        print("quack")
-        c = cmap[c % len(cmap)]
-        kept = labels[to_show] >= 0
-        ax.scatter(
-            feature[to_show[~kept]],
-            depths_um[to_show[~kept]],
-            color="dimgray",
-            s=s,
-            linewidth=linewidth,
-            rasterized=rasterized,
-            **scatter_kw,
-        )
     else:
         c = labels
         # cmap = colorcet.m_glasbey_light
         cmap = glasbey1024
-        print("quack")
         c = cmap[c % len(cmap)]
         kept = labels[to_show] >= 0
+        if show_triaged:
+            ax.scatter(
+                feature[to_show[~kept]],
+                depths_um[to_show[~kept]],
+                color="dimgray",
+                s=s,
+                linewidth=linewidth,
+                rasterized=rasterized,
+                **scatter_kw,
+            )
 
     s = ax.scatter(
         feature[to_show[kept]],
