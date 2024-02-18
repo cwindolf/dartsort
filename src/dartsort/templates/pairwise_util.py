@@ -323,8 +323,9 @@ class DeconvResidResult:
 
 
 def conv_to_resid(
-    template_data_a: templates.TemplateData,
-    template_data_b: templates.TemplateData,
+    # template_data_a: templates.TemplateData,
+    low_rank_templates_a: template_util.LowRankTemplates,
+    low_rank_templates_b: template_util.LowRankTemplates,
     conv_result: CompressedConvResult,
     amplitude_scaling_variance=0.0,
     amplitude_scaling_boundary=0.5,
@@ -344,10 +345,19 @@ def conv_to_resid(
     deconv_resid_norms = np.zeros(n_pairs)
     shifts = np.zeros(n_pairs, dtype=int)
     template_indices_a, template_indices_b = pairs.T
-    templates_a = template_data_a.templates[template_indices_a]
-    templates_b = template_data_b.templates[template_indices_b]
-    template_a_norms = np.linalg.norm(templates_a, axis=(1, 2)) ** 2
-    template_b_norms = np.linalg.norm(templates_b, axis=(1, 2)) ** 2
+
+    # templates_a = template_data_a.templates[template_indices_a]
+    # template_a_norms = np.linalg.norm(templates_a, axis=(1, 2)) ** 2
+    # templates_b = template_data_b.templates[template_indices_b]
+    # template_b_norms = np.linalg.norm(templates_b, axis=(1, 2)) ** 2
+
+    # low rank template norms
+    svs_a = low_rank_templates_a.singular_values[template_indices_a]
+    template_a_norms = torch.square(svs_a).sum(1).numpy(force=True)
+    svs_b = low_rank_templates_b.singular_values[template_indices_b]
+    template_b_norms = torch.square(svs_b).sum(1).numpy(force=True)
+
+    # now, compute reduction in norm of A after matching by B
     for j, (ix_a, ix_b) in enumerate(pairs):
         in_a = conv_result.template_indices_a == ix_a
         in_b = conv_result.template_indices_b == ix_b
@@ -361,18 +371,18 @@ def conv_to_resid(
 
         # figure out scaling
         if amplitude_scaling_variance:
-            amp_scale_min = 1. / (1. + amplitude_scaling_boundary)
-            amp_scale_max = 1. + amplitude_scaling_boundary
-            inv_lambda = 1. / amplitude_scaling_variance
+            amp_scale_min = 1.0 / (1.0 + amplitude_scaling_boundary)
+            amp_scale_max = 1.0 + amplitude_scaling_boundary
+            inv_lambda = 1.0 / amplitude_scaling_variance
             b = best_conv + inv_lambda
-            a = template_a_norms[j] + inv_lambda
-            scaling = np.clip(b / a, amp_scale_min, amp_scale_max)
-            norm_reduction = 2. * scaling * b - np.square(scaling) * a - inv_lambda
+            a = template_b_norms[j] + inv_lambda
+            scaling = (b / a).clip(amp_scale_min, amp_scale_max)
+            norm_reduction = 2.0 * scaling * b - np.square(scaling) * a - inv_lambda
         else:
-            norm_reduction = 2. * best_conv - template_b_norms[j]
+            norm_reduction = 2.0 * best_conv - template_b_norms[j]
+        
         deconv_resid_norms[j] = template_a_norms[j] - norm_reduction
-
-        assert deconv_resid_norms[j] >= -1e-1
+    assert (deconv_resid_norms >= -0.01).all()
 
     return DeconvResidResult(
         template_indices_a,
@@ -482,7 +492,7 @@ def compressed_convolve_pairs(
         compression_index,
         conv_ix,
         conv_upsampling_indices_b,
-        conv_temporal_components_up_b, #Need to change this conv_temporal_components_up_b[conv_compressed_upsampled_ix_b]
+        conv_temporal_components_up_b,  # Need to change this conv_temporal_components_up_b[conv_compressed_upsampled_ix_b]
         conv_compressed_upsampled_ix_b,
         compression_dup_ix,
     ) = compressed_upsampled_pairs(
@@ -554,8 +564,8 @@ def compressed_convolve_pairs(
     )
     if reduce_deconv_resid_norm:
         return conv_to_resid(
-            template_data_a,
-            template_data_b,
+            low_rank_templates_a,
+            low_rank_templates_b,
             res,
             amplitude_scaling_variance=amplitude_scaling_variance,
             amplitude_scaling_boundary=amplitude_scaling_boundary,
@@ -630,7 +640,9 @@ def correlate_pairs_lowrank(
         ix = slice(istart, iend)
 
         # want conv filter: nco, 1, rank, t
-        template_a = torch.bmm(temporal_a[ix_a[conv_ix][ix]], spatial_a[ix_a[conv_ix][ix]])
+        template_a = torch.bmm(
+            temporal_a[ix_a[conv_ix][ix]], spatial_a[ix_a[conv_ix][ix]]
+        )
         conv_filt = torch.bmm(spatial_b[ix_b[conv_ix][ix]], template_a.mT)
         conv_filt = conv_filt[:, None]  # (nco, 1, rank, t)
 
@@ -982,7 +994,15 @@ def compressed_upsampled_pairs(
         # temp_comps = compressed_upsampled_temporal.compressed_upsampled_templates[
         #     np.atleast_1d(temp_ix_b[ix_b[conv_ix]])
         # ]
-        return ix_b, compression_index, conv_ix, upinds, compressed_upsampled_temporal.compressed_upsampled_templates, np.atleast_1d(temp_ix_b[ix_b[conv_ix]]), compression_dup_ix
+        return (
+            ix_b,
+            compression_index,
+            conv_ix,
+            upinds,
+            compressed_upsampled_temporal.compressed_upsampled_templates,
+            np.atleast_1d(temp_ix_b[ix_b[conv_ix]]),
+            compression_dup_ix,
+        )
 
     # each conv_ix needs to be duplicated as many times as its b template has
     # upsampled copies
@@ -993,9 +1013,7 @@ def compressed_upsampled_pairs(
     )
     conv_up_i, up_shift_up_i = np.nonzero(upsampling_mask)
     conv_compressed_upsampled_ix = (
-        upsampled_shifted_template_index.up_shift_temp_ix_to_comp_up_ix[
-            up_shift_up_i
-        ]
+        upsampled_shifted_template_index.up_shift_temp_ix_to_comp_up_ix[up_shift_up_i]
     )
     conv_dup = conv_ix[conv_up_i]
     # And, all ix_{a,b}[i] such that compression_ix[i] lands in
@@ -1005,9 +1023,9 @@ def compressed_upsampled_pairs(
         dup_mask = dup_mask.numpy(force=True)
     compression_dup_ix, compression_index_up = np.nonzero(dup_mask)
     ix_b_up = ix_b[compression_dup_ix]
-    
+
     # the conv ix need to be offset to keep the relation with the pairs
-    # ix_a[old i] 
+    # ix_a[old i]
     # offsets = np.cumsum((conv_ix[:, None] == conv_dup[None, :]).sum(0))
     # offsets -= offsets[0]
     _, offsets = np.unique(compression_dup_ix, return_index=True)
@@ -1019,9 +1037,9 @@ def compressed_upsampled_pairs(
             conv_compressed_upsampled_ix
         ]
     )
-    
+
     # conv_temporal_components_up_b = compressed_upsampled_temporal.compressed_upsampled_templates
-    
+
     return (
         ix_b_up,
         compression_index_up,
