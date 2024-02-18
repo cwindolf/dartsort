@@ -182,7 +182,7 @@ class TemplateData:
 
         # handle superresolved templates
         if template_config.superres_templates:
-            unit_ids, superres_sorting = superres_sorting(
+            unit_ids, superres_sort = superres_sorting(
                 sorting,
                 sorting.times_seconds,
                 spike_depths_um,
@@ -195,7 +195,7 @@ class TemplateData:
                 adaptive_bin_size=template_config.adaptive_bin_size,
             )
         else:
-            superres_sorting = sorting
+            superres_sort = sorting
             # we don't skip empty units
             unit_ids = np.arange(sorting.labels.max() + 1)
 
@@ -205,7 +205,7 @@ class TemplateData:
         spike_counts[ix[ix >= 0]] = counts[ix >= 0]
 
         # main!
-        results = get_templates(recording, superres_sorting, **kwargs)
+        results = get_templates(recording, superres_sort, **kwargs)
 
         # handle registered templates
         if template_config.registered_templates and motion_est is not None:
