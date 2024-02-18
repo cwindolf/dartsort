@@ -116,6 +116,7 @@ def cluster_chunk(
             remove_clusters_smaller_than=clustering_config.remove_clusters_smaller_than,
             noise_density=clustering_config.noise_density,
             triage_quantile_per_cluster=clustering_config.triage_quantile_per_cluster,
+            revert=clustering_config.triage_quantile_per_cluster,
             workers=4,
             return_extra=clustering_config.attach_density_feature,
         )
