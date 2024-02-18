@@ -8,6 +8,7 @@ from scipy.sparse.csgraph import connected_components
 from scipy.spatial import KDTree
 from sklearn.neighbors import KDTree as SKDTree
 
+
 def kdtree_inliers(
     X, kdtree=None, n_neighbors=10, distance_upper_bound=25.0, workers=1
 ):
@@ -31,7 +32,19 @@ def kdtree_inliers(
     return inliers, kdtree
 
 
-def get_smoothed_densities(X, inliers=slice(None), sigmas=None, return_hist=False, sigma_lows=None, sigma_ramp_ax=-1, bin_sizes=None, bin_size_ratio=5.0, min_bin_size=1.0, ramp_min_bin_size=5.0, revert=True):
+def get_smoothed_densities(
+    X,
+    inliers=slice(None),
+    sigmas=None,
+    return_hist=False,
+    sigma_lows=None,
+    sigma_ramp_ax=-1,
+    bin_sizes=None,
+    bin_size_ratio=5.0,
+    min_bin_size=1.0,
+    ramp_min_bin_size=5.0,
+    revert=False,
+):
     """Get RBF density estimates for each X[i] and bandwidth in sigmas
 
     Outliers will be marked with NaN KDEs. Please pass inliers, or else your
@@ -66,7 +79,7 @@ def get_smoothed_densities(X, inliers=slice(None), sigmas=None, return_hist=Fals
     raw_histogram, bin_edges = np.histogramdd(infeats, bins=bin_edges)
     bin_sizes = np.array([(be[1] - be[0]) for be in bin_edges])
     bin_centers = [0.5 * (be[1:] + be[:-1]) for be in bin_edges]
-    
+
     # normalize histogram to samples / volume
     raw_histogram = raw_histogram / bin_sizes.prod()
 
@@ -88,7 +101,11 @@ def get_smoothed_densities(X, inliers=slice(None), sigmas=None, return_hist=Fals
             # filter by a sequence of bandwidths
             ramp = np.linspace(sigma_low, sigma, num=hist.shape[sigma_ramp_ax])
             if revert:
-                ramp[:, sigma_ramp_ax] = np.linspace(sigma[sigma_ramp_ax], sigma_low[sigma_ramp_ax], num=hist.shape[sigma_ramp_ax])
+                ramp[:, sigma_ramp_ax] = np.linspace(
+                    sigma[sigma_ramp_ax],
+                    sigma_low[sigma_ramp_ax],
+                    num=hist.shape[sigma_ramp_ax],
+                )
                 # ramp[:, 0] = sigma[0]
                 # ramp[:, 1] = sigma[1]
 
@@ -99,7 +116,7 @@ def get_smoothed_densities(X, inliers=slice(None), sigmas=None, return_hist=Fals
                 sig_move = sig.copy()
                 sig_move[0] = sig[sigma_ramp_ax]
                 sig_move[sigma_ramp_ax] = sig[0]
-                hist_smoothed[j] = gaussian_filter(hist_move, sig_move)[j] #sig_move
+                hist_smoothed[j] = gaussian_filter(hist_move, sig_move)[j]  # sig_move
             hist = np.moveaxis(hist_smoothed, 0, sigma_ramp_ax)
         if return_hist:
             hists.append(hist)
@@ -195,10 +212,10 @@ def density_peaks_clustering(
     return_extra=False,
     triage_quantile_per_cluster=0,
     amp_no_triaging=12,
-    revert=True,
+    revert=False,
 ):
     n = len(X)
-    
+
     inliers, kdtree = kdtree_inliers(
         X,
         kdtree=kdtree,
@@ -208,9 +225,17 @@ def density_peaks_clustering(
     )
 
     do_ratio = int(sigma_regional is not None)
-    density = get_smoothed_densities(X, inliers=inliers, sigmas=sigma_local, sigma_lows=sigma_local_low, revert=revert)
+    density = get_smoothed_densities(
+        X,
+        inliers=inliers,
+        sigmas=sigma_local,
+        sigma_lows=sigma_local_low,
+        revert=revert,
+    )
     if do_ratio:
-        reg_density = get_smoothed_densities(X, inliers=inliers, sigmas=sigma_regional, sigma_lows=sigma_regional_low)
+        reg_density = get_smoothed_densities(
+            X, inliers=inliers, sigmas=sigma_regional, sigma_lows=sigma_regional_low
+        )
         density = np.nan_to_num(density / reg_density)
 
     nhdn, distances, indices = nearest_higher_density_neighbor(
@@ -242,16 +267,19 @@ def density_peaks_clustering(
 
     if remove_clusters_smaller_than:
         labels = decrumb(labels, min_size=remove_clusters_smaller_than)
-    
-    if triage_quantile_per_cluster>0:
-        for k in np.unique(labels[labels>-1]):
+
+    if triage_quantile_per_cluster > 0:
+        for k in np.unique(labels[labels > -1]):
             idx_label = np.flatnonzero(labels == k)
             amp_vec = X[idx_label, 2]
             # triage_quantile_unit = triage_quantile_per_cluster
             q = np.quantile(density[idx_label], triage_quantile_per_cluster)
-            spikes_to_remove = np.flatnonzero(np.logical_and(
-                density[idx_label]<q, amp_vec<amp_no_triaging,
-            ))
+            spikes_to_remove = np.flatnonzero(
+                np.logical_and(
+                    density[idx_label] < q,
+                    amp_vec < amp_no_triaging,
+                )
+            )
             labels[idx_label[spikes_to_remove]] = -1
 
     if not return_extra:
