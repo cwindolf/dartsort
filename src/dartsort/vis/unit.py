@@ -17,7 +17,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 from matplotlib.legend_handler import HandlerTuple
 
-from ..util.multiprocessing_util import get_pool
+from ..util.multiprocessing_util import get_pool, CloudpicklePoolExecutor
 from .waveforms import geomplot
 
 # -- main class. see fn make_unit_summary below to make lots of UnitPlots.
@@ -747,7 +747,7 @@ def make_all_summaries(
     save_folder = Path(save_folder)
     save_folder.mkdir(exist_ok=True)
 
-    n_jobs, Executor, context = get_pool(n_jobs)
+    n_jobs, Executor, context = get_pool(n_jobs, cls=CloudpicklePoolExecutor)
     with Executor(
         max_workers=n_jobs,
         mp_context=context,

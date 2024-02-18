@@ -580,7 +580,8 @@ class DARTsortAnalysis:
         unit_ix = np.searchsorted(self.unit_ids, unit_id)
         unit_dists = self.merge_dist[unit_ix]
         distance_order = np.argsort(unit_dists)
-        assert distance_order[0] == unit_ix
+        distance_order = np.concatenate(([unit_ix], distance_order[distance_order != unit_ix]))
+        # assert distance_order[0] == unit_ix
         neighbor_ixs = distance_order[:n_neighbors]
         neighbor_ids = self.unit_ids[neighbor_ixs]
         neighbor_dists = self.merge_dist[neighbor_ixs[:, None], neighbor_ixs[None, :]]
