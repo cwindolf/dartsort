@@ -22,7 +22,7 @@ classifiers = [
 "Bug Tracker" = "https://github.com/cwindolf/dartsort/issues"
 
 [tool.setuptools.package-data]
-"dartsort.pretrained" = ["*.pt"]
+"dartsort.pretrained" = ["*.pt", "*.npz"]
 
 [project.scripts]
 "dartsort_binary_folder_config_py" = "dartsort.cli:dartsort_binary_folder_config_py"
