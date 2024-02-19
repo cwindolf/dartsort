@@ -60,7 +60,6 @@ class CompressedPairwiseConv:
         assert self.shifts_b.shape == (
             self.upsampled_shifted_template_index_b.shape[1],
         )
-
         self.a_shift_offset, self.offset_shift_a_to_ix = _get_shift_indexer(
             self.shifts_a
         )
@@ -69,6 +68,15 @@ class CompressedPairwiseConv:
         )
 
     def get_shift_ix_a(self, shifts_a):
+        """Map shift (an integer, signed) to a shift index
+
+        A shift index can be used to index into axis=1 of shifted_template_index_a,
+        or self.shifts_a for that matter.
+        It's an int in [0, n_shifts_a).
+        It's equal to np.searchsorted(self.shifts_a, shifts_a).
+        The thing is, searchsorted is slow, and we can pre-bake a lookup table.
+        _get_shift_indexer does the baking for us above.
+        """
         shifts_a = torch.atleast_1d(torch.as_tensor(shifts_a))
         return self.offset_shift_a_to_ix[shifts_a.to(int) + self.a_shift_offset]
 
@@ -328,6 +336,7 @@ class CompressedPairwiseConv:
     #         device=self.device,
     #     )
 
+
 def batched_h5_read(dataset, indices, batch_size=1000):
     if indices.size < batch_size:
         return dataset[indices]
@@ -341,14 +350,16 @@ def batched_h5_read(dataset, indices, batch_size=1000):
 
 def _get_shift_indexer(shifts):
     assert torch.equal(shifts, torch.sort(shifts).values)
+    # smallest shift (say, -5) becomes 5
     shift_offset = -int(shifts[0])
     offset_shift_to_ix = []
+
     for j, shift in enumerate(shifts):
         ix = shift + shift_offset
         assert len(offset_shift_to_ix) <= ix
-        assert 0 <= ix < len(shifts)
         while len(offset_shift_to_ix) < ix:
             offset_shift_to_ix.append(len(shifts))
         offset_shift_to_ix.append(j)
+
     offset_shift_to_ix = torch.tensor(offset_shift_to_ix, device=shifts.device)
     return shift_offset, offset_shift_to_ix
