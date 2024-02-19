@@ -229,6 +229,8 @@ def get_spike_pitch_shifts(
 
     # if probe_displacement > 0, then the registered position is below the original
     # and, to be conservative, round towards 0 rather than using //
+    # sometimes nans can sneak in here... let's just give them 0 disps.
+    probe_displacement = np.nan_to_num(probe_displacement)
     n_pitches_shift = (probe_displacement / pitch).astype(int)
 
     return n_pitches_shift
@@ -250,7 +252,12 @@ def invert_motion_estimate(motion_est, t_s, registered_depths_um):
         registered_bin_centers = bin_centers - bin_center_disps
         assert np.all(np.diff(registered_bin_centers) > 0), "Invertibility issue."
         disps = np.interp(
-            registered_depths_um, registered_bin_centers, bin_center_disps
+            registered_depths_um.clip(
+                registered_bin_centers.min(),
+                registered_bin_centers.max(),
+            ),
+            registered_bin_centers,
+            bin_center_disps,
         )
     else:
         # rigid motion
