@@ -28,7 +28,7 @@ class UnitPlot:
     width = 1
     height = 1
 
-    def draw(self, axis, sorting_analysis, unit_id):
+    def draw(self, panel, sorting_analysis, unit_id):
         raise NotImplementedError
 
     def notify_global_params(self, **params):
@@ -47,7 +47,8 @@ class TextInfo(UnitPlot):
     kind = "text"
     height = 0.5
 
-    def draw(self, axis, sorting_analysis, unit_id):
+    def draw(self, panel, sorting_analysis, unit_id):
+        axis = panel.subplots()
         axis.axis("off")
         msg = f"unit {unit_id}\n"
 
@@ -77,12 +78,13 @@ class ACG(UnitPlot):
     def __init__(self, max_lag=50):
         self.max_lag = max_lag
 
-    def draw(self, axis, sorting_analysis, unit_id):
+    def draw(self, panel, sorting_analysis, unit_id):
+        axis = panel.subplots()
         times_samples = sorting_analysis.times_samples(
             which=sorting_analysis.in_unit(unit_id)
         )
         lags, acg = correlogram(times_samples, max_lag=self.max_lag)
-        axis.bar(lags, acg)
+        bar(axis, lags, acg, fill=True, color="k")
         axis.set_xlabel("lag (samples)")
         axis.set_ylabel("acg")
 
@@ -95,7 +97,8 @@ class ISIHistogram(UnitPlot):
         self.bin_ms = bin_ms
         self.max_ms = max_ms
 
-    def draw(self, axis, sorting_analysis, unit_id):
+    def draw(self, panel, sorting_analysis, unit_id):
+        axis = panel.subplots()
         times_s = sorting_analysis.times_seconds(
             which=sorting_analysis.in_unit(unit_id)
         )
@@ -108,7 +111,7 @@ class ISIHistogram(UnitPlot):
         # counts, _ = np.histogram(dt_ms, bin_edges)
         # bin_centers = 0.5 * (bin_edges[1:] + bin_edges[:-1])
         # axis.bar(bin_centers, counts)
-        plt.hist(dt_ms, bin_edges)
+        plt.hist(dt_ms, bin_edges, color="k")
         axis.set_xlabel("isi (ms)")
         axis.set_ylabel(f"count (out of {dt_ms.size} total isis)")
 
@@ -130,7 +133,8 @@ class XZScatter(UnitPlot):
         self.probe_margin_um = probe_margin_um
         self.colorbar = colorbar
 
-    def draw(self, axis, sorting_analysis, unit_id):
+    def draw(self, panel, sorting_analysis, unit_id):
+        axis = panel.subplots()
         in_unit = sorting_analysis.in_unit(unit_id)
         x = sorting_analysis.x(which=in_unit)
         z = sorting_analysis.z(which=in_unit, registered=self.registered)
@@ -160,15 +164,19 @@ class PCAScatter(UnitPlot):
     kind = "scatter"
 
     def __init__(
-        self, relocate_amplitudes=False, relocated=True, amplitude_color_cutoff=15,
-        colorbar=False
+        self,
+        relocate_amplitudes=False,
+        relocated=True,
+        amplitude_color_cutoff=15,
+        colorbar=False,
     ):
         self.relocated = relocated
         self.relocate_amplitudes = relocate_amplitudes
         self.amplitude_color_cutoff = amplitude_color_cutoff
         self.colorbar = colorbar
 
-    def draw(self, axis, sorting_analysis, unit_id):
+    def draw(self, panel, sorting_analysis, unit_id):
+        axis = panel.subplots()
         which, loadings = sorting_analysis.unit_pca_features(
             unit_id=unit_id, relocated=self.relocated
         )
@@ -205,7 +213,8 @@ class TimeZScatter(UnitPlot):
         self.amplitude_color_cutoff = amplitude_color_cutoff
         self.probe_margin_um = probe_margin_um
 
-    def draw(self, axis, sorting_analysis, unit_id):
+    def draw(self, panel, sorting_analysis, unit_id):
+        axis = panel.subplots()
         in_unit = sorting_analysis.in_unit(unit_id)
         t = sorting_analysis.times_seconds(which=in_unit)
         z = sorting_analysis.z(which=in_unit, registered=self.registered)
@@ -245,7 +254,8 @@ class TFeatScatter(UnitPlot):
         self.amplitude_color_cutoff = amplitude_color_cutoff
         self.color_by_amplitude = color_by_amplitude
 
-    def draw(self, axis, sorting_analysis, unit_id):
+    def draw(self, panel, sorting_analysis, unit_id):
+        axis = panel.subplots()
         in_unit = sorting_analysis.in_unit(unit_id)
         t = sorting_analysis.times_seconds(which=in_unit)
         feat = sorting_analysis.named_feature(self.feat_name, which=in_unit)
@@ -271,7 +281,8 @@ class TimeAmpScatter(UnitPlot):
         self.relocate_amplitudes = relocate_amplitudes
         self.amplitude_color_cutoff = amplitude_color_cutoff
 
-    def draw(self, axis, sorting_analysis, unit_id):
+    def draw(self, panel, sorting_analysis, unit_id):
+        axis = panel.subplots()
         in_unit = sorting_analysis.in_unit(unit_id)
         t = sorting_analysis.times_seconds(which=in_unit)
         amps = sorting_analysis.amplitudes(
@@ -327,7 +338,8 @@ class WaveformPlot(UnitPlot):
     def get_waveforms(self, sorting_analysis, unit_id):
         raise NotImplementedError
 
-    def draw(self, axis, sorting_analysis, unit_id):
+    def draw(self, panel, sorting_analysis, unit_id):
+        axis = panel.subplots()
         which, waveforms, max_chan, geom, ci = self.get_waveforms(
             sorting_analysis, unit_id
         )
@@ -353,7 +365,7 @@ class WaveformPlot(UnitPlot):
                 new_offset=self.trough_offset_samples,
                 new_length=self.spike_length_samples,
             )
-            max_abs_amp = self.max_abs_template_scale * np.abs(templates).max()
+            max_abs_amp = self.max_abs_template_scale * np.nanmax(np.abs(templates))
         show_superres_templates = (
             self.show_superres_templates and self.template_index is None
         )
@@ -368,7 +380,7 @@ class WaveformPlot(UnitPlot):
                 new_length=self.spike_length_samples,
             )
             show_superres_templates = suptemplates.shape[0] > 1
-            max_abs_amp = self.max_abs_template_scale * np.abs(suptemplates).max()
+            max_abs_amp = self.max_abs_template_scale * np.nanmax(np.abs(suptemplates))
 
         ls = geomplot(
             waveforms,
@@ -434,6 +446,7 @@ class WaveformPlot(UnitPlot):
         reg_str = "registered " * sorting_analysis.shifting
         axis.set_ylabel(reg_str + "depth (um)")
         axis.set_xticks([])
+        axis.set_yticks([])
 
         if self.legend:
             axis.legend(
@@ -487,7 +500,8 @@ class NearbyCoarseTemplatesPlot(UnitPlot):
         self.n_neighbors = n_neighbors
         self.legend = legend
 
-    def draw(self, axis, sorting_analysis, unit_id):
+    def draw(self, panel, sorting_analysis, unit_id):
+        axis = panel.subplots()
         (
             neighbor_ids,
             neighbor_dists,
@@ -529,7 +543,7 @@ class NearbyCoarseTemplatesPlot(UnitPlot):
             )
             labels.append(str(uid))
             handles.append(lines[0])
-        axis.legend(handles=handles, labels=labels, fancybox=False)
+        axis.legend(handles=handles, labels=labels, fancybox=False, loc="upper left")
         axis.set_xticks([])
         axis.set_yticks([])
         axis.set_title(self.title)
@@ -539,15 +553,18 @@ class CoarseTemplateDistancePlot(UnitPlot):
     title = "coarse template distance"
     kind = "neighbors"
     width = 2
-    height = 2
+    height = 1.25
 
-    def __init__(self, channel_show_radius_um=50, n_neighbors=5, dist_vmax=1.0, show_values=True):
+    def __init__(
+        self, channel_show_radius_um=50, n_neighbors=5, dist_vmax=1.0, show_values=True
+    ):
         self.channel_show_radius_um = channel_show_radius_um
         self.n_neighbors = n_neighbors
         self.dist_vmax = dist_vmax
         self.show_values = show_values
 
-    def draw(self, axis, sorting_analysis, unit_id):
+    def draw(self, panel, sorting_analysis, unit_id):
+        axis = panel.subplots()
         (
             neighbor_ids,
             neighbor_dists,
@@ -578,6 +595,52 @@ class CoarseTemplateDistancePlot(UnitPlot):
             tx.set_color(colors[i])
             ty.set_color(colors[i])
         axis.set_title(self.title)
+
+
+class NeighborCCGPlot(UnitPlot):
+    kind = "neighbors"
+    width = 2
+    height = 0.75
+
+    def __init__(self, n_neighbors=3, max_lag=50):
+        self.n_neighbors = n_neighbors
+        self.max_lag = max_lag
+
+    def draw(self, panel, sorting_analysis, unit_id):
+        (
+            neighbor_ids,
+            neighbor_dists,
+            neighbor_coarse_templates,
+        ) = sorting_analysis.nearby_coarse_templates(
+            unit_id, n_neighbors=self.n_neighbors + 1
+        )
+        colors = np.array(cc.glasbey_light)[neighbor_ids % len(cc.glasbey_light)]
+        # assert neighbor_ids[0] == unit_id
+        neighbor_ids = neighbor_ids[1:]
+
+        my_st = sorting_analysis.times_samples(which=sorting_analysis.in_unit(unit_id))
+        neighb_sts = [
+            sorting_analysis.times_samples(which=sorting_analysis.in_unit(nid))
+            for nid in neighbor_ids
+        ]
+        ccgs = [correlogram(my_st, nst, max_lag=self.max_lag) for nst in neighb_sts]
+        acgs = [correlogram(my_st, nst, max_lag=self.max_lag) for nst in neighb_sts]
+
+        axes = panel.subplots(
+            nrows=2, sharey="row", sharex=True, ncols=self.n_neighbors
+        )
+        for j in range(self.n_neighbors):
+            clags, ccg = correlogram(my_st, neighb_sts[j], max_lag=self.max_lag)
+            merged_st = np.concatenate((my_st, neighb_sts[j]))
+            merged_st.sort()
+            alags, acg = correlogram(merged_st, max_lag=self.max_lag)
+
+            bar(axes[0, j], clags, ccg, fill=True, fc=colors[j])  # , ec="k", lw=1)
+            bar(axes[1, j], alags, acg, fill=True, fc=colors[j])  # , ec="k", lw=1)
+            axes[1, j].set_xlabel("lag (samples)")
+            axes[0, j].set_title(f"unit {neighbor_ids[j]}")
+        axes[0, 0].set_ylabel("ccg")
+        axes[1, 0].set_ylabel("merged acg")
 
 
 # -- multi plots
@@ -662,6 +725,7 @@ default_plots = (
     TPCAWaveformPlot(relocated=True),
     NearbyCoarseTemplatesPlot(),
     CoarseTemplateDistancePlot(),
+    NeighborCCGPlot(),
 )
 
 
@@ -716,10 +780,11 @@ def make_unit_summary(
         all_panels.extend(cardfigs)
 
         for cardfig, card in zip(cardfigs, column):
-            axes = cardfig.subplots(nrows=len(card.plots), ncols=1)
-            axes = np.atleast_1d(axes)
-            for plot, axis in zip(card.plots, axes):
-                plot.draw(axis, sorting_analysis, unit_id)
+            panels = cardfig.subfigures(nrows=len(card.plots), ncols=1)
+            panels = np.atleast_1d(panels)
+            for plot, panel in zip(card.plots, panels):
+                plot.draw(panel, sorting_analysis, unit_id)
+            all_panels.extend(panels)
 
     # clean up the panels, or else things get clipped
     for panel in all_panels:
@@ -953,3 +1018,9 @@ def _summary_job(unit_id):
     fig.savefig(tmp_out, dpi=_summary_job_context.dpi)
     tmp_out.rename(final_out)
     plt.close(fig)
+
+
+def bar(ax, x, y, **kwargs):
+    dx = np.diff(x).min()
+    x0 = np.concatenate((x - dx, x[-1:] + dx))
+    ax.stairs(y, x0, **kwargs)
