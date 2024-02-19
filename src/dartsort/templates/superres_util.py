@@ -67,6 +67,7 @@ def superres_sorting(
     labels = full_labels[kept]
     spike_times_s = spike_times_s[kept]
     spike_depths_um = spike_depths_um[kept]
+    spike_x_um = spike_x_um[kept]
 
     # make superres spike train
     if strategy in ("none", None):

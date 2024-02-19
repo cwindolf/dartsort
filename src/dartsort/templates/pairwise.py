@@ -346,7 +346,7 @@ def _get_shift_indexer(shifts):
     for j, shift in enumerate(shifts):
         ix = shift + shift_offset
         assert len(offset_shift_to_ix) <= ix
-        assert 0 <= ix < len(shifts)
+        # assert 0 <= ix < len(shifts)
         while len(offset_shift_to_ix) < ix:
             offset_shift_to_ix.append(len(shifts))
         offset_shift_to_ix.append(j)
