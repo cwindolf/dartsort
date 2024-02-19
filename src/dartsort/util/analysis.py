@@ -26,8 +26,11 @@ from ..config import default_template_config
 from ..templates import TemplateData
 from ..transform import WaveformPipeline
 from .data_util import DARTsortSorting
-from .drift_util import (get_spike_pitch_shifts,
-                         get_waveforms_on_static_channels, registered_average)
+from .drift_util import (
+    get_spike_pitch_shifts,
+    get_waveforms_on_static_channels,
+    registered_average,
+)
 from .spikeio import read_waveforms_channel_index
 from .waveform_util import make_channel_index
 
@@ -307,8 +310,10 @@ class DARTsortAnalysis:
             show_geom = self.recording.get_channel_locations()
         return show_geom
 
-    def show_channel_index(self, channel_channel_show_radius_um=50):
-        return make_channel_index(self.show_geom, channel_channel_show_radius_um)
+    def show_channel_index(self, channel_show_radius_um=50, channel_dist_p=np.inf):
+        return make_channel_index(
+            self.show_geom, channel_show_radius_um, p=channel_dist_p
+        )
 
     # spike feature loading methods
 
@@ -369,6 +374,7 @@ class DARTsortAnalysis:
         channel_show_radius_um=75,
         trough_offset_samples=42,
         spike_length_samples=121,
+        channel_dist_p=np.inf,
         relocated=False,
     ):
         if which is None:
@@ -389,8 +395,9 @@ class DARTsortAnalysis:
         if self.shifting:
             load_ci = self.channel_index
         else:
-            load_ci = make_channel_index(
-                self.recording.get_channel_locations(), channel_show_radius_um
+            load_ci = self.show_channel_index(
+                channel_show_radius_um=channel_show_radius_um,
+                channel_dist_p=channel_dist_p,
             )
         waveforms = read_waveforms_channel_index(
             self.recording,
@@ -415,6 +422,7 @@ class DARTsortAnalysis:
             waveforms,
             load_ci,
             channel_show_radius_um=channel_show_radius_um,
+            channel_dist_p=channel_dist_p,
             relocated=relocated,
         )
         return which, waveforms, max_chan, show_geom, show_channel_index
@@ -441,8 +449,14 @@ class DARTsortAnalysis:
 
         tpca_embeds = self.tpca_features(which=which)
         n, rank, c = tpca_embeds.shape
-        waveforms = tpca_embeds.transpose(0, 2, 1).reshape(n * c, rank)
-        waveforms = self.sklearn_tpca.inverse_transform(waveforms)
+        tpca_embeds = tpca_embeds.transpose(0, 2, 1).reshape(n * c, rank)
+        waveforms = np.full(
+            (n * c, self.sklearn_tpca.components_.shape[1]),
+            np.nan,
+            dtype=tpca_embeds.dtype,
+        )
+        valid = np.flatnonzero(np.isfinite(tpca_embeds[:, 0]))
+        waveforms[valid] = self.sklearn_tpca.inverse_transform(tpca_embeds[valid])
         t = waveforms.shape[1]
         waveforms = waveforms.reshape(n, c, t).transpose(0, 2, 1)
 
@@ -501,12 +515,15 @@ class DARTsortAnalysis:
         waveforms,
         load_channel_index,
         channel_show_radius_um=75,
+        channel_dist_p=np.inf,
         relocated=False,
     ):
         geom = self.recording.get_channel_locations()
-        show_geom = self.template_data.registered_geom
-        if show_geom is None:
-            show_geom = geom
+        show_geom = self.show_geom
+        show_channel_index = self.show_channel_index(
+            channel_show_radius_um=channel_show_radius_um, channel_dist_p=channel_dist_p
+        )
+
         temp = self.coarse_template_data.unit_templates(unit_id)
         n_pitches_shift = None
         if temp.shape[0]:
@@ -532,7 +549,7 @@ class DARTsortAnalysis:
             else:
                 amp_template = np.nanmean(amps, axis=0)
             max_chan = np.nanargmax(amp_template)
-        show_channel_index = make_channel_index(show_geom, channel_show_radius_um)
+
         show_chans = show_channel_index[max_chan]
         show_chans = show_chans[show_chans < len(show_geom)]
         show_channel_index = np.broadcast_to(
@@ -580,7 +597,9 @@ class DARTsortAnalysis:
         unit_ix = np.searchsorted(self.unit_ids, unit_id)
         unit_dists = self.merge_dist[unit_ix]
         distance_order = np.argsort(unit_dists)
-        distance_order = np.concatenate(([unit_ix], distance_order[distance_order != unit_ix]))
+        distance_order = np.concatenate(
+            ([unit_ix], distance_order[distance_order != unit_ix])
+        )
         # assert distance_order[0] == unit_ix
         neighbor_ixs = distance_order[:n_neighbors]
         neighbor_ids = self.unit_ids[neighbor_ixs]
