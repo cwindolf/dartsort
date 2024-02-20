@@ -109,11 +109,15 @@ def get_registered_templates(
 def get_realigned_sorting(
     recording,
     sorting,
+    realign_peaks=True,
+    low_rank_denoising=False,
     **kwargs,
 ):
     results = get_templates(
         recording,
         sorting,
+        realign_peaks=realign_peaks,
+        low_rank_denoising=low_rank_denoising,
         **kwargs,
     )
     return results["sorting"]
