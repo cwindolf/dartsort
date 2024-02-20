@@ -42,7 +42,9 @@ def train_decollider(
     early_stop_decrease_epochs=5,
     batch_size=64,
     loss_class=torch.nn.MSELoss,
+    val_every=1,
     device=None,
+    show_progress=True,
 ):
     """
     Arguments
@@ -108,7 +110,8 @@ def train_decollider(
     criterion = loss_class()
     examples_seen = 0
     val_losses = []
-    for epoch in trange(max_n_epochs):
+    xrange = trange if show_progress else range
+    for epoch in xrange(max_n_epochs):
         epoch_dt = 0.0
 
         # get data
@@ -178,6 +181,9 @@ def train_decollider(
             examples_seen += noised_batch.shape[0]
             epoch_dt += batch_dt
 
+        if epoch % val_every:
+            continue
+
         # evaluate
         val_record = evaluate_decollider(
             net,
@@ -207,13 +213,14 @@ def train_decollider(
         val_record["epoch_data_load_wall_dt_s"] = epoch_data_load_wall_dt_s
         val_records.append(val_record)
         val_losses.append(val_record["val_loss"])
-        summary = f"epoch {epoch}. "
-        summary += f"mean train loss: {np.mean(epoch_losses):0.3f}, "
-        summary += f"init train loss: {epoch_losses[0]:0.3f}, "
-        summary += ", ".join(
-            f"{k}: {v:0.3f}" for k, v in val_record.items() if k != "epoch"
-        )
-        tqdm.write(summary)
+        if show_progress:
+            summary = f"epoch {epoch}. "
+            summary += f"mean train loss: {np.mean(epoch_losses):0.3f}, "
+            summary += f"init train loss: {epoch_losses[0]:0.3f}, "
+            summary += ", ".join(
+                f"{k}: {v:0.3f}" for k, v in val_record.items() if k != "epoch"
+            )
+            tqdm.write(summary)
 
         # stop early
         if not early_stop_decrease_epochs or epoch < early_stop_decrease_epochs:
@@ -222,7 +229,8 @@ def train_decollider(
         # See: Early Stopping -- But When?
         best_epoch = np.argmin(val_losses)
         if epoch - best_epoch > early_stop_decrease_epochs:
-            tqdm.write(f"Early stopping at {epoch=}, since {best_epoch=}.")
+            if show_progress:
+                tqdm.write(f"Early stopping at {epoch=}, since {best_epoch=}.")
             break
 
     validation_dataframe = pd.DataFrame.from_records(val_records)
