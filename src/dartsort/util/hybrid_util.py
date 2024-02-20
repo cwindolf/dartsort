@@ -154,7 +154,7 @@ class HybridRecordingSegment(BasePreprocessorSegment):
 
 
 hybrid_recording = define_function_from_class(
-    source_class=HybridRecording, name="hybrid_recording"
+    source_class=HybridRecording, name=HybridRecording.name
 )
 
 
