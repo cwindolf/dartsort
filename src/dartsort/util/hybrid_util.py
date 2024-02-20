@@ -2,10 +2,10 @@ import numpy as np
 from spikeinterface.core import BaseRecording, BaseRecordingSegment
 from spikeinterface.core.core_tools import define_function_from_class
 from spikeinterface.preprocessing.basepreprocessor import (
-    BasePreprocessor,
-    BasePreprocessorSegment,
-)
+    BasePreprocessor, BasePreprocessorSegment)
 
+from ..templates import TemplateData
+from .analysis import DARTsortAnalysis
 from .data_util import DARTsortSorting
 
 
@@ -20,6 +20,7 @@ class HybridRecording(BasePreprocessor):
         times_samples=None,
         labels=None,
         template_indices=None,
+        unit_ids=None,
         trough_offset_samples=42,
         spike_train_kwargs=None,
         random_seed=0,
@@ -30,6 +31,9 @@ class HybridRecording(BasePreprocessor):
         assert templates.shape[2] == recording.get_num_channels()
         assert 0 <= trough_offset_samples < templates.shape[1]
         assert recording.get_num_segments() == 1
+
+        if unit_ids is None:
+            unit_ids = np.arange(len(templates))
 
         if times_samples is None:
             assert labels is None and template_indices is None
@@ -45,13 +49,15 @@ class HybridRecording(BasePreprocessor):
             )
         else:
             assert labels is not None
+            assert unit_ids is not None
             times_samples = np.asarray(times_samples)
             labels = np.asarray(labels)
+            unit_ids = np.asarray(unit_ids)
 
         assert times_samples.ndim == 1
         assert np.all(np.diff(times_samples) >= 0)
         if template_indices is None:
-            template_indices = labels
+            template_indices = unit_ids[labels]
         else:
             assert template_indices.max() < templates.shape[0]
         assert times_samples.shape == labels.shape == template_indices.shape
@@ -60,6 +66,7 @@ class HybridRecording(BasePreprocessor):
         self.labels = labels
         self.template_indices = template_indices
         self.templates = templates
+        self.unit_ids = unit_ids
 
         dtype_ = dtype
         if dtype_ is None:
@@ -82,6 +89,7 @@ class HybridRecording(BasePreprocessor):
             times_samples=times_samples,
             labels=labels,
             template_indices=template_indices,
+            unit_ids=unit_ids,
             templates=templates,
             trough_offset_samples=trough_offset_samples,
             spike_train_kwargs=spike_train_kwargs,
@@ -97,6 +105,22 @@ class HybridRecording(BasePreprocessor):
                 max_channels,
                 self.labels,
                 self.sampling_frequency,
+            )
+
+        def gt_template_data(self):
+            return TemplateData(
+                templates=self.templates,
+                unit_ids=self.unit_ids,
+                spike_counts=np.full(unit_ids.shape, np.inf),
+                trough_offset_samples=self.trough_offset_samples,
+                spike_length_samples=self.templates.shape[1],
+            )
+
+        def to_dartsort_analysis(self):
+            return DARTsortAnalysis(
+                sorting=self.to_dartsort_sorting(),
+                recording=self,
+                template_data=self.gt_template_data(),
             )
 
 
