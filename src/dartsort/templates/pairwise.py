@@ -75,7 +75,7 @@ class CompressedPairwiseConv:
         It's an int in [0, n_shifts_a).
         It's equal to np.searchsorted(self.shifts_a, shifts_a).
         The thing is, searchsorted is slow, and we can pre-bake a lookup table.
-        _get_shift_indexer does the baking for us above.
+        _get_shift_indexer does the baking for us below.
         """
         shifts_a = torch.atleast_1d(torch.as_tensor(shifts_a))
         return self.offset_shift_a_to_ix[shifts_a.to(int) + self.a_shift_offset]
@@ -357,8 +357,13 @@ def _get_shift_indexer(shifts):
     for j, shift in enumerate(shifts):
         ix = shift + shift_offset
         assert len(offset_shift_to_ix) <= ix
+
+        # fill indices corresponding to missing shifts with an out-of-bounds
+        # index to cause a panic if someone tries to load up a shift which DNE
         while len(offset_shift_to_ix) < ix:
             offset_shift_to_ix.append(len(shifts))
+
+        # real shifts get good index
         offset_shift_to_ix.append(j)
 
     offset_shift_to_ix = torch.tensor(offset_shift_to_ix, device=shifts.device)
