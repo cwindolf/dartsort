@@ -2,7 +2,11 @@ import numpy as np
 from spikeinterface.core import BaseRecording, BaseRecordingSegment
 from spikeinterface.core.core_tools import define_function_from_class
 from spikeinterface.preprocessing.basepreprocessor import (
-    BasePreprocessor, BasePreprocessorSegment)
+    BasePreprocessor,
+    BasePreprocessorSegment,
+)
+
+from .data_util import DARTsortSorting
 
 
 class HybridRecording(BasePreprocessor):
@@ -85,6 +89,16 @@ class HybridRecording(BasePreprocessor):
             dtype=dtype_,
         )
 
+        def to_dartsort_sorting(self):
+            max_channels = self.templates.ptp(1).argmax(1)
+            max_channels = max_channels[self.template_indices]
+            return DARTsortSorting(
+                self.times_samples,
+                max_channels,
+                self.labels,
+                self.sampling_frequency,
+            )
+
 
 class HybridRecordingSegment(BasePreprocessorSegment):
     def __init__(
@@ -137,10 +151,14 @@ class HybridRecordingSegment(BasePreprocessorSegment):
 
         # get spike times_samples/template_indices in this part, offset by start frame
         ix_low = np.searchsorted(
-            self.times_samples, start_frame - self.post_trough_samples, side="left"
+            self.times_samples,
+            start_frame - self.post_trough_samples,
+            side="left",
         )
         ix_high = np.searchsorted(
-            self.times_samples, end_frame + self.trough_offset_samples, side="right"
+            self.times_samples,
+            end_frame + self.trough_offset_samples,
+            side="right",
         )
         times_samples = self.times_samples[ix_low:ix_high] - start_frame
         template_indices = self.template_indices[ix_low:ix_high]
@@ -149,7 +167,9 @@ class HybridRecordingSegment(BasePreprocessorSegment):
         for t, c in zip(times_samples, template_indices):
             traces_pad[t + self.time_domain_offset] += self.templates[c]
 
-        traces = traces_pad[self.margin_left : traces_pad.shape[0] - self.margin_right]
+        traces = traces_pad[
+            self.margin_left : traces_pad.shape[0] - self.margin_right
+        ]
         return traces
 
 
@@ -223,17 +243,23 @@ def refractory_poisson_spike_train(
     estimated_spike_count = int((duration_s / mean_interval_s) * overestimation)
 
     # generate interspike intervals
-    intervals = rg.exponential(scale=mean_interval_s, size=estimated_spike_count)
+    intervals = rg.exponential(
+        scale=mean_interval_s, size=estimated_spike_count
+    )
     intervals += refractory_s
     intervals_samples = np.floor(intervals * sampling_frequency).astype(int)
 
     # determine spike times and restrict to ones which we can actually
     # add into / read from a recording with this duration and trough offset
     spike_samples = np.cumsum(intervals_samples)
-    max_spike_time = duration_samples - (spike_length_samples - trough_offset_samples)
+    max_spike_time = duration_samples - (
+        spike_length_samples - trough_offset_samples
+    )
     # check that we overestimated enough
     assert spike_samples.max() > max_spike_time
-    valid = spike_samples == spike_samples.clip(trough_offset_samples, max_spike_time)
+    valid = spike_samples == spike_samples.clip(
+        trough_offset_samples, max_spike_time
+    )
     spike_samples = spike_samples[valid]
     assert spike_samples.size
 
