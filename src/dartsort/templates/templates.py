@@ -201,7 +201,7 @@ class TemplateData:
 
         # count spikes in each template
         spike_counts = np.zeros_like(unit_ids)
-        ix, counts = np.unique(sorting.labels, return_counts=True)
+        ix, counts = np.unique(superres_sort.labels, return_counts=True)
         spike_counts[ix[ix >= 0]] = counts[ix >= 0]
 
         # main!
