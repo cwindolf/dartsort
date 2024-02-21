@@ -26,7 +26,7 @@ class SubtractionPeeler(BasePeeler):
         spike_length_samples=121,
         detection_thresholds=[12, 10, 8, 6, 5, 4],
         chunk_length_samples=30_000,
-        peak_sign="neg",
+        peak_sign="both",
         spatial_dedup_channel_index=None,
         n_chunks_fit=40,
         fit_subsampling_random_state=0,
@@ -274,7 +274,7 @@ def subtract_chunk(
     left_margin=0,
     right_margin=0,
     detection_thresholds=[12, 10, 8, 6, 5, 4],
-    peak_sign="neg",
+    peak_sign="both",
     spatial_dedup_channel_index=None,
     residnorm_decrease_threshold=3.162,  # sqrt(10)
 ):
