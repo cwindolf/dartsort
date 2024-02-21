@@ -37,7 +37,7 @@ def localize_hdf5(
     n_channels_subset=None,
     output_dataset_name="point_source_localizations",
     main_channels_dataset_name="channels",
-    amplitude_vectors_dataset_name="denoised_amplitude_vectors",
+    amplitude_vectors_dataset_name="denoised_peak_amplitude_vectors",
     channel_index_dataset_name="channel_index",
     geometry_dataset_name="geom",
     spikes_per_batch=10_000,

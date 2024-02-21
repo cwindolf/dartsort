@@ -14,9 +14,10 @@ from dataclasses import replace
 
 import h5py
 import numpy as np
+from dartsort.util import job_util
 from dartsort.util.data_util import DARTsortSorting
 
-from . import cluster_util, ensemble_utils
+from . import cluster_util, density, ensemble_utils, forward_backward
 
 
 def cluster_chunk(
@@ -25,6 +26,8 @@ def cluster_chunk(
     chunk_time_range_s=None,
     motion_est=None,
     recording=None,
+    amplitudes_dataset_name="denoised_ptp_amplitudes",
+    depth_order=True,
 ):
     """Cluster spikes from a single segment
 
@@ -43,6 +46,7 @@ def cluster_chunk(
         "closest_registered_channels",
         "grid_snap",
         "hdbscan",
+        "density_peaks",
     )
 
     with h5py.File(peeling_hdf5_filename, "r") as h5:
@@ -50,10 +54,15 @@ def cluster_chunk(
         channels = h5["channels"][:]
         times_s = h5["times_seconds"][:]
         xyza = h5["point_source_localizations"][:]
-        amps = h5["denoised_amplitudes"][:]
+        amps = h5[amplitudes_dataset_name][:]
         geom = h5["geom"][:]
     in_chunk = ensemble_utils.get_indices_in_chunk(times_s, chunk_time_range_s)
     labels = -1 * np.ones(len(times_samples))
+    extra_features = {
+        "point_source_localizations": xyza,
+        amplitudes_dataset_name: amps,
+        "times_seconds": times_s,
+    }
 
     if clustering_config.cluster_strategy == "closest_registered_channels":
         labels[in_chunk] = cluster_util.closest_registered_channels(
@@ -81,13 +90,43 @@ def cluster_chunk(
             motion_est,
             min_cluster_size=clustering_config.min_cluster_size,
             min_samples=clustering_config.min_samples,
-            log_c = clustering_config.log_c,
+            log_c=clustering_config.log_c,
             cluster_selection_epsilon=clustering_config.cluster_selection_epsilon,
             scales=clustering_config.feature_scales,
             adaptive_feature_scales=clustering_config.adaptive_feature_scales,
             recursive=clustering_config.recursive,
             remove_duplicates=clustering_config.remove_duplicates,
+            remove_big_units=clustering_config.remove_big_units,
+            zstd_big_units=clustering_config.zstd_big_units,
         )
+    elif clustering_config.cluster_strategy == "density_peaks":
+        z = xyza[in_chunk, 2]
+        if motion_est is not None:
+            z = motion_est.correct_s(times_s[in_chunk], z)
+        scales = clustering_config.feature_scales
+        ampfeat = scales[2] * np.log(clustering_config.log_c + amps[in_chunk])
+        res = density.density_peaks_clustering(
+            np.c_[scales[0] * xyza[in_chunk, 0], scales[1] * z, ampfeat],
+            sigma_local=clustering_config.sigma_local,
+            sigma_local_low=clustering_config.sigma_local_low,
+            sigma_regional=clustering_config.sigma_regional,
+            sigma_regional_low=clustering_config.sigma_regional_low,
+            n_neighbors_search=clustering_config.n_neighbors_search,
+            radius_search=clustering_config.radius_search,
+            remove_clusters_smaller_than=clustering_config.remove_clusters_smaller_than,
+            noise_density=clustering_config.noise_density,
+            triage_quantile_per_cluster=clustering_config.triage_quantile_per_cluster,
+            revert=clustering_config.revert,
+            workers=4,
+            return_extra=clustering_config.attach_density_feature,
+        )
+        
+        if clustering_config.attach_density_feature:
+            labels[in_chunk] = res["labels"]
+            extra_features["density_ratio"] = np.full(labels.size, np.nan)
+            extra_features["density_ratio"][in_chunk] = res["density"]
+        else:
+            labels[in_chunk] = res
     else:
         assert False
 
@@ -95,12 +134,12 @@ def cluster_chunk(
         times_samples=times_samples,
         channels=channels,
         labels=labels,
-        extra_features=dict(
-            point_source_localizations=xyza,
-            denoised_amplitudes=amps,
-            times_seconds=times_s,
-        ),
+        parent_h5_path=peeling_hdf5_filename,
+        extra_features=extra_features,
     )
+    
+    if depth_order:
+        sorting = cluster_util.reorder_by_depth(sorting, motion_est=motion_est)
 
     return sorting
 
@@ -158,6 +197,7 @@ def ensemble_chunks(
     peeling_hdf5_filename,
     recording,
     clustering_config,
+    computation_config=None,
     motion_est=None,
 ):
     """Initial clustering combined across chunks of time
@@ -173,6 +213,10 @@ def ensemble_chunks(
     -------
     sorting  : DARTsortSorting
     """
+    assert clustering_config.ensemble_strategy in ("forward_backward", "split_merge")
+    if computation_config is None:
+        computation_config = job_util.get_global_computation_config()
+
     # get chunk sortings
     chunk_time_ranges_s, chunk_sortings = cluster_chunks(
         peeling_hdf5_filename,
@@ -180,14 +224,11 @@ def ensemble_chunks(
         clustering_config,
         motion_est=motion_est,
     )
-
     if len(chunk_sortings) == 1:
         return chunk_sortings[0]
 
-    assert clustering_config.ensemble_strategy in ("forward_backward",)
-
     if clustering_config.ensemble_strategy == "forward_backward":
-        labels = ensemble_utils.forward_backward(
+        labels = forward_backward.forward_backward(
             recording,
             chunk_time_ranges_s,
             chunk_sortings,
@@ -197,5 +238,16 @@ def ensemble_chunks(
             motion_est=motion_est,
         )
         sorting = replace(chunk_sortings[0], labels=labels)
+    elif clustering_config.ensemble_strategy == "split_merge":
+        sorting = ensemble_utils.split_merge_ensemble(
+            recording,
+            chunk_sortings,
+            motion_est=motion_est,
+            split_merge_config=clustering_config.split_merge_ensemble_config,
+            n_jobs_split=computation_config.n_jobs_cpu,
+            n_jobs_merge=computation_config.actual_n_jobs_gpu,
+            device=computation_config.actual_device,
+            show_progress=True,
+        )
 
     return sorting

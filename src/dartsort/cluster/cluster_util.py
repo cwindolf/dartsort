@@ -7,6 +7,29 @@ from scipy.spatial import KDTree
 from sklearn.neighbors import KNeighborsClassifier
 from spikeinterface.comparison import compare_two_sorters
 from tqdm.auto import tqdm
+import dataclasses
+
+
+def reorder_by_depth(sorting, motion_est=None):
+    kept = np.flatnonzero(sorting.labels >= 0)
+    kept_labels = sorting.labels[kept]
+
+    units, kept_labels = np.unique(kept_labels, return_inverse=True)
+
+    depths = sorting.point_source_localizations[kept, 2]
+    if motion_est is not None:
+        depths = motion_est.correct_s(sorting.times_seconds[kept], depths)
+
+    centroids = np.zeros(units.size)
+    for u in range(units.size):
+        inu = np.flatnonzero(kept_labels == u)
+        centroids[u] = np.median(depths[inu])
+
+    labels = sorting.labels.copy()
+    # this one is some food for thought, lol.
+    labels[kept] = np.argsort(np.argsort(centroids))[kept_labels]
+
+    return dataclasses.replace(sorting, labels=labels)
 
 
 def closest_registered_channels(times_seconds, x, z_abs, geom, motion_est=None):
@@ -66,6 +89,8 @@ def hdbscan_clustering(
     remove_duplicates=True,
     frames_dedup=12,
     frame_dedup_cluster=20,
+    remove_big_units=True,
+    zstd_big_units=50,
 ):
     """
     Run HDBSCAN
@@ -77,13 +102,17 @@ def hdbscan_clustering(
         z_reg = motion_est.correct_s(times_seconds, z_abs)
 
     if adaptive_feature_scales:
-        scales = (1, 1, np.median(np.abs(x - np.median(x)))/np.median(np.abs(np.log(log_c + amps)-np.median(np.log(log_c + amps))))
-                 )
+        scales = (
+            1,
+            1,
+            np.median(np.abs(x - np.median(x)))
+            / np.median(np.abs(np.log(log_c + amps) - np.median(np.log(log_c + amps)))),
+        )
 
     features = np.c_[x * scales[0], z_reg * scales[1], np.log(log_c + amps) * scales[2]]
-    if features.shape[1]>=features.shape[0]:
-        return -1*np.ones(features.shape[0])
-    
+    if features.shape[1] >= features.shape[0]:
+        return -1 * np.ones(features.shape[0])
+
     clusterer = hdbscan.HDBSCAN(
         min_cluster_size=min_cluster_size,
         cluster_selection_epsilon=cluster_selection_epsilon,
@@ -112,7 +141,19 @@ def hdbscan_clustering(
             clusterer.labels_[removed_ix.astype("int")] = -1
 
     if not recursive:
-        return clusterer.labels_
+        if remove_big_units:
+            labels = clusterer.labels_
+            _, labels[labels >= 0] = np.unique(labels[labels >= 0], return_inverse=True)
+            arr_z_std = np.zeros(labels.max() + 1)
+            for k in np.unique(labels[labels >= 0]):
+                idx = np.flatnonzero(labels == k)
+                arr_z_std[k] = z_reg[idx].std()
+            bad_units = np.where(arr_z_std > zstd_big_units)
+            labels[np.isin(labels, bad_units)] = -1
+            _, labels[labels >= 0] = np.unique(labels[labels >= 0], return_inverse=True)
+            return labels
+        else:
+            return clusterer.labels_
 
     # -- recursively split clusters as long as HDBSCAN keeps finding more than 1
     # if HDBSCAN only finds one cluster, then be done
@@ -146,13 +187,16 @@ def hdbscan_clustering(
             frame_dedup_cluster=frame_dedup_cluster,
         )
         labels[in_unit[split_labels < 0]] = split_labels[split_labels < 0]
-        labels[in_unit[split_labels >= 0]] = split_labels[split_labels >= 0] + next_label
+        labels[in_unit[split_labels >= 0]] = (
+            split_labels[split_labels >= 0] + next_label
+        )
         # next_label += split_labels[split_labels >= 0].max() + 1
-        next_label += split_labels.max() + 1 #is that ok
+        next_label += split_labels.max() + 1  # is that ok
 
     # reindex
     _, labels[labels >= 0] = np.unique(labels[labels >= 0], return_inverse=True)
     return labels
+
 
 # How to deal with outliers?
 
