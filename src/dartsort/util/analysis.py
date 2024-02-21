@@ -8,10 +8,10 @@ This should also make it easier to compute drift-aware metrics
 (e.g., d' using registered templates and shifted waveforms).
 """
 
+import pickle
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Callable, Optional
-import pickle
 
 import h5py
 import numpy as np
@@ -26,11 +26,8 @@ from ..config import default_template_config
 from ..templates import TemplateData
 from ..transform import WaveformPipeline
 from .data_util import DARTsortSorting
-from .drift_util import (
-    get_spike_pitch_shifts,
-    get_waveforms_on_static_channels,
-    registered_average,
-)
+from .drift_util import (get_spike_pitch_shifts,
+                         get_waveforms_on_static_channels, registered_average)
 from .spikeio import read_waveforms_channel_index
 from .waveform_util import make_channel_index
 
