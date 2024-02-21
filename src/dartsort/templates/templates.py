@@ -3,6 +3,7 @@ from pathlib import Path
 from typing import Optional
 
 import numpy as np
+from dartsort.localize.localize_util import localize_waveforms
 from dartsort.util import drift_util
 
 from .get_templates import get_templates
@@ -80,6 +81,15 @@ class TemplateData:
             registered_template_depths_um=registered_template_depths_um,
         )
 
+    def template_locations(self):
+        template_locations = localize_waveforms(
+            self.templates,
+            self.registered_geom,
+            main_channels=self.templates.ptp(1).argmax(1),
+            radius=self.localization_radius_um,
+        )
+        return template_locations
+
     def unit_templates(self, unit_id):
         return self.templates[self.unit_ids == unit_id]
 
@@ -97,6 +107,9 @@ class TemplateData:
         n_jobs=0,
         units_per_job=8,
         device=None,
+        trough_offset_samples=42,
+        spike_length_samples=121,
+        return_realigned_sorting=False,
     ):
         if save_folder is not None:
             save_folder = Path(save_folder)
@@ -133,8 +146,8 @@ class TemplateData:
             geom = recording.get_channel_locations()
 
         kwargs = dict(
-            trough_offset_samples=template_config.trough_offset_samples,
-            spike_length_samples=template_config.spike_length_samples,
+            trough_offset_samples=trough_offset_samples,
+            spike_length_samples=spike_length_samples,
             spikes_per_unit=template_config.spikes_per_unit,
             # realign handled in advance below, not needed in kwargs
             # realign_peaks=template_config.realign_peaks,
@@ -171,7 +184,7 @@ class TemplateData:
 
         # handle superresolved templates
         if template_config.superres_templates:
-            unit_ids, sorting = superres_sorting(
+            unit_ids, superres_sort = superres_sorting(
                 sorting,
                 sorting.times_seconds,
                 spike_depths_um,
@@ -184,6 +197,7 @@ class TemplateData:
                 adaptive_bin_size=template_config.adaptive_bin_size,
             )
         else:
+            superres_sort = sorting
             # we don't skip empty units
             unit_ids = np.arange(sorting.labels.max() + 1)
 
@@ -193,7 +207,7 @@ class TemplateData:
         spike_counts[ix[ix >= 0]] = counts[ix >= 0]
 
         # main!
-        results = get_templates(recording, sorting, **kwargs)
+        results = get_templates(recording, superres_sort, **kwargs)
 
         # handle registered templates
         if template_config.registered_templates and motion_est is not None:
@@ -209,19 +223,21 @@ class TemplateData:
                 kwargs["registered_geom"],
                 registered_template_depths_um,
                 localization_radius_um=template_config.registered_template_localization_radius_um,
-                trough_offset_samples=template_config.trough_offset_samples,
-                spike_length_samples=template_config.spike_length_samples,
+                trough_offset_samples=trough_offset_samples,
+                spike_length_samples=spike_length_samples,
             )
         else:
             obj = cls(
                 results["templates"],
                 unit_ids,
                 spike_counts,
-                trough_offset_samples=template_config.trough_offset_samples,
-                spike_length_samples=template_config.spike_length_samples,
+                trough_offset_samples=trough_offset_samples,
+                spike_length_samples=spike_length_samples,
             )
-
         if save_folder is not None:
             obj.to_npz(npz_path)
+
+        if return_realigned_sorting:
+            return obj, sorting
 
         return obj

@@ -77,7 +77,7 @@ def filter_standardize_rec_mp(output_directory, filename_raw, dtype_raw,
     channels_to_remove=None,
     buffer = None, t_start=0, t_end=None,
     n_sec_chunk=1, multi_processing = True, n_jobs = 1, overwrite = True,
-    adcshift_correction=False,median_subtraction=False):
+    adcshift_correction=False, median_subtraction=False, no_standardize=True):
     """Preprocess pipeline: filtering, standarization and whitening filter
     This step (optionally) performs filtering on the data, standarizes it
     and computes a whitening filter. Filtering and standardized data are
@@ -178,6 +178,7 @@ def filter_standardize_rec_mp(output_directory, filename_raw, dtype_raw,
             channels_to_remove,
             adcshift_correction,
             median_subtraction,
+            no_standardize,
         )
     else:
         mp_object = multi_proc_object(
@@ -196,7 +197,9 @@ def filter_standardize_rec_mp(output_directory, filename_raw, dtype_raw,
             sampling_frequency,
             channels_to_remove,
             adcshift_correction,
-            median_subtraction)
+            median_subtraction,
+            no_standardize,
+        )
         
         with ctx.Pool(
             n_jobs,
@@ -235,7 +238,9 @@ class multi_proc_object:
         sampling_frequency,
         channels_to_remove,
         adcshift_correction,
-        median_subtraction):
+        median_subtraction,
+        no_standardize,
+    ):
         
         self.filename_raw = filename_raw
         self.fname_mean_sd = fname_mean_sd
@@ -253,6 +258,7 @@ class multi_proc_object:
         self.channels_to_remove = channels_to_remove
         self.adcshift_correction = adcshift_correction
         self.median_subtraction = median_subtraction
+        self.no_standardize = no_standardize
 
     def filter_standardize_batch_mp(self, batch_id):
         filter_standardize_batch(
@@ -272,9 +278,8 @@ class multi_proc_object:
             self.channels_to_remove,
             self.adcshift_correction,
             self.median_subtraction,
-            )        
-        
-
+            self.no_standardize,
+        )        
         
         
 def filter_standardize_for_loop(all_batches,
@@ -293,7 +298,9 @@ def filter_standardize_for_loop(all_batches,
             sampling_frequency,
             channels_to_remove,
             adcshift_correction,
-            median_subtraction):
+            median_subtraction,
+            no_standardize,
+        ):
     
     for batch_id in all_batches:
         filter_standardize_batch(
@@ -314,8 +321,8 @@ def filter_standardize_for_loop(all_batches,
             channels_to_remove,
             adcshift_correction,
             median_subtraction,
-            )
-
+            no_standardize,
+        )
 
 # %%
 def filter_standardize_rec(output_directory, filename_raw, dtype_raw,
@@ -326,7 +333,7 @@ def filter_standardize_rec(output_directory, filename_raw, dtype_raw,
     channels_to_remove=None,
     buffer = None, t_start=0, t_end=None,
     n_sec_chunk=1, multi_processing = True, n_processors = 6, overwrite = True,
-    adcshift_correction=False,median_subtraction=False):
+    adcshift_correction=False, median_subtraction=True, no_standardize=True):
     """Preprocess pipeline: filtering, standarization and whitening filter
     This step (optionally) performs filtering on the data, standarizes it
     and computes a whitening filter. Filtering and standardized data are
@@ -396,31 +403,6 @@ def filter_standardize_rec(output_directory, filename_raw, dtype_raw,
     if buffer is None:
         buffer = int(max(sampling_frequency/100, 200))
 
-# Multiprocessing doesn't work - switch to spikeinterface
-    # read config params
-#     if multi_processing:
-#         parmap.map(
-#             filter_standardize_batch,
-#             [i for i in all_batches],
-#             filename_raw, 
-#             fname_mean_sd,
-#             apply_filter,
-#             dtype_raw, 
-#             dtype_output,
-#             filtered_location,
-#             n_channels,
-#             buffer,
-#             rec_len,
-#             low_frequency,
-#             high_factor,
-#             order,
-#             sampling_frequency, 
-#             channels_to_remove,
-#             adcshift_correction,
-#             median_subtraction,
-#             processes=n_processors,
-#             pm_pbar=True)
-#     else:
     for batch_id in all_batches:
         filter_standardize_batch(
             batch_id, filename_raw, 
@@ -439,7 +421,8 @@ def filter_standardize_rec(output_directory, filename_raw, dtype_raw,
             channels_to_remove,
             adcshift_correction,
             median_subtraction,
-            )
+            no_standardize,
+        )
 
     # Merge the chunk filtered files and delete the individual chunks
     merge_filtered_files(filtered_location, output_directory)
@@ -505,7 +488,7 @@ def _mean_standard_deviation(rec, centered=False):
 
     # find standard deviation using robust method
     if not centered:
-        centers = np.mean(rec, axis=0)
+        centers = np.median(rec, axis=0)
         rec = rec - centers[None]
     else:
         centers = np.zeros(rec.shape[1], 'float32')
@@ -514,7 +497,7 @@ def _mean_standard_deviation(rec, centered=False):
 
 
 # %%
-def _standardize(rec, sd=None, centers=None):
+def _standardize(rec, sd=None, centers=None, no_standardize=True):
     """Determine standard deviation of noise in each channel
     Parameters
     ----------
@@ -533,11 +516,13 @@ def _standardize(rec, sd=None, centers=None):
     # find standard deviation using robust method
     if (sd is None) or (centers is None):
         sd, centers = _mean_standard_deviation(rec, centered=False)
-
+    
     # standardize all channels with SD> 0.1 (Voltage?) units
-    # Cat: TODO: ensure that this is actually correct for all types of channels
     idx1 = np.where(sd>=0.1)[0]
-    rec[:,idx1] = np.divide(rec[:,idx1] - centers[idx1][None], sd[idx1])
+    if no_standardize:
+        rec[:,idx1] = (rec[:,idx1] - centers[idx1][None])/np.median(sd[idx1])
+    else:
+        rec[:,idx1] = np.divide(rec[:,idx1] - centers[idx1][None], sd[idx1])
     
     # zero out bad channels
     idx2 = np.where(sd<0.1)[0]
@@ -555,7 +540,7 @@ def filter_standardize_batch(batch_id, bin_file, fname_mean_sd,
                              n_channels, buffer, rec_len,
                              low_frequency=None, high_factor=None,
                              order=None, sampling_frequency=None, channels_to_remove=None,
-                             adcshift_correction=False,median_subtraction=False):
+                             adcshift_correction=False,median_subtraction=True,no_standardize=True):
     """Butterworth filter for a one dimensional time series
     Parameters
     ----------
@@ -613,16 +598,13 @@ def filter_standardize_batch(batch_id, bin_file, fname_mean_sd,
     temp = np.load(fname_mean_sd)
     sd = temp['sd']
     centers = temp['centers']
-    ts = _standardize(ts, sd, centers)
+    ts = _standardize(ts, sd, centers, no_standardize)
     if channels_to_remove is not None:
-        
         ts = np.delete(ts, channels_to_remove, axis=1)
-    
     if adcshift_correction:
         ts = shiftWF(ts.T).T
     if median_subtraction:
         ts = ts - np.median(ts, axis = 1)[:, None]
-    
     # save
     fname = os.path.join(
         output_directory,

@@ -16,8 +16,10 @@ object can then be passed into the high level functions like
 
 TODO: change n_chunks_fit to n_spikes_fit, max_chunks_fit
 """
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import List, Optional, Tuple
+
+import torch
 
 try:
     from importlib.resources import files
@@ -31,7 +33,6 @@ default_pretrained_path = files("dartsort.pretrained")
 default_pretrained_path = default_pretrained_path.joinpath("single_chan_denoiser.pt")
 
 
-# TODO: integrate this in the other configs
 @dataclass(frozen=True)
 class WaveformConfig:
     """Defaults yield 42 sample trough offset and 121 total at 30kHz."""
@@ -44,7 +45,10 @@ class WaveformConfig:
 
     def spike_length_samples(self, sampling_frequency=30_000):
         spike_len_ms = self.ms_before + self.ms_after
-        return int(spike_len_ms * (sampling_frequency / 1000))
+        length = int(spike_len_ms * (sampling_frequency / 1000))
+        # odd is better for convolution arithmetic elsewhere
+        length = 2 * (length // 2) + 1
+        return length
 
 
 @dataclass(frozen=True)
@@ -85,7 +89,7 @@ class FeaturizationConfig:
     do_localization: bool = True
     localization_radius: float = 100.0
     # these are saved always if do_localization
-    save_amplitude_vectors: bool = True
+    localization_amplitude_type: str = "peak"
     localization_model: str = "pointsource"
 
     # -- further info about denoising
@@ -103,8 +107,6 @@ class FeaturizationConfig:
 
 @dataclass(frozen=True)
 class SubtractionConfig:
-    trough_offset_samples: int = 42
-    spike_length_samples: int = 121
     detection_thresholds: List[int] = (10, 8, 6, 5, 4)
     chunk_length_samples: int = 30_000
     peak_sign: str = "both"
@@ -124,9 +126,31 @@ class SubtractionConfig:
 
 
 @dataclass(frozen=True)
+class MotionEstimationConfig:
+    """Configure motion estimation.
+
+    You can also make your own and pass it to dartsort() to bypass this
+    """
+    do_motion_estimation: bool = True
+
+    # sometimes spikes can be localized far away from the probe, causing
+    # issues with motion estimation, we will ignore such spikes
+    probe_boundary_padding_um: float = 100.0
+
+    # DREDge parameters
+    spatial_bin_length_um: float = 1.0
+    temporal_bin_length_s: float = 1.0
+    window_step_um: float = 400.0
+    window_scale_um: float = 450.0
+    window_margin_um: Optional[float] = None
+    max_dt_s: float = 1000.0
+    max_disp_um: Optional[float] = None
+    correlation_threshold: float = 0.1
+    rigid: bool = False
+
+
+@dataclass(frozen=True)
 class TemplateConfig:
-    trough_offset_samples: int = 42
-    spike_length_samples: int = 121
     spikes_per_unit = 500
 
     # -- template construction parameters
@@ -155,8 +179,6 @@ class TemplateConfig:
 
 @dataclass(frozen=True)
 class MatchingConfig:
-    trough_offset_samples: int = 42
-    spike_length_samples: int = 121
     chunk_length_samples: int = 30_000
     extract_radius: float = 200.0
     n_chunks_fit: int = 40
@@ -176,6 +198,19 @@ class MatchingConfig:
 
 
 @dataclass(frozen=True)
+class SplitMergeConfig:
+    # -- split
+    split_strategy: str = "FeatureSplit"
+    recursive_split: bool = True
+
+    # -- merge
+    merge_template_config: TemplateConfig = TemplateConfig(superres_templates=False)
+    merge_distance_threshold: float = 0.25
+    cross_merge_distance_threshold: float = 0.5
+    min_spatial_cosine: float = 0.0
+
+
+@dataclass(frozen=True)
 class ClusteringConfig:
     # -- initial clustering
     cluster_strategy: str = "hdbscan"
@@ -190,26 +225,72 @@ class ClusteringConfig:
     recursive: bool = False
     remove_duplicates: bool = True
 
+    # remove large clusters in hdbscan?
+    remove_big_units: bool = True
+    zstd_big_units: float = 50.0
+
     # grid snap parameters
     grid_dx: float = 15.0
     grid_dz: float = 15.0
 
+    # density peaks parameters
+    sigma_local: float = 5.0
+    sigma_local_low: Optional[float] = None
+    sigma_regional: Optional[float] = None
+    sigma_regional_low: Optional[float] = None
+    n_neighbors_search: int = 20
+    radius_search: float = 5.0
+    remove_clusters_smaller_than: int = 10
+    noise_density: float = 0.0
+    attach_density_feature: bool = False
+    triage_quantile_per_cluster: float = 0.0
+    revert: bool = False
+
     # -- ensembling
     ensemble_strategy: Optional[str] = "forward_backward"
     chunk_size_s: float = 300.0
+    split_merge_ensemble_config: SplitMergeConfig = SplitMergeConfig()
 
 
 @dataclass(frozen=True)
-class SplitMergeConfig:
-    # -- split
-    split_strategy: str = "FeatureSplit"
-    recursive_split: bool = True
+class DARTsortConfig:
+    waveform_config: WaveformConfig = WaveformConfig()
+    featurization_config: FeaturizationConfig = FeaturizationConfig()
+    subtraction_config: SubtractionConfig = SubtractionConfig()
+    template_config: TemplateConfig = TemplateConfig()
+    clustering_config: ClusteringConfig = ClusteringConfig()
+    split_merge_config: SplitMergeConfig = SplitMergeConfig()
+    matching_config: MatchingConfig = MatchingConfig()
+    motion_estimation_config: MotionEstimationConfig = MotionEstimationConfig()
 
-    # -- merge
-    merge_template_config: TemplateConfig = TemplateConfig(superres_templates=False)
-    merge_distance_threshold: float = 0.25
+    # high level behavior
+    do_initial_split_merge: bool = True
+    matching_iterations: int = 1
 
 
+@dataclass
+class ComputationConfig:
+    n_jobs_cpu: int = 0
+    n_jobs_gpu: int = 0
+    device: Optional[torch.device] = None
+
+    actual_device: torch.device = field(init=False)
+    actual_n_jobs_gpu: int = field(init=False)
+
+    def __post_init__(self):
+        if self.device is None:
+            have_cuda = torch.cuda.is_available()
+            self.actual_device = torch.device("cuda" if have_cuda else "cpu")
+        else:
+            self.actual_device = torch.device(self.device)
+
+        if self.actual_device.type == "cuda":
+            self.actual_n_jobs_gpu = self.n_jobs_gpu
+        else:
+            self.actual_n_jobs_gpu = self.n_jobs_cpu
+
+
+default_waveform_config = WaveformConfig()
 default_featurization_config = FeaturizationConfig()
 default_subtraction_config = SubtractionConfig()
 default_template_config = TemplateConfig()
@@ -217,3 +298,6 @@ default_clustering_config = ClusteringConfig()
 default_split_merge_config = SplitMergeConfig()
 coarse_template_config = TemplateConfig(superres_templates=False)
 default_matching_config = MatchingConfig()
+default_motion_estimation_config = MotionEstimationConfig()
+default_dartsort_config = DARTsortConfig()
+default_computation_config  = ComputationConfig()

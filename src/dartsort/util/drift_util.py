@@ -145,6 +145,8 @@ def registered_template(
     registered_geom,
     registered_kdtree=None,
     match_distance=None,
+    min_fraction_at_shift=0.1,
+    min_count_at_shift=5,
     pad_value=0.0,
     reducer=fast_nanmedian,
 ):
@@ -184,7 +186,10 @@ def registered_template(
 
     # weighted mean is easier than weighted median, and we want this to be weighted
     valid = ~np.isnan(static_templates[:, 0, :])
-    weights = valid[:, None, :] * counts[:, None, None]
+    counts_ = counts[:, None]
+    fractions = counts_ / counts.sum()
+    valid &= (fractions >= min_fraction_at_shift) | (counts_ >= min_count_at_shift)
+    weights = valid[:, None, :] * counts_[:, None, :]
     weights = weights / np.maximum(weights.sum(0), 1)
     template = (np.nan_to_num(static_templates) * weights).sum(0)
     dtype = str(waveforms.dtype).split(".")[1] if is_tensor else waveforms.dtype
@@ -224,6 +229,8 @@ def get_spike_pitch_shifts(
 
     # if probe_displacement > 0, then the registered position is below the original
     # and, to be conservative, round towards 0 rather than using //
+    # sometimes nans can sneak in here... let's just give them 0 disps.
+    probe_displacement = np.nan_to_num(probe_displacement)
     n_pitches_shift = (probe_displacement / pitch).astype(int)
 
     return n_pitches_shift
@@ -245,7 +252,12 @@ def invert_motion_estimate(motion_est, t_s, registered_depths_um):
         registered_bin_centers = bin_centers - bin_center_disps
         assert np.all(np.diff(registered_bin_centers) > 0), "Invertibility issue."
         disps = np.interp(
-            registered_depths_um, registered_bin_centers, bin_center_disps
+            registered_depths_um.clip(
+                registered_bin_centers.min(),
+                registered_bin_centers.max(),
+            ),
+            registered_bin_centers,
+            bin_center_disps,
         )
     else:
         # rigid motion

@@ -1,3 +1,4 @@
+import warnings
 from collections import namedtuple
 from pathlib import Path
 
@@ -74,22 +75,20 @@ class SubtractionPeeler(BasePeeler):
     def save_models(self, save_folder):
         super().save_models(save_folder)
 
-        sub_denoise_pt = (
-            Path(save_folder) / "subtraction_denoising_pipeline.pt"
-        )
+        sub_denoise_pt = Path(save_folder) / "subtraction_denoising_pipeline.pt"
         torch.save(self.subtraction_denoising_pipeline, sub_denoise_pt)
 
     def load_models(self, save_folder):
         super().load_models(save_folder)
 
-        sub_denoise_pt = (
-            Path(save_folder) / "subtraction_denoising_pipeline.pt"
-        )
+        sub_denoise_pt = Path(save_folder) / "subtraction_denoising_pipeline.pt"
         if sub_denoise_pt.exists():
             self.subtraction_denoising_pipeline = torch.load(sub_denoise_pt)
 
     @classmethod
-    def from_config(cls, recording, subtraction_config, featurization_config):
+    def from_config(
+        cls, recording, waveform_config, subtraction_config, featurization_config
+    ):
         # waveform extraction channel neighborhoods
         geom = torch.tensor(recording.get_channel_locations())
         channel_index = make_channel_index(
@@ -110,13 +109,28 @@ class SubtractionPeeler(BasePeeler):
             geom, channel_index, featurization_config
         )
 
+        # waveform logic
+        trough_offset_samples = waveform_config.trough_offset_samples(
+            recording.sampling_frequency
+        )
+        spike_length_samples = waveform_config.spike_length_samples(
+            recording.sampling_frequency
+        )
+
+        if trough_offset_samples != 42 or spike_length_samples != 121:
+            # temporary warning just so I can see if this happens
+            warnings.warn(
+                f"waveform_config {trough_offset_samples=} {spike_length_samples=} "
+                f"since {recording.sampling_frequency=}"
+            )
+
         return cls(
             recording,
             channel_index,
             subtraction_denoising_pipeline,
             featurization_pipeline,
-            trough_offset_samples=subtraction_config.trough_offset_samples,
-            spike_length_samples=subtraction_config.spike_length_samples,
+            trough_offset_samples=trough_offset_samples,
+            spike_length_samples=spike_length_samples,
             detection_thresholds=subtraction_config.detection_thresholds,
             chunk_length_samples=subtraction_config.chunk_length_samples,
             peak_sign=subtraction_config.peak_sign,
@@ -203,16 +217,11 @@ class SubtractionPeeler(BasePeeler):
         if which == "denoisers":
             self.subtraction_denoising_pipeline = WaveformPipeline(
                 [init_waveform_feature]
-                + [
-                    t
-                    for t in orig_denoise
-                    if (t.is_denoiser and not t.needs_fit())
-                ]
+                + [t for t in orig_denoise if (t.is_denoiser and not t.needs_fit())]
             )
         else:
             self.subtraction_denoising_pipeline = WaveformPipeline(
-                [init_waveform_feature]
-                + [t for t in orig_denoise if t.is_denoiser]
+                [init_waveform_feature] + [t for t in orig_denoise if t.is_denoiser]
             )
 
         # and we don't need any features for this
@@ -392,8 +401,7 @@ def subtract_chunk(
 
     # discard spikes in the margins and sort times_samples for caller
     keep = torch.nonzero(
-        (spike_times >= left_margin)
-        & (spike_times < traces.shape[0] - right_margin)
+        (spike_times >= left_margin) & (spike_times < traces.shape[0] - right_margin)
     )[:, 0]
     if not keep.any():
         return empty_chunk_subtraction_result(
@@ -437,9 +445,7 @@ def subtract_chunk(
     )
 
 
-def empty_chunk_subtraction_result(
-    spike_length_samples, channel_index, residual
-):
+def empty_chunk_subtraction_result(spike_length_samples, channel_index, residual):
     empty_waveforms = torch.empty(
         (0, spike_length_samples, channel_index.shape[1]),
         dtype=residual.dtype,

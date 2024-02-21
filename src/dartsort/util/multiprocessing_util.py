@@ -7,8 +7,11 @@ import math
 
 try:
     import cloudpickle
+
+    have_cloudpickle = True
 except ImportError:
     pass
+    have_cloudpickle = False
 
 
 class MockFuture:
@@ -96,6 +99,9 @@ def get_pool(
     do_parallel = n_jobs >= 1
     n_jobs = max(1, n_jobs)
 
+    if cls == CloudpicklePoolExecutor and not have_cloudpickle:
+        cls = ProcessPoolExecutor
+
     Executor = cls if do_parallel else MockPoolExecutor
     context = get_context(context)
 
@@ -109,7 +115,6 @@ def get_pool(
         n_repeats = 1
         if max_tasks_per_child is not None:
             n_repeats = n_tasks // max_tasks_per_child + 1
-            print(f"{n_repeats=}")
         for _ in range(n_repeats):
             for rank in range(n_jobs):
                 rank_queue.put(rank)

@@ -113,9 +113,7 @@ def array_scatter_5_features(
     x,
     z,
     maxptp,
-    trough_val,
-    trough_time,
-    tip_val,
+    density,
     zlim=(-50, 3900),
     xlim=None,
     ptplim=None,
@@ -129,7 +127,7 @@ def array_scatter_5_features(
 ):
     fig = None
     if axes is None:
-        fig, axes = plt.subplots(1, 6, sharey=True, figsize=figsize)
+        fig, axes = plt.subplots(1, 5, sharey=True, figsize=figsize)
 
     if title is not None:
         fig.suptitle(title)
@@ -161,7 +159,7 @@ def array_scatter_5_features(
     axes[1].scatter(
         x,
         z,
-        c=maxptp_c,
+        c=np.exp(maxptp_c/50)-5,
         s=s_dot,
         alpha=0.1,
         marker=".",
@@ -180,58 +178,47 @@ def array_scatter_5_features(
         excluded_ids=excluded_ids,
         do_ellipse=do_ellipse,
     )
-    axes[2].set_xlabel("Amplitude (s.u.)", fontsize=16)
+    axes[2].set_xlabel("50*log(5+ptp) (s.u.)", fontsize=16)
     axes[2].tick_params(axis='x', labelsize=16)
 
     cluster_scatter(
-        trough_val,
+        density,
         z,
         labels,
         ax=axes[3],
         s=s_dot,
         alpha=0.1,
         excluded_ids=excluded_ids,
-        do_ellipse=do_ellipse,
+        do_ellipse=False,
     )
     axes[3].set_xlabel("Trough Val (s.u.)", fontsize=16)
     axes[3].tick_params(axis='x', labelsize=16)
     
-    cluster_scatter(
-        trough_time,
+    axes[4].scatter(
+        x,
         z,
-        labels,
-        ax=axes[4],
+        c=density,
         s=s_dot,
         alpha=0.1,
-        excluded_ids=excluded_ids,
-        do_ellipse=do_ellipse,
+        marker=".",
+        cmap=plt.cm.jet,
     )
     axes[4].set_xlabel("Trough Time (1/30ms)", fontsize=16)
     axes[4].tick_params(axis='x', labelsize=16)
+    axes[4].scatter(*geom.T, c="orange", marker="s", s=s_size_geom)
+    axes[4].set_title("colored by ptps")
 
-    cluster_scatter(
-        tip_val,
-        z,
-        labels,
-        ax=axes[5],
-        s=s_dot,
-        alpha=0.1,
-        excluded_ids=excluded_ids,
-        do_ellipse=do_ellipse,
-    )
-    axes[5].set_xlabel("Tip Val (s.u.)", fontsize=16)
-    axes[5].tick_params(axis='x', labelsize=16)
 
     axes[0].set_ylim(zlim)
     axes[1].set_ylim(zlim)
     axes[2].set_ylim(zlim)
     axes[3].set_ylim(zlim)
     axes[4].set_ylim(zlim)
-    axes[5].set_ylim(zlim)
 
     if xlim is not None:
         axes[0].set_xlim(xlim)
         axes[1].set_xlim(xlim)
+        axes[4].set_xlim(xlim)
     if ptplim is not None:
         axes[2].set_xlim(ptplim)
 
