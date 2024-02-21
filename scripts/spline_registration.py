@@ -4,6 +4,13 @@ import h5py
 from tqdm.auto import tqdm, trange
 import scipy.io
 import hdbscan
+import os 
+
+from dredge import dredge_ap, motion_util as mu
+
+
+import spikeinterface.core as sc
+import spikeinterface.full as si
 
 from spike_psvae import cluster_viz, cluster_utils
 from spike_psvae.ibme import register_nonrigid, fast_raster
@@ -13,20 +20,27 @@ from sklearn.linear_model import Ridge
 from sklearn.preprocessing import PolynomialFeatures, SplineTransformer
 from sklearn.pipeline import make_pipeline
 
-
+from dartsort.config import TemplateConfig, MatchingConfig, ClusteringConfig, SubtractionConfig, FeaturizationConfig
+from dartsort import cluster
 
 # Input
-fname_sub_h5 = "subtraction.h5"
-sampling_rate=30000
-rec_len_sec = 300 # Duration of the recording in seconds
-output_dir = "spline_drift_results"
-Path(output_dir).mkdir(exist_ok=True)
+data_dir = Path("UHD_DATA/ZYE_0021___2021-05-01___1")
+fname_sub_h5 = data_dir / "subtraction.h5"
+raw_data_name = data_dir / "standardized.bin"
+dtype_preprocessed = "float32"
+sampling_rate = 30000
+n_channels = 384
+
+rec_len_sec = int(os.path.getsize(raw_data_name)/4/n_channels/sampling_rate)
+
+output_dir = data_dir / "spline_drift_results"
+os.makedirs(Path(output_dir), exist_ok=True)
 savefigs=True
 if savefigs:
     import matplotlib.pyplot as plt
     import matplotlib.cm as cm
     vir = cm.get_cmap('viridis')
-
+    
 #parameters of output displacement
 disp_resolution=30000
 
@@ -39,33 +53,53 @@ batch_size_spline=20
 
 sub_h5 = Path(fname_sub_h5)
 
-with h5py.File(sub_h5, "r+") as h5:
-    geom = h5["geom"][:]
-    localization_results = np.array(h5["localizations"][:]) #f.get('localizations').value
-    maxptps = np.array(h5["maxptps"][:])
-    spike_index = np.array(h5["spike_index"][:])
-    z_reg = np.array(h5["z_reg"][:])
-    dispmap = np.array(h5["dispmap"][:])
+clustering_config_uhd = ClusteringConfig(
+    cluster_strategy="density_peaks",
+    sigma_regional=25,
+    chunk_size_s=300,
+    cluster_selection_epsilon=1,
+    min_cluster_size = 25,
+    min_samples = 25,
+    recursive=False,
+    remove_big_units=True,
+    zstd_big_units=50.0,
+)
 
-if savefigs:
-    idx = maxptps>threshold_ptp_rigid_reg
-    ptp_col = np.log(maxptps[idx]+1)
-    ptp_col[ptp_col>3.5]=3.5
-    ptp_col -= ptp_col.min()
-    ptp_col /= ptp_col.max()
-    color_array = vir(ptp_col)
-    plt.figure(figsize=(20, 10))
-    plt.scatter(spike_index[idx, 0], z_reg[idx], s=1, color = color_array)
-    plt.savefig(Path(output_dir) / "initial_detection_localization.png")
-    plt.close()
+with h5py.File(sub_h5, "r+") as h5:
+    localization_results = np.array(h5["point_source_localizations"][:])
+    maxptps = np.array(h5["denoised_ptp_amplitudes"][:])
+    times_samples = np.array(h5["times_samples"][:])
+    times_seconds = np.array(h5["times_seconds"][:])
+    geom = np.array(h5["geom"][:])
+    channels = np.array(h5["channels"][:])
+
+
+recording = sc.read_binary(
+    raw_data_name,
+    sampling_rate,
+    dtype_preprocessed,
+    num_channels=n_channels,
+    is_filtered=True,
+)
+
+recording.set_dummy_probe_from_locations(
+    geom, shape_params=dict(radius=10)
+)
+
+z = localization_results[:, 2]
+wh = (z > geom[:,1].min() - 100) & (z < geom[:,1].max() + 100)
+a = maxptps[wh]
+z = z[wh]
+t = times_seconds[wh]
+    
+me, extra = dredge_ap.register(a, z, t, max_disp_um=100, win_scale_um=300, win_step_um=200, rigid=False, mincorr=0.6)
+
+z_reg = me.correct_s(times_seconds, localization_results[:, 2])
+displacement_rigid = me.displacement
 
 # Rigid reg
 idx = np.flatnonzero(maxptps>threshold_ptp_rigid_reg)
 
-raster, dd, tt = fast_raster(maxptps[idx], z_reg[idx], spike_index[idx, 0]/sampling_rate)
-D, C = calc_corr_decent(raster, disp = 100)
-displacement_rigid = psolvecorr(D, C)
-
 if savefigs:
     ptp_col = np.log(maxptps[idx]+1)
     ptp_col[ptp_col>3.5]=3.5
@@ -73,48 +107,43 @@ if savefigs:
     ptp_col /= ptp_col.max()
     color_array = vir(ptp_col)
     plt.figure(figsize=(20, 10))
-    plt.scatter(spike_index[idx, 0], z_reg[idx], s=1, color = color_array)
+    plt.scatter(times_seconds[idx], z_reg[idx], s=1, color = color_array)
     plt.plot(displacement_rigid+geom.max()/2, c='red')
     plt.savefig(Path(output_dir) / "initial_detection_localization.png")
     plt.close()
 
 idx = np.flatnonzero(maxptps>threshold_ptp_spline)
-
-clusterer, cluster_centers, spike_index_cluster, x, z, maxptps_cluster, original_spike_ids = cluster_utils.cluster_spikes(
-    localization_results[idx, 0], 
-    z_reg[idx]-displacement_rigid[spike_index[idx, 0]//sampling_rate],
-    maxptps[idx], spike_index[idx], triage_quantile=100, do_copy_spikes=False, split_big=False, do_remove_dups=False)
+ 
+sorting = cluster(
+    sub_h5,
+    recording,
+    clustering_config=clustering_config_uhd, 
+    motion_est=me)
 
 if savefigs:
-    cluster_viz.array_scatter(clusterer.labels_, 
-                                  geom, x, z, 
-                                  maxptps_cluster)
+    cluster_viz.array_scatter(sorting.labels, 
+                                  geom, localization_results[:, 0], z_reg, 
+                                  maxptps, zlim=(-50, 332))
     plt.savefig(Path(output_dir) / "clustering_high_ptp_units.png")
     plt.close()
 
-z_centered = z[clusterer.labels_>-1].copy()
-for k in range(clusterer.labels_.max()+1):
-    idx_k = np.flatnonzero(clusterer.labels_[clusterer.labels_>-1] == k)
+z_centered = localization_results[sorting.labels>-1, 2].copy()
+for k in range(sorting.labels.max()+1):
+    idx_k = np.flatnonzero(sorting.labels[sorting.labels>-1] == k)
     z_centered[idx_k] -= z_centered[idx_k].mean()
 z_centered_std = z_centered.std()
 
 values = z_centered[np.abs(z_centered)<z_centered_std*std_bound]
-idx_times = np.flatnonzero(clusterer.labels_>-1)
-times = spike_index_cluster[idx_times, 0][np.abs(z_centered)<z_centered_std*std_bound]/sampling_rate
+idx_times = np.flatnonzero(sorting.labels>-1)
+times = times_seconds[idx_times][np.abs(z_centered)<z_centered_std*std_bound]
 
 transformer = SplineTransformer(
             degree=spline_degree,
             n_knots=int(rec_len_sec*2.5), #can find this automatically - 2 per period (of ~1.25sec)
         )
+
 model = make_pipeline(transformer, Ridge(alpha=1e-3))
 model.fit(times.reshape(-1, 1), values.reshape(-1, 1))
-
-if savefigs:
-    plt.figure(figsize=(20, 5))
-    plt.scatter(times, values, s=1, c='blue')
-    plt.plot(times, model.predict(times.reshape(-1, 1))[:, 0], c='red')
-    plt.savefig(Path(output_dir) / "spline_fit.png")
-    plt.close()
 
 print("Inference")
 spline_displacement = np.zeros(rec_len_sec*sampling_rate)
@@ -123,6 +152,7 @@ for batch_id in tqdm(range(n_batches)):
     idx_batch = np.arange(batch_id*batch_size_spline*sampling_rate, (batch_id+1)*batch_size_spline*sampling_rate, )
     spline_displacement[idx_batch] = model.predict(idx_batch.reshape(-1, 1)/sampling_rate)[:, 0]
 
+z_reg_spline = z_reg - spline_displacement[times_samples.astype('int')]
 if savefigs:
     idx = np.flatnonzero(maxptps>threshold_ptp_rigid_reg)
     ptp_col = np.log(maxptps[idx]+1)
@@ -131,9 +161,11 @@ if savefigs:
     ptp_col /= ptp_col.max()
     color_array = vir(ptp_col)
     plt.figure(figsize=(20, 10))
-    plt.scatter(spike_index[idx, 0], z_reg[idx]-displacement_rigid[spike_index[idx, 0]//30000] - spline_displacement[spike_index[idx, 0].astype('int')], s=1, color = color_array)
+    plt.scatter(times_seconds[idx], z_reg_spline[idx], s=1, color = color_array)
     plt.savefig(Path(output_dir) / "final_registered_raster.png")
     plt.close()
 
-np.save("low_freq_disp_map.npy", dispmap + displacement_rigid[None, :])
+
 np.save("high_freq_correction.npy", spline_displacement)
+np.save("spline_registered_z.npy", z_reg_spline)
+

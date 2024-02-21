@@ -250,11 +250,12 @@ def test_fakedata_nonn():
             subconf.subtraction_denoising_config, do_tpca_denoise=False
         ),
     )
+    nolocfeatconf = dataclasses.replace(featconf, do_localization=False)
     with tempfile.TemporaryDirectory() as tempdir:
         st0, out_h5 = subtract(
             rec,
             tempdir,
-            featurization_config=dataclasses.replace(featconf, do_localization=False),
+            featurization_config=nolocfeatconf,
             subtraction_config=subconf,
         )
         ns0 = len(st0)
@@ -263,13 +264,13 @@ def test_fakedata_nonn():
         sta, out_h5 = subtract(
             rec.frame_slice(start_frame=0, end_frame=int(20 * fs)),
             tempdir,
-            featurization_config=dataclasses.replace(featconf, do_localization=False),
+            featurization_config=nolocfeatconf,
             subtraction_config=subconf,
         )
         stb, out_h5 = subtract(
             rec,
             tempdir,
-            featurization_config=featconf,
+            featurization_config=nolocfeatconf,
             subtraction_config=subconf,
         )
         assert len(sta) < ns0
@@ -279,13 +280,13 @@ def test_fakedata_nonn():
         sta, out_h5 = subtract(
             rec.frame_slice(start_frame=0, end_frame=int(25 * fs)),
             tempdir,
-            featurization_config=dataclasses.replace(featconf, do_localization=False),
+            featurization_config=nolocfeatconf,
             subtraction_config=subconf,
         )
         stb, out_h5 = subtract(
             rec,
             tempdir,
-            featurization_config=featconf,
+            featurization_config=nolocfeatconf,
             subtraction_config=subconf,
         )
         assert len(sta) < ns0
@@ -295,13 +296,13 @@ def test_fakedata_nonn():
         sta, out_h5 = subtract(
             rec.frame_slice(start_frame=0, end_frame=int(30 * fs)),
             tempdir,
-            featurization_config=dataclasses.replace(featconf, do_localization=False),
+            featurization_config=nolocfeatconf,
             subtraction_config=subconf,
         )
         stb, out_h5 = subtract(
             rec,
             tempdir,
-            featurization_config=featconf,
+            featurization_config=nolocfeatconf,
             subtraction_config=subconf,
         )
         assert len(sta) < ns0
@@ -323,7 +324,7 @@ def test_small_nonn():
 
     h = dense_layout()
     geom = np.c_[h["x"], h["y"]][:n_channels]
-    rec = sc.NumpyRecording(noise, 10_000)
+    rec = sc.NumpyRecording(noise, 30_000)
     rec.set_dummy_probe_from_locations(geom)
 
     subconf = SubtractionConfig(
@@ -404,7 +405,7 @@ def test_small_default_config():
 
     h = dense_layout()
     geom = np.c_[h["x"], h["y"]][:n_channels]
-    rec = sc.NumpyRecording(noise, 10_000)
+    rec = sc.NumpyRecording(noise, 30_000)
     rec.set_dummy_probe_from_locations(geom)
 
     with tempfile.TemporaryDirectory() as tempdir:
