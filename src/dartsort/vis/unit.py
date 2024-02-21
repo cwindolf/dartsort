@@ -7,31 +7,29 @@ and subfigure mazes.
 Relies on the DARTsortAnalysis object of utils/analysis.py to do most of
 the data work so that this file can focus on plotting (sort of MVC).
 """
-from collections import namedtuple
+
 from pathlib import Path
 
+import colorcet as cc
 import matplotlib.pyplot as plt
 import numpy as np
 from matplotlib.legend_handler import HandlerTuple
 from tqdm.auto import tqdm
 
-from ..util.multiprocessing_util import get_pool
+from ..util.multiprocessing_util import CloudpicklePoolExecutor, get_pool
+from . import layout
 from .waveforms import geomplot
 
 # -- main class. see fn make_unit_summary below to make lots of UnitPlots.
 
 
-class UnitPlot:
-    kind: str
-    width = 1
-    height = 1
-
-    def draw(self, axis, sorting_analysis, unit_id):
+class UnitPlot(layout.BasePlot):
+    def draw(self, panel, sorting_analysis, unit_id):
         raise NotImplementedError
 
 
-class UnitMultiPlot:
-    def unit_plots(self, sorting_analysis, unit_id):
+class UnitMultiPlot(layout.BaseMultiPlot):
+    def plots(self, sorting_analysis, unit_id):
         # return [UnitPlot()]
         raise NotImplementedError
 
@@ -40,7 +38,8 @@ class TextInfo(UnitPlot):
     kind = "text"
     height = 0.5
 
-    def draw(self, axis, sorting_analysis, unit_id):
+    def draw(self, panel, sorting_analysis, unit_id):
+        axis = panel.subplots()
         axis.axis("off")
         msg = f"unit {unit_id}\n"
 
@@ -50,7 +49,6 @@ class TextInfo(UnitPlot):
             sorting_analysis.unit_ids == unit_id
         ].sum()
         msg += f"n spikes: {nspikes}\n"
-        axis.text(0, 0, msg, fontsize=6.5)
 
         temps = sorting_analysis.template_data.unit_templates(unit_id)
         if temps.size:
@@ -59,6 +57,7 @@ class TextInfo(UnitPlot):
         else:
             msg += "no template (too few spikes)"
 
+        axis.text(0, 0, msg, fontsize=6.5)
 
 # -- small summary plots
 
@@ -70,12 +69,13 @@ class ACG(UnitPlot):
     def __init__(self, max_lag=50):
         self.max_lag = max_lag
 
-    def draw(self, axis, sorting_analysis, unit_id):
+    def draw(self, panel, sorting_analysis, unit_id):
+        axis = panel.subplots()
         times_samples = sorting_analysis.times_samples(
             which=sorting_analysis.in_unit(unit_id)
         )
         lags, acg = correlogram(times_samples, max_lag=self.max_lag)
-        axis.bar(lags, acg)
+        bar(axis, lags, acg, fill=True, color="k")
         axis.set_xlabel("lag (samples)")
         axis.set_ylabel("acg")
 
@@ -88,7 +88,8 @@ class ISIHistogram(UnitPlot):
         self.bin_ms = bin_ms
         self.max_ms = max_ms
 
-    def draw(self, axis, sorting_analysis, unit_id):
+    def draw(self, panel, sorting_analysis, unit_id):
+        axis = panel.subplots()
         times_s = sorting_analysis.times_seconds(
             which=sorting_analysis.in_unit(unit_id)
         )
@@ -101,7 +102,7 @@ class ISIHistogram(UnitPlot):
         # counts, _ = np.histogram(dt_ms, bin_edges)
         # bin_centers = 0.5 * (bin_edges[1:] + bin_edges[:-1])
         # axis.bar(bin_centers, counts)
-        plt.hist(dt_ms, bin_edges)
+        plt.hist(dt_ms, bin_edges, color="k")
         axis.set_xlabel("isi (ms)")
         axis.set_ylabel(f"count (out of {dt_ms.size} total isis)")
 
@@ -113,15 +114,18 @@ class XZScatter(UnitPlot):
         self,
         relocate_amplitudes=False,
         registered=True,
-        max_amplitude=15,
+        amplitude_color_cutoff=15,
         probe_margin_um=100,
+        colorbar=False,
     ):
         self.relocate_amplitudes = relocate_amplitudes
         self.registered = registered
-        self.max_amplitude = max_amplitude
+        self.amplitude_color_cutoff = amplitude_color_cutoff
         self.probe_margin_um = probe_margin_um
+        self.colorbar = colorbar
 
-    def draw(self, axis, sorting_analysis, unit_id):
+    def draw(self, panel, sorting_analysis, unit_id):
+        axis = panel.subplots()
         in_unit = sorting_analysis.in_unit(unit_id)
         x = sorting_analysis.x(which=in_unit)
         z = sorting_analysis.z(which=in_unit, registered=self.registered)
@@ -133,36 +137,52 @@ class XZScatter(UnitPlot):
             which=in_unit[valid], relocated=self.relocate_amplitudes
         )
         s = axis.scatter(
-            x[valid], z[valid], c=np.minimum(amps, self.max_amplitude), lw=0, s=3
+            x[valid],
+            z[valid],
+            c=np.minimum(amps, self.amplitude_color_cutoff),
+            lw=0,
+            s=3,
         )
         axis.set_xlabel("x (um)")
         reg_str = "registered " * self.registered
         axis.set_ylabel(reg_str + "z (um)")
         reloc_str = "relocated " * self.relocate_amplitudes
-        plt.colorbar(s, ax=axis, shrink=0.5, label=reloc_str + "amplitude (su)")
+        if self.colorbar:
+            plt.colorbar(s, ax=axis, shrink=0.5, label=reloc_str + "amplitude (su)")
 
 
 class PCAScatter(UnitPlot):
     kind = "scatter"
 
-    def __init__(self, relocate_amplitudes=False, relocated=True, max_amplitude=15):
+    def __init__(
+        self,
+        relocate_amplitudes=False,
+        relocated=True,
+        amplitude_color_cutoff=15,
+        colorbar=False,
+    ):
         self.relocated = relocated
         self.relocate_amplitudes = relocate_amplitudes
-        self.max_amplitude = max_amplitude
+        self.amplitude_color_cutoff = amplitude_color_cutoff
+        self.colorbar = colorbar
 
-    def draw(self, axis, sorting_analysis, unit_id):
+    def draw(self, panel, sorting_analysis, unit_id):
+        axis = panel.subplots()
         which, loadings = sorting_analysis.unit_pca_features(
             unit_id=unit_id, relocated=self.relocated
         )
         amps = sorting_analysis.amplitudes(
             which=which, relocated=self.relocate_amplitudes
         )
-        s = axis.scatter(*loadings.T, c=np.minimum(amps, self.max_amplitude), lw=0, s=3)
+        s = axis.scatter(
+            *loadings.T, c=np.minimum(amps, self.amplitude_color_cutoff), lw=0, s=3
+        )
         reloc_str = "relocated " * self.relocated
         axis.set_xlabel(reloc_str + "per-unit PC1 (um)")
         axis.set_ylabel(reloc_str + "per-unit PC2 (um)")
         reloc_amp_str = "relocated " * self.relocate_amplitudes
-        plt.colorbar(s, ax=axis, shrink=0.5, label=reloc_amp_str + "amplitude (su)")
+        if self.colorbar:
+            plt.colorbar(s, ax=axis, shrink=0.5, label=reloc_amp_str + "amplitude (su)")
 
 
 # -- wide scatter plots
@@ -176,15 +196,16 @@ class TimeZScatter(UnitPlot):
         self,
         relocate_amplitudes=False,
         registered=True,
-        max_amplitude=15,
+        amplitude_color_cutoff=15,
         probe_margin_um=100,
     ):
         self.relocate_amplitudes = relocate_amplitudes
         self.registered = registered
-        self.max_amplitude = max_amplitude
+        self.amplitude_color_cutoff = amplitude_color_cutoff
         self.probe_margin_um = probe_margin_um
 
-    def draw(self, axis, sorting_analysis, unit_id):
+    def draw(self, panel, sorting_analysis, unit_id):
+        axis = panel.subplots()
         in_unit = sorting_analysis.in_unit(unit_id)
         t = sorting_analysis.times_seconds(which=in_unit)
         z = sorting_analysis.z(which=in_unit, registered=self.registered)
@@ -195,7 +216,11 @@ class TimeZScatter(UnitPlot):
             which=in_unit[valid], relocated=self.relocate_amplitudes
         )
         s = axis.scatter(
-            t[valid], z[valid], c=np.minimum(amps, self.max_amplitude), lw=0, s=3
+            t[valid],
+            z[valid],
+            c=np.minimum(amps, self.amplitude_color_cutoff),
+            lw=0,
+            s=3,
         )
         axis.set_xlabel("time (seconds)")
         reg_str = "registered " * self.registered
@@ -213,14 +238,15 @@ class TFeatScatter(UnitPlot):
         feat_name,
         color_by_amplitude=True,
         relocate_amplitudes=False,
-        max_amplitude=15,
+        amplitude_color_cutoff=15,
     ):
         self.relocate_amplitudes = relocate_amplitudes
         self.feat_name = feat_name
-        self.max_amplitude = max_amplitude
+        self.amplitude_color_cutoff = amplitude_color_cutoff
         self.color_by_amplitude = color_by_amplitude
 
-    def draw(self, axis, sorting_analysis, unit_id):
+    def draw(self, panel, sorting_analysis, unit_id):
+        axis = panel.subplots()
         in_unit = sorting_analysis.in_unit(unit_id)
         t = sorting_analysis.times_seconds(which=in_unit)
         feat = sorting_analysis.named_feature(self.feat_name, which=in_unit)
@@ -229,7 +255,7 @@ class TFeatScatter(UnitPlot):
             amps = sorting_analysis.amplitudes(
                 which=in_unit, relocated=self.relocate_amplitudes
             )
-            c = np.minimum(amps, self.max_amplitude)
+            c = np.minimum(amps, self.amplitude_color_cutoff)
         s = axis.scatter(t, feat, c=c, lw=0, s=3)
         axis.set_xlabel("time (seconds)")
         axis.set_ylabel(self.feat_name)
@@ -242,11 +268,12 @@ class TimeAmpScatter(UnitPlot):
     kind = "widescatter"
     width = 2
 
-    def __init__(self, relocate_amplitudes=False, max_amplitude=15):
+    def __init__(self, relocate_amplitudes=False, amplitude_color_cutoff=15):
         self.relocate_amplitudes = relocate_amplitudes
-        self.max_amplitude = max_amplitude
+        self.amplitude_color_cutoff = amplitude_color_cutoff
 
-    def draw(self, axis, sorting_analysis, unit_id):
+    def draw(self, panel, sorting_analysis, unit_id):
+        axis = panel.subplots()
         in_unit = sorting_analysis.in_unit(unit_id)
         t = sorting_analysis.times_seconds(which=in_unit)
         amps = sorting_analysis.amplitudes(
@@ -272,7 +299,7 @@ class WaveformPlot(UnitPlot):
         trough_offset_samples=42,
         spike_length_samples=121,
         count=250,
-        show_radius_um=50,
+        channel_show_radius_um=50,
         relocated=False,
         color="k",
         alpha=0.1,
@@ -285,7 +312,7 @@ class WaveformPlot(UnitPlot):
         template_index=None,
     ):
         self.count = count
-        self.show_radius_um = show_radius_um
+        self.channel_show_radius_um = channel_show_radius_um
         self.relocated = relocated
         self.color = color
         self.trough_offset_samples = trough_offset_samples
@@ -302,8 +329,11 @@ class WaveformPlot(UnitPlot):
     def get_waveforms(self, sorting_analysis, unit_id):
         raise NotImplementedError
 
-    def draw(self, axis, sorting_analysis, unit_id):
-        which, waveforms, max_chan, geom, ci = self.get_waveforms(sorting_analysis, unit_id)
+    def draw(self, panel, sorting_analysis, unit_id):
+        axis = panel.subplots()
+        which, waveforms, max_chan, geom, ci = self.get_waveforms(
+            sorting_analysis, unit_id
+        )
 
         max_abs_amp = None
         show_template = self.show_template
@@ -326,8 +356,10 @@ class WaveformPlot(UnitPlot):
                 new_offset=self.trough_offset_samples,
                 new_length=self.spike_length_samples,
             )
-            max_abs_amp = self.max_abs_template_scale * np.abs(templates).max()
-        show_superres_templates = self.show_superres_templates and self.template_index is None
+            max_abs_amp = self.max_abs_template_scale * np.nanmax(np.abs(templates))
+        show_superres_templates = (
+            self.show_superres_templates and self.template_index is None
+        )
         if show_superres_templates:
             suptemplates = sorting_analysis.template_data.unit_templates(unit_id)
             show_superres_templates = bool(suptemplates.size)
@@ -339,7 +371,7 @@ class WaveformPlot(UnitPlot):
                 new_length=self.spike_length_samples,
             )
             show_superres_templates = suptemplates.shape[0] > 1
-            max_abs_amp = self.max_abs_template_scale * np.abs(suptemplates).max()
+            max_abs_amp = self.max_abs_template_scale * np.nanmax(np.abs(suptemplates))
 
         ls = geomplot(
             waveforms,
@@ -405,6 +437,7 @@ class WaveformPlot(UnitPlot):
         reg_str = "registered " * sorting_analysis.shifting
         axis.set_ylabel(reg_str + "depth (um)")
         axis.set_xticks([])
+        axis.set_yticks([])
 
         if self.legend:
             axis.legend(
@@ -424,7 +457,7 @@ class RawWaveformPlot(WaveformPlot):
             unit_id,
             template_index=self.template_index,
             max_count=self.count,
-            show_radius_um=self.show_radius_um,
+            channel_show_radius_um=self.channel_show_radius_um,
             trough_offset_samples=self.trough_offset_samples,
             spike_length_samples=self.spike_length_samples,
             relocated=self.relocated,
@@ -439,9 +472,164 @@ class TPCAWaveformPlot(WaveformPlot):
             unit_id,
             template_index=self.template_index,
             max_count=self.count,
-            show_radius_um=self.show_radius_um,
+            channel_show_radius_um=self.channel_show_radius_um,
             relocated=self.relocated,
         )
+
+
+# -- merge-focused plots
+
+
+class NearbyCoarseTemplatesPlot(UnitPlot):
+    title = "nearby coarse templates"
+    kind = "neighbors"
+    width = 2
+    height = 2
+
+    def __init__(self, channel_show_radius_um=50, n_neighbors=5, legend=True):
+        self.channel_show_radius_um = channel_show_radius_um
+        self.n_neighbors = n_neighbors
+        self.legend = legend
+
+    def draw(self, panel, sorting_analysis, unit_id):
+        axis = panel.subplots()
+        (
+            neighbor_ids,
+            neighbor_dists,
+            neighbor_coarse_templates,
+        ) = sorting_analysis.nearby_coarse_templates(
+            unit_id, n_neighbors=self.n_neighbors
+        )
+        colors = np.array(cc.glasbey_light)[neighbor_ids % len(cc.glasbey_light)]
+        assert neighbor_ids[0] == unit_id
+        chan = neighbor_coarse_templates[0].ptp(0).argmax()
+        ci = sorting_analysis.show_channel_index(self.channel_show_radius_um)
+        channels = ci[chan]
+        neighbor_coarse_templates = np.pad(
+            neighbor_coarse_templates,
+            [(0, 0), (0, 0), (0, 1)],
+            constant_values=np.nan,
+        )
+        neighbor_coarse_templates = neighbor_coarse_templates[:, :, channels]
+        maxamp = np.abs(neighbor_coarse_templates).max()
+
+        labels = []
+        handles = []
+        for uid, color, template in reversed(
+            list(zip(neighbor_ids, colors, neighbor_coarse_templates))
+        ):
+            lines = geomplot(
+                template[None],
+                max_channels=[chan],
+                channel_index=ci,
+                geom=sorting_analysis.show_geom,
+                ax=axis,
+                show_zero=False,
+                max_abs_amp=maxamp,
+                subar=True,
+                bar_color="k",
+                bar_background="w",
+                zlim="tight",
+                color=color,
+            )
+            labels.append(str(uid))
+            handles.append(lines[0])
+        axis.legend(handles=handles, labels=labels, fancybox=False, loc="upper left")
+        axis.set_xticks([])
+        axis.set_yticks([])
+        axis.set_title(self.title)
+
+
+class CoarseTemplateDistancePlot(UnitPlot):
+    title = "coarse template distance"
+    kind = "neighbors"
+    width = 2
+    height = 1.25
+
+    def __init__(
+        self, channel_show_radius_um=50, n_neighbors=5, dist_vmax=1.0, show_values=True
+    ):
+        self.channel_show_radius_um = channel_show_radius_um
+        self.n_neighbors = n_neighbors
+        self.dist_vmax = dist_vmax
+        self.show_values = show_values
+
+    def draw(self, panel, sorting_analysis, unit_id):
+        axis = panel.subplots()
+        (
+            neighbor_ids,
+            neighbor_dists,
+            neighbor_coarse_templates,
+        ) = sorting_analysis.nearby_coarse_templates(
+            unit_id, n_neighbors=self.n_neighbors
+        )
+        colors = np.array(cc.glasbey_light)[neighbor_ids % len(cc.glasbey_light)]
+        assert neighbor_ids[0] == unit_id
+
+        im = axis.imshow(
+            neighbor_dists,
+            vmin=0,
+            vmax=self.dist_vmax,
+            cmap=plt.cm.RdGy,
+            origin="lower",
+            interpolation="none",
+        )
+        if self.show_values:
+            for (j, i), label in np.ndenumerate(neighbor_dists):
+                axis.text(i, j, f"{label:.2f}", ha="center", va="center")
+        plt.colorbar(im, ax=axis, shrink=0.3)
+        axis.set_xticks(range(len(neighbor_ids)), neighbor_ids)
+        axis.set_yticks(range(len(neighbor_ids)), neighbor_ids)
+        for i, (tx, ty) in enumerate(
+            zip(axis.xaxis.get_ticklabels(), axis.yaxis.get_ticklabels())
+        ):
+            tx.set_color(colors[i])
+            ty.set_color(colors[i])
+        axis.set_title(self.title)
+
+
+class NeighborCCGPlot(UnitPlot):
+    kind = "neighbors"
+    width = 2
+    height = 0.75
+
+    def __init__(self, n_neighbors=3, max_lag=50):
+        self.n_neighbors = n_neighbors
+        self.max_lag = max_lag
+
+    def draw(self, panel, sorting_analysis, unit_id):
+        (
+            neighbor_ids,
+            neighbor_dists,
+            neighbor_coarse_templates,
+        ) = sorting_analysis.nearby_coarse_templates(
+            unit_id, n_neighbors=self.n_neighbors + 1
+        )
+        colors = np.array(cc.glasbey_light)[neighbor_ids % len(cc.glasbey_light)]
+        # assert neighbor_ids[0] == unit_id
+        neighbor_ids = neighbor_ids[1:]
+
+        my_st = sorting_analysis.times_samples(which=sorting_analysis.in_unit(unit_id))
+        neighb_sts = [
+            sorting_analysis.times_samples(which=sorting_analysis.in_unit(nid))
+            for nid in neighbor_ids
+        ]
+
+        axes = panel.subplots(
+            nrows=2, sharey="row", sharex=True, ncols=self.n_neighbors
+        )
+        for j in range(self.n_neighbors):
+            clags, ccg = correlogram(my_st, neighb_sts[j], max_lag=self.max_lag)
+            merged_st = np.concatenate((my_st, neighb_sts[j]))
+            merged_st.sort()
+            alags, acg = correlogram(merged_st, max_lag=self.max_lag)
+
+            bar(axes[0, j], clags, ccg, fill=True, fc=colors[j])  # , ec="k", lw=1)
+            bar(axes[1, j], alags, acg, fill=True, fc=colors[j])  # , ec="k", lw=1)
+            axes[1, j].set_xlabel("lag (samples)")
+            axes[0, j].set_title(f"unit {neighbor_ids[j]}")
+        axes[0, 0].set_ylabel("ccg")
+        axes[1, 0].set_ylabel("merged acg")
 
 
 # -- multi plots
@@ -456,7 +644,7 @@ class SuperresWaveformMultiPlot(UnitMultiPlot):
         trough_offset_samples=42,
         spike_length_samples=121,
         count=250,
-        show_radius_um=50,
+        channel_show_radius_um=50,
         relocated=False,
         color="k",
         alpha=0.1,
@@ -469,7 +657,7 @@ class SuperresWaveformMultiPlot(UnitMultiPlot):
     ):
         self.kind = kind
         self.count = count
-        self.show_radius_um = show_radius_um
+        self.channel_show_radius_um = channel_show_radius_um
         self.relocated = relocated
         self.color = color
         self.trough_offset_samples = trough_offset_samples
@@ -482,7 +670,7 @@ class SuperresWaveformMultiPlot(UnitMultiPlot):
         self.legend = legend
         self.max_abs_template_scale = max_abs_template_scale
 
-    def unit_plots(self, sorting_analysis, unit_id):
+    def plots(self, sorting_analysis, unit_id):
         if self.kind == "raw":
             plot_cls = RawWaveformPlot
         elif self.kind == "tpca":
@@ -492,7 +680,7 @@ class SuperresWaveformMultiPlot(UnitMultiPlot):
         return [
             plot_cls(
                 count=self.count,
-                show_radius_um=self.show_radius_um,
+                channel_show_radius_um=self.channel_show_radius_um,
                 relocated=self.relocated,
                 color=self.color,
                 trough_offset_samples=self.trough_offset_samples,
@@ -524,6 +712,9 @@ default_plots = (
     TimeAmpScatter(relocate_amplitudes=True),
     RawWaveformPlot(),
     TPCAWaveformPlot(relocated=True),
+    NearbyCoarseTemplatesPlot(),
+    CoarseTemplateDistancePlot(),
+    NeighborCCGPlot(),
 )
 
 
@@ -537,47 +728,28 @@ template_assignment_plots = (
 def make_unit_summary(
     sorting_analysis,
     unit_id,
+    channel_show_radius_um=50.0,
+    amplitude_color_cutoff=15.0,
     plots=default_plots,
     max_height=4,
     figsize=(11, 8.5),
     figure=None,
 ):
-    # -- lay out the figure
-    columns = summary_layout(
-        plots, max_height=max_height, sorting_analysis=sorting_analysis, unit_id=unit_id
-    )
-
-    # -- draw the figure
-    width_ratios = [column[0].width for column in columns]
-    if figure is None:
-        figure = plt.figure(figsize=figsize, layout="constrained")
-    subfigures = figure.subfigures(
-        nrows=1, ncols=len(columns), hspace=0.1, width_ratios=width_ratios
-    )
-    all_panels = subfigures.tolist()
-    for column, subfig in zip(columns, subfigures):
-        n_cards = len(column)
-        height_ratios = [card.height for card in column]
-        remaining_height = max_height - sum(height_ratios)
-        if remaining_height > 0:
-            height_ratios.append(remaining_height)
-
-        cardfigs = subfig.subfigures(
-            nrows=n_cards + (remaining_height > 0), ncols=1, height_ratios=height_ratios
+    # notify plots of global params
+    for p in plots:
+        p.notify_global_params(
+            channel_show_radius_um=channel_show_radius_um,
+            amplitude_color_cutoff=amplitude_color_cutoff,
         )
-        cardfigs = np.atleast_1d(cardfigs)
-        all_panels.extend(cardfigs)
 
-        for cardfig, card in zip(cardfigs, column):
-            axes = cardfig.subplots(nrows=len(card.plots), ncols=1)
-            axes = np.atleast_1d(axes)
-            for plot, axis in zip(card.plots, axes):
-                plot.draw(axis, sorting_analysis, unit_id)
-
-    # clean up the panels, or else things get clipped
-    for panel in all_panels:
-        panel.set_facecolor([0, 0, 0, 0])
-        panel.patch.set_facecolor([0, 0, 0, 0])
+    figure = layout.flow_layout(
+        plots,
+        max_height=max_height,
+        figsize=figsize,
+        figure=figure,
+        sorting_analysis=sorting_analysis,
+        unit_id=unit_id,
+    )
 
     return figure
 
@@ -586,6 +758,8 @@ def make_all_summaries(
     sorting_analysis,
     save_folder,
     plots=default_plots,
+    channel_show_radius_um=50.0,
+    amplitude_color_cutoff=15.0,
     max_height=4,
     figsize=(11, 8.5),
     dpi=200,
@@ -593,11 +767,12 @@ def make_all_summaries(
     n_jobs=0,
     show_progress=True,
     overwrite=False,
+    unit_ids=None,
 ):
     save_folder = Path(save_folder)
     save_folder.mkdir(exist_ok=True)
 
-    n_jobs, Executor, context = get_pool(n_jobs)
+    n_jobs, Executor, context = get_pool(n_jobs, cls=CloudpicklePoolExecutor)
     with Executor(
         max_workers=n_jobs,
         mp_context=context,
@@ -605,6 +780,8 @@ def make_all_summaries(
         initargs=(
             sorting_analysis,
             plots,
+            channel_show_radius_um,
+            amplitude_color_cutoff,
             max_height,
             figsize,
             dpi,
@@ -614,6 +791,8 @@ def make_all_summaries(
         ),
     ) as pool:
         jobs = sorting_analysis.unit_ids
+        if unit_ids is not None:
+            jobs = unit_ids
         results = pool.map(_summary_job, jobs)
         if show_progress:
             results = tqdm(
@@ -661,74 +840,6 @@ def trim_waveforms(waveforms, old_offset=42, new_offset=42, new_length=121):
     return waveforms[:, start:end]
 
 
-# -- plotting helpers
-
-
-Card = namedtuple("Card", ["kind", "width", "height", "plots"])
-
-
-def summary_layout(plots, max_height=4, sorting_analysis=None, unit_id=None):
-    all_plots = []
-    for plot in plots:
-        if isinstance(plot, UnitPlot):
-            all_plots.append(plot)
-        elif isinstance(plot, UnitMultiPlot):
-            all_plots.extend(
-                plot.unit_plots(sorting_analysis=sorting_analysis, unit_id=unit_id)
-            )
-        else:
-            assert False
-    plots = all_plots
-
-    plots_by_kind = {}
-    for plot in plots:
-        if plot.kind not in plots_by_kind:
-            plots_by_kind[plot.kind] = []
-        plots_by_kind[plot.kind].append(plot)
-
-    # break plots into groups ("cards") by kind
-    cards = []
-    for kind, plots in plots_by_kind.items():
-        width = max(p.width for p in plots)
-        card_plots = []
-        for plot in plots:
-            if sum(p.height for p in card_plots) + plot.height <= max_height:
-                card_plots.append(plot)
-            else:
-                cards.append(
-                    Card(
-                        plots[0].kind,
-                        width,
-                        sum(p.height for p in card_plots),
-                        card_plots,
-                    )
-                )
-                card_plots = []
-        if card_plots:
-            cards.append(
-                Card(
-                    plots[0].kind, width, sum(p.height for p in card_plots), card_plots
-                )
-            )
-    cards = sorted(cards, key=lambda card: card.width)
-
-    # flow the same-width cards over columns
-    columns = [[]]
-    cur_width = cards[0].width
-    for card in cards:
-        if card.width != cur_width:
-            columns.append([card])
-            cur_width = card.width
-            continue
-
-        if sum(c.height for c in columns[-1]) + card.height <= max_height:
-            columns[-1].append(card)
-        else:
-            columns.append([card])
-
-    return columns
-
-
 # -- parallelism helpers
 
 
@@ -737,6 +848,8 @@ class SummaryJobContext:
         self,
         sorting_analysis,
         plots,
+        channel_show_radius_um,
+        amplitude_color_cutoff,
         max_height,
         figsize,
         dpi,
@@ -752,6 +865,8 @@ class SummaryJobContext:
         self.save_folder = save_folder
         self.image_ext = image_ext
         self.overwrite = overwrite
+        self.channel_show_radius_um = channel_show_radius_um
+        self.amplitude_color_cutoff = amplitude_color_cutoff
 
 
 _summary_job_context = None
@@ -783,6 +898,8 @@ def _summary_job(unit_id):
         _summary_job_context.sorting_analysis,
         unit_id,
         plots=_summary_job_context.plots,
+        channel_show_radius_um=_summary_job_context.channel_show_radius_um,
+        amplitude_color_cutoff=_summary_job_context.amplitude_color_cutoff,
         max_height=_summary_job_context.max_height,
         figsize=_summary_job_context.figsize,
         figure=fig,
@@ -793,3 +910,9 @@ def _summary_job(unit_id):
     fig.savefig(tmp_out, dpi=_summary_job_context.dpi)
     tmp_out.rename(final_out)
     plt.close(fig)
+
+
+def bar(ax, x, y, **kwargs):
+    dx = np.diff(x).min()
+    x0 = np.concatenate((x - dx, x[-1:] + dx))
+    ax.stairs(y, x0, **kwargs)

@@ -1,5 +1,6 @@
 from collections import namedtuple
 from dataclasses import dataclass, field, replace
+from pathlib import Path
 from typing import Optional
 from warnings import warn
 
@@ -38,11 +39,10 @@ class DARTsortSorting:
     channels: np.ndarray
     labels: Optional[np.ndarray] = None
     sampling_frequency: Optional[float] = 30_000.0
-    # entries in this dictionary will also be set as properties
-    extra_features: Optional[dict[str, np.ndarray]] = None
 
-    # automatically set
-    n_spikes: int = field(init=False)
+    # entries in this dictionary will also be set as properties
+    parent_h5_path: Optional[str] = None
+    extra_features: Optional[dict[str, np.ndarray]] = None
 
     def __post_init__(self):
         self.times_samples = np.asarray(self.times_samples, dtype=int)
@@ -50,6 +50,9 @@ class DARTsortSorting:
         if self.labels is None:
             self.labels = np.zeros_like(self.times_samples)
         self.labels = np.asarray(self.labels, dtype=int)
+        self._n_units = None
+        if self.parent_h5_path is not None:
+            self.parent_h5_path = Path(self.parent_h5_path).absolute()
 
         self.channels = np.asarray(self.channels, dtype=int)
         assert self.times_samples.shape == self.channels.shape
@@ -61,8 +64,6 @@ class DARTsortSorting:
                 assert not hasattr(self, k)
                 self.__dict__[k] = v
 
-        self.n_spikes = self.times_samples.size
-
     def to_numpy_sorting(self):
         return NumpySorting.from_times_labels(
             times_list=self.times_samples,
@@ -70,16 +71,68 @@ class DARTsortSorting:
             sampling_frequency=self.sampling_frequency,
         )
 
+    def save(self, sorting_npz):
+        data = dict(
+            times_samples=self.times_samples,
+            channels=self.channels,
+            labels=self.labels,
+            sampling_frequency=self.sampling_frequency,
+        )
+        if self.parent_h5_path:
+            data["parent_h5_path"] = np.array(str(self.parent_h5_path))
+            data["feature_keys"] = np.array(list(self.extra_features.keys()))
+        np.savez(sorting_npz, **data)
+
+    @classmethod
+    def load(cls, sorting_npz):
+        with np.load(sorting_npz) as data:
+            times_samples = data["times_samples"]
+            channels = data["channels"]
+            labels = data["labels"]
+            sampling_frequency = data["sampling_frequency"]
+            parent_h5_path = feature_keys = None
+            if "parent_h5_path" in data:
+                parent_h5_path = str(data["parent_h5_path"])
+                feature_keys = list(map(str, data["feature_keys"]))
+
+        extra_features = None
+        if parent_h5_path:
+            with h5py.File(parent_h5_path, "r") as h5:
+                extra_features = {k: h5[k][()] for k in feature_keys}
+
+        return cls(
+            times_samples=times_samples,
+            channels=channels,
+            labels=labels,
+            sampling_frequency=sampling_frequency,
+            parent_h5_path=parent_h5_path,
+            extra_features=extra_features,
+        )
+
+    @property
+    def n_spikes(self):
+        return self.times_samples.size
+
+    @property
+    def n_units(self):
+        if self._n_units is None:
+            u = np.unique(self.labels)
+            self._n_units = (u >= 0).sum()
+        return self._n_units
+
     def __str__(self):
         name = self.__class__.__name__
-        nspikes = self.times_samples.size
-        nunits = (np.unique(self.labels) >= 0).sum()
-        unit_str = f"{nunits} unit" + "s" * (nunits > 1)
+        ns = self.n_spikes
+        nu = self.n_units
+        unit_str = f"{nu} unit" + "s" * (nu > 1)
         feat_str = ""
         if self.extra_features:
             feat_str = ", ".join(self.extra_features.keys())
             feat_str = f" extra features: {feat_str}."
-        return f"{name}: {nspikes} spikes, {unit_str}.{feat_str}"
+        h5_str = ""
+        if self.parent_h5_path:
+            h5_str = f" from parent h5 file {self.parent_h5_path}."
+        return f"{name}: {ns} spikes, {unit_str}.{feat_str}{h5_str}"
 
     def __repr__(self):
         return str(self)
@@ -128,6 +181,7 @@ class DARTsortSorting:
             channels=channels,
             labels=labels,
             sampling_frequency=sampling_frequency,
+            parent_h5_path=str(peeling_hdf5_filename),
             extra_features=extra_features,
         )
 
