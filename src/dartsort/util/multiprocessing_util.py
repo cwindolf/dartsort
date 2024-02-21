@@ -1,11 +1,13 @@
 import multiprocessing
 from concurrent.futures import ProcessPoolExecutor
 from multiprocessing import get_context
+import math
 
 # TODO: torch.multiprocessing?
 
 try:
     import cloudpickle
+
     have_cloudpickle = True
 except ImportError:
     pass
@@ -58,16 +60,30 @@ class MockQueue:
         self.get = lambda: self.q.pop(0)
 
 
-def apply_cloudpickle(fn, /, *args, **kwargs):
+def cloudpickle_run(fn, args):
     fn = cloudpickle.loads(fn)
+    args, kwargs = cloudpickle.loads(args)
+    # return cloudpickle.dumps(fn(*args, **kwargs))
     return fn(*args, **kwargs)
+
+
+# def uncloudpickle(future):
+#     res = future.result()
+#     future._result = cloudpickle.loads(res)
 
 
 class CloudpicklePoolExecutor(ProcessPoolExecutor):
     def submit(self, fn, /, *args, **kwargs):
-        return super().submit(
-            apply_cloudpickle, cloudpickle.dumps(fn), *args, **kwargs
-        )
+        args = cloudpickle.dumps((args, kwargs))
+        future = super().submit(cloudpickle_run, cloudpickle.dumps(fn), args)
+        # future.add_done_callback(uncloudpickle_callback)
+        return future
+
+
+def rank_init(queue):
+    print(f"rank init waiting")
+    rank_init.rank = queue.get()
+    print(f"rank init got {rank_init.rank=}")
 
 
 def get_pool(
@@ -75,22 +91,34 @@ def get_pool(
     context="spawn",
     cls=ProcessPoolExecutor,
     with_rank_queue=False,
+    n_tasks=None,
+    max_tasks_per_child=None,
 ):
     if n_jobs == -1:
         n_jobs = multiprocessing.cpu_count()
     do_parallel = n_jobs >= 1
     n_jobs = max(1, n_jobs)
+
     if cls == CloudpicklePoolExecutor and not have_cloudpickle:
         cls = ProcessPoolExecutor
+
     Executor = cls if do_parallel else MockPoolExecutor
     context = get_context(context)
+
     if with_rank_queue:
         if do_parallel:
             manager = context.Manager()
             rank_queue = manager.Queue()
         else:
             rank_queue = MockQueue()
-        for rank in range(n_jobs):
-            rank_queue.put(rank)
+
+        n_repeats = 1
+        if max_tasks_per_child is not None:
+            n_repeats = n_tasks // max_tasks_per_child + 1
+        for _ in range(n_repeats):
+            for rank in range(n_jobs):
+                rank_queue.put(rank)
+
         return n_jobs, Executor, context, rank_queue
+
     return n_jobs, Executor, context
