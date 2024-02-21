@@ -4,6 +4,10 @@ from spikeinterface.core.core_tools import define_function_from_class
 from spikeinterface.preprocessing.basepreprocessor import (
     BasePreprocessor, BasePreprocessorSegment)
 
+from ..templates import TemplateData
+from .analysis import DARTsortAnalysis
+from .data_util import DARTsortSorting
+
 
 class HybridRecording(BasePreprocessor):
     name = "hybrid_recording"
@@ -16,6 +20,7 @@ class HybridRecording(BasePreprocessor):
         times_samples=None,
         labels=None,
         template_indices=None,
+        unit_ids=None,
         trough_offset_samples=42,
         spike_train_kwargs=None,
         random_seed=0,
@@ -26,6 +31,9 @@ class HybridRecording(BasePreprocessor):
         assert templates.shape[2] == recording.get_num_channels()
         assert 0 <= trough_offset_samples < templates.shape[1]
         assert recording.get_num_segments() == 1
+
+        if unit_ids is None:
+            unit_ids = np.arange(len(templates))
 
         if times_samples is None:
             assert labels is None and template_indices is None
@@ -41,13 +49,15 @@ class HybridRecording(BasePreprocessor):
             )
         else:
             assert labels is not None
+            assert unit_ids is not None
             times_samples = np.asarray(times_samples)
             labels = np.asarray(labels)
+            unit_ids = np.asarray(unit_ids)
 
         assert times_samples.ndim == 1
         assert np.all(np.diff(times_samples) >= 0)
         if template_indices is None:
-            template_indices = labels
+            template_indices = unit_ids[labels]
         else:
             assert template_indices.max() < templates.shape[0]
         assert times_samples.shape == labels.shape == template_indices.shape
@@ -56,6 +66,7 @@ class HybridRecording(BasePreprocessor):
         self.labels = labels
         self.template_indices = template_indices
         self.templates = templates
+        self.unit_ids = unit_ids
 
         dtype_ = dtype
         if dtype_ is None:
@@ -78,12 +89,39 @@ class HybridRecording(BasePreprocessor):
             times_samples=times_samples,
             labels=labels,
             template_indices=template_indices,
+            unit_ids=unit_ids,
             templates=templates,
             trough_offset_samples=trough_offset_samples,
             spike_train_kwargs=spike_train_kwargs,
             random_seed=random_seed,
             dtype=dtype_,
         )
+
+        def to_dartsort_sorting(self):
+            max_channels = self.templates.ptp(1).argmax(1)
+            max_channels = max_channels[self.template_indices]
+            return DARTsortSorting(
+                self.times_samples,
+                max_channels,
+                self.labels,
+                self.sampling_frequency,
+            )
+
+        def gt_template_data(self):
+            return TemplateData(
+                templates=self.templates,
+                unit_ids=self.unit_ids,
+                spike_counts=np.full(unit_ids.shape, np.inf),
+                trough_offset_samples=self.trough_offset_samples,
+                spike_length_samples=self.templates.shape[1],
+            )
+
+        def to_dartsort_analysis(self):
+            return DARTsortAnalysis(
+                sorting=self.to_dartsort_sorting(),
+                recording=self,
+                template_data=self.gt_template_data(),
+            )
 
 
 class HybridRecordingSegment(BasePreprocessorSegment):
@@ -137,10 +175,14 @@ class HybridRecordingSegment(BasePreprocessorSegment):
 
         # get spike times_samples/template_indices in this part, offset by start frame
         ix_low = np.searchsorted(
-            self.times_samples, start_frame - self.post_trough_samples, side="left"
+            self.times_samples,
+            start_frame - self.post_trough_samples,
+            side="left",
         )
         ix_high = np.searchsorted(
-            self.times_samples, end_frame + self.trough_offset_samples, side="right"
+            self.times_samples,
+            end_frame + self.trough_offset_samples,
+            side="right",
         )
         times_samples = self.times_samples[ix_low:ix_high] - start_frame
         template_indices = self.template_indices[ix_low:ix_high]
@@ -149,12 +191,14 @@ class HybridRecordingSegment(BasePreprocessorSegment):
         for t, c in zip(times_samples, template_indices):
             traces_pad[t + self.time_domain_offset] += self.templates[c]
 
-        traces = traces_pad[self.margin_left : traces_pad.shape[0] - self.margin_right]
+        traces = traces_pad[
+            self.margin_left : traces_pad.shape[0] - self.margin_right
+        ]
         return traces
 
 
 hybrid_recording = define_function_from_class(
-    source_class=HybridRecording, name="hybrid_recording"
+    source_class=HybridRecording, name=HybridRecording.name
 )
 
 
@@ -223,17 +267,23 @@ def refractory_poisson_spike_train(
     estimated_spike_count = int((duration_s / mean_interval_s) * overestimation)
 
     # generate interspike intervals
-    intervals = rg.exponential(scale=mean_interval_s, size=estimated_spike_count)
+    intervals = rg.exponential(
+        scale=mean_interval_s, size=estimated_spike_count
+    )
     intervals += refractory_s
     intervals_samples = np.floor(intervals * sampling_frequency).astype(int)
 
     # determine spike times and restrict to ones which we can actually
     # add into / read from a recording with this duration and trough offset
     spike_samples = np.cumsum(intervals_samples)
-    max_spike_time = duration_samples - (spike_length_samples - trough_offset_samples)
+    max_spike_time = duration_samples - (
+        spike_length_samples - trough_offset_samples
+    )
     # check that we overestimated enough
     assert spike_samples.max() > max_spike_time
-    valid = spike_samples == spike_samples.clip(trough_offset_samples, max_spike_time)
+    valid = spike_samples == spike_samples.clip(
+        trough_offset_samples, max_spike_time
+    )
     spike_samples = spike_samples[valid]
     assert spike_samples.size
 

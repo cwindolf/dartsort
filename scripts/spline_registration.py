@@ -7,7 +7,6 @@ import hdbscan
 import os 
 
 from dredge import dredge_ap, motion_util as mu
-
 import spikeinterface.core as sc
 import spikeinterface.full as si
 
@@ -83,7 +82,7 @@ recording = sc.read_binary(
 recording.set_dummy_probe_from_locations(
     geom, shape_params=dict(radius=10)
 )
-    
+
 z = localization_results[:, 2]
 wh = (z > geom[:,1].min() - 100) & (z < geom[:,1].max() + 100)
 a = maxptps[wh]
@@ -91,6 +90,7 @@ z = z[wh]
 t = times_seconds[wh]
     
 me, extra = dredge_ap.register(a, z, t, max_disp_um=100, win_scale_um=300, win_step_um=200, rigid=False, mincorr=0.6)
+
 z_reg = me.correct_s(times_seconds, localization_results[:, 2])
 displacement_rigid = me.displacement
 
@@ -111,7 +111,7 @@ if savefigs:
 
 idx = np.flatnonzero(maxptps>threshold_ptp_spline)
 
-sorting_dpc = cluster(
+sorting = cluster(
     sub_h5,
     recording,
     clustering_config=clustering_config_uhd, 
@@ -163,5 +163,5 @@ if savefigs:
     plt.savefig(Path(output_dir) / "final_registered_raster.png")
     plt.close()
 
-# np.save("low_freq_disp_map.npy", dispmap + displacement_rigid[None, :])
 np.save("high_freq_correction.npy", spline_displacement)
+np.save("spline_registered_z.npy", z_reg_spline)
