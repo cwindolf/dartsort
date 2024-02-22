@@ -2,7 +2,8 @@ import numpy as np
 from tqdm.auto import tqdm, trange
 
 from ..config import default_split_merge_config
-from . import merge, split, forward_backward
+from . import merge, split
+from .forward_backward import forward_backward
 
 
 
