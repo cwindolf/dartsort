@@ -66,7 +66,11 @@ def cluster_chunk(
 
     if clustering_config.cluster_strategy == "closest_registered_channels":
         labels[in_chunk] = cluster_util.closest_registered_channels(
-            times_s[in_chunk], xyza[in_chunk, 0], xyza[in_chunk, 2], geom, motion_est
+            times_s[in_chunk],
+            xyza[in_chunk, 0],
+            xyza[in_chunk, 2],
+            geom,
+            motion_est,
         )
     elif clustering_config.cluster_strategy == "grid_snap":
         labels[in_chunk] = cluster_util.grid_snap(
@@ -120,7 +124,7 @@ def cluster_chunk(
             workers=4,
             return_extra=clustering_config.attach_density_feature,
         )
-        
+
         if clustering_config.attach_density_feature:
             labels[in_chunk] = res["labels"]
             extra_features["density_ratio"] = np.full(labels.size, np.nan)
@@ -137,7 +141,7 @@ def cluster_chunk(
         parent_h5_path=peeling_hdf5_filename,
         extra_features=extra_features,
     )
-    
+
     if depth_order:
         sorting = cluster_util.reorder_by_depth(sorting, motion_est=motion_est)
 
@@ -155,7 +159,9 @@ def cluster_chunks(
     Returns a list of sortings. Each sorting labels all of the spikes in the
     recording with -1s outside the chunk, to allow for overlaps.
     """
-    chunk_samples = recording.sampling_frequency * clustering_config.chunk_size_s
+    chunk_samples = (
+        recording.sampling_frequency * clustering_config.chunk_size_s
+    )
 
     # determine number of chunks
     # if we're not ensembling, that's 1 chunk.
@@ -172,9 +178,9 @@ def cluster_chunks(
 
     # evenly divide the recording into chunks
     assert recording.get_num_segments() == 1
-    start_time_s, end_time_s = recording._recording_segments[0].sample_index_to_time(
-        np.array([0, recording.get_num_samples() - 1])
-    )
+    start_time_s, end_time_s = recording._recording_segments[
+        0
+    ].sample_index_to_time(np.array([0, recording.get_num_samples() - 1]))
     chunk_times_s = np.linspace(start_time_s, end_time_s, num=n_chunks + 1)
     chunk_time_ranges_s = list(zip(chunk_times_s[:-1], chunk_times_s[1:]))
 
@@ -213,7 +219,12 @@ def ensemble_chunks(
     -------
     sorting  : DARTsortSorting
     """
-    assert clustering_config.ensemble_strategy in ("forward_backward", "split_merge")
+    assert clustering_config.ensemble_strategy in (
+        "forward_backward",
+        "split_merge",
+        "none",
+        None,
+    )
     if computation_config is None:
         computation_config = job_util.get_global_computation_config()
 
