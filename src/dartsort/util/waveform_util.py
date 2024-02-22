@@ -9,7 +9,7 @@ Ideally they should all be both.
 import numpy as np
 import torch
 import torch.nn.functional as F
-from scipy.spatial.distance import pdist, squareform
+from scipy.spatial.distance import pdist, cdist, squareform
 
 # -- geometry utils
 
@@ -39,6 +39,44 @@ def get_pitch(geom):
     return pitch
 
 
+def fill_geom_holes(geom):
+    pitch = get_pitch(geom)
+    pitches_pad = int(np.ceil(geom[:, 1].ptp() / pitch))
+
+    # we have to be careful about floating point error here
+    # two sites may be different due to floating point error
+    # we know they are the same if their distance is smaller than:
+    min_distance = pdist(geom, metric="sqeuclidean").min() / 2
+
+    # find all shifted site positions
+    # TODO make this not quadratic
+    unique_shifted_positions = list(geom)
+    is_original = [True] * len(geom)
+    for shift in range(-pitches_pad, pitches_pad + 1):
+        shifted_geom = geom + [0, pitch * shift]
+        sz = shifted_geom[:, 1]
+        szinside = sz == sz.clip(
+            geom[:, 1].min() - min_distance,
+            geom[:, 1].max() + min_distance,
+        )
+        shifted_geom = shifted_geom[szinside]
+        dists = cdist(shifted_geom, unique_shifted_positions, metric="sqeuclidean")
+        for site, dists in zip(shifted_geom, dists):
+            if np.all(dists > min_distance):
+                unique_shifted_positions.append(site)
+                is_original.append(False)
+    unique_shifted_positions = np.array(unique_shifted_positions)
+    is_original = np.array(is_original)
+
+    # order by depth first, then horizontal position (unique goes the other way)
+    order = np.lexsort(unique_shifted_positions.T)
+    filled_geom = unique_shifted_positions[order]
+    is_original = is_original[order]
+    assert np.isclose(get_pitch(filled_geom), pitch)
+
+    return filled_geom, is_original
+
+
 # -- channel index creation
 
 
@@ -48,6 +86,7 @@ def make_channel_index(
     p=2,
     pad_val=None,
     to_torch=False,
+    fill_holes=False,
 ):
     """
     Compute an array whose whose ith row contains the ordered
@@ -56,6 +95,11 @@ def make_channel_index(
     C = geom.shape[0]
     if pad_val is None:
         pad_val = C
+
+    if fill_holes:
+        return make_filled_channel_index(
+            geom, radius, p=p, pad_val=pad_val, to_torch=to_torch
+        )
 
     # get neighbors matrix
     neighbors = squareform(pdist(geom, metric="minkowski", p=p)) <= radius
@@ -80,6 +124,31 @@ def make_channel_index(
         channel_index = torch.LongTensor(channel_index)
 
     return channel_index
+
+
+def make_filled_channel_index(geom, radius, p=2, pad_val=None, to_torch=False):
+    C = geom.shape[0]
+    if pad_val is None:
+        pad_val = C
+
+    filled_geom, is_original = fill_geom_holes(geom)
+    neighbors = cdist(geom, filled_geom, metric="minkowski", p=p) <= radius
+    n_neighbors = np.max(np.sum(neighbors, 0))
+    channel_index = np.full((C, n_neighbors), pad_val, dtype=int)
+
+    # fill every row in the matrix (one per channel)
+    for c in range(C):
+        # indices of c's neighbors
+        ch_idx = np.flatnonzero(neighbors[c])
+        ch_valid = is_original[ch_idx]
+        ch_idx[~ch_valid] = pad_val
+        channel_index[c, : ch_idx.shape[0]] = ch_idx
+
+    if to_torch:
+        channel_index = torch.LongTensor(channel_index)
+
+    return channel_index
+    
 
 
 def make_contiguous_channel_index(n_channels, n_neighbors=40):
@@ -109,7 +178,10 @@ def make_pitch_channel_index(geom, n_neighbor_rows=1, pitch=None):
         channel_index[c, : my_neighbors.size] = my_neighbors
     return channel_index
 
-def make_pitch_channel_index_no_nans_for_plotting(geom, n_neighbor_rows=1, pitch=None):
+
+def make_pitch_channel_index_no_nans_for_plotting(
+    geom, n_neighbor_rows=1, pitch=None
+):
     """
     Channel neighborhoods which are whole pitches
     This function will select all the n_neighbor_rows inside the probe so that wfs are not nans
@@ -125,19 +197,20 @@ def make_pitch_channel_index_no_nans_for_plotting(geom, n_neighbor_rows=1, pitch
     for c in range(n_channels):
         my_neighbors = np.flatnonzero(neighbors[c])
         channel_index[c, : my_neighbors.size] = my_neighbors
-        if channel_index[c].max()==n_channels:
-            if c>n_channels//2:
-                channel_index[c]=np.arange(n_channels-channel_index.shape[1], n_channels)
+        if channel_index[c].max() == n_channels:
+            if c > n_channels // 2:
+                channel_index[c] = np.arange(
+                    n_channels - channel_index.shape[1], n_channels
+                )
             else:
-                channel_index[c]=np.arange(0, channel_index.shape[1])
+                channel_index[c] = np.arange(0, channel_index.shape[1])
     return channel_index
 
 
 def full_channel_index(n_channels):
     """Everyone is everone's neighbor"""
     return (
-        np.arange(n_channels)[None, :]
-        * np.ones(n_channels, dtype=int)[:, None]
+        np.arange(n_channels)[None, :] * np.ones(n_channels, dtype=int)[:, None]
     )
 
 
@@ -172,7 +245,9 @@ def set_channels_in_probe(
     waveforms_full_dest[channels_in_probe] = waveforms_in_probe_src
     return waveforms_full_dest.permute(0, 2, 1)
 
+
 # -- channel subsetting
+
 
 def channel_subset_by_radius(
     waveforms,
@@ -283,7 +358,7 @@ def mask_to_relative(channel_index_mask):
             nz = np.flatnonzero(mask)
             nnz = nz.size
         if nnz:
-            rel_sub_channel_index[i, : nnz] = nz
+            rel_sub_channel_index[i, :nnz] = nz
 
     return rel_sub_channel_index
 
@@ -313,7 +388,7 @@ def mask_to_channel_index(channel_index, channel_index_mask):
             which = np.flatnonzero(mask)
             nnz = which.size
         if nnz:
-            new_channel_index[i, : nnz] = channel_index[i][which]
+            new_channel_index[i, :nnz] = channel_index[i][which]
     return new_channel_index
 
 
