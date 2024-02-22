@@ -6,6 +6,7 @@ from the config objects?
 """
 
 import importlib.util
+from pathlib import Path
 
 import click
 import spikeinterface.full as si
@@ -14,12 +15,85 @@ from .main import dartsort, default_dartsort_config
 from .vis.vismain import visualize_all_sorting_steps
 
 
+# -- entry points
+
+
+@click.command()
+@click.argument("binary_folder")
+@click.argument("output_directory")
+@click.option("--config_path", type=str, default=None)
+@click.option("--take_subtraction_from", type=str, default=None)
+@click.option("--n_jobs_gpu", default=None, type=int)
+@click.option("--n_jobs_cpu", default=None, type=int)
+@click.option("--overwrite", default=False, flag_value=True, is_flag=True)
+@click.option("--no_show_progress", default=False, flag_value=True, is_flag=True)
+@click.option("--device", type=str, default=None)
+def dartsort_binary_folder_config_py(
+    binary_folder,
+    output_directory,
+    config_path=None,
+    take_subtraction_from=None,
+    n_jobs_gpu=None,
+    n_jobs_cpu=None,
+    overwrite=False,
+    no_show_progress=False,
+    device=None,
+):
+    run_from_binary_folder_and_config_py(
+        binary_folder,
+        output_directory,
+        config_path=config_path,
+        take_subtraction_from=take_subtraction_from,
+        n_jobs_gpu=n_jobs_gpu,
+        n_jobs_cpu=n_jobs_cpu,
+        overwrite=overwrite,
+        show_progress=not no_show_progress,
+        device=device,
+    )
+
+
+@click.command()
+@click.argument("binary_folder")
+@click.argument("dartsort_dir")
+@click.argument("visualizations_dir")
+@click.option("--n_jobs_gpu", default=0)
+@click.option("--n_jobs_cpu", default=0)
+@click.option("--overwrite", default=False, flag_value=True, is_flag=True)
+@click.option("--no_scatterplots", default=False, flag_value=True, is_flag=True)
+@click.option("--no_summaries", default=False, flag_value=True, is_flag=True)
+def dartvis_binary_folder_all(
+    binary_folder,
+    dartsort_dir,
+    visualizations_dir,
+    n_jobs_gpu=0,
+    n_jobs_cpu=0,
+    overwrite=False,
+    no_scatterplots=False,
+    no_summaries=False,
+):
+    recording = si.read_binary_folder(binary_folder)
+    visualize_all_sorting_steps(
+        recording,
+        dartsort_dir,
+        visualizations_dir,
+        make_scatterplots=not no_scatterplots,
+        make_unit_summaries=not no_summaries,
+        n_jobs=n_jobs_gpu,
+        n_jobs_templates=n_jobs_cpu,
+        overwrite=overwrite,
+    )
+
+
+# -- scripting utils
+
+
 def run_from_binary_folder_and_config_py(
     binary_folder,
     output_directory,
     config_path=None,
-    n_jobs=0,
-    n_jobs_cluster=0,
+    take_subtraction_from=None,
+    n_jobs_gpu=None,
+    n_jobs_cpu=None,
     overwrite=False,
     show_progress=True,
     device=None,
@@ -38,77 +112,46 @@ def run_from_binary_folder_and_config_py(
 
     recording = si.read_binary_folder(binary_folder)
 
+    if take_subtraction_from is not None:
+        symlink_subtraction_and_motion(
+            take_subtraction_from,
+            output_directory,
+        )
+
     return dartsort(
         recording,
         output_directory,
         cfg=cfg,
         motion_est=None,
-        n_jobs=n_jobs,
-        n_jobs_cluster=n_jobs_cluster,
+        n_jobs_gpu=n_jobs_gpu,
+        n_jobs_cpu=n_jobs_cpu,
         overwrite=overwrite,
         show_progress=show_progress,
         device=device,
     )
 
 
-@click.command()
-@click.argument("binary_folder")
-@click.argument("output_directory")
-@click.option("--config_path", type=str, default=None)
-@click.option("--n_jobs", default=0)
-@click.option("--n_jobs_cluster", default=0)
-@click.option("--overwrite", default=False, flag_value=True, is_flag=True)
-@click.option("--no_show_progress", default=False, flag_value=True, is_flag=True)
-@click.option("--device", type=str, default=None)
-def dartsort_binary_folder_config_py(
-    binary_folder,
-    output_directory,
-    config_path=None,
-    n_jobs=0,
-    n_jobs_cluster=0,
-    overwrite=False,
-    no_show_progress=False,
-    device=None,
-):
-    run_from_binary_folder_and_config_py(
-        binary_folder,
-        output_directory,
-        config_path=config_path,
-        n_jobs=n_jobs,
-        n_jobs_cluster=n_jobs_cluster,
-        overwrite=overwrite,
-        show_progress=not no_show_progress,
-        device=device,
-    )
+def symlink_subtraction_and_motion(input_dir, output_dir):
+    input_dir = Path(input_dir)
+    output_dir = Path(output_dir)
+    output_dir.mkdir(exist_ok=True)
 
+    sub_h5 = input_dir / "subtraction.h5"
+    if not sub_h5.exists():
+        print(f"Can't symlink {sub_h5}")
+        return
 
-@click.command()
-@click.argument("binary_folder")
-@click.argument("dartsort_dir")
-@click.argument("visualizations_dir")
-@click.option("--n_jobs", default=0)
-@click.option("--n_jobs_templates", default=0)
-@click.option("--overwrite", default=False, flag_value=True, is_flag=True)
-@click.option("--no_scatterplots", default=False, flag_value=True, is_flag=True)
-@click.option("--no_summaries", default=False, flag_value=True, is_flag=True)
-def dartvis_binary_folder_all(
-    binary_folder,
-    dartsort_dir,
-    visualizations_dir,
-    n_jobs=0,
-    n_jobs_templates=0,
-    overwrite=False,
-    no_scatterplots=False,
-    no_summaries=False,
-):
-    recording = si.read_binary_folder(binary_folder)
-    visualize_all_sorting_steps(
-        recording,
-        dartsort_dir,
-        visualizations_dir,
-        make_scatterplots=not no_scatterplots,
-        make_unit_summaries=not no_summaries,
-        n_jobs=n_jobs,
-        n_jobs_templates=n_jobs_templates,
-        overwrite=overwrite,
-    )
+    targ_sub_h5 = output_dir / "subtraction.h5"
+    if not targ_sub_h5.exists():
+        targ_sub_h5.symlink_to(sub_h5)
+
+    sub_models = input_dir / "subtraction_models"
+    targ_sub_models = output_dir / "subtraction_models"
+    if not targ_sub_models.exists():
+        targ_sub_models.symlink_to(sub_models, target_is_directory=True)
+
+    motion_est_pkl = input_dir / "motion_est.pkl"
+    if motion_est_pkl.exists():
+        targ_me_pkl = output_dir / "motion_est.pkl"
+        if not targ_me_pkl.exists():
+            targ_me_pkl.symlink_to(motion_est_pkl)
