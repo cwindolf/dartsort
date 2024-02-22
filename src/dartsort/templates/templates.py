@@ -105,6 +105,7 @@ class TemplateData:
         save_npz_name="template_data.npz",
         localizations_dataset_name="point_source_localizations",
         n_jobs=0,
+        units_per_job=8,
         device=None,
         trough_offset_samples=42,
         spike_length_samples=121,
@@ -155,6 +156,7 @@ class TemplateData:
             denoising_fit_radius=template_config.denoising_fit_radius,
             denoising_snr_threshold=template_config.denoising_snr_threshold,
             device=device,
+            units_per_job=units_per_job,
         )
         if template_config.registered_templates and motion_est is not None:
             kwargs["registered_geom"] = drift_util.registered_geometry(
@@ -201,7 +203,7 @@ class TemplateData:
 
         # count spikes in each template
         spike_counts = np.zeros_like(unit_ids)
-        ix, counts = np.unique(sorting.labels, return_counts=True)
+        ix, counts = np.unique(superres_sort.labels, return_counts=True)
         spike_counts[ix[ix >= 0]] = counts[ix >= 0]
 
         # main!

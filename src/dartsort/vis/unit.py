@@ -7,38 +7,29 @@ and subfigure mazes.
 Relies on the DARTsortAnalysis object of utils/analysis.py to do most of
 the data work so that this file can focus on plotting (sort of MVC).
 """
-from collections import namedtuple
-from pathlib import Path
 
-from tqdm.auto import tqdm
+from pathlib import Path
 
 import colorcet as cc
 import matplotlib.pyplot as plt
 import numpy as np
 from matplotlib.legend_handler import HandlerTuple
+from tqdm.auto import tqdm
 
-from ..util.multiprocessing_util import get_pool, CloudpicklePoolExecutor
+from ..util.multiprocessing_util import CloudpicklePoolExecutor, get_pool
+from . import layout
 from .waveforms import geomplot
 
 # -- main class. see fn make_unit_summary below to make lots of UnitPlots.
 
 
-class UnitPlot:
-    kind: str
-    width = 1
-    height = 1
-
+class UnitPlot(layout.BasePlot):
     def draw(self, panel, sorting_analysis, unit_id):
         raise NotImplementedError
 
-    def notify_global_params(self, **params):
-        for k, v in params.items():
-            if hasattr(self, k):
-                setattr(self, k, v)
 
-
-class UnitMultiPlot:
-    def unit_plots(self, sorting_analysis, unit_id):
+class UnitMultiPlot(layout.BaseMultiPlot):
+    def plots(self, sorting_analysis, unit_id):
         # return [UnitPlot()]
         raise NotImplementedError
 
@@ -58,7 +49,6 @@ class TextInfo(UnitPlot):
             sorting_analysis.unit_ids == unit_id
         ].sum()
         msg += f"n spikes: {nspikes}\n"
-        axis.text(0, 0, msg, fontsize=6.5)
 
         temps = sorting_analysis.template_data.unit_templates(unit_id)
         if temps.size:
@@ -67,6 +57,7 @@ class TextInfo(UnitPlot):
         else:
             msg += "no template (too few spikes)"
 
+        axis.text(0, 0, msg, fontsize=6.5)
 
 # -- small summary plots
 
@@ -623,8 +614,6 @@ class NeighborCCGPlot(UnitPlot):
             sorting_analysis.times_samples(which=sorting_analysis.in_unit(nid))
             for nid in neighbor_ids
         ]
-        ccgs = [correlogram(my_st, nst, max_lag=self.max_lag) for nst in neighb_sts]
-        acgs = [correlogram(my_st, nst, max_lag=self.max_lag) for nst in neighb_sts]
 
         axes = panel.subplots(
             nrows=2, sharey="row", sharex=True, ncols=self.n_neighbors
@@ -681,7 +670,7 @@ class SuperresWaveformMultiPlot(UnitMultiPlot):
         self.legend = legend
         self.max_abs_template_scale = max_abs_template_scale
 
-    def unit_plots(self, sorting_analysis, unit_id):
+    def plots(self, sorting_analysis, unit_id):
         if self.kind == "raw":
             plot_cls = RawWaveformPlot
         elif self.kind == "tpca":
@@ -753,43 +742,14 @@ def make_unit_summary(
             amplitude_color_cutoff=amplitude_color_cutoff,
         )
 
-    # -- lay out the figure
-    columns = summary_layout(
-        plots, max_height=max_height, sorting_analysis=sorting_analysis, unit_id=unit_id
+    figure = layout.flow_layout(
+        plots,
+        max_height=max_height,
+        figsize=figsize,
+        figure=figure,
+        sorting_analysis=sorting_analysis,
+        unit_id=unit_id,
     )
-
-    # -- draw the figure
-    width_ratios = [column[0].width for column in columns]
-    if figure is None:
-        figure = plt.figure(figsize=figsize, layout="constrained")
-    subfigures = figure.subfigures(
-        nrows=1, ncols=len(columns), hspace=0.1, width_ratios=width_ratios
-    )
-    all_panels = subfigures.tolist()
-    for column, subfig in zip(columns, subfigures):
-        n_cards = len(column)
-        height_ratios = [card.height for card in column]
-        remaining_height = max_height - sum(height_ratios)
-        if remaining_height > 0:
-            height_ratios.append(remaining_height)
-
-        cardfigs = subfig.subfigures(
-            nrows=n_cards + (remaining_height > 0), ncols=1, height_ratios=height_ratios
-        )
-        cardfigs = np.atleast_1d(cardfigs)
-        all_panels.extend(cardfigs)
-
-        for cardfig, card in zip(cardfigs, column):
-            panels = cardfig.subfigures(nrows=len(card.plots), ncols=1)
-            panels = np.atleast_1d(panels)
-            for plot, panel in zip(card.plots, panels):
-                plot.draw(panel, sorting_analysis, unit_id)
-            all_panels.extend(panels)
-
-    # clean up the panels, or else things get clipped
-    for panel in all_panels:
-        panel.set_facecolor([0, 0, 0, 0])
-        panel.patch.set_facecolor([0, 0, 0, 0])
 
     return figure
 
@@ -878,74 +838,6 @@ def trim_waveforms(waveforms, old_offset=42, new_offset=42, new_length=121):
     start = old_offset - new_offset
     end = start + new_length
     return waveforms[:, start:end]
-
-
-# -- plotting helpers
-
-
-Card = namedtuple("Card", ["kind", "width", "height", "plots"])
-
-
-def summary_layout(plots, max_height=4, sorting_analysis=None, unit_id=None):
-    all_plots = []
-    for plot in plots:
-        if isinstance(plot, UnitPlot):
-            all_plots.append(plot)
-        elif isinstance(plot, UnitMultiPlot):
-            all_plots.extend(
-                plot.unit_plots(sorting_analysis=sorting_analysis, unit_id=unit_id)
-            )
-        else:
-            assert False
-    plots = all_plots
-
-    plots_by_kind = {}
-    for plot in plots:
-        if plot.kind not in plots_by_kind:
-            plots_by_kind[plot.kind] = []
-        plots_by_kind[plot.kind].append(plot)
-
-    # break plots into groups ("cards") by kind
-    cards = []
-    for kind, plots in plots_by_kind.items():
-        width = max(p.width for p in plots)
-        card_plots = []
-        for plot in plots:
-            if sum(p.height for p in card_plots) + plot.height <= max_height:
-                card_plots.append(plot)
-            else:
-                cards.append(
-                    Card(
-                        plots[0].kind,
-                        width,
-                        sum(p.height for p in card_plots),
-                        card_plots,
-                    )
-                )
-                card_plots = []
-        if card_plots:
-            cards.append(
-                Card(
-                    plots[0].kind, width, sum(p.height for p in card_plots), card_plots
-                )
-            )
-    cards = sorted(cards, key=lambda card: card.width)
-
-    # flow the same-width cards over columns
-    columns = [[]]
-    cur_width = cards[0].width
-    for card in cards:
-        if card.width != cur_width:
-            columns.append([card])
-            cur_width = card.width
-            continue
-
-        if sum(c.height for c in columns[-1]) + card.height <= max_height:
-            columns[-1].append(card)
-        else:
-            columns.append([card])
-
-    return columns
 
 
 # -- parallelism helpers
