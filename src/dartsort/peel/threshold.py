@@ -18,6 +18,7 @@ class ThresholdAndFeaturize(BasePeeler):
         peak_sign="both",
         spatial_dedup_channel_index=None,
         n_chunks_fit=40,
+        max_waveforms_fit=50_000,
         fit_subsampling_random_state=0,
     ):
         super().__init__(
@@ -27,6 +28,7 @@ class ThresholdAndFeaturize(BasePeeler):
             chunk_length_samples=chunk_length_samples,
             chunk_margin_samples=spike_length_samples,
             n_chunks_fit=n_chunks_fit,
+            max_waveforms_fit=max_waveforms_fit,
             fit_subsampling_random_state=fit_subsampling_random_state,
         )
 

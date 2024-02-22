@@ -29,8 +29,51 @@ def registered_geometry(
     upward_drift=None,
     downward_drift=None,
 ):
-    """Extend the probe's channel positions according to the range of motion
+    """Pad probe to motion extent
 
+    This adds extra channels to a probe layout, matching the probe's geometry.
+    For instance, say we had a tiny NP1-like probe that looks like this:
+
+     o o     -
+      o o    | 20um row spacing
+     o o     | 60um total height
+      o o    -
+
+    Now, say that the probe moves from depth 0 at time 0 up to depth 20um
+    relative to the brain tissue at time 10:
+
+                time 0          time 10
+
+                                o o
+    depth 40                     o o
+                o o             o o
+    depth 20     o o             o o
+                o o
+    depth 0      o o
+
+    In this case, the motion estimate at time 0 would be 0, and the motion estimate
+    at time 10 would be 20.
+
+    This function would add new fake "target channels" (marked with xs):
+
+                o o
+    depth 20     o o
+                o o
+    depth 0      o o
+                x x
+    depth -20    x x
+
+    Later, in interpolation, the motion will be added to these target channels. The
+    "o" channels will then always line up with their true positions, and the x channels
+    can be handled by extrapolation or nan padding, etc.
+
+    This function works by guessing the vertical gap between channels (called "pitch" here).
+    In the NP1-like example above, that's 40um, not 20um, due to the staggered layout. Then,
+    the extent of the motion is determined and rounded away from 0 to the nearest pitch.
+    Copies of the probe shifted by each pitch in the range of this extent are then created,
+    and the unique set of site positions is grabbed to finish.
+
+    Another way of looking at it:
     The probe will be extended upwards according to the amount of upward
     drift and downward according to the amount of downward drift, where
     here we mean drift of the probe relative to the spikes.

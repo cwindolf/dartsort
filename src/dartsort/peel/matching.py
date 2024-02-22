@@ -48,6 +48,7 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
         threshold=50.0,
         chunk_length_samples=30_000,
         n_chunks_fit=40,
+        max_waveforms_fit=50_000,
         fit_subsampling_random_state=0,
         max_iter=1000,
     ):
@@ -58,6 +59,7 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
             chunk_length_samples=chunk_length_samples,
             chunk_margin_samples=2 * template_data.templates.shape[1],
             n_chunks_fit=n_chunks_fit,
+            max_waveforms_fit=max_waveforms_fit,
             fit_subsampling_random_state=fit_subsampling_random_state,
         )
 
