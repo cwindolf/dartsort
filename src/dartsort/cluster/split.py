@@ -179,7 +179,7 @@ class FeatureSplit(SplitStrategy):
         channel_selection_radius=75.0,
         min_cluster_size=25,
         min_samples=25,
-        cluster_selection_epsilon=25,
+        cluster_selection_epsilon=1,
         sigma_local=5,
         sigma_local_low=None,
         noise_density=0.1,
