@@ -534,7 +534,7 @@ class NearbyCoarseTemplatesPlot(UnitPlot):
             )
             labels.append(str(uid))
             handles.append(lines[0])
-        axis.legend(handles=handles, labels=labels, fancybox=False, loc="upper left")
+        axis.legend(handles=handles, labels=labels, fancybox=False, loc="lower center")
         axis.set_xticks([])
         axis.set_yticks([])
         axis.set_title(self.title)
@@ -626,10 +626,10 @@ class NeighborCCGPlot(UnitPlot):
 
             bar(axes[0, j], clags, ccg, fill=True, fc=colors[j])  # , ec="k", lw=1)
             bar(axes[1, j], alags, acg, fill=True, fc=colors[j])  # , ec="k", lw=1)
-            axes[1, j].set_xlabel("lag (samples)")
             axes[0, j].set_title(f"unit {neighbor_ids[j]}")
         axes[0, 0].set_ylabel("ccg")
         axes[1, 0].set_ylabel("merged acg")
+        axes[1, (self.n_neighbors + 1) // 2].set_xlabel("lag (samples)")
 
 
 # -- multi plots

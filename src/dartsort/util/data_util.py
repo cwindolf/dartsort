@@ -1,5 +1,5 @@
 from collections import namedtuple
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Optional
 from warnings import warn
@@ -163,7 +163,11 @@ class DARTsortSorting:
             extra_features = None
             if load_simple_features:
                 extra_features = {}
-                loaded = (times_samples_dataset, channels_dataset, labels_dataset)
+                loaded = (
+                    times_samples_dataset,
+                    channels_dataset,
+                    labels_dataset,
+                )
                 for k in h5:
                     if (
                         k not in loaded
@@ -181,6 +185,28 @@ class DARTsortSorting:
             extra_features=extra_features,
         )
 
+def keep_only_most_recent_spikes(
+    sorting,
+    n_min_spikes=250,
+    latest_time_sample=90_000_000,
+):
+    """
+    This function selects the n_min_spikes before latest_time (or most recent after latest_time)
+    """
+    new_labels = np.full(sorting.labels.shape, -1)
+    units = np.unique(sorting.labels)
+    units = units[units>-1]
+    for k in units:
+        idx_k = np.flatnonzero(sorting.labels == k)
+        before_time = (sorting.times_samples[idx_k] < latest_time_sample) 
+        if before_time.sum()<=n_min_spikes:
+            idx_k = idx_k[:n_min_spikes]
+            new_labels[idx_k] = k
+        else:
+            idx_k = idx_k[before_time][-n_min_spikes:]
+            new_labels[idx_k] = k
+    new_sorting = replace(sorting, labels=new_labels)
+    return new_sorting
 
 def check_recording(
     rec,
@@ -240,3 +266,40 @@ def check_recording(
         failed = True
 
     return failed, avg_detections_per_second, max_abs
+
+
+def subset_sorting_by_spike_count(sorting, min_spikes=0):
+    if not min_spikes:
+        return sorting
+
+    units, counts = np.unique(sorting.labels, return_counts=True)
+    small_units = units[counts < min_spikes]
+
+    new_labels = np.where(
+        np.isin(sorting.labels, small_units), -1, sorting.labels
+    )
+
+    return replace(sorting, labels=new_labels)
+
+
+def subset_sorting_by_time_samples(
+    sorting, start_sample=0, end_sample=np.inf, reference_to_start_sample=True
+):
+    new_times = sorting.times_samples.copy()
+    new_labels = sorting.labels.copy()
+
+    in_range = (new_times >= start_sample) & (new_times < end_sample)
+    print(in_range.sum())
+    new_labels[~in_range] = -1
+
+    if reference_to_start_sample:
+        new_times -= start_sample
+
+    return replace(sorting, labels=new_labels, times_samples=new_times)
+
+
+def reindex_sorting_labels(sorting):
+    new_labels = sorting.labels.copy()
+    kept = np.flatnonzero(new_labels >= 0)
+    _, new_labels[kept] = np.unique(new_labels[kept], return_inverse=True)
+    return replace(sorting, labels=new_labels)

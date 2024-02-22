@@ -67,6 +67,8 @@ class HybridRecording(BasePreprocessor):
         self.template_indices = template_indices
         self.templates = templates
         self.unit_ids = unit_ids
+        self.trough_offset_samples = trough_offset_samples
+        self.spike_length_samples = templates.shape[1]
 
         dtype_ = dtype
         if dtype_ is None:
@@ -97,31 +99,35 @@ class HybridRecording(BasePreprocessor):
             dtype=dtype_,
         )
 
-        def to_dartsort_sorting(self):
-            max_channels = self.templates.ptp(1).argmax(1)
-            max_channels = max_channels[self.template_indices]
-            return DARTsortSorting(
-                self.times_samples,
-                max_channels,
-                self.labels,
-                self.sampling_frequency,
-            )
+    @property
+    def channels(self):
+        main_channels = self.templates.ptp(1).argmax(1)
+        main_channels = main_channels[self.template_indices]
+        return main_channels
 
-        def gt_template_data(self):
-            return TemplateData(
-                templates=self.templates,
-                unit_ids=self.unit_ids,
-                spike_counts=np.full(unit_ids.shape, np.inf),
-                trough_offset_samples=self.trough_offset_samples,
-                spike_length_samples=self.templates.shape[1],
-            )
+    def to_dartsort_sorting(self):
+        return DARTsortSorting(
+            self.times_samples,
+            self.channels,
+            self.labels,
+            self.sampling_frequency,
+        )
 
-        def to_dartsort_analysis(self):
-            return DARTsortAnalysis(
-                sorting=self.to_dartsort_sorting(),
-                recording=self,
-                template_data=self.gt_template_data(),
-            )
+    def gt_template_data(self):
+        return TemplateData(
+            templates=self.templates,
+            unit_ids=self.unit_ids,
+            spike_counts=np.full(unit_ids.shape, np.inf),
+            trough_offset_samples=self.trough_offset_samples,
+            spike_length_samples=self.spike_length_samples,
+        )
+
+    def to_dartsort_analysis(self):
+        return DARTsortAnalysis(
+            sorting=self.to_dartsort_sorting(),
+            recording=self,
+            template_data=self.gt_template_data(),
+        )
 
 
 class HybridRecordingSegment(BasePreprocessorSegment):

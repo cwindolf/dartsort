@@ -5,12 +5,16 @@ import numpy as np
 from dartsort.config import TemplateConfig
 from dartsort.templates import TemplateData, template_util
 from dartsort.templates.pairwise_util import (
-    construct_shift_indices, iterate_compressed_pairwise_convolutions)
+    construct_shift_indices,
+    iterate_compressed_pairwise_convolutions,
+)
 from dartsort.util.data_util import DARTsortSorting
 from scipy.cluster.hierarchy import complete, fcluster
 from scipy.sparse import coo_array
 from scipy.sparse.csgraph import maximum_bipartite_matching
 from tqdm.auto import tqdm
+
+from . import cluster_util
 
 
 def merge_templates(
@@ -38,6 +42,7 @@ def merge_templates(
     overwrite_templates=False,
     show_progress=True,
     template_npz_filename="template_data.npz",
+    reorder_by_depth=True,
 ) -> DARTsortSorting:
     """Template distance based merge
 
@@ -60,7 +65,7 @@ def merge_templates(
     -------
     A new DARTsortSorting
     """
-    print("merge input", np.unique(sorting.labels).size - 1)
+    print("zmerge input", np.unique(sorting.labels).size - 1)
     if template_data is None:
         template_data, sorting = TemplateData.from_config(
             recording,
@@ -94,7 +99,7 @@ def merge_templates(
     )
 
     # now run hierarchical clustering
-    return recluster(
+    merged_sorting = recluster(
         sorting,
         units,
         dists,
@@ -102,6 +107,13 @@ def merge_templates(
         template_snrs,
         merge_distance_threshold=merge_distance_threshold,
     )
+
+    if reorder_by_depth:
+        merged_sorting = cluster_util.reorder_by_depth(
+            merged_sorting, motion_est=motion_est
+        )
+
+    return merged_sorting
 
 
 def merge_across_sortings(
@@ -351,13 +363,22 @@ def cross_match_distance_matrix(
     # so that we can pick the shift and move on with our lives.
     choices = np.argmin(Dstack, axis=0)
     print(f"{choices.shape=}")
-    dists = Dstack[choices, np.arange(choices.shape[0])[:, None], np.arange(choices.shape[1])[None]]
-    shifts = shifts_stack[choices, np.arange(choices.shape[0])[:, None], np.arange(choices.shape[1])[None]]
+    dists = Dstack[
+        choices, np.arange(choices.shape[0])[:, None], np.arange(choices.shape[1])[None]
+    ]
+    shifts = shifts_stack[
+        choices, np.arange(choices.shape[0])[:, None], np.arange(choices.shape[1])[None]
+    ]
 
     snrs_a = template_snrs[a_mask]
     snrs_b = template_snrs[b_mask]
 
-    return dists, shifts, snrs_a, snrs_b, template_data_a.unit_ids, template_data_b.unit_ids
+    return (
+        dists,
+        shifts,
+        snrs_a,
+        snrs_b,
+    )
 
 
 def recluster(
@@ -368,7 +389,6 @@ def recluster(
     template_snrs,
     merge_distance_threshold=0.25,
 ):
-
     # upper triangle not including diagonal, aka condensed distance matrix in scipy
     pdist = dists[np.triu_indices(dists.shape[0], k=1)]
     # scipy hierarchical clustering only supports finite values, so let's just
@@ -448,6 +468,7 @@ def cross_match(
     matched = b_to_a >= 0
     print(f"{matched.sum()=}")
     next_a_label = units_a.max() + 1
+    print(f"{next_a_label=}")
     b_reindex = np.full_like(units_b, -1)
     matched_a_units = units_a[b_to_a[matched]]
     b_reindex[matched] = matched_a_units
@@ -458,23 +479,23 @@ def cross_match(
 
     # both sortings' times can change. we shift the lower SNR unit.
     # shifts is like trough[a] - trough[b]. if >0, subtract from a or add to b to realign.
-#     matched_b_units = units_b[matched]
-#     shifts = shifts[matched_a_units, matched_b_units]
+    #     matched_b_units = units_b[matched]
+    #     shifts = shifts[matched_a_units, matched_b_units]
 
-#     shifts_a = np.zeros_like(sorting_a.times_samples)
-#     a_matched = np.flatnonzero(np.isin(sorting_a.labels, matched_a_units))
-#     a_match_ix = np.searchsorted(matched_a_units, sorting_a.labels[a_matched])
-#     shifts_a[a_matched] = shifts[a_match_ix]
-#     times_a = sorting_a.times_samples - shifts_a
+    #     shifts_a = np.zeros_like(sorting_a.times_samples)
+    #     a_matched = np.flatnonzero(np.isin(sorting_a.labels, matched_a_units))
+    #     a_match_ix = np.searchsorted(matched_a_units, sorting_a.labels[a_matched])
+    #     shifts_a[a_matched] = shifts[a_match_ix]
+    #     times_a = sorting_a.times_samples - shifts_a
 
-#     shifts_b = np.zeros_like(sorting_b.times_samples)
-#     b_matched = np.flatnonzero(np.isin(sorting_b.labels, matched_b_units))
-#     b_match_ix = np.searchsorted(matched_b_units, sorting_b.labels[b_matched])
-#     shifts_b[b_matched] = shifts[b_match_ix]
-#     times_b = sorting_b.times_samples - shifts_b
+    #     shifts_b = np.zeros_like(sorting_b.times_samples)
+    #     b_matched = np.flatnonzero(np.isin(sorting_b.labels, matched_b_units))
+    #     b_match_ix = np.searchsorted(matched_b_units, sorting_b.labels[b_matched])
+    #     shifts_b[b_matched] = shifts[b_match_ix]
+    #     times_b = sorting_b.times_samples - shifts_b
 
     # sorting_a = replace(sorting_a)#, times_samples=times_a)
-    sorting_b = replace(sorting_b, labels=b_labels)#, times_samples=times_b)
+    sorting_b = replace(sorting_b, labels=b_labels)  # , times_samples=times_b)
     return sorting_a, sorting_b
 
 
@@ -572,8 +593,8 @@ def combine_templates(template_data_a, template_data_b):
     )
 
     cross_mask = np.zeros((unit_ids.size, unit_ids.size), dtype=bool)
-    cross_mask[ids_a.size:, :ids_b.size] = True
-    cross_mask[:ids_a.size, ids_b.size:] = True
+    cross_mask[ids_a.size :, : ids_b.size] = True
+    cross_mask[: ids_a.size, ids_b.size :] = True
 
     return template_data, cross_mask, ids_a, ids_b
 
