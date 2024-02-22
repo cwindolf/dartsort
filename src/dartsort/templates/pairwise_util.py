@@ -1029,7 +1029,7 @@ def compressed_upsampled_pairs(
     # offsets = np.cumsum((conv_ix[:, None] == conv_dup[None, :]).sum(0))
     # offsets -= offsets[0]
     _, offsets = np.unique(compression_dup_ix, return_index=True)
-    conv_ix_up = offsets[conv_dup]
+    conv_ix_up = np.atleast_1d(offsets[conv_dup])
 
     # which upsamples and which templates?
     conv_upsampling_indices_b = (
