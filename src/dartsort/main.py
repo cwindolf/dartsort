@@ -6,33 +6,51 @@ import numpy as np
 from dartsort.cluster.initial import ensemble_chunks
 from dartsort.cluster.merge import merge_templates
 from dartsort.cluster.split import split_clusters
-from dartsort.config import (DARTsortConfig, default_clustering_config,
-                             default_dartsort_config,
-                             default_featurization_config,
-                             default_matching_config,
-                             default_split_merge_config,
-                             default_subtraction_config,
-                             default_template_config, default_waveform_config)
-from dartsort.peel import (ObjectiveUpdateTemplateMatchingPeeler,
-                           SubtractionPeeler)
+from dartsort.config import (
+    DARTsortConfig,
+    default_clustering_config,
+    default_dartsort_config,
+    default_featurization_config,
+    default_matching_config,
+    default_split_merge_config,
+    default_subtraction_config,
+    default_template_config,
+    default_waveform_config,
+)
+from dartsort.peel import (
+    ObjectiveUpdateTemplateMatchingPeeler,
+    SubtractionPeeler,
+)
 from dartsort.templates import TemplateData
-from dartsort.util.data_util import DARTsortSorting, check_recording, keep_only_most_recent_spikes
+from dartsort.util.data_util import (
+    DARTsortSorting,
+    check_recording,
+    keep_only_most_recent_spikes,
+)
 from dartsort.util.peel_util import run_peeler
 from dartsort.util.registration_util import estimate_motion
 from dartsort.cluster import ensemble_utils
+
 
 def dartsort(
     recording,
     output_directory,
     cfg: DARTsortConfig = default_dartsort_config,
     motion_est=None,
-    n_jobs=0,
-    n_jobs_cluster=0,
+    n_jobs_gpu=None,
+    n_jobs_cpu=None,
     overwrite=False,
     show_progress=True,
     device=None,
 ):
     output_directory = Path(output_directory)
+    
+    n_jobs = n_jobs_gpu
+    if n_jobs is None:
+        n_jobs = cfg.computation_config.actual_n_jobs_gpu
+    n_jobs_cluster = n_jobs_cpu
+    if n_jobs_cluster is None:
+        n_jobs_cluster = cfg.computation_config.n_jobs_cpu
 
     # initialization: subtraction, motion estimation and initial clustering
     sorting, sub_h5 = subtract(
@@ -265,7 +283,7 @@ def match(
             trough_offset_samples=trough_offset_samples,
             spike_length_samples=spike_length_samples,
         )
-    
+
         # instantiate peeler
         matching_peeler = ObjectiveUpdateTemplateMatchingPeeler.from_config(
             recording,
@@ -291,37 +309,44 @@ def match(
         return sorting, output_hdf5_filename
     else:
         # compute chunk time ranges
-        chunk_samples = recording.sampling_frequency * template_config.chunk_size_s
+        chunk_samples = (
+            recording.sampling_frequency * template_config.chunk_size_s
+        )
         n_chunks = recording.get_num_samples() / chunk_samples
         # we'll count the remainder as a chunk if it's at least 2/3 of one
         n_chunks = np.floor(n_chunks) + (n_chunks - np.floor(n_chunks) > 0.66)
         n_chunks = int(max(1, n_chunks))
-        
+
         # evenly divide the recording into chunks
         assert recording.get_num_segments() == 1
-        start_time_s, end_time_s = recording._recording_segments[0].sample_index_to_time(
-            np.array([0, recording.get_num_samples() - 1])
-        )
+        start_time_s, end_time_s = recording._recording_segments[
+            0
+        ].sample_index_to_time(np.array([0, recording.get_num_samples() - 1]))
         chunk_times_s = np.linspace(start_time_s, end_time_s, num=n_chunks + 1)
         chunk_time_ranges_s = list(zip(chunk_times_s[:-1], chunk_times_s[1:]))
-        
+
         sorting_list, output_hdf5_filename_list = [], []
-        
+
         for j, chunk_time_range in enumerate(chunk_time_ranges_s):
             print(f"chunk_{j}")
-            model_subdir_chunk= f"chunk_{j}_" + model_subdir
+            model_subdir_chunk = f"chunk_{j}_" + model_subdir
             model_dir_chunk = Path(output_directory) / model_subdir_chunk
-            
-            chunk_starts_samples = np.arange(chunk_time_range[0]*recording.sampling_frequency, chunk_time_range[1]*recording.sampling_frequency, matching_config.chunk_length_samples).astype('int')
-            
+
+            chunk_starts_samples = np.arange(
+                chunk_time_range[0] * recording.sampling_frequency,
+                chunk_time_range[1] * recording.sampling_frequency,
+                matching_config.chunk_length_samples,
+            ).astype("int")
+
             if sorting is not None:
                 sorting_chunk = keep_only_most_recent_spikes(
                     sorting,
                     n_min_spikes=template_config.spikes_per_unit,
-                    latest_time_sample=chunk_time_range[1]*recording.sampling_frequency,
+                    latest_time_sample=chunk_time_range[1]
+                    * recording.sampling_frequency,
                 )
             else:
-                sorting_chunk=None
+                sorting_chunk = None
 
             # compute templates
             trough_offset_samples = waveform_config.trough_offset_samples(
@@ -343,7 +368,7 @@ def match(
                 trough_offset_samples=trough_offset_samples,
                 spike_length_samples=spike_length_samples,
             )
-        
+
             # instantiate peeler
             matching_peeler = ObjectiveUpdateTemplateMatchingPeeler.from_config(
                 recording,
@@ -366,8 +391,8 @@ def match(
                 show_progress=show_progress,
                 device=device,
             )
-            
+
             sorting_list.append(sorting_chunk)
             output_hdf5_filename_list.append(output_hdf5_filename)
-            
+
         return sorting_list, output_hdf5_filename_list
