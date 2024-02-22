@@ -14,7 +14,7 @@ from scipy.spatial.distance import pdist, squareform
 # -- geometry utils
 
 
-def get_pitch(geom):
+def get_pitch(geom, direction=1):
     """Guess the pitch, even for probes with gaps or channels missing at random
 
     This is the unit at which the probe repeats itself, computed as the
@@ -24,12 +24,15 @@ def get_pitch(geom):
 
     So for NP1, it's not every row, but every 2 rows! And for a probe with a
     zig-zag arrangement, it would be also 2 vertical distances between channels.
+
+    Copied from https://github.com/cwindolf/dartsort
     """
-    x_uniq = np.unique(geom[:, 0])
+    other_dims = [i for i in range(geom.shape[1]) if i != direction]
+    other_dims_uniq = np.unique(geom[:, other_dims], axis=0)
 
     pitch = np.inf
-    for x in x_uniq:
-        y_uniq_at_x = np.unique(geom[geom[:, 0] == x, 1])
+    for pos in other_dims_uniq:
+        y_uniq_at_x = np.unique(geom[geom[:, other_dims] == pos, 1])
         if y_uniq_at_x.size > 1:
             pitch = min(pitch, np.diff(y_uniq_at_x).min())
 
