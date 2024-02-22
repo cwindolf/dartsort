@@ -1,8 +1,8 @@
 import multiprocessing
-import torch.multiprocessing as torchmp
-from concurrent.futures import ProcessPoolExecutor
+from concurrent.futures import CancelledError, ProcessPoolExecutor
 from multiprocessing import get_context
-import math
+
+import torch.multiprocessing as torchmp
 
 # TODO: torch.multiprocessing?
 
@@ -37,10 +37,24 @@ class MockPoolExecutor:
         initargs=None,
         context=None,
     ):
-        if initializer is not None:
-            initializer(*initargs)
-        self.map = map
-        self.imap = map
+        self.initargs = initargs
+        self.initializer = initializer
+        self.initialized = False
+        self.cancelled = False
+
+    def _initialize(self):
+        if self.initialized:
+            return
+        if self.initializer is not None:
+            self.initializer(*self.initargs)
+        self.initialized = True
+
+    def map(self, function, *iterables, timeout=None, chunksize=1):
+        self._initialize()
+        for result in map(function, *iterables):
+            yield result
+            if self.cancelled:
+                raise CancelledError()
 
     def __enter__(self):
         return self
@@ -49,7 +63,12 @@ class MockPoolExecutor:
         return
 
     def submit(self, f, *args):
+        self._initialize()
         return MockFuture(f, *args)
+
+    def shutdown(self, wait=True, *, cancel_futures=False):
+        if cancel_futures:
+            self.cancelled = True
 
 
 class MockQueue:
@@ -92,6 +111,7 @@ def get_pool(
     context="spawn",
     cls=ProcessPoolExecutor,
     with_rank_queue=False,
+    rank_queue_empty=False,
     n_tasks=None,
     max_tasks_per_child=None,
 ):
@@ -116,12 +136,13 @@ def get_pool(
         else:
             rank_queue = MockQueue()
 
-        n_repeats = 1
-        if max_tasks_per_child is not None:
-            n_repeats = n_tasks // max_tasks_per_child + 1
-        for _ in range(n_repeats):
-            for rank in range(n_jobs):
-                rank_queue.put(rank)
+        if not rank_queue_empty:
+            n_repeats = 1
+            if max_tasks_per_child is not None:
+                n_repeats = n_tasks // max_tasks_per_child + 1
+            for _ in range(n_repeats):
+                for rank in range(n_jobs):
+                    rank_queue.put(rank)
 
         return n_jobs, Executor, context, rank_queue
 

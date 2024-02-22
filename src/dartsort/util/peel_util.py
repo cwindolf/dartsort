@@ -51,10 +51,11 @@ def run_peeler(
             radius=featurization_config.localization_radius,
             amplitude_vectors_dataset_name=f"{wf_name}_{loc_amp_type}_amplitude_vectors",
             show_progress=show_progress,
+            n_jobs=n_jobs,
             device=device,
             localization_model=featurization_config.localization_model,
         )
-        _gc(0, device)
+        _gc(n_jobs, device)
 
     return (
         DARTsortSorting.from_peeling_hdf5(output_hdf5_filename),

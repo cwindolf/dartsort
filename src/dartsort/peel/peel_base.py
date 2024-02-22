@@ -1,3 +1,4 @@
+from concurrent.futures import CancelledError
 from contextlib import contextmanager
 from pathlib import Path
 
@@ -32,6 +33,7 @@ class BasePeeler(torch.nn.Module):
         chunk_length_samples=30_000,
         chunk_margin_samples=0,
         n_chunks_fit=40,
+        max_waveforms_fit=50_000,
         fit_subsampling_random_state=0,
     ):
         assert recording.get_num_channels() == channel_index.shape[0]
@@ -42,6 +44,7 @@ class BasePeeler(torch.nn.Module):
         self.chunk_length_samples = chunk_length_samples
         self.chunk_margin_samples = chunk_margin_samples
         self.n_chunks_fit = n_chunks_fit
+        self.max_waveforms_fit = max_waveforms_fit
         self.fit_subsampling_random_state = np.random.default_rng(
             fit_subsampling_random_state
         )
@@ -91,6 +94,7 @@ class BasePeeler(torch.nn.Module):
         self,
         output_hdf5_filename,
         chunk_starts_samples=None,
+        stop_after_n_waveforms=None,
         n_jobs=0,
         overwrite=False,
         residual_filename=None,
@@ -168,22 +172,27 @@ class BasePeeler(torch.nn.Module):
                     n_spikes,
                 ):
                     batch_count = 0
-                    for result, chunk_start_samples in zip(results, chunks_to_do):
-                        n_new_spikes = self.gather_chunk_result(
-                            n_spikes,
-                            chunk_start_samples,
-                            result,
-                            h5_spike_datasets,
-                            output_h5,
-                            residual_file,
-                        )
-                        batch_count += 1
-                        n_spikes += n_new_spikes
-                        if show_progress:
-                            results.set_description(
-                                f"{task_name} {n_sec_chunk:.1f}s/batch "
-                                f"[spk/batch={n_spikes / batch_count:0.1f}]"
+                    try:
+                        for result, chunk_start_samples in zip(results, chunks_to_do):
+                            n_new_spikes = self.gather_chunk_result(
+                                n_spikes,
+                                chunk_start_samples,
+                                result,
+                                h5_spike_datasets,
+                                output_h5,
+                                residual_file,
                             )
+                            batch_count += 1
+                            n_spikes += n_new_spikes
+                            if show_progress:
+                                results.set_description(
+                                    f"{task_name} {n_sec_chunk:.1f}s/batch "
+                                    f"[spk/batch={n_spikes / batch_count:0.1f}]"
+                                )
+                            if stop_after_n_waveforms and n_spikes >= stop_after_n_waveforms:
+                                pool.shutdown(cancel_futures=True)
+                    except CancelledError:
+                        results.set_description(f"Stopped after {n_spikes} spikes.")
         finally:
             self.to("cpu")
 
@@ -389,6 +398,13 @@ class BasePeeler(torch.nn.Module):
             with h5py.File(temp_hdf5_filename) as h5:
                 waveforms = torch.tensor(h5["peeled_waveforms_fit"][:])
                 channels = torch.tensor(h5["channels"][:])
+            if self.max_waveforms_fit and waveforms.shape[0] > self.max_waveforms_fit:
+                choices = self.fit_subsampling_random_state.choice(
+                    waveforms.shape[0], size=self.max_waveforms_fit, replace=False
+                )
+                choices.sort()
+                waveforms = waveforms[choices]
+                channels = channels[choices]
             featurization_pipeline.fit(waveforms, max_channels=channels)
             self.featurization_pipeline = featurization_pipeline
         finally:
@@ -412,6 +428,7 @@ class BasePeeler(torch.nn.Module):
         self.peel(
             hdf5_filename,
             chunk_starts_samples=chunk_starts,
+            stop_after_n_waveforms=self.max_waveforms_fit,
             n_jobs=n_jobs,
             overwrite=True,
             task_name=task_name,
@@ -445,6 +462,9 @@ class BasePeeler(torch.nn.Module):
         residual_filename=None,
         overwrite=False,
         chunk_size=1024,
+        # could also do:
+        # libver=("earliest", "v110"),
+        libver="latest",
     ):
         """Create, overwrite, or re-open output files"""
         output_hdf5_filename = Path(output_hdf5_filename)
@@ -452,15 +472,15 @@ class BasePeeler(torch.nn.Module):
         n_spikes = 0
         if exists and overwrite:
             output_hdf5_filename.unlink()
-            output_h5 = h5py.File(output_hdf5_filename, "w")
+            output_h5 = h5py.File(output_hdf5_filename, "w", libver=libver)
             output_h5.create_dataset("last_chunk_start", data=-1, dtype=np.int64)
         elif exists:
             # exists and not overwrite
-            output_h5 = h5py.File(output_hdf5_filename, "r+")
+            output_h5 = h5py.File(output_hdf5_filename, "r+", libver=libver)
             n_spikes = len(output_h5["times_samples"])
         else:
             # didn't exist, so overwrite does not matter
-            output_h5 = h5py.File(output_hdf5_filename, "w")
+            output_h5 = h5py.File(output_hdf5_filename, "w", libver=libver)
             output_h5.create_dataset("last_chunk_start", data=-1, dtype=np.int64)
         last_chunk_start = output_h5["last_chunk_start"][()]
 

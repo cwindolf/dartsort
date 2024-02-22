@@ -1,10 +1,12 @@
 """Helper functions for localizing things other than torch Tensors
 """
+
 import h5py
 import numpy as np
 import torch
-from tqdm.auto import trange
+from tqdm.auto import tqdm
 
+from ..util.multiprocessing_util import get_pool
 from .localize_torch import localize_amplitude_vectors
 
 
@@ -40,11 +42,12 @@ def localize_hdf5(
     amplitude_vectors_dataset_name="denoised_peak_amplitude_vectors",
     channel_index_dataset_name="channel_index",
     geometry_dataset_name="geom",
-    spikes_per_batch=10_000,
+    spikes_per_batch=10 * 1024,
     overwrite=False,
     show_progress=True,
     device=None,
     localization_model="pointsource",
+    n_jobs=0,
 ):
     """Run localization on a HDF5 file with stored amplitude vectors
 
@@ -58,19 +61,72 @@ def localize_hdf5(
         device = "cuda" if torch.cuda.is_available() else "cpu"
     device = torch.device(device)
 
-    with h5py.File(hdf5_filename, "r+") as h5:
-        channels = h5[main_channels_dataset_name][:]
-        amp_vecs = h5[amplitude_vectors_dataset_name]
-        channel_index = h5[channel_index_dataset_name][:]
-        geom = h5[geometry_dataset_name][:]
+    done, do_delete = check_resume_or_overwrite(
+        hdf5_filename,
+        output_dataset_name,
+        main_channels_dataset_name,
+        overwrite=overwrite,
+    )
+    if done:
+        return
 
-        n_spikes = channels.shape[0]
-        assert geom.shape == (channel_index.shape[0], 2)
-        assert amp_vecs.shape == (*channels.shape, channel_index.shape[1])
+    n_jobs, Executor, context, queue = get_pool(
+        n_jobs, with_rank_queue=True, rank_queue_empty=True
+    )
+    with Executor(
+        max_workers=n_jobs,
+        mp_context=context,
+        initializer=_h5_localize_init,
+        initargs=(
+            queue,
+            hdf5_filename,
+            main_channels_dataset_name,
+            amplitude_vectors_dataset_name,
+            channel_index_dataset_name,
+            geometry_dataset_name,
+            radius,
+            n_channels_subset,
+            localization_model,
+            device,
+            spikes_per_batch,
+        ),
+    ) as pool:
+        with h5py.File(hdf5_filename, "r+") as h5:
+            n_spikes = h5[main_channels_dataset_name].shape[0]
+            if do_delete:
+                del h5[output_dataset_name]
+            localizations_dataset = h5.create_dataset(
+                output_dataset_name,
+                shape=(n_spikes, 4),
+                dtype=np.float64,
+            )
+            h5.swmr_mode = True
+
+            # workers are blocked waiting for their ranks, which
+            # allows us to put the h5 in swmr before they open it
+            for rank in range(n_jobs):
+                queue.put(rank)
+
+            batches = range(0, n_spikes, spikes_per_batch)
+            results = pool.map(_h5_localize_job, batches)
+            if show_progress:
+                results = tqdm(results, total=len(batches), desc="Localization")
+            for start_ix, end_ix, xyza_batch in results:
+                localizations_dataset[start_ix:end_ix] = xyza_batch
+
+
+def check_resume_or_overwrite(
+    hdf5_filename, output_dataset_name, main_channels_dataset_name, overwrite=False
+):
+    done = False
+    do_delete = False
+    with h5py.File(hdf5_filename, "r") as h5:
         if output_dataset_name in h5:
+            n_spikes = h5[main_channels_dataset_name].shape[0]
             shape = h5[output_dataset_name].shape
             if overwrite:
-                del h5[output_dataset_name]
+                # del h5[output_dataset_name]
+                do_delete = True
             elif shape != (n_spikes, 4):
                 raise ValueError(
                     f"The {output_dataset_name} dataset in {hdf5_filename} "
@@ -78,40 +134,73 @@ def localize_hdf5(
                 )
             else:
                 # else, we are resuming
-                return
+                done = True
+    return done, do_delete
 
-        geom = torch.tensor(geom, device=device)
-        channel_index = torch.tensor(channel_index, device=device)
-        channels = torch.tensor(channels, device=device)
 
-        localizations_dataset = h5.create_dataset(
-            output_dataset_name,
-            shape=(n_spikes, 4),
-            dtype=np.float64,
-        )
+def _h5_localize_init(
+    rank_queue,
+    hdf5_filename,
+    main_channels_dataset_name,
+    amplitude_vectors_dataset_name,
+    channel_index_dataset_name,
+    geometry_dataset_name,
+    radius,
+    n_channels_subset,
+    localization_model,
+    device,
+    spikes_per_batch,
+):
+    p = _h5_localize_init
 
-        batches = range(0, n_spikes, spikes_per_batch)
-        if show_progress:
-            batches = trange(0, n_spikes, spikes_per_batch, desc="Localization")
-        for start_ix in batches:
-            end_ix = min(n_spikes, start_ix + spikes_per_batch)
+    my_rank = rank_queue.get()
+    if device is None:
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+    device = torch.device(device)
+    if device.type == "cuda" and device.index is None:
+        if torch.cuda.device_count() > 1:
+            device = torch.device("cuda", index=my_rank % torch.cuda.device_count())
 
-            channels_batch = channels[start_ix:end_ix]
-            amp_vecs_batch = torch.tensor(amp_vecs[start_ix:end_ix], device=device)
+    h5 = h5py.File(hdf5_filename, "r", swmr=True)
+    channels = h5[main_channels_dataset_name][:]
+    amp_vecs = h5[amplitude_vectors_dataset_name]
+    channel_index = h5[channel_index_dataset_name][:]
+    geom = h5[geometry_dataset_name][:]
 
-            locs = localize_amplitude_vectors(
-                amp_vecs_batch,
-                geom,
-                channels_batch,
-                channel_index=channel_index,
-                radius=radius,
-                n_channels_subset=n_channels_subset,
-                model=localization_model,
-            )
-            xyza_batch = np.c_[
-                locs["x"].cpu().numpy(),
-                locs["y"].cpu().numpy(),
-                locs["z_abs"].cpu().numpy(),
-                locs["alpha"].cpu().numpy(),
-            ]
-            localizations_dataset[start_ix:end_ix] = xyza_batch
+    assert geom.shape == (channel_index.shape[0], 2)
+    assert amp_vecs.shape == (*channels.shape, channel_index.shape[1])
+
+    p.geom = torch.tensor(geom, device=device)
+    p.channel_index = torch.tensor(channel_index, device=device)
+    p.channels = torch.tensor(channels, device=device)
+    p.amp_vecs = amp_vecs
+    p.device = device
+    p.n_spikes = channels.shape[0]
+    p.spikes_per_batch = spikes_per_batch
+    p.radius = radius
+    p.n_channels_subset = n_channels_subset
+    p.localization_model = localization_model
+
+
+def _h5_localize_job(start_ix):
+    p = _h5_localize_init
+    end_ix = min(p.n_spikes, start_ix + p.spikes_per_batch)
+    channels_batch = p.channels[start_ix:end_ix]
+    amp_vecs_batch = torch.tensor(p.amp_vecs[start_ix:end_ix], device=p.device)
+
+    locs = localize_amplitude_vectors(
+        amp_vecs_batch,
+        p.geom,
+        channels_batch,
+        channel_index=p.channel_index,
+        radius=p.radius,
+        n_channels_subset=p.n_channels_subset,
+        model=p.localization_model,
+    )
+    xyza_batch = np.c_[
+        locs["x"].cpu().numpy(),
+        locs["y"].cpu().numpy(),
+        locs["z_abs"].cpu().numpy(),
+        locs["alpha"].cpu().numpy(),
+    ]
+    return start_ix, end_ix, xyza_batch
