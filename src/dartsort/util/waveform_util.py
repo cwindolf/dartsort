@@ -9,7 +9,7 @@ Ideally they should all be both.
 import numpy as np
 import torch
 import torch.nn.functional as F
-from scipy.spatial.distance import pdist, cdist, squareform
+from scipy.spatial.distance import cdist, pdist, squareform
 
 # -- geometry utils
 
@@ -32,7 +32,8 @@ def get_pitch(geom, direction=1):
 
     pitch = np.inf
     for pos in other_dims_uniq:
-        y_uniq_at_x = np.unique(geom[geom[:, other_dims] == pos, 1])
+        at_x = np.all(geom[:, other_dims] == pos, axis=1)
+        y_uniq_at_x = np.unique(geom[at_x, 1])
         if y_uniq_at_x.size > 1:
             pitch = min(pitch, np.diff(y_uniq_at_x).min())
 

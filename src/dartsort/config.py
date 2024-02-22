@@ -16,7 +16,7 @@ object can then be passed into the high level functions like
 
 TODO: change n_chunks_fit to n_spikes_fit, max_chunks_fit
 """
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import List, Optional, Tuple
 
 import torch
@@ -113,6 +113,7 @@ class SubtractionConfig:
     spatial_dedup_radius: float = 150.0
     extract_radius: float = 200.0
     n_chunks_fit: int = 40
+    max_waveforms_fit: int = 50_000
     fit_subsampling_random_state: int = 0
     residnorm_decrease_threshold: float = 3.162  # sqrt(10)
 
@@ -177,7 +178,7 @@ class TemplateConfig:
     realign_peaks: bool = True
     realign_max_sample_shift: int = 20
 
-    #track template over time
+    # track template over time
     time_tracking: bool = False
     chunk_size_s: int = 100
 
@@ -187,6 +188,7 @@ class MatchingConfig:
     chunk_length_samples: int = 30_000
     extract_radius: float = 200.0
     n_chunks_fit: int = 40
+    max_waveforms_fit: int = 50_000
     fit_subsampling_random_state: int = 0
 
     # template matching parameters

@@ -29,6 +29,7 @@ class SubtractionPeeler(BasePeeler):
         peak_sign="both",
         spatial_dedup_channel_index=None,
         n_chunks_fit=40,
+        max_waveforms_fit=50_000,
         fit_subsampling_random_state=0,
         residnorm_decrease_threshold=3.162,
     ):
@@ -39,6 +40,7 @@ class SubtractionPeeler(BasePeeler):
             chunk_length_samples=chunk_length_samples,
             chunk_margin_samples=2 * spike_length_samples,
             n_chunks_fit=n_chunks_fit,
+            max_waveforms_fit=max_waveforms_fit,
             fit_subsampling_random_state=fit_subsampling_random_state,
         )
 
@@ -244,6 +246,13 @@ class SubtractionPeeler(BasePeeler):
             with h5py.File(temp_hdf5_filename) as h5:
                 waveforms = torch.from_numpy(h5["subtract_fit_waveforms"][:])
                 channels = torch.from_numpy(h5["channels"][:])
+            if self.max_waveforms_fit and waveforms.shape[0] > self.max_waveforms_fit:
+                choices = self.fit_subsampling_random_state.choice(
+                    waveforms.shape[0], size=self.max_waveforms_fit, replace=False
+                )
+                choices.sort()
+                waveforms = waveforms[choices]
+                channels = channels[choices]
             orig_denoise.fit(waveforms, max_channels=channels)
             self.subtraction_denoising_pipeline = orig_denoise
             self.featurization_pipeline = orig_featurization_pipeline
