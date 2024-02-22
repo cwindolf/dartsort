@@ -146,6 +146,7 @@ class MotionEstimationConfig:
     max_dt_s: float = 1000.0
     max_disp_um: Optional[float] = None
     correlation_threshold: float = 0.1
+    min_amplitude: Optional[float] = None
     rigid: bool = False
 
 
