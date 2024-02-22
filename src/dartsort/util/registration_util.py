@@ -27,6 +27,7 @@ def estimate_motion(
     max_dt_s: float = 1000.0,
     max_disp_um: Optional[float] = None,
     correlation_threshold: float = 0.1,
+    min_amplitude: Optional[float] = None,
     rigid=False,
     localizations_dataset_name="point_source_localizations",
     amplitudes_dataset_name="denoised_ptp_amplitudes",
@@ -45,19 +46,22 @@ def estimate_motion(
 
     x = getattr(sorting, localizations_dataset_name)[:, 0]
     z = getattr(sorting, localizations_dataset_name)[:, 2]
+    a = getattr(sorting, amplitudes_dataset_name)
     geom = recording.get_channel_locations()
     xmin = geom[:, 0].min() - probe_boundary_padding_um
     xmax = geom[:, 0].max() + probe_boundary_padding_um
     zmin = geom[:, 1].min() - probe_boundary_padding_um
     zmax = geom[:, 1].max() + probe_boundary_padding_um
-    xvalid = x == x.clip(xmin, xmax)
-    zvalid = z == z.clip(zmin, zmax)
-    valid = np.flatnonzero(xvalid & zvalid)
+    valid = x == x.clip(xmin, xmax)
+    valid &= z == z.clip(zmin, zmax)
+    if min_amplitude:
+        valid &= a >= min_amplitude
+    valid = np.flatnonzero(valid)
 
     # features for registration
     z = z[valid]
     t_s = sorting.times_seconds[valid]
-    a = getattr(sorting, amplitudes_dataset_name)[valid]
+    a = a[valid]
 
     # run registration
     motion_est, info = dredge_ap.register(

@@ -146,12 +146,13 @@ class MotionEstimationConfig:
     max_dt_s: float = 1000.0
     max_disp_um: Optional[float] = None
     correlation_threshold: float = 0.1
+    min_amplitude: Optional[float] = None
     rigid: bool = False
 
 
 @dataclass(frozen=True)
 class TemplateConfig:
-    spikes_per_unit = 500
+    spikes_per_unit: int = 500
 
     # -- template construction parameters
     # registered templates?
@@ -176,6 +177,10 @@ class TemplateConfig:
     realign_peaks: bool = True
     realign_max_sample_shift: int = 20
 
+    #track template over time
+    time_tracking: bool = False
+    chunk_size_s: int = 100
+
 
 @dataclass(frozen=True)
 class MatchingConfig:
@@ -185,7 +190,7 @@ class MatchingConfig:
     fit_subsampling_random_state: int = 0
 
     # template matching parameters
-    threshold: float = 50.0
+    threshold: float = 150.0
     template_svd_compression_rank: int = 10
     template_temporal_upsampling_factor: int = 8
     template_min_channel_amplitude: float = 1.0
@@ -253,6 +258,26 @@ class ClusteringConfig:
 
 
 @dataclass(frozen=True)
+class ComputationConfig:
+    n_jobs_cpu: int = 0
+    n_jobs_gpu: int = 0
+    device: Optional[torch.device] = None
+    
+    @property
+    def actual_device(self):
+        if self.device is None:
+            have_cuda = torch.cuda.is_available()
+            return torch.device("cuda" if have_cuda else "cpu")
+        return torch.device(self.device)
+    
+    @property
+    def actual_n_jobs_gpu(self):
+        if self.actual_device.type == "cuda":
+            return self.n_jobs_gpu
+        return self.n_jobs_cpu
+
+
+@dataclass(frozen=True)
 class DARTsortConfig:
     waveform_config: WaveformConfig = WaveformConfig()
     featurization_config: FeaturizationConfig = FeaturizationConfig()
@@ -262,32 +287,11 @@ class DARTsortConfig:
     split_merge_config: SplitMergeConfig = SplitMergeConfig()
     matching_config: MatchingConfig = MatchingConfig()
     motion_estimation_config: MotionEstimationConfig = MotionEstimationConfig()
+    computation_config: ComputationConfig = ComputationConfig()
 
     # high level behavior
     do_initial_split_merge: bool = True
     matching_iterations: int = 1
-
-
-@dataclass
-class ComputationConfig:
-    n_jobs_cpu: int = 0
-    n_jobs_gpu: int = 0
-    device: Optional[torch.device] = None
-
-    actual_device: torch.device = field(init=False)
-    actual_n_jobs_gpu: int = field(init=False)
-
-    def __post_init__(self):
-        if self.device is None:
-            have_cuda = torch.cuda.is_available()
-            self.actual_device = torch.device("cuda" if have_cuda else "cpu")
-        else:
-            self.actual_device = torch.device(self.device)
-
-        if self.actual_device.type == "cuda":
-            self.actual_n_jobs_gpu = self.n_jobs_gpu
-        else:
-            self.actual_n_jobs_gpu = self.n_jobs_cpu
 
 
 default_waveform_config = WaveformConfig()
@@ -299,5 +303,5 @@ default_split_merge_config = SplitMergeConfig()
 coarse_template_config = TemplateConfig(superres_templates=False)
 default_matching_config = MatchingConfig()
 default_motion_estimation_config = MotionEstimationConfig()
-default_dartsort_config = DARTsortConfig()
 default_computation_config  = ComputationConfig()
+default_dartsort_config = DARTsortConfig()
