@@ -73,12 +73,13 @@ class ConvToLinearSingleChannelDecollider(SingleChannelDecollider):
     def __init__(
         self,
         out_channels=(16, 32, 64),
-        kernel_lengths=(5, 5, 11),
+        kernel_lengths=(5, 7, 11),
         hidden_linear_dims=(),
         spike_length_samples=121,
         final_activation="relu",
     ):
         super().__init__()
+        assert len(out_channels) == len(kernel_lengths)
         in_channels = (1,) + out_channels[:-1]
         is_hidden = [True] * (len(out_channels) - 1) + [False]
         self.net = nn.Sequential()
@@ -87,7 +88,7 @@ class ConvToLinearSingleChannelDecollider(SingleChannelDecollider):
         ):
             self.net.append(nn.Conv1d(ic, oc, k))
             if hid:
-                self.net.append(nn.ReLU())
+                self.net.append(nn.PReLU())
         self.net.append(nn.Flatten())
         flat_dim = out_channels[-1] * (
             spike_length_samples - sum(kernel_lengths) + len(kernel_lengths)
@@ -97,12 +98,16 @@ class ConvToLinearSingleChannelDecollider(SingleChannelDecollider):
         lin_out_dims = hidden_linear_dims + (spike_length_samples,)
         is_final = [False] * len(hidden_linear_dims) + [True]
         for inf, outf, fin in zip(lin_in_dims, lin_out_dims, is_final):
-            if fin and final_activation == "sigmoid":
+            if not fin:
+                self.net.append(nn.PReLU())
+            elif final_activation == "sigmoid":
                 self.net.append(nn.Sigmoid())
-            if fin and final_activation == "tanh":
+            elif final_activation == "tanh":
                 self.net.append(nn.Tanh())
-            else:
+            elif final_activation == "relu":
                 self.net.append(nn.ReLU())
+            else:
+                assert False
             self.net.append(nn.Linear(inf, outf))
         # add the empty channel dim back in
         self.net.append(nn.Unflatten(1, (1, spike_length_samples)))
@@ -130,12 +135,16 @@ class MLPSingleChannelDecollider(SingleChannelDecollider):
         is_final = [False] * max(0, len(hidden_sizes) - 1) + [True]
         for inf, outf, fin in zip(input_sizes, output_sizes, is_final):
             self.net.append(nn.Linear(inf, outf))
-            if fin and final_activation == "sigmoid":
+            if not fin:
+                self.net.append(nn.PReLU())
+            elif final_activation == "sigmoid":
                 self.net.append(nn.Sigmoid())
-            if fin and final_activation == "tanh":
+            elif final_activation == "tanh":
                 self.net.append(nn.Tanh())
-            else:
+            elif final_activation == "relu":
                 self.net.append(nn.ReLU())
+            else:
+                assert False
         self.net.append(nn.Linear(hidden_sizes[-1], spike_length_samples))
         # add the empty channel dim back in
         self.net.append(nn.Unflatten(1, (1, spike_length_samples)))
@@ -188,15 +197,17 @@ class ConvToLinearMultiChannelDecollider(MultiChannelDecollider):
         final_activation="relu",
     ):
         super().__init__()
+        assert len(out_channels) == len(kernel_heights) == len(kernel_lengths)
         in_channels = (2,) + out_channels[:-1]
         is_hidden = [True] * (len(out_channels) - 1) + [False]
         self.net = nn.Sequential()
+        
         for ic, oc, kl, kh, hid in zip(
             in_channels, out_channels, kernel_lengths, kernel_heights, is_hidden
         ):
             self.net.append(nn.Conv2d(ic, oc, (kh, kl)))
             if hid:
-                self.net.append(nn.ReLU())
+                self.net.append(nn.PReLU())
         self.net.append(nn.Flatten())
         out_w = spike_length_samples - sum(kernel_lengths) + len(kernel_lengths)
         out_h = n_channels - sum(kernel_heights) + len(kernel_heights)
@@ -205,12 +216,16 @@ class ConvToLinearMultiChannelDecollider(MultiChannelDecollider):
         lin_out_dims = hidden_linear_dims + (n_channels * spike_length_samples,)
         is_final = [False] * len(hidden_linear_dims) + [True]
         for inf, outf, fin in zip(lin_in_dims, lin_out_dims, is_final):
-            if fin and final_activation == "sigmoid":
+            if not fin:
+                self.net.append(nn.PReLU())
+            elif final_activation == "sigmoid":
                 self.net.append(nn.Sigmoid())
-            if fin and final_activation == "tanh":
+            elif final_activation == "tanh":
                 self.net.append(nn.Tanh())
-            else:
+            elif final_activation == "relu":
                 self.net.append(nn.ReLU())
+            else:
+                assert False
             self.net.append(nn.Linear(inf, outf))
         self.net.append(nn.Unflatten(1, (n_channels, spike_length_samples)))
         self._kwargs = dict(
@@ -242,12 +257,16 @@ class MLPMultiChannelDecollider(MultiChannelDecollider):
         is_final = [False] * max(0, len(hidden_sizes) - 1) + [True]
         for inf, outf, fin in zip(input_sizes, output_sizes, is_final):
             self.net.append(nn.Linear(inf, outf))
-            if fin and final_activation == "sigmoid":
+            if not fin:
+                self.net.append(nn.PReLU())
+            elif final_activation == "sigmoid":
                 self.net.append(nn.Sigmoid())
-            if fin and final_activation == "tanh":
+            elif final_activation == "tanh":
                 self.net.append(nn.Tanh())
-            else:
+            elif final_activation == "relu":
                 self.net.append(nn.ReLU())
+            else:
+                assert False
         self.net.append(
             nn.Linear(hidden_sizes[-1], n_channels * spike_length_samples)
         )

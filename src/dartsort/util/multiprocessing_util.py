@@ -1,4 +1,5 @@
 import multiprocessing
+import torch.multiprocessing as torchmp
 from concurrent.futures import ProcessPoolExecutor
 from multiprocessing import get_context
 import math
@@ -103,7 +104,10 @@ def get_pool(
         cls = ProcessPoolExecutor
 
     Executor = cls if do_parallel else MockPoolExecutor
-    context = get_context(context)
+    if context == "torchspawn":
+        context = torchmp.get_context("spawn")
+    else:
+        context = get_context(context)
 
     if with_rank_queue:
         if do_parallel:
