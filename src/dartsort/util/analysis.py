@@ -90,6 +90,7 @@ class DARTsortAnalysis:
         template_npz = model_dir / "template_data.npz"
         have_templates = template_npz.exists()
         if have_templates:
+            print(f"Reloading templates from {templates_npz}...")
             with h5py.File(hdf5_path, "r") as h5:
                 same_labels = np.array_equal(sorting.labels, h5["labels"][:])
             have_templates = have_templates and same_labels
@@ -172,9 +173,8 @@ class DARTsortAnalysis:
 
         if self.featurization_pipeline is not None:
             assert not self.featurization_pipeline.needs_fit()
-        assert np.isin(
-            self.template_data.unit_ids, np.unique(self.sorting.labels)
-        ).all()
+        temp_units = self.template_data.unit_ids[self.template_data.spike_counts > 0]
+        assert np.isin(temp_units, np.unique(self.sorting.labels)).all()
 
         assert self.hdf5_path.exists()
         self.coarse_template_data = self.template_data.coarsen()
