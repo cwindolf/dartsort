@@ -7,8 +7,6 @@ import hdbscan
 import os 
 
 from dredge import dredge_ap, motion_util as mu
-
-
 import spikeinterface.core as sc
 import spikeinterface.full as si
 
@@ -24,9 +22,9 @@ from dartsort.config import TemplateConfig, MatchingConfig, ClusteringConfig, Su
 from dartsort import cluster
 
 # Input
-data_dir = Path("UHD_DATA/ZYE_0021___2021-05-01___1")
+data_dir = Path("ZYE_0021___2021-05-01___1")
 fname_sub_h5 = data_dir / "subtraction.h5"
-raw_data_name = data_dir / "standardized.bin"
+raw_data_name = data_dir / "standardized.bin" 
 dtype_preprocessed = "float32"
 sampling_rate = 30000
 n_channels = 384
@@ -73,7 +71,6 @@ with h5py.File(sub_h5, "r+") as h5:
     geom = np.array(h5["geom"][:])
     channels = np.array(h5["channels"][:])
 
-
 recording = sc.read_binary(
     raw_data_name,
     sampling_rate,
@@ -113,7 +110,7 @@ if savefigs:
     plt.close()
 
 idx = np.flatnonzero(maxptps>threshold_ptp_spline)
- 
+
 sorting = cluster(
     sub_h5,
     recording,
@@ -153,6 +150,7 @@ for batch_id in tqdm(range(n_batches)):
     spline_displacement[idx_batch] = model.predict(idx_batch.reshape(-1, 1)/sampling_rate)[:, 0]
 
 z_reg_spline = z_reg - spline_displacement[times_samples.astype('int')]
+
 if savefigs:
     idx = np.flatnonzero(maxptps>threshold_ptp_rigid_reg)
     ptp_col = np.log(maxptps[idx]+1)
@@ -165,7 +163,5 @@ if savefigs:
     plt.savefig(Path(output_dir) / "final_registered_raster.png")
     plt.close()
 
-
 np.save("high_freq_correction.npy", spline_displacement)
 np.save("spline_registered_z.npy", z_reg_spline)
-

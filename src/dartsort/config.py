@@ -152,7 +152,7 @@ class MotionEstimationConfig:
 
 @dataclass(frozen=True)
 class TemplateConfig:
-    spikes_per_unit = 500
+    spikes_per_unit: int = 500
 
     # -- template construction parameters
     # registered templates?
@@ -176,6 +176,10 @@ class TemplateConfig:
     # TODO: maybe this should be done in clustering?
     realign_peaks: bool = True
     realign_max_sample_shift: int = 20
+
+    #track template over time
+    time_tracking: bool = False
+    chunk_size_s: int = 100
 
 
 @dataclass(frozen=True)
