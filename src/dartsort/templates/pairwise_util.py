@@ -231,6 +231,7 @@ def iterate_compressed_pairwise_convolutions(
         reg_geom=reg_geom,
         geom_kdtree=geom_kdtree,
         reg_geom_kdtree=reg_geom_kdtree,
+        do_shifting=do_shifting,
         match_distance=match_distance,
         conv_ignore_threshold=conv_ignore_threshold,
         min_spatial_cosine=min_spatial_cosine,
@@ -407,6 +408,7 @@ def compressed_convolve_pairs(
     reg_geom: Optional[np.ndarray] = None,
     geom_kdtree: Optional[KDTree] = None,
     reg_geom_kdtree: Optional[KDTree] = None,
+    do_shifting: bool = False,
     match_distance: Optional[float] = None,
     units_a: Optional[np.ndarray] = None,
     units_b: Optional[np.ndarray] = None,
@@ -449,6 +451,7 @@ def compressed_convolve_pairs(
         geom_kdtree=geom_kdtree,
         match_distance=match_distance,
         device=device,
+        do_shifting=do_shifting,
     )
     spatial_singular_b = get_shifted_spatial_singular(
         temp_ix_b,
@@ -460,6 +463,7 @@ def compressed_convolve_pairs(
         geom_kdtree=geom_kdtree,
         match_distance=match_distance,
         device=device,
+        do_shifting=do_shifting,
     )
 
     # figure out pairs of shifted templates to convolve in a deduplicated way
@@ -725,11 +729,8 @@ def get_shifted_spatial_singular(
     geom_kdtree=None,
     match_distance=None,
     device=None,
+    do_shifting=False,
 ):
-    # do we need to shift the templates?
-    n_shifts = template_shift_index.all_pitch_shifts.size
-    do_shifting = n_shifts > 1
-
     spatial_singular = (
         low_rank_templates.spatial_components[temp_ix]
         * low_rank_templates.singular_values[temp_ix][..., None]
@@ -764,6 +765,7 @@ def shift_deduplicated_pairs(
     geom=None,
     registered_geom=None,
     reg_geom_kdtree=None,
+    do_shifting=False,
     match_distance=None,
 ):
     """Choose a set of pairs of indices from group A and B to convolve
@@ -822,7 +824,6 @@ def shift_deduplicated_pairs(
         return None
 
     # if no shifting, deduplication is the identity
-    do_shifting = reg_geom_kdtree is not None
     if not do_shifting:
         nco_range = torch.arange(nco, device=pair_ix_a.device)
         return pair_ix_a, pair_ix_b, nco_range, nco_range, np.zeros(nco, dtype=int)
@@ -1029,7 +1030,7 @@ def compressed_upsampled_pairs(
     # offsets = np.cumsum((conv_ix[:, None] == conv_dup[None, :]).sum(0))
     # offsets -= offsets[0]
     _, offsets = np.unique(compression_dup_ix, return_index=True)
-    conv_ix_up = offsets[conv_dup]
+    conv_ix_up = np.atleast_1d(offsets[conv_dup])
 
     # which upsamples and which templates?
     conv_upsampling_indices_b = (
@@ -1162,6 +1163,7 @@ class ConvWorkerContext:
     reg_geom: Optional[np.ndarray] = None
     geom_kdtree: Optional[KDTree] = None
     reg_geom_kdtree: Optional[KDTree] = None
+    do_shifting: bool = False
     match_distance: Optional[float] = None
     conv_ignore_threshold: float = 0.0
     coarse_approx_error_threshold: float = 0.0

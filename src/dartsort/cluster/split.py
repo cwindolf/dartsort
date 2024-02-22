@@ -17,6 +17,8 @@ from tqdm.auto import tqdm
 from . import cluster_util, relocate, density
 from .forward_backward import forward_backward
 
+from scipy.spatial.distance import cdist
+
 
 def split_clusters(
     sorting,
@@ -174,12 +176,13 @@ class FeatureSplit(SplitStrategy):
         use_localization_features=True,
         n_pca_features=2,
         relocated=True,
+        use_wfs_L2_norm=False,
         localization_feature_scales=(1.0, 1.0, 50.0),
         log_c=5,
         channel_selection_radius=75.0,
         min_cluster_size=25,
         min_samples=25,
-        cluster_selection_epsilon=25,
+        cluster_selection_epsilon=1,
         sigma_local=5,
         sigma_local_low=None,
         noise_density=0.1,
@@ -240,7 +243,8 @@ class FeatureSplit(SplitStrategy):
         self.rg = np.random.default_rng(random_state)
         self.reassign_outliers = reassign_outliers
         self.max_size_wfs = max_size_wfs
-
+        self.use_wfs_L2_norm = use_wfs_L2_norm
+        self.l2norm = None #computed later 
         # hdbscan parameters
         self.min_cluster_size = min_cluster_size
         self.min_samples = min_samples
@@ -391,7 +395,7 @@ class FeatureSplit(SplitStrategy):
 
         do_pca = self.n_pca_features > 0
 
-        if do_pca or self.relocated:
+        if do_pca or self.relocated or self.use_wfs_L2_norm:
             (
                 max_registered_channel,
                 n_pitches_shift,
@@ -426,7 +430,7 @@ class FeatureSplit(SplitStrategy):
                 amplitude_normalized=self.amplitude_normalized,
             )
             do_pca = enough_good_spikes
-
+        
         if do_pca:
             kept = pca_kept
             # scale pc features to match localization features
@@ -437,6 +441,15 @@ class FeatureSplit(SplitStrategy):
             elif self.use_localization_features:
                 pca_embeds *= mad_sigma(loc_features[kept]).mean()
             features.append(pca_embeds)
+
+        if self.use_wfs_L2_norm:
+            enough_good_spikes, wf2_norm_kept, l2_norm = self.waveforms_L2norm(
+                in_unit,
+                max_registered_channel,
+                n_pitches_shift,
+            )
+            self.l2norm = l2_norm
+            kept = wf2_norm_kept
 
         if self.use_spread:
             spread = self.spread_feature(in_unit)
@@ -465,6 +478,7 @@ class FeatureSplit(SplitStrategy):
         ):
             hdb_labels = density.density_peaks_clustering(
                 features,
+                l2_norm=self.l2norm,
                 sigma_local=self.sigma_local,
                 sigma_local_low=self.sigma_local_low,
                 sigma_regional=None,
@@ -576,6 +590,84 @@ class FeatureSplit(SplitStrategy):
             ) / np.nansum(amp_vecs[k, channels_effective])
 
         return spread
+
+    def waveforms_L2norm(
+        self,
+        in_unit,
+        max_registered_channel,
+        n_pitches_shift,
+        batch_size=1_000,
+    ):
+        """Compute relocated waveforms on a drift-invariant channel set, for computing L2 distance"""
+        # figure out which set of channels to use
+        # we use the stored amplitudes to do this rather than computing a
+        # template, which can be expensive
+        # max_batch_size set to avoid memory errors
+        pca_channels = self.registered_channel_index[max_registered_channel]
+        pca_channels = pca_channels[pca_channels < len(self.registered_geom)]
+
+        # load waveform embeddings and invert TPCA if we are relocating
+        waveforms = None  # will allocate output array when we know its size
+        for bs in range(0, in_unit.size, batch_size):
+            be = min(in_unit.size, bs + batch_size)
+
+            batch = batched_h5_read(self.tpca_features, in_unit[bs:be])
+            n_batch, rank, c = batch.shape
+
+            # invert TPCA for relocation
+            if self.relocated:
+                batch = batch.transpose(0, 2, 1).reshape(n_batch * c, rank)
+                batch = self.tpca.inverse_transform(batch)
+                t = batch.shape[1]
+                batch = batch.reshape(n_batch, c, t).transpose(0, 2, 1)
+
+            # relocate or just restrict to channel subset
+            if self.relocated:
+                batch = relocate.relocated_waveforms_on_static_channels(
+                    batch,
+                    main_channels=self.channels[in_unit][bs:be],
+                    channel_index=self.channel_index,
+                    target_channels=pca_channels,
+                    xyza_from=self.xyza[in_unit][bs:be],
+                    z_to=self.z_reg[in_unit][bs:be],
+                    geom=self.geom,
+                    registered_geom=self.registered_geom,
+                    match_distance=self.match_distance,
+                )
+            else:
+                batch = drift_util.get_waveforms_on_static_channels(
+                    batch,
+                    self.geom,
+                    main_channels=self.channels[in_unit][bs:be],
+                    channel_index=self.channel_index,
+                    target_channels=pca_channels,
+                    n_pitches_shift=n_pitches_shift[bs:be],
+                    registered_geom=self.registered_geom,
+                    match_distance=self.match_distance,
+                )
+                t = batch.shape[1]
+
+            if waveforms is None:
+                waveforms = np.empty(
+                    (in_unit.size, t * pca_channels.size), dtype=batch.dtype
+                )
+            waveforms[bs:be] = batch.reshape(n_batch, -1)
+
+        # remove channels which are entirely nan
+        not_entirely_nan_channels = np.flatnonzero(np.isfinite(waveforms).any(axis=0))
+        if not_entirely_nan_channels.size < waveforms.shape[1]:
+            waveforms = waveforms[:, not_entirely_nan_channels]
+
+        # figure out which waveforms overlap completely with the remaining channels
+        no_nan = np.flatnonzero(np.isfinite(waveforms).all(axis=1))
+
+        if no_nan.size < max(self.min_cluster_size, self.n_pca_features):
+            return False, no_nan, None
+
+        else:
+            size_wf = waveforms.shape[1]
+            waveforms_l2_norm = cdist(waveforms[no_nan], waveforms[no_nan])/size_wf   
+        return True, no_nan, waveforms_l2_norm
 
     def pca_features(
         self,
@@ -709,9 +801,10 @@ class FeatureSplit(SplitStrategy):
             self.amplitudes = h5[amplitudes_dataset_name][:]
             self.registered_geom = self.geom
             self.registered_channel_index = self.channel_index
+
             if self.motion_est is not None:
                 self.z_reg = self.motion_est.correct_s(self.t_s, self.z)
-            if self.relocated:
+            if self.relocated or self.n_pca_features or self.use_wfs_L2_norm:
                 self.registered_geom = drift_util.registered_geometry(
                     self.geom, self.motion_est
                 )
@@ -723,6 +816,7 @@ class FeatureSplit(SplitStrategy):
             (self.use_localization_features and self.relocated)
             or self.n_pca_features
             or self.use_ptp
+            or self.use_wfs_L2_norm
         ):
             self.amplitude_vectors = h5[amplitude_vectors_dataset_name]
 
@@ -732,7 +826,7 @@ class FeatureSplit(SplitStrategy):
             ]
             self.localization_features *= self.localization_feature_scales
 
-        if self.n_pca_features:
+        if self.n_pca_features or self.use_wfs_L2_norm:
             # don't load these one into memory, since it's a bit heavier
             self.tpca_features = h5[tpca_features_dataset_name]
             self.match_distance = pdist(self.geom).min() / 2
@@ -742,7 +836,7 @@ class FeatureSplit(SplitStrategy):
             peeling_featurization_pt = mdir / "featurization_pipeline.pt"
             assert peeling_featurization_pt.exists()
 
-        if self.n_pca_features and self.relocated:
+        if (self.n_pca_features or self.use_wfs_L2_norm) and self.relocated:
             # load up featurization pipeline for tpca inversion
             assert peeling_featurization_pt is not None
             feature_pipeline = torch.load(peeling_featurization_pt)
