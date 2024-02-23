@@ -7,7 +7,7 @@ import numpy as np
 import torch
 from dartsort.util import drift_util, waveform_util
 from dartsort.util.multiprocessing_util import get_pool
-from dartsort.util.data_util import DARTsortSorting
+from dartsort.util.data_util import DARTsortSorting, batched_h5_read
 
 from hdbscan import HDBSCAN
 from scipy.spatial.distance import pdist
@@ -877,20 +877,6 @@ def _split_job_init(
 
 def _split_job(in_unit):
     return _split_job_context.split_strategy.split_cluster_with_strategy(in_unit)
-
-
-# -- h5 helper... slow reading...
-
-
-def batched_h5_read(dataset, indices, batch_size=1000):
-    if indices.size < batch_size:
-        return dataset[indices]
-    else:
-        out = np.empty((indices.size, *dataset.shape[1:]), dtype=dataset.dtype)
-        for bs in range(0, indices.size, batch_size):
-            be = min(indices.size, bs + batch_size)
-            out[bs:be] = dataset[indices[bs:be]]
-        return out
 
 
 # other helpers

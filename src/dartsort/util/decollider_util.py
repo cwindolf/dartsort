@@ -42,6 +42,8 @@ def train_decollider(
     early_stop_decrease_epochs=5,
     batch_size=64,
     loss_class=torch.nn.MSELoss,
+    opt_class=torch.optim.Adam,
+    opt_kw=None,
     val_every=1,
     device=None,
     show_progress=True,
@@ -105,8 +107,9 @@ def train_decollider(
             original_val_template_index,
         ) = combine_templates(templates_val, channel_subsets)
         assert spike_length_samples == templates_val.shape[2]
-
-    opt = torch.optim.Adam(net.parameters())
+    if opt_kw is None:
+        opt_kw = {}
+    opt = opt_class(net.parameters(), **opt_kw)
     criterion = loss_class()
     examples_seen = 0
     val_losses = []
