@@ -115,10 +115,14 @@ class DARTsortSorting:
 
     @property
     def n_units(self):
-        if self._n_units is None:
-            u = np.unique(self.labels)
-            self._n_units = (u >= 0).sum()
-        return self._n_units
+        return self.unit_ids.size
+
+    @property
+    def unit_ids(self):
+        if self._unit_ids is None:
+            self._unit_ids = np.unique(self.labels)
+            self._unit_ids = self._unit_ids[self._unit_ids >= 0]
+        return self._unit_ids
 
     def __str__(self):
         name = self.__class__.__name__
