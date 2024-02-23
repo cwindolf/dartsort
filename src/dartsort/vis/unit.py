@@ -34,7 +34,7 @@ class UnitMultiPlot(layout.BaseMultiPlot):
         raise NotImplementedError
 
 
-class TextInfo(UnitPlot):
+class UnitTextInfo(UnitPlot):
     kind = "text"
     height = 0.5
 
@@ -701,7 +701,7 @@ class SuperresWaveformMultiPlot(UnitMultiPlot):
 # -- main routines
 
 default_plots = (
-    TextInfo(),
+    UnitTextInfo(),
     ACG(),
     ISIHistogram(),
     XZScatter(),
@@ -719,7 +719,7 @@ default_plots = (
 
 
 template_assignment_plots = (
-    TextInfo(),
+    UnitTextInfo(),
     RawWaveformPlot(),
     SuperresWaveformMultiPlot(),
 )
@@ -803,6 +803,13 @@ def make_all_summaries(
             )
         for res in results:
             pass
+
+
+def all_summaries_done(unit_ids, save_folder, ext="png"):
+    return all(
+        (save_folder / f"unit{unit_id:04d}.{ext}").exists()
+        for unit_id in unit_ids
+    )
 
 
 # -- utilities
