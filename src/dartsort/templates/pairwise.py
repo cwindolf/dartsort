@@ -8,6 +8,7 @@ import torch
 from .pairwise_util import compressed_convolve_to_h5
 from .template_util import CompressedUpsampledTemplates, LowRankTemplates
 from .templates import TemplateData
+from ..util.data_util import batched_h5_read
 
 
 @dataclass
@@ -335,17 +336,6 @@ class CompressedPairwiseConv:
     #         in_memory=True,
     #         device=self.device,
     #     )
-
-
-def batched_h5_read(dataset, indices, batch_size=1000):
-    if indices.size < batch_size:
-        return dataset[indices]
-    else:
-        out = np.empty((indices.size, *dataset.shape[1:]), dtype=dataset.dtype)
-        for bs in range(0, indices.size, batch_size):
-            be = min(indices.size, bs + batch_size)
-            out[bs:be] = dataset[indices[bs:be]]
-        return out
 
 
 def _get_shift_indexer(shifts):

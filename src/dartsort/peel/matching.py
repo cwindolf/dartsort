@@ -1169,13 +1169,13 @@ class MatchingPeaks:
         self._upsampling_indices = self.upsampling_indices[which]
         self._scalings = self.scalings[which]
         self._scores = self.scores[which]
-        self.n_spikes = self._times.shape
+        self.n_spikes = self._times.numel()
 
     def grow_buffers(self, min_size=0):
         sz = max(min_size, int(self.cur_buf_size * self.BUFFER_GROWTH))
         k = self.n_spikes
         self._times = _grow_buffer(self._times, k, sz)
-        self.objective_template_indices = _grow_buffer(self._template_indices, k, sz)
+        self._template_indices = _grow_buffer(self._template_indices, k, sz)
         self._objective_template_indices = _grow_buffer(
             self._objective_template_indices, k, sz
         )
