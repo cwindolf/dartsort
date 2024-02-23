@@ -57,6 +57,9 @@ class DARTsortSorting:
         self.channels = np.asarray(self.channels, dtype=int)
         assert self.times_samples.shape == self.channels.shape
 
+        unit_ids = np.unique(self.labels)
+        self.unit_ids = unit_ids[unit_ids >= 0]
+
         if self.extra_features:
             for k in self.extra_features:
                 v = self.extra_features[k] = np.asarray(self.extra_features[k])
@@ -116,13 +119,6 @@ class DARTsortSorting:
     @property
     def n_units(self):
         return self.unit_ids.size
-
-    @property
-    def unit_ids(self):
-        if self._unit_ids is None:
-            self._unit_ids = np.unique(self.labels)
-            self._unit_ids = self._unit_ids[self._unit_ids >= 0]
-        return self._unit_ids
 
     def __str__(self):
         name = self.__class__.__name__
@@ -307,3 +303,17 @@ def reindex_sorting_labels(sorting):
     kept = np.flatnonzero(new_labels >= 0)
     _, new_labels[kept] = np.unique(new_labels[kept], return_inverse=True)
     return replace(sorting, labels=new_labels)
+
+
+# -- hdf5 util
+
+
+def batched_h5_read(dataset, indices, batch_size=1000):
+    if indices.size < batch_size:
+        return dataset[indices]
+    else:
+        out = np.empty((indices.size, *dataset.shape[1:]), dtype=dataset.dtype)
+        for bs in range(0, indices.size, batch_size):
+            be = min(indices.size, bs + batch_size)
+            out[bs:be] = dataset[indices[bs:be]]
+        return out

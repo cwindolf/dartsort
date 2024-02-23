@@ -6,7 +6,7 @@ import h5py
 import numpy as np
 import torch
 from dartsort.transform import WaveformPipeline
-from dartsort.util.data_util import SpikeDataset
+from dartsort.util.data_util import SpikeDataset, batched_h5_read
 from dartsort.util.multiprocessing_util import get_pool
 from dartsort.util.py_util import delay_keyboard_interrupt
 from spikeinterface.core.recording_tools import get_chunk_with_margin
@@ -192,7 +192,8 @@ class BasePeeler(torch.nn.Module):
                             if stop_after_n_waveforms and n_spikes >= stop_after_n_waveforms:
                                 pool.shutdown(cancel_futures=True)
                     except CancelledError:
-                        results.set_description(f"Stopped after {n_spikes} spikes.")
+                        if show_progress:
+                            results.write(f"Got {n_spikes} spikes, enough to stop early.")
         finally:
             self.to("cpu")
 
@@ -396,15 +397,19 @@ class BasePeeler(torch.nn.Module):
             # work in a try finally so we can delete the temp file
             # in case of an issue or a keyboard interrupt
             with h5py.File(temp_hdf5_filename) as h5:
-                waveforms = torch.tensor(h5["peeled_waveforms_fit"][:])
-                channels = torch.tensor(h5["channels"][:])
-            if self.max_waveforms_fit and waveforms.shape[0] > self.max_waveforms_fit:
-                choices = self.fit_subsampling_random_state.choice(
-                    waveforms.shape[0], size=self.max_waveforms_fit, replace=False
-                )
-                choices.sort()
-                waveforms = waveforms[choices]
-                channels = channels[choices]
+                channels = h5["channels"][:]
+                n_wf = channels.size
+                if self.max_waveforms_fit and n_wf > self.max_waveforms_fit:
+                    choices = self.fit_subsampling_random_state.choice(
+                        n_wf, size=self.max_waveforms_fit, replace=False
+                    )
+                    choices.sort()
+                    channels = channels[choices]
+                    waveforms = batched_h5_read(h5["peeled_waveforms_fit"], choices)
+
+            channels = torch.from_numpy(channels)
+            waveforms = torch.from_numpy(waveforms)
+
             featurization_pipeline.fit(waveforms, max_channels=channels)
             self.featurization_pipeline = featurization_pipeline
         finally:
