@@ -50,27 +50,50 @@ def visualize_sorting(
 
     if make_unit_summaries and sorting.n_units > 1:
         unit_summary_dir = output_directory / "single_unit_summaries"
-        if not overwrite and unit.all_summaries_done(
+        summaries_done = not overwrite and unit.all_summaries_done(
             sorting.unit_ids, unit_summary_dir
-        ):
-            return
-        sorting_analysis = DARTsortAnalysis.from_sorting(
-            recording=recording,
-            sorting=sorting,
-            motion_est=motion_est,
-            name=output_directory.stem,
-            n_jobs_templates=n_jobs_templates,
         )
-        unit.make_all_summaries(
-            sorting_analysis,
-            unit_summary_dir,
-            channel_show_radius_um=50.0,
-            amplitude_color_cutoff=15.0,
-            dpi=dpi,
-            n_jobs=n_jobs,
-            show_progress=True,
-            overwrite=overwrite,
+
+        unit_assignments_dir = output_directory / "template_assignments"
+        do_assignments = output_directory.stem.startswith("match")
+        assignments_done = not overwrite and unit.all_summaries_done(
+            sorting.unit_ids, unit_assignments_dir
         )
+
+        do_something = (not summaries_done) or (do_assignments and not assignments_done)
+        if do_something:
+            sorting_analysis = DARTsortAnalysis.from_sorting(
+                recording=recording,
+                sorting=sorting,
+                motion_est=motion_est,
+                name=output_directory.stem,
+                n_jobs_templates=n_jobs_templates,
+            )
+
+        if not summaries_done:
+            unit.make_all_summaries(
+                sorting_analysis,
+                unit_summary_dir,
+                channel_show_radius_um=50.0,
+                amplitude_color_cutoff=15.0,
+                dpi=dpi,
+                n_jobs=n_jobs,
+                show_progress=True,
+                overwrite=overwrite,
+            )
+
+        if do_assignments and not assignments_done:
+            unit.make_all_summaries(
+                sorting_analysis,
+                unit_assignments_dir,
+                plots=unit.template_assignment_plots,
+                channel_show_radius_um=50.0,
+                amplitude_color_cutoff=15.0,
+                dpi=dpi,
+                n_jobs=n_jobs,
+                show_progress=True,
+                overwrite=overwrite,
+            )
 
 
 def visualize_all_sorting_steps(
