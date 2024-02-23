@@ -25,7 +25,7 @@ from ..cluster import merge, relocate
 from ..config import default_template_config
 from ..templates import TemplateData
 from ..transform import WaveformPipeline
-from .data_util import DARTsortSorting
+from .data_util import DARTsortSorting, batched_h5_read
 from .drift_util import (get_spike_pitch_shifts,
                          get_waveforms_on_static_channels, registered_average)
 from .spikeio import read_waveforms_channel_index
@@ -96,6 +96,7 @@ class DARTsortAnalysis:
             with h5py.File(hdf5_path, "r") as h5:
                 same_labels = np.array_equal(sorting.labels, h5["labels"][:])
             have_templates = have_templates and same_labels
+            template_data = TemplateData.from_npz(template_npz)
 
         if not have_templates:
             template_data = TemplateData.from_config(
@@ -176,8 +177,6 @@ class DARTsortAnalysis:
 
         if self.featurization_pipeline is not None:
             assert not self.featurization_pipeline.needs_fit()
-        temp_units = self.template_data.unit_ids[self.template_data.spike_counts > 0]
-        assert np.isin(temp_units, np.unique(self.sorting.labels)).all()
 
         assert self.hdf5_path.exists()
         self.coarse_template_data = self.template_data.coarsen()
@@ -194,7 +193,6 @@ class DARTsortAnalysis:
                 self.motion_est is not None
                 and self.template_data.registered_geom is not None
             )
-        assert np.array_equal(self.coarse_template_data.unit_ids, self.unit_ids)
 
         # cached hdf5 pointer
         self._h5 = None
@@ -594,18 +592,20 @@ class DARTsortAnalysis:
         return waveforms, max_chan, show_geom, show_channel_index
 
     def nearby_coarse_templates(self, unit_id, n_neighbors=5):
-        unit_ix = np.searchsorted(self.unit_ids, unit_id)
+        td = self.coarse_template_data
+
+        unit_ix = np.searchsorted(td.unit_ids, unit_id)
         unit_dists = self.merge_dist[unit_ix]
         distance_order = np.argsort(unit_dists)
         distance_order = np.concatenate(
             ([unit_ix], distance_order[distance_order != unit_ix])
         )
         # assert distance_order[0] == unit_ix
-        neighbor_ixs = distance_order[:n_neighbors]
-        neighbor_ids = self.unit_ids[neighbor_ixs]
-        neighbor_dists = self.merge_dist[neighbor_ixs[:, None], neighbor_ixs[None, :]]
-        neighbor_coarse_templates = self.coarse_template_data.templates[neighbor_ixs]
-        return neighbor_ids, neighbor_dists, neighbor_coarse_templates
+        neighb_ixs = distance_order[:n_neighbors]
+        neighb_ids = td.unit_ids[neighb_ixs]
+        neighb_dists = self.merge_dist[neighb_ixs[:, None], neighb_ixs[None, :]]
+        neighb_coarse_templates = td.templates[neighb_ixs]
+        return neighb_ids, neighb_dists, neighb_coarse_templates
 
     # computation
 
@@ -621,7 +621,7 @@ class DARTsortAnalysis:
             device=self.device,
             n_jobs=1,
         )
-        assert np.array_equal(units, self.unit_ids)
+        assert np.array_equal(units, self.coarse_template_data.unit_ids)
         self.merge_dist = dists
 
 
@@ -671,17 +671,3 @@ class DARTsortGroundTruthComparison:
 
     def get_waveforms_by_category(self, gt_unit, predicted_unit=None):
         return ...
-
-
-# -- h5 helper... slow reading...
-
-
-def batched_h5_read(dataset, indices, batch_size=1000):
-    if indices.size < batch_size:
-        return dataset[indices]
-    else:
-        out = np.empty((indices.size, *dataset.shape[1:]), dtype=dataset.dtype)
-        for bs in range(0, indices.size, batch_size):
-            be = min(indices.size, bs + batch_size)
-            out[bs:be] = dataset[indices[bs:be]]
-        return out

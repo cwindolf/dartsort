@@ -9,6 +9,7 @@ from dartsort.detect import detect_and_deduplicate
 from dartsort.transform import Waveform, WaveformPipeline
 from dartsort.util import spiketorch
 from dartsort.util.waveform_util import make_channel_index
+from dartsort.util.data_util import batched_h5_read
 
 from .peel_base import BasePeeler
 
@@ -89,7 +90,11 @@ class SubtractionPeeler(BasePeeler):
 
     @classmethod
     def from_config(
-        cls, recording, waveform_config, subtraction_config, featurization_config
+        cls,
+        recording,
+        waveform_config,
+        subtraction_config,
+        featurization_config,
     ):
         # waveform extraction channel neighborhoods
         geom = torch.tensor(recording.get_channel_locations())
@@ -219,11 +224,16 @@ class SubtractionPeeler(BasePeeler):
         if which == "denoisers":
             self.subtraction_denoising_pipeline = WaveformPipeline(
                 [init_waveform_feature]
-                + [t for t in orig_denoise if (t.is_denoiser and not t.needs_fit())]
+                + [
+                    t
+                    for t in orig_denoise
+                    if (t.is_denoiser and not t.needs_fit())
+                ]
             )
         else:
             self.subtraction_denoising_pipeline = WaveformPipeline(
-                [init_waveform_feature] + [t for t in orig_denoise if t.is_denoiser]
+                [init_waveform_feature]
+                + [t for t in orig_denoise if t.is_denoiser]
             )
 
         # and we don't need any features for this
@@ -244,15 +254,21 @@ class SubtractionPeeler(BasePeeler):
             # work in a try finally so we can delete the temp file
             # in case of an issue or a keyboard interrupt
             with h5py.File(temp_hdf5_filename) as h5:
-                waveforms = torch.from_numpy(h5["subtract_fit_waveforms"][:])
-                channels = torch.from_numpy(h5["channels"][:])
-            if self.max_waveforms_fit and waveforms.shape[0] > self.max_waveforms_fit:
-                choices = self.fit_subsampling_random_state.choice(
-                    waveforms.shape[0], size=self.max_waveforms_fit, replace=False
-                )
-                choices.sort()
-                waveforms = waveforms[choices]
-                channels = channels[choices]
+                channels = h5["channels"][:]
+                n_wf = channels.size
+                if self.max_waveforms_fit and n_wf > self.max_waveforms_fit:
+                    choices = self.fit_subsampling_random_state.choice(
+                        n_wf, size=self.max_waveforms_fit, replace=False
+                    )
+                    choices.sort()
+                    channels = channels[choices]
+                    waveforms = batched_h5_read(
+                        h5["subtract_fit_waveforms"], choices
+                    )
+
+            channels = torch.from_numpy(channels)
+            waveforms = torch.from_numpy(waveforms)
+
             orig_denoise.fit(waveforms, max_channels=channels)
             self.subtraction_denoising_pipeline = orig_denoise
             self.featurization_pipeline = orig_featurization_pipeline
@@ -410,7 +426,8 @@ def subtract_chunk(
 
     # discard spikes in the margins and sort times_samples for caller
     keep = torch.nonzero(
-        (spike_times >= left_margin) & (spike_times < traces.shape[0] - right_margin)
+        (spike_times >= left_margin)
+        & (spike_times < traces.shape[0] - right_margin)
     )[:, 0]
     if not keep.any():
         return empty_chunk_subtraction_result(
@@ -454,7 +471,9 @@ def subtract_chunk(
     )
 
 
-def empty_chunk_subtraction_result(spike_length_samples, channel_index, residual):
+def empty_chunk_subtraction_result(
+    spike_length_samples, channel_index, residual
+):
     empty_waveforms = torch.empty(
         (0, spike_length_samples, channel_index.shape[1]),
         dtype=residual.dtype,
