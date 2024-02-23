@@ -298,7 +298,7 @@ class WaveformPlot(UnitPlot):
         self,
         trough_offset_samples=42,
         spike_length_samples=121,
-        count=250,
+        count=100,
         channel_show_radius_um=50,
         relocated=False,
         color="k",
@@ -806,7 +806,7 @@ def make_all_summaries(
 
 
 def all_summaries_done(unit_ids, save_folder, ext="png"):
-    return all(
+    return save_folder.exists() and all(
         (save_folder / f"unit{unit_id:04d}.{ext}").exists()
         for unit_id in unit_ids
     )
