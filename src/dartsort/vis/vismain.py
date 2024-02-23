@@ -50,10 +50,15 @@ def visualize_sorting(
 
     if make_unit_summaries and sorting.n_units > 1:
         unit_summary_dir = output_directory / "single_unit_summaries"
+        if not overwrite and unit.all_summaries_done(
+            sorting.unit_ids, unit_summary_dir
+        ):
+            return
         sorting_analysis = DARTsortAnalysis.from_sorting(
             recording=recording,
             sorting=sorting,
             motion_est=motion_est,
+            name=output_directory.stem,
             n_jobs_templates=n_jobs_templates,
         )
         unit.make_all_summaries(
