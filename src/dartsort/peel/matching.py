@@ -6,6 +6,7 @@ Interesting code details to revisit:
  - Why did the old code have this refractory thing inside
    high_res_peak? I think that was how they handled dedup?
 """
+
 from dataclasses import dataclass
 from typing import Optional
 
@@ -609,16 +610,13 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
                 conv_pad_len=self.obj_pad_len,
             )
 
-            # new_norm = torch.linalg.norm(residual) ** 2
-            # print(f"{it=} {new_norm=}")
-            # print(f"{(new_norm-old_norm)=}")
-            # print(f"{new_peaks.n_spikes=}")
-            # print(f"{new_peaks.scores.mean().numpy(force=True)=}")
-            # print("----------")
-
             # update spike train
             peaks.extend(new_peaks)
-        peaks.sort()
+
+        # subset to peaks inside the margin and sort for the caller
+        max_time = traces.shape[0] - right_margin - 1
+        valid = peaks.times == peaks.times.clamp(left_margin, max_time)
+        peaks.subset(*torch.nonzero(valid, as_tuple=True), sort=True)
 
         # extract collision-cleaned waveforms on small neighborhoods
         channels, waveforms = compressed_template_data.get_collisioncleaned_waveforms(
@@ -859,9 +857,11 @@ class MatchingTemplateData:
                 grid=True,
                 device=conv.device,
                 shifts_a=self.shifts_a,
-                shifts_b=self.shifts_b[template_indices[batch_start:batch_end]]
-                if self.shifts_b is not None
-                else None,
+                shifts_b=(
+                    self.shifts_b[template_indices[batch_start:batch_end]]
+                    if self.shifts_b is not None
+                    else None
+                ),
             )
             ix_template = template_indices_a[:, None]
             ix_time = times_sub[:, None] + (conv_pad_len + self.conv_lags)[None, :]
@@ -1159,11 +1159,23 @@ class MatchingPeaks:
     def scores(self):
         return self._scores[: self.n_spikes]
 
+    def subset(self, which, sort=False):
+        self._times = self.times[which]
+        if sort:
+            self._times, order = torch.sort(self._times, stable=True)
+            which = which[order]
+        self._template_indices = self.template_indices[which]
+        self._objective_template_indices = self.objective_template_indices[which]
+        self._upsampling_indices = self.upsampling_indices[which]
+        self._scalings = self.scalings[which]
+        self._scores = self.scores[which]
+        self.n_spikes = self._times.shape
+
     def grow_buffers(self, min_size=0):
         sz = max(min_size, int(self.cur_buf_size * self.BUFFER_GROWTH))
         k = self.n_spikes
         self._times = _grow_buffer(self._times, k, sz)
-        self._template_indices = _grow_buffer(self._template_indices, k, sz)
+        self.objective_template_indices = _grow_buffer(self._template_indices, k, sz)
         self._objective_template_indices = _grow_buffer(
             self._objective_template_indices, k, sz
         )
@@ -1173,30 +1185,32 @@ class MatchingPeaks:
         self.cur_buf_size = sz
 
     def sort(self):
-        order = torch.argsort(self.times[: self.n_spikes])
-        self._times[: self.n_spikes] = self.times[order]
-        self._template_indices[: self.n_spikes] = self.template_indices[order]
-        self._objective_template_indices[
-            : self.n_spikes
-        ] = self.objective_template_indices[order]
-        self._upsampling_indices[: self.n_spikes] = self.upsampling_indices[order]
-        self._scalings[: self.n_spikes] = self.scalings[order]
-        self._scores[: self.n_spikes] = self.scores[order]
+        sl = slice(0, self.n_spikes)
+
+        times = self._times[sl]
+        order = torch.argsort(times, stable=True)
+
+        self._times[sl] = times[order]
+        self._template_indices[sl] = self.template_indices[order]
+        self._objective_template_indices[sl] = self.objective_template_indices[order]
+        self._upsampling_indices[sl] = self.upsampling_indices[order]
+        self._scalings[sl] = self.scalings[order]
+        self._scores[sl] = self.scores[order]
 
     def extend(self, other):
         new_n_spikes = other.n_spikes + self.n_spikes
+        sl_new = slice(self.n_spikes, new_n_spikes)
+
         if new_n_spikes > self.cur_buf_size:
             self.grow_buffers(min_size=new_n_spikes)
-        self._times[self.n_spikes : new_n_spikes] = other.times
-        self._template_indices[self.n_spikes : new_n_spikes] = other.template_indices
-        self._objective_template_indices[
-            self.n_spikes : new_n_spikes
-        ] = other.objective_template_indices
-        self._upsampling_indices[
-            self.n_spikes : new_n_spikes
-        ] = other.upsampling_indices
-        self._scalings[self.n_spikes : new_n_spikes] = other.scalings
-        self._scores[self.n_spikes : new_n_spikes] = other.scores
+
+        self._times[sl_new] = other.times
+        self._template_indices[sl_new] = other.template_indices
+        self._objective_template_indices[sl_new] = other.objective_template_indices
+        self._upsampling_indices[sl_new] = other.upsampling_indices
+        self._scalings[sl_new] = other.scalings
+        self._scores[sl_new] = other.scores
+
         self.n_spikes = new_n_spikes
 
 
