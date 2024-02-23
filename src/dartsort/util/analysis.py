@@ -51,6 +51,7 @@ class DARTsortAnalysis:
     hdf5_path: Optional[Path] = None
     featurization_pipeline: Optional[WaveformPipeline] = None
     motion_est: Optional[MotionEstimate] = None
+    name: Optional[str] = None
 
     # hdf5 keys
     localizations_dataset = "point_source_localizations"
@@ -72,6 +73,7 @@ class DARTsortAnalysis:
         recording,
         sorting,
         motion_est=None,
+        name=None,
         template_config=default_template_config,
         n_jobs_templates=0,
     ):
@@ -90,7 +92,7 @@ class DARTsortAnalysis:
         template_npz = model_dir / "template_data.npz"
         have_templates = template_npz.exists()
         if have_templates:
-            print(f"Reloading templates from {templates_npz}...")
+            print(f"Reloading templates from {template_npz}...")
             with h5py.File(hdf5_path, "r") as h5:
                 same_labels = np.array_equal(sorting.labels, h5["labels"][:])
             have_templates = have_templates and same_labels
@@ -112,6 +114,7 @@ class DARTsortAnalysis:
             hdf5_path=hdf5_path,
             featurization_pipeline=featurization_pipeline,
             motion_est=motion_est,
+            name=name,
         )
 
     @classmethod
