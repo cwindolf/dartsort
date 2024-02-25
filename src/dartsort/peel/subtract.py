@@ -8,8 +8,8 @@ import torch.nn.functional as F
 from dartsort.detect import detect_and_deduplicate
 from dartsort.transform import Waveform, WaveformPipeline
 from dartsort.util import spiketorch
-from dartsort.util.waveform_util import make_channel_index
 from dartsort.util.data_util import batched_h5_read
+from dartsort.util.waveform_util import make_channel_index
 
 from .peel_base import BasePeeler
 
@@ -266,6 +266,8 @@ class SubtractionPeeler(BasePeeler):
                     waveforms = batched_h5_read(
                         h5["subtract_fit_waveforms"], choices
                     )
+                else:
+                    waveforms = h5["subtract_fit_waveforms"][:]
 
             channels = torch.from_numpy(channels)
             waveforms = torch.from_numpy(waveforms)
