@@ -9,7 +9,7 @@ from dartsort.templates.pairwise_util import (
     iterate_compressed_pairwise_convolutions,
 )
 from dartsort.util.data_util import DARTsortSorting
-from scipy.cluster.hierarchy import complete, fcluster
+from scipy.cluster.hierarchy import linkage, fcluster
 from scipy.sparse import coo_array
 from scipy.sparse.csgraph import maximum_bipartite_matching
 from tqdm.auto import tqdm
@@ -25,6 +25,7 @@ def merge_templates(
     motion_est=None,
     max_shift_samples=20,
     superres_linkage=np.max,
+    linkage="complete",
     sym_function=np.minimum,
     merge_distance_threshold=0.25,
     temporal_upsampling_factor=8,
@@ -106,6 +107,7 @@ def merge_templates(
         shifts,
         template_snrs,
         merge_distance_threshold=merge_distance_threshold,
+        link=linkage,
     )
 
     if reorder_by_depth:
@@ -388,6 +390,7 @@ def recluster(
     shifts,
     template_snrs,
     merge_distance_threshold=0.25,
+    link="complete",
 ):
     # upper triangle not including diagonal, aka condensed distance matrix in scipy
     pdist = dists[np.triu_indices(dists.shape[0], k=1)]
@@ -400,7 +403,7 @@ def recluster(
 
     pdist[~finite] = 1_000_000 + pdist[finite].max()
     # complete linkage: max dist between all pairs across clusters.
-    Z = complete(pdist)
+    Z = linkage(pdist, method=link)
     # extract flat clustering using our max dist threshold
     new_labels = fcluster(Z, merge_distance_threshold, criterion="distance")
 

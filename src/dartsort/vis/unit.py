@@ -292,7 +292,6 @@ class WaveformPlot(UnitPlot):
     kind = "waveform"
     width = 2
     height = 2
-    title = "waveforms"
 
     def __init__(
         self,
@@ -310,6 +309,7 @@ class WaveformPlot(UnitPlot):
         max_abs_template_scale=1.35,
         legend=True,
         template_index=None,
+        title=None,
     ):
         self.count = count
         self.channel_show_radius_um = channel_show_radius_um
@@ -325,6 +325,7 @@ class WaveformPlot(UnitPlot):
         self.legend = legend
         self.max_abs_template_scale = max_abs_template_scale
         self.template_index = template_index
+        self.title = title
 
     def get_waveforms(self, sorting_analysis, unit_id):
         raise NotImplementedError
@@ -343,6 +344,7 @@ class WaveformPlot(UnitPlot):
             show_template = bool(templates.size)
         if self.template_index is not None and show_template:
             templates = sorting_analysis.template_data.templates[self.template_index]
+            templates = templates[None]
             show_template = bool(templates.size)
             sup_temp_ids = sorting_analysis.unit_template_indices(unit_id)
             template_color = self.superres_template_cmap(
@@ -373,23 +375,24 @@ class WaveformPlot(UnitPlot):
             show_superres_templates = suptemplates.shape[0] > 1
             max_abs_amp = self.max_abs_template_scale * np.nanmax(np.abs(suptemplates))
 
-        ls = geomplot(
-            waveforms,
-            max_channels=np.full(len(waveforms), max_chan),
-            channel_index=ci,
-            geom=geom,
-            ax=axis,
-            show_zero=False,
-            subar=True,
-            msbar=False,
-            zlim="tight",
-            color=self.color,
-            alpha=self.alpha,
-            max_abs_amp=max_abs_amp,
-            lw=1,
-        )
-        handles = [ls[0]]
-        labels = ["waveforms"]
+        handles = {}
+        if waveforms is not None:
+            ls = geomplot(
+                waveforms,
+                max_channels=np.full(len(waveforms), max_chan),
+                channel_index=ci,
+                geom=geom,
+                ax=axis,
+                show_zero=False,
+                subar=True,
+                msbar=False,
+                zlim="tight",
+                color=self.color,
+                alpha=self.alpha,
+                max_abs_amp=max_abs_amp,
+                lw=1,
+            )
+            handles["waveforms"] = ls[0]
 
         if show_superres_templates:
             showchans = ci[max_chan]
@@ -411,8 +414,7 @@ class WaveformPlot(UnitPlot):
                     lw=1,
                 )
                 suphandles.append(ls[0])
-            handles.append(tuple(suphandles))
-            labels.append("superres templates")
+            handles["superres templates"] = tuple(suphandles)
 
         if show_template:
             showchans = ci[max_chan]
@@ -428,21 +430,21 @@ class WaveformPlot(UnitPlot):
                 max_abs_amp=max_abs_amp,
                 lw=1,
             )
-            handles.append(ls[0])
-            labels.append("mean of superres templates")
+            handles["mean of superres templates"] = ls[0]
 
-        reloc_str = "relocated " * self.relocated
+        reloc_str = "reloc. " * self.relocated
         shift_str = "shifted " * sorting_analysis.shifting
-        axis.set_title(reloc_str + shift_str + self.title)
-        reg_str = "registered " * sorting_analysis.shifting
-        axis.set_ylabel(reg_str + "depth (um)")
+        if self.title is None:
+            axis.set_title(reloc_str + shift_str + self.wfs_kind)
+        else:
+            axis.set_title(self.title)
         axis.set_xticks([])
         axis.set_yticks([])
 
         if self.legend:
             axis.legend(
-                handles,
-                labels,
+                handles.values(),
+                handles.keys(),
                 handler_map={tuple: HandlerTuple(ndivide=None)},
                 fancybox=False,
                 loc="upper left",
@@ -450,7 +452,7 @@ class WaveformPlot(UnitPlot):
 
 
 class RawWaveformPlot(WaveformPlot):
-    title = "raw waveforms"
+    wfs_kind = "raw wfs"
 
     def get_waveforms(self, sorting_analysis, unit_id):
         return sorting_analysis.unit_raw_waveforms(
@@ -465,7 +467,7 @@ class RawWaveformPlot(WaveformPlot):
 
 
 class TPCAWaveformPlot(WaveformPlot):
-    title = "collision-cleaned tpca waveforms"
+    wfs_kind = "coll.-cl. tpca wfs"
 
     def get_waveforms(self, sorting_analysis, unit_id):
         return sorting_analysis.unit_tpca_waveforms(
@@ -677,6 +679,7 @@ class SuperresWaveformMultiPlot(UnitMultiPlot):
             plot_cls = TPCAWaveformPlot
         else:
             assert False
+
         return [
             plot_cls(
                 count=self.count,
@@ -693,6 +696,7 @@ class SuperresWaveformMultiPlot(UnitMultiPlot):
                 legend=self.legend,
                 max_abs_template_scale=self.max_abs_template_scale,
                 template_index=template_index,
+                title=f"{sorting_analysis.template_data.spike_counts[template_index]} spikes assigned",
             )
             for template_index in sorting_analysis.unit_template_indices(unit_id)
         ]

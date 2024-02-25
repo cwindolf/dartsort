@@ -55,7 +55,7 @@ def visualize_sorting(
         )
 
         unit_assignments_dir = output_directory / "template_assignments"
-        do_assignments = output_directory.stem.startswith("match")
+        do_assignments = "match" in output_directory.stem
         assignments_done = not overwrite and unit.all_summaries_done(
             sorting.unit_ids, unit_assignments_dir
         )
