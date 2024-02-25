@@ -406,6 +406,8 @@ class BasePeeler(torch.nn.Module):
                     choices.sort()
                     channels = channels[choices]
                     waveforms = batched_h5_read(h5["peeled_waveforms_fit"], choices)
+                else:
+                    waveforms = h5["peeled_waveforms_fit"][:]
 
             channels = torch.from_numpy(channels)
             waveforms = torch.from_numpy(waveforms)
