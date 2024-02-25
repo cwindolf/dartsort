@@ -7,6 +7,7 @@ from tqdm.auto import tqdm
 from ..util.analysis import DARTsortAnalysis
 from ..util.data_util import DARTsortSorting
 from . import scatterplots, unit
+from .sorting import make_sorting_summary
 
 try:
     from dredge import motion_util
@@ -22,9 +23,12 @@ def visualize_sorting(
     output_directory,
     motion_est=None,
     make_scatterplots=True,
+    make_sorting_summaries=True,
     make_unit_summaries=True,
     gt_sorting=None,
     dpi=200,
+    layout_max_height=4,
+    layout_figsize=(11, 8.5),
     n_jobs=0,
     n_jobs_templates=0,
     overwrite=False,
@@ -34,7 +38,10 @@ def visualize_sorting(
     if make_scatterplots:
         scatter_unreg = output_directory / "scatter_unreg.png"
         if overwrite or not scatter_unreg.exists():
-            fig, axes, scatters = scatterplots.scatter_spike_features(sorting=sorting)
+            fig = plt.figure(figsize=layout_figsize)
+            fig, axes, scatters = scatterplots.scatter_spike_features(
+                sorting=sorting, figure=fig
+            )
             if have_dredge and motion_est is not None:
                 motion_util.plot_me_traces(motion_est, axes[2], color="r", lw=1)
             fig.savefig(scatter_unreg, dpi=dpi)
@@ -42,11 +49,32 @@ def visualize_sorting(
 
         scatter_reg = output_directory / "scatter_reg.png"
         if motion_est is not None and (overwrite or not scatter_reg.exists()):
+            fig = plt.figure(figsize=layout_figsize)
             fig, axes, scatters = scatterplots.scatter_spike_features(
-                sorting=sorting, motion_est=motion_est, registered=True
+                sorting=sorting, motion_est=motion_est, registered=True, figure=fig
             )
             fig.savefig(scatter_reg, dpi=dpi)
             plt.close(fig)
+
+    sorting_analysis = None
+    if make_sorting_summaries and sorting.n_units > 1:
+        sorting_summary = output_directory / "sorting_summary.png"
+        if overwrite or not sorting_summary.exists():
+            sorting_analysis = DARTsortAnalysis.from_sorting(
+                recording=recording,
+                sorting=sorting,
+                motion_est=motion_est,
+                name=output_directory.stem,
+                n_jobs_templates=n_jobs_templates,
+            )
+
+            fig = make_sorting_summary(
+                sorting_analysis,
+                max_height=layout_max_height,
+                figsize=layout_figsize,
+                figure=None,
+            )
+            fig.savefig(sorting_summary, dpi=dpi)
 
     if make_unit_summaries and sorting.n_units > 1:
         unit_summary_dir = output_directory / "single_unit_summaries"
@@ -61,7 +89,7 @@ def visualize_sorting(
         )
 
         do_something = (not summaries_done) or (do_assignments and not assignments_done)
-        if do_something:
+        if sorting_analysis is None and do_something:
             sorting_analysis = DARTsortAnalysis.from_sorting(
                 recording=recording,
                 sorting=sorting,
@@ -76,6 +104,8 @@ def visualize_sorting(
                 unit_summary_dir,
                 channel_show_radius_um=50.0,
                 amplitude_color_cutoff=15.0,
+                max_height=layout_max_height,
+                figsize=layout_figsize,
                 dpi=dpi,
                 n_jobs=n_jobs,
                 show_progress=True,
@@ -101,6 +131,7 @@ def visualize_all_sorting_steps(
     dartsort_dir,
     visualizations_dir,
     make_scatterplots=True,
+    make_sorting_summaries=True,
     make_unit_summaries=True,
     gt_sorting=None,
     step_dir_name_format="step{step:02d}_{step_name}",
@@ -108,6 +139,8 @@ def visualize_all_sorting_steps(
     initial_sortings=("subtraction.h5", "initial_clustering.npz"),
     step_refinements=("split{step}.npz", "merge{step}.npz"),
     match_step_sorting="matching{step}.h5",
+    layout_max_height=4,
+    layout_figsize=(11, 8.5),
     dpi=200,
     n_jobs=0,
     n_jobs_templates=0,
@@ -148,9 +181,12 @@ def visualize_all_sorting_steps(
             output_directory=visualizations_dir / step_dir_name,
             motion_est=motion_est,
             make_scatterplots=make_scatterplots,
+            make_sorting_summaries=make_sorting_summaries,
             make_unit_summaries=make_unit_summaries,
             gt_sorting=gt_sorting,
             dpi=dpi,
+            layout_max_height=layout_max_height,
+            layout_figsize=layout_figsize,
             n_jobs=n_jobs,
             n_jobs_templates=n_jobs_templates,
             overwrite=overwrite,
