@@ -104,6 +104,7 @@ class TemplateData:
         motion_est=None,
         save_npz_name="template_data.npz",
         localizations_dataset_name="point_source_localizations",
+        with_locs=True,
         n_jobs=0,
         units_per_job=8,
         device=None,
@@ -226,11 +227,20 @@ class TemplateData:
                 trough_offset_samples=trough_offset_samples,
                 spike_length_samples=spike_length_samples,
             )
-        else:
+        elif with_locs:
+            geom = recording.get_channel_locations()
+            depths_um = get_template_depths(
+                results["templates"],
+                geom,
+                localization_radius_um=template_config.registered_template_localization_radius_um,
+            )
             obj = cls(
                 results["templates"],
                 unit_ids,
                 spike_counts,
+                geom,
+                depths_um,
+                localization_radius_um=template_config.registered_template_localization_radius_um,
                 trough_offset_samples=trough_offset_samples,
                 spike_length_samples=spike_length_samples,
             )
