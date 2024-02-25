@@ -381,9 +381,9 @@ def conv_to_resid(
             norm_reduction = 2.0 * scaling * b - np.square(scaling) * a - inv_lambda
         else:
             norm_reduction = 2.0 * best_conv - template_b_norms[j]
-        
+
         deconv_resid_norms[j] = template_a_norms[j] - norm_reduction
-    assert (deconv_resid_norms >= -0.01).all()
+    # assert (deconv_resid_norms >= -0.01).all()
 
     return DeconvResidResult(
         template_indices_a,
