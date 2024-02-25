@@ -143,6 +143,7 @@ class SubtractionPeeler(BasePeeler):
             peak_sign=subtraction_config.peak_sign,
             spatial_dedup_channel_index=spatial_dedup_channel_index,
             n_chunks_fit=subtraction_config.n_chunks_fit,
+            max_waveforms_fit=subtraction_config.max_waveforms_fit,
             fit_subsampling_random_state=subtraction_config.fit_subsampling_random_state,
             residnorm_decrease_threshold=subtraction_config.residnorm_decrease_threshold,
         )

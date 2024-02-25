@@ -23,6 +23,11 @@ class BaseMultiPlot:
         # return [BasePlot()]
         raise NotImplementedError
 
+    def notify_global_params(self, **params):
+        for k, v in params.items():
+            if hasattr(self, k):
+                setattr(self, k, v)
+
 
 Card = namedtuple("Card", ["kind", "width", "height", "plots"])
 
