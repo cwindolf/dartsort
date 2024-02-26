@@ -115,7 +115,7 @@ def geomplot(
             ax.add_patch(
                 Rectangle(
                     [
-                        geom_plot[:, 0].max() + T // 4 - 2,
+                        xmax - T // 4 - 2,
                         min_z - max_abs_amp / 2 - subar / 10,
                     ],
                     4 + 7 + 2,
@@ -128,7 +128,7 @@ def geomplot(
         ax.add_patch(
             Rectangle(
                 [
-                    geom_plot[:, 0].max() + T // 4,
+                    xmax - T // 4,
                     min_z - max_abs_amp / 2,
                 ],
                 4,
@@ -138,7 +138,7 @@ def geomplot(
             )
         )
         ax.text(
-            geom_plot[:, 0].max() + T // 4 + 5,
+            xmax - T // 4 + 5,
             min_z - max_abs_amp / 2 + subar / 2,
             f"{subar} s.u.",
             transform=ax.transData,

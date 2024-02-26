@@ -22,7 +22,7 @@ from sklearn.decomposition import PCA
 from spikeinterface.comparison import GroundTruthComparison
 
 from ..cluster import merge, relocate
-from ..config import default_template_config
+from ..config import TemplateConfig
 from ..templates import TemplateData
 from ..transform import WaveformPipeline
 from .data_util import DARTsortSorting, batched_h5_read
@@ -33,6 +33,9 @@ from .drift_util import (
 )
 from .spikeio import read_waveforms_channel_index
 from .waveform_util import make_channel_index
+
+
+no_realign_template_config = TemplateConfig(realign_peaks=False)
 
 
 @dataclass
@@ -77,7 +80,7 @@ class DARTsortAnalysis:
         sorting,
         motion_est=None,
         name=None,
-        template_config=default_template_config,
+        template_config=no_realign_template_config,
         n_jobs_templates=0,
     ):
         """Try to re-load as much info as possible from the sorting itself
@@ -528,6 +531,8 @@ class DARTsortAnalysis:
         pca_radius_um=75,
         random_seed=0,
         max_count=500,
+        max_wfs_fit=10_000,
+        random_state=0,
     ):
         (
             which,
@@ -542,9 +547,17 @@ class DARTsortAnalysis:
             random_seed=random_seed,
             max_count=max_count,
         )
-        waveforms = waveforms.reshape(len(waveforms), -1)
 
+        # remove chans with no signal at all
+        not_entirely_nan_channels = np.flatnonzero(
+            np.isfinite(waveforms[:, 0]).any(axis=0)
+        )
+        if not_entirely_nan_channels.size and not_entirely_nan_channels.size < waveforms.shape[2]:
+            waveforms = waveforms[:, :, not_entirely_nan_channels]
+
+        waveforms = waveforms.reshape(len(waveforms), -1)
         no_nan = np.flatnonzero(~np.isnan(waveforms).any(axis=1))
+
         features = np.full(
             (len(waveforms), rank), np.nan, dtype=waveforms.dtype
         )
@@ -552,7 +565,14 @@ class DARTsortAnalysis:
             return which, features
 
         pca = PCA(rank, random_state=random_seed, whiten=True)
-        features[no_nan] = pca.fit_transform(waveforms[no_nan])
+        if no_nan.size > max_wfs_fit:
+            rg = np.random.default_rng(random_state)
+            choices = rg.choice(no_nan, size=max_wfs_fit, replace=False)
+            choices.sort()
+            pca.fit(waveforms[choices])
+            features[no_nan] = pca.transform(waveforms[no_nan])
+        else:
+            features[no_nan] = pca.fit_transform(waveforms[no_nan])
         return which, features
 
     def unit_max_channel(self, unit_id):
