@@ -841,6 +841,8 @@ def reconcile_channels(recordings, channel_index):
 
     if channel_index is not None:
         assert n_channels_full == channel_index.shape[0]
+        assert channel_index.min() >= 0
+        assert channel_index.max() <= channel_index.shape[0]
     else:
         channel_index = np.arange(n_channels_full)[:, None]
 

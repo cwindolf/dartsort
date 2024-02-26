@@ -18,7 +18,7 @@ class SortingTextInfo(OverviewPlot):
     kind = "text"
     height = 0.5
 
-    def draw(self, panel, sorting_analysis, unit_id):
+    def draw(self, panel, sorting_analysis):
         axis = panel.subplots()
         axis.axis("off")
         msg = ""
@@ -93,7 +93,7 @@ class MergeDistanceMatrix(OverviewPlot):
     def draw(self, panel, sorting_analysis):
         analysis_plots.distance_matrix_dendro(
             panel,
-            sorting_analysis.merge_dists,
+            sorting_analysis.merge_dist,
             unit_ids=sorting_analysis.coarse_template_data.unit_ids,
             dendrogram_linkage=self.dendrogram_linkage,
             dendrogram_threshold=self.dendrogram_threshold,

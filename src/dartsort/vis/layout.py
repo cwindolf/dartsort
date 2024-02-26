@@ -68,6 +68,8 @@ def flow_layout(plots, max_height=4, figsize=(8.5, 11), figure=None, **plot_kwar
         panel.set_facecolor([0, 0, 0, 0])
         panel.patch.set_facecolor([0, 0, 0, 0])
 
+    return figure
+
 
 def flow_layout_columns(plots, max_height=4, **plot_kwargs):
     all_plots = []
@@ -123,7 +125,7 @@ def flow_layout_columns(plots, max_height=4, **plot_kwargs):
             cur_width = card.width
             continue
 
-        if sum(c.height for c in columns[-1]) + card.height <= max_height:
+        if sum(c.height for c in columns[-1]) + card.height <= max_height + 1e-8:
             columns[-1].append(card)
         else:
             columns.append([card])

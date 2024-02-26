@@ -288,7 +288,7 @@ def fit_tsvd(
     sorting,
     denoising_rank=5,
     denoising_fit_radius=75,
-    denoising_spikes_fit=50_000,
+    denoising_spikes_fit=25_000,
     trough_offset_samples=42,
     spike_length_samples=121,
     random_seed=0,
@@ -316,14 +316,12 @@ def fit_tsvd(
         spike_length_samples=spike_length_samples,
         fill_value=0.0,  # all-0 rows don't change SVD basis
     )
+    waveforms = waveforms.transpose(0, 2, 1)
+    waveforms = waveforms.reshape(len(times) * tsvd_channel_index.shape[1], -1)
 
     # reshape, fit tsvd, and done
     tsvd = TruncatedSVD(n_components=denoising_rank, random_state=random_seed)
-    tsvd.fit(
-        waveforms.transpose(0, 2, 1).reshape(
-            len(times) * tsvd_channel_index.shape[1], -1
-        )
-    )
+    tsvd.fit(waveforms)
 
     return tsvd
 
@@ -381,7 +379,9 @@ def get_all_shifted_raw_and_low_rank_templates(
     min_count_at_shift=5,
     device=None,
 ):
-    n_jobs, Executor, context, rank_queue = get_pool(n_jobs, with_rank_queue=True)
+    n_jobs, Executor, context, rank_queue = get_pool(
+        n_jobs, with_rank_queue=True
+    )
     unit_ids = np.unique(sorting.labels)
     unit_ids = unit_ids[unit_ids >= 0]
     raw = denoising_tsvd is None
@@ -395,7 +395,8 @@ def get_all_shifted_raw_and_low_rank_templates(
 
     n_units = sorting.labels.max() + 1
     raw_templates = np.zeros(
-        (n_units, spike_length_samples, n_template_channels), dtype=recording.dtype
+        (n_units, spike_length_samples, n_template_channels),
+        dtype=recording.dtype,
     )
     low_rank_templates = None
     if not raw:
@@ -403,10 +404,13 @@ def get_all_shifted_raw_and_low_rank_templates(
             (n_units, spike_length_samples, n_template_channels),
             dtype=recording.dtype,
         )
-    snrs_by_channel = np.zeros((n_units, n_template_channels), dtype=recording.dtype)
+    snrs_by_channel = np.zeros(
+        (n_units, n_template_channels), dtype=recording.dtype
+    )
 
     unit_id_chunks = [
-        unit_ids[i : i + units_per_job] for i in range(0, n_units, units_per_job)
+        unit_ids[i : i + units_per_job]
+        for i in range(0, n_units, units_per_job)
     ]
 
     with Executor(
@@ -484,7 +488,9 @@ class TemplateProcessContext:
         self.denoising_tsvd = denoising_tsvd
         if denoising_tsvd is not None:
             self.denoising_tsvd = TorchSVDProjector(
-                torch.from_numpy(denoising_tsvd.components_.astype(recording.dtype))
+                torch.from_numpy(
+                    denoising_tsvd.components_.astype(recording.dtype)
+                )
             )
             self.denoising_tsvd.to(self.device)
         self.spikes_per_unit = spikes_per_unit
@@ -498,7 +504,11 @@ class TemplateProcessContext:
         self.min_count_at_shift = min_count_at_shift
 
         self.spike_buffer = torch.zeros(
-            (spikes_per_unit * units_per_job, spike_length_samples, self.n_channels),
+            (
+                spikes_per_unit * units_per_job,
+                spike_length_samples,
+                self.n_channels,
+            ),
             device=device,
             dtype=torch.from_numpy(np.zeros(1, dtype=recording.dtype)).dtype,
         )
@@ -541,7 +551,9 @@ def _template_process_init(
     device = torch.device(device)
     if device.type == "cuda" and device.index is None:
         if torch.cuda.device_count() > 1:
-            device = torch.device("cuda", index=rank % torch.cuda.device_count())
+            device = torch.device(
+                "cuda", index=rank % torch.cuda.device_count()
+            )
     torch.set_grad_enabled(False)
 
     rg = np.random.default_rng(random_seed + rank)
@@ -580,7 +592,9 @@ def _template_job(unit_ids):
     for u, c in zip(uids, counts):
         if c > p.spikes_per_unit:
             in_unit = p.rg.choice(
-                in_units_full[labels_full == u], p.spikes_per_unit, replace=False
+                in_units_full[labels_full == u],
+                p.spikes_per_unit,
+                replace=False,
             )
             in_units[offset : offset + min(c, p.spikes_per_unit)] = in_unit
             labels[offset : offset + min(c, p.spikes_per_unit)] = u
