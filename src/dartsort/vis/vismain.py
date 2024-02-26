@@ -26,6 +26,9 @@ def visualize_sorting(
     make_sorting_summaries=True,
     make_unit_summaries=True,
     gt_sorting=None,
+    channel_show_radius_um=50.0,
+    amplitude_color_cutoff=15.0,
+    pca_radius_um=75.0,
     dpi=200,
     layout_max_height=4,
     layout_figsize=(11, 8.5),
@@ -51,7 +54,10 @@ def visualize_sorting(
         if motion_est is not None and (overwrite or not scatter_reg.exists()):
             fig = plt.figure(figsize=layout_figsize)
             fig, axes, scatters = scatterplots.scatter_spike_features(
-                sorting=sorting, motion_est=motion_est, registered=True, figure=fig
+                sorting=sorting,
+                motion_est=motion_est,
+                registered=True,
+                figure=fig,
             )
             fig.savefig(scatter_reg, dpi=dpi)
             plt.close(fig)
@@ -88,7 +94,9 @@ def visualize_sorting(
             sorting.unit_ids, unit_assignments_dir
         )
 
-        do_something = (not summaries_done) or (do_assignments and not assignments_done)
+        do_something = (not summaries_done) or (
+            do_assignments and not assignments_done
+        )
         if sorting_analysis is None and do_something:
             sorting_analysis = DARTsortAnalysis.from_sorting(
                 recording=recording,
@@ -102,8 +110,9 @@ def visualize_sorting(
             unit.make_all_summaries(
                 sorting_analysis,
                 unit_summary_dir,
-                channel_show_radius_um=50.0,
-                amplitude_color_cutoff=15.0,
+                channel_show_radius_um=channel_show_radius_um,
+                amplitude_color_cutoff=amplitude_color_cutoff,
+                pca_radius_um=pca_radius_um,
                 max_height=layout_max_height,
                 figsize=layout_figsize,
                 dpi=dpi,
@@ -117,8 +126,8 @@ def visualize_sorting(
                 sorting_analysis,
                 unit_assignments_dir,
                 plots=unit.template_assignment_plots,
-                channel_show_radius_um=50.0,
-                amplitude_color_cutoff=15.0,
+                channel_show_radius_um=channel_show_radius_um,
+                amplitude_color_cutoff=amplitude_color_cutoff,
                 dpi=dpi,
                 n_jobs=n_jobs,
                 show_progress=True,
@@ -139,6 +148,9 @@ def visualize_all_sorting_steps(
     initial_sortings=("subtraction.h5", "initial_clustering.npz"),
     step_refinements=("split{step}.npz", "merge{step}.npz"),
     match_step_sorting="matching{step}.h5",
+    channel_show_radius_um=50.0,
+    amplitude_color_cutoff=15.0,
+    pca_radius_um=75.0,
     layout_max_height=4,
     layout_figsize=(11, 8.5),
     dpi=200,
@@ -184,6 +196,9 @@ def visualize_all_sorting_steps(
             make_sorting_summaries=make_sorting_summaries,
             make_unit_summaries=make_unit_summaries,
             gt_sorting=gt_sorting,
+            channel_show_radius_um=channel_show_radius_um,
+            amplitude_color_cutoff=amplitude_color_cutoff,
+            pca_radius_um=pca_radius_um,
             dpi=dpi,
             layout_max_height=layout_max_height,
             layout_figsize=layout_figsize,
