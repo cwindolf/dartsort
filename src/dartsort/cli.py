@@ -61,6 +61,7 @@ def dartsort_binary_folder_config_py(
 @click.argument("visualizations_dir")
 @click.option("--channel_show_radius_um", default=50.0)
 @click.option("--pca_radius_um", default=75.0)
+@click.option("--no_superres_templates", default=False, flag_value=True, is_flag=True)
 @click.option("--n_jobs_gpu", default=0)
 @click.option("--n_jobs_cpu", default=0)
 @click.option("--overwrite", default=False, flag_value=True, is_flag=True)
@@ -73,6 +74,7 @@ def dartvis_binary_folder_all(
     visualizations_dir,
     channel_show_radius_um=50.0,
     pca_radius_um=75.0,
+    no_superres_templates=False,
     n_jobs_gpu=0,
     n_jobs_cpu=0,
     overwrite=False,
@@ -87,6 +89,7 @@ def dartvis_binary_folder_all(
         recording,
         dartsort_dir,
         visualizations_dir,
+        superres_templates=not no_superres_templates,
         channel_show_radius_um=channel_show_radius_um,
         pca_radius_um=pca_radius_um,
         make_scatterplots=not no_scatterplots,

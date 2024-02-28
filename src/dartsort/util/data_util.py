@@ -289,7 +289,6 @@ def subset_sorting_by_time_samples(
     new_labels = sorting.labels.copy()
 
     in_range = (new_times >= start_sample) & (new_times < end_sample)
-    print(in_range.sum())
     new_labels[~in_range] = -1
 
     if reference_to_start_sample:
@@ -308,7 +307,7 @@ def reindex_sorting_labels(sorting):
 # -- hdf5 util
 
 
-def batched_h5_read(dataset, indices, batch_size=1000):
+def batched_h5_read(dataset, indices, batch_size=64):
     if indices.size < batch_size:
         return dataset[indices]
     else:
