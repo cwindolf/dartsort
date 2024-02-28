@@ -28,6 +28,7 @@ from .vis.vismain import visualize_all_sorting_steps
 @click.option("--overwrite", default=False, flag_value=True, is_flag=True)
 @click.option("--no_show_progress", default=False, flag_value=True, is_flag=True)
 @click.option("--device", type=str, default=None)
+@click.option("--rec_to_memory", default=False, flag_value=True, is_flag=True)
 def dartsort_binary_folder_config_py(
     binary_folder,
     output_directory,
@@ -38,6 +39,7 @@ def dartsort_binary_folder_config_py(
     overwrite=False,
     no_show_progress=False,
     device=None,
+    rec_to_memory=False,
 ):
     run_from_binary_folder_and_config_py(
         binary_folder,
@@ -49,6 +51,7 @@ def dartsort_binary_folder_config_py(
         overwrite=overwrite,
         show_progress=not no_show_progress,
         device=device,
+        rec_to_memory=rec_to_memory,
     )
 
 
@@ -56,26 +59,39 @@ def dartsort_binary_folder_config_py(
 @click.argument("binary_folder")
 @click.argument("dartsort_dir")
 @click.argument("visualizations_dir")
+@click.option("--channel_show_radius_um", default=50.0)
+@click.option("--pca_radius_um", default=75.0)
+@click.option("--no_superres_templates", default=False, flag_value=True, is_flag=True)
 @click.option("--n_jobs_gpu", default=0)
 @click.option("--n_jobs_cpu", default=0)
 @click.option("--overwrite", default=False, flag_value=True, is_flag=True)
 @click.option("--no_scatterplots", default=False, flag_value=True, is_flag=True)
 @click.option("--no_summaries", default=False, flag_value=True, is_flag=True)
+@click.option("--rec_to_memory", default=False, flag_value=True, is_flag=True)
 def dartvis_binary_folder_all(
     binary_folder,
     dartsort_dir,
     visualizations_dir,
+    channel_show_radius_um=50.0,
+    pca_radius_um=75.0,
+    no_superres_templates=False,
     n_jobs_gpu=0,
     n_jobs_cpu=0,
     overwrite=False,
     no_scatterplots=False,
     no_summaries=False,
+    rec_to_memory=False,
 ):
     recording = si.read_binary_folder(binary_folder)
+    if rec_to_memory:
+        recording = recording.save_to_memory(n_jobs=n_jobs_cpu)
     visualize_all_sorting_steps(
         recording,
         dartsort_dir,
         visualizations_dir,
+        superres_templates=not no_superres_templates,
+        channel_show_radius_um=channel_show_radius_um,
+        pca_radius_um=pca_radius_um,
         make_scatterplots=not no_scatterplots,
         make_unit_summaries=not no_summaries,
         n_jobs=n_jobs_gpu,
@@ -97,6 +113,7 @@ def run_from_binary_folder_and_config_py(
     overwrite=False,
     show_progress=True,
     device=None,
+    rec_to_memory=False,
 ):
     # stub for eventual function that reads a config file
     # I'm not sure this will be the way we actually do configuration
@@ -111,6 +128,9 @@ def run_from_binary_folder_and_config_py(
         cfg = module.cfg
 
     recording = si.read_binary_folder(binary_folder)
+
+    if rec_to_memory:
+        recording = recording.save_to_memory()
 
     if take_subtraction_from is not None:
         symlink_subtraction_and_motion(

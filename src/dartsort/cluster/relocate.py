@@ -80,4 +80,4 @@ def point_source_amplitude_vectors(x, y, z_abs, alpha, geom, channels=None):
     dz = geom[None, :, 1] - z_abs[:, None]
     dy = y[:, None]
 
-    return alpha[:, None] / np.sqrt(dy**2 + dx**2 + dz**2)
+    return alpha[:, None] / np.sqrt(dy*dy + dx*dx + dz*dz)

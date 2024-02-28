@@ -80,7 +80,7 @@ class ConvToLinearSingleChannelDecollider(SingleChannelDecollider):
     ):
         super().__init__()
         assert len(out_channels) == len(kernel_lengths)
-        in_channels = (1,) + out_channels[:-1]
+        in_channels = (1, *out_channels[:-1])
         is_hidden = [True] * (len(out_channels) - 1) + [False]
         self.net = nn.Sequential()
         for ic, oc, k, hid in zip(
@@ -130,7 +130,7 @@ class MLPSingleChannelDecollider(SingleChannelDecollider):
         super().__init__()
         self.net = nn.Sequential()
         self.net.append(nn.Flatten())
-        input_sizes = (spike_length_samples,) + hidden_sizes[:-1]
+        input_sizes = (spike_length_samples, *hidden_sizes[:-1])
         output_sizes = hidden_sizes
         is_final = [False] * max(0, len(hidden_sizes) - 1) + [True]
         for inf, outf, fin in zip(input_sizes, output_sizes, is_final):
@@ -198,7 +198,7 @@ class ConvToLinearMultiChannelDecollider(MultiChannelDecollider):
     ):
         super().__init__()
         assert len(out_channels) == len(kernel_heights) == len(kernel_lengths)
-        in_channels = (2,) + out_channels[:-1]
+        in_channels = (2, *out_channels[:-1])
         is_hidden = [True] * (len(out_channels) - 1) + [False]
         self.net = nn.Sequential()
 
@@ -250,9 +250,10 @@ class MLPMultiChannelDecollider(MultiChannelDecollider):
         super().__init__()
         self.net = nn.Sequential()
         self.net.append(nn.Flatten())
-        input_sizes = (2 * n_channels * spike_length_samples,) + hidden_sizes[
-            :-1
-        ]
+        input_sizes = (
+            2 * n_channels * spike_length_samples,
+            *hidden_sizes[:-1],
+        )
         output_sizes = hidden_sizes
         is_final = [False] * max(0, len(hidden_sizes) - 1) + [True]
         for inf, outf, fin in zip(input_sizes, output_sizes, is_final):

@@ -28,7 +28,6 @@ from dartsort.util.data_util import (
 )
 from dartsort.util.peel_util import run_peeler
 from dartsort.util.registration_util import estimate_motion
-from dartsort.cluster import ensemble_utils
 
 
 def dartsort(
@@ -43,7 +42,7 @@ def dartsort(
     device=None,
 ):
     output_directory = Path(output_directory)
-    
+
     n_jobs = n_jobs_gpu
     if n_jobs is None:
         n_jobs = cfg.computation_config.actual_n_jobs_gpu
@@ -229,6 +228,7 @@ def split_merge(
             template_config=split_merge_config.merge_template_config,
             merge_distance_threshold=split_merge_config.merge_distance_threshold,
             min_spatial_cosine=split_merge_config.min_spatial_cosine,
+            linkage=split_merge_config.linkage,
             n_jobs=n_jobs_merge,
             n_jobs_templates=n_jobs_merge,
         )
