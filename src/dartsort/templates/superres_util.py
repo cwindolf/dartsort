@@ -128,7 +128,7 @@ def motion_estimate_strategy(
     else:
         displacements = motion_est.disp_at_s(spike_times_s, spike_depths_um)
     mod_positions = displacements % pitch
-        
+
     if not adaptive_bin_size:
         bin_ids = mod_positions // superres_bin_size_um
         bin_ids = bin_ids.astype(int)
@@ -156,6 +156,7 @@ def motion_estimate_strategy(
                 superres_labels[idx_unit] = superres_labels_unit+cmp
                 cmp+=superres_labels_unit.max()+1
             return superres_labels.astype('int'), np.hstack(superres_to_original)
+
 
 def drift_pitch_loc_bin_strategy(
     original_labels,
@@ -190,7 +191,7 @@ def drift_pitch_loc_bin_strategy(
                 idx_unit = np.flatnonzero(original_labels == unit)
                 x_spread = np.median(np.abs(spike_x_um[idx_unit] - np.median(spike_x_um[idx_unit])))/0.6745
                 unit_superres_bin_size_um = np.maximum(np.round(2*x_spread/pitch)*pitch/2, 1)
-            
+
                 bin_ids = coarse_reg_depths[idx_unit] // unit_superres_bin_size_um
                 bin_ids = bin_ids.astype(int)
                 orig_label_and_bin, superres_labels_unit = np.unique(
@@ -200,6 +201,7 @@ def drift_pitch_loc_bin_strategy(
                 superres_labels[idx_unit] = superres_labels_unit+cmp
                 cmp+=superres_labels_unit.max()+1
             return superres_labels.astype('int'), np.hstack(superres_to_original)
+
 
 def remove_small_superres_units(
     superres_labels, superres_to_original, min_spikes_per_bin
