@@ -105,8 +105,8 @@ def peeler_is_done(
         output_hdf5_filename,
         overwrite=False,
     )
-    chunk_starts_samples = peeler.self.get_chunk_starts(chunk_starts_samples=chunk_starts_samples)
-    return last_chunk_start >= chunk_starts_samples.max()
+    chunk_starts_samples = peeler.get_chunk_starts(chunk_starts_samples=chunk_starts_samples)
+    return last_chunk_start >= max(chunk_starts_samples)
 
 
 def _gc(n_jobs, device):
