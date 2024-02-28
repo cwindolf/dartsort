@@ -36,6 +36,7 @@ from .waveform_util import make_channel_index
 
 
 no_realign_template_config = TemplateConfig(realign_peaks=False)
+basic_template_config = TemplateConfig(realign_peaks=False, superres_templates=False)
 
 
 @dataclass
@@ -81,6 +82,7 @@ class DARTsortAnalysis:
         motion_est=None,
         name=None,
         template_config=no_realign_template_config,
+        allow_template_reload=False,
         n_jobs_templates=0,
     ):
         """Try to re-load as much info as possible from the sorting itself
@@ -97,14 +99,16 @@ class DARTsortAnalysis:
             model_dir / "featurization_pipeline.pt"
         )
 
-        template_npz = model_dir / "template_data.npz"
-        have_templates = template_npz.exists()
-        if have_templates:
-            print(f"Reloading templates from {template_npz}...")
-            with h5py.File(hdf5_path, "r") as h5:
-                same_labels = np.array_equal(sorting.labels, h5["labels"][:])
-            have_templates = have_templates and same_labels
-            template_data = TemplateData.from_npz(template_npz)
+        have_templates = False
+        if allow_template_reload:
+            template_npz = model_dir / "template_data.npz"
+            have_templates = template_npz.exists()
+            if have_templates:
+                print(f"Reloading templates from {template_npz}...")
+                with h5py.File(hdf5_path, "r") as h5:
+                    same_labels = np.array_equal(sorting.labels, h5["labels"][:])
+                have_templates = have_templates and same_labels
+                template_data = TemplateData.from_npz(template_npz)
 
         if not have_templates:
             template_data = TemplateData.from_config(

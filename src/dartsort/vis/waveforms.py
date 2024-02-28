@@ -118,7 +118,7 @@ def geomplot(
                         xmax - T // 4 - 2,
                         min_z - max_abs_amp / 2 - subar / 10,
                     ],
-                    4 + 7 + 2,
+                    4 + 7 + 2 + T // 8,
                     subar + subar / 5,
                     fc=bar_background,
                     zorder=11,
