@@ -120,7 +120,7 @@ class BasePeeler(torch.nn.Module):
         )
 
         # figure out which chunks to process, and exit early if already done
-        chunk_starts_samples = self.self.get_chunk_starts(chunk_starts_samples=chunk_starts_samples)
+        chunk_starts_samples = self.get_chunk_starts(chunk_starts_samples=chunk_starts_samples)
         n_chunks_orig = len(chunk_starts_samples)
         chunks_to_do = [
             start for start in chunk_starts_samples if start > last_chunk_start
@@ -430,7 +430,7 @@ class BasePeeler(torch.nn.Module):
         rg = np.random.default_rng(self.fit_subsampling_random_state)
         chunk_starts_samples = self.chunk_length_samples * rg.choice(
             chunk_starts_samples,
-            size=min(n_full_chunks, self.n_chunks_fit),
+            size=min(len(chunk_starts_samples), self.n_chunks_fit),
             replace=False,
         )
         return chunk_starts_samples
