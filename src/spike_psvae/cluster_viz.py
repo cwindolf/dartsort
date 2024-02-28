@@ -68,7 +68,7 @@ def cluster_scatter(
             if do_ellipse:
                 x_mean, y_mean = xk.mean(), yk.mean()
                 if fontsize is None:
-                    ax.annotate(str(k), (x_mean, y_mean))
+                    ax.annotate(str(k), (x_mean, y_mean), fontsize=7)
                 else:
                     ax.annotate(str(k), (x_mean, y_mean), fontsize=fontsize)
                 xycov = np.cov(xk, yk)
@@ -78,6 +78,12 @@ def cluster_scatter(
     if not do_ellipse:
         return
 
+    rho = 0
+    for k in means.keys():
+        cov = covs[k]
+        vx, vy = cov[0, 0], cov[1, 1]
+        rho = cov[0, 1] / np.sqrt(vx * vy)
+        
     for k in means.keys():
         
         mean_x, mean_y = means[k]
@@ -113,8 +119,9 @@ def array_scatter_5_features(
     x,
     z,
     maxptp,
-    density,
-    zlim=(-50, 3900),
+    y,
+    pc,
+    zlim=(-100, 382),
     xlim=None,
     ptplim=None,
     maxptp_c=None,
@@ -178,11 +185,11 @@ def array_scatter_5_features(
         excluded_ids=excluded_ids,
         do_ellipse=do_ellipse,
     )
-    axes[2].set_xlabel("50*log(5+ptp) (s.u.)", fontsize=16)
+    axes[2].set_xlabel("PTP (s.u.)", fontsize=16)
     axes[2].tick_params(axis='x', labelsize=16)
 
     cluster_scatter(
-        density,
+        y,
         z,
         labels,
         ax=axes[3],
@@ -191,23 +198,22 @@ def array_scatter_5_features(
         excluded_ids=excluded_ids,
         do_ellipse=False,
     )
-    axes[3].set_xlabel("Trough Val (s.u.)", fontsize=16)
+    axes[3].set_xlabel("Y (um)", fontsize=16)
     axes[3].tick_params(axis='x', labelsize=16)
     
-    axes[4].scatter(
-        x,
+    cluster_scatter(
+        pc,
         z,
-        c=density,
+        labels,
+        ax=axes[4],
         s=s_dot,
         alpha=0.1,
-        marker=".",
-        cmap=plt.cm.jet,
+        excluded_ids=excluded_ids,
+        do_ellipse=False,
     )
-    axes[4].set_xlabel("Trough Time (1/30ms)", fontsize=16)
+    axes[4].set_xlabel("PC", fontsize=16)
     axes[4].tick_params(axis='x', labelsize=16)
-    axes[4].scatter(*geom.T, c="orange", marker="s", s=s_size_geom)
-    axes[4].set_title("colored by ptps")
-
+    
 
     axes[0].set_ylim(zlim)
     axes[1].set_ylim(zlim)
@@ -218,9 +224,10 @@ def array_scatter_5_features(
     if xlim is not None:
         axes[0].set_xlim(xlim)
         axes[1].set_xlim(xlim)
-        axes[4].set_xlim(xlim)
+        # axes[4].set_xlim(xlim)
     if ptplim is not None:
         axes[2].set_xlim(ptplim)
+    axes[3].set_xlim((0, 100))
 
     # if fig is not None:
     #     plt.tight_layout()
