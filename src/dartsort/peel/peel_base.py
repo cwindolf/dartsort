@@ -428,7 +428,7 @@ class BasePeeler(torch.nn.Module):
 
         # make a random subset of chunks to use for fitting
         rg = np.random.default_rng(self.fit_subsampling_random_state)
-        chunk_starts_samples = self.chunk_length_samples * rg.choice(
+        chunk_starts_samples = rg.choice(
             chunk_starts_samples,
             size=min(len(chunk_starts_samples), self.n_chunks_fit),
             replace=False,
