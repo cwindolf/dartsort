@@ -31,7 +31,7 @@ class EnforceDecrease(BaseWaveformDenoiser):
         self._channel_index = channel_index
     
     def needs_fit(self):
-        return hasattr(self, "_1")
+        return not hasattr(self, "_1")
 
     def fit(self, waveforms, max_channels):
         self.register_buffer(
