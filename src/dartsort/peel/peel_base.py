@@ -120,9 +120,7 @@ class BasePeeler(torch.nn.Module):
         )
 
         # figure out which chunks to process, and exit early if already done
-        if chunk_starts_samples is None:
-            T_samples = self.recording.get_num_samples()
-            chunk_starts_samples = range(0, T_samples, self.chunk_length_samples)
+        chunk_starts_samples = self.self.get_chunk_starts(chunk_starts_samples=chunk_starts_samples)
         n_chunks_orig = len(chunk_starts_samples)
         chunks_to_do = [
             start for start in chunk_starts_samples if start > last_chunk_start
@@ -418,23 +416,32 @@ class BasePeeler(torch.nn.Module):
             if temp_hdf5_filename.exists():
                 temp_hdf5_filename.unlink()
 
-    def run_subsampled_peeling(
-        self, hdf5_filename, n_jobs=0, device=None, task_name=None
-    ):
-        # make a random subset of chunks to use for fitting
+    def get_chunk_starts(self, chunk_starts_samples=None, subsampled=False):
+        if chunk_starts_samples is not None:
+            return chunk_starts_samples
+
         T_samples = self.recording.get_num_samples()
-        n_full_chunks = T_samples // self.chunk_length_samples
+        chunk_starts_samples = range(0, T_samples, self.chunk_length_samples)
+
+        if not subsampled:
+            return chunk_starts_samples
+
+        # make a random subset of chunks to use for fitting
         rg = np.random.default_rng(self.fit_subsampling_random_state)
-        chunk_starts = self.chunk_length_samples * rg.choice(
-            n_full_chunks,
+        chunk_starts_samples = self.chunk_length_samples * rg.choice(
+            chunk_starts_samples,
             size=min(n_full_chunks, self.n_chunks_fit),
             replace=False,
         )
+        return chunk_starts_samples
 
+    def run_subsampled_peeling(
+        self, hdf5_filename, n_jobs=0, device=None, task_name=None
+    ):
         # run peeling on these chunks to the temp folder
         self.peel(
             hdf5_filename,
-            chunk_starts_samples=chunk_starts,
+            chunk_starts_samples=self.get_chunk_starts(subsampled=True),
             stop_after_n_waveforms=self.max_waveforms_fit,
             n_jobs=n_jobs,
             overwrite=True,
