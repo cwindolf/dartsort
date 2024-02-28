@@ -402,6 +402,7 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
             threshold=matching_config.threshold,
             chunk_length_samples=matching_config.chunk_length_samples,
             n_chunks_fit=matching_config.n_chunks_fit,
+            max_waveforms_fit=matching_config.max_waveforms_fit,
             fit_subsampling_random_state=matching_config.fit_subsampling_random_state,
             max_iter=matching_config.max_iter,
         )

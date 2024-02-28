@@ -7,6 +7,7 @@ import torch
 from tqdm.auto import tqdm
 
 from ..util.multiprocessing_util import get_pool
+from ..util.py_util import delay_keyboard_interrupt
 from .localize_torch import localize_amplitude_vectors
 
 
@@ -61,7 +62,7 @@ def localize_hdf5(
         device = "cuda" if torch.cuda.is_available() else "cpu"
     device = torch.device(device)
 
-    done, do_delete = check_resume_or_overwrite(
+    done, do_delete, next_batch_start = check_resume_or_overwrite(
         hdf5_filename,
         output_dataset_name,
         main_channels_dataset_name,
@@ -95,37 +96,43 @@ def localize_hdf5(
             n_spikes = h5[main_channels_dataset_name].shape[0]
             if do_delete:
                 del h5[output_dataset_name]
-            localizations_dataset = h5.create_dataset(
+            localizations_dataset = h5.require_dataset(
                 output_dataset_name,
                 shape=(n_spikes, 4),
                 dtype=np.float64,
+                fillvalue=np.nan,
+                exact=True,
             )
-            h5.swmr_mode = True
 
             # workers are blocked waiting for their ranks, which
             # allows us to put the h5 in swmr before they open it
+            h5.swmr_mode = True
             for rank in range(n_jobs):
                 queue.put(rank)
 
-            batches = range(0, n_spikes, spikes_per_batch)
+            batches = range(next_batch_start, n_spikes, spikes_per_batch)
             results = pool.map(_h5_localize_job, batches)
             if show_progress:
                 results = tqdm(results, total=len(batches), desc="Localization")
             for start_ix, end_ix, xyza_batch in results:
-                localizations_dataset[start_ix:end_ix] = xyza_batch
+                with delay_keyboard_interrupt:
+                    localizations_dataset[start_ix:end_ix] = xyza_batch
 
 
 def check_resume_or_overwrite(
-    hdf5_filename, output_dataset_name, main_channels_dataset_name, overwrite=False
+    hdf5_filename,
+    output_dataset_name,
+    main_channels_dataset_name,
+    overwrite=False,
 ):
     done = False
     do_delete = False
+    next_batch_start = 0
     with h5py.File(hdf5_filename, "r") as h5:
         if output_dataset_name in h5:
             n_spikes = h5[main_channels_dataset_name].shape[0]
             shape = h5[output_dataset_name].shape
-            if overwrite:
-                # del h5[output_dataset_name]
+            if overwrite and shape != (n_spikes, 4):
                 do_delete = True
             elif shape != (n_spikes, 4):
                 raise ValueError(
@@ -134,8 +141,12 @@ def check_resume_or_overwrite(
                 )
             else:
                 # else, we are resuming
-                done = True
-    return done, do_delete
+                nan_ix = np.flatnonzero(np.isnan(h5[output_dataset_name][:, 0]))
+                if nan_ix.size:
+                    next_batch_start = nan_ix[0]
+                else:
+                    done = True
+    return done, do_delete, next_batch_start
 
 
 def _h5_localize_init(
@@ -159,7 +170,9 @@ def _h5_localize_init(
     device = torch.device(device)
     if device.type == "cuda" and device.index is None:
         if torch.cuda.device_count() > 1:
-            device = torch.device("cuda", index=my_rank % torch.cuda.device_count())
+            device = torch.device(
+                "cuda", index=my_rank % torch.cuda.device_count()
+            )
 
     h5 = h5py.File(hdf5_filename, "r", swmr=True)
     channels = h5[main_channels_dataset_name][:]

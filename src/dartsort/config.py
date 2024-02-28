@@ -13,10 +13,8 @@ featurization_config = FeaturizationConfig(do_nn_denoise=False)
 This will use all the other parameters' default values. This
 object can then be passed into the high level functions like
 `subtract(...)`.
-
-TODO: change n_chunks_fit to n_spikes_fit, max_chunks_fit
 """
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import List, Optional, Tuple
 
 import torch
@@ -27,10 +25,14 @@ except ImportError:
     try:
         from importlib_resources import files
     except ImportError:
-        raise ValueError("Need python>=3.10 or pip install importlib_resources.")
+        raise ValueError(
+            "Need python>=3.10 or pip install importlib_resources."
+        )
 
 default_pretrained_path = files("dartsort.pretrained")
-default_pretrained_path = default_pretrained_path.joinpath("single_chan_denoiser.pt")
+default_pretrained_path = default_pretrained_path.joinpath(
+    "single_chan_denoiser.pt"
+)
 
 
 @dataclass(frozen=True)
@@ -112,7 +114,7 @@ class SubtractionConfig:
     peak_sign: str = "both"
     spatial_dedup_radius: float = 150.0
     extract_radius: float = 200.0
-    n_chunks_fit: int = 40
+    n_chunks_fit: int = 100
     max_waveforms_fit: int = 50_000
     fit_subsampling_random_state: int = 0
     residnorm_decrease_threshold: float = 3.162  # sqrt(10)
@@ -132,6 +134,7 @@ class MotionEstimationConfig:
 
     You can also make your own and pass it to dartsort() to bypass this
     """
+
     do_motion_estimation: bool = True
 
     # sometimes spikes can be localized far away from the probe, causing
@@ -187,7 +190,7 @@ class TemplateConfig:
 class MatchingConfig:
     chunk_length_samples: int = 30_000
     extract_radius: float = 200.0
-    n_chunks_fit: int = 40
+    n_chunks_fit: int = 100
     max_waveforms_fit: int = 50_000
     fit_subsampling_random_state: int = 0
 
@@ -209,9 +212,13 @@ class SplitMergeConfig:
     # -- split
     split_strategy: str = "FeatureSplit"
     recursive_split: bool = True
+    split_strategy_kwargs: Optional[dict] = field(default_factory=lambda: dict(max_spikes=20_000))
 
     # -- merge
-    merge_template_config: TemplateConfig = TemplateConfig(superres_templates=False)
+    merge_template_config: TemplateConfig = TemplateConfig(
+        superres_templates=False
+    )
+    linkage: str = "complete"
     merge_distance_threshold: float = 0.25
     cross_merge_distance_threshold: float = 0.5
     min_spatial_cosine: float = 0.0
@@ -264,14 +271,14 @@ class ComputationConfig:
     n_jobs_cpu: int = 0
     n_jobs_gpu: int = 0
     device: Optional[torch.device] = None
-    
+
     @property
     def actual_device(self):
         if self.device is None:
             have_cuda = torch.cuda.is_available()
             return torch.device("cuda" if have_cuda else "cpu")
         return torch.device(self.device)
-    
+
     @property
     def actual_n_jobs_gpu(self):
         if self.actual_device.type == "cuda":
@@ -305,5 +312,5 @@ default_split_merge_config = SplitMergeConfig()
 coarse_template_config = TemplateConfig(superres_templates=False)
 default_matching_config = MatchingConfig()
 default_motion_estimation_config = MotionEstimationConfig()
-default_computation_config  = ComputationConfig()
+default_computation_config = ComputationConfig()
 default_dartsort_config = DARTsortConfig()
