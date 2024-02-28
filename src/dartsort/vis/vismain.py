@@ -4,7 +4,7 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 from tqdm.auto import tqdm
 
-from ..util.analysis import DARTsortAnalysis
+from ..util.analysis import DARTsortAnalysis, no_realign_template_config, basic_template_config
 from ..util.data_util import DARTsortSorting
 from . import scatterplots, unit
 from .sorting import make_sorting_summary
@@ -26,6 +26,10 @@ def visualize_sorting(
     make_sorting_summaries=True,
     make_unit_summaries=True,
     gt_sorting=None,
+    superres_templates=True,
+    channel_show_radius_um=50.0,
+    amplitude_color_cutoff=15.0,
+    pca_radius_um=75.0,
     dpi=200,
     layout_max_height=4,
     layout_figsize=(11, 8.5),
@@ -34,6 +38,8 @@ def visualize_sorting(
     overwrite=False,
 ):
     output_directory.mkdir(exist_ok=True, parents=True)
+    if (output_directory / ".done").exists():
+        return
 
     if make_scatterplots:
         scatter_unreg = output_directory / "scatter_unreg.png"
@@ -51,7 +57,10 @@ def visualize_sorting(
         if motion_est is not None and (overwrite or not scatter_reg.exists()):
             fig = plt.figure(figsize=layout_figsize)
             fig, axes, scatters = scatterplots.scatter_spike_features(
-                sorting=sorting, motion_est=motion_est, registered=True, figure=fig
+                sorting=sorting,
+                motion_est=motion_est,
+                registered=True,
+                figure=fig,
             )
             fig.savefig(scatter_reg, dpi=dpi)
             plt.close(fig)
@@ -66,6 +75,7 @@ def visualize_sorting(
                 motion_est=motion_est,
                 name=output_directory.stem,
                 n_jobs_templates=n_jobs_templates,
+                template_config=no_realign_template_config if superres_templates else basic_template_config,
             )
 
             fig = make_sorting_summary(
@@ -83,12 +93,14 @@ def visualize_sorting(
         )
 
         unit_assignments_dir = output_directory / "template_assignments"
-        do_assignments = output_directory.stem.startswith("match")
+        do_assignments = "match" in output_directory.stem
         assignments_done = not overwrite and unit.all_summaries_done(
             sorting.unit_ids, unit_assignments_dir
         )
 
-        do_something = (not summaries_done) or (do_assignments and not assignments_done)
+        do_something = (not summaries_done) or (
+            do_assignments and not assignments_done
+        )
         if sorting_analysis is None and do_something:
             sorting_analysis = DARTsortAnalysis.from_sorting(
                 recording=recording,
@@ -96,14 +108,16 @@ def visualize_sorting(
                 motion_est=motion_est,
                 name=output_directory.stem,
                 n_jobs_templates=n_jobs_templates,
+                allow_template_reload="match" in output_directory.stem,
             )
 
         if not summaries_done:
             unit.make_all_summaries(
                 sorting_analysis,
                 unit_summary_dir,
-                channel_show_radius_um=50.0,
-                amplitude_color_cutoff=15.0,
+                channel_show_radius_um=channel_show_radius_um,
+                amplitude_color_cutoff=amplitude_color_cutoff,
+                pca_radius_um=pca_radius_um,
                 max_height=layout_max_height,
                 figsize=layout_figsize,
                 dpi=dpi,
@@ -112,18 +126,21 @@ def visualize_sorting(
                 overwrite=overwrite,
             )
 
-        if do_assignments and not assignments_done:
-            unit.make_all_summaries(
-                sorting_analysis,
-                unit_assignments_dir,
-                plots=unit.template_assignment_plots,
-                channel_show_radius_um=50.0,
-                amplitude_color_cutoff=15.0,
-                dpi=dpi,
-                n_jobs=n_jobs,
-                show_progress=True,
-                overwrite=overwrite,
-            )
+        # if do_assignments and not assignments_done:
+        #     unit.make_all_summaries(
+        #         sorting_analysis,
+        #         unit_assignments_dir,
+        #         plots=unit.template_assignment_plots,
+        #         channel_show_radius_um=channel_show_radius_um,
+        #         amplitude_color_cutoff=amplitude_color_cutoff,
+        #         dpi=dpi,
+        #         n_jobs=n_jobs,
+        #         show_progress=True,
+        #         overwrite=overwrite,
+        #     )
+
+    with open(output_directory / ".done", "w"):
+        pass
 
 
 def visualize_all_sorting_steps(
@@ -139,6 +156,10 @@ def visualize_all_sorting_steps(
     initial_sortings=("subtraction.h5", "initial_clustering.npz"),
     step_refinements=("split{step}.npz", "merge{step}.npz"),
     match_step_sorting="matching{step}.h5",
+    superres_templates=True,
+    channel_show_radius_um=50.0,
+    amplitude_color_cutoff=15.0,
+    pca_radius_um=75.0,
     layout_max_height=4,
     layout_figsize=(11, 8.5),
     dpi=200,
@@ -150,12 +171,19 @@ def visualize_all_sorting_steps(
     visualizations_dir = Path(visualizations_dir)
 
     step_paths = list(initial_sortings)
-    n_match_steps = sum(
-        1 for _ in dartsort_dir.glob(match_step_sorting.format(step="*"))
-    )
+    step = 0
     match_step_sortings = step_refinements + (match_step_sorting,)
-    for step in range(n_match_steps):
-        step_paths.extend(s.format(step=step) for s in match_step_sortings)
+    while True:
+        this_step_paths = []
+        for s in match_step_sortings:
+            sf = s.format(step=step)
+            if not (dartsort_dir / sf).exists():
+                break
+            this_step_paths.append(sf)
+        step_paths.extend(this_step_paths)
+        if len(this_step_paths) < len(match_step_sortings):
+            break
+        step += 1
 
     motion_est_pkl = dartsort_dir / motion_est_pkl
     if motion_est_pkl.exists():
@@ -165,6 +193,8 @@ def visualize_all_sorting_steps(
     for j, path in enumerate(tqdm(step_paths, desc="Sorting steps")):
         sorting_path = dartsort_dir / path
         step_name = sorting_path.name
+        print(step_name)
+        print(sorting_path)
         if sorting_path.name.endswith(".h5"):
             sorting = DARTsortSorting.from_peeling_hdf5(sorting_path)
             step_name = step_name.removesuffix(".h5")
@@ -184,6 +214,10 @@ def visualize_all_sorting_steps(
             make_sorting_summaries=make_sorting_summaries,
             make_unit_summaries=make_unit_summaries,
             gt_sorting=gt_sorting,
+            superres_templates=superres_templates,
+            channel_show_radius_um=channel_show_radius_um,
+            amplitude_color_cutoff=amplitude_color_cutoff,
+            pca_radius_um=pca_radius_um,
             dpi=dpi,
             layout_max_height=layout_max_height,
             layout_figsize=layout_figsize,

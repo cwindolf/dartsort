@@ -60,8 +60,8 @@ def fill_geom_holes(geom):
         shifted_geom = geom + [0, pitch * shift]
         sz = shifted_geom[:, 1]
         szinside = sz == sz.clip(
-            geom[:, 1].min() - min_distance,
-            geom[:, 1].max() + min_distance,
+            geom[:, 1].min() - np.sqrt(min_distance),
+            geom[:, 1].max() + np.sqrt(min_distance),
         )
         shifted_geom = shifted_geom[szinside]
         dists = cdist(shifted_geom, unique_shifted_positions, metric="sqeuclidean")

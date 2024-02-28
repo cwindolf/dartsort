@@ -1,6 +1,7 @@
 import matplotlib.pyplot as plt
 import numpy as np
 import scipy.cluster.hierarchy
+from matplotlib.colors import to_hex
 from scipy.cluster.hierarchy import dendrogram, fcluster, linkage
 
 from .colors import glasbey1024
@@ -23,18 +24,25 @@ def scatter_max_channel_waveforms(
     zscale = dz * waveform_height / max_abs_amp
 
     xrel = np.linspace(-dx / 2, dx / 2, num=template_data.templates.shape[1])
-    locs = template_data.template_locations()[:, [0, 2]]
+    locs = template_data.template_locations()
+    locsx = locs["x"]
+    locsz = locs["z_abs"]
 
     if show_geom:
         axis.scatter(*template_data.registered_geom.T, **geom_scatter_kwargs)
 
-    for j, (u, temp) in enumerate(zip(template_data.unit_ids, template_data.templates)):
+    for j, (u, temp) in enumerate(
+        zip(template_data.unit_ids, template_data.templates)
+    ):
         mc = temp.ptp(0).argmax()
         mctrace = temp[:, mc]
 
-        xc, zc = locs[j]
+        xc = locsx[j]
+        zc = locsz[j]
         c = colors[u]
-        axis.plot(xc + xrel, zc + zscale * mctrace, lw=lw, color=c, **plot_kwargs)
+        axis.plot(
+            xc + xrel, zc + zscale * mctrace, lw=lw, color=c, **plot_kwargs
+        )
 
 
 def distance_matrix_dendro(
@@ -47,22 +55,23 @@ def distance_matrix_dendro(
     vmax=1.0,
     image_cmap=plt.cm.RdGy,
 ):
-    scipy.cluster.hierarchy.set_link_color_palette(glasbey1024)
-
     show_dendrogram = dendrogram_linkage is not None
-    dendro_width = (1,) if show_dendrogram else ()
+    dendro_width = (0.7, 0.15,) if show_dendrogram else ()
 
     gs = panel.add_gridspec(
         nrows=3,
-        ncols=5,
+        ncols=3 + 2 * show_dendrogram,
         wspace=0.0,
         hspace=0,
-        height_ratios=[0.5, *dendro_width, 0.5],
-        width_ratios=[2, 0.15, 0.7, 0.15, 0.1],
+        height_ratios=[0.5, 1, 0.5],
+        width_ratios=[2, 0.15, *dendro_width, 0.1],
     )
     ax_im = panel.add_subplot(gs[:, 0])
-    ax_cbar = panel.add_subplot(gs[1, 4])
+    ax_cbar = panel.add_subplot(gs[1, -1])
     if show_dendrogram:
+        scipy.cluster.hierarchy.set_link_color_palette(
+            list(map(to_hex, glasbey1024))
+        )
         ax_dendro = panel.add_subplot(gs[:, 2], sharey=ax_im)
         ax_dendro.axis("off")
 
@@ -98,9 +107,7 @@ def distance_matrix_dendro(
         ax_im.set_xticks([])
         ax_im.set_yticks([])
 
-    plt.colorbar(
-        im, cax=ax_cbar, label="template distance"
-    )
+    plt.colorbar(im, cax=ax_cbar, label="template distance")
     ax_cbar.set_yticks([0, vmax])
     ax_cbar.set_ylabel("template distance", labelpad=-5)
 

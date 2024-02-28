@@ -26,12 +26,17 @@ class EnforceDecrease(BaseWaveformDenoiser):
         name_prefix="",
     ):
         super().__init__(name=name, name_prefix=name_prefix)
+        self.batch_size = batch_size
+        self._geom = geom
+        self._channel_index = channel_index
+
+    def fit(self, waveforms, max_channels):
         self.register_buffer(
             "parents_index",
             torch.tensor(
                 make_parents_index(
-                    np.array(geom, dtype=float),
-                    np.array(channel_index, dtype=int),
+                    np.array(self._geom, dtype=float),
+                    np.array(self._channel_index, dtype=int),
                 )
             ),
         )
@@ -39,7 +44,6 @@ class EnforceDecrease(BaseWaveformDenoiser):
             "_1",
             torch.tensor(1.0),
         )
-        self.batch_size = batch_size
 
     def forward(self, waveforms, max_channels):
         """
