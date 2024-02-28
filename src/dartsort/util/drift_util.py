@@ -324,6 +324,7 @@ def get_waveforms_on_static_channels(
     match_distance=None,
     out=None,
     fill_value=np.nan,
+    workers=4,
 ):
     """Load a set of drifting waveforms on a static set of channels
 
@@ -405,7 +406,7 @@ def get_waveforms_on_static_channels(
     pitch = get_pitch(geom)
     if n_pitches_shift is None:
         n_pitches_shift = np.zeros(n_spikes)
-    shifts = np.c_[np.zeros(n_spikes), n_pitches_shift * pitch]
+    # shifts = np.c_[np.zeros(n_spikes), n_pitches_shift * pitch]
     if main_channels is None:
         # the case where all waveforms live on all channels, but
         # these channels may be shifting
@@ -430,20 +431,49 @@ def get_waveforms_on_static_channels(
     # the case where each waveform lives on its own channels
     # nans will never be matched in k-d query below
     padded_geom = np.pad(geom.astype(float), [(0, 1), (0, 0)], constant_values=np.nan)
-    # shape is n_spikes, c, spatial dim
-    moving_positions = padded_geom[channel_index[main_channels]] + shifts[:, None, :]
-    # valid_chan = ~np.isnan(moving_positions).any(axis=1)
-    valid_chan = channel_index[main_channels] < n_channels_tot
 
-    _, shifted_channels = target_kdtree.query(
-        moving_positions[valid_chan[:, :]],
+    # ok, the kdtree query can get expensive when we have lots of these shifting
+    # positions. it turns out to be worth it to go through the effort of figuring
+    # out what the unique valid moving positions are and just targeting those
+    channels_and_shifts = np.c_[main_channels, n_pitches_shift]
+    uniq_channels_and_shifts, uniq_inv = np.unique(channels_and_shifts, axis=0, return_inverse=True)
+    uniq_channels, uniq_n_pitches_shift = uniq_channels_and_shifts.T
+    uniq_shifts = np.c_[np.zeros(uniq_channels.shape[0]), uniq_n_pitches_shift * pitch]
+    uniq_moving_pos = padded_geom[channel_index[uniq_channels]] + uniq_shifts[:, None, :]
+    uniq_valid = channel_index[uniq_channels] < n_channels_tot
+    
+    _, uniq_shifted_channels = target_kdtree.query(
+        uniq_moving_pos[uniq_valid],
         distance_upper_bound=match_distance,
+        workers=workers,
     )
-    if shifted_channels.size < n_spikes * c:
-        shifted_channels_ = shifted_channels
-        shifted_channels = np.full((n_spikes, c), target_kdtree.n)
-        shifted_channels[valid_chan] = shifted_channels_
-    shifted_channels = shifted_channels.reshape(n_spikes, c)
+    if uniq_shifted_channels.size < uniq_channels.shape[0] * c:
+        uniq_shifted_channels_ = uniq_shifted_channels
+        uniq_shifted_channels = np.full((uniq_channels.shape[0], c), target_kdtree.n)
+        uniq_shifted_channels[uniq_valid] = uniq_shifted_channels_
+    uniq_shifted_channels = uniq_shifted_channels.reshape(uniq_channels.shape[0], c)
+
+    # ok, now we can return to non-unique world
+    shifted_channels = uniq_shifted_channels[uniq_inv]
+
+#     # shape is n_spikes, c, spatial dim
+#     moving_positions = padded_geom[channel_index[main_channels]] + shifts[:, None, :]
+#     # valid_chan = ~np.isnan(moving_positions).any(axis=1)
+#     valid_chan = channel_index[main_channels] < n_channels_tot
+
+#     _, uniq_shifted_channels = target_kdtree.query(
+#         moving_positions[valid_chan[:, :]],
+#         distance_upper_bound=match_distance,
+#         workers=workers,
+#     )
+#     shifted_channels = uniq_shifted_channels[uniq_inv]
+
+    # now, if not all chans were valid, fix that up...
+    # if shifted_channels.size < n_spikes * c:
+    #     shifted_channels_ = shifted_channels
+    #     shifted_channels = np.full((n_spikes, c), target_kdtree.n)
+    #     shifted_channels[valid_chan] = shifted_channels_
+    # shifted_channels = shifted_channels.reshape(n_spikes, c)
 
     # scatter the waveforms into their static channel neighborhoods
     if out is None:

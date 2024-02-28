@@ -14,7 +14,7 @@ This will use all the other parameters' default values. This
 object can then be passed into the high level functions like
 `subtract(...)`.
 """
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import List, Optional, Tuple
 
 import torch
@@ -212,6 +212,7 @@ class SplitMergeConfig:
     # -- split
     split_strategy: str = "FeatureSplit"
     recursive_split: bool = True
+    split_strategy_kwargs: Optional[dict] = field(default_factory=lambda: dict(max_spikes=20_000))
 
     # -- merge
     merge_template_config: TemplateConfig = TemplateConfig(
