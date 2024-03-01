@@ -157,6 +157,7 @@ def train_decollider(
             opt.zero_grad()
             pred = net(noised_batch, channel_masks=masks)
             if masks is not None:
+                masks = masks.to(pred.dtype)
                 loss = criterion(
                     pred * masks[:, :, None], target_batch * masks[:, :, None]
                 )
@@ -303,7 +304,7 @@ def load_epoch(
         assert detection_times is not None
         assert detection_channels is not None
         which_templates = gt_waveforms = None
-
+        
         noisy_waveforms, channels, which_rec = load_spikes(
             recordings,
             times=detection_times,
@@ -336,9 +337,9 @@ def load_epoch(
     channel_masks = np.isfinite(noisier_waveforms[:, :, 0])
     channel_masks = torch.as_tensor(channel_masks, dtype=torch.bool)
     if gt_waveforms is not None:
-        gt_waveforms[~channel_masks] = 0.0
-    noisy_waveforms[~channel_masks] = 0.0
-    noisier_waveforms[~channel_masks] = 0.0
+        torch.nan_to_num(gt_waveforms, out=gt_waveforms)
+    torch.nan_to_num(noisy_waveforms, out=noisy_waveforms)
+    torch.nan_to_num(noisier_waveforms, out=noisier_waveforms)
 
     return EpochData(
         noisy_waveforms=noisy_waveforms,

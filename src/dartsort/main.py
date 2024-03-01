@@ -97,6 +97,8 @@ def dartsort(
             )
 
         # E step: deconvolution
+        is_final = step == cfg.matching_iterations - 1
+        prop = 1.0 if is_final else cfg.intermediate_matching_subsampling
         sorting, match_h5 = match(
             recording,
             sorting,
@@ -106,6 +108,7 @@ def dartsort(
             waveform_config=cfg.waveform_config,
             featurization_config=cfg.featurization_config,
             matching_config=cfg.matching_config,
+            subsampling_proportion=prop,
             n_jobs_templates=n_jobs,
             n_jobs_match=n_jobs,
             overwrite=overwrite,
@@ -248,6 +251,7 @@ def match(
     featurization_config=default_featurization_config,
     matching_config=default_matching_config,
     chunk_starts_samples=None,
+    subsampling_proportion=1.0,
     n_jobs_templates=0,
     n_jobs_match=0,
     overwrite=False,
@@ -299,6 +303,7 @@ def match(
             model_subdir,
             featurization_config,
             chunk_starts_samples=chunk_starts_samples,
+            subsampling_proportion=subsampling_proportion,
             overwrite=overwrite,
             n_jobs=n_jobs_match,
             residual_filename=residual_filename,

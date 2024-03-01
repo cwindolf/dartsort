@@ -38,7 +38,9 @@ class BasePeeler(torch.nn.Module):
     ):
         assert recording.get_num_channels() == channel_index.shape[0]
         if recording.get_num_segments() > 1:
-            raise ValueError("Peeling does not yet support multi-segment recordings.")
+            raise ValueError(
+                "Peeling does not yet support multi-segment recordings."
+            )
         super().__init__()
         self.recording = recording
         self.chunk_length_samples = chunk_length_samples
@@ -120,7 +122,9 @@ class BasePeeler(torch.nn.Module):
         )
 
         # figure out which chunks to process, and exit early if already done
-        chunk_starts_samples = self.get_chunk_starts(chunk_starts_samples=chunk_starts_samples)
+        chunk_starts_samples = self.get_chunk_starts(
+            chunk_starts_samples=chunk_starts_samples
+        )
         n_chunks_orig = len(chunk_starts_samples)
         chunks_to_do = [
             start for start in chunk_starts_samples if start > last_chunk_start
@@ -171,7 +175,9 @@ class BasePeeler(torch.nn.Module):
                 ):
                     batch_count = 0
                     try:
-                        for result, chunk_start_samples in zip(results, chunks_to_do):
+                        for result, chunk_start_samples in zip(
+                            results, chunks_to_do
+                        ):
                             n_new_spikes = self.gather_chunk_result(
                                 n_spikes,
                                 chunk_start_samples,
@@ -187,11 +193,16 @@ class BasePeeler(torch.nn.Module):
                                     f"{task_name} {n_sec_chunk:.1f}s/batch "
                                     f"[spk/batch={n_spikes / batch_count:0.1f}]"
                                 )
-                            if stop_after_n_waveforms and n_spikes >= stop_after_n_waveforms:
+                            if (
+                                stop_after_n_waveforms
+                                and n_spikes >= stop_after_n_waveforms
+                            ):
                                 pool.shutdown(cancel_futures=True)
                     except CancelledError:
                         if show_progress:
-                            results.write(f"Got {n_spikes} spikes, enough to stop early.")
+                            results.write(
+                                f"Got {n_spikes} spikes, enough to stop early."
+                            )
         finally:
             self.to("cpu")
 
@@ -294,7 +305,8 @@ class BasePeeler(torch.nn.Module):
 
         if peel_result["n_spikes"] > 0:
             features = self.featurize_collisioncleaned_waveforms(
-                peel_result["collisioncleaned_waveforms"], peel_result["channels"]
+                peel_result["collisioncleaned_waveforms"],
+                peel_result["channels"],
             )
         else:
             features = {}
@@ -338,8 +350,12 @@ class BasePeeler(torch.nn.Module):
                 return 0
 
             for ds in self.out_datasets():
-                h5_spike_datasets[ds.name].resize(cur_n_spikes + n_new_spikes, axis=0)
-                h5_spike_datasets[ds.name][cur_n_spikes:] = chunk_result[ds.name]
+                h5_spike_datasets[ds.name].resize(
+                    cur_n_spikes + n_new_spikes, axis=0
+                )
+                h5_spike_datasets[ds.name][cur_n_spikes:] = chunk_result[
+                    ds.name
+                ]
 
         return n_new_spikes
 
@@ -376,10 +392,12 @@ class BasePeeler(torch.nn.Module):
         # disable self's featurization pipeline, replacing it with a waveform
         # saving node. then, we'll use those waveforms to fit the original
         featurization_pipeline = self.featurization_pipeline
-        self.featurization_pipeline = WaveformPipeline.from_class_names_and_kwargs(
-            self.recording.get_channel_locations(),
-            self.channel_index,
-            [("Waveform", {"name": "peeled_waveforms_fit"})],
+        self.featurization_pipeline = (
+            WaveformPipeline.from_class_names_and_kwargs(
+                self.recording.get_channel_locations(),
+                self.channel_index,
+                [("Waveform", {"name": "peeled_waveforms_fit"})],
+            )
         )
 
         temp_hdf5_filename = Path(save_folder) / "peeler_fit.h5"
@@ -403,7 +421,9 @@ class BasePeeler(torch.nn.Module):
                     )
                     choices.sort()
                     channels = channels[choices]
-                    waveforms = batched_h5_read(h5["peeled_waveforms_fit"], choices)
+                    waveforms = batched_h5_read(
+                        h5["peeled_waveforms_fit"], choices
+                    )
                 else:
                     waveforms = h5["peeled_waveforms_fit"][:]
 
@@ -416,12 +436,33 @@ class BasePeeler(torch.nn.Module):
             if temp_hdf5_filename.exists():
                 temp_hdf5_filename.unlink()
 
-    def get_chunk_starts(self, chunk_starts_samples=None, subsampled=False):
+    def get_chunk_starts(
+        self,
+        chunk_starts_samples=None,
+        subsampled=False,
+        subsampling_proportion=1.0,
+    ):
         if chunk_starts_samples is not None:
             return chunk_starts_samples
 
         T_samples = self.recording.get_num_samples()
         chunk_starts_samples = range(0, T_samples, self.chunk_length_samples)
+
+        if not subsampled and subsampling_proportion < 1:
+            rg = np.random.default_rng(self.fit_subsampling_random_state)
+            chunk_starts_samples = rg.choice(
+                chunk_starts_samples,
+                size=min(
+                    len(chunk_starts_samples),
+                    int(
+                        np.ceil(
+                            len(chunk_starts_samples) * subsampling_proportion
+                        )
+                    ),
+                ),
+                replace=False,
+            )
+            return chunk_starts_samples
 
         if not subsampled:
             return chunk_starts_samples
@@ -487,7 +528,9 @@ class BasePeeler(torch.nn.Module):
         if exists and overwrite:
             output_hdf5_filename.unlink()
             output_h5 = h5py.File(output_hdf5_filename, "w", libver=libver)
-            output_h5.create_dataset("last_chunk_start", data=-1, dtype=np.int64)
+            output_h5.create_dataset(
+                "last_chunk_start", data=-1, dtype=np.int64
+            )
         elif exists:
             # exists and not overwrite
             output_h5 = h5py.File(output_hdf5_filename, "r+", libver=libver)
@@ -495,7 +538,9 @@ class BasePeeler(torch.nn.Module):
         else:
             # didn't exist, so overwrite does not matter
             output_h5 = h5py.File(output_hdf5_filename, "w", libver=libver)
-            output_h5.create_dataset("last_chunk_start", data=-1, dtype=np.int64)
+            output_h5.create_dataset(
+                "last_chunk_start", data=-1, dtype=np.int64
+            )
         last_chunk_start = output_h5["last_chunk_start"][()]
 
         # write some fixed arrays that are useful to have around
@@ -567,7 +612,9 @@ def _peeler_process_init(peeler, device, rank_queue, save_residual):
     device = torch.device(device)
     if device.type == "cuda" and device.index is None:
         if torch.cuda.device_count() > 1:
-            device = torch.device("cuda", index=my_rank % torch.cuda.device_count())
+            device = torch.device(
+                "cuda", index=my_rank % torch.cuda.device_count()
+            )
 
     # move peeler to device
     peeler.to(device)

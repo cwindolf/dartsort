@@ -439,7 +439,7 @@ class FeatureSplit(SplitStrategy):
 
         if do_pca:
             enough_good_spikes, pca_kept, pca_embeds = self.pca_features(
-                in_unit,
+                in_unit[kept],
                 max_registered_channel,
                 n_pitches_shift,
                 amplitude_normalized=self.amplitude_normalized,
@@ -447,12 +447,19 @@ class FeatureSplit(SplitStrategy):
             do_pca = enough_good_spikes
 
         if do_pca:
-            kept = pca_kept
+            pca_f = np.full(
+                (len(loc_features), pca_embeds.shape[1]),
+                np.nan,
+                dtype=pca_embeds.dtype,
+            )
+            kept = kept[pca_kept]
+            pca_f[kept] = pca_embeds
+            pca_embeds = pca_f
             # scale pc features to match localization features
             if self.rescale_all_features:
                 mad0 = mad_sigma(loc_features[kept, 0])
                 for k in range(self.n_pca_features):
-                    pca_embeds[kept, k] *= mad0 / mad_sigma(pca_embeds[kept, k])
+                    pca_embeds[:, k] *= mad0 / mad_sigma(pca_embeds[:, k])
             elif self.use_localization_features:
                 pca_embeds *= mad_sigma(loc_features[kept]).mean()
             features.append(pca_embeds)
@@ -938,7 +945,7 @@ class FeatureSplit(SplitStrategy):
         amplitude_vectors_dataset_name="denoised_ptp_amplitude_vectors",
     ):
         peeling_hdf5_filename = Path(peeling_hdf5_filename)
-        h5 = h5py.File(peeling_hdf5_filename, "r")
+        h5 = h5py.File(peeling_hdf5_filename, "r", libver="latest")
         self.geom = h5["geom"][:]
         self.channel_index = h5["channel_index"][:]
         self.channels = h5["channels"][:]

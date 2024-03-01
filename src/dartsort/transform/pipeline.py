@@ -65,6 +65,11 @@ class WaveformPipeline(torch.nn.Module):
 
         for transformer in self.transformers:
             transformer.fit(waveforms, max_channels=max_channels)
+
+            # if we're done already, stop before denoising
+            if not self.needs_fit():
+                break
+
             if transformer.is_denoiser:
                 waveforms = transformer(waveforms, max_channels=max_channels)
 

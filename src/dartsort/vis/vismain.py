@@ -21,6 +21,7 @@ def visualize_sorting(
     recording,
     sorting,
     output_directory,
+    sorting_path=None,
     motion_est=None,
     make_scatterplots=True,
     make_sorting_summaries=True,
@@ -40,6 +41,14 @@ def visualize_sorting(
     output_directory.mkdir(exist_ok=True, parents=True)
     if (output_directory / ".done").exists():
         return
+
+    if sorting is None and sorting_path is not None:
+        if sorting_path.name.endswith(".h5"):
+            sorting = DARTsortSorting.from_peeling_hdf5(sorting_path)
+        elif sorting_path.name.endswith(".npz"):
+            sorting = DARTsortSorting.load(sorting_path)
+        else:
+            assert False
 
     if make_scatterplots:
         scatter_unreg = output_directory / "scatter_unreg.png"
@@ -66,6 +75,7 @@ def visualize_sorting(
             plt.close(fig)
 
     sorting_analysis = None
+    template_cfg = no_realign_template_config if superres_templates else basic_template_config
     if make_sorting_summaries and sorting.n_units > 1:
         sorting_summary = output_directory / "sorting_summary.png"
         if overwrite or not sorting_summary.exists():
@@ -75,7 +85,7 @@ def visualize_sorting(
                 motion_est=motion_est,
                 name=output_directory.stem,
                 n_jobs_templates=n_jobs_templates,
-                template_config=no_realign_template_config if superres_templates else basic_template_config,
+                template_config=template_cfg,
             )
 
             fig = make_sorting_summary(
@@ -108,6 +118,7 @@ def visualize_sorting(
                 motion_est=motion_est,
                 name=output_directory.stem,
                 n_jobs_templates=n_jobs_templates,
+                template_config=template_cfg,
                 allow_template_reload="match" in output_directory.stem,
             )
 
@@ -190,25 +201,16 @@ def visualize_all_sorting_steps(
         with open(motion_est_pkl, "rb") as jar:
             motion_est = pickle.load(jar)
 
-    for j, path in enumerate(tqdm(step_paths, desc="Sorting steps")):
+    for j, path in enumerate(tqdm(step_paths, desc="Sorting steps", mininterval=0)):
         sorting_path = dartsort_dir / path
-        step_name = sorting_path.name
-        print(step_name)
-        print(sorting_path)
-        if sorting_path.name.endswith(".h5"):
-            sorting = DARTsortSorting.from_peeling_hdf5(sorting_path)
-            step_name = step_name.removesuffix(".h5")
-        elif sorting_path.name.endswith(".npz"):
-            sorting = DARTsortSorting.load(sorting_path)
-            step_name = step_name.removesuffix(".npz")
-        else:
-            assert False
+        step_name = sorting_path.with_suffix("").name
 
         step_dir_name = step_dir_name_format.format(step=j, step_name=step_name)
         visualize_sorting(
             recording=recording,
-            sorting=sorting,
+            sorting=None,
             output_directory=visualizations_dir / step_dir_name,
+            sorting_path=sorting_path,
             motion_est=motion_est,
             make_scatterplots=make_scatterplots,
             make_sorting_summaries=make_sorting_summaries,

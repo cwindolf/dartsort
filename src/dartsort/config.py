@@ -301,7 +301,7 @@ class DARTsortConfig:
     # high level behavior
     do_initial_split_merge: bool = True
     matching_iterations: int = 1
-
+    intermediate_matching_subsampling: float = 1.0
 
 default_waveform_config = WaveformConfig()
 default_featurization_config = FeaturizationConfig()
