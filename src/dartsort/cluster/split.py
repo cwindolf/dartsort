@@ -186,6 +186,7 @@ class FeatureSplit(SplitStrategy):
         cluster_selection_epsilon=1,
         sigma_local=5,
         sigma_local_low=None,
+        sigma_regional=None,
         noise_density=0.1,
         n_neighbors_search=20,
         radius_search=10,
@@ -253,6 +254,7 @@ class FeatureSplit(SplitStrategy):
         # DPC parameters
         self.sigma_local = sigma_local
         self.sigma_local_low = sigma_local_low
+        self.sigma_regional = sigma_regional
         self.noise_density = noise_density
         self.n_neighbors_search = n_neighbors_search
         self.radius_search = radius_search
@@ -401,7 +403,7 @@ class FeatureSplit(SplitStrategy):
                 l2_norm=l2_norm,
                 sigma_local=self.sigma_local,
                 sigma_local_low=self.sigma_local_low,
-                sigma_regional=None,
+                sigma_regional=self.sigma_regional,
                 noise_density=self.noise_density,
                 n_neighbors_search=self.n_neighbors_search,
                 radius_search=self.radius_search,
