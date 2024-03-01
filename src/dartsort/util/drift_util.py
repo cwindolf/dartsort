@@ -188,8 +188,8 @@ def registered_template(
     registered_geom,
     registered_kdtree=None,
     match_distance=None,
-    min_fraction_at_shift=0.1,
-    min_count_at_shift=5,
+    min_fraction_at_shift=0.25,
+    min_count_at_shift=25,
     pad_value=0.0,
     reducer=fast_nanmedian,
 ):

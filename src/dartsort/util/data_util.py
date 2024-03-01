@@ -307,7 +307,7 @@ def reindex_sorting_labels(sorting):
 # -- hdf5 util
 
 
-def batched_h5_read(dataset, indices, batch_size=64):
+def batched_h5_read(dataset, indices, batch_size=128):
     if indices.size < batch_size:
         return dataset[indices]
     else:
