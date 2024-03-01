@@ -193,8 +193,8 @@ def read_waveforms_channel_index(
         )
 
     n_spikes = times_samples.size
-    waveforms = np.empty(
-        (n_spikes, spike_length_samples, channel_index.shape[1]), dtype=recording.dtype
+    waveforms = np.full(
+        (n_spikes, spike_length_samples, channel_index.shape[1]), fill_value, dtype=recording.dtype
     )
     read_times = times_samples - trough_offset_samples
     for i, t in enumerate(read_times):
@@ -278,8 +278,8 @@ def read_single_channel_waveforms(
         )
 
     n_spikes = times_samples.size
-    waveforms = np.empty(
-        (n_spikes, spike_length_samples), dtype=recording.dtype
+    waveforms = np.full(
+        (n_spikes, spike_length_samples), fill_value, dtype=recording.dtype
     )
     read_times = times_samples - trough_offset_samples
     for i, (t, c) in enumerate(zip(read_times, channels)):
