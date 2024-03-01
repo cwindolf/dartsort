@@ -1052,7 +1052,7 @@ def _split_job_init(
 
 
 def _split_job(in_unit):
-    return _split_job_context.split_strategy.split_cluster_with_strategy(in_unit)
+    return _split_job_context.split_strategy.split_cluster(in_unit)
 
 
 # other helpers
