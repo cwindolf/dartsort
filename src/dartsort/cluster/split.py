@@ -889,7 +889,7 @@ class FeatureSplit(SplitStrategy):
             self.tpca = tpca_feature[0].to_sklearn()
 
 
-class ChunkForwardBackwardSplit(FeatureSplit):
+class ChunkForwardBackwardFeatureSplit(FeatureSplit):
     def __init__(
         self,
         peeling_hdf5_filename,
@@ -1026,7 +1026,7 @@ class ChunkForwardBackwardSplit(FeatureSplit):
 
 
 # this is to help split_clusters take a string argument
-all_split_strategies = [FeatureSplit, ChunkForwardBackwardSplit]
+all_split_strategies = [FeatureSplit, ChunkForwardBackwardFeatureSplit]
 split_strategies_by_class_name = {cls.__name__: cls for cls in all_split_strategies}
 
 # -- parallelism widgets
