@@ -14,12 +14,11 @@ import spikeinterface.full as si
 from .main import dartsort, default_dartsort_config
 from .vis.vismain import visualize_all_sorting_steps
 
-
 # -- entry points
 
 
 @click.command()
-@click.argument("binary_folder")
+@click.argument("si_rec_path")
 @click.argument("output_directory")
 @click.option("--config_path", type=str, default=None)
 @click.option("--take_subtraction_from", type=str, default=None)
@@ -29,8 +28,8 @@ from .vis.vismain import visualize_all_sorting_steps
 @click.option("--no_show_progress", default=False, flag_value=True, is_flag=True)
 @click.option("--device", type=str, default=None)
 @click.option("--rec_to_memory", default=False, flag_value=True, is_flag=True)
-def dartsort_binary_folder_config_py(
-    binary_folder,
+def dartsort_si_config_py(
+    si_rec_path,
     output_directory,
     config_path=None,
     take_subtraction_from=None,
@@ -41,8 +40,8 @@ def dartsort_binary_folder_config_py(
     device=None,
     rec_to_memory=False,
 ):
-    run_from_binary_folder_and_config_py(
-        binary_folder,
+    run_from_si_rec_path_and_config_py(
+        si_rec_path,
         output_directory,
         config_path=config_path,
         take_subtraction_from=take_subtraction_from,
@@ -56,7 +55,7 @@ def dartsort_binary_folder_config_py(
 
 
 @click.command()
-@click.argument("binary_folder")
+@click.argument("si_rec_path")
 @click.argument("dartsort_dir")
 @click.argument("visualizations_dir")
 @click.option("--channel_show_radius_um", default=50.0)
@@ -68,8 +67,8 @@ def dartsort_binary_folder_config_py(
 @click.option("--no_scatterplots", default=False, flag_value=True, is_flag=True)
 @click.option("--no_summaries", default=False, flag_value=True, is_flag=True)
 @click.option("--rec_to_memory", default=False, flag_value=True, is_flag=True)
-def dartvis_binary_folder_all(
-    binary_folder,
+def dartvis_si_all(
+    si_rec_path,
     dartsort_dir,
     visualizations_dir,
     channel_show_radius_um=50.0,
@@ -82,7 +81,7 @@ def dartvis_binary_folder_all(
     no_summaries=False,
     rec_to_memory=False,
 ):
-    recording = si.read_binary_folder(binary_folder)
+    recording = si.read_si_rec_path(si_rec_path)
     if rec_to_memory:
         recording = recording.save_to_memory(n_jobs=n_jobs_cpu)
     visualize_all_sorting_steps(
@@ -103,8 +102,8 @@ def dartvis_binary_folder_all(
 # -- scripting utils
 
 
-def run_from_binary_folder_and_config_py(
-    binary_folder,
+def run_from_si_rec_path_and_config_py(
+    si_rec_path,
     output_directory,
     config_path=None,
     take_subtraction_from=None,
@@ -127,7 +126,7 @@ def run_from_binary_folder_and_config_py(
         spec.loader.exec_module(module)
         cfg = module.cfg
 
-    recording = si.read_binary_folder(binary_folder)
+    recording = si.read_si_rec_path(si_rec_path)
 
     if rec_to_memory:
         recording = recording.save_to_memory()
