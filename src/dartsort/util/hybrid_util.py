@@ -200,7 +200,7 @@ class HybridRecordingSegment(BasePreprocessorSegment):
         traces = traces_pad[
             self.margin_left : traces_pad.shape[0] - self.margin_right
         ]
-        return traces
+        return traces[:, channel_indices]
 
 
 hybrid_recording = define_function_from_class(
