@@ -86,6 +86,7 @@ def visualize_sorting(
                 name=output_directory.stem,
                 n_jobs_templates=n_jobs_templates,
                 template_config=template_cfg,
+                allow_template_reload="match" in output_directory.stem,
             )
 
             fig = make_sorting_summary(
