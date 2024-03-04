@@ -14,6 +14,7 @@ This will use all the other parameters' default values. This
 object can then be passed into the high level functions like
 `subtract(...)`.
 """
+
 from dataclasses import dataclass, field
 from typing import List, Optional, Tuple
 
@@ -25,14 +26,10 @@ except ImportError:
     try:
         from importlib_resources import files
     except ImportError:
-        raise ValueError(
-            "Need python>=3.10 or pip install importlib_resources."
-        )
+        raise ValueError("Need python>=3.10 or pip install importlib_resources.")
 
 default_pretrained_path = files("dartsort.pretrained")
-default_pretrained_path = default_pretrained_path.joinpath(
-    "single_chan_denoiser.pt"
-)
+default_pretrained_path = default_pretrained_path.joinpath("single_chan_denoiser.pt")
 
 
 @dataclass(frozen=True)
@@ -212,12 +209,12 @@ class SplitMergeConfig:
     # -- split
     split_strategy: str = "FeatureSplit"
     recursive_split: bool = True
-    split_strategy_kwargs: Optional[dict] = field(default_factory=lambda: dict(max_spikes=20_000))
+    split_strategy_kwargs: Optional[dict] = field(
+        default_factory=lambda: dict(max_spikes=20_000)
+    )
 
     # -- merge
-    merge_template_config: TemplateConfig = TemplateConfig(
-        superres_templates=False
-    )
+    merge_template_config: TemplateConfig = TemplateConfig(superres_templates=False)
     linkage: str = "complete"
     merge_distance_threshold: float = 0.25
     cross_merge_distance_threshold: float = 0.5
@@ -311,7 +308,9 @@ default_template_config = TemplateConfig()
 default_clustering_config = ClusteringConfig()
 default_split_merge_config = SplitMergeConfig()
 coarse_template_config = TemplateConfig(superres_templates=False)
-raw_template_config = TemplateConfig(do_realign_peaks=False, low_rank_denoising=False, superres_templates=False)
+raw_template_config = TemplateConfig(
+    realign_peaks=False, low_rank_denoising=False, superres_templates=False
+)
 default_matching_config = MatchingConfig()
 default_motion_estimation_config = MotionEstimationConfig()
 default_computation_config = ComputationConfig()
