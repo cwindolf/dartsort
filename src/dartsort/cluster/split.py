@@ -179,6 +179,8 @@ class FeatureSplit(SplitStrategy):
         relocated=True,
         use_wfs_L2_norm=False,
         localization_feature_scales=(1.0, 1.0, 50.0),
+        time_scale=3e-3,
+        use_time_feature=False,
         log_c=5,
         channel_selection_radius=75.0,
         min_cluster_size=25,
@@ -246,6 +248,11 @@ class FeatureSplit(SplitStrategy):
         self.reassign_outliers = reassign_outliers
         self.max_spikes = max_spikes
         self.use_wfs_L2_norm = use_wfs_L2_norm
+        self.rescale_all_features = rescale_all_features
+        self.use_ptp = use_ptp
+        self.amplitude_normalized = amplitude_normalized
+        self.use_spread = use_spread
+
         # hdbscan parameters
         self.min_cluster_size = min_cluster_size
         self.min_samples = min_samples
@@ -260,29 +267,8 @@ class FeatureSplit(SplitStrategy):
         self.radius_search = radius_search
         self.triage_quantile_per_cluster = triage_quantile_per_cluster
         self.remove_clusters_smaller_than = remove_clusters_smaller_than
-        self.rescale_all_features = rescale_all_features
-        self.use_ptp = use_ptp
-        self.amplitude_normalized = amplitude_normalized
-        self.use_spread = use_spread
 
-        # Check for ensembling
-        self.ensemble_over_chunks = ensemble_over_chunks
-        self.recording = recording
-        self.chunk_size_s = chunk_size_s
-        if self.ensemble_over_chunks:
-            assert (
-                self.use_localization_features
-            ), "Need to use loc features for ensembling over chunks"
-            assert (
-                self.recording is not None
-            ), "Need to input recording for ensembling over chunks"
-            assert (
-                self.chunk_size_s is not None
-            ), "Need to input chunk size for ensembling over chunks"
-
-        assert np.isin(
-            cluster_alg, ["hdbscan", "dpc"]
-        ), "cluster_alg needs to be hdbscan or dpc"
+        assert cluster_alg in ("hdbscan", "dpc")
         self.cluster_alg = cluster_alg
 
         # load up the required h5 datasets
@@ -336,6 +322,9 @@ class FeatureSplit(SplitStrategy):
             if not self.use_ptp:
                 loc_features = loc_features[:, :2]
             features.append(loc_features)
+
+        if self.use_time_feature:
+            features.append(self.t_s[in_unit] * self.time_scale)
 
         if do_pca:
             enough_good_spikes, pca_kept, pca_embeds = self.pca_features(
@@ -833,9 +822,11 @@ class FeatureSplit(SplitStrategy):
         self.channels = h5["channels"][:]
         self.match_distance = pdist(self.geom).min() / 2
 
+        if self.use_localization_features or self.relocated or self.use_time_feature:
+            self.t_s = h5["times_seconds"][:]
+
         if self.use_localization_features or self.relocated:
             self.xyza = h5[localizations_dataset_name][:]
-            self.t_s = h5["times_seconds"][:]
             # registered spike positions (=originals if not relocated)
             self.z_reg = self.z = self.xyza[:, 2]
 

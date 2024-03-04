@@ -8,6 +8,7 @@ Relies on the DARTsortAnalysis object of utils/analysis.py to do most of
 the data work so that this file can focus on plotting (sort of MVC).
 """
 
+from dataclasses import replace
 from pathlib import Path
 
 import colorcet as cc
@@ -16,6 +17,9 @@ import numpy as np
 from matplotlib.legend_handler import HandlerTuple
 from tqdm.auto import tqdm
 
+from ..cluster import split
+from ..config import raw_template_config
+from ..util.analysis import DARTsortAnalysis
 from ..util.multiprocessing_util import CloudpicklePoolExecutor, get_pool
 from . import layout
 from .waveforms import geomplot
@@ -149,9 +153,7 @@ class XZScatter(UnitPlot):
         axis.set_ylabel(reg_str + "z (um)")
         reloc_str = "relocated " * self.relocate_amplitudes
         if self.colorbar:
-            plt.colorbar(
-                s, ax=axis, shrink=0.5, label=reloc_str + "amplitude (su)"
-            )
+            plt.colorbar(s, ax=axis, shrink=0.5, label=reloc_str + "amplitude (su)")
 
 
 class PCAScatter(UnitPlot):
@@ -192,9 +194,7 @@ class PCAScatter(UnitPlot):
         axis.set_ylabel(reloc_str + "per-unit PC2 (um)")
         reloc_amp_str = "relocated " * self.relocate_amplitudes
         if self.colorbar:
-            plt.colorbar(
-                s, ax=axis, shrink=0.5, label=reloc_amp_str + "amplitude (su)"
-            )
+            plt.colorbar(s, ax=axis, shrink=0.5, label=reloc_amp_str + "amplitude (su)")
 
 
 # -- wide scatter plots
@@ -275,18 +275,14 @@ class TFeatScatter(UnitPlot):
         axis.set_ylabel(self.feat_name)
         if self.color_by_amplitude:
             reloc_str = "relocated " * self.relocate_amplitudes
-            plt.colorbar(
-                s, ax=axis, shrink=0.5, label=reloc_str + "amplitude (su)"
-            )
+            plt.colorbar(s, ax=axis, shrink=0.5, label=reloc_str + "amplitude (su)")
 
 
 class TimeAmpScatter(UnitPlot):
     kind = "widescatter"
     width = 2
 
-    def __init__(
-        self, relocate_amplitudes=False, amplitude_color_cutoff=15, alpha=0.2
-    ):
+    def __init__(self, relocate_amplitudes=False, amplitude_color_cutoff=15, alpha=0.2):
         self.relocate_amplitudes = relocate_amplitudes
         self.amplitude_color_cutoff = amplitude_color_cutoff
         self.alpha = alpha
@@ -359,14 +355,10 @@ class WaveformPlot(UnitPlot):
         show_template = self.show_template
         template_color = self.template_color
         if self.template_index is None and show_template:
-            templates = sorting_analysis.coarse_template_data.unit_templates(
-                unit_id
-            )
+            templates = sorting_analysis.coarse_template_data.unit_templates(unit_id)
             show_template = bool(templates.size)
         if self.template_index is not None and show_template:
-            templates = sorting_analysis.template_data.templates[
-                self.template_index
-            ]
+            templates = sorting_analysis.template_data.templates[self.template_index]
             templates = templates[None]
             show_template = bool(templates.size)
             sup_temp_ids = sorting_analysis.unit_template_indices(unit_id)
@@ -381,16 +373,12 @@ class WaveformPlot(UnitPlot):
                 new_offset=self.trough_offset_samples,
                 new_length=self.spike_length_samples,
             )
-            max_abs_amp = self.max_abs_template_scale * np.nanmax(
-                np.abs(templates)
-            )
+            max_abs_amp = self.max_abs_template_scale * np.nanmax(np.abs(templates))
         show_superres_templates = (
             self.show_superres_templates and self.template_index is None
         )
         if show_superres_templates:
-            suptemplates = sorting_analysis.template_data.unit_templates(
-                unit_id
-            )
+            suptemplates = sorting_analysis.template_data.unit_templates(unit_id)
             show_superres_templates = bool(suptemplates.size)
         if show_superres_templates:
             suptemplates = trim_waveforms(
@@ -400,9 +388,7 @@ class WaveformPlot(UnitPlot):
                 new_length=self.spike_length_samples,
             )
             show_superres_templates = suptemplates.shape[0] > 1
-            max_abs_amp = self.max_abs_template_scale * np.nanmax(
-                np.abs(suptemplates)
-            )
+            max_abs_amp = self.max_abs_template_scale * np.nanmax(np.abs(suptemplates))
 
         handles = {}
         if waveforms is not None:
@@ -531,9 +517,7 @@ class NearbyCoarseTemplatesPlot(UnitPlot):
         ) = sorting_analysis.nearby_coarse_templates(
             unit_id, n_neighbors=self.n_neighbors
         )
-        colors = np.array(cc.glasbey_light)[
-            neighbor_ids % len(cc.glasbey_light)
-        ]
+        colors = np.array(cc.glasbey_light)[neighbor_ids % len(cc.glasbey_light)]
         assert neighbor_ids[0] == unit_id
         chan = neighbor_coarse_templates[0].ptp(0).argmax()
         ci = sorting_analysis.show_channel_index(self.channel_show_radius_um)
@@ -567,9 +551,7 @@ class NearbyCoarseTemplatesPlot(UnitPlot):
             )
             labels.append(str(uid))
             handles.append(lines[0])
-        axis.legend(
-            handles=handles, labels=labels, fancybox=False, loc="lower center"
-        )
+        axis.legend(handles=handles, labels=labels, fancybox=False, loc="lower center")
         axis.set_xticks([])
         axis.set_yticks([])
         axis.set_title(self.title)
@@ -602,9 +584,7 @@ class CoarseTemplateDistancePlot(UnitPlot):
         ) = sorting_analysis.nearby_coarse_templates(
             unit_id, n_neighbors=self.n_neighbors
         )
-        colors = np.array(cc.glasbey_light)[
-            neighbor_ids % len(cc.glasbey_light)
-        ]
+        colors = np.array(cc.glasbey_light)[neighbor_ids % len(cc.glasbey_light)]
         assert neighbor_ids[0] == unit_id
 
         im = axis.imshow(
@@ -646,15 +626,11 @@ class NeighborCCGPlot(UnitPlot):
         ) = sorting_analysis.nearby_coarse_templates(
             unit_id, n_neighbors=self.n_neighbors + 1
         )
-        colors = np.array(cc.glasbey_light)[
-            neighbor_ids % len(cc.glasbey_light)
-        ]
+        colors = np.array(cc.glasbey_light)[neighbor_ids % len(cc.glasbey_light)]
         # assert neighbor_ids[0] == unit_id
         neighbor_ids = neighbor_ids[1:]
 
-        my_st = sorting_analysis.times_samples(
-            which=sorting_analysis.in_unit(unit_id)
-        )
+        my_st = sorting_analysis.times_samples(which=sorting_analysis.in_unit(unit_id))
         neighb_sts = [
             sorting_analysis.times_samples(which=sorting_analysis.in_unit(nid))
             for nid in neighbor_ids
@@ -669,16 +645,107 @@ class NeighborCCGPlot(UnitPlot):
             merged_st.sort()
             alags, acg = correlogram(merged_st, max_lag=self.max_lag)
 
-            bar(
-                axes[0, j], clags, ccg, fill=True, fc=colors[j]
-            )  # , ec="k", lw=1)
-            bar(
-                axes[1, j], alags, acg, fill=True, fc=colors[j]
-            )  # , ec="k", lw=1)
+            bar(axes[0, j], clags, ccg, fill=True, fc=colors[j])  # , ec="k", lw=1)
+            bar(axes[1, j], alags, acg, fill=True, fc=colors[j])  # , ec="k", lw=1)
             axes[0, j].set_title(f"unit {neighbor_ids[j]}")
         axes[0, 0].set_ylabel("ccg")
         axes[1, 0].set_ylabel("merged acg")
         axes[1, (self.n_neighbors + 1) // 2].set_xlabel("lag (samples)")
+
+
+# -- evaluation plots
+
+
+class SplitStrategyPlot(UnitPlot):
+    kind = "spliteval"
+    width = 5.5
+    height = 4.25
+
+    def __init__(
+        self,
+        split_name,
+        split_strategy,
+        peeling_hdf5_filename,
+        recording,
+        channel_show_radius_um=50.0,
+        amplitude_color_cutoff=15.0,
+        pca_radius_um=75.0,
+        split_strategy_kwargs=None,
+        motion_est=None,
+    ):
+        if split_strategy_kwargs is None:
+            split_strategy_kwargs = {}
+        if motion_est is not None:
+            split_strategy_kwargs["motion_est"] = motion_est
+        split_strategy_kwargs["peeling_hdf5_filename"] = peeling_hdf5_filename
+
+        self.split_name = split_name
+        self.split_strategy = split.split_strategies_by_class_name[split_strategy](
+            **split_strategy_kwargs
+        )
+        self.motion_est = motion_est
+        self.recording = recording
+        self.channel_show_radius_um = channel_show_radius_um
+        self.amplitude_color_cutoff = amplitude_color_cutoff
+        self.pca_radius_um = pca_radius_um
+
+        self.plots = [
+            XZScatter(),
+            TimeAmpScatter(),
+            TimeAmpScatter(relocate_amplitudes=True),
+            PCAScatter(),
+            TimeZScatter(),
+            # may need to update n neighbors for these
+            NearbyCoarseTemplatesPlot(),
+            CoarseTemplateDistancePlot(),
+        ]
+
+    def draw(self, panel, sorting_analysis, unit_id):
+        """
+        - x vs reg z
+        - time vs amp
+        - time vs reloc amp
+        - reloc PC scatter
+        - time vs z
+        - time vs z reg?
+        - templates
+        - template dist
+        """
+        # run the split
+        in_unit = sorting_analysis.in_unit(unit_id)
+        split_result = self.split_strategy.split_cluster(in_unit)
+
+        # re-make the sorting analysis
+        split_labels = np.full_like(sorting_analysis.sorting.labels, -1)
+        if split_result.is_split:
+            split_labels[in_unit] = split_result.new_labels
+        else:
+            split_labels[in_unit] = 0
+        split_sorting = replace(
+            sorting_analysis.sorting, split_labels
+        )
+        split_sorting_analysis = DARTsortAnalysis.from_sorting(
+            self.recording,
+            split_sorting,
+            motion_est=self.motion_est,
+            name=f"{self.split_name} {unit_id}",
+            template_config=raw_template_config,
+            allow_template_reload=False,
+            n_jobs_templates=0,
+        )
+
+        # make a new flow layout here
+        make_unit_summary(
+            split_sorting_analysis,
+            unit_id=0,
+            channel_show_radius_um=self.channel_show_radius_um,
+            amplitude_color_cutoff=self.amplitude_color_cutoff,
+            pca_radius_um=self.pca_radius_um,
+            plots=self.plots,
+            max_height=self.height,
+            figsize=(self.width, self.height),
+            figure=panel,
+        )
 
 
 # -- multi plots
@@ -745,9 +812,7 @@ class SuperresWaveformMultiPlot(UnitMultiPlot):
                 template_index=template_index,
                 title=f"{sorting_analysis.template_data.spike_counts[template_index]} spikes assigned",
             )
-            for template_index in sorting_analysis.unit_template_indices(
-                unit_id
-            )
+            for template_index in sorting_analysis.unit_template_indices(unit_id)
         ]
 
 
@@ -864,8 +929,7 @@ def make_all_summaries(
 
 def all_summaries_done(unit_ids, save_folder, ext="png"):
     return save_folder.exists() and all(
-        (save_folder / f"unit{unit_id:04d}.{ext}").exists()
-        for unit_id in unit_ids
+        (save_folder / f"unit{unit_id:04d}.{ext}").exists() for unit_id in unit_ids
     )
 
 
