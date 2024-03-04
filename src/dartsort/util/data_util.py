@@ -185,6 +185,7 @@ class DARTsortSorting:
             extra_features=extra_features,
         )
 
+
 def keep_only_most_recent_spikes(
     sorting,
     n_min_spikes=250,
@@ -195,11 +196,11 @@ def keep_only_most_recent_spikes(
     """
     new_labels = np.full(sorting.labels.shape, -1)
     units = np.unique(sorting.labels)
-    units = units[units>-1]
+    units = units[units > -1]
     for k in units:
         idx_k = np.flatnonzero(sorting.labels == k)
-        before_time = (sorting.times_samples[idx_k] < latest_time_sample) 
-        if before_time.sum()<=n_min_spikes:
+        before_time = sorting.times_samples[idx_k] < latest_time_sample
+        if before_time.sum() <= n_min_spikes:
             idx_k = idx_k[:n_min_spikes]
             new_labels[idx_k] = k
         else:
@@ -207,6 +208,7 @@ def keep_only_most_recent_spikes(
             new_labels[idx_k] = k
     new_sorting = replace(sorting, labels=new_labels)
     return new_sorting
+
 
 def check_recording(
     rec,
@@ -275,9 +277,7 @@ def subset_sorting_by_spike_count(sorting, min_spikes=0):
     units, counts = np.unique(sorting.labels, return_counts=True)
     small_units = units[counts < min_spikes]
 
-    new_labels = np.where(
-        np.isin(sorting.labels, small_units), -1, sorting.labels
-    )
+    new_labels = np.where(np.isin(sorting.labels, small_units), -1, sorting.labels)
 
     return replace(sorting, labels=new_labels)
 
