@@ -303,6 +303,7 @@ class DARTsortConfig:
     matching_iterations: int = 1
     intermediate_matching_subsampling: float = 1.0
 
+
 default_waveform_config = WaveformConfig()
 default_featurization_config = FeaturizationConfig()
 default_subtraction_config = SubtractionConfig()
@@ -310,6 +311,7 @@ default_template_config = TemplateConfig()
 default_clustering_config = ClusteringConfig()
 default_split_merge_config = SplitMergeConfig()
 coarse_template_config = TemplateConfig(superres_templates=False)
+raw_template_config = TemplateConfig(do_realign_peaks=False, low_rank_denoising=False, superres_templates=False)
 default_matching_config = MatchingConfig()
 default_motion_estimation_config = MotionEstimationConfig()
 default_computation_config = ComputationConfig()
