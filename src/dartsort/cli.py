@@ -127,6 +127,7 @@ def run_from_si_rec_path_and_config_py(
         cfg = module.cfg
 
     recording = si.load_extractor(si_rec_path)
+    print(f"{recording=}")
 
     if rec_to_memory:
         recording = recording.save_to_memory()
