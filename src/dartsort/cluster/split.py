@@ -175,6 +175,7 @@ class FeatureSplit(SplitStrategy):
         peeling_featurization_pt=None,
         motion_est=None,
         use_localization_features=True,
+        return_localization_features=False,
         n_pca_features=2,
         relocated=True,
         use_wfs_L2_norm=False,
@@ -252,6 +253,8 @@ class FeatureSplit(SplitStrategy):
         self.use_ptp = use_ptp
         self.amplitude_normalized = amplitude_normalized
         self.use_spread = use_spread
+        self.use_time_feature = use_time_feature
+        self.return_localization_features = return_localization_features
 
         # hdbscan parameters
         self.min_cluster_size = min_cluster_size
@@ -414,7 +417,7 @@ class FeatureSplit(SplitStrategy):
             else:
                 new_labels[idx_subsample[kept]] = hdb_labels
 
-        if self.ensemble_over_chunks and self.use_localization_features:
+        if self.return_localization_features and self.use_localization_features:
             return SplitResult(
                 is_split=is_split,
                 in_unit=in_unit_all,
@@ -922,6 +925,7 @@ class ChunkForwardBackwardFeatureSplit(FeatureSplit):
         min_cluster_size, min_samples, cluster_selection_epsilon
             HDBSCAN parameters. See their documentation for lots of info.
         """
+        split_strategy_kwargs["return_localization_features"] = True
         super().__init__(
             peeling_hdf5_filename, recording=recording, **split_strategy_kwargs
         )
