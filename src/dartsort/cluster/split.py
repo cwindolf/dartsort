@@ -816,7 +816,7 @@ class FeatureSplit(SplitStrategy):
         amplitude_vectors_dataset_name="denoised_ptp_amplitude_vectors",
     ):
         peeling_hdf5_filename = Path(peeling_hdf5_filename)
-        h5 = h5py.File(peeling_hdf5_filename, "r", libver="latest")
+        h5 = h5py.File(peeling_hdf5_filename, "r", libver="latest", locking=False)
         self.geom = h5["geom"][:]
         self.channel_index = h5["channel_index"][:]
         self.channels = h5["channels"][:]
