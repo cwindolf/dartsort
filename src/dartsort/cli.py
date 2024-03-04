@@ -81,7 +81,7 @@ def dartvis_si_all(
     no_summaries=False,
     rec_to_memory=False,
 ):
-    recording = si.read_si_rec_path(si_rec_path)
+    recording = si.load_extractor(si_rec_path)
     if rec_to_memory:
         recording = recording.save_to_memory(n_jobs=n_jobs_cpu)
     visualize_all_sorting_steps(
@@ -126,7 +126,7 @@ def run_from_si_rec_path_and_config_py(
         spec.loader.exec_module(module)
         cfg = module.cfg
 
-    recording = si.read_si_rec_path(si_rec_path)
+    recording = si.load_extractor(si_rec_path)
 
     if rec_to_memory:
         recording = recording.save_to_memory()
