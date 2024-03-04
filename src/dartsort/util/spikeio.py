@@ -339,6 +339,7 @@ def get_read_chunks(read_times, spike_length=121, max_chunk=512):
             chunk_len = 1
         else:
             # grow current chunk
+            print(f"grow {chunk_start_time=} {t=} {(t-chunk_start_time)=}")
             chunk_end_time = t
             chunk_wf_starts[chunk_len] = t - chunk_start_time
             chunk_len += 1
@@ -533,6 +534,8 @@ def _read_waveforms_binary_channel_index_chunked(
             for i, tt in zip(ix, tix):
                 chans = channel_index[main_channels[i]]
                 good = chans < n_channels
+                # print(f"{i=}")
+                # print(f"{tt=}")
                 waveforms[i, :, good] = wfs[
                     (tt + time_ix.ravel())[:, None], chans[good][None]
                 ].T
