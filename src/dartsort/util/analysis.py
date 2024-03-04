@@ -246,13 +246,16 @@ class DARTsortAnalysis:
     @property
     def h5(self):
         if self._h5 is None:
-            self._h5 = h5py.File(self.hdf5_path, "r")
+            self._h5 = h5py.File(self.hdf5_path, "r", locking=False)
         return self._h5
 
     @property
     def xyza(self):
         if self._xyza is None:
-            self._xyza = self.h5[self.localizations_dataset][:]
+            if hasattr(self.sorting, self.localizations_dataset):
+                self._xyza = getattr(self.sorting, self.localizations_dataset)
+            else:
+                self._xyza = self.h5[self.localizations_dataset][:]
         return self._xyza
 
     @property
@@ -270,7 +273,10 @@ class DARTsortAnalysis:
     @property
     def amplitude_vectors(self):
         if self._amplitude_vectors is None:
-            self._amplitude_vectors = self.h5[self.amplitude_vectors_dataset][:]
+            if hasattr(self.sorting, self.amplitude_vectors_dataset):
+                self._amplitude_vectors = getattr(self.sorting, self.amplitude_vectors_dataset)
+            else:
+                self._amplitude_vectors = self.h5[self.amplitude_vectors_dataset][:]
         return self._amplitude_vectors
 
     @property
@@ -475,6 +481,7 @@ class DARTsortAnalysis:
         max_count=250,
         random_seed=0,
         channel_show_radius_um=75,
+        channel_dist_p=np.inf,
         relocated=False,
     ):
         which = self.in_unit(unit_id)
@@ -523,6 +530,7 @@ class DARTsortAnalysis:
             waveforms,
             self.channel_index,
             channel_show_radius_um=channel_show_radius_um,
+            channel_dist_p=channel_dist_p,
             relocated=relocated,
         )
         return which, waveforms, max_chan, show_geom, show_channel_index
@@ -550,6 +558,7 @@ class DARTsortAnalysis:
             channel_show_radius_um=pca_radius_um,
             random_seed=random_seed,
             max_count=max_count,
+            channel_dist_p=2,
         )
 
         # remove chans with no signal at all
@@ -574,9 +583,11 @@ class DARTsortAnalysis:
             choices = rg.choice(no_nan, size=max_wfs_fit, replace=False)
             choices.sort()
             pca.fit(waveforms[choices])
-            features[no_nan] = pca.transform(waveforms[no_nan])
+            # features[no_nan] = pca.transform(waveforms[no_nan])
         else:
-            features[no_nan] = pca.fit_transform(waveforms[no_nan])
+            # features[no_nan] = pca.fit_transform(waveforms[no_nan])
+            pca.fit(waveforms[no_nan])
+        features = pca.transform(np.where(np.isfinite(waveforms), waveforms, pca.mean_[None]))
         return which, features
 
     def unit_max_channel(self, unit_id):
