@@ -297,6 +297,7 @@ class DARTsortConfig:
 
     # high level behavior
     do_initial_split_merge: bool = True
+    do_final_split_merge: bool = False
     matching_iterations: int = 1
     intermediate_matching_subsampling: float = 1.0
 

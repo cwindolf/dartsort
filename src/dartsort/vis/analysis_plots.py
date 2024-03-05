@@ -39,7 +39,7 @@ def scatter_max_channel_waveforms(
 
         xc = locsx[j]
         zc = locsz[j]
-        c = colors[u]
+        c = colors[u % len(colors)]
         axis.plot(
             xc + xrel, zc + zscale * mctrace, lw=lw, color=c, **plot_kwargs
         )

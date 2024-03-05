@@ -25,11 +25,15 @@ def kdtree_inliers(
         kdtree = KDTree(X)
 
     distances, indices = kdtree.query(
-        X, k=1 + n_neighbors, distance_upper_bound=distance_upper_bound, workers=workers
+        X,
+        k=1 + n_neighbors,
+        distance_upper_bound=distance_upper_bound,
+        workers=workers,
     )
     inliers = (indices[:, 1:] < len(X)).sum(1) >= n_neighbors
 
     return inliers, kdtree
+
 
 def get_smoothed_densities(
     X,
@@ -42,6 +46,7 @@ def get_smoothed_densities(
     bin_size_ratio=5.0,
     min_bin_size=1.0,
     ramp_min_bin_size=5.0,
+    max_n_bins=512,
     revert=False,
 ):
     """Get RBF density estimates for each X[i] and bandwidth in sigmas
@@ -67,17 +72,22 @@ def get_smoothed_densities(
     bin_sizes = np.full(X.shape[1], min_sigma / bin_size_ratio)
     bin_sizes = np.maximum(min_bin_size, bin_sizes)
     if do_ramp:
-        bin_sizes[sigma_ramp_ax] = max(bin_sizes[sigma_ramp_ax], ramp_min_bin_size)
+        bin_sizes[sigma_ramp_ax] = max(
+            bin_sizes[sigma_ramp_ax], ramp_min_bin_size
+        )
 
     # select bin edges
     extents = np.c_[np.floor(infeats.min(0)), np.ceil(infeats.max(0))]
     nbins = np.ceil(extents.ptp(1) / bin_sizes).astype(int)
-    bin_edges = [np.linspace(e[0], e[1], num=nb) for e, nb in zip(extents, nbins)]
+    bin_edges = [
+        np.linspace(e[0], e[1], num=min(max_n_bins, nb))
+        for e, nb in zip(extents, nbins)
+    ]
 
     # compute histogram and figure out how big the bins actually were
     raw_histogram, bin_edges = np.histogramdd(infeats, bins=bin_edges)
     for be in bin_edges:
-        if len(be)<2:
+        if len(be) < 2:
             return None
     bin_sizes = np.array([(be[1] - be[0]) for be in bin_edges])
     bin_centers = [0.5 * (be[1:] + be[:-1]) for be in bin_edges]
@@ -118,7 +128,9 @@ def get_smoothed_densities(
                 sig_move = sig.copy()
                 sig_move[0] = sig[sigma_ramp_ax]
                 sig_move[sigma_ramp_ax] = sig[0]
-                hist_smoothed[j] = gaussian_filter(hist_move, sig_move)[j]  # sig_move
+                hist_smoothed[j] = gaussian_filter(hist_move, sig_move)[
+                    j
+                ]  # sig_move
             hist = np.moveaxis(hist_smoothed, 0, sigma_ramp_ax)
         if return_hist:
             hists.append(hist)
@@ -217,7 +229,6 @@ def density_peaks_clustering(
     amp_no_triaging=12,
     revert=False,
 ):
-
     """
     if l2_norm is passed as argument, it will be used to compute density and nhdn
     """
@@ -244,10 +255,13 @@ def density_peaks_clustering(
             return np.full(X.shape[0], -1)
         if do_ratio:
             reg_density = get_smoothed_densities(
-                X, inliers=inliers, sigmas=sigma_regional, sigma_lows=sigma_regional_low
+                X,
+                inliers=inliers,
+                sigmas=sigma_regional,
+                sigma_lows=sigma_regional_low,
             )
             density = np.nan_to_num(density / reg_density)
-            
+
         nhdn, distances, indices = nearest_higher_density_neighbor(
             kdtree,
             density,
@@ -255,13 +269,13 @@ def density_peaks_clustering(
             distance_upper_bound=radius_search,
             workers=workers,
         )
-        
+
     else:
         # inliers don't matter here? Or should we still remove them?...
         # indices = np.full(l2_norm.shape[0], n)
         # l2_norm_inliers = l2_norm[inliers] #?? NO -> keep everything but only compute for inliers
         n = l2_norm.shape[0]
-        indices = l2_norm.argsort()[:, :1 + n_neighbors_search]
+        indices = l2_norm.argsort()[:, : 1 + n_neighbors_search]
         distances = l2_norm[np.arange(n)[:, None], indices]
         assert distances.shape == (l2_norm.shape[0], 1 + n_neighbors_search)
         density = np.median(distances, axis=1)
@@ -308,7 +322,9 @@ def density_peaks_clustering(
                     )
                 )
             else:
-                q = np.quantile(density[idx_label], 1-triage_quantile_per_cluster)
+                q = np.quantile(
+                    density[idx_label], 1 - triage_quantile_per_cluster
+                )
                 spikes_to_remove = np.flatnonzero(
                     np.logical_and(
                         density[idx_label] > q,
