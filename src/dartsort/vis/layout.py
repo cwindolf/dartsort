@@ -32,7 +32,9 @@ class BaseMultiPlot:
 Card = namedtuple("Card", ["kind", "width", "height", "plots"])
 
 
-def flow_layout(plots, max_height=4, figsize=(8.5, 11), figure=None, **plot_kwargs):
+def flow_layout(
+    plots, max_height=4, figsize=(8.5, 11), figure=None, **plot_kwargs
+):
     columns = flow_layout_columns(plots, max_height=max_height, **plot_kwargs)
 
     # -- draw the figure
@@ -40,10 +42,14 @@ def flow_layout(plots, max_height=4, figsize=(8.5, 11), figure=None, **plot_kwar
     if figure is None:
         figure = plt.figure(figsize=figsize, layout="constrained")
     subfigures = figure.subfigures(
-        nrows=1, ncols=len(columns), hspace=0.1, width_ratios=width_ratios
+        nrows=1,
+        ncols=len(columns),
+        hspace=0.1,
+        width_ratios=width_ratios,
+        squeeze=False,
     )
-    all_panels = subfigures.tolist()
-    for column, subfig in zip(columns, subfigures):
+    all_panels = subfigures[0].tolist()
+    for column, subfig in zip(columns, subfigures[0]):
         n_cards = len(column)
         height_ratios = [card.height for card in column]
         remaining_height = max_height - sum(height_ratios)
@@ -51,7 +57,9 @@ def flow_layout(plots, max_height=4, figsize=(8.5, 11), figure=None, **plot_kwar
             height_ratios.append(remaining_height)
 
         cardfigs = subfig.subfigures(
-            nrows=n_cards + (remaining_height > 0), ncols=1, height_ratios=height_ratios
+            nrows=n_cards + (remaining_height > 0),
+            ncols=1,
+            height_ratios=height_ratios,
         )
         cardfigs = np.atleast_1d(cardfigs)
         all_panels.extend(cardfigs)
@@ -77,9 +85,7 @@ def flow_layout_columns(plots, max_height=4, **plot_kwargs):
         if isinstance(plot, BasePlot):
             all_plots.append(plot)
         elif isinstance(plot, BaseMultiPlot):
-            all_plots.extend(
-                plot.plots(**plot_kwargs)
-            )
+            all_plots.extend(plot.plots(**plot_kwargs))
         else:
             assert False
     plots = all_plots
@@ -107,11 +113,14 @@ def flow_layout_columns(plots, max_height=4, **plot_kwargs):
                         card_plots,
                     )
                 )
-                card_plots = []
+                card_plots = [plot]
         if card_plots:
             cards.append(
                 Card(
-                    plots[0].kind, width, sum(p.height for p in card_plots), card_plots
+                    plots[0].kind,
+                    width,
+                    sum(p.height for p in card_plots),
+                    card_plots,
                 )
             )
     cards = sorted(cards, key=lambda card: card.width)
@@ -125,7 +134,10 @@ def flow_layout_columns(plots, max_height=4, **plot_kwargs):
             cur_width = card.width
             continue
 
-        if sum(c.height for c in columns[-1]) + card.height <= max_height + 1e-8:
+        if (
+            sum(c.height for c in columns[-1]) + card.height
+            <= max_height + 1e-8
+        ):
             columns[-1].append(card)
         else:
             columns.append([card])

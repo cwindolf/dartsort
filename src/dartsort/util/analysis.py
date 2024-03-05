@@ -105,7 +105,7 @@ class DARTsortAnalysis:
             have_templates = template_npz.exists()
             if have_templates:
                 print(f"Reloading templates from {template_npz}...")
-                with h5py.File(hdf5_path, "r") as h5:
+                with h5py.File(hdf5_path, "r", libver="latest", locking=False) as h5:
                     same_labels = np.array_equal(sorting.labels, h5["labels"][:])
                 have_templates = have_templates and same_labels
                 template_data = TemplateData.from_npz(template_npz)
@@ -203,9 +203,6 @@ class DARTsortAnalysis:
         assert self.hdf5_path.exists()
         self.coarse_template_data = self.template_data.coarsen()
 
-        # this obj will be pickled and we don't use these, let's save ourselves the ram
-        if self.sorting.extra_features:
-            self.sorting = replace(self.sorting, extra_features=None)
         self.shifting = (
             self.motion_est is not None
             or self.template_data.registered_geom is not None
@@ -246,14 +243,14 @@ class DARTsortAnalysis:
     @property
     def h5(self):
         if self._h5 is None:
-            self._h5 = h5py.File(self.hdf5_path, "r", locking=False)
+            self._h5 = h5py.File(self.hdf5_path, "r", libver="latest", locking=False)
         return self._h5
 
     @property
     def xyza(self):
         if self._xyza is None:
             if hasattr(self.sorting, self.localizations_dataset):
-                self._xyza = getattr(self.sorting, self.localizations_dataset)
+                return getattr(self.sorting, self.localizations_dataset)
             else:
                 self._xyza = self.h5[self.localizations_dataset][:]
         return self._xyza
@@ -261,12 +258,16 @@ class DARTsortAnalysis:
     @property
     def template_indices(self):
         if self._template_indices is None:
+            if hasattr(self.sorting, self.template_indices_dataset):
+                return getattr(self.sorting, self.template_indices_dataset)
             self._template_indices = self.h5[self.template_indices_dataset][:]
         return self._template_indices
 
     @property
     def max_chan_amplitudes(self):
         if self._max_chan_amplitudes is None:
+            if hasattr(self.sorting, self.amplitudes_dataset):
+                return getattr(self.sorting, self.amplitudes_dataset)
             self._max_chan_amplitudes = self.h5[self.amplitudes_dataset][:]
         return self._max_chan_amplitudes
 
@@ -274,9 +275,8 @@ class DARTsortAnalysis:
     def amplitude_vectors(self):
         if self._amplitude_vectors is None:
             if hasattr(self.sorting, self.amplitude_vectors_dataset):
-                self._amplitude_vectors = getattr(self.sorting, self.amplitude_vectors_dataset)
-            else:
-                self._amplitude_vectors = self.h5[self.amplitude_vectors_dataset][:]
+                return getattr(self.sorting, self.amplitude_vectors_dataset)
+            self._amplitude_vectors = self.h5[self.amplitude_vectors_dataset][:]
         return self._amplitude_vectors
 
     @property
@@ -680,6 +680,9 @@ class DARTsortAnalysis:
         merge_td = self.template_data
         if self.merge_distance_templates_kind == "coarse":
             merge_td = self.coarse_template_data
+
+        if merge_td.templates.shape[0] <= 1:
+            self.merge_dist = np.zeros((1, 1))
 
         units, dists, shifts, template_snrs = merge.calculate_merge_distances(
             merge_td,

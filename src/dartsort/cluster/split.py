@@ -170,7 +170,6 @@ class FeatureSplit(SplitStrategy):
         self,
         peeling_hdf5_filename,
         recording=None,
-        ensemble_over_chunks=False,
         chunk_size_s=300,
         peeling_featurization_pt=None,
         motion_est=None,
@@ -192,7 +191,7 @@ class FeatureSplit(SplitStrategy):
         sigma_regional=None,
         noise_density=0.1,
         n_neighbors_search=20,
-        radius_search=10,
+        radius_search=5.0,
         triage_quantile_per_cluster=0.2,
         remove_clusters_smaller_than=25,
         reassign_outliers=False,
@@ -254,6 +253,7 @@ class FeatureSplit(SplitStrategy):
         self.amplitude_normalized = amplitude_normalized
         self.use_spread = use_spread
         self.use_time_feature = use_time_feature
+        self.time_scale = time_scale
         self.return_localization_features = return_localization_features
 
         # hdbscan parameters
@@ -283,16 +283,15 @@ class FeatureSplit(SplitStrategy):
 
     def split_cluster(self, in_unit_all):
         n_spikes = in_unit_all.size
-        if self.max_spikes and n_spikes > self.max_spikes:
+        subsampling = self.max_spikes and n_spikes > self.max_spikes
+        if subsampling:
             # TODO: max_spikes could be chosen automatically
             # based on available memory and number of spikes
             idx_subsample = self.rg.choice(n_spikes, self.max_spikes, replace=False)
             idx_subsample.sort()
             in_unit = in_unit_all[idx_subsample]
-            subsampling = True
         else:
             in_unit = in_unit_all
-            subsampling = False
 
         if n_spikes < self.min_cluster_size:
             return SplitResult()
@@ -340,7 +339,7 @@ class FeatureSplit(SplitStrategy):
 
         if do_pca:
             pca_f = np.full(
-                (len(loc_features), pca_embeds.shape[1]),
+                (in_unit.size, pca_embeds.shape[1]),
                 np.nan,
                 dtype=pca_embeds.dtype,
             )
@@ -363,7 +362,7 @@ class FeatureSplit(SplitStrategy):
                 max_registered_channel,
                 n_pitches_shift,
             )
-            kept = wf2_norm_kept
+            kept = kept[wf2_norm_kept]
 
         if self.use_spread:
             spread = self.spread_feature(in_unit)
@@ -384,13 +383,15 @@ class FeatureSplit(SplitStrategy):
                 core_dist_n_jobs=1,  # let's just use our parallelism
                 prediction_data=self.reassign_outliers,
             )
-            hdb_labels = clust.fit_predict(features)
-            is_split = np.setdiff1d(np.unique(hdb_labels), [-1]).size > 1
+            clust_labels = clust.fit_predict(features)
+            new_ids = np.unique(clust_labels)
+            new_ids = new_ids[new_ids >= 0]
+            is_split = new_ids.size > 1
         elif (
             self.cluster_alg == "dpc"
             and features.shape[0] > self.remove_clusters_smaller_than
         ):
-            hdb_labels = density.density_peaks_clustering(
+            clust_labels = density.density_peaks_clustering(
                 features,
                 l2_norm=l2_norm,
                 sigma_local=self.sigma_local,
@@ -402,20 +403,22 @@ class FeatureSplit(SplitStrategy):
                 triage_quantile_per_cluster=self.triage_quantile_per_cluster,
                 remove_clusters_smaller_than=self.remove_clusters_smaller_than,
             )
-            is_split = np.setdiff1d(np.unique(hdb_labels), [-1]).size > 1
+            new_ids = np.unique(clust_labels)
+            new_ids = new_ids[new_ids >= 0]
+            is_split = new_ids.size > 1
         else:
             is_split = False
 
         if is_split and self.reassign_outliers:
-            hdb_labels = cluster_util.knn_reassign_outliers(hdb_labels, features)
+            clust_labels = cluster_util.knn_reassign_outliers(clust_labels, features)
 
         new_labels = None
         if is_split:
             new_labels = np.full(n_spikes, -1)
             if not subsampling:
-                new_labels[kept] = hdb_labels
+                new_labels[kept] = clust_labels
             else:
-                new_labels[idx_subsample[kept]] = hdb_labels
+                new_labels[idx_subsample[kept]] = clust_labels
 
         if self.return_localization_features and self.use_localization_features:
             return SplitResult(
@@ -425,7 +428,6 @@ class FeatureSplit(SplitStrategy):
                 x=loc_features[:, 0],
                 z_reg=loc_features[:, 1],
             )
-
         return SplitResult(
             is_split=is_split, in_unit=in_unit_all, new_labels=new_labels
         )
@@ -1022,8 +1024,14 @@ class ChunkForwardBackwardFeatureSplit(FeatureSplit):
         )
 
 
+class NullSplit(SplitStrategy):
+    def __init__(self, *args, **kwargs):
+        pass
+    def split_cluster(self, in_unit):
+        return SplitResult(in_unit=in_unit)
+
 # this is to help split_clusters take a string argument
-all_split_strategies = [FeatureSplit, ChunkForwardBackwardFeatureSplit]
+all_split_strategies = [FeatureSplit, ChunkForwardBackwardFeatureSplit, NullSplit]
 split_strategies_by_class_name = {cls.__name__: cls for cls in all_split_strategies}
 
 # -- parallelism widgets
