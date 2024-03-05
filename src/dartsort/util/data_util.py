@@ -100,7 +100,7 @@ class DARTsortSorting:
 
         extra_features = None
         if parent_h5_path:
-            with h5py.File(parent_h5_path, "r") as h5:
+            with h5py.File(parent_h5_path, "r", libver="latest", locking=False) as h5:
                 extra_features = {k: h5[k][()] for k in feature_keys}
 
         return cls(
@@ -151,7 +151,7 @@ class DARTsortSorting:
         labels=None,
     ):
         channels = None
-        with h5py.File(peeling_hdf5_filename, "r") as h5:
+        with h5py.File(peeling_hdf5_filename, "r", locking=False) as h5:
             times_samples = h5[times_samples_dataset][()]
             sampling_frequency = h5["sampling_frequency"][()]
             if channels_dataset in h5:
