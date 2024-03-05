@@ -117,6 +117,20 @@ def dartsort(
             model_subdir=f"matching{step}_models",
         )
 
+    if cfg.do_final_split_merge:
+        sorting = split_merge(
+            sorting,
+            recording,
+            motion_est,
+            output_directory=output_directory,
+            overwrite=overwrite,
+            split_merge_config=cfg.split_merge_config,
+            n_jobs_split=n_jobs_cluster,
+            n_jobs_merge=n_jobs,
+            split_npz=f"split{step+1}.npz",
+            merge_npz=f"merge{step+1}.npz",
+        )
+
     # done~
     return sorting
 
