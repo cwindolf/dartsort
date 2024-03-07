@@ -592,9 +592,35 @@ class DARTsortAnalysis:
 
     def unit_max_channel(self, unit_id):
         temp = self.coarse_template_data.unit_templates(unit_id)
-        assert temp.ndim == 3 and temp.shape[0] == 1
-        max_chan = temp[0].ptp(0).argmax()
+        assert temp.ndim == 3 and temp.shape[0] == np.atleast_1d(unit_id).size
+        max_chan = temp.mean(0).ptp(0).argmax()
         return max_chan
+    
+    def get_registered_channels(self, in_unit, n_samples=1000, random_state=0):
+        amp_samples = slice(None)
+        if in_unit.size > n_samples:
+            rg = np.random.default_rng(random_state)
+            amp_samples = rg.choice(in_unit.size, size=n_samples, replace=False)
+            amp_samples.sort()
+        n_pitches_shift = get_spike_pitch_shifts(
+            self.z(in_unit[amp_samples], registered=False),
+            geom=self.geom,
+            registered_depths_um=self.z(in_unit[amp_samples], registered=False),
+        )
+        amp_vecs = self.amplitude_vectors[in_unit[amp_samples]]
+        rgeom = self.template_data.registered_geom
+        if rgeom is None:
+            rgeom = self.geom
+        amplitude_template = registered_average(
+            amp_vecs,
+            n_pitches_shift,
+            self.geom,
+            rgeom,
+            main_channels=self.sorting.channels[in_unit],
+            channel_index=self.channel_index,
+        )
+        max_registered_channel = amplitude_template.argmax()
+        return max_registered_channel
 
     def unit_shift_or_relocate_channels(
         self,
@@ -613,7 +639,8 @@ class DARTsortAnalysis:
             channel_dist_p=channel_dist_p,
         )
 
-        max_chan = self.unit_max_channel(unit_id)
+        # max_chan = self.unit_max_channel(unit_id)
+        max_chan = self.get_registered_channels(which)
 
         show_chans = show_channel_index[max_chan]
         show_chans = show_chans[show_chans < len(show_geom)]
@@ -688,7 +715,7 @@ class DARTsortAnalysis:
             merge_td,
             superres_linkage=self.merge_superres_linkage,
             device=self.device,
-            n_jobs=1,
+            n_jobs=0,
         )
         assert np.array_equal(units, self.coarse_template_data.unit_ids)
         self.merge_dist = dists
