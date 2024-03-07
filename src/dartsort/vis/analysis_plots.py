@@ -34,7 +34,10 @@ def scatter_max_channel_waveforms(
     for j, (u, temp) in enumerate(
         zip(template_data.unit_ids, template_data.templates)
     ):
-        mc = temp.ptp(0).argmax()
+        ptpvec = temp.ptp(0)
+        if ptpvec.max() == 0:
+            continue
+        mc = ptpvec.argmax()
         mctrace = temp[:, mc]
 
         xc = locsx[j]

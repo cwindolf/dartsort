@@ -297,11 +297,55 @@ def subset_sorting_by_time_samples(
     return replace(sorting, labels=new_labels, times_samples=new_times)
 
 
+def subset_sorting_by_time_seconds(
+    sorting, t_start=0, t_end=np.inf
+):
+    new_labels = sorting.labels.copy()
+    t_s = sorting.times_seconds
+    in_range = t_s == t_s.clip(t_start, t_end)
+    new_labels[~in_range] = -1
+
+    return replace(sorting, labels=new_labels)
+
+
+def time_chunk_sortings(
+    sorting, recording, chunk_samples=None
+):
+    chunk_time_ranges = chunk_time_ranges(recording, chunk_samples)
+    chunk_sortings = [
+        subset_sorting_by_time_seconds(sorting, *tt) for tt in chunk_time_ranges
+    ]
+    return chunk_time_ranges, chunk_sortings
+
+
 def reindex_sorting_labels(sorting):
     new_labels = sorting.labels.copy()
     kept = np.flatnonzero(new_labels >= 0)
     _, new_labels[kept] = np.unique(new_labels[kept], return_inverse=True)
     return replace(sorting, labels=new_labels)
+
+
+# -- timing
+
+
+def chunk_time_ranges(recording, chunk_samples=None):
+    if chunk_samples is None or chunk_samples == np.inf:
+        n_chunks = 1
+    else:
+        n_chunks = recording.get_num_samples() / chunk_samples
+        # we'll count the remainder as a chunk if it's at least 2/3 of one
+        n_chunks = np.floor(n_chunks) + (n_chunks - np.floor(n_chunks) > 0.66)
+        n_chunks = int(max(1, n_chunks))
+
+    # evenly divide the recording into chunks
+    assert recording.get_num_segments() == 1
+    start_time_s, end_time_s = recording._recording_segments[
+        0
+    ].sample_index_to_time(np.array([0, recording.get_num_samples() - 1]))
+    chunk_times_s = np.linspace(start_time_s, end_time_s, num=n_chunks + 1)
+    chunk_time_ranges_s = list(zip(chunk_times_s[:-1], chunk_times_s[1:]))
+
+    return chunk_time_ranges_s
 
 
 # -- hdf5 util

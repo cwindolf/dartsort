@@ -192,21 +192,23 @@ class PCAScatter(UnitPlot):
         
         unit_id = np.atleast_1d(unit_id)
         multi_unit = unit_id.size > 1
+        which, loadings = sorting_analysis.unit_pca_features(
+            unit_id=unit_id,
+            relocated=self.relocated,
+            pca_radius_um=self.pca_radius_um,
+        )
         for uid in unit_id:
-            which, loadings = sorting_analysis.unit_pca_features(
-                unit_id=uid,
-                relocated=self.relocated,
-                pca_radius_um=self.pca_radius_um,
-            )
             if multi_unit:
                 c = dict(color=glasbey1024[uid % len(glasbey1024)])
+                thisu = np.flatnonzero(sorting_analysis.sorting.labels[which] == uid)
             else:
                 amps = sorting_analysis.amplitudes(
                     which=which, relocated=self.relocate_amplitudes
                 )
                 c = dict(c=np.minimum(amps, self.amplitude_color_cutoff))
+                thisu = slice(None)
             s = axis.scatter(
-                *loadings.T,
+                *loadings[thisu].T,
                 lw=0,
                 s=3,
                 **c,
@@ -422,6 +424,7 @@ class WaveformPlot(UnitPlot):
                 new_length=self.spike_length_samples,
             )
             max_abs_amp = self.max_abs_template_scale * np.nanmax(np.abs(templates))
+            
         show_superres_templates = (
             self.show_superres_templates and self.template_index is None
         )
@@ -440,6 +443,8 @@ class WaveformPlot(UnitPlot):
 
         handles = {}
         if waveforms is not None:
+            if np.isfinite(waveforms[:, 0, :]).any():
+                max_abs_amp = self.max_abs_template_scale *  np.nanpercentile(np.abs(waveforms), 99)
             ls = geomplot(
                 waveforms,
                 max_channels=np.full(len(waveforms), max_chan),
@@ -736,9 +741,9 @@ class SplitStrategyPlot(UnitPlot):
         split_strategy_kwargs["peeling_hdf5_filename"] = peeling_hdf5_filename
 
         self.split_name = split_name
-        self.split_strategy = split.split_strategies_by_class_name[split_strategy](
-            **split_strategy_kwargs
-        )
+        print(split_name)
+        self.split_strategy = split_strategy
+        self.split_strategy_kwargs = split_strategy_kwargs
         self.motion_est = motion_est
         self.recording = recording
         self.channel_show_radius_um = channel_show_radius_um
@@ -776,8 +781,12 @@ class SplitStrategyPlot(UnitPlot):
         - template dist
         """
         # run the split
+        print("split", self.split_name, self.split_strategy_kwargs)
+        split_strategy = split.split_strategies_by_class_name[self.split_strategy](
+            **self.split_strategy_kwargs
+        )
         in_unit = sorting_analysis.in_unit(unit_id)
-        split_result = self.split_strategy.split_cluster(in_unit)
+        split_result = split_strategy.split_cluster(in_unit)
         print("draw", self.split_name)
 
         # re-make the sorting analysis
@@ -787,7 +796,12 @@ class SplitStrategyPlot(UnitPlot):
             unit_ids, counts = np.unique(split_result.new_labels, return_counts=True)
             counts = counts[unit_ids >= 0]
             unit_ids = unit_ids[unit_ids >= 0]
+            order = np.argsort(counts)[::-1]
+            counts = counts[order]
+            unit_ids = unit_ids[order]
             counts = list(map(str, counts))
+            print(f"{unit_ids=}")
+            print(f"{counts=}")
         else:
             split_labels[in_unit] = 0
             unit_ids = 0
