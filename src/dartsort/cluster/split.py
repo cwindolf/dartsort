@@ -176,6 +176,7 @@ class FeatureSplit(SplitStrategy):
         use_localization_features=True,
         return_localization_features=False,
         n_pca_features=2,
+        pca_imputation=None,
         relocated=True,
         use_wfs_L2_norm=False,
         localization_feature_scales=(1.0, 1.0, 50.0),
@@ -240,6 +241,7 @@ class FeatureSplit(SplitStrategy):
         self.channel_selection_radius = channel_selection_radius
         self.use_localization_features = use_localization_features
         self.n_pca_features = n_pca_features
+        self.pca_imputation = pca_imputation
         self.relocated = relocated and motion_est is not None
         self.motion_est = motion_est
         self.localization_feature_scales = localization_feature_scales
@@ -255,6 +257,7 @@ class FeatureSplit(SplitStrategy):
         self.use_time_feature = use_time_feature
         self.time_scale = time_scale
         self.return_localization_features = return_localization_features
+        print(f"{self.use_localization_features=} {self.use_ptp=} {self.n_pca_features=} {self.pca_imputation=}")
 
         # hdbscan parameters
         self.min_cluster_size = min_cluster_size
@@ -373,6 +376,12 @@ class FeatureSplit(SplitStrategy):
                 spread *= mad_sigma(loc_features[kept]).mean()
             features.append(spread)
 
+        print(f"{self.use_localization_features=}")
+        if self.use_localization_features:
+            print(f"{self.localization_features[in_unit].shape=}")
+        print(f"{self.use_ptp=}")
+        print(f"{do_pca=}")
+        print(f"{features=}")
         features = np.column_stack([f[kept] for f in features])
 
         if self.cluster_alg == "hdbscan" and features.shape[0] > self.min_cluster_size:
@@ -665,17 +674,35 @@ class FeatureSplit(SplitStrategy):
                 random_state=np.random.RandomState(seed=self.rg.bit_generator),
                 whiten=True,
             )
-            pca_projs = np.full(
-                (waveforms.shape[0], self.n_pca_features),
-                np.nan,
-                dtype=waveforms.dtype,
-            )
-            waveforms = waveforms[no_nan]
-            waveforms = waveforms.reshape(waveforms.shape[0], -1)
-            if self.amplitude_normalized:
-                waveforms /= self.amplitudes[in_unit[no_nan]][:, None]
-            pca_projs[no_nan] = pca.fit_transform(waveforms)
-            return True, no_nan, pca_projs
+            if self.pca_imputation is None:
+                pca_projs = np.full(
+                    (waveforms.shape[0], self.n_pca_features),
+                    np.nan,
+                    dtype=waveforms.dtype,
+                )
+                waveforms = waveforms[no_nan]
+                waveforms = waveforms.reshape(waveforms.shape[0], -1)
+                if self.amplitude_normalized:
+                    waveforms /= self.amplitudes[in_unit[no_nan]][:, None]
+                pca_projs[no_nan] = pca.fit_transform(waveforms)
+                return True, no_nan, pca_projs
+            elif self.pca_imputation in ("mean", "iterative"):
+                wfs = waveforms.reshape(waveforms.shape[0], -1)
+                if self.amplitude_normalized:
+                    wfs /= self.amplitudes[in_unit][:, None]
+                pca.fit(wfs[no_nan])
+                if self.pca_imputation == "iterative":
+                    wfs = np.where(np.isfinite(wfs), wfs, pca.mean_[None])
+                    isnan = np.setdiff1d(np.arange(wfs.shape[0]), no_nan)
+                    for i in range(10):
+                        emb = pca.fit_transform(wfs)
+                        wfs[isnan] = pca.inverse_transform(emb[isnan])
+                    pca_projs = pca.transform(wfs)
+                else:
+                    pca_projs = pca.transform(
+                        np.where(np.isfinite(wfs), wfs, pca.mean_[None])
+                    )
+                return True, slice(None), pca_projs
 
         # otherwise, we have bigger data. in that case, first fit the PCA
         fit_choices = self.rg.choice(in_unit.size, size=max_samples_pca, replace=False)
@@ -732,10 +759,9 @@ class FeatureSplit(SplitStrategy):
         no_nan = np.flatnonzero(np.isfinite(fit_waveforms[:, 0, :]).all(axis=1))
         if no_nan.size < max(self.min_cluster_size, self.n_pca_features):
             return False, no_nan, None
-        fit_waveforms = fit_waveforms[no_nan]
         fit_waveforms = fit_waveforms.reshape(fit_waveforms.shape[0], -1)
         if self.amplitude_normalized:
-            amp_ix = in_unit[fit_choices[no_nan]]
+            amp_ix = in_unit[fit_choices]
             fit_waveforms /= self.amplitudes[amp_ix][:, None]
 
         # fit the per-cluster small rank PCA
@@ -744,13 +770,19 @@ class FeatureSplit(SplitStrategy):
             random_state=np.random.RandomState(seed=self.rg.bit_generator),
             whiten=True,
         )
-        pca.fit(fit_waveforms)
+        pca.fit(fit_waveforms[no_nan])
+        if self.pca_imputation == "iterative":
+            fit_waveforms = np.where(np.isfinite(fit_waveforms), fit_waveforms, pca.mean_[None])
+            isnan = np.setdiff1d(np.arange(fit_waveforms.shape[0]), no_nan)
+            for i in range(10):
+                emb = pca.fit_transform(fit_waveforms)
+                fit_waveforms[isnan] = pca.inverse_transform(emb[isnan])
 
         # now, we have the PCA. let's embed our data in batches.
         pca_projs = np.full(
             (in_unit.size, self.n_pca_features), np.nan, dtype=fit_waveforms.dtype
         )
-        all_no_nan = []
+        all_kept = []
 
         # load waveform embeddings and invert TPCA if we are relocating
         for bs in range(0, in_unit.size, batch_size):
@@ -795,21 +827,31 @@ class FeatureSplit(SplitStrategy):
             if subset_chans:
                 batch = batch[:, :, not_entirely_nan_channels]
 
-            # figure out which batch overlap completely with the remaining channels
-            no_nan = np.flatnonzero(np.isfinite(batch[:, 0, :]).all(axis=1))
-            if not no_nan.size:
-                continue
-            all_no_nan.append(bs + no_nan)
-
-            batch = batch[no_nan]
-            if self.amplitude_normalized:
-                amp_ix = in_unit[bs:be][no_nan]
-                batch /= self.amplitudes[amp_ix][:, None]
-
-            pca_projs[bs + no_nan] = pca.transform(batch.reshape(batch.shape[0], -1))
-
-        no_nan = np.concatenate(all_no_nan)
-        return True, no_nan, pca_projs
+            if self.pca_imputation is None:
+                no_nan = np.flatnonzero(np.isfinite(batch[:, 0, :]).all(axis=1))
+                if not no_nan.size:
+                    continue
+                all_kept.append(bs + no_nan)
+                batch = batch[no_nan].reshape(no_nan.size, -1)
+                if self.amplitude_normalized:
+                    amp_ix = in_unit[bs:be][no_nan]
+                    batch /= self.amplitudes[amp_ix][:, None]
+                pca_projs[bs + no_nan] = pca.transform(batch)
+            elif self.pca_imputation in ("mean", "iterative"):
+                batch = batch.reshape(batch.shape[0], -1)
+                batch /= self.amplitudes[in_unit[bs:be]][:, None]
+                pca_projs[bs:be] = pca.transform(
+                    np.where(np.isfinite(batch), batch, pca.mean_[None])
+                )
+            else:
+                assert False
+        if self.pca_imputation is None:
+            kept = np.concatenate(all_kept)
+        elif self.pca_imputation in ("mean", "iterative"):
+            kept = slice(None)
+        else:
+            assert False
+        return True, kept, pca_projs
 
     def initialize_from_h5(
         self,
