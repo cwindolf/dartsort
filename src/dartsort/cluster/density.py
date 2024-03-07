@@ -47,6 +47,7 @@ def get_smoothed_densities(
     min_bin_size=1.0,
     ramp_min_bin_size=5.0,
     max_n_bins=512,
+    min_n_bins=5,
     revert=False,
 ):
     """Get RBF density estimates for each X[i] and bandwidth in sigmas
@@ -80,15 +81,12 @@ def get_smoothed_densities(
     extents = np.c_[np.floor(infeats.min(0)), np.ceil(infeats.max(0))]
     nbins = np.ceil(extents.ptp(1) / bin_sizes).astype(int)
     bin_edges = [
-        np.linspace(e[0], e[1], num=min(max_n_bins, nb))
+        np.linspace(e[0], e[1], num=max(min_n_bins + 1, min(max_n_bins + 1, nb)))
         for e, nb in zip(extents, nbins)
     ]
 
     # compute histogram and figure out how big the bins actually were
     raw_histogram, bin_edges = np.histogramdd(infeats, bins=bin_edges)
-    for be in bin_edges:
-        if len(be) < 2:
-            return None
     bin_sizes = np.array([(be[1] - be[0]) for be in bin_edges])
     bin_centers = [0.5 * (be[1:] + be[:-1]) for be in bin_edges]
 
