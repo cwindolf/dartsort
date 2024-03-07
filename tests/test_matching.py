@@ -10,8 +10,7 @@ from dartsort import config, main
 from dartsort.localize.localize_torch import point_source_amplitude_at
 from dartsort.templates import TemplateData, template_util
 from dredge import motion_util
-from neuropixel import dense_layout
-from test_util import no_overlap_recording_sorting
+from test_util import dense_layout, no_overlap_recording_sorting
 
 nofeatcfg = config.FeaturizationConfig(
     do_nn_denoise=False,
