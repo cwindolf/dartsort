@@ -146,3 +146,8 @@ def make_sorting_summary(
     )
 
     return figure
+
+
+# def sorting_animation(
+#     sorting_analysis,
+# )
