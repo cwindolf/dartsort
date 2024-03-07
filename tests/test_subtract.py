@@ -106,7 +106,7 @@ def test_fakedata_nonn():
             overwrite=True,
         )
         ns0 = len(st)
-        with h5py.File(out_h5) as h5:
+        with h5py.File(out_h5, locking=False) as h5:
             assert h5["times_samples"].shape == (ns0,)
             assert h5["channels"].shape == (ns0,)
             assert h5["point_source_localizations"].shape == (ns0, 4)
@@ -130,7 +130,7 @@ def test_fakedata_nonn():
         )
         ns1 = len(st)
         assert ns0 == ns1
-        with h5py.File(out_h5) as h5:
+        with h5py.File(out_h5, locking=False) as h5:
             assert h5["times_samples"].shape == (ns0,)
             assert h5["channels"].shape == (ns0,)
             assert h5["point_source_localizations"].shape == (ns0, 4)
@@ -154,7 +154,7 @@ def test_fakedata_nonn():
         )
         ns2 = len(st)
         assert ns0 == ns2
-        with h5py.File(out_h5) as h5:
+        with h5py.File(out_h5, locking=False) as h5:
             assert h5["times_samples"].shape == (ns0,)
             assert h5["channels"].shape == (ns0,)
             assert h5["point_source_localizations"].shape == (ns0, 4)
@@ -178,7 +178,7 @@ def test_fakedata_nonn():
             n_jobs=2,
         )
         ns0 = len(st)
-        with h5py.File(out_h5) as h5:
+        with h5py.File(out_h5, locking=False) as h5:
             assert h5["times_samples"].shape == (ns0,)
             assert h5["channels"].shape == (ns0,)
             assert h5["point_source_localizations"].shape == (ns0, 4)
@@ -203,7 +203,7 @@ def test_fakedata_nonn():
         )
         ns1 = len(st)
         assert ns0 == ns1
-        with h5py.File(out_h5) as h5:
+        with h5py.File(out_h5, locking=False) as h5:
             assert h5["times_samples"].shape == (ns0,)
             assert h5["channels"].shape == (ns0,)
             assert h5["point_source_localizations"].shape == (ns0, 4)
@@ -228,7 +228,7 @@ def test_fakedata_nonn():
         )
         ns2 = len(st)
         assert ns0 == ns2
-        with h5py.File(out_h5) as h5:
+        with h5py.File(out_h5, locking=False) as h5:
             assert h5["times_samples"].shape == (ns0,)
             assert h5["channels"].shape == (ns0,)
             assert h5["point_source_localizations"].shape == (ns0, 4)
@@ -345,7 +345,7 @@ def test_small_nonn():
             subtraction_config=subconf,
             overwrite=True,
         )
-        with h5py.File(out_h5) as h5:
+        with h5py.File(out_h5, locking=False) as h5:
             lens = []
             for k in h5.keys():
                 if k not in ("channel_index", "geom") and h5[k].ndim >= 1:
@@ -364,7 +364,7 @@ def test_small_nonn():
             n_jobs=2,
             device="cpu",
         )
-        with h5py.File(out_h5) as h5:
+        with h5py.File(out_h5, locking=False) as h5:
             lens = []
             for k in h5.keys():
                 if k not in ("channel_index", "geom") and h5[k].ndim >= 1:
@@ -382,7 +382,7 @@ def test_small_nonn():
             subtraction_config=subconf,
             n_jobs=2,
         )
-        with h5py.File(out_h5) as h5:
+        with h5py.File(out_h5, locking=False) as h5:
             lens = []
             for k in h5.keys():
                 if k not in ("channel_index", "geom") and h5[k].ndim >= 1:
@@ -417,7 +417,7 @@ def test_small_default_config():
             overwrite=True,
             n_jobs=0,
         )
-        with h5py.File(out_h5) as h5:
+        with h5py.File(out_h5, locking=False) as h5:
             lens = []
             for k in h5.keys():
                 if k not in ("channel_index", "geom") and h5[k].ndim >= 1:
@@ -432,7 +432,7 @@ def test_small_default_config():
             overwrite=True,
             n_jobs=2,
         )
-        with h5py.File(out_h5) as h5:
+        with h5py.File(out_h5, locking=False) as h5:
             lens = []
             for k in h5.keys():
                 if k not in ("channel_index", "geom") and h5[k].ndim >= 1:
