@@ -309,13 +309,14 @@ def subset_sorting_by_time_seconds(
 
 
 def time_chunk_sortings(
-    sorting, recording, chunk_samples=None
+    sorting, recording=None, chunk_samples=None, chunk_time_ranges_s=None
 ):
-    chunk_time_ranges = chunk_time_ranges(recording, chunk_samples)
+    if chunk_time_ranges_s is None:
+        chunk_time_ranges_s = chunk_time_ranges(recording, chunk_samples)
     chunk_sortings = [
-        subset_sorting_by_time_seconds(sorting, *tt) for tt in chunk_time_ranges
+        subset_sorting_by_time_seconds(sorting, *tt) for tt in chunk_time_ranges_s
     ]
-    return chunk_time_ranges, chunk_sortings
+    return chunk_time_ranges_s, chunk_sortings
 
 
 def reindex_sorting_labels(sorting):
@@ -323,6 +324,35 @@ def reindex_sorting_labels(sorting):
     kept = np.flatnonzero(new_labels >= 0)
     _, new_labels[kept] = np.unique(new_labels[kept], return_inverse=True)
     return replace(sorting, labels=new_labels)
+
+
+def combine_sortings(sortings, dodge=False):
+    labels = np.full_like(sortings[0].labels, -1)
+    times_samples = sortings[0].times_samples.copy()
+    assert all(s.labels.size == sortings[0].labels.size for s in sortings)
+
+    if dodge:
+        label_to_sorting_index = []
+        label_to_original_label = []
+    next_label = 0
+    for j, sorting in enumerate(sortings):
+        kept = np.flatnonzero(sorting.labels >= 0)
+        assert np.all(labels[kept] < 0)
+        labels[kept] = sorting.labels[kept] + next_label
+        if dodge:
+            n_new_labels = 1 + sorting.labels[kept].max()
+            next_label += n_new_labels
+            label_to_sorting_index.append(np.full(n_new_labels, j))
+            label_to_original_label.append(np.arange(n_new_labels))
+        times_samples[kept] = sorting.times_samples[kept]
+
+    sorting = replace(sortings[0], labels=labels, times_samples=times_samples)
+
+    if dodge:
+        label_to_sorting_index = np.array(label_to_sorting_index)
+        label_to_original_label = np.array(label_to_original_label)
+        return label_to_sorting_index, label_to_original_label, sorting
+    return sorting
 
 
 # -- timing

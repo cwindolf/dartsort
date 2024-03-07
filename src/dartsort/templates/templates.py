@@ -4,7 +4,7 @@ from typing import Optional
 
 import numpy as np
 from dartsort.localize.localize_util import localize_waveforms
-from dartsort.util import drift_util
+from dartsort.util import data_util, drift_util
 
 from .get_templates import get_templates
 from .superres_util import superres_sorting
@@ -47,9 +47,9 @@ class TemplateData:
         if self.registered_geom is not None:
             to_save["registered_geom"] = self.registered_geom
         if self.registered_template_depths_um is not None:
-            to_save[
-                "registered_template_depths_um"
-            ] = self.registered_template_depths_um
+            to_save["registered_template_depths_um"] = (
+                self.registered_template_depths_um
+            )
         if not npz_path.parent.exists():
             npz_path.parent.mkdir()
         np.savez(npz_path, **to_save)
@@ -107,6 +107,7 @@ class TemplateData:
         with_locs=True,
         n_jobs=0,
         units_per_job=8,
+        tsvd=None,
         device=None,
         trough_offset_samples=42,
         spike_length_samples=121,
@@ -254,16 +255,16 @@ class TemplateData:
 
 
 def get_chunked_template_data(
-    combined_sorting,
-    chunk_time_ranges_s,
     recording,
-    sorting,
     template_config,
-    global_align=True,
+    global_sorting=None,
+    chunk_sortings=None,
+    chunk_time_ranges_s=None,
+    global_realign_peaks=True,
     save_folder=None,
     overwrite=False,
     motion_est=None,
-    save_npz_format="template_data_chunk{chunk_ix}.npz",
+    save_npz_name="chunked_template_data.npz",
     localizations_dataset_name="point_source_localizations",
     with_locs=True,
     n_jobs=0,
@@ -273,36 +274,82 @@ def get_chunked_template_data(
     spike_length_samples=121,
     random_seed=0,
 ):
-    """Save the effort of recomputing several TPCAs
-    """
+    """Save the effort of recomputing several TPCAs"""
     rg = np.random.default_rng(random_seed)
 
-    if template_config.realign_peaks and global_align:
-        # realign globally, before superres etc
-        sorting = get_realigned_sorting(
-            recording,
-            sorting,
-            **kwargs,
-            realign_peaks=True,
-            low_rank_denoising=False,
-            n_jobs=n_jobs,
-        )
+    if global_sorting is None:
+        assert chunk_sortings is not None
+        global_realign_peaks = False
+        global_sorting = data_util.combine_sortings(chunk_sortings, dodge=True)
+    else:
+        assert False
 
-    # now, break each unit into pieces matching the chunks
-    
+    done = False
+    if save_folder is not None:
+        save_folder = Path(save_folder)
+        if (save_folder / save_npz_name).exists():
+            done = not overwrite
 
-    if template_config.low_rank_denoising:
-        # global tpca
-        tsvd = fit_tsvd(
+    if not done and template_config.realign_peaks and global_realign_peaks:
+        # realign globally, before chunking
+        global_sorting = get_realigned_sorting(
             recording,
-            sorting,
-            denoising_rank=template_config.denoising_rank,
-            denoising_fit_radius=template_config.denoising_fit_radius,
+            global_sorting,
             trough_offset_samples=trough_offset_samples,
             spike_length_samples=spike_length_samples,
+            spikes_per_unit=template_config.spikes_per_unit,
+            realign_max_sample_shift=template_config.realign_max_sample_shift,
+            n_jobs=n_jobs,
             random_seed=rg,
         )
+        template_config = replace(template_config, realign_peaks=False)
 
-    
-    
-    
+    # now, break each unit into pieces matching the chunks
+    if chunk_sortings is None:
+        assert global_sorting is not None
+        chunk_time_ranges_s, chunk_sortings = data_util.time_chunk_sortings(
+            global_sorting, recording=recording, chunk_time_ranges_s=chunk_time_ranges_s
+        )
+
+    # combine into a single sorting, so that we can use the template computer's
+    # parallelism in one big loop
+    label_to_sorting_index, label_to_original_label, combined_sorting = data_util.combine_sortings(chunk_sortings, dodge=True)
+
+    # compute templates in combined label space
+    full_template_data = TemplateData.from_config(
+        recording,
+        combined_sorting,
+        template_config,
+        save_folder=save_folder,
+        overwrite=overwrite,
+        motion_est=motion_est,
+        save_npz_name=save_npz_name,
+        localizations_dataset_name=localizations_dataset_name,
+        with_locs=with_locs,
+        n_jobs=n_jobs,
+        units_per_job=units_per_job,
+        device=device,
+        trough_offset_samples=trough_offset_samples,
+        spike_length_samples=spike_length_samples,
+    )
+
+    # break it up back into chunks
+    chunk_template_data = []
+    for i in range(len(chunk_sortings)):
+        chunk_unit_ids = np.flatnonzero(label_to_sorting_index == i)
+        chunk_mask = np.flatnonzero(np.isin(full_template_data.unit_ids, chunk_unit_ids))
+        orig_unit_ids = label_to_original_label[full_template_data.unit_ids[chunk_mask]]
+        depths = None
+        if full_template_data.registered_template_depths_um is not None:
+            depths = full_template_data.registered_template_depths_um[chunk_mask]
+        chunk_template_data.append(
+            replace(
+                full_template_data,
+                templates=full_template_data.templates[chunk_mask],
+                unit_ids=orig_unit_ids,
+                spike_counts=full_template_data.spike_counts[chunk_mask],
+                registered_template_depths_um=depths,
+            )
+        )
+
+    return chunk_template_data
