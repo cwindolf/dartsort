@@ -80,7 +80,13 @@ class WaveformPipeline(torch.nn.Module):
 
 
 def check_unique_feature_names(transformers):
-    fnames = [f.name for f in transformers if f.is_featurizer]
+    fnames = []
+    for f in transformers:
+        if f.is_featurizer:
+            if f.is_multi:
+                fnames.extend(f.name)
+            else:
+                fnames.append(f.name)
     if not len(fnames) == len(set(fnames)):
         raise ValueError("Featurizer name collision in a WaveformPipeline")
 
