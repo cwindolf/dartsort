@@ -28,6 +28,9 @@ def cluster_chunk(
     recording=None,
     amplitudes_dataset_name="denoised_ptp_amplitudes",
     depth_order=True,
+    ramp_num_spikes=[10, 60],
+    ramp_ptp=[2, 6],
+    
 ):
     """Cluster spikes from a single segment
 
@@ -107,10 +110,15 @@ def cluster_chunk(
         z = xyza[in_chunk, 2]
         if motion_est is not None:
             z = motion_est.correct_s(times_s[in_chunk], z)
+        z_not_reg = xyza[in_chunk, 2]
         scales = clustering_config.feature_scales
         ampfeat = scales[2] * np.log(clustering_config.log_c + amps[in_chunk])
         res = density.density_peaks_clustering(
             np.c_[scales[0] * xyza[in_chunk, 0], scales[1] * z, ampfeat],
+            geom=geom,
+            y=xyza[in_chunk, 1],
+            z_not_reg=z_not_reg,
+            use_y_triaging=clustering_config.use_y_triaging,
             sigma_local=clustering_config.sigma_local,
             sigma_local_low=clustering_config.sigma_local_low,
             sigma_regional=clustering_config.sigma_regional,
@@ -120,10 +128,50 @@ def cluster_chunk(
             remove_clusters_smaller_than=clustering_config.remove_clusters_smaller_than,
             noise_density=clustering_config.noise_density,
             triage_quantile_per_cluster=clustering_config.triage_quantile_per_cluster,
+            ramp_triage_per_cluster=clustering_config.ramp_triage_per_cluster,
             revert=clustering_config.revert,
+            triage_quantile_before_clustering=clustering_config.triage_quantile_before_clustering,
+            amp_no_triaging_before_clustering=clustering_config.amp_no_triaging_before_clustering,
+            amp_no_triaging_after_clustering=clustering_config.amp_no_triaging_after_clustering,
+            distance_dependent_noise_density=clustering_config.distance_dependent_noise_density,
+            scales=scales,
+            log_c=clustering_config.log_c,
             workers=4,
             return_extra=clustering_config.attach_density_feature,
         )
+        
+        if clustering_config.remove_small_far_clusters:
+            if clustering_config.attach_density_feature:
+                labels_sort = res["labels"]
+            else:
+                labels_sort = res
+            z = xyza[in_chunk, 2]
+            if motion_est is not None:
+                z = motion_est.correct_s(times_s[in_chunk], z)
+            all_med_ptp = []
+            all_med_z_spread = []
+            all_med_x_spread = []
+            num_spikes = []
+            for k in np.unique(labels_sort)[np.unique(labels_sort)>-1]:
+                all_med_ptp.append(np.median(amps[in_chunk[labels_sort == k]]))
+                all_med_x_spread.append(xyza[in_chunk[labels_sort == k], 0].std())
+                all_med_z_spread.append(z[labels_sort == k].std())
+                num_spikes.append((labels_sort == k).sum())
+                
+            all_med_ptp = np.array(all_med_ptp)
+            all_med_x_spread = np.array(all_med_x_spread)
+            all_med_z_spread = np.array(all_med_z_spread)
+            num_spikes = np.array(num_spikes)
+
+            # ramp from ptp 2 to 6 with n spikes from 60 to 10 per minute!
+            idx_low = np.flatnonzero(np.logical_and(
+                np.isin(labels_sort, np.flatnonzero(num_spikes<=(chunk_time_range_s[1]-chunk_time_range_s[0])/60*(ramp_num_spikes[1] - (all_med_ptp - ramp_ptp[0])/(ramp_ptp[1]-ramp_ptp[0])*(ramp_num_spikes[1]-ramp_num_spikes[0])))),
+                np.isin(labels_sort, np.flatnonzero(all_med_ptp<=ramp_ptp[1]))
+            ))
+            if clustering_config.attach_density_feature:
+                res["labels"][idx_low] = -1
+            else:
+                res[idx_low] = -1
 
         if clustering_config.attach_density_feature:
             labels[in_chunk] = res["labels"]
