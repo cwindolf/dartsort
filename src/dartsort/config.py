@@ -296,6 +296,7 @@ class DARTsortConfig:
     computation_config: ComputationConfig = ComputationConfig()
 
     # high level behavior
+    subtract_only: bool = False
     do_initial_split_merge: bool = True
     do_final_split_merge: bool = False
     matching_iterations: int = 1
