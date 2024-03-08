@@ -15,7 +15,7 @@ from dataclasses import replace
 import h5py
 import numpy as np
 from dartsort.util import job_util
-from dartsort.util.data_util import DARTsortSorting
+from dartsort.util.data_util import DARTsortSorting, chunk_time_ranges
 
 from . import cluster_util, density, ensemble_utils, forward_backward
 
@@ -207,30 +207,18 @@ def cluster_chunks(
     Returns a list of sortings. Each sorting labels all of the spikes in the
     recording with -1s outside the chunk, to allow for overlaps.
     """
-    chunk_samples = (
-        recording.sampling_frequency * clustering_config.chunk_size_s
-    )
-
     # determine number of chunks
     # if we're not ensembling, that's 1 chunk.
     if (
         not clustering_config.ensemble_strategy
         or clustering_config.ensemble_strategy.lower() == "none"
     ):
-        n_chunks = 1
+        chunk_samples = None
     else:
-        n_chunks = recording.get_num_samples() / chunk_samples
-        # we'll count the remainder as a chunk if it's at least 2/3 of one
-        n_chunks = np.floor(n_chunks) + (n_chunks - np.floor(n_chunks) > 0.66)
-        n_chunks = int(max(1, n_chunks))
-
-    # evenly divide the recording into chunks
-    assert recording.get_num_segments() == 1
-    start_time_s, end_time_s = recording._recording_segments[
-        0
-    ].sample_index_to_time(np.array([0, recording.get_num_samples() - 1]))
-    chunk_times_s = np.linspace(start_time_s, end_time_s, num=n_chunks + 1)
-    chunk_time_ranges_s = list(zip(chunk_times_s[:-1], chunk_times_s[1:]))
+        chunk_samples = (
+            recording.sampling_frequency * clustering_config.chunk_size_s
+        )
+    chunk_time_ranges_s = chunk_time_ranges(recording, chunk_samples)
 
     # cluster each chunk. can be parallelized in the future.
     sortings = [

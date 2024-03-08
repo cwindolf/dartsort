@@ -5,11 +5,9 @@ import numpy as np
 from dartsort.config import TemplateConfig
 from dartsort.templates import TemplateData, template_util
 from dartsort.templates.pairwise_util import (
-    construct_shift_indices,
-    iterate_compressed_pairwise_convolutions,
-)
-from dartsort.util.data_util import DARTsortSorting
-from scipy.cluster.hierarchy import linkage, fcluster
+    construct_shift_indices, iterate_compressed_pairwise_convolutions)
+from dartsort.util.data_util import DARTsortSorting, combine_sortings
+from scipy.cluster.hierarchy import fcluster, linkage
 from scipy.sparse import coo_array
 from scipy.sparse.csgraph import maximum_bipartite_matching
 from tqdm.auto import tqdm
@@ -600,21 +598,3 @@ def combine_templates(template_data_a, template_data_b):
     cross_mask[: ids_a.size, ids_b.size :] = True
 
     return template_data, cross_mask, ids_a, ids_b
-
-
-def combine_sortings(sortings, dodge=False):
-    labels = np.full_like(sortings[0].labels, -1)
-    times_samples = sortings[0].times_samples.copy()
-    assert all(s.labels.size == sortings[0].labels.size for s in sortings)
-
-    next_label = 0
-    for sorting in sortings:
-        kept = np.flatnonzero(sorting.labels >= 0)
-        assert np.all(labels[kept] < 0)
-        labels[kept] = sorting.labels[kept] + next_label
-        if dodge:
-            next_label += 1 + sorting.labels[kept].max()
-        times_samples[kept] = sorting.times_samples[kept]
-
-    sorting = replace(sortings[0], labels=labels, times_samples=times_samples)
-    return sorting

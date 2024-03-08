@@ -65,7 +65,7 @@ class Localization(BaseWaveformFeaturizer):
                 loc_result["alpha"],
             ]
         )
-        return localizations
+        return {self.name: localizations}
 
 
 PointSourceLocalization = Localization
