@@ -39,22 +39,36 @@ class BaseWaveformDenoiser(BaseWaveformModule):
 
 class BaseWaveformFeaturizer(BaseWaveformModule):
     is_featurizer = True
+    is_multi = False
     # output shape per waveform
     shape = ()
     # output dtye
     dtype = torch.float
 
     def transform(self, waveforms, max_channels=None):
+        # returns dict {key=feat name, value=feature}
         raise NotImplementedError
 
     @property
-    def spike_dataset(self):
-        torch_dtype_as_str = str(self.dtype).split(".")[1]
-        return SpikeDataset(
-            name=self.name,
-            shape_per_spike=self.shape,
-            dtype=torch_dtype_as_str,
-        )
+    def spike_datasets(self):
+        if self.is_multi:
+            datasets = [
+                SpikeDataset(
+                    name=self.name,
+                    shape_per_spike=self.shape,
+                    dtype=str(d).split(".")[1],
+                )
+                for n, s, d in zip(self.name, self.shape, self.dtype)
+            ]
+            return datasets
+        else:
+            torch_dtype_as_str = str(self.dtype).split(".")[1]
+            dataset = SpikeDataset(
+                name=self.name,
+                shape_per_spike=self.shape,
+                dtype=torch_dtype_as_str,
+            )
+            return (dataset,)
 
 
 class IdentityWaveformDenoiser(BaseWaveformDenoiser):
@@ -84,4 +98,4 @@ class Waveform(BaseWaveformFeaturizer):
         self.dtype = dtype
 
     def transform(self, waveforms, max_channels=None):
-        return waveforms
+        return {self.name: waveforms}

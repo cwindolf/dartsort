@@ -163,11 +163,12 @@ class TemporalPCAFeaturizer(BaseWaveformFeaturizer, BaseTemporalPCA):
             dtype=features_in_probe.dtype,
             device=features_in_probe.device,
         )
-        return set_channels_in_probe(
+        features = set_channels_in_probe(
             features_in_probe,
             features,
             channels_in_probe,
         )
+        return {self.name: features}
 
     def inverse_transform(self, features, max_channels):
         (
