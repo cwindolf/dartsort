@@ -309,10 +309,10 @@ def subset_sorting_by_time_seconds(
 
 
 def time_chunk_sortings(
-    sorting, recording=None, chunk_samples=None, chunk_time_ranges_s=None
+    sorting, recording=None, chunk_length_samples=None, chunk_time_ranges_s=None
 ):
     if chunk_time_ranges_s is None:
-        chunk_time_ranges_s = chunk_time_ranges(recording, chunk_samples)
+        chunk_time_ranges_s = chunk_time_ranges(recording, chunk_length_samples)
     chunk_sortings = [
         subset_sorting_by_time_seconds(sorting, *tt) for tt in chunk_time_ranges_s
     ]
@@ -358,11 +358,11 @@ def combine_sortings(sortings, dodge=False):
 # -- timing
 
 
-def chunk_time_ranges(recording, chunk_samples=None):
-    if chunk_samples is None or chunk_samples == np.inf:
+def chunk_time_ranges(recording, chunk_length_samples=None):
+    if chunk_length_samples is None or chunk_length_samples == np.inf:
         n_chunks = 1
     else:
-        n_chunks = recording.get_num_samples() / chunk_samples
+        n_chunks = recording.get_num_samples() / chunk_length_samples
         # we'll count the remainder as a chunk if it's at least 2/3 of one
         n_chunks = np.floor(n_chunks) + (n_chunks - np.floor(n_chunks) > 0.66)
         n_chunks = int(max(1, n_chunks))
