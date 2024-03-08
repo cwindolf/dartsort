@@ -95,7 +95,9 @@ class AmplitudeFeatures(BaseWaveformFeaturizer):
         if self.ptp_max_amplitude:
             features[self.ptp_max_amplitude_name] = ptps
         if self.log_peak_to_trough:
-            features[self.log_peak_to_trough_name] = torch.log(maxs) - torch.log(mins)
+            features[self.log_peak_to_trough_name] = torch.log(maxs) - torch.log(
+                mins.neg()
+            )
 
         return features
 
@@ -155,4 +157,6 @@ class MaxAmplitude(BaseWaveformFeaturizer):
         if self.kind == "peak":
             return {self.name: torch.nan_to_num(waveforms.abs()).max(dim=(1, 2)).values}
         elif self.kind == "ptp":
-            return {self.name: torch.nan_to_num(ptp(waveforms, dim=1)).max(dim=1).values}
+            return {
+                self.name: torch.nan_to_num(ptp(waveforms, dim=1)).max(dim=1).values
+            }
