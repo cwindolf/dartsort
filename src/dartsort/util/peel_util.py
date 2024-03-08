@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from ..localize.localize_util import localize_hdf5, check_resume_or_overwrite
+from ..localize.localize_util import check_resume_or_overwrite, localize_hdf5
 from .data_util import DARTsortSorting
 
 
@@ -33,6 +33,7 @@ def run_peeler(
     if peeler_is_done(
         peeler,
         output_hdf5_filename,
+        overwrite=overwrite,
         chunk_starts_samples=chunk_starts_samples,
         do_localization=do_localization,
         localization_dataset_name=localization_dataset_name,
@@ -89,11 +90,15 @@ def run_peeler(
 def peeler_is_done(
     peeler,
     output_hdf5_filename,
+    overwrite=False,
     chunk_starts_samples=None,
     do_localization=True,
     localization_dataset_name="point_source_localizations",
     main_channels_dataset_name="channels",
 ):
+    if not overwrite:
+        return False
+
     if not output_hdf5_filename.exists():
         return False
 

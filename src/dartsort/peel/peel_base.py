@@ -262,7 +262,7 @@ class BasePeeler(torch.nn.Module):
         if self.featurization_pipeline is not None:
             for transformer in self.featurization_pipeline.transformers:
                 if transformer.is_featurizer:
-                    datasets.extend(transformer.spike_dataset)
+                    datasets.extend(transformer.spike_datasets)
         return datasets
 
     # -- utility methods which users likely won't touch
