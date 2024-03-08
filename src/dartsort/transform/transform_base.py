@@ -54,8 +54,8 @@ class BaseWaveformFeaturizer(BaseWaveformModule):
         if self.is_multi:
             datasets = [
                 SpikeDataset(
-                    name=self.name,
-                    shape_per_spike=self.shape,
+                    name=n,
+                    shape_per_spike=s,
                     dtype=str(d).split(".")[1],
                 )
                 for n, s, d in zip(self.name, self.shape, self.dtype)

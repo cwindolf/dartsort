@@ -71,52 +71,57 @@ def localize_hdf5(
     if done:
         return
 
-    n_jobs, Executor, context, queue = get_pool(
-        n_jobs, with_rank_queue=True, rank_queue_empty=True
-    )
-    with Executor(
-        max_workers=n_jobs,
-        mp_context=context,
-        initializer=_h5_localize_init,
-        initargs=(
-            queue,
-            hdf5_filename,
-            main_channels_dataset_name,
-            amplitude_vectors_dataset_name,
-            channel_index_dataset_name,
-            geometry_dataset_name,
-            radius,
-            n_channels_subset,
-            localization_model,
-            device,
-            spikes_per_batch,
-        ),
-    ) as pool:
-        with h5py.File(hdf5_filename, "r+") as h5:
-            n_spikes = h5[main_channels_dataset_name].shape[0]
-            if do_delete:
-                del h5[output_dataset_name]
-            localizations_dataset = h5.require_dataset(
-                output_dataset_name,
-                shape=(n_spikes, 4),
-                dtype=np.float64,
-                fillvalue=np.nan,
-                exact=True,
-            )
+    try:
+        n_jobs, Executor, context, queue = get_pool(
+            n_jobs, with_rank_queue=True, rank_queue_empty=True
+        )
+        with Executor(
+            max_workers=n_jobs,
+            mp_context=context,
+            initializer=_h5_localize_init,
+            initargs=(
+                queue,
+                hdf5_filename,
+                main_channels_dataset_name,
+                amplitude_vectors_dataset_name,
+                channel_index_dataset_name,
+                geometry_dataset_name,
+                radius,
+                n_channels_subset,
+                localization_model,
+                device,
+                spikes_per_batch,
+            ),
+        ) as pool:
+            with h5py.File(hdf5_filename, "r+") as h5:
+                n_spikes = h5[main_channels_dataset_name].shape[0]
+                if do_delete:
+                    del h5[output_dataset_name]
+                localizations_dataset = h5.require_dataset(
+                    output_dataset_name,
+                    shape=(n_spikes, 4),
+                    dtype=np.float64,
+                    fillvalue=np.nan,
+                    exact=True,
+                )
 
-            # workers are blocked waiting for their ranks, which
-            # allows us to put the h5 in swmr before they open it
-            h5.swmr_mode = True
-            for rank in range(n_jobs):
-                queue.put(rank)
+                # workers are blocked waiting for their ranks, which
+                # allows us to put the h5 in swmr before they open it
+                h5.swmr_mode = True
+                for rank in range(n_jobs):
+                    queue.put(rank)
 
-            batches = range(next_batch_start, n_spikes, spikes_per_batch)
-            results = pool.map(_h5_localize_job, batches)
-            if show_progress:
-                results = tqdm(results, total=len(batches), desc="Localization")
-            for start_ix, end_ix, xyza_batch in results:
-                with delay_keyboard_interrupt:
-                    localizations_dataset[start_ix:end_ix] = xyza_batch
+                batches = range(next_batch_start, n_spikes, spikes_per_batch)
+                results = pool.map(_h5_localize_job, batches)
+                if show_progress:
+                    results = tqdm(results, total=len(batches), desc="Localization")
+                for start_ix, end_ix, xyza_batch in results:
+                    with delay_keyboard_interrupt:
+                        localizations_dataset[start_ix:end_ix] = xyza_batch
+    finally:
+        global _loc_context
+        if _loc_context is not None:
+            _loc_context = None
 
 
 def check_resume_or_overwrite(
@@ -149,6 +154,45 @@ def check_resume_or_overwrite(
     return done, do_delete, next_batch_start
 
 
+class H5LocalizationContext:
+    def __init__(
+        self,
+        hdf5_filename,
+        main_channels_dataset_name,
+        amplitude_vectors_dataset_name,
+        channel_index_dataset_name,
+        geometry_dataset_name,
+        device,
+        spikes_per_batch,
+        radius,
+        n_channels_subset,
+        localization_model,
+    ):
+        h5 = h5py.File(hdf5_filename, "r", swmr=True)
+        channels = h5[main_channels_dataset_name][:]
+        amp_vecs = h5[amplitude_vectors_dataset_name]
+        channel_index = h5[channel_index_dataset_name][:]
+        geom = h5[geometry_dataset_name][:]
+
+        assert geom.shape == (channel_index.shape[0], 2)
+        assert amp_vecs.shape == (*channels.shape, channel_index.shape[1])
+
+        self.geom = torch.tensor(geom, device=device)
+        self.channel_index = torch.tensor(channel_index, device=device)
+        self.channels = torch.tensor(channels, device=device)
+        self.amp_vecs = amp_vecs
+        self.device = device
+        self.n_spikes = channels.shape[0]
+        self.spikes_per_batch = spikes_per_batch
+        self.radius = radius
+        self.n_channels_subset = n_channels_subset
+        self.localization_model = localization_model
+
+
+global _loc_context
+_loc_context = None
+
+
 def _h5_localize_init(
     rank_queue,
     hdf5_filename,
@@ -162,7 +206,7 @@ def _h5_localize_init(
     device,
     spikes_per_batch,
 ):
-    p = _h5_localize_init
+    global _loc_context
 
     my_rank = rank_queue.get()
     if device is None:
@@ -174,29 +218,24 @@ def _h5_localize_init(
                 "cuda", index=my_rank % torch.cuda.device_count()
             )
 
-    h5 = h5py.File(hdf5_filename, "r", swmr=True)
-    channels = h5[main_channels_dataset_name][:]
-    amp_vecs = h5[amplitude_vectors_dataset_name]
-    channel_index = h5[channel_index_dataset_name][:]
-    geom = h5[geometry_dataset_name][:]
-
-    assert geom.shape == (channel_index.shape[0], 2)
-    assert amp_vecs.shape == (*channels.shape, channel_index.shape[1])
-
-    p.geom = torch.tensor(geom, device=device)
-    p.channel_index = torch.tensor(channel_index, device=device)
-    p.channels = torch.tensor(channels, device=device)
-    p.amp_vecs = amp_vecs
-    p.device = device
-    p.n_spikes = channels.shape[0]
-    p.spikes_per_batch = spikes_per_batch
-    p.radius = radius
-    p.n_channels_subset = n_channels_subset
-    p.localization_model = localization_model
+    _loc_context = H5LocalizationContext(
+        hdf5_filename,
+        main_channels_dataset_name,
+        amplitude_vectors_dataset_name,
+        channel_index_dataset_name,
+        geometry_dataset_name,
+        device,
+        spikes_per_batch,
+        radius,
+        n_channels_subset,
+        localization_model,
+    )
 
 
 def _h5_localize_job(start_ix):
-    p = _h5_localize_init
+    global _loc_context
+    p = _loc_context
+
     end_ix = min(p.n_spikes, start_ix + p.spikes_per_batch)
     channels_batch = p.channels[start_ix:end_ix]
     amp_vecs_batch = torch.tensor(p.amp_vecs[start_ix:end_ix], device=p.device)

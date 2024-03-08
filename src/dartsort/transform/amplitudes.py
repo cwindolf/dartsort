@@ -19,7 +19,7 @@ class AmplitudeFeatures(BaseWaveformFeaturizer):
         log_peak_to_trough=True,
     ):
         self.shape = []
-        self.name = []
+        names = []
         self.dtype = []
 
         self.ptp_max_amplitude = ptp_max_amplitude
@@ -29,7 +29,7 @@ class AmplitudeFeatures(BaseWaveformFeaturizer):
                 name = f"{name_prefix}_{name}"
             self.ptp_max_amplitude_name = name
             self.shape.append(())
-            self.name.append(name)
+            names.append(name)
             self.dtype.append(dtype)
 
         self.peak_amplitude_vectors = peak_amplitude_vectors
@@ -39,7 +39,7 @@ class AmplitudeFeatures(BaseWaveformFeaturizer):
                 name = f"{name_prefix}_{name}"
             self.peak_amplitude_vectors_name = name
             self.shape.append((channel_index.shape[1],))
-            self.name.append(name)
+            names.append(name)
             self.dtype.append(dtype)
 
         self.ptp_amplitude_vectors = ptp_amplitude_vectors
@@ -49,7 +49,7 @@ class AmplitudeFeatures(BaseWaveformFeaturizer):
                 name = f"{name_prefix}_{name}"
             self.ptp_amplitude_vectors_name = name
             self.shape.append((channel_index.shape[1],))
-            self.name.append(name)
+            names.append(name)
             self.dtype.append(dtype)
 
         self.log_peak_to_trough = log_peak_to_trough
@@ -59,13 +59,15 @@ class AmplitudeFeatures(BaseWaveformFeaturizer):
                 name = f"{name_prefix}_{name}"
             self.log_peak_to_trough_name = name
             self.shape.append(())
-            self.name.append(name)
+            names.append(name)
             self.dtype.append(dtype)
 
         self.compute_minmax_vectors = (
             ptp_max_amplitude or ptp_amplitude_vectors or log_peak_to_trough
         )
         self.compute_maxchan = ptp_max_amplitude or log_peak_to_trough
+
+        super().__init__(name=names)
 
     def transform(self, waveforms, max_channels=None):
         features = {}
@@ -81,12 +83,12 @@ class AmplitudeFeatures(BaseWaveformFeaturizer):
         if self.compute_maxchan:
             maxchans = torch.argmax(ptp_vectors, dim=1, keepdim=True)
             if self.log_peak_to_trough:
-                maxs = torch.take_along_dim(max_vectors, maxchans, dim=1, keepdim=True)
-                mins = torch.take_along_dim(min_vectors, maxchans, dim=1, keepdim=True)
+                maxs = torch.take_along_dim(max_vectors, maxchans, dim=1)[:, 0]
+                mins = torch.take_along_dim(min_vectors, maxchans, dim=1)[:, 0]
                 if self.ptp_max_amplitude:
                     ptps = maxs - mins
             elif self.ptp_max_amplitude:
-                ptps = torch.take_along_dim(ptp_vectors, maxchans, dim=1, keepdim=True)
+                ptps = torch.take_along_dim(ptp_vectors, maxchans, dim=1)[:, 0]
 
         if self.ptp_amplitude_vectors:
             features[self.ptp_amplitude_vectors_name] = ptp_vectors
@@ -94,6 +96,7 @@ class AmplitudeFeatures(BaseWaveformFeaturizer):
             features[self.ptp_max_amplitude_name] = ptps
         if self.log_peak_to_trough:
             features[self.log_peak_to_trough_name] = torch.log(maxs) - torch.log(mins)
+        return features
 
 
 class AmplitudeVector(BaseWaveformFeaturizer):
