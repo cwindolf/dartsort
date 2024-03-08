@@ -1,4 +1,4 @@
-from .amplitudes import AmplitudeVector, MaxAmplitude
+from .amplitudes import AmplitudeFeatures, AmplitudeVector, MaxAmplitude
 from .enforce_decrease import EnforceDecrease
 from .localize import Localization, PointSourceLocalization
 from .single_channel_denoiser import SingleChannelWaveformDenoiser
@@ -15,6 +15,7 @@ all_transformers = [
     TemporalPCAFeaturizer,
     Localization,
     PointSourceLocalization,
+    AmplitudeFeatures,
 ]
 
 transformers_by_class_name = {cls.__name__: cls for cls in all_transformers}
