@@ -1,3 +1,5 @@
+from pathlib import Path
+
 import h5py
 import matplotlib.pyplot as plt
 import numpy as np
@@ -15,6 +17,7 @@ basic_template_config = config.TemplateConfig(
 
 def sorting_scatter_animation(
     sorting_analysis,
+    output_path,
     chunk_sortings=None,
     chunk_templates=None,
     chunk_time_ranges_s=None,
@@ -31,7 +34,12 @@ def sorting_scatter_animation(
     feature_getters=None,
     interval=200,
     figsize=(11, 8.5),
+    dpi=150,
 ):
+    output_path = Path(output_path)
+    assert output_path.parent.exists()
+    assert output_path.name.endswith(".mp4")
+
     if chunk_templates is not None:
         assert chunk_sortings is not None
 
@@ -74,6 +82,8 @@ def sorting_scatter_animation(
         interval=interval,
         figsize=figsize,
     )
+    anim.save(str(output_path), writer="ffmpeg", codec="libx264", dpi=dpi, bitrate=-1)
+    plt.close(fig)
 
 
 usual_feature_getters = {
