@@ -48,8 +48,10 @@ class WaveformPipeline(torch.nn.Module):
 
         for transformer in self.transformers:
             if transformer.is_featurizer:
-                features[transformer.name] = transformer.transform(
-                    waveforms, max_channels=max_channels
+                features.update(
+                    transformer.transform(
+                        waveforms, max_channels=max_channels
+                    )
                 )
             if transformer.is_denoiser:
                 waveforms = transformer(waveforms, max_channels=max_channels)
@@ -65,6 +67,11 @@ class WaveformPipeline(torch.nn.Module):
 
         for transformer in self.transformers:
             transformer.fit(waveforms, max_channels=max_channels)
+
+            # if we're done already, stop before denoising
+            if not self.needs_fit():
+                break
+
             if transformer.is_denoiser:
                 waveforms = transformer(waveforms, max_channels=max_channels)
 
@@ -138,26 +145,23 @@ def featurization_config_to_class_names_and_kwargs(fconf):
                 },
             )
         )
-    if do_feats and fconf.do_localization and fconf.localization_amplitude_type == "peak":
+
+    do_ptp_amp = do_feats and fconf.save_amplitudes
+    do_peak_vec = do_feats and fconf.do_localization and fconf.localization_amplitude_type == "peak"
+    do_ptp_vec = do_feats and fconf.save_amplitudes
+    do_logptt = do_feats and fconf.save_amplitudes
+    do_any_amp = do_peak_vec or do_ptp_vec or do_ptp_amp or do_logptt
+    if do_any_amp:
         class_names_and_kwargs.append(
             (
-                "AmplitudeVector",
-                {"name_prefix": fconf.output_waveforms_name},
-            )
-        )
-    if do_feats:
-        # we'll also need a peak-to-peak amplitude vector in other places
-        class_names_and_kwargs.append(
-            (
-                "AmplitudeVector",
-                {"name_prefix": fconf.output_waveforms_name, "kind": "ptp"},
-            )
-        )
-    if do_feats and fconf.save_amplitudes:
-        class_names_and_kwargs.append(
-            (
-                "MaxAmplitude",
-                {"name_prefix": fconf.output_waveforms_name},
+                "AmplitudeFeatures",
+                {
+                    "name_prefix": fconf.output_waveforms_name,
+                    "ptp_max_amplitude": do_ptp_amp,
+                    "peak_amplitude_vectors": do_peak_vec,
+                    "ptp_amplitude_vectors": do_ptp_vec,
+                    "log_peak_to_trough": do_logptt,
+                },
             )
         )
 

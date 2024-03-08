@@ -11,6 +11,7 @@ def run_peeler(
     model_subdir,
     featurization_config,
     chunk_starts_samples=None,
+    subsampling_proportion=1.0,
     overwrite=False,
     n_jobs=0,
     residual_filename=None,
@@ -47,6 +48,10 @@ def run_peeler(
     )
 
     # run main
+    if chunk_starts_samples is None and subsampling_proportion < 1.0:
+        chunk_starts_samples = peeler.get_chunk_starts(
+            subsampling_proportion=subsampling_proportion
+        )
     peeler.peel(
         output_hdf5_filename,
         chunk_starts_samples=chunk_starts_samples,
@@ -93,7 +98,11 @@ def peeler_is_done(
         return False
 
     if do_localization:
-        done, output_hdf5_filename, next_batch_start = check_resume_or_overwrite(
+        (
+            done,
+            output_hdf5_filename,
+            next_batch_start,
+        ) = check_resume_or_overwrite(
             output_hdf5_filename,
             localization_dataset_name,
             main_channels_dataset_name,
@@ -105,7 +114,9 @@ def peeler_is_done(
         output_hdf5_filename,
         overwrite=False,
     )
-    chunk_starts_samples = peeler.get_chunk_starts(chunk_starts_samples=chunk_starts_samples)
+    chunk_starts_samples = peeler.get_chunk_starts(
+        chunk_starts_samples=chunk_starts_samples
+    )
     return last_chunk_start >= max(chunk_starts_samples)
 
 

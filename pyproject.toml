@@ -25,5 +25,5 @@ classifiers = [
 "dartsort.pretrained" = ["*.pt", "*.npz"]
 
 [project.scripts]
-"dartsort_binary_folder_config_py" = "dartsort.cli:dartsort_binary_folder_config_py"
-"dartvis_binary_folder_all" = "dartsort.cli:dartvis_binary_folder_all"
+"dartsort_si_config_py" = "dartsort.cli:dartsort_si_config_py"
+"dartvis_si_all" = "dartsort.cli:dartvis_si_all"
