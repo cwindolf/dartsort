@@ -14,5 +14,6 @@ glasbey1024_npz = data_dir.joinpath("glasbey1024.npz")
 with np.load(glasbey1024_npz) as npz:
     glasbey1024 = npz["glasbey1024"]
 
+gray = np.array([0.5, 0.5, 0.5])
 
-__all__ = ["glasbey1024"]
+__all__ = ["glasbey1024", "gray"]
