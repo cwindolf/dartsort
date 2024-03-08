@@ -68,7 +68,7 @@ class SubtractionPeeler(BasePeeler):
         # we may be featurizing during subtraction, register the features
         for transformer in self.subtraction_denoising_pipeline.transformers:
             if transformer.is_featurizer:
-                datasets.append(transformer.spike_dataset)
+                datasets.extend(transformer.spike_datasets)
 
         return datasets
 
