@@ -100,7 +100,7 @@ class DARTsortSorting:
 
         extra_features = None
         if parent_h5_path:
-            with h5py.File(parent_h5_path, "r") as h5:
+            with h5py.File(parent_h5_path, "r", libver="latest", locking=False) as h5:
                 extra_features = {k: h5[k][()] for k in feature_keys}
 
         return cls(
@@ -151,7 +151,7 @@ class DARTsortSorting:
         labels=None,
     ):
         channels = None
-        with h5py.File(peeling_hdf5_filename, "r") as h5:
+        with h5py.File(peeling_hdf5_filename, "r", locking=False) as h5:
             times_samples = h5[times_samples_dataset][()]
             sampling_frequency = h5["sampling_frequency"][()]
             if channels_dataset in h5:
@@ -185,6 +185,7 @@ class DARTsortSorting:
             extra_features=extra_features,
         )
 
+
 def keep_only_most_recent_spikes(
     sorting,
     n_min_spikes=250,
@@ -195,11 +196,11 @@ def keep_only_most_recent_spikes(
     """
     new_labels = np.full(sorting.labels.shape, -1)
     units = np.unique(sorting.labels)
-    units = units[units>-1]
+    units = units[units > -1]
     for k in units:
         idx_k = np.flatnonzero(sorting.labels == k)
-        before_time = (sorting.times_samples[idx_k] < latest_time_sample) 
-        if before_time.sum()<=n_min_spikes:
+        before_time = sorting.times_samples[idx_k] < latest_time_sample
+        if before_time.sum() <= n_min_spikes:
             idx_k = idx_k[:n_min_spikes]
             new_labels[idx_k] = k
         else:
@@ -207,6 +208,7 @@ def keep_only_most_recent_spikes(
             new_labels[idx_k] = k
     new_sorting = replace(sorting, labels=new_labels)
     return new_sorting
+
 
 def check_recording(
     rec,
@@ -275,9 +277,7 @@ def subset_sorting_by_spike_count(sorting, min_spikes=0):
     units, counts = np.unique(sorting.labels, return_counts=True)
     small_units = units[counts < min_spikes]
 
-    new_labels = np.where(
-        np.isin(sorting.labels, small_units), -1, sorting.labels
-    )
+    new_labels = np.where(np.isin(sorting.labels, small_units), -1, sorting.labels)
 
     return replace(sorting, labels=new_labels)
 
@@ -297,6 +297,28 @@ def subset_sorting_by_time_samples(
     return replace(sorting, labels=new_labels, times_samples=new_times)
 
 
+def subset_sorting_by_time_seconds(
+    sorting, t_start=0, t_end=np.inf
+):
+    new_labels = sorting.labels.copy()
+    t_s = sorting.times_seconds
+    in_range = t_s == t_s.clip(t_start, t_end)
+    new_labels[~in_range] = -1
+
+    return replace(sorting, labels=new_labels)
+
+
+def time_chunk_sortings(
+    sorting, recording=None, chunk_samples=None, chunk_time_ranges_s=None
+):
+    if chunk_time_ranges_s is None:
+        chunk_time_ranges_s = chunk_time_ranges(recording, chunk_samples)
+    chunk_sortings = [
+        subset_sorting_by_time_seconds(sorting, *tt) for tt in chunk_time_ranges_s
+    ]
+    return chunk_time_ranges_s, chunk_sortings
+
+
 def reindex_sorting_labels(sorting):
     new_labels = sorting.labels.copy()
     kept = np.flatnonzero(new_labels >= 0)
@@ -304,10 +326,62 @@ def reindex_sorting_labels(sorting):
     return replace(sorting, labels=new_labels)
 
 
+def combine_sortings(sortings, dodge=False):
+    labels = np.full_like(sortings[0].labels, -1)
+    times_samples = sortings[0].times_samples.copy()
+    assert all(s.labels.size == sortings[0].labels.size for s in sortings)
+
+    if dodge:
+        label_to_sorting_index = []
+        label_to_original_label = []
+    next_label = 0
+    for j, sorting in enumerate(sortings):
+        kept = np.flatnonzero(sorting.labels >= 0)
+        assert np.all(labels[kept] < 0)
+        labels[kept] = sorting.labels[kept] + next_label
+        if dodge:
+            n_new_labels = 1 + sorting.labels[kept].max()
+            next_label += n_new_labels
+            label_to_sorting_index.append(np.full(n_new_labels, j))
+            label_to_original_label.append(np.arange(n_new_labels))
+        times_samples[kept] = sorting.times_samples[kept]
+
+    sorting = replace(sortings[0], labels=labels, times_samples=times_samples)
+
+    if dodge:
+        label_to_sorting_index = np.array(label_to_sorting_index)
+        label_to_original_label = np.array(label_to_original_label)
+        return label_to_sorting_index, label_to_original_label, sorting
+    return sorting
+
+
+# -- timing
+
+
+def chunk_time_ranges(recording, chunk_samples=None):
+    if chunk_samples is None or chunk_samples == np.inf:
+        n_chunks = 1
+    else:
+        n_chunks = recording.get_num_samples() / chunk_samples
+        # we'll count the remainder as a chunk if it's at least 2/3 of one
+        n_chunks = np.floor(n_chunks) + (n_chunks - np.floor(n_chunks) > 0.66)
+        n_chunks = int(max(1, n_chunks))
+
+    # evenly divide the recording into chunks
+    assert recording.get_num_segments() == 1
+    start_time_s, end_time_s = recording._recording_segments[
+        0
+    ].sample_index_to_time(np.array([0, recording.get_num_samples() - 1]))
+    chunk_times_s = np.linspace(start_time_s, end_time_s, num=n_chunks + 1)
+    chunk_time_ranges_s = list(zip(chunk_times_s[:-1], chunk_times_s[1:]))
+
+    return chunk_time_ranges_s
+
+
 # -- hdf5 util
 
 
-def batched_h5_read(dataset, indices, batch_size=64):
+def batched_h5_read(dataset, indices, batch_size=128):
     if indices.size < batch_size:
         return dataset[indices]
     else:

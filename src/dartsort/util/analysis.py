@@ -105,7 +105,7 @@ class DARTsortAnalysis:
             have_templates = template_npz.exists()
             if have_templates:
                 print(f"Reloading templates from {template_npz}...")
-                with h5py.File(hdf5_path, "r") as h5:
+                with h5py.File(hdf5_path, "r", libver="latest", locking=False) as h5:
                     same_labels = np.array_equal(sorting.labels, h5["labels"][:])
                 have_templates = have_templates and same_labels
                 template_data = TemplateData.from_npz(template_npz)
@@ -203,9 +203,6 @@ class DARTsortAnalysis:
         assert self.hdf5_path.exists()
         self.coarse_template_data = self.template_data.coarsen()
 
-        # this obj will be pickled and we don't use these, let's save ourselves the ram
-        if self.sorting.extra_features:
-            self.sorting = replace(self.sorting, extra_features=None)
         self.shifting = (
             self.motion_est is not None
             or self.template_data.registered_geom is not None
@@ -246,30 +243,39 @@ class DARTsortAnalysis:
     @property
     def h5(self):
         if self._h5 is None:
-            self._h5 = h5py.File(self.hdf5_path, "r")
+            self._h5 = h5py.File(self.hdf5_path, "r", libver="latest", locking=False)
         return self._h5
 
     @property
     def xyza(self):
         if self._xyza is None:
-            self._xyza = self.h5[self.localizations_dataset][:]
+            if hasattr(self.sorting, self.localizations_dataset):
+                return getattr(self.sorting, self.localizations_dataset)
+            else:
+                self._xyza = self.h5[self.localizations_dataset][:]
         return self._xyza
 
     @property
     def template_indices(self):
         if self._template_indices is None:
+            if hasattr(self.sorting, self.template_indices_dataset):
+                return getattr(self.sorting, self.template_indices_dataset)
             self._template_indices = self.h5[self.template_indices_dataset][:]
         return self._template_indices
 
     @property
     def max_chan_amplitudes(self):
         if self._max_chan_amplitudes is None:
+            if hasattr(self.sorting, self.amplitudes_dataset):
+                return getattr(self.sorting, self.amplitudes_dataset)
             self._max_chan_amplitudes = self.h5[self.amplitudes_dataset][:]
         return self._max_chan_amplitudes
 
     @property
     def amplitude_vectors(self):
         if self._amplitude_vectors is None:
+            if hasattr(self.sorting, self.amplitude_vectors_dataset):
+                return getattr(self.sorting, self.amplitude_vectors_dataset)
             self._amplitude_vectors = self.h5[self.amplitude_vectors_dataset][:]
         return self._amplitude_vectors
 
@@ -475,6 +481,7 @@ class DARTsortAnalysis:
         max_count=250,
         random_seed=0,
         channel_show_radius_um=75,
+        channel_dist_p=np.inf,
         relocated=False,
     ):
         which = self.in_unit(unit_id)
@@ -523,6 +530,7 @@ class DARTsortAnalysis:
             waveforms,
             self.channel_index,
             channel_show_radius_um=channel_show_radius_um,
+            channel_dist_p=channel_dist_p,
             relocated=relocated,
         )
         return which, waveforms, max_chan, show_geom, show_channel_index
@@ -550,6 +558,7 @@ class DARTsortAnalysis:
             channel_show_radius_um=pca_radius_um,
             random_seed=random_seed,
             max_count=max_count,
+            channel_dist_p=2,
         )
 
         # remove chans with no signal at all
@@ -574,16 +583,44 @@ class DARTsortAnalysis:
             choices = rg.choice(no_nan, size=max_wfs_fit, replace=False)
             choices.sort()
             pca.fit(waveforms[choices])
-            features[no_nan] = pca.transform(waveforms[no_nan])
+            # features[no_nan] = pca.transform(waveforms[no_nan])
         else:
-            features[no_nan] = pca.fit_transform(waveforms[no_nan])
+            # features[no_nan] = pca.fit_transform(waveforms[no_nan])
+            pca.fit(waveforms[no_nan])
+        features = pca.transform(np.where(np.isfinite(waveforms), waveforms, pca.mean_[None]))
         return which, features
 
     def unit_max_channel(self, unit_id):
         temp = self.coarse_template_data.unit_templates(unit_id)
-        assert temp.ndim == 3 and temp.shape[0] == 1
-        max_chan = temp[0].ptp(0).argmax()
+        assert temp.ndim == 3 and temp.shape[0] == np.atleast_1d(unit_id).size
+        max_chan = temp.mean(0).ptp(0).argmax()
         return max_chan
+    
+    def get_registered_channels(self, in_unit, n_samples=1000, random_state=0):
+        amp_samples = slice(None)
+        if in_unit.size > n_samples:
+            rg = np.random.default_rng(random_state)
+            amp_samples = rg.choice(in_unit.size, size=n_samples, replace=False)
+            amp_samples.sort()
+        n_pitches_shift = get_spike_pitch_shifts(
+            self.z(in_unit[amp_samples], registered=False),
+            geom=self.geom,
+            registered_depths_um=self.z(in_unit[amp_samples], registered=False),
+        )
+        amp_vecs = self.amplitude_vectors[in_unit[amp_samples]]
+        rgeom = self.template_data.registered_geom
+        if rgeom is None:
+            rgeom = self.geom
+        amplitude_template = registered_average(
+            amp_vecs,
+            n_pitches_shift,
+            self.geom,
+            rgeom,
+            main_channels=self.sorting.channels[in_unit],
+            channel_index=self.channel_index,
+        )
+        max_registered_channel = amplitude_template.argmax()
+        return max_registered_channel
 
     def unit_shift_or_relocate_channels(
         self,
@@ -602,7 +639,8 @@ class DARTsortAnalysis:
             channel_dist_p=channel_dist_p,
         )
 
-        max_chan = self.unit_max_channel(unit_id)
+        # max_chan = self.unit_max_channel(unit_id)
+        max_chan = self.get_registered_channels(which)
 
         show_chans = show_channel_index[max_chan]
         show_chans = show_chans[show_chans < len(show_geom)]
@@ -670,11 +708,14 @@ class DARTsortAnalysis:
         if self.merge_distance_templates_kind == "coarse":
             merge_td = self.coarse_template_data
 
+        if merge_td.templates.shape[0] <= 1:
+            self.merge_dist = np.zeros((1, 1))
+
         units, dists, shifts, template_snrs = merge.calculate_merge_distances(
             merge_td,
             superres_linkage=self.merge_superres_linkage,
             device=self.device,
-            n_jobs=1,
+            n_jobs=0,
         )
         assert np.array_equal(units, self.coarse_template_data.unit_ids)
         self.merge_dist = dists

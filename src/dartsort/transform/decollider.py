@@ -173,8 +173,9 @@ class MultiChannelDecollider(Decollider):
         # I somehow feel that receiving a "badness indicator" is more useful,
         # and the masks indicate good channels, so hence the flip below
         if channel_masks is None:
-            masks = torch.ones_like(waveforms[:, :, 0])
+            masks = torch.zeros_like(waveforms[:, :, 0])
         else:
+            assert channel_masks.shape == waveforms.shape[:2]
             masks = torch.logical_not(channel_masks).to(waveforms)
         # NCT -> N1CT (channels are height in Conv2D NCHW convention)
         waveforms = waveforms[:, None, :, :]
