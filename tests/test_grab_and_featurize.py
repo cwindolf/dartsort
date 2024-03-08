@@ -42,7 +42,7 @@ def test_grab_and_featurize():
     with tempfile.TemporaryDirectory() as tempdir:
         grab.peel(Path(tempdir) / "grab.h5")
 
-        with h5py.File(Path(tempdir) / "grab.h5") as h5:
+        with h5py.File(Path(tempdir) / "grab.h5", locking=False) as h5:
             assert h5["times_samples"].shape == (n_spikes,)
             assert h5["channels"].shape == (n_spikes,)
             assert h5["waveforms"].shape == (
@@ -56,7 +56,7 @@ def test_grab_and_featurize():
 
         grab.peel(Path(tempdir) / "grab.h5", overwrite=True, n_jobs=2)
 
-        with h5py.File(Path(tempdir) / "grab.h5") as h5:
+        with h5py.File(Path(tempdir) / "grab.h5", locking=False) as h5:
             assert h5["times_samples"].shape == (n_spikes,)
             assert h5["channels"].shape == (n_spikes,)
             assert h5["waveforms"].shape == (
@@ -93,7 +93,7 @@ def test_grab_and_featurize():
         grab.fit_models(tempdir)
         grab.peel(Path(tempdir) / "grab.h5")
 
-        with h5py.File(Path(tempdir) / "grab.h5") as h5:
+        with h5py.File(Path(tempdir) / "grab.h5", locking=False) as h5:
             assert h5["times_samples"].shape == (n_spikes,)
             assert h5["channels"].shape == (n_spikes,)
             assert h5["waveforms"].shape == (
@@ -114,7 +114,7 @@ def test_grab_and_featurize():
         grab.fit_models(tempdir, n_jobs=2)
         grab.peel(Path(tempdir) / "grab.h5", n_jobs=2)
 
-        with h5py.File(Path(tempdir) / "grab.h5") as h5:
+        with h5py.File(Path(tempdir) / "grab.h5", locking=False) as h5:
             assert h5["times_samples"].shape == (n_spikes,)
             assert h5["channels"].shape == (n_spikes,)
             assert h5["waveforms"].shape == (
@@ -158,7 +158,7 @@ def test_grab_and_featurize():
         grab.fit_models(tempdir)
         grab.peel(Path(tempdir) / "grab.h5", device="cpu")
 
-        with h5py.File(Path(tempdir) / "grab.h5") as h5:
+        with h5py.File(Path(tempdir) / "grab.h5", locking=False) as h5:
             assert h5["times_samples"].shape == (n_spikes,)
             assert h5["channels"].shape == (n_spikes,)
             assert h5["point_source_localizations"].shape == (n_spikes, 4)
@@ -181,7 +181,7 @@ def test_grab_and_featurize():
         grab.fit_models(tempdir, n_jobs=2)
         grab.peel(Path(tempdir) / "grab.h5", n_jobs=2)
 
-        with h5py.File(Path(tempdir) / "grab.h5") as h5:
+        with h5py.File(Path(tempdir) / "grab.h5", locking=False) as h5:
             assert h5["times_samples"].shape == (n_spikes,)
             assert h5["channels"].shape == (n_spikes,)
             assert h5["waveforms"].shape == (
@@ -232,7 +232,7 @@ def test_grab_and_featurize():
             amplitude_vectors_dataset_name="peak_amplitude_vectors",
         )
 
-        with h5py.File(Path(tempdir) / "grab.h5") as h5:
+        with h5py.File(Path(tempdir) / "grab.h5", locking=False) as h5:
             assert h5["times_samples"].shape == (n_spikes,)
             assert h5["channels"].shape == (n_spikes,)
             assert h5["point_source_localizations"].shape == (n_spikes, 4)
