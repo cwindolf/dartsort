@@ -13,9 +13,7 @@ def test_all_transformers():
     rg = np.random.default_rng(0)
     n_spikes = 1001
     spike_length_samples = 11
-    waveforms = rg.normal(
-        size=(n_spikes, spike_length_samples, channel_index.shape[1])
-    )
+    waveforms = rg.normal(size=(n_spikes, spike_length_samples, channel_index.shape[1]))
     waveforms = waveforms.astype(np.float32)
     channels = rg.integers(0, len(geom), size=n_spikes)
     # set channels to nan as they would be in a real context
@@ -29,7 +27,10 @@ def test_all_transformers():
     pipeline = WaveformPipeline.from_class_names_and_kwargs(
         geom,
         channel_index,
-        [(name, {}) for name in transformers_by_class_name],
+        [
+            (name, {"name_prefix": j})
+            for j, name in enumerate(transformers_by_class_name)
+        ],
     )
 
     # TODO
