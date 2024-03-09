@@ -96,7 +96,7 @@ def peeler_is_done(
     localization_dataset_name="point_source_localizations",
     main_channels_dataset_name="channels",
 ):
-    if not overwrite:
+    if overwrite:
         return False
 
     if not output_hdf5_filename.exists():
