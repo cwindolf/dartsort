@@ -303,6 +303,7 @@ class DARTsortConfig:
     computation_config: ComputationConfig = ComputationConfig()
 
     # high level behavior
+    subtract_only: bool = False
     do_initial_split_merge: bool = True
     do_final_split_merge: bool = False
     matching_iterations: int = 1
@@ -318,6 +319,9 @@ default_split_merge_config = SplitMergeConfig()
 coarse_template_config = TemplateConfig(superres_templates=False)
 raw_template_config = TemplateConfig(
     realign_peaks=False, low_rank_denoising=False, superres_templates=False
+)
+unaligned_coarse_denoised_template_config = TemplateConfig(
+    realign_peaks=False, low_rank_denoising=True, superres_templates=False
 )
 default_matching_config = MatchingConfig()
 default_motion_estimation_config = MotionEstimationConfig()

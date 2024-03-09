@@ -1,10 +1,9 @@
 import numpy as np
-from tqdm.auto import tqdm, trange
+from tqdm.auto import tqdm
 
 from ..config import default_split_merge_config
 from . import merge, split
 from .forward_backward import forward_backward
-
 
 
 def get_indices_in_chunk(times_s, chunk_time_range_s):
@@ -34,7 +33,7 @@ def split_merge_ensemble(
             recursive=split_merge_config.recursive_split,
             n_jobs=n_jobs_split,
             motion_est=motion_est,
-            show_progress=False
+            show_progress=False,
         )
         for sorting in tqdm(chunk_sortings, desc="Split within chunks")
     ]

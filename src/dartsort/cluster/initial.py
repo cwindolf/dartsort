@@ -213,12 +213,12 @@ def cluster_chunks(
         not clustering_config.ensemble_strategy
         or clustering_config.ensemble_strategy.lower() == "none"
     ):
-        chunk_samples = None
+        chunk_length_samples = None
     else:
-        chunk_samples = (
+        chunk_length_samples = (
             recording.sampling_frequency * clustering_config.chunk_size_s
         )
-    chunk_time_ranges_s = chunk_time_ranges(recording, chunk_samples)
+    chunk_time_ranges_s = chunk_time_ranges(recording, chunk_length_samples)
 
     # cluster each chunk. can be parallelized in the future.
     sortings = [

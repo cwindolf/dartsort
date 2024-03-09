@@ -14,7 +14,7 @@ class BaseWaveformModule(torch.nn.Module):
         if name is None:
             name = self.default_name
             if name_prefix:
-                name = name_prefix + "_" + name
+                name = f"{name_prefix}_{name}"
         self.name = name
         if channel_index is not None:
             self.register_buffer(
