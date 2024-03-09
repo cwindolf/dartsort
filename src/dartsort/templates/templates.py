@@ -90,8 +90,11 @@ class TemplateData:
         )
         return template_locations
 
+    def unit_mask(self, unit_id):
+        return np.isin(self.unit_ids, unit_id)
+
     def unit_templates(self, unit_id):
-        return self.templates[np.isin(self.unit_ids, unit_id)]
+        return self.templates[self.unit_mask(unit_id)]
 
     @classmethod
     def from_config(
@@ -254,7 +257,7 @@ class TemplateData:
         return obj
 
 
-def get_chunked_template_data(
+def get_chunked_templates(
     recording,
     template_config,
     global_sorting=None,

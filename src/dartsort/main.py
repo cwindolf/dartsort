@@ -50,7 +50,7 @@ def dartsort(
     if n_jobs_cluster is None:
         n_jobs_cluster = cfg.computation_config.n_jobs_cpu
 
-    # initialization: subtraction, motion estimation and initial clustering
+    # first step: subtraction and motion estimation
     sorting, sub_h5 = subtract(
         recording,
         output_directory,
@@ -70,6 +70,10 @@ def dartsort(
             device=device,
             **asdict(cfg.motion_estimation_config),
         )
+    if cfg.subtract_only:
+        return sorting
+
+    # clustering E/M. start by initializing clusters.
     sorting = cluster(
         sub_h5,
         recording,

@@ -59,6 +59,10 @@ class UnitTextInfo(UnitPlot):
         if temps.size:
             ptp = temps.ptp(1).max(1).mean()
             msg += f"mean superres maxptp: {ptp:0.1f}su\n"
+            in_unit = sorting_analysis.template_data.unit_mask(unit_id)
+            counts = sorting_analysis.template_data.spike_counts[in_unit]
+            snrs = temps.ptp(1).max(1) * np.sqrt(counts)
+            msg += "template snrs:\n  " + ", ".join(f"{s:0.1f}" for s in snrs)
         else:
             msg += "no template (too few spikes)"
 

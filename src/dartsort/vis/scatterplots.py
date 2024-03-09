@@ -1,8 +1,8 @@
-import colorcet
 import h5py
 import matplotlib.pyplot as plt
 import numpy as np
-from .colors import glasbey1024
+
+from .colors import glasbey1024, gray
 
 
 def scatter_spike_features(
@@ -386,7 +386,7 @@ def scatter_amplitudes_vs_depth(
             amplitudes = getattr(sorting, amplitudes_dataset_name, None)
         if hdf5_filename is None:
             hdf5_filename = sorting.parent_h5_path
-    
+
     needs_load = any(v is None for v in (depths_um, amplitudes, geom))
     if needs_load and hdf5_filename is not None:
         with h5py.File(hdf5_filename, "r") as h5:
@@ -446,12 +446,19 @@ def scatter_feature_vs_depth(
     to_show=None,
     rasterized=True,
     show_triaged=True,
+    scat=None,
+    pad_to_max=False,
     **scatter_kw,
 ):
     assert feature.shape == depths_um.shape
     if amplitudes is not None:
         assert feature.shape == amplitudes.shape
     assert feature.ndim == 1
+
+    updating = scat is not None
+    if updating:
+        max_spikes_plot = len(scat)
+        assert ax is not None
 
     if ax is None:
         ax = plt.gca()
@@ -478,45 +485,51 @@ def scatter_feature_vs_depth(
     if amplitudes is not None:
         to_show = to_show[np.argsort(amplitudes[to_show])]
 
-    if sorting is not None:
+    if sorting is not None and labels is None:
         if sorting.labels.max() > 0:
             labels = sorting.labels
 
     if labels is None:
         c = np.clip(amplitudes, 0, amplitude_color_cutoff)
-        cmap = amplitude_cmap
-        kept = slice(None)
+        order = slice(None)
     else:
-        c = labels
-        # cmap = colorcet.m_glasbey_light
-        cmap = glasbey1024
-        c = cmap[c % len(cmap)]
-        kept = labels[to_show] >= 0
+        c = glasbey1024[labels[to_show] % len(glasbey1024)]
+        order = np.concatenate(
+            (np.flatnonzero(labels < 0), np.flatnonzero(labels >= 0))
+        )
+        to_show = to_show[order]
         if show_triaged:
-            ax.scatter(
-                feature[to_show[~kept]],
-                depths_um[to_show[~kept]],
-                color="dimgray",
-                s=s,
-                linewidth=linewidth,
-                rasterized=rasterized,
-                **scatter_kw,
-            )
+            c[labels == -1] = gray
+        else:
+            to_show = to_show[labels[to_show] >= 0]
 
-    s = ax.scatter(
-        feature[to_show[kept]],
-        depths_um[to_show[kept]],
-        c=c[to_show[kept]],
-        # cmap=cmap,
-        s=s,
-        linewidth=linewidth,
-        rasterized=rasterized,
-        **scatter_kw,
-    )
+    feature = feature[to_show]
+    depths_um = depths_um[to_show]
+    if pad_to_max and len(to_show) < max_spikes_plot:
+        n_pad = max_spikes_plot - len(to_show)
+        feature = np.pad(feature, (0, n_pad), np.nan)
+        depths_um = np.pad(depths_um, (0, n_pad), np.nan)
+        c = np.pad(c, (0, n_pad), 0)
+
+    if updating:
+        scat.set_offsets(np.c_[feature, depths_um])
+        scat.set_facecolors(c)
+    else:
+        scat = ax.scatter(
+            feature,
+            depths_um,
+            c=c,
+            s=s,
+            linewidth=linewidth,
+            rasterized=rasterized,
+            **scatter_kw,
+        )
+
     if limits == "probe_margin" and geom is not None:
         ax.set_ylim(
             [geom[:, 1].min() - probe_margin_um, geom[:, 1].max() + probe_margin_um]
         )
     elif limits is not None:
         ax.set_ylim(limits)
-    return ax, s
+
+    return ax, scat
