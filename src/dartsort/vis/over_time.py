@@ -6,13 +6,182 @@ import numpy as np
 from matplotlib import animation
 
 from .. import config
+from ..cluster import merge
 from ..templates import templates
-from ..util import data_util, spike_features
-from . import analysis_plots, scatterplots
+from ..templates.get_templates import fit_tsvd
+from ..util import data_util, spike_features, analysis
+from . import analysis_plots, scatterplots, layout, unit
 
 basic_template_config = config.TemplateConfig(
     realign_peaks=False, superres_templates=False
 )
+
+
+# -- over_time_summary stuff
+
+
+class OverTimePlot(layout.BasePlot):
+    width = 8
+    height = 1
+    kind = "over_time"
+
+    def draw(self, panel, chunk_sorting_analyses, unit_id):
+        raise NotImplementedError
+
+
+class UnitPlotOverTime(layout.BasePlot):
+    def __init__(self, unit_plot, sharey=True):
+        self.unit_plot = unit_plot
+        self.sharey = sharey
+
+    def notify_global_params(self, **params):
+        super().notify_global_params(**params)
+        self.unit_plot.notify_global_params(**params)
+
+    def draw(self, panel, chunk_sorting_analyses, unit_id):
+        axes = panel.subplots(
+            ncols=len(chunk_sorting_analyses), sharey=self.sharey
+        )
+        for ax, csa in zip(axes, chunk_sorting_analyses):
+            self.unit_plot.draw(None, csa, unit_id, axis=ax)
+            if self.sharey:
+                ax.set_yticks([])
+                ax.set_ylabel("")
+
+
+class SelfDistanceOverTime(OverTimePlot):
+    def draw(self, panel, chunk_sorting_analyses, unit_id):
+        imax, longax = panel.subplots(ncols=2, width_ratios=[1, 3])
+        nchunks = len(chunk_sorting_analyses)
+
+        temps = np.stack(
+            [
+                csa.coarse_template_data.unit_templates(unit_id)[0]
+                for csa in chunk_sorting_analyses
+            ],
+            axis=0,
+        )
+        counts = [
+            csa.coarse_template_data.spike_counts(
+                csa.coarse_template_data.unit_mask(unit_id)
+            )
+            for csa in chunk_sorting_analyses
+        ]
+        counts = np.ravel(counts)
+        assert counts.shape == (nchunks,)
+        chunks_td = templates.TemplateData(temps, np.arange(nchunks), counts)
+        chunks, dists, _, _ = merge.calculate_merge_distances(
+            chunks_td,
+            n_jobs=0,
+        )
+        assert np.array_equal(chunks, np.arange(nchunks))
+
+        im = imax.imshow(
+            dists,
+            vmin=0,
+            vmax=self.dist_vmax,
+            cmap=plt.cm.RdGy,
+            origin="lower",
+            interpolation="none",
+        )
+        if self.show_values:
+            for (j, i), label in np.ndenumerate(neighbor_dists):
+                axis.text(i, j, f"{label:.2f}", ha="center", va="center")
+        plt.colorbar(im, ax=axis, shrink=0.3)
+        imax.set_title("inter-chunk template distances")
+
+        longax.plot(np.diagonal(dists, k=1))
+        longax.set_ylabel("dist between temps of chunk $i,i+1$")
+        longax.set_xlabel("chunk index $i$")
+        long.set_title("neighboring chunk template distances")
+
+
+over_time_plots = (
+    UnitPlotOverTime(unit.RawWaveformPlot()),
+    SelfDistanceOverTime(),
+    UnitPlotOverTime(unit.PCAScatter()),
+    UnitPlotOverTime(unit.XZScatter()),
+    UnitPlotOverTime(unit.TimeAmpScatter()),
+    UnitPlotOverTime(NearbyCoarseTemplatesPlot()),
+    UnitPlotOverTime(CoarseTemplateDistancePlot()),
+)
+
+
+def make_all_over_time_summaries(
+    sorting_analysis,
+    save_folder,
+    plots=over_time_plots,
+    chunk_length_s=300.0,
+    template_config=basic_template_config,
+    channel_show_radius_um=50.0,
+    amplitude_color_cutoff=15.0,
+    pca_radius_um=75.0,
+    max_height=8,
+    figsize=(16, 8.5),
+    dpi=200,
+    image_ext="png",
+    n_jobs=0,
+    n_jobs_templates=0,
+    show_progress=True,
+    overwrite=False,
+    unit_ids=None,
+):
+    # get unit ids
+    if unit_ids is None:
+        unit_ids = sorting_analysis.unit_ids
+
+    # check if done before expensive stuff
+    done = not overwrite and unit.all_summaries_done(unit_ids, unit_summary_dir)
+    if done:
+        return
+
+    # make chunk sorting analyses
+    # chunk sortings
+    chunk_time_ranges_s, chunk_sortings = data_util.time_chunk_sortings(
+        sorting=sorting_analysis.sorting,
+        recording=sorting_analysis.recording,
+        chunk_length_samples=chunk_length_s
+        * sorting_analysis.recording.sampling_frequency,
+    )
+    # tsvd
+    tsvd = fit_tsvd(
+        sorting_analysis.recording,
+        sorting_analysis.sorting,
+        denoising_fit_radius=pca_radius_um,
+    )
+    # chunk sorting analyses
+    chunk_sorting_analyses = [
+        analysis.DARTsortAnalysis.from_sorting(
+            sorting_analysis.recording,
+            chunk_sorting,
+            motion_est=sorting_analysis.motion_est,
+            template_config=template_config,
+            allow_template_reload=False,
+            n_jobs_templates=n_jobs_templates,
+            denoising_tsvd=tsvd,
+        )
+        for chunk_sorting in chunk_sortings
+    ]
+
+    unit.make_all_summaries(
+        chunk_sorting_analyses,
+        save_folder,
+        plots=plots,
+        channel_show_radius_um=channel_show_radius_um,
+        amplitude_color_cutoff=amplitude_color_cutoff,
+        pca_radius_um=pca_radius_um,
+        max_height=max_height,
+        figsize=figsize,
+        dpi=dpi,
+        image_ext=image_ext,
+        n_jobs=n_jobs,
+        show_progress=show_progress,
+        overwrite=overwrite,
+        unit_ids=unit_ids,
+    )
+
+
+# -- animation stuff
 
 
 def sorting_scatter_animation(
@@ -170,7 +339,11 @@ def update_frame(
     non_depth_keys = [k for k in all_spike_features if k != depth_feature]
     for j, k in enumerate(non_depth_keys):
         # determine this chunk's spike mask
-        _, feature_scatters[k], feature_ellips[k] = scatterplots.scatter_feature_vs_depth(
+        (
+            _,
+            feature_scatters[k],
+            feature_ellips[k],
+        ) = scatterplots.scatter_feature_vs_depth(
             all_spike_features[k][spike_mask],
             all_spike_features[depth_feature][spike_mask],
             ax=axes[j],
@@ -192,12 +365,18 @@ def update_frame(
         else:
             xmin, xmax = geom[:, 0].min(), geom[:, 0].max()
             margin = 100
-            disp = motion_est.disp_at_s(sum(chunk_time_range) / 2, geom[:, 1], grid=True)
+            disp = motion_est.disp_at_s(
+                sum(chunk_time_range) / 2, geom[:, 1], grid=True
+            )
             disp = np.c_[np.zeros_like(disp), disp]
             if geom_scatter:
                 geom_scatter[0].set_offsets(geom - disp)
             else:
-                geom_scatter.append(axes[j].scatter(*(geom - disp).T, s=5, marker="s", color="k", lw=0))
+                geom_scatter.append(
+                    axes[j].scatter(
+                        *(geom - disp).T, s=5, marker="s", color="k", lw=0
+                    )
+                )
 
         if chunk_template_features is not None:
             _, template_scatters[k] = scatterplots.scatter_feature_vs_depth(
