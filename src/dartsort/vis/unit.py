@@ -137,8 +137,9 @@ class XZScatter(UnitPlot):
         self.probe_margin_um = probe_margin_um
         self.colorbar = colorbar
 
-    def draw(self, panel, sorting_analysis, unit_id):
-        axis = panel.subplots()
+    def draw(self, panel, sorting_analysis, unit_id, axis=None):
+        if axis is None:
+            axis = panel.subplots()
         
         unit_id = np.atleast_1d(unit_id)
         multi_unit = unit_id.size > 1
@@ -191,8 +192,9 @@ class PCAScatter(UnitPlot):
         self.colorbar = colorbar
         self.pca_radius_um = pca_radius_um
 
-    def draw(self, panel, sorting_analysis, unit_id):
-        axis = panel.subplots()
+    def draw(self, panel, sorting_analysis, unit_id, axis=None):
+        if axis is None:
+            axis = panel.subplots()
         
         unit_id = np.atleast_1d(unit_id)
         multi_unit = unit_id.size > 1
@@ -225,6 +227,8 @@ class PCAScatter(UnitPlot):
             reloc_amp_str = "relocated " * self.relocate_amplitudes
             if self.colorbar:
                 plt.colorbar(s, ax=axis, shrink=0.5, label=reloc_amp_str + "amplitude (su)")
+
+        return axis
 
 
 # -- wide scatter plots
@@ -399,8 +403,9 @@ class WaveformPlot(UnitPlot):
     def get_waveforms(self, sorting_analysis, unit_id):
         raise NotImplementedError
 
-    def draw(self, panel, sorting_analysis, unit_id):
-        axis = panel.subplots()
+    def draw(self, panel, sorting_analysis, unit_id, axis=None):
+        if axis is None:
+            axis = panel.subplots()
         which, waveforms, max_chan, geom, ci = self.get_waveforms(
             sorting_analysis, unit_id
         )
@@ -566,8 +571,9 @@ class NearbyCoarseTemplatesPlot(UnitPlot):
         self.n_neighbors = n_neighbors
         self.legend = legend
 
-    def draw(self, panel, sorting_analysis, unit_id):
-        axis = panel.subplots()
+    def draw(self, panel, sorting_analysis, unit_id, axis=None):
+        if axis is None:
+            axis = panel.subplots()
         if np.asarray(unit_id).size > 1:
             unit_id = unit_id[0]
         (
@@ -577,7 +583,7 @@ class NearbyCoarseTemplatesPlot(UnitPlot):
         ) = sorting_analysis.nearby_coarse_templates(
             unit_id, n_neighbors=self.n_neighbors
         )
-        colors = np.array(cc.glasbey_light)[neighbor_ids % len(cc.glasbey_light)]
+        colors = np.array(glasbey1024)[neighbor_ids % len(glasbey1024)]
         assert neighbor_ids[0] == unit_id
         chan = neighbor_coarse_templates[0].ptp(0).argmax()
         ci = sorting_analysis.show_channel_index(self.channel_show_radius_um)
@@ -636,10 +642,11 @@ class CoarseTemplateDistancePlot(UnitPlot):
         self.dist_vmax = dist_vmax
         self.show_values = show_values
 
-    def draw(self, panel, sorting_analysis, unit_id):
+    def draw(self, panel, sorting_analysis, unit_id, axis=None):
         if np.asarray(unit_id).size > 1:
             unit_id = unit_id[0]
-        axis = panel.subplots()
+        if axis is None:
+            axis = panel.subplots()
         (
             neighbor_ids,
             neighbor_dists,
@@ -647,7 +654,7 @@ class CoarseTemplateDistancePlot(UnitPlot):
         ) = sorting_analysis.nearby_coarse_templates(
             unit_id, n_neighbors=self.n_neighbors
         )
-        colors = np.array(cc.glasbey_light)[neighbor_ids % len(cc.glasbey_light)]
+        colors = np.array(glasbey1024)[neighbor_ids % len(glasbey1024)]
         assert neighbor_ids[0] == unit_id
 
         im = axis.imshow(
@@ -690,7 +697,7 @@ class NeighborCCGPlot(UnitPlot):
         ) = sorting_analysis.nearby_coarse_templates(
             unit_id, n_neighbors=self.n_neighbors + 1
         )
-        colors = np.array(cc.glasbey_light)[neighbor_ids % len(cc.glasbey_light)]
+        colors = np.array(glasbey1024)[neighbor_ids % len(glasbey1024)]
         # assert neighbor_ids[0] == unit_id
         neighbor_ids = neighbor_ids[1:]
 
@@ -947,6 +954,7 @@ def make_unit_summary(
     max_height=4,
     figsize=(11, 8.5),
     figure=None,
+    **other_global_params,
 ):
     # notify plots of global params
     for p in plots:
@@ -954,6 +962,7 @@ def make_unit_summary(
             channel_show_radius_um=channel_show_radius_um,
             amplitude_color_cutoff=amplitude_color_cutoff,
             pca_radius_um=pca_radius_um,
+            **other_global_params,
         )
 
     figure = layout.flow_layout(
@@ -983,9 +992,17 @@ def make_all_summaries(
     show_progress=True,
     overwrite=False,
     unit_ids=None,
+    **other_global_params,
 ):
     save_folder = Path(save_folder)
     save_folder.mkdir(exist_ok=True)
+    
+    global_params = dict(
+        channel_show_radius_um=channel_show_radius_um,
+        amplitude_color_cutoff=amplitude_color_cutoff,
+        pca_radius_um=pca_radius_um,
+        **other_global_params,
+    )
 
     n_jobs, Executor, context = get_pool(n_jobs, cls=CloudpicklePoolExecutor)
     with Executor(
@@ -995,15 +1012,13 @@ def make_all_summaries(
         initargs=(
             sorting_analysis,
             plots,
-            channel_show_radius_um,
-            amplitude_color_cutoff,
-            pca_radius_um,
             max_height,
             figsize,
             dpi,
             save_folder,
             image_ext,
             overwrite,
+            global_params,
         ),
     ) as pool:
         jobs = sorting_analysis.unit_ids
@@ -1070,15 +1085,13 @@ class SummaryJobContext:
         self,
         sorting_analysis,
         plots,
-        channel_show_radius_um,
-        amplitude_color_cutoff,
-        pca_radius_um,
         max_height,
         figsize,
         dpi,
         save_folder,
         image_ext,
         overwrite,
+        global_params,
     ):
         self.sorting_analysis = sorting_analysis
         self.plots = plots
@@ -1088,9 +1101,7 @@ class SummaryJobContext:
         self.save_folder = save_folder
         self.image_ext = image_ext
         self.overwrite = overwrite
-        self.channel_show_radius_um = channel_show_radius_um
-        self.amplitude_color_cutoff = amplitude_color_cutoff
-        self.pca_radius_um = pca_radius_um
+        self.global_params = global_params
 
 
 _summary_job_context = None
@@ -1122,12 +1133,10 @@ def _summary_job(unit_id):
         _summary_job_context.sorting_analysis,
         unit_id,
         plots=_summary_job_context.plots,
-        channel_show_radius_um=_summary_job_context.channel_show_radius_um,
-        amplitude_color_cutoff=_summary_job_context.amplitude_color_cutoff,
-        pca_radius_um=_summary_job_context.pca_radius_um,
         max_height=_summary_job_context.max_height,
         figsize=_summary_job_context.figsize,
         figure=fig,
+        **_summary_job_context.global_params,
     )
 
     # the save is done sort of atomically to help with the resuming and avoid
