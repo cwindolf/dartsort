@@ -84,6 +84,7 @@ class DARTsortAnalysis:
         template_config=no_realign_template_config,
         allow_template_reload=False,
         n_jobs_templates=0,
+        denoising_tsvd=None,
     ):
         """Try to re-load as much info as possible from the sorting itself
 
@@ -118,6 +119,7 @@ class DARTsortAnalysis:
                 overwrite=False,
                 motion_est=motion_est,
                 n_jobs=n_jobs_templates,
+                tsvd=denoising_tsvd,
             )
 
         return cls(
