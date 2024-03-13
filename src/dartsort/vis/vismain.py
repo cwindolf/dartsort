@@ -28,6 +28,7 @@ def visualize_sorting(
     make_unit_summaries=True,
     gt_sorting=None,
     superres_templates=True,
+    sorting_analysis=None,
     channel_show_radius_um=50.0,
     amplitude_color_cutoff=15.0,
     pca_radius_um=75.0,
@@ -40,7 +41,10 @@ def visualize_sorting(
 ):
     output_directory.mkdir(exist_ok=True, parents=True)
     if (output_directory / ".done").exists():
-        return
+        if overwrite:
+            (output_directory / ".done").unlink()
+        else:
+            return
 
     if sorting is None and sorting_path is not None:
         if sorting_path.name.endswith(".h5"):
@@ -74,20 +78,20 @@ def visualize_sorting(
             fig.savefig(scatter_reg, dpi=dpi)
             plt.close(fig)
 
-    sorting_analysis = None
     template_cfg = no_realign_template_config if superres_templates else basic_template_config
     if make_sorting_summaries and sorting.n_units > 1:
         sorting_summary = output_directory / "sorting_summary.png"
         if overwrite or not sorting_summary.exists():
-            sorting_analysis = DARTsortAnalysis.from_sorting(
-                recording=recording,
-                sorting=sorting,
-                motion_est=motion_est,
-                name=output_directory.stem,
-                n_jobs_templates=n_jobs_templates,
-                template_config=template_cfg,
-                allow_template_reload="match" in output_directory.stem,
-            )
+            if sorting_analysis is None:
+                sorting_analysis = DARTsortAnalysis.from_sorting(
+                    recording=recording,
+                    sorting=sorting,
+                    motion_est=motion_est,
+                    name=output_directory.stem,
+                    n_jobs_templates=n_jobs_templates,
+                    template_config=template_cfg,
+                    allow_template_reload="match" in output_directory.stem,
+                )
 
             fig = make_sorting_summary(
                 sorting_analysis,
