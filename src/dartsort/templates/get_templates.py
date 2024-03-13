@@ -171,11 +171,12 @@ def get_templates(
         min_count_at_shift=min_count_at_shift,
         device=device,
     )
-    raw_templates, low_rank_templates, snrs_by_channel = res
+    unit_ids, spike_counts, raw_templates, low_rank_templates, snrs_by_channel = res
 
     if raw_only:
         return dict(
             sorting=sorting,
+            unit_ids=unit_ids,
             templates=raw_templates,
             raw_templates=raw_templates,
             snrs_by_channel=snrs_by_channel,
@@ -192,6 +193,8 @@ def get_templates(
 
     return dict(
         sorting=sorting,
+        unit_ids=unit_ids,
+        spike_counts=spike_counts,
         templates=templates,
         raw_templates=raw_templates,
         low_rank_templates=low_rank_templates,
@@ -383,7 +386,8 @@ def get_all_shifted_raw_and_low_rank_templates(
     n_jobs, Executor, context, rank_queue = get_pool(
         n_jobs, with_rank_queue=True
     )
-    unit_ids = np.unique(sorting.labels)
+    unit_ids, spike_counts = np.unique(sorting.labels, return_counts=True)
+    spike_counts = spike_counts[unit_ids >= 0]
     unit_ids = unit_ids[unit_ids >= 0]
     raw = denoising_tsvd is None
     prefix = "Raw" if raw else "Denoised"
@@ -394,7 +398,7 @@ def get_all_shifted_raw_and_low_rank_templates(
         n_template_channels = len(registered_geom)
         registered_kdtree = KDTree(registered_geom)
 
-    n_units = sorting.labels.max() + 1
+    n_units = unit_ids.size
     raw_templates = np.zeros(
         (n_units, spike_length_samples, n_template_channels),
         dtype=recording.dtype,
@@ -449,16 +453,17 @@ def get_all_shifted_raw_and_low_rank_templates(
             if res is None:
                 continue
             units_chunk, raw_temps_chunk, low_rank_temps_chunk, snrs_chunk = res
-            raw_templates[units_chunk] = raw_temps_chunk
+            ix_chunk = np.isin(unit_ids, units_chunk)
+            raw_templates[ix_chunk] = raw_temps_chunk
             if not raw:
-                low_rank_templates[units_chunk] = low_rank_temps_chunk
-            snrs_by_channel[units_chunk] = snrs_chunk
+                low_rank_templates[ix_chunk] = low_rank_temps_chunk
+            snrs_by_channel[ix_chunk] = snrs_chunk
             if show_progress:
                 pbar.update(len(units_chunk))
         if show_progress:
             pbar.close()
 
-    return raw_templates, low_rank_templates, snrs_by_channel
+    return unit_ids, spike_counts, raw_templates, low_rank_templates, snrs_by_channel
 
 
 class TemplateProcessContext:
