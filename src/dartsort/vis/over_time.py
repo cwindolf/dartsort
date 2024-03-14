@@ -30,9 +30,10 @@ class OverTimePlot(layout.BasePlot):
 
 
 class UnitPlotOverTime(OverTimePlot):
-    def __init__(self, unit_plot, sharey=True):
+    def __init__(self, unit_plot, height=1, sharey=True):
+        self.height = height
         self.unit_plot = unit_plot
-        self.sharey = sharey
+        self.sharey = sharey and unit_plot.can_sharey
 
     def notify_global_params(self, **params):
         super().notify_global_params(**params)
@@ -43,68 +44,86 @@ class UnitPlotOverTime(OverTimePlot):
         axes = panel.subplots(
             ncols=len(chunk_sorting_analyses), sharey=self.sharey
         )
-        for ax, csa in zip(axes, chunk_sorting_analyses):
+        first = True
+        for j, (ax, csa) in enumerate(zip(axes, chunk_sorting_analyses)):
+            if unit_id not in csa.unit_ids:
+                ax.axis("off")
+                continue
             self.unit_plot.draw(None, csa, unit_id, axis=ax)
             if self.sharey:
                 ax.set_yticks([])
                 ax.set_ylabel("")
+            if not first:
+                lg = ax.get_legend()
+                if lg is not None:
+                    lg.remove()
+            first = False
 
 
 class SelfDistanceOverTime(OverTimePlot):
+    height = 1.5
+
+    def __init__(self, show_values=True):
+        super().__init__()
+        self.show_values = show_values
+
     def draw(self, panel, sorting_analysis, unit_id):
         chunk_sorting_analyses = sorting_analysis
-        imax, longax = panel.subplots(ncols=2, width_ratios=[1, 3])
+        imax, longax = panel.subplots(ncols=2, width_ratios=[1, 2])
         nchunks = len(chunk_sorting_analyses)
 
         temps = []
         counts = []
-        for csa in chunk_sorting_analyses:
+        chunkixs = []
+        for j, csa in enumerate(chunk_sorting_analyses):
             ctd = csa.coarse_template_data
             um = ctd.unit_mask(unit_id)
-            if not um.size:
-                temps.append(np.zeros_like(ctd.templates[0]))
-                counts.append(0)
+            if not um.sum():
                 continue
-            print(f"{um=} {ctd.unit_templates(unit_id).shape=}")
-            temps.append(ctd.unit_templates(unit_id)[0])
+            um = np.flatnonzero(um)
+            assert um.size == 1
+            um = um[0]
+            temps.append(ctd.templates[um])
             counts.append(ctd.spike_counts[um])
+            chunkixs.append(j)
         temps = np.stack(temps, axis=0)
         counts = np.ravel(counts)
-        assert counts.shape == (nchunks,)
-        chunks_td = templates.TemplateData(temps, np.arange(nchunks), counts)
+        chunkixs = np.array(chunkixs)
+        chunks_td = templates.TemplateData(temps, chunkixs, counts)
         chunks, dists, _, _ = merge.calculate_merge_distances(
             chunks_td, n_jobs=0
         )
-        assert np.array_equal(chunks, np.arange(nchunks))
 
         im = imax.imshow(
             dists,
             vmin=0,
-            vmax=self.dist_vmax,
+            vmax=1,
             cmap=plt.cm.RdGy,
             origin="lower",
             interpolation="none",
         )
+        imax.set_xticks(range(len(chunkixs)), chunkixs)
+        imax.set_yticks(range(len(chunkixs)), chunkixs)
         if self.show_values:
-            for (j, i), label in np.ndenumerate(neighbor_dists):
-                axis.text(i, j, f"{label:.2f}", ha="center", va="center")
-        plt.colorbar(im, ax=axis, shrink=0.3)
+            for (j, i), label in np.ndenumerate(dists):
+                imax.text(i, j, f"{label:.2f}", ha="center", va="center")
+        plt.colorbar(im, ax=imax, shrink=0.3)
         imax.set_title("inter-chunk template distances")
 
-        longax.plot(np.diagonal(dists, k=1))
+        longax.plot(chunkixs[:-1], np.diag(dists, k=1))
         longax.set_ylabel("dist between temps of chunk $i,i+1$")
         longax.set_xlabel("chunk index $i$")
-        long.set_title("neighboring chunk template distances")
+        longax.set_title("neighboring chunk template distances")
 
 
 over_time_plots = (
-    UnitPlotOverTime(unit.RawWaveformPlot()),
+    UnitPlotOverTime(unit.RawWaveformPlot(), height=2),
     SelfDistanceOverTime(),
     UnitPlotOverTime(unit.PCAScatter()),
     UnitPlotOverTime(unit.XZScatter()),
     UnitPlotOverTime(unit.TimeAmpScatter()),
-    UnitPlotOverTime(unit.NearbyCoarseTemplatesPlot()),
-    UnitPlotOverTime(unit.CoarseTemplateDistancePlot()),
+    UnitPlotOverTime(unit.NearbyCoarseTemplatesPlot(), height=2),
+    UnitPlotOverTime(unit.CoarseTemplateDistancePlot(), height=1.5),
 )
 
 
@@ -117,8 +136,9 @@ def make_all_over_time_summaries(
     channel_show_radius_um=50.0,
     amplitude_color_cutoff=15.0,
     pca_radius_um=75.0,
-    max_height=8,
+    max_height=None,
     figsize=(16, 8.5),
+    hspace=0.05,
     dpi=200,
     image_ext="png",
     n_jobs=0,
@@ -164,6 +184,8 @@ def make_all_over_time_summaries(
         for chunk_sorting in chunk_sortings
     ]
 
+    if max_height is None:
+        max_height = sum(p.height for p in plots)
     unit.make_all_summaries(
         chunk_sorting_analyses,
         save_folder,
@@ -173,6 +195,7 @@ def make_all_over_time_summaries(
         pca_radius_um=pca_radius_um,
         max_height=max_height,
         figsize=figsize,
+        hspace=hspace,
         dpi=dpi,
         image_ext=image_ext,
         n_jobs=n_jobs,
