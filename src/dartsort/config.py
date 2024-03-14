@@ -180,7 +180,7 @@ class TemplateConfig:
 
     # track template over time
     time_tracking: bool = False
-    chunk_size_s: int = 100
+    chunk_size_s: int = 300
 
 
 @dataclass(frozen=True)
@@ -253,9 +253,16 @@ class ClusteringConfig:
     radius_search: float = 5.0
     remove_clusters_smaller_than: int = 10
     noise_density: float = 0.0
+    distance_dependent_noise_density: bool = False
     attach_density_feature: bool = False
     triage_quantile_per_cluster: float = 0.0
     revert: bool = False
+    ramp_triage_per_cluster: bool = False
+    triage_quantile_before_clustering: float = 0.0
+    amp_no_triaging_before_clustering: float = 6.0
+    amp_no_triaging_after_clustering: float = 8.0
+    use_y_triaging: bool = True
+    remove_small_far_clusters: bool = False
 
     # -- ensembling
     ensemble_strategy: Optional[str] = "forward_backward"
