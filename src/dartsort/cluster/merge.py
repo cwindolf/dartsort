@@ -34,6 +34,7 @@ def merge_templates(
     min_spatial_cosine=0.0,
     conv_batch_size=128,
     units_batch_size=8,
+    denoising_tsvd=None,
     device=None,
     n_jobs=0,
     n_jobs_templates=0,
@@ -77,6 +78,7 @@ def merge_templates(
             device=device,
             save_npz_name=template_npz_filename,
             return_realigned_sorting=True,
+            tsvd=denoising_tsvd,
         )
 
     units, dists, shifts, template_snrs = calculate_merge_distances(
@@ -134,6 +136,7 @@ def merge_across_sortings(
     min_spatial_cosine=0.0,
     conv_batch_size=128,
     units_batch_size=8,
+    denoising_tsvd=None,
     device=None,
     n_jobs=0,
     n_jobs_templates=0,
@@ -161,6 +164,7 @@ def merge_across_sortings(
                 units_batch_size=units_batch_size,
                 device=device,
                 n_jobs=n_jobs,
+                denoising_tsvd=denoising_tsvd,
                 n_jobs_templates=n_jobs_templates,
                 show_progress=False,
             )
@@ -175,6 +179,7 @@ def merge_across_sortings(
             template_config,
             motion_est=motion_est,
             n_jobs=n_jobs_templates,
+            tsvd=denoising_tsvd,
             device=device,
         )
         template_data_b = TemplateData.from_config(
@@ -183,9 +188,10 @@ def merge_across_sortings(
             template_config,
             motion_est=motion_est,
             n_jobs=n_jobs_templates,
+            tsvd=denoising_tsvd,
             device=device,
         )
-        dists, shifts, snrs_a, snrs_b, units_a, units_b = cross_match_distance_matrix(
+        dists, shifts, snrs_a, snrs_b = cross_match_distance_matrix(
             template_data_a,
             template_data_b,
             superres_linkage=superres_linkage,
@@ -210,8 +216,8 @@ def merge_across_sortings(
             shifts,
             snrs_a,
             snrs_b,
-            units_a,
-            units_b,
+            template_data_a.unit_ids,
+            template_data_b.unit_ids,
             merge_distance_threshold=cross_merge_distance_threshold,
         )
 
@@ -406,9 +412,9 @@ def recluster(
     new_labels = fcluster(Z, merge_distance_threshold, criterion="distance")
 
     # update labels
-    labels_updated = sorting.labels.copy()
+    labels_updated = np.full_like(sorting.labels, -1)
     kept = np.flatnonzero(np.isin(sorting.labels, units))
-    _, flat_labels = np.unique(labels_updated[kept], return_inverse=True)
+    _, flat_labels = np.unique(sorting.labels[kept], return_inverse=True)
     labels_updated[kept] = new_labels[flat_labels]
 
     # update times according to shifts

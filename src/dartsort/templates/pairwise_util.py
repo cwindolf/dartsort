@@ -124,17 +124,17 @@ def compressed_convolve_to_h5(
             ]
 
             # upsampled shifted template indices for B
-            up_shifted_temp_ix_b = (
-                upsampled_shifted_template_index.upsampled_shifted_template_index[
-                    chunk_res.template_indices_b,
-                    chunk_res.shift_indices_b,
-                    chunk_res.upsampling_indices_b,
-                ]
-            )
+            up_shifted_temp_ix_b = upsampled_shifted_template_index.upsampled_shifted_template_index[
+                chunk_res.template_indices_b,
+                chunk_res.shift_indices_b,
+                chunk_res.upsampling_indices_b,
+            ]
 
             # store new set of indices
             new_pconv_indices = chunk_res.compression_index + n_pconvs
-            pconv_index[shifted_temp_ix_a, up_shifted_temp_ix_b] = new_pconv_indices
+            pconv_index[
+                shifted_temp_ix_a, up_shifted_temp_ix_b
+            ] = new_pconv_indices
 
             # store new pconvs
             n_new_pconvs = chunk_res.compressed_conv.shape[0]
@@ -144,10 +144,15 @@ def compressed_convolve_to_h5(
             n_pconvs += n_new_pconvs
 
         # write fixed size outputs
-        h5.create_dataset("shifts_a", data=template_shift_index_a.all_pitch_shifts)
-        h5.create_dataset("shifts_b", data=template_shift_index_b.all_pitch_shifts)
         h5.create_dataset(
-            "shifted_template_index_a", data=template_shift_index_a.template_shift_index
+            "shifts_a", data=template_shift_index_a.all_pitch_shifts
+        )
+        h5.create_dataset(
+            "shifts_b", data=template_shift_index_b.all_pitch_shifts
+        )
+        h5.create_dataset(
+            "shifted_template_index_a",
+            data=template_shift_index_a.template_shift_index,
         )
         h5.create_dataset(
             "upsampled_shifted_template_index_b",
@@ -243,7 +248,9 @@ def iterate_compressed_pairwise_convolutions(
         reduce_deconv_resid_norm=reduce_deconv_resid_norm,
     )
 
-    n_jobs, Executor, context, rank_queue = get_pool(n_jobs, with_rank_queue=True)
+    n_jobs, Executor, context, rank_queue = get_pool(
+        n_jobs, with_rank_queue=True
+    )
     with Executor(
         n_jobs,
         mp_context=context,
@@ -338,7 +345,9 @@ def conv_to_resid(
 
     # here, we just care about pairs of (superres) templates, not upsampling
     # or shifting. so, get unique such pairs.
-    pairs = np.c_[conv_result.template_indices_a, conv_result.template_indices_b]
+    pairs = np.c_[
+        conv_result.template_indices_a, conv_result.template_indices_b
+    ]
     pairs = np.unique(pairs, axis=0)
     n_pairs = len(pairs)
 
@@ -347,16 +356,25 @@ def conv_to_resid(
     shifts = np.zeros(n_pairs, dtype=int)
     template_indices_a, template_indices_b = pairs.T
 
-    # templates_a = template_data_a.templates[template_indices_a]
-    # template_a_norms = np.linalg.norm(templates_a, axis=(1, 2)) ** 2
-    # templates_b = template_data_b.templates[template_indices_b]
-    # template_b_norms = np.linalg.norm(templates_b, axis=(1, 2)) ** 2
-
     # low rank template norms
+    # produce these on common channel sets
+    # N, R, C
+    spatial_a = low_rank_templates_a.spatial_components[template_indices_a]
+    spatial_b = low_rank_templates_b.spatial_components[template_indices_b]
+    # N, R
     svs_a = low_rank_templates_a.singular_values[template_indices_a]
-    template_a_norms = torch.square(svs_a).sum(1).numpy(force=True)
     svs_b = low_rank_templates_b.singular_values[template_indices_b]
-    template_b_norms = torch.square(svs_b).sum(1).numpy(force=True)
+    active_a = torch.any(spatial_a > 0, dim=1).to(svs_a)
+    active_b = torch.any(spatial_b > 0, dim=1).to(svs_b)
+    active = active_a * active_b
+    com_spatial_sing_a = (spatial_a * active[:, None, :]) * svs_a[:, :, None]
+    com_spatial_sing_b = (spatial_b * active[:, None, :]) * svs_b[:, :, None]
+    template_a_norms = (
+        torch.square(com_spatial_sing_a).sum((1, 2)).numpy(force=True)
+    )
+    template_b_norms = (
+        torch.square(com_spatial_sing_b).sum((1, 2)).numpy(force=True)
+    )
 
     # now, compute reduction in norm of A after matching by B
     for j, (ix_a, ix_b) in enumerate(pairs):
@@ -378,7 +396,9 @@ def conv_to_resid(
             b = best_conv + inv_lambda
             a = template_b_norms[j] + inv_lambda
             scaling = (b / a).clip(amp_scale_min, amp_scale_max)
-            norm_reduction = 2.0 * scaling * b - np.square(scaling) * a - inv_lambda
+            norm_reduction = (
+                2.0 * scaling * b - np.square(scaling) * a - inv_lambda
+            )
         else:
             norm_reduction = 2.0 * best_conv - template_b_norms[j]
 
@@ -525,6 +545,7 @@ def compressed_convolve_pairs(
         max_shift=max_shift,
         conv_ignore_threshold=conv_ignore_threshold,
         batch_size=batch_size,
+        restrict_to_active=reduce_deconv_resid_norm,
     )
     if kept is not None:
         conv_ix = conv_ix[kept]
@@ -553,9 +574,13 @@ def compressed_convolve_pairs(
 
     # recover metadata
     temp_ix_a = temp_ix_a[ix_a]
-    shift_ix_a = np.searchsorted(template_shift_index_a.all_pitch_shifts, shift_a[ix_a])
+    shift_ix_a = np.searchsorted(
+        template_shift_index_a.all_pitch_shifts, shift_a[ix_a]
+    )
     temp_ix_b = temp_ix_b[ix_b]
-    shift_ix_b = np.searchsorted(template_shift_index_b.all_pitch_shifts, shift_b[ix_b])
+    shift_ix_b = np.searchsorted(
+        template_shift_index_b.all_pitch_shifts, shift_b[ix_b]
+    )
 
     res = CompressedConvResult(
         template_indices_a=temp_ix_a,
@@ -592,6 +617,7 @@ def correlate_pairs_lowrank(
     max_shift="full",
     conv_ignore_threshold=0.0,
     batch_size=128,
+    restrict_to_active=False,
 ):
     """Convolve pairs of low rank templates
 
@@ -637,17 +663,26 @@ def correlate_pairs_lowrank(
 
     # batch over n_pairs for memory reasons
     pconv = torch.zeros(
-        (n_pairs, 2 * max_shift + 1), dtype=spatial_a.dtype, device=spatial_a.device
+        (n_pairs, 2 * max_shift + 1),
+        dtype=spatial_a.dtype,
+        device=spatial_a.device,
     )
     for istart in range(0, n_pairs, batch_size):
         iend = min(istart + batch_size, n_pairs)
         ix = slice(istart, iend)
 
+        spatial_a_ = spatial_a[ix_a[conv_ix][ix]]
+        spatial_b_ = spatial_b[ix_b[conv_ix][ix]]
+        if restrict_to_active:
+            active_a = torch.any(spatial_a_ > 0, dim=1).to(spatial_a)
+            active_b = torch.any(spatial_b_ > 0, dim=1).to(spatial_b)
+            active = active_a * active_b
+            spatial_a_ = spatial_a_ * active[:, None, :]
+            spatial_b_ = spatial_b_ * active[:, None, :]
+
         # want conv filter: nco, 1, rank, t
-        template_a = torch.bmm(
-            temporal_a[ix_a[conv_ix][ix]], spatial_a[ix_a[conv_ix][ix]]
-        )
-        conv_filt = torch.bmm(spatial_b[ix_b[conv_ix][ix]], template_a.mT)
+        template_a = torch.bmm(temporal_a[ix_a[conv_ix][ix]], spatial_a_)
+        conv_filt = torch.bmm(spatial_b_, template_a.mT)
         conv_filt = conv_filt[:, None]  # (nco, 1, rank, t)
 
         # 1, nco, rank, t
@@ -706,11 +741,15 @@ def construct_shift_indices(
 
 def handle_shift_indices(units, unit_ids, template_shift_index):
     """Determine shifted template indices belonging to a set of units."""
-    shifted_temp_ix_to_unit = unit_ids[template_shift_index.shifted_temp_ix_to_temp_ix]
+    shifted_temp_ix_to_unit = unit_ids[
+        template_shift_index.shifted_temp_ix_to_temp_ix
+    ]
     if units is None:
         shifted_temp_ix = np.arange(template_shift_index.n_shifted_templates)
     else:
-        shifted_temp_ix = np.flatnonzero(np.isin(shifted_temp_ix_to_unit, units))
+        shifted_temp_ix = np.flatnonzero(
+            np.isin(shifted_temp_ix_to_unit, units)
+        )
 
     shift = template_shift_index.shifted_temp_ix_to_shift[shifted_temp_ix]
     temp_ix = template_shift_index.shifted_temp_ix_to_temp_ix[shifted_temp_ix]
@@ -826,7 +865,13 @@ def shift_deduplicated_pairs(
     # if no shifting, deduplication is the identity
     if not do_shifting:
         nco_range = torch.arange(nco, device=pair_ix_a.device)
-        return pair_ix_a, pair_ix_b, nco_range, nco_range, np.zeros(nco, dtype=int)
+        return (
+            pair_ix_a,
+            pair_ix_b,
+            nco_range,
+            nco_range,
+            np.zeros(nco, dtype=int),
+        )
 
     # shift deduplication. algorithm:
     # 1 for each shifted template, determine the set of registered channels
@@ -931,12 +976,15 @@ def get_upsampled_shifted_template_index(
     """
     n_shifted_templates = template_shift_index.n_shifted_templates
     n_templates, n_shifts = template_shift_index.template_shift_index.shape
-    max_upsample = compressed_upsampled_temporal.compressed_upsampling_map.shape[1]
+    max_upsample = (
+        compressed_upsampled_temporal.compressed_upsampling_map.shape[1]
+    )
 
     cur_up_shift_temp_ix = 0
     # fill with an invalid index
     upsampled_shifted_template_index = np.full(
-        (n_templates, n_shifts, max_upsample), n_shifted_templates * max_upsample
+        (n_templates, n_shifts, max_upsample),
+        n_shifted_templates * max_upsample,
     )
     usti2sti = []
     usti2ti = []
@@ -945,11 +993,17 @@ def get_upsampled_shifted_template_index(
         shifted_temps = template_shift_index.template_shift_index[i]
         valid_shifts = np.flatnonzero(shifted_temps < n_shifted_templates)
 
-        upsampled_temps = compressed_upsampled_temporal.compressed_upsampling_map[i]
-        unique_comp_up_inds, inverse = np.unique(upsampled_temps, return_inverse=True)
+        upsampled_temps = (
+            compressed_upsampled_temporal.compressed_upsampling_map[i]
+        )
+        unique_comp_up_inds, inverse = np.unique(
+            upsampled_temps, return_inverse=True
+        )
 
         for j in valid_shifts:
-            up_shift_inds = cur_up_shift_temp_ix + np.arange(unique_comp_up_inds.size)
+            up_shift_inds = cur_up_shift_temp_ix + np.arange(
+                unique_comp_up_inds.size
+            )
             upsampled_shifted_template_index[i, j] = up_shift_inds[inverse]
             cur_up_shift_temp_ix += up_shift_inds.size
 
@@ -1010,11 +1064,15 @@ def compressed_upsampled_pairs(
     conv_shifted_temp_ix_b = np.atleast_1d(shifted_temp_ix_b[ix_b[conv_ix]])
     upsampling_mask = (
         conv_shifted_temp_ix_b[:, None]
-        == upsampled_shifted_template_index.up_shift_temp_ix_to_shift_temp_ix[None, :]
+        == upsampled_shifted_template_index.up_shift_temp_ix_to_shift_temp_ix[
+            None, :
+        ]
     )
     conv_up_i, up_shift_up_i = np.nonzero(upsampling_mask)
     conv_compressed_upsampled_ix = (
-        upsampled_shifted_template_index.up_shift_temp_ix_to_comp_up_ix[up_shift_up_i]
+        upsampled_shifted_template_index.up_shift_temp_ix_to_comp_up_ix[
+            up_shift_up_i
+        ]
     )
     conv_dup = conv_ix[conv_up_i]
     # And, all ix_{a,b}[i] such that compression_ix[i] lands in
@@ -1097,7 +1155,9 @@ def coarse_approximate(
 
                 convs = pconv[inshift]
                 meanconv = convs.mean(dim=0, keepdims=True)
-                if (convs - meanconv).abs().max() < coarse_approx_error_threshold:
+                if (
+                    convs - meanconv
+                ).abs().max() < coarse_approx_error_threshold:
                     # do something
                     new_pconv.append(meanconv)
                     old_ix_to_new_ix[inshift] = cur_new_ix
@@ -1130,7 +1190,9 @@ def coarse_approximate(
                     supconvs = convs[insup]
 
                     meanconv = supconvs.mean(dim=0, keepdims=True)
-                    if (convs - meanconv).abs().max() < coarse_approx_error_threshold:
+                    if (
+                        convs - meanconv
+                    ).abs().max() < coarse_approx_error_threshold:
                         new_pconv.append(meanconv)
                         old_ix_to_new_ix[inshift[insup]] = cur_new_ix
                         cur_new_ix += 1
@@ -1177,11 +1239,9 @@ class ConvWorkerContext:
 
     def __post_init__(self):
         # to device
-        self.compressed_upsampled_temporal.compressed_upsampled_templates = (
-            torch.as_tensor(
-                self.compressed_upsampled_temporal.compressed_upsampled_templates,
-                device=self.device,
-            )
+        self.compressed_upsampled_temporal.compressed_upsampled_templates = torch.as_tensor(
+            self.compressed_upsampled_temporal.compressed_upsampled_templates,
+            device=self.device,
         )
         self.low_rank_templates_a.spatial_components = torch.as_tensor(
             self.low_rank_templates_a.spatial_components, device=self.device
@@ -1215,7 +1275,9 @@ def _conv_worker_init(rank_queue, device, kwargs):
     device = torch.device(device)
     if device.type == "cuda" and device.index is None:
         if torch.cuda.device_count() > 1:
-            device = torch.device("cuda", index=my_rank % torch.cuda.device_count())
+            device = torch.device(
+                "cuda", index=my_rank % torch.cuda.device_count()
+            )
 
     _conv_worker_context = ConvWorkerContext(device=device, **kwargs)
 

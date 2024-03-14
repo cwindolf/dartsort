@@ -389,8 +389,7 @@ def filter_standardize_rec(output_directory, filename_raw, dtype_raw,
 
     # Make directory to hold filtered batch files:
     filtered_location = os.path.join(output_directory, "filtered_files")
-    if not os.path.exists(filtered_location):
-        os.makedirs(filtered_location)
+    os.makedirs(filtered_location, exist_ok=True)
     
     if t_end is not None:
         n_batches = (t_end-t_start)//n_sec_chunk
