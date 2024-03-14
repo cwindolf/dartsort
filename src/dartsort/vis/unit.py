@@ -1021,9 +1021,10 @@ def make_all_summaries(
             global_params,
         ),
     ) as pool:
-        jobs = sorting_analysis.unit_ids
-        if unit_ids is not None:
-            jobs = unit_ids
+        jobs = unit_ids
+        if unit_ids is None:
+            jobs = sorting_analysis.unit_ids
+            
         results = pool.map(_summary_job, jobs)
         if show_progress:
             results = tqdm(
