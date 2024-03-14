@@ -127,6 +127,7 @@ def get_templates(
             sorting,
             raw_results["raw_templates"],
             raw_results["snrs_by_channel"],
+            raw_results["unit_ids"],
             max_shift=realign_max_sample_shift,
             trough_offset_samples=trough_offset_samples,
             recording_length_samples=recording.get_num_samples(),
@@ -249,6 +250,7 @@ def realign_sorting(
     sorting,
     templates,
     snrs_by_channel,
+    unit_ids,
     max_shift=20,
     trough_offset_samples=42,
     recording_length_samples=None,
@@ -264,8 +266,10 @@ def realign_sorting(
     template_peak_times = np.abs(template_maxchan_traces).argmax(1)
 
     # find unit sample time shifts
-    template_shifts = template_peak_times - (trough_offset_samples + max_shift)
-    template_shifts[np.abs(template_shifts) > max_shift] = 0
+    template_shifts_ = template_peak_times - (trough_offset_samples + max_shift)
+    template_shifts_[np.abs(template_shifts) > max_shift] = 0
+    template_shifts = np.zeros(sorting.labels.max() + 1, dtype=int)
+    template_shifts[unit_ids] = template_shifts_
 
     # create aligned spike train
     new_times = sorting.times_samples + template_shifts[sorting.labels]
