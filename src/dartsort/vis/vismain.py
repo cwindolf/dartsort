@@ -4,9 +4,10 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 from tqdm.auto import tqdm
 
-from ..util.analysis import DARTsortAnalysis, no_realign_template_config, basic_template_config
+from ..util.analysis import (DARTsortAnalysis, basic_template_config,
+                             no_realign_template_config)
 from ..util.data_util import DARTsortSorting
-from . import scatterplots, unit
+from . import over_time, scatterplots, unit
 from .sorting import make_sorting_summary
 
 try:
@@ -26,11 +27,14 @@ def visualize_sorting(
     make_scatterplots=True,
     make_sorting_summaries=True,
     make_unit_summaries=True,
+    make_animations=True,
     gt_sorting=None,
     superres_templates=True,
     channel_show_radius_um=50.0,
     amplitude_color_cutoff=15.0,
     pca_radius_um=75.0,
+    chunk_length_s=300.0,
+    frame_interval=1500,
     dpi=200,
     layout_max_height=4,
     layout_figsize=(11, 8.5),
@@ -96,6 +100,16 @@ def visualize_sorting(
                 figure=None,
             )
             fig.savefig(sorting_summary, dpi=dpi)
+
+        animation_png = output_directory / "animation.mp4"
+        if overwrite or not animation_png.exists():
+            over_time.sorting_scatter_animation(
+                sorting_analysis,
+                animation_png,
+                chunk_length_samples=chunk_length_s * recording.sampling_frequency,
+                n_jobs_templates=n_jobs_templates,
+                interval=frame_interval,
+            )
 
     if make_unit_summaries and sorting.n_units > 1:
         unit_summary_dir = output_directory / "single_unit_summaries"
