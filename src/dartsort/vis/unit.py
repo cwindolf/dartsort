@@ -29,6 +29,8 @@ from .waveforms import geomplot
 
 
 class UnitPlot(layout.BasePlot):
+    can_sharey = True
+
     def draw(self, panel, sorting_analysis, unit_id):
         raise NotImplementedError
 
@@ -167,11 +169,11 @@ class XZScatter(UnitPlot):
                 rasterized=True,
             )
         axis.set_xlabel("x (um)")
-        reg_str = "registered " * self.registered
+        reg_str = "reg " * self.registered
         axis.set_ylabel(reg_str + "z (um)")
-        reloc_str = "relocated " * self.relocate_amplitudes
+        reloc_str = "reloc " * self.relocate_amplitudes
         if not multi_unit and self.colorbar:
-            plt.colorbar(s, ax=axis, shrink=0.5, label=reloc_str + "amplitude (su)")
+            plt.colorbar(s, ax=axis, shrink=0.5, label=reloc_str + "amp (su)")
 
 
 class PCAScatter(UnitPlot):
@@ -203,30 +205,31 @@ class PCAScatter(UnitPlot):
             relocated=self.relocated,
             pca_radius_um=self.pca_radius_um,
         )
-        for uid in unit_id:
-            if multi_unit:
-                c = dict(color=glasbey1024[uid % len(glasbey1024)])
-                thisu = np.flatnonzero(sorting_analysis.sorting.labels[which] == uid)
-            else:
-                amps = sorting_analysis.amplitudes(
-                    which=which, relocated=self.relocate_amplitudes
+        if which is not None:
+            for uid in unit_id:
+                if multi_unit:
+                    c = dict(color=glasbey1024[uid % len(glasbey1024)])
+                    thisu = np.flatnonzero(sorting_analysis.sorting.labels[which] == uid)
+                else:
+                    amps = sorting_analysis.amplitudes(
+                        which=which, relocated=self.relocate_amplitudes
+                    )
+                    c = dict(c=np.minimum(amps, self.amplitude_color_cutoff))
+                    thisu = slice(None)
+                s = axis.scatter(
+                    *loadings[thisu].T,
+                    lw=0,
+                    s=3,
+                    **c,
+                    rasterized=True,
                 )
-                c = dict(c=np.minimum(amps, self.amplitude_color_cutoff))
-                thisu = slice(None)
-            s = axis.scatter(
-                *loadings[thisu].T,
-                lw=0,
-                s=3,
-                **c,
-                rasterized=True,
-            )
-        reloc_str = "relocated " * self.relocated
-        axis.set_xlabel(reloc_str + "per-unit PC1 (um)")
-        axis.set_ylabel(reloc_str + "per-unit PC2 (um)")
+        reloc_str = "reloc " * self.relocated
+        axis.set_xlabel(reloc_str + "PC1")
+        axis.set_ylabel(reloc_str + "PC2")
         if not multi_unit:
-            reloc_amp_str = "relocated " * self.relocate_amplitudes
-            if self.colorbar:
-                plt.colorbar(s, ax=axis, shrink=0.5, label=reloc_amp_str + "amplitude (su)")
+            reloc_amp_str = "reloc " * self.relocate_amplitudes
+            if which is not None and self.colorbar:
+                plt.colorbar(s, ax=axis, shrink=0.5, label=reloc_amp_str + "amp (su)")
 
         return axis
 
@@ -279,12 +282,12 @@ class TimeZScatter(UnitPlot):
                 **c,
                 rasterized=True,
             )
-        axis.set_xlabel("time (seconds)")
-        reg_str = "registered " * self.registered
+        axis.set_xlabel("time (s)")
+        reg_str = "reg " * self.registered
         axis.set_ylabel(reg_str + "z (um)")
-        reloc_str = "relocated " * self.relocate_amplitudes
+        reloc_str = "reloc " * self.relocate_amplitudes
         if not multi_unit:
-            plt.colorbar(s, ax=axis, shrink=0.5, label=reloc_str + "amplitude (su)")
+            plt.colorbar(s, ax=axis, shrink=0.5, label=reloc_str + "amp (su)")
 
 
 class TFeatScatter(UnitPlot):
@@ -318,11 +321,11 @@ class TFeatScatter(UnitPlot):
             )
             c = np.minimum(amps, self.amplitude_color_cutoff)
         s = axis.scatter(t, feat, c=c, lw=0, s=3, alpha=self.alpha, rasterized=True)
-        axis.set_xlabel("time (seconds)")
+        axis.set_xlabel("time (s)")
         axis.set_ylabel(self.feat_name)
         if self.color_by_amplitude:
-            reloc_str = "relocated " * self.relocate_amplitudes
-            plt.colorbar(s, ax=axis, shrink=0.5, label=reloc_str + "amplitude (su)")
+            reloc_str = "reloc " * self.relocate_amplitudes
+            plt.colorbar(s, ax=axis, shrink=0.5, label=reloc_str + "amp (su)")
 
 
 class TimeAmpScatter(UnitPlot):
@@ -335,8 +338,9 @@ class TimeAmpScatter(UnitPlot):
         self.amplitude_color_cutoff = amplitude_color_cutoff
         self.alpha = alpha
 
-    def draw(self, panel, sorting_analysis, unit_id):
-        axis = panel.subplots()
+    def draw(self, panel, sorting_analysis, unit_id, axis=None):
+        if axis is None:
+            axis = panel.subplots()
         
         unit_id = np.atleast_1d(unit_id)
         multi_unit = unit_id.size > 1
@@ -352,9 +356,9 @@ class TimeAmpScatter(UnitPlot):
                 alpha=1 if multi_unit else self.alpha,
             )
             axis.scatter(t, amps, lw=0, s=3, rasterized=True, **c)
-        axis.set_xlabel("time (seconds)")
-        reloc_str = "relocated " * self.relocate_amplitudes
-        axis.set_ylabel(reloc_str + "amplitude (su)")
+        axis.set_xlabel("time (s)")
+        reloc_str = "reloc " * self.relocate_amplitudes
+        axis.set_ylabel(reloc_str + "amp (su)")
 
 
 # -- waveform plots
@@ -364,6 +368,7 @@ class WaveformPlot(UnitPlot):
     kind = "waveform"
     width = 2
     height = 2
+    can_sharey = False
 
     def __init__(
         self,
@@ -378,7 +383,7 @@ class WaveformPlot(UnitPlot):
         superres_template_cmap=plt.cm.winter,
         show_template=True,
         template_color="orange",
-        max_abs_template_scale=1.35,
+        max_abs_template_scale=1.5,
         legend=True,
         template_index=None,
         title=None,
@@ -564,6 +569,7 @@ class NearbyCoarseTemplatesPlot(UnitPlot):
     kind = "neighbors"
     width = 2
     height = 2
+    can_sharey = False
 
     def __init__(self, channel_show_radius_um=50, n_neighbors=5, legend=True):
         super().__init__()
@@ -584,6 +590,9 @@ class NearbyCoarseTemplatesPlot(UnitPlot):
             unit_id, n_neighbors=self.n_neighbors
         )
         colors = np.array(glasbey1024)[neighbor_ids % len(glasbey1024)]
+        if not np.equal(neighbor_ids, unit_id).any():
+            axis.axis("off")
+            return
         assert neighbor_ids[0] == unit_id
         chan = neighbor_coarse_templates[0].ptp(0).argmax()
         ci = sorting_analysis.show_channel_index(self.channel_show_radius_um)
@@ -655,6 +664,9 @@ class CoarseTemplateDistancePlot(UnitPlot):
             unit_id, n_neighbors=self.n_neighbors
         )
         colors = np.array(glasbey1024)[neighbor_ids % len(glasbey1024)]
+        if not np.equal(neighbor_ids, unit_id).any():
+            axis.axis("off")
+            return
         assert neighbor_ids[0] == unit_id
 
         im = axis.imshow(
@@ -953,6 +965,7 @@ def make_unit_summary(
     plots=default_plots,
     max_height=4,
     figsize=(11, 8.5),
+    hspace=0.1,
     figure=None,
     **other_global_params,
 ):
@@ -969,6 +982,7 @@ def make_unit_summary(
         plots,
         max_height=max_height,
         figsize=figsize,
+        hspace=hspace,
         figure=figure,
         sorting_analysis=sorting_analysis,
         unit_id=unit_id,
@@ -986,6 +1000,7 @@ def make_all_summaries(
     pca_radius_um=75.0,
     max_height=4,
     figsize=(11, 8.5),
+    hspace=0.1,
     dpi=200,
     image_ext="png",
     n_jobs=0,
@@ -1014,6 +1029,7 @@ def make_all_summaries(
             plots,
             max_height,
             figsize,
+            hspace,
             dpi,
             save_folder,
             image_ext,
@@ -1088,6 +1104,7 @@ class SummaryJobContext:
         plots,
         max_height,
         figsize,
+        hspace,
         dpi,
         save_folder,
         image_ext,
@@ -1098,6 +1115,7 @@ class SummaryJobContext:
         self.plots = plots
         self.max_height = max_height
         self.figsize = figsize
+        self.hspace = hspace
         self.dpi = dpi
         self.save_folder = save_folder
         self.image_ext = image_ext
@@ -1133,6 +1151,7 @@ def _summary_job(unit_id):
     make_unit_summary(
         _summary_job_context.sorting_analysis,
         unit_id,
+        hspace=_summary_job_context.hspace,
         plots=_summary_job_context.plots,
         max_height=_summary_job_context.max_height,
         figsize=_summary_job_context.figsize,

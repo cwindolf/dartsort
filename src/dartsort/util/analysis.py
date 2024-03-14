@@ -562,6 +562,8 @@ class DARTsortAnalysis:
             max_count=max_count,
             channel_dist_p=2,
         )
+        if waveforms is None:
+            return None, None
 
         # remove chans with no signal at all
         not_entirely_nan_channels = np.flatnonzero(
