@@ -257,7 +257,6 @@ class FeatureSplit(SplitStrategy):
         self.use_time_feature = use_time_feature
         self.time_scale = time_scale
         self.return_localization_features = return_localization_features
-        print(f"{self.use_localization_features=} {self.use_ptp=} {self.n_pca_features=} {self.pca_imputation=}")
 
         # hdbscan parameters
         self.min_cluster_size = min_cluster_size
@@ -376,12 +375,6 @@ class FeatureSplit(SplitStrategy):
                 spread *= mad_sigma(loc_features[kept]).mean()
             features.append(spread)
 
-        print(f"{self.use_localization_features=}")
-        if self.use_localization_features:
-            print(f"{self.localization_features[in_unit].shape=}")
-        print(f"{self.use_ptp=}")
-        print(f"{do_pca=}")
-        print(f"{features=}")
         features = np.column_stack([f[kept] for f in features])
 
         if self.cluster_alg == "hdbscan" and features.shape[0] > self.min_cluster_size:
