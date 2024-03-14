@@ -29,7 +29,7 @@ class OverTimePlot(layout.BasePlot):
         raise NotImplementedError
 
 
-class UnitPlotOverTime(layout.BasePlot):
+class UnitPlotOverTime(OverTimePlot):
     def __init__(self, unit_plot, sharey=True):
         self.unit_plot = unit_plot
         self.sharey = sharey
@@ -38,7 +38,8 @@ class UnitPlotOverTime(layout.BasePlot):
         super().notify_global_params(**params)
         self.unit_plot.notify_global_params(**params)
 
-    def draw(self, panel, chunk_sorting_analyses, unit_id):
+    def draw(self, panel, sorting_analysis, unit_id):
+        chunk_sorting_analyses = sorting_analysis
         axes = panel.subplots(
             ncols=len(chunk_sorting_analyses), sharey=self.sharey
         )
@@ -50,29 +51,29 @@ class UnitPlotOverTime(layout.BasePlot):
 
 
 class SelfDistanceOverTime(OverTimePlot):
-    def draw(self, panel, chunk_sorting_analyses, unit_id):
+    def draw(self, panel, sorting_analysis, unit_id):
+        chunk_sorting_analyses = sorting_analysis
         imax, longax = panel.subplots(ncols=2, width_ratios=[1, 3])
         nchunks = len(chunk_sorting_analyses)
 
-        temps = np.stack(
-            [
-                csa.coarse_template_data.unit_templates(unit_id)[0]
-                for csa in chunk_sorting_analyses
-            ],
-            axis=0,
-        )
-        counts = [
-            csa.coarse_template_data.spike_counts(
-                csa.coarse_template_data.unit_mask(unit_id)
-            )
-            for csa in chunk_sorting_analyses
-        ]
+        temps = []
+        counts = []
+        for csa in chunk_sorting_analyses:
+            ctd = csa.coarse_template_data
+            um = ctd.unit_mask(unit_id)
+            if not um.size:
+                temps.append(np.zeros_like(ctd.templates[0]))
+                counts.append(0)
+                continue
+            print(f"{um=} {ctd.unit_templates(unit_id).shape=}")
+            temps.append(ctd.unit_templates(unit_id)[0])
+            counts.append(ctd.spike_counts[um])
+        temps = np.stack(temps, axis=0)
         counts = np.ravel(counts)
         assert counts.shape == (nchunks,)
         chunks_td = templates.TemplateData(temps, np.arange(nchunks), counts)
         chunks, dists, _, _ = merge.calculate_merge_distances(
-            chunks_td,
-            n_jobs=0,
+            chunks_td, n_jobs=0
         )
         assert np.array_equal(chunks, np.arange(nchunks))
 
@@ -102,8 +103,8 @@ over_time_plots = (
     UnitPlotOverTime(unit.PCAScatter()),
     UnitPlotOverTime(unit.XZScatter()),
     UnitPlotOverTime(unit.TimeAmpScatter()),
-    UnitPlotOverTime(NearbyCoarseTemplatesPlot()),
-    UnitPlotOverTime(CoarseTemplateDistancePlot()),
+    UnitPlotOverTime(unit.NearbyCoarseTemplatesPlot()),
+    UnitPlotOverTime(unit.CoarseTemplateDistancePlot()),
 )
 
 
