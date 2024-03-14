@@ -282,7 +282,7 @@ def realign_sorting(
     # trim templates
     aligned_spike_len = t - 2 * max_shift
     aligned_templates = np.empty((n, aligned_spike_len, c))
-    for i, dt in enumerate(template_shifts):
+    for i, dt in enumerate(template_shifts_):
         aligned_templates[i] = templates[
             i, max_shift + dt : max_shift + dt + aligned_spike_len
         ]
