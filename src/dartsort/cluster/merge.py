@@ -10,7 +10,7 @@ from dartsort.util.data_util import DARTsortSorting, combine_sortings
 from scipy.cluster.hierarchy import fcluster, linkage
 from scipy.sparse import coo_array
 from scipy.sparse.csgraph import maximum_bipartite_matching
-from tqdm.auto import tqdm
+from tqdm.auto import tqdm, trange
 
 from . import cluster_util
 
@@ -81,8 +81,7 @@ def merge_templates(
             tsvd=denoising_tsvd,
         )
 
-    units, dists, shifts, template_snrs = calculate_merge_distances(
-        template_data,
+    dist_matrix_kwargs = dict(
         superres_linkage=superres_linkage,
         sym_function=sym_function,
         max_shift_samples=max_shift_samples,
@@ -94,9 +93,13 @@ def merge_templates(
         min_spatial_cosine=min_spatial_cosine,
         conv_batch_size=conv_batch_size,
         units_batch_size=units_batch_size,
+    )
+    units, dists, shifts, template_snrs = calculate_merge_distances(
+        template_data,
         device=device,
         n_jobs=n_jobs,
         show_progress=show_progress,
+        **dist_matrix_kwargs,
     )
 
     # now run hierarchical clustering
@@ -108,6 +111,8 @@ def merge_templates(
         template_snrs,
         merge_distance_threshold=merge_distance_threshold,
         link=linkage,
+        template_data=template_data,
+        dist_matrix_kwargs=dist_matrix_kwargs,
     )
 
     if reorder_by_depth:
@@ -395,6 +400,8 @@ def recluster(
     template_snrs,
     merge_distance_threshold=0.25,
     link="complete",
+    template_data=None,
+    dist_matrix_kwargs=None,
 ):
     # upper triangle not including diagonal, aka condensed distance matrix in scipy
     pdist = dists[np.triu_indices(dists.shape[0], k=1)]
@@ -407,7 +414,12 @@ def recluster(
 
     pdist[~finite] = 1_000_000 + pdist[finite].max()
     # complete linkage: max dist between all pairs across clusters.
-    Z = linkage(pdist, method=link)
+    if link == "weighted_template":
+        if dist_matrix_kwargs is None:
+            dist_matrix_kwargs = {}
+        Z = weighted_template_linkage(dists, units, template_data, **dist_matrix_kwargs)
+    else:
+        Z = linkage(pdist, method=link)
     # extract flat clustering using our max dist threshold
     new_labels = fcluster(Z, merge_distance_threshold, criterion="distance")
 
@@ -604,3 +616,95 @@ def combine_templates(template_data_a, template_data_b):
     cross_mask[: ids_a.size, ids_b.size :] = True
 
     return template_data, cross_mask, ids_a, ids_b
+
+
+def weighted_template_linkage(
+    dists, units, template_data, show_progress=True, **dist_matrix_kwargs
+):
+    """Custom linkage in the style of scipy
+
+    Return format is an array whose rows represent merges:
+     [cluster id 1, cluster id 2, distance between those, size of new cluster]
+
+    How are new clusters represented in these rows? The final word is:
+        At the ith iteration, clusters with indices Z[i,0] and Z[i,1]
+        are combined to form cluster n+i. A cluster with an index less
+        than n corresponds to one of the n original observations.
+
+    TODO: This recomputes SVDs many times. If this is a keeper let's get rid of that.
+    """
+    n0 = n = units.size
+    assert dists.shape == (n, n)
+    templates = template_data.templates
+    assert templates.shape[0] == n
+    assert np.array_equal(np.unique(template_data.unit_ids), units)
+    assert np.all(np.diff(template_data.unit_ids) >= 0)
+    weights = template_data.spike_counts
+
+    # these don't matter anymore -- signaling that to you, reader.
+    # it's all arange indexed from here on out.
+    del units, template_data
+
+    # dists and cci will change shape as merges are made
+    # cci[j] will be the (possibly merged) cluster id of row/col j of dists
+    current_cluster_index = np.arange(n)
+    current_cluster_counts = np.ones(n)
+
+    Z = np.zeros((n - 1, 4))
+    # while there is a merge to be made...
+    triui, triuj = np.triu_indices_from(dists, k=1)
+    iterator = (
+        trange(n, desc="Weighted template linkage") if show_progress else range(n)
+    )
+    for ix in iterator:
+        # find best new pair
+        best = dists[triui, triuj].argmin()
+        ii = triui[best]
+        jj = triuj[best]
+        keep_ix = min(ii, jj)
+        bye_ix = max(ii, jj)
+
+        # add them to the linkage
+        dist = dists[ii, jj]
+        count = current_cluster_counts[ii] + current_cluster_counts[jj]
+        ci = current_cluster_index[ii]
+        cj = current_cluster_index[jj]
+        Z[ix] = ci, cj, dist, count
+
+        # weighted sum their templates
+        counts = weights[[ii, jj]]
+        total = counts.sum()
+        w = counts / total()
+        temp = (templates[[ii, jj]] * w[:, None, None]).sum(0)
+
+        # update templates and spike counts
+        keep_mask = np.flatnonzero(np.arange(n) != bye_ix)
+        n = keep_mask.size
+        templates = templates[keep_mask]
+        templates[keep_ix] = temp
+        weights = weights[keep_mask]
+        weights[keep_ix] = total
+
+        # update cci and ccc
+        current_cluster_index = current_cluster_index[keep_mask]
+        current_cluster_index[keep_ix] = n0 + ix
+        current_cluster_counts[keep_ix] = current_cluster_counts[[ii, jj]].sum()
+        current_cluster_counts = current_cluster_counts[keep_mask]
+
+        # compute one-to-all new template distances and update distance matrix
+        temp_data = TemplateData(
+            templates[[keep_ix]], unit_ids=np.arange(1), spike_counts=np.array([total])
+        )
+        temps_data = TemplateData(
+            templates, unit_ids=np.arange(n), spike_counts=weights
+        )
+        dist, *_ = cross_match_distance_matrix(
+            temp_data, temps_data, **dist_matrix_kwargs
+        )
+        dists[keep_ix, :] = dists[:, keep_ix] = dist
+        dists = dists[keep_mask[:, None], keep_mask[None, :]]
+
+        # and don't forget the triu inds. please.
+        triui, triuj = np.triu_indices_from(dists, k=1)
+
+    return Z
