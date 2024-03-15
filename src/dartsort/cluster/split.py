@@ -190,10 +190,10 @@ class FeatureSplit(SplitStrategy):
         sigma_local=5,
         sigma_local_low=None,
         sigma_regional=None,
-        noise_density=0.1,
+        noise_density=0.0,
         n_neighbors_search=20,
         radius_search=5.0,
-        triage_quantile_per_cluster=0.2,
+        triage_quantile_per_cluster=0.,
         remove_clusters_smaller_than=25,
         reassign_outliers=False,
         random_state=0,
@@ -327,6 +327,13 @@ class FeatureSplit(SplitStrategy):
             if not self.use_ptp:
                 loc_features = loc_features[:, :2]
             features.append(loc_features)
+        elif self.use_ptp:
+            loc_features = self.localization_features[in_unit, 2]
+            if self.relocated:
+                loc_features[kept] = self.localization_feature_scales[2] * np.log(
+                    self.log_c + reloc_amplitudes
+                )
+            features.append(loc_features)
 
         if self.use_time_feature:
             features.append(self.t_s[in_unit] * self.time_scale)
@@ -376,12 +383,12 @@ class FeatureSplit(SplitStrategy):
                 spread *= mad_sigma(loc_features[kept]).mean()
             features.append(spread)
 
-        print(f"{self.use_localization_features=}")
-        if self.use_localization_features:
-            print(f"{self.localization_features[in_unit].shape=}")
-        print(f"{self.use_ptp=}")
-        print(f"{do_pca=}")
-        print(f"{features=}")
+        # print(f"{self.use_localization_features=}")
+        # if self.use_localization_features:
+        #     print(f"{self.localization_features[in_unit].shape=}")
+        # print(f"{self.use_ptp=}")
+        # print(f"{do_pca=}")
+        # print(f"{features=}")
         features = np.column_stack([f[kept] for f in features])
 
         if self.cluster_alg == "hdbscan" and features.shape[0] > self.min_cluster_size:
@@ -869,10 +876,10 @@ class FeatureSplit(SplitStrategy):
         self.channels = h5["channels"][:]
         self.match_distance = pdist(self.geom).min() / 2
 
-        if self.use_localization_features or self.relocated or self.use_time_feature:
+        if self.use_localization_features or self.use_ptp or self.relocated or self.use_time_feature or self.n_pca_features>0:
             self.t_s = h5["times_seconds"][:]
 
-        if self.use_localization_features or self.relocated:
+        if self.use_localization_features or self.use_ptp  or self.relocated or self.n_pca_features>0:
             self.xyza = h5[localizations_dataset_name][:]
             # registered spike positions (=originals if not relocated)
             self.z_reg = self.z = self.xyza[:, 2]
@@ -899,7 +906,7 @@ class FeatureSplit(SplitStrategy):
         ):
             self.amplitude_vectors = h5[amplitude_vectors_dataset_name]
 
-        if self.use_localization_features:
+        if self.use_localization_features or self.use_ptp :
             self.localization_features = np.c_[
                 self.xyza[:, 0],
                 self.z_reg,

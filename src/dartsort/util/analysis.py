@@ -82,7 +82,7 @@ class DARTsortAnalysis:
         motion_est=None,
         name=None,
         template_config=no_realign_template_config,
-        allow_template_reload=False,
+        allow_template_reload=False, #CHANGE THIS TO FALSE
         n_jobs_templates=0,
     ):
         """Try to re-load as much info as possible from the sorting itself
@@ -101,6 +101,7 @@ class DARTsortAnalysis:
 
         have_templates = False
         if allow_template_reload:
+            # template_npz = hdf5_path.parent / "chunk_0_matching0_models/template_data_coarse.npz"
             template_npz = model_dir / "template_data.npz"
             have_templates = template_npz.exists()
             if have_templates:
@@ -342,11 +343,17 @@ class DARTsortAnalysis:
         return show_geom
 
     def show_channel_index(
-        self, channel_show_radius_um=50, channel_dist_p=np.inf
+        self, channel_show_radius_um=50, channel_dist_p=np.inf, max_n_chan=None,
     ):
-        return make_channel_index(
+        show_ci = make_channel_index(
             self.show_geom, channel_show_radius_um, p=channel_dist_p
         )
+        if max_n_chan is not None and max_n_chan < show_ci.shape[1]:
+            
+            show_ci = show_ci[:, ::int(show_ci.shape[1])//max_n_chan]
+        return show_ci
+        
+        
 
     # spike feature loading methods
 
@@ -397,9 +404,103 @@ class DARTsortAnalysis:
 
     # cluster-dependent feature loading methods
 
+    def max_chan_waveforms_over_time(
+        self,
+        unit_id,
+        which=None,
+        template_index=None,
+        max_count=250,
+        random_seed=0,
+        trough_offset_samples=42,
+        spike_length_samples=121,
+        channel_dist_p=np.inf,
+        chunk_size_s=300,
+    ):
+        
+        if which is None:
+            which = self.in_unit(unit_id)
+        if template_index is not None:
+            assert template_index in self.unit_template_indices(unit_id)
+            which = self.in_template(template_index)
+        
+        if not which.size:
+            return (
+                which,
+                None,
+                None,
+                self.show_geom,
+                self.show_channel_index(
+                    channel_show_radius_um=channel_show_radius_um,
+                    channel_dist_p=channel_dist_p,
+                    max_n_chan=max_n_chan,
+                ),
+            )
+
+        channels, counts  = np.unique(self.sorting.channels[which], return_counts=True)
+        max_chan = channels[counts.argmax()]
+
+        chunk_samples = (
+            self.recording.sampling_frequency * chunk_size_s
+        )
+        n_chunks = self.recording.get_num_samples() / chunk_samples
+        # we'll count the remainder as a chunk if it's at least 2/3 of one
+        n_chunks = np.floor(n_chunks) + (n_chunks - np.floor(n_chunks) > 0.66)
+        n_chunks = int(max(1, n_chunks))
+
+
+        # evenly divide the recording into chunks
+        assert self.recording.get_num_segments() == 1
+        start_time_s, end_time_s = self.recording._recording_segments[
+            0
+        ].sample_index_to_time(np.array([0, self.recording.get_num_samples() - 1]))
+        chunk_times_s = np.linspace(start_time_s, end_time_s, num=n_chunks + 1)
+        chunk_time_ranges_s = list(zip(chunk_times_s[:-1], chunk_times_s[1:]))
+
+        which_chunks = []
+        for chunk_time_range in chunk_time_ranges_s: 
+            which_chunks.append(
+                which[np.logical_and(
+                    self.sorting.times_seconds[which]>=chunk_time_range[0], 
+                    self.sorting.times_seconds[which]<chunk_time_range[1]
+                )
+                ]
+            )
+
+        waveforms_all_chunks = []
+
+        for which_chunk in which_chunks:
+            if max_count is None:
+                max_count = which_chunk.size
+            if which_chunk.size > max_count:
+                rg = np.random.default_rng(0)
+                which_chunk = rg.choice(which_chunk, size=max_count, replace=False)
+                which_chunk.sort()
+            if not which_chunk.size:
+                #what to do here? retrun one 0 wf for now
+                waveforms_all_chunks.append(np.zeros((1, spike_length_samples, 1)))
+            else:
+                # read waveforms from disk
+                load_ci = np.arange(len(self.show_geom))[:, None]
+                
+                waveforms_all_chunks.append(read_waveforms_channel_index(
+                    self.recording,
+                    self.times_samples(which=which_chunk),
+                    load_ci,
+                    # Here, read on one channel, fixed!
+                    np.full(which.shape, max_chan),
+                    trough_offset_samples=trough_offset_samples,
+                    spike_length_samples=spike_length_samples,
+                    fill_value=np.nan,
+                ))
+        
+        # Need to reshape differently
+        return which, waveforms_all_chunks, max_chan, self.show_geom, load_ci
+    
+
     def unit_raw_waveforms(
         self,
         unit_id,
+        max_n_chan=None,
         which=None,
         template_index=None,
         max_count=250,
@@ -430,6 +531,7 @@ class DARTsortAnalysis:
                 self.show_channel_index(
                     channel_show_radius_um=channel_show_radius_um,
                     channel_dist_p=channel_dist_p,
+                    max_n_chan=max_n_chan,
                 ),
             )
 
@@ -440,6 +542,7 @@ class DARTsortAnalysis:
             load_ci = self.show_channel_index(
                 channel_show_radius_um=channel_show_radius_um,
                 channel_dist_p=channel_dist_p,
+                max_n_chan=max_n_chan,
             )
         waveforms = read_waveforms_channel_index(
             self.recording,
@@ -471,12 +574,15 @@ class DARTsortAnalysis:
             channel_show_radius_um=channel_show_radius_um,
             channel_dist_p=channel_dist_p,
             relocated=relocated,
-        )
+            max_n_chan=max_n_chan,
+        )   
+            
         return which, waveforms, max_chan, show_geom, show_channel_index
 
     def unit_tpca_waveforms(
         self,
         unit_id,
+        max_n_chan=None,
         template_index=None,
         max_count=250,
         random_seed=0,
@@ -501,6 +607,7 @@ class DARTsortAnalysis:
                 self.show_channel_index(
                     channel_show_radius_um=channel_show_radius_um,
                     channel_dist_p=channel_dist_p,
+                    max_n_chan=max_n_chan,
                 ),
             )
 
@@ -532,6 +639,7 @@ class DARTsortAnalysis:
             channel_show_radius_um=channel_show_radius_um,
             channel_dist_p=channel_dist_p,
             relocated=relocated,
+            max_n_chan=max_n_chan,
         )
         return which, waveforms, max_chan, show_geom, show_channel_index
 
@@ -631,12 +739,14 @@ class DARTsortAnalysis:
         channel_show_radius_um=75,
         channel_dist_p=np.inf,
         relocated=False,
+        max_n_chan=None,
     ):
         geom = self.recording.get_channel_locations()
         show_geom = self.show_geom
         show_channel_index = self.show_channel_index(
             channel_show_radius_um=channel_show_radius_um,
             channel_dist_p=channel_dist_p,
+            max_n_chan=max_n_chan,
         )
 
         # max_chan = self.unit_max_channel(unit_id)
@@ -644,6 +754,7 @@ class DARTsortAnalysis:
 
         show_chans = show_channel_index[max_chan]
         show_chans = show_chans[show_chans < len(show_geom)]
+            
         show_channel_index = np.broadcast_to(
             show_chans[None], (len(show_geom), show_chans.size)
         )

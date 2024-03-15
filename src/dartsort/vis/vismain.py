@@ -21,6 +21,7 @@ def visualize_sorting(
     recording,
     sorting,
     output_directory,
+    sorting_previous_step=None,
     sorting_path=None,
     motion_est=None,
     make_scatterplots=True,
@@ -33,13 +34,13 @@ def visualize_sorting(
     pca_radius_um=75.0,
     dpi=200,
     layout_max_height=4,
-    layout_figsize=(11, 8.5),
+    layout_figsize=(30, 15),
     n_jobs=0,
     n_jobs_templates=0,
     overwrite=False,
 ):
     output_directory.mkdir(exist_ok=True, parents=True)
-    if (output_directory / ".done").exists():
+    if (output_directory / ".done").exists() and not overwrite:
         return
 
     if sorting is None and sorting_path is not None:
@@ -86,7 +87,7 @@ def visualize_sorting(
                 name=output_directory.stem,
                 n_jobs_templates=n_jobs_templates,
                 template_config=template_cfg,
-                allow_template_reload="match" in output_directory.stem,
+                allow_template_reload=True, #"match" in output_directory.stem,
             )
 
             fig = make_sorting_summary(
@@ -120,13 +121,14 @@ def visualize_sorting(
                 name=output_directory.stem,
                 n_jobs_templates=n_jobs_templates,
                 template_config=template_cfg,
-                allow_template_reload="match" in output_directory.stem,
+                allow_template_reload=True, #"match" in output_directory.stem,
             )
 
         if not summaries_done:
             unit.make_all_summaries(
                 sorting_analysis,
                 unit_summary_dir,
+                sorting_previous_step=sorting_previous_step,
                 channel_show_radius_um=channel_show_radius_um,
                 amplitude_color_cutoff=amplitude_color_cutoff,
                 pca_radius_um=pca_radius_um,

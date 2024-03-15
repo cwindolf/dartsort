@@ -337,7 +337,7 @@ def density_peaks_clustering(
     if noise_density and l2_norm is None:
         nhdn[density <= noise_density] = n
 
-    if distance_dependent_noise_density and noise_density is not None:
+    if distance_dependent_noise_density and noise_density>0:
         dist = np.sqrt(((np.c_[X[inliers_first, 0], z_not_reg[inliers_first]][:, None] - geom[None])**2).sum(2)).min(1)
         noise_density_dist = np.minimum(np.maximum(dist - min_distance_noise_density, 0), min_distance_noise_density_10 - min_distance_noise_density) * (max_noise_density-noise_density) / (min_distance_noise_density_10 - min_distance_noise_density) + noise_density
         noise_density_dist[X[inliers_first, 2]>scales[2]*np.log(log_c+amp_lowest_noise_density)]=2

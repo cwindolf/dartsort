@@ -406,8 +406,9 @@ def recluster(
     new_labels = fcluster(Z, merge_distance_threshold, criterion="distance")
 
     # update labels
-    labels_updated = sorting.labels.copy()
-    kept = np.flatnonzero(np.isin(sorting.labels, units))
+    labels_updated = np.full(sorting.labels.shape, -1)
+    kept = np.flatnonzero(np.isin(sorting.labels, np.unique(units)))
+    labels_updated[kept] = sorting.labels[kept].copy()
     _, flat_labels = np.unique(labels_updated[kept], return_inverse=True)
     labels_updated[kept] = new_labels[flat_labels]
 
