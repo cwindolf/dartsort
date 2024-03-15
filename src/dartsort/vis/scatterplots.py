@@ -495,11 +495,12 @@ def scatter_feature_vs_depth(
     else:
         c = glasbey1024[labels[to_show] % len(glasbey1024)]
         order = np.concatenate(
-            (np.flatnonzero(labels < 0), np.flatnonzero(labels >= 0))
+            (np.flatnonzero(labels[to_show] < 0), np.flatnonzero(labels[to_show] >= 0))
         )
         to_show = to_show[order]
+        c = c[order]
         if show_triaged:
-            c[labels == -1] = gray
+            c[labels[to_show] == -1] = gray
         else:
             to_show = to_show[labels[to_show] >= 0]
 

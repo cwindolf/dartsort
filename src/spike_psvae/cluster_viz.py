@@ -212,7 +212,7 @@ def array_scatter_4_features(
         # axes[4].set_xlim(xlim)
     if ptplim is not None:
         axes[2].set_xlim((50*np.log(5+ptplim[0]), 50*np.log(5+ptplim[1])))
-    axes[3].set_xlim((0, 100))
+    # axes[3].set_xlim((0, 100))
 
     # if fig is not None:
     #     plt.tight_layout()
