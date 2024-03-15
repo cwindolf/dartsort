@@ -178,6 +178,7 @@ def get_templates(
         return dict(
             sorting=sorting,
             unit_ids=unit_ids,
+            spike_counts=spike_counts,
             templates=raw_templates,
             raw_templates=raw_templates,
             snrs_by_channel=snrs_by_channel,
