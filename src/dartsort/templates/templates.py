@@ -237,7 +237,7 @@ class TemplateData:
                 unit_ids=results["unit_ids"],
                 spike_counts=results["spike_counts"],
                 registered_geom=geom,
-                depths_um=depths_um,
+                registered_template_depths_um=depths_um,
                 localization_radius_um=template_config.registered_template_localization_radius_um,
                 trough_offset_samples=trough_offset_samples,
                 spike_length_samples=spike_length_samples,
