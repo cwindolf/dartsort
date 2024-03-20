@@ -599,7 +599,7 @@ class DARTsortAnalysis:
         assert temp.ndim == 3 and temp.shape[0] == np.atleast_1d(unit_id).size
         max_chan = temp.mean(0).ptp(0).argmax()
         return max_chan
-    
+
     def get_registered_channels(self, in_unit, n_samples=1000, random_state=0):
         amp_samples = slice(None)
         if in_unit.size > n_samples:
