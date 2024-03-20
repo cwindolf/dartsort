@@ -121,6 +121,7 @@ def array_scatter_4_features(
     maxptp,
     y,
     zlim=(-100, 382),
+    ylim=(0, 100),
     xlim=None,
     ptplim=None,
     maxptp_c=None,
@@ -197,7 +198,7 @@ def array_scatter_4_features(
         excluded_ids=excluded_ids,
         do_ellipse=do_ellipse,
     )
-    axes[3].set_xlabel("Y (um)", fontsize=16)
+    axes[3].set_xlabel("Max value", fontsize=16)
     axes[3].tick_params(axis='x', labelsize=16)
         
 
@@ -212,7 +213,7 @@ def array_scatter_4_features(
         # axes[4].set_xlim(xlim)
     if ptplim is not None:
         axes[2].set_xlim((50*np.log(5+ptplim[0]), 50*np.log(5+ptplim[1])))
-    # axes[3].set_xlim((0, 100))
+    axes[3].set_xlim(ylim)
 
     # if fig is not None:
     #     plt.tight_layout()

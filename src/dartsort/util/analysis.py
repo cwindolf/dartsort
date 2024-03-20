@@ -104,7 +104,9 @@ class DARTsortAnalysis:
             # template_npz = hdf5_path.parent / "chunk_0_matching0_models/template_data_coarse.npz"
             template_npz = model_dir / "template_data.npz"
             have_templates = template_npz.exists()
+            
             if have_templates:
+                print("HAVE TEMPLATES!!")
                 print(f"Reloading templates from {template_npz}...")
                 with h5py.File(hdf5_path, "r", libver="latest", locking=False) as h5:
                     same_labels = np.array_equal(sorting.labels, h5["labels"][:])

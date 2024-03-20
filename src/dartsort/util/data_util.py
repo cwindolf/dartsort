@@ -357,24 +357,35 @@ def combine_sortings(sortings, dodge=False):
 
 # -- timing
 
-
-def chunk_time_ranges(recording, chunk_length_samples=None):
+def chunk_time_ranges(recording, chunk_length_samples=None, slice_s=None):
     if chunk_length_samples is None or chunk_length_samples == np.inf:
         n_chunks = 1
-    else:
+    elif slice is None:
         n_chunks = recording.get_num_samples() / chunk_length_samples
+        # we'll count the remainder as a chunk if it's at least 2/3 of one
+        n_chunks = np.floor(n_chunks) + (n_chunks - np.floor(n_chunks) > 0.66)
+        n_chunks = int(max(1, n_chunks))
+    else:
+        if slice_s[0] is None:
+            slice_s[0] = 0.
+        if slice_s[1] is None:
+            slice_s[1] = recording.get_num_samples() / recording.sampling_frequency
+        n_chunks = (slice_s[1] - slice_s[0]) * recording.sampling_frequency/ chunk_length_samples 
         # we'll count the remainder as a chunk if it's at least 2/3 of one
         n_chunks = np.floor(n_chunks) + (n_chunks - np.floor(n_chunks) > 0.66)
         n_chunks = int(max(1, n_chunks))
 
     # evenly divide the recording into chunks
     assert recording.get_num_segments() == 1
-    start_time_s, end_time_s = recording._recording_segments[
-        0
-    ].sample_index_to_time(np.array([0, recording.get_num_samples() - 1]))
-    chunk_times_s = np.linspace(start_time_s, end_time_s, num=n_chunks + 1)
+    if slice is None:
+        start_time_s, end_time_s = recording._recording_segments[
+            0
+        ].sample_index_to_time(np.array([0, recording.get_num_samples() - 1]))
+        chunk_times_s = np.linspace(start_time_s, end_time_s, num=n_chunks + 1)
+    else:
+        chunk_times_s = np.linspace(slice_s[0], slice_s[1], num=n_chunks + 1)
     chunk_time_ranges_s = list(zip(chunk_times_s[:-1], chunk_times_s[1:]))
-
+        
     return chunk_time_ranges_s
 
 

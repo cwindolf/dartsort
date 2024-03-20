@@ -28,7 +28,7 @@ from dartsort.util.data_util import (
 )
 from dartsort.util.peel_util import run_peeler
 from dartsort.util.registration_util import estimate_motion
-
+from dartsort.util.data_util import chunk_time_ranges
 
 def dartsort(
     recording,
@@ -185,6 +185,7 @@ def cluster(
     motion_est=None,
     clustering_config=default_clustering_config,
     output_npz="initial_clustering.npz",
+    slice_s=None,
 ):
     if output_directory is not None:
         output_npz = Path(output_directory) / output_npz
@@ -197,6 +198,7 @@ def cluster(
         recording,
         clustering_config=clustering_config,
         motion_est=motion_est,
+        slice_s=slice_s,
     )
 
     if output_directory is not None:
@@ -279,6 +281,7 @@ def match(
     hdf5_filename="matching0.h5",
     model_subdir="matching0_models",
     template_npz_filename="template_data.npz",
+    slice_s=None,
 ):
     assert output_directory is not None
     model_dir = Path(output_directory) / model_subdir
@@ -330,22 +333,9 @@ def match(
         )
         return sorting, output_hdf5_filename
     else:
-        # compute chunk time ranges
-        chunk_samples = (
-            recording.sampling_frequency * template_config.chunk_size_s
-        )
-        n_chunks = recording.get_num_samples() / chunk_samples
-        # we'll count the remainder as a chunk if it's at least 2/3 of one
-        n_chunks = np.floor(n_chunks) + (n_chunks - np.floor(n_chunks) > 0.66)
-        n_chunks = int(max(1, n_chunks))
 
-        # evenly divide the recording into chunks
-        assert recording.get_num_segments() == 1
-        start_time_s, end_time_s = recording._recording_segments[
-            0
-        ].sample_index_to_time(np.array([0, recording.get_num_samples() - 1]))
-        chunk_times_s = np.linspace(start_time_s, end_time_s, num=n_chunks + 1)
-        chunk_time_ranges_s = list(zip(chunk_times_s[:-1], chunk_times_s[1:]))
+        chunk_time_ranges_s = chunk_time_ranges(recording, chunk_length_samples=template_config.chunk_size_s*recording.sampling_frequency, slice_s=slice_s)
+        n_chunks = len(chunk_time_ranges_s)
 
         sorting_list, output_hdf5_filename_list = [], []
 
@@ -390,6 +380,7 @@ def match(
                 trough_offset_samples=trough_offset_samples,
                 spike_length_samples=spike_length_samples,
             )
+            # Here add garbage collector 
 
             # instantiate peeler
             matching_peeler = ObjectiveUpdateTemplateMatchingPeeler.from_config(

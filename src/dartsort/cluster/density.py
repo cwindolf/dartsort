@@ -244,12 +244,20 @@ def density_peaks_clustering(
     max_noise_density=10,
     scales=None,
     log_c=None,
+    pcs_only=False,
     
 ):
     """
     if l2_norm is passed as argument, it will be used to compute density and nhdn
     """
     # n = len(X)
+
+    if pcs_only:
+        ramp_triage_before_clustering=False
+        use_y_triaging=False
+        distance_dependent_noise_density=False
+        remove_borders=False
+        triage_quantile_per_cluster=False
 
     if ramp_triage_before_clustering and geom is not None:
         inliers_first = np.ones(len(X)).astype('bool')

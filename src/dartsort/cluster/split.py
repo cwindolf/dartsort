@@ -308,6 +308,7 @@ class FeatureSplit(SplitStrategy):
                 reloc_amplitudes,
                 kept,
             ) = self.get_registered_channels(in_unit)
+
             if not kept.size:
                 return SplitResult()
         else:
@@ -354,7 +355,7 @@ class FeatureSplit(SplitStrategy):
                 dtype=pca_embeds.dtype,
             )
             kept = kept[pca_kept]
-            pca_f[kept] = pca_embeds
+            pca_f[kept] = pca_embeds[pca_kept]
             pca_embeds = pca_f
             # scale pc features to match localization features
             if self.rescale_all_features:
@@ -389,6 +390,13 @@ class FeatureSplit(SplitStrategy):
         # print(f"{self.use_ptp=}")
         # print(f"{do_pca=}")
         # print(f"{features=}")
+        if not len(features):
+            return SplitResult(
+                is_split=False, in_unit=in_unit_all, new_labels = np.full(n_spikes, -1)
+            )
+
+
+        
         features = np.column_stack([f[kept] for f in features])
 
         if self.cluster_alg == "hdbscan" and features.shape[0] > self.min_cluster_size:
@@ -672,6 +680,7 @@ class FeatureSplit(SplitStrategy):
 
             # figure out which waveforms overlap completely with the remaining channels
             no_nan = np.flatnonzero(np.isfinite(waveforms[:, 0, :]).all(axis=1))
+
             if no_nan.size < max(self.min_cluster_size, self.n_pca_features):
                 return False, no_nan, None
 

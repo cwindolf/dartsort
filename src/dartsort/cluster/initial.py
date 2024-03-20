@@ -201,6 +201,7 @@ def cluster_chunks(
     recording,
     clustering_config,
     motion_est=None,
+    slice_s=None,
 ):
     """Divide the recording into chunks, and cluster each chunk
 
@@ -218,7 +219,7 @@ def cluster_chunks(
         chunk_length_samples = (
             recording.sampling_frequency * clustering_config.chunk_size_s
         )
-    chunk_time_ranges_s = chunk_time_ranges(recording, chunk_length_samples)
+    chunk_time_ranges_s = chunk_time_ranges(recording, chunk_length_samples, slice_s)
 
     # cluster each chunk. can be parallelized in the future.
     sortings = [
@@ -241,6 +242,7 @@ def ensemble_chunks(
     clustering_config,
     computation_config=None,
     motion_est=None,
+    slice_s=None,
 ):
     """Initial clustering combined across chunks of time
 
@@ -270,6 +272,7 @@ def ensemble_chunks(
         recording,
         clustering_config,
         motion_est=motion_est,
+        slice_s=slice_s,
     )
     if len(chunk_sortings) == 1:
         return chunk_sortings[0]
