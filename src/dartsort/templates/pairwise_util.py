@@ -545,7 +545,7 @@ def compressed_convolve_pairs(
         max_shift=max_shift,
         conv_ignore_threshold=conv_ignore_threshold,
         batch_size=batch_size,
-        restrict_to_active=reduce_deconv_resid_norm,
+        # restrict_to_active=reduce_deconv_resid_norm,
     )
     if kept is not None:
         conv_ix = conv_ix[kept]
