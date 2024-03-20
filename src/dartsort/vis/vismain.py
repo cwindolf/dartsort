@@ -106,7 +106,7 @@ def visualize_sorting(
             fig.savefig(sorting_summary, dpi=dpi)
 
         animation_png = output_directory / "animation.mp4"
-        if overwrite or not animation_png.exists():
+        if make_animations and (overwrite or not animation_png.exists()):
             over_time.sorting_scatter_animation(
                 sorting_analysis,
                 animation_png,
