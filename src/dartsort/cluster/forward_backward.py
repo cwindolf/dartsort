@@ -186,8 +186,9 @@ def forward_backward(
                 labels_12[labels_12 > -1], return_inverse=True
             )  # Make contiguous
             idx_all = np.flatnonzero(
-                times_seconds < min_time_s + chunk_time_ranges_s[k + 1][1]
-            )
+                np.logical_and(times_seconds>=min_time_s,
+                times_seconds < chunk_time_ranges_s[k + 1][1]
+            ))
             labels_all = -1 * np.ones(
                 times_seconds.shape[0]
             )  # discard all spikes at the end for now

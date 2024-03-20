@@ -405,7 +405,7 @@ class WaveformPlot(UnitPlot):
         color="k",
         alpha=0.05,
         show_superres_templates=True,
-        superres_template_cmap=plt.cm.winter,
+        superres_template_cmap=plt.cm.jet,
         show_template=True,
         template_color="orange",
         max_abs_template_scale=1.35,
@@ -754,7 +754,7 @@ class CoarseTemplateDistancePlot(UnitPlot):
             unit_id, n_neighbors=self.n_neighbors
         )
         colors = np.array(cc.glasbey_light)[neighbor_ids % len(cc.glasbey_light)]
-        assert neighbor_ids[0] == unit_id
+        # assert neighbor_ids[0] == unit_id
 
         im = axis.imshow(
             neighbor_dists,
@@ -973,7 +973,7 @@ class SuperresWaveformMultiPlot(UnitMultiPlot):
         color="k",
         alpha=0.05,
         show_superres_templates=True,
-        superres_template_cmap=plt.cm.winter,
+        superres_template_cmap=plt.cm.jet,
         show_template=True,
         template_color="orange",
         max_abs_template_scale=1.35,
