@@ -709,9 +709,9 @@ class NeighborCCGPlot(UnitPlot):
         ) = sorting_analysis.nearby_coarse_templates(
             unit_id, n_neighbors=self.n_neighbors + 1
         )
-        colors = np.array(glasbey1024)[neighbor_ids % len(glasbey1024)]
         # assert neighbor_ids[0] == unit_id
         neighbor_ids = neighbor_ids[1:]
+        colors = np.array(glasbey1024)[neighbor_ids % len(glasbey1024)]
 
         my_st = sorting_analysis.times_samples(which=sorting_analysis.in_unit(unit_id))
         neighb_sts = [
@@ -720,9 +720,9 @@ class NeighborCCGPlot(UnitPlot):
         ]
 
         axes = panel.subplots(
-            nrows=2, sharey="row", sharex=True, ncols=self.n_neighbors
+            nrows=2, sharey="row", sharex=True, ncols=len(neighb_sts)
         )
-        for j in range(self.n_neighbors):
+        for j in range(len(neighb_sts)):
             clags, ccg = correlogram(my_st, neighb_sts[j], max_lag=self.max_lag)
             merged_st = np.concatenate((my_st, neighb_sts[j]))
             merged_st.sort()
@@ -733,7 +733,7 @@ class NeighborCCGPlot(UnitPlot):
             axes[0, j].set_title(f"unit {neighbor_ids[j]}")
         axes[0, 0].set_ylabel("ccg")
         axes[1, 0].set_ylabel("merged acg")
-        axes[1, (self.n_neighbors + 1) // 2].set_xlabel("lag (samples)")
+        axes[1, (len(neighb_sts) + 1) // 2].set_xlabel("lag (samples)")
 
 
 # -- evaluation plots
