@@ -501,7 +501,7 @@ def scatter_feature_vs_depth(
             labels = sorting.labels
 
     if labels is None:
-        c = np.clip(amplitudes, 0, amplitude_color_cutoff)
+        c = np.clip(amplitudes[to_show], 0, amplitude_color_cutoff)
         order = slice(None)
         show_ellipses = False
     else:
