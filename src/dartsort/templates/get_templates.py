@@ -345,17 +345,19 @@ def denoising_weights(
     d=6.0,
     edge_behavior="saturate",
 ):
+    """Weights are applied to raw template, 1-weights to low rank
+    """
     # v shaped function for time weighting
     vt = np.abs(np.arange(spike_length_samples) - trough_offset, dtype=float)
     if trough_offset < spike_length_samples:
-        vt[trough_offset:] = vt[trough_offset:] / vt[trough_offset:].max()
+        vt[trough_offset:] /= vt[trough_offset:].max()
     if trough_offset > 0:
-        vt[:trough_offset] = vt[:trough_offset] / vt[:trough_offset].max()
+        vt[:trough_offset] /= vt[:trough_offset].max()
 
     # snr weighting per channel
     if edge_behavior == "saturate":
         snc = np.minimum(snrs, snr_threshold) / snr_threshold
-    if edge_behavior == "inf":
+    elif edge_behavior == "inf":
         snc = np.minimum(snrs, snr_threshold) / snr_threshold
         snc[snc >= 1.0] = np.inf
     elif edge_behavior == "raw":
