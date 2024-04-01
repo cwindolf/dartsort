@@ -70,6 +70,9 @@ class DARTsortAnalysis:
     # configuration for analysis computations not included in above objects
     device: Optional[torch.device] = None
     merge_distance_templates_kind: str = "coarse"
+    merge_distance_kind: str = "rms"
+    merge_distance_spatial_radius_a: Optional[float] = None
+    merge_distance_min_channel_amplitude: float = 0.0
     merge_superres_linkage: Callable[[np.ndarray], float] = np.max
 
     # helper constructors
@@ -85,6 +88,7 @@ class DARTsortAnalysis:
         allow_template_reload=False,
         n_jobs_templates=0,
         denoising_tsvd=None,
+        **kwargs,
     ):
         """Try to re-load as much info as possible from the sorting itself
 
@@ -120,6 +124,7 @@ class DARTsortAnalysis:
                 motion_est=motion_est,
                 n_jobs=n_jobs_templates,
                 tsvd=denoising_tsvd,
+                # **kwargs,
             )
 
         return cls(
@@ -708,6 +713,8 @@ class DARTsortAnalysis:
 
     def _calc_merge_dist(self):
         """Compute the merge distance matrix"""
+        if hasattr(self, "merge_dist"):
+            return
         merge_td = self.template_data
         if self.merge_distance_templates_kind == "coarse":
             merge_td = self.coarse_template_data
@@ -718,6 +725,9 @@ class DARTsortAnalysis:
         units, dists, shifts, template_snrs = merge.calculate_merge_distances(
             merge_td,
             superres_linkage=self.merge_superres_linkage,
+            distance_kind=self.merge_distance_kind,
+            spatial_radius_a=self.merge_distance_spatial_radius_a,
+            min_channel_amplitude=self.merge_distance_min_channel_amplitude,
             device=self.device,
             n_jobs=0,
         )
