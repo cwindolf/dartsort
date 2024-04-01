@@ -181,7 +181,8 @@ def iterate_compressed_pairwise_convolutions(
     max_shift="full",
     amplitude_scaling_variance=0.0,
     amplitude_scaling_boundary=0.5,
-    reduce_deconv_resid_norm=False,
+    reduce_deconv_resid_decrease=False,
+    distance_kind="rms",
     conv_batch_size=128,
     units_batch_size=8,
     device=None,
@@ -245,7 +246,8 @@ def iterate_compressed_pairwise_convolutions(
         batch_size=conv_batch_size,
         amplitude_scaling_variance=amplitude_scaling_variance,
         amplitude_scaling_boundary=amplitude_scaling_boundary,
-        reduce_deconv_resid_norm=reduce_deconv_resid_norm,
+        reduce_deconv_resid_decrease=reduce_deconv_resid_decrease,
+        distance_kind=distance_kind,
     )
 
     n_jobs, Executor, context, rank_queue = get_pool(
@@ -273,7 +275,7 @@ def iterate_compressed_pairwise_convolutions(
 class CompressedConvResult:
     """Main return type of compressed_convolve_pairs
 
-    If reduce_deconv_resid_norm=True, a DeconvResidResult is returned.
+    If reduce_deconv_resid_decrease=True, a DeconvResidResult is returned.
 
     After convolving a bunch of template pairs, some convolutions
     may be zero. Let n_pairs be the number of nonzero convolutions.
@@ -317,13 +319,14 @@ class DeconvResidResult:
     template_indices_b: np.ndarray
 
     # norm after subtracting best upsampled/scaled/shifted B template from A template
-    deconv_resid_norms: np.ndarray
+    deconv_resid_decreases: np.ndarray
 
     # ints. B trough - A trough
     shifts: np.ndarray
 
     # for caller to implement different metrics
     template_a_norms: np.ndarray
+    scalings: np.ndarray
 
     # TODO: how to handle the nnz normalization we used to do?
     #       that one was done wrong -- the residual was not restricted
@@ -337,6 +340,7 @@ def conv_to_resid(
     conv_result: CompressedConvResult,
     amplitude_scaling_variance=0.0,
     amplitude_scaling_boundary=0.5,
+    distance_kind="rms",
 ) -> DeconvResidResult:
     # decompress
     pconvs = conv_result.compressed_conv[conv_result.compression_index]
@@ -357,6 +361,15 @@ def conv_to_resid(
     template_indices_a, template_indices_b = pairs.T
 
     # low rank template norms
+    # svs_a = low_rank_templates_a.singular_values[template_indices_a]
+    # svs_b = low_rank_templates_b.singular_values[template_indices_b]
+    # template_a_norms = (
+    #     torch.square(svs_a).sum(1).numpy(force=True)
+    # )
+    # template_b_norms = (
+    #     torch.square(svs_b).sum(1).numpy(force=True)
+    # )
+
     # produce these on common channel sets
     # N, R, C
     spatial_a = low_rank_templates_a.spatial_components[template_indices_a]
@@ -365,8 +378,8 @@ def conv_to_resid(
     svs_a = low_rank_templates_a.singular_values[template_indices_a]
     svs_b = low_rank_templates_b.singular_values[template_indices_b]
     active_a = torch.any(spatial_a > 0, dim=1).to(svs_a)
-    active_b = torch.any(spatial_b > 0, dim=1).to(svs_b)
-    active = active_a * active_b
+    # active_b = torch.any(spatial_b > 0, dim=1).to(svs_b)
+    active = active_a # * active_b
     com_spatial_sing_a = (spatial_a * active[:, None, :]) * svs_a[:, :, None]
     com_spatial_sing_b = (spatial_b * active[:, None, :]) * svs_b[:, :, None]
     template_a_norms = (
@@ -376,7 +389,15 @@ def conv_to_resid(
         torch.square(com_spatial_sing_b).sum((1, 2)).numpy(force=True)
     )
 
+    if distance_kind == "max":
+        ta = torch.bmm(low_rank_templates_a.temporal_components[template_indices_a], com_spatial_sing_a).numpy(force=True)
+        tb = torch.bmm(low_rank_templates_b.temporal_components[template_indices_b], com_spatial_sing_b).numpy(force=True)
+        template_a_norms_ret = np.abs(ta).max(axis=(1, 2))
+    else:
+        template_a_norms_ret = template_a_norms
+
     # now, compute reduction in norm of A after matching by B
+    scalings = np.ones_like(template_a_norms)
     for j, (ix_a, ix_b) in enumerate(pairs):
         in_a = conv_result.template_indices_a == ix_a
         in_b = conv_result.template_indices_b == ix_b
@@ -396,21 +417,32 @@ def conv_to_resid(
             b = best_conv + inv_lambda
             a = template_b_norms[j] + inv_lambda
             scaling = (b / a).clip(amp_scale_min, amp_scale_max)
-            norm_reduction = (
-                2.0 * scaling * b - np.square(scaling) * a - inv_lambda
-            )
+            scalings[j] = scaling
         else:
-            norm_reduction = 2.0 * best_conv - template_b_norms[j]
+            scaling = 1.0
 
-        deconv_resid_norms[j] = template_a_norms[j] - norm_reduction
-    # assert (deconv_resid_norms >= -0.01).all()
+        if distance_kind == "rms":
+            if amplitude_scaling_variance:
+                norm_reduction = (
+                    2.0 * scaling * b - np.square(scaling) * a - inv_lambda
+                )
+            else:
+                norm_reduction = 2.0 * best_conv - template_b_norms[j]
+            deconv_resid_norms[j] = template_a_norms[j] - norm_reduction
+            # deconv_resid_norms[j] /= template_a_norms[j]
+        elif distance_kind == "max":
+            deconv_resid_norms[j] = np.abs(ta[j] - scaling * tb[j]).max()
+            # deconv_resid_norms[j] /= np.abs(ta[j]).max()
+        else:
+            assert False
 
     return DeconvResidResult(
         template_indices_a,
         template_indices_b,
         deconv_resid_norms,
         shifts,
-        template_a_norms,
+        template_a_norms_ret,
+        scalings,
     )
 
 
@@ -437,7 +469,8 @@ def compressed_convolve_pairs(
     coarse_approx_error_threshold=0.0,
     amplitude_scaling_variance=0.0,
     amplitude_scaling_boundary=0.5,
-    reduce_deconv_resid_norm=False,
+    reduce_deconv_resid_decrease=False,
+    distance_kind="rms",
     max_shift="full",
     batch_size=128,
     device=None,
@@ -545,7 +578,7 @@ def compressed_convolve_pairs(
         max_shift=max_shift,
         conv_ignore_threshold=conv_ignore_threshold,
         batch_size=batch_size,
-        # restrict_to_active=reduce_deconv_resid_norm,
+        restrict_to_active=reduce_deconv_resid_decrease,
     )
     if kept is not None:
         conv_ix = conv_ix[kept]
@@ -591,13 +624,14 @@ def compressed_convolve_pairs(
         compression_index=compression_index,
         compressed_conv=pconv.numpy(force=True),
     )
-    if reduce_deconv_resid_norm:
+    if reduce_deconv_resid_decrease:
         return conv_to_resid(
             low_rank_templates_a,
             low_rank_templates_b,
             res,
             amplitude_scaling_variance=amplitude_scaling_variance,
             amplitude_scaling_boundary=amplitude_scaling_boundary,
+            distance_kind=distance_kind,
         )
     return res
 
@@ -1229,10 +1263,11 @@ class ConvWorkerContext:
     match_distance: Optional[float] = None
     conv_ignore_threshold: float = 0.0
     coarse_approx_error_threshold: float = 0.0
+    distance_kind: str = "rms"
     min_spatial_cosine: float = 0.0
     amplitude_scaling_variance: float = 0.0
     amplitude_scaling_boundary: float = 0.5
-    reduce_deconv_resid_norm: bool = False
+    reduce_deconv_resid_decrease: bool = False
     max_shift: Union[int, str] = "full"
     batch_size: int = 128
     device: Optional[torch.device] = None
