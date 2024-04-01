@@ -159,6 +159,7 @@ def registered_average(
     reducer=fast_nanmedian,
     work_buffer=None,
     pad_value=0.0,
+    return_n_samples=False,
 ):
     static_waveforms = get_waveforms_on_static_channels(
         waveforms,
@@ -173,10 +174,20 @@ def registered_average(
         fill_value=np.nan,
     )
 
+    if return_n_samples:
+        # remove time dim if any
+        c = static_waveforms
+        if static_waveforms.ndim == 3:
+            c = static_waveforms[:, 0, :]
+        n_samples = np.isfinite(c).sum(axis=0)
+
     # take the mean and return
     average = reducer(static_waveforms, axis=0)
     if not np.isnan(pad_value):
         average = np.nan_to_num(average, copy=False, nan=pad_value)
+    
+    if return_n_samples:
+        return average, n_samples
 
     return average
 
@@ -188,7 +199,7 @@ def registered_template(
     registered_geom,
     registered_kdtree=None,
     match_distance=None,
-    min_fraction_at_shift=0.25,
+    min_fraction_at_shift=0.5,
     min_count_at_shift=25,
     pad_value=0.0,
     reducer=fast_nanmedian,

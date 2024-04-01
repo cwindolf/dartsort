@@ -142,7 +142,7 @@ class XZScatter(UnitPlot):
     def draw(self, panel, sorting_analysis, unit_id, axis=None):
         if axis is None:
             axis = panel.subplots()
-        
+
         unit_id = np.atleast_1d(unit_id)
         multi_unit = unit_id.size > 1
         for uid in unit_id:
@@ -300,7 +300,7 @@ class TFeatScatter(UnitPlot):
         color_by_amplitude=True,
         relocate_amplitudes=False,
         amplitude_color_cutoff=15,
-        alpha=0.05,
+        alpha=0.1,
     ):
         super().__init__()
         self.relocate_amplitudes = relocate_amplitudes
@@ -341,7 +341,7 @@ class TimeAmpScatter(UnitPlot):
     def draw(self, panel, sorting_analysis, unit_id, axis=None):
         if axis is None:
             axis = panel.subplots()
-        
+
         unit_id = np.atleast_1d(unit_id)
         multi_unit = unit_id.size > 1
 
@@ -366,7 +366,7 @@ class TimeAmpScatter(UnitPlot):
 
 class WaveformPlot(UnitPlot):
     kind = "waveform"
-    width = 2
+    width = 3
     height = 2
     can_sharey = False
 
@@ -378,7 +378,7 @@ class WaveformPlot(UnitPlot):
         channel_show_radius_um=50,
         relocated=False,
         color="k",
-        alpha=0.05,
+        alpha=0.1,
         show_superres_templates=True,
         superres_template_cmap=plt.cm.winter,
         show_template=True,
@@ -438,7 +438,7 @@ class WaveformPlot(UnitPlot):
                 new_length=self.spike_length_samples,
             )
             max_abs_amp = self.max_abs_template_scale * np.nanmax(np.abs(templates))
-            
+
         show_superres_templates = (
             self.show_superres_templates and self.template_index is None
         )
@@ -567,7 +567,7 @@ class TPCAWaveformPlot(WaveformPlot):
 class NearbyCoarseTemplatesPlot(UnitPlot):
     title = "nearby coarse templates"
     kind = "neighbors"
-    width = 2
+    width = 3
     height = 2
     can_sharey = False
 
@@ -635,7 +635,7 @@ class NearbyCoarseTemplatesPlot(UnitPlot):
 class CoarseTemplateDistancePlot(UnitPlot):
     title = "coarse template distance"
     kind = "neighbors"
-    width = 2
+    width = 3
     height = 1.25
 
     def __init__(
@@ -693,7 +693,7 @@ class CoarseTemplateDistancePlot(UnitPlot):
 
 class NeighborCCGPlot(UnitPlot):
     kind = "neighbors"
-    width = 2
+    width = 3
     height = 0.75
 
     def __init__(self, n_neighbors=3, max_lag=50):
@@ -709,9 +709,9 @@ class NeighborCCGPlot(UnitPlot):
         ) = sorting_analysis.nearby_coarse_templates(
             unit_id, n_neighbors=self.n_neighbors + 1
         )
-        colors = np.array(glasbey1024)[neighbor_ids % len(glasbey1024)]
         # assert neighbor_ids[0] == unit_id
         neighbor_ids = neighbor_ids[1:]
+        colors = np.array(glasbey1024)[neighbor_ids % len(glasbey1024)]
 
         my_st = sorting_analysis.times_samples(which=sorting_analysis.in_unit(unit_id))
         neighb_sts = [
@@ -720,9 +720,9 @@ class NeighborCCGPlot(UnitPlot):
         ]
 
         axes = panel.subplots(
-            nrows=2, sharey="row", sharex=True, ncols=self.n_neighbors
+            nrows=2, sharey="row", sharex=True, ncols=len(neighb_sts)
         )
-        for j in range(self.n_neighbors):
+        for j in range(len(neighb_sts)):
             clags, ccg = correlogram(my_st, neighb_sts[j], max_lag=self.max_lag)
             merged_st = np.concatenate((my_st, neighb_sts[j]))
             merged_st.sort()
@@ -733,7 +733,7 @@ class NeighborCCGPlot(UnitPlot):
             axes[0, j].set_title(f"unit {neighbor_ids[j]}")
         axes[0, 0].set_ylabel("ccg")
         axes[1, 0].set_ylabel("merged acg")
-        axes[1, (self.n_neighbors + 1) // 2].set_xlabel("lag (samples)")
+        axes[1, (len(neighb_sts) + 1) // 2].set_xlabel("lag (samples)")
 
 
 # -- evaluation plots
@@ -853,6 +853,7 @@ class SplitStrategyPlot(UnitPlot):
             max_height=self.height,
             figsize=(self.width, self.height),
             figure=panel,
+            hspace=0.0,
         )
         desc = f"not split. {in_unit.size} total spikes."
         if split_result.is_split:
@@ -875,7 +876,7 @@ class SuperresWaveformMultiPlot(UnitMultiPlot):
         channel_show_radius_um=50,
         relocated=False,
         color="k",
-        alpha=0.05,
+        alpha=0.1,
         show_superres_templates=True,
         superres_template_cmap=plt.cm.winter,
         show_template=True,
@@ -999,7 +1000,7 @@ def make_all_summaries(
     amplitude_color_cutoff=15.0,
     pca_radius_um=75.0,
     max_height=4,
-    figsize=(11, 8.5),
+    figsize=(16, 8.5),
     hspace=0.1,
     dpi=200,
     image_ext="png",
@@ -1011,7 +1012,7 @@ def make_all_summaries(
 ):
     save_folder = Path(save_folder)
     save_folder.mkdir(exist_ok=True)
-    
+
     global_params = dict(
         channel_show_radius_um=channel_show_radius_um,
         amplitude_color_cutoff=amplitude_color_cutoff,
@@ -1020,27 +1021,29 @@ def make_all_summaries(
     )
 
     n_jobs, Executor, context = get_pool(n_jobs, cls=CloudpicklePoolExecutor)
+    from cloudpickle import dumps
+    initargs = (
+        sorting_analysis,
+        plots,
+        max_height,
+        figsize,
+        hspace,
+        dpi,
+        save_folder,
+        image_ext,
+        overwrite,
+        global_params,
+    )
     with Executor(
         max_workers=n_jobs,
         mp_context=context,
         initializer=_summary_init,
-        initargs=(
-            sorting_analysis,
-            plots,
-            max_height,
-            figsize,
-            hspace,
-            dpi,
-            save_folder,
-            image_ext,
-            overwrite,
-            global_params,
-        ),
+        initargs=(dumps(initargs),),
     ) as pool:
         jobs = unit_ids
         if unit_ids is None:
             jobs = sorting_analysis.unit_ids
-            
+
         results = pool.map(_summary_job, jobs)
         if show_progress:
             results = tqdm(
@@ -1126,8 +1129,10 @@ class SummaryJobContext:
 _summary_job_context = None
 
 
-def _summary_init(*args):
+def _summary_init(args):
     global _summary_job_context
+    from cloudpickle import loads
+    args = loads(args)
     _summary_job_context = SummaryJobContext(*args)
 
 
