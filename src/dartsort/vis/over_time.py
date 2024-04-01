@@ -152,7 +152,7 @@ def make_all_over_time_summaries(
         unit_ids = sorting_analysis.unit_ids
 
     # check if done before expensive stuff
-    done = not overwrite and unit.all_summaries_done(unit_ids, unit_summary_dir)
+    done = not overwrite and unit.all_summaries_done(unit_ids, save_folder)
     if done:
         return
 

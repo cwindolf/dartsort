@@ -247,7 +247,7 @@ class ClusteringConfig:
     # density peaks parameters
     sigma_local: float = 5.0
     sigma_local_low: Optional[float] = None
-    sigma_regional: Optional[float] = None
+    sigma_regional: Optional[float] = 25.0
     sigma_regional_low: Optional[float] = None
     n_neighbors_search: int = 20
     radius_search: float = 5.0
@@ -261,7 +261,7 @@ class ClusteringConfig:
     triage_quantile_before_clustering: float = 0.0
     amp_no_triaging_before_clustering: float = 6.0
     amp_no_triaging_after_clustering: float = 8.0
-    use_y_triaging: bool = True
+    use_y_triaging: bool = False
     remove_small_far_clusters: bool = False
 
     # -- ensembling
