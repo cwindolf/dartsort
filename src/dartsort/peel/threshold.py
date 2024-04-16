@@ -1,6 +1,7 @@
 import torch
 from dartsort.detect import detect_and_deduplicate
 from dartsort.util import spiketorch
+import warnings
 
 from .peel_base import BasePeeler
 
@@ -15,6 +16,7 @@ class ThresholdAndFeaturize(BasePeeler):
         spike_length_samples=121,
         detection_threshold=5.0,
         chunk_length_samples=30_000,
+        max_spikes_per_chunk=None,
         peak_sign="both",
         spatial_dedup_channel_index=None,
         n_chunks_fit=40,
@@ -43,6 +45,7 @@ class ThresholdAndFeaturize(BasePeeler):
         else:
             self.spatial_dedup_channel_index = None
         self.detection_threshold = detection_threshold
+        self.max_spikes_per_chunk = max_spikes_per_chunk
         self.peel_kind = f"Threshold {detection_threshold}"
 
     def peel_chunk(
@@ -53,11 +56,12 @@ class ThresholdAndFeaturize(BasePeeler):
         right_margin=0,
         return_residual=False,
     ):
-        times_rel, channels = detect_and_deduplicate(
+        times_rel, channels, energies = detect_and_deduplicate(
             traces,
             self.detection_threshold,
             dedup_channel_index=self.spatial_dedup_channel_index,
             peak_sign=self.peak_sign,
+            return_energies=True,
         )
         if not times_rel.numel():
             return dict(n_spikes=0)
@@ -69,9 +73,24 @@ class ThresholdAndFeaturize(BasePeeler):
         )
         valid = (times_rel >= min_time) & (times_rel < max_time)
         times_rel = times_rel[valid]
-        if not times_rel.numel():
+        n_detect = times_rel.numel()
+        if not n_detect:
             return dict(n_spikes=0)
         channels = channels[valid]
+
+        if self.max_spikes_per_chunk is not None:
+            if n_detect > self.max_spikes_per_chunk:
+                warnings.warn(
+                    f"{n_detect} spikes in chunk was larger than "
+                    f"{self.max_spikes_per_chunk=}. Keeping the top ones."
+                )
+                energies = energies[valid]
+                best = torch.argsort(energies)[-self.max_spikes_per_chunk:]
+                best = best.sort().values
+                del energies
+
+                times_rel = times_rel[best]
+                channels = channels[best]
 
         # load up the waveforms for this chunk
         waveforms = spiketorch.grab_spikes(
