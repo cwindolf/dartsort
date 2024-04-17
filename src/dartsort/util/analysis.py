@@ -26,14 +26,10 @@ from ..config import TemplateConfig
 from ..templates import TemplateData
 from ..transform import WaveformPipeline
 from .data_util import DARTsortSorting, batched_h5_read
-from .drift_util import (
-    get_spike_pitch_shifts,
-    get_waveforms_on_static_channels,
-    registered_average,
-)
+from .drift_util import (get_spike_pitch_shifts,
+                         get_waveforms_on_static_channels, registered_average)
 from .spikeio import read_waveforms_channel_index
 from .waveform_util import make_channel_index
-
 
 no_realign_template_config = TemplateConfig(realign_peaks=False)
 basic_template_config = TemplateConfig(realign_peaks=False, superres_templates=False)
@@ -391,7 +387,7 @@ class DARTsortAnalysis:
             z_to=self.z(which),
             geom=self.geom,
             registered_geom=self.template_data.registered_geom,
-            target_channels=slice(None),
+            target_channels=None,
         )
         return np.nanmax(reloc_amp_vecs, axis=1)
 
