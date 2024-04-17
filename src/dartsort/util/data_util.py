@@ -148,6 +148,7 @@ class DARTsortSorting:
         channels_dataset="channels",
         labels_dataset="labels",
         load_simple_features=True,
+        simple_feature_names=None,
         labels=None,
     ):
         channels = None
@@ -168,7 +169,9 @@ class DARTsortSorting:
                     channels_dataset,
                     labels_dataset,
                 )
-                for k in h5:
+                if simple_feature_names is None:
+                    simple_feature_names = h5.keys()
+                for k in simple_feature_names:
                     if (
                         k not in loaded
                         and 1 <= h5[k].ndim <= 2
