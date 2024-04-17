@@ -11,6 +11,7 @@ def detect_and_deduplicate(
     dedup_temporal_radius=7,
     spatial_dedup_batch_size=512,
     exclude_edges=True,
+    return_energies=False,
 ):
     """Detect and deduplicate peaks
 
@@ -118,5 +119,8 @@ def detect_and_deduplicate(
     if exclude_edges:
         max_energies[[0, -1], :] = 0.0
     times, chans = torch.nonzero(max_energies, as_tuple=True)
+
+    if return_energies:
+        return times, chans, max_energies[times, chans]
 
     return times, chans
