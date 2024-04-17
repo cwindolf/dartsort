@@ -10,6 +10,7 @@ original probe as a subset, as well as copies of the probe shifted
 by integer numbers of pitches. As many shifted copies are created
 as needed to capture all the drift.
 """
+
 from dataclasses import dataclass
 
 import numpy as np
@@ -185,7 +186,7 @@ def registered_average(
     average = reducer(static_waveforms, axis=0)
     if not np.isnan(pad_value):
         average = np.nan_to_num(average, copy=False, nan=pad_value)
-    
+
     if return_n_samples:
         return average, n_samples
 
@@ -394,12 +395,16 @@ def get_waveforms_on_static_channels(
         assert c == n_channels_tot
     if n_pitches_shift is not None:
         assert n_pitches_shift.shape == (n_spikes,)
+    if match_distance is None:
+        match_distance = pdist(geom).min() / 2
 
     # grab the positions of the channels that we are targeting
     target_geom = geom
     if registered_geom is not None:
         target_geom = registered_geom
     if target_channels is not None:
+        pad_channel = target_geom.max(0) + 10 * match_distance
+        target_geom = np.concatenate((target_geom, pad_channel[None]))
         target_geom = target_geom[target_channels]
 
     # make kdtree
@@ -409,14 +414,10 @@ def get_waveforms_on_static_channels(
         assert target_kdtree.n == len(target_geom)
     n_static_channels = len(target_geom)
 
-    # find where each moving position lands using a k-d tree
-    if match_distance is None:
-        match_distance = pdist(geom).min() / 2
-
     # figure out the positions of the channels that the waveforms live on
     pitch = get_pitch(geom)
     if n_pitches_shift is None:
-        n_pitches_shift = np.zeros(n_spikes)
+        n_pitches_shift = np.zeros(n_spikes, dtype=int)
     # shifts = np.c_[np.zeros(n_spikes), n_pitches_shift * pitch]
     if main_channels is None:
         # the case where all waveforms live on all channels, but
@@ -447,12 +448,16 @@ def get_waveforms_on_static_channels(
     # positions. it turns out to be worth it to go through the effort of figuring
     # out what the unique valid moving positions are and just targeting those
     channels_and_shifts = np.c_[main_channels, n_pitches_shift]
-    uniq_channels_and_shifts, uniq_inv = np.unique(channels_and_shifts, axis=0, return_inverse=True)
+    uniq_channels_and_shifts, uniq_inv = np.unique(
+        channels_and_shifts, axis=0, return_inverse=True
+    )
     uniq_channels, uniq_n_pitches_shift = uniq_channels_and_shifts.T
     uniq_shifts = np.c_[np.zeros(uniq_channels.shape[0]), uniq_n_pitches_shift * pitch]
-    uniq_moving_pos = padded_geom[channel_index[uniq_channels]] + uniq_shifts[:, None, :]
+    uniq_moving_pos = (
+        padded_geom[channel_index[uniq_channels]] + uniq_shifts[:, None, :]
+    )
     uniq_valid = channel_index[uniq_channels] < n_channels_tot
-    
+
     _, uniq_shifted_channels = target_kdtree.query(
         uniq_moving_pos[uniq_valid],
         distance_upper_bound=match_distance,
@@ -467,17 +472,17 @@ def get_waveforms_on_static_channels(
     # ok, now we can return to non-unique world
     shifted_channels = uniq_shifted_channels[uniq_inv]
 
-#     # shape is n_spikes, c, spatial dim
-#     moving_positions = padded_geom[channel_index[main_channels]] + shifts[:, None, :]
-#     # valid_chan = ~np.isnan(moving_positions).any(axis=1)
-#     valid_chan = channel_index[main_channels] < n_channels_tot
+    #     # shape is n_spikes, c, spatial dim
+    #     moving_positions = padded_geom[channel_index[main_channels]] + shifts[:, None, :]
+    #     # valid_chan = ~np.isnan(moving_positions).any(axis=1)
+    #     valid_chan = channel_index[main_channels] < n_channels_tot
 
-#     _, uniq_shifted_channels = target_kdtree.query(
-#         moving_positions[valid_chan[:, :]],
-#         distance_upper_bound=match_distance,
-#         workers=workers,
-#     )
-#     shifted_channels = uniq_shifted_channels[uniq_inv]
+    #     _, uniq_shifted_channels = target_kdtree.query(
+    #         moving_positions[valid_chan[:, :]],
+    #         distance_upper_bound=match_distance,
+    #         workers=workers,
+    #     )
+    #     shifted_channels = uniq_shifted_channels[uniq_inv]
 
     # now, if not all chans were valid, fix that up...
     # if shifted_channels.size < n_spikes * c:
@@ -568,6 +573,114 @@ def _full_probe_shifting_fast(
     return static_waveforms[:, :, : target_kdtree.n]
 
 
+def static_channel_neighborhoods(
+    geom,
+    main_channels,
+    channel_index,
+    target_channels=None,
+    pitch=None,
+    n_pitches_shift=None,
+    registered_geom=None,
+    target_kdtree=None,
+    match_distance=None,
+    workers=4,
+):
+    # validate inputs to avoid confusing errors
+    n_spikes = main_channels.shape[0]
+    assert geom.ndim == 2
+    n_channels_tot = geom.shape[0]
+    assert channel_index is not None
+    n_channels_tot_, c = channel_index.shape
+    assert n_channels_tot_ == n_channels_tot
+    assert main_channels.shape == (n_spikes,)
+    if n_pitches_shift is not None:
+        assert n_pitches_shift.shape == (n_spikes,)
+    if match_distance is None:
+        match_distance = pdist(geom).min() / 2
+
+    # grab the positions of the channels that we are targeting
+    target_geom = geom
+    if registered_geom is not None:
+        target_geom = registered_geom
+    if target_channels is not None:
+        pad_channel = target_geom.max(0) + 10 * match_distance
+        target_geom = np.concatenate((target_geom, pad_channel[None]))
+        target_geom = target_geom[target_channels]
+
+    # make kdtree
+    if target_kdtree is None:
+        target_kdtree = KDTree(target_geom)
+    else:
+        assert target_kdtree.n == len(target_geom)
+
+    if pitch is None:
+        pitch = get_pitch(geom)
+    if n_pitches_shift is None:
+        n_pitches_shift = np.zeros(n_spikes, dtype=int)
+
+    # the case where each waveform lives on its own channels
+    # nans will never be matched in k-d query below
+    padded_geom = np.pad(geom.astype(float), [(0, 1), (0, 0)], constant_values=np.nan)
+
+    # ok, the kdtree query can get expensive when we have lots of these shifting
+    # positions. it turns out to be worth it to go through the effort of figuring
+    # out what the unique valid moving positions are and just targeting those
+    channels_and_shifts = np.c_[main_channels, n_pitches_shift]
+    uniq_channels_and_shifts, uniq_inv = np.unique(
+        channels_and_shifts, axis=0, return_inverse=True
+    )
+    uniq_channels, uniq_n_pitches_shift = uniq_channels_and_shifts.T
+    uniq_shifts = np.c_[np.zeros(uniq_channels.shape[0]), uniq_n_pitches_shift * pitch]
+    uniq_moving_pos = (
+        padded_geom[channel_index[uniq_channels]] + uniq_shifts[:, None, :]
+    )
+    uniq_valid = channel_index[uniq_channels] < n_channels_tot
+
+    _, uniq_shifted_channels = target_kdtree.query(
+        uniq_moving_pos[uniq_valid],
+        distance_upper_bound=match_distance,
+        workers=workers,
+    )
+    if uniq_shifted_channels.size < uniq_channels.shape[0] * c:
+        uniq_shifted_channels_ = uniq_shifted_channels
+        uniq_shifted_channels = np.full((uniq_channels.shape[0], c), target_kdtree.n)
+        uniq_shifted_channels[uniq_valid] = uniq_shifted_channels_
+    uniq_shifted_channels = uniq_shifted_channels.reshape(uniq_channels.shape[0], c)
+
+    # ok, now we can return to non-unique world
+    shifted_channels = uniq_shifted_channels[uniq_inv]
+
+    return shifted_channels
+
+
+def grab_static(waveforms, shifted_channels, n_static_channels, fill_value=np.nan):
+    two_d = waveforms.ndim == 2
+    if two_d:
+        waveforms = waveforms[:, None, :]
+    n_spikes, t, c = waveforms.shape
+    if torch.is_tensor(waveforms):
+        static_waveforms = torch.full(
+            (n_spikes, t, n_static_channels + 1),
+            fill_value=fill_value,
+            dtype=waveforms.dtype,
+            device=waveforms.device,
+        )
+    else:
+        static_waveforms = np.full(
+            (n_spikes, t, n_static_channels + 1),
+            fill_value=fill_value,
+            dtype=waveforms.dtype,
+        )
+    spike_ix = np.arange(n_spikes)[:, None, None]
+    time_ix = np.arange(t)[None, :, None]
+    chan_ix = shifted_channels[:, None, :]
+    static_waveforms[spike_ix, time_ix, chan_ix] = waveforms
+    static_waveforms = static_waveforms[:, :, :n_static_channels]
+    if two_d:
+        static_waveforms = static_waveforms[:, 0, :]
+
+    return static_waveforms
+
 # -- which templates appear at which shifts in a recording?
 #    and, which pairs of shifted templates appear together?
 
@@ -590,7 +703,9 @@ class TemplateShiftIndex:
         """shift: n_times x n_templates"""
         all_shifts = np.unique(shifts)
         n_templates = shifts.shape[1]
-        pairs = np.stack(np.broadcast_arrays(np.arange(n_templates)[None, :], shifts), axis=2)
+        pairs = np.stack(
+            np.broadcast_arrays(np.arange(n_templates)[None, :], shifts), axis=2
+        )
         pairs = np.unique(pairs.reshape(shifts.size, 2), axis=0)
         n_shifted_templates = len(pairs)
         shift_ix = np.searchsorted(all_shifts, pairs[:, 1])
@@ -651,9 +766,7 @@ def get_shift_and_unit_pairs(
     # figure out all shifts for all units at all times
     unreg_depths_um = np.stack(
         [
-            invert_motion_estimate(
-                motion_est, t_s, reg_depths_um
-            )
+            invert_motion_estimate(motion_est, t_s, reg_depths_um)
             for t_s in chunk_time_centers_s
         ],
         axis=0,
@@ -680,16 +793,24 @@ def get_shift_and_unit_pairs(
 
     # co-occurrence matrix: do these shifted templates appear together?
     cooccurrence = np.zeros(
-        (template_shift_index_a.n_shifted_templates, template_shift_index_b.n_shifted_templates),
-        dtype=bool)
+        (
+            template_shift_index_a.n_shifted_templates,
+            template_shift_index_b.n_shifted_templates,
+        ),
+        dtype=bool,
+    )
     temps_a = np.arange(na)
     temps_b = np.arange(nb)
     for j in range(len(chunk_time_centers_s)):
-        shifted_ids_a = template_shift_index_a.shifts_to_shifted_ids(temps_a, shifts_a[j])
+        shifted_ids_a = template_shift_index_a.shifts_to_shifted_ids(
+            temps_a, shifts_a[j]
+        )
         if same:
             shifted_ids_b = shifted_ids_a
         else:
-            shifted_ids_b = template_shift_index_b.shifts_to_shifted_ids(temps_b, shifts_b[j])
+            shifted_ids_b = template_shift_index_b.shifts_to_shifted_ids(
+                temps_b, shifts_b[j]
+            )
         cooccurrence[shifted_ids_a[:, None], shifted_ids_b[None, :]] = 1
 
     return template_shift_index_a, template_shift_index_b, cooccurrence

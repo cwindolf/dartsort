@@ -31,9 +31,7 @@ def scatter_max_channel_waveforms(
     if show_geom:
         axis.scatter(*template_data.registered_geom.T, **geom_scatter_kwargs)
 
-    for j, (u, temp) in enumerate(
-        zip(template_data.unit_ids, template_data.templates)
-    ):
+    for j, (u, temp) in enumerate(zip(template_data.unit_ids, template_data.templates)):
         ptpvec = temp.ptp(0)
         if ptpvec.max() == 0:
             continue
@@ -43,9 +41,7 @@ def scatter_max_channel_waveforms(
         xc = locsx[j]
         zc = locsz[j]
         c = colors[u % len(colors)]
-        axis.plot(
-            xc + xrel, zc + zscale * mctrace, lw=lw, color=c, **plot_kwargs
-        )
+        axis.plot(xc + xrel, zc + zscale * mctrace, lw=lw, color=c, **plot_kwargs)
 
 
 def distance_matrix_dendro(
@@ -59,7 +55,14 @@ def distance_matrix_dendro(
     image_cmap=plt.cm.RdGy,
 ):
     show_dendrogram = dendrogram_linkage is not None
-    dendro_width = (0.7, 0.15,) if show_dendrogram else ()
+    dendro_width = (
+        (
+            0.7,
+            0.15,
+        )
+        if show_dendrogram
+        else ()
+    )
 
     gs = panel.add_gridspec(
         nrows=3,
@@ -72,9 +75,7 @@ def distance_matrix_dendro(
     ax_im = panel.add_subplot(gs[:, 0])
     ax_cbar = panel.add_subplot(gs[1, -1])
     if show_dendrogram:
-        scipy.cluster.hierarchy.set_link_color_palette(
-            list(map(to_hex, glasbey1024))
-        )
+        scipy.cluster.hierarchy.set_link_color_palette(list(map(to_hex, glasbey1024)))
         ax_dendro = panel.add_subplot(gs[:, 2], sharey=ax_im)
         ax_dendro.axis("off")
 
@@ -123,3 +124,30 @@ def get_linkage(dists, method="complete", threshold=0.25):
     # extract flat clustering using our max dist threshold
     labels = fcluster(Z, threshold, criterion="distance")
     return Z, labels
+
+
+def density_peaks_study(X, density_result, dims=[0, 1], **scatter_kw):
+    fig, axes = plt.subplots(ncols=3, layout="constrained", figsize=(9, 3), sharey=True)
+
+    scatter_kw = dict(lw=0, s=5) | scatter_kw
+
+    axes[0].scatter(*X[:, dims].T, c=density_result["density"], **scatter_kw)
+    missed = density_result["nhdn"] == len(X)
+    if missed.any():
+        axes[1].scatter(*X[missed][:, dims].T, c="gray", **scatter_kw)
+    if ~missed.any():
+        axes[1].scatter(
+            *X[~missed][:, dims].T, c=density_result["density"][~missed], **scatter_kw
+        )
+    for i in range(len(X)):
+        nhdn = density_result["nhdn"][i]
+        if nhdn >= len(X):
+            continue
+        x = X[i, dims]
+        dx = X[nhdn, dims] - x
+        axes[1].arrow(
+            *x, *dx, length_includes_head=True, width=0, head_width=1, color="k"
+        )
+    colors = np.concatenate([[[0.5, 0.5, 0.5]], glasbey1024])
+    axes[2].scatter(*X[:, dims].T, c=colors[density_result["labels"] + 1], **scatter_kw)
+    return fig, axes
