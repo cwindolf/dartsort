@@ -347,16 +347,25 @@ def conv_to_resid(
     shifts = np.zeros(n_pairs, dtype=int)
     template_indices_a, template_indices_b = pairs.T
 
-    # templates_a = template_data_a.templates[template_indices_a]
-    # template_a_norms = np.linalg.norm(templates_a, axis=(1, 2)) ** 2
-    # templates_b = template_data_b.templates[template_indices_b]
-    # template_b_norms = np.linalg.norm(templates_b, axis=(1, 2)) ** 2
-
     # low rank template norms
+    # produce these on common channel sets
+    # N, R, C
+    spatial_a = low_rank_templates_a.spatial_components[template_indices_a]
+    spatial_b = low_rank_templates_b.spatial_components[template_indices_b]
+    # N, R
     svs_a = low_rank_templates_a.singular_values[template_indices_a]
-    template_a_norms = torch.square(svs_a).sum(1).numpy(force=True)
     svs_b = low_rank_templates_b.singular_values[template_indices_b]
-    template_b_norms = torch.square(svs_b).sum(1).numpy(force=True)
+    active_a = torch.any(spatial_a > 0, dim=1).to(svs_a)
+    active_b = torch.any(spatial_b > 0, dim=1).to(svs_b)
+    active = active_a * active_b
+    com_spatial_sing_a = (spatial_a * active[:, None, :]) * svs_a[:, :, None]
+    com_spatial_sing_b = (spatial_b * active[:, None, :]) * svs_b[:, :, None]
+    template_a_norms = (
+        torch.square(com_spatial_sing_a).sum((1, 2)).numpy(force=True)
+    )
+    template_b_norms = (
+        torch.square(com_spatial_sing_b).sum((1, 2)).numpy(force=True)
+    )
 
     # now, compute reduction in norm of A after matching by B
     for j, (ix_a, ix_b) in enumerate(pairs):
@@ -378,7 +387,9 @@ def conv_to_resid(
             b = best_conv + inv_lambda
             a = template_b_norms[j] + inv_lambda
             scaling = (b / a).clip(amp_scale_min, amp_scale_max)
-            norm_reduction = 2.0 * scaling * b - np.square(scaling) * a - inv_lambda
+            norm_reduction = (
+                2.0 * scaling * b - np.square(scaling) * a - inv_lambda
+            )
         else:
             norm_reduction = 2.0 * best_conv - template_b_norms[j]
 
@@ -525,6 +536,7 @@ def compressed_convolve_pairs(
         max_shift=max_shift,
         conv_ignore_threshold=conv_ignore_threshold,
         batch_size=batch_size,
+        restrict_to_active=reduce_deconv_resid_norm,
     )
     if kept is not None:
         conv_ix = conv_ix[kept]
@@ -592,6 +604,7 @@ def correlate_pairs_lowrank(
     max_shift="full",
     conv_ignore_threshold=0.0,
     batch_size=128,
+    restrict_to_active=False,
 ):
     """Convolve pairs of low rank templates
 
@@ -637,17 +650,28 @@ def correlate_pairs_lowrank(
 
     # batch over n_pairs for memory reasons
     pconv = torch.zeros(
-        (n_pairs, 2 * max_shift + 1), dtype=spatial_a.dtype, device=spatial_a.device
+        (n_pairs, 2 * max_shift + 1), 
+        dtype=spatial_a.dtype, 
+        device=spatial_a.device
     )
     for istart in range(0, n_pairs, batch_size):
         iend = min(istart + batch_size, n_pairs)
         ix = slice(istart, iend)
 
+        spatial_a_ = spatial_a[ix_a[conv_ix][ix]]
+        spatial_b_ = spatial_b[ix_b[conv_ix][ix]]
+        if restrict_to_active:
+            active_a = torch.any(spatial_a_ > 0, dim=1).to(spatial_a)
+            active_b = torch.any(spatial_b_ > 0, dim=1).to(spatial_b)
+            active = active_a * active_b
+            spatial_a_ = spatial_a_ * active[:, None, :]
+            spatial_b_ = spatial_b_ * active[:, None, :]
+
         # want conv filter: nco, 1, rank, t
         template_a = torch.bmm(
-            temporal_a[ix_a[conv_ix][ix]], spatial_a[ix_a[conv_ix][ix]]
+            temporal_a[ix_a[conv_ix][ix]], spatial_a_
         )
-        conv_filt = torch.bmm(spatial_b[ix_b[conv_ix][ix]], template_a.mT)
+        conv_filt = torch.bmm(spatial_b_, template_a.mT)
         conv_filt = conv_filt[:, None]  # (nco, 1, rank, t)
 
         # 1, nco, rank, t

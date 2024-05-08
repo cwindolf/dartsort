@@ -52,7 +52,8 @@ class DARTsortSorting:
         self.labels = np.asarray(self.labels, dtype=int)
         self._n_units = None
         if self.parent_h5_path is not None:
-            self.parent_h5_path = Path(self.parent_h5_path).absolute()
+            if isinstance(self.parent_h5_path, str):
+                self.parent_h5_path = Path(self.parent_h5_path).absolute()
 
         self.channels = np.asarray(self.channels, dtype=int)
         assert self.times_samples.shape == self.channels.shape
@@ -186,6 +187,32 @@ class DARTsortSorting:
         )
 
 
+    @classmethod
+    def from_list_peeling_hdf5(
+        cls,
+        list_peeling_hdf5_filename,
+        times_samples_dataset="times_samples",
+        channels_dataset="channels",
+        labels_dataset="labels",
+        load_simple_features=True,
+        labels=None,
+        chunk_time_ranges_s=None,
+    ):
+        sorting_list = []
+        for peeling_hdf5_filename in list_peeling_hdf5_filename:
+            sorting_list.append(DARTsortSorting.from_peeling_hdf5(
+                peeling_hdf5_filename, 
+                times_samples_dataset=times_samples_dataset,
+                channels_dataset=channels_dataset,
+                labels_dataset=labels_dataset,
+                load_simple_features=load_simple_features,
+                labels=labels,
+            ))
+        return combine_chunked_sortings(sorting_list, chunk_time_ranges_s=chunk_time_ranges_s)
+
+
+
+
 def keep_only_most_recent_spikes(
     sorting,
     n_min_spikes=250,
@@ -207,6 +234,35 @@ def keep_only_most_recent_spikes(
             idx_k = idx_k[before_time][-n_min_spikes:]
             new_labels[idx_k] = k
     new_sorting = replace(sorting, labels=new_labels)
+    return new_sorting
+
+def update_sorting_chunk_spikes_loaded(
+    sorting_chunk,
+    idx_spikes,
+    n_min_spikes=250,
+    latest_time_sample=90_000_000,
+):
+    """
+    This function selects the n_min_spikes before latest_time from a sorting that has been updated (by merge)
+    """
+
+    new_labels_chunks = np.full(sorting_chunk.labels.shape, -1)
+    new_labels_chunks[idx_spikes] = sorting_chunk.labels[idx_spikes]
+    sorting_chunk = replace(sorting_chunk, labels=new_labels_chunks)
+
+    new_labels = np.full(sorting_chunk.labels.shape, -1)
+    units = np.unique(sorting_chunk.labels)
+    units = units[units > -1]
+    for k in units:
+        idx_k = np.flatnonzero(sorting_chunk.labels==k)
+        before_time = sorting_chunk.times_samples[idx_k] < latest_time_sample
+        if before_time.sum() <= n_min_spikes:
+            idx_k = idx_k[:n_min_spikes]
+            new_labels[idx_k] = k
+        else:
+            idx_k = idx_k[before_time][-n_min_spikes:]
+            new_labels[idx_k] = k
+    new_sorting = replace(sorting_chunk, labels=new_labels)
     return new_sorting
 
 
@@ -354,10 +410,102 @@ def combine_sortings(sortings, dodge=False):
         return label_to_sorting_index, label_to_original_label, sorting
     return sorting
 
+def combine_chunked_sortings(sortings, n_spikes=None, chunk_time_ranges_s=None):
+    """
+    This function combines sortings that contain info about non overlapping chunks of data 
+    """
+    if n_spikes is None:
+        n_spikes=0
+        if chunk_time_ranges_s is None:
+            for sorting in sortings:
+                n_spikes+= sorting.labels.size
+        else:
+            for sorting, chunk_time_range in zip(sortings, chunk_time_ranges_s):
+                idx = np.flatnonzero(np.logical_and(
+                    sorting.times_seconds >= chunk_time_range[0],
+                    sorting.times_seconds <= chunk_time_range[1]
+                ))
+                n_spikes += len(idx)
+    print(f"N SPIKES {n_spikes}")
+            
+    sorting_final = DARTsortSorting(
+        times_samples=np.zeros(n_spikes),
+        channels=np.zeros(n_spikes),
+        labels=np.zeros(n_spikes),
+        sampling_frequency=sortings[0].sampling_frequency,
+        parent_h5_path=None,
+    )
+
+    labels = np.full(n_spikes, -1, sortings[0].labels.dtype)
+    times_samples = np.full(n_spikes, -1, sortings[0].times_samples.dtype)
+    channels = np.full(n_spikes, -1, sortings[0].channels.dtype)
+    extra_features={}
+
+    list_parent_h5_path = []
+
+    cmp = 0
+    if chunk_time_ranges_s is None:
+        for j, sorting in enumerate(sortings):
+            list_parent_h5_path.append(sorting.parent_h5_path)
+            labels[cmp:cmp + sorting.labels.size] = sorting.labels
+            times_samples[cmp:cmp + sorting.labels.size] = sorting.times_samples
+            channels[cmp:cmp + sorting.labels.size] = sorting.channels
+            cmp+=sorting.labels.size
+    
+        for feat in sortings[0].extra_features:
+            if sortings[0].extra_features[feat].ndim==1:   
+                feat_array = np.full(n_spikes, -1, sortings[0].extra_features[feat].dtype)
+            else:
+                feat_array = np.full((n_spikes, sortings[0].extra_features[feat].shape[1]), -1, sortings[0].extra_features[feat].dtype)
+            cmp = 0
+            for j, sorting in enumerate(sortings):
+                feat_array[cmp:cmp + sorting.labels.size] = sorting.extra_features[feat]
+                cmp+=sorting.labels.size
+            extra_features[feat]=feat_array
+    else:
+        for j, sorting in enumerate(sortings):
+            chunk_time_range = chunk_time_ranges_s[j]
+            idx = np.flatnonzero(np.logical_and(
+                sorting.times_seconds >= chunk_time_range[0],
+                sorting.times_seconds <= chunk_time_range[1]
+            ))
+            list_parent_h5_path.append(sorting.parent_h5_path)
+            labels[cmp:cmp + len(idx)] = sorting.labels[idx]
+            times_samples[cmp:cmp + len(idx)] = sorting.times_samples[idx]
+            channels[cmp:cmp + len(idx)] = sorting.channels[idx]
+            cmp+=len(idx)
+    
+        for feat in sortings[0].extra_features:
+            if sortings[0].extra_features[feat].ndim==1:   
+                feat_array = np.full(n_spikes, -1, sortings[0].extra_features[feat].dtype)
+            else:
+                feat_array = np.full((n_spikes, sortings[0].extra_features[feat].shape[1]), -1, sortings[0].extra_features[feat].dtype)
+            cmp = 0
+            for j, sorting in enumerate(sortings):
+                chunk_time_range = chunk_time_ranges_s[j]
+                idx = np.flatnonzero(np.logical_and(
+                    sorting.times_seconds >= chunk_time_range[0],
+                    sorting.times_seconds <= chunk_time_range[1]
+                ))
+                feat_array[cmp:cmp + len(idx)] = sorting.extra_features[feat][idx]
+                cmp+=len(idx)
+            extra_features[feat]=feat_array
+    
+    sorting_final = DARTsortSorting(
+        times_samples=times_samples,
+        channels=channels,
+        labels=labels,
+        sampling_frequency=sortings[0].sampling_frequency,
+        parent_h5_path=list_parent_h5_path,
+        extra_features=extra_features,
+    )
+
+    return sorting_final
+
 
 # -- timing
 
-def chunk_time_ranges(recording, chunk_length_samples=None, slice_s=None):
+def chunk_time_ranges(recording, chunk_length_samples=None, slice_s=None, divider_samples=None):
     if chunk_length_samples is None or chunk_length_samples == np.inf:
         n_chunks = 1
     elif slice is None:
@@ -384,10 +532,22 @@ def chunk_time_ranges(recording, chunk_length_samples=None, slice_s=None):
         chunk_times_s = np.linspace(start_time_s, end_time_s, num=n_chunks + 1)
     else:
         chunk_times_s = np.linspace(slice_s[0], slice_s[1], num=n_chunks + 1)
+    if divider_samples is not None:
+        divider_s = divider_samples / recording.sampling_frequency
+        chunk_times_s[:-1] = (chunk_times_s[:-1] // divider_s) * divider_s
     chunk_time_ranges_s = list(zip(chunk_times_s[:-1], chunk_times_s[1:]))
         
     return chunk_time_ranges_s
 
+def subchunks_time_ranges(recording, chunk_range_s, subchunk_size_s, divider_samples=None):
+    n_chunks = (chunk_range_s[1] - chunk_range_s[0]) / subchunk_size_s 
+    n_chunks = np.floor(n_chunks) + (n_chunks - np.floor(n_chunks) > 0.66)
+    n_chunks = int(max(1, n_chunks))
+    chunk_times_s = np.linspace(chunk_range_s[0], chunk_range_s[1], num=n_chunks + 1)
+    if divider_samples is not None: 
+        divider_s = divider_samples / recording.sampling_frequency
+        chunk_times_s[:-1] = (chunk_times_s[:-1] // divider_s) * divider_s
+    return list(zip(chunk_times_s[:-1], chunk_times_s[1:]))
 
 # -- hdf5 util
 

@@ -172,6 +172,12 @@ class TemplateConfig:
     denoising_rank: int = 5
     denoising_snr_threshold: float = 50.0
     denoising_fit_radius: float = 75.0
+    min_fraction_at_shift: float = 0.25
+    min_count_at_shift: float = 25
+
+    # spatial SVD smoothing
+    spatial_svdsmoothing: bool = False
+    max_ptp_chans_to_spatialsmooth: float =3.0
 
     # realignment
     # TODO: maybe this should be done in clustering?
@@ -180,6 +186,8 @@ class TemplateConfig:
 
     # track template over time
     time_tracking: bool = False
+    subchunk_time_smoothing: bool = False
+    subchunk_size_s: int = 30
     chunk_size_s: int = 300
 
 
