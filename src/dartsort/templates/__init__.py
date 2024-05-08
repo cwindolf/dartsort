@@ -1,1 +1,1 @@
-from .templates import TemplateData
+from .templates import TemplateData, get_smoothed_templates

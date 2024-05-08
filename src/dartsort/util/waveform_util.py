@@ -268,7 +268,7 @@ def channel_subset_by_radius(
         geom, channel_index, radius=radius, n_channels_subset=n_channels_subset
     )
     waveforms_subset = get_channel_subset(
-        waveforms, max_channels, channel_index_mask
+        waveforms, max_channels, channel_index_mask, fill_value=fill_value,
     )
     if return_new_channel_index:
         new_channel_index = mask_to_channel_index(

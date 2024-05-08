@@ -121,7 +121,7 @@ def array_scatter_4_features(
     maxptp,
     y,
     zlim=(-100, 382),
-    ylim=(0, 100),
+    ylim=None,
     xlim=None,
     ptplim=None,
     maxptp_c=None,
@@ -176,7 +176,7 @@ def array_scatter_4_features(
     axes[1].set_title("colored by ptps")
 
     cluster_scatter(
-        50*np.log(5+maxptp),
+        maxptp*6.067412,
         z,
         labels,
         ax=axes[2],
@@ -185,7 +185,7 @@ def array_scatter_4_features(
         excluded_ids=excluded_ids,
         do_ellipse=do_ellipse,
     )
-    axes[2].set_xlabel("50*log(5+PTP) (s.u.)", fontsize=16)
+    axes[2].set_xlabel("PTP (uV)", fontsize=16)
     axes[2].tick_params(axis='x', labelsize=16)
 
     cluster_scatter(
@@ -198,7 +198,7 @@ def array_scatter_4_features(
         excluded_ids=excluded_ids,
         do_ellipse=do_ellipse,
     )
-    axes[3].set_xlabel("Max value", fontsize=16)
+    axes[3].set_xlabel("Peak value (uV)", fontsize=16)
     axes[3].tick_params(axis='x', labelsize=16)
         
 
@@ -212,8 +212,9 @@ def array_scatter_4_features(
         axes[1].set_xlim(xlim)
         # axes[4].set_xlim(xlim)
     if ptplim is not None:
-        axes[2].set_xlim((50*np.log(5+ptplim[0]), 50*np.log(5+ptplim[1])))
-    axes[3].set_xlim(ylim)
+        axes[2].set_xlim(ptplim[0], ptplim[1])
+    if ylim is not None:
+        axes[3].set_xlim(ylim)
 
     # if fig is not None:
     #     plt.tight_layout()
@@ -373,7 +374,7 @@ def array_scatter(
         x,
         z,
         labels,
-        ax=axes[0],
+        ax=axes[1],
         s=1,
         alpha=0.1,
         excluded_ids=excluded_ids,
@@ -388,21 +389,21 @@ def array_scatter(
     axes[0].tick_params(axis='y', labelsize=14)
 
     cluster_scatter(
-        50*np.log(5+maxptp),
+        maxptp*6.067412,
         z,
         labels,
-        ax=axes[1],
+        ax=axes[2],
         s=1,
         alpha=0.1,
         excluded_ids=excluded_ids,
         do_ellipse=do_ellipse,
     )
-    axes[1].set_xlabel("Amplitude (s.u.)", fontsize=16)
-    axes[1].tick_params(axis='x', labelsize=16)
+    axes[2].set_xlabel("Amplitude (s.u.)", fontsize=16)
+    axes[2].tick_params(axis='x', labelsize=16)
 
     if maxptp_c is None:
         maxptp_c = np.clip(maxptp, 3, 15)    
-    axes[2].scatter(
+    axes[0].scatter(
         x,
         z,
         c=maxptp_c,
@@ -411,17 +412,20 @@ def array_scatter(
         marker=".",
         cmap=plt.cm.jet,
     )
-    axes[2].scatter(*geom.T, c="orange", marker="s", s=10)
-    axes[2].set_title("ptps")
-    axes[0].set_ylim(zlim)
+    axes[1].scatter(*geom.T, c="orange", marker="s", s=10)
+    axes[0].set_title("ptp-colored")
     axes[1].set_ylim(zlim)
     axes[2].set_ylim(zlim)
-    if xlim is not None:
-        axes[0].set_xlim(xlim)
-        axes[2].set_xlim(xlim)
-    if ptplim is not None:
-        axes[1].set_xlim((50*np.log(5+ptplim[0]), 50*np.log(5+ptplim[1])))
+    axes[1].set_ylim(zlim)
+    axes[1].set_xlabel("x (um)", fontsize=14)
+    axes[1].tick_params(axis='x', labelsize=14)
 
+    if xlim is not None:
+        axes[1].set_xlim(xlim)
+        axes[0].set_xlim(xlim)
+    if ptplim is not None:
+        axes[2].set_xlim(ptplim[0], ptplim[1])
+    
     if fig is not None:
         plt.tight_layout()
 

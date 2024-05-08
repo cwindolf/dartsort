@@ -6,10 +6,12 @@ import numpy as np
 from dartsort.localize.localize_util import localize_waveforms
 from dartsort.util import data_util, drift_util
 
-from .get_templates import get_templates
+from .get_templates import get_templates, get_templates_with_spikes_loaded, get_templates_with_h5
 from .superres_util import superres_sorting
 from .template_util import (get_realigned_sorting, get_template_depths,
                             weighted_average)
+import h5py
+
 
 _motion_error_prefix = (
     "If template_config has registered_templates==True "
@@ -160,6 +162,10 @@ class TemplateData:
             denoising_rank=template_config.denoising_rank,
             denoising_fit_radius=template_config.denoising_fit_radius,
             denoising_snr_threshold=template_config.denoising_snr_threshold,
+            min_fraction_at_shift=template_config.min_fraction_at_shift,
+            min_count_at_shift=template_config.min_count_at_shift,
+            spatial_svdsmoothing=template_config.spatial_svdsmoothing,
+            max_ptp_chans_to_spatialsmooth=template_config.max_ptp_chans_to_spatialsmooth,
             device=device,
             units_per_job=units_per_job,
         )
@@ -255,6 +261,345 @@ class TemplateData:
             return obj, sorting
 
         return obj
+
+    @classmethod
+    def from_h5_with_colcleanedwfs(
+        cls,
+        recording,
+        h5_file,
+        sorting,
+        template_config,
+        indices=None,
+        save_folder=None,
+        overwrite=False,
+        motion_est=None,
+        save_npz_name="template_data.npz",
+        wfs_name="collisioncleaned_tpca_features",
+        localizations_dataset_name="point_source_localizations",
+        with_locs=True,
+        n_jobs=0,
+        units_per_job=8,
+        tsvd=None,
+        device=None,
+        trough_offset_samples=42,
+        spike_length_samples=121,
+        return_realigned_sorting=False,
+    ):
+        if save_folder is not None:
+            save_folder = Path(save_folder)
+            if not save_folder.exists():
+                save_folder.mkdir()
+            npz_path = save_folder / save_npz_name
+
+        motion_aware = (
+            template_config.registered_templates or template_config.superres_templates
+        )
+        localizations_all = sorting.point_source_localizations
+        times_seconds_all = sorting.times_seconds
+        labels_all = sorting.labels
+        channels_all = sorting.channels
+        if indices is not None:
+            localizations_all = localizations_all[indices]
+            times_seconds_all = times_seconds_all[indices]
+            labels_all = labels_all[indices]
+            channels_all = channels_all[indices]
+    
+        # load motion features if necessary
+        if motion_aware and localizations_all is not None:
+            # load spike depths
+            # TODO: relying on this index feels wrong
+            spike_depths_um = localizations_all[:, 2]
+            spike_x_um = localizations_all[:, 0]
+            geom = recording.get_channel_locations()
+        
+        kwargs = dict(
+            spikes_per_unit=template_config.spikes_per_unit,
+            denoising_rank=template_config.denoising_rank,
+            denoising_fit_radius=template_config.denoising_fit_radius,
+            denoising_snr_threshold=template_config.denoising_snr_threshold,
+            min_fraction_at_shift=template_config.min_fraction_at_shift,
+            min_count_at_shift=template_config.min_count_at_shift,
+            spatial_svdsmoothing=template_config.spatial_svdsmoothing,
+            max_ptp_chans_to_spatialsmooth=template_config.max_ptp_chans_to_spatialsmooth,
+            device=device,
+            units_per_job=units_per_job,
+            spike_length_samples=spike_length_samples,
+            indices=indices,
+        )
+
+        if template_config.registered_templates and motion_est is not None:
+            kwargs["registered_geom"] = drift_util.registered_geometry(
+                geom, motion_est=motion_est
+            )
+            kwargs["pitch_shifts"] = drift_util.get_spike_pitch_shifts(
+                spike_depths_um,
+                geom,
+                times_s=times_seconds_all,
+                motion_est=motion_est,
+            )
+
+        # No realign No superres here!!
+        kwargs["low_rank_denoising"] = template_config.low_rank_denoising
+        kwargs["realign_peaks"] = False
+
+        unit_ids = np.arange(labels_all.max() + 1)
+        # main!
+        results = get_templates_with_h5(
+            recording,
+            h5_file,
+            sorting,
+            wfs_name,
+            **kwargs,
+        )
+
+        # count spikes in each template
+        spike_counts = np.zeros_like(unit_ids)
+        ix, counts = np.unique(labels_all, return_counts=True)
+        spike_counts[ix[ix >= 0]] = counts[ix >= 0]
+
+        # here remove 0 count units! 
+        unit_ids = unit_ids[spike_counts>0]
+        spike_counts = spike_counts[spike_counts>0]
+
+        # handle registered templates
+        if template_config.registered_templates and motion_est is not None:
+            registered_template_depths_um = get_template_depths(
+                results["templates"],
+                kwargs["registered_geom"],
+                localization_radius_um=template_config.registered_template_localization_radius_um,
+            )
+            obj = cls(
+                results["templates"],
+                unit_ids,
+                spike_counts,
+                kwargs["registered_geom"],
+                registered_template_depths_um,
+                localization_radius_um=template_config.registered_template_localization_radius_um,
+                trough_offset_samples=trough_offset_samples,
+                spike_length_samples=spike_length_samples,
+            )
+        elif with_locs:
+            geom = recording.get_channel_locations()
+            depths_um = get_template_depths(
+                results["templates"],
+                geom,
+                localization_radius_um=template_config.registered_template_localization_radius_um,
+            )
+            obj = cls(
+                results["templates"],
+                unit_ids,
+                spike_counts,
+                geom,
+                depths_um,
+                localization_radius_um=template_config.registered_template_localization_radius_um,
+                trough_offset_samples=trough_offset_samples,
+                spike_length_samples=spike_length_samples,
+            )
+        if save_folder is not None:
+            obj.to_npz(npz_path)
+
+        if return_realigned_sorting:
+            return obj, sorting
+
+        return obj
+
+
+    @classmethod
+    def from_config_with_spikes_loaded(
+        cls,
+        recording,
+        wfs_all_loaded,
+        indices_unique_inverse,
+        indices_unique_index,
+        sorting,
+        template_config,
+        idx_spikes,
+        save_folder=None,
+        overwrite=False,
+        motion_est=None,
+        save_npz_name="template_data.npz",
+        with_locs=True,
+        n_jobs=0,
+        units_per_job=8,
+        tsvd=None,
+        device=None,
+        trough_offset_samples=42,
+        spike_length_samples=121,
+        return_realigned_sorting=False,
+    ):
+
+        if save_folder is not None:
+            save_folder = Path(save_folder)
+            if not save_folder.exists():
+                save_folder.mkdir()
+            npz_path = save_folder / save_npz_name
+
+        motion_aware = (
+            template_config.registered_templates or template_config.superres_templates
+        )
+        localizations_all = sorting.point_source_localizations[idx_spikes]
+        times_seconds_all = sorting.times_seconds[idx_spikes]
+        labels_all = sorting.labels[idx_spikes]
+        channels_all = sorting.channels[idx_spikes]
+        
+        # load motion features if necessary
+        if motion_aware and localizations_all is not None:
+            # load spike depths
+            # TODO: relying on this index feels wrong
+            spike_depths_um = localizations_all[:, 2]
+            spike_x_um = localizations_all[:, 0]
+            geom = recording.get_channel_locations()
+
+        kwargs = dict(
+            trough_offset_samples=trough_offset_samples,
+            spike_length_samples=spike_length_samples,
+            spikes_per_unit=template_config.spikes_per_unit,
+            # realign handled in advance below, not needed in kwargs
+            # realign_peaks=False,
+            realign_max_sample_shift=template_config.realign_max_sample_shift,
+            denoising_rank=template_config.denoising_rank,
+            denoising_fit_radius=template_config.denoising_fit_radius,
+            denoising_snr_threshold=template_config.denoising_snr_threshold,
+            min_fraction_at_shift=template_config.min_fraction_at_shift,
+            min_count_at_shift=template_config.min_count_at_shift,
+            spatial_svdsmoothing=template_config.spatial_svdsmoothing,
+            max_ptp_chans_to_spatialsmooth=template_config.max_ptp_chans_to_spatialsmooth,
+            device=device,
+            units_per_job=units_per_job,
+        )
+        if template_config.registered_templates and motion_est is not None:
+            kwargs["registered_geom"] = drift_util.registered_geometry(
+                geom, motion_est=motion_est
+            )
+            kwargs["pitch_shifts"] = drift_util.get_spike_pitch_shifts(
+                spike_depths_um,
+                geom,
+                times_s=times_seconds_all,
+                motion_est=motion_est,
+            )
+
+        # No realign No superres here!!
+        kwargs["low_rank_denoising"] = template_config.low_rank_denoising
+        kwargs["realign_peaks"] = False
+
+        unit_ids = np.arange(labels_all.max() + 1)
+
+        # main!
+        results = get_templates_with_spikes_loaded(
+            recording,
+            wfs_all_loaded,
+            indices_unique_inverse,
+            indices_unique_index,
+            sorting,
+            labels_all, #wfs_all_loaded[indices_unique_inverse[labels_all == k]] gives all wfs for unit k 
+            channels_all,
+            **kwargs,
+        )
+
+        # count spikes in each template
+        spike_counts = np.zeros_like(unit_ids)
+        ix, counts = np.unique(labels_all, return_counts=True)
+        spike_counts[ix[ix >= 0]] = counts[ix >= 0]
+
+        # here remove 0 count units! 
+        unit_ids = unit_ids[spike_counts>0]
+        spike_counts = spike_counts[spike_counts>0]
+
+        # handle registered templates
+        if template_config.registered_templates and motion_est is not None:
+            registered_template_depths_um = get_template_depths(
+                results["templates"],
+                kwargs["registered_geom"],
+                localization_radius_um=template_config.registered_template_localization_radius_um,
+            )
+            obj = cls(
+                results["templates"],
+                unit_ids,
+                spike_counts,
+                kwargs["registered_geom"],
+                registered_template_depths_um,
+                localization_radius_um=template_config.registered_template_localization_radius_um,
+                trough_offset_samples=trough_offset_samples,
+                spike_length_samples=spike_length_samples,
+            )
+        elif with_locs:
+            geom = recording.get_channel_locations()
+            depths_um = get_template_depths(
+                results["templates"],
+                geom,
+                localization_radius_um=template_config.registered_template_localization_radius_um,
+            )
+            obj = cls(
+                results["templates"],
+                unit_ids,
+                spike_counts,
+                geom,
+                depths_um,
+                localization_radius_um=template_config.registered_template_localization_radius_um,
+                trough_offset_samples=trough_offset_samples,
+                spike_length_samples=spike_length_samples,
+            )
+        if save_folder is not None:
+            obj.to_npz(npz_path)
+
+        if return_realigned_sorting:
+            return obj, sorting
+
+        return obj
+
+def get_smoothed_templates(
+    temp_data_list,
+    weight_list,
+    unit_ids,
+):
+    """
+    This function takes as input a list of temp data and weights, and returns the weighted average of all
+    unit_ids should be the unit that you want to keep (this might not be useful since all template data should have the same units)
+    """
+
+    # if all_unit_ids is None:
+    #     all_unit_ids = [temp_data.unit_ids for temp_data in temp_data_list]
+    # all_unit_ids = np.hstack(all_unit_ids)
+    # all_unit_ids = np.unique(all_unit_ids)
+    
+    templates = np.zeros((unit_ids.size, temp_data_list[0].templates.shape[1], temp_data_list[0].templates.shape[2]))
+    weight_sum = np.zeros(unit_ids.size)
+    spike_counts = np.zeros(unit_ids.size)
+
+    registered_geom = temp_data_list[0].registered_geom
+    localization_radius_um = temp_data_list[0].localization_radius_um
+    trough_offset_samples = temp_data_list[0].trough_offset_samples
+    spike_length_samples = temp_data_list[0].spike_length_samples
+    
+    for temp_data, weight in zip(temp_data_list, weight_list):
+        unit_good = np.isin(unit_ids, temp_data.unit_ids)
+        unit_good_tempdata = np.isin(temp_data.unit_ids, unit_ids)
+        weight_sum[unit_good] += weight
+        templates[unit_good] += weight*temp_data.templates[unit_good_tempdata]
+        spike_counts[unit_good] += weight*temp_data.spike_counts[unit_good_tempdata]
+    templates /= weight_sum[:, None, None]
+    spike_counts /= weight_sum
+    spike_counts = spike_counts.astype('int')
+
+    registered_template_depths_um = None
+    if temp_data_list[0].registered_template_depths_um is not None:
+        registered_template_depths_um = get_template_depths(
+            templates,
+            registered_geom,
+            localization_radius_um=localization_radius_um,
+        )
+
+    return TemplateData(
+        templates = templates.astype(temp_data_list[0].templates.dtype),
+        unit_ids = unit_ids.astype(temp_data_list[0].unit_ids.dtype),
+        spike_counts = spike_counts.astype(temp_data_list[0].spike_counts.dtype),
+        registered_geom = registered_geom,
+        registered_template_depths_um = registered_template_depths_um.astype(temp_data_list[0].registered_template_depths_um.dtype),
+        localization_radius_um = localization_radius_um,
+        trough_offset_samples = trough_offset_samples,
+        spike_length_samples = spike_length_samples,
+    )
+    
 
 
 def get_chunked_templates(

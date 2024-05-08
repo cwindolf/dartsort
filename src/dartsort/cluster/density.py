@@ -257,7 +257,6 @@ def density_peaks_clustering(
         use_y_triaging=False
         distance_dependent_noise_density=False
         remove_borders=False
-        triage_quantile_per_cluster=False
 
     if ramp_triage_before_clustering and geom is not None:
         inliers_first = np.ones(len(X)).astype('bool')
@@ -353,9 +352,8 @@ def density_peaks_clustering(
     if triage_quantile_before_clustering and l2_norm is None:
         q = np.quantile(density, triage_quantile_before_clustering)
         idx_triaging = np.flatnonzero(
-            np.logical_and(
             X[inliers_first, 2]< scales[2]*np.log(log_c+amp_no_triaging_before_clustering),
-            density < q)
+            density < q
         )
         nhdn[idx_triaging]=n
         
@@ -381,47 +379,54 @@ def density_peaks_clustering(
         labels = decrumb(labels, min_size=remove_clusters_smaller_than)
 
     if triage_quantile_per_cluster > 0:
-        amp_no_triaging_after_clustering = scales[2]*np.log(log_c+amp_no_triaging_after_clustering)
-        for k in np.unique(labels[labels > -1]):
-            idx_label = np.flatnonzero(labels == k)
-            amp_vec = X[inliers_first][idx_label, 2]
-            med_amp = np.median(amp_vec)
-            # print("median amplitude")
-            # print(med_amp)
-            if med_amp<amp_no_triaging_after_clustering:
-                if ramp_triage_per_cluster:
-                    # print("updating value")
-                    triage_quantile_per_cluster = (amp_no_triaging_after_clustering - med_amp)/amp_no_triaging_after_clustering
-                # triage_quantile_unit = triage_quantile_per_cluster
-                if l2_norm is None:
-                    q = np.quantile(density[idx_label], triage_quantile_per_cluster)
-                    spikes_to_remove = np.flatnonzero(
-                        np.logical_and(
-                            density[idx_label] < q,
-                            amp_vec < amp_no_triaging_after_clustering,
+        if not pcs_only:
+            amp_no_triaging_after_clustering = scales[2]*np.log(log_c+amp_no_triaging_after_clustering)
+            for k in np.unique(labels[labels > -1]):
+                idx_label = np.flatnonzero(labels == k)
+                amp_vec = X[inliers_first][idx_label, 2]
+                med_amp = np.median(amp_vec)
+                # print("median amplitude")
+                # print(med_amp)
+                if med_amp<amp_no_triaging_after_clustering:
+                    if ramp_triage_per_cluster:
+                        # print("updating value")
+                        triage_quantile_per_cluster = (amp_no_triaging_after_clustering - med_amp)/amp_no_triaging_after_clustering
+                    # triage_quantile_unit = triage_quantile_per_cluster
+                    if l2_norm is None:
+                        q = np.quantile(density[idx_label], triage_quantile_per_cluster)
+                        spikes_to_remove = np.flatnonzero(
+                            np.logical_and(
+                                density[idx_label] < q,
+                                amp_vec < amp_no_triaging_after_clustering,
+                            )
                         )
-                    )
-                else:
-                    q = np.quantile(density[idx_label], 1-triage_quantile_per_cluster)
-                    spikes_to_remove = np.flatnonzero(
-                        np.logical_and(
-                            density[idx_label] > q,
-                            amp_vec < amp_no_triaging_after_clustering,
+                    else:
+                        q = np.quantile(density[idx_label], 1-triage_quantile_per_cluster)
+                        spikes_to_remove = np.flatnonzero(
+                            np.logical_and(
+                                density[idx_label] > q,
+                                amp_vec < amp_no_triaging_after_clustering,
+                            )
                         )
-                    )
-
-                # print("spikes removal")
-                # print(np.unique(idx_label[spikes_to_remove]))
+    
+                    # print("spikes removal")
+                    # print(np.unique(idx_label[spikes_to_remove]))
+                    labels[idx_label[spikes_to_remove]] = -1
+                    # print(np.unique(idx_label[spikes_to_remove]))
+        else:
+            for k in np.unique(labels[labels > -1]):
+                idx_label = np.flatnonzero(labels == k)
+                q = np.nanquantile(density[idx_label], triage_quantile_per_cluster)
+                spikes_to_remove = np.flatnonzero(density[idx_label] < q)
                 labels[idx_label[spikes_to_remove]] = -1
-                # print(np.unique(idx_label[spikes_to_remove]))
-
+                
     labels_all = np.full(len(X), -1)
     labels_all[inliers_first] = labels
     
     if not return_extra:
         return labels_all
 
-    density_all = np.full(len(X), 0)
+    density_all = np.zeros(len(X))
     nhdn_all = np.full(len(X), n)
     density_all[inliers_first] = density
     nhdn_all[inliers_first] = nhdn

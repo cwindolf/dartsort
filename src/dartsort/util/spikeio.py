@@ -8,6 +8,7 @@ also featurize the waveforms
 from os import SEEK_SET
 
 import numpy as np
+from tqdm.auto import tqdm
 
 
 def read_full_waveforms(
@@ -15,6 +16,7 @@ def read_full_waveforms(
     times_samples,
     trough_offset_samples=42,
     spike_length_samples=121,
+    verbose=False,
 ):
     assert times_samples.ndim == 1
     assert times_samples.size > 0
@@ -38,6 +40,7 @@ def read_full_waveforms(
             n_channels=n_channels,
             dtype=recording.dtype,
             spike_length_samples=spike_length_samples,
+            verbose=verbose,
         )
 
     waveforms = np.empty(
@@ -57,18 +60,29 @@ def _read_full_waveforms_binary(
     n_channels,
     dtype,
     spike_length_samples=121,
+    verbose=False,
 ):
     n_spikes = read_times_samples.size
     waveforms = np.empty((n_spikes, spike_length_samples, n_channels), dtype=dtype)
     offsets = read_times_samples * np.dtype(dtype).itemsize * n_channels
     with open(binary_path, "rb") as binary:
-        for i, offset in enumerate(offsets):
-            binary.seek(offset, SEEK_SET)
-            waveforms[i] = np.fromfile(
-                binary,
-                dtype=dtype,
-                count=spike_length_samples * n_channels,
-            ).reshape(spike_length_samples, n_channels)
+        if not verbose:
+            for i, offset in enumerate(offsets):
+                binary.seek(offset, SEEK_SET)
+                waveforms[i] = np.fromfile(
+                    binary,
+                    dtype=dtype,
+                    count=spike_length_samples * n_channels,
+                ).reshape(spike_length_samples, n_channels)
+        else:
+            for i, offset in tqdm(enumerate(offsets), desc=f"Reading {len(offsets)} waveforms from {binary_path}", total=len(offsets)):
+                binary.seek(offset, SEEK_SET)
+                waveforms[i] = np.fromfile(
+                    binary,
+                    dtype=dtype,
+                    count=spike_length_samples * n_channels,
+                ).reshape(spike_length_samples, n_channels)
+
     return waveforms
 
 
