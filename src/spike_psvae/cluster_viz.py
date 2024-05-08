@@ -131,6 +131,7 @@ def array_scatter_4_features(
     figsize = (15, 15),
     s_dot=1,
     s_size_geom = 3,
+    label_feat4="Label?",
 ):
     fig = None
     if axes is None:
@@ -198,7 +199,7 @@ def array_scatter_4_features(
         excluded_ids=excluded_ids,
         do_ellipse=do_ellipse,
     )
-    axes[3].set_xlabel("Peak value (uV)", fontsize=16)
+    axes[3].set_xlabel(label_feat4, fontsize=16)
     axes[3].tick_params(axis='x', labelsize=16)
         
 
