@@ -284,6 +284,7 @@ class TemplateData:
         trough_offset_samples=42,
         spike_length_samples=121,
         return_realigned_sorting=False,
+        weight_wfs=None,
     ):
         if save_folder is not None:
             save_folder = Path(save_folder)
@@ -325,6 +326,7 @@ class TemplateData:
             units_per_job=units_per_job,
             spike_length_samples=spike_length_samples,
             indices=indices,
+            weight_wfs = weight_wfs,
         )
 
         if template_config.registered_templates and motion_est is not None:
@@ -344,7 +346,7 @@ class TemplateData:
 
         unit_ids = np.arange(labels_all.max() + 1)
         # main!
-        results = get_templates_with_h5(
+        results  = get_templates_with_h5(
             recording,
             h5_file,
             sorting,

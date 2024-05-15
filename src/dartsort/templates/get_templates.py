@@ -10,7 +10,7 @@ import torch
 from dartsort.util import spikeio
 from dartsort.util.drift_util import registered_template, get_waveforms_on_static_channels
 from dartsort.util.multiprocessing_util import get_pool
-from dartsort.util.spiketorch import fast_nanmedian, ptp
+from dartsort.util.spiketorch import fast_nanmedian, ptp, fast_nanweightedmean
 from dartsort.util.waveform_util import make_channel_index, full_channel_index, channel_subset_by_radius
 from scipy.spatial import KDTree
 from scipy.spatial.distance import pdist
@@ -42,6 +42,7 @@ def get_templates_with_h5(
     spatial_svdsmoothing=False,
     max_ptp_chans_to_spatialsmooth=3,
     spike_length_samples=121,
+    weight_wfs=None,
     n_jobs=0,
     show_progress=True,
     device=None,
@@ -68,6 +69,7 @@ def get_templates_with_h5(
             min_fraction_at_shift=min_fraction_at_shift,
             min_count_at_shift=min_count_at_shift,
             reducer=reducer,
+            weight_wfs=weight_wfs,
             random_seed=random_seed,
             n_jobs=n_jobs,
             show_progress=show_progress,
@@ -126,6 +128,7 @@ def get_templates_with_h5(
         show_progress=show_progress,
         min_fraction_at_shift=min_fraction_at_shift,
         min_count_at_shift=min_count_at_shift,
+        weight_wfs=weight_wfs,
         device=device,
         spike_length_samples=spike_length_samples,
     )
@@ -830,12 +833,16 @@ def get_all_shifted_raw_and_low_rank_templates_with_h5(
     min_fraction_at_shift=0.1,
     min_count_at_shift=5,
     spike_length_samples=121,
+    weight_wfs=None,
     device=None,
 ):
     """
     No parallelism yet
     """
     geom = recording.get_channel_locations()
+
+    if weight_wfs is not None:
+        reducer = fast_nanweightedmean
     
     unit_ids = np.unique(sorting.labels) #CHANGE THIS WITH LABELS + UIDS
     unit_ids = unit_ids[unit_ids >= 0]
@@ -871,52 +878,62 @@ def get_all_shifted_raw_and_low_rank_templates_with_h5(
     units_chunk = []
 
     # can parallelize here, snce we send wfs_all_loaded[in_unit] to each job 
-    for u in unit_ids:
-        if indices is None:
-            in_unit = np.flatnonzero(sorting.labels == u)
-        else:
-            in_unit = np.flatnonzero(sorting.labels[indices] == u)
-        pitch_shifts_unit = pitch_shifts[in_unit]
-        if not in_unit.size:
-            continue
-        units_chunk.append(u)
-        if registered:
-            with h5py.File(h5_file, "r+") as h5:
+    with h5py.File(h5_file, "r+") as h5:
+        for u in unit_ids:
+            if indices is None:
+                in_unit = np.flatnonzero(sorting.labels == u)
+            else:
+                in_unit = np.flatnonzero(sorting.labels[indices] == u)
+            pitch_shifts_unit = pitch_shifts[in_unit]
+            if not in_unit.size:
+                continue
+            units_chunk.append(u)
+            if registered:
+            # with h5py.File(h5_file, "r+") as h5:
                 wfs_all_loaded = h5[wfs_name][:][in_unit]
                 channels = h5["channels"][:][in_unit]
                 channel_index = h5["channel_index"][:]
-            wfs_all_loaded = get_waveforms_on_static_channels(
-                wfs_all_loaded,
-                geom,
-                channels, 
-                channel_index, 
-                registered_geom=registered_geom,
-                n_pitches_shift=pitch_shifts_unit,
-            )
-
-            raw_templates.append(
-                reducer(wfs_all_loaded, axis=0) #.numpy(force=True)
-            )
-            counts.append(
-                registered_template(
-                    np.ones((in_unit.size, recording.get_num_channels())),
-                    pitch_shifts_unit,
+                wfs_all_loaded = get_waveforms_on_static_channels(
+                    wfs_all_loaded,
                     geom,
-                    registered_geom,
-                    min_fraction_at_shift=min_fraction_at_shift,
-                    min_count_at_shift=min_count_at_shift,
-                    registered_kdtree=registered_kdtree,
-                    match_distance=pdist(geom).min() / 2,
-                    reducer=np.nansum,
+                    channels, 
+                    channel_index, 
+                    registered_geom=registered_geom,
+                    n_pitches_shift=pitch_shifts_unit,
                 )
-            )
-        else:
-            with h5py.File(h5_file, "r+") as h5:
+                if weight_wfs is not None:
+                    raw_templates.append(
+                        reducer(wfs_all_loaded, weight_wfs[indices][in_unit], axis=0) #.numpy(force=True)
+                    )
+                else:
+                    raw_templates.append(
+                        reducer(wfs_all_loaded, axis=0) #.numpy(force=True)
+                    )
+                counts.append(
+                    registered_template(
+                        np.ones((in_unit.size, recording.get_num_channels())),
+                        pitch_shifts_unit,
+                        geom,
+                        registered_geom,
+                        min_fraction_at_shift=min_fraction_at_shift,
+                        min_count_at_shift=min_count_at_shift,
+                        registered_kdtree=registered_kdtree,
+                        match_distance=pdist(geom).min() / 2,
+                        reducer=np.nansum,
+                    )
+                )
+            else:
                 wfs_all_loaded = h5[wfs_name][:][in_unit]
-            raw_templates.append(
-                reducer(wfs_all_loaded, axis=0).numpy(force=True)
-            )
-            counts.append(in_unit.size)
+                if weight_wfs is not None:
+                    raw_templates.append(
+                        reducer(wfs_all_loaded, weight_wfs[indices][in_unit], axis=0).numpy(force=True)
+                    )
+                else:
+                    raw_templates.append(
+                        reducer(wfs_all_loaded, axis=0).numpy(force=True)
+                    )
+    
+                counts.append(in_unit.size)
     snrs_by_channel = np.array([ptp(rt, 0) * np.sqrt(c) for rt, c in zip(raw_templates, counts)])
     raw_templates = np.array(raw_templates)
 
