@@ -107,7 +107,8 @@ def localize_hdf5(
 
                 # workers are blocked waiting for their ranks, which
                 # allows us to put the h5 in swmr before they open it
-                h5.swmr_mode = True
+                if not h5.swmr_mode:
+                    h5.swmr_mode = True
                 for rank in range(n_jobs):
                     queue.put(rank)
 
