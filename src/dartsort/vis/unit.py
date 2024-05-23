@@ -1013,6 +1013,13 @@ def make_all_summaries(
     **other_global_params,
 ):
     save_folder = Path(save_folder)
+    if unit_ids is None:
+        unit_ids = sorting_analysis.unit_ids
+    if not overwrite and all_summaries_done(
+        unit_ids, save_folder, ext=image_ext
+    ):
+        return
+    
     save_folder.mkdir(exist_ok=True)
 
     global_params = dict(
@@ -1043,17 +1050,13 @@ def make_all_summaries(
         initializer=_summary_init,
         initargs=(dumps(initargs),),
     ) as pool:
-        jobs = unit_ids
-        if unit_ids is None:
-            jobs = sorting_analysis.unit_ids
-
-        results = pool.map(_summary_job, jobs)
+        results = pool.map(_summary_job, unit_ids)
         if show_progress:
             results = tqdm(
                 results,
                 desc="Unit summaries",
                 smoothing=0,
-                total=len(jobs),
+                total=len(unit_ids),
             )
         for res in results:
             pass
