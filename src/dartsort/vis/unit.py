@@ -11,7 +11,6 @@ the data work so that this file can focus on plotting (sort of MVC).
 from dataclasses import replace
 from pathlib import Path
 
-import colorcet as cc
 import matplotlib.pyplot as plt
 import numpy as np
 from matplotlib.legend_handler import HandlerTuple
@@ -197,7 +196,7 @@ class PCAScatter(UnitPlot):
     def draw(self, panel, sorting_analysis, unit_id, axis=None):
         if axis is None:
             axis = panel.subplots()
-        
+
         unit_id = np.atleast_1d(unit_id)
         multi_unit = unit_id.size > 1
         which, loadings = sorting_analysis.unit_pca_features(
@@ -209,7 +208,9 @@ class PCAScatter(UnitPlot):
             for uid in unit_id:
                 if multi_unit:
                     c = dict(color=glasbey1024[uid % len(glasbey1024)])
-                    thisu = np.flatnonzero(sorting_analysis.sorting.labels[which] == uid)
+                    thisu = np.flatnonzero(
+                        sorting_analysis.sorting.labels[which] == uid
+                    )
                 else:
                     amps = sorting_analysis.amplitudes(
                         which=which, relocated=self.relocate_amplitudes
@@ -258,7 +259,7 @@ class TimeZScatter(UnitPlot):
         unit_id = np.atleast_1d(unit_id)
         multi_unit = unit_id.size > 1
         axis = panel.subplots()
-        
+
         for uid in unit_id:
             in_unit = sorting_analysis.in_unit(uid)
             t = sorting_analysis.times_seconds(which=in_unit)
@@ -273,7 +274,7 @@ class TimeZScatter(UnitPlot):
                     which=in_unit[valid], relocated=self.relocate_amplitudes
                 )
                 c = dict(c=np.minimum(amps, self.amplitude_color_cutoff))
-            
+
             s = axis.scatter(
                 t[valid],
                 z[valid],
@@ -332,7 +333,9 @@ class TimeAmpScatter(UnitPlot):
     kind = "widescatter"
     width = 2
 
-    def __init__(self, relocate_amplitudes=False, amplitude_color_cutoff=15, alpha=0.05):
+    def __init__(
+        self, relocate_amplitudes=False, amplitude_color_cutoff=15, alpha=0.05
+    ):
         super().__init__()
         self.relocate_amplitudes = relocate_amplitudes
         self.amplitude_color_cutoff = amplitude_color_cutoff
@@ -458,7 +461,9 @@ class WaveformPlot(UnitPlot):
         handles = {}
         if waveforms is not None:
             if np.isfinite(waveforms[:, 0, :]).any():
-                max_abs_amp = self.max_abs_template_scale *  np.nanpercentile(np.abs(waveforms), 99)
+                max_abs_amp = self.max_abs_template_scale * np.nanpercentile(
+                    np.abs(waveforms), 99
+                )
             ls = geomplot(
                 waveforms,
                 max_channels=np.full(len(waveforms), max_chan),
@@ -719,9 +724,7 @@ class NeighborCCGPlot(UnitPlot):
             for nid in neighbor_ids
         ]
 
-        axes = panel.subplots(
-            nrows=2, sharey="row", sharex=True, ncols=len(neighb_sts)
-        )
+        axes = panel.subplots(nrows=2, sharey="row", sharex=True, squeeze=False, ncols=len(neighb_sts))
         for j in range(len(neighb_sts)):
             clags, ccg = correlogram(my_st, neighb_sts[j], max_lag=self.max_lag)
             merged_st = np.concatenate((my_st, neighb_sts[j]))
@@ -733,7 +736,7 @@ class NeighborCCGPlot(UnitPlot):
             axes[0, j].set_title(f"unit {neighbor_ids[j]}")
         axes[0, 0].set_ylabel("ccg")
         axes[1, 0].set_ylabel("merged acg")
-        axes[1, (len(neighb_sts) + 1) // 2].set_xlabel("lag (samples)")
+        axes[1, len(neighb_sts) // 2].set_xlabel("lag (samples)")
 
 
 # -- evaluation plots
@@ -829,9 +832,7 @@ class SplitStrategyPlot(UnitPlot):
             split_labels[in_unit] = 0
             unit_ids = 0
             counts = [str(in_unit.size)]
-        split_sorting = replace(
-            sorting_analysis.sorting, labels=split_labels
-        )
+        split_sorting = replace(sorting_analysis.sorting, labels=split_labels)
         split_sorting_analysis = DARTsortAnalysis.from_sorting(
             self.recording,
             split_sorting,
@@ -860,6 +861,7 @@ class SplitStrategyPlot(UnitPlot):
             cs = ", ".join(counts)
             desc = f"split into {unit_ids.size} units with counts:\n{cs}"
         panel.suptitle(f"{self.split_name}, unit {unit_id}. {desc}")
+
 
 # -- multi plots
 # these have multiple plots per unit, and we don't know in advance how many
@@ -1011,6 +1013,13 @@ def make_all_summaries(
     **other_global_params,
 ):
     save_folder = Path(save_folder)
+    if unit_ids is None:
+        unit_ids = sorting_analysis.unit_ids
+    if not overwrite and all_summaries_done(
+        unit_ids, save_folder, ext=image_ext
+    ):
+        return
+    
     save_folder.mkdir(exist_ok=True)
 
     global_params = dict(
@@ -1022,6 +1031,7 @@ def make_all_summaries(
 
     n_jobs, Executor, context = get_pool(n_jobs, cls=CloudpicklePoolExecutor)
     from cloudpickle import dumps
+
     initargs = (
         sorting_analysis,
         plots,
@@ -1040,17 +1050,13 @@ def make_all_summaries(
         initializer=_summary_init,
         initargs=(dumps(initargs),),
     ) as pool:
-        jobs = unit_ids
-        if unit_ids is None:
-            jobs = sorting_analysis.unit_ids
-
-        results = pool.map(_summary_job, jobs)
+        results = pool.map(_summary_job, unit_ids)
         if show_progress:
             results = tqdm(
                 results,
                 desc="Unit summaries",
                 smoothing=0,
-                total=len(jobs),
+                total=len(unit_ids),
             )
         for res in results:
             pass
@@ -1132,6 +1138,7 @@ _summary_job_context = None
 def _summary_init(args):
     global _summary_job_context
     from cloudpickle import loads
+
     args = loads(args)
     _summary_job_context = SummaryJobContext(*args)
 

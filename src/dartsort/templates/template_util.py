@@ -1,9 +1,9 @@
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 import numpy as np
 from dartsort.localize.localize_util import localize_waveforms
-from dartsort.util import drift_util
+from dartsort.util import drift_util, waveform_util
 from dartsort.util.data_util import DARTsortSorting
 from dartsort.util.spiketorch import fast_nanmedian
 from scipy.interpolate import interp1d
@@ -195,6 +195,19 @@ def templates_at_time(
         return pitch_shifts, unregistered_templates
     return unregistered_templates
 
+
+def spatially_mask_templates(template_data, radius_um=0.0):
+    if not radius_um:
+        return template_data
+
+    tt = template_data.templates.copy()
+    ci = waveform_util.make_channel_index(template_data.registered_geom, radius_um)
+    chans = np.arange(ci.shape[0])
+    for j, t in enumerate(tt):
+        mask = ~np.isin(chans, ci[t.ptp(0).argmax()])
+        tt[j, :, mask] = 0.0
+
+    return replace(template_data, templates=tt)
 
 # -- template numerical processing
 
