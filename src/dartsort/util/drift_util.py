@@ -267,6 +267,7 @@ def get_spike_pitch_shifts(
     times_s=None,
     motion_est=None,
     pitch=None,
+    mode="floor",
 ):
     """Figure out coarse pitch shifts based on spike positions
 
@@ -286,7 +287,10 @@ def get_spike_pitch_shifts(
     # and, to be conservative, round towards 0 rather than using //
     # sometimes nans can sneak in here... let's just give them 0 disps.
     probe_displacement = np.nan_to_num(probe_displacement)
-    n_pitches_shift = (probe_displacement / pitch).astype(int)
+    if mode == "floor":
+        n_pitches_shift = (probe_displacement / pitch).astype(int)
+    elif mode == "round":
+        n_pitches_shift = (probe_displacement / pitch).astype(int)
 
     return n_pitches_shift
 
