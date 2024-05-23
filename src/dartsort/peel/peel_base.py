@@ -497,6 +497,9 @@ class BasePeeler(torch.nn.Module):
         )
 
     def load_models(self, save_folder):
+        if not save_folder.exists():
+            return
+
         feats_pt = Path(save_folder) / "featurization_pipeline.pt"
         if feats_pt.exists():
             self.featurization_pipeline = torch.load(feats_pt)
