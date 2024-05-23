@@ -8,6 +8,7 @@ from scipy.sparse.csgraph import connected_components
 from scipy.spatial import KDTree
 from scipy.stats import bernoulli
 from sklearn.neighbors import KDTree as SKDTree
+import multiprocessing
 
 def kdtree_inliers(
     X, kdtree=None, n_neighbors=10, distance_upper_bound=25.0, workers=1
@@ -79,16 +80,19 @@ def get_smoothed_densities(
 
     # select bin edges
     extents = np.c_[np.floor(infeats.min(0)), np.ceil(infeats.max(0))]
+    print(f"{extents=}")
     nbins = np.ceil(extents.ptp(1) / bin_sizes).astype(int)
     bin_edges = [
-        np.linspace(e[0], e[1], num=max(min_n_bins + 1, min(max_n_bins + 1, nb)))
+        np.linspace(e[0], e[1], num=1 + np.clip(nb, min_n_bins, max_n_bins))
         for e, nb in zip(extents, nbins)
     ]
+    print(f"{[be.shape for be in bin_edges]=}")
 
     # compute histogram and figure out how big the bins actually were
     raw_histogram, bin_edges = np.histogramdd(infeats, bins=bin_edges)
     bin_sizes = np.array([(be[1] - be[0]) for be in bin_edges])
     bin_centers = [0.5 * (be[1:] + be[:-1]) for be in bin_edges]
+    print(f"{[bc.shape for bc in bin_centers]=}")
 
     # normalize histogram to samples / volume
     raw_histogram = raw_histogram / bin_sizes.prod()
@@ -108,7 +112,7 @@ def get_smoothed_densities(
         if sigma is not None and sigma_low is None:
             hist = gaussian_filter(raw_histogram, sigma)
         elif sigma is not None and sigma_low is not None:
-            # filter by a sequence of bandwidths                    
+            # filter by a sequence of bandwidths
             ramp = np.linspace(sigma_low, sigma, num=hist.shape[sigma_ramp_ax])
             if revert:
                 ramp[:, sigma_ramp_ax] = np.linspace(
@@ -134,9 +138,13 @@ def get_smoothed_densities(
             hist = np.moveaxis(hist_smoothed, 0, sigma_ramp_ax)
         if return_hist:
             hists.append(hist)
+        print(f"{sigma=} {sigma_low=} {hist.min()=} {hist.max()=}")
 
         lerp = RegularGridInterpolator(bin_centers, hist, bounds_error=False)
-        kdes.append(lerp(X))
+        low = np.array([np.min(bc) for bc in bin_centers])
+        high = np.array([np.max(bc) for bc in bin_centers])
+        dens = lerp(X.clip(low, high))
+        kdes.append(dens)
 
     kdes = kdes if seq else kdes[0]
     if return_hist:
@@ -237,19 +245,20 @@ def density_peaks_clustering(
     amp_no_triaging_after_clustering=12,
     ramp_triage_per_cluster=False,
     revert=False,
-    distance_dependent_noise_density=True,
+    distance_dependent_noise_density=False,
     amp_lowest_noise_density=8,
     min_distance_noise_density=0,
     min_distance_noise_density_10=200,
     max_noise_density=10,
     scales=None,
     log_c=None,
-    
 ):
     """
     if l2_norm is passed as argument, it will be used to compute density and nhdn
     """
     # n = len(X)
+    if workers < 0:
+        workers = multiprocessing.cpu_count() + workers + 1
 
     if ramp_triage_before_clustering and geom is not None:
         inliers_first = np.ones(len(X)).astype('bool')
@@ -287,6 +296,7 @@ def density_peaks_clustering(
             distance_upper_bound=outlier_radius,
             workers=workers,
         )
+    print(f"{inliers.mean()=}")
 
     # inliers = inliers_first[inliers]
 
