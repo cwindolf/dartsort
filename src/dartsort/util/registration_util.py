@@ -27,10 +27,11 @@ def estimate_motion(
     max_dt_s: float = 1000.0,
     max_disp_um: Optional[float] = None,
     correlation_threshold: float = 0.1,
-    min_amplitude: Optional[float] = 0,
+    min_amplitude: Optional[float] = None,
+    masked_correlation: bool = False,
     rigid: bool=False,
-    localizations_dataset_name: str="point_source_localizations",
-    amplitudes_dataset_name: str="denoised_ptp_amplitudes",
+    localizations_dataset_name="point_source_localizations",
+    amplitudes_dataset_name="denoised_ptp_amplitudes",
     device: Optional["torch.device"]=None,
 ):
     if not do_motion_estimation:
@@ -75,6 +76,7 @@ def estimate_motion(
         win_step_um=window_step_um,
         win_scale_um=window_scale_um,
         win_margin_um=window_margin_um,
+        count_masked_correlation=masked_correlation,
         max_disp_um=max_disp_um,
         max_dt_s=max_dt_s,
         mincorr=correlation_threshold,
