@@ -7,8 +7,8 @@ from scipy.sparse import coo_array
 from scipy.sparse.csgraph import connected_components
 from scipy.spatial import KDTree
 from scipy.stats import bernoulli
-from sklearn.neighbors import KDTree as SKDTree
 import multiprocessing
+
 
 def kdtree_inliers(
     X, kdtree=None, n_neighbors=10, distance_upper_bound=25.0, workers=1
@@ -44,10 +44,10 @@ def get_smoothed_densities(
     sigma_lows=None,
     sigma_ramp_ax=-1,
     bin_sizes=None,
-    bin_size_ratio=5.0,
-    min_bin_size=1.0,
+    bin_size_ratio=10.0,
+    min_bin_size=0.1,
     ramp_min_bin_size=5.0,
-    max_n_bins=512,
+    max_n_bins=128,
     min_n_bins=5,
     revert=False,
 ):
@@ -74,25 +74,21 @@ def get_smoothed_densities(
     bin_sizes = np.full(X.shape[1], min_sigma / bin_size_ratio)
     bin_sizes = np.maximum(min_bin_size, bin_sizes)
     if do_ramp:
-        bin_sizes[sigma_ramp_ax] = max(
-            bin_sizes[sigma_ramp_ax], ramp_min_bin_size
-        )
+        bin_sizes[sigma_ramp_ax] = max(bin_sizes[sigma_ramp_ax], ramp_min_bin_size)
 
     # select bin edges
     extents = np.c_[np.floor(infeats.min(0)), np.ceil(infeats.max(0))]
-    print(f"{extents=}")
-    nbins = np.ceil(extents.ptp(1) / bin_sizes).astype(int)
+    if not (extents.ptp(1) > 0).all():
+        raise ValueError(f"Issue in KDE. {extents.ptp(1)=} {infeats.shape=} {sigmas=} {bin_sizes=}.")
     bin_edges = [
-        np.linspace(e[0], e[1], num=1 + np.clip(nb, min_n_bins, max_n_bins))
+        np.linspace(e[0], e[1], num=nb + 1
         for e, nb in zip(extents, nbins)
     ]
-    print(f"{[be.shape for be in bin_edges]=}")
 
     # compute histogram and figure out how big the bins actually were
     raw_histogram, bin_edges = np.histogramdd(infeats, bins=bin_edges)
     bin_sizes = np.array([(be[1] - be[0]) for be in bin_edges])
     bin_centers = [0.5 * (be[1:] + be[:-1]) for be in bin_edges]
-    print(f"{[bc.shape for bc in bin_centers]=}")
 
     # normalize histogram to samples / volume
     raw_histogram = raw_histogram / bin_sizes.prod()
@@ -120,10 +116,6 @@ def get_smoothed_densities(
                     sigma_low[sigma_ramp_ax],
                     num=hist.shape[sigma_ramp_ax],
                 )
-                # ramp[:, 0] = sigma[0]
-                # ramp[:, 1] = sigma[1]
-                # print(sigma[0])
-                # print(sigma[1])
 
             # operate along the ramp axis
             hist_move = np.moveaxis(hist, sigma_ramp_ax, 0)
@@ -132,13 +124,10 @@ def get_smoothed_densities(
                 sig_move = sig.copy()
                 sig_move[0] = sig[sigma_ramp_ax]
                 sig_move[sigma_ramp_ax] = sig[0]
-                hist_smoothed[j] = gaussian_filter(hist_move, sig_move)[
-                    j
-                ]  # sig_move
+                hist_smoothed[j] = gaussian_filter(hist_move, sig_move)[j]  # sig_move
             hist = np.moveaxis(hist_smoothed, 0, sigma_ramp_ax)
         if return_hist:
             hists.append(hist)
-        print(f"{sigma=} {sigma_low=} {hist.min()=} {hist.max()=}")
 
         lerp = RegularGridInterpolator(bin_centers, hist, bounds_error=False)
         low = np.array([np.min(bc) for bc in bin_centers])
@@ -209,7 +198,7 @@ def remove_border_points(
 def decrumb(labels, min_size=5):
     units, counts = np.unique(labels, return_counts=True)
     big_enough = counts >= min_size
-    units[~big_enough] = -1
+    units[np.logical_not(big_enough)] = -1
     units[big_enough] = np.arange(big_enough.sum())
     return units[labels]
 
@@ -219,13 +208,14 @@ def density_peaks_clustering(
     geom=None,
     y=None,
     z_not_reg=None,
-    use_y_triaging=True,
+    use_y_triaging=False,
     l2_norm=None,
     kdtree=None,
     sigma_local=5.0,
     sigma_local_low=None,
     sigma_regional=None,
     sigma_regional_low=None,
+    min_bin_size=1.0,
     outlier_neighbor_count=10,
     outlier_radius=25.0,
     n_neighbors_search=10,
@@ -239,7 +229,7 @@ def density_peaks_clustering(
     return_extra=False,
     triage_quantile_before_clustering=0,
     amp_no_triaging_before_clustering=6,
-    ramp_triage_before_clustering=True,
+    ramp_triage_before_clustering=False,
     radius_triage_before_clustering=75,
     triage_quantile_per_cluster=0,
     amp_no_triaging_after_clustering=12,
@@ -250,6 +240,7 @@ def density_peaks_clustering(
     min_distance_noise_density=0,
     min_distance_noise_density_10=200,
     max_noise_density=10,
+    max_n_bins=128,
     scales=None,
     log_c=None,
 ):
@@ -261,24 +252,35 @@ def density_peaks_clustering(
         workers = multiprocessing.cpu_count() + workers + 1
 
     if ramp_triage_before_clustering and geom is not None:
-        inliers_first = np.ones(len(X)).astype('bool')
-        idx_low_ptp = np.flatnonzero(X[:, 2]<scales[2]*np.log(log_c+amp_no_triaging_before_clustering))
-        distances_to_geom = (np.sqrt((X[idx_low_ptp, :2][None] - geom[:, None])**2).sum(2)).min(0)
-        probabilities = np.minimum(distances_to_geom, radius_triage_before_clustering)/radius_triage_before_clustering
-        which_to_discard = bernoulli.rvs(probabilities).astype('bool')
+        inliers_first = np.ones(len(X)).astype("bool")
+        idx_low_ptp = np.flatnonzero(
+            X[:, 2] < scales[2] * np.log(log_c + amp_no_triaging_before_clustering)
+        )
+        distances_to_geom = (
+            np.sqrt((X[idx_low_ptp, :2][None] - geom[:, None]) ** 2).sum(2)
+        ).min(0)
+        probabilities = (
+            np.minimum(distances_to_geom, radius_triage_before_clustering)
+            / radius_triage_before_clustering
+        )
+        which_to_discard = bernoulli.rvs(probabilities).astype("bool")
         inliers_first[idx_low_ptp[which_to_discard]] = False
         inliers_first = np.arange(len(X))[inliers_first]
     else:
         inliers_first = np.arange(len(X))
 
     n = len(inliers_first)
+    if n <= 1:
+        if return_extra:
+            return dict(labels=np.full(X.shape[0], -1))
+        return np.full(X.shape[0], -1)
 
     if use_y_triaging and y is not None:
         inliers, _ = kdtree_inliers(
             np.c_[X[inliers_first], y[inliers_first]],
             kdtree=kdtree,
             n_neighbors=outlier_neighbor_count,
-            distance_upper_bound=outlier_radius*np.sqrt(4/3),
+            distance_upper_bound=outlier_radius * np.sqrt(4 / 3),
             workers=workers,
         )
         _, kdtree = kdtree_inliers(
@@ -298,27 +300,58 @@ def density_peaks_clustering(
         )
     print(f"{inliers.mean()=}")
 
+    if not inliers.sum() > 1:
+        if return_extra:
+            return dict(labels=np.full(X.shape[0], -1))
+        return np.full(X.shape[0], -1)
+
     # inliers = inliers_first[inliers]
 
+    if sigma_local == "rule_of_thumb":
+        sigma_local = (
+            1.06
+            * np.linalg.norm(np.std(X[inliers_first][inliers], axis=0))
+            * np.power(inliers.sum(), -0.2)
+        )
+        if sigma_local <= 0:
+            raise ValueError(
+                f"rule of thumb problems. {sigma_local=} "
+                f"{np.std(X[inliers_first][inliers], axis=0)=} "
+                f"{len(X)=} {np.power(len(X), -0.2)=} "
+                f"{X.shape=} {inliers_first.shape=} {inliers.sum()=} "
+                f"{X[inliers_first][inliers].shape=}"
+            )
+        if sigma_regional == "rule_of_thumb":
+            radius_search = 2.0 * sigma_local
+            sigma_regional = 10 * sigma_local
+        else:
+            radius_search = 2.0 * sigma_local
+
     if l2_norm is None:
-        do_ratio = int(sigma_regional is not None)
+        do_ratio = sigma_regional is not None
         density = get_smoothed_densities(
             X[inliers_first],
             inliers=inliers,
             sigmas=sigma_local,
             sigma_lows=sigma_local_low,
             revert=revert,
+            min_bin_size=min_bin_size,
+            max_n_bins=max_n_bins,
         )
         if density is None:
-            return np.full(X[inliers_first].shape[0], -1)
+            if return_extra:
+                return dict(labels=np.full(X.shape[0], -1))
+            return np.full(X.shape[0], -1)
         if do_ratio:
             reg_density = get_smoothed_densities(
                 X[inliers_first],
                 inliers=inliers,
                 sigmas=sigma_regional,
                 sigma_lows=sigma_regional_low,
+                min_bin_size=min_bin_size,
             )
-            density = np.nan_to_num(density / reg_density)
+            density = density / reg_density
+        density = np.nan_to_num(density)
 
         nhdn, distances, indices = nearest_higher_density_neighbor(
             kdtree,
@@ -327,7 +360,6 @@ def density_peaks_clustering(
             distance_upper_bound=radius_search,
             workers=workers,
         )
-
     else:
         # inliers don't matter here? Or should we still remove them?...
         # indices = np.full(l2_norm.shape[0], n)
@@ -348,26 +380,48 @@ def density_peaks_clustering(
         nhdn[density <= noise_density] = n
 
     if distance_dependent_noise_density and noise_density is not None:
-        dist = np.sqrt(((np.c_[X[inliers_first, 0], z_not_reg[inliers_first]][:, None] - geom[None])**2).sum(2)).min(1)
-        noise_density_dist = np.minimum(np.maximum(dist - min_distance_noise_density, 0), min_distance_noise_density_10 - min_distance_noise_density) * (max_noise_density-noise_density) / (min_distance_noise_density_10 - min_distance_noise_density) + noise_density
-        noise_density_dist[X[inliers_first, 2]>scales[2]*np.log(log_c+amp_lowest_noise_density)]=2
+        dist = np.sqrt(
+            (
+                (
+                    np.c_[X[inliers_first, 0], z_not_reg[inliers_first]][:, None]
+                    - geom[None]
+                )
+                ** 2
+            ).sum(2)
+        ).min(1)
+        noise_density_dist = (
+            np.minimum(
+                np.maximum(dist - min_distance_noise_density, 0),
+                min_distance_noise_density_10 - min_distance_noise_density,
+            )
+            * (max_noise_density - noise_density)
+            / (min_distance_noise_density_10 - min_distance_noise_density)
+            + noise_density
+        )
+        noise_density_dist[
+            X[inliers_first, 2] > scales[2] * np.log(log_c + amp_lowest_noise_density)
+        ] = 2
         nhdn[density <= noise_density_dist] = n
     if triage_quantile_before_clustering and l2_norm is None:
         q = np.quantile(density, triage_quantile_before_clustering)
         idx_triaging = np.flatnonzero(
             np.logical_and(
-            X[inliers_first, 2]< scales[2]*np.log(log_c+amp_no_triaging_before_clustering),
-            density < q)
+                X[inliers_first, 2]
+                < scales[2] * np.log(log_c + amp_no_triaging_before_clustering),
+                density < q,
+            )
         )
-        nhdn[idx_triaging]=n
-        
+        nhdn[idx_triaging] = n
+
     nhdn = nhdn.astype(np.intc)
     has_nhdn = np.flatnonzero(nhdn < n).astype(np.intc)
-
-    graph = coo_array(
-        (np.ones(has_nhdn.size), (nhdn[has_nhdn], has_nhdn)), shape=(n, n)
+    rc = (
+        np.concatenate([nhdn[has_nhdn], has_nhdn]),
+        np.concatenate([has_nhdn, nhdn[has_nhdn]]),
     )
-    ncc, labels = connected_components(graph)
+
+    graph = coo_array((np.ones(2 * has_nhdn.size), rc), shape=(n, n))
+    ncc, labels = connected_components(graph, directed=False)
 
     if remove_borders:
         labels = remove_border_points(
@@ -382,18 +436,22 @@ def density_peaks_clustering(
     if remove_clusters_smaller_than:
         labels = decrumb(labels, min_size=remove_clusters_smaller_than)
 
-    if triage_quantile_per_cluster > 0:
-        amp_no_triaging_after_clustering = scales[2]*np.log(log_c+amp_no_triaging_after_clustering)
+    if triage_quantile_per_cluster:
+        amp_no_triaging_after_clustering = scales[2] * np.log(
+            log_c + amp_no_triaging_after_clustering
+        )
         for k in np.unique(labels[labels > -1]):
             idx_label = np.flatnonzero(labels == k)
             amp_vec = X[inliers_first][idx_label, 2]
             med_amp = np.median(amp_vec)
             # print("median amplitude")
             # print(med_amp)
-            if med_amp<amp_no_triaging_after_clustering:
+            if med_amp < amp_no_triaging_after_clustering:
                 if ramp_triage_per_cluster:
                     # print("updating value")
-                    triage_quantile_per_cluster = (amp_no_triaging_after_clustering - med_amp)/amp_no_triaging_after_clustering
+                    triage_quantile_per_cluster = (
+                        amp_no_triaging_after_clustering - med_amp
+                    ) / amp_no_triaging_after_clustering
                 # triage_quantile_unit = triage_quantile_per_cluster
                 if l2_norm is None:
                     q = np.quantile(density[idx_label], triage_quantile_per_cluster)
@@ -404,7 +462,7 @@ def density_peaks_clustering(
                         )
                     )
                 else:
-                    q = np.quantile(density[idx_label], 1-triage_quantile_per_cluster)
+                    q = np.quantile(density[idx_label], 1 - triage_quantile_per_cluster)
                     spikes_to_remove = np.flatnonzero(
                         np.logical_and(
                             density[idx_label] > q,
@@ -419,11 +477,11 @@ def density_peaks_clustering(
 
     labels_all = np.full(len(X), -1)
     labels_all[inliers_first] = labels
-    
+
     if not return_extra:
         return labels_all
 
-    density_all = np.full(len(X), 0)
+    density_all = np.zeros(len(X))
     nhdn_all = np.full(len(X), n)
     density_all[inliers_first] = density
     nhdn_all[inliers_first] = nhdn
