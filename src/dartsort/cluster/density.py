@@ -81,7 +81,7 @@ def get_smoothed_densities(
     if not (extents.ptp(1) > 0).all():
         raise ValueError(f"Issue in KDE. {extents.ptp(1)=} {infeats.shape=} {sigmas=} {bin_sizes=}.")
     bin_edges = [
-        np.linspace(e[0], e[1], num=nb + 1
+        np.linspace(e[0], e[1], num=nb + 1)
         for e, nb in zip(extents, nbins)
     ]
 
