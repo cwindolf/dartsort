@@ -543,7 +543,8 @@ def compressed_convolve_pairs(
         conv_ix=conv_ix,
         conv_compressed_upsampled_ix_b=conv_compressed_upsampled_ix_b,
         max_shift=max_shift,
-        conv_ignore_threshold=conv_ignore_threshold,
+        # conv_ignore_threshold=conv_ignore_threshold,
+        conv_ignore_threshold=0.0,
         batch_size=batch_size,
         # restrict_to_active=reduce_deconv_resid_norm,
     )

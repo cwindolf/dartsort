@@ -1,6 +1,7 @@
 import torch
 from dartsort.detect import detect_and_deduplicate
 from dartsort.util import spiketorch
+from dartsort.util.data_util import SpikeDataset
 
 from .peel_base import BasePeeler
 
@@ -17,6 +18,8 @@ class ThresholdAndFeaturize(BasePeeler):
         chunk_length_samples=30_000,
         peak_sign="both",
         spatial_dedup_channel_index=None,
+        relative_peak_radius_samples=5,
+        dedup_temporal_radius_samples=7,
         n_chunks_fit=40,
         max_waveforms_fit=50_000,
         fit_subsampling_random_state=0,
@@ -34,6 +37,8 @@ class ThresholdAndFeaturize(BasePeeler):
 
         self.trough_offset_samples = trough_offset_samples
         self.spike_length_samples = spike_length_samples
+        self.relative_peak_radius_samples = relative_peak_radius_samples
+        self.dedup_temporal_radius_samples = dedup_temporal_radius_samples
         self.peak_sign = peak_sign
         if spatial_dedup_channel_index is not None:
             self.register_buffer(
@@ -44,6 +49,13 @@ class ThresholdAndFeaturize(BasePeeler):
             self.spatial_dedup_channel_index = None
         self.detection_threshold = detection_threshold
         self.peel_kind = f"Threshold {detection_threshold}"
+
+    def out_datasets(self):
+        datasets = super().out_datasets()
+        datasets.append(
+            SpikeDataset(name="voltages", shape_per_spike=(), dtype=float)
+        )
+        return datasets
 
     def peel_chunk(
         self,
@@ -58,6 +70,8 @@ class ThresholdAndFeaturize(BasePeeler):
             self.detection_threshold,
             dedup_channel_index=self.spatial_dedup_channel_index,
             peak_sign=self.peak_sign,
+            dedup_temporal_radius=self.dedup_temporal_radius_samples,
+            relative_peak_radius=self.relative_peak_radius_samples,
         )
         if not times_rel.numel():
             return dict(n_spikes=0)
@@ -72,6 +86,7 @@ class ThresholdAndFeaturize(BasePeeler):
         if not times_rel.numel():
             return dict(n_spikes=0)
         channels = channels[valid]
+        voltages = traces[times_rel, channels]
 
         # load up the waveforms for this chunk
         waveforms = spiketorch.grab_spikes(
@@ -92,6 +107,7 @@ class ThresholdAndFeaturize(BasePeeler):
             n_spikes=times_rel.numel(),
             times_samples=times_samples,
             channels=channels,
+            voltages=voltages,
             collisioncleaned_waveforms=waveforms,
         )
         return peel_result

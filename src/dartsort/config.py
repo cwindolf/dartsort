@@ -202,6 +202,7 @@ class MatchingConfig:
     max_iter: int = 1000
     conv_ignore_threshold: float = 5.0
     coarse_approx_error_threshold: float = 0.0
+    coarse_objective: bool = True
 
 
 @dataclass(frozen=True)
@@ -249,6 +250,7 @@ class ClusteringConfig:
     sigma_local_low: Optional[float] = None
     sigma_regional: Optional[float] = None
     sigma_regional_low: Optional[float] = None
+    workers: Optional[int] = -1
     n_neighbors_search: int = 20
     radius_search: float = 5.0
     remove_clusters_smaller_than: int = 10

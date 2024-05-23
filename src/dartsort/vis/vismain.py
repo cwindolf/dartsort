@@ -31,6 +31,7 @@ def visualize_sorting(
     gt_sorting=None,
     superres_templates=True,
     sorting_analysis=None,
+    amplitudes_dataset_name='denoised_ptp_amplitudes',
     channel_show_radius_um=50.0,
     amplitude_color_cutoff=15.0,
     pca_radius_um=75.0,
@@ -63,7 +64,7 @@ def visualize_sorting(
         if overwrite or not scatter_unreg.exists():
             fig = plt.figure(figsize=layout_figsize)
             fig, axes, scatters = scatterplots.scatter_spike_features(
-                sorting=sorting, figure=fig
+                sorting=sorting, figure=fig, amplitude_color_cutoff=amplitude_color_cutoff, amplitudes_dataset_name=amplitudes_dataset_name,
             )
             if have_dredge and motion_est is not None:
                 motion_util.plot_me_traces(motion_est, axes[2], color="r", lw=1)
@@ -78,6 +79,7 @@ def visualize_sorting(
                 motion_est=motion_est,
                 registered=True,
                 figure=fig,
+                amplitude_color_cutoff=amplitude_color_cutoff, amplitudes_dataset_name=amplitudes_dataset_name,
             )
             fig.savefig(scatter_reg, dpi=dpi)
             plt.close(fig)

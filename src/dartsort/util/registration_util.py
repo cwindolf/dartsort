@@ -27,19 +27,20 @@ def estimate_motion(
     max_dt_s: float = 1000.0,
     max_disp_um: Optional[float] = None,
     correlation_threshold: float = 0.1,
-    min_amplitude: Optional[float] = None,
-    rigid=False,
-    localizations_dataset_name="point_source_localizations",
-    amplitudes_dataset_name="denoised_ptp_amplitudes",
-    device=None,
+    min_amplitude: Optional[float] = 0,
+    rigid: bool=False,
+    localizations_dataset_name: str="point_source_localizations",
+    amplitudes_dataset_name: str="denoised_ptp_amplitudes",
+    device: Optional["torch.device"]=None,
 ):
     if not do_motion_estimation:
         return None
 
-    motion_est_pkl = output_directory / "motion_est.pkl"
-    if not overwrite and motion_est_pkl.exists():
-        with open(motion_est_pkl, "rb") as jar:
-            return pickle.load(jar)
+    if output_directory is not None:
+        motion_est_pkl = output_directory / "motion_est.pkl"
+        if not overwrite and motion_est_pkl.exists():
+            with open(motion_est_pkl, "rb") as jar:
+                return pickle.load(jar)
 
     if not have_dredge:
         raise ValueError("Please install DREDge to use motion estimation.")
@@ -80,7 +81,8 @@ def estimate_motion(
         device=device,
     )
 
-    with open(motion_est_pkl, "wb") as jar:
-        pickle.dump(motion_est, jar)
+    if output_directory is not None:
+        with open(motion_est_pkl, "wb") as jar:
+            pickle.dump(motion_est, jar)
 
     return motion_est
