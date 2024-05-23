@@ -17,6 +17,7 @@ def scatter_spike_features(
     depths_um=None,
     x=None,
     amplitudes=None,
+    labels=None,
     geom=None,
     figure=None,
     axes=None,
@@ -91,6 +92,10 @@ def scatter_spike_features(
                 geom = h5["geom"][:]
 
     to_show = np.flatnonzero(np.clip(times_s, t_min, t_max) == times_s)
+    if x is not None:
+        to_show = to_show[np.isfinite(x[to_show])]
+    if depths_um is not None:
+        to_show = to_show[np.isfinite(depths_um[to_show])]
     if geom is not None:
         to_show = to_show[
             (depths_um[to_show] > geom[:, 1].min() - probe_margin_um)
@@ -104,6 +109,7 @@ def scatter_spike_features(
         depths_um=depths_um,
         times_s=times_s,
         amplitudes=amplitudes,
+        labels=labels,
         show_geom=show_geom,
         geom_scatter_kw=geom_scatter_kw,
         sorting=sorting,
@@ -128,6 +134,7 @@ def scatter_spike_features(
     _, s_a = scatter_amplitudes_vs_depth(
         depths_um=depths_um,
         amplitudes=amplitudes,
+        labels=labels,
         times_s=times_s,
         semilog_amplitudes=semilog_amplitudes,
         sorting=sorting,
@@ -155,6 +162,7 @@ def scatter_spike_features(
             feature,
             depths_um=depths_um,
             amplitudes=amplitudes,
+            labels=labels,
             sorting=sorting,
             times_s=times_s,
             motion_est=motion_est,
@@ -181,6 +189,7 @@ def scatter_spike_features(
         times_s=times_s,
         depths_um=depths_um,
         amplitudes=amplitudes,
+        labels=labels,
         sorting=sorting,
         motion_est=motion_est,
         registered=registered,
@@ -231,6 +240,7 @@ def scatter_time_vs_depth(
     to_show=None,
     amplitudes_dataset_name="denoised_ptp_amplitudes",
     show_triaged=True,
+    time_range=None,
     **scatter_kw,
 ):
     """Scatter plot of spike time vs spike depth (vertical position on probe)
@@ -271,6 +281,7 @@ def scatter_time_vs_depth(
         depths_um,
         times_s=times_s,
         amplitudes=amplitudes,
+        labels=labels,
         sorting=sorting,
         motion_est=motion_est,
         registered=registered,
@@ -286,6 +297,7 @@ def scatter_time_vs_depth(
         random_seed=random_seed,
         to_show=to_show,
         show_triaged=show_triaged,
+        time_range=time_range,
         **scatter_kw,
     )
 
@@ -330,6 +342,7 @@ def scatter_x_vs_depth(
         depths_um,
         times_s=times_s,
         amplitudes=amplitudes,
+        labels=labels,
         sorting=sorting,
         motion_est=motion_est,
         registered=registered,
@@ -410,6 +423,7 @@ def scatter_amplitudes_vs_depth(
         depths_um,
         times_s=times_s,
         amplitudes=amplitudes,
+        labels=labels,
         sorting=sorting,
         motion_est=motion_est,
         registered=registered,
@@ -452,6 +466,7 @@ def scatter_feature_vs_depth(
     limits="probe_margin",
     random_seed=0,
     to_show=None,
+    time_range=None,
     rasterized=True,
     show_triaged=True,
     show_ellipses=False,
@@ -478,19 +493,28 @@ def scatter_feature_vs_depth(
     n_spikes = len(feature)
     if to_show is None:
         to_show = np.arange(n_spikes)
+
+    to_show = to_show[np.isfinite(depths_um[to_show])]
+    to_show = to_show[np.isfinite(feature[to_show])]
     if geom is not None:
         to_show = to_show[
             (depths_um[to_show] > geom[:, 1].min() - probe_margin_um)
             & (depths_um[to_show] < geom[:, 1].max() + probe_margin_um)
         ]
+    if time_range is not None:
+        assert times_s is not None
+        to_show = to_show[np.clip(times_s[to_show], *time_range) == times_s[to_show]]
+    rg = np.random.default_rng(random_seed)
     if len(to_show) > max_spikes_plot:
-        rg = np.random.default_rng(random_seed)
         to_show = rg.choice(to_show, size=max_spikes_plot, replace=False)
+    else:
+        to_show = rg.choice(to_show, size=to_show.size, replace=False)
 
     if registered:
         assert motion_est is not None
         assert times_s is not None
-        depths_um = motion_est.correct_s(times_s, depths_um)
+        depths_um = depths_um.copy()
+        depths_um[to_show] = motion_est.correct_s(times_s[to_show], depths_um[to_show])
 
     # order by amplitude so that high amplitude units show up
     if amplitudes is not None:
@@ -502,6 +526,7 @@ def scatter_feature_vs_depth(
 
     if labels is None:
         c = np.clip(amplitudes[to_show], 0, amplitude_color_cutoff)
+        c = amplitude_cmap(c / amplitude_color_cutoff)
         order = slice(None)
         show_ellipses = False
     else:
@@ -514,8 +539,12 @@ def scatter_feature_vs_depth(
         to_show = to_show[order]
         c = glasbey1024[labels[to_show] % len(glasbey1024)]
         if show_triaged:
-            c[labels[to_show] == -1] = gray
+            triaged = labels[to_show] < 0
+            tc = np.clip(amplitudes[to_show[triaged]], 0, amplitude_color_cutoff)
+            tc = plt.cm.binary(tc / amplitude_color_cutoff)
+            c[triaged] = tc[..., :3]
         else:
+            c = c[labels[to_show] >= 0]
             to_show = to_show[labels[to_show] >= 0]
 
     feature = feature[to_show]
