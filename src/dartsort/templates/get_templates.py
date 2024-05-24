@@ -40,6 +40,7 @@ def get_templates(
     random_seed=0,
     units_per_job=8,
     n_jobs=0,
+    dtype=np.float32,
     show_progress=True,
     device=None,
 ):
@@ -121,6 +122,7 @@ def get_templates(
             random_seed=random_seed,
             n_jobs=n_jobs,
             show_progress=show_progress,
+            dtype=dtype,
             device=device,
         )
         sorting, templates = realign_sorting(
@@ -144,6 +146,7 @@ def get_templates(
         denoising_tsvd = fit_tsvd(
             recording,
             sorting,
+            dtype=dtype,
             denoising_rank=denoising_rank,
             denoising_fit_radius=denoising_fit_radius,
             denoising_spikes_fit=denoising_spikes_fit,
@@ -166,6 +169,7 @@ def get_templates(
         units_per_job=units_per_job,
         random_seed=random_seed,
         show_progress=show_progress,
+        dtype=dtype,
         trough_offset_samples=trough_offset_samples,
         spike_length_samples=spike_length_samples,
         min_fraction_at_shift=min_fraction_at_shift,
@@ -220,6 +224,7 @@ def get_raw_templates(
     reducer=fast_nanmedian,
     random_seed=0,
     n_jobs=0,
+    dtype=np.float32,
     show_progress=True,
     device=None,
 ):
@@ -239,6 +244,7 @@ def get_raw_templates(
         reducer=reducer,
         random_seed=random_seed,
         n_jobs=n_jobs,
+        dtype=dtype,
         show_progress=show_progress,
         device=device,
     )
@@ -299,6 +305,7 @@ def fit_tsvd(
     denoising_spikes_fit=25_000,
     trough_offset_samples=42,
     spike_length_samples=121,
+    dtype=np.float32,
     random_seed=0,
 ):
     # read spikes on channel neighborhood
@@ -325,6 +332,7 @@ def fit_tsvd(
         spike_length_samples=spike_length_samples,
         fill_value=0.0,  # all-0 rows don't change SVD basis
     )
+    waveforms = waveforms.astype(dtype)
     waveforms = waveforms.transpose(0, 2, 1)
     waveforms = waveforms.reshape(len(times) * tsvd_channel_index.shape[1], -1)
 
@@ -388,6 +396,7 @@ def get_all_shifted_raw_and_low_rank_templates(
     spike_length_samples=121,
     min_fraction_at_shift=0.1,
     min_count_at_shift=5,
+    dtype=np.float32,
     device=None,
 ):
     n_jobs, Executor, context, rank_queue = get_pool(
@@ -408,13 +417,13 @@ def get_all_shifted_raw_and_low_rank_templates(
     n_units = unit_ids.size
     raw_templates = np.zeros(
         (n_units, spike_length_samples, n_template_channels),
-        dtype=recording.dtype,
+        dtype=dtype,
     )
     low_rank_templates = None
     if not raw:
         low_rank_templates = np.zeros(
             (n_units, spike_length_samples, n_template_channels),
-            dtype=recording.dtype,
+            dtype=dtype,
         )
     snrs_by_channel = np.zeros(
         (n_units, n_template_channels), dtype=recording.dtype
@@ -445,6 +454,7 @@ def get_all_shifted_raw_and_low_rank_templates(
             spike_length_samples,
             device,
             units_per_job,
+            dtype,
         ),
     ) as pool:
         # launch the jobs and wrap in a progress bar
@@ -490,6 +500,7 @@ class TemplateProcessContext:
         spike_length_samples,
         device,
         units_per_job,
+        dtype,
     ):
         self.n_channels = recording.get_num_channels()
         self.registered = registered_kdtree is not None
@@ -523,7 +534,7 @@ class TemplateProcessContext:
                 self.n_channels,
             ),
             device=device,
-            dtype=torch.from_numpy(np.zeros(1, dtype=recording.dtype)).dtype,
+            dtype=torch.from_numpy(np.zeros(1, dtype=dtype)).dtype,
         )
 
         self.n_template_channels = self.n_channels
@@ -555,6 +566,7 @@ def _template_process_init(
     spike_length_samples,
     device,
     units_per_job,
+    dtype,
 ):
     global _template_process_context
 
@@ -585,6 +597,7 @@ def _template_process_init(
         spike_length_samples,
         device,
         units_per_job,
+        dtype,
     )
 
 
@@ -635,7 +648,7 @@ def _template_job(unit_ids):
         trough_offset_samples=p.trough_offset_samples,
         spike_length_samples=p.spike_length_samples,
     )
-    p.spike_buffer[: times.size] = torch.from_numpy(waveforms)
+    p.spike_buffer[: times.size] = torch.from_numpy(waveforms.astype(p.dtype))
     waveforms = p.spike_buffer[: times.size]
     n, t, c = waveforms.shape
 
