@@ -453,6 +453,7 @@ class DARTsortAnalysis:
             spike_length_samples=spike_length_samples,
             fill_value=np.nan,
         )
+        waveforms = waveforms.astype(self.template_data.templates.dtype)
         if not self.shifting:
             return (
                 which,
