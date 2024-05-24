@@ -33,6 +33,7 @@ class SubtractionPeeler(BasePeeler):
         max_waveforms_fit=50_000,
         fit_subsampling_random_state=0,
         residnorm_decrease_threshold=3.162,
+        dtype=torch.float,
     ):
         super().__init__(
             recording=recording,
@@ -43,6 +44,7 @@ class SubtractionPeeler(BasePeeler):
             n_chunks_fit=n_chunks_fit,
             max_waveforms_fit=max_waveforms_fit,
             fit_subsampling_random_state=fit_subsampling_random_state,
+            dtype=dtype,
         )
 
         self.trough_offset_samples = trough_offset_samples
