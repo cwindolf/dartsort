@@ -80,8 +80,10 @@ def get_smoothed_densities(
     extents = np.c_[np.floor(infeats.min(0)), np.ceil(infeats.max(0))]
     if not (extents.ptp(1) > 0).all():
         raise ValueError(f"Issue in KDE. {extents.ptp(1)=} {infeats.shape=} {sigmas=} {bin_sizes=}.")
+    nbins = np.ceil(extents.ptp(1) / bin_sizes).astype(int)
+    nbins = nbins.clip(min_n_bins, max_n_bins)
     bin_edges = [
-        np.linspace(e[0], e[1], num=nb + 1
+        np.linspace(e[0], e[1], num=nb + 1)
         for e, nb in zip(extents, nbins)
     ]
 
@@ -298,7 +300,6 @@ def density_peaks_clustering(
             distance_upper_bound=outlier_radius,
             workers=workers,
         )
-    print(f"{inliers.mean()=}")
 
     if not inliers.sum() > 1:
         if return_extra:
@@ -444,11 +445,8 @@ def density_peaks_clustering(
             idx_label = np.flatnonzero(labels == k)
             amp_vec = X[inliers_first][idx_label, 2]
             med_amp = np.median(amp_vec)
-            # print("median amplitude")
-            # print(med_amp)
             if med_amp < amp_no_triaging_after_clustering:
                 if ramp_triage_per_cluster:
-                    # print("updating value")
                     triage_quantile_per_cluster = (
                         amp_no_triaging_after_clustering - med_amp
                     ) / amp_no_triaging_after_clustering
@@ -470,10 +468,7 @@ def density_peaks_clustering(
                         )
                     )
 
-                # print("spikes removal")
-                # print(np.unique(idx_label[spikes_to_remove]))
                 labels[idx_label[spikes_to_remove]] = -1
-                # print(np.unique(idx_label[spikes_to_remove]))
 
     labels_all = np.full(len(X), -1)
     labels_all[inliers_first] = labels
