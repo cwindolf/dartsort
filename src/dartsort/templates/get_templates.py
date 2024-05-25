@@ -195,7 +195,7 @@ def get_templates(
         snr_threshold=denoising_snr_threshold,
     )
     templates = weights * raw_templates + (1 - weights) * low_rank_templates
-    templates = templates.astype(recording.dtype)
+    templates = templates.astype(dtype)
 
     return dict(
         sorting=sorting,
@@ -426,7 +426,7 @@ def get_all_shifted_raw_and_low_rank_templates(
             dtype=dtype,
         )
     snrs_by_channel = np.zeros(
-        (n_units, n_template_channels), dtype=recording.dtype
+        (n_units, n_template_channels), dtype=dtype
     )
 
     unit_id_chunks = [
@@ -507,13 +507,14 @@ class TemplateProcessContext:
 
         self.rg = rg
         self.device = device
+        self.dtype = dtype
         self.recording = recording
         self.sorting = sorting
         self.denoising_tsvd = denoising_tsvd
         if denoising_tsvd is not None:
             self.denoising_tsvd = TorchSVDProjector(
                 torch.from_numpy(
-                    denoising_tsvd.components_.astype(recording.dtype)
+                    denoising_tsvd.components_.astype(dtype)
                 )
             )
             self.denoising_tsvd.to(self.device)
