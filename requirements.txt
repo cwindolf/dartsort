@@ -1,1 +1,11 @@
+click
+colorcet
+h5py
+hdbscan
+matplotlib
+numpy
+pytest
+scipy
+scikit-learn
 spikeinterface
+tqdm
