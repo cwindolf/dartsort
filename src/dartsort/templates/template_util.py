@@ -19,8 +19,9 @@ def interpolate_templates(temp_data_smoothed, spike_counts_smoothed, unit_ids=No
         unit_ids = np.arange(temp_data_smoothed.shape[1])
     for k in unit_ids:
         temp_k = temp_data_smoothed[:, k]
-        notnan = np.flatnonzero(~np.isnan(spike_counts_smoothed[:, k]))
-        isnan = np.flatnonzero(np.isnan(spike_counts_smoothed[:, k]))
+        arr_bool = np.isnan(spike_counts_smoothed[:, k])
+        notnan = np.flatnonzero(~arr_bool)
+        isnan = np.flatnonzero(arr_bool)
         if len(notnan):
             temp_k[0] = temp_k[notnan[0]] 
             temp_k[-1] = temp_k[notnan[-1]] 
@@ -42,29 +43,42 @@ def smooth_list_templates(
     spike_count_list,
     unit_ids_list,
     units_ids,
-    threshold_n_spike=5,
+    ystdev=2,
+    threshold_n_spike=0.2,
 ):
-    gauss = Gaussian2DKernel(x_stddev=0.1, y_stddev=2)
+    gauss = Gaussian2DKernel(x_stddev=0.1, y_stddev=ystdev)
+    #0.1 does not do anything  
     n_units = len(units_ids)
     
     temp_data_final = np.zeros((len(templates_list), n_units, templates_list[0].shape[1], templates_list[0].shape[2]))
-    spike_counts_final = np.zeros((len(templates_list), n_units))
-    
+    spike_counts_final =  np.zeros((len(templates_list), n_units, templates_list[0].shape[2]))
+    spike_counts_smoothed = np.zeros((len(templates_list), n_units, templates_list[0].shape[2]))
+
     for k in range(len(templates_list)):
         spike_counts_final[k, unit_ids_list[k]] = spike_count_list[k]
         temp_data_final[k, unit_ids_list[k]] = templates_list[k]
     
-    spike_counts_smoothed = convolve(spike_counts_final, gauss)
-    spike_counts_smoothed[spike_counts_smoothed<threshold_n_spike] = np.nan 
+    # Is this correct? -> problem is that some of these get way too small...
+    low_spike_count = np.where(spike_counts_final<threshold_n_spike*np.nanmax(spike_counts_final, (0, 2))[None, :, None])
+    spike_counts_final[low_spike_count[0], low_spike_count[1], low_spike_count[2]] = np.nan 
+
+    for k in tqdm(units_ids, desc="Smoothing spike counts"):
+        spike_counts_smoothed[:, k] = convolve(spike_counts_final[:, k], gauss)
+    # spike_counts_smoothed[low_spike_count[0], low_spike_count[1], low_spike_count[2]] = np.nan 
+
+    # spike_counts_smoothed = convolve(spike_counts_final, gauss)
+    # Is this correct?
+    # spike_counts_smoothed[spike_counts_smoothed<threshold_n_spike*spike_counts_smoothed.max(0)[None]] = np.nan 
     
-    temp_data_smoothed = temp_data_final*spike_counts_final[:, :, None, None]
+    temp_data_smoothed = temp_data_final*spike_counts_final[:, :, None]
     for k in tqdm(units_ids, desc="Smoothing templates"):
         temp_data_smoothed[:, k] = convolve(temp_data_smoothed[:, k].reshape((temp_data_smoothed.shape[0], -1)), gauss, boundary="fill").reshape(temp_data_smoothed[:, k].shape)
-    temp_data_smoothed = temp_data_smoothed / spike_counts_smoothed[:, :, None, None]
-    
+    temp_data_smoothed = temp_data_smoothed / spike_counts_smoothed[:, :, None]
+
+    spike_counts_smoothed[spike_counts_smoothed==0]=np.nan
     del temp_data_final
-    temp_data_smoothed = interpolate_templates(temp_data_smoothed, spike_counts_smoothed)
-    return temp_data_smoothed
+    temp_data_smoothed = interpolate_templates(temp_data_smoothed, np.nanmax(spike_counts_smoothed, 2))
+    return temp_data_smoothed, spike_counts_smoothed
 
 
 

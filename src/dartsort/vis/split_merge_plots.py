@@ -3,6 +3,7 @@ from sklearn.decomposition import PCA
 from dartsort.util.drift_util import registered_geometry, get_spike_pitch_shifts, get_waveforms_on_static_channels
 from dartsort.templates.templates import TemplateData
 from dartsort.cluster.merge import calculate_merge_distances
+from dartsort.util.data_util import chunk_time_ranges, subchunks_time_ranges
 
 from dartsort.vis.unit import correlogram, bar
 from tqdm.auto import tqdm
@@ -21,6 +22,580 @@ def get_ccolor(k):
         return "#808080"
     else:
         return ccolors[k % len(ccolors)]
+
+def check_overmerges_post_deconv_with_smoothed_templates(
+    recording,
+    template_config,
+    matching_config,
+    sorting_post_split,
+    chunk_time_ranges_s,
+    output_directory,
+    times_seconds_list,
+    localization_results_list,
+    a_list,
+    depth_reg_list,
+    collisioncleaned_tpca_features_all_list, 
+    channels_list,
+    tpca_list,
+    channel_index,
+    geom,
+    me,
+    tpca_templates_list, #can be temp_data_smoothed, here one per subchunk
+    triaged_idx=None,
+    units_all=None,
+    n_neigh = 3,
+    zlim = (-100, 382),
+    bin_ms=0.1, 
+    max_ms=5,
+    max_lag=50,
+    time_smoothed=False,
+):
+
+    """
+    here, everything should be a list containing infor about each chunk!! 
+    """
+
+    tpca_templates_list[np.isnan(tpca_templates_list)]=0
+
+    registered_geom = registered_geometry(geom, me)
+    n_chans_reg_geom = len(registered_geom)
+
+    n_chunks = len(chunk_time_ranges_s)
+    n_cols = 4* (n_chunks // 4 + 1)
+    if n_chunks % 4 == 0:
+        n_rows = int(2*(n_chunks // 4))
+    else:
+        n_rows = int(2*(n_chunks // 4 + 1))
+
+    units_all = np.unique(sorting_post_split.labels)
+    units_all = units_all[units_all>-1]
+
+    height_ratio = [1]
+    for k in range(n_rows):
+        height_ratio.append(2)
+
+    if triaged_idx is None: 
+        triaged_idx=np.zeros(sorting_post_split.labels.shape, type='int')
+    color_array = np.take(["blue", "red"], triaged_idx)
+
+    for unit in tqdm(units_all): 
+
+        idx_unit = np.flatnonzero(sorting_post_split.labels==unit)
+        
+        # if previous_labels is not None:
+        #     units_prior = np.unique(previous_labels[sorting_post_split.labels == unit])
+        # else:
+        #     units_prior = unit
+        
+        fig = plt.figure(figsize=(40, 20))
+        
+        gs = fig.add_gridspec(n_rows+1, n_cols, height_ratios=height_ratio)
+
+        ax_ptp_time = fig.add_subplot(gs[0, :(n_cols-2)//2]) 
+        ax_z_time = fig.add_subplot(gs[0, (n_cols-2)//2:-2]) 
+        ax_fr_time = fig.add_subplot(gs[0, -2:]) 
+
+        idx_unit = np.flatnonzero(sorting_post_split.labels==unit)
+        # if unit_labels.max()>len(colors_split):
+
+        ax_ptp_time.scatter(sorting_post_split.times_seconds[idx_unit], sorting_post_split.denoised_ptp_amplitudes[idx_unit], c=color_array[idx_unit], s=1, alpha = 0.25)
+        ax_z_time.scatter(sorting_post_split.times_seconds[idx_unit], sorting_post_split.point_source_localizations[idx_unit, 2], c=color_array[idx_unit], s=1, alpha = 0.25)
+            
+        med_depth_reg = np.median(sorting_post_split.point_source_localizations[idx_unit, 2])
+        std_depth_reg = np.median(np.abs(sorting_post_split.point_source_localizations[idx_unit, 2] - med_depth_reg))/0.675
+        ax_z_time.set_ylim((med_depth_reg-5*std_depth_reg, med_depth_reg+5*std_depth_reg))
+        
+        ax_ptp_time.set_ylabel("PTP (s.u.)")
+        ax_ptp_time.set_xlabel("Time (s)")
+        ax_fr_time.set_ylabel("FR (N/s)")
+        ax_fr_time.set_xlabel("Time (s)")
+        ax_z_time.yaxis.set_label_position("right")
+        ax_z_time.yaxis.tick_right()
+        ax_z_time.set_ylabel("Reg z (um)")
+        ax_z_time.set_xlabel("Time (s)")
+        # ax_z_time.set_ylim(zlim)
+
+        ax_z_time.xaxis.set_label_position('top') 
+        ax_z_time.xaxis.tick_top()
+        ax_ptp_time.xaxis.set_label_position('top') 
+        ax_ptp_time.xaxis.tick_top()
+        ax_fr_time.xaxis.set_label_position('top') 
+        ax_fr_time.xaxis.tick_top()
+        ax_fr_time.yaxis.tick_right()
+
+        cmp = 0
+        for j, chunk_range in enumerate(chunk_time_ranges_s[:-1]):
+
+            sub_chunk_time_range_s = subchunks_time_ranges(recording, chunk_range, template_config.subchunk_size_s,
+                                                  divider_samples=matching_config.chunk_length_samples)
+            n_sub_chunks = len(sub_chunk_time_range_s)
+
+            idx_chunk_time = np.logical_and(
+                sorting_post_split.times_seconds>=chunk_range[0], sorting_post_split.times_seconds<chunk_range[1]
+            )
+            times_seconds = times_seconds_list[j]
+            n_spike_chunks = times_seconds.size
+            channels = channels_list[j]
+            tpca = tpca_list[j] # This should change
+            depth_reg = depth_reg_list[j]
+            localization_results = localization_results_list[j]
+            a = a_list[j]
+            collisioncleaned_tpca_features_all = collisioncleaned_tpca_features_all_list[j]
+
+            temp_unit_tpca = tpca_templates_list[j*n_sub_chunks:j*n_sub_chunks+n_sub_chunks].mean(0)[unit]
+            subtract_tpca_temp = True
+            
+            ax_ptp_time.axvline(chunk_range[0], c='black')
+            ax_ptp_time.axvline(chunk_range[1], c='black')
+            ax_z_time.axvline(chunk_range[0], c='black')
+            ax_z_time.axvline(chunk_range[1], c='black')
+
+            ax_pcs = fig.add_subplot(gs[2*int(j//4)+1, 4*int(j - 4*(j//4))]) 
+            ax_loc = fig.add_subplot(gs[2*int(j//4)+1, 4*int(j - 4*(j//4))+1]) 
+            ax_wfs = fig.add_subplot(gs[2*int(j//4)+2, 4*int(j - 4*(j//4))]) 
+            ax_wfs_temp_subtracted = fig.add_subplot(gs[2*int(j//4)+2, 4*int(j - 4*(j//4))+1]) 
+            ax_ISI = fig.add_subplot(gs[2*int(j//4)+1, 4*int(j - 4*(j//4))+2]) 
+            ax_ACG = fig.add_subplot(gs[2*int(j//4)+2, 4*int(j - 4*(j//4))+2]) 
+            ax_heatmap = fig.add_subplot(gs[2*int(j//4)+1:2*int(j//4)+3, 4*int(j - 4*(j//4))+3]) 
+
+            for k, subchunk_range in enumerate(sub_chunk_time_range_s):
+                idxtemp = int(j*n_sub_chunks+k)
+                ax_ptp_time.plot([subchunk_range[0], subchunk_range[1]], [tpca_templates_list[idxtemp][unit].ptp(0).max(), tpca_templates_list[idxtemp][unit].ptp(0).max()],
+                        c = "orange", label = "template ptp", 
+                )
+            # ax_z_time.plot([chunk_range[0], chunk_range[1]],
+            #               [template_data_chunk.registered_template_depths_um[template_data_chunk.unit_ids == unit], template_data_chunk.registered_template_depths_um[template_data_chunk.unit_ids == unit]], c = "orange", label = "template depth")
+
+            idx_chunk = np.arange(cmp, cmp+n_spike_chunks)
+            # np.flatnonzero(sorting_post_split.labels[cmp:cmp+n_spike_chunks]==unit)
+
+            all_indices_unit = np.flatnonzero(sorting_post_split.labels[idx_chunk]==unit)
+
+            dt_ms = np.diff(times_seconds[all_indices_unit][triaged_idx[idx_chunk][all_indices_unit]==0]) * 1000
+            lags, acg = correlogram(times_seconds[all_indices_unit][triaged_idx[idx_chunk][all_indices_unit]==0]*30_000, max_lag=max_lag)
+                
+            fr_unit = len(all_indices_unit)/(chunk_range[1]-chunk_range[0])
+            ax_fr_time.plot([chunk_range[0], chunk_range[1]], [fr_unit, fr_unit], c = 'k')
+            cmp+=n_spike_chunks
+
+            
+            n_nontriaged = triaged_idx[idx_chunk][all_indices_unit]==0
+            n_triaged = triaged_idx[idx_chunk][all_indices_unit]==1
+            if n_nontriaged.sum()>150:
+                subsample_1 = np.random.choice(n_nontriaged.sum(), 150, replace=False)
+                subsample_1 = all_indices_unit[n_nontriaged][subsample_1]
+            else:
+                subsample_1 = all_indices_unit[triaged_idx[idx_chunk][all_indices_unit]==0]
+            if n_triaged.sum()>150:
+                subsample_2 = np.random.choice(n_triaged.sum(), 150, replace=False)
+                subsample_2 = all_indices_unit[n_triaged][subsample_2]
+            else:
+                subsample_2 = all_indices_unit[triaged_idx[idx_chunk][all_indices_unit]==1]
+            # idx_subsample = np.random.choice(len(all_indices_unit), 150, replace=False)
+            all_indices_unit = np.concatenate((subsample_1, subsample_2))
+            all_indices_unit.sort()
+        
+
+            # TODO: stay around median
+            if len(all_indices_unit):
+                ax_loc.scatter(localization_results[all_indices_unit, 0], depth_reg[all_indices_unit], s=1, c = color_array[idx_chunk][all_indices_unit])
+                med_depth_reg = np.median(depth_reg[all_indices_unit])
+                std_depth_reg = np.median(np.abs(depth_reg[all_indices_unit] - med_depth_reg))/0.675
+                std_depth_reg = max(std_depth_reg, 1)
+                med_x = np.median(localization_results[all_indices_unit, 0])
+                std_x = np.median(np.abs(localization_results[all_indices_unit, 0] - med_x))/0.675
+                std_x = max(std_x, 1)
+                ax_loc.set_xlim((med_x-5*std_x, med_x+5*std_x))
+                ax_loc.set_ylim((med_depth_reg-5*std_depth_reg, med_depth_reg+5*std_depth_reg))
+                ax_loc.set_title("Localization", fontsize=7)
+                ax_loc.set_xlabel("x (um)", fontsize=7)
+                ax_loc.set_ylabel("reg z (um)", fontsize=7)
+            
+            bin_edges = np.arange(
+                0,
+                max_ms + bin_ms,
+                bin_ms,
+            )
+            ax_ISI.hist(dt_ms, bin_edges, color="k")
+            ax_ISI.set_title("isi (ms)", fontsize=7)
+            ax_ISI.set_ylabel(f"count (out of {dt_ms.size} isis)", fontsize = 7, labelpad=0)
+
+            bar(ax_ACG, lags, acg, fill=True, color="k")
+            ax_ACG.set_title("lag (samples)", fontsize=7)
+            ax_ACG.set_ylabel("acg", fontsize=7, labelpad=0)
+
+            # ax_ISI.yaxis.set_label_position("right")
+            ax_ISI.yaxis.tick_right()
+            # ax_ACG.yaxis.set_label_position("right")
+            ax_ACG.yaxis.tick_right()
+            
+            ax_heatmap.imshow(temp_unit_tpca.ptp(0).reshape(-1, 8))
+        
+            n_pitches_shift = get_spike_pitch_shifts(localization_results[all_indices_unit, 2], geom, times_s = times_seconds[all_indices_unit], motion_est=me)
+
+            temp_unit_tpca_bis = temp_unit_tpca.copy()
+            temp_unit_tpca_bis[np.isnan(temp_unit_tpca_bis)]=0
+            
+            max_chan_registered_geom = temp_unit_tpca_bis.ptp(0).argmax()
+            
+            max_chan_registered_geom = min(max_chan_registered_geom, n_chans_reg_geom - 6*8)
+            max_chan_registered_geom = max(max_chan_registered_geom, 6*8)
+            chans_to_plot_registered_geom = np.arange(max_chan_registered_geom - 10, max_chan_registered_geom+10, 2)
+
+            temp_chunk = temp_unit_tpca[15:75][:, chans_to_plot_registered_geom]
+            
+            med_ptp = 1.5*temp_chunk.ptp(0).max()
+            # med_ptp = 1.5*np.median(a[idx_chunk])
+            
+            # do all this before chunk / PCs...
+            waveforms_target_chan = get_waveforms_on_static_channels(
+                collisioncleaned_tpca_features_all[all_indices_unit],
+                geom,
+                main_channels=channels[all_indices_unit],
+                channel_index=channel_index,
+                target_channels=np.arange(max_chan_registered_geom-10, max_chan_registered_geom+10),
+                n_pitches_shift=n_pitches_shift,
+                registered_geom=registered_geom,
+            )
+            no_nans = np.flatnonzero(np.isfinite(waveforms_target_chan[:, 0, :]).all(axis=1))
+
+            if len(no_nans)>2:
+                pcs = PCA(2).fit_transform(waveforms_target_chan.reshape(waveforms_target_chan.shape[0], -1)[no_nans])
+                # idx_chunk = idx_chunk[no_nans]
+
+                ax_pcs.scatter(pcs[:, 0], pcs[:, 1], s=1, c = color_array[idx_chunk][all_indices_unit][no_nans])
+                ax_pcs.set_title("PCs", fontsize=7)
+            
+                # subsampled wfs to plot
+                waveforms_target_chan = tpca.inverse_transform(waveforms_target_chan.transpose(0, 2, 1).reshape(-1, 8)).reshape(-1, 20, 121).transpose(0, 2, 1)
+                waveforms_target_chan = waveforms_target_chan[:, 15:75, :]
+            
+                for k in range(5):
+                    for i in range(waveforms_target_chan.shape[0]):
+                        ax_wfs.plot(np.arange(120), waveforms_target_chan[i][:, np.arange(k*4,k*4+4, 2)].T.flatten() + k*med_ptp, c = color_array[idx_chunk][all_indices_unit][i], alpha = 0.05)
+                        if not subtract_tpca_temp: 
+                            ax_wfs_temp_subtracted.plot(np.arange(120), waveforms_target_chan[i][:, np.arange(k*4,k*4+4, 2)].T.flatten() - temp_chunk[:, k*2:k*2+2].T.flatten() + k*med_ptp, alpha = 0.05, c = color_array[idx_chunk][all_indices_unit][i])
+                        else:
+                            ax_wfs_temp_subtracted.plot(np.arange(120), waveforms_target_chan[i][:, np.arange(k*4,k*4+4, 2)].T.flatten() - temp_unit_tpca[15:75, chans_to_plot_registered_geom[k*2:k*2+2]].T.flatten() + k*med_ptp, alpha = 0.05, c = color_array[idx_chunk][all_indices_unit][i])
+                ax_wfs_temp_subtracted.set_ylabel(f"Template-subtracted wfs (max chan {max_chan_registered_geom})", fontsize=7, labelpad=0)
+                ax_wfs.set_ylabel("Wfs", fontsize=7, labelpad = 0)
+
+                ax_wfs_temp_subtracted.set_xticks([])
+                ax_wfs_temp_subtracted.set_yticks([])
+                ax_wfs.set_xticks([])
+                ax_wfs.set_yticks([])
+                    
+        plt.suptitle(f"Unit {unit}", y=0.925)
+        
+        # PCs on max chan 
+        # WFS on same chans 
+        plt.savefig(output_directory / f"unit_{unit}_overmerge")
+        plt.close()
+        
+
+def plot_reassignment_units(
+    labels_soft_assignment,
+    hard_assigned,
+    recording,
+    template_config,
+    matching_config,
+    sorting_post_split,
+    chunk_time_ranges_s,
+    output_directory,
+    times_seconds_list,
+    localization_results_list,
+    a_list,
+    depth_reg_list,
+    collisioncleaned_tpca_features_all_list, 
+    channels_list,
+    tpca_list,
+    channel_index,
+    geom,
+    me,
+    tpca_templates_list, #can be temp_data_smoothed, here one per subchunk
+    units_all=None,
+    n_neigh = 3,
+    zlim = (-100, 382),
+    bin_ms=0.1, 
+    max_ms=5,
+    max_lag=50,
+    time_smoothed=False,
+):
+
+    """
+    here, everything should be a list containing infor about each chunk!! 
+    """
+
+    colors_reassignment = ["blue", "green", "palegreen", "goldenrod", "red", "violet"]
+
+    registered_geom = registered_geometry(geom, me)
+    n_chans_reg_geom = len(registered_geom)
+
+    n_chunks = len(chunk_time_ranges_s)
+    n_cols = 4* (n_chunks // 4 + 1)
+    if n_chunks % 4 == 0:
+        n_rows = int(2*(n_chunks // 4))
+    else:
+        n_rows = int(2*(n_chunks // 4 + 1))
+
+    units_all = np.unique(sorting_post_split.labels)
+    units_all = units_all[units_all>-1]
+
+    height_ratio = [1]
+    for k in range(n_rows):
+        height_ratio.append(2)
+    
+    for unit in tqdm(units_all[units_all>37]): 
+
+        idx_hard_assign = np.flatnonzero(np.logical_and(hard_assigned, 
+            labels_soft_assignment[:, 0]==unit))
+        idx_first_assign = np.flatnonzero(np.logical_and(~hard_assigned, 
+            labels_soft_assignment[:, 0]==unit))
+        idx_second_assign = np.flatnonzero(np.logical_and(~hard_assigned, 
+            labels_soft_assignment[:, 1]==unit))
+        idx_third_assign = np.flatnonzero(np.logical_and(~hard_assigned, 
+            labels_soft_assignment[:, 2]==unit))
+        idx_triaged = np.flatnonzero(np.logical_and(
+            np.all(labels_soft_assignment == -1, axis=1), sorting_post_split.labels==unit))
+        idx_toosmall = np.flatnonzero(
+            labels_soft_assignment[:, 3] == unit)
+        
+        # if previous_labels is not None:
+        #     units_prior = np.unique(previous_labels[sorting_post_split.labels == unit])
+        # else:
+        #     units_prior = unit
+        
+        fig = plt.figure(figsize=(40, 20))
+        
+        gs = fig.add_gridspec(n_rows+1, n_cols, height_ratios=height_ratio)
+
+        ax_ptp_time = fig.add_subplot(gs[0, :(n_cols-2)//2]) 
+        ax_z_time = fig.add_subplot(gs[0, (n_cols-2)//2:-2]) 
+        ax_fr_time = fig.add_subplot(gs[0, -2:]) 
+
+        idx_unit = np.flatnonzero(sorting_post_split.labels==unit)
+        # if unit_labels.max()>len(colors_split):
+
+        ax_ptp_time.scatter(sorting_post_split.times_seconds[idx_hard_assign], sorting_post_split.denoised_ptp_amplitudes[idx_hard_assign], c='blue', s=1, alpha = 0.25, label="hardassigned")
+        ax_ptp_time.scatter(sorting_post_split.times_seconds[idx_first_assign], sorting_post_split.denoised_ptp_amplitudes[idx_first_assign], c='green', s=1, alpha = 0.25)
+        ax_ptp_time.scatter(sorting_post_split.times_seconds[idx_second_assign], sorting_post_split.denoised_ptp_amplitudes[idx_second_assign], c='palegreen', s=1, alpha = 0.25)
+        ax_ptp_time.scatter(sorting_post_split.times_seconds[idx_third_assign], sorting_post_split.denoised_ptp_amplitudes[idx_third_assign], c='goldenrod', s=1, alpha = 0.25)
+        ax_ptp_time.scatter(sorting_post_split.times_seconds[idx_triaged], sorting_post_split.denoised_ptp_amplitudes[idx_triaged], c='red', s=1, alpha = 0.25, label="triaged")
+        ax_ptp_time.scatter(sorting_post_split.times_seconds[idx_toosmall], sorting_post_split.denoised_ptp_amplitudes[idx_toosmall], c='violet', s=1, alpha = 0.25, label="template too small")
+        ax_ptp_time.legend(fontsize=7, loc='upper right')
+
+        ax_z_time.scatter(sorting_post_split.times_seconds[idx_hard_assign], sorting_post_split.point_source_localizations[idx_hard_assign, 2], c='blue', s=1, alpha = 0.25)
+        ax_z_time.scatter(sorting_post_split.times_seconds[idx_first_assign], sorting_post_split.point_source_localizations[idx_first_assign, 2], c='green', s=1, alpha = 0.25, label="soft assigned 1")
+        ax_z_time.scatter(sorting_post_split.times_seconds[idx_second_assign], sorting_post_split.point_source_localizations[idx_second_assign, 2], c='palegreen', s=1, alpha = 0.25, label="soft assigned 2")
+        ax_z_time.scatter(sorting_post_split.times_seconds[idx_third_assign], sorting_post_split.point_source_localizations[idx_third_assign, 2], c='goldenrod', s=1, alpha = 0.25, label="soft assigned 3")
+        ax_z_time.scatter(sorting_post_split.times_seconds[idx_triaged], sorting_post_split.point_source_localizations[idx_triaged, 2], c='red', s=1, alpha = 0.25)
+        ax_z_time.scatter(sorting_post_split.times_seconds[idx_toosmall], sorting_post_split.point_source_localizations[idx_toosmall, 2], c='violet', s=1, alpha = 0.25)
+        ax_z_time.legend(fontsize=7, loc='upper right')
+        
+        ax_ptp_time.set_ylabel("PTP (s.u.)")
+        ax_ptp_time.set_xlabel("Time (s)")
+        ax_fr_time.set_ylabel("FR (N/s)")
+        ax_fr_time.set_xlabel("Time (s)")
+        ax_z_time.yaxis.set_label_position("right")
+        ax_z_time.yaxis.tick_right()
+        ax_z_time.set_ylabel("Reg z (um)")
+        ax_z_time.set_xlabel("Time (s)")
+        ax_z_time.set_ylim(zlim)
+
+        ax_z_time.xaxis.set_label_position('top') 
+        ax_z_time.xaxis.tick_top()
+        ax_ptp_time.xaxis.set_label_position('top') 
+        ax_ptp_time.xaxis.tick_top()
+        ax_fr_time.xaxis.set_label_position('top') 
+        ax_fr_time.xaxis.tick_top()
+        ax_fr_time.yaxis.tick_right()
+
+        cmp = 0
+        for j, chunk_range in enumerate(chunk_time_ranges_s):
+
+            sub_chunk_time_range_s = subchunks_time_ranges(recording, chunk_range, template_config.subchunk_size_s,
+                                                  divider_samples=matching_config.chunk_length_samples)
+            n_sub_chunks = len(sub_chunk_time_range_s)
+
+            idx_chunk_time = np.logical_and(
+                sorting_post_split.times_seconds>=chunk_range[0], sorting_post_split.times_seconds<chunk_range[1]
+            )
+            times_seconds = times_seconds_list[j]
+            n_spike_chunks = times_seconds.size
+            channels = channels_list[j]
+            tpca = tpca_list[j]
+            depth_reg = depth_reg_list[j]
+            localization_results = localization_results_list[j]
+            a = a_list[j]
+            collisioncleaned_tpca_features_all = collisioncleaned_tpca_features_all_list[j]
+
+            temp_unit_tpca = tpca_templates_list[j*n_sub_chunks:j*n_sub_chunks+n_sub_chunks].mean(0)[unit]
+            subtract_tpca_temp = True
+            
+            ax_ptp_time.axvline(chunk_range[0], c='red')
+            ax_ptp_time.axvline(chunk_range[1], c='red')
+            ax_z_time.axvline(chunk_range[0], c='red')
+            ax_z_time.axvline(chunk_range[1], c='red')
+
+            ax_pcs = fig.add_subplot(gs[2*int(j//4)+1, 4*int(j - 4*(j//4))]) 
+            ax_loc = fig.add_subplot(gs[2*int(j//4)+1, 4*int(j - 4*(j//4))+1]) 
+            ax_wfs = fig.add_subplot(gs[2*int(j//4)+2, 4*int(j - 4*(j//4))]) 
+            ax_wfs_temp_subtracted = fig.add_subplot(gs[2*int(j//4)+2, 4*int(j - 4*(j//4))+1]) 
+            ax_ISI = fig.add_subplot(gs[2*int(j//4)+1, 4*int(j - 4*(j//4))+2]) 
+            ax_ACG = fig.add_subplot(gs[2*int(j//4)+2, 4*int(j - 4*(j//4))+2]) 
+            ax_heatmap = fig.add_subplot(gs[2*int(j//4)+1:2*int(j//4)+3, 4*int(j - 4*(j//4))+3]) 
+
+            for k, subchunk_range in enumerate(sub_chunk_time_range_s):
+                idxtemp = int(j*n_sub_chunks+k)
+                ax_ptp_time.plot([subchunk_range[0], subchunk_range[1]], [tpca_templates_list[idxtemp][unit].ptp(0).max(), tpca_templates_list[idxtemp][unit].ptp(0).max()],
+                        c = "orange", label = "template ptp", 
+                )
+            # ax_z_time.plot([chunk_range[0], chunk_range[1]],
+            #               [template_data_chunk.registered_template_depths_um[template_data_chunk.unit_ids == unit], template_data_chunk.registered_template_depths_um[template_data_chunk.unit_ids == unit]], c = "orange", label = "template depth")
+
+            idx_chunk = np.arange(cmp, cmp+n_spike_chunks)
+            # np.flatnonzero(sorting_post_split.labels[cmp:cmp+n_spike_chunks]==unit)
+
+            idx_hard_assign = np.flatnonzero(np.logical_and(hard_assigned[idx_chunk], 
+                labels_soft_assignment[idx_chunk, 0]==unit))
+            idx_first_assign = np.flatnonzero(np.logical_and(~hard_assigned[idx_chunk], 
+                labels_soft_assignment[idx_chunk, 0]==unit))
+            idx_second_assign = np.flatnonzero(np.logical_and(~hard_assigned[idx_chunk], 
+                labels_soft_assignment[idx_chunk, 1]==unit))
+            idx_third_assign = np.flatnonzero(np.logical_and(~hard_assigned[idx_chunk], 
+                labels_soft_assignment[idx_chunk, 2]==unit))
+            idx_triaged = np.flatnonzero(np.logical_and(
+                np.all(labels_soft_assignment[idx_chunk] == -1, axis=1), sorting_post_split.labels[idx_chunk]==unit))
+            idx_toosmall = np.flatnonzero(
+                labels_soft_assignment[idx_chunk, 3] == unit)
+
+            all_indices_unit = np.concatenate([
+                idx_hard_assign, idx_first_assign, idx_second_assign, idx_third_assign, idx_triaged, idx_toosmall
+            ])
+            all_indices_unit.sort()
+            
+            fr_unit = len(all_indices_unit)/(chunk_range[1]-chunk_range[0])
+            ax_fr_time.plot([chunk_range[0], chunk_range[1]], [fr_unit, fr_unit], c = 'k')
+            cmp+=n_spike_chunks
+            
+            if len(idx_hard_assign)>150:
+                idx_subsample = np.random.choice(len(idx_hard_assign), 150, replace=False)
+                idx_hard_assign = idx_hard_assign[idx_subsample]
+            if len(idx_first_assign)>150:
+                idx_subsample = np.random.choice(len(idx_first_assign), 150, replace=False)
+                idx_first_assign = idx_first_assign[idx_subsample]
+            if len(idx_second_assign)>150:
+                idx_subsample = np.random.choice(len(idx_second_assign), 150, replace=False)
+                idx_second_assign = idx_second_assign[idx_subsample]
+            if len(idx_third_assign)>150:
+                idx_subsample = np.random.choice(len(idx_third_assign), 150, replace=False)
+                idx_third_assign = idx_third_assign[idx_subsample]
+            if len(idx_triaged)>150:
+                idx_subsample = np.random.choice(len(idx_triaged), 150, replace=False)
+                idx_triaged = idx_triaged[idx_subsample]
+            if len(idx_toosmall)>150:
+                idx_subsample = np.random.choice(len(idx_toosmall), 150, replace=False)
+                idx_toosmall = idx_toosmall[idx_subsample]
+
+            subsampled_indices_unit = np.concatenate([
+                idx_hard_assign, idx_first_assign, idx_second_assign, idx_third_assign, idx_triaged, idx_toosmall
+            ])
+            color_array = np.concatenate([
+                np.full(len(idx_hard_assign), "blue"), np.full(len(idx_first_assign), "green"), np.full(len(idx_second_assign), "palegreen"),
+                np.full(len(idx_third_assign), "goldenrod"), np.full(len(idx_triaged), "red"), np.full(len(idx_toosmall), "violet"),
+            ])
+            sorted_indices = subsampled_indices_unit.argsort()
+            color_array = color_array[sorted_indices]
+            subsampled_indices_unit = subsampled_indices_unit[sorted_indices]
+
+            ax_loc.scatter(localization_results[subsampled_indices_unit, 0], depth_reg[subsampled_indices_unit], s=1, c = color_array)
+            ax_loc.set_title("Localization", fontsize=7)
+            ax_loc.set_xlabel("x (um)", fontsize=7)
+            ax_loc.set_ylabel("reg z (um)", fontsize=7)
+
+            dt_ms = np.diff(times_seconds[all_indices_unit]) * 1000
+            lags, acg = correlogram(times_seconds[all_indices_unit]*30_000, max_lag=max_lag)
+            
+            bin_edges = np.arange(
+                0,
+                max_ms + bin_ms,
+                bin_ms,
+            )
+            ax_ISI.hist(dt_ms, bin_edges, color="k")
+            ax_ISI.set_title("isi (ms)", fontsize=7)
+            ax_ISI.set_ylabel(f"count (out of {dt_ms.size} isis)", fontsize = 7, labelpad=0)
+
+            bar(ax_ACG, lags, acg, fill=True, color="k")
+            ax_ACG.set_title("lag (samples)", fontsize=7)
+            ax_ACG.set_ylabel("acg", fontsize=7, labelpad=0)
+
+            # ax_ISI.yaxis.set_label_position("right")
+            ax_ISI.yaxis.tick_right()
+            # ax_ACG.yaxis.set_label_position("right")
+            ax_ACG.yaxis.tick_right()
+            
+            ax_heatmap.imshow(temp_unit_tpca.ptp(0).reshape(-1, 8))
+        
+            n_pitches_shift = get_spike_pitch_shifts(localization_results[subsampled_indices_unit, 2], geom, times_s = times_seconds[subsampled_indices_unit], motion_est=me)
+
+            max_chan_registered_geom = temp_unit_tpca.ptp(0).argmax()
+            
+                # print(f"MAX CHAN {max_chan_registered_geom}")
+
+            max_chan_registered_geom = min(max_chan_registered_geom, n_chans_reg_geom - 6*8)
+            max_chan_registered_geom = max(max_chan_registered_geom, 6*8)
+            chans_to_plot_registered_geom = np.arange(max_chan_registered_geom - 10, max_chan_registered_geom+10, 2)
+
+            temp_chunk = temp_unit_tpca[15:75][:, chans_to_plot_registered_geom]
+            
+            med_ptp = 1.5*temp_chunk.ptp(0).max()
+            # med_ptp = 1.5*np.median(a[idx_chunk])
+            
+            # do all this before chunk / PCs...
+            ccwfs_targetchans = get_waveforms_on_static_channels(
+                collisioncleaned_tpca_features_all[subsampled_indices_unit],
+                geom,
+                main_channels=channels[subsampled_indices_unit],
+                channel_index=channel_index,
+                target_channels=np.arange(max_chan_registered_geom-10, max_chan_registered_geom+10),
+                n_pitches_shift=n_pitches_shift,
+                registered_geom=registered_geom,
+            )
+            no_nans = np.flatnonzero(np.isfinite(ccwfs_targetchans[:, 0, :]).all(axis=1))
+
+            if len(no_nans)>2:
+                pcs = PCA(2).fit_transform(ccwfs_targetchans.reshape(ccwfs_targetchans.shape[0], -1)[no_nans])
+                # idx_chunk = idx_chunk[no_nans]
+
+                ax_pcs.scatter(pcs[:, 0], pcs[:, 1], s=1, c = color_array[no_nans])
+                ax_pcs.set_title("PCs", fontsize=7)
+            
+                # subsampled wfs to plot
+                waveforms_target_chan = tpca.inverse_transform(ccwfs_targetchans.transpose(0, 2, 1).reshape(-1, 8)).reshape(-1, 20, 121).transpose(0, 2, 1)
+                waveforms_target_chan = waveforms_target_chan[:, 15:75, :]
+            
+                for k in range(5):
+                    for i in range(waveforms_target_chan.shape[0]):
+                        ax_wfs.plot(np.arange(120), waveforms_target_chan[i][:, np.arange(k*4,k*4+4, 2)].T.flatten() + k*med_ptp, c = color_array[i], alpha = 0.05)
+                        if not subtract_tpca_temp: 
+                            ax_wfs_temp_subtracted.plot(np.arange(120), waveforms_target_chan[i][:, np.arange(k*4,k*4+4, 2)].T.flatten() - temp_chunk[:, k*2:k*2+2].T.flatten() + k*med_ptp, alpha = 0.05, c = color_array[i])
+                        else:
+                            ax_wfs_temp_subtracted.plot(np.arange(120), waveforms_target_chan[i][:, np.arange(k*4,k*4+4, 2)].T.flatten() - temp_unit_tpca[15:75, chans_to_plot_registered_geom[k*2:k*2+2]].T.flatten() + k*med_ptp, alpha = 0.05, c = color_array[i])
+                ax_wfs_temp_subtracted.set_ylabel(f"Template-subtracted wfs (max chan {max_chan_registered_geom})", fontsize=7, labelpad=0)
+                ax_wfs.set_ylabel("Wfs", fontsize=7, labelpad = 0)
+
+                ax_wfs_temp_subtracted.set_xticks([])
+                ax_wfs_temp_subtracted.set_yticks([])
+                ax_wfs.set_xticks([])
+                ax_wfs.set_yticks([])
+                    
+        plt.suptitle(f"Unit {unit}", y=0.925)
+        
+        # PCs on max chan 
+        # WFS on same chans 
+        plt.savefig(output_directory / f"unit_{unit}_overmerge")
+        plt.close()
+        
 
 
 def check_oversplits(
@@ -644,7 +1219,7 @@ def check_overmerges_post_deconv(
     for k in range(n_rows):
         height_ratio.append(2)
     
-    for unit in tqdm(units_all[units_all]): 
+    for unit in tqdm(units_all): 
 
         # if previous_labels is not None:
         #     units_prior = np.unique(previous_labels[sorting_post_split.labels == unit])
@@ -664,6 +1239,12 @@ def check_overmerges_post_deconv(
 
         ax_ptp_time.scatter(sorting_post_split.times_seconds[idx_unit], sorting_post_split.denoised_ptp_amplitudes[idx_unit], s=1, c = "blue")
         ax_z_time.scatter(sorting_post_split.times_seconds[idx_unit], sorting_post_split.point_source_localizations[idx_unit, 2], s=1, c = "blue")
+
+
+        med_depth_reg = np.median(sorting_post_split.point_source_localizations[idx_unit, 2])
+        std_depth_reg = np.median(np.abs(sorting_post_split.point_source_localizations[idx_unit, 2] - med_depth_reg))/0.675
+        ax_z_time.set_ylim((med_depth_reg-5*std_depth_reg, med_depth_reg+5*std_depth_reg))
+
         ax_ptp_time.set_ylabel("PTP (s.u.)")
         ax_ptp_time.set_xlabel("Time (s)")
         ax_fr_time.set_ylabel("FR (N/s)")
@@ -672,7 +1253,7 @@ def check_overmerges_post_deconv(
         ax_z_time.yaxis.tick_right()
         ax_z_time.set_ylabel("Reg z (um)")
         ax_z_time.set_xlabel("Time (s)")
-        ax_z_time.set_ylim(zlim)
+        # ax_z_time.set_ylim(zlim)
 
         ax_z_time.xaxis.set_label_position('top') 
         ax_z_time.xaxis.tick_top()
@@ -697,9 +1278,13 @@ def check_overmerges_post_deconv(
 
             subtract_tpca_temp = False
             if tpca_templates_list is not None:
-                if np.any(tpca_templates_list[j].unit_ids==unit):
-                    temp_unit_tpca = tpca_templates_list[j].templates[tpca_templates_list[j].unit_ids==unit][0].transpose(1, 0)
-                    temp_unit_tpca = tpca.inverse_transform(temp_unit_tpca).transpose(1, 0)
+                if type(tpca_templates_list[j])==TemplateData:
+                    if np.any(tpca_templates_list[j].unit_ids==unit):
+                        temp_unit_tpca = tpca_templates_list[j].templates[tpca_templates_list[j].unit_ids==unit][0].transpose(1, 0)
+                        temp_unit_tpca = tpca.inverse_transform(temp_unit_tpca).transpose(1, 0)
+                        subtract_tpca_temp = True
+                else:
+                    temp_unit_tpca = tpca_templates_list[j][unit]
                     subtract_tpca_temp = True
             
             ax_ptp_time.axvline(chunk_range[0], c='red')
@@ -735,6 +1320,15 @@ def check_overmerges_post_deconv(
                 idx_chunk = idx_chunk[idx_subsample]
             
             ax_loc.scatter(localization_results[idx_chunk, 0], depth_reg[idx_chunk], s=1, c = "blue")
+            med_depth_reg = np.median(depth_reg[idx_chunk])
+            std_depth_reg = np.median(np.abs(depth_reg[idx_chunk] - med_depth_reg))/0.675
+            std_depth_reg = max(std_depth_reg, 1)
+            if len(idx_chunk):
+                med_x = np.median(localization_results[idx_chunk, 0])
+                std_x = np.median(np.abs(localization_results[idx_chunk, 0] - med_x))/0.675
+                std_x = max(std_x, 1)
+                ax_loc.set_xlim((med_x-5*std_x, med_x+5*std_x))
+                ax_loc.set_ylim((med_depth_reg-5*std_depth_reg, med_depth_reg+5*std_depth_reg))
             ax_loc.set_title("Localization", fontsize=7)
             ax_loc.set_xlabel("x (um)", fontsize=7)
             ax_loc.set_ylabel("reg z (um)", fontsize=7)

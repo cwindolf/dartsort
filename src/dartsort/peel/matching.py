@@ -123,6 +123,7 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
     def precompute_peeling_data(
         self, save_folder, overwrite=False, n_jobs=0, device=None
     ):
+
         self.build_template_data(
             save_folder,
             self.template_data,

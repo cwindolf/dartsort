@@ -1,6 +1,7 @@
 from dataclasses import replace
 from typing import Optional
 
+from pathlib import Path
 import numpy as np
 from dartsort.config import TemplateConfig
 from dartsort.templates import TemplateData, template_util
@@ -198,9 +199,9 @@ def merge_iterative_templates_with_multiple_chunks(
                 unit_ids_all=unit_ids_all,
                 superres_linkage=np.max,
                 sym_function=np.maximum,
-                min_channel_amplitude=0.0,
-                min_spatial_cosine=0.5,
-                n_jobs=0,
+                min_channel_amplitude=min_channel_amplitude, # Propagate these arguments 
+                min_spatial_cosine=min_spatial_cosine,
+                n_jobs=n_jobs,
                 show_progress=False,
             )
             
@@ -210,9 +211,9 @@ def merge_iterative_templates_with_multiple_chunks(
             snrs_all.append(template_snrs)
 
         print("merging")
-            
+
         dists_min_across_chunks = np.nanmax(dists_all, axis=0)
-        
+            
         total_pairs = shifts_all[0].shape[0]*shifts_all[0].shape[1]
         shifts_min_across_chunks = np.array(shifts_all).reshape((n_chunks, total_pairs))[np.array(dists_all).reshape((n_chunks, total_pairs)).argmin(0), np.arange(total_pairs)]
         shifts_min_across_chunks = shifts_min_across_chunks.reshape((shifts_all[0].shape[0],shifts_all[0].shape[1]))
@@ -239,17 +240,17 @@ def merge_iterative_templates_with_multiple_chunks(
                 link=linkage,
             )
 
-        fig, axes = array_scatter(
-          sorting_merge.labels, geom, sorting_merge.point_source_localizations[:, 0], motion_est.correct_s(sorting_merge.times_seconds, sorting_merge.point_source_localizations[:, 2]), 
-          sorting_merge.denoised_ptp_amplitudes, zlim=(-100, 382), do_ellipse=True, xlim=(-50, 92), ptplim = (0, 50),
-        )
-        plt.savefig(fig_directory / f"post_merge_iter_{miter}.png")
-        plt.close()
+        # fig, axes = array_scatter(
+        #   sorting_merge.labels, geom, sorting_merge.point_source_localizations[:, 0], motion_est.correct_s(sorting_merge.times_seconds, sorting_merge.point_source_localizations[:, 2]), 
+        #   sorting_merge.denoised_ptp_amplitudes, zlim=(-100, 382), do_ellipse=True, xlim=(-50, 92), ptplim = (0, 50),
+        # )
+        # plt.savefig(fig_directory / f"post_merge_iter_{miter}.png")
+        # plt.close()
 
-        print(f"FIRST FIG MADE ITER {miter}")
+        # print(f"FIRST FIG MADE ITER {miter}")
 
         if miter==0:
-            np.save(template_save_folder / f"labels_pre_GC_iter_{miter}.npy", sorting_merge.labels)
+            # np.save(template_save_folder / f"labels_pre_GC_iter_{miter}.npy", sorting_merge.labels)
             sorting_GC = chuck_noisy_template_units_from_merge(
                 sorting,
                 sorting_merge,
@@ -260,7 +261,7 @@ def merge_iterative_templates_with_multiple_chunks(
                 template_npz_filename="template_data.npz",
             )
         elif miter<num_merge_iteration-1:
-            np.save(template_save_folder / f"labels_pre_GC_iter_{miter}.npy", sorting_merge.labels)
+            # np.save(template_save_folder / f"labels_pre_GC_iter_{miter}.npy", sorting_merge.labels)
             sorting_GC = chuck_noisy_template_units_from_merge(
                 sorting_GC,
                 sorting_merge,
@@ -317,7 +318,7 @@ def merge_iterative_templates_with_multiple_chunks(
                 sorting_merge,
                 template_data_all,
                 template_save_folder=template_save_folder, #TODO
-                min_template_snr=50,
+                min_template_snr=50, #propagate these arguments as well
                 min_n_spikes=25,
                 template_npz_filename=template_npz_filename,
             )
@@ -375,6 +376,168 @@ def merge_iterative_templates_with_multiple_chunks(
         os.system(f"rm -r {spike_save_folder}")
     return sorting_GC
 
+
+def merge_templates_across_multiple_chunks(
+    sorting: DARTsortSorting,
+    recording,
+    chunk_time_ranges_s,
+    template_data_list = None,
+    template_config: Optional[TemplateConfig] = None,
+    motion_est=None,
+    max_shift_samples=20,
+    superres_linkage=np.max,
+    linkage="single",
+    sym_function=np.maximum,
+    masked_sym_func=np.fmax,
+    aggregate_func=np.nanmax,
+    mask_units_too_far=True,
+    merge_distance_threshold=0.1,
+    temporal_upsampling_factor=8,
+    amplitude_scaling_variance=0.001,
+    amplitude_scaling_boundary=0.1,
+    svd_compression_rank=20,
+    min_channel_amplitude=1.5,
+    min_spatial_cosine=0.0,
+    conv_batch_size=128,
+    units_batch_size=8,
+    N_spikes_overlap = 100,
+    device=None,
+    n_jobs=0,
+    n_jobs_templates=0,
+    template_save_folder=None,
+    overwrite_templates=False,
+    show_progress=False,
+    template_npz_filename="template_data.npz",
+    end_name_per_chunk="templates",
+    reorder_by_depth=True,
+    return_dist_matrix=False,
+) -> DARTsortSorting:
+    """Template distance based merge
+
+    Pass in a sorting, recording and template config to make templates,
+    and this will merge them (with superres). Or, if you have templates
+    already, pass them into template_data and we can skip the template
+    construction.
+
+    Arguments
+    ---------
+    max_shift_samples
+        Max offset during matching
+    superres_linkage
+        How to combine distances between two units' superres templates
+        By default, it's the max.
+    amplitude_scaling_*
+        Optionally allow scaling during matching
+
+    Returns
+    -------
+    A new DARTsortSorting
+    """
+    print(f"merge input {np.unique(sorting.labels).size - 1} units")
+    n_chunks = len(chunk_time_ranges_s)
+    if template_data_list is None:
+        template_data_list=[]
+        for j, chunk_time_range in tqdm(enumerate(chunk_time_ranges_s), total = len(chunk_time_ranges_s), desc="Making template list for merging"):
+            model_subdir_chunk = f"chunk_{j}_{end_name_per_chunk}"
+            if template_save_folder is not None:
+                model_dir_chunk = Path(template_save_folder) / model_subdir_chunk
+            else:
+                model_dir_chunk = None
+            assert template_config is not None
+            sorting_chunk = keep_only_most_recent_spikes(
+                sorting,
+                n_min_spikes=template_config.spikes_per_unit,
+                latest_time_sample=chunk_time_range[1]
+                * recording.sampling_frequency,
+            )
+            
+            template_data = TemplateData.from_config(
+                recording,
+                sorting_chunk,
+                template_config,
+                motion_est=motion_est,
+                n_jobs=n_jobs_templates,
+                save_folder=model_dir_chunk,
+                overwrite=overwrite_templates,
+                device=device,
+                save_npz_name=template_npz_filename,
+                # Here should add trough + spike length
+            )
+            template_data_list.append(template_data)
+
+    unit_ids_all = np.unique(sorting.labels)
+    unit_ids_all = unit_ids_all[unit_ids_all>-1]
+    
+    dists_all = []
+    shifts_all = []
+    snrs_all = []
+
+    for template_data in tqdm(template_data_list, desc = "Computing template distances", total = len(template_data_list)):
+
+        units, dists, shifts, template_snrs = calculate_merge_distances(
+            template_data,
+            unit_ids_all=unit_ids_all,
+            superres_linkage=superres_linkage,
+            sym_function=sym_function,
+            max_shift_samples=max_shift_samples,
+            temporal_upsampling_factor=temporal_upsampling_factor,
+            amplitude_scaling_variance=amplitude_scaling_variance,
+            amplitude_scaling_boundary=amplitude_scaling_boundary,
+            svd_compression_rank=svd_compression_rank,
+            min_channel_amplitude=min_channel_amplitude,
+            min_spatial_cosine=min_spatial_cosine,
+            conv_batch_size=conv_batch_size,
+            units_batch_size=units_batch_size,
+            device=device,
+            n_jobs=n_jobs,
+            show_progress=show_progress,
+        )
+        
+        dists_all.append(dists)
+        shifts_all.append(shifts)
+        snrs_all.append(template_snrs)
+
+    dists_all = np.array(dists_all)
+    
+    if mask_units_too_far:
+        temporal_mask = compute_temporal_mask_merge(
+            sorting,
+            chunk_time_ranges_s,
+            dists_all,
+            N_spikes_overlap = N_spikes_overlap,
+        )
+        dists_all = dists_all*temporal_mask
+        
+    dists_all[dists_all<0] = np.nan
+    for k in range(len(dists_all)):
+        dists_all[k] = masked_sym_func(dists_all[k], dists_all[k].T)
+    dists_across_chunks = aggregate_func(dists_all, axis=0)
+
+
+    total_pairs = shifts_all[0].shape[0]*shifts_all[0].shape[1]
+    shifts_across_chunks = np.array(shifts_all).reshape((n_chunks, total_pairs))[np.array(dists_all).reshape((n_chunks, total_pairs)).argmin(0), np.arange(total_pairs)]
+    shifts_across_chunks = shifts_across_chunks.reshape((shifts_all[0].shape[0],shifts_all[0].shape[1]))
+    template_snrs = np.array(snrs_all).max(0)
+    
+    # now run hierarchical clustering
+    merged_sorting = recluster(
+        sorting,
+        unit_ids_all,
+        dists_across_chunks,
+        shifts_across_chunks,
+        template_snrs,
+        merge_distance_threshold=merge_distance_threshold,
+        link=linkage,
+    )
+
+    if reorder_by_depth:
+        merged_sorting = cluster_util.reorder_by_depth(
+            merged_sorting, motion_est=motion_est
+        )
+
+    if return_dist_matrix:
+        return merged_sorting, dists_all
+    return merged_sorting
 
 
 
@@ -782,7 +945,9 @@ def recluster(
     labels_updated = np.full(sorting.labels.shape, -1)
     kept = np.flatnonzero(np.isin(sorting.labels, np.unique(units)))
     labels_updated[kept] = sorting.labels[kept].copy()
-    _, flat_labels = np.unique(labels_updated[kept], return_inverse=True)
+    # FIX THIS!! DOESN"T WORK IF NOT CONTIGUOUS TO BEGIN WITH....
+    flat_labels = labels_updated[kept]
+    # _, flat_labels = np.unique(labels_updated[kept], return_inverse=True)
     labels_updated[kept] = new_labels[flat_labels]
     labels_updated[labels_updated>-1] -= labels_updated[labels_updated>-1].min()
 
@@ -973,3 +1138,42 @@ def combine_templates(template_data_a, template_data_b):
     cross_mask[: ids_a.size, ids_b.size :] = True
 
     return template_data, cross_mask, ids_a, ids_b
+
+def compute_temporal_mask_merge(
+    sorting,
+    chunk_time_ranges_s,
+    dists_all,
+    N_spikes_overlap = 100,
+):
+    n_chunks, n_units = dists_all.shape[0], dists_all.shape[1]
+    temporal_mask = -1*np.ones((n_chunks, n_units, n_units))
+    for j, chunk_time_range in tqdm(enumerate(chunk_time_ranges_s), total = len(chunk_time_ranges_s)):
+        idx_chunk = np.flatnonzero(np.logical_and(
+                    sorting.times_seconds>=chunk_time_range[0],
+                    sorting.times_seconds<chunk_time_range[1]
+                ))
+        if j<len(chunk_time_ranges_s)-1:
+            idx_next_chunk = np.flatnonzero(np.logical_and(
+                        sorting.times_seconds>=chunk_time_range[0],
+                        sorting.times_seconds<chunk_time_ranges_s[j+1][1]
+                    ))
+        for unit_a in range(n_units):
+            unit_a_inchunk = (sorting.labels[idx_chunk] == unit_a).sum()>=N_spikes_overlap
+            if not unit_a_inchunk:
+                temporal_mask[j, unit_a, unit_a]=1
+            else:
+                for unit_b in range(n_units):
+                    if unit_b == unit_a:
+                        temporal_mask[j, unit_b, unit_a]=1
+                    else:
+                        unit_b_inchunk = (sorting.labels[idx_chunk] == unit_b).sum()>=N_spikes_overlap
+                        if unit_b_inchunk:
+                            temporal_mask[j, unit_a, unit_b]=1
+                        elif j<len(chunk_time_ranges_s)-1:
+                            unit_b_inchunk = (sorting.labels[idx_next_chunk] == unit_b).sum()>=N_spikes_overlap
+                            if unit_a_inchunk and unit_b_inchunk:
+                                temporal_mask[j, unit_a, unit_b]=1
+    return temporal_mask
+
+
+

@@ -26,7 +26,7 @@ from dartsort.util.data_util import (
     check_recording,
     keep_only_most_recent_spikes,
 )
-from dartsort.util.peel_util import run_peeler
+from dartsort.util.peel_util import run_peeler, fit_and_save_models
 from dartsort.util.registration_util import estimate_motion
 from dartsort.util.data_util import chunk_time_ranges, subchunks_time_ranges
 
@@ -354,19 +354,27 @@ def match(
 
         sorting_list, output_hdf5_filename_list = [], []
 
-        for j, chunk_time_range in enumerate(chunk_time_ranges_s):
-            print(f"chunk_{j}")
-            print(chunk_time_range)
-            model_subdir_chunk = f"chunk_{j}_" + model_subdir
-            model_dir_chunk = Path(output_directory) / model_subdir_chunk
+        if not templates_precomputed:
+            # compute templates
+            trough_offset_samples = waveform_config.trough_offset_samples(
+                recording.sampling_frequency
+            )
+            spike_length_samples = waveform_config.spike_length_samples(
+                recording.sampling_frequency
+            )
 
-            chunk_starts_samples = np.arange(
-                chunk_time_range[0] * recording.sampling_frequency,
-                chunk_time_range[1] * recording.sampling_frequency,
-                matching_config.chunk_length_samples,
-            ).astype("int")
-
-            if not templates_precomputed:
+            for j, chunk_time_range in enumerate(chunk_time_ranges_s):
+                print(f"chunk_{j}")
+                print(chunk_time_range)
+                model_subdir_chunk = f"chunk_{j}_" + model_subdir
+                model_dir_chunk = Path(output_directory) / model_subdir_chunk
+    
+                chunk_starts_samples = np.arange(
+                    chunk_time_range[0] * recording.sampling_frequency,
+                    chunk_time_range[1] * recording.sampling_frequency,
+                    matching_config.chunk_length_samples,
+                ).astype("int")
+    
                 if sorting is not None:
                     sorting_chunk = keep_only_most_recent_spikes(
                         sorting,
@@ -377,13 +385,6 @@ def match(
                 else:
                     sorting_chunk = None
     
-                # compute templates
-                trough_offset_samples = waveform_config.trough_offset_samples(
-                    recording.sampling_frequency
-                )
-                spike_length_samples = waveform_config.spike_length_samples(
-                    recording.sampling_frequency
-                )
                 template_data = TemplateData.from_config(
                     recording,
                     sorting_chunk,
@@ -397,11 +398,52 @@ def match(
                     trough_offset_samples=trough_offset_samples,
                     spike_length_samples=spike_length_samples,
                 )
-            elif not template_config.subchunk_time_smoothing:
+            templates_precomputed=True
+
+        template_data = TemplateData.from_npz(
+                    template_dir_precomputed / f"chunk_{n_chunks//2}_{per_chunk_dir_end_name}/{template_npz_filename}"
+                )
+
+        matching_peeler = ObjectiveUpdateTemplateMatchingPeeler.from_config(
+            recording,
+            waveform_config,
+            matching_config,
+            featurization_config,
+            template_data, # Need this 
+            motion_est=motion_est,
+        )
+        
+        fit_and_save_models(
+            matching_peeler,
+            output_directory,
+            hdf5_filename,
+            model_subdir,
+            featurization_config,
+            chunk_starts_samples=chunk_starts_samples,
+            overwrite=True,
+            n_jobs=n_jobs_match,
+            residual_filename=residual_filename,
+            show_progress=show_progress,
+            device=device,
+        )
+
+        if not template_config.subchunk_time_smoothing:
+            for j, chunk_time_range in enumerate(chunk_time_ranges_s):
+                print(f"chunk_{j}")
+                print(chunk_time_range)
+                model_subdir_chunk = f"chunk_{j}_" + model_subdir
+                model_dir_chunk = Path(output_directory) / model_subdir_chunk
+    
+                chunk_starts_samples = np.arange(
+                    chunk_time_range[0] * recording.sampling_frequency,
+                    chunk_time_range[1] * recording.sampling_frequency,
+                    matching_config.chunk_length_samples,
+                ).astype("int")
+    
                 template_data = TemplateData.from_npz(
                     template_dir_precomputed / f"chunk_{j}_{per_chunk_dir_end_name}/{template_npz_filename}"
                 )
-
+    
                 # instantiate peeler
                 # can reuse featurizers per chunk rather than subchunks? 
                 matching_peeler = ObjectiveUpdateTemplateMatchingPeeler.from_config(
@@ -412,36 +454,35 @@ def match(
                     template_data,
                     motion_est=motion_est,
                 )
+                                
                 sorting_chunk, output_hdf5_filename = run_peeler(
                     matching_peeler,
                     output_directory,
-                    f"chunk_{j}_" + hdf5_filename,
+                    hdf5_filename,
                     model_subdir_chunk,
                     featurization_config,
                     chunk_starts_samples=chunk_starts_samples,
-                    overwrite=True,
+                    overwrite=False,
+                    exception_no_featurization=True,
                     n_jobs=n_jobs_match,
                     residual_filename=residual_filename,
                     show_progress=show_progress,
                     device=device,
+                    keep_writing=True, 
                 )
-    
-                sorting_list.append(sorting_chunk)
-                output_hdf5_filename_list.append(output_hdf5_filename)
-            else:
-                assert templates_precomputed
-                # If not precomputed, need to change how things are done
+        else:
+            for j, chunk_time_range in enumerate(chunk_time_ranges_s):
                 sub_chunk_time_range_s = subchunks_time_ranges(recording, chunk_time_range, template_config.subchunk_size_s,
                                                               divider_samples=matching_config.chunk_length_samples)
                 print("Chunk range:")
                 print(chunk_time_range)
-
+    
                 print("Subchunk ranges:")
                 print(sub_chunk_time_range_s)
                 
                 n_sub_chunks = len(sub_chunk_time_range_s)
                 len_subchunks_s =sub_chunk_time_range_s[0][1] - sub_chunk_time_range_s[0][0] 
-
+    
                 if j>0:
                     template_data_previous = TemplateData.from_npz(
                         template_dir_precomputed / f"chunk_{j-1}_{per_chunk_dir_end_name}/{template_npz_filename}"
@@ -450,18 +491,18 @@ def match(
                     template_dir_precomputed / f"chunk_{j}_{per_chunk_dir_end_name}/{template_npz_filename}"
                 )
                 for k, subchunk_time_range in enumerate(sub_chunk_time_range_s):
-
+    
                     print(f"subchunk {int(j*n_sub_chunks + k)}")
                     model_subdir_chunk = f"subchunk_{int(j*n_sub_chunks + k)}_" + model_subdir
                     model_subdir_chunk = Path(output_directory) / model_subdir_chunk
-
+    
                     chunk_starts_samples = np.arange(
                         subchunk_time_range[0] * recording.sampling_frequency,
                         subchunk_time_range[1] * recording.sampling_frequency,
                         matching_config.chunk_length_samples,
                     ).astype("int")
-
-
+    
+    
                     if j>0:
                         template_data = get_smoothed_templates([template_data_previous, template_data_chunk], [(n_sub_chunks-k-1)/n_sub_chunks, (k+1)/n_sub_chunks], template_data_chunk.unit_ids)
                     else:
@@ -479,17 +520,19 @@ def match(
                         matching_peeler,
                         output_directory,
                         f"chunk_{int(j*n_sub_chunks + k)}_" + hdf5_filename,
-                        model_subdir_chunk,
+                        model_subdir,
                         featurization_config,
                         chunk_starts_samples=chunk_starts_samples,
-                        overwrite=overwrite,
+                        overwrite=overwrite, # check that it still computes the pconv.h5 object -> No, but we don't want to unlink the previous .pt ()which deletes everything
+                        exception_no_featurization=True,
                         n_jobs=n_jobs_match,
                         residual_filename=residual_filename,
                         show_progress=show_progress,
                         device=device,
+                        # keep_writing=False, # This parameter to keep filling up the h5 file
                     )
-        
-                    sorting_list.append(sorting_chunk)
-                    output_hdf5_filename_list.append(output_hdf5_filename)
-    
-        return sorting_list, output_hdf5_filename_list
+            
+                    # sorting_list.append(sorting_chunk)
+                    # output_hdf5_filename_list.append(output_hdf5_filename)
+
+        return sorting_chunk, output_hdf5_filename

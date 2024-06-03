@@ -351,6 +351,7 @@ def array_scatter(
     x,
     z,
     maxptp,
+    alpha=0.1,
     zlim=(-50, 3900),
     xlim=None,
     ptplim=None,
@@ -359,6 +360,7 @@ def array_scatter(
     axes=None,
     do_ellipse=True,
     figsize = (15, 15),
+    size=1,
 ):
     fig = None
     if axes is None:
@@ -376,8 +378,8 @@ def array_scatter(
         z,
         labels,
         ax=axes[1],
-        s=1,
-        alpha=0.1,
+        s=size,
+        alpha=alpha,
         excluded_ids=excluded_ids,
         do_ellipse=do_ellipse,
     )
@@ -390,12 +392,12 @@ def array_scatter(
     axes[0].tick_params(axis='y', labelsize=14)
 
     cluster_scatter(
-        maxptp*6.067412,
+        maxptp,
         z,
         labels,
         ax=axes[2],
-        s=1,
-        alpha=0.1,
+        s=size,
+        alpha=alpha,
         excluded_ids=excluded_ids,
         do_ellipse=do_ellipse,
     )
@@ -408,8 +410,8 @@ def array_scatter(
         x,
         z,
         c=maxptp_c,
-        s=1,
-        alpha=0.1,
+        s=size,
+        alpha=alpha/3,
         marker=".",
         cmap=plt.cm.jet,
     )
