@@ -551,6 +551,22 @@ def subchunks_time_ranges(recording, chunk_range_s, subchunk_size_s, divider_sam
 
 # -- hdf5 util
 
+def chunked_h5_read(indices, dataset):
+    """
+    mask : boolean array of shape dataset.shape[:1]
+    dataset : chunked h5py.Dataset
+    """
+    out = np.empty((len(indices), *dataset.shape[1:]), dtype=dataset.dtype)
+    n = 0
+    for sli, *_ in dataset.iter_chunks():
+        m = indices[np.logical_and(indices>=sli.start, indices<sli.stop)]
+        nm = m.size
+        if not nm:
+            continue
+        x = dataset[m]
+        out[n : n + nm] = x
+        n += nm
+    return out
 
 def batched_h5_read(dataset, indices, batch_size=128):
     if indices.size < batch_size:
