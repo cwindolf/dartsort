@@ -132,13 +132,14 @@ def get_templates_with_h5(
         device=device,
         spike_length_samples=spike_length_samples,
     )
-    raw_templates, _, snrs_by_channel = res
+    raw_templates, _, snrs_by_channel, counts = res
 
     return dict(
         sorting=sorting,
         templates=raw_templates,
         raw_templates=raw_templates,
         snrs_by_channel=snrs_by_channel,
+        per_chan_counts=counts,
     )
 
 
@@ -371,6 +372,200 @@ def get_templates_with_spikes_loaded(
         snrs_by_channel=snrs_by_channel,
         weights=weights,
     )
+
+
+def get_templates_linear(
+    recording,
+    sorting,
+    n_chunks=1,
+    trough_offset_samples=42,
+    spike_length_samples=121,
+    spikes_per_unit=500,
+    pitch_shifts=None,
+    registered_geom=None,
+    realign_peaks=False,
+    realign_max_sample_shift=20,
+    low_rank_denoising=True,
+    denoising_tsvd=None,
+    denoising_rank=5,
+    denoising_fit_radius=75,
+    denoising_spikes_fit=50_000,
+    denoising_snr_threshold=50.0,
+    min_fraction_at_shift=0.25,
+    min_count_at_shift=25,
+    reducer=fast_nanmedian,
+    spatial_svdsmoothing=False,
+    max_ptp_chans_to_spatialsmooth=3,
+    random_seed=0,
+    units_per_job=8,
+    n_jobs=0,
+    show_progress=True,
+    device=None,
+):
+    """Raw, denoised, and shifted templates
+
+    Low-level helper function which does the work of template computation for
+    the template classes elsewhere in this folder
+
+    Arguments
+    ---------
+    times, channels, labels : arrays of shape (n_spikes,)
+        The trough (or peak) times, main channels, and unit labels
+    geom : array of shape (n_channels, 2)
+        Probe channel geometry, needed to subsample channels when fitting
+        the low-rank denoising model, and also needed if the shifting
+        arguments are specified
+    pitch_shifts : int array of shape (n_spikes,)
+        When computing extended templates, these shifts are applied
+        before averaging
+    registered_geom : array of shape (n_channels_extended, 2)
+        Required if pitch_shifts is supplied. See drift_util.registered_geometry.
+    realign_peaks : bool
+        If True, a first round of raw templates are computed and used to shift
+        the spike times such that their peaks/troughs land on trough_offset_samples
+    trough_offset_samples, spike_length_samples : int
+        Waveform snippets will be loaded from times[i] - trough_offset_samples
+        to times[i] - trough_offset_samples + spike_length_samples
+    spikes_per_unit : int
+        Load at most this many randomly selected spikes per unit
+    low_rank_denoising : bool
+        Should we compute denoised templates? If not, raw averages.
+    denoising_model : sklearn Transformer
+        Pre-fit denoising model, in which case the next args are ignored
+    denoising_rank, denoising_fit_radius, denoising_spikes_fit
+        Parameters for the low rank model fit for denoising
+    denoising_snr_threshold : int
+        The SNR (=amplitude*sqrt(n_spikes)) threshold at which the
+        denoising is ignored and we just use the usual template
+    output_hdf5_filename : str or Path
+        Denoised and/or raw templates will be saved here under the dataset
+        names "raw_templates" and "denoised_templates"
+    keep_waveforms_in_hdf5 : bool
+        If True and output_hdf5_filename is supplied, waveforms extracted
+        for template computation are retained in the output hdf5. Else,
+        deleted to save disk space.
+    scratch_dir : str or Path
+        This is where a temporary directory will be made for intermediate
+        computations, if output_hdf5_filename is None. If it's left blank,
+        the tempfile default directory is used. If output_hdf5_file is not
+        None, that hdf5 file is used and this argument is ignored.
+
+    Returns
+    -------
+    dict whose keys vary based on the above arguments
+
+    """
+    # validate arguments
+    raw_only = not low_rank_denoising
+
+    # estimate peak sample times and realign spike train
+    # if realign_peaks:
+    #     # pad the trough_offset_samples and spike_length_samples so that
+    #     # if the user did not request denoising we can just return the
+    #     # raw templates right away
+    #     trough_offset_load = trough_offset_samples + realign_max_sample_shift
+    #     spike_length_load = spike_length_samples + 2 * realign_max_sample_shift
+    #     raw_results = get_raw_templates(
+    #         recording,
+    #         sorting,
+    #         pitch_shifts=pitch_shifts,
+    #         registered_geom=registered_geom,
+    #         realign_peaks=False,
+    #         trough_offset_samples=trough_offset_load,
+    #         spike_length_samples=spike_length_load,
+    #         spikes_per_unit=spikes_per_unit,
+    #         min_fraction_at_shift=min_fraction_at_shift,
+    #         min_count_at_shift=min_count_at_shift,
+    #         reducer=reducer,
+    #         random_seed=random_seed,
+    #         n_jobs=n_jobs,
+    #         show_progress=show_progress,
+    #         device=device,
+    #     )
+    #     sorting, templates = realign_sorting(
+    #         sorting,
+    #         raw_results["raw_templates"],
+    #         raw_results["snrs_by_channel"],
+    #         max_shift=realign_max_sample_shift,
+    #         trough_offset_samples=trough_offset_samples,
+    #         recording_length_samples=recording.get_num_samples(),
+    #     )
+    #     if raw_only:
+    #         # overwrite template dataset with aligned ones
+    #         # handle keep_waveforms_in_hdf5
+    #         raw_results["sorting"] = sorting
+    #         raw_results["templates"] = raw_results["raw_templates"] = templates
+    #         return raw_results
+
+    # fit tsvd
+    if low_rank_denoising and denoising_tsvd is None:
+        denoising_tsvd = fit_tsvd(
+            recording,
+            sorting,
+            denoising_rank=denoising_rank,
+            denoising_fit_radius=denoising_fit_radius,
+            denoising_spikes_fit=denoising_spikes_fit,
+            trough_offset_samples=trough_offset_samples,
+            spike_length_samples=spike_length_samples,
+            random_seed=random_seed,
+        )
+
+    # template logic
+    # for each unit, get shifted raw and denoised averages and channel SNRs
+    res = get_all_shifted_raw_and_low_rank_templates_linear(
+        recording,
+        sorting,
+        n_chunks=n_chunks,
+        registered_geom=registered_geom,
+        denoising_tsvd=denoising_tsvd,
+        pitch_shifts=pitch_shifts,
+        spikes_per_unit=spikes_per_unit,
+        reducer=reducer,
+        n_jobs=n_jobs,
+        units_per_job=units_per_job,
+        random_seed=random_seed,
+        show_progress=show_progress,
+        trough_offset_samples=trough_offset_samples,
+        spike_length_samples=spike_length_samples,
+        min_fraction_at_shift=min_fraction_at_shift,
+        min_count_at_shift=min_count_at_shift,
+        device=device,
+    )
+    raw_templates, low_rank_templates, snrs_by_channel = res
+
+    if raw_only:
+        return dict(
+            sorting=sorting,
+            templates=raw_templates,
+            raw_templates=raw_templates,
+            snrs_by_channel=snrs_by_channel,
+        )
+
+    weights = denoising_weights(
+        snrs_by_channel,
+        spike_length_samples=spike_length_samples,
+        trough_offset=trough_offset_samples,
+        snr_threshold=denoising_snr_threshold,
+    )
+    templates = weights * raw_templates + (1 - weights) * low_rank_templates
+    templates = templates.astype(recording.dtype)
+
+    if spatial_svdsmoothing:
+        for k in range(templates.shape[0]):
+            chans_low_ptp = np.flatnonzero(templates[k].ptp(0)<max_ptp_chans_to_spatialsmooth)
+            U, s, Vh = svd(templates[k][:, chans_low_ptp].T, full_matrices=False)
+            s[np.cumsum(s)>s.sum()*0.5]=0
+            templates[k, :, chans_low_ptp] = np.dot(U, np.dot(np.diag(s), Vh))
+
+    return dict(
+        sorting=sorting,
+        templates=templates,
+        raw_templates=raw_templates,
+        low_rank_templates=low_rank_templates,
+        snrs_by_channel=snrs_by_channel,
+        weights=weights,
+    )
+
 
 
 def get_templates(
@@ -934,11 +1129,11 @@ def get_all_shifted_raw_and_low_rank_templates_with_h5(
                     )
     
                 counts.append(in_unit.size)
-    snrs_by_channel = np.array([ptp(rt, 0) * np.sqrt(c) for rt, c in zip(raw_templates, counts)])
+    snrs_by_channel = np.array([ptp(rt, 0) * np.sqrt(c) for rt, c in zip(raw_templates, counts)]) # Here, need to return counts for smoothing
     raw_templates = np.array(raw_templates)
 
     # if denoising_tsvd is None:
-    return raw_templates, None, snrs_by_channel
+    return raw_templates, None, snrs_by_channel, np.array(counts)
 
 
 def get_all_shifted_raw_and_low_rank_templates_with_spikes_loaded(

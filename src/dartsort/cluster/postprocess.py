@@ -57,13 +57,12 @@ def chuck_noisy_template_units_with_time_tracking(
                 trough_offset_samples=trough_offset_samples,
                 spike_length_samples=spike_length_samples,
             )
+            # to remove later if works well
             template_data_list.append(template_data)
             if template_save_dir is not None:
                 template_save_dir_chunk = template_save_dir / f"chunk_{j}_{model_subdir}_pre_GC"
                 os.makedirs(template_save_dir_chunk, exist_ok=True)
                 template_data.to_npz(template_save_dir_chunk / template_npz_filename)
-
-            
 
     units = np.unique(sorting.labels)
     units = units[units>-1]
@@ -81,8 +80,8 @@ def chuck_noisy_template_units_with_time_tracking(
     good_unit_ids = np.hstack(good_unit_ids)
     unique_good_unit_ids, new_ids = np.unique(good_unit_ids, return_inverse=True)
 
-    print(unique_good_unit_ids)
-    print(new_ids)
+    # print(unique_good_unit_ids)
+    # print(new_ids)
 
     new_labels = sorting.labels.copy()
     valid = np.isin(new_labels, unique_good_unit_ids)

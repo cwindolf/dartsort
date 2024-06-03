@@ -354,7 +354,7 @@ class TemplateData:
             **kwargs,
         )
 
-        # count spikes in each template
+        # count spikes in each template DO WE NEED FOR EACH CHANNEL? 
         spike_counts = np.zeros_like(unit_ids)
         ix, counts = np.unique(labels_all, return_counts=True)
         spike_counts[ix[ix >= 0]] = counts[ix >= 0]
@@ -373,7 +373,7 @@ class TemplateData:
             obj = cls(
                 results["templates"],
                 unit_ids,
-                spike_counts,
+                results["per_chan_counts"],
                 kwargs["registered_geom"],
                 registered_template_depths_um,
                 localization_radius_um=template_config.registered_template_localization_radius_um,
@@ -390,7 +390,7 @@ class TemplateData:
             obj = cls(
                 results["templates"],
                 unit_ids,
-                spike_counts,
+                results["per_chan_counts"],
                 geom,
                 depths_um,
                 localization_radius_um=template_config.registered_template_localization_radius_um,
@@ -703,3 +703,48 @@ def get_chunked_templates(
         )
 
     return chunk_template_data
+
+def merge_template_list(
+    template_data_list, 
+    new_labels, 
+    prev_labels, 
+):
+    trough_offset_samples = template_data_list[0].trough_offset_samples
+    spike_length_samples = template_data_list[0].spike_length_samples
+    localization_radius_um = template_data_list[0].localization_radius_um
+    registered_geom = template_data_list[0].registered_geom
+
+    unit_ids = np.unique(new_labels)
+    unit_ids = unit_ids[unit_ids>-1]
+
+    new_temp_data_list = []
+    for k, temp_data in enumerate(template_data_list):
+        templates = np.zeros((unit_ids.shape[0], temp_data.templates.shape[1], temp_data.templates.shape[2]))
+        spike_counts = np.zeros(unit_ids.shape)
+        reg_depths = None
+        if temp_data.registered_template_depths_um is not None:
+            reg_depths = np.zeros(unit_ids.shape)
+        for u in unit_ids:
+            prev_units = np.unique(prev_labels[new_labels==u])
+            prev_units = prev_units[prev_units>-1]
+            # if len(prev_units)==1:
+            #     templates[u] = temp_data.templates[prev_units]
+            #     spike_counts[u] = temp_data.spike_counts[prev_units]
+            # else:
+            templates[u] = (temp_data.templates[prev_units]*temp_data.spike_counts[prev_units][:, None, None]).sum(0)/temp_data.spike_counts[prev_units].sum()
+            spike_counts[u] = temp_data.spike_counts[prev_units].sum()
+            if reg_depths is not None:
+                reg_depths[u] = (temp_data.registered_template_depths_um[prev_units]*temp_data.spike_counts[prev_units][:, None, None]).sum()/temp_data.spike_counts[prev_units].sum()
+        new_temp_data_list.append(
+            TemplateData(
+                templates = templates,
+                spike_counts = spike_counts,
+                unit_ids = unit_ids,
+                localization_radius_um = localization_radius_um,
+                spike_length_samples = spike_length_samples,
+                trough_offset_samples = trough_offset_samples,
+                registered_template_depths_um = reg_depths,
+            )
+        )
+    return new_temp_data_list
+

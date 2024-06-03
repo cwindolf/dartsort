@@ -70,7 +70,7 @@ class BasePeeler(torch.nn.Module):
     # are the main API methods for this class
 
     def load_or_fit_and_save_models(
-        self, save_folder, overwrite=False, n_jobs=0, device=None
+        self, save_folder, overwrite=False, exception_no_featurization=False, n_jobs=0, device=None
     ):
         """Load fitted models from save_folder if possible, or fit and save
 
@@ -79,12 +79,13 @@ class BasePeeler(torch.nn.Module):
         to `save_folder`
         """
         save_folder = Path(save_folder)
-        if overwrite and save_folder.exists():
+        if overwrite and save_folder.exists() and not exception_no_featurization:
             for pt_file in save_folder.glob("*pipeline.pt"):
                 pt_file.unlink()
         if self.needs_fit():
             self.load_models(save_folder)
-        if self.needs_fit():
+        if self.needs_fit() or overwrite:
+            # or overwrite to build up template data in case we have fitted already but need to update templates
             save_folder.mkdir(exist_ok=True)
             self.fit_models(
                 save_folder, overwrite=overwrite, n_jobs=n_jobs, device=device
@@ -367,13 +368,13 @@ class BasePeeler(torch.nn.Module):
 
     def fit_models(self, save_folder, overwrite=False, n_jobs=0, device=None):
         with torch.no_grad():
+            self.precompute_peeling_data(
+                save_folder=save_folder,
+                overwrite=overwrite,
+                n_jobs=n_jobs,
+                device=device,
+            )
             if self.peeling_needs_fit():
-                self.precompute_peeling_data(
-                    save_folder=save_folder,
-                    overwrite=overwrite,
-                    n_jobs=n_jobs,
-                    device=device,
-                )
                 self.fit_peeler_models(
                     save_folder=save_folder, n_jobs=n_jobs, device=device
                 )
