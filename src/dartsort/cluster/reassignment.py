@@ -9,257 +9,247 @@ from dartsort.util.drift_util import registered_geometry, get_spike_pitch_shifts
 from dartsort.util.waveform_util import channel_subset_by_radius
 import h5py
 from dartsort.templates.templates import TemplateData
-from dartsort.util.list_util import create_tpca_templates_list
+from dartsort.util.list_util import create_tpca_templates_list, create_tpca_templates_list_efficient
 from dartsort.templates.template_util import smooth_list_templates
 from dataclasses import replace
 
-def triage(
-    sorting,
-    recording,
-    motion_est,
-    chunk_time_ranges_s,
-    template_config,
-    matching_config,
-    data_dir_chunks,
-    tpca,
-    deconv_scores,
-    return_triaged_labels=True,
-    threshold_n_spike=0.2,
-    fill_nanvalue=1_000,
-    norm_operator=np.nanmax,
-    min_nspikes_unit=150,
-    min_overlapping_chans_ratio=0.75,
-    radius=25,
-    min_norm_triage=4,
-    n_iter=2,
-):
+# def triage(
+#     sorting,
+#     recording,
+#     motion_est,
+#     chunk_time_ranges_s,
+#     template_config,
+#     matching_config,
+#     matchh5,
+#     tpca,
+#     deconv_scores,
+#     return_triaged_labels=True,
+#     threshold_n_spike=0.2,
+#     fill_nanvalue=1_000,
+#     norm_operator=np.nanmax,
+#     min_nspikes_unit=150,
+#     min_overlapping_chans_ratio=0.75,
+#     radius=25,
+#     min_norm_triage=4,
+#     n_iter=2,
+# ):
 
-    weights_deconv = np.log(1 + np.abs(deconv_scores-deconv_scores.min()))
-    tpca_templates_list, spike_count_list, unit_ids_list = create_tpca_templates_list(
-        recording, 
-        sorting,
-        motion_est,
-        chunk_time_ranges_s,
-        template_config, 
-        matching_config,
-        data_dir_chunks,
-        weights=weights_deconv,
-        tpca=tpca,
-    )
+#     weights_deconv = np.log(1 + np.abs(deconv_scores-deconv_scores.min()))
+#     tpca_templates_list, spike_count_list = create_tpca_templates_list_efficient(
+#         recording, 
+#         sorting,
+#         motion_est,
+#         chunk_time_ranges_s,
+#         template_config, 
+#         matching_config,
+#         matchh5,
+#         weights=weights_deconv,
+#         tpca=tpca,
+#     )
 
-    templates_smoothed = smooth_list_templates(
-        tpca_templates_list, spike_count_list, unit_ids_list, np.unique(sorting.labels), threshold_n_spike=threshold_n_spike,
-    )
+#     templates_smoothed = smooth_list_templates(
+#         tpca_templates_list, spike_count_list, np.unique(sorting.labels), threshold_n_spike=threshold_n_spike,
+#     )
 
-    neighbors = -1*np.ones((all_units.max()+1, 2))
-    neighbors[:, 0] = np.arange(all_units.max()+1)
+#     neighbors = -1*np.ones((all_units.max()+1, 2))
+#     neighbors[:, 0] = np.arange(all_units.max()+1)
 
-    residual_norm, n_overlapping_chans = compute_residual_norm_moving_temps(
-        recording, 
-        sorting.labels,
-        motion_est,
-        chunk_time_ranges_s,
-        template_config,
-        matching_config,
-        tpca,
-        data_dir_chunks,
-        neighbors, # Specify neighbors here -- no neighbors 
-        templates_smoothed,
-        fill_nanvalue=fill_nanvalue,
-        norm_operator=norm_operator,
-        min_overlapping_chans_ratio=min_overlapping_chans_ratio,
-        radius=radius,
-    )
+#     residual_norm, n_overlapping_chans = compute_residual_norm_moving_temps(
+#         recording, 
+#         sorting.labels,
+#         motion_est,
+#         chunk_time_ranges_s,
+#         template_config,
+#         matching_config,
+#         tpca,
+#         matchh5,
+#         neighbors, # Specify neighbors here -- no neighbors 
+#         templates_smoothed,
+#         fill_nanvalue=fill_nanvalue,
+#         norm_operator=norm_operator,
+#         min_overlapping_chans_ratio=min_overlapping_chans_ratio,
+#         radius=radius,
+#     )
 
-    new_labels = sorting.labels.copy()
-    all_units = np.unique(sorting.labels)
-    all_units = all_units[all_units>-1]
+#     new_labels = sorting.labels.copy()
+#     all_units = np.unique(sorting.labels)
+#     all_units = all_units[all_units>-1]
 
-    new_labels[residual_norm>min_norm_triage] = -1
+#     new_labels[residual_norm>min_norm_triage] = -1
 
-    return new_labels  
+#     return new_labels  
 
-def compute_residual_norm_moving_temps(
-    recording, 
-    labels, #Here doesn't have to be split
-    motion_est,
-    chunk_time_ranges_s,
-    template_config,
-    matching_config,
-    tpca,
-    data_dir_chunks,
-    neighbors_over_time,
-    temp_data_smoothed,
-    min_overlapping_chans_ratio=1., #0.5,
-    fill_nanvalue=1_000_000,
-    norm_operator=np.nanmax,
-    radius=None,
-    # return_num_channels=False,
-):
-    # Can speed this up!! only look at first sorting (before split)
-    geom = recording.get_channel_locations()
-    registered_geom = registered_geometry(geom, motion_est)
+# def compute_residual_norm_moving_temps(
+#     recording, 
+#     labels, #Here doesn't have to be split
+#     motion_est,
+#     chunk_time_ranges_s,
+#     template_config,
+#     matching_config,
+#     tpca,
+#     matchh5,
+#     neighbors_over_time,
+#     temp_data_smoothed,
+#     wfs_name="collisioncleaned_tpca_features",
+#     min_overlapping_chans_ratio=1., #0.5,
+#     fill_nanvalue=1_000_000,
+#     norm_operator=np.nanmax,
+#     radius=None,
+#     # return_num_channels=False,
+# ):
+#     # Can speed this up!! only look at first sorting (before split)
+#     geom = recording.get_channel_locations()
+#     registered_geom = registered_geometry(geom, motion_est)
 
-    residual_Linf_norm = fill_nanvalue*np.ones((labels.shape[0], 3))
-    num_overlapping_chans = np.zeros((labels.shape[0], 3))
-    num_chan_waveforms_nonan = np.zeros(labels.shape[0])
+#     residual_Linf_norm = fill_nanvalue*np.ones((labels.shape[0], 3))
+#     num_overlapping_chans = np.zeros((labels.shape[0], 3))
+#     num_chan_waveforms_nonan = np.zeros(labels.shape[0])
     
-    cmp=0
-    for j, chunk_time_range in enumerate(chunk_time_ranges_s):
-        sub_chunk_time_range_s = subchunks_time_ranges(recording, chunk_time_range, template_config.subchunk_size_s,
-                                              divider_samples=matching_config.chunk_length_samples)
-        n_sub_chunks = len(sub_chunk_time_range_s)
-        for k, subchunk_time_range in tqdm(enumerate(sub_chunk_time_range_s), total = n_sub_chunks):
-
-            matchh5_chunk = data_dir_chunks / f"chunk_{int(j*n_sub_chunks + k)}_matching0.h5"
-            with h5py.File(matchh5_chunk, "r+") as h5:
-                times_seconds = h5["times_seconds"][:]
-                localizations = h5["point_source_localizations"][:] #[idx]
-                channels = h5["channels"][:] #[idx]
-                colcleanedwfs = h5["collisioncleaned_tpca_features"][:] #[idx]
-                channel_index = h5["channel_index"][:]
+#     cmp=0
+#     with h5py.File(matchh5, "r+") as h5:
+#         colcleanedwfs = h5[wfs_name]
+#         times_seconds = h5["times_seconds"]
+#         localizations = h5["point_source_localizations"]
+#         channels = h5["channels"]
+#         channel_index = h5["channel_index"]
+#         for sli, *_ in tqdm(dataset.iter_chunks()):
+#             wfs = dataset[sli]
                 
-            n_spikes_chunk = len(times_seconds)
-            indices_chunk = np.arange(cmp, cmp+n_spikes_chunk)
-            cmp+=n_spikes_chunk
+#             n_spikes_chunk = len(times_seconds)
+#             indices_chunk = np.arange(cmp, cmp+n_spikes_chunk)
+#             cmp+=n_spikes_chunk
 
-            all_units = np.unique(labels)
-            for unit in all_units[all_units>-1]:
-                if neighbors_over_time.ndim == 3:
-                    unit_neighbors = neighbors_over_time[int(j*n_sub_chunks + k), unit]
-                else: 
-                    unit_neighbors = neighbors_over_time[unit]
-                idx_unit = np.flatnonzero(labels[indices_chunk] == unit)
-                idx_unit_all_chunk = indices_chunk[idx_unit]
+#             all_units = np.unique(labels)
+#             for unit in all_units[all_units>-1]:
+#                 if neighbors_over_time.ndim == 3:
+#                     unit_neighbors = neighbors_over_time[int(j*n_sub_chunks + k), unit]
+#                 else: 
+#                     unit_neighbors = neighbors_over_time[unit]
+#                 idx_unit = np.flatnonzero(labels[indices_chunk] == unit)
+#                 idx_unit_all_chunk = indices_chunk[idx_unit]
 
-                if radius is not None: 
-                    wfs_unit, new_channel_index = channel_subset_by_radius(
-                        colcleanedwfs[idx_unit],
-                        channels[idx_unit],
-                        channel_index,
-                        geom,
-                        radius=radius
-                    )
-                else:
-                    wfs_unit = colcleanedwfs[idx_unit],
-                n_pitches_shift = get_spike_pitch_shifts(
-                    localizations[idx_unit, 2],
-                    geom=geom,
-                    times_s=times_seconds[idx_unit],
-                    motion_est=motion_est)
+#                 if radius is not None: 
+#                     wfs_unit, new_channel_index = channel_subset_by_radius(
+#                         colcleanedwfs[idx_unit],
+#                         channels[idx_unit],
+#                         channel_index,
+#                         geom,
+#                         radius=radius
+#                     )
+#                 else:
+#                     wfs_unit = colcleanedwfs[idx_unit],
+#                 n_pitches_shift = get_spike_pitch_shifts(
+#                     localizations[idx_unit, 2],
+#                     geom=geom,
+#                     times_s=times_seconds[idx_unit],
+#                     motion_est=motion_est)
             
-                wfs_unit = get_waveforms_on_static_channels(
-                    wfs_unit,
-                    geom,
-                    channels[idx_unit], 
-                    new_channel_index, 
-                    registered_geom=registered_geom,
-                    n_pitches_shift=n_pitches_shift,
-                )
+#                 wfs_unit = get_waveforms_on_static_channels(
+#                     wfs_unit,
+#                     geom,
+#                     channels[idx_unit], 
+#                     new_channel_index, 
+#                     registered_geom=registered_geom,
+#                     n_pitches_shift=n_pitches_shift,
+#                 )
                 
-                wfs_unit = tpca.inverse_transform(wfs_unit.transpose(0, 2, 1).reshape(-1, 8)).reshape(-1, registered_geom.shape[0], 121).transpose(0, 2, 1) #[:, :, 0] 
-                wfs_unit = wfs_unit[:, 25:70, :]
+#                 wfs_unit = tpca.inverse_transform(wfs_unit.transpose(0, 2, 1).reshape(-1, 8)).reshape(-1, registered_geom.shape[0], 121).transpose(0, 2, 1) #[:, :, 0] 
+#                 wfs_unit = wfs_unit[:, 25:70, :]
 
-                num_chan_waveforms_nonan[idx_unit_all_chunk] = (~np.isnan(wfs_unit[:, 0])).sum(1)
+#                 num_chan_waveforms_nonan[idx_unit_all_chunk] = (~np.isnan(wfs_unit[:, 0])).sum(1)
     
-                for i, neigh in enumerate(unit_neighbors):
-                    if neigh>-1:
-                        temp_neigh = temp_data_smoothed[int(j*n_sub_chunks + k), neigh]
-                        temp_neigh = temp_neigh[25:70]
-                        n_overlap_chans = (~np.isnan((wfs_unit - temp_neigh[None])[:, 0])).sum(1)
-                        idx_enough_overlap = n_overlap_chans >= min_overlapping_chans_ratio*num_chan_waveforms_nonan[idx_unit_all_chunk]
+#                 for i, neigh in enumerate(unit_neighbors):
+#                     if neigh>-1:
+#                         temp_neigh = temp_data_smoothed[int(j*n_sub_chunks + k), neigh]
+#                         temp_neigh = temp_neigh[25:70]
+#                         n_overlap_chans = (~np.isnan((wfs_unit - temp_neigh[None])[:, 0])).sum(1)
+#                         idx_enough_overlap = n_overlap_chans >= min_overlapping_chans_ratio*num_chan_waveforms_nonan[idx_unit_all_chunk]
 
-                        if idx_enough_overlap.sum()>0:
-                            residual_Linf_norm[idx_unit_all_chunk[idx_enough_overlap], i] = norm_operator(np.abs(wfs_unit[idx_enough_overlap] - temp_neigh[None]), axis = (1, 2))
-                            # if unit == 23:
-                            #     print("ENOUGH OVERLAP")
-                            #     print(idx_enough_overlap)
-                            #     print(residual_Linf_norm[idx_unit_all_chunk[idx_enough_overlap], i])
-                        num_overlapping_chans[idx_unit_all_chunk, i] = n_overlap_chans
+#                         if idx_enough_overlap.sum()>0:
+#                             residual_Linf_norm[idx_unit_all_chunk[idx_enough_overlap], i] = norm_operator(np.abs(wfs_unit[idx_enough_overlap] - temp_neigh[None]), axis = (1, 2))
+#                             # if unit == 23:
+#                             #     print("ENOUGH OVERLAP")
+#                             #     print(idx_enough_overlap)
+#                             #     print(residual_Linf_norm[idx_unit_all_chunk[idx_enough_overlap], i])
+#                         num_overlapping_chans[idx_unit_all_chunk, i] = n_overlap_chans
     
-    residual_Linf_norm[np.isnan(residual_Linf_norm)] = fill_nanvalue
+#     residual_Linf_norm[np.isnan(residual_Linf_norm)] = fill_nanvalue
 
-    return residual_Linf_norm, num_overlapping_chans, num_chan_waveforms_nonan
+#     return residual_Linf_norm, num_overlapping_chans, num_chan_waveforms_nonan
 
 
 
 def compute_residual_norm(
     recording, 
-    labels, #Here doesn't have to be split
+    sorting, #Here doesn't have to be split
     motion_est,
     chunk_time_ranges_s,
     template_config,
     matching_config,
     tpca,
-    data_dir_chunks,
+    matchh5,
     neighbors,
     temp_data_smoothed,
+    chunk_belong_wfs,
+    wfs_name="collisioncleaned_tpca_features",
     fill_nanvalue=1_000_000,
     norm_operator=np.nanmax,
     return_num_channels=False,
+    start_wf=25, 
+    end_wf=70,
 ):
     # Can speed this up!! only look at first sorting (before split)
     geom = recording.get_channel_locations()
     registered_geom = registered_geometry(geom, motion_est)
+    labels = sorting.labels
 
     residual_Linf_norm = fill_nanvalue*np.ones((labels.shape[0], neighbors.shape[1]))
     if return_num_channels:
         num_overlapping_chans = np.zeros((labels.shape[0], 3))
         num_chan_waveforms_nonan = np.zeros(labels.shape[0])
-    cmp=0
-    for j, chunk_time_range in enumerate(chunk_time_ranges_s):
-        sub_chunk_time_range_s = subchunks_time_ranges(recording, chunk_time_range, template_config.subchunk_size_s,
-                                              divider_samples=matching_config.chunk_length_samples)
-        n_sub_chunks = len(sub_chunk_time_range_s)
-        for k, subchunk_time_range in tqdm(enumerate(sub_chunk_time_range_s), total = n_sub_chunks):
 
-            matchh5_chunk = data_dir_chunks / f"chunk_{int(j*n_sub_chunks + k)}_matching0.h5"
-            with h5py.File(matchh5_chunk, "r+") as h5:
-                times_seconds = h5["times_seconds"][:]
-                localizations = h5["point_source_localizations"][:] #[idx]
-                channels = h5["channels"][:] #[idx]
-                colcleanedwfs = h5["collisioncleaned_tpca_features"][:] #[idx]
-                channel_index = h5["channel_index"][:]
-                
-            n_spikes_chunk = len(times_seconds)
-            indices_chunk = np.arange(cmp, cmp+n_spikes_chunk)
-            cmp+=n_spikes_chunk
-                        
-            for unit in np.unique(labels):
-                unit_neighbors = neighbors[unit]
-                idx_unit = np.flatnonzero(labels[indices_chunk] == unit)
-                idx_unit_all_chunk = indices_chunk[idx_unit]
-                # Maybe above, indexing is wrong>
-                
-                n_pitches_shift = get_spike_pitch_shifts(
-                    localizations[idx_unit, 2],
-                    geom=geom,
-                    times_s=times_seconds[idx_unit],
-                    motion_est=motion_est)
+    n_pitches_shift = get_spike_pitch_shifts(
+        sorting.point_source_localizations[:, 2],
+        geom=geom,
+        times_s=sorting.times_seconds,
+        motion_est=motion_est)
+
+    with h5py.File(matchh5, "r+") as h5:
+        colcleanedwfs = h5[wfs_name]
+        channel_index = h5["channel_index"][:]
+        for sli, *_ in tqdm(colcleanedwfs.iter_chunks()):
+            indices_chunk = np.arange(sli.start, sli.stop)
+            wfs = colcleanedwfs[sli]
+            labels_chunk = labels[sli]
             
-                wfs_unit = get_waveforms_on_static_channels(
-                    colcleanedwfs[idx_unit],
-                    geom,
-                    channels[idx_unit], 
-                    channel_index, 
-                    registered_geom=registered_geom,
-                    n_pitches_shift=n_pitches_shift,
-                )
-                
-                wfs_unit = tpca.inverse_transform(wfs_unit.transpose(0, 2, 1).reshape(-1, 8)).reshape(-1, registered_geom.shape[0], 121).transpose(0, 2, 1) #[:, :, 0] 
-                wfs_unit = wfs_unit[:, 25:70, :]
+            wfs = get_waveforms_on_static_channels(
+                wfs,
+                geom,
+                sorting.channels[sli], 
+                channel_index, 
+                registered_geom=registered_geom,
+                n_pitches_shift=n_pitches_shift[sli],
+            )
+            wfs = tpca.inverse_transform(wfs.transpose(0, 2, 1).reshape(-1, 8)).reshape(-1, registered_geom.shape[0], 121).transpose(0, 2, 1) #[:, :, 0] 
+            wfs = wfs[:, start_wf:end_wf, :]
 
-                if return_num_channels:
-                    num_chan_waveforms_nonan[idx_unit_all_chunk] = (~np.isnan(wfs_unit[:, 0])).sum(1)
-    
+            if return_num_channels:
+                num_chan_waveforms_nonan[indices_chunk] = (~np.isnan(wfs[:, 0])).sum(1)
+
+            for unit in np.unique(labels_chunk):
+                unit_neighbors = neighbors[unit]
+                idx_unit = np.flatnonzero(labels_chunk == unit)
+                idx_unit_all_chunk = indices_chunk[idx_unit]
+                wfs_unit = wfs[idx_unit]
+                                 
                 for i, neigh in enumerate(unit_neighbors):
                     if neigh>-1:
-                        temp_neigh = temp_data_smoothed[int(j*n_sub_chunks + k), neigh]
-                        temp_neigh = temp_neigh[25:70]
-                        residual_Linf_norm[idx_unit_all_chunk, i] = norm_operator(np.abs(wfs_unit - temp_neigh[None]), axis = (1, 2))
+                        temp_neigh = temp_data_smoothed[chunk_belong_wfs[idx_unit_all_chunk], neigh]
+                        temp_neigh = temp_neigh[:, start_wf:end_wf]
+                        residual_Linf_norm[idx_unit_all_chunk, i] = norm_operator(np.abs(wfs_unit - temp_neigh), axis = (1, 2))
                         if return_num_channels:
-                            num_overlapping_chans[idx_unit_all_chunk, i] = (~np.isnan((wfs_unit - temp_neigh[None])[:, 0])).sum(1)
-                            
+                            num_overlapping_chans[idx_unit_all_chunk, i] = (~np.isnan((wfs_unit - temp_neigh)[:, 0])).sum(1)
+
     residual_Linf_norm[np.isnan(residual_Linf_norm)] = fill_nanvalue
 
     if not return_num_channels:
@@ -275,62 +265,55 @@ def compute_maxchan_tpca_residual(
     template_config,
     matching_config,
     tpca,
-    data_dir_chunks,
+    matchh5,
     temp_data_smoothed,
+    chunk_belong_wfs,
+    wfs_name="collisioncleaned_tpca_features",
     trough_offset=42,
     peak_time_selection="maxstd",
     spike_length_samples=121,
     normalize_by_max_value=True,
+    tpca_rank=8,
 ):
 
     temp_data_smoothed[np.isnan(temp_data_smoothed)]=0
     geom = recording.get_channel_locations()
     registered_geom = registered_geometry(geom, motion_est)
+    n_channel_templates = registered_geom.shape[0]
 
     max_chan_residual = np.zeros((sorting.labels.shape[0], spike_length_samples))
-    
-    cmp=0
-    for j, chunk_time_range in enumerate(chunk_time_ranges_s):
-        sub_chunk_time_range_s = subchunks_time_ranges(recording, chunk_time_range, template_config.subchunk_size_s,
-                                              divider_samples=matching_config.chunk_length_samples)
-        n_sub_chunks = len(sub_chunk_time_range_s)
-        for k, subchunk_time_range in tqdm(enumerate(sub_chunk_time_range_s), total = n_sub_chunks):
 
-            matchh5_chunk = data_dir_chunks / f"chunk_{int(j*n_sub_chunks + k)}_matching0.h5"
-            with h5py.File(matchh5_chunk, "r+") as h5:
-                times_seconds = h5["times_seconds"][:]
-                localizations = h5["point_source_localizations"][:] #[idx]
-                channels = h5["channels"][:] #[idx]
-                colcleanedwfs = h5["collisioncleaned_tpca_features"][:] #[idx]
-                channel_index = h5["channel_index"][:]
-                
-            n_spikes_chunk = len(times_seconds)
-            indices_chunk = np.arange(cmp, cmp+n_spikes_chunk)
-            cmp+=n_spikes_chunk
-                        
-            for unit in np.unique(sorting.labels):
-                idx_unit = np.flatnonzero(sorting.labels[indices_chunk] == unit)
-                idx_unit_chunk = indices_chunk[idx_unit]
-                
-                n_pitches_shift = get_spike_pitch_shifts(
-                    localizations[idx_unit, 2],
-                    geom=geom,
-                    times_s=times_seconds[idx_unit],
-                    motion_est=motion_est)
-            
-                wfs_unit = get_waveforms_on_static_channels(
-                    colcleanedwfs[idx_unit],
-                    geom,
-                    channels[idx_unit], 
-                    channel_index, 
-                    registered_geom=registered_geom,
-                    n_pitches_shift=n_pitches_shift,
-                )
-                wfs_unit = tpca.inverse_transform(wfs_unit.transpose(0, 2, 1).reshape(-1, 8)).reshape(-1, registered_geom.shape[0], 121).transpose(0, 2, 1) #[:, :, 0] 
+    n_pitches_shift = get_spike_pitch_shifts(
+        sorting.point_source_localizations[:, 2],
+        geom=geom,
+        times_s=sorting.times_seconds,
+        motion_est=motion_est)
+
+    with h5py.File(matchh5, "r+") as h5:
+        channel_index = h5["channel_index"][:]
+        colcleanedwfs = h5[wfs_name]
+        # times_seconds = h5["times_seconds"]
+        # localizations = h5["point_source_localizations"]
+        # channels = h5["channels"]
+        # channel_index = h5["channel_index"]
+        for sli, *_ in tqdm(colcleanedwfs.iter_chunks()):
+            indices_chunk = np.arange(sli.start, sli.stop)
+        
+            wfs = get_waveforms_on_static_channels(
+                colcleanedwfs[sli],
+                geom,
+                sorting.channels[sli], 
+                channel_index, 
+                registered_geom=registered_geom,
+                n_pitches_shift=n_pitches_shift[sli],
+            )
+
+            # Is this needed?? probably not i.e. if we divide by the max template (in tpca space) no need --> would speed things up a lot!!
+            wfs = tpca.inverse_transform(wfs.transpose(0, 2, 1).reshape(-1, tpca_rank)).reshape(-1, n_channel_templates, spike_length_samples).transpose(0, 2, 1) #[:, :, 0] 
     
-                temp_mc = temp_data_smoothed[int(j*n_sub_chunks + k), unit]
-                mc = temp_mc.ptp(0).argmax()
-                max_chan_residual[idx_unit_chunk] = wfs_unit[:, :, mc] - temp_mc[None, :, mc]
+            temp_mc = temp_data_smoothed[chunk_belong_wfs[indices_chunk], sorting.labels[sli]]
+            mc = temp_mc.ptp(1).argmax(1)
+            max_chan_residual[indices_chunk] = wfs[np.arange(len(mc)), :, mc] - temp_mc[np.arange(len(mc)), :, mc]
     
     if normalize_by_max_value: 
         for unit in np.unique(sorting.labels):
@@ -338,6 +321,7 @@ def compute_maxchan_tpca_residual(
             no_nan = ~np.isnan(max_chan_residual[idx_unit, 0])
             if peak_time_selection=="maxstd":
                 trough_offset = max_chan_residual[idx_unit][no_nan].std(0).argmax()
+            cmp = 0
             for j, chunk_time_range in enumerate(chunk_time_ranges_s):
                 sub_chunk_time_range_s = subchunks_time_ranges(recording, chunk_time_range, template_config.subchunk_size_s,
                                                       divider_samples=matching_config.chunk_length_samples)
@@ -349,8 +333,10 @@ def compute_maxchan_tpca_residual(
                             sorting.times_seconds[idx_unit]<subchunk_time_range[1]
                         )
                     )
-                    temp_mc = temp_data_smoothed[int(j*n_sub_chunks + k), unit]
+                    temp_mc = temp_data_smoothed[cmp, unit]
+                    mc = temp_mc.ptp(0).argmax()
                     max_chan_residual[idx_unit[idx_chunk]]/=np.abs(temp_mc[trough_offset, mc])
+                    cmp+=1
 
     return max_chan_residual
 
@@ -419,13 +405,14 @@ def full_reassignment_split(
     chunk_time_ranges_s,
     template_config,
     matching_config,
-    data_dir_chunks,
+    matchh5,
     tpca,
     deconv_scores,
     return_triaged_labels=True,
     threshold_n_spike=0.2,
     fill_nanvalue=1_000_000,
     norm_operator=np.nanmax,
+    wfs_name="collisioncleaned_tpca_features",
     spike_length_samples=121,
     peak_time_selection="maxstd",
     trough_offset=42,
@@ -435,23 +422,35 @@ def full_reassignment_split(
     min_nspikes_unit=150,
     triage_spikes_2way=0.55,
     triage_spikes_3way=0.5,
+    norm_triage=4.0,
 ):
 
     weights_deconv = np.log(1 + np.abs(deconv_scores-deconv_scores.min()))
-    tpca_templates_list, spike_count_list, unit_ids_list = create_tpca_templates_list(
+    # tpca_templates_list, spike_count_list, unit_ids_list = create_tpca_templates_list(
+    #     recording, 
+    #     sorting,
+    #     motion_est,
+    #     chunk_time_ranges_s,
+    #     template_config, 
+    #     matching_config,
+    #     data_dir_chunks,
+    #     weights=weights_deconv,
+    #     tpca=tpca,
+    # )
+    tpca_templates_list, spike_count_list, chunk_belong_wfs = create_tpca_templates_list_efficient(
         recording, 
         sorting,
         motion_est,
         chunk_time_ranges_s,
         template_config, 
         matching_config,
-        data_dir_chunks,
+        matchh5,
         weights=weights_deconv,
         tpca=tpca,
     )
 
     templates_smoothed = smooth_list_templates(
-        tpca_templates_list, spike_count_list, unit_ids_list, np.unique(sorting.labels), threshold_n_spike=threshold_n_spike,
+        tpca_templates_list, spike_count_list, np.unique(sorting.labels), threshold_n_spike=threshold_n_spike,
     )
 
     max_chan_residual = compute_maxchan_tpca_residual(
@@ -462,8 +461,10 @@ def full_reassignment_split(
         template_config,
         matching_config,
         tpca,
-        data_dir_chunks,
+        matchh5,
         templates_smoothed,
+        chunk_belong_wfs,
+        wfs_name=wfs_name,
         spike_length_samples=spike_length_samples,
         normalize_by_max_value=normalize_by_max_value,
     )
@@ -479,33 +480,36 @@ def full_reassignment_split(
     
     sorting_split = replace(sorting, labels=labels_split)
 
-    tpca_templates_list_split, spike_count_list_split, unit_ids_list_split = create_tpca_templates_list(
+    tpca_templates_list_split, spike_count_list_split, chunk_belong = create_tpca_templates_list_efficient(
         recording, 
         sorting_split,
         motion_est,
         chunk_time_ranges_s,
         template_config, 
         matching_config,
-        data_dir_chunks,
+        matchh5,
         weights=None,
         tpca=tpca,
     )
 
+
     templates_smoothed_split = smooth_list_templates(
-        tpca_templates_list_split, spike_count_list_split, unit_ids_list_split, np.unique(sorting_split.labels),
+        tpca_templates_list_split, spike_count_list_split, np.unique(sorting_split.labels), threshold_n_spike=threshold_n_spike,
     )
 
     residual_norm = compute_residual_norm(
         recording, 
-        sorting.labels,
+        sorting,
         motion_est,
         chunk_time_ranges_s,
         template_config,
         matching_config,
         tpca,
-        data_dir_chunks,
+        matchh5,
         neighbors,
         templates_smoothed_split,
+        chunk_belong,
+        wfs_name=wfs_name,
         fill_nanvalue=fill_nanvalue,
         norm_operator=norm_operator,
     )
@@ -516,6 +520,7 @@ def full_reassignment_split(
     for unit in units:
         idx_unit = np.flatnonzero(sorting.labels == unit)
         new_labels[idx_unit] = neighbors[sorting.labels[idx_unit], residual_norm.argmin(1)[idx_unit]]
+    new_labels[residual_norm.min(1)>norm_triage] = -1
     new_labels = new_labels.astype('int')
 
     if not return_triaged_labels:

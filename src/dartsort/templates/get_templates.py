@@ -7,8 +7,10 @@ from dataclasses import replace
 
 import numpy as np
 import torch
+from dartsort.util.data_util import batched_h5_read, chunked_h5_read
 from dartsort.util import spikeio
-from dartsort.util.drift_util import registered_template, get_waveforms_on_static_channels
+from dartsort.util.data_util import keep_all_most_recent_spikes_per_chunk
+from dartsort.util.drift_util import registered_template, get_waveforms_on_static_channels, get_spike_pitch_shifts
 from dartsort.util.multiprocessing_util import get_pool
 from dartsort.util.spiketorch import fast_nanmedian, ptp, fast_nanweightedmean
 from dartsort.util.waveform_util import make_channel_index, full_channel_index, channel_subset_by_radius
@@ -374,14 +376,16 @@ def get_templates_with_spikes_loaded(
     )
 
 
-def get_templates_linear(
+def get_templates_multiple_chunks_linear(
     recording,
     sorting,
-    n_chunks=1,
+    chunk_time_ranges_s,
+    geom,
+    template_config,
+    motion_est=None,
     trough_offset_samples=42,
     spike_length_samples=121,
     spikes_per_unit=500,
-    pitch_shifts=None,
     registered_geom=None,
     realign_peaks=False,
     realign_max_sample_shift=20,
@@ -394,10 +398,11 @@ def get_templates_linear(
     min_fraction_at_shift=0.25,
     min_count_at_shift=25,
     reducer=fast_nanmedian,
+    pad_value=0.0,
     spatial_svdsmoothing=False,
     max_ptp_chans_to_spatialsmooth=3,
     random_seed=0,
-    units_per_job=8,
+    # units_per_job=8,
     n_jobs=0,
     show_progress=True,
     device=None,
@@ -409,16 +414,12 @@ def get_templates_linear(
 
     Arguments
     ---------
-    times, channels, labels : arrays of shape (n_spikes,)
-        The trough (or peak) times, main channels, and unit labels
+    sorting : sorting object containing times, channels, labels and spike positions 
+    chunk_time_ranges_s : all chunks of the data on which to compute templates. 
     geom : array of shape (n_channels, 2)
         Probe channel geometry, needed to subsample channels when fitting
         the low-rank denoising model, and also needed if the shifting
         arguments are specified
-    pitch_shifts : int array of shape (n_spikes,)
-        When computing extended templates, these shifts are applied
-        before averaging
-    registered_geom : array of shape (n_channels_extended, 2)
         Required if pitch_shifts is supplied. See drift_util.registered_geometry.
     realign_peaks : bool
         If True, a first round of raw templates are computed and used to shift
@@ -458,47 +459,9 @@ def get_templates_linear(
     # validate arguments
     raw_only = not low_rank_denoising
 
-    # estimate peak sample times and realign spike train
-    # if realign_peaks:
-    #     # pad the trough_offset_samples and spike_length_samples so that
-    #     # if the user did not request denoising we can just return the
-    #     # raw templates right away
-    #     trough_offset_load = trough_offset_samples + realign_max_sample_shift
-    #     spike_length_load = spike_length_samples + 2 * realign_max_sample_shift
-    #     raw_results = get_raw_templates(
-    #         recording,
-    #         sorting,
-    #         pitch_shifts=pitch_shifts,
-    #         registered_geom=registered_geom,
-    #         realign_peaks=False,
-    #         trough_offset_samples=trough_offset_load,
-    #         spike_length_samples=spike_length_load,
-    #         spikes_per_unit=spikes_per_unit,
-    #         min_fraction_at_shift=min_fraction_at_shift,
-    #         min_count_at_shift=min_count_at_shift,
-    #         reducer=reducer,
-    #         random_seed=random_seed,
-    #         n_jobs=n_jobs,
-    #         show_progress=show_progress,
-    #         device=device,
-    #     )
-    #     sorting, templates = realign_sorting(
-    #         sorting,
-    #         raw_results["raw_templates"],
-    #         raw_results["snrs_by_channel"],
-    #         max_shift=realign_max_sample_shift,
-    #         trough_offset_samples=trough_offset_samples,
-    #         recording_length_samples=recording.get_num_samples(),
-    #     )
-    #     if raw_only:
-    #         # overwrite template dataset with aligned ones
-    #         # handle keep_waveforms_in_hdf5
-    #         raw_results["sorting"] = sorting
-    #         raw_results["templates"] = raw_results["raw_templates"] = templates
-    #         return raw_results
-
     # fit tsvd
     if low_rank_denoising and denoising_tsvd is None:
+        print("fitting tsvd")
         denoising_tsvd = fit_tsvd(
             recording,
             sorting,
@@ -509,20 +472,46 @@ def get_templates_linear(
             spike_length_samples=spike_length_samples,
             random_seed=random_seed,
         )
+        
+    if denoising_tsvd is not None:
+        denoising_tsvd = TorchSVDProjector(
+            torch.from_numpy(
+                denoising_tsvd.components_.astype(recording.dtype)
+            )
+        )
+
+    n_chunks = len(chunk_time_ranges_s)
+    print("keeping all necessary spikes")
+    times_samples_unique, times_seconds_unique, depths_um_unique, chunk_unit_ids = keep_all_most_recent_spikes_per_chunk(
+        sorting,
+        chunk_time_ranges_s,
+        template_config,
+        recording,
+    )
+
+    print("computing pitch shifts")
+    pitch_shifts = get_spike_pitch_shifts(
+                depths_um_unique,
+                geom,
+                times_s=times_seconds_unique,
+                motion_est=motion_est,
+            )
 
     # template logic
     # for each unit, get shifted raw and denoised averages and channel SNRs
     res = get_all_shifted_raw_and_low_rank_templates_linear(
         recording,
         sorting,
-        n_chunks=n_chunks,
+        times_samples_unique, 
+        chunk_unit_ids,
+        pad_value=pad_value,
+        n_chunks=len(chunk_time_ranges_s),
         registered_geom=registered_geom,
         denoising_tsvd=denoising_tsvd,
         pitch_shifts=pitch_shifts,
         spikes_per_unit=spikes_per_unit,
-        reducer=reducer,
+        reducer=reducer, #This one will have to be the mean
         n_jobs=n_jobs,
-        units_per_job=units_per_job,
         random_seed=random_seed,
         show_progress=show_progress,
         trough_offset_samples=trough_offset_samples,
@@ -531,7 +520,7 @@ def get_templates_linear(
         min_count_at_shift=min_count_at_shift,
         device=device,
     )
-    raw_templates, low_rank_templates, snrs_by_channel = res
+    raw_templates, low_rank_templates, snrs_by_channel, spike_counts = res
 
     if raw_only:
         return dict(
@@ -539,23 +528,27 @@ def get_templates_linear(
             templates=raw_templates,
             raw_templates=raw_templates,
             snrs_by_channel=snrs_by_channel,
+            spike_counts=spike_counts,
         )
 
-    weights = denoising_weights(
-        snrs_by_channel,
-        spike_length_samples=spike_length_samples,
-        trough_offset=trough_offset_samples,
-        snr_threshold=denoising_snr_threshold,
-    )
-    templates = weights * raw_templates + (1 - weights) * low_rank_templates
+    templates = raw_templates.copy()
+    for j in range(n_chunks):
+        weights = denoising_weights(
+            snrs_by_channel[j],
+            spike_length_samples=spike_length_samples,
+            trough_offset=trough_offset_samples,
+            snr_threshold=denoising_snr_threshold,
+        )
+        templates[j] = weights * raw_templates[j] + (1 - weights) * low_rank_templates[j]
     templates = templates.astype(recording.dtype)
 
     if spatial_svdsmoothing:
-        for k in range(templates.shape[0]):
-            chans_low_ptp = np.flatnonzero(templates[k].ptp(0)<max_ptp_chans_to_spatialsmooth)
-            U, s, Vh = svd(templates[k][:, chans_low_ptp].T, full_matrices=False)
-            s[np.cumsum(s)>s.sum()*0.5]=0
-            templates[k, :, chans_low_ptp] = np.dot(U, np.dot(np.diag(s), Vh))
+        for j in range(n_chunks):
+            for k in range(templates.shape[1]):
+                chans_low_ptp = np.flatnonzero(templates[j, k].ptp(0)<max_ptp_chans_to_spatialsmooth)
+                U, s, Vh = svd(templates[j, k][:, chans_low_ptp].T, full_matrices=False)
+                s[np.cumsum(s)>s.sum()*0.5]=0
+                templates[j, k, :, chans_low_ptp] = np.dot(U, np.dot(np.diag(s), Vh))
 
     return dict(
         sorting=sorting,
@@ -564,6 +557,7 @@ def get_templates_linear(
         low_rank_templates=low_rank_templates,
         snrs_by_channel=snrs_by_channel,
         weights=weights,
+        spike_counts=spike_counts,
     )
 
 
@@ -1010,6 +1004,135 @@ def denoising_weights(
 
 # -- main routine which does all the spike loading and computation
 
+def get_all_shifted_raw_and_low_rank_templates_linear(
+    recording,
+    sorting,
+    times_samples_unique, 
+    chunk_unit_ids, # This is unit ids of all spikes over time 
+    pad_value=0.0,
+    n_chunks=1,
+    registered_geom=None,
+    denoising_tsvd=None,
+    pitch_shifts=None,
+    spikes_per_unit=500,
+    reducer=fast_nanmedian,
+    n_jobs=0,
+    batch_size=1024, #try 2048
+    random_seed=0,
+    show_progress=True,
+    trough_offset_samples=42,
+    spike_length_samples=121,
+    min_fraction_at_shift=0.1,
+    min_count_at_shift=5,
+    device=None,
+):
+
+    """
+    No parallelism yet
+    """
+
+    geom = recording.get_channel_locations()
+    
+    unit_ids = np.unique(sorting.labels) #CHANGE THIS WITH LABELS + UIDS
+    unit_ids = unit_ids[unit_ids >= 0]
+    raw = denoising_tsvd is None
+    prefix = "Raw" if raw else "Denoised"
+
+    n_template_channels = recording.get_num_channels()
+    registered_kdtree = None
+    registered=False
+    if registered_geom is not None:
+        n_template_channels = len(registered_geom)
+        registered_kdtree = KDTree(registered_geom)
+        registered=True
+
+    n_units = len(unit_ids)
+    raw_templates = np.zeros(
+        (n_chunks, n_units, spike_length_samples, n_template_channels),
+        dtype=recording.dtype,
+    )
+    # check how spike counts are used for denoising of templates 
+    spike_counts = np.zeros(
+        (n_chunks, n_units, n_template_channels),
+        dtype=recording.dtype,
+    )
+    
+    # low_rank_templates = None
+    if not raw:
+        low_rank_templates = np.zeros((n_chunks, n_units, spike_length_samples, n_template_channels),dtype=recording.dtype)
+    snrs_by_channel = np.zeros(
+        (n_chunks, n_units, n_template_channels), dtype=recording.dtype
+    )
+
+    # can parallelize here, snce we send wfs_all_loaded[in_unit] to each job 
+    batch_arr = np.arange(0, len(times_samples_unique)+1024, 1024)
+    batch_arr[-1]=len(times_samples_unique)
+
+    for k in tqdm(range(len(batch_arr)-1), desc="Computing templates for all chunks"):
+        batch_idx = np.arange(batch_arr[k], batch_arr[k+1])
+        waveforms = spikeio.read_full_waveforms(
+            recording,
+            times_samples_unique[batch_idx],
+            trough_offset_samples=trough_offset_samples,
+            spike_length_samples=spike_length_samples,
+        )
+        which_times, which_chunks, which_units = np.where(chunk_unit_ids[batch_idx]) #batch_size * n_chunks
+        
+        if not raw:
+            n, t, c = waveforms.shape
+            waveforms_denoised = waveforms.transpose(0, 2, 1).reshape(n * c, t)
+            waveforms_denoised = denoising_tsvd(torch.tensor(waveforms_denoised), in_place=True)
+            waveforms_denoised = waveforms_denoised.reshape(n, c, t).permute(0, 2, 1) #.cpu().detach().numpy()
+        if registered:
+            waveforms = get_waveforms_on_static_channels(
+                waveforms,
+                geom,
+                registered_geom=registered_geom,
+                n_pitches_shift=pitch_shifts[batch_idx],
+                fill_value=0, 
+            )
+            nonan = ~(waveforms[which_times].ptp(1) == 0)
+            # Here more complicated
+            np.add.at(spike_counts, (which_chunks, which_units), nonan)
+            # spike_counts[which_chunks, which_units] = spike_counts[which_chunks, which_units] + nonan
+            if not raw:
+                waveforms_denoised = get_waveforms_on_static_channels(
+                    waveforms_denoised,
+                    geom,
+                    registered_geom=registered_geom,
+                    n_pitches_shift=pitch_shifts[batch_idx],
+                    fill_value=0, 
+                )
+        else:
+            np.add.at(spike_counts, (which_chunks, which_units), 1)
+            # spike_counts[which_chunks, which_units] += 1
+        np.add.at(raw_templates, (which_chunks, which_units), waveforms[which_times])
+        # raw_templates[which_chunks, which_units] = raw_templates[which_chunks, which_units] + waveforms[which_times] #reduce later
+        if not raw:
+            # low_rank_templates[which_chunks, which_units] = low_rank_templates[which_chunks, which_units] + waveforms_denoised[which_times]
+            np.add.at(low_rank_templates, (which_chunks, which_units), waveforms_denoised[which_times].cpu().detach().numpy())
+
+    # spike_counts = 0 --> nan
+    # spike_counts shape: chunk*unit*chan
+    valid = spike_counts > min_count_at_shift #> instead of >= to make sure to turn off 0 channels 
+    valid &= spike_counts / spike_counts.max(2)[:, :, None] > min_fraction_at_shift
+    spike_counts[~valid] = np.nan
+        # spike_counts[spike_counts==0] = np.nan
+
+    
+    raw_templates /= spike_counts[:, :, None]
+    low_rank_templates = low_rank_templates/spike_counts[:, :, None]
+    snrs_by_chan = ptp(raw_templates, 2) * spike_counts
+    
+    if not np.isnan(pad_value):
+        raw_templates = np.nan_to_num(raw_templates, copy=False, nan=pad_value)
+        low_rank_templates = np.nan_to_num(low_rank_templates, copy=False, nan=pad_value)
+
+    if raw:
+        return raw_templates, raw_templates, snrs_by_channel, spike_counts
+
+    return raw_templates, low_rank_templates, snrs_by_channel, spike_counts
+
 def get_all_shifted_raw_and_low_rank_templates_with_h5(
     recording,
     h5_file,
@@ -1085,8 +1208,10 @@ def get_all_shifted_raw_and_low_rank_templates_with_h5(
             units_chunk.append(u)
             if registered:
             # with h5py.File(h5_file, "r+") as h5:
-                wfs_all_loaded = h5[wfs_name][:][in_unit]
-                channels = h5["channels"][:][in_unit]
+                wfs_all_loaded = chunked_h5_read(h5[wfs_name], in_unit) #HERE in unit + chunk
+                channels = chunked_h5_read(h5["channels"], in_unit)
+                # wfs_all_loaded = h5[wfs_name][:][in_unit]
+                # channels = h5["channels"][:][in_unit]
                 channel_index = h5["channel_index"][:]
                 wfs_all_loaded = get_waveforms_on_static_channels(
                     wfs_all_loaded,

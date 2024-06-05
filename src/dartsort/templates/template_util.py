@@ -39,9 +39,8 @@ def interpolate_templates(temp_data_smoothed, spike_counts_smoothed, unit_ids=No
     return temp_data_smoothed
 
 def smooth_list_templates(
-    templates_list, 
-    spike_count_list,
-    unit_ids_list,
+    temp_data_final, 
+    spike_counts_final,
     units_ids,
     ystdev=2,
     threshold_n_spike=0.2,
@@ -50,13 +49,12 @@ def smooth_list_templates(
     #0.1 does not do anything  
     n_units = len(units_ids)
     
-    temp_data_final = np.zeros((len(templates_list), n_units, templates_list[0].shape[1], templates_list[0].shape[2]))
-    spike_counts_final =  np.zeros((len(templates_list), n_units, templates_list[0].shape[2]))
-    spike_counts_smoothed = np.zeros((len(templates_list), n_units, templates_list[0].shape[2]))
+    # spike_counts_final =  np.zeros((len(templates_list), n_units, templates_list[0].shape[2]))
+    spike_counts_smoothed = np.zeros(spike_counts_final.shape)
 
-    for k in range(len(templates_list)):
-        spike_counts_final[k, unit_ids_list[k]] = spike_count_list[k]
-        temp_data_final[k, unit_ids_list[k]] = templates_list[k]
+    # for k in range(len(templates_list)):
+    #     spike_counts_final[k] = spike_count_list[k]
+    #     temp_data_final[k] = templates_list[k]
     
     # Is this correct? -> problem is that some of these get way too small...
     low_spike_count = np.where(spike_counts_final<threshold_n_spike*np.nanmax(spike_counts_final, (0, 2))[None, :, None])
@@ -78,7 +76,7 @@ def smooth_list_templates(
     spike_counts_smoothed[spike_counts_smoothed==0]=np.nan
     del temp_data_final
     temp_data_smoothed = interpolate_templates(temp_data_smoothed, np.nanmax(spike_counts_smoothed, 2))
-    return temp_data_smoothed, spike_counts_smoothed
+    return temp_data_smoothed
 
 
 
@@ -393,7 +391,7 @@ def compressed_upsampled_templates(
     # sometimes users may pass temporal SVD components in instead of templates,
     # so we allow them to pass in the amplitudes of the actual templates
     if ptps is None:
-        ptps = templates.ptp(1).max(1)
+        ptps = np.nanmax(templates.ptp(1), 1)
     assert ptps.shape == (n_templates,)
     if n_upsamples_map is None:
         n_upsamples = np.full(n_templates, max_upsample)

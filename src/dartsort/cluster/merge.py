@@ -7,9 +7,9 @@ from dartsort.config import TemplateConfig
 from dartsort.templates import TemplateData, template_util
 from dartsort.templates.pairwise_util import (
     construct_shift_indices, iterate_compressed_pairwise_convolutions)
-from dartsort.util.data_util import DARTsortSorting, combine_sortings, chunk_time_ranges, keep_only_most_recent_spikes, update_sorting_chunk_spikes_loaded
+from dartsort.util.data_util import DARTsortSorting, combine_sortings, chunk_time_ranges, keep_only_most_recent_spikes #update_sorting_chunk_spikes_loaded
 from dartsort.util import spikeio
-from dartsort.cluster.postprocess import chuck_noisy_template_units_with_loaded_spikes_per_chunk, chuck_noisy_template_units_from_merge
+from dartsort.cluster.postprocess import chuck_noisy_template_units_with_time_tracking, chuck_noisy_template_units_from_merge #chuck_noisy_template_units_with_loaded_spikes_per_chunk, 
 from dartsort.cluster.split import split_clusters
 from scipy.cluster.hierarchy import fcluster, linkage
 from scipy.sparse import coo_array
@@ -28,26 +28,11 @@ def merge_iterative_templates_with_multiple_chunks(
     sorting,
     spike_save_folder,
     sub_h5,
-    template_data: Optional[TemplateData] = None,
+    split_merge_config: SplitMergeConfig,
     template_config: Optional[TemplateConfig] = None,
     motion_est=None,
     chunk_time_ranges_s=None,
     slice_s=[None,None],
-    max_shift_samples=20,
-    superres_linkage=np.max,
-    linkage="complete",
-    sym_function=np.maximum,
-    merge_distance_threshold=0.25,
-    temporal_upsampling_factor=8,
-    amplitude_scaling_variance=0.001,
-    amplitude_scaling_boundary=0.1,
-    svd_compression_rank=20,
-    min_channel_amplitude=0.0,
-    min_spatial_cosine=0.5,
-    conv_batch_size=128,
-    units_batch_size=8, #change this :) 
-    num_merge_iteration=3,
-    iterative_split=True,
     device=None,
     n_jobs=0,
     n_jobs_templates=0,
@@ -85,296 +70,354 @@ def merge_iterative_templates_with_multiple_chunks(
     -------
     A new DARTsortSorting
     """
-    os.makedirs(spike_save_folder, exist_ok=True)
 
-    geom = np.load("/mnt/uhdlacie/geom_array_pat1.npy")
-    fig_directory = spike_save_folder.parent / "figures"
-    print("FIG DIRECTORY:")
-    print(fig_directory)
-
-    n_jobs=0
-    n_jobs_templates=0
+    geom = recording.get_channel_locations()
 
     if chunk_time_ranges_s is None: 
         chunk_time_ranges_s = chunk_time_ranges(recording, chunk_length_samples=template_config.chunk_size_s*recording.sampling_frequency, slice_s=slice_s)
     n_chunks = len(chunk_time_ranges_s)
 
-    print("Loading spikes for all chunks")
-
-    sortings_all = []
-    labels_all = []
-    times_all = []
-    n_spikes_chunks = []
-    for j, chunk_time_range in enumerate(chunk_time_ranges_s):
-
-        save_wfs_name = spike_save_folder / f"spike_wfs_chunk{j}.npy"
-
-        sorting_chunk = keep_only_most_recent_spikes(
-            sorting,
-            n_min_spikes=template_config.spikes_per_unit,
-            latest_time_sample=chunk_time_range[1]
-            * recording.sampling_frequency,
-        )
-        # This is the original - need to keep it to track spikes and labels updates correctly
-        sortings_all.append(sorting_chunk)
-
-        times_all = sorting_chunk.times_samples[sorting_chunk.labels>-1]
-        times_unique, indices_unique_index, indices_unique_inverse = np.unique(times_all, return_inverse=True, return_index=True)
-
-        # Better to just save and read wfs per chunks becuase too big otherwise
-        if not os.path.exists(save_wfs_name) or overwrite_spikes: 
-            waveforms_chunk = spikeio.read_full_waveforms(
-                recording,
-                times_unique,
-                trough_offset_samples=trough_offset_samples,
-                spike_length_samples=spike_length_samples,
-                verbose=True,
-            )
+    # Iterate this 3 times + propagate arguments for the split step
+    # Sorting max chan pc split 
+    # GC -> Merge -> make templates + complete 0.25 (iterative so complete is ok)
+    # chuck_noisy_template_units_from_merge --> remove GC 
     
-            np.save(save_wfs_name, waveforms_chunk)
-    print("spikes loaded!")
     # TODO Iterate the merge!
 
     for miter in range(num_merge_iteration):
+        print("splitting")
+        sorting = split_clusters(
+            sorting,
+            split_strategy=split_merge_config.split_strategy,
+            split_strategy_kwargs=dict(
+                peeling_hdf5_filename=sub_h5,
+                # change this here depending on the dataset rearrange so that all is subtraction_models / OK if not relocated :) 
+                peeling_featurization_pt=sub_h5.parent / "subtraction_models/featurization_pipeline.pt",
+                channel_selection_radius=split_merge_config.channel_selection_radius, # ensure it is a max chan here 
+                use_localization_features=split_merge_config.use_localization_features,
+                use_ptp=split_merge_config.use_ptp,
+                n_neighbors_search=split_merge_config.n_neighbors_search,
+                radius_search=split_merge_config.radius_search,
+                sigma_local=split_merge_config.sigma_local,
+                noise_density=split_merge_config.noise_density,
+                remove_clusters_smaller_than=split_merge_config.remove_clusters_smaller_than,
+                relocated=split_merge_config.relocated,
+                whitened=split_merge_config.whitened,
+                cluster_alg=split_merge_config.cluster_alg,
+            ),
+            recursive=False,
+            n_jobs=n_jobs,
+            motion_est=None, #doesn't matter here...
+        )
+        # GC with recomputing template data list 
+        sorting, template_data_list = chuck_noisy_template_units_with_time_tracking(
+            recording,
+            sorting,
+            chunk_time_ranges_s,
+            template_config,
+            template_data_list=None,
+            motion_est=motion_est,
+            trough_offset_samples=trough_offset_samples,
+            spike_length_samples=spike_length_samples,
+            tsvd=None,
+            device=device,
+            n_jobs=n_jobs,
+            template_save_dir=template_save_folder,
+            template_npz_filename=template_npz_filename,
+            overwrite=True,
+        )
 
-        print(f"ITERATION {miter}")
-    
-        dists_all = []
-        shifts_all = []
-        snrs_all = []
-        template_data_all = []
-        # unit_ids_all = []
-        
-        for j, chunk_time_range in tqdm(enumerate(chunk_time_ranges_s), desc = "computing templates and distances", total = len(chunk_time_ranges_s)):
-    
-            template_save_folder_chunk = template_save_folder / f"chunk_{j}_merge"
-            os.makedirs(template_save_folder_chunk, exist_ok=True)
-            # Can parallelize here!! 
+        sorting_merge = merge_templates_across_multiple_chunks(
+            sorting,
+            recording,
+            chunk_time_ranges_s,
+            template_data_list = template_data_list,
+            template_config = template_config,
+            motion_est=motion_est,
+            superres_linkage=split_merge_config.superres_linkage,
+            sym_function=split_merge_config.superres_linkage,
+            min_channel_amplitude=split_merge_config.min_channel_amplitude, 
+            min_spatial_cosine=split_merge_config.min_spatial_cosine,
+            max_shift_samples=split_merge_config.max_shift_samples,
+            merge_distance_threshold=split_merge_config.merge_distance_threshold,
+            temporal_upsampling_factor=split_merge_config.temporal_upsampling_factor,
+            amplitude_scaling_variance=split_merge_config.amplitude_scaling_variance,
+            amplitude_scaling_boundary=split_merge_config.amplitude_scaling_boundary,
+            svd_compression_rank=split_merge_config.svd_compression_rank,
+            conv_batch_size=split_merge_config.conv_batch_size,
+            units_batch_size=split_merge_config.units_batch_size, 
+        )
 
-            idx_spikes = sortings_all[j].labels>-1
-            if miter ==0:
-                sorting_chunk = sortings_all[j]
-                unit_ids_all = np.unique(sorting.labels)
-            else:                
-                sorting_chunk = update_sorting_chunk_spikes_loaded(
-                    sorting_GC,
-                    idx_spikes,
-                    n_min_spikes=template_config.spikes_per_unit,
-                    latest_time_sample=chunk_time_range[1]
-                    * recording.sampling_frequency,
-                )
-                unit_ids_all = np.unique(sorting_GC.labels)
-            unit_ids_all = unit_ids_all[unit_ids_all>-1]
-    
-            waveforms_loaded = np.load(spike_save_folder / f"spike_wfs_chunk{j}.npy")    
-            times_chunk = sortings_all[j].times_samples[idx_spikes]
-            times_unique, indices_unique_index, indices_unique_inverse = np.unique(times_chunk, return_inverse=True, return_index=True)
-
-            # print("sorting_chunk")
-            # print(sorting_chunk.labels.max())
-            # print(sorting_chunk.unit_ids.max())
-            
-            # compute templates
-            # Simplify this since we pass in sorting_chunk
-            template_data = TemplateData.from_config_with_spikes_loaded(
-                recording,
-                waveforms_loaded,
-                indices_unique_inverse,
-                indices_unique_index,
-                sorting_chunk,
-                template_config,
-                idx_spikes,
-                motion_est=motion_est,
-                n_jobs=n_jobs_templates,
-                save_folder=template_save_folder_chunk, #make model dir chunk
-                overwrite=True,
-                device=device,
-                save_npz_name=template_npz_filename,
-                trough_offset_samples=trough_offset_samples,
-                spike_length_samples=spike_length_samples,
-            )
-
-            units, dists, shifts, template_snrs = calculate_merge_distances(
-                template_data,
-                unit_ids_all=unit_ids_all,
-                superres_linkage=np.max,
-                sym_function=np.maximum,
-                min_channel_amplitude=min_channel_amplitude, # Propagate these arguments 
-                min_spatial_cosine=min_spatial_cosine,
-                n_jobs=n_jobs,
-                show_progress=False,
-            )
-            
-            template_data_all.append(template_data)
-            dists_all.append(dists)
-            shifts_all.append(shifts)
-            snrs_all.append(template_snrs)
-
-        print("merging")
-
-        dists_min_across_chunks = np.nanmax(dists_all, axis=0)
-            
-        total_pairs = shifts_all[0].shape[0]*shifts_all[0].shape[1]
-        shifts_min_across_chunks = np.array(shifts_all).reshape((n_chunks, total_pairs))[np.array(dists_all).reshape((n_chunks, total_pairs)).argmin(0), np.arange(total_pairs)]
-        shifts_min_across_chunks = shifts_min_across_chunks.reshape((shifts_all[0].shape[0],shifts_all[0].shape[1]))
-        template_snrs = np.array(snrs_all).max(0)
-
-        if miter==0:
-            sorting_merge = recluster(
-                sorting, # should be sorting in first iteration
-                unit_ids_all, # needs to be tracked
-                dists_min_across_chunks,
-                shifts_min_across_chunks,
-                template_snrs,
-                merge_distance_threshold=merge_distance_threshold,
-                link=linkage,
-            )
-        else:
-            sorting_merge = recluster(
-                sorting_GC, # should be sorting GC in later iterations 
-                unit_ids_all, # needs to be tracked
-                dists_min_across_chunks,
-                shifts_min_across_chunks,
-                template_snrs,
-                merge_distance_threshold=merge_distance_threshold,
-                link=linkage,
-            )
-
-        # fig, axes = array_scatter(
-        #   sorting_merge.labels, geom, sorting_merge.point_source_localizations[:, 0], motion_est.correct_s(sorting_merge.times_seconds, sorting_merge.point_source_localizations[:, 2]), 
-        #   sorting_merge.denoised_ptp_amplitudes, zlim=(-100, 382), do_ellipse=True, xlim=(-50, 92), ptplim = (0, 50),
-        # )
-        # plt.savefig(fig_directory / f"post_merge_iter_{miter}.png")
-        # plt.close()
-
-        # print(f"FIRST FIG MADE ITER {miter}")
-
-        if miter==0:
-            # np.save(template_save_folder / f"labels_pre_GC_iter_{miter}.npy", sorting_merge.labels)
-            sorting_GC = chuck_noisy_template_units_from_merge(
+        if miter < num_merge_iteration-1:
+            sorting = chuck_noisy_template_units_from_merge(
                 sorting,
                 sorting_merge,
-                template_data_all,
+                template_data_list,
                 spike_count_max=template_config.spikes_per_unit,
                 min_n_spikes=template_config.min_count_at_shift,
                 min_template_snr=template_config.denoising_snr_threshold,
-                template_npz_filename="template_data.npz",
-            )
-        elif miter<num_merge_iteration-1:
-            # np.save(template_save_folder / f"labels_pre_GC_iter_{miter}.npy", sorting_merge.labels)
-            sorting_GC = chuck_noisy_template_units_from_merge(
-                sorting_GC,
-                sorting_merge,
-                template_data_all,
-                spike_count_max=template_config.spikes_per_unit,
-                min_n_spikes=template_config.min_count_at_shift,
-                min_template_snr=template_config.denoising_snr_threshold,
-                template_npz_filename="template_data.npz",
             )
         else:
-            # NEED TO RECOMPUTE DATA IN THIS CASE...
-            template_data_all = []
-    
-            for j, chunk_time_range in tqdm(enumerate(chunk_time_ranges_s), desc="making templates for GC", total=len(chunk_time_ranges_s)):
-                # Can parallelize here!! 
-                idx_spikes = sortings_all[j].labels>-1
-                sorting_chunk = update_sorting_chunk_spikes_loaded(
-                    sorting_merge,
-                    idx_spikes,
-                    n_min_spikes=template_config.spikes_per_unit,
-                    latest_time_sample=chunk_time_range[1]
-                    * recording.sampling_frequency,
-                )
-                
-                waveforms_loaded = np.load(spike_save_folder / f"spike_wfs_chunk{j}.npy")
-    
-                idx_spikes = sortings_all[j].labels>-1
-                times_chunk = sortings_all[j].times_samples[idx_spikes]
-                times_unique, indices_unique_index, indices_unique_inverse = np.unique(times_chunk, return_inverse=True, return_index=True)
-                
-                # compute templates
-                template_data = TemplateData.from_config_with_spikes_loaded(
-                    recording,
-                    waveforms_loaded,
-                    indices_unique_inverse,
-                    indices_unique_index,
-                    sorting_chunk,
-                    template_config,
-                    idx_spikes,
-                    motion_est=motion_est,
-                    n_jobs=n_jobs_templates,
-                    save_folder=template_save_folder_chunk, #make model dir chunk
-                    overwrite=overwrite_templates,
-                    device=device,
-                    save_npz_name=template_npz_filename,
-                    trough_offset_samples=trough_offset_samples,
-                    spike_length_samples=spike_length_samples,
-                )        
-                template_data_all.append(template_data)
+        # Need to recompute templates here for the next step
+            sorting, template_data_list = chuck_noisy_template_units_with_time_tracking(
+                recording,
+                sorting,
+                chunk_time_ranges_s,
+                template_config,
+                template_data_list=None,
+                motion_est=motion_est,
+                trough_offset_samples=trough_offset_samples,
+                spike_length_samples=spike_length_samples,
+                tsvd=None,
+                device=device,
+                n_jobs=n_jobs,
+                template_save_dir=template_save_folder,
+                template_npz_filename=template_npz_filename,
+                overwrite=True,
+            )
+    return sorting
 
             
-            np.save(template_save_folder / f"labels_pre_GC_iter_{miter}.npy", sorting_merge.labels)
-            sorting_GC, template_data_all = chuck_noisy_template_units_with_loaded_spikes_per_chunk(
-                sorting_merge,
-                template_data_all,
-                template_save_folder=template_save_folder, #TODO
-                min_template_snr=50, #propagate these arguments as well
-                min_n_spikes=25,
-                template_npz_filename=template_npz_filename,
-            )
+    # for miter in range(num_merge_iteration):
 
-        fig, axes = array_scatter(
-          sorting_GC.labels, geom, sorting_GC.point_source_localizations[:, 0], motion_est.correct_s(sorting_GC.times_seconds, sorting_GC.point_source_localizations[:, 2]), 
-          sorting_GC.denoised_ptp_amplitudes, zlim=(-100, 382), do_ellipse=True, xlim=(-50, 92), ptplim = (0, 50),
-        )
-        plt.savefig(fig_directory / f"post_mergeGC_iter_{miter}.png")
-        plt.close()
+    #     print(f"ITERATION {miter}")
+    
+    #     dists_all = []
+    #     shifts_all = []
+    #     snrs_all = []
+    #     template_data_all = []
+    #     # unit_ids_all = []
+        
+    #     for j, chunk_time_range in tqdm(enumerate(chunk_time_ranges_s), desc = "computing templates and distances", total = len(chunk_time_ranges_s)):
+    
+    #         template_save_folder_chunk = template_save_folder / f"chunk_{j}_merge"
+    #         os.makedirs(template_save_folder_chunk, exist_ok=True)
+    #         # Can parallelize here!! 
+
+    #         idx_spikes = sortings_all[j].labels>-1
+    #         if miter ==0:
+    #             sorting_chunk = sortings_all[j]
+    #             unit_ids_all = np.unique(sorting.labels)
+    #         else:                
+    #             sorting_chunk = update_sorting_chunk_spikes_loaded(
+    #                 sorting_GC,
+    #                 idx_spikes,
+    #                 n_min_spikes=template_config.spikes_per_unit,
+    #                 latest_time_sample=chunk_time_range[1]
+    #                 * recording.sampling_frequency,
+    #             )
+    #             unit_ids_all = np.unique(sorting_GC.labels)
+    #         unit_ids_all = unit_ids_all[unit_ids_all>-1]
+    
+    #         waveforms_loaded = np.load(spike_save_folder / f"spike_wfs_chunk{j}.npy")    
+    #         times_chunk = sortings_all[j].times_samples[idx_spikes]
+    #         times_unique, indices_unique_index, indices_unique_inverse = np.unique(times_chunk, return_inverse=True, return_index=True)
+
+    #         # print("sorting_chunk")
+    #         # print(sorting_chunk.labels.max())
+    #         # print(sorting_chunk.unit_ids.max())
+            
+    #         # compute templates
+    #         # Simplify this since we pass in sorting_chunk
+    #         template_data = TemplateData.from_config_with_spikes_loaded(
+    #             recording,
+    #             waveforms_loaded,
+    #             indices_unique_inverse,
+    #             indices_unique_index,
+    #             sorting_chunk,
+    #             template_config,
+    #             idx_spikes,
+    #             motion_est=motion_est,
+    #             n_jobs=n_jobs_templates,
+    #             save_folder=template_save_folder_chunk, #make model dir chunk
+    #             overwrite=True,
+    #             device=device,
+    #             save_npz_name=template_npz_filename,
+    #             trough_offset_samples=trough_offset_samples,
+    #             spike_length_samples=spike_length_samples,
+    #         )
+
+    #         units, dists, shifts, template_snrs = calculate_merge_distances(
+    #             template_data,
+    #             unit_ids_all=unit_ids_all,
+    #             superres_linkage=np.max,
+    #             sym_function=np.maximum,
+    #             min_channel_amplitude=min_channel_amplitude, # Propagate these arguments 
+    #             min_spatial_cosine=min_spatial_cosine,
+    #             n_jobs=n_jobs,
+    #             show_progress=False,
+    #         )
+            
+    #         template_data_all.append(template_data)
+    #         dists_all.append(dists)
+    #         shifts_all.append(shifts)
+    #         snrs_all.append(template_snrs)
+
+    #     print("merging")
+
+    #     dists_min_across_chunks = np.nanmax(dists_all, axis=0)
+            
+    #     total_pairs = shifts_all[0].shape[0]*shifts_all[0].shape[1]
+    #     shifts_min_across_chunks = np.array(shifts_all).reshape((n_chunks, total_pairs))[np.array(dists_all).reshape((n_chunks, total_pairs)).argmin(0), np.arange(total_pairs)]
+    #     shifts_min_across_chunks = shifts_min_across_chunks.reshape((shifts_all[0].shape[0],shifts_all[0].shape[1]))
+    #     template_snrs = np.array(snrs_all).max(0)
+
+    #     if miter==0:
+    #         sorting_merge = recluster(
+    #             sorting, # should be sorting in first iteration
+    #             unit_ids_all, # needs to be tracked
+    #             dists_min_across_chunks,
+    #             shifts_min_across_chunks,
+    #             template_snrs,
+    #             merge_distance_threshold=merge_distance_threshold,
+    #             link=linkage,
+    #         )
+    #     else:
+    #         sorting_merge = recluster(
+    #             sorting_GC, # should be sorting GC in later iterations 
+    #             unit_ids_all, # needs to be tracked
+    #             dists_min_across_chunks,
+    #             shifts_min_across_chunks,
+    #             template_snrs,
+    #             merge_distance_threshold=merge_distance_threshold,
+    #             link=linkage,
+    #         )
+
+    #     # fig, axes = array_scatter(
+    #     #   sorting_merge.labels, geom, sorting_merge.point_source_localizations[:, 0], motion_est.correct_s(sorting_merge.times_seconds, sorting_merge.point_source_localizations[:, 2]), 
+    #     #   sorting_merge.denoised_ptp_amplitudes, zlim=(-100, 382), do_ellipse=True, xlim=(-50, 92), ptplim = (0, 50),
+    #     # )
+    #     # plt.savefig(fig_directory / f"post_merge_iter_{miter}.png")
+    #     # plt.close()
+
+    #     # print(f"FIRST FIG MADE ITER {miter}")
+
+    #     if miter==0:
+    #         # np.save(template_save_folder / f"labels_pre_GC_iter_{miter}.npy", sorting_merge.labels)
+    #         sorting_GC = chuck_noisy_template_units_from_merge(
+    #             sorting,
+    #             sorting_merge,
+    #             template_data_all,
+    #             spike_count_max=template_config.spikes_per_unit,
+    #             min_n_spikes=template_config.min_count_at_shift,
+    #             min_template_snr=template_config.denoising_snr_threshold,
+    #             template_npz_filename="template_data.npz",
+    #         )
+    #     elif miter<num_merge_iteration-1:
+    #         # np.save(template_save_folder / f"labels_pre_GC_iter_{miter}.npy", sorting_merge.labels)
+    #         sorting_GC = chuck_noisy_template_units_from_merge(
+    #             sorting_GC,
+    #             sorting_merge,
+    #             template_data_all,
+    #             spike_count_max=template_config.spikes_per_unit,
+    #             min_n_spikes=template_config.min_count_at_shift,
+    #             min_template_snr=template_config.denoising_snr_threshold,
+    #             template_npz_filename="template_data.npz",
+    #         )
+    #     else:
+    #         # NEED TO RECOMPUTE DATA IN THIS CASE...
+    #         template_data_all = []
+    
+    #         for j, chunk_time_range in tqdm(enumerate(chunk_time_ranges_s), desc="making templates for GC", total=len(chunk_time_ranges_s)):
+    #             # Can parallelize here!! 
+    #             idx_spikes = sortings_all[j].labels>-1
+    #             sorting_chunk = update_sorting_chunk_spikes_loaded(
+    #                 sorting_merge,
+    #                 idx_spikes,
+    #                 n_min_spikes=template_config.spikes_per_unit,
+    #                 latest_time_sample=chunk_time_range[1]
+    #                 * recording.sampling_frequency,
+    #             )
+                
+    #             waveforms_loaded = np.load(spike_save_folder / f"spike_wfs_chunk{j}.npy")
+    
+    #             idx_spikes = sortings_all[j].labels>-1
+    #             times_chunk = sortings_all[j].times_samples[idx_spikes]
+    #             times_unique, indices_unique_index, indices_unique_inverse = np.unique(times_chunk, return_inverse=True, return_index=True)
+                
+    #             # compute templates
+    #             template_data = TemplateData.from_config_with_spikes_loaded(
+    #                 recording,
+    #                 waveforms_loaded,
+    #                 indices_unique_inverse,
+    #                 indices_unique_index,
+    #                 sorting_chunk,
+    #                 template_config,
+    #                 idx_spikes,
+    #                 motion_est=motion_est,
+    #                 n_jobs=n_jobs_templates,
+    #                 save_folder=template_save_folder_chunk, #make model dir chunk
+    #                 overwrite=overwrite_templates,
+    #                 device=device,
+    #                 save_npz_name=template_npz_filename,
+    #                 trough_offset_samples=trough_offset_samples,
+    #                 spike_length_samples=spike_length_samples,
+    #             )        
+    #             template_data_all.append(template_data)
+
+            
+    #         np.save(template_save_folder / f"labels_pre_GC_iter_{miter}.npy", sorting_merge.labels)
+    #         sorting_GC, template_data_all = chuck_noisy_template_units_with_loaded_spikes_per_chunk(
+    #             sorting_merge,
+    #             template_data_all,
+    #             template_save_folder=template_save_folder, #TODO
+    #             min_template_snr=50, #propagate these arguments as well
+    #             min_n_spikes=25,
+    #             template_npz_filename=template_npz_filename,
+    #         )
+
+    #     # fig, axes = array_scatter(
+    #     #   sorting_GC.labels, geom, sorting_GC.point_source_localizations[:, 0], motion_est.correct_s(sorting_GC.times_seconds, sorting_GC.point_source_localizations[:, 2]), 
+    #     #   sorting_GC.denoised_ptp_amplitudes, zlim=(-100, 382), do_ellipse=True, xlim=(-50, 92), ptplim = (0, 50),
+    #     # )
+    #     # plt.savefig(fig_directory / f"post_mergeGC_iter_{miter}.png")
+    #     # plt.close()
 
 
-        if miter < num_merge_iteration-1 and iterative_split:
-            print("splitting")
-            sorting_GC = split_clusters(
-                sorting_GC,
-                split_strategy="MaxChanPCSplit",
-                split_strategy_kwargs=dict(
-                    peeling_hdf5_filename=sub_h5,
-                    # change this here depending on the dataset rearrange so that all is subtraction_models / OK if not relocated :) 
-                    peeling_featurization_pt=sub_h5.parent / "subtraction_models/featurization_pipeline.pt",
-                    channel_selection_radius=3,
-                    use_localization_features=False,
-                    use_ptp=False,
-                    n_neighbors_search=25,
-                    radius_search=5,
-                    sigma_local=1,
-                    noise_density=0.25,
-                    remove_clusters_smaller_than=25,
-                    relocated=False,
-                    whitened=False,
-                    cluster_alg="dpc",
-                ),
-                recursive=False,
-                n_jobs=0,
-                motion_est=None, #doesn't matter here...
-            )
+    #     if miter < num_merge_iteration-1 and iterative_split:
+    #         print("splitting")
+    #         sorting_GC = split_clusters(
+    #             sorting_GC,
+    #             split_strategy="MaxChanPCSplit",
+    #             split_strategy_kwargs=dict(
+    #                 peeling_hdf5_filename=sub_h5,
+    #                 # change this here depending on the dataset rearrange so that all is subtraction_models / OK if not relocated :) 
+    #                 peeling_featurization_pt=sub_h5.parent / "subtraction_models/featurization_pipeline.pt",
+    #                 channel_selection_radius=3,
+    #                 use_localization_features=False,
+    #                 use_ptp=False,
+    #                 n_neighbors_search=25,
+    #                 radius_search=5,
+    #                 sigma_local=1,
+    #                 noise_density=0.25,
+    #                 remove_clusters_smaller_than=25,
+    #                 relocated=False,
+    #                 whitened=False,
+    #                 cluster_alg="dpc",
+    #             ),
+    #             recursive=False,
+    #             n_jobs=0,
+    #             motion_est=None, #doesn't matter here...
+    #         )
 
-        fig, axes = array_scatter(
-          sorting_GC.labels, geom, sorting_GC.point_source_localizations[:, 0], motion_est.correct_s(sorting_GC.times_seconds, sorting_GC.point_source_localizations[:, 2]), 
-          sorting_GC.denoised_ptp_amplitudes, zlim=(-100, 382), do_ellipse=True, xlim=(-50, 92), ptplim = (0, 50),
-        )
-        plt.savefig(fig_directory / f"post_split_iter_{miter}.png")
-        plt.close()
+    #     # fig, axes = array_scatter(
+    #     #   sorting_GC.labels, geom, sorting_GC.point_source_localizations[:, 0], motion_est.correct_s(sorting_GC.times_seconds, sorting_GC.point_source_localizations[:, 2]), 
+    #     #   sorting_GC.denoised_ptp_amplitudes, zlim=(-100, 382), do_ellipse=True, xlim=(-50, 92), ptplim = (0, 50),
+    #     # )
+    #     # plt.savefig(fig_directory / f"post_split_iter_{miter}.png")
+    #     # plt.close()
 
-        # new_labels_ids = np.full(sorting.labels.max()+1, -1)
-        # units_orig_sorting = np.unique(sorting.labels)
-        # units_orig_sorting = units_orig_sorting[units_orig_sorting>-1]
-        # for k in np.unique(units_orig_sorting):
-        #     assert len(np.unique(sorting_GC.labels[sorting.labels==k]))==1
-        #     new_labels_ids[k] = sorting_GC.labels[sorting.labels==k][0]
+    #     # new_labels_ids = np.full(sorting.labels.max()+1, -1)
+    #     # units_orig_sorting = np.unique(sorting.labels)
+    #     # units_orig_sorting = units_orig_sorting[units_orig_sorting>-1]
+    #     # for k in np.unique(units_orig_sorting):
+    #     #     assert len(np.unique(sorting_GC.labels[sorting.labels==k]))==1
+    #     #     new_labels_ids[k] = sorting_GC.labels[sorting.labels==k][0]
 
-    # Save and compute templates (for deconv, since spikes are loaded already)
-    if delete_spikes:
-        os.system(f"rm -r {spike_save_folder}")
-    return sorting_GC
+    # # Save and compute templates (for deconv, since spikes are loaded already)
+    # if delete_spikes:
+    #     os.system(f"rm -r {spike_save_folder}")
+    # return sorting_GC
 
 
 def merge_templates_across_multiple_chunks(
@@ -401,6 +444,8 @@ def merge_templates_across_multiple_chunks(
     conv_batch_size=128,
     units_batch_size=8,
     N_spikes_overlap = 100,
+    trough_offset_samples=42,
+    spike_length_samples=121,
     device=None,
     n_jobs=0,
     n_jobs_templates=0,
@@ -408,7 +453,6 @@ def merge_templates_across_multiple_chunks(
     overwrite_templates=False,
     show_progress=False,
     template_npz_filename="template_data.npz",
-    end_name_per_chunk="templates",
     reorder_by_depth=True,
     return_dist_matrix=False,
 ) -> DARTsortSorting:
@@ -434,36 +478,22 @@ def merge_templates_across_multiple_chunks(
     A new DARTsortSorting
     """
     print(f"merge input {np.unique(sorting.labels).size - 1} units")
-    n_chunks = len(chunk_time_ranges_s)
-    if template_data_list is None:
-        template_data_list=[]
-        for j, chunk_time_range in tqdm(enumerate(chunk_time_ranges_s), total = len(chunk_time_ranges_s), desc="Making template list for merging"):
-            model_subdir_chunk = f"chunk_{j}_{end_name_per_chunk}"
-            if template_save_folder is not None:
-                model_dir_chunk = Path(template_save_folder) / model_subdir_chunk
-            else:
-                model_dir_chunk = None
-            assert template_config is not None
-            sorting_chunk = keep_only_most_recent_spikes(
-                sorting,
-                n_min_spikes=template_config.spikes_per_unit,
-                latest_time_sample=chunk_time_range[1]
-                * recording.sampling_frequency,
-            )
-            
-            template_data = TemplateData.from_config(
-                recording,
-                sorting_chunk,
-                template_config,
-                motion_est=motion_est,
-                n_jobs=n_jobs_templates,
-                save_folder=model_dir_chunk,
-                overwrite=overwrite_templates,
-                device=device,
-                save_npz_name=template_npz_filename,
-                # Here should add trough + spike length
-            )
-            template_data_list.append(template_data)
+
+    template_data_list = TemplateData.from_config_multiple_chunks_linear(
+        recording,
+        chunk_time_ranges_s,
+        sorting,
+        template_config,
+        save_folder=Path(template_save_folder),
+        overwrite=overwrite_templates,
+        motion_est=motion_est,
+        save_npz_name=template_npz_filename,
+        n_jobs=n_jobs_templates, 
+        # units_per_job=8, #no parallelization yet 
+        device=device,
+        trough_offset_samples=trough_offset_samples,
+        spike_length_samples=spike_length_samples
+    )
 
     unit_ids_all = np.unique(sorting.labels)
     unit_ids_all = unit_ids_all[unit_ids_all>-1]
@@ -471,6 +501,8 @@ def merge_templates_across_multiple_chunks(
     dists_all = []
     shifts_all = []
     snrs_all = []
+
+    n_chunks = len(chunk_time_ranges_s)
 
     for template_data in tqdm(template_data_list, desc = "Computing template distances", total = len(template_data_list)):
 
@@ -536,7 +568,7 @@ def merge_templates_across_multiple_chunks(
         )
 
     if return_dist_matrix:
-        return merged_sorting, dists_all
+        return merged_sorting, dists_all, dists_across_chunks
     return merged_sorting
 
 
@@ -1062,6 +1094,7 @@ def get_deconv_resid_norm_iter(
         min_channel_amplitude=min_channel_amplitude,
         rank=svd_compression_rank,
     )
+
     compressed_upsampled_temporal = template_util.compressed_upsampled_templates(
         low_rank_templates.temporal_components,
         ptps=template_data.templates.ptp(1).max(1),
