@@ -216,7 +216,7 @@ class DARTsortSorting:
 def keep_only_most_recent_spikes(
     sorting,
     n_min_spikes=250,
-    latest_time_sample=90_000_000,
+    latest_time_sample=0,
 ):
     """
     This function selects the n_min_spikes before latest_time (or most recent after latest_time)
@@ -236,34 +236,92 @@ def keep_only_most_recent_spikes(
     new_sorting = replace(sorting, labels=new_labels)
     return new_sorting
 
-def update_sorting_chunk_spikes_loaded(
-    sorting_chunk,
-    idx_spikes,
-    n_min_spikes=250,
-    latest_time_sample=90_000_000,
+def keep_all_most_recent_spikes_per_chunk(
+    sorting,
+    chunk_time_ranges_s,
+    template_config,
+    recording,
 ):
     """
-    This function selects the n_min_spikes before latest_time from a sorting that has been updated (by merge)
+    This function selects the n_min_spikes before latest_time (or most recent after latest_time)
     """
+    n_units = sorting.labels.max()+1
+    n_chunks = len(chunk_time_ranges_s)
+    
+    all_labels = []
+    # all_channels = []
+    all_times_samples = []
+    all_times_seconds = []
+    all_chunk_ids = []
+    all_depths_um = []
+    
+    for j, chunk_time_range in enumerate(chunk_time_ranges_s):
+        chunk_time_range = chunk_time_ranges_s[j]
+        sorting_chunk = keep_only_most_recent_spikes(
+            sorting,
+            n_min_spikes=template_config.spikes_per_unit,
+            latest_time_sample=chunk_time_range[1]
+            * recording.sampling_frequency,
+        )
+        idx = np.flatnonzero(sorting_chunk.labels > -1)
+        all_labels.append(sorting_chunk.labels[idx])
+        # all_channels.append(sorting_chunk.channels[idx])
+        all_times_samples.append(sorting_chunk.times_samples[idx])
+        all_times_seconds.append(sorting_chunk.times_seconds[idx])
+        all_chunk_ids.append(j*np.ones(len(idx)))
+        all_depths_um.append(sorting_chunk.point_source_localizations[idx, 2])
+    
+    all_labels = np.hstack(all_labels)
+    # all_channels = np.hstack(all_channels)
+    all_times_seconds = np.hstack(all_times_seconds)
+    all_chunk_ids = np.hstack(all_chunk_ids).astype("int")
+    all_times_samples = np.hstack(all_times_samples)
+    all_depths_um = np.hstack(all_depths_um)
+    
+    times_samples_unique, ind_arr, inv_arr = np.unique(all_times_samples, return_index=True, return_inverse=True)
+    times_seconds_unique = all_times_seconds[ind_arr]
+    n_spikes_to_load = len(times_samples_unique)
+    depths_um_unique = all_depths_um[ind_arr]
+    # channels_unique = all_channels[ind_arr]
+    
+    chunk_unit_ids = np.zeros((n_spikes_to_load, n_chunks, n_units))
+    # unit_ids = np.zeros((n_spikes_to_load, n_units))
+    
+    chunk_unit_ids[inv_arr, all_chunk_ids, all_labels]=1
+    # chunk_ids[inv_arr, all_chunk_ids]=1
 
-    new_labels_chunks = np.full(sorting_chunk.labels.shape, -1)
-    new_labels_chunks[idx_spikes] = sorting_chunk.labels[idx_spikes]
-    sorting_chunk = replace(sorting_chunk, labels=new_labels_chunks)
+    return times_samples_unique, times_seconds_unique, depths_um_unique, chunk_unit_ids
+    
 
-    new_labels = np.full(sorting_chunk.labels.shape, -1)
-    units = np.unique(sorting_chunk.labels)
-    units = units[units > -1]
-    for k in units:
-        idx_k = np.flatnonzero(sorting_chunk.labels==k)
-        before_time = sorting_chunk.times_samples[idx_k] < latest_time_sample
-        if before_time.sum() <= n_min_spikes:
-            idx_k = idx_k[:n_min_spikes]
-            new_labels[idx_k] = k
-        else:
-            idx_k = idx_k[before_time][-n_min_spikes:]
-            new_labels[idx_k] = k
-    new_sorting = replace(sorting_chunk, labels=new_labels)
-    return new_sorting
+
+# def update_sorting_chunk_spikes_loaded(
+#     sorting_chunk,
+#     idx_spikes,
+#     n_min_spikes=250,
+#     latest_time_sample=90_000_000,
+# ):
+#     """
+#     This function selects the n_min_spikes before latest_time from a sorting that has been updated (by merge)
+#     """
+
+#     new_labels_chunks = np.full(sorting_chunk.labels.shape, -1)
+#     new_labels_chunks[idx_spikes] = sorting_chunk.labels[idx_spikes]
+#     sorting_chunk = replace(sorting_chunk, labels=new_labels_chunks)
+
+#     new_labels = np.full(sorting_chunk.labels.shape, -1)
+#     units = np.unique(sorting_chunk.labels)
+#     units = units[units > -1]
+#     for k in units:
+#         idx_k = np.flatnonzero(sorting_chunk.labels==k)
+#         before_time = sorting_chunk.times_samples[idx_k] < latest_time_sample
+#         if before_time.sum() <= n_min_spikes:
+#             idx_k = idx_k[:n_min_spikes]
+#             new_labels[idx_k] = k
+#         else:
+#             idx_k = idx_k[before_time][-n_min_spikes:]
+#             new_labels[idx_k] = k
+#     new_sorting = replace(sorting_chunk, labels=new_labels)
+#     return new_sorting
 
 
 def check_recording(
@@ -551,7 +609,7 @@ def subchunks_time_ranges(recording, chunk_range_s, subchunk_size_s, divider_sam
 
 # -- hdf5 util
 
-def chunked_h5_read(indices, dataset):
+def chunked_h5_read(dataset, indices):
     """
     mask : boolean array of shape dataset.shape[:1]
     dataset : chunked h5py.Dataset

@@ -215,18 +215,47 @@ class MatchingConfig:
 @dataclass(frozen=True)
 class SplitMergeConfig:
     # -- split
-    split_strategy: str = "FeatureSplit"
-    recursive_split: bool = True
+    split_strategy: str = "FeatureSplit" 
+    recursive_split: bool = True #Set to False if using the iterative split merge
     split_strategy_kwargs: Optional[dict] = field(
         default_factory=lambda: dict(max_spikes=20_000)
     )
+
+    # Parma for the merge_iterative_templates_with_multiple_chunks
+    num_merge_iteration: float = 3
+    # Params for split_strategy="MaxChanPCSplit"
+    channel_selection_radius: float = 1 # ensure it is a max chan here 
+    use_localization_features: bool = False
+    use_ptp: bool = False
+    n_neighbors_search: float = 25
+    radius_search: float = 5
+    sigma_local: float = 1
+    noise_density: float = 0.25
+    remove_clusters_smaller_than: float = 25
+    relocated: bool = False
+    whitened: bool = False
+    cluster_alg: str = "dpc"
 
     # -- merge
     merge_template_config: TemplateConfig = TemplateConfig(superres_templates=False)
     linkage: str = "complete"
     merge_distance_threshold: float = 0.25
     cross_merge_distance_threshold: float = 0.5
-    min_spatial_cosine: float = 0.0
+    min_spatial_cosine: float = 0.5
+    superres_linkage = np.max
+    sym_function = np.maximum # dist = sym_function(dist(a,b),dist(b,a))
+    min_channel_amplitude: float = 0.0
+
+    # For template comparisons
+    max_shift_samples: float = 20.0
+    temporal_upsampling_factor: float = 8.0
+    amplitude_scaling_variance: float = 0.001
+    amplitude_scaling_boundary: float = 0.1
+    svd_compression_rank: float = 20
+    conv_batch_size: float = 128
+    units_batch_size: float = 8 
+    
+
 
 
 @dataclass(frozen=True)

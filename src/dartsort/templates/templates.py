@@ -6,7 +6,7 @@ import numpy as np
 from dartsort.localize.localize_util import localize_waveforms
 from dartsort.util import data_util, drift_util
 
-from .get_templates import get_templates, get_templates_with_spikes_loaded, get_templates_with_h5
+from .get_templates import (get_templates, get_templates_with_spikes_loaded, get_templates_with_h5, get_templates_multiple_chunks_linear)
 from .superres_util import superres_sorting
 from .template_util import (get_realigned_sorting, get_template_depths,
                             weighted_average)
@@ -548,6 +548,134 @@ class TemplateData:
             return obj, sorting
 
         return obj
+
+    @classmethod
+    def from_config_multiple_chunks_linear(
+        cls,
+        recording,
+        chunk_time_ranges_s,
+        sorting,
+        template_config,
+        save_folder=None,
+        overwrite=False,
+        motion_est=None,
+        save_npz_name="template_data.npz",
+        with_locs=True,
+        n_jobs=0, 
+        # units_per_job=8, #no parallelization yet 
+        tsvd=None,
+        device=None,
+        trough_offset_samples=42,
+        spike_length_samples=121,
+        # return_realigned_sorting=False, # not implemented here
+    ):
+
+        template_data_list = []
+        if save_folder is not None:
+            save_folder = Path(save_folder)
+            if not save_folder.exists():
+                save_folder.mkdir()
+            precomputed=True
+            for j in range(len(chunk_time_ranges_s)):
+                npz_path = save_folder / f"chunk_{j}_{save_npz_name}"
+                if npz_path.exists() and not overwrite:
+                    template_data_list.append(cls.from_npz(npz_path))
+                else:
+                    precomputed=False
+            if precomputed:
+                return template_data_list
+                    
+        motion_aware = (
+            template_config.registered_templates or template_config.superres_templates
+        )
+        
+        geom = recording.get_channel_locations()
+
+        
+        kwargs = dict(
+            trough_offset_samples=trough_offset_samples,
+            spike_length_samples=spike_length_samples,
+            spikes_per_unit=template_config.spikes_per_unit,
+            # realign handled in advance below, not needed in kwargs
+            # realign_peaks=False,
+            realign_max_sample_shift=template_config.realign_max_sample_shift,
+            denoising_rank=template_config.denoising_rank,
+            denoising_fit_radius=template_config.denoising_fit_radius,
+            denoising_snr_threshold=template_config.denoising_snr_threshold,
+            min_fraction_at_shift=template_config.min_fraction_at_shift,
+            min_count_at_shift=template_config.min_count_at_shift,
+            spatial_svdsmoothing=template_config.spatial_svdsmoothing,
+            max_ptp_chans_to_spatialsmooth=template_config.max_ptp_chans_to_spatialsmooth,
+            low_rank_denoising=template_config.low_rank_denoising,
+            realign_peaks=False, #No realign here
+            device=device,
+            # units_per_job=units_per_job,
+        )
+        if template_config.registered_templates and motion_est is not None:
+            kwargs["registered_geom"] = drift_util.registered_geometry(
+                geom, motion_est=motion_est
+            )
+
+        unit_ids = np.arange(sorting.labels.max() + 1)
+
+        # main!
+        results = get_templates_multiple_chunks_linear(
+            recording,
+            sorting,
+            chunk_time_ranges_s,
+            geom,
+            template_config,
+            motion_est=motion_est,
+            **kwargs,
+        )
+
+        for j in range(len(chunk_time_ranges_s)):
+            # handle registered templates
+            if template_config.registered_templates and motion_est is not None:
+                registered_template_depths_um = get_template_depths(
+                    results["templates"][j],
+                    kwargs["registered_geom"],
+                    localization_radius_um=template_config.registered_template_localization_radius_um,
+                )
+                obj = cls(
+                    results["templates"][j],
+                    unit_ids,
+                    np.nanmax(results["spike_counts"][j], 1),
+                    kwargs["registered_geom"],
+                    registered_template_depths_um,
+                    localization_radius_um=template_config.registered_template_localization_radius_um,
+                    trough_offset_samples=trough_offset_samples,
+                    spike_length_samples=spike_length_samples,
+                )
+            elif with_locs:
+                geom = recording.get_channel_locations()
+                depths_um = get_template_depths(
+                    results["templates"][j],
+                    geom,
+                    localization_radius_um=template_config.registered_template_localization_radius_um,
+                )
+                obj = cls(
+                    results["templates"][j],
+                    unit_ids,
+                    np.nanmax(results["spike_counts"][j], 1),
+                    geom,
+                    depths_um,
+                    localization_radius_um=template_config.registered_template_localization_radius_um,
+                    trough_offset_samples=trough_offset_samples,
+                    spike_length_samples=spike_length_samples,
+                )
+            if save_folder is not None:
+                npz_path = save_folder / f"chunk_{j}_{save_npz_name}"
+                obj.to_npz(npz_path)
+                
+            template_data_list.append(obj)
+
+        # if return_realigned_sorting:
+        #     return template_data_list, sorting
+
+        return template_data_list
+
+
 
 def get_smoothed_templates(
     temp_data_list,
