@@ -3,7 +3,7 @@ from typing import Optional
 
 from pathlib import Path
 import numpy as np
-from dartsort.config import TemplateConfig
+from dartsort.config import TemplateConfig, SplitMergeConfig
 from dartsort.templates import TemplateData, template_util
 from dartsort.templates.pairwise_util import (
     construct_shift_indices, iterate_compressed_pairwise_convolutions)
@@ -146,6 +146,8 @@ def merge_iterative_templates_with_multiple_chunks(
             svd_compression_rank=split_merge_config.svd_compression_rank,
             conv_batch_size=split_merge_config.conv_batch_size,
             units_batch_size=split_merge_config.units_batch_size, 
+            mask_units_too_far=split_merge_config.mask_units_too_far, 
+            aggregate_func=split_merge_config.aggregate_func,
         )
 
         if miter < num_merge_iteration-1:
@@ -455,6 +457,7 @@ def merge_templates_across_multiple_chunks(
     template_npz_filename="template_data.npz",
     reorder_by_depth=True,
     return_dist_matrix=False,
+    return_neighbors=False,
 ) -> DARTsortSorting:
     """Template distance based merge
 
@@ -568,9 +571,23 @@ def merge_templates_across_multiple_chunks(
         )
 
     if return_dist_matrix:
-        return merged_sorting, dists_all, dists_across_chunks
-    return merged_sorting
+        return merged_sorting, dists_across_chunks
 
+    if return_neighbors:
+        neighbors = get_post_merge_neighbors(
+            merged_sorting,
+            sorting,
+            dists_all,
+            neighbors_threshold=2*merge_distance_threshold,
+            linkage=linkage,
+            merge_func=np.nanmean,
+            aggregate_func=np.nanmin,
+            sym_function=sym_function,
+            fill_nanvalue=10_000,
+        )
+        return merged_sorting, neighbors
+        
+    return merged_sorting
 
 
 def merge_templates(
@@ -1207,6 +1224,75 @@ def compute_temporal_mask_merge(
                             if unit_a_inchunk and unit_b_inchunk:
                                 temporal_mask[j, unit_a, unit_b]=1
     return temporal_mask
+
+def get_spatial_dist_two_units(
+    sorting, 
+    ua, 
+    ub,
+):
+    return np.sqrt(((np.median(sorting.point_source_localizations[sorting.labels==ua, :][:, [0, 2]], axis=0) - np.median(sorting.point_source_localizations[sorting.labels==ub, :][:, [0, 2]], axis=0))**2).sum())
+
+
+def get_post_merge_neighbors(
+    sorting_postmerge,
+    sorting_premerge,
+    dist_all,
+    neighbors_threshold=0.5,
+    linkage="complete",
+    merge_func=np.nanmean,
+    aggregate_func=np.nanmin,
+    sym_function=np.maximum,
+    fill_nanvalue=10_000,
+):
+    n_new_units = sorting_postmerge.labels.max()+1
+    new_dist_all = np.zeros(((np.array(dist_all).shape[0]), n_new_units, n_new_units))
+    
+    for k in range(n_new_units):
+        for j in range(n_new_units):
+            prev_units_k = np.unique(sorting_premerge.labels[sorting_postmerge.labels == k])
+            prev_units_j = np.unique(sorting_premerge.labels[sorting_postmerge.labels == j])
+            if j==k:
+                new_dist_all[:, j, j]=0
+            elif len(prev_units_k) == 1 and len(prev_units_j) ==1:
+                prev_units_j = prev_units_j[0]
+                prev_units_k = prev_units_k[0]
+                new_dist_all[:, j, k] = dist_all[:, prev_units_j, prev_units_k]
+                new_dist_all[:, k, j] = dist_all[:, prev_units_k, prev_units_j]
+            elif len(prev_units_k) == 1:
+                prev_units_k = prev_units_k[0]
+                new_dist_all[:, j, k] = merge_func(dist_all[:, :, prev_units_k][:, prev_units_j], axis=1)
+                new_dist_all[:, k, j] = merge_func(dist_all[:, prev_units_k][:, prev_units_j], axis=1)
+            elif len(prev_units_j) == 1:
+                prev_units_j = prev_units_j[0]
+                new_dist_all[:, j, k] = merge_func(dist_all[:, prev_units_j][:, prev_units_k], axis=1)
+                new_dist_all[:, k, j] = merge_func(dist_all[:, :, prev_units_j][:, prev_units_k], axis=1)
+            else:
+                new_dist_all[:, j, k] = merge_func(dist_all[:, prev_units_j][:, prev_units_k], axis=(1, 2))
+                new_dist_all[:, k, j] = merge_func(dist_all[:, :, prev_units_j][:, prev_units_k], axis=(1, 2))
+    
+    new_dist_all_all_chunks = aggregate_func(new_dist_all, axis=0)
+    new_dist_all_all_chunks[np.isnan(new_dist_all_all_chunks)] = fill_nanvalue
+    new_dist_all_all_chunks = sym_function(new_dist_all_all_chunks.T, new_dist_all_all_chunks)    
+
+    Z = linkage(new_dist_all_all_chunks[np.triu_indices(new_dist_all_all_chunks.shape[0], k=1)], method=linkage)
+    labels_neighbors = fcluster(Z, neighbors_threshold, criterion="distance")
+
+    lab, counts = np.unique(labels_neighbors, return_counts=True)
+    
+    neighbors = -1*np.ones((sorting_postmerge.labels.max()+1, counts.max()))
+    neighbors[:, 0] = np.arange(neighbors.shape[0])
+    for k, c in zip(lab, counts):
+        if c>1:
+            units_prev = np.arange(neighbors.shape[0])[labels_neighbors == k]
+            for u in units_prev:
+                for j, u_bis in enumerate(units_prev[units_prev!=u]):
+                    if get_spatial_dist_two_units(
+                        sorting_postmerge, u, u_bis
+                    )<100:
+                        neighbors[u, j+1]=u_bis
+    neighbors = neighbors.astype("int")
+
+    return neighbors
 
 
 

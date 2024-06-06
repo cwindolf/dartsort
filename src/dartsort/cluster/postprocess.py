@@ -7,6 +7,7 @@ from ..templates import TemplateData
 import os
 from tqdm.auto import tqdm
 from dartsort.util.data_util import keep_only_most_recent_spikes
+from pathlib import Path
 
 
 def chuck_noisy_template_units_with_time_tracking(
