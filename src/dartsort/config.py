@@ -19,6 +19,7 @@ from dataclasses import dataclass, field
 from typing import List, Optional, Tuple
 
 import torch
+import numpy as np
 
 try:
     from importlib.resources import files
@@ -170,7 +171,7 @@ class TemplateConfig:
     # low rank denoising?
     low_rank_denoising: bool = True
     denoising_rank: int = 5
-    denoising_snr_threshold: float = 50.0
+    denoising_snr_threshold: float = 25.0 #Check that this is used with ptp * sqrt(N) otherwise need to be increased to ~50
     denoising_fit_radius: float = 75.0
     min_fraction_at_shift: float = 0.25
     min_count_at_shift: float = 25
@@ -245,6 +246,8 @@ class SplitMergeConfig:
     superres_linkage = np.max
     sym_function = np.maximum # dist = sym_function(dist(a,b),dist(b,a))
     min_channel_amplitude: float = 0.0
+    mask_units_too_far: bool = False
+    aggregate_func = np.nanmax
 
     # For template comparisons
     max_shift_samples: float = 20.0

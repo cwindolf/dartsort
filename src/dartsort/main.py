@@ -29,6 +29,7 @@ from dartsort.util.data_util import (
 from dartsort.util.peel_util import run_peeler, fit_and_save_models
 from dartsort.util.registration_util import estimate_motion
 from dartsort.util.data_util import chunk_time_ranges, subchunks_time_ranges
+from dartsort.util.list_util import merge_allh5_into_one
 
 def dartsort(
     recording,
@@ -284,15 +285,14 @@ def match(
     template_npz_filename="template_data.npz",
     templates_precomputed=False,
     template_dir_precomputed=None,
-    per_chunk_dir_end_name="merge",
+    remove_previous=True,
+    chunk_size=1024, #chunk size for chunked hdf5
 ):
     assert output_directory is not None
     model_dir = Path(output_directory) / model_subdir
 
     if templates_precomputed:
         assert template_dir_precomputed is not None
-        if templates_precomputed:
-            assert per_chunk_dir_end_name is not None
 
     if not template_config.time_tracking:
         # compute templates
@@ -348,7 +348,7 @@ def match(
         
     else:        
         chunk_time_ranges_s = chunk_time_ranges(recording, chunk_length_samples=template_config.chunk_size_s*recording.sampling_frequency, slice_s=slice_s, divider_samples=matching_config.chunk_length_samples)
-        print(chunk_time_ranges_s)
+        # print(chunk_time_ranges_s)
         n_chunks = len(chunk_time_ranges_s)
         len_chunks_s = chunk_time_ranges_s[0][1] - chunk_time_ranges_s[0][0]
 
@@ -401,9 +401,13 @@ def match(
             templates_precomputed=True
 
         template_data = TemplateData.from_npz(
-                    template_dir_precomputed / f"chunk_{n_chunks//2}_{per_chunk_dir_end_name}/{template_npz_filename}"
+                    template_dir_precomputed / f"chunk_{n_chunks//2}_{template_npz_filename}"
                 )
-
+        
+        chunk_starts_samples = np.arange(chunk_time_ranges_s[n_chunks//2][0] * recording.sampling_frequency,
+                    chunk_time_ranges_s[n_chunks//2][1] * recording.sampling_frequency,
+                    matching_config.chunk_length_samples).astype("int")
+        
         matching_peeler = ObjectiveUpdateTemplateMatchingPeeler.from_config(
             recording,
             waveform_config,
@@ -431,8 +435,8 @@ def match(
             for j, chunk_time_range in enumerate(chunk_time_ranges_s):
                 print(f"chunk_{j}")
                 print(chunk_time_range)
-                model_subdir_chunk = f"chunk_{j}_" + model_subdir
-                model_dir_chunk = Path(output_directory) / model_subdir_chunk
+                # model_subdir_chunk = f"chunk_{j}_" + model_subdir
+                # model_dir_chunk = Path(output_directory) / model_subdir_chunk
     
                 chunk_starts_samples = np.arange(
                     chunk_time_range[0] * recording.sampling_frequency,
@@ -441,7 +445,7 @@ def match(
                 ).astype("int")
     
                 template_data = TemplateData.from_npz(
-                    template_dir_precomputed / f"chunk_{j}_{per_chunk_dir_end_name}/{template_npz_filename}"
+                    template_dir_precomputed / f"chunk_{j}_{template_npz_filename}"
                 )
     
                 # instantiate peeler
@@ -459,7 +463,7 @@ def match(
                     matching_peeler,
                     output_directory,
                     hdf5_filename,
-                    model_subdir_chunk,
+                    model_subdir,
                     featurization_config,
                     chunk_starts_samples=chunk_starts_samples,
                     overwrite=False,
@@ -468,7 +472,6 @@ def match(
                     residual_filename=residual_filename,
                     show_progress=show_progress,
                     device=device,
-                    keep_writing=True, 
                 )
         else:
             for j, chunk_time_range in enumerate(chunk_time_ranges_s):
@@ -485,16 +488,16 @@ def match(
     
                 if j>0:
                     template_data_previous = TemplateData.from_npz(
-                        template_dir_precomputed / f"chunk_{j-1}_{per_chunk_dir_end_name}/{template_npz_filename}"
+                        template_dir_precomputed / f"chunk_{j-1}_{template_npz_filename}"
                     )
                 template_data_chunk = TemplateData.from_npz(
-                    template_dir_precomputed / f"chunk_{j}_{per_chunk_dir_end_name}/{template_npz_filename}"
+                    template_dir_precomputed / f"chunk_{j}_{template_npz_filename}"
                 )
                 for k, subchunk_time_range in enumerate(sub_chunk_time_range_s):
     
                     print(f"subchunk {int(j*n_sub_chunks + k)}")
-                    model_subdir_chunk = f"subchunk_{int(j*n_sub_chunks + k)}_" + model_subdir
-                    model_subdir_chunk = Path(output_directory) / model_subdir_chunk
+                    # model_subdir_chunk = f"subchunk_{int(j*n_sub_chunks + k)}_" + model_subdir
+                    # model_subdir_chunk = Path(output_directory) / model_subdir_chunk
     
                     chunk_starts_samples = np.arange(
                         subchunk_time_range[0] * recording.sampling_frequency,
@@ -523,16 +526,26 @@ def match(
                         model_subdir,
                         featurization_config,
                         chunk_starts_samples=chunk_starts_samples,
-                        overwrite=overwrite, # check that it still computes the pconv.h5 object -> No, but we don't want to unlink the previous .pt ()which deletes everything
+                        overwrite=overwrite,
                         exception_no_featurization=True,
                         n_jobs=n_jobs_match,
                         residual_filename=residual_filename,
                         show_progress=show_progress,
                         device=device,
-                        # keep_writing=False, # This parameter to keep filling up the h5 file
                     )
             
                     # sorting_list.append(sorting_chunk)
                     # output_hdf5_filename_list.append(output_hdf5_filename)
-
+            merge_allh5_into_one(
+                Path(output_directory) ,
+                recording,
+                chunk_time_ranges_s, 
+                template_config,
+                matching_config,
+                output_hdf5_filename=hdf5_filename,
+                name_chunk_h5=hdf5_filename,
+                chunk_size=chunk_size,
+                remove_previous=remove_previous,
+                overwrite=overwrite,
+            )
         return sorting_chunk, output_hdf5_filename
