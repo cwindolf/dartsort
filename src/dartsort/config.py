@@ -16,7 +16,7 @@ object can then be passed into the high level functions like
 """
 
 from dataclasses import dataclass, field
-from typing import List, Optional, Tuple
+from typing import List, Optional, Tuple, Callable
 
 import torch
 import numpy as np
@@ -239,24 +239,38 @@ class SplitMergeConfig:
 
     # -- merge
     merge_template_config: TemplateConfig = TemplateConfig(superres_templates=False)
-    linkage: str = "complete"
+    link: str = "complete"
     merge_distance_threshold: float = 0.25
     cross_merge_distance_threshold: float = 0.5
     min_spatial_cosine: float = 0.5
-    superres_linkage = np.max
-    sym_function = np.maximum # dist = sym_function(dist(a,b),dist(b,a))
+    # superres_linkage: Callable[np.array, np.array] = np.max
+    # sym_function: Callable[[np.array, np.array], np.array] = np.maximum # dist = sym_function(dist(a,b),dist(b,a))
+    superres_linkage: Callable = np.max
+    sym_function: Callable = np.maximum # dist = sym_function(dist(a,b),dist(b,a))
     min_channel_amplitude: float = 0.0
-    mask_units_too_far: bool = False
-    aggregate_func = np.nanmax
+    mask_units_too_far: bool = True
+    # aggregate_func: Callable[[np.array, Tuple[int]], np.array] = np.nanmax
+    aggregate_func: Callable = np.nanmax
+    min_ratio_chan_no_nan: float = 0.25
+
+    # -- reassignment
+    norm_triage: float = 4.0
+    # norm_operator: Callable[[np.array, Tuple[int]], np.array] = np.nanmax
+    norm_operator: Callable = np.nanmax
+    # resid split
+    peak_time_selection: str = "maxstd"
+    # For tpca template computation 
+    threshold_n_spike: float = 0.2
+    m_iter: int = 3
 
     # For template comparisons
-    max_shift_samples: float = 20.0
-    temporal_upsampling_factor: float = 8.0
+    max_shift_samples: int = 20
+    temporal_upsampling_factor: int = 8
     amplitude_scaling_variance: float = 0.001
     amplitude_scaling_boundary: float = 0.1
-    svd_compression_rank: float = 20
-    conv_batch_size: float = 128
-    units_batch_size: float = 8 
+    svd_compression_rank: int = 20
+    conv_batch_size: int = 128
+    units_batch_size: int = 8 
     
 
 

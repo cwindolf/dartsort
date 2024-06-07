@@ -925,49 +925,49 @@ def fit_tsvd(
 
     return tsvd
 
-def fit_tsvd_with_spikes_loaded(
-    recording,
-    wfs_all_loaded,
-    indices_unique_inverse,
-    indices_unique_index,
-    labels_all, #wfs_all_loaded[indices_unique_inverse[labels_all == k]] gives all wfs for unit k 
-    channels_all, #channels_all[indices_unique_index] gives a set of max channel usable for fitting tsvd
-    denoising_rank=5,
-    denoising_fit_radius=75,
-    denoising_spikes_fit=10_000,
-    trough_offset_samples=42,
-    spike_length_samples=121,
-    random_seed=0,
-):
-    geom = recording.get_channel_locations()
-    channel_index = full_channel_index(geom.shape[0])
+# def fit_tsvd_with_spikes_loaded(
+#     recording,
+#     wfs_all_loaded,
+#     indices_unique_inverse,
+#     indices_unique_index,
+#     labels_all, #wfs_all_loaded[indices_unique_inverse[labels_all == k]] gives all wfs for unit k 
+#     channels_all, #channels_all[indices_unique_index] gives a set of max channel usable for fitting tsvd
+#     denoising_rank=5,
+#     denoising_fit_radius=75,
+#     denoising_spikes_fit=10_000,
+#     trough_offset_samples=42,
+#     spike_length_samples=121,
+#     random_seed=0,
+# ):
+#     geom = recording.get_channel_locations()
+#     channel_index = full_channel_index(geom.shape[0])
 
-    wfs_all_loaded = wfs_all_loaded[indices_unique_inverse]
+#     wfs_all_loaded = wfs_all_loaded[indices_unique_inverse]
 
-    if denoising_spikes_fit<wfs_all_loaded.shape[0]:
-        rg = np.random.default_rng(random_seed)
+#     if denoising_spikes_fit<wfs_all_loaded.shape[0]:
+#         rg = np.random.default_rng(random_seed)
     
-        choices = rg.choice(wfs_all_loaded.shape[0], denoising_spikes_fit, replace=False)
-        wfs_all_loaded = wfs_all_loaded[choices]
-        channels_all = channels_all[choices]
+#         choices = rg.choice(wfs_all_loaded.shape[0], denoising_spikes_fit, replace=False)
+#         wfs_all_loaded = wfs_all_loaded[choices]
+#         channels_all = channels_all[choices]
 
-    # grab waveforms
-    wfs_all_loaded = channel_subset_by_radius(
-        wfs_all_loaded,
-        channels_all,
-        channel_index, #all
-        recording.get_channel_locations(),
-        radius=denoising_fit_radius,
-        fill_value=0.0, # all-0 rows don't change SVD basis
-        return_new_channel_index=False,
-    )
-    wfs_all_loaded = wfs_all_loaded.transpose(0, 2, 1)
-    wfs_all_loaded = wfs_all_loaded.reshape(wfs_all_loaded.shape[0] * wfs_all_loaded.shape[1], -1)
+#     # grab waveforms
+#     wfs_all_loaded = channel_subset_by_radius(
+#         wfs_all_loaded,
+#         channels_all,
+#         channel_index, #all
+#         recording.get_channel_locations(),
+#         radius=denoising_fit_radius,
+#         fill_value=0.0, # all-0 rows don't change SVD basis
+#         return_new_channel_index=False,
+#     )
+#     wfs_all_loaded = wfs_all_loaded.transpose(0, 2, 1)
+#     wfs_all_loaded = wfs_all_loaded.reshape(wfs_all_loaded.shape[0] * wfs_all_loaded.shape[1], -1)
 
-    # reshape, fit tsvd, and done
-    tsvd = TruncatedSVD(n_components=denoising_rank, random_state=random_seed)
-    tsvd.fit(wfs_all_loaded)
-    return tsvd
+#     # reshape, fit tsvd, and done
+#     tsvd = TruncatedSVD(n_components=denoising_rank, random_state=random_seed)
+#     tsvd.fit(wfs_all_loaded)
+#     return tsvd
 
 
 def denoising_weights(

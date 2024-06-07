@@ -431,7 +431,7 @@ def merge_templates_across_multiple_chunks(
     motion_est=None,
     max_shift_samples=20,
     superres_linkage=np.max,
-    linkage="single",
+    link="single",
     sym_function=np.maximum,
     masked_sym_func=np.fmax,
     aggregate_func=np.nanmax,
@@ -441,11 +441,12 @@ def merge_templates_across_multiple_chunks(
     amplitude_scaling_variance=0.001,
     amplitude_scaling_boundary=0.1,
     svd_compression_rank=20,
-    min_channel_amplitude=1.5,
+    min_channel_amplitude=0.0,
     min_spatial_cosine=0.0,
+    min_ratio_chan_no_nan=0.0,
     conv_batch_size=128,
     units_batch_size=8,
-    N_spikes_overlap = 100,
+    N_spikes_overlap = 50,
     trough_offset_samples=42,
     spike_length_samples=121,
     device=None,
@@ -546,8 +547,10 @@ def merge_templates_across_multiple_chunks(
     dists_all[dists_all<0] = np.nan
     for k in range(len(dists_all)):
         dists_all[k] = masked_sym_func(dists_all[k], dists_all[k].T)
+    # print(dists_all.shape)
     dists_across_chunks = aggregate_func(dists_all, axis=0)
-
+    if min_ratio_chan_no_nan > 0:
+        dists_across_chunks[(~np.isnan(dists_all)).sum(0)<min_ratio_chan_no_nan*len(dists_all)] = np.nan
 
     total_pairs = shifts_all[0].shape[0]*shifts_all[0].shape[1]
     shifts_across_chunks = np.array(shifts_all).reshape((n_chunks, total_pairs))[np.array(dists_all).reshape((n_chunks, total_pairs)).argmin(0), np.arange(total_pairs)]
@@ -562,7 +565,7 @@ def merge_templates_across_multiple_chunks(
         shifts_across_chunks,
         template_snrs,
         merge_distance_threshold=merge_distance_threshold,
-        link=linkage,
+        link=link,
     )
 
     if reorder_by_depth:
@@ -571,7 +574,7 @@ def merge_templates_across_multiple_chunks(
         )
 
     if return_dist_matrix:
-        return merged_sorting, dists_across_chunks
+        return merged_sorting, dists_across_chunks, dists_all
 
     if return_neighbors:
         neighbors = get_post_merge_neighbors(
@@ -579,7 +582,7 @@ def merge_templates_across_multiple_chunks(
             sorting,
             dists_all,
             neighbors_threshold=2*merge_distance_threshold,
-            linkage=linkage,
+            link=link,
             merge_func=np.nanmean,
             aggregate_func=np.nanmin,
             sym_function=sym_function,
@@ -598,15 +601,15 @@ def merge_templates(
     motion_est=None,
     max_shift_samples=20,
     superres_linkage=np.max,
-    linkage="complete",
-    sym_function=np.minimum,
+    link="complete",
+    sym_function=np.maximum,
     merge_distance_threshold=0.25,
     temporal_upsampling_factor=8,
     amplitude_scaling_variance=0.001,
     amplitude_scaling_boundary=0.1,
     svd_compression_rank=20,
-    min_channel_amplitude=1.0,
-    min_spatial_cosine=0.0,
+    min_channel_amplitude=0.0,
+    min_spatial_cosine=0.5,
     conv_batch_size=128,
     units_batch_size=8,
     device=None,
@@ -797,14 +800,14 @@ def merge_across_sortings(
 def calculate_merge_distances(
     template_data,
     superres_linkage=np.max,
-    sym_function=np.minimum,
+    sym_function=np.maximum,
     max_shift_samples=20,
     temporal_upsampling_factor=8,
     amplitude_scaling_variance=0.001,
     amplitude_scaling_boundary=0.1,
     svd_compression_rank=20,
-    min_channel_amplitude=1.0,
-    min_spatial_cosine=0.0,
+    min_channel_amplitude=0.0,
+    min_spatial_cosine=0.5,
     cooccurrence_mask=None,
     conv_batch_size=128,
     units_batch_size=8,
@@ -1193,7 +1196,7 @@ def compute_temporal_mask_merge(
     sorting,
     chunk_time_ranges_s,
     dists_all,
-    N_spikes_overlap = 100,
+    N_spikes_overlap = 50,
 ):
     n_chunks, n_units = dists_all.shape[0], dists_all.shape[1]
     temporal_mask = -1*np.ones((n_chunks, n_units, n_units))
@@ -1238,7 +1241,7 @@ def get_post_merge_neighbors(
     sorting_premerge,
     dist_all,
     neighbors_threshold=0.5,
-    linkage="complete",
+    link="complete",
     merge_func=np.nanmean,
     aggregate_func=np.nanmin,
     sym_function=np.maximum,
@@ -1267,14 +1270,14 @@ def get_post_merge_neighbors(
                 new_dist_all[:, j, k] = merge_func(dist_all[:, prev_units_j][:, prev_units_k], axis=1)
                 new_dist_all[:, k, j] = merge_func(dist_all[:, :, prev_units_j][:, prev_units_k], axis=1)
             else:
-                new_dist_all[:, j, k] = merge_func(dist_all[:, prev_units_j][:, prev_units_k], axis=(1, 2))
+                new_dist_all[:, j, k] = merge_func(dist_all[:, prev_units_j][:, :, prev_units_k], axis=(1, 2))
                 new_dist_all[:, k, j] = merge_func(dist_all[:, :, prev_units_j][:, prev_units_k], axis=(1, 2))
     
     new_dist_all_all_chunks = aggregate_func(new_dist_all, axis=0)
     new_dist_all_all_chunks[np.isnan(new_dist_all_all_chunks)] = fill_nanvalue
     new_dist_all_all_chunks = sym_function(new_dist_all_all_chunks.T, new_dist_all_all_chunks)    
 
-    Z = linkage(new_dist_all_all_chunks[np.triu_indices(new_dist_all_all_chunks.shape[0], k=1)], method=linkage)
+    Z = linkage(new_dist_all_all_chunks[np.triu_indices(new_dist_all_all_chunks.shape[0], k=1)], method=link)
     labels_neighbors = fcluster(Z, neighbors_threshold, criterion="distance")
 
     lab, counts = np.unique(labels_neighbors, return_counts=True)
