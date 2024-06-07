@@ -408,35 +408,33 @@ def iterative_merge_reassignment(
     matching_config,
     matchh5,
     tpca,
-    deconv_scores,
     split_merge_config,
-    m_iter=3,
-    threshold_n_spike=0.2,
+    template_save_folder=None,
+    template_npz_filename="template_data.npz",
     fill_nanvalue=10_000,
-    norm_operator=np.nanmax,
     wfs_name="collisioncleaned_tpca_features",
     spike_length_samples=121,
-    peak_time_selection="maxstd",
     trough_offset=42,
-    normalize_by_max_value=True,
-    min_nspikes_unit=150,
-    norm_triage=4.0,
 ):
 
-    for iter in range(m_iter):
-        # Add a function to get neighbors after this merge 
+    for iter in range(split_merge_config.m_iter):
+
         sorting, neighbors = merge_templates_across_multiple_chunks(
             sorting,
             recording,
             chunk_time_ranges_s,
+            template_save_folder=template_save_folder,
+            template_npz_filename=template_npz_filename,
             motion_est=motion_est,
             template_config=template_config,
+            link=split_merge_config.link,
             superres_linkage=split_merge_config.superres_linkage,
-            sym_function=split_merge_config.superres_linkage,
+            # sym_function=split_merge_config.sym_function,
             min_channel_amplitude=split_merge_config.min_channel_amplitude, 
             min_spatial_cosine=split_merge_config.min_spatial_cosine,
             max_shift_samples=split_merge_config.max_shift_samples,
-            merge_distance_threshold=split_merge_config.merge_distance_threshold, #0.25 for now
+            merge_distance_threshold=split_merge_config.merge_distance_threshold, #0.25 
+            min_ratio_chan_no_nan=split_merge_config.min_ratio_chan_no_nan, #0.25 
             temporal_upsampling_factor=split_merge_config.temporal_upsampling_factor,
             amplitude_scaling_variance=split_merge_config.amplitude_scaling_variance,
             amplitude_scaling_boundary=split_merge_config.amplitude_scaling_boundary,
@@ -445,6 +443,7 @@ def iterative_merge_reassignment(
             units_batch_size=split_merge_config.units_batch_size, 
             mask_units_too_far=split_merge_config.mask_units_too_far, #False for now
             aggregate_func=split_merge_config.aggregate_func,
+            overwrite_templates=True,
             return_neighbors=True,
         )
 
@@ -462,9 +461,12 @@ def iterative_merge_reassignment(
             tpca=tpca,
         )
     
-    
+
+        unit_ids = np.unique(sorting.labels)
+        unit_ids = unit_ids[unit_ids>-1]
+        
         templates_smoothed = smooth_list_templates(
-            tpca_templates_list, spike_count_list, np.unique(sorting.labels), threshold_n_spike=threshold_n_spike,
+            tpca_templates_list, spike_count_list, unit_ids, threshold_n_spike=split_merge_config.threshold_n_spike,
         )
     
         residual_norm = compute_residual_norm(
@@ -481,16 +483,14 @@ def iterative_merge_reassignment(
             chunk_belong,
             wfs_name=wfs_name,
             fill_nanvalue=fill_nanvalue,
-            norm_operator=norm_operator,
+            norm_operator=split_merge_config.norm_operator,
         )
     
-        units = np.unique(sorting.labels)
-        units = units[units>-1]
         new_labels = -1*np.ones(sorting.labels.shape)
-        for unit in units:
+        for unit in unit_ids:
             idx_unit = np.flatnonzero(sorting.labels == unit)
-            new_labels[idx_unit] = neighbors[sorting.labels[idx_unit], residual_norm.argmin(1)[idx_unit]]
-        new_labels[residual_norm.min(1)>norm_triage] = -1
+            new_labels[idx_unit] = neighbors[unit, residual_norm.argmin(1)[idx_unit]]
+        new_labels[residual_norm.min(1)>split_merge_config.norm_triage] = -1
         new_labels = new_labels.astype('int')
 
         replace(sorting, labels = new_labels)
