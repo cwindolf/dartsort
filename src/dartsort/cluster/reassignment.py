@@ -178,8 +178,6 @@ from dataclasses import replace
 
 #     return residual_Linf_norm, num_overlapping_chans, num_chan_waveforms_nonan
 
-
-
 def compute_residual_norm(
     recording, 
     sorting, #Here doesn't have to be split
@@ -626,7 +624,7 @@ def full_reassignment_split(
     new_labels = new_labels.astype('int')
 
     if not return_triaged_labels:
-        return new_labels, templates_smoothed_split
+        return new_labels
 
     else:
         labels_hardassignments_only = new_labels.copy()
@@ -643,7 +641,7 @@ def full_reassignment_split(
                 array_weighted = residual_norm[idx_unit] / residual_norm[idx_unit].sum(1)[:, None]
                 idx_bad = array_weighted.max(1)<triage_spikes_3way
                 labels_hardassignments_only[idx_unit[idx_bad]]=-1
-        return new_labels, labels_hardassignments_only, templates_smoothed_split
+        return new_labels, labels_hardassignments_only
 
 def square_mean(x, axis=1):
     return np.nanmean(np.square(x), axis=axis)

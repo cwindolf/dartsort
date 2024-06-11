@@ -567,6 +567,8 @@ class TemplateData:
         device=None,
         trough_offset_samples=42,
         spike_length_samples=121,
+        denoising_tsvd=None,
+        return_denoising_tsvd=False,
         # return_realigned_sorting=False, # not implemented here
     ):
 
@@ -582,8 +584,10 @@ class TemplateData:
                     template_data_list.append(cls.from_npz(npz_path))
                 else:
                     precomputed=False
-            if precomputed:
+            if precomputed and not return_denoising_tsvd:
                 return template_data_list
+            if precomputed and return_denoising_tsvd:
+                return template_data_list, denoising_tsvd
                     
         motion_aware = (
             template_config.registered_templates or template_config.superres_templates
@@ -626,6 +630,7 @@ class TemplateData:
             geom,
             template_config,
             motion_est=motion_est,
+            denoising_tsvd=denoising_tsvd,
             **kwargs,
         )
 
@@ -673,6 +678,8 @@ class TemplateData:
         # if return_realigned_sorting:
         #     return template_data_list, sorting
 
+        if return_denoising_tsvd:
+            return template_data_list, results["denoising_tsvd"]
         return template_data_list
 
 

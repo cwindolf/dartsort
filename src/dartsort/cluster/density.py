@@ -352,8 +352,10 @@ def density_peaks_clustering(
     if triage_quantile_before_clustering and l2_norm is None:
         q = np.quantile(density, triage_quantile_before_clustering)
         idx_triaging = np.flatnonzero(
+            np.logical_and(
             X[inliers_first, 2]< scales[2]*np.log(log_c+amp_no_triaging_before_clustering),
             density < q
+            )
         )
         nhdn[idx_triaging]=n
         

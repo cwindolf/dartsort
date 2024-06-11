@@ -1,13 +1,107 @@
 from dataclasses import replace
 
 import numpy as np
-
+import h5py
 from .. import config
 from ..templates import TemplateData
 import os
 from tqdm.auto import tqdm
 from dartsort.util.data_util import keep_only_most_recent_spikes
 from pathlib import Path
+from dataclasses import replace
+from scipy.cluster.hierarchy import fcluster, linkage
+
+def get_med_locations_ptps(sorting, depth_reg, max_value, scales=(1, 1, 50), log_c=5):
+    units = np.unique(sorting.labels)
+    units = units[units>-1]
+    loc_ptps = np.zeros((units.max()+1, 3))
+    if max_value is not None:
+        loc_ptps = np.zeros((units.max()+1, 4))
+    else:
+        loc_ptps = np.zeros((units.max()+1, 3))
+    for u in units:
+        idx_unit = np.flatnonzero(sorting.labels == u)
+        loc_ptps[u, 0] = scales[0]*np.median(sorting.point_source_localizations[idx_unit, 0])
+        loc_ptps[u, 1] = scales[1]*np.median(depth_reg[idx_unit])
+        loc_ptps[u, 2] = scales[2]*np.log(log_c+np.median(sorting.denoised_ptp_amplitudes[idx_unit]))
+        if max_value is not None:
+            loc_ptps[u, 3] = np.median(max_value[idx_unit])
+    return loc_ptps
+
+def merge_units_close_in_space(sorting, motion_est = None, max_value = None, merge_threshold = 20, scales=(1, 1, 50), log_c=5, fill_value=10_000, link="complete"):
+
+    if motion_est is not None:
+        z_reg = motion_est.correct_s(sorting.times_seconds, sorting.point_source_localizations[:, 2])
+    else:
+        z_reg = sorting.point_source_localizations[:, 2]
+
+    med_loc_ptps = get_med_locations_ptps(sorting, z_reg, max_value, scales, log_c)
+
+    if max_value is not None:
+        is_positive = med_loc_ptps[:, 3] > 0
+        same_sign = (is_positive[:, None] & is_positive[None]) + (~is_positive[:, None] & ~is_positive[None])
+        med_loc_ptps = med_loc_ptps[:, :3]
+        dist_matrix = np.sqrt(((med_loc_ptps[:, None] - med_loc_ptps[None])**2).sum(2))
+        dist_matrix[~same_sign] = fill_value
+        
+    pdist = dist_matrix[np.triu_indices(dist_matrix.shape[0], k=1)]
+    finite = np.isfinite(pdist)
+    if not finite.any():
+        return sorting
+    pdist[~finite] = fill_value + pdist[finite].max()
+    Z = linkage(pdist, method=link)
+    new_labels = fcluster(Z, merge_threshold, criterion="distance")
+    
+    units = np.unique(sorting.labels)
+    units = units[units>-1]
+    labels_updated = np.full(sorting.labels.shape, -1)
+    kept = np.flatnonzero(np.isin(sorting.labels, np.unique(units)))
+    labels_updated[kept] = sorting.labels[kept].copy()
+    flat_labels = labels_updated[kept]
+    labels_updated[kept] = new_labels[flat_labels]
+    labels_updated[labels_updated>-1] -= labels_updated[labels_updated>-1].min()
+
+    sorting = replace(sorting, labels = labels_updated)
+    return sorting
+
+    
+def separate_positive_negative_wfs(
+    sorting,
+    peeling_hdf5_filename,
+    tpca=None,
+    wfs_name="collisioncleaned_tpca_features",
+    trough_offset=42,
+    return_max_value=False,
+):
+
+    units = np.unique(sorting.labels)
+    units = units[units>-1]
+    new_labels = sorting.labels.copy()
+    cmp = units.max()+1
+    max_value = np.zeros(sorting.labels.shape)
+    
+    with h5py.File(peeling_hdf5_filename, "r+") as h5: 
+        channels = h5["channels"][:]
+        channel_index = h5["channel_index"][:]
+        dataset = h5[wfs_name]
+        for sli, *_ in tqdm(dataset.iter_chunks()):
+            idx = np.where((channel_index[channels[sli]] == channels[sli][:, None]))
+            collisioncleaned_tpca_features = dataset[sli]
+            waveforms_maxchan = collisioncleaned_tpca_features[idx[0], :, idx[1]]
+            if tpca is not None:
+                waveforms_maxchan = tpca.inverse_transform(waveforms_maxchan)
+            max_value[sli] = waveforms_maxchan[:, trough_offset]
+
+    for unit in units:
+        idx_unit = np.flatnonzero(sorting.labels == unit)
+        idx_unit_positive = idx_unit[max_value[idx_unit]>=0]
+        new_labels[idx_unit_positive] = cmp
+        cmp+=1
+    sorting = replace(sorting, labels = new_labels)
+
+    if return_max_value:
+        return sorting, max_value
+    return sorting
 
 
 def chuck_noisy_template_units_with_time_tracking(
@@ -47,7 +141,8 @@ def chuck_noisy_template_units_with_time_tracking(
             n_jobs=n_jobs, 
             device=device,
             trough_offset_samples=trough_offset_samples,
-            spike_length_samples=spike_length_samples
+            spike_length_samples=spike_length_samples,
+            denoising_tsvd=tsvd,
         )
 
     units = np.unique(sorting.labels)

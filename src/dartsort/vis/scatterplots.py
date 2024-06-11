@@ -4,6 +4,23 @@ import numpy as np
 
 from .colors import glasbey1024, gray
 
+def get_ptp_order_and_alphas(
+    sorting
+):
+    units = np.unique(sorting.labels)
+    units = units[units>-1]
+    med_ptp = []
+    for u in units:
+        med_ptp.append(np.median(sorting.denoised_ptp_amplitudes[sorting.labels == u]))
+    med_ptp = np.array(med_ptp)
+
+    alphas = np.log(med_ptp)
+    alphas -= alphas.min()
+    alphas += 0.1
+    alphas /= alphas.max()*4
+
+    return units[med_ptp.argsort()], alphas
+        
 
 def scatter_spike_features(
     hdf5_filename=None,

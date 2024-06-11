@@ -34,6 +34,30 @@ default_pretrained_path = default_pretrained_path.joinpath("single_chan_denoiser
 
 
 @dataclass(frozen=True)
+class PreprocessingConfig:
+    """
+    Defaults divides every channel of an int16 dataset into a float32 dataset by the median std (same for all)
+    + applies low pass filter and median subtraction using CMR
+    """
+    dtype_raw: str = "int16"
+    output_data_type: str = "float32"
+    
+    low_frequency: float = 300
+    high_factor: float = 0.1
+    order: float = 3
+
+    delete_original_data: bool = False
+    
+    apply_filter: bool = True
+    median_subtraction: bool = True
+    adcshift_correction: bool = True # CATGT OR RESAMPLED --> False
+    n_channels_before_preprocessing: int = 385
+    channels_to_remove: Tuple[int] = (384,)
+
+    n_jobs_preprocessing: int = -1
+
+
+@dataclass(frozen=True)
 class WaveformConfig:
     """Defaults yield 42 sample trough offset and 121 total at 30kHz."""
 
@@ -216,13 +240,13 @@ class MatchingConfig:
 @dataclass(frozen=True)
 class SplitMergeConfig:
     # -- split
-    split_strategy: str = "FeatureSplit" 
-    recursive_split: bool = True #Set to False if using the iterative split merge
+    split_strategy: str = "MaxChanPCSplit" 
+    recursive_split: bool = False #Set to False if using the iterative split merge
     split_strategy_kwargs: Optional[dict] = field(
         default_factory=lambda: dict(max_spikes=20_000)
     )
 
-    # Parma for the merge_iterative_templates_with_multiple_chunks
+    # Param for the merge_iterative_templates_with_multiple_chunks
     num_merge_iteration: float = 3
     # Params for split_strategy="MaxChanPCSplit"
     channel_selection_radius: float = 1 # ensure it is a max chan here 
@@ -232,7 +256,7 @@ class SplitMergeConfig:
     radius_search: float = 5
     sigma_local: float = 1
     noise_density: float = 0.25
-    remove_clusters_smaller_than: float = 25
+    remove_clusters_smaller_than: float = 10
     relocated: bool = False
     whitened: bool = False
     cluster_alg: str = "dpc"
@@ -271,6 +295,8 @@ class SplitMergeConfig:
     svd_compression_rank: int = 20
     conv_batch_size: int = 128
     units_batch_size: int = 8 
+
+    # Add Zipper Split params here
     
 
 
@@ -323,6 +349,12 @@ class ClusteringConfig:
     chunk_size_s: float = 300.0
     split_merge_ensemble_config: SplitMergeConfig = SplitMergeConfig()
 
+    # -- separate positive / negative spikes
+    separate_pos_neg: bool = True
+    merge_clusters_close_in_space: bool = True
+    spatial_distance_threshold: float = 20
+    space_merge_link: str = "complete"
+
 
 @dataclass(frozen=True)
 class ComputationConfig:
@@ -355,6 +387,7 @@ class DARTsortConfig:
     matching_config: MatchingConfig = MatchingConfig()
     motion_estimation_config: MotionEstimationConfig = MotionEstimationConfig()
     computation_config: ComputationConfig = ComputationConfig()
+    preprocessing_config = PreprocessingConfig()
 
     # high level behavior
     subtract_only: bool = False
@@ -363,7 +396,7 @@ class DARTsortConfig:
     matching_iterations: int = 1
     intermediate_matching_subsampling: float = 1.0
 
-
+default_preprocessing_config = PreprocessingConfig()
 default_waveform_config = WaveformConfig()
 default_featurization_config = FeaturizationConfig()
 default_subtraction_config = SubtractionConfig()
