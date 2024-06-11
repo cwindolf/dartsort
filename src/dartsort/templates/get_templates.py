@@ -472,8 +472,6 @@ def get_templates_multiple_chunks_linear(
             spike_length_samples=spike_length_samples,
             random_seed=random_seed,
         )
-        
-    if denoising_tsvd is not None:
         denoising_tsvd = TorchSVDProjector(
             torch.from_numpy(
                 denoising_tsvd.components_.astype(recording.dtype)
@@ -529,6 +527,7 @@ def get_templates_multiple_chunks_linear(
             raw_templates=raw_templates,
             snrs_by_channel=snrs_by_channel,
             spike_counts=spike_counts,
+            denoising_tsvd=denoising_tsvd,
         )
 
     templates = raw_templates.copy()
@@ -558,6 +557,7 @@ def get_templates_multiple_chunks_linear(
         snrs_by_channel=snrs_by_channel,
         weights=weights,
         spike_counts=spike_counts,
+        denoising_tsvd=denoising_tsvd,
     )
 
 
@@ -725,6 +725,7 @@ def get_templates(
             templates=raw_templates,
             raw_templates=raw_templates,
             snrs_by_channel=snrs_by_channel,
+            denoising_tsvd=denoising_tsvd,
         )
 
     weights = denoising_weights(
@@ -750,6 +751,7 @@ def get_templates(
         low_rank_templates=low_rank_templates,
         snrs_by_channel=snrs_by_channel,
         weights=weights,
+        denoising_tsvd=denoising_tsvd,
     )
 
 
@@ -791,51 +793,51 @@ def get_raw_templates(
         device=device,
     )
 
-def get_raw_templates_with_spikes_loaded(
-    recording,
-    wfs_all_loaded,
-    indices_unique_inverse,
-    indices_unique_index,
-    labels_all, #wfs_all_loaded[indices_unique_inverse[labels_all == k]] gives all wfs for unit k 
-    channels_all, 
-    trough_offset_samples=42,
-    spike_length_samples=121,
-    spikes_per_unit=500,
-    pitch_shifts=None,
-    registered_geom=None,
-    realign_peaks=False,
-    realign_max_sample_shift=20,
-    min_fraction_at_shift=0.25,
-    min_count_at_shift=25,
-    reducer=fast_nanmedian,
-    random_seed=0,
-    n_jobs=0,
-    show_progress=True,
-    device=None,
-):
-    return get_templates_with_spikes_loaded(
-        recording,
-        wfs_all_loaded,
-        indices_unique_inverse,
-        indices_unique_index,
-        labels_all, #wfs_all_loaded[indices_unique_inverse[labels_all == k]] gives all wfs for unit k 
-        channels_all, 
-        trough_offset_samples=trough_offset_samples,
-        spike_length_samples=spike_length_samples,
-        spikes_per_unit=spikes_per_unit,
-        pitch_shifts=pitch_shifts,
-        registered_geom=registered_geom,
-        realign_peaks=realign_peaks,
-        realign_max_sample_shift=realign_max_sample_shift,
-        min_fraction_at_shift=min_fraction_at_shift,
-        min_count_at_shift=min_count_at_shift,
-        low_rank_denoising=False,
-        reducer=reducer,
-        random_seed=random_seed,
-        n_jobs=n_jobs,
-        show_progress=show_progress,
-        device=device,
-    )
+# def get_raw_templates_with_spikes_loaded(
+#     recording,
+#     wfs_all_loaded,
+#     indices_unique_inverse,
+#     indices_unique_index,
+#     labels_all, #wfs_all_loaded[indices_unique_inverse[labels_all == k]] gives all wfs for unit k 
+#     channels_all, 
+#     trough_offset_samples=42,
+#     spike_length_samples=121,
+#     spikes_per_unit=500,
+#     pitch_shifts=None,
+#     registered_geom=None,
+#     realign_peaks=False,
+#     realign_max_sample_shift=20,
+#     min_fraction_at_shift=0.25,
+#     min_count_at_shift=25,
+#     reducer=fast_nanmedian,
+#     random_seed=0,
+#     n_jobs=0,
+#     show_progress=True,
+#     device=None,
+# ):
+#     return get_templates_with_spikes_loaded(
+#         recording,
+#         wfs_all_loaded,
+#         indices_unique_inverse,
+#         indices_unique_index,
+#         labels_all, #wfs_all_loaded[indices_unique_inverse[labels_all == k]] gives all wfs for unit k 
+#         channels_all, 
+#         trough_offset_samples=trough_offset_samples,
+#         spike_length_samples=spike_length_samples,
+#         spikes_per_unit=spikes_per_unit,
+#         pitch_shifts=pitch_shifts,
+#         registered_geom=registered_geom,
+#         realign_peaks=realign_peaks,
+#         realign_max_sample_shift=realign_max_sample_shift,
+#         min_fraction_at_shift=min_fraction_at_shift,
+#         min_count_at_shift=min_count_at_shift,
+#         low_rank_denoising=False,
+#         reducer=reducer,
+#         random_seed=random_seed,
+#         n_jobs=n_jobs,
+#         show_progress=show_progress,
+#         device=device,
+#     )
 
 
 # -- helpers
@@ -1121,12 +1123,14 @@ def get_all_shifted_raw_and_low_rank_templates_linear(
 
     
     raw_templates /= spike_counts[:, :, None]
-    low_rank_templates = low_rank_templates/spike_counts[:, :, None]
+    if not raw:
+        low_rank_templates = low_rank_templates/spike_counts[:, :, None]
     snrs_by_chan = ptp(raw_templates, 2) * spike_counts
     
     if not np.isnan(pad_value):
         raw_templates = np.nan_to_num(raw_templates, copy=False, nan=pad_value)
-        low_rank_templates = np.nan_to_num(low_rank_templates, copy=False, nan=pad_value)
+        if not raw:
+            low_rank_templates = np.nan_to_num(low_rank_templates, copy=False, nan=pad_value)
 
     if raw:
         return raw_templates, raw_templates, snrs_by_channel, spike_counts

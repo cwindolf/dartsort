@@ -187,6 +187,9 @@ def cluster(
     clustering_config=default_clustering_config,
     output_npz="initial_clustering.npz",
     slice_s=None,
+    tpca=None,
+    wfs_name="collisioncleaned_tpca_features",
+    trough_offset=42,
 ):
     if output_directory is not None:
         output_npz = Path(output_directory) / output_npz
@@ -200,6 +203,9 @@ def cluster(
         clustering_config=clustering_config,
         motion_est=motion_est,
         slice_s=slice_s,
+        tpca=tpca,
+        wfs_name="collisioncleaned_tpca_features",
+        trough_offset=trough_offset,
     )
 
     if output_directory is not None:
@@ -548,4 +554,6 @@ def match(
                 remove_previous=remove_previous,
                 overwrite=overwrite,
             )
-        return sorting_chunk, output_hdf5_filename
+
+            sorting = DARTsortSorting().from_peeling_hdf5(Path(output_directory) / hdf5_filename)
+        return sorting, Path(output_directory) / hdf5_filename

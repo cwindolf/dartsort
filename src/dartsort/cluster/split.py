@@ -985,7 +985,7 @@ class ZipperSplit(SplitStrategy):
         remove_clusters_smaller_than=25,
         rescale_time_merging=10,
         amplitude_diff_nomerge=3,
-        max_neigh_connected_merging=2,
+        max_neigh_connected_merging=1,
         max_dist_nomerge=1000,
         gaussian_filter_time_amp_std=[2, 0.1]
         ):
@@ -1026,10 +1026,12 @@ class ZipperSplit(SplitStrategy):
 
         raw_histogram, bin_edges = np.histogramdd(features, bins=bin_edges)
         bin_sizes = np.array([(be[1] - be[0]) for be in bin_edges])
-        bin_centers = [0.5 * (be[1:] + be[:-1]) for be in bin_edges]
         # normalize histogram to samples / volume
         raw_histogram = raw_histogram / bin_sizes.prod()
-        hist = gaussian_filter(raw_histogram, self.gaussian_filter_time_amp_std)
+
+        # here extend by one to not throw away far away time bins
+        bin_centers = [0.5 * (np.pad(be, 1, 'edge')[1:] + np.pad(be, 1, 'edge')[:-1]) for be in bin_edges]
+        hist = gaussian_filter(np.pad(raw_histogram, 1, 'edge'), self.gaussian_filter_time_amp_std)
 
         lerp = RegularGridInterpolator(bin_centers, hist, bounds_error=False)
         kde = lerp(features)
@@ -1108,7 +1110,7 @@ class ZipperSplit(SplitStrategy):
                             mat_dist[k, j] = np.abs(np.median(X[labels == j][idx_spikes_j, 1]) - np.median(X[labels == k][idx_spikes_k, 1]))
 
             mat_dist[np.arange(mat_dist.shape[0]), np.arange(mat_dist.shape[0])]=0
-            indices = mat_dist.argsort(1)[:, :self.max_neigh_connected_merging]     
+            indices = mat_dist.argsort(1)[:, :self.max_neigh_connected_merging+1]     
             indices[mat_dist[indices[:, 0], indices[:, 1]]>self.max_dist_nomerge] = 0
             graph = coo_array(
                 (np.ones(ncc), (indices[:, 1], indices[:, 0])), shape=(ncc, ncc)
@@ -1213,7 +1215,7 @@ class MaxChanPCSplit(SplitStrategy):
         self.reassign_outliers = reassign_outliers
         self.max_spikes = max_spikes
         self.amplitude_normalized = amplitude_normalized
-        print("max channel PC Split")
+        # print("max channel PC Split")
 
         # hdbscan parameters
         self.min_cluster_size = min_cluster_size
@@ -1417,6 +1419,7 @@ class MaxChanPCSplit(SplitStrategy):
         self.match_distance = pdist(self.geom).min() / 2
 
         # self.tpca_features = h5[tpca_features_dataset_name]
+        # HERE read using iter_chunks
         idx = np.where((self.channel_index[self.channels] == self.channels[:, None]))
         self.collisioncleaned_tpca_features = h5[tpca_features_dataset_name][:][idx[0], :, idx[1]]            
 
