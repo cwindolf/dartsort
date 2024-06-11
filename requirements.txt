@@ -10,3 +10,4 @@ scipy
 scikit-learn
 spikeinterface
 tqdm
+astropy
