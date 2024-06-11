@@ -12,4 +12,3 @@ dependencies:
   - scipy
   - scikit-learn
   - tqdm
-  - astropy
