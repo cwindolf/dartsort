@@ -233,7 +233,7 @@ class MatchingConfig:
     amplitude_scaling_variance: float = 0.0
     amplitude_scaling_boundary: float = 0.5
     max_iter: int = 1000
-    conv_ignore_threshold: float = 0.0 # CHnage this to 5 once bug is fixed :) 
+    conv_ignore_threshold: float = 0.0 # Change this to 5 once bug is fixed :) 
     coarse_approx_error_threshold: float = 0.0
 
 

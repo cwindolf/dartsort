@@ -358,7 +358,7 @@ def match(
         n_chunks = len(chunk_time_ranges_s)
         len_chunks_s = chunk_time_ranges_s[0][1] - chunk_time_ranges_s[0][0]
 
-        sorting_list, output_hdf5_filename_list = [], []
+        # sorting_list, output_hdf5_filename_list = [], []
 
         if not templates_precomputed:
             # compute templates

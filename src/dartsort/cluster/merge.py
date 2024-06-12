@@ -263,7 +263,7 @@ def merge_iterative_templates_with_multiple_chunks(
         # Need to recompute templates here for the next step
             sorting, template_data_list = chuck_noisy_template_units_with_time_tracking(
                 recording,
-                sorting,
+                sorting_merge,
                 chunk_time_ranges_s,
                 template_config,
                 template_data_list=None,
