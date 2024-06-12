@@ -146,6 +146,7 @@ def make_all_over_time_summaries(
     show_progress=True,
     overwrite=False,
     unit_ids=None,
+    analysis_kw=None,
 ):
     # get unit ids
     if unit_ids is None:
@@ -171,6 +172,8 @@ def make_all_over_time_summaries(
         denoising_fit_radius=pca_radius_um,
     )
     # chunk sorting analyses
+    if analysis_kw is None:
+        analysis_kw = {}
     chunk_sorting_analyses = [
         analysis.DARTsortAnalysis.from_sorting(
             sorting_analysis.recording,
@@ -180,6 +183,7 @@ def make_all_over_time_summaries(
             allow_template_reload=False,
             n_jobs_templates=n_jobs_templates,
             denoising_tsvd=tsvd,
+            **analysis_kw,
         )
         for chunk_sorting in chunk_sortings
     ]
@@ -221,6 +225,7 @@ def sorting_scatter_animation(
     depth_feature="z",
     features=("x", "amplitude", "log_peak_to_trough"),
     template_config=basic_template_config,
+    templates_tsvd=None,
     trough_offset_samples=42,
     spike_length_samples=121,
     n_jobs_templates=0,
@@ -260,6 +265,7 @@ def sorting_scatter_animation(
             device=device,
             trough_offset_samples=trough_offset_samples,
             spike_length_samples=spike_length_samples,
+            tsvd=templates_tsvd,
         )
 
     # make the animation
@@ -378,6 +384,7 @@ def update_frame(
             show_ellipses=True,
             max_n_labels=max_n_templates,
             ellip=feature_ellips.get(k, None),
+            show_triaged=False,
         )
 
         if k != "x":
@@ -417,6 +424,7 @@ def update_frame(
                 marker="s",
                 geom=chunk_template_data.registered_geom,
                 rasterized=False,
+                show_triaged=False,
             )
 
         if k == "amplitude" and semilog_amplitude:

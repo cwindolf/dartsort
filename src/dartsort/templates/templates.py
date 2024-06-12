@@ -269,6 +269,7 @@ def get_chunked_templates(
     device=None,
     trough_offset_samples=42,
     spike_length_samples=121,
+    tsvd=None,
     random_seed=0,
 ):
     """Save the effort of recomputing several TPCAs"""
@@ -326,6 +327,7 @@ def get_chunked_templates(
         device=device,
         trough_offset_samples=trough_offset_samples,
         spike_length_samples=spike_length_samples,
+        tsvd=tsvd,
     )
     print(f"{full_template_data.unit_ids.shape=}")
     print(f"{full_template_data.templates.shape=}")

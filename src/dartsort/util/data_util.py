@@ -343,8 +343,10 @@ def combine_sortings(sortings, dodge=False):
         assert np.all(labels[kept] < 0)
         labels[kept] = sorting.labels[kept] + next_label
         if dodge:
-            n_new_labels = 1 + sorting.labels[kept].max()
-            next_label += n_new_labels
+            n_new_labels = 0
+            if kept.size:
+                n_new_labels = 1 + sorting.labels[kept].max()
+                next_label += n_new_labels
             label_to_sorting_index.append(np.full(n_new_labels, j))
             label_to_original_label.append(np.arange(n_new_labels))
         times_samples[kept] = sorting.times_samples[kept]

@@ -19,6 +19,7 @@ from dataclasses import dataclass, field
 from typing import List, Optional, Tuple
 
 import torch
+import numpy as np
 
 try:
     from importlib.resources import files
@@ -40,10 +41,12 @@ class WaveformConfig:
     ms_after: float = 2.6
 
     def trough_offset_samples(self, sampling_frequency=30_000):
+        sampling_frequency = np.round(sampling_frequency)
         return int(self.ms_before * (sampling_frequency / 1000))
 
     def spike_length_samples(self, sampling_frequency=30_000):
         spike_len_ms = self.ms_before + self.ms_after
+        sampling_frequency = np.round(sampling_frequency)
         length = int(spike_len_ms * (sampling_frequency / 1000))
         # odd is better for convolution arithmetic elsewhere
         length = 2 * (length // 2) + 1
@@ -203,6 +206,7 @@ class MatchingConfig:
     max_iter: int = 1000
     conv_ignore_threshold: float = 5.0
     coarse_approx_error_threshold: float = 0.0
+    coarse_objective: bool = True
 
 
 @dataclass(frozen=True)
@@ -250,6 +254,7 @@ class ClusteringConfig:
     sigma_local_low: Optional[float] = None
     sigma_regional: Optional[float] = 25.0
     sigma_regional_low: Optional[float] = None
+    workers: Optional[int] = -1
     n_neighbors_search: int = 20
     radius_search: float = 5.0
     remove_clusters_smaller_than: int = 10
@@ -262,6 +267,8 @@ class ClusteringConfig:
     triage_quantile_before_clustering: float = 0.0
     amp_no_triaging_before_clustering: float = 6.0
     amp_no_triaging_after_clustering: float = 8.0
+    outlier_radius: float = 5.0
+    outlier_neighbor_count: int = 5
     use_y_triaging: bool = False
     remove_small_far_clusters: bool = False
 
