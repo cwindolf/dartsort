@@ -11,10 +11,11 @@ the data work so that this file can focus on plotting (sort of MVC).
 from dataclasses import replace
 from pathlib import Path
 
+from tqdm.auto import tqdm
+
 import matplotlib.pyplot as plt
 import numpy as np
 from matplotlib.legend_handler import HandlerTuple
-from tqdm.auto import tqdm
 
 from ..cluster import split
 from ..config import raw_template_config
@@ -1013,6 +1014,7 @@ def make_all_summaries(
     **other_global_params,
 ):
     save_folder = Path(save_folder)
+
     save_folder.mkdir(exist_ok=True)
 
     global_params = dict(
