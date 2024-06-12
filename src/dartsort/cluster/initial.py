@@ -134,12 +134,14 @@ def cluster_chunk(
             amp_no_triaging_before_clustering=clustering_config.amp_no_triaging_before_clustering,
             amp_no_triaging_after_clustering=clustering_config.amp_no_triaging_after_clustering,
             distance_dependent_noise_density=clustering_config.distance_dependent_noise_density,
+            outlier_radius=clustering_config.outlier_radius,
+            outlier_neighbor_count=clustering_config.outlier_neighbor_count,
             scales=scales,
             log_c=clustering_config.log_c,
-            workers=4,
+            workers=clustering_config.workers,
             return_extra=clustering_config.attach_density_feature,
         )
-        
+
         if clustering_config.remove_small_far_clusters:
             if clustering_config.attach_density_feature:
                 labels_sort = res["labels"]

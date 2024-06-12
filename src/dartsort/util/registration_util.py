@@ -29,10 +29,10 @@ def estimate_motion(
     correlation_threshold: float = 0.1,
     min_amplitude: Optional[float] = None,
     masked_correlation: bool = False,
-    rigid=False,
+    rigid: bool=False,
     localizations_dataset_name="point_source_localizations",
     amplitudes_dataset_name="denoised_ptp_amplitudes",
-    device=None,
+    device: Optional["torch.device"]=None,
 ):
     if not do_motion_estimation:
         return None

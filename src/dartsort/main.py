@@ -278,6 +278,7 @@ def match(
     device=None,
     hdf5_filename="matching0.h5",
     model_subdir="matching0_models",
+    template_data=None,
     template_npz_filename="template_data.npz",
 ):
     assert output_directory is not None
@@ -291,19 +292,20 @@ def match(
         spike_length_samples = waveform_config.spike_length_samples(
             recording.sampling_frequency
         )
-        template_data = TemplateData.from_config(
-            recording,
-            sorting,
-            template_config=template_config,
-            motion_est=motion_est,
-            n_jobs=n_jobs_templates,
-            save_folder=model_dir,
-            overwrite=overwrite,
-            device=device,
-            save_npz_name=template_npz_filename,
-            trough_offset_samples=trough_offset_samples,
-            spike_length_samples=spike_length_samples,
-        )
+        if template_data is None:
+            template_data = TemplateData.from_config(
+                recording,
+                sorting,
+                template_config=template_config,
+                motion_est=motion_est,
+                n_jobs=n_jobs_templates,
+                save_folder=model_dir,
+                overwrite=overwrite,
+                device=device,
+                save_npz_name=template_npz_filename,
+                trough_offset_samples=trough_offset_samples,
+                spike_length_samples=spike_length_samples,
+            )
 
         # instantiate peeler
         matching_peeler = ObjectiveUpdateTemplateMatchingPeeler.from_config(

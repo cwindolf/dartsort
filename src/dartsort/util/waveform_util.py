@@ -294,6 +294,8 @@ def channel_subset_by_index(
     # figure out which channels in channel_index_full are still
     # present in the form of a boolean mask
     channel_index_mask = channel_subset_mask(channel_index_full, channel_index_new)
+    if torch.is_tensor(channel_index_full):
+        channel_index_mask = torch.from_numpy(channel_index_mask)
     return get_channel_subset(waveforms, max_channels, channel_index_mask)
 
 
