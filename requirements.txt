@@ -6,7 +6,7 @@ hdbscan
 matplotlib
 numpy
 pytest
-pytorch >= 2.0
+torch >= 2.0
 scipy
 scikit-learn
 spikeinterface
