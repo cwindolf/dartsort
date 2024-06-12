@@ -132,7 +132,7 @@ def density_peaks_study(X, density_result, dims=[0, 1], **scatter_kw):
     scatter_kw = dict(lw=0, s=5) | scatter_kw
 
     axes[0].scatter(*X[:, dims].T, c=density_result["density"], **scatter_kw)
-    missed = density_result["nhdn"] == len(X)
+    missed = density_result["labels"] < 0
     if missed.any():
         axes[1].scatter(*X[missed][:, dims].T, c="gray", **scatter_kw)
     if ~missed.any():
@@ -146,8 +146,11 @@ def density_peaks_study(X, density_result, dims=[0, 1], **scatter_kw):
         x = X[i, dims]
         dx = X[nhdn, dims] - x
         axes[1].arrow(
-            *x, *dx, length_includes_head=True, width=0, head_width=1, color="k"
+            *x, *dx, length_includes_head=True, width=0, color="k"
         )
     colors = np.concatenate([[[0.5, 0.5, 0.5]], glasbey1024])
     axes[2].scatter(*X[:, dims].T, c=colors[density_result["labels"] + 1], **scatter_kw)
+    axes[2].scatter(
+        *X[missed][:, dims].T, c="gray", **scatter_kw
+    )
     return fig, axes
