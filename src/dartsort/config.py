@@ -110,7 +110,8 @@ class SubtractionConfig:
     chunk_length_samples: int = 30_000
     peak_sign: str = "both"
     spatial_dedup_radius: float = 150.0
-    extract_radius: float = 200.0
+    subtract_radius: float = 200.0
+    extract_radius: float = 100.0
     n_chunks_fit: int = 100
     max_waveforms_fit: int = 50_000
     fit_subsampling_random_state: int = 0
@@ -186,7 +187,7 @@ class TemplateConfig:
 @dataclass(frozen=True)
 class MatchingConfig:
     chunk_length_samples: int = 30_000
-    extract_radius: float = 200.0
+    extract_radius: float = 100.0
     n_chunks_fit: int = 100
     max_waveforms_fit: int = 50_000
     fit_subsampling_random_state: int = 0
