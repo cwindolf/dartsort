@@ -1,9 +1,9 @@
 import h5py
 import matplotlib.pyplot as plt
-from matplotlib.patches import Ellipse
-from matplotlib import transforms
-from scipy.spatial import KDTree
 import numpy as np
+from matplotlib import transforms
+from matplotlib.patches import Ellipse
+from scipy.spatial import KDTree
 
 from .colors import glasbey1024, gray
 from dartsort.cluster.density import kdtree_inliers
