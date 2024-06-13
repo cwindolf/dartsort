@@ -112,6 +112,7 @@ def featurization_config_to_class_names_and_kwargs(fconf):
                 {
                     "rank": fconf.tpca_rank,
                     "name_prefix": fconf.input_waveforms_name,
+                    "centered": fconf.tpca_centered,
                 },
             )
         )
@@ -129,6 +130,7 @@ def featurization_config_to_class_names_and_kwargs(fconf):
                 {
                     "rank": fconf.tpca_rank,
                     "fit_radius": fconf.tpca_fit_radius,
+                    "centered": fconf.tpca_centered,
                 },
             )
         )
@@ -148,6 +150,7 @@ def featurization_config_to_class_names_and_kwargs(fconf):
                 {
                     "rank": fconf.tpca_rank,
                     "name_prefix": fconf.output_waveforms_name,
+                    "centered": fconf.tpca_centered,
                 },
             )
         )
