@@ -143,6 +143,8 @@ def test_tiny(tmp_path):
                 0.0,
                 atol=1e-4,
             )
+            print(f"{res['scores']=}")
+            assert torch.all(res["scores"] > 0)
 
 
 def test_tiny_up(tmp_path, up_factor=8):
@@ -306,6 +308,7 @@ def test_tiny_up(tmp_path, up_factor=8):
                 0.0,
                 atol=1e-4,
             )
+            assert torch.all(res["scores"] > 0)
 
 
 def static_tester(tmp_path, up_factor=1):
@@ -460,6 +463,7 @@ def static_tester(tmp_path, up_factor=1):
                 0.0,
                 atol=1e-3,
             )
+            assert torch.all(res["scores"] > 0)
 
 
 def test_static_noup(tmp_path):
@@ -561,7 +565,7 @@ def test_fakedata_nonn():
         rec1 = rec0.save_to_folder(Path(tdir) / "rec")
         for rec in [rec1, rec0]:
             (Path(tdir) / "match").mkdir()
-            main.match(
+            st, h5 = main.match(
                 rec,
                 sorting=gts,
                 output_directory=Path(tdir) / "match",
@@ -569,6 +573,7 @@ def test_fakedata_nonn():
                 template_config=tempconf,
                 featurization_config=featconf,
             )
+            assert np.all(st.scores > 0)
             shutil.rmtree(Path(tdir) / "match")
 
 

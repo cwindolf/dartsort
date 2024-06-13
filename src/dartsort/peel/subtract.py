@@ -9,7 +9,9 @@ from dartsort.detect import detect_and_deduplicate
 from dartsort.transform import Waveform, WaveformPipeline
 from dartsort.util import spiketorch
 from dartsort.util.data_util import batched_h5_read
-from dartsort.util.waveform_util import make_channel_index
+from dartsort.util.waveform_util import (get_relative_subset,
+                                         make_channel_index,
+                                         relative_channel_subset_index)
 
 from .peel_base import BasePeeler
 
@@ -23,6 +25,7 @@ class SubtractionPeeler(BasePeeler):
         channel_index,
         subtraction_denoising_pipeline,
         featurization_pipeline,
+        subtract_channel_index=None,
         trough_offset_samples=42,
         spike_length_samples=121,
         detection_thresholds=[12, 10, 8, 6, 5, 4],
@@ -50,6 +53,25 @@ class SubtractionPeeler(BasePeeler):
         self.trough_offset_samples = trough_offset_samples
         self.spike_length_samples = spike_length_samples
         self.peak_sign = peak_sign
+        if subtract_channel_index is None:
+            subtract_channel_index = channel_index.clone().detach()
+        self.register_buffer("subtract_channel_index", subtract_channel_index)
+        self.fixed_output_data.append(
+            (
+                "subtract_channel_index",
+                self.subtract_channel_index.numpy(force=True).copy(),
+            ),
+        )
+        self.extract_subtract_same = torch.equal(
+            self.subtract_channel_index, self.channel_index
+        )
+        if not self.extract_subtract_same:
+            self.register_buffer(
+                "extract_subtract_mask",
+                relative_channel_subset_index(self.subtract_channel_index, self.channel_index),
+            )
+        else:
+            self.extract_subtract_mask = None
         if spatial_dedup_channel_index is not None:
             self.register_buffer(
                 "spatial_dedup_channel_index",
@@ -59,7 +81,6 @@ class SubtractionPeeler(BasePeeler):
             self.spatial_dedup_channel_index = None
         self.detection_thresholds = detection_thresholds
         self.residnorm_decrease_threshold = residnorm_decrease_threshold
-
         self.add_module(
             "subtraction_denoising_pipeline", subtraction_denoising_pipeline
         )
@@ -103,6 +124,9 @@ class SubtractionPeeler(BasePeeler):
         channel_index = make_channel_index(
             geom, subtraction_config.extract_radius, to_torch=True
         )
+        subtract_channel_index = make_channel_index(
+            geom, subtraction_config.subtract_radius, to_torch=True
+        )
         # per-threshold spike event deduplication channel neighborhoods
         spatial_dedup_channel_index = make_channel_index(
             geom, subtraction_config.spatial_dedup_radius, to_torch=True
@@ -111,7 +135,7 @@ class SubtractionPeeler(BasePeeler):
         # construct denoising and featurization pipelines
         subtraction_denoising_pipeline = WaveformPipeline.from_config(
             geom,
-            channel_index,
+            subtract_channel_index,
             subtraction_config.subtraction_denoising_config,
         )
         featurization_pipeline = WaveformPipeline.from_config(
@@ -138,6 +162,7 @@ class SubtractionPeeler(BasePeeler):
             channel_index,
             subtraction_denoising_pipeline,
             featurization_pipeline,
+            subtract_channel_index=subtract_channel_index,
             trough_offset_samples=trough_offset_samples,
             spike_length_samples=spike_length_samples,
             detection_thresholds=subtraction_config.detection_thresholds,
@@ -158,10 +183,13 @@ class SubtractionPeeler(BasePeeler):
         right_margin=0,
         return_residual=False,
     ):
+        extract_index = None if self.extract_subtract_same else self.channel_index
         subtraction_result = subtract_chunk(
             traces,
-            self.channel_index,
+            self.subtract_channel_index,
             self.subtraction_denoising_pipeline,
+            extract_index=extract_index,
+            extract_mask=self.extract_subtract_mask,
             trough_offset_samples=self.trough_offset_samples,
             spike_length_samples=self.spike_length_samples,
             left_margin=left_margin,
@@ -221,22 +249,17 @@ class SubtractionPeeler(BasePeeler):
 
         orig_denoise = self.subtraction_denoising_pipeline
         init_waveform_feature = Waveform(
-            channel_index=self.channel_index,
+            channel_index=self.subtract_channel_index,
             name="subtract_fit_waveforms",
         )
         if which == "denoisers":
             self.subtraction_denoising_pipeline = WaveformPipeline(
                 [init_waveform_feature]
-                + [
-                    t
-                    for t in orig_denoise
-                    if (t.is_denoiser and not t.needs_fit())
-                ]
+                + [t for t in orig_denoise if (t.is_denoiser and not t.needs_fit())]
             )
         else:
             self.subtraction_denoising_pipeline = WaveformPipeline(
-                [init_waveform_feature]
-                + [t for t in orig_denoise if t.is_denoiser]
+                [init_waveform_feature] + [t for t in orig_denoise if t.is_denoiser]
             )
 
         # and we don't need any features for this
@@ -265,9 +288,7 @@ class SubtractionPeeler(BasePeeler):
                     )
                     choices.sort()
                     channels = channels[choices]
-                    waveforms = batched_h5_read(
-                        h5["subtract_fit_waveforms"], choices
-                    )
+                    waveforms = batched_h5_read(h5["subtract_fit_waveforms"], choices)
                 else:
                     waveforms = h5["subtract_fit_waveforms"][:]
 
@@ -299,6 +320,8 @@ def subtract_chunk(
     traces,
     channel_index,
     denoising_pipeline,
+    extract_index=None,
+    extract_mask=None,
     trough_offset_samples=42,
     spike_length_samples=121,
     left_margin=0,
@@ -310,6 +333,11 @@ def subtract_chunk(
 ):
     """Core peeling routine for subtraction"""
     # validate arguments to avoid confusing error messages later
+    re_extract = extract_index is not None
+    if extract_index is None:
+        extract_index = channel_index
+    else:
+        assert extract_mask is not None
     assert 0 <= left_margin < traces.shape[0]
     assert 0 <= right_margin < traces.shape[0]
     assert traces.shape[1] == channel_index.shape[0]
@@ -431,8 +459,7 @@ def subtract_chunk(
 
     # discard spikes in the margins and sort times_samples for caller
     keep = torch.nonzero(
-        (spike_times >= left_margin)
-        & (spike_times < traces.shape[0] - right_margin)
+        (spike_times >= left_margin) & (spike_times < traces.shape[0] - right_margin)
     )[:, 0]
     if not keep.any():
         return empty_chunk_subtraction_result(
@@ -447,12 +474,18 @@ def subtract_chunk(
     for k in spike_features:
         spike_features[k] = spike_features[k][keep]
 
+    # if extract_index != subtract_index, re-do the channels for the subtracted wfs
+    if re_extract:
+        subtracted_waveforms = get_relative_subset(
+            subtracted_waveforms, spike_channels, extract_mask
+        )
+
     # construct collision-cleaned waveforms
     collisioncleaned_waveforms = spiketorch.grab_spikes(
         residual,
         spike_times,
         spike_channels,
-        channel_index,
+        extract_index,
         trough_offset=trough_offset_samples,
         spike_length_samples=spike_length_samples,
         buffer=0,
@@ -476,9 +509,7 @@ def subtract_chunk(
     )
 
 
-def empty_chunk_subtraction_result(
-    spike_length_samples, channel_index, residual
-):
+def empty_chunk_subtraction_result(spike_length_samples, channel_index, residual):
     empty_waveforms = torch.empty(
         (0, spike_length_samples, channel_index.shape[1]),
         dtype=residual.dtype,
