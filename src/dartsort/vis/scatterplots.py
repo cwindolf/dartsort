@@ -6,6 +6,7 @@ from scipy.spatial import KDTree
 import numpy as np
 
 from .colors import glasbey1024, gray
+from dartsort.cluster.density import kdtree_inliers
 
 
 def scatter_spike_features(
@@ -39,6 +40,7 @@ def scatter_spike_features(
     amplitudes_dataset_name="denoised_ptp_amplitudes",
     extra_features=None,
     show_triaged=True,
+    remove_outliers=True,
     **scatter_kw,
 ):
     """3-axis scatter plot of spike depths vs. horizontal pos, amplitude, and time
@@ -103,6 +105,10 @@ def scatter_spike_features(
             & (x[to_show] > geom[:, 0].min() - probe_margin_um)
             & (x[to_show] < geom[:, 0].max() + probe_margin_um)
         ]
+    if remove_outliers:
+        a = 50 * np.log(amplitudes + 5)
+        inliers, kdtree = kdtree_inliers(np.c_[depths_um, x, a][to_show])
+        to_show = to_show[inliers]
 
     _, s_x = scatter_x_vs_depth(
         x=x,
