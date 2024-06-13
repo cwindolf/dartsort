@@ -28,7 +28,7 @@ class GrabAndFeaturize(BasePeeler):
             channel_index=channel_index,
             featurization_pipeline=featurization_pipeline,
             chunk_length_samples=chunk_length_samples,
-            chunk_margin_samples=spike_length_samples,
+            chunk_margin_samples=max(trough_offset_samples, spike_length_samples - trough_offset_samples),
             n_chunks_fit=n_chunks_fit,
             fit_subsampling_random_state=fit_subsampling_random_state,
             dtype=dtype,
@@ -37,6 +37,18 @@ class GrabAndFeaturize(BasePeeler):
         self.spike_length_samples = spike_length_samples
         self.register_buffer("times_samples", times_samples)
         self.register_buffer("channels", channels)
+
+    def process_chunk(self, chunk_start_samples, return_residual=False):
+        """Override process_chunk to skip empties."""
+        chunk_end_samples = min(
+            self.recording.get_num_samples(),
+            chunk_start_samples + self.chunk_length_samples,
+        )
+        in_chunk = self.times_samples == self.times_samples.clip(chunk_start_samples, chunk_end_samples - 1)
+        if not in_chunk.any():
+            return dict(n_spikes=0)
+
+        return super().process_chunk(chunk_start_samples, return_residual=return_residual)
 
     def peel_chunk(
         self,

@@ -348,7 +348,7 @@ def test_small_nonn():
         with h5py.File(out_h5, locking=False) as h5:
             lens = []
             for k in h5.keys():
-                if k not in ("channel_index", "geom") and h5[k].ndim >= 1:
+                if k not in ("subtract_channel_index", "channel_index", "geom") and h5[k].ndim >= 1:
                     lens.append(h5[k].shape[0])
             assert np.unique(lens).size == 1
 
@@ -367,7 +367,7 @@ def test_small_nonn():
         with h5py.File(out_h5, locking=False) as h5:
             lens = []
             for k in h5.keys():
-                if k not in ("channel_index", "geom") and h5[k].ndim >= 1:
+                if k not in ("subtract_channel_index", "channel_index", "geom") and h5[k].ndim >= 1:
                     lens.append(h5[k].shape[0])
             assert np.unique(lens).size == 1
 
@@ -385,12 +385,12 @@ def test_small_nonn():
         with h5py.File(out_h5, locking=False) as h5:
             lens = []
             for k in h5.keys():
-                if k not in ("channel_index", "geom") and h5[k].ndim >= 1:
+                if k not in ("subtract_channel_index", "channel_index", "geom") and h5[k].ndim >= 1:
                     lens.append(h5[k].shape[0])
             assert np.unique(lens).size == 1
 
 
-def test_small_default_config():
+def small_default_config(extract_radius=200):
     # noise recording
     T_samples = 100_100
     n_channels = 50
@@ -408,6 +408,8 @@ def test_small_default_config():
     rec = sc.NumpyRecording(noise, 30_000)
     rec.set_dummy_probe_from_locations(geom)
 
+    cfg = SubtractionConfig(extract_radius=extract_radius)
+
     with tempfile.TemporaryDirectory() as tempdir:
         # test default config
         print("test_small_default_config first")
@@ -416,11 +418,12 @@ def test_small_default_config():
             tempdir,
             overwrite=True,
             n_jobs=0,
+            subtraction_config=cfg,
         )
         with h5py.File(out_h5, locking=False) as h5:
             lens = []
             for k in h5.keys():
-                if k not in ("channel_index", "geom") and h5[k].ndim >= 1:
+                if k not in ("subtract_channel_index", "channel_index", "geom") and h5[k].ndim >= 1:
                     lens.append(h5[k].shape[0])
             assert np.unique(lens).size == 1
 
@@ -431,16 +434,26 @@ def test_small_default_config():
             tempdir,
             overwrite=True,
             n_jobs=2,
+            subtraction_config=cfg,
         )
         with h5py.File(out_h5, locking=False) as h5:
             lens = []
             for k in h5.keys():
-                if k not in ("channel_index", "geom") and h5[k].ndim >= 1:
+                if k not in ("subtract_channel_index", "channel_index", "geom") and h5[k].ndim >= 1:
                     lens.append(h5[k].shape[0])
             assert np.unique(lens).size == 1
+
+
+def test_small_default_config():
+    small_default_config()
+
+
+def test_small_default_config_subex():
+    small_default_config(extract_radius=100.0)
 
 
 if __name__ == "__main__":
     test_fakedata_nonn()
     test_small_nonn()
     test_small_default_config()
+    test_small_default_config_subex()
