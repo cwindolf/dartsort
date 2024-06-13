@@ -6,6 +6,7 @@ Right now, this file is a mix of numpy and torch, and it could be
 a bit confusing which functions are torch/numpy-compatible.
 Ideally they should all be both.
 """
+
 import numpy as np
 import torch
 import torch.nn.functional as F
@@ -172,8 +173,7 @@ def make_pitch_channel_index(geom, n_neighbor_rows=1, pitch=None):
     if pitch is None:
         pitch = get_pitch(geom)
     neighbors = (
-        np.abs(geom[:, 1][:, None] - geom[:, 1][None, :])
-        <= n_neighbor_rows * pitch
+        np.abs(geom[:, 1][:, None] - geom[:, 1][None, :]) <= n_neighbor_rows * pitch
     )
     channel_index = np.full((n_channels, neighbors.sum(1).max()), n_channels)
     for c in range(n_channels):
@@ -182,9 +182,7 @@ def make_pitch_channel_index(geom, n_neighbor_rows=1, pitch=None):
     return channel_index
 
 
-def make_pitch_channel_index_no_nans_for_plotting(
-    geom, n_neighbor_rows=1, pitch=None
-):
+def make_pitch_channel_index_no_nans_for_plotting(geom, n_neighbor_rows=1, pitch=None):
     """
     Channel neighborhoods which are whole pitches
     This function will select all the n_neighbor_rows inside the probe so that wfs are not nans
@@ -193,8 +191,7 @@ def make_pitch_channel_index_no_nans_for_plotting(
     if pitch is None:
         pitch = get_pitch(geom)
     neighbors = (
-        np.abs(geom[:, 1][:, None] - geom[:, 1][None, :])
-        <= n_neighbor_rows * pitch
+        np.abs(geom[:, 1][:, None] - geom[:, 1][None, :]) <= n_neighbor_rows * pitch
     )
     channel_index = np.full((n_channels, neighbors.sum(1).max()), n_channels)
     for c in range(n_channels):
@@ -212,9 +209,7 @@ def make_pitch_channel_index_no_nans_for_plotting(
 
 def full_channel_index(n_channels):
     """Everyone is everone's neighbor"""
-    return (
-        np.arange(n_channels)[None, :] * np.ones(n_channels, dtype=int)[:, None]
-    )
+    return np.arange(n_channels)[None, :] * np.ones(n_channels, dtype=int)[:, None]
 
 
 # -- extracting single channels which were not part of padding
@@ -266,15 +261,25 @@ def channel_subset_by_radius(
     channel_index_mask = get_channel_index_mask(
         geom, channel_index, radius=radius, n_channels_subset=n_channels_subset
     )
-    waveforms_subset = get_channel_subset(
-        waveforms, max_channels, channel_index_mask
-    )
+    waveforms_subset = get_channel_subset(waveforms, max_channels, channel_index_mask)
     if return_new_channel_index:
-        new_channel_index = mask_to_channel_index(
-            channel_index, channel_index_mask
-        )
+        new_channel_index = mask_to_channel_index(channel_index, channel_index_mask)
         return waveforms_subset, new_channel_index
     return waveforms_subset
+
+
+def channel_subset_mask(channel_index_full, channel_index_new, to_torch=True):
+    n_channels = channel_index_full.shape[0]
+    mask = np.stack(
+        [
+            np.isin(row_full, np.setdiff1d(row_new, [n_channels]))
+            for row_full, row_new in zip(channel_index_full, channel_index_new)
+        ],
+        axis=0,
+    )
+    if to_torch:
+        mask = torch.tensor(mask)
+    return mask
 
 
 def channel_subset_by_index(
@@ -286,25 +291,15 @@ def channel_subset_by_index(
 ):
     """Restrict waveforms to channels in new channel index"""
     # boolean mask of same shape as channel_index_full
-    n_channels = channel_index_full.shape[0]
     # figure out which channels in channel_index_full are still
     # present in the form of a boolean mask
-
-    channel_index_mask = np.stack(
-        [
-            np.isin(row_full, np.setdiff1d(row_new, [n_channels]))
-            for row_full, row_new in zip(channel_index_full, channel_index_new)
-        ],
-        axis=0,
-    )
+    channel_index_mask = channel_subset_mask(channel_index_full, channel_index_new)
     if torch.is_tensor(channel_index_full):
         channel_index_mask = torch.from_numpy(channel_index_mask)
     return get_channel_subset(waveforms, max_channels, channel_index_mask)
 
 
-def get_channel_index_mask(
-    geom, channel_index, radius=None, n_channels_subset=None
-):
+def get_channel_index_mask(geom, channel_index, radius=None, n_channels_subset=None):
     """Get a boolean mask showing if channels are inside a radial/linear subset
 
     Subsetting is controlled by a radius or by a number of channels. Radius
@@ -383,9 +378,7 @@ def mask_to_channel_index(channel_index, channel_index_mask):
             device=channel_index_mask.device,
         )
     else:
-        new_channel_index = np.full(
-            (n_channels, max_sub_chans), fill_value=n_channels
-        )
+        new_channel_index = np.full((n_channels, max_sub_chans), fill_value=n_channels)
 
     for i, mask in enumerate(channel_index_mask):
         if is_tensor:
@@ -399,9 +392,7 @@ def mask_to_channel_index(channel_index, channel_index_mask):
     return new_channel_index
 
 
-def get_channel_subset(
-    waveforms, max_channels, channel_index_mask, fill_value=np.nan
-):
+def get_channel_subset(waveforms, max_channels, channel_index_mask, fill_value=np.nan):
     """Given a binary mask indicating which channels to keep, grab those channels"""
     if waveforms.ndim == 3:
         N, T, C = waveforms.shape
@@ -422,9 +413,7 @@ def get_channel_subset(
         waveforms = F.pad(waveforms, (0, 1), value=fill_value)
     else:
         npx = np
-        waveforms = np.pad(
-            waveforms, [*pads, (0, 1)], constant_values=fill_value
-        )
+        waveforms = np.pad(waveforms, [*pads, (0, 1)], constant_values=fill_value)
 
     if waveforms.ndim == 3:
         return waveforms[
@@ -438,3 +427,17 @@ def get_channel_subset(
         npx.arange(N)[:, None],
         rel_sub_channel_index[max_channels][:, :],
     ]
+
+
+def relative_channel_subset_index(channel_index_full, channel_index_new, to_torch=True):
+    mask = channel_subset_mask(channel_index_full, channel_index_new, to_torch=True)
+    rel_sub_channel_index = mask_to_relative(mask)
+    return rel_sub_channel_index
+
+
+def get_relative_subset(waveforms, max_channels, rel_sub_channel_index, fill_value=torch.nan):
+    waveforms = F.pad(waveforms, (0, 1), value=fill_value)
+    index = rel_sub_channel_index[max_channels]
+    if waveforms.ndim == 3:
+        index = index[:, None, :].broadcast_to(index.shape[0], waveforms.shape[1], index.shape[1])
+    return torch.gather(waveforms, waveforms.ndim - 1, index)
