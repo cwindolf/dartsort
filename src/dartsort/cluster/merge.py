@@ -83,11 +83,11 @@ def single_merge_GC_multiple_chunks(
         sorting,
         recording,
         chunk_time_ranges_s,
-        template_data_list = template_data_list,
+        template_data_list = None,
         template_config = template_config,
         motion_est=motion_est,
         superres_linkage=split_merge_config.superres_linkage,
-        sym_function=split_merge_config.superres_linkage,
+        sym_function=split_merge_config.sym_function,
         min_channel_amplitude=split_merge_config.min_channel_amplitude, 
         min_spatial_cosine=split_merge_config.min_spatial_cosine,
         max_shift_samples=split_merge_config.max_shift_samples,
@@ -102,8 +102,14 @@ def single_merge_GC_multiple_chunks(
         aggregate_func=split_merge_config.aggregate_func,
         denoising_tsvd=denoising_tsvd,
         return_denoising_tsvd=return_denoising_tsvd,
+        trough_offset_samples=trough_offset_samples,
+        spike_length_samples=spike_length_samples,
     )
-
+    if return_denoising_tsvd:
+        sorting, denoisign_tsvd = res
+    else:
+        sorting = res
+    
     sorting, template_data_list = chuck_noisy_template_units_with_time_tracking(
         recording,
         sorting,
@@ -208,7 +214,7 @@ def merge_iterative_templates_with_multiple_chunks(
         )
         print(f"Split found {len(np.unique(sorting.labels))-1} units")
         # GC with recomputing template data list 
-        sorting, template_data_list = chuck_noisy_template_units_with_time_tracking(
+        sorting, template_data_list, denoising_tsvd = chuck_noisy_template_units_with_time_tracking(
             recording,
             sorting,
             chunk_time_ranges_s,
@@ -223,6 +229,7 @@ def merge_iterative_templates_with_multiple_chunks(
             template_save_dir=template_save_folder,
             template_npz_filename=template_npz_filename,
             overwrite=True,
+            return_denoising_tsvd=True,
         )
 
         sorting_merge, denoising_tsvd = merge_templates_across_multiple_chunks(
@@ -246,6 +253,8 @@ def merge_iterative_templates_with_multiple_chunks(
             units_batch_size=split_merge_config.units_batch_size, 
             mask_units_too_far=split_merge_config.mask_units_too_far, 
             aggregate_func=split_merge_config.aggregate_func,
+            trough_offset_samples=trough_offset_samples,
+            spike_length_samples=spike_length_samples,
             denoising_tsvd=denoising_tsvd,
             return_denoising_tsvd=True,
         )
@@ -589,7 +598,7 @@ def merge_templates_across_multiple_chunks(
     print(f"merge input {np.unique(sorting.labels).size - 1} units")
 
     if template_data_list is None:
-        template_data_list, denoising_tsvd = TemplateData.from_config_multiple_chunks_linear(
+        res = TemplateData.from_config_multiple_chunks_linear(
             recording,
             chunk_time_ranges_s,
             sorting,
@@ -604,7 +613,12 @@ def merge_templates_across_multiple_chunks(
             trough_offset_samples=trough_offset_samples,
             spike_length_samples=spike_length_samples,
             denoising_tsvd=denoising_tsvd,
+            return_denoising_tsvd=return_denoising_tsvd,
         )
+        if return_denoising_tsvd:
+            template_data_list, denoising_tsvd = res
+        else:
+            template_data_list = res
 
     unit_ids_all = np.unique(sorting.labels)
     unit_ids_all = unit_ids_all[unit_ids_all>-1]

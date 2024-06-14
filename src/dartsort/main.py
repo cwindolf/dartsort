@@ -555,5 +555,5 @@ def match(
                 overwrite=overwrite,
             )
 
-            sorting = DARTsortSorting().from_peeling_hdf5(Path(output_directory) / hdf5_filename)
+            sorting = DARTsortSorting.from_peeling_hdf5(Path(output_directory) / hdf5_filename)
         return sorting, Path(output_directory) / hdf5_filename

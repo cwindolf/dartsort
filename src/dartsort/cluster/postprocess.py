@@ -119,6 +119,7 @@ def chuck_noisy_template_units_with_time_tracking(
     template_save_dir=None,
     template_npz_filename="template_data.npz",
     overwrite=False,
+    return_denoising_tsvd=False,
 ):
     """Get rid of noise units.
 
@@ -129,7 +130,7 @@ def chuck_noisy_template_units_with_time_tracking(
         os.makedirs(template_save_dir, exist_ok=True)
 
     if template_data_list is None: 
-        template_data_list = TemplateData.from_config_multiple_chunks_linear(
+        res = TemplateData.from_config_multiple_chunks_linear(
             recording,
             chunk_time_ranges_s,
             sorting,
@@ -143,7 +144,12 @@ def chuck_noisy_template_units_with_time_tracking(
             trough_offset_samples=trough_offset_samples,
             spike_length_samples=spike_length_samples,
             denoising_tsvd=tsvd,
+            return_denoising_tsvd=return_denoising_tsvd,
         )
+        if return_denoising_tsvd:
+            template_data_list, tsvd = res
+        else:
+            template_data_list = res
 
     units = np.unique(sorting.labels)
     units = units[units>-1]
@@ -188,7 +194,9 @@ def chuck_noisy_template_units_with_time_tracking(
         if template_save_dir is not None:
             template_chunk_npz_file = template_save_dir / f"chunk_{j}_{template_npz_filename}"
             new_template_data.to_npz(template_chunk_npz_file)
-            
+
+    if return_denoising_tsvd:
+        return new_sorting, new_template_data_list, tsvd
     return new_sorting, new_template_data_list
 
 
