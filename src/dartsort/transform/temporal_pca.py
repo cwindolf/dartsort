@@ -98,8 +98,9 @@ class BaseTemporalPCA(BaseWaveformModule):
         return self._needs_fit
 
     def _transform_in_probe(self, waveforms_in_probe):
+        x = waveforms_in_probe
         if self.centered:
-            x = waveforms_in_probe - self.mean
+            x = x - self.mean
         W = self.components
         if self.whiten:
             W = self.components / self.whitener
@@ -110,14 +111,22 @@ class BaseTemporalPCA(BaseWaveformModule):
         W = self.components
         if self.whiten:
             W = W * self.whitener
-        return torch.addmm(self.mean, features, W)
+        if self.centered:
+            return torch.addmm(self.mean, features, W)
+        return torch.mm(features, W)
 
     def _project_in_probe(self, waveforms_in_probe):
-        return torch.addmm(
-            self.mean,
-            waveforms_in_probe - self.mean,
+        if self.centered:
+            return torch.addmm(
+                self.mean,
+                waveforms_in_probe - self.mean,
+                self.components.T @ self.components,
+            )
+        return torch.mm(
+            waveforms_in_probe,
             self.components.T @ self.components,
         )
+            
 
     def to_sklearn(self):
         pca = PCA(
