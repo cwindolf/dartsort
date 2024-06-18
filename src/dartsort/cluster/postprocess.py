@@ -201,7 +201,7 @@ def chuck_noisy_template_units_with_time_tracking(
 
 
 
-def chuck_noisy_template_units(
+def realign_and_chuck_noisy_template_units(
     recording,
     sorting,
     template_data=None,
@@ -221,7 +221,7 @@ def chuck_noisy_template_units(
     change, and the number of templates will change.
     """
     if template_data is None:
-        template_data = TemplateData.from_config(
+        template_data, sorting = TemplateData.from_config(
             recording,
             sorting,
             template_config,
@@ -231,6 +231,7 @@ def chuck_noisy_template_units(
             device=device,
             trough_offset_samples=trough_offset_samples,
             spike_length_samples=spike_length_samples,
+            return_realigned_sorting=True,
         )
 
     template_ptps = template_data.templates.ptp(1).max(1)

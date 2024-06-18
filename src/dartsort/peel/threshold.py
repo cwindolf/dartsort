@@ -1,6 +1,8 @@
 import torch
 from dartsort.detect import detect_and_deduplicate
 from dartsort.util import spiketorch
+from dartsort.util.data_util import SpikeDataset
+import warnings
 
 from .peel_base import BasePeeler
 
@@ -15,11 +17,15 @@ class ThresholdAndFeaturize(BasePeeler):
         spike_length_samples=121,
         detection_threshold=5.0,
         chunk_length_samples=30_000,
+        max_spikes_per_chunk=None,
         peak_sign="both",
         spatial_dedup_channel_index=None,
+        relative_peak_radius_samples=5,
+        dedup_temporal_radius_samples=7,
         n_chunks_fit=40,
         max_waveforms_fit=50_000,
         fit_subsampling_random_state=0,
+        dtype=torch.float,
     ):
         super().__init__(
             recording=recording,
@@ -30,10 +36,13 @@ class ThresholdAndFeaturize(BasePeeler):
             n_chunks_fit=n_chunks_fit,
             max_waveforms_fit=max_waveforms_fit,
             fit_subsampling_random_state=fit_subsampling_random_state,
+            dtype=dtype,
         )
 
         self.trough_offset_samples = trough_offset_samples
         self.spike_length_samples = spike_length_samples
+        self.relative_peak_radius_samples = relative_peak_radius_samples
+        self.dedup_temporal_radius_samples = dedup_temporal_radius_samples
         self.peak_sign = peak_sign
         if spatial_dedup_channel_index is not None:
             self.register_buffer(
@@ -43,7 +52,15 @@ class ThresholdAndFeaturize(BasePeeler):
         else:
             self.spatial_dedup_channel_index = None
         self.detection_threshold = detection_threshold
+        self.max_spikes_per_chunk = max_spikes_per_chunk
         self.peel_kind = f"Threshold {detection_threshold}"
+
+    def out_datasets(self):
+        datasets = super().out_datasets()
+        datasets.append(
+            SpikeDataset(name="voltages", shape_per_spike=(), dtype=float)
+        )
+        return datasets
 
     def peel_chunk(
         self,
@@ -53,11 +70,14 @@ class ThresholdAndFeaturize(BasePeeler):
         right_margin=0,
         return_residual=False,
     ):
-        times_rel, channels = detect_and_deduplicate(
+        times_rel, channels, energies = detect_and_deduplicate(
             traces,
             self.detection_threshold,
             dedup_channel_index=self.spatial_dedup_channel_index,
             peak_sign=self.peak_sign,
+            dedup_temporal_radius=self.dedup_temporal_radius_samples,
+            relative_peak_radius=self.relative_peak_radius_samples,
+            return_energies=True,
         )
         if not times_rel.numel():
             return dict(n_spikes=0)
@@ -69,9 +89,25 @@ class ThresholdAndFeaturize(BasePeeler):
         )
         valid = (times_rel >= min_time) & (times_rel < max_time)
         times_rel = times_rel[valid]
-        if not times_rel.numel():
+        n_detect = times_rel.numel()
+        if not n_detect:
             return dict(n_spikes=0)
         channels = channels[valid]
+        voltages = traces[times_rel, channels]
+
+        if self.max_spikes_per_chunk is not None:
+            if n_detect > self.max_spikes_per_chunk:
+                warnings.warn(
+                    f"{n_detect} spikes in chunk was larger than "
+                    f"{self.max_spikes_per_chunk=}. Keeping the top ones."
+                )
+                energies = energies[valid]
+                best = torch.argsort(energies)[-self.max_spikes_per_chunk:]
+                best = best.sort().values
+                del energies
+
+                times_rel = times_rel[best]
+                channels = channels[best]
 
         # load up the waveforms for this chunk
         waveforms = spiketorch.grab_spikes(
@@ -92,6 +128,7 @@ class ThresholdAndFeaturize(BasePeeler):
             n_spikes=times_rel.numel(),
             times_samples=times_samples,
             channels=channels,
+            voltages=voltages,
             collisioncleaned_waveforms=waveforms,
         )
         return peel_result

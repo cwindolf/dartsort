@@ -149,6 +149,7 @@ class DARTsortSorting:
         channels_dataset="channels",
         labels_dataset="labels",
         load_simple_features=True,
+        simple_feature_names=None,
         labels=None,
     ):
         channels = None
@@ -169,7 +170,9 @@ class DARTsortSorting:
                     channels_dataset,
                     labels_dataset,
                 )
-                for k in h5:
+                if simple_feature_names is None:
+                    simple_feature_names = h5.keys()
+                for k in simple_feature_names:
                     if (
                         k not in loaded
                         and 1 <= h5[k].ndim <= 2
@@ -454,8 +457,10 @@ def combine_sortings(sortings, dodge=False):
         assert np.all(labels[kept] < 0)
         labels[kept] = sorting.labels[kept] + next_label
         if dodge:
-            n_new_labels = 1 + sorting.labels[kept].max()
-            next_label += n_new_labels
+            n_new_labels = 0
+            if kept.size:
+                n_new_labels = 1 + sorting.labels[kept].max()
+                next_label += n_new_labels
             label_to_sorting_index.append(np.full(n_new_labels, j))
             label_to_original_label.append(np.arange(n_new_labels))
         times_samples[kept] = sorting.times_samples[kept]
@@ -463,8 +468,9 @@ def combine_sortings(sortings, dodge=False):
     sorting = replace(sortings[0], labels=labels, times_samples=times_samples)
 
     if dodge:
-        label_to_sorting_index = np.array(label_to_sorting_index)
-        label_to_original_label = np.array(label_to_original_label)
+        print([x.shape for x in label_to_sorting_index])
+        label_to_sorting_index = np.concatenate(label_to_sorting_index)
+        label_to_original_label = np.concatenate(label_to_original_label)
         return label_to_sorting_index, label_to_original_label, sorting
     return sorting
 

@@ -35,6 +35,7 @@ class BasePeeler(torch.nn.Module):
         n_chunks_fit=40,
         max_waveforms_fit=50_000,
         fit_subsampling_random_state=0,
+        dtype=torch.float,
     ):
         assert recording.get_num_channels() == channel_index.shape[0]
         if recording.get_num_segments() > 1:
@@ -50,6 +51,7 @@ class BasePeeler(torch.nn.Module):
         self.fit_subsampling_random_state = np.random.default_rng(
             fit_subsampling_random_state
         )
+        self.dtype = dtype
         self.register_buffer("channel_index", channel_index)
         if featurization_pipeline is not None:
             self.add_module("featurization_pipeline", featurization_pipeline)
@@ -295,7 +297,11 @@ class BasePeeler(torch.nn.Module):
             channel_indices=None,
             margin=self.chunk_margin_samples,
         )
-        chunk = torch.tensor(chunk, device=self.channel_index.device)
+        chunk = torch.tensor(
+            chunk,
+            device=self.channel_index.device,
+            dtype=self.dtype,
+        )
         peel_result = self.peel_chunk(
             chunk,
             chunk_start_samples=chunk_start_samples,
@@ -498,6 +504,9 @@ class BasePeeler(torch.nn.Module):
         )
 
     def load_models(self, save_folder):
+        if not save_folder.exists():
+            return
+
         feats_pt = Path(save_folder) / "featurization_pipeline.pt"
         if feats_pt.exists():
             self.featurization_pipeline = torch.load(feats_pt)

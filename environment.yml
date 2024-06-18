@@ -2,13 +2,14 @@
 name: dartsort
 dependencies:
   - python=3.11
-  - numpy
-  - scipy
+  - click
+  - colorcet
   - h5py
-  - tqdm
-  - scikit-learn
   - hdbscan
   - matplotlib
-  - colorcet
+  - numpy
   - pytest
-  - click
+  - scipy
+  - scikit-learn
+  - tqdm
+  - astropy
