@@ -125,6 +125,7 @@ class FeaturizationConfig:
     # optionally restrict how many channels TPCA are fit on
     tpca_fit_radius: Optional[float] = None
     tpca_rank: int = 8
+    tpca_centered: bool = True
 
     # used when naming datasets saved to h5 files
     input_waveforms_name: str = "collisioncleaned"
@@ -197,7 +198,7 @@ class TemplateConfig:
 
     # low rank denoising?
     low_rank_denoising: bool = True
-    denoising_rank: int = 5
+    denoising_rank: int = 8
     denoising_snr_threshold: float = 25.0 #Check that this is used with ptp * sqrt(N) otherwise need to be increased to ~50
     denoising_fit_radius: float = 75.0
     min_fraction_at_shift: float = 0.25
