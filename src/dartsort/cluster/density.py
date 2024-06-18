@@ -444,7 +444,6 @@ def density_peaks_clustering(
     if remove_clusters_smaller_than:
         labels = decrumb(labels, min_size=remove_clusters_smaller_than)
 
-<<<<<<< HEAD
     if triage_quantile_per_cluster > 0:
         if not pcs_only:
             amp_no_triaging_after_clustering = scales[2]*np.log(log_c+amp_no_triaging_after_clustering)
