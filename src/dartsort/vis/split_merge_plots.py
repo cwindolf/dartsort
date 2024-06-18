@@ -1359,77 +1359,110 @@ def check_overmerges(
                     ax_heatmap.imshow(template_data_chunk.templates[template_data_chunk.unit_ids == unit][0].ptp(0).reshape(-1, 8))
                 
                     n_pitches_shift = get_spike_pitch_shifts(localization_results[idx_subsample, 2], geom, times_s = times_seconds[idx_subsample], motion_est=me)
-    
-                    max_chan_registered_geom = template_data_chunk.templates[template_data_chunk.unit_ids == unit][0].ptp(0).argmax()
-                        # print(f"MAX CHAN {max_chan_registered_geom}")
-    
-                    max_chan_registered_geom = min(max_chan_registered_geom, n_chans_reg_geom - 6*8)
-                    max_chan_registered_geom = max(max_chan_registered_geom, 6*8)
-                    chans_to_plot_registered_geom = np.arange(max_chan_registered_geom - 10, max_chan_registered_geom+10, 2)
-    
-                    temp_chunk = template_data_chunk.templates[template_data_chunk.unit_ids == unit][0][15:75][:, chans_to_plot_registered_geom]
-                    
-                    med_ptp = 1.5*temp_chunk.ptp(0).max()
 
-                    if raw:
-                        collisioncleaned_tpca_features = spikeio.read_waveforms_channel_index(
-                                recording,
-                                times_samples[idx_subsample],
-                                channel_index,
-                                channels[idx_subsample],
-                        )
-                    else:
-                        with h5py.File(subh5, "r+") as h5:
-                            collisioncleaned_tpca_features = h5[tpca_features_dataset_name][idx_unit_chunk[idx_subsample]]
-    
-                    # do all this before chunk / PCs...
-                    waveforms_target_chan = get_waveforms_on_static_channels(
-                        collisioncleaned_tpca_features,
-                        geom,
-                        main_channels=channels[idx_subsample],
-                        channel_index=channel_index,
-                        target_channels=np.arange(max_chan_registered_geom-10, max_chan_registered_geom+10),
-                        n_pitches_shift=n_pitches_shift,
-                        registered_geom=registered_geom,
-                    )
-                    no_nans = np.flatnonzero(np.isfinite(waveforms_target_chan[:, 0, :]).all(axis=1))
-                    if len(no_nans)>2:
-                        pcs = PCA(2).fit_transform(waveforms_target_chan.reshape(waveforms_target_chan.shape[0], -1)[no_nans])
-    
-                        ax_pcs.scatter(pcs[:, 0], pcs[:, 1], s=1, c = "blue")
-                        ax_pcs.set_title("PCs", fontsize=7)
-                    
-                        # subsampled wfs to plot
-                        if not raw:
-                            waveforms_target_chan = tpca.inverse_transform(waveforms_target_chan.transpose(0, 2, 1).reshape(-1, 8)).reshape(-1, 20, 121).transpose(0, 2, 1)
-                        waveforms_target_chan = waveforms_target_chan[:, 15:75, :]
 
-                        for k in range(5):
-                            for i in range(waveforms_target_chan.shape[0]):
-                                ax_wfs.plot(np.arange(120), waveforms_target_chan[i][:, np.arange(k*4,k*4+4, 2)].T.flatten() + k*med_ptp, c = "blue", alpha = 0.05)                                        
-                                if not subtract_tpca_temp: 
-                                    ax_wfs_temp_subtracted.plot(np.arange(120), waveforms_target_chan[i][:, np.arange(k*4,k*4+4, 2)].T.flatten() - temp_chunk[:, k*2:k*2+2].T.flatten() + k*med_ptp, alpha = 0.05, c = "blue")
-                                else:
-                                    ax_wfs_temp_subtracted.plot(np.arange(120), waveforms_target_chan[i][:, np.arange(k*4,k*4+4, 2)].T.flatten() - temp_unit_tpca[15:75, chans_to_plot_registered_geom[k*2:k*2+2]].T.flatten() + k*med_ptp, alpha = 0.05, c = "blue")
-                            if overlap_templates:
-                                if tpca_templates_list is not None:
-                                    ax_wfs.plot(np.arange(120), temp_unit_tpca[15:75, chans_to_plot_registered_geom[k*2:k*2+2]].T.flatten(), c = "orange", alpha = 1)                                        
-                                else:
-                                    ax_wfs.plot(np.arange(120), temp_chunk[:, k*2:k*2+2].T.flatten() + k*med_ptp, c = "orange", alpha = 1)                                        
-                        ax_wfs_temp_subtracted.set_ylabel(f"Template-subtracted wfs (max chan {max_chan_registered_geom})", fontsize=7, labelpad=0)
-                        ax_wfs.set_ylabel("Wfs", fontsize=7, labelpad = 0)
+                    chans_idx, count_chans_idx = np.unique(channel_index[channels[idx_subsample]].flatten(), return_counts=True)
+                    good_chans = chans_idx[count_chans_idx>25]
+                    good_chans = good_chans[good_chans<384]
+                    if len(good_chans):
+                        # print(good_chans)
+                        # chans_to_plot_registered_geom = good_chans[template_data_chunk.templates[template_data_chunk.unit_ids == unit][0, :, good_chans].ptp(0).argsort()[::-1][:10]]
+                        # print("channels to plot on")
+                        # print(chans_to_plot_registered_geom)
+                        
+    
+                        max_chan_registered_geom = template_data_chunk.templates[template_data_chunk.unit_ids == unit][0].ptp(0).argmax()
+                        # chans_idx, chans_count = np.unique(channels[idx_subsample]+8*n_pitches_shift, return_counts=True)
+                        # max_chan_registered_geom = chans_idx[chans_count.argmax()]
+                        max_chan_registered_geom = min(max_chan_registered_geom, n_chans_reg_geom - 10)
+                        max_chan_registered_geom = max(max_chan_registered_geom, 10)
+                        # print(f"CHAN PITCH SHIFT WFS {chans_idx, chans_count}")
+
+                        # print(max_chan_registered_geom)
+                        # print(np.unique(channels[idx_subsample], return_counts=True))
+                        # print(np.unique(channels[idx_subsample]+8*n_pitches_shift, return_counts=True))
         
-                        ax_wfs_temp_subtracted.set_xticks([])
-                        ax_wfs_temp_subtracted.set_yticks([])
-                        ax_wfs.set_xticks([])
-                        ax_wfs.set_yticks([])
+                        # max_chan_registered_geom = min(max_chan_registered_geom, n_chans_reg_geom - 6*8)
+                        # max_chan_registered_geom = max(max_chan_registered_geom, 6*8)
+                        chans_to_plot_registered_geom = np.arange(max_chan_registered_geom - 10, max_chan_registered_geom+10, 2)
+        
+                        temp_chunk = template_data_chunk.templates[template_data_chunk.unit_ids == unit][0][15:75][:, chans_to_plot_registered_geom]
+                        
+                        med_ptp = 1.5*temp_chunk.ptp(0).max()
+    
+                        if raw:
+                            # print("Channels")
+                            # print(channels[idx_subsample])
+                            # print("n_pitches shifts")
+                            # print(n_pitches_shift)
+                            # print("sub channels")
+                            # print(channels[idx_subsample] + 8*n_pitches_shift)
+                            collisioncleaned_tpca_features = spikeio.read_waveforms_channel_index(
+                                    recording,
+                                    times_samples[idx_subsample],
+                                    channel_index,
+                                    channels[idx_subsample],
+                            )
+                        else:
+                            with h5py.File(subh5, "r+") as h5:
+                                collisioncleaned_tpca_features = h5[tpca_features_dataset_name][idx_unit_chunk[idx_subsample]]
+
+                        
+                        # do all this before chunk / PCs...
+                        waveforms_target_chan = get_waveforms_on_static_channels(
+                            collisioncleaned_tpca_features,
+                            geom,
+                            main_channels=channels[idx_subsample],
+                            channel_index=channel_index,
+                            target_channels=chans_to_plot_registered_geom, #np.arange(max_chan_registered_geom-10, max_chan_registered_geom+10),
+                            n_pitches_shift=n_pitches_shift,
+                            registered_geom=registered_geom,
+                        )
+
+                        # print("channels no nan")
+                        # print(np.where(~np.isnan(waveforms_target_chan[0, 0])))
+                        
+                        no_nans = np.flatnonzero(np.isfinite(waveforms_target_chan[:, 0, :]).all(axis=1))
+                        if len(no_nans)>0:
+                            pcs = PCA(2).fit_transform(waveforms_target_chan.reshape(waveforms_target_chan.shape[0], -1)[no_nans])
+        
+                            ax_pcs.scatter(pcs[:, 0], pcs[:, 1], s=1, c = "blue")
+                            ax_pcs.set_title("PCs", fontsize=7)
+                        
+                            # subsampled wfs to plot
+                            if not raw:
+                                waveforms_target_chan = tpca.inverse_transform(waveforms_target_chan.transpose(0, 2, 1).reshape(-1, 8)).reshape(-1, 10, 121).transpose(0, 2, 1)
+                            waveforms_target_chan = waveforms_target_chan[:, 15:75, :]
+
+                            mean_waveforms = np.nanmean(waveforms_target_chan, axis = 0)
+    
+                            for k in range(5):
+                                for i in range(waveforms_target_chan.shape[0]):
+                                    ax_wfs.plot(np.arange(120), waveforms_target_chan[i][:, k*2:k*2+2].T.flatten() + k*med_ptp, c = "blue", alpha = 0.05)                                        
+                                    if not subtract_tpca_temp: 
+                                        ax_wfs_temp_subtracted.plot(np.arange(120), waveforms_target_chan[i][:, k*2:k*2+2].T.flatten() - temp_chunk[:, k*2:k*2+2].T.flatten() + k*med_ptp, alpha = 0.05, c = "blue")
+                                    else:
+                                        ax_wfs_temp_subtracted.plot(np.arange(120), waveforms_target_chan[i][:, k*2:k*2+2].T.flatten() - temp_unit_tpca[15:75, chans_to_plot_registered_geom].T.flatten() + k*med_ptp, alpha = 0.05, c = "blue")
+                            if overlap_templates:
+                                for k in range(5):
+                                    if tpca_templates_list is not None:
+                                        ax_wfs.plot(np.arange(120), temp_unit_tpca[15:75, chans_to_plot_registered_geom].T.flatten(), c = "orange", alpha = 1)                                        
+                                    else:
+                                        ax_wfs.plot(np.arange(120), temp_chunk[:, k*2:k*2+2].T.flatten() + k*med_ptp, c = "orange", alpha = 1)                                        
+                                        ax_wfs.plot(np.arange(120), mean_waveforms[:, k*2:k*2+2].T.flatten() + k*med_ptp, c = "red", alpha = 1)                                        
+                            ax_wfs.set_ylabel("Wfs", fontsize=7, labelpad = 0)
+                            ax_wfs_temp_subtracted.set_ylabel(f"Template-subtracted wfs (max chan {max_chan_registered_geom})", fontsize=7, labelpad=0)
+                            ax_wfs_temp_subtracted.set_xticks([])
+                            ax_wfs_temp_subtracted.set_yticks([])
+                            ax_wfs.set_xticks([])
+                            ax_wfs.set_yticks([])
                         
         plt.suptitle(f"Unit {unit}", y=0.925)
         
         # PCs on max chan 
         # WFS on same chans 
         if raw:
-            plt.savefig(output_directory / f"rawwfs_post_deconv_{unit}_overmerge")
+            plt.savefig(output_directory / f"RANK_8_rawwfs_post_deconv_{unit}_overmerge")
         else:
             plt.savefig(output_directory / f"post_deconv_{unit}_overmerge")
         plt.close()
@@ -1639,6 +1672,8 @@ def check_overmerges_post_deconv(
                 # med_ptp = 1.5*np.median(a[idx_chunk])
                 
                 # do all this before chunk / PCs...
+                
+                
                 ccwfs_targetchans = get_waveforms_on_static_channels(
                     collisioncleaned_tpca_features_all[idx_chunk],
                     geom,

@@ -232,7 +232,7 @@ def merge_iterative_templates_with_multiple_chunks(
             return_denoising_tsvd=True,
         )
 
-        sorting_merge, denoising_tsvd = merge_templates_across_multiple_chunks(
+        sorting, denoising_tsvd = merge_templates_across_multiple_chunks(
             sorting,
             recording,
             chunk_time_ranges_s,
@@ -259,20 +259,22 @@ def merge_iterative_templates_with_multiple_chunks(
             return_denoising_tsvd=True,
         )
 
-        if miter < split_merge_config.m_iter-1:
-            sorting = chuck_noisy_template_units_from_merge(
-                sorting,
-                sorting_merge,
-                template_data_list,
-                spike_count_max=template_config.spikes_per_unit,
-                min_n_spikes=template_config.min_count_at_shift,
-                min_template_snr=template_config.denoising_snr_threshold,
-            )
-        else:
+        # This step is not needed!!
+        # if miter < split_merge_config.m_iter-1:
+        #     sorting = chuck_noisy_template_units_from_merge(
+        #         sorting,
+        #         sorting_merge,
+        #         template_data_list,
+        #         spike_count_max=template_config.spikes_per_unit,
+        #         min_n_spikes=template_config.min_count_at_shift,
+        #         min_template_snr=template_config.denoising_snr_threshold,
+        #     )
+        # else:
+        if miter == split_merge_config.m_iter-1:
         # Need to recompute templates here for the next step
             sorting, template_data_list = chuck_noisy_template_units_with_time_tracking(
                 recording,
-                sorting_merge,
+                sorting,
                 chunk_time_ranges_s,
                 template_config,
                 template_data_list=None,
