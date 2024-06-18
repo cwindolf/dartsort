@@ -288,6 +288,7 @@ def match(
     device=None,
     hdf5_filename="matching0.h5",
     model_subdir="matching0_models",
+    template_data=None,
     template_npz_filename="template_data.npz",
     templates_precomputed=False,
     template_dir_precomputed=None,
@@ -308,7 +309,7 @@ def match(
         spike_length_samples = waveform_config.spike_length_samples(
             recording.sampling_frequency
         )
-        if not templates_precomputed:
+        if not templates_precomputed and template_data is None:
             template_data = TemplateData.from_config(
                 recording,
                 sorting,
@@ -322,11 +323,12 @@ def match(
                 trough_offset_samples=trough_offset_samples,
                 spike_length_samples=spike_length_samples,
             )
-        else:
+        elif template_data is None:
             template_data = TemplateData.from_npz(
                 template_dir_precomputed / template_npz_filename
             )
     
+
         # instantiate peeler
         matching_peeler = ObjectiveUpdateTemplateMatchingPeeler.from_config(
             recording,

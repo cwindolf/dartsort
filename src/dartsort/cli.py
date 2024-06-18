@@ -66,6 +66,7 @@ def dartsort_si_config_py(
 @click.option("--overwrite", default=False, flag_value=True, is_flag=True)
 @click.option("--no_scatterplots", default=False, flag_value=True, is_flag=True)
 @click.option("--no_summaries", default=False, flag_value=True, is_flag=True)
+@click.option("--no_animations", default=False, flag_value=True, is_flag=True)
 @click.option("--rec_to_memory", default=False, flag_value=True, is_flag=True)
 def dartvis_si_all(
     si_rec_path,
@@ -79,6 +80,7 @@ def dartvis_si_all(
     overwrite=False,
     no_scatterplots=False,
     no_summaries=False,
+    no_animations=False,
     rec_to_memory=False,
 ):
     recording = si.load_extractor(si_rec_path)
@@ -93,6 +95,7 @@ def dartvis_si_all(
         pca_radius_um=pca_radius_um,
         make_scatterplots=not no_scatterplots,
         make_unit_summaries=not no_summaries,
+        make_animations=not no_animations,
         n_jobs=n_jobs_gpu,
         n_jobs_templates=n_jobs_cpu,
         overwrite=overwrite,

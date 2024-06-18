@@ -8,6 +8,7 @@ def geomplot(
     colors=None,
     max_channels=None,
     channel_index=None,
+    channels=None,
     geom=None,
     ax=None,
     z_extension=1.0,
@@ -35,18 +36,25 @@ def geomplot(
     if waveforms.ndim == 2:
         waveforms = waveforms[None]
     assert waveforms.ndim == 3
-    if max_channels is None and channel_index is None:
-        max_channels = np.zeros(waveforms.shape[0], dtype=int)
-        channel_index = (
-            np.arange(geom.shape[0])[None, :]
-            * np.ones(geom.shape[0], dtype=int)[:, None]
-        )
-    max_channels = np.atleast_1d(max_channels)
-    n_channels, C = channel_index.shape
-    assert geom.shape == (n_channels, 2)
-    T = waveforms.shape[1]
-    if waveforms.shape != (*max_channels.shape, T, C):
-        raise ValueError(f"Bad shapes: {waveforms.shape=}, {max_channels.shape=}, {C=}")
+    if channels is None:
+        if max_channels is None and channel_index is None:
+            max_channels = np.zeros(waveforms.shape[0], dtype=int)
+            channel_index = (
+                np.arange(geom.shape[0])[None, :]
+                * np.ones(geom.shape[0], dtype=int)[:, None]
+            )
+        max_channels = np.atleast_1d(max_channels)
+        n_channels, C = channel_index.shape
+        assert geom.shape == (n_channels, 2)
+        T = waveforms.shape[1]
+        if waveforms.shape != (*max_channels.shape, T, C):
+            raise ValueError(f"Bad shapes: {waveforms.shape=}, {max_channels.shape=}, {C=}")
+        channels = channel_index[max_channels]
+    else:
+        n_channels = geom.shape[0]
+        T = waveforms.shape[1]
+        assert channels.shape[0] == waveforms.shape[0]
+        assert channels.shape[1] == waveforms.shape[-1]
 
     # -- figure out units for plotting
     z_uniq, z_ix = np.unique(geom[:, 1], return_inverse=True)
@@ -76,8 +84,8 @@ def geomplot(
     draw = []
     unique_chans = set()
     xmin, xmax = np.inf, -np.inf
-    for wf, mc in zip(waveforms, max_channels):
-        for i, c in enumerate(channel_index[mc]):
+    for wf, chans in zip(waveforms, channels):
+        for i, c in enumerate(chans):
             if c == n_channels:
                 continue
 

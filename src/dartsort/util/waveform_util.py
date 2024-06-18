@@ -153,7 +153,6 @@ def make_filled_channel_index(geom, radius, p=2, pad_val=None, to_torch=False):
         channel_index = torch.LongTensor(channel_index)
 
     return channel_index
-    
 
 
 def make_contiguous_channel_index(n_channels, n_neighbors=40):

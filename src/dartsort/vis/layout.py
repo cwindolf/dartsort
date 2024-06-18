@@ -33,7 +33,12 @@ Card = namedtuple("Card", ["kind", "width", "height", "plots"])
 
 
 def flow_layout(
-    plots, max_height=4, figsize=(30, 15), figure=None, **plot_kwargs
+    plots,
+    max_height=4,
+    figsize=(8.5, 11),
+    figure=None,
+    hspace=0.1,
+    **plot_kwargs
 ):
     columns = flow_layout_columns(plots, max_height=max_height, **plot_kwargs)
 
@@ -44,7 +49,7 @@ def flow_layout(
     subfigures = figure.subfigures(
         nrows=1,
         ncols=len(columns),
-        hspace=0.5,
+        hspace=hspace,
         width_ratios=width_ratios,
         squeeze=False,
     )
@@ -60,12 +65,18 @@ def flow_layout(
             nrows=n_cards + (remaining_height > 0),
             ncols=1,
             height_ratios=height_ratios,
+            hspace=0.1,
         )
         cardfigs = np.atleast_1d(cardfigs)
         all_panels.extend(cardfigs)
 
         for cardfig, card in zip(cardfigs, column):
-            panels = cardfig.subfigures(nrows=len(card.plots), ncols=1)
+            panels = cardfig.subfigures(
+                nrows=len(card.plots),
+                ncols=1,
+                height_ratios=[p.height for p in card.plots],
+                hspace=hspace,
+            )
             panels = np.atleast_1d(panels)
             for plot, panel in zip(card.plots, panels):
                 plot.draw(panel, **plot_kwargs)

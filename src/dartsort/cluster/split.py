@@ -11,6 +11,7 @@ from dartsort.util.multiprocessing_util import get_pool
 from hdbscan import HDBSCAN
 from scipy.spatial.distance import cdist, pdist
 from sklearn.decomposition import PCA
+# from sklearn.metrics.pairwise import nan_euclidean_distances
 from tqdm.auto import tqdm
 
 from scipy.ndimage import gaussian_filter
@@ -186,6 +187,7 @@ class FeatureSplit(SplitStrategy):
         n_pca_features=2,
         whitened=True,
         pca_imputation=None,
+        pca_reassign=False,
         relocated=True,
         use_wfs_L2_norm=False,
         localization_feature_scales=(1.0, 1.0, 50.0),
@@ -204,7 +206,7 @@ class FeatureSplit(SplitStrategy):
         radius_search=5.0,
         triage_quantile_per_cluster=0.,
         remove_clusters_smaller_than=25,
-        reassign_outliers=False,
+        knn_reassign_outliers=False,
         random_state=0,
         rescale_all_features=False,
         use_ptp=True,
@@ -252,12 +254,13 @@ class FeatureSplit(SplitStrategy):
         self.n_pca_features = n_pca_features
         self.whitened = whitened
         self.pca_imputation = pca_imputation
+        self.pca_reassign = pca_reassign
         self.relocated = relocated and motion_est is not None
         self.motion_est = motion_est
         self.localization_feature_scales = localization_feature_scales
         self.log_c = log_c
         self.rg = np.random.default_rng(random_state)
-        self.reassign_outliers = reassign_outliers
+        self.knn_reassign_outliers = knn_reassign_outliers
         self.max_spikes = max_spikes
         self.use_wfs_L2_norm = use_wfs_L2_norm
         self.rescale_all_features = rescale_all_features
@@ -267,7 +270,6 @@ class FeatureSplit(SplitStrategy):
         self.use_time_feature = use_time_feature
         self.time_scale = time_scale
         self.return_localization_features = return_localization_features
-        print(f"{self.use_localization_features=} {self.use_ptp=} {self.n_pca_features=} {self.pca_imputation=}")
 
         # hdbscan parameters
         self.min_cluster_size = min_cluster_size
@@ -365,14 +367,14 @@ class FeatureSplit(SplitStrategy):
             do_pca = enough_good_spikes
 
         if do_pca:
-            pca_f = np.full(
+            pca_embeds_ = np.full(
                 (in_unit.size, pca_embeds.shape[1]),
                 np.nan,
                 dtype=pca_embeds.dtype,
             )
+            pca_embeds_[kept[pca_kept]] = pca_embeds
+            pca_embeds = pca_embeds_
             kept = kept[pca_kept]
-            pca_f[kept] = pca_embeds[pca_kept]
-            pca_embeds = pca_f
             # scale pc features to match localization features
             if self.rescale_all_features:
                 mad0 = mad_sigma(loc_features[kept, 0])
@@ -400,19 +402,11 @@ class FeatureSplit(SplitStrategy):
                 spread *= mad_sigma(loc_features[kept]).mean()
             features.append(spread)
 
-        # print(f"{self.use_localization_features=}")
-        # if self.use_localization_features:
-        #     print(f"{self.localization_features[in_unit].shape=}")
-        # print(f"{self.use_ptp=}")
-        # print(f"{do_pca=}")
-        # print(f"{features=}")
-        if not len(features):
+        if not features:
             return SplitResult(
                 is_split=False, in_unit=in_unit_all, new_labels = np.full(n_spikes, -1)
             )
 
-
-        
         features = np.column_stack([f[kept] for f in features])
 
         if self.cluster_alg == "hdbscan" and features.shape[0] > self.min_cluster_size:
@@ -421,7 +415,7 @@ class FeatureSplit(SplitStrategy):
                 min_samples=self.min_samples,
                 cluster_selection_epsilon=self.cluster_selection_epsilon,
                 core_dist_n_jobs=1,  # let's just use our parallelism
-                prediction_data=self.reassign_outliers,
+                prediction_data=self.knn_reassign_outliers,
             )
             clust_labels = clust.fit_predict(features)
             new_ids = np.unique(clust_labels)
@@ -450,17 +444,27 @@ class FeatureSplit(SplitStrategy):
         else:
             is_split = False
 
-        if is_split and self.reassign_outliers:
+        if is_split and self.knn_reassign_outliers:
             clust_labels = cluster_util.knn_reassign_outliers(clust_labels, features)
 
         new_labels = None
         if is_split:
             new_labels = np.full(n_spikes, -1)
-            if not subsampling:
-                new_labels[kept] = clust_labels
-            else:
+            if subsampling:
                 new_labels[idx_subsample[kept]] = clust_labels
-
+            else:
+                new_labels[kept] = clust_labels
+        
+        if is_split and self.pca_reassign:
+            if subsampling:
+                new_labels[idx_subsample] = self.tpca_reassignment(
+                    new_labels[idx_subsample], in_unit, n_pitches_shift
+                )
+            else:
+                new_labels = self.tpca_reassignment(
+                    new_labels, in_unit, n_pitches_shift
+                )
+        
         if self.return_localization_features and self.use_localization_features:
             return SplitResult(
                 is_split=is_split,
@@ -509,7 +513,7 @@ class FeatureSplit(SplitStrategy):
                 registered_geom=self.registered_geom,
                 match_distance=self.match_distance,
             )
-            kept = np.flatnonzero(~np.isnan(reloc_amp_vecs).any(axis=1))
+            kept = np.flatnonzero(~np.isnan(reloc_amp_vecs).all(axis=1))
             reloc_amplitudes = np.nanmax(reloc_amp_vecs[kept], axis=1)
         else:
             reloc_amplitudes = None
@@ -636,12 +640,20 @@ class FeatureSplit(SplitStrategy):
         in_unit,
         max_registered_channel,
         n_pitches_shift,
-        batch_size=1_000,
+        batch_size=128,
         max_samples_pca=5_000,
         amplitude_normalized=False,
         whitened=False,
     ):
-        """Compute relocated PCA features on a drift-invariant channel set"""
+        """Compute relocated PCA features on a drift-invariant channel set
+
+        Returns
+        -------
+        enough_good_spikes : bool
+        kept : integer index array, size < in_unit.size, indices into in_unit
+        pca_embeds : array of shape (kept.size, rank)
+
+        """
         # figure out which set of channels to use
         # we use the stored amplitudes to do this rather than computing a
         # template, which can be expensive
@@ -709,16 +721,11 @@ class FeatureSplit(SplitStrategy):
                 whiten=whitened,
             )
             if self.pca_imputation is None:
-                pca_projs = np.full(
-                    (waveforms.shape[0], self.n_pca_features),
-                    np.nan,
-                    dtype=waveforms.dtype,
-                )
                 waveforms = waveforms[no_nan]
                 waveforms = waveforms.reshape(waveforms.shape[0], -1)
                 if self.amplitude_normalized:
                     waveforms /= self.amplitudes[in_unit[no_nan]][:, None]
-                pca_projs[no_nan] = pca.fit_transform(waveforms)
+                pca_projs = pca.fit_transform(waveforms)
                 return True, no_nan, pca_projs
             elif self.pca_imputation in ("mean", "iterative"):
                 wfs = waveforms.reshape(waveforms.shape[0], -1)
@@ -737,6 +744,8 @@ class FeatureSplit(SplitStrategy):
                         np.where(np.isfinite(wfs), wfs, pca.mean_[None])
                     )
                 return True, slice(None), pca_projs
+            else:
+                assert False
 
         # otherwise, we have bigger data. in that case, first fit the PCA
         fit_choices = self.rg.choice(in_unit.size, size=max_samples_pca, replace=False)
@@ -806,7 +815,9 @@ class FeatureSplit(SplitStrategy):
         )
         pca.fit(fit_waveforms[no_nan])
         if self.pca_imputation == "iterative":
-            fit_waveforms = np.where(np.isfinite(fit_waveforms), fit_waveforms, pca.mean_[None])
+            fit_waveforms = np.where(
+                np.isfinite(fit_waveforms), fit_waveforms, pca.mean_[None]
+            )
             isnan = np.setdiff1d(np.arange(fit_waveforms.shape[0]), no_nan)
             for i in range(10):
                 emb = pca.fit_transform(fit_waveforms)
@@ -814,7 +825,9 @@ class FeatureSplit(SplitStrategy):
 
         # now, we have the PCA. let's embed our data in batches.
         pca_projs = np.full(
-            (in_unit.size, self.n_pca_features), np.nan, dtype=fit_waveforms.dtype
+            (in_unit.size, self.n_pca_features),
+            np.nan,
+            dtype=fit_waveforms.dtype,
         )
         all_kept = []
 
@@ -885,7 +898,124 @@ class FeatureSplit(SplitStrategy):
             kept = slice(None)
         else:
             assert False
-        return True, kept, pca_projs
+        return True, kept, pca_projs[kept]
+
+    def tpca_reassignment(
+        self,
+        clust_labels,
+        in_unit,
+        n_pitches_shift,
+        centroid_samples=500,
+        batch_size=128,
+    ):
+        unit_ids = np.unique(clust_labels)
+        unit_ids = unit_ids[unit_ids >= 0]
+        n_units = unit_ids.size
+
+        # compute centroids in TPCA space
+        centroids = []
+        for split_label in unit_ids:
+            in_split = np.flatnonzero(clust_labels == split_label)
+            if in_split.size > centroid_samples:
+                in_split = self.rg.choice(
+                    in_split, size=centroid_samples, replace=False
+                )
+                in_split.sort()
+
+            ix = in_unit[in_split]
+            split_feats = batched_h5_read(self.tpca_features, ix)
+            n_batch, rank, c = split_feats.shape
+
+            # invert TPCA for relocation
+            if self.relocated:
+                split_feats = split_feats.transpose(0, 2, 1).reshape(n_batch * c, rank)
+                split_feats = self.tpca.inverse_transform(split_feats)
+                t = split_feats.shape[1]
+                split_feats = split_feats.reshape(n_batch, c, t).transpose(0, 2, 1)
+
+            # relocate or just restrict to channel subset
+            if self.relocated:
+                split_feats = relocate.relocated_waveforms_on_static_channels(
+                    split_feats,
+                    target_channels=slice(None),
+                    main_channels=self.channels[ix],
+                    channel_index=self.channel_index,
+                    xyza_from=self.xyza[ix],
+                    z_to=self.z_reg[ix],
+                    geom=self.geom,
+                    registered_geom=self.registered_geom,
+                    match_distance=self.match_distance,
+                )
+            else:
+                split_feats = drift_util.get_waveforms_on_static_channels(
+                    split_feats,
+                    self.geom,
+                    main_channels=self.channels[ix],
+                    channel_index=self.channel_index,
+                    n_pitches_shift=n_pitches_shift[in_split],
+                    registered_geom=self.registered_geom,
+                    match_distance=self.match_distance,
+                )
+            centroids.append(np.nan_to_num(np.nanmean(split_feats, axis=0)))
+        centroids = np.array(centroids)
+        chans = np.flatnonzero(np.isfinite(centroids[:, 0, :]).any(0))
+        centroids = centroids[:, :, chans]
+
+        # load waveform embeddings and invert TPCA if we are relocating
+        new_labels = np.full_like(clust_labels, -1)
+        assert clust_labels.shape == in_unit.shape
+        for bs in range(0, in_unit.size, batch_size):
+            be = min(in_unit.size, bs + batch_size)
+
+            batch = batched_h5_read(self.tpca_features, in_unit[bs:be])
+            n_batch, rank, c = batch.shape
+
+            # invert TPCA for relocation
+            if self.relocated:
+                batch = batch.transpose(0, 2, 1).reshape(n_batch * c, rank)
+                batch = self.tpca.inverse_transform(batch)
+                t = batch.shape[1]
+                batch = batch.reshape(n_batch, c, t).transpose(0, 2, 1)
+
+            # relocate or just restrict to channel subset
+            if self.relocated:
+                batch = relocate.relocated_waveforms_on_static_channels(
+                    batch,
+                    main_channels=self.channels[in_unit[bs:be]],
+                    channel_index=self.channel_index,
+                    target_channels=chans,
+                    xyza_from=self.xyza[in_unit[bs:be]],
+                    z_to=self.z_reg[in_unit[bs:be]],
+                    geom=self.geom,
+                    registered_geom=self.registered_geom,
+                    match_distance=self.match_distance,
+                )
+            else:
+                batch = drift_util.get_waveforms_on_static_channels(
+                    batch,
+                    self.geom,
+                    main_channels=self.channels[in_unit[bs:be]],
+                    channel_index=self.channel_index,
+                    target_channels=chans,
+                    n_pitches_shift=n_pitches_shift[bs:be],
+                    registered_geom=self.registered_geom,
+                    match_distance=self.match_distance,
+                )
+            
+            d = nan_sqeuclidean_distances(batch.reshape(batch.shape[0], -1), centroids.reshape(n_units, -1))
+            # d = batch.reshape(batch.shape[0], -1)[:, None] - centroids.reshape(n_units, -1)[None, :]
+            # np.nan_to_num(d, copy=False)
+            # d *= d
+            # d = d.sum(2)
+            new_labels[bs:be] = d.argmin(1)
+            # for j, i in enumerate(range(bs, be)):
+            #     wf = batch[j]
+            #     mask = np.isfinite(wf[0])
+            #     wf = wf[:, mask].ravel()[None]
+            #     c = centroids[:, :, mask].reshape(n_units, -1)
+            #     new_labels[i] = cdist(wf, c, metric="sqeuclidean").ravel().argmin()
+
+        return new_labels
 
     def initialize_from_h5(
         self,
@@ -1582,11 +1712,19 @@ class ChunkForwardBackwardFeatureSplit(FeatureSplit):
 class NullSplit(SplitStrategy):
     def __init__(self, *args, **kwargs):
         pass
+
     def split_cluster(self, in_unit):
         return SplitResult(in_unit=in_unit)
 
+
 # this is to help split_clusters take a string argument
-all_split_strategies = [FeatureSplit, MaxChanPCSplit, ChunkForwardBackwardFeatureSplit, NullSplit, ZipperSplit]
+all_split_strategies = [
+    FeatureSplit,
+    MaxChanPCSplit,
+    ChunkForwardBackwardFeatureSplit,
+    NullSplit,
+    ZipperSplit,
+]
 split_strategies_by_class_name = {cls.__name__: cls for cls in all_split_strategies}
 
 # -- parallelism widgets
@@ -1624,3 +1762,24 @@ def mad_sigma(x, axis=0, keepdims=False, gauss_correct=True):
     if gauss_correct:
         mad *= 1.4826
     return mad
+
+
+def nan_sqeuclidean_distances(X, Y, copy_X=False, copy_Y=True):
+    missing_X = np.isnan(X)
+    missing_Y = np.isnan(Y)
+    if copy_X:
+        X = X.copy()
+    if copy_Y:
+        Y = Y.copy()
+    X[missing_X] = 0
+    Y[missing_Y] = 0
+    distances = cdist(X, Y, metric="sqeuclidean")
+    
+    # Adjust distances for missing values
+    X *= X
+    Y *= Y
+    distances -= np.dot(X, missing_Y.T)
+    distances -= np.dot(missing_X, Y.T)
+
+    return distances
+        

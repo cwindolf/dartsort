@@ -586,6 +586,7 @@ def get_templates(
     random_seed=0,
     units_per_job=8,
     n_jobs=0,
+    dtype=np.float32,
     show_progress=True,
     device=None,
 ):
@@ -667,12 +668,14 @@ def get_templates(
             random_seed=random_seed,
             n_jobs=n_jobs,
             show_progress=show_progress,
+            dtype=dtype,
             device=device,
         )
         sorting, templates = realign_sorting(
             sorting,
             raw_results["raw_templates"],
             raw_results["snrs_by_channel"],
+            raw_results["unit_ids"],
             max_shift=realign_max_sample_shift,
             trough_offset_samples=trough_offset_samples,
             recording_length_samples=recording.get_num_samples(),
@@ -689,6 +692,7 @@ def get_templates(
         denoising_tsvd = fit_tsvd(
             recording,
             sorting,
+            dtype=dtype,
             denoising_rank=denoising_rank,
             denoising_fit_radius=denoising_fit_radius,
             denoising_spikes_fit=denoising_spikes_fit,
@@ -711,17 +715,20 @@ def get_templates(
         units_per_job=units_per_job,
         random_seed=random_seed,
         show_progress=show_progress,
+        dtype=dtype,
         trough_offset_samples=trough_offset_samples,
         spike_length_samples=spike_length_samples,
         min_fraction_at_shift=min_fraction_at_shift,
         min_count_at_shift=min_count_at_shift,
         device=device,
     )
-    raw_templates, low_rank_templates, snrs_by_channel = res
+    unit_ids, spike_counts, raw_templates, low_rank_templates, snrs_by_channel = res
 
     if raw_only:
         return dict(
             sorting=sorting,
+            unit_ids=unit_ids,
+            spike_counts=spike_counts,
             templates=raw_templates,
             raw_templates=raw_templates,
             snrs_by_channel=snrs_by_channel,
@@ -735,7 +742,7 @@ def get_templates(
         snr_threshold=denoising_snr_threshold,
     )
     templates = weights * raw_templates + (1 - weights) * low_rank_templates
-    templates = templates.astype(recording.dtype)
+    templates = templates.astype(dtype)
 
     if spatial_svdsmoothing:
         for k in range(templates.shape[0]):
@@ -746,6 +753,8 @@ def get_templates(
 
     return dict(
         sorting=sorting,
+        unit_ids=unit_ids,
+        spike_counts=spike_counts,
         templates=templates,
         raw_templates=raw_templates,
         low_rank_templates=low_rank_templates,
@@ -770,6 +779,7 @@ def get_raw_templates(
     reducer=fast_nanmedian,
     random_seed=0,
     n_jobs=0,
+    dtype=np.float32,
     show_progress=True,
     device=None,
 ):
@@ -789,6 +799,7 @@ def get_raw_templates(
         reducer=reducer,
         random_seed=random_seed,
         n_jobs=n_jobs,
+        dtype=dtype,
         show_progress=show_progress,
         device=device,
     )
@@ -847,6 +858,7 @@ def realign_sorting(
     sorting,
     templates,
     snrs_by_channel,
+    unit_ids,
     max_shift=20,
     trough_offset_samples=42,
     recording_length_samples=None,
@@ -862,8 +874,10 @@ def realign_sorting(
     template_peak_times = np.abs(template_maxchan_traces).argmax(1)
 
     # find unit sample time shifts
-    template_shifts = template_peak_times - (trough_offset_samples + max_shift)
-    template_shifts[np.abs(template_shifts) > max_shift] = 0
+    template_shifts_ = template_peak_times - (trough_offset_samples + max_shift)
+    template_shifts_[np.abs(template_shifts_) > max_shift] = 0
+    template_shifts = np.zeros(sorting.labels.max() + 1, dtype=int)
+    template_shifts[unit_ids] = template_shifts_
 
     # create aligned spike train
     new_times = sorting.times_samples + template_shifts[sorting.labels]
@@ -876,7 +890,7 @@ def realign_sorting(
     # trim templates
     aligned_spike_len = t - 2 * max_shift
     aligned_templates = np.empty((n, aligned_spike_len, c))
-    for i, dt in enumerate(template_shifts):
+    for i, dt in enumerate(template_shifts_):
         aligned_templates[i] = templates[
             i, max_shift + dt : max_shift + dt + aligned_spike_len
         ]
@@ -892,6 +906,7 @@ def fit_tsvd(
     denoising_spikes_fit=25_000,
     trough_offset_samples=42,
     spike_length_samples=121,
+    dtype=np.float32,
     random_seed=0,
 ):
     # read spikes on channel neighborhood
@@ -918,6 +933,7 @@ def fit_tsvd(
         spike_length_samples=spike_length_samples,
         fill_value=0.0,  # all-0 rows don't change SVD basis
     )
+    waveforms = waveforms.astype(dtype)
     waveforms = waveforms.transpose(0, 2, 1)
     waveforms = waveforms.reshape(len(times) * tsvd_channel_index.shape[1], -1)
 
@@ -982,17 +998,19 @@ def denoising_weights(
     d=6.0,
     edge_behavior="saturate",
 ):
+    """Weights are applied to raw template, 1-weights to low rank
+    """
     # v shaped function for time weighting
     vt = np.abs(np.arange(spike_length_samples) - trough_offset, dtype=float)
     if trough_offset < spike_length_samples:
-        vt[trough_offset:] = vt[trough_offset:] / vt[trough_offset:].max()
+        vt[trough_offset:] /= vt[trough_offset:].max()
     if trough_offset > 0:
-        vt[:trough_offset] = vt[:trough_offset] / vt[:trough_offset].max()
+        vt[:trough_offset] /= vt[:trough_offset].max()
 
     # snr weighting per channel
     if edge_behavior == "saturate":
         snc = np.minimum(snrs, snr_threshold) / snr_threshold
-    if edge_behavior == "inf":
+    elif edge_behavior == "inf":
         snc = np.minimum(snrs, snr_threshold) / snr_threshold
         snc[snc >= 1.0] = np.inf
     elif edge_behavior == "raw":
@@ -1430,12 +1448,14 @@ def get_all_shifted_raw_and_low_rank_templates(
     spike_length_samples=121,
     min_fraction_at_shift=0.1,
     min_count_at_shift=5,
+    dtype=np.float32,
     device=None,
 ):
     n_jobs, Executor, context, rank_queue = get_pool(
         n_jobs, with_rank_queue=True
     )
-    unit_ids = np.unique(sorting.labels)
+    unit_ids, spike_counts = np.unique(sorting.labels, return_counts=True)
+    spike_counts = spike_counts[unit_ids >= 0]
     unit_ids = unit_ids[unit_ids >= 0]
     raw = denoising_tsvd is None
     prefix = "Raw" if raw else "Denoised"
@@ -1446,19 +1466,19 @@ def get_all_shifted_raw_and_low_rank_templates(
         n_template_channels = len(registered_geom)
         registered_kdtree = KDTree(registered_geom)
 
-    n_units = sorting.labels.max() + 1
+    n_units = unit_ids.size
     raw_templates = np.zeros(
         (n_units, spike_length_samples, n_template_channels),
-        dtype=recording.dtype,
+        dtype=dtype,
     )
     low_rank_templates = None
     if not raw:
         low_rank_templates = np.zeros(
             (n_units, spike_length_samples, n_template_channels),
-            dtype=recording.dtype,
+            dtype=dtype,
         )
     snrs_by_channel = np.zeros(
-        (n_units, n_template_channels), dtype=recording.dtype
+        (n_units, n_template_channels), dtype=dtype
     )
 
     unit_id_chunks = [
@@ -1486,6 +1506,7 @@ def get_all_shifted_raw_and_low_rank_templates(
             spike_length_samples,
             device,
             units_per_job,
+            dtype,
         ),
     ) as pool:
         # launch the jobs and wrap in a progress bar
@@ -1501,16 +1522,17 @@ def get_all_shifted_raw_and_low_rank_templates(
             if res is None:
                 continue
             units_chunk, raw_temps_chunk, low_rank_temps_chunk, snrs_chunk = res
-            raw_templates[units_chunk] = raw_temps_chunk
+            ix_chunk = np.isin(unit_ids, units_chunk)
+            raw_templates[ix_chunk] = raw_temps_chunk
             if not raw:
-                low_rank_templates[units_chunk] = low_rank_temps_chunk
-            snrs_by_channel[units_chunk] = snrs_chunk
+                low_rank_templates[ix_chunk] = low_rank_temps_chunk
+            snrs_by_channel[ix_chunk] = snrs_chunk
             if show_progress:
                 pbar.update(len(units_chunk))
         if show_progress:
             pbar.close()
 
-    return raw_templates, low_rank_templates, snrs_by_channel
+    return unit_ids, spike_counts, raw_templates, low_rank_templates, snrs_by_channel
 
 
 class TemplateProcessContext:
@@ -1530,19 +1552,21 @@ class TemplateProcessContext:
         spike_length_samples,
         device,
         units_per_job,
+        dtype,
     ):
         self.n_channels = recording.get_num_channels()
         self.registered = registered_kdtree is not None
 
         self.rg = rg
         self.device = device
+        self.dtype = dtype
         self.recording = recording
         self.sorting = sorting
         self.denoising_tsvd = denoising_tsvd
         if denoising_tsvd is not None:
             self.denoising_tsvd = TorchSVDProjector(
                 torch.from_numpy(
-                    denoising_tsvd.components_.astype(recording.dtype)
+                    denoising_tsvd.components_.astype(dtype)
                 )
             )
             self.denoising_tsvd.to(self.device)
@@ -1563,7 +1587,7 @@ class TemplateProcessContext:
                 self.n_channels,
             ),
             device=device,
-            dtype=torch.from_numpy(np.zeros(1, dtype=recording.dtype)).dtype,
+            dtype=torch.from_numpy(np.zeros(1, dtype=dtype)).dtype,
         )
 
         self.n_template_channels = self.n_channels
@@ -1595,6 +1619,7 @@ def _template_process_init(
     spike_length_samples,
     device,
     units_per_job,
+    dtype,
 ):
     global _template_process_context
 
@@ -1625,6 +1650,7 @@ def _template_process_init(
         spike_length_samples,
         device,
         units_per_job,
+        dtype,
     )
 
 
@@ -1675,7 +1701,7 @@ def _template_job(unit_ids):
         trough_offset_samples=p.trough_offset_samples,
         spike_length_samples=p.spike_length_samples,
     )
-    p.spike_buffer[: times.size] = torch.from_numpy(waveforms)
+    p.spike_buffer[: times.size] = torch.from_numpy(waveforms.astype(p.dtype))
     waveforms = p.spike_buffer[: times.size]
     n, t, c = waveforms.shape
 

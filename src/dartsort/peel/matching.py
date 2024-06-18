@@ -52,6 +52,7 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
         max_waveforms_fit=50_000,
         fit_subsampling_random_state=0,
         max_iter=1000,
+        dtype=torch.float,
     ):
         super().__init__(
             recording=recording,
@@ -62,6 +63,7 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
             n_chunks_fit=n_chunks_fit,
             max_waveforms_fit=max_waveforms_fit,
             fit_subsampling_random_state=fit_subsampling_random_state,
+            dtype=dtype,
         )
 
         # main properties

@@ -4,9 +4,10 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 from tqdm.auto import tqdm
 
-from ..util.analysis import DARTsortAnalysis, no_realign_template_config, basic_template_config
+from ..util.analysis import (DARTsortAnalysis, basic_template_config,
+                             no_realign_template_config)
 from ..util.data_util import DARTsortSorting
-from . import scatterplots, unit
+from . import over_time, scatterplots, unit
 from .sorting import make_sorting_summary
 
 try:
@@ -27,11 +28,16 @@ def visualize_sorting(
     make_scatterplots=True,
     make_sorting_summaries=True,
     make_unit_summaries=True,
+    make_animations=True,
     gt_sorting=None,
     superres_templates=True,
+    sorting_analysis=None,
+    amplitudes_dataset_name='denoised_ptp_amplitudes',
     channel_show_radius_um=50.0,
     amplitude_color_cutoff=15.0,
     pca_radius_um=75.0,
+    chunk_length_s=300.0,
+    frame_interval=1500,
     dpi=200,
     layout_max_height=4,
     layout_figsize=(30, 15),
@@ -40,8 +46,11 @@ def visualize_sorting(
     overwrite=False,
 ):
     output_directory.mkdir(exist_ok=True, parents=True)
-    if (output_directory / ".done").exists() and not overwrite:
-        return
+    if (output_directory / ".done").exists():
+        if overwrite:
+            (output_directory / ".done").unlink()
+        else:
+            return
 
     if sorting is None and sorting_path is not None:
         if sorting_path.name.endswith(".h5"):
@@ -56,7 +65,7 @@ def visualize_sorting(
         if overwrite or not scatter_unreg.exists():
             fig = plt.figure(figsize=layout_figsize)
             fig, axes, scatters = scatterplots.scatter_spike_features(
-                sorting=sorting, figure=fig
+                sorting=sorting, figure=fig, amplitude_color_cutoff=amplitude_color_cutoff, amplitudes_dataset_name=amplitudes_dataset_name,
             )
             if have_dredge and motion_est is not None:
                 motion_util.plot_me_traces(motion_est, axes[2], color="r", lw=1)
@@ -71,24 +80,25 @@ def visualize_sorting(
                 motion_est=motion_est,
                 registered=True,
                 figure=fig,
+                amplitude_color_cutoff=amplitude_color_cutoff, amplitudes_dataset_name=amplitudes_dataset_name,
             )
             fig.savefig(scatter_reg, dpi=dpi)
             plt.close(fig)
 
-    sorting_analysis = None
     template_cfg = no_realign_template_config if superres_templates else basic_template_config
     if make_sorting_summaries and sorting.n_units > 1:
         sorting_summary = output_directory / "sorting_summary.png"
         if overwrite or not sorting_summary.exists():
-            sorting_analysis = DARTsortAnalysis.from_sorting(
-                recording=recording,
-                sorting=sorting,
-                motion_est=motion_est,
-                name=output_directory.stem,
-                n_jobs_templates=n_jobs_templates,
-                template_config=template_cfg,
-                allow_template_reload=True, #"match" in output_directory.stem,
-            )
+            if sorting_analysis is None:
+                sorting_analysis = DARTsortAnalysis.from_sorting(
+                    recording=recording,
+                    sorting=sorting,
+                    motion_est=motion_est,
+                    name=output_directory.stem,
+                    n_jobs_templates=n_jobs_templates,
+                    template_config=template_cfg,
+                    allow_template_reload="match" in output_directory.stem,
+                )
 
             fig = make_sorting_summary(
                 sorting_analysis,
@@ -97,6 +107,16 @@ def visualize_sorting(
                 figure=None,
             )
             fig.savefig(sorting_summary, dpi=dpi)
+
+        animation_png = output_directory / "animation.mp4"
+        if make_animations and (overwrite or not animation_png.exists()):
+            over_time.sorting_scatter_animation(
+                sorting_analysis,
+                animation_png,
+                chunk_length_samples=chunk_length_s * recording.sampling_frequency,
+                n_jobs_templates=n_jobs_templates,
+                interval=frame_interval,
+            )
 
     if make_unit_summaries and sorting.n_units > 1:
         unit_summary_dir = output_directory / "single_unit_summaries"

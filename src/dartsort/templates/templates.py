@@ -192,6 +192,7 @@ class TemplateData:
             )
         kwargs["low_rank_denoising"] = template_config.low_rank_denoising
         kwargs["realign_peaks"] = False
+        kwargs["denoising_tsvd"] = tsvd
 
         # handle superresolved templates
         if template_config.superres_templates:
@@ -209,13 +210,6 @@ class TemplateData:
             )
         else:
             superres_sort = sorting
-            # we don't skip empty units
-            unit_ids = np.arange(sorting.labels.max() + 1)
-
-        # count spikes in each template
-        spike_counts = np.zeros_like(unit_ids)
-        ix, counts = np.unique(superres_sort.labels, return_counts=True)
-        spike_counts[ix[ix >= 0]] = counts[ix >= 0]
 
         # main!
         results = get_templates(recording, superres_sort, **kwargs)
@@ -229,10 +223,10 @@ class TemplateData:
             )
             obj = cls(
                 results["templates"],
-                unit_ids,
-                spike_counts,
-                kwargs["registered_geom"],
-                registered_template_depths_um,
+                unit_ids=results["unit_ids"],
+                spike_counts=results["spike_counts"],
+                registered_geom=kwargs["registered_geom"],
+                registered_template_depths_um=registered_template_depths_um,
                 localization_radius_um=template_config.registered_template_localization_radius_um,
                 trough_offset_samples=trough_offset_samples,
                 spike_length_samples=spike_length_samples,
@@ -246,10 +240,10 @@ class TemplateData:
             )
             obj = cls(
                 results["templates"],
-                unit_ids,
-                spike_counts,
-                geom,
-                depths_um,
+                unit_ids=results["unit_ids"],
+                spike_counts=results["spike_counts"],
+                registered_geom=geom,
+                registered_template_depths_um=depths_um,
                 localization_radius_um=template_config.registered_template_localization_radius_um,
                 trough_offset_samples=trough_offset_samples,
                 spike_length_samples=spike_length_samples,
@@ -757,6 +751,7 @@ def get_chunked_templates(
     device=None,
     trough_offset_samples=42,
     spike_length_samples=121,
+    tsvd=None,
     random_seed=0,
 ):
     """Save the effort of recomputing several TPCAs"""
@@ -766,8 +761,6 @@ def get_chunked_templates(
         assert chunk_sortings is not None
         global_realign_peaks = False
         global_sorting = data_util.combine_sortings(chunk_sortings, dodge=True)
-    else:
-        assert False
 
     done = False
     if save_folder is not None:
@@ -816,13 +809,20 @@ def get_chunked_templates(
         device=device,
         trough_offset_samples=trough_offset_samples,
         spike_length_samples=spike_length_samples,
+        tsvd=tsvd,
     )
+    print(f"{full_template_data.unit_ids.shape=}")
+    print(f"{full_template_data.templates.shape=}")
 
     # break it up back into chunks
     chunk_template_data = []
     for i in range(len(chunk_sortings)):
-        chunk_unit_ids = np.flatnonzero(label_to_sorting_index == i)
-        chunk_mask = np.flatnonzero(np.isin(full_template_data.unit_ids, chunk_unit_ids))
+        chunk_mask = np.flatnonzero(
+            label_to_sorting_index[full_template_data.unit_ids]
+            == i
+        )
+        # chunk_unit_ids = np.flatnonzero(label_to_sorting_index == i)
+        # chunk_mask = np.flatnonzero(np.isin(full_template_data.unit_ids, chunk_unit_ids))
         orig_unit_ids = label_to_original_label[full_template_data.unit_ids[chunk_mask]]
         depths = None
         if full_template_data.registered_template_depths_um is not None:
