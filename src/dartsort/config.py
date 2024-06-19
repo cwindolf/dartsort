@@ -199,7 +199,7 @@ class TemplateConfig:
     # low rank denoising?
     low_rank_denoising: bool = True
     denoising_rank: int = 8
-    denoising_snr_threshold: float = 25.0 #Check that this is used with ptp * sqrt(N) otherwise need to be increased to ~50
+    denoising_snr_threshold: float = 50.0 #Check that this is used with ptp * sqrt(N) otherwise need to be increased to ~50
     denoising_fit_radius: float = 75.0
     min_fraction_at_shift: float = 0.25
     min_count_at_shift: float = 25
