@@ -1146,7 +1146,7 @@ class ZipperSplit(SplitStrategy):
         
         features = np.c_[self.times_seconds[in_unit_all], self.log_amplitudes[in_unit_all]]
 
-        std_pc_time = np.array([self.chunk_size, self.log_amplitudes[in_unit_all].std()*self.rescale_log_amp_std])
+        std_pc_time = np.array([self.chunk_size, mad_sigma(self.log_amplitudes[in_unit_all], gauss_correct=True)*self.rescale_log_amp_std])
         extents = np.c_[np.floor(features.min(0)), np.ceil(features.max(0))]
         nbins = np.ceil(extents.ptp(1) / std_pc_time).astype(int)
         bin_edges = [
@@ -1167,96 +1167,102 @@ class ZipperSplit(SplitStrategy):
         kde = lerp(features)
         no_nans = ~np.isnan(kde)
 
-        # Check this?
-        valstd = features[no_nans, 0].std()/features[no_nans, 1].std()
-        X = features[no_nans] * np.array([1, valstd])[None, :]
-        kdtree = KDTree(X)
-
-        distances, indices = kdtree.query(
-            X,
-            k=self.n_neigh_search+1,
-            distance_upper_bound=self.distance_upperbound_search,
-        ) 
-        distances, indices = distances[:, 1:].copy(), indices[:, 1:].copy()
-
-        # find lowest distance higher density neighbor
-        density_padded = np.pad(kde[no_nans], (0, 1), constant_values=np.inf)
-        is_lower_density = density_padded[indices] <= kde[no_nans][:, None]
-        distances[is_lower_density] = np.inf
-        indices[is_lower_density] = kdtree.n
-        nhdn = indices[np.arange(kdtree.n), distances.argmin(1)]
-        n = kdtree.n
-
-        nhdn[kde[no_nans] <= self.density_noise] = n
-
-        nhdn = nhdn.astype(np.intc)
-        has_nhdn = np.flatnonzero(nhdn < n).astype(np.intc)
-        
-        graph = coo_array(
-            (np.ones(has_nhdn.size), (nhdn[has_nhdn], has_nhdn)), shape=(n, n)
-        )
-        ncc, labels = connected_components(graph)
-        labels[nhdn == n] = -1
-        _, labels[labels>-1] = np.unique(labels[labels>-1], return_inverse=True)
-
-        if self.triage_per_cluster>0:
-            for k in np.unique(labels[labels>-1]):
-                q = np.quantile(kde[no_nans][labels == k], self.triage_per_cluster)
-                labels[np.flatnonzero(labels == k)[kde[no_nans][labels == k]<q]]=-1
-        if self.remove_clusters_smaller_than>0:
-            idx_good = np.flatnonzero(labels>-1)
-            _, counts = np.unique(labels[idx_good], return_counts=True)
-            labels[idx_good[counts[labels[idx_good]]<self.remove_clusters_smaller_than]]=-1
-        _, labels[labels>-1] = np.unique(labels[labels>-1], return_inverse=True)
-
-        triaged = labels==-1
-        
-        if labels.max()>0:
-            ncc = labels.max()+1
-            time_spread_per_cluster = np.zeros((ncc, 2))
-            for k in range(ncc):
-                time_spread_per_cluster[k, 0] = X[labels == k, 0].min()
-                time_spread_per_cluster[k, 1] = X[labels == k, 0].max()
-
-            mat_dist = np.full((ncc, ncc), np.inf)
-            for k in range(ncc):
-                for j in range(ncc):
-                    if time_spread_per_cluster[k, 1] < time_spread_per_cluster[j, 0]:
-                        if time_spread_per_cluster[j, 0]-time_spread_per_cluster[k, 1]<self.max_time_diff_to_merge:
-                            mat_dist[k, j] = np.sqrt(self.rescale_time_merging*(time_spread_per_cluster[j, 0] - time_spread_per_cluster[k, 1])**2 + (np.median(X[labels == k, 1]) - np.median(X[labels == j, 1]))**2)
-                    elif time_spread_per_cluster[k, 0] > time_spread_per_cluster[j, 1]:
-                        if time_spread_per_cluster[k, 0]-time_spread_per_cluster[j, 1]<self.max_time_diff_to_merge:
-                            mat_dist[k, j] = np.sqrt(self.rescale_time_merging*(time_spread_per_cluster[j, 1] - time_spread_per_cluster[k, 0])**2 + (np.median(X[labels == k, 1]) - np.median(X[labels == j, 1]))**2)
-                    else: 
-                        boundaries = [np.max(time_spread_per_cluster[[k, j], 0]), np.min(time_spread_per_cluster[[k, j], 1])]
-                        assert boundaries[1]>boundaries[0]
-                        idx_spikes_k = np.flatnonzero(np.logical_and(X[labels == k, 0]>=boundaries[0], X[labels == k, 0]<=boundaries[1]))
-                        idx_spikes_j = np.flatnonzero(np.logical_and(X[labels == j, 0]>=boundaries[0], X[labels == j, 0]<=boundaries[1]))
-                        dist_val = np.abs(np.median(self.denoised_ptp_amplitudes[in_unit_all][no_nans][labels == j][idx_spikes_j]) - np.median(self.denoised_ptp_amplitudes[in_unit_all][no_nans][labels == k][idx_spikes_k]))
-                        # print(f"units {(j, k)} amp distance {dist_val}")
-                        if dist_val>self.amplitude_diff_nomerge:
-                            mat_dist[k, j] = np.inf
-                        else:
-                            mat_dist[k, j] = np.abs(np.median(X[labels == j][idx_spikes_j, 1]) - np.median(X[labels == k][idx_spikes_k, 1]))
-
-            mat_dist[np.arange(mat_dist.shape[0]), np.arange(mat_dist.shape[0])]=0
-            indices = mat_dist.argsort(1)[:, :self.max_neigh_connected_merging+1]     
-            indices[mat_dist[indices[:, 0], indices[:, 1]]>self.max_dist_nomerge] = 0
+        if len(no_nans)>1:
+            # Check this?
+            valstd = mad_sigma(features[no_nans, 0], gauss_correct=True)/mad_sigma(features[no_nans, 1], gauss_correct=True)
+            X = features[no_nans] * np.array([1, valstd])[None, :]
+            kdtree = KDTree(X)
+    
+            distances, indices = kdtree.query(
+                X,
+                k=self.n_neigh_search+1,
+                distance_upper_bound=self.distance_upperbound_search,
+            ) 
+            distances, indices = distances[:, 1:].copy(), indices[:, 1:].copy()
+    
+            # find lowest distance higher density neighbor
+            density_padded = np.pad(kde[no_nans], (0, 1), constant_values=np.inf)
+            is_lower_density = density_padded[indices] <= kde[no_nans][:, None]
+            distances[is_lower_density] = np.inf
+            indices[is_lower_density] = kdtree.n
+            nhdn = indices[np.arange(kdtree.n), distances.argmin(1)]
+            n = kdtree.n
+    
+            nhdn[kde[no_nans] <= self.density_noise] = n
+    
+            nhdn = nhdn.astype(np.intc)
+            has_nhdn = np.flatnonzero(nhdn < n).astype(np.intc)
+            
             graph = coo_array(
-                (np.ones(ncc), (indices[:, 1], indices[:, 0])), shape=(ncc, ncc)
+                (np.ones(has_nhdn.size), (nhdn[has_nhdn], has_nhdn)), shape=(n, n)
             )
-            ncc_comp, labels_comp = connected_components(graph)
-            new_labels[~no_nans] = -1
-            new_labels[np.flatnonzero(no_nans)[triaged]] = -1
-            new_labels[np.flatnonzero(no_nans)[~triaged]] = labels_comp[labels[~triaged]]
-        else:
-            new_labels[~no_nans] = -1
-            new_labels[np.flatnonzero(no_nans)[triaged]] = -1
-            new_labels[np.flatnonzero(no_nans)[~triaged]] = 0
+            ncc, labels = connected_components(graph)
+            labels[nhdn == n] = -1
+            _, labels[labels>-1] = np.unique(labels[labels>-1], return_inverse=True)
+    
+            if self.triage_per_cluster>0:
+                for k in np.unique(labels[labels>-1]):
+                    q = np.quantile(kde[no_nans][labels == k], self.triage_per_cluster)
+                    labels[np.flatnonzero(labels == k)[kde[no_nans][labels == k]<q]]=-1
+            if self.remove_clusters_smaller_than>0:
+                idx_good = np.flatnonzero(labels>-1)
+                _, counts = np.unique(labels[idx_good], return_counts=True)
+                labels[idx_good[counts[labels[idx_good]]<self.remove_clusters_smaller_than]]=-1
+            _, labels[labels>-1] = np.unique(labels[labels>-1], return_inverse=True)
+    
+            triaged = labels==-1
+            
+            if labels.max()>0:
+                ncc = labels.max()+1
+                time_spread_per_cluster = np.zeros((ncc, 2))
+                for k in range(ncc):
+                    time_spread_per_cluster[k, 0] = X[labels == k, 0].min()
+                    time_spread_per_cluster[k, 1] = X[labels == k, 0].max()
+    
+                mat_dist = np.full((ncc, ncc), np.inf)
+                for k in range(ncc):
+                    for j in range(ncc):
+                        if time_spread_per_cluster[k, 1] < time_spread_per_cluster[j, 0]:
+                            if time_spread_per_cluster[j, 0]-time_spread_per_cluster[k, 1]<self.max_time_diff_to_merge:
+                                mat_dist[k, j] = np.sqrt(self.rescale_time_merging*(time_spread_per_cluster[j, 0] - time_spread_per_cluster[k, 1])**2 + (np.median(X[labels == k, 1]) - np.median(X[labels == j, 1]))**2)
+                        elif time_spread_per_cluster[k, 0] > time_spread_per_cluster[j, 1]:
+                            if time_spread_per_cluster[k, 0]-time_spread_per_cluster[j, 1]<self.max_time_diff_to_merge:
+                                mat_dist[k, j] = np.sqrt(self.rescale_time_merging*(time_spread_per_cluster[j, 1] - time_spread_per_cluster[k, 0])**2 + (np.median(X[labels == k, 1]) - np.median(X[labels == j, 1]))**2)
+                        else: 
+                            boundaries = [np.max(time_spread_per_cluster[[k, j], 0]), np.min(time_spread_per_cluster[[k, j], 1])]
+                            assert boundaries[1]>boundaries[0]
+                            idx_spikes_k = np.flatnonzero(np.logical_and(X[labels == k, 0]>=boundaries[0], X[labels == k, 0]<=boundaries[1]))
+                            idx_spikes_j = np.flatnonzero(np.logical_and(X[labels == j, 0]>=boundaries[0], X[labels == j, 0]<=boundaries[1]))
+                            dist_val = np.abs(np.median(self.denoised_ptp_amplitudes[in_unit_all][no_nans][labels == j][idx_spikes_j]) - np.median(self.denoised_ptp_amplitudes[in_unit_all][no_nans][labels == k][idx_spikes_k]))
+                            # print(f"units {(j, k)} amp distance {dist_val}")
+                            if dist_val>self.amplitude_diff_nomerge:
+                                mat_dist[k, j] = np.inf
+                            else:
+                                mat_dist[k, j] = np.abs(np.median(X[labels == j][idx_spikes_j, 1]) - np.median(X[labels == k][idx_spikes_k, 1]))
+    
+                mat_dist[np.arange(mat_dist.shape[0]), np.arange(mat_dist.shape[0])]=0
+                indices = mat_dist.argsort(1)[:, :self.max_neigh_connected_merging+1]     
+                indices[mat_dist[indices[:, 0], indices[:, 1]]>self.max_dist_nomerge] = 0
+                graph = coo_array(
+                    (np.ones(ncc), (indices[:, 1], indices[:, 0])), shape=(ncc, ncc)
+                )
+                ncc_comp, labels_comp = connected_components(graph)
+                new_labels[~no_nans] = -1
+                new_labels[np.flatnonzero(no_nans)[triaged]] = -1
+                new_labels[np.flatnonzero(no_nans)[~triaged]] = labels_comp[labels[~triaged]]
+            else:
+                new_labels[~no_nans] = -1
+                new_labels[np.flatnonzero(no_nans)[triaged]] = -1
+                new_labels[np.flatnonzero(no_nans)[~triaged]] = 0
+    
+            return SplitResult(
+                is_split=True, in_unit=in_unit_all, new_labels=new_labels
+            )
 
-        return SplitResult(
-            is_split=True, in_unit=in_unit_all, new_labels=new_labels
-        )
+        else:
+            return SplitResult(
+                is_split=True, in_unit=in_unit_all, new_labels=new_labels
+            )
 
 
 class MaxChanPCSplit(SplitStrategy):

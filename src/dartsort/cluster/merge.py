@@ -971,7 +971,6 @@ def calculate_merge_distances(
     sup_dists = np.full((n_templates, n_templates), np.nan) #NAN???
     sup_shifts = np.zeros((n_templates, n_templates), dtype=int)
 
-    print("q")
     # apply min channel amplitude to templates directly so that it reflects
     # in the template norms used in the distance computation
     # if min_channel_amplitude:
