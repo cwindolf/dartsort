@@ -220,6 +220,7 @@ def check_recording(
     expected_value_range=1e4,
     expected_spikes_per_sec=10_000,
     num_chunks_per_segment=5,
+    dtype=torch.float,
 ):
     """Sanity check spike detection rate and data range of input recording."""
 
@@ -241,7 +242,7 @@ def check_recording(
     spike_rates = []
     for chunk in random_chunks:
         times, _ = detect_and_deduplicate(
-            torch.tensor(chunk),
+            torch.tensor(chunk, dtype=dtype),
             threshold=threshold,
             peak_sign="both",
             dedup_channel_index=torch.tensor(dedup_channel_index),

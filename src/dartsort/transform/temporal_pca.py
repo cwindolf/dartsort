@@ -126,7 +126,6 @@ class BaseTemporalPCA(BaseWaveformModule):
             waveforms_in_probe,
             self.components.T @ self.components,
         )
-            
 
     def to_sklearn(self):
         pca = PCA(
@@ -160,14 +159,16 @@ class TemporalPCADenoiser(BaseWaveformDenoiser, BaseTemporalPCA):
 class TemporalPCAFeaturizer(BaseWaveformFeaturizer, BaseTemporalPCA):
     default_name = "tpca_features"
 
-    def transform(self, waveforms, max_channels):
+    def transform(self, waveforms, max_channels, channel_index=None):
+        if channel_index is None:
+            channel_index = self.channel_index
         (
             channels_in_probe,
             waveforms_in_probe,
-        ) = get_channels_in_probe(waveforms, max_channels, self.channel_index)
+        ) = get_channels_in_probe(waveforms, max_channels, channel_index)
         features_in_probe = self._transform_in_probe(waveforms_in_probe)
         features = torch.full(
-            (waveforms.shape[0], self.rank, self.channel_index.shape[1]),
+            (waveforms.shape[0], self.rank, channel_index.shape[1]),
             torch.nan,
             dtype=features_in_probe.dtype,
             device=features_in_probe.device,
@@ -179,11 +180,13 @@ class TemporalPCAFeaturizer(BaseWaveformFeaturizer, BaseTemporalPCA):
         )
         return {self.name: features}
 
-    def inverse_transform(self, features, max_channels):
+    def inverse_transform(self, features, max_channels, channel_index=None):
+        if channel_index is None:
+            channel_index = self.channel_index
         (
             channels_in_probe,
             features_in_probe,
-        ) = get_channels_in_probe(features, max_channels, self.channel_index)
+        ) = get_channels_in_probe(features, max_channels, channel_index)
         reconstructions_in_probe = self._inverse_transform_in_probe(
             features_in_probe
         )
@@ -191,7 +194,7 @@ class TemporalPCAFeaturizer(BaseWaveformFeaturizer, BaseTemporalPCA):
             (
                 features.shape[0],
                 self.components.shape[1],
-                self.channel_index.shape[1],
+                channel_index.shape[1],
             ),
             torch.nan,
             dtype=reconstructions_in_probe.dtype,

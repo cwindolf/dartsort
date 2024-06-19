@@ -184,6 +184,7 @@ class SubtractionPeeler(BasePeeler):
         return_residual=False,
     ):
         extract_index = None if self.extract_subtract_same else self.channel_index
+        traces = traces.to(self.dtype)
         subtraction_result = subtract_chunk(
             traces,
             self.subtract_channel_index,
