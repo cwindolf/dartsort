@@ -237,27 +237,6 @@ def create_tpca_templates_list_efficient(
     all_units = np.unique(all_labels)
     all_units = all_units[all_units>-1]
     n_units = len(all_units)
-
-    # Divide directly later, no need to do that?
-    # weight_sum_per_chunk_per_unit = np.full((n_total_chunks, n_units), np.nan)
-    # for j, chunk_time_range in enumerate(chunk_time_ranges_s):
-    #     sub_chunk_time_range_s = subchunks_time_ranges(recording, chunk_time_range, template_config.subchunk_size_s,
-    #                                               divider_samples=matching_config.chunk_length_samples)
-    #     n_sub_chunks = len(sub_chunk_time_range_s)
-    #     for k, subchunk_time_range in enumerate(sub_chunk_time_range_s):
-    #         idx_chunk = np.logical_and(
-    #             sorting.times_seconds >= subchunk_time_range[0], sorting.times_seconds < subchunk_time_range[1]
-    #         )
-    #         labels_chunk = all_labels[idx_chunk]
-            
-    #         lab, counts = np.unique(labels_chunk, return_counts=True)
-    #         counts = counts[lab>-1]
-    #         lab = lab[lab>-1]
-    #         if weights is not None:
-    #             weight_sum_per_chunk_per_unit[int(j*n_sub_chunks + k), lab] = np.bincount(labels_chunk[labels_chunk>-1], weights[idx_chunk][labels_chunk>-1])[lab]
-    #         else:
-    #             weight_sum_per_chunk_per_unit[int(j*n_sub_chunks + k), lab] = counts
-
                 
     # INITIALIZE WITH reg geom shape
     tpca_templates_list = np.zeros((n_total_chunks, n_units, tpca_rank, n_template_channels))
@@ -318,14 +297,8 @@ def create_tpca_templates_list_efficient(
         tpca_templates_list /= weights_count_list[:, :, None]
     else:
         tpca_templates_list /= spike_count_list[:, :, None]
-
-    if tpca is not None:
-        tpca_templates_list_reconstructed = np.full((n_total_chunks, n_units, n_spike_samples, n_template_channels), np.nan)
-        for k in range(n_total_chunks):
-            tpca_templates_list_reconstructed[k] = tpca.inverse_transform(tpca_templates_list[k].transpose(0, 2, 1).reshape(-1, tpca_rank)).reshape(-1, n_template_channels, n_spike_samples).transpose(0, 2, 1)
-        return tpca_templates_list_reconstructed, spike_count_list, chunk_belong
-    else:
-        return tpca_templates_list, spike_count_list, chunk_belong
+        
+    return tpca_templates_list, spike_count_list, chunk_belong
 
 def create_tpca_templates_list(
     recording, 
@@ -391,62 +364,3 @@ def create_tpca_templates_list(
             tpca_templates_list.append(temp_data_colcleaned)
 
     return tpca_templates_list, spike_count_list, unit_ids_list
-
-
-# def create_tpca_templates_list(
-#     recording, 
-#     sorting,
-#     me,
-#     chunk_time_ranges_s,
-#     template_config, 
-#     matching_config,
-#     data_dir_chunks,
-#     tpca=None,
-#     tpca_rank=8,
-#     n_spike_samples=121,
-#     weights=None,
-# ):
-
-#     """
-#     TODO: Parallelize this code
-#     """
-    
-#     cmp=0
-#     tpca_templates_list = []
-#     unit_ids_list = []
-#     spike_count_list = []
-    
-#     for j, chunk_time_range in tqdm(enumerate(chunk_time_ranges_s), total = len(chunk_time_ranges_s), desc="Making tpca colcleaned templates"):
-        
-#         colcleaned_wfs_unit = []
-#         sub_chunk_time_range_s = subchunks_time_ranges(recording, chunk_time_range, template_config.subchunk_size_s,
-#                                                   divider_samples=matching_config.chunk_length_samples)
-#         n_sub_chunks = len(sub_chunk_time_range_s)
-        
-#         for k, subchunk_time_range in enumerate(sub_chunk_time_range_s):
-                
-#             matchh5_chunk = data_dir_chunks / f"chunk_{int(j*n_sub_chunks + k)}_matching0.h5"
-#     # 
-#             with h5py.File(matchh5_chunk, "r+") as h5:
-#                 n_spikes_chunk = len(h5["times_samples"][:])
-
-#             indices_chunk = np.arange(cmp, cmp+n_spikes_chunk)
-#             cmp+=n_spikes_chunk
-    
-#             temp_data_colcleaned = TemplateData.from_h5_with_colcleanedwfs(
-#                 recording,
-#                 data_dir_chunks / f"chunk_{int(j*n_sub_chunks + k)}_matching0.h5",
-#                 sorting,
-#                 template_config,
-#                 indices=indices_chunk,
-#                 weight_wfs=weights,
-#                 save_folder=None,
-#                 motion_est=me,
-#             )   
-#             unit_ids_list.append(temp_data_colcleaned.unit_ids)
-#             spike_count_list.append(temp_data_colcleaned.spike_counts)
-#             if tpca is not None:
-#                 temp_data_colcleaned = tpca.inverse_transform(temp_data_colcleaned.templates.transpose(0, 2, 1).reshape(-1, tpca_rank)).reshape(-1, temp_data_colcleaned.templates.shape[2], n_spike_samples).transpose(0, 2, 1) #[:, :, 0] 
-#             tpca_templates_list.append(temp_data_colcleaned)
-
-#     return tpca_templates_list, spike_count_list, unit_ids_list
