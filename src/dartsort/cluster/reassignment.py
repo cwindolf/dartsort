@@ -361,6 +361,7 @@ def iterative_split_merge_reassignment(
     triage_spikes_2way=0.55,
     triage_spikes_3way=0.5,
     norm_triage=4.0,
+    denoising_tsvd=None,
 ):
 
     """
@@ -430,6 +431,7 @@ def iterative_split_merge_reassignment(
             aggregate_func=split_merge_config.aggregate_func,
             overwrite_templates=True,
             return_neighbors=True,
+            denoising_tsvd=denoising_tsvd,
         )
 
         #reassign and triage ---
