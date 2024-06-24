@@ -65,12 +65,13 @@ def cluster_scatter(
         color = get_ccolor(k)
         ax.scatter(xk, yk, s=s, color=color, lw=lw, marker=".", rasterized=True)
         if k not in excluded_ids:
+            
+            x_mean, y_mean = np.median(xk), np.median(yk)
+            # if fontsize is None:
+            #     ax.annotate(str(k), (x_mean, y_mean), fontsize=7)
+            # else:
+            ax.annotate(str(k), (x_mean, y_mean), fontsize=10)
             if do_ellipse:
-                x_mean, y_mean = xk.mean(), yk.mean()
-                if fontsize is None:
-                    ax.annotate(str(k), (x_mean, y_mean), fontsize=7)
-                else:
-                    ax.annotate(str(k), (x_mean, y_mean), fontsize=fontsize)
                 xycov = np.cov(xk, yk)
                 means[k] = x_mean, y_mean
                 covs[k] = xycov
@@ -370,8 +371,8 @@ def array_scatter(
         fig.suptitle(title)
 
     excluded_ids = {-1}
-    if not do_ellipse:
-        excluded_ids = np.unique(labels)
+    # if not do_ellipse:
+    #     excluded_ids = np.unique(labels)
 
     cluster_scatter(
         x,

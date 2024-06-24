@@ -231,6 +231,9 @@ def merge_iterative_templates_with_multiple_chunks(
             return_denoising_tsvd=True,
         )
 
+        print("denoising_tsvd after chuck units")
+        print(denoising_tsvd)
+
         sorting, denoising_tsvd = merge_templates_across_multiple_chunks(
             sorting,
             recording,
@@ -257,6 +260,9 @@ def merge_iterative_templates_with_multiple_chunks(
             denoising_tsvd=denoising_tsvd,
             return_denoising_tsvd=True,
         )
+
+        print("denoising_tsvd after merge")
+        print(denoising_tsvd)
 
         # This step is not needed!!
         # if miter < split_merge_config.m_iter-1:
