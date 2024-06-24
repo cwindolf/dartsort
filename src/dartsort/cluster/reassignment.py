@@ -105,7 +105,7 @@ def compute_maxchan_tpca_residual(
     temp_data_smoothed,
     chunk_belong_wfs,
     wfs_name="collisioncleaned_tpca_features",
-    trough_offset=42,
+    trough_offset=0,
     peak_time_selection="maxstd",
     spike_length_samples=121,
     tpca_rank=8,
@@ -328,6 +328,7 @@ def iterative_merge_reassignment(
         for unit in unit_ids:
             idx_unit = np.flatnonzero(sorting.labels == unit)
             new_labels[idx_unit] = neighbors[unit, residual_norm.argmin(1)[idx_unit]]
+        norm_triage = (norm_triage / tpca.components_.max(1)).min()
         new_labels[residual_norm.min(1)>split_merge_config.norm_triage] = -1
         new_labels = new_labels.astype('int')
 
@@ -360,7 +361,7 @@ def iterative_split_merge_reassignment(
     min_nspikes_unit=150,
     triage_spikes_2way=0.55,
     triage_spikes_3way=0.5,
-    norm_triage=4.0,
+    norm_triage=4.0, # This is the norm in wf space - converted later using the tpca
     denoising_tsvd=None,
 ):
 
@@ -436,50 +437,51 @@ def iterative_split_merge_reassignment(
 
         #reassign and triage ---
 
-        # The output of these two functions is now in the pc space 
-        tpca_templates_list, spike_count_list, chunk_belong = create_tpca_templates_list_efficient(
-            recording, 
-            sorting,
-            motion_est,
-            chunk_time_ranges_s,
-            template_config, 
-            matching_config,
-            matchh5,
-            weights=None,
-            tpca=tpca,
-        )
-    
+    # The output of these two functions is now in the pc space 
+    tpca_templates_list, spike_count_list, chunk_belong = create_tpca_templates_list_efficient(
+        recording, 
+        sorting,
+        motion_est,
+        chunk_time_ranges_s,
+        template_config, 
+        matching_config,
+        matchh5,
+        weights=None,
+        tpca=tpca,
+    )
 
-        unit_ids = np.unique(sorting.labels)
-        unit_ids = unit_ids[unit_ids>-1]
-        
-        templates_smoothed = smooth_list_templates(
-            tpca_templates_list, spike_count_list, unit_ids, threshold_n_spike=split_merge_config.threshold_n_spike,
-        )
+
+    unit_ids = np.unique(sorting.labels)
+    unit_ids = unit_ids[unit_ids>-1]
     
-        residual_norm = compute_residual_norm(
-            recording, 
-            sorting,
-            motion_est,
-            chunk_time_ranges_s,
-            template_config,
-            matching_config,
-            tpca,
-            matchh5,
-            neighbors,
-            templates_smoothed,
-            chunk_belong,
-            wfs_name=wfs_name,
-            fill_nanvalue=fill_nanvalue,
-            norm_operator=split_merge_config.norm_operator,
-        )
-    
-        new_labels = -1*np.ones(sorting.labels.shape)
-        for unit in unit_ids:
-            idx_unit = np.flatnonzero(sorting.labels == unit)
-            new_labels[idx_unit] = neighbors[unit, residual_norm.argmin(1)[idx_unit]]
-        new_labels[residual_norm.min(1)>split_merge_config.norm_triage] = -1
-        new_labels = new_labels.astype('int')
+    templates_smoothed = smooth_list_templates(
+        tpca_templates_list, spike_count_list, unit_ids, threshold_n_spike=split_merge_config.threshold_n_spike,
+    )
+
+    residual_norm = compute_residual_norm(
+        recording, 
+        sorting,
+        motion_est,
+        chunk_time_ranges_s,
+        template_config,
+        matching_config,
+        tpca,
+        matchh5,
+        neighbors,
+        templates_smoothed,
+        chunk_belong,
+        wfs_name=wfs_name,
+        fill_nanvalue=fill_nanvalue,
+        norm_operator=split_merge_config.norm_operator,
+    )
+
+    new_labels = -1*np.ones(sorting.labels.shape)
+    for unit in unit_ids:
+        idx_unit = np.flatnonzero(sorting.labels == unit)
+        new_labels[idx_unit] = neighbors[unit, residual_norm.argmin(1)[idx_unit]]
+    norm_triage = (norm_triage / tpca.components_.max(1)).min()
+    new_labels[residual_norm.min(1)>split_merge_config.norm_triage] = -1
+    new_labels = new_labels.astype('int')
 
         # sorting = replace(sorting, labels = new_labels)
         
@@ -508,7 +510,7 @@ def full_reassignment_split(
     min_nspikes_unit=150,
     triage_spikes_2way=0.55,
     triage_spikes_3way=0.5,
-    norm_triage=4.0,
+    norm_triage=4, # This is the norm in the original wf space - it is converted using the tpca
 ):
 
     weights_deconv = np.log(1 + np.abs(deconv_scores-deconv_scores.min()))
@@ -595,6 +597,7 @@ def full_reassignment_split(
     for unit in units:
         idx_unit = np.flatnonzero(sorting.labels == unit)
         new_labels[idx_unit] = neighbors[sorting.labels[idx_unit], residual_norm.argmin(1)[idx_unit]]
+    norm_triage = (norm_triage / tpca.components_.max(1)).min()
     new_labels[residual_norm.min(1)>norm_triage] = -1
     new_labels = new_labels.astype('int')
 

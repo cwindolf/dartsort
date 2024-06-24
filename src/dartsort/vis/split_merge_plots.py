@@ -1423,7 +1423,7 @@ def check_overmerges(
                         # print(np.where(~np.isnan(waveforms_target_chan[0, 0])))
                         
                         no_nans = np.flatnonzero(np.isfinite(waveforms_target_chan[:, 0, :]).all(axis=1))
-                        if len(no_nans)>0:
+                        if len(no_nans)>1:
                             pcs = PCA(2).fit_transform(waveforms_target_chan.reshape(waveforms_target_chan.shape[0], -1)[no_nans])
         
                             ax_pcs.scatter(pcs[:, 0], pcs[:, 1], s=1, c = "blue")
@@ -1449,7 +1449,7 @@ def check_overmerges(
                                         ax_wfs.plot(np.arange(120), temp_unit_tpca[15:75, chans_to_plot_registered_geom].T.flatten(), c = "orange", alpha = 1)                                        
                                     else:
                                         ax_wfs.plot(np.arange(120), temp_chunk[:, k*2:k*2+2].T.flatten() + k*med_ptp, c = "orange", alpha = 1)                                        
-                                        ax_wfs.plot(np.arange(120), mean_waveforms[:, k*2:k*2+2].T.flatten() + k*med_ptp, c = "red", alpha = 1)                                        
+                                        # ax_wfs.plot(np.arange(120), mean_waveforms[:, k*2:k*2+2].T.flatten() + k*med_ptp, c = "red", alpha = 1)                                        
                             ax_wfs.set_ylabel("Wfs", fontsize=7, labelpad = 0)
                             ax_wfs_temp_subtracted.set_ylabel(f"Template-subtracted wfs (max chan {max_chan_registered_geom})", fontsize=7, labelpad=0)
                             ax_wfs_temp_subtracted.set_xticks([])
