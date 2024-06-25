@@ -17,7 +17,7 @@ import numpy as np
 from dartsort.util import job_util
 from dartsort.util.data_util import DARTsortSorting, chunk_time_ranges
 
-from . import cluster_util, density, ensemble_utils, forward_backward
+from . import cluster_util, density, ensemble_utils, forward_backward, postprocess
 
 
 def cluster_chunk(
@@ -203,6 +203,7 @@ def cluster_chunks(
     recording,
     clustering_config,
     motion_est=None,
+    slice_s=None,
 ):
     """Divide the recording into chunks, and cluster each chunk
 
@@ -220,7 +221,7 @@ def cluster_chunks(
         chunk_length_samples = (
             recording.sampling_frequency * clustering_config.chunk_size_s
         )
-    chunk_time_ranges_s = chunk_time_ranges(recording, chunk_length_samples)
+    chunk_time_ranges_s = chunk_time_ranges(recording, chunk_length_samples, slice_s)
 
     # cluster each chunk. can be parallelized in the future.
     sortings = [
@@ -243,6 +244,10 @@ def ensemble_chunks(
     clustering_config,
     computation_config=None,
     motion_est=None,
+    slice_s=None,
+    tpca=None,
+    wfs_name="collisioncleaned_tpca_features",
+    trough_offset=42,
 ):
     """Initial clustering combined across chunks of time
 
@@ -272,6 +277,7 @@ def ensemble_chunks(
         recording,
         clustering_config,
         motion_est=motion_est,
+        slice_s=slice_s,
     )
     if len(chunk_sortings) == 1:
         return chunk_sortings[0]
@@ -297,6 +303,28 @@ def ensemble_chunks(
             n_jobs_merge=computation_config.actual_n_jobs_gpu,
             device=computation_config.actual_device,
             show_progress=True,
+        )
+        
+    print("Separate positive/negative wfs")   
+    if clustering_config.separate_pos_neg:
+        sorting, max_value = postprocess.separate_positive_negative_wfs(
+            sorting,
+            peeling_hdf5_filename,
+            tpca=tpca,
+            wfs_name=wfs_name,
+            trough_offset=trough_offset,
+            return_max_value=True,
+        )
+    print("Merge close in space")
+    if clustering_config.merge_clusters_close_in_space:
+        sorting = postprocess.merge_units_close_in_space(
+            sorting, 
+            motion_est=motion_est, 
+            max_value = max_value, 
+            merge_threshold = clustering_config.spatial_distance_threshold, 
+            scales=clustering_config.feature_scales, 
+            log_c=clustering_config.log_c, 
+            link=clustering_config.space_merge_link
         )
 
     return sorting

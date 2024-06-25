@@ -378,8 +378,8 @@ def conv_to_resid(
     svs_a = low_rank_templates_a.singular_values[template_indices_a]
     svs_b = low_rank_templates_b.singular_values[template_indices_b]
     active_a = torch.any(spatial_a > 0, dim=1).to(svs_a)
-    # active_b = torch.any(spatial_b > 0, dim=1).to(svs_b)
-    active = active_a # * active_b
+    active = active_a 
+
     com_spatial_sing_a = (spatial_a * active[:, None, :]) * svs_a[:, :, None]
     com_spatial_sing_b = (spatial_b * active[:, None, :]) * svs_b[:, :, None]
     template_a_norms = (

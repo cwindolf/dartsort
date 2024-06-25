@@ -245,6 +245,7 @@ def density_peaks_clustering(
     max_n_bins=128,
     scales=None,
     log_c=None,
+    pcs_only=False,
 ):
     """
     if l2_norm is passed as argument, it will be used to compute density and nhdn
@@ -252,6 +253,12 @@ def density_peaks_clustering(
     # n = len(X)
     if workers < 0:
         workers = multiprocessing.cpu_count() + workers + 1
+
+    if pcs_only:
+        ramp_triage_before_clustering=False
+        use_y_triaging=False
+        distance_dependent_noise_density=False
+        remove_borders=False
 
     if ramp_triage_before_clustering and geom is not None:
         inliers_first = np.ones(len(X)).astype("bool")
@@ -437,39 +444,40 @@ def density_peaks_clustering(
     if remove_clusters_smaller_than:
         labels = decrumb(labels, min_size=remove_clusters_smaller_than)
 
-    if triage_quantile_per_cluster:
-        amp_no_triaging_after_clustering = scales[2] * np.log(
-            log_c + amp_no_triaging_after_clustering
-        )
-        for k in np.unique(labels[labels > -1]):
-            idx_label = np.flatnonzero(labels == k)
-            amp_vec = X[inliers_first][idx_label, 2]
-            med_amp = np.median(amp_vec)
-            if med_amp < amp_no_triaging_after_clustering:
-                if ramp_triage_per_cluster:
-                    triage_quantile_per_cluster = (
-                        amp_no_triaging_after_clustering - med_amp
-                    ) / amp_no_triaging_after_clustering
-                # triage_quantile_unit = triage_quantile_per_cluster
-                if l2_norm is None:
-                    q = np.quantile(density[idx_label], triage_quantile_per_cluster)
-                    spikes_to_remove = np.flatnonzero(
-                        np.logical_and(
-                            density[idx_label] < q,
-                            amp_vec < amp_no_triaging_after_clustering,
+    if triage_quantile_per_cluster > 0:
+        if not pcs_only:
+            amp_no_triaging_after_clustering = scales[2]*np.log(log_c+amp_no_triaging_after_clustering)
+            for k in np.unique(labels[labels > -1]):
+                idx_label = np.flatnonzero(labels == k)
+                amp_vec = X[inliers_first][idx_label, 2]
+                med_amp = np.median(amp_vec)
+                if med_amp<amp_no_triaging_after_clustering:
+                    if ramp_triage_per_cluster:
+                        triage_quantile_per_cluster = (amp_no_triaging_after_clustering - med_amp)/amp_no_triaging_after_clustering
+                    if l2_norm is None:
+                        q = np.quantile(density[idx_label], triage_quantile_per_cluster)
+                        spikes_to_remove = np.flatnonzero(
+                            np.logical_and(
+                                density[idx_label] < q,
+                                amp_vec < amp_no_triaging_after_clustering,
+                            )
                         )
-                    )
-                else:
-                    q = np.quantile(density[idx_label], 1 - triage_quantile_per_cluster)
-                    spikes_to_remove = np.flatnonzero(
-                        np.logical_and(
-                            density[idx_label] > q,
-                            amp_vec < amp_no_triaging_after_clustering,
+                    else:
+                        q = np.quantile(density[idx_label], 1-triage_quantile_per_cluster)
+                        spikes_to_remove = np.flatnonzero(
+                            np.logical_and(
+                                density[idx_label] > q,
+                                amp_vec < amp_no_triaging_after_clustering,
+                            )
                         )
-                    )
-
+                    labels[idx_label[spikes_to_remove]] = -1
+        else:
+            for k in np.unique(labels[labels > -1]):
+                idx_label = np.flatnonzero(labels == k)
+                q = np.nanquantile(density[idx_label], triage_quantile_per_cluster)
+                spikes_to_remove = np.flatnonzero(density[idx_label] < q)
                 labels[idx_label[spikes_to_remove]] = -1
-
+                
     labels_all = np.full(len(X), -1)
     labels_all[inliers_first] = labels
 

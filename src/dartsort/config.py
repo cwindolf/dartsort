@@ -16,7 +16,7 @@ object can then be passed into the high level functions like
 """
 
 from dataclasses import dataclass, field
-from typing import List, Optional, Tuple
+from typing import List, Optional, Tuple, Callable
 
 import torch
 import numpy as np
@@ -31,6 +31,30 @@ except ImportError:
 
 default_pretrained_path = files("dartsort.pretrained")
 default_pretrained_path = default_pretrained_path.joinpath("single_chan_denoiser.pt")
+
+
+@dataclass(frozen=True)
+class PreprocessingConfig:
+    """
+    Defaults divides every channel of an int16 dataset into a float32 dataset by the median std (same for all)
+    + applies low pass filter and median subtraction using CMR
+    """
+    dtype_raw: str = "int16"
+    output_data_type: str = "float32"
+    
+    low_frequency: float = 300
+    high_factor: float = 0.1
+    order: float = 3
+
+    delete_original_data: bool = False
+    
+    apply_filter: bool = True
+    median_subtraction: bool = True
+    adcshift_correction: bool = True # CATGT OR RESAMPLED --> False
+    n_channels_before_preprocessing: int = 385
+    channels_to_remove: Tuple[int] = (384,)
+
+    n_jobs_preprocessing: int = -1
 
 
 @dataclass(frozen=True)
@@ -174,9 +198,15 @@ class TemplateConfig:
 
     # low rank denoising?
     low_rank_denoising: bool = True
-    denoising_rank: int = 5
-    denoising_snr_threshold: float = 50.0
+    denoising_rank: int = 8
+    denoising_snr_threshold: float = 50.0 #Check that this is used with ptp * sqrt(N) otherwise need to be increased to ~50
     denoising_fit_radius: float = 75.0
+    min_fraction_at_shift: float = 0.25
+    min_count_at_shift: float = 25
+
+    # spatial SVD smoothing
+    spatial_svdsmoothing: bool = False
+    max_ptp_chans_to_spatialsmooth: float =3.0
 
     # realignment
     # TODO: maybe this should be done in clustering?
@@ -185,6 +215,8 @@ class TemplateConfig:
 
     # track template over time
     time_tracking: bool = False
+    subchunk_time_smoothing: bool = False
+    subchunk_size_s: int = 30
     chunk_size_s: int = 300
 
 
@@ -205,7 +237,7 @@ class MatchingConfig:
     amplitude_scaling_variance: float = 0.0
     amplitude_scaling_boundary: float = 0.5
     max_iter: int = 1000
-    conv_ignore_threshold: float = 5.0
+    conv_ignore_threshold: float = 0.0 # Change this to 5 once bug is fixed :) 
     coarse_approx_error_threshold: float = 0.0
     coarse_objective: bool = True
 
@@ -213,18 +245,65 @@ class MatchingConfig:
 @dataclass(frozen=True)
 class SplitMergeConfig:
     # -- split
-    split_strategy: str = "FeatureSplit"
-    recursive_split: bool = True
+    split_strategy: str = "MaxChanPCSplit" 
+    recursive_split: bool = False #Set to False if using the iterative split merge
     split_strategy_kwargs: Optional[dict] = field(
         default_factory=lambda: dict(max_spikes=20_000)
     )
 
+    # Param for the merge_iterative_templates_with_multiple_chunks
+    num_merge_iteration: float = 3
+    # Params for split_strategy="MaxChanPCSplit"
+    channel_selection_radius: float = 1 # ensure it is a max chan here 
+    use_localization_features: bool = False
+    use_ptp: bool = False
+    n_neighbors_search: float = 25
+    radius_search: float = 5
+    sigma_local: float = 1
+    noise_density: float = 0.25
+    remove_clusters_smaller_than: float = 10
+    relocated: bool = False
+    whitened: bool = False
+    cluster_alg: str = "dpc"
+
     # -- merge
     merge_template_config: TemplateConfig = TemplateConfig(superres_templates=False)
-    linkage: str = "complete"
+    link: str = "complete"
     merge_distance_threshold: float = 0.25
     cross_merge_distance_threshold: float = 0.5
-    min_spatial_cosine: float = 0.0
+    min_spatial_cosine: float = 0.5
+    # superres_linkage: Callable[np.array, np.array] = np.max
+    # sym_function: Callable[[np.array, np.array], np.array] = np.maximum # dist = sym_function(dist(a,b),dist(b,a))
+    superres_linkage: Callable = np.max
+    sym_function: Callable = np.maximum # dist = sym_function(dist(a,b),dist(b,a))
+    min_channel_amplitude: float = 1.0
+    mask_units_too_far: bool = True
+    # aggregate_func: Callable[[np.array, Tuple[int]], np.array] = np.nanmax
+    aggregate_func: Callable = np.nanmax
+    min_ratio_chan_no_nan: float = 0.25
+
+    # -- reassignment
+    norm_triage: float = 4.0
+    # norm_operator: Callable[[np.array, Tuple[int]], np.array] = np.nanmax
+    norm_operator: Callable = np.nanmax
+    # resid split
+    peak_time_selection: str = "maxstd"
+    # For tpca template computation 
+    threshold_n_spike: float = 0.2
+    m_iter: int = 1
+
+    # For template comparisons
+    max_shift_samples: int = 20
+    temporal_upsampling_factor: int = 8
+    amplitude_scaling_variance: float = 0
+    amplitude_scaling_boundary: float = 0
+    svd_compression_rank: int = 20
+    conv_batch_size: int = 128
+    units_batch_size: int = 8 
+
+    # Add Zipper Split params here
+    
+
 
 
 @dataclass(frozen=True)
@@ -278,6 +357,12 @@ class ClusteringConfig:
     chunk_size_s: float = 300.0
     split_merge_ensemble_config: SplitMergeConfig = SplitMergeConfig()
 
+    # -- separate positive / negative spikes
+    separate_pos_neg: bool = True
+    merge_clusters_close_in_space: bool = True
+    spatial_distance_threshold: float = 20
+    space_merge_link: str = "complete"
+
 
 @dataclass(frozen=True)
 class ComputationConfig:
@@ -310,6 +395,7 @@ class DARTsortConfig:
     matching_config: MatchingConfig = MatchingConfig()
     motion_estimation_config: MotionEstimationConfig = MotionEstimationConfig()
     computation_config: ComputationConfig = ComputationConfig()
+    preprocessing_config = PreprocessingConfig()
 
     # high level behavior
     subtract_only: bool = False
@@ -318,7 +404,7 @@ class DARTsortConfig:
     matching_iterations: int = 1
     intermediate_matching_subsampling: float = 1.0
 
-
+default_preprocessing_config = PreprocessingConfig()
 default_waveform_config = WaveformConfig()
 default_featurization_config = FeaturizationConfig()
 default_subtraction_config = SubtractionConfig()

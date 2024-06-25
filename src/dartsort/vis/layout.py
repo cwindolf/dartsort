@@ -45,7 +45,7 @@ def flow_layout(
     # -- draw the figure
     width_ratios = [column[0].width for column in columns]
     if figure is None:
-        figure = plt.figure(figsize=figsize, layout="constrained")
+        figure = plt.figure(figsize=figsize) #, layout="constrained") ? needed
     subfigures = figure.subfigures(
         nrows=1,
         ncols=len(columns),
@@ -93,12 +93,12 @@ def flow_layout(
 def flow_layout_columns(plots, max_height=4, **plot_kwargs):
     all_plots = []
     for plot in plots:
-        if isinstance(plot, BasePlot):
-            all_plots.append(plot)
-        elif isinstance(plot, BaseMultiPlot):
-            all_plots.extend(plot.plots(**plot_kwargs))
-        else:
-            assert False
+        # if isinstance(plot, BasePlot):
+        all_plots.append(plot)
+        # elif isinstance(plot, BaseMultiPlot):
+        #     all_plots.extend(plot.plots(**plot_kwargs))
+        # else:
+        #     assert False
     plots = all_plots
 
     plots_by_kind = {}
@@ -110,6 +110,7 @@ def flow_layout_columns(plots, max_height=4, **plot_kwargs):
     # break plots into groups ("cards") by kind
     cards = []
     for kind, plots in plots_by_kind.items():
+        
         width = max(p.width for p in plots)
         card_plots = []
         for plot in plots:

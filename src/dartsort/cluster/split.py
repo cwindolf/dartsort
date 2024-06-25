@@ -14,6 +14,12 @@ from sklearn.decomposition import PCA
 # from sklearn.metrics.pairwise import nan_euclidean_distances
 from tqdm.auto import tqdm
 
+from scipy.ndimage import gaussian_filter
+from scipy.interpolate import RegularGridInterpolator
+from scipy.sparse.csgraph import connected_components
+from scipy.sparse import coo_array
+from scipy.spatial import KDTree
+
 from . import cluster_util, density, relocate
 from .forward_backward import forward_backward
 
@@ -50,7 +56,7 @@ def split_clusters(
     # initialize split state
     labels = sorting.labels.copy()
     labels_to_process = np.unique(labels)
-    labels_to_process = list(labels_to_process[labels_to_process > 0])
+    labels_to_process = list(labels_to_process[labels_to_process >= 0])
     cur_max_label = max(labels_to_process)
 
     if split_strategy_kwargs is None:
@@ -65,7 +71,7 @@ def split_clusters(
         initializer=_split_job_init,
         initargs=(
             split_strategy,
-            sorting.parent_h5_path,
+            sorting.parent_h5_path, # change this!!
             split_strategy_kwargs,
         ),
     ) as pool:
@@ -93,7 +99,9 @@ def split_clusters(
             labels[in_unit[triaged]] = new_labels[triaged]
             labels[in_unit[new_labels > 0]] = cur_max_label + new_labels[new_labels > 0]
             new_untriaged_labels = labels[in_unit[new_labels >= 0]]
-            cur_max_label = new_untriaged_labels.max()
+            cur_max_label = labels.max()
+            # if new_labels.max()==0:
+            #     cur_max_label = labels.max()
 
             # submit recursive jobs to the pool, if any
             if recursive:
@@ -177,6 +185,7 @@ class FeatureSplit(SplitStrategy):
         use_localization_features=True,
         return_localization_features=False,
         n_pca_features=2,
+        whitened=True,
         pca_imputation=None,
         pca_reassign=False,
         relocated=True,
@@ -192,10 +201,10 @@ class FeatureSplit(SplitStrategy):
         sigma_local=5,
         sigma_local_low=None,
         sigma_regional=None,
-        noise_density=0.1,
+        noise_density=0.0,
         n_neighbors_search=20,
         radius_search=5.0,
-        triage_quantile_per_cluster=0.2,
+        triage_quantile_per_cluster=0.,
         remove_clusters_smaller_than=25,
         knn_reassign_outliers=False,
         random_state=0,
@@ -243,6 +252,7 @@ class FeatureSplit(SplitStrategy):
         self.channel_selection_radius = channel_selection_radius
         self.use_localization_features = use_localization_features
         self.n_pca_features = n_pca_features
+        self.whitened = whitened
         self.pca_imputation = pca_imputation
         self.pca_reassign = pca_reassign
         self.relocated = relocated and motion_est is not None
@@ -279,6 +289,9 @@ class FeatureSplit(SplitStrategy):
         assert cluster_alg in ("hdbscan", "dpc")
         self.cluster_alg = cluster_alg
 
+        if cluster_alg == "dpc":
+            self.pcs_only = not self.use_localization_features and not self.use_spread and not self.use_wfs_L2_norm and not self.use_ptp
+
         # load up the required h5 datasets
         self.initialize_from_h5(
             peeling_hdf5_filename,
@@ -303,17 +316,20 @@ class FeatureSplit(SplitStrategy):
 
         do_pca = self.n_pca_features > 0
 
-        if do_pca or self.relocated or self.use_wfs_L2_norm or self.pca_reassign:
+        if (do_pca and self.motion_est is not None) or self.relocated or self.use_wfs_L2_norm:
             (
                 max_registered_channel,
                 n_pitches_shift,
                 reloc_amplitudes,
                 kept,
             ) = self.get_registered_channels(in_unit)
+
             if not kept.size:
                 return SplitResult()
         else:
             kept = np.arange(in_unit.shape[0])
+            max_registered_channel=self.channels[in_unit]
+            n_pitches_shift=np.full(in_unit.shape[0], 0)
 
         features = []
 
@@ -329,6 +345,13 @@ class FeatureSplit(SplitStrategy):
             if not self.use_ptp:
                 loc_features = loc_features[:, :2]
             features.append(loc_features)
+        elif self.use_ptp:
+            loc_features = self.localization_features[in_unit, 2]
+            if self.relocated:
+                loc_features[kept] = self.localization_feature_scales[2] * np.log(
+                    self.log_c + reloc_amplitudes
+                )
+            features.append(loc_features)
 
         if self.use_time_feature:
             features.append(self.t_s[in_unit] * self.time_scale)
@@ -339,6 +362,7 @@ class FeatureSplit(SplitStrategy):
                 max_registered_channel,
                 n_pitches_shift,
                 amplitude_normalized=self.amplitude_normalized,
+                whitened=self.whitened,
             )
             do_pca = enough_good_spikes
 
@@ -379,7 +403,10 @@ class FeatureSplit(SplitStrategy):
             features.append(spread)
 
         if not features:
-            return SplitResult()
+            return SplitResult(
+                is_split=False, in_unit=in_unit_all, new_labels = np.full(n_spikes, -1)
+            )
+
         features = np.column_stack([f[kept] for f in features])
 
         if self.cluster_alg == "hdbscan" and features.shape[0] > self.min_cluster_size:
@@ -409,6 +436,7 @@ class FeatureSplit(SplitStrategy):
                 radius_search=self.radius_search,
                 triage_quantile_per_cluster=self.triage_quantile_per_cluster,
                 remove_clusters_smaller_than=self.remove_clusters_smaller_than,
+                pcs_only=self.pcs_only,
             )
             new_ids = np.unique(clust_labels)
             new_ids = new_ids[new_ids >= 0]
@@ -615,6 +643,7 @@ class FeatureSplit(SplitStrategy):
         batch_size=128,
         max_samples_pca=5_000,
         amplitude_normalized=False,
+        whitened=False,
     ):
         """Compute relocated PCA features on a drift-invariant channel set
 
@@ -681,6 +710,7 @@ class FeatureSplit(SplitStrategy):
 
             # figure out which waveforms overlap completely with the remaining channels
             no_nan = np.flatnonzero(np.isfinite(waveforms[:, 0, :]).all(axis=1))
+
             if no_nan.size < max(self.min_cluster_size, self.n_pca_features):
                 return False, no_nan, None
 
@@ -688,7 +718,7 @@ class FeatureSplit(SplitStrategy):
             pca = PCA(
                 self.n_pca_features,
                 random_state=np.random.RandomState(seed=self.rg.bit_generator),
-                whiten=True,
+                whiten=whitened,
             )
             if self.pca_imputation is None:
                 waveforms = waveforms[no_nan]
@@ -781,7 +811,7 @@ class FeatureSplit(SplitStrategy):
         pca = PCA(
             self.n_pca_features,
             random_state=np.random.RandomState(seed=self.rg.bit_generator),
-            whiten=True,
+            whiten=whitened,
         )
         pca.fit(fit_waveforms[no_nan])
         if self.pca_imputation == "iterative":
@@ -1003,10 +1033,10 @@ class FeatureSplit(SplitStrategy):
         self.channels = h5["channels"][:]
         self.match_distance = pdist(self.geom).min() / 2
 
-        if self.use_localization_features or self.relocated or self.use_time_feature:
+        if self.use_localization_features or self.use_ptp or self.relocated or self.use_time_feature or self.n_pca_features>0:
             self.t_s = h5["times_seconds"][:]
 
-        if self.use_localization_features or self.relocated:
+        if self.use_localization_features or self.use_ptp  or self.relocated or self.n_pca_features>0:
             self.xyza = h5[localizations_dataset_name][:]
             # registered spike positions (=originals if not relocated)
             self.z_reg = self.z = self.xyza[:, 2]
@@ -1018,9 +1048,12 @@ class FeatureSplit(SplitStrategy):
             if self.motion_est is not None:
                 self.z_reg = self.motion_est.correct_s(self.t_s, self.z)
             if self.relocated or self.n_pca_features or self.use_wfs_L2_norm:
-                self.registered_geom = drift_util.registered_geometry(
-                    self.geom, self.motion_est
-                )
+                if self.motion_est is not None:
+                    self.registered_geom = drift_util.registered_geometry(
+                        self.geom, self.motion_est
+                    )
+                else:
+                    self.registered_geom = self.geom
                 self.registered_channel_index = waveform_util.make_channel_index(
                     self.registered_geom, self.channel_selection_radius
                 )
@@ -1033,7 +1066,7 @@ class FeatureSplit(SplitStrategy):
         ):
             self.amplitude_vectors = h5[amplitude_vectors_dataset_name]
 
-        if self.use_localization_features:
+        if self.use_localization_features or self.use_ptp :
             self.localization_features = np.c_[
                 self.xyza[:, 0],
                 self.z_reg,
@@ -1051,6 +1084,488 @@ class FeatureSplit(SplitStrategy):
             assert peeling_featurization_pt.exists()
 
         if (self.n_pca_features or self.use_wfs_L2_norm) and self.relocated:
+            # load up featurization pipeline for tpca inversion
+            assert peeling_featurization_pt is not None
+            feature_pipeline = torch.load(peeling_featurization_pt)
+            tpca_feature = [
+                f
+                for f in feature_pipeline.transformers
+                if f.name == tpca_features_dataset_name
+            ]
+            assert len(tpca_feature) == 1
+            self.tpca = tpca_feature[0].to_sklearn()
+
+class ZipperSplit(SplitStrategy):
+    def __init__(
+        self,
+        sorting,
+        peeling_hdf5_filename=None,
+        log_c=5,
+        log_scale_amp=True,
+        chunk_size=300,
+        max_time_diff_to_merge=600,
+        rescale_log_amp_std=5,
+        motion_est=None,
+        max_n_bins=500,
+        min_n_bins=50,
+        n_neigh_search=1000,
+        distance_upperbound_search=500,
+        density_noise=0.1,
+        triage_per_cluster=0.2,
+        remove_clusters_smaller_than=25,
+        rescale_time_merging=10,
+        amplitude_diff_nomerge=3,
+        max_neigh_connected_merging=1,
+        max_dist_nomerge=1000,
+        gaussian_filter_time_amp_std=[2, 0.1]
+        ):
+
+        self.times_seconds = sorting.times_seconds
+        self.denoised_ptp_amplitudes = sorting.denoised_ptp_amplitudes
+        if log_scale_amp:
+            self.log_amplitudes = np.log(log_c+self.denoised_ptp_amplitudes)
+        self.chunk_size = chunk_size
+        self.rescale_log_amp_std = rescale_log_amp_std
+        self.min_n_bins = min_n_bins
+        self.max_n_bins = max_n_bins
+        self.density_noise = density_noise
+        self.distance_upperbound_search = distance_upperbound_search
+        self.n_neigh_search = n_neigh_search
+        self.triage_per_cluster = triage_per_cluster
+        self.max_time_diff_to_merge = max_time_diff_to_merge
+        self.rescale_time_merging = rescale_time_merging
+        self.amplitude_diff_nomerge = amplitude_diff_nomerge
+        self.max_neigh_connected_merging = max_neigh_connected_merging
+        self.max_dist_nomerge = max_dist_nomerge
+        self.remove_clusters_smaller_than = remove_clusters_smaller_than
+        self.gaussian_filter_time_amp_std = gaussian_filter_time_amp_std
+        
+    def split_cluster(self, in_unit_all):
+
+        new_labels = -1*np.ones(len(in_unit_all))
+        
+        features = np.c_[self.times_seconds[in_unit_all], self.log_amplitudes[in_unit_all]]
+
+        std_pc_time = np.array([self.chunk_size, mad_sigma(self.log_amplitudes[in_unit_all], gauss_correct=True)*self.rescale_log_amp_std])
+        extents = np.c_[np.floor(features.min(0)), np.ceil(features.max(0))]
+        nbins = np.ceil(extents.ptp(1) / std_pc_time).astype(int)
+        bin_edges = [
+            np.linspace(e[0], e[1], num=max(self.min_n_bins + 1, min(self.max_n_bins + 1, nb)))
+            for e, nb in zip(extents, nbins)
+        ]
+
+        raw_histogram, bin_edges = np.histogramdd(features, bins=bin_edges)
+        bin_sizes = np.array([(be[1] - be[0]) for be in bin_edges])
+        # normalize histogram to samples / volume
+        raw_histogram = raw_histogram / bin_sizes.prod()
+
+        # here extend by one to not throw away far away time bins
+        bin_centers = [0.5 * (np.pad(be, 1, 'edge')[1:] + np.pad(be, 1, 'edge')[:-1]) for be in bin_edges]
+        hist = gaussian_filter(np.pad(raw_histogram, 1, 'edge'), self.gaussian_filter_time_amp_std)
+
+        lerp = RegularGridInterpolator(bin_centers, hist, bounds_error=False)
+        kde = lerp(features)
+        no_nans = ~np.isnan(kde)
+
+        if len(no_nans)>1:
+            # Check this?
+            valstd = mad_sigma(features[no_nans, 0], gauss_correct=True)/mad_sigma(features[no_nans, 1], gauss_correct=True)
+            X = features[no_nans] * np.array([1, valstd])[None, :]
+            kdtree = KDTree(X)
+    
+            distances, indices = kdtree.query(
+                X,
+                k=self.n_neigh_search+1,
+                distance_upper_bound=self.distance_upperbound_search,
+            ) 
+            distances, indices = distances[:, 1:].copy(), indices[:, 1:].copy()
+    
+            # find lowest distance higher density neighbor
+            density_padded = np.pad(kde[no_nans], (0, 1), constant_values=np.inf)
+            is_lower_density = density_padded[indices] <= kde[no_nans][:, None]
+            distances[is_lower_density] = np.inf
+            indices[is_lower_density] = kdtree.n
+            nhdn = indices[np.arange(kdtree.n), distances.argmin(1)]
+            n = kdtree.n
+    
+            nhdn[kde[no_nans] <= self.density_noise] = n
+    
+            nhdn = nhdn.astype(np.intc)
+            has_nhdn = np.flatnonzero(nhdn < n).astype(np.intc)
+            
+            graph = coo_array(
+                (np.ones(has_nhdn.size), (nhdn[has_nhdn], has_nhdn)), shape=(n, n)
+            )
+            ncc, labels = connected_components(graph)
+            labels[nhdn == n] = -1
+            _, labels[labels>-1] = np.unique(labels[labels>-1], return_inverse=True)
+    
+            if self.triage_per_cluster>0:
+                for k in np.unique(labels[labels>-1]):
+                    q = np.quantile(kde[no_nans][labels == k], self.triage_per_cluster)
+                    labels[np.flatnonzero(labels == k)[kde[no_nans][labels == k]<q]]=-1
+            if self.remove_clusters_smaller_than>0:
+                idx_good = np.flatnonzero(labels>-1)
+                _, counts = np.unique(labels[idx_good], return_counts=True)
+                labels[idx_good[counts[labels[idx_good]]<self.remove_clusters_smaller_than]]=-1
+            _, labels[labels>-1] = np.unique(labels[labels>-1], return_inverse=True)
+    
+            triaged = labels==-1
+            
+            if labels.max()>0:
+                ncc = labels.max()+1
+                time_spread_per_cluster = np.zeros((ncc, 2))
+                for k in range(ncc):
+                    time_spread_per_cluster[k, 0] = X[labels == k, 0].min()
+                    time_spread_per_cluster[k, 1] = X[labels == k, 0].max()
+    
+                mat_dist = np.full((ncc, ncc), np.inf)
+                for k in range(ncc):
+                    for j in range(ncc):
+                        if time_spread_per_cluster[k, 1] < time_spread_per_cluster[j, 0]:
+                            if time_spread_per_cluster[j, 0]-time_spread_per_cluster[k, 1]<self.max_time_diff_to_merge:
+                                mat_dist[k, j] = np.sqrt(self.rescale_time_merging*(time_spread_per_cluster[j, 0] - time_spread_per_cluster[k, 1])**2 + (np.median(X[labels == k, 1]) - np.median(X[labels == j, 1]))**2)
+                        elif time_spread_per_cluster[k, 0] > time_spread_per_cluster[j, 1]:
+                            if time_spread_per_cluster[k, 0]-time_spread_per_cluster[j, 1]<self.max_time_diff_to_merge:
+                                mat_dist[k, j] = np.sqrt(self.rescale_time_merging*(time_spread_per_cluster[j, 1] - time_spread_per_cluster[k, 0])**2 + (np.median(X[labels == k, 1]) - np.median(X[labels == j, 1]))**2)
+                        else: 
+                            boundaries = [np.max(time_spread_per_cluster[[k, j], 0]), np.min(time_spread_per_cluster[[k, j], 1])]
+                            assert boundaries[1]>boundaries[0]
+                            idx_spikes_k = np.flatnonzero(np.logical_and(X[labels == k, 0]>=boundaries[0], X[labels == k, 0]<=boundaries[1]))
+                            idx_spikes_j = np.flatnonzero(np.logical_and(X[labels == j, 0]>=boundaries[0], X[labels == j, 0]<=boundaries[1]))
+                            dist_val = np.abs(np.median(self.denoised_ptp_amplitudes[in_unit_all][no_nans][labels == j][idx_spikes_j]) - np.median(self.denoised_ptp_amplitudes[in_unit_all][no_nans][labels == k][idx_spikes_k]))
+                            # print(f"units {(j, k)} amp distance {dist_val}")
+                            if dist_val>self.amplitude_diff_nomerge:
+                                mat_dist[k, j] = np.inf
+                            else:
+                                mat_dist[k, j] = np.abs(np.median(X[labels == j][idx_spikes_j, 1]) - np.median(X[labels == k][idx_spikes_k, 1]))
+    
+                mat_dist[np.arange(mat_dist.shape[0]), np.arange(mat_dist.shape[0])]=0
+                indices = mat_dist.argsort(1)[:, :self.max_neigh_connected_merging+1]     
+                indices[mat_dist[indices[:, 0], indices[:, 1]]>self.max_dist_nomerge] = 0
+                graph = coo_array(
+                    (np.ones(ncc), (indices[:, 1], indices[:, 0])), shape=(ncc, ncc)
+                )
+                ncc_comp, labels_comp = connected_components(graph)
+                new_labels[~no_nans] = -1
+                new_labels[np.flatnonzero(no_nans)[triaged]] = -1
+                new_labels[np.flatnonzero(no_nans)[~triaged]] = labels_comp[labels[~triaged]]
+            else:
+                new_labels[~no_nans] = -1
+                new_labels[np.flatnonzero(no_nans)[triaged]] = -1
+                new_labels[np.flatnonzero(no_nans)[~triaged]] = 0
+    
+            return SplitResult(
+                is_split=True, in_unit=in_unit_all, new_labels=new_labels
+            )
+
+        else:
+            return SplitResult(
+                is_split=True, in_unit=in_unit_all, new_labels=new_labels
+            )
+
+
+class MaxChanPCSplit(SplitStrategy):
+    def __init__(
+        self,
+        peeling_hdf5_filename,
+        recording=None,
+        chunk_size_s=300,
+        peeling_featurization_pt=None,
+        motion_est=None,
+        use_localization_features=True,
+        return_localization_features=False,
+        n_pca_features=2,
+        whitened=True,
+        pca_imputation=None,
+        relocated=True,
+        use_wfs_L2_norm=False,
+        localization_feature_scales=(1.0, 1.0, 50.0),
+        time_scale=3e-3,
+        use_time_feature=False,
+        log_c=5,
+        channel_selection_radius=75.0,
+        min_cluster_size=25,
+        min_samples=25,
+        cluster_selection_epsilon=1,
+        sigma_local=5,
+        sigma_local_low=None,
+        sigma_regional=None,
+        noise_density=0.0,
+        n_neighbors_search=20,
+        radius_search=5.0,
+        triage_quantile_per_cluster=0.,
+        remove_clusters_smaller_than=25,
+        reassign_outliers=False,
+        random_state=0,
+        rescale_all_features=False,
+        use_ptp=False,
+        amplitude_normalized=False,
+        use_spread=False,
+        max_spikes=None,
+        cluster_alg="hdbscan",
+        initialize_from_listofh5=False,
+        **dataset_name_kwargs,
+    ):
+        """Split clusters based on per-cluster PCA and localization features
+
+        Fits PCA to relocated waveforms within a cluster, combines these with
+        localization features (x, registered z, and max amplitude), and runs
+        HDBSCAN to refine the labeling.
+
+        Arguments
+        ---------
+        peeling_hdf5_filename : str or Path or list of Paths if initialize_from_listofh5
+            Path to the HDF5 file output by a peeling step
+        peeling_featurization_pt : str or Path
+            Path to the .pt file where a featurization WaveformPipeline was
+            saved during peeling. Required if relocated=True.
+        motion_est : dredge.motion_util.MotionEstimate, optional
+            If supplied, registered depth positions will be used for clustering
+            and relocation
+        use_localization_features : bool
+            If false, only PCA features are used for clustering
+        n_pca_features : int
+            If 0, no PCA is used
+        relocated : bool
+            Whether to relocate waveforms according to the motion estimate.
+            Only used if motion_est is not None
+        localization_feature_scales : 3-tuple of float
+            Scales to apply to x, registered z, and log-scaled amplitude during
+            clustering to approximately sphere the clusters
+        channel_selection_radius : float
+            Spatial radius around the main channel used when selecting channels
+            used when extracting local PCA features
+        min_cluster_size, min_samples, cluster_selection_epsilon
+            HDBSCAN parameters. See their documentation for lots of info.
+        """
+        # method parameters
+        self.channel_selection_radius = channel_selection_radius
+        self.n_pca_features = n_pca_features
+        assert self.n_pca_features>0
+        self.whitened = whitened
+        self.pca_imputation = pca_imputation
+        self.relocated = relocated and motion_est is not None
+        self.motion_est = motion_est
+        self.rg = np.random.default_rng(random_state)
+        self.reassign_outliers = reassign_outliers
+        self.max_spikes = max_spikes
+        self.amplitude_normalized = amplitude_normalized
+        # print("max channel PC Split")
+
+        # hdbscan parameters
+        self.min_cluster_size = min_cluster_size
+        self.min_samples = min_samples
+        self.cluster_selection_epsilon = cluster_selection_epsilon
+
+        # DPC parameters
+        self.sigma_local = sigma_local
+        self.sigma_local_low = sigma_local_low
+        self.sigma_regional = sigma_regional
+        self.noise_density = noise_density
+        self.n_neighbors_search = n_neighbors_search
+        self.radius_search = radius_search
+        self.triage_quantile_per_cluster = triage_quantile_per_cluster
+        self.remove_clusters_smaller_than = remove_clusters_smaller_than
+
+        assert cluster_alg in ("hdbscan", "dpc")
+        self.cluster_alg = cluster_alg
+
+        if cluster_alg == "dpc":
+            pcs_only = True
+
+        
+        if not initialize_from_listofh5:
+        # load up the required h5 datasets
+            self.initialize_from_h5(
+                peeling_hdf5_filename,
+                peeling_featurization_pt,
+                **dataset_name_kwargs,
+            )
+        else:
+            print(peeling_hdf5_filename)
+            assert len(peeling_hdf5_filename)>1, "peeling_hdf5_filename should be a list of h5 names"
+            self.initialize_from_h5_list(
+                peeling_hdf5_filename,
+                peeling_featurization_pt,
+                **dataset_name_kwargs,
+            )
+            
+    def split_cluster(self, in_unit_all):
+        n_spikes = in_unit_all.size
+        subsampling = self.max_spikes and n_spikes > self.max_spikes
+        if subsampling:
+            # TODO: max_spikes could be chosen automatically
+            # based on available memory and number of spikes
+            idx_subsample = self.rg.choice(n_spikes, self.max_spikes, replace=False)
+            idx_subsample.sort()
+            in_unit = in_unit_all[idx_subsample]
+        else:
+            in_unit = in_unit_all
+
+        if n_spikes < self.min_cluster_size:
+            return SplitResult()
+
+        features = PCA(n_components=self.n_pca_features).fit_transform(self.collisioncleaned_tpca_features[in_unit])
+            
+        
+        if self.cluster_alg == "hdbscan" and features.shape[0] > self.min_cluster_size:
+            clust = HDBSCAN(
+                min_cluster_size=self.min_cluster_size,
+                min_samples=self.min_samples,
+                cluster_selection_epsilon=self.cluster_selection_epsilon,
+                core_dist_n_jobs=1,  # let's just use our parallelism
+                prediction_data=self.reassign_outliers,
+            )
+            clust_labels = clust.fit_predict(features)
+            new_ids = np.unique(clust_labels)
+            new_ids = new_ids[new_ids >= 0]
+            is_split = new_ids.size > 1
+        elif (
+            self.cluster_alg == "dpc"
+            and features.shape[0] > self.remove_clusters_smaller_than
+        ):
+            clust_labels = density.density_peaks_clustering(
+                features,
+                l2_norm=None,
+                sigma_local=self.sigma_local,
+                sigma_local_low=self.sigma_local_low,
+                sigma_regional=self.sigma_regional,
+                noise_density=self.noise_density,
+                n_neighbors_search=self.n_neighbors_search,
+                radius_search=self.radius_search,
+                triage_quantile_per_cluster=self.triage_quantile_per_cluster,
+                remove_clusters_smaller_than=self.remove_clusters_smaller_than,
+                pcs_only=True,
+            )
+            new_ids = np.unique(clust_labels)
+            new_ids = new_ids[new_ids >= 0]
+            is_split = new_ids.size > 1
+        else:
+            is_split = False
+
+        if is_split and self.reassign_outliers:
+            clust_labels = cluster_util.knn_reassign_outliers(clust_labels, features)
+
+        new_labels = None
+        if is_split:
+            new_labels = np.full(n_spikes, -1)
+            if not subsampling:
+                new_labels = clust_labels
+            else:
+                new_labels[idx_subsample] = clust_labels
+
+        return SplitResult(
+            is_split=is_split, in_unit=in_unit_all, new_labels=new_labels
+        )
+
+    def initialize_from_h5_list(
+        self,
+        peeling_hdf5_filename_list,
+        peeling_featurization_pt_list,
+        tpca_features_dataset_name="collisioncleaned_tpca_features",
+        localizations_dataset_name="point_source_localizations",
+        amplitudes_dataset_name="denoised_ptp_amplitudes",
+        amplitude_vectors_dataset_name="denoised_ptp_amplitude_vectors",
+    ):
+
+        """
+        Write this function 
+        """
+        peeling_hdf5_filename = Path(peeling_hdf5_filename_list[0])
+        h5 = h5py.File(peeling_hdf5_filename, "r", libver="latest", locking=False)
+        self.geom = h5["geom"][:]
+        self.channel_index = h5["channel_index"][:]
+        self.match_distance = pdist(self.geom).min() / 2
+
+        channels_list = []
+        collisioncleaned_tpca_features_list = []
+
+        if peeling_featurization_pt_list is None:
+            peeling_featurization_pt_list = []
+            for k, peeling_hdf5_filename in enumerate(peeling_hdf5_filename_list): 
+                peeling_hdf5_filename = Path(peeling_hdf5_filename)
+                mdir = peeling_hdf5_filename.parent / f"{peeling_hdf5_filename.stem}_models"
+                peeling_featurization_pt = mdir / "featurization_pipeline.pt"
+                peeling_featurization_pt_list.append(peeling_featurization_pt)
+                assert peeling_featurization_pt.exists()
+        
+        for k, peeling_hdf5_filename in enumerate(peeling_hdf5_filename_list): 
+            peeling_hdf5_filename = Path(peeling_hdf5_filename)
+            h5 = h5py.File(peeling_hdf5_filename, "r", libver="latest", locking=False)
+            assert np.all(h5["channel_index"][:] == self.channel_index)
+            channels = h5["channels"][:]
+            channels_list.append(channels)
+            idx = np.where((self.channel_index[channels] == channels[:, None]))
+
+            if not self.amplitude_normalized:
+                collisioncleaned_tpca_features_list.append(h5[tpca_features_dataset_name][:][idx[0], :, idx[1]])
+            else:
+                amplitudes=h5[amplitudes_dataset_name][:]
+                
+                peeling_featurization_pt = peeling_featurization_pt_list[k]
+                feature_pipeline = torch.load(peeling_featurization_pt)
+                tpca_feature = [
+                    f
+                    for f in feature_pipeline.transformers
+                    if f.name == tpca_features_dataset_name
+                ]
+                assert len(tpca_feature) == 1
+                tpca = tpca_feature[0].to_sklearn()
+                collisioncleaned_tpca_features_list.append(
+                    tpca.inverse_transform(h5[tpca_features_dataset_name][:][idx[0], :, idx[1]])/amplitudes[:, None]
+                )
+                            
+        if self.relocated:
+            amplitude_vectors_list = []
+            tpca_list = []
+            for k, peeling_hdf5_filename in enumerate(peeling_hdf5_filename_list): 
+            # load up featurization pipeline for tpca inversion
+                amplitude_vectors_list.append(h5[amplitude_vectors_dataset_name][:])
+                assert peeling_featurization_pt_list is not None
+                peeling_featurization_pt = peeling_featurization_pt_list[k]
+                feature_pipeline = torch.load(peeling_featurization_pt)
+                tpca_feature = [
+                    f
+                    for f in feature_pipeline.transformers
+                    if f.name == tpca_features_dataset_name
+                ]
+                assert len(tpca_feature) == 1
+                tpca_list.append(tpca_feature[0].to_sklearn())
+            self.amplitude_vectors = np.hstack(amplitude_vectors_list)
+
+        # Make attributes from list / OR KEEP LIST? IN CASE relocated, TPCA NEEDS LIST
+        self.channels = np.hstack(channels_list)
+        self.collisioncleaned_tpca_features = np.vstack(collisioncleaned_tpca_features_list)
+
+    def initialize_from_h5(
+        self,
+        peeling_hdf5_filename,
+        peeling_featurization_pt,
+        tpca_features_dataset_name="collisioncleaned_tpca_features",
+        localizations_dataset_name="point_source_localizations",
+        amplitudes_dataset_name="denoised_ptp_amplitudes",
+        amplitude_vectors_dataset_name="denoised_ptp_amplitude_vectors",
+    ):
+        peeling_hdf5_filename = Path(peeling_hdf5_filename)
+        h5 = h5py.File(peeling_hdf5_filename, "r", libver="latest", locking=False)
+        self.geom = h5["geom"][:]
+        self.channel_index = h5["channel_index"][:]
+        self.channels = h5["channels"][:]
+        self.match_distance = pdist(self.geom).min() / 2
+
+        # self.tpca_features = h5[tpca_features_dataset_name]
+        # HERE read using iter_chunks
+        idx = np.where((self.channel_index[self.channels] == self.channels[:, None]))
+        self.collisioncleaned_tpca_features = h5[tpca_features_dataset_name][:][idx[0], :, idx[1]]            
+
+        if peeling_featurization_pt is None:
+            mdir = peeling_hdf5_filename.parent / f"{peeling_hdf5_filename.stem}_models"
+            peeling_featurization_pt = mdir / "featurization_pipeline.pt"
+            assert peeling_featurization_pt.exists()
+
+        if self.relocated:
+            self.amplitude_vectors = h5[amplitude_vectors_dataset_name][:]
             # load up featurization pipeline for tpca inversion
             assert peeling_featurization_pt is not None
             feature_pipeline = torch.load(peeling_featurization_pt)
@@ -1211,8 +1726,10 @@ class NullSplit(SplitStrategy):
 # this is to help split_clusters take a string argument
 all_split_strategies = [
     FeatureSplit,
+    MaxChanPCSplit,
     ChunkForwardBackwardFeatureSplit,
     NullSplit,
+    ZipperSplit,
 ]
 split_strategies_by_class_name = {cls.__name__: cls for cls in all_split_strategies}
 

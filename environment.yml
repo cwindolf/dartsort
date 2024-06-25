@@ -7,7 +7,7 @@ dependencies:
   - click
   - colorcet
   - h5py
-  - hdbscan
+  # - hdbscan
   - matplotlib
   - numpy
   - pytest
@@ -15,3 +15,4 @@ dependencies:
   - scikit-learn
   - tqdm
   - astropy
+  - matplotlib-venn

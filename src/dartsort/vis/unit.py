@@ -23,10 +23,9 @@ from ..util.analysis import DARTsortAnalysis
 from ..util.multiprocessing_util import CloudpicklePoolExecutor, get_pool
 from . import layout
 from .colors import glasbey1024
-from .waveforms import geomplot
+from .waveforms import geomplot, geomplot_max_chan_overtime
 
 # -- main class. see fn make_unit_summary below to make lots of UnitPlots.
-
 
 class UnitPlot(layout.BasePlot):
     can_sharey = True
@@ -44,8 +43,9 @@ class UnitMultiPlot(layout.BaseMultiPlot):
 class UnitTextInfo(UnitPlot):
     kind = "text"
     height = 0.5
+    width = 1
 
-    def draw(self, panel, sorting_analysis, unit_id):
+    def draw(self, panel, sorting_analysis, unit_id, sorting_previous_step):
         axis = panel.subplots()
         axis.axis("off")
         msg = f"unit {unit_id}\n"
@@ -77,32 +77,36 @@ class UnitTextInfo(UnitPlot):
 class ACG(UnitPlot):
     kind = "histogram"
     height = 0.75
+    width = 1
 
     def __init__(self, max_lag=50):
         super().__init__()
         self.max_lag = max_lag
 
-    def draw(self, panel, sorting_analysis, unit_id):
+    def draw(self, panel, sorting_analysis, unit_id, sorting_previous_step):
         axis = panel.subplots()
         times_samples = sorting_analysis.times_samples(
             which=sorting_analysis.in_unit(unit_id)
         )
         lags, acg = correlogram(times_samples, max_lag=self.max_lag)
         bar(axis, lags, acg, fill=True, color="k")
-        axis.set_xlabel("lag (samples)")
-        axis.set_ylabel("acg")
+        axis.set_xlabel("lag (samples)", fontsize=5, labelpad=2)
+        axis.set_ylabel("acg", fontsize=5, labelpad=2)
+        axis.xaxis.set_tick_params(labelsize=5)
+        axis.yaxis.set_tick_params(labelsize=5)
 
 
 class ISIHistogram(UnitPlot):
     kind = "histogram"
     height = 0.75
+    width = 1
 
     def __init__(self, bin_ms=0.1, max_ms=5):
         super().__init__()
         self.bin_ms = bin_ms
         self.max_ms = max_ms
 
-    def draw(self, panel, sorting_analysis, unit_id):
+    def draw(self, panel, sorting_analysis, unit_id, sorting_previous_step):
         axis = panel.subplots()
         times_s = sorting_analysis.times_seconds(
             which=sorting_analysis.in_unit(unit_id)
@@ -117,12 +121,15 @@ class ISIHistogram(UnitPlot):
         # bin_centers = 0.5 * (bin_edges[1:] + bin_edges[:-1])
         # axis.bar(bin_centers, counts)
         plt.hist(dt_ms, bin_edges, color="k")
-        axis.set_xlabel("isi (ms)")
-        axis.set_ylabel(f"count (out of {dt_ms.size} total isis)")
+        axis.set_xlabel("isi (ms)", fontsize=5, labelpad=2)
+        axis.set_ylabel(f"count (out of {dt_ms.size} total isis)", fontsize=5, labelpad=2)
+        axis.xaxis.set_tick_params(labelsize=5)
+        axis.yaxis.set_tick_params(labelsize=5)
 
 
 class XZScatter(UnitPlot):
     kind = "scatter"
+    width = 1
 
     def __init__(
         self,
@@ -178,6 +185,7 @@ class XZScatter(UnitPlot):
 
 class PCAScatter(UnitPlot):
     kind = "scatter"
+    width = 1
 
     def __init__(
         self,
@@ -197,7 +205,6 @@ class PCAScatter(UnitPlot):
     def draw(self, panel, sorting_analysis, unit_id, axis=None):
         if axis is None:
             axis = panel.subplots()
-
         unit_id = np.atleast_1d(unit_id)
         multi_unit = unit_id.size > 1
         which, loadings = sorting_analysis.unit_pca_features(
@@ -225,6 +232,7 @@ class PCAScatter(UnitPlot):
                     **c,
                     rasterized=True,
                 )
+
         reloc_str = "reloc " * self.relocated
         axis.set_xlabel(reloc_str + "PC1")
         axis.set_ylabel(reloc_str + "PC2")
@@ -241,7 +249,9 @@ class PCAScatter(UnitPlot):
 
 class TimeZScatter(UnitPlot):
     kind = "widescatter"
-    width = 2
+    width = 1.25
+    height = 1.25
+
 
     def __init__(
         self,
@@ -256,7 +266,7 @@ class TimeZScatter(UnitPlot):
         self.amplitude_color_cutoff = amplitude_color_cutoff
         self.probe_margin_um = probe_margin_um
 
-    def draw(self, panel, sorting_analysis, unit_id):
+    def draw(self, panel, sorting_analysis, unit_id, sorting_previous_step):
         unit_id = np.atleast_1d(unit_id)
         multi_unit = unit_id.size > 1
         axis = panel.subplots()
@@ -294,7 +304,9 @@ class TimeZScatter(UnitPlot):
 
 class TFeatScatter(UnitPlot):
     kind = "widescatter"
-    width = 2
+    width = 1.25
+    height = 1.25
+    
 
     def __init__(
         self,
@@ -311,7 +323,7 @@ class TFeatScatter(UnitPlot):
         self.color_by_amplitude = color_by_amplitude
         self.alpha = alpha
 
-    def draw(self, panel, sorting_analysis, unit_id):
+    def draw(self, panel, sorting_analysis, unit_id, sorting_previous_step):
         axis = panel.subplots()
         in_unit = sorting_analysis.in_unit(unit_id)
         t = sorting_analysis.times_seconds(which=in_unit)
@@ -332,7 +344,9 @@ class TFeatScatter(UnitPlot):
 
 class TimeAmpScatter(UnitPlot):
     kind = "widescatter"
-    width = 2
+    width = 1.25
+    height = 1.25
+
 
     def __init__(
         self, relocate_amplitudes=False, amplitude_color_cutoff=15, alpha=0.05
@@ -345,7 +359,6 @@ class TimeAmpScatter(UnitPlot):
     def draw(self, panel, sorting_analysis, unit_id, axis=None):
         if axis is None:
             axis = panel.subplots()
-
         unit_id = np.atleast_1d(unit_id)
         multi_unit = unit_id.size > 1
 
@@ -380,21 +393,24 @@ class WaveformPlot(UnitPlot):
         spike_length_samples=121,
         count=100,
         channel_show_radius_um=50,
+        max_n_chan=20,
         relocated=False,
         color="k",
         alpha=0.1,
         show_superres_templates=True,
-        superres_template_cmap=plt.cm.winter,
+        superres_template_cmap=plt.cm.jet,
         show_template=True,
         template_color="orange",
         max_abs_template_scale=1.5,
         legend=True,
         template_index=None,
         title=None,
+        overtime=False,
     ):
         super().__init__()
         self.count = count
         self.channel_show_radius_um = channel_show_radius_um
+        self.max_n_chan = max_n_chan
         self.relocated = relocated
         self.color = color
         self.trough_offset_samples = trough_offset_samples
@@ -408,6 +424,10 @@ class WaveformPlot(UnitPlot):
         self.max_abs_template_scale = max_abs_template_scale
         self.template_index = template_index
         self.title = title
+        self.overtime = overtime
+        if overtime:
+            self.show_template=False
+            self.show_superres_templates = False
 
     def get_waveforms(self, sorting_analysis, unit_id):
         raise NotImplementedError
@@ -421,6 +441,7 @@ class WaveformPlot(UnitPlot):
 
         max_abs_amp = None
         show_template = self.show_template
+        
         template_color = self.template_color
         if self.template_index is None and show_template:
             templates = sorting_analysis.coarse_template_data.unit_templates(unit_id)
@@ -460,15 +481,47 @@ class WaveformPlot(UnitPlot):
             max_abs_amp = self.max_abs_template_scale * np.nanmax(np.abs(suptemplates))
 
         handles = {}
-        if waveforms is not None:
+        if waveforms is not None and not self.overtime:
             if np.isfinite(waveforms[:, 0, :]).any():
                 max_abs_amp = self.max_abs_template_scale * np.nanpercentile(
                     np.abs(waveforms), 99
                 )
             ls = geomplot(
                 waveforms,
-                max_channels=np.full(len(waveforms), max_chan),
-                channel_index=ci,
+                colors=colors,
+                # max_channels=np.full(len(waveforms), max_chan),
+                # channel_index=ci,
+                geom=geom[showchans],
+                ax=axis,
+                show_zero=False,
+                subar=True,
+                msbar=False,
+                zlim="tight",
+                color=self.color,
+                alpha=self.alpha,
+                max_abs_amp=max_abs_amp,
+                lw=1,
+            )
+            handles["waveforms"] = ls[0]
+        elif waveforms is not None:
+            wfs_stacked = np.vstack(waveforms)
+            if np.isfinite(wfs_stacked[:, 0, :]).any():
+                max_abs_amp = self.max_abs_template_scale *  np.nanpercentile(np.abs(wfs_stacked), 99)
+
+            colors = None
+            if sorting_previous_step is not None:
+                sorting_analysis, unit_id, sorting_previous_step
+                labels_unit_previous = sorting_previous_step.labels[sorting_analysis.sorting.labels==unit_id]
+                labels_unit_previous, labels_unit_ordered = np.unique(labels_unit_previous, return_inverse=True)
+                if len(labels_unit_previous)>1:
+                    colors = self.superres_template_cmap(
+                                np.linspace(0, 1, num=labels_unit_ordered.max()+1)[labels_unit_ordered]
+                            )
+
+            ls = geomplot_max_chan_overtime(
+                waveforms,
+                wfs_stacked,
+                colors=colors,
                 geom=geom,
                 ax=axis,
                 show_zero=False,
@@ -520,8 +573,8 @@ class WaveformPlot(UnitPlot):
             )
             handles["mean"] = ls[0]
 
-        reloc_str = "reloc. " * self.relocated
-        shift_str = "shifted " * sorting_analysis.shifting
+        reloc_str = "reloc. " * (self.relocated * (not self.overtime))
+        shift_str = "shifted " * (sorting_analysis.shifting * (not self.overtime))
         if self.title is None:
             axis.set_title(reloc_str + shift_str + self.wfs_kind)
         else:
@@ -536,6 +589,7 @@ class WaveformPlot(UnitPlot):
                 handler_map={tuple: HandlerTuple(ndivide=None)},
                 fancybox=False,
                 loc="upper left",
+                fontsize=5
             )
 
 
@@ -546,6 +600,7 @@ class RawWaveformPlot(WaveformPlot):
         return sorting_analysis.unit_raw_waveforms(
             unit_id,
             template_index=self.template_index,
+            max_n_chan=self.max_n_chan,
             max_count=self.count,
             channel_show_radius_um=self.channel_show_radius_um,
             trough_offset_samples=self.trough_offset_samples,
@@ -561,11 +616,23 @@ class TPCAWaveformPlot(WaveformPlot):
         return sorting_analysis.unit_tpca_waveforms(
             unit_id,
             template_index=self.template_index,
+            max_n_chan=self.max_n_chan,
             max_count=self.count,
             channel_show_radius_um=self.channel_show_radius_um,
             relocated=self.relocated,
         )
 
+class MaxChanOverTime(WaveformPlot):
+    wfs_kind = "Max channel over time"
+
+    def get_waveforms(self, sorting_analysis, unit_id):
+        return sorting_analysis.max_chan_waveforms_over_time(
+            unit_id,
+            template_index=self.template_index,
+            max_count=self.count,
+            trough_offset_samples=self.trough_offset_samples,
+            spike_length_samples=self.spike_length_samples,
+        )
 
 # -- merge-focused plots
 
@@ -577,11 +644,12 @@ class NearbyCoarseTemplatesPlot(UnitPlot):
     height = 2
     can_sharey = False
 
-    def __init__(self, channel_show_radius_um=50, n_neighbors=5, legend=True):
+    def __init__(self, channel_show_radius_um=50, n_neighbors=5, legend=True, max_n_chan=384):
         super().__init__()
         self.channel_show_radius_um = channel_show_radius_um
         self.n_neighbors = n_neighbors
         self.legend = legend
+        self.max_n_chan = max_n_chan
 
     def draw(self, panel, sorting_analysis, unit_id, axis=None):
         if axis is None:
@@ -601,13 +669,16 @@ class NearbyCoarseTemplatesPlot(UnitPlot):
             return
         assert neighbor_ids[0] == unit_id
         chan = neighbor_coarse_templates[0].ptp(0).argmax()
-        ci = sorting_analysis.show_channel_index(self.channel_show_radius_um)
+        
+        ci = sorting_analysis.show_channel_index(self.channel_show_radius_um, max_n_chan=self.max_n_chan)
         channels = ci[chan]
+        channels = channels[channels<len(sorting_analysis.show_geom)]
         neighbor_coarse_templates = np.pad(
             neighbor_coarse_templates,
             [(0, 0), (0, 0), (0, 1)],
             constant_values=np.nan,
         )
+        
         neighbor_coarse_templates = neighbor_coarse_templates[:, :, channels]
         maxamp = np.nanmax(np.abs(neighbor_coarse_templates))
 
@@ -618,9 +689,9 @@ class NearbyCoarseTemplatesPlot(UnitPlot):
         ):
             lines = geomplot(
                 template[None],
-                max_channels=[chan],
-                channel_index=ci,
-                geom=sorting_analysis.show_geom,
+                # max_channels=[chan],
+                # channel_index=ci,
+                geom=sorting_analysis.show_geom[channels],
                 ax=axis,
                 show_zero=False,
                 max_abs_amp=maxamp,
@@ -632,7 +703,7 @@ class NearbyCoarseTemplatesPlot(UnitPlot):
             )
             labels.append(str(uid))
             handles.append(lines[0])
-        axis.legend(handles=handles, labels=labels, fancybox=False, loc="lower center")
+        axis.legend(handles=handles, labels=labels, fancybox=False, loc="lower center", fontsize=5)
         axis.set_xticks([])
         axis.set_yticks([])
         axis.set_title(self.title)
@@ -656,6 +727,7 @@ class CoarseTemplateDistancePlot(UnitPlot):
         self.n_neighbors = n_neighbors
         self.dist_vmax = dist_vmax
         self.show_values = show_values
+
 
     def draw(self, panel, sorting_analysis, unit_id, axis=None):
         if np.asarray(unit_id).size > 1:
@@ -685,16 +757,19 @@ class CoarseTemplateDistancePlot(UnitPlot):
         )
         if self.show_values:
             for (j, i), label in np.ndenumerate(neighbor_dists):
-                axis.text(i, j, f"{label:.2f}", ha="center", va="center")
-        plt.colorbar(im, ax=axis, shrink=0.3)
-        axis.set_xticks(range(len(neighbor_ids)), neighbor_ids)
-        axis.set_yticks(range(len(neighbor_ids)), neighbor_ids)
+                axis.text(i, j, f"{label:.2f}", ha="center", va="center", fontsize=5)
+        # plt.colorbar(im, ax=axis, shrink=0.3)
+        axis.set_xticks(range(len(neighbor_ids)), neighbor_ids, fontsize=5)
+        axis.set_yticks(range(len(neighbor_ids)), neighbor_ids, fontsize=5)
         for i, (tx, ty) in enumerate(
             zip(axis.xaxis.get_ticklabels(), axis.yaxis.get_ticklabels())
         ):
             tx.set_color(colors[i])
             ty.set_color(colors[i])
-        axis.set_title(self.title)
+        axis.set_title(self.title, fontsize=8)        
+        axis.xaxis.set_tick_params(labelsize=5)
+        axis.yaxis.set_tick_params(labelsize=5)
+
 
 
 class NeighborCCGPlot(UnitPlot):
@@ -707,7 +782,7 @@ class NeighborCCGPlot(UnitPlot):
         self.n_neighbors = n_neighbors
         self.max_lag = max_lag
 
-    def draw(self, panel, sorting_analysis, unit_id):
+    def draw(self, panel, sorting_analysis, unit_id, sorting_previous_step):
         (
             neighbor_ids,
             neighbor_dists,
@@ -796,7 +871,7 @@ class SplitStrategyPlot(UnitPlot):
             CoarseTemplateDistancePlot(),
         ]
 
-    def draw(self, panel, sorting_analysis, unit_id):
+    def draw(self, panel, sorting_analysis, unit_id, sorting_previous_step):
         """
         - x vs reg z
         - time vs amp
@@ -881,7 +956,7 @@ class SuperresWaveformMultiPlot(UnitMultiPlot):
         color="k",
         alpha=0.1,
         show_superres_templates=True,
-        superres_template_cmap=plt.cm.winter,
+        superres_template_cmap=plt.cm.jet,
         show_template=True,
         template_color="orange",
         max_abs_template_scale=1.35,
@@ -947,9 +1022,10 @@ default_plots = (
     TimeAmpScatter(relocate_amplitudes=True),
     RawWaveformPlot(),
     TPCAWaveformPlot(relocated=True),
-    NearbyCoarseTemplatesPlot(),
+    NearbyCoarseTemplatesPlot(max_n_chan=20),
     CoarseTemplateDistancePlot(),
     NeighborCCGPlot(),
+    MaxChanOverTime(overtime=True),
 )
 
 
@@ -963,6 +1039,7 @@ template_assignment_plots = (
 def make_unit_summary(
     sorting_analysis,
     unit_id,
+    sorting_previous_step=None,
     channel_show_radius_um=50.0,
     amplitude_color_cutoff=15.0,
     pca_radius_um=75.0,
@@ -990,6 +1067,7 @@ def make_unit_summary(
         figure=figure,
         sorting_analysis=sorting_analysis,
         unit_id=unit_id,
+        sorting_previous_step=sorting_previous_step,
     )
 
     return figure
@@ -999,6 +1077,7 @@ def make_all_summaries(
     sorting_analysis,
     save_folder,
     plots=default_plots,
+    sorting_previous_step=None,
     channel_show_radius_um=50.0,
     amplitude_color_cutoff=15.0,
     pca_radius_um=75.0,
@@ -1111,6 +1190,7 @@ class SummaryJobContext:
     def __init__(
         self,
         sorting_analysis,
+        sorting_previous_step,
         plots,
         max_height,
         figsize,

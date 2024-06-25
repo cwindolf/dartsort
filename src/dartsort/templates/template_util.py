@@ -7,10 +7,77 @@ from dartsort.util import drift_util, waveform_util
 from dartsort.util.data_util import DARTsortSorting
 from dartsort.util.spiketorch import fast_nanmedian
 from scipy.interpolate import interp1d
-
 from .get_templates import get_raw_templates, get_templates
+from tqdm.auto import tqdm
+from astropy.convolution import convolve, Gaussian2DKernel
+# TODO: Need to add astropy to the list of packages
 
 # -- alternate template constructors
+
+def interpolate_templates(temp_data_smoothed, spike_counts_smoothed, unit_ids=None):
+    if unit_ids is None:
+        unit_ids = np.arange(temp_data_smoothed.shape[1])
+    for k in unit_ids:
+        temp_k = temp_data_smoothed[:, k]
+        arr_bool = np.isnan(spike_counts_smoothed[:, k])
+        notnan = np.flatnonzero(~arr_bool)
+        isnan = np.flatnonzero(arr_bool)
+        if len(notnan):
+            temp_k[0] = temp_k[notnan[0]] 
+            temp_k[-1] = temp_k[notnan[-1]] 
+            
+            if len(isnan):
+                isnan = isnan[isnan>0]
+                isnan = isnan[isnan<len(temp_data_smoothed)-1]
+                notnan = np.union1d(notnan, np.array([0, len(temp_data_smoothed)-1]))
+                notnan.sort()
+                for j in isnan:
+                    next = notnan[notnan>j][0]
+                    prev = notnan[notnan<j][-1]
+                    temp_k[j] = (temp_k[prev]*(next-j) + temp_k[next]*(j-prev))/(next-prev)
+        temp_data_smoothed[:, k] = temp_k
+    return temp_data_smoothed
+
+def smooth_list_templates(
+    temp_data_final, 
+    spike_counts_final,
+    units_ids,
+    ystdev=2,
+    threshold_n_spike=0.2,
+):
+    gauss = Gaussian2DKernel(x_stddev=0.1, y_stddev=ystdev)
+    #0.1 does not do anything  
+    n_units = len(units_ids)
+    
+    # spike_counts_final =  np.zeros((len(templates_list), n_units, templates_list[0].shape[2]))
+    spike_counts_smoothed = np.zeros(spike_counts_final.shape)
+
+    # for k in range(len(templates_list)):
+    #     spike_counts_final[k] = spike_count_list[k]
+    #     temp_data_final[k] = templates_list[k]
+    
+    # Is this correct? -> problem is that some of these get way too small...
+    low_spike_count = np.where(spike_counts_final<threshold_n_spike*np.nanmax(spike_counts_final, (0, 2))[None, :, None])
+    spike_counts_final[low_spike_count[0], low_spike_count[1], low_spike_count[2]] = np.nan 
+
+    for k in tqdm(units_ids, desc="Smoothing spike counts"):
+        spike_counts_smoothed[:, k] = convolve(spike_counts_final[:, k], gauss)
+    # spike_counts_smoothed[low_spike_count[0], low_spike_count[1], low_spike_count[2]] = np.nan 
+
+    # spike_counts_smoothed = convolve(spike_counts_final, gauss)
+    # Is this correct?
+    # spike_counts_smoothed[spike_counts_smoothed<threshold_n_spike*spike_counts_smoothed.max(0)[None]] = np.nan 
+    
+    temp_data_smoothed = temp_data_final*spike_counts_final[:, :, None]
+    for k in tqdm(units_ids, desc="Smoothing templates"):
+        temp_data_smoothed[:, k] = convolve(temp_data_smoothed[:, k].reshape((temp_data_smoothed.shape[0], -1)), gauss, boundary="fill").reshape(temp_data_smoothed[:, k].shape)
+    temp_data_smoothed = temp_data_smoothed / spike_counts_smoothed[:, :, None]
+
+    spike_counts_smoothed[spike_counts_smoothed==0]=np.nan
+    del temp_data_final
+    temp_data_smoothed = interpolate_templates(temp_data_smoothed, np.nanmax(spike_counts_smoothed, 2))
+    return temp_data_smoothed
+
 
 
 def get_single_raw_template(
@@ -337,7 +404,7 @@ def compressed_upsampled_templates(
     # sometimes users may pass temporal SVD components in instead of templates,
     # so we allow them to pass in the amplitudes of the actual templates
     if ptps is None:
-        ptps = templates.ptp(1).max(1)
+        ptps = np.nanmax(templates.ptp(1), 1)
     assert ptps.shape == (n_templates,)
     if n_upsamples_map is None:
         n_upsamples = np.full(n_templates, max_upsample)

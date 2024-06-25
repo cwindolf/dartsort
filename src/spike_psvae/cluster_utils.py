@@ -1,7 +1,7 @@
 import numpy as np
 import spikeinterface
 from spikeinterface.comparison import compare_two_sorters
-import pandas
+# import pandas
 import hdbscan
 from spike_psvae import triage
 from spike_psvae.spikeio import read_waveforms
@@ -691,16 +691,16 @@ def split_big_clusters(
     return labels_new
 
 
-def compute_cluster_centers(clusterer):
-    cluster_centers_data = []
-    cluster_ids = np.setdiff1d(np.unique(clusterer.labels_), [-1])
-    for label in cluster_ids:
-        cluster_centers_data.append(clusterer.weighted_cluster_centroid(label))
-    cluster_centers_data = np.asarray(cluster_centers_data)
-    cluster_centers = pandas.DataFrame(
-        data=cluster_centers_data, index=cluster_ids
-    )
-    return cluster_centers
+# def compute_cluster_centers(clusterer):
+#     cluster_centers_data = []
+#     cluster_ids = np.setdiff1d(np.unique(clusterer.labels_), [-1])
+#     for label in cluster_ids:
+#         cluster_centers_data.append(clusterer.weighted_cluster_centroid(label))
+#     cluster_centers_data = np.asarray(cluster_centers_data)
+#     cluster_centers = pandas.DataFrame(
+#         data=cluster_centers_data, index=cluster_ids
+#     )
+#     return cluster_centers
 
 
 def relabel_by_depth(clusterer, cluster_centers):

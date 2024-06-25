@@ -14,6 +14,15 @@ def fast_nanmedian(x, axis=-1):
     else:
         return x.numpy()
 
+def fast_nanweightedmean(x, weights, axis=-1):
+    is_tensor = torch.is_tensor(x)
+    weights /= weights.max()
+    x = torch.nansum(torch.as_tensor(x*weights[:, None, None]/weights.sum()), dim=axis)
+    if is_tensor:
+        return x
+    else:
+        return x.numpy()
+
 
 def ptp(waveforms, dim=1):
     is_tensor = torch.is_tensor(waveforms)

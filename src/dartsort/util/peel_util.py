@@ -3,8 +3,7 @@ from pathlib import Path
 from ..localize.localize_util import check_resume_or_overwrite, localize_hdf5
 from .data_util import DARTsortSorting
 
-
-def run_peeler(
+def fit_and_save_models(
     peeler,
     output_directory,
     hdf5_filename,
@@ -19,6 +18,18 @@ def run_peeler(
     device=None,
     localization_dataset_name="point_source_localizations",
 ):
+
+    output_directory = Path(output_directory)
+    output_directory.mkdir(exist_ok=True)
+    model_dir = output_directory / model_subdir
+    output_hdf5_filename = output_directory / hdf5_filename
+    if residual_filename is not None:
+        residual_filename = output_directory / residual_filename
+    do_localization = (
+        not featurization_config.denoise_only
+        and featurization_config.do_localization
+    )
+
     output_directory = Path(output_directory)
     output_directory.mkdir(exist_ok=True)
     model_dir = output_directory / model_subdir
@@ -46,6 +57,56 @@ def run_peeler(
     # fit models if needed
     peeler.load_or_fit_and_save_models(
         model_dir, overwrite=overwrite, n_jobs=n_jobs, device=device
+    )
+
+    del peeler
+    _gc(n_jobs, device)
+
+
+def run_peeler(
+    peeler,
+    output_directory,
+    hdf5_filename,
+    model_subdir,
+    featurization_config,
+    chunk_starts_samples=None,
+    subsampling_proportion=1.0,
+    overwrite=False,
+    exception_no_featurization=False,
+    n_jobs=0,
+    residual_filename=None,
+    show_progress=True,
+    device=None,
+    localization_dataset_name="point_source_localizations",
+):
+    output_directory = Path(output_directory)
+    output_directory.mkdir(exist_ok=True)
+    model_dir = output_directory / model_subdir
+    output_hdf5_filename = output_directory / hdf5_filename
+    if residual_filename is not None:
+        residual_filename = output_directory / residual_filename
+    do_localization = (
+        not featurization_config.denoise_only
+        and featurization_config.do_localization
+    )
+
+    # if not keep_writing:
+    if peeler_is_done(
+        peeler,
+        output_hdf5_filename,
+        overwrite=overwrite,
+        chunk_starts_samples=chunk_starts_samples,
+        do_localization=do_localization,
+        localization_dataset_name=localization_dataset_name,
+    ):
+        return (
+            DARTsortSorting.from_peeling_hdf5(output_hdf5_filename),
+            output_hdf5_filename,
+        )
+
+    # fit models if needed
+    peeler.load_or_fit_and_save_models(
+        model_dir, overwrite=overwrite, exception_no_featurization=exception_no_featurization, n_jobs=n_jobs, device=device
     )
 
     # run main

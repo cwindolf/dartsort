@@ -172,7 +172,7 @@ def localize_amplitude_vectors(
             y = y.numpy(force=True)
             z_rel = z_rel.numpy(force=True)
             z_abs = z_abs.numpy(force=True)
-            alpha = alpha.numpy(force=True)
+            projected_dist = projected_dist.numpy(force=True)
 
         return dict(x=x, y=y, z_rel=z_rel, z_abs=z_abs, alpha=projected_dist)
 
@@ -259,7 +259,7 @@ def dipole_mse(loc, amplitude_vector, local_geom, logbarrier=True):
     dys =  y.expand(dzs.size())
     
     duv = torch.stack([dxs, dys, dzs], dim=1)
-    X = duv / torch.pow(torch.sum(torch.square(duv), dim=1), 3/2)[:, None]
+    X = duv / (torch.pow(torch.sum(torch.square(duv), dim=1), 3/2)[:, None]) #Add 1e-4?
     # beta = torch.linalg.lstsq(X, amplitude_vector[:, None])[0]
     # beta = torch.linalg.solve(torch.matmul(X.T, X), torch.matmul(X.T, amplitude_vector))
     beta = torch.matmul(torch.linalg.pinv(torch.matmul(X.T, X)), torch.matmul(X.T, amplitude_vector))
