@@ -356,9 +356,9 @@ def iterative_split_merge_reassignment(
     threshold_n_spike=0.2,
     norm_operator=np.nanmax,
     peak_time_selection="maxstd",
-    max_value_no_split=0.25,
-    min_value_split=0.75,
-    min_nspikes_unit=150,
+    max_value_no_split=0.2,
+    min_value_split=0.5,
+    min_nspikes_unit=250, # use 25 * n chunks instead? 
     triage_spikes_2way=0.55,
     triage_spikes_3way=0.5,
     norm_triage=4.0, # This is the norm in wf space - converted later using the tpca
@@ -375,7 +375,7 @@ def iterative_split_merge_reassignment(
     for iter in range(split_merge_config.m_iter):
 
         if iter > 0:
-            deconv_scores = np.ones(deconv_scores.shape)
+            deconv_scores = None
 
         # Do we keep spikes that are only well assigned here? 
         new_labels, labels_hardassignments_only = full_reassignment_split(
@@ -436,6 +436,8 @@ def iterative_split_merge_reassignment(
         )
 
         #reassign and triage ---
+
+    # Here, GC, update neighbors and then reassign
 
     # The output of these two functions is now in the pc space 
     tpca_templates_list, spike_count_list, chunk_belong = create_tpca_templates_list_efficient(
@@ -513,7 +515,10 @@ def full_reassignment_split(
     norm_triage=4, # This is the norm in the original wf space - it is converted using the tpca
 ):
 
-    weights_deconv = np.log(1 + np.abs(deconv_scores-deconv_scores.min()))
+    if deconv_scores is not None:
+        weights_deconv = np.log(1 + np.abs(deconv_scores-deconv_scores.min()))
+    else:
+        weights_deconv = None
     
     # The output of these two functions is now in the pc space 
     tpca_templates_list, spike_count_list, chunk_belong_wfs = create_tpca_templates_list_efficient(

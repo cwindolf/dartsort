@@ -1462,7 +1462,7 @@ def check_overmerges(
         # PCs on max chan 
         # WFS on same chans 
         if raw:
-            plt.savefig(output_directory / f"RANK_8_rawwfs_post_deconv_{unit}_overmerge")
+            plt.savefig(output_directory / f"rawwfs_post_deconv_{unit}_overmerge")
         else:
             plt.savefig(output_directory / f"post_deconv_{unit}_overmerge")
         plt.close()

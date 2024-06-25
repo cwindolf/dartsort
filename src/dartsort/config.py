@@ -276,7 +276,7 @@ class SplitMergeConfig:
     # sym_function: Callable[[np.array, np.array], np.array] = np.maximum # dist = sym_function(dist(a,b),dist(b,a))
     superres_linkage: Callable = np.max
     sym_function: Callable = np.maximum # dist = sym_function(dist(a,b),dist(b,a))
-    min_channel_amplitude: float = 0.0
+    min_channel_amplitude: float = 1.0
     mask_units_too_far: bool = True
     # aggregate_func: Callable[[np.array, Tuple[int]], np.array] = np.nanmax
     aggregate_func: Callable = np.nanmax
@@ -290,13 +290,13 @@ class SplitMergeConfig:
     peak_time_selection: str = "maxstd"
     # For tpca template computation 
     threshold_n_spike: float = 0.2
-    m_iter: int = 3
+    m_iter: int = 1
 
     # For template comparisons
     max_shift_samples: int = 20
     temporal_upsampling_factor: int = 8
-    amplitude_scaling_variance: float = 0.001
-    amplitude_scaling_boundary: float = 0.1
+    amplitude_scaling_variance: float = 0
+    amplitude_scaling_boundary: float = 0
     svd_compression_rank: int = 20
     conv_batch_size: int = 128
     units_batch_size: int = 8 
