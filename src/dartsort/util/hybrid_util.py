@@ -17,6 +17,7 @@ def get_drifty_hybrid_recording(
                  seed=None,
                  firing_rates=None,
                  peak_channels=None,
+                 amplitude_scale_std=0.1,
 ):
     """
 
@@ -25,6 +26,7 @@ def get_drifty_hybrid_recording(
     :param: motion estimate object
     :param: firing_rates
     :param: peak_channels
+    :param: amplitude_factor
     """
 
     num_units = templates.num_units
@@ -60,6 +62,10 @@ def get_drifty_hybrid_recording(
     )
 
     
+    # Default amplitude scalings for spikes drawn from gamma
+    shape = 1. / (amplitude_scale_std ** 1.5)
+    amplitude_factor = rg.gamma(shape, scale=1./(shape-1), size=sorting.to_spike_vector().shape)
+        
     depths = recording.get_probe().contact_positions[:, 1][peak_channels]
     motion_times_s = np.arange(int(recording.get_duration())+1)
 
@@ -68,6 +74,7 @@ def get_drifty_hybrid_recording(
     disp = np.zeros((motion_times_s.shape[0], 2, num_units))
     disp[:, 1, :] = disp_y.swapaxes(0, 1)
 
+
     return InjectDriftingTemplatesRecording(
         sorting=sorting,
         drifting_templates=templates,
@@ -75,7 +82,8 @@ def get_drifty_hybrid_recording(
         displacement_vectors=[disp],
         displacement_sampling_frequency=1.0,
         displacement_unit_factor=np.eye(num_units),
-    )
+        amplitude_factor=amplitude_factor
+    ), sorting
 
 
 def simulate_spike_trains(
