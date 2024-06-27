@@ -240,10 +240,10 @@ class ClusteringConfig:
     adaptive_feature_scales: bool = False
     log_c: float = 5.0
     recursive: bool = False
-    remove_duplicates: bool = True
+    remove_duplicates: bool = False
 
     # remove large clusters in hdbscan?
-    remove_big_units: bool = True
+    remove_big_units: bool = False
     zstd_big_units: float = 50.0
 
     # grid snap parameters

@@ -16,6 +16,7 @@ import h5py
 import numpy as np
 from dartsort.util import job_util
 from dartsort.util.data_util import DARTsortSorting, chunk_time_ranges
+from dartsort.config import ClusteringConfig
 
 from . import cluster_util, density, ensemble_utils, forward_backward
 
@@ -23,14 +24,15 @@ from . import cluster_util, density, ensemble_utils, forward_backward
 def cluster_chunk(
     peeling_hdf5_filename,
     clustering_config,
+    sorting=None,
     chunk_time_range_s=None,
     motion_est=None,
     recording=None,
     amplitudes_dataset_name="denoised_ptp_amplitudes",
+    localizations_dataset_name="point_source_localizations",
     depth_order=True,
     ramp_num_spikes=[10, 60],
     ramp_ptp=[2, 6],
-    
 ):
     """Cluster spikes from a single segment
 
@@ -52,47 +54,48 @@ def cluster_chunk(
         "density_peaks",
     )
 
-    with h5py.File(peeling_hdf5_filename, "r") as h5:
-        times_samples = h5["times_samples"][:]
-        channels = h5["channels"][:]
-        times_s = h5["times_seconds"][:]
-        xyza = h5["point_source_localizations"][:]
-        amps = h5[amplitudes_dataset_name][:]
-        geom = h5["geom"][:]
-    in_chunk = ensemble_utils.get_indices_in_chunk(times_s, chunk_time_range_s)
-    labels = -1 * np.ones(len(times_samples))
-    extra_features = {
-        "point_source_localizations": xyza,
-        amplitudes_dataset_name: amps,
-        "times_seconds": times_s,
-    }
+    if sorting is None:
+        sorting = DARTsortSorting.from_peeling_hdf5(peeling_hdf5_filename)
+    xyza = getattr(sorting, localizations_dataset_name)
+    amps = getattr(sorting, amplitudes_dataset_name)
+
+    if recording is None:
+        with h5py.File(sorting.parent_h5_path, "r") as h5:
+            geom = h5["geom"][:]
+    else:
+        geom = recording.get_channel_locations()
+
+    to_cluster = ensemble_utils.get_indices_in_chunk(sorting.times_seconds, chunk_time_range_s)
+    to_cluster = np.setdiff1d(to_cluster, np.flatnonzero(sorting.labels < -1))
+    labels = np.full_like(sorting.labels, -1)
+    extra_features = sorting.extra_features
 
     if clustering_config.cluster_strategy == "closest_registered_channels":
-        labels[in_chunk] = cluster_util.closest_registered_channels(
-            times_s[in_chunk],
-            xyza[in_chunk, 0],
-            xyza[in_chunk, 2],
+        labels[to_cluster] = cluster_util.closest_registered_channels(
+            sorting.times_seconds[to_cluster],
+            xyza[to_cluster, 0],
+            xyza[to_cluster, 2],
             geom,
             motion_est,
         )
     elif clustering_config.cluster_strategy == "grid_snap":
-        labels[in_chunk] = cluster_util.grid_snap(
-            times_s[in_chunk],
-            xyza[in_chunk, 0],
-            xyza[in_chunk, 2],
+        labels[to_cluster] = cluster_util.grid_snap(
+            sorting.times_seconds[to_cluster],
+            xyza[to_cluster, 0],
+            xyza[to_cluster, 2],
             geom,
             grid_dx=clustering_config.grid_dx,
             grid_dz=clustering_config.grid_dz,
             motion_est=motion_est,
         )
     elif clustering_config.cluster_strategy == "hdbscan":
-        labels[in_chunk] = cluster_util.hdbscan_clustering(
+        labels[to_cluster] = cluster_util.hdbscan_clustering(
             recording,
-            times_s[in_chunk],
-            times_samples[in_chunk],
-            xyza[in_chunk, 0],
-            xyza[in_chunk, 2],
-            amps[in_chunk],
+            sorting.times_seconds[to_cluster],
+            sorting.times_samples[to_cluster],
+            xyza[to_cluster, 0],
+            xyza[to_cluster, 2],
+            amps[to_cluster],
             geom,
             motion_est,
             min_cluster_size=clustering_config.min_cluster_size,
@@ -107,16 +110,16 @@ def cluster_chunk(
             zstd_big_units=clustering_config.zstd_big_units,
         )
     elif clustering_config.cluster_strategy == "density_peaks":
-        z = xyza[in_chunk, 2]
+        z = xyza[to_cluster, 2]
         if motion_est is not None:
-            z = motion_est.correct_s(times_s[in_chunk], z)
-        z_not_reg = xyza[in_chunk, 2]
+            z = motion_est.correct_s(sorting.times_seconds[to_cluster], z)
+        z_not_reg = xyza[to_cluster, 2]
         scales = clustering_config.feature_scales
-        ampfeat = scales[2] * np.log(clustering_config.log_c + amps[in_chunk])
+        ampfeat = scales[2] * np.log(clustering_config.log_c + amps[to_cluster])
         res = density.density_peaks_clustering(
-            np.c_[scales[0] * xyza[in_chunk, 0], scales[1] * z, ampfeat],
+            np.c_[scales[0] * xyza[to_cluster, 0], scales[1] * z, ampfeat],
             geom=geom,
-            y=xyza[in_chunk, 1],
+            y=xyza[to_cluster, 1],
             z_not_reg=z_not_reg,
             use_y_triaging=clustering_config.use_y_triaging,
             sigma_local=clustering_config.sigma_local,
@@ -143,23 +146,25 @@ def cluster_chunk(
         )
 
         if clustering_config.remove_small_far_clusters:
+            # TODO: move this out into a new function, if it is used?
+            # the arguments ramp_ptp and ramp_num_spikes should be put into a config object.
             if clustering_config.attach_density_feature:
                 labels_sort = res["labels"]
             else:
                 labels_sort = res
-            z = xyza[in_chunk, 2]
+            z = xyza[to_cluster, 2]
             if motion_est is not None:
-                z = motion_est.correct_s(times_s[in_chunk], z)
+                z = motion_est.correct_s(times_s[to_cluster], z)
             all_med_ptp = []
             all_med_z_spread = []
             all_med_x_spread = []
             num_spikes = []
             for k in np.unique(labels_sort)[np.unique(labels_sort)>-1]:
-                all_med_ptp.append(np.median(amps[in_chunk[labels_sort == k]]))
-                all_med_x_spread.append(xyza[in_chunk[labels_sort == k], 0].std())
+                all_med_ptp.append(np.median(amps[to_cluster[labels_sort == k]]))
+                all_med_x_spread.append(xyza[to_cluster[labels_sort == k], 0].std())
                 all_med_z_spread.append(z[labels_sort == k].std())
                 num_spikes.append((labels_sort == k).sum())
-                
+
             all_med_ptp = np.array(all_med_ptp)
             all_med_x_spread = np.array(all_med_x_spread)
             all_med_z_spread = np.array(all_med_z_spread)
@@ -176,18 +181,19 @@ def cluster_chunk(
                 res[idx_low] = -1
 
         if clustering_config.attach_density_feature:
-            labels[in_chunk] = res["labels"]
+            labels[to_cluster] = res["labels"]
             extra_features["density_ratio"] = np.full(labels.size, np.nan)
-            extra_features["density_ratio"][in_chunk] = res["density"]
+            extra_features["density_ratio"][to_cluster] = res["density"]
         else:
-            labels[in_chunk] = res
+            labels[to_cluster] = res
     else:
         assert False
 
     sorting = DARTsortSorting(
-        times_samples=times_samples,
-        channels=channels,
+        times_samples=sorting.times_samples,
+        channels=sorting.channels,
         labels=labels,
+        sampling_frequency=sorting.sampling_frequency,
         parent_h5_path=peeling_hdf5_filename,
         extra_features=extra_features,
     )
@@ -202,6 +208,7 @@ def cluster_chunks(
     peeling_hdf5_filename,
     recording,
     clustering_config,
+    sorting=None,
     motion_est=None,
 ):
     """Divide the recording into chunks, and cluster each chunk
@@ -216,17 +223,19 @@ def cluster_chunks(
         or clustering_config.ensemble_strategy.lower() == "none"
     ):
         chunk_length_samples = None
+        chunk_time_ranges_s = [None]
     else:
         chunk_length_samples = (
             recording.sampling_frequency * clustering_config.chunk_size_s
         )
-    chunk_time_ranges_s = chunk_time_ranges(recording, chunk_length_samples)
+        chunk_time_ranges_s = chunk_time_ranges(recording, chunk_length_samples)
 
     # cluster each chunk. can be parallelized in the future.
     sortings = [
         cluster_chunk(
             peeling_hdf5_filename,
             clustering_config,
+            sorting=sorting,
             chunk_time_range_s=chunk_range,
             motion_est=motion_est,
             recording=recording,
@@ -241,6 +250,7 @@ def ensemble_chunks(
     peeling_hdf5_filename,
     recording,
     clustering_config,
+    sorting=None,
     computation_config=None,
     motion_est=None,
 ):
@@ -271,6 +281,7 @@ def ensemble_chunks(
         peeling_hdf5_filename,
         recording,
         clustering_config,
+        sorting=sorting,
         motion_est=motion_est,
     )
     if len(chunk_sortings) == 1:
@@ -300,3 +311,28 @@ def ensemble_chunks(
         )
 
     return sorting
+
+
+def initial_clustering(
+    recording,
+    sorting=None,
+    peeling_hdf5_filename=None,
+    clustering_config=None,
+    computation_config=None,
+    motion_est=None,
+):
+    if sorting is None:
+        sorting = DARTsortSorting.from_peeling_hdf5(peeling_hdf5_filename)
+    if peeling_hdf5_filename is None:
+        peeling_hdf5_filename = sorting.parent_h5_path
+
+    return ensemble_chunks(
+        peeling_hdf5_filename=peeling_hdf5_filename,
+        recording=recording,
+        clustering_config=clustering_config,
+        sorting=sorting,
+        computation_config=computation_config,
+        motion_est=motion_est,
+    )
+
+    
