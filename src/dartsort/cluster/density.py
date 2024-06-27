@@ -308,7 +308,7 @@ def density_peaks_clustering(
 
     # inliers = inliers_first[inliers]
 
-    if sigma_local.startswith("rule_of_thumb"):
+    if isinstance(sigma_local, str) and sigma_local.startswith("rule_of_thumb"):
         factor = 1
         if "*" in sigma_local:
             factor = float(sigma_local.split("*")[1].strip())
