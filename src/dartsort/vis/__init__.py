@@ -5,3 +5,4 @@ from .sorting import *
 from .unit import *
 from .vismain import *
 from .waveforms import *
+from . import gmm
