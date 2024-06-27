@@ -441,3 +441,14 @@ def get_relative_subset(waveforms, max_channels, rel_sub_channel_index, fill_val
     if waveforms.ndim == 3:
         index = index[:, None, :].broadcast_to(index.shape[0], waveforms.shape[1], index.shape[1])
     return torch.gather(waveforms, waveforms.ndim - 1, index)
+
+
+def grab_main_channels(waveforms, main_channels, channel_index, keepdim=False):
+    nc = len(channel_index)
+    _, relative_positions = np.nonzero((channel_index == np.arange(nc)[:, None]))
+    assert relative_positions.shape == (nc,)
+    inds = relative_positions[main_channels]
+    res = np.take_along_axis(waveforms, inds[:, None, None], axis=2)
+    if keepdim:
+        return res
+    return res[:, :, 0]

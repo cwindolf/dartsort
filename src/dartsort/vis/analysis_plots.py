@@ -126,8 +126,11 @@ def get_linkage(dists, method="complete", threshold=0.25):
     return Z, labels
 
 
-def density_peaks_study(X, density_result, dims=[0, 1], **scatter_kw):
-    fig, axes = plt.subplots(ncols=3, layout="constrained", figsize=(9, 3), sharey=True)
+def density_peaks_study(X, density_result, dims=[0, 1], fig=None, **scatter_kw):
+    if fig is None:
+        fig, axes = plt.subplots(ncols=3, layout="constrained", figsize=(9, 3), sharey=True)
+    else:
+        axes = fig.subplots(ncols=3, sharey=True)
 
     scatter_kw = dict(lw=0, s=5) | scatter_kw
 
