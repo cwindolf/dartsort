@@ -147,7 +147,7 @@ def flow_layout_columns(plots, max_height=4, **plot_kwargs):
 
         if (
             sum(c.height for c in columns[-1]) + card.height
-            <= max_height + 1e-8
+            <= max_height
         ):
             columns[-1].append(card)
         else:

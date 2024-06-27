@@ -3,12 +3,11 @@ from tqdm.auto import tqdm
 
 from ..config import default_split_merge_config
 from . import merge, split
-from .forward_backward import forward_backward
 
 
 def get_indices_in_chunk(times_s, chunk_time_range_s):
     if chunk_time_range_s is None:
-        return slice(None)
+        return np.arange(len(times_s))
 
     return np.flatnonzero(
         (times_s >= chunk_time_range_s[0]) & (times_s < chunk_time_range_s[1])
