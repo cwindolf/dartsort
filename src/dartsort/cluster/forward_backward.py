@@ -12,6 +12,8 @@ def forward_backward(
     motion_est=None,
     verbose=True,
     min_cluster_size=25,
+    # fill_value_dist=10_000,
+    # n_neighbors_max=5,
 ):
     """
     Ensemble over HDBSCAN clustering
@@ -60,6 +62,7 @@ def forward_backward(
     else:
         tbar = range(len(chunk_sortings) - 1)
     for k in tbar:
+    # for k in tqdm(range(len(chunk_sortings))):
         idx_1 = np.flatnonzero(
             np.logical_and(
                 times_seconds >= min_time_s,
@@ -91,18 +94,41 @@ def forward_backward(
 
             # FORWARD PASS
             dist_matrix = np.zeros((units_1.shape[0], units_2.shape[0]))
+            # dist_matrix = fill_value_dist*np.ones((units_1.shape[0], units_2.shape[0]))
+            # print("UNIT 1/2")
+            # print(units_1)
+            # print(len(units_1))
+            # print(units_2)
+            # print(len(units_2))
+
+            # Here, compute neighbors --> 3/5 neighbors to avoid quadratic time
+
+            medians_1 = np.zeros((len(units_1), features1.shape[1]))
+            medians_2 = np.zeros((len(units_2), features1.shape[1]))
             for i, unit_1 in enumerate(units_1):
-                for j, unit_2 in enumerate(units_2):
-                    idxunit1 = np.flatnonzero(labels_1 == unit_1)[-min_cluster_size:]
-                    idxunit2 = np.flatnonzero(labels_2 == unit_2)[:min_cluster_size]
-                    feat_1 = np.median(features1[idxunit1], axis=0)
-                    feat_2 = np.median(features2[idxunit2], axis=0)
-                    dist_matrix[i, j] = ((feat_1 - feat_2) ** 2).sum()
+                idxunit = np.flatnonzero(labels_1 == unit_1)[-min_cluster_size:]
+                medians_1[i] = np.median(features1[idxunit], axis=0)
+            for j, unit_2 in enumerate(units_2):
+                idxunit = np.flatnonzero(labels_2 == unit_2)[:min_cluster_size]
+                medians_2[j] = np.median(features2[idxunit], axis=0)
+
+            dist_matrix = ((medians_1[:, None] - medians_2[None, :])**2).sum(2) #.argsort(1)[:n_neighbors_max]
+            
+            # for i, unit_1 in tqdm(enumerate(units_1)):
+            #     for j, unit_2 in enumerate(neighbors[i]):
+            #         # idxunit1 = np.flatnonzero(labels_1 == unit_1)[-min_cluster_size:]
+            #         # idxunit2 = np.flatnonzero(labels_2 == unit_2)[:min_cluster_size]
+            #         # feat_1 = np.median(features1[idxunit1], axis=0)
+            #         # feat_2 = np.median(features2[idxunit2], axis=0)
+            #         dist_matrix[i, j] = medians_1[i] - medians_2[j])**2)
 
             # find for chunk 2 units the closest units in chunk 1 and split chunk 1 units
             dist_forward = dist_matrix.argmin(0)
             units_, counts_ = np.unique(dist_forward, return_counts=True)
 
+            # print("unit_to_split")
+            # print(units_[counts_ > 1])
+            # print(len(units_[counts_ > 1]))
             for unit_to_split in units_[counts_ > 1]:
                 units_to_match_to = (
                     np.flatnonzero(dist_forward == unit_to_split) + unit_label_shift
@@ -123,6 +149,9 @@ def forward_backward(
                 labels_1[spikes_to_update] = units_to_match_to[((features_to_match_to.T[:, None] - feat_s[None])** 2).sum(2).argmin(0)]
 
             # Relabel labels_1 and labels_2
+            # print("units_")
+            # print(units_)
+            # print(len(units_))
             for unit_to_relabel in units_:
                 if counts_[np.flatnonzero(units_ == unit_to_relabel)][0] == 1:
                     idx_to_relabel = np.flatnonzero(labels_1 == unit_to_relabel)
@@ -137,6 +166,9 @@ def forward_backward(
                 all_units_to_match_to = (
                     dist_matrix[units_not_matched].argmin(1) + unit_label_shift
                 )
+                # print("all_units_to_match_to")
+                # print(np.unique(all_units_to_match_to))
+                # print(len(np.unique(all_units_to_match_to)))
                 for unit_to_split in np.unique(all_units_to_match_to):
                     units_to_match_to = np.concatenate(
                         (

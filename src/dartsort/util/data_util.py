@@ -280,6 +280,14 @@ def keep_all_most_recent_spikes_per_chunk(
     all_chunk_ids = np.hstack(all_chunk_ids).astype("int")
     all_times_samples = np.hstack(all_times_samples)
     all_depths_um = np.hstack(all_depths_um)
+
+    sort_idx = all_times_samples.argsort()
+    
+    all_times_seconds = all_times_seconds[sort_idx]
+    all_times_samples = all_times_samples[sort_idx]
+    all_chunk_ids = all_chunk_ids[sort_idx]
+    all_depths_um = all_depths_um[sort_idx]
+    all_labels = all_labels[sort_idx]
     
     times_samples_unique, ind_arr, inv_arr = np.unique(all_times_samples, return_index=True, return_inverse=True)
     times_seconds_unique = all_times_seconds[ind_arr]
@@ -287,13 +295,13 @@ def keep_all_most_recent_spikes_per_chunk(
     depths_um_unique = all_depths_um[ind_arr]
     # channels_unique = all_channels[ind_arr]
     
-    chunk_unit_ids = np.zeros((n_spikes_to_load, n_chunks, n_units))
+    # chunk_unit_ids = np.zeros((n_spikes_to_load, n_chunks, n_units))
     # unit_ids = np.zeros((n_spikes_to_load, n_units))
     
-    chunk_unit_ids[inv_arr, all_chunk_ids, all_labels]=1
+    # chunk_unit_ids[inv_arr, all_chunk_ids, all_labels]=1
     # chunk_ids[inv_arr, all_chunk_ids]=1
 
-    return times_samples_unique, times_seconds_unique, depths_um_unique, chunk_unit_ids
+    return times_samples_unique, times_seconds_unique, depths_um_unique, ind_arr, inv_arr, all_chunk_ids, all_labels
     
 
 

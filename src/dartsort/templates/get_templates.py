@@ -227,7 +227,7 @@ def get_templates_multiple_chunks_linear(
 
     n_chunks = len(chunk_time_ranges_s)
     print("keeping all necessary spikes")
-    times_samples_unique, times_seconds_unique, depths_um_unique, chunk_unit_ids = keep_all_most_recent_spikes_per_chunk(
+    times_samples_unique, times_seconds_unique, depths_um_unique, ind_arr, inv_arr, all_chunk_ids, all_labels = keep_all_most_recent_spikes_per_chunk(
         sorting,
         chunk_time_ranges_s,
         template_config,
@@ -248,7 +248,10 @@ def get_templates_multiple_chunks_linear(
         recording,
         sorting,
         times_samples_unique, 
-        chunk_unit_ids,
+        ind_arr,
+        inv_arr, 
+        all_chunk_ids, 
+        all_labels,
         pad_value=pad_value,
         n_chunks=len(chunk_time_ranges_s),
         registered_geom=registered_geom,
@@ -683,7 +686,10 @@ def get_all_shifted_raw_and_low_rank_templates_linear(
     recording,
     sorting,
     times_samples_unique, 
-    chunk_unit_ids, # This is unit ids of all spikes over time 
+    ind_arr,
+    inv_arr, 
+    all_chunk_ids, 
+    all_labels, # This is unit ids of all spikes over time 
     pad_value=0.0,
     n_chunks=1,
     registered_geom=None,
@@ -735,11 +741,8 @@ def get_all_shifted_raw_and_low_rank_templates_linear(
     # low_rank_templates = None
     if not raw:
         low_rank_templates = np.zeros((n_chunks, n_units, spike_length_samples, n_template_channels),dtype=recording.dtype)
-    snrs_by_channel = np.zeros(
-        (n_chunks, n_units, n_template_channels), dtype=recording.dtype
-    )
 
-    # can parallelize here, snce we send wfs_all_loaded[in_unit] to each job 
+    # can parallelize here, since we send wfs_all_loaded[in_unit] to each job 
     batch_arr = np.arange(0, len(times_samples_unique)+batch_size, batch_size)
     batch_arr[-1]=len(times_samples_unique)
 
@@ -751,7 +754,22 @@ def get_all_shifted_raw_and_low_rank_templates_linear(
             trough_offset_samples=trough_offset_samples,
             spike_length_samples=spike_length_samples,
         )
-        which_times, which_chunks, which_units = np.where(chunk_unit_ids[batch_idx]) #batch_size * n_chunks
+        # which_times = inv_arr[batch_idx_unique]
+        
+        # print("ind_arr")
+        # print(ind_arr)
+        # assert np.all(ind_arr.argsort() == np.arange(len(ind_arr)))
+        # print(ind_arr[batch_idx])
+        
+        batch_idx_unique = np.arange(ind_arr[batch_idx][0], ind_arr[batch_idx][-1])
+        which_times, which_chunks, which_units = inv_arr[batch_idx_unique], all_chunk_ids[batch_idx_unique], all_labels[batch_idx_unique]
+        _, which_times = np.unique(which_times, return_inverse=True)
+        # which_times, which_chunks, which_units = np.where(chunk_unit_ids[batch_idx]) #batch_size * n_chunks
+
+        # print("LENS")
+        # print(len(which_times))
+        # print(len(which_chunks))
+        # print(len(which_units))
         
         if not raw:
             n, t, c = waveforms.shape
@@ -766,6 +784,7 @@ def get_all_shifted_raw_and_low_rank_templates_linear(
                 n_pitches_shift=pitch_shifts[batch_idx],
                 fill_value=0, 
             )
+            
             nonan = ~(waveforms[which_times].ptp(1) == 0)
             # Here more complicated
             np.add.at(spike_counts, (which_chunks, which_units), nonan)
@@ -793,7 +812,6 @@ def get_all_shifted_raw_and_low_rank_templates_linear(
     valid &= spike_counts / spike_counts.max(2)[:, :, None] > min_fraction_at_shift
     spike_counts[~valid] = np.nan
         # spike_counts[spike_counts==0] = np.nan
-
     
     raw_templates /= spike_counts[:, :, None]
     if not raw:
@@ -802,13 +820,15 @@ def get_all_shifted_raw_and_low_rank_templates_linear(
     
     if not np.isnan(pad_value):
         raw_templates = np.nan_to_num(raw_templates, copy=False, nan=pad_value)
+        snrs_by_chan = np.nan_to_num(snrs_by_chan, copy=False, nan=pad_value)
+        spike_counts = np.nan_to_num(spike_counts, copy=False, nan=pad_value)
         if not raw:
             low_rank_templates = np.nan_to_num(low_rank_templates, copy=False, nan=pad_value)
 
     if raw:
-        return raw_templates, raw_templates, snrs_by_channel, spike_counts
+        return raw_templates, raw_templates, snrs_by_chan, spike_counts
 
-    return raw_templates, low_rank_templates, snrs_by_channel, spike_counts
+    return raw_templates, low_rank_templates, snrs_by_chan, spike_counts
 
 def get_all_shifted_raw_and_low_rank_templates_with_h5(
     recording,
