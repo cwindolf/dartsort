@@ -327,10 +327,10 @@ def density_peaks_clustering(
                 f"{X[inliers_first][inliers].shape=}"
             )
         if sigma_regional == "rule_of_thumb":
-            radius_search = 2.0 * sigma_local
+            radius_search = radius_search * sigma_local
             sigma_regional = 10 * sigma_local
         else:
-            radius_search = 2.0 * sigma_local
+            radius_search = radius_search * sigma_local
 
     if l2_norm is None:
         do_ratio = sigma_regional is not None

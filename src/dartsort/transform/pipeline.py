@@ -113,6 +113,7 @@ def featurization_config_to_class_names_and_kwargs(fconf):
                     "rank": fconf.tpca_rank,
                     "name_prefix": fconf.input_waveforms_name,
                     "centered": fconf.tpca_centered,
+                    "temporal_slice": fconf.input_tpca_projs_temporal_slice,
                 },
             )
         )
