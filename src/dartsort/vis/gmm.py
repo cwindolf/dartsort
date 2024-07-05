@@ -139,38 +139,44 @@ class ZipperSplitPlot(GMMPlot):
             sigma_regional=1.,
             min_bin_size=0.05,
             n_neighbors_search=gmm.dpc_split_kw.n_neighbors_search,
-            remove_clusters_smaller_than=gmm.min_cluster_size // 2,
+            remove_clusters_smaller_than=gmm.min_cluster_size,
             return_extra=True,
         )
         
         axes = panel.subplot_mosaic("aabbcc\ndddeee")
 
-        panel, axes = analysis_plots.density_peaks_study(
+        _, _ = analysis_plots.density_peaks_study(
             z,
             dens,
             s=10,
             fig=panel,
             axes=np.array([axes[k] for k in "abc"]),
         )
-        
-        new_units = []
+
         labels = dens["labels"]
         ids = np.unique(labels)
-        for label in ids[ids >= 0]:
+        ids = ids[ids >= 0]
+        if ids.size <= 1:
+            axes["d"].axis("off")
+            axes["e"].axis('off')
+            return
+
+        new_units = []
+        for label in ids:
             u = spike_interp.InterpUnit(
                 do_interp=False,
                 **gmm.unit_kw,
             )
-            
-            inu = in_unit[np.flatnonzero(labels == u)]
+            inu = torch.tensor(in_unit[np.flatnonzero(labels == label)])
             inu, train_data = gmm.get_training_data(
                 unit_id,
                 waveform_kind="original",
                 in_unit=inu,
                 sampling_method=gmm.sampling_method,
             )
-            model.fit_center(**train_data, show_progress=False)
-        
+            u.fit_center(**train_data, show_progress=False)
+            new_units.append(u)
+
         # plot new unit maxchan wfs and old one in black
         ax = axes["d"]
         ax.axhline(0, c="k", lw=0.8)
@@ -189,13 +195,15 @@ class ZipperSplitPlot(GMMPlot):
             if j > 0:
                 all_means.append(means.mean(0))
             means = unit.to_waveform_channels(means, waveform_channels=chans[:, None])
+            means = means[..., 0]
+            means = gmm.data.tpca._inverse_transform_in_probe(means)
             means = means.numpy(force=True)
             color = "k"
             if j > 0:
                 color = glasbey1024[j - 1]
 
             lines = np.stack(
-                (np.broadcast_to(np.arange(means.shape[1])[None], means.shape), recons),
+                (np.broadcast_to(np.arange(means.shape[1])[None], means.shape), means),
                 axis=-1,
             )
             ax.add_collection(LineCollection(lines, colors=color, lw=1))
@@ -224,7 +232,7 @@ class ZipperSplitPlot(GMMPlot):
                 )
         dists = divergences.numpy(force=True)
 
-        axis = panel.subplots()
+        axis = axes["e"]
         im = axis.imshow(
             dists,
             vmin=0,
@@ -237,8 +245,8 @@ class ZipperSplitPlot(GMMPlot):
             for (j, i), label in np.ndenumerate(dists):
                 axis.text(i, j, f"{label:.2f}", ha="center", va="center")
         plt.colorbar(im, ax=axis, shrink=0.3)
-        axis.set_xticks(range(len(times)), [f"{t:0.1f}" for t in times])
-        axis.set_yticks(range(len(times)), [f"{t:0.1f}" for t in times])
+        axis.set_xticks(range(len(new_units)))
+        axis.set_yticks(range(len(new_units)))
         for i, (tx, ty) in enumerate(
             zip(axis.xaxis.get_ticklabels(), axis.yaxis.get_ticklabels())
         ):
