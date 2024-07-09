@@ -36,19 +36,19 @@ class DPCSplitPlot(GMMPlot):
     width = 5
     height = 2
 
-    def __init__(self, kind="residual"):
-        self.kind = kind
+    def __init__(self, spike_kind="residual"):
+        self.spike_kind = spike_kind
 
     def draw(self, panel, gmm, unit_id):
-        if self.kind == "residual_full":
+        if self.spike_kind == "residual_full":
             (in_unit,) = (gmm.labels == unit_id).nonzero(as_tuple=True)
             features = torch.empty((in_unit.numel(), gmm.residual_pca_rank), device=gmm.device)
             for sl, data in gmm.batches(in_unit):
                 gmm[unit_id].residual_embed(**data,  out=features[sl])
             z = features[:, :gmm.dpc_split_kw.rank].numpy(force=True)
-        elif self.kind == "train":
+        elif self.spike_kind == "train":
             _, in_unit, z = gmm.split_features(unit_id)
-        elif self.kind == "global":
+        elif self.spike_kind == "global":
             in_unit, data = gmm.get_training_data(unit_id)
             waveforms = gmm[unit_id].to_unit_channels(
                 waveforms=data["waveforms"],
@@ -84,6 +84,7 @@ class DPCSplitPlot(GMMPlot):
                 va="center",
                 transform=ax.transAxes,
             )
+            ax.autoscale_view()
             return
 
         ru = np.unique(dens["labels"])
@@ -96,7 +97,7 @@ class DPCSplitPlot(GMMPlot):
             fig=panel,
         )
         axes[-1].set_title(f"n={(ru>=0).sum()}", fontsize=8)
-        axes[0].set_title(self.kind)
+        axes[0].set_title(self.spike_kind)
         
 
 
@@ -142,8 +143,18 @@ class ZipperSplitPlot(GMMPlot):
             remove_clusters_smaller_than=gmm.min_cluster_size,
             return_extra=True,
         )
-        
-        axes = panel.subplot_mosaic("aabbcc\ndddeee")
+
+        labels = dens["labels"]
+        ids = np.unique(labels)
+        ids = ids[ids >= 0]
+
+        if ids.size > 1:
+            top, bottom = panel.subfigures(nrows=2)
+            axes_top = top.subplot_mosaic("abc")
+            axes_bottom = bottom.subplot_mosaic("de")
+            axes = {**axes_top, **axes_bottom}
+        else:
+            axes = panel.subplot_mosaic("abc")
 
         _, _ = analysis_plots.density_peaks_study(
             z,
@@ -152,13 +163,7 @@ class ZipperSplitPlot(GMMPlot):
             fig=panel,
             axes=np.array([axes[k] for k in "abc"]),
         )
-
-        labels = dens["labels"]
-        ids = np.unique(labels)
-        ids = ids[ids >= 0]
         if ids.size <= 1:
-            axes["d"].axis("off")
-            axes["e"].axis('off')
             return
 
         new_units = []
@@ -243,7 +248,7 @@ class ZipperSplitPlot(GMMPlot):
         )
         if self.show_values:
             for (j, i), label in np.ndenumerate(dists):
-                axis.text(i, j, f"{label:.2f}", ha="center", va="center")
+                axis.text(i, j, f"{label:.2f}", ha="center", va="center", clip_on=True)
         plt.colorbar(im, ax=axis, shrink=0.3)
         axis.set_xticks(range(len(new_units)))
         axis.set_yticks(range(len(new_units)))
@@ -260,19 +265,19 @@ class HDBScanSplitPlot(GMMPlot):
     width = 2
     height = 2
 
-    def __init__(self, kind="train"):
-        self.kind = kind
+    def __init__(self, spike_kind="train"):
+        self.spike_kind = spike_kind
 
     def draw(self, panel, gmm, unit_id):
-        if self.kind == "residual_full":
+        if self.spike_kind == "residual_full":
             (in_unit,) = (gmm.labels == unit_id).nonzero(as_tuple=True)
             features = torch.empty((in_unit.numel(), gmm.residual_pca_rank), device=gmm.device)
             for sl, data in gmm.batches(in_unit):
                 gmm[unit_id].residual_embed(**data,  out=features[sl])
             z = features[:, :gmm.dpc_split_kw.rank].numpy(force=True)
-        elif self.kind == "train":
+        elif self.spike_kind == "train":
             _, in_unit, z = gmm.split_features(unit_id)
-        elif self.kind == "global":
+        elif self.spike_kind == "global":
             in_unit, data = gmm.get_training_data(unit_id)
             waveforms = gmm[unit_id].to_unit_channels(
                 waveforms=data["waveforms"],
@@ -287,7 +292,8 @@ class HDBScanSplitPlot(GMMPlot):
                 show_progress=False,
             )
             z = loadings.numpy(force=True)
-
+        else:
+            assert False
         in_unit = in_unit.numpy(force=True)
         zu, idx, inv = np.unique(z, return_index=True, return_inverse=True, axis=0)
 
@@ -298,7 +304,7 @@ class HDBScanSplitPlot(GMMPlot):
         ax = panel.subplots()
         ax.scatter(*zu[labs < 0].T, color="gray", s=3, lw=0)
         ax.scatter(*zu[labs >= 0].T, c=glasbey1024[labs[labs >= 0]], s=3, lw=0)
-        ax.set_title(self.kind + " hdb")
+        ax.set_title(self.spike_kind + " hdb")
 
 
 class EmbedsOverTimePlot(GMMPlot):
@@ -334,6 +340,7 @@ class ChansHeatmap(GMMPlot):
         ax = panel.subplots()
         xy = gmm.data.registered_geom.numpy(force=True)
         ax.scatter(*xy[unique_ixs].T, c=counts, lw=0, cmap=self.cmap)
+        ax.scatter(*xy[np.atleast_1d(gmm[unit_id].max_channel.numpy(force=True))].T, color="g", lw=0)
 
 
 class AmplitudesOverTimePlot(GMMPlot):
@@ -440,8 +447,12 @@ class FeaturesVsBadnessesPlot(GMMPlot):
 
     def draw(self, panel, gmm, unit_id):
         # residual embed feats
-        _, in_unit_, z = gmm.split_features(unit_id)
-        in_unit, utd = gmm.get_training_data(unit_id, in_unit=in_unit_)
+        if gmm.dpc_split_kw.split_on_train:
+            _, in_unit_, z = gmm.split_features(unit_id)
+            in_unit, utd = gmm.get_training_data(unit_id, in_unit=in_unit_)
+        else:
+            in_unit, utd = gmm.get_training_data(unit_id)
+            _, in_unit_, z = gmm.split_features(unit_id, in_unit)
         assert torch.equal(in_unit_, in_unit)
         overlaps, rel_ix = gmm[unit_id].overlaps(utd["waveform_channels"])
 
@@ -702,7 +713,8 @@ class InputWaveformsSingleChanOverTimePlot(GMMPlot):
         bin_edges = np.linspace(*time_range, num=n_bins)
 
         axes = panel.subplots(nrows=self.max_bins, sharex=True, sharey=True)
-        axes[0].set_title(f"input waveforms\non {self.channel} channel")
+        # axes[0].set_title(f"input waveforms\non {self.channel} channel")
+        axes[0].set_title(self.channel)
 
         for bin_left, bin_right, ax in zip(bin_edges, bin_edges[1:], axes.flat):
             times_valid = gmm.data.times_seconds == gmm.data.times_seconds.clip(bin_left, bin_right)
@@ -868,14 +880,14 @@ class GridMeanDistancesPlot(GMMPlot):
                 times = times[gmm[unit_id].interp.grid_fitted]
             means = gmm[unit_id].get_means(times).reshape(len(times), -1)
             l2s = means.square().sum(1)
-    
+
             if self.scaled:
                 dots = (means[:, None, :] * means[None, :, :]).sum(2)
                 scalings = (dots + self.inv_lambda).div_(l2s + self.inv_lambda)
                 scalings = scalings.clip_(self.scale_clip_low, self.scale_clip_high)
             else:
                 scalings = torch.ones_like(l2s[:, None] + l2s[None, :])
-    
+
             dists = means[:, None].sub(scalings[:, :, None] * means[None]).square().sum(2).div(l2s)
             dists = dists.numpy(force=True)
             times = times.numpy(force=True)
@@ -894,7 +906,7 @@ class GridMeanDistancesPlot(GMMPlot):
         )
         if self.show_values:
             for (j, i), label in np.ndenumerate(dists):
-                axis.text(i, j, f"{label:.2f}", ha="center", va="center")
+                axis.text(i, j, f"{label:.2f}", ha="center", va="center", clip_on=True)
         plt.colorbar(im, ax=axis, shrink=0.3)
         axis.set_xticks(range(len(times)), [f"{t:0.1f}" for t in times])
         axis.set_yticks(range(len(times)), [f"{t:0.1f}" for t in times])
@@ -904,7 +916,7 @@ class GridMeanDistancesPlot(GMMPlot):
 default_gmm_plots = (
     ISIHistogram(),
     ChansHeatmap(),
-    HDBScanSplitPlot(kind="residual_full"),
+    HDBScanSplitPlot(spike_kind="residual_full"),
     HDBScanSplitPlot(),
     ZipperSplitPlot(),
     GridMeansSingleChanPlot(),
@@ -915,9 +927,9 @@ default_gmm_plots = (
     AmplitudesOverTimePlot(),
     BadnessesOverTimePlot(),
     EmbedsOverTimePlot(),
-    DPCSplitPlot(kind="residual_full"),
-    DPCSplitPlot(kind="train"),
-    DPCSplitPlot(kind="global"),
+    DPCSplitPlot(spike_kind="residual_full"),
+    DPCSplitPlot(spike_kind="train"),
+    DPCSplitPlot(spike_kind="global"),
     FeaturesVsBadnessesPlot(),
     GridMeanDistancesPlot(),
     GridMeansMultiChanPlot(),
