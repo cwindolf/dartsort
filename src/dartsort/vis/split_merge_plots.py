@@ -1677,6 +1677,7 @@ def check_overmerges(
                         # max_chan_registered_geom = chans_idx[chans_count.argmax()]
                         max_chan_registered_geom = min(max_chan_registered_geom, n_chans_reg_geom - 10)
                         max_chan_registered_geom = max(max_chan_registered_geom, 10)
+
                         # print(f"CHAN PITCH SHIFT WFS {chans_idx, chans_count}")
 
                         # print(max_chan_registered_geom)
@@ -1723,16 +1724,18 @@ def check_overmerges(
                         # print("channels no nan")
                         # print(np.where(~np.isnan(waveforms_target_chan[0, 0])))
                         
-                        no_nans = np.flatnonzero(np.isfinite(waveforms_target_chan[:, 0, :]).all(axis=1))
-                        if len(no_nans)>1:
-                            pcs = PCA(2).fit_transform(waveforms_target_chan.reshape(waveforms_target_chan.shape[0], -1)[no_nans])
+                        chans_no_nans = np.isfinite(waveforms_target_chan[:, 0, :]).all(axis=0)
+                        no_nans = np.flatnonzero(np.isfinite(waveforms_target_chan[:, 0, chans_no_nans]).all(axis=1))
+
+                        if len(no_nans)>1 and chans_no_nans.sum()>1:
+                            pcs = PCA(2).fit_transform(waveforms_target_chan[:, :, chans_no_nans].reshape(waveforms_target_chan.shape[0], -1)[no_nans])
         
                             ax_pcs.scatter(pcs[:, 0], pcs[:, 1], s=1, c = "blue")
                             ax_pcs.set_title("PCs", fontsize=7)
                         
                             # subsampled wfs to plot
                             if not raw:
-                                waveforms_target_chan = tpca.inverse_transform(waveforms_target_chan.transpose(0, 2, 1).reshape(-1, 8)).reshape(-1, 10, 121).transpose(0, 2, 1)
+                                waveforms_target_chan = tpca.inverse_transform(waveforms_target_chan[:, :, chans_no_nans].transpose(0, 2, 1).reshape(-1, 8)).reshape(-1, len(chans_no_nans), 121).transpose(0, 2, 1)
                             waveforms_target_chan = waveforms_target_chan[:, 15:75, :]
 
                             mean_waveforms = np.nanmean(waveforms_target_chan, axis = 0)
