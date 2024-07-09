@@ -308,9 +308,13 @@ def density_peaks_clustering(
 
     # inliers = inliers_first[inliers]
 
-    if sigma_local == "rule_of_thumb":
+    if isinstance(sigma_local, str) and sigma_local.startswith("rule_of_thumb"):
+        factor = 1
+        if "*" in sigma_local:
+            factor = float(sigma_local.split("*")[1].strip())
         sigma_local = (
             1.06
+            * factor
             * np.linalg.norm(np.std(X[inliers_first][inliers], axis=0))
             * np.power(inliers.sum(), -0.2)
         )
@@ -323,10 +327,10 @@ def density_peaks_clustering(
                 f"{X[inliers_first][inliers].shape=}"
             )
         if sigma_regional == "rule_of_thumb":
-            radius_search = 2.0 * sigma_local
+            radius_search = radius_search * sigma_local
             sigma_regional = 10 * sigma_local
         else:
-            radius_search = 2.0 * sigma_local
+            radius_search = radius_search * sigma_local
 
     if l2_norm is None:
         do_ratio = sigma_regional is not None
@@ -486,3 +490,8 @@ def density_peaks_clustering(
         nhdn=nhdn_all,
         labels=labels_all,
     )
+
+def mad(x, axis=0):
+    x = x - np.median(x, axis=axis, keepdims=True)
+    np.abs(x, out=x)
+    return np.median(x, axis=axis)

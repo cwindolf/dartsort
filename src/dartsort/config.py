@@ -102,6 +102,7 @@ class FeaturizationConfig:
     tpca_fit_radius: Optional[float] = None
     tpca_rank: int = 8
     tpca_centered: bool = True
+    input_tpca_projs_temporal_slice: Optional[slice] = None
 
     # used when naming datasets saved to h5 files
     input_waveforms_name: str = "collisioncleaned"
@@ -240,10 +241,10 @@ class ClusteringConfig:
     adaptive_feature_scales: bool = False
     log_c: float = 5.0
     recursive: bool = False
-    remove_duplicates: bool = True
+    remove_duplicates: bool = False
 
     # remove large clusters in hdbscan?
-    remove_big_units: bool = True
+    remove_big_units: bool = False
     zstd_big_units: float = 50.0
 
     # grid snap parameters
