@@ -210,7 +210,7 @@ class TemplateConfig:
 
     # realignment
     # TODO: maybe this should be done in clustering?
-    realign_peaks: bool = True
+    realign_peaks: bool = False
     realign_max_sample_shift: int = 20
 
     # track template over time
@@ -269,7 +269,7 @@ class SplitMergeConfig:
     # -- merge
     merge_template_config: TemplateConfig = TemplateConfig(superres_templates=False)
     link: str = "complete"
-    merge_distance_threshold: float = 0.25
+    merge_distance_threshold: float = 0.33
     cross_merge_distance_threshold: float = 0.5
     min_spatial_cosine: float = 0.5
     # superres_linkage: Callable[np.array, np.array] = np.max
@@ -290,7 +290,7 @@ class SplitMergeConfig:
     peak_time_selection: str = "maxstd"
     # For tpca template computation 
     threshold_n_spike: float = 0.2
-    m_iter: int = 1
+    m_iter: int = 3
 
     # For template comparisons
     max_shift_samples: int = 20

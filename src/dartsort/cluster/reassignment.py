@@ -433,6 +433,7 @@ def iterative_split_merge_reassignment(
             overwrite_templates=True,
             return_neighbors=True,
             denoising_tsvd=denoising_tsvd,
+            iter_merge=2,
         )
 
         #reassign and triage ---
@@ -440,52 +441,51 @@ def iterative_split_merge_reassignment(
     # Here, GC, update neighbors and then reassign
 
     # The output of these two functions is now in the pc space 
-    tpca_templates_list, spike_count_list, chunk_belong = create_tpca_templates_list_efficient(
-        recording, 
-        sorting,
-        motion_est,
-        chunk_time_ranges_s,
-        template_config, 
-        matching_config,
-        matchh5,
-        weights=None,
-        tpca=tpca,
-    )
+    # tpca_templates_list, spike_count_list, chunk_belong = create_tpca_templates_list_efficient(
+    #     recording, 
+    #     sorting,
+    #     motion_est,
+    #     chunk_time_ranges_s,
+    #     template_config, 
+    #     matching_config,
+    #     matchh5,
+    #     weights=None,
+    #     tpca=tpca,
+    # )
 
 
-    unit_ids = np.unique(sorting.labels)
-    unit_ids = unit_ids[unit_ids>-1]
+    # unit_ids = np.unique(sorting.labels)
+    # unit_ids = unit_ids[unit_ids>-1]
     
-    templates_smoothed = smooth_list_templates(
-        tpca_templates_list, spike_count_list, unit_ids, threshold_n_spike=split_merge_config.threshold_n_spike,
-    )
+    # templates_smoothed = smooth_list_templates(
+    #     tpca_templates_list, spike_count_list, unit_ids, threshold_n_spike=split_merge_config.threshold_n_spike,
+    # )
 
-    residual_norm = compute_residual_norm(
-        recording, 
-        sorting,
-        motion_est,
-        chunk_time_ranges_s,
-        template_config,
-        matching_config,
-        tpca,
-        matchh5,
-        neighbors,
-        templates_smoothed,
-        chunk_belong,
-        wfs_name=wfs_name,
-        fill_nanvalue=fill_nanvalue,
-        norm_operator=split_merge_config.norm_operator,
-    )
+    # residual_norm = compute_residual_norm(
+    #     recording, 
+    #     sorting,
+    #     motion_est,
+    #     chunk_time_ranges_s,
+    #     template_config,
+    #     matching_config,
+    #     tpca,
+    #     matchh5,
+    #     neighbors,
+    #     templates_smoothed,
+    #     chunk_belong,
+    #     wfs_name=wfs_name,
+    #     fill_nanvalue=fill_nanvalue,
+    #     norm_operator=split_merge_config.norm_operator,
+    # )
 
-    new_labels = -1*np.ones(sorting.labels.shape)
-    for unit in unit_ids:
-        idx_unit = np.flatnonzero(sorting.labels == unit)
-        new_labels[idx_unit] = neighbors[unit, residual_norm.argmin(1)[idx_unit]]
-    norm_triage = (norm_triage / tpca.components_.max(1)).min()
-    new_labels[residual_norm.min(1)>split_merge_config.norm_triage] = -1
-    new_labels = new_labels.astype('int')
-
-        # sorting = replace(sorting, labels = new_labels)
+    # new_labels = -1*np.ones(sorting.labels.shape)
+    # for unit in unit_ids:
+    #     idx_unit = np.flatnonzero(sorting.labels == unit)
+    #     new_labels[idx_unit] = neighbors[unit, residual_norm.argmin(1)[idx_unit]]
+    # norm_triage = (split_merge_config.norm_triage / tpca.components_.max(1)).min()
+    # new_labels[residual_norm.min(1)>norm_triage] = -1
+    # new_labels = new_labels.astype('int')
+    # sorting = replace(sorting, labels = new_labels)
         
     return sorting
 

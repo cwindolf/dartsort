@@ -419,7 +419,7 @@ class TemplateData:
         spike_length_samples=121,
         denoising_tsvd=None,
         return_denoising_tsvd=False,
-        # return_realigned_sorting=False, # not implemented here
+        return_realigned_sorting=False, # not implemented here
     ):
 
         template_data_list = []
@@ -461,7 +461,7 @@ class TemplateData:
             spatial_svdsmoothing=template_config.spatial_svdsmoothing,
             max_ptp_chans_to_spatialsmooth=template_config.max_ptp_chans_to_spatialsmooth,
             low_rank_denoising=template_config.low_rank_denoising,
-            realign_peaks=False, #No realign here
+            realign_peaks=template_config.realign_peaks, #No realign here
             device=device,
             # units_per_job=units_per_job,
         )
@@ -483,6 +483,9 @@ class TemplateData:
             denoising_tsvd=denoising_tsvd,
             **kwargs,
         )
+
+        if template_config.realign_peaks:
+            sorting = results["sorting"]
 
         for j in range(len(chunk_time_ranges_s)):
             # handle registered templates
@@ -525,10 +528,11 @@ class TemplateData:
                 
             template_data_list.append(obj)
 
-        # if return_realigned_sorting:
-        #     return template_data_list, sorting
-
-        if return_denoising_tsvd:
+        if return_realigned_sorting and not return_denoising_tsvd:
+            return template_data_list, sorting
+        elif return_realigned_sorting and return_denoising_tsvd:
+            return template_data_list, sorting, results["denoising_tsvd"]
+        elif return_denoising_tsvd:
             return template_data_list, results["denoising_tsvd"]
         return template_data_list
 

@@ -1169,8 +1169,7 @@ def check_split_step_post_deconv(
         plt.savefig(output_directory / f"unit_{unit}_overmerge")
         plt.close()
 
-
-def check_overmerges(
+def check_overmerges_NP1(
     recording,
     sorting,
     chunk_time_ranges_s,
@@ -1302,6 +1301,7 @@ def check_overmerges(
                         subtract_tpca_temp = True
                             
                 template_data_chunk = TemplateData.from_npz(data_dir_temp_data / f"chunk_{j}_{template_npz_filename}")
+                template_data_chunk.templates[np.isnan(template_data_chunk.templates)] = 0
     
                 ax_ptp_time.plot([chunk_range[0], chunk_range[1]], [template_data_chunk.templates[template_data_chunk.unit_ids == unit][0].ptp(0).max(), template_data_chunk.templates[template_data_chunk.unit_ids == unit][0].ptp(0).max()],
                     c = "orange", label = "template ptp", 
@@ -1356,7 +1356,7 @@ def check_overmerges(
                     idx_subsample = np.arange(len(idx_unit_chunk))
     
                 if np.any(template_data_chunk.unit_ids == unit):
-                    ax_heatmap.imshow(template_data_chunk.templates[template_data_chunk.unit_ids == unit][0].ptp(0).reshape(-1, 8))
+                    ax_heatmap.imshow(template_data_chunk.templates[template_data_chunk.unit_ids == unit][0].ptp(0).reshape(-1, 4), aspect="auto")
                 
                     n_pitches_shift = get_spike_pitch_shifts(localization_results[idx_subsample, 2], geom, times_s = times_seconds[idx_subsample], motion_est=me)
 
@@ -1369,7 +1369,308 @@ def check_overmerges(
                         # chans_to_plot_registered_geom = good_chans[template_data_chunk.templates[template_data_chunk.unit_ids == unit][0, :, good_chans].ptp(0).argsort()[::-1][:10]]
                         # print("channels to plot on")
                         # print(chans_to_plot_registered_geom)
+    
+                        max_chan_registered_geom = template_data_chunk.templates[template_data_chunk.unit_ids == unit][0].ptp(0).argmax()
+                        # chans_idx, chans_count = np.unique(channels[idx_subsample]+8*n_pitches_shift, return_counts=True)
+                        # max_chan_registered_geom = chans_idx[chans_count.argmax()]
+                        max_chan_registered_geom = min(max_chan_registered_geom, n_chans_reg_geom - 5)
+                        max_chan_registered_geom = max(max_chan_registered_geom, 5)
+                        # print(f"CHAN PITCH SHIFT WFS {chans_idx, chans_count}")
+
+                        # print(np.unique(channels[idx_subsample], return_counts=True))
+                        # print(np.unique(channels[idx_subsample]+8*n_pitches_shift, return_counts=True))
+        
+                        # max_chan_registered_geom = min(max_chan_registered_geom, n_chans_reg_geom - 6*8)
+                        # max_chan_registered_geom = max(max_chan_registered_geom, 6*8)
+                        chans_to_plot_registered_geom = np.arange(max_chan_registered_geom - 5, max_chan_registered_geom+5, 1)
+        
+                        temp_chunk = template_data_chunk.templates[template_data_chunk.unit_ids == unit][0][15:75][:, chans_to_plot_registered_geom]
                         
+                        med_ptp = 1.5*temp_chunk.ptp(0).max()
+    
+                        if raw:
+                            # print("Channels")
+                            # print(channels[idx_subsample])
+                            # print("n_pitches shifts")
+                            # print(n_pitches_shift)
+                            # print("sub channels")
+                            # print(channels[idx_subsample] + 8*n_pitches_shift)
+                            collisioncleaned_tpca_features = spikeio.read_waveforms_channel_index(
+                                    recording,
+                                    times_samples[idx_subsample],
+                                    channel_index,
+                                    channels[idx_subsample],
+                            )
+                        else:
+                            with h5py.File(subh5, "r+") as h5:
+                                collisioncleaned_tpca_features = h5[tpca_features_dataset_name][idx_unit_chunk[idx_subsample]]
+
+                        # do all this before chunk / PCs...
+                        waveforms_target_chan = get_waveforms_on_static_channels(
+                            collisioncleaned_tpca_features,
+                            geom,
+                            main_channels=channels[idx_subsample],
+                            channel_index=channel_index,
+                            target_channels=chans_to_plot_registered_geom, #np.arange(max_chan_registered_geom-10, max_chan_registered_geom+10),
+                            n_pitches_shift=n_pitches_shift,
+                            registered_geom=registered_geom,
+                        )                        
+
+                        # print("channels no nan")
+                        # print(np.where(~np.isnan(waveforms_target_chan[0, 0])))
+
+                        chans_no_nans = np.isfinite(waveforms_target_chan[:, 0, :]).all(axis=0)
+                        no_nans = np.flatnonzero(np.isfinite(waveforms_target_chan[:, 0, chans_no_nans]).all(axis=1))
+                        if len(no_nans)>1 and chans_no_nans.sum()>1:
+                            pcs = PCA(2).fit_transform(waveforms_target_chan[:, :, chans_no_nans].reshape(waveforms_target_chan.shape[0], -1)[no_nans])
+        
+                            ax_pcs.scatter(pcs[:, 0], pcs[:, 1], s=1, c = "blue")
+                            ax_pcs.set_title("PCs", fontsize=7)
+                        
+                            # subsampled wfs to plot
+                            if not raw:
+                                waveforms_target_chan = tpca.inverse_transform(waveforms_target_chan[:, :, chans_no_nans].transpose(0, 2, 1).reshape(-1, 8)).reshape(-1, len(chans_no_nans), 121).transpose(0, 2, 1)
+                            waveforms_target_chan = waveforms_target_chan[:, 15:75, :]
+
+                            # mean_waveforms = np.nanmean(waveforms_target_chan, axis = 0)
+    
+                            for k in range(5):
+                                for i in range(waveforms_target_chan.shape[0]):
+                                    ax_wfs.plot(np.arange(120), waveforms_target_chan[i][:, k*2:k*2+2].T.flatten() + k*med_ptp, c = "blue", alpha = 0.05)                                        
+                                    if not subtract_tpca_temp: 
+                                        ax_wfs_temp_subtracted.plot(np.arange(120), waveforms_target_chan[i][:, k*2:k*2+2].T.flatten() - temp_chunk[:, k*2:k*2+2].T.flatten() + k*med_ptp, alpha = 0.05, c = "blue")
+                                    else:
+                                        ax_wfs_temp_subtracted.plot(np.arange(120), waveforms_target_chan[i][:, k*2:k*2+2].T.flatten() - temp_unit_tpca[15:75, chans_to_plot_registered_geom].T.flatten() + k*med_ptp, alpha = 0.05, c = "blue")
+                            if overlap_templates:
+                                for k in range(5):
+                                    if tpca_templates_list is not None:
+                                        ax_wfs.plot(np.arange(120), temp_unit_tpca[15:75, chans_to_plot_registered_geom].T.flatten(), c = "orange", alpha = 1)                                        
+                                    else:
+                                        ax_wfs.plot(np.arange(120), temp_chunk[:, k*2:k*2+2].T.flatten() + k*med_ptp, c = "orange", alpha = 1)                                        
+                                        # ax_wfs.plot(np.arange(120), mean_waveforms[:, k*2:k*2+2].T.flatten() + k*med_ptp, c = "red", alpha = 1)                                        
+                            ax_wfs.set_ylabel("Wfs", fontsize=7, labelpad = 0)
+                            ax_wfs_temp_subtracted.set_ylabel(f"Template-subtracted wfs (max chan {max_chan_registered_geom})", fontsize=7, labelpad=0)
+                            ax_wfs_temp_subtracted.set_xticks([])
+                            ax_wfs_temp_subtracted.set_yticks([])
+                            ax_wfs.set_xticks([])
+                            ax_wfs.set_yticks([])
+                        
+        plt.suptitle(f"Unit {unit}", y=0.925)
+        
+        # PCs on max chan 
+        # WFS on same chans 
+        if raw:
+            plt.savefig(output_directory / f"rawwfs_post_deconv_{unit}_overmerge")
+        else:
+            plt.savefig(output_directory / f"post_deconv_{unit}_overmerge")
+        plt.close()
+        
+
+
+
+def check_overmerges(
+    recording,
+    sorting,
+    chunk_time_ranges_s,
+    data_dir_temp_data,
+    output_directory,
+    depth_reg_all,
+    subh5, 
+    geom,
+    me,
+    channel_index,
+    tpca,
+    slice_s,
+    units_all = None,
+    overlap_templates=True,
+    tpca_templates_list=None,
+    template_npz_filename = "template_data.npz",
+    tpca_features_dataset_name="collisioncleaned_tpca_features",
+    n_neigh = 3,
+    zlim = (-100, 382),
+    bin_ms=0.1, 
+    max_ms=5,
+    max_lag=50,
+    time_smoothed=False,
+    raw=False,
+    n_col=4,
+    n_col_templates=8,
+):
+
+    """
+    here, everything should be a list containing info about each chunk!! 
+    """
+
+    registered_geom = registered_geometry(geom, me)
+    n_chans_reg_geom = len(registered_geom)
+
+    n_chunks = len(chunk_time_ranges_s)
+    n_cols = n_col * (n_chunks // n_col + 1)
+    if n_chunks % n_col == 0:
+        n_rows = int(2*(n_chunks // n_col))
+    else:
+        n_rows = int(2*(n_chunks // n_col + 1))
+
+    if units_all is None:
+        units_all = np.unique(sorting.labels)
+        units_all = units_all[units_all>-1]
+
+    height_ratio = [1]
+    for k in range(n_rows):
+        height_ratio.append(2)
+    
+    for unit in tqdm(units_all): 
+        
+        fig = plt.figure(figsize=(40, 20))
+        
+        gs = fig.add_gridspec(n_rows+1, n_cols, height_ratios=height_ratio)
+
+        ax_ptp_time = fig.add_subplot(gs[0, :(n_cols-2)//2]) 
+        ax_z_time = fig.add_subplot(gs[0, (n_cols-2)//2:-2]) 
+        ax_fr_time = fig.add_subplot(gs[0, -2:]) 
+
+        idx_unit = np.flatnonzero(sorting.labels==unit)
+        # if unit_labels.max()>len(colors_split):
+
+        ax_ptp_time.scatter(sorting.times_seconds[idx_unit], sorting.denoised_ptp_amplitudes[idx_unit], s=1, c = "blue")
+        ax_z_time.scatter(sorting.times_seconds[idx_unit], sorting.point_source_localizations[idx_unit, 2], s=1, c = "blue")
+
+        med_depth_reg = np.median(sorting.point_source_localizations[idx_unit, 2])
+        std_depth_reg = np.median(np.abs(sorting.point_source_localizations[idx_unit, 2] - med_depth_reg))/0.675
+        ax_z_time.set_ylim((med_depth_reg-5*std_depth_reg, med_depth_reg+5*std_depth_reg))
+
+        ax_z_time.set_xlim(slice_s)
+        ax_ptp_time.set_xlim(slice_s)
+
+        ax_ptp_time.set_ylabel("PTP (s.u.)")
+        ax_ptp_time.set_xlabel("Time (s)")
+        ax_fr_time.set_ylabel("FR (N/s)")
+        ax_fr_time.set_xlabel("Time (s)")
+        ax_z_time.yaxis.set_label_position("right")
+        ax_z_time.yaxis.tick_right()
+        ax_z_time.set_ylabel("Reg z (um)")
+        ax_z_time.set_xlabel("Time (s)")
+        # ax_z_time.set_ylim(zlim)
+
+        ax_z_time.xaxis.set_label_position('top') 
+        ax_z_time.xaxis.tick_top()
+        ax_ptp_time.xaxis.set_label_position('top') 
+        ax_ptp_time.xaxis.tick_top()
+        ax_fr_time.xaxis.set_label_position('top') 
+        ax_fr_time.xaxis.tick_top()
+        ax_fr_time.yaxis.tick_right()
+
+        cmp = 0
+        for j, chunk_range in enumerate(chunk_time_ranges_s):
+
+            idx_chunk = np.flatnonzero(
+                np.logical_and(sorting.times_seconds>=chunk_range[0], sorting.times_seconds<chunk_range[1])
+            )
+            idx_unit_chunk= idx_chunk[sorting.labels[idx_chunk]==unit]
+
+            ax_ptp_time.axvline(chunk_range[0], c='red')
+            ax_ptp_time.axvline(chunk_range[1], c='red')
+            ax_z_time.axvline(chunk_range[0], c='red')
+            ax_z_time.axvline(chunk_range[1], c='red')
+
+            ax_pcs = fig.add_subplot(gs[2*int(j//n_col)+1, 4*int(j - n_col*(j//n_col))]) 
+            ax_loc = fig.add_subplot(gs[2*int(j//n_col)+1, 4*int(j - n_col*(j//n_col))+1]) 
+            ax_wfs = fig.add_subplot(gs[2*int(j//n_col)+2, 4*int(j - n_col*(j//n_col))]) 
+            ax_wfs_temp_subtracted = fig.add_subplot(gs[2*int(j//n_col)+2, 4*int(j - n_col*(j//n_col))+1]) 
+            ax_ISI = fig.add_subplot(gs[2*int(j//n_col)+1, 4*int(j - n_col*(j//n_col))+2]) 
+            ax_ACG = fig.add_subplot(gs[2*int(j//n_col)+2, 4*int(j - n_col*(j//n_col))+2]) 
+            ax_heatmap = fig.add_subplot(gs[2*int(j//n_col)+1:2*int(j//n_col)+3, 4*int(j - n_col*(j//n_col))+3]) 
+            
+            if len(idx_unit_chunk):
+                times_seconds = sorting.times_seconds[idx_unit_chunk]
+                times_samples = sorting.times_samples[idx_unit_chunk]
+                n_spike_chunks = times_seconds.size
+                channels = sorting.channels[idx_unit_chunk]
+                depth_reg = depth_reg_all[idx_unit_chunk]
+                localization_results = sorting.point_source_localizations[idx_unit_chunk]
+                a = sorting.denoised_ptp_amplitudes[idx_unit_chunk]
+        
+                subtract_tpca_temp = False
+                if tpca_templates_list is not None:
+                    if type(tpca_templates_list[j])==TemplateData:
+                        if np.any(tpca_templates_list[j].unit_ids==unit):
+                            temp_unit_tpca = tpca_templates_list[j].templates[tpca_templates_list[j].unit_ids==unit][0].transpose(1, 0)
+                            temp_unit_tpca = tpca.inverse_transform(temp_unit_tpca).transpose(1, 0)
+                            subtract_tpca_temp = True
+                    else:
+                        temp_unit_tpca = tpca_templates_list[j][unit]
+                        subtract_tpca_temp = True
+                            
+                template_data_chunk = TemplateData.from_npz(data_dir_temp_data / f"chunk_{j}_{template_npz_filename}")
+                template_data_chunk.templates[np.isnan(template_data_chunk.templates)] = 0
+    
+                ax_ptp_time.plot([chunk_range[0], chunk_range[1]], [template_data_chunk.templates[template_data_chunk.unit_ids == unit][0].ptp(0).max(), template_data_chunk.templates[template_data_chunk.unit_ids == unit][0].ptp(0).max()],
+                    c = "orange", label = "template ptp", 
+                )
+                ax_z_time.plot([chunk_range[0], chunk_range[1]],
+                              [template_data_chunk.registered_template_depths_um[template_data_chunk.unit_ids == unit], template_data_chunk.registered_template_depths_um[template_data_chunk.unit_ids == unit]], c = "orange", label = "template depth")
+    
+                fr_unit = len(idx_unit_chunk)/(chunk_range[1]-chunk_range[0])
+                ax_fr_time.plot([chunk_range[0], chunk_range[1]], [fr_unit, fr_unit], c = 'k')
+                cmp+=n_spike_chunks
+    
+                ax_loc.scatter(localization_results[:, 0], depth_reg, s=1, c = "blue")
+                med_depth_reg = np.median(depth_reg)
+                std_depth_reg = np.median(np.abs(depth_reg - med_depth_reg))/0.675
+                std_depth_reg = max(std_depth_reg, 1)
+                
+                med_x = np.median(localization_results[:, 0])
+                std_x = np.median(np.abs(localization_results[:, 0] - med_x))/0.675
+                std_x = max(std_x, 1)
+                ax_loc.set_xlim((med_x-5*std_x, med_x+5*std_x))
+                ax_loc.set_ylim((med_depth_reg-5*std_depth_reg, med_depth_reg+5*std_depth_reg))
+                ax_loc.set_title("Localization", fontsize=7)
+                ax_loc.set_xlabel("x (um)", fontsize=7)
+                ax_loc.set_ylabel("reg z (um)", fontsize=7)
+    
+                dt_ms = np.diff(times_seconds) * 1000
+                lags, acg = correlogram(times_seconds*30_000, max_lag=max_lag)
+                        
+                bin_edges = np.arange(
+                    0,
+                    max_ms + bin_ms,
+                    bin_ms,
+                )
+                ax_ISI.hist(dt_ms, bin_edges, color="k")
+                ax_ISI.set_title("isi (ms)", fontsize=7)
+                ax_ISI.set_ylabel(f"count (out of {dt_ms.size} isis)", fontsize = 7, labelpad=0)
+    
+                bar(ax_ACG, lags, acg, fill=True, color="k")
+                ax_ACG.set_title("lag (samples)", fontsize=7)
+                ax_ACG.set_ylabel("acg", fontsize=7, labelpad=0)
+    
+                # ax_ISI.yaxis.set_label_position("right")
+                ax_ISI.yaxis.tick_right()
+                # ax_ACG.yaxis.set_label_position("right")
+                ax_ACG.yaxis.tick_right()
+    
+                if len(idx_unit_chunk)>150:
+                    idx_subsample = np.random.choice(len(idx_unit_chunk), 150, replace=False)
+                    idx_subsample.sort()
+                    # idx_unit_chunk = idx_unit_chunk[idx_subsample]
+                else:
+                    idx_subsample = np.arange(len(idx_unit_chunk))
+    
+                if np.any(template_data_chunk.unit_ids == unit):
+                    ax_heatmap.imshow(template_data_chunk.templates[template_data_chunk.unit_ids == unit][0].ptp(0).reshape(-1, n_col_templates))
+                
+                    n_pitches_shift = get_spike_pitch_shifts(localization_results[idx_subsample, 2], geom, times_s = times_seconds[idx_subsample], motion_est=me)
+
+
+                    chans_idx, count_chans_idx = np.unique(channel_index[channels[idx_subsample]].flatten(), return_counts=True)
+                    good_chans = chans_idx[count_chans_idx>0]
+                    good_chans = good_chans[good_chans<384]
+                    
+                    if len(good_chans):
+                        # print(good_chans)
+                        # chans_to_plot_registered_geom = good_chans[template_data_chunk.templates[template_data_chunk.unit_ids == unit][0, :, good_chans].ptp(0).argsort()[::-1][:10]]
+                        # print("channels to plot on")
+                        # print(chans_to_plot_registered_geom)
     
                         max_chan_registered_geom = template_data_chunk.templates[template_data_chunk.unit_ids == unit][0].ptp(0).argmax()
                         # chans_idx, chans_count = np.unique(channels[idx_subsample]+8*n_pitches_shift, return_counts=True)
@@ -1655,7 +1956,7 @@ def check_overmerges_post_deconv(
             ax_ACG.yaxis.tick_right()
             
             if np.any(template_data_chunk.unit_ids == unit):
-                ax_heatmap.imshow(template_data_chunk.templates[template_data_chunk.unit_ids == unit][0].ptp(0).reshape(-1, 8))
+                ax_heatmap.imshow(template_data_chunk.templates[template_data_chunk.unit_ids == unit][0].ptp(0).reshape(-1, 8), aspect="auto")
             
                 n_pitches_shift = get_spike_pitch_shifts(localization_results[idx_chunk, 2], geom, times_s = times_seconds[idx_chunk], motion_est=me)
 

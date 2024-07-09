@@ -205,7 +205,6 @@ def get_templates_multiple_chunks_linear(
     """
     # validate arguments
     raw_only = not low_rank_denoising
-
     # fit tsvd
     if low_rank_denoising and denoising_tsvd is None:
         print("fitting tsvd")
@@ -223,6 +222,48 @@ def get_templates_multiple_chunks_linear(
             torch.from_numpy(
                 denoising_tsvd.components_.astype(recording.dtype)
             )
+        )
+
+    if realign_peaks:
+        pitch_shifts = get_spike_pitch_shifts(
+                sorting.point_source_localizations[:, 2],
+                geom,
+                times_s=sorting.times_seconds,
+                motion_est=motion_est,
+            )
+
+        print("Realigning sorting")
+        # pad the trough_offset_samples and spike_length_samples so that
+        # if the user did not request denoising we can just return the
+        # raw templates right away
+        trough_offset_load = trough_offset_samples + realign_max_sample_shift
+        spike_length_load = spike_length_samples + 2 * realign_max_sample_shift
+        raw_results = get_raw_templates(
+            recording,
+            sorting,
+            pitch_shifts=pitch_shifts,
+            registered_geom=registered_geom,
+            realign_peaks=False,
+            trough_offset_samples=trough_offset_load,
+            spike_length_samples=spike_length_load,
+            spikes_per_unit=spikes_per_unit,
+            min_fraction_at_shift=min_fraction_at_shift,
+            min_count_at_shift=min_count_at_shift,
+            reducer=reducer,
+            random_seed=random_seed,
+            n_jobs=n_jobs,
+            show_progress=True,
+            dtype=recording.dtype,
+            device=device,
+        )
+        sorting, templates = realign_sorting(
+            sorting,
+            raw_results["raw_templates"],
+            raw_results["snrs_by_channel"],
+            raw_results["unit_ids"],
+            max_shift=realign_max_sample_shift,
+            trough_offset_samples=trough_offset_samples,
+            recording_length_samples=recording.get_num_samples(),
         )
 
     n_chunks = len(chunk_time_ranges_s)
