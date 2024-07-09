@@ -57,11 +57,11 @@ class DARTsortAnalysis:
     name: Optional[str] = None
 
     # hdf5 keys
-    localizations_dataset = "point_source_localizations"
-    amplitudes_dataset = "denoised_ptp_amplitudes"
-    amplitude_vectors_dataset = "denoised_ptp_amplitude_vectors"
-    tpca_features_dataset = "collisioncleaned_tpca_features"
-    template_indices_dataset = "collisioncleaned_tpca_features"
+    localizations_dataset: str = "point_source_localizations"
+    amplitudes_dataset_name: str = "denoised_ptp_amplitudes"
+    amplitude_vectors_dataset: str = "denoised_ptp_amplitude_vectors"
+    tpca_features_dataset: str = "collisioncleaned_tpca_features"
+    template_indices_dataset: str = "template_indices"
 
     # configuration for analysis computations not included in above objects
     device: Optional[torch.device] = None
@@ -120,7 +120,6 @@ class DARTsortAnalysis:
                 motion_est=motion_est,
                 n_jobs=n_jobs_templates,
                 tsvd=denoising_tsvd,
-                # **kwargs,
             )
 
         return cls(
@@ -131,6 +130,7 @@ class DARTsortAnalysis:
             featurization_pipeline=featurization_pipeline,
             motion_est=motion_est,
             name=name,
+            **kwargs,
         )
 
     @classmethod
@@ -269,9 +269,9 @@ class DARTsortAnalysis:
     @property
     def max_chan_amplitudes(self):
         if self._max_chan_amplitudes is None:
-            if hasattr(self.sorting, self.amplitudes_dataset):
-                return getattr(self.sorting, self.amplitudes_dataset)
-            self._max_chan_amplitudes = self.h5[self.amplitudes_dataset][:]
+            if hasattr(self.sorting, self.amplitudes_dataset_name):
+                return getattr(self.sorting, self.amplitudes_dataset_name)
+            self._max_chan_amplitudes = self.h5[self.amplitudes_dataset_name][:]
         return self._max_chan_amplitudes
 
     @property
