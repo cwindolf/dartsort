@@ -1,4 +1,5 @@
 import numpy as np
+import warnings
 from spikeinterface.core import BaseRecording, BaseRecordingSegment
 from spikeinterface.core.core_tools import define_function_from_class
 from spikeinterface.extractors import NumpySorting
@@ -9,18 +10,23 @@ from spikeinterface.preprocessing.basepreprocessor import (
 from ..templates import TemplateData
 from .analysis import DARTsortAnalysis
 from .data_util import DARTsortSorting
+from ..config import unshifted_raw_template_config
+from ..templates import TemplateData
+
+
 
 def get_drifty_hybrid_recording(
-                recording,
-                 templates,
-                 motion_estimate,
-                 seed=None,
-                 firing_rates=None,
-                 peak_channels=None,
-                 amplitude_scale_std=0.1,
+    recording,
+    templates,
+    motion_estimate,
+    sorting=None,
+    displacement_sampling_frequency=5.0,
+    seed=0,
+    firing_rates=None,
+    peak_channels=None,
+    amplitude_scale_std=0.1,
 ):
     """
-
     :param: recording
     :param: templates object
     :param: motion estimate object
@@ -28,62 +34,77 @@ def get_drifty_hybrid_recording(
     :param: peak_channels
     :param: amplitude_factor
     """
-
     num_units = templates.num_units
-    
-    if seed is None:
-        _rg = np.random.default_rng()
-        seed = _rg.integers(0)
     rg = np.random.default_rng(seed=seed)
 
     if peak_channels is None:
         raise(NotImplementedError, "Autodetection of peak channels not implemented yet.")
-        
-    # Default firing rates drawn uniformly from 1-10Hz
-    if firing_rates:
-        assert firing_rates.shape[0] == num_units, "Number of firing rates must match number of units in templates."
-    else:
-        firing_rates = rg.uniform(1.0, 10.0, num_units)
 
-    spike_trains = [refractory_poisson_spike_train(
-                        firing_rates[i], 
-                        recording.get_num_samples(), 
-                        spike_length_samples=templates.num_samples,
-                        seed=seed
-                    ) for i in range(num_units)
-                ]
+    if sorting is None:
+        sorting = get_sorting(num_units, recording, firing_rates=firing_rates, rg=rg, spike_length_samples=templates.num_samples)
+    n_spikes = sorting.count_total_num_spikes()
 
-    spike_labels = np.repeat(np.arange(num_units) + 1, np.array([spike_trains[i].shape[0] for i in range(num_units)]))
-
-    sorting = NumpySorting.from_times_labels(
-        [np.concatenate(spike_trains)], 
-        [spike_labels], 
-        sampling_frequency=recording.get_sampling_frequency()
-    )
-
-    
     # Default amplitude scalings for spikes drawn from gamma
-    shape = 1. / (amplitude_scale_std ** 1.5)
-    amplitude_factor = rg.gamma(shape, scale=1./(shape-1), size=sorting.to_spike_vector().shape)
-        
+    if amplitude_scale_std:
+        shape = 1. / (amplitude_scale_std ** 1.5)
+        amplitude_factor = rg.gamma(shape, scale=1./(shape-1), size=n_spikes)
+    else:
+        amplitude_factor = np.ones(n_spikes)
+
     depths = recording.get_probe().contact_positions[:, 1][peak_channels]
-    motion_times_s = np.arange(int(recording.get_duration())+1)
+    t_start = recording.sample_index_to_time(0)
+    t_end = recording.sample_index_to_time(recording.get_num_samples() - 1)
+    motion_times_s = np.arange(t_start, t_end, step=1.0 / displacement_sampling_frequency)
 
     disp_y = motion_estimate.disp_at_s(motion_times_s, depths, grid=True)
 
     disp = np.zeros((motion_times_s.shape[0], 2, num_units))
-    disp[:, 1, :] = disp_y.swapaxes(0, 1)
+    disp[:, 1, :] = disp_y.T
+    # this tricks SI into using one displacement per unit
+    displacement_unit_factor = np.eye(num_units)
 
+    if not sorting.check_serializability(type='json'):
+        warnings.warn("Your sorting is not serializable, which could lead to problems later.")
 
     return InjectDriftingTemplatesRecording(
         sorting=sorting,
         drifting_templates=templates,
         parent_recording=recording,
         displacement_vectors=[disp],
-        displacement_sampling_frequency=1.0,
-        displacement_unit_factor=np.eye(num_units),
+        displacement_sampling_frequency=displacement_sampling_frequency,
+        displacement_unit_factor=displacement_unit_factor,
         amplitude_factor=amplitude_factor
-    ), sorting
+    )
+
+
+def get_sorting(num_units, recording, firing_rates=None, rg=0, nbefore=42, spike_length_samples=128):
+    rg = np.random.default_rng(rg)
+
+    # Default firing rates drawn uniformly from 1-10Hz
+    if firing_rates is not None:
+        assert firing_rates.shape[0] == num_units, "Number of firing rates must match number of units in templates."
+    else:
+        firing_rates = rg.uniform(1.0, 10.0, num_units)
+
+    spike_trains = [
+        refractory_poisson_spike_train(
+            firing_rates[i], 
+            recording.get_num_samples(), 
+            trough_offset_samples=nbefore,
+            spike_length_samples=spike_length_samples,
+            seed=rg,
+        ) for i in range(num_units)
+    ]
+
+    spike_labels = np.repeat(np.arange(num_units) + 1, np.array([spike_trains[i].shape[0] for i in range(num_units)]))
+
+    sorting = NumpySorting.from_times_labels(
+        [np.concatenate(spike_trains)], 
+        [spike_labels], 
+        sampling_frequency=recording.sampling_frequency,
+    )
+
+    return sorting
 
 
 def simulate_spike_trains(
@@ -172,3 +193,26 @@ def refractory_poisson_spike_train(
     assert spike_samples.size
 
     return spike_samples
+
+
+def sorting_from_times_labels(times, labels, recording=None, sampling_frequency=None,  determine_channels=True, template_config=unshifted_raw_template_config):
+    channels = np.zeros_like(labels)
+    if sampling_frequency is None:
+        if recording is not None:
+            sampling_frequency = recording.sampling_frequency
+    sorting = DARTsortSorting(times_samples=times, channels=channels, labels=labels, sampling_frequency=sampling_frequency)
+
+    if not determine_channels:
+        return
+
+    _, labels_flat = np.unique(labels, return_inverse=True)
+    sorting = DARTsortSorting(times_samples=times, channels=channels, labels=labels_flat, sampling_frequency=sorting.sampling_frequency)
+    td = TemplateData.from_config(recording, sorting, template_config, with_locs=False)
+    channels = np.nan_to_num(td.templates.ptp(1)).max(1)[labels_flat]
+    sorting = DARTsortSorting(times_samples=times, channels=channels, labels=labels, sampling_frequency=sorting.sampling_frequency)
+    return sorting, td
+
+
+def sorting_from_spikeinterface(sorting, recording=None, determine_channels=True, template_config=unshifted_raw_template_config):
+    sv = sorting.to_spike_vector()
+    return sorting_from_times_labels(sv['sample_index'], sv['unit_index'], sampling_frequency=sorting.sampling_frequency, recording=recording, determine_channels=determine_channels, template_config=template_config)
