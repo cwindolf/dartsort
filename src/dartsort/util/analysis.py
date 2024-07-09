@@ -202,7 +202,8 @@ class DARTsortAnalysis:
         if self.featurization_pipeline is not None:
             assert not self.featurization_pipeline.needs_fit()
 
-        assert self.hdf5_path.exists()
+        if self.hdf5_path is not None:
+            assert self.hdf5_path.exists()
         self.coarse_template_data = self.template_data.coarsen()
 
         self.shifting = (

@@ -149,6 +149,7 @@ def visualize_sorting(
                 unit_summary_dir,
                 channel_show_radius_um=channel_show_radius_um,
                 amplitude_color_cutoff=amplitude_color_cutoff,
+                amplitudes_dataset_name=amplitudes_dataset_name,
                 pca_radius_um=pca_radius_um,
                 max_height=layout_max_height,
                 figsize=layout_figsize,
