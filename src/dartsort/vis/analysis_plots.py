@@ -126,25 +126,34 @@ def get_linkage(dists, method="complete", threshold=0.25):
     return Z, labels
 
 
-def density_peaks_study(X, density_result, dims=[0, 1], fig=None, **scatter_kw):
-    if fig is None:
+def density_peaks_study(X, density_result, dims=[0, 1], fig=None, axes=None, idx=None, inv=None, **scatter_kw):
+    if inv is None:
+        idx = np.arange(len(X))
+        inv = np.arange(len(X))
+    if fig is None and axes is None:
         fig, axes = plt.subplots(ncols=3, layout="constrained", figsize=(9, 3), sharey=True)
-    else:
+    elif axes is None:
         axes = fig.subplots(ncols=3, sharey=True)
 
     scatter_kw = dict(lw=0, s=5) | scatter_kw
 
-    axes[0].scatter(*X[:, dims].T, c=density_result["density"], **scatter_kw)
-    missed = density_result["labels"] < 0
+    density = density_result["density"][inv]
+    labels = density_result["labels"][inv]
+    good = density_result["nhdn"][inv] < len(density_result["density"])
+    nhdns = np.full_like(inv, -1)
+    nhdns[good] = idx[density_result["nhdn"][inv][good]]
+
+    axes[0].scatter(*X[:, dims].T, c=density, **scatter_kw)
+    missed = labels < 0
     if missed.any():
         axes[1].scatter(*X[missed][:, dims].T, c="gray", **scatter_kw)
     if ~missed.any():
         axes[1].scatter(
-            *X[~missed][:, dims].T, c=density_result["density"][~missed], **scatter_kw
+            *X[~missed][:, dims].T, c=density[~missed], **scatter_kw
         )
     for i in range(len(X)):
-        nhdn = density_result["nhdn"][i]
-        if nhdn >= len(X):
+        nhdn = nhdns[i]
+        if nhdn < 0:
             continue
         x = X[i, dims]
         dx = X[nhdn, dims] - x
@@ -152,7 +161,7 @@ def density_peaks_study(X, density_result, dims=[0, 1], fig=None, **scatter_kw):
             *x, *dx, length_includes_head=True, width=0, color="k"
         )
     colors = np.concatenate([[[0.5, 0.5, 0.5]], glasbey1024])
-    axes[2].scatter(*X[:, dims].T, c=colors[density_result["labels"] + 1], **scatter_kw)
+    axes[2].scatter(*X[:, dims].T, c=colors[labels + 1], **scatter_kw)
     axes[2].scatter(
         *X[missed][:, dims].T, c="gray", **scatter_kw
     )
