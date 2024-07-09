@@ -33,12 +33,7 @@ Card = namedtuple("Card", ["kind", "width", "height", "plots"])
 
 
 def flow_layout(
-    plots,
-    max_height=4,
-    figsize=(8.5, 11),
-    figure=None,
-    hspace=0.1,
-    **plot_kwargs
+    plots, max_height=4, figsize=(8.5, 11), figure=None, hspace=0.1, **plot_kwargs
 ):
     columns = flow_layout_columns(plots, max_height=max_height, **plot_kwargs)
 
@@ -74,7 +69,7 @@ def flow_layout(
             panels = cardfig.subfigures(
                 nrows=len(card.plots),
                 ncols=1,
-                height_ratios=[p.height for p in card.plots],
+                height_ratios=[min(p.height, max_height) for p in card.plots],
                 hspace=hspace,
             )
             panels = np.atleast_1d(panels)
@@ -98,7 +93,7 @@ def flow_layout_columns(plots, max_height=4, **plot_kwargs):
         elif isinstance(plot, BaseMultiPlot):
             all_plots.extend(plot.plots(**plot_kwargs))
         else:
-            assert False
+            raise ValueError(f"Not sure what to do with {plot=}")
     plots = all_plots
 
     plots_by_kind = {}
@@ -113,27 +108,16 @@ def flow_layout_columns(plots, max_height=4, **plot_kwargs):
         width = max(p.width for p in plots)
         card_plots = []
         for plot in plots:
-            if sum(p.height for p in card_plots) + plot.height <= max_height:
+            card_height = sum(min(p.height, max_height) for p in card_plots)
+            plot_height = min(plot.height, max_height)
+            if card_height + plot_height <= max_height:
                 card_plots.append(plot)
             else:
-                cards.append(
-                    Card(
-                        plots[0].kind,
-                        width,
-                        sum(p.height for p in card_plots),
-                        card_plots,
-                    )
-                )
+                cards.append(Card(plots[0].kind, width, card_height, card_plots))
                 card_plots = [plot]
+        card_height = sum(min(p.height, max_height) for p in card_plots)
         if card_plots:
-            cards.append(
-                Card(
-                    plots[0].kind,
-                    width,
-                    sum(p.height for p in card_plots),
-                    card_plots,
-                )
-            )
+            cards.append(Card(plots[0].kind, width, card_height, card_plots))
     cards = sorted(cards, key=lambda card: card.width)
 
     # flow the same-width cards over columns
@@ -145,10 +129,7 @@ def flow_layout_columns(plots, max_height=4, **plot_kwargs):
             cur_width = card.width
             continue
 
-        if (
-            sum(c.height for c in columns[-1]) + card.height
-            <= max_height
-        ):
+        if sum(c.height for c in columns[-1]) + card.height <= max_height:
             columns[-1].append(card)
         else:
             columns.append([card])

@@ -21,6 +21,7 @@ class BaseTemporalPCA(BaseWaveformModule):
         random_state=0,
         name=None,
         name_prefix="",
+        temporal_slice=None,
     ):
         if fit_radius is not None:
             if geom is None or channel_index is None:
@@ -40,10 +41,12 @@ class BaseTemporalPCA(BaseWaveformModule):
         self.fit_radius = fit_radius
         self.centered = centered
         self.whiten = whiten
+        self.temporal_slice = temporal_slice
         if whiten:
             assert self.centered
 
     def fit(self, waveforms, max_channels):
+        waveforms = self._temporal_slice(waveforms)
         self.dtype = waveforms.dtype
         train_channel_index = self.channel_index
         if self.fit_radius is not None:
@@ -96,6 +99,12 @@ class BaseTemporalPCA(BaseWaveformModule):
 
     def needs_fit(self):
         return self._needs_fit
+    
+    def _temporal_slice(self, waveforms):
+        if self.temporal_slice is None:
+            return waveforms
+
+        return waveforms[:, self.temporal_slice]
 
     def _transform_in_probe(self, waveforms_in_probe):
         x = waveforms_in_probe
@@ -144,6 +153,7 @@ class TemporalPCADenoiser(BaseWaveformDenoiser, BaseTemporalPCA):
     default_name = "temporal_pca"
 
     def forward(self, waveforms, max_channels):
+        waveforms = self._temporal_slice(waveforms)
         (
             channels_in_probe,
             waveforms_in_probe,
@@ -160,6 +170,7 @@ class TemporalPCAFeaturizer(BaseWaveformFeaturizer, BaseTemporalPCA):
     default_name = "tpca_features"
 
     def transform(self, waveforms, max_channels, channel_index=None):
+        waveforms = self._temporal_slice(waveforms)
         if channel_index is None:
             channel_index = self.channel_index
         (
