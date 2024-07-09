@@ -330,6 +330,9 @@ coarse_template_config = TemplateConfig(superres_templates=False)
 raw_template_config = TemplateConfig(
     realign_peaks=False, low_rank_denoising=False, superres_templates=False
 )
+unshifted_raw_template_config = TemplateConfig(
+    registered_templates=False, realign_peaks=False, low_rank_denoising=False, superres_templates=False
+)
 unaligned_coarse_denoised_template_config = TemplateConfig(
     realign_peaks=False, low_rank_denoising=True, superres_templates=False
 )
