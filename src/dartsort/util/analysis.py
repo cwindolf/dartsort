@@ -721,6 +721,7 @@ class DARTsortAnalysis:
 
         units, dists, shifts, template_snrs = merge.calculate_merge_distances(
             merge_td,
+            sym_function=np.maximum,
             superres_linkage=self.merge_superres_linkage,
             distance_kind=self.merge_distance_kind,
             spatial_radius_a=self.merge_distance_spatial_radius_a,

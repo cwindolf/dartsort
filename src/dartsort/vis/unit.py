@@ -480,7 +480,7 @@ class WaveformPlot(UnitPlot):
                 max_abs_amp=max_abs_amp,
                 lw=1,
             )
-            handles["waveforms"] = ls[0]
+            handles["waveforms"] = ls
 
         if show_superres_templates:
             showchans = ci[max_chan]
@@ -501,7 +501,7 @@ class WaveformPlot(UnitPlot):
                     max_abs_amp=max_abs_amp,
                     lw=1,
                 )
-                suphandles.append(ls[0])
+                suphandles.append(ls)
             handles["superres templates"] = tuple(suphandles)
 
         if show_template:
@@ -518,7 +518,7 @@ class WaveformPlot(UnitPlot):
                 max_abs_amp=max_abs_amp,
                 lw=1,
             )
-            handles["mean"] = ls[0]
+            handles["mean"] = ls
 
         reloc_str = "reloc. " * self.relocated
         shift_str = "shifted " * sorting_analysis.shifting
@@ -631,7 +631,7 @@ class NearbyCoarseTemplatesPlot(UnitPlot):
                 color=color,
             )
             labels.append(str(uid))
-            handles.append(lines[0])
+            handles.append(lines)
         axis.legend(handles=handles, labels=labels, fancybox=False, loc="lower center")
         axis.set_xticks([])
         axis.set_yticks([])
