@@ -30,7 +30,6 @@ def cluster_chunk(
     depth_order=True,
     ramp_num_spikes=[10, 60],
     ramp_ptp=[2, 6],
-    
 ):
     """Cluster spikes from a single segment
 
