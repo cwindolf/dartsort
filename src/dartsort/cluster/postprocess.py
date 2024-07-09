@@ -6,7 +6,6 @@ from .. import config
 from ..templates import TemplateData
 import os
 from tqdm.auto import tqdm
-from dartsort.util.data_util import keep_only_most_recent_spikes
 from pathlib import Path
 from dataclasses import replace
 from scipy.cluster.hierarchy import fcluster, linkage
@@ -157,7 +156,7 @@ def chuck_noisy_template_units_with_time_tracking(
     good_unit_ids = []
 
     for template_data in tqdm(template_data_list, desc = "GC with template data"):
-        template_ptps = template_data.templates.ptp(1).max(1)
+        template_ptps = np.nanmax(template_data.templates.ptp(1), 1)
         template_snrs = template_ptps * np.sqrt(template_data.spike_counts)
         good_templates = np.logical_and(template_data.spike_counts >=  template_config.min_count_at_shift, template_snrs>=template_config.denoising_snr_threshold)
         good_unit_ids.append(
@@ -234,7 +233,7 @@ def realign_and_chuck_noisy_template_units(
             return_realigned_sorting=True,
         )
 
-    template_ptps = template_data.templates.ptp(1).max(1)
+    template_ptps = np.nanmax(template_data.templates.ptp(1), 1)
     template_snrs = template_ptps * np.sqrt(template_data.spike_counts)
     good_templates = np.logical_and(
         template_data.spike_counts >= min_n_spikes,
@@ -295,9 +294,9 @@ def chuck_noisy_template_units_from_merge(
             temp_premerge = template_data.templates[np.isin(template_data.unit_ids, units_premerge)]
             spikecount_premerge = template_data.spike_counts[np.isin(template_data.unit_ids, units_premerge)]
             if temp_premerge.ndim==2:
-                template_snrs = spikecount_premerge*temp_premerge.ptp(0).max()
+                template_snrs = spikecount_premerge*np.nanmax(temp_premerge.ptp(0))
             else:
-                template_snrs = (spikecount_premerge[:, None, None]*temp_premerge/spikecount_premerge.sum()).sum(0).ptp(0).max()*np.min((spikecount_premerge.sum(), spike_count_max))
+                template_snrs = (spikecount_premerge[:, None, None]*temp_premerge/np.nanmax(spikecount_premerge.sum()).sum(0).ptp(0))*np.min((spikecount_premerge.sum(), spike_count_max))
                 spikecount_premerge = np.min((spikecount_premerge.sum(), spike_count_max))
             if spikecount_premerge >= min_n_spikes and template_snrs > min_template_snr:
                 good_unit_ids.append(u)
