@@ -30,11 +30,12 @@ def merge_allh5_into_one(
     libver="latest",
     chunk_size=1024,
     remove_previous=False, #set to false by default because maybe a bit dangerous? 
+    init_chunk=0,
 ):
 
     output_hdf5_filename = Path(output_directory) / output_hdf5_filename
 
-    first_h5 = output_directory / f"chunk_0_{name_chunk_h5}"
+    first_h5 = output_directory / f"chunk_{init_chunk}_{name_chunk_h5}"
     out_datasets, fixed_output_data = fixed_and_spike_datasets(first_h5)
     
     output_h5, h5_spike_datasets, cur_n_spikes = initialize_file(
