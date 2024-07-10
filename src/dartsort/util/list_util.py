@@ -53,18 +53,19 @@ def merge_allh5_into_one(
             n_sub_chunks = len(sub_chunk_time_range_s)
             for k, subchunk_time_range in enumerate(sub_chunk_time_range_s):
                 matchh5_chunk = output_directory / f"chunk_{int(j*n_sub_chunks + k)}_{name_chunk_h5}"
-        
-                n_new_spikes = gather_h5files(
-                    output_h5, 
-                    cur_n_spikes,
-                    out_datasets, 
-                    h5_spike_datasets,
-                    matchh5_chunk,
-                )
-                cur_n_spikes += n_new_spikes
 
-                if remove_previous:
-                    os.remove(matchh5_chunk)
+                if os.path.exists(matchh5_chunk):
+                    n_new_spikes = gather_h5files(
+                        output_h5, 
+                        cur_n_spikes,
+                        out_datasets, 
+                        h5_spike_datasets,
+                        matchh5_chunk,
+                    )
+                    cur_n_spikes += n_new_spikes
+    
+                    if remove_previous:
+                        os.remove(matchh5_chunk)
     finally:
         output_h5.close()
 
