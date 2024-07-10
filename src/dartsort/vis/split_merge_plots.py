@@ -1686,8 +1686,7 @@ def check_overmerges(
         
                         # max_chan_registered_geom = min(max_chan_registered_geom, n_chans_reg_geom - 6*8)
                         # max_chan_registered_geom = max(max_chan_registered_geom, 6*8)
-                        chans_to_plot_registered_geom = np.arange(max_chan_registered_geom - 10, max_chan_registered_geom+10, 2)
-        
+                        chans_to_plot_registered_geom = np.arange(max_chan_registered_geom - 10, max_chan_registered_geom+10, 2)        
                         temp_chunk = template_data_chunk.templates[template_data_chunk.unit_ids == unit][0][15:75][:, chans_to_plot_registered_geom]
                         
                         med_ptp = 1.5*temp_chunk.ptp(0).max()
