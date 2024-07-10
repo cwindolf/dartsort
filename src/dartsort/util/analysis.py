@@ -69,6 +69,7 @@ class DARTsortAnalysis:
     merge_distance_spatial_radius_a: Optional[float] = None
     merge_distance_min_channel_amplitude: float = 0.0
     merge_superres_linkage: Callable[[np.ndarray], float] = np.max
+    compute_distances: bool = "if_hdf5"
 
     # helper constructors
 
@@ -218,7 +219,11 @@ class DARTsortAnalysis:
 
         # cached hdf5 pointer
         self._h5 = None
-        self._calc_merge_dist()
+        compute_distances = self.compute_distances
+        if self.compute_distances == "if_hdf5":
+            compute_distances = self.hdf5_path is not None
+        if compute_distances:
+            self._calc_merge_dist()
 
     def clear_cache(self):
         self._unit_ids = None
