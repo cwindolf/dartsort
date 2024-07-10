@@ -55,7 +55,7 @@ class TrimmedAgreementMatrix(ComparisonPlot):
         ax = panel.subplots()
         im = ax.imshow(agreement.values[:, :agreement.shape[0]], vmin=0, vmax=1)
         plt.colorbar(im, ax=ax, shrink=0.3)
-        ax.set_title("best matches' agreements")
+        ax.set_title("Hungarian matches' agreements")
         ax.set_ylabel("gt unit")
         ax.set_xlabel("sorter unit")
 
