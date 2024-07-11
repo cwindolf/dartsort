@@ -195,7 +195,7 @@ def refractory_poisson_spike_train(
     return spike_samples
 
 
-def sorting_from_times_labels(times, labels, recording=None, sampling_frequency=None,  determine_channels=True, template_config=unshifted_raw_template_config):
+def sorting_from_times_labels(times, labels, recording=None, sampling_frequency=None,  determine_channels=True, template_config=unshifted_raw_template_config, with_locs=False):
     channels = np.zeros_like(labels)
     if sampling_frequency is None:
         if recording is not None:
@@ -207,12 +207,12 @@ def sorting_from_times_labels(times, labels, recording=None, sampling_frequency=
 
     _, labels_flat = np.unique(labels, return_inverse=True)
     sorting = DARTsortSorting(times_samples=times, channels=channels, labels=labels_flat, sampling_frequency=sorting.sampling_frequency)
-    td = TemplateData.from_config(recording, sorting, template_config, with_locs=False)
+    td = TemplateData.from_config(recording, sorting, template_config, with_locs=with_locs)
     channels = np.nan_to_num(td.templates.ptp(1)).max(1)[labels_flat]
     sorting = DARTsortSorting(times_samples=times, channels=channels, labels=labels, sampling_frequency=sorting.sampling_frequency)
     return sorting, td
 
 
-def sorting_from_spikeinterface(sorting, recording=None, determine_channels=True, template_config=unshifted_raw_template_config):
+def sorting_from_spikeinterface(sorting, recording=None, determine_channels=True, template_config=unshifted_raw_template_config, with_locs=False):
     sv = sorting.to_spike_vector()
-    return sorting_from_times_labels(sv['sample_index'], sv['unit_index'], sampling_frequency=sorting.sampling_frequency, recording=recording, determine_channels=determine_channels, template_config=template_config)
+    return sorting_from_times_labels(sv['sample_index'], sv['unit_index'], sampling_frequency=sorting.sampling_frequency, recording=recording, determine_channels=determine_channels, template_config=template_config, with_locs=with_locs)
