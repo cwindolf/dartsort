@@ -1679,8 +1679,6 @@ def check_overmerges(
                         max_chan_registered_geom = max(max_chan_registered_geom, 10)
 
                         # print(f"CHAN PITCH SHIFT WFS {chans_idx, chans_count}")
-
-                        # print(max_chan_registered_geom)
                         # print(np.unique(channels[idx_subsample], return_counts=True))
                         # print(np.unique(channels[idx_subsample]+8*n_pitches_shift, return_counts=True))
         
