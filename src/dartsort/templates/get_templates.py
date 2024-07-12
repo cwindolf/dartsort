@@ -205,6 +205,12 @@ def get_templates_multiple_chunks_linear(
     """
     # validate arguments
     raw_only = not low_rank_denoising
+
+    if realign_peaks: 
+        trough_offset_samples_original = trough_offset_samples
+        trough_offset_samples = trough_offset_samples + realign_max_sample_shift
+        spike_length_samples = spike_length_samples + 2 * realign_max_sample_shift
+        
     # fit tsvd
     if low_rank_denoising and denoising_tsvd is None:
         print("fitting tsvd")
@@ -222,48 +228,6 @@ def get_templates_multiple_chunks_linear(
             torch.from_numpy(
                 denoising_tsvd.components_.astype(recording.dtype)
             )
-        )
-
-    if realign_peaks:
-        pitch_shifts = get_spike_pitch_shifts(
-                sorting.point_source_localizations[:, 2],
-                geom,
-                times_s=sorting.times_seconds,
-                motion_est=motion_est,
-            )
-
-        print("Realigning sorting")
-        # pad the trough_offset_samples and spike_length_samples so that
-        # if the user did not request denoising we can just return the
-        # raw templates right away
-        trough_offset_load = trough_offset_samples + realign_max_sample_shift
-        spike_length_load = spike_length_samples + 2 * realign_max_sample_shift
-        raw_results = get_raw_templates(
-            recording,
-            sorting,
-            pitch_shifts=pitch_shifts,
-            registered_geom=registered_geom,
-            realign_peaks=False,
-            trough_offset_samples=trough_offset_load,
-            spike_length_samples=spike_length_load,
-            spikes_per_unit=spikes_per_unit,
-            min_fraction_at_shift=min_fraction_at_shift,
-            min_count_at_shift=min_count_at_shift,
-            reducer=reducer,
-            random_seed=random_seed,
-            n_jobs=n_jobs,
-            show_progress=True,
-            dtype=recording.dtype,
-            device=device,
-        )
-        sorting, templates = realign_sorting(
-            sorting,
-            raw_results["raw_templates"],
-            raw_results["snrs_by_channel"],
-            raw_results["unit_ids"],
-            max_shift=realign_max_sample_shift,
-            trough_offset_samples=trough_offset_samples,
-            recording_length_samples=recording.get_num_samples(),
         )
 
     n_chunks = len(chunk_time_ranges_s)
@@ -312,6 +276,20 @@ def get_templates_multiple_chunks_linear(
     raw_templates, low_rank_templates, snrs_by_channel, spike_counts = res
 
     if raw_only:
+        if realign_peaks: 
+            unit_ids = np.unique(sorting.labels)
+            unit_ids = unit_ids[unit_ids>-1]
+            sorting, raw_templates = realign_sorting_per_chunk(
+                sorting,
+                raw_templates,
+                snrs_by_channel,
+                unit_ids,
+                chunk_time_ranges_s=chunk_time_ranges_s,
+                max_shift=realign_max_sample_shift,
+                trough_offset_samples=trough_offset_samples_original,
+                recording_length_samples=recording.get_num_samples(),
+            )
+        
         return dict(
             sorting=sorting,
             templates=raw_templates,
@@ -339,6 +317,21 @@ def get_templates_multiple_chunks_linear(
                 U, s, Vh = svd(templates[j, k][:, chans_low_ptp].T, full_matrices=False)
                 s[denoising_rank:]=0
                 templates[j, k, :, chans_low_ptp] = np.dot(U, np.dot(np.diag(s), Vh))
+
+    if realign_peaks: 
+        unit_ids = np.unique(sorting.labels)
+        unit_ids = unit_ids[unit_ids>-1]
+        sorting, templates = realign_sorting_per_chunk(
+            sorting,
+            templates,
+            snrs_by_channel,
+            unit_ids,
+            chunk_time_ranges_s=chunk_time_ranges_s,
+            max_shift=realign_max_sample_shift,
+            trough_offset_samples=trough_offset_samples_original,
+            recording_length_samples=recording.get_num_samples(),
+        )
+
 
     return dict(
         sorting=sorting,
@@ -596,6 +589,69 @@ def get_raw_templates(
     )
 
 # -- helpers
+
+def realign_sorting_per_chunk(
+    sorting,
+    templates_all_chunks,
+    snrs_by_channel_all_chunks,
+    unit_ids,
+    chunk_time_ranges_s,
+    max_shift=20,
+    trough_offset_samples=42,
+    recording_length_samples=None,
+):
+
+    new_times = sorting.times_samples.copy()
+    new_labels = sorting.labels.copy()
+    n_chunks, n, t, c = templates_all_chunks.shape
+
+    aligned_spike_len = t - 2 * max_shift
+    templates_new = templates_all_chunks[:, :, max_shift:max_shift+aligned_spike_len]#.copy()
+
+    if max_shift == 0:
+        return sorting, templates_new
+
+    for k, chunk_time_range in tqdm(enumerate(chunk_time_ranges_s), desc = "Realigning chunks"):
+
+        idx_chunk = np.flatnonzero(
+            np.logical_and(sorting.times_seconds>=chunk_time_range[0], sorting.times_seconds<chunk_time_range[1]) 
+        )
+
+        labels = sorting.labels[idx_chunk]
+
+        snrs_by_channel = snrs_by_channel_all_chunks[k]
+        templates = templates_all_chunks[k]
+        # sorting = 
+        
+        # find template peak time
+        template_maxchans = snrs_by_channel.argmax(1)
+        template_maxchan_traces = templates[np.arange(n), :, template_maxchans]
+        template_peak_times = np.abs(template_maxchan_traces).argmax(1)
+    
+        # find unit sample time shifts
+        template_shifts_ = template_peak_times - (trough_offset_samples + max_shift)
+        template_shifts_[np.abs(template_shifts_) > max_shift] = 0
+        template_shifts = np.zeros(unit_ids.max() + 1, dtype=int)
+        template_shifts[unit_ids] = template_shifts_
+    
+        # create aligned spike train
+        new_times[idx_chunk] = sorting.times_samples[idx_chunk] + template_shifts[labels]
+        if recording_length_samples is not None:
+            highlim = recording_length_samples - (t - trough_offset_samples)
+            new_labels[idx_chunk[(new_times[idx_chunk] < trough_offset_samples) & (new_times[idx_chunk] > highlim)]] = -1
+    
+        # trim templates
+        aligned_templates = np.empty((n, aligned_spike_len, c))
+        for i, dt in enumerate(template_shifts_):
+            aligned_templates[i] = templates[
+                i, max_shift + dt : max_shift + dt + aligned_spike_len
+            ]
+
+        templates_new[k] = aligned_templates
+    
+    aligned_sorting = replace(sorting, labels=new_labels, times_samples=new_times)
+    
+    return aligned_sorting, templates_new
 
 
 def realign_sorting(

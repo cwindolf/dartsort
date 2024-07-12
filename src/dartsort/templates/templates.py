@@ -422,6 +422,9 @@ class TemplateData:
         return_realigned_sorting=False, # not implemented here
     ):
 
+        if template_config.realign_peaks:
+            sorting.labels[sorting.times_samples > (recording.get_num_samples() - spike_length_samples - trough_offset_samples + template_config.realign_max_sample_shift)] = -1
+
         template_data_list = []
         if save_folder is not None:
             save_folder = Path(save_folder)
@@ -450,8 +453,8 @@ class TemplateData:
             trough_offset_samples=trough_offset_samples,
             spike_length_samples=spike_length_samples,
             spikes_per_unit=template_config.spikes_per_unit,
-            # realign handled in advance below, not needed in kwargs
-            # realign_peaks=False,
+            # Here, realign needs to be done per chunk --> expensive so cannot be handled in advance
+            realign_peaks=template_config.realign_peaks, #No realign here
             realign_max_sample_shift=template_config.realign_max_sample_shift,
             denoising_rank=template_config.denoising_rank,
             denoising_fit_radius=template_config.denoising_fit_radius,
@@ -461,7 +464,6 @@ class TemplateData:
             spatial_svdsmoothing=template_config.spatial_svdsmoothing,
             max_ptp_chans_to_spatialsmooth=template_config.max_ptp_chans_to_spatialsmooth,
             low_rank_denoising=template_config.low_rank_denoising,
-            realign_peaks=template_config.realign_peaks, #No realign here
             device=device,
             # units_per_job=units_per_job,
         )
