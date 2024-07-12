@@ -41,8 +41,8 @@ class AgreementMatrix(ComparisonPlot):
         im = ax.imshow(agreement, vmin=0, vmax=1)
         # plt.colorbar(im, ax=ax, shrink=0.3)
         ax.set_title("all units' agreements")
-        ax.set_ylabel("gt unit")
-        ax.set_xlabel("sorter unit")
+        ax.set_ylabel(f"{comparison.gt_name} unit")
+        ax.set_xlabel(f"{comparison.tested_name} unit")
 
 
 class TrimmedAgreementMatrix(ComparisonPlot):
@@ -56,8 +56,8 @@ class TrimmedAgreementMatrix(ComparisonPlot):
         im = ax.imshow(agreement.values[:, :agreement.shape[0]], vmin=0, vmax=1)
         plt.colorbar(im, ax=ax, shrink=0.3)
         ax.set_title("Hungarian matches' agreements")
-        ax.set_ylabel("gt unit")
-        ax.set_xlabel("sorter unit")
+        ax.set_ylabel(f"{comparison.gt_name} unit")
+        ax.set_xlabel(f"{comparison.tested_name} unit")
 
 
 class MetricRegPlot(ComparisonPlot):
@@ -70,14 +70,17 @@ class MetricRegPlot(ComparisonPlot):
 
     def draw(self, panel, comparison):
         ax = panel.subplots()
+        df = comparison.unit_info_dataframe()
         sns.regplot(
-            data=comparison.unit_info_dataframe(),
+            data=df,
             x=self.x,
             y=self.y,
             logistic=True,
             color=self.color,
             ax=ax,
         )
+        met = df[self.y].mean()
+        ax.set_title(f"mean {self.y}: {met:.3f}", fontsize="small")
 
 
 class MetricHistogram(ComparisonPlot):
@@ -85,8 +88,8 @@ class MetricHistogram(ComparisonPlot):
     width = 3
     height = 2
 
-    def __init__(self, xs=["recall", "precision", "accuracy"], colors="rgb"):
-        self.xs = xs
+    def __init__(self, xs=("recall", "precision", "accuracy"), colors="rgb"):
+        self.xs = list(xs)
         self.colors = colors
 
     def draw(self, panel, comparison):
