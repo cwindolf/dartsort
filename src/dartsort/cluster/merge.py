@@ -72,6 +72,7 @@ def single_merge_GC_multiple_chunks(
         chunk_time_ranges_s = chunk_time_ranges(recording, chunk_length_samples=template_config.chunk_size_s*recording.sampling_frequency, slice_s=slice_s)
     n_chunks = len(chunk_time_ranges_s)
 
+
     # Iterate this 3 times + propagate arguments for the split step
     # Sorting max chan pc split 
     # GC -> Merge -> make templates + complete 0.25 (iterative so complete is ok)
@@ -214,7 +215,7 @@ def merge_iterative_templates_with_multiple_chunks(
             motion_est=None, #doesn't matter here...
         )
 
-        print(f"Split found {sorting.labels.max() + 1} units")
+        _, sorting.labels[sorting.labels>-1] = np.unique(sorting.labels[sorting.labels>-1], return_inverse=True)
 
         # GC with recomputing template data list 
         sorting, template_data_list, denoising_tsvd = chuck_noisy_template_units_with_time_tracking(
@@ -412,7 +413,7 @@ def merge_templates_across_multiple_chunks(
                 units_batch_size=units_batch_size,
                 device=device,
                 n_jobs=n_jobs,
-                show_progress=show_progress,
+                show_progress=False,
             )
             
             dists_all.append(dists)
