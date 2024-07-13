@@ -7,7 +7,6 @@ from matplotlib.colors import to_rgba
 
 def geomplot(
     waveforms,
-    colors=None,
     max_channels=None,
     channel_index=None,
     channels=None,
