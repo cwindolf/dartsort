@@ -1,211 +1,110 @@
 import numpy as np
+import warnings
 from spikeinterface.core import BaseRecording, BaseRecordingSegment
 from spikeinterface.core.core_tools import define_function_from_class
+from spikeinterface.extractors import NumpySorting
+from spikeinterface.generation.drift_tools import InjectDriftingTemplatesRecording
 from spikeinterface.preprocessing.basepreprocessor import (
     BasePreprocessor, BasePreprocessorSegment)
 
 from ..templates import TemplateData
 from .analysis import DARTsortAnalysis
 from .data_util import DARTsortSorting
+from ..config import unshifted_raw_template_config
+from ..templates import TemplateData
 
 
-class HybridRecording(BasePreprocessor):
-    name = "hybrid_recording"
-    installed = True
 
-    def __init__(
-        self,
-        recording: BaseRecording,
-        templates: np.ndarray,
-        times_samples=None,
-        labels=None,
-        template_indices=None,
-        unit_ids=None,
-        trough_offset_samples=42,
-        spike_train_kwargs=None,
-        random_seed=0,
-        dtype="float32",
-    ):
-        """A basic hybrid recording factory"""
-        assert templates.ndim == 3
-        assert templates.shape[2] == recording.get_num_channels()
-        assert 0 <= trough_offset_samples < templates.shape[1]
-        assert recording.get_num_segments() == 1
+def get_drifty_hybrid_recording(
+    recording,
+    templates,
+    motion_estimate,
+    sorting=None,
+    displacement_sampling_frequency=5.0,
+    seed=0,
+    firing_rates=None,
+    peak_channels=None,
+    amplitude_scale_std=0.1,
+):
+    """
+    :param: recording
+    :param: templates object
+    :param: motion estimate object
+    :param: firing_rates
+    :param: peak_channels
+    :param: amplitude_factor
+    """
+    num_units = templates.num_units
+    rg = np.random.default_rng(seed=seed)
 
-        if unit_ids is None:
-            unit_ids = np.arange(len(templates))
+    if peak_channels is None:
+        raise(NotImplementedError, "Autodetection of peak channels not implemented yet.")
 
-        if times_samples is None:
-            assert labels is None and template_indices is None
-            if spike_train_kwargs is None:
-                spike_train_kwargs = {}
-            spike_train_kwargs["trough_offset_samples"] = trough_offset_samples
-            spike_train_kwargs["spike_length_samples"] = templates.shape[1]
-            spike_train_kwargs["rg"] = random_seed
-            times_samples, labels = simulate_spike_trains(
-                n_units=templates.shape[0],
-                duration_samples=recording.get_num_samples(),
-                **spike_train_kwargs,
-            )
-        else:
-            assert labels is not None
-            assert unit_ids is not None
-            times_samples = np.asarray(times_samples)
-            labels = np.asarray(labels)
-            unit_ids = np.asarray(unit_ids)
+    if sorting is None:
+        sorting = get_sorting(num_units, recording, firing_rates=firing_rates, rg=rg, spike_length_samples=templates.num_samples)
+    n_spikes = sorting.count_total_num_spikes()
 
-        assert times_samples.ndim == 1
-        assert np.all(np.diff(times_samples) >= 0)
-        if template_indices is None:
-            template_indices = unit_ids[labels]
-        else:
-            assert template_indices.max() < templates.shape[0]
-        assert times_samples.shape == labels.shape == template_indices.shape
+    # Default amplitude scalings for spikes drawn from gamma
+    if amplitude_scale_std:
+        shape = 1. / (amplitude_scale_std ** 1.5)
+        amplitude_factor = rg.gamma(shape, scale=1./(shape-1), size=n_spikes)
+    else:
+        amplitude_factor = np.ones(n_spikes)
 
-        self.times_samples = times_samples
-        self.labels = labels
-        self.template_indices = template_indices
-        self.templates = templates
-        self.unit_ids = unit_ids
-        self.trough_offset_samples = trough_offset_samples
-        self.spike_length_samples = templates.shape[1]
+    depths = recording.get_probe().contact_positions[:, 1][peak_channels]
+    t_start = recording.sample_index_to_time(0)
+    t_end = recording.sample_index_to_time(recording.get_num_samples() - 1)
+    motion_times_s = np.arange(t_start, t_end, step=1.0 / displacement_sampling_frequency)
 
-        dtype_ = dtype
-        if dtype_ is None:
-            dtype_ = recording.dtype
-        assert dtype_ == templates.dtype
-        BasePreprocessor.__init__(self, recording, dtype=dtype_)
-        for parent_segment in recording._recording_segments:
-            rec_segment = HybridRecordingSegment(
-                parent_segment,
-                times_samples,
-                template_indices,
-                templates,
-                trough_offset_samples=trough_offset_samples,
-                dtype=dtype_,
-            )
-            self.add_recording_segment(rec_segment)
+    disp_y = motion_estimate.disp_at_s(motion_times_s, depths, grid=True)
 
-        self._kwargs = dict(
-            recording=recording,
-            times_samples=times_samples,
-            labels=labels,
-            template_indices=template_indices,
-            unit_ids=unit_ids,
-            templates=templates,
-            trough_offset_samples=trough_offset_samples,
-            spike_train_kwargs=spike_train_kwargs,
-            random_seed=random_seed,
-            dtype=dtype_,
-        )
+    disp = np.zeros((motion_times_s.shape[0], 2, num_units))
+    disp[:, 1, :] = disp_y.T
+    # this tricks SI into using one displacement per unit
+    displacement_unit_factor = np.eye(num_units)
 
-    @property
-    def channels(self):
-        main_channels = self.templates.ptp(1).argmax(1)
-        main_channels = main_channels[self.template_indices]
-        return main_channels
+    if not sorting.check_serializability(type='json'):
+        warnings.warn("Your sorting is not serializable, which could lead to problems later.")
 
-    def to_dartsort_sorting(self):
-        return DARTsortSorting(
-            self.times_samples,
-            self.channels,
-            self.labels,
-            self.sampling_frequency,
-        )
-
-    def gt_template_data(self):
-        return TemplateData(
-            templates=self.templates,
-            unit_ids=self.unit_ids,
-            spike_counts=np.full(unit_ids.shape, np.inf),
-            trough_offset_samples=self.trough_offset_samples,
-            spike_length_samples=self.spike_length_samples,
-        )
-
-    def to_dartsort_analysis(self):
-        return DARTsortAnalysis(
-            sorting=self.to_dartsort_sorting(),
-            recording=self,
-            template_data=self.gt_template_data(),
-        )
+    return InjectDriftingTemplatesRecording(
+        sorting=sorting,
+        drifting_templates=templates,
+        parent_recording=recording,
+        displacement_vectors=[disp],
+        displacement_sampling_frequency=displacement_sampling_frequency,
+        displacement_unit_factor=displacement_unit_factor,
+        amplitude_factor=amplitude_factor
+    )
 
 
-class HybridRecordingSegment(BasePreprocessorSegment):
-    def __init__(
-        self,
-        parent_recording_segment: BaseRecordingSegment,
-        times_samples,
-        template_indices,
-        templates,
-        trough_offset_samples=0,
-        dtype="float32",
-    ):
-        BasePreprocessorSegment.__init__(self, parent_recording_segment)
-        self.times_samples = times_samples
-        self.template_indices = template_indices
-        self.templates = templates
-        self.trough_offset_samples = trough_offset_samples
-        self.spike_length_samples = templates.shape[1]
-        self.post_trough_samples = (
-            self.spike_length_samples - self.trough_offset_samples
-        )
-        self.margin_left = self.spike_length_samples
-        self.margin_right = self.spike_length_samples
-        self.dtype = dtype
+def get_sorting(num_units, recording, firing_rates=None, rg=0, nbefore=42, spike_length_samples=128):
+    rg = np.random.default_rng(rg)
 
-        # this is a helper for indexing operations below
-        self.time_domain_offset = (
-            np.arange(self.spike_length_samples)
-            - self.trough_offset_samples
-            + self.margin_left
-        )
+    # Default firing rates drawn uniformly from 1-10Hz
+    if firing_rates is not None:
+        assert firing_rates.shape[0] == num_units, "Number of firing rates must match number of units in templates."
+    else:
+        firing_rates = rg.uniform(1.0, 10.0, num_units)
 
-    def get_traces(self, start_frame, end_frame, channel_indices):
-        if start_frame is None:
-            start_frame = 0
-        if end_frame is None:
-            end_frame = self.get_num_samples()
+    spike_trains = [
+        refractory_poisson_spike_train(
+            firing_rates[i], 
+            recording.get_num_samples(), 
+            trough_offset_samples=nbefore,
+            spike_length_samples=spike_length_samples,
+            seed=rg,
+        ) for i in range(num_units)
+    ]
 
-        parent_traces = self.parent_recording_segment.get_traces(
-            start_frame=start_frame,
-            end_frame=end_frame,
-            channel_indices=slice(None),
-        )
-        # we want to copy since we will modify and can't have a memmap
-        # and, we will use np.pad to add margin since we don't care
-        # about the edges
-        traces_pad = np.pad(
-            parent_traces.astype(self.dtype, copy=False),
-            [(self.margin_left, self.margin_right), (0, 0)],
-        )
+    spike_labels = np.repeat(np.arange(num_units) + 1, np.array([spike_trains[i].shape[0] for i in range(num_units)]))
 
-        # get spike times_samples/template_indices in this part, offset by start frame
-        ix_low = np.searchsorted(
-            self.times_samples,
-            start_frame - self.post_trough_samples,
-            side="left",
-        )
-        ix_high = np.searchsorted(
-            self.times_samples,
-            end_frame + self.trough_offset_samples,
-            side="right",
-        )
-        times_samples = self.times_samples[ix_low:ix_high] - start_frame
-        template_indices = self.template_indices[ix_low:ix_high]
+    sorting = NumpySorting.from_times_labels(
+        [np.concatenate(spike_trains)], 
+        [spike_labels], 
+        sampling_frequency=recording.sampling_frequency,
+    )
 
-        # just add with a for loop
-        for t, c in zip(times_samples, template_indices):
-            traces_pad[t + self.time_domain_offset] += self.templates[c]
-
-        traces = traces_pad[
-            self.margin_left : traces_pad.shape[0] - self.margin_right
-        ]
-        return traces[:, channel_indices]
-
-
-hybrid_recording = define_function_from_class(
-    source_class=HybridRecording, name=HybridRecording.name
-)
+    return sorting
 
 
 def simulate_spike_trains(
@@ -247,7 +146,7 @@ def simulate_spike_trains(
 def refractory_poisson_spike_train(
     rate_hz,
     duration_samples,
-    rg=0,
+    seed=0,
     refractory_samples=40,
     trough_offset_samples=42,
     spike_length_samples=121,
@@ -262,7 +161,7 @@ def refractory_poisson_spike_train(
         Spikes / second, well, except it'll be slower due to refractoriness.
     duration : float
     """
-    rg = np.random.default_rng(rg)
+    rg = np.random.default_rng(seed)
 
     seconds_per_sample = 1.0 / sampling_frequency
     refractory_s = refractory_samples * seconds_per_sample
@@ -294,3 +193,26 @@ def refractory_poisson_spike_train(
     assert spike_samples.size
 
     return spike_samples
+
+
+def sorting_from_times_labels(times, labels, recording=None, sampling_frequency=None,  determine_channels=True, template_config=unshifted_raw_template_config, with_locs=False):
+    channels = np.zeros_like(labels)
+    if sampling_frequency is None:
+        if recording is not None:
+            sampling_frequency = recording.sampling_frequency
+    sorting = DARTsortSorting(times_samples=times, channels=channels, labels=labels, sampling_frequency=sampling_frequency)
+
+    if not determine_channels:
+        return
+
+    _, labels_flat = np.unique(labels, return_inverse=True)
+    sorting = DARTsortSorting(times_samples=times, channels=channels, labels=labels_flat, sampling_frequency=sorting.sampling_frequency)
+    td = TemplateData.from_config(recording, sorting, template_config, with_locs=with_locs)
+    channels = np.nan_to_num(td.templates.ptp(1)).max(1)[labels_flat]
+    sorting = DARTsortSorting(times_samples=times, channels=channels, labels=labels, sampling_frequency=sorting.sampling_frequency)
+    return sorting, td
+
+
+def sorting_from_spikeinterface(sorting, recording=None, determine_channels=True, template_config=unshifted_raw_template_config, with_locs=False):
+    sv = sorting.to_spike_vector()
+    return sorting_from_times_labels(sv['sample_index'], sv['unit_index'], sampling_frequency=sorting.sampling_frequency, recording=recording, determine_channels=determine_channels, template_config=template_config, with_locs=with_locs)

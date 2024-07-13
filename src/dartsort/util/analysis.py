@@ -19,7 +19,6 @@ import spikeinterface.core as sc
 import torch
 from dredge.motion_util import MotionEstimate
 from sklearn.decomposition import PCA
-from spikeinterface.comparison import GroundTruthComparison
 
 from ..cluster import merge, relocate
 from ..config import TemplateConfig
@@ -57,11 +56,11 @@ class DARTsortAnalysis:
     name: Optional[str] = None
 
     # hdf5 keys
-    localizations_dataset = "point_source_localizations"
-    amplitudes_dataset = "denoised_ptp_amplitudes"
-    amplitude_vectors_dataset = "denoised_ptp_amplitude_vectors"
-    tpca_features_dataset = "collisioncleaned_tpca_features"
-    template_indices_dataset = "collisioncleaned_tpca_features"
+    localizations_dataset: str = "point_source_localizations"
+    amplitudes_dataset_name: str = "denoised_ptp_amplitudes"
+    amplitude_vectors_dataset: str = "denoised_ptp_amplitude_vectors"
+    tpca_features_dataset: str = "collisioncleaned_tpca_features"
+    template_indices_dataset: str = "template_indices"
 
     # configuration for analysis computations not included in above objects
     device: Optional[torch.device] = None
@@ -70,6 +69,7 @@ class DARTsortAnalysis:
     merge_distance_spatial_radius_a: Optional[float] = None
     merge_distance_min_channel_amplitude: float = 0.0
     merge_superres_linkage: Callable[[np.ndarray], float] = np.max
+    compute_distances: bool = "if_hdf5"
 
     # helper constructors
 
@@ -123,7 +123,6 @@ class DARTsortAnalysis:
                 motion_est=motion_est,
                 n_jobs=n_jobs_templates,
                 tsvd=denoising_tsvd,
-                # **kwargs,
             )
 
         return cls(
@@ -134,6 +133,7 @@ class DARTsortAnalysis:
             featurization_pipeline=featurization_pipeline,
             motion_est=motion_est,
             name=name,
+            **kwargs,
         )
 
     @classmethod
@@ -206,7 +206,8 @@ class DARTsortAnalysis:
         if self.featurization_pipeline is not None:
             assert not self.featurization_pipeline.needs_fit()
 
-        assert self.hdf5_path.exists()
+        if self.hdf5_path is not None:
+            assert self.hdf5_path.exists()
         self.coarse_template_data = self.template_data.coarsen()
 
         self.shifting = (
@@ -221,7 +222,11 @@ class DARTsortAnalysis:
 
         # cached hdf5 pointer
         self._h5 = None
-        self._calc_merge_dist()
+        compute_distances = self.compute_distances
+        if self.compute_distances == "if_hdf5":
+            compute_distances = self.hdf5_path is not None
+        if compute_distances:
+            self._calc_merge_dist()
 
     def clear_cache(self):
         self._unit_ids = None
@@ -272,9 +277,9 @@ class DARTsortAnalysis:
     @property
     def max_chan_amplitudes(self):
         if self._max_chan_amplitudes is None:
-            if hasattr(self.sorting, self.amplitudes_dataset):
-                return getattr(self.sorting, self.amplitudes_dataset)
-            self._max_chan_amplitudes = self.h5[self.amplitudes_dataset][:]
+            if hasattr(self.sorting, self.amplitudes_dataset_name):
+                return getattr(self.sorting, self.amplitudes_dataset_name)
+            self._max_chan_amplitudes = self.h5[self.amplitudes_dataset_name][:]
         return self._max_chan_amplitudes
 
     @property
@@ -406,6 +411,29 @@ class DARTsortAnalysis:
         if isinstance(which, slice):
             which = np.arange(len(self.sorting))[which]
         return batched_h5_read(self._tpca_features, which)
+
+    # unit level properties
+
+    def unit_amplitudes(self, unit_ids=None):
+        if unit_ids is None:
+            unit_ids = self.unit_ids
+        amplitudes = np.zeros(unit_ids.shape)
+        for j, unit_id in enumerate(unit_ids):
+            temps = self.template_data.unit_templates(unit_id)
+            amplitudes[j] = np.nan_to_num(temps).ptp()
+        return amplitudes
+
+    def firing_rates(self, unit_ids=None):
+        if unit_ids is None:
+            counts = self.spike_counts
+        else:
+            counts = np.zeros(unit_ids.shape)
+            for j, unit_id in enumerate(unit_ids):
+                (isu,) = np.flatnonzero(self.unit_ids == unit_id)
+                counts[j] = self.spike_counts[isu]
+        seconds = self.recording.get_duration()
+        frs = counts / seconds
+        return frs
 
     # cluster-dependent feature loading methods
 
@@ -834,6 +862,7 @@ class DARTsortAnalysis:
 
         units, dists, shifts, template_snrs = merge.calculate_merge_distances(
             merge_td,
+            sym_function=np.maximum,
             superres_linkage=self.merge_superres_linkage,
             distance_kind=self.merge_distance_kind,
             spatial_radius_a=self.merge_distance_spatial_radius_a,
@@ -843,51 +872,3 @@ class DARTsortAnalysis:
         )
         assert np.array_equal(units, self.coarse_template_data.unit_ids)
         self.merge_dist = dists
-
-
-@dataclass
-class DARTsortGroundTruthComparison:
-    gt_analysis: DARTsortAnalysis
-    predicted_analysis: DARTsortAnalysis
-    gt_name: Optional[str] = None
-    predicted_name: Optional[str] = None
-    delta_time: float = 0.4
-    match_score: float = 0.1
-    well_detected_score: float = 0.8
-    exhaustive_gt: bool = False
-    n_jobs: int = -1
-    match_mode: str = "hungarian"
-
-    def __post_init__(self):
-        self.comparison = GroundTruthComparison(
-            gt_sorting=self.gt_analysis.sorting.to_numpy_sorting(),
-            tested_sorting=self.predicted_analysis.sorting.to_numpy_sorting(),
-            gt_name=self.gt_name,
-            predicted_name=self.predicted_name,
-            delta_time=self.delta_time,
-            match_score=self.match_score,
-            well_detected_score=self.well_detected_score,
-            exhaustive_gt=self.exhaustive_gt,
-            n_jobs=self.n_jobs,
-            match_mode=self.match_mode,
-        )
-
-    def get_match(self, gt_unit):
-        pass
-
-    def get_spikes_by_category(self, gt_unit, predicted_unit=None):
-        if predicted_unit is None:
-            predicted_unit = self.get_match(gt_unit)
-
-        return dict(
-            matched_predicted_indices=...,
-            matched_gt_indices=...,
-            only_gt_indices=...,
-            only_predicted_indices=...,
-        )
-
-    def get_performance(self, gt_unit):
-        pass
-
-    def get_waveforms_by_category(self, gt_unit, predicted_unit=None):
-        return ...

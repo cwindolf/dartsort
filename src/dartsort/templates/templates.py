@@ -231,13 +231,15 @@ class TemplateData:
                 trough_offset_samples=trough_offset_samples,
                 spike_length_samples=spike_length_samples,
             )
-        elif with_locs:
-            geom = recording.get_channel_locations()
-            depths_um = get_template_depths(
-                results["templates"],
-                geom,
-                localization_radius_um=template_config.registered_template_localization_radius_um,
-            )
+        else:
+            geom = depths_um = None
+            if with_locs:
+                geom = recording.get_channel_locations()
+                depths_um = get_template_depths(
+                    results["templates"],
+                    geom,
+                    localization_radius_um=template_config.registered_template_localization_radius_um,
+                )
             obj = cls(
                 results["templates"],
                 unit_ids=results["unit_ids"],

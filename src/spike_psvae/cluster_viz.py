@@ -362,6 +362,10 @@ def array_scatter(
     do_ellipse=True,
     figsize = (15, 15),
     size=1,
+    scatter_temp_amp_z=False,
+    template_data=None,
+    com_x_temp=None,
+    units_to_mark=None,
 ):
     fig = None
     if axes is None:
@@ -384,6 +388,12 @@ def array_scatter(
         excluded_ids=excluded_ids,
         do_ellipse=do_ellipse,
     )
+    if scatter_temp_amp_z and template_data is not None and com_x_temp is not None:
+        if units_to_mark is None:
+            axes[0].scatter(com_x_temp, template_data.registered_template_depths_um, marker="x", c = "red", s=25)
+        else:
+            axes[0].scatter(com_x_temp[units_to_mark], template_data.registered_template_depths_um[units_to_mark], marker="x", c = "red", s=25)
+
     axes[0].scatter(*geom.T, c="orange", marker="s", s=10)
     axes[0].scatter(geom[0, 0], geom[0, 1], c="orange", marker="s", s=10, label='Channel Locations')
     axes[0].set_ylabel("Registered Depth (um)", fontsize=14)
@@ -402,8 +412,16 @@ def array_scatter(
         excluded_ids=excluded_ids,
         do_ellipse=do_ellipse,
     )
-    axes[2].set_xlabel("Amplitude (s.u.)", fontsize=16)
-    axes[2].tick_params(axis='x', labelsize=16)
+    if scatter_temp_amp_z and template_data is not None:
+        ptp_temps =  50*np.log(5+template_data.templates.ptp(1).max(1))
+        if units_to_mark is None:
+            axes[1].scatter(ptp_temps, template_data.registered_template_depths_um, marker="x", c = "red", s=25)
+        else:
+            axes[1].scatter(ptp_temps[units_to_mark], template_data.registered_template_depths_um[units_to_mark], marker="x", c = "red", s=25)
+        # for u in range(len(ptp_temps)):
+        #     plt.text(ptp_temps + 0.2, template_data.registered_template_depths_um + 1, f"{u}")
+    axes[1].set_xlabel("Amplitude (s.u.)", fontsize=16)
+    axes[1].tick_params(axis='x', labelsize=16)
 
     if maxptp_c is None:
         maxptp_c = np.clip(maxptp, 3, 15)    
