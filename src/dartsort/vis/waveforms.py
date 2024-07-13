@@ -1,6 +1,8 @@
 import matplotlib.pyplot as plt
 import numpy as np
 from matplotlib.patches import Rectangle
+from matplotlib.collections import LineCollection
+from matplotlib.colors import to_rgba
 
 
 def geomplot(
@@ -17,6 +19,7 @@ def geomplot(
     show_zero_kwargs=None,
     max_abs_amp=None,
     show_chan_label=False,
+    annotate_z=True,
     chan_labels=None,
     xlim_factor=1,
     subar=False,
@@ -24,8 +27,9 @@ def geomplot(
     bar_color="k",
     bar_background="w",
     zlim="tight",
-    rearrange=True,
-    n_chans_per_line=4,
+    c=None,
+    color=None,
+    colors=None,
     **plot_kwargs,
 ):
     """Plot waveforms according to geometry using channel index"""
@@ -82,25 +86,27 @@ def geomplot(
 
     # -- and, plot
     draw = []
+    draw_colors = []
     unique_chans = set()
     xmin, xmax = np.inf, -np.inf
-    for wf, chans in zip(waveforms, channels):
+    for j, (wf, chans) in enumerate(zip(waveforms, channels)):
         for i, c in enumerate(chans):
             if c == n_channels:
                 continue
 
-            draw.append(geom_plot[c, 0] + t_domain)
-            draw.append(geom_plot[c, 1] + wf[:, i])
+            draw.append(np.c_[geom_plot[c, 0] + t_domain, geom_plot[c, 1] + wf[:, i]])
             xmin = min(geom_plot[c, 0] + t_domain.min(), xmin)
             xmax = max(geom_plot[c, 0] + t_domain.max(), xmax)
             unique_chans.add(c)
+            if colors is not None:
+                draw_colors.append(to_rgba(colors[j]))
+            elif color is not None:
+                draw_colors.append(to_rgba(color))
+            elif c is not None:
+                draw_colors.append(to_rgba(c))
     dx = xmax - xmin
-    ax.set_xlim(
-        [
-            xmin + dx / 2 - xlim_factor * dx / 2,
-            xmax - dx / 2 + xlim_factor * dx / 2,
-        ]
-    )
+    xpad = dx / 2 - xlim_factor * dx / 2
+    ax.set_xlim([xmin + xpad, xmax - xpad])
 
     ann_offset = np.array([0, 0.33 * inter_chan_z]) * geom_scales
     chan_labels = (
@@ -380,7 +386,7 @@ def geomplot_max_chan_overtime(
         )
 
     if zlim is None:
-        pass
+        ax.autoscale_view()
     elif zlim == "auto":
         min_z = min(geom_plot[c, 1] for c in unique_chans)
         max_z = max(geom_plot[c, 1] for c in unique_chans)

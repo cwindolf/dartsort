@@ -539,7 +539,6 @@ def merge_templates(
     -------
     A new DARTsortSorting
     """
-    print("zmerge input", np.unique(sorting.labels).size - 1)
     if template_data is None:
         template_data, sorting = TemplateData.from_config(
             recording,
