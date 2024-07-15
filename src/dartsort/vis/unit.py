@@ -102,8 +102,9 @@ class ISIHistogram(UnitPlot):
         self.bin_ms = bin_ms
         self.max_ms = max_ms
 
-    def draw(self, panel, sorting_analysis, unit_id):
-        axis = panel.subplots()
+    def draw(self, panel, sorting_analysis, unit_id, axis=None, color="k"):
+        if axis is None:
+            axis = panel.subplots()
         times_s = sorting_analysis.times_seconds(
             which=sorting_analysis.in_unit(unit_id)
         )
@@ -116,7 +117,7 @@ class ISIHistogram(UnitPlot):
         # counts, _ = np.histogram(dt_ms, bin_edges)
         # bin_centers = 0.5 * (bin_edges[1:] + bin_edges[:-1])
         # axis.bar(bin_centers, counts)
-        plt.hist(dt_ms, bin_edges, color="k")
+        plt.hist(dt_ms, bin_edges, color=color)
         axis.set_xlabel("isi (ms)")
         axis.set_ylabel(f"count (out of {dt_ms.size} total isis)")
 
