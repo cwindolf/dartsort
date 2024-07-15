@@ -1,7 +1,9 @@
 from dataclasses import dataclass
 
+import numpy as np
 from spikeinterface.comparison import GroundTruthComparison
 
+from ..cluster import merge
 from .analysis import DARTsortAnalysis
 
 
@@ -43,7 +45,47 @@ class DARTsortGroundTruthComparison:
         df = df.astype(float)  # not sure what the problem was...
         df['gt_ptp_amplitude'] = amplitudes
         df['gt_firing_rate'] = firing_rates
+        df['gt_match_temp_dist'] = self.template_distances[:, self.comparison.best_match_12]
         return df
+
+    @property
+    def template_distances(self):
+        self._calculate_template_distances()
+        return self._template_distances
+
+    def nearby_tested_templates(self, gt_unit_id, n_neighbors=5):
+        gt_td = self.gt_analysis.coarse_template_data
+        tested_td = self.tested_analysis.coarse_template_data
+
+        gt_unit_ix = np.searchsorted(gt_td.unit_ids, gt_unit_id)
+        assert gt_td.unit_ids[gt_unit_ix] == gt_unit_id
+
+        unit_dists = self.template_distances[gt_unit_ix]
+        distance_order = np.argsort(unit_dists)
+
+        # assert distance_order[0] == unit_ix
+        neighb_ixs = distance_order[:n_neighbors]
+        neighb_ids = tested_td.unit_ids[neighb_ixs]
+        neighb_dists = self.template_dist[gt_unit_ix, neighb_ixs[None, :]]
+        neighb_coarse_templates = tested_td.templates[neighb_ixs]
+
+        return neighb_ids, neighb_dists, neighb_coarse_templates
+
+    def _calculate_template_distances(self):
+        """Compute the merge distance matrix"""
+        if hasattr(self, "template_distances"):
+            return
+
+        gt_td = self.gt_analysis.coarse_template_data
+        tested_td = self.tested_analysis.coarse_template_data
+
+        dists, shifts, snrs_a, snrs_b = merge.cross_match_distance_matrix(
+            gt_td,
+            tested_td,
+            sym_function=np.maximum,
+            n_jobs=self.n_jobs,
+        )
+        self.template_distances = dists
 
     def get_spikes_by_category(self, gt_unit, tested_unit=None):
         # TODO
