@@ -2,6 +2,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import seaborn as sns
 from matplotlib.colors import FuncNorm
+import warnings
 
 from . import unit
 from .colors import glasbey1024
@@ -374,6 +375,7 @@ def make_all_unit_comparisons(
 
 # -- comparisons
 
+
 class ComparisonPlot(BasePlot):
     kind = "comparison"
     width = 2
@@ -401,7 +403,7 @@ class AgreementMatrix(ComparisonPlot):
 class TrimmedAgreementMatrix(ComparisonPlot):
     kind = "matrix"
     width = 3
-    height = 3
+    height = 2
 
     def draw(self, panel, comparison):
         agreement = comparison.comparison.get_ordered_agreement_scores()
@@ -415,6 +417,8 @@ class TrimmedAgreementMatrix(ComparisonPlot):
 
 class MetricRegPlot(ComparisonPlot):
     kind = "gtmetric"
+    width = 2
+    height = 2
 
     def __init__(self, x="gt_ptp_amplitude", y="accuracy", color="b", log_x=False):
         self.x = x
@@ -425,43 +429,62 @@ class MetricRegPlot(ComparisonPlot):
     def draw(self, panel, comparison):
         ax = panel.subplots()
         df = comparison.unit_info_dataframe()
-        sns.regplot(
-            data=df,
-            x=self.x,
-            y=self.y,
-            logistic=True,
-            color=self.color,
-            ax=ax,
-        )
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", category=RuntimeWarning)
+            sns.regplot(
+                data=df,
+                x=self.x,
+                y=self.y,
+                logistic=True,
+                # logx=self.log_x,
+                color=self.color,
+                ax=ax,
+            )
         if self.log_x:
             ax.semilogx()
         met = df[self.y].mean()
         ax.set_title(f"mean {self.y}: {met:.3f}", fontsize="small")
 
 
-class MetricHistogram(ComparisonPlot):
+class MetricDistribution(ComparisonPlot):
     kind = "wide"
-    width = 3
-    height = 2
 
-    def __init__(self, xs=("recall", "precision", "accuracy"), colors="rgb"):
+    def __init__(self, xs=("recall", "accuracy", "temp_dist", "precision"), colors=("r", "b", "orange", "g"), flavor="hist", width=3, height=2):
         self.xs = list(xs)
         self.colors = colors
+        self.flavor = flavor
+        self.width = width
+        self.height = height
 
     def draw(self, panel, comparison):
         ax = panel.subplots()
         df = comparison.unit_info_dataframe()
         df = df[self.xs].melt(value_vars=self.xs, var_name='metric')
-        sns.histplot(
-            data=df,
-            x='value',
-            hue='metric',
-            palette=list(self.colors),
-            element='step',
-            ax=ax,
-            bins=np.linspace(0, 1, 21),
-        )
-        sns.move_legend(ax, 'upper left')
+        if self.flavor == "hist":
+            sns.histplot(
+                data=df,
+                x='value',
+                hue='metric',
+                palette=list(self.colors),
+                element='step',
+                ax=ax,
+                bins=np.linspace(0, 1, 21),
+            )
+            sns.move_legend(ax, 'upper left', frameon=False)
+        elif self.flavor == "box":
+            sns.boxplot(
+                data=df,
+                x='metric',
+                y='value',
+                hue='metric',
+                palette=list(self.colors),
+                ax=ax,
+                legend=False,
+            )
+            ax.tick_params(axis="x", rotation=90)
+            ax.set_ylim([-0.05, 1.05])
+            ax.set(xlabel=None, ylabel=None)
 
 
 class TemplateDistanceMatrix(ComparisonPlot):
@@ -490,7 +513,7 @@ class TemplateDistanceMatrix(ComparisonPlot):
 class TrimmedTemplateDistanceMatrix(ComparisonPlot):
     kind = "matrix"
     width = 3
-    height = 3
+    height = 2
 
     def __init__(self, cmap=plt.cm.magma_r):
         self.cmap = cmap
@@ -509,21 +532,23 @@ class TrimmedTemplateDistanceMatrix(ComparisonPlot):
         ax.set_ylabel(f"{comparison.gt_name} unit")
         ax.set_xlabel(f"{comparison.tested_name} unit")
 
-
+box = MetricDistribution(flavor="box", width=2, height=3.5)
+box.kind = "gtmetric"
 gt_overview_plots = (
-    MetricHistogram(),
-    TrimmedAgreementMatrix(),
-    # AgreementMatrix(),
-    TrimmedTemplateDistanceMatrix(),
-    # TemplateDistanceMatrix(),
-    MetricRegPlot(x="gt_ptp_amplitude", y="accuracy"),
-    MetricRegPlot(x="gt_ptp_amplitude", y="recall", color="r"),
-    MetricRegPlot(x="gt_ptp_amplitude", y="precision", color="g"),
+    MetricRegPlot(x="gt_ptp_amplitude", y="accuracy", log_x=True),
+    MetricRegPlot(x="gt_ptp_amplitude", y="recall", color="r", log_x=True),
+    MetricRegPlot(x="gt_ptp_amplitude", y="precision", color="g", log_x=True),
     MetricRegPlot(x="gt_firing_rate", y="accuracy"),
     MetricRegPlot(x="gt_firing_rate", y="recall", color="r"),
     MetricRegPlot(x="gt_firing_rate", y="precision", color="g"),
-    MetricRegPlot(x="gt_match_temp_dist", y="precision", color="g", log_x=True),
+    MetricRegPlot(x="temp_dist", y="precision", color="g", log_x=True),
+    MetricRegPlot(x="gt_ptp_amplitude", y="temp_dist", color="orange", log_x=True),
+    MetricRegPlot(x="gt_firing_rate", y="temp_dist", color="orange"),
     MetricRegPlot(x="gt_ptp_amplitude", y="unsorted_recall", color="purple", log_x=True),
+    box,
+    MetricDistribution(),
+    TrimmedAgreementMatrix(),
+    TrimmedTemplateDistanceMatrix(),
 )
 
 # multi comparisons stuff
@@ -538,7 +563,7 @@ def make_gt_overview_summary(
     figsize=(11, 8.5),
     figure=None,
     suptitle=True,
-    same_width_flow=False,
+    same_width_flow=True,
 ):
     figure = flow_layout(
         plots,
