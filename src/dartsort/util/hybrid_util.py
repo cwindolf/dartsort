@@ -208,7 +208,7 @@ def sorting_from_times_labels(times, labels, recording=None, sampling_frequency=
     _, labels_flat = np.unique(labels, return_inverse=True)
     sorting = DARTsortSorting(times_samples=times, channels=channels, labels=labels_flat, sampling_frequency=sorting.sampling_frequency)
     td = TemplateData.from_config(recording, sorting, template_config, with_locs=False, n_jobs=n_jobs)
-    channels = np.nan_to_num(td.templates.ptp(1)).max(1)[labels_flat]
+    channels = np.nan_to_num(td.templates.ptp(1)).argmax(1)[labels_flat]
     sorting = DARTsortSorting(times_samples=times, channels=channels, labels=labels, sampling_frequency=sorting.sampling_frequency)
     return sorting, td
 
