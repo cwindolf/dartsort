@@ -73,7 +73,7 @@ class DARTsortGroundTruthComparison:
         dist = self.template_distances[
             np.arange(len(self.template_distances)), self.comparison.best_match_12.astype(int)
         ]
-        df['gt_match_temp_dist'] = dist
+        df['temp_dist'] = dist
         rec = []
         for uid in df.index:
             rec.append(self.unsorted_detection[self.gt_analysis.in_unit(uid)].mean())
