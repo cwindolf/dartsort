@@ -375,7 +375,6 @@ def cross_match_distance_matrix(
     Dab = dists[a_mask[:, None], b_mask[None, :]]
     Dba = dists[b_mask[:, None], a_mask[None, :]]
     Dstack = np.stack((Dab, Dba.T))
-    print(f"{Dstack.shape=} {Dab.shape=} {Dba.shape=}")
     shifts_ab = shifts[a_mask[:, None], b_mask[None, :]]
     shifts_ba = shifts[b_mask[:, None], a_mask[None, :]]
     shifts_stack = np.stack((shifts_ab, -shifts_ba.T))
@@ -386,7 +385,6 @@ def cross_match_distance_matrix(
     # that important, at the end of the day. still, we keep track of it
     # so that we can pick the shift and move on with our lives.
     choices = np.argmin(Dstack, axis=0)
-    print(f"{choices.shape=}")
     dists = Dstack[
         choices, np.arange(choices.shape[0])[:, None], np.arange(choices.shape[1])[None]
     ]
@@ -640,9 +638,8 @@ def combine_templates(template_data_a, template_data_b):
         registered_template_depths_um=locs,
     )
 
-    cross_mask = np.zeros((unit_ids.size, unit_ids.size), dtype=bool)
-    cross_mask[ids_a.size :, : ids_b.size] = True
-    cross_mask[: ids_a.size, ids_b.size :] = True
+    cross_mask = np.logical_and(np.isin(unit_ids, ids_a)[:, None], np.isin(unit_ids, ids_b)[None])
+    cross_mask = np.logical_or(cross_mask, cross_mask.T)
 
     return template_data, cross_mask, ids_a, ids_b
 
