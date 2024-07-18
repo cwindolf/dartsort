@@ -145,9 +145,7 @@ def make_filled_channel_index(geom, radius, p=2, pad_val=None, to_torch=False):
     for c in range(C):
         # indices of c's neighbors
         ch_idx = np.flatnonzero(neighbors[c])
-        ch_valid = is_original[ch_idx]
-        ch_idx[~ch_valid] = pad_val
-        channel_index[c, : ch_idx.shape[0]] = ch_idx
+        channel_index[c, : is_original[ch_idx]] = ch_idx
 
     if to_torch:
         channel_index = torch.LongTensor(channel_index)
