@@ -10,6 +10,7 @@ Ideally they should all be both.
 import numpy as np
 import torch
 import torch.nn.functional as F
+from scipy.spatial import KDTree
 from scipy.spatial.distance import cdist, pdist, squareform
 
 # -- geometry utils
@@ -47,6 +48,7 @@ def get_pitch(geom, direction=1):
 def fill_geom_holes(geom):
     pitch = get_pitch(geom)
     pitches_pad = int(np.ceil(geom[:, 1].ptp() / pitch))
+    print(f"{pitches_pad=} {pitch=}")
 
     # we have to be careful about floating point error here
     # two sites may be different due to floating point error
@@ -59,12 +61,12 @@ def fill_geom_holes(geom):
     is_original = [True] * len(geom)
     for shift in range(-pitches_pad, pitches_pad + 1):
         shifted_geom = geom + [0, pitch * shift]
-        sz = shifted_geom[:, 1]
-        szinside = sz == sz.clip(
-            geom[:, 1].min() - np.sqrt(min_distance),
-            geom[:, 1].max() + np.sqrt(min_distance),
-        )
-        shifted_geom = shifted_geom[szinside]
+        # sz = shifted_geom[:, 1]
+        # szinside = sz == sz.clip(
+        #     geom[:, 1].min() - np.sqrt(min_distance),
+        #     geom[:, 1].max() + np.sqrt(min_distance),
+        # )
+        # shifted_geom = shifted_geom[szinside]
         dists = cdist(shifted_geom, unique_shifted_positions, metric="sqeuclidean")
         for site, dists in zip(shifted_geom, dists):
             if np.all(dists > min_distance):
@@ -134,12 +136,15 @@ def make_channel_index(
 
 def make_filled_channel_index(geom, radius, p=2, pad_val=None, to_torch=False):
     C = geom.shape[0]
-    if not radius: 
+    if not radius:
         return single_channel_index(C, to_torch=to_torch)
     if pad_val is None:
         pad_val = C
 
     filled_geom, is_original = fill_geom_holes(geom)
+    filled_kdt = KDTree(filled_geom)
+    _, original_inds = filled_kdt.query(geom)
+    assert np.array_equal(filled_geom[original_inds], geom)
     neighbors = cdist(geom, filled_geom, metric="minkowski", p=p) <= radius
     n_neighbors = np.max(np.sum(neighbors, 0))
     channel_index = np.full((C, n_neighbors), pad_val, dtype=int)
@@ -147,8 +152,10 @@ def make_filled_channel_index(geom, radius, p=2, pad_val=None, to_torch=False):
     # fill every row in the matrix (one per channel)
     for c in range(C):
         # indices of c's neighbors
-        ch_idx = np.flatnonzero(neighbors[c])
-        channel_index[c, : is_original[ch_idx]] = ch_idx
+        filled_ch_idx = np.flatnonzero(neighbors[c])
+        ch_idx = np.searchsorted(original_inds, filled_ch_idx)
+        ch_idx[np.logical_not(is_original[filled_ch_idx])] = pad_val
+        channel_index[c] = ch_idx
 
     if to_torch:
         channel_index = torch.LongTensor(channel_index)
@@ -447,11 +454,15 @@ def relative_channel_subset_index(channel_index_full, channel_index_new, to_torc
     return rel_sub_channel_index
 
 
-def get_relative_subset(waveforms, max_channels, rel_sub_channel_index, fill_value=torch.nan):
+def get_relative_subset(
+    waveforms, max_channels, rel_sub_channel_index, fill_value=torch.nan
+):
     waveforms = F.pad(waveforms, (0, 1), value=fill_value)
     index = rel_sub_channel_index[max_channels]
     if waveforms.ndim == 3:
-        index = index[:, None, :].broadcast_to(index.shape[0], waveforms.shape[1], index.shape[1])
+        index = index[:, None, :].broadcast_to(
+            index.shape[0], waveforms.shape[1], index.shape[1]
+        )
     return torch.gather(waveforms, waveforms.ndim - 1, index)
 
 
