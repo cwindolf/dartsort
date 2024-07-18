@@ -48,7 +48,6 @@ def get_pitch(geom, direction=1):
 def fill_geom_holes(geom):
     pitch = get_pitch(geom)
     pitches_pad = int(np.ceil(geom[:, 1].ptp() / pitch))
-    print(f"{pitches_pad=} {pitch=}")
 
     # we have to be careful about floating point error here
     # two sites may be different due to floating point error
