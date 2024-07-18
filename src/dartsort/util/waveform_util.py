@@ -94,10 +94,11 @@ def make_channel_index(
     fill_holes=False,
 ):
     """
-    Compute an array whose whose ith row contains the ordered
-    (by distance) neighbors for the ith channel
+    Compute an array whose whose ith row contains the neighbors for the ith channel
     """
     C = geom.shape[0]
+    if not radius:
+        return single_channel_index(C, to_torch=to_torch)
     if pad_val is None:
         pad_val = C
 
@@ -133,6 +134,8 @@ def make_channel_index(
 
 def make_filled_channel_index(geom, radius, p=2, pad_val=None, to_torch=False):
     C = geom.shape[0]
+    if not radius: 
+        return single_channel_index(C, to_torch=to_torch)
     if pad_val is None:
         pad_val = C
 
@@ -205,9 +208,20 @@ def make_pitch_channel_index_no_nans_for_plotting(geom, n_neighbor_rows=1, pitch
     return channel_index
 
 
-def full_channel_index(n_channels):
+def full_channel_index(n_channels, to_torch=False):
     """Everyone is everone's neighbor"""
-    return np.arange(n_channels)[None, :] * np.ones(n_channels, dtype=int)[:, None]
+    ci = np.arange(n_channels)[None, :] * np.ones(n_channels, dtype=int)[:, None]
+    if to_torch:
+        ci = torch.tensor(ci)
+    return ci
+
+
+def single_channel_index(n_channels, to_torch=False):
+    """Lonely islands"""
+    ci = np.arange(n_channels)[:, None]
+    if to_torch:
+        ci = torch.tensor(ci)
+    return ci
 
 
 # -- extracting single channels which were not part of padding
