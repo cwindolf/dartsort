@@ -36,33 +36,48 @@ class DPCSplitPlot(GMMPlot):
     width = 5
     height = 2
 
-    def __init__(self, spike_kind="residual"):
+    def __init__(self, spike_kind="residual", feature="pca"):
         self.spike_kind = spike_kind
+        assert feature in ("pca", "spread_amp")
+        self.feature = feature
 
     def draw(self, panel, gmm, unit_id):
-        if self.spike_kind == "residual_full":
-            (in_unit,) = (gmm.labels == unit_id).nonzero(as_tuple=True)
-            features = torch.empty((in_unit.numel(), gmm.residual_pca_rank), device=gmm.device)
-            for sl, data in gmm.batches(in_unit):
-                gmm[unit_id].residual_embed(**data,  out=features[sl])
-            z = features[:, :gmm.dpc_split_kw.rank].numpy(force=True)
-        elif self.spike_kind == "train":
-            _, in_unit, z = gmm.split_features(unit_id)
-        elif self.spike_kind == "global":
+        if self.feature == "pca":
+            if self.spike_kind == "residual_full":
+                (in_unit,) = (gmm.labels == unit_id).nonzero(as_tuple=True)
+                features = torch.empty((in_unit.numel(), gmm.residual_pca_rank), device=gmm.device)
+                for sl, data in gmm.batches(in_unit):
+                    gmm[unit_id].residual_embed(**data,  out=features[sl])
+                z = features[:, :gmm.dpc_split_kw.rank].numpy(force=True)
+            elif self.spike_kind == "train":
+                _, in_unit, z = gmm.split_features(unit_id)
+            elif self.spike_kind == "global":
+                in_unit, data = gmm.get_training_data(unit_id)
+                waveforms = gmm[unit_id].to_unit_channels(
+                    waveforms=data["waveforms"],
+                    times=data["times"],
+                    waveform_channels=data["waveform_channels"],
+                )
+                loadings, mean, components, svs = spike_interp.fit_pcas(
+                    waveforms.reshape(in_unit.numel(), -1),
+                    missing=None,
+                    empty=None,
+                    rank=gmm.dpc_split_kw.rank,
+                    show_progress=False,
+                )
+                z = loadings.numpy(force=True)
+        elif self.feature == "spread_amp":
+            assert self.spike_kind in ("train", "global")
             in_unit, data = gmm.get_training_data(unit_id)
-            waveforms = gmm[unit_id].to_unit_channels(
-                waveforms=data["waveforms"],
-                times=data["times"],
-                waveform_channels=data["waveform_channels"],
-            )
-            loadings, mean, components, svs = spike_interp.fit_pcas(
-                waveforms.reshape(in_unit.numel(), -1),
-                missing=None,
-                empty=None,
-                rank=gmm.dpc_split_kw.rank,
-                show_progress=False,
-            )
-            z = loadings.numpy(force=True)
+            waveforms = data["waveforms"]
+            channel_norms = torch.sqrt(torch.nan_to_num(waveforms.square().sum(1)))
+            amp = channel_norms.max(1).values
+            logs = torch.nan_to_num(channel_norms.log())
+            spread = (channel_norms * logs).sum(1)
+            z = np.c_[amp.numpy(force=True), spread.numpy(force=True)]
+            z /= mad(z, 0)
+            print(f"{amp.min()=} {amp.max()=} {amp.mean()=} {amp.std()=}")
+            print(f"{spread.min()=} {spread.max()=} {spread.mean()=} {spread.std()=}")
 
         in_unit = in_unit.numpy(force=True)
         zu, idx, inv = np.unique(z, return_index=True, return_inverse=True, axis=0)
@@ -76,14 +91,8 @@ class DPCSplitPlot(GMMPlot):
         )
         if "density" not in dens:
             ax = panel.subplots()
-            ax.text(
-                0.5,
-                0.5,
-                "Clustering threw everyone away",
-                ha="center",
-                va="center",
-                transform=ax.transAxes,
-            )
+            ax.title("all spikes binned")
+            ax.scatter(*z[:, :2].T, s=5, lw=0, color="k")
             ax.autoscale_view()
             return
 
@@ -98,7 +107,10 @@ class DPCSplitPlot(GMMPlot):
         )
         axes[-1].set_title(f"n={(ru>=0).sum()}", fontsize=8)
         axes[0].set_title(self.spike_kind)
-        
+        if self.feature == "spread_amp":
+            axes[0].set_xlabel("spread")
+            axes[0].set_ylabel("amp")
+
 
 
 class ZipperSplitPlot(GMMPlot):
@@ -249,6 +261,157 @@ class ZipperSplitPlot(GMMPlot):
         if self.show_values:
             for (j, i), label in np.ndenumerate(dists):
                 axis.text(i, j, f"{label:.2f}", ha="center", va="center", clip_on=True)
+        plt.colorbar(im, ax=axis, shrink=0.3)
+        axis.set_xticks(range(len(new_units)))
+        axis.set_yticks(range(len(new_units)))
+        for i, (tx, ty) in enumerate(
+            zip(axis.xaxis.get_ticklabels(), axis.yaxis.get_ticklabels())
+        ):
+            tx.set_color(glasbey1024[i])
+            ty.set_color(glasbey1024[i])
+        axis.set_title(gmm.merge_metric)
+
+
+class KMeansPPSPlitPlot(GMMPlot):
+    kind = "triplet"
+    width = 5
+    height = 5
+
+    def __init__(
+        self,
+        cmap=plt.cm.rainbow,
+        fitted_only=True,
+        scaled=True,
+        amplitude_scaling_std=np.sqrt(0.001),
+        amplitude_scaling_limit=1.2,
+        dist_vmax=1.0,
+        show_values=True,
+        n_clust=5,
+        n_iter=20,
+    ):
+        self.cmap = cmap
+        self.fitted_only = fitted_only
+        self.scaled = scaled
+        self.inv_lambda = 1.0 / (amplitude_scaling_std**2)
+        self.scale_clip_low = 1.0 / amplitude_scaling_limit
+        self.scale_clip_high = amplitude_scaling_limit
+        self.dist_vmax = dist_vmax
+        self.show_values = show_values
+        self.title = "grid mean dists"
+        self.n_clust = n_clust
+        self.n_iter = n_iter
+        if self.scaled:
+            self.title = f"scaled {self.title}"
+
+    def draw(self, panel, gmm, unit_id):
+        in_unit, labels = gmm.kmeanspp(unit_id, n_clust=self.n_clust, n_iter=self.n_iter)
+
+        times = gmm.data.times_seconds[in_unit].numpy(force=True)
+        amps = np.nan_to_num(gmm.data.static_amp_vecs[in_unit]).ptp(1)
+        labels = labels.numpy(force=True)
+        ids = np.unique(labels)
+        ids = ids[ids >= 0]
+
+        if ids.size > 1:
+            top, bottom = panel.subfigures(nrows=2)
+            ax_top = top.subplots()
+            axes = bottom.subplot_mosaic("de")
+        else:
+            ax_top = panel.subplots()
+
+        ax_top.scatter(
+            times,
+            amps,
+            c=glasbey1024[labels],
+            s=4,
+            lw=0,
+        )
+        if ids.size <= 1:
+            return
+
+        new_units = []
+        for label in ids:
+            u = spike_interp.InterpUnit(
+                do_interp=False,
+                **gmm.unit_kw,
+            )
+            inu = in_unit[np.flatnonzero(labels == label)]
+            inu, train_data = gmm.get_training_data(
+                unit_id,
+                waveform_kind="original",
+                in_unit=inu,
+                sampling_method=gmm.sampling_method,
+            )
+            u.fit_center(**train_data, show_progress=False)
+            new_units.append(u)
+        
+        ju = [(j, u) for j, u in enumerate(new_units) if u.n_chans_unit]
+
+        # plot new unit maxchan wfs and old one in black
+        ax = axes["d"]
+        ax.axhline(0, c="k", lw=0.8)
+        all_means = []
+        for j, unit in ju:
+            if unit.do_interp:
+                times = unit.interp.grid.squeeze()
+                if self.fitted_only:
+                    times = times[unit.interp.grid_fitted]
+            else:
+                times = torch.tensor([sum(gmm.t_bounds) / 2]).to(gmm.device)
+            times = torch.atleast_1d(times)
+
+            chans = torch.full((times.numel(),), unit.max_channel, device=times.device)
+            means = unit.get_means(times).to(gmm.device)
+            if j > 0:
+                all_means.append(means.mean(0))
+            means = unit.to_waveform_channels(means, waveform_channels=chans[:, None])
+            means = means[..., 0]
+            means = gmm.data.tpca._inverse_transform_in_probe(means)
+            means = means.numpy(force=True)
+            color = glasbey1024[j]
+
+            lines = np.stack(
+                (np.broadcast_to(np.arange(means.shape[1])[None], means.shape), means),
+                axis=-1,
+            )
+            ax.add_collection(LineCollection(lines, colors=color, lw=1))
+        ax.autoscale_view()
+        ax.set_xticks([])
+        ax.spines[["top", "right", "bottom"]].set_visible(False)
+
+        # plot distance matrix
+        kind = gmm.merge_metric
+        min_overlap = gmm.min_overlap
+        subset_channel_index = None
+        if gmm.merge_on_waveform_radius:
+            subset_channel_index = gmm.data.registered_reassign_channel_index
+        nu = len(new_units)
+        divergences = torch.full((nu, nu), torch.nan)
+        for i, ua in ju:
+            for j, ub in ju:
+                if i == j:
+                    divergences[i, j] = 0
+                    continue
+                divergences[i, j] = ua.divergence(
+                    ub,
+                    kind=kind,
+                    min_overlap=min_overlap,
+                    subset_channel_index=subset_channel_index,
+                )
+        dists = divergences.numpy(force=True)
+
+        axis = axes["e"]
+        im = axis.imshow(
+            dists,
+            vmin=0,
+            vmax=self.dist_vmax,
+            cmap=self.cmap,
+            origin="lower",
+            interpolation="none",
+        )
+        if self.show_values:
+            for (j, i), label in np.ndenumerate(dists):
+                axis.text(i, j, f"{label:.2f}".lstrip("0"), ha="center", va="center", clip_on=True, fontsize=5)
         plt.colorbar(im, ax=axis, shrink=0.3)
         axis.set_xticks(range(len(new_units)))
         axis.set_yticks(range(len(new_units)))
@@ -916,9 +1079,10 @@ class GridMeanDistancesPlot(GMMPlot):
 default_gmm_plots = (
     ISIHistogram(),
     ChansHeatmap(),
-    HDBScanSplitPlot(spike_kind="residual_full"),
-    HDBScanSplitPlot(),
+    # HDBScanSplitPlot(spike_kind="residual_full"),
+    # HDBScanSplitPlot(),
     ZipperSplitPlot(),
+    KMeansPPSPlitPlot(),
     GridMeansSingleChanPlot(),
     InputWaveformsSingleChanPlot(),
     InputWaveformsSingleChanOverTimePlot(channel="unit"),
@@ -930,6 +1094,7 @@ default_gmm_plots = (
     DPCSplitPlot(spike_kind="residual_full"),
     DPCSplitPlot(spike_kind="train"),
     DPCSplitPlot(spike_kind="global"),
+    DPCSplitPlot(spike_kind="global", feature="spread_amp"),
     FeaturesVsBadnessesPlot(),
     GridMeanDistancesPlot(),
     GridMeansMultiChanPlot(),
