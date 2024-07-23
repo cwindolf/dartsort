@@ -195,7 +195,7 @@ def refractory_poisson_spike_train(
     return spike_samples
 
 
-def sorting_from_times_labels(times, labels, recording=None, sampling_frequency=None,  determine_channels=True, template_config=unshifted_raw_template_config, n_jobs=0):
+def sorting_from_times_labels(times, labels, recording=None, sampling_frequency=None, determine_channels=True, template_config=unshifted_raw_template_config, n_jobs=0):
     channels = np.zeros_like(labels)
     if sampling_frequency is None:
         if recording is not None:
@@ -203,7 +203,7 @@ def sorting_from_times_labels(times, labels, recording=None, sampling_frequency=
     sorting = DARTsortSorting(times_samples=times, channels=channels, labels=labels, sampling_frequency=sampling_frequency)
 
     if not determine_channels:
-        return
+        return sorting
 
     _, labels_flat = np.unique(labels, return_inverse=True)
     sorting = DARTsortSorting(times_samples=times, channels=channels, labels=labels_flat, sampling_frequency=sorting.sampling_frequency)
