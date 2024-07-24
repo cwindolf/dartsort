@@ -126,6 +126,7 @@ class FeaturizationConfig:
     tpca_fit_radius: Optional[float] = None
     tpca_rank: int = 8
     tpca_centered: bool = True
+    input_tpca_projs_temporal_slice: Optional[slice] = None
 
     # used when naming datasets saved to h5 files
     input_waveforms_name: str = "collisioncleaned"
@@ -319,10 +320,10 @@ class ClusteringConfig:
     adaptive_feature_scales: bool = False
     log_c: float = 5.0
     recursive: bool = False
-    remove_duplicates: bool = True
+    remove_duplicates: bool = False
 
     # remove large clusters in hdbscan?
-    remove_big_units: bool = True
+    remove_big_units: bool = False
     zstd_big_units: float = 50.0
 
     # grid snap parameters
@@ -414,6 +415,9 @@ default_split_merge_config = SplitMergeConfig()
 coarse_template_config = TemplateConfig(superres_templates=False)
 raw_template_config = TemplateConfig(
     realign_peaks=False, low_rank_denoising=False, superres_templates=False
+)
+unshifted_raw_template_config = TemplateConfig(
+    registered_templates=False, realign_peaks=False, low_rank_denoising=False, superres_templates=False
 )
 unaligned_coarse_denoised_template_config = TemplateConfig(
     realign_peaks=False, low_rank_denoising=True, superres_templates=False
