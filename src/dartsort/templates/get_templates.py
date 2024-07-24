@@ -927,6 +927,203 @@ def get_all_shifted_raw_and_low_rank_templates_linear(
 
     return raw_templates, low_rank_templates, snrs_by_chan, spike_counts
 
+def get_all_shifted_raw_and_low_rank_templates_linear_median_approx(
+    recording,
+    sorting,
+    times_samples_unique, 
+    ind_arr,
+    inv_arr, 
+    all_chunk_ids, 
+    all_labels, # This is unit ids of all spikes over time 
+    pad_value=0.0,
+    n_chunks=1,
+    registered_geom=None,
+    denoising_tsvd=None,
+    pitch_shifts=None,
+    spikes_per_unit=500,
+    reducer=fast_nanmedian,
+    n_jobs=0,
+    batch_size=1024, #try 2048
+    random_seed=0,
+    show_progress=True,
+    trough_offset_samples=42,
+    spike_length_samples=121,
+    min_fraction_at_shift=0.1,
+    min_count_at_shift=5,
+    device=None,
+):
+
+    """
+    No parallelism yet
+    """
+
+    geom = recording.get_channel_locations()
+    
+    unit_ids = np.unique(sorting.labels) #CHANGE THIS WITH LABELS + UIDS
+    unit_ids = unit_ids[unit_ids >= 0]
+    raw = denoising_tsvd is None
+    prefix = "Raw" if raw else "Denoised"
+
+    n_template_channels = recording.get_num_channels()
+    registered_kdtree = None
+    registered=False
+    if registered_geom is not None:
+        n_template_channels = len(registered_geom)
+        registered_kdtree = KDTree(registered_geom)
+        registered=True
+
+    n_units = len(unit_ids)
+    raw_templates = np.zeros(
+        (n_chunks, n_units, spike_length_samples, n_template_channels),
+        dtype=recording.dtype,
+    ) # this is not the mean of the templates!! it's the mean of templates inside of [mu-sigma, mu+sigma] 
+    raw_mean = np.zeros(
+        (n_chunks, n_units, spike_length_samples, n_template_channels),
+        dtype=recording.dtype,
+    )
+    raw_var = np.zeros(
+        (n_chunks, n_units, spike_length_samples, n_template_channels),
+        dtype=recording.dtype,
+    )
+
+    # check how spike counts are used for denoising of templates 
+    spike_counts = np.zeros(
+        (n_chunks, n_units, n_template_channels),
+        dtype=recording.dtype, #No int because then cannot have nans?
+    ) # this is current spike counts i.e. before getting the new batch
+    spike_counts_in_std = np.zeros(
+        (n_chunks, n_units, spike_length_samples, n_template_channels),
+        dtype=recording.dtype, #No int because then cannot have nans?
+    ) # this is the total number fo spikes added to the template computation i.e. that are inside [mu-sigma, mu+sigma]
+    
+    # low_rank_templates = None
+    if not raw:
+        low_rank_templates = np.zeros((n_chunks, n_units, spike_length_samples, n_template_channels),dtype=recording.dtype) # this is not the mean of the templates!! it's the mean of templates inside of [mu-sigma, mu+sigma] for denoised psikes
+
+    # can parallelize here, since we send wfs_all_loaded[in_unit] to each job 
+    batch_arr = np.arange(0, len(times_samples_unique)+batch_size, batch_size)
+    batch_arr[-1]=len(times_samples_unique)
+
+    for k in tqdm(range(len(batch_arr)-1), desc="Computing templates for all chunks"):
+        raw_batch_mean = np.zeros(
+            (n_chunks, n_units, spike_length_samples, n_template_channels),
+            dtype=recording.dtype,
+        )
+        batch_spike_counts = np.zeros(
+            (n_chunks, n_units, n_template_channels),
+            dtype=recording.dtype, # No int because ofcasting in np.divide
+        ) # this is current spike counts i.e. before getting the new batch
+        
+        batch_idx = np.arange(batch_arr[k], batch_arr[k+1])
+        waveforms = spikeio.read_full_waveforms(
+            recording,
+            times_samples_unique[batch_idx],
+            trough_offset_samples=trough_offset_samples,
+            spike_length_samples=spike_length_samples,
+        )
+        # which_times = inv_arr[batch_idx_unique]
+        
+        # print("ind_arr")
+        # print(ind_arr)
+        # assert np.all(ind_arr.argsort() == np.arange(len(ind_arr)))
+        # print(ind_arr[batch_idx])
+        
+        batch_idx_unique = np.arange(ind_arr[batch_idx][0], ind_arr[batch_idx][-1])
+        which_times, which_chunks, which_units = inv_arr[batch_idx_unique], all_chunk_ids[batch_idx_unique], all_labels[batch_idx_unique]
+        _, which_times = np.unique(which_times, return_inverse=True)
+        # which_times, which_chunks, which_units = np.where(chunk_unit_ids[batch_idx]) #batch_size * n_chunks
+
+        # print("LENS")
+        # print(len(which_times))
+        # print(len(which_chunks))
+        # print(len(which_units))
+        
+        if not raw:
+            n, t, c = waveforms.shape
+            waveforms_denoised = waveforms.transpose(0, 2, 1).reshape(n * c, t)
+            waveforms_denoised = denoising_tsvd(torch.tensor(waveforms_denoised), in_place=True)
+            waveforms_denoised = waveforms_denoised.reshape(n, c, t).permute(0, 2, 1) #.cpu().detach().numpy()
+        if registered:
+            waveforms = get_waveforms_on_static_channels(
+                waveforms,
+                geom,
+                registered_geom=registered_geom,
+                n_pitches_shift=pitch_shifts[batch_idx],
+                fill_value=0, 
+            )
+            
+            nonan = ~(waveforms[which_times].ptp(1) == 0) # new spike counts
+            # Here more complicated
+            np.add.at(batch_spike_counts, (which_chunks, which_units), nonan)
+            # np.add.at(spike_counts, (which_chunks, which_units), nonan)
+            # spike_counts[which_chunks, which_units] = spike_counts[which_chunks, which_units] + nonan
+            if not raw:
+                waveforms_denoised = get_waveforms_on_static_channels(
+                    waveforms_denoised,
+                    geom,
+                    registered_geom=registered_geom,
+                    n_pitches_shift=pitch_shifts[batch_idx],
+                    fill_value=0, 
+                )
+        else:
+            np.add.at(batch_spike_counts, (which_chunks, which_units), 1)
+            # spike_counts[which_chunks, which_units] += 1
+        np.add.at(raw_batch_mean, (which_chunks, which_units), waveforms[which_times])
+        
+        raw_batch_mean = np.divide(raw_batch_mean, batch_spike_counts[:, :, None], where = batch_spike_counts[:, :, None]!=0)
+
+        # Here, compute std (problem: avoid dividing by zero?)
+        sum_counts = spike_counts + batch_spike_counts
+        raw_var = (spike_counts - 1)[:, :, None]*raw_var - np.divide(batch_spike_counts**2, sum_counts, where = sum_counts!=0)[:, :, None] * (raw_batch_mean-raw_mean)**2
+        # handle division by 0 
+        # raw_var[np.isnan(raw_var)]
+        wfs_mean_squared_diff = (waveforms[which_times] - raw_mean[which_chunks, which_units])**2
+        np.add.at(raw_var, (which_chunks, which_units), wfs_mean_squared_diff)
+        # raw_var /= (sum_counts - 1)[:, :, None]
+        raw_var = np.divide(raw_var, (sum_counts - 1)[:, :, None], where = (sum_counts - 1)[:, :, None]!=0)
+
+        raw_mean = spike_counts[:, :, None]*raw_mean + raw_batch_mean*batch_spike_counts[:, :, None]
+        spike_counts += batch_spike_counts 
+        raw_mean = np.divide(raw_mean, spike_counts[:, :, None], where = spike_counts[:, :, None]!=0)
+        # raw_mean /= spike_counts[:, :, None]
+
+        # Then, compute templates in  [mu-sigma, mu+sigma] + counts 
+        in_std = np.where(np.abs(waveforms[which_times] - raw_mean[which_chunks, which_units])<np.sqrt(raw_var[which_chunks, which_units]))
+        # This operation is quite slow as in_std is huge --> with mean, can only index chunk and unit, here need to index channels and timesteps as well
+        # How can we speed this up? 
+        np.add.at(spike_counts_in_std, (which_chunks[in_std[0]], which_units[in_std[0]], in_std[1], in_std[2]), 1)
+        # print(f"Max spike counts in std {spike_counts_in_std.max()}")
+        np.add.at(raw_templates, (which_chunks[in_std[0]], which_units[in_std[0]], in_std[1], in_std[2]), waveforms[which_times][in_std])
+        if not raw:
+            np.add.at(low_rank_templates, (which_chunks[in_std[0]], which_units[in_std[0]], in_std[1], in_std[2]), waveforms_denoised[which_times][in_std])
+            
+    # spike_counts = 0 --> nan
+    # spike_counts shape: chunk*unit*chan
+    valid = spike_counts_in_std > min_count_at_shift #> instead of >= to make sure to turn off 0 channels 
+    valid &= spike_counts_in_std / spike_counts_in_std.max(2)[:, :, None] > min_fraction_at_shift
+    spike_counts_in_std[~valid] = np.nan
+        # spike_counts[spike_counts==0] = np.nan
+
+    raw_templates /= spike_counts_in_std
+    if not raw:
+        low_rank_templates = low_rank_templates/spike_counts_in_std
+    snrs_by_chan = ptp(raw_templates, 2) * spike_counts_in_std.max(2) #max, min or median here? make sure it's above 0? if far away from peak, ideally denoising would tke into account the per timestep snr
+    
+    if not np.isnan(pad_value):
+        raw_templates = np.nan_to_num(raw_templates, copy=False, nan=pad_value)
+        snrs_by_chan = np.nan_to_num(snrs_by_chan, copy=False, nan=pad_value)
+        spike_counts_in_std = np.nan_to_num(spike_counts_in_std, copy=False, nan=pad_value)
+        if not raw:
+            low_rank_templates = np.nan_to_num(low_rank_templates, copy=False, nan=pad_value)
+
+    spike_counts_in_std = np.max(spike_counts_in_std, axis=2) # How to deal with a template being low count in some parts and high in others? can this be a problem if in some timesteps get stuck around a bad spike?  
+    if raw:
+        return raw_templates, raw_templates, snrs_by_chan, spike_counts_in_std
+
+    return raw_templates, low_rank_templates, snrs_by_chan, spike_counts_in_std
+
+
+
 def get_all_shifted_raw_and_low_rank_templates_with_h5(
     recording,
     h5_file,

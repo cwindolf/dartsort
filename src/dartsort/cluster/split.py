@@ -1552,12 +1552,16 @@ class MaxChanPCSplit(SplitStrategy):
         self.geom = h5["geom"][:]
         self.channel_index = h5["channel_index"][:]
         self.channels = h5["channels"][:]
+        amps = h5[amplitudes_dataset_name][:]
         self.match_distance = pdist(self.geom).min() / 2
 
         # self.tpca_features = h5[tpca_features_dataset_name]
         # HERE read using iter_chunks
         idx = np.where((self.channel_index[self.channels] == self.channels[:, None]))
-        self.collisioncleaned_tpca_features = h5[tpca_features_dataset_name][:][idx[0], :, idx[1]]            
+        self.collisioncleaned_tpca_features = h5[tpca_features_dataset_name][:][idx[0], :, idx[1]]
+        
+        if self.amplitude_normalized:
+            self.collisioncleaned_tpca_features /= amps[:, None]
 
         if peeling_featurization_pt is None:
             mdir = peeling_hdf5_filename.parent / f"{peeling_hdf5_filename.stem}_models"
