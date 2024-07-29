@@ -291,6 +291,20 @@ def depthwise_oaconv1d(input, weight, f2=None, padding=0):
 
     # shape_full = s1 + s2 - 1
     block_size, overlap, in1_step, in2_step = _calc_oa_lens(s1, s2)
+
+    # overlap=None is a signal that no useful blocks for OA can
+    # be found, do a vanilla FFT correlation
+    if overlap is None:
+        f1 = torch.fft.rfft(input, n=s1)
+        f2 = torch.fft.rfft(torch.flip(weight, (-1,)), n=s1)
+        f1.mul_(f2[:, None:, ])
+        res = torch.fft.irfft(f1, n=s1)
+        valid_len = s1 - s2 + 1
+        valid_start = s2 - 1
+        assert valid_start >= padding
+        res = res[:, valid_start-padding: valid_start+valid_len + padding]
+        return res
+
     nstep1, pad1, nstep2, pad2 = steps_and_pad(
         s1, in1_step, s2, in2_step, block_size, overlap
     )
