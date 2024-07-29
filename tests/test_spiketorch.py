@@ -132,3 +132,34 @@ def test_resample():
     xup_scipy = resample(x, 80)
     xup_torch = spiketorch.real_resample(torch.as_tensor(x), 80)
     assert np.isclose(xup_scipy, xup_torch).all()
+    
+
+def test_depthwise_oaconv1d():
+    rg = np.random.default_rng(0)
+    # ns=500 tests fallback, vanilla FFT correlation in torch
+    # ns=5000 tests overlap-add implementation
+    for ns in [500, 5000]:
+        spike_length, trough_offset = 121, 42
+
+        # fake templates in white noise
+        t0 = np.exp(-(((np.arange(spike_length) - trough_offset) / 10) ** 2))
+        t1 = np.exp(-(((np.arange(spike_length) - trough_offset) / 30) ** 2))
+
+        templates = torch.Tensor(np.stack([t0, t1]))
+        traces = 0.1 * torch.Tensor(rg.normal(size=(2, ns)))
+
+        traces[0, 100:100 + spike_length] += templates[0]
+        traces[1, 300:300 + spike_length] += templates[1]
+
+        torch_conv = F.conv1d(
+            traces[None, :, :],
+            templates[:, None, :],
+            groups=2,
+        )
+
+        oa_conv = spiketorch.depthwise_oaconv1d(
+            traces,
+            templates
+        )
+
+        assert np.allclose(torch_conv, oa_conv, atol=1e-5)
