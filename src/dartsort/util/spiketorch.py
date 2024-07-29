@@ -302,9 +302,10 @@ def depthwise_oaconv1d(input, weight, f2=None, padding=0):
     # freq domain correlation
     f1 = torch.fft.rfft(input, n=block_size)
     if f2 is None:
-        f2 = torch.fft.rfft(weight, n=block_size)
-    # .conj() here to do cross-correlation instead of convolution (time reversal property of rfft)
-    f1.mul_(f2.conj()[:, None, :])
+        # flip direction of templates to perform cross-correlation
+        f2 = torch.fft.rfft(torch.flip(weight, (-1,)), n=block_size)
+
+    f1.mul_(f2[:, None, :])
     res = torch.fft.irfft(f1, n=block_size)
 
     # overlap add part with torch
