@@ -106,8 +106,9 @@ class ISIHistogram(UnitPlot):
         self.bin_ms = bin_ms
         self.max_ms = max_ms
 
-    def draw(self, panel, sorting_analysis, unit_id, sorting_previous_step):
-        axis = panel.subplots()
+    def draw(self, panel, sorting_analysis, unit_id, axis=None, color="k", label=None):
+        if axis is None:
+            axis = panel.subplots()
         times_s = sorting_analysis.times_seconds(
             which=sorting_analysis.in_unit(unit_id)
         )
@@ -120,12 +121,9 @@ class ISIHistogram(UnitPlot):
         # counts, _ = np.histogram(dt_ms, bin_edges)
         # bin_centers = 0.5 * (bin_edges[1:] + bin_edges[:-1])
         # axis.bar(bin_centers, counts)
-        plt.hist(dt_ms, bin_edges, color="k")
-        axis.set_xlabel("isi (ms)", fontsize=5, labelpad=2)
-        axis.set_ylabel(f"count (out of {dt_ms.size} total isis)", fontsize=5, labelpad=2)
-        axis.xaxis.set_tick_params(labelsize=5)
-        axis.yaxis.set_tick_params(labelsize=5)
-
+        plt.hist(dt_ms, bin_edges, color=color, label=label)
+        axis.set_xlabel("isi (ms)")
+        axis.set_ylabel(f"count (out of {dt_ms.size} total isis)")
 
 class XZScatter(UnitPlot):
     kind = "scatter"
@@ -1048,6 +1046,7 @@ def make_unit_summary(
     figsize=(11, 8.5),
     hspace=0.1,
     figure=None,
+    gizmo_name="sorting_analysis",
     **other_global_params,
 ):
     # notify plots of global params
@@ -1065,9 +1064,9 @@ def make_unit_summary(
         figsize=figsize,
         hspace=hspace,
         figure=figure,
-        sorting_analysis=sorting_analysis,
         unit_id=unit_id,
         sorting_previous_step=sorting_previous_step,
+        **{gizmo_name: sorting_analysis},
     )
 
     return figure
@@ -1090,6 +1089,7 @@ def make_all_summaries(
     show_progress=True,
     overwrite=False,
     unit_ids=None,
+    gizmo_name="sorting_analysis",
     **other_global_params,
 ):
     save_folder = Path(save_folder)
@@ -1123,6 +1123,7 @@ def make_all_summaries(
         image_ext,
         overwrite,
         global_params,
+        gizmo_name,
     )
     with Executor(
         max_workers=n_jobs,
@@ -1200,6 +1201,7 @@ class SummaryJobContext:
         image_ext,
         overwrite,
         global_params,
+        gizmo_name,
     ):
         self.sorting_analysis = sorting_analysis
         self.plots = plots
@@ -1211,6 +1213,7 @@ class SummaryJobContext:
         self.image_ext = image_ext
         self.overwrite = overwrite
         self.global_params = global_params
+        self.gizmo_name = gizmo_name
 
 
 _summary_job_context = None
@@ -1249,6 +1252,7 @@ def _summary_job(unit_id):
         max_height=_summary_job_context.max_height,
         figsize=_summary_job_context.figsize,
         figure=fig,
+        gizmo_name=_summary_job_context.gizmo_name,
         **_summary_job_context.global_params,
     )
 

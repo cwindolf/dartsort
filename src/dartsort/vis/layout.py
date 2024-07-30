@@ -33,9 +33,10 @@ Card = namedtuple("Card", ["kind", "width", "height", "plots"])
 
 
 def flow_layout(
-    plots, max_height=4, figsize=(8.5, 11), figure=None, hspace=0.1, **plot_kwargs
+    plots, same_width_flow=True, max_height=4, figsize=(8.5, 11), figure=None, hspace=0.1, **plot_kwargs
 ):
-    columns = flow_layout_columns(plots, max_height=max_height, **plot_kwargs)
+    columns = flow_layout_columns(plots, same_width_flow=same_width_flow, max_height=max_height, **plot_kwargs)
+    max_height = max(sum(card.height for card in col) for col in columns)
 
     # -- draw the figure
     width_ratios = [column[0].width for column in columns]
@@ -85,13 +86,14 @@ def flow_layout(
     return figure
 
 
-def flow_layout_columns(plots, max_height=4, **plot_kwargs):
+def flow_layout_columns(plots, max_height=4, same_width_flow=True, **plot_kwargs):
     all_plots = []
     for plot in plots:
-        if isinstance(plot, BasePlot):
-            all_plots.append(plot)
-        elif isinstance(plot, BaseMultiPlot):
+        # duck typing this since isinstance() can be weird with autoreload
+        if callable(getattr(plot, "plots", None)):
             all_plots.extend(plot.plots(**plot_kwargs))
+        elif callable(getattr(plot, "draw", None)):
+            all_plots.append(plot)
         else:
             raise ValueError(f"Not sure what to do with {plot=}")
 
@@ -122,11 +124,11 @@ def flow_layout_columns(plots, max_height=4, **plot_kwargs):
             cards.append(Card(plots[0].kind, width, card_height, card_plots))
     cards = sorted(cards, key=lambda card: card.width)
 
-    # flow the same-width cards over columns
+    # flow the cards over columns
     columns = [[]]
     cur_width = cards[0].width
     for card in cards:
-        if card.width != cur_width:
+        if same_width_flow and card.width != cur_width:
             columns.append([card])
             cur_width = card.width
             continue
