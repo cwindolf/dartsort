@@ -514,10 +514,11 @@ def test_fakedata_nonn():
     templates = np.array(
         [t[:, None] * a[None, :] for t, a in zip((t0, t1, t2, t3), amps)]
     )
-    templates[0] *= 100 / np.abs(templates[0]).max()
-    templates[1] *= 50 / np.abs(templates[0]).max()
-    templates[2] *= 100 / np.abs(templates[0]).max()
-    templates[3] *= 50 / np.abs(templates[0]).max()
+    norm = np.abs(templates[0]).max()
+    templates[0] *= 100 / norm
+    templates[1] *= 50 / norm
+    templates[2] *= 100 / norm
+    templates[3] *= 50 / norm
 
     # make fake spike trains
     spikes_per_unit = 1000
