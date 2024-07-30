@@ -597,7 +597,7 @@ def chunk_time_ranges(recording, chunk_length_samples=None, slice_s=None, divide
         n_chunks = int(max(1, n_chunks))
 
     # evenly divide the recording into chunks
-    assert recording.get_num_segments() == 1
+    # assert recording.get_num_segments() == 1
     if slice is None:
         start_time_s, end_time_s = recording._recording_segments[
             0
@@ -605,7 +605,7 @@ def chunk_time_ranges(recording, chunk_length_samples=None, slice_s=None, divide
         chunk_times_s = np.linspace(start_time_s, end_time_s, num=n_chunks + 1)
     else:
         chunk_times_s = np.linspace(slice_s[0], slice_s[1], num=n_chunks + 1)
-    if divider_samples is not None:
+    if divider_samples is not None and recording is not None:
         divider_s = divider_samples / recording.sampling_frequency
         chunk_times_s[:-1] = (chunk_times_s[:-1] // divider_s) * divider_s
     chunk_time_ranges_s = list(zip(chunk_times_s[:-1], chunk_times_s[1:]))
