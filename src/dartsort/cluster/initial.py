@@ -17,7 +17,7 @@ import numpy as np
 from dartsort.util import job_util
 from dartsort.util.data_util import DARTsortSorting, chunk_time_ranges
 from dartsort.config import ClusteringConfig
-
+from tqdm.auto import tqdm
 from . import cluster_util, density, ensemble_utils, forward_backward, postprocess
 
 
@@ -232,17 +232,18 @@ def cluster_chunks(
     chunk_time_ranges_s = chunk_time_ranges(recording, chunk_length_samples, slice_s)
 
     # cluster each chunk. can be parallelized in the future.
-    sortings = [
-        cluster_chunk(
+    sortings = []
+    for chunk_range in tqdm(chunk_time_ranges_s, desc = "Clustering each chunk"):
+        sortings.append(cluster_chunk(
             peeling_hdf5_filename,
             clustering_config,
             sorting=sorting,
             chunk_time_range_s=chunk_range,
             motion_est=motion_est,
             recording=recording,
-        )
-        for chunk_range in chunk_time_ranges_s
-    ]
+        ))
+    #     for chunk_range in chunk_time_ranges_s
+    # ]
 
     return chunk_time_ranges_s, sortings
 
