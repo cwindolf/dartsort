@@ -360,7 +360,7 @@ def get_templates(
     denoising_tsvd=None,
     denoising_rank=5,
     denoising_fit_radius=75,
-    denoising_spikes_fit=50_000,
+    denoising_spikes_fit=20_000,
     denoising_snr_threshold=50.0,
     min_fraction_at_shift=0.25,
     min_count_at_shift=25,

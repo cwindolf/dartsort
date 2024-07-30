@@ -269,7 +269,7 @@ class SplitMergeConfig:
 
     # -- merge
     merge_template_config: TemplateConfig = TemplateConfig(superres_templates=False)
-    link: str = "complete"
+    linkage: str = "complete"
     merge_distance_threshold: float = 0.33
     cross_merge_distance_threshold: float = 0.5
     min_spatial_cosine: float = 0.5

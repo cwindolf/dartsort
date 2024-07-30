@@ -229,6 +229,10 @@ def cluster_chunks(
         chunk_length_samples = (
             recording.sampling_frequency * clustering_config.chunk_size_s
         )
+    if slice_s is None and recording is not None:
+        slice_s = (0, recording.get_total_duration())
+    elif slice_s is None and sorting is not None:
+        slice_s = (0, sorting.times_seconds.max())
     chunk_time_ranges_s = chunk_time_ranges(recording, chunk_length_samples, slice_s)
 
     # cluster each chunk. can be parallelized in the future.
@@ -348,6 +352,7 @@ def initial_clustering(
     clustering_config=None,
     computation_config=None,
     motion_est=None,
+    slice_s=None,
 ):
     if sorting is None:
         sorting = DARTsortSorting.from_peeling_hdf5(peeling_hdf5_filename)
@@ -361,6 +366,7 @@ def initial_clustering(
         sorting=sorting,
         computation_config=computation_config,
         motion_est=motion_est,
+        slice_s=slice_s,
     )
 
     
