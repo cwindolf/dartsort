@@ -216,6 +216,7 @@ def merge_iterative_templates_with_multiple_chunks(
         )
 
         _, sorting.labels[sorting.labels>-1] = np.unique(sorting.labels[sorting.labels>-1], return_inverse=True)
+        print(f"Split found {sorting.labels.max() + 1} units")
 
         # GC with recomputing template data list 
         sorting, template_data_list, denoising_tsvd = chuck_noisy_template_units_with_time_tracking(
@@ -236,6 +237,7 @@ def merge_iterative_templates_with_multiple_chunks(
             return_denoising_tsvd=True,
         )
 
+        
         print(f"GC found {sorting.labels.max() + 1} units")
 
         sorting, denoising_tsvd = merge_templates_across_multiple_chunks(

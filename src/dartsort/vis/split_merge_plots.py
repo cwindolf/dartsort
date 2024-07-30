@@ -19,10 +19,15 @@ import h5py
 ccolors = np.array(cc.glasbey[:31])
 # %%
 def get_ccolor(k):
-    if k == -1:
-        return "#808080"
+    if isinstance(k, int):
+        if k == -1:
+            return "#808080"
+        else:
+            return ccolors[k % len(ccolors)]
     else:
-        return ccolors[k % len(ccolors)]
+        col_array = ccolors[k % len(ccolors)]
+        col_array[k==-1] = "#808080"
+        return col_array
 
 def check_overmerges_post_deconv_with_smoothed_templates(
     recording,
@@ -1495,6 +1500,7 @@ def check_overmerges(
     raw=False,
     n_col=4,
     n_col_templates=8,
+    sorting_split=None,
 ):
 
     """
@@ -1532,8 +1538,13 @@ def check_overmerges(
         idx_unit = np.flatnonzero(sorting.labels==unit)
         # if unit_labels.max()>len(colors_split):
 
-        ax_ptp_time.scatter(sorting.times_seconds[idx_unit], sorting.denoised_ptp_amplitudes[idx_unit], s=1, c = "blue")
-        ax_z_time.scatter(sorting.times_seconds[idx_unit], sorting.point_source_localizations[idx_unit, 2], s=1, c = "blue")
+        if sorting_split is not None:
+            color_array = get_ccolor(sorting_split.labels[idx_unit])
+        else:
+            color_array='blue'
+            
+        ax_ptp_time.scatter(sorting.times_seconds[idx_unit], sorting.denoised_ptp_amplitudes[idx_unit], s=1, c = color_array)
+        ax_z_time.scatter(sorting.times_seconds[idx_unit], sorting.point_source_localizations[idx_unit, 2], s=1, c = color_array)
 
         med_depth_reg = np.median(sorting.point_source_localizations[idx_unit, 2])
         std_depth_reg = np.median(np.abs(sorting.point_source_localizations[idx_unit, 2] - med_depth_reg))/0.675
@@ -1582,6 +1593,12 @@ def check_overmerges(
             ax_heatmap = fig.add_subplot(gs[2*int(j//n_col)+1:2*int(j//n_col)+3, 4*int(j - n_col*(j//n_col))+3]) 
             
             if len(idx_unit_chunk):
+                
+                if sorting_split is not None:
+                    color_array = get_ccolor(sorting_split.labels[idx_unit_chunk])
+                else:
+                    color_array='blue'
+
                 times_seconds = sorting.times_seconds[idx_unit_chunk]
                 times_samples = sorting.times_samples[idx_unit_chunk]
                 n_spike_chunks = times_seconds.size
@@ -1601,7 +1618,8 @@ def check_overmerges(
                         temp_unit_tpca = tpca_templates_list[j][unit]
                         subtract_tpca_temp = True
                             
-                template_data_chunk = TemplateData.from_npz(data_dir_temp_data / f"chunk_{j}_{template_npz_filename}")
+                # template_data_chunk = TemplateData.from_npz(data_dir_temp_data / f"chunk_{j}_{template_npz_filename}")
+                template_data_chunk = TemplateData.from_npz(data_dir_temp_data / f"{template_npz_filename}")
                 template_data_chunk.templates[np.isnan(template_data_chunk.templates)] = 0
     
                 ax_ptp_time.plot([chunk_range[0], chunk_range[1]], [template_data_chunk.templates[template_data_chunk.unit_ids == unit][0].ptp(0).max(), template_data_chunk.templates[template_data_chunk.unit_ids == unit][0].ptp(0).max()],
@@ -1613,8 +1631,8 @@ def check_overmerges(
                 fr_unit = len(idx_unit_chunk)/(chunk_range[1]-chunk_range[0])
                 ax_fr_time.plot([chunk_range[0], chunk_range[1]], [fr_unit, fr_unit], c = 'k')
                 cmp+=n_spike_chunks
-    
-                ax_loc.scatter(localization_results[:, 0], depth_reg, s=1, c = "blue")
+
+                ax_loc.scatter(localization_results[:, 0], depth_reg, s=1, c = color_array)
                 med_depth_reg = np.median(depth_reg)
                 std_depth_reg = np.median(np.abs(depth_reg - med_depth_reg))/0.675
                 std_depth_reg = max(std_depth_reg, 1)
@@ -1726,8 +1744,12 @@ def check_overmerges(
 
                         if len(no_nans)>1 and chans_no_nans.sum()>1:
                             pcs = PCA(2).fit_transform(waveforms_target_chan[:, :, chans_no_nans].reshape(waveforms_target_chan.shape[0], -1)[no_nans])
-        
-                            ax_pcs.scatter(pcs[:, 0], pcs[:, 1], s=1, c = "blue")
+                            if sorting_split is not None:
+                                color_array = get_ccolor(sorting_split.labels[idx_unit_chunk][idx_subsample][no_nans])
+                            else:
+                                color_array="blue"
+    
+                            ax_pcs.scatter(pcs[:, 0], pcs[:, 1], s=1, c = color_array)
                             ax_pcs.set_title("PCs", fontsize=7)
                         
                             # subsampled wfs to plot
@@ -1736,14 +1758,21 @@ def check_overmerges(
                             waveforms_target_chan = waveforms_target_chan[:, 15:75, :]
 
                             mean_waveforms = np.nanmean(waveforms_target_chan, axis = 0)
-    
+                            
+                            if sorting_split is not None:
+                                color_array = get_ccolor(sorting_split.labels[idx_unit_chunk][idx_subsample])
+                            else:
+                                color_array=np.full(len(idx_subsample), "blue")
+
+                            ax_wfs.axvline(42-15, color = "grey")
+                            ax_wfs.axvline(42-15+60, color = "grey")
                             for k in range(5):
                                 for i in range(waveforms_target_chan.shape[0]):
-                                    ax_wfs.plot(np.arange(120), waveforms_target_chan[i][:, k*2:k*2+2].T.flatten() + k*med_ptp, c = "blue", alpha = 0.05)                                        
+                                    ax_wfs.plot(np.arange(120), waveforms_target_chan[i][:, k*2:k*2+2].T.flatten() + k*med_ptp, c = color_array[i], alpha = 0.05)                                        
                                     if not subtract_tpca_temp: 
-                                        ax_wfs_temp_subtracted.plot(np.arange(120), waveforms_target_chan[i][:, k*2:k*2+2].T.flatten() - temp_chunk[:, k*2:k*2+2].T.flatten() + k*med_ptp, alpha = 0.05, c = "blue")
+                                        ax_wfs_temp_subtracted.plot(np.arange(120), waveforms_target_chan[i][:, k*2:k*2+2].T.flatten() - temp_chunk[:, k*2:k*2+2].T.flatten() + k*med_ptp, alpha = 0.05, c = color_array[i])
                                     else:
-                                        ax_wfs_temp_subtracted.plot(np.arange(120), waveforms_target_chan[i][:, k*2:k*2+2].T.flatten() - temp_unit_tpca[15:75, chans_to_plot_registered_geom].T.flatten() + k*med_ptp, alpha = 0.05, c = "blue")
+                                        ax_wfs_temp_subtracted.plot(np.arange(120), waveforms_target_chan[i][:, k*2:k*2+2].T.flatten() - temp_unit_tpca[15:75, chans_to_plot_registered_geom].T.flatten() + k*med_ptp, alpha = 0.05, c = color_array[i])
                             if overlap_templates:
                                 for k in range(5):
                                     if tpca_templates_list is not None:

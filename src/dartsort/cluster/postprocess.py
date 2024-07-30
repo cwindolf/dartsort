@@ -119,6 +119,7 @@ def chuck_noisy_template_units_with_time_tracking(
     template_npz_filename="template_data.npz",
     overwrite=False,
     return_denoising_tsvd=False,
+    return_realigned_sorting=False,
 ):
     """Get rid of noise units.
 
@@ -144,8 +145,13 @@ def chuck_noisy_template_units_with_time_tracking(
             spike_length_samples=spike_length_samples,
             denoising_tsvd=tsvd,
             return_denoising_tsvd=return_denoising_tsvd,
+            return_realigned_sorting=return_realigned_sorting
         )
-        if return_denoising_tsvd:
+        if return_denoising_tsvd and return_realigned_sorting:
+            template_data_list, sorting, tsvd = res
+        elif return_realigned_sorting:
+            template_data_list, sorting = res
+        elif return_denoising_tsvd:
             template_data_list, tsvd = res
         else:
             template_data_list = res
