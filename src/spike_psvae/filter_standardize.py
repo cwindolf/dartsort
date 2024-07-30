@@ -9,6 +9,9 @@ from spike_psvae import spikeio
 import numpy.fft as fft
 import math
 
+# TODO: Add this for detecting bad channels + interpolating
+from ibldsp import voltage
+
 #ADC shift correction
 def phaseShiftSig(sig, fs, nSamples):
     # % function sig1 = phaseShiftSig(sig, fs, nSamples)
