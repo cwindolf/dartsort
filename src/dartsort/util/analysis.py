@@ -68,8 +68,11 @@ class DARTsortAnalysis:
     merge_distance_kind: str = "rms"
     merge_distance_spatial_radius_a: Optional[float] = None
     merge_distance_min_channel_amplitude: float = 0.0
+    merge_distance_min_spatial_cosine: float = 0.0
     merge_superres_linkage: Callable[[np.ndarray], float] = np.max
     compute_distances: bool = "if_hdf5"
+    n_jobs: int = 0
+    default_channel_index_radius: float = 100.0
 
     # helper constructors
 
@@ -81,8 +84,8 @@ class DARTsortAnalysis:
         motion_est=None,
         name=None,
         template_config=no_realign_template_config,
-        allow_template_reload=False, #CHANGE THIS TO FALSE
-        n_jobs_templates=0,
+        allow_template_reload=False,
+        n_jobs=0,
         denoising_tsvd=None,
         **kwargs,
     ):
@@ -121,7 +124,7 @@ class DARTsortAnalysis:
                 template_config,
                 overwrite=False,
                 motion_est=motion_est,
-                n_jobs=n_jobs_templates,
+                n_jobs=n_jobs,
                 tsvd=denoising_tsvd,
             )
 
@@ -133,6 +136,7 @@ class DARTsortAnalysis:
             featurization_pipeline=featurization_pipeline,
             motion_est=motion_est,
             name=name,
+            n_jobs=n_jobs,
             **kwargs,
         )
 
@@ -293,13 +297,19 @@ class DARTsortAnalysis:
     @property
     def geom(self):
         if self._geom is None:
-            self._geom = self.h5["geom"][:]
+            if self.hdf5_path is not None:
+                self._geom = self.h5["geom"][:]
+            else:
+                self._geom = self.recording.get_channel_locations()
         return self._geom
 
     @property
     def channel_index(self):
         if self._channel_index is None:
-            self._channel_index = self.h5["channel_index"][:]
+            if self.hdf5_path is not None:
+                self._channel_index = self.h5["channel_index"][:]
+            else:
+                self._channel_index = make_channel_index(self.geom, self.default_channel_index_radius)
         return self._channel_index
 
     @property
@@ -542,6 +552,7 @@ class DARTsortAnalysis:
         trough_offset_samples=42,
         spike_length_samples=121,
         channel_dist_p=np.inf,
+        max_chan=None,
         relocated=False,
     ):
         if which is None:
@@ -559,7 +570,7 @@ class DARTsortAnalysis:
             return (
                 which,
                 None,
-                None,
+                max_chan,
                 self.show_geom,
                 self.show_channel_index(
                     channel_show_radius_um=channel_show_radius_um,
@@ -569,42 +580,32 @@ class DARTsortAnalysis:
             )
 
         # read waveforms from disk
-        if self.shifting:
-            load_ci = self.channel_index
-        else:
-            load_ci = self.show_channel_index(
-                channel_show_radius_um=channel_show_radius_um,
-                channel_dist_p=channel_dist_p,
-                max_n_chan=max_n_chan,
-            )
+        read_chans = self.sorting.channels[which]
+        if max_chan is not None:
+            read_chans = np.full_like(read_chans, max_chan)
         waveforms = read_waveforms_channel_index(
             self.recording,
             self.times_samples(which=which),
-            load_ci,
-            self.sorting.channels[which],
+            self.channel_index,
+            read_chans,
             trough_offset_samples=trough_offset_samples,
             spike_length_samples=spike_length_samples,
             fill_value=np.nan,
         )
         waveforms = waveforms.astype(self.template_data.templates.dtype)
-        if not self.shifting:
-            return (
-                which,
-                waveforms,
-                self.geom,
-                load_ci,
-            )
 
         (
             waveforms,
             max_chan,
             show_geom,
             show_channel_index,
-        ) = self.unit_shift_or_relocate_channels(
+        ) = self.unit_select_channels(
             unit_id,
             which,
             waveforms,
-            load_ci,
+            self.channel_index,
+            read_chans=read_chans,
+            max_chan=max_chan,
             channel_show_radius_um=channel_show_radius_um,
             channel_dist_p=channel_dist_p,
             relocated=relocated,
@@ -665,7 +666,7 @@ class DARTsortAnalysis:
             max_chan,
             show_geom,
             show_channel_index,
-        ) = self.unit_shift_or_relocate_channels(
+        ) = self.unit_select_channels(
             unit_id,
             which,
             waveforms,
@@ -766,12 +767,14 @@ class DARTsortAnalysis:
         max_registered_channel = amplitude_template.argmax()
         return max_registered_channel
 
-    def unit_shift_or_relocate_channels(
+    def unit_select_channels(
         self,
         unit_id,
         which,
         waveforms,
         load_channel_index,
+        read_chans=None,
+        max_chan=None,
         channel_show_radius_um=75,
         channel_dist_p=np.inf,
         relocated=False,
@@ -785,8 +788,13 @@ class DARTsortAnalysis:
             max_n_chan=max_n_chan,
         )
 
-        # max_chan = self.unit_max_channel(unit_id)
-        max_chan = self.get_registered_channels(which)
+        if read_chans is None:
+            read_chans = self.sorting.channels[which]
+        if max_chan is None:
+            if self.shifting:
+                max_chan = self.get_registered_channels(which)
+            else:
+                max_chan = self.unit_max_channel(unit_id)
 
         show_chans = show_channel_index[max_chan]
         show_chans = show_chans[show_chans < len(show_geom)]
@@ -795,13 +803,10 @@ class DARTsortAnalysis:
             show_chans[None], (len(show_geom), show_chans.size)
         )
 
-        if not self.shifting:
-            return waveforms, max_chan, show_geom, show_channel_index
-
         if relocated:
             waveforms = relocate.relocated_waveforms_on_static_channels(
                 waveforms,
-                main_channels=self.sorting.channels[which],
+                main_channels=read_chans,
                 channel_index=load_channel_index,
                 xyza_from=self.xyza[which],
                 target_channels=show_chans,
@@ -811,19 +816,21 @@ class DARTsortAnalysis:
             )
             return waveforms, max_chan, show_geom, show_channel_index
 
-        n_pitches_shift = get_spike_pitch_shifts(
-            self.z(which=which, registered=False),
-            geom=geom,
-            registered_depths_um=self.z(which=which, registered=True),
-            times_s=self.times_seconds(which=which),
-            motion_est=self.motion_est,
-        )
+        n_pitches_shift = None
+        if self.shifting:
+            n_pitches_shift = get_spike_pitch_shifts(
+                self.z(which=which, registered=False),
+                geom=geom,
+                registered_depths_um=self.z(which=which, registered=True),
+                times_s=self.times_seconds(which=which),
+                motion_est=self.motion_est,
+            )
 
         waveforms = get_waveforms_on_static_channels(
             waveforms,
             geom=geom,
             n_pitches_shift=n_pitches_shift,
-            main_channels=self.sorting.channels[which],
+            main_channels=read_chans,
             channel_index=load_channel_index,
             target_channels=show_chans,
             registered_geom=show_geom,
@@ -867,8 +874,9 @@ class DARTsortAnalysis:
             distance_kind=self.merge_distance_kind,
             spatial_radius_a=self.merge_distance_spatial_radius_a,
             min_channel_amplitude=self.merge_distance_min_channel_amplitude,
+            min_spatial_cosine=self.merge_distance_min_spatial_cosine,
             device=self.device,
-            n_jobs=0,
+            n_jobs=self.n_jobs,
         )
         assert np.array_equal(units, self.coarse_template_data.unit_ids)
         self.merge_dist = dists
