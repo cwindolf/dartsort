@@ -124,7 +124,7 @@ class DARTsortGroundTruthComparison:
         )
         self._template_distances = dists
 
-    def _calculate_unsorted_detection(self):
+    def _calculate_unsorted_detection(self, return_has_match = False):
         if self._unsorted_detection is not None:
             return
         if self.verbose:
@@ -151,6 +151,9 @@ class DARTsortGroundTruthComparison:
         d, i = tested_kdtree.query(gt_coord, p=4, distance_upper_bound=1 + 1e-6, workers=4)
         has_match = i < tested_kdtree.n
         self._unsorted_detection = has_match
+        
+        if return_has_match:
+            return has_match
 
     def get_spikes_by_category(self, gt_unit, tested_unit=None):
         # TODO
