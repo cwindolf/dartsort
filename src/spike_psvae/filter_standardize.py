@@ -9,8 +9,10 @@ from spike_psvae import spikeio
 import numpy.fft as fft
 import math
 
-# TODO: Add this for detecting bad channels + interpolating
+# for interpolating channels
 from ibldsp import voltage
+
+
 
 #ADC shift correction
 def phaseShiftSig(sig, fs, nSamples):
@@ -72,15 +74,43 @@ def shiftWF(thisWF):
     
     return newWF
 
+def detect_bad_channels(mean_sd, z_score=3.29):
+    """
+    This function detects bad channels based on median + centers
+    mean_sd: std and centers of all channels
+    z_score=3.32 corresponds to a confidence interval of 0.999
+    """
+
+    mad_centers = np.median(mean_sd['centers'])
+    mad = np.median(np.abs(mean_sd['centers'] - np.median(mean_sd['centers'])))
+    conf_int = z_score*np.median(np.abs(mean_sd['centers'] - np.median(mean_sd['centers'])))/0.675
+    
+    noisy_chans = np.where(np.abs(mean_sd['centers']-mad_centers)>conf_int)[0]
+    
+    mad_centers = np.median(mean_sd['sd'])
+    mad = np.median(np.abs(mean_sd['sd'] - np.median(mean_sd['sd'])))
+    conf_int = z_score*np.median(np.abs(mean_sd['sd'] - np.median(mean_sd['sd'])))/0.675
+    
+    dead_chans = np.where(np.abs(mean_sd['sd']-mad_centers)>conf_int)[0]
+
+    n_channels = len(mean_sd["centers"])
+
+    channel_labels = np.zeros(n_channels)
+    channel_labels[noisy_chans] = 1
+    channel_labels[dead_chans] = 2
+
+    return channel_labels
+
+
 def filter_standardize_rec_mp(output_directory, filename_raw, dtype_raw,
-    rec_len_sec, n_channels = 384,
+    rec_len_sec, geom, n_channels = 384,
     dtype_output = np.float32,
     apply_filter = True,
     low_frequency =300, high_factor = 0.1, order = 3, sampling_frequency= 30000, 
     channels_to_remove=None,
     buffer = None, t_start=0, t_end=None,
     n_sec_chunk=1, multi_processing = True, n_jobs = 1, overwrite = True,
-    adcshift_correction=False, median_subtraction=False, no_standardize=True):
+    adcshift_correction=False, median_subtraction=False, no_standardize=True, interpolate_bad_channels=True):
     """Preprocess pipeline: filtering, standarization and whitening filter
     This step (optionally) performs filtering on the data, standarizes it
     and computes a whitening filter. Filtering and standardized data are
@@ -130,6 +160,10 @@ def filter_standardize_rec_mp(output_directory, filename_raw, dtype_raw,
         get_std(small_batch, sampling_frequency,
                 fname_mean_sd, apply_filter,
                 low_frequency, high_factor, order)
+    
+    channel_labels=None
+    if interpolate_bad_channels:
+        channel_labels = detect_bad_channels(np.load(fname_mean_sd))
 
     # turn it off
     small_batch = None
@@ -174,6 +208,7 @@ def filter_standardize_rec_mp(output_directory, filename_raw, dtype_raw,
             n_channels, 
             buffer,
             rec_len, 
+            geom,
             low_frequency,
             high_factor,
             order,
@@ -182,6 +217,7 @@ def filter_standardize_rec_mp(output_directory, filename_raw, dtype_raw,
             adcshift_correction,
             median_subtraction,
             no_standardize,
+            channel_labels,
         )
     else:
         mp_object = multi_proc_object(
@@ -194,6 +230,7 @@ def filter_standardize_rec_mp(output_directory, filename_raw, dtype_raw,
             n_channels, 
             buffer,
             rec_len, 
+            geom,
             low_frequency,
             high_factor,
             order,
@@ -202,6 +239,7 @@ def filter_standardize_rec_mp(output_directory, filename_raw, dtype_raw,
             adcshift_correction,
             median_subtraction,
             no_standardize,
+            channel_labels,
         )
         
         with ctx.Pool(
@@ -222,14 +260,14 @@ def filter_standardize_rec_mp(output_directory, filename_raw, dtype_raw,
     return standardized_path, standardized_params['dtype']
 
 def restandardize_preprocess_rec_mp(output_directory, filename_raw, dtype_raw,
-    rec_len_sec, n_channels = 384,
+    rec_len_sec, geom, n_channels = 384,
     dtype_output = np.float32,
     apply_filter = True,
     low_frequency =300, high_factor = 0.1, order = 3, sampling_frequency= 30000, 
     channels_to_remove=None,
     buffer = None, t_start=0, t_end=None,
     n_sec_chunk=1, multi_processing = True, n_jobs = 1, overwrite = True,
-    adcshift_correction=False, median_subtraction=False, no_standardize=True):
+    adcshift_correction=False, median_subtraction=False, no_standardize=True, interpolate_bad_channels=True):
     """Preprocess pipeline: filtering, standarization and whitening filter
     This step (optionally) performs filtering on the data, standarizes it
     and computes a whitening filter. Filtering and standardized data are
@@ -275,7 +313,10 @@ def restandardize_preprocess_rec_mp(output_directory, filename_raw, dtype_raw,
     fname_mean_sd = os.path.join(
         output_directory, 'mean_and_standard_dev_value.npz')
 
-    
+    channel_labels=None
+    if interpolate_bad_channels:
+        channel_labels = detect_bad_channels(np.load(fname_mean_sd))
+
     if overwrite or not os.path.exists(fname_mean_sd):
         restandardize_get_std(small_batch, sampling_frequency,
                 fname_mean_sd, apply_filter,
@@ -344,6 +385,7 @@ def restandardize_preprocess_rec_mp(output_directory, filename_raw, dtype_raw,
         n_channels, 
         buffer,
         rec_len, 
+        geom,
         low_frequency,
         high_factor,
         order,
@@ -352,6 +394,7 @@ def restandardize_preprocess_rec_mp(output_directory, filename_raw, dtype_raw,
         adcshift_correction,
         median_subtraction,
         no_standardize,
+        channel_labels,
     )
     
     with ctx.Pool(
@@ -385,6 +428,7 @@ class multi_proc_object:
         n_channels, 
         buffer,
         rec_len, 
+        geom,
         low_frequency,
         high_factor,
         order,
@@ -393,6 +437,7 @@ class multi_proc_object:
         adcshift_correction,
         median_subtraction,
         no_standardize,
+        channel_labels,
     ):
         
         self.filename_raw = filename_raw
@@ -404,6 +449,7 @@ class multi_proc_object:
         self.n_channels = n_channels 
         self.buffer = buffer
         self.rec_len = rec_len 
+        self.geom = geom
         self.low_frequency = low_frequency
         self.high_factor = high_factor
         self.order = order
@@ -412,6 +458,7 @@ class multi_proc_object:
         self.adcshift_correction = adcshift_correction
         self.median_subtraction = median_subtraction
         self.no_standardize = no_standardize
+        self.channel_labels = channel_labels
 
     def filter_standardize_batch_mp(self, batch_id):
         filter_standardize_batch(
@@ -424,6 +471,7 @@ class multi_proc_object:
             self.n_channels, 
             self.buffer,
             self.rec_len, 
+            self.geom,
             self.low_frequency,
             self.high_factor,
             self.order,
@@ -432,6 +480,7 @@ class multi_proc_object:
             self.adcshift_correction,
             self.median_subtraction,
             self.no_standardize,
+            self.channel_labels,
         )        
         
     def filter_standardize_batch_mp_restandardize(self, batch_id):
@@ -445,6 +494,7 @@ class multi_proc_object:
             self.n_channels, 
             self.buffer,
             self.rec_len, 
+            self.geom,
             self.low_frequency,
             self.high_factor,
             self.order,
@@ -453,6 +503,7 @@ class multi_proc_object:
             self.adcshift_correction,
             self.median_subtraction,
             self.no_standardize,
+            self.channel_labels,
         )        
         
         
@@ -466,6 +517,7 @@ def filter_standardize_for_loop(all_batches,
             n_channels, 
             buffer,
             rec_len, 
+            geom,
             low_frequency,
             high_factor,
             order,
@@ -474,6 +526,7 @@ def filter_standardize_for_loop(all_batches,
             adcshift_correction,
             median_subtraction,
             no_standardize,
+            channel_labels,
         ):
     
     for batch_id in all_batches:
@@ -488,6 +541,7 @@ def filter_standardize_for_loop(all_batches,
             n_channels, 
             buffer,
             rec_len, 
+            geom,
             low_frequency,
             high_factor,
             order,
@@ -496,18 +550,19 @@ def filter_standardize_for_loop(all_batches,
             adcshift_correction,
             median_subtraction,
             no_standardize,
+            channel_labels,
         )
 
 # %%
 def filter_standardize_rec(output_directory, filename_raw, dtype_raw,
-    rec_len_sec, n_channels = 384,
+    rec_len_sec, geom, n_channels = 384,
     dtype_output = np.float32,
     apply_filter = True,
     low_frequency =300, high_factor = 0.1, order = 3, sampling_frequency= 30000, 
     channels_to_remove=None,
     buffer = None, t_start=0, t_end=None,
     n_sec_chunk=1, multi_processing = True, n_processors = 6, overwrite = True,
-    adcshift_correction=False, median_subtraction=True, no_standardize=True):
+    adcshift_correction=False, median_subtraction=True, no_standardize=True, interpolate_bad_channels=True):
     """Preprocess pipeline: filtering, standarization and whitening filter
     This step (optionally) performs filtering on the data, standarizes it
     and computes a whitening filter. Filtering and standardized data are
@@ -557,6 +612,10 @@ def filter_standardize_rec(output_directory, filename_raw, dtype_raw,
         get_std(small_batch, sampling_frequency,
                 fname_mean_sd, apply_filter,
                 low_frequency, high_factor, order)
+    
+    channel_labels=None
+    if interpolate_bad_channels:
+        channel_labels = detect_bad_channels(np.load(fname_mean_sd))
 
     # turn it off
     small_batch = None
@@ -587,6 +646,7 @@ def filter_standardize_rec(output_directory, filename_raw, dtype_raw,
             n_channels, 
             buffer,
             rec_len, 
+            geom,
             low_frequency,
             high_factor,
             order,
@@ -595,6 +655,7 @@ def filter_standardize_rec(output_directory, filename_raw, dtype_raw,
             adcshift_correction,
             median_subtraction,
             no_standardize,
+            channel_labels,
         )
 
     # Merge the chunk filtered files and delete the individual chunks
@@ -708,10 +769,10 @@ def _standardize(rec, sd=None, centers=None, no_standardize=True):
 # %%
 def filter_standardize_batch_restandardize(batch_id, bin_file, fname_mean_sd,
                              apply_filter, dtype_input, out_dtype, output_directory,
-                             n_channels, buffer, rec_len,
+                             n_channels, buffer, rec_len, geom,
                              low_frequency=None, high_factor=None,
                              order=None, sampling_frequency=None, channels_to_remove=None,
-                             adcshift_correction=False,median_subtraction=True,no_standardize=True):
+                             adcshift_correction=False,median_subtraction=True,no_standardize=True, channel_labels=None):
     """Butterworth filter for a one dimensional time series
     Parameters
     ----------
@@ -779,10 +840,17 @@ def filter_standardize_batch_restandardize(batch_id, bin_file, fname_mean_sd,
     ts = _standardize(ts, sd, centers, no_standardize)
     if channels_to_remove is not None:
         ts = np.delete(ts, channels_to_remove, axis=1)
+        if channel_labels is not None:
+            channel_labels = np.delete(channel_labels, channels_to_remove)
     if adcshift_correction:
         ts = shiftWF(ts.T).T
     if median_subtraction:
         ts = ts - np.median(ts, axis = 1)[:, None]
+
+    # Here input needs to be (nc,ns)
+    ts = voltage.interpolate_bad_channels(ts.T, channel_labels, x=geom[:, 0], y=geom[:, 1])
+    ts = ts.T
+
     # save
     fname = os.path.join(
         output_directory,
@@ -801,10 +869,10 @@ def filter_standardize_batch_restandardize(batch_id, bin_file, fname_mean_sd,
 # %%
 def filter_standardize_batch(batch_id, bin_file, fname_mean_sd,
                              apply_filter, dtype_input, out_dtype, output_directory,
-                             n_channels, buffer, rec_len,
+                             n_channels, buffer, rec_len, geom,
                              low_frequency=None, high_factor=None,
                              order=None, sampling_frequency=None, channels_to_remove=None,
-                             adcshift_correction=False,median_subtraction=True,no_standardize=True):
+                             adcshift_correction=False,median_subtraction=True,no_standardize=True,channel_labels=None):
     """Butterworth filter for a one dimensional time series
     Parameters
     ----------
@@ -863,12 +931,19 @@ def filter_standardize_batch(batch_id, bin_file, fname_mean_sd,
     sd = temp['sd']
     centers = temp['centers']
     ts = _standardize(ts, sd, centers, no_standardize)
+    
     if channels_to_remove is not None:
         ts = np.delete(ts, channels_to_remove, axis=1)
+        if channel_labels is not None:
+            channel_labels = np.delete(channel_labels, channels_to_remove)
     if adcshift_correction:
         ts = shiftWF(ts.T).T
     if median_subtraction:
         ts = ts - np.median(ts, axis = 1)[:, None]
+    # Here input needs to be (nc,ns)
+    ts = voltage.interpolate_bad_channels(ts.T, channel_labels, x=geom[:, 0], y=geom[:, 1])
+    ts = ts.T
+    
     # save
     fname = os.path.join(
         output_directory,
