@@ -1,11 +1,12 @@
 import numpy as np
 import warnings
-from spikeinterface.core import BaseRecording, BaseRecordingSegment
+from spikeinterface.core import BaseRecording, BaseRecordingSegment, Templates
 from spikeinterface.core.core_tools import define_function_from_class
 from spikeinterface.extractors import NumpySorting
-from spikeinterface.generation.drift_tools import InjectDriftingTemplatesRecording
+from spikeinterface.generation.drift_tools import InjectDriftingTemplatesRecording, DriftingTemplates, move_dense_templates
 from spikeinterface.preprocessing.basepreprocessor import (
     BasePreprocessor, BasePreprocessorSegment)
+from probeinterface import Probe
 
 from ..templates import TemplateData
 from .analysis import DARTsortAnalysis
@@ -38,7 +39,11 @@ def get_drifty_hybrid_recording(
     rg = np.random.default_rng(seed=seed)
 
     if peak_channels is None:
-        raise(NotImplementedError, "Autodetection of peak channels not implemented yet.")
+        (central_disp_index,) = np.flatnonzero(
+            np.all(templates.displacements == 0, 1)
+        )
+        central_templates = templates.templates_array_moved[central_disp_index]
+        peak_channels = central_templates.ptp(1).argmax(1)
 
     if sorting is None:
         sorting = get_sorting(num_units, recording, firing_rates=firing_rates, rg=rg, spike_length_samples=templates.num_samples)
@@ -66,7 +71,7 @@ def get_drifty_hybrid_recording(
     if not sorting.check_serializability(type='json'):
         warnings.warn("Your sorting is not serializable, which could lead to problems later.")
 
-    return InjectDriftingTemplatesRecording(
+    rec = InjectDriftingTemplatesRecording(
         sorting=sorting,
         drifting_templates=templates,
         parent_recording=recording,
@@ -75,6 +80,8 @@ def get_drifty_hybrid_recording(
         displacement_unit_factor=displacement_unit_factor,
         amplitude_factor=amplitude_factor
     )
+    rec.annotate(peak_channel=peak_channels.tolist())
+    return rec
 
 
 def get_sorting(num_units, recording, firing_rates=None, rg=0, nbefore=42, spike_length_samples=128):
@@ -193,6 +200,38 @@ def refractory_poisson_spike_train(
     assert spike_samples.size
 
     return spike_samples
+
+
+def precompute_displaced_registered_templates(
+    template_data: TemplateData,
+    geometry: np.array,
+    displacements: np.array,
+    sampling_frequency: float = 30000,
+    template_subset=slice(None),
+) -> DriftingTemplates:
+    """Use spikeinterface tools to turn templates on registered geom into
+    precomputed drifting templates on the regular geom.
+    """
+    source_probe = Probe(ndim=template_data.registered_geom.ndim)
+    source_probe.set_contacts(positions=template_data.registered_geom)
+    target_probe = Probe(ndim=geometry.ndim)
+    target_probe.set_contacts(positions=geometry)
+
+    shifted_templates = move_dense_templates(
+        templates_array=template_data.templates[template_subset],
+        displacements=displacements,
+        source_probe=source_probe,
+        dest_probe=target_probe,
+    )
+
+    ret = DriftingTemplates.from_precomputed_templates(
+        templates_array_moved=shifted_templates,
+        displacements=displacements,
+        sampling_frequency=sampling_frequency,
+        nbefore=template_data.trough_offset_samples,
+        probe=target_probe,
+    )
+    return ret
 
 
 def sorting_from_times_labels(times, labels, recording=None, sampling_frequency=None,  determine_channels=True, template_config=unshifted_raw_template_config, n_jobs=0):
