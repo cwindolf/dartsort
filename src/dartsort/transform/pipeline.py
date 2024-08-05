@@ -47,13 +47,18 @@ class WaveformPipeline(torch.nn.Module):
             return waveforms, features
 
         for transformer in self.transformers:
-            if transformer.is_featurizer:
+            if transformer.is_featurizer and transformer.is_denoiser:
+                waveforms, new_features = transformer(waveforms, max_channels=max_channels)
+                features.update(new_features)
+
+            elif transformer.is_featurizer:
                 features.update(
                     transformer.transform(
                         waveforms, max_channels=max_channels
                     )
                 )
-            if transformer.is_denoiser:
+
+            elif transformer.is_denoiser:
                 waveforms = transformer(waveforms, max_channels=max_channels)
 
         return waveforms, features
