@@ -70,6 +70,9 @@ class BaseWaveformFeaturizer(BaseWaveformModule):
             )
             return (dataset,)
 
+class BaseWaveformAutoencoder(BaseWaveformDenoiser, BaseWaveformFeaturizer):
+    pass
+
 
 class IdentityWaveformDenoiser(BaseWaveformDenoiser):
     def forward(self, waveforms, max_channels=None):
