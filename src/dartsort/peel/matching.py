@@ -132,7 +132,6 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
             upsampling_peak_window_radius=self.upsampling_peak_window_radius,
             svd_compression_rank=self.svd_compression_rank,
             min_channel_amplitude=self.min_channel_amplitude,
-            dtype=self.recording.dtype,
             overwrite=overwrite,
             n_jobs=n_jobs,
             device=device,
@@ -228,11 +227,11 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
         upsampling_peak_window_radius=8,
         svd_compression_rank=10,
         min_channel_amplitude=1.0,
-        dtype=np.float32,
         overwrite=False,
         n_jobs=0,
         device=None,
     ):
+        dtype = template_data.templates.dtype
         low_rank_templates = template_util.svd_compress_templates(
             template_data.templates,
             min_channel_amplitude=min_channel_amplitude,
