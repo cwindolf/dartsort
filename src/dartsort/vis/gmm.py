@@ -1,17 +1,19 @@
 from pathlib import Path
 
 import matplotlib.pyplot as plt
+import seaborn as sns
 from matplotlib.collections import LineCollection
 import numpy as np
 import torch
 from tqdm.auto import tqdm
+from scipy.spatial import KDTree
 
 from ..cluster import density
+from dartsort.cluster.modes import smoothed_dipscore_at
 from .colors import glasbey1024
 from . import analysis_plots, layout
 from ..util.multiprocessing_util import CloudpicklePoolExecutor, get_pool
 from .waveforms import geomplot
-from ..util.waveform_util import grab_main_channels
 
 try:
     from ephysx import spike_interp
@@ -867,7 +869,6 @@ class InputWaveformsSingleChanPlot(GMMPlot):
         time_range = self.time_range
         if time_range is None:
             time_range = times.min(), times.max()
-        chans = gmm.data.channels[in_unit[wh]]
         waveforms = utd["waveforms"][wh]
         waveform_channels = utd["waveform_channels"][wh]
 
@@ -1182,7 +1183,7 @@ class GMMMergePlot(GMMPlot):
 class NearbyTimesVAmps(GMMMergePlot):
     kind = "wall"
     width = 3
-    height = 2
+    height = 1.5
 
     def __init__(self, n_neighbors=5):
         self.n_neighbors = n_neighbors
@@ -1201,7 +1202,7 @@ class NearbyTimesVAmps(GMMMergePlot):
 class ViolatorTimesVAmps(GMMPlot):
     kind = "wide"
     width = 3
-    height = 2
+    height = 1.5
 
     def __init__(self, n_neighbors=5, viol_ms=1.0):
         self.n_neighbors = n_neighbors
@@ -1228,7 +1229,7 @@ class ViolatorTimesVAmps(GMMPlot):
 class ViolatorTimesVBadness(GMMPlot):
     kind = "vwide"
     width = 3
-    height = 2
+    height = 1.5
 
     def __init__(self, n_neighbors=5, viol_ms=1.0):
         self.n_neighbors = n_neighbors
@@ -1266,7 +1267,7 @@ class ViolatorTimesVBadness(GMMPlot):
 class NearbyTimesVBadness(GMMMergePlot):
     kind = "vwall"
     width = 3
-    height = 2
+    height = 1.5
 
     def __init__(self, n_neighbors=5):
         self.n_neighbors = n_neighbors
@@ -1292,7 +1293,7 @@ class NearbyTimesVBadness(GMMMergePlot):
 
 class NearbyMeansSingleChan(GMMMergePlot):
     kind = "small"
-    width = 3
+    width = 2
     height = 2
 
     def __init__(self, fitted_only=True, n_neighbors=5):
@@ -1373,39 +1374,149 @@ class NearbyMeansMultiChan(GMMMergePlot):
 class NeighborBimodality(GMMMergePlot):
     kind = "vtall"
     width = 3
-    height = 8
-    
-    def __init__(self, n_neighbors=5, badness_kind="1-r^2"):
+    height = 10
+
+    def __init__(self, n_neighbors=5, badness_kind="1-r^2", do_reg=False, masked=False, mask_radius_s=5.0):
         self.n_neighbors = n_neighbors
         self.badness_kind = badness_kind
+        self.do_reg = do_reg
+        self.masked = masked
+        self.mask_radius_s = mask_radius_s
 
     def draw(self, panel, gmm, unit_id):
-        neighbors = self.get_neighbors(gmm, unit_id, reversed=True)
+        from isosplit import isocut, dipscore_at
+        (in_self,) = torch.nonzero(gmm.labels == unit_id, as_tuple=True)
+        neighbors = self.get_neighbors(gmm, unit_id)
+        # remove self
+        neighbors = neighbors[1:]
+        axes = panel.subplots(nrows=self.n_neighbors, ncols=2 + self.do_reg, squeeze=False)
+        for row in axes[len(neighbors):]:
+            row[0].axis("off")
+            row[1].axis("off")
 
+        if self.masked:
+            times_self = gmm.data.times_seconds[in_self][:, None]
+            kdtree_self = KDTree(times_self.numpy(force=True))
 
+        for u, row in zip(neighbors, axes):
+            (inu,) = torch.nonzero(gmm.labels == u, as_tuple=True)
+
+            if self.masked:
+                times_u = gmm.data.times_seconds[inu][:, None]
+                kdtree_u = KDTree(times_u.numpy(force=True))
+
+                self_matched = np.isfinite(
+                    kdtree_u.query(times_self, distance_upper_bound=self.mask_radius_s)[0]
+                )
+                u_matched = np.isfinite(
+                    kdtree_self.query(times_u,  distance_upper_bound=self.mask_radius_s)[0]
+                )
+                in_self_local = in_self.numpy(force=True)[self_matched]
+                inu_local = inu.numpy(force=True)[u_matched]
+            else:
+                in_self_local = in_self.numpy(force=True)
+                inu_local = inu.numpy(force=True)
+            nu = inu_local.size
+            ns = in_self_local.size
+
+            if min(nu, ns) < 2:
+                continue
+
+            which = np.concatenate((in_self_local, inu_local))
+            order = np.argsort(which)
+            which = which[order]
+            identity = np.zeros_like(which)
+            ntot = ns + nu
+            identity[:ns] = unit_id
+            identity[ns:] = u
+            identity = identity[order]
+            sample_weights = np.zeros(which.shape)
+            sample_weights[:ns] = (nu / ntot) / 0.5
+            sample_weights[ns:] = (ns / ntot) / 0.5
+            sample_weights = sample_weights[order]
+
+            badness = gmm.reassignment_divergences(
+                which_spikes=torch.from_numpy(which).to(gmm.labels),
+                unit_ids=[unit_id, u],
+                show_progress=False,
+                kind=self.badness_kind,
+            )
+            a = np.full(badness.shape, np.inf)
+            a[badness.coords] = badness.data
+            a = np.nan_to_num(a, nan=1.0, posinf=1.0, copy=False)
+            self_badness, u_badness = a
+
+            row[0].scatter(
+                u_badness,
+                self_badness,
+                c=glasbey1024[identity % len(glasbey1024)],
+                s=4,
+                lw=0,
+                alpha=0.5,
+            )
+            row[0].set_title(f"{ns=} {nu=}", fontsize=6)
+            row[0].set_xlabel(f"{u}: {self.badness_kind}")
+            row[0].set_ylabel(f"{unit_id}: {self.badness_kind}")
+
+            # closer to me = self_badness < u_badness = u_badness - self_badness > 0 = to the right
+            dbad = u_badness - self_badness
+            unique_dbad, inverse, counts = np.unique(dbad, return_counts=True, return_inverse=True)
+            weights = counts.copy().astype(float)
+            weights = np.zeros(counts.shape)
+            np.add.at(weights, inverse, sample_weights)
+
+            row[1].axvline(0, lw=1, color="k")
+
+            n, bins, patches = row[1].hist(dbad, bins=64, histtype="step", color="b", density=True)
+            row[1].hist(unique_dbad, bins=bins, histtype="step", color="b", linestyle=":", density=True)
+            row[1].hist(unique_dbad, weights=weights, bins=bins, histtype="step", color="r", density=True)
+
+            ds_ud, x, m, m_ud = smoothed_dipscore_at(0, unique_dbad, sample_weights=counts.astype(float))
+            row[1].plot(x, m, color="g", lw=1)
+            row[1].plot(x, m_ud, color="g", lw=1, ls=(0, (0.5, 0.5)))
+            ds_udw, xw, mw, m_udw = smoothed_dipscore_at(0, unique_dbad, sample_weights=weights)
+            row[1].plot(xw, mw, color="orange", lw=1)
+            row[1].plot(xw, m_udw, color="orange", lw=1, ls=(0, (0.5, 0.5)))
+
+            ds_ud = f"{ds_ud:0.3f}".lstrip("0").rstrip("0")
+            ds_udw = f"{ds_udw:0.3f}".lstrip("0").rstrip("0")
+            mstr = "masked " if self.masked else ""
+            row[1].set_title(f"{mstr} u{ds_ud} uw{ds_udw}", fontsize=7)
+
+            if self.do_reg:
+                sns.regplot(
+                    x=dbad,
+                    y=identity == u,
+                    logistic=True,
+                    color="k",
+                    ax=row[2],
+                    ci=None,
+                )
+
+                
 class NearbyDivergencesMatrix(GMMMergePlot):
     kind = "amatrix"
-    width = 3
-    height = 3
+    width = 2
+    height = 2
 
     def __init__(
         self,
-        merge_metric=None,
         cmap=plt.cm.rainbow,
         dist_vmax=1,
         merge_on_waveform_radius=True,
         n_neighbors=5,
         show_values=True,
+        badness_kind="1-r^2",
     ):
-        self.merge_metric = merge_metric
         self.cmap = cmap
         self.dist_vmax = dist_vmax
         self.merge_on_waveform_radius = merge_on_waveform_radius
         self.n_neighbors = n_neighbors
         self.show_values = show_values
+        self.badness_kind = badness_kind
 
     def draw(self, panel, gmm, unit_id):
-        kind = self.merge_metric
+        kind = self.badness_kind
         if kind is None:
             kind = gmm.merge_metric
         min_overlap = gmm.min_overlap
@@ -1460,13 +1571,13 @@ class NearbyDivergencesMatrix(GMMMergePlot):
             tx.set_color(glasbey1024[neighbors[i]])
             ty.set_color(glasbey1024[neighbors[i]])
         chanstr = "reas" if self.merge_on_waveform_radius else "unit"
-        title = f"{gmm.merge_metric} ({chanstr} chans)"
+        title = f"{kind} ({chanstr} chans)"
         axis.set_title(title)
 
 
 class ISICorner(GMMMergePlot):
     kind = "corner"
-    width = 4
+    width = 6
     height = 5
 
     def __init__(self, n_neighbors=5, bin_ms=0.1, max_ms=5, tick_step=1):
@@ -1484,8 +1595,9 @@ class ISICorner(GMMMergePlot):
             nrows=len(neighbors),
             ncols=len(neighbors),
             sharex=True,
-            sharey="row",
+            sharey=False,
             squeeze=False,
+            gridspec_kw=dict(hspace=0),
         )
         bin_edges = np.arange(0, self.max_ms + self.bin_ms, self.bin_ms)
         for i, ua in enumerate(neighbors):
@@ -1499,19 +1611,17 @@ class ISICorner(GMMMergePlot):
             axes[i, i].text(
                 0.5,
                 0.9,
-                f"{ua}: {times_s_a.size} tot sp",
+                f"{ua}: {times_s_a.size}sp",
                 color="k",
                 fontsize=5,
                 ha="center",
                 transform=axes[i, i].transAxes,
-                backgroundcolor=(1, 1, 1, 0.5),
+                backgroundcolor=(1, 1, 1, 0.75),
             )
 
             for j, ub in enumerate(neighbors):
                 if j > i:
                     axes[i, j].axis("off")
-                if j == 0:
-                    axes[i, j].set_ylabel(f"count")
                 if j >= i:
                     continue
 
@@ -1523,10 +1633,22 @@ class ISICorner(GMMMergePlot):
                 dt_ms_ab = np.diff(times_s_ab) * 1000
                 counts, bin_edges = np.histogram(dt_ms_ab, bin_edges)
                 axes[i, j].stairs(counts, bin_edges, color="k", fill=True)
+                # axes[i, j].set_yticks([])
+                axes[i, j].set_ylim([0, max(1, counts.max())])
+                # axes[i, j].text(
+                #     0.1,
+                #     0.9,
+                #     f"{counts.max()}",
+                #     color="k",
+                #     fontsize=5,
+                #     ha="center",
+                #     transform=axes[i, j].transAxes,
+                #     backgroundcolor=(1, 1, 1, 0.75),
+                # )
 
                 if i == len(neighbors) - 1:
                     axes[i, j].set_xlabel("isi (ms)")
-                axes[i, j].set_xticks(np.arange(0, self.max_ms + 1, self.tick_step))
+                axes[i, j].set_xticks(np.arange(0, self.max_ms + self.tick_step, self.tick_step))
 
 
 default_gmm_plots = (
@@ -1561,11 +1683,16 @@ gmm_merge_plots = (
     ViolatorTimesVAmps(),
     NearbyTimesVAmps(),
     NearbyDivergencesMatrix(merge_on_waveform_radius=True),
+    NearbyDivergencesMatrix(merge_on_waveform_radius=True, badness_kind="1-scaledr^2"),
     NearbyDivergencesMatrix(merge_on_waveform_radius=False),
+    NearbyDivergencesMatrix(merge_on_waveform_radius=False, badness_kind="1-scaledr^2"),
     ViolatorTimesVBadness(),
     NearbyTimesVBadness(),
-    ISICorner(),
-    ISICorner(bin_ms=1, max_ms=25, tick_step=5),
+    ISICorner(bin_ms=0.25),
+    ISICorner(bin_ms=0.5, max_ms=8, tick_step=2),
+    NeighborBimodality(),
+    NeighborBimodality(badness_kind="1-r^2", masked=True),
+    NeighborBimodality(badness_kind="1-scaledr^2"),
 )
 
 
@@ -1604,11 +1731,12 @@ def make_all_gmm_merge_summaries(
     save_folder,
     plots=gmm_merge_plots,
     max_height=11,
-    figsize=(18, 10),
+    figsize=(22, 10),
+    dpi=250,
     **kwargs,
 ):
     return make_all_gmm_summaries(
-        gmm, save_folder, plots=plots, max_height=max_height, figsize=figsize, **kwargs
+        gmm, save_folder, plots=plots, max_height=max_height, figsize=figsize, dpi=dpi, **kwargs
     )
 
 
@@ -1754,6 +1882,7 @@ def _summary_job(unit_id):
 
         print("// error in unit", unit_id)
         print(traceback.format_exc())
+        raise
     finally:
         if tmp_out.exists():
             tmp_out.unlink()
