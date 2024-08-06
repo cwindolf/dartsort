@@ -253,7 +253,7 @@ class TemplateData:
             )
 
         if return_tsvd:
-            tsvd = denoising_tsvd
+            tsvd = tsvd
         if save_folder is not None:
             obj.to_npz(npz_path)
 
@@ -546,8 +546,6 @@ class TemplateData:
         elif return_denoising_tsvd:
             return template_data_list, results["denoising_tsvd"]
         return template_data_list
-
-
 
 def get_smoothed_templates(
     temp_data_list,

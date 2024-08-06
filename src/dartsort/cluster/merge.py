@@ -466,7 +466,10 @@ def merge_templates_across_multiple_chunks(
         )
 
     if return_dist_matrix:
-        return merged_sorting, dists_across_chunks, dists_all
+        if return_denoising_tsvd:
+            return merged_sorting, dists_across_chunks, dists_all, denoising_tsvd
+        else:
+            return merged_sorting, dists_across_chunks, dists_all
 
     if return_neighbors:
         neighbors = get_post_merge_neighbors(

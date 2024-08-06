@@ -927,7 +927,7 @@ def get_all_shifted_raw_and_low_rank_templates_linear(
 
     return raw_templates, low_rank_templates, snrs_by_chan, spike_counts
 
-def get_all_shifted_raw_and_low_rank_templates_linear_median_approx(
+def get_all_shifted_raw_and_low_rank_templates_linear_median_stochastic_approx(
     recording,
     sorting,
     times_samples_unique, 
@@ -943,7 +943,7 @@ def get_all_shifted_raw_and_low_rank_templates_linear_median_approx(
     spikes_per_unit=500,
     reducer=fast_nanmedian,
     n_jobs=0,
-    batch_size=1024, #try 2048
+    batch_size=2048, #try 2048
     random_seed=0,
     show_progress=True,
     trough_offset_samples=42,
@@ -954,7 +954,8 @@ def get_all_shifted_raw_and_low_rank_templates_linear_median_approx(
 ):
 
     """
-    No parallelism yet
+    This function computes a stochastic approximation of the median by reading spikes by batches
+    It follows this paper paragraph 2.2 (The SA Estimate) https://dl.acm.org/doi/pdf/10.1145/347090.347195
     """
 
     geom = recording.get_channel_locations()
@@ -973,46 +974,46 @@ def get_all_shifted_raw_and_low_rank_templates_linear_median_approx(
         registered=True
 
     n_units = len(unit_ids)
-    raw_templates = np.zeros(
+    current_median = np.zeros(
         (n_chunks, n_units, spike_length_samples, n_template_channels),
         dtype=recording.dtype,
     ) # this is not the mean of the templates!! it's the mean of templates inside of [mu-sigma, mu+sigma] 
-    raw_mean = np.zeros(
+    current_n_batch = np.zeros(
+        (n_chunks, n_units, n_template_channels),
+        dtype=recording.dtype,
+    )
+    current_density_estimate = np.zeros(
         (n_chunks, n_units, spike_length_samples, n_template_channels),
         dtype=recording.dtype,
     )
-    raw_var = np.zeros(
+    initial_density_estimate = np.zeros(
         (n_chunks, n_units, spike_length_samples, n_template_channels),
         dtype=recording.dtype,
     )
-
     # check how spike counts are used for denoising of templates 
     spike_counts = np.zeros(
         (n_chunks, n_units, n_template_channels),
         dtype=recording.dtype, #No int because then cannot have nans?
     ) # this is current spike counts i.e. before getting the new batch
-    spike_counts_in_std = np.zeros(
-        (n_chunks, n_units, spike_length_samples, n_template_channels),
-        dtype=recording.dtype, #No int because then cannot have nans?
-    ) # this is the total number fo spikes added to the template computation i.e. that are inside [mu-sigma, mu+sigma]
     
     # low_rank_templates = None
     if not raw:
-        low_rank_templates = np.zeros((n_chunks, n_units, spike_length_samples, n_template_channels),dtype=recording.dtype) # this is not the mean of the templates!! it's the mean of templates inside of [mu-sigma, mu+sigma] for denoised psikes
+        low_rank_current_median = np.zeros((n_chunks, n_units, spike_length_samples, n_template_channels),dtype=recording.dtype) # this is not the mean of the templates!! it's the mean of templates inside of [mu-sigma, mu+sigma] for denoised spikes
+    current_density_estimate_low_rank = np.zeros(
+        (n_chunks, n_units, spike_length_samples, n_template_channels),
+        dtype=recording.dtype,
+    )
+    initial_density_estimate_low_rank = np.zeros(
+        (n_chunks, n_units, spike_length_samples, n_template_channels),
+        dtype=recording.dtype,
+    )
+
 
     # can parallelize here, since we send wfs_all_loaded[in_unit] to each job 
     batch_arr = np.arange(0, len(times_samples_unique)+batch_size, batch_size)
     batch_arr[-1]=len(times_samples_unique)
 
     for k in tqdm(range(len(batch_arr)-1), desc="Computing templates for all chunks"):
-        raw_batch_mean = np.zeros(
-            (n_chunks, n_units, spike_length_samples, n_template_channels),
-            dtype=recording.dtype,
-        )
-        batch_spike_counts = np.zeros(
-            (n_chunks, n_units, n_template_channels),
-            dtype=recording.dtype, # No int because ofcasting in np.divide
-        ) # this is current spike counts i.e. before getting the new batch
         
         batch_idx = np.arange(batch_arr[k], batch_arr[k+1])
         waveforms = spikeio.read_full_waveforms(
@@ -1043,6 +1044,7 @@ def get_all_shifted_raw_and_low_rank_templates_linear_median_approx(
             waveforms_denoised = waveforms.transpose(0, 2, 1).reshape(n * c, t)
             waveforms_denoised = denoising_tsvd(torch.tensor(waveforms_denoised), in_place=True)
             waveforms_denoised = waveforms_denoised.reshape(n, c, t).permute(0, 2, 1) #.cpu().detach().numpy()
+        
         if registered:
             waveforms = get_waveforms_on_static_channels(
                 waveforms,
@@ -1052,9 +1054,9 @@ def get_all_shifted_raw_and_low_rank_templates_linear_median_approx(
                 fill_value=0, 
             )
             
-            nonan = ~(waveforms[which_times].ptp(1) == 0) # new spike counts
+            # nonan = ~(waveforms[which_times].ptp(1) == 0) # new spike counts
             # Here more complicated
-            np.add.at(batch_spike_counts, (which_chunks, which_units), nonan)
+            # np.add.at(batch_spike_counts, (which_chunks, which_units), nonan)
             # np.add.at(spike_counts, (which_chunks, which_units), nonan)
             # spike_counts[which_chunks, which_units] = spike_counts[which_chunks, which_units] + nonan
             if not raw:
@@ -1065,62 +1067,141 @@ def get_all_shifted_raw_and_low_rank_templates_linear_median_approx(
                     n_pitches_shift=pitch_shifts[batch_idx],
                     fill_value=0, 
                 )
-        else:
-            np.add.at(batch_spike_counts, (which_chunks, which_units), 1)
-            # spike_counts[which_chunks, which_units] += 1
-        np.add.at(raw_batch_mean, (which_chunks, which_units), waveforms[which_times])
-        
-        raw_batch_mean = np.divide(raw_batch_mean, batch_spike_counts[:, :, None], where = batch_spike_counts[:, :, None]!=0)
 
-        # Here, compute std (problem: avoid dividing by zero?)
-        sum_counts = spike_counts + batch_spike_counts
-        raw_var = (spike_counts - 1)[:, :, None]*raw_var - np.divide(batch_spike_counts**2, sum_counts, where = sum_counts!=0)[:, :, None] * (raw_batch_mean-raw_mean)**2
-        # handle division by 0 
-        # raw_var[np.isnan(raw_var)]
-        wfs_mean_squared_diff = (waveforms[which_times] - raw_mean[which_chunks, which_units])**2
-        np.add.at(raw_var, (which_chunks, which_units), wfs_mean_squared_diff)
-        # raw_var /= (sum_counts - 1)[:, :, None]
-        raw_var = np.divide(raw_var, (sum_counts - 1)[:, :, None], where = (sum_counts - 1)[:, :, None]!=0)
+        # Check where current_n_batch is 0 
+        # Update median + estimate + batch count there 
+        idx_no_previous_chunkunits, idx_no_previous_channels = np.where(current_n_batch[which_chunks, which_units]==0)
+        if len(idx_no_previous_chunkunits):
+            # Get initial median
+            current_median[which_chunks[idx_no_previous_chunkunits], which_units[idx_no_previous_chunkunits], :, idx_no_previous_channels] = np.median(waveforms[which_times[idx_no_previous_chunkunits]], axis=0)[:, idx_no_previous_channels]
+            if not raw:
+                low_rank_current_median[which_chunks[idx_no_previous_chunkunits], which_units[idx_no_previous_chunkunits], :, idx_no_previous_channels] = np.median(waveforms_denoised[which_times[idx_no_previous_chunkunits]], axis=0)[:, idx_no_previous_channels]
 
-        raw_mean = spike_counts[:, :, None]*raw_mean + raw_batch_mean*batch_spike_counts[:, :, None]
-        spike_counts += batch_spike_counts 
-        raw_mean = np.divide(raw_mean, spike_counts[:, :, None], where = spike_counts[:, :, None]!=0)
-        # raw_mean /= spike_counts[:, :, None]
-
-        # Then, compute templates in  [mu-sigma, mu+sigma] + counts 
-        in_std = np.where(np.abs(waveforms[which_times] - raw_mean[which_chunks, which_units])<np.sqrt(raw_var[which_chunks, which_units]))
-        # This operation is quite slow as in_std is huge --> with mean, can only index chunk and unit, here need to index channels and timesteps as well
-        # How can we speed this up? 
-        np.add.at(spike_counts_in_std, (which_chunks[in_std[0]], which_units[in_std[0]], in_std[1], in_std[2]), 1)
-        # print(f"Max spike counts in std {spike_counts_in_std.max()}")
-        np.add.at(raw_templates, (which_chunks[in_std[0]], which_units[in_std[0]], in_std[1], in_std[2]), waveforms[which_times][in_std])
-        if not raw:
-            np.add.at(low_rank_templates, (which_chunks[in_std[0]], which_units[in_std[0]], in_std[1], in_std[2]), waveforms_denoised[which_times][in_std])
+            #Set number of batch = 1 - same as low rank
+            current_n_batch[which_chunks[idx_no_previous_chunkunits], which_units[idx_no_previous_chunkunits], idx_no_previous_channels] = 1
             
+            # Get M number of spikes in batch + spike counts - same as low rank
+            number_new_obs = np.zeros(
+                (n_chunks, n_units, n_template_channels),
+                dtype=recording.dtype,
+            )
+            np.add.at(number_new_obs, (which_chunks[idx_no_previous_chunkunits], which_units[idx_no_previous_chunkunits], idx_no_previous_channels), 1)
+            np.add.at(spike_counts, (which_chunks[idx_previous_chunkunits], which_units[idx_previous_chunkunits], idx_previous_channels), 1) 
+
+            # Get number of spikes in the density estimation interval - different if low rank
+            number_in_interval = np.zeros(
+                (n_chunks, n_units, n_template_channels),
+                dtype=recording.dtype,
+            )
+            idx_in_interval, idx_chansin_interval = np.where(np.abs(waveforms[which_times[idx_no_previous_chunkunits], :, idx_no_previous_channels] - current_median[which_chunks[idx_no_previous_chunkunits], which_units[idx_no_previous_chunkunits], :, idx_no_previous_channels])<1)
+            np.add.at(number_in_interval, (which_chunks[idx_no_previous_chunkunits][idx_in_interval], which_units[idx_no_previous_chunkunits][idx_in_interval], idx_no_previous_channels[idx_chansin_interval]), 1)
+                
+            # Get current and initial density estimate (both are equal when n=1) - different if low rank 
+            current_density_estimate[which_chunks[idx_no_previous_chunkunits], which_units[idx_no_previous_chunkunits], :, idx_no_previous_channels] = number_in_interval[which_chunks[idx_no_previous_chunkunits], which_units[idx_no_previous_chunkunits], :, idx_no_previous_channels] / (2*number_new_obs[which_chunks[idx_no_previous_chunkunits], which_units[idx_no_previous_chunkunits], :, idx_no_previous_channels] + 1e-6)
+            initial_density_estimate[which_chunks[idx_no_previous_chunkunits], which_units[idx_no_previous_chunkunits], :, idx_no_previous_channels] = number_in_interval[which_chunks[idx_no_previous_chunkunits], which_units[idx_no_previous_chunkunits], :, idx_no_previous_channels] / (2*number_new_obs[which_chunks[idx_no_previous_chunkunits], which_units[idx_no_previous_chunkunits], :, idx_no_previous_channels] + 1e-6)
+
+            if not raw:
+                number_in_interval_low_rank = np.zeros(
+                    (n_chunks, n_units, n_template_channels),
+                    dtype=recording.dtype,
+                )
+                idx_in_interval, idx_chansin_interval = np.where(np.abs(waveforms_denoised[which_times[idx_no_previous_chunkunits], :, idx_no_previous_channels] - low_rank_current_median[which_chunks[idx_no_previous_chunkunits], which_units[idx_no_previous_chunkunits], :, idx_no_previous_channels])<1)
+                np.add.at(number_in_interval_low_rank, (which_chunks[idx_no_previous_chunkunits][idx_in_interval], which_units[idx_no_previous_chunkunits][idx_in_interval], idx_no_previous_channels[idx_chansin_interval]), 1)
+                current_density_estimate_low_rank[which_chunks[idx_no_previous_chunkunits], which_units[idx_no_previous_chunkunits], :, idx_no_previous_channels] = number_in_interval_low_rank[which_chunks[idx_no_previous_chunkunits], which_units[idx_no_previous_chunkunits], :, idx_no_previous_channels] / (2*number_new_obs[which_chunks[idx_no_previous_chunkunits], which_units[idx_no_previous_chunkunits], :, idx_no_previous_channels] + 1e-6)
+                initial_density_estimate_low_rank[which_chunks[idx_no_previous_chunkunits], which_units[idx_no_previous_chunkunits], :, idx_no_previous_channels] = number_in_interval_low_rank[which_chunks[idx_no_previous_chunkunits], which_units[idx_no_previous_chunkunits], :, idx_no_previous_channels] / (2*number_new_obs[which_chunks[idx_no_previous_chunkunits], which_units[idx_no_previous_chunkunits], :, idx_no_previous_channels] + 1e-6)
+        
+        # Check where batch is not 0 
+        # Get new counts and update estimates there 
+        # Update median + estimate + batch count there 
+        idx_previous_chunkunits, idx_previous_channels = np.where(current_n_batch[which_chunks, which_units]>0)
+        if len(idx_previous_chunkunits):
+            # update number of seen batches -same as low rank
+            current_n_batch[which_chunks[idx_previous_chunkunits], which_units[idx_previous_chunkunits], idx_previous_channels] += 1
+            n_batch = current_n_batch[which_chunks[idx_previous_chunkunits], which_units[idx_previous_chunkunits], idx_previous_channels]
+
+            # Get M - number of spikes in batch -same as low rank
+            number_new_obs = np.zeros(
+                (n_chunks, n_units, n_template_channels),
+                dtype=recording.dtype,
+            )
+            np.add.at(number_new_obs, (which_chunks[idx_previous_chunkunits], which_units[idx_previous_chunkunits], idx_previous_channels), 1) 
+            np.add.at(spike_counts, (which_chunks[idx_previous_chunkunits], which_units[idx_previous_chunkunits], idx_previous_channels), 1) 
+
+            # Get number of spikes in the density estimation interval -different if low rank
+            number_in_interval = np.zeros(
+                (n_chunks, n_units, n_template_channels),
+                dtype=recording.dtype,
+            )
+            idx_in_interval, idx_chansin_interval = np.where(np.abs(waveforms[which_times[idx_previous_chunkunits], :, idx_previous_channels] - current_median[which_chunks[idx_previous_chunkunits], which_units[idx_previous_chunkunits], :, idx_previous_channels])<1/np.sqrt(n_batch))
+            np.add.at(number_in_interval, (which_chunks[idx_previous_chunkunits][idx_in_interval], which_units[idx_previous_chunkunits][idx_in_interval], idx_previous_channels[idx_chansin_interval]), 1)
+
+            # Update current density estimate - is it ok to multiply / add instead of add.at here? Should be -different if low rank
+            current_density_estimate[which_chunks[idx_previous_chunkunits], which_units[idx_previous_chunkunits], :, idx_previous_channels] *= (1 - 1/n_batch)
+            current_density_estimate[which_chunks[idx_previous_chunkunits], which_units[idx_previous_chunkunits], :, idx_previous_channels] += number_in_interval[which_chunks[idx_previous_chunkunits], which_units[idx_previous_chunkunits], idx_previous_channels] / (2 * number_new_obs[which_chunks[idx_previous_chunkunits], which_units[idx_previous_chunkunits], idx_previous_channels] * np.sqrt(n_batch))
+            
+            # compute max(f0/sqrt(n), fn) -different if low rank
+            max_initial_current_density = np.maximum(initial_density_estimate[which_chunks[idx_previous_chunkunits], which_units[idx_previous_chunkunits], :, idx_previous_channels]/np.sqrt(n_batch), current_density_estimate[which_chunks[idx_previous_chunkunits], which_units[idx_previous_chunkunits], :, idx_previous_channels])
+
+            # Get number of spikes smaller than median -different if low rank
+            number_in_interval = np.zeros(
+                (n_chunks, n_units, n_template_channels),
+                dtype=recording.dtype,
+            )
+            idx_in_interval, idx_chansin_interval = np.where(waveforms[which_times[idx_previous_chunkunits], :, idx_previous_channels] <= current_median[which_chunks[idx_previous_chunkunits], which_units[idx_previous_chunkunits], :, idx_previous_channels])
+            np.add.at(number_in_interval, (which_chunks[idx_previous_chunkunits][idx_in_interval], which_units[idx_previous_chunkunits][idx_in_interval], idx_previous_channels[idx_chansin_interval]), 1)
+
+            # compute median update -different if low rank
+            current_median[which_chunks[idx_previous_chunkunits], which_units[idx_previous_chunkunits], :, idx_previous_channels] += (1/2 - number_in_interval/number_new_obs[which_chunks[idx_previous_chunkunits], which_units[idx_previous_chunkunits], :, idx_previous_channels])/ (n*max_initial_current_density)
+            
+            if not raw:
+                # Get number of spikes in the density estimation interval -different if low rank
+                number_in_interval = np.zeros(
+                    (n_chunks, n_units, n_template_channels),
+                    dtype=recording.dtype,
+                )
+                idx_in_interval, idx_chansin_interval = np.where(np.abs(waveforms_denoised[which_times[idx_previous_chunkunits], :, idx_previous_channels] - low_rank_current_median[which_chunks[idx_previous_chunkunits], which_units[idx_previous_chunkunits], :, idx_previous_channels])<1/np.sqrt(n_batch))
+                np.add.at(number_in_interval, (which_chunks[idx_previous_chunkunits][idx_in_interval], which_units[idx_previous_chunkunits][idx_in_interval], idx_previous_channels[idx_chansin_interval]), 1)
+    
+                # Update current density estimate - is it ok to multiply / add instead of add.at here? Should be -different if low rank
+                current_density_estimate_low_rank[which_chunks[idx_previous_chunkunits], which_units[idx_previous_chunkunits], :, idx_previous_channels] *= (1 - 1/n_batch)
+                current_density_estimate_low_rank[which_chunks[idx_previous_chunkunits], which_units[idx_previous_chunkunits], :, idx_previous_channels] += number_in_interval[which_chunks[idx_previous_chunkunits], which_units[idx_previous_chunkunits], idx_previous_channels] / (2 * number_new_obs[which_chunks[idx_previous_chunkunits], which_units[idx_previous_chunkunits], idx_previous_channels] * np.sqrt(n_batch))
+                
+                # compute max(f0/sqrt(n), fn) -different if low rank
+                max_initial_current_density = np.maximum(initial_density_estimate_low_rank[which_chunks[idx_previous_chunkunits], which_units[idx_previous_chunkunits], :, idx_previous_channels]/np.sqrt(n_batch), current_density_estimate_low_rank[which_chunks[idx_previous_chunkunits], which_units[idx_previous_chunkunits], :, idx_previous_channels])
+    
+                # Get number of spikes smaller than median -different if low rank
+                number_in_interval = np.zeros(
+                    (n_chunks, n_units, n_template_channels),
+                    dtype=recording.dtype,
+                )
+                idx_in_interval, idx_chansin_interval = np.where(waveforms_denoised[which_times[idx_previous_chunkunits], :, idx_previous_channels] <= low_rank_current_median[which_chunks[idx_previous_chunkunits], which_units[idx_previous_chunkunits], :, idx_previous_channels])
+                np.add.at(number_in_interval, (which_chunks[idx_previous_chunkunits][idx_in_interval], which_units[idx_previous_chunkunits][idx_in_interval], idx_previous_channels[idx_chansin_interval]), 1)
+    
+                # compute median update -different if low rank
+                low_rank_current_median[which_chunks[idx_previous_chunkunits], which_units[idx_previous_chunkunits], :, idx_previous_channels] += (1/2 - number_in_interval/number_new_obs[which_chunks[idx_previous_chunkunits], which_units[idx_previous_chunkunits], :, idx_previous_channels])/ (n*max_initial_current_density)
+    
     # spike_counts = 0 --> nan
     # spike_counts shape: chunk*unit*chan
-    valid = spike_counts_in_std > min_count_at_shift #> instead of >= to make sure to turn off 0 channels 
-    valid &= spike_counts_in_std / spike_counts_in_std.max(2)[:, :, None] > min_fraction_at_shift
-    spike_counts_in_std[~valid] = np.nan
+    valid = spike_counts > min_count_at_shift #> instead of >= to make sure to turn off 0 channels 
+    valid &= spike_counts / spike_counts.max(2)[:, :, None] > min_fraction_at_shift
+    spike_counts[~valid] = np.nan
         # spike_counts[spike_counts==0] = np.nan
 
-    raw_templates /= spike_counts_in_std
-    if not raw:
-        low_rank_templates = low_rank_templates/spike_counts_in_std
-    snrs_by_chan = ptp(raw_templates, 2) * spike_counts_in_std.max(2) #max, min or median here? make sure it's above 0? if far away from peak, ideally denoising would tke into account the per timestep snr
+    # raw_templates is current median
+    snrs_by_chan = ptp(current_median, 2) * spike_counts.max(2) #max, min or median here? make sure it's above 0? if far away from peak, ideally denoising would tke into account the per timestep snr
     
     if not np.isnan(pad_value):
-        raw_templates = np.nan_to_num(raw_templates, copy=False, nan=pad_value)
+        current_median = np.nan_to_num(current_median, copy=False, nan=pad_value)
         snrs_by_chan = np.nan_to_num(snrs_by_chan, copy=False, nan=pad_value)
-        spike_counts_in_std = np.nan_to_num(spike_counts_in_std, copy=False, nan=pad_value)
+        spike_counts = np.nan_to_num(spike_counts, copy=False, nan=pad_value)
         if not raw:
-            low_rank_templates = np.nan_to_num(low_rank_templates, copy=False, nan=pad_value)
+            low_rank_current_median = np.nan_to_num(low_rank_current_median, copy=False, nan=pad_value)
 
-    spike_counts_in_std = np.max(spike_counts_in_std, axis=2) # How to deal with a template being low count in some parts and high in others? can this be a problem if in some timesteps get stuck around a bad spike?  
+    spike_counts = np.max(spike_counts, axis=2) # How to deal with a template being low count in some parts and high in others? can this be a problem if in some timesteps get stuck around a bad spike?  
     if raw:
-        return raw_templates, raw_templates, snrs_by_chan, spike_counts_in_std
+        return current_median, current_median, snrs_by_chan, spike_counts
 
-    return raw_templates, low_rank_templates, snrs_by_chan, spike_counts_in_std
+    return current_median, low_rank_current_median, snrs_by_chan, spike_counts
 
 
 
