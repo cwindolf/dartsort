@@ -252,6 +252,7 @@ def realign_and_chuck_noisy_template_units(
     assert np.all(np.diff(good_unit_ids) >= 0)
     unique_good_unit_ids, new_template_unit_ids = np.unique(good_unit_ids, return_inverse=True)
     print(f"Kept units {unique_good_unit_ids}")
+    print(f"GC removes units { np.unique(template_data.unit_ids[~good_templates])}")
 
     new_labels = sorting.labels.copy()
     valid = np.isin(new_labels, unique_good_unit_ids)
