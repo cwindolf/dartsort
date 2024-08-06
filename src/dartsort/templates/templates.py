@@ -117,6 +117,7 @@ class TemplateData:
         trough_offset_samples=42,
         spike_length_samples=121,
         return_realigned_sorting=False,
+        return_tsvd=False,
     ):
         if save_folder is not None:
             save_folder = Path(save_folder)
@@ -250,12 +251,18 @@ class TemplateData:
                 trough_offset_samples=trough_offset_samples,
                 spike_length_samples=spike_length_samples,
             )
+
+        if return_tsvd:
+            tsvd = denoising_tsvd
         if save_folder is not None:
             obj.to_npz(npz_path)
 
-        if return_realigned_sorting:
+        if return_realigned_sorting and return_tsvd:
+            return obj, sorting, tsvd
+        elif return_realigned_sorting:
             return obj, sorting
-
+        elif return_tsvd:
+            return obj, tsvd
         return obj
 
     @classmethod
