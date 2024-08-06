@@ -1505,13 +1505,18 @@ def check_overmerges(
     spike_length_samples=121,
     start_time=0,
     end_time=121,
+    temp_per_chunk=True,
+    subtract_raw_temp=True,
 ):
 
     """
     here, everything should be a list containing info about each chunk!! 
     """
 
-    registered_geom = registered_geometry(geom, me)
+    if me is not None:
+        registered_geom = registered_geometry(geom, me)
+    else:
+        registered_geom = geom
     n_chans_reg_geom = len(registered_geom)
 
     n_chunks = len(chunk_time_ranges_s)
@@ -1621,9 +1626,11 @@ def check_overmerges(
                     else:
                         temp_unit_tpca = tpca_templates_list[j][unit]
                         subtract_tpca_temp = True
-                            
-                # template_data_chunk = TemplateData.from_npz(data_dir_temp_data / f"chunk_{j}_{template_npz_filename}")
-                template_data_chunk = TemplateData.from_npz(data_dir_temp_data / f"{template_npz_filename}")
+
+                if temp_per_chunk:
+                    template_data_chunk = TemplateData.from_npz(data_dir_temp_data / f"chunk_{j}_{template_npz_filename}")
+                else:
+                    template_data_chunk = TemplateData.from_npz(data_dir_temp_data / f"{template_npz_filename}")
                 template_data_chunk.templates[np.isnan(template_data_chunk.templates)] = 0
     
                 ax_ptp_time.plot([chunk_range[0], chunk_range[1]], [template_data_chunk.templates[template_data_chunk.unit_ids == unit][0].ptp(0).max(), template_data_chunk.templates[template_data_chunk.unit_ids == unit][0].ptp(0).max()],
@@ -1733,6 +1740,7 @@ def check_overmerges(
 
                         
                         # do all this before chunk / PCs...
+                        
                         waveforms_target_chan = get_waveforms_on_static_channels(
                             collisioncleaned_tpca_features,
                             geom,
@@ -1761,7 +1769,8 @@ def check_overmerges(
                         
                             # subsampled wfs to plot
                             if not raw:
-                                waveforms_target_chan = tpca.inverse_transform(waveforms_target_chan[:, :, chans_no_nans].transpose(0, 2, 1).reshape(-1, 8)).reshape(-1, len(chans_no_nans), spike_length_samples).transpose(0, 2, 1)
+                                nw, nt, nc = waveforms_target_chan[:, :, chans_no_nans].shape
+                                waveforms_target_chan = tpca.inverse_transform(waveforms_target_chan[:, :, chans_no_nans].transpose(0, 2, 1).reshape(nw*nc, nt)).reshape(nw, nc, 121).transpose(0, 2, 1)[:, 20:80]
                             waveforms_target_chan = waveforms_target_chan[:, start_time:end_time, :]
 
                             mean_waveforms = np.nanmean(waveforms_target_chan, axis = 0)
@@ -1775,11 +1784,12 @@ def check_overmerges(
                             ax_wfs.axvline(trough_offset_samples, color = "grey")
                             for k in range(5):
                                 for i in range(waveforms_target_chan.shape[0]):
-                                    ax_wfs.plot(np.arange((end_time-start_time)*2), waveforms_target_chan[i][:, k*2:k*2+2].T.flatten() + k*med_ptp, c = color_array[i], alpha = 0.05)                                        
-                                    if not subtract_tpca_temp: 
-                                        ax_wfs_temp_subtracted.plot(np.arange((end_time-start_time)*2), waveforms_target_chan[i][:, k*2:k*2+2].T.flatten() - temp_chunk[:, k*2:k*2+2].T.flatten() + k*med_ptp, alpha = 0.05, c = color_array[i])
-                                    else:
-                                        ax_wfs_temp_subtracted.plot(np.arange((end_time-start_time)*2), waveforms_target_chan[i][:, k*2:k*2+2].T.flatten() - temp_unit_tpca[start_time:end_time, chans_to_plot_registered_geom].T.flatten() + k*med_ptp, alpha = 0.05, c = color_array[i])
+                                    nt = waveforms_target_chan[i][:, k*2:k*2+2].T.flatten().shape[0]
+                                    ax_wfs.plot(np.arange(nt), waveforms_target_chan[i][:, k*2:k*2+2].T.flatten() + k*med_ptp, c = color_array[i], alpha = 0.05)                                        
+                                    if not subtract_tpca_temp and subtract_raw_temp: 
+                                        ax_wfs_temp_subtracted.plot(np.arange(nt), waveforms_target_chan[i][:, k*2:k*2+2].T.flatten() - temp_chunk[:, k*2:k*2+2].T.flatten() + k*med_ptp, alpha = 0.05, c = color_array[i])
+                                    elif subtract_raw_temp:
+                                        ax_wfs_temp_subtracted.plot(np.arange(nt), waveforms_target_chan[i][:, k*2:k*2+2].T.flatten() - temp_unit_tpca[start_time:end_time, chans_to_plot_registered_geom].T.flatten() + k*med_ptp, alpha = 0.05, c = color_array[i])
                             if overlap_templates:
                                 for k in range(5):
                                     if tpca_templates_list is not None:
