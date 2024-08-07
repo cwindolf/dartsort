@@ -82,8 +82,8 @@ def detect_bad_channels(mean_sd, z_score=3.29):
     """
 
     mad_centers = np.median(mean_sd['sd'])
-    mad = np.median(np.abs(mean_sd['sd'] - mad_centers))
-    conf_int = z_score*np.median(np.abs(mean_sd['sd'] - mad_centers))/0.675
+    mad = np.median(np.abs(mean_sd['sd'] - mad_centers))/0.675
+    conf_int = z_score*mad
     
     noisy_chans = np.where(mean_sd['sd']>mad_centers+conf_int)[0]
     dead_chans = np.where(mean_sd['sd']<mad_centers-conf_int)[0]
