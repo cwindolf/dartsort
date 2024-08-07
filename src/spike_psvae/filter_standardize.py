@@ -81,19 +81,14 @@ def detect_bad_channels(mean_sd, z_score=3.29):
     z_score=3.32 corresponds to a confidence interval of 0.999
     """
 
-    mad_centers = np.median(mean_sd['centers'])
-    mad = np.median(np.abs(mean_sd['centers'] - np.median(mean_sd['centers'])))
-    conf_int = z_score*np.median(np.abs(mean_sd['centers'] - np.median(mean_sd['centers'])))/0.675
-    
-    noisy_chans = np.where(np.abs(mean_sd['centers']-mad_centers)>conf_int)[0]
-    
     mad_centers = np.median(mean_sd['sd'])
-    mad = np.median(np.abs(mean_sd['sd'] - np.median(mean_sd['sd'])))
-    conf_int = z_score*np.median(np.abs(mean_sd['sd'] - np.median(mean_sd['sd'])))/0.675
+    mad = np.median(np.abs(mean_sd['sd'] - mad_centers))
+    conf_int = z_score*np.median(np.abs(mean_sd['sd'] - mad_centers))/0.675
     
-    dead_chans = np.where(np.abs(mean_sd['sd']-mad_centers)>conf_int)[0]
+    noisy_chans = np.where(mean_sd['sd']>mad_centers+conf_int)[0]
+    dead_chans = np.where(mean_sd['sd']<mad_centers-conf_int)[0]
 
-    n_channels = len(mean_sd["centers"])
+    n_channels = len(mean_sd["sd"])
 
     channel_labels = np.zeros(n_channels)
     channel_labels[noisy_chans] = 1
