@@ -76,7 +76,7 @@ def shiftWF(thisWF):
 
 def detect_bad_channels(mean_sd, z_score=3.29):
     """
-    This function detects bad channels based on median + centers
+    This function detects bad channels based on channels MAD 
     mean_sd: std and centers of all channels
     z_score=3.32 corresponds to a confidence interval of 0.999
     """

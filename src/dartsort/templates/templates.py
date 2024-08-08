@@ -253,7 +253,7 @@ class TemplateData:
             )
 
         if return_tsvd:
-            tsvd = tsvd
+            tsvd = results["denoising_tsvd"]
         if save_folder is not None:
             obj.to_npz(npz_path)
 
