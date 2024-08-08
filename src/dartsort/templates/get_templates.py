@@ -249,9 +249,9 @@ def get_templates_multiple_chunks_linear(
 
     # template logic
     # for each unit, get shifted raw and denoised averages and channel SNRs
-    # res = get_all_shifted_raw_and_low_rank_templates_linear_median_stochastic_approx_exponentially_weighted(
-    res = get_all_shifted_raw_and_low_rank_templates_linear_median_stochastic_approx(
-    # res = get_all_shifted_raw_and_low_rank_templates_linear(
+    # This is not ready yet 
+    # res = get_all_shifted_raw_and_low_rank_templates_linear_median_stochastic_approx(
+    res = get_all_shifted_raw_and_low_rank_templates_linear(
         recording,
         sorting,
         times_samples_unique, 
