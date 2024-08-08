@@ -955,7 +955,7 @@ def get_all_shifted_raw_and_low_rank_templates_linear_median_stochastic_approx(
     reducer=fast_nanmedian,
     
     n_jobs=0,
-    batch_size=16_000, #4096 faster - seems to be the same?
+    batch_size=10_000, # Important to have a large size here fo rinitialization
     random_seed=0,
     show_progress=True,
     trough_offset_samples=42,
@@ -968,6 +968,11 @@ def get_all_shifted_raw_and_low_rank_templates_linear_median_stochastic_approx(
     """
     This function computes a stochastic approximation of the median by reading spikes by batches
     It follows this paper paragraph 2.2 (The SA Estimate)https://dl.acm.org/doi/pdf/10.1145/347090.347195 and https://epubs.siam.org/doi/pdf/10.1137/0904048
+
+    Possible improvements: 
+     - still quite slow as we do this per channel so we need to track everything per channel AND per timestep
+       (different than the mean computation as we can just add everything and just track spike counts there)
+     - do a better initialization and then use smaller batch size (easier in memory)
     """
 
     geom = recording.get_channel_locations()
@@ -1250,7 +1255,7 @@ def get_all_shifted_raw_and_low_rank_templates_linear_median_stochastic_approx_e
     spikes_per_unit=500,
     reducer=fast_nanmedian,
     n_jobs=0,
-    batch_size=16_000, #4096 faster - seems to be the same?
+    batch_size=10_000, #4096 faster - seems to be the same?
     random_seed=0,
     show_progress=True,
     trough_offset_samples=42,
@@ -1433,36 +1438,6 @@ def get_all_shifted_raw_and_low_rank_templates_linear_median_stochastic_approx_e
             current_density_estimate[which_chunks[idx_no_previous_chunkunits], which_units[idx_no_previous_chunkunits], :, idx_no_previous_channels] = number_in_interval[which_chunks[idx_no_previous_chunkunits], which_units[idx_no_previous_chunkunits], :, idx_no_previous_channels] / (2*number_new_obs[which_chunks[idx_no_previous_chunkunits], which_units[idx_no_previous_chunkunits], idx_no_previous_channels] + 1e-6)[:, None]
             initial_density_estimate[which_chunks[idx_no_previous_chunkunits], which_units[idx_no_previous_chunkunits], :, idx_no_previous_channels] = number_in_interval[which_chunks[idx_no_previous_chunkunits], which_units[idx_no_previous_chunkunits], :, idx_no_previous_channels] / (2*number_new_obs[which_chunks[idx_no_previous_chunkunits], which_units[idx_no_previous_chunkunits], idx_no_previous_channels] + 1e-6)[:, None]
 
-            # print("After initialization")
-            # print("current n batch 1")
-            # print(current_n_batch[0, unit_good, mc_good])
-            # print(current_n_batch[0, unit_0, mc_0])
-            # print(current_n_batch[0, unit_inf, mc_inf])
-            # print("new obs num")
-            # print(number_new_obs[0, unit_good, mc_good])
-            # print(number_new_obs[0, unit_0, mc_0])
-            # print(number_new_obs[0, unit_inf, mc_inf])
-            # print("spike counts")
-            # print(spike_counts[0, unit_good, mc_good])
-            # print(spike_counts[0, unit_0, mc_0])
-            # print(spike_counts[0, unit_inf, mc_inf])
-            # print("initial_density_estimate 42")
-            # print(initial_density_estimate[0, unit_good, 42, mc_good])
-            # print(initial_density_estimate[0, unit_0, 42, mc_0])
-            # print(initial_density_estimate[0, unit_inf, 42, mc_inf])
-            # print("current_density_estimate 42")
-            # print(current_density_estimate[0, unit_good, 42, mc_good])
-            # print(current_density_estimate[0, unit_0, 42, mc_0])
-            # print(current_density_estimate[0, unit_inf, 42, mc_inf])
-            # print("number_in_interval 42")
-            # print(number_in_interval[0, unit_good, 42, mc_good])
-            # print(number_in_interval[0, unit_0, 42, mc_0])
-            # print(number_in_interval[0, unit_inf, 42, mc_inf])
-            # print("current_median 42")
-            # print(current_median[0, unit_good, 42, mc_good])
-            # print(current_median[0, unit_0, 42, mc_0])
-            # print(current_median[0, unit_inf, 42, mc_inf])
-            
             if not raw:
                 number_in_interval_low_rank = np.zeros(
                     (n_chunks, n_units, spike_length_samples, n_template_channels),
@@ -1513,36 +1488,6 @@ def get_all_shifted_raw_and_low_rank_templates_linear_median_stochastic_approx_e
             # Update current density estimate - is it ok to multiply / add instead of add.at here? Should be -different if low rank
             current_density_estimate[which_chunks[idx_previous_chunkunits], which_units[idx_previous_chunkunits], :, idx_previous_channels] *= (1 - exp_weight) 
             current_density_estimate[which_chunks[idx_previous_chunkunits], which_units[idx_previous_chunkunits], :, idx_previous_channels] += exp_weight*np.sqrt(n_batch)[:, None]*number_in_interval[which_chunks[idx_previous_chunkunits], which_units[idx_previous_chunkunits], :, idx_previous_channels] / (2 * number_new_obs[which_chunks[idx_previous_chunkunits], which_units[idx_previous_chunkunits], idx_previous_channels])[:, None]
-            
-            # print("After updating")
-            # print("current n batch 1")
-            # print(current_n_batch[0, unit_good, mc_good])
-            # print(current_n_batch[0, unit_0, mc_0])
-            # print(current_n_batch[0, unit_inf, mc_inf])
-            # print("new obs num")
-            # print(number_new_obs[0, unit_good, mc_good])
-            # print(number_new_obs[0, unit_0, mc_0])
-            # print(number_new_obs[0, unit_inf, mc_inf])
-            # print("spike counts")
-            # print(spike_counts[0, unit_good, mc_good])
-            # print(spike_counts[0, unit_0, mc_0])
-            # print(spike_counts[0, unit_inf, mc_inf])
-            # print("initial_density_estimate 42")
-            # print(initial_density_estimate[0, unit_good, 42, mc_good])
-            # print(initial_density_estimate[0, unit_0, 42, mc_0])
-            # print(initial_density_estimate[0, unit_inf, 42, mc_inf])
-            # print("current_density_estimate 42")
-            # print(current_density_estimate[0, unit_good, 42, mc_good])
-            # print(current_density_estimate[0, unit_0, 42, mc_0])
-            # print(current_density_estimate[0, unit_inf, 42, mc_inf])
-            # print("number_in_interval 42")
-            # print(number_in_interval[0, unit_good, 42, mc_good])
-            # print(number_in_interval[0, unit_0, 42, mc_0])
-            # print(number_in_interval[0, unit_inf, 42, mc_inf])
-            # print("current_median 42")
-            # print(current_median[0, unit_good, 42, mc_good])
-            # print(current_median[0, unit_0, 42, mc_0])
-            # print(current_median[0, unit_inf, 42, mc_inf])
             
             if not raw:
                 # Get number of spikes in the density estimation interval -different if low rank
