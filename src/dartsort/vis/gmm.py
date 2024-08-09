@@ -12,7 +12,7 @@ from ..cluster import density
 from dartsort.cluster.modes import smoothed_dipscore_at
 from .colors import glasbey1024
 from . import analysis_plots, layout
-from ..util.multiprocessing_util import CloudpicklePoolExecutor, get_pool
+from ..util.multiprocessing_util import CloudpicklePoolExecutor, get_pool, ThreadPoolExecutor
 from .waveforms import geomplot
 
 try:
@@ -80,6 +80,11 @@ class DPCSplitPlot(GMMPlot):
             spread = (channel_norms * logs).sum(1)
             z = np.c_[amp.numpy(force=True), spread.numpy(force=True)]
             z /= mad(z, 0)
+        
+        if in_unit is None:
+            ax = panel.subplots()
+            ax.set_title("no features")
+            return
 
         in_unit = in_unit.numpy(force=True)
         zu, idx, inv = np.unique(z, return_index=True, return_inverse=True, axis=0)
@@ -93,7 +98,7 @@ class DPCSplitPlot(GMMPlot):
         )
         if "density" not in dens:
             ax = panel.subplots()
-            ax.title("all spikes binned")
+            ax.set_title("all spikes binned")
             ax.scatter(*z[:, :2].T, s=5, lw=0, color="k")
             ax.autoscale_view()
             return
@@ -144,7 +149,7 @@ class ZipperSplitPlot(GMMPlot):
     def draw(self, panel, gmm, unit_id):
         in_unit = np.flatnonzero(gmm.labels == unit_id)
         times = gmm.data.times_seconds[in_unit].numpy(force=True)
-        amps = np.nan_to_num(gmm.data.static_amp_vecs[in_unit]).ptp(1)
+        amps = np.nanmax(gmm.data.amp_vecs[in_unit], 1)
         z = np.c_[times / mad(times), amps / mad(amps)]
         dens = density.density_peaks_clustering(
             z,
@@ -262,7 +267,7 @@ class ZipperSplitPlot(GMMPlot):
         if self.show_values:
             for (j, i), label in np.ndenumerate(dists):
                 axis.text(i, j, f"{label:.2f}", ha="center", va="center", clip_on=True)
-        plt.colorbar(im, ax=axis, shrink=0.3)
+        panel.colorbar(im, ax=axis, shrink=0.3)
         axis.set_xticks(range(len(new_units)))
         axis.set_yticks(range(len(new_units)))
         for i, (tx, ty) in enumerate(
@@ -310,7 +315,7 @@ class KMeansPPSPlitPlot(GMMPlot):
         )
 
         times = gmm.data.times_seconds[in_unit].numpy(force=True)
-        amps = np.nan_to_num(gmm.data.static_amp_vecs[in_unit]).ptp(1)
+        amps = np.nanmax(gmm.data.amp_vecs[in_unit], 1)
         labels = labels.numpy(force=True)
         ids = np.unique(labels)
         ids = ids[ids >= 0]
@@ -423,7 +428,7 @@ class KMeansPPSPlitPlot(GMMPlot):
                     clip_on=True,
                     fontsize=5,
                 )
-        plt.colorbar(im, ax=axis, shrink=0.3)
+        panel.colorbar(im, ax=axis, shrink=0.3)
         axis.set_xticks(range(len(new_units)))
         axis.set_yticks(range(len(new_units)))
         for i, (tx, ty) in enumerate(
@@ -598,7 +603,7 @@ class ISIHistogram(GMMPlot):
         counts, _ = np.histogram(dt_ms, bin_edges)
         # bin_centers = 0.5 * (bin_edges[1:] + bin_edges[:-1])
         # axis.bar(bin_centers, counts)
-        plt.stairs(counts, bin_edges, color="k", fill=True)
+        axis.stairs(counts, bin_edges, color="k", fill=True)
         axis.set_xlabel("isi (ms)")
         axis.set_ylabel(f"count (out of {dt_ms.size} total isis)")
 
@@ -608,18 +613,21 @@ class BadnessesOverTimePlot(GMMPlot):
     width = 5
     height = 3
 
-    def __init__(self, colors="rgb", kinds=("1-r^2", "1-scaledr^2")):
+    def __init__(self, colors="rgb", kinds=None):
         self.colors = colors
         self.kinds = kinds
 
     def draw(self, panel, gmm, unit_id):
         in_unit, utd = gmm.get_training_data(unit_id, waveform_kind="reassign")
+        kinds = self.kinds
+        if self.kinds is None:
+            kinds = (gmm.reassign_metric,)
 
         spike_ix, overlaps, badnesses = gmm[unit_id].spike_badnesses(
             utd["times"],
             utd["waveforms"],
             utd["waveform_channels"],
-            kinds=self.kinds,
+            kinds=kinds,
         )
         overlaps = overlaps.numpy(force=True)
         times = utd["times"][spike_ix].numpy(force=True)
@@ -699,12 +707,15 @@ class GridMeansMultiChanPlot(GMMPlot):
 
     def draw(self, panel, gmm, unit_id):
         times, chans, recons = get_means(gmm, unit_id, fitted_only=self.fitted_only, time_range=self.time_range)
+        times = times.numpy(force=True)
+        chans = chans.numpy(force=True)
         if gmm[unit_id].do_interp:
-            c = times.numpy(force=True)
-            c = (c - time_range[0]) / (time_range[1] - time_range[0])
+            c = times
+            c = (c - self.time_range[0]) / (self.time_range[1] - self.time_range[0])
             colors = self.cmap(c)
         else:
             colors = "r"
+        recons = recons.numpy(force=True)
         maa = np.nanmax(np.abs(recons))
 
         ax = panel.subplots()
@@ -1155,7 +1166,7 @@ class GridMeanDistancesPlot(GMMPlot):
         if self.show_values:
             for (j, i), label in np.ndenumerate(dists):
                 axis.text(i, j, f"{label:.2f}", ha="center", va="center", clip_on=True)
-        plt.colorbar(im, ax=axis, shrink=0.3)
+        panel.colorbar(im, ax=axis, shrink=0.3)
         axis.set_xticks(range(len(times)), [f"{t:0.1f}" for t in times])
         axis.set_yticks(range(len(times)), [f"{t:0.1f}" for t in times])
         axis.set_title(self.title)
@@ -1231,9 +1242,10 @@ class ViolatorTimesVBadness(GMMPlot):
     width = 3
     height = 1.5
 
-    def __init__(self, n_neighbors=5, viol_ms=1.0):
+    def __init__(self, n_neighbors=5, viol_ms=1.0, kind=None):
         self.n_neighbors = n_neighbors
         self.viol_ms = viol_ms
+        self.kind = kind
 
     def draw(self, panel, gmm, unit_id):
         ax = panel.subplots()
@@ -1244,6 +1256,7 @@ class ViolatorTimesVBadness(GMMPlot):
             which_spikes=inu,
             unit_ids=[unit_id],
             show_progress=False,
+            kind=self.kind,
         )
         a = np.full_like(t, np.inf)
         a[badness.coords[1]] = badness.data
@@ -1395,14 +1408,14 @@ class NeighborBimodality(GMMMergePlot):
             row[1].axis("off")
 
         if self.masked:
-            times_self = gmm.data.times_seconds[in_self][:, None]
+            times_self = gmm.data.times_seconds[in_self][:, None].cpu()
             kdtree_self = KDTree(times_self.numpy(force=True))
 
         for u, row in zip(neighbors, axes):
             (inu,) = torch.nonzero(gmm.labels == u, as_tuple=True)
 
             if self.masked:
-                times_u = gmm.data.times_seconds[inu][:, None]
+                times_u = gmm.data.times_seconds[inu][:, None].cpu()
                 kdtree_u = KDTree(times_u.numpy(force=True))
 
                 self_matched = np.isfinite(
@@ -1577,7 +1590,7 @@ class NearbyDivergencesMatrix(GMMMergePlot):
 
 class ISICorner(GMMMergePlot):
     kind = "corner"
-    width = 6
+    width = 5
     height = 5
 
     def __init__(self, n_neighbors=5, bin_ms=0.1, max_ms=5, tick_step=1):
@@ -1666,10 +1679,10 @@ default_gmm_plots = (
     AmplitudesOverTimePlot(),
     BadnessesOverTimePlot(),
     EmbedsOverTimePlot(),
-    DPCSplitPlot(spike_kind="residual_full"),
+    # DPCSplitPlot(spike_kind="residual_full"),
     DPCSplitPlot(spike_kind="train"),
     # DPCSplitPlot(spike_kind="global"),
-    DPCSplitPlot(spike_kind="global", feature="spread_amp"),
+    # DPCSplitPlot(spike_kind="global", feature="spread_amp"),
     FeaturesVsBadnessesPlot(),
     GridMeanDistancesPlot(),
     GridMeansMultiChanPlot(),
@@ -1682,17 +1695,18 @@ gmm_merge_plots = (
     NearbyMeansMultiChan(),
     ViolatorTimesVAmps(),
     NearbyTimesVAmps(),
-    NearbyDivergencesMatrix(merge_on_waveform_radius=True),
-    NearbyDivergencesMatrix(merge_on_waveform_radius=True, badness_kind="1-scaledr^2"),
-    NearbyDivergencesMatrix(merge_on_waveform_radius=False),
-    NearbyDivergencesMatrix(merge_on_waveform_radius=False, badness_kind="1-scaledr^2"),
+    NearbyDivergencesMatrix(merge_on_waveform_radius=True, badness_kind="diagz"),
+    # NearbyDivergencesMatrix(merge_on_waveform_radius=True, badness_kind="1-scaledr^2"),
+    NearbyDivergencesMatrix(merge_on_waveform_radius=False, badness_kind="diagz"),
+    # NearbyDivergencesMatrix(merge_on_waveform_radius=False, badness_kind="1-scaledr^2"),
     ViolatorTimesVBadness(),
     NearbyTimesVBadness(),
     ISICorner(bin_ms=0.25),
     ISICorner(bin_ms=0.5, max_ms=8, tick_step=2),
-    NeighborBimodality(),
-    NeighborBimodality(badness_kind="1-r^2", masked=True),
-    NeighborBimodality(badness_kind="1-scaledr^2"),
+    # NeighborBimodality(),
+    NeighborBimodality(badness_kind="diagz", masked=True),
+    # NeighborBimodality(badness_kind="1-r^2", masked=True),
+    # NeighborBimodality(badness_kind="1-scaledr^2", masked=True),
 )
 
 
@@ -1753,6 +1767,7 @@ def make_all_gmm_summaries(
     show_progress=True,
     overwrite=False,
     unit_ids=None,
+    use_threads=False,
     **other_global_params,
 ):
     save_folder = Path(save_folder)
@@ -1767,7 +1782,11 @@ def make_all_gmm_summaries(
         **other_global_params,
     )
 
-    n_jobs, Executor, context = get_pool(n_jobs, cls=CloudpicklePoolExecutor)
+    ispar = n_jobs > 0
+    cls = CloudpicklePoolExecutor
+    if use_threads:
+        cls = ThreadPoolExecutor
+    n_jobs, Executor, context = get_pool(n_jobs, cls=cls)
     from cloudpickle import dumps
 
     initargs = (
@@ -1782,11 +1801,13 @@ def make_all_gmm_summaries(
         overwrite,
         global_params,
     )
+    if ispar and not use_threads:
+        initargs = (dumps(initargs),)
     with Executor(
         max_workers=n_jobs,
         mp_context=context,
         initializer=_summary_init,
-        initargs=(dumps(initargs),),
+        initargs=initargs,
     ) as pool:
         results = pool.map(_summary_job, unit_ids)
         if show_progress:
@@ -1835,11 +1856,12 @@ class SummaryJobContext:
 _summary_job_context = None
 
 
-def _summary_init(args):
+def _summary_init(*args):
     global _summary_job_context
-    from cloudpickle import loads
+    if len(args) == 1:
+        from cloudpickle import loads
 
-    args = loads(args)
+        args = loads(args[0])
     _summary_job_context = SummaryJobContext(*args)
 
 
