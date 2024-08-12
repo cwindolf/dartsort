@@ -202,7 +202,6 @@ def refractory_poisson_spike_train(
     return spike_samples
 
 
-<<<<<<< HEAD
 def precompute_displaced_registered_templates(
     template_data: TemplateData,
     geometry: np.array,
