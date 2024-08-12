@@ -310,7 +310,7 @@ class KMeansPPSPlitPlot(GMMPlot):
             self.title = f"scaled {self.title}"
 
     def draw(self, panel, gmm, unit_id):
-        in_unit, labels = gmm.kmeanspp(
+        in_unit, labels, weights = gmm.kmeanspp(
             unit_id, n_clust=self.n_clust, n_iter=self.n_iter
         )
 
@@ -338,19 +338,20 @@ class KMeansPPSPlitPlot(GMMPlot):
             return
 
         new_units = []
-        for label in ids:
+        for j, label in enumerate(ids):
             u = spike_interp.InterpUnit(
                 do_interp=False,
                 **gmm.unit_kw,
             )
             inu = in_unit[np.flatnonzero(labels == label)]
+            w = None if weights is None else weights[labels == label, j]
             inu, train_data = gmm.get_training_data(
                 unit_id,
                 waveform_kind="original",
                 in_unit=inu,
                 sampling_method=gmm.sampling_method,
             )
-            u.fit_center(**train_data, show_progress=False)
+            u.fit_center(**train_data, show_progress=False, weights=w)
             new_units.append(u)
 
         ju = [(j, u) for j, u in enumerate(new_units) if u.n_chans_unit]
@@ -1274,7 +1275,7 @@ class ViolatorTimesVBadness(GMMPlot):
         ax.scatter(t[small & fin], a[small & fin], c="r", s=5, lw=0)
         ax.scatter(t[big & inf], np.ones_like(a[big & inf]), c="k", s=5, lw=0, marker="x")
         ax.scatter(t[small & inf], np.ones_like(a[small & inf]), c="r", s=5, lw=0, marker="x")
-        ax.set_ylabel("badness")
+        ax.set_ylabel(gmm.reassign_metric)
 
 
 class NearbyTimesVBadness(GMMMergePlot):
@@ -1669,7 +1670,7 @@ default_gmm_plots = (
     ChansHeatmap(),
     # HDBScanSplitPlot(spike_kind="residual_full"),
     # HDBScanSplitPlot(),
-    ZipperSplitPlot(),
+    # ZipperSplitPlot(),
     KMeansPPSPlitPlot(),
     GridMeansSingleChanPlot(),
     InputWaveformsSingleChanPlot(),
@@ -1684,8 +1685,8 @@ default_gmm_plots = (
     # DPCSplitPlot(spike_kind="global"),
     # DPCSplitPlot(spike_kind="global", feature="spread_amp"),
     FeaturesVsBadnessesPlot(),
-    GridMeanDistancesPlot(),
-    GridMeansMultiChanPlot(),
+    # GridMeanDistancesPlot(),
+    # GridMeansMultiChanPlot(),
     # InputWaveformsMultiChanPlot(),
 )
 
@@ -1696,8 +1697,9 @@ gmm_merge_plots = (
     ViolatorTimesVAmps(),
     NearbyTimesVAmps(),
     NearbyDivergencesMatrix(merge_on_waveform_radius=True, badness_kind="diagz"),
+    NearbyDivergencesMatrix(merge_on_waveform_radius=True, badness_kind="1-r^2"),
     # NearbyDivergencesMatrix(merge_on_waveform_radius=True, badness_kind="1-scaledr^2"),
-    NearbyDivergencesMatrix(merge_on_waveform_radius=False, badness_kind="diagz"),
+    # NearbyDivergencesMatrix(merge_on_waveform_radius=False, badness_kind="diagz"),
     # NearbyDivergencesMatrix(merge_on_waveform_radius=False, badness_kind="1-scaledr^2"),
     ViolatorTimesVBadness(),
     NearbyTimesVBadness(),
@@ -1705,7 +1707,7 @@ gmm_merge_plots = (
     ISICorner(bin_ms=0.5, max_ms=8, tick_step=2),
     # NeighborBimodality(),
     NeighborBimodality(badness_kind="diagz", masked=True),
-    # NeighborBimodality(badness_kind="1-r^2", masked=True),
+    NeighborBimodality(badness_kind="1-r^2", masked=True),
     # NeighborBimodality(badness_kind="1-scaledr^2", masked=True),
 )
 
