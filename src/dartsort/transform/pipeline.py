@@ -47,13 +47,18 @@ class WaveformPipeline(torch.nn.Module):
             return waveforms, features
 
         for transformer in self.transformers:
-            if transformer.is_featurizer:
+            if transformer.is_featurizer and transformer.is_denoiser:
+                waveforms, new_features = transformer(waveforms, max_channels=max_channels)
+                features.update(new_features)
+
+            elif transformer.is_featurizer:
                 features.update(
                     transformer.transform(
                         waveforms, max_channels=max_channels
                     )
                 )
-            if transformer.is_denoiser:
+
+            elif transformer.is_denoiser:
                 waveforms = transformer(waveforms, max_channels=max_channels)
 
         return waveforms, features
@@ -105,10 +110,16 @@ def featurization_config_to_class_names_and_kwargs(fconf):
         class_names_and_kwargs.append(
             ("Waveform", {"name_prefix": fconf.input_waveforms_name})
         )
-    if do_feats and fconf.save_input_tpca_projs:
+    combined_tpca = (
+        do_feats
+        and fconf.save_input_tpca_projs
+        and fconf.do_tpca_denoise
+        and not fconf.do_nn_denoise
+    )
+    if combined_tpca:
         class_names_and_kwargs.append(
             (
-                "TemporalPCAFeaturizer",
+                "TemporalPCA",
                 {
                     "rank": fconf.tpca_rank,
                     "name_prefix": fconf.input_waveforms_name,
@@ -117,24 +128,37 @@ def featurization_config_to_class_names_and_kwargs(fconf):
                 },
             )
         )
-    if fconf.do_nn_denoise:
-        class_names_and_kwargs.append(
-            (
-                fconf.nn_denoiser_class_name,
-                {"pretrained_path": fconf.nn_denoiser_pretrained_path},
+    else:
+        if do_feats and fconf.save_input_tpca_projs:
+            class_names_and_kwargs.append(
+                (
+                    "TemporalPCAFeaturizer",
+                    {
+                        "rank": fconf.tpca_rank,
+                        "name_prefix": fconf.input_waveforms_name,
+                        "centered": fconf.tpca_centered,
+                        "temporal_slice": fconf.input_tpca_projs_temporal_slice,
+                    },
+                )
             )
-        )
-    if fconf.do_tpca_denoise:
-        class_names_and_kwargs.append(
-            (
-                "TemporalPCADenoiser",
-                {
-                    "rank": fconf.tpca_rank,
-                    "fit_radius": fconf.tpca_fit_radius,
-                    "centered": fconf.tpca_centered,
-                },
+        if fconf.do_nn_denoise:
+            class_names_and_kwargs.append(
+                (
+                    fconf.nn_denoiser_class_name,
+                    {"pretrained_path": fconf.nn_denoiser_pretrained_path},
+                )
             )
-        )
+        if fconf.do_tpca_denoise:
+            class_names_and_kwargs.append(
+                (
+                    "TemporalPCADenoiser",
+                    {
+                        "rank": fconf.tpca_rank,
+                        "fit_radius": fconf.tpca_fit_radius,
+                        "centered": fconf.tpca_centered,
+                    },
+                )
+            )
     if fconf.do_enforce_decrease:
         class_names_and_kwargs.append(("EnforceDecrease", {}))
     if do_feats and fconf.save_output_waveforms:

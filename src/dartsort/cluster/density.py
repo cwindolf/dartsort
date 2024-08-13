@@ -40,6 +40,7 @@ def get_smoothed_densities(
     X,
     inliers=slice(None),
     sigmas=None,
+    weights=None,
     return_hist=False,
     sigma_lows=None,
     sigma_ramp_ax=-1,
@@ -88,7 +89,7 @@ def get_smoothed_densities(
     ]
 
     # compute histogram and figure out how big the bins actually were
-    raw_histogram, bin_edges = np.histogramdd(infeats, bins=bin_edges)
+    raw_histogram, bin_edges = np.histogramdd(infeats, bins=bin_edges, weights=weights)
     bin_sizes = np.array([(be[1] - be[0]) for be in bin_edges])
     bin_centers = [0.5 * (be[1:] + be[:-1]) for be in bin_edges]
 

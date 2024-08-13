@@ -12,6 +12,7 @@ import torch
 import torch.nn.functional as F
 from scipy.spatial import KDTree
 from scipy.spatial.distance import cdist, pdist, squareform
+from tqdm.auto import trange
 
 # -- geometry utils
 
@@ -307,6 +308,7 @@ def channel_subset_by_index(
     channel_index_full,
     channel_index_new,
     fill_value=torch.nan,
+    chunk_length=None,
 ):
     """Restrict waveforms to channels in new channel index"""
     # boolean mask of same shape as channel_index_full
@@ -315,7 +317,7 @@ def channel_subset_by_index(
     channel_index_mask = channel_subset_mask(channel_index_full, channel_index_new)
     if torch.is_tensor(channel_index_full):
         channel_index_mask = torch.from_numpy(channel_index_mask)
-    return get_channel_subset(waveforms, max_channels, channel_index_mask)
+    return get_channel_subset(waveforms, max_channels, channel_index_mask, chunk_length=chunk_length)
 
 
 def get_channel_index_mask(geom, channel_index, radius=None, n_channels_subset=None):
@@ -411,7 +413,17 @@ def mask_to_channel_index(channel_index, channel_index_mask):
     return new_channel_index
 
 
-def get_channel_subset(waveforms, max_channels, channel_index_mask, fill_value=np.nan):
+def get_channel_subset(
+    waveforms,
+    max_channels,
+    channel_index_mask,
+    fill_value=np.nan,
+    chunk_length=None,
+    in_place=False,
+    out=None,
+    rel_sub_channel_index=None,
+    show_progress=True,
+):
     """Given a binary mask indicating which channels to keep, grab those channels"""
     if waveforms.ndim == 3:
         N, T, C = waveforms.shape
@@ -424,28 +436,60 @@ def get_channel_subset(waveforms, max_channels, channel_index_mask, fill_value=n
         assert False
     n_channels, C_ = channel_index_mask.shape
     assert C == C_
+    is_torch = torch.is_tensor(waveforms)
+    npx = np
+    if is_torch:
+        npx = torch
+    
+    if rel_sub_channel_index is None:
+        rel_sub_channel_index = mask_to_relative(channel_index_mask)
+        if is_torch:
+            rel_sub_channel_index = torch.as_tensor(rel_sub_channel_index)
+    n_chan_sub = rel_sub_channel_index.shape[1]
+
+    if in_place and out is None:
+        out = waveforms[..., :n_chan_sub]
+
+    if chunk_length is not None:
+        if out is None:
+            out = npx.zeros_like(waveforms[..., :n_chan_sub])
+        xrange = trange if show_progress else range
+        for bs in xrange(0, len(out), chunk_length):
+            sl = slice(bs, min(len(out), bs + chunk_length))
+            get_channel_subset(
+                waveforms[sl],
+                max_channels[sl],
+                channel_index_mask,
+                fill_value=fill_value,
+                chunk_length=None,
+                out=out[sl],
+                rel_sub_channel_index=rel_sub_channel_index,
+            )
+        return out
 
     # convert to relative channel offsets
-    rel_sub_channel_index = mask_to_relative(channel_index_mask)
-    if torch.is_tensor(waveforms):
-        npx = torch
+    if is_torch:
         waveforms = F.pad(waveforms, (0, 1), value=fill_value)
+        take_along_dim = torch.take_along_dim
     else:
-        npx = np
         waveforms = np.pad(waveforms, [*pads, (0, 1)], constant_values=fill_value)
+        def take_along_dim(x, ix, dim, out=None):
+            res = np.take_along_axis(x, ix, axis=dim)
+            if out is not None:
+                out[:] = res
+                res = out
+            return res
 
+    inds = rel_sub_channel_index[max_channels]
     if waveforms.ndim == 3:
-        return waveforms[
-            npx.arange(N)[:, None, None],
-            npx.arange(T)[None, :, None],
-            rel_sub_channel_index[max_channels][:, None, :],
-        ]
-
-    # waveforms.ndim == 2:
-    return waveforms[
-        npx.arange(N)[:, None],
-        rel_sub_channel_index[max_channels][:, :],
-    ]
+        inds = inds[:, None, :]
+    
+    return take_along_dim(
+        waveforms,
+        inds,
+        dim=waveforms.ndim - 1,
+        out=out,
+    )
 
 
 def relative_channel_subset_index(channel_index_full, channel_index_new, to_torch=True):
