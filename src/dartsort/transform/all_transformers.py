@@ -3,7 +3,7 @@ from .enforce_decrease import EnforceDecrease
 from .localize import Localization, PointSourceLocalization
 from .vae_localize import VAELocalization
 from .single_channel_denoiser import SingleChannelWaveformDenoiser
-from .temporal_pca import TemporalPCADenoiser, TemporalPCAFeaturizer
+from .temporal_pca import TemporalPCADenoiser, TemporalPCAFeaturizer, TemporalPCA
 from .transform_base import Waveform
 
 all_transformers = [
@@ -18,6 +18,7 @@ all_transformers = [
     PointSourceLocalization,
     VAELocalization, 
     AmplitudeFeatures,
+    TemporalPCA,
 ]
 
 transformers_by_class_name = {cls.__name__: cls for cls in all_transformers}
