@@ -6,7 +6,7 @@ from dartsort.util.waveform_util import (channel_subset_by_radius,
 from sklearn.decomposition import PCA, TruncatedSVD
 
 from .transform_base import (BaseWaveformDenoiser, BaseWaveformFeaturizer,
-                             BaseWaveformModule)
+                             BaseWaveformModule, BaseWaveformAutoencoder)
 
 
 class BaseTemporalPCA(BaseWaveformModule):
@@ -99,7 +99,7 @@ class BaseTemporalPCA(BaseWaveformModule):
 
     def needs_fit(self):
         return self._needs_fit
-    
+
     def _temporal_slice(self, waveforms):
         if self.temporal_slice is None:
             return waveforms
@@ -169,7 +169,7 @@ class TemporalPCADenoiser(BaseWaveformDenoiser, BaseTemporalPCA):
 class TemporalPCAFeaturizer(BaseWaveformFeaturizer, BaseTemporalPCA):
     default_name = "tpca_features"
 
-    def transform(self, waveforms, max_channels, channel_index=None):
+    def transform(self, waveforms, max_channels, channel_index=None, return_in_probe=False):
         waveforms = self._temporal_slice(waveforms)
         if channel_index is None:
             channel_index = self.channel_index
@@ -189,6 +189,9 @@ class TemporalPCAFeaturizer(BaseWaveformFeaturizer, BaseTemporalPCA):
             features,
             channels_in_probe,
         )
+        if return_in_probe:
+            return features_in_probe, channels_in_probe, {self.name: features}
+
         return {self.name: features}
 
     def inverse_transform(self, features, max_channels, channel_index=None):
@@ -216,6 +219,24 @@ class TemporalPCAFeaturizer(BaseWaveformFeaturizer, BaseTemporalPCA):
             reconstructions,
             channels_in_probe,
         )
+
+
+class TemporalPCA(BaseWaveformAutoencoder, TemporalPCAFeaturizer):
+
+    def forward(self, waveforms, max_channels):
+        waveforms = self._temporal_slice(waveforms)
+        features_in_probe, channels_in_probe, features = self.transform(
+            waveforms, max_channels, return_in_probe=True,
+        )
+        reconstructions_in_probe = self._inverse_transform_in_probe(
+            features_in_probe
+        )
+        reconstructions = set_channels_in_probe(
+            reconstructions_in_probe,
+            waveforms,
+            channels_in_probe,
+        )
+        return reconstructions, features
 
 
 # could also have one which is both by subclassing both of the above,

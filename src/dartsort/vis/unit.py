@@ -1032,10 +1032,6 @@ def make_all_summaries(
         pca_radius_um=pca_radius_um,
         **other_global_params,
     )
-
-    n_jobs, Executor, context = get_pool(n_jobs, cls=CloudpicklePoolExecutor)
-    from cloudpickle import dumps
-
     initargs = (
         sorting_analysis,
         plots,
@@ -1049,11 +1045,15 @@ def make_all_summaries(
         global_params,
         gizmo_name,
     )
+    if n_jobs:
+        from cloudpickle import dumps
+        initargs = (dumps(initargs),)
+    n_jobs, Executor, context = get_pool(n_jobs, cls=CloudpicklePoolExecutor)
     with Executor(
         max_workers=n_jobs,
         mp_context=context,
         initializer=_summary_init,
-        initargs=(dumps(initargs),),
+        initargs=initargs,
     ) as pool:
         results = pool.map(_summary_job, unit_ids)
         if show_progress:
@@ -1142,11 +1142,12 @@ class SummaryJobContext:
 _summary_job_context = None
 
 
-def _summary_init(args):
+def _summary_init(*args):
     global _summary_job_context
-    from cloudpickle import loads
+    if len(args) == 1:
+        from cloudpickle import loads
 
-    args = loads(args)
+        args = loads(args[0])
     _summary_job_context = SummaryJobContext(*args)
 
 
