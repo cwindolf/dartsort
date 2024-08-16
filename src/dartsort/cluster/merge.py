@@ -542,6 +542,7 @@ def get_deconv_resid_decrease_iter(
     conv_batch_size=128,
     units_batch_size=8,
     spatial_radius_a=None,
+    ignore_empty_channels=True,
     distance_kind="rms",
     device=None,
     n_jobs=0,
@@ -549,7 +550,7 @@ def get_deconv_resid_decrease_iter(
 ):
     # get template aux data
     low_rank_templates_b = template_util.svd_compress_templates(
-        template_data.templates,
+        template_data,
         min_channel_amplitude=min_channel_amplitude,
         rank=svd_compression_rank,
     )
@@ -567,7 +568,7 @@ def get_deconv_resid_decrease_iter(
             template_data, spatial_radius_a
         )
         low_rank_templates_a = template_util.svd_compress_templates(
-            template_data_a.templates,
+            template_data_a,
             min_channel_amplitude=min_channel_amplitude,
             rank=svd_compression_rank,
         )
@@ -605,6 +606,7 @@ def get_deconv_resid_decrease_iter(
         coarse_approx_error_threshold=0.0,
         amplitude_scaling_variance=amplitude_scaling_variance,
         amplitude_scaling_boundary=amplitude_scaling_boundary,
+        ignore_empty_channels=ignore_empty_channels,
         distance_kind=distance_kind,
         max_shift=max_shift_samples,
         conv_batch_size=conv_batch_size,
