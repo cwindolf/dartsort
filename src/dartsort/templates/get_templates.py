@@ -701,8 +701,10 @@ def _template_job(unit_ids):
                 p.reducer(waveforms[in_unit], axis=0).numpy(force=True)
             )
             counts.append(in_unit.size)
-    snrs_by_chan = [ptp(rt, 0) * c for rt, c in zip(raw_templates, counts)]
+    snrs_by_chan = np.array([ptp(rt, 0) * c for rt, c in zip(raw_templates, counts)])
     counts_by_chan = np.array(counts)
+    if counts_by_chan.ndim == 1:
+        counts_by_chan = np.broadcast_to(counts_by_chan[:, None], snrs_by_chan.shape)
     raw_templates = np.array(raw_templates)
 
     if p.denoising_tsvd is None:
