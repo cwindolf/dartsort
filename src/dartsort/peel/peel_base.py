@@ -7,6 +7,7 @@ import numpy as np
 import torch
 from dartsort.transform import WaveformPipeline
 from dartsort.util.data_util import SpikeDataset, batched_h5_read
+from dartsort.cluster.density import get_smoothed_densities
 from dartsort.util.multiprocessing_util import get_pool
 from dartsort.util.py_util import delay_keyboard_interrupt
 from spikeinterface.core.recording_tools import get_chunk_with_margin
@@ -34,6 +35,9 @@ class BasePeeler(torch.nn.Module):
         chunk_margin_samples=0,
         n_chunks_fit=40,
         max_waveforms_fit=50_000,
+        n_waveforms_fit=20_000,
+        fit_max_reweighting=20.0,
+        fit_sampling="random",
         fit_subsampling_random_state=0,
         dtype=torch.float,
     ):
@@ -53,6 +57,9 @@ class BasePeeler(torch.nn.Module):
         )
         self.dtype = dtype
         self.register_buffer("channel_index", channel_index)
+        self.n_waveforms_fit = n_waveforms_fit
+        self.fit_sampling = fit_sampling
+        self.fit_max_reweighting = fit_max_reweighting
         if featurization_pipeline is not None:
             self.add_module("featurization_pipeline", featurization_pipeline)
         else:
@@ -84,14 +91,18 @@ class BasePeeler(torch.nn.Module):
         if overwrite and save_folder.exists():
             for pt_file in save_folder.glob("*pipeline.pt"):
                 pt_file.unlink()
-        if self.needs_fit():
+        if self.needs_precompute() or self.needs_fit():
             self.load_models(save_folder)
-        if self.needs_fit():
-            save_folder.mkdir(exist_ok=True)
-            self.fit_models(
-                save_folder, overwrite=overwrite, n_jobs=n_jobs, device=device
-            )
+        if self.needs_precompute() or self.needs_fit():
+            if self.needs_precompute():
+                self.precompute_models()
+            if self.needs_fit():
+                save_folder.mkdir(exist_ok=True)
+                self.fit_models(
+                    save_folder, overwrite=overwrite, n_jobs=n_jobs, device=device
+                )
             self.save_models(save_folder)
+        assert not self.needs_precompute()
         assert not self.needs_fit()
 
     def peel(
@@ -238,6 +249,9 @@ class BasePeeler(torch.nn.Module):
     def peeling_needs_fit(self):
         return False
 
+    def peeling_needs_precompute(self):
+        return False
+
     def precompute_peeling_data(
         self, save_folder, overwrite=False, n_jobs=0, device=None
     ):
@@ -248,6 +262,10 @@ class BasePeeler(torch.nn.Module):
     def fit_peeler_models(self, save_folder, n_jobs=0, device=None):
         # subclasses should override if they need to fit models for peeling
         assert not self.peeling_needs_fit()
+
+    def precompute_peeler_models(self, save_folder, n_jobs=0, device=None):
+        # subclasses should override if they need to fit models for peeling
+        assert not self.peeling_needs_precompute()
 
     # subclasses can add to this list
     # for each dataset in this list, an output dataset in the
@@ -371,6 +389,12 @@ class BasePeeler(torch.nn.Module):
             it_does = it_does or self.featurization_pipeline.needs_fit()
         return it_does
 
+    def needs_precompute(self):
+        it_does = self.peeling_needs_precompute()
+        if self.featurization_pipeline is not None:
+            it_does = it_does or self.featurization_pipeline.needs_precompute()
+        return it_does
+
     def fit_models(self, save_folder, overwrite=False, n_jobs=0, device=None):
         with torch.no_grad():
             if self.peeling_needs_fit():
@@ -388,6 +412,13 @@ class BasePeeler(torch.nn.Module):
             )
         assert not self.needs_fit()
 
+    def precompute_models(self):
+        if self.peeling_needs_precompute():
+            self.precompute_peeler_models()
+        if self.featurization_pipeline is None:
+            return
+        self.featurization_pipeline.precompute()
+
     def fit_featurization_pipeline(self, save_folder, n_jobs=0, device=None):
         if self.featurization_pipeline is None:
             return
@@ -402,7 +433,10 @@ class BasePeeler(torch.nn.Module):
             WaveformPipeline.from_class_names_and_kwargs(
                 self.recording.get_channel_locations(),
                 self.channel_index,
-                [("Waveform", {"name": "peeled_waveforms_fit"})],
+                [
+                    ("Voltage", {"name": "peeled_voltages_fit"}),
+                    ("Waveform", {"name": "peeled_waveforms_fit"}),
+                ],
             )
         )
 
@@ -421,10 +455,26 @@ class BasePeeler(torch.nn.Module):
             with h5py.File(temp_hdf5_filename) as h5:
                 channels = h5["channels"][:]
                 n_wf = channels.size
-                if self.max_waveforms_fit and n_wf > self.max_waveforms_fit:
-                    choices = self.fit_subsampling_random_state.choice(
-                        n_wf, size=self.max_waveforms_fit, replace=False
-                    )
+                if n_wf > self.n_waveforms_fit:
+                    if self.fit_sampling == "random":
+                        choices = self.fit_subsampling_random_state.choice(
+                            n_wf, size=self.n_waveforms_fit, replace=False
+                        )
+                    elif self.fit_sampling == "amp_reweighted":
+                        volts = h5["peeled_voltages_fit"][:]
+                        sigma = 1.06 * volts.std() * np.power(len(volts), -0.2)
+                        sample_p = get_smoothed_densities(volts[:, None], sigmas=sigma)
+                        sample_p = sample_p.mean() / sample_p
+                        sample_p = sample_p.clip(
+                            1. / self.fit_max_reweighting,
+                            self.fit_max_reweighting,
+                        )
+                        sample_p /= sample_p.sum()
+                        choices = self.fit_subsampling_random_state.choice(
+                            n_wf, p=sample_p, size=self.n_waveforms_fit, replace=False
+                        )
+                    else:
+                        assert False
                     choices.sort()
                     channels = channels[choices]
                     waveforms = batched_h5_read(
