@@ -388,12 +388,34 @@ def chunk_time_ranges(recording, chunk_length_samples=None):
 # -- hdf5 util
 
 
-def batched_h5_read(dataset, indices, batch_size=128):
-    if indices.size < batch_size:
-        return dataset[indices]
-    else:
-        out = np.empty((indices.size, *dataset.shape[1:]), dtype=dataset.dtype)
-        for bs in range(0, indices.size, batch_size):
-            be = min(indices.size, bs + batch_size)
-            out[bs:be] = dataset[indices[bs:be]]
-        return out
+def batched_h5_read(dataset, indices=None, mask=None, show_progress=False):
+    if mask is None:
+        mask = np.zeros(len(dataset), dtype=bool)
+        mask[indices] = 1
+    return _read_by_chunk(mask, dataset, show_progress=show_progress)
+
+
+def _read_by_chunk(mask, dataset, show_progress=True):
+    """
+    mask : boolean array of shape dataset.shape[:1]
+    dataset : chunked h5py.Dataset
+    """
+    out = np.empty((mask.sum(), *dataset.shape[1:]), dtype=dataset.dtype)
+    n = 0
+    chunks = dataset.iter_chunks()
+    if show_progress:
+        chunks = tqdm(
+            chunks,
+            total=int(np.ceil(dataset.shape[0] / dataset.chunks[0])),
+            desc=dataset.name,
+        )
+    for sli, *_ in chunks:
+        m = np.flatnonzero(mask[sli])
+        nm = m.size
+        if not nm:
+            continue
+        x = dataset[sli][m]
+        # x = dataset[np.arange(sli.start, sli.stop)[m]]
+        out[n : n + nm] = x
+        n += nm
+    return out
