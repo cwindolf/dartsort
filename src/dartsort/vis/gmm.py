@@ -11,7 +11,7 @@ from scipy.spatial import KDTree
 from ..cluster import density
 from dartsort.cluster.modes import smoothed_dipscore_at
 from .colors import glasbey1024
-from . import analysis_plots, layout
+from . import analysis_plots, layout, unit
 from ..util.multiprocessing_util import CloudpicklePoolExecutor, get_pool, ThreadPoolExecutor
 from .waveforms import geomplot
 
@@ -290,10 +290,14 @@ class KMeansPPSPlitPlot(GMMPlot):
         scaled=True,
         amplitude_scaling_std=np.sqrt(0.001),
         amplitude_scaling_limit=1.2,
+        merge_on_waveform_radius=True,
         dist_vmax=1.0,
         show_values=True,
         n_clust=5,
-        n_iter=20,
+        n_iter=50,
+        common_chans=True,
+        inherit_chans=True,
+        min_overlap=0.0,
     ):
         self.cmap = cmap
         self.fitted_only = fitted_only
@@ -306,6 +310,10 @@ class KMeansPPSPlitPlot(GMMPlot):
         self.title = "grid mean dists"
         self.n_clust = n_clust
         self.n_iter = n_iter
+        self.common_chans = common_chans
+        self.inherit_chans = inherit_chans
+        self.min_overlap = min_overlap
+        self.merge_on_waveform_radius = merge_on_waveform_radius
         if self.scaled:
             self.title = f"scaled {self.title}"
 
@@ -338,6 +346,12 @@ class KMeansPPSPlitPlot(GMMPlot):
             return
 
         new_units = []
+        chans_kw = {} 
+        if self.inherit_chans:
+            chans_kw = dict(
+                channels=gmm[unit_id].channels,
+                max_channel=gmm[unit_id].max_channel,
+            )
         for j, label in enumerate(ids):
             u = spike_interp.InterpUnit(
                 do_interp=False,
@@ -351,7 +365,12 @@ class KMeansPPSPlitPlot(GMMPlot):
                 in_unit=inu,
                 sampling_method=gmm.sampling_method,
             )
-            u.fit_center(**train_data, show_progress=False, weights=w)
+            u.fit_center(
+                **train_data,
+                show_progress=False,
+                weights=w,
+                **chans_kw,
+            )
             new_units.append(u)
 
         ju = [(j, u) for j, u in enumerate(new_units) if u.n_chans_unit]
@@ -390,14 +409,18 @@ class KMeansPPSPlitPlot(GMMPlot):
 
         # plot distance matrix
         kind = gmm.merge_metric
-        min_overlap = gmm.min_overlap
+        min_overlap = self.min_overlap
+        if self.min_overlap is None:
+            min_overlap = gmm.min_overlap
         subset_channel_index = None
-        if gmm.merge_on_waveform_radius:
+        if self.merge_on_waveform_radius:
             subset_channel_index = gmm.data.registered_reassign_channel_index
         nu = len(new_units)
         divergences = torch.full((nu, nu), torch.nan)
         for i, ua in ju:
+            # print(f"{i=} {ua.n_chans_unit=} {ua.channels.tolist()=}")
             for j, ub in ju:
+                # print(f"{j=} {ub.n_chans_unit=} {ub.channels.tolist()=}")
                 if i == j:
                     divergences[i, j] = 0
                     continue
@@ -406,6 +429,7 @@ class KMeansPPSPlitPlot(GMMPlot):
                     kind=kind,
                     min_overlap=min_overlap,
                     subset_channel_index=subset_channel_index,
+                    common_chans=self.common_chans,
                 )
         dists = divergences.numpy(force=True)
 
@@ -1664,6 +1688,57 @@ class ISICorner(GMMMergePlot):
                     axes[i, j].set_xlabel("isi (ms)")
                 axes[i, j].set_xticks(np.arange(0, self.max_ms + self.tick_step, self.tick_step))
 
+                
+class CCGColumn(GMMMergePlot):
+    kind = "neighbors"
+    width = 3
+    height = 10
+
+    def __init__(self, n_neighbors=5, max_lag=50):
+        super().__init__()
+        self.n_neighbors = n_neighbors
+        self.max_lag = max_lag
+
+    def draw(self, panel, gmm, unit_id):
+        # pick nearest units
+        neighbor_ids = self.get_neighbors(gmm, unit_id)
+        colors = glasbey1024[neighbor_ids % len(glasbey1024)]
+
+        axes = panel.subplots(
+            nrows=self.n_neighbors,
+            ncols=2,
+            sharex=True,
+            sharey=False,
+            squeeze=False,
+        )
+
+        my_st = gmm.data.times_samples[gmm.labels == unit_id]
+        alags, acg = unit.correlogram(my_st, max_lag=self.max_lag)
+        unit.bar(axes[0, 1], alags, acg, fill=True, fc=colors[0])
+        axes[0, 0].axis("off")
+        axes[0, 1].set_ylabel(f"my acg {neighbor_ids[0]}")
+        
+        j = 0
+        for j, ub in enumerate(neighbor_ids[1:], start=1):
+            their_st = gmm.data.times_samples[gmm.labels == ub]
+            clags, ccg = unit.correlogram(my_st, their_st, max_lag=self.max_lag)
+            merged_st = np.concatenate((my_st, their_st))
+            merged_st.sort()
+            alags, acg = unit.correlogram(merged_st, max_lag=self.max_lag)
+
+            unit.bar(axes[j, 0], clags, ccg, fill=True, fc=colors[j])  # , ec="k", lw=1)
+            unit.bar(axes[j, 1], alags, acg, fill=True, fc=colors[j])  # , ec="k", lw=1)
+            axes[j, 0].set_ylabel(f"ccg {ub}")
+            axes[j, 1].set_ylabel(f"macg {ub}")
+
+        axes[j, 1].set_xlabel("lag (samples)")
+        if j > 0:
+            axes[j, 0].set_xlabel("lag (samples)")
+
+        for k in range(j + 1, self.n_neighbors):
+            axes[k, 0].axis("off")
+            axes[k, 1].axis("off")
+
 
 default_gmm_plots = (
     ISIHistogram(),
@@ -1708,6 +1783,7 @@ gmm_merge_plots = (
     # NeighborBimodality(),
     NeighborBimodality(badness_kind="diagz", masked=True),
     NeighborBimodality(badness_kind="1-r^2", masked=True),
+    CCGColumn(),
     # NeighborBimodality(badness_kind="1-scaledr^2", masked=True),
 )
 

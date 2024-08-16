@@ -69,6 +69,7 @@ class DARTsortAnalysis:
     merge_distance_spatial_radius_a: Optional[float] = None
     merge_distance_min_channel_amplitude: float = 0.0
     merge_distance_min_spatial_cosine: float = 0.0
+    merge_temporal_upsampling: int = 1
     merge_superres_linkage: Callable[[np.ndarray], float] = np.max
     compute_distances: bool = "if_hdf5"
     n_jobs: int = 0
@@ -763,6 +764,7 @@ class DARTsortAnalysis:
             spatial_radius_a=self.merge_distance_spatial_radius_a,
             min_channel_amplitude=self.merge_distance_min_channel_amplitude,
             min_spatial_cosine=self.merge_distance_min_spatial_cosine,
+            temporal_upsampling_factor=self.merge_temporal_upsampling,
             device=self.device,
             n_jobs=self.n_jobs,
         )
