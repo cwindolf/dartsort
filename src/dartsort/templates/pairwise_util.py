@@ -182,6 +182,7 @@ def iterate_compressed_pairwise_convolutions(
     amplitude_scaling_variance=0.0,
     amplitude_scaling_boundary=0.5,
     reduce_deconv_resid_decrease=False,
+    ignore_empty_channels=False,
     distance_kind="rms",
     conv_batch_size=128,
     units_batch_size=8,
@@ -248,6 +249,7 @@ def iterate_compressed_pairwise_convolutions(
         amplitude_scaling_boundary=amplitude_scaling_boundary,
         reduce_deconv_resid_decrease=reduce_deconv_resid_decrease,
         distance_kind=distance_kind,
+        ignore_empty_channels=ignore_empty_channels,
     )
 
     n_jobs, Executor, context, rank_queue = get_pool(
@@ -340,8 +342,14 @@ def conv_to_resid(
     conv_result: CompressedConvResult,
     amplitude_scaling_variance=0.0,
     amplitude_scaling_boundary=0.5,
+    ignore_empty_channels=True,
     distance_kind="rms",
 ) -> DeconvResidResult:
+    """Reduce pairwise convolutions to a scalar, the deconv objective.
+    
+    The idea: we are trying to reconstruct templates a with templates b.
+    How much can we reduce the norm of template a by subtracting (scaled) b?
+    """
     # decompress
     pconvs = conv_result.compressed_conv[conv_result.compression_index]
     full_length = pconvs.shape[1]
@@ -378,15 +386,21 @@ def conv_to_resid(
     svs_a = low_rank_templates_a.singular_values[template_indices_a]
     svs_b = low_rank_templates_b.singular_values[template_indices_b]
     active_a = torch.any(spatial_a > 0, dim=1).to(svs_a)
+    if ignore_empty_channels:
+        active_b = low_rank_templates_b.spike_counts_by_channel[template_indices_b]
+        active_b = active_b > 0
+        active_b = torch.from_numpy(active_b).to(svs_a)
+        active = active_a * active_b
+    else:
+        active = active_a
     # active_b = torch.any(spatial_b > 0, dim=1).to(svs_b)
-    active = active_a # * active_b
     com_spatial_sing_a = (spatial_a * active[:, None, :]) * svs_a[:, :, None]
     com_spatial_sing_b = (spatial_b * active[:, None, :]) * svs_b[:, :, None]
     template_a_norms = (
-        torch.square(com_spatial_sing_a).sum((1, 2)).numpy(force=True)
+        com_spatial_sing_a.square().sum((1, 2)).numpy(force=True)
     )
     template_b_norms = (
-        torch.square(com_spatial_sing_b).sum((1, 2)).numpy(force=True)
+        com_spatial_sing_b.square().sum((1, 2)).numpy(force=True)
     )
 
     if distance_kind == "max":
@@ -470,6 +484,7 @@ def compressed_convolve_pairs(
     amplitude_scaling_variance=0.0,
     amplitude_scaling_boundary=0.5,
     reduce_deconv_resid_decrease=False,
+    ignore_empty_channels=False,
     distance_kind="rms",
     max_shift="full",
     batch_size=128,
@@ -633,6 +648,7 @@ def compressed_convolve_pairs(
             amplitude_scaling_variance=amplitude_scaling_variance,
             amplitude_scaling_boundary=amplitude_scaling_boundary,
             distance_kind=distance_kind,
+            ignore_empty_channels=ignore_empty_channels,
         )
     return res
 
@@ -1270,6 +1286,7 @@ class ConvWorkerContext:
     amplitude_scaling_boundary: float = 0.5
     reduce_deconv_resid_decrease: bool = False
     max_shift: Union[int, str] = "full"
+    ignore_empty_channels: bool = False
     batch_size: int = 128
     device: Optional[torch.device] = None
 

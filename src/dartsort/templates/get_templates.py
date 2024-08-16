@@ -176,7 +176,7 @@ def get_templates(
         min_count_at_shift=min_count_at_shift,
         device=device,
     )
-    unit_ids, spike_counts, raw_templates, low_rank_templates, snrs_by_channel = res
+    unit_ids, spike_counts, raw_templates, low_rank_templates, snrs_by_channel, spike_counts_by_channel = res
 
     if raw_only:
         return dict(
@@ -186,6 +186,7 @@ def get_templates(
             templates=raw_templates,
             raw_templates=raw_templates,
             snrs_by_channel=snrs_by_channel,
+            spike_counts_by_channel=spike_counts_by_channel,
         )
 
     weights = denoising_weights(
@@ -205,6 +206,7 @@ def get_templates(
         raw_templates=raw_templates,
         low_rank_templates=low_rank_templates,
         snrs_by_channel=snrs_by_channel,
+        spike_counts_by_channel=spike_counts_by_channel,
         weights=weights,
     )
 
@@ -428,6 +430,9 @@ def get_all_shifted_raw_and_low_rank_templates(
     snrs_by_channel = np.zeros(
         (n_units, n_template_channels), dtype=dtype
     )
+    spike_counts_by_channel = np.zeros(
+        (n_units, n_template_channels), dtype=dtype
+    )
 
     unit_id_chunks = [
         unit_ids[i : i + units_per_job]
@@ -469,18 +474,19 @@ def get_all_shifted_raw_and_low_rank_templates(
         for res in results:
             if res is None:
                 continue
-            units_chunk, raw_temps_chunk, low_rank_temps_chunk, snrs_chunk = res
+            units_chunk, raw_temps_chunk, low_rank_temps_chunk, snrs_chunk, chancounts_chunk = res
             ix_chunk = np.isin(unit_ids, units_chunk)
             raw_templates[ix_chunk] = raw_temps_chunk
             if not raw:
                 low_rank_templates[ix_chunk] = low_rank_temps_chunk
             snrs_by_channel[ix_chunk] = snrs_chunk
+            spike_counts_by_channel[ix_chunk] = chancounts_chunk
             if show_progress:
                 pbar.update(len(units_chunk))
         if show_progress:
             pbar.close()
 
-    return unit_ids, spike_counts, raw_templates, low_rank_templates, snrs_by_channel
+    return unit_ids, spike_counts, raw_templates, low_rank_templates, snrs_by_channel, spike_counts_by_channel
 
 
 class TemplateProcessContext:
@@ -696,10 +702,11 @@ def _template_job(unit_ids):
             )
             counts.append(in_unit.size)
     snrs_by_chan = [ptp(rt, 0) * c for rt, c in zip(raw_templates, counts)]
+    counts_by_chan = np.array(counts)
     raw_templates = np.array(raw_templates)
 
     if p.denoising_tsvd is None:
-        return units_chunk, raw_templates, None, snrs_by_chan
+        return units_chunk, raw_templates, None, snrs_by_chan, counts_by_chan
 
     # nt, t, ct = raw_templates.shape
     # low_rank_templates = torch.tensor(raw_templates.transpose(0, 2, 1), device=p.device)
@@ -738,7 +745,7 @@ def _template_job(unit_ids):
             )
     low_rank_templates = np.array(low_rank_templates)
 
-    return units_chunk, raw_templates, low_rank_templates, snrs_by_chan
+    return units_chunk, raw_templates, low_rank_templates, snrs_by_chan, counts_by_chan
 
 
 class TorchSVDProjector(torch.nn.Module):
