@@ -25,27 +25,26 @@ class EnforceDecrease(BaseWaveformDenoiser):
         name=None,
         name_prefix="",
     ):
-        super().__init__(name=name, name_prefix=name_prefix)
+        super().__init__(
+            name=name,
+            name_prefix=name_prefix,
+            geom=geom,
+            channel_index=channel_index,
+        )
         self.batch_size = batch_size
-        self._geom = geom
-        self._channel_index = channel_index
-    
-    def needs_fit(self):
-        return not hasattr(self, "_1")
 
-    def fit(self, waveforms, max_channels):
+    def needs_precompute(self):
+        return not hasattr(self, "parents_index")
+
+    def precompute(self):
         self.register_buffer(
             "parents_index",
             torch.tensor(
                 make_parents_index(
-                    np.array(self._geom, dtype=float),
-                    np.array(self._channel_index, dtype=int),
+                    self.geom.numpy(force=True),
+                    self.channel_index.numpy(force=True),
                 )
             ),
-        )
-        self.register_buffer(
-            "_1",
-            torch.tensor(1.0),
         )
 
     def forward(self, waveforms, max_channels):
@@ -78,12 +77,11 @@ class EnforceDecrease(BaseWaveformDenoiser):
                 torch.arange(bs, be)[:, None, None],
                 self.parents_index[max_channels[bs:be]],
             ]
-            parent_min_ptps[bs:be] = parent_ptps.min(dim=2).values
+            torch.amin(parent_ptps, dim=2, out=parent_min_ptps[bs:be])
 
         # what would we need to multiply by to ensure my amp is <= all parents?
-        rescaling = torch.minimum(parent_min_ptps / ptps, self._1)
-        # decreasing_ptps = ptps * rescaling
-        decreasing_waveforms = waveforms * rescaling[:, None, :]
+        rescaling = parent_min_ptps.div_(ptps).clamp_(max=1.0)
+        decreasing_waveforms = waveforms.mul_(rescaling[:, None, :])
         return decreasing_waveforms
 
 
