@@ -163,6 +163,7 @@ class TemporalPCADenoiser(BaseWaveformDenoiser, BaseTemporalPCA):
             waveforms_in_probe,
             waveforms,
             channels_in_probe,
+            in_place=True,
         )
 
 
