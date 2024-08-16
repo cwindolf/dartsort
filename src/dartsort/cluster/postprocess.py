@@ -63,6 +63,7 @@ def realign_and_chuck_noisy_template_units(
         templates=template_data.templates[good_templates],
         unit_ids=new_template_unit_ids,
         spike_counts=template_data.spike_counts[good_templates],
+        spike_counts_by_channel=template_data.spike_counts_by_channel[good_templates],
         registered_geom=template_data.registered_geom,
         registered_template_depths_um=rtdum,
     )
