@@ -201,6 +201,23 @@ def refractory_poisson_spike_train(
 
     return spike_samples
 
+def piecewise_refractory_poisson_spike_train(rates, bins, binsize_samples, **kwargs):
+    """
+    Returns a spike train with variable firing rate using refractory_poisson_spike_train().
+
+    :param rates: list of firing rates in Hz
+    :param bins: bin starting samples (same shape as rates)
+    :param binsize_samples: number of samples per bin
+    :param **kwargs: kwargs to feed to refractory_poisson_spike_train()
+    """
+    sp_tr = np.concatenate(
+        [
+            refractory_poisson_spike_train(r, binsize_samples, **kwargs) + bins[i] if r > 0.1 else [] 
+            for i, r in enumerate(rates)
+        ]
+    )
+    return sp_tr
+
 
 def precompute_displaced_registered_templates(
     template_data: TemplateData,
