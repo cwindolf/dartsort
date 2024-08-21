@@ -26,6 +26,7 @@ def get_drifty_hybrid_recording(
     firing_rates=None,
     peak_channels=None,
     amplitude_scale_std=0.1,
+    amplitude_factor=None
 ):
     """
     :param: recording
@@ -33,7 +34,9 @@ def get_drifty_hybrid_recording(
     :param: motion estimate object
     :param: firing_rates
     :param: peak_channels
-    :param: amplitude_factor
+    :param: amplitude_scale_std -- std of gamma distributed amplitude variation if
+        amplitude_factor is None
+    :param: amplitude_factor array of length n_spikes with amplitude factors
     """
     num_units = templates.num_units
     rg = np.random.default_rng(seed=seed)
@@ -50,11 +53,12 @@ def get_drifty_hybrid_recording(
     n_spikes = sorting.count_total_num_spikes()
 
     # Default amplitude scalings for spikes drawn from gamma
-    if amplitude_scale_std:
-        shape = 1. / (amplitude_scale_std ** 1.5)
-        amplitude_factor = rg.gamma(shape, scale=1./(shape-1), size=n_spikes)
-    else:
-        amplitude_factor = np.ones(n_spikes)
+    if not amplitude_factor:
+        if amplitude_scale_std:
+            shape = 1. / (amplitude_scale_std ** 1.5)
+            amplitude_factor = rg.gamma(shape, scale=1./(shape-1), size=n_spikes)
+        else:
+            amplitude_factor = np.ones(n_spikes)
 
     depths = recording.get_probe().contact_positions[:, 1][peak_channels]
     t_start = recording.sample_index_to_time(0)
