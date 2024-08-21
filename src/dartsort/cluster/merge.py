@@ -632,12 +632,16 @@ def combine_templates(template_data_a, template_data_b):
     spike_counts = np.concatenate(
         (template_data_a.spike_counts, template_data_b.spike_counts)
     )
+    spike_counts_by_channel = np.concatenate(
+        (template_data_a.spike_counts_by_channel, template_data_b.spike_counts_by_channel)
+    )
     template_data = TemplateData(
         templates=templates,
         unit_ids=unit_ids,
         spike_counts=spike_counts,
         registered_geom=rgeom,
         registered_template_depths_um=locs,
+        spike_counts_by_channel=spike_counts_by_channel,
     )
 
     cross_mask = np.logical_and(np.isin(unit_ids, ids_a)[:, None], np.isin(unit_ids, ids_b)[None])
