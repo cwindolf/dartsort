@@ -53,7 +53,7 @@ def get_drifty_hybrid_recording(
     n_spikes = sorting.count_total_num_spikes()
 
     # Default amplitude scalings for spikes drawn from gamma
-    if not amplitude_factor:
+    if amplitude_factor is None:
         if amplitude_scale_std:
             shape = 1. / (amplitude_scale_std ** 1.5)
             amplitude_factor = rg.gamma(shape, scale=1./(shape-1), size=n_spikes)
