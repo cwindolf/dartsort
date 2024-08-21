@@ -24,6 +24,7 @@ class DARTsortGroundTruthComparison:
     match_mode: str = "hungarian"
     compute_labels: bool = True
     verbose: bool = True
+    device: Optional[str] = None
 
     compute_distances: bool = True
     compute_unsorted_recall: bool = True
@@ -120,7 +121,8 @@ class DARTsortGroundTruthComparison:
             gt_td,
             tested_td,
             sym_function=np.maximum,
-            n_jobs=max(self.gt_analysis.n_jobs, self.tested_analysis.n_jobs),
+            n_jobs=self.n_jobs,
+            device=self.device,
         )
         self._template_distances = dists
 
