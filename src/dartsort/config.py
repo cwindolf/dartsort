@@ -335,7 +335,7 @@ class ClusteringConfig:
     sigma_local_low: Optional[float] = None
     sigma_regional: Optional[float] = 25.0
     sigma_regional_low: Optional[float] = None
-    workers: Optional[int] = -1
+    workers: Optional[int] = 1 # not -1 to be able to run dense datasets without errors
     n_neighbors_search: int = 20
     radius_search: float = 5.0
     remove_clusters_smaller_than: int = 10
