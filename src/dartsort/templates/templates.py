@@ -26,6 +26,8 @@ class TemplateData:
     unit_ids: np.ndarray
     # (n_templates,) spike count for each template
     spike_counts: np.ndarray
+    # (n_templates, n_registered_channels or n_channels) spike count for each channel
+    spike_counts_by_channel: np.ndarray
 
     registered_geom: Optional[np.ndarray] = None
     registered_template_depths_um: Optional[np.ndarray] = None
@@ -219,6 +221,7 @@ class TemplateData:
                 results["templates"],
                 unit_ids=results["unit_ids"],
                 spike_counts=results["spike_counts"],
+                spike_counts_by_channel=results["spike_counts_by_channel"],
                 registered_geom=kwargs["registered_geom"],
                 registered_template_depths_um=registered_template_depths_um,
                 localization_radius_um=template_config.registered_template_localization_radius_um,
@@ -238,6 +241,7 @@ class TemplateData:
                 results["templates"],
                 unit_ids=results["unit_ids"],
                 spike_counts=results["spike_counts"],
+                spike_counts_by_channel=results["spike_counts_by_channel"],
                 registered_geom=geom,
                 registered_template_depths_um=depths_um,
                 localization_radius_um=template_config.registered_template_localization_radius_um,

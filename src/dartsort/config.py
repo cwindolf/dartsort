@@ -119,7 +119,9 @@ class SubtractionConfig:
     extract_radius: float = 100.0
     n_chunks_fit: int = 100
     max_waveforms_fit: int = 50_000
+    n_waveforms_fit: int = 20_000
     fit_subsampling_random_state: int = 0
+    fit_sampling: str = "random"
     residnorm_decrease_threshold: float = 3.162  # sqrt(10)
 
     # how will waveforms be denoised before subtraction?
@@ -195,7 +197,9 @@ class MatchingConfig:
     extract_radius: float = 100.0
     n_chunks_fit: int = 100
     max_waveforms_fit: int = 50_000
+    n_waveforms_fit: int = 20_000
     fit_subsampling_random_state: int = 0
+    fit_sampling: str = "random"
 
     # template matching parameters
     threshold: float = 150.0

@@ -29,6 +29,12 @@ class BaseWaveformModule(torch.nn.Module):
     def needs_fit(self):
         return False
 
+    def needs_precompute(self):
+        return False
+
+    def precompute(self):
+        pass
+
 
 class BaseWaveformDenoiser(BaseWaveformModule):
     is_denoiser = True
@@ -71,6 +77,10 @@ class BaseWaveformFeaturizer(BaseWaveformModule):
             return (dataset,)
 
 
+class BaseWaveformAutoencoder(BaseWaveformDenoiser, BaseWaveformFeaturizer):
+    pass
+
+
 class IdentityWaveformDenoiser(BaseWaveformDenoiser):
     def forward(self, waveforms, max_channels=None):
         return waveforms
@@ -98,4 +108,4 @@ class Waveform(BaseWaveformFeaturizer):
         self.dtype = dtype
 
     def transform(self, waveforms, max_channels=None):
-        return {self.name: waveforms}
+        return {self.name: waveforms.clone()}
