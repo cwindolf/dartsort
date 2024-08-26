@@ -159,3 +159,29 @@ class MaxAmplitude(BaseWaveformFeaturizer):
             return {
                 self.name: torch.nan_to_num(ptp(waveforms, dim=1)).max(dim=1).values
             }
+
+
+class Voltage(BaseWaveformFeaturizer):
+    default_name = "voltages"
+    shape = ()
+
+    def __init__(
+        self,
+        channel_index=None,
+        geom=None,
+        dtype=torch.float,
+        name=None,
+        name_prefix="",
+    ):
+        if name is None:
+            name = f"{kind}_{self.default_name}"
+            if name_prefix:
+                name = f"{name_prefix}_{name}"
+        super().__init__(name=name, name_prefix=name_prefix)
+        self.dtype = dtype
+
+    def transform(self, waveforms, max_channels=None):
+        waveforms = waveforms.view(len(waveforms), -1)
+        nanmax = torch.nan_to_num(waveforms).abs_().max(dim=1, keepdim=True)
+        voltages = torch.take_along_dim(waveforms, nanmax.indices, dim=1)
+        return {self.name: voltages[:, 0]}

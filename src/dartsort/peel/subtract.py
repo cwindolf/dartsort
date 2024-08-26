@@ -34,7 +34,9 @@ class SubtractionPeeler(BasePeeler):
         spatial_dedup_channel_index=None,
         n_chunks_fit=40,
         max_waveforms_fit=50_000,
+        n_waveforms_fit=20_000,
         fit_subsampling_random_state=0,
+        fit_sampling="random",
         residnorm_decrease_threshold=3.162,
         dtype=torch.float,
     ):
@@ -47,6 +49,8 @@ class SubtractionPeeler(BasePeeler):
             n_chunks_fit=n_chunks_fit,
             max_waveforms_fit=max_waveforms_fit,
             fit_subsampling_random_state=fit_subsampling_random_state,
+            n_waveforms_fit=n_waveforms_fit,
+            fit_sampling=fit_sampling,
             dtype=dtype,
         )
 
@@ -97,6 +101,9 @@ class SubtractionPeeler(BasePeeler):
 
     def peeling_needs_fit(self):
         return self.subtraction_denoising_pipeline.needs_fit()
+
+    def peeling_needs_precompute(self):
+        return self.subtraction_denoising_pipeline.needs_precompute()
 
     def save_models(self, save_folder):
         super().save_models(save_folder)
@@ -171,6 +178,8 @@ class SubtractionPeeler(BasePeeler):
             spatial_dedup_channel_index=spatial_dedup_channel_index,
             n_chunks_fit=subtraction_config.n_chunks_fit,
             max_waveforms_fit=subtraction_config.max_waveforms_fit,
+            fit_sampling=subtraction_config.fit_sampling,
+            n_waveforms_fit=subtraction_config.n_waveforms_fit,
             fit_subsampling_random_state=subtraction_config.fit_subsampling_random_state,
             residnorm_decrease_threshold=subtraction_config.residnorm_decrease_threshold,
         )
@@ -215,6 +224,9 @@ class SubtractionPeeler(BasePeeler):
             peel_result["residual"] = subtraction_result.residual
 
         return peel_result
+
+    def precompute_peeler_models(self):
+        self.subtraction_denoising_pipeline.precompute()
 
     def fit_peeler_models(self, save_folder, n_jobs=0, device=None):
         # when fitting peelers for subtraction, there are basically
