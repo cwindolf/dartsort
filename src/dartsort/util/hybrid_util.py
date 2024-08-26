@@ -1,11 +1,12 @@
 import numpy as np
 import warnings
-from spikeinterface.core import BaseRecording, BaseRecordingSegment
+from spikeinterface.core import BaseRecording, BaseRecordingSegment, Templates
 from spikeinterface.core.core_tools import define_function_from_class
 from spikeinterface.extractors import NumpySorting
-from spikeinterface.generation.drift_tools import InjectDriftingTemplatesRecording
+from spikeinterface.generation.drift_tools import InjectDriftingTemplatesRecording, DriftingTemplates, move_dense_templates
 from spikeinterface.preprocessing.basepreprocessor import (
     BasePreprocessor, BasePreprocessorSegment)
+from probeinterface import Probe
 
 from ..templates import TemplateData
 from .analysis import DARTsortAnalysis
@@ -25,6 +26,7 @@ def get_drifty_hybrid_recording(
     firing_rates=None,
     peak_channels=None,
     amplitude_scale_std=0.1,
+    amplitude_factor=None
 ):
     """
     :param: recording
@@ -32,24 +34,31 @@ def get_drifty_hybrid_recording(
     :param: motion estimate object
     :param: firing_rates
     :param: peak_channels
-    :param: amplitude_factor
+    :param: amplitude_scale_std -- std of gamma distributed amplitude variation if
+        amplitude_factor is None
+    :param: amplitude_factor array of length n_spikes with amplitude factors
     """
     num_units = templates.num_units
     rg = np.random.default_rng(seed=seed)
 
     if peak_channels is None:
-        raise(NotImplementedError, "Autodetection of peak channels not implemented yet.")
+        (central_disp_index,) = np.flatnonzero(
+            np.all(templates.displacements == 0, 1)
+        )
+        central_templates = templates.templates_array_moved[central_disp_index]
+        peak_channels = central_templates.ptp(1).argmax(1)
 
     if sorting is None:
         sorting = get_sorting(num_units, recording, firing_rates=firing_rates, rg=rg, spike_length_samples=templates.num_samples)
     n_spikes = sorting.count_total_num_spikes()
 
     # Default amplitude scalings for spikes drawn from gamma
-    if amplitude_scale_std:
-        shape = 1. / (amplitude_scale_std ** 1.5)
-        amplitude_factor = rg.gamma(shape, scale=1./(shape-1), size=n_spikes)
-    else:
-        amplitude_factor = np.ones(n_spikes)
+    if amplitude_factor is None:
+        if amplitude_scale_std:
+            shape = 1. / (amplitude_scale_std ** 1.5)
+            amplitude_factor = rg.gamma(shape, scale=1./(shape-1), size=n_spikes)
+        else:
+            amplitude_factor = np.ones(n_spikes)
 
     depths = recording.get_probe().contact_positions[:, 1][peak_channels]
     t_start = recording.sample_index_to_time(0)
@@ -66,7 +75,7 @@ def get_drifty_hybrid_recording(
     if not sorting.check_serializability(type='json'):
         warnings.warn("Your sorting is not serializable, which could lead to problems later.")
 
-    return InjectDriftingTemplatesRecording(
+    rec = InjectDriftingTemplatesRecording(
         sorting=sorting,
         drifting_templates=templates,
         parent_recording=recording,
@@ -75,6 +84,8 @@ def get_drifty_hybrid_recording(
         displacement_unit_factor=displacement_unit_factor,
         amplitude_factor=amplitude_factor
     )
+    rec.annotate(peak_channel=peak_channels.tolist())
+    return rec
 
 
 def get_sorting(num_units, recording, firing_rates=None, rg=0, nbefore=42, spike_length_samples=128):
@@ -194,8 +205,57 @@ def refractory_poisson_spike_train(
 
     return spike_samples
 
+def piecewise_refractory_poisson_spike_train(rates, bins, binsize_samples, **kwargs):
+    """
+    Returns a spike train with variable firing rate using refractory_poisson_spike_train().
 
-def sorting_from_times_labels(times, labels, recording=None, sampling_frequency=None,  determine_channels=True, template_config=unshifted_raw_template_config, n_jobs=0):
+    :param rates: list of firing rates in Hz
+    :param bins: bin starting samples (same shape as rates)
+    :param binsize_samples: number of samples per bin
+    :param **kwargs: kwargs to feed to refractory_poisson_spike_train()
+    """
+    sp_tr = np.concatenate(
+        [
+            refractory_poisson_spike_train(r, binsize_samples, **kwargs) + bins[i] if r > 0.1 else [] 
+            for i, r in enumerate(rates)
+        ]
+    )
+    return sp_tr
+
+
+def precompute_displaced_registered_templates(
+    template_data: TemplateData,
+    geometry: np.array,
+    displacements: np.array,
+    sampling_frequency: float = 30000,
+    template_subset=slice(None),
+) -> DriftingTemplates:
+    """Use spikeinterface tools to turn templates on registered geom into
+    precomputed drifting templates on the regular geom.
+    """
+    source_probe = Probe(ndim=template_data.registered_geom.ndim)
+    source_probe.set_contacts(positions=template_data.registered_geom)
+    target_probe = Probe(ndim=geometry.ndim)
+    target_probe.set_contacts(positions=geometry)
+
+    shifted_templates = move_dense_templates(
+        templates_array=template_data.templates[template_subset],
+        displacements=displacements,
+        source_probe=source_probe,
+        dest_probe=target_probe,
+    )
+
+    ret = DriftingTemplates.from_precomputed_templates(
+        templates_array_moved=shifted_templates,
+        displacements=displacements,
+        sampling_frequency=sampling_frequency,
+        nbefore=template_data.trough_offset_samples,
+        probe=target_probe,
+    )
+    return ret
+
+
+def sorting_from_times_labels(times, labels, recording=None, sampling_frequency=None, determine_channels=True, template_config=unshifted_raw_template_config, n_jobs=0):
     channels = np.zeros_like(labels)
     if sampling_frequency is None:
         if recording is not None:
@@ -203,7 +263,7 @@ def sorting_from_times_labels(times, labels, recording=None, sampling_frequency=
     sorting = DARTsortSorting(times_samples=times, channels=channels, labels=labels, sampling_frequency=sampling_frequency)
 
     if not determine_channels:
-        return
+        return sorting
 
     _, labels_flat = np.unique(labels, return_inverse=True)
     sorting = DARTsortSorting(times_samples=times, channels=channels, labels=labels_flat, sampling_frequency=sorting.sampling_frequency)
