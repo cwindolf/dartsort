@@ -217,10 +217,11 @@ class LowRankTemplates:
     temporal_components: np.ndarray
     singular_values: np.ndarray
     spatial_components: np.ndarray
+    spike_counts_by_channel: np.ndarray
 
 
 def svd_compress_templates(
-    templates, min_channel_amplitude=1.0, rank=5, channel_sparse=True
+    template_data, min_channel_amplitude=1.0, rank=5, channel_sparse=True
 ):
     """
     Returns:
@@ -228,6 +229,7 @@ def svd_compress_templates(
     singular_values: n_units, rank
     spatial_components: n_units, rank, n_channels
     """
+    templates = template_data.templates
     vis_mask = templates.ptp(axis=1, keepdims=True) > min_channel_amplitude
     vis_templates = templates * vis_mask
     dtype = templates.dtype
@@ -260,7 +262,7 @@ def svd_compress_templates(
         singular_values[i, :k] = s[:rank]
         spatial_components[i, :k, mask] = Vh[:rank].T
 
-    return LowRankTemplates(temporal_components, singular_values, spatial_components)
+    return LowRankTemplates(temporal_components, singular_values, spatial_components, template_data.spike_counts_by_channel)
 
 
 def temporally_upsample_templates(

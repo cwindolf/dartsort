@@ -131,16 +131,17 @@ def registered_geometry(
     return registered_geom
 
 
-def registered_channels(channels, geom, n_pitches_shift, registered_geom):
+def registered_channels(channels, geom, n_pitches_shift, registered_geom, distance_upper_bound=None):
     """What registered channels do `channels` land on after shifting by `n_pitches_shift`?"""
     pitch = get_pitch(geom)
     shifted_positions = geom.copy()[channels]
     shifted_positions[:, 1] += n_pitches_shift * pitch
 
     registered_kdtree = KDTree(registered_geom)
-    min_distance = pdist(registered_geom).min() / 2
+    if distance_upper_bound is None:
+        distance_upper_bound = pdist(registered_geom).min() / 2
     distances, registered_channels = registered_kdtree.query(
-        shifted_positions, distance_upper_bound=min_distance
+        shifted_positions, distance_upper_bound=distance_upper_bound
     )
     # make sure there were no unmatched points
     assert np.all(registered_channels < len(registered_geom))

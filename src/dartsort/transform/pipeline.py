@@ -34,6 +34,9 @@ class WaveformPipeline(torch.nn.Module):
             featurization_config_to_class_names_and_kwargs(featurization_config),
         )
 
+    def needs_precompute(self):
+        return any(t.needs_precompute() for t in self.transformers)
+
     def needs_fit(self):
         return any(t.needs_fit() for t in self.transformers)
 
@@ -47,13 +50,18 @@ class WaveformPipeline(torch.nn.Module):
             return waveforms, features
 
         for transformer in self.transformers:
-            if transformer.is_featurizer:
+            if transformer.is_featurizer and transformer.is_denoiser:
+                waveforms, new_features = transformer(waveforms, max_channels=max_channels)
+                features.update(new_features)
+
+            elif transformer.is_featurizer:
                 features.update(
                     transformer.transform(
                         waveforms, max_channels=max_channels
                     )
                 )
-            if transformer.is_denoiser:
+
+            elif transformer.is_denoiser:
                 waveforms = transformer(waveforms, max_channels=max_channels)
 
         return waveforms, features
@@ -74,6 +82,10 @@ class WaveformPipeline(torch.nn.Module):
 
             if transformer.is_denoiser:
                 waveforms = transformer(waveforms, max_channels=max_channels)
+
+    def precompute(self):
+        for transformer in self.transformers:
+            transformer.precompute()
 
     def __iter__(self):
         return iter(self.transformers)
@@ -105,6 +117,25 @@ def featurization_config_to_class_names_and_kwargs(fconf):
         class_names_and_kwargs.append(
             ("Waveform", {"name_prefix": fconf.input_waveforms_name})
         )
+    # combined_tpca = (
+    #     do_feats
+    #     and fconf.save_input_tpca_projs
+    #     and fconf.do_tpca_denoise
+    #     and not fconf.do_nn_denoise
+    # )
+    # if combined_tpca:
+    #     class_names_and_kwargs.append(
+    #         (
+    #             "TemporalPCA",
+    #             {
+    #                 "rank": fconf.tpca_rank,
+    #                 "name_prefix": fconf.input_waveforms_name,
+    #                 "centered": fconf.tpca_centered,
+    #                 "temporal_slice": fconf.input_tpca_projs_temporal_slice,
+    #             },
+    #         )
+    #     )
+    # else:
     if do_feats and fconf.save_input_tpca_projs:
         class_names_and_kwargs.append(
             (

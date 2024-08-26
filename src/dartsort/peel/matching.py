@@ -50,7 +50,9 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
         chunk_length_samples=30_000,
         n_chunks_fit=40,
         max_waveforms_fit=50_000,
+        n_waveforms_fit=20_000,
         fit_subsampling_random_state=0,
+        fit_sampling="random",
         max_iter=1000,
         dtype=torch.float,
     ):
@@ -63,6 +65,8 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
             n_chunks_fit=n_chunks_fit,
             max_waveforms_fit=max_waveforms_fit,
             fit_subsampling_random_state=fit_subsampling_random_state,
+            fit_sampling=fit_sampling,
+            n_waveforms_fit=n_waveforms_fit,
             dtype=dtype,
         )
 
@@ -132,7 +136,6 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
             upsampling_peak_window_radius=self.upsampling_peak_window_radius,
             svd_compression_rank=self.svd_compression_rank,
             min_channel_amplitude=self.min_channel_amplitude,
-            dtype=self.recording.dtype,
             overwrite=overwrite,
             n_jobs=n_jobs,
             device=device,
@@ -228,13 +231,13 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
         upsampling_peak_window_radius=8,
         svd_compression_rank=10,
         min_channel_amplitude=1.0,
-        dtype=np.float32,
         overwrite=False,
         n_jobs=0,
         device=None,
     ):
+        dtype = template_data.templates.dtype
         low_rank_templates = template_util.svd_compress_templates(
-            template_data.templates,
+            template_data,
             min_channel_amplitude=min_channel_amplitude,
             rank=svd_compression_rank,
         )
@@ -255,7 +258,7 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
         if self.coarse_objective:
             coarse_template_data = template_data.coarsen()
             coarse_low_rank_templates = template_util.svd_compress_templates(
-                coarse_template_data.templates,
+                coarse_template_data,
                 min_channel_amplitude=min_channel_amplitude,
                 rank=svd_compression_rank,
             )
@@ -406,6 +409,8 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
             n_chunks_fit=matching_config.n_chunks_fit,
             max_waveforms_fit=matching_config.max_waveforms_fit,
             fit_subsampling_random_state=matching_config.fit_subsampling_random_state,
+            n_waveforms_fit=matching_config.n_waveforms_fit,
+            fit_sampling=matching_config.fit_sampling,
             max_iter=matching_config.max_iter,
         )
 
