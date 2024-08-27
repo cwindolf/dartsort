@@ -38,6 +38,10 @@ def ravel_multi_index(multi_index, dims):
     raveled_indices : LongTensor
         Indices into the flattened tensor of shape `dims`
     """
+    if len(dims) == 1:
+        assert multi_index.ndim == 1
+        return multi_index
+
     assert len(multi_index) == len(dims)
 
     # collect multi indices

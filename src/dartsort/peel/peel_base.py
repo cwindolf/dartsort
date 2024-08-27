@@ -41,7 +41,6 @@ class BasePeeler(torch.nn.Module):
         fit_subsampling_random_state=0,
         dtype=torch.float,
     ):
-        assert recording.get_num_channels() == channel_index.shape[0]
         if recording.get_num_segments() > 1:
             raise ValueError(
                 "Peeling does not yet support multi-segment recordings."
@@ -56,7 +55,9 @@ class BasePeeler(torch.nn.Module):
             fit_subsampling_random_state
         )
         self.dtype = dtype
-        self.register_buffer("channel_index", channel_index)
+        if channel_index is not None:
+            self.register_buffer("channel_index", channel_index)
+            assert recording.get_num_channels() == channel_index.shape[0]
         self.n_waveforms_fit = n_waveforms_fit
         self.fit_sampling = fit_sampling
         self.fit_max_reweighting = fit_max_reweighting
@@ -70,8 +71,11 @@ class BasePeeler(torch.nn.Module):
         self.fixed_output_data = [
             ("sampling_frequency", self.recording.get_sampling_frequency()),
             ("geom", self.recording.get_channel_locations()),
-            ("channel_index", self.channel_index.numpy(force=True).copy()),
         ]
+        if channel_index is not None:
+            self.fixed_output_data.append(
+                ("channel_index", self.channel_index.numpy(force=True).copy()),
+            ) 
 
     # -- main functions for users to call
     # in practice users will interact with the functions `subtract(...)` in

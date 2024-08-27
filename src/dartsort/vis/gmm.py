@@ -36,12 +36,17 @@ class GMMPlot(layout.BasePlot):
 class DPCSplitPlot(GMMPlot):
     kind = "triplet"
     width = 5
-    height = 2
+    height = 5
 
-    def __init__(self, spike_kind="residual", feature="pca"):
+    def __init__(self, spike_kind="train", feature="pca", inherit_chans=True, common_chans=True, dist_vmax=1., cmap=plt.cm.rainbow):
         self.spike_kind = spike_kind
         assert feature in ("pca", "spread_amp")
         self.feature = feature
+        self.inherit_chans = inherit_chans
+        self.common_chans = common_chans
+        self.dist_vmax = dist_vmax
+        self.cmap = cmap
+        self.show_values = True
 
     def draw(self, panel, gmm, unit_id):
         if self.feature == "pca":
@@ -80,7 +85,7 @@ class DPCSplitPlot(GMMPlot):
             spread = (channel_norms * logs).sum(1)
             z = np.c_[amp.numpy(force=True), spread.numpy(force=True)]
             z /= mad(z, 0)
-        
+
         if in_unit is None:
             ax = panel.subplots()
             ax.set_title("no features")
@@ -104,19 +109,141 @@ class DPCSplitPlot(GMMPlot):
             return
 
         ru = np.unique(dens["labels"])
-        panel, axes = analysis_plots.density_peaks_study(
+        panel_top, panel_bottom = panel.subfigures(nrows=2, height_ratios=[.6, 1])
+        panel_top, axes = analysis_plots.density_peaks_study(
             z,
             dens,
             s=10,
             idx=idx,
             inv=inv,
-            fig=panel,
+            fig=panel_top,
         )
         axes[-1].set_title(f"n={(ru>=0).sum()}", fontsize=8)
         axes[0].set_title(self.spike_kind)
         if self.feature == "spread_amp":
             axes[0].set_xlabel("spread")
             axes[0].set_ylabel("amp")
+            
+        axes = panel_bottom.subplots(ncols=2)
+        axes = {'d': axes[0], 'e': axes[1]}
+        labels = dens['labels'][inv]
+        in_unit = torch.from_numpy(in_unit)
+        ids = np.unique(labels)
+        ids = ids[ids >= 0]
+        new_units = []
+        chans_kw = {} 
+        if self.inherit_chans:
+            chans_kw = dict(
+                channels=gmm[unit_id].channels,
+                max_channel=gmm[unit_id].max_channel,
+            )
+        for j, label in enumerate(ids):
+            u = spike_interp.InterpUnit(
+                do_interp=False,
+                **gmm.unit_kw,
+            )
+            inu = in_unit[np.flatnonzero(labels == label)]
+            inu, train_data = gmm.get_training_data(
+                unit_id,
+                waveform_kind="original",
+                in_unit=inu,
+                sampling_method=gmm.sampling_method,
+            )
+            u.fit_center(
+                **train_data,
+                padded_geom=gmm.data.padded_registered_geom,
+                show_progress=False,
+                **chans_kw,
+            )
+            new_units.append(u)
+
+        ju = [(j, u) for j, u in enumerate(new_units) if u.n_chans_unit]
+
+        # plot new unit maxchan wfs and old one in black
+        ax = axes["d"]
+        ax.axhline(0, c="k", lw=0.8)
+        all_means = []
+        for j, unit in ju:
+            if unit.do_interp:
+                times = unit.interp.grid.squeeze()
+                if self.fitted_only:
+                    times = times[unit.interp.grid_fitted]
+            else:
+                times = torch.tensor([sum(gmm.t_bounds) / 2]).to(gmm.device)
+            times = torch.atleast_1d(times)
+
+            chans = torch.full((times.numel(),), unit.max_channel, device=times.device)
+            means = unit.get_means(times).to(gmm.device)
+            if j > 0:
+                all_means.append(means.mean(0))
+            means = unit.to_waveform_channels(means, waveform_channels=chans[:, None])
+            means = means[..., 0]
+            means = gmm.data.tpca._inverse_transform_in_probe(means)
+            means = means.numpy(force=True)
+            color = glasbey1024[j]
+
+            lines = np.stack(
+                (np.broadcast_to(np.arange(means.shape[1])[None], means.shape), means),
+                axis=-1,
+            )
+            ax.add_collection(LineCollection(lines, colors=color, lw=1))
+        ax.autoscale_view()
+        ax.set_xticks([])
+        ax.spines[["top", "right", "bottom"]].set_visible(False)
+
+        # plot distance matrix
+        kind = gmm.merge_metric
+        min_overlap = gmm.min_overlap
+        subset_channel_index = None
+        if gmm.merge_on_waveform_radius:
+            subset_channel_index = gmm.data.registered_reassign_channel_index
+        nu = len(new_units)
+        divergences = torch.full((nu, nu), torch.nan)
+        for i, ua in ju:
+            # print(f"{i=} {ua.n_chans_unit=} {ua.channels.tolist()=}")
+            for j, ub in ju:
+                # print(f"{j=} {ub.n_chans_unit=} {ub.channels.tolist()=}")
+                if i == j:
+                    divergences[i, j] = 0
+                    continue
+                divergences[i, j] = ua.divergence(
+                    ub,
+                    kind=kind,
+                    min_overlap=min_overlap,
+                    subset_channel_index=subset_channel_index,
+                    common_chans=self.common_chans,
+                )
+        dists = divergences.numpy(force=True)
+
+        axis = axes["e"]
+        im = axis.imshow(
+            dists,
+            vmin=0,
+            vmax=self.dist_vmax,
+            cmap=self.cmap,
+            origin="lower",
+            interpolation="none",
+        )
+        if self.show_values:
+            for (j, i), label in np.ndenumerate(dists):
+                axis.text(
+                    i,
+                    j,
+                    f"{label:.2f}".lstrip("0"),
+                    ha="center",
+                    va="center",
+                    clip_on=True,
+                    fontsize=5,
+                )
+        panel.colorbar(im, ax=axis, shrink=0.3)
+        axis.set_xticks(range(len(new_units)))
+        axis.set_yticks(range(len(new_units)))
+        for i, (tx, ty) in enumerate(
+            zip(axis.xaxis.get_ticklabels(), axis.yaxis.get_ticklabels())
+        ):
+            tx.set_color(glasbey1024[i])
+            ty.set_color(glasbey1024[i])
+        axis.set_title(gmm.merge_metric)
 
 
 class ZipperSplitPlot(GMMPlot):
@@ -367,6 +494,7 @@ class KMeansPPSPlitPlot(GMMPlot):
             )
             u.fit_center(
                 **train_data,
+                padded_geom=gmm.data.padded_registered_geom,
                 show_progress=False,
                 weights=w,
                 **chans_kw,
@@ -546,7 +674,14 @@ class ChansHeatmap(GMMPlot):
         unique_ixs, counts = np.unique(ixs, return_counts=True)
         ax = panel.subplots()
         xy = gmm.data.registered_geom.numpy(force=True)
-        ax.scatter(*xy[unique_ixs].T, c=counts, lw=0, cmap=self.cmap)
+        s = ax.scatter(*xy[unique_ixs].T, c=counts, lw=0, cmap=self.cmap)
+        plt.colorbar(s, ax=ax, shrink=0.3)
+        ax.scatter(
+            *xy[gmm[unit_id].channels_valid.numpy(force=True)].T,
+            color="r",
+            lw=1,
+            fc="none",
+        )
         ax.scatter(
             *xy[np.atleast_1d(gmm[unit_id].max_channel.numpy(force=True))].T,
             color="g",
@@ -558,51 +693,47 @@ class AmplitudesOverTimePlot(GMMPlot):
     kind = "embeds"
     width = 5
     height = 3
+    
+    def __init__(self, kinds=("recon", 'model'), colors="bkrg"):
+        self.kinds = kinds
+        self.colors = dict(zip(kinds, colors))
 
     def draw(self, panel, gmm, unit_id):
         in_unit, utd = gmm.get_training_data(unit_id, waveform_kind="reassign")
-        amps = utd["static_amp_vecs"].numpy(force=True)
-        amps = np.nanmax(amps, axis=1)
+        
+        show = {}
+        if "feat" in self.kinds:
+            amps = utd["static_amp_vecs"].numpy(force=True)
+            show['feat'] = np.nanmax(amps, axis=1)
         amps2 = utd["waveforms"]
-        n, r, c = amps2.shape
-        amps2 = gmm.data.tpca._inverse_transform_in_probe(
-            amps2.permute(0, 2, 1).reshape(n * c, r)
-        )
-        amps2 = amps2.reshape(n, -1, c).permute(0, 2, 1)
-        amps2 = np.nan_to_num(amps2.numpy(force=True)).ptp(axis=(1, 2))
-        recons = gmm[unit_id].get_means(utd["times"])
-        recons = gmm[unit_id].to_waveform_channels(
-            recons, waveform_channels=utd["waveform_channels"]
-        )
-        n, r, c = recons.shape
-        recons = gmm.data.tpca._inverse_transform_in_probe(
-            recons.permute(0, 2, 1).reshape(n * c, r)
-        )
-        recons = recons.reshape(n, -1, c).permute(0, 2, 1)
-
-        recon_amps = np.nan_to_num(recons.numpy(force=True)).ptp(axis=(1, 2))
+        if 'recon' in self.kinds:
+            n, r, c = amps2.shape
+            amps2 = gmm.data.tpca._inverse_transform_in_probe(
+                amps2.permute(0, 2, 1).reshape(n * c, r)
+            )
+            amps2 = amps2.reshape(n, -1, c).permute(0, 2, 1)
+            show['recon'] = np.nan_to_num(amps2.numpy(force=True)).ptp(axis=(1, 2))
+        if 'model' in self.kinds:
+            recons = gmm[unit_id].get_means(utd["times"])
+            recons = gmm[unit_id].to_waveform_channels(
+                recons, waveform_channels=utd["waveform_channels"]
+            )
+            n, r, c = recons.shape
+            recons = gmm.data.tpca._inverse_transform_in_probe(
+                recons.permute(0, 2, 1).reshape(n * c, r)
+            )
+            recons = recons.reshape(n, -1, c).permute(0, 2, 1)
+            show['model'] = np.nan_to_num(recons.numpy(force=True)).ptp(axis=(1, 2))
+        if 'maxchan_energy' in self.kinds:
+            wfs = torch.nan_to_num(utd['waveforms'])
+            wfs = torch.linalg.norm(wfs, dim=1)
+            wfs = wfs.max(dim=1).values
+            show['maxchan_energy'] = wfs.numpy(force=True)
 
         ax = panel.subplots()
-        ax.scatter(
-            utd["times"].numpy(force=True),
-            amps,
-            s=3,
-            c="b",
-            lw=0,
-            label="observed (final)",
-        )
-        ax.scatter(
-            utd["times"].numpy(force=True),
-            amps2,
-            s=3,
-            c="k",
-            lw=0,
-            label="observed (feat)",
-        )
-        ax.scatter(
-            utd["times"].numpy(force=True), recon_amps, s=3, c="r", lw=0, label="model"
-        )
-        # ax.legend(loc="upper left", ncols=3)
+        t = utd["times"].numpy(force=True)
+        for kind, a in show.items():
+            ax.scatter(t, a, c=self.colors[kind], s=3, lw=0, label=kind)
         ax.set_ylabel("amplitude")
 
 
@@ -705,8 +836,7 @@ class FeaturesVsBadnessesPlot(GMMPlot):
         badnesses = {k: v.numpy(force=True) for k, v in badnesses.items()}
 
         # amplitudes
-        amps = utd["static_amp_vecs"].numpy(force=True)
-        amps = np.nanmax(amps, axis=1)
+        amps = torch.nan_to_num(torch.linalg.norm(utd['waveforms'], dim=1)).max(dim=1).values.numpy(force=True)
 
         axes = panel.subplots(ncols=z.shape[1] + 1, sharey=True)
         for ax, feat, featname in zip(
@@ -838,11 +968,12 @@ class InputWaveformsMultiChanPlot(GMMPlot):
     width = 5
     height = 5
 
-    def __init__(self, cmap=plt.cm.rainbow, max_plot=250, rg=0, time_range=None):
+    def __init__(self, cmap=plt.cm.rainbow, max_plot=250, rg=0, time_range=None, imputation_kind=None):
         self.cmap = cmap
         self.max_plot = max_plot
         self.rg = np.random.default_rng(0)
         self.time_range = time_range
+        self.imputation_kind = imputation_kind
 
     def draw(self, panel, gmm, unit_id):
         in_unit, utd = gmm.get_training_data(unit_id)
@@ -857,6 +988,22 @@ class InputWaveformsMultiChanPlot(GMMPlot):
         waveform_channels = utd["waveform_channels"][wh]
         waveforms = utd["waveforms"][wh]
         n, r, c = waveforms.shape
+        if self.imputation_kind:
+            waveforms = gmm[unit_id].impute(
+                times,
+                waveforms,
+                waveform_channels,
+                waveform_channel_index=utd["waveform_channel_index"],
+                imputation_kind=self.imputation_kind,
+                padded_registered_geom=gmm.data.padded_registered_geom,
+            )
+            waveforms = waveforms.reshape(n, r, gmm[unit_id].n_chans_unit)
+            waveform_channels = gmm[unit_id].channels.numpy(force=True)
+            waveform_channels = np.broadcast_to(waveform_channels[None], (n, *waveform_channels.shape))
+        else:
+            waveform_channels = waveform_channels.numpy(force=True)
+        n, r, c = waveforms.shape
+
         waveforms = gmm.data.tpca._inverse_transform_in_probe(
             waveforms.permute(0, 2, 1).reshape(n * c, r)
         )
@@ -870,7 +1017,7 @@ class InputWaveformsMultiChanPlot(GMMPlot):
         ax = panel.subplots()
         geomplot(
             waveforms,
-            channels=waveform_channels.numpy(force=True),
+            channels=waveform_channels,
             geom=gmm.data.registered_geom.numpy(force=True),
             max_abs_amp=maa,
             lw=1,
@@ -1705,7 +1852,7 @@ class CCGColumn(GMMMergePlot):
         colors = glasbey1024[neighbor_ids % len(glasbey1024)]
 
         axes = panel.subplots(
-            nrows=self.n_neighbors,
+            nrows=self.n_neighbors + 1,
             ncols=2,
             sharex=True,
             sharey=False,
