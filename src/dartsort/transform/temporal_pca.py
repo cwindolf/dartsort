@@ -146,6 +146,7 @@ class BaseTemporalPCA(BaseWaveformModule):
         pca.components_ = self.components.numpy()
         if hasattr(self, "whitener"):
             pca.explained_variance_ = np.square(self.whitener.numpy())
+        pca.temporal_slice = self.temporal_slice
         return pca
 
 
