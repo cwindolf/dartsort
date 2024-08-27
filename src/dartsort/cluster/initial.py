@@ -210,6 +210,7 @@ def cluster_chunks(
     clustering_config,
     sorting=None,
     motion_est=None,
+    amplitudes_dataset_name='denoised_ptp_amplitudes',
 ):
     """Divide the recording into chunks, and cluster each chunk
 
@@ -239,6 +240,7 @@ def cluster_chunks(
             chunk_time_range_s=chunk_range,
             motion_est=motion_est,
             recording=recording,
+            amplitudes_dataset_name=amplitudes_dataset_name,
         )
         for chunk_range in chunk_time_ranges_s
     ]
@@ -253,6 +255,7 @@ def ensemble_chunks(
     sorting=None,
     computation_config=None,
     motion_est=None,
+    **kwargs,
 ):
     """Initial clustering combined across chunks of time
 
@@ -283,6 +286,7 @@ def ensemble_chunks(
         clustering_config,
         sorting=sorting,
         motion_est=motion_est,
+        **kwargs,
     )
     if len(chunk_sortings) == 1:
         return chunk_sortings[0]
@@ -320,6 +324,7 @@ def initial_clustering(
     clustering_config=None,
     computation_config=None,
     motion_est=None,
+    **kwargs,
 ):
     if sorting is None:
         sorting = DARTsortSorting.from_peeling_hdf5(peeling_hdf5_filename)
@@ -333,6 +338,7 @@ def initial_clustering(
         sorting=sorting,
         computation_config=computation_config,
         motion_est=motion_est,
+        **kwargs,
     )
 
     
