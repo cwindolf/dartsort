@@ -60,7 +60,7 @@ def cluster_chunk(
     amps = getattr(sorting, amplitudes_dataset_name)
 
     if recording is None:
-        with h5py.File(sorting.parent_h5_path, "r") as h5:
+        with h5py.File(sorting.parent_h5_path, "r", locking=False) as h5:
             geom = h5["geom"][:]
     else:
         geom = recording.get_channel_locations()
