@@ -22,6 +22,7 @@ class BaseTemporalPCA(BaseWaveformModule):
         name=None,
         name_prefix="",
         temporal_slice=None,
+        n_oversamples=10,
     ):
         if fit_radius is not None:
             if geom is None or channel_index is None:
@@ -42,8 +43,7 @@ class BaseTemporalPCA(BaseWaveformModule):
         self.centered = centered
         self.whiten = whiten
         self.temporal_slice = temporal_slice
-        if whiten:
-            assert self.centered
+        self.n_oversamples = n_oversamples
 
     def fit(self, waveforms, max_channels):
         waveforms = self._temporal_slice(waveforms)
@@ -53,48 +53,38 @@ class BaseTemporalPCA(BaseWaveformModule):
             waveforms, train_channel_index = channel_subset_by_radius(
                 waveforms,
                 max_channels,
-                self.channel_index.cpu().numpy(),
-                self.geom.cpu().numpy(),
+                self.channel_index,
+                self.geom,
                 self.fit_radius,
             )
         _, waveforms_fit = get_channels_in_probe(
             waveforms, max_channels, train_channel_index
         )
-        waveforms_fit = waveforms_fit.cpu().numpy()
 
         if self.centered:
-            pca = PCA(
-                self.rank,
-                random_state=self.random_state,
-                whiten=self.whiten,
-                copy=False,  # don't need to worry here
-            )
-            pca.fit(waveforms_fit)
-            self.register_buffer(
-                "mean", torch.tensor(pca.mean_).to(waveforms.dtype)
-            )
-            self.register_buffer(
-                "components",
-                torch.tensor(pca.components_).to(waveforms.dtype),
-            )
-            self.register_buffer(
-                "whitener",
-                torch.sqrt(
-                    torch.tensor(pca.explained_variance_).to(waveforms.dtype)
-                ),
-            )
+            mean = waveforms_fit.mean(0)
         else:
-            tsvd = TruncatedSVD(self.rank, random_state=self.random_state)
-            tsvd.fit(waveforms_fit)
-            self.register_buffer(
-                "mean",
-                torch.zeros(waveforms_fit[0].shape, dtype=waveforms.dtype),
-            )
-            self.register_buffer(
-                "components",
-                torch.tensor(tsvd.components_).to(waveforms.dtype),
-            )
+            mean = torch.zeros_like(waveforms_fit[0])
 
+        q = self.rank + self.n_oversamples
+        n_samples, n_times = waveforms_fit.shape
+        assert q < min(n_samples, n_times)
+        M = mean if self.centered else None
+
+        # 7 is based on sklearn's auto choice
+        U, S, V = torch.svd_lowrank(waveforms_fit, q=q, M=M, niter=7)
+        U = U[..., :self.rank]
+        S = S[..., :self.rank]
+        V = V[..., :self.rank]
+
+        # loadings = U * S[..., None, :]
+        components = V.T.contiguous()
+        explained_variance = (S**2) / (n_samples - 1)
+        whitener = torch.sqrt(explained_variance)
+
+        self.register_buffer("mean", mean)
+        self.register_buffer("components", components)
+        self.register_buffer("whitener", whitener)
         self._needs_fit = False
 
     def needs_fit(self):
@@ -142,11 +132,10 @@ class BaseTemporalPCA(BaseWaveformModule):
             random_state=self.random_state,
             whiten=self.whiten,
         )
-        pca.mean_ = self.mean.numpy()
-        pca.components_ = self.components.numpy()
-        if hasattr(self, "whitener"):
-            pca.explained_variance_ = np.square(self.whitener.numpy())
-        pca.temporal_slice = self.temporal_slice
+        pca.mean_ = self.mean.numpy(force=True)
+        pca.components_ = self.components.numpy(force=True)
+        pca.explained_variance_ = np.square(self.whitener.numpy(force=True))
+        pca.temporal_slice = self.temporal_slice  # this is not standard
         return pca
 
 
