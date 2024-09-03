@@ -421,10 +421,10 @@ class WaveformPlot(UnitPlot):
         )
         trough_offset_samples = self.trough_offset_samples
         spike_length_samples = self.spike_length_samples
-        if tslice.start is not None:
+        if tslice is not None and tslice.start is not None:
             trough_offset_samples = self.trough_offset_samples - tslice.start
             spike_length_samples = self.spike_length_samples - tslice.start
-        if tslice.stop is not None:
+        if tslice is not None and tslice.stop is not None:
             spike_length_samples = tslice.stop - tslice.start
 
         max_abs_amp = None
