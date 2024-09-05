@@ -19,7 +19,7 @@ from dartsort.util.data_util import DARTsortSorting, chunk_time_ranges
 from dartsort.config import ClusteringConfig
 from tqdm.auto import tqdm
 from . import cluster_util, density, ensemble_utils, forward_backward, postprocess
-
+import sys
 
 def cluster_chunk(
     peeling_hdf5_filename,
@@ -237,15 +237,18 @@ def cluster_chunks(
 
     # cluster each chunk. can be parallelized in the future.
     sortings = []
+    n_spikes=0
     for chunk_range in tqdm(chunk_time_ranges_s, desc = "Clustering each chunk"):
-        sortings.append(cluster_chunk(
+        sorting_chunk = cluster_chunk(
             peeling_hdf5_filename,
             clustering_config,
             sorting=sorting,
             chunk_time_range_s=chunk_range,
             motion_est=motion_est,
             recording=recording,
-        ))
+        )
+        n_spikes += sorting_chunk.labels.shape[0]
+        sortings.append(sorting_chunk)
     #     for chunk_range in chunk_time_ranges_s
     # ]
 
@@ -321,7 +324,6 @@ def ensemble_chunks(
             show_progress=True,
         )
         
-    print("Separate positive/negative wfs")   
     if clustering_config.separate_pos_neg:
         sorting, max_value = postprocess.separate_positive_negative_wfs(
             sorting,
@@ -331,7 +333,7 @@ def ensemble_chunks(
             trough_offset=trough_offset,
             return_max_value=True,
         )
-    print("Merge close in space")
+
     if clustering_config.merge_clusters_close_in_space:
         sorting = postprocess.merge_units_close_in_space(
             sorting, 

@@ -98,6 +98,7 @@ def get_smoothed_densities(
     kdes = []
     if return_hist:
         hists = []
+
     for sigma, sigma_low in zip(list(sigmas), list(sigma_lows)):
         # fix up sigma, sigma_low based on bin size
         if sigma is not None:
@@ -136,7 +137,6 @@ def get_smoothed_densities(
         high = np.array([np.max(bc) for bc in bin_centers])
         dens = lerp(X.clip(low, high))
         kdes.append(dens)
-
     kdes = kdes if seq else kdes[0]
     if return_hist:
         hists = hists if seq else hists[0]
@@ -147,6 +147,7 @@ def get_smoothed_densities(
 def nearest_higher_density_neighbor(
     kdtree, density, n_neighbors_search=10, distance_upper_bound=5.0, workers=1
 ):
+
     distances, indices = kdtree.query(
         kdtree.data,
         k=1 + n_neighbors_search,
@@ -154,8 +155,10 @@ def nearest_higher_density_neighbor(
         workers=workers,
     )
     # exclude self
-    distances, indices = distances[:, 1:].copy(), indices[:, 1:].copy()
-
+    # distances, indices = distances[:, 1:].copy(), indices[:, 1:].copy()
+    distances = distances[:, 1:]
+    indices = indices[:, 1:]
+    
     # find lowest distance higher density neighbor
     density_padded = np.pad(density, (0, 1), constant_values=np.inf)
     is_lower_density = density_padded[indices] <= density[:, None]
@@ -169,6 +172,7 @@ def nearest_higher_density_neighbor(
 def remove_border_points(
     labels, density, kdtree, search_radius=1.0, n_neighbors_search=5, workers=1
 ):
+
     distances, indices = kdtree.query(
         kdtree.data,
         k=1 + n_neighbors_search,
