@@ -487,7 +487,13 @@ def get_templates(
             spike_length_samples=spike_length_samples,
             random_seed=random_seed,
         )
-
+        # Not torch svd projector 
+        denoising_tsvd = TorchSVDProjector(
+            torch.from_numpy(
+                denoising_tsvd.components_.astype(recording.dtype)
+            )
+        )
+        
     # template logic
     # for each unit, get shifted raw and denoised averages and channel SNRs
     res = get_all_shifted_raw_and_low_rank_templates(
@@ -510,14 +516,6 @@ def get_templates(
         device=device,
     )
     unit_ids, spike_counts, raw_templates, low_rank_templates, snrs_by_channel = res
-
-    if low_rank_denoising:
-        denoising_tsvd = TorchSVDProjector(
-            torch.from_numpy(
-                denoising_tsvd.components_.astype(recording.dtype)
-            )
-        )
-
 
     if raw_only:
         return dict(
