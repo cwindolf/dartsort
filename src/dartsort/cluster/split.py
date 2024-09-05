@@ -19,6 +19,7 @@ from scipy.interpolate import RegularGridInterpolator
 from scipy.sparse.csgraph import connected_components
 from scipy.sparse import coo_array
 from scipy.spatial import KDTree
+# from sklearn.neighbors import KDTree
 
 from . import cluster_util, density, relocate
 from .forward_backward import forward_backward
@@ -1117,7 +1118,8 @@ class ZipperSplit(SplitStrategy):
         amplitude_diff_nomerge=3,
         max_neigh_connected_merging=1,
         max_dist_nomerge=1000,
-        gaussian_filter_time_amp_std=[2, 0.1]
+        gaussian_filter_time_amp_std=[2, 0.1],
+        max_size = 500_000
         ):
 
         self.times_seconds = sorting.times_seconds
@@ -1139,6 +1141,7 @@ class ZipperSplit(SplitStrategy):
         self.max_dist_nomerge = max_dist_nomerge
         self.remove_clusters_smaller_than = remove_clusters_smaller_than
         self.gaussian_filter_time_amp_std = gaussian_filter_time_amp_std
+        self.max_size = max_size
         
     def split_cluster(self, in_unit_all):
 
@@ -1165,41 +1168,50 @@ class ZipperSplit(SplitStrategy):
 
         lerp = RegularGridInterpolator(bin_centers, hist, bounds_error=False)
         kde = lerp(features)
-        no_nans = ~np.isnan(kde)
+
+        no_nans = np.flatnonzero(~np.isnan(kde))
+
+        if len(no_nans)>self.max_size:
+            subsample_idx = np.random.choice(len(no_nans), size = self.max_size, replace = False)
+            no_nans = no_nans[subsample_idx]
 
         if len(no_nans)>1:
             # Check this?
+            n = len(no_nans)
+
+            
             valstd = mad_sigma(features[no_nans, 0], gauss_correct=True)/mad_sigma(features[no_nans, 1], gauss_correct=True)
+
             X = features[no_nans] * np.array([1, valstd])[None, :]
             kdtree = KDTree(X)
-    
+
             distances, indices = kdtree.query(
                 X,
                 k=self.n_neigh_search+1,
                 distance_upper_bound=self.distance_upperbound_search,
             ) 
             distances, indices = distances[:, 1:].copy(), indices[:, 1:].copy()
-    
+
             # find lowest distance higher density neighbor
             density_padded = np.pad(kde[no_nans], (0, 1), constant_values=np.inf)
             is_lower_density = density_padded[indices] <= kde[no_nans][:, None]
             distances[is_lower_density] = np.inf
-            indices[is_lower_density] = kdtree.n
-            nhdn = indices[np.arange(kdtree.n), distances.argmin(1)]
-            n = kdtree.n
+            # n = kdtree.n
+            indices[is_lower_density] = n
+            nhdn = indices[np.arange(n), distances.argmin(1)]
+            
     
             nhdn[kde[no_nans] <= self.density_noise] = n
-    
             nhdn = nhdn.astype(np.intc)
             has_nhdn = np.flatnonzero(nhdn < n).astype(np.intc)
-            
+
             graph = coo_array(
                 (np.ones(has_nhdn.size), (nhdn[has_nhdn], has_nhdn)), shape=(n, n)
             )
             ncc, labels = connected_components(graph)
             labels[nhdn == n] = -1
             _, labels[labels>-1] = np.unique(labels[labels>-1], return_inverse=True)
-    
+
             if self.triage_per_cluster>0:
                 for k in np.unique(labels[labels>-1]):
                     q = np.quantile(kde[no_nans][labels == k], self.triage_per_cluster)
@@ -1211,7 +1223,7 @@ class ZipperSplit(SplitStrategy):
             _, labels[labels>-1] = np.unique(labels[labels>-1], return_inverse=True)
     
             triaged = labels==-1
-            
+
             if labels.max()>0:
                 ncc = labels.max()+1
                 time_spread_per_cluster = np.zeros((ncc, 2))
@@ -1234,7 +1246,6 @@ class ZipperSplit(SplitStrategy):
                             idx_spikes_k = np.flatnonzero(np.logical_and(X[labels == k, 0]>=boundaries[0], X[labels == k, 0]<=boundaries[1]))
                             idx_spikes_j = np.flatnonzero(np.logical_and(X[labels == j, 0]>=boundaries[0], X[labels == j, 0]<=boundaries[1]))
                             dist_val = np.abs(np.median(self.denoised_ptp_amplitudes[in_unit_all][no_nans][labels == j][idx_spikes_j]) - np.median(self.denoised_ptp_amplitudes[in_unit_all][no_nans][labels == k][idx_spikes_k]))
-                            # print(f"units {(j, k)} amp distance {dist_val}")
                             if dist_val>self.amplitude_diff_nomerge:
                                 mat_dist[k, j] = np.inf
                             else:
@@ -1247,13 +1258,9 @@ class ZipperSplit(SplitStrategy):
                     (np.ones(ncc), (indices[:, 1], indices[:, 0])), shape=(ncc, ncc)
                 )
                 ncc_comp, labels_comp = connected_components(graph)
-                new_labels[~no_nans] = -1
-                new_labels[np.flatnonzero(no_nans)[triaged]] = -1
-                new_labels[np.flatnonzero(no_nans)[~triaged]] = labels_comp[labels[~triaged]]
+                new_labels[no_nans[~triaged]] = labels_comp[labels[~triaged]]
             else:
-                new_labels[~no_nans] = -1
-                new_labels[np.flatnonzero(no_nans)[triaged]] = -1
-                new_labels[np.flatnonzero(no_nans)[~triaged]] = 0
+                new_labels[no_nans[~triaged]] = 0
     
             return SplitResult(
                 is_split=True, in_unit=in_unit_all, new_labels=new_labels
@@ -1351,7 +1358,6 @@ class MaxChanPCSplit(SplitStrategy):
         self.reassign_outliers = reassign_outliers
         self.max_spikes = max_spikes
         self.amplitude_normalized = amplitude_normalized
-        # print("max channel PC Split")
 
         # hdbscan parameters
         self.min_cluster_size = min_cluster_size

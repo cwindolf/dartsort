@@ -1666,13 +1666,15 @@ class TemplateProcessContext:
         self.recording = recording
         self.sorting = sorting
         self.denoising_tsvd = denoising_tsvd
+        
         if denoising_tsvd is not None:
-            self.denoising_tsvd = TorchSVDProjector(
-                torch.from_numpy(
-                    denoising_tsvd.components_.astype(dtype)
-                )
-            )
+            # self.denoising_tsvd = TorchSVDProjector(
+            #     torch.from_numpy(
+            #         denoising_tsvd.components_.astype(dtype)
+            #     )
+            # )
             self.denoising_tsvd.to(self.device)
+            
         self.spikes_per_unit = spikes_per_unit
         self.reducer = reducer
         self.trough_offset_samples = trough_offset_samples
