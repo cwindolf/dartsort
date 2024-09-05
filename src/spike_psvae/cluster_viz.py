@@ -423,12 +423,12 @@ def array_scatter(
     axes[1].set_xlabel("Amplitude (s.u.)", fontsize=16)
     axes[1].tick_params(axis='x', labelsize=16)
 
-    if maxptp_c is None:
-        maxptp_c = np.clip(maxptp, 3, 15)    
+    # if maxptp_c is None:
+    #     maxptp_c = np.clip(maxptp, 3, 15)    
     axes[0].scatter(
         x,
         z,
-        c=maxptp_c,
+        c=maxptp,
         s=size,
         alpha=alpha/3,
         marker=".",
