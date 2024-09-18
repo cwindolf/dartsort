@@ -1026,11 +1026,16 @@ def make_all_summaries(
     overwrite=False,
     unit_ids=None,
     gizmo_name="sorting_analysis",
+    n_units=None,
+    seed=0,
     **other_global_params,
 ):
     save_folder = Path(save_folder)
     if unit_ids is None:
         unit_ids = sorting_analysis.unit_ids
+    if n_units is not None and n_units < len(unit_ids):
+        rg = np.random.default_rng(seed)
+        unit_ids = rg.choice(unit_ids, size=n_units, replace=False)
     if not overwrite and all_summaries_done(
         unit_ids, save_folder, ext=image_ext
     ):
