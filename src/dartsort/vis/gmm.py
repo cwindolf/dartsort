@@ -7,6 +7,7 @@ import numpy as np
 import torch
 from tqdm.auto import tqdm
 from scipy.spatial import KDTree
+from scipy.stats import pearsonr
 
 from ..cluster import density
 from dartsort.cluster.modes import smoothed_dipscore_at
@@ -422,12 +423,16 @@ class KMeansPPSPlitPlot(GMMPlot):
         merge_on_waveform_radius=True,
         dist_vmax=1.0,
         show_values=True,
-        n_clust=5,
-        n_iter=50,
-        common_chans=True,
+        n_clust=None,
+        n_iter=None,
+        common_chans=False,
         inherit_chans=True,
-        impute_before_center=False,
+        impute_before_center=True,
+        with_proportions=False,
         min_overlap=0.0,
+        zip_metric=None,
+        verbose=False,
+        equilibrium_kmeans_alpha=0.0,
     ):
         self.cmap = cmap
         self.fitted_only = fitted_only
@@ -445,12 +450,23 @@ class KMeansPPSPlitPlot(GMMPlot):
         self.impute_before_center = impute_before_center
         self.min_overlap = min_overlap
         self.merge_on_waveform_radius = merge_on_waveform_radius
+        self.with_proportions = with_proportions
+        self.zip_metric = zip_metric
+        self.verbose = verbose
+        self.equilibrium_kmeans_alpha = equilibrium_kmeans_alpha
         if self.scaled:
             self.title = f"scaled {self.title}"
 
     def draw(self, panel, gmm, unit_id):
+        n_clust = self.n_clust or gmm.kmeans_nclust
+        n_iter = self.n_iter or gmm.kmeans_niter
         in_unit, labels, weights = gmm.kmeanspp(
-            unit_id, n_clust=self.n_clust, n_iter=self.n_iter
+            unit_id,
+            n_clust=n_clust,
+            n_iter=n_iter,
+            with_proportions=self.with_proportions,
+            verbose=self.verbose,
+            equilibrium_kmeans_alpha=self.equilibrium_kmeans_alpha,
         )
 
         times = gmm.data.times_seconds[in_unit].numpy(force=True)
@@ -458,9 +474,22 @@ class KMeansPPSPlitPlot(GMMPlot):
         labels = labels.numpy(force=True)
         ids = np.unique(labels)
         ids = ids[ids >= 0]
+        if self.verbose: print(f"gmm.KMeansPPSPlitPlot {ids=} {np.unique(labels, return_counts=True)=}")
+
+        zip_metric = self.zip_metric or gmm.zip_metric
+        zip_threshold = gmm.zip_threshold
+        if gmm.zip_by_quantile:
+            in_unit, utd = gmm.get_training_data(unit_id, in_unit=in_unit, waveform_kind="reassign")
+            spike_ix, overlaps, badnesses = gmm[unit_id].spike_badnesses(
+                utd["times"],
+                utd["waveforms"],
+                utd["waveform_channels"],
+                kinds=(zip_metric,)
+            )
+            zip_threshold = torch.quantile(badnesses[zip_metric], zip_threshold)
 
         if ids.size > 1:
-            top, bottom = panel.subfigures(nrows=2)
+            top, bottom, below = panel.subfigures(nrows=3)
             ax_top = top.subplots()
             axes = bottom.subplot_mosaic("dfe")
         else:
@@ -483,6 +512,7 @@ class KMeansPPSPlitPlot(GMMPlot):
                 channels=gmm[unit_id].channels,
                 max_channel=gmm[unit_id].max_channel,
             )
+        if self.verbose: print(f"{self.impute_before_center=} {self.common_chans=}")
         for j, label in enumerate(ids):
             u = spike_interp.InterpUnit(
                 do_interp=False,
@@ -542,7 +572,7 @@ class KMeansPPSPlitPlot(GMMPlot):
             ax.set_title(pick)
 
         # plot distance matrix
-        kind = gmm.merge_metric
+        kind = gmm.zip_metric
         min_overlap = self.min_overlap
         if self.min_overlap is None:
             min_overlap = gmm.min_overlap
@@ -551,6 +581,7 @@ class KMeansPPSPlitPlot(GMMPlot):
             subset_channel_index = gmm.data.registered_reassign_channel_index
         nu = len(new_units)
         divergences = torch.full((nu, nu), torch.nan)
+        if self.verbose: print(f"{self.inherit_chans=} {zip_metric=} {subset_channel_index is None=}")
         for i, ua in ju:
             # print(f"{i=} {ua.n_chans_unit=} {ua.channels.tolist()=}")
             for j, ub in ju:
@@ -595,7 +626,66 @@ class KMeansPPSPlitPlot(GMMPlot):
         ):
             tx.set_color(glasbey1024[i])
             ty.set_color(glasbey1024[i])
-        axis.set_title(gmm.merge_metric)
+        axis.set_title(f"{kind} {zip_threshold}")
+
+        dbads, bimodalities = gmm.bimodalities_prefit(
+            new_units,
+            which_spikes=in_unit,
+            return_dbad=True,
+            common_chans=self.common_chans,
+            impute_missing=self.impute_before_center,
+        )
+        f0 = below
+        # f0, f1 = below.subfigures(ncols=2, width_ratios=(2, 1))
+        # ax1 = f1.subplots()
+        # im = ax1.imshow(
+        #     bimodalities,
+        #     vmin=0,
+        #     vmax=self.dist_vmax,
+        #     cmap=self.cmap,
+        #     origin="lower",
+        #     interpolation="none",
+        # )
+        # if self.show_values:
+        #     for (j, i), label in np.ndenumerate(bimodalities):
+        #         ax1.text(
+        #             i,
+        #             j,
+        #             f"{label:.2f}".lstrip("0"),
+        #             ha="center",
+        #             va="center",
+        #             clip_on=True,
+        #             fontsize=5,
+        #         )
+        # panel.colorbar(im, ax=ax1, shrink=0.3)
+        # ax1.set_xticks(range(len(new_units)))
+        # ax1.set_yticks(range(len(new_units)))
+        # for i, (tx, ty) in enumerate(
+        #     zip(ax1.xaxis.get_ticklabels(), ax1.yaxis.get_ticklabels())
+        # ):
+        #     tx.set_color(glasbey1024[i])
+        #     ty.set_color(glasbey1024[i])
+
+        axes0 = f0.subplots(nrows=len(dbads), ncols=len(dbads), sharex=True, sharey=True)
+        for i in range(len(dbads)):
+            for j in range(len(dbads)):
+                if j >= i:
+                    axes0[i, j].set_visible(False)
+                    continue
+
+                axes0[i, j].scatter(
+                    dbads[i],
+                    dbads[j],
+                    c=np.stack([glasbey1024[i], glasbey1024[j]], axis=0)[(dbads[i] < dbads[j]).astype(int)],
+                    s=3,
+                    lw=0,
+                )
+                axes0[i, j].set_xticks([])
+                axes0[i, j].set_yticks([])
+                axes0[i, j].set_title(f"{bimodalities[i, j]:0.2f}", fontsize=5)
+
+        # ax0.hist(dbads.todense(), bins=32, density=True, histtype="step")
+       
 
 
 class HDBScanSplitPlot(GMMPlot):
@@ -1577,16 +1667,22 @@ class NeighborBimodality(GMMMergePlot):
     width = 3
     height = 10
 
-    def __init__(self, n_neighbors=5, badness_kind="1-r^2", do_reg=False, masked=False, mask_radius_s=5.0, impute_missing=False):
+    def __init__(self, n_neighbors=5, badness_kind=None, do_reg=False, masked=False, mask_radius_s=5.0, impute_missing=False, max_spikes=2048, cut=None, kind="isotonic"):
         self.n_neighbors = n_neighbors
         self.badness_kind = badness_kind
         self.do_reg = do_reg
         self.masked = masked
         self.mask_radius_s = mask_radius_s
         self.impute_missing = impute_missing
+        self.max_spikes = max_spikes
+        self.cut = None
+        self.kind = kind
 
     def draw(self, panel, gmm, unit_id):
         from isosplit import isocut, dipscore_at
+        kind = self.badness_kind
+        if kind is None:
+            kind = gmm.reassign_metric
         (in_self,) = torch.nonzero(gmm.labels == unit_id, as_tuple=True)
         neighbors = self.get_neighbors(gmm, unit_id)
         # remove self
@@ -1618,6 +1714,15 @@ class NeighborBimodality(GMMMergePlot):
             else:
                 in_self_local = in_self.numpy(force=True)
                 inu_local = inu.numpy(force=True)
+
+            rg = np.random.default_rng(0)
+            if inu_local.size > self.max_spikes:
+                inu_local = rg.choice(inu_local, size=self.max_spikes, replace=False)
+                inu_local.sort()
+            if in_self_local.size > self.max_spikes:
+                in_self_local = rg.choice(in_self_local, size=self.max_spikes, replace=False)
+                in_self_local.sort()
+
             nu = inu_local.size
             ns = in_self_local.size
 
@@ -1641,13 +1746,14 @@ class NeighborBimodality(GMMMergePlot):
                 which_spikes=torch.from_numpy(which).to(gmm.labels),
                 unit_ids=[unit_id, u],
                 show_progress=False,
-                kind=self.badness_kind,
+                kind=kind,
                 impute_missing=self.impute_missing,
             )
             a = np.full(badness.shape, np.inf)
             a[badness.coords] = badness.data
-            a = np.nan_to_num(a, nan=1.0, posinf=1.0, copy=False)
+            a = np.nan_to_num(a, nan=gmm.match_threshold, posinf=gmm.match_threshold, copy=False)
             self_badness, u_badness = a
+            pear = pearsonr(self_badness, u_badness)
 
             row[0].scatter(
                 u_badness,
@@ -1657,30 +1763,32 @@ class NeighborBimodality(GMMMergePlot):
                 lw=0,
                 alpha=0.5,
             )
-            row[0].set_title(f"{ns=} {nu=}", fontsize=6)
+            row[0].set_title(f"{ns=} {nu=} 1-rho={1.0 - pear.statistic} p={pear.pvalue}", fontsize=6)
             row[0].set_xlabel(f"{u}: {self.badness_kind}")
             row[0].set_ylabel(f"{unit_id}: {self.badness_kind}")
 
             # closer to me = self_badness < u_badness = u_badness - self_badness > 0 = to the right
             dbad = u_badness - self_badness
             unique_dbad, inverse, counts = np.unique(dbad, return_counts=True, return_inverse=True)
-            weights = counts.copy().astype(float)
+            # weights = counts.copy().astype(float)
             weights = np.zeros(counts.shape)
             np.add.at(weights, inverse, sample_weights)
 
-            row[1].axvline(0, lw=1, color="k")
-
             n, bins, patches = row[1].hist(dbad, bins=64, histtype="step", color="b", density=True)
-            row[1].hist(unique_dbad, bins=bins, histtype="step", color="b", linestyle=":", density=True)
-            row[1].hist(unique_dbad, weights=weights, bins=bins, histtype="step", color="r", density=True)
+            hist, _, _ = row[1].hist(unique_dbad, bins=bins, histtype="step", color="b", linestyle=":", density=True)
+            histw, _, _ = row[1].hist(unique_dbad, weights=weights, bins=bins, histtype="step", color="r", density=True)
+            bc = 0.5 * (bins[1:] + bins[:-1])
 
-            ds_ud, x, m, m_ud = smoothed_dipscore_at(0, unique_dbad, sample_weights=counts.astype(float))
+            ds_ud, x, m, m_ud, cut_ud = smoothed_dipscore_at(self.cut, unique_dbad, sample_weights=counts.astype(float), kind=self.kind)
             row[1].plot(x, m, color="g", lw=1)
             row[1].plot(x, m_ud, color="g", lw=1, ls=(0, (0.5, 0.5)))
-            ds_udw, xw, mw, m_udw = smoothed_dipscore_at(0, unique_dbad, sample_weights=weights)
+            row[1].axvline(cut_ud, lw=0.8, color="g")
+            ds_udw, xw, mw, m_udw, cut_udw = smoothed_dipscore_at(self.cut, unique_dbad, sample_weights=weights, kind=self.kind)
             row[1].plot(xw, mw, color="orange", lw=1)
             row[1].plot(xw, m_udw, color="orange", lw=1, ls=(0, (0.5, 0.5)))
+            row[1].axvline(cut_udw, lw=0.8, color="orange")
 
+            dbin = np.diff(bc).mean()
             ds_ud = f"{ds_ud:0.3f}".lstrip("0").rstrip("0")
             ds_udw = f"{ds_udw:0.3f}".lstrip("0").rstrip("0")
             mstr = "masked " if self.masked else ""
@@ -1697,7 +1805,7 @@ class NeighborBimodality(GMMMergePlot):
                     ci=None,
                 )
 
-                
+
 class NearbyDivergencesMatrix(GMMMergePlot):
     kind = "amatrix"
     width = 2
@@ -1723,27 +1831,16 @@ class NearbyDivergencesMatrix(GMMMergePlot):
         kind = self.badness_kind
         if kind is None:
             kind = gmm.merge_metric
-        min_overlap = gmm.min_overlap
-        subset_channel_index = None
-        if self.merge_on_waveform_radius:
-            subset_channel_index = gmm.data.registered_reassign_channel_index
 
         neighbors = self.get_neighbors(gmm, unit_id)
-
-        nu = len(neighbors)
-        ju = list(enumerate(gmm[u] for u in neighbors))
-        divergences = torch.full((nu, nu), torch.nan)
-        for i, ua in ju:
-            for j, ub in ju:
-                if i == j:
-                    divergences[i, j] = 0
-                    continue
-                divergences[i, j] = ua.divergence(
-                    ub,
-                    kind=kind,
-                    min_overlap=min_overlap,
-                    subset_channel_index=subset_channel_index,
-                )
+        nu = neighbors.size
+        divergences = gmm.central_divergences(
+            units_a=torch.from_numpy(neighbors),
+            units_b=torch.from_numpy(neighbors),
+            kind=kind,
+            allow_chan_subset=self.merge_on_waveform_radius,
+            
+        )
         dists = divergences.numpy(force=True)
 
         axis = panel.subplots()
@@ -1912,7 +2009,7 @@ default_gmm_plots = (
     # HDBScanSplitPlot(spike_kind="residual_full"),
     # HDBScanSplitPlot(),
     # ZipperSplitPlot(),
-    KMeansPPSPlitPlot(inherit_chans=True, n_clust=10, impute_before_center=True),
+    KMeansPPSPlitPlot(inherit_chans=True, impute_before_center=True),
     GridMeansSingleChanPlot(),
     InputWaveformsSingleChanPlot(),
     # InputWaveformsSingleChanOverTimePlot(channel="unit"),
@@ -1938,7 +2035,9 @@ gmm_merge_plots = (
     ViolatorTimesVAmps(),
     NearbyTimesVAmps(),
     NearbyDivergencesMatrix(merge_on_waveform_radius=True, badness_kind="diagz"),
+    NearbyDivergencesMatrix(merge_on_waveform_radius=False, badness_kind="diagz"),
     NearbyDivergencesMatrix(merge_on_waveform_radius=True, badness_kind="1-r^2"),
+    NearbyDivergencesMatrix(merge_on_waveform_radius=True, badness_kind="cos"),
     # NearbyDivergencesMatrix(merge_on_waveform_radius=True, badness_kind="1-scaledr^2"),
     # NearbyDivergencesMatrix(merge_on_waveform_radius=False, badness_kind="diagz"),
     # NearbyDivergencesMatrix(merge_on_waveform_radius=False, badness_kind="1-scaledr^2"),
@@ -1947,8 +2046,8 @@ gmm_merge_plots = (
     ISICorner(bin_ms=0.25),
     ISICorner(bin_ms=0.5, max_ms=8, tick_step=2),
     # NeighborBimodality(),
-    NeighborBimodality(badness_kind="1-r^2", masked=True),
-    NeighborBimodality(badness_kind="1-r^2", masked=True, impute_missing=True),
+    # NeighborBimodality(badness_kind=None, masked=True, impute_missing=True, kind="truncnorm"),
+    NeighborBimodality(badness_kind=None, masked=True, impute_missing=True),
     CCGColumn(),
     # NeighborBimodality(badness_kind="1-scaledr^2", masked=True),
 )
@@ -2012,11 +2111,16 @@ def make_all_gmm_summaries(
     overwrite=False,
     unit_ids=None,
     use_threads=False,
+    n_units=None,
+    seed=0,
     **other_global_params,
 ):
     save_folder = Path(save_folder)
     if unit_ids is None:
         unit_ids = gmm.unit_ids().numpy(force=True)
+    if n_units is not None and n_units < len(unit_ids):
+        rg = np.random.default_rng(seed)
+        unit_ids = rg.choice(unit_ids, size=n_units, replace=False)
     if not overwrite and all_summaries_done(unit_ids, save_folder, ext=image_ext):
         return
 
