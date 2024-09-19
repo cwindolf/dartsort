@@ -30,6 +30,8 @@ class VAELocalization(BaseWaveformFeaturizer):
         learning_rate=1e-3,
         batch_size=32,
         alpha_closed_form=False,
+        amplitudes_only=False,
+        prior_variance=80.0,
     ):
         assert amplitude_kind in ("peak", "ptp")
         super().__init__(
@@ -46,9 +48,12 @@ class VAELocalization(BaseWaveformFeaturizer):
         self.learning_rate = learning_rate
         self.batch_size = batch_size
         self.encoder = None
+        self.amplitudes_only = amplitudes_only
         self.register_buffer("padded_geom", F.pad(self.geom.to(torch.float), (0, 0, 0, 1)))
         self.hidden_dims = hidden_dims
         self.alpha_closed_form = alpha_closed_form
+        self.variational = prior_variance is not None
+        self.prior_variance = prior_variance
 
         self.register_buffer(
             "model_channel_index",
@@ -63,6 +68,16 @@ class VAELocalization(BaseWaveformFeaturizer):
         if self.encoder is not None:
             return
 
+        n_latent = self.latent_dim
+        if self.variational:
+            n_latent *= 2
+        input_dims = [
+            (spike_length_samples + 1) * self.model_channel_index.shape[1],
+            *self.hidden_dims[:-1],
+        ]
+        output_dims = [*self.hidden_dims[1:], n_latent]
+        
+        
         self.encoder = nn.Sequential(
             nn.Linear((spike_length_samples + 1) * self.model_channel_index.shape[1], self.hidden_dims[0]),
             nn.BatchNorm1d(self.hidden_dims[0]),
@@ -70,11 +85,13 @@ class VAELocalization(BaseWaveformFeaturizer):
             nn.Linear(self.hidden_dims[0], self.hidden_dims[1]),
             nn.BatchNorm1d(self.hidden_dims[1]),
             nn.ReLU(),
-            nn.Linear(self.hidden_dims[1], self.latent_dim * 2),  # Output mu and var
+            nn.Linear(self.hidden_dims[1], n_latent),  # Output mu and var
         )
         self.encoder.to(self.padded_geom.device)
 
     def reparameterize(self, mu, var):
+        if var is None:
+            return mu
         std = var.sqrt()
         eps = torch.randn_like(std)
         return mu + eps * std
@@ -110,8 +127,11 @@ class VAELocalization(BaseWaveformFeaturizer):
     def forward(self, x, mask, obs_amps, channels):
         x_flat = x.view(x.size(0), -1)
         x_flat_mask = torch.cat((x_flat, mask), dim=1)
-        mu, var = self.encoder(x_flat_mask).chunk(2, dim=-1)
-        var = F.softplus(var)
+        mu = self.encoder(x_flat_mask)
+        var = None
+        if self.variational:
+            mu, var = mu.chunk(2, dim=-1)
+            var = F.softplus(var)
         z = self.reparameterize(mu, var)
         alphas, pred_amps = self.decode(z, channels, obs_amps, mask)
         return pred_amps, mu, var
@@ -120,18 +140,32 @@ class VAELocalization(BaseWaveformFeaturizer):
         recon_x_masked = recon_x * mask
         x_masked = x * mask
         MSE = F.mse_loss(recon_x_masked, x_masked, reduction="sum")
-        KLD = -0.5 * (1 + torch.log(var) - mu.pow(2) - var).sum()
+        KLD = 0.0
+        if self.variational:
+            KLD = (
+                var / self.prior_variance
+                + torch.log(self.prior_variance / var)
+                + mu.pow(2) / self.prior_variance
+                - 1
+            ).sum()
         return MSE, KLD
 
     def _fit(self, waveforms, channels):
         # apply channel reindexing before any fitting...
-        waveforms = reindex(channels, waveforms, self.relative_index, pad_value=0.0)
-        # should be no nans there thanks to padding with 0s
-
-        if self.amplitude_kind == "ptp":
-            amps = ptp(waveforms)
-        elif self.amplitude_kind == "peak":
-            amps = waveforms.abs().max(dim=1).values
+        if self.amplitudes_only:
+            if self.amplitude_kind == "ptp":
+                waveforms = ptp(waveforms)
+            elif self.amplitude_kind == "peak":
+                waveforms = waveforms.abs().max(dim=1).values
+            waveforms = waveforms[:, None]
+            waveforms = reindex(channels, waveforms, self.relative_index, pad_value=0.0)
+            amps = waveforms[:, 0]
+        else:
+            waveforms = reindex(channels, waveforms, self.relative_index, pad_value=0.0)
+            if self.amplitude_kind == "ptp":
+                amps = ptp(waveforms)
+            elif self.amplitude_kind == "peak":
+                amps = waveforms.abs().max(dim=1).values
             
         self.initialize_net(waveforms.shape[1])
 
@@ -143,7 +177,7 @@ class VAELocalization(BaseWaveformFeaturizer):
         with trange(self.epochs, desc="Epochs", unit="epoch") as pbar:
             for epoch in pbar:
                 total_loss = 0
-                total_bce = 0
+                total_mse = 0
                 total_kld = 0
                 for waveform_batch, amps_batch, channels_batch in dataloader:
                     optimizer.zero_grad()
@@ -155,12 +189,12 @@ class VAELocalization(BaseWaveformFeaturizer):
                     mse, kld = self.loss_function(
                         reconstructed_amps, amps_batch, channels_mask, mu, var
                     )
-                    loss = bce + kld
+                    loss = mse + kld
                     loss.backward()
                     optimizer.step()
                     total_loss += loss.item()
                     total_mse += mse.item()
-                    total_kld += kld.item()
+                    total_kld += kld.item() if self.variational else kld
 
                 pbar.set_description(f"Epochs [loss={total_loss / len(dataloader):0.2f},mse={total_mse/len(dataloader):0.2f},kld={total_kld/len(dataloader):0.2f}]")
 
@@ -175,12 +209,21 @@ class VAELocalization(BaseWaveformFeaturizer):
 
         waveform[n] lives on channels self.channel_index[max_channels[n]]
         """
+        if self.amplitudes_only:
+            if self.amplitude_kind == "ptp":
+                waveforms = ptp(waveforms)
+            elif self.amplitude_kind == "peak":
+                waveforms = waveforms.abs().max(dim=1).values
+            waveforms = waveforms[:, None]
         waveforms = reindex(max_channels, waveforms, self.relative_index, pad_value=0.0)
         mask = self.model_channel_index[max_channels] < len(self.geom)
         mask = mask.to(waveforms)
         x_flat = waveforms.view(len(waveforms), -1)
         x_flat_mask = torch.cat((x_flat, mask), dim=1)
-        mu, var = self.encoder(x_flat_mask).chunk(2, dim=-1)
+        mu = self.encoder(x_flat_mask)
+        var = None
+        if self.variational:
+            mu, var = mu.chunk(2, dim=-1)
         x, y, z = mu[:, :3].T
         y = F.softplus(y)
         mx, mz = self.geom[max_channels].T
