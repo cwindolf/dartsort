@@ -447,7 +447,7 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
 
         return match_results
 
-    def templates_at_time(self, t_s):
+    def templates_at_time(self, t_s, spatial_mask=None):
         """Handle drift -- grab the right spatial neighborhoods."""
         pconvdb = self.pairwise_conv_db
         pitch_shifts_a = pitch_shifts_b = None
@@ -457,6 +457,7 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
         ):
             pconvdb.to(self.objective_spatial_components.device)
         if self.is_drifting:
+            assert spatial_mask is None
             pitch_shifts_b, cur_spatial = template_util.templates_at_time(
                 t_s,
                 self.spatial_components,
@@ -505,6 +506,9 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
         else:
             cur_spatial = self.spatial_components
             cur_obj_spatial = self.objective_spatial_components
+            if spatial_mask is not None:
+                cur_spatial = cur_spatial[:, :, spatial_mask]
+                cur_obj_spatial = cur_obj_spatial[:, :, spatial_mask]
             max_channels = self.registered_template_ampvecs.argmax(1)
 
         # if not pconvdb._is_torch:
@@ -542,8 +546,10 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
         left_margin=0,
         right_margin=0,
         threshold=30,
+        return_collisioncleaned_waveforms=True,
         return_residual=False,
         return_conv=False,
+        unit_mask=None,
     ):
         """Core peeling routine for subtraction"""
         # initialize residual, it needs to be padded to support our channel
@@ -588,6 +594,7 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
                 padded_objective,
                 refrac_mask,
                 compressed_template_data,
+                unit_mask=unit_mask,
             )
             if new_peaks is None:
                 break
@@ -627,12 +634,14 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
         peaks.subset(*torch.nonzero(valid, as_tuple=True), sort=True)
 
         # extract collision-cleaned waveforms on small neighborhoods
-        channels, waveforms = compressed_template_data.get_collisioncleaned_waveforms(
-            residual_padded,
-            peaks,
-            self.channel_index,
-            spike_length_samples=self.spike_length_samples,
-        )
+        channels = waveforms = None
+        if return_collisioncleaned_waveforms:
+            channels, waveforms = compressed_template_data.get_collisioncleaned_waveforms(
+                residual_padded,
+                peaks,
+                self.channel_index,
+                spike_length_samples=self.spike_length_samples,
+            )
 
         res = dict(
             n_spikes=peaks.n_spikes,
@@ -658,6 +667,7 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
         padded_objective,
         refrac_mask,
         compressed_template_data,
+        unit_mask=None,
     ):
         # update the coarse objective
         torch.add(
@@ -671,6 +681,8 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
         objective = (padded_objective + refrac_mask)[
             :-1, self.obj_pad_len : -self.obj_pad_len
         ]
+        if unit_mask is not None:
+            objective[torch.logical_not(unit_mask)] = -torch.inf
         # formerly used detect_and_deduplicate, but that was slow.
         objective_max, max_obj_template = objective.max(dim=0)
         times = argrelmax(objective_max, self.spike_length_samples, self.threshold)

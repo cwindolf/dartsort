@@ -36,6 +36,20 @@ class BaseWaveformModule(torch.nn.Module):
         pass
 
 
+class RegularChannelsTransformerMixin:
+    
+    def needs_precompute(self):
+        return hasattr(self, "regular_channel_index")
+
+    def precompute(self):
+        # create regular channel index...
+        # assume that we have a
+        self.radius
+        # parameter
+        ...
+
+        
+
 class BaseWaveformDenoiser(BaseWaveformModule):
     is_denoiser = True
 
@@ -75,6 +89,8 @@ class BaseWaveformFeaturizer(BaseWaveformModule):
                 dtype=torch_dtype_as_str,
             )
             return (dataset,)
+
+
 
 
 class BaseWaveformAutoencoder(BaseWaveformDenoiser, BaseWaveformFeaturizer):
