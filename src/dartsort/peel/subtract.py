@@ -1,6 +1,7 @@
 import warnings
 from collections import namedtuple
 from pathlib import Path
+import tempfile
 
 import h5py
 import torch
@@ -231,7 +232,7 @@ class SubtractionPeeler(BasePeeler):
     def precompute_peeler_models(self):
         self.subtraction_denoising_pipeline.precompute()
 
-    def fit_peeler_models(self, save_folder, n_jobs=0, device=None):
+    def fit_peeler_models(self, save_folder, tmp_dir=None, n_jobs=0, device=None):
         # when fitting peelers for subtraction, there are basically
         # two cases. fitting featurizers is easy -- they don't modify
         # the waveforms. fitting denoisers is hard -- they do. each
@@ -244,14 +245,14 @@ class SubtractionPeeler(BasePeeler):
         # just remove all the denoisers that need fitting, run peeling,
         # and fit everything
         self._fit_subtraction_transformers(
-            save_folder, n_jobs=n_jobs, device=device, which="denoisers"
+            save_folder, tmp_dir=tmp_dir, n_jobs=n_jobs, device=device, which="denoisers"
         )
         self._fit_subtraction_transformers(
-            save_folder, n_jobs=n_jobs, device=device, which="featurizers"
+            save_folder, tmp_dir=tmp_dir, n_jobs=n_jobs, device=device, which="featurizers"
         )
 
     def _fit_subtraction_transformers(
-        self, save_folder, n_jobs=0, device=None, which="denoisers"
+        self, save_folder, tmp_dir=None, n_jobs=0, device=None, which="denoisers"
     ):
         """Handle fitting either denoisers or featurizers since the logic is similar"""
         if not any(
@@ -262,6 +263,10 @@ class SubtractionPeeler(BasePeeler):
             for t in self.subtraction_denoising_pipeline
         ):
             return
+
+        if device is None:
+            device = "cuda" if torch.cuda.is_available() else "cpu"
+        device = torch.device(device)
 
         orig_denoise = self.subtraction_denoising_pipeline
         init_waveform_feature = Waveform(
@@ -283,40 +288,43 @@ class SubtractionPeeler(BasePeeler):
         self.featurization_pipeline = WaveformPipeline([])
 
         # run mini subtraction
-        temp_hdf5_filename = Path(save_folder) / "subtraction_denoiser_fit.h5"
-        try:
-            self.run_subsampled_peeling(
-                temp_hdf5_filename,
-                n_jobs=n_jobs,
-                device=device,
-                task_name="Fit subtraction denoisers",
-            )
-
-            # fit featurization pipeline and reassign
-            # work in a try finally so we can delete the temp file
-            # in case of an issue or a keyboard interrupt
-            with h5py.File(temp_hdf5_filename) as h5:
-                channels = h5["channels"][:]
-                n_wf = channels.size
-                if self.max_waveforms_fit and n_wf > self.max_waveforms_fit:
-                    choices = self.fit_subsampling_random_state.choice(
-                        n_wf, size=self.max_waveforms_fit, replace=False
-                    )
-                    choices.sort()
-                    channels = channels[choices]
-                    waveforms = batched_h5_read(h5["subtract_fit_waveforms"], choices)
-                else:
-                    waveforms = h5["subtract_fit_waveforms"][:]
-
-            channels = torch.from_numpy(channels)
-            waveforms = torch.from_numpy(waveforms)
-
-            orig_denoise.fit(waveforms, max_channels=channels)
-            self.subtraction_denoising_pipeline = orig_denoise
-            self.featurization_pipeline = orig_featurization_pipeline
-        finally:
-            if temp_hdf5_filename.exists():
-                temp_hdf5_filename.unlink()
+        with tempfile.TemporaryDirectory(dir=tmp_dir) as temp_dir:
+            temp_hdf5_filename = Path(temp_dir) / "subtraction_denoiser_fit.h5"
+            try:
+                self.run_subsampled_peeling(
+                    temp_hdf5_filename,
+                    n_jobs=n_jobs,
+                    device=device,
+                    task_name="Fit subtraction denoisers",
+                )
+    
+                # fit featurization pipeline and reassign
+                # work in a try finally so we can delete the temp file
+                # in case of an issue or a keyboard interrupt
+                with h5py.File(temp_hdf5_filename) as h5:
+                    channels = h5["channels"][:]
+                    n_wf = channels.size
+                    if self.max_waveforms_fit and n_wf > self.max_waveforms_fit:
+                        choices = self.fit_subsampling_random_state.choice(
+                            n_wf, size=self.max_waveforms_fit, replace=False
+                        )
+                        choices.sort()
+                        channels = channels[choices]
+                        waveforms = batched_h5_read(h5["subtract_fit_waveforms"], choices)
+                    else:
+                        waveforms = h5["subtract_fit_waveforms"][:]
+    
+                channels = torch.as_tensor(channels, device=device)
+                waveforms = torch.as_tensor(waveforms, device=device)
+                orig_denoise = orig_denoise.to(device)
+                orig_denoise.fit(waveforms, max_channels=channels)
+                orig_denoise = orig_denoise.to("cpu")
+                self.subtraction_denoising_pipeline = orig_denoise
+                self.featurization_pipeline = orig_featurization_pipeline
+            finally:
+                self.to("cpu")
+                if temp_hdf5_filename.exists():
+                    temp_hdf5_filename.unlink()
 
 
 ChunkSubtractionResult = namedtuple(
