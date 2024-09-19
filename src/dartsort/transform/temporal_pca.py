@@ -69,7 +69,10 @@ class BaseTemporalPCA(BaseWaveformModule):
         q = self.rank + self.n_oversamples
         n_samples, n_times = waveforms_fit.shape
         assert q < min(n_samples, n_times)
-        M = mean if self.centered else None
+        M = None
+        if self.centered:
+            # torch does not seem always to want to broadcast M as advertised?
+            M = mean[None].broadcast_to(waveforms_fit.shape)
 
         # 7 is based on sklearn's auto choice
         U, S, V = torch.svd_lowrank(waveforms_fit, q=q, M=M, niter=7)
