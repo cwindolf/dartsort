@@ -85,6 +85,65 @@ def fill_geom_holes(geom):
     return filled_geom, is_original
 
 
+def regularize_geom(geom, radius=0):
+    """Re-order, fill holes, and optionally expand geometry to make it 'regular'
+
+    Used in make_regular_channel_index. That docstring has some info about what's
+    going on here.
+    """
+    nchans = len(geom)
+    eps = pdist(geom).min() / 2.0
+
+    rgeom = geom.copy()
+    for j in range(geom.shape[1]):
+        # skip empty dims
+        if geom[:, j].ptp() < eps:
+            continue
+        rgeom = _regularize_1d(rgeom, radius=max(eps, radius), eps=eps, dim=j)
+    
+    # order regularized geom by depth and then x
+    order = np.lexsort(rgeom.T)
+    rgeom = rgeom[order]
+
+    return rgeom, eps
+
+
+def _regularize_1d(geom, mapping, radius, eps, dim=1):
+    total = geom[:, dim].ptp()
+    dim_pitch = get_pitch(geom, direction=dim)
+    steps = int(np.ceil(total / dim_pitch))
+
+    min_pos = geom[:, dim].min() - radius
+    max_pos = geom[:, dim].min() + radius
+
+    all_positions = []
+    offset = np.zeros(geom.shape[1])
+    for step in range(-steps, steps + 1):
+        offset[j] = step * dim_pitch
+        # add positions within the radius
+        offset_geom = geom + offset
+        keepers = offset_geom[:, dim].clip(min_pos, max_pos) == offset_geom[:, dim]
+        all_positions.append(offset_geom[keepers])
+
+    all_positions = np.concatenate(all_positions)
+    all_positions = np.unique(all_positions, axis=0)
+
+    # deal with fp tolerance
+    dists = squareform(pdist(all_positions))
+    A = dists < eps
+    n_neighbs = A.sum(0)
+    if n_neighbs.max() == 1:
+        return all_positions
+    else:
+        assert n_neighbs.max() > 1
+
+    from scipy.cluster.hierarchy import linkage, fcluster
+    Z = linkage(A.astype(np.float32))
+    labels = fcluster(Z, 1.1, criterion='distance')
+    labels -= 1
+    return all_positions[np.unique(labels)]
+        
+
 # -- channel index creation
 
 
@@ -162,6 +221,69 @@ def make_filled_channel_index(geom, radius, p=2, pad_val=None, to_torch=False):
         channel_index = torch.LongTensor(channel_index)
 
     return channel_index
+
+
+def make_regular_channel_index(geom, radius, p=2, to_torch=False):
+    """Channel index for multi-channel models
+
+    In this channel index, the layout of channels around the max channel is
+    always consistent -- but this is achieved by dummy channels. This makes
+    for a consistent layout to input into multi-channel feature learners, at
+    least relative to the detection channel. However, those learners have to
+    deal with masked out dummy channels.
+
+    Example:
+
+    Let's say the probe looks like:
+     o o
+      o o
+     o
+      o o
+    And, let's say that our channel index's radius is twice the vertical
+    spacing (and say this is the same as the horizontal spacing). Then
+    the top left channel might have (eyeballing it) 4 neighbors (excluding
+    itself), the second row left channel maybe 5, the second row right channel
+    only 4 due to the hole.
+
+    This is padded out to a dummy probe (masked chans as xs) with holes filled in:
+     x x x x x x
+      x x x x x x
+     x x o o x x
+      x x o o x x
+     x x o x x x
+      x x o o x x
+     x x x x x x
+      x x x x x x
+    Now, all of the real channels have the same number of neighbors and in fact
+    exist in the same spatial relationship with their channel neighborhood. It's
+    just that some of those neighbors are fake. But, extracting a radiul channel
+    index here will lead to a consistent layout -- as long as the channels are
+    ordered right (!!).
+
+    Note that for probes which don't have a regular layout, this just doesn't
+    make sense at all. I'm thinking of ones that have weird layouts where one channel
+    is way bigger than the others and serves as a reference, etc -- throw those
+    away!
+    """
+    rgeom, eps = regularize_geom(geom, radius=radius)
+
+    # determine original geom's position in the regularized one, and which
+    # channels are fake chans (they are unmatched in the query)
+    kdt = KDTree(geom)
+    dists, reg2orig = kdt.query(rgeom, k=1, distance_upper_bound=eps)
+
+    # make regularized channel index...
+    rci = make_channel_index(rgeom, radius, p=p)
+
+    # subset it to non-fake chans and replace regularized channel indices with
+    # the corresponding original channel index (or len(geom) if fake)
+    real_reg = np.flatnonzero(reg2orig < kdt.n)
+    real_reg_ix = reg2orig[real_reg]
+    ordered_real_reg = real_reg[np.argsort(real_reg_ix)]
+    channel_index = reg2orig[rci[ordered_real_reg]]
+
+    return channel_index
+
 
 
 def make_contiguous_channel_index(n_channels, n_neighbors=40):
