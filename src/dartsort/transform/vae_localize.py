@@ -1,7 +1,6 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from dartsort.localize.localize_torch import localize_amplitude_vectors
 from dartsort.util.spiketorch import get_relative_index, ptp, reindex
 from dartsort.util.waveform_util import make_regular_channel_index
 from torch.utils.data import DataLoader, TensorDataset
