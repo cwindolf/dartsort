@@ -1,6 +1,7 @@
 from concurrent.futures import CancelledError
 from contextlib import contextmanager
 from pathlib import Path
+import tempfile
 
 import h5py
 import numpy as np
@@ -399,7 +400,7 @@ class BasePeeler(torch.nn.Module):
             it_does = it_does or self.featurization_pipeline.needs_precompute()
         return it_does
 
-    def fit_models(self, save_folder, overwrite=False, n_jobs=0, device=None):
+    def fit_models(self, save_folder, tmp_dir=None, overwrite=False, n_jobs=0, device=None):
         with torch.no_grad():
             if self.peeling_needs_fit():
                 self.precompute_peeling_data(
@@ -409,10 +410,10 @@ class BasePeeler(torch.nn.Module):
                     device=device,
                 )
                 self.fit_peeler_models(
-                    save_folder=save_folder, n_jobs=n_jobs, device=device
+                    save_folder=save_folder, tmp_dir=tmp_dir, n_jobs=n_jobs, device=device
                 )
             self.fit_featurization_pipeline(
-                save_folder=save_folder, n_jobs=n_jobs, device=device
+                save_folder=save_folder, tmp_dir=tmp_dir, n_jobs=n_jobs, device=device
             )
         assert not self.needs_fit()
 
@@ -423,12 +424,16 @@ class BasePeeler(torch.nn.Module):
             return
         self.featurization_pipeline.precompute()
 
-    def fit_featurization_pipeline(self, save_folder, n_jobs=0, device=None):
+    def fit_featurization_pipeline(self, save_folder, tmp_dir=None, n_jobs=0, device=None):
         if self.featurization_pipeline is None:
             return
 
         if not self.featurization_pipeline.needs_fit():
             return
+
+        if device is None:
+            device = "cuda" if torch.cuda.is_available() else "cpu"
+        device = torch.device(device)
 
         # disable self's featurization pipeline, replacing it with a waveform
         # saving node. then, we'll use those waveforms to fit the original
@@ -444,57 +449,60 @@ class BasePeeler(torch.nn.Module):
             )
         )
 
-        temp_hdf5_filename = Path(save_folder) / "peeler_fit.h5"
-        try:
-            self.run_subsampled_peeling(
-                temp_hdf5_filename,
-                n_jobs=n_jobs,
-                device=device,
-                task_name="Fit features",
-            )
-
-            # fit featurization pipeline and reassign
-            # work in a try finally so we can delete the temp file
-            # in case of an issue or a keyboard interrupt
-            with h5py.File(temp_hdf5_filename) as h5:
-                channels = h5["channels"][:]
-                n_wf = channels.size
-                if n_wf > self.n_waveforms_fit:
-                    if self.fit_sampling == "random":
-                        choices = self.fit_subsampling_random_state.choice(
-                            n_wf, size=self.n_waveforms_fit, replace=False
-                        )
-                    elif self.fit_sampling == "amp_reweighted":
-                        volts = h5["peeled_voltages_fit"][:]
-                        sigma = 1.06 * volts.std() * np.power(len(volts), -0.2)
-                        sample_p = get_smoothed_densities(volts[:, None], sigmas=sigma)
-                        sample_p = sample_p.mean() / sample_p
-                        sample_p = sample_p.clip(
-                            1. / self.fit_max_reweighting,
-                            self.fit_max_reweighting,
-                        )
-                        sample_p /= sample_p.sum()
-                        choices = self.fit_subsampling_random_state.choice(
-                            n_wf, p=sample_p, size=self.n_waveforms_fit, replace=False
+        with tempfile.TemporaryDirectory(dir=tmp_dir) as temp_dir:
+            temp_hdf5_filename = Path(temp_dir) / "peeler_fit.h5"
+            try:
+                self.run_subsampled_peeling(
+                    temp_hdf5_filename,
+                    n_jobs=n_jobs,
+                    device=device,
+                    task_name="Fit features",
+                )
+    
+                # fit featurization pipeline and reassign
+                # work in a try finally so we can delete the temp file
+                # in case of an issue or a keyboard interrupt
+                with h5py.File(temp_hdf5_filename) as h5:
+                    channels = h5["channels"][:]
+                    n_wf = channels.size
+                    if n_wf > self.n_waveforms_fit:
+                        if self.fit_sampling == "random":
+                            choices = self.fit_subsampling_random_state.choice(
+                                n_wf, size=self.n_waveforms_fit, replace=False
+                            )
+                        elif self.fit_sampling == "amp_reweighted":
+                            volts = h5["peeled_voltages_fit"][:]
+                            sigma = 1.06 * volts.std() * np.power(len(volts), -0.2)
+                            sample_p = get_smoothed_densities(volts[:, None], sigmas=sigma)
+                            sample_p = sample_p.mean() / sample_p
+                            sample_p = sample_p.clip(
+                                1. / self.fit_max_reweighting,
+                                self.fit_max_reweighting,
+                            )
+                            sample_p /= sample_p.sum()
+                            choices = self.fit_subsampling_random_state.choice(
+                                n_wf, p=sample_p, size=self.n_waveforms_fit, replace=False
+                            )
+                        else:
+                            assert False
+                        choices.sort()
+                        channels = channels[choices]
+                        waveforms = batched_h5_read(
+                            h5["peeled_waveforms_fit"], choices
                         )
                     else:
-                        assert False
-                    choices.sort()
-                    channels = channels[choices]
-                    waveforms = batched_h5_read(
-                        h5["peeled_waveforms_fit"], choices
-                    )
-                else:
-                    waveforms = h5["peeled_waveforms_fit"][:]
-
-            channels = torch.from_numpy(channels)
-            waveforms = torch.from_numpy(waveforms)
-
-            featurization_pipeline.fit(waveforms, max_channels=channels)
-            self.featurization_pipeline = featurization_pipeline
-        finally:
-            if temp_hdf5_filename.exists():
-                temp_hdf5_filename.unlink()
+                        waveforms = h5["peeled_waveforms_fit"][:]
+    
+                channels = torch.as_tensor(channels, device=device)
+                waveforms = torch.as_tensor(waveforms, device=device)
+                featurization_pipeline = featurization_pipeline.to(device)
+                featurization_pipeline.fit(waveforms, max_channels=channels)
+                featurization_pipeline = featurization_pipeline.to("cpu")
+                self.featurization_pipeline = featurization_pipeline
+            finally:
+                self.to("cpu")
+                if temp_hdf5_filename.exists():
+                    temp_hdf5_filename.unlink()
 
     def get_chunk_starts(
         self,

@@ -108,6 +108,7 @@ class ThresholdAndFeaturize(BasePeeler):
 
                 times_rel = times_rel[best]
                 channels = channels[best]
+                voltages = voltages[best]
 
         # load up the waveforms for this chunk
         waveforms = spiketorch.grab_spikes(
