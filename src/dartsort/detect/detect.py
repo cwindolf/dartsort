@@ -12,6 +12,7 @@ def detect_and_deduplicate(
     spatial_dedup_batch_size=512,
     exclude_edges=True,
     return_energies=False,
+    detection_mask=None,
 ):
     """Detect and deduplicate peaks
 
@@ -34,6 +35,9 @@ def detect_and_deduplicate(
     dedup_temporal_radius : int
         Only the largest peak within this sliding radius
         will be kept
+    detection_mask : tensor
+        If supplied, this floating tensor of 1s or 0s will act
+        as a gate to suppress detections in the 0s
 
     Returns
     -------
@@ -80,6 +84,10 @@ def detect_and_deduplicate(
     # remove peaks smaller than our threshold
     F.threshold_(energies, threshold, 0.0)
 
+    # optionally remove censored peaks
+    if detection_mask is not None:
+        energies.mul_(detection_mask)
+
     # -- temporal deduplication
     if dedup_temporal_radius > 0:
         max_energies = F.max_pool2d(
@@ -97,23 +105,25 @@ def detect_and_deduplicate(
     max_energies = max_energies[0, 0]
 
     # -- spatial deduplication
-    # we would like to max pool again on the other axis,
-    # but that doesn't support any old radial neighborhood
+    # this is max pooling within the channel index's neighborhood's
     if all_dedup:
-        max_energies[:] = max_energies.max(dim=1, keepdim=True).values
+        max_energies = max_energies.max(dim=1, keepdim=True).values
     elif dedup_channel_index is not None:
         # pad channel axis with extra chan of 0s
         max_energies = F.pad(max_energies, (0, 1))
         for batch_start in range(0, nsamples, spatial_dedup_batch_size):
             batch_end = batch_start + spatial_dedup_batch_size
-            max_energies[batch_start:batch_end, :nchans] = torch.max(
-                max_energies[batch_start:batch_end, dedup_channel_index], dim=2
-            ).values
+            torch.amax(
+                max_energies[batch_start:batch_end, dedup_channel_index],
+                dim=2,
+                out=max_energies[batch_start:batch_end, :nchans],
+            )
         max_energies = max_energies[:, :nchans]
 
     # if temporal/spatial max made you grow, you were not a peak!
     if (dedup_temporal_radius > 0) or (dedup_channel_index is not None):
-        max_energies[max_energies > energies] = 0.0
+        # max_energies[max_energies > energies] = 0.0
+        max_energies.masked_fill_(max_energies > energies, 0.0)
 
     # sparsify and return
     if exclude_edges:
