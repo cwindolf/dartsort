@@ -1,4 +1,6 @@
 import numpy as np
+from scipy.signal import find_peaks
+from scipy.stats import norm
 from . import density
 # todo: replace all isosplit stuff with things based on scipy's isotonic regression.
 
@@ -35,6 +37,44 @@ def fit_unimodal_right(x, f, weights=None, cut=0, hard=False):
     return out
 
 
+def fit_truncnorm_right(x, f, weights=None, cut=0, hard=False, n_iter=10):
+    """Like above, but fits truncated normal to xs > cut with MoM."""
+    if weights is None:
+        weights = np.ones_like(f)
+
+    # figure out where cut lands and what f(cut) should be
+    cuti_left = np.searchsorted(x, cut)
+    if cuti_left >= len(x) - 2:
+        # everything is to the left... return uniform
+        return np.full_like(f, 1/len(f))
+    cuti_right = np.searchsorted(x, cut, side="right") - 1
+    if cuti_right <= 1:
+        # everything is to the right... fit normal!
+        mean = np.average(x, weights=weights)
+        var = np.average((x - mean) ** 2, weights=weights)
+        return norm.pdf(x, loc=mean, scale=np.sqrt(var))
+    # else, in the middle somewhere...
+    assert cuti_left in (cuti_right, cuti_right + 1)
+
+    xcut = x[cuti_right:]
+    mean = np.average(xcut, weights=weights[cuti_right:])
+    var = np.average((xcut - mean) ** 2, weights=weights[cuti_right:])
+    mu = mean
+    sigma = std = np.sqrt(var)
+    for i in range(n_iter):
+        alpha = (cut - mu) / sigma
+        phi_alpha = norm.cdf(alpha)
+        Z = 1.0 - phi_alpha
+        # we have: mean ~ mu + sigma*phi(alpha)/Z
+        # and      var ~ sigma^2(1+alpha phi(alpha) /Z - (phi(alpha)/Z)^2)
+        # implies mu = mean - sigma*phi(alpha)/Z
+        #         sigma^2 = var/(1+alpha phi(alpha) /Z - (phi(alpha)/Z)^2)
+        sigma = np.sqrt(var / (1 + alpha * phi_alpha / Z - (phi_alpha / Z) ** 2))
+        mu = mean - sigma * phi_alpha / Z
+
+    return norm.pdf(x, loc=mu, scale=sigma)
+
+
 def fit_bimodal_at(x, f, weights=None, cut=0):
     from isosplit import up_down_isotonic_regression
     if weights is None:
@@ -49,7 +89,16 @@ def fit_bimodal_at(x, f, weights=None, cut=0):
     return out
 
 
-def smoothed_dipscore_at(cut, samples, sample_weights, alternative="smoothed", dipscore_only=False, score_kind="tv"):
+def smoothed_dipscore_at(
+    cut,
+    samples,
+    sample_weights,
+    alternative="smoothed",
+    dipscore_only=False,
+    score_kind="tv",
+    cut_relmax_order=3,
+    kind="isotonic",
+):
     if sample_weights is None:
         sample_weights = np.ones_like(samples)
     densities = density.get_smoothed_densities(
@@ -63,9 +112,27 @@ def smoothed_dipscore_at(cut, samples, sample_weights, alternative="smoothed", d
     )
     spacings = np.diff(samples)
     spacings = np.concatenate((spacings[:1], 0.5 * (spacings[1:] + spacings[:-1]), spacings[-1:]))
+    densities /= (densities * spacings).sum()
+
+    if cut is None:
+        # closest maxes left + right of 0
+        maxers, _ = find_peaks(densities, distance=cut_relmax_order)
+        coords = samples[maxers]
+        left_cut = right_cut = 0
+        if (coords < 0).any():
+            left_cut = coords[coords < 0].max()
+        if (coords > 0).any():
+            right_cut = coords[coords > 0].min()
+        candidates = np.logical_and(samples >= left_cut, samples <= right_cut)
+        cut = 0
+        if candidates.any():
+            cut = samples[candidates][np.argmin(densities[candidates])]
+
     if alternative == "bimodal":
         densities = fit_bimodal_at(samples, densities, weights=sample_weights, cut=cut)
-    densities /= (densities * spacings).sum()
+        densities /= (densities * spacings).sum()
+    else:
+        assert alternative == "smoothed"
 
     score = 0
     best_dens_err = np.inf
@@ -83,7 +150,12 @@ def smoothed_dipscore_at(cut, samples, sample_weights, alternative="smoothed", d
             s = np.ascontiguousarray(samples[order])
             d = np.ascontiguousarray(densities[order])
             w = np.ascontiguousarray(sample_weights[order])
-            dens = fit_unimodal_right(sign * s, d, weights=w, hard=hard)
+            if kind == "isotonic":
+                dens = fit_unimodal_right(sign * s, d, weights=w, cut=sign * cut, hard=hard)
+            elif kind == "truncnorm":
+                dens = fit_truncnorm_right(sign * s, d, weights=w, cut=sign * cut, hard=hard)
+            else:
+                assert False
             dens = dens[order]
             dens /= (dens * spacings).sum()
             dens_err = (np.abs(dens - densities) * spacings).sum()
@@ -100,4 +172,4 @@ def smoothed_dipscore_at(cut, samples, sample_weights, alternative="smoothed", d
     if dipscore_only:
         return score
 
-    return score, samples, densities, best_uni
+    return score, samples, densities, best_uni, cut

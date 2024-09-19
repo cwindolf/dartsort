@@ -416,9 +416,16 @@ class WaveformPlot(UnitPlot):
     def draw(self, panel, sorting_analysis, unit_id, axis=None):
         if axis is None:
             axis = panel.subplots()
-        which, waveforms, max_chan, geom, ci = self.get_waveforms(
+        tslice, which, waveforms, max_chan, geom, ci = self.get_waveforms(
             sorting_analysis, unit_id
         )
+        trough_offset_samples = self.trough_offset_samples
+        spike_length_samples = self.spike_length_samples
+        if tslice is not None and tslice.start is not None:
+            trough_offset_samples = self.trough_offset_samples - tslice.start
+            spike_length_samples = self.spike_length_samples - tslice.start
+        if tslice is not None and tslice.stop is not None:
+            spike_length_samples = tslice.stop - tslice.start
 
         max_abs_amp = None
         show_template = self.show_template
@@ -439,8 +446,8 @@ class WaveformPlot(UnitPlot):
             templates = trim_waveforms(
                 templates,
                 old_offset=sorting_analysis.coarse_template_data.trough_offset_samples,
-                new_offset=self.trough_offset_samples,
-                new_length=self.spike_length_samples,
+                new_offset=trough_offset_samples,
+                new_length=spike_length_samples,
             )
             max_abs_amp = self.max_abs_template_scale * np.nanmax(np.abs(templates))
 
@@ -454,8 +461,8 @@ class WaveformPlot(UnitPlot):
             suptemplates = trim_waveforms(
                 suptemplates,
                 old_offset=sorting_analysis.template_data.trough_offset_samples,
-                new_offset=self.trough_offset_samples,
-                new_length=self.spike_length_samples,
+                new_offset=trough_offset_samples,
+                new_length=spike_length_samples,
             )
             show_superres_templates = suptemplates.shape[0] > 1
             max_abs_amp = self.max_abs_template_scale * np.nanmax(np.abs(suptemplates))
@@ -544,7 +551,7 @@ class RawWaveformPlot(WaveformPlot):
     wfs_kind = "raw wfs"
 
     def get_waveforms(self, sorting_analysis, unit_id):
-        return sorting_analysis.unit_raw_waveforms(
+        return slice(None), *sorting_analysis.unit_raw_waveforms(
             unit_id,
             template_index=self.template_index,
             max_count=self.count,
@@ -559,7 +566,12 @@ class TPCAWaveformPlot(WaveformPlot):
     wfs_kind = "coll.-cl. tpca wfs"
 
     def get_waveforms(self, sorting_analysis, unit_id):
-        return sorting_analysis.unit_tpca_waveforms(
+        temporal_slice = getattr(
+            sorting_analysis.sklearn_tpca,
+            "temporal_slice",
+            slice(None),
+        )
+        return temporal_slice, *sorting_analysis.unit_tpca_waveforms(
             unit_id,
             template_index=self.template_index,
             max_count=self.count,
@@ -1014,11 +1026,16 @@ def make_all_summaries(
     overwrite=False,
     unit_ids=None,
     gizmo_name="sorting_analysis",
+    n_units=None,
+    seed=0,
     **other_global_params,
 ):
     save_folder = Path(save_folder)
     if unit_ids is None:
         unit_ids = sorting_analysis.unit_ids
+    if n_units is not None and n_units < len(unit_ids):
+        rg = np.random.default_rng(seed)
+        unit_ids = rg.choice(unit_ids, size=n_units, replace=False)
     if not overwrite and all_summaries_done(
         unit_ids, save_folder, ext=image_ext
     ):

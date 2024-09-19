@@ -38,6 +38,7 @@ class SubtractionPeeler(BasePeeler):
         fit_subsampling_random_state=0,
         fit_sampling="random",
         residnorm_decrease_threshold=3.162,
+        persist_deduplication=True,
         dtype=torch.float,
     ):
         super().__init__(
@@ -57,6 +58,7 @@ class SubtractionPeeler(BasePeeler):
         self.trough_offset_samples = trough_offset_samples
         self.spike_length_samples = spike_length_samples
         self.peak_sign = peak_sign
+        self.persist_deduplication = persist_deduplication
         if subtract_channel_index is None:
             subtract_channel_index = channel_index.clone().detach()
         self.register_buffer("subtract_channel_index", subtract_channel_index)
@@ -208,6 +210,7 @@ class SubtractionPeeler(BasePeeler):
             peak_sign=self.peak_sign,
             spatial_dedup_channel_index=self.spatial_dedup_channel_index,
             residnorm_decrease_threshold=self.residnorm_decrease_threshold,
+            persist_deduplication=self.persist_deduplication,
         )
 
         # add in chunk_start_samples
@@ -343,6 +346,9 @@ def subtract_chunk(
     peak_sign="both",
     spatial_dedup_channel_index=None,
     residnorm_decrease_threshold=3.162,  # sqrt(10)
+    persist_deduplication=True,
+    relative_peak_radius=5,
+    dedup_temporal_radius=7,
 ):
     """Core peeling routine for subtraction"""
     # validate arguments to avoid confusing error messages later
@@ -374,15 +380,26 @@ def subtract_chunk(
     spike_times = []
     spike_channels = []
     spike_features = []
+    if persist_deduplication:
+        detection_mask = torch.ones_like(residual)
+        dedup_temporal_ix = torch.arange(
+            -dedup_temporal_radius, dedup_temporal_radius, device=residual.device
+        )
 
-    for threshold in detection_thresholds:
+    for j, threshold in enumerate(detection_thresholds):
         # -- detect and extract waveforms
         # detection has more args which we don't expose right now
+        step_mask = None
+        if persist_deduplication and j > 0:
+            step_mask = detection_mask[:, :-1]
         times_samples, channels = detect_and_deduplicate(
             residual[:, :-1],
             threshold,
             dedup_channel_index=spatial_dedup_channel_index,
             peak_sign=peak_sign,
+            detection_mask=step_mask,
+            relative_peak_radius=relative_peak_radius,
+            dedup_temporal_radius=dedup_temporal_radius,
         )
         if not times_samples.numel():
             continue
@@ -444,6 +461,13 @@ def subtract_chunk(
             already_padded=True,
             in_place=True,
         )
+        if persist_deduplication:
+            time_ix = times_samples.unsqueeze(1) + dedup_temporal_ix.unsqueeze(0)
+            if spatial_dedup_channel_index is not None:
+                chan_ix = spatial_dedup_channel_index[channels]
+            else:
+                chan_ix = channels.unsqueeze(1)
+            detection_mask[time_ix[:, :, None], chan_ix[:, None, :]] = 0.0
         del times_samples, channels, waveforms, features
 
     # check if we got no spikes
