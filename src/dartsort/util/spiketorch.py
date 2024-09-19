@@ -401,7 +401,7 @@ def reindex(
     pad_value=torch.nan,
 ):
     """"""
-    rel_ix = relative_index[max_channels]
+    rel_ix = relative_index[max_channels].unsqueeze(1)
     if not already_padded:
         source_waveforms = F.pad(source_waveforms, (0, 1), value=pad_value)
     return torch.take_along_dim(source_waveforms, rel_ix, dim=2)
