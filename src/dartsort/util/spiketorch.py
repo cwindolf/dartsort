@@ -301,12 +301,17 @@ def depthwise_oaconv1d(input, weight, f2=None, padding=0):
     if overlap is None:
         f1 = torch.fft.rfft(input, n=s1)
         f2 = torch.fft.rfft(torch.flip(weight, (-1,)), n=s1)
-        f1.mul_(f2[:, None:, ])
+        f1.mul_(
+            f2[
+                :,
+                None:,
+            ]
+        )
         res = torch.fft.irfft(f1, n=s1)
         valid_len = s1 - s2 + 1
         valid_start = s2 - 1
         assert valid_start >= padding
-        res = res[:, valid_start-padding: valid_start+valid_len + padding]
+        res = res[:, valid_start - padding : valid_start + valid_len + padding]
         return res
 
     nstep1, pad1, nstep2, pad2 = steps_and_pad(
@@ -344,6 +349,59 @@ def depthwise_oaconv1d(input, weight, f2=None, padding=0):
     valid_len = s1 - s2 + 1
     valid_start = s2 - 1
     assert valid_start >= padding
-    oa = oa[:, valid_start - padding:valid_start + valid_len + padding]
+    oa = oa[:, valid_start - padding : valid_start + valid_len + padding]
 
     return oa
+
+
+# -- channel reindexing
+
+
+def get_relative_index(source_channel_index, target_channel_index):
+    """Pre-compute a channel reindexing helper structure.
+
+    Inputs have shapes:
+        source_channel_index.shape == (n_chans, n_source_chans)
+        target_channel_index.shape == (n_chans, n_target_chans)
+
+    This returns an array (relative_index) of shape (n_chans, n_target_chans)
+    which knows how to translate between the source and target indices:
+
+        relative_index[c, j] = index of target_channel_index[c, j] in source_channel_index[c]
+                               if present, else n_source_chans (i.e., an invalid index)
+                               (or, n_source chans if target_channel_index[c, j] is n_chans)
+
+    See below:
+        reindex(max_channels, source_waveforms, relative_index)
+    """
+    n_chans, n_source_chans = source_channel_index.shape
+    n_chans_, n_target_chans = target_channel_index.shape
+    assert n_chans == n_chans_
+    relative_index = torch.full_like(target_channel_index, n_source_chans)
+    for c in range(n_chans):
+        row = source_channel_index[c]
+        for j in range(n_target_chans):
+            targ = target_channel_index[c, j]
+            if targ == n_chans:
+                continue
+            mask = row == targ
+            if not mask.any():
+                continue
+            (ixs,) = mask.nonzero(as_tuple=True)
+            assert ixs.numel() == 1
+            relative_index[c, j] = ixs[0]
+    return relative_index
+
+
+def reindex(
+    max_channels,
+    source_waveforms,
+    relative_index,
+    already_padded=False,
+    pad_value=torch.nan,
+):
+    """"""
+    rel_ix = relative_index[max_channels]
+    if not already_padded:
+        source_waveforms = F.pad(source_waveforms, (0, 1), value=pad_value)
+    return torch.take_along_dim(source_waveforms, rel_ix, dim=2)
