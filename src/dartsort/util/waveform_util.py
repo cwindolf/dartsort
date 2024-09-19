@@ -36,7 +36,7 @@ def get_pitch(geom, direction=1):
     pitch = np.inf
     for pos in other_dims_uniq:
         at_x = np.all(geom[:, other_dims] == pos, axis=1)
-        y_uniq_at_x = np.unique(geom[at_x, 1])
+        y_uniq_at_x = np.unique(geom[at_x, direction])
         if y_uniq_at_x.size > 1:
             pitch = min(pitch, np.diff(y_uniq_at_x).min())
 
@@ -93,6 +93,9 @@ def regularize_geom(geom, radius=0):
     nchans = len(geom)
     eps = pdist(geom).min() / 2.0
 
+    if torch.is_tensor(geom):
+        geom = geom.numpy()
+
     rgeom = geom.copy()
     for j in range(geom.shape[1]):
         # skip empty dims
@@ -107,18 +110,18 @@ def regularize_geom(geom, radius=0):
     return rgeom, eps
 
 
-def _regularize_1d(geom, mapping, radius, eps, dim=1):
+def _regularize_1d(geom, radius, eps, dim=1):
     total = geom[:, dim].ptp()
     dim_pitch = get_pitch(geom, direction=dim)
     steps = int(np.ceil(total / dim_pitch))
 
     min_pos = geom[:, dim].min() - radius
-    max_pos = geom[:, dim].min() + radius
+    max_pos = geom[:, dim].max() + radius
 
     all_positions = []
     offset = np.zeros(geom.shape[1])
     for step in range(-steps, steps + 1):
-        offset[j] = step * dim_pitch
+        offset[dim] = step * dim_pitch
         # add positions within the radius
         offset_geom = geom + offset
         keepers = offset_geom[:, dim].clip(min_pos, max_pos) == offset_geom[:, dim]
@@ -264,12 +267,14 @@ def make_regular_channel_index(geom, radius, p=2, to_torch=False):
     is way bigger than the others and serves as a reference, etc -- throw those
     away!
     """
-    rgeom, eps = regularize_geom(geom, radius=radius)
+    rgeom, eps = regularize_geom(geom=geom, radius=radius)
 
     # determine original geom's position in the regularized one, and which
     # channels are fake chans (they are unmatched in the query)
     kdt = KDTree(geom)
     dists, reg2orig = kdt.query(rgeom, k=1, distance_upper_bound=eps)
+    # the usual extra padding chan
+    reg2orig = np.concatenate((reg2orig, [kdt.n]))
 
     # make regularized channel index...
     rci = make_channel_index(rgeom, radius, p=p)
@@ -280,6 +285,9 @@ def make_regular_channel_index(geom, radius, p=2, to_torch=False):
     real_reg_ix = reg2orig[real_reg]
     ordered_real_reg = real_reg[np.argsort(real_reg_ix)]
     channel_index = reg2orig[rci[ordered_real_reg]]
+
+    if to_torch:
+        channel_index = torch.from_numpy(channel_index)
 
     return channel_index
 
