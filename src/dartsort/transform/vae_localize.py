@@ -1,11 +1,10 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from dartsort.localize.localize_torch import localize_amplitude_vectors
-from dartsort.util.spiketorch import ptp
+from dartsort.util.spiketorch import get_relative_index, ptp, reindex
+from dartsort.util.waveform_util import make_regular_channel_index
 from torch.utils.data import DataLoader, TensorDataset
 from tqdm.auto import trange
-
 
 from .transform_base import BaseWaveformFeaturizer
 
@@ -28,6 +27,9 @@ class VAELocalization(BaseWaveformFeaturizer):
         hidden_dims=(256, 128),
         name=None,
         name_prefix="",
+        epochs=10,
+        learning_rate=1e-3,
+        batch_size=32,
     ):
         assert amplitude_kind in ("peak", "ptp")
         super().__init__(
@@ -40,7 +42,10 @@ class VAELocalization(BaseWaveformFeaturizer):
         self.amplitude_kind = amplitude_kind
         self.radius = radius
         self.localization_model = localization_model
-        self.latent_dim = 3 #x,y,z
+        self.latent_dim = 3  # x,y,z
+        self.epochs = epochs
+        self.learning_rate = learning_rate
+        self.batch_size = batch_size
         self.encoder = nn.Sequential(
             nn.Linear(self.input_dim, hidden_dims[0]),
             nn.BatchNorm1d(hidden_dims[0]),
@@ -48,9 +53,18 @@ class VAELocalization(BaseWaveformFeaturizer):
             nn.Linear(hidden_dims[0], hidden_dims[1]),
             nn.BatchNorm1d(hidden_dims[1]),
             nn.ReLU(),
-            nn.Linear(hidden_dims[1], self.latent_dim * 2)  # Output mu and log_var
+            nn.Linear(hidden_dims[1], self.latent_dim * 2),  # Output mu and log_var
         )
         self.register_buffer("padded_geom", F.pad(self.geom, (0, 0, 0, 1)))
+
+        self.register_buffer(
+            "model_channel_index",
+            make_regular_channel_index(self.geom, radius, to_torch=True),
+        )
+        self.register_buffer(
+            "relative_index",
+            get_relative_index(self.channel_index, self.model_channel_index),
+        )
 
     def reparameterize(self, mu, var):
         std = var.sqrt()
@@ -59,7 +73,9 @@ class VAELocalization(BaseWaveformFeaturizer):
 
     def local_distances(self, z, channels):
         """Return distances from each z to its local geom centered at channels."""
-        local_geom = self.padded_geom[self.channel_index[channels]] - self.geom[channels].unsqueeze(1)
+        local_geom = self.padded_geom[self.channel_index[channels]] - self.geom[
+            channels
+        ].unsqueeze(1)
         dx = z[:, 0, None] - local_geom[:, :, 0]
         dz = z[:, 2, None] + local_geom[:, :, 1]
         y = F.softplus(z[:, 1]).unsqueeze(1)
@@ -67,7 +83,7 @@ class VAELocalization(BaseWaveformFeaturizer):
         return dists
 
     def get_alphas(self, obs_amps, dists, return_pred=False):
-        pred_amps_alpha1 = 1. / dists
+        pred_amps_alpha1 = 1.0 / dists
         # least squares with no intercept
         alphas = (obs_amps * pred_amps_alpha1).sum(1) / pred_amps_alpha1.square().sum(1)
         if return_pred:
@@ -87,36 +103,51 @@ class VAELocalization(BaseWaveformFeaturizer):
         z = self.reparameterize(mu, var)
         alphas, pred_amps = self.decode(z, channels, obs_amps)
         return pred_amps, mu, var
-    
+
     def loss_function(self, recon_x, x, mask, mu, var):
         mask = mask.to(x)
         recon_x_masked = recon_x * mask
         x_masked = x * mask
-        BCE = F.mse_loss(recon_x, x, reduction='sum')
+        BCE = F.mse_loss(recon_x_masked, x_masked, reduction="sum")
         KLD = -0.5 * (1 + torch.log(var) - mu.pow(2) - var).sum()
         return BCE + KLD
 
-   # @torch.enable_grad()
-    def fit(self, waveforms, amps, channels, epochs=10, learning_rate=1e-3, batch_size=32):
-        # Example waveform data and IDs
-        with torch.enable_grad():
-            # Create a dataset including the IDs
-            dataset = TensorDataset(waveforms, amps, channels)
-            dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=True)
-            optimizer = torch.optim.Adam(self.parameters(), lr=learning_rate)
-            self.train()  # Set the model to training mode
-            for epoch in trange(epochs, desc="Epochs"):
+    def _fit(self, waveforms, channels):
+        # apply channel reindexing before any fitting...
+        waveforms = reindex(channels, waveforms, self.relative_index, pad_value=0.0)
+        # should be no nans there thanks to padding with 0s
+
+        if self.amplitude_kind == "ptp":
+            amps = ptp(waveforms)
+        elif self.amplitude_kind == "peak":
+            amps = waveforms.abs().max(dim=1).values
+
+        dataset = TensorDataset(waveforms, amps, channels)
+        dataloader = DataLoader(dataset, batch_size=self.batch_size, shuffle=True)
+        optimizer = torch.optim.Adam(self.parameters(), lr=self.learning_rate)
+
+        self.train()
+        with trange(self.epochs, desc="Epochs") as pbar:
+            for epoch in pbar:
                 total_loss = 0
                 for waveform_batch, amps_batch, channels_batch in dataloader:
                     optimizer.zero_grad()
-                    channels_mask = self.channel_index[channels_batch] < len(self.geom)
-                    reconstructed_amps, mu, var = self.forward(waveform_batch, channels_mask, amps_batch, channels_batch)
-                    loss = self.loss_function(reconstructed_amps, amps_batch, channels_mask, mu, var)
+                    channels_mask = self.model_channel_index[channels_batch] < len(self.geom)
+                    reconstructed_amps, mu, var = self.forward(
+                        waveform_batch, channels_mask, amps_batch, channels_batch
+                    )
+                    loss = self.loss_function(
+                        reconstructed_amps, amps_batch, channels_mask, mu, var
+                    )
                     loss.backward()
                     optimizer.step()
                     total_loss += loss.item()
 
-                print(f"Epoch {epoch}, Loss: {total_loss / len(dataloader)}")
+                pbar.set_description(f"epoch={epoch}: loss={total_loss / len(dataloader)}")
+
+    def fit(self, waveforms, max_channels):
+        with torch.enable_grad():
+            self._fit(waveforms, max_channels)
 
     def transform(self, waveforms, max_channels):
         """
@@ -125,8 +156,8 @@ class VAELocalization(BaseWaveformFeaturizer):
 
         waveform[n] lives on channels self.channel_index[max_channels[n]]
         """
-        waveforms = torch.nan_to_num(waveforms)
-        mask = self.channel_index[max_channels] < len(self.geom)
+        waveforms = reindex(max_channels, waveforms, self.relative_index, pad_value=0.0)
+        mask = self.model_channel_index[max_channels] < len(self.geom)
         x_flat = waveforms.view(len(waveforms), -1)
         x_flat_mask = torch.cat((x_flat, mask), dim=1)
         mu, log_var = self.encoder(x_flat_mask).chunk(2, dim=-1)
@@ -134,6 +165,3 @@ class VAELocalization(BaseWaveformFeaturizer):
         y = F.softplus(y)
         mx, mz = self.geom[max_channels].T
         return x + mx, y, z + mz
-
-# %%
-
