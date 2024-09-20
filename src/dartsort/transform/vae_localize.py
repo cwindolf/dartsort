@@ -1,6 +1,7 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from dartsort.util import nn_util
 from dartsort.util.spiketorch import get_relative_index, ptp, reindex
 from dartsort.util.waveform_util import make_regular_channel_index
 from torch.utils.data import DataLoader, TensorDataset
@@ -29,16 +30,14 @@ class VAELocalization(BaseWaveformFeaturizer):
         epochs=10,
         learning_rate=1e-3,
         batch_size=32,
+        use_batchnorm=True,
         alpha_closed_form=False,
         amplitudes_only=False,
         prior_variance=80.0,
     ):
         assert amplitude_kind in ("peak", "ptp")
         super().__init__(
-            geom=geom,
-            channel_index=channel_index,
-            name=name,
-            name_prefix=name_prefix,
+            geom=geom, channel_index=channel_index, name=name, name_prefix=name_prefix
         )
         self.amplitude_kind = amplitude_kind
         self.radius = radius
@@ -49,7 +48,10 @@ class VAELocalization(BaseWaveformFeaturizer):
         self.batch_size = batch_size
         self.encoder = None
         self.amplitudes_only = amplitudes_only
-        self.register_buffer("padded_geom", F.pad(self.geom.to(torch.float), (0, 0, 0, 1)))
+        self.use_batchnorm = use_batchnorm
+        self.register_buffer(
+            "padded_geom", F.pad(self.geom.to(torch.float), (0, 0, 0, 1))
+        )
         self.hidden_dims = hidden_dims
         self.alpha_closed_form = alpha_closed_form
         self.variational = prior_variance is not None
@@ -63,7 +65,7 @@ class VAELocalization(BaseWaveformFeaturizer):
             "relative_index",
             get_relative_index(self.channel_index, self.model_channel_index),
         )
-    
+
     def initialize_net(self, spike_length_samples):
         if self.encoder is not None:
             return
@@ -71,21 +73,12 @@ class VAELocalization(BaseWaveformFeaturizer):
         n_latent = self.latent_dim
         if self.variational:
             n_latent *= 2
-        input_dims = [
+
+        self.encoder = nn_util.get_mlp(
             (spike_length_samples + 1) * self.model_channel_index.shape[1],
-            *self.hidden_dims[:-1],
-        ]
-        output_dims = [*self.hidden_dims[1:], n_latent]
-        
-        
-        self.encoder = nn.Sequential(
-            nn.Linear((spike_length_samples + 1) * self.model_channel_index.shape[1], self.hidden_dims[0]),
-            nn.BatchNorm1d(self.hidden_dims[0]),
-            nn.ReLU(),
-            nn.Linear(self.hidden_dims[0], self.hidden_dims[1]),
-            nn.BatchNorm1d(self.hidden_dims[1]),
-            nn.ReLU(),
-            nn.Linear(self.hidden_dims[1], n_latent),  # Output mu and var
+            self.hidden_dims,
+            n_latent,
+            use_batchnorm=self.use_batchnorm,
         )
         self.encoder.to(self.padded_geom.device)
 
@@ -110,7 +103,9 @@ class VAELocalization(BaseWaveformFeaturizer):
     def get_alphas(self, obs_amps, dists, masks, return_pred=False):
         pred_amps_alpha1 = 1.0 / dists
         # least squares with no intercept
-        alphas = (masks * obs_amps * pred_amps_alpha1).sum(1) / (masks * pred_amps_alpha1).square().sum(1)
+        alphas = (masks * obs_amps * pred_amps_alpha1).sum(1) / (
+            masks * pred_amps_alpha1
+        ).square().sum(1)
         if return_pred:
             return alphas, alphas.unsqueeze(1) * pred_amps_alpha1
         return alphas
@@ -118,7 +113,9 @@ class VAELocalization(BaseWaveformFeaturizer):
     def decode(self, z, channels, obs_amps, masks):
         dists = self.local_distances(z, channels)
         if self.alpha_closed_form:
-            alphas, pred_amps = self.get_alphas(obs_amps, dists, masks, return_pred=True)
+            alphas, pred_amps = self.get_alphas(
+                obs_amps, dists, masks, return_pred=True
+            )
         else:
             alphas = F.softplus(z[:, 3])
             pred_amps = alphas.unsqueeze(1) / dists
@@ -166,7 +163,7 @@ class VAELocalization(BaseWaveformFeaturizer):
                 amps = ptp(waveforms)
             elif self.amplitude_kind == "peak":
                 amps = waveforms.abs().max(dim=1).values
-            
+
         self.initialize_net(waveforms.shape[1])
 
         dataset = TensorDataset(waveforms, amps, channels)
@@ -181,7 +178,9 @@ class VAELocalization(BaseWaveformFeaturizer):
                 total_kld = 0
                 for waveform_batch, amps_batch, channels_batch in dataloader:
                     optimizer.zero_grad()
-                    channels_mask = self.model_channel_index[channels_batch] < len(self.geom)
+                    channels_mask = self.model_channel_index[channels_batch] < len(
+                        self.geom
+                    )
                     channels_mask = channels_mask.to(waveform_batch)
                     reconstructed_amps, mu, var = self.forward(
                         waveform_batch, channels_mask, amps_batch, channels_batch
@@ -196,7 +195,9 @@ class VAELocalization(BaseWaveformFeaturizer):
                     total_mse += mse.item()
                     total_kld += kld.item() if self.variational else kld
 
-                pbar.set_description(f"Epochs [loss={total_loss / len(dataloader):0.2f},mse={total_mse/len(dataloader):0.2f},kld={total_kld/len(dataloader):0.2f}]")
+                pbar.set_description(
+                    f"Epochs [loss={total_loss / len(dataloader):0.2f},mse={total_mse/len(dataloader):0.2f},kld={total_kld/len(dataloader):0.2f}]"
+                )
 
     def fit(self, waveforms, max_channels):
         with torch.enable_grad():
@@ -234,5 +235,5 @@ class VAELocalization(BaseWaveformFeaturizer):
                 obs_amps = waveforms.abs().max(dim=1).values
             alphas, pred_amps = self.decode(mu, max_channels, obs_amps, mask)
             return x + mx, y, z + mz, obs_amps, pred_amps, mx, mz
-            
+
         return x + mx, y, z + mz
