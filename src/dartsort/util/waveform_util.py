@@ -90,7 +90,6 @@ def regularize_geom(geom, radius=0):
     Used in make_regular_channel_index. That docstring has some info about what's
     going on here.
     """
-    nchans = len(geom)
     eps = pdist(geom).min() / 2.0
 
     if torch.is_tensor(geom):
@@ -102,7 +101,7 @@ def regularize_geom(geom, radius=0):
         if geom[:, j].ptp() < eps:
             continue
         rgeom = _regularize_1d(rgeom, radius=max(eps, radius), eps=eps, dim=j)
-    
+
     # order regularized geom by depth and then x
     order = np.lexsort(rgeom.T)
     rgeom = rgeom[order]
@@ -115,8 +114,8 @@ def _regularize_1d(geom, radius, eps, dim=1):
     dim_pitch = get_pitch(geom, direction=dim)
     steps = int(np.ceil(total / dim_pitch))
 
-    min_pos = geom[:, dim].min() - radius
-    max_pos = geom[:, dim].max() + radius
+    min_pos = geom[:, dim].min() - radius - eps
+    max_pos = geom[:, dim].max() + radius + eps
 
     all_positions = []
     offset = np.zeros(geom.shape[1])
@@ -140,11 +139,12 @@ def _regularize_1d(geom, radius, eps, dim=1):
         assert n_neighbs.max() > 1
 
     from scipy.cluster.hierarchy import linkage, fcluster
+
     Z = linkage(A.astype(np.float32))
-    labels = fcluster(Z, 1.1, criterion='distance')
+    labels = fcluster(Z, 1.1, criterion="distance")
     labels -= 1
     return all_positions[np.unique(labels)]
-        
+
 
 # -- channel index creation
 
@@ -291,6 +291,38 @@ def make_regular_channel_index(geom, radius, p=2, to_torch=False):
 
     return channel_index
 
+
+def regularize_channel_index(geom, channel_index, p=2, to_torch=False):
+    """Convert a channel index to the "regular" format
+
+    Need to know the p used in the first place.
+    """
+    nchans = len(geom)
+
+    # current radius
+    radius = 0
+    for row in channel_index:
+        row = row[row < nchans]
+        radius = max(radius, pdist(geom[row]).max())
+
+    regular_channel_index = make_regular_channel_index(geom, radius, p=p)
+
+    for c in range(nchans):
+        regrow = regular_channel_index[c]
+        origrow = channel_index[c]
+        invalid = np.logical_not(np.isin(regrow, origrow))
+        regular_channel_index[c, invalid] = nchans
+
+        # check that this is a re-encoding of the same channels
+        newc = regular_channel_index[c]
+        newc = newc[newc < nchans]
+        oldc = origrow[origrow < nchans]
+        assert np.array_equal(np.sort(newc), np.sort(oldc))
+
+    if to_torch:
+        regular_channel_index = torch.from_numpy(regular_channel_index)
+
+    return regular_channel_index
 
 
 def make_contiguous_channel_index(n_channels, n_neighbors=40):
@@ -446,7 +478,9 @@ def channel_subset_by_index(
     channel_index_mask = channel_subset_mask(channel_index_full, channel_index_new)
     if torch.is_tensor(channel_index_full):
         channel_index_mask = torch.from_numpy(channel_index_mask)
-    return get_channel_subset(waveforms, max_channels, channel_index_mask, chunk_length=chunk_length)
+    return get_channel_subset(
+        waveforms, max_channels, channel_index_mask, chunk_length=chunk_length
+    )
 
 
 def get_channel_index_mask(geom, channel_index, radius=None, n_channels_subset=None):
@@ -569,7 +603,7 @@ def get_channel_subset(
     npx = np
     if is_torch:
         npx = torch
-    
+
     if rel_sub_channel_index is None:
         rel_sub_channel_index = mask_to_relative(channel_index_mask)
         if is_torch:
@@ -602,6 +636,7 @@ def get_channel_subset(
         take_along_dim = torch.take_along_dim
     else:
         waveforms = np.pad(waveforms, [*pads, (0, 1)], constant_values=fill_value)
+
         def take_along_dim(x, ix, dim, out=None):
             res = np.take_along_axis(x, ix, axis=dim)
             if out is not None:
@@ -612,7 +647,7 @@ def get_channel_subset(
     inds = rel_sub_channel_index[max_channels]
     if waveforms.ndim == 3:
         inds = inds[:, None, :]
-    
+
     return take_along_dim(
         waveforms,
         inds,
