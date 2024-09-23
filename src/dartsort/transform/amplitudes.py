@@ -174,7 +174,7 @@ class Voltage(BaseWaveformFeaturizer):
         name_prefix="",
     ):
         if name is None:
-            name = f"{kind}_{self.default_name}"
+            name = self.default_name
             if name_prefix:
                 name = f"{name_prefix}_{name}"
         super().__init__(name=name, name_prefix=name_prefix)
