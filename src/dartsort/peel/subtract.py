@@ -3,13 +3,12 @@ from collections import namedtuple
 from pathlib import Path
 import tempfile
 
-import h5py
 import torch
 import torch.nn.functional as F
 from dartsort.detect import detect_and_deduplicate
-from dartsort.transform import Waveform, WaveformPipeline
+from dartsort.transform import Waveform, WaveformPipeline, Voltage
 from dartsort.util import spiketorch
-from dartsort.util.data_util import batched_h5_read
+from dartsort.util import peel_util
 from dartsort.util.waveform_util import (get_relative_subset,
                                          make_channel_index,
                                          relative_channel_subset_index)
@@ -269,19 +268,20 @@ class SubtractionPeeler(BasePeeler):
         device = torch.device(device)
 
         orig_denoise = self.subtraction_denoising_pipeline
+        init_voltage_feature = Voltage(
+            channel_index=self.subtract_channel_index,
+            name="subtract_fit_voltages",
+        )
         init_waveform_feature = Waveform(
             channel_index=self.subtract_channel_index,
             name="subtract_fit_waveforms",
         )
+        ifeats = [init_voltage_feature, init_waveform_feature]
         if which == "denoisers":
-            self.subtraction_denoising_pipeline = WaveformPipeline(
-                [init_waveform_feature]
-                + [t for t in orig_denoise if (t.is_denoiser and not t.needs_fit())]
-            )
+            ffeats = [t for t in orig_denoise if (t.is_denoiser and not t.needs_fit())]
         else:
-            self.subtraction_denoising_pipeline = WaveformPipeline(
-                [init_waveform_feature] + [t for t in orig_denoise if t.is_denoiser]
-            )
+            ffeats = [t for t in orig_denoise if t.is_denoiser]
+        self.subtraction_denoising_pipeline = WaveformPipeline(ifeats + ffeats)
 
         # and we don't need any features for this
         orig_featurization_pipeline = self.featurization_pipeline
@@ -297,23 +297,20 @@ class SubtractionPeeler(BasePeeler):
                     device=device,
                     task_name="Fit subtraction denoisers",
                 )
-    
+
                 # fit featurization pipeline and reassign
                 # work in a try finally so we can delete the temp file
                 # in case of an issue or a keyboard interrupt
-                with h5py.File(temp_hdf5_filename) as h5:
-                    channels = h5["channels"][:]
-                    n_wf = channels.size
-                    if self.max_waveforms_fit and n_wf > self.max_waveforms_fit:
-                        choices = self.fit_subsampling_random_state.choice(
-                            n_wf, size=self.max_waveforms_fit, replace=False
-                        )
-                        choices.sort()
-                        channels = channels[choices]
-                        waveforms = batched_h5_read(h5["subtract_fit_waveforms"], choices)
-                    else:
-                        waveforms = h5["subtract_fit_waveforms"][:]
-    
+                channels, waveforms = peel_util.subsample_waveforms(
+                    temp_hdf5_filename,
+                    fit_sampling=self.fit_sampling,
+                    random_state=self.fit_subsampling_random_state,
+                    n_waveforms_fit=self.n_waveforms_fit,
+                    fit_max_reweighting=self.fit_max_reweighting,
+                    voltages_dataset_name="subtract_fit_voltages",
+                    waveforms_dataset_name="subtract_fit_waveforms",
+                )
+
                 channels = torch.as_tensor(channels, device=device)
                 waveforms = torch.as_tensor(waveforms, device=device)
                 orig_denoise = orig_denoise.to(device)

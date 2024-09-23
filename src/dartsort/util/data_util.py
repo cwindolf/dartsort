@@ -1,5 +1,5 @@
 from collections import namedtuple
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Optional
 from warnings import warn
@@ -9,6 +9,7 @@ import numpy as np
 import torch
 from dartsort.detect import detect_and_deduplicate
 from spikeinterface.core import NumpySorting, get_random_data_chunks
+from tqdm.auto import tqdm
 
 from .waveform_util import make_channel_index
 
@@ -402,6 +403,19 @@ def _read_by_chunk(mask, dataset, show_progress=True):
     """
     out = np.empty((mask.sum(), *dataset.shape[1:]), dtype=dataset.dtype)
     n = 0
+    for sli, dsli in yield_chunks(dataset, show_progress):
+        m = np.flatnonzero(mask[sli])
+        nm = m.size
+        if not nm:
+            continue
+        x = dsli[m]
+        # x = dataset[np.arange(sli.start, sli.stop)[m]]
+        out[n : n + nm] = x
+        n += nm
+    return out
+
+
+def yield_chunks(dataset, show_progress=True):
     chunks = dataset.iter_chunks()
     if show_progress:
         chunks = tqdm(
@@ -409,13 +423,6 @@ def _read_by_chunk(mask, dataset, show_progress=True):
             total=int(np.ceil(dataset.shape[0] / dataset.chunks[0])),
             desc=dataset.name,
         )
+
     for sli, *_ in chunks:
-        m = np.flatnonzero(mask[sli])
-        nm = m.size
-        if not nm:
-            continue
-        x = dataset[sli][m]
-        # x = dataset[np.arange(sli.start, sli.stop)[m]]
-        out[n : n + nm] = x
-        n += nm
-    return out
+        yield sli, dataset[sli]

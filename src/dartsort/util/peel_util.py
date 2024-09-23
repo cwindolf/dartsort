@@ -1,7 +1,10 @@
+import h5py
 from pathlib import Path
+import numpy as np
+import torch
 
 from ..localize.localize_util import check_resume_or_overwrite, localize_hdf5
-from .data_util import DARTsortSorting
+from .data_util import DARTsortSorting, batched_h5_read
 
 
 def run_peeler(
@@ -141,3 +144,52 @@ def _gc(n_jobs, device):
         torch.cuda.is_available() and device is None
     ):
         torch.cuda.empty_cache()
+
+
+def subsample_waveforms(
+    hdf5_filename,
+    fit_sampling="random",
+    random_state=0,
+    n_waveforms_fit=10_000,
+    voltages_dataset_name="collisioncleaned_voltages",
+    waveforms_dataset_name="collisioncleaned_waveforms",
+    fit_max_reweighting=20.0,
+):
+    from ..cluster.density import get_smoothed_densities
+    random_state = np.random.default_rng(random_state)
+
+    with h5py.File(hdf5_filename) as h5:
+        channels = h5["channels"][:]
+        n_wf = channels.size
+        if n_wf > n_waveforms_fit:
+            if fit_sampling == "random":
+                choices = random_state.choice(
+                    n_wf, size=n_waveforms_fit, replace=False
+                )
+            elif fit_sampling == "amp_reweighted":
+                volts = h5[voltages_dataset_name][:]
+                sigma = 1.06 * volts.std() * np.power(len(volts), -0.2)
+                sample_p = get_smoothed_densities(volts[:, None], sigmas=sigma)
+                sample_p = sample_p.mean() / sample_p
+                sample_p = sample_p.clip(
+                    1. / fit_max_reweighting,
+                    fit_max_reweighting,
+                )
+                sample_p /= sample_p.sum()
+                choices = random_state.choice(
+                    n_wf, p=sample_p, size=n_waveforms_fit, replace=False
+                )
+            else:
+                assert False
+            choices.sort()
+            channels = channels[choices]
+            waveforms = batched_h5_read(
+                h5[waveforms_dataset_name], choices
+            )
+        else:
+            waveforms = h5[waveforms_dataset_name][:]
+
+    waveforms = torch.from_numpy(waveforms)
+    channels = torch.from_numpy(channels)
+
+    return channels, waveforms

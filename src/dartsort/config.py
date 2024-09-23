@@ -82,6 +82,7 @@ class FeaturizationConfig:
     denoise_only: bool = False
 
     # -- featurization configuration
+    save_input_voltages: bool = False
     save_input_waveforms: bool = False
     save_input_tpca_projs: bool = True
     save_output_waveforms: bool = False

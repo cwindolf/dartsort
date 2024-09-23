@@ -115,6 +115,11 @@ def featurization_config_to_class_names_and_kwargs(fconf):
 
     do_feats = not fconf.denoise_only
 
+    if do_feats and fconf.save_input_voltages:
+        class_names_and_kwargs.append(
+            ("Voltage", {"name_prefix": fconf.input_waveforms_name})
+        )
+
     if do_feats and fconf.save_input_waveforms:
         class_names_and_kwargs.append(
             ("Waveform", {"name_prefix": fconf.input_waveforms_name})
