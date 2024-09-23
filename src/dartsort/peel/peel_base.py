@@ -7,9 +7,9 @@ import h5py
 import numpy as np
 import torch
 from dartsort.transform import WaveformPipeline
-from dartsort.util.data_util import SpikeDataset, batched_h5_read
-from dartsort.cluster.density import get_smoothed_densities
+from dartsort.util.data_util import SpikeDataset
 from dartsort.util.multiprocessing_util import get_pool
+from dartsort.util import peel_util
 from dartsort.util.py_util import delay_keyboard_interrupt
 from spikeinterface.core.recording_tools import get_chunk_with_margin
 from tqdm.auto import tqdm
@@ -458,41 +458,20 @@ class BasePeeler(torch.nn.Module):
                     device=device,
                     task_name="Fit features",
                 )
-    
+
                 # fit featurization pipeline and reassign
                 # work in a try finally so we can delete the temp file
                 # in case of an issue or a keyboard interrupt
-                with h5py.File(temp_hdf5_filename) as h5:
-                    channels = h5["channels"][:]
-                    n_wf = channels.size
-                    if n_wf > self.n_waveforms_fit:
-                        if self.fit_sampling == "random":
-                            choices = self.fit_subsampling_random_state.choice(
-                                n_wf, size=self.n_waveforms_fit, replace=False
-                            )
-                        elif self.fit_sampling == "amp_reweighted":
-                            volts = h5["peeled_voltages_fit"][:]
-                            sigma = 1.06 * volts.std() * np.power(len(volts), -0.2)
-                            sample_p = get_smoothed_densities(volts[:, None], sigmas=sigma)
-                            sample_p = sample_p.mean() / sample_p
-                            sample_p = sample_p.clip(
-                                1. / self.fit_max_reweighting,
-                                self.fit_max_reweighting,
-                            )
-                            sample_p /= sample_p.sum()
-                            choices = self.fit_subsampling_random_state.choice(
-                                n_wf, p=sample_p, size=self.n_waveforms_fit, replace=False
-                            )
-                        else:
-                            assert False
-                        choices.sort()
-                        channels = channels[choices]
-                        waveforms = batched_h5_read(
-                            h5["peeled_waveforms_fit"], choices
-                        )
-                    else:
-                        waveforms = h5["peeled_waveforms_fit"][:]
-    
+                channels, waveforms = peel_util.subsample_waveforms(
+                    temp_hdf5_filename,
+                    fit_sampling=self.fit_sampling,
+                    random_state=self.fit_subsampling_random_state,
+                    n_waveforms_fit=self.n_waveforms_fit,
+                    fit_max_reweighting=self.fit_max_reweighting,
+                    voltages_dataset_name="peeled_voltages_fit",
+                    waveforms_dataset_name="peeled_waveforms_fit",
+                )
+
                 channels = torch.as_tensor(channels, device=device)
                 waveforms = torch.as_tensor(waveforms, device=device)
                 featurization_pipeline = featurization_pipeline.to(device)
