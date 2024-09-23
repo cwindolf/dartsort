@@ -27,14 +27,18 @@ class VAELocalization(BaseWaveformFeaturizer):
         hidden_dims=(256, 128),
         name=None,
         name_prefix="",
-        epochs=10,
+        epochs=100,
         learning_rate=1e-3,
         batch_size=32,
         use_batchnorm=True,
-        alpha_closed_form=False,
+        alpha_closed_form=True,
         amplitudes_only=False,
         prior_variance=80.0,
+        convergence_eps=0.01,
+        min_epochs=2,
+        scale_loss_by_mean=False,
     ):
+        assert localization_model == "pointsource"
         assert amplitude_kind in ("peak", "ptp")
         super().__init__(
             geom=geom, channel_index=channel_index, name=name, name_prefix=name_prefix
@@ -56,6 +60,9 @@ class VAELocalization(BaseWaveformFeaturizer):
         self.alpha_closed_form = alpha_closed_form
         self.variational = prior_variance is not None
         self.prior_variance = prior_variance
+        self.convergence_eps = convergence_eps
+        self.min_epochs = min_epochs
+        self.scale_loss_by_mean = scale_loss_by_mean
 
         self.register_buffer(
             "model_channel_index",
@@ -95,7 +102,7 @@ class VAELocalization(BaseWaveformFeaturizer):
         neighbors = self.padded_geom[self.model_channel_index[channels]]
         local_geom = neighbors - centers.unsqueeze(1)
         dx = z[:, 0, None] - local_geom[:, :, 0]
-        dz = z[:, 2, None] + local_geom[:, :, 1]
+        dz = z[:, 2, None] - local_geom[:, :, 1]
         y = F.softplus(z[:, 1]).unsqueeze(1)
         dists = torch.sqrt(dx**2 + dz**2 + y**2)
         return dists
@@ -136,6 +143,11 @@ class VAELocalization(BaseWaveformFeaturizer):
     def loss_function(self, recon_x, x, mask, mu, var):
         recon_x_masked = recon_x * mask
         x_masked = x * mask
+        if self.scale_loss_by_mean:
+            # 1/mean amplitude
+            rescale = mask.sum(1, keepdim=True) / x_masked.sum(1, keepdim=True)
+            x_masked *= rescale
+            recon_x_masked *= rescale
         MSE = F.mse_loss(recon_x_masked, x_masked, reduction="sum")
         KLD = 0.0
         if self.variational:
@@ -171,6 +183,7 @@ class VAELocalization(BaseWaveformFeaturizer):
         optimizer = torch.optim.Adam(self.parameters(), lr=self.learning_rate)
 
         self.train()
+        loss_history = []
         with trange(self.epochs, desc="Epochs", unit="epoch") as pbar:
             for epoch in pbar:
                 total_loss = 0
@@ -195,9 +208,19 @@ class VAELocalization(BaseWaveformFeaturizer):
                     total_mse += mse.item()
                     total_kld += kld.item() if self.variational else kld
 
-                pbar.set_description(
-                    f"Epochs [loss={total_loss / len(dataloader):0.2f},mse={total_mse/len(dataloader):0.2f},kld={total_kld/len(dataloader):0.2f}]"
-                )
+                loss = total_loss / len(dataloader)
+                loss_history.append(loss)
+                desc = f"[loss={loss:0.2f},mse={total_mse/len(dataloader):0.2f},kld={total_kld/len(dataloader):0.2f}]"
+                pbar.set_description(f"Epochs {desc}")
+
+                # check convergence
+                if epoch < self.min_epochs:
+                    continue
+
+                diff = abs(loss - loss_history[-2])
+                if diff / loss_history[-2] < self.convergence_eps:
+                    pbar.set_description(f"Converged epoch={epoch} {desc}")
+                    break
 
     def fit(self, waveforms, max_channels):
         with torch.enable_grad():
