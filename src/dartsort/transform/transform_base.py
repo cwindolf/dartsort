@@ -81,6 +81,45 @@ class BaseWaveformAutoencoder(BaseWaveformDenoiser, BaseWaveformFeaturizer):
     pass
 
 
+class Passthrough(BaseWaveformDenoiser, BaseWaveformFeaturizer):
+
+    def __init__(self, pipeline):
+        feat = [t for t in pipeline if t.is_featurizer]
+        if not len(feat):
+            raise ValueError("Passthrough with no featurizer?")
+        name = f"passthrough_{feat[0].name}"
+        super().__init__(name=name)
+        self.pipeline = pipeline
+
+    def needs_precompute(self):
+        return self.pipeline.needs_precompute()
+
+    def precompute(self):
+        return self.pipeline.precompute()
+
+    def needs_fit(self):
+        return self.pipeline.needs_fit()
+
+    def fit(self, waveforms, max_channels):
+        self.pipeline.fit(waveforms, max_channels)
+
+    def forward(self, waveforms, max_channels=None):
+        pipeline_waveforms, pipeline_features = self.pipeline(waveforms, max_channels)
+        return waveforms, pipeline_features
+
+    @property
+    def spike_datasets(self):
+        datasets = []
+        for t in self.pipeline.transformers:
+            if t.is_featurizer:
+                datasets.extend(t.spike_datasets)
+        return datasets
+
+    def transform(self, waveforms, max_channels=None):
+        pipeline_waveforms, pipeline_features = self.pipeline(waveforms, max_channels)
+        return pipeline_features
+
+
 class IdentityWaveformDenoiser(BaseWaveformDenoiser):
     def forward(self, waveforms, max_channels=None):
         return waveforms

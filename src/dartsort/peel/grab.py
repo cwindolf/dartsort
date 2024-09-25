@@ -1,7 +1,7 @@
 import torch
 from dartsort.util import spiketorch
 
-from .peel_base import BasePeeler
+from .peel_base import BasePeeler, SpikeDataset
 
 
 class GrabAndFeaturize(BasePeeler):
@@ -37,6 +37,13 @@ class GrabAndFeaturize(BasePeeler):
         self.spike_length_samples = spike_length_samples
         self.register_buffer("times_samples", times_samples)
         self.register_buffer("channels", channels)
+
+    def out_datasets(self):
+        datasets = super().out_datasets()
+        datasets.append(
+            SpikeDataset(name="indices", shape_per_spike=(), dtype=int)
+        )
+        return datasets
 
     def process_chunk(self, chunk_start_samples, return_residual=False):
         """Override process_chunk to skip empties."""
@@ -88,6 +95,7 @@ class GrabAndFeaturize(BasePeeler):
 
         return dict(
             n_spikes=in_chunk.numel(),
+            indices=in_chunk,
             times_samples=self.times_samples[in_chunk],
             channels=channels,
             collisioncleaned_waveforms=waveforms,
