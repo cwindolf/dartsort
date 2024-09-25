@@ -25,6 +25,9 @@ class Decollider(BaseWaveformDenoiser):
         noisier3noise=False,
         inference_kind="raw",
         seed=0,
+        batch_size=32,
+        learning_rate=1e-3,
+        epochs=25,
     ):
         assert inference_kind in ("raw", "amortized")
 
@@ -34,7 +37,10 @@ class Decollider(BaseWaveformDenoiser):
         self.hidden_dims = hidden_dims
         self.n_channels = len(geom)
         self.recording = recording
-        self.rg = np.random.get_default_rng(seed)
+        self.batch_size = batch_size
+        self.learning_rate = learning_rate
+        self.epochs = epochs
+        self.rg = np.random.default_rng(seed)
 
         super().__init__(
             geom=geom, channel_index=channel_index, name=name, name_prefix=name_prefix
@@ -50,6 +56,15 @@ class Decollider(BaseWaveformDenoiser):
             "relative_index",
             get_relative_index(self.channel_index, self.model_channel_index),
         )
+        # suburban lawns -- janitor
+        self.register_buffer(
+            "irrelative_index",
+            get_relative_index(self.model_channel_index, self.channel_index),
+        )
+        self._needs_fit = True
+
+    def needs_fit(self):
+        return self._needs_fit
 
     def initialize_nets(self, spike_length_samples):
         self.spike_length_samples = spike_length_samples
@@ -83,8 +98,9 @@ class Decollider(BaseWaveformDenoiser):
         waveforms = reindex(max_channels, waveforms, self.relative_index, pad_value=0.0)
         with torch.enable_grad():
             self._fit(waveforms, max_channels)
+        self._needs_fit = False
 
-    def transform(self, waveforms, max_channels):
+    def forward(self, waveforms, max_channels):
         """Called only at inference time."""
         n = len(waveforms)
         waveforms = reindex(max_channels, waveforms, self.relative_index, pad_value=0.0)
@@ -92,18 +108,20 @@ class Decollider(BaseWaveformDenoiser):
 
         net_input = torch.cat((waveforms.view(n, self.wf_dim), masks), dim=1)
         if self.inference_kind == "amortized":
-            pred = self.inf_net(net_input)
+            pred = self.inf_net(net_input).view(waveforms.shape)
         elif self.inference_kind == "raw":
-            pred = self.eyz(net_input)
+            pred = self.eyz(net_input).view(waveforms.shape)
         else:
             assert False
+
+        pred = reindex(max_channels, pred, self.irrelative_index)
 
         return pred
 
     def get_masks(self, max_channels):
         return self.model_channel_index[max_channels] < self.n_channels
 
-    def forward(self, y, m, mask):
+    def train_forward(self, y, m, mask):
         n = len(y)
         z = y + m
         z_flat = z.view(n, self.wf_dim)
@@ -117,18 +135,18 @@ class Decollider(BaseWaveformDenoiser):
 
         # predictions given z
         if self.noisier3noise:
-            eyz = self.eyz(z_masked)
-            emz = self.emz(z_masked)
+            eyz = self.eyz(z_masked).view(y.shape)
+            emz = self.emz(z_masked).view(y.shape)
             exz = eyz - emz
         else:
-            eyz = self.eyz(z_masked)
+            eyz = self.eyz(z_masked).view(y.shape)
             exz = 2 * eyz - z
 
         # predictions given y, if relevant
         if self.inference_kind == "amortized":
             y_flat = y.view(n, self.wf_dim)
             y_masked = torch.cat((y_flat, mask), dim=1)
-            exy = self.inf_net(y_masked)
+            exy = self.inf_net(y_masked).view(y.shape)
 
         return exz, eyz, emz, exy
 
@@ -157,8 +175,9 @@ class Decollider(BaseWaveformDenoiser):
 
         return torch.from_numpy(noise_waveforms)
 
-    def loss(mask, waveforms, m, exz, eyz, emz=None, exy=None):
+    def loss(self, mask, waveforms, m, exz, eyz, emz=None, exy=None):
         loss_dict = {}
+        mask = mask.unsqueeze(1)
         loss_dict["eyz"] = F.mse_loss(mask * eyz, mask * waveforms)
         if emz is not None:
             loss_dict["emz"] = F.mse_loss(mask * emz, mask * m)
@@ -167,31 +186,30 @@ class Decollider(BaseWaveformDenoiser):
         return loss_dict
 
     def _fit(self, waveforms, channels):
-        self.initialize_net(waveforms.shape[1])
+        self.initialize_nets(waveforms.shape[1])
         dataset = TensorDataset(waveforms, channels)
         dataloader = DataLoader(dataset, batch_size=self.batch_size, shuffle=True)
         optimizer = torch.optim.Adam(self.parameters(), lr=self.learning_rate)
+        self.to(waveforms.device)
 
         with trange(self.epochs, desc="Epochs", unit="epoch") as pbar:
-            epoch_losses = {}
             for epoch in pbar:
+                epoch_losses = {}
                 for waveform_batch, channels_batch in dataloader:
                     optimizer.zero_grad()
 
                     # get a batch of noise samples
                     m = self.get_noise(channels_batch).to(waveform_batch)
                     mask = self.get_masks(channels_batch).to(waveform_batch)
-                    exz, eyz, emz, exy = self.forward(
-                        waveforms,
-                        m,
-                    )
+                    exz, eyz, emz, exy = self.train_forward(waveform_batch, m, mask)
                     loss_dict = self.loss(mask, waveform_batch, m, exz, eyz, emz, exy)
                     loss = sum(loss_dict.values())
                     loss.backward()
                     optimizer.step()
 
-                    for k, v in loss_dict:
+                    for k, v in loss_dict.items():
                         epoch_losses[k] = v.item() + epoch_losses.get(k, 0.0)
 
-                loss_str = ", ".join(f"{k}: {v:0.2f}" for k, v in epoch_losses.items())
+                epoch_losses = {k: v / len(dataloader) for k, v in epoch_losses.items()}
+                loss_str = ", ".join(f"{k}: {v:.3f}" for k, v in epoch_losses.items())
                 pbar.set_description(f"Epochs [{loss_str}]")

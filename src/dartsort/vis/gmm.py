@@ -1763,7 +1763,7 @@ class NeighborBimodality(GMMMergePlot):
                 lw=0,
                 alpha=0.5,
             )
-            row[0].set_title(f"{ns=} {nu=} 1-rho={1.0 - pear.statistic} p={pear.pvalue}", fontsize=6)
+            row[0].set_title(f"{ns=} {nu=} 1-rho={1.0 - pear.statistic:.2f} p={pear.pvalue:.2f}", fontsize=6)
             row[0].set_xlabel(f"{u}: {self.badness_kind}")
             row[0].set_ylabel(f"{unit_id}: {self.badness_kind}")
 
