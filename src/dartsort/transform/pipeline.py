@@ -84,6 +84,9 @@ class WaveformPipeline(torch.nn.Module):
 
             if transformer.is_denoiser:
                 waveforms = transformer(waveforms, max_channels=max_channels)
+                if transformer.is_featurizer:
+                    # result is tuple wfs, feats
+                    waveforms = waveforms[0]
 
     def precompute(self):
         for transformer in self.transformers:

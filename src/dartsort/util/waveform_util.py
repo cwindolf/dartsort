@@ -91,6 +91,8 @@ def regularize_geom(geom, radius=0):
     going on here.
     """
     eps = pdist(geom).min() / 2.0
+    radius = np.atleast_1d(radius)
+    radius = np.broadcast_to(radius, geom.shape[1:])
 
     if torch.is_tensor(geom):
         geom = geom.numpy()
@@ -100,7 +102,7 @@ def regularize_geom(geom, radius=0):
         # skip empty dims
         if geom[:, j].ptp() < eps:
             continue
-        rgeom = _regularize_1d(rgeom, radius=max(eps, radius), eps=eps, dim=j)
+        rgeom = _regularize_1d(rgeom, radius=max(eps, radius[j]), eps=eps, dim=j)
 
     # order regularized geom by depth and then x
     order = np.lexsort(rgeom.T)
@@ -268,6 +270,8 @@ def make_regular_channel_index(geom, radius, p=2, to_torch=False):
     away!
     """
     rgeom, eps = regularize_geom(geom=geom, radius=radius)
+    if np.array(radius).size > 1:
+        radius = np.sqrt(np.square(radius).sum())
 
     # determine original geom's position in the regularized one, and which
     # channels are fake chans (they are unmatched in the query)
@@ -301,9 +305,9 @@ def regularize_channel_index(geom, channel_index, p=2, to_torch=False):
 
     # current radius
     radius = 0
-    for row in channel_index:
+    for j, row in enumerate(channel_index):
         row = row[row < nchans]
-        radius = max(radius, pdist(geom[row]).max())
+        radius = max(radius, cdist(geom[row], geom[j][None]).max())
 
     regular_channel_index = make_regular_channel_index(geom, radius, p=p)
 

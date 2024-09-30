@@ -2,7 +2,7 @@ import math
 
 import torch
 import torch.nn.functional as F
-from scipy.signal._signaltools import _calc_oa_lens
+from scipy.fftpack import next_fast_len
 from torch.fft import irfft, rfft
 
 
@@ -256,6 +256,41 @@ def real_resample(x, num, dim=0):
 
     return y
 
+def _calc_oa_lens(s1, s2, block_size=None):
+    """Modified from scipy
+    """
+    import math
+    from scipy.special import lambertw
+
+    fallback = (s1+s2-1, None, s1, s2)
+    if s1 == s2 or s1 == 1 or s2 == 1:
+        return fallback
+    if s2 > s1:
+        s1, s2 = s2, s1
+        swapped = True
+    else:
+        swapped = False
+
+    if s2 >= s1/2 and block_size is None:
+        return fallback
+    overlap = s2-1
+    opt_size = -overlap*lambertw(-1/(2*math.e*overlap), k=-1).real
+    if block_size is None:
+        block_size = next_fast_len(math.ceil(opt_size))
+
+    # Use conventional FFT convolve if there is only going to be one block.
+    if block_size >= s1:
+        return fallback
+
+    if not swapped:
+        in1_step = block_size-s2+1
+        in2_step = s2
+    else:
+        in1_step = s2
+        in2_step = block_size-s2+1
+
+    return block_size, overlap, in1_step, in2_step
+
 
 def steps_and_pad(s1, in1_step, s2, in2_step, block_size, overlap):
     shape_final = s1 + s2 - 1
@@ -348,6 +383,57 @@ def depthwise_oaconv1d(input, weight, f2=None, padding=0):
     # extract correct padding
     valid_len = s1 - s2 + 1
     valid_start = s2 - 1
+    assert valid_start >= padding
+    oa = oa[:, valid_start - padding : valid_start + valid_len + padding]
+
+    return oa
+
+
+def single_inv_oaconv1d(input, f2, s2, block_size, padding=0, norm="backward"):
+    """Depthwise correlation (F.conv1d with groups=in_chans) with overlap-add"""
+    # conv on last axis
+    # assert input.ndim == weight.ndim == 2
+    n1, s1 = input.shape
+    assert s1 >= s2
+    valid_len = s1 - s2 + 1
+    valid_start = s2 - 1
+
+    # shape_full = s1 + s2 - 1
+    block_size, overlap, in1_step, in2_step = _calc_oa_lens(s1, s2, block_size=block_size)
+    assert overlap is not None
+    # case is hard to support...
+
+    nstep1, pad1, nstep2, pad2 = steps_and_pad(
+        s1, in1_step, s2, in2_step, block_size, overlap
+    )
+
+    if pad1 > 0:
+        input = F.pad(input, (0, pad1))
+    input = input.reshape(n1, nstep1, in1_step)
+
+    # freq domain correlation
+    f1 = torch.fft.rfft(input, n=block_size, norm=norm)
+    if f1.shape[2] > f2.shape[0]:
+        f2 = F.pad(f2, (0, f1.shape[2] - f2.shape[0]))
+
+    f1.mul_(f2)
+    res = torch.fft.irfft(f1, n=block_size, norm=norm)
+
+    # overlap add part with torch
+    fold_input = res.reshape(n1, nstep1, block_size).permute(0, 2, 1)
+    fold_out_len = nstep1 * in1_step + overlap
+    fold_res = F.fold(
+        fold_input,
+        output_size=(1, fold_out_len),
+        kernel_size=(1, block_size),
+        stride=(1, in1_step),
+    )
+    assert fold_res.shape == (n1, 1, 1, fold_out_len)
+
+    oa = fold_res.reshape(n1, fold_out_len)
+    # this is the full convolution
+    # oa = oa[:, : shape_final]
+    # extract correct padding
     assert valid_start >= padding
     oa = oa[:, valid_start - padding : valid_start + valid_len + padding]
 
