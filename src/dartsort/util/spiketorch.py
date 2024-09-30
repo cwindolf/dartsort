@@ -217,7 +217,72 @@ def reduce_at_(dest, ix, src, reduce, include_self=True):
     )
 
 
+def argrelmax(x, radius, threshold, exclude_edge=True):
+    x1 = F.max_pool1d(
+        x[None, None],
+        kernel_size=2 * radius + 1,
+        padding=radius,
+        stride=1,
+    )[0, 0]
+    x1[x < x1] = 0
+    F.threshold_(x1, threshold, 0.0)
+    ix = torch.nonzero(x1)[:, 0]
+    if exclude_edge:
+        return ix[(ix > 0) & (ix < x.numel() - 1)]
+    return ix
+
+
 _cdtypes = {torch.float32: torch.complex64, torch.float64: torch.complex128}
+
+
+def convolve_lowrank(
+    traces,
+    spatial_singular,
+    temporal_components,
+    padding=0,
+    out=None,
+):
+    """Depthwise convolution of traces with templates"""
+    n_templates, spike_length_samples, rank = temporal_components.shape
+
+    out_len = traces.shape[0] + 2 * padding - spike_length_samples + 1
+    if out is None:
+        out = torch.empty(
+            (n_templates, out_len),
+            dtype=traces.dtype,
+            device=traces.device,
+        )
+    else:
+        assert out.shape == (n_templates, out_len)
+
+    for q in range(rank):
+        # units x time
+        rec_spatial = spatial_singular[:, q, :] @ traces
+
+        # convolve with temporal components -- units x time
+        temporal = temporal_components[:, :, q]
+
+        # temporalf = temporalf[:, :, q]
+        # conv1d with groups! only convolve each unit with its own temporal filter
+        conv = F.conv1d(
+            rec_spatial[None],
+            temporal[:, None, :],
+            groups=n_templates,
+            padding=padding,
+        )[0]
+
+        # o-a turns out not to be helpful, sadly
+        # conv = depthwise_oaconv1d(
+        #     rec_spatial, temporal, padding=padding, f2=temporalf
+        # )
+
+        if q:
+            out += conv
+        else:
+            out.copy_(conv)
+
+    # back to units x time (remove extra dim used for conv1d)
+    return out
 
 
 def real_resample(x, num, dim=0):
