@@ -5,6 +5,8 @@ from dartsort.util import nn_util, spikeio
 from dartsort.util.spiketorch import get_relative_index, reindex
 from dartsort.util.waveform_util import regularize_channel_index, grab_main_channels
 from torch.utils.data import Dataset, DataLoader, StackDataset, TensorDataset, BatchSampler, RandomSampler, WeightedRandomSampler
+from dartsort.util.waveform_util import regularize_channel_index
+from torch.utils.data import DataLoader, TensorDataset
 from tqdm.auto import trange
 
 from .transform_base import BaseWaveformDenoiser
@@ -60,7 +62,6 @@ class Decollider(BaseWaveformDenoiser):
         self.register_buffer(
             "model_channel_index", torch.from_numpy(self.model_channel_index_np)
         )
-        print(f"{self.model_channel_index.shape=}")
         self.register_buffer(
             "relative_index",
             get_relative_index(self.channel_index, self.model_channel_index),
