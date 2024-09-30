@@ -229,7 +229,13 @@ def svd_compress_templates(
     singular_values: n_units, rank
     spatial_components: n_units, rank, n_channels
     """
-    templates = template_data.templates
+    if hasattr(template_data, "templates"):
+        templates = template_data.templates
+        counts = template_data.spike_counts_by_channel
+    else:
+        templates = template_data
+        counts = None
+
     vis_mask = templates.ptp(axis=1, keepdims=True) > min_channel_amplitude
     vis_templates = templates * vis_mask
     dtype = templates.dtype
@@ -262,7 +268,7 @@ def svd_compress_templates(
         singular_values[i, :k] = s[:rank]
         spatial_components[i, :k, mask] = Vh[:rank].T
 
-    return LowRankTemplates(temporal_components, singular_values, spatial_components, template_data.spike_counts_by_channel)
+    return LowRankTemplates(temporal_components, singular_values, spatial_components, counts)
 
 
 def temporally_upsample_templates(

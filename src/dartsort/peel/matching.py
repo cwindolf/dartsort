@@ -582,7 +582,7 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
 
         # initialize convolution
         compressed_template_data.convolve(
-            residual, padding=self.obj_pad_len, out=padded_conv
+            residual.T, padding=self.obj_pad_len, out=padded_conv
         )
 
         # main loop
