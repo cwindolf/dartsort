@@ -244,8 +244,7 @@ def convolve_lowrank(
 ):
     """Depthwise convolution of traces with templates"""
     n_templates, spike_length_samples, rank = temporal_components.shape
-
-    out_len = traces.shape[0] + 2 * padding - spike_length_samples + 1
+    out_len = traces.shape[1] + 2 * padding - spike_length_samples + 1
     if out is None:
         out = torch.empty(
             (n_templates, out_len),
@@ -262,7 +261,6 @@ def convolve_lowrank(
         # convolve with temporal components -- units x time
         temporal = temporal_components[:, :, q]
 
-        # temporalf = temporalf[:, :, q]
         # conv1d with groups! only convolve each unit with its own temporal filter
         conv = F.conv1d(
             rec_spatial[None],
@@ -273,7 +271,7 @@ def convolve_lowrank(
 
         # o-a turns out not to be helpful, sadly
         # conv = depthwise_oaconv1d(
-        #     rec_spatial, temporal, padding=padding, f2=temporalf
+        #     rec_spatial, temporal, padding=padding, f2=temporalf[:, :, q]
         # )
 
         if q:

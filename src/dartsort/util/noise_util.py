@@ -1,8 +1,12 @@
-from scipy.fftpack import next_fast_len
+import numpy as np
+import pandas as pd
 import torch
 import torch.nn.functional as F
 
 from dartsort.util import spiketorch
+from dartsort.detect import detect_and_deduplicate
+from scipy.fftpack import next_fast_len
+from tqdm.auto import trange
 
 
 class FactorizedNoise(torch.nn.Module):
@@ -150,3 +154,66 @@ class StationaryFactorizedNoise(torch.nn.Module):
         kernel_fft = (xt_fft * xt_fft.conj()).mean(0).sqrt_()
 
         return cls(spatial_std, vt_spatial, kernel_fft, block_size, t)
+
+    def unit_false_positives(
+        self,
+        low_rank_templates,
+        min_threshold=5.0,
+        radius=10,
+        generator=None,
+        size=100,
+        t=4096,
+        unit_batch_size=32,
+    ):
+        singular = torch.asarray(
+            low_rank_templates.singular_values,
+            device=self.spatial_std.device,
+            dtype=self.spatial_std.dtype,
+        )
+        spatial = torch.asarray(
+            low_rank_templates.spatial_components,
+            device=self.spatial_std.device,
+            dtype=self.spatial_std.dtype,
+        )
+        spatial_singular = singular.unsqueeze(-1) * spatial
+        temporal = torch.asarray(
+            low_rank_templates.temporal_components,
+            device=self.spatial_std.device,
+            dtype=self.spatial_std.dtype,
+        )
+        negnormsq = spatial_singular.square().sum((1, 2)).neg_().unsqueeze(1)
+        nu, nt = temporal.shape[:2]
+        obj = None  # var for reusing buffers
+        units = []
+        scores = []
+        for j in trange(size, desc="False positives"):
+            sample = self.simulate(t=t + nt - 1, generator=generator)[0].T
+            obj = spiketorch.convolve_lowrank(
+                sample,
+                spatial_singular,
+                temporal,
+                out=obj,
+            )
+            assert obj.shape == (nu, t)
+            obj = torch.add(negnormsq, obj, alpha=2.0, out=obj)
+
+            # find peaks...
+            peak_times, peak_units, peak_energies = detect_and_deduplicate(
+                obj.T,
+                min_threshold,
+                peak_sign="pos",
+                dedup_temporal_radius=radius,
+                return_energies=True,
+            )
+            units.append(peak_units.numpy(force=True))
+            scores.append(peak_energies.numpy(force=True))
+
+        total_samples = size * t
+        df = pd.DataFrame(
+            dict(
+                units=np.concatenate(units),
+                scores=np.concatenate(scores),
+            )
+        )
+
+        return total_samples, df
