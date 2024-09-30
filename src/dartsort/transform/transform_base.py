@@ -84,10 +84,10 @@ class BaseWaveformAutoencoder(BaseWaveformDenoiser, BaseWaveformFeaturizer):
 class Passthrough(BaseWaveformDenoiser, BaseWaveformFeaturizer):
 
     def __init__(self, pipeline):
-        feat = [t for t in pipeline if t.is_featurizer]
-        if not len(feat):
-            raise ValueError("Passthrough with no featurizer?")
-        name = f"passthrough_{feat[0].name}"
+        t = [t for t in pipeline if t.is_featurizer]
+        if not len(t):
+            t = pipeline.transformers
+        name = f"passthrough_{t[0].name}"
         super().__init__(name=name)
         self.pipeline = pipeline
 
