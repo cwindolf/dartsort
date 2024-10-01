@@ -8,7 +8,8 @@ from dartsort.templates import TemplateData, template_util
 from dartsort.templates.pairwise_util import (construct_shift_indices, iterate_compressed_pairwise_convolutions)
 from dartsort.util.data_util import DARTsortSorting, combine_sortings, chunk_time_ranges, keep_only_most_recent_spikes 
 from dartsort.util import spikeio
-from dartsort.cluster.postprocess import chuck_noisy_template_units_with_time_tracking, chuck_noisy_template_units_from_merge 
+from dartsort.cluster.postprocess import chuck_noisy_template_units_with_time_tracking 
+# , chuck_noisy_template_units_from_merge 
 from dartsort.cluster.split import split_clusters
 from scipy.cluster.hierarchy import fcluster, linkage
 from scipy.sparse import coo_array
@@ -46,12 +47,12 @@ def single_merge_GC_multiple_chunks(
     return_denoising_tsvd=False,
     template_data_list=None, # For debugging/tuning purposes
 ):
-    """Template distance based merge, across chunks and iterative
+    """Template distance based merge, across chunks
 
     Pass in a sorting, recording and template config to make templates,
     and this will merge them (with superres). 
     It will create a template object for each chunk (defined by chunk_time_ranges_s or recording + slice_s), 
-    and merge based on all temp data for all chunks
+    and merge based on all temp data for all chunks. 
     It loads spikes only once to compute templates, to avoid reading recording back and forth
 
     Does not support superres templates yet 
@@ -60,7 +61,15 @@ def single_merge_GC_multiple_chunks(
     
     Arguments
     ---------    
-    
+    chunk_time_ranges_s
+        Time chunks on which to compute the templates for comparison
+    slice_s
+        The slice of recording on which to compute the templates
+    split_merge_config
+        Object containing the params for the merge (template distances, threshold etc..)
+    template_config
+        Object containing the params for computing templates (n spikes etc..)
+
     Returns
     -------
     A new DARTsortSorting
@@ -156,7 +165,9 @@ def merge_iterative_templates_with_multiple_chunks(
     denoising_tsvd=None,
     return_denoising_tsvd=False,
 ):
-    """Template distance based merge, across chunks and iterative
+    """
+    Template distance based merge, across chunks and iterative: 
+    It alternates between the following steps: split - GC - merge - GC 
 
     Pass in a sorting, recording and template config to make templates,
     and this will merge them (with superres). 
@@ -170,7 +181,15 @@ def merge_iterative_templates_with_multiple_chunks(
     
     Arguments
     ---------    
-    
+    chunk_time_ranges_s
+        Time chunks on which to compute the templates for comparison
+    slice_s
+        The slice of recording on which to compute the templates
+    split_merge_config
+        Object containing the params for the split (strategy, DPC params etc...) and merge (template distances, threshold etc..)
+    template_config
+        Object containing the params for computing templates (n spikes etc..)
+
     Returns
     -------
     A new DARTsortSorting
