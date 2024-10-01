@@ -274,55 +274,56 @@ def realign_and_chuck_noisy_template_units(
     return new_sorting, new_template_data
 
 
-def chuck_noisy_template_units_from_merge(
-    sorting_pre_merge,
-    sorting_post_merge,
-    template_data_list_pre_merge,
-    spike_count_max=250,
-    min_n_spikes=25,
-    min_template_snr=50,
-    device=None,
-    n_jobs=0,
-):
-    """Get rid of noise units.
+# # TODO: Delete below? 
+# def chuck_noisy_template_units_from_merge(
+#     sorting_pre_merge,
+#     sorting_post_merge,
+#     template_data_list_pre_merge,
+#     spike_count_max=250,
+#     min_n_spikes=25,
+#     min_template_snr=50,
+#     device=None,
+#     n_jobs=0,
+# ):
+#     """Get rid of noise units.
 
-    This will reindex the sorting and template data -- unit labels will
-    change, and the number of templates will change.
+#     This will reindex the sorting and template data -- unit labels will
+#     change, and the number of templates will change.
 
-    This takes as input the pre-merge template data, and the sorting after merge + merge unit mapping to automatically discard unit i.e. without computing new temp data 
-    """
+#     This takes as input the pre-merge template data, and the sorting after merge + merge unit mapping to automatically discard unit i.e. without computing new temp data 
+#     """
 
-    units_postmerge = np.unique(sorting_post_merge.labels)
-    units_postmerge = units_postmerge[units_postmerge>-1]
+#     units_postmerge = np.unique(sorting_post_merge.labels)
+#     units_postmerge = units_postmerge[units_postmerge>-1]
 
-    good_unit_ids = []
+#     good_unit_ids = []
 
-    for template_data in tqdm(template_data_list_pre_merge, desc = "GC with pre-merge template data"):
-        # no_0_count = template_data.spike_counts>0
-        for u in units_postmerge:
-            units_premerge = np.unique(sorting_pre_merge.labels[sorting_post_merge.labels==u])
-            temp_premerge = template_data.templates[np.isin(template_data.unit_ids, units_premerge)]
-            spikecount_premerge = template_data.spike_counts[np.isin(template_data.unit_ids, units_premerge)]
-            if temp_premerge.ndim==2:
-                template_snrs = spikecount_premerge*np.nanmax(temp_premerge.ptp(0))
-            else:
-                template_snrs = (spikecount_premerge[:, None, None]*temp_premerge/np.nanmax(spikecount_premerge.sum()).sum(0).ptp(0))*np.min((spikecount_premerge.sum(), spike_count_max))
-                spikecount_premerge = np.min((spikecount_premerge.sum(), spike_count_max))
-            if spikecount_premerge >= min_n_spikes and template_snrs > min_template_snr:
-                good_unit_ids.append(u)
+#     for template_data in tqdm(template_data_list_pre_merge, desc = "GC with pre-merge template data"):
+#         # no_0_count = template_data.spike_counts>0
+#         for u in units_postmerge:
+#             units_premerge = np.unique(sorting_pre_merge.labels[sorting_post_merge.labels==u])
+#             temp_premerge = template_data.templates[np.isin(template_data.unit_ids, units_premerge)]
+#             spikecount_premerge = template_data.spike_counts[np.isin(template_data.unit_ids, units_premerge)]
+#             if temp_premerge.ndim==2:
+#                 template_snrs = spikecount_premerge*np.nanmax(temp_premerge.ptp(0))
+#             else:
+#                 template_snrs = (spikecount_premerge[:, None, None]*temp_premerge/np.nanmax(spikecount_premerge.sum()).sum(0).ptp(0))*np.min((spikecount_premerge.sum(), spike_count_max))
+#                 spikecount_premerge = np.min((spikecount_premerge.sum(), spike_count_max))
+#             if spikecount_premerge >= min_n_spikes and template_snrs > min_template_snr:
+#                 good_unit_ids.append(u)
                 
-    good_unit_ids = np.asarray(good_unit_ids)
-    unique_good_unit_ids = np.unique(good_unit_ids)
+#     good_unit_ids = np.asarray(good_unit_ids)
+#     unique_good_unit_ids = np.unique(good_unit_ids)
 
-    new_labels = sorting_post_merge.labels.copy()
-    valid = np.isin(new_labels, unique_good_unit_ids)
-    new_labels[~valid] = -1
-    _, new_labels[valid] = np.unique(new_labels[valid], return_inverse=True)
+#     new_labels = sorting_post_merge.labels.copy()
+#     valid = np.isin(new_labels, unique_good_unit_ids)
+#     new_labels[~valid] = -1
+#     _, new_labels[valid] = np.unique(new_labels[valid], return_inverse=True)
 
-    new_sorting = replace(sorting_post_merge, labels=new_labels)
+#     new_sorting = replace(sorting_post_merge, labels=new_labels)
 
-    print(f"GC keeps {len(unique_good_unit_ids)} units")
-    return new_sorting
+#     print(f"GC keeps {len(unique_good_unit_ids)} units")
+#     return new_sorting
 
 # def chuck_noisy_template_units_with_loaded_spikes_per_chunk(
 #     sorting,
