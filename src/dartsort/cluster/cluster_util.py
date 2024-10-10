@@ -441,3 +441,10 @@ def make_sorting_from_labels_frames(labels, spike_frames, sampling_frequency=300
         sampling_frequency=sampling_frequency,
     )
     return sorting
+
+
+def meet(labels_a, labels_b):
+    """Sort of an intersection operation for clusterings."""
+    labels_ab = np.stack((labels_a, labels_b), axis=1)
+    ab_unique, meet_labels = np.unique(labels_ab, axis=0, return_inverse=True)
+    return meet_labels
