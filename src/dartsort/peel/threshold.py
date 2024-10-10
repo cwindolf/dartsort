@@ -20,6 +20,7 @@ class ThresholdAndFeaturize(BasePeeler):
         max_spikes_per_chunk=None,
         peak_sign="both",
         fit_sampling="random",
+        fit_max_reweighting=20.0,
         spatial_dedup_channel_index=None,
         relative_peak_radius_samples=5,
         dedup_temporal_radius_samples=7,
@@ -40,6 +41,7 @@ class ThresholdAndFeaturize(BasePeeler):
             max_waveforms_fit=max_waveforms_fit,
             fit_sampling=fit_sampling,
             fit_subsampling_random_state=fit_subsampling_random_state,
+            fit_max_reweighting=fit_max_reweighting,
             dtype=dtype,
         )
 

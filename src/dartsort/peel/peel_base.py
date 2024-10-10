@@ -303,15 +303,16 @@ class BasePeeler(torch.nn.Module):
         )
         return features
 
-    def process_chunk(self, chunk_start_samples, return_residual=False):
+    def process_chunk(self, chunk_start_samples, chunk_end_samples=None, return_residual=False, skip_features=False):
         """Grab, peel, and featurize a chunk, returning a dict of numpy arrays
 
         Main function called in peeling workers
         """
-        chunk_end_samples = min(
-            self.recording.get_num_samples(),
-            chunk_start_samples + self.chunk_length_samples,
-        )
+        if chunk_end_samples is None:
+            chunk_end_samples = min(
+                self.recording.get_num_samples(),
+                chunk_start_samples + self.chunk_length_samples,
+            )
         chunk, left_margin, right_margin = get_chunk_with_margin(
             self.recording._recording_segments[0],
             start_frame=chunk_start_samples,
@@ -332,7 +333,7 @@ class BasePeeler(torch.nn.Module):
             return_residual=return_residual,
         )
 
-        if peel_result["n_spikes"] > 0:
+        if peel_result["n_spikes"] > 0 and not skip_features:
             features = self.featurize_collisioncleaned_waveforms(
                 peel_result["collisioncleaned_waveforms"],
                 peel_result["channels"],
