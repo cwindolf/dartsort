@@ -12,6 +12,7 @@ from .transform import WaveformPipeline
 from .util.analysis import DARTsortAnalysis
 from .util.data_util import DARTsortSorting
 from .util.waveform_util import make_channel_index
-from .cluster import merge, postprocess
+from .cluster import merge, postprocess, density
+from . import util
 
 __version__ = importlib.metadata.version("dartsort")
