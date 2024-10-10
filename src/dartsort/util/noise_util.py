@@ -9,6 +9,51 @@ from scipy.fftpack import next_fast_len
 from tqdm.auto import trange
 
 
+class FullNoise(torch.nn.Module):
+    """Do not use this, it's just for comparison to the others.
+    """
+
+    def __init__(self, std, vt, nt, nc):
+        super().__init__()
+        self.std = std
+        self.vt = vt
+        self.nt = nt
+        self.nc = nc
+
+    def full_covariance(self):
+        return (self.vt.T * self.std.square()) @ self.vt
+
+    def simulate(self, size=1, t=None, generator=None):
+        device = self.spatial_std.device
+        assert t == self.nt
+        samples = torch.randn(size, t * self.nc, generator=generator, device=device)
+        samples = torch.einsum(
+            "ni,i,ij->nj",
+            samples,
+            self.std,
+            self.vt,
+        )
+        return samples.view(size, self.nt, self.nc)
+
+    @classmethod
+    def estimate(cls, snippets):
+        snippets = torch.asarray(snippets)
+        snippets = snippets.to(torch.promote_types(snippets.dtype, torch.float))
+
+        n, t, c = snippets.shape
+
+        x = snippets.view(n, t * c)
+        # u_full, sing, vt_full = torch.linalg.svd(x, full_matrices=False)
+        # std = sing / torch.sqrt(torch.tensor(n - 1).to(snippets))
+
+        cov = torch.cov(x.T)
+        eigvals, v = torch.linalg.eigh(cov)
+        std = eigvals.sqrt()
+        vt = v.T.contiguous()
+
+        return cls(std, vt)
+
+
 class FactorizedNoise(torch.nn.Module):
     """Spatial/temporal factorized noise. See .estimate().
     """
@@ -19,6 +64,13 @@ class FactorizedNoise(torch.nn.Module):
         self.vt_spatial = vt_spatial
         self.temporal_std = temporal_std
         self.vt_temporal = vt_temporal
+
+    def full_covariance(self):
+        spatial_cov = self.spatial_std[:, None] * self.vt_spatial
+        spatial_cov = spatial_cov.T @ spatial_cov
+        temporal_cov = self.temporal_std[:, None] * self.vt_temporal
+        temporal_cov = temporal_cov.T @ temporal_cov
+        return torch.kron(temporal_cov, spatial_cov)
 
     def simulate(self, size=1, t=None, generator=None):
         c = self.spatial_std.numel()
@@ -61,8 +113,8 @@ class FactorizedNoise(torch.nn.Module):
         snippets = snippets.to(torch.promote_types(snippets.dtype, torch.float))
 
         n, t, c = snippets.shape
-        sqrt_nt_minus_1 = torch.sqrt(torch.tensor(n * t - 1, dtype=snippets.dtype))
-        sqrt_nc_minus_1 = torch.sqrt(torch.tensor(n * c - 1, dtype=snippets.dtype))
+        sqrt_nt_minus_1 = torch.tensor(n * t - 1, dtype=snippets.dtype).sqrt()
+        sqrt_nc_minus_1 = torch.tensor(n * c - 1, dtype=snippets.dtype).sqrt()
         assert n * t > c ** 2
         assert n * c > t ** 2
 
@@ -135,7 +187,7 @@ class StationaryFactorizedNoise(torch.nn.Module):
         snippets = snippets.to(torch.promote_types(snippets.dtype, torch.float))
 
         n, t, c = snippets.shape
-        sqrt_nt_minus_1 = torch.sqrt(torch.tensor(n * t - 1, dtype=snippets.dtype))
+        sqrt_nt_minus_1 = torch.tensor(n * t - 1, dtype=snippets.dtype).sqrt()
         assert n * t > c ** 2
         assert n * c > t
 
@@ -217,3 +269,53 @@ class StationaryFactorizedNoise(torch.nn.Module):
         )
 
         return total_samples, df
+
+
+def get_discovery_control(
+    units,
+    tp_scores,
+    tp_labels,
+    fp_scores,
+    fp_labels,
+    fp_num_frames,
+    rec_total_frames,
+):
+    """Pick thresholds for deconvolution
+
+    TP scores are the deconv thresholds at which "true positive" (well,
+    at least from our best guess) spikes would be matched during deconv.
+    FP scores are the deconv thresholds at which false positive (according
+    to our noise estimate) events would be detected. Note that some units
+    will have no false positives -- they're just that good.
+
+    Then:
+      - (unit_tp_scores < thresh).mean() is an estimate of the false negative
+        rate for that unit. If the clustering was 'unbiased', it's a good estimate.
+
+        If clustering was conservative (biased to high scoring spikes), it
+        underestimates the FNR. If we pick largest thresh s.t. this
+        underest < maxfnr, then we picked a threshold that was too big.
+
+      - (unit_fp_scores > thresh).sum() * (rec_total_frames / fp_num_frames) * n_spikes_unit
+        estimates the number of false positive spikes per real spike for that unit.
+
+    fnr control options. max fnr = alpha.
+      - per-unit alpha: pick thresh = alpha qtile per unit. (max thresh s.t. fnr est < alpha)
+      - worst-unit alpha: min of above.
+          (why should we choose to miss any spikes in big units? it won't even cost FPs.)
+      - fudged per unit: fudge_factor * per-unit alpha
+          (account for conservative clustering bias. but how to pick fudge_factor?)
+      - worst-unit fudged.
+
+    fp control options: max fp per input spike = K, say 2.5 or 5?
+      - per-unit: thresh = min thresh s.t. fp/spk est < K
+      - worst-unit: max of above
+
+    I think a reasonable goal is to do the best we can to control FNR while not
+    blowing up the spike count. In other words, the threshold we choose is
+        max(count_control_threshold, fnr_control_threshold).
+
+    This can be done globally or per unit. If global, we do...
+        max(count_control_thresholds.max(), fnr_control_thresholds.min()).
+    """
+    pass
