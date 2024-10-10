@@ -22,6 +22,7 @@ from ..config import raw_template_config
 from ..util.analysis import DARTsortAnalysis
 from ..util.multiprocessing_util import CloudpicklePoolExecutor, get_pool
 from . import layout
+from .analysis_plots import isi_hist, correlogram, plot_correlogram, bar;
 from .colors import glasbey1024
 from .waveforms import geomplot
 
@@ -87,9 +88,7 @@ class ACG(UnitPlot):
         times_samples = sorting_analysis.times_samples(
             which=sorting_analysis.in_unit(unit_id)
         )
-        lags, acg = correlogram(times_samples, max_lag=self.max_lag)
-        bar(axis, lags, acg, fill=True, color="k")
-        axis.set_xlabel("lag (samples)")
+        plot_correlogram(axis, times_samples, max_lag=self.max_lag)
         axis.set_ylabel("acg")
 
 
@@ -108,18 +107,7 @@ class ISIHistogram(UnitPlot):
         times_s = sorting_analysis.times_seconds(
             which=sorting_analysis.in_unit(unit_id)
         )
-        dt_ms = np.diff(times_s) * 1000
-        bin_edges = np.arange(
-            0,
-            self.max_ms + self.bin_ms,
-            self.bin_ms,
-        )
-        # counts, _ = np.histogram(dt_ms, bin_edges)
-        # bin_centers = 0.5 * (bin_edges[1:] + bin_edges[:-1])
-        # axis.bar(bin_centers, counts)
-        plt.hist(dt_ms, bin_edges, color=color, label=label)
-        axis.set_xlabel("isi (ms)")
-        axis.set_ylabel(f"count (out of {dt_ms.size} total isis)")
+        isi_hist(times_s, axis, bin_ms=self.bin_ms, max_ms=self.max_ms, color=color, label=label)
 
 
 class XZScatter(UnitPlot):
@@ -1087,29 +1075,6 @@ def make_all_summaries(
 # -- utilities
 
 
-def correlogram(times_a, times_b=None, max_lag=50):
-    lags = np.arange(-max_lag, max_lag + 1)
-    ccg = np.zeros(len(lags), dtype=int)
-
-    times_a = np.sort(times_a)
-    auto = times_b is None
-    if auto:
-        times_b = times_a
-    else:
-        times_b = np.sort(times_b)
-
-    for i, lag in enumerate(lags):
-        lagged_b = times_b + lag
-        insertion_inds = np.searchsorted(times_a, lagged_b)
-        found = insertion_inds < len(times_a)
-        ccg[i] = np.sum(times_a[insertion_inds[found]] == lagged_b[found])
-
-    if auto:
-        ccg[lags == 0] = 0
-
-    return lags, ccg
-
-
 def trim_waveforms(waveforms, old_offset=42, new_offset=42, new_length=121):
     if waveforms.shape[1] == new_length and old_offset == new_offset:
         return waveforms
@@ -1202,9 +1167,3 @@ def _summary_job(unit_id):
     fig.savefig(tmp_out, dpi=_summary_job_context.dpi)
     tmp_out.rename(final_out)
     plt.close(fig)
-
-
-def bar(ax, x, y, **kwargs):
-    dx = np.diff(x).min()
-    x0 = np.concatenate((x - dx, x[-1:] + dx))
-    ax.stairs(y, x0, **kwargs)

@@ -166,3 +166,53 @@ def density_peaks_study(X, density_result, dims=[0, 1], fig=None, axes=None, idx
         *X[missed][:, dims].T, c="gray", **scatter_kw
     )
     return fig, axes
+
+
+def isi_hist(times_s, axis, max_ms=5, bin_ms=0.1, color="k", label=None, histtype="bar", alpha=1.0):
+    dt_ms = np.diff(times_s) * 1000
+    bin_edges = np.arange(
+        0,
+        max_ms + bin_ms,
+        bin_ms,
+    )
+    # counts, _ = np.histogram(dt_ms, bin_edges)
+    # bin_centers = 0.5 * (bin_edges[1:] + bin_edges[:-1])
+    # axis.bar(bin_centers, counts)
+    axis.hist(dt_ms, bin_edges, color=color, label=label, histtype=histtype, alpha=alpha)
+    axis.set_xlabel("isi (ms)")
+    axis.set_ylabel(f"count (out of {dt_ms.size} total isis)")
+
+
+def correlogram(times_a, times_b=None, max_lag=50):
+    lags = np.arange(-max_lag, max_lag + 1)
+    ccg = np.zeros(len(lags), dtype=int)
+
+    times_a = np.sort(times_a)
+    auto = times_b is None
+    if auto:
+        times_b = times_a
+    else:
+        times_b = np.sort(times_b)
+
+    for i, lag in enumerate(lags):
+        lagged_b = times_b + lag
+        insertion_inds = np.searchsorted(times_a, lagged_b)
+        found = insertion_inds < len(times_a)
+        ccg[i] = np.sum(times_a[insertion_inds[found]] == lagged_b[found])
+
+    if auto:
+        ccg[lags == 0] = 0
+
+    return lags, ccg
+
+
+def bar(ax, x, y, **kwargs):
+    dx = np.diff(x).min()
+    x0 = np.concatenate((x - dx, x[-1:] + dx))
+    return ax.stairs(y, x0, **kwargs)
+
+
+def plot_correlogram(axis, times_a, times_b=None, max_lag=50, color="k", fill=True, **stairs_kwargs):
+    lags, ccg = correlogram(times_a, times_b=times_b, max_lag=max_lag)
+    axis.set_xlabel("lag (samples)")
+    return bar(axis, lags, ccg, fill=fill, color=color, **stairs_kwargs)
