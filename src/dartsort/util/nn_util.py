@@ -31,6 +31,7 @@ def get_waveform_mlp(
     initial_conv_fullheight=False,
     final_conv_fullheight=False,
     return_initial_shape=False,
+    residual=False,
 ):
     input_dim = n_input_channels * (spike_length_samples + input_includes_mask)
 
@@ -59,7 +60,34 @@ def get_waveform_mlp(
             ))
         layers.append(nn.ReLU())
         layers.append(nn.Conv1d(spike_length_samples, spike_length_samples, kernel_size=1))
-    return nn.Sequential(*layers)
+
+    net = nn.Sequential(*layers)
+    if residual:
+        net = WaveformOnlyResidualForm(net)
+
+    return net
+
+
+class ResidualForm(nn.Module):
+
+    def __init__(self, module):
+        super().__init__()
+        self.module = module
+
+    def forward(self, input):
+        output = self.module(input)
+        return input + output
+
+
+class WaveformOnlyResidualForm(nn.Module):
+    def __init__(self, module):
+        super().__init__()
+        self.module = module
+
+    def forward(self, inputs):
+        waveforms, masks = inputs
+        output = self.module(inputs)
+        return waveforms + output
 
 
 class ChannelwiseDropout(nn.Module):
