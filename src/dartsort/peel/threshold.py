@@ -43,10 +43,10 @@ class ThresholdAndFeaturize(BasePeeler):
             fit_subsampling_random_state=fit_subsampling_random_state,
             fit_max_reweighting=fit_max_reweighting,
             dtype=dtype,
+            trough_offset_samples=trough_offset_samples,
+            spike_length_samples=spike_length_samples,
         )
 
-        self.trough_offset_samples = trough_offset_samples
-        self.spike_length_samples = spike_length_samples
         self.relative_peak_radius_samples = relative_peak_radius_samples
         self.dedup_temporal_radius_samples = dedup_temporal_radius_samples
         self.peak_sign = peak_sign

@@ -40,6 +40,8 @@ class BasePeeler(torch.nn.Module):
         fit_max_reweighting=20.0,
         fit_sampling="random",
         fit_subsampling_random_state=0,
+        trough_offset_samples=42,
+        spike_length_samples=121,
         dtype=torch.float,
     ):
         if recording.get_num_segments() > 1:
@@ -52,10 +54,13 @@ class BasePeeler(torch.nn.Module):
         self.chunk_margin_samples = chunk_margin_samples
         self.n_chunks_fit = n_chunks_fit
         self.max_waveforms_fit = max_waveforms_fit
+        self.trough_offset_samples = trough_offset_samples
+        self.spike_length_samples = spike_length_samples
         self.fit_subsampling_random_state = np.random.default_rng(
             fit_subsampling_random_state
         )
         self.dtype = dtype
+        self.np_dtype = torch.empty((), dtype=dtype).numpy().dtype
         if channel_index is not None:
             self.register_buffer("channel_index", channel_index)
             assert recording.get_num_channels() == channel_index.shape[0]
@@ -114,13 +119,17 @@ class BasePeeler(torch.nn.Module):
         self,
         output_hdf5_filename,
         chunk_starts_samples=None,
+        chunk_length_samples=None,
         stop_after_n_waveforms=None,
         n_jobs=0,
         overwrite=False,
         residual_filename=None,
         show_progress=True,
+        skip_features=False,
+        residual_to_h5=False,
         task_name=None,
         device=None,
+        ignore_resuming=False,
     ):
         """Run the full (already fitted) peeling and featurization pipeline
 
@@ -134,14 +143,17 @@ class BasePeeler(torch.nn.Module):
             task_name = self.peel_kind
 
         # this is -1 if we haven't started yet
-        last_chunk_start = self.check_resuming(
-            output_hdf5_filename,
-            overwrite=overwrite,
-        )
+        if ignore_resuming:
+            last_chunk_start = 0
+        else:
+            last_chunk_start = self.check_resuming(
+                output_hdf5_filename,
+                overwrite=overwrite,
+            )
 
         # figure out which chunks to process, and exit early if already done
         chunk_starts_samples = self.get_chunk_starts(
-            chunk_starts_samples=chunk_starts_samples
+            chunk_starts_samples=chunk_starts_samples,
         )
         n_chunks_orig = len(chunk_starts_samples)
         chunks_to_do = [
@@ -150,6 +162,9 @@ class BasePeeler(torch.nn.Module):
         if not chunks_to_do:
             return output_hdf5_filename
         save_residual = residual_filename is not None
+        compute_residual = save_residual or residual_to_h5
+        if chunk_length_samples is None:
+            chunk_length_samples = self.chunk_length_samples
 
         # main peeling loop
         # wrap in try/finally to ensure file handles get closed if there
@@ -162,13 +177,20 @@ class BasePeeler(torch.nn.Module):
                 max_workers=n_jobs,
                 mp_context=context,
                 initializer=_peeler_process_init,
-                initargs=(self, device, rank_queue, save_residual),
+                initargs=(
+                    self,
+                    device,
+                    rank_queue,
+                    compute_residual,
+                    skip_features,
+                    chunk_length_samples,
+                ),
             ) as pool:
                 # launch the jobs and wrap in a progress bar
                 results = pool.map(_peeler_process_job, chunks_to_do)
                 if show_progress:
                     n_sec_chunk = (
-                        self.chunk_length_samples
+                        chunk_length_samples
                         / self.recording.get_sampling_frequency()
                     )
                     results = tqdm(
@@ -184,10 +206,11 @@ class BasePeeler(torch.nn.Module):
                     output_hdf5_filename,
                     residual_filename=residual_filename,
                     overwrite=overwrite,
+                    skip_features=skip_features,
+                    residual_to_h5=residual_to_h5,
                 ) as (
                     output_h5,
                     h5_spike_datasets,
-                    save_residual,
                     residual_file,
                     n_spikes,
                 ):
@@ -203,15 +226,18 @@ class BasePeeler(torch.nn.Module):
                                 h5_spike_datasets,
                                 output_h5,
                                 residual_file,
+                                residual_to_h5,
+                                ignore_resuming,
+                                skip_features,
                             )
                             batch_count += 1
                             n_spikes += n_new_spikes
                             if show_progress:
-                                results.set_description(
-                                    f"{task_name} {n_sec_chunk:.1f}s/batch "
-                                    f"[spk/batch={n_spikes / batch_count:0.1f}]"
-                                )
-                            if (
+                                desc = f"{task_name}"
+                                if not skip_features:
+                                    desc += f" [spk/{n_sec_chunk:g}s={n_spikes / batch_count:0.1f}]"
+                                results.set_description(desc)
+                            if not skip_features and (
                                 stop_after_n_waveforms
                                 and n_spikes >= stop_after_n_waveforms
                             ):
@@ -303,16 +329,22 @@ class BasePeeler(torch.nn.Module):
         )
         return features
 
-    def process_chunk(self, chunk_start_samples, chunk_end_samples=None, return_residual=False, skip_features=False):
+    def process_chunk(
+        self,
+        chunk_start_samples,
+        chunk_end_samples=None,
+        return_residual=False,
+        skip_features=False,
+    ):
         """Grab, peel, and featurize a chunk, returning a dict of numpy arrays
 
         Main function called in peeling workers
         """
         if chunk_end_samples is None:
-            chunk_end_samples = min(
-                self.recording.get_num_samples(),
-                chunk_start_samples + self.chunk_length_samples,
-            )
+            chunk_end_samples = chunk_start_samples + self.chunk_length_samples
+        chunk_end_samples = min(
+            self.recording.get_num_samples(), chunk_end_samples
+        )
         chunk, left_margin, right_margin = get_chunk_with_margin(
             self.recording._recording_segments[0],
             start_frame=chunk_start_samples,
@@ -341,6 +373,10 @@ class BasePeeler(torch.nn.Module):
         else:
             features = {}
 
+        # a user who wants these must featurize with a waveform node
+        # keeping them below adds overhead
+        del peel_result["collisioncleaned_waveforms"]
+
         assert not any(k in features for k in peel_result)
         chunk_result = {**peel_result, **features}
         chunk_result = {
@@ -364,28 +400,36 @@ class BasePeeler(torch.nn.Module):
         h5_spike_datasets,
         output_h5,
         residual_file,
+        residual_to_h5,
+        ignore_resuming,
+        skip_features,
     ):
         # delay keyboard interrupts so we don't write half a batch
         # of data and leave files in an invalid state after ^C
         # not that something else couldn't happen...
         with delay_keyboard_interrupt:
-            # write stuff
-            output_h5["last_chunk_start"][()] = chunk_start_samples
-            n_new_spikes = chunk_result["n_spikes"]
+            if not ignore_resuming:
+                output_h5["last_chunk_start"][()] = chunk_start_samples
 
             if residual_file is not None:
                 chunk_result["residual"].tofile(residual_file)
 
+            if residual_to_h5 and "residual" in chunk_result:
+                n_residuals = len(output_h5["residual"])
+                output_h5["residual"].resize(n_residuals + 1, axis=0)
+                output_h5["residual"][n_residuals:] = chunk_result["residual"]
+
+            if skip_features:
+                return 0
+
+            n_new_spikes = chunk_result["n_spikes"]
             if not n_new_spikes:
                 return 0
 
             for ds in self.out_datasets():
-                h5_spike_datasets[ds.name].resize(
-                    cur_n_spikes + n_new_spikes, axis=0
-                )
-                h5_spike_datasets[ds.name][cur_n_spikes:] = chunk_result[
-                    ds.name
-                ]
+                h5ds = h5_spike_datasets[ds.name]
+                h5ds.resize(cur_n_spikes + n_new_spikes, axis=0)
+                h5ds[cur_n_spikes:] = chunk_result[ds.name]
 
         return n_new_spikes
 
@@ -457,7 +501,7 @@ class BasePeeler(torch.nn.Module):
                     temp_hdf5_filename,
                     n_jobs=n_jobs,
                     device=device,
-                    task_name="Fit features",
+                    task_name="Load examples for feature fitting",
                 )
 
                 # fit featurization pipeline and reassign
@@ -487,53 +531,72 @@ class BasePeeler(torch.nn.Module):
     def get_chunk_starts(
         self,
         chunk_starts_samples=None,
+        chunk_length_samples=None,
+        t_start=None,
+        t_end=None,
         subsampled=False,
-        subsampling_proportion=1.0,
+        n_chunks=None,
     ):
         if chunk_starts_samples is not None:
             return chunk_starts_samples
+        if chunk_length_samples is None:
+            chunk_length_samples = self.chunk_length_samples
 
         T_samples = self.recording.get_num_samples()
-        chunk_starts_samples = range(0, T_samples, self.chunk_length_samples)
-
-        if not subsampled and subsampling_proportion < 1:
-            rg = np.random.default_rng(self.fit_subsampling_random_state)
-            chunk_starts_samples = rg.choice(
-                chunk_starts_samples,
-                size=min(
-                    len(chunk_starts_samples),
-                    int(
-                        np.ceil(
-                            len(chunk_starts_samples) * subsampling_proportion
-                        )
-                    ),
-                ),
-                replace=False,
-            )
-            return chunk_starts_samples
+        if t_end is None:
+            t_end = T_samples
+        if t_start is None:
+            t_start = 0
+        chunk_starts_samples = range(t_start, t_end, chunk_length_samples)
 
         if not subsampled:
             return chunk_starts_samples
+
+        if n_chunks is None:
+            n_chunks = self.n_chunks_fit
 
         # make a random subset of chunks to use for fitting
         rg = np.random.default_rng(self.fit_subsampling_random_state)
         chunk_starts_samples = rg.choice(
             chunk_starts_samples,
-            size=min(len(chunk_starts_samples), self.n_chunks_fit),
+            size=min(len(chunk_starts_samples), n_chunks),
             replace=False,
         )
         return chunk_starts_samples
 
     def run_subsampled_peeling(
-        self, hdf5_filename, n_jobs=0, device=None, task_name=None
+        self,
+        hdf5_filename,
+        n_jobs=0,
+        chunk_length_samples=None,
+        residual_to_h5=False,
+        skip_features=False,
+        ignore_resuming=False,
+        n_chunks=None,
+        t_start=None,
+        t_end=None,
+        device=None,
+        task_name=None,
+        overwrite=True,
     ):
         # run peeling on these chunks to the temp folder
+        chunk_starts = self.get_chunk_starts(
+            subsampled=True,
+            chunk_length_samples=chunk_length_samples,
+            t_start=t_start,
+            t_end=t_end,
+            n_chunks=n_chunks,
+        )
         self.peel(
             hdf5_filename,
-            chunk_starts_samples=self.get_chunk_starts(subsampled=True),
+            chunk_starts_samples=chunk_starts,
+            chunk_length_samples=chunk_length_samples,
             stop_after_n_waveforms=self.max_waveforms_fit,
+            ignore_resuming=ignore_resuming,
+            residual_to_h5=residual_to_h5,
+            skip_features=skip_features,
             n_jobs=n_jobs,
-            overwrite=True,
+            overwrite=overwrite,
             task_name=task_name,
             device=device,
         )
@@ -571,6 +634,8 @@ class BasePeeler(torch.nn.Module):
         # could also do:
         # libver=("earliest", "v110"),
         libver="latest",
+        residual_to_h5=False,
+        skip_features=False,
     ):
         """Create, overwrite, or re-open output files"""
         output_hdf5_filename = Path(output_hdf5_filename)
@@ -601,17 +666,32 @@ class BasePeeler(torch.nn.Module):
 
         # create per-spike datasets
         # use chunks to support growing the dataset as we find spikes
-        h5_spike_datasets = {}
-        for ds in self.out_datasets():
-            if ds.name in output_h5:
-                h5_spike_datasets[ds.name] = output_h5[ds.name]
+        h5_spike_datasets = None
+        if not skip_features:
+            h5_spike_datasets = {}
+            for ds in self.out_datasets():
+                if ds.name in output_h5:
+                    h5_spike_datasets[ds.name] = output_h5[ds.name]
+                else:
+                    h5_spike_datasets[ds.name] = output_h5.create_dataset(
+                        ds.name,
+                        dtype=ds.dtype,
+                        shape=(n_spikes, *ds.shape_per_spike),
+                        maxshape=(None, *ds.shape_per_spike),
+                        chunks=(chunk_size, *ds.shape_per_spike),
+                    )
+
+        if residual_to_h5:
+            if "residual" in output_h5:
+                pass
             else:
-                h5_spike_datasets[ds.name] = output_h5.create_dataset(
-                    ds.name,
-                    dtype=ds.dtype,
-                    shape=(n_spikes, *ds.shape_per_spike),
-                    maxshape=(None, *ds.shape_per_spike),
-                    chunks=(chunk_size, *ds.shape_per_spike),
+                n_chans = self.recording.get_num_channels()
+                output_h5.create_dataset(
+                    "residual",
+                    dtype=self.np_dtype,
+                    shape=(0, self.spike_length_samples, n_chans),
+                    maxshape=(None, self.spike_length_samples, n_chans),
+                    chunks=(chunk_size, self.spike_length_samples, n_chans),
                 )
 
         # residual file ignore/open/overwrite logic
@@ -628,7 +708,6 @@ class BasePeeler(torch.nn.Module):
             yield (
                 output_h5,
                 h5_spike_datasets,
-                save_residual,
                 residual_file,
                 n_spikes,
             )
@@ -643,9 +722,11 @@ class BasePeeler(torch.nn.Module):
 
 
 class PeelerProcessContext:
-    def __init__(self, peeler, save_residual):
+    def __init__(self, peeler, compute_residual, skip_features, chunk_length_samples):
         self.peeler = peeler
-        self.save_residual = save_residual
+        self.compute_residual = compute_residual
+        self.skip_features = skip_features
+        self.chunk_length_samples = chunk_length_samples
 
 
 # this state will be set on each process
@@ -653,7 +734,14 @@ class PeelerProcessContext:
 _peeler_process_context = None
 
 
-def _peeler_process_init(peeler, device, rank_queue, save_residual):
+def _peeler_process_init(
+    peeler,
+    device,
+    rank_queue,
+    compute_residual,
+    skip_features,
+    chunk_length_samples,
+):
     global _peeler_process_context
 
     # figure out what device to work on
@@ -663,23 +751,29 @@ def _peeler_process_init(peeler, device, rank_queue, save_residual):
     device = torch.device(device)
     if device.type == "cuda" and device.index is None:
         if torch.cuda.device_count() > 1:
-            device = torch.device(
-                "cuda", index=my_rank % torch.cuda.device_count()
-            )
+            index = my_rank % torch.cuda.device_count()
+            device = torch.device("cuda", index=index)
 
-    # move peeler to device
+    # move peeler to device and put everything in inference mode
     peeler.to(device)
     peeler.eval()
 
     # update process-local variables
-    _peeler_process_context = PeelerProcessContext(peeler, save_residual)
+    _peeler_process_context = PeelerProcessContext(
+        peeler, compute_residual, skip_features, chunk_length_samples
+    )
 
 
 def _peeler_process_job(chunk_start_samples):
     # by returning here, we are implicitly relying on pickle
-    # we can replace this with cloudpickle or manual np.save if helpful
+    # TODO: replace with manual np.saves
     with torch.no_grad():
+        chunk_end_samples = None
+        chlen = _peeler_process_context.chunk_length_samples
+        if chlen is not None:
+            chunk_end_samples = chunk_start_samples + chlen
         return _peeler_process_context.peeler.process_chunk(
             chunk_start_samples,
-            return_residual=_peeler_process_context.save_residual,
+            chunk_end_samples=chunk_end_samples,
+            return_residual=_peeler_process_context.compute_residual,
         )
