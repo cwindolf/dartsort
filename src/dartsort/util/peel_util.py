@@ -14,7 +14,6 @@ def run_peeler(
     model_subdir,
     featurization_config,
     chunk_starts_samples=None,
-    subsampling_proportion=1.0,
     overwrite=False,
     n_jobs=0,
     residual_filename=None,
@@ -31,6 +30,7 @@ def run_peeler(
     do_localization = (
         not featurization_config.denoise_only
         and featurization_config.do_localization
+        and not featurization_config.nn_localization
     )
 
     if peeler_is_done(
@@ -52,10 +52,6 @@ def run_peeler(
     )
 
     # run main
-    if chunk_starts_samples is None and subsampling_proportion < 1.0:
-        chunk_starts_samples = peeler.get_chunk_starts(
-            subsampling_proportion=subsampling_proportion
-        )
     peeler.peel(
         output_hdf5_filename,
         chunk_starts_samples=chunk_starts_samples,
@@ -65,7 +61,6 @@ def run_peeler(
         show_progress=show_progress,
         device=device,
     )
-    del peeler
     _gc(n_jobs, device)
 
     # do localization
@@ -84,6 +79,20 @@ def run_peeler(
         )
         _gc(n_jobs, device)
 
+    if featurization_config.n_residual_snips:
+        peeler.run_subsampled_peeling(
+            output_hdf5_filename,
+            n_jobs=n_jobs,
+            chunk_length_samples=peeler.spike_length_samples,
+            residual_to_h5=True,
+            skip_features=True,
+            ignore_resuming=True,
+            device=device,
+            n_chunks=featurization_config.n_residual_snips,
+            task_name="Residual snips",
+            overwrite=False,
+        )
+
     return (
         DARTsortSorting.from_peeling_hdf5(output_hdf5_filename),
         output_hdf5_filename,
@@ -94,6 +103,7 @@ def peeler_is_done(
     peeler,
     output_hdf5_filename,
     overwrite=False,
+    n_residual_snips=0,
     chunk_starts_samples=None,
     do_localization=True,
     localization_dataset_name="point_source_localizations",
@@ -104,6 +114,13 @@ def peeler_is_done(
 
     if not output_hdf5_filename.exists():
         return False
+
+    if n_residual_snips:
+        with h5py.File(output_hdf5_filename, "r") as h5:
+            if "residual" not in h5:
+                return False
+            if len(h5["residual"]) < n_residual_snips:
+                return False
 
     if do_localization:
         (

@@ -52,11 +52,11 @@ class SubtractionPeeler(BasePeeler):
             fit_subsampling_random_state=fit_subsampling_random_state,
             n_waveforms_fit=n_waveforms_fit,
             fit_sampling=fit_sampling,
+            trough_offset_samples=trough_offset_samples,
+            spike_length_samples=spike_length_samples,
             dtype=dtype,
         )
 
-        self.trough_offset_samples = trough_offset_samples
-        self.spike_length_samples = spike_length_samples
         self.peak_sign = peak_sign
         self.persist_deduplication = persist_deduplication
         if subtract_channel_index is None:
@@ -295,7 +295,7 @@ class SubtractionPeeler(BasePeeler):
                     temp_hdf5_filename,
                     n_jobs=n_jobs,
                     device=device,
-                    task_name="Fit subtraction denoisers",
+                    task_name="Load examples for denoiser fitting",
                 )
 
                 # fit featurization pipeline and reassign

@@ -56,6 +56,7 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
         max_iter=1000,
         dtype=torch.float,
     ):
+        n_templates, spike_length_samples = template_data.templates.shape[:2]
         super().__init__(
             recording=recording,
             channel_index=channel_index,
@@ -67,6 +68,8 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
             fit_subsampling_random_state=fit_subsampling_random_state,
             fit_sampling=fit_sampling,
             n_waveforms_fit=n_waveforms_fit,
+            trough_offset_samples=trough_offset_samples,
+            spike_length_samples=spike_length_samples,
             dtype=dtype,
         )
 
@@ -82,8 +85,7 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
         self.coarse_approx_error_threshold = coarse_approx_error_threshold
         self.refractory_radius_frames = refractory_radius_frames
         self.max_iter = max_iter
-        self.n_templates, self.spike_length_samples = template_data.templates.shape[:2]
-        self.trough_offset_samples = trough_offset_samples
+        self.n_templates = n_templates
         self.geom = recording.get_channel_locations()
         self.n_channels = len(self.geom)
         self.obj_pad_len = max(
