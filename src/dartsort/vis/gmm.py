@@ -415,7 +415,7 @@ class MStep(GMMPlot):
     height = 5
     alpha = 0.05
 
-    def draw(self, panel, gmm, unit_id, unit=None, in_unit=None):
+    def draw(self, panel, gmm, unit_id, unit=None, in_unit=None, axes=None):
         if unit is None:
             unit = gmm[unit_id]
         in_unit, utd = gmm.get_training_data(unit_id, in_unit=in_unit, waveform_kind="original")
@@ -432,6 +432,11 @@ class MStep(GMMPlot):
                 padded_registered_geom=padded_geom,
                 centered=False,
             )
+            waveforms_rel = waveforms_rel.reshape(
+                len(waveforms_rel),
+                -1,
+                unit.channels_valid.numel(),
+            )
         else:
             waveforms_rel = unit.to_unit_channels(
                 waveforms,
@@ -445,13 +450,17 @@ class MStep(GMMPlot):
 
         mean = unit.mean.reshape(r, c).T.numpy(force=True).ravel()
         std = unit.std.reshape(r, c).T.numpy(force=True).ravel()
+        domain = r * unit.channels_valid.numpy(force=True)[:, None] + np.arange(r)
+        domain = domain.ravel()
 
         color = glasbey1024[unit_id % len(glasbey1024)]
 
-        ax, ay = panel.subplots(nrows=2, sharex=True)
-        ax.plot(x.T, color="k", alpha=self.alpha)
+        if axes is None:
+            axes = panel.subplots(nrows=2, sharex=True)
+        ax, ay = axes
+        ax.plot(domain, x.T, color="k", alpha=self.alpha)
         ax.fill_between(
-            np.arange(r * c),
+            domain,
             mean - std,
             mean + std,
             color=color,
@@ -459,11 +468,11 @@ class MStep(GMMPlot):
             lw=0,
             zorder=11,
         )
-        ax.plot(mean, lw=1, color=color)
-        ay.plot(np.abs(mean), color=color, lw=1, label='fitted |mean|')
-        ay.plot(std, color=color, ls="--", lw=1, label='fitted std')
-        ay.plot(np.abs(np.nanmean(x, axis=0)), color='k', ls="--", lw=1, label='emp |mean|')
-        ay.plot(np.nanstd(x, axis=0), color='k', ls=":", lw=1, label='emp std')
+        ax.plot(domain, mean, lw=1, color=color)
+        ay.plot(domain, np.abs(mean), color=color, lw=1, label='fitted |mean|')
+        ay.plot(domain, std, color=color, ls="--", lw=1, label='fitted std')
+        ay.plot(domain, np.abs(np.nanmean(x, axis=0)), color='k', ls="--", lw=1, label='emp |mean|')
+        ay.plot(domain, np.nanstd(x, axis=0), color='k', ls=":", lw=1, label='emp std')
         ay.legend(loc='upper left', frameon=False, fancybox=False)
         ay.set_xlabel("channel-major feature index")
 
@@ -589,7 +598,10 @@ class KMeansPPSPlitPlot(GMMPlot):
         for j, label in enumerate(ids):
             u = spike_interp.InterpUnit(
                 do_interp=False,
-                **gmm.unit_kw | dict(impute_before_center=self.impute_before_center),
+                **gmm.unit_kw | dict(
+                    impute_before_center=self.impute_before_center,
+                    channel_strategy_snr_min=gmm[unit_id].channel_strategy_snr_min / 2,
+                ),
             )
             inu = in_unit[np.flatnonzero(labels == label)]
             w = None if weights is None else weights[labels == label, j]
@@ -714,6 +726,7 @@ class KMeansPPSPlitPlot(GMMPlot):
 
         dbads, bimodalities, reas_labels = gmm.bimodalities_prefit(
             new_units,
+            pairs_valid=dists < zip_threshold,
             which_spikes=in_unit,
             common_chans=self.common_chans,
             impute_missing=self.impute_before_center,
@@ -978,6 +991,8 @@ class BadnessesOverTimePlot(GMMPlot):
             utd["waveform_channels"],
             kinds=kinds,
         )
+        if not spike_ix.numel():
+            return
         overlaps = overlaps.numpy(force=True)
         times = utd["times"][spike_ix].numpy(force=True)
 
@@ -1034,6 +1049,8 @@ class FeaturesVsBadnessesPlot(GMMPlot):
             overlaps=overlaps,
             rel_ix=rel_ix,
         )
+        if not spike_ix.size:
+            return
         overlaps = overlaps.numpy(force=True)
         badnesses = {k: v.numpy(force=True) for k, v in badnesses.items()}
 
@@ -2107,7 +2124,7 @@ default_gmm_plots = (
     # HDBScanSplitPlot(spike_kind="residual_full"),
     # HDBScanSplitPlot(),
     # ZipperSplitPlot(),
-    KMeansPPSPlitPlot(inherit_chans=True, impute_before_center=True),
+    KMeansPPSPlitPlot(),
     # GridMeansSingleChanPlot(),
     InputWaveformsSingleChanPlot(),
     # InputWaveformsSingleChanOverTimePlot(channel="unit"),
@@ -2156,7 +2173,7 @@ gmm_selected_plots = (
     NearbyDivergencesMatrix(merge_on_waveform_radius=True),
     MStep(),
     ChansHeatmap(),
-    KMeansPPSPlitPlot(inherit_chans=True, impute_before_center=True),
+    KMeansPPSPlitPlot(),
     AmplitudesOverTimePlot(),
 )
 
