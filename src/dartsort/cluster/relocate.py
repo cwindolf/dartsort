@@ -22,6 +22,7 @@ def relocated_waveforms_on_static_channels(
     xyza_from,
     z_to,
     geom,
+    amplitude_vectors=None,
     registered_geom=None,
     target_kdtree=None,
     match_distance=None,
@@ -31,7 +32,13 @@ def relocated_waveforms_on_static_channels(
     two_d = waveforms.ndim == 2
     if two_d:
         waveforms = waveforms[:, None, :]
-    x, y, z_from, alpha = xyza_from.T
+    x, y, z_from = xyza_from[:, :3].T
+    if xyza_from.shape[1] == 4:
+        alpha = xyza_from[:, 3]
+    elif xyza_from.shape[1] == 3:
+        alpha = determine_alpha(amplitude_vectors, x, y, z_from, geom, channels=channel_index[main_channels])
+    else:
+        assert False
     if registered_geom is None:
         registered_geom = geom
 
@@ -75,11 +82,25 @@ def point_source_amplitude_vectors(x, y, z_abs, alpha, geom, channels=None):
     """Point-source amplitudes on fixed channels from varying spike positions"""
     if channels is not None:
         geom = geom[channels]
+    if geom.ndim == 2:
+        geom = geom[None]
 
-    dx = geom[None, :, 0] - x[:, None]
-    dz = geom[None, :, 1] - z_abs[:, None]
+    dx = geom[..., 0] - x[:, None]
+    dz = geom[..., 1] - z_abs[:, None]
     dy = y[:, None]
     denom = np.sqrt(dy*dy + dx*dx + dz*dz)
     denom[denom < 1e-8] = 1
 
     return alpha[:, None] / denom
+
+
+def determine_alpha(ampvecs, x, y, z, geom, channels=None):
+    geom = np.pad(geom, [(0, 1), (0, 0)], constant_values=np.nan)
+    mask = (channels < len(geom)).astype(ampvecs.dtype)
+    preds = point_source_amplitude_vectors(x, y, z, np.ones_like(z), geom, channels=channels)
+    alpha = (
+        np.nan_to_num(ampvecs * preds * mask).sum(axis=1)
+        / np.nan_to_num(ampvecs * ampvecs * mask).sum(axis=1)
+    )
+    return alpha
+
