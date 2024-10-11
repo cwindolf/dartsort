@@ -1,21 +1,20 @@
 import torch
-import torch.nn as nn
 import torch.nn.functional as F
 from dartsort.util import nn_util
 from dartsort.util.spiketorch import get_relative_index, ptp, reindex
 from dartsort.util.waveform_util import make_regular_channel_index
-from torch.utils.data import DataLoader, TensorDataset
+from torch.utils.data import DataLoader, TensorDataset, RandomSampler, BatchSampler
 from tqdm.auto import trange
 
 from .transform_base import BaseWaveformFeaturizer
 
 
-class VAELocalization(BaseWaveformFeaturizer):
-    """Order of output columns: x, y, z_abs, alpha"""
+class AmortizedLocalization(BaseWaveformFeaturizer):
+    """Order of output columns: x, y, z_abs."""
 
-    default_name = "vae_point_source_localizations"
-    shape = (4,)
-    dtype = torch.double
+    default_name = "point_source_localizations"
+    shape = (3,)
+    dtype = torch.float
 
     def __init__(
         self,
@@ -32,13 +31,14 @@ class VAELocalization(BaseWaveformFeaturizer):
         batch_size=32,
         use_batchnorm=True,
         alpha_closed_form=True,
-        amplitudes_only=False,
-        prior_variance=80.0,
+        amplitudes_only=True,
+        prior_variance=None,
         convergence_eps=0.01,
-        min_epochs=2,
+        min_epochs=5,
         scale_loss_by_mean=True,
         reference='main_channel',
-        channelwise_dropout_p=0.0,
+        channelwise_dropout_p=0.2,
+        examples_per_epoch=25_000,
     ):
         assert localization_model in ("pointsource", "dipole")
         assert amplitude_kind in ("peak", "ptp")
@@ -67,6 +67,7 @@ class VAELocalization(BaseWaveformFeaturizer):
         self.scale_loss_by_mean = scale_loss_by_mean
         self.channelwise_dropout_p = channelwise_dropout_p
         self.reference = reference
+        self.examples_per_epoch = examples_per_epoch
 
         self.register_buffer(
             "padded_geom", F.pad(self.geom.to(torch.float), (0, 0, 0, 1))
@@ -207,15 +208,15 @@ class VAELocalization(BaseWaveformFeaturizer):
             rescale = mask.sum(1, keepdim=True) / x_masked.sum(1, keepdim=True)
             x_masked *= rescale
             recon_x_masked *= rescale
-        MSE = F.mse_loss(recon_x_masked, x_masked, reduction="sum") / self.batch_size
-        KLD = 0.0
+        mse = F.mse_loss(recon_x_masked, x_masked, reduction="sum") / self.batch_size
+        kld = 0.0
         if self.variational:
-            KLD = 0.5 * (
+            kld = 0.5 * (
                 + torch.log(self.prior_variance / var)
                 + mu.pow(2) / self.prior_variance
                 - 1
             ).sum() / self.batch_size
-        return MSE, KLD
+        return mse, kld
 
     def _fit(self, waveforms, channels):
         # apply channel reindexing before any fitting...
@@ -242,40 +243,61 @@ class VAELocalization(BaseWaveformFeaturizer):
         self.initialize_net(waveforms.shape[1])
 
         dataset = TensorDataset(waveforms, amps, channels)
-        dataloader = DataLoader(dataset, batch_size=self.batch_size, shuffle=True)
+        sampler = RandomSampler(dataset)
+        sampler = BatchSampler(sampler, batch_size=self.batch_size, drop_last=True)
+        dataloader = DataLoader(dataset, sampler=sampler)
         optimizer = torch.optim.Adam(self.parameters(), lr=self.learning_rate)
 
         self.train()
         mse_history = []
-        with trange(self.epochs, desc="Epochs", unit="epoch") as pbar:
+        with trange(self.epochs, desc="Train localizer", unit="epoch") as pbar:
             for epoch in pbar:
                 total_loss = 0
                 total_mse = 0
                 total_kld = 0
-                for waveform_batch, amps_batch, channels_batch in dataloader:
+                n_examples = 0
+                for waveform_batch, amps_batch, chans_batch in dataloader:
+                    # for whatever reason, batch sampler adds an empty dim
+                    waveform_batch = waveform_batch[0]
+                    amps_batch = amps_batch[0]
+                    chans_batch = chans_batch[0]
+                    assert self.batch_size == len(waveform_batch) == len(amps_batch) == len(chans_batch)
+
                     optimizer.zero_grad()
-                    channels_mask = self.model_channel_index[channels_batch] < len(
+                    channels_mask = self.model_channel_index[chans_batch] < len(
                         self.geom
                     )
                     channels_mask = channels_mask.to(waveform_batch)
                     reconstructed_amps, mu, var = self.forward(
-                        waveform_batch, channels_mask, amps_batch, channels_batch
+                        waveform_batch, channels_mask, amps_batch, chans_batch
                     )
                     mse, kld = self.loss_function(
                         reconstructed_amps, amps_batch, channels_mask, mu, var
                     )
-                    loss = mse + kld
+                    loss = mse
+                    if self.variational:
+                        loss = loss + kld
                     loss.backward()
                     optimizer.step()
                     total_loss += loss.item()
                     total_mse += mse.item()
-                    total_kld += kld.item() if self.variational else kld
+                    if self.variational:
+                        total_kld += kld.item()
 
-                loss = total_loss / len(dataloader)
-                mse = total_mse / len(dataloader)
+                    n_examples += self.batch_size
+                    if n_examples >= self.examples_per_epoch:
+                        break
+
+                nbatch = (n_examples / self.batch_size)
+                loss = total_loss / nbatch
+                mse = total_mse / nbatch
                 mse_history.append(mse)
-                desc = f"[loss={loss:0.2f},mse={total_mse/len(dataloader):0.2f},kld={total_kld/len(dataloader):0.2f}]"
-                pbar.set_description(f"Epochs {desc}")
+                desc = f"[loss={loss:0.2f}"
+                if self.variational:
+                    kld = total_kld / nbatch
+                    desc += f",mse={mse:0.2f},kld={kld:0.2f}"
+                desc += "]"
+                pbar.set_description(f"Train localizer {desc}")
 
                 # check convergence
                 if epoch < self.min_epochs:
@@ -283,7 +305,7 @@ class VAELocalization(BaseWaveformFeaturizer):
 
                 diff = min(mse_history[:-1]) - mse
                 if diff / min(mse_history[:-1]) < self.convergence_eps:
-                    pbar.set_description(f"Converged epoch={epoch} {desc}")
+                    pbar.set_description(f"Localizer converged at epoch={epoch} {desc}")
                     break
 
     def fit(self, waveforms, max_channels):
@@ -292,12 +314,6 @@ class VAELocalization(BaseWaveformFeaturizer):
         self._needs_fit = False
 
     def transform(self, waveforms, max_channels, return_extra=False):
-        """
-        waveforms : torch.tensor, shape (num_waveforms, n_timesteps, n_channels_subset)
-        max_channels : torch.tensor, shape (num_waveforms,)
-
-        waveform[n] lives on channels self.channel_index[max_channels[n]]
-        """
         # handle getting amplitudes, reindexing channels, and amplitudes_only logic
         if waveforms.ndim == 2:
             assert self.amplitudes_only
@@ -340,4 +356,5 @@ class VAELocalization(BaseWaveformFeaturizer):
             alphas, pred_amps = self.decode(mu, max_channels, obs_amps, mask)
             return x, y, z, obs_amps, pred_amps, mx, mz
 
-        return x, y, z
+        locs = torch.column_stack((x, y, z))
+        return {self.name: locs}

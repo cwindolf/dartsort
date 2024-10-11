@@ -81,6 +81,9 @@ class FeaturizationConfig:
     # turn off features below
     denoise_only: bool = False
 
+    # -- residual snips
+    n_residual_snips: int = 4096
+
     # -- featurization configuration
     save_input_voltages: bool = False
     save_input_waveforms: bool = False
@@ -94,6 +97,7 @@ class FeaturizationConfig:
     # these are saved always if do_localization
     localization_amplitude_type: str = "peak"
     localization_model: str = "pointsource"
+    nn_localization: bool = True
 
     # -- further info about denoising
     # in the future we may add multi-channel or other nns

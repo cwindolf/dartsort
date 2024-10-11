@@ -196,9 +196,23 @@ def featurization_config_to_class_names_and_kwargs(fconf):
                 },
             )
         )
+    if do_feats and fconf.do_localization and fconf.nn_localization:
+        class_names_and_kwargs.append(
+            (
+                "AmortizedLocalization",
+                {
+                    "amplitude_kind": fconf.localization_amplitude_type,
+                    "localization_model": fconf.localization_model,
+                },
+            )
+        )
 
     do_ptp_amp = do_feats and fconf.save_amplitudes
-    do_peak_vec = do_feats and fconf.do_localization and fconf.localization_amplitude_type == "peak"
+    do_peak_vec = do_feats and (
+        fconf.do_localization
+        and fconf.localization_amplitude_type == "peak"
+        and not fconf.nn_localization
+    )
     do_ptp_vec = do_feats and fconf.save_amplitudes
     do_logptt = do_feats and fconf.save_amplitudes
     do_any_amp = do_peak_vec or do_ptp_vec or do_ptp_amp or do_logptt
