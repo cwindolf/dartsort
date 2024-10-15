@@ -1,17 +1,16 @@
+import h5py
 import numpy as np
 import pandas as pd
 import torch
-import torch.nn.functional as F
-
-from dartsort.util import spiketorch
 from dartsort.detect import detect_and_deduplicate
+from dartsort.util import drift_util, spiketorch, waveform_util
+from linear_operator import operators
 from scipy.fftpack import next_fast_len
 from tqdm.auto import trange
 
 
 class FullNoise(torch.nn.Module):
-    """Do not use this, it's just for comparison to the others.
-    """
+    """Do not use this, it's just for comparison to the others."""
 
     def __init__(self, std, vt, nt, nc):
         super().__init__()
@@ -55,8 +54,7 @@ class FullNoise(torch.nn.Module):
 
 
 class FactorizedNoise(torch.nn.Module):
-    """Spatial/temporal factorized noise. See .estimate().
-    """
+    """Spatial/temporal factorized noise. See .estimate()."""
 
     def __init__(self, spatial_std, vt_spatial, temporal_std, vt_temporal):
         super().__init__()
@@ -115,18 +113,22 @@ class FactorizedNoise(torch.nn.Module):
         n, t, c = snippets.shape
         sqrt_nt_minus_1 = torch.tensor(n * t - 1, dtype=snippets.dtype).sqrt()
         sqrt_nc_minus_1 = torch.tensor(n * c - 1, dtype=snippets.dtype).sqrt()
-        assert n * t > c ** 2
-        assert n * c > t ** 2
+        assert n * t > c**2
+        assert n * c > t**2
 
         # estimate spatial covariance
         x_spatial = snippets.view(n * t, c)
-        u_spatial, spatial_sing, vt_spatial = torch.linalg.svd(x_spatial, full_matrices=False)
+        u_spatial, spatial_sing, vt_spatial = torch.linalg.svd(
+            x_spatial, full_matrices=False
+        )
         spatial_std = spatial_sing / sqrt_nt_minus_1
 
         # extract whitened temporal snips
         x_temporal = u_spatial.view(n, t, c).permute(0, 2, 1).reshape(n * c, t)
         x_temporal.mul_(sqrt_nt_minus_1)
-        _, temporal_sing, vt_temporal = torch.linalg.svd(x_temporal, full_matrices=False)
+        _, temporal_sing, vt_temporal = torch.linalg.svd(
+            x_temporal, full_matrices=False
+        )
         del _
         temporal_std = temporal_sing / sqrt_nc_minus_1
 
@@ -160,7 +162,11 @@ class StationaryFactorizedNoise(torch.nn.Module):
         t_padded = t + self.t - 1
         noise = torch.randn(size * c, t_padded, generator=generator, device=device)
         noise = spiketorch.single_inv_oaconv1d(
-            noise, s2=self.t, f2=self.kernel_fft, block_size=self.block_size, norm="ortho"
+            noise,
+            s2=self.t,
+            f2=self.kernel_fft,
+            block_size=self.block_size,
+            norm="ortho",
         )
         noise = noise.view(size, c, t)
         spatial_part = self.spatial_std[:, None] * self.vt_spatial
@@ -188,12 +194,14 @@ class StationaryFactorizedNoise(torch.nn.Module):
 
         n, t, c = snippets.shape
         sqrt_nt_minus_1 = torch.tensor(n * t - 1, dtype=snippets.dtype).sqrt()
-        assert n * t > c ** 2
+        assert n * t > c**2
         assert n * c > t
 
         # estimate spatial covariance
         x_spatial = snippets.view(n * t, c)
-        u_spatial, spatial_sing, vt_spatial = torch.linalg.svd(x_spatial, full_matrices=False)
+        u_spatial, spatial_sing, vt_spatial = torch.linalg.svd(
+            x_spatial, full_matrices=False
+        )
         spatial_std = spatial_sing / sqrt_nt_minus_1
 
         # extract whitened temporal snips
@@ -269,6 +277,292 @@ class StationaryFactorizedNoise(torch.nn.Module):
         )
 
         return total_samples, df
+
+
+class EmbeddedNoise(torch.nn.Module):
+    """Handles computations related to noise in TPCA space.
+
+    Can have a couple of kinds of mean. mean_kind == ...
+      - "zero": noise was already centered, my mean is 0
+      - "by_rank": same mean on all channels
+      - "full": value per rank, chan
+
+    And cov_kind = ...
+      - "scalar": one global variance
+      - "diagonal_by_rank": same variance across chans, varies by rank
+      - "diagonal": value per rank, chan
+      - "factorized": kronecker prod of dense rank and chan factors
+      - "factorized_by_rank": same, but chan factor varies by rank
+      - "factorized_rank_diag" : factorized, but rank factor is diagonal
+      - "factorized_by_rank_rank_diag" : factorized_by_rank, but rank factor is diagonal
+         this one is block diagonal and therefore nicer than factorized_by_rank.
+    """
+
+    def __init__(
+        self,
+        rank,
+        n_channels,
+        mean_kind="zero",
+        cov_kind="scalar",
+        mean=None,
+        global_std=None,
+        rank_std=None,
+        full_std=None,
+        rank_vt=None,
+        channel_std=None,
+        channel_vt=None,
+    ):
+        self.rank = rank
+        self.n_channels = n_channels
+        self.mean_kind = mean_kind
+        self.cov_kind = cov_kind
+
+        self.mean = mean
+        self.global_std = global_std
+        self.rank_std = rank_std
+        self.channel_std = channel_std
+        self.full_std = full_std
+
+        self.rank_vt = rank_vt
+        self.channel_vt = channel_vt
+
+    @property
+    def device(self):
+        return self.global_std.device
+
+    def mean_rc(self):
+        """Return noise mean as a rank x channels tensor"""
+        shape = self.rank, self.n_channels
+        if self.mean_kind == "zero":
+            return torch.zeros(shape)
+        elif self.mean_kind == "by_rank":
+            return self.mean[:, None].broadcast_to(shape).contiguous()
+        elif self.mean_kind == "full":
+            return self.mean
+
+    def marginal_precision(self, channels):
+        return self.marginal_covariance(channels).inverse()
+
+    def marginal_covariance(self, channels):
+        nc = channels.numel()
+
+        if self.cov_kind == "scalar":
+            eye = operators.IdentityLinearOperator(self.rank * nc, device=self.device)
+            return self.global_std.square() * eye
+
+        if self.cov_kind == "diagonal_by_rank":
+            rank_diag = operators.DiagLinearOperator(self.rank_std**2)
+            chans_eye = operators.IdentityLinearOperator(nc, device=self.device)
+            return torch.kron(rank_diag, chans_eye)
+
+        if self.cov_kind == "diagonal":
+            return operators.DiagLinearOperator(self.full_std**2)
+
+        if self.cov_kind == "factorized":
+            rank_root = self.rank_vt.T * self.rank_std
+            rank_root = operators.RootLinearOperator(rank_root)
+            chan_root = self.channel_vt.T * self.channel_std
+            chan_root = operators.RootLinearOperator(chan_root)
+            return torch.kron(rank_root, chan_root)
+
+        if self.cov_kind == "factorized_rank_diag":
+            rank_root = self.rank_vt.T * self.rank_std
+            rank_root = operators.RootLinearOperator(rank_root)
+            chan_root = self.channel_vt.T * self.channel_std
+            chan_root = operators.RootLinearOperator(chan_root)
+            return torch.kron(rank_root, chan_root)
+
+        assert False
+
+    @classmethod
+    def estimate(cls, snippets, mean_kind="zero", cov_kind="scalar"):
+        """Factory method to estimate noise model from TPCA snippets
+
+        Arguments
+        ---------
+        snippets : torch.Tensor
+            (n, rank, c) array of tpca-embedded noise snippets
+            missing values are okay, indicate by NaN please
+        """
+        n, rank, n_channels = snippets.shape
+        init_kw = dict(
+            rank=rank, n_channels=n_channels, mean_kind=mean_kind, cov_kind=cov_kind
+        )
+        x = torch.asarray(snippets).view(n, -1)
+        x = x.to(torch.promote_types(x.dtype, torch.float))
+
+        # estimate mean and center data
+        if mean_kind == "zero":
+            mean = None
+        elif mean_kind == "by_rank":
+            mean = torch.nanmean(x, dim=(0, 2))
+            assert mean.isfinite().all()
+            x = x - mean.unsqueeze(1)
+        elif mean_kind == "full":
+            mean = torch.nanmean(x, dim=0)
+            mean = torch.where(
+                mean.isnan().all(1).unsqueeze(1),
+                torch.nanmean(mean, dim=1).unsqueeze(1),
+                mean,
+            )
+            x = x - mean
+        else:
+            assert False
+
+        # estimate covs
+        dxsq = x.square()
+        full_var = torch.nanmean(dxsq, dim=0)
+        rank_var = torch.nanmean(full_var, dim=1)
+        assert rank_var.isfinite().all()
+        global_var = torch.nanmean(rank_var)
+        global_std = global_var.sqrt()
+
+        if cov_kind == "scalar":
+            return cls(mean=mean, global_std=global_std, **init_kw)
+
+        if cov_kind == "by_rank":
+            rank_std = rank_var.sqrt_()
+            return cls(mean=mean, global_std=global_std, rank_std=rank_std, **init_kw)
+
+        if cov_kind == "diagonal":
+            full_var = torch.where(
+                full_var.isnan().all(1).unsqueeze(1),
+                rank_var.unsqueeze(1),
+                full_var,
+            )
+            full_std = full_var.sqrt()
+            return cls(mean=mean, global_std=global_std, full_std=full_std, **init_kw)
+
+        assert cov_kind.startswith("factorized")
+        # handle rank part first, then the spatial part
+
+        # start by getting the rank part of the cov, if necessary, and whitening
+        # the ranks to leave behind x_spatial
+        if "rank_diag" in cov_kind:
+            # rank part is diagonal
+            rank_vt = None
+            x_spatial = x.div_(rank_std.unsqueeze(1))
+            del x
+        else:
+            # full cov estimation for rank part via svd
+            # we have NaNs, but we can get rid of them because channels are either all
+            # NaN or not. below, for the spatial part, no such luck and we have to
+            # evaluate the covariance in a masked way
+            x_rank = x.permute(0, 2, 1).reshape(n * n_channels, rank)
+            valid = x_rank.isfinite(1).all()
+            x_rankv = x_rank[valid]
+            del x
+            u_rankv, rank_sing, rank_vt = torch.linalg.svd(x_rankv, full_matrices=False)
+            correction = torch.tensor(len(x_rankv) - 1.0).sqrt()
+            rank_std = rank_sing / correction
+
+            # whitened spatial part -- reuse storage
+            x_spatial = x_rank
+            del x_rank
+            x_spatial[valid] = u_rankv
+            x_spatial = x_spatial.reshape(n, n_channels, rank).permute(0, 2, 1)
+            x_spatial.mul_(correction)
+
+        # spatial part could be "by rank" or same for all ranks
+        # either way, there are nans afoot
+        if "by_rank" in cov_kind:
+            channel_std = torch.zeros_like(x_spatial[0])
+            channel_vt = torch.zeros((rank, n_channels, n_channels)).to(channel_std)
+            for q in range(rank):
+                xq = x_spatial[:, q]
+                covq = spiketorch.nancov(xq)
+                qeig, qv = torch.linalg.eigh(covq)
+                channel_std[q] = qeig.sqrt()
+                channel_vt[q] = qv.T
+        else:
+            x_spatial = x_spatial.reshape(n * rank, n_channels)
+            cov_spatial = spiketorch.nancov(x_spatial)
+            channel_eig, channel_v = torch.linalg.eigh(cov_spatial)
+            channel_std = channel_eig.sqrt()
+            channel_vt = channel_v.T.contiguous()
+
+        return cls(
+            mean=mean,
+            global_std=global_std,
+            rank_std=rank_std,
+            rank_vt=rank_vt,
+            channel_std=channel_std,
+            channel_vt=channel_vt,
+            **init_kw,
+        )
+
+
+def interpolate_residual_snippets(
+    tpca,
+    motion_est,
+    hdf5_path,
+    geom,
+    registered_geom,
+    sigma=10.0,
+    mean_kind="zero",
+    cov_kind="scalar",
+    residual_times_s_dataset_name="residual_times_seconds",
+    residual_dataset_name="residual",
+    channels_mode="round",
+    interpolation_method="normalized",
+):
+    """PCA-embed and interpolate residual snippets to the registered probe"""
+    from dartsort.util import interpolation_util
+
+    with h5py.File(hdf5_path, "r") as h5:
+        snippets = h5[residual_dataset_name][:]
+        times_s = h5[residual_times_s_dataset_name][:]
+    snippets = torch.from_numpy(snippets).to(tpca.components)
+    times_s = torch.from_numpy(times_s).to(tpca.components)
+
+    # tpca project
+    snippets = snippets[:, tpca.temporal_slice]
+    n, t, c = snippets.shape
+    snippets = snippets.permute(0, 2, 1).reshape(n * c, t)
+    snippets = tpca._transform_in_probe(snippets)
+    snippets = snippets.reshape(n, c, -1).permute(0, 2, 1)
+
+    # -- interpolate
+    # source positions
+    source_geom = interpolation_util.pad_geom(geom)
+    psc = len(source_geom)
+    source_pos = source_geom[None].broadcast_to(n, psc)
+    source_depths = source_pos[:, :, 1].reshape(-1).clone()
+    source_t = times_s[None].broadcast_to(source_depths).reshape(-1)
+    source_reg_depths = motion_est.correct_s(source_t, source_depths)
+    source_pos[:, :, 1] = source_reg_depths.reshape(source_pos[:, :, 1].shape)
+
+    # target positions -- these are just the full reg probe
+    target_pos = torch.asarray(registered_geom).to(source_geom)
+    target_pos = target_pos[None].broadcast_to(n, *target_pos.shape)
+    # this is how it would be done sparsely... which we are not doing.
+    # pitch_shifts = drift_util.get_spike_pitch_shifts(
+    #     source_depths,
+    #     geom=geom,
+    #     motion_est=motion_est,
+    #     times_s=source_t,
+    #     registered_depths_um=source_reg_depths,
+    #     mode=channels_mode,
+    # )
+    # target_channels = drift_util.static_channel_neighborhoods(
+    #     geom,
+    #     channels=np.zeros(n, dtype=int),
+    #     channel_index=waveform_util.full_channel_index(len(geom)),
+    #     n_pitches_shift=pitch_shifts,
+    #     registered_geom=registered_geom,
+    # )
+    # target_geom = interpolation_util.pad_geom(registered_geom)
+    # target_pos = target_geom[target_channels]
+
+    snippets = interpolation_util.kernel_interpolate(
+        snippets,
+        source_pos,
+        target_pos,
+        sigma=sigma,
+        allow_destroy=True,
+        interpolation_method=interpolation_method,
+    )
+    return snippets
 
 
 def get_discovery_control(
