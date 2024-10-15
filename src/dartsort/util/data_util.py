@@ -415,14 +415,25 @@ def _read_by_chunk(mask, dataset, show_progress=True):
     return out
 
 
-def yield_chunks(dataset, show_progress=True):
+def yield_chunks(dataset, show_progress=True, desc_prefix=None):
+    """Iterate chunks of an h5py dataset which is only chunked on axis=0."""
     chunks = dataset.iter_chunks()
+
     if show_progress:
-        chunks = tqdm(
-            chunks,
-            total=int(np.ceil(dataset.shape[0] / dataset.chunks[0])),
-            desc=dataset.name,
-        )
+        desc = dataset.name
+        if desc_prefix:
+            desc = f"{desc_prefix} {desc}"
+        n_chunks = int(np.ceil(dataset.shape[0] / dataset.chunks[0]))
+        chunks = tqdm(chunks, total=n_chunks, desc=desc)
 
     for sli, *_ in chunks:
         yield sli, dataset[sli]
+
+
+def yield_masked_chunks(mask, dataset, show_progress=True, desc_prefix=None):
+    offset = 0
+    for sli, data in yield_chunks(dataset, show_progress=show_progress, desc_prefix=desc_prefix):
+        source_ixs = np.flatnonzero(mask[sli])
+        dest_ixs = slice(offset, offset + source_ixs.size)
+        yield dest_ixs, data[source_ixs]
+        offset += source_ixs.size
