@@ -283,6 +283,13 @@ def convolve_lowrank(
     return out
 
 
+def nancov(x, correction=1):
+    xxt = x @ x.T
+    mask = x.isfinite().to(x)
+    nobs = mask @ mask.T
+    return xxt / (nobs + correction)
+
+
 def real_resample(x, num, dim=0):
     """torch version of a special case of scipy.signal.resample
 
@@ -319,13 +326,13 @@ def real_resample(x, num, dim=0):
 
     return y
 
+
 def _calc_oa_lens(s1, s2, block_size=None):
-    """Modified from scipy
-    """
+    """Modified from scipy"""
     import math
     from scipy.special import lambertw
 
-    fallback = (s1+s2-1, None, s1, s2)
+    fallback = (s1 + s2 - 1, None, s1, s2)
     if s1 == s2 or s1 == 1 or s2 == 1:
         return fallback
     if s2 > s1:
@@ -334,10 +341,10 @@ def _calc_oa_lens(s1, s2, block_size=None):
     else:
         swapped = False
 
-    if s2 >= s1/2 and block_size is None:
+    if s2 >= s1 / 2 and block_size is None:
         return fallback
-    overlap = s2-1
-    opt_size = -overlap*lambertw(-1/(2*math.e*overlap), k=-1).real
+    overlap = s2 - 1
+    opt_size = -overlap * lambertw(-1 / (2 * math.e * overlap), k=-1).real
     if block_size is None:
         block_size = next_fast_len(math.ceil(opt_size))
 
@@ -346,11 +353,11 @@ def _calc_oa_lens(s1, s2, block_size=None):
         return fallback
 
     if not swapped:
-        in1_step = block_size-s2+1
+        in1_step = block_size - s2 + 1
         in2_step = s2
     else:
         in1_step = s2
-        in2_step = block_size-s2+1
+        in2_step = block_size - s2 + 1
 
     return block_size, overlap, in1_step, in2_step
 
@@ -462,7 +469,9 @@ def single_inv_oaconv1d(input, f2, s2, block_size, padding=0, norm="backward"):
     valid_start = s2 - 1
 
     # shape_full = s1 + s2 - 1
-    block_size, overlap, in1_step, in2_step = _calc_oa_lens(s1, s2, block_size=block_size)
+    block_size, overlap, in1_step, in2_step = _calc_oa_lens(
+        s1, s2, block_size=block_size
+    )
     assert overlap is not None
     # case is hard to support...
 
