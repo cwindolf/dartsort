@@ -685,9 +685,7 @@ class BasePeeler(torch.nn.Module):
                     )
 
         if residual_to_h5:
-            if "residual" in output_h5:
-                pass
-            else:
+            if "residual" not in output_h5:
                 n_chans = self.recording.get_num_channels()
                 output_h5.create_dataset(
                     "residual",
@@ -695,6 +693,14 @@ class BasePeeler(torch.nn.Module):
                     shape=(0, self.spike_length_samples, n_chans),
                     maxshape=(None, self.spike_length_samples, n_chans),
                     chunks=(chunk_size, self.spike_length_samples, n_chans),
+                )
+            if "residual_times_seconds" not in output_h5:
+                output_h5.create_dataset(
+                    "residual_times_seconds",
+                    dtype=float,
+                    shape=(0,),
+                    maxshape=(None,),
+                    chunks=(chunk_size,),
                 )
 
         # residual file ignore/open/overwrite logic
