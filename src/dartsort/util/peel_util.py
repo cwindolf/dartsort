@@ -1,5 +1,6 @@
-import h5py
 from pathlib import Path
+
+import h5py
 import numpy as np
 import torch
 
@@ -91,6 +92,7 @@ def run_peeler(
             n_chunks=featurization_config.n_residual_snips,
             task_name="Residual snips",
             overwrite=False,
+            ordered=True,
         )
 
     return (
