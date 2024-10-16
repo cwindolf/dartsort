@@ -5,7 +5,6 @@ channels:
 dependencies:
   - python=3.11
   - click
-  - colorcet
   - h5py
   - hdbscan
   - matplotlib
