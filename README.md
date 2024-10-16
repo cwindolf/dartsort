@@ -23,11 +23,12 @@ $ mamba activate dartsort
 ```
 
 Next, visit https://pytorch.org/get-started/locally/ and follow the `PyTorch` install instructions for your specific OS and hardware needs.
+We also need to install `linear_operator` from the `gpytorch` channel.
 For example, on a Linux workstation or cluster with NVIDIA GPUs available, one might use (dropping in `mamba` for `conda` commands):
 
 ```bash
 # Example -- see https://pytorch.org/get-started/locally/ to find your platform's command.
-(dartsort) $ mamba install pytorch torchvision torchaudio pytorch-cuda=11.8 -c pytorch -c nvidia
+(dartsort) $ mamba install pytorch torchvision torchaudio pytorch-cuda=11.8 linear_operator -c pytorch -c nvidia -c gpytorch
 ```
 
 Finally, install the remaining `pip` dependencies and `dartsort` itself:
