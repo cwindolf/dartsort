@@ -9,7 +9,7 @@ dependencies:
   - h5py
   - hdbscan
   - matplotlib
-  - numpy
+  - numpy>=2.0
   - pytest
   - scipy>=1.13
   - scikit-learn
