@@ -2,9 +2,6 @@
 """
 import torch
 
-from .all_transformers import transformers_by_class_name
-
-
 class WaveformPipeline(torch.nn.Module):
     def __init__(self, transformers):
         super().__init__()
@@ -15,6 +12,7 @@ class WaveformPipeline(torch.nn.Module):
     def from_class_names_and_kwargs(
         cls, geom, channel_index, class_names_and_kwargs
     ):
+        from .all_transformers import transformers_by_class_name
         return cls(
             [
                 transformers_by_class_name[name](

@@ -130,3 +130,9 @@ class WaveformOnly(nn.Module):
     def forward(self, inputs):
         waveforms, masks = inputs
         return self.module(waveforms), masks
+
+
+# is this what they want us to do??
+torch.serialization.add_safe_globals(
+    [ResidualForm, WaveformOnlyResidualForm, ChannelwiseDropout, Cat, Permute, WaveformOnly, nn.Flatten, nn.Linear, nn.Conv1d, nn.ReLU, nn.BatchNorm1d]
+)
