@@ -3,10 +3,11 @@ import torch
 import torch.nn.functional as F
 from dartsort.util import nn_util, spikeio
 from dartsort.util.spiketorch import get_relative_index, reindex
-from dartsort.util.waveform_util import regularize_channel_index, grab_main_channels
-from torch.utils.data import Dataset, DataLoader, StackDataset, TensorDataset, BatchSampler, RandomSampler, WeightedRandomSampler
-from dartsort.util.waveform_util import regularize_channel_index
-from torch.utils.data import DataLoader, TensorDataset
+from dartsort.util.waveform_util import (grab_main_channels,
+                                         regularize_channel_index)
+from torch.utils.data import (BatchSampler, DataLoader, Dataset, RandomSampler,
+                              StackDataset, TensorDataset,
+                              WeightedRandomSampler)
 from tqdm.auto import trange
 
 from .transform_base import BaseWaveformDenoiser
