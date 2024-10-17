@@ -172,9 +172,10 @@ def kernel_interpolate(
 
     # -- build kernel
     if interpolation_method == "nearest":
-        d = torch.cdist(source_pos, target_pos)
+        d = torch.cdist(source_pos, target_pos).nan_to_num(nan=torch.inf)
+        n, ns, nt = d.shape
         kernel = torch.zeros_like(d)
-        kernel[d.argmin(dim=(1, 2), keepdim=True)] = 1
+        kernel.scatter_(1, d.argmin(dim=1, keepdim=True), 1)
     else:
         kernel = log_rbf(source_pos, target_pos, sigma)
         if interpolation_method == "normalized":
@@ -182,7 +183,11 @@ def kernel_interpolate(
             kernel.nan_to_num_()
         elif interpolation_method.startswith("kriging"):
             kernel = kernel.exp_()
-            kernel = source_kernel_invs @ kernel
+            if source_kernel_invs is None:
+                sk = log_rbf(source_pos, sigma=sigma).exp_()
+                kernel = torch.linalg.lstsq(sk, kernel).solution
+            else:
+                kernel = source_kernel_invs @ kernel
             if interpolation_method == "kriging_normalized":
                 kernel = kernel / kernel.sum(1, keepdim=True)
         elif interpolation_method == "rbf":
