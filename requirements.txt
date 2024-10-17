@@ -1,14 +1,12 @@
 --extra-index-url https://download.pytorch.org/whl/cpu
 click
-colorcet
 h5py
 hdbscan
 matplotlib
-numpy
+numpy >= 2.0
 pytest
 torch >= 2.0
 scipy >= 1.13
 scikit-learn
 spikeinterface
 tqdm
-astropy

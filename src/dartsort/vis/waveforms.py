@@ -219,5 +219,7 @@ def geomplot(
         max_z = max(geom_plot[c, 1] for c in unique_chans)
         if np.isfinite([min_z, max_z]).all():
             ax.set_ylim([min_z - max_abs_amp * zlim, max_z + max_abs_amp * zlim])
+    elif zlim is False:
+        pass
 
     return lines
