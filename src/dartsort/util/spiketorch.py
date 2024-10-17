@@ -284,10 +284,10 @@ def convolve_lowrank(
 
 
 def nancov(x, correction=1):
-    xxt = x @ x.T
+    xtx = x.T @ x
     mask = x.isfinite().to(x)
-    nobs = mask @ mask.T
-    return xxt / (nobs + correction)
+    nobs = mask.T @ mask
+    return xtx / (nobs + correction)
 
 
 def real_resample(x, num, dim=0):
