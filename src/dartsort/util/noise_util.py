@@ -2,6 +2,7 @@ import h5py
 import numpy as np
 import pandas as pd
 import torch
+import torch.nn.functional as F
 from dartsort.detect import detect_and_deduplicate
 from dartsort.util import drift_util, spiketorch, waveform_util
 from linear_operator import operators
@@ -287,6 +288,10 @@ class EmbeddedNoise(torch.nn.Module):
       - "by_rank": same mean on all channels
       - "full": value per rank, chan
 
+    Default is zero, because we usually do not do "centering" in our TPCA
+    (i.e., it is just linear not affine). Since the channels are highpassed,
+    they have mean 0, and still do in TPCA space.
+
     And cov_kind = ...
       - "scalar": one global variance
       - "diagonal_by_rank": same variance across chans, varies by rank
@@ -296,6 +301,12 @@ class EmbeddedNoise(torch.nn.Module):
       - "factorized_rank_diag" : factorized, but rank factor is diagonal
       - "factorized_by_rank_rank_diag" : factorized_by_rank, but rank factor is diagonal
          this one is block diagonal and therefore nicer than factorized_by_rank.
+
+    Default here for now is factorized_by_rank_rank_diag. This is because empirically,
+    rank covs were observed to be diagonal-ish (not extremely close, but not super
+    far). And, spatial covs look to be of spatially-decaying kernel type, but the band
+    width depends on the rank (since ranks ~ frequency bands). So let's model those
+    differences by default -- it doesn't cost much.
     """
 
     def __init__(
@@ -303,7 +314,7 @@ class EmbeddedNoise(torch.nn.Module):
         rank,
         n_channels,
         mean_kind="zero",
-        cov_kind="scalar",
+        cov_kind="factorized_by_rank_rank_diag",
         mean=None,
         global_std=None,
         rank_std=None,
@@ -340,10 +351,10 @@ class EmbeddedNoise(torch.nn.Module):
         elif self.mean_kind == "full":
             return self.mean
 
-    def marginal_precision(self, channels):
+    def marginal_precision(self, channels=slice(None)):
         return self.marginal_covariance(channels).inverse()
 
-    def marginal_covariance(self, channels):
+    def marginal_covariance(self, channels=slice(None)):
         nc = channels.numel()
 
         if self.cov_kind == "scalar":
@@ -372,7 +383,10 @@ class EmbeddedNoise(torch.nn.Module):
             chan_root = operators.RootLinearOperator(chan_root)
             return torch.kron(rank_root, chan_root)
 
-        assert False
+        raise NotImplementedError
+
+    def marginal_cov_sqrt(self, channels=slice(None)):
+        raise NotImplementedError
 
     @classmethod
     def estimate(cls, snippets, mean_kind="zero", cov_kind="scalar"):
@@ -388,7 +402,7 @@ class EmbeddedNoise(torch.nn.Module):
         init_kw = dict(
             rank=rank, n_channels=n_channels, mean_kind=mean_kind, cov_kind=cov_kind
         )
-        x = torch.asarray(snippets).view(n, -1)
+        x = torch.asarray(snippets)
         x = x.to(torch.promote_types(x.dtype, torch.float))
 
         # estimate mean and center data
@@ -413,6 +427,7 @@ class EmbeddedNoise(torch.nn.Module):
         dxsq = x.square()
         full_var = torch.nanmean(dxsq, dim=0)
         rank_var = torch.nanmean(full_var, dim=1)
+        rank_std = rank_var.sqrt_()
         assert rank_var.isfinite().all()
         global_var = torch.nanmean(rank_var)
         global_std = global_var.sqrt()
@@ -421,7 +436,6 @@ class EmbeddedNoise(torch.nn.Module):
             return cls(mean=mean, global_std=global_std, **init_kw)
 
         if cov_kind == "by_rank":
-            rank_std = rank_var.sqrt_()
             return cls(mean=mean, global_std=global_std, rank_std=rank_std, **init_kw)
 
         if cov_kind == "diagonal":
@@ -438,6 +452,7 @@ class EmbeddedNoise(torch.nn.Module):
 
         # start by getting the rank part of the cov, if necessary, and whitening
         # the ranks to leave behind x_spatial
+        print('a')
         if "rank_diag" in cov_kind:
             # rank part is diagonal
             rank_vt = None
@@ -449,9 +464,10 @@ class EmbeddedNoise(torch.nn.Module):
             # NaN or not. below, for the spatial part, no such luck and we have to
             # evaluate the covariance in a masked way
             x_rank = x.permute(0, 2, 1).reshape(n * n_channels, rank)
-            valid = x_rank.isfinite(1).all()
+            valid = x_rank.isfinite().all(dim=1)
             x_rankv = x_rank[valid]
             del x
+            print('b')
             u_rankv, rank_sing, rank_vt = torch.linalg.svd(x_rankv, full_matrices=False)
             correction = torch.tensor(len(x_rankv) - 1.0).sqrt()
             rank_std = rank_sing / correction
@@ -460,24 +476,34 @@ class EmbeddedNoise(torch.nn.Module):
             x_spatial = x_rank
             del x_rank
             x_spatial[valid] = u_rankv
+            print('c')
             x_spatial = x_spatial.reshape(n, n_channels, rank).permute(0, 2, 1)
             x_spatial.mul_(correction)
 
         # spatial part could be "by rank" or same for all ranks
         # either way, there are nans afoot
+        print('d')
         if "by_rank" in cov_kind:
-            channel_std = torch.zeros_like(x_spatial[0])
+            channel_std = torch.ones_like(x_spatial[0])
             channel_vt = torch.zeros((rank, n_channels, n_channels)).to(channel_std)
             for q in range(rank):
                 xq = x_spatial[:, q]
-                covq = spiketorch.nancov(xq)
-                qeig, qv = torch.linalg.eigh(covq)
+                validq = xq.isfinite().any(0)
+                print(f"{xq.shape=} {validq.shape=}")
+                covq = spiketorch.nancov(xq[:, validq])
+                fullcovq = torch.eye(xq.shape[1], dtype=covq.dtype, device=covq.device)
+                fullcovq[validq[:, None] & validq[None, :]] = covq.view(-1)
+                print(f"{covq.shape=} {covq.isfinite().to(float).mean()=}")
+                qeig, qv = torch.linalg.eigh(fullcovq)
                 channel_std[q] = qeig.sqrt()
                 channel_vt[q] = qv.T
         else:
             x_spatial = x_spatial.reshape(n * rank, n_channels)
+            print('e')
             cov_spatial = spiketorch.nancov(x_spatial)
+            print('f', cov_spatial.shape, x_spatial.shape)
             channel_eig, channel_v = torch.linalg.eigh(cov_spatial)
+            print('g')
             channel_std = channel_eig.sqrt()
             channel_vt = channel_v.T.contiguous()
 
@@ -505,6 +531,7 @@ def interpolate_residual_snippets(
     residual_dataset_name="residual",
     channels_mode="round",
     interpolation_method="normalized",
+    workers=None,
 ):
     """PCA-embed and interpolate residual snippets to the registered probe"""
     from dartsort.util import interpolation_util
@@ -524,36 +551,30 @@ def interpolate_residual_snippets(
 
     # -- interpolate
     # source positions
-    source_geom = interpolation_util.pad_geom(geom)
-    psc = len(source_geom)
-    source_pos = source_geom[None].broadcast_to(n, psc)
-    source_depths = source_pos[:, :, 1].reshape(-1).clone()
-    source_t = times_s[None].broadcast_to(source_depths).reshape(-1)
+    source_geom = torch.asarray(geom).to(snippets)
+    psc, psd = source_geom.shape
+    source_pos = source_geom[None].broadcast_to(n, psc, psd).contiguous()
+    source_depths = source_pos[:, :, 1].clone()
+    source_t = times_s[:, None].broadcast_to(source_depths.shape).reshape(-1)
+    source_depths = source_depths.reshape(-1)
     source_reg_depths = motion_est.correct_s(source_t, source_depths)
+    source_reg_depths = torch.asarray(source_reg_depths)
     source_pos[:, :, 1] = source_reg_depths.reshape(source_pos[:, :, 1].shape)
 
-    # target positions -- these are just the full reg probe
-    target_pos = torch.asarray(registered_geom).to(source_geom)
-    target_pos = target_pos[None].broadcast_to(n, *target_pos.shape)
-    # this is how it would be done sparsely... which we are not doing.
-    # pitch_shifts = drift_util.get_spike_pitch_shifts(
-    #     source_depths,
-    #     geom=geom,
-    #     motion_est=motion_est,
-    #     times_s=source_t,
-    #     registered_depths_um=source_reg_depths,
-    #     mode=channels_mode,
-    # )
-    # target_channels = drift_util.static_channel_neighborhoods(
-    #     geom,
-    #     channels=np.zeros(n, dtype=int),
-    #     channel_index=waveform_util.full_channel_index(len(geom)),
-    #     n_pitches_shift=pitch_shifts,
-    #     registered_geom=registered_geom,
-    # )
-    # target_geom = interpolation_util.pad_geom(registered_geom)
-    # target_pos = target_geom[target_channels]
+    # target positions
+    # we'll query the target geom for the closest source pos, within reason
+    kdtree = drift_util.KDTree(registered_geom)
+    prgeom = interpolation_util.pad_geom(registered_geom)
+    match_distance = drift_util.pdist(geom).min() / 2
+    _, targ_inds = kdtree.query(
+        source_pos.reshape(-1, psd).numpy(force=True),
+        distance_upper_bound=match_distance,
+        workers=workers or -1,
+    )
+    targ_inds = torch.from_numpy(targ_inds).reshape(source_pos.shape[:2])
+    target_pos = prgeom[targ_inds]
 
+    # allocate output storage with an extra channel of NaN needed later
     snippets = interpolation_util.kernel_interpolate(
         snippets,
         source_pos,
@@ -562,7 +583,13 @@ def interpolate_residual_snippets(
         allow_destroy=True,
         interpolation_method=interpolation_method,
     )
-    return snippets
+
+    # now, let's embed these into the full registered probe
+    snippets_full = snippets.new_full((n, tpca.rank, len(registered_geom)), torch.nan)
+    targ_inds = targ_inds[:, None].broadcast_to(snippets.shape)
+    snippets_full.scatter_(2, targ_inds, snippets)
+
+    return snippets_full
 
 
 def get_discovery_control(
