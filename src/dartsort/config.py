@@ -18,8 +18,8 @@ object can then be passed into the high level functions like
 from dataclasses import dataclass, field
 from typing import List, Optional, Tuple
 
-import torch
 import numpy as np
+import torch
 
 try:
     from importlib.resources import files
