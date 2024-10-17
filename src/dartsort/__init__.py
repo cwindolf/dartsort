@@ -11,6 +11,7 @@ from .templates import TemplateData
 from .transform import WaveformPipeline
 from .util.analysis import DARTsortAnalysis
 from .util.data_util import DARTsortSorting
+from .util.drift_util import registered_geometry
 from .util.waveform_util import make_channel_index
 from .cluster import merge, postprocess, density
 from . import util
