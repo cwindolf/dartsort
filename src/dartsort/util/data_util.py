@@ -190,6 +190,15 @@ class DARTsortSorting:
         )
 
 
+def get_tpca(sorting):
+    """Look for the TemporalPCAFeaturizer in the usual place."""
+    base_dir = sorting.parent_h5_path.parent
+    model_dir = base_dir / f"{sorting.parent_h5_path.stem}_models"
+    pipeline = torch.load(model_dir / "featurization_pipeline.pt")
+    tpca = pipeline.transformers[0]
+    return tpca
+
+
 def keep_only_most_recent_spikes(
     sorting,
     n_min_spikes=250,
