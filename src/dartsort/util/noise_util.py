@@ -329,6 +329,7 @@ class EmbeddedNoise(torch.nn.Module):
         self.cov_kind = cov_kind
 
         self.mean = mean
+        self.mean_full = self.mean_rc()
         self.global_std = global_std
         self.rank_std = rank_std
         self.channel_std = channel_std
@@ -342,6 +343,16 @@ class EmbeddedNoise(torch.nn.Module):
         return self.global_std.device
 
     def mean_rc(self):
+        """Return noise mean as a rank x channels tensor"""
+        shape = self.rank, self.n_channels
+        if self.mean_kind == "zero":
+            return torch.zeros(shape)
+        elif self.mean_kind == "by_rank":
+            return self.mean[:, None].broadcast_to(shape).contiguous()
+        elif self.mean_kind == "full":
+            return self.mean
+
+    def marginal_mean(self):
         """Return noise mean as a rank x channels tensor"""
         shape = self.rank, self.n_channels
         if self.mean_kind == "zero":
