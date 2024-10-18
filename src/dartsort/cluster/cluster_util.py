@@ -292,7 +292,7 @@ def remove_self_duplicates(
 
             # reshape to NxT
             template = np.median(wfs_unit, axis=0)
-            mc = template.ptp(0).argmax()
+            mc = np.ptp(template, 0).argmax()
             template_mc = template[:, mc]
             template_argmin = np.abs(template_mc).argmax()
 

@@ -79,9 +79,9 @@ class GTUnitTextInfo(UnitComparisonPlot):
 
         gt_temp = comparison.gt_analysis.coarse_template_data.unit_templates(unit_id)
         tested_temp = comparison.tested_analysis.coarse_template_data.unit_templates(tested_unit_id)
-        gt_ptp = gt_temp.ptp(1).max(1).squeeze()
+        gt_ptp = np.ptp(gt_temp, 1).max(1).squeeze()
         assert gt_ptp.size == 1
-        tested_ptp = tested_temp.ptp(1).max(1).squeeze()
+        tested_ptp = np.ptp(tested_temp, 1).max(1).squeeze()
         assert tested_ptp.size == 1
         msg += f"GT PTP: {gt_ptp:0.1f}; matched PTP: {tested_ptp:0.1f}\n"
         msg += f"{tested_nspikes} spikes in matched unit\n"

@@ -97,7 +97,7 @@ class TemplateData:
         template_locations = localize_waveforms(
             self.templates,
             self.registered_geom,
-            main_channels=self.templates.ptp(1).argmax(1),
+            main_channels=np.ptp(self.templates, 1).argmax(1),
             radius=self.localization_radius_um,
         )
         return template_locations

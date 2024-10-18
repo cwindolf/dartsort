@@ -79,9 +79,10 @@ def get_smoothed_densities(
 
     # select bin edges
     extents = np.c_[np.floor(infeats.min(0)), np.ceil(infeats.max(0))]
-    if not (extents.ptp(1) > 0).all():
-        raise ValueError(f"Issue in KDE. {extents.ptp(1)=} {infeats.shape=} {sigmas=} {bin_sizes=}.")
-    nbins = np.ceil(extents.ptp(1) / bin_sizes).astype(int)
+    dextents = np.ptp(extents, 1)
+    if not (dextents > 0).all():
+        raise ValueError(f"Issue in KDE. {dextents=} {infeats.shape=} {sigmas=} {bin_sizes=}.")
+    nbins = np.ceil(dextents / bin_sizes).astype(int)
     nbins = nbins.clip(min_n_bins, max_n_bins)
     bin_edges = [
         np.linspace(e[0], e[1], num=nb + 1)
