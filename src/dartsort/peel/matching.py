@@ -101,7 +101,7 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
 
         # waveform extraction
         self.channel_index = channel_index
-        self.registered_template_ampvecs = template_data.templates.ptp(1)
+        self.registered_template_ampvecs = np.ptp(template_data.templates, 1)
 
         # amplitude scaling properties
         self.is_scaling = bool(amplitude_scaling_variance)
@@ -251,7 +251,7 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
         self.register_buffer("spatial_components", torch.tensor(spatial_components))
         compressed_upsampled_temporal = self.handle_upsampling(
             temporal_components,
-            ptps=template_data.templates.ptp(1).max(1),
+            ptps=np.ptp(template_data.templates, 1).max(1),
             temporal_upsampling_factor=temporal_upsampling_factor,
             upsampling_peak_window_radius=upsampling_peak_window_radius,
         )

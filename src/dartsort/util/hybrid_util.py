@@ -46,7 +46,7 @@ def get_drifty_hybrid_recording(
             np.all(templates.displacements == 0, 1)
         )
         central_templates = templates.templates_array_moved[central_disp_index]
-        peak_channels = central_templates.ptp(1).argmax(1)
+        peak_channels = np.ptp(central_templates, 1).argmax(1)
 
     if sorting is None:
         sorting = get_sorting(num_units, recording, firing_rates=firing_rates, rg=rg, spike_length_samples=templates.num_samples)
@@ -268,7 +268,7 @@ def sorting_from_times_labels(times, labels, recording=None, sampling_frequency=
     _, labels_flat = np.unique(labels, return_inverse=True)
     sorting = DARTsortSorting(times_samples=times, channels=channels, labels=labels_flat, sampling_frequency=sorting.sampling_frequency)
     td = TemplateData.from_config(recording, sorting, template_config, with_locs=False, n_jobs=n_jobs)
-    channels = np.nan_to_num(td.coarsen().templates.ptp(1)).argmax(1)[labels_flat]
+    channels = np.nan_to_num(np.ptp(td.coarsen().templates, 1)).argmax(1)[labels_flat]
     sorting = DARTsortSorting(times_samples=times, channels=channels, labels=labels_flat, sampling_frequency=sorting.sampling_frequency)
     return sorting, td
 

@@ -9,6 +9,7 @@ from tqdm.auto import tqdm
 from ..util.multiprocessing_util import get_pool
 from ..util.py_util import delay_keyboard_interrupt
 from .localize_torch import localize_amplitude_vectors
+from ..util.spiketorch import ptp
 
 
 def localize_waveforms(
@@ -20,7 +21,7 @@ def localize_waveforms(
     n_channels_subset=None,
 ):
     C, dim = geom.shape
-    amp_vecs = waveforms.ptp(1)
+    amp_vecs = ptp(waveforms, 1)
     if main_channels is None:
         main_channels = amp_vecs.argmax(1)
 
