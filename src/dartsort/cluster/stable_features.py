@@ -68,11 +68,6 @@ class StableSpikeDataset(torch.nn.Module):
     def device(self):
         return self.prgeom.device
 
-    def to_sorting(self) -> DARTsortSorting:
-        labels = np.full_like(self.original_sorting.labels, -1)
-        labels[self.kept_indices] = self.labels.cpu()
-        return replace(self.original_sorting, labels=labels)
-
     @classmethod
     def from_sorting(
         cls,
