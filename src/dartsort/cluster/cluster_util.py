@@ -1,13 +1,42 @@
+import dataclasses
+
 import hdbscan
 import numpy as np
 import spikeinterface
+import torch
 from dartsort.util import drift_util, spikeio
 from dredge.motion_util import IdentityMotionEstimate
+from scipy.cluster.hierarchy import fcluster, linkage
 from scipy.spatial import KDTree
 from sklearn.neighbors import KNeighborsClassifier
-from spikeinterface.comparison import compare_two_sorters
-from tqdm.auto import tqdm
-import dataclasses
+
+
+def agglomerate(labels, distances, linkage_method="complete", threshold=1.0):
+    """"""
+    is_torch = torch.is_tensor(distances)
+    if is_torch:
+        distances = distances.numpy(force=True)
+
+    n = distances.shape[0]
+    pdist = distances[np.triu_indices(n, k=1)]
+    if pdist.min() > threshold:
+        return labels
+    finite = np.isfinite(pdist)
+    if not finite.all():
+        inf = max(0, pdist[finite].max()) + threshold + 1.0
+        pdist[np.logical_not(finite)] = inf
+
+    Z = linkage(pdist, method=linkage_method)
+    new_labels = fcluster(Z, threshold, criterion="distance")
+    # offset by 1, I think always, but I don't want to be wrong?
+    new_labels -= new_labels.min()
+
+    if is_torch:
+        new_labels = torch.from_numpy(new_labels).to(labels)
+
+    return new_labels
+
+
 
 
 def reorder_by_depth(sorting, motion_est=None):
@@ -342,6 +371,7 @@ def remove_duplicate_spikes(
     full_duplicate_fraction=0.95,
     min_result_spikes=10,
 ):
+    from spikeinterface.comparison import compare_two_sorters
     # normalize agreement by smaller unit and then remove only the spikes with agreement
     sorting = make_sorting_from_labels_frames(clusterer.labels_, spike_frames)
     # remove duplicates
