@@ -328,15 +328,26 @@ class EmbeddedNoise(torch.nn.Module):
         self.mean_kind = mean_kind
         self.cov_kind = cov_kind
 
-        self.mean = mean
-        self.mean_full = self.mean_rc()
-        self.global_std = global_std
-        self.rank_std = rank_std
-        self.channel_std = channel_std
-        self.full_std = full_std
+        self.register_buffer("chans_arange", torch.arange(n_channels))
+        if mean is not None:
+            self.register_buffer("mean", mean)
+        self.register_buffer("global_std", global_std)
+        if rank_std is not None:
+            self.register_buffer("rank_std", rank_std)
+        if channel_std is not None:
+            self.register_buffer("channel_std", channel_std)
+        if full_std is not None:
+            self.register_buffer("full_std", full_std)
 
-        self.rank_vt = rank_vt
-        self.channel_vt = channel_vt
+        if rank_vt is not None:
+            self.register_buffer("rank_vt", rank_vt)
+        if channel_vt is not None:
+            self.register_buffer("channel_vt", channel_vt)
+
+        # precompute stuff
+        self._full_cov = None
+        self.register_buffer("mean_full", self.mean_rc().clone().detach())
+        self.logdet = self.marginal_covariance().logdet()
 
     @property
     def device(self):
@@ -357,15 +368,21 @@ class EmbeddedNoise(torch.nn.Module):
         shape = self.rank, self.n_channels
         if self.mean_kind == "zero":
             return torch.zeros(shape)
-        elif self.mean_kind == "by_rank":
+        if self.mean_kind == "by_rank":
             return self.mean[:, None].broadcast_to(shape).contiguous()
-        elif self.mean_kind == "full":
+        if self.mean_kind == "full":
             return self.mean
-
-    def marginal_precision(self, channels=slice(None)):
-        return self.marginal_covariance(channels).inverse()
+        assert False
 
     def marginal_covariance(self, channels=slice(None)):
+        if channels == slice(None):
+            if self._full_cov is None:
+                self._full_cov = self._marginal_covariance()
+            return self._full_cov
+        return self._marginal_covariance(channels)
+
+    def _marginal_covariance(self, channels=slice(None)):
+        channels = self.chans_arange[channels]
         nc = channels.numel()
 
         if self.cov_kind == "scalar":
@@ -378,7 +395,8 @@ class EmbeddedNoise(torch.nn.Module):
             return torch.kron(rank_diag, chans_eye)
 
         if self.cov_kind == "diagonal":
-            return operators.DiagLinearOperator(self.full_std**2)
+            chans_std = self.full_std[:, channels]
+            return operators.DiagLinearOperator(chans_std**2)
 
         if self.cov_kind == "factorized":
             rank_root = self.rank_vt.T * self.rank_std
@@ -388,16 +406,22 @@ class EmbeddedNoise(torch.nn.Module):
             return torch.kron(rank_root, chan_root)
 
         if self.cov_kind == "factorized_rank_diag":
-            rank_root = self.rank_vt.T * self.rank_std
-            rank_root = operators.RootLinearOperator(rank_root)
-            chan_root = self.channel_vt.T * self.channel_std
-            chan_root = operators.RootLinearOperator(chan_root)
-            return torch.kron(rank_root, chan_root)
+            rank_cov = operators.DiagLinearOperator(self.rank_std.square())
+            chan_root = self.channel_vt.T[channels] * self.channel_std
+            chan_cov = chan_root @ chan_root.T
+            # chan_cov = operators.RootLinearOperator(chan_root)
+            return torch.kron(rank_cov, chan_cov)
 
-        raise NotImplementedError
+        if self.cov_kind == "factorized_by_rank_rank_diag":
+            chans_vt = self.channel_vt[:, :, channels]
+            r, C, c = chans_vt.shape
+            blocks = chans_vt.new_empty((r, c, c))
+            chans_std = self.channel_std[:, :]  # no slice here!
+            for q, sq in enumerate(self.rank_std):
+                blocks[q] = sq * chans_vt[q].T @ chans_vt[q]
+            return operators.BlockDiagLinearOperator(blocks)
 
-    def marginal_cov_sqrt(self, channels=slice(None)):
-        raise NotImplementedError
+        assert False
 
     @classmethod
     def estimate(cls, snippets, mean_kind="zero", cov_kind="scalar"):

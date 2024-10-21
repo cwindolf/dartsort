@@ -1,4 +1,4 @@
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from typing import Optional
 
 import h5py
@@ -25,6 +25,8 @@ class StableSpikeDataset(torch.nn.Module):
         extract_features: torch.Tensor,
         core_neighborhoods: "SpikeNeighborhoods",
         features_on_device: bool = True,
+        interpolation_method: str = "kriging",
+        interpolation_sigma: float = 20.0,
     ):
         """Motion-corrected spike data on the registered probe"""
         super().__init__()
@@ -37,6 +39,8 @@ class StableSpikeDataset(torch.nn.Module):
         self.n_channels_extract = extract_channels.shape[1]
         self.n_channels_core = core_channels.shape[1]
         self.n_spikes = kept_indices.size
+        self.interpolation_method = interpolation_method
+        self.interpolation_sigma = interpolation_sigma
 
         # for to_sorting()
         self.kept_indices = kept_indices
@@ -180,6 +184,8 @@ class StableSpikeDataset(torch.nn.Module):
             extract_features=extract_features,
             core_neighborhoods=core_neighborhoods,
             features_on_device=features_on_device,
+            interpolation_method=interpolation_method,
+            interpolation_sigma=interpolation_sigma,
         )
         self.to(device)
         return self
@@ -188,14 +194,19 @@ class StableSpikeDataset(torch.nn.Module):
         self,
         indices: torch.LongTensor,
         neighborhood: str = "extract",
+        with_channels=True,
         with_reconstructions: bool = False,
+        with_neighborhood_ids: bool = False,
     ) -> "SpikeFeatures":
+        channels = None
         if neighborhood == "extract":
             features = self.extract_features[indices]
-            channels = self.extract_channels[indices]
+            if with_channels:
+                channels = self.extract_channels[indices]
         elif neighborhood == "core":
             features = self.core_features[indices]
-            channels = self.core_channels[indices]
+            if with_channels:
+                channels = self.core_channels[indices]
         else:
             assert False
 
@@ -209,6 +220,15 @@ class StableSpikeDataset(torch.nn.Module):
 
         return SpikeFeatures(
             indices=indices, features=features, channels=channels, waveforms=waveforms
+        )
+
+    def interp_to_chans(self, spike_data, channels):
+        return interp_to_chans(
+            spike_data,
+            channels,
+            self.prgeom,
+            interpolation_method=self.interpolation_method,
+            interpolation_sigma=self.interpolation_sigma,
         )
 
 
@@ -227,9 +247,29 @@ class SpikeFeatures:
     # n, r, c
     features: torch.Tensor
     # n, c
-    channels: torch.LongTensor
-    # n, t, c, only probided when with_reconstructions=True
+    channels: Optional[torch.LongTensor] = None
+    # n, t, c
     waveforms: Optional[torch.Tensor] = None
+
+    def __post_init__(self):
+        self.n_spikes = len(self.waveforms)
+
+    def __len__(self):
+        return self.n_spikes
+
+    def __getitem__(self, ix):
+        """Subset the spikes in this collection with [subset]."""
+        waveforms = channels = None
+        if self.channels is not None:
+            channels = self.channels[ix]
+        if self.waveforms is not None:
+            waveforms = self.waveforms[ix]
+        return self.__class__(
+            indices=self.indices[ix],
+            features=self.features[ix],
+            channels=channels,
+            waveforms=waveforms,
+        )
 
 
 class SpikeNeighborhoods(torch.nn.Module):
@@ -286,16 +326,69 @@ class SpikeNeighborhoods(torch.nn.Module):
     def neighborhood_members(self, id):
         return self._neighborhood_members[self.neighborhood_members_slices[id]]
 
-    def subset_neighborhood_ids(self, channels, min_coverage=1.0):
-        ids = []
+    def subset_neighborhoods(self, channels, min_coverage=1.0):
+        """
+        Returns
+        -------
+        neighborhood_info : dict
+            Keys are neighborhood ids, values are tuples
+            (neighborhood_channels, neighborhood_member_indices)
+        n_spikes : int
+            The total number of spikes in the neighborhood.
+        """
+        neighborhood_info = {}
+        n_spikes = 0
         for j, nhood in enumerate(self.neighborhoods):
             coverage = torch.isin(nhood, channels).sum() / self.neighborhood_sizes[j]
             if coverage >= min_coverage:
-                ids.append(j)
-        return ids
+                member_indices = self.neighborhood_members(j)
+                neighborhood_info[j] = (nhood, member_indices)
+                n_spikes += member_indices.numel()
+        return neighborhood_info, n_spikes
+
+    def spike_neighborhoods(self, channels, spike_indices, min_coverage=1.0):
+        """Like subset_neighborhoods, but for an already chosen collection of spikes
+
+        This is used when subsetting log likelihood calculations.
+        In this case, the returned neighborhood_member_indices keys are relative:
+        spike_indices[neighborhood_member_indices] are the actual indices.
+        """
+        neighborhood_info = {}
+        n_spikes = 0
+        spike_ids = self.neighborhood_ids[spike_indices]
+        neighborhoods_considered = torch.unique(spike_ids)
+        for j in neighborhoods_considered:
+            nhood = self.neighborhoods[j]
+            coverage = torch.isin(nhood, channels).sum() / self.neighborhood_sizes[j]
+            if coverage >= min_coverage:
+                (member_indices,) = torch.nonzero(spike_ids == j)
+                neighborhood_info[j] = (nhood, member_indices)
+                n_spikes += member_indices.numel()
+        return neighborhood_info, n_spikes
 
 
 # -- helpers
+
+
+def interp_to_chans(
+    spike_data,
+    channels,
+    prgeom,
+    interpolation_method="kriging",
+    interpolation_sigma=20.0,
+):
+    source_pos = prgeom[spike_data.channels]
+    target_pos = prgeom[channels]
+    shape = spike_data.n_spikes, *target_pos.shape
+    target_pos = target_pos[None].broadcast_to(shape)
+    return interpolation_util.kernel_interpolate(
+        spike_data.features,
+        source_pos,
+        target_pos,
+        sigma=interpolation_sigma,
+        allow_destroy=False,
+        interpolation_method=interpolation_method,
+    )
 
 
 def get_shift_info(sorting, motion_est, geom, keep_select, motion_depth_mode):
