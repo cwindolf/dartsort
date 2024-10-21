@@ -31,8 +31,6 @@ def cluster_chunk(
     amplitudes_dataset_name="denoised_ptp_amplitudes",
     localizations_dataset_name="point_source_localizations",
     depth_order=True,
-    ramp_num_spikes=[10, 60],
-    ramp_ptp=[2, 6],
 ):
     """Cluster spikes from a single segment
 
@@ -51,7 +49,8 @@ def cluster_chunk(
         "closest_registered_channels",
         "grid_snap",
         "hdbscan",
-        "density_peaks",
+        "dpc",
+        "density_peaks_fancy",
     )
 
     if sorting is None:
@@ -109,77 +108,39 @@ def cluster_chunk(
             remove_big_units=clustering_config.remove_big_units,
             zstd_big_units=clustering_config.zstd_big_units,
         )
-    elif clustering_config.cluster_strategy == "density_peaks":
-        z = xyza[to_cluster, 2]
-        if motion_est is not None:
-            z = motion_est.correct_s(sorting.times_seconds[to_cluster], z)
-        z_not_reg = xyza[to_cluster, 2]
-        scales = clustering_config.feature_scales
-        ampfeat = scales[2] * np.log(clustering_config.log_c + amps[to_cluster])
-        res = density.density_peaks_clustering(
-            np.c_[scales[0] * xyza[to_cluster, 0], scales[1] * z, ampfeat],
-            geom=geom,
-            y=xyza[to_cluster, 1],
-            z_not_reg=z_not_reg,
-            use_y_triaging=clustering_config.use_y_triaging,
+    elif clustering_config.cluster_strategy == "dpc":
+        features = (xyza[:, [0, 2]][to_cluster],)
+        if clustering_config.use_amplitude:
+            ampfeat = np.log(clustering_config.amp_log_c + amps[to_cluster])
+            ampfeat *= clustering_config.amp_scale
+            features = (*features, ampfeat)
+        if clustering_config.n_main_channel_pcs:
+            pcs = cluster_util.get_main_channel_pcs(
+                sorting, which=to_cluster, rank=clustering_config.n_main_channel_pcs
+            )
+            features = (*features, clustering_config.pc_scale * pcs)
+        X = np.column_stack(features)
+        labels[to_cluster] = density.density_peaks(
+            X,
             sigma_local=clustering_config.sigma_local,
-            sigma_local_low=clustering_config.sigma_local_low,
             sigma_regional=clustering_config.sigma_regional,
-            sigma_regional_low=clustering_config.sigma_regional_low,
+            outlier_neighbor_count=clustering_config.outlier_neighbor_count,
+            outlier_radius=clustering_config.outlier_radius,
             n_neighbors_search=clustering_config.n_neighbors_search,
             radius_search=clustering_config.radius_search,
-            remove_clusters_smaller_than=clustering_config.remove_clusters_smaller_than,
             noise_density=clustering_config.noise_density,
-            triage_quantile_per_cluster=clustering_config.triage_quantile_per_cluster,
-            ramp_triage_per_cluster=clustering_config.ramp_triage_per_cluster,
-            revert=clustering_config.revert,
-            triage_quantile_before_clustering=clustering_config.triage_quantile_before_clustering,
-            amp_no_triaging_before_clustering=clustering_config.amp_no_triaging_before_clustering,
-            amp_no_triaging_after_clustering=clustering_config.amp_no_triaging_after_clustering,
-            distance_dependent_noise_density=clustering_config.distance_dependent_noise_density,
-            outlier_radius=clustering_config.outlier_radius,
-            outlier_neighbor_count=clustering_config.outlier_neighbor_count,
-            scales=scales,
-            log_c=clustering_config.log_c,
+            remove_clusters_smaller_than=clustering_config.remove_clusters_smaller_than,
             workers=clustering_config.workers,
-            return_extra=clustering_config.attach_density_feature,
+        )["labels"]
+    elif clustering_config.cluster_strategy == "density_peaks_fancy":
+        res = density.density_peaks_fancy(
+            xyza,
+            amps,
+            to_cluster,
+            sorting,
+            motion_est,
+            clustering_config,
         )
-
-        if clustering_config.remove_small_far_clusters:
-            # TODO: move this out into a new function, if it is used?
-            # the arguments ramp_ptp and ramp_num_spikes should be put into a config object.
-            if clustering_config.attach_density_feature:
-                labels_sort = res["labels"]
-            else:
-                labels_sort = res
-            z = xyza[to_cluster, 2]
-            if motion_est is not None:
-                z = motion_est.correct_s(times_s[to_cluster], z)
-            all_med_ptp = []
-            all_med_z_spread = []
-            all_med_x_spread = []
-            num_spikes = []
-            for k in np.unique(labels_sort)[np.unique(labels_sort)>-1]:
-                all_med_ptp.append(np.median(amps[to_cluster[labels_sort == k]]))
-                all_med_x_spread.append(xyza[to_cluster[labels_sort == k], 0].std())
-                all_med_z_spread.append(z[labels_sort == k].std())
-                num_spikes.append((labels_sort == k).sum())
-
-            all_med_ptp = np.array(all_med_ptp)
-            all_med_x_spread = np.array(all_med_x_spread)
-            all_med_z_spread = np.array(all_med_z_spread)
-            num_spikes = np.array(num_spikes)
-
-            # ramp from ptp 2 to 6 with n spikes from 60 to 10 per minute!
-            idx_low = np.flatnonzero(np.logical_and(
-                np.isin(labels_sort, np.flatnonzero(num_spikes<=(chunk_time_range_s[1]-chunk_time_range_s[0])/60*(ramp_num_spikes[1] - (all_med_ptp - ramp_ptp[0])/(ramp_ptp[1]-ramp_ptp[0])*(ramp_num_spikes[1]-ramp_num_spikes[0])))),
-                np.isin(labels_sort, np.flatnonzero(all_med_ptp<=ramp_ptp[1]))
-            ))
-            if clustering_config.attach_density_feature:
-                res["labels"][idx_low] = -1
-            else:
-                res[idx_low] = -1
-
         if clustering_config.attach_density_feature:
             labels[to_cluster] = res["labels"]
             extra_features["density_ratio"] = np.full(labels.size, np.nan)
