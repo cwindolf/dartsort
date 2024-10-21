@@ -167,7 +167,7 @@ def read_waveforms_channel_index(
     n_channels = recording.get_num_channels()
 
     if recording.binary_compatible_with(
-        file_offset=0, time_axis=0, file_paths_lenght=1  # sic
+        file_offset=0, time_axis=0, file_paths_length=1
     ):
         # fast path. this is like 2x as fast as the read_traces for loop
         # below, but requires a recording on disk in a nice format
@@ -258,7 +258,7 @@ def read_single_channel_waveforms(
     assert channels.min() >= 0
 
     if recording.binary_compatible_with(
-        file_offset=0, time_axis=0, file_paths_lenght=1  # sic
+        file_offset=0, time_axis=0, file_paths_length=1
     ):
         # fast path. this is like 2x as fast as the read_traces for loop
         # below, but requires a recording on disk in a nice format
@@ -455,7 +455,7 @@ def read_waveforms_channel_index_chunked(
     read_times = times_samples - trough_offset_samples
 
     if recording.binary_compatible_with(
-        file_offset=0, time_axis=0, file_paths_lenght=1  # sic
+        file_offset=0, time_axis=0, file_paths_length=1
     ):
         # fast path. this is like 2x as fast as the read_traces for loop
         # below, but requires a recording on disk in a nice format
