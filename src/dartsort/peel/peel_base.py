@@ -521,7 +521,7 @@ class BasePeeler(torch.nn.Module):
                 channels = torch.as_tensor(channels, device=device)
                 waveforms = torch.as_tensor(waveforms, device=device)
                 featurization_pipeline = featurization_pipeline.to(device)
-                featurization_pipeline.fit(waveforms, max_channels=channels)
+                featurization_pipeline.fit(waveforms, max_channels=channels, recording=self.recording)
                 featurization_pipeline = featurization_pipeline.to("cpu")
                 self.featurization_pipeline = featurization_pipeline
             finally:

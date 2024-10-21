@@ -45,7 +45,7 @@ class BaseTemporalPCA(BaseWaveformModule):
         self.temporal_slice = temporal_slice
         self.n_oversamples = n_oversamples
 
-    def fit(self, waveforms, max_channels):
+    def fit(self, waveforms, max_channels, recording=None):
         waveforms = self._temporal_slice(waveforms)
         self.dtype = waveforms.dtype
         train_channel_index = self.channel_index
