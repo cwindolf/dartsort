@@ -64,7 +64,7 @@ class WaveformPipeline(torch.nn.Module):
 
         return waveforms, features
 
-    def fit(self, waveforms, max_channels):
+    def fit(self, waveforms, max_channels, recording):
         assert waveforms.ndim == 3
         assert max_channels.shape[0] == waveforms.shape[0]
 
@@ -73,7 +73,7 @@ class WaveformPipeline(torch.nn.Module):
 
         for transformer in self.transformers:
             transformer.train()
-            transformer.fit(waveforms, max_channels=max_channels)
+            transformer.fit(waveforms, max_channels=max_channels, recording=recording)
             transformer.eval()
 
             # if we're done already, stop before denoising

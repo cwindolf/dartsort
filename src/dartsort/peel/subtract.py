@@ -14,6 +14,7 @@ from dartsort.util.waveform_util import (get_relative_subset,
                                          relative_channel_subset_index)
 
 from .peel_base import BasePeeler
+from .threshold import threshold_chunk
 
 
 class SubtractionPeeler(BasePeeler):
@@ -90,6 +91,10 @@ class SubtractionPeeler(BasePeeler):
         self.add_module(
             "subtraction_denoising_pipeline", subtraction_denoising_pipeline
         )
+
+        # internal api for switching to thresholding during denoiser fitting
+        # when there are no pre-fit denoisers
+        self._turn_off_subtraction = False
 
     def out_datasets(self):
         datasets = super().out_datasets()
@@ -211,6 +216,7 @@ class SubtractionPeeler(BasePeeler):
             spatial_dedup_channel_index=self.spatial_dedup_channel_index,
             residnorm_decrease_threshold=self.residnorm_decrease_threshold,
             persist_deduplication=self.persist_deduplication,
+            no_subtraction=self._turn_off_subtraction,
         )
 
         # add in chunk_start_samples
@@ -243,9 +249,10 @@ class SubtractionPeeler(BasePeeler):
         # so we will cheat for now:
         # just remove all the denoisers that need fitting, run peeling,
         # and fit everything
-        self._fit_subtraction_transformers(
+        while self._fit_subtraction_transformers(
             save_folder, tmp_dir=tmp_dir, n_jobs=n_jobs, device=device, which="denoisers"
-        )
+        ):
+            pass
         self._fit_subtraction_transformers(
             save_folder, tmp_dir=tmp_dir, n_jobs=n_jobs, device=device, which="featurizers"
         )
@@ -253,15 +260,20 @@ class SubtractionPeeler(BasePeeler):
     def _fit_subtraction_transformers(
         self, save_folder, tmp_dir=None, n_jobs=0, device=None, which="denoisers"
     ):
-        """Handle fitting either denoisers or featurizers since the logic is similar"""
-        if not any(
-            (
-                (t.is_denoiser if which == "denoisers" else t.is_featurizer)
-                and t.needs_fit()
-            )
-            for t in self.subtraction_denoising_pipeline
-        ):
-            return
+        """Fit models which are run during the subtraction step
+
+        These include denoisers and featurizers. Featurizers are easy, we just fit them
+        to the extracted waveforms output from a mini-subtraction. Denoisers are a bit
+        harder, since they influence the actual waveforms that are extracted. In that sense,
+        you need to fit them serially with a new mini subtraction each time.
+        """
+        if which == "denoisers":
+            needs_fit = any(t.is_denoiser and t.needs_fit() for t in self.subtraction_denoising_pipeline)
+        elif which == "featurizers":
+            assert not any(t.is_denoiser and t.needs_fit() for t in self.subtraction_denoising_pipeline)
+            needs_fit = any(t.is_featurizer and t.needs_fit() for t in self.subtraction_denoising_pipeline)
+        if not needs_fit:
+            return False
 
         if device is None:
             device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -278,7 +290,19 @@ class SubtractionPeeler(BasePeeler):
         )
         ifeats = [init_voltage_feature, init_waveform_feature]
         if which == "denoisers":
-            ffeats = [t for t in orig_denoise if (t.is_denoiser and not t.needs_fit())]
+            # add all the already fitted denoisers until we hit the next unfitted one
+            ffeats = []
+            for t in orig_denoise:
+                if t.is_denoiser:
+                    if t.needs_fit():
+                        break
+                    ffeats.append(t)
+
+            # this is the sequence of transforms to actually use in fitting
+            fit_feats = ffeats + [t]
+
+            # if we have no denoisers yet, then definitely don't do subtraction!
+            self._turn_off_subtraction = not ffeats
         else:
             ffeats = [t for t in orig_denoise if t.is_denoiser]
         self.subtraction_denoising_pipeline = WaveformPipeline(ifeats + ffeats)
@@ -313,15 +337,18 @@ class SubtractionPeeler(BasePeeler):
 
                 channels = torch.as_tensor(channels, device=device)
                 waveforms = torch.as_tensor(waveforms, device=device)
-                orig_denoise = orig_denoise.to(device)
-                orig_denoise.fit(waveforms, max_channels=channels)
-                orig_denoise = orig_denoise.to("cpu")
+                fit_denoise = WaveformPipeline(fit_feats)
+                fit_denoise = fit_denoise.to(device)
+                fit_denoise.fit(waveforms, max_channels=channels, recording=self.recording)
+                fit_denoise = fit_denoise.to("cpu")
+                self._turn_off_subtraction = False
                 self.subtraction_denoising_pipeline = orig_denoise
                 self.featurization_pipeline = orig_featurization_pipeline
             finally:
                 self.to("cpu")
                 if temp_hdf5_filename.exists():
                     temp_hdf5_filename.unlink()
+        return True
 
 
 ChunkSubtractionResult = namedtuple(
@@ -354,8 +381,34 @@ def subtract_chunk(
     persist_deduplication=True,
     relative_peak_radius=5,
     dedup_temporal_radius=7,
+    no_subtraction=False,
 ):
     """Core peeling routine for subtraction"""
+    if no_subtraction:
+        times_rel, channels, voltages, waveforms = threshold_chunk(
+            traces,
+            channel_index,
+            detection_threshold=min(detection_thresholds),
+            peak_sign=peak_sign,
+            spatial_dedup_channel_index=spatial_dedup_channel_index,
+            trough_offset_samples=trough_offset_samples,
+            spike_length_samples=spike_length_samples,
+            left_margin=left_margin,
+            right_margin=right_margin,
+            relative_peak_radius=relative_peak_radius,
+            dedup_temporal_radius=dedup_temporal_radius,
+            max_spikes_per_chunk=None,
+            quiet=False,
+        )
+        waveforms, features = denoising_pipeline(waveforms, channels)
+        return ChunkSubtractionResult(
+            n_spikes=times_rel.numel(),
+            times_samples=times_rel,
+            channels=channels,
+            collisioncleaned_waveforms=waveforms,
+            residual=None,
+            features=features,
+        )
     # validate arguments to avoid confusing error messages later
     re_extract = extract_index is not None
     if extract_index is None:
@@ -410,7 +463,8 @@ def subtract_chunk(
             continue
 
         # throw away spikes which cannot be subtracted
-        keep = (times_samples >= trough_offset_samples) & (
+        keep = torch.logical_and(
+            times_samples >= trough_offset_samples,
             times_samples < max_trough_time
         )
         times_samples = times_samples[keep]

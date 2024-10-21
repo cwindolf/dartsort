@@ -23,7 +23,7 @@ class BaseWaveformModule(torch.nn.Module):
         if geom is not None:
             self.register_buffer("geom", torch.asarray(geom, copy=True))
 
-    def fit(self, waveforms, max_channels=None):
+    def fit(self, waveforms, max_channels=None, recording=None):
         pass
 
     def needs_fit(self):
@@ -100,7 +100,7 @@ class Passthrough(BaseWaveformDenoiser, BaseWaveformFeaturizer):
     def needs_fit(self):
         return self.pipeline.needs_fit()
 
-    def fit(self, waveforms, max_channels):
+    def fit(self, waveforms, max_channels, recording=None):
         self.pipeline.fit(waveforms, max_channels)
 
     def forward(self, waveforms, max_channels=None):

@@ -45,12 +45,13 @@ class GrabAndFeaturize(BasePeeler):
         )
         return datasets
 
-    def process_chunk(self, chunk_start_samples, return_residual=False):
+    def process_chunk(self, chunk_start_samples, chunk_end_samples=None, return_residual=False):
         """Override process_chunk to skip empties."""
-        chunk_end_samples = min(
-            self.recording.get_num_samples(),
-            chunk_start_samples + self.chunk_length_samples,
-        )
+        if chunk_end_samples is None:
+            chunk_end_samples = min(
+                self.recording.get_num_samples(),
+                chunk_start_samples + self.chunk_length_samples,
+            )
         in_chunk = self.times_samples == self.times_samples.clip(chunk_start_samples, chunk_end_samples - 1)
         if not in_chunk.any():
             return dict(n_spikes=0)
