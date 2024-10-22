@@ -30,7 +30,6 @@ class SpikeMixtureModel(torch.nn.Module):
 
     def __init__(
         self,
-        sorting: data_util.DARTsortSorting,
         data: StableSpikeDataset,
         noise: noise_util.EmbeddedNoise,
         n_spikes_fit: int = 4096,
@@ -55,9 +54,11 @@ class SpikeMixtureModel(torch.nn.Module):
         merge_bimodality_threshold: float = 0.1,
         merge_sym_function: callable = np.minimum,
     ):
-        self.original_sorting = sorting
+        # key data structures for loading and modeling spikes
         self.data = data
         self.noise = noise
+
+        # parameters
         self.n_spikes_fit = n_spikes_fit
         self.n_threads = n_threads
         self.min_count = min_count
@@ -73,10 +74,14 @@ class SpikeMixtureModel(torch.nn.Module):
         self.merge_bimodality_threshold = merge_bimodality_threshold
         self.merge_sym_function = merge_sym_function
 
-        # store on cpu
-        self.labels = sorting.labels[data.kept_indices]
-        # self.register_buffer("labels", torch.from_numpy(labels))
+        # store labels on cpu since we're always nonzeroing / writing np data
+        self.labels = self.data.original_sorting.labels[data.kept_indices]
+        self.labels = torch.from_numpy(self.labels)
 
+        # this is populated by self.m_step()
+        self.units = torch.nn.ModuleList()
+
+        # store arguments to the unit constructor in a dict
         self.unit_args = dict(
             rank=data.rank,
             n_channels=data.n_channels,
@@ -88,14 +93,16 @@ class SpikeMixtureModel(torch.nn.Module):
             channels_strategy_snr_min=channels_strategy_snr_min,
             prior_pseudocount=prior_pseudocount,
         )
+
+        # clustering with noise unit to hopefully grab false positives
         noise_args = self.unit_args | dict(mean_kind="zero", cov_kind="zero")
         self.noise_unit = GaussianUnit(**noise_args)
-        self.units = torch.nn.ModuleList()
-        self._rg = np.random.default_rng(random_seed)
-
+        # these only need computing once, but not in init so that
+        # there is time for the user to .cuda() me before then
         self._noise_log_likelihoods = None
 
-        # multithreading stuff
+        # multithreading stuff. thread-local rgs, control access to labels, etc.
+        self._rg = np.random.default_rng(random_seed)
         self.labels_lock = threading.Lock()
         self.lock = threading.Lock()
         self.storage = threading.local()
@@ -103,22 +110,45 @@ class SpikeMixtureModel(torch.nn.Module):
     # -- headliners
 
     def to_sorting(self):
-        labels = np.full_like(self.original_sorting.labels, -1)
-        labels[self.data.kept_indices] = self.labels.cpu()
-        return replace(self.original_sorting, labels=labels)
+        labels = np.full_like(self.data.original_sorting.labels, -1)
+        labels[self.data.kept_indices] = self.labels.numpy(force=True)
+        return replace(self.data.original_sorting, labels=labels)
 
     def unit_ids(self):
         uids = torch.unique(self.labels)
         return uids[uids >= 0]
 
-    def em(self, n_iter=None, show_progress=False):
+    def em(self, n_iter=None, show_progress=True):
         n_iter = self.n_em_iters if n_iter is None else n_iter
-        its = trange(n_iter, desc="EM") if show_progress else range(n_iter)
-        for j in its:
+        if show_progress:
+            its = trange(n_iter, desc="EM", **tqdm_kw)
+        else:
+            its = range(n_iter)
+
+        # if we have no units, we can't E step.
+        if not self.units:
+            self.m_step()
+
+        for _ in its:
+            # E step: get responsibilities and update hard assignments
             log_liks = self.log_likelihoods()
-            self.reassign(log_liks)
-            log_liks = self.cleanup(log_liks)
+            reas_count = self.reassign(log_liks)
+
+            # garbage collection -- get rid of low count labels
+            # no need to clean units since they'll be overwritten immediately
+            log_liks = self.cleanup(log_liks, clean_units=False)
+
+            # M step: fit units based on responsibilities
             self.m_step(log_liks)
+
+            # extra info for description
+            if show_progress:
+                out_pct = (self.labels < 0).sum() / self.data.n_spikes
+                out_pct = f"{100 * out_pct:.1f}"
+                nu = len(self.units)
+                reas_pct = reas_count / self.data.n_spikes
+                reas_pct = f"{100 * out_pct:.1f}"
+                its.set_description(f"EM({nu=},out={out_pct}%,reas={reas_pct}%)")
 
     def m_step(self, likelihoods=None):
         del self.units[:]  # no .clear() on ModuleList?
@@ -130,7 +160,9 @@ class SpikeMixtureModel(torch.nn.Module):
         ):
             self.units.append(unit)
 
-    def log_likelihoods(self, with_noise_unit=True, use_storage=True):
+    def log_likelihoods(
+        self, with_noise_unit=True, use_storage=True, show_progress=False
+    ):
         """Noise unit last so that rows correspond to unit ids without 1 offset"""
         # determine how much storage space we need by figuring out how many spikes
         # are overlapping with each unit
@@ -152,10 +184,19 @@ class SpikeMixtureModel(torch.nn.Module):
         )
         offset = 0
         pool = Parallel(self.n_threads, backend="threading", return_as="generator")
-        for unit_id, inds, liks in pool(
+        results = pool(
             delayed(self.unit_log_likelihoods)(unit_id=j, neighbs=neighbs, ns=ns)
             for j, neighbs, ns in neighb_info
-        ):
+        )
+        if show_progress:
+            results = tqdm(
+                results,
+                total=len(neighb_info),
+                desc="Likelihoods",
+                unit="unit",
+                **tqdm_kw,
+            )
+        for unit_id, inds, liks in results:
             nnew = inds.numel()
             coo_uix[offset : offset + nnew] = unit_id
             coo_six[offset : offset + nnew] = inds.numpy(force=True)
@@ -178,13 +219,17 @@ class SpikeMixtureModel(torch.nn.Module):
     def reassign(self, log_liks):
         has_noise_unit = log_liks.shape[1] > len(self.units)
         assignments = loglik_reassign(log_liks, has_noise_unit=has_noise_unit)
+        reassign_count = (self.labels != assignments).sum()
         self.labels.copy_(assignments)
+        return reassign_count
 
-    def cleanup(self, log_liks=None):
+    def cleanup(self, log_liks=None, clean_units=True):
         """Remove too-small units
 
         Also handles bookkeeping to throw those units out of the sparse
-        log_liks array.
+        log_liks array, and to throw away small units in self.units.
+        clean_units should be true unless your next move is an m step.
+        For instance if it's an E step, it's like the cleanup never happened.
         """
         unit_ids, counts = torch.unique(self.labels, return_counts=True)
         counts = counts[unit_ids >= 0]
@@ -194,6 +239,12 @@ class SpikeMixtureModel(torch.nn.Module):
             return log_liks
 
         self.relabel_units(unit_ids[big_enough])
+        if clean_units and len(self.units):
+            keep = torch.zeros(len(self.units))
+            keep[unit_ids] = big_enough
+            keep_units = [u for j, u in self.units if keep[j]]
+            del self.units[:]
+            self.units.extend(keep_units)
         if log_liks is None:
             return
 
@@ -206,12 +257,40 @@ class SpikeMixtureModel(torch.nn.Module):
         return log_liks
 
     def merge(self, log_liks=None):
-        pass
+        distances = self.distances()
+        bimodalities = None
+        if self.merge_bimodality_threshold is not None:
+            bimodalities = self.bimodalities()
+        distances = combine_distances(
+            distances,
+            self.merge_distance_threshold,
+            bimodalities,
+            self.merge_bimodality_threshold,
+            sym_function=self.merge_sym_function,
+        )
+        new_labels, new_ids = agglomerate(
+            self.labels,
+            distances,
+            linkage_method="complete",
+        )
+        self.labels.copy_(torch.from_numpy(new_labels))
 
-    def split(self):
-        pass
+    def split(self, show_progress=True):
+        pool = Parallel(
+            self.n_threads, backend="threading", return_as="generator_unordered"
+        )
+        unit_ids = self.unit_ids()
+        results = pool(delayed(self.kmeans_split_unit)(j) for j in unit_ids)
+        if show_progress:
+            results = tqdm(
+                results, total=len(unit_ids), desc="Split", unit="unit", **tqdm_kw
+            )
+        for _ in results:
+            pass
 
-    def distances(self, kind=None, noise_normalized=None, units=None):
+    def distances(
+        self, kind=None, noise_normalized=None, units=None, show_progress=True
+    ):
         # default to my settings but allow user to experiment
         if kind is None:
             kind = self.distance_metric
@@ -253,11 +332,87 @@ class SpikeMixtureModel(torch.nn.Module):
                 d /= denom * denom[j]
             dists[j] = d
 
-        pool = Parallel(self.n_threads, backend="threading", return_as="generator")
-        for res in pool(dist_job(j, u) for j, u in enumerate(units)):
+        pool = Parallel(
+            self.n_threads, backend="threading", return_as="generator_unordered"
+        )
+        results = pool(dist_job(j, u) for j, u in enumerate(units))
+        if show_progress:
+            results = tqdm(results, desc="Distances", total=nu, unit="unit", **tqdm_kw)
+        for _ in results:
             pass
 
         return dists
+
+    def bimodalities(
+        self,
+        log_liks,
+        compute_mask=None,
+        cut=None,
+        weighted=True,
+        min_overlap=0.95,
+        masked=True,
+        dt_s=2.0,
+        max_spikes=2048,
+        show_progress=True,
+    ):
+        nu = len(self.units)
+        in_units = [
+            torch.nonzero(self.labels == j, as_tuple=True)[0] for j in range(nu)
+        ]
+        scores = np.full((nu, nu), np.inf, dtype=np.float32)
+        np.fill_diagonal(scores, 0.0)
+
+        if not torch.is_tensor(log_liks):
+            log_liks = coo_to_torch(log_liks)
+
+        @delayed
+        def bimod_job(i, j):
+            if not compute_mask[i, j]:
+                return
+            ini = in_units[i]
+            inj = in_units[j]
+            if masked:
+                times_i = self.data.times_seconds[ini]
+                times_j = self.data.times_seconds[inj]
+                ini = ini[getdt(times_j, times_i) <= dt_s]
+                inj = inj[getdt(times_i, times_j) <= dt_s]
+            ini = shrinkfit(ini, max_spikes, self.rg)
+            inj = shrinkfit(inj, max_spikes, self.rg)
+
+            in_pair = torch.concatenate((ini, inj))
+            ijlabels = torch.zeros(in_pair.shape, dtype=bool)
+            ijlabels[ini.numel() :] = 1
+            in_pair, order = in_pair.sort()
+            ijlabels = ijlabels[order]
+
+            log_lik_diff = get_diff_sparse(log_liks, i, j, in_pair)
+            scores[i, j] = scores[j, i] = qda(
+                ijlabels.numpy(force=True),
+                diff=log_lik_diff,
+                cut=cut,
+                weighted=weighted,
+                min_overlap=min_overlap,
+                score_kind="tv",
+            )
+
+        if compute_mask is None:
+            compute_mask = np.ones((nu, nu), dtype=bool)
+        compute_mask = np.logical_or(compute_mask, compute_mask.T)
+        compute_mask[np.tril_indices(nu)] = False
+        ii, jj = np.nonzero(compute_mask)
+
+        pool = Parallel(
+            self.n_threads, backend="threading", return_as="generator_unordered"
+        )
+        results = pool(bimod_job(i, j) for i, j in zip(ii, jj))
+        if show_progress:
+            results = tqdm(
+                results, desc="Bimodality", total=ii.size, unit="pair", **tqdm_kw
+            )
+        for _ in results:
+            pass
+
+        return scores
 
     # -- helpers
 
@@ -404,17 +559,13 @@ class SpikeMixtureModel(torch.nn.Module):
         weights = responsibilities / responsibilities.sum(0)
 
         # avoid oversplitting by doing a mini merge here
-        split_labels, split_units = self.mini_merge(sp, split_labels, weights)
+        split_labels, split_ids = self.mini_merge(sp, split_labels, weights)
 
         # tack these new units onto the end
         with self.labels_lock:
-            next_label = len(self.units)
-            for u in split_units[1:]:
-                self.units.append(u)
+            next_label = self.labels.max() + 1
             split_labels = torch.asarray(split_labels, device=self.labels.device)
             split_labels[split_labels >= 1] += next_label - 1
-
-            self.units[unit_id] = split_units[0]
             self.labels[indices_full] = -1
             self.labels[sp.indices] = split_labels
 
@@ -458,13 +609,13 @@ class SpikeMixtureModel(torch.nn.Module):
             self.merge_bimodality_threshold,
             sym_function=self.merge_sym_function,
         )
-        new_labels = agglomerate(
+        new_labels, new_ids = agglomerate(
             labels,
             distances,
             linkage_method="complete",
-            threshold=1.0,
         )
-        return new_labels, units
+
+        return new_labels, new_ids
 
     # -- gizmos
 
@@ -856,8 +1007,8 @@ def coo_sparse_mask_rows(coo, keep_mask):
 def combine_distances(
     dists_a,
     thresh_a,
-    dists_b,
-    thresh_b,
+    dists_b=None,
+    thresh_b=None,
     agg_function=np.maximum,
     sym_function=np.minimum,
 ):
@@ -866,7 +1017,10 @@ def combine_distances(
     They have different reference thresholds, but the result of this function
     has threshold 1.
     """
-    dists = agg_function(dists_a / thresh_a, dists_b / thresh_b)
+    if thresh_b is None:
+        dists = dists_a / thresh_a
+    else:
+        dists = agg_function(dists_a / thresh_a, dists_b / thresh_b)
     return sym_function(dists, dists.T)
 
 
@@ -887,9 +1041,9 @@ def bimodalities_dense(
             in_pair = np.flatnonzero(np.isin(labels, ij))
             pair_log_liks = log_liks[ij][:, in_pair]
             bimodalities[j, i] = bimodalities[i, j] = qda(
+                labels[in_pair] == j,
                 pair_log_liks[0],
                 pair_log_liks[1],
-                labels[in_pair] == j,
                 cut=cut,
                 weighted=weighted,
                 min_overlap=min_overlap,
@@ -898,9 +1052,10 @@ def bimodalities_dense(
 
 
 def qda(
-    log_liks_a,
-    log_liks_b,
     in_b,
+    log_liks_a=None,
+    log_liks_b=None,
+    diff=None,
     cut=None,
     weighted=True,
     min_overlap=0.95,
@@ -928,3 +1083,42 @@ def qda(
         dipscore_only=True,
         score_kind=score_kind,
     )
+
+
+def getdt(times_i, times_j):
+    ni = times_i.numel()
+    iij = torch.searchsorted(times_i, times_j)
+    dji = torch.minimum(
+        times_j - times_i[iij.clip(0, ni - 1)],
+        times_i[(1 + iij).clip(0, ni - 1)] - times_j,
+    )
+    return dji
+
+
+def shrinkfit(x, max_size, rg):
+    n = x.numel()
+    if n <= max_size:
+        return x
+
+    choices = rg.choice(n, size=max_size, replace=False)
+    choices.sort()
+    choices = torch.from_numpy(choices)
+    return x[choices.to(x.device)]
+
+
+def get_diff_sparse(sparse_arr, i, j, cols):
+    xi = torch.index_select(sparse_arr[i], 0, cols).coalesce()
+    indsi = xi.indices().view(-1).numpy()
+    xi = xi.values().numpy()
+
+    xj = torch.index_select(sparse_arr[j], 0, cols).coalesce()
+    indsj = xj.indices().view(-1).numpy()
+    xj = xj.values().numpy()
+
+    ikeep = np.isin(indsi, indsj)
+    jkeep = np.isin(indsj, indsi)
+
+    diff = np.full(cols.shape, np.nan)
+    diff[indsi[ikeep]] = xj[jkeep] - xi[ikeep]
+
+    return diff
