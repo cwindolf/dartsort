@@ -204,10 +204,12 @@ class AmortizedLocalization(BaseWaveformFeaturizer):
         recon_x_masked = recon_x * mask
         x_masked = x * mask
         if self.scale_loss_by_mean:
-            # 1/mean amplitude
-            rescale = mask.sum(1, keepdim=True) / x_masked.sum(1, keepdim=True)
-            x_masked *= rescale
-            recon_x_masked *= rescale
+            # 1/(n_chans_retained*mean amplitude)
+            rescale = 1.0 / x_masked.sum(1, keepdim=True)
+        else:
+            rescale = 1.0 / mask.sum(1, keepdim=True)
+        x_masked *= rescale
+        recon_x_masked *= rescale
         mse = F.mse_loss(recon_x_masked, x_masked, reduction="sum") / self.batch_size
         kld = 0.0
         if self.variational:
@@ -308,7 +310,7 @@ class AmortizedLocalization(BaseWaveformFeaturizer):
                     pbar.set_description(f"Localizer converged at epoch={epoch} {desc}")
                     break
 
-    def fit(self, waveforms, max_channels):
+    def fit(self, waveforms, max_channels, recording=None):
         with torch.enable_grad():
             self._fit(waveforms, max_channels)
         self._needs_fit = False

@@ -28,7 +28,7 @@ class Decollider(BaseWaveformDenoiser):
         inference_kind="amortized",
         batch_size=32,
         learning_rate=1e-3,
-        epochs=50,
+        n_epochs=50,
         channelwise_dropout_p=0.2,
         inference_z_samples=10,
         n_data_workers=4,
@@ -54,7 +54,7 @@ class Decollider(BaseWaveformDenoiser):
         self.n_channels = len(geom)
         self.batch_size = batch_size
         self.learning_rate = learning_rate
-        self.epochs = epochs
+        self.n_epochs = n_epochs
         self.channelwise_dropout_p = channelwise_dropout_p
         self.n_data_workers = n_data_workers
         self.with_conv_fullheight = with_conv_fullheight
@@ -268,7 +268,7 @@ class Decollider(BaseWaveformDenoiser):
         )
         optimizer = torch.optim.Adam(self.parameters(), lr=self.learning_rate)
 
-        with trange(self.epochs, desc="Epochs", unit="epoch") as pbar:
+        with trange(self.n_epochs, desc="Epochs", unit="epoch") as pbar:
             for epoch in pbar:
                 epoch_losses = {}
                 for (waveform_batch, channels_batch), noise_batch in dataloader:
