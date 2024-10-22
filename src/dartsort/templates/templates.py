@@ -66,6 +66,22 @@ class TemplateData:
             npz_path.parent.mkdir()
         np.savez(npz_path, **to_save)
 
+    def __getitem__(self, subset):
+        # need to implement other cases
+        assert np.array_equal(self.unit_ids, np.arange(len(self.unit_ids)))
+        return self.__class__(
+            templates=self.templates[subset],
+            unit_ids=self.unit_ids[subset],
+            spike_counts=self.spike_counts[subset],
+            spike_counts_by_channel=self.spike_counts_by_channel[subset] if self.spike_counts_by_channel is not None else None,
+            raw_std_dev=self.raw_std_dev[subset] if self.raw_std_dev is not None else None,
+            registered_geom=self.registered_geom,
+            registered_template_depths_um=self.registered_template_depths_um[subset] if self.registered_template_depths_um is not None else None,
+            localization_radius_um=self.localization_radius_um,
+            trough_offset_samples=self.trough_offset_samples,
+            spike_length_samples=self.spike_length_samples,
+        )
+
     def coarsen(self, with_locs=True):
         """Weighted average all templates that share a unit id and re-localize."""
         # update templates

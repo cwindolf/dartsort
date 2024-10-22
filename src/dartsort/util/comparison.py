@@ -71,9 +71,8 @@ class DARTsortGroundTruthComparison:
         df = df.astype(float)  # not sure what the problem was...
         df['gt_ptp_amplitude'] = amplitudes
         df['gt_firing_rate'] = firing_rates
-        dist = self.template_distances[
-            np.arange(len(self.template_distances)), self.comparison.best_match_12.astype(int)
-        ]
+        print(f"{self.template_distances.shape=}")
+        dist = np.diagonal(self.template_distances)
         df['temp_dist'] = dist
         rec = []
         for uid in df.index:
@@ -115,7 +114,11 @@ class DARTsortGroundTruthComparison:
             return
 
         gt_td = self.gt_analysis.coarse_template_data
-        tested_td = self.tested_analysis.coarse_template_data
+        nugt = gt_td.templates.shape[0]
+        matches = self.comparison.best_match_12.astype(int).values
+        matched = np.flatnonzero(matches >= 0)
+        matches = matches[matched]
+        tested_td = self.tested_analysis.coarse_template_data[matches]
 
         dists, shifts, snrs_a, snrs_b = merge.cross_match_distance_matrix(
             gt_td,
@@ -124,7 +127,8 @@ class DARTsortGroundTruthComparison:
             n_jobs=self.n_jobs,
             device=self.device,
         )
-        self._template_distances = dists
+        self._template_distances = np.full((nugt, nugt), np.inf)
+        self._template_distances[np.arange(nugt)[:, None], matched[None, :]] = dists
 
     def _calculate_unsorted_detection(self):
         if self._unsorted_detection is not None:

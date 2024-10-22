@@ -31,6 +31,7 @@ class SingleChannelWaveformDenoiser(BaseWaveformDenoiser):
         name=None,
         name_prefix="",
         clsname="SingleChannelDenoiser",
+        n_epochs=None,
     ):
         super().__init__(
             channel_index=channel_index, name=name, name_prefix=name_prefix
