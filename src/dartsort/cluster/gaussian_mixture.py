@@ -515,7 +515,7 @@ class SpikeMixtureModel(torch.nn.Module):
             chans_valid = neighb_chans < self.data.n_channels
             features = features[..., chans_valid]
             neighb_chans = neighb_chans[chans_valid]
-            lls = unit.log_likelihoods(features, neighb_chans)
+            lls = unit.log_likelihoods(features, neighb_chans, neighborhood_id=neighb_id)
 
             if inds_already:
                 log_likelihoods[neighb_member_ixs] = lls
@@ -812,22 +812,24 @@ class GaussianUnit(torch.nn.Module):
         else:
             assert False
 
-    def log_likelihood(self, features, channels) -> torch.Tensor:
+    def log_likelihood(self, features, channels, neighborhood_id=None) -> torch.Tensor:
         """Log likelihood for spike features living on the same channels."""
         mean = self.noise.mean_full[:, channels]
         if self.mean_kind == "full":
             mean = mean + self.mean[:, channels]
         features = features - mean
 
-        cov = self.noise.marginal_covariance(channels)
-        # self.cov_kind nonzero to be implemented
+        if self.cov_kind == "zero":
+            cov = self.noise.marginal_covariance(channels, cache_key=neighborhood_id)
+        else:
+            assert False
 
         inv_quad, logdet = cov.inv_quad_logdet(
             features.view(len(features), -1),
             logdet=True,
             reduce_inv_quad=True,
         )
-        ll = -0.5 * (inv_quad + (logdet + log2pi).sum(1))
+        ll = -0.5 * (inv_quad + logdet + log2pi * mean.numel())
         return ll
 
     def divergence(
