@@ -917,7 +917,7 @@ class AmplitudesOverTimePlot(GMMPlot):
                 amps2.permute(0, 2, 1).reshape(n * c, r)
             )
             amps2 = amps2.reshape(n, -1, c).permute(0, 2, 1)
-            show['recon'] = np.nan_to_num(amps2.numpy(force=True)).ptp(axis=(1, 2))
+            show['recon'] = np.ptp(np.nan_to_num(amps2.numpy(force=True)), axis=(1, 2))
         if 'model' in self.kinds:
             recons = gmm[unit_id].get_means(utd["times"])
             recons = gmm[unit_id].to_waveform_channels(
@@ -928,7 +928,7 @@ class AmplitudesOverTimePlot(GMMPlot):
                 recons.permute(0, 2, 1).reshape(n * c, r)
             )
             recons = recons.reshape(n, -1, c).permute(0, 2, 1)
-            show['model'] = np.nan_to_num(recons.numpy(force=True)).ptp(axis=(1, 2))
+            show['model'] = np.ptp(np.nan_to_num(recons.numpy(force=True)), axis=(1, 2))
         if 'maxchan_energy' in self.kinds:
             wfs = torch.nan_to_num(utd['waveforms'])
             wfs = torch.linalg.norm(wfs, dim=1)

@@ -79,9 +79,10 @@ def get_smoothed_densities(
 
     # select bin edges
     extents = np.c_[np.floor(infeats.min(0)), np.ceil(infeats.max(0))]
-    if not (extents.ptp(1) > 0).all():
-        raise ValueError(f"Issue in KDE. {extents.ptp(1)=} {infeats.shape=} {sigmas=} {bin_sizes=}.")
-    nbins = np.ceil(extents.ptp(1) / bin_sizes).astype(int)
+    dextents = np.ptp(extents, 1)
+    if not (dextents > 0).all():
+        raise ValueError(f"Issue in KDE. {dextents=} {infeats.shape=} {sigmas=} {bin_sizes=}.")
+    nbins = np.ceil(dextents / bin_sizes).astype(int)
     nbins = nbins.clip(min_n_bins, max_n_bins)
     bin_edges = [
         np.linspace(e[0], e[1], num=nb + 1)
@@ -205,6 +206,165 @@ def decrumb(labels, min_size=5):
     units[big_enough] = np.arange(big_enough.sum())
     return units[labels]
 
+
+def density_peaks(
+    X,
+    kdtree=None,
+    sigma_local=5.0,
+    sigma_regional=None,
+    outlier_neighbor_count=10,
+    outlier_radius=25.0,
+    n_neighbors_search=10,
+    radius_search=5.0,
+    noise_density=0.0,
+    remove_clusters_smaller_than=10,
+    remove_borders=False,
+    border_search_radius=10.0,
+    border_search_neighbors=3,
+    workers=-1,
+    return_extra=False,
+):
+    """Density peaks clustering as described by Rodriguez and Laio, but...
+
+    This implementation has three tweaks from original DPC
+     - KDE density estimation, implemented by smoothing histograms
+     - "Sharpening": density can be a ratio of KDEs, like a sharpening kernel
+     - Noise: you can throw away points with too low of a density (ratio)
+    """
+    n = len(X)
+    inliers, kdtree = kdtree_inliers(
+        X,
+        kdtree=kdtree,
+        n_neighbors=outlier_neighbor_count,
+        distance_upper_bound=outlier_radius,
+        workers=workers,
+    )
+
+    sigmas = [sigma_local] + ([sigma_regional] * int(sigma_regional is not None))
+    density = get_smoothed_densities(X, inliers=inliers, sigmas=sigmas)
+    if sigma_regional is not None:
+        density = density[0] / density[1]
+    else:
+        density = density[0]
+
+    nhdn, distances, indices = nearest_higher_density_neighbor(
+        kdtree,
+        density,
+        n_neighbors_search=n_neighbors_search,
+        distance_upper_bound=radius_search,
+        workers=workers,
+    )
+    if noise_density:
+        nhdn[density <= noise_density] = n
+
+    nhdn = nhdn.astype(np.intc)
+    has_nhdn = np.flatnonzero(nhdn < n).astype(np.intc)
+    data = np.ones(has_nhdn.size)
+    graph = coo_array((data, (nhdn[has_nhdn], has_nhdn)), shape=(n, n))
+    ncc, labels = connected_components(graph)
+
+    if remove_borders:
+        labels = remove_border_points(
+            labels,
+            density,
+            kdtree,
+            search_radius=border_search_radius,
+            n_neighbors_search=border_search_neighbors,
+            workers=workers,
+        )
+
+    if remove_clusters_smaller_than:
+        labels = decrumb(labels, min_size=remove_clusters_smaller_than)
+
+    return dict(
+        density=density,
+        nhdn=nhdn,
+        labels=labels,
+    )
+
+
+# -- version used in UHD project
+
+
+def density_peaks_fancy(
+    xyza,
+    amps,
+    to_cluster,
+    sorting,
+    motion_est,
+    clustering_config,
+    ramp_num_spikes=[10, 60],
+    ramp_ptp=[2, 6],
+):
+    z = xyza[to_cluster, 2]
+    if motion_est is not None:
+        z = motion_est.correct_s(sorting.times_seconds[to_cluster], z)
+    z_not_reg = xyza[to_cluster, 2]
+    ampfeat = clustering_config.amp_scale * np.log(
+        clustering_config.amp_log_c + amps[to_cluster]
+    )
+    res = density.density_peaks_clustering(
+        np.c_[scales[0] * xyza[to_cluster, 0], scales[1] * z, ampfeat],
+        geom=geom,
+        y=xyza[to_cluster, 1],
+        z_not_reg=z_not_reg,
+        use_y_triaging=clustering_config.use_y_triaging,
+        sigma_local=clustering_config.sigma_local,
+        sigma_local_low=clustering_config.sigma_local_low,
+        sigma_regional=clustering_config.sigma_regional,
+        sigma_regional_low=clustering_config.sigma_regional_low,
+        n_neighbors_search=clustering_config.n_neighbors_search,
+        radius_search=clustering_config.radius_search,
+        remove_clusters_smaller_than=clustering_config.remove_clusters_smaller_than,
+        noise_density=clustering_config.noise_density,
+        triage_quantile_per_cluster=clustering_config.triage_quantile_per_cluster,
+        ramp_triage_per_cluster=clustering_config.ramp_triage_per_cluster,
+        revert=clustering_config.revert,
+        triage_quantile_before_clustering=clustering_config.triage_quantile_before_clustering,
+        amp_no_triaging_before_clustering=clustering_config.amp_no_triaging_before_clustering,
+        amp_no_triaging_after_clustering=clustering_config.amp_no_triaging_after_clustering,
+        distance_dependent_noise_density=clustering_config.distance_dependent_noise_density,
+        outlier_radius=clustering_config.outlier_radius,
+        outlier_neighbor_count=clustering_config.outlier_neighbor_count,
+        scales=scales,
+        log_c=clustering_config.log_c,
+        workers=clustering_config.workers,
+        return_extra=clustering_config.attach_density_feature,
+    )
+
+    if clustering_config.remove_small_far_clusters:
+        if clustering_config.attach_density_feature:
+            labels_sort = res["labels"]
+        else:
+            labels_sort = res
+        z = xyza[to_cluster, 2]
+        if motion_est is not None:
+            z = motion_est.correct_s(times_s[to_cluster], z)
+        all_med_ptp = []
+        all_med_z_spread = []
+        all_med_x_spread = []
+        num_spikes = []
+        for k in np.unique(labels_sort)[np.unique(labels_sort)>-1]:
+            all_med_ptp.append(np.median(amps[to_cluster[labels_sort == k]]))
+            all_med_x_spread.append(xyza[to_cluster[labels_sort == k], 0].std())
+            all_med_z_spread.append(z[labels_sort == k].std())
+            num_spikes.append((labels_sort == k).sum())
+
+        all_med_ptp = np.array(all_med_ptp)
+        all_med_x_spread = np.array(all_med_x_spread)
+        all_med_z_spread = np.array(all_med_z_spread)
+        num_spikes = np.array(num_spikes)
+
+        # ramp from ptp 2 to 6 with n spikes from 60 to 10 per minute!
+        idx_low = np.flatnonzero(np.logical_and(
+            np.isin(labels_sort, np.flatnonzero(num_spikes<=(chunk_time_range_s[1]-chunk_time_range_s[0])/60*(ramp_num_spikes[1] - (all_med_ptp - ramp_ptp[0])/(ramp_ptp[1]-ramp_ptp[0])*(ramp_num_spikes[1]-ramp_num_spikes[0])))),
+            np.isin(labels_sort, np.flatnonzero(all_med_ptp<=ramp_ptp[1]))
+        ))
+        if clustering_config.attach_density_feature:
+            res["labels"][idx_low] = -1
+        else:
+            res[idx_low] = -1
+    return res
 
 def density_peaks_clustering(
     X,

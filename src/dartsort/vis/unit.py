@@ -60,11 +60,11 @@ class UnitTextInfo(UnitPlot):
 
         temps = sorting_analysis.template_data.unit_templates(unit_id)
         if temps.size:
-            ptp = temps.ptp(1).max(1).mean()
+            ptp = np.ptp(temps, 1).max(1).mean()
             msg += f"mean superres maxptp: {ptp:0.1f}su\n"
             in_unit = sorting_analysis.template_data.unit_mask(unit_id)
             counts = sorting_analysis.template_data.spike_counts[in_unit]
-            snrs = temps.ptp(1).max(1) * np.sqrt(counts)
+            snrs = np.ptp(temps, 1).max(1) * np.sqrt(counts)
             msg += "template snrs:\n  " + ", ".join(f"{s:0.1f}" for s in snrs)
         else:
             msg += "no template (too few spikes)"
@@ -601,7 +601,7 @@ class NearbyCoarseTemplatesPlot(UnitPlot):
             axis.axis("off")
             return
         assert neighbor_ids[0] == unit_id
-        chan = neighbor_coarse_templates[0].ptp(0).argmax()
+        chan = np.ptp(neighbor_coarse_templates[0], 0).argmax()
         ci = sorting_analysis.show_channel_index(self.channel_show_radius_um)
         channels = ci[chan]
         neighbor_coarse_templates = np.pad(

@@ -102,7 +102,8 @@ class FeaturizationConfig:
     # -- further info about denoising
     # in the future we may add multi-channel or other nns
     nn_denoiser_class_name: str = "SingleChannelWaveformDenoiser"
-    nn_denoiser_pretrained_path: str = default_pretrained_path
+    nn_denoiser_pretrained_path: Optional[str] = default_pretrained_path
+
     # optionally restrict how many channels TPCA are fit on
     tpca_fit_radius: Optional[float] = None
     tpca_rank: int = 8
@@ -240,15 +241,31 @@ class SplitMergeConfig:
 @dataclass(frozen=True)
 class ClusteringConfig:
     # -- initial clustering
-    cluster_strategy: str = "hdbscan"
+    cluster_strategy: str = "dpc"
+
+    # initial clustering features
+    use_amplitude: bool = True
+    amp_log_c: float = 5.0
+    amp_scale: float = 50.0
+    n_main_channel_pcs: int = 0
+    pc_scale: float = 10.0
+    adaptive_feature_scales: bool = False
+
+    # density peaks parameters
+    sigma_local: float = 5.0
+    sigma_regional: Optional[float] = 25.0
+    workers: Optional[int] = -1
+    n_neighbors_search: int = 20
+    radius_search: float = 5.0
+    remove_clusters_smaller_than: int = 10
+    noise_density: float = 0.0
+    outlier_radius: float = 5.0
+    outlier_neighbor_count: int = 5
 
     # hdbscan parameters
     min_cluster_size: int = 25
     min_samples: int = 25
     cluster_selection_epsilon: int = 1
-    feature_scales: Tuple[float] = (1.0, 1.0, 50.0)
-    adaptive_feature_scales: bool = False
-    log_c: float = 5.0
     recursive: bool = False
     remove_duplicates: bool = False
 
@@ -260,16 +277,9 @@ class ClusteringConfig:
     grid_dx: float = 15.0
     grid_dz: float = 15.0
 
-    # density peaks parameters
-    sigma_local: float = 5.0
+    # uhd version of density peaks parameters
     sigma_local_low: Optional[float] = None
-    sigma_regional: Optional[float] = 25.0
     sigma_regional_low: Optional[float] = None
-    workers: Optional[int] = -1
-    n_neighbors_search: int = 20
-    radius_search: float = 5.0
-    remove_clusters_smaller_than: int = 10
-    noise_density: float = 0.0
     distance_dependent_noise_density: bool = False
     attach_density_feature: bool = False
     triage_quantile_per_cluster: float = 0.0
@@ -278,13 +288,11 @@ class ClusteringConfig:
     triage_quantile_before_clustering: float = 0.0
     amp_no_triaging_before_clustering: float = 6.0
     amp_no_triaging_after_clustering: float = 8.0
-    outlier_radius: float = 5.0
-    outlier_neighbor_count: int = 5
     use_y_triaging: bool = False
     remove_small_far_clusters: bool = False
 
     # -- ensembling
-    ensemble_strategy: Optional[str] = "forward_backward"
+    ensemble_strategy: Optional[str] = None
     chunk_size_s: float = 300.0
     split_merge_ensemble_config: SplitMergeConfig = SplitMergeConfig()
 

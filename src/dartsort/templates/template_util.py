@@ -204,7 +204,7 @@ def spatially_mask_templates(template_data, radius_um=0.0):
     ci = waveform_util.make_channel_index(template_data.registered_geom, radius_um)
     chans = np.arange(ci.shape[0])
     for j, t in enumerate(tt):
-        mask = ~np.isin(chans, ci[t.ptp(0).argmax()])
+        mask = ~np.isin(chans, ci[np.ptp(t, 0).argmax()])
         tt[j, :, mask] = 0.0
 
     return replace(template_data, templates=tt)
@@ -236,7 +236,7 @@ def svd_compress_templates(
         templates = template_data
         counts = None
 
-    vis_mask = templates.ptp(axis=1, keepdims=True) > min_channel_amplitude
+    vis_mask = np.ptp(templates, axis=1, keepdims=True) > min_channel_amplitude
     vis_templates = templates * vis_mask
     dtype = templates.dtype
 
@@ -345,7 +345,7 @@ def compressed_upsampled_templates(
     # sometimes users may pass temporal SVD components in instead of templates,
     # so we allow them to pass in the amplitudes of the actual templates
     if ptps is None:
-        ptps = templates.ptp(1).max(1)
+        ptps = np.ptp(templates, 1).max(1)
     assert ptps.shape == (n_templates,)
     if n_upsamples_map is None:
         n_upsamples = np.full(n_templates, max_upsample)
