@@ -48,7 +48,7 @@ def get_pitch(geom, direction=1):
 
 def fill_geom_holes(geom):
     pitch = get_pitch(geom)
-    pitches_pad = int(np.ceil(geom[:, 1].ptp() / pitch))
+    pitches_pad = int(np.ceil(np.ptp(geom[:, 1]) / pitch))
 
     # we have to be careful about floating point error here
     # two sites may be different due to floating point error
@@ -100,7 +100,7 @@ def regularize_geom(geom, radius=0):
     rgeom = geom.copy()
     for j in range(geom.shape[1]):
         # skip empty dims
-        if geom[:, j].ptp() < eps:
+        if np.ptp(geom[:, j]) < eps:
             continue
         rgeom = _regularize_1d(rgeom, radius=max(eps, radius[j]), eps=eps, dim=j)
 
@@ -112,7 +112,7 @@ def regularize_geom(geom, radius=0):
 
 
 def _regularize_1d(geom, radius, eps, dim=1):
-    total = geom[:, dim].ptp()
+    total = np.ptp(geom[:, dim])
     dim_pitch = get_pitch(geom, direction=dim)
     steps = int(np.ceil(total / dim_pitch))
 

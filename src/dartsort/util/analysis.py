@@ -423,7 +423,7 @@ class DARTsortAnalysis:
         amplitudes = np.zeros(unit_ids.shape)
         for j, unit_id in enumerate(unit_ids):
             temps = self.template_data.unit_templates(unit_id)
-            amplitudes[j] = np.nan_to_num(temps).ptp()
+            amplitudes[j] = np.ptp(np.nan_to_num(temps))
         return amplitudes
 
     def firing_rates(self, unit_ids=None):
@@ -631,7 +631,7 @@ class DARTsortAnalysis:
     def unit_max_channel(self, unit_id):
         temp = self.coarse_template_data.unit_templates(unit_id)
         assert temp.ndim == 3 and temp.shape[0] == np.atleast_1d(unit_id).size
-        max_chan = temp.mean(0).ptp(0).argmax()
+        max_chan = np.ptp(temp.mean(0), 0).argmax()
         return max_chan
 
     def get_registered_channels(self, in_unit, n_samples=1000, random_state=0):

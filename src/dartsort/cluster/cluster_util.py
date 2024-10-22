@@ -1,9 +1,10 @@
 import dataclasses
 
 import hdbscan
+import h5py
 import numpy as np
 import spikeinterface
-from dartsort.util import drift_util, spikeio
+from dartsort.util import drift_util, spikeio, data_util, waveform_util
 from dredge.motion_util import IdentityMotionEstimate
 from scipy.cluster.hierarchy import fcluster, linkage
 from scipy.spatial import KDTree
@@ -314,7 +315,7 @@ def remove_self_duplicates(
 
             # reshape to NxT
             template = np.median(wfs_unit, axis=0)
-            mc = template.ptp(0).argmax()
+            mc = np.ptp(template, 0).argmax()
             template_mc = template[:, mc]
             template_argmin = np.abs(template_mc).argmax()
 
@@ -471,3 +472,19 @@ def meet(labels_a, labels_b):
     labels_ab = np.stack((labels_a, labels_b), axis=1)
     ab_unique, meet_labels = np.unique(labels_ab, axis=0, return_inverse=True)
     return meet_labels
+
+
+def get_main_channel_pcs(sorting, which=slice(None), rank=1, show_progress=False, dataset_name="collisioncleaned_tpca_features"):
+    mask = np.zeros(len(sorting), dtype=bool)
+    mask[which] = True
+    channels = sorting.channels[which]
+
+    features = np.empty((mask.sum(), rank), dtype=np.float32)
+    with h5py.File(sorting.parent_h5_path, "r", locking=False) as h5:
+        feats_dset = h5[dataset_name]
+        channel_index = h5["channel_index"][:]
+        for ixs, feats in data_util.yield_masked_chunks(mask, feats_dset, show_progress=show_progress, desc_prefix="Main channel"):
+            feats = feats[:, :rank]
+            feats = waveform_util.grab_main_channels(feats, channels[ixs], channel_index)
+            features[ixs] = feats
+    return features

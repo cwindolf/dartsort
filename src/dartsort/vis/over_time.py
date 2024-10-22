@@ -324,7 +324,7 @@ def get_template_features(
         features["z"] = xyza["z_abs"]
 
     if "amplitude" in feature_names:
-        features["amplitude"] = template_data.templates.ptp(1).max(1)
+        features["amplitude"] = np.ptp(template_data.templates, 1).max(1)
 
     if "log_peak_to_trough" in feature_names:
         features["log_peak_to_trough"] = spike_features.peak_to_trough(
@@ -358,7 +358,7 @@ def update_frame(
         analysis_plots.scatter_max_channel_waveforms(
             axes[0], chunk_template_data, lw=1
         )
-        xmin, dx = geom[:, 0].min(), geom[:, 0].ptp()
+        xmin, dx = geom[:, 0].min(), np.ptp(geom[:, 0])
         axes[0].set_xlim([xmin - dx / 2, xmin + 3 * dx / 2])
         axes = axes[1:]
 

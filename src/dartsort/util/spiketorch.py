@@ -1,5 +1,6 @@
 import math
 
+import numpy as np
 import torch
 import torch.nn.functional as F
 from scipy.fftpack import next_fast_len
@@ -18,7 +19,7 @@ def fast_nanmedian(x, axis=-1):
 def ptp(waveforms, dim=1):
     is_tensor = torch.is_tensor(waveforms)
     if not is_tensor:
-        return waveforms.ptp(axis=dim)
+        return np.ptp(waveforms, axis=dim)
     return waveforms.max(dim=dim).values - waveforms.min(dim=dim).values
 
 

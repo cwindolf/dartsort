@@ -106,8 +106,8 @@ def split_clusters(
                 new_units = np.unique(new_untriaged_labels)
                 for i in new_units:
                     idx = np.flatnonzero(new_untriaged_labels == i)
-                    tall = split_result.x[idx].ptp() > split_big_kw["dx"]
-                    wide = split_result.z_reg[idx].ptp() > split_big_kw["dx"]
+                    tall = np.ptp(split_result.x[idx]) > split_big_kw["dx"]
+                    wide = np.ptp(split_result.z_reg[idx]) > split_big_kw["dx"]
                     if (tall or wide) and len(idx) > split_big_kw["min_size_split"]:
                         jobs.append(
                             pool.submit(_split_job, np.flatnonzero(labels == i))

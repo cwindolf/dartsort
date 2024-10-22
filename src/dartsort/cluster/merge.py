@@ -260,15 +260,6 @@ def calculate_merge_distances(
     sup_dists = np.full((n_templates, n_templates), np.inf)
     sup_shifts = np.zeros((n_templates, n_templates), dtype=int)
 
-    print("q")
-    # apply min channel amplitude to templates directly so that it reflects
-    # in the template norms used in the distance computation
-    # if min_channel_amplitude:
-    #     temps = template_data.templates.copy()
-    #     mask = temps.ptp(axis=1, keepdims=True) > min_channel_amplitude
-    #     temps *= mask.astype(temps.dtype)
-    #     template_data = replace(template_data, templates=temps)
-
     # build distance matrix
     dec_res_iter = get_deconv_resid_decrease_iter(
         template_data,
@@ -311,12 +302,12 @@ def calculate_merge_distances(
                 dists[ia, ib] = superres_linkage(sup_dists[in_pair])
                 shifts[ia, ib] = np.median(sup_shifts[in_pair])
         coarse_td = template_data.coarsen(with_locs=False)
-        template_snrs = coarse_td.templates.ptp(1).max(1) / coarse_td.spike_counts
+        template_snrs = np.ptp(coarse_td.templates, 1).max(1) / coarse_td.spike_counts
     else:
         dists = sup_dists
         shifts = sup_shifts
         template_snrs = (
-            template_data.templates.ptp(1).max(1) / template_data.spike_counts
+            np.ptp(template_data.templates, 1).max(1) / template_data.spike_counts
         )
 
     dists = sym_function(dists, dists.T)
@@ -556,7 +547,7 @@ def get_deconv_resid_decrease_iter(
     )
     compressed_upsampled_temporal = template_util.compressed_upsampled_templates(
         low_rank_templates_b.temporal_components,
-        ptps=template_data.templates.ptp(1).max(1),
+        ptps=np.ptp(template_data.templates, 1).max(1),
         max_upsample=temporal_upsampling_factor,
     )
 

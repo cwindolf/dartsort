@@ -41,7 +41,7 @@ def realign_and_chuck_noisy_template_units(
             return_realigned_sorting=True,
         )
 
-    template_ptps = template_data.templates.ptp(1).max(1)
+    template_ptps = np.ptp(template_data.templates, 1).max(1)
     template_snrs = template_ptps * np.sqrt(template_data.spike_counts)
     good_templates = np.logical_and(
         template_data.spike_counts >= min_n_spikes,
