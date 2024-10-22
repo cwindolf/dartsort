@@ -1,6 +1,6 @@
 import torch
-from torch import nn
 import torch.nn.functional as F
+from torch import nn
 
 
 def get_mlp(input_dim, hidden_dims, output_dim, use_batchnorm=True):
@@ -39,27 +39,43 @@ def get_waveform_mlp(
     if initial_conv_fullheight:
         # what Conv1d considers channels is actually time (conv1d is ncl).
         # so this is matmul over time, and kernel size is 1 to be separate over chans
-        layers.append(WaveformOnly(nn.Conv1d(spike_length_samples, spike_length_samples, kernel_size=1)))
+        layers.append(
+            WaveformOnly(
+                nn.Conv1d(spike_length_samples, spike_length_samples, kernel_size=1)
+            )
+        )
         if use_batchnorm:
-            layers.append(WaveformOnly(nn.Sequential(
-                Permute(0, 2, 1), nn.BatchNorm1d(n_input_channels), Permute(0, 2, 1)
-            )))
+            layers.append(
+                WaveformOnly(
+                    nn.Sequential(
+                        Permute(0, 2, 1),
+                        nn.BatchNorm1d(n_input_channels),
+                        Permute(0, 2, 1),
+                    )
+                )
+            )
         layers.append(WaveformOnly(nn.ReLU()))
     if separated_mask_input:
         layers.append(Cat(dim=1))
     if channelwise_dropout_p:
         layers.append(ChannelwiseDropout(channelwise_dropout_p))
     layers.append(nn.Flatten())
-    layers.append(get_mlp(input_dim, hidden_dims, output_dim, use_batchnorm=use_batchnorm))
+    layers.append(
+        get_mlp(input_dim, hidden_dims, output_dim, use_batchnorm=use_batchnorm)
+    )
     if return_initial_shape:
         layers.append(nn.Unflatten(-1, (spike_length_samples, n_input_channels)))
     if final_conv_fullheight:
         if use_batchnorm:
-            layers.append(nn.Sequential(
-                Permute(0, 2, 1), nn.BatchNorm1d(n_input_channels), Permute(0, 2, 1)
-            ))
+            layers.append(
+                nn.Sequential(
+                    Permute(0, 2, 1), nn.BatchNorm1d(n_input_channels), Permute(0, 2, 1)
+                )
+            )
         layers.append(nn.ReLU())
-        layers.append(nn.Conv1d(spike_length_samples, spike_length_samples, kernel_size=1))
+        layers.append(
+            nn.Conv1d(spike_length_samples, spike_length_samples, kernel_size=1)
+        )
 
     net = nn.Sequential(*layers)
     if residual:
@@ -133,6 +149,19 @@ class WaveformOnly(nn.Module):
 
 
 # is this what they want us to do??
-torch.serialization.add_safe_globals(
-    [ResidualForm, WaveformOnlyResidualForm, ChannelwiseDropout, Cat, Permute, WaveformOnly, nn.Flatten, nn.Linear, nn.Conv1d, nn.ReLU, nn.BatchNorm1d]
-)
+if hasattr(torch.serialization, "add_safe_globals"):
+    torch.serialization.add_safe_globals(
+        [
+            ResidualForm,
+            WaveformOnlyResidualForm,
+            ChannelwiseDropout,
+            Cat,
+            Permute,
+            WaveformOnly,
+            nn.Flatten,
+            nn.Linear,
+            nn.Conv1d,
+            nn.ReLU,
+            nn.BatchNorm1d,
+        ]
+    )
