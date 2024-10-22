@@ -291,21 +291,23 @@ class SubtractionPeeler(BasePeeler):
         ifeats = [init_voltage_feature, init_waveform_feature]
         if which == "denoisers":
             # add all the already fitted denoisers until we hit the next unfitted one
-            ffeats = []
+            already_fitted = []
+            fit_feats = []
             for t in orig_denoise:
                 if t.is_denoiser:
                     if t.needs_fit():
+                        fit_feats = [t]
                         break
-                    ffeats.append(t)
+                    already_fitted.append(t)
 
             # this is the sequence of transforms to actually use in fitting
-            fit_feats = ffeats + [t]
+            fit_feats = already_fitted + fit_feats
 
             # if we have no denoisers yet, then definitely don't do subtraction!
-            self._turn_off_subtraction = not ffeats
+            self._turn_off_subtraction = not already_fitted
         else:
-            ffeats = [t for t in orig_denoise if t.is_denoiser]
-        self.subtraction_denoising_pipeline = WaveformPipeline(ifeats + ffeats)
+            already_fitted = [t for t in orig_denoise if t.is_denoiser]
+        self.subtraction_denoising_pipeline = WaveformPipeline(ifeats + already_fitted)
 
         # and we don't need any features for this
         orig_featurization_pipeline = self.featurization_pipeline
