@@ -76,7 +76,7 @@ class ChunkFeature:
                 f"which_waveforms={self.which_waveforms} not in ('subtracted', 'cleaned', denoised)"
             )
         if not self.tensor_ok and torch.is_tensor(wfs):
-            wfs = wfs.cpu().numpy()
+            wfs = wfs.cpu().detach().numpy()
         return wfs
 
 
