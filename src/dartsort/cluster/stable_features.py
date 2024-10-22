@@ -42,7 +42,6 @@ class StableSpikeDataset(torch.nn.Module):
         self.interpolation_method = interpolation_method
         self.interpolation_sigma = interpolation_sigma
 
-        # for to_sorting()
         self.kept_indices = kept_indices
         self.original_sorting = original_sorting
 
