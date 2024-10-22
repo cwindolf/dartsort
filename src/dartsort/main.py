@@ -1,31 +1,22 @@
 from dataclasses import asdict
 from pathlib import Path
-import numpy as np
 
+import numpy as np
 from dartsort.cluster.initial import ensemble_chunks
 from dartsort.cluster.merge import merge_templates
 from dartsort.cluster.split import split_clusters
-from dartsort.config import (
-    DARTsortConfig,
-    default_clustering_config,
-    default_dartsort_config,
-    default_featurization_config,
-    default_matching_config,
-    default_split_merge_config,
-    default_subtraction_config,
-    default_template_config,
-    default_waveform_config,
-)
-from dartsort.peel import (
-    ObjectiveUpdateTemplateMatchingPeeler,
-    SubtractionPeeler,
-)
+from dartsort.config import (DARTsortConfig, default_clustering_config,
+                             default_dartsort_config,
+                             default_featurization_config,
+                             default_matching_config,
+                             default_split_merge_config,
+                             default_subtraction_config,
+                             default_template_config, default_waveform_config)
+from dartsort.peel import (ObjectiveUpdateTemplateMatchingPeeler,
+                           SubtractionPeeler)
 from dartsort.templates import TemplateData
-from dartsort.util.data_util import (
-    DARTsortSorting,
-    check_recording,
-    keep_only_most_recent_spikes,
-)
+from dartsort.util.data_util import (DARTsortSorting, check_recording,
+                                     keep_only_most_recent_spikes)
 from dartsort.util.peel_util import run_peeler
 from dartsort.util.registration_util import estimate_motion
 
@@ -269,7 +260,6 @@ def match(
     featurization_config=default_featurization_config,
     matching_config=default_matching_config,
     chunk_starts_samples=None,
-    subsampling_proportion=1.0,
     n_jobs_templates=0,
     n_jobs_match=0,
     overwrite=False,
@@ -323,7 +313,6 @@ def match(
             model_subdir,
             featurization_config,
             chunk_starts_samples=chunk_starts_samples,
-            subsampling_proportion=subsampling_proportion,
             overwrite=overwrite,
             n_jobs=n_jobs_match,
             residual_filename=residual_filename,

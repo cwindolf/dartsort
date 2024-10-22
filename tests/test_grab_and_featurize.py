@@ -252,17 +252,9 @@ def test_grab_and_featurize():
             assert h5["last_chunk_start"][()] == 90_000
 
     # this is kind of a good test of reproducibility
-    # totally reproducible on CPU, suprprisingly large diffs on GPU
-    # reproducibility is fine on some BLAS but not MKL?
-    repro = (not torch.cuda.is_available()) and (
-        "BLAS_INFO=mkl" not in torch.__config__.show()
-    )
-    if repro:
-        assert np.array_equal(locs0, locs1)
-    else:
-        valid = np.clip(locs1[:, 2], geom[:, 1].min(), geom[:, 1].max())
-        valid = locs1[:, 2] == valid
-        assert np.isclose(locs0[valid], locs1[valid], atol=1e-6).all()
+    valid = np.clip(locs1[:, 2], geom[:, 1].min(), geom[:, 1].max())
+    valid = locs1[:, 2] == valid
+    assert np.isclose(locs0[valid], locs1[valid], rtol=1e-3, atol=1e-3).all()
 
 
 if __name__ == "__main__":

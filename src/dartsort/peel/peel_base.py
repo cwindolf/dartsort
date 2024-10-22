@@ -285,7 +285,7 @@ class BasePeeler(torch.nn.Module):
         # runs before fit_peeler_models()
         pass
 
-    def fit_peeler_models(self, save_folder, n_jobs=0, device=None):
+    def fit_peeler_models(self, save_folder, tmp_dir=None, n_jobs=0, device=None):
         # subclasses should override if they need to fit models for peeling
         assert not self.peeling_needs_fit()
 
@@ -538,6 +538,7 @@ class BasePeeler(torch.nn.Module):
         subsampled=False,
         n_chunks=None,
         ordered=False,
+        skip_last=False,
     ):
         if chunk_starts_samples is not None:
             return chunk_starts_samples
@@ -550,6 +551,10 @@ class BasePeeler(torch.nn.Module):
         if t_start is None:
             t_start = 0
         chunk_starts_samples = range(t_start, t_end, chunk_length_samples)
+        if skip_last:
+            chunk_starts_samples = list(chunk_starts_samples)
+            if t_end - chunk_starts_samples[-1] < chunk_length_samples:
+                chunk_starts_samples = chunk_starts_samples[:-1]
 
         if not subsampled:
             return chunk_starts_samples
@@ -584,6 +589,7 @@ class BasePeeler(torch.nn.Module):
         task_name=None,
         overwrite=True,
         ordered=False,
+        skip_last=False,
     ):
         # run peeling on these chunks to the temp folder
         chunk_starts = self.get_chunk_starts(
@@ -593,6 +599,7 @@ class BasePeeler(torch.nn.Module):
             t_end=t_end,
             n_chunks=n_chunks,
             ordered=ordered,
+            skip_last=skip_last,
         )
         self.peel(
             hdf5_filename,

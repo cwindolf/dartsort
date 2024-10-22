@@ -28,7 +28,7 @@ def read_full_waveforms(
     read_times = times_samples - trough_offset_samples
 
     if not return_scaled and recording.binary_compatible_with(
-        file_offset=0, time_axis=0, file_paths_lenght=1
+        file_offset=0, time_axis=0, file_paths_length=1
     ):
         # fast path. this is like 2x as fast as the read_traces for loop
         # below, but requires a recording on disk in a nice format

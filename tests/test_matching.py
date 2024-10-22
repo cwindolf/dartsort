@@ -70,6 +70,7 @@ def test_tiny(tmp_path):
                 n_jobs=0,
                 save_folder=tmp_path,
                 overwrite=True,
+                with_locs=True,
             )
 
             matcher = main.ObjectiveUpdateTemplateMatchingPeeler.from_config(
@@ -202,6 +203,7 @@ def test_tiny_up(tmp_path, up_factor=8):
                 n_jobs=0,
                 save_folder=tmp_path,
                 overwrite=True,
+                with_locs=True,
             )
             print(f"{template_data.templates.ptp(1).max(1)=}")
 
@@ -366,6 +368,7 @@ def static_tester(tmp_path, up_factor=1):
                 n_jobs=0,
                 save_folder=tmp_path,
                 overwrite=True,
+                with_locs=True,
             )
 
             matcher = main.ObjectiveUpdateTemplateMatchingPeeler.from_config(

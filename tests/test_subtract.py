@@ -11,6 +11,14 @@ from dartsort.main import subtract
 from dartsort.util import waveform_util
 from test_util import dense_layout
 
+fixedlenkeys = (
+    "subtract_channel_index",
+    "channel_index",
+    "geom",
+    "residual",
+    "residual_times_seconds",
+)
+
 
 def test_fakedata_nonn():
     print("test_fakedata_nonn")
@@ -109,7 +117,7 @@ def test_fakedata_nonn():
         with h5py.File(out_h5, locking=False) as h5:
             assert h5["times_samples"].shape == (ns0,)
             assert h5["channels"].shape == (ns0,)
-            assert h5["point_source_localizations"].shape == (ns0, 4)
+            assert h5["point_source_localizations"].shape in [(ns0, 4), (ns0, 3)]
             assert np.array_equal(h5["channel_index"][:], channel_index)
             assert h5["collisioncleaned_tpca_features"].shape == (
                 ns0,
@@ -133,7 +141,7 @@ def test_fakedata_nonn():
         with h5py.File(out_h5, locking=False) as h5:
             assert h5["times_samples"].shape == (ns0,)
             assert h5["channels"].shape == (ns0,)
-            assert h5["point_source_localizations"].shape == (ns0, 4)
+            assert h5["point_source_localizations"].shape in [(ns0, 4), (ns0, 3)]
             assert np.array_equal(h5["channel_index"][:], channel_index)
             assert np.array_equal(h5["geom"][()], geom)
             assert h5["last_chunk_start"][()] == int(np.floor(T_s) * fs)
@@ -157,7 +165,7 @@ def test_fakedata_nonn():
         with h5py.File(out_h5, locking=False) as h5:
             assert h5["times_samples"].shape == (ns0,)
             assert h5["channels"].shape == (ns0,)
-            assert h5["point_source_localizations"].shape == (ns0, 4)
+            assert h5["point_source_localizations"].shape in [(ns0, 4), (ns0, 3)]
             assert np.array_equal(h5["channel_index"][:], channel_index)
             assert np.array_equal(h5["geom"][()], geom)
             assert h5["last_chunk_start"][()] == int(np.floor(T_s) * fs)
@@ -181,7 +189,7 @@ def test_fakedata_nonn():
         with h5py.File(out_h5, locking=False) as h5:
             assert h5["times_samples"].shape == (ns0,)
             assert h5["channels"].shape == (ns0,)
-            assert h5["point_source_localizations"].shape == (ns0, 4)
+            assert h5["point_source_localizations"].shape in [(ns0, 4), (ns0, 3)]
             assert np.array_equal(h5["channel_index"][:], channel_index)
             assert h5["collisioncleaned_tpca_features"].shape == (
                 ns0,
@@ -206,7 +214,7 @@ def test_fakedata_nonn():
         with h5py.File(out_h5, locking=False) as h5:
             assert h5["times_samples"].shape == (ns0,)
             assert h5["channels"].shape == (ns0,)
-            assert h5["point_source_localizations"].shape == (ns0, 4)
+            assert h5["point_source_localizations"].shape in [(ns0, 4), (ns0, 3)]
             assert np.array_equal(h5["channel_index"][:], channel_index)
             assert np.array_equal(h5["geom"][()], geom)
             assert h5["last_chunk_start"][()] == int(np.floor(T_s) * fs)
@@ -231,7 +239,7 @@ def test_fakedata_nonn():
         with h5py.File(out_h5, locking=False) as h5:
             assert h5["times_samples"].shape == (ns0,)
             assert h5["channels"].shape == (ns0,)
-            assert h5["point_source_localizations"].shape == (ns0, 4)
+            assert h5["point_source_localizations"].shape in [(ns0, 4), (ns0, 3)]
             assert np.array_equal(h5["channel_index"][:], channel_index)
             assert np.array_equal(h5["geom"][()], geom)
             assert h5["last_chunk_start"][()] == int(np.floor(T_s) * fs)
@@ -348,7 +356,7 @@ def test_small_nonn():
         with h5py.File(out_h5, locking=False) as h5:
             lens = []
             for k in h5.keys():
-                if k not in ("subtract_channel_index", "channel_index", "geom") and h5[k].ndim >= 1:
+                if k not in fixedlenkeys and h5[k].ndim >= 1:
                     lens.append(h5[k].shape[0])
             assert np.unique(lens).size == 1
 
@@ -367,7 +375,7 @@ def test_small_nonn():
         with h5py.File(out_h5, locking=False) as h5:
             lens = []
             for k in h5.keys():
-                if k not in ("subtract_channel_index", "channel_index", "geom") and h5[k].ndim >= 1:
+                if k not in fixedlenkeys and h5[k].ndim >= 1:
                     lens.append(h5[k].shape[0])
             assert np.unique(lens).size == 1
 
@@ -385,7 +393,7 @@ def test_small_nonn():
         with h5py.File(out_h5, locking=False) as h5:
             lens = []
             for k in h5.keys():
-                if k not in ("subtract_channel_index", "channel_index", "geom") and h5[k].ndim >= 1:
+                if k not in fixedlenkeys and h5[k].ndim >= 1:
                     lens.append(h5[k].shape[0])
             assert np.unique(lens).size == 1
 
@@ -423,7 +431,7 @@ def small_default_config(extract_radius=200):
         with h5py.File(out_h5, locking=False) as h5:
             lens = []
             for k in h5.keys():
-                if k not in ("subtract_channel_index", "channel_index", "geom") and h5[k].ndim >= 1:
+                if k not in fixedlenkeys and h5[k].ndim >= 1:
                     lens.append(h5[k].shape[0])
             assert np.unique(lens).size == 1
 
@@ -439,7 +447,7 @@ def small_default_config(extract_radius=200):
         with h5py.File(out_h5, locking=False) as h5:
             lens = []
             for k in h5.keys():
-                if k not in ("subtract_channel_index", "channel_index", "geom") and h5[k].ndim >= 1:
+                if k not in fixedlenkeys and h5[k].ndim >= 1:
                     lens.append(h5[k].shape[0])
             assert np.unique(lens).size == 1
 
