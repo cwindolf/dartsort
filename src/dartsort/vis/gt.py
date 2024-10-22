@@ -432,8 +432,10 @@ class MetricRegPlot(ComparisonPlot):
 
         with warnings.catch_warnings():
             warnings.simplefilter("ignore", category=RuntimeWarning)
+            df_show = df[np.isfinite(df[self.y].values)]
+            df_show = df_show[np.isfinite(df[self.x].values)]
             sns.regplot(
-                data=df,
+                data=df_show,
                 x=self.x,
                 y=self.y,
                 logistic=True,
@@ -521,8 +523,7 @@ class TrimmedTemplateDistanceMatrix(ComparisonPlot):
     def draw(self, panel, comparison):
         agreement = comparison.comparison.get_ordered_agreement_scores()
         row_order = agreement.index
-        col_order = np.array(agreement.columns)[:agreement.shape[0]]
-        dist = comparison.template_distances[row_order, :][:, col_order]
+        dist = comparison.template_distances[row_order, :]
 
         ax = panel.subplots()
         log1p_norm = FuncNorm((np.log1p, np.expm1), vmin=0)

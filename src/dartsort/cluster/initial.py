@@ -56,6 +56,7 @@ def cluster_chunk(
     if sorting is None:
         sorting = DARTsortSorting.from_peeling_hdf5(peeling_hdf5_filename)
     xyza = getattr(sorting, localizations_dataset_name)
+    z_reg = motion_est.correct_s(sorting.times_seconds, xyza[:, 2])
     amps = getattr(sorting, amplitudes_dataset_name)
 
     if recording is None:
@@ -68,20 +69,24 @@ def cluster_chunk(
     to_cluster = np.setdiff1d(to_cluster, np.flatnonzero(sorting.labels < -1))
     labels = np.full_like(sorting.labels, -1)
     extra_features = sorting.extra_features
+    z_reg = z_reg[to_cluster]
+    xyza = xyza[to_cluster]
+    amps = amps[to_cluster]
+    t_s = sorting.times_seconds[to_cluster]
 
     if clustering_config.cluster_strategy == "closest_registered_channels":
         labels[to_cluster] = cluster_util.closest_registered_channels(
-            sorting.times_seconds[to_cluster],
-            xyza[to_cluster, 0],
-            xyza[to_cluster, 2],
+            t_s,
+            xyza[:, 0],
+            xyza[:, 2],
             geom,
             motion_est,
         )
     elif clustering_config.cluster_strategy == "grid_snap":
         labels[to_cluster] = cluster_util.grid_snap(
-            sorting.times_seconds[to_cluster],
-            xyza[to_cluster, 0],
-            xyza[to_cluster, 2],
+            t_s,
+            xyza[:, 0],
+            xyza[:, 2],
             geom,
             grid_dx=clustering_config.grid_dx,
             grid_dz=clustering_config.grid_dz,
@@ -90,11 +95,11 @@ def cluster_chunk(
     elif clustering_config.cluster_strategy == "hdbscan":
         labels[to_cluster] = cluster_util.hdbscan_clustering(
             recording,
-            sorting.times_seconds[to_cluster],
+            t_s,
             sorting.times_samples[to_cluster],
-            xyza[to_cluster, 0],
-            xyza[to_cluster, 2],
-            amps[to_cluster],
+            xyza[:, 0],
+            xyza[:, 2],
+            amps,
             geom,
             motion_est,
             min_cluster_size=clustering_config.min_cluster_size,
@@ -109,9 +114,9 @@ def cluster_chunk(
             zstd_big_units=clustering_config.zstd_big_units,
         )
     elif clustering_config.cluster_strategy == "dpc":
-        features = (xyza[:, [0, 2]][to_cluster],)
+        features = (xyza[:, 0], z_reg)
         if clustering_config.use_amplitude:
-            ampfeat = np.log(clustering_config.amp_log_c + amps[to_cluster])
+            ampfeat = np.log(clustering_config.amp_log_c + amps)
             ampfeat *= clustering_config.amp_scale
             features = (*features, ampfeat)
         if clustering_config.n_main_channel_pcs:

@@ -35,6 +35,9 @@ class BaseWaveformModule(torch.nn.Module):
     def precompute(self):
         pass
 
+    def extra_repr(self):
+        return f"name={self.name},needs_fit={self.needs_fit()}"
+
 
 class BaseWaveformDenoiser(BaseWaveformModule):
     is_denoiser = True
