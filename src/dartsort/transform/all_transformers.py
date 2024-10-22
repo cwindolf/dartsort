@@ -27,7 +27,6 @@ all_transformers = [
     TemporalPCA,
     Voltage,
     Decollider,
-    Passthrough,
 ]
 
 transformers_by_class_name = {cls.__name__: cls for cls in all_transformers}

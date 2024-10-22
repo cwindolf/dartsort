@@ -40,6 +40,9 @@ def ravel_multi_index(multi_index, dims):
         Indices into the flattened tensor of shape `dims`
     """
     if len(dims) == 1:
+        if isinstance(multi_index, tuple):
+            assert len(multi_index) == 1
+            multi_index = multi_index[0]
         assert multi_index.ndim == 1
         return multi_index
 

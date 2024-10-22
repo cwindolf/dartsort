@@ -93,6 +93,7 @@ def run_peeler(
             task_name="Residual snips",
             overwrite=False,
             ordered=True,
+            skip_last=True,
         )
 
     return (

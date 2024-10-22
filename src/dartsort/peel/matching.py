@@ -657,7 +657,7 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
             collisioncleaned_waveforms=waveforms,
         )
         if return_residual:
-            res["residual"] = residual
+            res["residual"] = residual[left_margin : traces.shape[0] - right_margin]
         if return_conv:
             res["conv"] = padded_conv
         return res

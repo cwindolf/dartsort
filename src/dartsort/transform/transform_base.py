@@ -86,7 +86,7 @@ class BaseWaveformAutoencoder(BaseWaveformDenoiser, BaseWaveformFeaturizer):
 
 class Passthrough(BaseWaveformDenoiser, BaseWaveformFeaturizer):
 
-    def __init__(self, pipeline):
+    def __init__(self, pipeline, geom=None, channel_index=None):
         t = [t for t in pipeline if t.is_featurizer]
         if not len(t):
             t = pipeline.transformers
