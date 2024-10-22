@@ -348,6 +348,7 @@ class EmbeddedNoise(torch.nn.Module):
         self._full_cov = None
         self.register_buffer("mean_full", self.mean_rc().clone().detach())
         self.logdet = self.marginal_covariance().logdet()
+        self.cache = {}
 
     @property
     def device(self):
@@ -374,12 +375,17 @@ class EmbeddedNoise(torch.nn.Module):
             return self.mean
         assert False
 
-    def marginal_covariance(self, channels=slice(None)):
+    def marginal_covariance(self, channels=slice(None), cache_key=None):
+        if cache_key is not None and cache_key in self.cache:
+            return self.cache[cache_key]
         if channels == slice(None):
             if self._full_cov is None:
                 self._full_cov = self._marginal_covariance()
             return self._full_cov
-        return self._marginal_covariance(channels)
+        cov = self._marginal_covariance(channels)
+        if cache_key is not None:
+            self.cache[cache_key] = cov
+        return cov
 
     def _marginal_covariance(self, channels=slice(None)):
         channels = self.chans_arange[channels]
