@@ -5,7 +5,7 @@ from .colors import glasbey1024
 
 
 def get_neighbors(gmm, unit_id, n_neighbors=5):
-    means, covs, logdets = gmm.stack_units
+    means, covs, logdets = gmm.stack_units()
     dists = gmm.units[unit_id].divergence(means, covs, logdets, kind=gmm.distance_metric)
     dists = dists.view(-1)
     order = torch.argsort(dists)

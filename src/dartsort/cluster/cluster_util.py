@@ -16,7 +16,8 @@ def agglomerate(labels, distances, linkage_method="complete", threshold=1.0):
     n = distances.shape[0]
     pdist = distances[np.triu_indices(n, k=1)]
     if pdist.min() > threshold:
-        return labels
+        ids = np.unique(labels)
+        return labels, ids[ids >= 0]
     finite = np.isfinite(pdist)
     if not finite.all():
         inf = max(0, pdist[finite].max()) + threshold + 1.0
@@ -28,7 +29,8 @@ def agglomerate(labels, distances, linkage_method="complete", threshold=1.0):
     new_ids -= new_ids.min()
 
     kept = labels >= 0
-    new_labels = np.where(kept, new_ids[labels[kept]], -1)
+    new_labels = np.full_like(labels, -1)
+    new_labels[kept] = new_ids[labels[kept]]
 
     return new_labels, new_ids
 
