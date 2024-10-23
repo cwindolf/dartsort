@@ -1,22 +1,27 @@
 import multiprocessing
-from concurrent.futures import CancelledError, ProcessPoolExecutor, ThreadPoolExecutor as _ThreadPoolExecutor
+from concurrent.futures import CancelledError, ProcessPoolExecutor
+from concurrent.futures import ThreadPoolExecutor as _ThreadPoolExecutor
 from multiprocessing import get_context
 
 import torch.multiprocessing as torchmp
 
 # TODO: torch.multiprocessing?
 
+have_cloudpickle = False
 try:
     import cloudpickle
-
     have_cloudpickle = True
 except ImportError:
-    pass
-    have_cloudpickle = False
+    try:
+        from joblib.externals import cloudpickle
+        have_cloudpickle = True
+    except ImportError:
+        pass
 
 
-# shim for same api ([mp_]context args)
 class ThreadPoolExecutor(_ThreadPoolExecutor):
+    """shim for same api ([mp_]context args)"""
+
     def __init__(
         self,
         max_workers=None,
