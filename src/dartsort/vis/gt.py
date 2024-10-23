@@ -433,7 +433,7 @@ class MetricRegPlot(ComparisonPlot):
         with warnings.catch_warnings():
             warnings.simplefilter("ignore", category=RuntimeWarning)
             df_show = df[np.isfinite(df[self.y].values)]
-            df_show = df_show[np.isfinite(df[self.x].values)]
+            df_show = df_show[np.isfinite(df_show[self.x].values)]
             sns.regplot(
                 data=df_show,
                 x=self.x,
