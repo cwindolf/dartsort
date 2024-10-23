@@ -2,12 +2,12 @@ import h5py
 import numpy as np
 import pandas as pd
 import torch
-import torch.nn.functional as F
-from dartsort.detect import detect_and_deduplicate
-from dartsort.util import drift_util, spiketorch, waveform_util
+import linear_operator
 from linear_operator import operators
 from scipy.fftpack import next_fast_len
 from tqdm.auto import trange
+
+from ..util import drift_util, spiketorch
 
 
 class FullNoise(torch.nn.Module):
@@ -226,6 +226,8 @@ class StationaryFactorizedNoise(torch.nn.Module):
         t=4096,
         unit_batch_size=32,
     ):
+        from ..detect import detect_and_deduplicate
+
         singular = torch.asarray(
             low_rank_templates.singular_values,
             device=self.spatial_std.device,
@@ -323,6 +325,7 @@ class EmbeddedNoise(torch.nn.Module):
         channel_std=None,
         channel_vt=None,
     ):
+        super().__init__()
         self.rank = rank
         self.n_channels = n_channels
         self.mean_kind = mean_kind
@@ -347,7 +350,6 @@ class EmbeddedNoise(torch.nn.Module):
         # precompute stuff
         self._full_cov = None
         self.register_buffer("mean_full", self.mean_rc().clone().detach())
-        self.logdet = self.marginal_covariance().logdet()
         self.cache = {}
 
     @property
@@ -381,6 +383,7 @@ class EmbeddedNoise(torch.nn.Module):
         if channels == slice(None):
             if self._full_cov is None:
                 self._full_cov = self._marginal_covariance()
+                self.logdet = self._full_cov.logdet()
             return self._full_cov
         cov = self._marginal_covariance(channels)
         if cache_key is not None:
@@ -425,6 +428,7 @@ class EmbeddedNoise(torch.nn.Module):
             chans_std = self.channel_std[:, :]  # no slice here!
             for q, sq in enumerate(self.rank_std):
                 blocks[q] = sq * chans_vt[q].T @ chans_vt[q]
+            blocks = linear_operator.to_linear_operator(blocks)
             return operators.BlockDiagLinearOperator(blocks)
 
         assert False
@@ -493,7 +497,6 @@ class EmbeddedNoise(torch.nn.Module):
 
         # start by getting the rank part of the cov, if necessary, and whitening
         # the ranks to leave behind x_spatial
-        print('a')
         if "rank_diag" in cov_kind:
             # rank part is diagonal
             rank_vt = None
@@ -508,7 +511,6 @@ class EmbeddedNoise(torch.nn.Module):
             valid = x_rank.isfinite().all(dim=1)
             x_rankv = x_rank[valid]
             del x
-            print('b')
             u_rankv, rank_sing, rank_vt = torch.linalg.svd(x_rankv, full_matrices=False)
             correction = torch.tensor(len(x_rankv) - 1.0).sqrt()
             rank_std = rank_sing / correction
@@ -517,34 +519,27 @@ class EmbeddedNoise(torch.nn.Module):
             x_spatial = x_rank
             del x_rank
             x_spatial[valid] = u_rankv
-            print('c')
             x_spatial = x_spatial.reshape(n, n_channels, rank).permute(0, 2, 1)
             x_spatial.mul_(correction)
 
         # spatial part could be "by rank" or same for all ranks
         # either way, there are nans afoot
-        print('d')
         if "by_rank" in cov_kind:
             channel_std = torch.ones_like(x_spatial[0])
             channel_vt = torch.zeros((rank, n_channels, n_channels)).to(channel_std)
             for q in range(rank):
                 xq = x_spatial[:, q]
                 validq = xq.isfinite().any(0)
-                print(f"{xq.shape=} {validq.shape=}")
                 covq = spiketorch.nancov(xq[:, validq])
                 fullcovq = torch.eye(xq.shape[1], dtype=covq.dtype, device=covq.device)
                 fullcovq[validq[:, None] & validq[None, :]] = covq.view(-1)
-                print(f"{covq.shape=} {covq.isfinite().to(float).mean()=}")
                 qeig, qv = torch.linalg.eigh(fullcovq)
                 channel_std[q] = qeig.sqrt()
                 channel_vt[q] = qv.T
         else:
             x_spatial = x_spatial.reshape(n * rank, n_channels)
-            print('e')
             cov_spatial = spiketorch.nancov(x_spatial)
-            print('f', cov_spatial.shape, x_spatial.shape)
             channel_eig, channel_v = torch.linalg.eigh(cov_spatial)
-            print('g')
             channel_std = channel_eig.sqrt()
             channel_vt = channel_v.T.contiguous()
 

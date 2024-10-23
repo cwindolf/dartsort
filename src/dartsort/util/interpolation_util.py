@@ -103,12 +103,14 @@ def interpolate_by_chunk(
         if source_shifts.ndim == 1:
             # allows per-channel shifts
             source_shifts = source_shifts.unsqueeze(1)
+        source_shifts = source_shifts.unsqueeze(-1)
         source_pos = source_geom[source_channels] + source_shifts
 
         # where are they going?
         target_pos = target_geom[target_channels[ixs]]
 
         # interpolate, store
+        chunk_features = torch.from_numpy(chunk_features).to(device)
         chunk_res = kernel_interpolate(
             chunk_features,
             source_pos,
@@ -185,7 +187,8 @@ def kernel_interpolate(
             kernel = kernel.exp_()
             if source_kernel_invs is None:
                 sk = log_rbf(source_pos, sigma=sigma).exp_()
-                kernel = torch.linalg.lstsq(sk, kernel).solution
+                kernel = torch.linalg.lstsq(sk.cpu(), kernel.cpu(), driver="gelsd")
+                kernel = kernel.solution.to(features)
             else:
                 kernel = source_kernel_invs @ kernel
             if interpolation_method == "kriging_normalized":

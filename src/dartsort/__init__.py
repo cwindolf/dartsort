@@ -15,5 +15,10 @@ from .util.drift_util import registered_geometry
 from .util.waveform_util import make_channel_index
 from .cluster import merge, postprocess, density
 from . import util
+from .util import noise_util, data_util, waveform_util, spiketorch
+from .util.noise_util import EmbeddedNoise
+from .cluster.initial import initial_clustering
+from .cluster.stable_features import StableSpikeDataset
+from .cluster.gaussian_mixture import SpikeMixtureModel, GaussianUnit
 
 __version__ = importlib.metadata.version("dartsort")

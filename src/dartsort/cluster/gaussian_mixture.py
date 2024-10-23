@@ -54,6 +54,8 @@ class SpikeMixtureModel(torch.nn.Module):
         merge_bimodality_threshold: float = 0.1,
         merge_sym_function: callable = np.minimum,
     ):
+        super().__init__()
+
         # key data structures for loading and modeling spikes
         self.data = data
         self.noise = noise
@@ -83,8 +85,6 @@ class SpikeMixtureModel(torch.nn.Module):
 
         # store arguments to the unit constructor in a dict
         self.unit_args = dict(
-            rank=data.rank,
-            n_channels=data.n_channels,
             noise=noise,
             mean_kind=mean_kind,
             cov_kind=cov_kind,
@@ -95,8 +95,12 @@ class SpikeMixtureModel(torch.nn.Module):
         )
 
         # clustering with noise unit to hopefully grab false positives
-        noise_args = self.unit_args | dict(mean_kind="zero", cov_kind="zero")
-        self.noise_unit = GaussianUnit(**noise_args)
+        noise_args = dict(mean_kind="zero", cov_kind="zero", channels_strategy="all")
+        noise_args = self.unit_args | noise_args
+        self.noise_unit = GaussianUnit(
+            rank=self.data.rank, n_channels=data.n_channels, **noise_args
+        )
+        self.noise_unit.fit(None, None)
         # these only need computing once, but not in init so that
         # there is time for the user to .cuda() me before then
         self._noise_log_likelihoods = None
@@ -131,7 +135,7 @@ class SpikeMixtureModel(torch.nn.Module):
 
         for _ in its:
             # E step: get responsibilities and update hard assignments
-            log_liks = self.log_likelihoods()
+            log_liks = self.log_likelihoods(show_progress=show_progress > 1)
             reas_count = self.reassign(log_liks)
 
             # garbage collection -- get rid of low count labels
@@ -139,7 +143,7 @@ class SpikeMixtureModel(torch.nn.Module):
             log_liks = self.cleanup(log_liks, clean_units=False)
 
             # M step: fit units based on responsibilities
-            self.m_step(log_liks)
+            self.m_step(log_liks, show_progress=show_progress > 1)
 
             # extra info for description
             if show_progress:
@@ -147,17 +151,23 @@ class SpikeMixtureModel(torch.nn.Module):
                 out_pct = f"{100 * out_pct:.1f}"
                 nu = len(self.units)
                 reas_pct = reas_count / self.data.n_spikes
-                reas_pct = f"{100 * out_pct:.1f}"
+                reas_pct = f"{100 * reas_pct:.1f}"
                 its.set_description(f"EM({nu=},out={out_pct}%,reas={reas_pct}%)")
 
-    def m_step(self, likelihoods=None):
+    def m_step(self, likelihoods=None, show_progress=False):
         del self.units[:]  # no .clear() on ModuleList?
         if likelihoods is not None:
-            likelihoods = coo_to_torch(likelihoods)
+            likelihoods = coo_to_torch(likelihoods, self.data.dtype)
         pool = Parallel(self.n_threads, backend="threading", return_as="generator")
-        for unit in pool(
-            delayed(self.fit_unit)(j, likelihoods=likelihoods) for j in self.unit_ids()
-        ):
+        unit_ids = self.unit_ids()
+        results = pool(
+            delayed(self.fit_unit)(j, likelihoods=likelihoods) for j in unit_ids
+        )
+        if show_progress:
+            results = tqdm(
+                results, desc="M step", unit="unit", total=len(unit_ids), **tqdm_kw
+            )
+        for unit in results:
             self.units.append(unit)
 
     def log_likelihoods(
@@ -172,7 +182,7 @@ class SpikeMixtureModel(torch.nn.Module):
             neighbs, ns_unit = self.data.core_neighborhoods.subset_neighborhoods(
                 unit.channels
             )
-            neighb_info.append(j, neighbs, ns_unit)
+            neighb_info.append((j, neighbs, ns_unit))
             ns_total += ns_unit
 
         # add in space for the noise unit
@@ -196,16 +206,18 @@ class SpikeMixtureModel(torch.nn.Module):
                 unit="unit",
                 **tqdm_kw,
             )
-        for unit_id, inds, liks in results:
+        for j, (inds, liks) in enumerate(results):
+            if inds is None:
+                continue
             nnew = inds.numel()
-            coo_uix[offset : offset + nnew] = unit_id
+            coo_uix[offset : offset + nnew] = j
             coo_six[offset : offset + nnew] = inds.numpy(force=True)
             coo_data[offset : offset + nnew] = liks.numpy(force=True)
             offset += nnew
 
         if with_noise_unit:
             noise_six, noise_ll = self.noise_log_likelihoods()
-            coo_uix[offset:] = unit_id + 1
+            coo_uix[offset:] = j + 1
             coo_six[offset:] = noise_six
             coo_data[offset:] = noise_ll
 
@@ -219,6 +231,7 @@ class SpikeMixtureModel(torch.nn.Module):
     def reassign(self, log_liks):
         has_noise_unit = log_liks.shape[1] > len(self.units)
         assignments = loglik_reassign(log_liks, has_noise_unit=has_noise_unit)
+        assignments = torch.from_numpy(assignments).to(self.labels)
         reassign_count = (self.labels != assignments).sum()
         self.labels.copy_(assignments)
         return reassign_count
@@ -363,7 +376,7 @@ class SpikeMixtureModel(torch.nn.Module):
         np.fill_diagonal(scores, 0.0)
 
         if not torch.is_tensor(log_liks):
-            log_liks = coo_to_torch(log_liks)
+            log_liks = coo_to_torch(log_liks, self.data.dtype)
 
         @delayed
         def bimod_job(i, j):
@@ -426,7 +439,7 @@ class SpikeMixtureModel(torch.nn.Module):
         return_full_indices=False,
     ):
         if indices is None:
-            (indices_full,) = torch.nonzero(self.labels == unit_id)
+            (indices_full,) = torch.nonzero(self.labels == unit_id, as_tuple=True)
             n_in_unit = indices_full.numel()
             if max_size and n_in_unit > max_size:
                 indices = self.rg.choice(n_in_unit, size=max_size, replace=False)
@@ -451,7 +464,7 @@ class SpikeMixtureModel(torch.nn.Module):
     ):
         features = self.random_spike_data(unit_id, indices, max_size=self.n_spikes_fit)
         if weights is None and likelihoods is not None:
-            weights = torch.index_select(likelihoods, 1, indices)
+            weights = torch.index_select(likelihoods, 1, features.indices)
             weights = weights.to(self.data.device).coalesce()
             weights = torch.sparse.softmax(weights, dim=0)
             weights = weights[unit_id].to_dense()
@@ -506,29 +519,28 @@ class SpikeMixtureModel(torch.nn.Module):
         for neighb_id, (neighb_chans, neighb_member_ixs) in jobs:
             if inds_already:
                 sp = self.data.spike_data(
-                    spike_indices[neighb_member_ixs], with_channels=False
+                    spike_indices[neighb_member_ixs], with_channels=False, neighborhood="core"
                 )
             else:
-                sp = self.data.spike_data(neighb_member_ixs, with_channels=False)
-
+                sp = self.data.spike_data(neighb_member_ixs, with_channels=False, neighborhood="core")
             features = sp.features
             chans_valid = neighb_chans < self.data.n_channels
             features = features[..., chans_valid]
             neighb_chans = neighb_chans[chans_valid]
-            lls = unit.log_likelihoods(features, neighb_chans, neighborhood_id=neighb_id)
+            lls = unit.log_likelihood(features, neighb_chans, neighborhood_id=neighb_id)
 
             if inds_already:
                 log_likelihoods[neighb_member_ixs] = lls
             else:
-                spike_indices[offset : offset + sp.n_spikes] = neighb_member_ixs
-                log_likelihoods[offset : offset + sp.n_spikes] = lls
-                offset += sp.n_spikes
+                spike_indices[offset : offset + len(sp)] = neighb_member_ixs
+                log_likelihoods[offset : offset + len(sp)] = lls
+                offset += len(sp)
 
         if not inds_already:
             spike_indices, order = spike_indices.sort()
             log_likelihoods = log_likelihoods[order]
 
-        return unit_id, spike_indices, log_likelihoods
+        return spike_indices, log_likelihoods
 
     def noise_log_likelihoods(self):
         if self._noise_log_likelihoods is None:
@@ -753,12 +765,15 @@ class GaussianUnit(torch.nn.Module):
         self.fit(features, weights)
         return self
 
-    def fit(self, features: SpikeFeatures, weights):
+    def fit(self, features: SpikeFeatures, weights: torch.Tensor):
+        if features is None:
+            self.pick_channels(None)
+            return
+
         features_full, weights_full, count_data, weights_normalized = to_full_probe(
             features, weights, self.n_channels, self.storage
         )
         # assigns self.mean
-        self.fit_mean(features_full, weights_normalized, count_data)
         emp_mean, features_full = self.fit_mean(
             features_full, weights_normalized, count_data
         )
@@ -772,7 +787,7 @@ class GaussianUnit(torch.nn.Module):
             return torch.zeros_like(features_full[0]), features_full
 
         assert self.mean_kind == "full"
-        emp_mean = torch.vecdot(weights_normalized, features_full, dim=0)
+        emp_mean = torch.linalg.vecdot(weights_normalized, features_full, dim=0)
 
         if self.prior_type == "niw":
             count_full = self.prior_pseudocount + count_data
@@ -796,21 +811,21 @@ class GaussianUnit(torch.nn.Module):
 
         assert False
 
+    def pick_channels(self, count_data):
+        if self.channels_strategy == "all":
+            self.register_buffer("channels", torch.arange(self.n_channels))
+        elif self.channels_strategy == "snr":
+            snr = torch.linalg.vector_norm(self.mean, dim=0) * count_data.sqrt().view(-1)
+            (channels,) = torch.nonzero(snr >= self.channels_strategy_snr_min, as_tuple=True)
+            self.register_buffer("channels", channels)
+        else:
+            assert False
+
     def dense_cov(self):
         if self.cov_kind == "zero":
             cov = self.noise.marginal_covariance()
             return cov.to_dense()
         assert False
-
-    def pick_channels(self, count_data):
-        if self.channels_strategy == "all":
-            self.register_buffer("channels", torch.arange(self.n_channels))
-        elif self.channels_strategy == "snr":
-            snr = torch.linalg.norm(self.mean) * count_data.sqrt()
-            (channels,) = torch.nonzero(snr >= self.channels_strategy_snr_min)
-            self.register_buffer("channels", channels)
-        else:
-            assert False
 
     def log_likelihood(self, features, channels, neighborhood_id=None) -> torch.Tensor:
         """Log likelihood for spike features living on the same channels."""
@@ -825,9 +840,9 @@ class GaussianUnit(torch.nn.Module):
             assert False
 
         inv_quad, logdet = cov.inv_quad_logdet(
-            features.view(len(features), -1),
+            features.view(len(features), -1).T,
             logdet=True,
-            reduce_inv_quad=True,
+            reduce_inv_quad=False,
         )
         ll = -0.5 * (inv_quad + logdet + log2pi * mean.numel())
         return ll
@@ -848,55 +863,63 @@ class GaussianUnit(torch.nn.Module):
 
     def noise_metric_divergence(self, other_means):
         dmu = other_means - self.mean
+        dmu = dmu.view(len(other_means), -1)
         noise_cov = self.noise.marginal_covariance()
-        return noise_cov.inv_quad(dmu, reduce_inv_quad=True)
+        return noise_cov.inv_quad(dmu.T, reduce_inv_quad=False)
 
     def kl_divergence(self, other_means, other_covs, other_logdets):
-        """DKL(other || self)"""
+        """DKL(others || self)"""
         n = other_means.shape[0]
         dmu = other_means - self.mean
 
         # compute the inverse quad and self log det terms
         inv_quad, self_logdet = self.cov.inv_quad_logdet(
-            dmu.view(n, -1), logdet=True, reduce_inv_quad=True
+            dmu.view(n, -1).T, logdet=True, reduce_inv_quad=True
         )
+        tr = torch.trace(self.cov.solve(other_covs))
+        k = self.cov.shape[0]
+        ld = self_logdet - other_logdets
+        return 0.5 * (tr + inv_quad - k + ld)
 
 
 # -- utilities
 
 
-log2pi = torch.log(2.0 * torch.pi)
+log2pi = torch.log(torch.tensor(2.0 * torch.pi))
 tqdm_kw = dict(smoothing=0, mininterval=1.0 / 24.0)
 
 
 def to_full_probe(features, weights, n_channels, storage):
-    features_full = get_zeros(features.features, storage, "features_full")
-    targ_inds = features.channels[:, None].broadcast_to(features.features.shape)
+    n, r, c = features.features.shape
+    features_full = get_nans(features.features, storage, "features_full", (n, r, n_channels + 1))
+    targ_inds = features.channels.unsqueeze(1).broadcast_to(features.features.shape)
     features_full.scatter_(2, targ_inds, features.features)
-    weights_full = features_full[:, 0, :].isfinite().to(features_full)
+    features_full = features_full[:, :, :-1]
+    weights_full = features_full[:, :1, :].isfinite().to(features_full)
     if weights is not None:
-        weights_full = weights_full.mul_(weights[:, None])
+        weights_full = weights_full.mul_(weights[:, None, None])
     features_full = features_full.nan_to_num_()
-    count_data = weights_full.sum(0, keepdim=True)
+    count_data = weights_full.sum(0)
     weights_normalized = weights_full / count_data
+    weights_normalized = weights_normalized.nan_to_num_()
     return features_full, weights_full, count_data, weights_normalized
 
 
-def get_zeros(target, storage, name, shape):
+def get_nans(target, storage, name, shape):
     if storage is None:
-        return target.new_zeros(shape)
+        return target.new_full(shape, torch.nan)
 
     buffer = getattr(storage, name, None)
     if buffer is None:
-        buffer = target.new_zeros(shape)
+        buffer = target.new_full(shape, torch.nan)
         setattr(storage, name, buffer)
     else:
         if any(bs < ts for bs, ts in zip(buffer.shape, shape)):
-            buffer = target.new_zeros(shape)
+            buffer = target.new_full(shape, torch.nan)
             setattr(storage, name, buffer)
         region = tuple(slice(0, ts) for ts in shape)
         buffer = buffer[region]
-        buffer.fill_(0.0)
+        buffer.fill_(torch.nan)
 
     return buffer
 
@@ -913,6 +936,9 @@ def get_coo_storage(ns_total, storage, use_storage):
             del storage.coo_uix
             del storage.coo_six
             del storage.coo_data
+        storage.coo_uix = np.empty(ns_total, dtype=int)
+        storage.coo_six = np.empty(ns_total, dtype=int)
+        storage.coo_data = np.empty(ns_total, dtype=np.float32)
     else:
         storage.coo_uix = np.empty(ns_total, dtype=int)
         storage.coo_six = np.empty(ns_total, dtype=int)
@@ -936,7 +962,7 @@ def coo_to_torch(coo_array, dtype):
 
 def loglik_reassign(log_liks, has_noise_unit=False):
     assignments = sparse_reassign(log_liks)
-    n_units = log_liks.shape[1] - has_noise_unit
+    n_units = log_liks.shape[0] - has_noise_unit
     if has_noise_unit:
         assignments[assignments >= n_units] = -1
     return assignments
@@ -973,10 +999,17 @@ def sparse_reassign(liks, match_threshold=None, batch_size=512, return_csc=False
     return assignments
 
 
-@numba.njit(
+# seems like csc can have int32 or 64 coos?
+sigs = [
     numba.void(
         numba.int64[:], numba.int64[:], numba.int32[:], numba.float32[:], numba.int32[:]
     ),
+    numba.void(
+        numba.int64[:], numba.int64[:], numba.int64[:], numba.float32[:], numba.int64[:]
+    )
+]
+@numba.njit(
+    sigs,
     error_model="numpy",
     nogil=True,
 )
