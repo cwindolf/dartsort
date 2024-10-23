@@ -118,9 +118,7 @@ class DARTsortGroundTruthComparison:
         matches = self.comparison.best_match_12.astype(int).values
         matched = np.flatnonzero(matches >= 0)
         matches = matches[matched]
-        print(f"{matched.sum()=} {matched.shape=}")
         tested_td = self.tested_analysis.coarse_template_data[matches]
-        print(f"{tested_td.templates.shape=}")
 
         dists, shifts, snrs_a, snrs_b = merge.cross_match_distance_matrix(
             gt_td,
@@ -129,7 +127,6 @@ class DARTsortGroundTruthComparison:
             n_jobs=self.n_jobs,
             device=self.device,
         )
-        print(f"{dists.shape=}")
         self._template_distances = np.full((nugt, nugt), np.inf)
         self._template_distances[np.arange(nugt)[:, None], matched[None, :]] = dists
 

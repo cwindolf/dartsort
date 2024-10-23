@@ -338,6 +338,7 @@ def cross_match_distance_matrix(
     template_data, cross_mask, ids_a, ids_b = combine_templates(
         template_data_a, template_data_b
     )
+    print(f"{ids_a.shape=} {ids_b.shape=} {template_data.templates.shape=}")
     units, dists, shifts, template_snrs = calculate_merge_distances(
         template_data,
         superres_linkage=superres_linkage,
@@ -363,6 +364,7 @@ def cross_match_distance_matrix(
     # (with infs on main diag blocks)
     a_mask = np.flatnonzero(np.isin(units, ids_a))
     b_mask = np.flatnonzero(np.isin(units, ids_b))
+    print(f"{a_mask.shape=} {b_mask.shape=} {units.shape=}")
     Dab = dists[a_mask[:, None], b_mask[None, :]]
     Dba = dists[b_mask[:, None], a_mask[None, :]]
     Dstack = np.stack((Dab, Dba.T))

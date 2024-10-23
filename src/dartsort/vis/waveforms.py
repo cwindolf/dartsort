@@ -55,7 +55,7 @@ def geomplot(
             raise ValueError(f"Bad shapes: {waveforms.shape=}, {max_channels.shape=}, {C=}")
         channels = channel_index[max_channels]
     else:
-        n_channels = geom.shape[0]
+        n_channels = geom[np.isfinite(geom).all(1)].shape[0]
         T = waveforms.shape[1]
         assert channels.shape[0] == waveforms.shape[0]
         assert channels.shape[1] == waveforms.shape[-1]
@@ -64,7 +64,7 @@ def geomplot(
     valid = np.isfinite(geom).all(1)
     z_uniq, z_ix = np.unique(geom[valid, 1], return_inverse=True)
     for i in z_ix:
-        x_uniq = np.unique(geom[z_ix == i, 0])
+        x_uniq = np.unique(geom[valid][z_ix == i, 0])
         if x_uniq.size > 1:
             break
     else:
@@ -78,7 +78,7 @@ def geomplot(
         T / inter_chan_x / x_extension,
         max_abs_amp / inter_chan_z / z_extension,
     ]
-    geom_plot = geom * geom_scales
+    geom_plot = geom[valid] * geom_scales
     t_domain = np.linspace(-T // 2, T // 2, num=T)
 
     # -- and, plot

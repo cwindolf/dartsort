@@ -9,7 +9,7 @@ from tqdm.auto import tqdm
 from ..cluster import gaussian_mixture
 from ..util import spikeio
 from ..util.multiprocessing_util import (CloudpicklePoolExecutor,
-                                         ThreadPoolExecutor, get_pool)
+                                         ThreadPoolExecutor, get_pool, cloudpickle)
 from . import analysis_plots, gmm_helpers, layout, unit
 from .colors import glasbey1024
 from .waveforms import geomplot
@@ -38,7 +38,7 @@ class ISIHistogram(GMMPlot):
 
     def draw(self, panel, gmm, unit_id):
         axis = panel.subplots()
-        times_s = gmm.data.times_seconds[gmm.labels == unit_id].numpy(force=True)
+        times_s = gmm.data.times_seconds[gmm.labels == unit_id]
         dt_ms = np.diff(times_s) * 1000
         bin_edges = np.arange(0, self.max_ms + self.bin_ms, self.bin_ms)
         counts, _ = np.histogram(dt_ms, bin_edges)
@@ -65,13 +65,13 @@ class ChansHeatmap(GMMPlot):
         s = ax.scatter(*xy[unique_ixs].T, c=counts, lw=0, cmap=self.cmap)
         plt.colorbar(s, ax=ax, shrink=0.3)
         ax.scatter(
-            *xy[gmm[unit_id].channels.numpy(force=True)].T,
+            *xy[gmm.units[unit_id].channels.numpy(force=True)].T,
             color="r",
             lw=1,
             fc="none",
         )
         ax.scatter(
-            *xy[np.atleast_1d(gmm[unit_id].snr.argmax().numpy(force=True))].T,
+            *xy[np.atleast_1d(gmm.units[unit_id].snr.argmax().numpy(force=True))].T,
             color="g",
             lw=0,
         )
@@ -104,7 +104,7 @@ class MStep(GMMPlot):
         ax.axis("off")
 
         sp = gmm.random_spike_data(unit_id, with_reconstructions=True)
-        maa = sp.waveforms.abs().max()
+        maa = sp.waveforms.abs().nan_to_num().max()
         lines, chans = geomplot(
             sp.waveforms,
             channels=sp.channels,
@@ -118,7 +118,7 @@ class MStep(GMMPlot):
         )
         chans = torch.tensor(list(chans))
         tup = gaussian_mixture.to_full_probe(
-            sp.features, weights=None, n_channels=gmm.data.n_channels, storage=None
+            sp, weights=None, n_channels=gmm.data.n_channels, storage=None
         )
         features_full, weights_full, count_data, weights_normalized = tup
         emp_mean = torch.nanmean(features_full, dim=0)[:, chans]
@@ -158,7 +158,8 @@ class Likelihoods(GMMPlot):
         (in_unit,) = torch.nonzero(gmm.labels == unit_id, as_tuple=True)
         if not in_unit.numel():
             return
-        liks = gmm.unit_log_likelihoods(unit_id, spike_indices=in_unit)
+        inds_, liks = gmm.unit_log_likelihoods(unit_id, spike_indices=in_unit)
+        assert torch.equal(inds_, in_unit)
         nliks = gmm.noise_log_likelihoods()[1][in_unit]
         t = gmm.data.times_seconds[in_unit]
         dt_ms = np.diff(t) * 1000
@@ -219,7 +220,7 @@ class KMeansSplit(GMMPlot):
         ax_dist = analysis_plots.distance_matrix_dendro(
             fig_dist,
             split_info["distances"],
-            unit_ids=split_ids,
+            # unit_ids=split_ids,
             dendrogram_linkage=None,
             show_unit_labels=True,
             vmax=1.0,
@@ -232,7 +233,7 @@ class KMeansSplit(GMMPlot):
         ax_bimod = analysis_plots.distance_matrix_dendro(
             fig_bimods,
             split_info["bimodalities"],
-            unit_ids=split_ids,
+            # unit_ids=split_ids,
             dendrogram_linkage=None,
             show_unit_labels=True,
             vmax=0.5,
@@ -244,7 +245,7 @@ class KMeansSplit(GMMPlot):
         ax_centroids = fig_mean.subplots()
         mainchan = gmm.units[unit_id].snr.argmax()
         ax_centroids.axhline(0, color="k", lw=0.8)
-        sns.despine(ax_centroids, left=False, right=True, bottom=True, top=True)
+        sns.despine(ax=ax_centroids, left=False, right=True, bottom=True, top=True)
         for subid, subunit in zip(split_ids, split_info["units"]):
             subm = subunit.mean[:, mainchan]
             subm = gmm.data.tpca._inverse_transform_in_probe(subm[None])[0]
@@ -284,6 +285,7 @@ class NeighborMeans(GMMPlot):
         # means on core channels
         chans = gmm.units[unit_id].snr.argmax()
         chans = torch.cdist(gmm.data.prgeom[chans[None]], gmm.data.prgeom)
+        chans = chans.view(-1)
         (chans,) = torch.nonzero(chans <= gmm.data.core_radius, as_tuple=True)
         means = [gmm.units[u].mean[:, chans].numpy(force=True) for u in neighbors]
 
@@ -294,7 +296,7 @@ class NeighborMeans(GMMPlot):
             .broadcast_to(len(means), *chans.shape)
             .numpy(force=True),
             geom=gmm.data.prgeom.numpy(force=True),
-            colors=glasbey1024[neighbors],
+            colors=glasbey1024[neighbors.numpy(force=True)],
             show_zero=False,
             ax=ax,
         )
@@ -317,7 +319,7 @@ class NeighborDistances(GMMPlot):
         ax = analysis_plots.distance_matrix_dendro(
             panel,
             distances,
-            unit_ids=neighbors,
+            unit_ids=neighbors.numpy(force=True),
             dendrogram_linkage=None,
             show_unit_labels=True,
             vmax=0.5,
@@ -340,8 +342,11 @@ class NeighborBimodalities(GMMPlot):
         assert neighbors[0] == unit_id
         log_liks = gmm.log_likelihoods(unit_ids=neighbors)
         labels = gaussian_mixture.loglik_reassign(log_liks, has_noise_unit=True)
+        log_liks = gaussian_mixture.coo_to_torch(log_liks, torch.float)
         kept = labels >= 0
-        labels = torch.where(kept, neighbors[labels[kept]], -1)
+        labels_ = np.full_like(labels, -1)
+        labels_[kept] = neighbors[labels[kept]].numpy(force=True)
+        labels = labels_
 
         others = neighbors[1:]
         axes = panel.subplots(nrows=len(others), ncols=2)
@@ -353,6 +358,7 @@ class NeighborBimodalities(GMMPlot):
                 log_liks,
                 loglik_ix_a=0,
                 loglik_ix_b=j + 1,
+                debug=True,
             )
 
             scatter_ax, bimod_ax = axes_row
@@ -360,6 +366,9 @@ class NeighborBimodalities(GMMPlot):
             scatter_ax.scatter(bimod_info["xi"], bimod_info["xj"], s=3, lw=0, c=c)
             scatter_ax.set_xlabel(unit_id, color=glasbey1024[unit_id])
             scatter_ax.set_xlabel(other_id, color=glasbey1024[other_id])
+
+            if "samples" not in bimod_info:
+                continue
             bimod_ax.hist(bimod_info["samples"], color="gray", **histkw)
             bimod_ax.hist(
                 bimod_info["samples"],
@@ -405,7 +414,6 @@ def make_unit_gmm_summary(
     # notify plots of global params
     for p in plots:
         p.notify_global_params(
-            time_range=gmm.t_bounds,
             **other_global_params,
         )
 
@@ -460,7 +468,6 @@ def make_all_gmm_summaries(
     if use_threads:
         cls = ThreadPoolExecutor
     n_jobs, Executor, context = get_pool(n_jobs, cls=cls)
-    from cloudpickle import dumps
 
     initargs = (
         gmm,
@@ -475,7 +482,7 @@ def make_all_gmm_summaries(
         global_params,
     )
     if ispar and not use_threads:
-        initargs = (dumps(initargs),)
+        initargs = (cloudpickle.dumps(initargs),)
     with Executor(
         max_workers=n_jobs,
         mp_context=context,

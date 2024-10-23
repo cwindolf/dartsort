@@ -232,7 +232,7 @@ class SpikeMixtureModel(torch.nn.Module):
         # log liks as sparse matrix. sparse zeros are not 0 but -inf!!
         log_liks = coo_array(
             (coo_data, (coo_uix, coo_six)),
-            shape=(len(self.units) + with_noise_unit, self.data.n_spikes),
+            shape=(len(unit_ids) + with_noise_unit, self.data.n_spikes),
         )
         return log_liks
 
@@ -325,7 +325,7 @@ class SpikeMixtureModel(torch.nn.Module):
         nu = len(units)
 
         # stack unit data into one place
-        means, covs, logdets = self.stack_units()
+        means, covs, logdets = self.stack_units(units)
 
         # compute denominator of noised normalized distances
         if noise_normalized:
@@ -494,7 +494,7 @@ class SpikeMixtureModel(torch.nn.Module):
             offset = 0
             log_likelihoods = torch.empty(ns)
         else:
-            log_likelihoods = torch.full(ns, -torch.inf)
+            log_likelihoods = torch.full((ns,), -torch.inf)
 
         jobs = neighbs.items()
         if show_progress:
@@ -532,10 +532,10 @@ class SpikeMixtureModel(torch.nn.Module):
 
         return spike_indices, log_likelihoods
 
-    def noise_log_likelihoods(self):
+    def noise_log_likelihoods(self, show_progress=False):
         if self._noise_log_likelihoods is None:
             self._noise_six, self._noise_log_likelihoods = self.unit_log_likelihoods(
-                unit=self.noise_unit, show_progress=True, desc_prefix="Noise "
+                unit=self.noise_unit, show_progress=show_progress, desc_prefix="Noise "
             )
         return self._noise_six, self._noise_log_likelihoods
 
@@ -544,13 +544,13 @@ class SpikeMixtureModel(torch.nn.Module):
         # unit's channel set
         unit = self.units[unit_id]
         indices_full, sp = self.random_spike_data(unit_id, return_full_indices=True)
-        X = self.data.interp_to_chans(sp, unit)
+        X = self.data.interp_to_chans(sp, unit.channels)
         if debug:
             debug_info = dict(indices_full=indices_full, sp=sp, X=X)
 
         # run kmeans with kmeans++ initialization
         split_labels, responsibilities = kmeans(
-            X,
+            X.view(len(X), -1),
             n_iter=self.kmeans_n_iter,
             n_components=self.kmeans_k,
             random_state=self.rg,
@@ -593,36 +593,42 @@ class SpikeMixtureModel(torch.nn.Module):
         units = []
         for label in split_ids:
             (in_label,) = torch.nonzero(labels == labels, as_tuple=True)
-            weights = None if weights is None else weights[in_label]
+            w = None if weights is None else weights[in_label, label]
             features = spike_data[in_label]
-            unit = GaussianUnit.from_features(features, weights, **self.unit_args)
+            unit = GaussianUnit.from_features(features, weights=w, **self.unit_args)
             units.append(unit)
 
         # determine their distances
-        distances = self.distances(units=units)
+        distances = self.distances(units=units, show_progress=False)
 
         # determine their bimodalities while at once mini-reassigning
         lls = spike_data.features.new_full((len(units), len(spike_data)), -torch.inf)
         for j, unit in enumerate(units):
-            lls[j] = self.unit_log_likelihoods(
+            inds_, lls_ = self.unit_log_likelihoods(
                 unit=unit, spike_indices=spike_data.indices
             )
+            if lls_ is not None:
+                lls[j] = lls
         best_liks, labels = lls.max(dim=0)
         labels[torch.isinf(best_liks)] = -1
         labels = labels.numpy(force=True)
         kept = np.flatnonzero(labels >= 0)
-        ids, labels[kept], counts = np.unique(labels[kept])
+        ids, labels[kept], counts = np.unique(labels[kept], return_inverse=True, return_counts=True)
         ids = ids[counts > 0]
-        units = [u for j, u in enumerate(units) if counts[j]]
+        counts_dense = np.zeros(len(units), dtype=counts.dtype)
+        counts_dense[ids] = counts
+        units = [u for j, u in enumerate(units) if counts_dense[j]]
         bimodalities = bimodalities_dense(
             lls.numpy(force=True)[ids], labels, ids=np.arange(ids.size)
         )
+        bimodalities_full = np.full_like(distances, np.inf)
+        bimodalities_full[ids[:, None], ids[None, :]] = bimodalities
 
         # return merged labels
         distances = combine_distances(
             distances,
             self.merge_distance_threshold,
-            bimodalities,
+            bimodalities_full,
             self.merge_bimodality_threshold,
             sym_function=self.merge_sym_function,
         )
@@ -653,15 +659,15 @@ class SpikeMixtureModel(torch.nn.Module):
         masked=True,
         max_spikes=2048,
         dt_s=2.0,
-        debug=False,
         score_kind="tv",
+        debug=False,
     ):
         if in_units is not None:
             ina = in_units[id_a]
             inb = in_units[id_b]
         else:
-            (ina,) = torch.nonzero(self.labels == id_a)
-            (inb,) = torch.nonzero(self.labels == id_b)
+            (ina,) = torch.nonzero(self.labels == id_a, as_tuple=True)
+            (inb,) = torch.nonzero(self.labels == id_b, as_tuple=True)
 
         if masked:
             times_a = self.data.times_seconds[ina]
@@ -755,7 +761,7 @@ class SpikeMixtureModel(torch.nn.Module):
         if distance_metric is None:
             kind = self.distance_metric
         nu, rank, nc = len(units), self.data.rank, self.data.n_channels
-        means = self.noise_unit.mean.new_zeros((nu, rank, nc))
+        means = torch.zeros((nu, rank, nc), device=self.data.device)
         covs = logdets = None
         if kind in ("kl_divergence",):
             covs = means.new_zeros((nu, rank * nc, rank * nc))
@@ -765,6 +771,7 @@ class SpikeMixtureModel(torch.nn.Module):
             if covs is not None:
                 covs[j] = unit.dense_cov()
                 logdets[j] = unit.logdet
+        return means, covs, logdets
 
 
 # -- modeling class
@@ -961,7 +968,9 @@ class GaussianUnit(torch.nn.Module):
         raise ValueError(f"Unknown divergence {kind=}.")
 
     def noise_metric_divergence(self, other_means):
-        dmu = other_means - self.mean
+        dmu = other_means
+        if self.mean_kind != "zero":
+            dmu = dmu - self.mean
         dmu = dmu.view(len(other_means), -1)
         noise_cov = self.noise.marginal_covariance()
         return noise_cov.inv_quad(dmu.T, reduce_inv_quad=False)
@@ -969,7 +978,9 @@ class GaussianUnit(torch.nn.Module):
     def kl_divergence(self, other_means, other_covs, other_logdets):
         """DKL(others || self)"""
         n = other_means.shape[0]
-        dmu = other_means - self.mean
+        dmu = other_means
+        if self.mean_kind != "zero":
+            dmu = dmu - self.mean
 
         # compute the inverse quad and self log det terms
         inv_quad, self_logdet = self.cov.inv_quad_logdet(
@@ -1201,7 +1212,8 @@ def qda(
     debug_info=None,
 ):
     # "in b not a"-ness
-    diff = log_liks_b - log_liks_a
+    if diff is None:
+        diff = log_liks_b - log_liks_a
     keep = np.isfinite(diff)
     if not keep.mean() >= min_overlap:
         return np.inf
@@ -1221,7 +1233,7 @@ def qda(
         sample_weights=sample_weights,
         dipscore_only=True,
         score_kind=score_kind,
-        debug_info=None,
+        debug_info=debug_info,
     )
 
 

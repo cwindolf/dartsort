@@ -552,6 +552,19 @@ gt_overview_plots = (
     TrimmedTemplateDistanceMatrix(),
 )
 
+gt_overview_plots_no_temp_dist = (
+    MetricRegPlot(x="gt_ptp_amplitude", y="accuracy", log_x=True),
+    MetricRegPlot(x="gt_ptp_amplitude", y="recall", color="r", log_x=True),
+    MetricRegPlot(x="gt_ptp_amplitude", y="precision", color="g", log_x=True),
+    MetricRegPlot(x="gt_firing_rate", y="accuracy"),
+    MetricRegPlot(x="gt_firing_rate", y="recall", color="r"),
+    MetricRegPlot(x="gt_firing_rate", y="precision", color="g"),
+    MetricRegPlot(x="gt_ptp_amplitude", y="unsorted_recall", color="purple", log_x=True),
+    box,
+    MetricDistribution(xs=("recall", "accuracy", "temp_dist", "precision")),
+    TrimmedAgreementMatrix(),
+)
+
 # multi comparisons stuff
 # box and whisker between sorters
 
