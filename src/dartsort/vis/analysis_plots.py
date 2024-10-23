@@ -107,6 +107,11 @@ def distance_matrix_dendro(
             unit_ids = np.arange(distances.shape[0])
         ax_im.set_xticks(10 * np.arange(len(order)) + 5, unit_ids[order])
         ax_im.set_yticks(10 * np.arange(len(order)) + 5, unit_ids[order])
+        for i, (tx, ty) in enumerate(
+            zip(ax_im.xaxis.get_ticklabels(), ax_im.yaxis.get_ticklabels())
+        ):
+            tx.set_color(glasbey1024[unit_ids[i]])
+            ty.set_color(glasbey1024[unit_ids[i]])
     else:
         ax_im.set_xticks([])
         ax_im.set_yticks([])
@@ -114,6 +119,7 @@ def distance_matrix_dendro(
     plt.colorbar(im, cax=ax_cbar, label="template distance")
     ax_cbar.set_yticks([0, vmax])
     ax_cbar.set_ylabel("template distance", labelpad=-5)
+    return ax_im
 
 
 def get_linkage(dists, method="complete", threshold=0.25):

@@ -1,8 +1,8 @@
 import matplotlib.pyplot as plt
 import numpy as np
-from matplotlib.patches import Rectangle
 from matplotlib.collections import LineCollection
 from matplotlib.colors import to_rgba
+from matplotlib.patches import Rectangle
 
 
 def geomplot(
@@ -29,6 +29,7 @@ def geomplot(
     c=None,
     color=None,
     colors=None,
+    return_chans=False,
     **plot_kwargs,
 ):
     """Plot waveforms according to geometry using channel index"""
@@ -60,13 +61,14 @@ def geomplot(
         assert channels.shape[1] == waveforms.shape[-1]
 
     # -- figure out units for plotting
-    z_uniq, z_ix = np.unique(geom[:, 1], return_inverse=True)
+    valid = np.isfinite(geom).all(1)
+    z_uniq, z_ix = np.unique(geom[valid, 1], return_inverse=True)
     for i in z_ix:
         x_uniq = np.unique(geom[z_ix == i, 0])
         if x_uniq.size > 1:
             break
     else:
-        x_uniq = np.unique(geom[:, 0])
+        x_uniq = np.unique(geom[valid, 0])
     inter_chan_x = 1
     if x_uniq.size > 1:
         inter_chan_x = x_uniq[1] - x_uniq[0]
@@ -221,5 +223,8 @@ def geomplot(
             ax.set_ylim([min_z - max_abs_amp * zlim, max_z + max_abs_amp * zlim])
     elif zlim is False:
         pass
+
+    if return_chans:
+        return lines, unique_chans
 
     return lines

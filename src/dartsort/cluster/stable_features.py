@@ -27,6 +27,7 @@ class StableSpikeDataset(torch.nn.Module):
         features_on_device: bool = True,
         interpolation_method: str = "kriging",
         interpolation_sigma: float = 20.0,
+        core_radius: float = 35.0,
     ):
         """Motion-corrected spike data on the registered probe"""
         super().__init__()
@@ -41,6 +42,7 @@ class StableSpikeDataset(torch.nn.Module):
         self.n_spikes = kept_indices.size
         self.interpolation_method = interpolation_method
         self.interpolation_sigma = interpolation_sigma
+        self.core_radius = core_radius
 
         self.kept_indices = kept_indices
         self.original_sorting = original_sorting
@@ -51,6 +53,9 @@ class StableSpikeDataset(torch.nn.Module):
         # neighborhoods module, for querying spikes by channel group
         self.core_neighborhoods = core_neighborhoods
 
+        extract_amp_vecs = torch.linalg.vecnorm(extract_features, dim=1)
+        amps = extract_amp_vecs.max(1).values
+
         # channel neighborhoods and features
         # if not self.features_on_device, .spike_data() will .to(self.device)
         if self.features_on_device:
@@ -58,11 +63,15 @@ class StableSpikeDataset(torch.nn.Module):
             self.register_buffer("extract_channels", extract_channels)
             self.register_buffer("core_features", core_features)
             self.register_buffer("extract_features", extract_features)
+            # self.register_buffer("extract_amp_vecs", extract_amp_vecs)
+            self.register_buffer("amps", amps)
         else:
             self.core_channels = core_channels
             self.extract_channels = extract_channels
             self.core_features = core_features
             self.extract_features = extract_features
+            # self.extract_amp_vecs = extract_amp_vecs
+            self.amps = amps
 
         # always on device
         self.register_buffer("prgeom", prgeom)
@@ -191,6 +200,7 @@ class StableSpikeDataset(torch.nn.Module):
             features_on_device=features_on_device,
             interpolation_method=interpolation_method,
             interpolation_sigma=interpolation_sigma,
+            core_radius=core_radius,
         )
         self.to(device)
         return self

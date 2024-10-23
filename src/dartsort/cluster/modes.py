@@ -1,7 +1,9 @@
 import numpy as np
 from scipy.signal import find_peaks
 from scipy.stats import norm
+
 from . import density
+
 # todo: replace all isosplit stuff with things based on scipy's isotonic regression.
 
 
@@ -98,6 +100,7 @@ def smoothed_dipscore_at(
     score_kind="tv",
     cut_relmax_order=3,
     kind="isotonic",
+    debug_info=None,
 ):
     if sample_weights is None:
         sample_weights = np.ones_like(samples)
@@ -168,6 +171,16 @@ def smoothed_dipscore_at(
                 score = my_score
                 best_dens_err = dens_err
                 best_uni = dens
+
+    if debug_info is not None:
+        debug_info["domain"] = samples
+        debug_info["alternative_density"] = densities
+        debug_info["cut"] = cut
+        debug_info["score"] = score
+        debug_info["score_kind"] = score_kind
+        debug_info["uni_density"] = dens
+        debug_info["sample_weights"] = sample_weights
+        debug_info["samples"] = samples
 
     if dipscore_only:
         return score
