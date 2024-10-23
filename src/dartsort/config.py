@@ -104,6 +104,7 @@ class FeaturizationConfig:
     nn_denoiser_class_name: str = "SingleChannelWaveformDenoiser"
     nn_denoiser_pretrained_path: Optional[str] = default_pretrained_path
     nn_denoiser_train_epochs: int = 50
+    nn_denoiser_extra_kwargs: Optional[dict] = None
 
     # optionally restrict how many channels TPCA are fit on
     tpca_fit_radius: Optional[float] = None
