@@ -5,8 +5,8 @@ from dartsort.util.waveform_util import (channel_subset_by_radius,
                                          set_channels_in_probe)
 from sklearn.decomposition import PCA, TruncatedSVD
 
-from .transform_base import (BaseWaveformDenoiser, BaseWaveformFeaturizer,
-                             BaseWaveformModule, BaseWaveformAutoencoder)
+from .transform_base import (BaseWaveformAutoencoder, BaseWaveformDenoiser,
+                             BaseWaveformFeaturizer, BaseWaveformModule)
 
 
 class BaseTemporalPCA(BaseWaveformModule):
@@ -128,6 +128,18 @@ class BaseTemporalPCA(BaseWaveformModule):
             waveforms_in_probe,
             self.components.T @ self.components,
         )
+
+    def force_reconstruct(self, features):
+        ndim = features.ndim
+        if ndim == 2:
+            features = features.unsqueeze(0)
+        n, r, c = features.shape
+        waveforms = features.permute(0, 2, 1).reshape(n * c, r)
+        waveforms = self._inverse_transform_in_probe(waveforms)
+        waveforms = waveforms.reshape(n, c, -1).permute(0, 2, 1)
+        if ndim == 2:
+            waveforms = waveforms[0]
+        return waveforms
 
     def to_sklearn(self):
         pca = PCA(
