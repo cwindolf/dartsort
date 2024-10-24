@@ -117,18 +117,22 @@ def geomplot(
         if show_chan_label:
             ax.annotate(chan_labels[c], geom_plot[c] + ann_offset, size=6, color="gray")
     lines = LineCollection(
-        draw,
-        colors=draw_colors if draw_colors else None,
+        np.array(draw),
+        colors=np.array(draw_colors) if draw_colors else None,
         **plot_kwargs,
     )
     lines = ax.add_collection(lines)
     if annotate_z:
-        for c in unique_chans:
-            ax.annotate(
-                f"{geom[c, 1]:f}".rstrip("0").rstrip("."),
-                (xmin, geom_plot[c, 1]),
+        unique_z = np.unique(geom[list(unique_chans)])
+        unique_zp = np.unique(geom_plot[list(unique_chans)])
+        for z, zp in zip(unique_z, unique_zp):
+            ax.text(
+                xmin,
+                zp,
+                f"{z:f}".rstrip("0").rstrip("."),
                 size=6,
                 color="gray",
+                clip_on=True,
             )
 
     if subar:
