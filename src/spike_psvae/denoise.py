@@ -11,6 +11,7 @@ from scipy.spatial.distance import cdist
 from sklearn.decomposition import PCA
 from torch import nn
 from tqdm.auto import trange
+import dartsort
 
 try:
     from .denoise_temporal_decrease import (
@@ -20,9 +21,7 @@ except ImportError:
     pass
 
 
-pretrained_path = (
-    Path(__file__).parent.parent.parent / "pretrained/single_chan_denoiser.pt"
-)
+pretrained_path = Path(dartsort.__file__).parent.joinpath('pretrained', 'single_chan_denoiser.pt')
 
 
 class SingleChanDenoiser(nn.Module):
@@ -775,7 +774,7 @@ def enforce_decrease_shells(
     # compute original ptps and allocate storage for decreasing ones
     is_torch = False
     if torch.is_tensor(waveforms):
-        orig_ptps = (waveforms.max(dim=1).values - waveforms.min(dim=1).values).cpu().numpy()
+        orig_ptps = (waveforms.max(dim=1).values - waveforms.min(dim=1).values).cpu().detach().numpy()
         is_torch = True
     else:
         orig_ptps = waveforms.ptp(axis=1)

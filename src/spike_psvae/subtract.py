@@ -1730,6 +1730,7 @@ def subtract_and_localize_numpy(
     radial_parents=None,
     tpca=None,
     device=None,
+    enfdec=None,
     probe="np1",
     trough_offset=42,
     spike_length_samples=121,
@@ -1772,6 +1773,7 @@ def subtract_and_localize_numpy(
             residual,
             threshold,
             radial_parents,
+            enfdec,  # enfdec
             tpca,
             dedup_channel_index,
             extract_channel_index,
@@ -1852,4 +1854,5 @@ def subtract_and_localize_numpy(
         ],
         columns=["sample", "trace", "x", "y", "z", "alpha"],
     )
-    return df_localisation, cleaned_wfs.to("cpu")
+    np_waveforms = cleaned_wfs.to("cpu").detach().numpy()
+    return df_localisation, np_waveforms
