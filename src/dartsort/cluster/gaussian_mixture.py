@@ -52,6 +52,8 @@ class SpikeMixtureModel(torch.nn.Module):
         distance_noise_normalized: bool = True,
         merge_distance_threshold: float = 1.0,
         merge_bimodality_threshold: float = 0.1,
+        merge_bimodality_cut: float = 0.0,
+        merge_bimodality_overlap: float = 0.80,
         merge_sym_function: callable = np.minimum,
     ):
         super().__init__()
@@ -74,6 +76,8 @@ class SpikeMixtureModel(torch.nn.Module):
         self.distance_noise_normalized = distance_noise_normalized
         self.merge_distance_threshold = merge_distance_threshold
         self.merge_bimodality_threshold = merge_bimodality_threshold
+        self.merge_bimodality_cut = merge_bimodality_cut
+        self.merge_bimodality_overlap = merge_bimodality_overlap
         self.merge_sym_function = merge_sym_function
 
         # store labels on cpu since we're always nonzeroing / writing np data
@@ -363,12 +367,18 @@ class SpikeMixtureModel(torch.nn.Module):
         compute_mask=None,
         cut=None,
         weighted=True,
-        min_overlap=0.95,
+        min_overlap=None,
         masked=True,
         dt_s=2.0,
         max_spikes=2048,
         show_progress=True,
     ):
+        if cut is None:
+            cut = self.merge_bimodality_cut
+        if cut == "auto":
+            cut = None
+        if min_overlap is None:
+            min_overlap = self.merge_bimodality_overlap
         nu = len(self.units)
         in_units = [
             torch.nonzero(self.labels == j, as_tuple=True)[0] for j in range(nu)
@@ -468,7 +478,11 @@ class SpikeMixtureModel(torch.nn.Module):
         show_progress=False,
         desc_prefix="",
     ):
-        """
+        """Log likelihoods of core spikes for a single unit
+
+        If spike_indices are provided, then the returned spike_indices are exactly
+        those.
+
         Returns
         -------
         spike_indices
@@ -479,6 +493,8 @@ class SpikeMixtureModel(torch.nn.Module):
         inds_already = spike_indices is not None
         if neighbs is None or ns is None:
             if inds_already:
+                # in this case, the indices returned in the structure are
+                # relative indices inside spike_indices
                 neighbs, ns = self.data.core_neighborhoods.spike_neighborhoods(
                     unit.channels, spike_indices
                 )
@@ -494,7 +510,7 @@ class SpikeMixtureModel(torch.nn.Module):
             offset = 0
             log_likelihoods = torch.empty(ns)
         else:
-            log_likelihoods = torch.full((ns,), -torch.inf)
+            log_likelihoods = torch.full((len(spike_indices),), -torch.inf)
 
         jobs = neighbs.items()
         if show_progress:
@@ -565,11 +581,10 @@ class SpikeMixtureModel(torch.nn.Module):
             if debug:
                 return debug_info
             return 0, []
-        weights = responsibilities / responsibilities.sum(0)
 
         # avoid oversplitting by doing a mini merge here
         split_labels, split_ids = self.mini_merge(
-            sp, split_labels, weights, debug=debug, debug_info=debug_info
+            sp, split_labels, responsibilities, debug=debug, debug_info=debug_info
         )
 
         if debug:
@@ -592,7 +607,7 @@ class SpikeMixtureModel(torch.nn.Module):
         split_ids = labels.unique()
         units = []
         for label in split_ids:
-            (in_label,) = torch.nonzero(labels == labels, as_tuple=True)
+            (in_label,) = torch.nonzero(labels == label, as_tuple=True)
             w = None if weights is None else weights[in_label, label]
             features = spike_data[in_label]
             unit = GaussianUnit.from_features(features, weights=w, **self.unit_args)
@@ -608,27 +623,18 @@ class SpikeMixtureModel(torch.nn.Module):
                 unit=unit, spike_indices=spike_data.indices
             )
             if lls_ is not None:
-                lls[j] = lls
+                lls[j] = lls_
         best_liks, labels = lls.max(dim=0)
         labels[torch.isinf(best_liks)] = -1
-        labels = labels.numpy(force=True)
-        kept = np.flatnonzero(labels >= 0)
-        ids, labels[kept], counts = np.unique(labels[kept], return_inverse=True, return_counts=True)
-        ids = ids[counts > 0]
-        counts_dense = np.zeros(len(units), dtype=counts.dtype)
-        counts_dense[ids] = counts
-        units = [u for j, u in enumerate(units) if counts_dense[j]]
         bimodalities = bimodalities_dense(
-            lls.numpy(force=True)[ids], labels, ids=np.arange(ids.size)
+            lls.numpy(force=True), labels.numpy(force=True)
         )
-        bimodalities_full = np.full_like(distances, np.inf)
-        bimodalities_full[ids[:, None], ids[None, :]] = bimodalities
 
         # return merged labels
         distances = combine_distances(
             distances,
             self.merge_distance_threshold,
-            bimodalities_full,
+            bimodalities,
             self.merge_bimodality_threshold,
             sym_function=self.merge_sym_function,
         )
@@ -654,7 +660,7 @@ class SpikeMixtureModel(torch.nn.Module):
         loglik_ix_b=None,
         cut=None,
         weighted=True,
-        min_overlap=0.95,
+        min_overlap=None,
         in_units=None,
         masked=True,
         max_spikes=2048,
@@ -662,6 +668,12 @@ class SpikeMixtureModel(torch.nn.Module):
         score_kind="tv",
         debug=False,
     ):
+        if cut is None:
+            cut = self.merge_bimodality_cut
+        if cut == "auto":
+            cut = None
+        if min_overlap is None:
+            min_overlap = self.merge_bimodality_overlap
         if in_units is not None:
             ina = in_units[id_a]
             inb = in_units[id_b]
@@ -684,9 +696,9 @@ class SpikeMixtureModel(torch.nn.Module):
         in_pair, order = in_pair.sort()
         is_b = is_b[order]
 
-        loglik_ix_a = id_a if loglik_ix_a is None else loglik_ix_a
-        loglik_ix_b = id_b if loglik_ix_b is None else loglik_ix_b
-        log_lik_diff = get_diff_sparse(log_liks, loglik_ix_a, loglik_ix_b, in_pair, return_extra=debug)
+        lixa = id_a if loglik_ix_a is None else loglik_ix_a
+        lixb = id_b if loglik_ix_b is None else loglik_ix_b
+        log_lik_diff = get_diff_sparse(log_liks, lixa, lixb, in_pair, return_extra=debug)
 
         debug_info = None
         if debug:
@@ -916,9 +928,8 @@ class GaussianUnit(torch.nn.Module):
         if self.channels_strategy == "all":
             self.register_buffer("channels", torch.arange(self.n_channels))
         elif self.channels_strategy == "snr":
-            snr = torch.linalg.vector_norm(self.mean, dim=0) * count_data.sqrt().view(
-                -1
-            )
+            amp = torch.linalg.vector_norm(self.mean, dim=0)
+            snr = amp * count_data.sqrt().view(-1)
             self.register_buffer("snr", snr)
             (channels,) = torch.nonzero(
                 snr >= self.channels_strategy_snr_min, as_tuple=True
@@ -1174,7 +1185,7 @@ def combine_distances(
 
 
 def bimodalities_dense(
-    log_liks, labels, ids=None, cut=None, weighted=True, min_overlap=0.95
+    log_liks, labels, ids=None, cut=0.0, weighted=True, min_overlap=0.95
 ):
     """Bimodality scores from dense data
 
@@ -1185,7 +1196,7 @@ def bimodalities_dense(
         ids = np.unique(labels)
     bimodalities = np.zeros((ids.size, ids.size), dtype=np.float32)
     for i in range(ids.size):
-        for j in range(1, ids.size):
+        for j in range(i + 1, ids.size):
             ij = np.array([i, j])
             in_pair = np.flatnonzero(np.isin(labels, ij))
             pair_log_liks = log_liks[ij][:, in_pair]
@@ -1207,7 +1218,8 @@ def qda(
     diff=None,
     cut=None,
     weighted=True,
-    min_overlap=0.95,
+    min_overlap=0.80,
+    min_count=5,
     score_kind="tv",
     debug_info=None,
 ):
@@ -1215,7 +1227,10 @@ def qda(
     if diff is None:
         diff = log_liks_b - log_liks_a
     keep = np.isfinite(diff)
-    if not keep.mean() >= min_overlap:
+    keep_prop = keep.mean()
+    if debug_info is not None:
+        debug_info["keep_prop"] = keep_prop
+    if keep_prop < min_overlap or keep.sum() < min_count:
         return np.inf
     in_b = in_b[keep]
     diff = diff[keep]
@@ -1223,13 +1238,18 @@ def qda(
     if weighted:
         b_prop = in_b.mean()
         a_prop = 1.0 - b_prop
-        sample_weights = np.where(in_b, a_prop / 0.5, b_prop / 0.5)
+        diff, keep_keep, inv = np.unique(diff, return_index=True, return_inverse=True)
+        keep = keep[keep_keep]
+        sample_weights = np.zeros(diff.shape)
+        np.add.at(sample_weights, inv, np.where(in_b, a_prop / 0.5, b_prop / 0.5))
     else:
-        sample_weights = np.ones_like(diff)
+        sample_weights = None
+        diff, keep_keep = np.unique(diff, return_index=True)
+        keep = keep[keep_keep]
 
     return smoothed_dipscore_at(
         cut,
-        diff,
+        diff.astype(np.float64),
         sample_weights=sample_weights,
         dipscore_only=True,
         score_kind=score_kind,
