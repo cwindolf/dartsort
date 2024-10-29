@@ -433,7 +433,7 @@ class MetricRegPlot(ComparisonPlot):
         with warnings.catch_warnings():
             warnings.simplefilter("ignore", category=RuntimeWarning)
             df_show = df[np.isfinite(df[self.y].values)]
-            df_show = df_show[np.isfinite(df[self.x].values)]
+            df_show = df_show[np.isfinite(df_show[self.x].values)]
             sns.regplot(
                 data=df_show,
                 x=self.x,
@@ -550,6 +550,19 @@ gt_overview_plots = (
     MetricDistribution(),
     TrimmedAgreementMatrix(),
     TrimmedTemplateDistanceMatrix(),
+)
+
+gt_overview_plots_no_temp_dist = (
+    MetricRegPlot(x="gt_ptp_amplitude", y="accuracy", log_x=True),
+    MetricRegPlot(x="gt_ptp_amplitude", y="recall", color="r", log_x=True),
+    MetricRegPlot(x="gt_ptp_amplitude", y="precision", color="g", log_x=True),
+    MetricRegPlot(x="gt_firing_rate", y="accuracy"),
+    MetricRegPlot(x="gt_firing_rate", y="recall", color="r"),
+    MetricRegPlot(x="gt_firing_rate", y="precision", color="g"),
+    MetricRegPlot(x="gt_ptp_amplitude", y="unsorted_recall", color="purple", log_x=True),
+    box,
+    MetricDistribution(xs=("recall", "accuracy", "temp_dist", "precision")),
+    TrimmedAgreementMatrix(),
 )
 
 # multi comparisons stuff

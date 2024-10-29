@@ -164,6 +164,7 @@ def featurization_config_to_class_names_and_kwargs(fconf):
                 {
                     "pretrained_path": fconf.nn_denoiser_pretrained_path,
                     "n_epochs": fconf.nn_denoiser_train_epochs,
+                    **(fconf.nn_denoiser_extra_kwargs or {}),
                 },
             )
         )

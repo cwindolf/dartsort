@@ -53,11 +53,12 @@ class StableSpikeDataset(torch.nn.Module):
         # neighborhoods module, for querying spikes by channel group
         self.core_neighborhoods = core_neighborhoods
 
-        extract_amp_vecs = torch.linalg.vecnorm(extract_features, dim=1)
-        amps = extract_amp_vecs.max(1).values
+        extract_amp_vecs = torch.linalg.vector_norm(extract_features, dim=1)
+        amps = extract_amp_vecs.nan_to_num().max(1).values
 
         # channel neighborhoods and features
         # if not self.features_on_device, .spike_data() will .to(self.device)
+        times_s = torch.asarray(self.original_sorting.times_seconds[kept_indices])
         if self.features_on_device:
             self.register_buffer("core_channels", core_channels)
             self.register_buffer("extract_channels", extract_channels)
@@ -65,6 +66,7 @@ class StableSpikeDataset(torch.nn.Module):
             self.register_buffer("extract_features", extract_features)
             # self.register_buffer("extract_amp_vecs", extract_amp_vecs)
             self.register_buffer("amps", amps)
+            self.register_buffer("times_seconds", times_s)
         else:
             self.core_channels = core_channels
             self.extract_channels = extract_channels
@@ -72,6 +74,7 @@ class StableSpikeDataset(torch.nn.Module):
             self.extract_features = extract_features
             # self.extract_amp_vecs = extract_amp_vecs
             self.amps = amps
+            self.times_seconds = times_s
 
         # always on device
         self.register_buffer("prgeom", prgeom)
@@ -379,7 +382,7 @@ class SpikeNeighborhoods(torch.nn.Module):
             nhoodv = nhood[nhood < self.n_channels]
             coverage = torch.isin(nhoodv, channels).sum() / nhoodv.numel()
             if coverage >= min_coverage:
-                (member_indices,) = torch.nonzero(spike_ids == j)
+                (member_indices,) = torch.nonzero(spike_ids == j, as_tuple=True)
                 neighborhood_info[j] = (nhood, member_indices)
                 n_spikes += member_indices.numel()
         return neighborhood_info, n_spikes
@@ -397,7 +400,7 @@ def interp_to_chans(
 ):
     source_pos = prgeom[spike_data.channels]
     target_pos = prgeom[channels]
-    shape = spike_data.n_spikes, *target_pos.shape
+    shape = len(spike_data), *target_pos.shape
     target_pos = target_pos[None].broadcast_to(shape)
     return interpolation_util.kernel_interpolate(
         spike_data.features,
