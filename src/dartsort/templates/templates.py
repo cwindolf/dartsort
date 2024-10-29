@@ -6,7 +6,7 @@ import numpy as np
 from dartsort.localize.localize_util import localize_waveforms
 from dartsort.util import data_util, drift_util
 
-from .get_templates import (get_templates, get_templates_with_h5, get_templates_multiple_chunks_linear)
+from .get_templates import (get_templates, get_templates_multiple_chunks_linear)
 from .superres_util import superres_sorting
 from .template_util import (get_realigned_sorting, get_template_depths,
                             weighted_average)
