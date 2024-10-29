@@ -56,11 +56,12 @@ def kmeans(
         kmeanspp_initial=kmeanspp_initial,
     )
     # responsibilities, sum to 1 over centroids
-    e = F.softmax(-0.5 * dists, dim=1)
     if not n_iter:
         return labels, e
 
     centroids = X[centroid_ixs]
+    dists = torch.cdist(X, centroids).square_()
+    e = F.softmax(-0.5 * dists, dim=1)
     proportions = e.mean(0)
 
     for j in range(n_iter):
