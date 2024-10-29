@@ -14,3 +14,4 @@ dependencies:
   - scikit-learn
   - tqdm
   - pandas
+  - linear_operator

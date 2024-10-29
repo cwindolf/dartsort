@@ -11,3 +11,4 @@ scikit-learn
 spikeinterface
 tqdm
 pandas
+linear_operator
