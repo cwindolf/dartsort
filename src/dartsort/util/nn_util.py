@@ -3,14 +3,16 @@ import torch.nn.functional as F
 from torch import nn
 
 
-def get_mlp(input_dim, hidden_dims, output_dim, use_batchnorm=True):
+def get_mlp(input_dim, hidden_dims, output_dim, norm_kind="batchnorm"):
     input_dims = [input_dim, *hidden_dims[:-1]]
     layers = []
 
     for ind, outd in zip(input_dims, hidden_dims):
         layers.append(nn.Linear(ind, outd))
-        if use_batchnorm:
+        if norm_kind == "batchnorm":
             layers.append(nn.BatchNorm1d(outd))
+        elif norm_kind == "layernorm":
+            layers.append(nn.LayerNorm(outd))
         layers.append(nn.ReLU())
 
     final_dim = hidden_dims[-1] if hidden_dims else input_dim
@@ -25,7 +27,7 @@ def get_waveform_mlp(
     hidden_dims,
     output_dim,
     input_includes_mask=True,
-    use_batchnorm=True,
+    norm_kind="batchnorm",
     channelwise_dropout_p=0.0,
     separated_mask_input=False,
     initial_conv_fullheight=False,
@@ -44,12 +46,16 @@ def get_waveform_mlp(
                 nn.Conv1d(spike_length_samples, spike_length_samples, kernel_size=1)
             )
         )
-        if use_batchnorm:
+        if norm_kind:
+            if norm_kind == "batchnorm":
+                norm = nn.BatchNorm1d(n_input_channels)
+            elif norm_kind == "layernorm":
+                norm = nn.LayerNorm(n_input_channels)
             layers.append(
                 WaveformOnly(
                     nn.Sequential(
                         Permute(0, 2, 1),
-                        nn.BatchNorm1d(n_input_channels),
+                        norm,
                         Permute(0, 2, 1),
                     )
                 )
@@ -61,15 +67,19 @@ def get_waveform_mlp(
         layers.append(ChannelwiseDropout(channelwise_dropout_p))
     layers.append(nn.Flatten())
     layers.append(
-        get_mlp(input_dim, hidden_dims, output_dim, use_batchnorm=use_batchnorm)
+        get_mlp(input_dim, hidden_dims, output_dim, norm_kind=norm_kind)
     )
     if return_initial_shape:
         layers.append(nn.Unflatten(-1, (spike_length_samples, n_input_channels)))
     if final_conv_fullheight:
-        if use_batchnorm:
+        if norm_kind:
+            if norm_kind == "batchnorm":
+                norm = nn.BatchNorm1d(n_input_channels)
+            elif norm_kind == "layernorm":
+                norm = nn.LayerNorm(n_input_channels)
             layers.append(
                 nn.Sequential(
-                    Permute(0, 2, 1), nn.BatchNorm1d(n_input_channels), Permute(0, 2, 1)
+                    Permute(0, 2, 1), norm, Permute(0, 2, 1)
                 )
             )
         layers.append(nn.ReLU())
