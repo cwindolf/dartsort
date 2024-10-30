@@ -95,7 +95,7 @@ class SingleChannelDenoiser(nn.Module):
         return self.out(x)
 
     def load(self, pretrained_path=default_pretrained_path):
-        checkpoint = torch.load(pretrained_path, map_location="cpu")
+        checkpoint = torch.load(pretrained_path, map_location="cpu", weights_only=True)
         self.load_state_dict(checkpoint)
         return self
 

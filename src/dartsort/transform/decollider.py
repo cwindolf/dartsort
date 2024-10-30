@@ -21,7 +21,7 @@ class Decollider(BaseWaveformDenoiser):
         channel_index,
         geom,
         hidden_dims=(256, 256),
-        use_batchnorm=True,
+        norm_kind="batchnorm",
         name=None,
         name_prefix="",
         exz_estimator="n3n",
@@ -47,7 +47,7 @@ class Decollider(BaseWaveformDenoiser):
             geom=geom, channel_index=channel_index, name=name, name_prefix=name_prefix
         )
 
-        self.use_batchnorm = use_batchnorm
+        self.norm_kind = norm_kind
         self.exz_estimator = exz_estimator
         self.inference_kind = inference_kind
         self.hidden_dims = hidden_dims
@@ -90,7 +90,7 @@ class Decollider(BaseWaveformDenoiser):
             self.model_channel_index.shape[1],
             self.hidden_dims,
             self.output_dim,
-            use_batchnorm=self.use_batchnorm,
+            norm_kind=self.norm_kind,
             channelwise_dropout_p=self.channelwise_dropout_p,
             separated_mask_input=True,
             return_initial_shape=True,
