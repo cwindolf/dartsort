@@ -313,12 +313,19 @@ class SpikeNeighborhoods(torch.nn.Module):
         self.register_buffer("neighborhoods", neighborhoods)
         self.n_neighborhoods = len(neighborhoods)
 
+        # store neighborhoods as a matrix
+        indicators = torch.zeros((n_channels, len(neighborhoods)))
+        for j, nhood in enumerate(neighborhoods):
+            indicators[nhood[nhood < n_channels], j] = 1.0
+        self.register_buffer("indicators", indicators)
+        self.register_buffer("channel_counts", indicators.sum(0))
+
         if neighborhood_members is None:
             # cache lookups
             neighborhood_members = []
             for j in range(len(neighborhoods)):
                 (in_nhood,) = torch.nonzero(neighborhood_ids == j, as_tuple=True)
-                neighborhood_members.append(in_nhood)
+                neighborhood_members.append(in_nhood.cpu())
         assert len(neighborhood_members) == self.n_neighborhoods
 
         # it's a pain to store dicts with register_buffer, so store offsets
@@ -327,6 +334,7 @@ class SpikeNeighborhoods(torch.nn.Module):
         )
         self.neighborhood_members_slices = []
         neighborhood_member_offset = 0
+        neighborhood_popcounts = []
         for j in range(len(neighborhoods)):
             nhoodmemsz = neighborhood_members[j].numel()
             nhoodmemsl = slice(
@@ -335,7 +343,11 @@ class SpikeNeighborhoods(torch.nn.Module):
             _neighborhood_members[nhoodmemsl] = neighborhood_members[j]
             self.neighborhood_members_slices.append(nhoodmemsl)
             neighborhood_member_offset += nhoodmemsz
-        self.register_buffer("_neighborhood_members", _neighborhood_members)
+            neighborhood_popcounts.append(nhoodmemsz)
+        # self.register_buffer("_neighborhood_members", _neighborhood_members)
+        # seems that indices want to live on cpu.
+        self._neighborhood_members = _neighborhood_members.cpu()
+        self.register_buffer("popcounts", torch.tensor(neighborhood_popcounts))
 
     @classmethod
     def from_channels(cls, channels, n_channels):
@@ -346,7 +358,11 @@ class SpikeNeighborhoods(torch.nn.Module):
         return self._neighborhood_members[self.neighborhood_members_slices[id]]
 
     def subset_neighborhoods(self, channels, min_coverage=1.0):
-        """
+        """Return info on neighborhoods which cover the channel set well enough
+
+        Define coverage for a neighborhood and a channel group as the intersection
+        size divided by the neighborhood's size.
+
         Returns
         -------
         neighborhood_info : dict
@@ -355,15 +371,14 @@ class SpikeNeighborhoods(torch.nn.Module):
         n_spikes : int
             The total number of spikes in the neighborhood.
         """
-        neighborhood_info = {}
-        n_spikes = 0
-        for j, nhood in enumerate(self.neighborhoods):
-            nhoodv = nhood[nhood < self.n_channels]
-            coverage = torch.isin(nhoodv, channels).sum() / nhoodv.numel()
-            if coverage >= min_coverage:
-                member_indices = self.neighborhood_members(j)
-                neighborhood_info[j] = (nhood, member_indices)
-                n_spikes += member_indices.numel()
+        inds = self.indicators[channels]
+        coverage = inds.sum(0) / self.channel_counts
+        (covered_ids,) = torch.nonzero(coverage >= min_coverage, as_tuple=True)
+        neighborhood_info = {
+            j: (self.neighborhoods[j], self.neighborhood_members(j))
+            for j in covered_ids
+        }
+        n_spikes = self.popcounts[covered_ids].sum()
         return neighborhood_info, n_spikes
 
     def spike_neighborhoods(self, channels, spike_indices, min_coverage=1.0):
@@ -373,18 +388,17 @@ class SpikeNeighborhoods(torch.nn.Module):
         In this case, the returned neighborhood_member_indices keys are relative:
         spike_indices[neighborhood_member_indices] are the actual indices.
         """
-        neighborhood_info = {}
-        n_spikes = 0
         spike_ids = self.neighborhood_ids[spike_indices]
         neighborhoods_considered = torch.unique(spike_ids)
-        for j in neighborhoods_considered:
-            nhood = self.neighborhoods[j]
-            nhoodv = nhood[nhood < self.n_channels]
-            coverage = torch.isin(nhoodv, channels).sum() / nhoodv.numel()
-            if coverage >= min_coverage:
-                (member_indices,) = torch.nonzero(spike_ids == j, as_tuple=True)
-                neighborhood_info[j] = (nhood, member_indices)
-                n_spikes += member_indices.numel()
+        inds = self.indicators[channels][:, neighborhoods_considered]
+        coverage = inds.sum(0) / self.channel_counts[neighborhoods_considered]
+        covered_ids = neighborhoods_considered[coverage >= min_coverage].cpu()
+        spike_ids = spike_ids.cpu()
+        neighborhood_info = {
+            j: (self.neighborhoods[j], *torch.nonzero(spike_ids == j, as_tuple=True))
+            for j in covered_ids
+        }
+        n_spikes = self.popcounts[covered_ids].sum()
         return neighborhood_info, n_spikes
 
 
@@ -413,6 +427,13 @@ def interp_to_chans(
 
 
 def get_shift_info(sorting, motion_est, geom, keep_select, motion_depth_mode):
+    """
+    shifts = reg_depths - depths
+    reg_depths = depths + shifts
+    i.e., target_pos = source_pos + shifts
+          target_pos - shifts = source_pos
+    where by source pos i mean the true moving positions.
+    """
     times_s = sorting.times_seconds[keep_select]
     channels = sorting.channels[keep_select]
     if motion_depth_mode == "localization":

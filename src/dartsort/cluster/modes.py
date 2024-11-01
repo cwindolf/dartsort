@@ -4,12 +4,18 @@ from scipy.stats import norm
 
 from . import density
 
+try:
+    from isosplit import up_down_isotonic_regression, jisotonic5
+except ImportError:
+    import warnings
+    warnings.warn("No isosplit...")
+    pass
+
 # todo: replace all isosplit stuff with things based on scipy's isotonic regression.
 
 
 def fit_unimodal_right(x, f, weights=None, cut=0, hard=False):
     """Unimodal to the right of cut, increasing to the left. Continuity at the border."""
-    from isosplit import up_down_isotonic_regression, jisotonic5
     if weights is None:
         weights = np.ones_like(f)
 
@@ -99,7 +105,7 @@ def smoothed_dipscore_at(
     dipscore_only=False,
     score_kind="tv",
     cut_relmax_order=3,
-    kind="isotonic",
+    null="isotoniconesideunnormed",
     debug_info=None,
 ):
     if sample_weights is None:
@@ -140,32 +146,42 @@ def smoothed_dipscore_at(
     score = 0
     best_dens_err = np.inf
     best_uni = None
+
+    if score_kind == "ks":
+        empirical = np.cumsum(densities * spacings)
+
+    if null in ("isotonic", "gcm"):
+        orders = (slice(None),)
+        signs = (1,)
+    else:
+        orders = (slice(None), slice(None, None, -1))
+        signs = (1, -1)
+
     # change to density which is best overall fit
     for hard in (False, True):
-        mask = samples < cut if hard else samples <= cut
-        if score_kind == "ks":
-            empirical = (densities[mask] * spacings[mask]).sum()
-
-        for order, sign in zip(
-            (slice(None), slice(None, None, -1)),
-            (1, -1),
-        ):
+        for order, sign in zip(orders, signs):
             s = np.ascontiguousarray(samples[order])
             d = np.ascontiguousarray(densities[order])
             w = np.ascontiguousarray(sample_weights[order])
-            if kind == "isotonic":
+            if null in ("isotoniconeside", "isotoniconesideunnormed"):
                 dens = fit_unimodal_right(sign * s, d, weights=w, cut=sign * cut, hard=hard)
-            elif kind == "truncnorm":
+            elif null == "isotonic":
+                dens = up_down_isotonic_regression(d, weights=w)
+            elif null == "truncnorm":
                 dens = fit_truncnorm_right(sign * s, d, weights=w, cut=sign * cut, hard=hard)
             else:
                 assert False
+
             dens = dens[order]
-            dens /= (dens * spacings).sum()
+            if null not in ("isotonic", "isotoniconesideunnormed"):
+                dens /= (dens * spacings).sum()
+
             dens_err = (np.abs(dens - densities) * spacings).sum()
             if score_kind == "ks":
-                my_score = abs(empirical - np.sum(dens[mask] * spacings[mask])) * np.sqrt(sample_weights.sum())
+                my_score = np.abs(empirical - np.cumsum(dens * spacings)).max()
             elif score_kind == "tv":
-                my_score = 0.5 * np.sum(np.abs(densities - dens) * spacings)
+                my_score = 0.5 * dens_err
+
             # if my_score > score:
             if dens_err < best_dens_err:
                 score = my_score
@@ -178,7 +194,7 @@ def smoothed_dipscore_at(
         debug_info["cut"] = cut
         debug_info["score"] = score
         debug_info["score_kind"] = score_kind
-        debug_info["uni_density"] = dens
+        debug_info["uni_density"] = best_uni
         debug_info["sample_weights"] = sample_weights
         debug_info["samples"] = samples
 
