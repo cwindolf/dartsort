@@ -38,6 +38,7 @@ def scatter_spike_features(
     label_axes=True,
     random_seed=0,
     amplitudes_dataset_name="denoised_ptp_amplitudes",
+    localizations_dataset_name="point_source_localizations",
     extra_features=None,
     show_triaged=True,
     remove_outliers=True,
@@ -68,7 +69,7 @@ def scatter_spike_features(
         if times_s is None:
             times_s = getattr(sorting, "times_seconds", None)
         if x is None:
-            x = getattr(sorting, "point_source_localizations", None)
+            x = getattr(sorting, localizations_dataset_name, None)
             if x is not None:
                 depths_um = x[:, 2]
                 x = x[:, 0]
@@ -85,9 +86,9 @@ def scatter_spike_features(
             if times_s is None:
                 times_s = h5["times_seconds"][:]
             if x is None:
-                x = h5["point_source_localizations"][:, 0]
+                x = h5[localizations_dataset_name][:, 0]
             if depths_um is None:
-                depths_um = h5["point_source_localizations"][:, 2]
+                depths_um = h5[localizations_dataset_name][:, 2]
             if amplitudes is None:
                 amplitudes = h5[amplitudes_dataset_name][:]
             if geom is None:
@@ -133,6 +134,7 @@ def scatter_spike_features(
         linewidth=linewidth,
         to_show=to_show,
         amplitudes_dataset_name=amplitudes_dataset_name,
+        localizations_dataset_name=localizations_dataset_name,
         show_triaged=show_triaged,
         **scatter_kw,
     )
@@ -158,6 +160,7 @@ def scatter_spike_features(
         linewidth=linewidth,
         to_show=to_show,
         amplitudes_dataset_name=amplitudes_dataset_name,
+        localizations_dataset_name=localizations_dataset_name,
         show_triaged=show_triaged,
         **scatter_kw,
     )
@@ -211,6 +214,7 @@ def scatter_spike_features(
         linewidth=linewidth,
         to_show=to_show,
         amplitudes_dataset_name=amplitudes_dataset_name,
+        localizations_dataset_name=localizations_dataset_name,
         show_triaged=show_triaged,
         **scatter_kw,
     )
@@ -245,6 +249,7 @@ def scatter_time_vs_depth(
     linewidth=0,
     to_show=None,
     amplitudes_dataset_name="denoised_ptp_amplitudes",
+    localizations_dataset_name="point_source_localizations",
     show_triaged=True,
     time_range=None,
     **scatter_kw,
@@ -262,7 +267,7 @@ def scatter_time_vs_depth(
         if times_s is None:
             times_s = getattr(sorting, "times_seconds", None)
         if depths_um is None:
-            depths_um = getattr(sorting, "point_source_localizations", None)
+            depths_um = getattr(sorting, localizations_dataset_name, None)
             if depths_um is not None:
                 depths_um = depths_um[:, 2]
         if amplitudes is None:
@@ -276,7 +281,7 @@ def scatter_time_vs_depth(
             if times_s is None:
                 times_s = h5["times_seconds"][:]
             if depths_um is None:
-                depths_um = h5["point_source_localizations"][:, 2]
+                depths_um = h5[localizations_dataset_name][:, 2]
             if amplitudes is None:
                 amplitudes = h5[amplitudes_dataset_name][:]
             if geom is None:
@@ -332,6 +337,7 @@ def scatter_x_vs_depth(
     linewidth=0,
     to_show=None,
     amplitudes_dataset_name="denoised_ptp_amplitudes",
+    localizations_dataset_name="point_source_localizations",
     show_triaged=True,
     **scatter_kw,
 ):
@@ -400,13 +406,14 @@ def scatter_amplitudes_vs_depth(
     linewidth=0,
     to_show=None,
     amplitudes_dataset_name="denoised_ptp_amplitudes",
+    localizations_dataset_name="point_source_localizations",
     show_triaged=True,
     **scatter_kw,
 ):
     """Scatter plot of spike amplitude vs spike depth (vertical position on probe)"""
     if sorting is not None:
         if depths_um is None:
-            depths_um = getattr(sorting, "point_source_localizations", None)
+            depths_um = getattr(sorting, localizations_dataset_name, None)
             if depths_um is not None:
                 depths_um = x[:, 2]
         if amplitudes is None:
@@ -418,7 +425,7 @@ def scatter_amplitudes_vs_depth(
     if needs_load and hdf5_filename is not None:
         with h5py.File(hdf5_filename, "r", locking=False) as h5:
             if depths_um is None:
-                depths_um = h5["point_source_localizations"][:, 2]
+                depths_um = h5[localizations_dataset_name][:, 2]
             if amplitudes is None:
                 amplitudes = h5[amplitudes_dataset_name][:]
             if geom is None:

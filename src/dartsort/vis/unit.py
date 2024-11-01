@@ -20,7 +20,7 @@ from matplotlib.legend_handler import HandlerTuple
 from ..cluster import split
 from ..config import raw_template_config
 from ..util.analysis import DARTsortAnalysis
-from ..util.multiprocessing_util import CloudpicklePoolExecutor, get_pool
+from ..util.multiprocessing_util import CloudpicklePoolExecutor, get_pool, cloudpickle
 from . import layout
 from .analysis_plots import isi_hist, correlogram, plot_correlogram, bar;
 from .colors import glasbey1024
@@ -1051,8 +1051,7 @@ def make_all_summaries(
         gizmo_name,
     )
     if n_jobs:
-        from cloudpickle import dumps
-        initargs = (dumps(initargs),)
+        initargs = (cloudpickle.dumps(initargs),)
     n_jobs, Executor, context = get_pool(n_jobs, cls=CloudpicklePoolExecutor)
     with Executor(
         max_workers=n_jobs,
@@ -1127,9 +1126,8 @@ _summary_job_context = None
 def _summary_init(*args):
     global _summary_job_context
     if len(args) == 1:
-        from cloudpickle import loads
 
-        args = loads(args[0])
+        args = cloudpickle.loads(args[0])
     _summary_job_context = SummaryJobContext(*args)
 
 
