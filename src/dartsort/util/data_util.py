@@ -192,8 +192,13 @@ class DARTsortSorting:
 
 def get_tpca(sorting):
     """Look for the TemporalPCAFeaturizer in the usual place."""
-    base_dir = sorting.parent_h5_path.parent
-    model_dir = base_dir / f"{sorting.parent_h5_path.stem}_models"
+    if isinstance(sorting, Path):
+        base_dir = sorting.parent
+        stem = sorting.stem
+    else:
+        base_dir = sorting.parent_h5_path.parent
+        stem = sorting.parent_h5_path.stem
+    model_dir = base_dir / f"{stem}_models"
     pipeline = torch.load(
         model_dir / "featurization_pipeline.pt",
         weights_only=True,
