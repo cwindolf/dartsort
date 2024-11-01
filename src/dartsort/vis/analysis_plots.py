@@ -60,7 +60,6 @@ def distance_matrix_dendro(
     dendro_width = (
         (
             0.7,
-            0.15,
         )
         if show_dendrogram
         else ()
@@ -73,7 +72,7 @@ def distance_matrix_dendro(
         width_ratios=[2, 0.15, *dendro_width],
     )
     ax_im = panel.add_subplot(gs[:, 0])
-    ax_cbar = panel.add_subplot(gs[1, -1])
+    ax_cbar = panel.add_subplot(gs[1, 1])
     if show_dendrogram:
         scipy.cluster.hierarchy.set_link_color_palette(list(map(to_hex, glasbey1024)))
         ax_dendro = panel.add_subplot(gs[:, 2], sharey=ax_im)
@@ -99,17 +98,22 @@ def distance_matrix_dendro(
         vmin=0,
         vmax=vmax,
         cmap=image_cmap,
+        extent=[0, len(distances) * 10, 0, len(distances) * 10] if show_dendrogram else None,
         origin="lower",
     )
     if show_values:
+        sc = 10 if show_dendrogram else 1
+        so = 5 if show_dendrogram else 0
         for (j, i), val in np.ndenumerate(distances[order][:, order]):
             lc = invert(image_cmap(val / vmax))
-            ax_im.text(i, j, f"{val:.2f}", ha="center", va="center", clip_on=True, color=lc)
+            ax_im.text(so + sc * i, so + sc * j, f"{val:.2f}", ha="center", va="center", clip_on=True, color=lc)
     if show_unit_labels:
         if unit_ids is None:
             unit_ids = np.arange(distances.shape[0])
-        ax_im.set_xticks(np.arange(len(order)), unit_ids[order])
-        ax_im.set_yticks(np.arange(len(order)), unit_ids[order])
+        sc = 10 if show_dendrogram else 1
+        so = 5 if show_dendrogram else 0
+        ax_im.set_xticks(so + sc * np.arange(len(order)), unit_ids[order])
+        ax_im.set_yticks(so + sc * np.arange(len(order)), unit_ids[order])
         for i, (tx, ty) in enumerate(
             zip(ax_im.xaxis.get_ticklabels(), ax_im.yaxis.get_ticklabels())
         ):

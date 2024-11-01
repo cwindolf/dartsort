@@ -1,7 +1,9 @@
 import numpy as np
 import torch
+from matplotlib.lines import Line2D
 
 from .colors import glasbey1024
+from .waveforms import geomplot
 
 
 def get_neighbors(gmm, unit_id, n_neighbors=5):
@@ -47,3 +49,41 @@ def amp_double_scatter(gmm, indices, panel, unit_id=None, labels=None, viol_ms=N
     else:
         for j in np.unique(labels):
             ax_dist.hist(amps[labels == j], color=glasbey1024[j], label="unit", **histk)
+
+
+def plot_means(panel, prgeom, tpca, chans, units, labels, title="nearest neighbors"):
+    ax = panel.subplots()
+
+    means = []
+    for unit in units:
+        mean = unit.mean[:, chans]
+        means.append(tpca.force_reconstruct(mean).numpy(force=True))
+
+    colors = glasbey1024[labels]
+    geomplot(
+        np.stack(means, axis=0),
+        channels=chans[None]
+        .broadcast_to(len(means), *chans.shape)
+        .numpy(force=True),
+        geom=prgeom.numpy(force=True),
+        colors=colors,
+        show_zero=False,
+        ax=ax,
+        zlim=None,
+    )
+    panel.legend(
+        handles=[Line2D([0, 1], [0, 0], color=c) for c in colors],
+        labels=labels.tolist(),
+        loc="outside upper center",
+        frameon=False,
+        ncols=4,
+        title=title,
+        fontsize="small",
+        borderpad=0,
+        labelspacing=0.25,
+        handlelength=1.0,
+        handletextpad=0.4,
+        borderaxespad=0.0,
+        columnspacing=1.0,
+    )
+    ax.axis("off")
