@@ -8,6 +8,7 @@ import torch.multiprocessing as torchmp
 # TODO: torch.multiprocessing?
 
 have_cloudpickle = False
+cloudpickle = None
 try:
     import cloudpickle
     have_cloudpickle = True
