@@ -1,14 +1,13 @@
+import tempfile
 import warnings
 from collections import namedtuple
 from pathlib import Path
-import tempfile
 
 import torch
 import torch.nn.functional as F
 from dartsort.detect import detect_and_deduplicate
-from dartsort.transform import Waveform, WaveformPipeline, Voltage
-from dartsort.util import spiketorch
-from dartsort.util import peel_util
+from dartsort.transform import Voltage, Waveform, WaveformPipeline
+from dartsort.util import peel_util, spiketorch
 from dartsort.util.waveform_util import (get_relative_subset,
                                          make_channel_index,
                                          relative_channel_subset_index)
@@ -387,7 +386,7 @@ def subtract_chunk(
 ):
     """Core peeling routine for subtraction"""
     if no_subtraction:
-        times_rel, channels, voltages, waveforms = threshold_chunk(
+        threshold_res = threshold_chunk(
             traces,
             channel_index,
             detection_threshold=min(detection_thresholds),
@@ -402,15 +401,16 @@ def subtract_chunk(
             max_spikes_per_chunk=None,
             quiet=False,
         )
-        waveforms, features = denoising_pipeline(waveforms, channels)
+        waveforms, features = denoising_pipeline(threshold_res['waveforms'], threshold_res['channels'])
         return ChunkSubtractionResult(
-            n_spikes=times_rel.numel(),
-            times_samples=times_rel,
-            channels=channels,
+            n_spikes=threshold_res['n_spikes'],
+            times_samples=threshold_res['times_rel'],
+            channels=threshold_res['channels'],
             collisioncleaned_waveforms=waveforms,
             residual=None,
             features=features,
         )
+
     # validate arguments to avoid confusing error messages later
     re_extract = extract_index is not None
     if extract_index is None:

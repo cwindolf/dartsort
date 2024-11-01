@@ -10,3 +10,6 @@ scipy >= 1.13
 scikit-learn
 spikeinterface
 tqdm
+pandas
+linear_operator
+numba
