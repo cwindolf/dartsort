@@ -384,15 +384,26 @@ class EmbeddedNoise(torch.nn.Module):
             return self.mean
         assert False
 
-    def marginal_covariance(self, channels=slice(None), cache_key=None):
+    def marginal_covariance(self, channels=slice(None), cache_key=None, device=None):
+        if device is not None:
+            device = torch.device(device)
         if cache_key is not None and cache_key in self.cache:
-            return self.cache[cache_key]
+            res = self.cache[cache_key]
+            if device is not None and device != res.device:
+                res = res.to(device)
+                self.cache[cache_key] = res
+            return res
         if channels == slice(None):
             if self._full_cov is None:
                 self._full_cov = self._marginal_covariance()
                 self._logdet = self._full_cov.logdet()
+            if device is not None and device != self._full_cov.device:
+                self._full_cov = self._full_cov.to(device)
+                self._logdet = self._logdet.to(device)
             return self._full_cov
         cov = self._marginal_covariance(channels)
+        if device is not None and device != cov.device:
+            cov = cov.to(device)
         if cache_key is not None:
             self.cache[cache_key] = cov
         return cov
@@ -562,7 +573,6 @@ class EmbeddedNoise(torch.nn.Module):
 
 
 def interpolate_residual_snippets(
-    tpca,
     motion_est,
     hdf5_path,
     geom,
@@ -575,18 +585,27 @@ def interpolate_residual_snippets(
     channels_mode="round",
     interpolation_method="normalized",
     workers=None,
+    device=None,
 ):
     """PCA-embed and interpolate residual snippets to the registered probe"""
-    from dartsort.util import interpolation_util
+    from dartsort.util import interpolation_util, data_util
 
-    with h5py.File(hdf5_path, "r") as h5:
+    if device is None:
+        device = "cuda" if torch.cuda.is_available() else None
+
+    tpca = data_util.get_tpca(hdf5_path)
+    if device is not None:
+        tpca = tpca.to(device)
+
+    with h5py.File(hdf5_path, "r", locking=False) as h5:
         snippets = h5[residual_dataset_name][:]
         times_s = h5[residual_times_s_dataset_name][:]
     snippets = torch.from_numpy(snippets).to(tpca.components)
     times_s = torch.from_numpy(times_s).to(tpca.components)
 
     # tpca project
-    snippets = snippets[:, tpca.temporal_slice]
+    if tpca.temporal_slice is not None:
+        snippets = snippets[:, tpca.temporal_slice]
     n, t, c = snippets.shape
     snippets = snippets.permute(0, 2, 1).reshape(n * c, t)
     snippets = tpca._transform_in_probe(snippets)
@@ -600,9 +619,11 @@ def interpolate_residual_snippets(
     source_depths = source_pos[:, :, 1].clone()
     source_t = times_s[:, None].broadcast_to(source_depths.shape).reshape(-1)
     source_depths = source_depths.reshape(-1)
-    source_reg_depths = motion_est.correct_s(source_t, source_depths)
-    source_reg_depths = torch.asarray(source_reg_depths)
-    source_pos[:, :, 1] = source_reg_depths.reshape(source_pos[:, :, 1].shape)
+    source_shifts = 0
+    if motion_est is not None:
+        source_reg_depths = motion_est.correct_s(source_t.cpu(), source_depths.cpu())
+        source_reg_depths = torch.asarray(source_reg_depths).to(snippets)
+        source_shifts = source_reg_depths - source_depths
 
     # target positions
     # we'll query the target geom for the closest source pos, within reason
@@ -615,13 +636,22 @@ def interpolate_residual_snippets(
         workers=workers or -1,
     )
     targ_inds = torch.from_numpy(targ_inds).reshape(source_pos.shape[:2])
-    target_pos = prgeom[targ_inds]
+    target_pos = prgeom[targ_inds].to(snippets)
+    if motion_est is not None:
+        target_pos[:, :, 1] = target_pos[:, :, 1] - source_shifts
+
+    # if kriging, we need a pseudoinverse
+    skis = None
+    if interpolation_method.startswith("kriging"):
+        skis = interpolation_util.get_source_kernel_pinvs(source_geom, None, sigma=sigma)
+        skis = skis.broadcast_to((len(snippets), *skis.shape[1:]))
 
     # allocate output storage with an extra channel of NaN needed later
     snippets = interpolation_util.kernel_interpolate(
         snippets,
         source_pos,
         target_pos,
+        source_kernel_invs=skis,
         sigma=sigma,
         allow_destroy=True,
         interpolation_method=interpolation_method,
@@ -630,7 +660,7 @@ def interpolate_residual_snippets(
     # now, let's embed these into the full registered probe
     snippets_full = snippets.new_full((n, tpca.rank, len(registered_geom)), torch.nan)
     targ_inds = targ_inds[:, None].broadcast_to(snippets.shape)
-    snippets_full.scatter_(2, targ_inds, snippets)
+    snippets_full.scatter_(2, targ_inds.to(snippets.device), snippets)
 
     return snippets_full
 

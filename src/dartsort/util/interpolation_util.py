@@ -76,6 +76,7 @@ def interpolate_by_chunk(
     dtype = torch.from_numpy(np.empty((), dtype=dataset.dtype)).dtype
     n_spikes = mask.sum()
     assert channels.shape == (n_spikes,)
+    n_source_chans = channel_index.shape[1]
     n_target_chans = target_channels.shape[1]
     assert target_channels.shape == (n_spikes, n_target_chans)
     feature_dim = dataset.shape[1]
@@ -89,10 +90,17 @@ def interpolate_by_chunk(
     # build data needed for interpolation
     source_geom = pad_geom(geom, dtype=dtype, device=device)
     target_geom = pad_geom(registered_geom, dtype=dtype, device=device)
+    # here, shifts = reg_depths - depths
     shifts = torch.as_tensor(shifts, dtype=dtype).to(device)
     target_channels = torch.as_tensor(target_channels, device=device)
     channel_index = torch.as_tensor(channel_index, device=device)
     channels = torch.as_tensor(channels, device=device)
+
+    # if needed, precompute kriging pinvs
+    skis = None
+    do_skis = interpolation_method.startswith("kriging")
+    if do_skis:
+        source_kernel_invs = get_source_kernel_pinvs(source_geom, channel_index, sigma=sigma)
 
     for ixs, chunk_features in yield_masked_chunks(
         mask, dataset, show_progress=show_progress, desc_prefix="Interpolating"
@@ -104,10 +112,15 @@ def interpolate_by_chunk(
             # allows per-channel shifts
             source_shifts = source_shifts.unsqueeze(1)
         source_shifts = source_shifts.unsqueeze(-1)
-        source_pos = source_geom[source_channels] + source_shifts
+        # used to shift the source, but for kriging it's better to shift targets
+        # so that we can cache source kernel choleskys
+        source_pos = source_geom[source_channels] # + source_shifts
 
         # where are they going?
-        target_pos = target_geom[target_channels[ixs]]
+        target_pos = target_geom[target_channels[ixs]] - source_shifts
+
+        if do_skis:
+            skis = source_kernel_invs[channels[ixs]]
 
         # interpolate, store
         chunk_features = torch.from_numpy(chunk_features).to(device)
@@ -115,6 +128,7 @@ def interpolate_by_chunk(
             chunk_features,
             source_pos,
             target_pos,
+            source_kernel_invs=skis,
             sigma=sigma,
             allow_destroy=True,
             interpolation_method=interpolation_method,
@@ -122,6 +136,17 @@ def interpolate_by_chunk(
         out[ixs] = chunk_res.to(out)
 
     return out
+
+
+def get_source_kernel_pinvs(source_geom, channel_index=None, sigma=20.0, atol=1e-5, rtol=1e-5):
+    """channel_index None means we'll make one inv of the full probe."""
+    if channel_index is None:
+        source_pos = source_geom[None]
+    else:
+        source_pos = source_geom[channel_index]
+    source_kernels = log_rbf(source_pos, sigma=sigma).exp_().nan_to_num_()
+    pinvs = torch.linalg.pinv(source_kernels, atol=atol, rtol=rtol, hermitian=True)
+    return pinvs
 
 
 def pad_geom(geom, dtype=torch.float, device=None):
@@ -179,6 +204,7 @@ def kernel_interpolate(
         kernel = torch.zeros_like(d)
         kernel.scatter_(1, d.argmin(dim=1, keepdim=True), 1)
     else:
+        tic = time.perf_counter()
         kernel = log_rbf(source_pos, target_pos, sigma)
         if interpolation_method == "normalized":
             kernel = F.softmax(kernel, dim=1)
