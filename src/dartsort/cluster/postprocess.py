@@ -199,7 +199,7 @@ def chuck_noisy_template_units_with_time_tracking(
         )
         new_template_data_list.append(new_template_data)
         if template_save_dir is not None:
-            template_chunk_npz_file = template_save_dir / f"chunk_{j}_GC_{template_npz_filename}"
+            template_chunk_npz_file = template_save_dir / f"chunk_{j}_{template_npz_filename}"
             new_template_data.to_npz(template_chunk_npz_file)
 
     if return_denoising_tsvd:
