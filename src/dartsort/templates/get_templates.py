@@ -140,7 +140,7 @@ def get_templates_multiple_chunks_linear(
     denoising_tsvd=None,
     denoising_rank=5,
     denoising_fit_radius=75,
-    denoising_spikes_fit=50_000,
+    denoising_spikes_fit=20_000,
     denoising_snr_threshold=50.0,
     min_fraction_at_shift=0.25,
     min_count_at_shift=25,
@@ -239,7 +239,6 @@ def get_templates_multiple_chunks_linear(
         )
 
     n_chunks = len(chunk_time_ranges_s)
-    print("keeping all necessary spikes")
     times_samples_unique, times_seconds_unique, depths_um_unique, ind_arr, inv_arr, all_chunk_ids, all_labels = keep_all_most_recent_spikes_per_chunk(
         sorting,
         chunk_time_ranges_s,
@@ -247,7 +246,6 @@ def get_templates_multiple_chunks_linear(
         recording,
     )
 
-    print("computing pitch shifts")
     pitch_shifts = get_spike_pitch_shifts(
                 depths_um_unique,
                 geom,
@@ -341,7 +339,6 @@ def get_templates_multiple_chunks_linear(
             trough_offset_samples=trough_offset_samples_original,
             recording_length_samples=recording.get_num_samples(),
         )
-
 
     return dict(
         sorting=sorting,
@@ -869,21 +866,11 @@ def get_all_shifted_raw_and_low_rank_templates_linear(
             spike_length_samples=spike_length_samples,
         )
         # which_times = inv_arr[batch_idx_unique]
-        
-        # print("ind_arr")
-        # print(ind_arr)
-        # assert np.all(ind_arr.argsort() == np.arange(len(ind_arr)))
-        # print(ind_arr[batch_idx])
-        
+                
         batch_idx_unique = np.arange(ind_arr[batch_idx][0], ind_arr[batch_idx][-1])
         which_times, which_chunks, which_units = inv_arr[batch_idx_unique], all_chunk_ids[batch_idx_unique], all_labels[batch_idx_unique]
         _, which_times = np.unique(which_times, return_inverse=True)
         # which_times, which_chunks, which_units = np.where(chunk_unit_ids[batch_idx]) #batch_size * n_chunks
-
-        # print("LENS")
-        # print(len(which_times))
-        # print(len(which_chunks))
-        # print(len(which_units))
         
         if not raw:
             n, t, c = waveforms.shape
@@ -922,6 +909,7 @@ def get_all_shifted_raw_and_low_rank_templates_linear(
 
     # spike_counts = 0 --> nan
     # spike_counts shape: chunk*unit*chan
+    
     valid = spike_counts > min_count_at_shift #> instead of >= to make sure to turn off 0 channels 
     valid &= spike_counts / spike_counts.max(2)[:, :, None] > min_fraction_at_shift
     spike_counts[~valid] = np.nan

@@ -2,6 +2,13 @@ from pathlib import Path
 
 from ..localize.localize_util import check_resume_or_overwrite, localize_hdf5
 from .data_util import DARTsortSorting
+from dartsort.peel import ObjectiveUpdateTemplateMatchingPeeler
+
+from dartsort.config import (
+    default_featurization_config,
+    default_matching_config,
+    default_waveform_config,
+)
 
 def fit_and_save_models(
     peeler,
@@ -146,6 +153,91 @@ def run_peeler(
         DARTsortSorting.from_peeling_hdf5(output_hdf5_filename),
         output_hdf5_filename,
     )
+
+
+
+def match_single_chunk(
+    recording,
+    template_data,
+    name_hdf5_chunk="matching0.h5",
+    chunk_starts_samples=None,
+    motion_est=None,
+    output_directory=None,
+    model_subdir="matching0_models",
+    waveform_config=default_waveform_config,
+    featurization_config=default_featurization_config,
+    matching_config=default_matching_config,
+    n_jobs=0,
+    overwrite=False,
+    residual_filename=None,
+    show_progress=True,
+    device=None,
+):
+    matching_peeler = ObjectiveUpdateTemplateMatchingPeeler.from_config(
+        recording,
+        waveform_config,
+        matching_config,
+        featurization_config,
+        template_data,
+        motion_est=motion_est,
+    )
+    sorting_chunk, output_hdf5_filename = run_peeler(
+        matching_peeler,
+        output_directory,
+        name_hdf5_chunk,
+        model_subdir,
+        featurization_config,
+        chunk_starts_samples=chunk_starts_samples,
+        overwrite=overwrite,
+        exception_no_featurization=True,
+        n_jobs=n_jobs,
+        residual_filename=residual_filename,
+        show_progress=show_progress,
+        device=device,
+    )
+    return sorting_chunk, output_hdf5_filename
+
+def fitting_and_saving_models_before_time_tracking_deconv(
+    recording,
+    template_data,
+    hdf5_filename="matching0.h5",
+    chunk_starts_samples=None,
+    motion_est=None,
+    output_directory=None,
+    model_subdir="matching0_models",
+    waveform_config=default_waveform_config,
+    featurization_config=default_featurization_config,
+    matching_config=default_matching_config,
+    n_jobs=0,
+    overwrite=True,
+    residual_filename=None,
+    show_progress=True,
+    device=None,
+):
+       
+    matching_peeler = ObjectiveUpdateTemplateMatchingPeeler.from_config(
+        recording,
+        waveform_config,
+        matching_config,
+        featurization_config,
+        template_data, 
+        motion_est=motion_est,
+    )
+    
+    fit_and_save_models(
+        matching_peeler,
+        output_directory,
+        hdf5_filename,
+        model_subdir,
+        featurization_config,
+        chunk_starts_samples=chunk_starts_samples,
+        overwrite=True,
+        n_jobs=n_jobs,
+        residual_filename=residual_filename,
+        show_progress=show_progress,
+        device=device,
+    )
+
 
 
 def peeler_is_done(
