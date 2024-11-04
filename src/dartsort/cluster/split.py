@@ -11,7 +11,6 @@ from dartsort.util.multiprocessing_util import get_pool
 from hdbscan import HDBSCAN
 from scipy.spatial.distance import cdist, pdist
 from sklearn.decomposition import PCA
-# from sklearn.metrics.pairwise import nan_euclidean_distances
 from tqdm.auto import tqdm
 
 from scipy.ndimage import gaussian_filter
@@ -19,7 +18,6 @@ from scipy.interpolate import RegularGridInterpolator
 from scipy.sparse.csgraph import connected_components
 from scipy.sparse import coo_array
 from scipy.spatial import KDTree
-# from sklearn.neighbors import KDTree
 
 from . import cluster_util, density, relocate
 from .forward_backward import forward_backward
