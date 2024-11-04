@@ -266,23 +266,7 @@ def density_peaks_clustering(
         remove_borders=False
 
     assert ramp_triage_before_clustering is False
-    # DELETE BELOW + ARGUMENT?
-    # if ramp_triage_before_clustering and geom is not None:
-    #     inliers_first = np.ones(len(X)).astype("bool")
-    #     idx_low_ptp = np.flatnonzero(
-    #         X[:, 2] < scales[2] * np.log(log_c + amp_no_triaging_before_clustering)
-    #     )
-    #     distances_to_geom = (
-    #         np.sqrt((X[idx_low_ptp, :2][None] - geom[:, None]) ** 2).sum(2)
-    #     ).min(0)
-    #     probabilities = (
-    #         np.minimum(distances_to_geom, radius_triage_before_clustering)
-    #         / radius_triage_before_clustering
-    #     )
-    #     which_to_discard = bernoulli.rvs(probabilities).astype("bool")
-    #     inliers_first[idx_low_ptp[which_to_discard]] = False
-    #     inliers_first = np.arange(len(X))[inliers_first]
-    # else:
+
     inliers_first = np.arange(len(X))
 
     n = len(inliers_first)
@@ -380,50 +364,12 @@ def density_peaks_clustering(
         distance_upper_bound=radius_search,
         workers=workers,
     )
-    # else:
-    #     # inliers don't matter here? Or should we still remove them?...
-    #     # indices = np.full(l2_norm.shape[0], n)
-    #     # l2_norm_inliers = l2_norm[inliers] #?? NO -> keep everything but only compute for inliers
-    #     l2_norm = l2_norm[inliers_first][:, inliers_first]
-    #     n = l2_norm.shape[0]
-    #     indices = l2_norm.argsort()[:, : 1 + n_neighbors_search]
-    #     distances = l2_norm[np.arange(n)[:, None], indices]
-    #     assert distances.shape == (l2_norm.shape[0], 1 + n_neighbors_search)
-    #     density = np.median(distances, axis=1)
-    #     density_padded = np.pad(density, (0, 1), constant_values=np.inf)
-    #     is_higher_density = density_padded[indices] >= density[:, None]
-    #     distances[is_higher_density] = np.inf
-    #     indices[is_higher_density] = n
-    #     nhdn = indices[np.arange(n), distances.argmin(1)]
 
     if noise_density and l2_norm is None:
         nhdn[density <= noise_density] = n
 
     assert distance_dependent_noise_density is False
-    # DELETE THIS? 
-    # if distance_dependent_noise_density and noise_density is not None:
-    #     dist = np.sqrt(
-    #         (
-    #             (
-    #                 np.c_[X[inliers_first, 0], z_not_reg[inliers_first]][:, None]
-    #                 - geom[None]
-    #             )
-    #             ** 2
-    #         ).sum(2)
-    #     ).min(1)
-    #     noise_density_dist = (
-    #         np.minimum(
-    #             np.maximum(dist - min_distance_noise_density, 0),
-    #             min_distance_noise_density_10 - min_distance_noise_density,
-    #         )
-    #         * (max_noise_density - noise_density)
-    #         / (min_distance_noise_density_10 - min_distance_noise_density)
-    #         + noise_density
-    #     )
-    #     noise_density_dist[
-    #         X[inliers_first, 2] > scales[2] * np.log(log_c + amp_lowest_noise_density)
-    #     ] = 2
-    #     nhdn[density <= noise_density_dist] = n
+
     if triage_quantile_before_clustering and l2_norm is None:
         q = np.quantile(density, triage_quantile_before_clustering)
         idx_triaging = np.flatnonzero(
@@ -446,16 +392,6 @@ def density_peaks_clustering(
     ncc, labels = connected_components(graph, directed=False)
 
     assert remove_borders is False
-    # DELETE BELOW? 
-    # if remove_borders:
-    #     labels = remove_border_points(
-    #         labels,
-    #         density,
-    #         kdtree,
-    #         search_radius=border_search_radius,
-    #         n_neighbors_search=border_search_neighbors,
-    #         workers=workers,
-    #     )
 
     if remove_clusters_smaller_than:
         labels = decrumb(labels, min_size=remove_clusters_smaller_than)
@@ -470,7 +406,6 @@ def density_peaks_clustering(
                 if med_amp<amp_no_triaging_after_clustering:
                     if ramp_triage_per_cluster:
                         triage_quantile_per_cluster = (amp_no_triaging_after_clustering - med_amp)/amp_no_triaging_after_clustering
-                    # if l2_norm is None:
                     q = np.quantile(density[idx_label], triage_quantile_per_cluster)
                     spikes_to_remove = np.flatnonzero(
                         np.logical_and(
@@ -478,14 +413,6 @@ def density_peaks_clustering(
                             amp_vec < amp_no_triaging_after_clustering,
                         )
                     )
-                    # else:
-                    #     q = np.quantile(density[idx_label], 1-triage_quantile_per_cluster)
-                    #     spikes_to_remove = np.flatnonzero(
-                    #         np.logical_and(
-                    #             density[idx_label] > q,
-                    #             amp_vec < amp_no_triaging_after_clustering,
-                    #         )
-                    #     )
                     labels[idx_label[spikes_to_remove]] = -1
         else:
             for k in np.unique(labels[labels > -1]):

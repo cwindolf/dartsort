@@ -205,8 +205,6 @@ def merge_iterative_templates_with_multiple_chunks(
     # Sorting max chan pc split 
     # GC -> Merge -> make templates + complete 0.25 (iterative so complete is ok)
     # chuck_noisy_template_units_from_merge --> remove GC 
-    
-    # TODO Iterate the merge!
 
     for miter in range(split_merge_config.m_iter):
         print("splitting")
