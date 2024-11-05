@@ -569,7 +569,6 @@ gt_overview_plots_no_temp_dist = (
 # box and whisker between sorters
 
 
-
 def make_gt_overview_summary(
     comparison,
     plots=gt_overview_plots,

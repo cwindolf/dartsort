@@ -7,7 +7,7 @@ from .waveforms import geomplot
 
 
 def get_neighbors(gmm, unit_id, n_neighbors=5):
-    means, covs, logdets = gmm.stack_units()
+    means, covs, logdets = gmm.stack_units(use_cache=True)
     dists = gmm.units[unit_id].divergence(means, covs, logdets, kind=gmm.distance_metric)
     dists = dists.view(-1)
     order = torch.argsort(dists)
@@ -70,6 +70,7 @@ def plot_means(panel, prgeom, tpca, chans, units, labels, title="nearest neighbo
         show_zero=False,
         ax=ax,
         zlim=None,
+        subar=True,
     )
     panel.legend(
         handles=[Line2D([0, 1], [0, 0], color=c) for c in colors],

@@ -162,7 +162,16 @@ class Likelihoods(GMMPlot):
         (in_unit,) = torch.nonzero(gmm.labels == unit_id, as_tuple=True)
         if not in_unit.numel():
             return
-        inds_, liks = gmm.unit_log_likelihoods(unit_id, spike_indices=in_unit)
+        if hasattr(gmm, "log_liks"):
+            liks_ = gmm.log_liks[:, in_unit][[unit_id]].tocoo()
+            inds_ = None
+            if liks_.nnz:
+                inds_ = in_unit
+                liks = np.full(in_unit.shape, -np.inf, dtype=np.float32)
+                liks[liks_.coords[1]] = liks_.data
+                liks = torch.from_numpy(liks)
+        else:
+            inds_, liks = gmm.unit_log_likelihoods(unit_id, spike_indices=in_unit)
         if inds_ is None:
             return
         assert torch.equal(inds_, in_unit)
@@ -215,6 +224,12 @@ class KMeansSplit(GMMPlot):
     def draw(self, panel, gmm, unit_id, split_info=None):
         if split_info is None:
             split_info = gmm.kmeans_split_unit(unit_id, debug=True)
+        if not split_info:
+            ax = panel.subplots()
+            ax.text(.5, .5, "no channels!", ha="center", transform=ax.transAxes)
+            ax.axis("off")
+            return
+
         split_labels = split_info["reas_labels"]
         split_ids = np.unique(split_labels)
 
@@ -370,8 +385,13 @@ class NeighborBimodalities(GMMPlot):
     def draw(self, panel, gmm, unit_id):
         neighbors = gmm_helpers.get_neighbors(gmm, unit_id)
         assert neighbors[0] == unit_id
-        log_liks = gmm.log_likelihoods(unit_ids=neighbors)
-        labels, spikells = gaussian_mixture.loglik_reassign(log_liks, has_noise_unit=True)
+        if hasattr(gmm, "log_liks"):
+            neighbors_plus_noiseunit = np.concatenate((neighbors, [gmm.log_liks.shape[0] - 1]))
+            log_liks = gmm.log_liks[neighbors_plus_noiseunit]
+        else:
+            log_liks = gmm.log_likelihoods(unit_ids=neighbors)
+        labels, spikells, log_liks = gaussian_mixture.loglik_reassign(log_liks, has_noise_unit=True)
+        log_liks = log_liks.tocoo()
         log_liks = gaussian_mixture.coo_to_torch(log_liks, torch.float)
         kept = labels >= 0
         labels_ = np.full_like(labels, -1)
@@ -409,12 +429,12 @@ class NeighborBimodalities(GMMPlot):
                 bimod_ax.text(0, 0, f"too-small kept prop {bimod_info['keep_prop']:.2f}")
                 bimod_ax.axis("off")
                 continue
-            bimod_ax.hist(bimod_info["samples"], color="gray", label="unweighted hist", **histkw)
+            bimod_ax.hist(bimod_info["samples"], color="gray", label="hist", **histkw)
             bimod_ax.hist(
                 bimod_info["samples"],
                 weights=bimod_info["sample_weights"],
                 color="k",
-                label="weighted hist",
+                label="whist",
                 **histkw,
             )
             bimod_ax.axvline(bimod_info["cut"], color="k", lw=0.8, ls=":")
@@ -450,7 +470,7 @@ def make_unit_gmm_summary(
     unit_id,
     plots=default_gmm_plots,
     max_height=9,
-    figsize=(13, 9),
+    figsize=(14, 11),
     hspace=0.1,
     figure=None,
     **other_global_params,
@@ -479,7 +499,7 @@ def make_all_gmm_summaries(
     save_folder,
     plots=default_gmm_plots,
     max_height=9,
-    figsize=(13, 9),
+    figsize=(14, 11),
     hspace=0.1,
     dpi=200,
     image_ext="png",
