@@ -290,6 +290,16 @@ class SpikeFeatures:
             waveforms=waveforms,
         )
 
+    def __repr__(self):
+        indstr = f"inds.shape={self.indices.shape},"
+        featstr = f"feats.shape={self.features.shape},"
+        chanstr = wfstr = ""
+        if self.channels is not None:
+            chanstr = f"feats.shape={self.channels.shape},"
+        if self.waveforms is not None:
+            wfstr = f"feats.shape={self.waveforms.shape},"
+        return f"{self.__class__.__name__}({indstr}{featstr}{chanstr}{wfstr})"
+
 
 class SpikeNeighborhoods(torch.nn.Module):
     def __init__(self, n_channels, neighborhood_ids, neighborhoods, neighborhood_members=None):
@@ -357,7 +367,7 @@ class SpikeNeighborhoods(torch.nn.Module):
     def neighborhood_members(self, id):
         return self._neighborhood_members[self.neighborhood_members_slices[id]]
 
-    def subset_neighborhoods(self, channels, min_coverage=1.0):
+    def subset_neighborhoods(self, channels, min_coverage=1.0, add_to_overlaps=None):
         """Return info on neighborhoods which cover the channel set well enough
 
         Define coverage for a neighborhood and a channel group as the intersection
@@ -379,6 +389,9 @@ class SpikeNeighborhoods(torch.nn.Module):
             for j in covered_ids
         }
         n_spikes = self.popcounts[covered_ids].sum()
+        if add_to_overlaps is not None:
+            for _, members in neighborhood_info.values():
+                add_to_overlaps[members] += 1
         return neighborhood_info, n_spikes
 
     def spike_neighborhoods(self, channels, spike_indices, min_coverage=1.0):

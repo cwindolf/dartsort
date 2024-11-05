@@ -616,14 +616,14 @@ def interpolate_residual_snippets(
     source_geom = torch.asarray(geom).to(snippets)
     psc, psd = source_geom.shape
     source_pos = source_geom[None].broadcast_to(n, psc, psd).contiguous()
-    source_depths = source_pos[:, :, 1].clone()
-    source_t = times_s[:, None].broadcast_to(source_depths.shape).reshape(-1)
-    source_depths = source_depths.reshape(-1)
+    source_depths = source_pos[:, :, 1].reshape(-1)
+    source_t = times_s[:, None].broadcast_to(source_pos[:, :, 1].shape).reshape(-1)
     source_shifts = 0
     if motion_est is not None:
         source_reg_depths = motion_est.correct_s(source_t.cpu(), source_depths.cpu())
         source_reg_depths = torch.asarray(source_reg_depths).to(snippets)
         source_shifts = source_reg_depths - source_depths
+        source_shifts = source_shifts.reshape(source_pos[:, :, 1].shape)
 
     # target positions
     # we'll query the target geom for the closest source pos, within reason

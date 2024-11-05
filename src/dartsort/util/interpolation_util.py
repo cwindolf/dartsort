@@ -204,7 +204,6 @@ def kernel_interpolate(
         kernel = torch.zeros_like(d)
         kernel.scatter_(1, d.argmin(dim=1, keepdim=True), 1)
     else:
-        tic = time.perf_counter()
         kernel = log_rbf(source_pos, target_pos, sigma)
         if interpolation_method == "normalized":
             kernel = F.softmax(kernel, dim=1)

@@ -7,7 +7,7 @@ import torch
 import torch.nn.functional as F
 from dartsort.util import noise_util
 from joblib import Parallel, delayed
-from scipy.sparse import coo_array
+from scipy.sparse import coo_array, csr_array, csc_array
 from scipy.special import logsumexp
 from tqdm.auto import tqdm, trange
 
@@ -59,6 +59,7 @@ class SpikeMixtureModel(torch.nn.Module):
         merge_bimodality_cut: float = 0.0,
         merge_bimodality_overlap: float = 0.80,
         merge_bimodality_score_kind: str = "tv",
+        merge_bimodality_masked: bool = False,
         merge_sym_function: callable = np.minimum,
         em_converged_prop: float = 0.005,
         em_converged_rtol: float = 1e-2,
@@ -87,6 +88,7 @@ class SpikeMixtureModel(torch.nn.Module):
         self.merge_bimodality_cut = merge_bimodality_cut
         self.merge_bimodality_overlap = merge_bimodality_overlap
         self.merge_bimodality_score_kind = merge_bimodality_score_kind
+        self.merge_bimodality_masked = merge_bimodality_masked
         self.merge_sym_function = merge_sym_function
         self.em_converged_prop = em_converged_prop
         self.em_converged_rtol = em_converged_rtol
@@ -120,6 +122,7 @@ class SpikeMixtureModel(torch.nn.Module):
         # these only need computing once, but not in init so that
         # there is time for the user to .cuda() me before then
         self._noise_log_likelihoods = None
+        self._stack = None
 
         # multithreading stuff. thread-local rgs, control access to labels, etc.
         self._rg = np.random.default_rng(random_seed)
@@ -138,31 +141,31 @@ class SpikeMixtureModel(torch.nn.Module):
         uids = torch.unique(self.labels)
         return uids[uids >= 0]
 
-    def em(self, n_iter=None, show_progress=True):
+    def em(self, n_iter=None, show_progress=True, final_e_step=True):
         n_iter = self.n_em_iters if n_iter is None else n_iter
         if show_progress:
             its = trange(n_iter, desc="EM", **tqdm_kw)
+            step_progress = max(0, int(show_progress) - 1)
         else:
             its = range(n_iter)
 
         # if we have no units, we can't E step.
         if not self.units:
-            self.m_step(show_progress=show_progress > 1)
+            self.m_step(show_progress=step_progress)
 
         for _ in its:
             # having this cleanup here doesn't do anything except make the
             # reassignment counts make sense
-            self.cleanup(clean_units=True, min_count=1)
             means, *_ = self.stack_units(mean_only=True)
 
             # no need to clean units since they'll be overwritten immediately
             reas_count, log_liks, spike_logliks = self.e_step(
-                show_progress=show_progress > 1, clean_units=False
+                show_progress=step_progress, clean_units=False
             )
             logpx = logsumexp(spike_logliks)
 
             # M step: fit units based on responsibilities
-            max_rdif = self.m_step(log_liks, show_progress=show_progress > 1, prev_means=means)
+            max_rdif = self.m_step(log_liks, show_progress=step_progress, prev_means=means)
 
             # extra info for description
             if show_progress:
@@ -180,6 +183,9 @@ class SpikeMixtureModel(torch.nn.Module):
             if max_rdif < self.em_converged_rtol:
                 break
 
+        if not final_e_step:
+            return
+
         # final e step for caller
         reas_count, log_liks, spike_logliks = self.e_step(clean_units=True)
         return log_liks
@@ -187,7 +193,8 @@ class SpikeMixtureModel(torch.nn.Module):
     def e_step(self, show_progress=False, clean_units=False):
         # E step: get responsibilities and update hard assignments
         log_liks = self.log_likelihoods(show_progress=show_progress)
-        reas_count, spike_logliks = self.reassign(log_liks)
+        # replace log_liks by csc
+        reas_count, spike_logliks, log_liks = self.reassign(log_liks)
 
         # garbage collection -- get rid of low count labels
         log_liks = self.cleanup(log_liks, clean_units=clean_units)
@@ -196,8 +203,6 @@ class SpikeMixtureModel(torch.nn.Module):
 
     def m_step(self, likelihoods=None, show_progress=False, prev_means=None):
         del self.units[:]  # no .clear() on ModuleList?
-        if likelihoods is not None:
-            likelihoods = coo_to_torch(likelihoods, self.data.dtype)
         pool = Parallel(self.n_threads, backend="threading", return_as="generator")
         unit_ids = self.unit_ids()
         results = pool(
@@ -230,23 +235,32 @@ class SpikeMixtureModel(torch.nn.Module):
         # determine how much storage space we need by figuring out how many spikes
         # are overlapping with each unit
         neighb_info = []
-        ns_total = 0
+        nnz = 0
+        # how many units does each spike overlap with? needed when writing csc directly
+        overlapping_units = np.zeros(self.data.n_spikes, dtype=int)
         for j in unit_ids:
             unit = self.units[j]
             neighbs, ns_unit = self.data.core_neighborhoods.subset_neighborhoods(
-                unit.channels
+                unit.channels, add_to_overlaps=overlapping_units
             )
             neighb_info.append((j, neighbs, ns_unit))
-            ns_total += ns_unit
+            nnz += ns_unit
 
         # add in space for the noise unit
         if with_noise_unit:
-            ns_total = ns_total + self.data.n_spikes
+            nnz = nnz + self.data.n_spikes
+            overlapping_units[:] += 1
 
-        coo_uix, coo_six, coo_data = get_coo_storage(
-            ns_total, self.storage, use_storage
+        # get the big nnz-length csc buffers
+        csc_indices, csc_data = get_csc_storage(
+            nnz, self.storage, use_storage
         )
-        offset = 0
+        # csc compressed indptr. spikes are columns.
+        indptr = np.concatenate(([0], np.cumsum(overlapping_units)))
+        del overlapping_units
+        # each spike starts at writing at its indptr. as we gather more units for each
+        # spike, we increment the spike's "write head". idea is to directly make csc
+        write_offsets = indptr[:-1].copy()
         pool = Parallel(self.n_threads, backend="threading", return_as="generator")
         results = pool(
             delayed(self.unit_log_likelihoods)(unit_id=j, neighbs=neighbs, ns=ns)
@@ -263,32 +277,35 @@ class SpikeMixtureModel(torch.nn.Module):
         for j, (inds, liks) in enumerate(results):
             if inds is None:
                 continue
-            nnew = inds.numel()
-            coo_uix[offset : offset + nnew] = j
-            coo_six[offset : offset + nnew] = inds.numpy(force=True)
-            coo_data[offset : offset + nnew] = liks.numpy(force=True)
-            offset += nnew
+            inds = inds.numpy(force=True)
+            liks = liks.numpy(force=True)
+            csc_insert(j, write_offsets, inds, csc_indices, csc_data, liks)
+            # inds = inds.numpy(force=True)
+            # data_ixs = write_offsets[inds]
+            # csc_indices[data_ixs] = j
+            # csc_data[data_ixs] = liks.numpy(force=True)
+            # write_offsets[inds] += 1
 
         if with_noise_unit:
-            noise_six, noise_ll = self.noise_log_likelihoods()
-            coo_uix[offset:] = j + 1
-            coo_six[offset:] = noise_six
-            coo_data[offset:] = noise_ll
+            inds, liks = self.noise_log_likelihoods()
+            data_ixs = write_offsets[inds]
+            # assert np.array_equal(data_ixs, ccol_indices[1:] - 1)  # just fyi
+            csc_indices[data_ixs] = j + 1
+            csc_data[data_ixs] = liks.numpy(force=True)
 
-        # log liks as sparse matrix. sparse zeros are not 0 but -inf!!
-        log_liks = coo_array(
-            (coo_data, (coo_uix, coo_six)),
-            shape=(len(unit_ids) + with_noise_unit, self.data.n_spikes),
-        )
+        shape = (len(unit_ids) + with_noise_unit, self.data.n_spikes)
+        log_liks = csc_array((csc_data, csc_indices, indptr), shape=shape)
+        log_liks.has_canonical_format = True
+
         return log_liks
 
     def reassign(self, log_liks):
         has_noise_unit = log_liks.shape[1] > len(self.units)
-        assignments, spike_logliks = loglik_reassign(log_liks, has_noise_unit=has_noise_unit)
+        assignments, spike_logliks, log_liks_csc = loglik_reassign(log_liks, has_noise_unit=has_noise_unit)
         assignments = torch.from_numpy(assignments).to(self.labels)
         reassign_count = (self.labels != assignments).sum()
         self.labels.copy_(assignments)
-        return reassign_count, spike_logliks
+        return reassign_count, spike_logliks, log_liks_csc
 
     def cleanup(self, log_liks=None, clean_units=True, min_count=None):
         """Remove too-small units
@@ -298,31 +315,40 @@ class SpikeMixtureModel(torch.nn.Module):
         clean_units should be true unless your next move is an m step.
         For instance if it's an E step, it's like the cleanup never happened.
         """
+        has_noise_unit = log_liks.shape[1] > len(self.units)
         unit_ids, counts = torch.unique(self.labels, return_counts=True)
         counts = counts[unit_ids >= 0]
         unit_ids = unit_ids[unit_ids >= 0]
         if min_count is None:
             min_count = self.min_count
         big_enough = counts >= min_count
+        keep = torch.zeros(len(self.units), dtype=bool)
+        keep[unit_ids] = big_enough
         if big_enough.all():
             return log_liks
 
         self.relabel_units(unit_ids[big_enough])
         if clean_units and len(self.units):
-            keep = torch.zeros(len(self.units))
-            keep[unit_ids] = big_enough
-            keep_units = [u for j, u in self.units if keep[j]]
+            keep_units = [u for j, u in enumerate(self.units) if keep[j]]
             del self.units[:]
             self.units.extend(keep_units)
         if log_liks is None:
             return
 
-        has_noise_unit = log_liks.shape[1] > len(self.units)
         if has_noise_unit:
-            big_enough = torch.concatenate(
-                (big_enough, torch.ones_like(big_enough[:1]))
+            keep = torch.concatenate(
+                (keep, torch.ones_like(keep[:1]))
             )
-        log_liks = coo_sparse_mask_rows(log_liks, big_enough.numpy(force=True))
+        assert keep.numel() == log_liks.shape[0]
+
+        if isinstance(log_liks, coo_array):
+            log_liks = coo_sparse_mask_rows(log_liks, keep.numpy(force=True))
+        elif isinstance(log_liks, csc_array):
+            keep = np.flatnonzero(keep.numpy(force=True))
+            log_liks = log_liks[keep]
+        else:
+            assert False
+
         return log_liks
 
     def merge(self, log_liks=None, show_progress=True):
@@ -414,7 +440,7 @@ class SpikeMixtureModel(torch.nn.Module):
         cut=None,
         weighted=True,
         min_overlap=None,
-        masked=True,
+        masked=None,
         dt_s=2.0,
         max_spikes=2048,
         show_progress=True,
@@ -425,6 +451,8 @@ class SpikeMixtureModel(torch.nn.Module):
             cut = None
         if min_overlap is None:
             min_overlap = self.merge_bimodality_overlap
+        if masked is None:
+            masked = self.merge_bimodality_masked
         nu = len(self.units)
         in_units = [
             torch.nonzero(self.labels == j, as_tuple=True)[0] for j in range(nu)
@@ -502,14 +530,23 @@ class SpikeMixtureModel(torch.nn.Module):
         return sp
 
     def fit_unit(
-        self, unit_id=None, indices=None, likelihoods=None, weights=None, **unit_args
+        self, unit_id=None, indices=None, likelihoods=None, weights=None, verbose=False, **unit_args
     ):
         features = self.random_spike_data(unit_id, indices, max_size=self.n_spikes_fit)
+        if verbose:
+            print(f"{unit_id=} {features=}")
         if weights is None and likelihoods is not None:
-            weights = torch.index_select(likelihoods, 1, features.indices)
-            weights = weights.to(self.data.device).coalesce()
+            # torch's index_select is painfully slow
+            # weights = torch.index_select(likelihoods, 1, features.indices)
+            # here we have weights as a csc_array
+            weights = likelihoods[:, features.indices]
+            weights = coo_to_torch(weights.tocoo(), torch.float)
+            weights = weights.to(self.data.device)
             weights = torch.sparse.softmax(weights, dim=0)
-            weights = weights[unit_id].to_dense()
+            weights = weights[unit_id]
+            weights = weights.to_dense()
+        if verbose and weights is not None:
+            print(f"{weights.sum()=} {weights.min()=} {weights.max()=}")
         unit_args = self.unit_args | unit_args
         unit = GaussianUnit.from_features(features, weights, **unit_args)
         return unit
@@ -612,6 +649,8 @@ class SpikeMixtureModel(torch.nn.Module):
         # get spike data and use interpolation to fill it out to the
         # unit's channel set
         unit = self.units[unit_id]
+        if debug and not unit.channels.numel():
+            return dict()
         indices_full, sp = self.random_spike_data(unit_id, return_full_indices=True)
         X = self.data.interp_to_chans(sp, unit.channels)
         if debug:
@@ -845,9 +884,12 @@ class SpikeMixtureModel(torch.nn.Module):
         self.labels[kept] = new_labels.to(self.labels)[label_indices]
         self.labels[torch.logical_not(kept)] = -1
 
-    def stack_units(self, units=None, mean_only=False):
+    def stack_units(self, units=None, mean_only=False, use_cache=False):
         if units is None:
             units = self.units
+        if use_cache and self._stack is not None:
+            if mean_only or self._stack[1] is not None:
+                return self._stack
 
         nu, rank, nc = len(units), self.data.rank, self.data.n_channels
 
@@ -862,6 +904,9 @@ class SpikeMixtureModel(torch.nn.Module):
             if covs is not None:
                 covs[j] = unit.dense_cov()
                 logdets[j] = unit.logdet
+
+        if use_cache:
+            self._stack = means, covs, logdets
 
         return means, covs, logdets
 
@@ -1128,55 +1173,82 @@ def get_nans(target, storage, name, shape):
         region = tuple(slice(0, ts) for ts in shape)
         buffer = buffer[region]
         buffer.fill_(torch.nan)
+    if buffer.device != target.device:
+        buffer = buffer.to(target.device)
+        setattr(storage, name, buffer)
 
     return buffer
 
 
 def get_coo_storage(ns_total, storage, use_storage):
     if not use_storage:
-        coo_uix = np.empty(ns_total, dtype=int)
+        # coo_uix = np.empty(ns_total, dtype=int)
         coo_six = np.empty(ns_total, dtype=int)
         coo_data = np.empty(ns_total, dtype=np.float32)
-        return coo_uix, coo_six, coo_data
+        return coo_six, coo_data
 
     if hasattr(storage, "coo_data"):
         if storage.coo_data.size < ns_total:
-            del storage.coo_uix
+            # del storage.coo_uix
             del storage.coo_six
             del storage.coo_data
-        storage.coo_uix = np.empty(ns_total, dtype=int)
+        # storage.coo_uix = np.empty(ns_total, dtype=int)
         storage.coo_six = np.empty(ns_total, dtype=int)
         storage.coo_data = np.empty(ns_total, dtype=np.float32)
     else:
-        storage.coo_uix = np.empty(ns_total, dtype=int)
+        # storage.coo_uix = np.empty(ns_total, dtype=int)
         storage.coo_six = np.empty(ns_total, dtype=int)
         storage.coo_data = np.empty(ns_total, dtype=np.float32)
 
-    return storage.coo_uix, storage.coo_six, storage.coo_data
+    # return storage.coo_uix, storage.coo_six, storage.coo_data
+    return storage.coo_six, storage.coo_data
 
 
-def coo_to_torch(coo_array, dtype):
+def get_csc_storage(ns_total, storage, use_storage):
+    if not use_storage:
+        csc_row_indices = np.empty(ns_total, dtype=int)
+        csc_data = np.empty(ns_total, dtype=np.float32)
+        return csc_row_indices, csc_data
+
+    if hasattr(storage, "csc_data"):
+        if storage.csc_data.size < ns_total:
+            del storage.csc_row_indices
+            del storage.csc_data
+        storage.csc_row_indices = np.empty(ns_total, dtype=int)
+        storage.csc_data = np.empty(ns_total, dtype=np.float32)
+    else:
+        storage.csc_row_indices = np.empty(ns_total, dtype=int)
+        storage.csc_data = np.empty(ns_total, dtype=np.float32)
+
+    return storage.csc_row_indices, storage.csc_data
+
+
+def coo_to_torch(coo_array, dtype, transpose=False, is_coalesced=True):
     coo = (
-        torch.from_numpy(coo_array.coords[0]),
-        torch.from_numpy(coo_array.coords[1]),
+        torch.from_numpy(coo_array.coords[int(transpose)]),
+        torch.from_numpy(coo_array.coords[1 - int(transpose)]),
     )
+    s0, s1 = coo_array.shape
+    if transpose:
+        s0, s1 = s1, s0
     res = torch.sparse_coo_tensor(
         torch.row_stack(coo),
         torch.asarray(coo_array.data, dtype=torch.float),
-        size=coo_array.shape,
+        size=(s0, s1),
+        is_coalesced=is_coalesced,
     )
     return res
 
 
 def loglik_reassign(log_liks, has_noise_unit=False):
-    assignments, spike_logliks = sparse_reassign(log_liks)
+    log_liks_csc, assignments, spike_logliks = sparse_reassign(log_liks, return_csc=True)
     n_units = log_liks.shape[0] - has_noise_unit
     if has_noise_unit:
         assignments[assignments >= n_units] = -1
-    return assignments, spike_logliks
+    return assignments, spike_logliks, log_liks_csc
 
 
-def sparse_reassign(liks, match_threshold=None, batch_size=512, return_csc=False):
+def sparse_reassign(liks, match_threshold=None, return_csc=False):
     """Reassign spikes to units with largest likelihood
 
     liks is (n_units, n_spikes). This computes the argmax for each column,
@@ -1221,9 +1293,12 @@ sigs = [
     sigs,
     error_model="numpy",
     nogil=True,
+    parallel=True,
 )
 def hot_argmax_loop(assignments, scores, nz_lines, indptr, data, indices):
-    for i in nz_lines:
+    # for i in nz_lines:
+    for j in numba.prange(nz_lines.shape[0]):
+        i = nz_lines[j]
         p = indptr[i]
         q = indptr[i + 1]
         ix = indices[p:q]
@@ -1232,6 +1307,23 @@ def hot_argmax_loop(assignments, scores, nz_lines, indptr, data, indices):
         assignments[i] = ix[best]
         mx = dx.max()
         scores[i] = mx + np.log(np.exp(dx - mx).sum())
+
+
+sig = numba.void(numba.int64, numba.int64[:], numba.int64[:], numba.int64[:], numba.float32[:], numba.float32[:])
+@numba.njit(sig, error_model="numpy", nogil=True, parallel=True)
+def csc_insert(row, write_offsets, inds, csc_indices, csc_data, liks):
+    """
+    data_ixs = write_offsets[inds]
+    csc_indices[data_ixs] = j
+    csc_data[data_ixs] = liks
+    write_offsets[inds] += 1
+    """
+    for j in numba.prange(inds.shape[0]):
+        ind = inds[j]
+        data_ix = write_offsets[ind]
+        csc_indices[data_ix] = row
+        csc_data[data_ix] = liks[j]
+        write_offsets[ind] += 1
 
 
 def coo_sparse_mask_rows(coo, keep_mask):
