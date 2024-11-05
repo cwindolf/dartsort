@@ -35,6 +35,13 @@ def agglomerate(labels, distances, linkage_method="complete", threshold=1.0):
     return new_labels, new_ids
 
 
+def combine_disjoint(inds_a, labels_a, inds_b, labels_b):
+    labels = np.full(labels_a.size + labels_b.size, -1, dtype=labels_a.dtype)
+    labels[inds_a] = labels_a
+    labels[inds_b] = labels_b
+    return labels
+
+
 def reorder_by_depth(sorting, motion_est=None):
     kept = np.flatnonzero(sorting.labels >= 0)
     kept_labels = sorting.labels[kept]

@@ -31,6 +31,7 @@ def cluster_chunk(
     amplitudes_dataset_name="denoised_ptp_amplitudes",
     localizations_dataset_name="point_source_localizations",
     depth_order=True,
+    random_seed=0,
 ):
     """Cluster spikes from a single segment
 
@@ -52,6 +53,7 @@ def cluster_chunk(
         "dpc",
         "density_peaks_fancy",
     )
+    rg = np.random.default_rng(random_seed)
 
     if sorting is None:
         sorting = DARTsortSorting.from_peeling_hdf5(peeling_hdf5_filename)
@@ -114,6 +116,7 @@ def cluster_chunk(
             zstd_big_units=clustering_config.zstd_big_units,
         )
     elif clustering_config.cluster_strategy == "dpc":
+        # build feature set
         features = (xyza[:, 0], z_reg)
         if clustering_config.use_amplitude:
             ampfeat = np.log(clustering_config.amp_log_c + amps)
@@ -125,8 +128,19 @@ def cluster_chunk(
             )
             features = (*features, clustering_config.pc_scale * pcs)
         X = np.column_stack(features)
-        labels[to_cluster] = density.density_peaks(
-            X,
+
+        # subsample if requested
+        maxcount = clustering_config.kdtree_subsample_max_size
+        subsampling = maxcount and len(X) > maxcount
+        X_fit = X
+        if subsampling:
+            choices = rg.choice(len(X), size=maxcount, replace=False)
+            choices.sort()
+            not_choices = np.setdiff1d(np.arange(len(X)), choices)
+            X_fit = X[choices]
+
+        dpc_res = density.density_peaks(
+            X_fit,
             sigma_local=clustering_config.sigma_local,
             sigma_regional=clustering_config.sigma_regional,
             outlier_neighbor_count=clustering_config.outlier_neighbor_count,
@@ -136,7 +150,22 @@ def cluster_chunk(
             noise_density=clustering_config.noise_density,
             remove_clusters_smaller_than=clustering_config.remove_clusters_smaller_than,
             workers=clustering_config.workers,
-        )["labels"]
+        )
+        dpc_labels = dpc_res["labels"]
+
+        if subsampling:
+            kdtree = dpc_res["kdtree"]
+            other_labels = density.nearest_neighbor_assign(
+                kdtree,
+                dpc_labels,
+                X[not_choices],
+                radius_search=clustering_config.radius_search,
+                workers=clustering_config.workers,
+            )
+            dpc_labels = cluster_util.combine_disjoint(choices, dpc_labels, not_choices, other_labels)
+
+        labels[to_cluster] = dpc_labels
+
     elif clustering_config.cluster_strategy == "density_peaks_fancy":
         res = density.density_peaks_fancy(
             xyza,

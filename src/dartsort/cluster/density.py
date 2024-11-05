@@ -280,10 +280,19 @@ def density_peaks(
         density=density,
         nhdn=nhdn,
         labels=labels,
+        kdtree=kdtree,
     )
 
 
-# -- version used in UHD project
+def nearest_neighbor_assign(kdtree, tree_labels, X_other, radius_search=5.0, workers=-1):
+    dists, inds = kdtree.query(X_other, k=1, distance_upper_bound=radius_search, workers=workers)
+    found = np.flatnonzero(inds < kdtree.n)
+    other_labels = np.full(len(X_other), -1, dtype=tree_labels.dtype)
+    other_labels[found] = tree_labels[inds[found]]
+    return other_labels
+
+
+# -- versions used in UHD project
 
 
 def density_peaks_fancy(
@@ -364,7 +373,8 @@ def density_peaks_fancy(
             res["labels"][idx_low] = -1
         else:
             res[idx_low] = -1
-    return res
+    return res    
+
 
 def density_peaks_clustering(
     X,
