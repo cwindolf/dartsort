@@ -94,7 +94,7 @@ class BaseTemporalPCA(BaseWaveformModule):
         return self._needs_fit
 
     def _temporal_slice(self, waveforms):
-        if self.temporal_slice is None:
+        if getattr(self, 'temporal_slice', None) is None:
             return waveforms
 
         return waveforms[:, self.temporal_slice]
@@ -177,6 +177,7 @@ class TemporalPCAFeaturizer(BaseWaveformFeaturizer, BaseTemporalPCA):
 
     def transform(self, waveforms, max_channels, channel_index=None, return_in_probe=False):
         waveforms = self._temporal_slice(waveforms)
+
         if channel_index is None:
             channel_index = self.channel_index
         (
