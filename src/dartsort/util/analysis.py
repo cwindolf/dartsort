@@ -68,7 +68,7 @@ class DARTsortAnalysis:
     merge_distance_kind: str = "rms"
     merge_distance_spatial_radius_a: Optional[float] = None
     merge_distance_min_channel_amplitude: float = 0.0
-    merge_distance_min_spatial_cosine: float = 0.0
+    merge_distance_min_spatial_cosine: float = 0.5
     merge_temporal_upsampling: int = 1
     merge_superres_linkage: Callable[[np.ndarray], float] = np.max
     compute_distances: bool = "if_hdf5"
@@ -101,7 +101,8 @@ class DARTsortAnalysis:
         assert model_dir.exists()
 
         featurization_pipeline = torch.load(
-            model_dir / "featurization_pipeline.pt"
+            model_dir / "featurization_pipeline.pt",
+            weights_only=True,
         )
 
         have_templates = False
