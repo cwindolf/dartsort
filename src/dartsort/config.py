@@ -263,6 +263,7 @@ class ClusteringConfig:
     noise_density: float = 0.0
     outlier_radius: float = 5.0
     outlier_neighbor_count: int = 5
+    kdtree_subsample_max_size: int = 2_500_000
 
     # hdbscan parameters
     min_cluster_size: int = 25
