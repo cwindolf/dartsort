@@ -391,8 +391,6 @@ class NeighborBimodalities(GMMPlot):
         else:
             log_liks = gmm.log_likelihoods(unit_ids=neighbors)
         labels, spikells, log_liks = gaussian_mixture.loglik_reassign(log_liks, has_noise_unit=True)
-        log_liks = log_liks.tocoo()
-        log_liks = gaussian_mixture.coo_to_torch(log_liks, torch.float)
         kept = labels >= 0
         labels_ = np.full_like(labels, -1)
         labels_[kept] = neighbors[labels[kept]].numpy(force=True)
@@ -420,7 +418,7 @@ class NeighborBimodalities(GMMPlot):
             if "in_pair_kept" not in bimod_info:
                 scatter_ax.text(0, 0, f"too few spikes")
             else:
-                c = glasbey1024[labels[bimod_info["in_pair_kept"]]]
+                c = np.atleast_2d(glasbey1024[labels[bimod_info["in_pair_kept"]]])
                 scatter_ax.scatter(bimod_info["xi"], bimod_info["xj"], s=3, lw=0, c=c)
                 scatter_ax.set_ylabel(unit_id, color=glasbey1024[unit_id])
                 scatter_ax.set_xlabel(other_id.item(), color=glasbey1024[other_id])
