@@ -450,11 +450,11 @@ class EmbeddedNoise(torch.nn.Module):
 
         if self.cov_kind == "factorized_by_rank_rank_diag":
             chans_vt = self.channel_vt[:, :, channels]
-            r, C, c = chans_vt.shape
-            blocks = chans_vt.new_empty((r, c, c))
-            chans_std = self.channel_std[:, :]  # no slice here!
-            for q, sq in enumerate(self.rank_std):
-                blocks[q] = sq * chans_vt[q].T @ chans_vt[q]
+            chans_std = self.channel_std[:, :, None]  # no slice here!
+            chan_root = chans_std * chans_vt
+            blocks = torch.bmm(
+                self.rank_std[:, None, None] * chan_root.mT, chan_root
+            )
             blocks = linear_operator.to_linear_operator(blocks)
             return operators.BlockDiagLinearOperator(blocks)
 
@@ -594,7 +594,9 @@ class EmbeddedNoise(torch.nn.Module):
         from dartsort.util.drift_util import registered_geometry
         with h5py.File(hdf5_path, "r", locking=False) as h5:
             geom = h5["geom"][:]
-        rgeom = registered_geometry(geom, motion_est=motion_est)
+        rgeom = geom
+        if motion_est is not None:
+            rgeom = registered_geometry(geom, motion_est=motion_est)
         snippets = interpolate_residual_snippets(
             motion_est,
             hdf5_path,
