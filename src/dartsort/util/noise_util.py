@@ -384,6 +384,15 @@ class EmbeddedNoise(torch.nn.Module):
             return self.mean
         assert False
 
+    def whiten(self, data, channels=slice(None)):
+        assert self.mean_kind == "zero"
+        cov = self.marginal_covariance(channels=channels)
+        assert data.ndim == 3
+        data = data.reshape(len(data), -1)
+        res = linear_operator.sqrt_inv_matmul(cov, data.unsqueeze(2))
+        assert res.ndim == 3 and res.shape == (*data.shape, 1)
+        return res
+
     def marginal_covariance(self, channels=slice(None), cache_key=None, device=None):
         if device is not None:
             device = torch.device(device)
@@ -571,6 +580,32 @@ class EmbeddedNoise(torch.nn.Module):
             **init_kw,
         )
 
+    @classmethod
+    def estimate_from_hdf5(
+        cls,
+        hdf5_path,
+        mean_kind="zero",
+        cov_kind="factorized_by_rank_rank_diag",
+        motion_est=None,
+        interpolation_method="kriging",
+        sigma=20.0,
+        device=None,
+    ):
+        from dartsort.util.drift_util import registered_geometry
+        with h5py.File(hdf5_path, "r", locking=False) as h5:
+            geom = h5["geom"][:]
+        rgeom = registered_geometry(geom, motion_est=motion_est)
+        snippets = interpolate_residual_snippets(
+            motion_est,
+            hdf5_path,
+            geom,
+            rgeom,
+            sigma=sigma,
+            interpolation_method=interpolation_method,
+            device=device
+        )
+        return cls.estimate(snippets, mean_kind=mean_kind, cov_kind=cov_kind)
+
 
 def interpolate_residual_snippets(
     motion_est,
@@ -578,8 +613,6 @@ def interpolate_residual_snippets(
     geom,
     registered_geom,
     sigma=10.0,
-    mean_kind="zero",
-    cov_kind="scalar",
     residual_times_s_dataset_name="residual_times_seconds",
     residual_dataset_name="residual",
     channels_mode="round",

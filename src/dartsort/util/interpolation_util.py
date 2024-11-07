@@ -91,10 +91,10 @@ def interpolate_by_chunk(
     source_geom = pad_geom(geom, dtype=dtype, device=device)
     target_geom = pad_geom(registered_geom, dtype=dtype, device=device)
     # here, shifts = reg_depths - depths
-    shifts = torch.as_tensor(shifts, dtype=dtype).to(device)
-    target_channels = torch.as_tensor(target_channels, device=device)
+    shifts = torch.as_tensor(shifts, dtype=dtype)
+    target_channels = torch.as_tensor(target_channels)
     channel_index = torch.as_tensor(channel_index, device=device)
-    channels = torch.as_tensor(channels, device=device)
+    channels = torch.as_tensor(channels)
 
     # if needed, precompute kriging pinvs
     skis = None
@@ -106,15 +106,15 @@ def interpolate_by_chunk(
         mask, dataset, show_progress=show_progress, desc_prefix="Interpolating"
     ):
         # where are the spikes?
-        source_channels = channel_index[channels[ixs]]
-        source_shifts = shifts[ixs]
+        source_channels = channel_index[channels[ixs]].to(device)
+        source_shifts = shifts[ixs].to(device)
         if source_shifts.ndim == 1:
             # allows per-channel shifts
             source_shifts = source_shifts.unsqueeze(1)
         source_shifts = source_shifts.unsqueeze(-1)
         # used to shift the source, but for kriging it's better to shift targets
         # so that we can cache source kernel choleskys
-        source_pos = source_geom[source_channels] # + source_shifts
+        source_pos = source_geom[source_channels]  # + source_shifts
 
         # where are they going?
         target_pos = target_geom[target_channels[ixs]] - source_shifts
