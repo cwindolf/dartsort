@@ -182,7 +182,6 @@ def test_tiny_up(tmp_path, up_factor=8):
         temp = cupts.compressed_upsampled_templates[
             cupts.compressed_upsampling_map[l, u]
         ]
-        print(f"{t=} {temp.ptp(0).max()=}")
         rec0[
             t - trough_offset_samples : t - trough_offset_samples + spike_length_samples
         ] += temp
@@ -205,7 +204,6 @@ def test_tiny_up(tmp_path, up_factor=8):
                 overwrite=True,
                 with_locs=True,
             )
-            print(f"{template_data.templates.ptp(1).max(1)=}")
 
             matcher = main.ObjectiveUpdateTemplateMatchingPeeler.from_config(
                 rec,
@@ -225,7 +223,7 @@ def test_tiny_up(tmp_path, up_factor=8):
             )
             tempup = template_util.compressed_upsampled_templates(
                 lrt.temporal_components,
-                ptps=template_data.templates.ptp(1).max(1),
+                ptps=np.ptp(template_data.templates, 1).max(1),
                 max_upsample=up_factor,
             )
             assert np.array_equal(
@@ -287,17 +285,6 @@ def test_tiny_up(tmp_path, up_factor=8):
                 return_conv=True,
             )
 
-            print(f'{res["n_spikes"]=} {len(times)=}')
-            print(f"{cupts.compressed_upsampled_templates.ptp(1).max(1)=}")
-            print(
-                f'{res["collisioncleaned_waveforms"].numpy(force=True).ptp(1).max(1)=}'
-            )
-            print(
-                f'{np.c_[res["times_samples"], res["labels"], res["upsampling_indices"]]=}'
-            )
-            print(f"{np.c_[times, labels, upsampling_indices]=}")
-            print(f'{torch.square(res["residual"]).mean()=}')
-            print(f"C {torch.square(res['conv']).mean()=}")
             assert res["n_spikes"] == len(times)
             assert np.array_equal(res["times_samples"], times)
             assert np.array_equal(res["labels"], labels)
@@ -392,7 +379,7 @@ def static_tester(tmp_path, up_factor=1):
             )
             tempup = template_util.compressed_upsampled_templates(
                 lrt.temporal_components,
-                ptps=template_data.templates.ptp(1).max(1),
+                ptps=np.ptp(template_data.templates, 1).max(1),
                 max_upsample=up_factor,
             )
             assert np.array_equal(

@@ -6,7 +6,6 @@ import spikeinterface.core as sc
 from dartsort import config
 from dartsort.templates import (get_templates, pairwise, pairwise_util,
                                 template_util, templates)
-from dartsort.util import drift_util
 from dartsort.util.data_util import DARTsortSorting
 from dredge.motion_util import IdentityMotionEstimate, get_motion_estimate
 from test_util import no_overlap_recording_sorting
@@ -27,11 +26,6 @@ def test_roundtrip(tmp_path):
         save_folder=tmp_path,
         overwrite=True,
     )
-    print(f"{np.abs(template_data.templates - temps).max()=}")
-    print(f"{np.abs(template_data.templates - temps).mean()=}")
-    print(f"{np.abs(template_data.templates - temps).min()=}")
-    print(f"{template_data.templates.ptp(1).max(1)=}")
-    print(f"{temps.ptp(1).max(1)=}")
     assert np.array_equal(template_data.templates, temps)
 
 
@@ -218,7 +212,7 @@ def test_pconv():
     svd_compressed = template_util.svd_compress_templates(temps, rank=1)
     ctempup = template_util.compressed_upsampled_templates(
         svd_compressed.temporal_components,
-        ptps=temps.ptp(1).max(1),
+        ptps=np.ptp(temps, 1).max(1),
         max_upsample=1,
         kind="cubic",
     )
