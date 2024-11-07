@@ -287,11 +287,14 @@ def convolve_lowrank(
     return out
 
 
-def nancov(x, correction=1):
+def nancov(x, correction=1, return_nobs=False):
     xtx = x.T @ x
     mask = x.isfinite().to(x)
     nobs = mask.T @ mask
-    return xtx / (nobs + correction)
+    cov = xtx / (nobs + correction)
+    if return_nobs:
+        return cov, nobs
+    return cov
 
 
 def real_resample(x, num, dim=0):
