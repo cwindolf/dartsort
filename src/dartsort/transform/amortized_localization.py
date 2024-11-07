@@ -30,17 +30,17 @@ class AmortizedLocalization(BaseWaveformFeaturizer):
         epochs=100,
         learning_rate=1e-3,
         batch_size=32,
-        norm_kind="batchnorm",
+        norm_kind="layernorm",
         alpha_closed_form=True,
         amplitudes_only=True,
         prior_variance=None,
         convergence_eps=0.01,
-        min_epochs=10,
+        min_epochs=5,
         scale_loss_by_mean=True,
         reference='main_channel',
-        channelwise_dropout_p=0.2,
-        examples_per_epoch=25_000,
-        val_split_p=0.0,
+        channelwise_dropout_p=0.01,
+        examples_per_epoch=50_000,
+        val_split_p=0.3,
         random_seed=0,
     ):
         assert localization_model in ("pointsource", "dipole")
@@ -72,7 +72,7 @@ class AmortizedLocalization(BaseWaveformFeaturizer):
         self.reference = reference
         self.examples_per_epoch = examples_per_epoch
         self.val_split_p = val_split_p
-        self.rg = np.random.default_rng(random_seed)
+        self.random_seed = random_seed
 
         self.register_buffer(
             "padded_geom", F.pad(self.geom.to(torch.float), (0, 0, 0, 1))
@@ -249,7 +249,8 @@ class AmortizedLocalization(BaseWaveformFeaturizer):
 
         # make a validation set for early stopping
         if self.val_split_p:
-            istrain = self.rg.binomial(1, p=self.val_split_p, size=len(waveforms))
+            rg = np.random.default_rng(self.random_seed)
+            istrain = rg.binomial(1, p=self.val_split_p, size=len(waveforms))
             istrain = istrain.astype(bool)
             isval = np.logical_not(istrain)
             val_waveforms = waveforms[isval]
