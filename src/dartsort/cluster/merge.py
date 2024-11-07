@@ -29,7 +29,7 @@ def merge_templates(
     distance_kind="rms",
     sym_function=np.minimum,
     merge_distance_threshold=0.25,
-    temporal_upsampling_factor=8,
+    temporal_upsampling_factor=1,
     amplitude_scaling_variance=0.001,
     amplitude_scaling_boundary=0.1,
     svd_compression_rank=20,
@@ -138,7 +138,7 @@ def merge_across_sortings(
     superres_linkage=np.max,
     sym_function=np.minimum,
     max_shift_samples=20,
-    temporal_upsampling_factor=8,
+    temporal_upsampling_factor=1,
     amplitude_scaling_variance=0.001,
     amplitude_scaling_boundary=0.1,
     svd_compression_rank=20,
@@ -240,7 +240,7 @@ def calculate_merge_distances(
     superres_linkage=np.max,
     sym_function=np.minimum,
     max_shift_samples=20,
-    temporal_upsampling_factor=8,
+    temporal_upsampling_factor=1,
     amplitude_scaling_variance=0.001,
     amplitude_scaling_boundary=0.1,
     svd_compression_rank=20,
@@ -321,7 +321,7 @@ def cross_match_distance_matrix(
     superres_linkage=np.max,
     sym_function=np.minimum,
     max_shift_samples=20,
-    temporal_upsampling_factor=8,
+    temporal_upsampling_factor=1,
     amplitude_scaling_variance=0.001,
     amplitude_scaling_boundary=0.1,
     svd_compression_rank=20,
@@ -333,7 +333,7 @@ def cross_match_distance_matrix(
     distance_kind="rms",
     device=None,
     n_jobs=0,
-    show_progress=False,
+    show_progress=True,
 ):
     template_data, cross_mask, ids_a, ids_b = combine_templates(
         template_data_a, template_data_b
@@ -364,7 +364,6 @@ def cross_match_distance_matrix(
     # (with infs on main diag blocks)
     a_mask = np.flatnonzero(np.isin(units, ids_a))
     b_mask = np.flatnonzero(np.isin(units, ids_b))
-    print(f"{a_mask.shape=} {b_mask.shape=} {units.shape=}")
     Dab = dists[a_mask[:, None], b_mask[None, :]]
     Dba = dists[b_mask[:, None], a_mask[None, :]]
     Dstack = np.stack((Dab, Dba.T))
@@ -385,14 +384,23 @@ def cross_match_distance_matrix(
         choices, np.arange(choices.shape[0])[:, None], np.arange(choices.shape[1])[None]
     ]
 
-    snrs_a = template_snrs[a_mask]
-    snrs_b = template_snrs[b_mask]
+    # handle duplicates and missing
+    a_inds = np.searchsorted(units[a_mask], ids_a, side="right") - 1
+    a_kept = units[a_mask][a_inds] == ids_a
+    b_inds = np.searchsorted(units[b_mask], ids_b, side="right") - 1
+    b_kept = units[b_mask][b_inds] == ids_b
+    dists = dists[a_inds[a_kept][:, None], b_inds[b_kept][None, :]]
+
+    snrs_a = template_snrs[a_mask][a_inds[a_kept]]
+    snrs_b = template_snrs[b_mask][b_inds[b_kept]]
 
     return (
         dists,
         shifts,
         snrs_a,
         snrs_b,
+        a_kept,
+        b_kept,
     )
 
 
