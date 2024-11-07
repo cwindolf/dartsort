@@ -67,8 +67,11 @@ class TemplateData:
         np.savez(npz_path, **to_save)
 
     def __getitem__(self, subset):
-        # need to implement other cases
-        assert np.array_equal(self.unit_ids, np.arange(len(self.unit_ids)))
+        if not np.array_equal(self.unit_ids, np.arange(len(self.unit_ids))):
+            subset_ixs = np.searchsorted(self.unit_ids, subset, side="right") - 1
+            matched = self.unit_ids[subset_ixs] == subset
+            assert matched.all()
+            subset = subset_ixs
         return self.__class__(
             templates=self.templates[subset],
             unit_ids=self.unit_ids[subset],
