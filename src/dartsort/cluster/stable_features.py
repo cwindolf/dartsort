@@ -24,7 +24,7 @@ class StableSpikeDataset(torch.nn.Module):
         core_features: torch.Tensor,
         extract_features: torch.Tensor,
         core_neighborhoods: "SpikeNeighborhoods",
-        features_on_device: bool = True,
+        features_on_device: bool = False,
         interpolation_method: str = "kriging",
         interpolation_sigma: float = 20.0,
         core_radius: float = 35.0,
@@ -95,13 +95,12 @@ class StableSpikeDataset(torch.nn.Module):
         core_radius=35.0,
         subsampling_rg=0,
         max_n_spikes=np.inf,
-        features_on_device=True,
         interpolation_sigma=20.0,
         interpolation_method="kriging",
         motion_depth_mode="channel",
         features_dataset_name="collisioncleaned_tpca_features",
         show_progress=False,
-        store_on_device=True,
+        store_on_device=False,
         workers=-1,
         device=None,
     ):
@@ -149,8 +148,11 @@ class StableSpikeDataset(torch.nn.Module):
                 workers=workers,
                 motion_depth_mode=motion_depth_mode,
             )
-            extract_channels = torch.from_numpy(extract_channels).to(device)
-            core_channels = torch.from_numpy(core_channels).to(device)
+            extract_channels = torch.from_numpy(extract_channels)
+            core_channels = torch.from_numpy(core_channels)
+            if store_on_device:
+                extract_channels = extract_channels.to(device)
+                core_channels = core_channels.to(device)
 
             # stabilize features with interpolation
             extract_features = interpolation_util.interpolate_by_chunk(
@@ -200,7 +202,7 @@ class StableSpikeDataset(torch.nn.Module):
             core_features=core_features,
             extract_features=extract_features,
             core_neighborhoods=core_neighborhoods,
-            features_on_device=features_on_device,
+            features_on_device=store_on_device,
             interpolation_method=interpolation_method,
             interpolation_sigma=interpolation_sigma,
             core_radius=core_radius,
@@ -230,7 +232,8 @@ class StableSpikeDataset(torch.nn.Module):
 
         if not self.features_on_device:
             features = features.to(self.device)
-            channels = channels.to(self.device)
+            if with_channels:
+                channels = channels.to(self.device)
 
         waveforms = None
         if with_reconstructions:
@@ -302,7 +305,14 @@ class SpikeFeatures:
 
 
 class SpikeNeighborhoods(torch.nn.Module):
-    def __init__(self, n_channels, neighborhood_ids, neighborhoods, neighborhood_members=None):
+    def __init__(
+        self,
+        n_channels,
+        neighborhood_ids,
+        neighborhoods,
+        neighborhood_members=None,
+        store_on_device: bool = False,
+    ):
         """SpikeNeighborhoods
 
         Sparsely keep track of which channels each spike lives on. Used to query
@@ -319,8 +329,12 @@ class SpikeNeighborhoods(torch.nn.Module):
         """
         super().__init__()
         self.n_channels = n_channels
-        self.register_buffer("neighborhood_ids", neighborhood_ids)
-        self.register_buffer("neighborhoods", neighborhoods)
+        if store_on_device:
+            self.register_buffer("neighborhood_ids", neighborhood_ids)
+            self.register_buffer("neighborhoods", neighborhoods)
+        else:
+            self.neighborhood_ids = neighborhood_ids
+            self.neighborhoods = neighborhoods
         self.n_neighborhoods = len(neighborhoods)
 
         # store neighborhoods as a matrix
@@ -390,8 +404,7 @@ class SpikeNeighborhoods(torch.nn.Module):
         }
         n_spikes = self.popcounts[covered_ids].sum()
         if add_to_overlaps is not None:
-            for _, members in neighborhood_info.values():
-                add_to_overlaps[members] += 1
+            add_to_overlaps[covered_ids] += 1
         return neighborhood_info, n_spikes
 
     def spike_neighborhoods(self, channels, spike_indices, min_coverage=1.0):
@@ -402,7 +415,7 @@ class SpikeNeighborhoods(torch.nn.Module):
         spike_indices[neighborhood_member_indices] are the actual indices.
         """
         spike_ids = self.neighborhood_ids[spike_indices]
-        neighborhoods_considered = torch.unique(spike_ids)
+        neighborhoods_considered = torch.unique(spike_ids).to(self.indicators.device)
         inds = self.indicators[channels][:, neighborhoods_considered]
         coverage = inds.sum(0) / self.channel_counts[neighborhoods_considered]
         covered_ids = neighborhoods_considered[coverage >= min_coverage].cpu()
