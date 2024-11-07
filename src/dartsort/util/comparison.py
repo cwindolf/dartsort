@@ -120,15 +120,17 @@ class DARTsortGroundTruthComparison:
         matches = matches[matched]
         tested_td = self.tested_analysis.coarse_template_data[matches]
 
-        dists, shifts, snrs_a, snrs_b = merge.cross_match_distance_matrix(
+        dists, shifts, snrs_a, snrs_b, a_mask, b_mask = merge.cross_match_distance_matrix(
             gt_td,
             tested_td,
             sym_function=np.maximum,
-            n_jobs=self.n_jobs,
-            device=self.device,
+            n_jobs=1,
+            svd_compression_rank=10,
+            device="cpu",
+            min_spatial_cosine=0.1,
         )
-        self._template_distances = np.full((nugt, nugt), np.inf)
-        self._template_distances[np.arange(nugt)[:, None], matched[None, :]] = dists
+        self._template_distances = np.full((nugt, nugt), 5.0)
+        self._template_distances[np.arange(nugt)[a_mask][:, None], matched[b_mask][None, :]] = dists
 
     def _calculate_unsorted_detection(self):
         if self._unsorted_detection is not None:
