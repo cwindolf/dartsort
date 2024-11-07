@@ -225,10 +225,10 @@ def featurization_config_to_class_names_and_kwargs(fconf):
                 "AmplitudeFeatures",
                 {
                     "name_prefix": fconf.output_waveforms_name,
-                    "ptp_max_amplitude": do_ptp_amp,
-                    "peak_amplitude_vectors": do_peak_vec,
-                    "ptp_amplitude_vectors": do_ptp_vec,
-                    "log_peak_to_trough": do_logptt,
+                    "ptp_max_amplitude": do_ptp_amp or fconf.save_all_amplitudes,
+                    "peak_amplitude_vectors": do_peak_vec or fconf.save_all_amplitudes,
+                    "ptp_amplitude_vectors": do_ptp_vec or fconf.save_all_amplitudes,
+                    "log_peak_to_trough": do_logptt or fconf.save_all_amplitudes,
                 },
             )
         )
