@@ -167,7 +167,7 @@ class SpikeMixtureModel(torch.nn.Module):
 
             # no need to clean units since they'll be overwritten immediately
             reas_count, log_liks, spike_logliks = self.e_step(
-                show_progress=step_progress, clean_units=False
+                show_progress=step_progress
             )
             logpx = logsumexp(spike_logliks)
 
@@ -197,7 +197,7 @@ class SpikeMixtureModel(torch.nn.Module):
         reas_count, log_liks, spike_logliks = self.e_step(clean_units=True)
         return log_liks
 
-    def e_step(self, show_progress=False, clean_units=False):
+    def e_step(self, show_progress=False, clean_units=True):
         # E step: get responsibilities and update hard assignments
         log_liks = self.log_likelihoods(show_progress=show_progress)
         # replace log_liks by csc
@@ -211,12 +211,13 @@ class SpikeMixtureModel(torch.nn.Module):
     def m_step(self, likelihoods=None, show_progress=False, prev_means=None):
         """Beware that this flattens the labels."""
         del self.units[:]
+        unit_ids = self.unit_ids()
 
         if self.use_proportions and likelihoods is not None:
             self.update_proportions(likelihoods)
+            assert len(self.log_proportions) >= unit_ids.max() + 1
 
         pool = Parallel(self.n_threads, backend="threading", return_as="generator")
-        unit_ids = self.unit_ids()
         results = pool(
             delayed(self.fit_unit)(j, likelihoods=likelihoods) for j in unit_ids
         )
@@ -228,7 +229,7 @@ class SpikeMixtureModel(torch.nn.Module):
             self.units.append(unit)
         if self.log_proportions is not None:
             maxix = self.log_proportions.numel() - 1
-            assert (unit_ids != maxix).all() 
+            assert (unit_ids < maxix).all() 
             ixs = torch.cat((unit_ids, torch.tensor([maxix])))
             self.log_proportions = self.log_proportions[ixs]
         if prev_means is not None:
@@ -339,7 +340,9 @@ class SpikeMixtureModel(torch.nn.Module):
         log_resps = torch.sparse.softmax(log_liks, dim=0)
         log_resps = coo_to_scipy(log_resps).tocsr()
         log_props = logmeanexp(log_resps)
-        self.log_proportions = torch.asarray(log_props, dtype=torch.float, device=self.data.device)
+        self.log_proportions = torch.asarray(
+            log_props, dtype=torch.float, device=self.data.device
+        )
 
     def reassign(self, log_liks):
         has_noise_unit = log_liks.shape[1] > len(self.units)
@@ -1563,6 +1566,8 @@ def qda(
         return np.inf
     in_b = in_b[keep]
     diff = diff[keep]
+    if in_b.all() or not in_b.any():
+        return np.inf
 
     if weighted:
         b_prop = in_b.mean()
@@ -1571,10 +1576,13 @@ def qda(
         keep = keep[keep_keep]
         sample_weights = np.zeros(diff.shape)
         np.add.at(sample_weights, inv, np.where(in_b, a_prop / 0.5, b_prop / 0.5))
+        assert np.all(sample_weights > 0)
     else:
         diff, keep_keep, inv = np.unique(diff, return_inverse=True)
         sample_weights = np.zeros(diff.shape)
         np.add.at(sample_weights, inv, 1.0)
+        print("b")
+        assert np.all(sample_weights > 0)
 
     return smoothed_dipscore_at(
         cut,
