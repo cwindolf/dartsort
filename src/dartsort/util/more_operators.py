@@ -32,14 +32,14 @@ class LowRankRootSumLinearOperator(SumLinearOperator):
         is_first = isinstance(linear_ops[0], LowRankRootLinearOperator)
         self._root_op = linear_ops[1 - is_first]
         self._other_op = linear_ops[is_first]
-        super().__init__(linear_ops, preconditioner_override=preconditioner_override)
+        super().__init__(*linear_ops, preconditioner_override=preconditioner_override)
 
     @property
     @cached(name="chol_cap_mat")
     def chol_cap_mat(self):
         U = self._root_op.root
         V = self._root_op.root.mT
-        Ainv_U = self._other_op.solve(U)
+        Ainv_U = self._other_op.solve(U.to_dense())
 
         C = ConstantDiagLinearOperator(
             torch.ones(*V.batch_shape, 1, device=V.device, dtype=V.dtype), V.shape[-2]
@@ -87,15 +87,16 @@ class LowRankRootSumLinearOperator(SumLinearOperator):
         ],
     ]:
         A = self._other_op
-        U = self._linear_op.root
-        V = self._linear_op.root.mT
+        U = self._root_op.root
+        V = self._root_op.root.mT
         chol_cap_mat = self.chol_cap_mat
+        Ainv_rhs = A.solve(rhs)
 
-        res = V.matmul(A.solve(rhs))
+        res = V.matmul(Ainv_rhs)
         res = torch.cholesky_solve(res, chol_cap_mat)
-        res = A.solve(U.matmul(res))
-
-        solve = A.solve(rhs) - res
+        # res = A.solve(U.matmul(res))
+        # solve = A.solve(rhs) - res
+        solve = Ainv_rhs.sub_(A.solve(U.matmul(res)))
 
         return solve
 
