@@ -1192,7 +1192,7 @@ class GaussianUnit(torch.nn.Module):
 
     def fit(self, features: SpikeFeatures, weights: torch.Tensor, neighborhoods=None):
         if features is None:
-            self.pick_channels(None)
+            self.pick_channels(None, None)
             return
         n = len(features)
         r = self.noise.rank
@@ -1218,7 +1218,14 @@ class GaussianUnit(torch.nn.Module):
         self.fit_mean(achans, afeats, aweights, aweights_sum)
 
         # assigns self.cov, self.logdet
-        self.fit_cov(features, weights_full, count_data, neighborhoods=neighborhoods)
+        self.fit_cov(
+            features,
+            achans,
+            aweights,
+            aweights_sum,
+            neighborhoods=neighborhoods,
+            target_padded=target_padded,
+        )
         del features  # overwritten
 
         self.pick_channels(achans, aweights_sum)
@@ -1229,7 +1236,7 @@ class GaussianUnit(torch.nn.Module):
 
         assert self.mean_kind == "full"
         aweights_norm = aweights / aweights_sum
-        am = torch.linalg.vecdot(aweights_norm, afeats, dim=0)
+        am = torch.linalg.vecdot(aweights_norm.unsqueeze(1), afeats, dim=0)
 
         if self.prior_type == "niw":
             assert self.noise.mean_kind == "zero"
@@ -1273,9 +1280,9 @@ class GaussianUnit(torch.nn.Module):
                 spw, achans, self.noise.n_channels, target_padded=target_padded
             )
             spw = replace(spw, features=nu)
-            wnu = zero_pad_to_chans(spw, achans, self.noise.n_channels)
+            wnu, _ = zero_pad_to_chans(spw, achans, self.noise.n_channels)
             del spw  # overwritten
-            lambd = template_scale_map(
+            self.template_std = template_scale_map(
                 wfeats,
                 wnu,
                 aweights,
@@ -1283,7 +1290,6 @@ class GaussianUnit(torch.nn.Module):
                 beta=self.scale_beta,
                 allow_destroy=True,
             )
-            self.template_std = lambd**-0.5
             return
 
         assert False
@@ -1304,6 +1310,7 @@ class GaussianUnit(torch.nn.Module):
             self.register_buffer("snr", full_snr)
             strong = snr >= self.channels_strategy_snr_min
             self.register_buffer("channels", active_chans[strong])
+            return
 
         assert False
 
@@ -1877,8 +1884,8 @@ def template_scale_map(
     beta=1.0,
     allow_destroy=False,
     xtol=1e-2,
-    n_iter=20,
-    lr=1e-2,
+    n_iter=2000,
+    lr=1e-1,
 ):
     n = len(xw)
     ztnu = xw if allow_destroy else xw.clone()
@@ -1886,11 +1893,12 @@ def template_scale_map(
     del xw, nu
 
     nuw.mul_(weights.unsqueeze(1))
-    ztnusq = ztnu.mul_(nuw).view(n, -1).sum(1).square_()
-    nutnu = nuw.square_().sum(1)
+    ztnusq = ztnu.mul_(nuw).sum(dim=(1, 2)).square_()
+    nutnu = nuw.square_().sum(dim=(1, 2))
     del nuw
     alpha_Non2_1 = alpha + n / 2 - 1.0
-    init = torch.sum(ztnusq / (1.0 + nutnu))
+    # init = torch.sum(ztnusq / (1.0 + nutnu))
+    init = torch.tensor(1.0)
 
     with torch.enable_grad():
         log_lambd = torch.log(init)
@@ -1911,11 +1919,12 @@ def template_scale_map(
             loss.backward()
             opt.step()
 
-            if j <= n_iter / 5:
+            if j <= 8:
                 continue
 
             new_lambd = log_lambd.exp()
             if torch.abs(new_lambd - lambd) < xtol:
                 break
 
-    return log_lambd.clone().detach().exp_()
+    final = log_lambd.clone().detach().exp_()
+    return 1.0 / final.sqrt()
