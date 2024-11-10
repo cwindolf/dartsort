@@ -468,7 +468,7 @@ def occupied_chans(spike_data, n_channels, neighborhoods=None):
     ids = torch.unique(spike_data.neighborhood_ids)
     chans = neighborhoods.neighborhoods[ids]
     chans = torch.unique(chans)
-    return chans[chans < n_channels]
+    return chans[chans < n_channels].to(spike_data.channels)
 
 
 def interp_to_chans(
@@ -533,10 +533,10 @@ def get_channel_reindexer(channels, n_channels):
     reindexer : LongTensor
         Shape (n_channels + 1,)
         reindexer[i] is the index of i in channels, if present.
-        Otherwise, it is n_chans_subset + 1.
-        And the last entry is, of course, n_chans_subset + 1.
+        Otherwise, it is n_chans_subset.
+        And the last entry is, of course, n_chans_subset.
     """
-    reindexer = channels.new_zeros((n_channels + 1,))
+    reindexer = channels.new_full((n_channels + 1,), channels.numel())
     (rel_ixs,) = torch.nonzero(channels < n_channels, as_tuple=True)
     reindexer[channels[rel_ixs]] = rel_ixs
     return reindexer
