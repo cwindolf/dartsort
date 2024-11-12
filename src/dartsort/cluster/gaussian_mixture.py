@@ -638,18 +638,7 @@ class SpikeMixtureModel(torch.nn.Module):
         if verbose:
             print(f"{unit_id=} {features=}")
         if weights is None and likelihoods is not None:
-            # torch's index_select is painfully slow
-            # weights = torch.index_select(likelihoods, 1, features.indices)
-            # here we have weights as a csc_array
-            weights = likelihoods[:, features.indices]
-            weights = coo_to_torch(weights.tocoo(), torch.float, copy_data=True)
-            weights = weights.to(self.data.device)
-            if self.log_proportions is not None:
-                log_props_vec = self.log_proportions[weights.indices()[0]]
-                weights.values().add_(log_props_vec)
-            weights = torch.sparse.softmax(weights, dim=0)
-            weights = weights[unit_id]
-            weights = weights.to_dense()
+            weights = self.get_fit_weights(unit_id, features.indices, likelihoods)
         if verbose and weights is not None:
             print(f"{weights.sum()=} {weights.min()=} {weights.max()=}")
         unit_args = self.unit_args | unit_args
@@ -848,7 +837,11 @@ class SpikeMixtureModel(torch.nn.Module):
 
             cur_len_with_noise = self.log_proportions.numel()
             noise_log_prop = self.log_proportions[-1]
-            self.log_proportions.resize_(cur_len_with_noise + n_new_units)
+            # self.log_proportions.resize_(cur_len_with_noise + n_new_units)
+            self.log_proportions = torch.cat(
+                (self.log_proportions, self.log_proportions.new_empty(n_new_units)),
+                dim=0,
+            )
             self.log_proportions[unit_id] = new_log_props[0]
             self.log_proportions[cur_len_with_noise - 1 : -1] = new_log_props[1:]
             self.log_proportions[-1] = noise_log_prop
@@ -1018,6 +1011,24 @@ class SpikeMixtureModel(torch.nn.Module):
         if debug:
             return debug_info
         return score
+
+    def get_fit_weights(self, unit_id, indices, likelihoods=None):
+        """Normalized responsibilities for subset of spikes."""
+        if likelihoods is None:
+            return None
+        # torch's index_select is painfully slow
+        # weights = torch.index_select(likelihoods, 1, features.indices)
+        # here we have weights as a csc_array
+        weights = likelihoods[:, indices]
+        weights = coo_to_torch(weights.tocoo(), torch.float, copy_data=True)
+        weights = weights.to(self.data.device)
+        if self.log_proportions is not None:
+            log_props_vec = self.log_proportions[weights.indices()[0]]
+            weights.values().add_(log_props_vec)
+        weights = torch.sparse.softmax(weights, dim=0)
+        weights = weights[unit_id]
+        weights = weights.to_dense()
+        return weights
 
     # -- gizmos
 
@@ -1267,6 +1278,8 @@ class GaussianUnit(torch.nn.Module):
             return
 
         if self.cov_kind == "scaled_template":
+            # todo: is there some issue with centering and weights
+            # zeros get filled in, don't want to subtract mean and leave nonzero
             spw, nu = noise_whiten(
                 features,
                 self.noise,

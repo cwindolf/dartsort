@@ -492,8 +492,8 @@ def interp_to_chans(
     )
 
 
-def zero_pad_to_chans(
-    spike_data, channels, n_channels, weights=None, target_padded=None
+def pad_to_chans(
+    spike_data, channels, n_channels, weights=None, target_padded=None, pad_value=0.0
 ):
     n, r, c = spike_data.features.shape
     c_targ = channels.numel()
@@ -504,7 +504,10 @@ def zero_pad_to_chans(
 
     # scatter data
     if target_padded is None:
-        target_padded = spike_data.features.new_zeros(n, r, c_targ + 1)
+        if pad_value == 0.0:
+            target_padded = spike_data.features.new_zeros(n, r, c_targ + 1)
+        else:
+            target_padded = spike_data.features.new_full((n, r, c_targ + 1), pad_value)
     scatter_ixs = target_ixs.unsqueeze(1).broadcast_to((n, r, c))
     target_padded.scatter_(src=spike_data.features, dim=2, index=scatter_ixs)
     target = target_padded[..., :-1]
@@ -518,6 +521,12 @@ def zero_pad_to_chans(
     weights_padded.scatter_(src=weights, dim=1, index=target_ixs)
     weights = weights_padded[:, :-1]
     return target, weights
+
+
+def zero_pad_to_chans(
+    spike_data, channels, n_channels, weights=None, target_padded=None
+):
+    return pad_to_chans(spike_data, channels, n_channels, weights=weights)
 
 
 def get_channel_reindexer(channels, n_channels):
