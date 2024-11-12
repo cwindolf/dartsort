@@ -287,11 +287,38 @@ def convolve_lowrank(
     return out
 
 
-def nancov(x, correction=1, return_nobs=False):
-    xtx = x.T @ x
-    mask = x.isfinite().to(x)
-    nobs = mask.T @ mask
-    cov = xtx / (nobs + correction)
+def nancov(x, weights=None, correction=1, nan_free=False, return_nobs=False, force_posdef=False):
+    """Pairwise covariance estimate
+
+    Covariances are estimated from masked observations in each feature.
+    The result may not be positive definite, but we'll eigh it for you if
+    you want.
+    """
+    if not nan_free:
+        mask = x.isfinite().to(x)
+        x = x.nan_to_num()
+
+    if weights is not None:
+        xtx = (x.T * weights) @ x
+        if nan_free:
+            nobs = weights.sum(0)
+        else:
+            nobs = (mask.T * weights) @ mask
+    else:
+        xtx = x.T @ x
+        if nan_free:
+            nobs = np.array(len(x), dtype=x.dtype)
+        else:
+            nobs = mask.T @ mask
+    denom = nobs - correction
+    denom[denom <= 0] = 1
+    cov = xtx / denom
+
+    if force_posdef:
+        vals, vecs = torch.linalg.eigh(cov)
+        good = vals > 0
+        cov = (vecs[:, good] * vals[good]) @ vecs[:, good].T
+
     if return_nobs:
         return cov, nobs
     return cov
