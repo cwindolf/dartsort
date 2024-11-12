@@ -303,12 +303,7 @@ class EmbeddedNoise(torch.nn.Module):
       - "factorized_rank_diag" : factorized, but rank factor is diagonal
       - "factorized_by_rank_rank_diag" : factorized_by_rank, but rank factor is diagonal
          this one is block diagonal and therefore nicer than factorized_by_rank.
-
-    Default here for now is factorized_by_rank_rank_diag. This is because empirically,
-    rank covs were observed to be diagonal-ish (not extremely close, but not super
-    far). And, spatial covs look to be of spatially-decaying kernel type, but the band
-    width depends on the rank (since ranks ~ frequency bands). So let's model those
-    differences by default -- it doesn't cost much.
+      - "full": not generally practical.
     """
 
     def __init__(
@@ -324,6 +319,7 @@ class EmbeddedNoise(torch.nn.Module):
         rank_vt=None,
         channel_std=None,
         channel_vt=None,
+        full_cov=None,
     ):
         super().__init__()
         self.rank = rank
@@ -346,6 +342,9 @@ class EmbeddedNoise(torch.nn.Module):
             self.register_buffer("rank_vt", rank_vt)
         if channel_vt is not None:
             self.register_buffer("channel_vt", channel_vt)
+
+        if full_cov is not None:
+            self.register_buffer("full_cov", full_cov)
 
         # precompute stuff
         self._full_cov = None
@@ -434,6 +433,12 @@ class EmbeddedNoise(torch.nn.Module):
             chans_std = self.full_std[:, channels]
             return operators.DiagLinearOperator(chans_std**2)
 
+        if self.cov_kind == "full":
+            marg_cov = self.full_cov[:, channels][..., channels]
+            r, c = marg_cov.shape[:2]
+            marg_cov = marg_cov.reshape(r * c, r * c)
+            return linear_operator.to_linear_operator(marg_cov)
+
         if self.cov_kind == "factorized":
             rank_root = self.rank_vt.T * self.rank_std
             rank_cov = rank_root @ rank_root.T
@@ -454,10 +459,9 @@ class EmbeddedNoise(torch.nn.Module):
         if self.cov_kind == "factorized_by_rank_rank_diag":
             chans_vt = self.channel_vt[:, :, channels]
             chans_std = self.channel_std[:, :, None]  # no slice here!
-            chan_root = chans_std * chans_vt
-            blocks = torch.bmm(
-                self.rank_std[:, None, None] * chan_root.mT, chan_root
-            )
+            rank_std = self.rank_std.view(self.rank, 1, 1)
+            chan_root = (rank_std * chans_std) * chans_vt
+            blocks = torch.bmm(chan_root.mT, chan_root)
             blocks = linear_operator.to_linear_operator(blocks)
             return operators.BlockDiagLinearOperator(blocks)
 
@@ -499,6 +503,7 @@ class EmbeddedNoise(torch.nn.Module):
             assert False
 
         # estimate covs
+        # still n, rank, n_channels
         dxsq = x.square()
         full_var = torch.nanmean(dxsq, dim=0)
         rank_var = torch.nanmean(full_var, dim=1)
@@ -521,6 +526,15 @@ class EmbeddedNoise(torch.nn.Module):
             )
             full_std = full_var.sqrt()
             return cls(mean=mean, global_std=global_std, full_std=full_std, **init_kw)
+
+        if cov_kind == "full":
+            x = x.view(n, rank * n_channels)
+            present = torch.isfinite(x).any(dim=0)
+            cov = torch.eye(x.shape[1], device=x.device, dtype=x.dtype)
+            vcov = spiketorch.nancov(x[:, present])
+            cov[present[:, None] & present[None, :]] = vcov.view(-1)
+            cov = cov.reshape(rank, n_channels, rank, n_channels)
+            return cls(mean=mean, global_std=global_std, full_cov=cov, **init_kw)
 
         assert cov_kind.startswith("factorized")
         # handle rank part first, then the spatial part
