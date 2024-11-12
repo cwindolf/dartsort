@@ -7,13 +7,13 @@ import torch
 from tqdm.auto import tqdm
 
 from ..cluster import gaussian_mixture, stable_features
-from ..util.multiprocessing_util import (CloudpicklePoolExecutor,
-                                         ThreadPoolExecutor, get_pool, cloudpickle)
 from ..util import spiketorch
+from ..util.multiprocessing_util import (CloudpicklePoolExecutor,
+                                         ThreadPoolExecutor, cloudpickle,
+                                         get_pool)
 from . import analysis_plots, gmm_helpers, layout
 from .colors import glasbey1024
 from .waveforms import geomplot
-
 
 distance_cmap = plt.cm.plasma
 
@@ -66,7 +66,7 @@ class ChansHeatmap(GMMPlot):
         ax = panel.subplots()
         xy = gmm.data.prgeom.numpy(force=True)
         s = ax.scatter(*xy[unique_ixs].T, c=counts, lw=0, cmap=self.cmap)
-        plt.colorbar(s, ax=ax, shrink=0.3, label='chan count')
+        plt.colorbar(s, ax=ax, shrink=0.3, label="chan count")
         ax.scatter(
             *xy[gmm.units[unit_id].channels.numpy(force=True)].T,
             color="r",
@@ -116,16 +116,16 @@ class MStep(GMMPlot):
 
         # panel_bottom, panel_cbar = panel_bottom.subfigures(ncols=2, width_ratios=[5, 0.5])
         if self.with_covs:
-            cov_axes = panel_bottom.subplots(
-                nrows=3, ncols=2, sharey=True, sharex=True
-            )
+            cov_axes = panel_bottom.subplots(nrows=3, ncols=2, sharey=True, sharex=True)
             # cax = panel_cbar.add_subplot(3, 1, 2)
 
         # get spike data and determine channel set by plotting
-        sp = gmm.random_spike_data(unit_id, max_size=self.n_waveforms_show, with_reconstructions=True)
+        sp = gmm.random_spike_data(
+            unit_id, max_size=self.n_waveforms_show, with_reconstructions=True
+        )
         maa = sp.waveforms.abs().nan_to_num().max()
         geomplot_kw = dict(
-            max_abs_amp=maa, 
+            max_abs_amp=maa,
             geom=gmm.data.prgeom.numpy(force=True),
             show_zero=False,
             return_chans=True,
@@ -172,10 +172,16 @@ class MStep(GMMPlot):
         emp_cov, nobs = spiketorch.nancov(feats.view(n, r * c), return_nobs=True)
         denom = nobs + gmm.units[unit_id].prior_pseudocount
         emp_cov = (nobs / denom) * emp_cov
-        noise_cov = gmm.noise.marginal_covariance(channels=gmm.units[unit_id].channels).to_dense()
+        noise_cov = gmm.noise.marginal_covariance(
+            channels=gmm.units[unit_id].channels
+        ).to_dense()
         m = model_mean.reshape(-1)
         mmt = m[:, None] @ m[None, :]
-        modelcov = gmm.units[unit_id].marginal_covariance(channels=gmm.units[unit_id].channels).to_dense()
+        modelcov = (
+            gmm.units[unit_id]
+            .marginal_covariance(channels=gmm.units[unit_id].channels)
+            .to_dense()
+        )
         residual = emp_cov - modelcov
         covs = (emp_cov, noise_cov, mmt.abs(), mmt, modelcov, emp_cov - modelcov)
         # vmax = max(c.abs().max() for c in covs)
@@ -183,8 +189,10 @@ class MStep(GMMPlot):
 
         for ax, cov, name in zip(cov_axes.flat, covs, names):
             vmax = cov.abs().triu(diagonal=1)
-            vmax = vmax[vmax>0].quantile(.975)
-            im = ax.imshow(cov.numpy(force=True), vmin=-vmax, vmax=vmax, cmap=plt.cm.seismic)
+            vmax = vmax[vmax > 0].quantile(0.975)
+            im = ax.imshow(
+                cov.numpy(force=True), vmin=-vmax, vmax=vmax, cmap=plt.cm.seismic
+            )
             ax.axis("off")
             ax.set_title(
                 name
@@ -203,19 +211,15 @@ class CovarianceResidual(GMMPlot):
 
     def draw(self, panel, gmm, unit_id):
         sp = gmm.random_spike_data(unit_id)
-        weights = gmm.get_fit_weights(unit_id, sp.indices, getattr(gmm, 'log_liks', None))
-
-        achans = gaussian_mixture.occupied_chans(
-            sp, gmm.noise.n_channels
+        weights = gmm.get_fit_weights(
+            unit_id, sp.indices, getattr(gmm, "log_liks", None)
         )
+
+        achans = gaussian_mixture.occupied_chans(sp, gmm.noise.n_channels)
         if weights is None:
             weights = sp.features.new_ones(len(sp))
         afeats, aweights = stable_features.pad_to_chans(
-            sp,
-            achans,
-            gmm.noise.n_channels,
-            weights=weights,
-            pad_value=torch.nan
+            sp, achans, gmm.noise.n_channels, weights=weights, pad_value=torch.nan
         )
         aweights_sum = torch.nansum(aweights, 0)
         aweights_norm = aweights / aweights_sum
@@ -225,7 +229,9 @@ class CovarianceResidual(GMMPlot):
         )
         afeatsc = afeats - mean
 
-        emp_cov = spiketorch.nancov(afeatsc.view(len(sp), -1), weights=weights, correction=0, force_posdef=True)
+        emp_cov = spiketorch.nancov(
+            afeatsc.view(len(sp), -1), weights=weights, correction=0, force_posdef=True
+        )
         # emp_cov = torch.cov(afeatsc.view(len(sp), -1).nan_to_num().T)
         noise_cov = gmm.noise.marginal_covariance(achans).to_dense()
         residual = emp_cov - noise_cov
@@ -251,7 +257,7 @@ class CovarianceResidual(GMMPlot):
         ax_eig = bot.subplots()
 
         vm = emp_cov.abs().max()
-        imk = dict(vmin=-vm, vmax=vm, cmap=plt.cm.seismic, interpolation='none')
+        imk = dict(vmin=-vm, vmax=vm, cmap=plt.cm.seismic, interpolation="none")
 
         covs = dict(
             emp=emp_cov,
@@ -273,9 +279,11 @@ class CovarianceResidual(GMMPlot):
             rank1_resid=rank1_residual_eigs,
         )
         for (name, cov), ax, color in zip(covs.items(), axes.flat, colors):
-            if name == 'mmT_scaled':
+            if name == "mmT_scaled":
                 vm = cov.abs().max() * 0.9
-                mimk = dict(vmin=-vm, vmax=vm, cmap=plt.cm.seismic, interpolation='none')
+                mimk = dict(
+                    vmin=-vm, vmax=vm, cmap=plt.cm.seismic, interpolation="none"
+                )
             else:
                 mimk = imk
             im = ax.imshow(cov, **mimk)
@@ -290,11 +298,11 @@ class CovarianceResidual(GMMPlot):
                 # r2 = (eigs['emp'].sum() - F.relu(eigs[name].flip(0)).cumsum(0)) / eigs['emp'].sum()
                 # ax_r2.plot(r2, color=color, lw=1)
 
-        for ax in axes.flat[len(covs):]:
+        for ax in axes.flat[len(covs) :]:
             ax.axis("off")
-        ax_eig.set_xlabel('eig index')
-        ax_eig.set_ylabel('eigenvalues')
-        ax_eig.axhline(0, color='k', lw=0.8)
+        ax_eig.set_xlabel("eig index")
+        ax_eig.set_ylabel("eigenvalues")
+        ax_eig.axhline(0, color="k", lw=0.8)
         # ax_r2.set_ylabel('1-R^2')
         # ax_eig.axhline([0, 1], color='k', lw=0.8)
 
@@ -346,9 +354,18 @@ class Likelihoods(GMMPlot):
             ax_time.scatter(t[small], liks[small], s=3, lw=0, color="k")
         ax_noise.scatter(nliks, liks, s=3, lw=0, color=c)
         histk = dict(histtype="step", orientation="horizontal")
-        n, bins, _ = ax_dist.hist(liks[torch.isfinite(liks)], color=c, label="unit", bins=64, **histk)
+        n, bins, _ = ax_dist.hist(
+            liks[torch.isfinite(liks)], color=c, label="unit", bins=64, **histk
+        )
         ax_dist.hist(nliks, color="k", label="noise", bins=bins, **histk)
-        ax_dist.legend(loc="lower right", borderpad=0.1, frameon=False, borderaxespad=0.1, handletextpad=0.3, handlelength=1.0)
+        ax_dist.legend(
+            loc="lower right",
+            borderpad=0.1,
+            frameon=False,
+            borderaxespad=0.1,
+            handletextpad=0.3,
+            handlelength=1.0,
+        )
 
 
 class Amplitudes(GMMPlot):
@@ -387,7 +404,7 @@ class KMeansSplit(GMMPlot):
                 msg = "no channels!"
             else:
                 msg = "split abandoned"
-            ax.text(.5, .5, msg, ha="center", transform=ax.transAxes)
+            ax.text(0.5, 0.5, msg, ha="center", transform=ax.transAxes)
             ax.axis("off")
             return
 
@@ -400,7 +417,7 @@ class KMeansSplit(GMMPlot):
         amps_row, centroids_row, mcmeans_row, modes_row = panel.subfigures(**kw)
         fig_chans, fig_dists = modes_row.subfigures(ncols=2)
         fig_dist, fig_bimods = fig_dists.subfigures(nrows=2)
-        panel.suptitle('kmeans split info')
+        panel.suptitle("kmeans split info")
 
         # subunit amplitudes
         gmm_helpers.amp_double_scatter(
@@ -459,7 +476,13 @@ class KMeansSplit(GMMPlot):
         if len(split_ids) < len(split_info["units"]):
             split_info["units"] = [split_info["units"][j] for j in split_ids]
         gmm_helpers.plot_means(
-            mcmeans_row, gmm.data.prgeom, gmm.data.tpca, chans, split_info["units"], split_ids, title=None
+            mcmeans_row,
+            gmm.data.prgeom,
+            gmm.data.tpca,
+            chans,
+            split_info["units"],
+            split_ids,
+            title=None,
         )
 
         # subunit channels histogram
@@ -549,11 +572,15 @@ class NeighborBimodalities(GMMPlot):
         neighbors = gmm_helpers.get_neighbors(gmm, unit_id)
         assert neighbors[0] == unit_id
         if hasattr(gmm, "log_liks"):
-            neighbors_plus_noiseunit = np.concatenate((neighbors, [gmm.log_liks.shape[0] - 1]))
+            neighbors_plus_noiseunit = np.concatenate(
+                (neighbors, [gmm.log_liks.shape[0] - 1])
+            )
             log_liks = gmm.log_liks[neighbors_plus_noiseunit]
         else:
             log_liks = gmm.log_likelihoods(unit_ids=neighbors)
-        labels, spikells, log_liks = gaussian_mixture.loglik_reassign(log_liks, has_noise_unit=True)
+        labels, spikells, log_liks = gaussian_mixture.loglik_reassign(
+            log_liks, has_noise_unit=True
+        )
         kept = labels >= 0
         labels_ = np.full_like(labels, -1)
         labels_[kept] = neighbors[labels[kept]].numpy(force=True)
@@ -587,9 +614,12 @@ class NeighborBimodalities(GMMPlot):
                 scatter_ax.set_xlabel(other_id.item(), color=glasbey1024[other_id])
 
             if "samples" not in bimod_info:
-                bimod_ax.text(0, 0, f"too-small kept prop {bimod_info['keep_prop']:.2f}")
+                bimod_ax.text(
+                    0, 0, f"too-small kept prop {bimod_info['keep_prop']:.2f}"
+                )
                 bimod_ax.axis("off")
                 continue
+
             bimod_ax.hist(bimod_info["samples"], color="gray", label="hist", **histkw)
             bimod_ax.hist(
                 bimod_info["samples"],
@@ -600,15 +630,56 @@ class NeighborBimodalities(GMMPlot):
             )
             bimod_ax.axvline(bimod_info["cut"], color="k", lw=0.8, ls=":")
             bimod_ax.plot(
-                bimod_info["domain"], bimod_info["alternative_density"], color="r", label="alt"
+                bimod_info["domain"],
+                bimod_info["alternative_density"],
+                color="r",
+                label="alt",
             )
-            bimod_ax.plot(bimod_info["domain"], bimod_info["uni_density"], color="b", label="null")
+            bimod_ax.plot(
+                bimod_info["domain"], bimod_info["uni_density"], color="b", label="null"
+            )
             info = f"{bimod_info['score_kind']}{bimod_info['score']:.3f} ll({unit_id})-ll({other_id.item()})"
             bimod_ax.set_xlabel(info)
             bimod_ax.set_yticks([])
             if no_leg_yet:
-                bimod_ax.legend(loc="upper right", borderpad=0.1, frameon=False, borderaxespad=0.1, handletextpad=0.3, handlelength=1.0, markerfirst=False)
+                bimod_ax.legend(
+                    loc="upper right",
+                    borderpad=0.1,
+                    frameon=False,
+                    borderaxespad=0.1,
+                    handletextpad=0.3,
+                    handlelength=1.0,
+                    markerfirst=False,
+                )
                 no_leg_yet = False
+
+
+class NeighborInfoCriteria(GMMPlot):
+    kind = "merge"
+    width = 3
+    height = 8
+
+    def __init__(self, n_neighbors=5):
+        self.n_neighbors = n_neighbors
+
+    def draw(self, panel, gmm, unit_id):
+        neighbors = gmm_helpers.get_neighbors(gmm, unit_id)
+        assert neighbors[0] == unit_id
+        others = neighbors[1:]
+        axes = panel.subplots(nrows=len(others), ncols=1)
+        histkw = dict(density=True, histtype="step", bins=128)
+        cstr = "{aic_full=:0.2f} {aic_merged=:0.2f} {bic_full=:0.2f} {bic_merged=:0.2f}"
+        for ax, other_id in zip(axes, others):
+            uids = [unit_id, other_id]
+            sns.despine(ax=ax, left=True, right=True, top=True)
+            res = gmm.unit_group_criterion(uids, gmm.log_liks, debug=True)
+            sll = res["subunit_logliks"].tocsr()
+            for row, uid in enumerate(uids):
+                ax.hist(sll[[row]].data, color=glasbey1024[uid], **histkw)
+            s = f"other={other_id} {cstr.format(res)}"
+            ax.set_title(s, fontsize="small")
+            ax.set_xlabel("log lik")
+
 
 # -- main api
 

@@ -591,10 +591,42 @@ class SpikeMixtureModel(torch.nn.Module):
 
     # -- helpers
 
+    def random_indices(
+        self,
+        unit_id=None,
+        unit_ids=None,
+        indices_full=None,
+        max_size=None,
+        return_full_indices=False,
+    ):
+        if indices_full is None:
+            if unit_id is not None:
+                in_u = self.labels == unit_id
+            elif unit_ids is not None:
+                in_u = torch.isin(self.labels, unit_ids)
+            else:
+                assert False
+            (indices_full,) = torch.nonzero(in_u, as_tuple=True)
+
+        n_full = indices_full.numel()
+        if max_size and n_full > max_size:
+            indices = self.rg.choice(n_full, size=max_size, replace=False)
+            indices.sort()
+            indices = torch.asarray(indices, device=indices_full.device)
+            indices = indices_full[indices]
+        else:
+            indices = indices_full
+
+        if return_full_indices:
+            return indices_full, indices
+        return indices
+
     def random_spike_data(
         self,
         unit_id=None,
+        unit_ids=None,
         indices=None,
+        indices_full=None,
         max_size=None,
         neighborhood="extract",
         with_reconstructions=False,
@@ -602,15 +634,13 @@ class SpikeMixtureModel(torch.nn.Module):
         with_neighborhood_ids=False,
     ):
         if indices is None:
-            (indices_full,) = torch.nonzero(self.labels == unit_id, as_tuple=True)
-            n_in_unit = indices_full.numel()
-            if max_size and n_in_unit > max_size:
-                indices = self.rg.choice(n_in_unit, size=max_size, replace=False)
-                indices.sort()
-                indices = torch.asarray(indices, device=indices_full.device)
-                indices = indices_full[indices]
-            else:
-                indices = indices_full
+            indices_full, indices = self.random_indices(
+                unit_id,
+                unit_ids,
+                max_size,
+                indices_full=indices_full,
+                return_full_indices=True,
+            )
 
         sp = self.data.spike_data(
             indices,
@@ -629,12 +659,14 @@ class SpikeMixtureModel(torch.nn.Module):
         indices=None,
         likelihoods=None,
         weights=None,
+        features=None,
         verbose=False,
         **unit_args,
     ):
-        features = self.random_spike_data(
-            unit_id, indices, max_size=self.n_spikes_fit, with_neighborhood_ids=True
-        )
+        if features is None:
+            features = self.random_spike_data(
+                unit_id, indices, max_size=self.n_spikes_fit, with_neighborhood_ids=True
+            )
         if verbose:
             print(f"{unit_id=} {features=}")
         if weights is None and likelihoods is not None:
@@ -1012,22 +1044,96 @@ class SpikeMixtureModel(torch.nn.Module):
             return debug_info
         return score
 
+    def unit_group_criterion(
+        self,
+        unit_ids,
+        likelihoods,
+        spikes_per_subunit=2048,
+        debug=False,
+    ):
+        """See if a single unit explains a group as far as AIC/BIC/MDL go."""
+        # pick spikes for likelihood computation
+        in_subunits = [
+            self.random_indices(u, max_size=spikes_per_subunit) for u in unit_ids
+        ]
+        in_any = torch.cat(in_subunits)
+        in_any, in_order = torch.sort(in_any)
+
+        # pick some of those spikes to fit for the new unit
+        sp = self.random_spike_data(indices_full=in_any)
+
+        # get something sorta like fitting weights for the new unit
+        weights = self.get_fit_weights(unit_ids[0], sp.indices, likelihoods)
+        for u in unit_ids[1:]:
+            uweights = self.get_fit_weights(u, sp.indices, likelihoods)
+            weights = torch.logaddexp(weights, uweights, out=weights)
+
+        # fit new unit
+        unit = self.fit_unit(features=sp, weights=weights)
+
+        # extract likelihoods... no proportions!
+        full_loglik = marginal_loglik(
+            in_any.numpy(force=True), self.log_proportions, likelihoods, unit_ids
+        )
+        unit_logliks = self.unit_log_likelihoods(unit=unit, spike_indices=in_any)
+        unit_loglik = torch.logsumexp(unit_logliks)
+
+        # compute some criteria
+        n = in_any.numel()
+        params_unit = unit.n_params()
+        params_full = sum(self.units[u].n_params() for u in unit_ids)
+        if self.use_proportions:
+            params_full += len(unit_ids) - 1
+        aic_full = 2 * params_full - 2 * full_loglik
+        aic_unit = 2 * params_unit - 2 * unit_loglik
+        bic_full = params_full * np.log(n) - 2 * full_loglik
+        bic_unit = params_unit * np.log(n) - 2 * unit_loglik
+        # mdl is equivalent to bic here
+        res = dict(
+            aic_full=aic_full, aic_unit=aic_unit, bic_full=bic_full, bic_unit=bic_unit
+        )
+        if debug:
+            debug_info = dict(
+                full_loglik=full_loglik,
+                unit_loglik=unit_loglik,
+                unit_logliks=unit_logliks,
+                subunit_logliks=likelihoods[:, in_any][unit_ids],
+                indices=in_any,
+                unit=unit,
+                sp=sp,
+            )
+            res.update(debug_info)
+        return res
+
+    def get_log_likelihoods(
+        self,
+        indices,
+        likelihoods,
+        with_proportions=True,
+        unit_ids=None,
+        to_dense=False,
+    ):
+        # torch's index_select is painfully slow
+        # weights = torch.index_select(likelihoods, 1, features.indices)
+        # here we have weights as a csc_array
+        liks = likelihoods[:, indices]
+        liks = coo_to_torch(liks.tocoo(), torch.float, copy_data=True)
+        liks = liks.to(self.data.device)
+        if with_proportions and self.log_proportions is not None:
+            log_props_vec = self.log_proportions[liks.indices()[0]]
+            liks.values().add_(log_props_vec)
+        if unit_ids is None:
+            return liks
+        return liks[unit_ids]
+
     def get_fit_weights(self, unit_id, indices, likelihoods=None):
         """Normalized responsibilities for subset of spikes."""
         if likelihoods is None:
             return None
-        # torch's index_select is painfully slow
-        # weights = torch.index_select(likelihoods, 1, features.indices)
-        # here we have weights as a csc_array
-        weights = likelihoods[:, indices]
-        weights = coo_to_torch(weights.tocoo(), torch.float, copy_data=True)
-        weights = weights.to(self.data.device)
-        if self.log_proportions is not None:
-            log_props_vec = self.log_proportions[weights.indices()[0]]
-            weights.values().add_(log_props_vec)
+
+        weights = self.get_log_likelihoods(indices, likelihoods)
         weights = torch.sparse.softmax(weights, dim=0)
-        weights = weights[unit_id]
-        weights = weights.to_dense()
+        weights = weights[unit_id].to_dense()
         return weights
 
     # -- gizmos
@@ -1201,6 +1307,19 @@ class GaussianUnit(torch.nn.Module):
         self = self.to(features.features.device)
         return self
 
+    def n_params(self, on_channels=True):
+        p = 0
+        nc = self.channels.numel() if on_channels else self.n_channels
+
+        # my mean
+        if self.mean_kind == "full":
+            p += nc * self.rank
+
+        # my cov
+        assert self.cov_kind == "zero"
+
+        return p
+
     def fit(self, features: SpikeFeatures, weights: torch.Tensor, neighborhoods=None):
         if features is None:
             self.pick_channels(None, None)
@@ -1208,16 +1327,14 @@ class GaussianUnit(torch.nn.Module):
         n = len(features)
         r = self.noise.rank
 
-        achans = occupied_chans(
-            features, self.noise.n_channels, neighborhoods=neighborhoods
-        )
+        achans = occupied_chans(features, self.n_channels, neighborhoods=neighborhoods)
         target_padded = features.features.new_zeros(n, r, achans.numel() + 1)
         if weights is None:
             weights = features.features.new_ones(n)
         afeats, aweights = zero_pad_to_chans(
             features,
             achans,
-            self.noise.n_channels,
+            self.n_channels,
             weights=weights,
             target_padded=target_padded,
         )
@@ -1537,6 +1654,23 @@ def coo_to_scipy(coo_tensor):
     data = coo_tensor.values().numpy(force=True)
     coords = coo_tensor.indices().numpy(force=True)
     return coo_array((data, coords), shape=coo_tensor.shape)
+
+
+def marginal_loglik(indices, log_proportions, log_likelihoods, unit_ids=None):
+    if unit_ids is not None:
+        # renormalize log props
+        log_proportions = log_proportions[unit_ids]
+        log_proportions = log_proportions - logsumexp(log_proportions)
+
+    log_likelihoods = log_likelihoods[:, indices]
+    if unit_ids is not None:
+        log_likelihoods = log_likelihoods[unit_ids]
+
+    # .indices == row inds for a csc_array
+    props = log_proportions[log_likelihoods.indices]
+    log_liks = props + log_likelihoods.data
+
+    return logsumexp(log_liks)
 
 
 def loglik_reassign(
