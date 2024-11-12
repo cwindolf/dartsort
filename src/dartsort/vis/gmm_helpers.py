@@ -60,6 +60,7 @@ def plot_means(panel, prgeom, tpca, chans, units, labels, title="nearest neighbo
         means.append(tpca.force_reconstruct(mean).numpy(force=True))
 
     colors = glasbey1024[labels]
+    print(f"{len(means)=} {labels.shape=} {colors.shape=}")
     geomplot(
         np.stack(means, axis=0),
         channels=chans[None]
