@@ -184,9 +184,7 @@ class SpikeMixtureModel(torch.nn.Module):
             meanlogpx = spike_logliks.mean()
 
             # M step: fit units based on responsibilities
-            max_adif = self.m_step(
-                log_liks, show_progress=step_progress, prev_means=means
-            )
+            mres = self.m_step(log_liks, show_progress=step_progress, prev_means=means)
 
             # extra info for description
             if show_progress:
@@ -195,13 +193,13 @@ class SpikeMixtureModel(torch.nn.Module):
                 nu = len(self.units)
                 reas_prop = reas_count / self.data.n_spikes
                 rpct = f"{100 * reas_prop:.1f}"
-                adif = f"{max_adif:.2f}"
+                adif = f"{mres['adif']:.2f}"
                 msg = f"EM[{nu=},out={opct}%,reas={rpct}%,dmu={adif},meanlogpx={meanlogpx:g}]"
                 its.set_description(msg)
 
             if reas_prop < self.em_converged_prop:
                 break
-            if max_adif < self.em_converged_atol:
+            if mres["adif"] < self.em_converged_atol:
                 break
 
         if not final_e_step:
@@ -249,21 +247,15 @@ class SpikeMixtureModel(torch.nn.Module):
             for j, unit in enumerate(zip(unit_ids, results)):
                 assert unit.annotations["unit_id"] == j
                 self.units.append(unit)
-        # if self.log_proportions is not None:
-        #     # this is the index of the noise unit. it's got to be larger than
-        #     # the largest unit index
-        #     maxix = self.log_proportions.numel() - 1
-        #     assert (unit_ids < maxix).all()
-        #     ixs = torch.cat((unit_ids, torch.tensor([maxix])))
-        #     self.log_proportions = self.log_proportions[ixs]
+        adif = None
         if prev_means is not None:
             nu = len(unit_ids)
-            # prev_means = prev_means[unit_ids]
             new_means, *_ = self.stack_units(mean_only=True)
             dmu = (prev_means - new_means).abs_().view(nu, -1)
             adif = torch.max(dmu)
-            return adif
         self._stack = None
+        self.clear_scheduled_annotations()
+        return dict(adif=adif)
 
     def log_likelihoods(
         self, unit_ids=None, with_noise_unit=True, use_storage=True, show_progress=False
@@ -387,14 +379,8 @@ class SpikeMixtureModel(torch.nn.Module):
         self.labels.copy_(assignments)
         return reassign_count, spike_logliks, log_liks_csc
 
-    def cleanup(self, log_liks=None, clean_units=True, min_count=None):
-        """Remove too-small units
-
-        Also handles bookkeeping to throw those units out of the sparse
-        log_liks array, and to throw away small units in self.units.
-        clean_units should be true unless your next move is an m step.
-        For instance if it's an E step, it's like the cleanup never happened.
-        """
+    def cleanup(self, log_liks=None, min_count=None):
+        """Remove too-small units, make label space contiguous, tidy all properties"""
         unit_ids, counts = torch.unique(self.labels, return_counts=True)
         counts = counts[unit_ids >= 0]
         unit_ids = unit_ids[unit_ids >= 0]
@@ -411,17 +397,33 @@ class SpikeMixtureModel(torch.nn.Module):
         if log_liks is not None:
             has_noise_unit = log_liks.shape[1] > len(self.units)
 
-        self.relabel_units(unit_ids[big_enough])
-        if clean_units and self.log_proportions is not None:
+        kept_ids = unit_ids[big_enough]
+        new_ids = torch.arange(kept_ids.numel())
+        old2new = dict(zip(kept_ids, new_ids))
+        self._relabel(kept_ids)
+
+        if self.log_proportions is not None:
             lps = self.log_proportions.numpy(force=True)
             lps = lps[keep_noise.numpy(force=True)]
             # logsumexp to 0 (sumexp to 1) again
             lps -= logsumexp(lps)
             self.log_proportions = self.log_proportions.new_tensor(lps)
-        if clean_units and len(self.units):
-            keep_units = [u for j, u in enumerate(self.units) if keep[j]]
+
+        if len(self.units):
+            keep_units = []
+            for oi, ni in zip(kept_ids, new_ids):
+                u = self.units[oi]
+                u.annotations["unit_id"] = ni
+                keep_units.append(u)
             del self.units[:]
             self.units.extend(keep_units)
+
+        if self.next_round_annotations:
+            next_round_annotations = {}
+            for j, nra in self.next_round_annotations.items():
+                if keep[j]:
+                    next_round_annotations[old2new[j]] = nra
+
         if log_liks is None:
             return
 
@@ -462,6 +464,11 @@ class SpikeMixtureModel(torch.nn.Module):
             linkage_method=self.merge_linkage,
         )
         self.labels.copy_(torch.from_numpy(new_labels))
+
+        for new_id in np.unique(new_ids):
+            merge_parents = np.flatnonzero(new_ids == new_ids)
+            self.schedule_annotations(new_id, dict(merge_parents=merge_parents))
+
         del self.units[:]
         if self.log_proportions is not None:
             log_props = self.log_proportions.numpy(force=True)
@@ -488,8 +495,10 @@ class SpikeMixtureModel(torch.nn.Module):
             results = tqdm(
                 results, total=len(unit_ids), desc="Split", unit="unit", **tqdm_kw
             )
-        for _ in results:
-            pass
+        for res in results:
+            if "new_ids" in res:
+                for nid in res["new_ids"]:
+                    self.schedule_annotations(nid, split_parent=res["parent_id"])
         del self.units[:]
         self._stack = None
 
@@ -802,25 +811,25 @@ class SpikeMixtureModel(torch.nn.Module):
     def kmeans_split_unit(self, unit_id, debug=False):
         # get spike data and use interpolation to fill it out to the
         # unit's channel set
+        result = dict(parent_id=parent_id)
         unit = self.units[unit_id]
         if not unit.channels.numel():
-            return {} if debug else None
+            return result
 
         indices_full, sp = self.random_spike_data(
             unit_id, return_full_indices=True, with_neighborhood_ids=True
         )
         if not indices_full.numel() > self.min_count:
-            return {} if debug else None
+            return result
 
         Xo = X = self.data.interp_to_chans(sp, unit.channels)
         if self.split_whiten:
             X = self.noise.whiten(X, channels=unit.channels)
 
         if debug:
-            debug_info = dict(indices_full=indices_full, sp=sp, X=Xo, Xw=X)
+            result.update(dict(indices_full=indices_full, sp=sp, X=Xo, Xw=X))
         else:
             del Xo
-            debug_info = None
 
         # run kmeans with kmeans++ initialization
         split_labels, responsibilities = kmeans(
@@ -833,10 +842,10 @@ class SpikeMixtureModel(torch.nn.Module):
             drop_prop=self.kmeans_drop_prop,
         )
         if debug:
-            debug_info["split_labels"] = split_labels
-            debug_info["responsibilities"] = responsibilities
+            result["split_labels"] = split_labels
+            result["responsibilities"] = responsibilities
         if split_labels.unique().numel() <= 1:
-            return debug_info
+            return result
 
         # avoid oversplitting by doing a mini merge here
         split_labels = self.mini_merge(
@@ -844,18 +853,18 @@ class SpikeMixtureModel(torch.nn.Module):
             split_labels,
             weights=responsibilities,
             debug=debug,
-            debug_info=debug_info,
+            debug_info=result,
         )
         split_ids, split_counts = np.unique(split_labels, return_counts=True)
         valid = split_ids >= 0
         if not valid.any():
-            return debug_info
+            return result
         split_ids = split_ids[valid]
         assert np.array_equal(split_ids, np.arange(len(split_ids)))
 
         if debug:
-            debug_info["merge_labels"] = split_labels
-            return debug_info
+            result["merge_labels"] = split_labels
+            return result
 
         split_labels = torch.asarray(split_labels, device=self.labels.device)
         n_new_units = split_ids.size - 1
@@ -900,6 +909,10 @@ class SpikeMixtureModel(torch.nn.Module):
             self.log_proportions[unit_id] = new_log_props[0]
             self.log_proportions[cur_len_with_noise - 1 : -1] = new_log_props[1:]
             self.log_proportions[-1] = noise_log_prop
+
+        new_ids = torch.unique(split_labels)
+        result["new_ids"] = new_ids[new_ids >= 0]
+        return result
 
     def mini_merge(
         self,
@@ -1216,12 +1229,12 @@ class SpikeMixtureModel(torch.nn.Module):
                 self.storage.rg = self._rg.spawn(1)[0]
         return self.storage.rg
 
-    def relabel_units(self, old_labels, new_labels=None, flat=False):
+    def _relabel(self, old_labels, new_labels=None, flat=False):
         """Re-label units
 
-        !! This could invalidate self.units and props. It's left to the caller
-        to know when to del self.units[:] or to manually update that
-        list after calling this.
+        !! This could invalidate self.units and props.
+
+        Suggested to only call .cleanup(), this is its low-level helper.
 
         Arguments
         ---------
@@ -1275,6 +1288,14 @@ class SpikeMixtureModel(torch.nn.Module):
             self._stack = means, covs, logdets
 
         return means, covs, logdets
+
+    def schedule_annotations(self, unit_id, **annotations):
+        if unit_id not in self.next_round_annotations:
+            self.next_round_annotations[unit_id] = {}
+        self.next_round_annotations[unit_id].update(annotations)
+
+    def clear_scheduled_annotations(self):
+        self.next_round_annotations.clear()
 
 
 # -- modeling class
