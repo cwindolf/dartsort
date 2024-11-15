@@ -97,6 +97,7 @@ class StableSpikeDataset(torch.nn.Module):
         core_radius=35.0,
         subsampling_rg=0,
         max_n_spikes=np.inf,
+        discard_triaged=False,
         interpolation_sigma=20.0,
         interpolation_method="kriging",
         motion_depth_mode="channel",
@@ -111,18 +112,22 @@ class StableSpikeDataset(torch.nn.Module):
         device = torch.device(device)
 
         # which spikes to keep?
-        if len(sorting) > max_n_spikes:
-            rg = np.random.default_rng(subsampling_rg)
-            kept_indices = rg.choice(len(sorting), size=max_n_spikes, replace=False)
-            kept_indices.sort()
-            keep = np.zeros(len(sorting), dtype=bool)
-            keep[kept_indices] = 1
-            keep_select = kept_indices
+        if discard_triaged:
+            keep = sorting.labels >= 0
+            keep_select = kept_indices = np.flatnonzero(keep)
         else:
             keep = np.ones(len(sorting), dtype=bool)
             kept_indices = np.arange(len(sorting))
             keep_select = slice(None)
+        if kept_indices.size > max_n_spikes:
+            rg = np.random.default_rng(subsampling_rg)
+            kept_kept = rg.choice(kept_indices.size, size=max_n_spikes, replace=False)
+            kept_kept.sort()
+            keep[kept_indices] = 0
+            keep[kept_indices[kept_kept]] = 1
+            keep_select = kept_indices = kept_indices[kept_kept]
 
+        # load information not stored directly on the sorting
         with h5py.File(sorting.parent_h5_path, "r", locking=False) as h5:
             geom = h5["geom"][:]
             extract_channel_index = h5["channel_index"][:]

@@ -633,9 +633,11 @@ def combine_templates(template_data_a, template_data_b):
     spike_counts = np.concatenate(
         (template_data_a.spike_counts, template_data_b.spike_counts)
     )
-    spike_counts_by_channel = np.concatenate(
-        (template_data_a.spike_counts_by_channel, template_data_b.spike_counts_by_channel)
-    )
+    spike_counts_by_channel = None
+    if template_data_a.spike_counts_by_channel is not None:
+        spike_counts_by_channel = np.concatenate(
+            (template_data_a.spike_counts_by_channel, template_data_b.spike_counts_by_channel)
+        )
     template_data = TemplateData(
         templates=templates,
         unit_ids=unit_ids,
