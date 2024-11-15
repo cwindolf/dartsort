@@ -249,16 +249,8 @@ class SpikeMixtureModel(torch.nn.Module):
             for j, unit in enumerate(zip(unit_ids, results)):
                 assert unit.annotations["unit_id"] == j
                 self.units.append(unit)
-        # if self.log_proportions is not None:
-        #     # this is the index of the noise unit. it's got to be larger than
-        #     # the largest unit index
-        #     maxix = self.log_proportions.numel() - 1
-        #     assert (unit_ids < maxix).all()
-        #     ixs = torch.cat((unit_ids, torch.tensor([maxix])))
-        #     self.log_proportions = self.log_proportions[ixs]
         if prev_means is not None:
             nu = len(unit_ids)
-            # prev_means = prev_means[unit_ids]
             new_means, *_ = self.stack_units(mean_only=True)
             dmu = (prev_means - new_means).abs_().view(nu, -1)
             adif = torch.max(dmu)
@@ -387,14 +379,8 @@ class SpikeMixtureModel(torch.nn.Module):
         self.labels.copy_(assignments)
         return reassign_count, spike_logliks, log_liks_csc
 
-    def cleanup(self, log_liks=None, clean_units=True, min_count=None):
-        """Remove too-small units
-
-        Also handles bookkeeping to throw those units out of the sparse
-        log_liks array, and to throw away small units in self.units.
-        clean_units should be true unless your next move is an m step.
-        For instance if it's an E step, it's like the cleanup never happened.
-        """
+    def cleanup(self, log_liks=None, min_count=None):
+        """Remove too-small units, make label space contiguous, tidy all properties"""
         unit_ids, counts = torch.unique(self.labels, return_counts=True)
         counts = counts[unit_ids >= 0]
         unit_ids = unit_ids[unit_ids >= 0]
@@ -411,17 +397,33 @@ class SpikeMixtureModel(torch.nn.Module):
         if log_liks is not None:
             has_noise_unit = log_liks.shape[1] > len(self.units)
 
-        self.relabel_units(unit_ids[big_enough])
-        if clean_units and self.log_proportions is not None:
+        kept_ids = unit_ids[big_enough]
+        new_ids = torch.arange(kept_ids.numel())
+        old2new = dict(zip(kept_ids, new_ids))
+        self._relabel(kept_ids)
+
+        if self.log_proportions is not None:
             lps = self.log_proportions.numpy(force=True)
             lps = lps[keep_noise.numpy(force=True)]
             # logsumexp to 0 (sumexp to 1) again
             lps -= logsumexp(lps)
             self.log_proportions = self.log_proportions.new_tensor(lps)
-        if clean_units and len(self.units):
-            keep_units = [u for j, u in enumerate(self.units) if keep[j]]
+
+        if len(self.units):
+            keep_units = []
+            for oi, ni in zip(kept_ids, new_ids):
+                u = self.units[oi]
+                u.annotations["unit_id"] = ni
+                keep_units.append(u)
             del self.units[:]
             self.units.extend(keep_units)
+
+        if self.next_round_annotations:
+            next_round_annotations = {}
+            for j, nra in self.next_round_annotations.items():
+                if keep[j]:
+                    next_round_annotations[old2new[j]] = nra
+
         if log_liks is None:
             return
 
@@ -1091,32 +1093,19 @@ class SpikeMixtureModel(torch.nn.Module):
 
         if fit_type == "refit_all":
             units = []
-            subunit_logliks = spikes_core.features.new_full(
-                (len(unit_ids), len(in_any)), -torch.inf
-            )
+            subunit_logliks = spikes_core.features.new_full((len(unit_ids), len(in_any)), -torch.inf)
             full_loglik = 0.0
             for i, k in enumerate(unit_ids):
-                u = self.fit_unit(
-                    unit_id=k,
-                    indices=in_any,
-                    likelihoods=likelihoods,
-                    features=spikes_extract,
-                )
+                u = self.fit_unit(unit_id=k, indices=in_any, likelihoods=likelihoods, features=spikes_extract)
                 units.append(u)
-                _, subunit_logliks[i] = self.unit_log_likelihoods(
-                    unit=u, spikes=spikes_core
-                )
+                _, subunit_logliks[i] = self.unit_log_likelihoods(unit=u, spikes=spikes_core)
             subunit_log_props = F.softmax(subunit_logliks, dim=0).mean(1).log_()
             # loglik per spik
-            full_loglik = torch.logsumexp(
-                subunit_logliks.T + subunit_log_props, dim=1
-            ).mean()
+            full_loglik = torch.logsumexp(subunit_logliks.T + subunit_log_props, dim=1).mean()
             unit = self.fit_unit(indices=in_any, features=spikes_extract)
             likelihoods = None
         elif fit_type == "avg_preexisting":
-            unit = self.units[unit_ids[0]].avg_with(
-                *[self.units[u] for u in unit_ids[1:]]
-            )
+            unit = self.units[unit_ids[0]].avg_with(*[self.units[u] for u in unit_ids[1:]])
             if debug:
                 subunit_logliks = likelihoods[:, in_any][unit_ids]
             full_loglik = marginal_loglik(
@@ -1365,6 +1354,7 @@ class GaussianUnit(torch.nn.Module):
         channels_strategy_snr_min=50.0,
         prior_pseudocount=10,
         scale_mean: float = 0.1,
+        **annotations,
     ):
         self = cls(
             rank=features.features.shape[1],
@@ -1377,6 +1367,7 @@ class GaussianUnit(torch.nn.Module):
             channels_strategy=channels_strategy,
             channels_strategy_snr_min=channels_strategy_snr_min,
             scale_mean=scale_mean,
+            **annotations,
         )
         self.fit(features, weights, neighborhoods=neighborhoods)
         self = self.to(features.features.device)
@@ -1390,13 +1381,8 @@ class GaussianUnit(torch.nn.Module):
             n_channels=self.n_channels,
             noise=self.noise,
         )
-        new.register_buffer(
-            "mean", (self.mean + sum(o.mean for o in others)) / (1 + len(others))
-        )
-        new.register_buffer(
-            "channels",
-            torch.cat([self.channels, *[o.channels for o in others]]).unique(),
-        )
+        new.register_buffer("mean", (self.mean + sum(o.mean for o in others)) / (1 + len(others)))
+        new.register_buffer("channels", torch.cat([self.channels, *[o.channels for o in others]]).unique())
         assert self.cov_kind == "zero"
         return new
 
@@ -1744,9 +1730,7 @@ def coo_to_scipy(coo_tensor):
     return coo_array((data, coords), shape=coo_tensor.shape)
 
 
-def marginal_loglik(
-    indices, log_proportions, log_likelihoods, unit_ids=None, reduce="mean"
-):
+def marginal_loglik(indices, log_proportions, log_likelihoods, unit_ids=None, reduce="mean"):
     if unit_ids is not None:
         # renormalize log props
         log_proportions = log_proportions[unit_ids]
