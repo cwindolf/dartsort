@@ -1,19 +1,16 @@
+import dataclasses
 import numpy as np
+from tqdm.auto import tqdm
 import warnings
-from spikeinterface.core import BaseRecording, BaseRecordingSegment, Templates
-from spikeinterface.core.core_tools import define_function_from_class
 from spikeinterface.extractors import NumpySorting
 from spikeinterface.generation.drift_tools import InjectDriftingTemplatesRecording, DriftingTemplates, move_dense_templates
-from spikeinterface.preprocessing.basepreprocessor import (
-    BasePreprocessor, BasePreprocessorSegment)
 from probeinterface import Probe
+from scipy.spatial import KDTree
+from scipy.sparse import csgraph, coo_array
 
 from ..templates import TemplateData
-from .analysis import DARTsortAnalysis
 from .data_util import DARTsortSorting
 from ..config import unshifted_raw_template_config
-from ..templates import TemplateData
-
 
 
 def get_drifty_hybrid_recording(
@@ -82,7 +79,7 @@ def get_drifty_hybrid_recording(
         displacement_vectors=[disp],
         displacement_sampling_frequency=displacement_sampling_frequency,
         displacement_unit_factor=displacement_unit_factor,
-        amplitude_factor=amplitude_factor
+        amplitude_factor=amplitude_factor,
     )
     rec.annotate(peak_channel=peak_channels.tolist())
     return rec
@@ -205,6 +202,7 @@ def refractory_poisson_spike_train(
 
     return spike_samples
 
+
 def piecewise_refractory_poisson_spike_train(rates, bins, binsize_samples, **kwargs):
     """
     Returns a spike train with variable firing rate using refractory_poisson_spike_train().
@@ -214,13 +212,14 @@ def piecewise_refractory_poisson_spike_train(rates, bins, binsize_samples, **kwa
     :param binsize_samples: number of samples per bin
     :param **kwargs: kwargs to feed to refractory_poisson_spike_train()
     """
-    sp_tr = np.concatenate(
-        [
-            refractory_poisson_spike_train(r, binsize_samples, **kwargs) + bins[i] if r > 0.1 else [] 
-            for i, r in enumerate(rates)
-        ]
-    )
-    return sp_tr
+    st = []
+    for rate, bin in zip(rates, bins):
+        if rate < 0.1:
+            continue
+        binst = refractory_poisson_spike_train(rate, binsize_samples, **kwargs)
+        st.append(bin + binst)
+    st = np.concatenate(st)
+    return st
 
 
 def precompute_displaced_registered_templates(
@@ -255,6 +254,66 @@ def precompute_displaced_registered_templates(
     return ret
 
 
+def closest_clustering(gt_st, peel_st, geom=None, match_dt_ms=0.1, match_radius_um=0.0, p=2.0, M=50.0):
+    frames_per_ms = gt_st.sampling_frequency / 1000
+    delta_frames = match_dt_ms * frames_per_ms
+    rescale = [delta_frames]
+    gt_pos = gt_st.times_samples[:, None]
+    peel_pos = peel_st.times_samples[:, None]
+    if match_radius_um:
+        rescale = rescale + (geom.shape[1] * [match_radius_um])
+        gt_pos = np.c_[gt_pos, geom[gt_st.channels]]
+        peel_pos = np.c_[peel_pos, geom[peel_st.channels]]
+    else:
+        gt_pos = gt_pos.astype(float)
+        peel_pos = peel_pos.astype(float)
+    gt_pos /= rescale
+    peel_pos /= rescale
+    labels = greedy_match(gt_pos, peel_pos, dx=1.0 / frames_per_ms)
+    labels[labels >= 0] = gt_st.labels[labels[labels >= 0]]
+
+    return dataclasses.replace(peel_st, labels=labels)
+
+
+def greedy_match(gt_coords, test_coords, max_val=1.0, dx=1./30, workers=-1, p=2.0):
+    assignments = np.full(len(test_coords), -1)
+    gt_unmatched = np.ones(len(gt_coords), dtype=bool)
+
+    for j, thresh in enumerate(
+        tqdm(np.arange(0.0, max_val + dx + 2e-5, dx), desc="match")
+    ):
+        test_unmatched = np.flatnonzero(assignments < 0)
+        if not test_unmatched.size:
+            break
+        test_kdtree = KDTree(test_coords[test_unmatched])
+        gt_ix = np.flatnonzero(gt_unmatched)
+        d, i = test_kdtree.query(
+            gt_coords[gt_ix],
+            k=1,
+            distance_upper_bound=min(thresh, max_val),
+            workers=workers,
+            p=p,
+        )
+        # handle multiple gt spikes getting matched to the same peel ix
+        thresh_matched = i < test_kdtree.n
+        _, ii = np.unique(i, return_index=True)
+        i = i[ii]
+        thresh_matched = thresh_matched[ii]
+
+        gt_ix = gt_ix[ii]
+        gt_ix = gt_ix[thresh_matched]
+        i = i[thresh_matched]
+        assignments[test_unmatched[i]] = gt_ix
+        gt_unmatched[gt_ix] = False
+
+        if not gt_unmatched.any():
+            break
+        if thresh > max_val:
+            break
+
+    return assignments
+
+
 def sorting_from_times_labels(times, labels, recording=None, sampling_frequency=None, determine_channels=True, template_config=unshifted_raw_template_config, n_jobs=0):
     channels = np.zeros_like(labels)
     if sampling_frequency is None:
@@ -273,6 +332,14 @@ def sorting_from_times_labels(times, labels, recording=None, sampling_frequency=
     return sorting, td
 
 
-def sorting_from_spikeinterface(sorting, recording=None, determine_channels=True, template_config=unshifted_raw_template_config, n_jobs=0):
+def sorting_from_spikeinterface(
+    sorting,
+    recording=None,
+    determine_channels=True,
+    template_config=unshifted_raw_template_config,
+    n_jobs=0,
+):
     sv = sorting.to_spike_vector()
-    return sorting_from_times_labels(sv['sample_index'], sv['unit_index'], sampling_frequency=sorting.sampling_frequency, recording=recording, determine_channels=determine_channels, template_config=template_config, n_jobs=n_jobs)
+    return sorting_from_times_labels(
+        sv['sample_index'], sv['unit_index'], sampling_frequency=sorting.sampling_frequency, recording=recording, determine_channels=determine_channels, template_config=template_config, n_jobs=n_jobs
+    )
