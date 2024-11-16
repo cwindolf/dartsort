@@ -638,14 +638,13 @@ class SpikeMixtureModel(torch.nn.Module):
         if units is None:
             nu = self.n_units()
             ids, units = self.ids_and_units()
-            units = self.items()
         else:
             nu = len(units)
             ids = range(nu)
 
         # stack unit data into one place
         mean_only = kind == "noise_metric"
-        ids, means, covs, logdets = self.stack_units(ids=ids, units=units, mean_only=mean_only)
+        ids, means, covs, logdets = self.stack_units(nu=nu, ids=ids, units=units, mean_only=mean_only)
 
         # compute denominator of noised normalized distances
         if noise_normalized:
@@ -1391,13 +1390,15 @@ class SpikeMixtureModel(torch.nn.Module):
         self.labels[torch.logical_not(kept)] = -1
         self._stack = None
 
-    def stack_units(self, units=None, ids=None, mean_only=True, use_cache=False):
+    def stack_units(self, nu=None, units=None, ids=None, mean_only=True, use_cache=False):
         if ids is not None:
             assert units is not None
         elif units is not None:
             ids = np.arange(len(units))
         else:
             ids, units = self.ids_and_units()
+        if nu is None:
+            nu = len(ids)
 
         if use_cache and self._stack is not None:
             if mean_only or self._stack[1] is not None:
@@ -1405,11 +1406,11 @@ class SpikeMixtureModel(torch.nn.Module):
 
         rank, nc = self.data.rank, self.data.n_channels
 
-        means = torch.full((len(ids), rank, nc), torch.nan, device=self.data.device)
+        means = torch.full((nu, rank, nc), torch.nan, device=self.data.device)
         covs = logdets = None
         if not mean_only:
-            covs = means.new_full((len(units), rank * nc, rank * nc), torch.nan)
-            logdets = means.new_full((len(units),), torch.nan)
+            covs = means.new_full((nu, rank * nc, rank * nc), torch.nan)
+            logdets = means.new_full((nu,), torch.nan)
 
         for j, unit in enumerate(units):
             means[j] = unit.mean
