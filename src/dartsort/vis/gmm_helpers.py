@@ -7,10 +7,10 @@ from .waveforms import geomplot
 
 
 def get_neighbors(gmm, unit_id, n_neighbors=5):
-    means, covs, logdets = gmm.stack_units(use_cache=True)
-    dists = gmm.units[unit_id].divergence(means, covs, logdets, kind=gmm.distance_metric)
+    ids, means, covs, logdets = gmm.stack_units(use_cache=True)
+    dists = gmm[unit_id].divergence(means, covs, logdets, kind=gmm.distance_metric)
     dists = dists.view(-1)
-    order = torch.argsort(dists)
+    order = ids[torch.argsort(dists)]
     assert order[0] == unit_id
     return order[:n_neighbors + 1]
 
@@ -60,7 +60,6 @@ def plot_means(panel, prgeom, tpca, chans, units, labels, title="nearest neighbo
         means.append(tpca.force_reconstruct(mean).numpy(force=True))
 
     colors = glasbey1024[labels]
-    print(f"{len(means)=} {labels.shape=} {colors.shape=}")
     geomplot(
         np.stack(means, axis=0),
         channels=chans[None]

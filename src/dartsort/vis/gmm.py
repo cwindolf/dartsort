@@ -1,4 +1,5 @@
 from pathlib import Path
+import warnings
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -33,7 +34,7 @@ class GMMPlot(layout.BasePlot):
 class ISIHistogram(GMMPlot):
     kind = "small"
     width = 2
-    height = 2
+    height = 1.5
 
     def __init__(self, bin_ms=0.1, max_ms=5):
         self.bin_ms = bin_ms
@@ -68,13 +69,13 @@ class ChansHeatmap(GMMPlot):
         s = ax.scatter(*xy[unique_ixs].T, c=counts, lw=0, cmap=self.cmap)
         plt.colorbar(s, ax=ax, shrink=0.3, label="chan count")
         ax.scatter(
-            *xy[gmm.units[unit_id].channels.numpy(force=True)].T,
+            *xy[gmm[unit_id].channels.numpy(force=True)].T,
             color="r",
             lw=1,
             fc="none",
         )
         ax.scatter(
-            *xy[np.atleast_1d(gmm.units[unit_id].snr.argmax().numpy(force=True))].T,
+            *xy[np.atleast_1d(gmm[unit_id].snr.argmax().numpy(force=True))].T,
             color="g",
             lw=0,
         )
@@ -92,6 +93,18 @@ class TextInfo(GMMPlot):
 
         nspikes = (gmm.labels == unit_id).sum()
         msg += f"n spikes: {nspikes}\n"
+        if gmm[unit_id].annotations:
+            msg += 'annots:\n'
+            for k, v in gmm[unit_id].annotations.items():
+                if torch.is_tensor(k):
+                    k = k.numpy(force=True)
+                    if k.size == 1:
+                        k = k.item()
+                if torch.is_tensor(v):
+                    v = v.numpy(force=True)
+                    if v.size == 1:
+                        v = v.item()
+                msg += f"{k}: {v}"
 
         axis.text(0, 0, msg, fontsize=6.5)
 
@@ -103,7 +116,7 @@ class MStep(GMMPlot):
 
     def __init__(self, n_waveforms_show=64, with_covs=True):
         self.with_covs = with_covs
-        self.height = 5 + 4 * with_covs
+        self.height = 4 + 4 * with_covs
         self.n_waveforms_show = n_waveforms_show
 
     def draw(self, panel, gmm, unit_id, axes=None):
@@ -147,7 +160,7 @@ class MStep(GMMPlot):
         n, r, c = feats.shape
         emp_mean = torch.nanmean(feats, dim=0)
         emp_mean = gmm.data.tpca.force_reconstruct(emp_mean.nan_to_num_())
-        model_mean = gmm.units[unit_id].mean[:, chans]
+        model_mean = gmm[unit_id].mean[:, chans]
         model_mean = gmm.data.tpca.force_reconstruct(model_mean)
 
         geomplot(
@@ -165,24 +178,23 @@ class MStep(GMMPlot):
             return
 
         # covariance vis
-        feats = features_full[:, :, gmm.units[unit_id].channels]
-        model_mean = gmm.units[unit_id].mean[:, gmm.units[unit_id].channels]
+        feats = features_full[:, :, gmm[unit_id].channels]
+        model_mean = gmm[unit_id].mean[:, gmm[unit_id].channels]
         feats = feats - model_mean
         n, r, c = feats.shape
         emp_cov, nobs = spiketorch.nancov(feats.view(n, r * c), return_nobs=True)
-        denom = nobs + gmm.units[unit_id].prior_pseudocount
+        denom = nobs + gmm[unit_id].prior_pseudocount
         emp_cov = (nobs / denom) * emp_cov
         noise_cov = gmm.noise.marginal_covariance(
-            channels=gmm.units[unit_id].channels
+            channels=gmm[unit_id].channels
         ).to_dense()
         m = model_mean.reshape(-1)
         mmt = m[:, None] @ m[None, :]
         modelcov = (
-            gmm.units[unit_id]
-            .marginal_covariance(channels=gmm.units[unit_id].channels)
+            gmm[unit_id]
+            .marginal_covariance(channels=gmm[unit_id].channels)
             .to_dense()
         )
-        residual = emp_cov - modelcov
         covs = (emp_cov, noise_cov, mmt.abs(), mmt, modelcov, emp_cov - modelcov)
         # vmax = max(c.abs().max() for c in covs)
         names = ("regemp", "noise", "|temptempT|", "temptempT", "model", "resid")
@@ -244,7 +256,11 @@ class CovarianceResidual(GMMPlot):
         emp_eigs = torch.linalg.eigvalsh(emp_cov)
         noise_eigs = torch.linalg.eigvalsh(noise_cov)
         residual_eigs, residual_vecs = torch.linalg.eigh(residual)
-        model_residual_eigs = torch.linalg.eigvalsh(model_residual)
+        try:
+            model_residual_eigs = torch.linalg.eigvalsh(model_residual)
+        except Exception as e:
+            warnings.warn(f"Model residual. {e}")
+            model_residual_eigs = torch.zeros(model_residual.shape[0])
 
         rank1 = (residual_vecs[:, -1:] * residual_eigs[-1:]) @ residual_vecs[:, -1:].T
         rank1_model = noise_cov + rank1
@@ -256,14 +272,14 @@ class CovarianceResidual(GMMPlot):
         # ax_eig, ax_r2 = bot.subplots(ncols=2)
         ax_eig = bot.subplots()
 
-        vm = emp_cov.abs().max()
-        imk = dict(vmin=-vm, vmax=vm, cmap=plt.cm.seismic, interpolation="none")
+        # vm = 0.9 * emp_cov.abs().max()
+        imk = dict(cmap=plt.cm.seismic, interpolation="none")
 
         covs = dict(
             emp=emp_cov,
             noise=noise_cov,
             noise_resid=residual,
-            mmT_scaled=scale * mmT,
+            mmT=scale * mmT,
             mmT_model=model,
             mmT_resid=model_residual,
             rank1=rank1,
@@ -279,19 +295,21 @@ class CovarianceResidual(GMMPlot):
             rank1_resid=rank1_residual_eigs,
         )
         for (name, cov), ax, color in zip(covs.items(), axes.flat, colors):
-            if name == "mmT_scaled":
-                vm = cov.abs().max() * 0.9
-                mimk = dict(
-                    vmin=-vm, vmax=vm, cmap=plt.cm.seismic, interpolation="none"
-                )
-            else:
-                mimk = imk
+            vm = cov.abs().max() * 0.9
+            mimk = imk | dict(vmax=vm, vmin=-vm)
+            # if name == "mmT":
+            #     vm = cov.abs().max() * 0.9
+            #     mimk = dict(
+            #         vmin=-vm, vmax=vm, cmap=plt.cm.seismic, interpolation="none"
+            #     )
+            # else:
+            #     mimk = imk
             im = ax.imshow(cov, **mimk)
             cb = plt.colorbar(im, ax=ax, shrink=0.2)
             cb.outline.set_visible(False)
             title = name
-            if name.startswith("mmT_sc"):
-                title = title + f" (scale={scale:0.2f})"
+            if name == "mmT":
+                title = title + f" (scale={scale:.2f})"
             ax.set_title(title, color=color)
             if name in eigs:
                 ax_eig.plot(eigs[name].flip(0), color=color, lw=1)
@@ -459,7 +477,7 @@ class KMeansSplit(GMMPlot):
             ax.set_xticks([])
             ax.axhline(0, color="k", lw=0.8)
             sns.despine(ax=ax, left=False, right=True, bottom=True, top=True)
-        mainchan = gmm.units[unit_id].snr.argmax()
+        mainchan = gmm[unit_id].snr.argmax()
         for subid, subunit in zip(split_ids, split_info["units"]):
             subm = subunit.mean[:, mainchan]
             subm = gmm.data.tpca._inverse_transform_in_probe(subm[None])[0]
@@ -518,11 +536,11 @@ class NeighborMeans(GMMPlot):
 
     def draw(self, panel, gmm, unit_id):
         neighbors = gmm_helpers.get_neighbors(gmm, unit_id)
-        units = [gmm.units[u] for u in reversed(neighbors)]
-        labels = neighbors.numpy(force=True)[::-1]
+        units = [gmm[u] for u in reversed(neighbors)]
+        labels = neighbors[::-1]
 
         # means on core channels
-        chans = gmm.units[unit_id].snr.argmax()
+        chans = gmm[unit_id].snr.argmax()
         chans = torch.cdist(gmm.data.prgeom[chans[None]], gmm.data.prgeom)
         chans = chans.view(-1)
         (chans,) = torch.nonzero(chans <= gmm.data.core_radius, as_tuple=True)
@@ -544,12 +562,12 @@ class NeighborDistances(GMMPlot):
     def draw(self, panel, gmm, unit_id):
         neighbors = gmm_helpers.get_neighbors(gmm, unit_id)
         distances = gmm.distances(
-            units=[gmm.units[u] for u in neighbors], show_progress=False
+            units=[gmm[u] for u in neighbors], show_progress=False
         )
         ax = analysis_plots.distance_matrix_dendro(
             panel,
             distances,
-            unit_ids=neighbors.numpy(force=True),
+            unit_ids=neighbors,
             dendrogram_linkage=None,
             show_unit_labels=True,
             vmax=self.dist_vmax,
@@ -561,7 +579,7 @@ class NeighborDistances(GMMPlot):
 
 
 class NeighborBimodalities(GMMPlot):
-    kind = "merge"
+    kind = "bim"
     width = 4
     height = 8
 
@@ -583,7 +601,7 @@ class NeighborBimodalities(GMMPlot):
         )
         kept = labels >= 0
         labels_ = np.full_like(labels, -1)
-        labels_[kept] = neighbors[labels[kept]].numpy(force=True)
+        labels_[kept] = neighbors[labels[kept]]
         labels = labels_
 
         others = neighbors[1:]
@@ -606,7 +624,9 @@ class NeighborBimodalities(GMMPlot):
                 bimod_ax.set_title("bimodality computation", fontsize="small")
 
             if "in_pair_kept" not in bimod_info:
-                scatter_ax.text(0, 0, f"too few spikes")
+                scatter_ax.text(
+                    0.5, 0.5, f"too few spikes", transform=scatter_ax.transAxes, ha='center', va='center'
+                )
             else:
                 c = np.atleast_2d(glasbey1024[labels[bimod_info["in_pair_kept"]]])
                 scatter_ax.scatter(bimod_info["xi"], bimod_info["xj"], s=3, lw=0, c=c)
@@ -615,7 +635,7 @@ class NeighborBimodalities(GMMPlot):
 
             if "samples" not in bimod_info:
                 bimod_ax.text(
-                    0, 0, f"too-small kept prop {bimod_info['keep_prop']:.2f}"
+                    0.5, 0.5, f"too-small\nkept prop {bimod_info['keep_prop']:.2f}", transform=bimod_ax.transAxes, ha='center', va='center'
                 )
                 bimod_ax.axis("off")
                 continue
@@ -655,30 +675,51 @@ class NeighborBimodalities(GMMPlot):
 
 
 class NeighborInfoCriteria(GMMPlot):
-    kind = "merge"
-    width = 3
+    kind = "bim"
+    width = 4
     height = 8
 
-    def __init__(self, n_neighbors=5):
+    def __init__(self, n_neighbors=5, fit_by_avg=False):
         self.n_neighbors = n_neighbors
+        self.fit_by_avg = fit_by_avg
 
     def draw(self, panel, gmm, unit_id):
         neighbors = gmm_helpers.get_neighbors(gmm, unit_id)
         assert neighbors[0] == unit_id
         others = neighbors[1:]
         axes = panel.subplots(nrows=len(others), ncols=1)
-        histkw = dict(density=True, histtype="step", bins=128)
-        cstr = "{aic_full=:0.2f} {aic_merged=:0.2f} {bic_full=:0.2f} {bic_merged=:0.2f}"
+        histkw = dict(density=True, histtype="step", bins=128, log=True)
+        astr = "AICfull/merged: {aic_full:0.1f} / {aic_merged:0.1f}"
+        bstr = "BICfull/merged: {bic_full:0.1f} / {bic_merged:0.1f}"
+        lstr = "LLfull/merged: {full_loglik:0.1f} / {unit_loglik:0.1f}"
+        cstr = f"{astr}\n{bstr}\n{lstr}\n"
         for ax, other_id in zip(axes, others):
             uids = [unit_id, other_id]
-            sns.despine(ax=ax, left=True, right=True, top=True)
             res = gmm.unit_group_criterion(uids, gmm.log_liks, debug=True)
-            sll = res["subunit_logliks"].tocsr()
+            sll = res["subunit_logliks"]
+            if not torch.is_tensor(sll):
+                sll = sll.tocsr()
             for row, uid in enumerate(uids):
-                ax.hist(sll[[row]].data, color=glasbey1024[uid], **histkw)
-            s = f"other={other_id} {cstr.format(res)}"
-            ax.set_title(s, fontsize="small")
+                if not torch.is_tensor(sll):
+                    rowsll = sll[[row]].data
+                else:
+                    rowsll = sll[row]
+                rowsll = rowsll[torch.isfinite(rowsll)]
+                if rowsll.numel():
+                    ax.hist(rowsll, color=glasbey1024[uid], **histkw)
+            ull = res["unit_logliks"]
+            ax.hist(ull[torch.isfinite(ull)], color="k", **histkw)
+            s = f"other={other_id}\n" + cstr.format_map(res)
+            aic_merge = res['aic_merged'] < res['aic_full']
+            bic_merge = res['bic_merged'] < res['bic_full']
+            ll_merge = res['unit_loglik'] > res['full_loglik']
+            s += f"aic: " + ("merge!" if aic_merge else "nope.") + "\n"
+            s += f"bic: " + ("merge!" if bic_merge else "nope.") + "\n"
+            s += f"ll: " + ("merge!" if ll_merge else "nope.")
+            ax.text(0.05, 0.95, s, transform=ax.transAxes)
             ax.set_xlabel("log lik")
+            sns.despine(ax=ax, left=True, right=True, top=True)
+            # ax.set_yticks([])
 
 
 # -- main api
@@ -686,14 +727,17 @@ class NeighborInfoCriteria(GMMPlot):
 default_gmm_plots = (
     TextInfo(),
     ISIHistogram(),
+    ISIHistogram(bin_ms=1, max_ms=50),
     ChansHeatmap(),
-    MStep(),
+    MStep(with_covs=False),
+    CovarianceResidual(),
     Likelihoods(),
     Amplitudes(),
     KMeansSplit(),
     NeighborMeans(),
     NeighborDistances(),
     NeighborBimodalities(),
+    NeighborInfoCriteria(),
 )
 
 
@@ -702,7 +746,7 @@ def make_unit_gmm_summary(
     unit_id,
     plots=default_gmm_plots,
     max_height=9,
-    figsize=(14, 11),
+    figsize=(15, 11),
     hspace=0.1,
     figure=None,
     **other_global_params,
@@ -731,7 +775,7 @@ def make_all_gmm_summaries(
     save_folder,
     plots=default_gmm_plots,
     max_height=9,
-    figsize=(14, 11),
+    figsize=(15, 11),
     hspace=0.1,
     dpi=200,
     image_ext="png",
@@ -746,7 +790,7 @@ def make_all_gmm_summaries(
 ):
     save_folder = Path(save_folder)
     if unit_ids is None:
-        unit_ids = gmm.unit_ids().numpy(force=True)
+        unit_ids = gmm.unit_ids()
     if n_units is not None and n_units < len(unit_ids):
         rg = np.random.default_rng(seed)
         unit_ids = rg.choice(unit_ids, size=n_units, replace=False)
