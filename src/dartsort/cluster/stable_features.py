@@ -438,9 +438,7 @@ class SpikeNeighborhoods(torch.nn.Module):
             for j in covered_ids
         }
         n_spikes = self.popcounts[covered_ids].sum()
-        if add_to_overlaps is not None:
-            add_to_overlaps[covered_ids] += 1
-        return neighborhood_info, n_spikes
+        return covered_ids, neighborhood_info, n_spikes
 
     def spike_neighborhoods(self, channels, spike_indices, min_coverage=1.0):
         """Like subset_neighborhoods, but for an already chosen collection of spikes

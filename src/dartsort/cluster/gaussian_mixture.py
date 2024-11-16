@@ -11,7 +11,7 @@ from scipy.sparse import coo_array, csc_array
 from scipy.special import logsumexp
 from tqdm.auto import tqdm, trange
 
-from ..util import more_operators, noise_util
+from ..util import more_operators, noise_util, spiketorch
 from .cluster_util import agglomerate
 from .kmeans import kmeans
 from .modes import smoothed_dipscore_at
@@ -74,6 +74,7 @@ class SpikeMixtureModel(torch.nn.Module):
         merge_bimodality_masked: bool = False,
         merge_sym_function: callable = np.minimum,
         em_converged_prop: float = 0.02,
+        em_converged_churn: float = 0.01,
         em_converged_atol: float = 1e-2,
     ):
         super().__init__()
@@ -106,6 +107,7 @@ class SpikeMixtureModel(torch.nn.Module):
         self.merge_linkage = merge_linkage
         self.em_converged_prop = em_converged_prop
         self.em_converged_atol = em_converged_atol
+        self.em_converged_churn = em_converged_churn
         self.split_em_iter = split_em_iter
         self.split_whiten = split_whiten
         self.use_proportions = use_proportions
@@ -116,7 +118,7 @@ class SpikeMixtureModel(torch.nn.Module):
         self.labels = torch.from_numpy(self.labels)
 
         # this is populated by self.m_step()
-        self.units = torch.nn.ModuleList()
+        self._units = torch.nn.ModuleDict()
         self.log_proportions = None
 
         # store arguments to the unit constructor in a dict
@@ -150,16 +152,68 @@ class SpikeMixtureModel(torch.nn.Module):
         self.storage = threading.local()
         self.next_round_annotations = {}
 
+    # -- unit management
+
+    def __getitem__(self, ix):
+        ix = self.normalize_key(ix)
+        if ix not in self:
+            raise KeyError(f"Mixture has no unit with ID {ix}")
+        return self._units[ix]
+
+    def __setitem__(self, ix, value):
+        ix = self.normalize_key(ix)
+        self._units[ix] = value
+
+    def __contains__(self, ix):
+        ix = self.normalize_key(ix)
+        return ix in self._units
+
+    def update(self, other):
+        if isinstance(other, dict):
+            other = other.items()
+        for k, v in other:
+            self[k] = v
+
+    def empty(self):
+        return not self._units
+
+    def clear_units(self):
+        self._stack = None
+        self._units.clear()
+
+    def unit_ids(self):
+        return np.array([int(k) for k in self._units.keys()])
+
+    def items(self):
+        for k, v in self._units.items():
+            yield int(k), v
+
+    def ids_and_units(self):
+        return self.unit_ids(), self._units.values()
+
+    def n_units(self):
+        nu_u = max(self.unit_ids()) + 1
+        nu_l = self.label_ids().max() + 1
+        return max(nu_u, nu_l)
+
+    def label_ids(self):
+        uids = torch.unique(self.labels)
+        return uids[uids >= 0]
+
+    def ids(self):
+        return torch.arange(self.n_units())
+
+    def n_labels(self):
+        unit_ids = self.label_ids()
+        nu = unit_ids.max() + 1
+        return nu
+
     # -- headliners
 
     def to_sorting(self):
         labels = np.full_like(self.data.original_sorting.labels, -1)
         labels[self.data.kept_indices] = self.labels.numpy(force=True)
         return replace(self.data.original_sorting, labels=labels)
-
-    def unit_ids(self):
-        uids = torch.unique(self.labels)
-        return uids[uids >= 0]
 
     def em(self, n_iter=None, show_progress=True, final_e_step=True):
         n_iter = self.n_em_iters if n_iter is None else n_iter
@@ -170,62 +224,74 @@ class SpikeMixtureModel(torch.nn.Module):
             its = range(n_iter)
 
         # if we have no units, we can't E step.
-        if not self.units:
+        if self.empty():
             self.m_step(show_progress=step_progress)
+            self.cleanup(min_count=1)
 
+        convergence_props = {}
+        log_liks = None
         for _ in its:
             # for convergence testing...
-            self.cleanup(min_count=1)
-            means, *_ = self.stack_units(mean_only=True)
+            log_liks, convergence_props = self.cleanup(log_liks, min_count=1, clean_props=convergence_props)
 
-            reas_count, log_liks, spike_logliks = self.e_step(
-                show_progress=step_progress
+            recompute_mask = None
+            if 'adif' in convergence_props:
+                recompute_mask = convergence_props['adif'] > 0
+                # recompute_mask = torch.ones(self.n_units(), dtype=bool)
+
+            unit_churn, reas_count, log_liks, spike_logliks = self.e_step(
+                show_progress=step_progress, recompute_mask=recompute_mask, prev_log_liks=log_liks
             )
+            convergence_props['unit_churn'] = unit_churn
+            log_liks, convergence_props = self.cleanup(log_liks, clean_props=convergence_props)
             meanlogpx = spike_logliks.mean()
 
             # M step: fit units based on responsibilities
-            mres = self.m_step(log_liks, show_progress=step_progress, prev_means=means)
+            to_fit = convergence_props['unit_churn'] >= self.em_converged_churn
+            mres = self.m_step(log_liks, show_progress=step_progress, to_fit=to_fit)
+            convergence_props['adif'] = mres['adif']
 
             # extra info for description
+            max_adif = mres['max_adif']
             if show_progress:
                 opct = (self.labels < 0).sum() / self.data.n_spikes
                 opct = f"{100 * opct:.1f}"
-                nu = len(self.units)
+                nu = self.n_units().item()
                 reas_prop = reas_count / self.data.n_spikes
                 rpct = f"{100 * reas_prop:.1f}"
-                adif = f"{mres['adif']:.2f}"
-                msg = f"EM[{nu=},out={opct}%,reas={rpct}%,dmu={adif},meanlogpx={meanlogpx:g}]"
+                adif = f"{max_adif:.2f}"
+                msg = f"EM[{nu=},fu={to_fit.sum()},out={opct}%,reas={rpct}%,dmu={adif},meanlogpx={meanlogpx:g}]"
                 its.set_description(msg)
 
             if reas_prop < self.em_converged_prop:
                 break
-            if mres["adif"] < self.em_converged_atol:
+            if max_adif is not None and max_adif < self.em_converged_atol:
                 break
 
         if not final_e_step:
             return
 
         # final e step for caller
-        reas_count, log_liks, spike_logliks = self.e_step(clean_units=True)
+        unit_churn, reas_count, log_liks, spike_logliks = self.e_step(show_progress=step_progress)
         return log_liks
 
-    def e_step(self, show_progress=False):
+    def e_step(self, show_progress=False, prev_log_liks=None, recompute_mask=None):
         # E step: get responsibilities and update hard assignments
-        log_liks = self.log_likelihoods(show_progress=show_progress)
+        log_liks = self.log_likelihoods(
+            show_progress=show_progress, previous_logliks=prev_log_liks, recompute_mask=recompute_mask
+        )
         # replace log_liks by csc
-        reas_count, spike_logliks, log_liks = self.reassign(log_liks)
+        unit_churn, reas_count, spike_logliks, log_liks = self.reassign(log_liks)
+        return unit_churn, reas_count, log_liks, spike_logliks
 
-        # garbage collection -- get rid of low count labels
-        log_liks = self.cleanup(log_liks)
-
-        return reas_count, log_liks, spike_logliks
-
-    def m_step(self, likelihoods=None, show_progress=False, prev_means=None):
+    def m_step(self, likelihoods=None, show_progress=False, to_fit=None):
         """Beware that this flattens the labels."""
-        needs_append = not self.units
-        unit_ids = self.unit_ids()
-        if not needs_append:
-            assert unit_ids.max() < len(self.units)
+        warm_start = not self.empty()
+        fit_ids = unit_ids = self.label_ids()
+        if to_fit is not None:
+            fit_ids = unit_ids[to_fit[unit_ids]]
+        if warm_start:
+            _, prev_means, *_ = self.stack_units(mean_only=True)
 
         if self.use_proportions and likelihoods is not None:
             self.update_proportions(likelihoods)
@@ -235,34 +301,44 @@ class SpikeMixtureModel(torch.nn.Module):
         pool = Parallel(self.n_threads, backend="threading", return_as="generator")
         results = pool(
             delayed(self.fit_unit)(
-                j, likelihoods=likelihoods, **self.next_round_annotations.get(j, {})
+                j,
+                likelihoods=likelihoods,
+                warm_start=warm_start,
+                **self.next_round_annotations.get(j, {}),
             )
-            for j in unit_ids
+            for j in fit_ids
         )
         if show_progress:
             results = tqdm(
-                results, desc="M step", unit="unit", total=len(unit_ids), **tqdm_kw
+                results, desc="M step", unit="unit", total=len(fit_ids), **tqdm_kw
             )
-        if needs_append:
-            for j, unit in enumerate(zip(unit_ids, results)):
-                assert unit.annotations["unit_id"] == j
-                self.units.append(unit)
-        adif = None
-        if prev_means is not None:
-            nu = len(unit_ids)
-            new_means, *_ = self.stack_units(mean_only=True)
-            dmu = (prev_means - new_means).abs_().view(nu, -1)
-            adif = torch.max(dmu)
+        for uid, unit in zip(fit_ids, results):
+            if not warm_start:
+                self[uid] = unit
+        max_adif = adif = None
         self._stack = None
+        if warm_start:
+            ids, new_means, *_ = self.stack_units(mean_only=True)
+            dmu = (prev_means - new_means).abs_().view(len(new_means), -1)
+            adif_ = torch.max(dmu, dim=1).values
+            max_adif = adif_.max()
+            adif = torch.zeros(self.n_units())
+            adif[ids] = adif_
         self.clear_scheduled_annotations()
-        return dict(adif=adif)
+        return dict(max_adif=max_adif, adif=adif)
 
     def log_likelihoods(
-        self, unit_ids=None, with_noise_unit=True, use_storage=True, show_progress=False
+        self,
+        unit_ids=None,
+        with_noise_unit=True,
+        use_storage=True,
+        show_progress=False,
+        previous_logliks=None,
+        recompute_mask=None,
     ):
         """Noise unit last so that rows correspond to unit ids without 1 offset"""
         if unit_ids is None:
-            unit_ids = range(len(self.units))
+            unit_ids = self.unit_ids()
 
         # how many units does each core neighborhood overlap with?
         n_cores = self.data.core_neighborhoods.n_neighborhoods
@@ -276,11 +352,24 @@ class SpikeMixtureModel(torch.nn.Module):
         neighb_info = []
         nnz = 0
         for j in unit_ids:
-            unit = self.units[j]
-            neighbs, ns_unit = self.data.core_neighborhoods.subset_neighborhoods(
-                unit.channels, add_to_overlaps=core_overlaps
-            )
-            neighb_info.append((j, neighbs, ns_unit))
+            unit = self[j]
+            if recompute_mask is None or recompute_mask[j]:
+                covered_neighbs, neighbs, ns_unit = self.data.core_neighborhoods.subset_neighborhoods(
+                    unit.channels, add_to_overlaps=core_overlaps
+                )
+                unit.annotations['covered_neighbs'] = covered_neighbs
+                neighb_info.append((j, neighbs, ns_unit))
+            else:
+                row = previous_logliks[[j]].tocoo(copy=True)
+                six = row.coords[1]
+                ns_unit = row.nnz
+                if 'covered_neighbs' in unit.annotations:
+                    covered_neighbs = unit.annotations['covered_neighbs']
+                else:
+                    covered_neighbs = self.data.core_neighborhoods.neighborhood_ids[six]
+                    covered_neighbs = torch.unique(covered_neighbs)
+                neighb_info.append((j, six, row.data, ns_unit))
+            core_overlaps[covered_neighbs] += 1
             nnz += ns_unit
 
         # how many units does each spike overlap with? needed to write csc
@@ -292,6 +381,17 @@ class SpikeMixtureModel(torch.nn.Module):
         if with_noise_unit:
             nnz = nnz + self.data.n_spikes
 
+        @delayed
+        def job(ninfo):
+            if len(ninfo) == 4:
+                j, coo, data, ns = ninfo
+                return coo, data
+            else:
+                assert len(ninfo) == 3
+                j, neighbs, ns = ninfo
+                ix, ll = self.unit_log_likelihoods(unit_id=j, neighbs=neighbs, ns=ns)
+                return ix, ll
+
         # get the big nnz-length csc buffers. these can be huge so we cache them.
         csc_indices, csc_data = get_csc_storage(nnz, self.storage, use_storage)
         # csc compressed indptr. spikes are columns.
@@ -301,10 +401,7 @@ class SpikeMixtureModel(torch.nn.Module):
         # spike, we increment the spike's "write head". idea is to directly make csc
         write_offsets = indptr[:-1].copy()
         pool = Parallel(self.n_threads, backend="threading", return_as="generator")
-        results = pool(
-            delayed(self.unit_log_likelihoods)(unit_id=j, neighbs=neighbs, ns=ns)
-            for j, neighbs, ns in neighb_info
-        )
+        results = pool(job(ninfo) for ninfo in neighb_info)
         if show_progress:
             results = tqdm(
                 results,
@@ -316,8 +413,9 @@ class SpikeMixtureModel(torch.nn.Module):
         for j, (inds, liks) in enumerate(results):
             if inds is None:
                 continue
-            inds = inds.numpy(force=True)
-            liks = liks.numpy(force=True)
+            if torch.is_tensor(inds):
+                inds = inds.numpy(force=True)
+                liks = liks.numpy(force=True)
             csc_insert(j, write_offsets, inds, csc_indices, csc_data, liks)
             # inds = inds.numpy(force=True)
             # data_ixs = write_offsets[inds]
@@ -332,7 +430,7 @@ class SpikeMixtureModel(torch.nn.Module):
             csc_indices[data_ixs] = j + 1
             csc_data[data_ixs] = liks.numpy(force=True)
 
-        shape = (len(unit_ids) + with_noise_unit, self.data.n_spikes)
+        shape = (self.n_units() + with_noise_unit, self.data.n_spikes)
         log_liks = csc_array((csc_data, csc_indices, indptr), shape=shape)
         log_liks.has_canonical_format = True
 
@@ -368,36 +466,63 @@ class SpikeMixtureModel(torch.nn.Module):
         )
 
     def reassign(self, log_liks):
-        has_noise_unit = log_liks.shape[1] > len(self.units)
+        n_units = self.n_units()
         assignments, spike_logliks, log_liks_csc = loglik_reassign(
             log_liks,
-            has_noise_unit=has_noise_unit,
+            has_noise_unit=True,
             log_proportions=self.log_proportions,
         )
         assignments = torch.from_numpy(assignments).to(self.labels)
-        reassign_count = (self.labels != assignments).sum()
-        self.labels.copy_(assignments)
-        return reassign_count, spike_logliks, log_liks_csc
 
-    def cleanup(self, log_liks=None, min_count=None):
+        # track reassignments, first globally
+        same = torch.zeros_like(assignments)
+        torch.eq(self.labels, assignments, out=same)
+        reassign_count = len(same) - same.sum()
+
+        # and per unit IoU
+        intersection = torch.zeros(n_units, dtype=int)
+        kept = assignments >= 0
+        spiketorch.add_at_(intersection, assignments[kept], same[kept])
+        union = torch.zeros(n_units, dtype=int)
+        buf1 = torch.zeros(same.shape, dtype=bool)
+        buf2 = torch.zeros(same.shape, dtype=bool)
+        buf3 = torch.zeros(same.shape, dtype=bool)
+        for j in range(n_units):
+            torch.eq(assignments, j, out=buf1)
+            torch.eq(self.labels, j, out=buf2)
+            union[j] = max(1, torch.logical_or(buf1, buf2, out=buf3).sum())
+        iou = intersection / union
+        unit_churn = 1.0 - iou
+
+        # update labels
+        self.labels.copy_(assignments)
+
+        return unit_churn, reassign_count, spike_logliks, log_liks_csc
+
+    def cleanup(self, log_liks=None, min_count=None, clean_props=None):
         """Remove too-small units, make label space contiguous, tidy all properties"""
-        unit_ids, counts = torch.unique(self.labels, return_counts=True)
-        counts = counts[unit_ids >= 0]
-        unit_ids = unit_ids[unit_ids >= 0]
         if min_count is None:
             min_count = self.min_count
+
+        label_ids, counts = torch.unique(self.labels, return_counts=True)
+        counts = counts[label_ids >= 0]
+        label_ids = label_ids[label_ids >= 0]
         big_enough = counts >= min_count
-        keep = torch.zeros(len(self.units), dtype=bool)
-        keep[unit_ids] = big_enough
+
+        keep = torch.zeros(self.n_units(), dtype=bool)
+        keep[label_ids] = big_enough
+        self._stack = None
+
         if keep.all():
-            return log_liks
+            return log_liks, clean_props
+
+        if clean_props:
+            clean_props = {k: v[keep] for k, v in clean_props.items()}
 
         keep_noise = torch.concatenate((keep, torch.ones_like(keep[:1])))
         keep = keep.numpy(force=True)
-        if log_liks is not None:
-            has_noise_unit = log_liks.shape[1] > len(self.units)
 
-        kept_ids = unit_ids[big_enough]
+        kept_ids = label_ids[big_enough]
         new_ids = torch.arange(kept_ids.numel())
         old2new = dict(zip(kept_ids, new_ids))
         self._relabel(kept_ids)
@@ -409,36 +534,37 @@ class SpikeMixtureModel(torch.nn.Module):
             lps -= logsumexp(lps)
             self.log_proportions = self.log_proportions.new_tensor(lps)
 
-        if len(self.units):
-            keep_units = []
+        if not self.empty():
+            keep_units = {}
             for oi, ni in zip(kept_ids, new_ids):
-                u = self.units[oi]
-                u.annotations["unit_id"] = ni
-                keep_units.append(u)
-            del self.units[:]
-            self.units.extend(keep_units)
+                u = self[oi]
+                keep_units[ni] = u
+            self.clear_units()
+            self.update(keep_units)
 
         if self.next_round_annotations:
             next_round_annotations = {}
             for j, nra in self.next_round_annotations.items():
                 if keep[j]:
                     next_round_annotations[old2new[j]] = nra
+            self.next_round_annotations = next_round_annotations
 
         if log_liks is None:
-            return
+            return log_liks, clean_props
 
-        keep_ll = keep_noise.numpy(force=True) if has_noise_unit else keep
+        keep_ll = keep_noise.numpy(force=True)
         assert keep_ll.size == log_liks.shape[0]
 
         if isinstance(log_liks, coo_array):
             log_liks = coo_sparse_mask_rows(log_liks, keep_ll)
         elif isinstance(log_liks, csc_array):
             keep_ll = np.flatnonzero(keep_ll)
+            assert keep_ll.max() == log_liks.shape[0] - 1
             log_liks = log_liks[keep_ll]
         else:
             assert False
 
-        return log_liks
+        return log_liks, clean_props
 
     def merge(self, log_liks=None, show_progress=True):
         distances = self.distances(show_progress=show_progress)
@@ -469,7 +595,7 @@ class SpikeMixtureModel(torch.nn.Module):
             merge_parents = np.flatnonzero(new_ids == new_ids)
             self.schedule_annotations(new_id, dict(merge_parents=merge_parents))
 
-        del self.units[:]
+        self.clear_units()
         if self.log_proportions is not None:
             log_props = self.log_proportions.numpy(force=True)
 
@@ -483,7 +609,6 @@ class SpikeMixtureModel(torch.nn.Module):
             self.log_proportions = torch.asarray(
                 new_log_props, device=self.log_proportions.device
             )
-        self._stack = None
 
     def split(self, show_progress=True):
         pool = Parallel(
@@ -499,8 +624,7 @@ class SpikeMixtureModel(torch.nn.Module):
             if "new_ids" in res:
                 for nid in res["new_ids"]:
                     self.schedule_annotations(nid, split_parent=res["parent_id"])
-        del self.units[:]
-        self._stack = None
+        self.clear_units()
 
     def distances(
         self, kind=None, noise_normalized=None, units=None, show_progress=True
@@ -512,21 +636,27 @@ class SpikeMixtureModel(torch.nn.Module):
             noise_normalized = self.distance_noise_normalized
 
         if units is None:
-            units = self.units
-        nu = len(units)
+            nu = self.n_units()
+            ids, units = self.ids_and_units()
+            units = self.items()
+        else:
+            nu = len(units)
+            ids = range(nu)
 
         # stack unit data into one place
         mean_only = kind == "noise_metric"
-        means, covs, logdets = self.stack_units(units, mean_only=mean_only)
+        ids, means, covs, logdets = self.stack_units(ids=ids, units=units, mean_only=mean_only)
 
         # compute denominator of noised normalized distances
         if noise_normalized:
-            denom = self.noise_unit.divergence(
+            denom_ = self.noise_unit.divergence(
                 means, other_covs=covs, other_logdets=logdets, kind=kind
             )
-            denom = np.sqrt(denom.numpy(force=True))
+            denom = np.zeros(nu)
+            denom[ids] = np.sqrt(denom_.numpy(force=True))
 
-        dists = np.zeros((nu, nu), dtype=np.float32)
+        dists = np.full((nu, nu), np.inf, dtype=np.float32)
+        np.fill_diagonal(dists, 0.0)
 
         @delayed
         def dist_job(j, unit):
@@ -536,12 +666,12 @@ class SpikeMixtureModel(torch.nn.Module):
             d = d.numpy(force=True).astype(dists.dtype)
             if noise_normalized:
                 d /= denom * denom[j]
-            dists[j] = d
+            dists[j, ids] = d
 
         pool = Parallel(
             self.n_threads, backend="threading", return_as="generator_unordered"
         )
-        results = pool(dist_job(j, u) for j, u in enumerate(units))
+        results = pool(dist_job(j, u) for j, u in zip(ids, units))
         if show_progress:
             results = tqdm(results, desc="Distances", total=nu, unit="unit", **tqdm_kw)
         for _ in results:
@@ -569,7 +699,7 @@ class SpikeMixtureModel(torch.nn.Module):
             min_overlap = self.merge_bimodality_overlap
         if masked is None:
             masked = self.merge_bimodality_masked
-        nu = len(self.units)
+        nu = self.n_units()
         in_units = [
             torch.nonzero(self.labels == j, as_tuple=True)[0] for j in range(nu)
         ]
@@ -682,6 +812,7 @@ class SpikeMixtureModel(torch.nn.Module):
         weights=None,
         features=None,
         verbose=False,
+        warm_start=False,
         **unit_args,
     ):
         if features is None:
@@ -695,16 +826,14 @@ class SpikeMixtureModel(torch.nn.Module):
         if verbose and weights is not None:
             print(f"{weights.sum()=} {weights.min()=} {weights.max()=}")
         unit_args = self.unit_args | unit_args
-        if len(self.units) > unit_id:
-            unit = self.units[unit_id]
-            assert unit.annotations.get(unit_id, unit_id) == unit_id
+        if warm_start:
+            unit = self[unit_id]
             unit.fit(features, weights, neighborhoods=self.data.extract_neighborhoods)
         else:
             unit = GaussianUnit.from_features(
                 features,
                 weights,
                 neighborhoods=self.data.extract_neighborhoods,
-                unit_id=unit_id,
                 **unit_args,
             )
         return unit
@@ -732,7 +861,7 @@ class SpikeMixtureModel(torch.nn.Module):
         log_likelihoods
         """
         if unit is None:
-            unit = self.units[unit_id]
+            unit = self[unit_id]
         if ignore_channels:
             core_channels = torch.arange(self.data.n_channels)
         else:
@@ -748,9 +877,10 @@ class SpikeMixtureModel(torch.nn.Module):
                     core_channels, spike_indices
                 )
             else:
-                neighbs, ns = self.data.core_neighborhoods.subset_neighborhoods(
+                covered_neighbs, neighbs, ns = self.data.core_neighborhoods.subset_neighborhoods(
                     core_channels
                 )
+                unit.annotations['covered_neighbs'] = covered_neighbs
         if not ns:
             return None, None
 
@@ -811,8 +941,8 @@ class SpikeMixtureModel(torch.nn.Module):
     def kmeans_split_unit(self, unit_id, debug=False):
         # get spike data and use interpolation to fill it out to the
         # unit's channel set
-        result = dict(parent_id=parent_id)
-        unit = self.units[unit_id]
+        result = dict(parent_id=unit_id, new_ids=[unit_id])
+        unit = self[unit_id]
         if not unit.channels.numel():
             return result
 
@@ -860,7 +990,8 @@ class SpikeMixtureModel(torch.nn.Module):
         if not valid.any():
             return result
         split_ids = split_ids[valid]
-        assert np.array_equal(split_ids, np.arange(len(split_ids)))
+        if not np.array_equal(split_ids, np.arange(len(split_ids))):
+            raise ValueError(f"Bad {split_ids=}")
 
         if debug:
             result["merge_labels"] = split_labels
@@ -873,7 +1004,7 @@ class SpikeMixtureModel(torch.nn.Module):
             with self.labels_lock:
                 self.labels[indices_full] = -1
                 self.labels[sp.indices[split_labels >= 0]] = unit_id
-            return
+            return result
 
         # else, tack new units onto the end
         # we need to lock up the labels array access here because labels.max()
@@ -1109,14 +1240,16 @@ class SpikeMixtureModel(torch.nn.Module):
             for i, k in enumerate(unit_ids):
                 u = self.fit_unit(unit_id=k, indices=in_any, likelihoods=likelihoods, features=spikes_extract)
                 units.append(u)
-                _, subunit_logliks[i] = self.unit_log_likelihoods(unit=u, spikes=spikes_core)
+                _, sll = self.unit_log_likelihoods(unit=u, spikes=spikes_core)
+                if sll is not None:
+                    subunit_logliks[i] = sll
             subunit_log_props = F.softmax(subunit_logliks, dim=0).mean(1).log_()
             # loglik per spik
             full_loglik = torch.logsumexp(subunit_logliks.T + subunit_log_props, dim=1).mean()
             unit = self.fit_unit(indices=in_any, features=spikes_extract)
             likelihoods = None
         elif fit_type == "avg_preexisting":
-            unit = self.units[unit_ids[0]].avg_with(*[self.units[u] for u in unit_ids[1:]])
+            unit = self[unit_ids[0]].avg_with(*[self[u] for u in unit_ids[1:]])
             if debug:
                 subunit_logliks = likelihoods[:, in_any][unit_ids]
             full_loglik = marginal_loglik(
@@ -1139,7 +1272,7 @@ class SpikeMixtureModel(torch.nn.Module):
         unique_nids, inverse = torch.unique(nids, return_inverse=True)
         unique_chans = self.data.core_neighborhoods.neighborhoods[unique_nids]
         unique_k_merged = unit.n_params(unique_chans)
-        unique_k_full = [self.units[u].n_params(unique_chans) for u in unit_ids]
+        unique_k_full = [self[u].n_params(unique_chans) for u in unit_ids]
         unique_k_full = torch.stack(unique_k_full, dim=1)
         k_merged = unique_k_merged[inverse]
         k_full = unique_k_full[inverse]
@@ -1208,6 +1341,14 @@ class SpikeMixtureModel(torch.nn.Module):
 
     # -- gizmos
 
+    @staticmethod
+    def normalize_key(ix):
+        if torch.is_tensor(ix):
+            ix = ix.numpy(force=True).item()
+        elif isinstance(ix, np.ndarray):
+            ix = ix.item()
+        return str(ix)
+
     @property
     def rg(self):
         # thread-local rgs since they aren't safe
@@ -1219,7 +1360,7 @@ class SpikeMixtureModel(torch.nn.Module):
     def _relabel(self, old_labels, new_labels=None, flat=False):
         """Re-label units
 
-        !! This could invalidate self.units and props.
+        !! This could invalidate self._units and props.
 
         Suggested to only call .cleanup(), this is its low-level helper.
 
@@ -1250,20 +1391,25 @@ class SpikeMixtureModel(torch.nn.Module):
         self.labels[torch.logical_not(kept)] = -1
         self._stack = None
 
-    def stack_units(self, units=None, mean_only=True, use_cache=False):
-        if units is None:
-            units = self.units
+    def stack_units(self, units=None, ids=None, mean_only=True, use_cache=False):
+        if ids is not None:
+            assert units is not None
+        elif units is not None:
+            ids = np.arange(len(units))
+        else:
+            ids, units = self.ids_and_units()
+
         if use_cache and self._stack is not None:
             if mean_only or self._stack[1] is not None:
                 return self._stack
 
-        nu, rank, nc = len(units), self.data.rank, self.data.n_channels
+        rank, nc = self.data.rank, self.data.n_channels
 
-        means = torch.zeros((nu, rank, nc), device=self.data.device)
+        means = torch.full((len(ids), rank, nc), torch.nan, device=self.data.device)
         covs = logdets = None
         if not mean_only:
-            covs = means.new_zeros((nu, rank * nc, rank * nc))
-            logdets = means.new_zeros((nu,))
+            covs = means.new_full((len(units), rank * nc, rank * nc), torch.nan)
+            logdets = means.new_full((len(units),), torch.nan)
 
         for j, unit in enumerate(units):
             means[j] = unit.mean
@@ -1272,9 +1418,11 @@ class SpikeMixtureModel(torch.nn.Module):
                 logdets[j] = unit.logdet
 
         if use_cache:
-            self._stack = means, covs, logdets
+            self._stack = ids, means, covs, logdets
+        else:
+            self._stack = None
 
-        return means, covs, logdets
+        return ids, means, covs, logdets
 
     def schedule_annotations(self, unit_id, **annotations):
         if unit_id not in self.next_round_annotations:
