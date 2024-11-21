@@ -231,7 +231,9 @@ def ppca_e_step(
     )
 
 
-def ppca_m_step(e_y, e_u, e_ycu, e_uu, ess, W_old, mean_prior_pseudocount):
+def ppca_m_step(
+    e_y, e_u, e_ycu, e_uu, ess, W_old, mean_prior_pseudocount=10.0, rescale=True
+):
     """Lightweight PPCA M step"""
     rank, nc, M = e_ycu.shape
     mu = e_y - W_old @ e_u
@@ -239,7 +241,14 @@ def ppca_m_step(e_y, e_u, e_ycu, e_uu, ess, W_old, mean_prior_pseudocount):
         mu *= ess / (ess + mean_prior_pseudocount)
     if e_u is None:
         return dict(mu=mu, W=None)
+    if rescale:
+        sigma_u = e_uu - e_u[:, None] * e_u[None]
+        scales = sigma_u.diagonal().sqrt()
+        e_uu = e_uu / scales
+        e_ycu = e_ycu / scales
     W = torch.linalg.solve(e_uu, e_ycu.view(rank * nc, M), left=False)
+    if rescale:
+        W.mul_(scales)
     W = W.view(rank, nc, M)
     return dict(mu=mu, W=W)
 
