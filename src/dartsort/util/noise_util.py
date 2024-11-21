@@ -1,8 +1,8 @@
 import h5py
+import linear_operator
 import numpy as np
 import pandas as pd
 import torch
-import linear_operator
 from linear_operator import operators
 from scipy.fftpack import next_fast_len
 from tqdm.auto import trange
@@ -392,9 +392,13 @@ class EmbeddedNoise(torch.nn.Module):
         assert res.ndim == 3 and res.shape == (*data.shape, 1)
         return res
 
-    def marginal_covariance(self, channels=slice(None), cache_key=None, device=None):
+    def marginal_covariance(
+        self, channels=slice(None), cache_prefix=None, cache_key=None, device=None
+    ):
         if device is not None:
             device = torch.device(device)
+        if cache_prefix is not None:
+            cache_key = (cache_prefix, cache_key)
         if cache_key is not None and cache_key in self.cache:
             res = self.cache[cache_key]
             if device is not None and device != res.device:
@@ -416,9 +420,28 @@ class EmbeddedNoise(torch.nn.Module):
             self.cache[cache_key] = cov
         return cov
 
-    def _marginal_covariance(self, channels=slice(None)):
+    def offdiag_covariance(self, channels_left=slice(None), channels_right=slice(None)):
+        return self._marginal_covariance(
+            channels=channels_right, channels_left=channels_left
+        )
+
+    def _marginal_covariance(self, channels=slice(None), channels_left=None):
         channels = self.chans_arange[channels]
+        have_left = channels_left is not None
+        if channels_left is None:
+            channels_left = channels
         nc = channels.numel()
+        ncl = channels_left.numel()
+
+        if have_left:
+            if self.cov_kind in ("scalar", "diagonal_by_rank", "diagonal"):
+                if torch.isin(channels_left, channels).any():
+                    raise ValueError(
+                        "Don't know how to get non-marginal covariance block "
+                        f"for cov_kind={self.cov_kind} when the block overlaps "
+                        "with the diagonal."
+                    )
+                return operators.ZeroLinearOperator((self.rank * ncl, self.rank * nc))
 
         if self.cov_kind == "scalar":
             eye = operators.IdentityLinearOperator(self.rank * nc, device=self.device)
@@ -434,34 +457,40 @@ class EmbeddedNoise(torch.nn.Module):
             return operators.DiagLinearOperator(chans_std**2)
 
         if self.cov_kind == "full":
-            marg_cov = self.full_cov[:, channels][..., channels]
-            r, c = marg_cov.shape[:2]
-            marg_cov = marg_cov.reshape(r * c, r * c)
+            marg_cov = self.full_cov[:, channels_left][..., channels]
+            r = marg_cov.shape[0]
+            marg_cov = marg_cov.reshape(r * ncl, r * nc)
             return linear_operator.to_linear_operator(marg_cov)
 
         if self.cov_kind == "factorized":
             rank_root = self.rank_vt.T * self.rank_std
             rank_cov = rank_root @ rank_root.T
-            # rank_root = operators.RootLinearOperator(rank_root)
             chan_root = self.channel_vt.T[channels] * self.channel_std
-            chan_cov = chan_root @ chan_root.T
-            # chan_root = operators.RootLinearOperator(chan_root)
-            # return torch.kron(rank_root, chan_root)
+            chan_root_right = chan_root.T
+            if have_left:
+                chan_root = self.channel_vt.T[channels_left] * self.channel_std
+            chan_cov = chan_root @ chan_root_right
             return operators.KroneckerProductLinearOperator(rank_cov, chan_cov)
 
         if self.cov_kind == "factorized_rank_diag":
             rank_cov = operators.DiagLinearOperator(self.rank_std.square())
             chan_root = self.channel_vt.T[channels] * self.channel_std
-            chan_cov = chan_root @ chan_root.T
-            # chan_cov = operators.RootLinearOperator(chan_root)
+            chan_root_right = chan_root.T
+            if have_left:
+                chan_root = self.channel_vt.T[channels_left] * self.channel_std
+            chan_cov = chan_root @ chan_root_right
             return torch.kron(rank_cov, chan_cov)
 
         if self.cov_kind == "factorized_by_rank_rank_diag":
-            chans_vt = self.channel_vt[:, :, channels]
-            chans_std = self.channel_std[:, :, None]  # no slice here!
             rank_std = self.rank_std.view(self.rank, 1, 1)
-            chan_root = (rank_std * chans_std) * chans_vt
-            blocks = torch.bmm(chan_root.mT, chan_root)
+            chans_std = self.channel_std[:, :, None]  # no slice here!
+            rc_std = rank_std * chans_std
+            chans_vt = self.channel_vt[:, :, channels]
+            chan_rootl = chan_root = rc_std * chans_vt
+            if have_left:
+                chans_vtl = self.channel_vt[:, :, channels_left]
+                chan_rootl = rc_std * chans_vtl
+            blocks = torch.bmm(chan_rootl.mT, chan_root)
             blocks = linear_operator.to_linear_operator(blocks)
             return operators.BlockDiagLinearOperator(blocks)
 
@@ -614,6 +643,7 @@ class EmbeddedNoise(torch.nn.Module):
         device=None,
     ):
         from dartsort.util.drift_util import registered_geometry
+
         with h5py.File(hdf5_path, "r", locking=False) as h5:
             geom = h5["geom"][:]
         rgeom = geom
@@ -626,7 +656,7 @@ class EmbeddedNoise(torch.nn.Module):
             rgeom,
             sigma=sigma,
             interpolation_method=interpolation_method,
-            device=device
+            device=device,
         )
         return cls.estimate(snippets, mean_kind=mean_kind, cov_kind=cov_kind)
 
@@ -700,7 +730,9 @@ def interpolate_residual_snippets(
     # if kriging, we need a pseudoinverse
     skis = None
     if interpolation_method.startswith("kriging"):
-        skis = interpolation_util.get_source_kernel_pinvs(source_geom, None, sigma=sigma)
+        skis = interpolation_util.get_source_kernel_pinvs(
+            source_geom, None, sigma=sigma
+        )
         skis = skis.broadcast_to((len(snippets), *skis.shape[1:]))
 
     # allocate output storage with an extra channel of NaN needed later

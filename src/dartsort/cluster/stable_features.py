@@ -413,6 +413,10 @@ class SpikeNeighborhoods(torch.nn.Module):
             neighborhood_ids=neighborhood_ids,
         )
 
+    def neighborhood_channels(self, id):
+        nhc = self.neighborhoods[id]
+        return nhc[nhc < self.n_channels]
+
     def neighborhood_members(self, id):
         return self._neighborhood_members[self.neighborhood_members_slices[id]]
 
