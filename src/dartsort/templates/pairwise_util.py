@@ -386,7 +386,7 @@ def conv_to_resid(
     svs_a = low_rank_templates_a.singular_values[template_indices_a]
     svs_b = low_rank_templates_b.singular_values[template_indices_b]
     active_a = torch.any(spatial_a > 0, dim=1).to(svs_a)
-    if ignore_empty_channels:
+    if ignore_empty_channels and low_rank_templates_b.spike_counts_by_channel is not None:
         active_b = low_rank_templates_b.spike_counts_by_channel[template_indices_b]
         active_b = active_b > 0
         active_b = torch.from_numpy(active_b).to(svs_a)

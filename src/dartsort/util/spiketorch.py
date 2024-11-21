@@ -5,6 +5,7 @@ import torch
 import torch.nn.functional as F
 from scipy.fftpack import next_fast_len
 from torch.fft import irfft, rfft
+import warnings
 
 
 def fast_nanmedian(x, axis=-1):
@@ -315,9 +316,12 @@ def nancov(x, weights=None, correction=1, nan_free=False, return_nobs=False, for
     cov = xtx / denom
 
     if force_posdef:
-        vals, vecs = torch.linalg.eigh(cov)
-        good = vals > 0
-        cov = (vecs[:, good] * vals[good]) @ vecs[:, good].T
+        try:
+            vals, vecs = torch.linalg.eigh(cov)
+            good = vals > 0
+            cov = (vecs[:, good] * vals[good]) @ vecs[:, good].T
+        except Exception as e:
+            warnings.warn(f"Error in nancov eigh: {e}")
 
     if return_nobs:
         return cov, nobs
