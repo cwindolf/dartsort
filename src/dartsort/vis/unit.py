@@ -51,7 +51,8 @@ class UnitTextInfo(UnitPlot):
         axis.axis("off")
         msg = f"unit {unit_id}\n"
 
-        msg += f"feature source: {sorting_analysis.hdf5_path.name}\n"
+        if getattr(sorting_analysis, 'hdf5_path', None):
+            msg += f"feature source: {sorting_analysis.hdf5_path.name}\n"
 
         nspikes = sorting_analysis.spike_counts[
             sorting_analysis.unit_ids == unit_id
