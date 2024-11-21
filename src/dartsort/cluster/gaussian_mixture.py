@@ -260,7 +260,10 @@ class SpikeMixtureModel(torch.nn.Module):
                 reas_prop = reas_count / self.data.n_spikes
                 rpct = f"{100 * reas_prop:.1f}"
                 adif = f"{max_adif:.2f}"
-                msg = f"EM[{nu=},fu={to_fit.sum()},out={opct}%,reas={rpct}%,dmu={adif},meanlogpx={meanlogpx:g}]"
+                msg = (
+                    f"EM[K={nu},Ka={to_fit.sum()};{opct}%fp,"
+                    f"{rpct}%reas,dmu={adif};logpx/n={meanlogpx:.1f}]"
+                )
                 its.set_description(msg)
 
             if reas_prop < self.em_converged_prop:
@@ -593,7 +596,7 @@ class SpikeMixtureModel(torch.nn.Module):
 
         for new_id in np.unique(new_ids):
             merge_parents = np.flatnonzero(new_ids == new_ids)
-            self.schedule_annotations(new_id, dict(merge_parents=merge_parents))
+            self.schedule_annotations(new_id, merge_parents=merge_parents)
 
         self.clear_units()
         if self.log_proportions is not None:
@@ -1219,7 +1222,7 @@ class SpikeMixtureModel(torch.nn.Module):
         debug=False,
     ):
         """See if a single unit explains a group as far as AIC/BIC/MDL go."""
-        assert fit_type in ("avg_preexisting", "refit_all")
+        assert fit_type in ("avg_preexisting", "refit_all", "refit_avg")
         unit_ids = torch.tensor(unit_ids)
 
         # pick spikes for likelihood computation
@@ -1232,12 +1235,14 @@ class SpikeMixtureModel(torch.nn.Module):
         spikes_core = self.data.spike_data(in_any, neighborhood="core")
         n = in_any.numel()
 
-        if fit_type == "refit_all":
+        if fit_type.startswith("refit"):
             units = []
             subunit_logliks = spikes_core.features.new_full((len(unit_ids), len(in_any)), -torch.inf)
             full_loglik = 0.0
             for i, k in enumerate(unit_ids):
-                u = self.fit_unit(unit_id=k, indices=in_any, likelihoods=likelihoods, features=spikes_extract)
+                u = self.fit_unit(
+                    unit_id=k, indices=in_any, likelihoods=likelihoods, features=spikes_extract
+                )
                 units.append(u)
                 _, sll = self.unit_log_likelihoods(unit=u, spikes=spikes_core)
                 if sll is not None:
@@ -1245,10 +1250,17 @@ class SpikeMixtureModel(torch.nn.Module):
             subunit_log_props = F.softmax(subunit_logliks, dim=0).mean(1).log_()
             # loglik per spik
             full_loglik = torch.logsumexp(subunit_logliks.T + subunit_log_props, dim=1).mean()
-            unit = self.fit_unit(indices=in_any, features=spikes_extract)
-            likelihoods = None
+
+            if fit_type == "refit_all":
+                unit = self.fit_unit(indices=in_any, features=spikes_extract)
+            elif fit_type == "refit_avg":
+                unit = average_units(units, props=subunit_log_props.exp())
+            else:
+                assert False
         elif fit_type == "avg_preexisting":
-            unit = self[unit_ids[0]].avg_with(*[self[u] for u in unit_ids[1:]])
+            subunit_log_props = self.log_proportions[unit_ids]
+            units = [self[uid] for uid in unit_ids]
+            unit = average_units(units, F.softmax(subunit_log_props))
             if debug:
                 subunit_logliks = likelihoods[:, in_any][unit_ids]
             full_loglik = marginal_loglik(
@@ -1262,7 +1274,10 @@ class SpikeMixtureModel(torch.nn.Module):
 
         # extract likelihoods... no proportions!
         _, unit_logliks = self.unit_log_likelihoods(unit=unit, spikes=spikes_core)
-        unit_loglik = unit_logliks.mean()
+        if unit_logliks is not None:
+            unit_loglik = unit_logliks.mean()
+        else:
+            unit_loglik = np.nan
 
         # parameter counting... since we use marginal likelihoods, I'm restricting
         # the parameter counts to just the marginal set considered for each spike.
@@ -1272,7 +1287,7 @@ class SpikeMixtureModel(torch.nn.Module):
         unique_chans = self.data.core_neighborhoods.neighborhoods[unique_nids]
         unique_k_merged = unit.n_params(unique_chans)
         unique_k_full = [self[u].n_params(unique_chans) for u in unit_ids]
-        unique_k_full = torch.stack(unique_k_full, dim=1)
+        unique_k_full = torch.stack(unique_k_full, dim=1).sum(1)
         k_merged = unique_k_merged[inverse]
         k_full = unique_k_full[inverse]
 
@@ -1488,7 +1503,6 @@ class GaussianUnit(torch.nn.Module):
         channels_strategy_snr_min=50.0,
         prior_pseudocount=10,
         scale_mean: float = 0.1,
-        mean=None,
         **annotations,
     ):
         super().__init__()
@@ -1505,8 +1519,6 @@ class GaussianUnit(torch.nn.Module):
         self.scale_alpha = float(prior_pseudocount)
         self.scale_beta = float(prior_pseudocount) / scale_mean
         self.annotations = annotations
-        if mean is not None:
-            self.register_buffer("mean", mean)
 
     @classmethod
     def from_features(
@@ -1540,19 +1552,6 @@ class GaussianUnit(torch.nn.Module):
         self.fit(features, weights, neighborhoods=neighborhoods)
         self = self.to(features.features.device)
         return self
-
-    def avg_with(self, *others):
-        new = self.__class__(
-            mean_kind=self.mean_kind,
-            cov_kind=self.cov_kind,
-            rank=self.rank,
-            n_channels=self.n_channels,
-            noise=self.noise,
-        )
-        new.register_buffer("mean", (self.mean + sum(o.mean for o in others)) / (1 + len(others)))
-        new.register_buffer("channels", torch.cat([self.channels, *[o.channels for o in others]]).unique())
-        assert self.cov_kind == "zero"
-        return new
 
     def n_params(self, channels=None, on_channels=True):
         p = channels.new_zeros(len(channels))
@@ -1770,6 +1769,40 @@ class GaussianUnit(torch.nn.Module):
 
 log2pi = torch.log(torch.tensor(2.0 * torch.pi))
 tqdm_kw = dict(smoothing=0, mininterval=1.0 / 24.0)
+
+
+def average_units(units, proportions):
+    ua = units[0]
+    assert ua.cov_kind == "zero"
+    new_unit = GaussianUnit(
+        rank=ua.rank,
+        n_channels=ua.n_channels,
+        noise=ua.noise,
+        mean_kind=ua.mean_kind,
+        cov_kind=ua.cov_kind,
+        prior_type=ua.prior_type,
+        channels_strategy=ua.channels_strategy,
+        channels_strategy_snr_min=ua.channels_strategy_snr_min,
+        prior_pseudocount=ua.prior_pseudocount,
+        scale_mean=ua.scale_mean,
+    )
+    if ua.mean_kind == "zero":
+        return ua
+
+    if ua.channels_strategy == "all":
+        channels = ua.channels
+    elif ua.channels_strategy == "snr":
+        avg_snr = sum(pi * u.snr for pi, u in zip(proportions, units))
+        new.register_buffer("snr", avg_snr)
+        (channels,) = torch.nonzero(avg_snr >= new.channels_strategy_snr_min, as_tuple=True)
+    else:
+        assert False
+    new.register_buffer("channels", channels)
+
+    new_mean = sum(pi * u.mean for pi, u in zip(proportions, units))
+    new.register_buffer("mean", new_mean)
+
+    return new
 
 
 def to_full_probe(features, weights, n_channels, storage):
