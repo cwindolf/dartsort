@@ -1671,10 +1671,17 @@ class GaussianUnit(torch.nn.Module):
 
         assert False
 
-    def marginal_covariance(self, channels, cache_key=None, device=None):
-        ncov = self.noise.marginal_covariance(
-            channels, cache_key=cache_key, device=device
-        )
+    def marginal_covariance(
+        self, channels, cache_key=None, device=None, signal_only=False
+    ):
+        if signal_only:
+            ncov = operators.ZeroLinearOperator(
+                2 * [channels.numel() * self.noise.rank]
+            )
+        else:
+            ncov = self.noise.marginal_covariance(
+                channels, cache_key=cache_key, device=device
+            )
         zero_signal = (
             self.cov_kind == "zero" or self.cov_kind == "ppca" and not self.ppca_rank
         )
