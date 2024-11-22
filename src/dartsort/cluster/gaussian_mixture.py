@@ -1233,7 +1233,7 @@ class SpikeMixtureModel(torch.nn.Module):
         unit_ids,
         likelihoods=None,
         spikes_per_subunit=2048,
-        fit_type="refit_all",
+        fit_type="avg_preexisting",
         debug=False,
     ):
         """See if a single unit explains a group as far as AIC/BIC/MDL go."""
@@ -1638,20 +1638,20 @@ class GaussianUnit(torch.nn.Module):
             mean_full = new_zeros((self.noise.rank, self.noise.n_channels))
 
         if hasattr(self, "W"):
-            W_full = self.mean
+            W_full = self.W
             W_full.fill_(0.0)
         elif "W" in res:
             W_full = new_zeros((self.noise.rank, self.noise.n_channels, self.ppca_rank))
 
         if je_suis:
             mean_full[:, achans] = res["mu"]
+            if "W" in res:
+                W_full[:, achans] = res["W"]
         self.register_buffer("mean", mean_full)
-        if "W" in res:
-            W_full[:, achans] = res["W"]
-            self.register_buffer("mean", W_full)
+        self.register_buffer("W", W_full)
         self.pick_channels(achans, res["nobs"])
 
-    def pick_channels(self, active_chans, aweights_sum):
+    def pick_channels(self, active_chans, nobs):
         if self.channels_strategy == "all":
             self.register_buffer("channels", torch.arange(self.n_channels))
             return
@@ -1661,7 +1661,7 @@ class GaussianUnit(torch.nn.Module):
 
         if self.channels_strategy == "snr":
             amp = torch.linalg.vector_norm(self.mean[:, active_chans], dim=0)
-            snr = amp * aweights_sum.sqrt().view(-1)
+            snr = amp * nobs.sqrt()
             full_snr = self.mean.new_zeros(self.mean.shape[1])
             full_snr[active_chans] = snr
             self.register_buffer("snr", full_snr)
@@ -1770,8 +1770,7 @@ tqdm_kw = dict(smoothing=0, mininterval=1.0 / 24.0)
 
 def average_units(units, proportions):
     ua = units[0]
-    assert ua.cov_kind == "zero"
-    new_unit = GaussianUnit(
+    new = GaussianUnit(
         rank=ua.rank,
         n_channels=ua.n_channels,
         noise=ua.noise,
@@ -1782,6 +1781,7 @@ def average_units(units, proportions):
         channels_strategy_snr_min=ua.channels_strategy_snr_min,
         prior_pseudocount=ua.prior_pseudocount,
         scale_mean=ua.scale_mean,
+        ppca_rank=len(units) * ua.ppca_rank,
     )
     if ua.mean_kind == "zero":
         return ua
@@ -1800,6 +1800,15 @@ def average_units(units, proportions):
 
     new_mean = sum(pi * u.mean for pi, u in zip(proportions, units))
     new.register_buffer("mean", new_mean)
+
+    if new.cov_kind == "zero":
+        pass
+    elif new.cov_kind == "ppca":
+        W = torch.cat(
+            [pi * u.W for pi, u in zip(proportions, units)],
+            dim=2,
+        )
+        new.register_buffer("W", W)
 
     return new
 

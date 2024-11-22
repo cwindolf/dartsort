@@ -595,7 +595,7 @@ class NeighborBimodalities(GMMPlot):
         labels, spikells, log_liks = gaussian_mixture.loglik_reassign(
             log_liks, has_noise_unit=True
         )
-        kept = labels >= 0
+        kept = np.logical_and(labels >= 0, labels < len(neighbors))
         labels_ = np.full_like(labels, -1)
         labels_[kept] = neighbors[labels[kept]]
         labels = labels_
