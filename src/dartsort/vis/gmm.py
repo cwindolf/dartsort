@@ -1,6 +1,6 @@
-from pathlib import Path
-import warnings
 import itertools
+import warnings
+from pathlib import Path
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -95,7 +95,7 @@ class TextInfo(GMMPlot):
         nspikes = (gmm.labels == unit_id).sum()
         msg += f"n spikes: {nspikes}\n"
         if gmm[unit_id].annotations:
-            msg += 'annots:\n'
+            msg += "annots:\n"
             for k, v in gmm[unit_id].annotations.items():
                 if torch.is_tensor(k):
                     k = k.numpy(force=True)
@@ -125,11 +125,10 @@ class TextInfo(GMMPlot):
 class MStep(GMMPlot):
     kind = "mstep"
     width = 5
+    height = 4
     alpha = 0.05
 
-    def __init__(self, n_waveforms_show=64, with_covs=True):
-        self.with_covs = with_covs
-        self.height = 4 + 4 * with_covs
+    def __init__(self, n_waveforms_show=64):
         self.n_waveforms_show = n_waveforms_show
 
     def draw(self, panel, gmm, unit_id, axes=None):
@@ -139,11 +138,6 @@ class MStep(GMMPlot):
             panel_top = panel
         ax = panel_top.subplots()
         ax.axis("off")
-
-        # panel_bottom, panel_cbar = panel_bottom.subfigures(ncols=2, width_ratios=[5, 0.5])
-        if self.with_covs:
-            cov_axes = panel_bottom.subplots(nrows=3, ncols=2, sharey=True, sharex=True)
-            # cax = panel_cbar.add_subplot(3, 1, 2)
 
         # get spike data and determine channel set by plotting
         sp = gmm.random_spike_data(
@@ -187,46 +181,6 @@ class MStep(GMMPlot):
         )
         ax.axis("off")
         ax.set_title("reconstructed mean and example inputs")
-        if not self.with_covs:
-            return
-
-        # covariance vis
-        feats = features_full[:, :, gmm[unit_id].channels]
-        model_mean = gmm[unit_id].mean[:, gmm[unit_id].channels]
-        feats = feats - model_mean
-        n, r, c = feats.shape
-        emp_cov, nobs = spiketorch.nancov(feats.view(n, r * c), return_nobs=True)
-        denom = nobs + gmm[unit_id].prior_pseudocount
-        emp_cov = (nobs / denom) * emp_cov
-        noise_cov = gmm.noise.marginal_covariance(
-            channels=gmm[unit_id].channels
-        ).to_dense()
-        m = model_mean.reshape(-1)
-        mmt = m[:, None] @ m[None, :]
-        modelcov = (
-            gmm[unit_id]
-            .marginal_covariance(channels=gmm[unit_id].channels)
-            .to_dense()
-        )
-        covs = (emp_cov, noise_cov, mmt.abs(), mmt, modelcov, emp_cov - modelcov)
-        # vmax = max(c.abs().max() for c in covs)
-        names = ("regemp", "noise", "|temptempT|", "temptempT", "model", "resid")
-
-        for ax, cov, name in zip(cov_axes.flat, covs, names):
-            vmax = cov.abs().triu(diagonal=1)
-            vmax = vmax[vmax > 0].quantile(0.975)
-            im = ax.imshow(
-                cov.numpy(force=True), vmin=-vmax, vmax=vmax, cmap=plt.cm.seismic
-            )
-            ax.axis("off")
-            ax.set_title(
-                name
-                + f" max={cov.abs().max().numpy(force=True).item():.2f}, "
-                + f"rms={cov.square().mean().sqrt_().numpy(force=True).item():.2f}",
-                fontsize="small",
-            )
-            plt.colorbar(im, ax=ax, shrink=0.5)
-        # plt.colorbar(im, cax=cax, shrink=0.5)
 
 
 class CovarianceResidual(GMMPlot):
@@ -263,22 +217,32 @@ class CovarianceResidual(GMMPlot):
 
         mmT = mean.view(-1, 1) @ mean.view(1, -1)
         scale = (mmT * residual).sum() / mmT.square().sum()
-        model = noise_cov + scale * mmT
-        model_residual = emp_cov - model
+        if scale < 0:
+            warnings.warn(f"mmT {scale=:0.3f} negative, clipping.")
+            scale = 0.0
+        mmT_cov = noise_cov + scale * mmT
+        mmT_residual = emp_cov - mmT_cov
 
         emp_eigs = torch.linalg.eigvalsh(emp_cov)
         noise_eigs = torch.linalg.eigvalsh(noise_cov)
         residual_eigs, residual_vecs = torch.linalg.eigh(residual)
         try:
-            model_residual_eigs = torch.linalg.eigvalsh(model_residual)
+            mmT_residual_eigs = torch.linalg.eigvalsh(mmT_residual)
         except Exception as e:
-            warnings.warn(f"Model residual. {e}")
-            model_residual_eigs = torch.zeros(model_residual.shape[0])
+            warnings.warn(f"mmT residual. {e}")
+            mmT_residual_eigs = torch.zeros(mmT_residual.shape[0])
 
         rank1 = (residual_vecs[:, -1:] * residual_eigs[-1:]) @ residual_vecs[:, -1:].T
         rank1_model = noise_cov + rank1
         rank1_residual = emp_cov - rank1_model
         rank1_residual_eigs = torch.linalg.eigvalsh(rank1_residual)
+
+        signal = gmm[unit_id].marginal_covariance(channels=achans, signal_only=True)
+        signal = signal.to_dense()
+        modelcov = gmm[unit_id].marginal_covariance(channels=achans)
+        modelcov = modelcov.to_dense()
+        model_residual = emp_cov - modelcov
+        model_residual_eigs = torch.linalg.eigvalsh(model_residual)
 
         top, bot = panel.subfigures(nrows=2, height_ratios=[5, 2])
         axes = top.subplots(nrows=3, ncols=3, sharex=True, sharey=True)
@@ -293,21 +257,40 @@ class CovarianceResidual(GMMPlot):
             noise=noise_cov,
             noise_resid=residual,
             mmT=scale * mmT,
-            mmT_model=model,
-            mmT_resid=model_residual,
+            mmT_model=mmT_cov,
+            mmT_resid=mmT_residual,
             rank1=rank1,
             rank1_model=rank1_model,
             rank1_resid=rank1_residual,
+            model_signal=signal,
+            model=modelcov,
+            model_residual=model_residual,
         )
-        colors = ("k", "g", "r", "gray", "c", "orange", "gray", "palegreen", "fuchsia")
+        colors = dict(
+            emp="k",
+            noise="g",
+            noise_resid="r",
+            mmT="gray",
+            mmT_model="gray",
+            mmT_resid="orange",
+            rank1="gray",
+            rank1_model="gray",
+            rank1_resid="fuchsia",
+            model_signal="gray",
+            model="gray",
+            model_resid="purple",
+        )
+
         eigs = dict(
             emp=emp_eigs,
             noise=noise_eigs,
             noise_resid=residual_eigs,
-            mmT_resid=model_residual_eigs,
+            mmT_resid=mmT_residual_eigs,
             rank1_resid=rank1_residual_eigs,
+            model_resid=model_residual_eigs,
         )
-        for (name, cov), ax, color in zip(covs.items(), axes.flat, colors):
+        for (name, cov), ax in zip(covs.items(), axes.flat):
+            color = colors[name]
             vm = cov.abs().max() * 0.9
             mimk = imk | dict(vmax=vm, vmin=-vm)
             # if name == "mmT":
@@ -638,7 +621,12 @@ class NeighborBimodalities(GMMPlot):
 
             if "in_pair_kept" not in bimod_info:
                 scatter_ax.text(
-                    0.5, 0.5, f"too few spikes", transform=scatter_ax.transAxes, ha='center', va='center'
+                    0.5,
+                    0.5,
+                    f"too few spikes",
+                    transform=scatter_ax.transAxes,
+                    ha="center",
+                    va="center",
                 )
                 continue
             else:
@@ -649,7 +637,12 @@ class NeighborBimodalities(GMMPlot):
 
             if "samples" not in bimod_info:
                 bimod_ax.text(
-                    0.5, 0.5, f"too-small\nkept prop {bimod_info['keep_prop']:.2f}", transform=bimod_ax.transAxes, ha='center', va='center'
+                    0.5,
+                    0.5,
+                    f"too-small\nkept prop {bimod_info['keep_prop']:.2f}",
+                    transform=bimod_ax.transAxes,
+                    ha="center",
+                    va="center",
                 )
                 bimod_ax.axis("off")
                 continue
@@ -707,7 +700,7 @@ class NeighborInfoCriteria(GMMPlot):
         bstr = "BICfull/merged: {bic_full:0.1f} / {bic_merged:0.1f}"
         lstr = "LLfull/merged: {full_loglik:0.1f} / {unit_loglik:0.1f}"
         cstr = f"{astr}\n{bstr}\n{lstr}\n"
-        bbox = dict(facecolor='w', alpha=0.5, edgecolor="none")
+        bbox = dict(facecolor="w", alpha=0.5, edgecolor="none")
         for ax, other_id in zip(axes, others):
             uids = [unit_id, other_id]
             res = gmm.unit_group_criterion(uids, gmm.log_liks, debug=True)
@@ -726,12 +719,12 @@ class NeighborInfoCriteria(GMMPlot):
             if ull is not None:
                 ax.hist(ull[torch.isfinite(ull)], color="k", **histkw)
             s = f"other={other_id}\n" + cstr.format_map(res)
-            aic_merge = res['aic_merged'] < res['aic_full']
-            bic_merge = res['bic_merged'] < res['bic_full']
-            ll_merge = res['unit_loglik'] > res['full_loglik']
-            aicdif = res['aic_full'] - res['aic_merged']
-            bicdif = res['bic_full'] - res['bic_merged']
-            lldif = res['full_loglik'] - res['unit_loglik']
+            aic_merge = res["aic_merged"] < res["aic_full"]
+            bic_merge = res["bic_merged"] < res["bic_full"]
+            ll_merge = res["unit_loglik"] > res["full_loglik"]
+            aicdif = res["aic_full"] - res["aic_merged"]
+            bicdif = res["bic_full"] - res["bic_merged"]
+            lldif = res["full_loglik"] - res["unit_loglik"]
             s += f"aic: {aicdif:0.1f}, " + ("merge!" if aic_merge else "nope.") + "\n"
             s += f"bic: {bicdif:0.1f}, " + ("merge!" if bic_merge else "nope.") + "\n"
             s += f"ll: {lldif:0.1f}, " + ("merge!" if ll_merge else "nope.")
