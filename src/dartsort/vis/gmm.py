@@ -132,11 +132,7 @@ class MStep(GMMPlot):
         self.n_waveforms_show = n_waveforms_show
 
     def draw(self, panel, gmm, unit_id, axes=None):
-        if self.with_covs:
-            panel_top, panel_bottom = panel.subfigures(nrows=2, height_ratios=[1, 1])
-        else:
-            panel_top = panel
-        ax = panel_top.subplots()
+        ax = panel.subplots()
         ax.axis("off")
 
         # get spike data and determine channel set by plotting
@@ -218,7 +214,6 @@ class CovarianceResidual(GMMPlot):
         mmT = mean.view(-1, 1) @ mean.view(1, -1)
         scale = (mmT * residual).sum() / mmT.square().sum()
         if scale < 0:
-            warnings.warn(f"mmT {scale=:0.3f} negative, clipping.")
             scale = 0.0
         mmT_cov = noise_cov + scale * mmT
         mmT_residual = emp_cov - mmT_cov
@@ -226,11 +221,14 @@ class CovarianceResidual(GMMPlot):
         emp_eigs = torch.linalg.eigvalsh(emp_cov)
         noise_eigs = torch.linalg.eigvalsh(noise_cov)
         residual_eigs, residual_vecs = torch.linalg.eigh(residual)
-        try:
-            mmT_residual_eigs = torch.linalg.eigvalsh(mmT_residual)
-        except Exception as e:
-            warnings.warn(f"mmT residual. {e}")
+        if scale == 0:
             mmT_residual_eigs = torch.zeros(mmT_residual.shape[0])
+        else:
+            try:
+                mmT_residual_eigs = torch.linalg.eigvalsh(mmT_residual)
+            except Exception as e:
+                warnings.warn(f"mmT residual. {e}")
+                mmT_residual_eigs = torch.zeros(mmT_residual.shape[0])
 
         rank1 = (residual_vecs[:, -1:] * residual_eigs[-1:]) @ residual_vecs[:, -1:].T
         rank1_model = noise_cov + rank1
@@ -245,7 +243,7 @@ class CovarianceResidual(GMMPlot):
         model_residual_eigs = torch.linalg.eigvalsh(model_residual)
 
         top, bot = panel.subfigures(nrows=2, height_ratios=[5, 2])
-        axes = top.subplots(nrows=3, ncols=3, sharex=True, sharey=True)
+        axes = top.subplots(nrows=4, ncols=3, sharex=True, sharey=True)
         # ax_eig, ax_r2 = bot.subplots(ncols=2)
         ax_eig = bot.subplots()
 
@@ -264,7 +262,7 @@ class CovarianceResidual(GMMPlot):
             rank1_resid=rank1_residual,
             model_signal=signal,
             model=modelcov,
-            model_residual=model_residual,
+            model_resid=model_residual,
         )
         colors = dict(
             emp="k",
@@ -707,13 +705,14 @@ class NeighborInfoCriteria(GMMPlot):
             sll = res["subunit_logliks"]
             if not torch.is_tensor(sll):
                 sll = sll.tocsr()
+
             for row, uid in enumerate(uids):
-                if not torch.is_tensor(sll):
-                    rowsll = sll[[row]].data
-                else:
+                if torch.is_tensor(sll):
                     rowsll = sll[row]
-                rowsll = rowsll[torch.isfinite(rowsll)]
-                if rowsll.numel():
+                    rowsll = rowsll[torch.isfinite(rowsll)]
+                else:
+                    rowsll = sll[[row]].data
+                if len(rowsll):
                     ax.hist(rowsll, color=glasbey1024[uid], **histkw)
             ull = res["unit_logliks"]
             if ull is not None:
@@ -741,7 +740,7 @@ default_gmm_plots = (
     ISIHistogram(),
     ISIHistogram(bin_ms=1, max_ms=50),
     ChansHeatmap(),
-    MStep(with_covs=False),
+    MStep(),
     CovarianceResidual(),
     Likelihoods(),
     Amplitudes(),
