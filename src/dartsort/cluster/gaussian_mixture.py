@@ -1282,7 +1282,8 @@ class SpikeMixtureModel(torch.nn.Module):
         elif fit_type == "avg_preexisting":
             subunit_log_props = self.log_proportions[unit_ids]
             units = [self[uid] for uid in unit_ids]
-            unit = average_units(units, F.softmax(subunit_log_props))
+            subunit_props = F.softmax(subunit_log_props, dim=0)
+            unit = average_units(units, subunit_props)
             if debug:
                 subunit_logliks = likelihoods[:, in_any][unit_ids]
             full_loglik = marginal_loglik(
@@ -1587,10 +1588,22 @@ class GaussianUnit(torch.nn.Module):
 
     def n_params(self, channels=None, on_channels=True):
         p = channels.new_zeros(len(channels))
+        ncv = torch.isin(channels, self.channels).sum(1)
+
         if self.mean_kind == "full":
-            p += self.rank * torch.isin(channels, self.channels).sum(1)
-        # my cov
-        assert self.cov_kind == "zero"
+            p += self.rank * ncv
+        elif self.mean_kind == "zero":
+            pass
+        else:
+            assert False
+
+        if self.cov_kind == "zero":
+            pass
+        elif self.cov_kind == "ppca":
+            p += self.ppca_rank * self.rank * ncv
+        else:
+            assert False
+
         return p
 
     def fit(
@@ -1624,7 +1637,7 @@ class GaussianUnit(torch.nn.Module):
                 active_W=active_W,
                 weights=weights,
                 cache_prefix="extract",
-                M=self.ppca_rank,
+                M=self.ppca_rank if self.cov_kind == "ppca" else 0,
                 n_iter=self.ppca_inner_em_iter,
                 mean_prior_pseudocount=self.prior_pseudocount,
                 show_progress=show_progress,
@@ -1640,15 +1653,16 @@ class GaussianUnit(torch.nn.Module):
         if hasattr(self, "W"):
             W_full = self.W
             W_full.fill_(0.0)
-        elif "W" in res:
+        elif res.get("W", None) is not None:
             W_full = new_zeros((self.noise.rank, self.noise.n_channels, self.ppca_rank))
 
         if je_suis:
             mean_full[:, achans] = res["mu"]
-            if "W" in res:
+            if res.get("W", None) is not None:
                 W_full[:, achans] = res["W"]
         self.register_buffer("mean", mean_full)
-        self.register_buffer("W", W_full)
+        if res.get("W", None) is not None:
+            self.register_buffer("W", W_full)
         self.pick_channels(achans, res["nobs"])
 
     def pick_channels(self, active_chans, nobs):
@@ -1675,9 +1689,8 @@ class GaussianUnit(torch.nn.Module):
         self, channels, cache_key=None, device=None, signal_only=False
     ):
         if signal_only:
-            ncov = operators.ZeroLinearOperator(
-                2 * [channels.numel() * self.noise.rank]
-            )
+            sz = channels.numel() * self.noise.rank
+            ncov = operators.ZeroLinearOperator((sz, sz))
         else:
             ncov = self.noise.marginal_covariance(
                 channels, cache_key=cache_key, device=device
@@ -1690,13 +1703,9 @@ class GaussianUnit(torch.nn.Module):
         if self.cov_kind == "ppca" and self.ppca_rank:
             root = self.W[:, channels].reshape(-1, self.ppca_rank)
             root = operators.LowRankRootLinearOperator(root)
-            # cov = more_operators.LowRankRootSumLinearOperator(
-            #     root,
-            #     ncov,
-            # )
             # i believe this calls .add_low_rank()
             return ncov + root
-
+            # return more_operators.LowRankRootSumLinearOperator(root, ncov)
         assert False
 
     def dense_cov(self):
