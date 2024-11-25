@@ -441,7 +441,8 @@ class EmbeddedNoise(torch.nn.Module):
                         f"for cov_kind={self.cov_kind} when the block overlaps "
                         "with the diagonal."
                     )
-                return operators.ZeroLinearOperator((self.rank * ncl, self.rank * nc))
+                sz = self.rank * ncl, self.rank * nc
+                return operators.ZeroLinearOperator(*sz, dtype=self.global_std.dtype)
 
         if self.cov_kind == "scalar":
             eye = operators.IdentityLinearOperator(self.rank * nc, device=self.device)
@@ -682,6 +683,7 @@ def interpolate_residual_snippets(
 
     tpca = data_util.get_tpca(hdf5_path)
     if device is not None:
+        tpca = tpca.to(tpca.components.dtype)
         tpca = tpca.to(device)
 
     with h5py.File(hdf5_path, "r", locking=False) as h5:
