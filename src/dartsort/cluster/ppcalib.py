@@ -25,6 +25,7 @@ def ppca_em(
     mean_prior_pseudocount=10.0,
     show_progress=False,
     W_initialization="zeros",
+    em_converged_atol=0.05,
 ):
     new_zeros = sp.features.new_zeros
     if active_W is not None:
@@ -67,6 +68,7 @@ def ppca_em(
             cache_prefix=cache_prefix,
             return_yc=W_needs_initialization and not i,
         )
+        old_state = state
         state = ppca_m_step(
             **e,
             M=M,
@@ -74,6 +76,10 @@ def ppca_em(
             noise=noise,
             active_channels=active_channels,
         )
+        dmu = torch.abs(state["mu"] - old_state["mu"]).abs().max()
+        dW = torch.abs(state["W"] - old_state["W"]).abs().max()
+        if max(dmu, dW) < em_converged_atol:
+            break
 
     state["nobs"] = nobs
 
@@ -162,8 +168,8 @@ def ppca_e_step(
         D,
     )
     if yes_pca:
-        full_ubar, full_uubar, full_T, active_W = embed(
-            sp, neighb_data, M, weights, active_W, normalize=False
+        full_ubar, full_uubar, active_W, active_mean = embed(
+            sp, neighb_data, M, weights, active_W, active_mean, normalize=False
         )
     for ndata in neighb_data:
         in_neighborhood = ndata["in_neighborhood"]
@@ -271,12 +277,12 @@ def ppca_e_step(
     )
 
 
-def embed(sp, neighb_data, M, weights, W, normalize=True):
+def embed(sp, neighb_data, M, weights, W, active_mean, normalize=True):
     N = len(sp)
     _ubar = sp.features.new_zeros((N, M))
-    if not normalize:
-        _uubar = sp.features.new_zeros(N, M, M)
-    _T = sp.features.new_zeros((N, M, M))
+    # if not normalize:
+    _uubar = sp.features.new_zeros(N, M, M)
+    # _T = sp.features.new_zeros((N, M, M))
     eye_M = torch.eye(M, device=sp.features.device, dtype=sp.features.dtype)
 
     for ndata in neighb_data:
@@ -305,20 +311,31 @@ def embed(sp, neighb_data, M, weights, W, normalize=True):
         uubar.add_(T)
 
         _ubar[in_neighborhood] = ubar
-        if not normalize:
-            _uubar[in_neighborhood] = uubar
-        _T[in_neighborhood] = T
+        # if not normalize:
+        _uubar[in_neighborhood] = uubar
+        # _T[in_neighborhood] = T
 
     if normalize:
         um = vecdot(weights[:, None], _ubar, dim=0)
         _ubar -= um
-        # _uubar = -= um[:, None] * um
-        us = vecdot(weights[:, None], _T.diagonal(dim1=-2, dim2=-1).sqrt(), dim=0)
-        _T.div_(us[:, None] * us[None, :])
-        _uubar = torch.baddbmm(_T, _ubar[:, :, None], _ubar[:, None])
-        W = W / us
+        _uubar -= um[:, None] * um
+        active_mean = active_mean + W @ um
+        S = vecdot(weights[:, None, None], _uubar)
+        U, Dx = torch.linalg.eigh(S)
+        DxrootU = U * Dx.sqrt()
+        gram = DxrootU.T @ W.T @ W @ DxrootU
+        V, Dw = torch.linalg.eigh(gram)
+        transform = DxrootU @ V
+        inv_transform = V.T @ (1 / Dx.sqrt()) @ U.T
+        W = W @ transform
+        _ubar = _ubar @ inv_transform
+        _uubar = torch.einsum("nij,pi,qj->npq", _uubar, inv_transform, inv_transform)
+        # us = vecdot(weights[:, None], _T.diagonal(dim1=-2, dim2=-1).sqrt(), dim=0)
+        # _T.div_(us[:, None] * us[None, :])
+        # _uubar = torch.baddbmm(_T, _ubar[:, :, None], _ubar[:, None])
+        # W = W / us
 
-    return _ubar, _uubar, _T, W
+    return _ubar, _uubar, W, active_mean
 
 
 def get_neighborhood_data(
