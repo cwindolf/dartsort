@@ -7,9 +7,7 @@ class BaseWaveformModule(torch.nn.Module):
     is_featurizer = False
     default_name = ""
 
-    def __init__(
-        self, channel_index=None, geom=None, name=None, name_prefix=""
-    ):
+    def __init__(self, channel_index=None, geom=None, name=None, name_prefix=""):
         super().__init__()
         if name is None:
             name = self.default_name
@@ -21,7 +19,9 @@ class BaseWaveformModule(torch.nn.Module):
                 "channel_index", torch.asarray(channel_index, copy=True)
             )
         if geom is not None:
-            self.register_buffer("geom", torch.asarray(geom, copy=True))
+            self.register_buffer(
+                "geom", torch.asarray(geom, dtype=torch.float, copy=True)
+            )
 
     def fit(self, waveforms, max_channels=None, recording=None):
         pass
