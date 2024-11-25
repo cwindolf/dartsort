@@ -1367,7 +1367,7 @@ class SpikeMixtureModel(torch.nn.Module):
         return liks[unit_ids]
 
     def get_fit_weights(self, unit_id, indices, likelihoods=None):
-        """Normalized responsibilities for subset of spikes."""
+        """Responsibilities for subset of spikes."""
         if likelihoods is None:
             return None
 

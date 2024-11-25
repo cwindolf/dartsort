@@ -8,6 +8,8 @@ from tqdm.auto import trange
 from ..util.noise_util import EmbeddedNoise
 from .stable_features import SpikeFeatures, SpikeNeighborhoods
 
+vecdot = torch.linalg.vecdot
+
 
 def ppca_em(
     sp: SpikeFeatures,
@@ -67,7 +69,6 @@ def ppca_em(
         )
         state = ppca_m_step(
             **e,
-            W_old=state["W"],
             M=M,
             mean_prior_pseudocount=mean_prior_pseudocount,
             noise=noise,
@@ -88,6 +89,7 @@ def ppca_e_step(
     return_yc=False,
     active_W=None,
     weights=None,
+    center_u=True,
     cache_prefix=None,
 ):
     """E step in lightweight PPCA
@@ -144,49 +146,50 @@ def ppca_e_step(
         e_uu = y.new_zeros((M, M))
 
     # helpful tensors to keep around
+
+    neighb_data = get_neighborhood_data(
+        sp,
+        neighborhoods,
+        noise,
+        active_W,
+        active_mean,
+        active_channels,
+        rank,
+        weights,
+        cache_prefix,
+        yes_pca,
+        M,
+        D,
+    )
     if yes_pca:
-        eye_M = torch.eye(M, device=y.device, dtype=y.dtype)
-
-    unique_nids = torch.unique(sp.neighborhood_ids)
-    for nid in unique_nids:
-        # neighborhood channels logic
-        (in_neighborhood,) = (sp.neighborhood_ids == nid).nonzero(as_tuple=True)
-        n_neighb = in_neighborhood.numel()
-        neighb_chans = neighborhoods.neighborhoods[nid]
-        active_subset = torch.isin(active_channels, neighb_chans)
-        neighb_subset = torch.isin(neighb_chans, active_channels)
-        assert torch.equal(neighb_chans[neighb_subset], active_channels[active_subset])
-        neighb_chans = neighb_chans[neighb_chans < neighborhoods.n_channels]
-        have_missing = not active_subset.all()
-        if have_missing:
-            (missing_subset,) = torch.logical_not(active_subset).nonzero(as_tuple=True)
-            missing_chans = active_channels[missing_subset]
-        (active_subset,) = active_subset.nonzero(as_tuple=True)
-        neighb_nc = active_subset.numel()
-        D_neighb = rank * neighb_nc
-        if not have_missing:
-            assert D_neighb == D
-
-        # neighborhood's known quantities
-        w = weights[in_neighborhood]
-        w_ = w[:, None]
-        w__ = w_[:, None]
-        C_oo = noise.marginal_covariance(
-            channels=neighb_chans, cache_prefix=cache_prefix, cache_key=nid
+        full_ubar, full_uubar, full_T, active_W = embed(
+            sp, neighb_data, M, weights, active_W, normalize=False
         )
+    for ndata in neighb_data:
+        in_neighborhood = ndata["in_neighborhood"]
+        neighb_subset = ndata["neighb_subset"]
+        active_subset = ndata["active_subset"]
+        missing_subset = ndata["missing_subset"]
+        missing_chans = ndata["missing_chans"]
+        n_neighb = ndata["n_neighb"]
+        neighb_nc = ndata["neighb_nc"]
+        D_neighb = ndata["D_neighb"]
+        C_oo = ndata["C_oo"]
+        C_mo = ndata["C_mo"]
+        nu = ndata["nu"]
+        tnu = ndata["tnu"]
+        w = ndata["w0"]
+        w_ = ndata["w1"]
+        w__ = ndata["w2"]
+        have_missing = ndata["have_missing"]
+        W_o = active_W[:, active_subset].reshape(D_neighb, M)
+        if have_missing and yes_pca:
+            W_m = active_W[:, missing_subset].reshape(D - D_neighb, M)
+
         if yes_pca:
-            W_o = active_W[:, active_subset].reshape(D_neighb, M)
-        nu = active_mean[:, active_subset].reshape(D_neighb)
-        if have_missing:
-            C_mo = noise.offdiag_covariance(
-                channels_left=missing_chans, channels_right=neighb_chans
-            )
-            # ZeroLinearOperators sometims behave weirdly?
-            C_mo = C_mo.to_dense()
-            tnu = active_mean[:, missing_subset].reshape(D - D_neighb)
-            if yes_pca:
-                W_m = active_W[:, missing_subset].reshape(D - D_neighb, M)
-        assert C_oo.shape == (D_neighb, D_neighb)
+            ubar = full_ubar[in_neighborhood]
+            uubar = full_uubar[in_neighborhood]
+            # T = full_T[in_neighborhood]
 
         # actual data in neighborhood
         x = sp.features[in_neighborhood][:, :, neighb_subset]
@@ -195,15 +198,6 @@ def ppca_e_step(
 
         # we need these ones everywhere
         Cooinvxc = C_oo.solve(xc.T).T
-
-        # moments of embeddings
-        # T is MxM and we cache C_oo's Cholesky, so this is the quick one.
-        if yes_pca:
-            T_inv = eye_M + linear_operator.solve(lhs=W_o.T, input=C_oo, rhs=W_o)
-            T = torch.linalg.inv(T_inv)
-            ubar = Cooinvxc @ (W_o @ T)
-            uubar = ubar[:, :, None] * ubar[:, None, :]
-            uubar.add_(T)
 
         # pca-centered data
         Cooinvxcc = Cooinvxc
@@ -229,6 +223,7 @@ def ppca_e_step(
         if yes_pca:
             mean_ubar = torch.linalg.vecdot(w_, ubar, dim=0)
             mean_uubar = torch.linalg.vecdot(w__, uubar, dim=0)
+
         if have_missing:
             wx = torch.linalg.vecdot(w_, x, dim=0)
             wxbar_m = torch.linalg.vecdot(w_, xbar_m, dim=0)
@@ -237,6 +232,7 @@ def ppca_e_step(
             ybar[:, missing_subset] = wxbar_m.view(rank, nc - neighb_nc)
         else:
             ybar = torch.linalg.vecdot(w_, x, dim=0).view(rank, nc)
+
         if have_missing and yes_pca:
             wxcu = torch.linalg.vecdot(w__, e_xcu, dim=0)
             wmxcu = torch.linalg.vecdot(w__, e_mxcu, dim=0)
@@ -271,7 +267,139 @@ def ppca_e_step(
         e_uu=e_uu,
         ess=ess,
         yc=yc,
+        W_old=active_W,
     )
+
+
+def embed(sp, neighb_data, M, weights, W, normalize=True):
+    N = len(sp)
+    _ubar = sp.features.new_zeros((N, M))
+    if not normalize:
+        _uubar = sp.features.new_zeros(N, M, M)
+    _T = sp.features.new_zeros((N, M, M))
+    eye_M = torch.eye(M, device=sp.features.device, dtype=sp.features.dtype)
+
+    for ndata in neighb_data:
+        in_neighborhood = ndata["in_neighborhood"]
+        neighb_subset = ndata["neighb_subset"]
+        active_subset = ndata["active_subset"]
+        n_neighb = ndata["n_neighb"]
+        D_neighb = ndata["D_neighb"]
+        C_oo = ndata["C_oo"]
+        nu = ndata["nu"]
+        W_o = W[:, active_subset].reshape(D_neighb, M)
+
+        x = sp.features[in_neighborhood][:, :, neighb_subset]
+        x = x.reshape(n_neighb, D_neighb)
+        xc = x - nu
+
+        # we need these ones everywhere
+        Cooinvxc = C_oo.solve(xc.T).T
+
+        # moments of embeddings
+        # T is MxM and we cache C_oo's Cholesky, so this is the quick one.
+        T_inv = eye_M + linear_operator.solve(lhs=W_o.T, input=C_oo, rhs=W_o)
+        T = torch.linalg.inv(T_inv)
+        ubar = Cooinvxc @ (W_o @ T)
+        uubar = ubar[:, :, None] * ubar[:, None, :]
+        uubar.add_(T)
+
+        _ubar[in_neighborhood] = ubar
+        if not normalize:
+            _uubar[in_neighborhood] = uubar
+        _T[in_neighborhood] = T
+
+    if normalize:
+        um = vecdot(weights[:, None], _ubar, dim=0)
+        _ubar -= um
+        # _uubar = -= um[:, None] * um
+        us = vecdot(weights[:, None], _T.diagonal(dim1=-2, dim2=-1).sqrt(), dim=0)
+        _T.div_(us[:, None] * us[None, :])
+        _uubar = torch.baddbmm(_T, _ubar[:, :, None], _ubar[:, None])
+        W = W / us
+
+    return _ubar, _uubar, _T, W
+
+
+def get_neighborhood_data(
+    sp,
+    neighborhoods,
+    noise,
+    active_W,
+    active_mean,
+    active_channels,
+    rank,
+    weights,
+    cache_prefix,
+    yes_pca,
+    M,
+    D,
+):
+    neighborhood_data = []
+
+    unique_nids = torch.unique(sp.neighborhood_ids)
+    for nid in unique_nids:
+        # neighborhood channels logic
+        (in_neighborhood,) = (sp.neighborhood_ids == nid).nonzero(as_tuple=True)
+        n_neighb = in_neighborhood.numel()
+        neighb_chans = neighborhoods.neighborhoods[nid]
+        active_subset = torch.isin(active_channels, neighb_chans)
+        neighb_subset = torch.isin(neighb_chans, active_channels)
+        assert torch.equal(neighb_chans[neighb_subset], active_channels[active_subset])
+        neighb_chans = neighb_chans[neighb_chans < neighborhoods.n_channels]
+        have_missing = not active_subset.all()
+        missing_subset = missing_chans = None
+        if have_missing:
+            (missing_subset,) = torch.logical_not(active_subset).nonzero(as_tuple=True)
+            missing_chans = active_channels[missing_subset]
+        (active_subset,) = active_subset.nonzero(as_tuple=True)
+        neighb_nc = active_subset.numel()
+        D_neighb = rank * neighb_nc
+        if not have_missing:
+            assert D_neighb == D
+
+        # neighborhood's known quantities
+        w = weights[in_neighborhood]
+        w_ = w[:, None]
+        w__ = w_[:, None]
+        C_oo = noise.marginal_covariance(
+            channels=neighb_chans, cache_prefix=cache_prefix, cache_key=nid
+        )
+        nu = active_mean[:, active_subset].reshape(D_neighb)
+        tnu = C_mo = W_m = None
+        if have_missing:
+            C_mo = noise.offdiag_covariance(
+                channels_left=missing_chans, channels_right=neighb_chans
+            )
+            # ZeroLinearOperators sometims behave weirdly?
+            C_mo = C_mo.to_dense()
+            tnu = active_mean[:, missing_subset].reshape(D - D_neighb)
+        assert C_oo.shape == (D_neighb, D_neighb)
+
+        neighborhood_data.append(
+            dict(
+                nid=nid,
+                have_missing=have_missing,
+                in_neighborhood=in_neighborhood,
+                n_neighb=n_neighb,
+                neighb_chans=neighb_chans,
+                active_subset=active_subset,
+                neighb_subset=neighb_subset,
+                missing_subset=missing_subset,
+                missing_chans=missing_chans,
+                neighb_nc=neighb_nc,
+                D_neighb=D_neighb,
+                w0=w,
+                w1=w_,
+                w2=w__,
+                nu=nu,
+                tnu=tnu,
+                C_oo=C_oo,
+                C_mo=C_mo,
+            )
+        )
+
+    return neighborhood_data
 
 
 def ppca_m_step(
@@ -287,10 +415,17 @@ def ppca_m_step(
     active_cov=None,
     active_channels=None,
     mean_prior_pseudocount=10.0,
-    rescale=True,
+    rescale=False,
 ):
     """Lightweight PPCA M step"""
     rank, nc = e_y.shape
+
+    # update mean
+    mu = e_y
+    if e_u is not None:
+        mu -= W_old @ e_u
+    if mean_prior_pseudocount:
+        mu *= ess / (ess + mean_prior_pseudocount)
 
     # initialize W via SVD of whitened residual
     if yc is not None and M:
@@ -312,12 +447,12 @@ def ppca_m_step(
         W = L @ W
         W = W.view(rank, nc, M)
 
-        # update mean
-        mu = e_y
-        if e_u is not None:
-            mu -= W @ e_u
-        if mean_prior_pseudocount:
-            mu *= ess / (ess + mean_prior_pseudocount)
+        # # update mean
+        # mu = e_y
+        # if e_u is not None:
+        #     mu -= W @ e_u
+        # if mean_prior_pseudocount:
+        #     mu *= ess / (ess + mean_prior_pseudocount)
 
         return dict(mu=mu, W=W)
 
@@ -337,12 +472,12 @@ def ppca_m_step(
 
     W = W.view(rank, nc, M)
 
-    # update mean
-    mu = e_y
-    if e_u is not None:
-        mu -= W @ e_u
-    if mean_prior_pseudocount:
-        mu *= ess / (ess + mean_prior_pseudocount)
+    # # update mean
+    # mu = e_y
+    # if e_u is not None:
+    #     mu -= W @ e_u
+    # if mean_prior_pseudocount:
+    #     mu *= ess / (ess + mean_prior_pseudocount)
 
     return dict(mu=mu, W=W)
 
