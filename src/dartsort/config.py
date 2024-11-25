@@ -33,7 +33,7 @@ default_pretrained_path = files("dartsort.pretrained")
 default_pretrained_path = default_pretrained_path.joinpath("single_chan_denoiser.pt")
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, kw_only=True, slots=True)
 class WaveformConfig:
     """Defaults yield 42 sample trough offset and 121 total at 30kHz."""
 
@@ -53,7 +53,7 @@ class WaveformConfig:
         return length
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, kw_only=True, slots=True)
 class FeaturizationConfig:
     """Featurization and denoising configuration
 
@@ -75,7 +75,7 @@ class FeaturizationConfig:
     """
 
     # -- denoising configuration
-    do_nn_denoise: bool = True
+    do_nn_denoise: bool = False
     do_tpca_denoise: bool = True
     do_enforce_decrease: bool = True
     # turn off features below
@@ -108,17 +108,20 @@ class FeaturizationConfig:
     nn_denoiser_extra_kwargs: Optional[dict] = None
 
     # optionally restrict how many channels TPCA are fit on
-    tpca_fit_radius: Optional[float] = None
+    tpca_fit_radius: Optional[float] = 75.0
     tpca_rank: int = 8
-    tpca_centered: bool = True
-    input_tpca_projs_temporal_slice: Optional[slice] = None
+    tpca_centered: bool = False
+    # todo: use a WaveformConfig...
+    input_tpca_projs_temporal_slice: Optional[slice] = field(
+        default_factory=lambda: slice(20, 81)
+    )
 
     # used when naming datasets saved to h5 files
     input_waveforms_name: str = "collisioncleaned"
     output_waveforms_name: str = "denoised"
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, kw_only=True, slots=True)
 class SubtractionConfig:
     detection_thresholds: List[int] = (10, 8, 6, 5, 4)
     chunk_length_samples: int = 30_000
@@ -137,12 +140,13 @@ class SubtractionConfig:
     # users can also save waveforms/features during subtraction
     subtraction_denoising_config: FeaturizationConfig = FeaturizationConfig(
         denoise_only=True,
+        do_nn_denoise=True,
         input_waveforms_name="raw",
         output_waveforms_name="subtracted",
     )
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, kw_only=True, slots=True)
 class MotionEstimationConfig:
     """Configure motion estimation.
 
@@ -168,7 +172,7 @@ class MotionEstimationConfig:
     rigid: bool = False
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, kw_only=True, slots=True)
 class TemplateConfig:
     spikes_per_unit: int = 500
 
@@ -178,7 +182,7 @@ class TemplateConfig:
     registered_template_localization_radius_um: float = 100.0
 
     # superresolved templates
-    superres_templates: bool = True
+    superres_templates: bool = False
     superres_bin_size_um: float = 10.0
     superres_bin_min_spikes: int = 5
     superres_strategy: str = "drift_pitch_loc_bin"
@@ -191,7 +195,6 @@ class TemplateConfig:
     denoising_fit_radius: float = 75.0
 
     # realignment
-    # TODO: maybe this should be done in clustering?
     realign_peaks: bool = True
     realign_max_sample_shift: int = 20
 
@@ -200,7 +203,7 @@ class TemplateConfig:
     chunk_size_s: int = 300
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, kw_only=True, slots=True)
 class MatchingConfig:
     chunk_length_samples: int = 30_000
     extract_radius: float = 100.0
@@ -224,7 +227,7 @@ class MatchingConfig:
     coarse_objective: bool = True
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, kw_only=True, slots=True)
 class SplitMergeConfig:
     # -- split
     split_strategy: str = "FeatureSplit"
@@ -241,7 +244,7 @@ class SplitMergeConfig:
     min_spatial_cosine: float = 0.0
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, kw_only=True, slots=True)
 class ClusteringConfig:
     # -- initial clustering
     cluster_strategy: str = "dpc"
@@ -301,7 +304,7 @@ class ClusteringConfig:
     split_merge_ensemble_config: SplitMergeConfig = SplitMergeConfig()
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, kw_only=True, slots=True)
 class ComputationConfig:
     n_jobs_cpu: int = 0
     n_jobs_gpu: int = 0
@@ -311,7 +314,9 @@ class ComputationConfig:
     def actual_device(self):
         if self.device is None:
             have_cuda = torch.cuda.is_available()
-            return torch.device("cuda" if have_cuda else "cpu")
+            if have_cuda:
+                return torch.device("cuda")
+            return torch.device("cpu")
         return torch.device(self.device)
 
     @property
@@ -321,7 +326,7 @@ class ComputationConfig:
         return self.n_jobs_cpu
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, kw_only=True, slots=True)
 class DARTsortConfig:
     waveform_config: WaveformConfig = WaveformConfig()
     featurization_config: FeaturizationConfig = FeaturizationConfig()
@@ -352,7 +357,10 @@ raw_template_config = TemplateConfig(
     realign_peaks=False, low_rank_denoising=False, superres_templates=False
 )
 unshifted_raw_template_config = TemplateConfig(
-    registered_templates=False, realign_peaks=False, low_rank_denoising=False, superres_templates=False
+    registered_templates=False,
+    realign_peaks=False,
+    low_rank_denoising=False,
+    superres_templates=False,
 )
 unaligned_coarse_denoised_template_config = TemplateConfig(
     realign_peaks=False, low_rank_denoising=True, superres_templates=False
