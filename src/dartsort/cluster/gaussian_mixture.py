@@ -1,5 +1,6 @@
 import threading
 from dataclasses import replace
+from typing import Literal
 
 import numba
 import numpy as np
@@ -46,11 +47,14 @@ class SpikeMixtureModel(torch.nn.Module):
         cov_kind="zero",
         use_proportions: bool = True,
         proportions_sample_size: int = 2**16,
-        channels_strategy="snr",
-        channels_strategy_snr_min=5.0,
+        channels_strategy: Literal["all", "snr", "count"] = "count",
+        channels_count_min: float = 25.0,
+        channels_snr_amp: float = 1.0,
+        with_noise_unit: bool = True,
         prior_pseudocount: float = 10.0,
         ppca_rank: int = 0,
         ppca_inner_em_iter: int = 1,
+        ppca_atol: float = 0.05,
         random_seed: int = 0,
         n_threads: int = 4,
         min_count: int = 50,
@@ -128,22 +132,28 @@ class SpikeMixtureModel(torch.nn.Module):
             mean_kind=mean_kind,
             cov_kind=cov_kind,
             channels_strategy=channels_strategy,
-            channels_strategy_snr_min=channels_strategy_snr_min,
+            channels_count_min=channels_count_min,
+            channels_snr_amp=channels_snr_amp,
             prior_pseudocount=prior_pseudocount,
             ppca_rank=ppca_rank,
             ppca_inner_em_iter=ppca_inner_em_iter,
+            ppca_atol=ppca_atol,
         )
 
         # clustering with noise unit to hopefully grab false positives
-        noise_args = dict(mean_kind="zero", cov_kind="zero", channels_strategy="all")
-        noise_args = self.unit_args | noise_args
-        self.noise_unit = GaussianUnit(
-            rank=self.data.rank, n_channels=data.n_channels, **noise_args
-        )
-        self.noise_unit.fit(None, None)
-        # these only need computing once, but not in init so that
-        # there is time for the user to .cuda() me before then
-        self._noise_log_likelihoods = None
+        self.with_noise_unit = with_noise_unit
+        if self.with_noise_unit:
+            noise_args = dict(
+                mean_kind="zero", cov_kind="zero", channels_strategy="all"
+            )
+            noise_args = self.unit_args | noise_args
+            self.noise_unit = GaussianUnit(
+                rank=self.data.rank, n_channels=data.n_channels, **noise_args
+            )
+            self.noise_unit.fit(None, None)
+            # these only need computing once, but not in init so that
+            # there is time for the user to .cuda() me before then
+            self._noise_log_likelihoods = None
         self._stack = None
 
         # multithreading stuff. thread-local rgs, control access to labels, etc.
@@ -154,6 +164,16 @@ class SpikeMixtureModel(torch.nn.Module):
         self.next_round_annotations = {}
 
     # -- unit management
+
+    @property
+    def cov_kind(self):
+        return self.unit_args["cov_kind"]
+
+    @cov_kind.setter
+    def cov_kind(self, value):
+        self.unit_args["cov_kind"] = value
+        for unit in self._units.values():
+            unit.cov_kind = value
 
     def __getitem__(self, ix):
         ix = self.normalize_key(ix)
@@ -194,7 +214,10 @@ class SpikeMixtureModel(torch.nn.Module):
 
     def n_units(self):
         nu_u = max(self.unit_ids()) + 1
-        nu_l = self.label_ids().max() + 1
+        lids = self.label_ids()
+        nu_l = 0
+        if lids.numel():
+            nu_l = lids.max() + 1
         return max(nu_u, nu_l)
 
     def label_ids(self):
@@ -310,7 +333,7 @@ class SpikeMixtureModel(torch.nn.Module):
         if self.use_proportions and likelihoods is not None:
             self.update_proportions(likelihoods)
         if self.log_proportions is not None:
-            assert len(self.log_proportions) > unit_ids.max() + 1
+            assert len(self.log_proportions) > unit_ids.max() + self.with_noise_unit
 
         pool = Parallel(self.n_threads, backend="threading", return_as="generator")
         results = pool(
@@ -356,6 +379,7 @@ class SpikeMixtureModel(torch.nn.Module):
 
         # how many units does each core neighborhood overlap with?
         n_cores = self.data.core_neighborhoods.n_neighborhoods
+        with_noise_unit = self.with_noise_unit and with_noise_unit
         if with_noise_unit:
             # everyone overlaps the noise unit
             core_overlaps = torch.ones(n_cores, dtype=int, device=self.data.device)
@@ -433,11 +457,6 @@ class SpikeMixtureModel(torch.nn.Module):
                 inds = inds.numpy(force=True)
                 liks = liks.numpy(force=True)
             csc_insert(j, write_offsets, inds, csc_indices, csc_data, liks)
-            # inds = inds.numpy(force=True)
-            # data_ixs = write_offsets[inds]
-            # csc_indices[data_ixs] = j
-            # csc_data[data_ixs] = liks.numpy(force=True)
-            # write_offsets[inds] += 1
 
         if with_noise_unit:
             inds, liks = self.noise_log_likelihoods()
@@ -458,11 +477,13 @@ class SpikeMixtureModel(torch.nn.Module):
 
         # have to jump through some hoops because torch sparse tensors
         # don't implement .mean() yet??
-        sample = self.rg.choice(
-            log_liks.shape[1], size=self.proportions_sample_size, replace=False
-        )
-        sample.sort()
-        log_liks = log_liks[:, sample].tocoo()
+        if log_liks.shape[1] > self.proportions_sample_size:
+            sample = self.rg.choice(
+                log_liks.shape[1], size=self.proportions_sample_size, replace=False
+            )
+            sample.sort()
+            log_liks = log_liks[:, sample]
+        log_liks = log_liks.tocoo()
         log_liks = coo_to_torch(log_liks, torch.float, copy_data=True)
 
         # log proportions are added to the likelihoods
@@ -485,7 +506,7 @@ class SpikeMixtureModel(torch.nn.Module):
         n_units = self.n_units()
         assignments, spike_logliks, log_liks_csc = loglik_reassign(
             log_liks,
-            has_noise_unit=True,
+            has_noise_unit=self.with_noise_unit,
             log_proportions=self.log_proportions,
         )
         assignments = torch.from_numpy(assignments).to(self.labels)
@@ -535,7 +556,9 @@ class SpikeMixtureModel(torch.nn.Module):
         if clean_props:
             clean_props = {k: v[keep] for k, v in clean_props.items()}
 
-        keep_noise = torch.concatenate((keep, torch.ones_like(keep[:1])))
+        keep_noise = keep.clone()
+        if self.with_noise_unit:
+            keep_noise = torch.concatenate((keep, torch.ones_like(keep[:1])))
         keep = keep.numpy(force=True)
 
         kept_ids = label_ids[big_enough]
@@ -575,7 +598,7 @@ class SpikeMixtureModel(torch.nn.Module):
             log_liks = coo_sparse_mask_rows(log_liks, keep_ll)
         elif isinstance(log_liks, csc_array):
             keep_ll = np.flatnonzero(keep_ll)
-            assert keep_ll.max() == log_liks.shape[0] - 1
+            assert keep_ll.max() <= log_liks.shape[0] - self.with_noise_unit
             log_liks = log_liks[keep_ll]
         else:
             assert False
@@ -1109,6 +1132,8 @@ class SpikeMixtureModel(torch.nn.Module):
         valid = ids >= 0
         ids = ids[valid]
         if ids.size <= 1:
+            # flatten
+            labels[labels >= 0] = np.searchsorted(ids, labels[labels >= 0])
             return labels
 
         bimodalities = bimodalities_dense(
@@ -1524,10 +1549,12 @@ class GaussianUnit(torch.nn.Module):
         mean_kind="full",
         cov_kind="zero",
         prior_type="niw",
-        channels_strategy="snr",
-        channels_strategy_snr_min=50.0,
+        channels_strategy="count",
+        channels_count_min=50.0,
+        channels_snr_amp=1.0,
         prior_pseudocount=10,
         ppca_inner_em_iter=1,
+        ppca_atol=0.05,
         ppca_rank=0,
         scale_mean: float = 0.1,
         **annotations,
@@ -1540,13 +1567,15 @@ class GaussianUnit(torch.nn.Module):
         self.mean_kind = mean_kind
         self.prior_type = prior_type
         self.channels_strategy = channels_strategy
-        self.channels_strategy_snr_min = channels_strategy_snr_min
+        self.channels_count_min = channels_count_min
+        self.channels_snr_amp = channels_snr_amp
         self.cov_kind = cov_kind
         self.scale_mean = scale_mean
         self.scale_alpha = float(prior_pseudocount)
         self.scale_beta = float(prior_pseudocount) / scale_mean
         self.ppca_rank = ppca_rank
         self.ppca_inner_em_iter = ppca_inner_em_iter
+        self.ppca_atol = ppca_atol
         self.annotations = annotations
 
     @classmethod
@@ -1559,11 +1588,13 @@ class GaussianUnit(torch.nn.Module):
         mean_kind="full",
         cov_kind="zero",
         prior_type="niw",
-        channels_strategy="snr",
+        channels_strategy="count",
         ppca_rank=0,
-        channels_strategy_snr_min=50.0,
+        channels_count_min=50.0,
+        channels_snr_amp=1.0,
         prior_pseudocount=10,
         ppca_inner_em_iter=1,
+        ppca_atol=0.05,
         scale_mean: float = 0.1,
         **annotations,
     ):
@@ -1576,10 +1607,12 @@ class GaussianUnit(torch.nn.Module):
             prior_type=prior_type,
             prior_pseudocount=prior_pseudocount,
             channels_strategy=channels_strategy,
-            channels_strategy_snr_min=channels_strategy_snr_min,
+            channels_count_min=channels_count_min,
+            channels_snr_amp=channels_snr_amp,
             scale_mean=scale_mean,
             ppca_rank=ppca_rank,
             ppca_inner_em_iter=ppca_inner_em_iter,
+            ppca_atol=ppca_atol,
             **annotations,
         )
         self.fit(features, weights, neighborhoods=neighborhoods)
@@ -1639,6 +1672,7 @@ class GaussianUnit(torch.nn.Module):
                 cache_prefix="extract",
                 M=self.ppca_rank if self.cov_kind == "ppca" else 0,
                 n_iter=self.ppca_inner_em_iter,
+                em_converged_atol=self.ppca_atol,
                 mean_prior_pseudocount=self.prior_pseudocount,
                 show_progress=show_progress,
                 W_initialization="zeros",
@@ -1679,7 +1713,17 @@ class GaussianUnit(torch.nn.Module):
             full_snr = self.mean.new_zeros(self.mean.shape[1])
             full_snr[active_chans] = snr
             self.register_buffer("snr", full_snr)
-            strong = snr >= self.channels_strategy_snr_min
+            snr_min = np.sqrt(self.channels_count_min) * self.channels_snr_amp
+            strong = snr >= snr_min
+            self.register_buffer("channels", active_chans[strong])
+            return
+
+        if self.channels_strategy == "count":
+            snr = nobs.sqrt()
+            full_snr = self.mean.new_zeros(self.mean.shape[1])
+            full_snr[active_chans] = snr
+            self.register_buffer("snr", full_snr)
+            strong = nobs >= self.channels_count_min
             self.register_buffer("channels", active_chans[strong])
             return
 
@@ -1690,7 +1734,9 @@ class GaussianUnit(torch.nn.Module):
     ):
         if signal_only:
             sz = channels.numel() * self.noise.rank
-            ncov = operators.ZeroLinearOperator((sz, sz))
+            ncov = operators.ZeroLinearOperator(
+                sz, sz, dtype=self.noise.global_std.dtype
+            )
         else:
             ncov = self.noise.marginal_covariance(
                 channels, cache_key=cache_key, device=device
@@ -1703,9 +1749,10 @@ class GaussianUnit(torch.nn.Module):
         if self.cov_kind == "ppca" and self.ppca_rank:
             root = self.W[:, channels].reshape(-1, self.ppca_rank)
             root = operators.LowRankRootLinearOperator(root)
-            # i believe this calls .add_low_rank()
-            return ncov + root
-            # return more_operators.LowRankRootSumLinearOperator(root, ncov)
+            # this calls .add_low_rank, and it's genuinely bugged.
+            # the log liks that come out look wrong. can't say why.
+            # return ncov + root
+            return more_operators.LowRankRootSumLinearOperator(root, ncov)
         assert False
 
     def dense_cov(self):
@@ -1787,7 +1834,8 @@ def average_units(units, proportions):
         cov_kind=ua.cov_kind,
         prior_type=ua.prior_type,
         channels_strategy=ua.channels_strategy,
-        channels_strategy_snr_min=ua.channels_strategy_snr_min,
+        channels_count_min=ua.channels_count_min,
+        channels_snr_amp=ua.channels_snr_amp,
         prior_pseudocount=ua.prior_pseudocount,
         scale_mean=ua.scale_mean,
         ppca_rank=len(units) * ua.ppca_rank,
@@ -1797,12 +1845,13 @@ def average_units(units, proportions):
 
     if ua.channels_strategy == "all":
         channels = ua.channels
-    elif ua.channels_strategy == "snr":
+    elif ua.channels_strategy in ("snr", "count"):
         avg_snr = sum(pi * u.snr for pi, u in zip(proportions, units))
         new.register_buffer("snr", avg_snr)
-        (channels,) = torch.nonzero(
-            avg_snr >= new.channels_strategy_snr_min, as_tuple=True
-        )
+        min_snr = np.sqrt(new.channels_count_min)
+        if ua.channels_strategy == "snr":
+            min_snr *= new.channels_snr_amp
+        (channels,) = torch.nonzero(avg_snr >= min_snr, as_tuple=True)
     else:
         assert False
     new.register_buffer("channels", channels)
