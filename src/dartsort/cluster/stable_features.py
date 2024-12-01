@@ -4,6 +4,7 @@ from typing import Optional
 import h5py
 import numpy as np
 import torch
+
 from dartsort.transform.temporal_pca import TemporalPCAFeaturizer
 from dartsort.util import drift_util, interpolation_util, waveform_util
 from dartsort.util.data_util import DARTsortSorting, get_tpca
@@ -40,7 +41,7 @@ class StableSpikeDataset(torch.nn.Module):
         self.n_channels = prgeom.shape[0] - 1
         self.n_channels_extract = extract_channels.shape[1]
         self.n_channels_core = core_channels.shape[1]
-        self.n_spikes = kept_indices.size
+        self.n_spikes = len(kept_indices)
         self.interpolation_method = interpolation_method
         self.interpolation_sigma = interpolation_sigma
         self.core_radius = core_radius
