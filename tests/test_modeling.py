@@ -1,14 +1,5 @@
-from pathlib import Path
-
-import matplotlib.pyplot as plt
 import numpy as np
-import seaborn as sns
-import spikeinterface.full as si
-import torch
-import torch.nn.functional as F
 
-import dartsort
-import dartsort.vis as dartvis
 from dartsort.util.testing_util import mixture_testing_util
 
 mu_atol = 0.05
