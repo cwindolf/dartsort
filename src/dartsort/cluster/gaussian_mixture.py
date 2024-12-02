@@ -354,6 +354,7 @@ class SpikeMixtureModel(torch.nn.Module):
         unit_churn, reas_count, log_liks, spike_logliks = self.e_step(
             show_progress=step_progress
         )
+        log_liks, _ = self.cleanup(log_liks)
         return log_liks
 
     def e_step(self, show_progress=False, prev_log_liks=None, recompute_mask=None):
