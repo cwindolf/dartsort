@@ -32,6 +32,9 @@ def ppca_em(
     new_zeros = sp.features.new_zeros
     if active_W is not None:
         assert active_W.shape[2] == M
+    n = len(sp)
+    if n < M:
+        raise ValueError(f"Too few samples {n=} for rank {M=}.")
 
     rank = noise.rank
     do_pca = M > 0
@@ -51,6 +54,7 @@ def ppca_em(
         D,
     )
     any_missing = any(nd["have_missing"] for nd in neighb_data)
+    active_cov = noise.marginal_covariance(channels=active_channels)
 
     if active_mean is None:
         active_mean, nobs = initialize_mean(
@@ -93,6 +97,7 @@ def ppca_em(
             active_mean=state["mu"],
             active_W=state["W"],
             weights=weights,
+            active_cov=active_cov,
             cache_prefix=cache_prefix,
             normalize=normalize and not (W_needs_initialization and not i),
             return_yc=W_needs_initialization and not i,
@@ -105,6 +110,7 @@ def ppca_em(
             **e,
             M=M,
             ess=ess,
+            active_cov=active_cov,
             mean_prior_pseudocount=mean_prior_pseudocount,
             noise=noise,
             active_channels=active_channels,
@@ -131,6 +137,8 @@ def ppca_em(
             weights,
             state["W"],
             state["mu"],
+            active_channels=active_channels,
+            active_cov=active_cov,
             prior_var=prior_var,
             normalize=normalize,
             cache_prefix=cache_prefix,
@@ -148,6 +156,7 @@ def ppca_e_step(
     active_channels,
     active_mean,
     ess,
+    active_cov=None,
     return_yc=False,
     active_W=None,
     weights=None,
@@ -212,6 +221,8 @@ def ppca_e_step(
             weights,
             active_W,
             active_mean,
+            active_cov=active_cov,
+            active_channels=active_channels,
             prior_var=prior_var,
             normalize=normalize,
             cache_prefix=cache_prefix,
@@ -347,6 +358,8 @@ def embed(
     weights,
     W,
     active_mean,
+    active_channels,
+    active_cov=None,
     prior_var=1.0,
     normalize=True,
     cache_prefix=None,
@@ -403,6 +416,8 @@ def embed(
         # _T[in_neighborhood] = T
 
     if normalize:
+        if active_cov is None:
+            active_cov = noise.marginal_covariance(channels=active_channels)
         Wflat = W.view(-1, M)
 
         # centering
@@ -421,7 +436,7 @@ def embed(
         U.mul_(sgn(U[0]))
         UDxrt = U * Dx.sqrt()
         rhs = Wflat @ UDxrt.T
-        gevp_W = linear_operator.solve(lhs=rhs.T, input=C_oo, rhs=rhs)
+        gevp_W = linear_operator.solve(lhs=rhs.T, input=active_cov, rhs=rhs)
         Dw, V = torch.linalg.eigh(gevp_W)
         Dw = Dw.flip(dims=(0,))
         V = V.flip(dims=(1,))
@@ -548,7 +563,7 @@ def ppca_m_step(
         s[s <= 0] = 1e-5
         W = v[:, :M].mul_(s.sqrt_() * sgn(v[0, :M]))
         # svd sign ambiguity
-        assert W.shape == (rank * nc, M)
+        assert W.shape == (rank * nc, M), f"{W.shape=} {(rank * nc, M)=} {yc.shape=}"
 
         W = L @ W
         W = W.view(rank, nc, M)
