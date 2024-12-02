@@ -1,3 +1,4 @@
+import logging
 import threading
 from dataclasses import replace
 from typing import Literal
@@ -19,6 +20,8 @@ from .modes import smoothed_dipscore_at
 from .ppcalib import ppca_em
 from .stable_features import (SpikeFeatures, StableSpikeDataset,
                               occupied_chans, zero_pad_to_chans)
+
+logger = logging.getLogger(__name__)
 
 # -- main class
 
@@ -338,8 +341,10 @@ class SpikeMixtureModel(torch.nn.Module):
                 its.set_description(msg)
 
             if reas_prop < self.em_converged_prop:
+                logger.info(f"Labels converged with {reas_prop=}")
                 break
             if max_adif is not None and max_adif < self.em_converged_atol:
+                logger.info(f"Parameters converged with {max_adif=}")
                 break
 
         if not final_e_step:
@@ -919,7 +924,6 @@ class SpikeMixtureModel(torch.nn.Module):
         likelihoods=None,
         weights=None,
         features=None,
-        verbose=False,
         warm_start=False,
         **unit_args,
     ):
@@ -927,12 +931,11 @@ class SpikeMixtureModel(torch.nn.Module):
             features = self.random_spike_data(
                 unit_id, indices, max_size=self.n_spikes_fit, with_neighborhood_ids=True
             )
-        if verbose:
-            print(f"{unit_id=} {features=}")
+        logger.debug(f"Fit {unit_id=} {features=}")
         if weights is None and likelihoods is not None:
             weights = self.get_fit_weights(unit_id, features.indices, likelihoods)
-        if verbose and weights is not None:
-            print(f"{weights.sum()=} {weights.min()=} {weights.max()=}")
+        if weights is not None:
+            logger.debug(f"{weights.sum()=} {weights.min()=} {weights.max()=}")
         unit_args = self.unit_args | unit_args
         if warm_start and unit_id in self:
             unit = self[unit_id]
