@@ -9,17 +9,18 @@ import torch
 import torch.nn.functional as F
 from joblib import Parallel, delayed
 from linear_operator import operators
+from scipy.cluster.hierarchy import linkage
 from scipy.sparse import coo_array, csc_array
 from scipy.special import logsumexp
+from sklearn.model_selection import StratifiedKFold
 from tqdm.auto import tqdm, trange
 
 from ..util import more_operators, noise_util, spiketorch
-from .cluster_util import agglomerate
+from .cluster_util import agglomerate, combine_distances, leafsets
 from .kmeans import kmeans
 from .modes import smoothed_dipscore_at
 from .ppcalib import ppca_em
-from .stable_features import (SpikeFeatures, StableSpikeDataset,
-                              occupied_chans, zero_pad_to_chans)
+from .stable_features import SpikeFeatures, StableSpikeDataset, occupied_chans
 
 logger = logging.getLogger(__name__)
 
@@ -65,11 +66,13 @@ class SpikeMixtureModel(torch.nn.Module):
         kmeans_kmeanspp_initial: str = "mean",
         split_em_iter: int = 1,
         split_whiten: bool = True,
-        distance_metric: str = "noise_metric",
+        distance_metric: Literal["noise_metric", "kl"] = "kl",
         distance_noise_normalized: bool = True,
-        merge_linkage: str = "complete",
+        merge_linkage: str = "single",
         merge_distance_threshold: float = 1.0,
         merge_bimodality_threshold: float = 0.1,
+        merge_criterion_threshold: float = 1.0,
+        merge_criterion: Literal["ll", "aic", "bic", "cv"] = "cv",
         split_bimodality_threshold: float = 0.1,
         merge_bimodality_cut: float = 0.0,
         merge_bimodality_overlap: float = 0.80,
@@ -101,6 +104,8 @@ class SpikeMixtureModel(torch.nn.Module):
         self.distance_metric = distance_metric
         self.distance_noise_normalized = distance_noise_normalized
         self.merge_distance_threshold = merge_distance_threshold
+        self.merge_criterion = merge_criterion
+        self.merge_criterion_threshold = merge_criterion_threshold
         self.merge_bimodality_threshold = merge_bimodality_threshold
         self.split_bimodality_threshold = split_bimodality_threshold
         self.merge_bimodality_cut = merge_bimodality_cut
@@ -127,6 +132,7 @@ class SpikeMixtureModel(torch.nn.Module):
         self.log_proportions = None
 
         # store arguments to the unit constructor in a dict
+        self.ppca_rank = ppca_rank
         self.unit_args = dict(
             noise=noise,
             mean_kind=mean_kind,
@@ -667,27 +673,8 @@ class SpikeMixtureModel(torch.nn.Module):
         return log_liks, clean_props
 
     def merge(self, log_liks=None, show_progress=True):
-        distances = self.distances(show_progress=show_progress)
-        bimodalities = None
-        if self.merge_bimodality_threshold is not None:
-            compute_mask = distances <= self.merge_distance_threshold
-            bimodalities = self.bimodalities(
-                log_liks,
-                compute_mask=compute_mask,
-                show_progress=show_progress,
-                weighted=self.merge_bimodality_weighted,
-            )
-        distances = combine_distances(
-            distances,
-            self.merge_distance_threshold,
-            bimodalities,
-            self.merge_bimodality_threshold,
-            sym_function=self.merge_sym_function,
-        )
-        new_labels, new_ids = agglomerate(
-            self.labels,
-            distances,
-            linkage_method=self.merge_linkage,
+        new_labels, new_ids = self.merge_units(
+            log_liks=log_liks, show_progress=show_progress
         )
         self.labels.copy_(torch.from_numpy(new_labels))
 
@@ -926,17 +913,22 @@ class SpikeMixtureModel(torch.nn.Module):
         weights=None,
         features=None,
         warm_start=False,
+        verbose=False,
         **unit_args,
     ):
         if features is None:
             features = self.random_spike_data(
                 unit_id, indices, max_size=self.n_spikes_fit, with_neighborhood_ids=True
             )
-        logger.debug(f"Fit {unit_id=} {features=}")
+        if verbose:
+            logger.info(f"Fit {unit_id=} {features=}")
         if weights is None and likelihoods is not None:
             weights = self.get_fit_weights(unit_id, features.indices, likelihoods)
-        if weights is not None:
-            logger.debug(f"{weights.sum()=} {weights.min()=} {weights.max()=}")
+            (valid,) = torch.nonzero(weights, as_tuple=True)
+            weights = weights[valid]
+            features = features[valid]
+        if verbose and weights is not None:
+            logger.info(f"{weights.sum()=} {weights.min()=} {weights.max()=}")
         unit_args = self.unit_args | unit_args
         if warm_start and unit_id in self:
             unit = self[unit_id]
@@ -1043,11 +1035,13 @@ class SpikeMixtureModel(torch.nn.Module):
 
         return spike_indices, log_likelihoods
 
-    def noise_log_likelihoods(self, show_progress=False):
+    def noise_log_likelihoods(self, indices=None, show_progress=False):
         if self._noise_log_likelihoods is None:
             self._noise_six, self._noise_log_likelihoods = self.unit_log_likelihoods(
                 unit=self.noise_unit, show_progress=show_progress, desc_prefix="Noise "
             )
+        if indices is not None:
+            return self._noise_log_likelihoods[indices]
         return self._noise_six, self._noise_log_likelihoods
 
     def kmeans_split_unit(self, unit_id, debug=False):
@@ -1214,37 +1208,17 @@ class SpikeMixtureModel(torch.nn.Module):
             labels[labels >= 0] = np.searchsorted(ids, labels[labels >= 0])
             return labels
 
-        bimodalities = bimodalities_dense(
-            lls.numpy(force=True),
-            labels,
-            ids=np.arange(len(units)),
-            cut=self.merge_bimodality_cut,
-            min_overlap=self.merge_bimodality_overlap,
-            score_kind=self.merge_bimodality_score_kind,
-        )
-
-        # determine their distances
-        distances = self.distances(units=units, show_progress=False)
-
-        # return merged labels
-        distances = combine_distances(
-            distances,
-            self.merge_distance_threshold,
-            bimodalities,
-            self.split_bimodality_threshold,
-            sym_function=self.merge_sym_function,
-        )
-        new_labels, new_ids = agglomerate(
-            labels,
-            distances,
-            linkage_method=self.merge_linkage,
+        new_labels, new_ids = self.merge_units(
+            units=units,
+            labels=labels,
+            log_liks=lls,
+            spike_data=spike_data,
+            debug_info=debug_info,
         )
         if debug:
             debug_info["reas_labels"] = labels
             debug_info["units"] = units
             debug_info["lls"] = lls
-            debug_info["bimodalities"] = bimodalities
-            debug_info["distances"] = distances
 
         return new_labels
 
@@ -1331,12 +1305,233 @@ class SpikeMixtureModel(torch.nn.Module):
             return debug_info
         return score
 
+    def tree_merge(
+        self,
+        distances,
+        unit_ids,
+        labels=None,
+        spikes_extract=None,
+        max_distance=1.0,
+        threshold=None,
+        criterion="ll",
+        likelihoods=None,
+        weights=None,
+        fit_type="refit_all",
+        spikes_per_subunit=2048,
+        sym_function=np.maximum,
+    ):
+        distances = sym_function(distances, distances.T)
+        distances = distances[np.triu_indices(len(distances), k=1)]
+        Z = linkage(distances)
+        n = len(Z) + 1
+
+        if weights is not None and spikes_extract is not None:
+            if weights.shape != (len(unit_ids), len(spikes_extract)):
+                raise ValueError(
+                    f"{weights.shape=} does not agree with {len(unit_ids)=} "
+                    f"and {len(spikes_extract)=}."
+                )
+
+        if threshold is None:
+            threshold = self.merge_criterion_threshold
+
+        # figure out the leaf nodes in each cluster in the hierarchy
+        # up to max_distance
+        clusters = leafsets(Z)
+
+        # walk backwards through the tree
+        already_merged_leaves = set()
+        improvements = np.full(n - 1, -np.inf)
+        group_ids = np.arange(len(unit_ids))
+        for i, (pa, pb, dist, nab) in reversed(list(enumerate(Z))):
+            if dist > max_distance:
+                continue
+
+            # did we already merge a cluster containing this one?
+            if pa in already_merged_leaves:
+                assert pb in already_merged_leaves  # and vice versa
+                continue
+            assert pb not in already_merged_leaves
+
+            # check if should merge
+            leaves = clusters[n + i]
+            cluster_ids = unit_ids[leaves]
+            if criterion in ("ll", "aic", "bic"):
+                res = self.unit_group_criterion(
+                    cluster_ids,
+                    likelihoods=likelihoods,
+                    spikes_per_subunit=spikes_per_subunit,
+                    fit_type=fit_type,
+                )
+                if criterion == "ll":
+                    # ll, bigger = better
+                    imp = res["unit_loglik"] - res["full_loglik"]
+                else:
+                    # {a,b}ic smaller =  better
+                    imp = res[f"{criterion}_full"] - res[f"{criterion}_merged"]
+            else:
+                assert criterion == "cv"
+                # heldout ll, bigger = better
+                res = self.kfold(
+                    cluster_ids,
+                    labels=labels,
+                    spikes_extract=spikes_extract,
+                    weights=weights[leaves] if weights is not None else None,
+                    spikes_per_subunit=spikes_per_subunit,
+                    likelihoods=likelihoods,
+                )
+                imp = res["cv_merged_loglik"] - res["cv_full_loglik"]
+            improvements[i] = imp
+
+            # how to actually merge?
+            if imp > -threshold:
+                group_ids[leaves] = n + i
+                already_merged_leaves.update(cluster_ids)
+
+        return Z, group_ids, improvements
+
+    def kfold(
+        self,
+        unit_ids,
+        spikes_extract=None,
+        labels=None,
+        n_splits=3,
+        n_folds=3,
+        spikes_per_subunit=2048,
+        likelihoods=None,
+        weights=None,
+    ):
+        unit_ids = torch.asarray(unit_ids)
+
+        # pick spikes for comparison
+        if labels is None:
+            in_subunits = [
+                self.random_indices(u, max_size=spikes_per_subunit) for u in unit_ids
+            ]
+            min_count = min(map(len, in_subunits))
+            in_any = torch.cat(in_subunits)
+            in_any, in_order = torch.sort(in_any)
+            spikes_extract = self.data.spike_data(in_any, with_neighborhood_ids=True)
+            spikes_core = self.data.spike_data(
+                in_any, neighborhood="core", with_neighborhood_ids=True
+            )
+            labels = self.labels[in_any]
+            if min_count * (n_splits - 1) / n_splits < self.min_count:
+                return dict(cv_full_loglik=np.nan, cv_merged_loglik=np.nan)
+        else:
+            assert spikes_extract is not None
+            spikes_core = self.data.spike_data(
+                spikes_extract.indices, neighborhood="core", with_neighborhood_ids=True
+            )
+
+        rs = np.random.RandomState(self.rg.bit_generator)
+        skf = StratifiedKFold(n_splits, shuffle=True, random_state=rs)
+
+        full_loglik = 0.0
+        merged_loglik = 0.0
+        for k, (train_ix, test_ix) in zip(range(n_folds), skf.split(labels, labels)):
+            # allow user to pass in pre-built weights
+            fold_weights = None
+            if weights is not None:
+                fold_weights = weights[:, train_ix]
+
+            # fit units
+            subunits, merged_unit = self.refit_group(
+                unit_ids,
+                spikes_extract[train_ix],
+                likelihoods=likelihoods,
+                weights=fold_weights,
+            )
+
+            # get heldout spike liks
+            test_core = spikes_core[test_ix]
+            subunit_logliks = test_core.features.new_full(
+                (len(unit_ids), len(test_core)), -torch.inf
+            )
+            for i, u in enumerate(subunits):
+                _, sll = self.unit_log_likelihoods(unit=u, spikes=test_core)
+                if sll is not None:
+                    subunit_logliks[i] = sll
+            _, merged_logliks = self.unit_log_likelihoods(
+                unit=merged_unit, spikes=test_core
+            )
+            # if any spikes are ignored by all, ignore...
+            keep = subunit_logliks.isfinite().all(dim=0)
+            subunit_logliks = subunit_logliks[:, keep]
+            merged_logliks = merged_logliks[keep]
+
+            # aggregate
+            subunit_log_props = F.softmax(subunit_logliks, dim=0).mean(1).log_()
+            fold_full_loglik = torch.logsumexp(
+                subunit_logliks.T + subunit_log_props, dim=1
+            )
+            if self.distance_noise_normalized:
+                nlls = self.noise_log_likelihoods(test_core.indices[keep])
+                fold_full_loglik.div_(nlls.abs())
+            fold_full_loglik = fold_full_loglik.mean()
+            fold_merged_loglik = np.nan
+            if merged_logliks is not None:
+                if self.distance_noise_normalized:
+                    merged_logliks.div_(nlls.abs())
+                fold_merged_loglik = merged_logliks.mean()
+
+            denom = n_folds
+            # if self.distance_noise_normalized:
+            #     nlls = self.noise_log_likelihoods(test_core.indices)
+            #     denom = denom * nlls.mean().abs()
+
+            # add to the total
+            full_loglik += fold_full_loglik / denom
+            merged_loglik += fold_merged_loglik / denom
+
+        return dict(cv_full_loglik=full_loglik, cv_merged_loglik=merged_loglik)
+
+    def refit_group(
+        self,
+        unit_ids,
+        spikes_extract,
+        likelihoods=None,
+        weights=None,
+        fit_type="refit_all",
+        verbose=False,
+    ):
+        units = []
+        for i, k in enumerate(unit_ids):
+            my_weights = None
+            if weights is not None:
+                my_weights = weights[i]
+            u = self.fit_unit(
+                unit_id=k,
+                indices=spikes_extract.indices,
+                likelihoods=likelihoods,
+                weights=my_weights,
+                features=spikes_extract,
+                verbose=False,
+            )
+            units.append(u)
+        if verbose:
+            logger.info(f"{[u.channels for u in units]=}")
+
+        if fit_type == "refit_all":
+            unit = self.fit_unit(
+                indices=spikes_extract.indices, features=spikes_extract
+            )
+        elif fit_type == "refit_avg":
+            subunit_logliks = likelihoods[:, spikes_extract.indices][unit_ids]
+            subunit_logliks = torch.asarray(subunit_logliks.to_dense())
+            subunit_log_props = F.softmax(subunit_logliks, dim=0).mean(1).log_()
+            unit = average_units(units, props=subunit_log_props.exp())
+        else:
+            assert False
+
+        return units, unit
+
     def unit_group_criterion(
         self,
         unit_ids,
         likelihoods=None,
         spikes_per_subunit=2048,
-        fit_type="avg_preexisting",
+        fit_type="refit_all",
         debug=False,
     ):
         """See if a single unit explains a group as far as AIC/BIC/MDL go."""
@@ -1349,48 +1544,48 @@ class SpikeMixtureModel(torch.nn.Module):
         ]
         in_any = torch.cat(in_subunits)
         in_any, in_order = torch.sort(in_any)
-        spikes_extract = self.data.spike_data(in_any)
-        spikes_core = self.data.spike_data(in_any, neighborhood="core")
+        spikes_extract = self.data.spike_data(
+            in_any, with_neighborhood_ids=fit_type.startswith("refit")
+        )
+        spikes_core = self.data.spike_data(
+            in_any,
+            neighborhood="core",
+            with_neighborhood_ids=fit_type.startswith("refit"),
+        )
         n = in_any.numel()
 
         if fit_type.startswith("refit"):
-            units = []
-            subunit_logliks = spikes_core.features.new_full(
-                (len(unit_ids), len(in_any)), -torch.inf
+            units, unit = self.refit_group(
+                unit_ids,
+                spikes_extract,
+                likelihoods=likelihoods,
+                fit_type=fit_type,
             )
-            full_loglik = 0.0
-            for i, k in enumerate(unit_ids):
-                u = self.fit_unit(
-                    unit_id=k,
-                    indices=in_any,
-                    likelihoods=likelihoods,
-                    features=spikes_extract,
-                )
-                units.append(u)
+
+            subunit_logliks = spikes_core.features.new_full(
+                (len(unit_ids), len(spikes_extract)), -torch.inf
+            )
+            for i, u in enumerate(units):
                 _, sll = self.unit_log_likelihoods(unit=u, spikes=spikes_core)
                 if sll is not None:
                     subunit_logliks[i] = sll
-            subunit_log_props = F.softmax(subunit_logliks, dim=0).mean(1).log_()
+            (keep,) = subunit_logliks.isfinite().all(dim=0).nonzero(as_tuple=True)
+            subunit_log_props = (
+                F.softmax(subunit_logliks[:, keep], dim=0).mean(1).log_()
+            )
             # loglik per spik
             full_loglik = torch.logsumexp(
-                subunit_logliks.T + subunit_log_props, dim=1
+                subunit_logliks[:, keep].T + subunit_log_props, dim=1
             ).mean()
-
-            if fit_type == "refit_all":
-                unit = self.fit_unit(indices=in_any, features=spikes_extract)
-            elif fit_type == "refit_avg":
-                unit = average_units(units, props=subunit_log_props.exp())
-            else:
-                assert False
         elif fit_type == "avg_preexisting":
             subunit_log_props = self.log_proportions[unit_ids]
             units = [self[uid] for uid in unit_ids]
             subunit_props = F.softmax(subunit_log_props, dim=0)
             unit = average_units(units, subunit_props)
-            if debug:
-                subunit_logliks = likelihoods[:, in_any][unit_ids]
+            subunit_logliks = likelihoods[:, in_any][unit_ids]
+            keep = np.flatnonzero(np.diff(subunit_logliks.indptr))
             full_loglik = marginal_loglik(
-                indices=in_any.numpy(force=True),
+                indices=in_any.numpy(force=True)[keep],
                 log_proportions=self.log_proportions,
                 log_likelihoods=likelihoods,
                 unit_ids=unit_ids,
@@ -1399,7 +1594,7 @@ class SpikeMixtureModel(torch.nn.Module):
             assert False
 
         # extract likelihoods... no proportions!
-        _, unit_logliks = self.unit_log_likelihoods(unit=unit, spikes=spikes_core)
+        _, unit_logliks = self.unit_log_likelihoods(unit=unit, spikes=spikes_core[keep])
         if unit_logliks is not None:
             unit_loglik = unit_logliks.mean()
         else:
@@ -1408,7 +1603,7 @@ class SpikeMixtureModel(torch.nn.Module):
         # parameter counting... since we use marginal likelihoods, I'm restricting
         # the parameter counts to just the marginal set considered for each spike.
         # then, aic and bic formulas are changed slightly below to match.
-        nids = self.data.core_neighborhoods.neighborhood_ids[in_any]
+        nids = self.data.core_neighborhoods.neighborhood_ids[in_any[keep]]
         unique_nids, inverse = torch.unique(nids, return_inverse=True)
         unique_chans = self.data.core_neighborhoods.neighborhoods[unique_nids]
         unique_k_merged = unit.n_params(unique_chans)
@@ -1418,6 +1613,7 @@ class SpikeMixtureModel(torch.nn.Module):
         k_full = unique_k_full[inverse]
 
         # for aic: k is avg
+        n = len(keep)
         k_merged_avg = k_merged.sum() / n
         k_full_avg = k_full.sum() / n
         if self.use_proportions:
@@ -1435,11 +1631,11 @@ class SpikeMixtureModel(torch.nn.Module):
             aic_merged=aic_merged,
             bic_full=bic_full,
             bic_merged=bic_merged,
+            full_loglik=full_loglik,
+            unit_loglik=unit_loglik,
         )
         if debug:
             debug_info = dict(
-                full_loglik=full_loglik,
-                unit_loglik=unit_loglik,
                 unit_logliks=unit_logliks,
                 subunit_logliks=subunit_logliks,
                 indices=in_any,
@@ -1480,6 +1676,124 @@ class SpikeMixtureModel(torch.nn.Module):
         return weights
 
     # -- gizmos
+
+    def merge_units(
+        self,
+        unit_ids=None,
+        units=None,
+        spike_data=None,
+        labels=None,
+        log_liks=None,
+        show_progress=False,
+        merge_kind=None,
+        debug_info=None,
+    ):
+        """Unit merging logic
+
+        Returns
+        -------
+        new_labels : int array
+            Same shape as `labels`, if supplied, or self.labels otherwise.
+        new_ids : int array
+            Has length `len(units)`: maps each unit to its new ID. If `units`
+            was not supplied, then that would mean all of my units.
+        """
+        if unit_ids is None:
+            if units is not None:
+                unit_ids = torch.arange(len(units))
+            else:
+                unit_ids = self.unit_ids()
+
+        # merge full label set by default
+        if labels is None:
+            labels = self.labels
+
+        # merge behavior is either a hierarchical merge or this tree-based
+        # idea, depending on the value of a parameter
+        if merge_kind is None:
+            merge_kind = "hierarchical"
+            if self.merge_criterion_threshold is not None:
+                merge_kind = "tree"
+
+        # distances are needed by both methods
+        distances = self.distances(units=units, show_progress=show_progress)
+        if debug_info is not None:
+            debug_info["distances"] = distances
+        assert distances.shape[0] == len(unit_ids)
+
+        if merge_kind == "hierarchical":
+            bimodalities = None
+            do_bimodality = self.merge_bimodality_threshold is not None
+            if do_bimodality:
+                if isinstance(bimodalities, csc_array):
+                    compute_mask = distances <= self.merge_distance_threshold
+                    bimodalities = self.bimodalities(
+                        log_liks,
+                        compute_mask=compute_mask,
+                        show_progress=show_progress,
+                        weighted=self.merge_bimodality_weighted,
+                    )
+                else:
+                    assert torch.is_tensor(log_liks)
+                    assert log_liks.layout == torch.strided
+                    bimodalities = bimodalities_dense(
+                        log_liks.numpy(force=True),
+                        labels,
+                        ids=unit_ids.numpy(force=True),
+                        cut=self.merge_bimodality_cut,
+                        min_overlap=self.merge_bimodality_overlap,
+                        score_kind=self.merge_bimodality_score_kind,
+                    )
+
+            distances = (distances, bimodalities)
+            thresholds = (
+                self.merge_distance_threshold,
+                self.merge_bimodality_threshold,
+            )
+            distances = combine_distances(
+                distances,
+                thresholds,
+                sym_function=self.merge_sym_function,
+            )
+            new_labels, new_ids = agglomerate(
+                labels,
+                distances,
+                linkage_method=self.merge_linkage,
+            )
+            if debug_info is not None:
+                debug_info["bimodalities"] = bimodalities
+        elif merge_kind == "tree":
+            weights = None
+            if torch.is_tensor(log_liks):
+                assert spike_data is not None
+                assert log_liks.layout == torch.strided
+                assert log_liks.shape == (len(unit_ids), len(spike_data))
+                weights = F.softmax(log_liks, dim=0)
+
+            Z, group_ids, improvements = self.tree_merge(
+                distances,
+                unit_ids=unit_ids,
+                labels=labels,
+                spikes_extract=spike_data,
+                max_distance=self.merge_distance_threshold,
+                criterion=self.merge_criterion,
+                likelihoods=log_liks,
+                weights=weights,
+                sym_function=self.merge_sym_function,
+            )
+            if debug_info is not None:
+                debug_info["Z"] = Z
+                debug_info["improvements"] = improvements
+
+            group_ids = torch.asarray(group_ids)
+            _, new_ids = group_ids.unique(return_inverse=True)
+            new_labels = torch.asarray(labels).clone()
+            (kept,) = (new_labels >= 0).nonzero(as_tuple=True)
+            new_labels[kept] = new_ids[new_labels[kept]]
+        else:
+            assert False
+
+        return new_labels, new_ids
 
     @staticmethod
     def normalize_key(ix):
@@ -1545,7 +1859,7 @@ class SpikeMixtureModel(torch.nn.Module):
             nu = len(ids)
 
         if use_cache and self._stack is not None:
-            if mean_only or self._stack[1] is not None:
+            if mean_only or self._stack[-1] is not None:
                 return self._stack
 
         rank, nc = self.data.rank, self.data.n_channels
@@ -1553,14 +1867,16 @@ class SpikeMixtureModel(torch.nn.Module):
         means = torch.full((nu, rank, nc), torch.nan, device=self.data.device)
         covs = logdets = None
         if not mean_only:
-            covs = means.new_full((nu, rank * nc, rank * nc), torch.nan)
+            if self.cov_kind == "ppca" and self.ppca_rank:
+                covs = means.new_full((nu, rank, nc, self.ppca_rank), torch.nan)
             logdets = means.new_full((nu,), torch.nan)
 
         for j, unit in enumerate(units):
             means[j] = unit.mean
             if covs is not None:
-                covs[j] = unit.dense_cov()
-                logdets[j] = unit.logdet
+                covs[j] = unit.W
+            if logdets is not None:
+                logdets[j] = unit.logdet()
 
         if use_cache:
             self._stack = ids, means, covs, logdets
@@ -1786,22 +2102,19 @@ class GaussianUnit(torch.nn.Module):
         if not active_chans.numel():
             return
 
+        amp = torch.linalg.vector_norm(self.mean[:, active_chans], dim=0)
+        snr = amp * nobs.sqrt()
+        snr = nobs.sqrt()
+        full_snr = self.mean.new_zeros(self.mean.shape[1])
+        full_snr[active_chans] = snr
+        self.register_buffer("snr", full_snr)
+
         if self.channels_strategy == "snr":
-            amp = torch.linalg.vector_norm(self.mean[:, active_chans], dim=0)
-            snr = amp * nobs.sqrt()
-            full_snr = self.mean.new_zeros(self.mean.shape[1])
-            full_snr[active_chans] = snr
-            self.register_buffer("snr", full_snr)
             snr_min = np.sqrt(self.channels_count_min) * self.channels_snr_amp
             strong = snr >= snr_min
             self.register_buffer("channels", active_chans[strong])
             return
-
         if self.channels_strategy == "count":
-            snr = nobs.sqrt()
-            full_snr = self.mean.new_zeros(self.mean.shape[1])
-            full_snr[active_chans] = snr
-            self.register_buffer("snr", full_snr)
             strong = nobs >= self.channels_count_min
             self.register_buffer("channels", active_chans[strong])
             return
@@ -1809,8 +2122,10 @@ class GaussianUnit(torch.nn.Module):
         assert False
 
     def marginal_covariance(
-        self, channels, cache_key=None, device=None, signal_only=False
+        self, channels=None, cache_key=None, device=None, signal_only=False
     ):
+        if channels is None:
+            channels = torch.arange(self.n_channels)
         if signal_only:
             sz = channels.numel() * self.noise.rank
             ncov = operators.ZeroLinearOperator(
@@ -1834,8 +2149,8 @@ class GaussianUnit(torch.nn.Module):
             return more_operators.LowRankRootSumLinearOperator(root, ncov)
         assert False
 
-    def dense_cov(self):
-        return self.cov().to_dense()
+    def logdet(self, channels=None):
+        return self.marginal_covariance(channels).logdet()
 
     def log_likelihood(self, features, channels, neighborhood_id=None) -> torch.Tensor:
         """Log likelihood for spike features living on the same channels."""
@@ -1884,14 +2199,21 @@ class GaussianUnit(torch.nn.Module):
         dmu = other_means
         if self.mean_kind != "zero":
             dmu = dmu - self.mean
+        dmu = dmu.view(n, -1)
 
         # compute the inverse quad and self log det terms
-        my_cov = self.cov()
+        my_cov = self.marginal_covariance()
         inv_quad, self_logdet = my_cov.inv_quad_logdet(
-            dmu.view(n, -1).T, logdet=True, reduce_inv_quad=True
+            dmu.T, logdet=True, reduce_inv_quad=False
         )
-        tr = torch.trace(my_cov.solve(other_covs))
+
+        # other covs
         k = my_cov.shape[0]
+        tr = k
+        if self.cov_kind == "ppca" and self.ppca_rank:
+            solve = my_cov.solve(other_covs)
+            solve = solve @ other_covs.mT + self.noise.marginal_covariance()
+            tr = solve.diagonal(dim1=-2, dim2=-1).sum(dim=1)
         ld = self_logdet - other_logdets
         return 0.5 * (tr + inv_quad - k + ld)
 
@@ -1922,17 +2244,7 @@ def average_units(units, proportions):
     if ua.mean_kind == "zero":
         return ua
 
-    if ua.channels_strategy == "all":
-        channels = ua.channels
-    elif ua.channels_strategy in ("snr", "count"):
-        avg_snr = sum(pi * u.snr for pi, u in zip(proportions, units))
-        new.register_buffer("snr", avg_snr)
-        min_snr = np.sqrt(new.channels_count_min)
-        if ua.channels_strategy == "snr":
-            min_snr *= new.channels_snr_amp
-        (channels,) = torch.nonzero(avg_snr >= min_snr, as_tuple=True)
-    else:
-        assert False
+    channels = torch.cat([u.channels for u in units]).unique()
     new.register_buffer("channels", channels)
 
     new_mean = sum(pi * u.mean for pi, u in zip(proportions, units))
@@ -1940,9 +2252,9 @@ def average_units(units, proportions):
 
     if new.cov_kind == "zero":
         pass
-    elif new.cov_kind == "ppca":
+    elif new.cov_kind == "ppca" and new.ppca_rank > 0:
         W = torch.cat(
-            [pi * u.W for pi, u in zip(proportions, units)],
+            [pi.sqrt() * u.W for pi, u in zip(proportions, units)],
             dim=2,
         )
         new.register_buffer("W", W)
@@ -2252,26 +2564,6 @@ def coo_sparse_mask_rows(coo, keep_mask):
         shape=(kept_label_indices.size, coo.shape[1]),
     )
     return coo
-
-
-def combine_distances(
-    dists_a,
-    thresh_a,
-    dists_b=None,
-    thresh_b=None,
-    agg_function=np.maximum,
-    sym_function=np.minimum,
-):
-    """Combine two distance matrices and symmetrize them
-
-    They have different reference thresholds, but the result of this function
-    has threshold 1.
-    """
-    if thresh_b is None:
-        dists = dists_a / thresh_a
-    else:
-        dists = agg_function(dists_a / thresh_a, dists_b / thresh_b)
-    return sym_function(dists, dists.T)
 
 
 def bimodalities_dense(
