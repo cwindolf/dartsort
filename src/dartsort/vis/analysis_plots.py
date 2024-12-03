@@ -1,6 +1,7 @@
 import matplotlib.pyplot as plt
 import numpy as np
 import scipy.cluster.hierarchy
+from matplotlib.collections import LineCollection
 from matplotlib.colors import to_hex
 from scipy.cluster.hierarchy import dendrogram, fcluster, linkage
 
@@ -44,6 +45,64 @@ def scatter_max_channel_waveforms(
         axis.plot(xc + xrel, zc + zscale * mctrace, lw=lw, color=c, **plot_kwargs)
 
 
+def annotated_dendro(
+    ax,
+    Z,
+    annotations,
+    threshold=1.0,
+    above_threshold_color=0.0,
+    leaf_labels=None,
+    annotations_offset_by_n=True,
+):
+    n = len(Z) + 1
+    res = dendrogram(
+        Z,
+        ax=ax,
+        distance_sort=True,
+        color_threshold=1.0,
+        get_leaves=True,
+        no_plot=True,
+    )
+
+    lines = np.zeros((len(Z), 4, 2))
+    colors = np.zeros((len(Z), 3))
+    for j, (ic, dc) in enumerate(zip(res["icoord"], res["dcoord"])):
+        lines[j, :, 0] = ic
+        lines[j, :, 1] = dc
+        if dc[1] < 1.0:
+            colors[j] = glasbey1024[n + j]
+        else:
+            colors[j] = above_threshold_color
+
+    lc = LineCollection(lines, colors=colors)
+    ax.add_collection(lc)
+    ax.autoscale_view()
+    if leaf_labels is None:
+        leaf_labels = np.arange(len(res["leaves"]))
+    leaf_labels = np.asarray(leaf_labels)
+    ax.set_xticks(
+        5 + 10 * np.arange(len(res["leaves"])), labels=leaf_labels[res["leaves"]]
+    )
+    for tick, leaf in zip(ax.get_xticklabels(), res["leaves"]):
+        tick.set_color(glasbey1024[leaf_labels[leaf]])
+
+    for j, (ic, dc) in enumerate(zip(res["icoord"], res["dcoord"])):
+        cluix = n + j if annotations_offset_by_n else j
+        if cluix in annotations:
+            top = np.mean(ic[1:3]), np.mean(dc[1:3])
+            fc = colors[j]
+            lc = invert(fc)
+            ax.text(
+                *top,
+                annotations[cluix],
+                fontsize="medium",
+                color=lc,
+                va="center",
+                ha="center",
+                bbox=dict(fc=fc, ec="none", boxstyle="square,pad=0.1"),
+            )
+
+
 def distance_matrix_dendro(
     panel,
     distances,
@@ -57,13 +116,7 @@ def distance_matrix_dendro(
     label=None,
 ):
     show_dendrogram = dendrogram_linkage is not None
-    dendro_width = (
-        (
-            0.7,
-        )
-        if show_dendrogram
-        else ()
-    )
+    dendro_width = (0.7,) if show_dendrogram else ()
 
     gs = panel.add_gridspec(
         nrows=3,
@@ -98,7 +151,11 @@ def distance_matrix_dendro(
         vmin=0,
         vmax=vmax,
         cmap=image_cmap,
-        extent=[0, len(distances) * 10, 0, len(distances) * 10] if show_dendrogram else None,
+        extent=(
+            [0, len(distances) * 10, 0, len(distances) * 10]
+            if show_dendrogram
+            else None
+        ),
         origin="lower",
     )
     if show_values:
@@ -106,7 +163,15 @@ def distance_matrix_dendro(
         so = 5 if show_dendrogram else 0
         for (j, i), val in np.ndenumerate(distances[order][:, order]):
             lc = invert(image_cmap(val / vmax))
-            ax_im.text(so + sc * i, so + sc * j, f"{val:.2f}", ha="center", va="center", clip_on=True, color=lc)
+            ax_im.text(
+                so + sc * i,
+                so + sc * j,
+                f"{val:.2f}",
+                ha="center",
+                va="center",
+                clip_on=True,
+                color=lc,
+            )
     if show_unit_labels:
         if unit_ids is None:
             unit_ids = np.arange(distances.shape[0])
@@ -130,8 +195,8 @@ def distance_matrix_dendro(
     return ax_im
 
 
-_k = np.array([0., 0., 0., 1.])
-_w = np.array([1., 1., 1., 1.])
+_k = np.array([0.0, 0.0, 0.0, 1.0])
+_w = np.array([1.0, 1.0, 1.0, 1.0])
 
 
 def invert(color):
@@ -151,12 +216,23 @@ def get_linkage(dists, method="complete", threshold=0.25):
     return Z, labels
 
 
-def density_peaks_study(X, density_result, dims=[0, 1], fig=None, axes=None, idx=None, inv=None, **scatter_kw):
+def density_peaks_study(
+    X,
+    density_result,
+    dims=[0, 1],
+    fig=None,
+    axes=None,
+    idx=None,
+    inv=None,
+    **scatter_kw,
+):
     if inv is None:
         idx = np.arange(len(X))
         inv = np.arange(len(X))
     if fig is None and axes is None:
-        fig, axes = plt.subplots(ncols=3, layout="constrained", figsize=(9, 3), sharey=True)
+        fig, axes = plt.subplots(
+            ncols=3, layout="constrained", figsize=(9, 3), sharey=True
+        )
     elif axes is None:
         axes = fig.subplots(ncols=3, sharey=True)
 
@@ -173,27 +249,30 @@ def density_peaks_study(X, density_result, dims=[0, 1], fig=None, axes=None, idx
     if missed.any():
         axes[1].scatter(*X[missed][:, dims].T, c="gray", **scatter_kw)
     if ~missed.any():
-        axes[1].scatter(
-            *X[~missed][:, dims].T, c=density[~missed], **scatter_kw
-        )
+        axes[1].scatter(*X[~missed][:, dims].T, c=density[~missed], **scatter_kw)
     for i in range(len(X)):
         nhdn = nhdns[i]
         if nhdn < 0:
             continue
         x = X[i, dims]
         dx = X[nhdn, dims] - x
-        axes[1].arrow(
-            *x, *dx, length_includes_head=True, width=0, color="k"
-        )
+        axes[1].arrow(*x, *dx, length_includes_head=True, width=0, color="k")
     colors = np.concatenate([[[0.5, 0.5, 0.5]], glasbey1024])
     axes[2].scatter(*X[:, dims].T, c=colors[labels + 1], **scatter_kw)
-    axes[2].scatter(
-        *X[missed][:, dims].T, c="gray", **scatter_kw
-    )
+    axes[2].scatter(*X[missed][:, dims].T, c="gray", **scatter_kw)
     return fig, axes
 
 
-def isi_hist(times_s, axis, max_ms=5, bin_ms=0.1, color="k", label=None, histtype="bar", alpha=1.0):
+def isi_hist(
+    times_s,
+    axis,
+    max_ms=5,
+    bin_ms=0.1,
+    color="k",
+    label=None,
+    histtype="bar",
+    alpha=1.0,
+):
     dt_ms = np.diff(times_s) * 1000
     bin_edges = np.arange(
         0,
@@ -203,7 +282,9 @@ def isi_hist(times_s, axis, max_ms=5, bin_ms=0.1, color="k", label=None, histtyp
     # counts, _ = np.histogram(dt_ms, bin_edges)
     # bin_centers = 0.5 * (bin_edges[1:] + bin_edges[:-1])
     # axis.bar(bin_centers, counts)
-    axis.hist(dt_ms, bin_edges, color=color, label=label, histtype=histtype, alpha=alpha)
+    axis.hist(
+        dt_ms, bin_edges, color=color, label=label, histtype=histtype, alpha=alpha
+    )
     axis.set_xlabel("isi (ms)")
     axis.set_ylabel(f"count (out of {dt_ms.size} total isis)")
 
@@ -237,7 +318,9 @@ def bar(ax, x, y, **kwargs):
     return ax.stairs(y, x0, **kwargs)
 
 
-def plot_correlogram(axis, times_a, times_b=None, max_lag=50, color="k", fill=True, **stairs_kwargs):
+def plot_correlogram(
+    axis, times_a, times_b=None, max_lag=50, color="k", fill=True, **stairs_kwargs
+):
     lags, ccg = correlogram(times_a, times_b=times_b, max_lag=max_lag)
     axis.set_xlabel("lag (samples)")
     return bar(axis, lags, ccg, fill=fill, color=color, **stairs_kwargs)
