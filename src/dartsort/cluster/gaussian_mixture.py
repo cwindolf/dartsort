@@ -2218,8 +2218,9 @@ class GaussianUnit(torch.nn.Module):
         k = my_cov.shape[0]
         tr = k
         if self.cov_kind == "ppca" and self.ppca_rank:
-            solve = my_cov.solve(other_covs)
-            solve = solve @ other_covs.mT + self.noise.marginal_covariance()
+            oW = other_covs.reshape(n, k, self.ppca_rank)
+            solve = my_cov.solve(oW)
+            solve = solve @ oW.mT + self.noise.marginal_covariance()
             tr = solve.diagonal(dim1=-2, dim2=-1).sum(dim=1)
         ld = self_logdet - other_logdets
         return 0.5 * (tr + inv_quad - k + ld)

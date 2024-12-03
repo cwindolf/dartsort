@@ -554,10 +554,19 @@ def ppca_m_step(
             active_cov = noise.marginal_covariance(active_channels)
         L = torch.linalg.cholesky(active_cov)
         yc = yc.view(n, rank * nc)
-        yc = L.solve(yc.T).T
-        assert yc.shape == (n, rank * nc)
+        ycw = L.solve(yc.T).T
+        assert ycw.shape == (n, rank * nc)
 
-        u, s, v = torch.pca_lowrank(yc, q=min(*yc.shape, M + 10), center=False, niter=7)
+        try:
+            u, s, v = torch.pca_lowrank(
+                ycw, q=min(*ycw.shape, M + 10), center=False, niter=7
+            )
+        except Exception as e:
+            err = ValueError(
+                f"{torch.isfinite(yc).all()=} {yc.shape=}"
+                f"{torch.isfinite(ycw).all()=} {ycw.shape=}"
+            )
+            raise err from e
         s = s[:M].square_().div(n - 1.0)
         s = F.relu(s - 1)
         s[s <= 0] = 1e-5
