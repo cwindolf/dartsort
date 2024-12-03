@@ -2092,7 +2092,7 @@ class GaussianUnit(torch.nn.Module):
         if hasattr(self, "W"):
             W_full = self.W
             W_full.fill_(0.0)
-        elif res.get("W", None) is not None:
+        elif je_suis and res.get("W", None) is not None:
             W_full = new_zeros((self.noise.rank, self.noise.n_channels, self.ppca_rank))
 
         if je_suis:
@@ -2100,7 +2100,7 @@ class GaussianUnit(torch.nn.Module):
             if res.get("W", None) is not None:
                 W_full[:, achans] = res["W"]
         self.register_buffer("mean", mean_full)
-        if res.get("W", None) is not None:
+        if je_suis and res.get("W", None) is not None:
             self.register_buffer("W", W_full)
         self.pick_channels(achans, res["nobs"])
 
