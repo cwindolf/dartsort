@@ -1,4 +1,3 @@
-import itertools
 import warnings
 from pathlib import Path
 
@@ -10,9 +9,12 @@ from tqdm.auto import tqdm
 
 from ..cluster import gaussian_mixture, stable_features
 from ..util import spiketorch
-from ..util.multiprocessing_util import (CloudpicklePoolExecutor,
-                                         ThreadPoolExecutor, cloudpickle,
-                                         get_pool)
+from ..util.multiprocessing_util import (
+    CloudpicklePoolExecutor,
+    ThreadPoolExecutor,
+    cloudpickle,
+    get_pool,
+)
 from . import analysis_plots, gmm_helpers, layout
 from .colors import glasbey1024
 from .waveforms import geomplot
@@ -320,7 +322,7 @@ class CovarianceResidual(GMMPlot):
 
 
 class Likelihoods(GMMPlot):
-    kind = "widescatter"
+    kind = "merge"
     width = 4
     height = 2
 
@@ -450,18 +452,34 @@ class KMeansSplit(GMMPlot):
         normstr = ", noisenormed" if gmm.distance_noise_normalized else ""
         ax_dist.set_title(f"{gmm.distance_metric}{normstr}", fontsize="small")
 
-        # bimodality matrix
-        ax_bimod = analysis_plots.distance_matrix_dendro(
-            fig_bimods,
-            split_info["bimodalities"],
-            # unit_ids=split_ids,
-            dendrogram_linkage=None,
-            show_unit_labels=True,
-            vmax=0.5,
-            image_cmap=distance_cmap,
-            show_values=True,
-        )
-        ax_bimod.set_title("bimodality", fontsize="small")
+        if "bimodalities" in split_info:
+            # bimodality matrix
+            ax_bimod = analysis_plots.distance_matrix_dendro(
+                fig_bimods,
+                split_info["bimodalities"],
+                # unit_ids=split_ids,
+                dendrogram_linkage=None,
+                show_unit_labels=True,
+                vmax=0.5,
+                image_cmap=distance_cmap,
+                show_values=True,
+            )
+            ax_bimod.set_title("bimodality", fontsize="small")
+        elif "Z" in split_info:
+            ax_bimod = fig_bimods.subplots()
+            improvements = split_info["improvements"]
+            annotations = {j: f"{imp:.2f}" for j, imp in enumerate(improvements)}
+            analysis_plots.annotated_dendro(
+                ax_bimod,
+                split_info["Z"],
+                annotations,
+                threshold=gmm.merge_distance_threshold,
+                annotations_offset_by_n=False,
+            )
+            ax_bimod.set_title(f"tree {gmm.distance_metric} {gmm.merge_criterion}")
+            sns.despine(ax=ax_bimod, left=True, right=True, top=True)
+        else:
+            assert False
 
         # subunit means on the unit main channel, where possible
         ax_centroids, ax_mycentroids = centroids_row.subplots(ncols=2, sharey=True)
@@ -549,14 +567,18 @@ class NeighborDistances(GMMPlot):
     width = 4
     height = 2
 
-    def __init__(self, n_neighbors=5, dist_vmax=1.0):
+    def __init__(self, n_neighbors=5, dist_vmax=1.0, metric=None):
         self.n_neighbors = n_neighbors
         self.dist_vmax = dist_vmax
+        self.metric = metric
 
     def draw(self, panel, gmm, unit_id):
         neighbors = gmm_helpers.get_neighbors(gmm, unit_id)
+        metric = self.metric
+        if metric is None:
+            metric = gmm.distance_metric
         distances = gmm.distances(
-            units=[gmm[u] for u in neighbors], show_progress=False
+            units=[gmm[u] for u in neighbors], show_progress=False, kind=metric
         )
         ax = analysis_plots.distance_matrix_dendro(
             panel,
@@ -569,7 +591,7 @@ class NeighborDistances(GMMPlot):
             show_values=True,
         )
         normstr = ", noisenormed" if gmm.distance_noise_normalized else ""
-        ax.set_title(f"nearby {gmm.distance_metric}{normstr}", fontsize="small")
+        ax.set_title(f"nearby {metric}{normstr}", fontsize="small")
 
 
 class NeighborBimodalities(GMMPlot):
@@ -684,25 +706,34 @@ class NeighborInfoCriteria(GMMPlot):
     width = 4
     height = 9
 
-    def __init__(self, n_neighbors=5, fit_by_avg=False):
+    def __init__(self, n_neighbors=5, fit_by_avg=False, fit_type="refit_all"):
         self.n_neighbors = n_neighbors
         self.fit_by_avg = fit_by_avg
+        self.fit_type = fit_type
 
     def draw(self, panel, gmm, unit_id):
         neighbors = gmm_helpers.get_neighbors(gmm, unit_id)
         assert neighbors[0] == unit_id
         others = neighbors[1:]
         axes = panel.subplots(nrows=len(others), ncols=1)
-        histkw = dict(density=True, histtype="step", bins=128, log=True)
+        histkw = dict(density=True, histtype="step", log=True)
         astr = "AICfull/merged: {aic_full:0.1f} / {aic_merged:0.1f}"
         bstr = "BICfull/merged: {bic_full:0.1f} / {bic_merged:0.1f}"
         lstr = "LLfull/merged: {full_loglik:0.1f} / {unit_loglik:0.1f}"
-        cstr = f"{astr}\n{bstr}\n{lstr}\n"
+        cvstr = "CVfull/merged: {cv_full_loglik:0.1f} / {cv_merged_loglik:0.1f}"
+        cstr = f"{astr}\n{bstr}\n{lstr}\n{cvstr}\n"
         bbox = dict(facecolor="w", alpha=0.5, edgecolor="none")
         for ax, other_id in zip(axes, others):
             uids = [unit_id, other_id]
-            res = gmm.unit_group_criterion(uids, gmm.log_liks, debug=True)
+            res = gmm.unit_group_criterion(
+                uids, gmm.log_liks, debug=True, fit_type=self.fit_type
+            )
+            cvres = gmm.kfold(uids, likelihoods=gmm.log_liks)
+            res.update(cvres)
+
             sll = res["subunit_logliks"]
+            n = sll.shape[1]
+            histkw["bins"] = 2 * int(np.ceil(np.sqrt(n)))
             if not torch.is_tensor(sll):
                 sll = sll.tocsr()
 
@@ -717,20 +748,70 @@ class NeighborInfoCriteria(GMMPlot):
             ull = res["unit_logliks"]
             if ull is not None:
                 ax.hist(ull[torch.isfinite(ull)], color="k", **histkw)
-            s = f"other={other_id}\n" + cstr.format_map(res)
+            s = f"other={other_id} fit={self.fit_type}\n" + cstr.format_map(res)
             aic_merge = res["aic_merged"] < res["aic_full"]
             bic_merge = res["bic_merged"] < res["bic_full"]
             ll_merge = res["unit_loglik"] > res["full_loglik"]
             aicdif = res["aic_full"] - res["aic_merged"]
             bicdif = res["bic_full"] - res["bic_merged"]
-            lldif = res["full_loglik"] - res["unit_loglik"]
+            lldif = res["unit_loglik"] - res["full_loglik"]
+            cvdif = cvres["cv_full_loglik"] - res["cv_merged_loglik"]
+            cv_merge = cvdif < 0
             s += f"aic: {aicdif:0.1f}, " + ("merge!" if aic_merge else "nope.") + "\n"
             s += f"bic: {bicdif:0.1f}, " + ("merge!" if bic_merge else "nope.") + "\n"
+            s += f"cv: {cvdif:0.1f}, " + ("merge!" if cv_merge else "nope.") + "\n"
             s += f"ll: {lldif:0.1f}, " + ("merge!" if ll_merge else "nope.")
             ax.text(0.05, 0.95, s, transform=ax.transAxes, va="top", bbox=bbox)
             ax.set_xlabel("log lik")
             sns.despine(ax=ax, left=True, right=True, top=True)
             # ax.set_yticks([])
+
+
+class NeighborTreeMerge(GMMPlot):
+    kind = "treemerge"
+    width = 4
+    height = 1.5
+
+    def __init__(self, n_neighbors=5, metric=None, criterion="ll", max_distance=2.0):
+        self.n_neighbors = n_neighbors
+        self.metric = metric
+        self.criterion = criterion
+        self.max_distance = max_distance
+
+    def draw(self, panel, gmm, unit_id):
+        neighbors = gmm_helpers.get_neighbors(gmm, unit_id)
+        assert neighbors[0] == unit_id
+
+        metric = self.metric
+        if metric is None:
+            metric = gmm.distance_metric
+
+        distances = gmm.distances(
+            units=[gmm[u] for u in neighbors], show_progress=False, kind=metric
+        )
+
+        Z, group_ids, improvements = gmm.tree_merge(
+            distances,
+            neighbors,
+            max_distance=self.max_distance,
+            likelihoods=gmm.log_liks,
+            criterion=self.criterion,
+            threshold=0.0,
+        )
+
+        # make vis
+        annotations = {j: f"{imp:.3f}" for j, imp in enumerate(improvements)}
+        ax = panel.subplots()
+        analysis_plots.annotated_dendro(
+            ax,
+            Z,
+            annotations,
+            threshold=self.max_distance,
+            leaf_labels=neighbors,
+            annotations_offset_by_n=False,
+        )
+        ax.set_title(f"{metric} {self.criterion}")
+        sns.despine(ax=ax, left=True, right=True, top=True)
 
 
 # -- main api
@@ -747,8 +828,14 @@ default_gmm_plots = (
     KMeansSplit(),
     NeighborMeans(),
     NeighborDistances(),
+    NeighborDistances(metric="kl"),
+    NeighborTreeMerge(metric="noise_metric", criterion="ll"),
+    NeighborTreeMerge(metric="noise_metric", criterion="aic"),
+    NeighborTreeMerge(metric="noise_metric", criterion="bic"),
+    NeighborTreeMerge(metric="noise_metric", criterion="cv"),
     NeighborBimodalities(),
-    NeighborInfoCriteria(),
+    NeighborInfoCriteria(fit_type="refit_all"),
+    NeighborInfoCriteria(fit_type="avg_preexisting"),
 )
 
 
@@ -757,7 +844,7 @@ def make_unit_gmm_summary(
     unit_id,
     plots=default_gmm_plots,
     max_height=9,
-    figsize=(15, 11),
+    figsize=(18, 11),
     hspace=0.1,
     figure=None,
     **other_global_params,
@@ -786,7 +873,7 @@ def make_all_gmm_summaries(
     save_folder,
     plots=default_gmm_plots,
     max_height=9,
-    figsize=(15, 11),
+    figsize=(18, 11),
     hspace=0.1,
     dpi=200,
     image_ext="png",
