@@ -7,12 +7,12 @@ from .waveforms import geomplot
 
 
 def get_neighbors(gmm, unit_id, n_neighbors=5):
-    ids, means, covs, logdets = gmm.stack_units(use_cache=True)
+    ids, means, covs, logdets = gmm.stack_units(use_cache=True, mean_only=False)
     dists = gmm[unit_id].divergence(means, covs, logdets, kind=gmm.distance_metric)
     dists = dists.view(-1)
     order = ids[torch.argsort(dists)]
     assert order[0] == unit_id
-    return order[:n_neighbors + 1]
+    return order[: n_neighbors + 1]
 
 
 def amp_double_scatter(gmm, indices, panel, unit_id=None, labels=None, viol_ms=None):
@@ -62,9 +62,7 @@ def plot_means(panel, prgeom, tpca, chans, units, labels, title="nearest neighbo
     colors = glasbey1024[labels]
     geomplot(
         np.stack(means, axis=0),
-        channels=chans[None]
-        .broadcast_to(len(means), *chans.shape)
-        .numpy(force=True),
+        channels=chans[None].broadcast_to(len(means), *chans.shape).numpy(force=True),
         geom=prgeom.numpy(force=True),
         colors=colors,
         show_zero=False,
