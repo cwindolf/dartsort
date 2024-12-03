@@ -295,7 +295,7 @@ def ppca_e_step(
             e_xcu = xc[:, :, None] * ubar[:, None, :]
         if yes_pca and have_missing:
             e_mxcu = (Cooinvxc @ C_mo.T)[:, :, None] * ubar[:, None, :]
-            CmoCooinvWo = linear_operator.solve(lhs=C_mo, input=C_oo, rhs=W_o)
+            CmoCooinvWo = C_mo @ C_oo.solve(W_o)
             e_mxcu += (uubar @ (W_m - CmoCooinvWo).T).mT
 
         # take weighted averages
@@ -403,7 +403,7 @@ def embed(
 
         # moments of embeddings
         # T is MxM and we cache C_oo's Cholesky, so this is the quick one.
-        T_inv = eye_M + linear_operator.solve(lhs=W_o.T, input=C_oo, rhs=W_o)
+        T_inv = eye_M + W_o.T @ C_oo.solve(W_o)
         T = torch.linalg.inv(T_inv)
         ubar = Cooinvxc @ (W_o @ T)
         # uubar = ubar[:, :, None] * ubar[:, None, :]
