@@ -1504,14 +1504,17 @@ class SpikeMixtureModel(torch.nn.Module):
         units = []
         for i, k in enumerate(unit_ids):
             my_weights = None
+            keep = slice(None)
             if weights is not None:
                 my_weights = weights[i]
+                (keep,) = my_weights.nonzero(as_tuple=True)
+                my_weights = my_weights[keep]
             u = self.fit_unit(
                 unit_id=k,
-                indices=spikes_extract.indices,
+                indices=spikes_extract.indices[keep],
                 likelihoods=likelihoods,
                 weights=my_weights,
-                features=spikes_extract,
+                features=spikes_extract[keep],
                 verbose=False,
             )
             units.append(u)
