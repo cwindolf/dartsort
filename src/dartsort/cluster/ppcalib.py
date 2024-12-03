@@ -41,7 +41,11 @@ def ppca_em(
     D = rank * active_channels.numel()
     if weights is None:
         weights = sp.features.new_ones(len(sp))
+    else:
+        assert (weights > 0).all()
+        assert torch.isfinite(weights).all()
     ess = weights.sum()
+    assert torch.isfinite(ess)
     neighb_data = get_neighborhood_data(
         sp,
         neighborhoods,
