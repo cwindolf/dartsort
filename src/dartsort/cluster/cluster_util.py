@@ -1,14 +1,15 @@
 import dataclasses
 
-import hdbscan
 import h5py
+import hdbscan
 import numpy as np
 import spikeinterface
-from dartsort.util import drift_util, spikeio, data_util, waveform_util
-from dredge.motion_util import IdentityMotionEstimate
 from scipy.cluster.hierarchy import fcluster, linkage
 from scipy.spatial import KDTree
 from sklearn.neighbors import KNeighborsClassifier
+
+from dartsort.util import data_util, drift_util, spikeio, waveform_util
+from dredge.motion_util import IdentityMotionEstimate
 
 
 def agglomerate(labels, distances, linkage_method="complete", threshold=1.0):
@@ -33,6 +34,37 @@ def agglomerate(labels, distances, linkage_method="complete", threshold=1.0):
     new_labels[kept] = new_ids[labels[kept]]
 
     return new_labels, new_ids
+
+
+def leafsets(Z, max_distance=np.inf):
+    """For a linkage Z, get the leaves in each non-leaf cluster."""
+    n = len(Z) + 1
+    leaves = {}
+    for i, row in enumerate(Z):
+        pa, pb, dist, nab = row
+        if dist > max_distance:
+            break
+        leavesa = leaves.get(pa, [int(pa)])
+        leavesb = leaves.get(pb, [int(pb)])
+        leaves[n + i] = leavesa + leavesb
+    return leaves
+
+
+def combine_distances(
+    distances,
+    thresholds,
+    agg_function=np.maximum,
+    sym_function=np.maximum,
+):
+    """Combine several distance matrices and symmetrize them
+
+    They have different reference thresholds, but the result of this function
+    has threshold 1.
+    """
+    dists = distances[0] / thresholds[0]
+    for dist, thresh in zip(distances[1:], thresholds[1:]):
+        dists = agg_function(dists, dist / thresh)
+    return sym_function(dists, dists.T)
 
 
 def combine_disjoint(inds_a, labels_a, inds_b, labels_b):
@@ -375,6 +407,7 @@ def remove_duplicate_spikes(
     min_result_spikes=10,
 ):
     from spikeinterface.comparison import compare_two_sorters
+
     # normalize agreement by smaller unit and then remove only the spikes with agreement
     sorting = make_sorting_from_labels_frames(clusterer.labels_, spike_frames)
     # remove duplicates
@@ -483,7 +516,13 @@ def meet(labels_a, labels_b):
     return meet_labels
 
 
-def get_main_channel_pcs(sorting, which=slice(None), rank=1, show_progress=False, dataset_name="collisioncleaned_tpca_features"):
+def get_main_channel_pcs(
+    sorting,
+    which=slice(None),
+    rank=1,
+    show_progress=False,
+    dataset_name="collisioncleaned_tpca_features",
+):
     mask = np.zeros(len(sorting), dtype=bool)
     mask[which] = True
     channels = sorting.channels[which]
@@ -492,8 +531,12 @@ def get_main_channel_pcs(sorting, which=slice(None), rank=1, show_progress=False
     with h5py.File(sorting.parent_h5_path, "r", locking=False) as h5:
         feats_dset = h5[dataset_name]
         channel_index = h5["channel_index"][:]
-        for ixs, feats in data_util.yield_masked_chunks(mask, feats_dset, show_progress=show_progress, desc_prefix="Main channel"):
+        for ixs, feats in data_util.yield_masked_chunks(
+            mask, feats_dset, show_progress=show_progress, desc_prefix="Main channel"
+        ):
             feats = feats[:, :rank]
-            feats = waveform_util.grab_main_channels(feats, channels[ixs], channel_index)
+            feats = waveform_util.grab_main_channels(
+                feats, channels[ixs], channel_index
+            )
             features[ixs] = feats
     return features
