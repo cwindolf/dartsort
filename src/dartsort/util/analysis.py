@@ -106,6 +106,7 @@ class DARTsortAnalysis:
         )
 
         have_templates = False
+        template_data = None
         if allow_template_reload:
             template_npz = model_dir / "template_data.npz"
             have_templates = template_npz.exists()
@@ -116,7 +117,7 @@ class DARTsortAnalysis:
                 have_templates = have_templates and same_labels
                 template_data = TemplateData.from_npz(template_npz)
 
-        if not have_templates:
+        if not have_templates and template_config is not None:
             template_data = TemplateData.from_config(
                 recording,
                 sorting,
@@ -211,24 +212,26 @@ class DARTsortAnalysis:
 
         if self.hdf5_path is not None:
             assert self.hdf5_path.exists()
-        self.coarse_template_data = self.template_data.coarsen()
+        self.coarse_template_data = self.template_data
+        if self.template_data is not None:
+            if any(np.unique(self.template_data.unit_ids, return_counts=True)[1] > 1):
+                self.coarse_template_data = self.template_data.coarsen()
 
         self.shifting = (
             self.motion_est is not None
             or self.template_data.registered_geom is not None
         )
         if self.shifting:
-            assert (
-                self.motion_est is not None
-                and self.template_data.registered_geom is not None
-            )
+            assert self.motion_est is not None
+            if self.template_data is not None:
+                assert self.template_data.registered_geom is not None
 
         # cached hdf5 pointer
         self._h5 = None
         compute_distances = self.compute_distances
         if self.compute_distances == "if_hdf5":
             compute_distances = self.hdf5_path is not None
-        if compute_distances:
+        if compute_distances and self.template_data is not None:
             self._calc_merge_dist()
 
     def clear_cache(self):

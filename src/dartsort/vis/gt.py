@@ -462,13 +462,16 @@ class MetricDistribution(ComparisonPlot):
     def draw(self, panel, comparison):
         ax = panel.subplots()
         df = comparison.unit_info_dataframe()
-        df = df[self.xs].melt(value_vars=self.xs, var_name='metric')
+        keep = [x in df for x in self.xs]
+        xs = [x for i, x in enumerate(self.xs) if keep[i]]
+        colors = [c for i, c in enumerate(self.colors) if keep[i]]
+        df = df[xs].melt(value_vars=xs, var_name='metric')
         if self.flavor == "hist":
             sns.histplot(
                 data=df,
                 x='value',
                 hue='metric',
-                palette=list(self.colors),
+                palette=list(colors),
                 element='step',
                 ax=ax,
                 bins=np.linspace(0, 1, 21),
@@ -480,7 +483,7 @@ class MetricDistribution(ComparisonPlot):
                 x='metric',
                 y='value',
                 hue='metric',
-                palette=list(self.colors),
+                palette=list(colors),
                 ax=ax,
                 legend=False,
             )
@@ -578,6 +581,20 @@ def make_gt_overview_summary(
     suptitle=True,
     same_width_flow=True,
 ):
+    if not comparison.has_templates:
+        plots_ = []
+        for plot in plots:
+            if isinstance(plot, MetricRegPlot):
+                if "temp" in plot.x:
+                    continue
+                if "temp" in plot.y:
+                    continue
+            if isinstance(plot, TemplateDistanceMatrix):
+                continue
+            if isinstance(plot, TrimmedTemplateDistanceMatrix):
+                continue
+            plots_.append(plot)
+        plots = plots_
     figure = flow_layout(
         plots,
         max_height=max_height,
