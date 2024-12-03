@@ -676,7 +676,7 @@ class SpikeMixtureModel(torch.nn.Module):
         new_labels, new_ids = self.merge_units(
             log_liks=log_liks, show_progress=show_progress
         )
-        self.labels.copy_(torch.from_numpy(new_labels))
+        self.labels.copy_(torch.asarray(new_labels))
 
         unique_new_ids = np.unique(new_ids)
         kept_units = {}
@@ -1317,8 +1317,9 @@ class SpikeMixtureModel(torch.nn.Module):
         likelihoods=None,
         weights=None,
         fit_type="refit_all",
-        spikes_per_subunit=2048,
+        spikes_per_subunit=1024,
         sym_function=np.maximum,
+        show_progress=False,
     ):
         distances = sym_function(distances, distances.T)
         distances = distances[np.triu_indices(len(distances), k=1)]
@@ -1343,15 +1344,19 @@ class SpikeMixtureModel(torch.nn.Module):
         already_merged_leaves = set()
         improvements = np.full(n - 1, -np.inf)
         group_ids = np.arange(len(unit_ids))
-        for i, (pa, pb, dist, nab) in reversed(list(enumerate(Z))):
+        its = reversed(list(enumerate(Z)))
+        if show_progress:
+            its = tqdm(its, desc="Tree", total=n - 1, **tqdm_kw)
+        for i, (pa, pb, dist, nab) in its:
             if dist > max_distance:
                 continue
 
             # did we already merge a cluster containing this one?
-            if pa in already_merged_leaves:
-                assert pb in already_merged_leaves  # and vice versa
+            pleaves = clusters.get(pa, [pa]) + clusters.get(pb, [pb])
+            contained = [l in already_merged_leaves for l in pleaves]
+            if any(contained):
+                assert all(contained)
                 continue
-            assert pb not in already_merged_leaves
 
             # check if should merge
             leaves = clusters[n + i]
@@ -1397,14 +1402,15 @@ class SpikeMixtureModel(torch.nn.Module):
         labels=None,
         n_splits=3,
         n_folds=3,
-        spikes_per_subunit=2048,
+        spikes_per_subunit=1024,
+        cap_factor=4,
         likelihoods=None,
         weights=None,
     ):
         unit_ids = torch.asarray(unit_ids)
 
         # pick spikes for comparison
-        if labels is None:
+        if spikes_extract is None:
             in_subunits = [
                 self.random_indices(u, max_size=spikes_per_subunit) for u in unit_ids
             ]
@@ -1419,7 +1425,7 @@ class SpikeMixtureModel(torch.nn.Module):
             if min_count * (n_splits - 1) / n_splits < self.min_count:
                 return dict(cv_full_loglik=np.nan, cv_merged_loglik=np.nan)
         else:
-            assert spikes_extract is not None
+            assert labels is not None
             spikes_core = self.data.spike_data(
                 spikes_extract.indices, neighborhood="core", with_neighborhood_ids=True
             )
@@ -1780,6 +1786,7 @@ class SpikeMixtureModel(torch.nn.Module):
                 likelihoods=log_liks,
                 weights=weights,
                 sym_function=self.merge_sym_function,
+                show_progress=show_progress,
             )
             if debug_info is not None:
                 debug_info["Z"] = Z
