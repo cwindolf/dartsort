@@ -51,8 +51,9 @@ class DARTsortGroundTruthComparison:
             verbose=self.verbose,
             compute_labels=self.compute_labels,
         )
+        self.has_templates = self.tested_analysis.template_data is not None
 
-        if self.compute_distances:
+        if self.compute_distances and self.has_templates:
             if self.verbose:
                 print("Calculating GT/tested template distances...")
             self._calculate_template_distances()
@@ -71,9 +72,9 @@ class DARTsortGroundTruthComparison:
         df = df.astype(float)  # not sure what the problem was...
         df['gt_ptp_amplitude'] = amplitudes
         df['gt_firing_rate'] = firing_rates
-        print(f"{self.template_distances.shape=}")
-        dist = np.diagonal(self.template_distances)
-        df['temp_dist'] = dist
+        if self.has_templates:
+            dist = np.diagonal(self.template_distances)
+            df['temp_dist'] = dist
         rec = []
         for uid in df.index:
             rec.append(self.unsorted_detection[self.gt_analysis.in_unit(uid)].mean())

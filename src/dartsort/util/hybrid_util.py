@@ -254,7 +254,7 @@ def precompute_displaced_registered_templates(
     return ret
 
 
-def closest_clustering(gt_st, peel_st, geom=None, match_dt_ms=0.1, match_radius_um=0.0, p=2.0, M=50.0):
+def closest_clustering(gt_st, peel_st, geom=None, match_dt_ms=0.1, match_radius_um=0.0, p=2.0):
     frames_per_ms = gt_st.sampling_frequency / 1000
     delta_frames = match_dt_ms * frames_per_ms
     rescale = [delta_frames]
