@@ -2111,6 +2111,7 @@ class GaussianUnit(torch.nn.Module):
             return
 
         if not active_chans.numel() or nobs is None:
+            self.register_buffer("channels", torch.arange(0))
             return
 
         amp = torch.linalg.vector_norm(self.mean[:, active_chans], dim=0)
