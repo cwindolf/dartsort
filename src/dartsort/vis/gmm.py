@@ -802,16 +802,19 @@ class NeighborTreeMerge(GMMPlot):
         # make vis
         annotations = {j: f"{imp:.3f}" for j, imp in enumerate(improvements)}
         ax = panel.subplots()
-        analysis_plots.annotated_dendro(
-            ax,
-            Z,
-            annotations,
-            threshold=self.max_distance,
-            leaf_labels=neighbors,
-            annotations_offset_by_n=False,
-        )
-        ax.set_title(f"{metric} {self.criterion}")
-        sns.despine(ax=ax, left=True, right=True, top=True)
+        try:
+            analysis_plots.annotated_dendro(
+                ax,
+                Z,
+                annotations,
+                threshold=self.max_distance,
+                leaf_labels=neighbors,
+                annotations_offset_by_n=False,
+            )
+            ax.set_title(f"{metric} {self.criterion}")
+            sns.despine(ax=ax, left=True, right=True, top=True)
+        except ValueError as e:
+            ax.text(0.5, 0.5, str(e), fontsize="small", ha="center", va="center", transform=ax.transAxes)
 
 
 # -- main api
@@ -827,15 +830,15 @@ default_gmm_plots = (
     Amplitudes(),
     KMeansSplit(),
     NeighborMeans(),
-    NeighborDistances(),
+    NeighborDistances(metric='noise_metric'),
     NeighborDistances(metric="kl"),
-    NeighborTreeMerge(metric=None, criterion="ll"),
-    NeighborTreeMerge(metric=None, criterion="aic"),
-    NeighborTreeMerge(metric=None, criterion="bic"),
+    # NeighborTreeMerge(metric=None, criterion="ll"),
+    # NeighborTreeMerge(metric=None, criterion="aic"),
+    # NeighborTreeMerge(metric=None, criterion="bic"),
     NeighborTreeMerge(metric=None, criterion="cv"),
     NeighborBimodalities(),
     NeighborInfoCriteria(fit_type="refit_all"),
-    NeighborInfoCriteria(fit_type="avg_preexisting"),
+    # NeighborInfoCriteria(fit_type="avg_preexisting"),
 )
 
 
