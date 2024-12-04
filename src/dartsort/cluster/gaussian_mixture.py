@@ -1415,16 +1415,23 @@ class SpikeMixtureModel(torch.nn.Module):
             in_subunits = [
                 self.random_indices(u, max_size=spikes_per_subunit) for u in unit_ids
             ]
+
             min_count = min(map(len, in_subunits))
+            if min_count * (n_splits - 1) / n_splits < self.min_count:
+                return dict(cv_full_loglik=np.nan, cv_merged_loglik=np.nan)
+
             in_any = torch.cat(in_subunits)
+            n_present = in_any.numel()
+            n_max = cap_factor * spikes_per_subunit
+            if n_present > n_max:
+                in_any = in_any[self.rg.choice(n_present, size=n_max, replace=False)]
+
             in_any, in_order = torch.sort(in_any)
             spikes_extract = self.data.spike_data(in_any, with_neighborhood_ids=True)
             spikes_core = self.data.spike_data(
                 in_any, neighborhood="core", with_neighborhood_ids=True
             )
             labels = self.labels[in_any]
-            if min_count * (n_splits - 1) / n_splits < self.min_count:
-                return dict(cv_full_loglik=np.nan, cv_merged_loglik=np.nan)
         else:
             assert labels is not None
             spikes_core = self.data.spike_data(
