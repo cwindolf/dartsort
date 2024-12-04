@@ -2102,14 +2102,15 @@ class GaussianUnit(torch.nn.Module):
         self.register_buffer("mean", mean_full)
         if je_suis and res.get("W", None) is not None:
             self.register_buffer("W", W_full)
-        self.pick_channels(achans, res["nobs"])
+        nobs = res["nobs"] if je_suis else None
+        self.pick_channels(achans, nobs)
 
-    def pick_channels(self, active_chans, nobs):
+    def pick_channels(self, active_chans, nobs=None):
         if self.channels_strategy == "all":
             self.register_buffer("channels", torch.arange(self.n_channels))
             return
 
-        if not active_chans.numel():
+        if not active_chans.numel() or nobs is None:
             return
 
         amp = torch.linalg.vector_norm(self.mean[:, active_chans], dim=0)
