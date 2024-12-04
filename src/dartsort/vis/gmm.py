@@ -138,7 +138,7 @@ class MStep(GMMPlot):
         sp = gmm.random_spike_data(
             unit_id, max_size=self.n_waveforms_show, with_reconstructions=True
         )
-        maa = sp.waveforms.abs().nan_to_num().max()
+        maa = sp.waveforms.abs().nan_to_num().max().numpy(force=True)
         geomplot_kw = dict(
             max_abs_amp=maa,
             geom=gmm.data.prgeom.numpy(force=True),
@@ -146,8 +146,8 @@ class MStep(GMMPlot):
             return_chans=True,
         )
         lines, chans = geomplot(
-            sp.waveforms,
-            channels=sp.channels,
+            sp.waveforms.numpy(force=True),
+            channels=sp.channels.numpy(force=True),
             color="k",
             alpha=self.alpha,
             ax=ax,
@@ -161,9 +161,9 @@ class MStep(GMMPlot):
         feats = features_full[:, :, chans]
         n, r, c = feats.shape
         emp_mean = torch.nanmean(feats, dim=0)
-        emp_mean = gmm.data.tpca.force_reconstruct(emp_mean.nan_to_num_())
+        emp_mean = gmm.data.tpca.force_reconstruct(emp_mean.nan_to_num_()).numpy(force=True)
         model_mean = gmm[unit_id].mean[:, chans]
-        model_mean = gmm.data.tpca.force_reconstruct(model_mean)
+        model_mean = gmm.data.tpca.force_reconstruct(model_mean).numpy(force=True)
 
         geomplot(
             np.stack([emp_mean, model_mean], axis=0),
@@ -288,7 +288,7 @@ class CovarianceResidual(GMMPlot):
         )
         for (name, cov), ax in zip(covs.items(), axes.flat):
             color = colors[name]
-            vm = cov.abs().max() * 0.9
+            vm = cov.abs().max().numpy(force=True) * 0.9
             mimk = imk | dict(vmax=vm, vmin=-vm)
             # if name == "mmT":
             #     vm = cov.abs().max() * 0.9
@@ -297,7 +297,7 @@ class CovarianceResidual(GMMPlot):
             #     )
             # else:
             #     mimk = imk
-            im = ax.imshow(cov, **mimk)
+            im = ax.imshow(cov.numpy(force=True), **mimk)
             cb = plt.colorbar(im, ax=ax, shrink=0.2)
             cb.outline.set_visible(False)
             title = name
@@ -305,7 +305,7 @@ class CovarianceResidual(GMMPlot):
                 title = title + f" (scale={scale:.2f})"
             ax.set_title(title, color=color)
             if name in eigs:
-                ax_eig.plot(eigs[name].flip(0), color=color, lw=1)
+                ax_eig.plot(eigs[name].flip(0).numpy(force=True), color=color, lw=1)
                 # r2 = (eigs['emp'].sum() - F.relu(eigs[name].flip(0)).cumsum(0)) / eigs['emp'].sum()
                 # ax_r2.plot(r2, color=color, lw=1)
 
@@ -490,11 +490,11 @@ class KMeansSplit(GMMPlot):
         for subid, subunit in zip(split_ids, split_info["units"]):
             subm = subunit.mean[:, mainchan]
             subm = gmm.data.tpca._inverse_transform_in_probe(subm[None])[0]
-            ax_centroids.plot(subm, color=glasbey1024[subid])
+            ax_centroids.plot(subm.numpy(force=True), color=glasbey1024[subid])
 
             subm = subunit.mean[:, subunit.snr.argmax()]
             subm = gmm.data.tpca._inverse_transform_in_probe(subm[None])[0]
-            ax_mycentroids.plot(subm, color=glasbey1024[subid])
+            ax_mycentroids.plot(subm.numpy(force=True), color=glasbey1024[subid])
 
         # subunit multichan means
         chans = torch.cdist(gmm.data.prgeom[mainchan[None]], gmm.data.prgeom)
@@ -515,10 +515,10 @@ class KMeansSplit(GMMPlot):
         # subunit channels histogram
         chan_bins = torch.unique(split_info["sp"].channels)
         chan_bins = chan_bins[chan_bins < gmm.data.n_channels]
-        chan_bins = torch.arange(chan_bins.min(), chan_bins.max() + 1)
+        chan_bins = torch.arange(chan_bins.min(), chan_bins.max() + 2)
         unit_chans = []
         for j in split_ids:
-            uc = split_info["sp"].channels[split_labels == j]
+            uc = split_info["sp"].channels[split_labels == j].cpu()
             unit_chans.append(uc[uc < gmm.data.n_channels])
         ax_chans = fig_chans.subplots()
         ax_chans.hist(
@@ -564,16 +564,20 @@ class NeighborDistances(GMMPlot):
     width = 4
     height = 2
 
-    def __init__(self, n_neighbors=5, dist_vmax=1.0, metric=None):
+    def __init__(self, n_neighbors=5, dist_vmax=1.0, metric=None, noise_normalized=None):
         self.n_neighbors = n_neighbors
         self.dist_vmax = dist_vmax
         self.metric = metric
+        self.noise_normalized = noise_normalized
 
     def draw(self, panel, gmm, unit_id):
         neighbors = gmm_helpers.get_neighbors(gmm, unit_id)
         metric = self.metric
         if metric is None:
             metric = gmm.distance_metric
+        noise_normalized = self.noise_normalized
+        if noise_normalized is None:
+            noise_normalized = gmm.distance_noise_normalized
         distances = gmm.distances(
             units=[gmm[u] for u in neighbors], show_progress=False, kind=metric
         )
@@ -587,7 +591,7 @@ class NeighborDistances(GMMPlot):
             image_cmap=distance_cmap,
             show_values=True,
         )
-        normstr = ", noisenormed" if gmm.distance_noise_normalized else ""
+        normstr = ", noisenormed" if noise_normalized else ""
         ax.set_title(f"nearby {metric}{normstr}", fontsize="small")
 
 
@@ -736,7 +740,7 @@ class NeighborInfoCriteria(GMMPlot):
 
             for row, uid in enumerate(uids):
                 if torch.is_tensor(sll):
-                    rowsll = sll[row]
+                    rowsll = sll[row].cpu()
                     rowsll = rowsll[torch.isfinite(rowsll)]
                 else:
                     rowsll = sll[[row]].data
@@ -744,6 +748,7 @@ class NeighborInfoCriteria(GMMPlot):
                     ax.hist(rowsll, color=glasbey1024[uid], **histkw)
             ull = res["unit_logliks"]
             if ull is not None:
+                ull = ull.cpu()
                 ax.hist(ull[torch.isfinite(ull)], color="k", **histkw)
             s = f"other={other_id} fit={self.fit_type}\n" + cstr.format_map(res)
             aic_merge = res["aic_merged"] < res["aic_full"]
@@ -769,11 +774,12 @@ class NeighborTreeMerge(GMMPlot):
     width = 4
     height = 1.5
 
-    def __init__(self, n_neighbors=5, metric=None, criterion="ll", max_distance=2.0):
+    def __init__(self, n_neighbors=5, metric=None, criterion="ll", max_distance=1e10, noise_normalized=None):
         self.n_neighbors = n_neighbors
         self.metric = metric
         self.criterion = criterion
         self.max_distance = max_distance
+        self.noise_normalized = noise_normalized
 
     def draw(self, panel, gmm, unit_id):
         neighbors = gmm_helpers.get_neighbors(gmm, unit_id)
@@ -783,8 +789,15 @@ class NeighborTreeMerge(GMMPlot):
         if metric is None:
             metric = gmm.distance_metric
 
+        noise_normalized = self.noise_normalized
+        if noise_normalized is None:
+            noise_normalized = gmm.distance_noise_normalized
+
         distances = gmm.distances(
-            units=[gmm[u] for u in neighbors], show_progress=False, kind=metric
+            units=[gmm[u] for u in neighbors],
+            show_progress=False,
+            kind=metric,
+            noise_normalized=noise_normalized
         )
 
         Z, group_ids, improvements = gmm.tree_merge(
@@ -794,6 +807,7 @@ class NeighborTreeMerge(GMMPlot):
             likelihoods=gmm.log_liks,
             criterion=self.criterion,
             threshold=0.0,
+            noise_normalized=noise_normalized,
         )
 
         # make vis
@@ -808,7 +822,8 @@ class NeighborTreeMerge(GMMPlot):
                 leaf_labels=neighbors,
                 annotations_offset_by_n=False,
             )
-            ax.set_title(f"{metric} {self.criterion}")
+            nstr = " noisenormed" if noise_normalized else ""
+            ax.set_title(f"{metric} {self.criterion}{nstr}")
             sns.despine(ax=ax, left=True, right=True, top=True)
         except ValueError as e:
             ax.text(
@@ -837,10 +852,12 @@ default_gmm_plots = (
     NeighborMeans(),
     NeighborDistances(metric="noise_metric"),
     NeighborDistances(metric="kl"),
+    NeighborDistances(metric="kl", noise_normalized=True),
     NeighborTreeMerge(metric=None, criterion="ll"),
     # NeighborTreeMerge(metric=None, criterion="aic"),
     # NeighborTreeMerge(metric=None, criterion="bic"),
     NeighborTreeMerge(metric=None, criterion="cv"),
+    NeighborTreeMerge(metric=None, criterion="cv", noise_normalized=True),
     NeighborBimodalities(),
     NeighborInfoCriteria(fit_type="refit_all"),
     # NeighborInfoCriteria(fit_type="avg_preexisting"),
