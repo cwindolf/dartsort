@@ -145,6 +145,7 @@ class SpikeMixtureModel(torch.nn.Module):
             ppca_inner_em_iter=ppca_inner_em_iter,
             ppca_atol=ppca_atol,
         )
+        self.split_unit_args = self.unit_args | dict(cov_kind="zero", ppca_rank=0)
 
         # clustering with noise unit to hopefully grab false positives
         self.with_noise_unit = with_noise_unit
@@ -1181,7 +1182,7 @@ class SpikeMixtureModel(torch.nn.Module):
                     features,
                     weights=w,
                     neighborhoods=self.data.extract_neighborhoods,
-                    **self.unit_args,
+                    **self.split_unit_args,
                 )
                 units.append(unit)
 
@@ -2221,14 +2222,16 @@ class GaussianUnit(torch.nn.Module):
         # other covs
         k = my_cov.shape[0]
         tr = k
+        ld = 0.0
         if self.cov_kind == "ppca" and self.ppca_rank:
             oW = other_covs.reshape(n, k, self.ppca_rank)
             solve = my_cov.solve(oW)
-            ncov = self.noise.marginal_covariance().to_dense()
-            solve = solve @ oW.mT + my_cov.solve(ncov)
+            ncov = self.noise.full_dense_cov()
+            solve = solve @ oW.mT
             tr = solve.diagonal(dim1=-2, dim2=-1).sum(dim=1)
-        ld = self_logdet - other_logdets
-        return 0.5 * (tr + inv_quad - k + ld)
+            tr += torch.trace(my_cov.solve(ncov))
+            ld = self_logdet - other_logdets
+        return 0.5 * (inv_quad + ((tr - k) + ld))
 
 
 # -- utilities
