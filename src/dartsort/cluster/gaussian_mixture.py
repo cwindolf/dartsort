@@ -1860,6 +1860,8 @@ class SpikeMixtureModel(torch.nn.Module):
     def stack_units(
         self, nu=None, units=None, ids=None, mean_only=True, use_cache=False
     ):
+        if units is not None and not mean_only:
+            mean_only = units[0].cov_kind == "zero"
         if ids is not None:
             assert units is not None
         elif units is not None:
