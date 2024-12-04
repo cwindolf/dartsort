@@ -3,11 +3,13 @@ import linear_operator
 import numpy as np
 import pandas as pd
 import torch
-from linear_operator import operators
+from linear_operator import operators, settings
 from scipy.fftpack import next_fast_len
 from tqdm.auto import trange
 
 from ..util import drift_util, spiketorch
+
+settings.
 
 
 class FullNoise(torch.nn.Module):
@@ -407,7 +409,9 @@ class EmbeddedNoise(torch.nn.Module):
             return res
         if channels == slice(None):
             if self._full_cov is None:
-                self._full_cov = self._marginal_covariance()
+                fcov = self._marginal_covariance()
+                fcov = operators.CholLinearOperator(fcov.cholesky())
+                self._full_cov = fcov
                 self._logdet = self._full_cov.logdet()
             if device is not None and device != self._full_cov.device:
                 self._full_cov = self._full_cov.to(device)
