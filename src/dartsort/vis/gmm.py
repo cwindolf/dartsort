@@ -827,7 +827,7 @@ default_gmm_plots = (
     Amplitudes(),
     KMeansSplit(),
     NeighborMeans(),
-    NeighborDistances(),
+    NeighborDistances(metric="noise_metric"),
     NeighborDistances(metric="kl"),
     NeighborTreeMerge(metric=None, criterion="ll"),
     NeighborTreeMerge(metric=None, criterion="aic"),
