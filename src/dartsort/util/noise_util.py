@@ -410,7 +410,7 @@ class EmbeddedNoise(torch.nn.Module):
                 res = res.to(device)
                 self.cache[cache_key] = res
             return res
-        if channels == slice(None):
+        if channels is None or channels == slice(None):
             if self._full_cov is None:
                 fcov = self._marginal_covariance()
                 self._full_cov_dense = fcov.to_dense()
