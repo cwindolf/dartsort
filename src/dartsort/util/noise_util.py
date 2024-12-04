@@ -392,6 +392,11 @@ class EmbeddedNoise(torch.nn.Module):
         assert res.ndim == 3 and res.shape == (*data.shape, 1)
         return res
 
+    def full_dense_cov(self):
+        if self._full_cov is None:
+            self.marginal_covariance()
+        return self._full_cov_dense
+
     def marginal_covariance(
         self, channels=slice(None), cache_prefix=None, cache_key=None, device=None
     ):
@@ -408,6 +413,7 @@ class EmbeddedNoise(torch.nn.Module):
         if channels == slice(None):
             if self._full_cov is None:
                 fcov = self._marginal_covariance()
+                self._full_cov_dense = fcov.to_dense()
                 fcov = operators.CholLinearOperator(fcov.cholesky())
                 self._full_cov = fcov
                 self._logdet = self._full_cov.logdet()
