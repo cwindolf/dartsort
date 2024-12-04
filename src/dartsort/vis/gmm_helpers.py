@@ -10,7 +10,7 @@ def get_neighbors(gmm, unit_id, n_neighbors=5):
     ids, means, covs, logdets = gmm.stack_units(use_cache=True, mean_only=False)
     dists = gmm[unit_id].divergence(means, covs, logdets, kind=gmm.distance_metric)
     dists = dists.view(-1)
-    order = ids[torch.argsort(dists)]
+    order = ids[torch.argsort(dists).numpy(force=True)]
     assert order[0] == unit_id
     return order[: n_neighbors + 1]
 
