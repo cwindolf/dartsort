@@ -737,8 +737,8 @@ class SpikeMixtureModel(torch.nn.Module):
             noise_normalized = self.distance_noise_normalized
 
         if units is None:
-            nu = self.n_units()
             ids, units = self.ids_and_units()
+            nu = max(ids) + 1
         else:
             nu = len(units)
             ids = range(nu)
@@ -746,38 +746,50 @@ class SpikeMixtureModel(torch.nn.Module):
         # stack unit data into one place
         mean_only = kind == "noise_metric"
         ids, means, covs, logdets = self.stack_units(
-            nu=nu, ids=ids, units=units, mean_only=mean_only
+            nu=len(ids), ids=ids, units=units, mean_only=mean_only
         )
 
-        # compute denominator of noised normalized distances
-        if noise_normalized:
-            denom_ = self.noise_unit.divergence(
-                means, other_covs=covs, other_logdets=logdets, kind=kind
-            )
-            denom = np.zeros(nu)
-            denom[ids] = np.sqrt(denom_.numpy(force=True))
-
+        # output will land here
         dists = np.full((nu, nu), np.inf, dtype=np.float32)
         np.fill_diagonal(dists, 0.0)
 
+        # reverse KL is faster since there is only one cov to solve with
+        transposed = False
+        kind_ = kind
+        if kind == "kl":
+            kind_ = "reverse_kl"
+            transposed = True
+
+        # worker fn for parallelization
         @delayed
         def dist_job(j, unit):
+            print(f"{j=} {kind_=}")
             d = unit.divergence(
-                means, other_covs=covs, other_logdets=logdets, kind=kind
+                means, other_covs=covs, other_logdets=logdets, kind=kind_
             )
             d = d.numpy(force=True).astype(dists.dtype)
-            if noise_normalized:
-                d /= denom * denom[j]
-            dists[j, ids] = d
+            if transposed:
+                dists[ids, j] = d
+            else:
+                dists[j, ids] = d
 
         pool = Parallel(
             self.n_threads, backend="threading", return_as="generator_unordered"
         )
         results = pool(dist_job(j, u) for j, u in zip(ids, units))
         if show_progress:
-            results = tqdm(results, desc="Distances", total=nu, unit="unit", **tqdm_kw)
+            results = tqdm(results, desc="Distances", total=len(ids), unit="unit", **tqdm_kw)
         for _ in results:
             pass
+
+        # normalize by dividing by the divergence under the noise unit
+        if noise_normalized:
+            denom = self.noise_unit.divergence(
+                means, other_covs=covs, other_logdets=logdets, kind=kind
+            )
+            denom = denom.sqrt()
+            dists[:, ids] /= denom[None, :]
+            dists[ids, :] /= denom[:, None]
 
         return dists
 
@@ -2140,10 +2152,11 @@ class GaussianUnit(torch.nn.Module):
     def marginal_covariance(
         self, channels=None, cache_key=None, device=None, signal_only=False
     ):
+        channels_ = channels
         if channels is None:
-            channels = torch.arange(self.n_channels)
+            channels_ = torch.arange(self.n_channels)
         if signal_only:
-            sz = channels.numel() * self.noise.rank
+            sz = channels_.numel() * self.noise.rank
             ncov = operators.ZeroLinearOperator(
                 sz, sz, dtype=self.noise.global_std.dtype
             )
@@ -2157,7 +2170,7 @@ class GaussianUnit(torch.nn.Module):
         if zero_signal:
             return ncov
         if self.cov_kind == "ppca" and self.ppca_rank:
-            root = self.W[:, channels].reshape(-1, self.ppca_rank)
+            root = self.W[:, channels_].reshape(-1, self.ppca_rank)
             root = operators.LowRankRootLinearOperator(root)
             # this calls .add_low_rank, and it's genuinely bugged.
             # the log liks that come out look wrong. can't say why.
@@ -2199,6 +2212,8 @@ class GaussianUnit(torch.nn.Module):
             return self.noise_metric_divergence(other_means)
         if kind == "kl":
             return self.kl_divergence(other_means, other_covs, other_logdets)
+        if kind == "reverse_kl":
+            return self.reverse_kl_divergence(other_means, other_covs, other_logdets)
         raise ValueError(f"Unknown divergence {kind=}.")
 
     def noise_metric_divergence(self, other_means):
@@ -2210,7 +2225,61 @@ class GaussianUnit(torch.nn.Module):
         return noise_cov.inv_quad(dmu.T, reduce_inv_quad=False)
 
     def kl_divergence(self, other_means, other_covs, other_logdets):
-        """DKL(others || self)"""
+        """DKL(self || others)
+            = 0.5 * {
+                tr(So^-1 Ss)
+                + (mus - muo)^T So^-1 (mus - muo)
+                - k
+                + log(|So| / |Ss|)
+              }
+        """
+        n = other_means.shape[0]
+        dmu = other_means
+        if self.mean_kind != "zero":
+            dmu = dmu - self.mean
+        dmu = dmu.view(n, -1)
+        k = dmu.shape[1]
+
+        # get all the other covariance operators
+        ncov = self.noise.marginal_covariance()
+        ncov_batch = ncov._expand_batch((n,))
+        is_ppca = self.cov_kind == "ppca" and self.ppca_rank
+        if is_ppca:
+            oW = other_covs.reshape(n, k, self.ppca_rank)
+            root = operators.LowRankRootLinearOperator(oW)
+            other_covs = more_operators.LowRankRootSumLinearOperator(root, ncov_batch)
+        else:
+            other_covs = ncov_batch
+
+        # get trace term
+        tr = float(k)
+        if is_ppca:
+            my_dense_cov = self.marginal_covariance().to_dense()
+            solve = other_covs.solve(my_dense_cov)
+            assert solve.shape == (n, k, k)
+            tr = solve.diagonal(dim1=1, dim2=2).sum(dim=1)
+
+        # get inv quad term
+        inv_quad = other_covs.inv_quad(dmu.unsqueeze(-1), reduce_inv_quad=False)
+        print(f"{inv_quad.shape=} {dmu.shape=} {other_covs.shape=} {ncov.shape=} {n=} {k=}")
+        assert inv_quad.shape == (n, 1)
+        inv_quad = inv_quad[:, 0]
+
+        # get logdet term
+        ld = 0.0
+        if is_ppca:
+            ld = other_logdets - self.logdet()
+        return 0.5 * (inv_quad + ((tr - k) + ld))
+
+    def reverse_kl_divergence(self, other_means, other_covs, other_logdets):
+        """DKL(others || self)
+            = 0.5 * {
+                tr(Ss^-1 So)
+                + (mus - muo)^T Ss^-1 (mus - muo)
+                - k
+                + log(|Ss| / |So|)
+              }
+        """
         n = other_means.shape[0]
         dmu = other_means
         if self.mean_kind != "zero":
@@ -2219,12 +2288,13 @@ class GaussianUnit(torch.nn.Module):
 
         # compute the inverse quad and self log det terms
         my_cov = self.marginal_covariance()
+        k = my_cov.shape[0]
+        assert dmu.shape[1] == k
         inv_quad, self_logdet = my_cov.inv_quad_logdet(
             dmu.T, logdet=True, reduce_inv_quad=False
         )
 
         # other covs
-        k = my_cov.shape[0]
         tr = k
         ld = 0.0
         if self.cov_kind == "ppca" and self.ppca_rank:
