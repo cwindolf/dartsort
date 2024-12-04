@@ -361,10 +361,9 @@ class SpikeNeighborhoods(torch.nn.Module):
         self.n_channels = n_channels
         if store_on_device:
             self.register_buffer("neighborhood_ids", neighborhood_ids)
-            self.register_buffer("neighborhoods", neighborhoods)
         else:
             self.neighborhood_ids = neighborhood_ids
-            self.neighborhoods = neighborhoods
+        self.register_buffer("neighborhoods", neighborhoods)
         self.n_neighborhoods = len(neighborhoods)
 
         # store neighborhoods as a matrix
