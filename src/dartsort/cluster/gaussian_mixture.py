@@ -2059,6 +2059,7 @@ class GaussianUnit(torch.nn.Module):
 
         achans = occupied_chans(features, self.n_channels, neighborhoods=neighborhoods)
         je_suis = achans.numel()
+        do_pca = self.cov_kind == "ppca" and self.ppca_rank
 
         active_mean = active_W = None
         if hasattr(self, "mean"):
@@ -2093,7 +2094,7 @@ class GaussianUnit(torch.nn.Module):
         if hasattr(self, "W"):
             W_full = self.W
             W_full.fill_(0.0)
-        elif je_suis and res.get("W", None) is not None:
+        elif do_pca:
             W_full = new_zeros((self.noise.rank, self.noise.n_channels, self.ppca_rank))
 
         if je_suis:
@@ -2101,7 +2102,7 @@ class GaussianUnit(torch.nn.Module):
             if res.get("W", None) is not None:
                 W_full[:, achans] = res["W"]
         self.register_buffer("mean", mean_full)
-        if je_suis and res.get("W", None) is not None:
+        if do_pca:
             self.register_buffer("W", W_full)
         nobs = res["nobs"] if je_suis else None
         self.pick_channels(achans, nobs)
