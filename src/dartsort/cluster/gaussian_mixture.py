@@ -66,7 +66,7 @@ class SpikeMixtureModel(torch.nn.Module):
         kmeans_kmeanspp_initial: str = "mean",
         split_em_iter: int = 1,
         split_whiten: bool = True,
-        distance_metric: Literal["noise_metric", "kl"] = "kl",
+        distance_metric: Literal["noise_metric", "kl", "reverse_kl"] = "kl",
         distance_noise_normalized: bool = True,
         merge_linkage: str = "single",
         merge_distance_threshold: float = 1.0,
@@ -493,12 +493,12 @@ class SpikeMixtureModel(torch.nn.Module):
         def job(ninfo):
             if len(ninfo) == 4:
                 j, coo, data, ns = ninfo
-                return coo, data
+                return j, coo, data
             else:
                 assert len(ninfo) == 3
                 j, neighbs, ns = ninfo
                 ix, ll = self.unit_log_likelihoods(unit_id=j, neighbs=neighbs, ns=ns)
-                return ix, ll
+                return j, ix, ll
 
         # get the big nnz-length csc buffers. these can be huge so we cache them.
         csc_indices, csc_data = get_csc_storage(nnz, self.storage, use_storage)
@@ -518,7 +518,7 @@ class SpikeMixtureModel(torch.nn.Module):
                 unit="unit",
                 **tqdm_kw,
             )
-        for j, (inds, liks) in enumerate(results):
+        for j, inds, liks in results:
             if inds is None:
                 continue
             if torch.is_tensor(inds):
@@ -763,7 +763,6 @@ class SpikeMixtureModel(torch.nn.Module):
         # worker fn for parallelization
         @delayed
         def dist_job(j, unit):
-            print(f"{j=} {kind_=}")
             d = unit.divergence(
                 means, other_covs=covs, other_logdets=logdets, kind=kind_
             )
@@ -2261,7 +2260,6 @@ class GaussianUnit(torch.nn.Module):
 
         # get inv quad term
         inv_quad = other_covs.inv_quad(dmu.unsqueeze(-1), reduce_inv_quad=False)
-        print(f"{inv_quad.shape=} {dmu.shape=} {other_covs.shape=} {ncov.shape=} {n=} {k=}")
         assert inv_quad.shape == (n, 1)
         inv_quad = inv_quad[:, 0]
 
