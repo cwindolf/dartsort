@@ -3,13 +3,11 @@ import linear_operator
 import numpy as np
 import pandas as pd
 import torch
-from linear_operator import operators, settings
+from linear_operator import operators
 from scipy.fftpack import next_fast_len
 from tqdm.auto import trange
 
 from ..util import drift_util, spiketorch
-
-settings.
 
 
 class FullNoise(torch.nn.Module):
