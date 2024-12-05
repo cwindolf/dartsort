@@ -87,16 +87,17 @@ class LowRankRootSumLinearOperator(SumLinearOperator):
         ],
     ]:
         A = self._other_op
-        U = self._root_op.root
+        AinvU = self.AinvU
         V = self._root_op.root.mT
         chol_cap_mat = self.chol_cap_mat
+
         Ainv_rhs = A.solve(rhs)
 
         res = V.matmul(Ainv_rhs)
         res = torch.cholesky_solve(res, chol_cap_mat)
         # res = A.solve(U.matmul(res))
         # solve = A.solve(rhs) - res
-        solve = Ainv_rhs.sub_(A.solve(U.matmul(res)))
+        solve = Ainv_rhs.sub_(AinvU.matmul(res))
 
         return solve
 
@@ -106,6 +107,15 @@ class LowRankRootSumLinearOperator(SumLinearOperator):
     def _sum_batch(self, dim: int) -> LinearOperator:
         return SumBatchLinearOperator(self, dim)
 
+    @property
+    @cached(name="AinvU")
+    def AinvU(self):
+        A = self._other_op
+        U = self._root_op.root
+        AinvU = A.solve(U.to_dense())
+        return AinvU
+
+    @cached(name="_logdet")
     def _logdet(self):
         chol_cap_mat = self.chol_cap_mat
         logdet_cap_mat = 2 * torch.diagonal(
