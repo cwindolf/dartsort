@@ -392,7 +392,7 @@ class EmbeddedNoise(torch.nn.Module):
         assert res.ndim == 3 and res.shape == (*data.shape, 1)
         return res
 
-    def full_dense_cov(self, device=device):
+    def full_dense_cov(self, device=None):
         if self._full_cov is None:
             self.marginal_covariance(device=device)
         if device is not None:
