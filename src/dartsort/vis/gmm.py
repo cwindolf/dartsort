@@ -161,7 +161,9 @@ class MStep(GMMPlot):
         feats = features_full[:, :, chans]
         n, r, c = feats.shape
         emp_mean = torch.nanmean(feats, dim=0)
-        emp_mean = gmm.data.tpca.force_reconstruct(emp_mean.nan_to_num_()).numpy(force=True)
+        emp_mean = gmm.data.tpca.force_reconstruct(emp_mean.nan_to_num_()).numpy(
+            force=True
+        )
         model_mean = gmm[unit_id].mean[:, chans]
         model_mean = gmm.data.tpca.force_reconstruct(model_mean).numpy(force=True)
 
@@ -446,8 +448,8 @@ class KMeansSplit(GMMPlot):
             image_cmap=distance_cmap,
             show_values=True,
         )
-        normstr = ", noisenormed" if gmm.distance_noise_normalized else ""
-        ax_dist.set_title(f"{gmm.distance_metric}{normstr}", fontsize="small")
+        normstr = f"norm={gmm.distance_normalization_kind}"
+        ax_dist.set_title(f"{gmm.distance_metric}, {normstr}", fontsize="small")
 
         if "bimodalities" in split_info:
             # bimodality matrix
@@ -473,7 +475,9 @@ class KMeansSplit(GMMPlot):
                 threshold=gmm.merge_distance_threshold,
                 annotations_offset_by_n=False,
             )
-            ax_bimod.set_title(f"tree {gmm.distance_metric} {gmm.merge_criterion}")
+            ax_bimod.set_title(
+                f"tree {gmm.distance_metric} {gmm.merge_criterion}-{gmm.criterion_normalization_kind}"
+            )
             sns.despine(ax=ax_bimod, left=True, right=True, top=True)
         else:
             assert False
@@ -564,22 +568,27 @@ class NeighborDistances(GMMPlot):
     width = 4
     height = 2
 
-    def __init__(self, n_neighbors=5, dist_vmax=1.0, metric=None, noise_normalized=None):
+    def __init__(
+        self, n_neighbors=5, dist_vmax=1.0, metric=None, normalization_kind=None
+    ):
         self.n_neighbors = n_neighbors
         self.dist_vmax = dist_vmax
         self.metric = metric
-        self.noise_normalized = noise_normalized
+        self.normalization_kind = normalization_kind
 
     def draw(self, panel, gmm, unit_id):
         neighbors = gmm_helpers.get_neighbors(gmm, unit_id)
         metric = self.metric
         if metric is None:
             metric = gmm.distance_metric
-        noise_normalized = self.noise_normalized
-        if noise_normalized is None:
-            noise_normalized = gmm.distance_noise_normalized
+        normalization_kind = self.normalization_kind
+        if normalization_kind is None:
+            normalization_kind = gmm.distance_normalization_kind
         distances = gmm.distances(
-            units=[gmm[u] for u in neighbors], show_progress=False, kind=metric
+            units=[gmm[u] for u in neighbors],
+            show_progress=False,
+            kind=metric,
+            normalization_kind=normalization_kind,
         )
         ax = analysis_plots.distance_matrix_dendro(
             panel,
@@ -591,7 +600,7 @@ class NeighborDistances(GMMPlot):
             image_cmap=distance_cmap,
             show_values=True,
         )
-        normstr = ", noisenormed" if noise_normalized else ""
+        normstr = f"norm={normalization_kind}"
         ax.set_title(f"nearby {metric}{normstr}", fontsize="small")
 
 
@@ -707,10 +716,17 @@ class NeighborInfoCriteria(GMMPlot):
     width = 4
     height = 9
 
-    def __init__(self, n_neighbors=5, fit_by_avg=False, fit_type="refit_all"):
+    def __init__(
+        self,
+        n_neighbors=5,
+        fit_by_avg=False,
+        fit_type="refit_all",
+        cv_entropy_correction=True,
+    ):
         self.n_neighbors = n_neighbors
         self.fit_by_avg = fit_by_avg
         self.fit_type = fit_type
+        self.cv_entropy_correction = cv_entropy_correction
 
     def draw(self, panel, gmm, unit_id):
         neighbors = gmm_helpers.get_neighbors(gmm, unit_id)
@@ -720,16 +736,23 @@ class NeighborInfoCriteria(GMMPlot):
         histkw = dict(density=True, histtype="step", log=True)
         astr = "AICfull/merged: {aic_full:0.1f} / {aic_merged:0.1f}"
         bstr = "BICfull/merged: {bic_full:0.1f} / {bic_merged:0.1f}"
+        istr = "ICLfull/merged: {icl_full:0.1f} / {icl_merged:0.1f}"
+        ccstr = "CCLfull/merged: {ccl_full:0.1f} / {ccl_merged:0.1f}"
         lstr = "LLfull/merged: {full_loglik:0.1f} / {unit_loglik:0.1f}"
-        cvstr = "CVfull/merged: {cv_full_loglik:0.1f} / {cv_merged_loglik:0.1f}"
-        cstr = f"{astr}\n{bstr}\n{lstr}\n{cvstr}\n"
+        c0 = "C" if self.cv_entropy_correction else ""
+        cvstr = c0 + "CVfull/merged: {cv_full_loglik:0.1f} / {cv_merged_loglik:0.1f}"
+        cstr = f"{astr}\n{bstr}\n{lstr}\n{ccstr}\n{istr}\n{cvstr}\n"
         bbox = dict(facecolor="w", alpha=0.5, edgecolor="none")
         for ax, other_id in zip(axes, others):
             uids = [unit_id, other_id]
             res = gmm.unit_group_criterion(
-                uids, gmm.log_liks, debug=True, fit_type=self.fit_type
+                uids, likelihoods=gmm.log_liks, debug=True, fit_type=self.fit_type
             )
-            cvres = gmm.kfold(uids, likelihoods=gmm.log_liks)
+            cvres = gmm.kfold(
+                uids,
+                likelihoods=gmm.log_liks,
+                entropy_correction=self.cv_entropy_correction,
+            )
             res.update(cvres)
 
             sll = res["subunit_logliks"]
@@ -751,18 +774,23 @@ class NeighborInfoCriteria(GMMPlot):
                 ull = ull.cpu()
                 ax.hist(ull[torch.isfinite(ull)], color="k", **histkw)
             s = f"other={other_id} fit={self.fit_type}\n" + cstr.format_map(res)
-            aic_merge = res["aic_merged"] < res["aic_full"]
-            bic_merge = res["bic_merged"] < res["bic_full"]
-            ll_merge = res["unit_loglik"] > res["full_loglik"]
+            # criterion style: smaller is better, so merge if M<F - 0<F-M
             aicdif = res["aic_full"] - res["aic_merged"]
             bicdif = res["bic_full"] - res["bic_merged"]
+            icldif = res["icl_full"] - res["icl_merged"]
+
+            # lik style: bigger better, merge if F<M - 0<M-F
+            ccldif = res["ccl_merged"] - res["ccl_full"]
             lldif = res["unit_loglik"] - res["full_loglik"]
-            cvdif = cvres["cv_full_loglik"] - res["cv_merged_loglik"]
-            cv_merge = cvdif < 0
-            s += f"aic: {aicdif:0.1f}, " + ("merge!" if aic_merge else "nope.") + "\n"
-            s += f"bic: {bicdif:0.1f}, " + ("merge!" if bic_merge else "nope.") + "\n"
-            s += f"cv: {cvdif:0.1f}, " + ("merge!" if cv_merge else "nope.") + "\n"
-            s += f"ll: {lldif:0.1f}, " + ("merge!" if ll_merge else "nope.")
+            cvdif = cvres["cv_merged_loglik"] - res["cv_full_loglik"]
+
+            s += f"aic: {aicdif:0.1f}, " + ("merge!" if aicdif > 0 else "nope.") + "\n"
+            s += f"bic: {bicdif:0.1f}, " + ("merge!" if bicdif > 0 else "nope.") + "\n"
+            s += f"icl: {icldif:0.1f}, " + ("merge!" if icldif > 0 else "nope.") + "\n"
+            s += f"ccl: {ccldif:0.1f}, " + ("merge!" if ccldif > 0 else "nope.") + "\n"
+            s += f"cv: {cvdif:0.1f}, " + ("merge!" if cvdif > 0 else "nope.") + "\n"
+            s += f"ll: {lldif:0.1f}, " + ("merge!" if lldif > 0 else "nope.")
+
             ax.text(0.05, 0.95, s, transform=ax.transAxes, va="top", bbox=bbox)
             ax.set_xlabel("log lik")
             sns.despine(ax=ax, left=True, right=True, top=True)
@@ -774,30 +802,41 @@ class NeighborTreeMerge(GMMPlot):
     width = 4
     height = 1.5
 
-    def __init__(self, n_neighbors=5, metric=None, criterion="ll", max_distance=1e10, noise_normalized=None):
+    def __init__(
+        self,
+        n_neighbors=5,
+        metric=None,
+        criterion="ll",
+        max_distance=1e10,
+        normalization_kind=None,
+    ):
         self.n_neighbors = n_neighbors
         self.metric = metric
         self.criterion = criterion
         self.max_distance = max_distance
-        self.noise_normalized = noise_normalized
+        self.normalization_kind = normalization_kind
 
     def draw(self, panel, gmm, unit_id):
         neighbors = gmm_helpers.get_neighbors(gmm, unit_id)
         assert neighbors[0] == unit_id
 
+        criterion = self.criterion
+        if criterion is None:
+            criterion = gmm.merge_criterion
+
         metric = self.metric
         if metric is None:
             metric = gmm.distance_metric
 
-        noise_normalized = self.noise_normalized
-        if noise_normalized is None:
-            noise_normalized = gmm.distance_noise_normalized
+        normalization_kind = self.normalization_kind
+        if normalization_kind is None:
+            normalization_kind = gmm.criterion_normalization_kind
 
         distances = gmm.distances(
             units=[gmm[u] for u in neighbors],
             show_progress=False,
             kind=metric,
-            noise_normalized=noise_normalized
+            normalization_kind=normalization_kind,
         )
 
         Z, group_ids, improvements = gmm.tree_merge(
@@ -805,9 +844,9 @@ class NeighborTreeMerge(GMMPlot):
             neighbors,
             max_distance=self.max_distance,
             likelihoods=gmm.log_liks,
-            criterion=self.criterion,
-            threshold=0.0,
-            noise_normalized=noise_normalized,
+            criterion=criterion,
+            threshold=-np.inf,
+            normalization_kind=normalization_kind,
         )
 
         # make vis
@@ -822,8 +861,8 @@ class NeighborTreeMerge(GMMPlot):
                 leaf_labels=neighbors,
                 annotations_offset_by_n=False,
             )
-            nstr = " noisenormed" if noise_normalized else ""
-            ax.set_title(f"{metric} {self.criterion}{nstr}")
+            nstr = f"norm={normalization_kind}"
+            ax.set_title(f"{metric} {criterion} {nstr}")
             sns.despine(ax=ax, left=True, right=True, top=True)
         except ValueError as e:
             ax.text(
@@ -851,16 +890,20 @@ default_gmm_plots = (
     KMeansSplit(),
     NeighborMeans(),
     NeighborDistances(metric="noise_metric"),
-    NeighborDistances(metric="kl"),
-    NeighborDistances(metric="kl", noise_normalized=True),
+    NeighborDistances(metric="kl", normalization_kind="none"),
+    NeighborDistances(metric="kl", normalization_kind="channels"),
+    # NeighborDistances(metric="kl", normalization_kind="noise"),
     NeighborTreeMerge(metric=None, criterion="ll"),
+    NeighborTreeMerge(metric=None, criterion="icl"),
     # NeighborTreeMerge(metric=None, criterion="aic"),
     # NeighborTreeMerge(metric=None, criterion="bic"),
-    NeighborTreeMerge(metric=None, criterion="cv"),
-    NeighborTreeMerge(metric=None, criterion="cv", noise_normalized=True),
+    NeighborTreeMerge(metric=None, criterion="cv", normalization_kind="none"),
+    NeighborTreeMerge(metric=None, criterion="ccv", normalization_kind="none"),
+    NeighborTreeMerge(metric=None, criterion="ccv", normalization_kind="channels"),
+    # NeighborTreeMerge(metric=None, criterion="ccv", normalization_kind="noise"),
     NeighborBimodalities(),
     NeighborInfoCriteria(fit_type="refit_all"),
-    # NeighborInfoCriteria(fit_type="avg_preexisting"),
+    NeighborInfoCriteria(fit_type="avg_preexisting"),
 )
 
 
