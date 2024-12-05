@@ -37,14 +37,13 @@ class LowRankRootSumLinearOperator(SumLinearOperator):
     @property
     @cached(name="chol_cap_mat")
     def chol_cap_mat(self):
-        U = self._root_op.root
         V = self._root_op.root.mT
-        Ainv_U = self._other_op.solve(U.to_dense())
+        AinvU = self.AinvU
 
         C = ConstantDiagLinearOperator(
             torch.ones(*V.batch_shape, 1, device=V.device, dtype=V.dtype), V.shape[-2]
         )
-        cap_mat = to_dense(C + V.matmul(Ainv_U))
+        cap_mat = to_dense(C + V.matmul(AinvU))
         chol_cap_mat = psd_safe_cholesky(cap_mat)
 
         return chol_cap_mat
