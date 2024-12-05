@@ -1,11 +1,22 @@
 import math
+import warnings
 
+import linear_operator
 import numpy as np
 import torch
 import torch.nn.functional as F
 from scipy.fftpack import next_fast_len
 from torch.fft import irfft, rfft
-import warnings
+
+log2pi = torch.log(torch.tensor(2 * np.pi))
+
+
+def ll_via_inv_quad(cov, y):
+    inv_quad, logdet = linear_operator.inv_quad_logdet(
+        cov, y.T, logdet=True, reduce_inv_quad=False
+    )
+    ll = -0.5 * (inv_quad + logdet + log2pi * y.shape[1])
+    return ll
 
 
 def fast_nanmedian(x, axis=-1):
@@ -288,7 +299,9 @@ def convolve_lowrank(
     return out
 
 
-def nancov(x, weights=None, correction=1, nan_free=False, return_nobs=False, force_posdef=False):
+def nancov(
+    x, weights=None, correction=1, nan_free=False, return_nobs=False, force_posdef=False
+):
     """Pairwise covariance estimate
 
     Covariances are estimated from masked observations in each feature.
