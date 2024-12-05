@@ -1,20 +1,9 @@
-import linear_operator
 import numpy as np
 import torch
 from linear_operator import operators
 from scipy.stats import multivariate_normal
 
-from dartsort.util import more_operators
-
-log2pi = torch.log(torch.tensor(2 * np.pi))
-
-
-def ll_via_inv_quad(cov, y):
-    inv_quad, logdet = linear_operator.inv_quad_logdet(
-        cov, y.T, logdet=True, reduce_inv_quad=False
-    )
-    ll = -0.5 * (inv_quad + logdet + log2pi * y.shape[1])
-    return ll
+from dartsort.util import more_operators, spiketorch
 
 
 def test_lowranksolve():
@@ -50,13 +39,13 @@ def test_lowranksolve():
     # the low rank part...
     root = operators.LowRankRootLinearOperator(v)
 
-    # guest of honor
+    # guests of honor
     my_root_cov_dense = more_operators.LowRankRootSumLinearOperator(dense_eye, root)
     my_root_cov_diag = more_operators.LowRankRootSumLinearOperator(diag_eye, root)
 
     # test inv_quad_logdet
-    dense_root_lls = ll_via_inv_quad(my_root_cov_dense, y)
-    diag_root_lls = ll_via_inv_quad(my_root_cov_diag, y)
+    dense_root_lls = spiketorch.ll_via_inv_quad(my_root_cov_dense, y)
+    diag_root_lls = spiketorch.ll_via_inv_quad(my_root_cov_diag, y)
     assert np.isclose(scipy_lls, dense_root_lls).all()
     assert np.isclose(scipy_lls, diag_root_lls).all()
 
