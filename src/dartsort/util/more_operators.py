@@ -92,11 +92,8 @@ class LowRankRootSumLinearOperator(SumLinearOperator):
         chol_cap_mat = self.chol_cap_mat
 
         Ainv_rhs = A.solve(rhs)
-
         res = V.matmul(Ainv_rhs)
         res = torch.cholesky_solve(res, chol_cap_mat)
-        # res = A.solve(U.matmul(res))
-        # solve = A.solve(rhs) - res
         solve = Ainv_rhs.sub_(AinvU.matmul(res))
 
         return solve
