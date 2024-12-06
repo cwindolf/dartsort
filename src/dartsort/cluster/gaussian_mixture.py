@@ -430,7 +430,7 @@ class SpikeMixtureModel(torch.nn.Module):
             adif_ = torch.max(dmu, dim=1).values
             max_adif = adif_.max()
             adif = torch.zeros(self.n_units())
-            adif[ids] = adif_
+            adif[ids] = adif_.to(adif)
 
         return dict(max_adif=max_adif, adif=adif)
 
@@ -943,6 +943,7 @@ class SpikeMixtureModel(torch.nn.Module):
         if weights is None and likelihoods is not None:
             weights = self.get_fit_weights(unit_id, features.indices, likelihoods)
             (valid,) = torch.nonzero(weights, as_tuple=True)
+            valid = valid.cpu()
             weights = weights[valid]
             features = features[valid]
         if verbose and weights is not None:
@@ -1383,6 +1384,7 @@ class SpikeMixtureModel(torch.nn.Module):
             contained = [l in already_merged_leaves for l in pleaves]
             if any(contained):
                 assert all(contained)
+                improvements[i] = np.inf
                 continue
 
             # check if should merge
@@ -1514,7 +1516,8 @@ class SpikeMixtureModel(torch.nn.Module):
                     subunit_logliks[i] = sll
             # if any spikes are ignored by all, ignore...
             keep = subunit_logliks.isfinite().any(dim=0)
-            if not keep.any():
+            (keep,) = keep.cpu().nonzero(as_tuple=True)
+            if not keep.numel():
                 full_loglik = merged_loglik = np.nan
                 break
             _, merged_logliks = self.unit_log_likelihoods(
@@ -1559,8 +1562,8 @@ class SpikeMixtureModel(torch.nn.Module):
             assert torch.isfinite(fold_merged_loglik)
 
             # add to the total
-            full_loglik += fold_full_loglik / n_folds
-            merged_loglik += fold_merged_loglik / n_folds
+            full_loglik += fold_full_loglik.cpu().item() / n_folds
+            merged_loglik += fold_merged_loglik.cpu().item() / n_folds
             if not np.isfinite(full_loglik) and np.isfinite(merged_loglik):
                 break
 
@@ -1588,6 +1591,7 @@ class SpikeMixtureModel(torch.nn.Module):
             if weights is not None:
                 my_weights = weights[i]
                 (keep,) = my_weights.nonzero(as_tuple=True)
+                keep = keep.cpu()
                 my_weights = my_weights[keep]
             u = self.fit_unit(
                 unit_id=k,
@@ -1664,6 +1668,7 @@ class SpikeMixtureModel(torch.nn.Module):
                 if sll is not None:
                     subunit_logliks[i] = sll
             (keep,) = subunit_logliks.isfinite().any(dim=0).nonzero(as_tuple=True)
+            keep = keep.cpu()
             subunit_log_props = (
                 F.softmax(subunit_logliks[:, keep], dim=0).mean(1).log_()
             )
@@ -2248,7 +2253,7 @@ class GaussianUnit(torch.nn.Module):
         if signal_only:
             sz = channels_.numel() * self.noise.rank
             ncov = operators.ZeroLinearOperator(
-                sz, sz, dtype=self.noise.global_std.dtype
+                sz, sz, dtype=self.noise.global_std.dtype, device=device
             )
         else:
             ncov = self.noise.marginal_covariance(
@@ -2262,6 +2267,8 @@ class GaussianUnit(torch.nn.Module):
         if self.cov_kind == "ppca" and self.ppca_rank:
             root = self.W[:, channels_].reshape(-1, self.ppca_rank)
             root = operators.LowRankRootLinearOperator(root)
+            if signal_only:
+                return root
             # this calls .add_low_rank, and it's genuinely bugged.
             # the log liks that come out look wrong. can't say why.
             # return ncov + root
