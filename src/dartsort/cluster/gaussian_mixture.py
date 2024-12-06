@@ -1109,6 +1109,7 @@ class SpikeMixtureModel(torch.nn.Module):
         split_labels = self.mini_merge(
             sp,
             split_labels,
+            unit_id,
             weights=responsibilities.T,
             debug=debug,
             debug_info=result,
@@ -1178,6 +1179,7 @@ class SpikeMixtureModel(torch.nn.Module):
         self,
         spike_data,
         labels,
+        unit_id,
         weights=None,
         debug=False,
         debug_info=None,
@@ -1234,13 +1236,19 @@ class SpikeMixtureModel(torch.nn.Module):
             labels[labels >= 0] = np.searchsorted(ids, labels[labels >= 0])
             return labels
 
+        fit_type = "reuse_refitmerged"
+        if "cv" in self.merge_criterion:
+            fit_type = "refit_all"
+
         new_labels, new_ids = self.merge_units(
             units=units,
             labels=labels,
+            override_unit_id=unit_id,
             weights=weights[valid],
             log_liks=lls,
             spike_data=spike_data,
             debug_info=debug_info,
+            fit_type=fit_type,
         )
         if debug:
             debug_info["reas_labels"] = labels
@@ -1337,13 +1345,14 @@ class SpikeMixtureModel(torch.nn.Module):
         distances,
         unit_ids,
         labels=None,
+        override_unit_id=None,
         spikes_extract=None,
         max_distance=1.0,
         threshold=None,
         criterion="ll",
         likelihoods=None,
         weights=None,
-        fit_type="refit_all",
+        fit_type="reuse_fitmerged",
         spikes_per_subunit=1024,
         sym_function=np.maximum,
         normalization_kind=None,
@@ -1394,6 +1403,7 @@ class SpikeMixtureModel(torch.nn.Module):
                 res = self.unit_group_criterion(
                     cluster_ids,
                     spikes_extract=spikes_extract,
+                    override_unit_id=override_unit_id,
                     weights=weights[leaves] if weights is not None else None,
                     likelihoods=likelihoods,
                     spikes_per_subunit=spikes_per_subunit,
@@ -1413,11 +1423,13 @@ class SpikeMixtureModel(torch.nn.Module):
                     cluster_ids,
                     labels=labels,
                     spikes_extract=spikes_extract,
+                    override_unit_id=override_unit_id,
                     weights=weights[leaves] if weights is not None else None,
                     spikes_per_subunit=spikes_per_subunit,
                     normalization_kind=normalization_kind,
                     likelihoods=likelihoods,
                     entropy_correction=criterion == "ccv",
+                    fit_type=fit_type,
                 )
                 # heldout ll, bigger = better
                 imp = res["cv_merged_loglik"] - res["cv_full_loglik"]
@@ -1433,6 +1445,7 @@ class SpikeMixtureModel(torch.nn.Module):
     def kfold(
         self,
         unit_ids,
+        override_unit_id=None,
         spikes_extract=None,
         normalization_kind=None,
         labels=None,
@@ -1445,6 +1458,7 @@ class SpikeMixtureModel(torch.nn.Module):
         weights=None,
         min_overlap=0.66,
         fit_type="reuse_fitmerged",
+        debug=False,
     ):
         unit_ids = torch.asarray(unit_ids)
         if normalization_kind is None:
@@ -1491,9 +1505,9 @@ class SpikeMixtureModel(torch.nn.Module):
             spike_nc = spike_nc.to(torch.float).reciprocal_()
             assert spike_nc.ndim == 1 and torch.isfinite(spike_nc).all()
 
-        full_loglik = 0.0
-        merged_loglik = 0.0
-        mean_overlap = 0.0
+        full_logliks = np.full(n_folds, np.nan, dtype=np.float32)
+        merged_logliks = np.full(n_folds, np.nan, dtype=np.float32)
+        mean_overlaps = np.full(n_folds, np.nan, dtype=np.float32)
         for k, (train_ix, test_ix) in zip(range(n_folds), skf.split(labels, labels)):
             # allow user to pass in pre-built weights
             fold_weights = None
@@ -1504,6 +1518,7 @@ class SpikeMixtureModel(torch.nn.Module):
             subunits, merged_unit = self.refit_group(
                 unit_ids,
                 spikes_extract[train_ix],
+                override_unit_id=override_unit_id,
                 likelihoods=likelihoods,
                 weights=fold_weights,
                 fit_type=fit_type,
@@ -1520,21 +1535,21 @@ class SpikeMixtureModel(torch.nn.Module):
                     subunit_logliks[i] = sll
             # if any spikes are ignored by all, ignore...
             ol = subunit_logliks.isfinite().all(dim=0).to(torch.float).mean()
-            mean_overlap += ol.cpu().item() / n_folds
+            mean_overlaps[k] = ol.cpu().item()
             keep = subunit_logliks.isfinite().any(dim=0)
             (keep,) = keep.cpu().nonzero(as_tuple=True)
             if not keep.numel():
                 full_loglik = merged_loglik = np.nan
                 break
-            _, merged_logliks = self.unit_log_likelihoods(
+            _, fold_merged_logliks = self.unit_log_likelihoods(
                 unit=merged_unit, spikes=test_core
             )
-            if merged_logliks is None:
+            if fold_merged_logliks is None:
                 full_loglik = merged_loglik = np.nan
                 break
             subunit_logliks = subunit_logliks[:, keep]
-            merged_logliks = merged_logliks[keep]
-            assert torch.isfinite(merged_logliks).all()
+            fold_merged_logliks = fold_merged_logliks[keep]
+            assert torch.isfinite(fold_merged_logliks).all()
 
             # aggregate subunit liks
             subunit_log_props = F.softmax(subunit_logliks, dim=0).mean(1).log_()
@@ -1558,28 +1573,41 @@ class SpikeMixtureModel(torch.nn.Module):
                 log_resps = F.log_softmax(subunit_logliks, dim=1)
                 log_resps.nan_to_num_(nan=torch.nan, neginf=0.0)
                 ec = -(log_resps * log_resps.exp()).sum(1)
-                assert ec.shape == merged_logliks.shape
+                assert ec.shape == fold_merged_logliks.shape
                 assert torch.isfinite(ec).all()
                 fold_full_loglik -= ec.mean()
             assert torch.isfinite(fold_full_loglik)
 
             # get merged lik
             if normalization_kind == "noise":
-                merged_logliks.div_(nlls.abs())
+                fold_merged_logliks.div_(nlls.abs())
             elif normalization_kind == "channels":
-                merged_logliks.mul_(fold_spike_nc)
-            fold_merged_loglik = merged_logliks.mean()
+                fold_merged_logliks.mul_(fold_spike_nc)
+            fold_merged_loglik = fold_merged_logliks.mean()
             assert torch.isfinite(fold_merged_loglik)
 
             # add to the total
-            full_loglik += fold_full_loglik.cpu().item() / n_folds
-            merged_loglik += fold_merged_loglik.cpu().item() / n_folds
-            if not np.isfinite(full_loglik) and np.isfinite(merged_loglik):
+            full_logliks[k] = fold_full_loglik.cpu().item()
+            merged_logliks[k] = fold_merged_loglik.cpu().item()
+            if not np.isfinite(full_logliks[k] + merged_logliks[k]):
                 break
 
+        mean_overlap = mean_overlaps.mean()
         if mean_overlap < min_overlap:
             full_loglik = np.nan
             merged_loglik = np.nan
+        else:
+            full_loglik = full_logliks.mean()
+            merged_loglik = merged_logliks.mean()
+
+        if debug:
+            return dict(
+                cv_full_loglik=full_loglik,
+                cv_merged_loglik=merged_loglik,
+                mean_overlaps=mean_overlaps,
+                full_logliks=full_logliks,
+                merged_logliks=merged_logliks,
+            )
 
         return dict(cv_full_loglik=full_loglik, cv_merged_loglik=merged_loglik)
 
@@ -1587,6 +1615,7 @@ class SpikeMixtureModel(torch.nn.Module):
         self,
         unit_ids,
         spikes_extract,
+        override_unit_id=None,
         spikes_core=None,
         likelihoods=None,
         weights=None,
@@ -1607,10 +1636,10 @@ class SpikeMixtureModel(torch.nn.Module):
                 keep = slice(None)
                 if weights is not None:
                     my_weights = weights[i]
-                    (keep,) = my_weights.nonzero(as_tuple=True)
+                    (keep,) = my_weights.cpu().nonzero(as_tuple=True)
                     my_weights = my_weights[keep]
                 u = self.fit_unit(
-                    unit_id=k,
+                    unit_id=override_unit_id if override_unit_id is not None else k,
                     indices=spikes_extract.indices[keep],
                     likelihoods=likelihoods,
                     weights=my_weights,
@@ -1636,6 +1665,7 @@ class SpikeMixtureModel(torch.nn.Module):
                     subunit_log_props = subunit_props.log()
                     full_logliks = subunit_logliks[:, keep].T + subunit_log_props
         elif fit_type in ("avg_preexisting", "reuse_fitmerged"):
+            assert override_unit_id is None
             units = [self[uid] for uid in unit_ids]
             if fit_type == "avg_preexisting":
                 subunit_log_props = self.log_proportions[unit_ids]
@@ -1669,6 +1699,7 @@ class SpikeMixtureModel(torch.nn.Module):
         self,
         unit_ids,
         likelihoods=None,
+        override_unit_id=None,
         weights=None,
         spikes_extract=None,
         spikes_per_subunit=2048,
@@ -1700,6 +1731,7 @@ class SpikeMixtureModel(torch.nn.Module):
         units, unit, full_logliks, subunit_log_props, keep = self.refit_group(
             unit_ids,
             spikes_extract,
+            override_unit_id=override_unit_id,
             spikes_core=spikes_core,
             weights=weights,
             likelihoods=likelihoods,
@@ -1810,6 +1842,7 @@ class SpikeMixtureModel(torch.nn.Module):
         self,
         unit_ids=None,
         units=None,
+        override_unit_id=None,
         spike_data=None,
         labels=None,
         log_liks=None,
@@ -1817,6 +1850,7 @@ class SpikeMixtureModel(torch.nn.Module):
         show_progress=False,
         merge_kind=None,
         debug_info=None,
+        fit_type="reuse_fitmerged",
     ):
         """Unit merging logic
 
@@ -1903,6 +1937,7 @@ class SpikeMixtureModel(torch.nn.Module):
 
             Z, group_ids, improvements = self.tree_merge(
                 distances,
+                override_unit_id=override_unit_id,
                 unit_ids=unit_ids,
                 labels=labels,
                 spikes_extract=spike_data,
@@ -1912,6 +1947,7 @@ class SpikeMixtureModel(torch.nn.Module):
                 weights=weights,
                 sym_function=self.merge_sym_function,
                 show_progress=show_progress,
+                fit_type=fit_type,
             )
             if debug_info is not None:
                 debug_info["Z"] = Z
