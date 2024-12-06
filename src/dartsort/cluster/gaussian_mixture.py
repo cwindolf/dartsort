@@ -1444,6 +1444,7 @@ class SpikeMixtureModel(torch.nn.Module):
         likelihoods=None,
         weights=None,
         min_overlap=0.66,
+        fit_type="reuse_fitmerged",
     ):
         unit_ids = torch.asarray(unit_ids)
         if normalization_kind is None:
@@ -1505,6 +1506,7 @@ class SpikeMixtureModel(torch.nn.Module):
                 spikes_extract[train_ix],
                 likelihoods=likelihoods,
                 weights=fold_weights,
+                fit_type=fit_type,
             )
 
             # get heldout spike liks
@@ -1585,49 +1587,79 @@ class SpikeMixtureModel(torch.nn.Module):
         self,
         unit_ids,
         spikes_extract,
+        spikes_core=None,
         likelihoods=None,
         weights=None,
-        fit_type="refit_all",
+        fit_type="reuse_fitmerged",
         verbose=False,
+        with_likelihoods=False,
     ):
-        units = []
-        if weights is not None and spikes_extract is not None:
-            if weights.shape != (len(unit_ids), len(spikes_extract)):
-                raise ValueError(
-                    f"{weights.shape=} does not agree with {len(unit_ids)=} "
-                    f"and {len(spikes_extract)=}, where {unit_ids=}."
+        if fit_type in ("refit_all", "refit_avg"):
+            units = []
+            if weights is not None and spikes_extract is not None:
+                if weights.shape != (len(unit_ids), len(spikes_extract)):
+                    raise ValueError(
+                        f"{weights.shape=} does not agree with {len(unit_ids)=} "
+                        f"and {len(spikes_extract)=}, where {unit_ids=}."
+                    )
+            for i, k in enumerate(unit_ids):
+                my_weights = None
+                keep = slice(None)
+                if weights is not None:
+                    my_weights = weights[i]
+                    (keep,) = my_weights.nonzero(as_tuple=True)
+                    my_weights = my_weights[keep]
+                u = self.fit_unit(
+                    unit_id=k,
+                    indices=spikes_extract.indices[keep],
+                    likelihoods=likelihoods,
+                    weights=my_weights,
+                    features=spikes_extract[keep],
+                    verbose=False,
                 )
-        for i, k in enumerate(unit_ids):
-            my_weights = None
-            keep = slice(None)
-            if weights is not None:
-                my_weights = weights[i]
-                (keep,) = my_weights.nonzero(as_tuple=True)
-                my_weights = my_weights[keep]
-            u = self.fit_unit(
-                unit_id=k,
-                indices=spikes_extract.indices[keep],
-                likelihoods=likelihoods,
-                weights=my_weights,
-                features=spikes_extract[keep],
-                verbose=False,
-            )
-            units.append(u)
-        if verbose:
-            logger.info(f"{[u.channels for u in units]=}")
+                units.append(u)
+            if verbose:
+                logger.info(f"{[u.channels for u in units]=}")
 
-        if fit_type == "refit_all":
+            if fit_type == "refit_avg":
+                subunit_logliks = spikes_core.features.new_full(
+                    (len(unit_ids), len(spikes_extract)), -torch.inf
+                )
+                for i, u in enumerate(units):
+                    _, sll = self.unit_log_likelihoods(unit=u, spikes=spikes_core)
+                    if sll is not None:
+                        subunit_logliks[i] = sll
+                keep = subunit_logliks.isfinite().any(dim=0)
+                (keep,) = keep.cpu().nonzero(as_tuple=True)
+                subunit_props = F.softmax(subunit_logliks[:, keep], dim=0).mean(1)
+                if with_likelihoods:
+                    full_logliks = subunit_logliks[:, keep].T + subunit_props.log()
+        elif fit_type in ("avg_preexisting", "reuse_fitmerged"):
+            units = [self[uid] for uid in unit_ids]
+            if fit_type == "avg_preexisting":
+                subunit_log_props = self.log_proportions[unit_ids]
+                subunit_props = F.softmax(subunit_log_props, dim=0)
+
+            if with_likelihoods:
+                subunit_logliks = likelihoods[:, spikes_extract.indices][unit_ids]
+                keep = np.flatnonzero(np.diff(subunit_logliks.indptr))
+                spll = subunit_logliks[:, keep].tocoo()
+                full_logliks = torch.full(spll.shape, -torch.inf)
+                full_logliks[spll.coords] = torch.from_numpy(spll.data)
+                full_logliks = full_logliks.to(subunit_log_props)
+                full_logliks = full_logliks.T + subunit_log_props
+
+        if fit_type in ("refit_all", "reuse_fitmerged"):
             unit = self.fit_unit(
                 indices=spikes_extract.indices, features=spikes_extract
             )
-        elif fit_type == "refit_avg":
-            subunit_logliks = likelihoods[:, spikes_extract.indices][unit_ids]
-            subunit_logliks = torch.asarray(subunit_logliks.to_dense())
-            subunit_log_props = F.softmax(subunit_logliks, dim=0).mean(1).log_()
-            unit = average_units(units, props=subunit_log_props.exp())
+        elif fit_type in ("refit_avg", "avg_preexisting"):
+            unit = average_units(units, proportions=subunit_log_props.exp())
         else:
             assert False
 
+        if with_likelihoods:
+            return units, unit, full_logliks, keep
         return units, unit
 
     def unit_group_criterion(
@@ -1637,7 +1669,7 @@ class SpikeMixtureModel(torch.nn.Module):
         weights=None,
         spikes_extract=None,
         spikes_per_subunit=2048,
-        fit_type="refit_all",
+        fit_type="reuse_fitmerged",
         debug=False,
     ):
         """See if a single unit explains a group as far as AIC/BIC/MDL go."""
@@ -1662,50 +1694,16 @@ class SpikeMixtureModel(torch.nn.Module):
         )
         n = len(spikes_extract)
 
-        if fit_type.startswith("refit"):
-            units, unit = self.refit_group(
-                unit_ids,
-                spikes_extract,
-                weights=weights,
-                likelihoods=likelihoods,
-                fit_type=fit_type,
-            )
-
-            subunit_logliks = spikes_core.features.new_full(
-                (len(unit_ids), len(spikes_extract)), -torch.inf
-            )
-            for i, u in enumerate(units):
-                _, sll = self.unit_log_likelihoods(unit=u, spikes=spikes_core)
-                if sll is not None:
-                    subunit_logliks[i] = sll
-            (keep,) = subunit_logliks.isfinite().any(dim=0).cpu().nonzero(as_tuple=True)
-            subunit_log_props = (
-                F.softmax(subunit_logliks[:, keep], dim=0).mean(1).log_()
-            )
-            # loglik per spik
-            full_logliks = subunit_logliks[:, keep].T + subunit_log_props
-            full_loglik = torch.logsumexp(full_logliks, dim=1).mean()
-        elif fit_type == "avg_preexisting":
-            subunit_log_props = self.log_proportions[unit_ids]
-            units = [self[uid] for uid in unit_ids]
-            subunit_props = F.softmax(subunit_log_props, dim=0)
-            unit = average_units(units, subunit_props)
-            subunit_logliks = likelihoods[:, in_any][unit_ids]
-            keep = np.flatnonzero(np.diff(subunit_logliks.indptr))
-            spll = subunit_logliks[:, keep].tocoo()
-            full_logliks = torch.full(spll.shape, -torch.inf)
-            full_logliks[spll.coords] = torch.from_numpy(spll.data)
-            full_logliks = full_logliks.to(subunit_log_props)
-            full_logliks = full_logliks.T + subunit_log_props
-            full_loglik = torch.logsumexp(full_logliks, dim=1).mean()
-            # full_loglik = marginal_loglik(
-            #     indices=spikes_extract.indices.numpy(force=True)[keep],
-            #     log_proportions=self.log_proportions,
-            #     log_likelihoods=likelihoods,
-            #     unit_ids=unit_ids,
-            # )
-        else:
-            assert False
+        units, unit, full_logliks, keep = self.refit_group(
+            unit_ids,
+            spikes_extract,
+            spikes_core=spikes_core,
+            weights=weights,
+            likelihoods=likelihoods,
+            fit_type=fit_type,
+            with_likelihoods=True,
+        )
+        full_loglik = torch.logsumexp(full_logliks, dim=1).mean()
 
         log_resps = F.log_softmax(full_logliks, dim=1)
         log_resps.nan_to_num_(neginf=0.0, nan=torch.nan)
@@ -2328,7 +2326,7 @@ class GaussianUnit(torch.nn.Module):
         noise_cov = self.noise.marginal_covariance(device=dmu.device)
         return noise_cov.inv_quad(dmu.T, reduce_inv_quad=False)
 
-    def kl_divergence(self, other_means, other_covs, other_logdets):
+    def kl_divergence(self, other_means=None, other_covs=None, other_logdets=None, other=None, return_extra=False):
         """DKL(self || others)
         = 0.5 * {
             tr(So^-1 Ss)
@@ -2337,6 +2335,15 @@ class GaussianUnit(torch.nn.Module):
             + log(|So| / |Ss|)
           }
         """
+        is_ppca = self.cov_kind == "ppca" and self.ppca_rank
+
+        if other is not None:
+            other_means = other.mean.unsqueeze(0)
+            other_covs = None
+            if is_ppca:
+                other_covs = other.W.unsqueeze(0)
+            other_logdets = torch.atleast_1d(other.logdet())
+
         n = other_means.shape[0]
         dmu = other_means
         if self.mean_kind != "zero":
@@ -2347,7 +2354,6 @@ class GaussianUnit(torch.nn.Module):
         # get all the other covariance operators
         ncov = self.noise.marginal_covariance()
         ncov_batch = ncov._expand_batch((n,))
-        is_ppca = self.cov_kind == "ppca" and self.ppca_rank
         if is_ppca:
             oW = other_covs.reshape(n, k, self.ppca_rank)
             root = operators.LowRankRootLinearOperator(oW)
@@ -2372,7 +2378,10 @@ class GaussianUnit(torch.nn.Module):
         ld = 0.0
         if is_ppca:
             ld = other_logdets - self.logdet()
-        return 0.5 * (inv_quad + ((tr - k) + ld))
+        kl = 0.5 * (inv_quad + ((tr - k) + ld))
+        if return_extra:
+            return dict(kl=kl, inv_quad=inv_quad, ld=ld, tr=tr, k=k)
+        return kl
 
     def reverse_kl_divergence(self, other_means, other_covs, other_logdets):
         """DKL(others || self)
