@@ -1621,7 +1621,7 @@ class SpikeMixtureModel(torch.nn.Module):
             if verbose:
                 logger.info(f"{[u.channels for u in units]=}")
 
-            if fit_type == "refit_avg":
+            if fit_type == "refit_avg" or with_likelihoods:
                 subunit_logliks = spikes_core.features.new_full(
                     (len(unit_ids), len(spikes_extract)), -torch.inf
                 )
@@ -1633,7 +1633,8 @@ class SpikeMixtureModel(torch.nn.Module):
                 (keep,) = keep.cpu().nonzero(as_tuple=True)
                 subunit_props = F.softmax(subunit_logliks[:, keep], dim=0).mean(1)
                 if with_likelihoods:
-                    full_logliks = subunit_logliks[:, keep].T + subunit_props.log()
+                    subunit_log_props = subunit_props.log()
+                    full_logliks = subunit_logliks[:, keep].T + subunit_log_props
         elif fit_type in ("avg_preexisting", "reuse_fitmerged"):
             units = [self[uid] for uid in unit_ids]
             if fit_type == "avg_preexisting":
@@ -1648,6 +1649,8 @@ class SpikeMixtureModel(torch.nn.Module):
                 full_logliks[spll.coords] = torch.from_numpy(spll.data)
                 full_logliks = full_logliks.to(subunit_log_props)
                 full_logliks = full_logliks.T + subunit_log_props
+        else:
+            assert False
 
         if fit_type in ("refit_all", "reuse_fitmerged"):
             unit = self.fit_unit(
@@ -1659,7 +1662,7 @@ class SpikeMixtureModel(torch.nn.Module):
             assert False
 
         if with_likelihoods:
-            return units, unit, full_logliks, keep
+            return units, unit, full_logliks, subunit_log_props, keep
         return units, unit
 
     def unit_group_criterion(
@@ -1694,7 +1697,7 @@ class SpikeMixtureModel(torch.nn.Module):
         )
         n = len(spikes_extract)
 
-        units, unit, full_logliks, keep = self.refit_group(
+        units, unit, full_logliks, subunit_log_props, keep = self.refit_group(
             unit_ids,
             spikes_extract,
             spikes_core=spikes_core,
@@ -1760,6 +1763,7 @@ class SpikeMixtureModel(torch.nn.Module):
             icl_merged=bic_merged,
         )
         if debug:
+            subunit_logliks = full_logliks - subunit_log_props
             debug_info = dict(
                 unit_logliks=unit_logliks,
                 subunit_logliks=subunit_logliks,
@@ -1824,7 +1828,6 @@ class SpikeMixtureModel(torch.nn.Module):
             Has length `len(units)`: maps each unit to its new ID. If `units`
             was not supplied, then that would mean all of my units.
         """
-        print(f"{[u.channels for u in units]=}")
         if unit_ids is None:
             if units is not None:
                 unit_ids = torch.arange(len(units))
