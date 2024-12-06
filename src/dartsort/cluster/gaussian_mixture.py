@@ -1667,8 +1667,9 @@ class SpikeMixtureModel(torch.nn.Module):
         elif fit_type in ("avg_preexisting", "reuse_fitmerged"):
             assert override_unit_id is None
             units = [self[uid] for uid in unit_ids]
-            if fit_type == "avg_preexisting":
+            if with_likelihoods or fit_type == "avg_preexisting":
                 subunit_log_props = self.log_proportions[unit_ids]
+            if fit_type == "avg_preexisting":
                 subunit_props = F.softmax(subunit_log_props, dim=0)
 
             if with_likelihoods:
@@ -1707,7 +1708,7 @@ class SpikeMixtureModel(torch.nn.Module):
         debug=False,
     ):
         """See if a single unit explains a group as far as AIC/BIC/MDL go."""
-        assert fit_type in ("avg_preexisting", "refit_all", "refit_avg")
+        assert fit_type in ("avg_preexisting", "refit_all", "refit_avg", "reuse_fitmerged")
         unit_ids = torch.asarray(unit_ids)
 
         # pick spikes for likelihood computation
@@ -1718,7 +1719,7 @@ class SpikeMixtureModel(torch.nn.Module):
             in_any = torch.cat(in_subunits)
             in_any, in_order = torch.sort(in_any)
             spikes_extract = self.data.spike_data(
-                in_any, with_neighborhood_ids=fit_type.startswith("refit")
+                in_any, with_neighborhood_ids="fit" in fit_type,
             )
 
         spikes_core = self.data.spike_data(
