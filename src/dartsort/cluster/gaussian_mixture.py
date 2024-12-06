@@ -1603,7 +1603,6 @@ class SpikeMixtureModel(torch.nn.Module):
             if weights is not None:
                 my_weights = weights[i]
                 (keep,) = my_weights.nonzero(as_tuple=True)
-                keep = keep.cpu()
                 my_weights = my_weights[keep]
             u = self.fit_unit(
                 unit_id=k,
@@ -1679,8 +1678,7 @@ class SpikeMixtureModel(torch.nn.Module):
                 _, sll = self.unit_log_likelihoods(unit=u, spikes=spikes_core)
                 if sll is not None:
                     subunit_logliks[i] = sll
-            (keep,) = subunit_logliks.isfinite().any(dim=0).nonzero(as_tuple=True)
-            keep = keep.cpu()
+            (keep,) = subunit_logliks.isfinite().any(dim=0).cpu().nonzero(as_tuple=True)
             subunit_log_props = (
                 F.softmax(subunit_logliks[:, keep], dim=0).mean(1).log_()
             )
