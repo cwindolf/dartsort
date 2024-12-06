@@ -53,6 +53,7 @@ def annotated_dendro(
     above_threshold_color=0.0,
     leaf_labels=None,
     annotations_offset_by_n=True,
+    rotation=45,
 ):
     n = len(Z) + 1
     res = dendrogram(
@@ -99,7 +100,9 @@ def annotated_dendro(
                 color=lc,
                 va="center",
                 ha="center",
-                bbox=dict(fc=fc, ec="none", boxstyle="square,pad=0.1"),
+                rotation=rotation,
+                rotation_mode="anchor",
+                bbox=dict(fc=fc, ec="none", boxstyle="square,pad=0."),
             )
 
 
