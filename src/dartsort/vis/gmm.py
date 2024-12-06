@@ -808,13 +808,15 @@ class NeighborTreeMerge(GMMPlot):
         metric=None,
         criterion="ll",
         max_distance=1e10,
-        normalization_kind=None,
+        criterion_normalization_kind=None,
+        distance_normalization_kind=None,
     ):
         self.n_neighbors = n_neighbors
         self.metric = metric
         self.criterion = criterion
         self.max_distance = max_distance
-        self.normalization_kind = normalization_kind
+        self.criterion_normalization_kind = criterion_normalization_kind
+        self.distance_normalization_kind = distance_normalization_kind
 
     def draw(self, panel, gmm, unit_id):
         neighbors = gmm_helpers.get_neighbors(gmm, unit_id)
@@ -828,15 +830,19 @@ class NeighborTreeMerge(GMMPlot):
         if metric is None:
             metric = gmm.distance_metric
 
-        normalization_kind = self.normalization_kind
-        if normalization_kind is None:
-            normalization_kind = gmm.criterion_normalization_kind
+        distance_normalization_kind = self.distance_normalization_kind
+        if distance_normalization_kind is None:
+            distance_normalization_kind = gmm.distance_normalization_kind
+
+        criterion_normalization_kind = self.criterion_normalization_kind
+        if criterion_normalization_kind is None:
+            criterion_normalization_kind = gmm.criterion_normalization_kind
 
         distances = gmm.distances(
             units=[gmm[u] for u in neighbors],
             show_progress=False,
             kind=metric,
-            normalization_kind=normalization_kind,
+            normalization_kind=distance_normalization_kind,
         )
 
         Z, group_ids, improvements = gmm.tree_merge(
@@ -846,7 +852,7 @@ class NeighborTreeMerge(GMMPlot):
             likelihoods=gmm.log_liks,
             criterion=criterion,
             threshold=-np.inf,
-            normalization_kind=normalization_kind,
+            normalization_kind=criterion_normalization_kind,
         )
 
         # make vis
@@ -861,7 +867,7 @@ class NeighborTreeMerge(GMMPlot):
                 leaf_labels=neighbors,
                 annotations_offset_by_n=False,
             )
-            nstr = f"norm={normalization_kind}"
+            nstr = f"dnorm={distance_normalization_kind} cnorm={criterion_normalization_kind}"
             ax.set_title(f"{metric} {criterion} {nstr}")
             sns.despine(ax=ax, left=True, right=True, top=True)
         except ValueError as e:
@@ -890,20 +896,21 @@ default_gmm_plots = (
     KMeansSplit(),
     NeighborMeans(),
     NeighborDistances(metric="noise_metric"),
-    NeighborDistances(metric="kl", normalization_kind="none"),
-    NeighborDistances(metric="kl", normalization_kind="channels"),
+    NeighborDistances(metric="kl"),
+    # NeighborDistances(metric="kl", normalization_kind="none"),
+    # NeighborDistances(metric="kl", normalization_kind="channels"),
     # NeighborDistances(metric="kl", normalization_kind="noise"),
     NeighborTreeMerge(metric=None, criterion="ll"),
     NeighborTreeMerge(metric=None, criterion="icl"),
     # NeighborTreeMerge(metric=None, criterion="aic"),
     # NeighborTreeMerge(metric=None, criterion="bic"),
-    NeighborTreeMerge(metric=None, criterion="cv", normalization_kind="none"),
-    NeighborTreeMerge(metric=None, criterion="ccv", normalization_kind="none"),
-    NeighborTreeMerge(metric=None, criterion="ccv", normalization_kind="channels"),
-    # NeighborTreeMerge(metric=None, criterion="ccv", normalization_kind="noise"),
+    NeighborTreeMerge(metric=None, criterion="cv", criterion_normalization_kind="none"),
+    NeighborTreeMerge(metric=None, criterion="ccv", criterion_normalization_kind="none"),
+    # NeighborTreeMerge(metric=None, criterion="ccv", criterion_normalization_kind="channels"),
+    # NeighborTreeMerge(metric=None, criterion="ccv", criterion_normalization_kind="noise"),
     NeighborBimodalities(),
-    NeighborInfoCriteria(fit_type="refit_all"),
-    NeighborInfoCriteria(fit_type="avg_preexisting"),
+    NeighborInfoCriteria(fit_type="reuse_fitmerged"),
+    # NeighborInfoCriteria(fit_type="avg_preexisting"),
 )
 
 
