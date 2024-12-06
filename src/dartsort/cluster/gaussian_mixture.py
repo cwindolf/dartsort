@@ -1441,6 +1441,7 @@ class SpikeMixtureModel(torch.nn.Module):
         cap_factor=4,
         likelihoods=None,
         weights=None,
+        min_overlap=0.66,
     ):
         unit_ids = torch.asarray(unit_ids)
         if normalization_kind is None:
@@ -1489,6 +1490,7 @@ class SpikeMixtureModel(torch.nn.Module):
 
         full_loglik = 0.0
         merged_loglik = 0.0
+        mean_overlap = 0.0
         for k, (train_ix, test_ix) in zip(range(n_folds), skf.split(labels, labels)):
             # allow user to pass in pre-built weights
             fold_weights = None
@@ -1513,6 +1515,8 @@ class SpikeMixtureModel(torch.nn.Module):
                 if sll is not None:
                     subunit_logliks[i] = sll
             # if any spikes are ignored by all, ignore...
+            ol = subunit_logliks.isfinite().all(dim=0).to(torch.float).mean()
+            mean_overlap += ol.cpu().item() / n_folds
             keep = subunit_logliks.isfinite().any(dim=0)
             if not keep.any():
                 full_loglik = merged_loglik = np.nan
@@ -1538,6 +1542,10 @@ class SpikeMixtureModel(torch.nn.Module):
             elif normalization_kind == "channels":
                 fold_spike_nc = spike_nc[test_ix[keep]]
                 fold_full_loglik.mul_(fold_spike_nc)
+
+            yfold = labels[test_ix[keep]]
+            yu, yc = np.unique(yfold, return_counts=True)
+
             fold_full_loglik = fold_full_loglik.mean()
 
             if entropy_correction:
@@ -1563,6 +1571,10 @@ class SpikeMixtureModel(torch.nn.Module):
             merged_loglik += fold_merged_loglik / n_folds
             if not np.isfinite(full_loglik) and np.isfinite(merged_loglik):
                 break
+
+        if mean_overlap < min_overlap:
+            full_loglik = np.nan
+            merged_loglik = np.nan
 
         return dict(cv_full_loglik=full_loglik, cv_merged_loglik=merged_loglik)
 
@@ -1811,6 +1823,7 @@ class SpikeMixtureModel(torch.nn.Module):
             Has length `len(units)`: maps each unit to its new ID. If `units`
             was not supplied, then that would mean all of my units.
         """
+        print(f"{[u.channels for u in units]=}")
         if unit_ids is None:
             if units is not None:
                 unit_ids = torch.arange(len(units))
@@ -2224,7 +2237,6 @@ class GaussianUnit(torch.nn.Module):
 
         amp = torch.linalg.vector_norm(self.mean[:, active_chans], dim=0)
         snr = amp * nobs.sqrt()
-        snr = nobs.sqrt()
         full_snr = self.mean.new_zeros(self.mean.shape[1])
         full_snr[active_chans] = snr
         self.register_buffer("snr", full_snr)
