@@ -70,7 +70,7 @@ def annotated_dendro(
     for j, (ic, dc) in enumerate(zip(res["icoord"], res["dcoord"])):
         lines[j, :, 0] = ic
         lines[j, :, 1] = dc
-        if dc[1] < 1.0:
+        if dc[1] < threshold:
             colors[j] = glasbey1024[n + j]
         else:
             colors[j] = above_threshold_color
