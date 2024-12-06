@@ -896,7 +896,7 @@ default_gmm_plots = (
     KMeansSplit(),
     NeighborMeans(),
     NeighborDistances(metric="noise_metric"),
-    NeighborDistances(metric="kl"),
+    NeighborDistances(metric="js"),
     # NeighborDistances(metric="kl", normalization_kind="none"),
     # NeighborDistances(metric="kl", normalization_kind="channels"),
     # NeighborDistances(metric="kl", normalization_kind="noise"),
@@ -905,7 +905,9 @@ default_gmm_plots = (
     # NeighborTreeMerge(metric=None, criterion="aic"),
     # NeighborTreeMerge(metric=None, criterion="bic"),
     NeighborTreeMerge(metric=None, criterion="cv", criterion_normalization_kind="none"),
-    NeighborTreeMerge(metric=None, criterion="ccv", criterion_normalization_kind="none"),
+    NeighborTreeMerge(
+        metric=None, criterion="ccv", criterion_normalization_kind="none"
+    ),
     # NeighborTreeMerge(metric=None, criterion="ccv", criterion_normalization_kind="channels"),
     # NeighborTreeMerge(metric=None, criterion="ccv", criterion_normalization_kind="noise"),
     NeighborBimodalities(),
