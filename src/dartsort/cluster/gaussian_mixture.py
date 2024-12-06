@@ -1722,16 +1722,18 @@ class SpikeMixtureModel(torch.nn.Module):
         k_full_avg = k_full.sum() / n
         if self.use_proportions:
             k_full_avg += len(unit_ids) - 1
+        k_merged_avg_mean = k_merged_avg / n
+        k_full_avg_mean = k_full_avg / n
 
         # compute some criteria
         # actually computing AIC/BIC per example (divide by N)
         # logliks here are already mean log liks.
         # and forget all the factors of 2!
-        aic_full = k_full_avg - full_loglik
-        aic_merged = k_merged_avg - unit_loglik
-        bic_full = 0.5 * (k_full_avg * np.log(n)) - full_loglik
+        aic_full = k_full_avg_mean - full_loglik
+        aic_merged = k_merged_avg_mean - unit_loglik
+        bic_full = 0.5 * (k_full_avg_mean * np.log(n)) - full_loglik
         icl_full = bic_full + ec
-        bic_merged = 0.5 * (k_merged_avg * np.log(n)) - unit_loglik
+        bic_merged = 0.5 * (k_merged_avg_mean * np.log(n)) - unit_loglik
         res = dict(
             aic_full=aic_full,
             aic_merged=aic_merged,
