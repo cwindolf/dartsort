@@ -64,8 +64,9 @@ class SpikeMixtureModel(torch.nn.Module):
         kmeans_drop_prop: float = 0.025,
         kmeans_with_proportions: bool = False,
         kmeans_kmeanspp_initial: str = "mean",
-        split_em_iter: int = 1,
+        split_em_iter: int = 0,
         split_whiten: bool = True,
+        ppca_in_split: bool = False,
         distance_metric: Literal["noise_metric", "kl", "reverse_kl", "js"] = "js",
         distance_normalization_kind: Literal["none", "noise", "channels"] = "channels",
         criterion_normalization_kind: Literal["none", "noise", "channels"] = "none",
@@ -147,7 +148,10 @@ class SpikeMixtureModel(torch.nn.Module):
             ppca_inner_em_iter=ppca_inner_em_iter,
             ppca_atol=ppca_atol,
         )
-        self.split_unit_args = self.unit_args | dict(cov_kind="zero", ppca_rank=0)
+        if ppca_in_split:
+            self.split_unit_args = self.unit_args
+        else:
+            self.split_unit_args = self.unit_args | dict(cov_kind="zero", ppca_rank=0)
 
         # clustering with noise unit to hopefully grab false positives
         self.with_noise_unit = with_noise_unit
@@ -798,7 +802,7 @@ class SpikeMixtureModel(torch.nn.Module):
             denom = self.noise_unit.divergence(
                 means, other_covs=covs, other_logdets=logdets, kind=kind
             )
-            denom = denom.sqrt()
+            denom = denom.sqrt_().numpy(force=True)
             dists[:, ids] /= denom[None, :]
             dists[ids, :] /= denom[:, None]
         elif normalization_kind == "channels":
@@ -1107,6 +1111,7 @@ class SpikeMixtureModel(torch.nn.Module):
         if debug:
             result["split_labels"] = split_labels
             result["responsibilities"] = responsibilities
+        split_labels = split_labels.cpu()
         split_ids, split_labels = split_labels.unique(return_inverse=True)
         assert split_ids.min() >= 0
         if split_labels.unique().numel() <= 1:
@@ -1241,6 +1246,7 @@ class SpikeMixtureModel(torch.nn.Module):
                     lls[j] = lls_
             best_liks, labels = lls.max(dim=0)
             labels[torch.isinf(best_liks)] = -1
+            labels = labels.cpu()
             weights = F.softmax(lls, dim=0)
 
         labels = labels.numpy(force=True)
