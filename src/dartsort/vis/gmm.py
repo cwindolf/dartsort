@@ -719,82 +719,50 @@ class NeighborInfoCriteria(GMMPlot):
     def __init__(
         self,
         n_neighbors=5,
-        fit_by_avg=False,
-        fit_type="refit_all",
-        cv_entropy_correction=True,
+        in_bag=False,
     ):
         self.n_neighbors = n_neighbors
-        self.fit_by_avg = fit_by_avg
-        self.fit_type = fit_type
-        self.cv_entropy_correction = cv_entropy_correction
+        self.in_bag = in_bag
 
     def draw(self, panel, gmm, unit_id):
         neighbors = gmm_helpers.get_neighbors(gmm, unit_id)
         assert neighbors[0] == unit_id
         others = neighbors[1:]
         axes = panel.subplots(nrows=len(others), ncols=1)
-        histkw = dict(density=True, histtype="step", log=True)
-        astr = "AICfull/merged: {aic_full:0.1f} / {aic_merged:0.1f}"
-        bstr = "BICfull/merged: {bic_full:0.1f} / {bic_merged:0.1f}"
-        istr = "ICLfull/merged: {icl_full:0.1f} / {icl_merged:0.1f}"
-        ccstr = "CCLfull/merged: {ccl_full:0.1f} / {ccl_merged:0.1f}"
-        lstr = "LLfull/merged: {full_loglik:0.1f} / {unit_loglik:0.1f}"
-        c0 = "C" if self.cv_entropy_correction else ""
-        cvstr = c0 + "CVfull/merged: {cv_full_loglik:0.1f} / {cv_merged_loglik:0.1f}"
-        cstr = f"{astr}\n{bstr}\n{lstr}\n{ccstr}\n{istr}\n{cvstr}\n"
+        bag = "inbag" if self.in_bag else "heldout"
         bbox = dict(facecolor="w", alpha=0.5, edgecolor="none")
+        histkw = dict(density=True, histtype="step", log=True)
+
         for ax, other_id in zip(axes, others):
-            uids = [unit_id, other_id]
-            res = gmm.unit_group_criterion(
-                uids, likelihoods=gmm.log_liks, debug=True, fit_type=self.fit_type
-            )
-            cvres = gmm.kfold(
-                uids,
+            res = gmm.merge_criteria(
+                [unit_id, other_id],
                 likelihoods=gmm.log_liks,
-                entropy_correction=self.cv_entropy_correction,
+                in_bag=self.in_bag,
+                debug=True,
             )
-            res.update(cvres)
+            if res is None:
+                ax.text(0.5, 0.5, "abandoned", transform=ax.transAxes)
+                ax.axis("off")
+                continue
 
-            sll = res["subunit_logliks"]
-            n = sll.shape[1]
-            histkw["bins"] = 2 * int(np.ceil(np.sqrt(n)))
-            if not torch.is_tensor(sll):
-                sll = sll.tocsr()
+            info = res["info"]
+            kept = info["keep"].sum() / len(info["keep"])
+            for uid, ll in zip((unit_id, other_id), info["subunit_logliks"]):
+                ax.hist(ll, color=glasbey1024[uid], **histkw)
+            merged_ll = info["unit_logliks"]
+            ax.hist(merged_ll, color="k", **histkw)
 
-            for row, uid in enumerate(uids):
-                if torch.is_tensor(sll):
-                    rowsll = sll[row].cpu()
-                    rowsll = rowsll[torch.isfinite(rowsll)]
-                else:
-                    rowsll = sll[[row]].data
-                if len(rowsll):
-                    ax.hist(rowsll, color=glasbey1024[uid], **histkw)
-            ull = res["unit_logliks"]
-            if ull is not None:
-                ull = ull.cpu()
-                ax.hist(ull[torch.isfinite(ull)], color="k", **histkw)
-            s = f"other={other_id} fit={self.fit_type}\n" + cstr.format_map(res)
-            # criterion style: smaller is better, so merge if M<F - 0<F-M
-            aicdif = res["aic_full"] - res["aic_merged"]
-            bicdif = res["bic_full"] - res["bic_merged"]
-            icldif = res["icl_full"] - res["icl_merged"]
+            message = f"{100*kept:.1f}%"
+            if "improvements" in res:
+                message = f"{message} {bag} full/merged/improvement:"
+                fc, mc = res["full_criteria"], res["merged_criteria"]
+                for k, v in res["improvements"].items():
+                    t = ":) " if v >= 0 else "X( "
+                    message += f"\n{t}{k}: {fc[k]:.2f} / {mc[k]:.2f} / {v:.2f}"
 
-            # lik style: bigger better, merge if F<M - 0<M-F
-            ccldif = res["ccl_merged"] - res["ccl_full"]
-            lldif = res["unit_loglik"] - res["full_loglik"]
-            cvdif = cvres["cv_merged_loglik"] - res["cv_full_loglik"]
-
-            s += f"aic: {aicdif:0.1f}, " + ("merge!" if aicdif > 0 else "nope.") + "\n"
-            s += f"bic: {bicdif:0.1f}, " + ("merge!" if bicdif > 0 else "nope.") + "\n"
-            s += f"icl: {icldif:0.1f}, " + ("merge!" if icldif > 0 else "nope.") + "\n"
-            s += f"ccl: {ccldif:0.1f}, " + ("merge!" if ccldif > 0 else "nope.") + "\n"
-            s += f"cv: {cvdif:0.1f}, " + ("merge!" if cvdif > 0 else "nope.") + "\n"
-            s += f"ll: {lldif:0.1f}, " + ("merge!" if lldif > 0 else "nope.")
-
-            ax.text(0.05, 0.95, s, transform=ax.transAxes, va="top", bbox=bbox)
+            ax.text(0.05, 0.95, message, transform=ax.transAxes, va="top", bbox=bbox)
             ax.set_xlabel("log lik")
             sns.despine(ax=ax, left=True, right=True, top=True)
-            # ax.set_yticks([])
 
 
 class NeighborTreeMerge(GMMPlot):
@@ -806,7 +774,7 @@ class NeighborTreeMerge(GMMPlot):
         self,
         n_neighbors=5,
         metric=None,
-        criterion="ll",
+        criterion="heldout_loglik",
         max_distance=1e10,
         criterion_normalization_kind=None,
         distance_normalization_kind=None,
@@ -897,21 +865,12 @@ default_gmm_plots = (
     NeighborMeans(),
     NeighborDistances(metric="noise_metric"),
     NeighborDistances(metric="js"),
-    # NeighborDistances(metric="kl", normalization_kind="none"),
-    # NeighborDistances(metric="kl", normalization_kind="channels"),
-    # NeighborDistances(metric="kl", normalization_kind="noise"),
-    NeighborTreeMerge(metric=None, criterion="ll"),
-    NeighborTreeMerge(metric=None, criterion="icl"),
-    # NeighborTreeMerge(metric=None, criterion="aic"),
-    # NeighborTreeMerge(metric=None, criterion="bic"),
-    NeighborTreeMerge(metric=None, criterion="cv", criterion_normalization_kind="none"),
-    NeighborTreeMerge(
-        metric=None, criterion="ccv", criterion_normalization_kind="none"
-    ),
-    # NeighborTreeMerge(metric=None, criterion="ccv", criterion_normalization_kind="channels"),
-    # NeighborTreeMerge(metric=None, criterion="ccv", criterion_normalization_kind="noise"),
+    NeighborTreeMerge(metric=None, criterion="heldout_ccl"),
+    NeighborTreeMerge(metric=None, criterion="heldout_loglik"),
+    NeighborTreeMerge(metric=None, criterion="loglik"),
     NeighborBimodalities(),
-    NeighborInfoCriteria(fit_type="reuse_fitmerged"),
+    NeighborInfoCriteria(in_bag=False),
+    NeighborInfoCriteria(in_bag=True),
     # NeighborInfoCriteria(fit_type="avg_preexisting"),
 )
 

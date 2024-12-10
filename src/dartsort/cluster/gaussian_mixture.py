@@ -1,7 +1,7 @@
 import logging
 import threading
 from dataclasses import replace
-from typing import Literal
+from typing import Literal, Optional
 
 import numba
 import numpy as np
@@ -12,7 +12,6 @@ from linear_operator import operators
 from scipy.cluster.hierarchy import linkage
 from scipy.sparse import coo_array, csc_array
 from scipy.special import logsumexp
-from sklearn.model_selection import StratifiedKFold
 from tqdm.auto import tqdm, trange
 
 from ..util import more_operators, noise_util, spiketorch
@@ -55,7 +54,6 @@ class SpikeMixtureModel(torch.nn.Module):
         ppca_rank: int = 0,
         ppca_inner_em_iter: int = 1,
         ppca_atol: float = 0.05,
-        random_seed: int = 0,
         n_threads: int = 4,
         min_count: int = 50,
         n_em_iters: int = 25,
@@ -74,7 +72,9 @@ class SpikeMixtureModel(torch.nn.Module):
         merge_distance_threshold: float = 1.0,
         merge_bimodality_threshold: float = 0.1,
         merge_criterion_threshold: float = 1.0,
-        merge_criterion: Literal["ll", "aic", "bic", "cv", "ccv"] = "ccv",
+        merge_criterion: Literal[
+            "heldout_loglik", "heldout_ccl", "loglik", "ccl", "aic", "bic", "icl"
+        ] = "heldout_ccl",
         split_bimodality_threshold: float = 0.1,
         merge_bimodality_cut: float = 0.0,
         merge_bimodality_overlap: float = 0.80,
@@ -85,6 +85,7 @@ class SpikeMixtureModel(torch.nn.Module):
         em_converged_prop: float = 0.02,
         em_converged_churn: float = 0.01,
         em_converged_atol: float = 1e-2,
+        random_seed: int = 0,
     ):
         super().__init__()
 
@@ -803,6 +804,7 @@ class SpikeMixtureModel(torch.nn.Module):
                 means, other_covs=covs, other_logdets=logdets, kind=kind
             )
             denom = denom.sqrt_().numpy(force=True)
+            denom[denom == 0] = 1.0
             dists[:, ids] /= denom[None, :]
             dists[ids, :] /= denom[:, None]
         elif normalization_kind == "channels":
@@ -880,6 +882,7 @@ class SpikeMixtureModel(torch.nn.Module):
         indices_full=None,
         max_size=None,
         return_full_indices=False,
+        split_name="train",
     ):
         if indices_full is None:
             if unit_id is not None:
@@ -888,7 +891,12 @@ class SpikeMixtureModel(torch.nn.Module):
                 in_u = torch.isin(self.labels, unit_ids)
             else:
                 assert False
-            (indices_full,) = torch.nonzero(in_u, as_tuple=True)
+            (indices_full,) = in_u.nonzero(as_tuple=True)
+
+        if split_name is not None:
+            indices_full = self.data.restrict_to_split(
+                indices_full, split_name=split_name
+            )
 
         n_full = indices_full.numel()
         if max_size and n_full > max_size:
@@ -911,6 +919,7 @@ class SpikeMixtureModel(torch.nn.Module):
         indices_full=None,
         max_size=None,
         neighborhood="extract",
+        split_name="train",
         with_reconstructions=False,
         return_full_indices=False,
         with_neighborhood_ids=False,
@@ -921,6 +930,7 @@ class SpikeMixtureModel(torch.nn.Module):
                 unit_ids=unit_ids,
                 max_size=max_size,
                 indices_full=indices_full,
+                split_name=split_name,
                 return_full_indices=True,
             )
 
@@ -1213,6 +1223,11 @@ class SpikeMixtureModel(torch.nn.Module):
             if not big_enough.any():
                 labels.fill_(-1)
                 return labels
+
+            kept = torch.isin(labels, unique_labels[big_enough])
+            kept_labels = labels[kept]
+            labels.fill_(-1)
+            labels[kept] = torch.searchsorted(unique_labels[big_enough], kept_labels)
             weights = weights[big_enough]
 
             units = []
@@ -1227,12 +1242,6 @@ class SpikeMixtureModel(torch.nn.Module):
                     **self.split_unit_args,
                 )
                 units.append(unit)
-
-            if not n_em_iter:
-                labels[labels >= 0] = np.searchsorted(
-                    unique_labels[big_enough], labels[labels >= 0]
-                )
-                break
 
             # determine their bimodalities while at once mini-reassigning
             lls = spike_data.features.new_full(
@@ -1253,26 +1262,18 @@ class SpikeMixtureModel(torch.nn.Module):
         ids = np.unique(labels)
         valid = ids >= 0
         ids = ids[valid]
-        if units is not None:
-            units = [units[ii] for ii in ids]
+        units = [units[ii] for ii in ids]
         labels[labels >= 0] = np.searchsorted(ids, labels[labels >= 0])
         if ids.size <= 1:
             return labels
 
-        fit_type = "reuse_refitmerged"
-        if "cv" in self.merge_criterion:
-            fit_type = "refit_all"
-
         new_labels, new_ids = self.merge_units(
             units=units,
-            unit_ids=np.arange(len(ids)),
             labels=labels,
             override_unit_id=unit_id,
-            weights=weights[valid],
-            log_liks=lls,
+            likelihoods=lls[ids],
             spike_data=spike_data,
             debug_info=debug_info,
-            fit_type=fit_type,
         )
         if debug:
             debug_info["reas_labels"] = labels
@@ -1367,55 +1368,43 @@ class SpikeMixtureModel(torch.nn.Module):
     def tree_merge(
         self,
         distances,
-        unit_ids,
+        unit_ids=None,
+        units=None,
         labels=None,
         override_unit_id=None,
         spikes_extract=None,
         max_distance=1.0,
         threshold=None,
-        criterion="ll",
+        criterion="heldout_ccl",
         likelihoods=None,
         weights=None,
-        fit_type="reuse_fitmerged",
         spikes_per_subunit=1024,
         sym_function=np.maximum,
         normalization_kind=None,
         show_progress=False,
     ):
+        # heuristic unit groupings to investigate
         distances = sym_function(distances, distances.T)
         distances = distances[np.triu_indices(len(distances), k=1)]
         Z = linkage(distances)
-        n = len(Z) + 1
-
-        is_fixed_set = spikes_extract is not None
-        if is_fixed_set:
-            # in this case we work on nested subsets of the given spikes
-            assert weights is not None
-            assert labels is not None
-        else:
-            assert weights is None
-            assert labels is None
-        if is_fixed_set:
-            if weights.shape != (len(unit_ids), len(spikes_extract)):
-                raise ValueError(
-                    f"{weights.shape=} does not agree with {len(unit_ids)=} "
-                    f"and {len(spikes_extract)=}."
-                )
-
-        if threshold is None:
-            threshold = self.merge_criterion_threshold
+        n_units = len(Z) + 1
 
         # figure out the leaf nodes in each cluster in the hierarchy
         # up to max_distance
         clusters = leafsets(Z)
 
+        if threshold is None:
+            threshold = self.merge_criterion_threshold
+
         # walk backwards through the tree
         already_merged_leaves = set()
-        improvements = np.full(n - 1, -np.inf)
-        group_ids = np.arange(len(unit_ids))
+        improvements = np.full(n_units - 1, -np.inf)
+        group_ids = np.arange(n_units)
         its = reversed(list(enumerate(Z)))
+        in_bag = criterion.startswith("heldout_")
+        criterion = criterion.removeprefix("heldout_")
         if show_progress:
-            its = tqdm(its, desc="Tree", total=n - 1, **tqdm_kw)
+            its = tqdm(its, desc="Tree", total=n_units - 1, **tqdm_kw)
         for i, (pa, pb, dist, nab) in its:
             if not np.isfinite(dist) or dist > max_distance:
                 continue
@@ -1429,454 +1418,266 @@ class SpikeMixtureModel(torch.nn.Module):
                 continue
 
             # check if should merge
-            leaves = clusters[n + i]
-            cluster_ids = unit_ids[leaves]
-            level_weights = level_spe = level_y = None
-            if is_fixed_set:
-                level_weights = weights[leaves] if is_fixed_set else None
+            leaves = clusters[n_units + i]
+            cluster_ids = leaves if unit_ids is None else unit_ids[leaves]
+            level_spe = None
+            if spikes_extract is not None:
                 in_level = np.flatnonzero(np.isin(labels, cluster_ids))
                 level_spe = spikes_extract[in_level]
-                level_y = labels[in_level]
 
-            if criterion in ("ll", "aic", "bic", "icl"):
-                res = self.unit_group_criterion(
-                    cluster_ids,
-                    spikes_extract=level_spe,
-                    override_unit_id=override_unit_id,
-                    weights=level_weights,
-                    likelihoods=likelihoods,
-                    spikes_per_subunit=spikes_per_subunit,
-                    fit_type=fit_type,
-                )
-                if criterion in ("ll", "ccl"):
-                    # ll, ccl -- bigger = better
-                    fkey = "ccl_full" if criterion == "ccl" else "full_loglik"
-                    mkey = "ccl_merged" if criterion == "ccl" else "unit_loglik"
-                    imp = res[mkey] - res[fkey]
-                else:
-                    # {a,b}ic, icl -- smaller =  better
-                    imp = res[f"{criterion}_full"] - res[f"{criterion}_merged"]
-            else:
-                assert criterion in ("cv", "ccv")
-                res = self.kfold(
-                    cluster_ids,
-                    labels=level_y,
-                    spikes_extract=level_spe,
-                    override_unit_id=override_unit_id,
-                    weights=weights[leaves] if weights is not None else None,
-                    spikes_per_subunit=spikes_per_subunit,
-                    normalization_kind=normalization_kind,
-                    likelihoods=likelihoods,
-                    entropy_correction=criterion == "ccv",
-                    fit_type=fit_type,
-                )
-                # heldout ll, bigger = better
-                imp = res["cv_merged_loglik"] - res["cv_full_loglik"]
-            improvements[i] = imp
+            level_likelihoods = likelihoods
+            level_units = units
+            if units is not None:
+                level_units = [units[l] for l in leaves]
+                level_likelihoods = likelihoods[leaves][:, in_level]
+
+            crit = self.merge_criteria(
+                leaves,
+                units=level_units,
+                spikes_extract=level_spe,
+                likelihoods=level_likelihoods,
+                in_bag=in_bag,
+                spikes_per_subunit=spikes_per_subunit,
+                override_unit_id=override_unit_id,
+            )
+            if crit is not None:
+                improvements[i] = crit[criterion]
 
             # how to actually merge?
-            if imp > -threshold:
-                group_ids[leaves] = n + i
+            if improvements[i] > -threshold:
+                group_ids[leaves] = n_units + i
                 already_merged_leaves.update(leaves)
 
         return Z, group_ids, improvements
 
-    def kfold(
+    def merge_criteria(
         self,
         unit_ids,
+        units=None,
+        likelihoods=None,
         override_unit_id=None,
         spikes_extract=None,
-        normalization_kind=None,
-        labels=None,
-        n_splits=3,
-        n_folds=3,
+        in_bag=False,
         spikes_per_subunit=2048,
-        entropy_correction=False,
-        cap_factor=4,
-        likelihoods=None,
-        weights=None,
-        min_overlap=0.66,
-        fit_type="reuse_fitmerged",
-        class_balanced=True,
+        min_overlap=0.8,
+        class_balancing="balanced",
         debug=False,
     ):
-        unit_ids = torch.asarray(unit_ids)
-        if normalization_kind is None:
-            normalization_kind = self.criterion_normalization_kind
+        """See if a single unit explains a group
 
-        # pick spikes for comparison
+        This code handles two cases. In the split step, we're computing things for a
+        group of hypothetical units which don't correspond to labels in self.labels.
+        In that case, likelihoods is dense and has len(likelihoods)==len(unit_ids).
+        Otherwise, likelihoods is the usual csc array and unit_ids indexes its rows.
+
+        And, it computes several criteria.
+        """
+        # check our two cases...
+        if isinstance(likelihoods, csc_array):
+            # "merge step" case. using units in self._units
+            assert units is None
+            assert override_unit_id is None
+        else:
+            # "split step" case. using pre-fit hypothetical units.
+            assert torch.is_tensor(likelihoods)
+            assert units is not None
+            assert unit_ids is not None
+            assert override_unit_id is not None
+            assert spikes_extract is not None
+            assert len(units) == len(unit_ids) == len(likelihoods)
+            assert likelihoods.shape[1] == len(spikes_extract)
+
+        unit_ids = torch.asarray(unit_ids)
+        dim_units = 0  # naming this for clarity in sums below
+
+        # pick spikes for merged unit fit
         if spikes_extract is None:
             in_subunits = [
                 self.random_indices(u, max_size=spikes_per_subunit) for u in unit_ids
             ]
-
-            min_count = min(map(len, in_subunits))
-            split_prop = (n_splits - 1) / n_splits
-            if min_count * split_prop < self.min_count:
-                return dict(cv_full_loglik=np.nan, cv_merged_loglik=np.nan)
-
             in_any = torch.cat(in_subunits)
-            n_present = in_any.numel()
-            n_max = cap_factor * spikes_per_subunit
-            if n_present > n_max:
-                in_any = in_any[self.rg.choice(n_present, size=n_max, replace=False)]
             in_any, in_order = torch.sort(in_any)
-            labels = self.labels[in_any]
-            _, label_counts = labels.unique(return_counts=True)
-            min_count = label_counts.min()
-            if min_count * split_prop < self.min_count:
-                return dict(cv_full_loglik=np.nan, cv_merged_loglik=np.nan)
-
             spikes_extract = self.data.spike_data(in_any, with_neighborhood_ids=True)
-            spikes_core = self.data.spike_data(
-                in_any, neighborhood="core", with_neighborhood_ids=True
-            )
-        else:
-            assert labels is not None
-            spikes_core = self.data.spike_data(
-                spikes_extract.indices, neighborhood="core", with_neighborhood_ids=True
-            )
+        fit_ix = spikes_extract.indices
 
-        rs = np.random.RandomState(self.rg.bit_generator)
-        skf = StratifiedKFold(n_splits, shuffle=True, random_state=rs)
-
-        if normalization_kind == "channels":
-            spike_nc = (spikes_core.channels < self.data.n_channels).sum(1)
-            spike_nc = spike_nc.to(torch.float).reciprocal_()
-            assert spike_nc.ndim == 1 and torch.isfinite(spike_nc).all()
-
-        n_classes = len(unit_ids)
-        full_logliks = np.full((n_folds, n_classes), np.nan, dtype=np.float32)
-        merged_logliks = np.full((n_folds, n_classes), np.nan, dtype=np.float32)
-        mean_overlaps = np.full((n_folds, n_classes), np.nan, dtype=np.float32)
-        for k, (train_ix, test_ix) in zip(range(n_folds), skf.split(labels, labels)):
-            # allow user to pass in pre-built weights
-            fold_weights = None
-            if weights is not None:
-                fold_weights = weights[:, train_ix]
-
-            # fit units
-            subunits, merged_unit = self.refit_group(
-                unit_ids,
-                spikes_extract[train_ix],
-                spikes_core=spikes_core[train_ix],
-                override_unit_id=override_unit_id,
-                likelihoods=likelihoods,
-                weights=fold_weights,
-                fit_type=fit_type,
-            )
-
-            # get heldout spike liks
-            test_core = spikes_core[test_ix]
-            subunit_logliks = test_core.features.new_full(
-                (len(unit_ids), len(test_core)), -torch.inf
-            )
-            for i, u in enumerate(subunits):
-                _, sll = self.unit_log_likelihoods(unit=u, spikes=test_core)
-                if sll is not None:
-                    subunit_logliks[i] = sll
-            _, fold_merged_logliks = self.unit_log_likelihoods(
-                unit=merged_unit, spikes=test_core
-            )
-            if fold_merged_logliks is None:
-                full_logliks[:] = merged_logliks[:] = np.nan
-                break
-            yfold = labels[test_ix]
-            yu = np.unique(yfold)
-
-            # if any spikes are ignored by all, ignore...
-            ol = subunit_logliks.isfinite().all(dim=0).to(torch.float).cpu()
-            for ci, cl in enumerate(yu):
-                in_class = np.flatnonzero(yfold == cl)
-                mean_overlaps[k, ci] = ol[in_class].mean().item()
-            keep = torch.logical_and(
-                subunit_logliks.isfinite().any(dim=0),
-                fold_merged_logliks.isfinite(),
-            )
-            (keep,) = keep.cpu().nonzero(as_tuple=True)
-            if not keep.numel():
-                full_loglik = merged_loglik = np.nan
-                break
-            subunit_logliks = subunit_logliks[:, keep]
-            fold_merged_logliks = fold_merged_logliks[keep]
-            assert torch.isfinite(fold_merged_logliks).all()
-
-            yfold = labels[test_ix[keep]]
-            yu, yc = np.unique(yfold, return_counts=True)
-
-            # aggregate subunit liks
-            subunit_log_props = F.softmax(subunit_logliks, dim=0).mean(1).log_()
-            subunit_logliks = subunit_logliks.T + subunit_log_props
-            fold_full_loglik = torch.logsumexp(subunit_logliks, dim=1)
-            assert torch.isfinite(fold_full_loglik).all()
-            if normalization_kind == "noise":
-                nlls = self.noise_log_likelihoods(test_core.indices[keep])
-                fold_full_loglik.div_(nlls.abs())
-            elif normalization_kind == "channels":
-                fold_spike_nc = spike_nc[test_ix[keep]]
-                fold_full_loglik.mul_(fold_spike_nc)
-
-            # fold_full_loglik = fold_full_loglik.mean()
-
-            if entropy_correction:
-                # Biernacki, Celeux, Govaert 2000, eq 2.4
-                log_resps = F.log_softmax(subunit_logliks, dim=1)
-                log_resps.nan_to_num_(nan=torch.nan, neginf=0.0)
-                ec = -(log_resps * log_resps.exp()).sum(1)
-                assert ec.shape == fold_merged_logliks.shape
-                assert torch.isfinite(ec).all()
-                # fold_full_loglik -= ec.mean()
-            # assert torch.isfinite(fold_full_loglik)
-
-            # get merged lik
-            if normalization_kind == "noise":
-                fold_merged_logliks.div_(nlls.abs())
-            elif normalization_kind == "channels":
-                fold_merged_logliks.mul_(fold_spike_nc)
-            # fold_merged_loglik = fold_merged_logliks.mean()
-            # assert torch.isfinite(fold_merged_loglik)
-
-            # add to the total
-            for ci, cl in enumerate(yu):
-                in_class = np.flatnonzero(yfold == cl)
-
-                fc_full_ll = fold_full_loglik[in_class].mean().cpu().item()
-                if entropy_correction:
-                    fc_full_ll -= ec[in_class].mean().cpu().item()
-                full_logliks[k, ci] = fc_full_ll
-
-                merged_logliks[k, ci] = (
-                    fold_merged_logliks[in_class].mean().cpu().item()
-                )
-
-            # full_logliks[k] = fold_full_loglik.cpu().item()
-            # merged_logliks[k] = fold_merged_loglik.cpu().item()
-            if not np.isfinite(np.sum(full_logliks[k] + merged_logliks[k])):
-                break
-
-        mean_overlap = mean_overlaps.mean(0).min()
-        if not mean_overlap > min_overlap:
-            full_loglik = np.nan
-            merged_loglik = np.nan
-        else:
-            worst_merged_class = (merged_logliks - full_logliks).mean(0).argmin()
-            full_loglik = full_logliks[:, worst_merged_class].mean()
-            merged_loglik = merged_logliks[:, worst_merged_class].mean()
-
-        if debug:
-            return dict(
-                cv_full_loglik=full_loglik,
-                cv_merged_loglik=merged_loglik,
-                mean_overlaps=mean_overlaps,
-                full_logliks=full_logliks,
-                merged_logliks=merged_logliks,
-            )
-
-        return dict(cv_full_loglik=full_loglik, cv_merged_loglik=merged_loglik)
-
-    def refit_group(
-        self,
-        unit_ids,
-        spikes_extract,
-        override_unit_id=None,
-        spikes_core=None,
-        likelihoods=None,
-        weights=None,
-        fit_type="reuse_fitmerged",
-        verbose=False,
-        with_likelihoods=False,
-    ):
-        if fit_type in ("refit_all", "refit_avg"):
-            units = []
-            if weights is not None and spikes_extract is not None:
-                if weights.shape != (len(unit_ids), len(spikes_extract)):
-                    raise ValueError(
-                        f"{weights.shape=} does not agree with {len(unit_ids)=} "
-                        f"and {len(spikes_extract)=}, where {unit_ids=}."
-                    )
-            for i, k in enumerate(unit_ids):
-                my_weights = None
-                keep = slice(None)
-                if weights is not None:
-                    my_weights = weights[i]
-                    (keep,) = my_weights.cpu().nonzero(as_tuple=True)
-                    my_weights = my_weights[keep]
-                u = self.fit_unit(
-                    unit_id=override_unit_id if override_unit_id is not None else k,
-                    indices=spikes_extract.indices[keep],
-                    likelihoods=likelihoods,
-                    weights=my_weights,
-                    features=spikes_extract[keep],
-                    verbose=False,
-                )
-                units.append(u)
-            if verbose:
-                logger.info(f"{[u.channels for u in units]=}")
-
-            subunit_logliks = spikes_core.features.new_full(
-                (len(unit_ids), len(spikes_extract)), -torch.inf
-            )
-            for i, u in enumerate(units):
-                _, sll = self.unit_log_likelihoods(unit=u, spikes=spikes_core)
-                if sll is not None:
-                    subunit_logliks[i] = sll
-            keep = subunit_logliks.isfinite().any(dim=0)
-            (keep,) = keep.cpu().nonzero(as_tuple=True)
-            subunit_props = F.softmax(subunit_logliks[:, keep], dim=0).mean(1)
-            subunit_log_props = subunit_props.log()
-            full_logliks = subunit_logliks[:, keep].T + subunit_log_props
-        elif fit_type in ("avg_preexisting", "reuse_fitmerged"):
-            assert override_unit_id is None
-            units = [self[uid] for uid in unit_ids]
-            subunit_log_props = self.log_proportions[unit_ids]
-            subunit_props = F.softmax(subunit_log_props, dim=0)
-
-            subunit_logliks = likelihoods[:, spikes_extract.indices][unit_ids]
-            keep = np.flatnonzero(np.diff(subunit_logliks.indptr))
-            spll = subunit_logliks[:, keep].tocoo()
-            full_logliks = torch.full(spll.shape, -torch.inf)
-            full_logliks[spll.coords] = torch.from_numpy(spll.data)
-            full_logliks = full_logliks.to(subunit_log_props)
-            full_logliks = full_logliks.T + subunit_log_props
-        else:
-            assert False
-
-        if fit_type in ("refit_all", "reuse_fitmerged"):
-            unit = self.fit_unit(
-                indices=spikes_extract.indices[keep],
-                features=spikes_extract[keep],
-            )
-        elif fit_type in ("refit_avg", "avg_preexisting"):
-            unit = average_units(units, proportions=subunit_log_props.exp())
-        else:
-            assert False
-
-        if with_likelihoods:
-            return units, unit, full_logliks, subunit_log_props, keep
-        return units, unit
-
-    def unit_group_criterion(
-        self,
-        unit_ids,
-        likelihoods=None,
-        override_unit_id=None,
-        weights=None,
-        spikes_extract=None,
-        spikes_per_subunit=2048,
-        fit_type="reuse_fitmerged",
-        min_overlap=0.95,
-        debug=False,
-    ):
-        """See if a single unit explains a group as far as AIC/BIC/MDL go."""
-        assert fit_type in (
-            "avg_preexisting",
-            "refit_all",
-            "refit_avg",
-            "reuse_fitmerged",
-        )
-        unit_ids = torch.asarray(unit_ids)
+        # fit merged unit
+        fit_weights = None
+        if isinstance(likelihoods, csc_array):
+            fit_weights = self.get_log_likelihoods(fit_ix, likelihoods)
+            fit_weights = torch.sparse.softmax(fit_weights, dim=0)
+            fit_weights = fit_weights.to_dense()[unit_ids].sum(dim=dim_units)
+            assert fit_weights.shape == (len(spikes_extract),)
+        merged_unit = self.fit_unit(features=spikes_extract, weights=fit_weights)
 
         # pick spikes for likelihood computation
-        if spikes_extract is None:
-            in_subunits = [
-                self.random_indices(u, max_size=spikes_per_subunit) for u in unit_ids
-            ]
-            in_any = torch.cat(in_subunits)
-            in_any, in_order = torch.sort(in_any)
-            spikes_extract = self.data.spike_data(
-                in_any,
-                with_neighborhood_ids="fit" in fit_type,
+        if in_bag:
+            spikes_core = self.data.spike_data(
+                fit_ix, neighborhood="core", with_neighborhood_ids=True
+            )
+        else:
+            spikes_core = self.random_spike_data(
+                unit_id=override_unit_id,
+                unit_ids=unit_ids,
+                split_name="val",
+                neighborhood="core",
+                with_neighborhood_ids=True,
             )
 
-        spikes_core = self.data.spike_data(
-            spikes_extract.indices,
-            neighborhood="core",
-            with_neighborhood_ids=True,
-        )
-        n = len(spikes_extract)
+        # get original units' log likelihoods
+        # two cases: pre-computed dense ones, or we need to grab from sparse
+        # we also grab the sum of responsibilities in the first case. this
+        # helps us compute the local change in log lik due to this merge
+        lik_weights = None
+        if isinstance(likelihoods, csc_array):
+            lik_ix = spikes_core.indices
+            if in_bag:
+                full_logliks = self.get_log_likelihoods(
+                    lik_ix, likelihoods, unit_ids=unit_ids, dense=True
+                )
+                lik_weights = fit_weights
+            else:
+                full_logliks = self.get_log_likelihoods(lik_ix, likelihoods)
+                lik_weights = torch.sparse.softmax(full_logliks, dim=0)
+                full_logliks = full_logliks.to_dense()
+                full_logliks = full_logliks[unit_ids]
+                lik_weights = lik_weights.to_dense()[unit_ids].sum(dim=dim_units)
+        else:
+            full_logliks = spikes_core.features.new_full(
+                (len(units), len(spikes_core)), -torch.inf
+            )
+            for j, unit in enumerate(units):
+                _, ull = self.unit_log_likelihoods(unit=unit, spikes=spikes_core)
+                if ull is not None:
+                    full_logliks[j] = ull
+        assert full_logliks.shape == (len(unit_ids), len(spikes_core))
+        labels = full_logliks.argmax(0)
+        labids, labixs, labcts = labels.unique(return_inverse=True, return_counts=True)
+        if len(labids) < len(full_logliks):
+            return None
+        if labcts.min() < self.min_count:
+            return None
 
-        units, unit, full_logliks, subunit_log_props, keep = self.refit_group(
-            unit_ids,
-            spikes_extract,
-            override_unit_id=override_unit_id,
-            spikes_core=spikes_core,
-            weights=weights,
-            likelihoods=likelihoods,
-            fit_type=fit_type,
-            with_likelihoods=True,
-        )
-
-        log_resps = F.log_softmax(full_logliks, dim=1)
+        # compute entropy correction for class likelihood
+        log_resps = F.log_softmax(full_logliks, dim=dim_units)
         log_resps.nan_to_num_(neginf=0.0, nan=torch.nan)
-        ec = -(log_resps * log_resps.exp()).sum(1)
-        full_loglik = torch.logsumexp(full_logliks, dim=1)
+        ec = -(log_resps * log_resps.exp()).sum(dim=dim_units)
 
-        # extract likelihoods... no proportions!
-        _, unit_logliks = self.unit_log_likelihoods(unit=unit, spikes=spikes_core[keep])
-        keep2 = slice(None)
-        unit_loglik = np.nan
-        if unit_logliks is not None:
-            keep2 = torch.isfinite(unit_logliks)
-            (keep2,) = keep2.cpu().nonzero(as_tuple=True)
-            if keep2.numel() < unit_logliks.numel() * min_overlap:
-                unit_loglik = unit_logliks[keep2].mean()
-
-        full_loglik = full_loglik[keep2].mean()
-        ec = ec[keep2].mean()
-        keep = keep[keep2]
-
-        # parameter counting... since we use marginal likelihoods, I'm restricting
-        # the parameter counts to just the marginal set considered for each spike.
-        # then, aic and bic formulas are changed slightly below to match.
-        nids = spikes_core.neighborhood_ids[keep]
-        unique_nids, inverse = torch.unique(nids, return_inverse=True)
-        unique_chans = self.data.core_neighborhoods.neighborhoods[unique_nids]
-        unique_k_merged = unit.n_params(unique_chans)
-        unique_k_full = [self[u].n_params(unique_chans) for u in unit_ids]
-        unique_k_full = torch.stack(unique_k_full, dim=1).sum(1)
-        k_merged = unique_k_merged[inverse]
-        k_full = unique_k_full[inverse]
-
-        # for aic: k is avg
-        n = len(keep)
-        k_merged_avg = k_merged.sum() / n
-        k_full_avg = k_full.sum() / n
-        if self.use_proportions:
-            k_full_avg += len(unit_ids) - 1
-        k_merged_avg_mean = k_merged_avg / n
-        k_full_avg_mean = k_full_avg / n
-
-        # compute some criteria
-        # actually computing AIC/BIC per example (divide by N)
-        # logliks here are already mean log liks.
-        # and forget all the factors of 2!
-        aic_full = k_full_avg_mean - full_loglik
-        aic_merged = k_merged_avg_mean - unit_loglik
-        bic_full = 0.5 * (k_full_avg_mean * np.log(n)) - full_loglik
-        icl_full = bic_full + ec
-        bic_merged = 0.5 * (k_merged_avg_mean * np.log(n)) - unit_loglik
-        res = dict(
-            aic_full=aic_full,
-            aic_merged=aic_merged,
-            bic_full=bic_full,
-            bic_merged=bic_merged,
-            full_loglik=full_loglik,
-            unit_loglik=unit_loglik,
-            ccl_full=full_loglik - ec,
-            ccl_merged=unit_loglik,
-            icl_full=icl_full,
-            icl_merged=bic_merged,
-        )
+        # full model's log likelihood for each spike is logsumexp over units
         if debug:
-            subunit_logliks = full_logliks - subunit_log_props
-            debug_info = dict(
-                unit_logliks=unit_logliks,
-                subunit_logliks=subunit_logliks,
-                indices=in_any,
-                unit=unit,
+            subunit_logliks = full_logliks
+        keep0 = full_logliks.isfinite().all(dim=dim_units)
+        full_logliks = torch.logsumexp(full_logliks, dim=dim_units)
+
+        # merged model's likelihood
+        _, merged_logliks = self.unit_log_likelihoods(
+            unit=merged_unit, spikes=spikes_core
+        )
+
+        # it's possible for spikes to be ignored. that's fine, but within reason.
+        if merged_logliks is None:
+            return None
+        keep = torch.logical_and(keep0, merged_logliks.isfinite())
+        labprops = torch.zeros_like(labcts)
+        spiketorch.add_at_(labprops, labixs, keep.to(labcts))
+        labprops = labprops / labcts
+        if labprops.min() < min_overlap:
+            if debug:
+                return dict(
+                    info=dict(
+                        unit_logliks=merged_logliks[keep],
+                        subunit_logliks=subunit_logliks[:, keep],
+                        keep=keep,
+                    )
+                )
+            return None
+
+        (keep,) = keep.cpu().nonzero(as_tuple=True)
+        n = keep.numel()
+
+        labixs = labixs[keep]
+        merged_logliks = merged_logliks[keep]
+        full_logliks = full_logliks[keep]
+        ec = ec[keep]
+        if lik_weights is not None:
+            lik_weights = lik_weights[keep]
+
+        # get averages in each class
+        if lik_weights is not None:
+            class_w = class_sum(labids, labixs, lik_weights)
+        else:
+            class_w = labcts.to(torch.float)
+        class_ec = class_sum(labids, labixs, ec, lik_weights) / class_w
+        class_fll = class_sum(labids, labixs, full_logliks, lik_weights) / class_w
+        class_mll = class_sum(labids, labixs, merged_logliks, lik_weights) / class_w
+
+        if class_balancing == "worst":
+            worst_ix = torch.argmin(class_mll - class_fll)
+            ec = class_ec[worst_ix]
+            fll = class_fll[worst_ix]
+            mll = class_mll[worst_ix]
+        elif class_balancing == "balanced":
+            ec = class_ec.mean()
+            fll = class_fll.mean()
+            mll = class_mll.mean()
+        else:
+            assert False
+
+        full_ll = fll.cpu().item()
+        merged_ll = mll.cpu().item()
+        ec = ec.cpu().item()
+
+        full_criteria = dict(loglik=full_ll, ccl=full_ll - ec)
+        merged_criteria = dict(loglik=merged_ll, ccl=merged_ll)
+        if in_bag:
+            # in-bag metrics include information criteria
+            if units is None:
+                units = [self[u] for u in unit_ids]
+            k_full, k_merged = get_average_parameter_counts(
+                units,
+                merged_unit,
+                spikes_core[keep],
+                self.data.core_neighborhoods,
+                use_proportions=self.use_proportions,
+                reduce=False,
             )
-            res.update(debug_info)
-        return res
+            k_full = class_sum(labids, labixs, k_full, lik_weights) / class_w
+            k_merged = class_sum(labids, labixs, k_merged, lik_weights) / class_w
+            if class_balancing == "worst":
+                k_full = k_full[worst_ix]
+                k_merged = k_merged[worst_ix]
+                n = class_w[worst_ix]
+            elif class_balancing == "balanced":
+                k_full = k_full.mean()
+                k_merged = k_merged.mean()
+                n = class_w.mean()
+
+            # skip factors of 2
+            full_criteria["aic"] = k_full / n - full_ll
+            merged_criteria["aic"] = k_merged / n - merged_ll
+            full_criteria["bic"] = 0.5 * (k_full * np.log(n) / n) - full_ll
+            merged_criteria["bic"] = 0.5 * (k_merged * np.log(n) / n) - merged_ll
+            full_criteria["icl"] = full_criteria["bic"] + ec
+            merged_criteria["icl"] = merged_criteria["bic"]
+
+        improvements = {}
+        for k in full_criteria.keys():
+            # *ic*: smaller=better, so diff=merged-full<0 means merge is good
+            sign = -1 if k in ("aic", "bic", "icl") else 1
+            improvements[k] = sign * (merged_criteria[k] - full_criteria[k])
+
+        if debug:
+            results = dict(
+                improvements=improvements,
+                full_criteria=full_criteria,
+                merged_criteria=merged_criteria,
+                info=dict(
+                    unit_logliks=merged_logliks,
+                    subunit_logliks=subunit_logliks[:, keep],
+                    keep=keep,
+                ),
+            )
+            return results
+        return improvements
 
     def get_log_likelihoods(
         self,
@@ -1884,20 +1685,31 @@ class SpikeMixtureModel(torch.nn.Module):
         likelihoods,
         with_proportions=True,
         unit_ids=None,
-        to_dense=False,
+        dense=False,
     ):
         # torch's index_select is painfully slow
         # weights = torch.index_select(likelihoods, 1, features.indices)
         # here we have weights as a csc_array
         liks = likelihoods[:, indices]
+        if unit_ids is not None:
+            liks = liks[unit_ids]
+
         liks = coo_to_torch(liks.tocoo(), torch.float, copy_data=True)
         liks = liks.to(self.data.device)
         if with_proportions and self.log_proportions is not None:
-            log_props_vec = self.log_proportions[liks.indices()[0]]
-            liks.values().add_(log_props_vec)
-        if unit_ids is None:
-            return liks
-        return liks[unit_ids]
+            log_props = self.log_proportions
+            if unit_ids is not None:
+                log_props = log_props[unit_ids]
+            log_props = log_props[liks.indices()[0]]
+            liks.values().add_(log_props)
+
+        if dense:
+            inds = liks.indices()
+            data = liks.values()
+            liks = data.new_full(liks.shape, -torch.inf)
+            liks[*inds] = data
+
+        return liks
 
     def get_fit_weights(self, unit_id, indices, likelihoods=None):
         """Responsibilities for subset of spikes."""
@@ -1910,135 +1722,6 @@ class SpikeMixtureModel(torch.nn.Module):
         return weights
 
     # -- gizmos
-
-    def merge_units(
-        self,
-        unit_ids=None,
-        units=None,
-        override_unit_id=None,
-        spike_data=None,
-        labels=None,
-        log_liks=None,
-        weights=None,
-        show_progress=False,
-        merge_kind=None,
-        debug_info=None,
-        fit_type="reuse_fitmerged",
-    ):
-        """Unit merging logic
-
-        Returns
-        -------
-        new_labels : int array
-            Same shape as `labels`, if supplied, or self.labels otherwise.
-        new_ids : int array
-            Has length `len(units)`: maps each unit to its new ID. If `units`
-            was not supplied, then that would mean all of my units.
-        """
-        if unit_ids is None:
-            if units is not None:
-                unit_ids = torch.arange(len(units))
-            else:
-                unit_ids = self.unit_ids()
-
-        # merge full label set by default
-        if labels is None:
-            labels = self.labels
-
-        # merge behavior is either a hierarchical merge or this tree-based
-        # idea, depending on the value of a parameter
-        if merge_kind is None:
-            merge_kind = "hierarchical"
-            if self.merge_criterion_threshold is not None:
-                merge_kind = "tree"
-
-        # distances are needed by both methods
-        distances = self.distances(units=units, show_progress=show_progress)
-        if debug_info is not None:
-            debug_info["distances"] = distances
-        assert distances.shape[0] == len(unit_ids)
-
-        if merge_kind == "hierarchical":
-            bimodalities = None
-            do_bimodality = self.merge_bimodality_threshold is not None
-            if do_bimodality:
-                if isinstance(bimodalities, csc_array):
-                    compute_mask = distances <= self.merge_distance_threshold
-                    bimodalities = self.bimodalities(
-                        log_liks,
-                        compute_mask=compute_mask,
-                        show_progress=show_progress,
-                        weighted=self.merge_bimodality_weighted,
-                    )
-                else:
-                    assert torch.is_tensor(log_liks)
-                    assert log_liks.layout == torch.strided
-                    bimodalities = bimodalities_dense(
-                        log_liks.numpy(force=True),
-                        labels,
-                        ids=unit_ids.numpy(force=True),
-                        cut=self.merge_bimodality_cut,
-                        min_overlap=self.merge_bimodality_overlap,
-                        score_kind=self.merge_bimodality_score_kind,
-                    )
-
-            distances = (distances, bimodalities)
-            thresholds = (
-                self.merge_distance_threshold,
-                self.merge_bimodality_threshold,
-            )
-            distances = combine_distances(
-                distances,
-                thresholds,
-                sym_function=self.merge_sym_function,
-            )
-            new_labels, new_ids = agglomerate(
-                labels,
-                distances,
-                linkage_method=self.merge_linkage,
-            )
-            if debug_info is not None:
-                debug_info["bimodalities"] = bimodalities
-        elif merge_kind == "tree":
-            if weights is None and torch.is_tensor(log_liks):
-                assert spike_data is not None
-                assert log_liks.layout == torch.strided
-                assert log_liks.shape == (len(unit_ids), len(spike_data))
-                weights = F.softmax(log_liks, dim=0)
-            if weights is not None:
-                if weights.shape != (len(unit_ids), len(spike_data)):
-                    raise ValueError(
-                        f"{weights.shape=}, but {(len(unit_ids), len(spike_data))=}, "
-                        f"with {unit_ids=}."
-                    )
-
-            Z, group_ids, improvements = self.tree_merge(
-                distances,
-                override_unit_id=override_unit_id,
-                unit_ids=unit_ids,
-                labels=labels,
-                spikes_extract=spike_data,
-                max_distance=self.merge_distance_threshold,
-                criterion=self.merge_criterion,
-                likelihoods=log_liks,
-                weights=weights,
-                sym_function=self.merge_sym_function,
-                show_progress=show_progress,
-                fit_type=fit_type,
-            )
-            if debug_info is not None:
-                debug_info["Z"] = Z
-                debug_info["improvements"] = improvements
-
-            group_ids = torch.asarray(group_ids)
-            _, new_ids = group_ids.unique(return_inverse=True)
-            new_labels = torch.asarray(labels).clone()
-            (kept,) = (new_labels >= 0).nonzero(as_tuple=True)
-            new_labels[kept] = new_ids[new_labels[kept]]
-        else:
-            assert False
-
-        return new_labels, new_ids
 
     @staticmethod
     def normalize_key(ix):
@@ -2139,6 +1822,124 @@ class SpikeMixtureModel(torch.nn.Module):
 
     def clear_scheduled_annotations(self):
         self.next_round_annotations.clear()
+
+    # merge utils
+
+    def merge_units(
+        self,
+        units=None,
+        override_unit_id=None,
+        likelihoods=None,
+        spike_data=None,
+        labels=None,
+        show_progress=False,
+        merge_kind=None,
+        debug_info=None,
+    ):
+        """Unit merging logic
+
+        Returns
+        -------
+        new_labels : int array
+            Same shape as `labels`, if supplied, or self.labels otherwise.
+        new_ids : int array
+            Has length `len(units)`: maps each unit to its new ID. If `units`
+            was not supplied, then that would mean all of my units.
+        """
+        # merge full label set by default
+        if labels is None:
+            labels = self.labels
+
+        # merge behavior is either a hierarchical merge or this tree-based
+        # idea, depending on the value of a parameter
+        if merge_kind is None:
+            merge_kind = "hierarchical"
+            if self.merge_criterion_threshold is not None:
+                merge_kind = "tree"
+
+        # distances are needed by both methods
+        distances = self.distances(units=units, show_progress=show_progress)
+        if debug_info is not None:
+            debug_info["distances"] = distances
+
+        if merge_kind == "hierarchical":
+            return self.hierarchical_bimodality_merge(
+                distances,
+                labels,
+                likelihoods,
+                show_progress=show_progress,
+                debug_info=debug_info,
+            )
+        elif merge_kind == "tree":
+            Z, group_ids, improvements = self.tree_merge(
+                distances,
+                labels=labels,
+                units=units,
+                override_unit_id=override_unit_id,
+                spikes_extract=spike_data,
+                max_distance=self.merge_distance_threshold,
+                criterion=self.merge_criterion,
+                likelihoods=likelihoods,
+                sym_function=self.merge_sym_function,
+                show_progress=show_progress,
+            )
+            if debug_info is not None:
+                debug_info["Z"] = Z
+                debug_info["improvements"] = improvements
+
+            group_ids = torch.asarray(group_ids)
+            _, new_ids = group_ids.unique(return_inverse=True)
+            new_labels = torch.asarray(labels).clone()
+            (kept,) = (new_labels >= 0).nonzero(as_tuple=True)
+            new_labels[kept] = new_ids[new_labels[kept]]
+        else:
+            assert False
+
+        return new_labels, new_ids
+
+    def hierarchical_bimodality_merge(
+        self, distances, labels, likelihoods, show_progress=True, debug_info=None
+    ):
+        do_bimodality = self.merge_bimodality_threshold is not None
+        if do_bimodality:
+            if isinstance(likelihoods, csc_array):
+                compute_mask = distances <= self.merge_distance_threshold
+                bimodalities = self.bimodalities(
+                    likelihoods,
+                    compute_mask=compute_mask,
+                    show_progress=show_progress,
+                    weighted=self.merge_bimodality_weighted,
+                )
+            else:
+                assert torch.is_tensor(likelihoods)
+                assert likelihoods.layout == torch.strided
+                bimodalities = bimodalities_dense(
+                    likelihoods.numpy(force=True),
+                    labels,
+                    cut=self.merge_bimodality_cut,
+                    min_overlap=self.merge_bimodality_overlap,
+                    score_kind=self.merge_bimodality_score_kind,
+                )
+
+        distances = (distances, bimodalities)
+        thresholds = (
+            self.merge_distance_threshold,
+            self.merge_bimodality_threshold,
+        )
+        distances = combine_distances(
+            distances,
+            thresholds,
+            sym_function=self.merge_sym_function,
+        )
+        new_labels, new_ids = agglomerate(
+            labels,
+            distances,
+            linkage_method=self.merge_linkage,
+        )
+        if debug_info is not None:
+            debug_info["bimodalities"] = bimodalities
+
+        return new_labels, new_ids
 
 
 # -- modeling class
@@ -2284,14 +2085,19 @@ class GaussianUnit(torch.nn.Module):
     def fit(
         self,
         features: SpikeFeatures,
-        weights: torch.Tensor,
-        neighborhoods=None,
-        show_progress=False,
+        weights: Optional[torch.Tensor] = None,
+        neighborhoods: Optional["SpikeNeighborhoods"] = None,
+        show_progress: bool = False,
     ):
         if features is None:
             self.pick_channels(None, None)
             return
         new_zeros = features.features.new_zeros
+
+        if weights is not None:
+            (kept,) = (weights > 0).cpu().nonzero(as_tuple=True)
+            features = features[kept]
+            weights = weights[kept]
 
         achans = occupied_chans(features, self.n_channels, neighborhoods=neighborhoods)
         je_suis = achans.numel()
@@ -2349,6 +2155,7 @@ class GaussianUnit(torch.nn.Module):
             return
 
         if not active_chans.numel() or nobs is None:
+            self.register_buffer("snr", torch.zeros(self.n_channels))
             self.register_buffer("channels", torch.arange(0))
             return
 
@@ -2554,6 +2361,49 @@ class GaussianUnit(torch.nn.Module):
 
 log2pi = torch.log(torch.tensor(2.0 * torch.pi))
 tqdm_kw = dict(smoothing=0, mininterval=1.0 / 24.0)
+
+
+def get_average_parameter_counts(
+    full_units,
+    merged_unit,
+    spikes_core,
+    core_neighborhoods,
+    weights=None,
+    use_proportions=True,
+    reduce=True,
+):
+    # parameter counting... since we use marginal likelihoods, I'm restricting
+    # the parameter counts to just the marginal set considered for each spike.
+    # then, aic and bic formulas are changed slightly below to match.
+    nids = spikes_core.neighborhood_ids
+    unique_nids, inverse = torch.unique(nids, return_inverse=True)
+    unique_chans = core_neighborhoods.neighborhoods[unique_nids]
+    unique_k_merged = merged_unit.n_params(unique_chans)
+    unique_k_full = [u.n_params(unique_chans) for u in full_units]
+    unique_k_full = torch.stack(unique_k_full, dim=1).sum(1)
+    k_merged = unique_k_merged[inverse].to(torch.float)
+    k_full = unique_k_full[inverse].to(torch.float)
+
+    if reduce:
+        if weights is None:
+            k_merged = k_merged.mean()
+            k_full = k_full.mean()
+        else:
+            k_merged = torch.linalg.vecdot(weights, k_merged)
+            k_full = torch.linalg.vecdot(weights, k_full)
+
+    # for aic: k is avg
+    if use_proportions:
+        k_full += len(full_units) - 1
+
+    return k_full, k_merged
+
+
+def class_sum(classes, inverse_inds, x, weights=None):
+    wsum = x.new_zeros(len(classes))
+    x = x * weights if weights is not None else x
+    spiketorch.add_at_(wsum, inverse_inds, x)
+    return wsum
 
 
 def average_units(units, proportions):
@@ -2900,7 +2750,6 @@ def coo_sparse_mask_rows(coo, keep_mask):
 def bimodalities_dense(
     log_liks,
     labels,
-    ids=None,
     cut=0.0,
     weighted=True,
     min_overlap=0.95,
@@ -2912,12 +2761,11 @@ def bimodalities_dense(
     of bimodality scores.
     """
     if cut == "auto":
-        cut = None  # should just use "auto".
-    if ids is None:
-        ids = np.unique(labels)
-    bimodalities = np.zeros((ids.size, ids.size), dtype=np.float32)
-    for i in range(ids.size):
-        for j in range(i + 1, ids.size):
+        cut = None
+    n_units = len(log_liks)
+    bimodalities = np.zeros((n_units, n_units), dtype=np.float32)
+    for i in range(n_units):
+        for j in range(i + 1, n_units):
             ij = np.array([i, j])
             in_pair = np.flatnonzero(np.isin(labels, ij))
             if not in_pair.size:
