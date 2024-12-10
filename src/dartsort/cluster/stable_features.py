@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-from typing import Optional
+from typing import Optional, Sequence
 
 import h5py
 import numpy as np
@@ -29,6 +29,8 @@ class StableSpikeDataset(torch.nn.Module):
         features_on_device: bool = False,
         interpolation_method: str = "kriging",
         interpolation_sigma: float = 20.0,
+        split_names: Optional[Sequence[str]] = None,
+        split_mask: Optional[torch.LongTensor] = None,
         core_radius: float = 35.0,
     ):
         """Motion-corrected spike data on the registered probe"""
@@ -46,8 +48,15 @@ class StableSpikeDataset(torch.nn.Module):
         self.interpolation_sigma = interpolation_sigma
         self.core_radius = core_radius
 
-        self.kept_indices = kept_indices
         self.original_sorting = original_sorting
+
+        # spike collection indices
+        self.kept_indices = kept_indices
+        # split indices are within kept_indices
+        self.has_splits = split_names is not None
+        self.split_names = split_names
+        self.split_ids = dict(zip(split_names, range(len(split_names))))
+        self.split_mask = split_mask
 
         # pca module, to reconstructing wfs for vis
         self.tpca = tpca
@@ -96,17 +105,19 @@ class StableSpikeDataset(torch.nn.Module):
         sorting,
         motion_est,
         core_radius=35.0,
-        subsampling_rg=0,
         max_n_spikes=np.inf,
         discard_triaged=False,
         interpolation_sigma=20.0,
         interpolation_method="kriging",
         motion_depth_mode="channel",
         features_dataset_name="collisioncleaned_tpca_features",
+        split_names=("train", "val"),
+        split_proportions=(0.75, 0.25),
         show_progress=False,
         store_on_device=False,
         workers=-1,
         device=None,
+        random_seed=0,
     ):
         if device is None:
             device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -115,18 +126,26 @@ class StableSpikeDataset(torch.nn.Module):
         # which spikes to keep?
         if discard_triaged:
             keep = sorting.labels >= 0
-            keep_select = kept_indices = np.flatnonzero(keep)
+            keep_select = kept_inds = np.flatnonzero(keep)
         else:
             keep = np.ones(len(sorting), dtype=bool)
-            kept_indices = np.arange(len(sorting))
+            kept_inds = np.arange(len(sorting))
             keep_select = slice(None)
-        if kept_indices.size > max_n_spikes:
-            rg = np.random.default_rng(subsampling_rg)
-            kept_kept = rg.choice(kept_indices.size, size=max_n_spikes, replace=False)
+        rg = random_seed
+        if kept_inds.size > max_n_spikes:
+            rg = np.random.default_rng(rg)
+            kept_kept = rg.choice(kept_inds.size, size=max_n_spikes, replace=False)
             kept_kept.sort()
-            keep[kept_indices] = 0
-            keep[kept_indices[kept_kept]] = 1
-            keep_select = kept_indices = kept_indices[kept_kept]
+            keep[kept_inds] = 0
+            keep[kept_inds[kept_kept]] = 1
+            keep_select = kept_inds = kept_inds[kept_kept]
+
+        # choose splits
+        split_mask = None
+        if split_names:
+            n_splits = len(split_names)
+            rg = np.random.default_rng(rg)
+            split_mask = rg.choice(n_splits, p=split_proportions, size=len(kept_inds))
 
         # load information not stored directly on the sorting
         with h5py.File(sorting.parent_h5_path, "r", locking=False) as h5:
@@ -206,7 +225,7 @@ class StableSpikeDataset(torch.nn.Module):
         )
 
         self = cls(
-            kept_indices=kept_indices,
+            kept_indices=kept_inds,
             prgeom=prgeom,
             tpca=tpca,
             extract_channels=extract_channels,
@@ -219,6 +238,8 @@ class StableSpikeDataset(torch.nn.Module):
             features_on_device=store_on_device,
             interpolation_method=interpolation_method,
             interpolation_sigma=interpolation_sigma,
+            split_names=split_names,
+            split_mask=split_mask,
             core_radius=core_radius,
         )
         self.to(device)
@@ -231,6 +252,7 @@ class StableSpikeDataset(torch.nn.Module):
         with_channels=True,
         with_reconstructions: bool = False,
         with_neighborhood_ids: bool = False,
+        split: Optional[str] = "train",
     ) -> "SpikeFeatures":
         channels = neighborhood_ids = None
         if neighborhood == "extract":
@@ -277,6 +299,17 @@ class StableSpikeDataset(torch.nn.Module):
             interpolation_method=self.interpolation_method,
             interpolation_sigma=self.interpolation_sigma,
         )
+
+    def restrict_to_split(self, indices, split_name="train"):
+        if not self.has_splits:
+            assert split_name is None
+            return indices
+        if len(self.split_names) == 1:
+            return indices
+
+        sid = self.split_ids[split_name]
+        sids = self.split_mask[indices]
+        return indices[sids == sid]
 
 
 # -- utility classes
