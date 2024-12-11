@@ -1486,7 +1486,6 @@ class SpikeMixtureModel(torch.nn.Module):
             assert spikes_extract is not None
             assert len(units) == len(unit_ids) == len(likelihoods)
             assert likelihoods.shape[1] == len(spikes_extract)
-        print(f"--- MCa {unit_ids=}")
 
         unit_ids = torch.asarray(unit_ids)
         dim_units = 0  # naming this for clarity in sums below
@@ -1531,20 +1530,24 @@ class SpikeMixtureModel(torch.nn.Module):
         lik_weights = None
         if isinstance(likelihoods, csc_array):
             lik_ix = spikes_core.indices
+
+            # below we compute likelihoods, but the proportion vector should be re-normalized.
+            # need to multiply by 1/sum(suprops), aka subtract logsumexp(logsuprops)
+            prop_correction = torch.logsumexp(self.log_proportions[unit_ids], dim=0)
+
             if in_bag:
-                print('in bag')
                 full_logliks = self.get_log_likelihoods(
                     lik_ix, likelihoods, unit_ids=unit_ids, dense=True
                 )
+                full_logliks -= prop_correction
                 lik_weights = fit_weights
             else:
-                print('not in bag')
                 full_logliks_sp = self.get_log_likelihoods(lik_ix, likelihoods)
-                lik_weights = torch.sparse.softmax(full_logliks_sp, dim=0)
+                lik_weights = torch.sparse.softmax(full_logliks_sp, dim=dim_units)
                 data = full_logliks_sp.values()
                 full_logliks = data.new_full(full_logliks_sp.shape, -torch.inf)
                 full_logliks[*full_logliks_sp.indices()] = data
-                full_logliks = full_logliks[unit_ids]
+                full_logliks = full_logliks[unit_ids] - prop_correction
                 lik_weights = lik_weights.to_dense()[unit_ids].sum(dim=dim_units)
         else:
             full_logliks = spikes_core.features.new_full(
@@ -1554,6 +1557,8 @@ class SpikeMixtureModel(torch.nn.Module):
                 _, ull = self.unit_log_likelihoods(unit=unit, spikes=spikes_core)
                 if ull is not None:
                     full_logliks[j] = ull
+            props = F.softmax(full_logliks, dim=dim_units).mean(1)
+            full_logliks += props.log()[:, None]
         assert full_logliks.shape == (len(unit_ids), len(spikes_core))
         labels = full_logliks.argmax(0)
         labids, labixs, labcts = labels.unique(return_inverse=True, return_counts=True)
@@ -1586,7 +1591,6 @@ class SpikeMixtureModel(torch.nn.Module):
         labprops = torch.zeros_like(labcts)
         spiketorch.add_at_(labprops, labixs, keep.to(labcts))
         labprops = labprops / labcts
-        print(f"{labprops=}")
         if labprops.min() < min_overlap:
             if debug:
                 return dict(
@@ -1617,8 +1621,6 @@ class SpikeMixtureModel(torch.nn.Module):
         class_ec = class_sum(labids, labixs, ec, lik_weights) / class_w
         class_fll = class_sum(labids, labixs, full_logliks, lik_weights) / class_w
         class_mll = class_sum(labids, labixs, merged_logliks, lik_weights) / class_w
-        print(f"{class_fll=}")
-        print(f"{class_mll=}")
 
         if class_balancing == "worst":
             worst_ix = torch.argmin(class_mll - class_fll)
