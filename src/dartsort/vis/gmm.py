@@ -177,7 +177,7 @@ class MStep(GMMPlot):
             ax=ax,
         )
         ax.axis("off")
-        ax.set_title("reconstructed mean and example inputs")
+        ax.set_title("reconstructed mean and example inputs", fontsize='small')
 
 
 class CovarianceResidual(GMMPlot):
@@ -305,7 +305,7 @@ class CovarianceResidual(GMMPlot):
             title = name
             if name == "mmT":
                 title = title + f" (scale={scale:.2f})"
-            ax.set_title(title, color=color)
+            ax.set_title(title, color=color, fontsize='small')
             if name in eigs:
                 ax_eig.plot(eigs[name].flip(0).numpy(force=True), color=color, lw=1)
                 # r2 = (eigs['emp'].sum() - F.relu(eigs[name].flip(0)).cumsum(0)) / eigs['emp'].sum()
@@ -476,7 +476,8 @@ class KMeansSplit(GMMPlot):
                 annotations_offset_by_n=False,
             )
             ax_bimod.set_title(
-                f"tree {gmm.distance_metric} {gmm.merge_criterion}-{gmm.criterion_normalization_kind}"
+                f"tree {gmm.distance_metric} {gmm.merge_criterion}-{gmm.criterion_normalization_kind}",
+                fontsize='small',
             )
             sns.despine(ax=ax_bimod, left=True, right=True, top=True)
         else:
@@ -645,9 +646,9 @@ class NeighborBimodalities(GMMPlot):
             )
 
             scatter_ax, bimod_ax = axes_row
-            if j == 0:
-                scatter_ax.set_title("loglik pair scatter", fontsize="small")
-                bimod_ax.set_title("bimodality computation", fontsize="small")
+            # if j == 0:
+            #     scatter_ax.set_title("loglik pair scatter", fontsize="small")
+            #     bimod_ax.set_title("bimodality computation", fontsize="small")
 
             if "in_pair_kept" not in bimod_info:
                 scatter_ax.text(
@@ -732,6 +733,7 @@ class NeighborInfoCriteria(GMMPlot):
         bag = "inbag" if self.in_bag else "heldout"
         bbox = dict(facecolor="w", alpha=0.5, edgecolor="none")
         histkw = dict(density=True, histtype="step", log=True)
+        textkw = dict(bbox=bbox, va="top", fontsize="x-small")
 
         for ax, other_id in zip(axes, others):
             res = gmm.merge_criteria(
@@ -746,21 +748,24 @@ class NeighborInfoCriteria(GMMPlot):
                 continue
 
             info = res["info"]
-            kept = info["keep"].sum() / len(info["keep"])
+            kept = info["keep_mask"].sum() / len(info["keep_mask"])
             for uid, ll in zip((unit_id, other_id), info["subunit_logliks"]):
-                ax.hist(ll, color=glasbey1024[uid], **histkw)
+                if not ll.numel():
+                    continue
+                ax.hist(ll.cpu(), color=glasbey1024[uid], **histkw)
             merged_ll = info["unit_logliks"]
-            ax.hist(merged_ll, color="k", **histkw)
+            if merged_ll.numel():
+                ax.hist(merged_ll.cpu(), color="k", **histkw)
 
             message = f"{100*kept:.1f}%"
             if "improvements" in res:
-                message = f"{message} {bag} full/merged/improvement:"
+                message = f"{message} {bag} full/merge/imp:"
                 fc, mc = res["full_criteria"], res["merged_criteria"]
                 for k, v in res["improvements"].items():
                     t = ":) " if v >= 0 else "X( "
-                    message += f"\n{t}{k}: {fc[k]:.2f} / {mc[k]:.2f} / {v:.2f}"
+                    message += f"\n{t}{k}: {fc[k]:.1f} / {mc[k]:.1f} / {v:.2f}"
 
-            ax.text(0.05, 0.95, message, transform=ax.transAxes, va="top", bbox=bbox)
+            ax.text(0.05, 0.95, message, transform=ax.transAxes, **textkw)
             ax.set_xlabel("log lik")
             sns.despine(ax=ax, left=True, right=True, top=True)
 
@@ -778,6 +783,7 @@ class NeighborTreeMerge(GMMPlot):
         max_distance=1e10,
         criterion_normalization_kind=None,
         distance_normalization_kind=None,
+        threshold=-np.inf,
     ):
         self.n_neighbors = n_neighbors
         self.metric = metric
@@ -785,6 +791,7 @@ class NeighborTreeMerge(GMMPlot):
         self.max_distance = max_distance
         self.criterion_normalization_kind = criterion_normalization_kind
         self.distance_normalization_kind = distance_normalization_kind
+        self.threshold = threshold
 
     def draw(self, panel, gmm, unit_id):
         neighbors = gmm_helpers.get_neighbors(gmm, unit_id)
@@ -819,7 +826,7 @@ class NeighborTreeMerge(GMMPlot):
             max_distance=self.max_distance,
             likelihoods=gmm.log_liks,
             criterion=criterion,
-            threshold=-np.inf,
+            threshold=self.threshold,
             normalization_kind=criterion_normalization_kind,
         )
 
@@ -835,8 +842,12 @@ class NeighborTreeMerge(GMMPlot):
                 leaf_labels=neighbors,
                 annotations_offset_by_n=False,
             )
-            nstr = f"dnorm={distance_normalization_kind} cnorm={criterion_normalization_kind}"
-            ax.set_title(f"{metric} {criterion} {nstr}")
+            nstr = ""
+            if distance_normalization_kind != "none":
+                nstr += f"dnm={distance_normalization_kind}"
+            if criterion_normalization_kind != "none":
+                nstr += f"cnm={criterion_normalization_kind}"
+            ax.set_title(f"{metric} {criterion} {nstr}", fontsize='small')
             sns.despine(ax=ax, left=True, right=True, top=True)
         except ValueError as e:
             ax.text(
@@ -868,6 +879,7 @@ default_gmm_plots = (
     NeighborTreeMerge(metric=None, criterion="heldout_ccl"),
     NeighborTreeMerge(metric=None, criterion="heldout_loglik"),
     NeighborTreeMerge(metric=None, criterion="loglik"),
+    NeighborTreeMerge(metric=None, criterion="icl"),
     NeighborBimodalities(),
     NeighborInfoCriteria(in_bag=False),
     NeighborInfoCriteria(in_bag=True),
@@ -880,7 +892,7 @@ def make_unit_gmm_summary(
     unit_id,
     plots=default_gmm_plots,
     max_height=9,
-    figsize=(18, 11),
+    figsize=(22, 11),
     hspace=0.1,
     figure=None,
     **other_global_params,
@@ -909,7 +921,7 @@ def make_all_gmm_summaries(
     save_folder,
     plots=default_gmm_plots,
     max_height=9,
-    figsize=(18, 11),
+    figsize=(25, 14),
     hspace=0.1,
     dpi=200,
     image_ext="png",
@@ -954,9 +966,10 @@ def make_all_gmm_summaries(
         image_ext,
         overwrite,
         global_params,
+        plt.rcParams,
     )
-    if ispar and not use_threads:
-        initargs = (cloudpickle.dumps(initargs),)
+    # if ispar and not use_threads:
+    #     initargs = (cloudpickle.dumps(initargs),)
     with Executor(
         max_workers=n_jobs,
         mp_context=context,
@@ -994,6 +1007,7 @@ class SummaryJobContext:
         image_ext,
         overwrite,
         global_params,
+        rc,
     ):
         self.gmm = gmm
         self.plots = plots
@@ -1005,6 +1019,7 @@ class SummaryJobContext:
         self.image_ext = image_ext
         self.overwrite = overwrite
         self.global_params = global_params
+        # plt.rcParams = rc
 
 
 _summary_job_context = None
@@ -1012,10 +1027,8 @@ _summary_job_context = None
 
 def _summary_init(*args):
     global _summary_job_context
-    if len(args) == 1:
-        from cloudpickle import loads
-
-        args = loads(args[0])
+    # if len(args) == 1:
+    #     args = cloudpickle.loads(args[0])
     _summary_job_context = SummaryJobContext(*args)
 
 

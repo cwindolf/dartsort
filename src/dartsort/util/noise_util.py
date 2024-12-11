@@ -7,7 +7,7 @@ from linear_operator import operators
 from scipy.fftpack import next_fast_len
 from tqdm.auto import trange
 
-from ..util import drift_util, spiketorch
+from ..util import drift_util, spiketorch, more_operators
 
 
 class FullNoise(torch.nn.Module):
@@ -430,10 +430,13 @@ class EmbeddedNoise(torch.nn.Module):
             self.cache[cache_key] = cov
         return cov
 
-    def offdiag_covariance(self, channels_left=slice(None), channels_right=slice(None)):
-        return self._marginal_covariance(
+    def offdiag_covariance(self, channels_left=slice(None), channels_right=slice(None), device=None):
+        odc = self._marginal_covariance(
             channels=channels_right, channels_left=channels_left
         )
+        if device is not None:
+            odc = odc.to(device)
+        return odc
 
     def _marginal_covariance(self, channels=slice(None), channels_left=None):
         channels = self.chans_arange[channels]
@@ -445,7 +448,7 @@ class EmbeddedNoise(torch.nn.Module):
 
         if have_left:
             if self.cov_kind in ("scalar", "diagonal_by_rank", "diagonal"):
-                if torch.isin(channels_left, channels).any():
+                if torch.isin(channels_left.to(channels), channels).any():
                     raise ValueError(
                         "Don't know how to get non-marginal covariance block "
                         f"for cov_kind={self.cov_kind} when the block overlaps "
@@ -503,6 +506,8 @@ class EmbeddedNoise(torch.nn.Module):
                 chan_rootl = rc_std * chans_vtl
             blocks = torch.bmm(chan_rootl.mT, chan_root)
             blocks = linear_operator.to_linear_operator(blocks)
+            if have_left:
+                return more_operators.NonSquareBlockLinearOperator(blocks)
             return operators.BlockDiagLinearOperator(blocks)
 
         assert False
@@ -571,7 +576,7 @@ class EmbeddedNoise(torch.nn.Module):
             x = x.view(n, rank * n_channels)
             present = torch.isfinite(x).any(dim=0)
             cov = torch.eye(x.shape[1], device=x.device, dtype=x.dtype)
-            vcov = spiketorch.nancov(x[:, present])
+            vcov = spiketorch.nancov(x[:, present], force_posdef=True)
             cov[present[:, None] & present[None, :]] = vcov.view(-1)
             cov = cov.reshape(rank, n_channels, rank, n_channels)
             return cls(mean=mean, global_std=global_std, full_cov=cov, **init_kw)

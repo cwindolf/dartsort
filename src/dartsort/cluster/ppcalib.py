@@ -252,14 +252,14 @@ def ppca_e_step(
         # tnu = ndata["tnu"]
 
         C_oo = noise.marginal_covariance(
-            channels=neighb_chans, cache_prefix=cache_prefix, cache_key=nid
+            channels=neighb_chans, cache_prefix=cache_prefix, cache_key=nid, device=y.device
         )
         nu = active_mean[:, active_subset].reshape(D_neighb)
         if have_missing:
             C_mo = noise.offdiag_covariance(
-                channels_left=missing_chans, channels_right=neighb_chans
+                channels_left=missing_chans, channels_right=neighb_chans, device=nu.device
             )
-            C_mo = C_mo.to_dense()
+            C_mo = C_mo.to_dense().to(nu.device)
             tnu = active_mean[:, missing_subset].reshape(D - D_neighb)
         assert C_oo.shape == (D_neighb, D_neighb)
 
@@ -556,9 +556,9 @@ def ppca_m_step(
         n = len(yc)
         if active_cov is None:
             active_cov = noise.marginal_covariance(active_channels)
-        L = torch.linalg.cholesky(active_cov)
+        L = torch.linalg.cholesky(active_cov).to_dense()
         yc = yc.view(n, rank * nc)
-        ycw = L.solve(yc.T).T
+        ycw = torch.linalg.solve_triangular(L, yc.T, upper=False).T
         assert ycw.shape == (n, rank * nc)
 
         try:
