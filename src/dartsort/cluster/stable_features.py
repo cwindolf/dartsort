@@ -70,18 +70,20 @@ class StableSpikeDataset(torch.nn.Module):
 
         # channel neighborhoods and features
         # if not self.features_on_device, .spike_data() will .to(self.device)
+        self.core_channels = core_channels.cpu()
+        self.extract_channels = extract_channels.cpu()
         times_s = torch.asarray(self.original_sorting.times_seconds[kept_indices])
         if self.features_on_device:
-            self.register_buffer("core_channels", core_channels)
-            self.register_buffer("extract_channels", extract_channels)
+            # self.register_buffer("core_channels", core_channels)
+            # self.register_buffer("extract_channels", extract_channels)
             self.register_buffer("core_features", core_features)
             self.register_buffer("extract_features", extract_features)
             # self.register_buffer("extract_amp_vecs", extract_amp_vecs)
             self.register_buffer("amps", amps)
             self.register_buffer("times_seconds", times_s)
         else:
-            self.core_channels = core_channels
-            self.extract_channels = extract_channels
+            # self.core_channels = core_channels
+            # self.extract_channels = extract_channels
             self.core_features = core_features
             self.extract_features = extract_features
             # self.extract_amp_vecs = extract_amp_vecs
@@ -273,7 +275,7 @@ class StableSpikeDataset(torch.nn.Module):
         if not self.features_on_device:
             features = features.to(self.device)
             if with_channels:
-                channels = channels.to(self.device)
+                channels = channels
 
         waveforms = None
         if with_reconstructions:
@@ -396,7 +398,8 @@ class SpikeNeighborhoods(torch.nn.Module):
             self.register_buffer("neighborhood_ids", neighborhood_ids)
         else:
             self.neighborhood_ids = neighborhood_ids
-        self.register_buffer("neighborhoods", neighborhoods)
+        # self.register_buffer("neighborhoods", neighborhoods)
+        self.neighborhoods = neighborhoods.cpu()
         self.n_neighborhoods = len(neighborhoods)
 
         # store neighborhoods as a matrix
@@ -540,7 +543,7 @@ def pad_to_chans(
 
     # determine channels to write to
     reindexer = get_channel_reindexer(channels, n_channels)
-    target_ixs = reindexer[spike_data.channels]
+    target_ixs = reindexer[spike_data.channels].to(spike_data.features.device)
 
     # scatter data
     if target_padded is None:

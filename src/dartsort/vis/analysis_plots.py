@@ -64,10 +64,13 @@ def annotated_dendro(
         get_leaves=True,
         no_plot=True,
     )
+    dcoords = np.array(res['dcoord'])[:, 1]
+    depth_order = np.argsort(dcoords)
 
     lines = np.zeros((len(Z), 4, 2))
     colors = np.zeros((len(Z), 3))
-    for j, (ic, dc) in enumerate(zip(res["icoord"], res["dcoord"])):
+    for jj, (ic, dc) in enumerate(zip(res["icoord"], res["dcoord"])):
+        j = depth_order[jj]
         lines[j, :, 0] = ic
         lines[j, :, 1] = dc
         if dc[1] < threshold:
@@ -87,7 +90,8 @@ def annotated_dendro(
     for tick, leaf in zip(ax.get_xticklabels(), res["leaves"]):
         tick.set_color(glasbey1024[leaf_labels[leaf]])
 
-    for j, (ic, dc) in enumerate(zip(res["icoord"], res["dcoord"])):
+    for jj, (ic, dc) in enumerate(zip(res["icoord"], res["dcoord"])):
+        j = depth_order[jj]
         cluix = n + j if annotations_offset_by_n else j
         if cluix in annotations:
             top = np.mean(ic[1:3]), np.mean(dc[1:3])

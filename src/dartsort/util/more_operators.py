@@ -4,6 +4,7 @@ import torch
 from jaxtyping import Float
 from linear_operator.operators import to_dense
 from linear_operator.operators._linear_operator import LinearOperator
+from linear_operator.operators.block_linear_operator import BlockLinearOperator
 from linear_operator.operators.diag_linear_operator import \
     ConstantDiagLinearOperator
 from linear_operator.operators.low_rank_root_linear_operator import \
@@ -117,6 +118,7 @@ class LowRankRootSumLinearOperator(SumLinearOperator):
         logdet_cap_mat = 2 * torch.diagonal(
             chol_cap_mat, offset=0, dim1=-2, dim2=-1
         ).log().sum(-1)
+
         logdet_A = self._other_op.logdet()
         logdet_term = logdet_cap_mat + logdet_A
 
@@ -224,3 +226,33 @@ class LowRankRootSumLinearOperator(SumLinearOperator):
             return left_tensor @ solve
         else:
             return solve
+
+
+class NonSquareBlockLinearOperator(BlockLinearOperator):
+    @property
+    def num_blocks(self) -> int:
+        return self.base_linear_op.size(-3)
+
+    def _size(self):
+        shape = list(self.base_linear_op.shape)
+        shape[-2] *= shape[-3]
+        shape[-1] *= shape[-3]
+        del shape[-3]
+        return torch.Size(shape)
+
+    def _add_batch_dim(
+        self: Float[LinearOperator, "*batch1 M P"], other: Float[torch.Tensor, "*batch2 N C"]
+    ) -> Float[torch.Tensor, "batch2 ... C"]:
+        *batch_shape, num_rows, num_cols = other.shape
+        batch_shape = list(batch_shape)
+
+        batch_shape.append(self.num_blocks)
+        other = other.view(*batch_shape, num_rows // self.num_blocks, num_cols)
+        return other
+
+    def _remove_batch_dim(self, other):
+        shape = list(other.shape)
+        del shape[-3]
+        shape[-2] *= self.num_blocks
+        other = other.reshape(*shape)
+        return other
