@@ -1263,7 +1263,8 @@ class SpikeMixtureModel(torch.nn.Module):
         valid = np.logical_and(ids >= 0, counts >= self.min_count)
         ids = ids[valid]
         units = [units[ii] for ii in ids]
-        labels[labels >= 0] = np.searchsorted(ids, labels[labels >= 0])
+        keepers = np.flatnonzero(np.isin(labels, ids))
+        labels[keepers] = np.searchsorted(ids, labels[keepers])
         if ids.size <= 1:
             return labels
 
