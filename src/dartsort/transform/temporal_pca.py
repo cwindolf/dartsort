@@ -1,9 +1,10 @@
 import numpy as np
 import torch
+from sklearn.decomposition import PCA
+
 from dartsort.util.waveform_util import (channel_subset_by_radius,
                                          get_channels_in_probe,
                                          set_channels_in_probe)
-from sklearn.decomposition import PCA, TruncatedSVD
 
 from .transform_base import (BaseWaveformAutoencoder, BaseWaveformDenoiser,
                              BaseWaveformFeaturizer, BaseWaveformModule)
@@ -26,9 +27,7 @@ class BaseTemporalPCA(BaseWaveformModule):
     ):
         if fit_radius is not None:
             if geom is None or channel_index is None:
-                raise ValueError(
-                    "TemporalPCA with fit_radius!=None requires geom."
-                )
+                raise ValueError("TemporalPCA with fit_radius!=None requires geom.")
         super().__init__(
             channel_index=channel_index,
             geom=geom,
@@ -76,9 +75,9 @@ class BaseTemporalPCA(BaseWaveformModule):
 
         # 7 is based on sklearn's auto choice
         U, S, V = torch.svd_lowrank(waveforms_fit, q=q, M=M, niter=7)
-        U = U[..., :self.rank]
-        S = S[..., :self.rank]
-        V = V[..., :self.rank]
+        U = U[..., : self.rank]
+        S = S[..., : self.rank]
+        V = V[..., : self.rank]
 
         # loadings = U * S[..., None, :]
         components = V.T.contiguous()
@@ -94,7 +93,7 @@ class BaseTemporalPCA(BaseWaveformModule):
         return self._needs_fit
 
     def _temporal_slice(self, waveforms):
-        if getattr(self, 'temporal_slice', None) is None:
+        if getattr(self, "temporal_slice", None) is None:
             return waveforms
 
         return waveforms[:, self.temporal_slice]
@@ -175,7 +174,9 @@ class TemporalPCADenoiser(BaseWaveformDenoiser, BaseTemporalPCA):
 class TemporalPCAFeaturizer(BaseWaveformFeaturizer, BaseTemporalPCA):
     default_name = "tpca_features"
 
-    def transform(self, waveforms, max_channels, channel_index=None, return_in_probe=False):
+    def transform(
+        self, waveforms, max_channels, channel_index=None, return_in_probe=False
+    ):
         waveforms = self._temporal_slice(waveforms)
 
         if channel_index is None:
@@ -208,9 +209,7 @@ class TemporalPCAFeaturizer(BaseWaveformFeaturizer, BaseTemporalPCA):
             channels_in_probe,
             features_in_probe,
         ) = get_channels_in_probe(features, max_channels, channel_index)
-        reconstructions_in_probe = self._inverse_transform_in_probe(
-            features_in_probe
-        )
+        reconstructions_in_probe = self._inverse_transform_in_probe(features_in_probe)
         reconstructions = torch.full(
             (
                 features.shape[0],
@@ -233,11 +232,11 @@ class TemporalPCA(BaseWaveformAutoencoder, TemporalPCAFeaturizer):
     def forward(self, waveforms, max_channels):
         waveforms = self._temporal_slice(waveforms)
         features_in_probe, channels_in_probe, features = self.transform(
-            waveforms, max_channels, return_in_probe=True,
+            waveforms,
+            max_channels,
+            return_in_probe=True,
         )
-        reconstructions_in_probe = self._inverse_transform_in_probe(
-            features_in_probe
-        )
+        reconstructions_in_probe = self._inverse_transform_in_probe(features_in_probe)
         reconstructions = set_channels_in_probe(
             reconstructions_in_probe,
             waveforms,

@@ -115,6 +115,7 @@ class FeaturizationConfig:
     input_tpca_projs_temporal_slice: Optional[slice] = field(
         default_factory=lambda: slice(20, 81)
     )
+    learn_cleaned_tpca_basis: bool = False
 
     # used when naming datasets saved to h5 files
     input_waveforms_name: str = "collisioncleaned"

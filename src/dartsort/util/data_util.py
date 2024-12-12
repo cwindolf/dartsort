@@ -7,9 +7,10 @@ from warnings import warn
 import h5py
 import numpy as np
 import torch
-from dartsort.detect import detect_and_deduplicate
 from spikeinterface.core import NumpySorting, get_random_data_chunks
 from tqdm.auto import tqdm
+
+from dartsort.detect import detect_and_deduplicate
 
 from .waveform_util import make_channel_index
 
@@ -153,7 +154,9 @@ class DARTsortSorting:
         labels=None,
     ):
         channels = None
-        with h5py.File(peeling_hdf5_filename, "r", libver="latest", locking=False) as h5:
+        with h5py.File(
+            peeling_hdf5_filename, "r", libver="latest", locking=False
+        ) as h5:
             times_samples = h5[times_samples_dataset][()]
             sampling_frequency = h5["sampling_frequency"][()]
             if channels_dataset in h5:
@@ -192,6 +195,8 @@ class DARTsortSorting:
 
 def get_tpca(sorting):
     """Look for the TemporalPCAFeaturizer in the usual place."""
+    from dartsort.transform import TemporalPCAFeaturizer
+
     if isinstance(sorting, Path):
         base_dir = sorting.parent
         stem = sorting.stem
@@ -204,7 +209,10 @@ def get_tpca(sorting):
         weights_only=True,
         map_location="cpu",
     )
-    tpca = pipeline.transformers[0]
+    tpcas = [t for t in pipeline.transformers if isinstance(t, TemporalPCAFeaturizer)]
+    if not tpcas:
+        print("Looking for a TPCA featurizer, but there aren't any.")
+    tpca = tpcas[0]
     return tpca
 
 
@@ -320,9 +328,7 @@ def subset_sorting_by_time_samples(
     return replace(sorting, labels=new_labels, times_samples=new_times)
 
 
-def subset_sorting_by_time_seconds(
-    sorting, t_start=0, t_end=np.inf
-):
+def subset_sorting_by_time_seconds(sorting, t_start=0, t_end=np.inf):
     new_labels = sorting.labels.copy()
     t_s = sorting.times_seconds
     in_range = t_s == t_s.clip(t_start, t_end)
@@ -395,9 +401,9 @@ def chunk_time_ranges(recording, chunk_length_samples=None):
 
     # evenly divide the recording into chunks
     assert recording.get_num_segments() == 1
-    start_time_s, end_time_s = recording._recording_segments[
-        0
-    ].sample_index_to_time(np.array([0, recording.get_num_samples() - 1]))
+    start_time_s, end_time_s = recording._recording_segments[0].sample_index_to_time(
+        np.array([0, recording.get_num_samples() - 1])
+    )
     chunk_times_s = np.linspace(start_time_s, end_time_s, num=n_chunks + 1)
     chunk_time_ranges_s = list(zip(chunk_times_s[:-1], chunk_times_s[1:]))
 
@@ -450,7 +456,9 @@ def yield_chunks(dataset, show_progress=True, desc_prefix=None):
 
 def yield_masked_chunks(mask, dataset, show_progress=True, desc_prefix=None):
     offset = 0
-    for sli, data in yield_chunks(dataset, show_progress=show_progress, desc_prefix=desc_prefix):
+    for sli, data in yield_chunks(
+        dataset, show_progress=show_progress, desc_prefix=desc_prefix
+    ):
         source_ixs = np.flatnonzero(mask[sli])
         dest_ixs = slice(offset, offset + source_ixs.size)
         yield dest_ixs, data[source_ixs]
