@@ -7,7 +7,7 @@ from linear_operator import operators
 from scipy.fftpack import next_fast_len
 from tqdm.auto import trange
 
-from ..util import drift_util, spiketorch, more_operators
+from ..util import drift_util, more_operators, spiketorch
 
 
 class FullNoise(torch.nn.Module):
@@ -145,6 +145,19 @@ class StationaryFactorizedNoise(torch.nn.Module):
         self.block_size = block_size
         self.t = t
 
+    def whiten(self, snippet):
+        wsnip = snippet @ (self.vt_spatial / self.spatial_std[:, None])
+        wsnip = spiketorch.single_inv_oaconv1d(
+            wsnip.T,
+            s2=self.t,
+            f2=1 / self.kernel_fft,
+            block_size=self.block_size,
+            norm="ortho",
+        )
+        # zca
+        wsnip = wsnip.T @ self.vt_spatial.T
+        return wsnip
+
     def simulate(self, size=1, t=None, generator=None):
         """Simulate stationary factorized noise
 
@@ -162,6 +175,7 @@ class StationaryFactorizedNoise(torch.nn.Module):
         # need extra room at the edges to do valid convolution
         t_padded = t + self.t - 1
         noise = torch.randn(size * c, t_padded, generator=generator, device=device)
+        print(f"{noise.shape=}")
         noise = spiketorch.single_inv_oaconv1d(
             noise,
             s2=self.t,
@@ -430,7 +444,9 @@ class EmbeddedNoise(torch.nn.Module):
             self.cache[cache_key] = cov
         return cov
 
-    def offdiag_covariance(self, channels_left=slice(None), channels_right=slice(None), device=None):
+    def offdiag_covariance(
+        self, channels_left=slice(None), channels_right=slice(None), device=None
+    ):
         odc = self._marginal_covariance(
             channels=channels_right, channels_left=channels_left
         )
