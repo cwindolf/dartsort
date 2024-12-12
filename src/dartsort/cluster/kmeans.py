@@ -44,6 +44,7 @@ def kmeans(
     kmeanspp_initial="mean",
     with_proportions=False,
     drop_prop=0.025,
+    return_centroids=False,
 ):
     """A bit more than K-means
 
@@ -55,13 +56,16 @@ def kmeans(
         random_state=random_state,
         kmeanspp_initial=kmeanspp_initial,
     )
-    # responsibilities, sum to 1 over centroids
-    if not n_iter:
-        return labels, e
 
     centroids = X[centroid_ixs]
     dists = torch.cdist(X, centroids).square_()
+    # responsibilities, sum to 1 over centroids
     e = F.softmax(-0.5 * dists, dim=1)
+    if not n_iter:
+        if return_centroids:
+            return labels, e, centroids
+        return labels, e
+
     proportions = e.mean(0)
 
     for j in range(n_iter):
@@ -82,4 +86,6 @@ def kmeans(
             e = F.softmax(-0.5 * dists, dim=1)
 
     assignments = torch.argmin(dists, 1)
+    if return_centroids:
+        return assignments, e, centroids
     return assignments, e
