@@ -35,6 +35,20 @@ def ptp(waveforms, dim=1):
     return waveforms.max(dim=dim).values - waveforms.min(dim=dim).values
 
 
+def taper(waveforms, t_start=10, t_end=20, dim=1):
+    nt = waveforms.shape[dim]
+    t0 = torch.linspace(-torch.pi, 0.0, steps=t_start)
+    t1 = torch.zeros(nt - t_start - t_end)
+    t2 = torch.linspace(0, -torch.pi, steps=t_end)
+    domain = torch.concatenate((t0, t1, t2))
+    window = torch.cos(domain).add(1.0).div(2.0)
+    for j in range(dim):
+        window = window.unsqueeze(0)
+    for j in range(dim + 1, waveforms.ndim):
+        window = window.unsqueeze(-1)
+    return waveforms * window
+
+
 def ravel_multi_index(multi_index, dims):
     """torch implementation of np.ravel_multi_index
 
