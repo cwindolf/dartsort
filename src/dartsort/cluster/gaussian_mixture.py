@@ -1259,8 +1259,8 @@ class SpikeMixtureModel(torch.nn.Module):
             weights = F.softmax(lls, dim=0)
 
         labels = labels.numpy(force=True)
-        ids = np.unique(labels)
-        valid = ids >= 0
+        ids, counts = np.unique(labels, return_counts=True)
+        valid = np.logical_and(ids >= 0, counts >= self.min_count)
         ids = ids[valid]
         units = [units[ii] for ii in ids]
         labels[labels >= 0] = np.searchsorted(ids, labels[labels >= 0])
@@ -1742,9 +1742,9 @@ class SpikeMixtureModel(torch.nn.Module):
 
     def __getstate__(self):
         state = self.__dict__.copy()
-        del state['lock']
-        del state['labels_lock']
-        del state['storage']
+        del state["lock"]
+        del state["labels_lock"]
+        del state["storage"]
         return state
 
     def __setstate__(self, state):
