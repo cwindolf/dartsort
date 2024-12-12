@@ -124,7 +124,7 @@ class FeaturizationConfig:
 
 @dataclass(frozen=True, kw_only=True, slots=True)
 class SubtractionConfig:
-    detection_thresholds: List[int] = (10, 8, 6, 5, 4)
+    detection_threshold: float = 4.0
     chunk_length_samples: int = 30_000
     peak_sign: str = "both"
     spatial_dedup_radius: float = 150.0
