@@ -64,7 +64,7 @@ def annotated_dendro(
         get_leaves=True,
         no_plot=True,
     )
-    dcoords = np.array(res['dcoord'])[:, 1]
+    dcoords = np.array(res["dcoord"])[:, 1]
     depth_order = np.argsort(dcoords)
 
     lines = np.zeros((len(Z), 4, 2))
@@ -281,11 +281,7 @@ def isi_hist(
     alpha=1.0,
 ):
     dt_ms = np.diff(times_s) * 1000
-    bin_edges = np.arange(
-        0,
-        max_ms + bin_ms,
-        bin_ms,
-    )
+    bin_edges = np.arange(0, max_ms + bin_ms, bin_ms)
     # counts, _ = np.histogram(dt_ms, bin_edges)
     # bin_centers = 0.5 * (bin_edges[1:] + bin_edges[:-1])
     # axis.bar(bin_centers, counts)
