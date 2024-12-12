@@ -1,6 +1,8 @@
 """A class which manages pipelines of denoisers and featurizers
 """
+
 import torch
+
 
 class WaveformPipeline(torch.nn.Module):
     def __init__(self, transformers):
@@ -9,16 +11,15 @@ class WaveformPipeline(torch.nn.Module):
         self.transformers = torch.nn.ModuleList(transformers)
 
     @classmethod
-    def from_class_names_and_kwargs(
-        cls, geom, channel_index, class_names_and_kwargs
-    ):
+    def from_class_names_and_kwargs(cls, geom, channel_index, class_names_and_kwargs):
         from .all_transformers import transformers_by_class_name
+
         return cls(
             [
                 transformers_by_class_name[name](
                     channel_index=torch.as_tensor(channel_index),
                     geom=torch.as_tensor(geom),
-                    **kwargs
+                    **kwargs,
                 )
                 for name, kwargs in class_names_and_kwargs
             ]
@@ -49,14 +50,14 @@ class WaveformPipeline(torch.nn.Module):
 
         for transformer in self.transformers:
             if transformer.is_featurizer and transformer.is_denoiser:
-                waveforms, new_features = transformer(waveforms, max_channels=max_channels)
+                waveforms, new_features = transformer(
+                    waveforms, max_channels=max_channels
+                )
                 features.update(new_features)
 
             elif transformer.is_featurizer:
                 features.update(
-                    transformer.transform(
-                        waveforms, max_channels=max_channels
-                    )
+                    transformer.transform(waveforms, max_channels=max_channels)
                 )
 
             elif transformer.is_denoiser:
@@ -74,7 +75,9 @@ class WaveformPipeline(torch.nn.Module):
         for transformer in self.transformers:
             if transformer.needs_fit():
                 transformer.train()
-                transformer.fit(waveforms, max_channels=max_channels, recording=recording)
+                transformer.fit(
+                    waveforms, max_channels=max_channels, recording=recording
+                )
             transformer.eval()
 
             # if we're done already, stop before denoising
@@ -121,30 +124,14 @@ def featurization_config_to_class_names_and_kwargs(fconf):
         class_names_and_kwargs.append(
             ("Voltage", {"name_prefix": fconf.input_waveforms_name})
         )
-
     if do_feats and fconf.save_input_waveforms:
         class_names_and_kwargs.append(
             ("Waveform", {"name_prefix": fconf.input_waveforms_name})
         )
-    # combined_tpca = (
-    #     do_feats
-    #     and fconf.save_input_tpca_projs
-    #     and fconf.do_tpca_denoise
-    #     and not fconf.do_nn_denoise
-    # )
-    # if combined_tpca:
-    #     class_names_and_kwargs.append(
-    #         (
-    #             "TemporalPCA",
-    #             {
-    #                 "rank": fconf.tpca_rank,
-    #                 "name_prefix": fconf.input_waveforms_name,
-    #                 "centered": fconf.tpca_centered,
-    #                 "temporal_slice": fconf.input_tpca_projs_temporal_slice,
-    #             },
-    #         )
-    #     )
-    # else:
+    if fconf.learn_cleaned_tpca_basis:
+        class_names_and_kwargs.append(
+            ("BaseTemporalPCA", {"rank": fconf.tpca_rank, "centered": False})
+        )
     if do_feats and fconf.save_input_tpca_projs:
         class_names_and_kwargs.append(
             (
@@ -183,11 +170,9 @@ def featurization_config_to_class_names_and_kwargs(fconf):
         class_names_and_kwargs.append(("EnforceDecrease", {}))
     if do_feats and fconf.save_output_waveforms:
         class_names_and_kwargs.append(
-            (
-                "Waveform",
-                {"name_prefix": fconf.output_waveforms_name},
-            )
+            ("Waveform", {"name_prefix": fconf.output_waveforms_name})
         )
+
     if do_feats and fconf.save_output_tpca_projs:
         class_names_and_kwargs.append(
             (
