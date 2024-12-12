@@ -1,7 +1,7 @@
 import importlib.metadata
 
-from . import util
-from .cluster import density, merge, postprocess, ppcalib
+from . import detect, util
+from .cluster import cluster_util, density, kmeans, merge, postprocess, ppcalib
 from .cluster.gaussian_mixture import GaussianUnit, SpikeMixtureModel
 from .cluster.initial import initial_clustering
 from .cluster.stable_features import (SpikeFeatures, SpikeNeighborhoods,
