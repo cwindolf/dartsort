@@ -477,6 +477,8 @@ def subtract_chunk(
             detection_mask=detection_mask[:, :-1],
             relative_peak_radius=relative_peak_radius,
             dedup_temporal_radius=spike_length_samples,
+            # relative_peak_radius=spike_length_samples,
+            # dedup_temporal_radius=None,
         )
         if not times_samples.numel():
             break
@@ -485,11 +487,19 @@ def subtract_chunk(
         keep = torch.logical_and(
             times_samples >= trough_offset_samples, times_samples < max_trough_time
         )
-        (keep,) = keep.cpu().nonzero(as_tuple=True)
+        (keep,) = keep.nonzero(as_tuple=True)
         if not keep.numel():
             break
         times_samples = times_samples[keep]
         channels = channels[keep]
+
+        # never look at these again.
+        time_ix = times_samples.unsqueeze(1) + dedup_temporal_ix.unsqueeze(0)
+        if spatial_dedup_channel_index is not None:
+            chan_ix = spatial_dedup_channel_index[channels]
+        else:
+            chan_ix = channels.unsqueeze(1)
+        detection_mask[time_ix[:, :, None], chan_ix[:, None, :]] = 0.0
 
         # read waveforms, denoise, and test residnorm decrease
         waveforms = spiketorch.grab_spikes(
@@ -513,7 +523,7 @@ def subtract_chunk(
             residuals = residuals.sub_(waveforms).nan_to_num_()
             new_normsq = residuals.square_().sum(dim=(1, 2))
             keep = new_normsq < orig_normsq.sub_(residnormsq_thresh)
-            (keep,) = keep.cpu().nonzero(as_tuple=True)
+            (keep,) = keep.nonzero(as_tuple=True)
             if not keep.numel():
                 break
             if keep.numel() < new_normsq.numel():
@@ -524,8 +534,8 @@ def subtract_chunk(
                     features[k] = features[k][keep]
 
         # store this iter's outputs
-        spike_times.append(times_samples.cpu())
-        spike_channels.append(channels.cpu())
+        spike_times.append(times_samples)
+        spike_channels.append(channels)
         spike_features.append(features)
         subtracted_waveforms.append(waveforms)
 
@@ -541,12 +551,6 @@ def subtract_chunk(
             already_padded=True,
             in_place=True,
         )
-        time_ix = times_samples.unsqueeze(1) + dedup_temporal_ix.unsqueeze(0)
-        if spatial_dedup_channel_index is not None:
-            chan_ix = spatial_dedup_channel_index[channels]
-        else:
-            chan_ix = channels.unsqueeze(1)
-        detection_mask[time_ix[:, :, None], chan_ix[:, None, :]] = 0.0
 
     # check if we got no spikes
     if not spike_times:
@@ -557,9 +561,11 @@ def subtract_chunk(
         )
 
     # concatenate all of the thresholds together into single tensors
-    subtracted_waveforms = torch.concatenate(subtracted_waveforms)
+    spike_times = [t.cpu() for t in spike_times]
+    spike_channels = [t.cpu() for t in spike_channels]
     spike_times = torch.concatenate(spike_times)
     spike_channels = torch.concatenate(spike_channels)
+    subtracted_waveforms = torch.concatenate(subtracted_waveforms)
     spike_features_list = spike_features
     spike_features = {}
     feature_keys = list(spike_features_list[0].keys())
@@ -614,7 +620,7 @@ def subtract_chunk(
     spike_times -= left_margin
 
     # strip margin and padding channel off the residual
-    residual = residual[left_margin : traces.shape[0] - right_margin, :-1]
+    residual = residual[left_margin : traces.shape[0] - right_margin, :-1].cpu()
 
     return ChunkSubtractionResult(
         n_spikes=spike_times.numel(),
