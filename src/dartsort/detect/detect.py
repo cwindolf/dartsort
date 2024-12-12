@@ -59,50 +59,46 @@ def detect_and_deduplicate(
         assert peak_sign == "pos"
         # no need to copy since max pooling will
         energies = traces
-    # for use with pooling functions, become 11TC
-    energies = energies[None, None]
-
-    # -- torch temporal relative maxima as pooling operation
-    # we used to implement with max_pool2d -> unique, but
-    # we can use max_unpool2d to speed up the second step
-    # temporal max pooling
-    energies, indices = F.max_pool2d_with_indices(
-        energies,
-        kernel_size=[2 * relative_peak_radius + 1, 1],
-        stride=1,
-        padding=[relative_peak_radius, 0],
-    )
-    # unpool will set non-maxima to 0
-    energies = F.max_unpool2d(
-        energies,
-        indices,
-        kernel_size=[2 * relative_peak_radius + 1, 1],
-        stride=1,
-        padding=[relative_peak_radius, 0],
-        output_size=energies.shape,
-    )
-    # remove peaks smaller than our threshold
-    F.threshold_(energies, threshold, 0.0)
 
     # optionally remove censored peaks
     if detection_mask is not None:
         energies.mul_(detection_mask)
 
+    # -- torch temporal relative maxima as pooling operation
+    # we used to implement with max_pool2d -> unique, but
+    # we can use max_unpool2d to speed up the second step
+    # temporal max pooling
+    energies, indices = F.max_pool1d_with_indices(
+        energies.T.unsqueeze(0),
+        kernel_size=2 * relative_peak_radius + 1,
+        stride=1,
+        padding=relative_peak_radius,
+    )
+    # unpool will set non-maxima to 0
+    energies = F.max_unpool1d(
+        energies,
+        indices,
+        kernel_size=2 * relative_peak_radius + 1,
+        stride=1,
+        padding=relative_peak_radius,
+        output_size=energies.shape,
+    )
+    # remove peaks smaller than our threshold
+    F.threshold_(energies, threshold, 0.0)
+
     # -- temporal deduplication
-    if dedup_temporal_radius > 0:
-        max_energies = F.max_pool2d(
+    if dedup_temporal_radius:
+        max_energies = F.max_pool1d(
             energies,
-            kernel_size=[2 * dedup_temporal_radius + 1, 1],
+            kernel_size=2 * dedup_temporal_radius + 1,
             stride=1,
-            padding=[dedup_temporal_radius, 0],
+            padding=dedup_temporal_radius,
         )
-    elif dedup_channel_index is not None:
-        max_energies = energies.clone()
     else:
         max_energies = energies
     # back to TC
-    energies = energies[0, 0]
-    max_energies = max_energies[0, 0]
+    energies = energies[0].T
+    max_energies = max_energies[0].T
 
     # -- spatial deduplication
     # this is max pooling within the channel index's neighborhood's
@@ -121,7 +117,7 @@ def detect_and_deduplicate(
         max_energies = max_energies[:, :nchans]
 
     # if temporal/spatial max made you grow, you were not a peak!
-    if (dedup_temporal_radius > 0) or (dedup_channel_index is not None):
+    if dedup_temporal_radius or (dedup_channel_index is not None):
         # max_energies[max_energies > energies] = 0.0
         max_energies.masked_fill_(max_energies > energies, 0.0)
 
