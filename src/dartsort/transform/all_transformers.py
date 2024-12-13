@@ -9,6 +9,7 @@ from .localize import Localization, PointSourceLocalization
 from .pipeline import WaveformPipeline
 from .single_channel_denoiser import (SingleChannelDenoiser,
                                       SingleChannelWaveformDenoiser)
+from .single_channel_templates import SingleChannelTemplates
 from .temporal_pca import (BaseTemporalPCA, TemporalPCA, TemporalPCADenoiser,
                            TemporalPCAFeaturizer)
 from .transform_base import Passthrough, Waveform
@@ -29,6 +30,7 @@ all_transformers = [
     AmplitudeFeatures,
     Voltage,
     Decollider,
+    SingleChannelTemplates,
 ]
 
 transformers_by_class_name = {cls.__name__: cls for cls in all_transformers}

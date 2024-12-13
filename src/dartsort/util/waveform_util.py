@@ -479,7 +479,11 @@ def channel_subset_by_index(
     # boolean mask of same shape as channel_index_full
     # figure out which channels in channel_index_full are still
     # present in the form of a boolean mask
-    channel_index_mask = channel_subset_mask(channel_index_full, channel_index_new, to_torch=torch.is_tensor(channel_index_new))
+    channel_index_mask = channel_subset_mask(
+        channel_index_full,
+        channel_index_new,
+        to_torch=torch.is_tensor(channel_index_new),
+    )
     if torch.is_tensor(channel_index_full):
         channel_index_mask = torch.from_numpy(channel_index_mask)
     return get_channel_subset(
@@ -687,3 +691,11 @@ def grab_main_channels(waveforms, main_channels, channel_index, keepdim=False):
     if keepdim:
         return res
     return res[:, :, 0]
+
+
+def grab_main_channels_torch(waveforms, channels, channel_index):
+    nc = len(channel_index)
+    _, rpos = (channel_index == torch.arange(nc).unsqueeze(1)).nonzero(as_tuple=True)
+    assert rpos.shape == (nc,)
+    inds = rpos[channels]
+    return torch.take_along_dim(waveforms, inds[:, None, None], dim=2)

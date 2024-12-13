@@ -6,13 +6,14 @@ from pathlib import Path
 import h5py
 import numpy as np
 import torch
+from spikeinterface.core.recording_tools import get_chunk_with_margin
+from tqdm.auto import tqdm
+
 from dartsort.transform import WaveformPipeline
 from dartsort.util import peel_util
 from dartsort.util.data_util import SpikeDataset
 from dartsort.util.multiprocessing_util import get_pool
 from dartsort.util.py_util import delay_keyboard_interrupt
-from spikeinterface.core.recording_tools import get_chunk_with_margin
-from tqdm.auto import tqdm
 
 
 class BasePeeler(torch.nn.Module):
@@ -379,7 +380,9 @@ class BasePeeler(torch.nn.Module):
 
         # add times in seconds
         segment = self.recording._recording_segments[0]
-        chunk_result["chunk_start_seconds"] = segment.sample_index_to_time(chunk_start_samples)
+        chunk_result["chunk_start_seconds"] = segment.sample_index_to_time(
+            chunk_start_samples
+        )
         if peel_result["n_spikes"]:
             chunk_result["times_seconds"] = segment.sample_index_to_time(
                 chunk_result["times_samples"]
@@ -413,7 +416,9 @@ class BasePeeler(torch.nn.Module):
                 output_h5["residual"].resize(n_residuals + 1, axis=0)
                 output_h5["residual"][n_residuals:] = chunk_result["residual"]
                 output_h5["residual_times_seconds"].resize(n_residuals + 1, axis=0)
-                output_h5["residual_times_seconds"][n_residuals:] = chunk_result["chunk_start_seconds"]
+                output_h5["residual_times_seconds"][n_residuals:] = chunk_result[
+                    "chunk_start_seconds"
+                ]
 
             if skip_features:
                 return 0
@@ -521,7 +526,9 @@ class BasePeeler(torch.nn.Module):
                 channels = torch.as_tensor(channels, device=device)
                 waveforms = torch.as_tensor(waveforms, device=device)
                 featurization_pipeline = featurization_pipeline.to(device)
-                featurization_pipeline.fit(waveforms, max_channels=channels, recording=self.recording)
+                featurization_pipeline.fit(
+                    waveforms, max_channels=channels, recording=self.recording
+                )
                 featurization_pipeline = featurization_pipeline.to("cpu")
                 self.featurization_pipeline = featurization_pipeline
             finally:
@@ -590,6 +597,7 @@ class BasePeeler(torch.nn.Module):
         overwrite=True,
         ordered=False,
         skip_last=False,
+        show_progress=True,
     ):
         # run peeling on these chunks to the temp folder
         chunk_starts = self.get_chunk_starts(
@@ -613,6 +621,7 @@ class BasePeeler(torch.nn.Module):
             overwrite=overwrite,
             task_name=task_name,
             device=device,
+            show_progress=show_progress,
         )
 
     def save_models(self, save_folder):
