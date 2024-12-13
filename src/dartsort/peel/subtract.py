@@ -6,8 +6,16 @@ from pathlib import Path
 import torch
 import torch.nn.functional as F
 
-from dartsort.detect import detect_and_deduplicate
-from dartsort.transform import Voltage, Waveform, WaveformPipeline
+from dartsort.detect import (
+    detect_and_deduplicate,
+    singlechan_template_detect_and_deduplicate,
+)
+from dartsort.transform import (
+    SingleChannelTemplates,
+    Voltage,
+    Waveform,
+    WaveformPipeline,
+)
 from dartsort.util import peel_util, spiketorch
 from dartsort.util.waveform_util import (
     get_relative_subset,
@@ -41,6 +49,10 @@ class SubtractionPeeler(BasePeeler):
         fit_subsampling_random_state=0,
         fit_sampling="random",
         residnorm_decrease_threshold=3.162,
+        use_singlechan_templates=False,
+        n_singlechan_templates=10,
+        singlechan_threshold=40.0,
+        singlechan_alignment_padding=20,
         dtype=torch.float,
     ):
         super().__init__(
@@ -93,6 +105,22 @@ class SubtractionPeeler(BasePeeler):
         self.add_module(
             "subtraction_denoising_pipeline", subtraction_denoising_pipeline
         )
+
+        self.use_singlechan_templates = use_singlechan_templates
+        self.have_singlechan_templates = False
+        self.singlechan_threshold = singlechan_threshold
+        if use_singlechan_templates:
+            sc_feat = SingleChannelTemplates(
+                self.channel_index,
+                n_centroids=n_singlechan_templates,
+                alignment_padding=singlechan_alignment_padding,
+                trough_offset_samples=self.trough_offset_samples,
+                spike_length_samples=self.spike_length_samples,
+            )
+            if self.featurization_pipeline is None:
+                self.featurization_pipeline = WaveformPipeline([sc_feat])
+            else:
+                self.featurization_pipeline.transformers.insert(0, sc_feat)
 
         # internal api for switching to thresholding during denoiser fitting
         # when there are no pre-fit denoisers
@@ -191,6 +219,10 @@ class SubtractionPeeler(BasePeeler):
             n_waveforms_fit=subtraction_config.n_waveforms_fit,
             fit_subsampling_random_state=subtraction_config.fit_subsampling_random_state,
             residnorm_decrease_threshold=subtraction_config.residnorm_decrease_threshold,
+            use_singlechan_templates=subtraction_config.use_singlechan_templates,
+            n_singlechan_templates=subtraction_config.n_singlechan_templates,
+            singlechan_threshold=subtraction_config.singlechan_threshold,
+            singlechan_alignment_padding=subtraction_config.singlechan_alignment_padding,
         )
 
     def peel_chunk(
@@ -203,6 +235,17 @@ class SubtractionPeeler(BasePeeler):
     ):
         extract_index = None if self.extract_subtract_same else self.channel_index
         traces = traces.to(self.dtype)
+        if self.have_singlechan_templates:
+            sc_feat = self.featurization_pipeline.transformers[0]
+            assert isinstance(sc_feat, SingleChannelTemplates)
+            singlechan_kw = dict(
+                singlechan_templates=sc_feat.templates,
+                singlechan_threshold=self.singlechan_threshold,
+                singlechan_trough_offset=sc_feat.template_trough,
+            )
+        else:
+            singlechan_kw = {}
+
         subtraction_result = subtract_chunk(
             traces,
             self.subtract_channel_index,
@@ -218,6 +261,7 @@ class SubtractionPeeler(BasePeeler):
             spatial_dedup_channel_index=self.spatial_dedup_channel_index,
             residnorm_decrease_threshold=self.residnorm_decrease_threshold,
             no_subtraction=self._turn_off_subtraction,
+            **singlechan_kw,
         )
 
         # add in chunk_start_samples
@@ -237,6 +281,15 @@ class SubtractionPeeler(BasePeeler):
 
     def precompute_peeler_models(self):
         self.subtraction_denoising_pipeline.precompute()
+
+    def fit_featurization_pipeline(
+        self, save_folder, tmp_dir=None, n_jobs=0, device=None
+    ):
+        super().fit_featurization_pipeline(
+            save_folder, tmp_dir=tmp_dir, n_jobs=n_jobs, device=device
+        )
+        if self.use_singlechan_templates:
+            self.have_singlechan_templates = True
 
     def fit_peeler_models(self, save_folder, tmp_dir=None, n_jobs=0, device=None):
         # when fitting peelers for subtraction, there are basically
@@ -333,13 +386,13 @@ class SubtractionPeeler(BasePeeler):
 
         # run mini subtraction
         with tempfile.TemporaryDirectory(dir=tmp_dir) as temp_dir:
-            temp_hdf5_filename = Path(temp_dir) / "subtraction_denoiser_fit.h5"
+            temp_hdf5_filename = Path(temp_dir) / f"subtraction_{which[:-1]}_fit.h5"
             try:
                 self.run_subsampled_peeling(
                     temp_hdf5_filename,
                     n_jobs=n_jobs,
                     device=device,
-                    task_name="Load examples for denoiser fitting",
+                    task_name=f"Load examples for {which[:-1]} fitting",
                 )
 
                 # fit featurization pipeline and reassign
@@ -402,6 +455,9 @@ def subtract_chunk(
     residnorm_decrease_threshold=3.162,  # sqrt(10)
     relative_peak_radius=5,
     dedup_temporal_radius=7,
+    singlechan_templates=None,
+    singlechan_threshold=None,
+    singlechan_trough_offset=None,
     no_subtraction=False,
     max_iter=100,
 ):
@@ -469,17 +525,30 @@ def subtract_chunk(
     )
 
     for _ in range(max_iter):
-        times_samples, channels = detect_and_deduplicate(
-            residual[:, :-1],
-            detection_threshold,
-            dedup_channel_index=spatial_dedup_channel_index,
-            peak_sign=peak_sign,
-            detection_mask=detection_mask[:, :-1],
-            relative_peak_radius=relative_peak_radius,
-            dedup_temporal_radius=spike_length_samples,
-            # relative_peak_radius=spike_length_samples,
-            # dedup_temporal_radius=None,
-        )
+        if singlechan_templates is None:
+            times_samples, channels = detect_and_deduplicate(
+                residual[:, :-1],
+                detection_threshold,
+                # dedup_channel_index=spatial_dedup_channel_index,
+                dedup_channel_index=channel_index,
+                peak_sign=peak_sign,
+                detection_mask=detection_mask[:, :-1],
+                relative_peak_radius=relative_peak_radius,
+                dedup_temporal_radius=spike_length_samples,
+                # relative_peak_radius=spike_length_samples,
+                # dedup_temporal_radius=None,
+            )
+        else:
+            times_samples, channels = singlechan_template_detect_and_deduplicate(
+                residual[:, :-1],
+                singlechan_templates,
+                threshold=singlechan_threshold,
+                trough_offset_samples=singlechan_trough_offset,
+                dedup_channel_index=channel_index,
+                relative_peak_radius=relative_peak_radius,
+                dedup_temporal_radius=spike_length_samples,
+                detection_mask=detection_mask[:, :-1],
+            )
         if not times_samples.numel():
             break
 

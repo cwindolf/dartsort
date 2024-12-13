@@ -130,3 +130,55 @@ def detect_and_deduplicate(
         return times, chans, max_energies[times, chans]
 
     return times, chans
+
+
+def singlechan_template_detect_and_deduplicate(
+    traces,
+    singlechan_templates,
+    threshold=40.0,
+    trough_offset_samples=42,
+    dedup_channel_index=None,
+    relative_peak_radius=5,
+    dedup_temporal_radius=7,
+    spatial_dedup_batch_size=512,
+    exclude_edges=True,
+    return_energies=False,
+    detection_mask=None,
+):
+    """Detect spikes by per-channel matching with normalized templates
+
+    See peel/universal_util.py to get some templates.
+    """
+    # convolve with templates
+    conv_traces = traces.T.unsqueeze(1)
+    conv_filt = singlechan_templates.unsqueeze(1)
+    full = 2 * (singlechan_templates.shape[1] // 2)
+    conv = F.conv1d(conv_traces, conv_filt, padding=full)
+
+    # exactly align the convolution with the original traces
+    offset = full - trough_offset_samples
+    conv = conv[:, :, offset : offset + len(traces)]
+
+    # convert to scaled deconvolution objective
+    # when templates are normalized, the decrease in residual normsq
+    # due to subtracting a scaled template is just the conv squared.
+    obj = conv.square_().amax(dim=1).T
+
+    # get peaks
+    times, chans = detect_and_deduplicate(
+        obj,
+        threshold=threshold,
+        dedup_channel_index=dedup_channel_index,
+        peak_sign="pos",
+        relative_peak_radius=relative_peak_radius,
+        dedup_temporal_radius=dedup_temporal_radius,
+        spatial_dedup_batch_size=spatial_dedup_batch_size,
+        exclude_edges=exclude_edges,
+        return_energies=False,
+        detection_mask=detection_mask,
+    )
+
+    if return_energies:
+        return times, chans, traces[times, chans]
+
+    return times, chans

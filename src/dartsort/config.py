@@ -136,6 +136,10 @@ class SubtractionConfig:
     fit_subsampling_random_state: int = 0
     fit_sampling: str = "random"
     residnorm_decrease_threshold: float = 3.162  # sqrt(10)
+    use_singlechan_templates: bool = False
+    singlechan_threshold: float = 40.0
+    n_singlechan_templates: int = 10
+    singlechan_alignment_padding: int = 20
 
     # how will waveforms be denoised before subtraction?
     # users can also save waveforms/features during subtraction
