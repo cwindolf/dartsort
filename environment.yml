@@ -16,3 +16,4 @@ dependencies:
   - pandas
   - linear_operator
   - numba
+  - pydantic

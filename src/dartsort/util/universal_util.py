@@ -129,3 +129,29 @@ def get_singlechan_waveforms(
     waveforms = torch.asarray(waveforms[:, :, 0])
 
     return waveforms
+
+
+def singlechan_to_library(singlechan_templates):
+    from dartsort.templates import TemplateData
+
+
+def universal_templates_from_data(
+    rec,
+):
+    singlechan_centroids = get_singlechan_centroids(
+        singlechan_waveforms=None,
+        rec=None,
+        detection_threshold=6.0,
+        deduplication_radius=150.0,
+        trough_offset_samples=42,
+        spike_length_samples=121,
+        alignment_padding=20,
+        n_centroids=10,
+        pca_rank=8,
+        n_waveforms_fit=20_000,
+        taper=True,
+        taper_start=20,
+        taper_end=30,
+        kmeanspp_initial="random",
+        random_seed=0,
+    )

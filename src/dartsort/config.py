@@ -15,11 +15,11 @@ object can then be passed into the high level functions like
 `subtract(...)`.
 """
 
-from dataclasses import dataclass, field
-from typing import List, Optional, Tuple
+from dataclasses import MISSING, field
 
 import numpy as np
 import torch
+from pydantic.dataclasses import dataclass
 
 try:
     from importlib.resources import files
@@ -31,6 +31,23 @@ except ImportError:
 
 default_pretrained_path = files("dartsort.pretrained")
 default_pretrained_path = default_pretrained_path.joinpath("single_chan_denoiser.pt")
+
+
+def argfield(default=MISSING, default_factory=MISSING, arg_type=MISSING, cli=True):
+    """Helper for defining fields with extended CLI behavior.
+
+    This is only needed when a field's type is not a callable which can
+    take string inputs and return an object of the right type, such as
+    typing.Union or something. Then arg_type is what the CLI will call
+    to convert the argv element into an object of the desired type.
+
+    Fields with cli=False will not be available from the command line.
+    """
+    return field(
+        default=default,
+        default_factory=default_factory,
+        metadata=dict(arg_type=arg_type, cli=cli),
+    )
 
 
 @dataclass(frozen=True, kw_only=True, slots=True)
@@ -51,6 +68,20 @@ class WaveformConfig:
         # odd is better for convolution arithmetic elsewhere
         length = 2 * (length // 2) + 1
         return length
+
+    def relative_slice(self, other, sampling_frequency=30_000):
+        """My trough-aligned subset of samples in other, which contains me."""
+        assert other.ms_before >= self.ms_before
+        assert other.ms_after >= self.ms_after
+        my_trough = self.trough_offset_samples(sampling_frequency)
+        my_len = self.spike_length_samples(sampling_frequency)
+        other_trough = other.trough_offset_samples(sampling_frequency)
+        other_len = other.spike_length_samples(sampling_frequency)
+        start_offset = other_trough - my_trough
+        end_offset = (other_len - other_trough) - (my_len - my_trough)
+        if start_offset == end_offset == 0:
+            return slice(None)
+        return slice(start_offset, other_len - end_offset)
 
 
 @dataclass(frozen=True, kw_only=True, slots=True)
@@ -103,19 +134,18 @@ class FeaturizationConfig:
     # -- further info about denoising
     # in the future we may add multi-channel or other nns
     nn_denoiser_class_name: str = "SingleChannelWaveformDenoiser"
-    nn_denoiser_pretrained_path: Optional[str] = default_pretrained_path
+    nn_denoiser_pretrained_path: str = default_pretrained_path
     nn_denoiser_train_epochs: int = 50
-    nn_denoiser_extra_kwargs: Optional[dict] = None
+    nn_denoiser_extra_kwargs: dict | None = argfield(None, cli=False)
 
     # optionally restrict how many channels TPCA are fit on
-    tpca_fit_radius: Optional[float] = 75.0
+    tpca_fit_radius: float = 75.0
     tpca_rank: int = 8
     tpca_centered: bool = False
     # todo: use a WaveformConfig...
-    input_tpca_projs_temporal_slice: Optional[slice] = field(
-        default_factory=lambda: slice(20, 81)
+    input_tpca_waveform_config: WaveformConfig | None = WaveformConfig(
+        ms_before=0.75, ms_after=1.25
     )
-    learn_cleaned_tpca_basis: bool = False
 
     # used when naming datasets saved to h5 files
     input_waveforms_name: str = "collisioncleaned"
@@ -137,7 +167,7 @@ class SubtractionConfig:
     fit_sampling: str = "random"
     residnorm_decrease_threshold: float = 3.162  # sqrt(10)
     use_singlechan_templates: bool = False
-    singlechan_threshold: float = 40.0
+    singlechan_threshold: float = 50.0
     n_singlechan_templates: int = 10
     singlechan_alignment_padding: int = 20
 
@@ -169,11 +199,11 @@ class MotionEstimationConfig:
     temporal_bin_length_s: float = 1.0
     window_step_um: float = 400.0
     window_scale_um: float = 450.0
-    window_margin_um: Optional[float] = None
+    window_margin_um: float | None = argfield(default=None, arg_type=float)
     max_dt_s: float = 1000.0
-    max_disp_um: Optional[float] = None
+    max_disp_um: float | None = argfield(default=None, arg_type=float)
     correlation_threshold: float = 0.1
-    min_amplitude: Optional[float] = None
+    min_amplitude: float | None = argfield(default=None, arg_type=float)
     rigid: bool = False
 
 
@@ -237,7 +267,7 @@ class SplitMergeConfig:
     # -- split
     split_strategy: str = "FeatureSplit"
     recursive_split: bool = True
-    split_strategy_kwargs: Optional[dict] = field(
+    split_strategy_kwargs: dict | None = field(
         default_factory=lambda: dict(max_spikes=20_000)
     )
 
@@ -264,8 +294,8 @@ class ClusteringConfig:
 
     # density peaks parameters
     sigma_local: float = 5.0
-    sigma_regional: Optional[float] = 25.0
-    workers: Optional[int] = -1
+    sigma_regional: float | None = argfield(default=25.0, arg_type=float)
+    workers: int = -1
     n_neighbors_search: int = 20
     radius_search: float = 5.0
     remove_clusters_smaller_than: int = 10
@@ -290,8 +320,8 @@ class ClusteringConfig:
     grid_dz: float = 15.0
 
     # uhd version of density peaks parameters
-    sigma_local_low: Optional[float] = None
-    sigma_regional_low: Optional[float] = None
+    sigma_local_low: float | None = argfield(default=None, arg_type=float)
+    sigma_regional_low: float | None = argfield(default=None, arg_type=float)
     distance_dependent_noise_density: bool = False
     attach_density_feature: bool = False
     triage_quantile_per_cluster: float = 0.0
@@ -304,7 +334,7 @@ class ClusteringConfig:
     remove_small_far_clusters: bool = False
 
     # -- ensembling
-    ensemble_strategy: Optional[str] = None
+    ensemble_strategy: str | None = argfield(default=None, arg_type=str)
     chunk_size_s: float = 300.0
     split_merge_ensemble_config: SplitMergeConfig = SplitMergeConfig()
 
@@ -313,7 +343,7 @@ class ClusteringConfig:
 class ComputationConfig:
     n_jobs_cpu: int = 0
     n_jobs_gpu: int = 0
-    device: Optional[torch.device] = None
+    device: torch.device | None = argfield(default=None, arg_type=torch.device)
 
     @property
     def actual_device(self):
