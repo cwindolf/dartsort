@@ -1,10 +1,11 @@
 import torch
 import torch.nn.functional as F
+from torch import vmap
+from torch.func import grad_and_value, hessian
+
 from dartsort.util.torch_optimization_util import batched_levenberg_marquardt
 from dartsort.util.waveform_util import (channel_subset_by_radius,
                                          full_channel_index)
-from torch import vmap
-from torch.func import grad_and_value, hessian
 
 
 def localize_amplitude_vectors(
@@ -163,7 +164,7 @@ def localize_amplitude_vectors(
         y = F.softplus(y0)
         projected_dist = vmap_dipole_find_projection_distance(
             normalized_amp_vecs, x, y, z_rel, local_geoms
-        )     
+        )
 
         z_abs = z_rel + geom[main_channels, 1]
 
@@ -181,6 +182,8 @@ def localize_amplitude_vectors(
 
 
 # -- point source / dipole model library functions
+
+
 def point_source_amplitude_at(x, y, z, alpha, local_geom):
     """Point source model predicted amplitude at local_geom given location"""
     dxs = torch.square(x - local_geom[:, 0])
@@ -198,21 +201,26 @@ def point_source_find_alpha(amp_vec, channel_mask, x, y, z, local_geoms):
     )
     return alpha
 
+
 def dipole_find_projection_distance(normalized_amp_vec, x, y, z, local_geom):
     """COmpute a value dist/dipole in x,z that tells us if dipole or monopole is better"""
-    
+
     dxs = x - local_geom[:, 0]
     dzs = z - local_geom[:, 1]
     dys = y.expand(dzs.size())
     duv = torch.stack([dxs, dys, dzs], dim=1)
-    X = duv / torch.pow(torch.sum(torch.square(duv), dim=1), 3/2)[:, None]
-    beta = torch.matmul(torch.linalg.pinv(torch.matmul(X.T, X)), torch.matmul(X.T, normalized_amp_vec))
+    X = duv / torch.pow(torch.sum(torch.square(duv), dim=1), 3 / 2)[:, None]
+    beta = torch.matmul(
+        torch.linalg.pinv(torch.matmul(X.T, X)), torch.matmul(X.T, normalized_amp_vec)
+    )
     beta /= torch.sqrt(torch.square(beta).sum())
     dipole_planar_direction = torch.sqrt(torch.square(beta[[0, 2]]).sum())
     closest_chan = torch.argmin(torch.sum(torch.square(duv), dim=1))
-    min_duv = duv[closest_chan[None]][0] #workaround around vmap doesn't work for one dim tensor .item()
-    val_th = torch.sqrt(torch.square(min_duv).sum())/dipole_planar_direction
+    # workaround around vmap doesn't work for one dim tensor .item()
+    min_duv = duv[closest_chan[None]][0]
+    val_th = torch.sqrt(torch.square(min_duv).sum()) / dipole_planar_direction
     return val_th
+
 
 def point_source_mse(loc, amplitude_vector, channel_mask, local_geom, logbarrier=True):
     """Objective in point source model
@@ -256,15 +264,17 @@ def dipole_mse(loc, amplitude_vector, local_geom, logbarrier=True):
 
     dxs = x - local_geom[:, 0]
     dzs = z - local_geom[:, 1]
-    dys =  y.expand(dzs.size())
-    
+    dys = y.expand(dzs.size())
+
     duv = torch.stack([dxs, dys, dzs], dim=1)
-    X = duv / torch.pow(torch.sum(torch.square(duv), dim=1), 3/2)[:, None]
+    X = duv / torch.pow(torch.sum(torch.square(duv), dim=1), 3 / 2)[:, None]
     # beta = torch.linalg.lstsq(X, amplitude_vector[:, None])[0]
     # beta = torch.linalg.solve(torch.matmul(X.T, X), torch.matmul(X.T, amplitude_vector))
-    beta = torch.matmul(torch.linalg.pinv(torch.matmul(X.T, X)), torch.matmul(X.T, amplitude_vector))
+    beta = torch.matmul(
+        torch.linalg.pinv(torch.matmul(X.T, X)), torch.matmul(X.T, amplitude_vector)
+    )
     qtq = torch.matmul(X, beta)
-    
+
     obj = torch.square(amplitude_vector - qtq).mean()
     if logbarrier:
         obj -= torch.log(10.0 * y) / 10000.0
