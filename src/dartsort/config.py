@@ -142,7 +142,7 @@ class FeaturizationConfig:
     tpca_fit_radius: float = 75.0
     tpca_rank: int = 8
     tpca_centered: bool = False
-    # todo: use a WaveformConfig...
+    learn_cleaned_tpca_basis: bool = False
     input_tpca_waveform_config: WaveformConfig | None = WaveformConfig(
         ms_before=0.75, ms_after=1.25
     )
@@ -343,9 +343,9 @@ class ClusteringConfig:
 class ComputationConfig:
     n_jobs_cpu: int = 0
     n_jobs_gpu: int = 0
-    device: torch.device | None = argfield(default=None, arg_type=torch.device)
+    executor: str = "ThreadPoolExecutor"
+    device: str | None = argfield(default=None, arg_type=str)
 
-    @property
     def actual_device(self):
         if self.device is None:
             have_cuda = torch.cuda.is_available()
@@ -354,9 +354,8 @@ class ComputationConfig:
             return torch.device("cpu")
         return torch.device(self.device)
 
-    @property
-    def actual_n_jobs_gpu(self):
-        if self.actual_device.type == "cuda":
+    def actual_n_jobs(self):
+        if self.actual_device().type == "cuda":
             return self.n_jobs_gpu
         return self.n_jobs_cpu
 

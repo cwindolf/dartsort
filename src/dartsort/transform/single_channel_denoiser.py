@@ -25,8 +25,8 @@ class SingleChannelWaveformDenoiser(BaseWaveformDenoiser):
         channel_index,
         geom=None,
         denoiser=None,
-        batch_size=32,
-        in_place=True,
+        batch_size=1024,
+        in_place=False,
         pretrained_path=default_pretrained_path,
         name=None,
         name_prefix="",
@@ -41,8 +41,6 @@ class SingleChannelWaveformDenoiser(BaseWaveformDenoiser):
 
         if denoiser is None:
             denoiser = dnclss[clsname]().load(pretrained_path)
-            denoiser.eval()
-            denoiser.requires_grad_(False)
         self.denoiser = denoiser
 
     def forward(self, waveforms, max_channels=None):
@@ -97,6 +95,8 @@ class SingleChannelDenoiser(nn.Module):
     def load(self, pretrained_path=default_pretrained_path):
         checkpoint = torch.load(pretrained_path, map_location="cpu", weights_only=True)
         self.load_state_dict(checkpoint)
+        self.eval()
+        self.requires_grad_(False)
         return self
 
 

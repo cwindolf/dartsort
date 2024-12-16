@@ -3,6 +3,7 @@ from concurrent.futures import CancelledError, ProcessPoolExecutor
 from concurrent.futures import ThreadPoolExecutor as _ThreadPoolExecutor
 from multiprocessing import get_context
 
+import torch
 import torch.multiprocessing as torchmp
 
 # TODO: torch.multiprocessing?
@@ -125,6 +126,25 @@ def rank_init(queue):
     print(f"rank init got {rank_init.rank=}")
 
 
+def pool_from_cfg(computation_config=None, with_rank_queue=False, check_local=False):
+    if computation_config is None:
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+        device = torch.device(device)
+        n_jobs = 0
+        cls = MockPoolExecutor
+    else:
+        device = computation_config.actual_device()
+        n_jobs = computation_config.actual_n_jobs()
+        cls = computation_config.executor
+
+    return get_pool(
+        n_jobs,
+        cls=cls,
+        with_rank_queue=with_rank_queue,
+        check_local=check_local,
+    )
+
+
 def get_pool(
     n_jobs,
     context="spawn",
@@ -133,16 +153,30 @@ def get_pool(
     rank_queue_empty=False,
     n_tasks=None,
     max_tasks_per_child=None,
+    check_local=False,
 ):
     if n_jobs == -1:
         n_jobs = multiprocessing.cpu_count()
     do_parallel = n_jobs >= 1
     n_jobs = max(1, n_jobs)
 
+    if isinstance(cls, str):
+        if cls == "CloudpicklePoolExecutor":
+            cls = CloudpicklePoolExecutor
+        elif cls == "ThreadPoolExecutor":
+            cls = ThreadPoolExecutor
+        elif cls == "ProcessPoolExecutor":
+            cls = ProcessPoolExecutor
+        elif cls == "MockPoolExecutor":
+            cls = MockPoolExecutor
+        else:
+            assert False
+
     if cls == CloudpicklePoolExecutor and not have_cloudpickle:
         cls = ProcessPoolExecutor
 
     Executor = cls if do_parallel else MockPoolExecutor
+    is_local = cls in (MockPoolExecutor, ThreadPoolExecutor)
     if context == "torchspawn":
         context = torchmp.get_context("spawn")
     else:
@@ -163,6 +197,10 @@ def get_pool(
                 for rank in range(n_jobs):
                     rank_queue.put(rank)
 
+        if check_local:
+            return n_jobs, Executor, context, rank_queue, is_local
         return n_jobs, Executor, context, rank_queue
 
+    if check_local:
+        return n_jobs, Executor, context, is_local
     return n_jobs, Executor, context
