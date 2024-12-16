@@ -16,6 +16,7 @@ from dartsort.config import (
     default_subtraction_config,
     default_template_config,
     default_waveform_config,
+    default_computation_config,
 )
 from dartsort.peel import ObjectiveUpdateTemplateMatchingPeeler, SubtractionPeeler
 from dartsort.templates import TemplateData
@@ -143,12 +144,11 @@ def subtract(
     waveform_config=default_waveform_config,
     featurization_config=default_featurization_config,
     subtraction_config=default_subtraction_config,
+    computation_config=default_computation_config,
     chunk_starts_samples=None,
-    n_jobs=0,
     overwrite=False,
     residual_filename=None,
     show_progress=True,
-    device=None,
     hdf5_filename="subtraction.h5",
     model_subdir="subtraction_models",
 ):
@@ -163,14 +163,13 @@ def subtract(
         subtraction_peeler,
         output_directory,
         hdf5_filename,
-        model_subdir,
-        featurization_config,
+        model_subdir=model_subdir,
+        featurization_config=featurization_config,
         chunk_starts_samples=chunk_starts_samples,
         overwrite=overwrite,
-        n_jobs=n_jobs,
+        computation_config=computation_config,
         residual_filename=residual_filename,
         show_progress=show_progress,
-        device=device,
     )
     return detections, output_hdf5_filename
 

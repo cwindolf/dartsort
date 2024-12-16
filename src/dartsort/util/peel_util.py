@@ -14,12 +14,11 @@ def run_peeler(
     hdf5_filename,
     model_subdir,
     featurization_config,
+    computation_config,
     chunk_starts_samples=None,
     overwrite=False,
-    n_jobs=0,
     residual_filename=None,
     show_progress=True,
-    device=None,
     localization_dataset_name="point_source_localizations",
 ):
     output_directory = Path(output_directory)
@@ -49,20 +48,21 @@ def run_peeler(
 
     # fit models if needed
     peeler.load_or_fit_and_save_models(
-        model_dir, overwrite=overwrite, n_jobs=n_jobs, device=device
+        model_dir, overwrite=overwrite, computation_config=computation_config
     )
 
     # run main
     peeler.peel(
         output_hdf5_filename,
         chunk_starts_samples=chunk_starts_samples,
-        n_jobs=n_jobs,
         overwrite=overwrite,
         residual_filename=residual_filename,
         show_progress=show_progress,
-        device=device,
+        computation_config=computation_config,
     )
-    _gc(n_jobs, device)
+    _gc(
+        computation_config.actual_n_jobs(), computation_config.actual_device()
+    )
 
     # do localization
     if do_localization:
@@ -74,21 +74,22 @@ def run_peeler(
             amplitude_vectors_dataset_name=f"{wf_name}_{loc_amp_type}_amplitude_vectors",
             output_dataset_name=localization_dataset_name,
             show_progress=show_progress,
-            n_jobs=n_jobs,
-            device=device,
+            n_jobs=computation_config.actual_n_jobs(),
+            device=computation_config.actual_device(),
             localization_model=featurization_config.localization_model,
         )
-        _gc(n_jobs, device)
+        _gc(
+            computation_config.actual_n_jobs(), computation_config.actual_device()
+        )
 
     if featurization_config.n_residual_snips:
         peeler.run_subsampled_peeling(
             output_hdf5_filename,
-            n_jobs=n_jobs,
             chunk_length_samples=peeler.spike_length_samples,
             residual_to_h5=True,
             skip_features=True,
             ignore_resuming=True,
-            device=device,
+            computation_config=computation_config,
             n_chunks=featurization_config.n_residual_snips,
             task_name="Residual snips",
             overwrite=False,

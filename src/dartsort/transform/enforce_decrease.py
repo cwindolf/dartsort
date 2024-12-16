@@ -21,7 +21,7 @@ class EnforceDecrease(BaseWaveformDenoiser):
         self,
         channel_index,
         geom,
-        batch_size=32,
+        batch_size=1024,
         name=None,
         name_prefix="",
     ):

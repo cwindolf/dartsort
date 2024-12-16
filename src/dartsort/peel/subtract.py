@@ -289,15 +289,15 @@ class SubtractionPeeler(BasePeeler):
         self.subtraction_denoising_pipeline.precompute()
 
     def fit_featurization_pipeline(
-        self, save_folder, tmp_dir=None, n_jobs=0, device=None
+        self, save_folder, tmp_dir=None, computation_config=None
     ):
         super().fit_featurization_pipeline(
-            save_folder, tmp_dir=tmp_dir, n_jobs=n_jobs, device=device
+            save_folder, tmp_dir=tmp_dir, computation_config=computation_config
         )
         if self.use_singlechan_templates:
             self.have_singlechan_templates = True
 
-    def fit_peeler_models(self, save_folder, tmp_dir=None, n_jobs=0, device=None):
+    def fit_peeler_models(self, save_folder, tmp_dir=None, computation_config=None):
         # when fitting peelers for subtraction, there are basically
         # two cases. fitting featurizers is easy -- they don't modify
         # the waveforms. fitting denoisers is hard -- they do. each
@@ -309,24 +309,23 @@ class SubtractionPeeler(BasePeeler):
         # so we will cheat for now:
         # just remove all the denoisers that need fitting, run peeling,
         # and fit everything
+
         while self._fit_subtraction_transformers(
             save_folder,
             tmp_dir=tmp_dir,
-            n_jobs=n_jobs,
-            device=device,
+            computation_config=computation_config,
             which="denoisers",
         ):
             pass
         self._fit_subtraction_transformers(
             save_folder,
             tmp_dir=tmp_dir,
-            n_jobs=n_jobs,
-            device=device,
+            computation_config=computation_config,
             which="featurizers",
         )
 
     def _fit_subtraction_transformers(
-        self, save_folder, tmp_dir=None, n_jobs=0, device=None, which="denoisers"
+        self, save_folder, tmp_dir=None, computation_config=None, which="denoisers"
     ):
         """Fit models which are run during the subtraction step
 
@@ -352,9 +351,11 @@ class SubtractionPeeler(BasePeeler):
         if not needs_fit:
             return False
 
-        if device is None:
+        if computation_config is None:
             device = "cuda" if torch.cuda.is_available() else "cpu"
-        device = torch.device(device)
+            device = torch.device(device)
+        else:
+            device = computation_config.actual_device()
 
         orig_denoise = self.subtraction_denoising_pipeline
         init_voltage_feature = Voltage(
@@ -396,8 +397,7 @@ class SubtractionPeeler(BasePeeler):
             try:
                 self.run_subsampled_peeling(
                     temp_hdf5_filename,
-                    n_jobs=n_jobs,
-                    device=device,
+                    computation_config=computation_config,
                     task_name=f"Load examples for {which[:-1]} fitting",
                 )
 
@@ -563,6 +563,7 @@ def subtract_chunk(
             times_samples >= trough_offset_samples, times_samples < max_trough_time
         )
         (keep,) = keep.nonzero(as_tuple=True)
+
         if not keep.numel():
             break
         times_samples = times_samples[keep]
