@@ -1,5 +1,6 @@
 import tempfile
 from concurrent.futures import CancelledError
+from threading import local
 from contextlib import contextmanager
 from pathlib import Path
 
@@ -12,7 +13,7 @@ from tqdm.auto import tqdm
 from dartsort.transform import WaveformPipeline
 from dartsort.util import peel_util
 from dartsort.util.data_util import SpikeDataset
-from dartsort.util.multiprocessing_util import get_pool
+from dartsort.util.multiprocessing_util import pool_from_cfg
 from dartsort.util.py_util import delay_keyboard_interrupt
 
 
@@ -88,7 +89,7 @@ class BasePeeler(torch.nn.Module):
     # are the main API methods for this class
 
     def load_or_fit_and_save_models(
-        self, save_folder, overwrite=False, n_jobs=0, device=None
+        self, save_folder, overwrite=False, computation_config=None
     ):
         """Load fitted models from save_folder if possible, or fit and save
 
@@ -108,7 +109,7 @@ class BasePeeler(torch.nn.Module):
             if self.needs_fit():
                 save_folder.mkdir(exist_ok=True)
                 self.fit_models(
-                    save_folder, overwrite=overwrite, n_jobs=n_jobs, device=device
+                    save_folder, overwrite=overwrite, computation_config=computation_config
                 )
             self.save_models(save_folder)
         assert not self.needs_precompute()
@@ -120,15 +121,14 @@ class BasePeeler(torch.nn.Module):
         chunk_starts_samples=None,
         chunk_length_samples=None,
         stop_after_n_waveforms=None,
-        n_jobs=0,
         overwrite=False,
         residual_filename=None,
         show_progress=True,
         skip_features=False,
         residual_to_h5=False,
         task_name=None,
-        device=None,
         ignore_resuming=False,
+        computation_config=None,
     ):
         """Run the full (already fitted) peeling and featurization pipeline
 
@@ -169,8 +169,8 @@ class BasePeeler(torch.nn.Module):
         # wrap in try/finally to ensure file handles get closed if there
         # is some unforseen error
         try:
-            n_jobs, Executor, context, rank_queue = get_pool(
-                n_jobs, with_rank_queue=True
+            n_jobs, Executor, context, rank_queue, is_local = pool_from_cfg(
+                computation_config, with_rank_queue=True, check_local=True
             )
             with Executor(
                 max_workers=n_jobs,
@@ -178,13 +178,17 @@ class BasePeeler(torch.nn.Module):
                 initializer=_peeler_process_init,
                 initargs=(
                     self,
-                    device,
+                    computation_config.actual_device(),
                     rank_queue,
                     compute_residual,
                     skip_features,
                     chunk_length_samples,
+                    is_local,
                 ),
             ) as pool:
+                if is_local:
+                    self.to(computation_config.actual_device())
+
                 # launch the jobs and wrap in a progress bar
                 results = pool.map(_peeler_process_job, chunks_to_do)
                 if show_progress:
@@ -280,17 +284,17 @@ class BasePeeler(torch.nn.Module):
         return False
 
     def precompute_peeling_data(
-        self, save_folder, overwrite=False, n_jobs=0, device=None
+        self, save_folder, overwrite=False, computation_config=None
     ):
         # subclasses should override if they need to cache data for peeling
         # runs before fit_peeler_models()
         pass
 
-    def fit_peeler_models(self, save_folder, tmp_dir=None, n_jobs=0, device=None):
+    def fit_peeler_models(self, save_folder, tmp_dir=None, computation_config=None):
         # subclasses should override if they need to fit models for peeling
         assert not self.peeling_needs_fit()
 
-    def precompute_peeler_models(self, save_folder, n_jobs=0, device=None):
+    def precompute_peeler_models(self, save_folder, computation_config=None):
         # subclasses should override if they need to fit models for peeling
         assert not self.peeling_needs_precompute()
 
@@ -447,24 +451,22 @@ class BasePeeler(torch.nn.Module):
         return it_does
 
     def fit_models(
-        self, save_folder, tmp_dir=None, overwrite=False, n_jobs=0, device=None
+        self, save_folder, tmp_dir=None, overwrite=False, computation_config=None
     ):
         with torch.no_grad():
             if self.peeling_needs_fit():
                 self.precompute_peeling_data(
                     save_folder=save_folder,
                     overwrite=overwrite,
-                    n_jobs=n_jobs,
-                    device=device,
+                    computation_config=computation_config,
                 )
                 self.fit_peeler_models(
                     save_folder=save_folder,
                     tmp_dir=tmp_dir,
-                    n_jobs=n_jobs,
-                    device=device,
+                    computation_config=computation_config,
                 )
             self.fit_featurization_pipeline(
-                save_folder=save_folder, tmp_dir=tmp_dir, n_jobs=n_jobs, device=device
+                save_folder=save_folder, tmp_dir=tmp_dir, computation_config=computation_config,
             )
         assert not self.needs_fit()
 
@@ -476,7 +478,7 @@ class BasePeeler(torch.nn.Module):
         self.featurization_pipeline.precompute()
 
     def fit_featurization_pipeline(
-        self, save_folder, tmp_dir=None, n_jobs=0, device=None
+        self, save_folder, tmp_dir=None, computation_config=None
     ):
         if self.featurization_pipeline is None:
             return
@@ -484,9 +486,11 @@ class BasePeeler(torch.nn.Module):
         if not self.featurization_pipeline.needs_fit():
             return
 
-        if device is None:
+        if computation_config is None:
             device = "cuda" if torch.cuda.is_available() else "cpu"
-        device = torch.device(device)
+            device = torch.device(device)
+        else:
+            device = computation_config.actual_device()
 
         # disable self's featurization pipeline, replacing it with a waveform
         # saving node. then, we'll use those waveforms to fit the original
@@ -505,8 +509,7 @@ class BasePeeler(torch.nn.Module):
             try:
                 self.run_subsampled_peeling(
                     temp_hdf5_filename,
-                    n_jobs=n_jobs,
-                    device=device,
+                    computation_config=computation_config,
                     task_name="Load examples for feature fitting",
                 )
 
@@ -584,7 +587,6 @@ class BasePeeler(torch.nn.Module):
     def run_subsampled_peeling(
         self,
         hdf5_filename,
-        n_jobs=0,
         chunk_length_samples=None,
         residual_to_h5=False,
         skip_features=False,
@@ -592,7 +594,7 @@ class BasePeeler(torch.nn.Module):
         n_chunks=None,
         t_start=None,
         t_end=None,
-        device=None,
+        computation_config=None,
         task_name=None,
         overwrite=True,
         ordered=False,
@@ -617,10 +619,9 @@ class BasePeeler(torch.nn.Module):
             ignore_resuming=ignore_resuming,
             residual_to_h5=residual_to_h5,
             skip_features=skip_features,
-            n_jobs=n_jobs,
+            computation_config=computation_config,
             overwrite=overwrite,
             task_name=task_name,
-            device=device,
             show_progress=show_progress,
         )
 
@@ -756,7 +757,7 @@ class PeelerProcessContext:
 
 # this state will be set on each process
 # it means that BasePeeler.peel() itself is not thread-safe but that's ok
-_peeler_process_context = None
+_peeler_process_context = local()
 
 
 def _peeler_process_init(
@@ -766,6 +767,7 @@ def _peeler_process_init(
     compute_residual,
     skip_features,
     chunk_length_samples,
+    is_local,
 ):
     global _peeler_process_context
 
@@ -780,11 +782,12 @@ def _peeler_process_init(
             device = torch.device("cuda", index=index)
 
     # move peeler to device and put everything in inference mode
-    peeler.to(device)
+    if not is_local:
+        peeler.to(device)
     peeler.eval()
 
     # update process-local variables
-    _peeler_process_context = PeelerProcessContext(
+    _peeler_process_context.ctx = PeelerProcessContext(
         peeler, compute_residual, skip_features, chunk_length_samples
     )
 
@@ -794,11 +797,11 @@ def _peeler_process_job(chunk_start_samples):
     # TODO: replace with manual np.saves
     with torch.no_grad():
         chunk_end_samples = None
-        chlen = _peeler_process_context.chunk_length_samples
+        chlen = _peeler_process_context.ctx.chunk_length_samples
         if chlen is not None:
             chunk_end_samples = chunk_start_samples + chlen
-        return _peeler_process_context.peeler.process_chunk(
+        return _peeler_process_context.ctx.peeler.process_chunk(
             chunk_start_samples,
             chunk_end_samples=chunk_end_samples,
-            return_residual=_peeler_process_context.compute_residual,
+            return_residual=_peeler_process_context.ctx.compute_residual,
         )
