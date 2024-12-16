@@ -4,12 +4,13 @@
 import h5py
 import numpy as np
 import torch
+from scipy.spatial.distance import cdist
 from tqdm.auto import tqdm
 
 from ..util.multiprocessing_util import get_pool
 from ..util.py_util import delay_keyboard_interrupt
-from .localize_torch import localize_amplitude_vectors
 from ..util.spiketorch import ptp
+from .localize_torch import localize_amplitude_vectors
 
 
 def localize_waveforms(
@@ -214,9 +215,7 @@ def _h5_localize_init(
     device = torch.device(device)
     if device.type == "cuda" and device.index is None:
         if torch.cuda.device_count() > 1:
-            device = torch.device(
-                "cuda", index=my_rank % torch.cuda.device_count()
-            )
+            device = torch.device("cuda", index=my_rank % torch.cuda.device_count())
 
     _loc_context = H5LocalizationContext(
         hdf5_filename,
@@ -256,3 +255,34 @@ def _h5_localize_job(start_ix):
         locs["alpha"].cpu().numpy(),
     ]
     return start_ix, end_ix, xyza_batch
+
+
+def point_source_mse(locs, amp_vecs, channels, channel_index, geom):
+    neighborhoods = channel_index[channels]
+    invalid = neighborhoods == len(geom)
+    pgeom = np.pad(geom, [(0, 1), (0, 0)], constant_values=np.nan)
+    dxz = pgeom[neighborhoods]
+
+    if locs.shape[1] == 3:
+        alpha = ...
+    else:
+        alpha = locs[:, 3]
+        locs = locs[:, :3]
+
+    x, y, z = locs.T
+
+    dxz[:, :, 0] -= x
+    dxz[:, :, 1] -= z
+    np.square(dxz, out=dxz)
+    pred = dxz.sum(2)
+    pred += y**2
+    np.sqrt(pred, out=pred)
+    np.reciprocal(pred, out=pred)
+    pred *= alpha
+
+    mse = amp_vecs - pred
+    mse[invalid] = 0.0
+    nnz = invalid.sum(1)
+    mse = mse.sum(1) / nnz
+
+    return mse
