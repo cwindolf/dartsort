@@ -1,7 +1,6 @@
 from collections import namedtuple
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Optional
 from warnings import warn
 
 import h5py
@@ -39,12 +38,12 @@ class DARTsortSorting:
 
     times_samples: np.ndarray
     channels: np.ndarray
-    labels: Optional[np.ndarray] = None
-    sampling_frequency: Optional[float] = 30_000.0
+    labels: np.ndarray | None = None
+    sampling_frequency: float = 30_000.0
+    parent_h5_path: str | None = None
 
     # entries in this dictionary will also be set as properties
-    parent_h5_path: Optional[str] = None
-    extra_features: Optional[dict[str, np.ndarray]] = None
+    extra_features: dict[str, np.ndarray] | None = None
 
     def __post_init__(self):
         self.times_samples = np.asarray(self.times_samples, dtype=int)
