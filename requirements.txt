@@ -13,3 +13,4 @@ tqdm
 pandas
 linear_operator
 numba
+pydantic

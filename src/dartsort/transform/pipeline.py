@@ -26,12 +26,18 @@ class WaveformPipeline(torch.nn.Module):
         )
 
     @classmethod
-    def from_config(cls, geom, channel_index, featurization_config):
-        return cls.from_class_names_and_kwargs(
-            geom,
-            channel_index,
-            featurization_config_to_class_names_and_kwargs(featurization_config),
+    def from_config(
+        cls,
+        geom,
+        channel_index,
+        featurization_config,
+        waveform_config,
+        sampling_frequency=30_000,
+    ):
+        args = featurization_config_to_class_names_and_kwargs(
+            featurization_config, waveform_config, sampling_frequency=sampling_frequency
         )
+        return cls.from_class_names_and_kwargs(geom, channel_index, args)
 
     def needs_precompute(self):
         return any(t.needs_precompute() for t in self.transformers)
@@ -110,110 +116,116 @@ def check_unique_feature_names(transformers):
         raise ValueError("Featurizer name collision in a WaveformPipeline")
 
 
-def featurization_config_to_class_names_and_kwargs(fconf):
+def featurization_config_to_class_names_and_kwargs(
+    featurization_config,
+    waveform_config,
+    sampling_frequency=30_000,
+):
     """Convert this config into a list of waveform transformer classes and arguments
 
     Used by WaveformPipeline.from_config(...) to construct WaveformPipelines
     from FeaturizationConfig objects.
     """
+    fc = featurization_config
     class_names_and_kwargs = []
 
-    do_feats = not fconf.denoise_only
+    do_feats = not fc.denoise_only
 
-    if do_feats and fconf.save_input_voltages:
+    if do_feats and fc.save_input_voltages:
         class_names_and_kwargs.append(
-            ("Voltage", {"name_prefix": fconf.input_waveforms_name})
+            ("Voltage", {"name_prefix": fc.input_waveforms_name})
         )
-    if do_feats and fconf.save_input_waveforms:
+    if do_feats and fc.save_input_waveforms:
         class_names_and_kwargs.append(
-            ("Waveform", {"name_prefix": fconf.input_waveforms_name})
+            ("Waveform", {"name_prefix": fc.input_waveforms_name})
         )
-    if fconf.learn_cleaned_tpca_basis:
+    if fc.learn_cleaned_tpca_basis:
         class_names_and_kwargs.append(
-            ("BaseTemporalPCA", {"rank": fconf.tpca_rank, "centered": False})
+            ("BaseTemporalPCA", {"rank": fc.tpca_rank, "centered": False})
         )
-    if do_feats and fconf.save_input_tpca_projs:
+    if do_feats and fc.save_input_tpca_projs:
+        tslice = fc.input_tpca_waveform_config.relative_slice(waveform_config)
         class_names_and_kwargs.append(
             (
                 "TemporalPCAFeaturizer",
                 {
-                    "rank": fconf.tpca_rank,
-                    "name_prefix": fconf.input_waveforms_name,
-                    "centered": fconf.tpca_centered,
-                    "temporal_slice": fconf.input_tpca_projs_temporal_slice,
+                    "rank": fc.tpca_rank,
+                    "name_prefix": fc.input_waveforms_name,
+                    "centered": fc.tpca_centered,
+                    "temporal_slice": tslice,
                 },
             )
         )
-    if fconf.do_nn_denoise:
+    if fc.do_nn_denoise:
         class_names_and_kwargs.append(
             (
-                fconf.nn_denoiser_class_name,
+                fc.nn_denoiser_class_name,
                 {
-                    "pretrained_path": fconf.nn_denoiser_pretrained_path,
-                    "n_epochs": fconf.nn_denoiser_train_epochs,
-                    **(fconf.nn_denoiser_extra_kwargs or {}),
+                    "pretrained_path": fc.nn_denoiser_pretrained_path,
+                    "n_epochs": fc.nn_denoiser_train_epochs,
+                    **(fc.nn_denoiser_extra_kwargs or {}),
                 },
             )
         )
-    if fconf.do_tpca_denoise:
+    if fc.do_tpca_denoise:
         class_names_and_kwargs.append(
             (
                 "TemporalPCADenoiser",
                 {
-                    "rank": fconf.tpca_rank,
-                    "fit_radius": fconf.tpca_fit_radius,
-                    "centered": fconf.tpca_centered,
+                    "rank": fc.tpca_rank,
+                    "fit_radius": fc.tpca_fit_radius,
+                    "centered": fc.tpca_centered,
                 },
             )
         )
-    if fconf.do_enforce_decrease:
+    if fc.do_enforce_decrease:
         class_names_and_kwargs.append(("EnforceDecrease", {}))
-    if do_feats and fconf.save_output_waveforms:
+    if do_feats and fc.save_output_waveforms:
         class_names_and_kwargs.append(
-            ("Waveform", {"name_prefix": fconf.output_waveforms_name})
+            ("Waveform", {"name_prefix": fc.output_waveforms_name})
         )
 
-    if do_feats and fconf.save_output_tpca_projs:
+    if do_feats and fc.save_output_tpca_projs:
         class_names_and_kwargs.append(
             (
                 "TemporalPCAFeaturizer",
                 {
-                    "rank": fconf.tpca_rank,
-                    "name_prefix": fconf.output_waveforms_name,
-                    "centered": fconf.tpca_centered,
+                    "rank": fc.tpca_rank,
+                    "name_prefix": fc.output_waveforms_name,
+                    "centered": fc.tpca_centered,
                 },
             )
         )
-    if do_feats and fconf.do_localization and fconf.nn_localization:
+    if do_feats and fc.do_localization and fc.nn_localization:
         class_names_and_kwargs.append(
             (
                 "AmortizedLocalization",
                 {
-                    "amplitude_kind": fconf.localization_amplitude_type,
-                    "localization_model": fconf.localization_model,
+                    "amplitude_kind": fc.localization_amplitude_type,
+                    "localization_model": fc.localization_model,
                 },
             )
         )
 
-    do_ptp_amp = do_feats and fconf.save_amplitudes
+    do_ptp_amp = do_feats and fc.save_amplitudes
     do_peak_vec = do_feats and (
-        fconf.do_localization
-        and fconf.localization_amplitude_type == "peak"
-        and not fconf.nn_localization
+        fc.do_localization
+        and fc.localization_amplitude_type == "peak"
+        and not fc.nn_localization
     )
-    do_ptp_vec = do_feats and fconf.save_amplitudes
-    do_logptt = do_feats and fconf.save_amplitudes
+    do_ptp_vec = do_feats and fc.save_amplitudes
+    do_logptt = do_feats and fc.save_amplitudes
     do_any_amp = do_peak_vec or do_ptp_vec or do_ptp_amp or do_logptt
     if do_any_amp:
         class_names_and_kwargs.append(
             (
                 "AmplitudeFeatures",
                 {
-                    "name_prefix": fconf.output_waveforms_name,
-                    "ptp_max_amplitude": do_ptp_amp or fconf.save_all_amplitudes,
-                    "peak_amplitude_vectors": do_peak_vec or fconf.save_all_amplitudes,
-                    "ptp_amplitude_vectors": do_ptp_vec or fconf.save_all_amplitudes,
-                    "log_peak_to_trough": do_logptt or fconf.save_all_amplitudes,
+                    "name_prefix": fc.output_waveforms_name,
+                    "ptp_max_amplitude": do_ptp_amp or fc.save_all_amplitudes,
+                    "peak_amplitude_vectors": do_peak_vec or fc.save_all_amplitudes,
+                    "ptp_amplitude_vectors": do_ptp_vec or fc.save_all_amplitudes,
+                    "log_peak_to_trough": do_logptt or fc.save_all_amplitudes,
                 },
             )
         )

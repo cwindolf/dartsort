@@ -13,14 +13,15 @@ from typing import Optional
 import numpy as np
 import torch
 import torch.nn.functional as F
+from scipy.spatial import KDTree
+from scipy.spatial.distance import pdist
+
 from dartsort.templates import template_util
 from dartsort.templates.pairwise import CompressedPairwiseConv
 from dartsort.transform import WaveformPipeline
 from dartsort.util import drift_util, spiketorch
 from dartsort.util.data_util import SpikeDataset
 from dartsort.util.waveform_util import make_channel_index
-from scipy.spatial import KDTree
-from scipy.spatial.distance import pdist
 
 from .peel_base import BasePeeler
 
@@ -44,7 +45,7 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
         amplitude_scaling_variance=0.0,
         amplitude_scaling_boundary=0.5,
         conv_ignore_threshold=5.0,
-        coarse_approx_error_threshold=5.0,
+        coarse_approx_error_threshold=0.0,
         trough_offset_samples=42,
         threshold=50.0,
         chunk_length_samples=30_000,
@@ -386,7 +387,11 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
             geom, matching_config.extract_radius, to_torch=True
         )
         featurization_pipeline = WaveformPipeline.from_config(
-            geom, channel_index, featurization_config
+            geom,
+            channel_index,
+            featurization_config,
+            waveform_config,
+            sampling_frequency=recording.sampling_frequency,
         )
         trough_offset_samples = waveform_config.trough_offset_samples(
             recording.sampling_frequency
@@ -638,11 +643,13 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
         # extract collision-cleaned waveforms on small neighborhoods
         channels = waveforms = None
         if return_collisioncleaned_waveforms:
-            channels, waveforms = compressed_template_data.get_collisioncleaned_waveforms(
-                residual_padded,
-                peaks,
-                self.channel_index,
-                spike_length_samples=self.spike_length_samples,
+            channels, waveforms = (
+                compressed_template_data.get_collisioncleaned_waveforms(
+                    residual_padded,
+                    peaks,
+                    self.channel_index,
+                    spike_length_samples=self.spike_length_samples,
+                )
             )
 
         res = dict(
@@ -687,7 +694,9 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
             objective[torch.logical_not(unit_mask)] = -torch.inf
         # formerly used detect_and_deduplicate, but that was slow.
         objective_max, max_obj_template = objective.max(dim=0)
-        times = spiketorch.argrelmax(objective_max, self.spike_length_samples, self.threshold)
+        times = spiketorch.argrelmax(
+            objective_max, self.spike_length_samples, self.threshold
+        )
         obj_template_indices = max_obj_template[times]
         # remove peaks inside the padding
         if not times.numel():

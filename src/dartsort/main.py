@@ -2,21 +2,28 @@ from dataclasses import asdict
 from pathlib import Path
 
 import numpy as np
+
 from dartsort.cluster.initial import ensemble_chunks
 from dartsort.cluster.merge import merge_templates
 from dartsort.cluster.split import split_clusters
-from dartsort.config import (DARTsortConfig, default_clustering_config,
-                             default_dartsort_config,
-                             default_featurization_config,
-                             default_matching_config,
-                             default_split_merge_config,
-                             default_subtraction_config,
-                             default_template_config, default_waveform_config)
-from dartsort.peel import (ObjectiveUpdateTemplateMatchingPeeler,
-                           SubtractionPeeler)
+from dartsort.config import (
+    DARTsortConfig,
+    default_clustering_config,
+    default_dartsort_config,
+    default_featurization_config,
+    default_matching_config,
+    default_split_merge_config,
+    default_subtraction_config,
+    default_template_config,
+    default_waveform_config,
+)
+from dartsort.peel import ObjectiveUpdateTemplateMatchingPeeler, SubtractionPeeler
 from dartsort.templates import TemplateData
-from dartsort.util.data_util import (DARTsortSorting, check_recording,
-                                     keep_only_most_recent_spikes)
+from dartsort.util.data_util import (
+    DARTsortSorting,
+    check_recording,
+    keep_only_most_recent_spikes,
+)
 from dartsort.util.peel_util import run_peeler
 from dartsort.util.registration_util import estimate_motion
 
@@ -274,138 +281,119 @@ def match(
     assert output_directory is not None
     model_dir = Path(output_directory) / model_subdir
 
-    if not template_config.time_tracking:
-        # compute templates
-        trough_offset_samples = waveform_config.trough_offset_samples(
-            recording.sampling_frequency
-        )
-        spike_length_samples = waveform_config.spike_length_samples(
-            recording.sampling_frequency
-        )
-        if template_data is None:
-            template_data = TemplateData.from_config(
-                recording,
-                sorting,
-                template_config=template_config,
-                motion_est=motion_est,
-                n_jobs=n_jobs_templates,
-                save_folder=model_dir,
-                overwrite=overwrite,
-                device=device,
-                save_npz_name=template_npz_filename,
-                trough_offset_samples=trough_offset_samples,
-                spike_length_samples=spike_length_samples,
-            )
-
-        # instantiate peeler
-        matching_peeler = ObjectiveUpdateTemplateMatchingPeeler.from_config(
+    # compute templates
+    if template_data is None:
+        template_data = TemplateData.from_config(
             recording,
-            waveform_config,
-            matching_config,
-            featurization_config,
-            template_data,
+            sorting,
+            template_config=template_config,
+            waveform_config=waveform_config,
             motion_est=motion_est,
-        )
-        sorting, output_hdf5_filename = run_peeler(
-            matching_peeler,
-            output_directory,
-            hdf5_filename,
-            model_subdir,
-            featurization_config,
-            chunk_starts_samples=chunk_starts_samples,
+            n_jobs=n_jobs_templates,
+            save_folder=model_dir,
             overwrite=overwrite,
-            n_jobs=n_jobs_match,
-            residual_filename=residual_filename,
+            device=device,
+            save_npz_name=template_npz_filename,
+        )
+
+    # instantiate peeler
+    matching_peeler = ObjectiveUpdateTemplateMatchingPeeler.from_config(
+        recording,
+        waveform_config,
+        matching_config,
+        featurization_config,
+        template_data,
+        motion_est=motion_est,
+    )
+    sorting, output_hdf5_filename = run_peeler(
+        matching_peeler,
+        output_directory,
+        hdf5_filename,
+        model_subdir,
+        featurization_config,
+        chunk_starts_samples=chunk_starts_samples,
+        overwrite=overwrite,
+        n_jobs=n_jobs_match,
+        residual_filename=residual_filename,
+        show_progress=show_progress,
+        device=device,
+    )
+    return sorting, output_hdf5_filename
+
+
+def match_chunked(
+    recording,
+    sorting,
+    output_directory=None,
+    motion_est=None,
+    waveform_config=default_waveform_config,
+    template_config=default_template_config,
+    featurization_config=default_featurization_config,
+    matching_config=default_matching_config,
+    chunk_starts_samples=None,
+    n_jobs_templates=0,
+    n_jobs_match=0,
+    overwrite=False,
+    residual_filename=None,
+    show_progress=True,
+    device=None,
+    template_data=None,
+    template_npz_filename="template_data.npz",
+):
+    # compute chunk time ranges
+    chunk_samples = recording.sampling_frequency * template_config.chunk_size_s
+    n_chunks = recording.get_num_samples() / chunk_samples
+    # we'll count the remainder as a chunk if it's at least 2/3 of one
+    n_chunks = np.floor(n_chunks) + (n_chunks - np.floor(n_chunks) > 0.66)
+    n_chunks = int(max(1, n_chunks))
+
+    # evenly divide the recording into chunks
+    assert recording.get_num_segments() == 1
+    start_time_s, end_time_s = recording._recording_segments[0].sample_index_to_time(
+        np.array([0, recording.get_num_samples() - 1])
+    )
+    chunk_times_s = np.linspace(start_time_s, end_time_s, num=n_chunks + 1)
+    chunk_time_ranges_s = list(zip(chunk_times_s[:-1], chunk_times_s[1:]))
+
+    sortings = []
+    hdf5_filenames = []
+
+    for j, chunk_time_range in enumerate(chunk_time_ranges_s):
+        sorting_chunk = keep_only_most_recent_spikes(
+            sorting,
+            n_min_spikes=template_config.spikes_per_unit,
+            latest_time_sample=chunk_time_range[1] * recording.sampling_frequency,
+        )
+        chunk_starts_samples = recording._recording_segments[0].time_to_sample_index(
+            chunk_time_range
+        )
+        chunk_starts_samples = chunk_starts_samples.astype(int)
+        chunk_starts_samples = np.arange(
+            *chunk_starts_samples, matching_config.chunk_length_samples
+        )
+
+        chunk_sorting, chunk_h5 = match(
+            recording,
+            sorting=sorting_chunk,
+            output_directory=output_directory,
+            motion_est=motion_est,
+            waveform_config=default_waveform_config,
+            template_config=default_template_config,
+            featurization_config=default_featurization_config,
+            matching_config=default_matching_config,
+            chunk_starts_samples=chunk_starts_samples,
+            n_jobs_templates=n_jobs_templates,
+            n_jobs_match=n_jobs_match,
+            overwrite=overwrite,
+            residual_filename=None,
             show_progress=show_progress,
             device=device,
+            hdf5_filename=f"matching0_chunk{j:3d}.h5",
+            model_subdir=f"matching0_chunk{j:3d}_models",
+            template_npz_filename=template_npz_filename,
         )
-        return sorting, output_hdf5_filename
-    else:
-        # compute chunk time ranges
-        chunk_samples = (
-            recording.sampling_frequency * template_config.chunk_size_s
-        )
-        n_chunks = recording.get_num_samples() / chunk_samples
-        # we'll count the remainder as a chunk if it's at least 2/3 of one
-        n_chunks = np.floor(n_chunks) + (n_chunks - np.floor(n_chunks) > 0.66)
-        n_chunks = int(max(1, n_chunks))
 
-        # evenly divide the recording into chunks
-        assert recording.get_num_segments() == 1
-        start_time_s, end_time_s = recording._recording_segments[
-            0
-        ].sample_index_to_time(np.array([0, recording.get_num_samples() - 1]))
-        chunk_times_s = np.linspace(start_time_s, end_time_s, num=n_chunks + 1)
-        chunk_time_ranges_s = list(zip(chunk_times_s[:-1], chunk_times_s[1:]))
+        sortings.append(chunk_sorting)
+        hdf5_filenames.append(chunk_h5)
 
-        sorting_list, output_hdf5_filename_list = [], []
-
-        for j, chunk_time_range in enumerate(chunk_time_ranges_s):
-            print(f"chunk_{j}")
-            model_subdir_chunk = f"chunk_{j}_" + model_subdir
-            model_dir_chunk = Path(output_directory) / model_subdir_chunk
-
-            chunk_starts_samples = np.arange(
-                chunk_time_range[0] * recording.sampling_frequency,
-                chunk_time_range[1] * recording.sampling_frequency,
-                matching_config.chunk_length_samples,
-            ).astype("int")
-
-            if sorting is not None:
-                sorting_chunk = keep_only_most_recent_spikes(
-                    sorting,
-                    n_min_spikes=template_config.spikes_per_unit,
-                    latest_time_sample=chunk_time_range[1]
-                    * recording.sampling_frequency,
-                )
-            else:
-                sorting_chunk = None
-
-            # compute templates
-            trough_offset_samples = waveform_config.trough_offset_samples(
-                recording.sampling_frequency
-            )
-            spike_length_samples = waveform_config.spike_length_samples(
-                recording.sampling_frequency
-            )
-            template_data = TemplateData.from_config(
-                recording,
-                sorting_chunk,
-                template_config=template_config,
-                motion_est=motion_est,
-                n_jobs=n_jobs_templates,
-                save_folder=model_dir_chunk,
-                overwrite=overwrite,
-                device=device,
-                save_npz_name=template_npz_filename,
-                trough_offset_samples=trough_offset_samples,
-                spike_length_samples=spike_length_samples,
-            )
-
-            # instantiate peeler
-            matching_peeler = ObjectiveUpdateTemplateMatchingPeeler.from_config(
-                recording,
-                waveform_config,
-                matching_config,
-                featurization_config,
-                template_data,
-                motion_est=motion_est,
-            )
-            sorting_chunk, output_hdf5_filename = run_peeler(
-                matching_peeler,
-                output_directory,
-                f"chunk_{j}_" + hdf5_filename,
-                model_subdir_chunk,
-                featurization_config,
-                chunk_starts_samples=chunk_starts_samples,
-                overwrite=overwrite,
-                n_jobs=n_jobs_match,
-                residual_filename=residual_filename,
-                show_progress=show_progress,
-                device=device,
-            )
-
-            sorting_list.append(sorting_chunk)
-            output_hdf5_filename_list.append(output_hdf5_filename)
-
-        return sorting_list, output_hdf5_filename_list
+    return sortings, hdf5_filenames

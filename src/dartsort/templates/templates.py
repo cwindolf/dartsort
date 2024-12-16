@@ -3,6 +3,8 @@ from pathlib import Path
 from typing import Optional
 
 import numpy as np
+
+from dartsort import config
 from dartsort.localize.localize_util import localize_waveforms
 from dartsort.util import data_util, drift_util
 
@@ -55,13 +57,9 @@ class TemplateData:
                 self.registered_template_depths_um
             )
         if self.spike_counts_by_channel is not None:
-            to_save["spike_counts_by_channel"] = (
-                self.spike_counts_by_channel
-            )
+            to_save["spike_counts_by_channel"] = self.spike_counts_by_channel
         if self.raw_std_dev is not None:
-            to_save["raw_std_dev"] = (
-                self.raw_std_dev
-            )
+            to_save["raw_std_dev"] = self.raw_std_dev
         if not npz_path.parent.exists():
             npz_path.parent.mkdir()
         np.savez(npz_path, **to_save)
@@ -76,10 +74,20 @@ class TemplateData:
             templates=self.templates[subset],
             unit_ids=self.unit_ids[subset],
             spike_counts=self.spike_counts[subset],
-            spike_counts_by_channel=self.spike_counts_by_channel[subset] if self.spike_counts_by_channel is not None else None,
-            raw_std_dev=self.raw_std_dev[subset] if self.raw_std_dev is not None else None,
+            spike_counts_by_channel=(
+                self.spike_counts_by_channel[subset]
+                if self.spike_counts_by_channel is not None
+                else None
+            ),
+            raw_std_dev=(
+                self.raw_std_dev[subset] if self.raw_std_dev is not None else None
+            ),
             registered_geom=self.registered_geom,
-            registered_template_depths_um=self.registered_template_depths_um[subset] if self.registered_template_depths_um is not None else None,
+            registered_template_depths_um=(
+                self.registered_template_depths_um[subset]
+                if self.registered_template_depths_um is not None
+                else None
+            ),
             localization_radius_um=self.localization_radius_um,
             trough_offset_samples=self.trough_offset_samples,
             spike_length_samples=self.spike_length_samples,
@@ -133,6 +141,7 @@ class TemplateData:
         recording,
         sorting,
         template_config,
+        waveform_config=config.default_waveform_config,
         save_folder=None,
         overwrite=False,
         motion_est=None,
@@ -143,8 +152,6 @@ class TemplateData:
         units_per_job=8,
         tsvd=None,
         device=None,
-        trough_offset_samples=42,
-        spike_length_samples=121,
         return_realigned_sorting=False,
     ):
         if save_folder is not None:
@@ -159,6 +166,13 @@ class TemplateData:
             raise ValueError(
                 "TemplateData.from_config needs sorting!=None when its .npz file does not exist."
             )
+
+        trough_offset_samples = waveform_config.trough_offset_samples(
+            recording.sampling_frequency
+        )
+        spike_length_samples = waveform_config.spike_length_samples(
+            recording.sampling_frequency
+        )
 
         motion_aware = (
             template_config.registered_templates or template_config.superres_templates
@@ -346,7 +360,9 @@ def get_chunked_templates(
 
     # combine into a single sorting, so that we can use the template computer's
     # parallelism in one big loop
-    label_to_sorting_index, label_to_original_label, combined_sorting = data_util.combine_sortings(chunk_sortings, dodge=True)
+    label_to_sorting_index, label_to_original_label, combined_sorting = (
+        data_util.combine_sortings(chunk_sortings, dodge=True)
+    )
 
     # compute templates in combined label space
     full_template_data = TemplateData.from_config(
@@ -373,8 +389,7 @@ def get_chunked_templates(
     chunk_template_data = []
     for i in range(len(chunk_sortings)):
         chunk_mask = np.flatnonzero(
-            label_to_sorting_index[full_template_data.unit_ids]
-            == i
+            label_to_sorting_index[full_template_data.unit_ids] == i
         )
         # chunk_unit_ids = np.flatnonzero(label_to_sorting_index == i)
         # chunk_mask = np.flatnonzero(np.isin(full_template_data.unit_ids, chunk_unit_ids))
