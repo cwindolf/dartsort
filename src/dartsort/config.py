@@ -105,6 +105,7 @@ class FeaturizationConfig:
     typical case can manually instantiate a WaveformPipeline
     and pass it into their peeler.
     """
+    skip: bool = False
 
     # -- denoising configuration
     do_nn_denoise: bool = False
@@ -123,7 +124,7 @@ class FeaturizationConfig:
     save_output_waveforms: bool = False
     save_output_tpca_projs: bool = False
     save_amplitudes: bool = True
-    save_all_amplitudes: bool = True
+    save_all_amplitudes: bool = False
     # localization runs on output waveforms
     do_localization: bool = True
     localization_radius: float = 100.0

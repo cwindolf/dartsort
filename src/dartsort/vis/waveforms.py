@@ -30,6 +30,7 @@ def geomplot(
     color=None,
     colors=None,
     return_chans=False,
+    linestyles=None,
     **plot_kwargs,
 ):
     """Plot waveforms according to geometry using channel index"""
@@ -86,21 +87,27 @@ def geomplot(
     draw_colors = []
     unique_chans = set()
     xmin, xmax = np.inf, -np.inf
+    if linestyles is not None:
+        ls = []
+        plot_kwargs['linestyles'] = ls
     for j, (wf, chans) in enumerate(zip(waveforms, channels)):
-        for i, c in enumerate(chans):
-            if c == n_channels:
+        for i, cc in enumerate(chans):
+            if cc == n_channels:
                 continue
 
-            draw.append(np.c_[geom_plot[c, 0] + t_domain, geom_plot[c, 1] + wf[:, i]])
-            xmin = min(geom_plot[c, 0] + t_domain.min(), xmin)
-            xmax = max(geom_plot[c, 0] + t_domain.max(), xmax)
-            unique_chans.add(c)
+            draw.append(np.c_[geom_plot[cc, 0] + t_domain, geom_plot[cc, 1] + wf[:, i]])
+            xmin = min(geom_plot[cc, 0] + t_domain.min(), xmin)
+            xmax = max(geom_plot[cc, 0] + t_domain.max(), xmax)
+            unique_chans.add(cc)
             if colors is not None:
                 draw_colors.append(to_rgba(colors[j]))
             elif color is not None:
                 draw_colors.append(to_rgba(color))
             elif c is not None:
-                draw_colors.append(to_rgba(c))
+                cj = c[j] if (hasattr(c, '__len__') and len(c)>1) else c
+                draw_colors.append(to_rgba(cj))
+            if linestyles is not None:
+                ls.append(linestyles[j])
     dx = xmax - xmin
     xpad = dx / 2 - xlim_factor * dx / 2
     ax.set_xlim([xmin + xpad, xmax - xpad])
