@@ -3,11 +3,12 @@ from pathlib import Path
 
 import numpy as np
 
-from dartsort.cluster.initial import ensemble_chunks
-from dartsort.cluster.merge import merge_templates
-from dartsort.cluster.split import split_clusters
+from dartsort.cluster.initial import initial_clustering
+from dartsort.cluster.refine import refine_clustering
 from dartsort.config import (
-    DARTsortConfig,
+    DARTsortUserConfig,
+    DARTsortInternalConfig,
+    DeveloperConfig,
     default_clustering_config,
     default_dartsort_config,
     default_featurization_config,
@@ -32,22 +33,14 @@ from dartsort.util.registration_util import estimate_motion
 def dartsort(
     recording,
     output_directory,
-    cfg: DARTsortConfig = default_dartsort_config,
+    cfg: (
+        DARTsortUserConfig | DeveloperConfig | DARTsortInternalConfig
+    ) = default_dartsort_config,
     motion_est=None,
-    n_jobs_gpu=None,
-    n_jobs_cpu=None,
     overwrite=False,
-    show_progress=True,
-    device=None,
 ):
     output_directory = Path(output_directory)
-
-    n_jobs = n_jobs_gpu
-    if n_jobs is None:
-        n_jobs = cfg.computation_config.actual_n_jobs_gpu
-    n_jobs_cluster = n_jobs_cpu
-    if n_jobs_cluster is None:
-        n_jobs_cluster = cfg.computation_config.n_jobs_cpu
+    cfg = cfg.to_internal_config()
 
     # first step: subtraction and motion estimation
     sorting, sub_h5 = subtract(
@@ -56,9 +49,8 @@ def dartsort(
         waveform_config=cfg.waveform_config,
         featurization_config=cfg.featurization_config,
         subtraction_config=cfg.subtraction_config,
-        n_jobs=n_jobs,
+        computation_config=cfg.computation_config,
         overwrite=overwrite,
-        device=device,
     )
     if motion_est is None:
         motion_est = estimate_motion(
@@ -73,32 +65,23 @@ def dartsort(
         return sorting
 
     # clustering E/M. start by initializing clusters.
-    sorting = cluster(
-        sub_h5,
+    sorting = initial_clustering(
         recording,
-        output_directory=output_directory,
-        overwrite=overwrite,
+        sorting=sorting,
         motion_est=motion_est,
         clustering_config=cfg.clustering_config,
+        computation_config=cfg.computation_config,
+    )
+    sorting = refine_clustering(
+        recording=recording,
+        sorting=sorting,
+        motion_est=motion_est,
+        refinement_config=cfg.refinement_config,
+        computation_config=cfg.computation_config,
     )
 
     # E/M iterations
     for step in range(cfg.matching_iterations):
-        # M step: refine clusters
-        if step > 0 or cfg.do_initial_split_merge:
-            sorting = split_merge(
-                sorting,
-                recording,
-                motion_est,
-                output_directory=output_directory,
-                overwrite=overwrite,
-                split_merge_config=cfg.split_merge_config,
-                n_jobs_split=n_jobs_cluster,
-                n_jobs_merge=n_jobs,
-                split_npz=f"split{step}.npz",
-                merge_npz=f"merge{step}.npz",
-            )
-
         # E step: deconvolution
         is_final = step == cfg.matching_iterations - 1
         prop = 1.0 if is_final else cfg.intermediate_matching_subsampling
@@ -111,28 +94,20 @@ def dartsort(
             waveform_config=cfg.waveform_config,
             featurization_config=cfg.featurization_config,
             matching_config=cfg.matching_config,
-            subsampling_proportion=prop,
-            n_jobs_templates=n_jobs,
-            n_jobs_match=n_jobs,
             overwrite=overwrite,
-            device=device,
+            computation_config=cfg.computation_config,
             hdf5_filename=f"matching{step}.h5",
             model_subdir=f"matching{step}_models",
         )
 
-    if cfg.do_final_split_merge:
-        sorting = split_merge(
-            sorting,
-            recording,
-            motion_est,
-            output_directory=output_directory,
-            overwrite=overwrite,
-            split_merge_config=cfg.split_merge_config,
-            n_jobs_split=n_jobs_cluster,
-            n_jobs_merge=n_jobs,
-            split_npz=f"split{step+1}.npz",
-            merge_npz=f"merge{step+1}.npz",
-        )
+        if (not is_final) or cfg.final_refinement:
+            sorting = refine_clustering(
+                recording=recording,
+                sorting=sorting,
+                motion_est=motion_est,
+                refinement_config=cfg.refinement_config,
+                computation_config=cfg.computation_config,
+            )
 
     # done~
     return sorting
@@ -172,88 +147,6 @@ def subtract(
         show_progress=show_progress,
     )
     return detections, output_hdf5_filename
-
-
-def cluster(
-    hdf5_filename,
-    recording,
-    output_directory=None,
-    overwrite=False,
-    motion_est=None,
-    clustering_config=default_clustering_config,
-    output_npz="initial_clustering.npz",
-):
-    if output_directory is not None:
-        output_npz = Path(output_directory) / output_npz
-        if not overwrite and output_npz.exists():
-            return DARTsortSorting.load(output_npz)
-
-    # TODO: have this accept a sorting and expect it to contain basic feats.
-    sorting = ensemble_chunks(
-        hdf5_filename,
-        recording,
-        clustering_config=clustering_config,
-        motion_est=motion_est,
-    )
-
-    if output_directory is not None:
-        sorting.save(output_npz)
-
-    return sorting
-
-
-def split_merge(
-    sorting,
-    recording,
-    motion_est,
-    output_directory=None,
-    overwrite=False,
-    split_merge_config=default_split_merge_config,
-    n_jobs_split=0,
-    n_jobs_merge=0,
-    split_npz="split.npz",
-    merge_npz="merge.npz",
-):
-    split_exists = merge_exists = False
-    if output_directory is not None:
-        split_npz = Path(output_directory) / split_npz
-        split_exists = split_npz.exists()
-        merge_npz = Path(output_directory) / merge_npz
-        merge_exists = merge_npz.exists()
-        if not overwrite and merge_exists:
-            return DARTsortSorting.load(merge_npz)
-
-    if not overwrite and split_exists:
-        split_sorting = DARTsortSorting.load(split_npz)
-    else:
-        split_sorting = split_clusters(
-            sorting,
-            split_strategy=split_merge_config.split_strategy,
-            recursive=split_merge_config.recursive_split,
-            n_jobs=n_jobs_split,
-            motion_est=motion_est,
-        )
-        if output_directory is not None:
-            split_sorting.save(split_npz)
-
-    if not overwrite and merge_exists:
-        merge_sorting = DARTsortSorting.load(merge_npz)
-    else:
-        merge_sorting = merge_templates(
-            split_sorting,
-            recording,
-            motion_est=motion_est,
-            template_config=split_merge_config.merge_template_config,
-            merge_distance_threshold=split_merge_config.merge_distance_threshold,
-            min_spatial_cosine=split_merge_config.min_spatial_cosine,
-            linkage=split_merge_config.linkage,
-            n_jobs=n_jobs_merge,
-            n_jobs_templates=n_jobs_merge,
-        )
-        if output_directory is not None:
-            merge_sorting.save(merge_npz)
-
-    return merge_sorting
 
 
 def match(

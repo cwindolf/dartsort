@@ -309,8 +309,8 @@ def ensemble_chunks(
             motion_est=motion_est,
             split_merge_config=clustering_config.split_merge_ensemble_config,
             n_jobs_split=computation_config.n_jobs_cpu,
-            n_jobs_merge=computation_config.actual_n_jobs_gpu,
-            device=computation_config.actual_device,
+            n_jobs_merge=computation_config.actual_n_jobs(),
+            device=computation_config.actual_device(),
             show_progress=True,
         )
 
