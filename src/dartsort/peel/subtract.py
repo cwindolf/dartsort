@@ -163,6 +163,16 @@ class SubtractionPeeler(BasePeeler):
         subtraction_config,
         featurization_config,
     ):
+        if subtraction_config.use_universal_templates:
+            from . import UniversalTemplatesMatchingPeeler
+
+            return UniversalTemplatesMatchingPeeler.from_config(
+                recording,
+                waveform_config=waveform_config,
+                subtraction_config=subtraction_config,
+                featurization_config=featurization_config,
+            )
+
         # waveform extraction channel neighborhoods
         geom = torch.tensor(recording.get_channel_locations())
         channel_index = make_channel_index(

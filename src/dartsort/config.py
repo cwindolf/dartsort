@@ -31,6 +31,7 @@ except ImportError:
 
 default_pretrained_path = files("dartsort.pretrained")
 default_pretrained_path = default_pretrained_path.joinpath("single_chan_denoiser.pt")
+default_pretrained_path = str(default_pretrained_path)
 
 
 def argfield(default=MISSING, default_factory=MISSING, arg_type=MISSING, cli=True):
@@ -170,6 +171,7 @@ class SubtractionConfig:
     singlechan_threshold: float = 50.0
     n_singlechan_templates: int = 10
     singlechan_alignment_padding: int = 20
+    use_universal_templates: bool = False
 
     # how will waveforms be denoised before subtraction?
     # users can also save waveforms/features during subtraction
