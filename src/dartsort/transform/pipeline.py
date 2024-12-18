@@ -127,8 +127,10 @@ def featurization_config_to_class_names_and_kwargs(
     from FeaturizationConfig objects.
     """
     fc = featurization_config
-    class_names_and_kwargs = []
+    if fc.skip:
+        return []
 
+    class_names_and_kwargs = []
     do_feats = not fc.denoise_only
 
     if do_feats and fc.save_input_voltages:
