@@ -55,7 +55,10 @@ class StableSpikeDataset(torch.nn.Module):
         # split indices are within kept_indices
         self.has_splits = split_names is not None
         self.split_names = split_names
-        self.split_ids = dict(zip(split_names, range(len(split_names))))
+        if self.has_splits:
+            self.split_ids = dict(zip(split_names, range(len(split_names))))
+        else:
+            self.split_ids = None
         self.split_mask = split_mask
 
         # pca module, to reconstructing wfs for vis
@@ -302,8 +305,8 @@ class StableSpikeDataset(torch.nn.Module):
             interpolation_sigma=self.interpolation_sigma,
         )
 
-    def restrict_to_split(self, indices, split_name="train"):
-        if not self.has_splits:
+    def restrict_to_split(self, indices, split_name=None):
+        if split_name is None or not self.has_splits:
             assert split_name is None
             return indices
         if len(self.split_names) == 1:

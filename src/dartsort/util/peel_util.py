@@ -6,6 +6,7 @@ import torch
 
 from ..localize.localize_util import check_resume_or_overwrite, localize_hdf5
 from .data_util import DARTsortSorting, batched_h5_read
+from . import job_util
 
 
 def run_peeler(
@@ -14,7 +15,7 @@ def run_peeler(
     hdf5_filename,
     model_subdir,
     featurization_config,
-    computation_config,
+    computation_config=None,
     chunk_starts_samples=None,
     overwrite=False,
     residual_filename=None,
@@ -32,6 +33,8 @@ def run_peeler(
         and featurization_config.do_localization
         and not featurization_config.nn_localization
     )
+    if computation_config is None:
+        computation_config = job_util.get_global_computation_config()
 
     if peeler_is_done(
         peeler,
@@ -60,9 +63,7 @@ def run_peeler(
         show_progress=show_progress,
         computation_config=computation_config,
     )
-    _gc(
-        computation_config.actual_n_jobs(), computation_config.actual_device()
-    )
+    _gc(computation_config.actual_n_jobs(), computation_config.actual_device())
 
     # do localization
     if do_localization:
@@ -78,9 +79,7 @@ def run_peeler(
             device=computation_config.actual_device(),
             localization_model=featurization_config.localization_model,
         )
-        _gc(
-            computation_config.actual_n_jobs(), computation_config.actual_device()
-        )
+        _gc(computation_config.actual_n_jobs(), computation_config.actual_device())
 
     if featurization_config.n_residual_snips:
         peeler.run_subsampled_peeling(
@@ -177,6 +176,7 @@ def subsample_waveforms(
     fit_max_reweighting=20.0,
 ):
     from ..cluster.density import get_smoothed_densities
+
     random_state = np.random.default_rng(random_state)
 
     with h5py.File(hdf5_filename) as h5:
@@ -184,16 +184,14 @@ def subsample_waveforms(
         n_wf = channels.size
         if n_wf > n_waveforms_fit:
             if fit_sampling == "random":
-                choices = random_state.choice(
-                    n_wf, size=n_waveforms_fit, replace=False
-                )
+                choices = random_state.choice(n_wf, size=n_waveforms_fit, replace=False)
             elif fit_sampling == "amp_reweighted":
                 volts = h5[voltages_dataset_name][:]
                 sigma = 1.06 * volts.std() * np.power(len(volts), -0.2)
                 sample_p = get_smoothed_densities(volts[:, None], sigmas=sigma)
                 sample_p = sample_p.mean() / sample_p
                 sample_p = sample_p.clip(
-                    1. / fit_max_reweighting,
+                    1.0 / fit_max_reweighting,
                     fit_max_reweighting,
                 )
                 sample_p /= sample_p.sum()
@@ -204,9 +202,7 @@ def subsample_waveforms(
                 assert False
             choices.sort()
             channels = channels[choices]
-            waveforms = batched_h5_read(
-                h5[waveforms_dataset_name], choices
-            )
+            waveforms = batched_h5_read(h5[waveforms_dataset_name], choices)
         else:
             waveforms = h5[waveforms_dataset_name][:]
 

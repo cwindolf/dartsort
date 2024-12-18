@@ -1,3 +1,4 @@
+from os import pipe
 import torch
 from dartsort.util.data_util import SpikeDataset
 
@@ -86,39 +87,57 @@ class BaseWaveformAutoencoder(BaseWaveformDenoiser, BaseWaveformFeaturizer):
 
 class Passthrough(BaseWaveformDenoiser, BaseWaveformFeaturizer):
 
-    def __init__(self, pipeline, geom=None, channel_index=None):
-        t = [t for t in pipeline if t.is_featurizer]
-        if not len(t):
-            t = pipeline.transformers
-        name = f"passthrough_{t[0].name}"
-        super().__init__(name=name)
+    def __init__(
+        self, pipeline=None, geom=None, channel_index=None, name=None, name_prefix=None
+    ):
+        t = []
+        if pipeline is not None:
+            t = [t for t in pipeline if t.is_featurizer]
+            if not len(t):
+                t = pipeline.transformers
+            if name is None:
+                name = f"passthrough_{t[0].name}"
+        super().__init__(name=name, name_prefix=name_prefix)
         self.pipeline = pipeline
 
     def needs_precompute(self):
+        if self.pipeline is None:
+            return False
         return self.pipeline.needs_precompute()
 
     def precompute(self):
+        if self.pipeline is None:
+            return
         return self.pipeline.precompute()
 
     def needs_fit(self):
+        if self.pipeline is None:
+            return False
         return self.pipeline.needs_fit()
 
     def fit(self, waveforms, max_channels, recording=None):
+        if self.pipeline is None:
+            return
         self.pipeline.fit(waveforms, max_channels)
 
     def forward(self, waveforms, max_channels=None):
+        if self.pipeline is None:
+            return waveforms, {}
         pipeline_waveforms, pipeline_features = self.pipeline(waveforms, max_channels)
         return waveforms, pipeline_features
 
     @property
     def spike_datasets(self):
         datasets = []
-        for t in self.pipeline.transformers:
-            if t.is_featurizer:
-                datasets.extend(t.spike_datasets)
+        if self.pipeline is not None:
+            for t in self.pipeline.transformers:
+                if t.is_featurizer:
+                    datasets.extend(t.spike_datasets)
         return datasets
 
     def transform(self, waveforms, max_channels=None):
+        if self.pipeline is None:
+            return {}
         pipeline_waveforms, pipeline_features = self.pipeline(waveforms, max_channels)
         return pipeline_features
 

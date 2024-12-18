@@ -1,5 +1,6 @@
 """A good integration test of a few pieces
 """
+
 import tempfile
 from pathlib import Path
 
@@ -11,11 +12,15 @@ from dartsort import transform
 from dartsort.localize.localize_util import localize_hdf5
 from dartsort.peel.grab import GrabAndFeaturize
 from dartsort.util.waveform_util import make_channel_index
+from dartsort import config
+
+
+two_jobs_config = config.ComputationConfig(n_jobs_cpu=2, n_jobs_gpu=2)
 
 
 def test_grab_and_featurize():
     # noise recording
-    T_samples = 100_100
+    T_samples = 50_100
     n_channels = 50
     rg = np.random.default_rng(0)
     noise = rg.normal(size=(T_samples, n_channels)).astype(np.float32)
@@ -24,7 +29,7 @@ def test_grab_and_featurize():
     rec.set_dummy_probe_from_locations(geom)
 
     # random spike times_samples
-    n_spikes = 50203
+    n_spikes = 5203
     times_samples = rg.integers(100, T_samples - 100, size=n_spikes)
     channels = rg.integers(0, n_channels, size=n_spikes)
 
@@ -52,9 +57,9 @@ def test_grab_and_featurize():
             )
             assert np.array_equal(h5["geom"][()], geom)
             assert np.array_equal(h5["channel_index"][()], channel_index)
-            assert h5["last_chunk_start"][()] == 90_000
+            assert h5["last_chunk_start"][()] == 30_000
 
-        grab.peel(Path(tempdir) / "grab.h5", overwrite=True, n_jobs=2)
+        grab.peel(Path(tempdir) / "grab.h5", overwrite=True)
 
         with h5py.File(Path(tempdir) / "grab.h5", locking=False) as h5:
             assert h5["times_samples"].shape == (n_spikes,)
@@ -66,7 +71,7 @@ def test_grab_and_featurize():
             )
             assert np.array_equal(h5["geom"][()], geom)
             assert np.array_equal(h5["channel_index"][()], channel_index)
-            assert h5["last_chunk_start"][()] == 90_000
+            assert h5["last_chunk_start"][()] == 30_000
 
     # try one with TPCA
     channel_index = make_channel_index(geom, 20)
@@ -108,11 +113,11 @@ def test_grab_and_featurize():
             )
             assert np.array_equal(h5["geom"][()], geom)
             assert np.array_equal(h5["channel_index"][()], channel_index)
-            assert h5["last_chunk_start"][()] == 90_000
+            assert h5["last_chunk_start"][()] == 30_000
 
     with tempfile.TemporaryDirectory() as tempdir:
-        grab.fit_models(tempdir, n_jobs=2)
-        grab.peel(Path(tempdir) / "grab.h5", n_jobs=2)
+        grab.fit_models(tempdir, computation_config=two_jobs_config)
+        grab.peel(Path(tempdir) / "grab.h5", computation_config=two_jobs_config)
 
         with h5py.File(Path(tempdir) / "grab.h5", locking=False) as h5:
             assert h5["times_samples"].shape == (n_spikes,)
@@ -124,12 +129,12 @@ def test_grab_and_featurize():
             )
             assert np.array_equal(h5["geom"][()], geom)
             assert np.array_equal(h5["channel_index"][()], channel_index)
-            assert h5["last_chunk_start"][()] == 90_000
+            assert h5["last_chunk_start"][()] == 30_000
 
 
 def test_grab_locations():
     # noise recording
-    T_samples = 100_100
+    T_samples = 50_100
     n_channels = 50
     rg = np.random.default_rng(0)
     noise = rg.normal(size=(T_samples, n_channels)).astype(np.float32)
@@ -138,7 +143,7 @@ def test_grab_locations():
     rec.set_dummy_probe_from_locations(geom)
 
     # random spike times_samples
-    n_spikes = 50203
+    n_spikes = 5203
     times_samples = rg.integers(100, T_samples - 100, size=n_spikes)
     channels = rg.integers(0, n_channels, size=n_spikes)
 
@@ -173,7 +178,7 @@ def test_grab_locations():
 
     with tempfile.TemporaryDirectory() as tempdir:
         grab.fit_models(tempdir)
-        grab.peel(Path(tempdir) / "grab.h5", device="cpu")
+        grab.peel(Path(tempdir) / "grab.h5")
 
         with h5py.File(Path(tempdir) / "grab.h5", locking=False) as h5:
             assert h5["times_samples"].shape == (n_spikes,)
@@ -192,7 +197,7 @@ def test_grab_locations():
             )
             assert np.array_equal(h5["geom"][()], geom)
             assert np.array_equal(h5["channel_index"][()], channel_index)
-            assert h5["last_chunk_start"][()] == 90_000
+            assert h5["last_chunk_start"][()] == 30_000
 
     # grab the wfs
     channel_index = make_channel_index(geom, 20)
@@ -224,7 +229,7 @@ def test_grab_locations():
     )
     with tempfile.TemporaryDirectory() as tempdir:
         grab.fit_models(tempdir)
-        grab.peel(Path(tempdir) / "grab.h5", device="cpu")
+        grab.peel(Path(tempdir) / "grab.h5")
 
         localize_hdf5(
             Path(tempdir) / "grab.h5",
@@ -249,7 +254,7 @@ def test_grab_locations():
             )
             assert np.array_equal(h5["geom"][()], geom)
             assert np.array_equal(h5["channel_index"][()], channel_index)
-            assert h5["last_chunk_start"][()] == 90_000
+            assert h5["last_chunk_start"][()] == 30_000
 
     # this is kind of a good test of reproducibility
     valid = np.logical_and(

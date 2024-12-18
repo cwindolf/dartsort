@@ -1,4 +1,7 @@
-from spikeinterface.preprocessing.basepreprocessor import BasePreprocessor, BasePreprocessorSegment
+from spikeinterface.preprocessing.basepreprocessor import (
+    BasePreprocessor,
+    BasePreprocessorSegment,
+)
 
 
 class PeeledResidualRecording(BasePreprocessor):
@@ -8,7 +11,7 @@ class PeeledResidualRecording(BasePreprocessor):
         super().__init__(peeler.recording, dtype=peeler.dtype)
         assert peeler.recording.get_num_segments() == 1
         self.add_recording_segment(PeeledResidualSegment(peeler))
-        self._kwargs = dict(peeler=peeler, recording=recording)
+        self._kwargs = dict(peeler=peeler)
 
 
 class PeeledResidualSegment(BasePreprocessorSegment):
@@ -24,5 +27,4 @@ class PeeledResidualSegment(BasePreprocessorSegment):
             return_residual=True,
             skip_features=True,
         )
-        return stuff['residual'].numpy(force=True)[:, channel_indices]
-        
+        return stuff["residual"].numpy(force=True)[:, channel_indices]

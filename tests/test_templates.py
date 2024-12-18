@@ -4,8 +4,13 @@ from pathlib import Path
 import numpy as np
 import spikeinterface.core as sc
 from dartsort import config
-from dartsort.templates import (get_templates, pairwise, pairwise_util,
-                                template_util, templates)
+from dartsort.templates import (
+    get_templates,
+    pairwise,
+    pairwise_util,
+    template_util,
+    templates,
+)
 from dartsort.util.data_util import DARTsortSorting
 from dredge.motion_util import IdentityMotionEstimate, get_motion_estimate
 from test_util import no_overlap_recording_sorting
@@ -22,7 +27,6 @@ def test_roundtrip(tmp_path):
             realign_peaks=False,
         ),
         motion_est=IdentityMotionEstimate(),
-        n_jobs=0,
         save_folder=tmp_path,
         overwrite=True,
     )
@@ -172,8 +176,7 @@ def test_main_object():
             denoising_rank=2,
         ),
         motion_est=me,
-        trough_offset_samples=0,
-        spike_length_samples=2,
+        waveform_config=config.WaveformConfig(ms_before=0, ms_after=2000),
     )
 
 
@@ -256,7 +259,9 @@ def test_pconv():
         registered_template_depths_um=np.zeros(5),
     )
     geom = np.c_[np.zeros(c), np.arange(1, c + 1).astype(float)]
-    motion_est = get_motion_estimate(time_bin_centers_s=np.array([0., 1, 2]), displacement=[-1., 0, 1])
+    motion_est = get_motion_estimate(
+        time_bin_centers_s=np.array([0.0, 1, 2]), displacement=[-1.0, 0, 1]
+    )
 
     # visualize shifted temps
     # for tix in range(5):
@@ -327,7 +332,9 @@ def test_pconv():
             for shiftb in (-1, 0, 1):
                 for tixa in range(5):
                     for tixb in range(5):
-                        ixa, ixb, pconv = pconvdb.query(tixa, tixb, shifts_a=shifta, shifts_b=shiftb)
+                        ixa, ixb, pconv = pconvdb.query(
+                            tixa, tixb, shifts_a=shifta, shifts_b=shiftb
+                        )
                         if shifta != shiftb:
                             # this is because we are rigid here
                             assert not ixa.numel()

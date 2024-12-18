@@ -379,7 +379,6 @@ def combine_sortings(sortings, dodge=False):
     sorting = replace(sortings[0], labels=labels, times_samples=times_samples)
 
     if dodge:
-        print([x.shape for x in label_to_sorting_index])
         label_to_sorting_index = np.concatenate(label_to_sorting_index)
         label_to_original_label = np.concatenate(label_to_original_label)
         return label_to_sorting_index, label_to_original_label, sorting

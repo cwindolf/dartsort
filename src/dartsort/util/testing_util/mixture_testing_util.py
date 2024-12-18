@@ -136,6 +136,8 @@ def simulate_moppca(
         extract_features=x,
         core_neighborhoods=neighbs,
         extract_neighborhoods=neighbs,
+        split_names=["train"],
+        split_mask=torch.zeros(len(x), dtype=int),
     )
     return dict(
         data=data,
