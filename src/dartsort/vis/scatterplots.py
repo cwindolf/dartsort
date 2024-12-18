@@ -287,7 +287,7 @@ def scatter_time_vs_depth(
             if geom is None:
                 geom = h5["geom"][:]
 
-    return scatter_feature_vs_depth(
+    ax, scat = scatter_feature_vs_depth(
         times_s,
         depths_um,
         times_s=times_s,
@@ -311,6 +311,11 @@ def scatter_time_vs_depth(
         time_range=time_range,
         **scatter_kw,
     )
+
+    if time_range is not None:
+        ax.set_xlim(time_range)
+
+    return ax, scat
 
 
 def scatter_x_vs_depth(
