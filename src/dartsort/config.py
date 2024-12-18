@@ -16,6 +16,7 @@ object can then be passed into the high level functions like
 """
 
 from dataclasses import MISSING, field
+from typing import Literal
 
 import numpy as np
 import torch
@@ -105,6 +106,7 @@ class FeaturizationConfig:
     typical case can manually instantiate a WaveformPipeline
     and pass it into their peeler.
     """
+
     skip: bool = False
 
     # -- denoising configuration
@@ -129,8 +131,8 @@ class FeaturizationConfig:
     do_localization: bool = True
     localization_radius: float = 100.0
     # these are saved always if do_localization
-    localization_amplitude_type: str = "peak"
-    localization_model: str = "pointsource"
+    localization_amplitude_type: Literal["peak", "ptp"] = "peak"
+    localization_model: Literal["pointsource", "dipole"] = "pointsource"
     nn_localization: bool = True
 
     # -- further info about denoising
@@ -339,7 +341,41 @@ class ClusteringConfig:
     # -- ensembling
     ensemble_strategy: str | None = argfield(default=None, arg_type=str)
     chunk_size_s: float = 300.0
-    split_merge_ensemble_config: SplitMergeConfig = SplitMergeConfig()
+    split_merge_ensemble_config: SplitMergeConfig | None = None
+
+
+@dataclass(frozen=True, kw_only=True, slots=True)
+class RefinementConfig:
+    refinement_stragegy: Literal["gmm", "splitmerge"] = "gmm"
+
+    # -- gmm parameters
+    # noise params
+    cov_kind = "full"
+    # feature params
+    core_radius: float = 35.0
+    interpolation_sigma: float = 20.0
+    val_proportion: float = 0.25
+    max_n_spikes: float | int = argfield(default=np.inf, arg_type=float)
+    # model params
+    signal_rank: int = 0
+    n_spikes_fit: int = 4096
+    n_em_iters: int = 25
+    distance_metric: Literal["noise_metric", "kl", "reverse_kl", "symkl"] = "symkl"
+    distance_normalization_kind: Literal["none", "noise", "channels"] = "noise"
+    merge_distance_threshold: float = 1.5
+    # if None, switches to bimodality
+    merge_criterion_threshold: float | None = 0.0
+    merge_criterion: Literal[
+        "heldout_loglik", "heldout_ccl", "loglik", "ccl", "aic", "bic", "icl"
+    ] = "heldout_ccl"
+    merge_bimodality_threshold: float = 0.05
+    em_converged_prop: float = 0.02
+    em_converged_churn: float = 0.01
+    em_converged_atol: float = 1e-2
+    n_total_iters: int = 3
+
+    # if someone wants this
+    split_merge_config: SplitMergeConfig | None = None
 
 
 @dataclass(frozen=True, kw_only=True, slots=True)
@@ -364,23 +400,41 @@ class ComputationConfig:
 
 
 @dataclass(frozen=True, kw_only=True, slots=True)
-class DARTsortConfig:
+class DARTsortInternalConfig:
     waveform_config: WaveformConfig = WaveformConfig()
     featurization_config: FeaturizationConfig = FeaturizationConfig()
     subtraction_config: SubtractionConfig = SubtractionConfig()
     template_config: TemplateConfig = TemplateConfig()
     clustering_config: ClusteringConfig = ClusteringConfig()
-    split_merge_config: SplitMergeConfig = SplitMergeConfig()
+    refinement_config: RefinementConfig = RefinementConfig()
     matching_config: MatchingConfig = MatchingConfig()
     motion_estimation_config: MotionEstimationConfig = MotionEstimationConfig()
     computation_config: ComputationConfig = ComputationConfig()
 
     # high level behavior
     subtract_only: bool = False
-    do_initial_split_merge: bool = True
-    do_final_split_merge: bool = False
+    final_refinement: bool = True
     matching_iterations: int = 1
     intermediate_matching_subsampling: float = 1.0
+
+    def to_internal_config(self):
+        return self
+
+
+@dataclass(frozen=True, kw_only=True, slots=True)
+class DeveloperConfig:
+    pass
+
+    def to_internal_config(self):
+        return DARTsortInternalConfig()
+
+
+@dataclass(frozen=True, kw_only=True, slots=True)
+class DARTsortUserConfig:
+    pass
+
+    def to_internal_config(self):
+        return DARTsortInternalConfig()
 
 
 default_waveform_config = WaveformConfig()
@@ -406,3 +460,4 @@ default_matching_config = MatchingConfig()
 default_motion_estimation_config = MotionEstimationConfig()
 default_computation_config = ComputationConfig()
 default_dartsort_config = DARTsortConfig()
+default_refinement_config = RefinementConfig()

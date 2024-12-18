@@ -139,7 +139,7 @@ class StableSpikeDataset(torch.nn.Module):
         rg = random_seed
         if kept_inds.size > max_n_spikes:
             rg = np.random.default_rng(rg)
-            kept_kept = rg.choice(kept_inds.size, size=max_n_spikes, replace=False)
+            kept_kept = rg.choice(kept_inds.size, size=int(max_n_spikes), replace=False)
             kept_kept.sort()
             keep[kept_inds] = 0
             keep[kept_inds[kept_kept]] = 1

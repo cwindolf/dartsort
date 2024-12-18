@@ -43,14 +43,14 @@ class SpikeMixtureModel(torch.nn.Module):
         noise: noise_util.EmbeddedNoise,
         n_spikes_fit: int = 4096,
         mean_kind="full",
-        cov_kind="zero",
+        cov_kind="ppca",
         use_proportions: bool = True,
         proportions_sample_size: int = 2**16,
         channels_strategy: Literal["all", "snr", "count"] = "count",
         channels_count_min: float = 25.0,
         channels_snr_amp: float = 1.0,
         with_noise_unit: bool = True,
-        prior_pseudocount: float = 10.0,
+        prior_pseudocount: float = 0.0,
         ppca_rank: int = 0,
         ppca_inner_em_iter: int = 1,
         ppca_atol: float = 0.05,
@@ -61,17 +61,17 @@ class SpikeMixtureModel(torch.nn.Module):
         kmeans_n_iter: int = 100,
         kmeans_drop_prop: float = 0.025,
         kmeans_with_proportions: bool = False,
-        kmeans_kmeanspp_initial: str = "mean",
+        kmeans_kmeanspp_initial: str = "random",
         split_em_iter: int = 0,
         split_whiten: bool = True,
         ppca_in_split: bool = False,
-        distance_metric: Literal["noise_metric", "kl", "reverse_kl", "js"] = "js",
-        distance_normalization_kind: Literal["none", "noise", "channels"] = "channels",
+        distance_metric: Literal["noise_metric", "kl", "reverse_kl", "symkl"] = "symkl",
+        distance_normalization_kind: Literal["none", "noise", "channels"] = "noise",
         criterion_normalization_kind: Literal["none", "noise", "channels"] = "none",
         merge_linkage: str = "single",
         merge_distance_threshold: float = 1.0,
         merge_bimodality_threshold: float = 0.1,
-        merge_criterion_threshold: float = 1.0,
+        merge_criterion_threshold: float | None = 1.0,
         merge_criterion: Literal[
             "heldout_loglik", "heldout_ccl", "loglik", "ccl", "aic", "bic", "icl"
         ] = "heldout_ccl",
@@ -81,7 +81,7 @@ class SpikeMixtureModel(torch.nn.Module):
         merge_bimodality_weighted: bool = True,
         merge_bimodality_score_kind: str = "tv",
         merge_bimodality_masked: bool = False,
-        merge_sym_function: callable = np.minimum,
+        merge_sym_function: np.ufunc = np.minimum,
         em_converged_prop: float = 0.02,
         em_converged_churn: float = 0.01,
         em_converged_atol: float = 1e-2,
@@ -767,7 +767,7 @@ class SpikeMixtureModel(torch.nn.Module):
         if kind == "kl":
             kind_ = "reverse_kl"
             transposed = True
-        if kind == "js":
+        if kind == "symkl":
             kind_ = "reverse_kl"
             averaged = True
 
@@ -2273,15 +2273,15 @@ class GaussianUnit(torch.nn.Module):
         """
         if kind == "noise_metric":
             return self.noise_metric_divergence(other_means)
-        if kind in ("kl", "js"):
+        if kind in ("kl", "symkl"):
             kl1 = self.kl_divergence(other_means, other_covs, other_logdets)
             if kind == "kl":
                 return kl1
-        if kind in ("reverse_kl", "js"):
+        if kind in ("reverse_kl", "symkl"):
             kl2 = self.reverse_kl_divergence(other_means, other_covs, other_logdets)
             if kind == "reverse_kl":
                 return kl2
-        if kind == "js":
+        if kind == "symkl":
             return 0.5 * (kl1 + kl2)
         raise ValueError(f"Unknown divergence {kind=}.")
 
