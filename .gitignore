@@ -12,6 +12,8 @@ notebook/.stan/*
 figs/*
 .idea
 *.swp
+*.sublime-workspace
+*.sublime-project
 
 ## Core latex/pdflatex auxiliary files:
 *.aux
