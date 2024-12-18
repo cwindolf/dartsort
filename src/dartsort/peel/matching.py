@@ -130,7 +130,7 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
         return self._needs_precompute
 
     def precompute_peeling_data(
-        self, save_folder, overwrite=False, n_jobs=0, device=None
+        self, save_folder, overwrite=False, computation_config=None
     ):
         self.build_template_data(
             save_folder,
@@ -140,8 +140,7 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
             svd_compression_rank=self.svd_compression_rank,
             min_channel_amplitude=self.min_channel_amplitude,
             overwrite=overwrite,
-            n_jobs=n_jobs,
-            device=device,
+            computation_config=computation_config,
         )
         # couple more torch buffers
         self.register_buffer(
@@ -235,10 +234,14 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
         svd_compression_rank=10,
         min_channel_amplitude=1.0,
         overwrite=False,
-        n_jobs=0,
-        device=None,
+        computation_config=None,
     ):
         dtype = template_data.templates.dtype
+        unit_ids, id_counts = np.unique(template_data.unit_ids, return_counts=True)
+        have_groups = np.any(id_counts > 1)
+        if not have_groups:
+            # the logic of coarsening is not needed.
+            self.coarse_objective = False
         low_rank_templates = template_util.svd_compress_templates(
             template_data,
             min_channel_amplitude=min_channel_amplitude,
@@ -259,21 +262,21 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
 
         # handle the case where objective is not superres
         if self.coarse_objective:
-            coarse_template_data = template_data.coarsen()
-            coarse_low_rank_templates = template_util.svd_compress_templates(
-                coarse_template_data,
+            objective_temp_data = template_data.coarsen()
+            objective_low_rank_temps = template_util.svd_compress_templates(
+                objective_temp_data,
                 min_channel_amplitude=min_channel_amplitude,
                 rank=svd_compression_rank,
             )
-            temporal_components = coarse_low_rank_templates.temporal_components.astype(
+            temporal_components = objective_low_rank_temps.temporal_components.astype(
                 dtype
             )
-            singular_values = coarse_low_rank_templates.singular_values.astype(dtype)
-            spatial_components = coarse_low_rank_templates.spatial_components.astype(
+            singular_values = objective_low_rank_temps.singular_values.astype(dtype)
+            spatial_components = objective_low_rank_temps.spatial_components.astype(
                 dtype
             )
             self.objective_template_depths_um = (
-                coarse_template_data.registered_template_depths_um
+                objective_temp_data.registered_template_depths_um
             )
             self.register_buffer(
                 "objective_temporal_components", torch.tensor(temporal_components)
@@ -286,8 +289,8 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
             )
             self.obj_n_templates = spatial_components.shape[0]
         else:
-            coarse_template_data = template_data
-            coarse_low_rank_templates = low_rank_templates
+            objective_temp_data = template_data
+            objective_low_rank_temps = low_rank_templates
             self.objective_template_depths_um = self.registered_template_depths_um
             self.register_buffer(
                 "objective_temporal_components", self.temporal_components
@@ -298,7 +301,7 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
             )
             self.obj_n_templates = self.n_templates
         self.handle_template_groups(
-            coarse_template_data.unit_ids, self.template_data.unit_ids
+            objective_temp_data.unit_ids, self.template_data.unit_ids
         )
         convlen = self.chunk_length_samples + self.chunk_margin_samples
         block_size, *_ = spiketorch._calc_oa_lens(convlen, self.spike_length_samples)
@@ -319,8 +322,8 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
         )
         self.pairwise_conv_db = CompressedPairwiseConv.from_template_data(
             save_folder / "pconv.h5",
-            template_data=coarse_template_data,
-            low_rank_templates=coarse_low_rank_templates,
+            template_data=objective_temp_data,
+            low_rank_templates=objective_low_rank_temps,
             template_data_b=template_data,
             low_rank_templates_b=low_rank_templates,
             compressed_upsampled_temporal=compressed_upsampled_temporal,
@@ -330,8 +333,7 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
             overwrite=overwrite,
             conv_ignore_threshold=self.conv_ignore_threshold,
             coarse_approx_error_threshold=self.coarse_approx_error_threshold,
-            device=device,
-            n_jobs=n_jobs,
+            computation_config=computation_config,
         )
 
         self.fixed_output_data += [
@@ -441,10 +443,8 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
         match_results = self.match_chunk(
             traces,
             compressed_template_data,
-            trough_offset_samples=self.trough_offset_samples,
             left_margin=left_margin,
             right_margin=right_margin,
-            threshold=self.threshold,
             return_residual=return_residual,
             return_conv=return_conv,
         )
@@ -549,10 +549,8 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
         self,
         traces,
         compressed_template_data,
-        trough_offset_samples=42,
         left_margin=0,
         right_margin=0,
-        threshold=30,
         return_collisioncleaned_waveforms=True,
         return_residual=False,
         return_conv=False,
