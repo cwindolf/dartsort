@@ -655,7 +655,8 @@ def grab_main_channels(waveforms, main_channels, channel_index, keepdim=False):
 
 def grab_main_channels_torch(waveforms, channels, channel_index):
     nc = len(channel_index)
-    _, rpos = (channel_index == torch.arange(nc).unsqueeze(1)).nonzero(as_tuple=True)
+    chans_arange = torch.arange(nc).to(channel_index)
+    _, rpos = (channel_index == chans_arange.unsqueeze(1)).nonzero(as_tuple=True)
     assert rpos.shape == (nc,)
     inds = rpos[channels]
     return torch.take_along_dim(waveforms, inds[:, None, None], dim=2)

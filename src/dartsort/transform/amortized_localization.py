@@ -28,17 +28,18 @@ class AmortizedLocalization(BaseWaveformFeaturizer):
         name=None,
         name_prefix="",
         epochs=100,
-        learning_rate=1e-3,
-        batch_size=32,
+        learning_rate=3e-3,
+        batch_size=16,
+        inference_batch_size=2**14,
         norm_kind="layernorm",
         alpha_closed_form=True,
         amplitudes_only=True,
         prior_variance=None,
         convergence_eps=0.01,
-        min_epochs=5,
+        min_epochs=10,
         scale_loss_by_mean=True,
         reference='main_channel',
-        channelwise_dropout_p=0.01,
+        channelwise_dropout_p=0.00,
         examples_per_epoch=50_000,
         val_split_p=0.3,
         random_seed=0,
@@ -73,6 +74,7 @@ class AmortizedLocalization(BaseWaveformFeaturizer):
         self.examples_per_epoch = examples_per_epoch
         self.val_split_p = val_split_p
         self.random_seed = random_seed
+        self.inference_batch_size = inference_batch_size
 
         self.register_buffer(
             "padded_geom", F.pad(self.geom.to(torch.float), (0, 0, 0, 1))
@@ -90,6 +92,12 @@ class AmortizedLocalization(BaseWaveformFeaturizer):
 
     def needs_fit(self):
         return self._needs_fit
+
+    def fit(self, waveforms, max_channels, recording=None):
+        with torch.enable_grad():
+            self._fit(waveforms, max_channels)
+        self.eval()
+        self._needs_fit = False
 
     def initialize_net(self, spike_length_samples):
         if self.encoder is not None:
@@ -359,13 +367,7 @@ class AmortizedLocalization(BaseWaveformFeaturizer):
                     pbar.set_description(f"Localizer converged at epoch={epoch} {desc}")
                     break
 
-    def fit(self, waveforms, max_channels, recording=None):
-        with torch.enable_grad():
-            self._fit(waveforms, max_channels)
-        self.eval()
-        self._needs_fit = False
-
-    def transform(self, waveforms, max_channels, return_extra=False):
+    def transform_unbatched(self, waveforms, max_channels, return_extra=False):
         # handle getting amplitudes, reindexing channels, and amplitudes_only logic
         if waveforms.ndim == 2:
             assert self.amplitudes_only
@@ -394,6 +396,7 @@ class AmortizedLocalization(BaseWaveformFeaturizer):
         x_mask = torch.cat((waveforms, mask.unsqueeze(1)), dim=1)
 
         # encode
+        # this is where we need to batch
         mu = self.encoder(x_mask)
         var = None
         if self.variational:
@@ -412,7 +415,18 @@ class AmortizedLocalization(BaseWaveformFeaturizer):
                 obs_amps=obs_amps,
                 pred_amps=pred_amps,
                 mx=mx,
-                mz=mz,
+                mz=mz
             )
 
+        return locs
+
+    def transform(self, waveforms, max_channels):
+        n = len(waveforms)
+        if n > self.inference_batch_size:
+            locs = waveforms.new_empty((n, self.latent_dim))
+            for bs in range(0, n, self.inference_batch_size):
+                be = bs + self.inference_batch_size
+                locs[bs:be] = self.transform_unbatched(waveforms[bs:be], max_channels[bs:be])
+        else:
+            locs = self.transform_unbatched(waveforms, max_channels)
         return {self.name: locs}

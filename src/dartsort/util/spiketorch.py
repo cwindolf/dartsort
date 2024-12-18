@@ -46,7 +46,7 @@ def taper(waveforms, t_start=10, t_end=20, dim=1):
         window = window.unsqueeze(0)
     for j in range(dim + 1, waveforms.ndim):
         window = window.unsqueeze(-1)
-    return waveforms * window
+    return waveforms * window.to(waveforms)
 
 
 def ravel_multi_index(multi_index, dims):
