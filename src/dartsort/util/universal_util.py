@@ -77,8 +77,8 @@ def get_singlechan_centroids(
             warnings.warn(wning)
         shift = min(max(shift, -alignment_padding), alignment_padding)
         temp = temp[shift + alignment_padding : shift + trim_end]
-        temps.append(temp)
-    temps = torch.from_numpy(np.array(temps))
+        temps.append(torch.asarray(temp))
+    temps = torch.stack(temps, dim=0)
 
     # taper and normalize
     temps = spiketorch.taper(temps, t_start=taper_start, t_end=taper_end)
