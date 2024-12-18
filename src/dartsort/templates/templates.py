@@ -10,8 +10,8 @@ from dartsort.util import data_util, drift_util
 
 from .get_templates import get_templates
 from .superres_util import superres_sorting
-from .template_util import (get_realigned_sorting, get_template_depths,
-                            weighted_average)
+from .template_util import get_realigned_sorting, get_template_depths, weighted_average
+from ..util import job_util
 
 _motion_error_prefix = (
     "If template_config has registered_templates==True "
@@ -148,13 +148,16 @@ class TemplateData:
         save_npz_name="template_data.npz",
         localizations_dataset_name="point_source_localizations",
         with_locs=False,
-        n_jobs=0,
         units_per_job=8,
         tsvd=None,
-        device=None,
         return_realigned_sorting=False,
+        computation_config=None,
     ):
+        if computation_config is None:
+            computation_config = job_util.get_global_computation_config()
+
         if save_folder is not None:
+            assert not return_realigned_sorting
             save_folder = Path(save_folder)
             if not save_folder.exists():
                 save_folder.mkdir()
@@ -205,7 +208,7 @@ class TemplateData:
             denoising_rank=template_config.denoising_rank,
             denoising_fit_radius=template_config.denoising_fit_radius,
             denoising_snr_threshold=template_config.denoising_snr_threshold,
-            device=device,
+            device=computation_config.actual_device(),
             units_per_job=units_per_job,
         )
         if template_config.registered_templates and motion_est is not None:
@@ -227,7 +230,7 @@ class TemplateData:
                 **kwargs,
                 realign_peaks=True,
                 low_rank_denoising=False,
-                n_jobs=n_jobs,
+                n_jobs=computation_config.actual_n_jobs(),
             )
         kwargs["low_rank_denoising"] = template_config.low_rank_denoising
         kwargs["realign_peaks"] = False
@@ -315,16 +318,17 @@ def get_chunked_templates(
     save_npz_name="chunked_template_data.npz",
     localizations_dataset_name="point_source_localizations",
     with_locs=True,
-    n_jobs=0,
     units_per_job=8,
-    device=None,
-    trough_offset_samples=42,
-    spike_length_samples=121,
     tsvd=None,
     random_seed=0,
+    computation_config=None,
+    waveform_config=config.default_waveform_config,
 ):
     """Save the effort of recomputing several TPCAs"""
     rg = np.random.default_rng(random_seed)
+
+    if computation_config is None:
+        computation_config = job_util.get_global_computation_config()
 
     if global_sorting is None:
         assert chunk_sortings is not None
@@ -346,7 +350,7 @@ def get_chunked_templates(
             spike_length_samples=spike_length_samples,
             spikes_per_unit=template_config.spikes_per_unit,
             realign_max_sample_shift=template_config.realign_max_sample_shift,
-            n_jobs=n_jobs,
+            n_jobs=computation_config.actual_n_jobs(),
             random_seed=rg,
         )
         template_config = replace(template_config, realign_peaks=False)
@@ -375,11 +379,9 @@ def get_chunked_templates(
         save_npz_name=save_npz_name,
         localizations_dataset_name=localizations_dataset_name,
         with_locs=with_locs,
-        n_jobs=n_jobs,
         units_per_job=units_per_job,
-        device=device,
-        trough_offset_samples=trough_offset_samples,
-        spike_length_samples=spike_length_samples,
+        computation_config=computation_config,
+        waveform_config=waveform_config,
         tsvd=tsvd,
     )
     print(f"{full_template_data.unit_ids.shape=}")

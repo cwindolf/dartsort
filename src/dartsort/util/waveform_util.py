@@ -341,46 +341,6 @@ def make_contiguous_channel_index(n_channels, n_neighbors=40):
     return channel_index
 
 
-def make_pitch_channel_index(geom, n_neighbor_rows=1, pitch=None):
-    """Channel neighborhoods which are whole pitches"""
-    n_channels = geom.shape[0]
-    if pitch is None:
-        pitch = get_pitch(geom)
-    neighbors = (
-        np.abs(geom[:, 1][:, None] - geom[:, 1][None, :]) <= n_neighbor_rows * pitch
-    )
-    channel_index = np.full((n_channels, neighbors.sum(1).max()), n_channels)
-    for c in range(n_channels):
-        my_neighbors = np.flatnonzero(neighbors[c])
-        channel_index[c, : my_neighbors.size] = my_neighbors
-    return channel_index
-
-
-def make_pitch_channel_index_no_nans_for_plotting(geom, n_neighbor_rows=1, pitch=None):
-    """
-    Channel neighborhoods which are whole pitches
-    This function will select all the n_neighbor_rows inside the probe so that wfs are not nans
-    """
-    n_channels = geom.shape[0]
-    if pitch is None:
-        pitch = get_pitch(geom)
-    neighbors = (
-        np.abs(geom[:, 1][:, None] - geom[:, 1][None, :]) <= n_neighbor_rows * pitch
-    )
-    channel_index = np.full((n_channels, neighbors.sum(1).max()), n_channels)
-    for c in range(n_channels):
-        my_neighbors = np.flatnonzero(neighbors[c])
-        channel_index[c, : my_neighbors.size] = my_neighbors
-        if channel_index[c].max() == n_channels:
-            if c > n_channels // 2:
-                channel_index[c] = np.arange(
-                    n_channels - channel_index.shape[1], n_channels
-                )
-            else:
-                channel_index[c] = np.arange(0, channel_index.shape[1])
-    return channel_index
-
-
 def full_channel_index(n_channels, to_torch=False):
     """Everyone is everone's neighbor"""
     ci = np.arange(n_channels)[None, :] * np.ones(n_channels, dtype=int)[:, None]

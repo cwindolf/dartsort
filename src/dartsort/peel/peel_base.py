@@ -15,6 +15,7 @@ from dartsort.util import peel_util
 from dartsort.util.data_util import SpikeDataset
 from dartsort.util.multiprocessing_util import pool_from_cfg
 from dartsort.util.py_util import delay_keyboard_interrupt
+from dartsort.util import job_util
 
 
 class BasePeeler(torch.nn.Module):
@@ -109,7 +110,9 @@ class BasePeeler(torch.nn.Module):
             if self.needs_fit():
                 save_folder.mkdir(exist_ok=True)
                 self.fit_models(
-                    save_folder, overwrite=overwrite, computation_config=computation_config
+                    save_folder,
+                    overwrite=overwrite,
+                    computation_config=computation_config,
                 )
             self.save_models(save_folder)
         assert not self.needs_precompute()
@@ -164,6 +167,8 @@ class BasePeeler(torch.nn.Module):
         compute_residual = save_residual or residual_to_h5
         if chunk_length_samples is None:
             chunk_length_samples = self.chunk_length_samples
+        if computation_config is None:
+            computation_config = job_util.get_global_computation_config()
 
         # main peeling loop
         # wrap in try/finally to ensure file handles get closed if there
@@ -466,7 +471,9 @@ class BasePeeler(torch.nn.Module):
                     computation_config=computation_config,
                 )
             self.fit_featurization_pipeline(
-                save_folder=save_folder, tmp_dir=tmp_dir, computation_config=computation_config,
+                save_folder=save_folder,
+                tmp_dir=tmp_dir,
+                computation_config=computation_config,
             )
         assert not self.needs_fit()
 
@@ -487,10 +494,8 @@ class BasePeeler(torch.nn.Module):
             return
 
         if computation_config is None:
-            device = "cuda" if torch.cuda.is_available() else "cpu"
-            device = torch.device(device)
-        else:
-            device = computation_config.actual_device()
+            computation_config = job_util.get_global_computation_config()
+        device = computation_config.actual_device()
 
         # disable self's featurization pipeline, replacing it with a waveform
         # saving node. then, we'll use those waveforms to fit the original
@@ -637,7 +642,7 @@ class BasePeeler(torch.nn.Module):
 
         feats_pt = Path(save_folder) / "featurization_pipeline.pt"
         if feats_pt.exists():
-            self.featurization_pipeline = torch.load(feats_pt)
+            self.featurization_pipeline = torch.load(feats_pt, weights_only=True)
 
     def check_resuming(self, output_hdf5_filename, overwrite=False):
         output_hdf5_filename = Path(output_hdf5_filename)

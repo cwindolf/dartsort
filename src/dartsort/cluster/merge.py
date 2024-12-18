@@ -15,6 +15,7 @@ from scipy.sparse.csgraph import maximum_bipartite_matching
 from tqdm.auto import tqdm, trange
 
 from . import cluster_util
+from dartsort.util import job_util
 
 
 def merge_templates(
@@ -39,9 +40,7 @@ def merge_templates(
     conv_batch_size=128,
     units_batch_size=8,
     denoising_tsvd=None,
-    device=None,
-    n_jobs=0,
-    n_jobs_templates=0,
+    computation_config=None,
     template_save_folder=None,
     overwrite_templates=False,
     show_progress=True,
@@ -69,16 +68,18 @@ def merge_templates(
     -------
     A new DARTsortSorting
     """
+    if computation_config is None:
+        computation_config = job_util.get_global_computation_config()
+
     if template_data is None:
         template_data, sorting = TemplateData.from_config(
             recording,
             sorting,
             template_config,
             motion_est=motion_est,
-            n_jobs=n_jobs_templates,
+            computation_config=computation_config,
             save_folder=template_save_folder,
             overwrite=overwrite_templates,
-            device=device,
             save_npz_name=template_npz_filename,
             return_realigned_sorting=True,
             tsvd=denoising_tsvd,
@@ -101,8 +102,8 @@ def merge_templates(
     )
     units, dists, shifts, template_snrs = calculate_merge_distances(
         template_data,
-        device=device,
-        n_jobs=n_jobs,
+        device=computation_config.actual_device(),
+        n_jobs=computation_config.actual_n_jobs(),
         show_progress=show_progress,
         **dist_matrix_kwargs,
     )
@@ -147,11 +148,11 @@ def merge_across_sortings(
     conv_batch_size=128,
     units_batch_size=8,
     denoising_tsvd=None,
-    device=None,
-    n_jobs=0,
-    n_jobs_templates=0,
+    computation_config=None,
     show_progress=True,
 ):
+    if computation_config is None:
+        computation_config = job_util.get_global_computation_config()
     # first, merge within chunks
     if within_merge_distance_threshold:
         sortings = [
@@ -172,11 +173,9 @@ def merge_across_sortings(
                 min_channel_amplitude=min_channel_amplitude,
                 conv_batch_size=conv_batch_size,
                 units_batch_size=units_batch_size,
-                device=device,
-                n_jobs=n_jobs,
                 denoising_tsvd=denoising_tsvd,
-                n_jobs_templates=n_jobs_templates,
                 show_progress=False,
+                computation_config=computation_config,
             )
             for sorting in tqdm(sortings, desc="Merge within chunks")
         ]
@@ -188,18 +187,16 @@ def merge_across_sortings(
             sortings[i],
             template_config,
             motion_est=motion_est,
-            n_jobs=n_jobs_templates,
             tsvd=denoising_tsvd,
-            device=device,
+            computation_config=computation_config,
         )
         template_data_b = TemplateData.from_config(
             recording,
             sortings[i + 1],
             template_config,
             motion_est=motion_est,
-            n_jobs=n_jobs_templates,
             tsvd=denoising_tsvd,
-            device=device,
+            computation_config=computation_config,
         )
         dists, shifts, snrs_a, snrs_b = cross_match_distance_matrix(
             template_data_a,
@@ -215,8 +212,8 @@ def merge_across_sortings(
             min_channel_amplitude=min_channel_amplitude,
             conv_batch_size=conv_batch_size,
             units_batch_size=units_batch_size,
-            device=device,
-            n_jobs=n_jobs,
+            device=computation_config.actual_device(),
+            n_jobs=computation_config.actual_n_jobs(),
             show_progress=show_progress,
         )
         sortings[i], sortings[i + 1] = cross_match(
@@ -636,7 +633,10 @@ def combine_templates(template_data_a, template_data_b):
     spike_counts_by_channel = None
     if template_data_a.spike_counts_by_channel is not None:
         spike_counts_by_channel = np.concatenate(
-            (template_data_a.spike_counts_by_channel, template_data_b.spike_counts_by_channel)
+            (
+                template_data_a.spike_counts_by_channel,
+                template_data_b.spike_counts_by_channel,
+            )
         )
     template_data = TemplateData(
         templates=templates,
@@ -647,101 +647,9 @@ def combine_templates(template_data_a, template_data_b):
         spike_counts_by_channel=spike_counts_by_channel,
     )
 
-    cross_mask = np.logical_and(np.isin(unit_ids, ids_a)[:, None], np.isin(unit_ids, ids_b)[None])
+    cross_mask = np.logical_and(
+        np.isin(unit_ids, ids_a)[:, None], np.isin(unit_ids, ids_b)[None]
+    )
     cross_mask = np.logical_or(cross_mask, cross_mask.T)
 
     return template_data, cross_mask, ids_a, ids_b
-
-
-def weighted_template_linkage(
-    dists, units, template_data, show_progress=True, **dist_matrix_kwargs
-):
-    """Custom linkage in the style of scipy
-
-    Return format is an array whose rows represent merges:
-     [cluster id 1, cluster id 2, distance between those, size of new cluster]
-
-    How are new clusters represented in these rows? The final word is:
-        At the ith iteration, clusters with indices Z[i,0] and Z[i,1]
-        are combined to form cluster n+i. A cluster with an index less
-        than n corresponds to one of the n original observations.
-
-    TODO: This recomputes SVDs many times. If this is a keeper let's get rid of that.
-    """
-    n0 = n = units.size
-    assert dists.shape == (n, n)
-    templates = template_data.templates
-    assert templates.shape[0] == n
-    assert np.array_equal(np.unique(template_data.unit_ids), units)
-    assert np.all(np.diff(template_data.unit_ids) >= 0)
-    weights = template_data.spike_counts
-
-    # these don't matter anymore -- signaling that to you, reader.
-    # it's all arange indexed from here on out.
-    del units, template_data
-
-    # dists and cci will change shape as merges are made
-    # cci[j] will be the (possibly merged) cluster id of row/col j of dists
-    current_cluster_index = np.arange(n)
-    current_cluster_counts = np.ones(n)
-
-    Z = np.zeros((n - 1, 4))
-    # while there is a merge to be made...
-    triui, triuj = np.triu_indices_from(dists, k=1)
-    iterator = (
-        trange(n, desc="Weighted template linkage") if show_progress else range(n)
-    )
-    for ix in iterator:
-        # find best new pair
-        best = dists[triui, triuj].argmin()
-        ii = triui[best]
-        jj = triuj[best]
-        # we keep the smaller index -- makes indexing logic simpler below
-        # because it doesn't change...
-        keep_ix = min(ii, jj)
-        bye_ix = max(ii, jj)
-
-        # add them to the linkage
-        dist = dists[ii, jj]
-        count = current_cluster_counts[ii] + current_cluster_counts[jj]
-        ci = current_cluster_index[ii]
-        cj = current_cluster_index[jj]
-        Z[ix] = ci, cj, dist, count
-
-        # weighted sum their templates
-        counts = weights[[ii, jj]]
-        total = counts.sum()
-        w = counts / total
-        temp = (templates[[ii, jj]] * w[:, None, None]).sum(0)
-
-        # update templates and spike counts
-        keep_mask = np.flatnonzero(np.arange(n) != bye_ix)
-        n = keep_mask.size
-        templates = templates[keep_mask]
-        templates[keep_ix] = temp
-        weights = weights[keep_mask]
-        weights[keep_ix] = total
-
-        # update cci and ccc
-        current_cluster_index = current_cluster_index[keep_mask]
-        current_cluster_index[keep_ix] = n0 + ix
-        current_cluster_counts[keep_ix] = current_cluster_counts[[ii, jj]].sum()
-        current_cluster_counts = current_cluster_counts[keep_mask]
-
-        # compute one-to-all new template distances and update distance matrix
-        temp_data = TemplateData(
-            templates[[keep_ix]], unit_ids=np.arange(1), spike_counts=np.array([total])
-        )
-        temps_data = TemplateData(
-            templates, unit_ids=np.arange(n), spike_counts=weights
-        )
-        dist, *_ = cross_match_distance_matrix(
-            temp_data, temps_data, **dist_matrix_kwargs
-        )
-        dists = dists[keep_mask[:, None], keep_mask[None, :]]
-        dists[keep_ix, :] = dists[:, keep_ix] = dist
-
-        # and don't forget the triu inds. please.
-        triui, triuj = np.triu_indices_from(dists, k=1)
-
-    return Z

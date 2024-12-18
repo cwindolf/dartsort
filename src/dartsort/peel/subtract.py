@@ -16,7 +16,7 @@ from dartsort.transform import (
     Waveform,
     WaveformPipeline,
 )
-from dartsort.util import peel_util, spiketorch
+from dartsort.util import peel_util, spiketorch, job_util
 from dartsort.util.waveform_util import (
     get_relative_subset,
     make_channel_index,
@@ -153,7 +153,9 @@ class SubtractionPeeler(BasePeeler):
 
         sub_denoise_pt = Path(save_folder) / "subtraction_denoising_pipeline.pt"
         if sub_denoise_pt.exists():
-            self.subtraction_denoising_pipeline = torch.load(sub_denoise_pt)
+            self.subtraction_denoising_pipeline = torch.load(
+                sub_denoise_pt, weights_only=True
+            )
 
     @classmethod
     def from_config(
@@ -358,14 +360,15 @@ class SubtractionPeeler(BasePeeler):
                 t.is_featurizer and t.needs_fit()
                 for t in self.subtraction_denoising_pipeline
             )
+        else:
+            assert False
+
         if not needs_fit:
             return False
 
         if computation_config is None:
-            device = "cuda" if torch.cuda.is_available() else "cpu"
-            device = torch.device(device)
-        else:
-            device = computation_config.actual_device()
+            computation_config = job_util.get_global_computation_config()
+        device = computation_config.actual_device()
 
         orig_denoise = self.subtraction_denoising_pipeline
         init_voltage_feature = Voltage(

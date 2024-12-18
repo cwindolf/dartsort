@@ -10,6 +10,7 @@ running a BasePeeler on one or more chunks. So, they are expected to be
 combined with calls to `main.subtract()`, as implemented in the
 `main.initial_clustering` function (TODO!).
 """
+
 from dataclasses import replace
 
 import h5py
@@ -67,7 +68,9 @@ def cluster_chunk(
     else:
         geom = recording.get_channel_locations()
 
-    to_cluster = ensemble_utils.get_indices_in_chunk(sorting.times_seconds, chunk_time_range_s)
+    to_cluster = ensemble_utils.get_indices_in_chunk(
+        sorting.times_seconds, chunk_time_range_s
+    )
     to_cluster = np.setdiff1d(to_cluster, np.flatnonzero(sorting.labels < -1))
     labels = np.full_like(sorting.labels, -1)
     extra_features = sorting.extra_features
@@ -162,7 +165,9 @@ def cluster_chunk(
                 radius_search=clustering_config.radius_search,
                 workers=clustering_config.workers,
             )
-            dpc_labels = cluster_util.combine_disjoint(choices, dpc_labels, not_choices, other_labels)
+            dpc_labels = cluster_util.combine_disjoint(
+                choices, dpc_labels, not_choices, other_labels
+            )
 
         labels[to_cluster] = dpc_labels
 
@@ -205,7 +210,7 @@ def cluster_chunks(
     clustering_config,
     sorting=None,
     motion_est=None,
-    amplitudes_dataset_name='denoised_ptp_amplitudes',
+    amplitudes_dataset_name="denoised_ptp_amplitudes",
 ):
     """Divide the recording into chunks, and cluster each chunk
 
@@ -335,5 +340,3 @@ def initial_clustering(
         motion_est=motion_est,
         **kwargs,
     )
-
-    

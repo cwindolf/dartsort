@@ -14,6 +14,7 @@ class SingleChannelTemplates(BaseWaveformModule):
     def __init__(
         self,
         channel_index,
+        geom=None,
         n_centroids=10,
         pca_rank=8,
         spike_length_samples=121,
@@ -23,8 +24,12 @@ class SingleChannelTemplates(BaseWaveformModule):
         random_seed=0,
         kmeanspp_initial="random",
         taper=True,
+        name=None,
+        name_prefix=None,
     ):
-        super().__init__(channel_index=channel_index)
+        super().__init__(
+            channel_index=channel_index, name=name, name_prefix=name_prefix
+        )
 
         # main control
         self.n_centroids = n_centroids

@@ -266,16 +266,14 @@ def match(
     featurization_config=default_featurization_config,
     matching_config=default_matching_config,
     chunk_starts_samples=None,
-    n_jobs_templates=0,
-    n_jobs_match=0,
     overwrite=False,
     residual_filename=None,
     show_progress=True,
-    device=None,
     hdf5_filename="matching0.h5",
     model_subdir="matching0_models",
     template_data=None,
     template_npz_filename="template_data.npz",
+    computation_config=default_computation_config,
 ):
     assert output_directory is not None
     model_dir = Path(output_directory) / model_subdir
@@ -288,11 +286,10 @@ def match(
             template_config=template_config,
             waveform_config=waveform_config,
             motion_est=motion_est,
-            n_jobs=n_jobs_templates,
             save_folder=model_dir,
             overwrite=overwrite,
-            device=device,
             save_npz_name=template_npz_filename,
+            computation_config=computation_config,
         )
 
     # instantiate peeler
@@ -312,10 +309,9 @@ def match(
         featurization_config,
         chunk_starts_samples=chunk_starts_samples,
         overwrite=overwrite,
-        n_jobs=n_jobs_match,
         residual_filename=residual_filename,
         show_progress=show_progress,
-        device=device,
+        computation_config=computation_config,
     )
     return sorting, output_hdf5_filename
 

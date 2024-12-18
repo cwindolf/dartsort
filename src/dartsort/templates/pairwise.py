@@ -9,6 +9,7 @@ from .pairwise_util import compressed_convolve_to_h5
 from .template_util import CompressedUpsampledTemplates, LowRankTemplates
 from .templates import TemplateData
 from ..util.data_util import batched_h5_read
+from ..util import job_util
 
 
 @dataclass
@@ -122,11 +123,7 @@ class CompressedPairwiseConv:
         show_progress=True,
     ):
         if computation_config is None:
-            device = "cuda" if torch.cuda.is_available() else "cpu"
-            n_jobs = 0
-        else:
-            n_jobs = computation_config.actual_n_jobs()
-            device = computation_config.device()
+            computation_config = job_util.get_global_computation_config()
 
         compressed_convolve_to_h5(
             hdf5_filename,
@@ -143,8 +140,8 @@ class CompressedPairwiseConv:
             conv_batch_size=conv_batch_size,
             units_batch_size=units_batch_size,
             overwrite=overwrite,
-            device=device,
-            n_jobs=n_jobs,
+            device=computation_config.actual_device(),
+            n_jobs=computation_config.actual_n_jobs(),
             show_progress=show_progress,
         )
         return cls.from_h5(hdf5_filename)

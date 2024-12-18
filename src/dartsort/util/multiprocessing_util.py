@@ -6,16 +6,20 @@ from multiprocessing import get_context
 import torch
 import torch.multiprocessing as torchmp
 
+from . import job_util
+
 # TODO: torch.multiprocessing?
 
 have_cloudpickle = False
 cloudpickle = None
 try:
     import cloudpickle
+
     have_cloudpickle = True
 except ImportError:
     try:
         from joblib.externals import cloudpickle
+
         have_cloudpickle = True
     except ImportError:
         pass
@@ -32,7 +36,9 @@ class ThreadPoolExecutor(_ThreadPoolExecutor):
         initargs=None,
         context=None,
     ):
-        super().__init__(max_workers=max_workers, initializer=initializer, initargs=initargs)
+        super().__init__(
+            max_workers=max_workers, initializer=initializer, initargs=initargs
+        )
 
 
 class MockFuture:
@@ -128,18 +134,11 @@ def rank_init(queue):
 
 def pool_from_cfg(computation_config=None, with_rank_queue=False, check_local=False):
     if computation_config is None:
-        device = "cuda" if torch.cuda.is_available() else "cpu"
-        device = torch.device(device)
-        n_jobs = 0
-        cls = MockPoolExecutor
-    else:
-        device = computation_config.actual_device()
-        n_jobs = computation_config.actual_n_jobs()
-        cls = computation_config.executor
+        computation_config = job_util.get_global_computation_config()
 
     return get_pool(
-        n_jobs,
-        cls=cls,
+        computation_config.actual_n_jobs(),
+        cls=computation_config.executor,
         with_rank_queue=with_rank_queue,
         check_local=check_local,
     )

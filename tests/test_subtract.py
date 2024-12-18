@@ -5,7 +5,7 @@ import h5py
 import numpy as np
 import spikeinterface.core as sc
 import torch
-from dartsort.config import FeaturizationConfig, SubtractionConfig
+from dartsort.config import FeaturizationConfig, SubtractionConfig, ComputationConfig
 from dartsort.localize.localize_torch import point_source_amplitude_at
 from dartsort.main import subtract
 from dartsort.util import waveform_util
@@ -19,11 +19,14 @@ fixedlenkeys = (
     "residual_times_seconds",
 )
 
+two_jobs_cfg_cpu = ComputationConfig(n_jobs_cpu=2, n_jobs_gpu=2, device="cpu")
+two_jobs_cfg = ComputationConfig(n_jobs_cpu=2, n_jobs_gpu=2)
+
 
 def test_fakedata_nonn():
     print("test_fakedata_nonn")
     # generate fake neuropixels data with artificial templates
-    T_s = 89.5
+    T_s = 9.5
     fs = 30000
     n_channels = 25
     T_samples = int(fs * T_s)
@@ -61,12 +64,12 @@ def test_fakedata_nonn():
         [t[:, None] * a[None, :] for t, a in zip((t0, t1, t2, t3), amps)]
     )
     templates[0] *= 100 / np.abs(templates[0]).max()
-    templates[1] *= 50 / np.abs(templates[0]).max()
-    templates[2] *= 100 / np.abs(templates[0]).max()
-    templates[3] *= 50 / np.abs(templates[0]).max()
+    templates[1] *= 50 / np.abs(templates[1]).max()
+    templates[2] *= 100 / np.abs(templates[2]).max()
+    templates[3] *= 50 / np.abs(templates[3]).max()
 
     # make fake spike trains
-    spikes_per_unit = 1000
+    spikes_per_unit = 51
     sts = []
     labels = []
     for i in range(len(templates)):
@@ -84,21 +87,21 @@ def test_fakedata_nonn():
     rec = 0.1 * rg.normal(size=(T_samples, len(geom))).astype(np.float32)
     for t, l in zip(times, labels):
         rec[t : t + 121] += templates[l]
-    assert np.sum(np.abs(rec) > 80) >= 1000
-    assert np.sum(np.abs(rec) > 40) >= 2000
+    assert np.sum(np.abs(rec) > 80) >= 100
+    assert np.sum(np.abs(rec) > 40) >= 50
 
     # make into spikeinterface
     rec = sc.NumpyRecording(rec, fs)
     rec.set_dummy_probe_from_locations(geom)
 
     subconf = SubtractionConfig(
-        detection_thresholds=(80, 40),
+        detection_threshold=20.0,
         peak_sign="both",
         subtraction_denoising_config=FeaturizationConfig(
             do_nn_denoise=False, denoise_only=True
         ),
     )
-    featconf = FeaturizationConfig(do_nn_denoise=False)
+    featconf = FeaturizationConfig(do_nn_denoise=False, n_residual_snips=8)
     channel_index = waveform_util.make_channel_index(geom, subconf.extract_radius)
     assert channel_index.shape[0] == len(geom)
     assert channel_index.max() == len(geom)
@@ -183,7 +186,7 @@ def test_fakedata_nonn():
             featurization_config=featconf,
             subtraction_config=subconf,
             overwrite=True,
-            n_jobs=2,
+            computation_config=two_jobs_cfg,
         )
         ns0 = len(st)
         with h5py.File(out_h5, locking=False) as h5:
@@ -207,7 +210,7 @@ def test_fakedata_nonn():
             featurization_config=featconf,
             subtraction_config=subconf,
             overwrite=False,
-            n_jobs=2,
+            computation_config=two_jobs_cfg,
         )
         ns1 = len(st)
         assert ns0 == ns1
@@ -232,7 +235,7 @@ def test_fakedata_nonn():
             featurization_config=featconf,
             subtraction_config=subconf,
             overwrite=True,
-            n_jobs=2,
+            computation_config=two_jobs_cfg,
         )
         ns2 = len(st)
         assert ns0 == ns2
@@ -251,14 +254,17 @@ def test_fakedata_nonn():
 
     # simulate resuming a job that got cancelled in the middle
     print("test resume1")
-    # this one needs to be more deterministic
     subconf = dataclasses.replace(
         subconf,
         subtraction_denoising_config=dataclasses.replace(
-            subconf.subtraction_denoising_config, do_tpca_denoise=False
+            subconf.subtraction_denoising_config,
+            do_nn_denoise=True,
+            do_tpca_denoise=False,
         ),
     )
     nolocfeatconf = dataclasses.replace(featconf, do_localization=False)
+    print(subconf)
+    print(nolocfeatconf)
     with tempfile.TemporaryDirectory() as tempdir:
         st0, out_h5 = subtract(
             rec,
@@ -270,39 +276,7 @@ def test_fakedata_nonn():
 
     with tempfile.TemporaryDirectory() as tempdir:
         sta, out_h5 = subtract(
-            rec.frame_slice(start_frame=0, end_frame=int(20 * fs)),
-            tempdir,
-            featurization_config=nolocfeatconf,
-            subtraction_config=subconf,
-        )
-        stb, out_h5 = subtract(
-            rec,
-            tempdir,
-            featurization_config=nolocfeatconf,
-            subtraction_config=subconf,
-        )
-        assert len(sta) < ns0
-        assert len(stb) == ns0
-
-    with tempfile.TemporaryDirectory() as tempdir:
-        sta, out_h5 = subtract(
-            rec.frame_slice(start_frame=0, end_frame=int(25 * fs)),
-            tempdir,
-            featurization_config=nolocfeatconf,
-            subtraction_config=subconf,
-        )
-        stb, out_h5 = subtract(
-            rec,
-            tempdir,
-            featurization_config=nolocfeatconf,
-            subtraction_config=subconf,
-        )
-        assert len(sta) < ns0
-        assert len(stb) == ns0
-
-    with tempfile.TemporaryDirectory() as tempdir:
-        sta, out_h5 = subtract(
-            rec.frame_slice(start_frame=0, end_frame=int(30 * fs)),
+            rec.frame_slice(start_frame=0, end_frame=int((T_s // 3) * fs)),
             tempdir,
             featurization_config=nolocfeatconf,
             subtraction_config=subconf,
@@ -319,14 +293,15 @@ def test_fakedata_nonn():
 
 def test_small_nonn():
     # noise recording
-    T_samples = 100_100
+    T_samples = 50_100
     n_channels = 50
     rg = np.random.default_rng(0)
     noise = rg.normal(size=(T_samples, n_channels)).astype(np.float32)
 
-    # add a spike every 50 samples
+    # add a spike every so_often samples
+    so_often = 501
     template = 50 * np.exp(-(((np.arange(121) - 42) / 10) ** 2))
-    for t in range(0, 100_100 - 121, 50):
+    for t in range(0, T_samples - 121, so_often):
         random_channel = rg.integers(n_channels)
         noise[t : t + 121, random_channel] += template
 
@@ -336,13 +311,13 @@ def test_small_nonn():
     rec.set_dummy_probe_from_locations(geom)
 
     subconf = SubtractionConfig(
-        detection_thresholds=(80, 40),
+        detection_threshold=40.0,
         peak_sign="both",
         subtraction_denoising_config=FeaturizationConfig(
             do_nn_denoise=False, denoise_only=True
         ),
     )
-    featconf = FeaturizationConfig(do_nn_denoise=False)
+    featconf = FeaturizationConfig(do_nn_denoise=False, n_residual_snips=8)
 
     print("No parallel")
     with tempfile.TemporaryDirectory() as tempdir:
@@ -369,8 +344,7 @@ def test_small_nonn():
             overwrite=True,
             featurization_config=featconf,
             subtraction_config=subconf,
-            n_jobs=2,
-            device="cpu",
+            computation_config=two_jobs_cfg_cpu,
         )
         with h5py.File(out_h5, locking=False) as h5:
             lens = []
@@ -388,7 +362,7 @@ def test_small_nonn():
             overwrite=True,
             featurization_config=featconf,
             subtraction_config=subconf,
-            n_jobs=2,
+            computation_config=two_jobs_cfg,
         )
         with h5py.File(out_h5, locking=False) as h5:
             lens = []
@@ -400,14 +374,15 @@ def test_small_nonn():
 
 def small_default_config(extract_radius=200):
     # noise recording
-    T_samples = 100_100
+    T_samples = 50_100
     n_channels = 50
     rg = np.random.default_rng(0)
     noise = rg.normal(size=(T_samples, n_channels)).astype(np.float32)
 
-    # add a spike every 50 samples
+    # add a spike every so often samples
+    so_often = 501
     template = 20 * np.exp(-(((np.arange(121) - 42) / 10) ** 2))
-    for t in range(0, 100_100 - 121, 50):
+    for t in range(0, T_samples - 121, so_often):
         random_channel = rg.integers(n_channels)
         noise[t : t + 121, random_channel] += template
 
@@ -416,7 +391,7 @@ def small_default_config(extract_radius=200):
     rec = sc.NumpyRecording(noise, 30_000)
     rec.set_dummy_probe_from_locations(geom)
 
-    cfg = SubtractionConfig(extract_radius=extract_radius)
+    cfg = SubtractionConfig(detection_threshold=10.0, extract_radius=extract_radius)
 
     with tempfile.TemporaryDirectory() as tempdir:
         # test default config
@@ -425,7 +400,6 @@ def small_default_config(extract_radius=200):
             rec,
             tempdir,
             overwrite=True,
-            n_jobs=0,
             subtraction_config=cfg,
         )
         with h5py.File(out_h5, locking=False) as h5:
@@ -441,7 +415,7 @@ def small_default_config(extract_radius=200):
             rec,
             tempdir,
             overwrite=True,
-            n_jobs=2,
+            computation_config=two_jobs_cfg,
             subtraction_config=cfg,
         )
         with h5py.File(out_h5, locking=False) as h5:

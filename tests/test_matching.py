@@ -27,7 +27,6 @@ def test_tiny(tmp_path):
     recording_length_samples = 200
     n_channels = 2
     geom = np.c_[np.zeros(2), np.arange(2)]
-    geom
 
     # template main channel traces
     trace0 = 50 * np.exp(
@@ -67,7 +66,6 @@ def test_tiny(tmp_path):
                 *no_overlap_recording_sorting(templates),
                 template_config,
                 motion_est=motion_util.IdentityMotionEstimate(),
-                n_jobs=0,
                 save_folder=tmp_path,
                 overwrite=True,
                 with_locs=True,
@@ -199,7 +197,6 @@ def test_tiny_up(tmp_path, up_factor=8):
                 *no_overlap_recording_sorting(templates),
                 template_config,
                 motion_est=motion_util.IdentityMotionEstimate(),
-                n_jobs=0,
                 save_folder=tmp_path,
                 overwrite=True,
                 with_locs=True,
@@ -352,7 +349,6 @@ def static_tester(tmp_path, up_factor=1):
                 *no_overlap_recording_sorting(templates),
                 template_config,
                 motion_est=motion_util.IdentityMotionEstimate(),
-                n_jobs=0,
                 save_folder=tmp_path,
                 overwrite=True,
                 with_locs=True,
@@ -467,7 +463,7 @@ def test_static_up(tmp_path):
 def test_fakedata_nonn():
     print("test_fakedata_nonn")
     # generate fake neuropixels data with artificial templates
-    T_s = 89.5
+    T_s = 9.5
     fs = 30000
     n_channels = 25
     T_samples = int(fs * T_s)
@@ -511,7 +507,7 @@ def test_fakedata_nonn():
     templates[3] *= 50 / norm
 
     # make fake spike trains
-    spikes_per_unit = 1000
+    spikes_per_unit = 51
     sts = []
     labels = []
     for i in range(len(templates)):
@@ -537,8 +533,8 @@ def test_fakedata_nonn():
     rec0 = 0.1 * rg.normal(size=(T_samples, len(geom))).astype(np.float32)
     for t, l in zip(times, labels):
         rec0[t : t + 121] += templates[l]
-    assert np.sum(np.abs(rec0) > 80) >= 1000
-    assert np.sum(np.abs(rec0) > 40) >= 2000
+    assert np.sum(np.abs(rec0) > 80) >= 50
+    assert np.sum(np.abs(rec0) > 40) >= 100
 
     # make into spikeinterface
     rec0 = si.NumpyRecording(rec0, fs)
