@@ -118,10 +118,16 @@ class CompressedPairwiseConv:
         conv_batch_size=1024,
         units_batch_size=8,
         overwrite=False,
-        device=None,
-        n_jobs=0,
+        computation_config=None,
         show_progress=True,
     ):
+        if computation_config is None:
+            device = "cuda" if torch.cuda.is_available() else "cpu"
+            n_jobs = 0
+        else:
+            n_jobs = computation_config.actual_n_jobs()
+            device = computation_config.device()
+
         compressed_convolve_to_h5(
             hdf5_filename,
             template_data=template_data,
@@ -154,7 +160,12 @@ class CompressedPairwiseConv:
             if isinstance(v, np.ndarray) or torch.is_tensor(v):
                 setattr(self, name, torch.as_tensor(v, device=device))
         self.device = device
-        if pin and self.device.type == "cuda" and torch.cuda.is_available() and not self.pconv.is_pinned():
+        if (
+            pin
+            and self.device.type == "cuda"
+            and torch.cuda.is_available()
+            and not self.pconv.is_pinned()
+        ):
             # self.pconv.share_memory_()
             print("pin")
             torch.cuda.cudart().cudaHostRegister(
