@@ -4,13 +4,12 @@
 import h5py
 import numpy as np
 import torch
-from scipy.spatial.distance import cdist
 from tqdm.auto import tqdm
 
 from ..util.multiprocessing_util import get_pool
 from ..util.py_util import delay_keyboard_interrupt
 from ..util.spiketorch import ptp
-from .localize_torch import localize_amplitude_vectors
+from .localize_torch import localize_amplitude_vectors, vmap_point_source_find_alpha
 
 
 def localize_waveforms(
@@ -264,25 +263,34 @@ def point_source_mse(locs, amp_vecs, channels, channel_index, geom):
     dxz = pgeom[neighborhoods]
 
     if locs.shape[1] == 3:
-        alpha = ...
+        channel_mask = torch.logical_not(invalid).to(torch.float)
+        alpha = vmap_point_source_find_alpha(
+            torch.asarray(amp_vecs).nan_to_num(),
+            channel_mask,
+            *torch.asarray(locs).T,
+            torch.asarray(dxz).nan_to_num(),
+        )
+        alpha = alpha.numpy()
     else:
         alpha = locs[:, 3]
         locs = locs[:, :3]
 
     x, y, z = locs.T
 
-    dxz[:, :, 0] -= x
-    dxz[:, :, 1] -= z
+    dxz[:, :, 0] -= x[:, None]
+    dxz[:, :, 1] -= z[:, None]
     np.square(dxz, out=dxz)
     pred = dxz.sum(2)
-    pred += y**2
+    pred += y[:, None]**2
     np.sqrt(pred, out=pred)
+    pred[invalid] = 1.0
     np.reciprocal(pred, out=pred)
-    pred *= alpha
+    pred *= alpha[:, None]
 
     mse = amp_vecs - pred
     mse[invalid] = 0.0
-    nnz = invalid.sum(1)
+    np.square(mse, out=mse)
+    nnz = channel_index.shape[1] - invalid.sum(1)
     mse = mse.sum(1) / nnz
 
     return mse
