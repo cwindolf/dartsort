@@ -6,6 +6,7 @@ import h5py
 import numpy as np
 import torch
 
+from dartsort.transform import single_channel_templates
 from dartsort.util import spiketorch, waveform_util
 
 
@@ -70,7 +71,7 @@ def get_singlechan_centroids(
     temps = []
     for j in range(n_centroids):
         temp = singlechan_waveforms[labels == j].mean(0)
-        peak = temp.abs().argmax()
+        peak = temp.abs().argmax().cpu().item()
         shift = peak - full_trough
         if abs(shift) > alignment_padding:
             wning = f"Odd {shift=} observed in singlechan templates with {alignment_padding=}."
@@ -131,27 +132,121 @@ def get_singlechan_waveforms(
     return waveforms
 
 
-def singlechan_to_library(singlechan_templates):
+def spatial_footprint_bank(
+    geom, n_sigmas=5, min_template_size=10.0, max_distance=32.0, dx=32.0
+):
+    # this is just a single shank version, since I don't plan to use
+    # this in production. but it is copied from KS' code and can be
+    # modified as theirs is for multi shank.
+
+    # what KS calls dmin
+    z_unique = np.unique(geom[:, 1])
+    dz = 1.0 if z_unique.size == 1 else np.median(np.diff(z_unique))
+
+    # how they place z centers
+    z_min, z_max = z_unique.min(), z_unique.max()
+    z_centers = np.arange(z_min, z_max + 1e-2, dz / 2)
+
+    # how they place x centers
+    x_min, x_max = geom[:, 0].min(), geom[:, 0].max()
+    nx = np.round((x_max - x_min) / (dx / 2)) + 1
+    x_centers = np.linspace(x_min, x_max, num=int(nx))
+
+    # get all centers in 2d and exclude ones which are too far from the probe
+    # which won't be any i guess without missing chans etc
+    xx, zz = np.meshgrid(x_centers, z_centers, indexing="ij")
+    xz = np.stack((xx, zz), axis=-1).reshape(-1, 2)
+    distsq = np.square(xz[:, None, :] - geom).sum(2)
+    valid = distsq < max_distance**2
+    valid = valid.any(1)
+    xz = xz[valid]
+    distsq = distsq[valid]
+    n_centers = len(distsq)
+    assert distsq.shape == (n_centers, len(geom))
+
+    # puff them up
+    sigmas = min_template_size * (1 + np.arange(n_sigmas))
+    spatial_profiles = np.exp(-distsq[:, None, :] / sigmas[:, None] ** 2)
+    spatial_profiles = spatial_profiles.reshape(n_centers * n_sigmas, len(geom))
+
+    return spatial_profiles
+
+
+def singlechan_to_library(
+    singlechan_templates,
+    geom,
+    n_sigmas=5,
+    min_template_size=10.0,
+    max_distance=32.0,
+    dx=32.0,
+):
     from dartsort.templates import TemplateData
+
+    footprints = spatial_footprint_bank(
+        geom,
+        n_sigmas=n_sigmas,
+        min_template_size=min_template_size,
+        max_distance=max_distance,
+        dx=dx,
+    )
+    nf, nc = footprints.shape
+    nsct, nt = singlechan_templates.shape
+    templates = footprints[:, None, None, :] * singlechan_templates[None, :, :, None]
+    assert templates.shape == (nf, nsct, nt, nc)
+    templates = templates.reshape(nf * nsct, nt, nc)
+    templates /= np.linalg.norm(templates, axis=(1, 2))
+
+    return TemplateData(
+        templates,
+        unit_ids=np.arange(nsct * nt),
+        spike_counts=np.ones(nsct * nt, dtype=int),
+    )
 
 
 def universal_templates_from_data(
-    rec,
+    singlechan_waveforms=None,
+    rec=None,
+    detection_threshold=6.0,
+    deduplication_radius=150.0,
+    trough_offset_samples=42,
+    spike_length_samples=121,
+    alignment_padding=20,
+    n_centroids=10,
+    pca_rank=8,
+    n_waveforms_fit=20_000,
+    taper=True,
+    taper_start=20,
+    taper_end=30,
+    kmeanspp_initial="random",
+    random_seed=0,
+    n_sigmas=5,
+    min_template_size=10.0,
+    max_distance=32.0,
+    dx=32.0,
 ):
     singlechan_centroids = get_singlechan_centroids(
-        singlechan_waveforms=None,
-        rec=None,
-        detection_threshold=6.0,
-        deduplication_radius=150.0,
-        trough_offset_samples=42,
-        spike_length_samples=121,
-        alignment_padding=20,
-        n_centroids=10,
-        pca_rank=8,
-        n_waveforms_fit=20_000,
-        taper=True,
-        taper_start=20,
-        taper_end=30,
-        kmeanspp_initial="random",
-        random_seed=0,
+        singlechan_waveforms=singlechan_waveforms,
+        rec=rec,
+        detection_threshold=detection_threshold,
+        deduplication_radius=deduplication_radius,
+        trough_offset_samples=trough_offset_samples,
+        spike_length_samples=spike_length_samples,
+        alignment_padding=alignment_padding,
+        n_centroids=n_centroids,
+        pca_rank=pca_rank,
+        n_waveforms_fit=n_waveforms_fit,
+        taper=taper,
+        taper_start=taper_start,
+        taper_end=taper_end,
+        kmeanspp_initial=kmeanspp_initial,
+        random_seed=random_seed,
     )
+    template_data = singlechan_to_library(
+        singlechan_centroids,
+        rec.get_channel_locations() if rec is not None else None,
+        n_sigmas=n_sigmas,
+        min_template_size=min_template_size,
+        max_distance=max_distance,
+        dx=dx,
+    )
+    return template_data
