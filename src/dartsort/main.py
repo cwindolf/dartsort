@@ -38,11 +38,14 @@ def dartsort(
     ) = default_dartsort_config,
     motion_est=None,
     overwrite=False,
+    return_extra=False,
 ):
     output_directory = Path(output_directory)
     cfg = to_internal_config(cfg)
 
-    # first step: subtraction and motion estimation
+    ret = {}
+
+    # first step: initial detection and motion estimation
     sorting, sub_h5 = subtract(
         recording,
         output_directory,
@@ -52,8 +55,13 @@ def dartsort(
         computation_config=cfg.computation_config,
         overwrite=overwrite,
     )
+    if return_extra:
+        ret["initial_detection"] = sorting
+
     if cfg.subtract_only:
-        return dict(sorting=sorting)
+        ret["sorting"] = sorting
+        return ret
+
     if motion_est is None:
         motion_est = estimate_motion(
             recording,
@@ -63,10 +71,13 @@ def dartsort(
             device=cfg.computation_config.actual_device(),
             **asdict(cfg.motion_estimation_config),
         )
-    if cfg.dredge_only:
-        return dict(sorting=sorting, motion_est=motion_est)
+    ret["motion_est"] = motion_est
 
-    # clustering E/M. start by initializing clusters.
+    if cfg.dredge_only:
+        ret["sorting"] = sorting
+        return ret
+
+    # clustering
     sorting = initial_clustering(
         recording,
         sorting=sorting,
@@ -74,6 +85,8 @@ def dartsort(
         clustering_config=cfg.clustering_config,
         computation_config=cfg.computation_config,
     )
+    if return_extra:
+        ret["initial_labels"] = sorting.labels
     sorting = refine_clustering(
         recording=recording,
         sorting=sorting,
@@ -81,7 +94,10 @@ def dartsort(
         refinement_config=cfg.refinement_config,
         computation_config=cfg.computation_config,
     )
+    if return_extra:
+        ret["refined_labels"] = sorting.labels
 
+    # alternate matching with
     for step in range(cfg.matching_iterations):
         is_final = step == cfg.matching_iterations - 1
         prop = 1.0 if is_final else cfg.intermediate_matching_subsampling
@@ -100,6 +116,8 @@ def dartsort(
             hdf5_filename=f"matching{step}.h5",
             model_subdir=f"matching{step}_models",
         )
+        if return_extra:
+            ret[f"matching{step}"] = sorting
 
         if (not is_final) or cfg.final_refinement:
             sorting = refine_clustering(
@@ -109,9 +127,12 @@ def dartsort(
                 refinement_config=cfg.refinement_config,
                 computation_config=cfg.computation_config,
             )
+            if return_extra:
+                ret[f"refined{step}_labels"] = sorting.labels
 
     # done~
-    return dict(sorting=sorting, motion_est=motion_est)
+    ret["sorting"] = sorting
+    return ret
 
 
 def subtract(
