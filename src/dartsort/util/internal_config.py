@@ -493,7 +493,11 @@ def to_internal_config(cfg):
         radius_search=cfg.density_bandwidth,
     )
     refinement_config = RefinementConfig(
-        signal_rank=cfg.signal_rank, interpolation_sigma=cfg.interpolation_bandwidth
+        signal_rank=cfg.signal_rank,
+        interpolation_sigma=cfg.interpolation_bandwidth,
+        merge_criterion=cfg.merge_criterion,
+        merge_criterion_threshold=cfg.merge_criterion_threshold,
+        merge_bimodality_threshold=cfg.merge_bimodality_threshold,
     )
     motion_estimation_config = MotionEstimationConfig(
         **{k.name: getattr(cfg, k.name) for k in fields(MotionEstimationConfig)}

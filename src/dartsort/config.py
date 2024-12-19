@@ -150,3 +150,9 @@ class DeveloperConfig(DARTsortUserConfig):
     use_singlechan_templates: bool = False
     use_universal_templates: bool = False
     signal_rank: Annotated[int, Field(ge=0)] = 0
+
+    merge_criterion_threshold: float | None = 0.0
+    merge_criterion: Literal[
+        "heldout_loglik", "heldout_ccl", "loglik", "ccl", "aic", "bic", "icl"
+    ] = "heldout_ccl"
+    merge_bimodality_threshold: float = 0.05
