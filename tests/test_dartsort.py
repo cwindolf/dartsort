@@ -82,7 +82,6 @@ def test_fakedata():
     rec.set_dummy_probe_from_locations(geom)
 
     with tempfile.TemporaryDirectory() as tempdir:
-        # TODO: Use a config which makes it easy to lower the residual snip count
         cfg = dartsort.DARTsortInternalConfig(
             subtraction_config=dartsort.SubtractionConfig(
                 subtraction_denoising_config=dartsort.FeaturizationConfig(
