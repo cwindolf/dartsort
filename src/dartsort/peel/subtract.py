@@ -218,6 +218,10 @@ class SubtractionPeeler(BasePeeler):
                 f"waveform_config {trough_offset_samples=} {spike_length_samples=} "
                 f"since {recording.sampling_frequency=}"
             )
+        singlechan_alignment_padding = int(
+            subtraction_config.singlechan_alignment_padding_ms
+            * (recording.sampling_frequency / 1000)
+        )
 
         return cls(
             recording,
@@ -240,7 +244,7 @@ class SubtractionPeeler(BasePeeler):
             use_singlechan_templates=subtraction_config.use_singlechan_templates,
             n_singlechan_templates=subtraction_config.n_singlechan_templates,
             singlechan_threshold=subtraction_config.singlechan_threshold,
-            singlechan_alignment_padding=subtraction_config.singlechan_alignment_padding,
+            singlechan_alignment_padding=singlechan_alignment_padding,
         )
 
     def peel_chunk(

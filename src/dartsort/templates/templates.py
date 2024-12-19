@@ -170,12 +170,10 @@ class TemplateData:
                 "TemplateData.from_config needs sorting!=None when its .npz file does not exist."
             )
 
-        trough_offset_samples = waveform_config.trough_offset_samples(
-            recording.sampling_frequency
-        )
-        spike_length_samples = waveform_config.spike_length_samples(
-            recording.sampling_frequency
-        )
+        fs = recording.sampling_frequency
+        trough_offset_samples = waveform_config.trough_offset_samples(fs)
+        spike_length_samples = waveform_config.spike_length_samples(fs)
+        realign_max_sample_shift = int(template_config.realign_shift_ms * (fs / 1000))
 
         motion_aware = (
             template_config.registered_templates or template_config.superres_templates
@@ -204,7 +202,7 @@ class TemplateData:
             spikes_per_unit=template_config.spikes_per_unit,
             # realign handled in advance below, not needed in kwargs
             # realign_peaks=False,
-            realign_max_sample_shift=template_config.realign_max_sample_shift,
+            realign_max_sample_shift=realign_max_sample_shift,
             denoising_rank=template_config.denoising_rank,
             denoising_fit_radius=template_config.denoising_fit_radius,
             denoising_snr_threshold=template_config.denoising_snr_threshold,
@@ -384,8 +382,6 @@ def get_chunked_templates(
         waveform_config=waveform_config,
         tsvd=tsvd,
     )
-    print(f"{full_template_data.unit_ids.shape=}")
-    print(f"{full_template_data.templates.shape=}")
 
     # break it up back into chunks
     chunk_template_data = []

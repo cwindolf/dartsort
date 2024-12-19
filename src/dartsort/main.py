@@ -9,14 +9,14 @@ from dartsort.config import (
     DARTsortUserConfig,
     DARTsortInternalConfig,
     DeveloperConfig,
-    default_clustering_config,
+    to_internal_config,
     default_dartsort_config,
-    default_featurization_config,
-    default_matching_config,
-    default_split_merge_config,
-    default_subtraction_config,
-    default_template_config,
     default_waveform_config,
+    default_template_config,
+    default_clustering_config,
+    default_featurization_config,
+    default_subtraction_config,
+    default_matching_config,
     default_computation_config,
 )
 from dartsort.peel import ObjectiveUpdateTemplateMatchingPeeler, SubtractionPeeler
@@ -40,7 +40,7 @@ def dartsort(
     overwrite=False,
 ):
     output_directory = Path(output_directory)
-    cfg = cfg.to_internal_config()
+    cfg = to_internal_config(cfg)
 
     # first step: subtraction and motion estimation
     sorting, sub_h5 = subtract(
@@ -52,6 +52,8 @@ def dartsort(
         computation_config=cfg.computation_config,
         overwrite=overwrite,
     )
+    if cfg.subtract_only:
+        return dict(sorting=sorting)
     if motion_est is None:
         motion_est = estimate_motion(
             recording,
@@ -61,8 +63,8 @@ def dartsort(
             device=cfg.computation_config.actual_device(),
             **asdict(cfg.motion_estimation_config),
         )
-    if cfg.subtract_only:
-        return sorting
+    if cfg.dredge_only:
+        return dict(sorting=sorting, motion_est=motion_est)
 
     # clustering E/M. start by initializing clusters.
     sorting = initial_clustering(
@@ -80,11 +82,10 @@ def dartsort(
         computation_config=cfg.computation_config,
     )
 
-    # E/M iterations
     for step in range(cfg.matching_iterations):
-        # E step: deconvolution
         is_final = step == cfg.matching_iterations - 1
         prop = 1.0 if is_final else cfg.intermediate_matching_subsampling
+
         sorting, match_h5 = match(
             recording,
             sorting,
@@ -110,7 +111,7 @@ def dartsort(
             )
 
     # done~
-    return sorting
+    return dict(sorting=sorting, motion_est=motion_est)
 
 
 def subtract(

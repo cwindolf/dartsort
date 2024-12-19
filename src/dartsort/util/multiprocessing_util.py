@@ -107,6 +107,7 @@ class MockQueue:
 
 
 def cloudpickle_run(fn, args):
+    assert cloudpickle is not None
     fn = cloudpickle.loads(fn)
     args, kwargs = cloudpickle.loads(args)
     # return cloudpickle.dumps(fn(*args, **kwargs))
@@ -120,6 +121,7 @@ def cloudpickle_run(fn, args):
 
 class CloudpicklePoolExecutor(ProcessPoolExecutor):
     def submit(self, fn, /, *args, **kwargs):
+        assert cloudpickle is not None
         args = cloudpickle.dumps((args, kwargs))
         future = super().submit(cloudpickle_run, cloudpickle.dumps(fn), args)
         # future.add_done_callback(uncloudpickle_callback)
@@ -141,6 +143,7 @@ def pool_from_cfg(computation_config=None, with_rank_queue=False, check_local=Fa
         cls=computation_config.executor,
         with_rank_queue=with_rank_queue,
         check_local=check_local,
+        multi_gpu=computation_config.is_multi_gpu(),
     )
 
 
@@ -153,6 +156,7 @@ def get_pool(
     n_tasks=None,
     max_tasks_per_child=None,
     check_local=False,
+    multi_gpu=False,
 ):
     if n_jobs == -1:
         n_jobs = multiprocessing.cpu_count()
@@ -160,6 +164,11 @@ def get_pool(
     n_jobs = max(1, n_jobs)
 
     if isinstance(cls, str):
+        if cls == "threading_unless_multigpu":
+            if n_jobs > 1 and multi_gpu:
+                cls = "ProcessPoolExecutor"
+            else:
+                cls = "ThreadPoolExecutor"
         if cls == "CloudpicklePoolExecutor":
             cls = CloudpicklePoolExecutor
         elif cls == "ThreadPoolExecutor":

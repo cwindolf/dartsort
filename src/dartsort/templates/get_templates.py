@@ -3,6 +3,7 @@
 The class TemplateData in templates.py provides a friendlier interface,
 where you can get templates using the TemplateConfig in config.py.
 """
+
 from dataclasses import replace
 
 import numpy as np
@@ -28,6 +29,7 @@ def get_templates(
     registered_geom=None,
     realign_peaks=False,
     realign_max_sample_shift=20,
+    realign_to="max",
     low_rank_denoising=True,
     denoising_tsvd=None,
     denoising_rank=5,
@@ -131,6 +133,7 @@ def get_templates(
             raw_results["raw_templates"],
             raw_results["snrs_by_channel"],
             raw_results["unit_ids"],
+            realign_to=realign_to,
             max_shift=realign_max_sample_shift,
             trough_offset_samples=trough_offset_samples,
             recording_length_samples=recording.get_num_samples(),
@@ -177,7 +180,14 @@ def get_templates(
         min_count_at_shift=min_count_at_shift,
         device=device,
     )
-    unit_ids, spike_counts, raw_templates, low_rank_templates, snrs_by_channel, spike_counts_by_channel = res
+    (
+        unit_ids,
+        spike_counts,
+        raw_templates,
+        low_rank_templates,
+        snrs_by_channel,
+        spike_counts_by_channel,
+    ) = res
 
     if raw_only:
         return dict(
@@ -261,6 +271,7 @@ def realign_sorting(
     templates,
     snrs_by_channel,
     unit_ids,
+    realign_to="trough",
     max_shift=20,
     trough_offset_samples=42,
     recording_length_samples=None,
@@ -273,7 +284,13 @@ def realign_sorting(
     # find template peak time
     template_maxchans = snrs_by_channel.argmax(1)
     template_maxchan_traces = templates[np.arange(n), :, template_maxchans]
-    template_peak_times = np.abs(template_maxchan_traces).argmax(1)
+    if realign_to == "max":
+        template_peak_times = np.abs(template_maxchan_traces).argmax(1)
+    elif realign_to == "trough":
+        # find the peak...
+        template_peak_times = template_maxchan_traces.argmin(1)
+    else:
+        assert False
 
     # find unit sample time shifts
     template_shifts_ = template_peak_times - (trough_offset_samples + max_shift)
@@ -356,8 +373,7 @@ def denoising_weights(
     d=6.0,
     edge_behavior="saturate",
 ):
-    """Weights are applied to raw template, 1-weights to low rank
-    """
+    """Weights are applied to raw template, 1-weights to low rank"""
     # v shaped function for time weighting
     vt = np.abs(np.arange(spike_length_samples) - trough_offset, dtype=float)
     if trough_offset < spike_length_samples:
@@ -402,9 +418,7 @@ def get_all_shifted_raw_and_low_rank_templates(
     dtype=np.float32,
     device=None,
 ):
-    n_jobs, Executor, context, rank_queue = get_pool(
-        n_jobs, with_rank_queue=True
-    )
+    n_jobs, Executor, context, rank_queue = get_pool(n_jobs, with_rank_queue=True)
     unit_ids, spike_counts = np.unique(sorting.labels, return_counts=True)
     spike_counts = spike_counts[unit_ids >= 0]
     unit_ids = unit_ids[unit_ids >= 0]
@@ -428,16 +442,11 @@ def get_all_shifted_raw_and_low_rank_templates(
             (n_units, spike_length_samples, n_template_channels),
             dtype=dtype,
         )
-    snrs_by_channel = np.zeros(
-        (n_units, n_template_channels), dtype=dtype
-    )
-    spike_counts_by_channel = np.zeros(
-        (n_units, n_template_channels), dtype=dtype
-    )
+    snrs_by_channel = np.zeros((n_units, n_template_channels), dtype=dtype)
+    spike_counts_by_channel = np.zeros((n_units, n_template_channels), dtype=dtype)
 
     unit_id_chunks = [
-        unit_ids[i : i + units_per_job]
-        for i in range(0, n_units, units_per_job)
+        unit_ids[i : i + units_per_job] for i in range(0, n_units, units_per_job)
     ]
 
     with Executor(
@@ -475,7 +484,13 @@ def get_all_shifted_raw_and_low_rank_templates(
         for res in results:
             if res is None:
                 continue
-            units_chunk, raw_temps_chunk, low_rank_temps_chunk, snrs_chunk, chancounts_chunk = res
+            (
+                units_chunk,
+                raw_temps_chunk,
+                low_rank_temps_chunk,
+                snrs_chunk,
+                chancounts_chunk,
+            ) = res
             ix_chunk = np.isin(unit_ids, units_chunk)
             raw_templates[ix_chunk] = raw_temps_chunk
             if not raw:
@@ -487,7 +502,14 @@ def get_all_shifted_raw_and_low_rank_templates(
         if show_progress:
             pbar.close()
 
-    return unit_ids, spike_counts, raw_templates, low_rank_templates, snrs_by_channel, spike_counts_by_channel
+    return (
+        unit_ids,
+        spike_counts,
+        raw_templates,
+        low_rank_templates,
+        snrs_by_channel,
+        spike_counts_by_channel,
+    )
 
 
 class TemplateProcessContext:
@@ -520,9 +542,7 @@ class TemplateProcessContext:
         self.denoising_tsvd = denoising_tsvd
         if denoising_tsvd is not None:
             self.denoising_tsvd = TorchSVDProjector(
-                torch.from_numpy(
-                    denoising_tsvd.components_.astype(dtype)
-                )
+                torch.from_numpy(denoising_tsvd.components_.astype(dtype))
             )
             self.denoising_tsvd.to(self.device)
         self.spikes_per_unit = spikes_per_unit
@@ -584,9 +604,7 @@ def _template_process_init(
     device = torch.device(device)
     if device.type == "cuda" and device.index is None:
         if torch.cuda.device_count() > 1:
-            device = torch.device(
-                "cuda", index=rank % torch.cuda.device_count()
-            )
+            device = torch.device("cuda", index=rank % torch.cuda.device_count())
     torch.set_grad_enabled(False)
 
     rg = np.random.default_rng(random_seed + rank)
