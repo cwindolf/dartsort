@@ -58,7 +58,7 @@ def dartsort(
             sorting,
             output_directory,
             overwrite=overwrite,
-            device=device,
+            device=cfg.computation_config.actual_device(),
             **asdict(cfg.motion_estimation_config),
         )
     if cfg.subtract_only:

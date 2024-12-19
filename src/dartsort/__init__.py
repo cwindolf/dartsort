@@ -1,17 +1,31 @@
 import importlib.metadata
 
-from . import detect, util
+from . import detect, util, cluster
 from .cluster import cluster_util, density, kmeans, merge, postprocess, ppcalib
 from .cluster.gaussian_mixture import GaussianUnit, SpikeMixtureModel
 from .cluster.initial import initial_clustering
-from .cluster.stable_features import (SpikeFeatures, SpikeNeighborhoods,
-                                      StableSpikeDataset)
+from .cluster.stable_features import (
+    SpikeFeatures,
+    SpikeNeighborhoods,
+    StableSpikeDataset,
+)
+from .cluster.refine import refine_clustering
 from .config import *
-from .localize.localize_util import (localize_amplitude_vectors, localize_hdf5,
-                                     localize_waveforms)
-from .main import (ObjectiveUpdateTemplateMatchingPeeler, SubtractionPeeler,
-                   check_recording, cluster, dartsort, estimate_motion, match,
-                   run_peeler, split_merge, subtract)
+from .localize.localize_util import (
+    localize_amplitude_vectors,
+    localize_hdf5,
+    localize_waveforms,
+)
+from .main import (
+    ObjectiveUpdateTemplateMatchingPeeler,
+    SubtractionPeeler,
+    check_recording,
+    dartsort,
+    estimate_motion,
+    match,
+    run_peeler,
+    subtract,
+)
 from .peel.grab import GrabAndFeaturize
 from .templates import TemplateData
 from .transform import WaveformPipeline

@@ -95,7 +95,7 @@ class SpikeMixtureModel(torch.nn.Module):
 
         # parameters
         self.n_spikes_fit = n_spikes_fit
-        self.n_threads = n_threads
+        self.n_threads = n_threads if n_threads != 0 else 1
         self.min_count = min_count
         self.channels_count_min = channels_count_min
         self.n_em_iters = n_em_iters
@@ -128,6 +128,7 @@ class SpikeMixtureModel(torch.nn.Module):
         self.proportions_sample_size = proportions_sample_size
 
         # store labels on cpu since we're always nonzeroing / writing np data
+        assert self.data.original_sorting.labels is not None
         self.labels = self.data.original_sorting.labels[data.kept_indices]
         self.labels = torch.from_numpy(self.labels)
 
@@ -682,7 +683,7 @@ class SpikeMixtureModel(torch.nn.Module):
 
     def merge(self, log_liks=None, show_progress=True):
         new_labels, new_ids = self.merge_units(
-            log_liks=log_liks, show_progress=show_progress
+            likelihoods=log_liks, show_progress=show_progress
         )
         self.labels.copy_(torch.asarray(new_labels))
 

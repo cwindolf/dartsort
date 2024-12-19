@@ -108,7 +108,7 @@ class StableSpikeDataset(torch.nn.Module):
     def from_sorting(
         cls,
         sorting,
-        motion_est,
+        motion_est=None,
         core_radius=35.0,
         max_n_spikes=np.inf,
         discard_triaged=False,
@@ -156,9 +156,12 @@ class StableSpikeDataset(torch.nn.Module):
         with h5py.File(sorting.parent_h5_path, "r", locking=False) as h5:
             geom = h5["geom"][:]
             extract_channel_index = h5["channel_index"][:]
-            registered_geom = drift_util.registered_geometry(
-                geom, motion_est=motion_est
-            )
+            if motion_est is None:
+                registered_geom = geom
+            else:
+                registered_geom = drift_util.registered_geometry(
+                    geom, motion_est=motion_est
+                )
             prgeom = interpolation_util.pad_geom(registered_geom)
 
             times_s, channels, depths, rdepths, shifts = get_shift_info(
@@ -614,7 +617,9 @@ def get_shift_info(sorting, motion_est, geom, keep_select, motion_depth_mode):
     else:
         assert False
 
-    rdepths = motion_est.correct_s(times_s, depths)
+    rdepths = depths
+    if motion_est is not None:
+        rdepths = motion_est.correct_s(times_s, depths)
     shifts = rdepths - depths
 
     return times_s, channels, depths, rdepths, shifts
@@ -640,14 +645,17 @@ def get_stable_channels(
     registered_kdtree = drift_util.KDTree(registered_geom)
     match_distance = drift_util.pdist(geom).min() / 2
 
-    n_pitches_shift = drift_util.get_spike_pitch_shifts(
-        depths,
-        geom=geom,
-        motion_est=motion_est,
-        times_s=times_s,
-        registered_depths_um=rdepths,
-        mode="round",
-    )
+    if motion_est is None:
+        n_pitches_shift = np.zeros(len(depths), dtype=int)
+    else:
+        n_pitches_shift = drift_util.get_spike_pitch_shifts(
+            depths,
+            geom=geom,
+            motion_est=motion_est,
+            times_s=times_s,
+            registered_depths_um=rdepths,
+            mode="round",
+        )
 
     extract_channels = drift_util.static_channel_neighborhoods(
         geom,
