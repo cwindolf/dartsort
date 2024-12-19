@@ -59,7 +59,9 @@ def cluster_chunk(
     if sorting is None:
         sorting = DARTsortSorting.from_peeling_hdf5(peeling_hdf5_filename)
     xyza = getattr(sorting, localizations_dataset_name)
-    z_reg = motion_est.correct_s(sorting.times_seconds, xyza[:, 2])
+    z_reg = xyza[:, 2]
+    if motion_est is not None:
+        z_reg = motion_est.correct_s(sorting.times_seconds, z_reg)
     amps = getattr(sorting, amplitudes_dataset_name)
 
     if recording is None:
@@ -81,11 +83,7 @@ def cluster_chunk(
 
     if clustering_config.cluster_strategy == "closest_registered_channels":
         labels[to_cluster] = cluster_util.closest_registered_channels(
-            t_s,
-            xyza[:, 0],
-            xyza[:, 2],
-            geom,
-            motion_est,
+            t_s, xyza[:, 0], xyza[:, 2], geom, motion_est
         )
     elif clustering_config.cluster_strategy == "grid_snap":
         labels[to_cluster] = cluster_util.grid_snap(
@@ -173,12 +171,7 @@ def cluster_chunk(
 
     elif clustering_config.cluster_strategy == "density_peaks_fancy":
         res = density.density_peaks_fancy(
-            xyza,
-            amps,
-            to_cluster,
-            sorting,
-            motion_est,
-            clustering_config,
+            xyza, amps, to_cluster, sorting, motion_est, clustering_config
         )
         if clustering_config.attach_density_feature:
             labels[to_cluster] = res["labels"]

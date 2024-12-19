@@ -459,5 +459,5 @@ unaligned_coarse_denoised_template_config = TemplateConfig(
 default_matching_config = MatchingConfig()
 default_motion_estimation_config = MotionEstimationConfig()
 default_computation_config = ComputationConfig()
-default_dartsort_config = DARTsortConfig()
+default_dartsort_config = DARTsortInternalConfig()
 default_refinement_config = RefinementConfig()
