@@ -2,12 +2,18 @@ import numpy as np
 import torch
 from sklearn.decomposition import PCA
 
-from dartsort.util.waveform_util import (channel_subset_by_radius,
-                                         get_channels_in_probe,
-                                         set_channels_in_probe)
+from dartsort.util.waveform_util import (
+    channel_subset_by_radius,
+    get_channels_in_probe,
+    set_channels_in_probe,
+)
 
-from .transform_base import (BaseWaveformAutoencoder, BaseWaveformDenoiser,
-                             BaseWaveformFeaturizer, BaseWaveformModule)
+from .transform_base import (
+    BaseWaveformAutoencoder,
+    BaseWaveformDenoiser,
+    BaseWaveformFeaturizer,
+    BaseWaveformModule,
+)
 
 
 class BaseTemporalPCA(BaseWaveformModule):

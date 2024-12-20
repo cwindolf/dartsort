@@ -36,6 +36,7 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
         channel_index,
         featurization_pipeline,
         motion_est=None,
+        pairwise_conv_db=None,
         svd_compression_rank=10,
         coarse_objective=True,
         temporal_upsampling_factor=8,
@@ -76,6 +77,7 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
 
         # main properties
         self.template_data = template_data
+        self.pairwise_conv_db = pairwise_conv_db
         self.coarse_objective = coarse_objective
         self.temporal_upsampling_factor = temporal_upsampling_factor
         self.upsampling_peak_window_radius = upsampling_peak_window_radius
@@ -320,21 +322,22 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
         chunk_centers_s = self.recording._recording_segments[0].sample_index_to_time(
             chunk_centers_samples
         )
-        self.pairwise_conv_db = CompressedPairwiseConv.from_template_data(
-            save_folder / "pconv.h5",
-            template_data=objective_temp_data,
-            low_rank_templates=objective_low_rank_temps,
-            template_data_b=template_data,
-            low_rank_templates_b=low_rank_templates,
-            compressed_upsampled_temporal=compressed_upsampled_temporal,
-            chunk_time_centers_s=chunk_centers_s,
-            motion_est=self.motion_est,
-            geom=self.geom,
-            overwrite=overwrite,
-            conv_ignore_threshold=self.conv_ignore_threshold,
-            coarse_approx_error_threshold=self.coarse_approx_error_threshold,
-            computation_config=computation_config,
-        )
+        if self.pairwise_conv_db is None:
+            self.pairwise_conv_db = CompressedPairwiseConv.from_template_data(
+                save_folder / "pconv.h5",
+                template_data=objective_temp_data,
+                low_rank_templates=objective_low_rank_temps,
+                template_data_b=template_data,
+                low_rank_templates_b=low_rank_templates,
+                compressed_upsampled_temporal=compressed_upsampled_temporal,
+                chunk_time_centers_s=chunk_centers_s,
+                motion_est=self.motion_est,
+                geom=self.geom,
+                overwrite=overwrite,
+                conv_ignore_threshold=self.conv_ignore_threshold,
+                coarse_approx_error_threshold=self.coarse_approx_error_threshold,
+                computation_config=computation_config,
+            )
 
         self.fixed_output_data += [
             ("temporal_components", temporal_components),
@@ -868,12 +871,7 @@ class MatchingTemplateData:
             )
             ix_template = template_indices_a[:, None]
             ix_time = times_sub[:, None] + (conv_pad_len + self.conv_lags)[None, :]
-            spiketorch.add_at_(
-                conv,
-                (ix_template, ix_time),
-                pconvs,
-                sign=-1,
-            )
+            spiketorch.add_at_(conv, (ix_template, ix_time), pconvs, sign=-1)
 
     def fine_match(
         self,
@@ -931,6 +929,7 @@ class MatchingTemplateData:
             # )
 
         if self.coarse_objective:
+            assert superres_index is not None
             # TODO best I came up with, but it still syncs
             superres_ix = superres_index[objective_template_indices]
             dup_ix, column_ix = (superres_ix < self.n_templates).nonzero(as_tuple=True)
@@ -940,12 +939,6 @@ class MatchingTemplateData:
                 snips[dup_ix],
                 self.spatial_singular[template_indices].mT,
             ).sum((1, 2))
-            # convs = torch.einsum(
-            #     "jtc,jrc,jtr->j",
-            #     snips[dup_ix],
-            #     self.spatial_singular[template_indices],
-            #     self.temporal_components[template_indices],
-            # )
             norms = self.template_norms_squared[template_indices]
             objs = torch.full(superres_ix.shape, -torch.inf, device=convs.device)
             objs[dup_ix, column_ix] = 2 * convs - norms
@@ -980,12 +973,6 @@ class MatchingTemplateData:
             comp_up_ix < self.n_compressed_upsampled_templates
         ).nonzero(as_tuple=True)
         comp_up_indices = comp_up_ix[dup_ix, column_ix]
-        # convs = torch.einsum(
-        #     "jtcd,jrc,jtr->jd",
-        #     snips_dt[dup_ix],
-        #     self.spatial_singular[template_indices[dup_ix]],
-        #     self.compressed_upsampled_temporal[comp_up_indices],
-        # )
         temps = torch.bmm(
             self.compressed_upsampled_temporal[comp_up_indices],
             self.spatial_singular[template_indices[dup_ix]],
@@ -993,20 +980,6 @@ class MatchingTemplateData:
         convs = torch.linalg.vecdot(snips[dup_ix].view(len(temps), -1), temps)
         convs_prev = torch.linalg.vecdot(snips_prev[dup_ix].view(len(temps), -1), temps)
 
-        # convs_r = torch.round(convs).to(int).numpy()
-        # convs_prev_r = torch.round(convs_prev).to(int).numpy()
-        # convs = torch.einsum(
-        #     "jtc,jrc,jtr->j",
-        #     snips[dup_ix],
-        #     self.spatial_singular[template_indices[dup_ix]],
-        #     self.compressed_upsampled_temporal[comp_up_indices],
-        # )
-        # convs_prev = torch.einsum(
-        #     "jtc,jrc,jtr->j",
-        #     snips_prev[dup_ix],
-        #     self.spatial_singular[template_indices[dup_ix]],
-        #     self.compressed_upsampled_temporal[comp_up_indices],
-        # )
         better = convs >= convs_prev
         convs = torch.maximum(convs, convs_prev)
 

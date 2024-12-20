@@ -43,7 +43,7 @@ class BaseWaveformModule(torch.nn.Module):
 class BaseWaveformDenoiser(BaseWaveformModule):
     is_denoiser = True
 
-    def forward(self, waveforms, max_channels=None):
+    def forward(self, waveforms, max_channels):
         raise NotImplementedError
 
 
@@ -55,7 +55,7 @@ class BaseWaveformFeaturizer(BaseWaveformModule):
     # output dtye
     dtype = torch.float
 
-    def transform(self, waveforms, max_channels=None):
+    def transform(self, waveforms, max_channels):
         # returns dict {key=feat name, value=feature}
         raise NotImplementedError
 
