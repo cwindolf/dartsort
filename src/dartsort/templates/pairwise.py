@@ -295,6 +295,7 @@ class SeparablePairwiseConv(torch.nn.Module):
         Note: need to be consistent with interpretation of the sign of the time lag
         between here and CompressedPairwiseConv.
         """
+        super().__init__()
         self.register_buffer("spatial_footprints", torch.asarray(spatial_footprints))
         self.register_buffer("temporal_shapes", torch.asarray(temporal_shapes))
         self.Nf = len(spatial_footprints)

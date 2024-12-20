@@ -48,7 +48,7 @@ class DARTsortUserConfig:
         "Default value corresponds to 79 samples at 30kHz.",
     )
     alignment_ms: Annotated[float, Field(gt=0)] = argfield(
-        default=0.8,
+        default=1.0,
         doc="Time shift allowed when aligning events.",
     )
 
