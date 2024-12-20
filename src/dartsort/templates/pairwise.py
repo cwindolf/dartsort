@@ -4,6 +4,7 @@ from typing import Optional
 import h5py
 import numpy as np
 import torch
+from torch._functorch.vmap import _as_tuple
 import torch.nn.functional as F
 
 from .pairwise_util import compressed_convolve_to_h5
@@ -282,9 +283,9 @@ class SeparablePairwiseConv(torch.nn.Module):
         Let Nf = len(spatial_footprints), Ns = len(temporal_shapes). Then
         indexing is footprint-major, so that
 
-            template[i] = spatial_footprints[i // Nf] * temporal_shapes[i - Nf * (i // Nf)]
+            template[i] = spatial_footprints[i // Ns] * temporal_shapes[i - Ns * (i // Ns)]
 
-        Let f(i) = i // Nf and s(i) = i - Nf * (i // Nf). Then the channel-summed
+        Let f(i) = i // Ns and s(i) = i - Ns * (i // Ns). Then the channel-summed
         convolution of templates i and j is given by
 
             conv(t; i, j) = (
@@ -299,6 +300,7 @@ class SeparablePairwiseConv(torch.nn.Module):
         self.register_buffer("spatial_footprints", torch.asarray(spatial_footprints))
         self.register_buffer("temporal_shapes", torch.asarray(temporal_shapes))
         self.Nf = len(spatial_footprints)
+        self.Ns, self.nt = temporal_shapes.shape
 
         # convolve all pairs of temporal shapes
         # i is data, j is filter
@@ -311,7 +313,8 @@ class SeparablePairwiseConv(torch.nn.Module):
         # spatial component
         sdot = self.spatial_footprints @ self.spatial_footprints.T
         self.register_buffer("sdot", sdot)
-        self.tia = torch.arange(len(temporal_shapes))
+        self.overlap = (self.sdot > 0).cpu()
+        self.tia = torch.arange(self.Ns * self.Nf)
 
     def query(
         self,
@@ -329,24 +332,35 @@ class SeparablePairwiseConv(torch.nn.Module):
         if device is not None and device != self.spatial_footprints.device:
             self.to(device)
         assert shifts_a is shifts_b is None
-        assert upsampling_indices_b is None
-        del return_zero_convs  # choose not to implement this
+        assert upsampling_indices_b is None or (upsampling_indices_b == 0).all()
+        assert not return_zero_convs  # choose not to implement this
         assert grid  # only this case here. can probably do the same above.
         if template_indices_a is None:
             template_indices_a = self.tia.to(template_indices_b)
 
-        f_i = template_indices_b // self.Nf
-        f_j = template_indices_a // self.Nf
-        s_i = template_indices_b - self.Nf * f_i
-        s_j = template_indices_a - self.Nf * f_j
+        f_i = template_indices_a // self.Ns
+        f_j = template_indices_b // self.Ns
+        keep_i, keep_j = self.overlap[f_i[:, None], f_j[None, :]].nonzero(as_tuple=True)
 
-        pconvs = (
-            self.sdot[f_i[:, None], f_j[None, :]]
-            * self.tconv[s_i[:, None], s_j[None, :]]
-        )
-
+        template_indices_a = template_indices_a[keep_i]
+        template_indices_b = template_indices_b[keep_j]
         if scalings_b is not None:
-            pconvs.mul_(scalings_b[:, None])
+            scalings_b = scalings_b[keep_j]
+        if times_b is not None:
+            times_b = times_b[keep_j]
+
+        f_i = template_indices_a // self.Ns
+        f_j = template_indices_b // self.Ns
+        s_i = template_indices_a - self.Ns * f_i
+        s_j = template_indices_b - self.Ns * f_j
+
+        sdot = self.sdot[f_i, f_j]
+        assert sdot.ndim == 1
+        if scalings_b is not None:
+            sdot = sdot * scalings_b
+        tconv = self.tconv[s_i, s_j]
+        assert tconv.shape == (len(sdot), 2 * self.nt - 1)
+        pconvs = sdot.unsqueeze(1) * tconv
 
         if times_b is not None:
             return template_indices_a, template_indices_b, times_b, pconvs

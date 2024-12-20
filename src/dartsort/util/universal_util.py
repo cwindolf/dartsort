@@ -133,7 +133,7 @@ def get_singlechan_waveforms(
 
 
 def spatial_footprint_bank(
-    geom, n_sigmas=5, min_template_size=10.0, max_distance=32.0, dx=32.0
+    geom, n_sigmas=5, min_template_size=10.0, max_distance=32.0, dx=32.0, eps=0.025
 ):
     # this is just a single shank version, since I don't plan to use
     # this in production. but it is copied from KS' code and can be
@@ -168,6 +168,8 @@ def spatial_footprint_bank(
     sigmas = min_template_size * (1 + np.arange(n_sigmas))
     spatial_profiles = np.exp(-distsq[:, None, :] / sigmas[:, None] ** 2)
     spatial_profiles = spatial_profiles.reshape(n_centers * n_sigmas, len(geom))
+    spatial_profiles /= np.linalg.norm(spatial_profiles, axis=1, keepdims=True)
+    spatial_profiles[spatial_profiles < eps] = 0.0
 
     return spatial_profiles
 
@@ -189,6 +191,7 @@ def singlechan_to_library(
         max_distance=max_distance,
         dx=dx,
     )
+    footprints = footprints.astype(str(singlechan_templates.dtype).split(".")[1])
     if torch.is_tensor(singlechan_templates):
         singlechan_templates = singlechan_templates.numpy(force=True)
     nf, nc = footprints.shape
@@ -202,8 +205,8 @@ def singlechan_to_library(
 
     template_data = TemplateData(
         templates,
-        unit_ids=np.arange(nsct * nt),
-        spike_counts=np.ones(nsct * nt, dtype=int),
+        unit_ids=np.arange(nsct * nf),
+        spike_counts=np.ones(nsct * nf, dtype=int),
     )
     return footprints, template_data
 

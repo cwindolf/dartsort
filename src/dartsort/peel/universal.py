@@ -1,9 +1,11 @@
 import torch
+import numpy as np
 
 from ..util import universal_util, waveform_util
 from ..transform import WaveformPipeline
 from .matching import ObjectiveUpdateTemplateMatchingPeeler
 from ..templates.pairwise import SeparablePairwiseConv
+from ..templates.template_util import LowRankTemplates
 
 
 class UniversalTemplatesMatchingPeeler(ObjectiveUpdateTemplateMatchingPeeler):
@@ -30,7 +32,6 @@ class UniversalTemplatesMatchingPeeler(ObjectiveUpdateTemplateMatchingPeeler):
         threshold=50.0,
         trough_offset_samples=42,
         spike_length_samples=121,
-        svd_compression_rank=10,
         amplitude_scaling_variance=100.0,
         amplitude_scaling_boundary=500.0,
         detection_threshold=6.0,
@@ -73,6 +74,23 @@ class UniversalTemplatesMatchingPeeler(ObjectiveUpdateTemplateMatchingPeeler):
                 kmeanspp_initial="random",
             )
         )
+
+        Nf = len(footprints)
+        Ns = len(shapes)
+        shapes_ixd = torch.asarray(shapes)[None]
+        shapes_ixd = shapes_ixd.broadcast_to((Nf, Ns, *shapes.shape[1:]))
+        shapes_ixd = shapes_ixd.reshape(Nf * Ns, *shapes.shape[1:], 1)
+        footprints_ixd = torch.asarray(footprints)[:, None]
+        footprints_ixd = footprints_ixd.broadcast_to((Nf, Ns, *footprints.shape[1:]))
+        footprints_ixd = footprints_ixd.reshape(Nf * Ns, 1, *footprints.shape[1:])
+        low_rank_templates = LowRankTemplates(
+            temporal_components=shapes_ixd.numpy(),
+            singular_values=shapes_ixd.new_ones(Nf * Ns, 1).numpy(),
+            spatial_components=footprints_ixd.numpy(),
+            spike_counts_by_channel=np.broadcast_to(
+                np.atleast_2d([100]), (Nf * Ns, footprints.shape[1])
+            ),
+        )
         pairwise_conv_db = SeparablePairwiseConv(footprints, shapes)
         super().__init__(
             recording,
@@ -80,10 +98,10 @@ class UniversalTemplatesMatchingPeeler(ObjectiveUpdateTemplateMatchingPeeler):
             channel_index,
             featurization_pipeline,
             pairwise_conv_db=pairwise_conv_db,
+            low_rank_templates=low_rank_templates,
             threshold=threshold,
             amplitude_scaling_variance=amplitude_scaling_variance,
             amplitude_scaling_boundary=amplitude_scaling_boundary,
-            svd_compression_rank=svd_compression_rank,
             # usual gizmos
             trough_offset_samples=trough_offset_samples,
             chunk_length_samples=chunk_length_samples,
@@ -94,10 +112,11 @@ class UniversalTemplatesMatchingPeeler(ObjectiveUpdateTemplateMatchingPeeler):
             fit_sampling=fit_sampling,
             dtype=dtype,
             # matching params which don't need setting
-            min_channel_amplitude=1.0,
+            svd_compression_rank=1,
+            min_channel_amplitude=0.0,
             motion_est=None,
             coarse_approx_error_threshold=0.0,
-            conv_ignore_threshold=5.0,
+            conv_ignore_threshold=0.0,
             coarse_objective=True,
             temporal_upsampling_factor=1,
             refractory_radius_frames=10,
@@ -127,6 +146,7 @@ class UniversalTemplatesMatchingPeeler(ObjectiveUpdateTemplateMatchingPeeler):
         )
         return cls(
             recording,
+            threshold=subtraction_config.universal_threshold,
             channel_index=channel_index,
             featurization_pipeline=featurization_pipeline,
             trough_offset_samples=trough_offset_samples,
