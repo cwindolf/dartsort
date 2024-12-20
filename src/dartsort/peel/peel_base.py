@@ -204,7 +204,7 @@ class BasePeeler(torch.nn.Module):
                         results,
                         total=n_chunks_orig,
                         initial=n_chunks_orig - len(chunks_to_do),
-                        smoothing=0.01,
+                        smoothing=0,
                         desc=f"{task_name} {n_sec_chunk:.1f}s/it [spk/it=%%%]",
                     )
 

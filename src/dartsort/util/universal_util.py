@@ -193,6 +193,8 @@ def singlechan_to_library(
     nsct, nt = singlechan_templates.shape
     templates = footprints[:, None, None, :] * singlechan_templates[None, :, :, None]
     assert templates.shape == (nf, nsct, nt, nc)
+
+    # note: this is footprint-major
     templates = templates.reshape(nf * nsct, nt, nc)
     templates /= np.linalg.norm(templates, axis=(1, 2))
 
