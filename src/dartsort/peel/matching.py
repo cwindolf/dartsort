@@ -37,6 +37,7 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
         featurization_pipeline,
         motion_est=None,
         pairwise_conv_db=None,
+        low_rank_templates=None,
         svd_compression_rank=10,
         coarse_objective=True,
         temporal_upsampling_factor=8,
@@ -78,6 +79,7 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
         # main properties
         self.template_data = template_data
         self.pairwise_conv_db = pairwise_conv_db
+        self.low_rank_templates = low_rank_templates
         self.coarse_objective = coarse_objective
         self.temporal_upsampling_factor = temporal_upsampling_factor
         self.upsampling_peak_window_radius = upsampling_peak_window_radius
@@ -244,14 +246,15 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
         if not have_groups:
             # the logic of coarsening is not needed.
             self.coarse_objective = False
-        low_rank_templates = template_util.svd_compress_templates(
-            template_data,
-            min_channel_amplitude=min_channel_amplitude,
-            rank=svd_compression_rank,
-        )
-        temporal_components = low_rank_templates.temporal_components.astype(dtype)
-        singular_values = low_rank_templates.singular_values.astype(dtype)
-        spatial_components = low_rank_templates.spatial_components.astype(dtype)
+        if self.low_rank_templates is None:
+            self.low_rank_templates = template_util.svd_compress_templates(
+                template_data,
+                min_channel_amplitude=min_channel_amplitude,
+                rank=svd_compression_rank,
+            )
+        temporal_components = self.low_rank_templates.temporal_components.astype(dtype)
+        singular_values = self.low_rank_templates.singular_values.astype(dtype)
+        spatial_components = self.low_rank_templates.spatial_components.astype(dtype)
         self.register_buffer("temporal_components", torch.tensor(temporal_components))
         self.register_buffer("singular_values", torch.tensor(singular_values))
         self.register_buffer("spatial_components", torch.tensor(spatial_components))
@@ -292,7 +295,7 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
             self.obj_n_templates = spatial_components.shape[0]
         else:
             objective_temp_data = template_data
-            objective_low_rank_temps = low_rank_templates
+            objective_low_rank_temps = self.low_rank_templates
             self.objective_template_depths_um = self.registered_template_depths_um
             self.register_buffer(
                 "objective_temporal_components", self.temporal_components
@@ -302,6 +305,7 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
                 "objective_spatial_components", self.spatial_components
             )
             self.obj_n_templates = self.n_templates
+
         self.handle_template_groups(
             objective_temp_data.unit_ids, self.template_data.unit_ids
         )
@@ -322,13 +326,14 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
         chunk_centers_s = self.recording._recording_segments[0].sample_index_to_time(
             chunk_centers_samples
         )
+
         if self.pairwise_conv_db is None:
             self.pairwise_conv_db = CompressedPairwiseConv.from_template_data(
                 save_folder / "pconv.h5",
                 template_data=objective_temp_data,
                 low_rank_templates=objective_low_rank_temps,
                 template_data_b=template_data,
-                low_rank_templates_b=low_rank_templates,
+                low_rank_templates_b=self.low_rank_templates,
                 compressed_upsampled_temporal=compressed_upsampled_temporal,
                 chunk_time_centers_s=chunk_centers_s,
                 motion_est=self.motion_est,
