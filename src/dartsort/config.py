@@ -34,6 +34,7 @@ class DARTsortUserConfig:
         "or 'cuda' or 'cuda:1'. If unset, uses n_jobs_gpu of your CUDA "
         "GPUs if you have multiple, or else just the one, or your CPU.",
     )
+    executor: str = "threading_unless_multigpu"
 
     # -- waveform snippet length parameters
     ms_before: Annotated[float, Field(gt=0)] = argfield(
@@ -128,6 +129,7 @@ class DARTsortUserConfig:
     rigid: bool = argfield(
         default=False, doc="Use rigid registration and ignore the window parameters."
     )
+    probe_boundary_padding_um: float = 100.0
     spatial_bin_length_um: Annotated[float, Field(gt=0)] = 1.0
     temporal_bin_length_s: Annotated[float, Field(gt=0)] = 1.0
     window_step_um: Annotated[float, Field(gt=0)] = 400.0
@@ -140,6 +142,7 @@ class DARTsortUserConfig:
         default=None, arg_type=float
     )
     correlation_threshold: Annotated[float, Field(gt=0, lt=1)] = 0.1
+    min_amplitude: float | None = argfield(default=None, arg_type=float)
 
 
 @dataclass(frozen=True, kw_only=True, slots=True)

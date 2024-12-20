@@ -510,7 +510,10 @@ def to_internal_config(cfg):
         extract_radius=cfg.featurization_radius_um,
     )
     computation_config = ComputationConfig(
-        n_jobs_cpu=cfg.n_jobs_cpu, n_jobs_gpu=cfg.n_jobs_gpu, device=cfg.device
+        n_jobs_cpu=cfg.n_jobs_cpu,
+        n_jobs_gpu=cfg.n_jobs_gpu,
+        device=cfg.device,
+        executor=cfg.executor,
     )
 
     return DARTsortInternalConfig(
