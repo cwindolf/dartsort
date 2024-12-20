@@ -189,12 +189,14 @@ def singlechan_to_library(
         max_distance=max_distance,
         dx=dx,
     )
+    if torch.is_tensor(singlechan_templates):
+        singlechan_templates = singlechan_templates.numpy(force=True)
     nf, nc = footprints.shape
     nsct, nt = singlechan_templates.shape
     templates = footprints[:, None, None, :] * singlechan_templates[None, :, :, None]
     assert templates.shape == (nf, nsct, nt, nc)
     templates = templates.reshape(nf * nsct, nt, nc)
-    templates /= np.linalg.norm(templates, axis=(1, 2))
+    templates /= np.linalg.norm(templates, axis=(1, 2), keepdims=True)
 
     return TemplateData(
         templates,
