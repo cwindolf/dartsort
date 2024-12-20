@@ -200,11 +200,12 @@ def singlechan_to_library(
     templates = templates.reshape(nf * nsct, nt, nc)
     templates /= np.linalg.norm(templates, axis=(1, 2), keepdims=True)
 
-    return TemplateData(
+    template_data = TemplateData(
         templates,
         unit_ids=np.arange(nsct * nt),
         spike_counts=np.ones(nsct * nt, dtype=int),
     )
+    return footprints, template_data
 
 
 def universal_templates_from_data(
@@ -245,7 +246,7 @@ def universal_templates_from_data(
         kmeanspp_initial=kmeanspp_initial,
         random_seed=random_seed,
     )
-    template_data = singlechan_to_library(
+    footprints, template_data = singlechan_to_library(
         singlechan_centroids,
         rec.get_channel_locations() if rec is not None else None,
         n_sigmas=n_sigmas,
@@ -253,4 +254,4 @@ def universal_templates_from_data(
         max_distance=max_distance,
         dx=dx,
     )
-    return template_data
+    return singlechan_centroids, footprints, template_data
