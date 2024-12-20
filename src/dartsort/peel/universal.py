@@ -3,6 +3,7 @@ import torch
 from ..util import universal_util, waveform_util
 from ..transform import WaveformPipeline
 from .matching import ObjectiveUpdateTemplateMatchingPeeler
+from ..templates.pairwise import SeparablePairwiseConv
 
 
 class UniversalTemplatesMatchingPeeler(ObjectiveUpdateTemplateMatchingPeeler):
@@ -49,32 +50,36 @@ class UniversalTemplatesMatchingPeeler(ObjectiveUpdateTemplateMatchingPeeler):
         fit_sampling="random",
         dtype=torch.float,
     ):
-        template_data = universal_util.universal_templates_from_data(
-            rec=recording,
-            detection_threshold=detection_threshold,
-            trough_offset_samples=trough_offset_samples,
-            spike_length_samples=spike_length_samples,
-            alignment_padding=alignment_padding,
-            n_centroids=n_centroids,
-            pca_rank=pca_rank,
-            n_waveforms_fit=n_waveforms_fit,
-            taper=taper,
-            taper_start=alignment_padding // 2,
-            taper_end=alignment_padding // 2,
-            random_seed=fit_subsampling_random_state,
-            n_sigmas=n_sigmas,
-            min_template_size=min_template_size,
-            max_distance=max_distance,
-            dx=dx,
-            # let's not worry about exposing these
-            deduplication_radius=150.0,
-            kmeanspp_initial="random",
+        shapes, footprints, template_data = (
+            universal_util.universal_templates_from_data(
+                rec=recording,
+                detection_threshold=detection_threshold,
+                trough_offset_samples=trough_offset_samples,
+                spike_length_samples=spike_length_samples,
+                alignment_padding=alignment_padding,
+                n_centroids=n_centroids,
+                pca_rank=pca_rank,
+                n_waveforms_fit=n_waveforms_fit,
+                taper=taper,
+                taper_start=alignment_padding // 2,
+                taper_end=alignment_padding // 2,
+                random_seed=fit_subsampling_random_state,
+                n_sigmas=n_sigmas,
+                min_template_size=min_template_size,
+                max_distance=max_distance,
+                dx=dx,
+                # let's not worry about exposing these
+                deduplication_radius=150.0,
+                kmeanspp_initial="random",
+            )
         )
+        pairwise_conv_db = SeparablePairwiseConv(footprints, shapes)
         super().__init__(
             recording,
             template_data,
             channel_index,
             featurization_pipeline,
+            pairwise_conv_db=pairwise_conv_db,
             threshold=threshold,
             amplitude_scaling_variance=amplitude_scaling_variance,
             amplitude_scaling_boundary=amplitude_scaling_boundary,
