@@ -4,6 +4,7 @@ from typing import Optional
 import h5py
 import numpy as np
 import torch
+import torch.nn.functional as F
 
 from .pairwise_util import compressed_convolve_to_h5
 from .template_util import CompressedUpsampledTemplates, LowRankTemplates
@@ -56,6 +57,106 @@ class CompressedPairwiseConv:
     in_memory: bool = False
     device: torch.device = torch.device("cpu")
 
+    def query(
+        self,
+        template_indices_a,
+        template_indices_b,
+        upsampling_indices_b=None,
+        shifts_a=None,
+        shifts_b=None,
+        scalings_b=None,
+        times_b=None,
+        return_zero_convs=False,
+        grid=False,
+        device=None,
+    ):
+        if template_indices_a is None:
+            template_indices_a = torch.arange(
+                len(self.shifted_template_index_a), device=self.device
+            )
+        template_indices_a = torch.atleast_1d(torch.as_tensor(template_indices_a))
+        template_indices_b = torch.atleast_1d(torch.as_tensor(template_indices_b))
+
+        # handle no shifting
+        no_shifting = shifts_a is None or shifts_b is None
+        shifted_template_index = self.shifted_template_index_a
+        upsampled_shifted_template_index = self.upsampled_shifted_template_index_b
+        if no_shifting:
+            assert shifts_a is None and shifts_b is None
+            assert self.shifts_a.shape == (1,)
+            assert self.shifts_b.shape == (1,)
+            a_ix = (template_indices_a,)
+            b_ix = (template_indices_b,)
+            shifted_template_index = shifted_template_index[:, 0]
+            upsampled_shifted_template_index = upsampled_shifted_template_index[:, 0]
+        else:
+            shift_indices_a = self._get_shift_ix_a(shifts_a)
+            shift_indices_b = self._get_shift_ix_a(shifts_b)
+            a_ix = (template_indices_a, shift_indices_a)
+            b_ix = (template_indices_b, shift_indices_b)
+
+        # handle no upsampling
+        no_upsampling = upsampling_indices_b is None
+        if no_upsampling:
+            assert self.upsampled_shifted_template_index_b.shape[2] == 1
+            upsampled_shifted_template_index = upsampled_shifted_template_index[..., 0]
+        else:
+            b_ix = b_ix + (torch.atleast_1d(torch.as_tensor(upsampling_indices_b)),)
+
+        # get shifted template indices for A
+        shifted_temp_ix_a = shifted_template_index[a_ix]
+
+        # upsampled shifted template indices for B
+        up_shifted_temp_ix_b = upsampled_shifted_template_index[b_ix]
+
+        # return convolutions between all ai,bj or just ai,bi?
+        if grid:
+            pconv_indices = self.pconv_index[
+                shifted_temp_ix_a[:, None], up_shifted_temp_ix_b[None, :]
+            ]
+            template_indices_a, template_indices_b = torch.cartesian_prod(
+                template_indices_a, template_indices_b
+            ).T
+            if scalings_b is not None:
+                scalings_b = torch.broadcast_to(
+                    scalings_b[None], pconv_indices.shape
+                ).reshape(-1)
+            if times_b is not None:
+                times_b = torch.broadcast_to(
+                    times_b[None], pconv_indices.shape
+                ).reshape(-1)
+            pconv_indices = pconv_indices.view(-1)
+        else:
+            pconv_indices = self.pconv_index[shifted_temp_ix_a, up_shifted_temp_ix_b]
+
+        # most users will be happy not to get a bunch of zeros for pairs that don't overlap
+        if not return_zero_convs:
+            which = pconv_indices > 0
+            pconv_indices = pconv_indices[which]
+            template_indices_a = template_indices_a[which]
+            template_indices_b = template_indices_b[which]
+            if scalings_b is not None:
+                scalings_b = scalings_b[which]
+            if times_b is not None:
+                times_b = times_b[which]
+
+        if self.in_memory:
+            pconvs = self.pconv[pconv_indices.to(self.pconv.device)]
+        else:
+            pconvs = torch.from_numpy(
+                batched_h5_read(self.pconv, pconv_indices.numpy(force=True))
+            )
+        if device is not None:
+            pconvs = pconvs.to(device)
+
+        if scalings_b is not None:
+            pconvs.mul_(scalings_b[:, None])
+
+        if times_b is not None:
+            return template_indices_a, template_indices_b, times_b, pconvs
+
+        return template_indices_a, template_indices_b, pconvs
+
     def __post_init__(self):
         assert self.shifts_a.ndim == self.shifts_b.ndim == 1
         assert self.shifts_a.shape == (self.shifted_template_index_a.shape[1],)
@@ -69,7 +170,7 @@ class CompressedPairwiseConv:
             self.shifts_b
         )
 
-    def get_shift_ix_a(self, shifts_a):
+    def _get_shift_ix_a(self, shifts_a):
         """Map shift (an integer, signed) to a shift index
 
         A shift index can be used to index into axis=1 of shifted_template_index_a,
@@ -173,6 +274,44 @@ class CompressedPairwiseConv:
             # self.pconv = self.pconv.pin_memory()
         return self
 
+
+class SeparablePairwiseConv(torch.nn.Module):
+    def __init__(self, spatial_footprints, temporal_shapes):
+        """Footprint-major rank 1 template convolution database
+
+        Let Nf = len(spatial_footprints), Ns = len(temporal_shapes). Then
+        indexing is footprint-major, so that
+
+            template[i] = spatial_footprints[i // Nf] * temporal_shapes[i - Nf * (i // Nf)]
+
+        Let f(i) = i // Nf and s(i) = i - Nf * (i // Nf). Then the channel-summed
+        convolution of templates i and j is given by
+
+            conv(t; i, j) = (
+                <spatial_footprints[f(i)], spatial_footprints[f(j)]>
+                * conv1d(temporal_shapes[s(i)], temporal_shapes[s(j)])[t]
+            )
+
+        Note: need to be consistent with interpretation of the sign of the time lag
+        between here and CompressedPairwiseConv.
+        """
+        self.register_buffer("spatial_footprints", torch.asarray(spatial_footprints))
+        self.register_buffer("temporal_shapes", torch.asarray(temporal_shapes))
+        self.Nf = len(spatial_footprints)
+
+        # convolve all pairs of temporal shapes
+        # i is data, j is filter
+        nt = temporal_shapes.shape[1]
+        inp = self.temporal_shapes[:, None, :]
+        fil = self.temporal_shapes[:, None, :]
+        # Ns, Ns, 2*nt - 1
+        self.register_buffer("tconv", F.conv1d(inp, fil, padding=nt - 1))
+
+        # spatial component
+        sdot = self.spatial_footprints @ self.spatial_footprints.T
+        self.register_buffer("sdot", sdot)
+        self.tia = torch.arange(len(temporal_shapes))
+
     def query(
         self,
         template_indices_a,
@@ -186,84 +325,24 @@ class CompressedPairwiseConv:
         grid=False,
         device=None,
     ):
+        if device is not None and device != self.spatial_footprints.device:
+            self.to(device)
+        assert shifts_a is shifts_b is None
+        assert upsampling_indices_b is None
+        del return_zero_convs  # choose not to implement this
+        assert grid  # only this case here. can probably do the same above.
         if template_indices_a is None:
-            template_indices_a = torch.arange(
-                len(self.shifted_template_index_a), device=self.device
-            )
-        template_indices_a = torch.atleast_1d(torch.as_tensor(template_indices_a))
-        template_indices_b = torch.atleast_1d(torch.as_tensor(template_indices_b))
+            template_indices_a = self.tia.to(template_indices_b)
 
-        # handle no shifting
-        no_shifting = shifts_a is None or shifts_b is None
-        shifted_template_index = self.shifted_template_index_a
-        upsampled_shifted_template_index = self.upsampled_shifted_template_index_b
-        if no_shifting:
-            assert shifts_a is None and shifts_b is None
-            assert self.shifts_a.shape == (1,)
-            assert self.shifts_b.shape == (1,)
-            a_ix = (template_indices_a,)
-            b_ix = (template_indices_b,)
-            shifted_template_index = shifted_template_index[:, 0]
-            upsampled_shifted_template_index = upsampled_shifted_template_index[:, 0]
-        else:
-            shift_indices_a = self.get_shift_ix_a(shifts_a)
-            shift_indices_b = self.get_shift_ix_a(shifts_b)
-            a_ix = (template_indices_a, shift_indices_a)
-            b_ix = (template_indices_b, shift_indices_b)
+        f_i = template_indices_b // self.Nf
+        f_j = template_indices_a // self.Nf
+        s_i = template_indices_b - self.Nf * f_i
+        s_j = template_indices_a - self.Nf * f_j
 
-        # handle no upsampling
-        no_upsampling = upsampling_indices_b is None
-        if no_upsampling:
-            assert self.upsampled_shifted_template_index_b.shape[2] == 1
-            upsampled_shifted_template_index = upsampled_shifted_template_index[..., 0]
-        else:
-            b_ix = b_ix + (torch.atleast_1d(torch.as_tensor(upsampling_indices_b)),)
-
-        # get shifted template indices for A
-        shifted_temp_ix_a = shifted_template_index[a_ix]
-
-        # upsampled shifted template indices for B
-        up_shifted_temp_ix_b = upsampled_shifted_template_index[b_ix]
-
-        # return convolutions between all ai,bj or just ai,bi?
-        if grid:
-            pconv_indices = self.pconv_index[
-                shifted_temp_ix_a[:, None], up_shifted_temp_ix_b[None, :]
-            ]
-            template_indices_a, template_indices_b = torch.cartesian_prod(
-                template_indices_a, template_indices_b
-            ).T
-            if scalings_b is not None:
-                scalings_b = torch.broadcast_to(
-                    scalings_b[None], pconv_indices.shape
-                ).reshape(-1)
-            if times_b is not None:
-                times_b = torch.broadcast_to(
-                    times_b[None], pconv_indices.shape
-                ).reshape(-1)
-            pconv_indices = pconv_indices.view(-1)
-        else:
-            pconv_indices = self.pconv_index[shifted_temp_ix_a, up_shifted_temp_ix_b]
-
-        # most users will be happy not to get a bunch of zeros for pairs that don't overlap
-        if not return_zero_convs:
-            which = pconv_indices > 0
-            pconv_indices = pconv_indices[which]
-            template_indices_a = template_indices_a[which]
-            template_indices_b = template_indices_b[which]
-            if scalings_b is not None:
-                scalings_b = scalings_b[which]
-            if times_b is not None:
-                times_b = times_b[which]
-
-        if self.in_memory:
-            pconvs = self.pconv[pconv_indices.to(self.pconv.device)]
-        else:
-            pconvs = torch.from_numpy(
-                batched_h5_read(self.pconv, pconv_indices.numpy(force=True))
-            )
-        if device is not None:
-            pconvs = pconvs.to(device)
+        pconvs = (
+            self.sdot[f_i[:, None], f_j[None, :]]
+            * self.tconv[s_i[:, None], s_j[None, :]]
+        )
 
         if scalings_b is not None:
             pconvs.mul_(scalings_b[:, None])
@@ -272,78 +351,6 @@ class CompressedPairwiseConv:
             return template_indices_a, template_indices_b, times_b, pconvs
 
         return template_indices_a, template_indices_b, pconvs
-
-    # def at_shifts(self, shifts_a=None, shifts_b=None, device=None):
-    #     """Subset this database to one set of shifts.
-
-    #     The database becomes shiftless (not in the pejorative sense).
-    #     """
-    #     if shifts_a is None or shifts_b is None:
-    #         assert shifts_a is shifts_b
-    #         assert self.shifts_a.shape == (1,)
-    #         assert self.shifts_b.shape == (1,)
-    #         return self
-
-    #     assert shifts_a.shape == (len(self.shifted_template_index_a),)
-    #     assert shifts_b.shape == (len(self.upsampled_shifted_template_index_b),)
-    #     n_shifted_temps_a, n_up_shifted_temps_b = self.pconv_index.shape
-
-    #     # active shifted and upsampled indices
-    #     shift_ix_a = self.get_shift_ix_a(shifts_a)
-    #     shift_ix_b = self.get_shift_ix_b(shifts_b)
-    #     sub_shifted_temp_index_a = self.shifted_template_index_a[
-    #         torch.arange(len(self.shifted_template_index_a))[:, None],
-    #         shift_ix_a[:, None],
-    #     ]
-    #     sub_up_shifted_temp_index_b = self.upsampled_shifted_template_index_b[
-    #         torch.arange(len(self.upsampled_shifted_template_index_b))[:, None],
-    #         shift_ix_b[:, None],
-    #     ]
-
-    #     # in flat form for indexing into pconv_index. also, reindex.
-    #     valid_a = sub_shifted_temp_index_a < n_shifted_temps_a
-    #     shifted_temp_ixs_a, new_shifted_temp_ixs_a = torch.unique(
-    #         sub_shifted_temp_index_a[valid_a], return_inverse=True
-    #     )
-    #     valid_b = sub_up_shifted_temp_index_b < n_up_shifted_temps_b
-    #     up_shifted_temp_ixs_b, new_up_shifted_temp_ixs_b = torch.unique(
-    #         sub_up_shifted_temp_index_b[valid_b], return_inverse=True
-    #     )
-
-    #     # get relevant pconv subset and reindex
-    #     sub_pconv_indices, new_pconv_indices = torch.unique(
-    #         self.pconv_index[
-    #             shifted_temp_ixs_a[:, None],
-    #             up_shifted_temp_ixs_b.ravel()[None, :],
-    #         ],
-    #         return_inverse=True,
-    #     )
-    #     if self.in_memory:
-    #         sub_pconv = self.pconv[sub_pconv_indices.to(self.pconv.device)]
-    #     else:
-    #         sub_pconv = torch.from_numpy(batched_h5_read(self.pconv, sub_pconv_indices))
-    #     if device is not None:
-    #         sub_pconv = sub_pconv.to(device)
-
-    #     # reindexing
-    #     n_sub_shifted_temps_a = len(shifted_temp_ixs_a)
-    #     n_sub_up_shifted_temps_b = len(up_shifted_temp_ixs_b)
-    #     sub_pconv_index = new_pconv_indices.view(
-    #         n_sub_shifted_temps_a, n_sub_up_shifted_temps_b
-    #     )
-    #     sub_shifted_temp_index_a[valid_a] = new_shifted_temp_ixs_a
-    #     sub_up_shifted_temp_index_b[valid_b] = new_up_shifted_temp_ixs_b
-
-    #     return self.__class__(
-    #         shifts_a=torch.zeros(1),
-    #         shifts_b=torch.zeros(1),
-    #         shifted_template_index_a=sub_shifted_temp_index_a,
-    #         upsampled_shifted_template_index_b=sub_up_shifted_temp_index_b,
-    #         pconv_index=sub_pconv_index,
-    #         pconv=sub_pconv,
-    #         in_memory=True,
-    #         device=self.device,
-    #     )
 
 
 def _get_shift_indexer(shifts):
