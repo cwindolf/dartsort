@@ -57,6 +57,9 @@ class StableSpikeDataset(torch.nn.Module):
         self.split_names = split_names
         if self.has_splits:
             self.split_ids = dict(zip(split_names, range(len(split_names))))
+            self.split_indices = {
+                k: np.flatnonzero(split_mask == j) for k, j in self.split_ids.items()
+            }
         else:
             self.split_ids = None
         self.split_mask = split_mask
@@ -68,9 +71,6 @@ class StableSpikeDataset(torch.nn.Module):
         self.core_neighborhoods = core_neighborhoods
         self.extract_neighborhoods = extract_neighborhoods
 
-        extract_amp_vecs = torch.linalg.vector_norm(extract_features, dim=1)
-        amps = extract_amp_vecs.nan_to_num().max(1).values
-
         # channel neighborhoods and features
         # if not self.features_on_device, .spike_data() will .to(self.device)
         self.core_channels = core_channels.cpu()
@@ -81,16 +81,12 @@ class StableSpikeDataset(torch.nn.Module):
             # self.register_buffer("extract_channels", extract_channels)
             self.register_buffer("core_features", core_features)
             self.register_buffer("extract_features", extract_features)
-            # self.register_buffer("extract_amp_vecs", extract_amp_vecs)
-            self.register_buffer("amps", amps)
             self.register_buffer("times_seconds", times_s)
         else:
             # self.core_channels = core_channels
             # self.extract_channels = extract_channels
             self.core_features = core_features
             self.extract_features = extract_features
-            # self.extract_amp_vecs = extract_amp_vecs
-            self.amps = amps
             self.times_seconds = times_s
 
         # always on device
@@ -182,6 +178,7 @@ class StableSpikeDataset(torch.nn.Module):
                 core_radius,
                 workers=workers,
                 motion_depth_mode=motion_depth_mode,
+                device=device,
             )
             extract_channels = torch.from_numpy(extract_channels)
             core_channels = torch.from_numpy(core_channels)
@@ -226,10 +223,10 @@ class StableSpikeDataset(torch.nn.Module):
 
         # determine channel neighborhoods
         core_neighborhoods = SpikeNeighborhoods.from_channels(
-            core_channels, len(prgeom) - 1
+            core_channels, len(prgeom) - 1, device=device
         )
         extract_neighborhoods = SpikeNeighborhoods.from_channels(
-            extract_channels, len(prgeom) - 1
+            extract_channels, len(prgeom) - 1, device=device
         )
 
         self = cls(
@@ -403,7 +400,7 @@ class SpikeNeighborhoods(torch.nn.Module):
         if store_on_device:
             self.register_buffer("neighborhood_ids", neighborhood_ids)
         else:
-            self.neighborhood_ids = neighborhood_ids
+            self.neighborhood_ids = neighborhood_ids.cpu()
         # self.register_buffer("neighborhoods", neighborhoods)
         self.neighborhoods = neighborhoods.cpu()
         self.n_neighborhoods = len(neighborhoods)
@@ -445,7 +442,9 @@ class SpikeNeighborhoods(torch.nn.Module):
         self.register_buffer("popcounts", torch.tensor(neighborhood_popcounts))
 
     @classmethod
-    def from_channels(cls, channels, n_channels):
+    def from_channels(cls, channels, n_channels, device=None):
+        if device is not None:
+            channels = channels.to(device)
         neighborhoods, neighborhood_ids = torch.unique(
             channels, dim=0, return_inverse=True
         )
@@ -637,6 +636,7 @@ def get_stable_channels(
     motion_est,
     core_radius,
     workers=-1,
+    device=None,
     motion_depth_mode="channel",
 ):
     core_channel_index = waveform_util.make_channel_index(geom, core_radius)
@@ -657,6 +657,17 @@ def get_stable_channels(
             mode="round",
         )
 
+    # extract the main unique chans computation
+    c_and_s = torch.column_stack(
+        (torch.asarray(channels, dtype=torch.int32, device=device),
+         torch.asarray(n_pitches_shift, dtype=torch.int32, device=device)),
+    )
+    uniq_channels_and_shifts, uniq_inv = torch.unique(
+        c_and_s, dim=0, return_inverse=True
+    )
+    uniq_channels_and_shifts = uniq_channels_and_shifts.numpy(force=True)
+    uniq_inv = uniq_inv.numpy(force=True)
+
     extract_channels = drift_util.static_channel_neighborhoods(
         geom,
         channels,
@@ -666,6 +677,8 @@ def get_stable_channels(
         registered_geom=registered_geom,
         target_kdtree=registered_kdtree,
         match_distance=match_distance,
+        uniq_channels_and_shifts=uniq_channels_and_shifts,
+        uniq_inv=uniq_inv,
         workers=workers,
     )
     core_channels = drift_util.static_channel_neighborhoods(
@@ -677,6 +690,8 @@ def get_stable_channels(
         registered_geom=registered_geom,
         target_kdtree=registered_kdtree,
         match_distance=match_distance,
+        uniq_channels_and_shifts=uniq_channels_and_shifts,
+        uniq_inv=uniq_inv,
         workers=workers,
     )
 
