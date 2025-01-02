@@ -46,6 +46,7 @@ class SpikeMixtureModel(torch.nn.Module):
         cov_kind="ppca",
         use_proportions: bool = True,
         proportions_sample_size: int = 2**16,
+        likelihood_batch_size: int = 2**14,
         channels_strategy: Literal["all", "snr", "count"] = "count",
         channels_count_min: float = 25.0,
         channels_snr_amp: float = 1.0,
@@ -95,6 +96,7 @@ class SpikeMixtureModel(torch.nn.Module):
 
         # parameters
         self.n_spikes_fit = n_spikes_fit
+        self.likelihood_batch_size = likelihood_batch_size
         self.n_threads = n_threads if n_threads != 0 else 1
         self.min_count = min_count
         self.channels_count_min = channels_count_min
@@ -456,26 +458,28 @@ class SpikeMixtureModel(torch.nn.Module):
         # how many units does each core neighborhood overlap with?
         n_cores = self.data.core_neighborhoods.n_neighborhoods
         with_noise_unit = self.with_noise_unit and with_noise_unit
-        if with_noise_unit:
-            # everyone overlaps the noise unit
-            core_overlaps = torch.ones(n_cores, dtype=int, device=self.data.device)
-        else:
-            core_overlaps = torch.zeros(n_cores, dtype=int, device=self.data.device)
+        # everyone overlaps the noise unit
+        core_overlaps = torch.full(
+            (n_cores,), int(with_noise_unit), dtype=torch.int32, device=self.data.device
+        )
 
         # for each unit, determine which spikes will be computed
-        neighb_info = []
+        unit_neighb_info = []
         nnz = 0
         for j in unit_ids:
             unit = self[j]
             if recompute_mask is None or recompute_mask[j]:
                 covered_neighbs, neighbs, ns_unit = (
                     self.data.core_neighborhoods.subset_neighborhoods(
-                        unit.channels, add_to_overlaps=core_overlaps
+                        unit.channels,
+                        add_to_overlaps=core_overlaps,
+                        batch_size=self.likelihood_batch_size,
                     )
                 )
                 unit.annotations["covered_neighbs"] = covered_neighbs
-                neighb_info.append((j, neighbs, ns_unit))
+                unit_neighb_info.append((j, neighbs, ns_unit))
             else:
+                assert previous_logliks is not None
                 row = previous_logliks[[j]].tocoo(copy=True)
                 six = row.coords[1]
                 ns_unit = row.nnz
@@ -484,14 +488,13 @@ class SpikeMixtureModel(torch.nn.Module):
                 else:
                     covered_neighbs = self.data.core_neighborhoods.neighborhood_ids[six]
                     covered_neighbs = torch.unique(covered_neighbs)
-                neighb_info.append((j, six, row.data, ns_unit))
+                unit_neighb_info.append((j, six, row.data, ns_unit))
             core_overlaps[covered_neighbs] += 1
             nnz += ns_unit
 
         # how many units does each spike overlap with? needed to write csc
-        spike_overlaps = core_overlaps[
-            self.data.core_neighborhoods.neighborhood_ids
-        ].numpy(force=True)
+        spike_overlaps = core_overlaps[self.data.core_neighborhoods.neighborhood_ids]
+        spike_overlaps = spike_overlaps.numpy(force=True)
 
         # add in space for the noise unit
         if with_noise_unit:
@@ -505,23 +508,25 @@ class SpikeMixtureModel(torch.nn.Module):
             else:
                 assert len(ninfo) == 3
                 j, neighbs, ns = ninfo
-                ix, ll = self.unit_log_likelihoods(unit_id=j, neighbs=neighbs, ns=ns)
+                ix, ll = self.unit_log_likelihoods(
+                    unit_id=j, neighbs=neighbs, ns=ns, return_sorted=False
+                )
                 return j, ix, ll
 
         # get the big nnz-length csc buffers. these can be huge so we cache them.
         csc_indices, csc_data = get_csc_storage(nnz, self.storage, use_storage)
         # csc compressed indptr. spikes are columns.
-        indptr = np.concatenate(([0], np.cumsum(spike_overlaps)))
+        indptr = np.concatenate(([0], np.cumsum(spike_overlaps, dtype=int)))
         del spike_overlaps
         # each spike starts at writing at its indptr. as we gather more units for each
         # spike, we increment the spike's "write head". idea is to directly make csc
         write_offsets = indptr[:-1].copy()
         pool = Parallel(self.n_threads, backend="threading", return_as="generator")
-        results = pool(job(ninfo) for ninfo in neighb_info)
+        results = pool(job(ninfo) for ninfo in unit_neighb_info)
         if show_progress:
             results = tqdm(
                 results,
-                total=len(neighb_info),
+                total=len(unit_neighb_info),
                 desc="Likelihoods",
                 unit="unit",
                 **tqdm_kw,
@@ -995,6 +1000,7 @@ class SpikeMixtureModel(torch.nn.Module):
         show_progress=False,
         ignore_channels=False,
         desc_prefix="",
+        return_sorted=True,
     ):
         """Log likelihoods of core spikes for a single unit
 
@@ -1023,10 +1029,10 @@ class SpikeMixtureModel(torch.nn.Module):
                     core_channels, spike_indices
                 )
             else:
-                covered_neighbs, neighbs, ns = (
-                    self.data.core_neighborhoods.subset_neighborhoods(core_channels)
+                cn, neighbs, ns = self.data.core_neighborhoods.subset_neighborhoods(
+                    core_channels, batch_size=self.likelihood_batch_size
                 )
-                unit.annotations["covered_neighbs"] = covered_neighbs
+                unit.annotations["covered_neighbs"] = cn
         if not ns:
             return None, None
 
@@ -1039,13 +1045,13 @@ class SpikeMixtureModel(torch.nn.Module):
                 (len(spike_indices),), -torch.inf, device=self.data.device
             )
 
-        jobs = neighbs.items()
+        jobs = neighbs
         if show_progress:
             jobs = tqdm(
                 jobs, desc=f"{desc_prefix}logliks", total=len(neighbs), **tqdm_kw
             )
 
-        for neighb_id, (neighb_chans, neighb_member_ixs) in jobs:
+        for neighb_id, neighb_chans, neighb_member_ixs in jobs:
             if spikes is not None:
                 sp = spikes[neighb_member_ixs]
             elif inds_already:
@@ -1056,7 +1062,10 @@ class SpikeMixtureModel(torch.nn.Module):
                 )
             else:
                 sp = self.data.spike_data(
-                    neighb_member_ixs, with_channels=False, neighborhood="core"
+                    neighb_member_ixs,
+                    with_channels=False,
+                    neighborhood="core",
+                    feature_buffer=self.core_batch_buffer,
                 )
             features = sp.features
             chans_valid = neighb_chans < self.data.n_channels
@@ -1071,7 +1080,7 @@ class SpikeMixtureModel(torch.nn.Module):
                 log_likelihoods[offset : offset + len(sp)] = lls
                 offset += len(sp)
 
-        if not inds_already:
+        if return_sorted and not inds_already:
             spike_indices, order = spike_indices.sort()
             log_likelihoods = log_likelihoods[order]
 
@@ -1771,6 +1780,16 @@ class SpikeMixtureModel(torch.nn.Module):
             with self.lock:
                 self.storage.rg = self._rg.spawn(1)[0]
         return self.storage.rg
+
+    @property
+    def core_batch_buffer(self):
+        if not hasattr(self.storage, "core_batch_buffer"):
+            shape = self.likelihood_batch_size, *self.data.core_features.shape[1:]
+            core_batch_buffer = self.data.core_features.new_empty(
+                shape, pin_memory=True
+            )
+            self.storage.core_batch_buffer = core_batch_buffer
+        return self.storage.core_batch_buffer
 
     def _relabel(self, old_labels, new_labels=None, flat=False):
         """Re-label units
@@ -2756,11 +2775,29 @@ sig = "void(i8, i8[::1], i8[::1], i8[::1], f4[::1], f4[::1])"
 
 @numba.njit(sig, error_model="numpy", nogil=True, parallel=True)
 def csc_insert(row, write_offsets, inds, csc_indices, csc_data, liks):
-    """
-    data_ixs = write_offsets[inds]
-    csc_indices[data_ixs] = j
-    csc_data[data_ixs] = liks
-    write_offsets[inds] += 1
+    """Insert elements into a CSC sparse array
+
+    To use this, you need to know the indptr in advance. Then this function
+    can help you to insert a row into the array. You have to insert all nz
+    elements for that row at once in a single call to this function, and
+    rows must be written in order.
+
+    (However, the columns within each row can be unordered.)
+
+    write_offsets should be initialized at the indptr -- so, they are
+    each column's "write head", indicating how many rows have been written
+    for that column so far.
+
+    Then, this updates the row indices (csc_indices) array with the correct
+    row for each column (inds), and adds the data in the right place. The
+    "write heads" are incremented, so that when this fn is called for the next
+    row things are in the right place.
+
+    This would be equivalent to:
+        data_ixs = write_offsets[inds]
+        csc_indices[data_ixs] = row
+        csc_data[data_ixs] = liks
+        write_offsets[inds] += 1
     """
     for j in numba.prange(inds.shape[0]):
         ind = inds[j]
