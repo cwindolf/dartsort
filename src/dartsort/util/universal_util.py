@@ -6,7 +6,6 @@ import h5py
 import numpy as np
 import torch
 
-from dartsort.transform import single_channel_templates
 from dartsort.util import spiketorch, waveform_util
 
 
@@ -106,8 +105,9 @@ def get_singlechan_waveforms(
     deduplication_index = waveform_util.make_channel_index(
         rec.get_channel_locations(), radius=deduplication_radius, to_torch=True
     )
+    baz = "hi"
     wfeat = Waveform(
-        channel_index, name="hi", spike_length_samples=spike_length_samples
+        channel_index, name=baz, spike_length_samples=spike_length_samples
     )
     thresh = ThresholdAndFeaturize(
         rec,
@@ -124,7 +124,7 @@ def get_singlechan_waveforms(
         tmp_h5 = Path(tdir) / "singlechan_wfs.h5"
         thresh.run_subsampled_peeling(tmp_h5, show_progress=show_progress)
         with h5py.File(tmp_h5) as h5:
-            waveforms = h5["hi"][:]
+            waveforms = h5[baz][:]
 
     assert waveforms.shape[2] == 1
     waveforms = torch.asarray(waveforms[:, :, 0])
@@ -133,7 +133,7 @@ def get_singlechan_waveforms(
 
 
 def spatial_footprint_bank(
-    geom, n_sigmas=5, min_template_size=10.0, max_distance=32.0, dx=32.0, eps=0.025
+    geom, n_sigmas=3, min_template_size=10.0, dsigma=2.0, max_distance=32.0, dx=32.0, eps=0.025
 ):
     # this is just a single shank version, since I don't plan to use
     # this in production. but it is copied from KS' code and can be
@@ -165,7 +165,7 @@ def spatial_footprint_bank(
     assert distsq.shape == (n_centers, len(geom))
 
     # puff them up
-    sigmas = min_template_size * (1 + np.arange(n_sigmas))
+    sigmas = min_template_size * (1 + dsigma * np.arange(n_sigmas))
     spatial_profiles = np.exp(-distsq[:, None, :] / sigmas[:, None] ** 2)
     spatial_profiles = spatial_profiles.reshape(n_centers * n_sigmas, len(geom))
     spatial_profiles /= np.linalg.norm(spatial_profiles, axis=1, keepdims=True)
