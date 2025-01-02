@@ -511,10 +511,10 @@ class SpikeNeighborhoods(torch.nn.Module):
         coverage = inds.sum(0) / self.channel_counts[neighborhoods_considered]
         covered_ids = neighborhoods_considered[coverage >= min_coverage].cpu()
         spike_ids = spike_ids.cpu()
-        neighborhood_info = {
-            j: (self.neighborhoods[j], *torch.nonzero(spike_ids == j, as_tuple=True))
+        neighborhood_info = [
+            (j, self.neighborhoods[j], *torch.nonzero(spike_ids == j, as_tuple=True))
             for j in covered_ids
-        }
+        ]
         n_spikes = self.popcounts[covered_ids].sum()
         return neighborhood_info, n_spikes
 
