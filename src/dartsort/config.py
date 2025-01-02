@@ -16,7 +16,7 @@ class DARTsortUserConfig:
     dredge_only: bool = False
     matching_iterations: int = 1
 
-    # -- parallelism options
+    # -- computer options
     n_jobs_cpu: int = argfield(
         default=0,
         doc="Number of parallel workers to use when running on CPU. "
@@ -35,6 +35,7 @@ class DARTsortUserConfig:
         "GPUs if you have multiple, or else just the one, or your CPU.",
     )
     executor: str = "threading_unless_multigpu"
+    chunk_length_samples: int = 30_000
 
     # -- waveform snippet length parameters
     ms_before: Annotated[float, Field(gt=0)] = argfield(
@@ -159,3 +160,4 @@ class DeveloperConfig(DARTsortUserConfig):
         "heldout_loglik", "heldout_ccl", "loglik", "ccl", "aic", "bic", "icl"
     ] = "heldout_ccl"
     merge_bimodality_threshold: float = 0.05
+    n_refinement_iters: int = 3
