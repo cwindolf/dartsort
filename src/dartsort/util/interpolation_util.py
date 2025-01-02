@@ -256,7 +256,10 @@ def log_rbf(source_pos, target_pos=None, sigma=None):
     """
     if target_pos is None:
         target_pos = source_pos
-    kernel = torch.cdist(source_pos, target_pos)
-    kernel = kernel.square_().mul_(-1.0 / (2 * sigma**2))
-    torch.nan_to_num(kernel, nan=-torch.inf, out=kernel)
+    kernel = source_pos[:, :, None] - target_pos[:, None, :]
+    kernel = kernel.square_().sum(dim=3).mul_(-1.0 / (2 * sigma**2))
+    kernel = kernel.nan_to_num_(nan=-torch.inf)
+    # kernel = torch.cdist(source_pos, target_pos)
+    # kernel = kernel.square_().mul_(-1.0 / (2 * sigma**2))
+    # torch.nan_to_num(kernel, nan=-torch.inf, out=kernel)
     return kernel
