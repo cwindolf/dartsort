@@ -493,8 +493,8 @@ class SpikeNeighborhoods(torch.nn.Module):
             if batch_size is None or len(jmems) < batch_size:
                 neighborhood_info.append((j, jneighb, jmems))
             else:
-                for membatch in batched(jmems, batch_size):
-                    neighborhood_info.append((j, jneighb, membatch))
+                for bs in range(0, len(jmems), batch_size):
+                    neighborhood_info.append((j, jneighb, jmems[bs : bs + batch_size]))
 
         return covered_ids, neighborhood_info, n_spikes
 
