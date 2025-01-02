@@ -313,8 +313,12 @@ class SeparablePairwiseConv(torch.nn.Module):
         # spatial component
         sdot = self.spatial_footprints @ self.spatial_footprints.T
         self.register_buffer("sdot", sdot)
-        self.overlap = (self.sdot > 0).cpu()
+        self.register_buffer("overlap", (self.sdot > 0).cpu())
         self.tia = torch.arange(self.Ns * self.Nf)
+
+    @property
+    def device(self):
+        return self.tconv.device
 
     def query(
         self,
