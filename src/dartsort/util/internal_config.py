@@ -481,6 +481,7 @@ def to_internal_config(cfg):
         residnorm_decrease_threshold=np.sqrt(
             cfg.denoiser_badness_factor * cfg.matching_threshold**2
         ),
+        chunk_length_samples=cfg.chunk_length_samples,
     )
     template_config = TemplateConfig(
         registered_template_localization_radius_um=cfg.localization_radius_um,
@@ -499,6 +500,7 @@ def to_internal_config(cfg):
         merge_criterion=cfg.merge_criterion,
         merge_criterion_threshold=cfg.merge_criterion_threshold,
         merge_bimodality_threshold=cfg.merge_bimodality_threshold,
+        n_total_iters=cfg.n_refinement_iters,
     )
     motion_estimation_config = MotionEstimationConfig(
         **{k.name: getattr(cfg, k.name) for k in fields(MotionEstimationConfig)}
@@ -509,6 +511,7 @@ def to_internal_config(cfg):
         amplitude_scaling_boundary=cfg.amplitude_scaling_limit,
         template_temporal_upsampling_factor=cfg.temporal_upsamples,
         extract_radius=cfg.featurization_radius_um,
+        chunk_length_samples=cfg.chunk_length_samples,
     )
     computation_config = ComputationConfig(
         n_jobs_cpu=cfg.n_jobs_cpu,
