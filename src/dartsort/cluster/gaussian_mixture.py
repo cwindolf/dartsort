@@ -277,7 +277,7 @@ class SpikeMixtureModel(torch.nn.Module):
     def label_ids(self, with_counts=False, split=None):
         labels = self.labels
         if split is not None:
-            labels = self.labels[self.data.split_indices["split"]]
+            labels = self.labels[self.data.split_indices[split]]
         uids = torch.unique(labels, return_counts=with_counts)
         if with_counts:
             uids, counts = uids
@@ -441,12 +441,11 @@ class SpikeMixtureModel(torch.nn.Module):
             results = tqdm(
                 results, desc="M step", unit="unit", total=len(fit_ids), **tqdm_kw
             )
-        results = dict(zip(fit_ids, results))
 
         self.clear_scheduled_annotations()
         if total:
             self.clear_units()
-        self.update(results)
+        self.update(zip(fit_ids, results))
 
         max_adif = adif = None
         self._stack = None
@@ -1269,7 +1268,11 @@ class SpikeMixtureModel(torch.nn.Module):
                     neighborhoods=self.data.extract_neighborhoods,
                     **self.split_unit_args,
                 )
-                units.append(unit)
+                if unit.channels.numel():
+                    units.append(unit)
+
+            if len(units) <= 1:
+                return labels
 
             # determine their bimodalities while at once mini-reassigning
             lls = spike_data.features.new_full(
@@ -2158,7 +2161,7 @@ class GaussianUnit(torch.nn.Module):
         neighborhoods: Optional["SpikeNeighborhoods"] = None,
         show_progress: bool = False,
     ):
-        if features is None:
+        if features is None or len(features) < self.channels_count_min:
             self.pick_channels(None, None)
             return
         new_zeros = features.features.new_zeros
@@ -2221,14 +2224,11 @@ class GaussianUnit(torch.nn.Module):
 
     def pick_channels(self, active_chans, nobs=None):
         if self.channels_strategy == "all":
-            # self.register_buffer("channels", torch.arange(self.n_channels))
             self.channels = torch.arange(self.n_channels)
             return
 
-        if not active_chans.numel() or nobs is None:
-            # self.register_buffer("snr", torch.zeros(self.n_channels))
+        if nobs is None or not active_chans.numel():
             self.snr = torch.zeros(self.n_channels)
-            # self.register_buffer("channels", torch.arange(0))
             self.channels = torch.arange(0)
             return
 
@@ -2236,18 +2236,15 @@ class GaussianUnit(torch.nn.Module):
         snr = amp * nobs.sqrt()
         full_snr = self.mean.new_zeros(self.mean.shape[1])
         full_snr[active_chans] = snr
-        # self.register_buffer("snr", full_snr)
         self.snr = full_snr.cpu()
 
         if self.channels_strategy == "snr":
             snr_min = np.sqrt(self.channels_count_min) * self.channels_snr_amp
             strong = snr >= snr_min
-            # self.register_buffer("channels", active_chans[strong.cpu()])
             self.channels = active_chans[strong.cpu()]
             return
         if self.channels_strategy == "count":
             strong = nobs >= self.channels_count_min
-            # self.register_buffer("channels", active_chans[strong.cpu()])
             self.channels = active_chans[strong.cpu()]
             return
 

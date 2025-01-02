@@ -9,10 +9,10 @@ def test_ptp():
     rg = np.random.default_rng(0)
 
     x = rg.normal(size=100)
-    assert np.array_equal(spiketorch.ptp(torch.tensor(x), 0).numpy(), x.ptp())
+    assert np.array_equal(spiketorch.ptp(torch.tensor(x), 0).numpy(), np.ptp(x))
     x = rg.normal(size=(100, 100))
-    assert np.array_equal(spiketorch.ptp(torch.tensor(x), 0).numpy(), x.ptp(0))
-    assert np.array_equal(spiketorch.ptp(torch.tensor(x), 1).numpy(), x.ptp(1))
+    assert np.array_equal(spiketorch.ptp(torch.tensor(x), 0).numpy(), np.ptp(x, 0))
+    assert np.array_equal(spiketorch.ptp(torch.tensor(x), 1).numpy(), np.ptp(x, 1))
 
 
 def test_ravel_multi_index():
