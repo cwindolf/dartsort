@@ -588,6 +588,8 @@ def static_channel_neighborhoods(
     registered_geom=None,
     target_kdtree=None,
     match_distance=None,
+    uniq_channels_and_shifts=None,
+    uniq_inv=None,
     workers=4,
 ):
     # validate inputs to avoid confusing errors
@@ -630,10 +632,11 @@ def static_channel_neighborhoods(
     # ok, the kdtree query can get expensive when we have lots of these shifting
     # positions. it turns out to be worth it to go through the effort of figuring
     # out what the unique valid moving positions are and just targeting those
-    channels_and_shifts = np.c_[main_channels, n_pitches_shift]
-    uniq_channels_and_shifts, uniq_inv = np.unique(
-        channels_and_shifts, axis=0, return_inverse=True
-    )
+    if uniq_channels_and_shifts is None:
+        channels_and_shifts = np.c_[main_channels, n_pitches_shift]
+        uniq_channels_and_shifts, uniq_inv = np.unique(
+            channels_and_shifts, axis=0, return_inverse=True
+        )
     uniq_channels, uniq_n_pitches_shift = uniq_channels_and_shifts.T
     uniq_shifts = np.c_[np.zeros(uniq_channels.shape[0]), uniq_n_pitches_shift * pitch]
     uniq_moving_pos = (
