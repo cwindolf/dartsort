@@ -1785,9 +1785,9 @@ class SpikeMixtureModel(torch.nn.Module):
     def core_batch_buffer(self):
         if not hasattr(self.storage, "core_batch_buffer"):
             shape = self.likelihood_batch_size, *self.data.core_features.shape[1:]
-            core_batch_buffer = self.data.core_features.new_empty(
-                shape, pin_memory=True
-            )
+            core_batch_buffer = self.data.core_features.new_empty(shape)
+            if self.data.device.type == "cuda":
+                core_batch_buffer = core_batch_buffer.pin_memory()
             self.storage.core_batch_buffer = core_batch_buffer
         return self.storage.core_batch_buffer
 
