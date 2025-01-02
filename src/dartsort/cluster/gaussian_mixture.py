@@ -52,7 +52,7 @@ class SpikeMixtureModel(torch.nn.Module):
         with_noise_unit: bool = True,
         prior_pseudocount: float = 0.0,
         ppca_rank: int = 0,
-        ppca_inner_em_iter: int = 1,
+        ppca_inner_em_iter: int = 25,
         ppca_atol: float = 0.05,
         n_threads: int = 4,
         min_count: int = 50,
@@ -272,8 +272,16 @@ class SpikeMixtureModel(torch.nn.Module):
             nu_l = lids.max() + 1
         return max(nu_u, nu_l)
 
-    def label_ids(self):
-        uids = torch.unique(self.labels)
+    def label_ids(self, with_counts=False, split=None):
+        labels = self.labels
+        if split is not None:
+            labels = self.labels[self.data.split_indices["split"]]
+        uids = torch.unique(labels, return_counts=with_counts)
+        if with_counts:
+            uids, counts = uids
+            counts = counts[uids >= 0]
+            uids = uids[uids >= 0]
+            return uids, counts
         return uids[uids >= 0]
 
     def ids(self):
@@ -390,10 +398,11 @@ class SpikeMixtureModel(torch.nn.Module):
         to_fit=None,
         fit_ids=None,
         compare=False,
+        split="train",
     ):
         """Beware that this flattens the labels."""
         warm_start = not self.empty()
-        unit_ids = self.label_ids()
+        unit_ids, spike_counts = self.label_ids(with_counts=True, split=split)
         if to_fit is not None:
             fit_ids = unit_ids[to_fit[unit_ids]]
         total = fit_ids is None
@@ -407,12 +416,21 @@ class SpikeMixtureModel(torch.nn.Module):
         if self.log_proportions is not None:
             assert len(self.log_proportions) > unit_ids.max() + self.with_noise_unit
 
+        fit_indices = quick_indices(
+            self.rg,
+            unit_ids.numpy(),
+            self.labels.numpy(),
+            split_indices=None if split is None else self.data.split_indices[split],
+            max_sizes=spike_counts.clamp(max=self.n_spikes_fit).numpy(force=True),
+        )
+
         pool = Parallel(self.n_threads, backend="threading", return_as="generator")
         results = pool(
             delayed(self.fit_unit)(
                 j,
                 likelihoods=likelihoods,
                 warm_start=warm_start,
+                indices=fit_indices[j.item()],
                 **self.next_round_annotations.get(j, {}),
             )
             for j in fit_ids
@@ -959,7 +977,7 @@ class SpikeMixtureModel(torch.nn.Module):
     ):
         if features is None:
             features = self.random_spike_data(
-                unit_id, indices, max_size=self.n_spikes_fit, with_neighborhood_ids=True
+                unit_id=unit_id, indices=indices, max_size=self.n_spikes_fit, with_neighborhood_ids=True
             )
         if verbose:
             logger.info(f"Fit {unit_id=} {features=}")
@@ -3018,3 +3036,62 @@ def template_scale_map(
 
     final = log_lambd.clone().detach().exp_()
     return 1.0 / final.sqrt()
+
+
+def quick_indices(
+    rg, unit_ids, labels, split_indices=None, max_sizes=4096
+):
+    """It's slow to do lots of nonzero(labels==j).
+
+    This goes all in one by looking for the first yea many spikes in a random order.
+    """
+    labels_in_split = labels if split_indices is None else labels[split_indices]
+    random_order = rg.permutation(len(labels_in_split))
+    reordered_labels = labels_in_split[random_order]
+
+    counts_so_far = np.zeros(unit_ids.max() + 1, dtype=np.int32)
+    counts_so_far[unit_ids] = 0
+    n_active = unit_ids.size
+    reordered_indices = np.full((unit_ids.max() + 1, np.max(max_sizes)), labels.size + 1)
+
+    full_max_sizes = np.zeros(unit_ids.max() + 1, dtype=np.int32)
+    full_max_sizes[unit_ids] = max_sizes
+
+    _quick_indices(np.int32(n_active), counts_so_far, reordered_labels, reordered_indices, full_max_sizes)
+
+    to_original_index = random_order
+    if split_indices is not None:
+        to_original_index = split_indices[to_original_index]
+
+    indices = {}
+    for u in unit_ids:
+        myixs = reordered_indices[u]
+        myixs = myixs[myixs < labels.size + 1]
+        myixs = to_original_index[myixs]
+        myixs.sort()
+        indices[u] = myixs
+
+    return indices
+
+
+sig = "void(i4, i4[::1], i8[::1], i8[:, ::1], i4[::1])"
+
+
+@numba.njit(sig, error_model="numpy", nogil=True)
+def _quick_indices(n_active, counts_so_far, reordered_labels, indices, max_sizes):
+    for i in range(len(reordered_labels)):
+        label = reordered_labels[i]
+
+        my_count = counts_so_far[label]
+        max_size = max_sizes[label]
+
+        if my_count < max_size:
+            indices[label, my_count] = i
+
+        my_count += 1
+        counts_so_far[label] = my_count
+
+        if my_count == max_size:
+            n_active -= 1
+            if n_active == 0:
+                break
