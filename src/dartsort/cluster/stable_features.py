@@ -219,7 +219,7 @@ class StableSpikeDataset(torch.nn.Module):
 
         # determine channel neighborhoods
         core_neighborhoods = SpikeNeighborhoods.from_channels(
-            core_channels, len(prgeom) - 1, device=device
+            core_channels, len(prgeom) - 1, device=device, features=core_features
         )
         extract_neighborhoods = SpikeNeighborhoods.from_channels(
             extract_channels, len(prgeom) - 1, device=device
@@ -382,8 +382,10 @@ class SpikeNeighborhoods(torch.nn.Module):
         n_channels,
         neighborhood_ids,
         neighborhoods,
+        features=None,
         neighborhood_members=None,
         store_on_device: bool = False,
+        device=None,
     ):
         """SpikeNeighborhoods
 
@@ -405,16 +407,29 @@ class SpikeNeighborhoods(torch.nn.Module):
             self.register_buffer("neighborhood_ids", neighborhood_ids)
         else:
             self.neighborhood_ids = neighborhood_ids.cpu()
-        # self.register_buffer("neighborhoods", neighborhoods)
-        self.neighborhoods = neighborhoods.cpu()
+        self.register_buffer("neighborhoods", neighborhoods)
+        # self.neighborhoods = neighborhoods.cpu()
         self.n_neighborhoods = len(neighborhoods)
 
-        # store neighborhoods as a matrix
+        # store neighborhoods as an indicator matrix
+        # also store nonzero-d masks
         indicators = torch.zeros((n_channels, len(neighborhoods)))
+        masks = []
+        mask_slices = []
+        offset = 0
         for j, nhood in enumerate(neighborhoods):
-            indicators[nhood[nhood < n_channels], j] = 1.0
+            jvalid = nhood < n_channels
+            indicators[nhood[jvalid], j] = 1.0
+            (jvalid,) = jvalid.nonzero(as_tuple=True)
+            njvalid = jvalid.numel()
+            assert njvalid
+            masks.append(jvalid)
+            mask_slices.append(slice(offset, offset + njvalid))
+            offset += njvalid
         self.register_buffer("indicators", indicators)
         self.register_buffer("channel_counts", indicators.sum(0))
+        self.register_buffer("_masks", torch.concatenate(masks, dim=0))
+        self._mask_slices = mask_slices
 
         if neighborhood_members is None:
             # cache lookups
@@ -445,8 +460,16 @@ class SpikeNeighborhoods(torch.nn.Module):
         self._neighborhood_members = _neighborhood_members.cpu()
         self.register_buffer("popcounts", torch.tensor(neighborhood_popcounts))
 
+        if features is not None:
+            _features_valid = []
+            for j in range(len(neighborhoods)):
+                f = features[self.neighborhood_members(j)]
+                f = f[..., self.valid_mask(j).to(f.device)]
+                _features_valid.append(f)
+            self._features_valid = _features_valid
+
     @classmethod
-    def from_channels(cls, channels, n_channels, device=None):
+    def from_channels(cls, channels, n_channels, device=None, features=None):
         if device is not None:
             channels = channels.to(device)
         neighborhoods, neighborhood_ids = torch.unique(
@@ -456,7 +479,12 @@ class SpikeNeighborhoods(torch.nn.Module):
             n_channels=n_channels,
             neighborhoods=neighborhoods,
             neighborhood_ids=neighborhood_ids,
+            features=features,
+            device=channels.device,
         )
+
+    def valid_mask(self, id):
+        return self._masks[self._mask_slices[id]]
 
     def neighborhood_channels(self, id):
         nhc = self.neighborhoods[id]
@@ -464,6 +492,16 @@ class SpikeNeighborhoods(torch.nn.Module):
 
     def neighborhood_members(self, id):
         return self._neighborhood_members[self.neighborhood_members_slices[id]]
+
+    def neighborhood_features(self, id, batch_start=None, batch_size=None, batch_buffer=None):
+        f = self._features_valid[id]
+        if batch_start is not None:
+            f = f[batch_start:batch_start + batch_size]
+        if batch_buffer is not None:
+            batch_buffer[:len(f)] = f
+            return batch_buffer[:len(f)]
+        else:
+            return f
 
     def subset_neighborhoods(
         self, channels, min_coverage=1.0, add_to_overlaps=None, batch_size=None
@@ -491,10 +529,10 @@ class SpikeNeighborhoods(torch.nn.Module):
             jneighb = self.neighborhoods[j]
             jmems = self.neighborhood_members(j)
             if batch_size is None or len(jmems) < batch_size:
-                neighborhood_info.append((j, jneighb, jmems))
+                neighborhood_info.append((j, jneighb, jmems, None))
             else:
                 for bs in range(0, len(jmems), batch_size):
-                    neighborhood_info.append((j, jneighb, jmems[bs : bs + batch_size]))
+                    neighborhood_info.append((j, jneighb, jmems[bs : bs + batch_size], bs))
 
         return covered_ids, neighborhood_info, n_spikes
 
@@ -529,7 +567,7 @@ def occupied_chans(spike_data, n_channels, neighborhoods=None):
     ids = torch.unique(spike_data.neighborhood_ids)
     chans = neighborhoods.neighborhoods[ids]
     chans = torch.unique(chans)
-    return chans[chans < n_channels].to(spike_data.channels)
+    return chans[chans < n_channels]
 
 
 def interp_to_chans(
