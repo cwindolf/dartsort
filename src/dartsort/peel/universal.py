@@ -144,10 +144,15 @@ class UniversalTemplatesMatchingPeeler(ObjectiveUpdateTemplateMatchingPeeler):
         spike_length_samples = waveform_config.spike_length_samples(
             recording.sampling_frequency
         )
+        alignment_padding = int(
+            subtraction_config.singlechan_alignment_padding_ms * (recording.sampling_frequency / 1000)
+        )
         return cls(
             recording,
+            chunk_length_samples=subtraction_config.chunk_length_samples,
             threshold=subtraction_config.universal_threshold,
             channel_index=channel_index,
+            alignment_padding=alignment_padding,
             featurization_pipeline=featurization_pipeline,
             trough_offset_samples=trough_offset_samples,
             spike_length_samples=spike_length_samples,

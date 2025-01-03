@@ -47,13 +47,10 @@ def test_fakedata():
     templates = np.array(
         [t[:, None] * a[None, :] for t, a in zip((t0, t1, t2, t3), amps)]
     )
-    templates[0] *= 100 / np.abs(templates[0]).max()
-    templates[1] *= 50 / np.abs(templates[1]).max()
-    templates[2] *= 100 / np.abs(templates[2]).max()
-    templates[3] *= 50 / np.abs(templates[3]).max()
+    templates *= np.array([[[20., 40, 20, 40]]]).T / np.abs(templates).max(axis=(1, 2), keepdims=True)
 
     # make fake spike trains
-    spikes_per_unit = 101
+    spikes_per_unit = 201
     sts = []
     labels = []
     for i in range(len(templates)):
@@ -71,11 +68,10 @@ def test_fakedata():
     labels = labels[order]
 
     # inject the spikes into a noise background
-    rec = 0.1 * rg.normal(size=(T_samples, len(geom))).astype(np.float32)
+    rec = 0.25 * rg.normal(size=(T_samples, len(geom))).astype(np.float32)
     for t, l in zip(times, labels):
         rec[t : t + 121] += templates[l]
-    assert np.sum(np.abs(rec) > 80) >= 100
-    assert np.sum(np.abs(rec) > 40) >= 50
+    assert np.sum(np.abs(rec) > 10) >= 100
 
     # make into spikeinterface
     rec = sc.NumpyRecording(rec, fs)
@@ -88,9 +84,13 @@ def test_fakedata():
                     denoise_only=True, do_nn_denoise=False
                 )
             ),
-            featurization_config=dartsort.FeaturizationConfig(n_residual_snips=128),
+            featurization_config=dartsort.FeaturizationConfig(n_residual_snips=512),
             motion_estimation_config=dartsort.MotionEstimationConfig(
                 do_motion_estimation=False
             ),
         )
         st = dartsort.dartsort(rec, output_directory=tempdir, cfg=cfg)
+
+
+if __name__ == '__main__':
+    test_fakedata()

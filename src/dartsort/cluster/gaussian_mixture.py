@@ -46,14 +46,14 @@ class SpikeMixtureModel(torch.nn.Module):
         cov_kind="ppca",
         use_proportions: bool = True,
         proportions_sample_size: int = 2**16,
-        likelihood_batch_size: int = 2**14,
+        likelihood_batch_size: int = 2**16,
         channels_strategy: Literal["all", "snr", "count"] = "count",
         channels_count_min: float = 25.0,
         channels_snr_amp: float = 1.0,
         with_noise_unit: bool = True,
         prior_pseudocount: float = 0.0,
         ppca_rank: int = 0,
-        ppca_inner_em_iter: int = 1,
+        ppca_inner_em_iter: int = 25,
         ppca_atol: float = 0.05,
         n_threads: int = 4,
         min_count: int = 50,
@@ -274,8 +274,16 @@ class SpikeMixtureModel(torch.nn.Module):
             nu_l = lids.max() + 1
         return max(nu_u, nu_l)
 
-    def label_ids(self):
-        uids = torch.unique(self.labels)
+    def label_ids(self, with_counts=False, split=None):
+        labels = self.labels
+        if split is not None:
+            labels = self.labels[self.data.split_indices[split]]
+        uids = torch.unique(labels, return_counts=with_counts)
+        if with_counts:
+            uids, counts = uids
+            counts = counts[uids >= 0]
+            uids = uids[uids >= 0]
+            return uids, counts
         return uids[uids >= 0]
 
     def ids(self):
@@ -392,10 +400,11 @@ class SpikeMixtureModel(torch.nn.Module):
         to_fit=None,
         fit_ids=None,
         compare=False,
+        split="train",
     ):
         """Beware that this flattens the labels."""
         warm_start = not self.empty()
-        unit_ids = self.label_ids()
+        unit_ids, spike_counts = self.label_ids(with_counts=True, split=split)
         if to_fit is not None:
             fit_ids = unit_ids[to_fit[unit_ids]]
         total = fit_ids is None
@@ -409,12 +418,21 @@ class SpikeMixtureModel(torch.nn.Module):
         if self.log_proportions is not None:
             assert len(self.log_proportions) > unit_ids.max() + self.with_noise_unit
 
+        fit_indices = quick_indices(
+            self.rg,
+            unit_ids.numpy(),
+            self.labels.numpy(),
+            split_indices=None if split is None else self.data.split_indices[split],
+            max_sizes=spike_counts.clamp(max=self.n_spikes_fit).numpy(force=True),
+        )
+
         pool = Parallel(self.n_threads, backend="threading", return_as="generator")
         results = pool(
             delayed(self.fit_unit)(
                 j,
                 likelihoods=likelihoods,
                 warm_start=warm_start,
+                indices=fit_indices[j.item()],
                 **self.next_round_annotations.get(j, {}),
             )
             for j in fit_ids
@@ -423,12 +441,11 @@ class SpikeMixtureModel(torch.nn.Module):
             results = tqdm(
                 results, desc="M step", unit="unit", total=len(fit_ids), **tqdm_kw
             )
-        results = dict(zip(fit_ids, results))
 
         self.clear_scheduled_annotations()
         if total:
             self.clear_units()
-        self.update(results)
+        self.update(zip(fit_ids, results))
 
         max_adif = adif = None
         self._stack = None
@@ -584,7 +601,7 @@ class SpikeMixtureModel(torch.nn.Module):
         )
 
     def reassign(self, log_liks):
-        n_units = self.n_units()
+        n_units = log_liks.shape[0] - self.with_noise_unit
         assignments, spike_logliks, log_liks_csc = loglik_reassign(
             log_liks,
             has_noise_unit=self.with_noise_unit,
@@ -592,23 +609,23 @@ class SpikeMixtureModel(torch.nn.Module):
         )
         assignments = torch.from_numpy(assignments).to(self.labels)
 
-        # track reassignments, first globally
+        # track reassignments
         same = torch.zeros_like(assignments)
         torch.eq(self.labels, assignments, out=same)
+
+        # total number of reassigned spikes
         reassign_count = len(same) - same.sum()
 
         # and per unit IoU
         intersection = torch.zeros(n_units, dtype=int)
-        kept = assignments >= 0
+        (kept,) = (assignments >= 0).nonzero(as_tuple=True)
+        (orig_kept,) = (self.labels >= 0).nonzero(as_tuple=True)
         spiketorch.add_at_(intersection, assignments[kept], same[kept])
-        union = torch.zeros(n_units, dtype=int)
-        buf1 = torch.zeros(same.shape, dtype=bool)
-        buf2 = torch.zeros(same.shape, dtype=bool)
-        buf3 = torch.zeros(same.shape, dtype=bool)
-        for j in range(n_units):
-            torch.eq(assignments, j, out=buf1)
-            torch.eq(self.labels, j, out=buf2)
-            union[j] = max(1, torch.logical_or(buf1, buf2, out=buf3).sum())
+        union = torch.zeros_like(intersection)
+        union -= intersection
+        _1 = union.new_ones((1,))
+        spiketorch.add_at_(union, assignments[kept], _1.broadcast_to(kept.shape))
+        spiketorch.add_at_(union, self.labels[orig_kept], _1.broadcast_to(orig_kept.shape))
         iou = intersection / union
         unit_churn = 1.0 - iou
 
@@ -964,7 +981,7 @@ class SpikeMixtureModel(torch.nn.Module):
     ):
         if features is None:
             features = self.random_spike_data(
-                unit_id, indices, max_size=self.n_spikes_fit, with_neighborhood_ids=True
+                unit_id=unit_id, indices=indices, max_size=self.n_spikes_fit, with_neighborhood_ids=True
             )
         if verbose:
             logger.info(f"Fit {unit_id=} {features=}")
@@ -1051,7 +1068,10 @@ class SpikeMixtureModel(torch.nn.Module):
                 jobs, desc=f"{desc_prefix}logliks", total=len(neighbs), **tqdm_kw
             )
 
-        for neighb_id, neighb_chans, neighb_member_ixs in jobs:
+        for neighb_id, neighb_chans, neighb_member_ixs, batch_start in jobs:
+            chans_valid = self.data.core_neighborhoods.valid_mask(neighb_id)
+            neighb_chans = neighb_chans[chans_valid]
+
             if spikes is not None:
                 sp = spikes[neighb_member_ixs]
             elif inds_already:
@@ -1060,25 +1080,30 @@ class SpikeMixtureModel(torch.nn.Module):
                     with_channels=False,
                     neighborhood="core",
                 )
+                features = sp.features
+                features = features[..., chans_valid]
             else:
-                sp = self.data.spike_data(
-                    neighb_member_ixs,
-                    with_channels=False,
-                    neighborhood="core",
-                    feature_buffer=self.core_batch_buffer,
+                # sp = self.data.spike_data(
+                #     neighb_member_ixs,
+                #     with_channels=False,
+                #     neighborhood="core",
+                # )
+                features = self.data.core_neighborhoods.neighborhood_features(
+                    neighb_id,
+                    batch_start=batch_start,
+                    batch_size=self.likelihood_batch_size,
                 )
-            features = sp.features
-            chans_valid = neighb_chans < self.data.n_channels
-            features = features[..., chans_valid]
-            neighb_chans = neighb_chans[chans_valid]
+                features = features.to(self.data.device)
+
             lls = unit.log_likelihood(features, neighb_chans, neighborhood_id=neighb_id)
 
             if inds_already:
                 log_likelihoods[neighb_member_ixs.to(log_likelihoods.device)] = lls
             else:
-                spike_indices[offset : offset + len(sp)] = neighb_member_ixs
-                log_likelihoods[offset : offset + len(sp)] = lls
-                offset += len(sp)
+                nbatch = len(lls)
+                spike_indices[offset : offset + nbatch] = neighb_member_ixs
+                log_likelihoods[offset : offset + nbatch] = lls
+                offset += nbatch
 
         if return_sorted and not inds_already:
             spike_indices, order = spike_indices.sort()
@@ -1251,7 +1276,11 @@ class SpikeMixtureModel(torch.nn.Module):
                     neighborhoods=self.data.extract_neighborhoods,
                     **self.split_unit_args,
                 )
-                units.append(unit)
+                if unit.channels.numel():
+                    units.append(unit)
+
+            if len(units) <= 1:
+                return labels
 
             # determine their bimodalities while at once mini-reassigning
             lls = spike_data.features.new_full(
@@ -1781,16 +1810,6 @@ class SpikeMixtureModel(torch.nn.Module):
                 self.storage.rg = self._rg.spawn(1)[0]
         return self.storage.rg
 
-    @property
-    def core_batch_buffer(self):
-        if not hasattr(self.storage, "core_batch_buffer"):
-            shape = self.likelihood_batch_size, *self.data.core_features.shape[1:]
-            core_batch_buffer = self.data.core_features.new_empty(shape)
-            if self.data.device.type == "cuda":
-                core_batch_buffer = core_batch_buffer.pin_memory()
-            self.storage.core_batch_buffer = core_batch_buffer
-        return self.storage.core_batch_buffer
-
     def _relabel(self, old_labels, new_labels=None, flat=False):
         """Re-label units
 
@@ -2140,7 +2159,7 @@ class GaussianUnit(torch.nn.Module):
         neighborhoods: Optional["SpikeNeighborhoods"] = None,
         show_progress: bool = False,
     ):
-        if features is None:
+        if features is None or len(features) < self.channels_count_min:
             self.pick_channels(None, None)
             return
         new_zeros = features.features.new_zeros
@@ -2203,34 +2222,28 @@ class GaussianUnit(torch.nn.Module):
 
     def pick_channels(self, active_chans, nobs=None):
         if self.channels_strategy == "all":
-            # self.register_buffer("channels", torch.arange(self.n_channels))
-            self.channels = torch.arange(self.n_channels)
+            self.register_buffer("channels", torch.arange(self.n_channels))
             return
 
-        if not active_chans.numel() or nobs is None:
-            # self.register_buffer("snr", torch.zeros(self.n_channels))
+        if nobs is None or not active_chans.numel():
             self.snr = torch.zeros(self.n_channels)
-            # self.register_buffer("channels", torch.arange(0))
-            self.channels = torch.arange(0)
+            self.register_buffer("channels", torch.arange(0))
             return
 
         amp = torch.linalg.vector_norm(self.mean[:, active_chans], dim=0)
         snr = amp * nobs.sqrt()
         full_snr = self.mean.new_zeros(self.mean.shape[1])
         full_snr[active_chans] = snr
-        # self.register_buffer("snr", full_snr)
         self.snr = full_snr.cpu()
 
         if self.channels_strategy == "snr":
             snr_min = np.sqrt(self.channels_count_min) * self.channels_snr_amp
             strong = snr >= snr_min
-            # self.register_buffer("channels", active_chans[strong.cpu()])
-            self.channels = active_chans[strong.cpu()]
+            self.register_buffer("channels", active_chans[strong.cpu()])
             return
         if self.channels_strategy == "count":
             strong = nobs >= self.channels_count_min
-            # self.register_buffer("channels", active_chans[strong.cpu()])
-            self.channels = active_chans[strong.cpu()]
+            self.register_buffer("channels", active_chans[strong.cpu()])
             return
 
         assert False
@@ -2462,43 +2475,6 @@ def class_sum(classes, inverse_inds, x, weights=None):
     x = x * weights if weights is not None else x
     spiketorch.add_at_(wsum, inverse_inds, x)
     return wsum
-
-
-def average_units(units, proportions):
-    ua = units[0]
-    new = GaussianUnit(
-        rank=ua.rank,
-        n_channels=ua.n_channels,
-        noise=ua.noise,
-        mean_kind=ua.mean_kind,
-        cov_kind=ua.cov_kind,
-        prior_type=ua.prior_type,
-        channels_strategy=ua.channels_strategy,
-        channels_count_min=ua.channels_count_min,
-        channels_snr_amp=ua.channels_snr_amp,
-        prior_pseudocount=ua.prior_pseudocount,
-        scale_mean=ua.scale_mean,
-        ppca_rank=len(units) * ua.ppca_rank,
-    )
-    if ua.mean_kind == "zero":
-        return ua
-
-    channels = torch.cat([u.channels for u in units]).unique()
-    new.register_buffer("channels", channels)
-
-    new_mean = sum(pi * u.mean for pi, u in zip(proportions, units))
-    new.register_buffer("mean", new_mean)
-
-    if new.cov_kind == "zero":
-        pass
-    elif new.cov_kind == "ppca" and new.ppca_rank > 0:
-        W = torch.cat(
-            [pi.sqrt() * u.W for pi, u in zip(proportions, units)],
-            dim=2,
-        )
-        new.register_buffer("W", W)
-
-    return new
 
 
 def to_full_probe(features, weights, n_channels, storage):
@@ -3055,3 +3031,62 @@ def template_scale_map(
 
     final = log_lambd.clone().detach().exp_()
     return 1.0 / final.sqrt()
+
+
+def quick_indices(
+    rg, unit_ids, labels, split_indices=None, max_sizes=4096
+):
+    """It's slow to do lots of nonzero(labels==j).
+
+    This goes all in one by looking for the first yea many spikes in a random order.
+    """
+    labels_in_split = labels if split_indices is None else labels[split_indices]
+    random_order = rg.permutation(len(labels_in_split))
+    reordered_labels = labels_in_split[random_order]
+
+    counts_so_far = np.zeros(unit_ids.max() + 1, dtype=np.int32)
+    counts_so_far[unit_ids] = 0
+    n_active = unit_ids.size
+    reordered_indices = np.full((unit_ids.max() + 1, np.max(max_sizes)), labels.size + 1)
+
+    full_max_sizes = np.zeros(unit_ids.max() + 1, dtype=np.int32)
+    full_max_sizes[unit_ids] = max_sizes
+
+    _quick_indices(np.int32(n_active), counts_so_far, reordered_labels, reordered_indices, full_max_sizes)
+
+    to_original_index = random_order
+    if split_indices is not None:
+        to_original_index = split_indices[to_original_index]
+
+    indices = {}
+    for u in unit_ids:
+        myixs = reordered_indices[u]
+        myixs = myixs[myixs < labels.size + 1]
+        myixs = to_original_index[myixs]
+        myixs.sort()
+        indices[u] = myixs
+
+    return indices
+
+
+sig = "void(i4, i4[::1], i8[::1], i8[:, ::1], i4[::1])"
+
+
+@numba.njit(sig, error_model="numpy", nogil=True)
+def _quick_indices(n_active, counts_so_far, reordered_labels, indices, max_sizes):
+    for i in range(len(reordered_labels)):
+        label = reordered_labels[i]
+
+        my_count = counts_so_far[label]
+        max_size = max_sizes[label]
+
+        if my_count < max_size:
+            indices[label, my_count] = i
+
+        my_count += 1
+        counts_so_far[label] = my_count
+
+        if my_count == max_size:
+            n_active -= 1
+            if n_active == 0:
+                break
