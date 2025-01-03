@@ -46,7 +46,7 @@ class SpikeMixtureModel(torch.nn.Module):
         cov_kind="ppca",
         use_proportions: bool = True,
         proportions_sample_size: int = 2**16,
-        likelihood_batch_size: int = 2**14,
+        likelihood_batch_size: int = 2**16,
         channels_strategy: Literal["all", "snr", "count"] = "count",
         channels_count_min: float = 25.0,
         channels_snr_amp: float = 1.0,
@@ -601,7 +601,7 @@ class SpikeMixtureModel(torch.nn.Module):
         )
 
     def reassign(self, log_liks):
-        n_units = self.n_units()
+        n_units = log_liks.shape[0] - self.with_noise_unit
         assignments, spike_logliks, log_liks_csc = loglik_reassign(
             log_liks,
             has_noise_unit=self.with_noise_unit,
@@ -609,23 +609,23 @@ class SpikeMixtureModel(torch.nn.Module):
         )
         assignments = torch.from_numpy(assignments).to(self.labels)
 
-        # track reassignments, first globally
+        # track reassignments
         same = torch.zeros_like(assignments)
         torch.eq(self.labels, assignments, out=same)
+
+        # total number of reassigned spikes
         reassign_count = len(same) - same.sum()
 
         # and per unit IoU
         intersection = torch.zeros(n_units, dtype=int)
-        kept = assignments >= 0
+        (kept,) = (assignments >= 0).nonzero(as_tuple=True)
+        (orig_kept,) = (self.labels >= 0).nonzero(as_tuple=True)
         spiketorch.add_at_(intersection, assignments[kept], same[kept])
-        union = torch.zeros(n_units, dtype=int)
-        buf1 = torch.zeros(same.shape, dtype=bool)
-        buf2 = torch.zeros(same.shape, dtype=bool)
-        buf3 = torch.zeros(same.shape, dtype=bool)
-        for j in range(n_units):
-            torch.eq(assignments, j, out=buf1)
-            torch.eq(self.labels, j, out=buf2)
-            union[j] = max(1, torch.logical_or(buf1, buf2, out=buf3).sum())
+        union = torch.zeros_like(intersection)
+        union -= intersection
+        _1 = union.new_ones((1,))
+        spiketorch.add_at_(union, assignments[kept], _1.broadcast_to(kept.shape))
+        spiketorch.add_at_(union, self.labels[orig_kept], _1.broadcast_to(orig_kept.shape))
         iou = intersection / union
         unit_churn = 1.0 - iou
 
@@ -1068,7 +1068,10 @@ class SpikeMixtureModel(torch.nn.Module):
                 jobs, desc=f"{desc_prefix}logliks", total=len(neighbs), **tqdm_kw
             )
 
-        for neighb_id, neighb_chans, neighb_member_ixs in jobs:
+        for neighb_id, neighb_chans, neighb_member_ixs, batch_start in jobs:
+            chans_valid = self.data.core_neighborhoods.valid_mask(neighb_id)
+            neighb_chans = neighb_chans[chans_valid]
+
             if spikes is not None:
                 sp = spikes[neighb_member_ixs]
             elif inds_already:
@@ -1077,25 +1080,30 @@ class SpikeMixtureModel(torch.nn.Module):
                     with_channels=False,
                     neighborhood="core",
                 )
+                features = sp.features
+                features = features[..., chans_valid]
             else:
-                sp = self.data.spike_data(
-                    neighb_member_ixs,
-                    with_channels=False,
-                    neighborhood="core",
-                    feature_buffer=self.core_batch_buffer,
+                # sp = self.data.spike_data(
+                #     neighb_member_ixs,
+                #     with_channels=False,
+                #     neighborhood="core",
+                # )
+                features = self.data.core_neighborhoods.neighborhood_features(
+                    neighb_id,
+                    batch_start=batch_start,
+                    batch_size=self.likelihood_batch_size,
                 )
-            features = sp.features
-            chans_valid = neighb_chans < self.data.n_channels
-            features = features[..., chans_valid]
-            neighb_chans = neighb_chans[chans_valid]
+                features = features.to(self.data.device)
+
             lls = unit.log_likelihood(features, neighb_chans, neighborhood_id=neighb_id)
 
             if inds_already:
                 log_likelihoods[neighb_member_ixs.to(log_likelihoods.device)] = lls
             else:
-                spike_indices[offset : offset + len(sp)] = neighb_member_ixs
-                log_likelihoods[offset : offset + len(sp)] = lls
-                offset += len(sp)
+                nbatch = len(lls)
+                spike_indices[offset : offset + nbatch] = neighb_member_ixs
+                log_likelihoods[offset : offset + nbatch] = lls
+                offset += nbatch
 
         if return_sorted and not inds_already:
             spike_indices, order = spike_indices.sort()
@@ -1802,16 +1810,6 @@ class SpikeMixtureModel(torch.nn.Module):
                 self.storage.rg = self._rg.spawn(1)[0]
         return self.storage.rg
 
-    @property
-    def core_batch_buffer(self):
-        if not hasattr(self.storage, "core_batch_buffer"):
-            shape = self.likelihood_batch_size, *self.data.core_features.shape[1:]
-            core_batch_buffer = self.data.core_features.new_empty(shape)
-            if self.data.device.type == "cuda":
-                core_batch_buffer = core_batch_buffer.pin_memory()
-            self.storage.core_batch_buffer = core_batch_buffer
-        return self.storage.core_batch_buffer
-
     def _relabel(self, old_labels, new_labels=None, flat=False):
         """Re-label units
 
@@ -2224,12 +2222,12 @@ class GaussianUnit(torch.nn.Module):
 
     def pick_channels(self, active_chans, nobs=None):
         if self.channels_strategy == "all":
-            self.channels = torch.arange(self.n_channels)
+            self.register_buffer("channels", torch.arange(self.n_channels))
             return
 
         if nobs is None or not active_chans.numel():
             self.snr = torch.zeros(self.n_channels)
-            self.channels = torch.arange(0)
+            self.register_buffer("channels", torch.arange(0))
             return
 
         amp = torch.linalg.vector_norm(self.mean[:, active_chans], dim=0)
@@ -2241,11 +2239,11 @@ class GaussianUnit(torch.nn.Module):
         if self.channels_strategy == "snr":
             snr_min = np.sqrt(self.channels_count_min) * self.channels_snr_amp
             strong = snr >= snr_min
-            self.channels = active_chans[strong.cpu()]
+            self.register_buffer("channels", active_chans[strong.cpu()])
             return
         if self.channels_strategy == "count":
             strong = nobs >= self.channels_count_min
-            self.channels = active_chans[strong.cpu()]
+            self.register_buffer("channels", active_chans[strong.cpu()])
             return
 
         assert False
@@ -2477,43 +2475,6 @@ def class_sum(classes, inverse_inds, x, weights=None):
     x = x * weights if weights is not None else x
     spiketorch.add_at_(wsum, inverse_inds, x)
     return wsum
-
-
-def average_units(units, proportions):
-    ua = units[0]
-    new = GaussianUnit(
-        rank=ua.rank,
-        n_channels=ua.n_channels,
-        noise=ua.noise,
-        mean_kind=ua.mean_kind,
-        cov_kind=ua.cov_kind,
-        prior_type=ua.prior_type,
-        channels_strategy=ua.channels_strategy,
-        channels_count_min=ua.channels_count_min,
-        channels_snr_amp=ua.channels_snr_amp,
-        prior_pseudocount=ua.prior_pseudocount,
-        scale_mean=ua.scale_mean,
-        ppca_rank=len(units) * ua.ppca_rank,
-    )
-    if ua.mean_kind == "zero":
-        return ua
-
-    channels = torch.cat([u.channels for u in units]).unique()
-    new.register_buffer("channels", channels)
-
-    new_mean = sum(pi * u.mean for pi, u in zip(proportions, units))
-    new.register_buffer("mean", new_mean)
-
-    if new.cov_kind == "zero":
-        pass
-    elif new.cov_kind == "ppca" and new.ppca_rank > 0:
-        W = torch.cat(
-            [pi.sqrt() * u.W for pi, u in zip(proportions, units)],
-            dim=2,
-        )
-        new.register_buffer("W", W)
-
-    return new
 
 
 def to_full_probe(features, weights, n_channels, storage):

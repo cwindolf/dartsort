@@ -107,8 +107,6 @@ def ppca_em(
             return_yc=W_needs_initialization and not i,
             prior_var=prior_var,
         )
-        # print(f"A {i=} {state['mu']=}")
-        # print(f"A {i=} {state['W']=}")
         old_state = state
         state = ppca_m_step(
             **e,
@@ -119,8 +117,6 @@ def ppca_em(
             noise=noise,
             active_channels=active_channels,
         )
-        # print(f"B {i=} {state['mu']=}")
-        # print(f"B {i=} {state['W']=}")
         dmu = torch.abs(state["mu"] - old_state["mu"]).abs().max()
         dW = 0
         if state["W"] is not None:
