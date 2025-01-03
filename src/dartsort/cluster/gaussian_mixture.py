@@ -970,7 +970,7 @@ class SpikeMixtureModel(torch.nn.Module):
             logger.info(f"Fit {unit_id=} {features=}")
         if weights is None and likelihoods is not None:
             weights = self.get_fit_weights(unit_id, features.indices, likelihoods)
-            (valid,) = torch.nonzero(weights, as_tuple=True)
+            (valid,) = weights.nonzero(as_tuple=True)
             valid = valid.cpu()
             weights = weights[valid]
             features = features[valid]
@@ -1036,14 +1036,14 @@ class SpikeMixtureModel(torch.nn.Module):
         if not ns:
             return None, None
 
-        if not inds_already:
-            spike_indices = torch.empty(ns, dtype=int)
-            offset = 0
-            log_likelihoods = torch.empty(ns)
-        else:
+        if inds_already:
             log_likelihoods = torch.full(
                 (len(spike_indices),), -torch.inf, device=self.data.device
             )
+        else:
+            spike_indices = torch.empty(ns, dtype=int)
+            offset = 0
+            log_likelihoods = torch.empty(ns)
 
         jobs = neighbs
         if show_progress:
