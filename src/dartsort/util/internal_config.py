@@ -6,6 +6,8 @@ import numpy as np
 import torch
 from pydantic.dataclasses import dataclass
 
+from .py_util import int_or_inf
+
 try:
     from importlib.resources import files
 except ImportError:
@@ -335,11 +337,13 @@ class RefinementConfig:
     # -- gmm parameters
     # noise params
     cov_kind = "full"
+
     # feature params
     core_radius: float = 35.0
     interpolation_sigma: float = 20.0
     val_proportion: float = 0.25
-    max_n_spikes: float | int = argfield(default=np.inf, arg_type=float)
+    max_n_spikes: float | int = argfield(default=4_000_000, arg_type=int_or_inf)
+
     # model params
     signal_rank: int = 0
     n_spikes_fit: int = 4096
@@ -501,6 +505,8 @@ def to_internal_config(cfg):
         merge_criterion_threshold=cfg.merge_criterion_threshold,
         merge_bimodality_threshold=cfg.merge_bimodality_threshold,
         n_total_iters=cfg.n_refinement_iters,
+        max_n_spikes=cfg.gmm_max_spikes,
+        val_proportion=cfg.gmm_val_proportion,
     )
     motion_estimation_config = MotionEstimationConfig(
         **{k.name: getattr(cfg, k.name) for k in fields(MotionEstimationConfig)}

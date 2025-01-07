@@ -127,15 +127,13 @@ def simulate_moppca(
     )
     data = dartsort.StableSpikeDataset(
         original_sorting=init_sorting,
-        kept_indices=torch.arange(N),
+        kept_indices=np.arange(N),
         prgeom=torch.arange(nc + 1, dtype=torch.float).unsqueeze(1),
         tpca=_tpca,
         extract_channels=channels,
         core_channels=channels,
         core_features=x,
-        extract_features=x,
-        core_neighborhoods=neighbs,
-        extract_neighborhoods=neighbs,
+        train_extract_features=x,
         split_names=["train"],
         split_mask=torch.zeros(len(x), dtype=int),
     )
@@ -204,7 +202,9 @@ def fit_ppca(
     nc = neighborhoods.n_channels
     print(f"{nc=}")
     res = ppcalib.ppca_em(
-        data.spike_data(indices=slice(None), with_neighborhood_ids=True),
+        data.spike_data(
+            indices=slice(None), split_indices=slice(None), with_neighborhood_ids=True
+        ),
         noise,
         neighborhoods,
         active_channels=torch.arange(nc),

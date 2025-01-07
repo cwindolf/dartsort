@@ -45,3 +45,10 @@ class NoKeyboardInterrupt:
 
 
 delay_keyboard_interrupt = NoKeyboardInterrupt()
+
+
+def int_or_inf(s):
+    s = float(s)
+    if np.isfinite(s):
+        return int(s)
+    return s

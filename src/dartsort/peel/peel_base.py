@@ -206,6 +206,7 @@ class BasePeeler(torch.nn.Module):
                         initial=n_chunks_orig - len(chunks_to_do),
                         smoothing=0,
                         desc=f"{task_name} {n_sec_chunk:.1f}s/it [spk/it=%%%]",
+                        mininterval=0.25,
                     )
 
                 # construct h5 after forking to avoid pickling it
@@ -241,7 +242,7 @@ class BasePeeler(torch.nn.Module):
                                 desc = f"{task_name}"
                                 if not skip_features:
                                     desc += f" [spk/{n_sec_chunk:g}s={n_spikes / batch_count:0.1f}]"
-                                results.set_description(desc)
+                                results.set_description(desc, refresh=False)
                             if not skip_features and (
                                 stop_after_n_waveforms
                                 and n_spikes >= stop_after_n_waveforms
