@@ -572,7 +572,8 @@ class SpikeNeighborhoods(torch.nn.Module):
         device=None,
         features=None,
     ):
-        if neighborhoods is not None:
+        if neighborhood_ids is not None:
+            assert neighborhoods is not None
             return cls.from_known_ids(
                 channels,
                 n_channels,

@@ -47,7 +47,9 @@ def test_fakedata():
     templates = np.array(
         [t[:, None] * a[None, :] for t, a in zip((t0, t1, t2, t3), amps)]
     )
-    templates *= np.array([[[20., 40, 20, 40]]]).T / np.abs(templates).max(axis=(1, 2), keepdims=True)
+    templates *= np.array([[[20.0, 40, 20, 40]]]).T / np.abs(templates).max(
+        axis=(1, 2), keepdims=True
+    )
 
     # make fake spike trains
     spikes_per_unit = 201
@@ -84,6 +86,7 @@ def test_fakedata():
                     denoise_only=True, do_nn_denoise=False
                 )
             ),
+            refinement_config=dartsort.RefinementConfig(min_count=10),
             featurization_config=dartsort.FeaturizationConfig(n_residual_snips=512),
             motion_estimation_config=dartsort.MotionEstimationConfig(
                 do_motion_estimation=False
@@ -92,5 +95,5 @@ def test_fakedata():
         st = dartsort.dartsort(rec, output_directory=tempdir, cfg=cfg)
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     test_fakedata()

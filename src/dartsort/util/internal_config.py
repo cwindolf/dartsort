@@ -345,6 +345,7 @@ class RefinementConfig:
     max_n_spikes: float | int = argfield(default=4_000_000, arg_type=int_or_inf)
 
     # model params
+    min_count: int = 50
     signal_rank: int = 0
     n_spikes_fit: int = 4096
     n_em_iters: int = 25

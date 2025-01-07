@@ -50,6 +50,7 @@ def refine_clustering(
     gmm = SpikeMixtureModel(
         data,
         noise,
+        min_count=refinement_config.min_count,
         n_threads=computation_config.actual_n_jobs(),
         n_spikes_fit=refinement_config.n_spikes_fit,
         ppca_rank=refinement_config.signal_rank,
