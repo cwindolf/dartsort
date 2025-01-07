@@ -67,7 +67,6 @@ def refine_clustering(
         em_converged_churn=refinement_config.em_converged_churn,
         em_converged_atol=refinement_config.em_converged_atol,
     )
-    gmm.to(computation_config.actual_device())
     gmm.cleanup()
     for it in range(refinement_config.n_total_iters):
         log_liks = gmm.em()

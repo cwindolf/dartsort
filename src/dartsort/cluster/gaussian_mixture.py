@@ -348,7 +348,6 @@ class SpikeMixtureModel(torch.nn.Module):
             assert convergence_props is not None  # for typing.
             meanlogpx = spike_logliks[train_ix].mean()
             self.train_meanlogpxs.append(meanlogpx.item())
-            print(self.train_meanlogpxs)
 
             # M step: fit units based on responsibilities
             to_fit = convergence_props["unit_churn"] >= self.em_converged_churn
