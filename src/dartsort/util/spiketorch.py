@@ -577,6 +577,12 @@ def single_inv_oaconv1d(input, f2, s2, block_size, padding=0, norm="backward"):
     return oa
 
 
+def isin_sorted(x, y):
+    """Like torch.isin(x, y), but faster by assuming both sorted."""
+    ix = torch.searchsorted(y, x, side="right") - 1
+    return x == y[ix]
+
+
 # -- channel reindexing
 
 

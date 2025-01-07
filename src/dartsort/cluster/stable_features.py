@@ -86,10 +86,15 @@ class StableSpikeDataset(torch.nn.Module):
         core_radius: float = 35.0,
         neighborhood_ids=None,
         neighborhood_ix=None,
+        device=None,
         _core_feature_splits=("train", "kept"),
     ):
         """Motion-corrected spike data on the registered probe"""
         super().__init__()
+    
+        if device is None:
+            device = "cuda" if torch.cuda.is_available() else "cpu"
+        device = torch.device(device)
 
         self.features_on_device = features_on_device
 
@@ -125,6 +130,7 @@ class StableSpikeDataset(torch.nn.Module):
         # neighborhoods module, for querying spikes by channel group
         if self.has_splits and "train" in self.split_indices:
             train_ixs = self.split_indices["train"]
+            self.n_spikes_train = len(train_ixs)
             self._train_extract_neighborhoods = SpikeNeighborhoods.from_channels(
                 extract_channels[train_ixs],
                 n_channels=self.n_channels,
@@ -132,6 +138,8 @@ class StableSpikeDataset(torch.nn.Module):
                     None if neighborhood_ids is None else neighborhood_ids[train_ixs]
                 ),
                 neighborhoods=extract_channels[neighborhood_ix],
+                deduplicate=True,
+                device=device,
             )
             self._train_extract_channels = extract_channels.cpu()[train_ixs]
         _core_neighborhoods = {
@@ -143,6 +151,7 @@ class StableSpikeDataset(torch.nn.Module):
                 ),
                 neighborhoods=core_channels[neighborhood_ix],
                 features=core_features[ix] if k in _core_feature_splits else None,
+                device=device,
             )
             for k, ix in self.split_indices.items()
         }
@@ -244,7 +253,7 @@ class StableSpikeDataset(torch.nn.Module):
             )
 
             # determine channel occupancy of core/extract stable features
-            extract_channels, core_channels, neighb_info = get_stable_channels(
+            extract_channels, core_channels, *neighb_info = get_stable_channels(
                 geom,
                 depths,
                 rdepths,
@@ -262,7 +271,7 @@ class StableSpikeDataset(torch.nn.Module):
             # we also get the total counts in each combo, and the indices of
             # the first spikes in each combo, allowing neighbs to be reconstructed
             # as needed
-            neighborhood_ids, neighborhood_counts, neighborhood_ix = neighb_info
+            neighborhood_ids, neighborhood_ix = neighb_info
             extract_channels = torch.from_numpy(extract_channels)
             core_channels = torch.from_numpy(core_channels)
             if store_on_device:
@@ -323,6 +332,7 @@ class StableSpikeDataset(torch.nn.Module):
             split_names=split_names,
             split_mask=split_mask,
             core_radius=core_radius,
+            device=device,
         )
         self.to(device)
         return self
@@ -346,7 +356,14 @@ class StableSpikeDataset(torch.nn.Module):
             assert split == "train"
             assert split_indices is not None
 
-            features = self._train_extract_features[split_indices]
+            if withbuf:
+                features = feature_buffer[: len(indices)]
+                non_blocking = features.is_pinned()
+                torch.index_select(
+                    self._train_extract_features, 0, split_indices, out=features
+                )
+            else:
+                features = self._train_extract_features[split_indices]
             if with_channels:
                 channels = self._train_extract_channels[split_indices]
             if with_neighborhood_ids:
@@ -559,6 +576,8 @@ class SpikeNeighborhoods(torch.nn.Module):
             for j in range(len(neighborhoods)):
                 f = features[self.neighborhood_members(j)]
                 f = f[..., self.valid_mask(j).to(f.device)]
+                if device is not None and device.type == "cuda":
+                    f = f.pin_memory()
                 _features_valid.append(f)
             self._features_valid = _features_valid
 
@@ -570,6 +589,7 @@ class SpikeNeighborhoods(torch.nn.Module):
         neighborhood_ids=None,
         neighborhoods=None,
         device=None,
+        deduplicate=False,
         features=None,
     ):
         if neighborhood_ids is not None:
@@ -580,6 +600,7 @@ class SpikeNeighborhoods(torch.nn.Module):
                 neighborhood_ids,
                 neighborhoods,
                 device=device,
+                deduplicate=deduplicate,
                 features=features,
             )
         if device is not None:
@@ -603,12 +624,17 @@ class SpikeNeighborhoods(torch.nn.Module):
         neighborhood_ids,
         neighborhoods,
         device=None,
+        deduplicate=False,
         features=None,
     ):
         neighborhoods = torch.asarray(neighborhoods)
         if device is not None:
             neighborhoods = neighborhoods.to(device)
             neighborhood_ids = neighborhood_ids.to(device)
+        if deduplicate:
+            neighborhoods, old2new = torch.unique(neighborhoods, dim=0, return_inverse=True)
+            neighborhood_ids = old2new[neighborhood_ids]
+            kept_ids, neighborhood_ids = torch.unique(neighborhood_ids, return_inverse=True)
         return cls(
             n_channels=n_channels,
             neighborhoods=neighborhoods,
@@ -857,11 +883,14 @@ def get_stable_channels(
         )
 
     # extract the main unique chans computation
-    c = torch.asarray(channels, dtype=torch.int32, device=device)
-    s = torch.asarray(n_pitches_shift, dtype=torch.int32, device=device)
+    c = torch.asarray(channels, dtype=torch.int32)
+    s = torch.asarray(n_pitches_shift, dtype=torch.int32)
     cs = torch.column_stack((c, s))
+    if device is not None:
+        cs = cs.to(device)
     uniq_channels_and_shifts, *neighb_info = unique_with_index(cs, dim=0)
     neighborhood_ids, neighborhood_counts, neighborhood_ix = neighb_info
+    neighborhood_ix = neighborhood_ix.cpu()
     uniq_channels_and_shifts = uniq_channels_and_shifts.numpy(force=True)
     neighborhood_ids_ = neighborhood_ids.numpy(force=True)
 
@@ -892,7 +921,7 @@ def get_stable_channels(
         workers=workers,
     )
 
-    return extract_channels, core_channels, neighb_info
+    return extract_channels, core_channels, neighborhood_ids, neighborhood_ix
 
 
 def unique_with_index(x, dim=0):

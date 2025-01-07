@@ -15,6 +15,40 @@ def test_ptp():
     assert np.array_equal(spiketorch.ptp(torch.tensor(x), 1).numpy(), np.ptp(x, 1))
 
 
+def test_isin_sorted():
+    x = torch.arange(5)
+    y = torch.arange(10)
+    for i in range(-30, 30):
+        for j in range(-30, 30):
+            assert torch.equal(
+                torch.isin(x + i, y + j),
+                spiketorch.isin_sorted(x + i, y + j),
+            )
+    x = x[[1, 2, 4]]
+    y = y[::2]
+    for i in range(-30, 30):
+        for j in range(-30, 30):
+            assert torch.equal(
+                torch.isin(x + i, y + j),
+                spiketorch.isin_sorted(x + i, y + j),
+            )
+    rg = np.random.default_rng()
+    x = rg.integers(low=0, high=100, size=20)
+    x = np.concatenate((np.zeros(5, dtype=int), x))
+    x.sort()
+    x = torch.from_numpy(x)
+    y = rg.integers(low=0, high=20, size=40)
+    y = np.concatenate((np.zeros(5, dtype=int), y))
+    y.sort()
+    y = torch.from_numpy(y)
+    for i in range(-30, 30):
+        for j in range(-30, 30):
+            assert torch.equal(
+                torch.isin(x + i, y + j),
+                spiketorch.isin_sorted(x + i, y + j),
+            )
+
+
 def test_ravel_multi_index():
     # no broadcasting case
     x = torch.zeros((40, 41))

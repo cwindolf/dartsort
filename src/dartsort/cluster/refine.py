@@ -46,6 +46,7 @@ def refine_clustering(
             1.0 - refinement_config.val_proportion,
             refinement_config.val_proportion,
         ),
+        device=computation_config.actual_device(),
     )
     gmm = SpikeMixtureModel(
         data,
@@ -54,6 +55,7 @@ def refine_clustering(
         n_threads=computation_config.actual_n_jobs(),
         n_spikes_fit=refinement_config.n_spikes_fit,
         ppca_rank=refinement_config.signal_rank,
+        ppca_inner_em_iter=refinement_config.ppca_inner_em_iter,
         n_em_iters=refinement_config.n_em_iters,
         distance_metric=refinement_config.distance_metric,
         distance_normalization_kind=refinement_config.distance_normalization_kind,

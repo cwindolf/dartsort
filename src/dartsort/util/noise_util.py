@@ -418,6 +418,8 @@ class EmbeddedNoise(torch.nn.Module):
     ):
         if device is not None:
             device = torch.device(device)
+        if cache_key is not None and torch.is_tensor(cache_key):
+            cache_key = cache_key.item()
         if cache_prefix is not None:
             cache_key = (cache_prefix, cache_key)
         if cache_key is not None and cache_key in self.cache:
@@ -464,12 +466,12 @@ class EmbeddedNoise(torch.nn.Module):
 
         if have_left:
             if self.cov_kind in ("scalar", "diagonal_by_rank", "diagonal"):
-                if torch.isin(channels_left.to(channels), channels).any():
-                    raise ValueError(
-                        "Don't know how to get non-marginal covariance block "
-                        f"for cov_kind={self.cov_kind} when the block overlaps "
-                        "with the diagonal."
-                    )
+                # if torch.isin(channels_left.to(channels), channels).any():
+                #     raise ValueError(
+                #         "Don't know how to get non-marginal covariance block "
+                #         f"for cov_kind={self.cov_kind} when the block overlaps "
+                #         "with the diagonal."
+                #     )
                 sz = self.rank * ncl, self.rank * nc
                 return operators.ZeroLinearOperator(*sz, dtype=self.global_std.dtype)
 

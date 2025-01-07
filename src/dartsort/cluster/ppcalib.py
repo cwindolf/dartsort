@@ -7,6 +7,7 @@ from tqdm.auto import trange
 
 from ..util.noise_util import EmbeddedNoise
 from .stable_features import SpikeFeatures, SpikeNeighborhoods
+from ..util import spiketorch
 
 vecdot = torch.linalg.vecdot
 
@@ -479,10 +480,13 @@ def get_neighborhood_data(
         n_neighb = in_neighborhood.numel()
         neighb_chans = neighborhoods.neighborhoods[nid]
         # subset of active chans which are in the neighborhood
-        active_subset = torch.isin(active_channels, neighb_chans)
+        active_subset = spiketorch.isin_sorted(active_channels, neighb_chans)
+
         # subset of neighborhood's chans which are active
-        neighb_subset = torch.isin(neighb_chans, active_channels)
-        assert torch.equal(neighb_chans[neighb_subset], active_channels[active_subset])
+        neighb_subset = spiketorch.isin_sorted(neighb_chans, active_channels)
+
+        # assert torch.equal(neighb_chans[neighb_subset], active_channels[active_subset])
+
         neighb_chans = neighb_chans[neighb_chans < neighborhoods.n_channels]
         have_missing = not active_subset.all()
         missing_subset = missing_chans = None

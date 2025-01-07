@@ -349,6 +349,7 @@ class RefinementConfig:
     signal_rank: int = 0
     n_spikes_fit: int = 4096
     n_em_iters: int = 25
+    ppca_inner_em_iter: int = 10
     distance_metric: Literal["noise_metric", "kl", "reverse_kl", "symkl"] = "symkl"
     distance_normalization_kind: Literal["none", "noise", "channels"] = "noise"
     merge_distance_threshold: float = 1.5
