@@ -42,7 +42,7 @@ jobs:
         
       - name: Install Pip Requirements
         run: |
-          pip install -r dartsort/requirements.txt
+          pip install -r dartsort/requirements-ci.txt
 
       - name: Get DREDge
         uses: actions/checkout@v4
