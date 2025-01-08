@@ -86,7 +86,7 @@ class SpikeMixtureModel(torch.nn.Module):
         em_converged_prop: float = 0.02,
         em_converged_churn: float = 0.01,
         em_converged_atol: float = 1e-2,
-        em_converged_logpx_tol: float = 0.05,
+        em_converged_logpx_tol: float = 0.01,
         random_seed: int = 0,
     ):
         super().__init__()
@@ -134,7 +134,7 @@ class SpikeMixtureModel(torch.nn.Module):
         # store labels on cpu since we're always nonzeroing / writing np data
         assert self.data.original_sorting.labels is not None
         labels = self.data.original_sorting.labels
-        self.labels = torch.asarray(labels)
+        self.labels = torch.asarray(labels, copy=True)
 
         # this is populated by self.m_step()
         self._units = torch.nn.ModuleDict()
@@ -303,7 +303,8 @@ class SpikeMixtureModel(torch.nn.Module):
     # -- headliners
 
     def to_sorting(self):
-        return replace(self.data.original_sorting, labels=self.labels.numpy())
+        labels = self.labels.numpy(force=False).copy()
+        return replace(self.data.original_sorting, labels=labels)
 
     def em(
         self, n_iter=None, show_progress=True, final_e_step=True, final_split="kept"

@@ -86,7 +86,7 @@ def dartsort(
         computation_config=cfg.computation_config,
     )
     if return_extra:
-        ret["initial_labels"] = sorting.labels
+        ret["initial_labels"] = sorting.labels.copy()
     sorting = refine_clustering(
         recording=recording,
         sorting=sorting,
@@ -95,7 +95,7 @@ def dartsort(
         computation_config=cfg.computation_config,
     )
     if return_extra:
-        ret["refined_labels"] = sorting.labels
+        ret["refined_labels"] = sorting.labels.copy()
 
     # alternate matching with
     for step in range(cfg.matching_iterations):

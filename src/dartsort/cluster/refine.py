@@ -70,9 +70,9 @@ def refine_clustering(
     gmm.cleanup()
     for it in range(refinement_config.n_total_iters):
         log_liks = gmm.em()
-        gmm.merge(log_liks)
-        log_liks = gmm.em()
         gmm.split()
+        log_liks = gmm.em()
+        gmm.merge(log_liks)
     gmm.em(final_split="full")
     gmm.cpu()
     sorting = gmm.to_sorting()
