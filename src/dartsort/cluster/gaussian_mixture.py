@@ -613,7 +613,7 @@ class SpikeMixtureModel(torch.nn.Module):
 
         # have to jump through some hoops because torch sparse tensors
         # don't implement .mean() yet??
-        spike_ixs = self.data.split_indices["train"]
+        spike_ixs = self.data.split_indices["train"].numpy()
         if spike_ixs.shape[0] > self.proportions_sample_size:
             sample = self.rg.choice(
                 spike_ixs.shape[0], size=self.proportions_sample_size, replace=False
@@ -1947,7 +1947,9 @@ class SpikeMixtureModel(torch.nn.Module):
             shape = self.n_spikes_fit, *self.data._train_extract_features.shape[1:]
             dtype = self.data._train_extract_features.dtype
             pin = self.data.device.type == "cuda"
-            self.storage._train_extract_buffer = torch.empty(shape, dtype=dtype, pin_memory=pin)
+            self.storage._train_extract_buffer = torch.empty(
+                shape, dtype=dtype, pin_memory=pin
+            )
         return self.storage._train_extract_buffer
 
     def _relabel(self, old_labels, new_labels=None, flat=False):
@@ -2012,7 +2014,7 @@ class SpikeMixtureModel(torch.nn.Module):
             logdets = means.new_full((nu,), torch.nan)
 
         for j, unit in enumerate(units):
-            if not hasattr(unit, 'mean'):
+            if not hasattr(unit, "mean"):
                 continue
             means[j] = unit.mean
             if covs is not None:
@@ -2528,10 +2530,10 @@ class GaussianUnit(torch.nn.Module):
         # inv_quad = inv_quad[:, 0]
         inv_quad = dmu.new_empty(len(dmu))
         for bs in range(0, len(dmu), 32):
-            dmub = dmu[bs:bs+32]
-            cb = other_covs[bs:bs+32]
+            dmub = dmu[bs : bs + 32]
+            cb = other_covs[bs : bs + 32]
             iq = cb.solve(dmub.unsqueeze(2))[:, :, 0]
-            inv_quad[bs:bs+32] = (iq * dmub).sum(1)
+            inv_quad[bs : bs + 32] = (iq * dmub).sum(1)
         assert inv_quad.shape == dmu.shape[:1]
 
         # get logdet term
