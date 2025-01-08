@@ -34,7 +34,7 @@ jobs:
 
       - name: NumPy Override
         run: |
-          mamba install "numpy<2.0"
+          micromamba install "numpy<2.0"
 
       - name: Install Torch (CPU)
         run: |
