@@ -41,6 +41,7 @@ def dartsort(
     return_extra=False,
 ):
     output_directory = Path(output_directory)
+    output_directory.mkdir(exist_ok=True)
     cfg = to_internal_config(cfg)
 
     ret = {}
@@ -95,11 +96,11 @@ def dartsort(
         computation_config=cfg.computation_config,
     )
     if return_extra:
-        ret["refined_labels"] = sorting.labels.copy()
+        ret["refined0_labels"] = sorting.labels.copy()
 
     # alternate matching with
-    for step in range(cfg.matching_iterations):
-        is_final = step == cfg.matching_iterations - 1
+    for step in range(1, cfg.matching_iterations + 1):
+        is_final = step == cfg.matching_iterations
         prop = 1.0 if is_final else cfg.intermediate_matching_subsampling
 
         sorting, match_h5 = match(
@@ -307,3 +308,10 @@ def match_chunked(
         hdf5_filenames.append(chunk_h5)
 
     return sortings, hdf5_filenames
+
+
+def run_dev_tasks(results, output_directory, cfg):
+    if cfg.save_intermediate_labels:
+        for k, v in results.items():
+            if k.endswith("_labels"):
+                np.save(output_directory / f"{k}.npy", v, allow_pickle=False)

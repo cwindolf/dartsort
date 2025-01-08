@@ -2069,8 +2069,9 @@ class SpikeMixtureModel(torch.nn.Module):
         # merge behavior is either a hierarchical merge or this tree-based
         # idea, depending on the value of a parameter
         if merge_kind is None:
-            merge_kind = "hierarchical"
-            if self.merge_criterion_threshold is not None:
+            if self.merge_criterion == "bimodality":
+                merge_kind = "hierarchical"
+            else:
                 merge_kind = "tree"
 
         # distances are needed by both methods

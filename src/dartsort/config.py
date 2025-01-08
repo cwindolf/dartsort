@@ -13,7 +13,9 @@ class DARTsortUserConfig:
     """User-facing configuration options"""
 
     # -- high level behavior
-    dredge_only: bool = False
+    dredge_only: bool = argfield(
+        False, doc="Whether to stop after initial localization and motion tracking."
+    )
     matching_iterations: int = 1
 
     # -- computer options
@@ -155,12 +157,26 @@ class DeveloperConfig(DARTsortUserConfig):
     use_universal_templates: bool = False
     signal_rank: Annotated[int, Field(ge=0)] = 0
 
-    merge_criterion_threshold: float | None = 0.0
+    merge_criterion_threshold: float = 0.0
     merge_criterion: Literal[
-        "heldout_loglik", "heldout_ccl", "loglik", "ccl", "aic", "bic", "icl"
+        "heldout_loglik",
+        "heldout_ccl",
+        "loglik",
+        "ccl",
+        "aic",
+        "bic",
+        "icl",
+        "bimodality",
     ] = "heldout_ccl"
     merge_bimodality_threshold: float = 0.05
     n_refinement_iters: int = 3
 
     gmm_max_spikes: Annotated[int, Field(gt=0)] = 4_000_000
     gmm_val_proportion: Annotated[float, Field(gt=0)] = 0.25
+
+    # flags for dev tasks run by main.run_dev_tasks
+    save_intermediate_labels: bool = False
+
+    @property
+    def needs_extra(self):
+        return self.save_intermediate_labels

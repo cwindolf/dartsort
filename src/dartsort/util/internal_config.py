@@ -7,6 +7,7 @@ import torch
 from pydantic.dataclasses import dataclass
 
 from .py_util import int_or_inf
+from .cli_util import argfield
 
 try:
     from importlib.resources import files
@@ -19,25 +20,6 @@ except ImportError:
 default_pretrained_path = files("dartsort.pretrained")
 default_pretrained_path = default_pretrained_path.joinpath("single_chan_denoiser.pt")
 default_pretrained_path = str(default_pretrained_path)
-
-
-def argfield(
-    default=MISSING, default_factory=MISSING, arg_type=MISSING, cli=True, doc=""
-):
-    """Helper for defining fields with extended CLI behavior.
-
-    This is only needed when a field's type is not a callable which can
-    take string inputs and return an object of the right type, such as
-    typing.Union or something. Then arg_type is what the CLI will call
-    to convert the argv element into an object of the desired type.
-
-    Fields with cli=False will not be available from the command line.
-    """
-    return field(
-        default=default,
-        default_factory=default_factory,
-        metadata=dict(arg_type=arg_type, cli=cli, doc=""),
-    )
 
 
 @dataclass(frozen=True, kw_only=True, slots=True)
