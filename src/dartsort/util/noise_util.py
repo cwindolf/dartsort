@@ -402,7 +402,12 @@ class EmbeddedNoise(torch.nn.Module):
         cov = self.marginal_covariance(channels=channels)
         assert data.ndim == 3
         data = data.reshape(len(data), -1)
-        res = linear_operator.sqrt_inv_matmul(cov, data.unsqueeze(2))
+        chol = cov.cholesky()
+        res = torch.linalg.solve_triangular(chol, data.T, upper=False)
+        res = res.T.unsqueeze(2)
+
+        # contour integral quad with lanczos is too fancy here...
+        # res = linear_operator.sqrt_inv_matmul(cov, data.unsqueeze(2))
         assert res.ndim == 3 and res.shape == (*data.shape, 1)
         return res
 

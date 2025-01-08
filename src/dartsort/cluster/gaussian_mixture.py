@@ -979,9 +979,9 @@ class SpikeMixtureModel(torch.nn.Module):
             indices = self.rg.choice(n_full, size=max_size, replace=False)
             indices.sort()
             indices = torch.asarray(indices, device=indices_full.device)
-            indices = indices_full[indices]
             if split_name is not None:
                 split_indices = split_indices_full[indices]
+            indices = indices_full[indices]
         else:
             indices = indices_full
 
@@ -1540,6 +1540,7 @@ class SpikeMixtureModel(torch.nn.Module):
         sym_function=np.maximum,
         normalization_kind=None,
         show_progress=False,
+        max_group_size=8,
     ):
         if distances.shape[0] == 1:
             return None, None, None
@@ -1570,8 +1571,11 @@ class SpikeMixtureModel(torch.nn.Module):
             if not np.isfinite(dist) or dist > max_distance:
                 continue
 
+            pleaves = clusters.get(pa, [int(pa)]) + clusters.get(pb, [int(pb)])
+            if len(pleaves) > max_group_size:
+                continue
+
             # did we already merge a cluster containing this one?
-            pleaves = clusters.get(pa, [pa]) + clusters.get(pb, [pb])
             contained = [l in already_merged_leaves for l in pleaves]
             if any(contained):
                 assert all(contained)
@@ -2481,9 +2485,12 @@ class GaussianUnit(torch.nn.Module):
             + log(|So| / |Ss|)
           }
         """
-        is_ppca = self.cov_kind == "ppca" and self.ppca_rank
+        is_ppca = False
+        if other_covs is not None:
+            is_ppca = other_covs.shape[-2] < other_covs.shape[-1]
 
         if other is not None:
+            is_ppca = other.cov_kind == "ppca" and other.ppca_rank > 0
             other_means = other.mean.unsqueeze(0)
             other_covs = None
             if is_ppca:
@@ -2516,9 +2523,15 @@ class GaussianUnit(torch.nn.Module):
             tr = solve.diagonal(dim1=1, dim2=2).sum(dim=1)
 
         # get inv quad term
-        inv_quad = other_covs.inv_quad(dmu.unsqueeze(-1), reduce_inv_quad=False)
-        assert inv_quad.shape == (n, 1)
-        inv_quad = inv_quad[:, 0]
+        # inv_quad = other_covs.inv_quad(dmu.unsqueeze(-1), reduce_inv_quad=False)
+        # inv_quad = inv_quad[:, 0]
+        inv_quad = dmu.new_empty(len(dmu))
+        for bs in range(0, len(dmu), 32):
+            dmub = dmu[bs:bs+32]
+            cb = other_covs[bs:bs+32]
+            iq = cb.solve(dmub.unsqueeze(2))[:, :, 0]
+            inv_quad[bs:bs+32] = (iq * dmub).sum(1)
+        assert inv_quad.shape == dmu.shape[:1]
 
         # get logdet term
         ld = 0.0
@@ -2570,7 +2583,7 @@ class GaussianUnit(torch.nn.Module):
 
 
 log2pi = torch.log(torch.tensor(2.0 * torch.pi))
-tqdm_kw = dict(smoothing=0, mininterval=1.0 / 24.0)
+tqdm_kw = dict(smoothing=0, mininterval=0.2)
 
 
 def get_average_parameter_counts(

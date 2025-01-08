@@ -73,7 +73,7 @@ def refine_clustering(
         gmm.merge(log_liks)
         log_liks = gmm.em()
         gmm.split()
-    gmm.em()
+    gmm.em(final_split="full")
     gmm.cpu()
     sorting = gmm.to_sorting()
     return sorting
