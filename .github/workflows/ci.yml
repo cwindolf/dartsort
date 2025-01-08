@@ -29,6 +29,10 @@ jobs:
           environment-file: dartsort/environment.yml
           init-shell: bash
 
+      - name: NumPy Override
+        run: |
+          mamba install "numpy<2.0"
+
       - name: Install Torch (CPU)
         run: |
           pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
