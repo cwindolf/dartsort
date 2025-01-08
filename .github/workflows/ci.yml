@@ -35,10 +35,6 @@ jobs:
       - name: NumPy Override
         run: |
           micromamba install "numpy<2.0"
-
-      - name: Install Torch (CPU)
-        run: |
-          pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
         
       - name: Install Pip Requirements
         run: |
