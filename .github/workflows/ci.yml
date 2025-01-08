@@ -31,10 +31,6 @@ jobs:
         with:
           environment-file: dartsort/environment.yml
           init-shell: bash
-
-      - name: NumPy Override
-        run: |
-          micromamba install "numpy<2.0"
         
       - name: Install Pip Requirements
         run: |
