@@ -8,7 +8,7 @@ pytest
 torch >= 2.0
 scipy >= 1.13
 scikit-learn
-spikeinterface @ -e git+https://github.com/SpikeInterface/spikeinterface@main
+spikeinterface >= 0.101.2
 tqdm
 pandas
 linear_operator
