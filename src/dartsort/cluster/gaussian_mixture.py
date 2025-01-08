@@ -1879,6 +1879,8 @@ class SpikeMixtureModel(torch.nn.Module):
         # torch's index_select is painfully slow
         # weights = torch.index_select(likelihoods, 1, features.indices)
         # here we have weights as a csc_array
+        if torch.is_tensor(indices):
+            indices = indices.numpy(force=True)
         liks = likelihoods[:, indices]
         if unit_ids is not None:
             liks = liks[unit_ids]
