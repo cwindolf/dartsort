@@ -137,13 +137,9 @@ class DARTsortUserConfig:
     temporal_bin_length_s: Annotated[float, Field(gt=0)] = 1.0
     window_step_um: Annotated[float, Field(gt=0)] = 400.0
     window_scale_um: Annotated[float, Field(gt=0)] = 450.0
-    window_margin_um: Annotated[float, Field(gt=0)] | None = argfield(
-        default=None, arg_type=float
-    )
+    window_margin_um: Annotated[float, Field(gt=0)] | None = None
     max_dt_s: Annotated[float, Field(gt=0)] = 1000.0
-    max_disp_um: Annotated[float, Field(gt=0)] | None = argfield(
-        default=None, arg_type=float
-    )
+    max_disp_um: Annotated[float, Field(gt=0)] | None = None
     correlation_threshold: Annotated[float, Field(gt=0, lt=1)] = 0.1
     min_amplitude: float | None = argfield(default=None, arg_type=float)
 

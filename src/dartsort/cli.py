@@ -1,8 +1,7 @@
-import numpy as np
 import argparse
 import spikeinterface.core as sc
 
-from .util import cli_util, internal_config
+from .util import cli_util
 from . import config, main
 
 
@@ -11,18 +10,24 @@ def dartsort_cli():
 
     Try `dartsort --help` to start.
 
-    --<!!> Not stable.
+    ---<!!> Not stable.
 
     I am figuring out how to do preprocessing still. It may be configured?
     """
     # -- define CLI
     ap = argparse.ArgumentParser(
         prog="dartsort",
-        epilog=dartsort_cli.__doc__.split("--")[1],
+        epilog=dartsort_cli.__doc__.split("---")[1],
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     ap.add_argument("recording", help="Path to SpikeInterface RecordingExtractor.")
-    ap.add_argument("output_directory", help="Folder where outputs will be saved.")
+    ap.add_argument(
+        "output_directory",
+        nargs="?",
+        help="Folder where outputs will be saved. If this is unset, then "
+        "--config-toml must be supplied, and the output folder will be the one where "
+        "that configuration lives.",
+    )
     ap.add_argument(
         "--config-toml",
         type=str,
@@ -45,20 +50,44 @@ def dartsort_cli():
     # -- parse args
     args = ap.parse_args()
 
-    # load the recording
-    # TODO: preprocessing management
-    rec = sc.load_extractor(cli_util.ensurepath(args.recording))
+    # check if we have config file
+    config_toml = None
+    if args.config_toml:
+        config_toml = cli_util.ensurepath(args.config_toml)
+
+    # determine output directory
+    if args.output_directory:
+        output_directory = cli_util.ensurepath(args.output_directory, strict=False)
+    elif config_toml is None:
+        print(f"No output directory given, exiting. See `{ap.prog} -h`.")
+        return 1
+    else:
+        output_directory = config_toml.parent
 
     # determine the config from the command line args
     cfg = cli_util.combine_toml_and_argv(
         (config.DARTsortUserConfig, config.DeveloperConfig),
         config.DeveloperConfig,
-        cli_util.ensurepath(args.config_toml),
+        config_toml,
         args,
     )
 
+    # load the recording
+    # TODO: preprocessing management
+    try:
+        rec = sc.load_extractor(cli_util.ensurepath(args.recording))
+    except FileNotFoundError as e:
+        ee = FileNotFoundError(
+            f"The recording path passed to {ap.prog}, '{args.recording}', doesn't exist."
+        )
+        raise ee from e
+    except Exception as e:
+        ee = ValueError(
+            f"{ap.prog} couldn't load your recording. Detailed error above."
+        )
+        raise ee from e
+
     # -- run
     # TODO: maybe this should dump to Phy?
-    output_directory = cli_util.ensurepath(args.output_directory, strict=False)
     ret = main.dartsort(rec, output_directory, cfg=cfg, return_extra=cfg.needs_extra)
     main.run_dev_tasks(ret, output_directory, cfg)
