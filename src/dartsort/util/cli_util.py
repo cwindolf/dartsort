@@ -3,8 +3,7 @@ from dataclasses import MISSING, fields, field, asdict
 from argparse import ArgumentParser, BooleanOptionalAction, _StoreAction
 import tomllib
 import typing
-
-from torch import Value
+from annotated_types import Gt, Ge, Lt, Le
 
 
 def ensurepath(path, strict=True):
@@ -52,6 +51,22 @@ class FieldBooleanOptionalAction(BooleanOptionalAction):
         setattr(namespace, manglefieldset(self.dest), True)
 
 
+def field_annot_str(field):
+    constrs = []
+    for tp in field.metadata:
+        if isinstance(tp, Gt):
+            constrs.append(f"> {tp.gt}")
+        elif isinstance(tp, Ge):
+            constrs.append(f">= {tp.ge}")
+        elif isinstance(tp, Lt):
+            constrs.append(f"< {tp.lt}")
+        elif isinstance(tp, Le):
+            constrs.append(f"<= {tp.le}")
+        else:
+            raise ValueError(f"Haven't implemented {tp} annotation.")
+    return ", ".join(constrs)
+
+
 def dataclass_to_argparse(cls, parser=None, prefix="", skipnames=None):
     """Add a dataclass's fields as arguments to an ArgumentParser
 
@@ -68,20 +83,31 @@ def dataclass_to_argparse(cls, parser=None, prefix="", skipnames=None):
             continue
 
         required = field.default is MISSING and field.default_factory is MISSING
-        doc = field.metadata.get("doc", None)
+        doc = field.metadata.get("doc", "")
         type_ = field.metadata.get("arg_type", field.type)
         if type_ is MISSING:
             raise ValueError(f"Need type or arg_type for {field}.")
+
         choices = None
         if typing.get_origin(type_) == typing.Literal:
             choices = typing.get_args(type_)
             type_ = type(choices[0])
+        elif typing.get_origin(type_) == typing.Annotated:
+            type_, annot = typing.get_args(type_)
+            annot = field_annot_str(annot)
+            if annot:
+                doc += f" (%(type)s; {annot})"
+            else:
+                doc += " (%(type)s)"
+        elif type_ != bool:
+            doc += " (%(type)s)"
 
         name = f"--{prefix}{field.name.replace('_', '-')}"
         metavar = field.name.upper()
         default = field.default
         if default is MISSING:
             default = None
+
         kw = dict(
             default=default, help=doc, metavar=metavar, dest=field.name, choices=choices
         )
@@ -101,7 +127,7 @@ def dataclass_to_argparse(cls, parser=None, prefix="", skipnames=None):
 
 
 def dataclass_from_toml(clss, toml_path):
-    with open(toml_path, "r") as toml:
+    with open(toml_path, "rb") as toml:
         for cls in clss:
             try:
                 return cls(**tomllib.load(toml))

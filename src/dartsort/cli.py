@@ -7,7 +7,9 @@ from . import config, main
 
 
 def dartsort_cli():
-    """dartsort_cli
+    """dartsort's CLI, invoked by `dartsort` at the terminal.
+
+    Try `dartsort --help` to start.
 
     --<!!> Not stable.
 
