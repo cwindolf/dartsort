@@ -1,3 +1,4 @@
+# TODO: arg_group to group arguments in the -h.
 from pathlib import Path
 from dataclasses import MISSING, fields, field, asdict
 from argparse import ArgumentParser, BooleanOptionalAction, _StoreAction
@@ -39,10 +40,15 @@ def manglefieldset(name):
     return f"{name}$$fieldset"
 
 
+# these two classes register that args are passed on the command line,
+# giving a way to use cli args to override config file args based on
+# whether they were actually passed (vs being non-default, say)
+
+
 class FieldStoreAction(_StoreAction):
     def __call__(self, parser, namespace, values, option_string=None):
         super().__call__(parser, namespace, values, option_string=option_string)
-        setattr(namespace, f"{self.dest}$$fieldset", values)
+        setattr(namespace, manglefieldset(self.dest), values)
 
 
 class FieldBooleanOptionalAction(BooleanOptionalAction):

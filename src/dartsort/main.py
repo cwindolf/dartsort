@@ -40,6 +40,7 @@ def dartsort(
     overwrite=False,
     return_extra=False,
 ):
+    """TODO: fast forward."""
     output_directory = Path(output_directory)
     output_directory.mkdir(exist_ok=True)
     cfg = to_internal_config(cfg)

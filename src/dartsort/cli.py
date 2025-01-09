@@ -36,6 +36,7 @@ def dartsort_cli():
         help="Path to configuration in TOML format. Arguments passed on the "
         "command line will override their values in the TOML file.",
     )
+    ap.add_argument("--overwrite", action="store_true")
     # user-facing API
     cli_util.dataclass_to_argparse(config.DARTsortUserConfig, parser=ap)
 
@@ -89,6 +90,12 @@ def dartsort_cli():
         raise ee from e
 
     # -- run
-    # TODO: maybe this should dump to Phy?
-    ret = main.dartsort(rec, output_directory, cfg=cfg, return_extra=cfg.needs_extra)
+    # TODO: maybe this script should dump to Phy?
+    ret = main.dartsort(
+        rec,
+        output_directory,
+        cfg=cfg,
+        overwrite=args.overwrite,
+        return_extra=cfg.needs_extra,
+    )
     main.run_dev_tasks(ret, output_directory, cfg)
