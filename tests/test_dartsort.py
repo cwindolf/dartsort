@@ -5,6 +5,7 @@ import spikeinterface.core as sc
 import tempfile
 import torch
 from dartsort.localize.localize_torch import point_source_amplitude_at
+import subprocess
 
 
 def test_fakedata():
@@ -93,6 +94,12 @@ def test_fakedata():
             ),
         )
         st = dartsort.dartsort(rec, output_directory=tempdir, cfg=cfg)
+
+
+def test_cli_help():
+    # at least make sure the cli can do -h
+    res = subprocess.run(["dartsort", "-h"])
+    assert not res.returncode
 
 
 if __name__ == "__main__":
