@@ -26,7 +26,8 @@ def dartsort_cli():
         nargs="?",
         help="Folder where outputs will be saved. If this is unset, then "
         "--config-toml must be supplied, and the output folder will be the one where "
-        "that configuration lives.",
+        "that configuration lives. If both are supplied, output_directory will be "
+        "used (not the config file's parent dir).",
     )
     ap.add_argument(
         "--config-toml",
