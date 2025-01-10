@@ -32,6 +32,7 @@ def ppca_em(
     normalize=False,
     em_converged_atol=0.1,
     prior_var=1.0,
+    cache_direct=True,
 ):
     new_zeros = sp.features.new_zeros
     if active_W is not None:
@@ -54,8 +55,13 @@ def ppca_em(
         sp, neighborhoods, active_channels, rank, weights, D, noise, cache_prefix
     )
     any_missing = any(nd.have_missing for nd in neighb_data)
-    active_cov = noise.marginal_covariance(channels=active_channels)
-    active_cov = CholLinearOperator(active_cov.cholesky())
+    cache_kw = {}
+    if cache_direct:
+        cache_kw = dict(
+            cache_prefix="direct", cache_key=tuple(active_channels.tolist())
+        )
+    active_cov = noise.marginal_covariance(channels=active_channels, **cache_kw)
+    active_cov_chol_factor = active_cov.cholesky().to_dense()
 
     scratch = None
     if do_pca:
@@ -104,7 +110,7 @@ def ppca_em(
             active_mean=state["mu"],
             active_W=state["W"],
             weights=weights,
-            active_cov=active_cov,
+            active_cov_chol_factor=active_cov_chol_factor,
             normalize=normalize and not (W_needs_initialization and not i),
             return_yc=W_needs_initialization and not i,
             prior_var=prior_var,
@@ -115,7 +121,7 @@ def ppca_em(
             **e,
             M=M,
             ess=ess,
-            active_cov=active_cov,
+            active_cov_chol_factor=active_cov_chol_factor,
             mean_prior_pseudocount=mean_prior_pseudocount,
             noise=noise,
             active_channels=active_channels,
@@ -141,7 +147,7 @@ def ppca_em(
             state["W"],
             state["mu"],
             active_channels=active_channels,
-            active_cov=active_cov,
+            active_cov_chol_factor=active_cov_chol_factor,
             prior_var=prior_var,
             normalize=normalize,
             scratch=scratch,
@@ -159,7 +165,7 @@ def ppca_e_step(
     active_channels,
     active_mean,
     ess,
-    active_cov=None,
+    active_cov_chol_factor=None,
     return_yc=False,
     active_W=None,
     weights=None,
@@ -225,7 +231,7 @@ def ppca_e_step(
             active_W,
             active_mean,
             ess=ess,
-            active_cov=active_cov,
+            active_cov_chol_factor=active_cov_chol_factor,
             active_channels=active_channels,
             prior_var=prior_var,
             normalize=normalize,
@@ -338,7 +344,7 @@ def embed(
     active_mean,
     active_channels,
     ess,
-    active_cov=None,
+    active_cov_chol_factor=None,
     prior_var=1.0,
     normalize=True,
     scratch=None,
@@ -371,8 +377,9 @@ def embed(
         _uubar[nd.neighb_members] = uubar
 
     if normalize:
-        if active_cov is None:
+        if active_cov_chol_factor is None:
             active_cov = noise.marginal_covariance(channels=active_channels)
+            active_cov_chol_factor = torch.linalg.cholesky(active_cov).to_dense()
         Wflat = W.view(-1, M)
 
         # centering
@@ -391,7 +398,9 @@ def embed(
         U.mul_(sgn(U[0]))
         UDxrt = U * Dx.sqrt()
         rhs = Wflat @ UDxrt.T
-        gevp_W = linear_operator.solve(lhs=rhs.T, input=active_cov, rhs=rhs)
+        gevp_W_right = torch.linalg.solve_triangular(active_cov_chol_factor, rhs)
+        gevp_W = gevp_W_right.T @ gevp_W_right
+        # gevp_W = linear_operator.solve(lhs=rhs.T, input=active_cov, rhs=rhs)
         Dw, V = torch.linalg.eigh(gevp_W)
         Dw = Dw.flip(dims=(0,))
         V = V.flip(dims=(1,))
@@ -517,7 +526,7 @@ def ppca_m_step(
     yc=None,
     M=0,
     noise=None,
-    active_cov=None,
+    active_cov_chol_factor=None,
     active_channels=None,
     mean_prior_pseudocount=0.0,
     rescale=False,
@@ -535,9 +544,11 @@ def ppca_m_step(
     # initialize W via SVD of whitened residual
     if yc is not None and M:
         n = len(yc)
-        if active_cov is None:
+        if active_cov_chol_factor is None:
             active_cov = noise.marginal_covariance(active_channels)
-        L = torch.linalg.cholesky(active_cov).to_dense()
+            L = torch.linalg.cholesky(active_cov).to_dense()
+        else:
+            L = active_cov_chol_factor
         yc = yc.view(n, rank * nc)
         ycw = torch.linalg.solve_triangular(L, yc.T, upper=False).T
         assert ycw.shape == (n, rank * nc)
