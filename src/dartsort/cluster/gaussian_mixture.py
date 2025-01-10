@@ -274,7 +274,7 @@ class SpikeMixtureModel(torch.nn.Module):
         lids, _ = self.label_ids()
         nu_l = 0
         if lids.numel():
-            nu_l = lids.max() + 1
+            nu_l = lids.max().item() + 1
         return max(nu_u, nu_l)
 
     def label_ids(self, split="train"):
@@ -310,6 +310,7 @@ class SpikeMixtureModel(torch.nn.Module):
         self, n_iter=None, show_progress=True, final_e_step=True, final_split="kept"
     ):
         n_iter = self.n_em_iters if n_iter is None else n_iter
+        step_progress = False
         if show_progress:
             its = trange(n_iter, desc="EM", **tqdm_kw)
             step_progress = max(0, int(show_progress) - 1)
@@ -363,7 +364,7 @@ class SpikeMixtureModel(torch.nn.Module):
             if show_progress:
                 opct = (self.labels[train_ix] < 0).sum() / self.data.n_spikes_train
                 opct = f"{100 * opct:.1f}"
-                nu = self.n_units().item()
+                nu = self.n_units()
                 rpct = f"{100 * reas_prop:.1f}"
                 adif = f"{max_adif:.2f}"
                 msg = (
@@ -540,14 +541,15 @@ class SpikeMixtureModel(torch.nn.Module):
         # how many units does each spike overlap with? needed to write csc
         # embed the split indices in the global space
         spike_overlaps_ = core_overlaps[spike_neighborhoods.neighborhood_ids]
-        spike_overlaps = np.full(
-            self.data.n_spikes, int(with_noise_unit), dtype=np.int32
-        )
+        spike_overlaps = np.zeros(self.data.n_spikes, dtype=np.int32)
         spike_overlaps[split_indices] = spike_overlaps_.numpy(force=True)
 
         # add in space for the noise unit
         if with_noise_unit:
-            nnz = nnz + self.data.n_spikes
+            if split_indices is None or split_indices == slice(None):
+                nnz = nnz + self.data.n_spikes
+            else:
+                nnz = nnz + split_indices.numel()
 
         @delayed
         def _ll_job(args):
@@ -588,15 +590,15 @@ class SpikeMixtureModel(torch.nn.Module):
                 unit="unit",
                 **tqdm_kw,
             )
-        j = 0
+        j = -1
         for j, inds, liks in results:
             if inds is None:
                 continue
             csc_insert(j, write_offsets, inds, csc_indices, csc_data, liks)
 
         if with_noise_unit:
-            inds, liks = self.noise_log_likelihoods()
-            data_ixs = write_offsets[inds]
+            liks = self.noise_log_likelihoods(indices=split_indices)
+            data_ixs = write_offsets[split_indices]
             # assert np.array_equal(data_ixs, ccol_indices[1:] - 1)  # just fyi
             csc_indices[data_ixs] = j + 1
             csc_data[data_ixs] = liks
@@ -1225,11 +1227,11 @@ class SpikeMixtureModel(torch.nn.Module):
                 desc_prefix="Noise ",
                 split="full",
             )
-            self._noise_six = _noise_six.numpy(force=True)
+            del _noise_six  # noise overlaps with all, ignore.
             self._noise_log_likelihoods = _noise_log_likelihoods.numpy(force=True)
         if indices is not None:
             return self._noise_log_likelihoods[indices]
-        return self._noise_six, self._noise_log_likelihoods
+        return self._noise_log_likelihoods
 
     def kmeans_split_unit(self, unit_id, debug=False):
         # get spike data and use interpolation to fill it out to the
