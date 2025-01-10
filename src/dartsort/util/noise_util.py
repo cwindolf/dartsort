@@ -432,6 +432,9 @@ class EmbeddedNoise(torch.nn.Module):
             if device is not None and device != res.device:
                 res = res.to(device)
                 self.cache[cache_key] = res
+            # TODO: why is this necessary? I thought that calling solve would cache this.
+            if not hasattr(res, '_memoize_cache'):
+                res.cholesky()
             return res
         if channels is None or channels == slice(None):
             if self._full_cov is None:

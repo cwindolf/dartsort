@@ -45,7 +45,6 @@ def dartsort_cli():
     cli_util.dataclass_to_argparse(
         config.DeveloperConfig,
         parser=dev_args,
-        prefix="_",
         skipnames=cli_util.fieldnames(config.DARTsortUserConfig),
     )
 

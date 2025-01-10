@@ -650,7 +650,7 @@ class BasePeeler(torch.nn.Module):
         exists = output_hdf5_filename.exists()
         last_chunk_start = -1
         if exists and not overwrite:
-            with h5py.File(output_hdf5_filename, "r") as h5:
+            with h5py.File(output_hdf5_filename, "r", locking=False) as h5:
                 last_chunk_start = h5["last_chunk_start"][()]
         return last_chunk_start
 
