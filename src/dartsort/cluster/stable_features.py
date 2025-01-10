@@ -723,13 +723,14 @@ class SpikeNeighborhoods(torch.nn.Module):
         if spike_ids is None:
             spike_ids = self.neighborhood_ids[spike_indices]
         assert spike_ids is not None
-        covered_ids = torch.unique(spike_ids).to(self.indicators.device)
+        covered_ids = torch.unique(spike_ids)
         if min_coverage:
+            covered_ids = covered_ids.to(self.indicators.device)
             inds = self.indicators[channels][:, covered_ids]
             coverage = inds.sum(0) / self.channel_counts[covered_ids]
             covered = coverage >= min_coverage
             covered_ids = covered_ids[covered].cpu()
-        spike_ids = spike_ids.cpu()
+            spike_ids = spike_ids.cpu()
         neighborhood_info = [
             (j, self.neighborhoods[j], *(spike_ids == j).nonzero(as_tuple=True), None)
             for j in covered_ids
