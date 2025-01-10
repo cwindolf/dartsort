@@ -93,7 +93,11 @@ def test_fakedata():
                 do_motion_estimation=False
             ),
         )
-        st = dartsort.dartsort(rec, output_directory=tempdir, cfg=cfg)
+        cfg0 = dartsort.DeveloperConfig(save_intermediate_labels=True)
+        res = dartsort.dartsort(
+            rec, output_directory=tempdir, cfg=cfg, return_extra=cfg0.needs_extra
+        )
+        dartsort.run_dev_tasks(res, tempdir, cfg0)
 
 
 def test_cli_help():

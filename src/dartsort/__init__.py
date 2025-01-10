@@ -25,6 +25,7 @@ from .main import (
     match,
     run_peeler,
     subtract,
+    run_dev_tasks,
 )
 from .peel.grab import GrabAndFeaturize
 from .templates import TemplateData

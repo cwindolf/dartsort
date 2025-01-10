@@ -133,6 +133,7 @@ def dartsort(
                 ret[f"refined{step}_labels"] = sorting.labels
 
     # done~
+    sorting.save(output_directory / "dartsort_sorting.npz")
     ret["sorting"] = sorting
     return ret
 
@@ -312,6 +313,7 @@ def match_chunked(
 
 
 def run_dev_tasks(results, output_directory, cfg):
+    output_directory = Path(output_directory).resolve(strict=True)
     if cfg.save_intermediate_labels:
         for k, v in results.items():
             if k.endswith("_labels"):
