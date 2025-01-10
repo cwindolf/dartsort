@@ -242,6 +242,7 @@ def ppca_e_step(
         n_neighb = ndata["n_neighb"]
         neighb_nc = ndata["neighb_nc"]
         D_neighb = ndata["D_neighb"]
+        w = ndata["w0"] / ess
         w_ = ndata["w1"] / ess
         w__ = ndata["w2"] / ess
         have_missing = ndata["have_missing"]
@@ -257,8 +258,8 @@ def ppca_e_step(
             cache_key=nid,
             device=y.device,
         )
-        # TODO: genuinely confused about the need for this.
-        C_oochol = C_oo.cholesky()
+        # TODO: genuinely confused about the need for this. why doesn't solve() use this cached object?
+        C_oochol = CholLinearOperator(C_oo.cholesky())
         nu = active_mean[:, active_subset].reshape(D_neighb)
         if have_missing:
             C_mo = noise.offdiag_covariance(
@@ -308,17 +309,25 @@ def ppca_e_step(
             e_xcu = xc[:, :, None] * ubar[:, None, :]
         if yes_pca and have_missing:
             e_mxcu = (Cooinvxc @ C_mo.T)[:, :, None] * ubar[:, None, :]
-            CmoCooinvWo = C_mo @ CooinvWo
-            e_mxcu += (uubar @ (W_m - CmoCooinvWo).T).mT
+            # CmoCooinvWo = C_mo @ CooinvWo
+            Wm_less_CmoCooinvWo = W_m.addmm(C_mo, CooinvWo, beta=-1)
+            shp = Wm_less_CmoCooinvWo.shape
+            # e_mxcu += (uubar @ (W_m - CmoCooinvWo).T).mT
+            # print(f"{uubar.shape=} {Wm_less_CmoCooinvWo.shape=}")
+            Wm_less_CmoCooinvWo = Wm_less_CmoCooinvWo.unsqueeze(0)
+            Wm_less_CmoCooinvWo = Wm_less_CmoCooinvWo.broadcast_to((len(uubar), *shp))
+            # e_mxcu += uubar.mT @ Wm_less_CmoCooinvWo
+            e_mxcu.baddbmm_(Wm_less_CmoCooinvWo, uubar)
 
         # take weighted averages
         if yes_pca:
-            mean_ubar = torch.linalg.vecdot(w_, ubar, dim=0)
-            mean_uubar = torch.linalg.vecdot(w__, uubar, dim=0)
+            mean_ubar = w @ ubar
+            mean_uubar = w @ uubar.view(n_neighb, -1)
+            mean_uubar = mean_uubar.view(uubar.shape[1:])
 
-        wx = torch.linalg.vecdot(w_, x, dim=0)
+        wx = w @ x
         if have_missing:
-            wxbar_m = torch.linalg.vecdot(w_, xbar_m, dim=0)
+            wxbar_m = w @ xbar_m
             ybar = y.new_zeros((rank, nc))
             ybar[:, active_subset] = wx.view(rank, neighb_nc)
             ybar[:, missing_subset] = wxbar_m.view(rank, nc - neighb_nc)
@@ -326,9 +335,11 @@ def ppca_e_step(
             ybar = wx.view(rank, nc)
 
         if yes_pca:
-            wxcu = torch.linalg.vecdot(w__, e_xcu, dim=0)
+            wxcu = w @ e_xcu.view(n_neighb, -1)
+            wxcu = wxcu.view(e_xcu.shape[1:])
         if have_missing and yes_pca:
-            wmxcu = torch.linalg.vecdot(w__, e_mxcu, dim=0)
+            wmxcu = w @ e_mxcu.view(n_neighb, -1)
+            wmxcu = wmxcu.view(e_mxcu.shape[1:])
             ycubar = y.new_zeros((rank, nc, M))
             ycubar[:, active_subset] = wxcu.view(rank, neighb_nc, M)
             ycubar[:, missing_subset] = wmxcu.view(rank, nc - neighb_nc, M)
