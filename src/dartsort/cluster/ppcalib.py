@@ -1,9 +1,12 @@
 import warnings
+from typing import Optional
 
 import linear_operator
+from linear_operator.operators import CholLinearOperator
 import torch
 import torch.nn.functional as F
 from tqdm.auto import trange
+from dataclasses import dataclass
 
 from ..util.noise_util import EmbeddedNoise
 from .stable_features import SpikeFeatures, SpikeNeighborhoods
@@ -249,14 +252,19 @@ def ppca_e_step(
         # tnu = ndata["tnu"]
 
         C_oo = noise.marginal_covariance(
-            channels=neighb_chans, cache_prefix=cache_prefix, cache_key=nid, device=y.device
+            channels=neighb_chans,
+            cache_prefix=cache_prefix,
+            cache_key=nid,
+            device=y.device,
         )
         # TODO: genuinely confused about the need for this.
         C_oochol = C_oo.cholesky()
         nu = active_mean[:, active_subset].reshape(D_neighb)
         if have_missing:
             C_mo = noise.offdiag_covariance(
-                channels_left=missing_chans, channels_right=neighb_chans, device=nu.device
+                channels_left=missing_chans,
+                channels_right=neighb_chans,
+                device=nu.device,
             )
             C_mo = C_mo.to_dense().to(nu.device)
             tnu = active_mean[:, missing_subset].reshape(D - D_neighb)
@@ -464,34 +472,51 @@ def embed(
     return _ubar, _uubar, W, active_mean
 
 
-def get_neighborhood_data(
-    sp,
-    neighborhoods,
-    active_channels,
-    rank,
-    weights,
-    cache_prefix,
-    yes_pca,
-    M,
-    D,
-):
-    neighborhood_data = []
+@dataclass(kw_only=True, frozen=True, slots=True)
+class NeighborhoodPPCAData:
+    neighb_id: int
+    neighb_nc: int
+    neighb_n_spikes: int
+    D_neighb: int
+    have_missing: bool
 
-    unique_nids = torch.unique(sp.neighborhood_ids)
-    for nid in unique_nids:
-        # neighborhood channels logic
-        (in_neighborhood,) = (sp.neighborhood_ids == nid).nonzero(as_tuple=True)
-        n_neighb = in_neighborhood.numel()
-        neighb_chans = neighborhoods.neighborhoods[nid]
+    C_oo: linear_operator.LinearOperator
+    C_oo_chol: CholLinearOperator
+    w: torch.Tensor
+    x: torch.Tensor
+    neighb_members: torch.Tensor
+
+    C_mo: Optional[torch.Tensor]
+    active_subset: Optional[torch.Tensor]
+    missing_subset: Optional[torch.Tensor]
+
+
+def get_neighborhood_data(
+    sp, neighborhoods, active_channels, rank, weights, D, noise, cache_prefix
+):
+    neighborhood_info, ns = neighborhoods.spike_neighborhoods(
+        channels=active_channels,
+        neighborhood_ids=sp.neighborhood_ids,
+        min_coverage=0,
+    )
+    neighborhood_data = []
+    ess = weights.sum()
+    for nid, neighb_chans, neighb_members, _ in neighborhood_info:
+        n_neighb = neighb_members.numel()
+
+        # -- neighborhood channels
+        neighb_valid = neighborhoods.valid_mask(nid)
+        # subset of neighborhood's chans which are active
+        # needs to be subset of full nchans set, not just the valid ones
+        # neighb_subset = spiketorch.isin_sorted(neighb_chans, active_channels)
+        neighb_subset = neighb_valid  # those are the same. tested by assert blo.
+        # ok to restrict to valid below
+        neighb_chans = neighb_chans[neighb_valid]
+        assert spiketorch.isin_sorted(neighb_chans, active_channels).all()
         # subset of active chans which are in the neighborhood
         active_subset = spiketorch.isin_sorted(active_channels, neighb_chans)
 
-        # subset of neighborhood's chans which are active
-        neighb_subset = spiketorch.isin_sorted(neighb_chans, active_channels)
-
-        # assert torch.equal(neighb_chans[neighb_subset], active_channels[active_subset])
-
-        neighb_chans = neighb_chans[neighb_chans < neighborhoods.n_channels]
+        # -- missing channels
         have_missing = not active_subset.all()
         missing_subset = missing_chans = None
         if have_missing:
@@ -500,32 +525,43 @@ def get_neighborhood_data(
         (active_subset,) = active_subset.nonzero(as_tuple=True)
         neighb_nc = active_subset.numel()
         D_neighb = rank * neighb_nc
-        if not have_missing:
-            assert D_neighb == D
 
-        # neighborhood's known quantities
-        w = weights[in_neighborhood]
-        w_ = w[:, None]
-        w__ = w_[:, None]
-
-        neighborhood_data.append(
-            dict(
-                nid=nid,
-                have_missing=have_missing,
-                in_neighborhood=in_neighborhood,
-                n_neighb=n_neighb,
-                neighb_chans=neighb_chans,
-                active_subset=active_subset,
-                neighb_subset=neighb_subset,
-                missing_subset=missing_subset,
-                missing_chans=missing_chans,
-                neighb_nc=neighb_nc,
-                D_neighb=D_neighb,
-                w0=w,
-                w1=w_,
-                w2=w__,
-            )
+        # -- neighborhood data
+        device = sp.features.device
+        C_oo = noise.marginal_covariance(
+            channels=neighb_chans,
+            cache_prefix=cache_prefix,
+            cache_key=nid,
+            device=device,
         )
+        C_oo_chol = CholLinearOperator(C_oo.cholesky())
+        w = weights[neighb_members] / ess
+        C_mo = None
+        if have_missing:
+            C_mo = noise.offdiag_covariance(
+                channels_left=missing_chans,
+                channels_right=neighb_chans,
+            )
+            C_mo = C_mo.to_dense().to(device)
+        x = sp.features[neighb_members][:, :, neighb_subset]
+        x = x.view(n_neighb, d_neighb)
+
+        nd = NeighborhoodPPCAData(
+            neighb_id=nid,
+            neighb_nc=neighb_nc,
+            neighb_n_spikes=n_neighb,
+            D_neighb=D_neighb,
+            have_missing=have_missing,
+            C_oo=C_oo,
+            C_oo_chol=C_oo_chol,
+            w=w,
+            x=x,
+            neighb_members=neighb_members,
+            C_mo=C_mo,
+            active_subset=active_subset,
+            missing_subset=missing_subset,
+        )
+        neighborhood_data.append(nd)
 
     return neighborhood_data
 
