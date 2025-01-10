@@ -3108,7 +3108,7 @@ def noise_whiten(
         nu = z.new_zeros((nbids.numel(), *z.shape[1:]))
     for j, nbid in enumerate(nbids):
         nbchans = neighborhoods.neighborhoods[nbid]
-        nbvalid = nbchans < noise.n_channels
+        nbvalid = neighborhoods.valid_mask(nbid)
         nbchans = nbchans[nbvalid]
         innb = sp.neighborhood_ids == nbid
         nbcov = noise.marginal_covariance(

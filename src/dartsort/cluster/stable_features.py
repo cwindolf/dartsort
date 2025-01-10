@@ -91,7 +91,7 @@ class StableSpikeDataset(torch.nn.Module):
     ):
         """Motion-corrected spike data on the registered probe"""
         super().__init__()
-    
+
         if device is None:
             device = "cuda" if torch.cuda.is_available() else "cpu"
         device = torch.device(device)
@@ -632,9 +632,13 @@ class SpikeNeighborhoods(torch.nn.Module):
             neighborhoods = neighborhoods.to(device)
             neighborhood_ids = neighborhood_ids.to(device)
         if deduplicate:
-            neighborhoods, old2new = torch.unique(neighborhoods, dim=0, return_inverse=True)
+            neighborhoods, old2new = torch.unique(
+                neighborhoods, dim=0, return_inverse=True
+            )
             neighborhood_ids = old2new[neighborhood_ids]
-            kept_ids, neighborhood_ids = torch.unique(neighborhood_ids, return_inverse=True)
+            kept_ids, neighborhood_ids = torch.unique(
+                neighborhood_ids, return_inverse=True
+            )
         return cls(
             n_channels=n_channels,
             neighborhoods=neighborhoods,
@@ -719,10 +723,12 @@ class SpikeNeighborhoods(torch.nn.Module):
         if spike_ids is None:
             spike_ids = self.neighborhood_ids[spike_indices]
         assert spike_ids is not None
-        neighborhoods_considered = torch.unique(spike_ids).to(self.indicators.device)
-        inds = self.indicators[channels][:, neighborhoods_considered]
-        coverage = inds.sum(0) / self.channel_counts[neighborhoods_considered]
-        covered_ids = neighborhoods_considered[coverage >= min_coverage].cpu()
+        covered_ids = torch.unique(spike_ids).to(self.indicators.device)
+        if min_coverage:
+            inds = self.indicators[channels][:, covered_ids]
+            coverage = inds.sum(0) / self.channel_counts[covered_ids]
+            covered = coverage >= min_coverage
+            covered_ids = covered_ids[covered].cpu()
         spike_ids = spike_ids.cpu()
         neighborhood_info = [
             (j, self.neighborhoods[j], *(spike_ids == j).nonzero(as_tuple=True), None)

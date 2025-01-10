@@ -51,18 +51,17 @@ def ppca_em(
     ess = weights.sum()
     assert torch.isfinite(ess)
     neighb_data = get_neighborhood_data(
-        sp,
-        neighborhoods,
-        active_channels,
-        rank,
-        weights,
-        cache_prefix,
-        do_pca,
-        M,
-        D,
+        sp, neighborhoods, active_channels, rank, weights, D, noise, cache_prefix
     )
-    any_missing = any(nd["have_missing"] for nd in neighb_data)
+    any_missing = any(nd.have_missing for nd in neighb_data)
     active_cov = noise.marginal_covariance(channels=active_channels)
+    active_cov = CholLinearOperator(active_cov.cholesky())
+
+    scratch = None
+    if do_pca:
+        scratch_NM = sp.features.new_zeros((n, M))
+        scratch_NMM = sp.features.new_zeros(n, M, M)
+        scratch = (scratch_NM, scratch_NMM)
 
     if active_mean is None:
         active_mean, nobs = initialize_mean(
@@ -106,10 +105,10 @@ def ppca_em(
             active_W=state["W"],
             weights=weights,
             active_cov=active_cov,
-            cache_prefix=cache_prefix,
             normalize=normalize and not (W_needs_initialization and not i),
             return_yc=W_needs_initialization and not i,
             prior_var=prior_var,
+            scratch=scratch,
         )
         old_state = state
         state = ppca_m_step(
@@ -145,7 +144,7 @@ def ppca_em(
             active_cov=active_cov,
             prior_var=prior_var,
             normalize=normalize,
-            cache_prefix=cache_prefix,
+            scratch=scratch,
         )
 
     state["nobs"] = nobs
@@ -165,8 +164,8 @@ def ppca_e_step(
     active_W=None,
     weights=None,
     normalize=True,
-    cache_prefix=None,
     prior_var=1.0,
+    scratch=None,
 ):
     """E step in lightweight PPCA
 
@@ -225,73 +224,36 @@ def ppca_e_step(
             weights,
             active_W,
             active_mean,
+            ess=ess,
             active_cov=active_cov,
             active_channels=active_channels,
             prior_var=prior_var,
             normalize=normalize,
-            cache_prefix=cache_prefix,
+            scratch=scratch,
         )
-    for ndata in neighb_data:
-        nid = ndata["nid"]
-        in_neighborhood = ndata["in_neighborhood"]
-        neighb_subset = ndata["neighb_subset"]
-        neighb_chans = ndata["neighb_chans"]
-        active_subset = ndata["active_subset"]
-        missing_subset = ndata["missing_subset"]
-        missing_chans = ndata["missing_chans"]
-        n_neighb = ndata["n_neighb"]
-        neighb_nc = ndata["neighb_nc"]
-        D_neighb = ndata["D_neighb"]
-        w = ndata["w0"] / ess
-        w_ = ndata["w1"] / ess
-        w__ = ndata["w2"] / ess
-        have_missing = ndata["have_missing"]
-
-        # C_oo = ndata["C_oo"]
-        # C_mo = ndata["C_mo"]
-        # nu = ndata["nu"]
-        # tnu = ndata["tnu"]
-
-        C_oo = noise.marginal_covariance(
-            channels=neighb_chans,
-            cache_prefix=cache_prefix,
-            cache_key=nid,
-            device=y.device,
-        )
-        # TODO: genuinely confused about the need for this. why doesn't solve() use this cached object?
-        C_oochol = CholLinearOperator(C_oo.cholesky())
-        nu = active_mean[:, active_subset].reshape(D_neighb)
-        if have_missing:
-            C_mo = noise.offdiag_covariance(
-                channels_left=missing_chans,
-                channels_right=neighb_chans,
-                device=nu.device,
-            )
-            C_mo = C_mo.to_dense().to(nu.device)
-            tnu = active_mean[:, missing_subset].reshape(D - D_neighb)
-        assert C_oo.shape == (D_neighb, D_neighb)
+    for nd in neighb_data:
+        nu = active_mean[:, nd.active_subset].reshape(nd.D_neighb)
+        if nd.have_missing:
+            tnu = active_mean[:, nd.missing_subset].reshape(D - nd.D_neighb)
 
         if yes_pca:
-            W_o = active_W[:, active_subset].reshape(D_neighb, M)
-            if have_missing and yes_pca:
-                W_m = active_W[:, missing_subset].reshape(D - D_neighb, M)
+            W_o = active_W[:, nd.active_subset].reshape(nd.D_neighb, M)
+            if nd.have_missing and yes_pca:
+                W_m = active_W[:, nd.missing_subset].reshape(D - nd.D_neighb, M)
 
         if yes_pca:
-            ubar = full_ubar[in_neighborhood]
-            uubar = full_uubar[in_neighborhood]
-            # T = full_T[in_neighborhood]
+            ubar = full_ubar[nd.neighb_members]
+            uubar = full_uubar[nd.neighb_members]
 
         # actual data in neighborhood
-        x = sp.features[in_neighborhood][:, :, neighb_subset]
-        x = x.reshape(n_neighb, D_neighb)
-        xc = x - nu
+        xc = nd.x - nu
 
         # we need these ones everywhere
-        Cooinvxc = C_oochol.solve(xc.T).T
+        Cooinvxc = nd.C_oo_chol.solve(xc.T).T
 
         # pca-centered data
-        if yes_pca and have_missing:
-            CooinvWo = C_oochol.solve(W_o)
+        if yes_pca and nd.have_missing:
+            CooinvWo = nd.C_oo_chol.solve(W_o)
             # xcc = torch.addmm(xc, ubar, W_o.T, alpha=-1)
             # Cooinvxcc = C_oochol.solve(xcc.T).T
             Cooinvxcc = Cooinvxc.addmm(ubar, CooinvWo.T, alpha=-1)
@@ -299,21 +261,20 @@ def ppca_e_step(
             Cooinvxcc = Cooinvxc
 
         # first data moment
-        if have_missing:
-            xbar_m = torch.addmm(tnu, Cooinvxcc, C_mo.T)
+        if nd.have_missing:
+            xbar_m = torch.addmm(tnu, Cooinvxcc, nd.C_mo.T)
             if yes_pca:
                 xbar_m.addmm_(ubar, W_m.T)
 
         # cross moment
         if yes_pca:
             e_xcu = xc[:, :, None] * ubar[:, None, :]
-        if yes_pca and have_missing:
-            e_mxcu = (Cooinvxc @ C_mo.T)[:, :, None] * ubar[:, None, :]
+        if yes_pca and nd.have_missing:
+            e_mxcu = (Cooinvxc @ nd.C_mo.T)[:, :, None] * ubar[:, None, :]
             # CmoCooinvWo = C_mo @ CooinvWo
-            Wm_less_CmoCooinvWo = W_m.addmm(C_mo, CooinvWo, beta=-1)
+            Wm_less_CmoCooinvWo = W_m.addmm(nd.C_mo, CooinvWo, beta=-1)
             shp = Wm_less_CmoCooinvWo.shape
             # e_mxcu += (uubar @ (W_m - CmoCooinvWo).T).mT
-            # print(f"{uubar.shape=} {Wm_less_CmoCooinvWo.shape=}")
             Wm_less_CmoCooinvWo = Wm_less_CmoCooinvWo.unsqueeze(0)
             Wm_less_CmoCooinvWo = Wm_less_CmoCooinvWo.broadcast_to((len(uubar), *shp))
             # e_mxcu += uubar.mT @ Wm_less_CmoCooinvWo
@@ -321,41 +282,41 @@ def ppca_e_step(
 
         # take weighted averages
         if yes_pca:
-            mean_ubar = w @ ubar
-            mean_uubar = w @ uubar.view(n_neighb, -1)
+            mean_ubar = nd.w_norm @ ubar
+            mean_uubar = nd.w_norm @ uubar.view(nd.neighb_n_spikes, -1)
             mean_uubar = mean_uubar.view(uubar.shape[1:])
 
-        wx = w @ x
-        if have_missing:
-            wxbar_m = w @ xbar_m
+        wx = nd.w_norm @ nd.x
+        if nd.have_missing:
+            wxbar_m = nd.w_norm @ xbar_m
             ybar = y.new_zeros((rank, nc))
-            ybar[:, active_subset] = wx.view(rank, neighb_nc)
-            ybar[:, missing_subset] = wxbar_m.view(rank, nc - neighb_nc)
+            ybar[:, nd.active_subset] = wx.view(rank, nd.neighb_nc)
+            ybar[:, nd.missing_subset] = wxbar_m.view(rank, nc - nd.neighb_nc)
         else:
             ybar = wx.view(rank, nc)
 
         if yes_pca:
-            wxcu = w @ e_xcu.view(n_neighb, -1)
+            wxcu = nd.w_norm @ e_xcu.view(nd.neighb_n_spikes, -1)
             wxcu = wxcu.view(e_xcu.shape[1:])
-        if have_missing and yes_pca:
-            wmxcu = w @ e_mxcu.view(n_neighb, -1)
+        if nd.have_missing and yes_pca:
+            wmxcu = nd.w_norm @ e_mxcu.view(nd.neighb_n_spikes, -1)
             wmxcu = wmxcu.view(e_mxcu.shape[1:])
             ycubar = y.new_zeros((rank, nc, M))
-            ycubar[:, active_subset] = wxcu.view(rank, neighb_nc, M)
-            ycubar[:, missing_subset] = wmxcu.view(rank, nc - neighb_nc, M)
+            ycubar[:, nd.active_subset] = wxcu.view(rank, nd.neighb_nc, M)
+            ycubar[:, nd.missing_subset] = wmxcu.view(rank, nc - nd.neighb_nc, M)
         elif yes_pca:
             ycubar = wxcu.view(rank, nc, M)
 
         # residual imputed
         if return_yc:
-            if have_missing:
-                xc = xc.view(n_neighb, rank, neighb_nc).mT
-                yc[in_neighborhood[:, None], :, active_subset[None, :]] = xc
+            if nd.have_missing:
+                xc = xc.view(nd.neighb_n_spikes, rank, nd.neighb_nc).mT
+                yc[nd.neighb_members[:, None], :, nd.active_subset[None, :]] = xc
                 xbar_m -= tnu
-                txc = xbar_m.view(n_neighb, rank, nc - neighb_nc).mT
-                yc[in_neighborhood[:, None], :, missing_subset[None, :]] = txc
+                txc = xbar_m.view(nd.neighb_n_spikes, rank, nc - nd.neighb_nc).mT
+                yc[nd.neighb_members[:, None], :, nd.missing_subset[None, :]] = txc
             else:
-                yc[in_neighborhood] = xc.view(n_neighb, rank, neighb_nc)
+                yc[nd.neighb_members] = xc.view(nd.neighb_n_spikes, rank, nd.neighb_nc)
 
         # accumulate results
         e_y += ybar
@@ -364,14 +325,7 @@ def ppca_e_step(
             e_uu += mean_uubar
             e_ycu += ycubar
 
-    return dict(
-        e_y=e_y,
-        e_u=e_u,
-        e_ycu=e_ycu,
-        e_uu=e_uu,
-        yc=yc,
-        W_old=active_W,
-    )
+    return dict(e_y=e_y, e_u=e_u, e_ycu=e_ycu, e_uu=e_uu, yc=yc, W_old=active_W)
 
 
 def embed(
@@ -383,61 +337,38 @@ def embed(
     W,
     active_mean,
     active_channels,
+    ess,
     active_cov=None,
     prior_var=1.0,
     normalize=True,
-    cache_prefix=None,
+    scratch=None,
 ):
     N = len(sp)
-    _ubar = sp.features.new_zeros((N, M))
-    # if not normalize:
-    _uubar = sp.features.new_zeros(N, M, M)
+    if scratch is not None:
+        _ubar, _uubar = scratch
+    else:
+        _ubar = sp.features.new_zeros((N, M))
+        # if not normalize:
+        _uubar = sp.features.new_zeros(N, M, M)
     # _T = sp.features.new_zeros((N, M, M))
     eye_M = prior_var * torch.eye(M, device=sp.features.device, dtype=sp.features.dtype)
 
-    for ndata in neighb_data:
-        in_neighborhood = ndata["in_neighborhood"]
-        neighb_subset = ndata["neighb_subset"]
-        neighb_chans = ndata["neighb_chans"]
-        missing_chans = ndata["missing_chans"]
-        active_subset = ndata["active_subset"]
-        n_neighb = ndata["n_neighb"]
-        D_neighb = ndata["D_neighb"]
-        nid = ndata["nid"]
-        have_missing = ndata["have_missing"]
-
-        C_oo = noise.marginal_covariance(
-            channels=neighb_chans, cache_prefix=cache_prefix, cache_key=nid
-        )
-        nu = active_mean[:, active_subset].reshape(D_neighb)
-        W_o = W[:, active_subset].reshape(D_neighb, M)
-        if have_missing:
-            C_mo = noise.offdiag_covariance(
-                channels_left=missing_chans, channels_right=neighb_chans
-            )
-            C_mo = C_mo.to_dense()
-        assert C_oo.shape == (D_neighb, D_neighb)
-
-        x = sp.features[in_neighborhood][:, :, neighb_subset]
-        x = x.reshape(n_neighb, D_neighb)
-        xc = x - nu
+    for nd in neighb_data:
+        nu = active_mean[:, nd.active_subset].reshape(nd.D_neighb)
+        W_o = W[:, nd.active_subset].reshape(nd.D_neighb, M)
+        xc = nd.x - nu
 
         # we need these ones everywhere
-        Cooinvxc = C_oo.solve(xc.T).T
+        Cooinvxc = nd.C_oo_chol.solve(xc.T).T
 
         # moments of embeddings
-        # T is MxM and we cache C_oo's Cholesky, so this is the quick one.
-        T_inv = eye_M + W_o.T @ C_oo.solve(W_o)
+        T_inv = eye_M + W_o.T @ nd.C_oo_chol.solve(W_o)
         T = torch.linalg.inv(T_inv)
         ubar = Cooinvxc @ (W_o @ T)
-        # uubar = ubar[:, :, None] * ubar[:, None, :]
-        # uubar.add_(T)
         uubar = torch.baddbmm(T, ubar[:, :, None], ubar[:, None, :])
 
-        _ubar[in_neighborhood] = ubar
-        # if not normalize:
-        _uubar[in_neighborhood] = uubar
-        # _T[in_neighborhood] = T
+        _ubar[nd.neighb_members] = ubar
+        _uubar[nd.neighb_members] = uubar
 
     if normalize:
         if active_cov is None:
@@ -447,13 +378,13 @@ def embed(
         # centering
         ess = weights.sum()
         weights = weights / ess
-        um = vecdot(weights[:, None], _ubar, dim=0)
+        um = weights @ _ubar
         _ubar -= um
         _uubar -= um[:, None] * um
         # active_mean = active_mean + W @ um
 
         # whitening. need to do a GEVP to start...
-        S = vecdot(weights[:, None, None], _uubar, dim=0)
+        S = (weights @ _uubar.view(N, M * M)).view(N, M, M)
         Dx, U = torch.linalg.eigh(S)
         Dx = Dx.flip(dims=(0,))
         U = U.flip(dims=(1,))
@@ -468,17 +399,13 @@ def embed(
 
         # this gives us transforms...
         W_tf = UDxrt @ V
-        # u_tf = V.T @ (U / Dx.sqrt())
         u_tf = (U / Dx.sqrt()) @ V
 
-        # W_tf = W_tf.T
-        # u_tf = u_tf.T
-
         # which we apply.
-        W = W @ W_tf
-        _ubar = _ubar @ u_tf
+        W @= W_tf
+        _ubar @= u_tf
         _uubar = torch.einsum("nij,ip,jq->npq", _uubar, u_tf, u_tf)
-        active_mean = active_mean + W @ um
+        active_mean.addmm_(W, um)
 
     return _ubar, _uubar, W, active_mean
 
@@ -494,6 +421,7 @@ class NeighborhoodPPCAData:
     C_oo: linear_operator.LinearOperator
     C_oo_chol: CholLinearOperator
     w: torch.Tensor
+    w_norm: torch.Tensor
     x: torch.Tensor
     neighb_members: torch.Tensor
 
@@ -545,8 +473,9 @@ def get_neighborhood_data(
             cache_key=nid,
             device=device,
         )
+        assert C_oo.shape == (D_neighb, D_neighb)
         C_oo_chol = CholLinearOperator(C_oo.cholesky())
-        w = weights[neighb_members] / ess
+        w = weights[neighb_members]
         C_mo = None
         if have_missing:
             C_mo = noise.offdiag_covariance(
@@ -555,7 +484,7 @@ def get_neighborhood_data(
             )
             C_mo = C_mo.to_dense().to(device)
         x = sp.features[neighb_members][:, :, neighb_subset]
-        x = x.view(n_neighb, d_neighb)
+        x = x.view(n_neighb, D_neighb)
 
         nd = NeighborhoodPPCAData(
             neighb_id=nid,
@@ -566,6 +495,7 @@ def get_neighborhood_data(
             C_oo=C_oo,
             C_oo_chol=C_oo_chol,
             w=w,
+            w_norm=w / ess,
             x=x,
             neighb_members=neighb_members,
             C_mo=C_mo,
@@ -632,37 +562,20 @@ def ppca_m_step(
         W = L @ W
         W = W.view(rank, nc, M)
 
-        # # update mean
-        # mu = e_y
-        # if e_u is not None:
-        #     mu -= W @ e_u
-        # if mean_prior_pseudocount:
-        #     mu *= ess / (ess + mean_prior_pseudocount)
-
         return dict(mu=mu, W=W)
 
     if e_u is None:
         return dict(mu=mu, W=None)
 
     if rescale:
-        # sigma_u = e_uu - e_u[:, None] * e_u[None]
         scales = e_uu.diagonal().sqrt()
         e_uu = e_uu / (scales[:, None] * scales[None, :])
         e_ycu = e_ycu / scales
 
     W = torch.linalg.solve(e_uu, e_ycu.view(rank * nc, M), left=False)
-
     if rescale:
         W.mul_(scales)
-
     W = W.view(rank, nc, M)
-
-    # # update mean
-    # mu = e_y
-    # if e_u is not None:
-    #     mu -= W @ e_u
-    # if mean_prior_pseudocount:
-    #     mu *= ess / (ess + mean_prior_pseudocount)
 
     return dict(mu=mu, W=W)
 
@@ -683,16 +596,11 @@ def initialize_mean(
     if weights is None:
         weights = sp.features.new_ones((ns,))
 
-    for ndata in neighborhood_data:
-        in_neighborhood = ndata["in_neighborhood"]
-        neighb_subset = ndata["neighb_subset"]
-        active_subset = ndata["active_subset"]
-
-        w = weights[in_neighborhood, None, None]
-        x = sp.features[in_neighborhood][:, :, neighb_subset]
+    for nd in neighborhood_data:
         if not nobs_only:
-            weighted_sum[:, active_subset] += torch.linalg.vecdot(w, x, dim=0)
-        nobs[active_subset] += w.sum()
+            ws = nd.w @ nd.x.view(nd.neighb_n_spikes, -1)
+            weighted_sum[:, nd.active_subset] += ws.view(rank, nd.neighb_nc)
+        nobs[nd.active_subset] += nd.w.sum()
 
     if not nobs_only:
         mean = weighted_sum / (nobs + mean_prior_pseudocount)
