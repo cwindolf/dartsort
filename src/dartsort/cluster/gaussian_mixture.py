@@ -252,15 +252,6 @@ class SpikeMixtureModel(torch.nn.Module):
         uids = sorted(int(k) for k in self._units.keys())
         return np.array(list(uids))
 
-    def keys(self):
-        return self.unit_ids()
-
-    def values(self):
-        return self.ids_and_units()[1]
-
-    def items(self):
-        yield from zip(self.ids_and_units())
-
     def ids_and_units(self):
         uids = self.unit_ids()
         units = [self[u] for u in uids]
@@ -364,7 +355,7 @@ class SpikeMixtureModel(torch.nn.Module):
             if show_progress:
                 opct = (self.labels[train_ix] < 0).sum() / self.data.n_spikes_train
                 opct = f"{100 * opct:.1f}"
-                nu = self.n_units()
+                nu = len(to_fit)
                 rpct = f"{100 * reas_prop:.1f}"
                 adif = f"{max_adif:.2f}"
                 msg = (
@@ -603,7 +594,7 @@ class SpikeMixtureModel(torch.nn.Module):
             csc_indices[data_ixs] = j + 1
             csc_data[data_ixs] = liks
 
-        shape = (self.n_units() + with_noise_unit, self.data.n_spikes)
+        shape = (j + 1 + with_noise_unit, self.data.n_spikes)
         log_liks = csc_array((csc_data, csc_indices, indptr), shape=shape)
         log_liks.has_canonical_format = True
 
