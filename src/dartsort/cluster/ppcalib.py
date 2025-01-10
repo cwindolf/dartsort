@@ -251,6 +251,8 @@ def ppca_e_step(
         C_oo = noise.marginal_covariance(
             channels=neighb_chans, cache_prefix=cache_prefix, cache_key=nid, device=y.device
         )
+        # TODO: genuinely confused about the need for this.
+        C_oochol = C_oo.cholesky()
         nu = active_mean[:, active_subset].reshape(D_neighb)
         if have_missing:
             C_mo = noise.offdiag_covariance(
@@ -276,12 +278,14 @@ def ppca_e_step(
         xc = x - nu
 
         # we need these ones everywhere
-        Cooinvxc = C_oo.solve(xc.T).T
+        Cooinvxc = C_oochol.solve(xc.T).T
 
         # pca-centered data
         if yes_pca and have_missing:
-            xcc = torch.addmm(xc, ubar, W_o.T, alpha=-1)
-            Cooinvxcc = C_oo.solve(xcc.T).T
+            CooinvWo = C_oochol.solve(W_o)
+            # xcc = torch.addmm(xc, ubar, W_o.T, alpha=-1)
+            # Cooinvxcc = C_oochol.solve(xcc.T).T
+            Cooinvxcc = Cooinvxc.addmm(ubar, CooinvWo.T, alpha=-1)
         else:
             Cooinvxcc = Cooinvxc
 
@@ -296,7 +300,7 @@ def ppca_e_step(
             e_xcu = xc[:, :, None] * ubar[:, None, :]
         if yes_pca and have_missing:
             e_mxcu = (Cooinvxc @ C_mo.T)[:, :, None] * ubar[:, None, :]
-            CmoCooinvWo = C_mo @ C_oo.solve(W_o)
+            CmoCooinvWo = C_mo @ CooinvWo
             e_mxcu += (uubar @ (W_m - CmoCooinvWo).T).mT
 
         # take weighted averages
