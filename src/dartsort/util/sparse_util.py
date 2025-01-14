@@ -187,20 +187,20 @@ def csc_sparse_getrow(csc, row, rowcount):
     columns_out = np.empty(rowcount, dtype=rowix_dtype)
     data_out = np.empty(rowcount, dtype=csc.data.dtype)
     _csc_sparse_getrow(
-        csc.indices, csc.indptr, csc.data, columns_out, data_out, rowix_dtype.type(row)
+        csc.indices, csc.indptr, csc.data, columns_out, data_out, rowix_dtype.type(row), rowcount
     )
 
     return columns_out, data_out
 
 
 sigs = [
-    "void(i8[::1], i8[::1], f4[::1], i8[::1], f4[::1], i8)",
-    "void(i4[::1], i4[::1], f4[::1], i4[::1], f4[::1], i4)",
+    "void(i8[::1], i8[::1], f4[::1], i8[::1], f4[::1], i8, i8)",
+    "void(i4[::1], i4[::1], f4[::1], i4[::1], f4[::1], i4, i8)",
 ]
 
 
 @numba.njit(sigs, error_model="numpy", nogil=True)
-def _csc_sparse_getrow(indices, indptr, data, columns_out, data_out, the_row):
+def _csc_sparse_getrow(indices, indptr, data, columns_out, data_out, the_row, count):
     write_ix = 0
 
     column = 0
@@ -218,6 +218,8 @@ def _csc_sparse_getrow(indices, indptr, data, columns_out, data_out, the_row):
             column_end = indptr[column + 1]
         columns_out[write_ix] = column
         write_ix += 1
+        if write_ix >= count:
+            return
 
 
 # @numba.njit(sigs, error_model="numpy", nogil=True)
