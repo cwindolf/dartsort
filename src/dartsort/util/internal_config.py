@@ -327,6 +327,7 @@ class RefinementConfig:
     max_n_spikes: float | int = argfield(default=4_000_000, arg_type=int_or_inf)
 
     # model params
+    channels_strategy: str = "count"
     min_count: int = 50
     signal_rank: int = 0
     n_spikes_fit: int = 4096
@@ -338,7 +339,14 @@ class RefinementConfig:
     # if None, switches to bimodality
     merge_criterion_threshold: float | None = 0.0
     merge_criterion: Literal[
-        "heldout_loglik", "heldout_ccl", "loglik", "ccl", "aic", "bic", "icl", "bimodality"
+        "heldout_loglik",
+        "heldout_ccl",
+        "loglik",
+        "ccl",
+        "aic",
+        "bic",
+        "icl",
+        "bimodality",
     ] = "heldout_ccl"
     merge_bimodality_threshold: float = 0.05
     em_converged_prop: float = 0.02
@@ -491,6 +499,7 @@ def to_internal_config(cfg):
         n_total_iters=cfg.n_refinement_iters,
         max_n_spikes=cfg.gmm_max_spikes,
         val_proportion=cfg.gmm_val_proportion,
+        channels_strategy=cfg.channels_strategy,
     )
     motion_estimation_config = MotionEstimationConfig(
         **{k.name: getattr(cfg, k.name) for k in fields(MotionEstimationConfig)}

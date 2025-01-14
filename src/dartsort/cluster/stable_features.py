@@ -142,6 +142,9 @@ class StableSpikeDataset(torch.nn.Module):
                 device=device,
             )
             self._train_extract_channels = extract_channels.cpu()[train_ixs]
+        core_channel_index = waveform_util.make_channel_index(
+            prgeom, core_radius, to_torch=True
+        )
         _core_neighborhoods = {
             f"key_{k}": SpikeNeighborhoods.from_channels(
                 core_channels[ix],
@@ -152,11 +155,11 @@ class StableSpikeDataset(torch.nn.Module):
                 neighborhoods=core_channels[neighborhood_ix],
                 features=core_features[ix] if k in _core_feature_splits else None,
                 device=device,
+                channel_index=core_channel_index,
             )
             for k, ix in self.split_indices.items()
         }
         self._core_neighborhoods = torch.nn.ModuleDict(_core_neighborhoods)
-
         self.core_channels = core_channels.cpu()
 
         # channel neighborhoods and features
@@ -496,6 +499,7 @@ class SpikeNeighborhoods(torch.nn.Module):
         features=None,
         neighborhood_members=None,
         store_on_device: bool = False,
+        channel_index=None,
         device=None,
     ):
         """SpikeNeighborhoods
@@ -521,6 +525,8 @@ class SpikeNeighborhoods(torch.nn.Module):
         self.register_buffer("neighborhoods", neighborhoods)
         # self.neighborhoods = neighborhoods.cpu()
         self.n_neighborhoods = len(neighborhoods)
+        if channel_index is not None:
+            self.register_buffer("channel_index", channel_index)
 
         # store neighborhoods as an indicator matrix
         # also store nonzero-d masks
@@ -591,6 +597,7 @@ class SpikeNeighborhoods(torch.nn.Module):
         device=None,
         deduplicate=False,
         features=None,
+        channel_index=None,
     ):
         if neighborhood_ids is not None:
             assert neighborhoods is not None
@@ -602,6 +609,7 @@ class SpikeNeighborhoods(torch.nn.Module):
                 device=device,
                 deduplicate=deduplicate,
                 features=features,
+                channel_index=channel_index,
             )
         if device is not None:
             channels = channels.to(device)
@@ -614,6 +622,7 @@ class SpikeNeighborhoods(torch.nn.Module):
             neighborhood_ids=neighborhood_ids,
             features=features,
             device=channels.device,
+            channel_index=channel_index,
         )
 
     @classmethod
@@ -626,6 +635,7 @@ class SpikeNeighborhoods(torch.nn.Module):
         device=None,
         deduplicate=False,
         features=None,
+        channel_index=None,
     ):
         neighborhoods = torch.asarray(neighborhoods)
         if device is not None:
@@ -645,6 +655,7 @@ class SpikeNeighborhoods(torch.nn.Module):
             neighborhood_ids=neighborhood_ids,
             features=features,
             device=device,
+            channel_index=channel_index,
         )
 
     def has_feature_cache(self):
@@ -742,15 +753,24 @@ class SpikeNeighborhoods(torch.nn.Module):
 # -- helpers
 
 
-def occupied_chans(spike_data, n_channels, neighborhoods=None):
+def occupied_chans(
+    spike_data, n_channels, neighborhood_ids=None, neighborhoods=None, fuzz=0
+):
     if spike_data.neighborhood_ids is None:
         chans = torch.unique(spike_data.channels)
         return chans[chans < n_channels]
     assert neighborhoods is not None
-    ids = torch.unique(spike_data.neighborhood_ids)
+    if neighborhood_ids is None:
+        neighborhood_ids = spike_data.neighborhood_ids
+    ids = torch.unique(neighborhood_ids)
     chans = neighborhoods.neighborhoods[ids]
     chans = torch.unique(chans)
-    return chans[chans < n_channels]
+    chans = chans[chans < n_channels]
+    for _ in range(fuzz):
+        chans = neighborhoods.channel_index[chans]
+        chans = torch.unique(chans)
+        chans = chans[chans < n_channels]
+    return chans
 
 
 def interp_to_chans(
@@ -928,7 +948,12 @@ def get_stable_channels(
         workers=workers,
     )
 
-    return extract_channels, core_channels, neighborhood_ids, neighborhood_ix
+    return (
+        extract_channels,
+        core_channels,
+        neighborhood_ids,
+        neighborhood_ix,
+    )
 
 
 def unique_with_index(x, dim=0):

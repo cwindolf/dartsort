@@ -87,6 +87,24 @@ def test_fakedata():
                     denoise_only=True, do_nn_denoise=False
                 )
             ),
+            refinement_config=dartsort.RefinementConfig(
+                min_count=10, channels_strategy="count_fuzzcore"
+            ),
+            featurization_config=dartsort.FeaturizationConfig(n_residual_snips=512),
+            motion_estimation_config=dartsort.MotionEstimationConfig(
+                do_motion_estimation=False
+            ),
+            matching_iterations=0,
+        )
+        res = dartsort.dartsort(rec, output_directory=tempdir, cfg=cfg)
+
+    with tempfile.TemporaryDirectory() as tempdir:
+        cfg = dartsort.DARTsortInternalConfig(
+            subtraction_config=dartsort.SubtractionConfig(
+                subtraction_denoising_config=dartsort.FeaturizationConfig(
+                    denoise_only=True, do_nn_denoise=False
+                )
+            ),
             refinement_config=dartsort.RefinementConfig(min_count=10),
             featurization_config=dartsort.FeaturizationConfig(n_residual_snips=512),
             motion_estimation_config=dartsort.MotionEstimationConfig(

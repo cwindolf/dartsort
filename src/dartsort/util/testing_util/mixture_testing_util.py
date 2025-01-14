@@ -111,7 +111,6 @@ def simulate_moppca(
     if init_label_corruption:
         to_corrupt = rg.binomial(1, init_label_corruption, size=N)
         init_labels[to_corrupt] = rg.integers(K, size=to_corrupt.sum())
-    print(f"{init_labels=}")
 
     init_sorting = dartsort.DARTsortSorting(
         times_samples=torch.arange(N),
@@ -160,6 +159,7 @@ def fit_moppcas(
     em_converged_atol=0.05,
     with_noise_unit=True,
     return_before_fit=False,
+    channels_strategy="count",
 ):
     import dartsort
 
@@ -179,6 +179,7 @@ def fit_moppcas(
         em_converged_prop=1e-6,
         n_threads=1,
         with_noise_unit=with_noise_unit,
+        channels_strategy=channels_strategy,
     )
     torch.manual_seed(0)
     if not return_before_fit:
@@ -196,6 +197,7 @@ def fit_ppca(
     show_progress=True,
     normalize=True,
     em_converged_atol=1e-6,
+    cache_local_direct=False,
 ):
     from dartsort.cluster import ppcalib
 
@@ -213,6 +215,7 @@ def fit_ppca(
         show_progress=show_progress,
         normalize=normalize,
         em_converged_atol=em_converged_atol,
+        cache_local_direct=cache_local_direct,
     )
     return res
 
@@ -324,6 +327,7 @@ def test_ppca(
     show_vis=False,
     figsize=(4, 3),
     normalize=True,
+    cache_local=False,
     rg=0,
 ):
     rg = np.random.default_rng(rg)
@@ -352,6 +356,7 @@ def test_ppca(
         show_progress=make_vis,
         normalize=normalize,
         em_converged_atol=em_converged_atol,
+        cache_local_direct=cache_local,
     )
 
     muerr, werr, panel = compare_subspaces(
@@ -392,6 +397,7 @@ def test_moppcas(
     make_vis=True,
     figsize=(4, 3),
     return_before_fit=False,
+    channels_strategy="count",
     snr=10.0,
     rg=0,
 ):
@@ -420,6 +426,7 @@ def test_moppcas(
         em_converged_atol=em_converged_atol,
         with_noise_unit=with_noise_unit,
         return_before_fit=return_before_fit,
+        channels_strategy=channels_strategy,
     )
     if return_before_fit:
         return dict(sim_res=sim_res, gmm=mm)

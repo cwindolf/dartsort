@@ -32,7 +32,8 @@ def ppca_em(
     normalize=False,
     em_converged_atol=0.1,
     prior_var=1.0,
-    cache_direct=True,
+    cache_global_direct=True,
+    cache_local_direct=False,
 ):
     new_zeros = sp.features.new_zeros
     if active_W is not None:
@@ -52,11 +53,19 @@ def ppca_em(
     ess = weights.sum()
     assert torch.isfinite(ess)
     neighb_data = get_neighborhood_data(
-        sp, neighborhoods, active_channels, rank, weights, D, noise, cache_prefix
+        sp,
+        neighborhoods,
+        active_channels,
+        rank,
+        weights,
+        D,
+        noise,
+        cache_prefix,
+        cache_direct=cache_local_direct,
     )
     any_missing = any(nd.have_missing for nd in neighb_data)
     cache_kw = {}
-    if cache_direct:
+    if cache_global_direct:
         cache_kw = dict(
             cache_prefix="direct", cache_key=tuple(active_channels.tolist())
         )
@@ -421,7 +430,6 @@ def embed(
 
 @dataclass(kw_only=True, frozen=True, slots=True)
 class NeighborhoodPPCAData:
-    neighb_id: int
     neighb_nc: int
     neighb_n_spikes: int
     D_neighb: int
@@ -440,32 +448,91 @@ class NeighborhoodPPCAData:
 
 
 def get_neighborhood_data(
-    sp, neighborhoods, active_channels, rank, weights, D, noise, cache_prefix
+    sp,
+    neighborhoods,
+    active_channels,
+    rank,
+    weights,
+    D,
+    noise,
+    cache_prefix,
+    cache_direct=False,
 ):
     neighborhood_info, ns = neighborhoods.spike_neighborhoods(
         channels=active_channels,
         neighborhood_ids=sp.neighborhood_ids,
         min_coverage=0,
     )
-    neighborhood_data = []
-    ess = weights.sum()
+
+    # two passes: first is deduplication
+    dedup_data = {}
     for nid, neighb_chans, neighb_members, _ in neighborhood_info:
-        n_neighb = neighb_members.numel()
 
         # -- neighborhood channels
         neighb_valid = neighborhoods.valid_mask(nid)
         # subset of neighborhood's chans which are active
-        # needs to be subset of full nchans set, not just the valid ones
-        # neighb_subset = spiketorch.isin_sorted(neighb_chans, active_channels)
-        neighb_subset = neighb_valid  # those are the same. tested by assert blo.
+        # needs to be subset of full neighborhood channel set, not just the ones <NC
+        neighb_subset = spiketorch.isin_sorted(neighb_chans, active_channels)
+        can_cache_by_neighborhood = torch.equal(neighb_subset, neighb_valid)
+        del neighb_valid
+        # neighb_subset = neighb_valid  # assume those are the same. tested by assert blo.
         # ok to restrict to valid below
-        neighb_chans = neighb_chans[neighb_valid]
+        neighb_chans = neighb_chans[neighb_subset]
         assert spiketorch.isin_sorted(neighb_chans, active_channels).all()
         # subset of active chans which are in the neighborhood
         active_subset = spiketorch.isin_sorted(active_channels, neighb_chans)
 
+        w = weights[neighb_members]
+        x = sp.features[neighb_members][:, :, neighb_subset]
+
+        chans_tuple = tuple(active_channels[active_subset].tolist())
+        if chans_tuple in dedup_data:
+            *info, ws, xs, mems = dedup_data[chans_tuple]
+            ws.append(w)
+            xs.append(x)
+            mems.append(neighb_members)
+        else:
+            have_missing = not active_subset.all()
+            dedup_data[chans_tuple] = (
+                nid,
+                neighb_chans,
+                active_subset,
+                can_cache_by_neighborhood,
+                have_missing,
+                [w],
+                [x],
+                [neighb_members],
+            )
+
+    neighborhood_data = []
+    ess = weights.sum()
+    for chans_tuple, chans_data in dedup_data.items():
+        *info, ws, xs, mems = chans_data
+        nid, neighb_chans, active_subset, can_cache_by_neighborhood, have_missing = info
+        if len(ws) > 1:
+            w = torch.concatenate(ws)
+            x = torch.concatenate(xs)
+            neighb_members = torch.concatenate(mems)
+            nid = None
+        else:
+            w = ws[0]
+            x = xs[0]
+            neighb_members = mems[0]
+
+        n_neighb = neighb_members.numel()
+        cache_kw = {}
+        if cache_direct:
+            cache_kw = dict(
+                cache_prefix="direct",
+                cache_key=tuple(active_channels[active_subset].tolist()),
+            )
+        elif can_cache_by_neighborhood:
+            cache_kw = dict(
+                cache_prefix=cache_prefix,
+                cache_key=nid,
+            )
+
         # -- missing channels
-        have_missing = not active_subset.all()
         missing_subset = missing_chans = None
         if have_missing:
             (missing_subset,) = torch.logical_not(active_subset).nonzero(as_tuple=True)
@@ -477,10 +544,7 @@ def get_neighborhood_data(
         # -- neighborhood data
         device = sp.features.device
         C_oo = noise.marginal_covariance(
-            channels=neighb_chans,
-            cache_prefix=cache_prefix,
-            cache_key=nid,
-            device=device,
+            channels=neighb_chans, device=device, **cache_kw
         )
         assert C_oo.shape == (D_neighb, D_neighb)
         C_oo_chol = CholLinearOperator(C_oo.cholesky())
@@ -492,11 +556,9 @@ def get_neighborhood_data(
                 channels_right=neighb_chans,
             )
             C_mo = C_mo.to_dense().to(device)
-        x = sp.features[neighb_members][:, :, neighb_subset]
         x = x.view(n_neighb, D_neighb)
 
         nd = NeighborhoodPPCAData(
-            neighb_id=nid,
             neighb_nc=neighb_nc,
             neighb_n_spikes=n_neighb,
             D_neighb=D_neighb,

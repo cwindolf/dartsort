@@ -66,6 +66,7 @@ def refine_clustering(
         em_converged_prop=refinement_config.em_converged_prop,
         em_converged_churn=refinement_config.em_converged_churn,
         em_converged_atol=refinement_config.em_converged_atol,
+        channels_strategy=refinement_config.channels_strategy,
     )
     gmm.cleanup()
     for it in range(refinement_config.n_total_iters):
