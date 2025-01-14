@@ -410,7 +410,7 @@ class SpikeMixtureModel(torch.nn.Module):
         unit_churn, reas_count, log_liks, spike_logliks = self.e_step(
             show_progress=step_progress, split=final_split
         )
-        log_liks, _ = self.cleanup(log_liks)
+        log_liks, _ = self.cleanup(log_liks, relabel_split=final_split)
         return log_liks
 
     def e_step(
@@ -454,7 +454,9 @@ class SpikeMixtureModel(torch.nn.Module):
         if self.use_proportions and likelihoods is not None:
             self.update_proportions(likelihoods)
         if self.log_proportions is not None:
-            assert len(self.log_proportions) == unit_ids.max() + 1 + self.with_noise_unit
+            assert (
+                len(self.log_proportions) == unit_ids.max() + 1 + self.with_noise_unit
+            )
 
         fit_full_indices, fit_split_indices = quick_indices(
             self.rg,
@@ -541,11 +543,11 @@ class SpikeMixtureModel(torch.nn.Module):
                 unit_neighb_info.append((j, neighbs, ns_unit))
             else:
                 assert previous_logliks is not None
-                assert hasattr(previous_logliks, 'row_nnz')
-                assert 'covered_neighbs' in unit.annotations
+                assert hasattr(previous_logliks, "row_nnz")
+                assert "covered_neighbs" in unit.annotations
                 ns_unit = previous_logliks.row_nnz[j]
                 unit_neighb_info.append((j, ns_unit))
-                covered_neighbs = unit.annotations['covered_neighbs']
+                covered_neighbs = unit.annotations["covered_neighbs"]
             core_overlaps[covered_neighbs] += 1
             nnz += ns_unit
 
@@ -695,12 +697,18 @@ class SpikeMixtureModel(torch.nn.Module):
         unit_churn = 1.0 - iou
 
         # update labels
+        self.labels.fill_(-1)
         self.labels[spike_ix] = assignments
 
         return unit_churn, reassign_count, spike_logliks, log_liks_csc
 
     def cleanup(
-        self, log_liks=None, min_count=None, clean_props=None, split="train"
+        self,
+        log_liks=None,
+        min_count=None,
+        clean_props=None,
+        split="train",
+        relabel_split="train",
     ) -> tuple[Optional[csc_array], Optional[dict]]:
         """Remove too-small units, make label space contiguous, tidy all properties"""
         if min_count is None:
@@ -731,7 +739,7 @@ class SpikeMixtureModel(torch.nn.Module):
         kept_ids = label_ids[big_enough]
         new_ids = torch.arange(kept_ids.numel())
         old2new = dict(zip(kept_ids, new_ids))
-        self._relabel(kept_ids, split=split)
+        self._relabel(kept_ids, split=relabel_split)
 
         if self.log_proportions is not None:
             lps = self.log_proportions.numpy(force=True)
@@ -757,8 +765,6 @@ class SpikeMixtureModel(torch.nn.Module):
 
         keep_ll = keep_noise.numpy(force=True)
         assert keep_ll.size == log_liks.shape[0]
-        if keep_ll.all():
-            return log_liks, clean_props
 
         if isinstance(log_liks, coo_array):
             log_liks = coo_sparse_mask_rows(log_liks, keep_ll)
@@ -1171,6 +1177,8 @@ class SpikeMixtureModel(torch.nn.Module):
                 )
                 unit.annotations["covered_neighbs"] = cn
         if not ns:
+            if inds_already:
+                return None
             return None, None
 
         if inds_already:
@@ -1330,7 +1338,7 @@ class SpikeMixtureModel(torch.nn.Module):
 
         split_labels = torch.asarray(split_labels, device=self.labels.device)
         n_new_units = split_ids.size - 1
-        if n_new_units < 1:
+        if n_new_units <= 1:
             # quick case
             with self.labels_lock:
                 self.labels[indices_full] = -1
@@ -2033,7 +2041,7 @@ class SpikeMixtureModel(torch.nn.Module):
             label_indices = label_indices[kept]
 
         unkept = torch.logical_not(kept)
-        if split is not None:
+        if split_indices != slice(None):
             unkept = split_indices[unkept]
             kept = split_indices[kept]
 
@@ -2158,7 +2166,6 @@ class SpikeMixtureModel(torch.nn.Module):
                 sym_function=self.merge_sym_function,
                 show_progress=show_progress,
             )
-            print(f"{group_ids.shape=} {distances.shape=}")
             if debug_info is not None:
                 debug_info["Z"] = Z
                 debug_info["improvements"] = improvements
