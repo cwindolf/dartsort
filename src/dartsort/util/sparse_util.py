@@ -184,27 +184,23 @@ def _csc_sparse_mask_rows(indices, indptr, data, oldrow_to_newrow, keep_mask):
 
 def csc_sparse_getrow(csc, row, rowcount):
     rowix_dtype = csc.indices.dtype
-    indptr_out = np.empty(rowcount + 1, dtype=rowix_dtype)
-    data_out = np.empty(rowcount, dtype=rowix_dtype)
-    indices_out = np.full(rowcount, row, dtype=rowix_dtype)
+    columns_out = np.empty(rowcount, dtype=rowix_dtype)
+    data_out = np.empty(rowcount, dtype=csc.data.dtype)
     _csc_sparse_getrow(
-        csc.indices, csc.indptr, csc.data, indptr_out, data_out, rowix_dtype.type(row)
+        csc.indices, csc.indptr, csc.data, columns_out, data_out, rowix_dtype.type(row)
     )
 
-    return csc_array(
-        (data_out, indices_out, indptr_out),
-        shape=(len(kept_row_inds), csc.shape[1]),
-    )
+    return columns_out, data_out
 
 
 sigs = [
-    "void(i8[::1], i8[::1], f4[::1], i8[::1], i8[::1], i8)",
-    "void(i4[::1], i4[::1], f4[::1], i4[::1], i4[::1], i4)",
+    "void(i8[::1], i8[::1], f4[::1], i8[::1], f4[::1], i8)",
+    "void(i4[::1], i4[::1], f4[::1], i4[::1], f4[::1], i4)",
 ]
 
 
 @numba.njit(sigs, error_model="numpy", nogil=True)
-def _csc_sparse_getrow(indices, indptr, data, indptr_out, data_out, the_row):
+def _csc_sparse_getrow(indices, indptr, data, columns_out, data_out, the_row):
     write_ix = 0
 
     column = 0
@@ -217,17 +213,11 @@ def _csc_sparse_getrow(indices, indptr, data, indptr_out, data_out, the_row):
 
         # write data for this sample
         data_out[write_ix] = data[read_ix]
-        write_ix += 1
-
         while read_ix >= column_end:
-            indptr_out[column + 1] = write_ix - 1
             column += 1
             column_end = indptr[column + 1]
-
-    while column < len(indptr) - 1:
-        indptr_out[column + 1] = write_ix
-        column += 1
-        column_end = indptr[column + 1]
+        columns_out[write_ix] = column
+        write_ix += 1
 
 
 # @numba.njit(sigs, error_model="numpy", nogil=True)

@@ -541,19 +541,21 @@ class SpikeMixtureModel(torch.nn.Module):
                 unit_neighb_info.append((j, neighbs, ns_unit))
             else:
                 assert previous_logliks is not None
-                if hasattr(previous_logliks, 'row_nnz'):
+                if hasattr(previous_logliks, "row_nnz"):
                     rnnz = previous_logliks.row_nnz[j]
-                    row = csc_sparse_getrow(previous_logliks, j, rnnz).tocoo(copy=False)
+                    six, data = csc_sparse_getrow(previous_logliks, j, rnnz)
                 else:
                     row = previous_logliks[[j]].tocoo(copy=True)
-                six = row.coords[1]
-                ns_unit = row.nnz
+                    six = row.coords[1]
+                    ns_unit = row.nnz
+                    data = row.data
+                ns_unit = len(six)
                 if "covered_neighbs" in unit.annotations:
                     covered_neighbs = unit.annotations["covered_neighbs"]
                 else:
                     covered_neighbs = full_core_neighborhoods.neighborhood_ids[six]
                     covered_neighbs = torch.unique(covered_neighbs)
-                unit_neighb_info.append((j, six, row.data, ns_unit))
+                unit_neighb_info.append((j, six, data, ns_unit))
             core_overlaps[covered_neighbs] += 1
             nnz += ns_unit
 

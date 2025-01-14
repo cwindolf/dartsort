@@ -80,6 +80,27 @@ def test_csc_mask():
         assert np.array_equal(x1.data, x0.data)
 
 
+def test_csc_getrow():
+    rg = np.random.default_rng(10)
+    ij = rg.integers(low=((0, 0),), high=(shape,), size=(nnz, 2))
+    ij = np.unique(ij, axis=0)
+    assert (np.diff(ij[:, 0]) >= 0).all()
+    assert not (np.diff(ij[:, 1]) >= 0).all()
+    vals = rg.normal(size=len(ij)).astype(np.float32)
+
+    x = coo_array((vals, ij.T), shape).tocsc()
+
+    for row in range(x.shape[0]):
+        x0 = x[[row]]
+        columns, data = sparse_util.csc_sparse_getrow(x, row, x0.nnz)
+
+        assert len(columns) == len(data) == x0.nnz
+        x0coo = x0.tocoo()
+        assert np.array_equal(columns, x0coo.coords[1])
+        assert np.array_equal(data, x0coo.data)
+
+
 if __name__ == "__main__":
+    test_csc_getrow()
     test_csc_insert()
     test_csc_mask()
