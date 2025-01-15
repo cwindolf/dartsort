@@ -264,11 +264,13 @@ def ppca_e_step(
         xc = nd.x - nu
 
         # we need these ones everywhere
-        Cooinvxc = nd.C_oo_chol.solve(xc.T).T
+        # Cooinvxc = nd.C_oo_chol.solve(xc.T).T
+        Cooinvxc = xc @ nd.C_oo_inv
 
         # pca-centered data
         if yes_pca and nd.have_missing:
             CooinvWo = nd.C_oo_chol.solve(W_o)
+            CooinvWo = nd.C_oo_inv @ W_o
             # xcc = torch.addmm(xc, ubar, W_o.T, alpha=-1)
             # Cooinvxcc = C_oochol.solve(xcc.T).T
             Cooinvxcc = Cooinvxc.addmm(ubar, CooinvWo.T, alpha=-1)
@@ -285,7 +287,9 @@ def ppca_e_step(
         if yes_pca:
             e_xcu = xc[:, :, None] * ubar[:, None, :]
         if yes_pca and nd.have_missing:
-            e_mxcu = (Cooinvxc @ nd.C_mo.T)[:, :, None] * ubar[:, None, :]
+            # e_mxcu = (Cooinvxc @ nd.C_mo.T)[:, :, None] * ubar[:, None, :]
+            # print(f"{e_mxcu.shape=}")
+            e_mxcu = torch.einsum("ij,kj,il->ikl", Cooinvxc, nd.C_mo, ubar)
             # CmoCooinvWo = C_mo @ CooinvWo
             Wm_less_CmoCooinvWo = W_m.addmm(nd.C_mo, CooinvWo, beta=-1)
             shp = Wm_less_CmoCooinvWo.shape
@@ -314,7 +318,7 @@ def ppca_e_step(
             wxcu = nd.w_norm @ e_xcu.view(nd.neighb_n_spikes, -1)
             wxcu = wxcu.view(e_xcu.shape[1:])
         if nd.have_missing and yes_pca:
-            wmxcu = nd.w_norm @ e_mxcu.view(nd.neighb_n_spikes, -1)
+            wmxcu = nd.w_norm @ e_mxcu.reshape(nd.neighb_n_spikes, -1)
             wmxcu = wmxcu.view(e_mxcu.shape[1:])
             ycubar = y.new_zeros((rank, nc, M))
             ycubar[:, nd.active_subset] = wxcu.view(rank, nd.neighb_nc, M)
@@ -374,10 +378,12 @@ def embed(
         xc = nd.x - nu
 
         # we need these ones everywhere
-        Cooinvxc = nd.C_oo_chol.solve(xc.T).T
+        # Cooinvxc = nd.C_oo_chol.solve(xc.T).T
+        Cooinvxc = xc @ nd.C_oo_inv
 
         # moments of embeddings
-        T_inv = eye_M + W_o.T @ nd.C_oo_chol.solve(W_o)
+        # T_inv = eye_M + W_o.T @ nd.C_oo_chol.solve(W_o)
+        T_inv = eye_M + W_o.T @ nd.C_oo_inv @ W_o
         T = torch.linalg.inv(T_inv)
         ubar = Cooinvxc @ (W_o @ T)
         uubar = torch.baddbmm(T, ubar[:, :, None], ubar[:, None, :])
@@ -437,6 +443,7 @@ class NeighborhoodPPCAData:
 
     C_oo: linear_operator.LinearOperator
     C_oo_chol: CholLinearOperator
+    C_oo_inv: CholLinearOperator
     w: torch.Tensor
     w_norm: torch.Tensor
     x: torch.Tensor
@@ -482,13 +489,11 @@ def get_neighborhood_data(
         # subset of active chans which are in the neighborhood
         active_subset = spiketorch.isin_sorted(active_channels, neighb_chans)
 
-        w = weights[neighb_members]
         x = sp.features[neighb_members][:, :, neighb_subset]
 
         chans_tuple = tuple(active_channels[active_subset].tolist())
         if chans_tuple in dedup_data:
-            *info, ws, xs, mems = dedup_data[chans_tuple]
-            ws.append(w)
+            *info, xs, mems = dedup_data[chans_tuple]
             xs.append(x)
             mems.append(neighb_members)
         else:
@@ -499,7 +504,6 @@ def get_neighborhood_data(
                 active_subset,
                 can_cache_by_neighborhood,
                 have_missing,
-                [w],
                 [x],
                 [neighb_members],
             )
@@ -507,15 +511,15 @@ def get_neighborhood_data(
     neighborhood_data = []
     ess = weights.sum()
     for chans_tuple, chans_data in dedup_data.items():
-        *info, ws, xs, mems = chans_data
+        *info, xs, mems = chans_data
         nid, neighb_chans, active_subset, can_cache_by_neighborhood, have_missing = info
-        if len(ws) > 1:
-            w = torch.concatenate(ws)
+        if len(mems) > 1:
             x = torch.concatenate(xs)
             neighb_members = torch.concatenate(mems)
+            neighb_members, order = neighb_members.sort()
+            x = x[order]
             nid = None
         else:
-            w = ws[0]
             x = xs[0]
             neighb_members = mems[0]
 
@@ -547,7 +551,10 @@ def get_neighborhood_data(
             channels=neighb_chans, device=device, **cache_kw
         )
         assert C_oo.shape == (D_neighb, D_neighb)
-        C_oo_chol = CholLinearOperator(C_oo.cholesky())
+        chol = C_oo.cholesky(upper=False)
+        C_oo_chol = CholLinearOperator(chol)
+        Linv = chol.inverse().to_dense()
+        C_oo_inv = Linv.T @ Linv
         w = weights[neighb_members]
         C_mo = None
         if have_missing:
@@ -565,6 +572,7 @@ def get_neighborhood_data(
             have_missing=have_missing,
             C_oo=C_oo,
             C_oo_chol=C_oo_chol,
+            C_oo_inv=C_oo_inv,
             w=w,
             w_norm=w / ess,
             x=x,

@@ -764,13 +764,14 @@ def occupied_chans(
         neighborhood_ids = spike_data.neighborhood_ids
     ids = torch.unique(neighborhood_ids)
     chans = neighborhoods.neighborhoods[ids]
-    chans = torch.unique(chans)
+    chans, counts = torch.unique(chans, return_counts=True)
+    counts = counts[chans < n_channels]
     chans = chans[chans < n_channels]
     for _ in range(fuzz):
         chans = neighborhoods.channel_index[chans]
         chans = torch.unique(chans)
         chans = chans[chans < n_channels]
-    return chans
+    return chans, counts
 
 
 def interp_to_chans(

@@ -325,6 +325,7 @@ class RefinementConfig:
     interpolation_sigma: float = 20.0
     val_proportion: float = 0.25
     max_n_spikes: float | int = argfield(default=4_000_000, arg_type=int_or_inf)
+    max_avg_units: int = 8
 
     # model params
     channels_strategy: str = "count"

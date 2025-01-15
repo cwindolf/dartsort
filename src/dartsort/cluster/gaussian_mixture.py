@@ -683,7 +683,7 @@ class SpikeMixtureModel(torch.nn.Module):
         # intersection
         n_units = max(log_liks.shape[0] - self.with_noise_unit, original.max() + 1)
         intersection = torch.zeros(n_units, dtype=int)
-        spiketorch.add_at_(intersection, assignments[kept], original[kept])
+        spiketorch.add_at_(intersection, assignments[kept], same[kept])
 
         # union by include/exclude
         union = torch.zeros_like(intersection)
@@ -783,6 +783,8 @@ class SpikeMixtureModel(torch.nn.Module):
         new_labels, new_ids = self.merge_units(
             likelihoods=log_liks, show_progress=show_progress
         )
+        if new_labels is None:
+            return
         self.labels.copy_(torch.asarray(new_labels))
 
         unique_new_ids = np.unique(new_ids)
@@ -1324,6 +1326,8 @@ class SpikeMixtureModel(torch.nn.Module):
             debug=debug,
             debug_info=result,
         )
+        if split_labels is None:
+            return result
         split_ids, split_counts = np.unique(split_labels, return_counts=True)
         valid = split_ids >= 0
         if not valid.any():
@@ -1598,6 +1602,12 @@ class SpikeMixtureModel(torch.nn.Module):
         # heuristic unit groupings to investigate
         distances = sym_function(distances, distances.T)
         distances = distances[np.triu_indices(len(distances), k=1)]
+        finite = np.isfinite(distances)
+        if not finite.any():
+            return None, None, None
+        if not finite.all():
+            inf = max(0, distances[finite].max()) + max_distance + 1
+            distances[np.logical_not(finite)] = inf
         Z = linkage(distances)
         n_units = len(Z) + 1
 
@@ -1869,7 +1879,7 @@ class SpikeMixtureModel(torch.nn.Module):
                 units,
                 merged_unit,
                 spikes_core[keep],
-                self.data.neighborhoods(),
+                self.data.neighborhoods()[1],
                 use_proportions=self.use_proportions,
                 reduce=False,
             )
@@ -1877,8 +1887,9 @@ class SpikeMixtureModel(torch.nn.Module):
             if lik_weights is not None:
                 lik_weights = lik_weights.cpu()
             labixs = labixs.cpu()
-            k_full = class_sum(labids, labixs, k_full, lik_weights) / class_w
-            k_merged = class_sum(labids, labixs, k_merged, lik_weights) / class_w
+            labids = labids.cpu()
+            k_full = class_sum(labids, labixs, k_full.cpu(), lik_weights) / class_w
+            k_merged = class_sum(labids, labixs, k_merged.cpu(), lik_weights) / class_w
             if class_balancing == "worst":
                 k_full = k_full[worst_ix]
                 k_merged = k_merged[worst_ix]
@@ -2144,6 +2155,9 @@ class SpikeMixtureModel(torch.nn.Module):
             debug_info["distances"] = distances
         if distances.shape[0] == 1:
             return None, None
+        pdist = distances[np.triu_indices(len(distances), k=1)]
+        if not (pdist <= self.merge_distance_threshold).any():
+            return None, None
 
         if merge_kind == "hierarchical":
             return self.hierarchical_bimodality_merge(
@@ -2397,10 +2411,10 @@ class GaussianUnit(torch.nn.Module):
             weights = weights[kept]
 
         if self.channels_strategy.endswith("fuzzcore"):
-            achans_full = occupied_chans(
+            achans_full, _ = occupied_chans(
                 features, self.n_channels, neighborhoods=neighborhoods
             )
-            achans = occupied_chans(
+            achans, _ = occupied_chans(
                 features,
                 neighborhood_ids=core_neighborhood_ids,
                 n_channels=self.n_channels,
@@ -2410,7 +2424,7 @@ class GaussianUnit(torch.nn.Module):
             achans = achans[spiketorch.isin_sorted(achans, achans_full)]
             needs_direct = True
         elif self.channels_strategy.endswith("core"):
-            achans = occupied_chans(
+            achans, _ = occupied_chans(
                 features,
                 neighborhood_ids=core_neighborhood_ids,
                 n_channels=self.n_channels,
@@ -2418,7 +2432,7 @@ class GaussianUnit(torch.nn.Module):
             )
             needs_direct = True
         else:
-            achans = occupied_chans(
+            achans, _ = occupied_chans(
                 features, self.n_channels, neighborhoods=neighborhoods
             )
             needs_direct = False
@@ -2428,7 +2442,7 @@ class GaussianUnit(torch.nn.Module):
         do_pca = self.cov_kind == "ppca" and self.ppca_rank
 
         active_mean = active_W = None
-        if hasattr(self, "mean"):
+        if hasattr(self, "mean") and self.ppca_warm_start:
             active_mean = self.mean[:, achans]
         if hasattr(self, "W") and self.ppca_warm_start:
             active_W = self.W[:, achans]
@@ -2538,6 +2552,8 @@ class GaussianUnit(torch.nn.Module):
 
     def log_likelihood(self, features, channels, neighborhood_id=None) -> torch.Tensor:
         """Log likelihood for spike features living on the same channels."""
+        if not len(features):
+            return features.new_zeros((0,))
         mean = self.noise.mean_full[:, channels]
         if self.mean_kind == "full":
             mean = mean + self.mean[:, channels]
@@ -2736,7 +2752,7 @@ def get_average_parameter_counts(
 def class_sum(classes, inverse_inds, x, weights=None):
     wsum = x.new_zeros(len(classes))
     x = x * weights if weights is not None else x
-    spiketorch.add_at_(wsum, inverse_inds, x)
+    spiketorch.add_at_(wsum, inverse_inds.to(x.device), x)
     return wsum
 
 
