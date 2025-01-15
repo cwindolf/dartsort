@@ -113,3 +113,8 @@ def test_mixture():
                         #     mixture_testing_util.test_moppcas(**kw)
 
                         #     assert False
+
+
+if __name__ == "__main__":
+    test_ppca()
+    test_mixture()
