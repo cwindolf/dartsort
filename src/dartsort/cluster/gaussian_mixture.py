@@ -453,10 +453,6 @@ class SpikeMixtureModel(torch.nn.Module):
 
         if self.use_proportions and likelihoods is not None:
             self.update_proportions(likelihoods)
-        if self.log_proportions is not None:
-            assert (
-                len(self.log_proportions) == unit_ids.max() + 1 + self.with_noise_unit
-            )
 
         fit_full_indices, fit_split_indices = quick_indices(
             self.rg,
