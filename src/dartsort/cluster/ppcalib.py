@@ -1,3 +1,7 @@
+# TODO:
+# parenthesization: combine the reductions?
+# rotation? W convergence?
+
 import warnings
 from typing import Optional
 
@@ -155,6 +159,7 @@ def ppca_em(
             weights,
             state["W"],
             state["mu"],
+            ess=ess,
             active_channels=active_channels,
             active_cov_chol_factor=active_cov_chol_factor,
             prior_var=prior_var,
@@ -305,18 +310,22 @@ def ppca_e_step(
 
         # take weighted averages
         if yes_pca:
-            mean_ubar = nd.w_norm @ ubar
-            mean_uubar = nd.w_norm @ uubar.view(nd.neighb_n_spikes, -1)
-            mean_uubar = mean_uubar.view(uubar.shape[1:])
+            # mean_ubar = nd.w_norm @ ubar
+            e_u.view(1, -1).addmm_(nd.w_norm[None], ubar)
+            # mean_uubar = nd.w_norm @ uubar.view(nd.neighb_n_spikes, -1)
+            # mean_uubar = mean_uubar.view(uubar.shape[1:])
+            e_uu.view(1, -1).addmm_(nd.w_norm[None], uubar.view(nd.neighb_n_spikes, -1))
 
-        wx = nd.w_norm @ nd.x
+        # wx = nd.w_norm @ nd.x
         if nd.have_missing:
-            wxbar_m = nd.w_norm @ xbar_m
-            ybar = y.new_zeros((rank, nc))
-            ybar[:, nd.active_subset] = wx.view(rank, nd.neighb_nc)
-            ybar[:, nd.missing_subset] = wxbar_m.view(rank, nc - nd.neighb_nc)
+            e_y[:, nd.active_subset] += (nd.w_norm @ nd.x).view(rank, -1)
+            e_y[:, nd.missing_subset] += (nd.w_norm @ xbar_m).view(rank, -1)
+            # ybar = y.new_zeros((rank, nc))
+            # ybar[:, nd.active_subset] = wx.view(rank, nd.neighb_nc)
+            # ybar[:, nd.missing_subset] = wxbar_m.view(rank, nc - nd.neighb_nc)
         else:
-            ybar = wx.view(rank, nc)
+            e_y.view(1, -1).addmm_(nd.w_norm[None], nd.x)
+            # ybar = wx.view(rank, nc)
 
         if yes_pca:
             wxcu = nd.w_norm @ e_xcu.view(nd.neighb_n_spikes, -1)
@@ -342,10 +351,10 @@ def ppca_e_step(
                 yc[nd.neighb_members] = xc.view(nd.neighb_n_spikes, rank, nd.neighb_nc)
 
         # accumulate results
-        e_y += ybar
+        # e_y += ybar
         if yes_pca:
-            e_u += mean_ubar
-            e_uu += mean_uubar
+            # e_u += mean_ubar
+            # e_uu += mean_uubar
             e_ycu += ycubar
 
     return dict(e_y=e_y, e_u=e_u, e_ycu=e_ycu, e_uu=e_uu, yc=yc, W_old=active_W)

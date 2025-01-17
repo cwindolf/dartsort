@@ -13,7 +13,7 @@ t_w_test = ("zero", "hot", "random")
 t_channels_strategy_test = ("count", "count_core")
 
 
-def test_ppca():
+def _test_ppca(normalize=False):
     for t_channels_strategy in t_channels_strategy_test:
         for t_missing in t_missing_test:
             for t_mu in t_mu_test:
@@ -30,7 +30,7 @@ def test_ppca():
                             figsize=(3, 2.5),
                             make_vis=False,
                             show_vis=False,
-                            normalize=False,
+                            normalize=normalize,
                             cache_local=t_channels_strategy.endswith("core"),
                         )
 
@@ -54,6 +54,14 @@ def test_ppca():
                         #     plt.close(res['panel'])
                         #     assert False
                         # plt.close(res['panel'])
+
+
+def test_norm_ppca():
+    _test_ppca(True)
+
+
+def test_unnorm_ppca():
+    _test_ppca(False)
 
 
 def test_mixture():
@@ -116,5 +124,6 @@ def test_mixture():
 
 
 if __name__ == "__main__":
-    test_ppca()
+    test_norm_ppca()
+    test_unnorm_ppca()
     test_mixture()
