@@ -198,6 +198,7 @@ def fit_ppca(
     normalize=True,
     em_converged_atol=1e-6,
     cache_local_direct=False,
+    W_initialization="svd",
 ):
     from dartsort.cluster import ppcalib
 
@@ -216,6 +217,7 @@ def fit_ppca(
         normalize=normalize,
         em_converged_atol=em_converged_atol,
         cache_local_direct=cache_local_direct,
+        W_initialization=W_initialization,
     )
     return res
 
@@ -247,22 +249,22 @@ def compare_subspaces(
         unit = gmm[k]
         uW = getattr(unit, "W", np.zeros_like(W))
         umu = getattr(unit, "mean", np.zeros_like(mu))
+    M = 0
+    werr = None
     if torch.is_tensor(uW):
         uW = uW.numpy()
+        assert uW.shape == W.shape, f"{uW.shape=} {W.shape=}"
+        rank, nc, M = W.shape
+        WTW = W.reshape(rank * nc, M)
+        WTW = WTW @ WTW.T
+        uWTW = uW.reshape(rank * nc, M)
+        uWTW = uWTW @ uWTW.T
+        werr = WTW - uWTW
     if torch.is_tensor(umu):
         umu = umu.numpy()
-
-    assert umu.shape == mu.shape, f"{umu.shape=} {mu.shape=}"
-    assert uW.shape == W.shape, f"{uW.shape=} {W.shape=}"
-
-    rank, nc, M = W.shape
-    WTW = W.reshape(rank * nc, M)
-    WTW = WTW @ WTW.T
-    uWTW = uW.reshape(rank * nc, M)
-    uWTW = uWTW @ uWTW.T
+        assert umu.shape == mu.shape, f"{umu.shape=} {mu.shape=}"
 
     muerr = mu - umu
-    werr = WTW - uWTW
     if not make_vis:
         return muerr, werr, None
 
@@ -280,18 +282,19 @@ def compare_subspaces(
     ax_mu.legend(title="mean")
     ax_muerr.hist(muerr.ravel(), bins=32, log=True)
     ax_muerr.set_xlabel("mean errors")
-    ax_werr.hist(werr.ravel(), bins=32, log=True)
-    ax_werr.set_xlabel("subspace errors")
 
-    vm = max(np.abs(WTW).max(), 0.9 * np.abs(uWTW).max())
-    kw = dict(vmin=-vm, vmax=vm, cmap=plt.cm.seismic, interpolation="none")
-    im = ax_w.imshow(WTW, **kw)
-    ax_w.set_title("gt subspace")
-    ax_uw.imshow(uWTW, **kw)
-    ax_uw.set_title("est subspace")
-    ax_dw.imshow(WTW - uWTW, **kw)
-    ax_dw.set_title("diff")
-    plt.colorbar(im, ax=ax_dw, shrink=0.75, aspect=10)
+    if M:
+        ax_werr.hist(werr.ravel(), bins=32, log=True)
+        ax_werr.set_xlabel("subspace errors")
+        vm = max(np.abs(WTW).max(), 0.9 * np.abs(uWTW).max())
+        kw = dict(vmin=-vm, vmax=vm, cmap=plt.cm.seismic, interpolation="none")
+        im = ax_w.imshow(WTW, **kw)
+        ax_w.set_title("gt subspace")
+        ax_uw.imshow(uWTW, **kw)
+        ax_uw.set_title("est subspace")
+        ax_dw.imshow(WTW - uWTW, **kw)
+        ax_dw.set_title("diff")
+        plt.colorbar(im, ax=ax_dw, shrink=0.75, aspect=10)
     if title:
         panel.suptitle(title)
 
@@ -328,6 +331,7 @@ def test_ppca(
     figsize=(4, 3),
     normalize=True,
     cache_local=False,
+    W_initialization="svd",
     rg=0,
 ):
     rg = np.random.default_rng(rg)
@@ -351,12 +355,13 @@ def test_ppca(
         sim_res["data"],
         sim_res["noise"],
         sim_res["neighborhoods"],
-        M=M,
+        M=M * (t_w != "zero"),
         n_iter=em_iter,
         show_progress=make_vis,
         normalize=normalize,
         em_converged_atol=em_converged_atol,
         cache_local_direct=cache_local,
+        W_initialization=W_initialization,
     )
 
     muerr, werr, panel = compare_subspaces(

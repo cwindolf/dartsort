@@ -28,12 +28,12 @@ def ppca_em(
     weights=None,
     cache_prefix=None,
     M=1,
-    n_iter=1,
+    n_iter=100,
     mean_prior_pseudocount=0.0,
     show_progress=False,
     W_initialization="svd",
     normalize=True,
-    em_converged_atol=0.1,
+    em_converged_atol=1e-2,
     prior_var=1.0,
     cache_global_direct=True,
     cache_local_direct=False,
@@ -142,13 +142,12 @@ def ppca_em(
         dW = 0
         if state["W"] is not None:
             dW = torch.abs(state["W"] - old_state["W"]).abs().max()
-        if not any_missing:
-            break
-        if max(dmu, dW) < em_converged_atol:
+        if not any_missing and W_initialization == "svd":
             break
         if show_progress:
             iters.set_description(f"PPCA[{dmu=:.2g}, {dW=:.2g}]")
-    print(i, dmu, dW)
+        if max(dmu, dW) < em_converged_atol:
+            break
 
     if normalize and any_missing and state["W"] is not None:
         _, _, state["W"], state["mu"] = embed(
@@ -159,7 +158,6 @@ def ppca_em(
             weights,
             state["W"],
             state["mu"],
-            ess=ess,
             active_channels=active_channels,
             ess=ess,
             active_cov_chol_factor=active_cov_chol_factor,
@@ -267,55 +265,30 @@ def ppca_e_step(
             uubar = full_uubar[nd.u_slice]
 
         # actual data in neighborhood
-        xcc = xc = nd.x - nu
+        xc = torch.sub(nd.x, nu, out=nd.xcbuf)
+        xcc = xc
         if yes_pca:
-            Woubar = ubar @ W_o.T
-            if nd.have_missing:
-                Wmubar = ubar @ W_m.T
-            xcc = xcc - Woubar
-
-        # we need these ones everywhere
-        # Cooinvxc = nd.C_oo_chol.solve(xc.T).T
-        # Cooinvxc = xc @ nd.C_oo_inv
-
-        # # pca-centered data
-        # if yes_pca and nd.have_missing:
-        #     CooinvWo = nd.C_oo_chol.solve(W_o)
-        #     CooinvWo = nd.C_oo_inv @ W_o
-        #     # xcc = torch.addmm(xc, ubar, W_o.T, alpha=-1)
-        #     # Cooinvxcc = C_oochol.solve(xcc.T).T
-        #     Cooinvxcc = Cooinvxc.addmm(ubar, CooinvWo.T, alpha=-1)
-        # else:
-        #     Cooinvxcc = Cooinvxc
+            wubar = nd.w_norm[:, None] * ubar
+            wxcu = xc.T @ wubar
+            if return_yc:
+                xcc = xc.addmm(ubar, W_o.T, alpha=-1)
+            else:
+                xcc = xc.addmm_(ubar, W_o.T, alpha=-1)
+                del xc
 
         # first data moment
         if nd.have_missing:
             CooinvCom = nd.C_oo_inv @ nd.C_mo.T
             xbar_m = torch.addmm(tnu, xcc, CooinvCom)
             if yes_pca:
-                xbar_m.add_(Wmubar)
-
-        # cross moment
-        if yes_pca:
-            e_xcu = xc[:, :, None] * ubar[:, None, :]
-        if yes_pca and nd.have_missing:
-            # R tilde.
-            CooinvWo = nd.C_oo_inv @ W_o
-            Wm_less_CmoCooinvWo = W_m.addmm(nd.C_mo, CooinvWo, beta=-1)
-            coefts = Wm_less_CmoCooinvWo[None].broadcast_to(
-                (len(uubar), *Wm_less_CmoCooinvWo.shape)
-            )
-            e_mxcu = torch.bmm(coefts, uubar)
-            coefts = CooinvCom.T[None].broadcast_to((len(e_mxcu), *CooinvCom.T.shape))
-            e_mxcu.baddbmm_(coefts, e_xcu)
+                xbar_m.addmm_(ubar, W_m.T)
 
         # take weighted averages
         if yes_pca:
-            # mean_ubar = nd.w_norm @ ubar
-            e_u.view(1, -1).addmm_(nd.w_norm[None], ubar)
-            # mean_uubar = nd.w_norm @ uubar.view(nd.neighb_n_spikes, -1)
-            # mean_uubar = mean_uubar.view(uubar.shape[1:])
-            e_uu.view(1, -1).addmm_(nd.w_norm[None], uubar.view(nd.neighb_n_spikes, -1))
+            e_u += wubar.sum(0)
+            wuubar = nd.w_norm[None] @ uubar.view(nd.neighb_n_spikes, -1)
+            wuubar = wuubar.view(M, M)
+            e_uu += wuubar
 
         # wx = nd.w_norm @ nd.x
         if nd.have_missing:
@@ -323,37 +296,27 @@ def ppca_e_step(
             e_y[:, nd.missing_subset] += (nd.w_norm @ xbar_m).view(rank, -1)
         else:
             e_y.view(1, -1).addmm_(nd.w_norm[None], nd.x)
-            # ybar = wx.view(rank, nc)
 
-        if yes_pca:
-            wxcu = nd.w_norm @ e_xcu.view(nd.neighb_n_spikes, -1)
-            wxcu = wxcu.view(e_xcu.shape[1:])
         if nd.have_missing and yes_pca:
-            wmxcu = nd.w_norm @ e_mxcu.reshape(nd.neighb_n_spikes, -1)
-            wmxcu = wmxcu.view(e_mxcu.shape[1:])
-            ycubar = new_zeros((rank, nc, M))
-            ycubar[:, nd.active_subset] = wxcu.view(rank, nd.neighb_nc, M)
-            ycubar[:, nd.missing_subset] = wmxcu.view(rank, nc - nd.neighb_nc, M)
+            e_ycu[:, nd.active_subset] += wxcu.reshape(rank, nd.neighb_nc, M)
+            Wm_less_CmoCooinvWo = torch.addmm(W_m, CooinvCom.T, W_o, alpha=-1)
+            wmxcu = (CooinvCom.T @ wxcu).addmm_(Wm_less_CmoCooinvWo, wuubar)
+            e_ycu[:, nd.missing_subset] += wmxcu.reshape(rank, nc - nd.neighb_nc, M)
         elif yes_pca:
-            ycubar = wxcu.view(rank, nc, M)
+            e_ycu += wxcu.view(rank, nc, M)
 
         # residual imputed
         if return_yc:
             if nd.have_missing:
-                xc = xc.view(nd.neighb_n_spikes, rank, nd.neighb_nc).mT
-                yc[nd.u_slice][:, :, nd.active_subset[None, :]] = xc
+                yc[nd.u_slice][:, :, nd.active_subset] = xc.view(
+                    nd.neighb_n_spikes, rank, -1
+                )
                 xbar_m -= tnu
-                txc = xbar_m.view(nd.neighb_n_spikes, rank, nc - nd.neighb_nc).mT
-                yc[nd.u_slice][:, :, nd.missing_subset[None, :]] = txc
+                yc[nd.u_slice][:, :, nd.missing_subset] = xbar_m.view(
+                    nd.neighb_n_spikes, rank, -1
+                )
             else:
                 yc[nd.u_slice] = xc.view(nd.neighb_n_spikes, rank, nd.neighb_nc)
-
-        # accumulate results
-        # e_y += ybar
-        if yes_pca:
-            # e_u += mean_ubar
-            # e_uu += mean_uubar
-            e_ycu += ycubar
 
     return dict(e_y=e_y, e_u=e_u, e_ycu=e_ycu, e_uu=e_uu, yc=yc, W_old=active_W)
 
@@ -381,38 +344,21 @@ def embed(
     if scratch is not None:
         _ubar, _uubar = scratch
     else:
-        _ubar = features.new_zeros((N, M))
-        # if not normalize:
-        _uubar = features.new_zeros(N, M, M)
-    eye_M_ = torch.eye(M, device=device, dtype=dtype)
-    eye_M = prior_var * eye_M_
+        _ubar = new_zeros((N, M))
+        _uubar = new_zeros(N, M, M)
+    eye_M = eye_M_ = torch.eye(M, device=device, dtype=dtype)
+    if prior_var != 1:
+        eye_M = prior_var * eye_M_
 
     for nd in neighb_data:
         nu = active_mean[:, nd.active_subset].reshape(nd.D_neighb)
         W_o = W[:, nd.active_subset].reshape(nd.D_neighb, M)
-        xc = nd.x - nu
-
-        # we need these ones everywhere
-        # Cooinvxc = nd.C_oo_chol.solve(xc.T).T
-        # Cooinvxc = xc @ nd.C_oo_inv
+        xc = torch.sub(nd.x, nu, out=nd.xcbuf)
 
         # moments of embeddings
-        # T_inv = eye_M + W_o.T @ nd.C_oo_chol.solve(W_o)
         T_inv = eye_M + W_o.T @ nd.C_oo_inv @ W_o
-        # root = operators.LowRankRootLinearOperator(W_o.T @ nd.C_oo_cholinv)
-        # print(f"{root.shape=} {I_M.shape=}")
-        # helper = root + I_M
-        # helper = operators.LowRankRootSumLinearOperator(I_M
-        # print(f"{T_inv.shape=}")
-        # T = helper.solve(eye_M_)
         T, info = torch.linalg.inv_ex(T_inv)
         u_proj = nd.C_oo_inv @ (W_o @ T)
-        # ubar = Cooinvxc @ (W_o @ T)
-        # ubar = xc @ u_proj
-        # uubar = torch.baddbmm(T, ubar[:, :, None], ubar[:, None, :])
-
-        # _ubar[nd.u_slice] = ubar
-        # _uubar[nd.u_slice] = uubar
         torch.mm(xc, u_proj, out=_ubar[nd.u_slice])
         torch.baddbmm(
             T,
@@ -422,47 +368,41 @@ def embed(
         )
 
     if normalize:
+        active_cov = noise.marginal_covariance(channels=active_channels).to_dense()
         if active_cov_chol_factor is None:
-            active_cov = noise.marginal_covariance(channels=active_channels)
             active_cov_chol_factor = torch.linalg.cholesky(active_cov).to_dense()
         Wflat = W.view(-1, M)
 
         # centering
-        ess = weights.sum()
         weights = weights / ess
         um = weights @ _ubar
         _ubar -= um
-        _uubar -= um[:, None] * um
-        # active_mean = active_mean + W @ um
+        _uubar.addcmul_(um[:, None], um)
 
-        # whitening. need to do a GEVP to start...
+        # -- whitening
+        # decompose Euu
         S = (weights @ _uubar.view(N, M * M)).view(M, M)
         Dx, U = torch.linalg.eigh(S)
-        Dx = Dx.flip(dims=(0,))
-        U = U.flip(dims=(1,))
         U.mul_(sgn(U[0]))
-        UDxrt = U * Dx.sqrt()
-        rhs = Wflat @ UDxrt.T
-        gevp_W_right = torch.linalg.solve_triangular(
-            active_cov_chol_factor, rhs, upper=False
+        S_left_root = U * Dx.sqrt()
+
+        # now
+        gevp_W_right = torch.linalg.multi_dot(
+            (active_cov_chol_factor.T, Wflat, S_left_root)
         )
         gevp_W = gevp_W_right.T @ gevp_W_right
-        # gevp_W = linear_operator.solve(lhs=rhs.T, input=active_cov, rhs=rhs)
         Dw, V = torch.linalg.eigh(gevp_W)
-        Dw = Dw.flip(dims=(0,))
-        V = V.flip(dims=(1,))
         V.mul_(sgn(V[0]))
 
         # this gives us transforms...
-        W_tf = UDxrt @ V
+        W_tf = S_left_root @ V
         u_tf = (U / Dx.sqrt()) @ V
 
         # which we apply.
-        W @= W_tf
-        _ubar @= u_tf
+        W = W @ W_tf
+        _ubar = _ubar @ u_tf
         _uubar = torch.einsum("nij,ip,jq->npq", _uubar, u_tf, u_tf)
         active_mean += W @ um
-        # .addmm_(W.view(-1, M), um.unsqueeze(1))
 
     return _ubar, _uubar, W, active_mean
 
@@ -481,6 +421,7 @@ class NeighborhoodPPCAData:
     w: torch.Tensor
     w_norm: torch.Tensor
     x: torch.Tensor
+    xcbuf: torch.Tensor
     neighb_members: torch.Tensor
     u_slice: torch.Tensor
 
@@ -613,6 +554,7 @@ def get_neighborhood_data(
             w=w,
             w_norm=w / ess,
             x=x,
+            xcbuf=x.new_empty(x.shape),
             neighb_members=neighb_members,
             u_slice=slice(n_start, n_start + n_neighb),
             C_mo=C_mo,
