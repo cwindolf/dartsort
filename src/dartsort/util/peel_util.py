@@ -96,10 +96,7 @@ def run_peeler(
             skip_last=True,
         )
 
-    return (
-        DARTsortSorting.from_peeling_hdf5(output_hdf5_filename),
-        output_hdf5_filename,
-    )
+    return DARTsortSorting.from_peeling_hdf5(output_hdf5_filename)
 
 
 def peeler_is_done(

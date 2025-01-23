@@ -159,7 +159,7 @@ def subtract(
         subtraction_config=subtraction_config,
         featurization_config=featurization_config,
     )
-    detections, output_hdf5_filename = run_peeler(
+    detections = run_peeler(
         subtraction_peeler,
         output_directory,
         hdf5_filename,
