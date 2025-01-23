@@ -110,7 +110,7 @@ class SpikeMixtureModel(torch.nn.Module):
         em_converged_churn: float = 0.01,
         em_converged_atol: float = 1e-2,
         em_converged_logpx_tol: float = 1e-5,
-        hard_noise=True,
+        hard_noise=False,
         random_seed: int = 0,
     ):
         super().__init__()

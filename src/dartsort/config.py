@@ -166,7 +166,7 @@ class DeveloperConfig(DARTsortUserConfig):
     ] = "heldout_ccl"
     merge_bimodality_threshold: float = 0.05
     n_refinement_iters: int = 3
-    channels_strategy: str = "count_core"
+    channels_strategy: str = "count_fuzzcore"
     hard_noise: bool = False
 
     gmm_max_spikes: Annotated[int, Field(gt=0)] = 4_000_000

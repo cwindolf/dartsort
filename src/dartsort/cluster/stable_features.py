@@ -769,17 +769,17 @@ def occupied_chans(
         neighborhood_ids = spike_data.neighborhood_ids
     ids, inverse = torch.unique(neighborhood_ids, return_inverse=True)
     if weights is None:
-        weights = torch.ones(inverse.shape)
-    id_counts = torch.zeros(ids.shape)
-    spiketorch.add_at_(id_counts, inverse, weights)
+        weights = torch.ones(inverse.shape, device=ids.device)
+    id_counts = torch.zeros(ids.shape, device=ids.device)
+    spiketorch.add_at_(id_counts, inverse, weights.to(ids.device))
 
     chans0 = neighborhoods.neighborhoods[ids]
     chans, inverse = torch.unique(chans0, return_inverse=True)
-    counts = torch.zeros(chans.shape)
+    counts = torch.zeros(chans.shape, device=chans.device)
     spiketorch.add_at_(
         counts,
         inverse.view(-1),
-        id_counts[:, None].broadcast_to(chans0.shape).reshape(-1),
+        id_counts[:, None].broadcast_to(chans0.shape).reshape(-1).to(counts.device),
     )
 
     counts = counts[chans < n_channels]
