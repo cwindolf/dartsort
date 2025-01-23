@@ -109,13 +109,14 @@ def test_fakedata_nonn():
 
     with tempfile.TemporaryDirectory() as tempdir:
         print("first one")
-        st, out_h5 = subtract(
+        st = subtract(
             rec,
             tempdir,
             featurization_config=featconf,
             subtraction_config=subconf,
             overwrite=True,
         )
+        out_h5 = st.parent_h5_path
         ns0 = len(st)
         with h5py.File(out_h5, locking=False) as h5:
             assert h5["times_samples"].shape == (ns0,)
@@ -132,7 +133,7 @@ def test_fakedata_nonn():
 
         # test that resuming works
         print("resume")
-        st, out_h5 = subtract(
+        st = subtract(
             rec,
             tempdir,
             featurization_config=featconf,
@@ -140,6 +141,7 @@ def test_fakedata_nonn():
             overwrite=False,
         )
         ns1 = len(st)
+        out_h5 = st.parent_h5_path
         assert ns0 == ns1
         with h5py.File(out_h5, locking=False) as h5:
             assert h5["times_samples"].shape == (ns0,)
@@ -156,13 +158,14 @@ def test_fakedata_nonn():
 
         # test overwrite
         print("overwrite")
-        st, out_h5 = subtract(
+        st = subtract(
             rec,
             tempdir,
             featurization_config=featconf,
             subtraction_config=subconf,
             overwrite=True,
         )
+        out_h5 = st.parent_h5_path
         ns2 = len(st)
         assert ns0 == ns2
         with h5py.File(out_h5, locking=False) as h5:
@@ -180,7 +183,7 @@ def test_fakedata_nonn():
 
     with tempfile.TemporaryDirectory() as tempdir:
         print("parallel first one")
-        st, out_h5 = subtract(
+        st = subtract(
             rec,
             tempdir,
             featurization_config=featconf,
@@ -188,6 +191,7 @@ def test_fakedata_nonn():
             overwrite=True,
             computation_config=two_jobs_cfg,
         )
+        out_h5 = st.parent_h5_path
         ns0 = len(st)
         with h5py.File(out_h5, locking=False) as h5:
             assert h5["times_samples"].shape == (ns0,)
@@ -204,7 +208,7 @@ def test_fakedata_nonn():
 
         # test that resuming works
         print("parallel resume")
-        st, out_h5 = subtract(
+        st = subtract(
             rec,
             tempdir,
             featurization_config=featconf,
@@ -212,6 +216,7 @@ def test_fakedata_nonn():
             overwrite=False,
             computation_config=two_jobs_cfg,
         )
+        out_h5 = st.parent_h5_path
         ns1 = len(st)
         assert ns0 == ns1
         with h5py.File(out_h5, locking=False) as h5:
@@ -229,7 +234,7 @@ def test_fakedata_nonn():
 
         # test overwrite
         print("parallel overwrite")
-        st, out_h5 = subtract(
+        st = subtract(
             rec,
             tempdir,
             featurization_config=featconf,
@@ -237,6 +242,7 @@ def test_fakedata_nonn():
             overwrite=True,
             computation_config=two_jobs_cfg,
         )
+        out_h5 = st.parent_h5_path
         ns2 = len(st)
         assert ns0 == ns2
         with h5py.File(out_h5, locking=False) as h5:
@@ -266,7 +272,7 @@ def test_fakedata_nonn():
     print(subconf)
     print(nolocfeatconf)
     with tempfile.TemporaryDirectory() as tempdir:
-        st0, out_h5 = subtract(
+        st0 = subtract(
             rec,
             tempdir,
             featurization_config=nolocfeatconf,
@@ -275,13 +281,13 @@ def test_fakedata_nonn():
         ns0 = len(st0)
 
     with tempfile.TemporaryDirectory() as tempdir:
-        sta, out_h5 = subtract(
+        sta = subtract(
             rec.frame_slice(start_frame=0, end_frame=int((T_s // 3) * fs)),
             tempdir,
             featurization_config=nolocfeatconf,
             subtraction_config=subconf,
         )
-        stb, out_h5 = subtract(
+        stb = subtract(
             rec,
             tempdir,
             featurization_config=nolocfeatconf,
@@ -321,13 +327,14 @@ def test_small_nonn():
 
     print("No parallel")
     with tempfile.TemporaryDirectory() as tempdir:
-        st, out_h5 = subtract(
+        st = subtract(
             rec,
             tempdir,
             featurization_config=featconf,
             subtraction_config=subconf,
             overwrite=True,
         )
+        out_h5 = st.parent_h5_path
         with h5py.File(out_h5, locking=False) as h5:
             lens = []
             for k in h5.keys():
@@ -338,7 +345,7 @@ def test_small_nonn():
     print("CPU parallel")
     with tempfile.TemporaryDirectory() as tempdir:
         # test default config
-        st, out_h5 = subtract(
+        st = subtract(
             rec,
             tempdir,
             overwrite=True,
@@ -346,6 +353,7 @@ def test_small_nonn():
             subtraction_config=subconf,
             computation_config=two_jobs_cfg_cpu,
         )
+        out_h5 = st.parent_h5_path
         with h5py.File(out_h5, locking=False) as h5:
             lens = []
             for k in h5.keys():
@@ -356,7 +364,7 @@ def test_small_nonn():
     print("Yes parallel")
     with tempfile.TemporaryDirectory() as tempdir:
         # test default config
-        st, out_h5 = subtract(
+        st = subtract(
             rec,
             tempdir,
             overwrite=True,
@@ -364,6 +372,7 @@ def test_small_nonn():
             subtraction_config=subconf,
             computation_config=two_jobs_cfg,
         )
+        out_h5 = st.parent_h5_path
         with h5py.File(out_h5, locking=False) as h5:
             lens = []
             for k in h5.keys():
@@ -396,12 +405,13 @@ def small_default_config(extract_radius=200):
     with tempfile.TemporaryDirectory() as tempdir:
         # test default config
         print("test_small_default_config first")
-        st, out_h5 = subtract(
+        st = subtract(
             rec,
             tempdir,
             overwrite=True,
             subtraction_config=cfg,
         )
+        out_h5 = st.parent_h5_path
         with h5py.File(out_h5, locking=False) as h5:
             lens = []
             for k in h5.keys():
@@ -411,13 +421,14 @@ def small_default_config(extract_radius=200):
 
         # test default config
         print("test_small_default_config second")
-        st, out_h5 = subtract(
+        st = subtract(
             rec,
             tempdir,
             overwrite=True,
             computation_config=two_jobs_cfg,
             subtraction_config=cfg,
         )
+        out_h5 = st.parent_h5_path
         with h5py.File(out_h5, locking=False) as h5:
             lens = []
             for k in h5.keys():
