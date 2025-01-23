@@ -2486,7 +2486,7 @@ class GaussianUnit(torch.nn.Module):
 
         can_warm_start = False
         if je_suis and hasattr(self, "channels"):
-            can_warm_start = spiketorch.isin_sorted(achans, self.channels).all()
+            can_warm_start = spiketorch.isin_sorted(achans.cpu(), self.channels.cpu()).all()
 
         active_mean = active_W = None
         n_iter = self.ppca_initial_em_iter

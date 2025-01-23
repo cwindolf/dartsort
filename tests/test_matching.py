@@ -552,7 +552,7 @@ def test_fakedata_nonn():
         rec1 = rec0.save_to_folder(Path(tdir) / "rec")
         for rec in [rec1, rec0]:
             (Path(tdir) / "match").mkdir()
-            st, h5 = main.match(
+            st = main.match(
                 rec,
                 sorting=gts,
                 output_directory=Path(tdir) / "match",

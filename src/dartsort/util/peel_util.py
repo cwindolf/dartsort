@@ -44,10 +44,7 @@ def run_peeler(
         do_localization=do_localization,
         localization_dataset_name=localization_dataset_name,
     ):
-        return (
-            DARTsortSorting.from_peeling_hdf5(output_hdf5_filename),
-            output_hdf5_filename,
-        )
+        return DARTsortSorting.from_peeling_hdf5(output_hdf5_filename)
 
     # fit models if needed
     peeler.load_or_fit_and_save_models(
