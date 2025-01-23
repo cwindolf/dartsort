@@ -332,7 +332,6 @@ class RefinementConfig:
     min_count: int = 50
     signal_rank: int = 0
     n_spikes_fit: int = 4096
-    n_em_iters: int = 25
     ppca_inner_em_iter: int = 10
     distance_metric: Literal["noise_metric", "kl", "reverse_kl", "symkl"] = "symkl"
     distance_normalization_kind: Literal["none", "noise", "channels"] = "noise"
@@ -350,6 +349,7 @@ class RefinementConfig:
         "bimodality",
     ] = "heldout_ccl"
     merge_bimodality_threshold: float = 0.05
+    n_em_iters: int = 25
     em_converged_prop: float = 0.02
     em_converged_churn: float = 0.01
     em_converged_atol: float = 1e-2

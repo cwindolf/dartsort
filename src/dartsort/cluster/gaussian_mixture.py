@@ -2749,7 +2749,11 @@ class GaussianUnit(torch.nn.Module):
         ld = 0.0
         if self.cov_kind == "ppca" and self.ppca_rank:
             oW = other_covs.reshape(n, k, self.ppca_rank)
-            solve = my_cov.solve(oW)
+            solve = []
+            for bs in range(0, n, 32):
+                solve.append(my_cov.solve(oW[bs:bs+32]))
+            solve = torch.concatenate(solve, dim=0)
+            # solve = my_cov.solve(oW)
             ncov = self.noise.full_dense_cov()
             solve = solve @ oW.mT
             tr = solve.diagonal(dim1=-2, dim2=-1).sum(dim=1)
@@ -3046,7 +3050,7 @@ def hard_noise_argmax_loop(
         dx = data[p:q] + log_proportions[ix]
         mx = dx.max()
         score = mx + np.log(np.exp(dx - mx).sum())
-        noise_score = data[q]
+        noise_score = data[q]  # indptr[i+1]-1 is the noise ix
         if score > noise_score:
             scores[j] = score
             best = dx.argmax()
