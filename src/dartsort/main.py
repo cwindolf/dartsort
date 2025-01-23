@@ -48,7 +48,7 @@ def dartsort(
     ret = {}
 
     # first step: initial detection and motion estimation
-    sorting, sub_h5 = subtract(
+    sorting = subtract(
         recording,
         output_directory,
         waveform_config=cfg.waveform_config,
@@ -104,7 +104,7 @@ def dartsort(
         is_final = step == cfg.matching_iterations
         prop = 1.0 if is_final else cfg.intermediate_matching_subsampling
 
-        sorting, match_h5 = match(
+        sorting = match(
             recording,
             sorting,
             output_directory,
@@ -171,7 +171,7 @@ def subtract(
         residual_filename=residual_filename,
         show_progress=show_progress,
     )
-    return detections, output_hdf5_filename
+    return detections
 
 
 def match(
@@ -219,7 +219,7 @@ def match(
         template_data,
         motion_est=motion_est,
     )
-    sorting, output_hdf5_filename = run_peeler(
+    sorting = run_peeler(
         matching_peeler,
         output_directory,
         hdf5_filename,
@@ -231,7 +231,7 @@ def match(
         show_progress=show_progress,
         computation_config=computation_config,
     )
-    return sorting, output_hdf5_filename
+    return sorting
 
 
 def match_chunked(

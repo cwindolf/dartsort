@@ -33,7 +33,7 @@ def ppca_em(
     show_progress=False,
     W_initialization="svd",
     normalize=True,
-    em_converged_atol=1e-2,
+    em_converged_atol=1e-4,
     prior_var=1.0,
     cache_global_direct=True,
     cache_local_direct=False,
@@ -53,9 +53,7 @@ def ppca_em(
     else:
         assert (weights > 0).all()
         assert torch.isfinite(weights).all()
-    ess = weights.sum()
-    assert torch.isfinite(ess)
-    neighb_data = get_neighborhood_data(
+    neighb_data, keep = get_neighborhood_data(
         sp,
         neighborhoods,
         active_channels,
@@ -66,6 +64,11 @@ def ppca_em(
         cache_prefix,
         cache_direct=cache_local_direct,
     )
+    ess = weights[keep].sum()
+    if keep != slice(None):
+        sp = sp[keep]
+        weights = weights[keep]
+        n = len(sp)
     any_missing = any(nd.have_missing for nd in neighb_data)
     cache_kw = {}
     if cache_global_direct:
@@ -137,17 +140,19 @@ def ppca_em(
             mean_prior_pseudocount=mean_prior_pseudocount,
             noise=noise,
             active_channels=active_channels,
+            rescale=True,
         )
         dmu = torch.abs(state["mu"] - old_state["mu"]).abs().max()
         dW = 0
         if state["W"] is not None:
             dW = torch.abs(state["W"] - old_state["W"]).abs().max()
-        if not any_missing and W_initialization == "svd":
-            break
+        # if not any_missing and W_initialization == "svd":
+        #     break
         if show_progress:
             iters.set_description(f"PPCA[{dmu=:.2g}, {dW=:.2g}]")
         if max(dmu, dW) < em_converged_atol:
             break
+    # print(f"{i=} {dmu=} {dW=}")
 
     if normalize and any_missing and state["W"] is not None:
         _, _, state["W"], state["mu"] = embed(
@@ -286,7 +291,7 @@ def ppca_e_step(
         # take weighted averages
         if yes_pca:
             e_u += wubar.sum(0)
-            wuubar = nd.w_norm[None] @ uubar.view(nd.neighb_n_spikes, -1)
+            wuubar = nd.w_norm @ uubar.view(nd.neighb_n_spikes, -1)
             wuubar = wuubar.view(M, M)
             e_uu += wuubar
 
@@ -297,8 +302,10 @@ def ppca_e_step(
         else:
             e_y.view(1, -1).addmm_(nd.w_norm[None], nd.x)
 
+        # cross-moment
         if nd.have_missing and yes_pca:
             e_ycu[:, nd.active_subset] += wxcu.reshape(rank, nd.neighb_nc, M)
+
             Wm_less_CmoCooinvWo = torch.addmm(W_m, CooinvCom.T, W_o, alpha=-1)
             wmxcu = (CooinvCom.T @ wxcu).addmm_(Wm_less_CmoCooinvWo, wuubar)
             e_ycu[:, nd.missing_subset] += wmxcu.reshape(rank, nc - nd.neighb_nc, M)
@@ -383,7 +390,9 @@ def embed(
         # decompose Euu
         S = (weights @ _uubar.view(N, M * M)).view(M, M)
         Dx, U = torch.linalg.eigh(S)
-        U.mul_(sgn(U[0]))
+        Dx = Dx.flip((0,))
+        U = U.flip((1,))
+        # U.mul_(sgn(U.diagonal()))
         S_left_root = U * Dx.sqrt()
 
         # now
@@ -392,9 +401,13 @@ def embed(
         )
         gevp_W = gevp_W_right.T @ gevp_W_right
         Dw, V = torch.linalg.eigh(gevp_W)
-        V.mul_(sgn(V[0]))
+        Dw = Dw.flip((0,))
+        V = V.flip((1,))
+        # V.mul_(sgn(V.diagonal()))
 
         # this gives us transforms...
+        correction = sgn((U * V.T).sum(dim=1))
+        V.mul_(correction)
         W_tf = S_left_root @ V
         u_tf = (U / Dx.sqrt()) @ V
 
@@ -422,7 +435,6 @@ class NeighborhoodPPCAData:
     w_norm: torch.Tensor
     x: torch.Tensor
     xcbuf: torch.Tensor
-    neighb_members: torch.Tensor
     u_slice: torch.Tensor
 
     C_mo: Optional[torch.Tensor]
@@ -446,6 +458,8 @@ def get_neighborhood_data(
         neighborhood_ids=sp.neighborhood_ids,
         min_coverage=0,
     )
+    all_kept = True
+    keep = slice(None)
 
     # two passes: first is deduplication
     dedup_data = {}
@@ -461,6 +475,12 @@ def get_neighborhood_data(
         # neighb_subset = neighb_valid  # assume those are the same. tested by assert blo.
         # ok to restrict to valid below
         neighb_chans = neighb_chans[neighb_subset]
+        if not neighb_chans.numel() and all_kept:
+            all_kept = False
+            discard = torch.zeros(len(sp), dtype=bool)
+        if not neighb_chans.numel():
+            discard[neighb_members] = True
+            continue
         assert spiketorch.isin_sorted(neighb_chans, active_channels).all()
         # subset of active chans which are in the neighborhood
         active_subset = spiketorch.isin_sorted(active_channels, neighb_chans)
@@ -483,9 +503,11 @@ def get_neighborhood_data(
                 [x],
                 [neighb_members],
             )
+    if not all_kept:
+        (keep,) = torch.logical_not(discard).nonzero(as_tuple=True)
 
     neighborhood_data = []
-    ess = weights.sum()
+    ess = weights[keep].sum()
     n_start = 0
     for chans_tuple, chans_data in dedup_data.items():
         *info, xs, mems = chans_data
@@ -555,7 +577,7 @@ def get_neighborhood_data(
             w_norm=w / ess,
             x=x,
             xcbuf=x.new_empty(x.shape),
-            neighb_members=neighb_members,
+            # neighb_members=neighb_members,
             u_slice=slice(n_start, n_start + n_neighb),
             C_mo=C_mo,
             active_subset=active_subset,
@@ -564,7 +586,7 @@ def get_neighborhood_data(
         neighborhood_data.append(nd)
         n_start += n_neighb
 
-    return neighborhood_data
+    return neighborhood_data, keep
 
 
 def ppca_m_step(
@@ -614,7 +636,7 @@ def ppca_m_step(
                 f"{torch.isfinite(ycw).all()=} {ycw.shape=}"
             )
             raise err from e
-        s = s[:M].square_().div(n - 1.0)
+        s = s[:M].square_().div(max(1.0, n - 1.0))
         s = F.relu(s - 1)
         s[s <= 0] = 1e-5
         W = v[:, :M].mul_(s.sqrt_() * sgn(v[0, :M]))

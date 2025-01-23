@@ -25,10 +25,14 @@ from ..config import TemplateConfig
 from ..templates import TemplateData
 from ..transform import WaveformPipeline
 from .data_util import DARTsortSorting, batched_h5_read
-from .drift_util import (get_spike_pitch_shifts,
-                         get_waveforms_on_static_channels, registered_average)
+from .drift_util import (
+    get_spike_pitch_shifts,
+    get_waveforms_on_static_channels,
+    registered_average,
+)
 from .spikeio import read_waveforms_channel_index
 from .waveform_util import make_channel_index
+from . import job_util
 
 no_realign_template_config = TemplateConfig(realign_peaks=False)
 basic_template_config = TemplateConfig(realign_peaks=False, superres_templates=False)
@@ -86,8 +90,8 @@ class DARTsortAnalysis:
         name=None,
         template_config=no_realign_template_config,
         allow_template_reload=False,
-        n_jobs=0,
         denoising_tsvd=None,
+        computation_config=None,
         **kwargs,
     ):
         """Try to re-load as much info as possible from the sorting itself
@@ -124,9 +128,12 @@ class DARTsortAnalysis:
                 template_config,
                 overwrite=False,
                 motion_est=motion_est,
-                n_jobs=n_jobs,
+                computation_config=computation_config,
                 tsvd=denoising_tsvd,
             )
+
+        if computation_config is None:
+            computation_config = job_util.get_global_computation_config()
 
         return cls(
             sorting=sorting,
@@ -136,7 +143,7 @@ class DARTsortAnalysis:
             featurization_pipeline=featurization_pipeline,
             motion_est=motion_est,
             name=name,
-            n_jobs=n_jobs,
+            n_jobs=computation_config.actual_n_jobs(),
             **kwargs,
         )
 
@@ -151,9 +158,7 @@ class DARTsortAnalysis:
         **kwargs,
     ):
         return cls(
-            DARTsortSorting.from_peeling_hdf5(
-                hdf5_path, load_simple_features=False
-            ),
+            DARTsortSorting.from_peeling_hdf5(hdf5_path, load_simple_features=False),
             Path(hdf5_path),
             recording,
             template_data=template_data,
@@ -184,9 +189,7 @@ class DARTsortAnalysis:
                 hdf5_path, load_simple_features=False
             )
         if template_data is None:
-            template_data = TemplateData.from_npz(
-                Path(model_dir) / template_data_npz
-            )
+            template_data = TemplateData.from_npz(Path(model_dir) / template_data_npz)
         if motion_est is None:
             if (hdf5_path.parent / motion_est_pkl).exists():
                 with open(hdf5_path.parent / motion_est_pkl, "rb") as jar:
@@ -251,8 +254,7 @@ class DARTsortAnalysis:
     def __getstate__(self):
         # remove cached stuff before pickling
         return {
-            k: v if not k.startswith("_") else None
-            for k, v in self.__dict__.items()
+            k: v if not k.startswith("_") else None for k, v in self.__dict__.items()
         }
 
     # cache gizmos
@@ -311,7 +313,9 @@ class DARTsortAnalysis:
             if self.hdf5_path is not None:
                 self._channel_index = self.h5["channel_index"][:]
             else:
-                self._channel_index = make_channel_index(self.geom, self.default_channel_index_radius)
+                self._channel_index = make_channel_index(
+                    self.geom, self.default_channel_index_radius
+                )
         return self._channel_index
 
     @property
@@ -331,9 +335,7 @@ class DARTsortAnalysis:
     @property
     def unit_ids(self):
         if self._unit_ids is None:
-            allunits, counts = np.unique(
-                self.sorting.labels, return_counts=True
-            )
+            allunits, counts = np.unique(self.sorting.labels, return_counts=True)
             self._unit_ids = allunits[allunits >= 0]
             self._spike_counts = counts[allunits >= 0]
         return self._unit_ids
@@ -341,9 +343,7 @@ class DARTsortAnalysis:
     @property
     def spike_counts(self):
         if self._spike_counts is None:
-            allunits, counts = np.unique(
-                self.sorting.labels, return_counts=True
-            )
+            allunits, counts = np.unique(self.sorting.labels, return_counts=True)
             self._unit_ids = allunits[allunits >= 0]
             self._spike_counts = counts[allunits >= 0]
         return self._spike_counts
@@ -364,9 +364,7 @@ class DARTsortAnalysis:
             show_geom = self.recording.get_channel_locations()
         return show_geom
 
-    def show_channel_index(
-        self, channel_show_radius_um=50, channel_dist_p=np.inf
-    ):
+    def show_channel_index(self, channel_show_radius_um=50, channel_dist_p=np.inf):
         return make_channel_index(
             self.show_geom, channel_show_radius_um, p=channel_dist_p
         )
@@ -553,9 +551,7 @@ class DARTsortAnalysis:
             dtype=tpca_embeds.dtype,
         )
         valid = np.flatnonzero(np.isfinite(tpca_embeds[:, 0]))
-        waveforms[valid] = self.sklearn_tpca.inverse_transform(
-            tpca_embeds[valid]
-        )
+        waveforms[valid] = self.sklearn_tpca.inverse_transform(tpca_embeds[valid])
         t = waveforms.shape[1]
         waveforms = waveforms.reshape(n, c, t).transpose(0, 2, 1)
 
@@ -607,15 +603,16 @@ class DARTsortAnalysis:
         not_entirely_nan_channels = np.flatnonzero(
             np.isfinite(waveforms[:, 0]).any(axis=0)
         )
-        if not_entirely_nan_channels.size and not_entirely_nan_channels.size < waveforms.shape[2]:
+        if (
+            not_entirely_nan_channels.size
+            and not_entirely_nan_channels.size < waveforms.shape[2]
+        ):
             waveforms = waveforms[:, :, not_entirely_nan_channels]
 
         waveforms = waveforms.reshape(len(waveforms), -1)
         no_nan = np.flatnonzero(~np.isnan(waveforms).any(axis=1))
 
-        features = np.full(
-            (len(waveforms), rank), np.nan, dtype=waveforms.dtype
-        )
+        features = np.full((len(waveforms), rank), np.nan, dtype=waveforms.dtype)
         if no_nan.size < rank:
             return which, features
 
@@ -629,7 +626,9 @@ class DARTsortAnalysis:
         else:
             # features[no_nan] = pca.fit_transform(waveforms[no_nan])
             pca.fit(waveforms[no_nan])
-        features = pca.transform(np.where(np.isfinite(waveforms), waveforms, pca.mean_[None]))
+        features = pca.transform(
+            np.where(np.isfinite(waveforms), waveforms, pca.mean_[None])
+        )
         return which, features
 
     def unit_max_channel(self, unit_id):

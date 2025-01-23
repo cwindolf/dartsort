@@ -7,7 +7,7 @@ import numpy as np
 import torch
 
 from dartsort.transform.temporal_pca import TemporalPCAFeaturizer
-from dartsort.util import drift_util, interpolation_util, waveform_util
+from dartsort.util import drift_util, interpolation_util, spiketorch, waveform_util
 from dartsort.util.data_util import DARTsortSorting, get_tpca
 
 # -- main class
@@ -754,7 +754,12 @@ class SpikeNeighborhoods(torch.nn.Module):
 
 
 def occupied_chans(
-    spike_data, n_channels, neighborhood_ids=None, neighborhoods=None, fuzz=0
+    spike_data,
+    n_channels,
+    neighborhood_ids=None,
+    neighborhoods=None,
+    fuzz=0,
+    weights=None,
 ):
     if spike_data.neighborhood_ids is None:
         chans = torch.unique(spike_data.channels)
@@ -762,15 +767,28 @@ def occupied_chans(
     assert neighborhoods is not None
     if neighborhood_ids is None:
         neighborhood_ids = spike_data.neighborhood_ids
-    ids = torch.unique(neighborhood_ids)
-    chans = neighborhoods.neighborhoods[ids]
-    chans, counts = torch.unique(chans, return_counts=True)
+    ids, inverse = torch.unique(neighborhood_ids, return_inverse=True)
+    if weights is None:
+        weights = torch.ones(inverse.shape)
+    id_counts = torch.zeros(ids.shape)
+    spiketorch.add_at_(id_counts, inverse, weights)
+
+    chans0 = neighborhoods.neighborhoods[ids]
+    chans, inverse = torch.unique(chans0, return_inverse=True)
+    counts = torch.zeros(chans.shape)
+    spiketorch.add_at_(
+        counts,
+        inverse.view(-1),
+        id_counts[:, None].broadcast_to(chans0.shape).reshape(-1),
+    )
+
     counts = counts[chans < n_channels]
     chans = chans[chans < n_channels]
     for _ in range(fuzz):
         chans = neighborhoods.channel_index[chans]
         chans = torch.unique(chans)
         chans = chans[chans < n_channels]
+
     return chans, counts
 
 

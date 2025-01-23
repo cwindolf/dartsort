@@ -17,14 +17,14 @@ def simulate_moppca(
     t_cov: Literal["eye", "random"] = "eye",
     # zero, hot, random,
     t_w: Literal["zero", "hot", "random"] = "zero",
-    t_missing: Literal[None, "random", "by_cluster"] = None,
+    t_missing: Literal[None, "random", "skewed", "by_cluster"] = None,
     init_label_corruption: float = 0.0,
     snr: float = 10.0,
     rg=0,
 ):
     import dartsort
 
-    rg = np.random.default_rng(0)
+    rg = np.random.default_rng(rg)
     D = rank * nc
 
     if t_mu == "zero":
@@ -93,6 +93,18 @@ def simulate_moppca(
             mask[i] = True
         assert ct == npair
         channels = possible_neighbs[rg.integers(npair, size=N)]
+    elif t_missing == "skewed":
+        nc_miss = min(2, nc - 2)
+        assert nc_miss > 0
+        n0 = np.arange(nc - nc_miss)
+        n1 = nc_miss + n0
+        neighbs = np.stack((n0, n1), axis=0)
+        ns_missing = 100
+        choices = np.concatenate(
+            (np.zeros(ns_missing, dtype=int), np.ones(N - ns_missing, dtype=int))
+        )
+        rg.shuffle(choices)
+        channels = neighbs[choices]
     elif t_missing == "by_cluster":
         clus_neighbs = [
             rg.choice(nc, size=nc - n_missing, replace=False) for _ in range(K)
@@ -325,7 +337,7 @@ def test_ppca(
     t_missing: Literal[None, "random"] = None,
     n_missing=2,
     em_iter=100,
-    em_converged_atol=1e-6,
+    em_converged_atol=1e-4,
     make_vis=True,
     show_vis=False,
     figsize=(4, 3),

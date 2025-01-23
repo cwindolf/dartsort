@@ -9,9 +9,12 @@ from tqdm.auto import tqdm
 
 from ..cluster import gaussian_mixture, stable_features
 from ..util import spiketorch
-from ..util.multiprocessing_util import (CloudpicklePoolExecutor,
-                                         ThreadPoolExecutor, cloudpickle,
-                                         get_pool)
+from ..util.multiprocessing_util import (
+    CloudpicklePoolExecutor,
+    ThreadPoolExecutor,
+    cloudpickle,
+    get_pool,
+)
 from . import analysis_plots, gmm_helpers, layout
 from .colors import glasbey1024
 from .waveforms import geomplot
@@ -60,8 +63,9 @@ class ChansHeatmap(GMMPlot):
         self.cmap = cmap
 
     def draw(self, panel, gmm, unit_id):
-        (in_unit_full,) = torch.nonzero(gmm.labels == unit_id, as_tuple=True)
-        spike_chans = gmm.data.extract_channels[in_unit_full].numpy(force=True)
+        train_ix = gmm.data.split_indices["train"]
+        (in_unit_full,) = torch.nonzero(gmm.labels[train_ix] == unit_id, as_tuple=True)
+        spike_chans = gmm.data._train_extract_channels[in_unit_full].numpy(force=True)
         ixs = spike_chans[spike_chans < gmm.data.n_channels]
         unique_ixs, counts = np.unique(ixs, return_counts=True)
         ax = panel.subplots()
@@ -84,7 +88,7 @@ class ChansHeatmap(GMMPlot):
 class TextInfo(GMMPlot):
     kind = "aaatext"
     width = 2
-    height = 1
+    height = 3
 
     def draw(self, panel, gmm, unit_id):
         axis = panel.subplots()
@@ -110,7 +114,7 @@ class TextInfo(GMMPlot):
                     elif v.ndim == 1:
                         vv = [str(v[0])]
                         for vvv in map(str, v[1:]):
-                            if len(vv[-1]) > 16:
+                            if len(vv[-1]) > 10:
                                 vv[-1] += "\n"
                                 vv.append(vvv)
                                 continue
@@ -118,7 +122,7 @@ class TextInfo(GMMPlot):
                         v = "\n".join(vv)
                 msg += f"{k}:\n{v}"
 
-        axis.text(0, 0, msg, fontsize=6.5)
+        axis.text(0, 0, msg, fontsize=5.5)
 
 
 class MStep(GMMPlot):
@@ -177,7 +181,7 @@ class MStep(GMMPlot):
             ax=ax,
         )
         ax.axis("off")
-        ax.set_title("reconstructed mean and example inputs", fontsize='small')
+        ax.set_title("reconstructed mean and example inputs", fontsize="small")
 
 
 class CovarianceResidual(GMMPlot):
@@ -191,7 +195,8 @@ class CovarianceResidual(GMMPlot):
             unit_id, sp.indices, getattr(gmm, "log_liks", None)
         )
 
-        achans = gaussian_mixture.occupied_chans(sp, gmm.noise.n_channels)
+        # achans = gaussian_mixture.occupied_chans(sp, gmm.noise.n_channels)
+        achans = gmm[unit_id].channels
         if weights is None:
             weights = sp.features.new_ones(len(sp))
         afeats, aweights = stable_features.pad_to_chans(
@@ -305,7 +310,7 @@ class CovarianceResidual(GMMPlot):
             title = name
             if name == "mmT":
                 title = title + f" (scale={scale:.2f})"
-            ax.set_title(title, color=color, fontsize='small')
+            ax.set_title(title, color=color, fontsize="small")
             if name in eigs:
                 ax_eig.plot(eigs[name].flip(0).numpy(force=True), color=color, lw=1)
                 # r2 = (eigs['emp'].sum() - F.relu(eigs[name].flip(0)).cumsum(0)) / eigs['emp'].sum()
@@ -352,7 +357,7 @@ class Likelihoods(GMMPlot):
         if inds_ is None:
             return
         assert torch.equal(inds_, in_unit)
-        nliks = gmm.noise_log_likelihoods()[1][in_unit]
+        nliks = gmm.noise_log_likelihoods()[in_unit]
         t = gmm.data.times_seconds[in_unit]
         dt_ms = np.diff(t) * 1000
         small = dt_ms <= self.viol_ms
@@ -404,19 +409,22 @@ class KMeansSplit(GMMPlot):
     width = 6.5
     height = 9
 
-    def __init__(self, layout="vert"):
+    def __init__(self, layout="vert", neighborhood="core"):
         self.layout = layout
+        self.neighborhood = neighborhood
 
     def draw(self, panel, gmm, unit_id, split_info=None):
         if split_info is None:
             split_info = gmm.kmeans_split_unit(unit_id, debug=True)
-        failed = not split_info or "reas_labels" not in split_info
+        failed0 = not split_info
+        failed1 = "reas_labels" not in split_info
+        failed = failed0 or failed1
         if failed:
             ax = panel.subplots()
             if not split_info:
                 msg = "no channels!"
             else:
-                msg = "split abandoned"
+                msg = "split abandoned" + split_info.get("bail", "no bail")
             ax.text(0.5, 0.5, msg, ha="center", transform=ax.transAxes)
             ax.axis("off")
             return
@@ -438,18 +446,19 @@ class KMeansSplit(GMMPlot):
         )
 
         # distance matrix
-        ax_dist = analysis_plots.distance_matrix_dendro(
-            fig_dist,
-            split_info["distances"],
-            # unit_ids=split_ids,
-            dendrogram_linkage=None,
-            show_unit_labels=True,
-            vmax=1.0,
-            image_cmap=distance_cmap,
-            show_values=True,
-        )
-        normstr = f"norm={gmm.distance_normalization_kind}"
-        ax_dist.set_title(f"{gmm.distance_metric}, {normstr}", fontsize="small")
+        if "distances" in split_info:
+            ax_dist = analysis_plots.distance_matrix_dendro(
+                fig_dist,
+                split_info["distances"],
+                # unit_ids=split_ids,
+                dendrogram_linkage=None,
+                show_unit_labels=True,
+                vmax=1.0,
+                image_cmap=distance_cmap,
+                show_values=True,
+            )
+            normstr = f"norm={gmm.distance_normalization_kind}"
+            ax_dist.set_title(f"{gmm.distance_metric}, {normstr}", fontsize="small")
 
         if "bimodalities" in split_info:
             # bimodality matrix
@@ -467,7 +476,10 @@ class KMeansSplit(GMMPlot):
         elif "Z" in split_info:
             ax_bimod = fig_bimods.subplots()
             improvements = split_info["improvements"]
-            annotations = {j: f"{imp:.2f}" for j, imp in enumerate(improvements)}
+            olaps = np.floor(split_info["overlaps"] * 100)
+            annotations = {
+                j: f"{imp:.2f} {olaps[j]:g}" for j, imp in enumerate(improvements)
+            }
             analysis_plots.annotated_dendro(
                 ax_bimod,
                 split_info["Z"],
@@ -477,11 +489,15 @@ class KMeansSplit(GMMPlot):
             )
             ax_bimod.set_title(
                 f"tree {gmm.distance_metric} {gmm.merge_criterion}-{gmm.criterion_normalization_kind}",
-                fontsize='small',
+                fontsize="small",
             )
             sns.despine(ax=ax_bimod, left=True, right=True, top=True)
         else:
-            assert False
+            ax_bimod = fig_bimods.subplots()
+            ax_bimod.text(
+                0.5, 0.5, "no mini merge", ha="center", transform=ax_bimod.transAxes
+            )
+            ax_bimod.axis("off")
 
         # subunit means on the unit main channel, where possible
         ax_centroids, ax_mycentroids = centroids_row.subplots(ncols=2, sharey=True)
@@ -502,20 +518,29 @@ class KMeansSplit(GMMPlot):
             ax_mycentroids.plot(subm.numpy(force=True), color=glasbey1024[subid])
 
         # subunit multichan means
-        chans = torch.cdist(gmm.data.prgeom[mainchan[None]], gmm.data.prgeom)
-        chans = chans.view(-1)
-        (chans,) = torch.nonzero(chans <= gmm.data.core_radius, as_tuple=True)
+        if self.neighborhood == "core":
+            chans = torch.cdist(gmm.data.prgeom[mainchan[None]], gmm.data.prgeom)
+            chans = chans.view(-1)
+            (chans,) = torch.nonzero(chans <= gmm.data.core_radius, as_tuple=True)
+        elif self.neighborhood == "unit":
+            chans = gmm[unit_id].channels
+        else:
+            assert False
         if len(split_ids) < len(split_info["units"]):
             split_info["units"] = [split_info["units"][j] for j in split_ids]
-        gmm_helpers.plot_means(
-            mcmeans_row,
-            gmm.data.prgeom,
-            gmm.data.tpca,
-            chans,
-            split_info["units"],
-            split_ids,
-            title=None,
-        )
+        if "units" in split_info:
+            try:
+                gmm_helpers.plot_means(
+                    mcmeans_row,
+                    gmm.data.prgeom,
+                    gmm.data.tpca,
+                    chans,
+                    split_info["units"],
+                    split_ids,
+                    title=None,
+                )
+            except Exception:
+                pass
 
         # subunit channels histogram
         chan_bins = torch.unique(split_info["sp"].channels)
@@ -623,10 +648,10 @@ class NeighborBimodalities(GMMPlot):
             log_liks = gmm.log_liks[neighbors_plus_noiseunit]
         else:
             log_liks = gmm.log_likelihoods(unit_ids=neighbors)
-        labels, spikells, log_liks = gaussian_mixture.loglik_reassign(
+        nz_lines, labels, spikells, log_liks = gaussian_mixture.loglik_reassign(
             log_liks, has_noise_unit=True
         )
-        kept = np.logical_and(labels >= 0, labels < len(neighbors))
+        kept = nz_lines[np.logical_and(labels >= 0, labels < len(neighbors))]
         labels_ = np.full_like(labels, -1)
         labels_[kept] = neighbors[labels[kept]]
         labels = labels_
@@ -696,7 +721,7 @@ class NeighborBimodalities(GMMPlot):
             bimod_ax.plot(
                 bimod_info["domain"], bimod_info["uni_density"], color="b", label="null"
             )
-            info = f"{bimod_info['score_kind']}{bimod_info['score']:.3f} ll({unit_id})-ll({other_id.item()})"
+            info = f"{bimod_info['score_kind']}{bimod_info['score']:.3f} {unit_id}v{other_id.item()}"
             bimod_ax.set_xlabel(info)
             bimod_ax.set_yticks([])
             if no_leg_yet:
@@ -820,7 +845,7 @@ class NeighborTreeMerge(GMMPlot):
             normalization_kind=distance_normalization_kind,
         )
 
-        Z, group_ids, improvements = gmm.tree_merge(
+        Z, group_ids, improvements, overlaps = gmm.tree_merge(
             distances,
             neighbors,
             max_distance=self.max_distance,
@@ -831,7 +856,10 @@ class NeighborTreeMerge(GMMPlot):
         )
 
         # make vis
-        annotations = {j: f"{imp:.3f}" for j, imp in enumerate(improvements)}
+        olaps = np.floor(overlaps * 100)
+        annotations = {
+            j: f"{imp:.2f} {olaps[j]:g}" for j, imp in enumerate(improvements)
+        }
         ax = panel.subplots()
         try:
             analysis_plots.annotated_dendro(
@@ -847,7 +875,7 @@ class NeighborTreeMerge(GMMPlot):
                 nstr += f"dnm={distance_normalization_kind}"
             if criterion_normalization_kind != "none":
                 nstr += f"cnm={criterion_normalization_kind}"
-            ax.set_title(f"{metric} {criterion} {nstr}", fontsize='small')
+            ax.set_title(f"{metric} {criterion} {nstr}", fontsize="small")
             sns.despine(ax=ax, left=True, right=True, top=True)
         except ValueError as e:
             ax.text(
@@ -875,7 +903,7 @@ default_gmm_plots = (
     KMeansSplit(),
     NeighborMeans(),
     NeighborDistances(metric="noise_metric"),
-    NeighborDistances(metric="js"),
+    NeighborDistances(metric="symkl"),
     NeighborTreeMerge(metric=None, criterion="heldout_ccl"),
     NeighborTreeMerge(metric=None, criterion="heldout_loglik"),
     NeighborTreeMerge(metric=None, criterion="loglik"),
@@ -886,13 +914,15 @@ default_gmm_plots = (
     # NeighborInfoCriteria(fit_type="avg_preexisting"),
 )
 
+figsize = (17, 10)
+
 
 def make_unit_gmm_summary(
     gmm,
     unit_id,
     plots=default_gmm_plots,
     max_height=9,
-    figsize=(22, 11),
+    figsize=figsize,
     hspace=0.1,
     figure=None,
     **other_global_params,
@@ -921,7 +951,7 @@ def make_all_gmm_summaries(
     save_folder,
     plots=default_gmm_plots,
     max_height=9,
-    figsize=(25, 14),
+    figsize=figsize,
     hspace=0.1,
     dpi=200,
     image_ext="png",

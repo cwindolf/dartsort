@@ -22,7 +22,10 @@ def amp_double_scatter(gmm, indices, panel, unit_id=None, labels=None, viol_ms=N
     ax_dist.set_xlabel("count")
     if not indices.numel():
         return
-    amps = gmm.data.amps[indices]
+    amps = gmm.data.core_features[indices]
+    nnz = torch.isfinite(amps[:, 0]).sum(1)
+    amps = amps.nan_to_num_()
+    amps = torch.linalg.norm(amps, dim=(1, 2)) / nnz
     t = gmm.data.times_seconds[indices]
     dt_ms = np.diff(t) * 1000
     if viol_ms is not None:
