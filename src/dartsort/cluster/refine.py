@@ -67,11 +67,15 @@ def refine_clustering(
         em_converged_churn=refinement_config.em_converged_churn,
         em_converged_atol=refinement_config.em_converged_atol,
         channels_strategy=refinement_config.channels_strategy,
+        hard_noise=refinement_config.hard_noise,
     )
     gmm.cleanup()
     for it in range(refinement_config.n_total_iters):
         log_liks = gmm.em()
-        if log_liks.shape[0] > refinement_config.max_avg_units * recording.get_num_channels():
+        if (
+            log_liks.shape[0]
+            > refinement_config.max_avg_units * recording.get_num_channels()
+        ):
             print(f"{log_liks.shape=}, skipping split.")
         else:
             gmm.split()

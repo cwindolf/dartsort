@@ -167,6 +167,7 @@ class DeveloperConfig(DARTsortUserConfig):
     merge_bimodality_threshold: float = 0.05
     n_refinement_iters: int = 3
     channels_strategy: str = "count_core"
+    hard_noise: bool = False
 
     gmm_max_spikes: Annotated[int, Field(gt=0)] = 4_000_000
     gmm_val_proportion: Annotated[float, Field(gt=0)] = 0.25
