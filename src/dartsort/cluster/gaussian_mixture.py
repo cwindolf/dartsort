@@ -2486,7 +2486,9 @@ class GaussianUnit(torch.nn.Module):
 
         can_warm_start = False
         if je_suis and hasattr(self, "channels"):
-            can_warm_start = spiketorch.isin_sorted(achans.cpu(), self.channels.cpu()).all()
+            can_warm_start = spiketorch.isin_sorted(
+                achans.cpu(), self.channels.cpu()
+            ).all()
 
         active_mean = active_W = None
         n_iter = self.ppca_initial_em_iter
@@ -2749,14 +2751,13 @@ class GaussianUnit(torch.nn.Module):
         ld = 0.0
         if self.cov_kind == "ppca" and self.ppca_rank:
             oW = other_covs.reshape(n, k, self.ppca_rank)
-            solve = []
+            tr = 0.0
             for bs in range(0, n, 32):
-                solve.append(my_cov.solve(oW[bs:bs+32]))
-            solve = torch.concatenate(solve, dim=0)
+                res = my_cov.solve(oW[bs : bs + 32])
+                res = res @ oW[bs : bs + 32].mT
+                tr = tr + res.diagonal(dim1=-2, dim2=-1).sum(dim=1)
             # solve = my_cov.solve(oW)
             ncov = self.noise.full_dense_cov()
-            solve = solve @ oW.mT
-            tr = solve.diagonal(dim1=-2, dim2=-1).sum(dim=1)
             tr += torch.trace(my_cov.solve(ncov))
             ld = self_logdet - other_logdets
         return 0.5 * (inv_quad + ((tr - k) + ld))
