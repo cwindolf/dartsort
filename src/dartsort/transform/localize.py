@@ -23,6 +23,7 @@ class Localization(BaseWaveformFeaturizer):
         localization_model="pointsource",
         name=None,
         name_prefix="",
+        batch_size=1024,
     ):
         assert amplitude_kind in ("peak", "ptp")
         super().__init__(
@@ -36,6 +37,7 @@ class Localization(BaseWaveformFeaturizer):
         self.n_channels_subset = n_channels_subset
         self.logbarrier = logbarrier
         self.localization_model = localization_model
+        self.batch_size = batch_size
 
     def transform(self, waveforms, max_channels=None):
         # get amplitude vectors
@@ -43,28 +45,32 @@ class Localization(BaseWaveformFeaturizer):
             ampvecs = waveforms.abs().max(dim=1).values
         elif self.amplitude_kind == "ptp":
             ampvecs = ptp(waveforms, dim=1)
+        else:
+            assert False
+
+        n = len(ampvecs)
+        localizations = ampvecs.new_empty((n, 4), dtype=self.dtype)
 
         with torch.enable_grad():
-            loc_result = localize_amplitude_vectors(
-                ampvecs,
-                self.geom,
-                max_channels,
-                channel_index=self.channel_index,
-                radius=self.radius,
-                n_channels_subset=self.n_channels_subset,
-                logbarrier=self.logbarrier,
-                dtype=self.dtype,
-                model=self.localization_model,
-            )
+            for batch_start in range(0, n, self.batch_size):
+                batch_end = min(n, batch_start + self.batch_size)
+                sl = slice(batch_start, batch_end)
+                loc_result = localize_amplitude_vectors(
+                    ampvecs[sl],
+                    self.geom,
+                    max_channels[sl],
+                    channel_index=self.channel_index,
+                    radius=self.radius,
+                    n_channels_subset=self.n_channels_subset,
+                    logbarrier=self.logbarrier,
+                    dtype=self.dtype,
+                    model=self.localization_model,
+                )
+                localizations[sl, 0] = loc_result["x"]
+                localizations[sl, 1] = loc_result["y"]
+                localizations[sl, 2] = loc_result["z_abs"]
+                localizations[sl, 3] = loc_result["alpha"]
 
-        localizations = torch.column_stack(
-            [
-                loc_result["x"],
-                loc_result["y"],
-                loc_result["z_abs"],
-                loc_result["alpha"],
-            ]
-        )
         return {self.name: localizations}
 
 

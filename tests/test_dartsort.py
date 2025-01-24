@@ -90,7 +90,9 @@ def test_fakedata():
             refinement_config=dartsort.RefinementConfig(
                 min_count=10, channels_strategy="count"
             ),
-            featurization_config=dartsort.FeaturizationConfig(n_residual_snips=512),
+            featurization_config=dartsort.FeaturizationConfig(
+                n_residual_snips=512, nn_localization=False
+            ),
             motion_estimation_config=dartsort.MotionEstimationConfig(
                 do_motion_estimation=False
             ),

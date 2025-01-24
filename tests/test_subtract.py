@@ -297,7 +297,7 @@ def test_fakedata_nonn():
         assert len(stb) == ns0
 
 
-def test_small_nonn():
+def _test_small_nonn(nn_localization=False):
     # noise recording
     T_samples = 50_100
     n_channels = 50
@@ -323,7 +323,9 @@ def test_small_nonn():
             do_nn_denoise=False, denoise_only=True
         ),
     )
-    featconf = FeaturizationConfig(do_nn_denoise=False, n_residual_snips=8)
+    featconf = FeaturizationConfig(
+        do_nn_denoise=False, n_residual_snips=8, nn_localization=nn_localization
+    )
 
     print("No parallel")
     with tempfile.TemporaryDirectory() as tempdir:
@@ -379,6 +381,11 @@ def test_small_nonn():
                 if k not in fixedlenkeys and h5[k].ndim >= 1:
                     lens.append(h5[k].shape[0])
             assert np.unique(lens).size == 1
+
+
+def test_small_nonn():
+    _test_small_nonn(False)
+    _test_small_nonn(True)
 
 
 def small_default_config(extract_radius=200):

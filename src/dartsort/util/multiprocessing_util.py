@@ -150,7 +150,7 @@ def pool_from_cfg(computation_config=None, with_rank_queue=False, check_local=Fa
 def get_pool(
     n_jobs,
     context="spawn",
-    cls=ProcessPoolExecutor,
+    cls="threading_unless_multigpu",
     with_rank_queue=False,
     rank_queue_empty=False,
     n_tasks=None,

@@ -281,7 +281,7 @@ def point_source_mse(locs, amp_vecs, channels, channel_index, geom):
     dxz[:, :, 1] -= z[:, None]
     np.square(dxz, out=dxz)
     pred = dxz.sum(2)
-    pred += y[:, None]**2
+    pred += y[:, None] ** 2
     np.sqrt(pred, out=pred)
     pred[invalid] = 1.0
     np.reciprocal(pred, out=pred)
