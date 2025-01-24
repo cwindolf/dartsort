@@ -48,6 +48,14 @@ def test_isin_sorted():
                 spiketorch.isin_sorted(x + i, y + j),
             )
 
+    # edge cases with empties
+    empty = torch.arange(0)
+    full = torch.arange(5)
+    empty_b = torch.zeros((0,), dtype=bool)
+    full_b = torch.zeros((5,), dtype=bool)
+    assert torch.equal(spiketorch.isin_sorted(empty, full), empty_b)
+    assert torch.equal(spiketorch.isin_sorted(full, empty), full_b)
+
 
 def test_ravel_multi_index():
     # no broadcasting case
@@ -65,8 +73,7 @@ def test_ravel_multi_index():
     x2 = x.clone()
     inds = (
         torch.LongTensor([1, 20, 30])[:, None],
-        torch.LongTensor([2, 31, 30])[:, None]
-        + torch.tensor([-1, 0, 1])[None, :],
+        torch.LongTensor([2, 31, 30])[:, None] + torch.tensor([-1, 0, 1])[None, :],
     )
     raveled = spiketorch.ravel_multi_index(inds, x.shape)
     x.view(-1)[raveled] = 1
@@ -166,7 +173,7 @@ def test_resample():
     xup_scipy = resample(x, 80)
     xup_torch = spiketorch.real_resample(torch.as_tensor(x), 80)
     assert np.isclose(xup_scipy, xup_torch).all()
-    
+
 
 def test_depthwise_oaconv1d():
     rg = np.random.default_rng(0)
@@ -182,8 +189,8 @@ def test_depthwise_oaconv1d():
         templates = torch.Tensor(np.stack([t0, t1]))
         traces = 0.1 * torch.Tensor(rg.normal(size=(2, ns)))
 
-        traces[0, 100:100 + spike_length] += templates[0]
-        traces[1, 300:300 + spike_length] += templates[1]
+        traces[0, 100 : 100 + spike_length] += templates[0]
+        traces[1, 300 : 300 + spike_length] += templates[1]
 
         torch_conv = F.conv1d(
             traces[None, :, :],
@@ -191,9 +198,6 @@ def test_depthwise_oaconv1d():
             groups=2,
         )
 
-        oa_conv = spiketorch.depthwise_oaconv1d(
-            traces,
-            templates
-        )
+        oa_conv = spiketorch.depthwise_oaconv1d(traces, templates)
 
         assert np.allclose(torch_conv, oa_conv, atol=1e-5)

@@ -579,6 +579,8 @@ def single_inv_oaconv1d(input, f2, s2, block_size, padding=0, norm="backward"):
 
 def isin_sorted(x, y):
     """Like torch.isin(x, y), but faster by assuming both sorted."""
+    if not y.numel():
+        return torch.zeros(x.shape, dtype=bool, device=x.device)
     ix = torch.searchsorted(y, x, side="right") - 1
     return x == y[ix]
 
