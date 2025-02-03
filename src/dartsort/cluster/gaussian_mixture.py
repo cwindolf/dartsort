@@ -2751,16 +2751,16 @@ class GaussianUnit(torch.nn.Module):
         ld = 0.0
         if self.cov_kind == "ppca" and self.ppca_rank:
             oW = other_covs.reshape(n, k, self.ppca_rank)
-            tr = 0.0
+            tr = other_covs.new_empty((n,))
             for bs in range(0, n, 32):
-                res = my_cov.solve(oW[bs : bs + 32])
-                res = res @ oW[bs : bs + 32].mT
-                tr = tr + res.diagonal(dim1=-2, dim2=-1).sum(dim=1)
-            # solve = my_cov.solve(oW)
+                be = min(n, bs+32)
+                res = my_cov.solve(oW[bs:be])
+                res = res @ oW[bs:be].mT
+                tr[bs:be] = res.diagonal(dim1=-2, dim2=-1).sum(dim=1)
             ncov = self.noise.full_dense_cov()
             tr += torch.trace(my_cov.solve(ncov))
             ld = self_logdet - other_logdets
-        return 0.5 * (inv_quad + ((tr - k) + ld))
+        return 0.5 * (inv_quad + (tr - k + ld))
 
 
 # -- utilities
