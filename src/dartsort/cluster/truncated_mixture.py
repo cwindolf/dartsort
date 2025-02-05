@@ -1,11 +1,10 @@
-from typing import Union, Optional
-import dataclasses
 import numpy as np
 import torch
 import threading
 
 from ..util.noise_util import EmbeddedNoise
 from .stable_features import SpikeFeatures, SpikeNeighborhoods, StableSpikeDataset
+from ._truncated_em_helpers import neighb_lut, TEBatchData, TEBatchResult, _te_batch
 from ..util import spiketorch
 
 
@@ -38,67 +37,134 @@ class SpikeTruncatedMixtureModel(torch.nn.Module):
         pass
 
     def em_step(self):
-        unit_candidate_neighborhood_ids = self.propose_new_candidates()
-        self.processor.update(self.means, self.bases, unit_candidate_neighborhood_ids)
+        unit_neighborhood_counts = self.propose_new_candidates()
+        self.processor.update(self.means, self.bases, unit_neighborhood_counts)
         # get statistics buffers. maybe they are already intialized
         # parallel gather process() into the buffers. use a helper job function.
         # can process() actually add its results into thread local buffers and combine those
         # for us? maybe the parallel for is handled by that class and this one stays simple
 
     def kl_divergences(self):
+        """Pairwise KL divergences."""
         pass
 
 
-@dataclasses.dataclass(slots=True, kw_only=True, frozen=True)
-class TEBatchResult:
-    indices: torch.Tensor
-    candidates: torch.Tensor
-
-    batch_elbo: Optional[float] = None
-    batch_obs_elbo: Optional[float] = None
-
-    R: Optional[torch.Tensor] = None
-    U: Optional[torch.Tensor] = None
-    m: Optional[torch.Tensor] = None
-
-    ddW: Optional[torch.Tensor] = None
-    ddm: Optional[torch.Tensor] = None
-
-
 class TruncatedExpectationProcessor(torch.nn.Module):
-    def __init__(self, noise: EmbeddedNoise, neighborhoods: SpikeNeighborhoods):
-        # store number of neighborhoods
-
+    def __init__(
+        self,
+        noise: EmbeddedNoise,
+        neighborhoods: SpikeNeighborhoods,
+        features: torch.Tensor,
+    ):
         # initialize fixed noise-related arrays
-        self.CmoCooinv = ...
+        self.initialize_fixed(noise, neighborhoods)
+        self.neighborhood_ids = neighborhoods.neighborhood_ids
+        self.features = features
 
         # place to store thread-local work and output arrays
         self._locals = threading.local()
 
-    def update(self, new_means, new_bases, unit_candidate_neighborhood_ids=None):
-        if unit_candidate_neighborhood_ids:
+    def update(self, new_means, new_bases, unit_neighborhood_counts=None):
+        if unit_neighborhood_counts is not None:
             # update lookup table and re-initialize storage
-            ...
-        else:
-            assert 1  # that i have storage initialized
+            self.unit_neighb_lut = neighb_lut(unit_neighborhood_counts)
+
+    def te_step(self):
         pass
 
     def process_batch(
         self,
-        sp: SpikeFeatures,
-        candidates: torch.Tensor,
+        batch_indices,
         with_grads=False,
         with_stats=False,
         with_kl=False,
         with_elbo=False,
         with_obs_elbo=False,
     ) -> TEBatchResult:
-        assert sp.split_indices is not None
-        do = with_grads or with_stats or with_kl or with_elbo or with_obs_elbo
-        if not do:  # you okay?
-            return TEBatchResult(indices=sp.split_indices, candidates=candidates)
+        bd = self.load_batch(batch_indices=batch_indices)
+        return self.te_batch(
+            bd=bd,
+            with_grads=with_grads,
+            with_stats=with_stats,
+            with_kl=with_kl,
+            with_elbo=with_elbo,
+            with_obs_elbo=with_obs_elbo,
+        )
 
-        assert False
+    # long method... putting it in another file to keep the flow
+    # clear in this one. this method is the one that does all the math.
+    te_batch = _te_batch
+
+    def load_batch(
+        self,
+        batch_indices,
+        with_grads=False,
+        with_stats=False,
+        with_kl=False,
+        with_elbo=False,
+        with_obs_elbo=False,
+    ) -> TEBatchData:
+        candidates = self.candidates[batch_indices]
+        x = self.features[batch_indices]
+        neighborhood_ids = self.neighborhood_ids[batch_indices]
+
+        # todo: index_select into buffers?
+        lut_ixs = self.unit_neighb_lut[candidates, neighborhood_ids[:, None]]
+
+        # neighborhood-dependent
+        Coo_logdet = self.Coo_logdet[neighborhood_ids]
+        Coo_inv = self.Coo_inv[neighborhood_ids]
+        Coinv_Com = self.Coinv_Com[neighborhood_ids]
+        obs_ix = self.obs_ix[neighborhood_ids]
+        miss_ix = self.miss_ix[neighborhood_ids]
+        nobs = self.nobs[neighborhood_ids]
+
+        # unit-dependent
+        log_proportions = self.log_proportions[candidates]
+
+        # neighborhood + unit-dependent
+        nu = self.nu[lut_ixs]
+        tnu = self.tnu[lut_ixs]
+        Wobs = self.Wobs[lut_ixs]
+        Cooinv_nu = self.Cooinv_nu[lut_ixs]
+        obs_logdets = self.obs_logdets[lut_ixs]
+        Cobsinv_WobsT = self.Cobsinv_WobsT[lut_ixs]
+        T = self.T[lut_ixs]
+        W_WCC = self.W_WCC[lut_ixs]
+        inv_cap = self.inv_cap
+
+        # per-spike
+        noise_lls = None
+        if self.noise_logliks is not None:
+            noise_lls = self.noise_logliks[batch_indices]
+
+        return TEBatchData(
+            n=len(x),
+            #
+            x=x,
+            candidates=candidates,
+            #
+            Coo_logdet=Coo_logdet,
+            Coo_inv=Coo_inv,
+            Coinv_Com=Coinv_Com,
+            obs_ix=obs_ix,
+            miss_ix=miss_ix,
+            nobs=nobs,
+            #
+            log_proportions=log_proportions,
+            #
+            Wobs=Wobs,
+            nu=nu,
+            tnu=tnu,
+            Cooinv_WobsT=Cobsinv_WobsT,
+            Cooinv_nu=Cooinv_nu,
+            obs_logdets=obs_logdets,
+            W_WCC=W_WCC,
+            T=T,
+            inv_cap=inv_cap,
+            #
+            noise_lls=noise_lls,
+        )
 
 
 class CandidateSet:
@@ -189,16 +255,10 @@ class CandidateSet:
         )
 
         # lastly... which neighborhoods are present in which units?
-        unit_neighborhood_counts = np.zeros((n_units, n_neighbs), dtype=np.int32)
+        unit_neighborhood_counts = np.zeros((n_units, n_neighbs), dtype=int)
         np.add.at(
             unit_neighborhood_counts,
             (self.candidates, self.neighborhood_ids[:, None]),
             1,
         )
-        max_overlaps = unit_neighborhood_counts.sum(1).max()
-        unit_candidate_neighborhood_ids = np.full((n_units, max_overlaps), n_neighbs)
-        for j in range(n_units):
-            mine = np.flatnonzero(unit_neighborhood_counts[j])
-            unit_candidate_neighborhood_ids[j, : len(mine)] = mine
-
-        return unit_candidate_neighborhood_ids
+        return unit_neighborhood_counts
