@@ -1,6 +1,9 @@
 import numpy as np
 import torch
 import threading
+from linear_operator import operators
+from linear_operator.utils.cholesky import psd_safe_cholesky
+import torch.nn.functional as F
 
 from ..util.noise_util import EmbeddedNoise
 from .stable_features import SpikeFeatures, SpikeNeighborhoods, StableSpikeDataset
@@ -64,10 +67,183 @@ class TruncatedExpectationProcessor(torch.nn.Module):
         # place to store thread-local work and output arrays
         self._locals = threading.local()
 
-    def update(self, new_means, new_bases, unit_neighborhood_counts=None):
+    def initialize_fixed(self, noise, neighborhoods):
+        """Neighborhood-dependent precomputed matrices.
+
+        These are:
+         - Coo_logdet
+            Log determinant of marginal noise covariances
+         - Coo_inv
+            Inverse of '''
+         - Cooinv_Com
+            Above, product with observed-missing cov block
+         - obs_ix
+            Observed channel indices
+         - miss_ix
+            Missing channel indices
+         - nobs
+            Number of observed channels
+        """
+        self.rank = R = noise.rank
+        self.nc = nc = noise.n_channels
+
+        # Get Coos
+        # Have to do everything as a list. That's what the
+        # noise object supports, but also, we don't want to
+        # pad with 0s since that would make logdets 0, Chols
+        # confusing etc.
+        # We will use the neighborhood valid ixs to pad later.
+        # Since we cache everything we need, update can avoid
+        # having to do lists stuff.
+        Coo = [
+            noise.marginal_covariance(
+                channels=neighborhoods.neighborhood_channels(ni),
+                cache_prefix=neighborhoods.name,
+                cache_key=ni,
+            )
+            for ni in range(neighborhoods.n_neighborhoods)
+        ]
+        Com = [
+            noise.marginal_covariance(
+                channels_left=neighborhoods.neighborhood_channels(ni),
+                channels=neighborhoods.missing_channels(ni),
+            ).to_dense()
+            for ni in range(neighborhoods.n_neighborhoods)
+        ]
+
+        # Get choleskys. linear_operator will jitter to help
+        # with numerics for us if we do everything via chol.
+        Coo = [operators.CholLinearOperator(C.cholesky()) for C in Coo]
+        Coo_logdet = torch.tensor([C.logdet() for C in Coo])
+        Coo_inv = [C.inverse().to_dense() for C in Coo]
+        Cooinv_Com = [Co @ Cm for Co, Cm in zip(Coo, Com)]
+
+        # figure out dimensions
+        nc_obs = neighborhoods.channel_counts
+        self.nc_obs = nco = nc_obs.max().to(int)
+        self.nc_miss = ncm = nc - nc_obs.min().to(int)
+        nobs = R * nc_obs
+
+        # understand channel subsets
+        # these arrays are used to scatter into D-shaped dims.
+        # actually... maybe into D+1-shaped dims, so that we can use
+        # D as the invalid indicator
+        self.register_buffer("obs_ix", neighborhoods.neighborhoods)
+        self.register_buffer(
+            "miss_ix",
+            torch.full((neighborhoods.n_neighborhoods, ncm), fill_value=nc),
+        )
+        for ni in range(neighborhoods.n_neighborhoods):
+            neighb_missing = neighborhoods.missing_channels(ni)
+            self.miss_ix[: neighb_missing.numel()] = neighb_missing
+
+        # allocate buffers
+        self.register_buffer("Coo_logdet", Coo_logdet)
+        self.register_buffer("nobs", nobs)
+        self.register_buffer(
+            "Coo_inv",
+            torch.zeros(neighborhoods.n_neighborhoods, R * nco, R * nco),
+        )
+        self.register_buffer(
+            "Cooinv_Com",
+            torch.zeros(neighborhoods.n_neighborhoods, R * nco, R * ncm),
+        )
+
+        # loop to fill relevant channels of zero padded buffers
+        # for observed channels, the valid subset for each neighborhood
+        # (neighborhoods.valid_mask) is exactly where we need to put
+        # the matrices so that they hit the right parts of the features
+        # for missing channels, we're free to do it in any consistent
+        # way. things just need to align betweein miss_ix and Coinv_Com.
+        for ni in range(neighborhoods.n_neighborhoods):
+            oi = neighborhoods.valid_mask(ni)
+            (mi,) = (self.miss_ix[ni] < nc).nonzero(as_tuple=True)
+            self.Coo_inv[ni].view(R, nco, R, nco)[:, oi, :, oi] = Coo_inv[ni]
+            self.Coinv_Com[ni].view(R, nco, R, ncm)[:, oi, :, mi] = Cooinv_Com[ni]
+
+    def update(
+        self,
+        log_proportions,
+        means,
+        noise_log_prop,
+        bases=None,
+        unit_neighborhood_counts=None,
+    ):
+        Nu, r, Nc = means.shape
+        assert Nc in (self.nc, self.nc + 1)
+        already_padded = Nc == self.Nc + 1
+        assert log_proportions.shape == (Nu,)
+        self.M = 0
+        if bases is not None:
+            Nu_, d, self.M = bases.shape
+            assert Nu_ == Nu
+            assert d == self.rank * (self.Nc + already_padded)
+
         if unit_neighborhood_counts is not None:
             # update lookup table and re-initialize storage
-            self.unit_neighb_lut = neighb_lut(unit_neighborhood_counts)
+            res = neighb_lut(unit_neighborhood_counts)
+            self.lut, self.lut_units, self.lut_neighbs = res
+        nlut = len(self.lut)
+
+        # observed parts of W...
+        mu = means
+        W = bases
+        if not already_padded:
+            mu = F.pad(mu, (0, 1))
+            if self.M:
+                assert W is not None
+                W = F.pad(W, (0, 1))
+
+        obs_ix = self.obs_ix[self.lut_neighbs]
+        miss_ix = self.miss_ix[self.lut_neighbs]
+
+        # proportions stuff
+        self.register_buffer("noise_log_prop", noise_log_prop)
+        self.register_buffer("log_proportions", log_proportions)
+
+        # mean stuff
+        nu = mu[self.lut_units[:, None], :, obs_ix]
+        assert nu.shape == (nlut, r, self.nc_obs)
+        tnu = mu[self.lut_units[:, None], :, miss_ix]
+        self.register_buffer("nu", nu)
+        self.register_buffer("tnu", tnu)
+        assert nu.shape == (nlut, r, self.nc_miss)
+        Cooinv = self.Coo_inv[self.lut_neighbs]
+        self.register_buffer("Cooinv_nu", torch.bmm(Cooinv, nu.view(nlut, -1, 1)))
+
+        # basis stuff
+        if not self.M:
+            return
+        assert W is not None
+
+        # load basis
+        Wobs = W.view(Nu, self.M, r, Nc)[self.lut_units[:, None], :, :, obs_ix]
+        assert Wobs.shape == (nlut, self.M, r, self.nc_obs)
+        Wobs = Wobs.view(nlut, self.M, -1)
+        Wmiss = W.view(Nu, self.M, r, Nc)[self.lut_units[:, None], :, :, miss_ix]
+        assert Wmiss.shape == (nlut, self.M, r, self.nc_miss)
+        Wmiss = Wmiss.view(nlut, self.M, -1)
+
+        self.register_buffer("Cobsinv_WobsT", torch.bmm(Cooinv, Wobs.mT))
+
+        cap = torch.bmm(Wobs, self.Cobsinv_WobsT)
+        cap.diagonal(dim1=-2, dim2=-1).add_(1.0)
+        assert cap.shape == (Nu, self.M, self.M)
+        cap = operators.CholLinearOperator(psd_safe_cholesky(cap))
+
+        # matrix determinant lemma
+        noise_logdets = self.Coo_logdet[self.lut_neighbs]
+        cap_logdets = cap.logdet()
+        self.register_buffer("obs_logdets", noise_logdets + cap_logdets)
+
+        # this is used in the log lik Woodbury, and it's also the posterior
+        # covariance of the ppca embedding (usually I call that T).
+        self.register_buffer("inv_cap", cap.inverse().to_dense())
+
+        # gizmo matrix used in a certain part of the "imputation"
+        self.register_buffer(
+            "W_WCC", Wmiss - Wobs.mT.bmm(self.Cooinv_Com[self.lut_neighbs])
+        )
 
     def te_step(self):
         pass
@@ -125,13 +301,16 @@ class TruncatedExpectationProcessor(torch.nn.Module):
         # neighborhood + unit-dependent
         nu = self.nu[lut_ixs]
         tnu = self.tnu[lut_ixs]
-        Wobs = self.Wobs[lut_ixs]
         Cooinv_nu = self.Cooinv_nu[lut_ixs]
-        obs_logdets = self.obs_logdets[lut_ixs]
-        Cobsinv_WobsT = self.Cobsinv_WobsT[lut_ixs]
-        T = self.T[lut_ixs]
-        W_WCC = self.W_WCC[lut_ixs]
-        inv_cap = self.inv_cap
+        if self.M:
+            obs_logdets = self.obs_logdets[lut_ixs]
+            Wobs = self.Wobs[lut_ixs]
+            Cobsinv_WobsT = self.Cobsinv_WobsT[lut_ixs]
+            W_WCC = self.W_WCC[lut_ixs]
+            inv_cap = self.inv_cap[lut_ixs]
+        else:
+            Wobs = Cobsinv_WobsT = W_WCC = inv_cap = None
+            obs_logdets = Coo_logdet[:, None].broadcast_to(candidates.shape)
 
         # per-spike
         noise_lls = None
@@ -160,7 +339,6 @@ class TruncatedExpectationProcessor(torch.nn.Module):
             Cooinv_nu=Cooinv_nu,
             obs_logdets=obs_logdets,
             W_WCC=W_WCC,
-            T=T,
             inv_cap=inv_cap,
             #
             noise_lls=noise_lls,

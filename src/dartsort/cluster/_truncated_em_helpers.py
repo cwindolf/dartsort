@@ -25,6 +25,8 @@ class TEBatchResult:
     ddm: Optional[torch.Tensor] = None
     noise_lls: Optional[torch.Tensor] = None
 
+    kl: Optional[torch.Tensor] = None
+
 
 has_candidates = dict(has_candidates=True)
 
@@ -61,12 +63,13 @@ class TEBatchData:
     tnu: torch.Tensor = field(metadata=has_candidates)
     # (n, n_candidate_units, D_obs_max)
     Cooinv_nu: torch.Tensor = field(metadata=has_candidates)
-    Cooinv_WobsT: torch.Tensor = field(metadata=has_candidates)
+
+    # -- parameters with pca
+    Cooinv_WobsT: Optional[torch.Tensor] = field(metadata=has_candidates)
     obs_logdets: torch.Tensor = field(metadata=has_candidates)
-    T: torch.Tensor = field(metadata=has_candidates)
-    W_WCC: torch.Tensor = field(metadata=has_candidates)
-    inv_cap: torch.Tensor = field(metadata=has_candidates)
-    Wobs: torch.Tensor = field(metadata=has_candidates)
+    W_WCC: Optional[torch.Tensor] = field(metadata=has_candidates)
+    inv_cap: Optional[torch.Tensor] = field(metadata=has_candidates)
+    Wobs: Optional[torch.Tensor] = field(metadata=has_candidates)
 
     # (n,)
     noise_lls: Optional[torch.Tensor] = None
@@ -87,13 +90,12 @@ class TEBatchData:
 def _te_batch(
     self,
     bd: TEBatchData,
-    res: TEBatchResult,
     with_grads=False,
     with_stats=False,
     with_kl=False,
     with_elbo=False,
     with_obs_elbo=False,
-):
+) -> TEBatchResult:
     """This is bound as a method of TruncatedExpectationProcessor"""
     C_ = bd.candidates.shape[1]
     Do = bd.x.shape[1]
@@ -109,7 +111,7 @@ def _te_batch(
         inv_quad = torch.bmm(bd.x.unsqueeze(1), Cooinv_x).view(bd.n)
         nlls = inv_quad.add_(bd.Coo_logdet).add_(pinobs).mul_(-0.5)
     # this may change, so can't be baked in
-    noise_lls = nlls + self.log_noise_proportion
+    noise_lls = nlls + self.noise_log_prop
 
     # -- observed log likelihoods
     # Woodbury solve of inv(Coo + Wobs Wobs') (x - mu)
@@ -129,6 +131,9 @@ def _te_batch(
     Cooinv_xc = Cooinv_x[None, ..., 0] - bd.Cooinv_nu
     WobsT_Cooinv_xc = None
     if self.M:
+        assert bd.Wobs is not None
+        assert bd.inv_cap is not None
+        assert bd.Cooinv_WobsT is not None
         WobsT_Cooinv_xc = bd.Wobs.mT.bmm(Cooinv_xc)
         inner = bd.inv_cap.bmm(WobsT_Cooinv_xc)
         inv_quad = torch.baddbmm(
@@ -154,9 +159,14 @@ def _te_batch(
     Q = torch.softmax(all_lls, dim=1)
     Q_ = Q[:, :-1]
 
+    # -- KL part comes before throwing away extra units
+    kl = None
+    assert not kl
+
     # restrict bd to new candidates
     # new_candidates = bd.candidates.take_along_dim(topinds, dim=1)
     bd = bd.take_along_candidates(topinds)
+    C = bd.candidates.shape[1]
     # new_candidates = bd.candidates
 
     # -- sufficient statistics
@@ -168,37 +178,43 @@ def _te_batch(
     R = U = m = None
     if with_stats and self.M:
         assert WobsT_Cooinv_xc is not None  # for pyright
+        assert bd.W_WCC is not None
+        assert bd.Wobs is not None
+        assert bd.inv_cap is not None
 
         # embedding moments
-        ubar = bd.T.bmm(WobsT_Cooinv_xc)
-        U = bd.T.baddbmm_(ubar.unsqueeze(2), ubar.unsqueeze(1))
+        # T low key is inv_cap. overwriting since this is the last use.
+        ubar = bd.inv_cap.bmm(WobsT_Cooinv_xc)
+        U = bd.inv_cap.baddbmm_(ubar.unsqueeze(2), ubar.unsqueeze(1))
         Qu = Q_[:, :, None, None] * ubar[:, :, :, None]
         QU = Q_[:, :, None, None] * U
         Ro = Qu * xc[:, :, None, :]
         # this does not have an n dim. we're reducing.
         # Ro is (n, C, M, Do). R is (Ctotal, M, Do)
-        R = Q.new_zeros((self.n_units, self.M, self.D))
+        R = Q.new_zeros((self.n_units, self.M, self.rank, self.nc + 1))
         spiketorch.add_at_(
             R,
             (
-                bd.candidates[:, :, None, None],
-                torch.arange(self.M)[:, None, :, None],
-                bd.obs_ix[:, None, None, :],
+                bd.candidates[:, :, None, None, None],
+                torch.arange(self.M)[:, None, :, None, None],
+                torch.arange(self.rank)[:, None, None, :, None],
+                bd.obs_ix[:, None, None, None, :],
             ),
-            Ro,
+            Ro.view(*Ro.shape[:3], self.rank, self.nc_obs),
         )
         Rm = QU.bmm(bd.W_WCC).baddbmm(Ro, bd.Coinv_Com)
         spiketorch.add_at_(
             R,
             (
-                bd.candidates[:, :, None, None],
-                torch.arange(self.M)[:, None, :, None],
-                bd.miss_ix[:, None, None, :],
+                bd.candidates[:, :, None, None, None],
+                torch.arange(self.M)[:, None, :, None, None],
+                torch.arange(self.rank)[:, None, None, :, None],
+                bd.miss_ix[:, None, None, None, :],
             ),
-            Rm,
+            Rm.view(*Rm.shape[:3], self.rank, self.nc_miss),
         )
         # E[y-Wu]
-        m = Q.new_zeros((self.n_units, self.D))
+        m = Q.new_zeros((self.n_units, self.rank, self.nc + 1))
         Wobs_ubar = torch.bmm(bd.Wobs, ubar)
         mo = Q[:, :, None] * (Wobs_ubar + bd.x[:, None])
         mo.baddbmm(bd.Wobs, Qu, alpha=-1)
@@ -206,9 +222,10 @@ def _te_batch(
             m,
             (
                 bd.candidates[:, :, None, None],
+                torch.arange(self.rank)[None, None, :, None],
                 bd.obs_ix[:, None, None, :],
             ),
-            mo,
+            mo.view(n, C, self.rank, self.nc_obs),
         )
 
         mm = Q[:, :, None] * (bd.tnu.baddbmm_(bd.Coinv_Com.mT, xc - Wobs_ubar))
@@ -216,19 +233,20 @@ def _te_batch(
             m,
             (
                 bd.candidates[:, :, None, None],
+                torch.arange(self.rank)[None, None, :, None],
                 bd.miss_ix[:, None, None, :],
             ),
-            mm,
+            mm.view(C, self.rank, self.nc_miss),
         )
     elif with_stats:
-        m = Q.new_zeros((self.n_units, self.D))
+        m = Q.new_zeros((self.n_units, self.rank, self.nc + 1))
         spiketorch.add_at_(
             m,
             (
                 bd.candidates[:, :, None, None],
                 bd.obs_ix[:, None, None, :],
             ),
-            Q[:, :, None] * bd.x[:, None],
+            Q[:, :, None, None] * bd.x.view(bd.n, 1, self.rank, self.nc_obs),
         )
 
         mm = Q[:, :, None] * (bd.tnu.baddbmm_(bd.Coinv_Com.mT, xc))
@@ -238,17 +256,21 @@ def _te_batch(
                 bd.candidates[:, :, None, None],
                 bd.miss_ix[:, None, None, :],
             ),
-            mm,
+            mm.view(bd.n, 1, self.rank, self.nc_miss),
         )
 
     # -- gradients
     # not implemented
+    assert not with_grads
 
     # -- elbo
     # not implemented
+    assert not with_elbo
 
     # -- obs elbo
-    obs_elbo = torch.sum(Q_ * (toplls + Q.log()))
+    obs_elbo = None
+    if with_obs_elbo:
+        obs_elbo = torch.sum(Q_ * (toplls + Q.log()))
 
     return TEBatchResult(
         candidates=bd.candidates,
@@ -261,6 +283,7 @@ def _te_batch(
         m=m,
         ddW=None,
         ddm=None,
+        kl=kl,
         noise_lls=nlls if bd.noise_lls is None else None,
     )
 
@@ -289,4 +312,4 @@ def neighb_lut(unit_neighborhood_counts):
     lut = np.full_like(unit_neighborhood_counts, n_units * n_neighborhoods)
     lut[unit_ids, neighborhood_ids] = np.arange(len(unit_ids))
 
-    return lut
+    return lut, unit_ids, neighborhood_ids
