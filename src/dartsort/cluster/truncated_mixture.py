@@ -1,6 +1,4 @@
-import re
 import numpy as np
-from sklearn import base
 import torch
 import threading
 import joblib
@@ -43,7 +41,8 @@ class SpikeTruncatedMixtureModel(torch.nn.Module):
 
     def set_parameters(self, means, log_proportions, noise_log_prop, bases=None):
         """Parameters are stored padded with an extra channel."""
-        nu = means.shape
+        # TODO: updating
+        nu = means.shape[0]
         assert means.shape == (nu, self.data.rank, self.data.nc)
         self.register_buffer("means", F.pad(means, (0, 1)))
 
@@ -77,7 +76,8 @@ class SpikeTruncatedMixtureModel(torch.nn.Module):
         self.means[..., :-1] = result.m
         if self.M:
             assert self.bases is not None
-            torch.linalg.solve(result.U, result.R, out=self.bases[..., :-1])
+            W = torch.linalg.solve(result.U, result.R)
+            self.bases[..., :-1] = W.view(self.bases[..., :-1].shape)
 
         self._N[0] = result.noise_N
         self._N[1:] = result.N
@@ -384,10 +384,10 @@ class TruncatedExpectationProcessor(torch.nn.Module):
         assert W is not None
 
         # load basis
-        Wobs = W.view(Nu, self.M, r, Nc)[self.lut_units[:, None], :, :, obs_ix]
+        Wobs = W[self.lut_units[:, None], :, :, obs_ix]
         assert Wobs.shape == (nlut, self.M, r, self.nc_obs)
         Wobs = Wobs.view(nlut, self.M, -1)
-        Wmiss = W.view(Nu, self.M, r, Nc)[self.lut_units[:, None], :, :, miss_ix]
+        Wmiss = W[self.lut_units[:, None], :, :, miss_ix]
         assert Wmiss.shape == (nlut, self.M, r, self.nc_miss)
         Wmiss = Wmiss.view(nlut, self.M, -1)
 
