@@ -1,13 +1,24 @@
+import re
 import numpy as np
+from sklearn import base
 import torch
 import threading
+import joblib
 from linear_operator import operators
 from linear_operator.utils.cholesky import psd_safe_cholesky
 import torch.nn.functional as F
+from tqdm.auto import trange
+
 
 from ..util.noise_util import EmbeddedNoise
 from .stable_features import SpikeFeatures, SpikeNeighborhoods, StableSpikeDataset
-from ._truncated_em_helpers import neighb_lut, TEBatchData, TEBatchResult, _te_batch
+from ._truncated_em_helpers import (
+    neighb_lut,
+    TEBatchData,
+    TEBatchResult,
+    TEStepResult,
+    _te_batch,
+)
 from ..util import spiketorch
 
 
@@ -16,40 +27,61 @@ class SpikeTruncatedMixtureModel(torch.nn.Module):
         self,
         data: StableSpikeDataset,
         noise: EmbeddedNoise,
-        rank: int = 0,
+        M: int = 0,
         n_candidates: int = 3,
         n_search: int = 1,
     ):
-        """
-        Noise unit is label 0. Will have to figure out hard noise.
-        Or should noise not really be its own unit? Just stored separately?
-        """
         self.data = data
         self.noise = noise
-        self.rank = rank
+        self.M = M
         train_indices, self.train_neighborhoods = self.data.neighborhoods("extract")
         self.n_spikes = train_indices.numel()
-        self.processor = TruncatedExpectationProcessor(noise, self.train_neighborhoods)
+        self.processor = TruncatedExpectationProcessor(
+            noise, self.train_neighborhoods, self.data._train_extract_features
+        )
         self.candidates = CandidateSet(self.n_spikes, n_candidates, n_search)
+
+    def set_parameters(self, means, log_proportions, noise_log_prop, bases=None):
+        """Parameters are stored padded with an extra channel."""
+        nu = means.shape
+        assert means.shape == (nu, self.data.rank, self.data.nc)
+        self.register_buffer("means", F.pad(means, (0, 1)))
+
+        assert log_proportions.shape == (nu,)
+        self.register_buffer("log_proportions", log_proportions)
+        self.register_buffer("noise_log_prop", noise_log_prop)
+        self.register_buffer("_N", torch.zeros(nu + 1))
+
+        self.M = 0 if bases is None else bases.shape[1]
+        if self.M:
+            assert bases is not None
+            assert bases.shape == (nu, self.M, self.data.rank, self.data.nc)
+            self.register_buffer("bases", F.pad(bases, (0, 1)))
+        else:
+            self.bases = None
+        self.to(means.device)
 
     def initialize_parameters(self, train_labels):
         # run ppcas, or svds?
         # compute noise log liks? or does TEP want to do that? or, perhaps we do
         # that by setting noise to the explore unit in the first iteration, and
         # then storing?
-        pass
+        raise NotImplementedError
 
-    def em_step(self):
+    def em_step(self, show_progress=False):
         unit_neighborhood_counts = self.propose_new_candidates()
         self.processor.update(self.means, self.bases, unit_neighborhood_counts)
-        # get statistics buffers. maybe they are already intialized
-        # parallel gather process() into the buffers. use a helper job function.
-        # can process() actually add its results into thread local buffers and combine those
-        # for us? maybe the parallel for is handled by that class and this one stays simple
+        result = self.processor.truncated_e_step(
+            self.candidates.candidates, show_progress=show_progress
+        )
+        self.means[..., :-1] = result.m
+        if self.M:
+            assert self.bases is not None
+            torch.linalg.solve(result.U, result.R, out=self.bases[..., :-1])
 
-    def kl_divergences(self):
-        """Pairwise KL divergences."""
-        pass
+        self._N[0] = result.noise_N
+        self._N[1:] = result.N
+        self.noise_log_prop[:], self.log_proportions[:] = F.log_softmax(self._N)
 
 
 class TruncatedExpectationProcessor(torch.nn.Module):
@@ -58,14 +90,147 @@ class TruncatedExpectationProcessor(torch.nn.Module):
         noise: EmbeddedNoise,
         neighborhoods: SpikeNeighborhoods,
         features: torch.Tensor,
+        batch_size: int = 2**14,
+        n_threads: int = 0,
+        random_seed: int = 0,
     ):
         # initialize fixed noise-related arrays
         self.initialize_fixed(noise, neighborhoods)
         self.neighborhood_ids = neighborhoods.neighborhood_ids
+        if features.isnan().any():
+            print("Yeah. nans. Guess not possible to do in place?")
+            features = features.nan_to_num()
         self.features = features
+        self.batch_size = batch_size
+
+        # M is updated by self.update() when a basis is assigned here.
+        self.M = 0
 
         # place to store thread-local work and output arrays
+        # TODO
         self._locals = threading.local()
+
+        # thread pool
+        self._rg = np.random.default_rng(random_seed)
+        self.pool = joblib.Parallel(
+            n_jobs=n_threads or 1, backend="threading", return_as="generator_unordered"
+        )
+
+        # these are populated by the first call to truncated E step
+        self.noise_logliks = None
+
+    @property
+    def device(self):
+        assert hasattr(self, "Coo_logdet")
+        return self.Coo_logdet.device
+
+    def truncated_e_step(self, candidates, show_progress=False) -> TEStepResult:
+        """E step of truncated VEM
+
+        Will update candidates[:, :self.n_candidates] in place.
+        """
+        # sufficient statistics
+        dev = self.device
+        m = torch.zeros((self.n_units, self.rank, self.nc), device=dev)
+        N = torch.zeros((self.n_units,), device=dev)
+        noise_N = torch.tensor(0.0, device=dev)
+        obs_elbo = torch.tensor(0.0, device=dev)
+        R = U = None
+        if self.M:
+            R = torch.zeros((self.n_units, self.M, self.rank, self.nc), device=dev)
+            U = torch.zeros((self.n_units, self.M, self.M), device=dev)
+
+        # will be updated...
+        top_candidates = candidates[:, : self.n_candidates]
+
+        # do we need to initialize the noise log likelihoods?
+        first_run = self.noise_logliks is None
+        noise_logliks = None
+        if first_run:
+            noise_logliks = torch.empty((len(self.features),), device=dev)
+
+        # run loop
+        jobs = map(self._te_step_job, self.batches(show_progress=show_progress))
+        for result in self.pool(jobs):
+            assert result is not None  # why, pyright??
+
+            m += result.m
+            N += result.N
+            noise_N += result.noise_N
+            obs_elbo += result.obs_elbo
+
+            if self.M:
+                assert R is not None
+                assert U is not None
+                R += result.R
+                U += result.U
+
+            # could do these in the threads? unless shuffled.
+            top_candidates[result.indices] = result.candidates
+            if first_run:
+                assert noise_logliks is not None  # pyright...
+                noise_logliks[result.indices] = result.noise_lls
+
+        if first_run:
+            self.register_buffer("noise_logliks", noise_logliks)
+
+        return TEStepResult(
+            elbo=None,
+            obs_elbo=obs_elbo,
+            noise_N=noise_N,
+            N=N,
+            R=R,
+            U=U,
+            m=m,
+            kl=None,
+        )
+
+    @joblib.delayed
+    def _te_step_job(self, batch_indices):
+        return self.process_batch(
+            batch_indices=batch_indices,
+            with_stats=True,
+            with_obs_elbo=True,
+        )
+
+    def batches(self, shuffle=False, show_progress=False):
+        n = len(self.features)
+        if shuffle:
+            shuf = self._rg.permutation(n)
+            for sl in self.batches(show_progress=show_progress):
+                ix = shuf[sl]
+                ix.sort()
+                yield ix
+        else:
+            if show_progress:
+                starts = trange(
+                    0, n, self.batch_size, desc="Batches", smoothing=0, mininterval=0.2
+                )
+            else:
+                starts = range(0, n, self.batch_size)
+
+            for batch_start in starts:
+                batch_end = min(n, batch_start + self.batch_size)
+                yield slice(batch_start, batch_end)
+
+    def process_batch(
+        self,
+        batch_indices,
+        with_grads=False,
+        with_stats=False,
+        with_kl=False,
+        with_elbo=False,
+        with_obs_elbo=False,
+    ) -> TEBatchResult:
+        bd = self.load_batch(batch_indices=batch_indices)
+        return self.te_batch(
+            bd=bd,
+            with_grads=with_grads,
+            with_stats=with_stats,
+            with_kl=with_kl,
+            with_elbo=with_elbo,
+            with_obs_elbo=with_obs_elbo,
+        )
 
     def initialize_fixed(self, noise, neighborhoods):
         """Neighborhood-dependent precomputed matrices.
@@ -171,13 +336,15 @@ class TruncatedExpectationProcessor(torch.nn.Module):
     ):
         Nu, r, Nc = means.shape
         assert Nc in (self.nc, self.nc + 1)
-        already_padded = Nc == self.Nc + 1
+        assert r == self.noise.rank
+        already_padded = Nc == self.nc + 1
         assert log_proportions.shape == (Nu,)
         self.M = 0
         if bases is not None:
-            Nu_, d, self.M = bases.shape
+            Nu_, r_, nc_, self.M = bases.shape
             assert Nu_ == Nu
-            assert d == self.rank * (self.Nc + already_padded)
+            assert r == r_
+            assert nc_ == Nc
 
         if unit_neighborhood_counts is not None:
             # update lookup table and re-initialize storage
@@ -245,28 +412,6 @@ class TruncatedExpectationProcessor(torch.nn.Module):
             "W_WCC", Wmiss - Wobs.mT.bmm(self.Cooinv_Com[self.lut_neighbs])
         )
 
-    def te_step(self):
-        pass
-
-    def process_batch(
-        self,
-        batch_indices,
-        with_grads=False,
-        with_stats=False,
-        with_kl=False,
-        with_elbo=False,
-        with_obs_elbo=False,
-    ) -> TEBatchResult:
-        bd = self.load_batch(batch_indices=batch_indices)
-        return self.te_batch(
-            bd=bd,
-            with_grads=with_grads,
-            with_stats=with_stats,
-            with_kl=with_kl,
-            with_elbo=with_elbo,
-            with_obs_elbo=with_obs_elbo,
-        )
-
     # long method... putting it in another file to keep the flow
     # clear in this one. this method is the one that does all the math.
     te_batch = _te_batch
@@ -318,6 +463,7 @@ class TruncatedExpectationProcessor(torch.nn.Module):
             noise_lls = self.noise_logliks[batch_indices]
 
         return TEBatchData(
+            indices=batch_indices,
             n=len(x),
             #
             x=x,
