@@ -34,6 +34,7 @@ from .stable_features import (
     StableSpikeDataset,
     occupied_chans,
 )
+from . import truncated_mixture
 
 logger = logging.getLogger(__name__)
 
@@ -324,6 +325,87 @@ class SpikeMixtureModel(torch.nn.Module):
     def to_sorting(self):
         labels = self.labels.numpy(force=False).copy()
         return replace(self.data.original_sorting, labels=labels)
+
+    def tem(
+        self,
+        n_iter=None,
+        show_progress=True,
+        final_e_step=True,
+        final_split="kept",
+        n_threads=0,
+    ):
+        # TODO: hang on to this and update it in place
+        tmm = truncated_mixture.SpikeTruncatedMixtureModel(
+            self.data, self.noise, self.ppca_rank, n_threads=n_threads
+        )
+
+        n_iter = self.n_em_iters if n_iter is None else n_iter
+        step_progress = False
+        if show_progress:
+            its = trange(n_iter, desc="EM", **tqdm_kw)
+            step_progress = bool(max(0, int(show_progress) - 1))
+        else:
+            its = range(n_iter)
+
+        # initialize me
+        missing_ids = self.missing_ids()
+        if len(missing_ids):
+            self.m_step(show_progress=step_progress, fit_ids=missing_ids)
+            self.cleanup(min_count=1)
+
+        # update from my stack
+        ids, means, covs, logdets = self.stack_units()
+        logprops = self.log_proportions
+        if logprops is None:
+            ids_, counts = self.label_ids()
+            assert torch.equal(torch.asarray(ids), ids_)
+            props = F.pad(counts.to(torch.float), (0, 1))
+            props[-1] = props.sum()
+            logprops = F.log_softmax(props, dim=0)
+
+        dkl = self.distances(kind="kl", normalization_kind="none")
+
+        # try reassigning without noise unit...
+        lls = self.log_likelihoods(with_noise_unit=False, show_progress=True)
+        labels_full = loglik_reassign(lls)[1]
+        tmm.set_parameters(
+            labels=torch.from_numpy(labels_full),
+            means=means[ids],
+            bases=covs[ids].permute(0, 3, 1, 2) if covs is not None else None,
+            log_proportions=logprops[:-1],
+            noise_log_prop=logprops[-1],
+            kl_divergences=dkl,
+        )
+
+        for j in its:
+            res = tmm.step(show_progress=step_progress)
+            msg = f"tEM[oelbo={res['obs_elbo']}]"
+            if show_progress:
+                its.set_description(msg)
+
+        # reupdate my GaussianUnits
+        self.clear_units()
+        self.labels[self.data.split_indices["train"]] = tmm.candidates.candidates[:, 0]
+        for j in range(len(tmm.means)):
+            basis = None
+            if tmm.bases is not None:
+                basis = tmm.bases[j, ..., :-1].permute(1, 2, 0)
+            print(tmm.means[j, :, :-1])
+            self[j] = GaussianUnit.from_parameters(
+                self.noise,
+                mean=tmm.means[j, :, :-1],
+                basis=basis,
+            )
+
+        if not final_e_step:
+            return
+
+        # final e step for caller
+        unit_churn, reas_count, log_liks, spike_logliks = self.e_step(
+            show_progress=step_progress, split=final_split
+        )
+        log_liks, _ = self.cleanup(log_liks, relabel_split=final_split)
+        return log_liks
 
     def em(
         self, n_iter=None, show_progress=True, final_e_step=True, final_split="kept"
@@ -2317,7 +2399,7 @@ class GaussianUnit(torch.nn.Module):
         channels_strategy="count",
         channels_count_min=50.0,
         channels_snr_amp=1.0,
-        prior_pseudocount=10,
+        prior_pseudocount=0,
         ppca_initial_em_iter=1,
         ppca_inner_em_iter=1,
         ppca_atol=0.05,
@@ -2346,6 +2428,31 @@ class GaussianUnit(torch.nn.Module):
         self.ppca_atol = ppca_atol
         self.annotations = annotations
         self.ppca_warm_start = ppca_warm_start
+
+    @classmethod
+    def from_parameters(
+        cls,
+        noise: noise_util.EmbeddedNoise,
+        mean,
+        basis=None,
+    ):
+        M = 0 if basis is None else basis.shape[-1]
+        # TODO: pick channels somehow...
+        self = cls(
+            noise.rank,
+            noise.n_channels,
+            noise,
+            cov_kind="ppca",
+            ppca_rank=M,
+            channels_strategy="all",
+        )
+        self.register_buffer("mean", mean)
+        if basis is not None:
+            self.register_buffer("W", basis)
+        self.register_buffer("channels", torch.arange(self.n_channels))
+        # TODO: neeed for vis. figure it out.
+        self.snr = torch.ones(self.n_channels)
+        return self
 
     @classmethod
     def from_features(
@@ -2753,7 +2860,7 @@ class GaussianUnit(torch.nn.Module):
             oW = other_covs.reshape(n, k, self.ppca_rank)
             tr = other_covs.new_empty((n,))
             for bs in range(0, n, 32):
-                be = min(n, bs+32)
+                be = min(n, bs + 32)
                 res = my_cov.solve(oW[bs:be])
                 res = res @ oW[bs:be].mT
                 tr[bs:be] = res.diagonal(dim1=-2, dim2=-1).sum(dim=1)

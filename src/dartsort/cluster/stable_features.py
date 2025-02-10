@@ -521,7 +521,7 @@ class SpikeNeighborhoods(torch.nn.Module):
         """
         super().__init__()
         self.n_channels = n_channels
-        self.register_buffer("nchans_arange", torch.arange(n_channels))
+        self.register_buffer("chans_arange", torch.arange(n_channels))
         if store_on_device:
             self.register_buffer("neighborhood_ids", neighborhood_ids)
         else:
@@ -679,7 +679,7 @@ class SpikeNeighborhoods(torch.nn.Module):
         return nhc[nhc < self.n_channels]
 
     def missing_channels(self, id):
-        return self.chans_arange[self.indicators[id] == 0]
+        return self.chans_arange[self.indicators[:, id] == 0]
 
     def neighborhood_members(self, id):
         return self._neighborhood_members[self.neighborhood_members_slices[id]]

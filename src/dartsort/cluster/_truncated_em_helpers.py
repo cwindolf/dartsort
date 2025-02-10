@@ -6,9 +6,10 @@ import torch
 from ..util import spiketorch
 
 log2pi = torch.log(torch.tensor(2 * np.pi))
+_1 = torch.tensor(1.0)
 
 
-@dataclass(slots=True, kw_only=True, frozen=True)
+@dataclass  # (slots=True, kw_only=True, frozen=True)
 class TEStepResult:
     elbo: Optional[torch.Tensor] = None
     obs_elbo: Optional[torch.Tensor] = None
@@ -22,7 +23,7 @@ class TEStepResult:
     kl: Optional[torch.Tensor] = None
 
 
-@dataclass(slots=True, kw_only=True, frozen=True)
+@dataclass  # (slots=True, kw_only=True, frozen=True)
 class TEBatchResult:
     indices: Union[slice, torch.Tensor]
     candidates: torch.Tensor
@@ -40,13 +41,14 @@ class TEBatchResult:
     ddm: Optional[torch.Tensor] = None
     noise_lls: Optional[torch.Tensor] = None
 
-    kl: Optional[torch.Tensor] = None
+    ncc: Optional[torch.Tensor] = None
+    dkl: Optional[torch.Tensor] = None
 
 
 _hc = dict(has_candidates=True)
 
 
-@dataclass(slots=True, kw_only=True, frozen=True)
+@dataclass  # (slots=True, kw_only=True, frozen=True)
 class TEBatchData:
     indices: Union[slice, torch.Tensor]
     n: int
@@ -55,7 +57,7 @@ class TEBatchData:
     # (n, D_obs_max)
     x: torch.Tensor
     # (n, C_)
-    candidates: torch.Tensor
+    candidates: torch.Tensor = field(metadata=_hc)
 
     # -- neighborhood dependent
     # (n,)
@@ -63,7 +65,7 @@ class TEBatchData:
     # (n, D_obs_max, D_obs_max)
     Coo_inv: torch.Tensor
     # (n, D_obs_max, D_miss_max)
-    Coinv_Com: torch.Tensor
+    Cooinv_Com: torch.Tensor
     # (n, D_obs_max)
     obs_ix: torch.Tensor
     # (n, D_miss_max)
@@ -90,7 +92,7 @@ class TEBatchData:
     # (n,)
     noise_lls: Optional[torch.Tensor] = None
 
-    def take_along_candidates(self, inds):
+    def take_along_candidates(self, inds, extras):
         cand_fields = [
             f.name
             for f in fields(self)
@@ -98,9 +100,22 @@ class TEBatchData:
             and getattr(self, f.name) is not None
         ]
         replacements = {
-            k: getattr(self, k).take_along_dim(dim=1, indices=inds) for k in cand_fields
+            k: getattr(self, k).take_along_dim(
+                dim=1, indices=inds[..., *([None] * (getattr(self, k).ndim - 2))]
+            )
+            for k in cand_fields
         }
-        return replace(self, **replacements)
+        new_tebd = replace(self, **replacements)
+        if extras:
+            extras = [
+                (
+                    e.take_along_dim(dim=1, indices=inds[..., *([None] * (e.ndim - 2))])
+                    if e is not None
+                    else None
+                )
+                for e in extras
+            ]
+        return new_tebd, extras
 
 
 def _te_batch(
@@ -143,8 +158,14 @@ def _te_batch(
     # TODO: after implementing, re-evaluate if it would be better to multiply by
     # the inv sqrt and square here. in particular... maybe we want to avoid having
     # to build xc?
-    xc = bd.x[None] - bd.nu
-    Cooinv_xc = Cooinv_x[None, ..., 0] - bd.Cooinv_nu
+    xc = bd.x[:, None] - bd.nu
+    # Cooinv_xc = Cooinv_x.mT[:, None] - bd.Cooinv_nu
+    Cooinv_xc = torch.add(
+        Cooinv_x.mT,
+        bd.Cooinv_nu,
+        alpha=-1,
+        out=bd.Cooinv_nu,
+    )
     WobsT_Cooinv_xc = None
     if self.M:
         assert bd.Wobs is not None
@@ -160,10 +181,11 @@ def _te_batch(
         )
     else:
         inv_quad = Cooinv_xc
-    inv_quad = torch.bmm(xc.view(-1, 1, Do), inv_quad).view(bd.n, C_)
-    lls = inv_quad.add_(bd.obs_logdets).add_(pinobs).mul_(-0.5)
+    del Cooinv_xc  # overwritten
+    inv_quad = inv_quad.mul_(xc).sum(dim=2)
+    lls_unnorm = inv_quad.add_(bd.obs_logdets).add_(pinobs[:, None]).mul_(-0.5)
     # the proportions...
-    lls.add_(bd.log_proportions)
+    lls = lls_unnorm + bd.log_proportions
 
     # -- update K_ns
     toplls, topinds = lls.sort(dim=1, descending=True)
@@ -171,28 +193,45 @@ def _te_batch(
     topinds = topinds[:, : self.n_candidates]
 
     # -- compute Q
-    all_lls = torch.stack((toplls, noise_lls.unsqueeze(1)), dim=1)
+    all_lls = torch.concatenate((toplls, noise_lls.unsqueeze(1)), dim=1)
     Q = torch.softmax(all_lls, dim=1)
     Q_ = Q[:, :-1]
 
-    # -- KL part comes before throwing away extra units
-    kl = None
-    assert not kl
+    # extract top candidate inds
+    bd_new, (xc, WobsT_Cooinv_xc) = bd.take_along_candidates(
+        topinds, (xc, WobsT_Cooinv_xc)
+    )
+    assert xc is not None
 
-    # restrict bd to new candidates
-    # new_candidates = bd.candidates.take_along_dim(topinds, dim=1)
-    bd = bd.take_along_candidates(topinds)
+    # -- KL part comes before throwing away extra units
+    ncc = dkl = None
+    if with_kl:
+        ncc = Q.new_zeros((self.n_units, self.n_units))
+        spiketorch.add_at_(
+            ncc,
+            (bd_new.candidates[:, None, :1], bd.candidates[:, :, None]),
+            _1.broadcast_to(bd.candidates.shape),
+        )
+        dkl = Q.new_zeros((self.n_units, self.n_units))
+        spiketorch.add_at_(
+            dkl,
+            (bd_new.candidates[:, None, :1], bd.candidates[:, :, None]),
+            lls_unnorm[:, 0, None] - lls_unnorm,
+        )
+
+    # -- replace bd name...
+    bd = bd_new
     C = bd.candidates.shape[1]
-    # new_candidates = bd.candidates
 
     # -- sufficient statistics
     Qn = N = noise_N = None
     if with_stats:
         N = Q.new_zeros(self.n_units)
-        spiketorch.add_at_(N, bd.candidates, Q_)
+        spiketorch.add_at_(N, bd.candidates.view(-1), Q_.reshape(-1))
         noise_N = Q[:, -1].sum()
         # used below for weighted averaging
-        Qn = Q_ / N[:, None]
+        Qn = Q_ / N[bd.candidates]
+
     R = U = m = None
     if with_stats and self.M:
         assert Qn is not None
@@ -221,7 +260,7 @@ def _te_batch(
             ),
             Ro.view(*Ro.shape[:3], self.rank, self.nc_obs),
         )
-        Rm = QU.bmm(bd.W_WCC).baddbmm(Ro, bd.Coinv_Com)
+        Rm = QU.bmm(bd.W_WCC).baddbmm(Ro, bd.Cooinv_Com)
         spiketorch.add_at_(
             R,
             (
@@ -247,7 +286,7 @@ def _te_batch(
             mo.view(bd.n, C, self.rank, self.nc_obs),
         )
 
-        mm = Qn[:, :, None] * (bd.tnu.baddbmm_(bd.Coinv_Com.mT, xc - Wobs_ubar))
+        mm = Qn[:, :, None] * (bd.tnu.baddbmm_(bd.Cooinv_Com.mT, xc - Wobs_ubar))
         spiketorch.add_at_(
             m,
             (
@@ -265,19 +304,21 @@ def _te_batch(
             m,
             (
                 bd.candidates[:, :, None, None],
+                torch.arange(self.rank)[None, None, :, None],
                 bd.obs_ix[:, None, None, :],
             ),
             Qn[:, :, None, None] * bd.x.view(bd.n, 1, self.rank, self.nc_obs),
         )
 
-        mm = Qn[:, :, None] * (bd.tnu.baddbmm_(bd.Coinv_Com.mT, xc))
+        mm = Qn[:, :, None] * (bd.tnu.baddbmm_(xc, bd.Cooinv_Com))
         spiketorch.add_at_(
             m,
             (
                 bd.candidates[:, :, None, None],
+                torch.arange(self.rank)[None, None, :, None],
                 bd.miss_ix[:, None, None, :],
             ),
-            mm.view(bd.n, 1, self.rank, self.nc_miss),
+            mm.view(bd.n, C, self.rank, self.nc_miss),
         )
 
     # -- gradients
@@ -305,7 +346,8 @@ def _te_batch(
         m=m,
         ddW=None,
         ddm=None,
-        kl=kl,
+        ncc=ncc,
+        dkl=dkl,
         noise_lls=nlls if bd.noise_lls is None else None,
     )
 
@@ -322,7 +364,7 @@ def neighb_lut(unit_neighborhood_counts):
 
     Arguments
     ---------
-    unit_neighborhood_counts : array
+    unit_neighborhood_counts : array (n_units, n_neighborhoods)
 
     Returns
     -------
@@ -335,3 +377,26 @@ def neighb_lut(unit_neighborhood_counts):
     lut[unit_ids, neighborhood_ids] = np.arange(len(unit_ids))
 
     return lut, unit_ids, neighborhood_ids
+
+
+def units_overlapping_neighborhoods(unit_neighborhood_counts):
+    """
+    Arguments
+    ---------
+    unit_neighborhood_counts : array (n_units, n_neighborhoods)
+
+    Returns
+    -------
+    neighb_units: LongTensor (n_neighborhoods, <n_units)
+        Filled with n_units where irrelevant.
+    """
+    n_units, n_neighborhoods = unit_neighborhood_counts.shape
+    unit_ids, neighborhood_ids = np.nonzero(unit_neighborhood_counts)
+    max_overlap = (unit_neighborhood_counts > 0).sum(0).max()
+
+    neighb_units = np.full((n_neighborhoods, max_overlap), n_units)
+    for j in range(n_neighborhoods):
+        inj = np.flatnonzero(neighborhood_ids == j)
+        neighb_units[j, : inj.size] = unit_ids[inj]
+
+    return neighb_units
