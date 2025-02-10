@@ -187,7 +187,9 @@ class TruncatedExpectationProcessor(torch.nn.Module):
         """
         # sufficient statistics
         dev = self.device
-        m = torch.zeros((self.n_units, self.rank, self.nc), device=dev)
+        m = torch.zeros(
+            (self.n_units, self.rank, self.nc), device=dev, dtype=torch.double
+        )
         N = torch.zeros((self.n_units,), device=dev, dtype=torch.double)
         dkl = torch.zeros((self.n_units, self.n_units), device=dev, dtype=torch.double)
         ncc = torch.zeros((self.n_units, self.n_units), device=dev, dtype=torch.double)
@@ -212,23 +214,29 @@ class TruncatedExpectationProcessor(torch.nn.Module):
             self._te_step_job(candidates, batchix)
             for batchix in self.batches(show_progress=show_progress)
         )
+        count = 0
         for result in self.pool(jobs):
             assert result is not None  # why, pyright??
 
-            m += result.m[:, :, :-1]
-            N += result.N
-            noise_N += result.noise_N
-            obs_elbo += result.obs_elbo
-
             # welford
+            N += result.N
+            N1 = N.clamp(min=1.0)[:, None, None]
+            m += (result.m[:, :, :-1] - m).div_(N1)
+            noise_N += result.noise_N
+
+            # running avg for elbo/n
+            count += len(result.candidates)
+            obs_elbo += (result.obs_elbo - obs_elbo) / count
+
+            # welford again
             ncc += result.ncc
             dkl += (result.dkl - dkl).div_(ncc.clamp(min=1.0))
 
             if self.M:
                 assert R is not None
                 assert U is not None
-                R += result.R
-                U += result.U
+                R += (result.R - R).div_(N1)
+                U += (result.U - U).div_(N1)
 
             # could do these in the threads? unless shuffled.
             top_candidates[result.indices] = result.candidates

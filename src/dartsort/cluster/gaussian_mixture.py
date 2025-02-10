@@ -375,7 +375,7 @@ class SpikeMixtureModel(torch.nn.Module):
 
         for j in its:
             res = tmm.step(show_progress=step_progress)
-            msg = f"tEM[oelbo={res['obs_elbo']}]"
+            msg = f"tEM[oelbo/n={res['obs_elbo']:0.2f}]"
             if show_progress:
                 its.set_description(msg)
 
