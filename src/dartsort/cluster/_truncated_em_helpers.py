@@ -9,6 +9,17 @@ log2pi = torch.log(torch.tensor(2 * np.pi))
 _1 = torch.tensor(1.0)
 
 
+def __debug_init__(self):
+    res = {}
+    for f in fields(self):
+        v = getattr(self, f.name)
+        if torch.is_tensor(v):
+            res[f.name] = v.isnan().any().item()
+    if any(res.values()):
+        msg = f"NaNs in {self.__class__.__name__}: {res}"
+        raise ValueError(msg)
+
+
 @dataclass  # (slots=True, kw_only=True, frozen=True)
 class TEStepResult:
     elbo: Optional[torch.Tensor] = None
@@ -21,6 +32,8 @@ class TEStepResult:
     m: Optional[torch.Tensor] = None
 
     kl: Optional[torch.Tensor] = None
+
+    __post_init__ = __debug_init__
 
 
 @dataclass  # (slots=True, kw_only=True, frozen=True)
@@ -43,6 +56,7 @@ class TEBatchResult:
 
     ncc: Optional[torch.Tensor] = None
     dkl: Optional[torch.Tensor] = None
+    __post_init__ = __debug_init__
 
 
 _hc = dict(has_candidates=True)
@@ -91,6 +105,7 @@ class TEBatchData:
 
     # (n,)
     noise_lls: Optional[torch.Tensor] = None
+    __post_init__ = __debug_init__
 
     def take_along_candidates(self, inds, extras):
         cand_fields = [
@@ -230,7 +245,10 @@ def _te_batch(
         spiketorch.add_at_(N, bd.candidates.view(-1), Q_.reshape(-1))
         noise_N = Q[:, -1].sum()
         # used below for weighted averaging
-        Qn = Q_ / N[bd.candidates]
+        Qn = Q_.clone()
+        denom = N[bd.candidates]
+        denom = torch.where(Q_ > 0, denom, _1.broadcast_to(denom.shape), out=denom)
+        Qn.div_(denom)
 
     R = U = m = None
     if with_stats and self.M:
@@ -332,6 +350,7 @@ def _te_batch(
     # -- obs elbo
     obs_elbo = None
     if with_obs_elbo:
+        Q = torch.where(Q > 0, Q, _1, out=Q)
         obs_elbo = torch.sum(Q * (all_lls + Q.log()))
 
     return TEBatchResult(

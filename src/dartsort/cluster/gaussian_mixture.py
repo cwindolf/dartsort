@@ -355,19 +355,15 @@ class SpikeMixtureModel(torch.nn.Module):
 
         # update from my stack
         ids, means, covs, logdets = self.stack_units()
-        logprops = self.log_proportions
-        if logprops is None:
-            ids_, counts = self.label_ids()
-            assert torch.equal(torch.asarray(ids), ids_)
-            props = F.pad(counts.to(torch.float), (0, 1))
-            props[-1] = props.sum()
-            logprops = F.log_softmax(props, dim=0)
 
         dkl = self.distances(kind="kl", normalization_kind="none")
 
         # try reassigning without noise unit...
-        lls = self.log_likelihoods(with_noise_unit=False, show_progress=True)
-        labels_full = loglik_reassign(lls)[1]
+        lls = self.log_likelihoods(with_noise_unit=True, show_progress=True)
+        labels_full = loglik_reassign(lls[:-1])[1]
+        self.update_proportions(lls)
+        logprops = self.log_proportions
+        print()
         tmm.set_parameters(
             labels=torch.from_numpy(labels_full),
             means=means[ids],

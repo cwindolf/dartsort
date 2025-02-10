@@ -222,7 +222,7 @@ class TruncatedExpectationProcessor(torch.nn.Module):
 
             # welford
             ncc += result.ncc
-            dkl += (result.dkl - dkl).div_(ncc)
+            dkl += (result.dkl - dkl).div_(ncc.clamp(min=1.0))
 
             if self.M:
                 assert R is not None
@@ -357,7 +357,6 @@ class TruncatedExpectationProcessor(torch.nn.Module):
         nc_obs = neighborhoods.channel_counts
         self.nc_obs = nco = nc_obs.max().to(int)
         self.nc_miss = ncm = nc - nc_obs.min().to(int)
-        nobs = R * nc_obs
 
         # understand channel subsets
         # these arrays are used to scatter into D-shaped dims.
@@ -374,7 +373,7 @@ class TruncatedExpectationProcessor(torch.nn.Module):
 
         # allocate buffers
         self.register_buffer("Coo_logdet", Coo_logdet)
-        self.register_buffer("nobs", nobs)
+        self.register_buffer("nobs", R * nc_obs)
         self.register_buffer(
             "Coo_inv",
             torch.zeros(neighborhoods.n_neighborhoods, R * nco, R * nco),
