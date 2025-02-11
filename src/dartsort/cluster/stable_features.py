@@ -798,19 +798,30 @@ def interp_to_chans(
     prgeom,
     interpolation_method="kriging",
     interpolation_sigma=20.0,
+    batch_size=256,
 ):
     source_pos = prgeom[spike_data.channels]
     target_pos = prgeom[channels]
     shape = len(spike_data), *target_pos.shape
-    target_pos = target_pos[None].broadcast_to(shape)
-    return interpolation_util.kernel_interpolate(
-        spike_data.features,
-        source_pos,
-        target_pos,
-        sigma=interpolation_sigma,
-        allow_destroy=False,
-        interpolation_method=interpolation_method,
-    )
+    output_shape = *spike_data.features.shape[:2], channels.numel()
+    output = spike_data.features.new_empty(output_shape)
+    if not channels.numel():
+        return output
+    for batch_start in range(0, len(spike_data), batch_size):
+        batch_end = min(batch_start + batch_size, len(spike_data))
+        sl = slice(batch_start, batch_end)
+        shape = batch_end - batch_start, *target_pos.shape
+        target_pos_ = target_pos[None].broadcast_to(shape)
+        interpolation_util.kernel_interpolate(
+            spike_data.features[sl],
+            source_pos[sl],
+            target_pos_,
+            sigma=interpolation_sigma,
+            allow_destroy=False,
+            interpolation_method=interpolation_method,
+            out=output[sl]
+        )
+    return output
 
 
 def pad_to_chans(
