@@ -65,14 +65,14 @@ class DARTsortGroundTruthComparison:
     def get_match(self, gt_unit):
         return int(self.comparison.best_match_12[gt_unit])
 
-    def unit_info_dataframe(self):
+    def unit_info_dataframe(self, force_distances=False):
         amplitudes = self.gt_analysis.unit_amplitudes()
         firing_rates = self.gt_analysis.firing_rates()
         df = self.comparison.get_performance()
         df = df.astype(float)  # not sure what the problem was...
         df['gt_ptp_amplitude'] = amplitudes
         df['gt_firing_rate'] = firing_rates
-        if self.has_templates:
+        if self.has_templates and (force_distances or self.compute_distances):
             dist = np.diagonal(self.template_distances)
             df['temp_dist'] = dist
         rec = []

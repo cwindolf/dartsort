@@ -252,7 +252,7 @@ class TemplateData:
             superres_sort = sorting
 
         # main!
-        results = get_templates(recording, superres_sort, **kwargs)
+        results = get_templates(recording, superres_sort, n_jobs=computation_config.actual_n_jobs(), **kwargs)
 
         # handle registered templates
         if template_config.registered_templates and motion_est is not None:

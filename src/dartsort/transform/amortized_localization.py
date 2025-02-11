@@ -420,13 +420,21 @@ class AmortizedLocalization(BaseWaveformFeaturizer):
 
         return locs
 
-    def transform(self, waveforms, max_channels):
+    def transform(self, waveforms, max_channels, show_progress=False):
         n = len(waveforms)
-        if n > self.inference_batch_size:
-            locs = waveforms.new_empty((n, self.latent_dim))
-            for bs in range(0, n, self.inference_batch_size):
-                be = bs + self.inference_batch_size
-                locs[bs:be] = self.transform_unbatched(waveforms[bs:be], max_channels[bs:be])
-        else:
-            locs = self.transform_unbatched(waveforms, max_channels)
+        with torch.no_grad():
+            if n > self.inference_batch_size:
+                locs = waveforms.new_empty((n, 3))
+                rg = trange if show_progress else range
+                my_device = self.padded_geom.device
+                device_in = locs.device
+                for bs in rg(0, n, self.inference_batch_size):
+                    be = bs + self.inference_batch_size
+                    batch = waveforms[bs:be].to(my_device)
+                    batch_chans = max_channels[bs:be].to(my_device)
+                    res = self.transform_unbatched(batch, batch_chans)
+                    locs[bs:be] = res.to(device_in)
+                    del batch, batch_chans, res
+            else:
+                locs = self.transform_unbatched(waveforms, max_channels)
         return {self.name: locs}

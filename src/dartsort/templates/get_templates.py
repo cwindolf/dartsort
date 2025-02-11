@@ -8,6 +8,7 @@ from dataclasses import replace
 
 import numpy as np
 import torch
+import threading
 from dartsort.util import spikeio
 from dartsort.util.drift_util import registered_template
 from dartsort.util.multiprocessing_util import get_pool
@@ -575,7 +576,7 @@ class TemplateProcessContext:
             self.n_template_channels = len(self.registered_geom)
 
 
-_template_process_context = None
+_template_process_context = threading.local()
 
 
 def _template_process_init(
@@ -608,7 +609,7 @@ def _template_process_init(
     torch.set_grad_enabled(False)
 
     rg = np.random.default_rng(random_seed + rank)
-    _template_process_context = TemplateProcessContext(
+    _template_process_context.ctx = TemplateProcessContext(
         rg,
         recording,
         sorting,
@@ -628,7 +629,7 @@ def _template_process_init(
 
 
 def _template_job(unit_ids):
-    p = _template_process_context
+    p = _template_process_context.ctx
 
     in_units_full = np.flatnonzero(np.isin(p.sorting.labels, unit_ids))
     if not in_units_full.size:

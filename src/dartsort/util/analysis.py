@@ -53,7 +53,7 @@ class DARTsortAnalysis:
 
     sorting: DARTsortSorting
     recording: sc.BaseRecording
-    template_data: TemplateData
+    template_data: Optional[TemplateData] = None
     hdf5_path: Optional[Path] = None
     featurization_pipeline: Optional[WaveformPipeline] = None
     motion_est: Optional[MotionEstimate] = None
@@ -220,10 +220,7 @@ class DARTsortAnalysis:
             if any(np.unique(self.template_data.unit_ids, return_counts=True)[1] > 1):
                 self.coarse_template_data = self.template_data.coarsen()
 
-        self.shifting = (
-            self.motion_est is not None
-            or self.template_data.registered_geom is not None
-        )
+        self.shifting = self.motion_est is not None
         if self.shifting:
             assert self.motion_est is not None
             if self.template_data is not None:

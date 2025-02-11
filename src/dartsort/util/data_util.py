@@ -64,7 +64,8 @@ class DARTsortSorting:
         if self.extra_features:
             for k in self.extra_features:
                 v = self.extra_features[k] = np.asarray(self.extra_features[k])
-                assert v.shape[0] == len(self.times_samples)
+                if not (k.endswith("channel_index") or k == "geom"):
+                    assert v.shape[0] == len(self.times_samples)
                 assert not hasattr(self, k)
                 self.__dict__[k] = v
 
@@ -180,6 +181,8 @@ class DARTsortSorting:
                         and 1 <= h5[k].ndim <= 2
                         and h5[k].shape[0] == n_spikes
                     ):
+                        extra_features[k] = h5[k][:]
+                    elif (k not in loaded and (k.endswith("channel_index") or k == 'geom')):
                         extra_features[k] = h5[k][:]
 
         return cls(

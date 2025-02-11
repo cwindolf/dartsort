@@ -10,7 +10,7 @@ from scipy.sparse import csgraph, coo_array
 
 from ..templates import TemplateData
 from .data_util import DARTsortSorting
-from ..config import unshifted_raw_template_config
+from ..config import unshifted_raw_template_config, ComputationConfig
 
 
 def get_drifty_hybrid_recording(
@@ -314,7 +314,7 @@ def greedy_match(gt_coords, test_coords, max_val=1.0, dx=1./30, workers=-1, p=2.
     return assignments
 
 
-def sorting_from_times_labels(times, labels, recording=None, sampling_frequency=None, determine_channels=True, template_config=unshifted_raw_template_config, n_jobs=0):
+def sorting_from_times_labels(times, labels, recording=None, motion_est=None, sampling_frequency=None, determine_channels=True, template_config=unshifted_raw_template_config, n_jobs=0, spikes_per_unit=50):
     channels = np.zeros_like(labels)
     if sampling_frequency is None:
         if recording is not None:
@@ -326,7 +326,9 @@ def sorting_from_times_labels(times, labels, recording=None, sampling_frequency=
 
     _, labels_flat = np.unique(labels, return_inverse=True)
     sorting = DARTsortSorting(times_samples=times, channels=channels, labels=labels_flat, sampling_frequency=sorting.sampling_frequency)
-    td = TemplateData.from_config(recording, sorting, template_config, with_locs=False, n_jobs=n_jobs)
+    template_config = dataclasses.replace(template_config, spikes_per_unit=spikes_per_unit)
+    comp_cfg = ComputationConfig(n_jobs_cpu=n_jobs, n_jobs_gpu=n_jobs)
+    td = TemplateData.from_config(recording, sorting, template_config, with_locs=False, computation_config=comp_cfg)
     channels = np.nan_to_num(np.ptp(td.coarsen().templates, 1)).argmax(1)[labels_flat]
     sorting = DARTsortSorting(times_samples=times, channels=channels, labels=labels_flat, sampling_frequency=sorting.sampling_frequency)
     return sorting, td

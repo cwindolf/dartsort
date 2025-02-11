@@ -49,6 +49,7 @@ def localize_hdf5(
     show_progress=True,
     device=None,
     localization_model="pointsource",
+    logbarrier=True,
     n_jobs=0,
 ):
     """Run localization on a HDF5 file with stored amplitude vectors
@@ -72,7 +73,7 @@ def localize_hdf5(
 
     try:
         n_jobs, Executor, context, queue = get_pool(
-            n_jobs, with_rank_queue=True, rank_queue_empty=True
+            n_jobs, with_rank_queue=True, rank_queue_empty=True, cls="ProcessPoolExecutor"
         )
         with Executor(
             max_workers=n_jobs,
@@ -90,6 +91,7 @@ def localize_hdf5(
                 localization_model,
                 device,
                 spikes_per_batch,
+                logbarrier,
             ),
         ) as pool:
             with h5py.File(hdf5_filename, "r+") as h5:
@@ -167,6 +169,7 @@ class H5LocalizationContext:
         radius,
         n_channels_subset,
         localization_model,
+        logbarrier,
     ):
         h5 = h5py.File(hdf5_filename, "r", swmr=True)
         channels = h5[main_channels_dataset_name][:]
@@ -187,6 +190,7 @@ class H5LocalizationContext:
         self.radius = radius
         self.n_channels_subset = n_channels_subset
         self.localization_model = localization_model
+        self.logbarrier = logbarrier
 
 
 global _loc_context
@@ -205,6 +209,7 @@ def _h5_localize_init(
     localization_model,
     device,
     spikes_per_batch,
+    logbarrier,
 ):
     global _loc_context
 
@@ -227,6 +232,7 @@ def _h5_localize_init(
         radius,
         n_channels_subset,
         localization_model,
+        logbarrier,
     )
 
 
@@ -238,15 +244,17 @@ def _h5_localize_job(start_ix):
     channels_batch = p.channels[start_ix:end_ix]
     amp_vecs_batch = torch.tensor(p.amp_vecs[start_ix:end_ix], device=p.device)
 
-    locs = localize_amplitude_vectors(
-        amp_vecs_batch,
-        p.geom,
-        channels_batch,
-        channel_index=p.channel_index,
-        radius=p.radius,
-        n_channels_subset=p.n_channels_subset,
-        model=p.localization_model,
-    )
+    with torch.enable_grad():
+        locs = localize_amplitude_vectors(
+            amp_vecs_batch,
+            p.geom,
+            channels_batch,
+            channel_index=p.channel_index,
+            radius=p.radius,
+            n_channels_subset=p.n_channels_subset,
+            model=p.localization_model,
+            logbarrier=p.logbarrier,
+        )
     xyza_batch = np.c_[
         locs["x"].cpu().numpy(),
         locs["y"].cpu().numpy(),
@@ -257,9 +265,17 @@ def _h5_localize_job(start_ix):
 
 
 def point_source_mse(locs, amp_vecs, channels, channel_index, geom):
+    is_torch = torch.is_tensor(locs)
+    locs = torch.asarray(locs)
+    amp_vecs = torch.asarray(amp_vecs)
+    channels = torch.asarray(channels)
+    channel_index = torch.asarray(channel_index)
+    pgeom = np.pad(geom, [(0, 1), (0, 0)], constant_values=np.nan)
+    geom = torch.asarray(geom)
+    pgeom = torch.asarray(pgeom)
+
     neighborhoods = channel_index[channels]
     invalid = neighborhoods == len(geom)
-    pgeom = np.pad(geom, [(0, 1), (0, 0)], constant_values=np.nan)
     dxz = pgeom[neighborhoods]
 
     if locs.shape[1] == 3:
@@ -279,18 +295,21 @@ def point_source_mse(locs, amp_vecs, channels, channel_index, geom):
 
     dxz[:, :, 0] -= x[:, None]
     dxz[:, :, 1] -= z[:, None]
-    np.square(dxz, out=dxz)
+    dxz.square_()
     pred = dxz.sum(2)
     pred += y[:, None] ** 2
-    np.sqrt(pred, out=pred)
+    pred.sqrt_()
     pred[invalid] = 1.0
-    np.reciprocal(pred, out=pred)
+    pred.reciprocal_()
     pred *= alpha[:, None]
 
     mse = amp_vecs - pred
     mse[invalid] = 0.0
-    np.square(mse, out=mse)
+    mse.square_()
     nnz = channel_index.shape[1] - invalid.sum(1)
     mse = mse.sum(1) / nnz
+
+    if not is_torch:
+        mse = mse.numpy()
 
     return mse

@@ -32,6 +32,7 @@ from .templates import TemplateData
 from .transform import WaveformPipeline
 from .util import data_util, noise_util, spiketorch, waveform_util
 from .util.analysis import DARTsortAnalysis
+from .util.comparison import DARTsortGroundTruthComparison
 from .util.data_util import DARTsortSorting
 from .util.drift_util import registered_geometry
 from .util.noise_util import EmbeddedNoise

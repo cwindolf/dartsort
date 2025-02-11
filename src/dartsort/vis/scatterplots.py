@@ -347,6 +347,12 @@ def scatter_x_vs_depth(
     **scatter_kw,
 ):
     """Scatter plot of spike horizontal pos vs spike depth (vertical position on probe)"""
+    if x is None and sorting is not None:
+        x = getattr(sorting, localizations_dataset_name)[:, 0]
+    if depths_um is None and sorting is not None:
+        depths_um = getattr(sorting, localizations_dataset_name)[:, 2]
+    if amplitudes is None and sorting is not None:
+        amplitudes = getattr(sorting, amplitudes_dataset_name)
 
     if to_show is None and geom is not None:
         to_show = np.flatnonzero(

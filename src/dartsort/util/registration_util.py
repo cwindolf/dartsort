@@ -15,7 +15,7 @@ except ImportError:
 def estimate_motion(
     recording,
     sorting,
-    output_directory,
+    output_directory=None,
     overwrite=False,
     do_motion_estimation=True,
     probe_boundary_padding_um=100.0,

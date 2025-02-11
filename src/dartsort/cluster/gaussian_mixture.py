@@ -2,6 +2,8 @@ import logging
 import threading
 from dataclasses import replace
 from typing import Literal, Optional
+import warnings
+import traceback
 
 import numba
 import numpy as np
@@ -2499,22 +2501,27 @@ class GaussianUnit(torch.nn.Module):
             active_W = self.W[:, achans]
 
         if je_suis:
-            res = ppca_em(
-                sp=features,
-                noise=self.noise,
-                neighborhoods=neighborhoods,
-                active_channels=achans,
-                active_mean=active_mean,
-                active_W=active_W,
-                weights=weights,
-                cache_prefix="extract",
-                M=self.ppca_rank if self.cov_kind == "ppca" else 0,
-                n_iter=n_iter,
-                em_converged_atol=self.ppca_atol,
-                mean_prior_pseudocount=self.prior_pseudocount,
-                show_progress=show_progress,
-                cache_local_direct=needs_direct,
-            )
+            try:
+                res = ppca_em(
+                    sp=features,
+                    noise=self.noise,
+                    neighborhoods=neighborhoods,
+                    active_channels=achans,
+                    active_mean=active_mean,
+                    active_W=active_W,
+                    weights=weights,
+                    cache_prefix="extract",
+                    M=self.ppca_rank if self.cov_kind == "ppca" else 0,
+                    n_iter=n_iter,
+                    em_converged_atol=self.ppca_atol,
+                    mean_prior_pseudocount=self.prior_pseudocount,
+                    show_progress=show_progress,
+                    cache_local_direct=needs_direct,
+                )
+            except ValueError as e:
+                warnings.warn(f"ppca_em {e}")
+                self.pick_channels(None, None)
+                return
 
         if hasattr(self, "mean"):
             mean_full = self.mean
@@ -3358,3 +3365,11 @@ def _quick_indices(n_active, counts_so_far, reordered_labels, indices, max_sizes
             n_active -= 1
             if n_active == 0:
                 break
+
+
+def warn_with_traceback(message, category, filename, lineno, file=None, line=None):
+    import sys
+    log = file if hasattr(file,'write') else sys.stderr
+    traceback.print_stack(file=log)
+    log.write(warnings.formatwarning(message, category, filename, lineno, line))
+warnings.showwarning = warn_with_traceback
