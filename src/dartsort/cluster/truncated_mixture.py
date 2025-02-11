@@ -29,8 +29,8 @@ class SpikeTruncatedMixtureModel(torch.nn.Module):
         noise: EmbeddedNoise,
         M: int = 0,
         n_candidates: int = 3,
-        n_search: int = 1,
-        n_explore: int = 1,
+        n_search: int = 2,
+        n_explore: int = 2,
         random_seed=0,
         n_threads: int = 0,
     ):
@@ -149,16 +149,21 @@ class TruncatedExpectationProcessor(torch.nn.Module):
         batch_size: int = 2**12,
         n_threads: int = 0,
         random_seed: int = 0,
+        precompute_invx=True,
     ):
         super().__init__()
 
         # initialize fixed noise-related arrays
         self.initialize_fixed(noise, neighborhoods)
         self.neighborhood_ids = neighborhoods.neighborhood_ids
+        self.n_neighborhoods = neighborhoods.n_neighborhoods
         if features.isnan().any():
             print("Yeah. nans. Guess not possible to do in place?")
-            features = features.nan_to_num()
-        self.features = features
+            self.features = features.nan_to_num()
+        else:
+            self.features = features.clone()
+        if precompute_invx:
+            self.precompute_invx()
         self.batch_size = batch_size
         self.n_candidates = n_candidates
 
@@ -415,6 +420,13 @@ class TruncatedExpectationProcessor(torch.nn.Module):
                 Cooinv_Com[ni].view(R, ncoi, R, ncmi).permute(1, 3, 0, 2)
             )
 
+    def precompute_invx(self):
+        # precomputed Cooinv_x
+        self.Cooinv_x = self.features.clone().view(len(self.features), -1)
+        for ni in trange(self.n_neighborhoods, desc="invx"):
+            (mask,) = (self.neighborhood_ids == ni).nonzero(as_tuple=True)
+            self.Cooinv_x[mask] @= self.Coo_inv[ni]
+
     def update(
         self,
         log_proportions,
@@ -519,6 +531,9 @@ class TruncatedExpectationProcessor(torch.nn.Module):
         candidates = candidates[batch_indices]
         n, c = candidates.shape
         x = self.features[batch_indices].view(n, -1)
+        Cooinv_x = None
+        if hasattr(self, "Cooinv_x"):
+            Cooinv_x = self.Cooinv_x[batch_indices]
         neighborhood_ids = self.neighborhood_ids[batch_indices]
 
         # todo: index_select into buffers?
@@ -554,6 +569,12 @@ class TruncatedExpectationProcessor(torch.nn.Module):
         if hasattr(self, "noise_logliks"):
             noise_lls = self.noise_logliks[batch_indices]
 
+        # scratch arrays
+        all_lls = self.all_lls()[:n]
+        ubar = None
+        if self.M:
+            ubar = self.ubar()[:n]
+
         return TEBatchData(
             indices=batch_indices,
             n=len(x),
@@ -580,7 +601,24 @@ class TruncatedExpectationProcessor(torch.nn.Module):
             inv_cap=inv_cap,
             #
             noise_lls=noise_lls,
+            #
+            Cooinv_x=Cooinv_x,
+            #
+            all_lls=all_lls,
+            ubar=ubar,
         )
+
+    def all_lls(self):
+        if not hasattr(self._locals, "all_lls"):
+            self._locals.all_lls = self.Coo_logdet.new_empty(
+                (self.batch_size, self.n_candidates + 1)
+            )
+        return self._locals.all_lls
+
+    def ubar(self):
+        if not hasattr(self._locals, "ubar"):
+            self._locals.ubar = self.Coo_logdet.new_empty((self.batch_size, self.M))
+        return self._locals.ubar
 
 
 class CandidateSet:
