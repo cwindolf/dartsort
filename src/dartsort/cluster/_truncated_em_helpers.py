@@ -10,14 +10,19 @@ _1 = torch.tensor(1.0)
 
 
 def __debug_init__(self):
+    print("-" * 40, self.__class__.__name__)
     res = {}
     for f in fields(self):
         v = getattr(self, f.name)
         if torch.is_tensor(v):
             res[f.name] = v.isnan().any().item()
+            print(
+                f" - {f.name}: {v.shape} {v.min()=:g} {v.to(torch.float).mean()=:g} {v.max()=:g} {v.sum()=:g}"
+            )
     if any(res.values()):
         msg = f"NaNs in {self.__class__.__name__}: {res}"
         raise ValueError(msg)
+    print("//" + "-" * 38)
 
 
 @dataclass  # (slots=True, kw_only=True, frozen=True)
@@ -179,7 +184,7 @@ def _te_batch(
         Cooinv_x.mT,
         bd.Cooinv_nu,
         alpha=-1,
-        out=bd.Cooinv_nu,
+        # out=bd.Cooinv_nu,
     )
     WobsT_Cooinv_xc = None
     if self.M:
@@ -197,6 +202,9 @@ def _te_batch(
     else:
         inv_quad = Cooinv_xc
     del Cooinv_xc  # overwritten
+    print(
+        f"{inv_quad.shape=} {bd.obs_logdets.shape=} {pinobs.shape=} {bd.log_proportions.shape=}"
+    )
     inv_quad = inv_quad.mul_(xc).sum(dim=2)
     lls_unnorm = inv_quad.add_(bd.obs_logdets).add_(pinobs[:, None]).mul_(-0.5)
     # the proportions...
@@ -208,9 +216,13 @@ def _te_batch(
     topinds = topinds[:, : self.n_candidates]
 
     # -- compute Q
+    print(f"{toplls.shape=} {noise_lls.shape=}")
     all_lls = torch.concatenate((toplls, noise_lls.unsqueeze(1)), dim=1)
     Q = torch.softmax(all_lls, dim=1)
     Q_ = Q[:, :-1]
+    print(f"{Q[:, -1].min()=}")
+    print(f"{Q[:, -1].mean()=}")
+    print(f"{Q[:, -1].max()=}")
 
     # extract top candidate inds
     bd_new, (xc, WobsT_Cooinv_xc) = bd.take_along_candidates(
@@ -228,10 +240,17 @@ def _te_batch(
             _1.broadcast_to(bd.candidates.shape),
         )
         dkl = Q.new_zeros((self.n_units, self.n_units))
+        top_lls_unnorm = lls_unnorm.take_along_dim(topinds[:, :1], dim=1)
+        print(f"{(top_lls_unnorm - nlls).min()=}")
+        print(f"{(top_lls_unnorm - nlls).mean()=}")
+        print(f"{(top_lls_unnorm - nlls).max()=}")
+        print(f"{(toplls[:, 0] - noise_lls).min()=}")
+        print(f"{(toplls[:, 0] - noise_lls).mean()=}")
+        print(f"{(toplls[:, 0] - noise_lls).max()=}")
         spiketorch.add_at_(
             dkl,
-            (bd_new.candidates[:, None, :1], bd.candidates[:, :, None]),
-            lls_unnorm[:, 0, None] - lls_unnorm,
+            (bd_new.candidates[:, :1], bd.candidates),
+            top_lls_unnorm - lls_unnorm,
         )
 
     # -- replace bd name...
@@ -245,10 +264,8 @@ def _te_batch(
         spiketorch.add_at_(N, bd.candidates.view(-1), Q_.reshape(-1))
         noise_N = Q[:, -1].sum()
         # used below for weighted averaging
-        Qn = Q_.clone()
-        denom = N[bd.candidates]
-        denom = torch.where(Q_ > 0, denom, _1.broadcast_to(denom.shape), out=denom)
-        Qn.div_(denom)
+        Qn = Q_ / N.clamp(min=1.0)[bd.candidates]
+        # Qn = Q_
 
     R = U = m = None
     if with_stats and self.M:
@@ -328,7 +345,14 @@ def _te_batch(
             Qn[:, :, None, None] * bd.x.view(bd.n, 1, self.rank, self.nc_obs),
         )
 
-        mm = Qn[:, :, None] * (bd.tnu.baddbmm_(xc, bd.Cooinv_Com))
+        print(f"{bd.tnu.shape=}")
+        print(f"{xc.shape=}")
+        print(f"{bd.Cooinv_Com.shape=}")
+        print(f"{Qn.shape=}")
+        print(f"{bd.tnu.baddbmm_(xc, bd.Cooinv_Com).shape=}")
+        mm = bd.tnu.baddbmm_(xc, bd.Cooinv_Com).mul_(Qn.unsqueeze(2))
+        print(f"{Qn.min()=} {Qn.mean()=} {Qn.max()=}")
+        print(f"{mm.min()=} {mm.mean()=} {mm.max()=}")
         spiketorch.add_at_(
             m,
             (
@@ -343,15 +367,16 @@ def _te_batch(
     # not implemented
     assert not with_grads
 
-    # -- elbo
+    # -- elbo/n
     # not implemented
     assert not with_elbo
 
-    # -- obs elbo
+    # -- obs elbo/n
     obs_elbo = None
     if with_obs_elbo:
-        Q = torch.where(Q > 0, Q, _1, out=Q)
-        obs_elbo = torch.sum(Q * (all_lls + Q.log()))
+        logQ = torch.where(Q > 0, Q, _1).log()
+        all_lls = torch.where(Q > 0, all_lls, torch.tensor(0.0))
+        obs_elbo = torch.sum(Q * (all_lls + logQ), dim=1).mean()
 
     return TEBatchResult(
         indices=bd.indices,
