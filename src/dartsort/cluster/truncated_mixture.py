@@ -122,22 +122,6 @@ class SpikeTruncatedMixtureModel(torch.nn.Module):
         self.log_proportions[:] = lp[1:]
         self.kl_divergences[:] = result.kl
 
-        print("set to")
-        print(f"{self.means.min()=} {self.means.mean()=} {self.means.max()=}")
-        print(
-            f"{self.means[...,:-1].min()=} {self.means[...,:-1].mean()=} {self.means[...,:-1].max()=}"
-        )
-        print(
-            f"{self.log_proportions.min()=} {self.log_proportions.mean()=} {self.log_proportions.max()=}"
-        )
-        print(f"{self.noise_log_prop=}")
-        print(
-            f"{self.kl_divergences.min()=} {self.kl_divergences.mean()=} {self.kl_divergences.max()=}"
-        )
-        print(f"{self.kl_divergences.isfinite().sum(1).min()=}")
-        print(f"{self.kl_divergences.isfinite().sum(1).to(torch.float).mean()=}")
-        print(f"{self.kl_divergences.isfinite().sum(1).max()=}")
-
         return dict(obs_elbo=result.obs_elbo)
 
     def search_sets(self, n_search=None):
@@ -238,9 +222,9 @@ class TruncatedExpectationProcessor(torch.nn.Module):
             N_N0 = N.div((N + result.N).clamp(min=1.0))[:, None, None]
             N += result.N
             N_N1 = result.N.div(N.clamp(min=1.0))[:, None, None]
-            # m += (result.m[:, :, :-1] - m).mul_(N_N1)
-            m *= N_N0
-            m += result.m[:, :, :-1] * N_N1
+            m += (result.m[:, :, :-1] - m).mul_(N_N1)
+            # m *= N_N0
+            # m += result.m[:, :, :-1] * N_N1
             noise_N += result.noise_N
 
             # running avg for elbo/n
@@ -269,13 +253,6 @@ class TruncatedExpectationProcessor(torch.nn.Module):
             self.register_buffer("noise_logliks", noise_logliks)
 
         dkl[ncc < 1] = torch.inf
-
-        print("final")
-        print(f"{m.min()=} {m.mean()=} {m.max()=}")
-        print(f"{N.min()=} {N.mean()=} {N.max()=}")
-        print(f"{noise_N=}")
-        print(f"{dkl.min()=} {dkl.mean()=} {dkl.max()=}")
-        print(f"{ncc.min()=} {ncc.mean()=} {ncc.max()=}")
 
         return TEStepResult(
             elbo=None,
@@ -387,7 +364,7 @@ class TruncatedExpectationProcessor(torch.nn.Module):
         Coo = [operators.CholLinearOperator(C.cholesky()) for C in Coo]
         Coo_logdet = torch.tensor([C.logdet() for C in Coo])
         Coo_inv = [C.inverse().to_dense() for C in Coo]
-        Cooinv_Com = [Co @ Cm for Co, Cm in zip(Coo, Com)]
+        Cooinv_Com = [Co @ Cm for Co, Cm in zip(Coo_inv, Com)]
 
         # figure out dimensions
         nc_obs = neighborhoods.channel_counts
@@ -641,21 +618,16 @@ class CandidateSet:
         self.candidates = torch.empty(
             (self.n_spikes, n_total), dtype=torch.long, pin_memory=can_pin
         )
-        print(f"__init__ {torch.unique(self.candidates[:, : self.n_candidates])=}")
-        print(f"__init__ {torch.unique(self.candidates[:, :])=}")
         self.rg = np.random.default_rng(random_seed)
 
     def initialize_candidates(self, labels, closest_neighbors):
         """Imposes invariant 1, or at least tries to start off well."""
-        print(f"before init {torch.unique(self.candidates[:, : self.n_candidates])=}")
-        print(f"with {torch.unique(closest_neighbors[labels])=}")
         torch.index_select(
             closest_neighbors,
             dim=0,
             index=labels,
             out=self.candidates[:, : self.n_candidates],
         )
-        print(f"after init {torch.unique(self.candidates[:, : self.n_candidates])=}")
 
     def propose_candidates(self, unit_search_neighbors):
         """Assumes invariant 1 and does not mess it up.
@@ -670,10 +642,8 @@ class CandidateSet:
         n_units = len(unit_search_neighbors)
 
         top = self.candidates[:, :C]
-        print(f"{torch.unique(self.candidates[:, :C])=}")
 
         # write the search units in place
-        print(f"before {torch.unique(self.candidates[:, C: C + n_search])=}")
         target = self.candidates[:, C : C + n_search].view(
             self.n_spikes, C, self.n_search
         )
@@ -682,7 +652,6 @@ class CandidateSet:
             == self.candidates.untyped_storage().data_ptr()
         )
         target[:] = unit_search_neighbors[top]
-        print(f"after {torch.unique(self.candidates[:, C: C + n_search])=}")
         # torch.take_along_dim(
         #     input=unit_search_neighbors,
         #     indices=top,
@@ -719,11 +688,9 @@ class CandidateSet:
         )
         targs = torch.from_numpy(targs)
         # torch take_along_dim has an out= while np's does not, so use it.
-        print(f"before {torch.unique(self.candidates[:, -self.n_explore :])=}")
         self.candidates[:, -self.n_explore :] = neighborhood_explore_units[
             self.neighborhood_ids[:, None], targs
         ]
-        print(f"after {torch.unique(self.candidates[:, -self.n_explore :])=}")
 
         # update counts for the explore units
         np.add.at(

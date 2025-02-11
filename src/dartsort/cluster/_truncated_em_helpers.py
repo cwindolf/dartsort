@@ -9,6 +9,9 @@ log2pi = torch.log(torch.tensor(2 * np.pi))
 _1 = torch.tensor(1.0)
 
 
+DEBUG = False
+
+
 def __debug_init__(self):
     print("-" * 40, self.__class__.__name__)
     res = {}
@@ -17,7 +20,7 @@ def __debug_init__(self):
         if torch.is_tensor(v):
             res[f.name] = v.isnan().any().item()
             print(
-                f" - {f.name}: {v.shape} {v.min()=:g} {v.to(torch.float).mean()=:g} {v.max()=:g} {v.sum()=:g}"
+                f" - {f.name}: {v.shape} min={v.min().item():g} mean={v.to(torch.float).mean().item():g} max={v.max().item():g} sum={v.sum().item():g}"
             )
     if any(res.values()):
         msg = f"NaNs in {self.__class__.__name__}: {res}"
@@ -38,7 +41,8 @@ class TEStepResult:
 
     kl: Optional[torch.Tensor] = None
 
-    __post_init__ = __debug_init__
+    if DEBUG:
+        __post_init__ = __debug_init__
 
 
 @dataclass  # (slots=True, kw_only=True, frozen=True)
@@ -61,7 +65,9 @@ class TEBatchResult:
 
     ncc: Optional[torch.Tensor] = None
     dkl: Optional[torch.Tensor] = None
-    __post_init__ = __debug_init__
+
+    if DEBUG:
+        __post_init__ = __debug_init__
 
 
 _hc = dict(has_candidates=True)
@@ -110,7 +116,9 @@ class TEBatchData:
 
     # (n,)
     noise_lls: Optional[torch.Tensor] = None
-    __post_init__ = __debug_init__
+
+    if DEBUG:
+        __post_init__ = __debug_init__
 
     def take_along_candidates(self, inds, extras):
         cand_fields = [
@@ -202,9 +210,6 @@ def _te_batch(
     else:
         inv_quad = Cooinv_xc
     del Cooinv_xc  # overwritten
-    print(
-        f"{inv_quad.shape=} {bd.obs_logdets.shape=} {pinobs.shape=} {bd.log_proportions.shape=}"
-    )
     inv_quad = inv_quad.mul_(xc).sum(dim=2)
     lls_unnorm = inv_quad.add_(bd.obs_logdets).add_(pinobs[:, None]).mul_(-0.5)
     # the proportions...
@@ -216,13 +221,9 @@ def _te_batch(
     topinds = topinds[:, : self.n_candidates]
 
     # -- compute Q
-    print(f"{toplls.shape=} {noise_lls.shape=}")
     all_lls = torch.concatenate((toplls, noise_lls.unsqueeze(1)), dim=1)
     Q = torch.softmax(all_lls, dim=1)
     Q_ = Q[:, :-1]
-    print(f"{Q[:, -1].min()=}")
-    print(f"{Q[:, -1].mean()=}")
-    print(f"{Q[:, -1].max()=}")
 
     # extract top candidate inds
     bd_new, (xc, WobsT_Cooinv_xc) = bd.take_along_candidates(
@@ -241,12 +242,6 @@ def _te_batch(
         )
         dkl = Q.new_zeros((self.n_units, self.n_units))
         top_lls_unnorm = lls_unnorm.take_along_dim(topinds[:, :1], dim=1)
-        print(f"{(top_lls_unnorm - nlls).min()=}")
-        print(f"{(top_lls_unnorm - nlls).mean()=}")
-        print(f"{(top_lls_unnorm - nlls).max()=}")
-        print(f"{(toplls[:, 0] - noise_lls).min()=}")
-        print(f"{(toplls[:, 0] - noise_lls).mean()=}")
-        print(f"{(toplls[:, 0] - noise_lls).max()=}")
         spiketorch.add_at_(
             dkl,
             (bd_new.candidates[:, :1], bd.candidates),
@@ -344,15 +339,7 @@ def _te_batch(
             ),
             Qn[:, :, None, None] * bd.x.view(bd.n, 1, self.rank, self.nc_obs),
         )
-
-        print(f"{bd.tnu.shape=}")
-        print(f"{xc.shape=}")
-        print(f"{bd.Cooinv_Com.shape=}")
-        print(f"{Qn.shape=}")
-        print(f"{bd.tnu.baddbmm_(xc, bd.Cooinv_Com).shape=}")
         mm = bd.tnu.baddbmm_(xc, bd.Cooinv_Com).mul_(Qn.unsqueeze(2))
-        print(f"{Qn.min()=} {Qn.mean()=} {Qn.max()=}")
-        print(f"{mm.min()=} {mm.mean()=} {mm.max()=}")
         spiketorch.add_at_(
             m,
             (

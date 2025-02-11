@@ -386,7 +386,6 @@ class SpikeMixtureModel(torch.nn.Module):
             basis = None
             if tmm.bases is not None:
                 basis = tmm.bases[j, ..., :-1].permute(1, 2, 0)
-            print(tmm.means[j, :, :-1])
             self[j] = GaussianUnit.from_parameters(
                 self.noise,
                 mean=tmm.means[j, :, :-1],
