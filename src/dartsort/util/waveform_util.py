@@ -17,7 +17,7 @@ from tqdm.auto import trange
 # -- geometry utils
 
 
-def get_pitch(geom, direction=1):
+def get_pitch(geom, direction=1, allow_horizontal=False):
     """Guess the pitch, even for probes with gaps or channels missing at random
 
     This is the unit at which the probe repeats itself, computed as the
@@ -27,12 +27,14 @@ def get_pitch(geom, direction=1):
 
     So for NP1, it's not every row, but every 2 rows! And for a probe with a
     zig-zag arrangement, it would be also 2 vertical distances between channels.
-
-    Copied from https://github.com/cwindolf/dartsort
     """
     other_dims = [i for i in range(geom.shape[1]) if i != direction]
     other_dims_uniq = np.unique(geom[:, other_dims], axis=0)
 
+    # case 1: lattice layouts
+    # the pitch is determined as the minimal spacing between
+    # contacts whose position is the same along directions other
+    # than `direction`. this handles dense Neuropixels layouts.
     pitch = np.inf
     for pos in other_dims_uniq:
         at_x = np.all(geom[:, other_dims] == pos, axis=1)
@@ -40,10 +42,25 @@ def get_pitch(geom, direction=1):
         if y_uniq_at_x.size > 1:
             pitch = min(pitch, np.diff(y_uniq_at_x).min())
 
-    if np.isinf(pitch):
-        raise ValueError("Horizontal probe.")
+    # case 1 succeeded
+    if np.isfinite(pitch):
+        return pitch
 
-    return pitch
+    # case 2: fallback for zig-zag layouts
+    # there are two main types of zig-zag layouts I have seen. one
+    # is a regular zig-zag. The other has a stagger half-way down
+    # (a certain choice of NP1 banks for a long configuration).
+    all_unique_y = np.unique(geom[:, direction])
+
+    # there is 1 unique y position... call it 0 pitch.
+    if all_unique_y.size == 1:
+        if allow_horizontal:
+            return 0
+        else:
+            raise ValueError("Horizontal probe.")
+
+    assert all_unique_y.size > 1
+    return np.diff(all_unique_y).min()
 
 
 def fill_geom_holes(geom):
@@ -113,7 +130,9 @@ def regularize_geom(geom, radius=0):
 
 def _regularize_1d(geom, radius, eps, dim=1):
     total = np.ptp(geom[:, dim])
-    dim_pitch = get_pitch(geom, direction=dim)
+    dim_pitch = get_pitch(geom, direction=dim, allow_horizontal=True)
+    if dim_pitch == 0:
+        return geom
     steps = int(np.ceil(total / dim_pitch))
 
     min_pos = geom[:, dim].min() - radius - eps

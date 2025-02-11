@@ -340,6 +340,7 @@ class EmbeddedNoise(torch.nn.Module):
         self.n_channels = n_channels
         self.mean_kind = mean_kind
         self.cov_kind = cov_kind
+        self.D = rank * n_channels
 
         self.register_buffer("chans_arange", torch.arange(n_channels))
         if mean is not None:
@@ -433,7 +434,7 @@ class EmbeddedNoise(torch.nn.Module):
                 res = res.to(device)
                 self.cache[cache_key] = res
             # TODO: why is this necessary? I thought that calling solve would cache this.
-            if not hasattr(res, '_memoize_cache'):
+            if not hasattr(res, "_memoize_cache"):
                 res.cholesky()
             return res
         if channels is None or channels == slice(None):

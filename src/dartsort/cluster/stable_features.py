@@ -140,6 +140,7 @@ class StableSpikeDataset(torch.nn.Module):
                 neighborhoods=extract_channels[neighborhood_ix],
                 deduplicate=True,
                 device=device,
+                name="extract",
             )
             self._train_extract_channels = extract_channels.cpu()[train_ixs]
         core_channel_index = waveform_util.make_channel_index(
@@ -156,6 +157,7 @@ class StableSpikeDataset(torch.nn.Module):
                 features=core_features[ix] if k in _core_feature_splits else None,
                 device=device,
                 channel_index=core_channel_index,
+                name=k,
             )
             for k, ix in self.split_indices.items()
         }
@@ -412,7 +414,7 @@ class StableSpikeDataset(torch.nn.Module):
 
     def neighborhoods(
         self, neighborhood="core", split="train"
-    ) -> tuple[torch.tensor, "SpikeNeighborhoods"]:
+    ) -> tuple[torch.LongTensor, "SpikeNeighborhoods"]:
         split_ixs = self.split_indices[split]
 
         if neighborhood == "extract":
@@ -501,6 +503,7 @@ class SpikeNeighborhoods(torch.nn.Module):
         store_on_device: bool = False,
         channel_index=None,
         device=None,
+        name=None,
     ):
         """SpikeNeighborhoods
 
@@ -518,6 +521,7 @@ class SpikeNeighborhoods(torch.nn.Module):
         """
         super().__init__()
         self.n_channels = n_channels
+        self.register_buffer("chans_arange", torch.arange(n_channels))
         if store_on_device:
             self.register_buffer("neighborhood_ids", neighborhood_ids)
         else:
@@ -527,6 +531,7 @@ class SpikeNeighborhoods(torch.nn.Module):
         self.n_neighborhoods = len(neighborhoods)
         if channel_index is not None:
             self.register_buffer("channel_index", channel_index)
+        self.name = name
 
         # store neighborhoods as an indicator matrix
         # also store nonzero-d masks
@@ -598,6 +603,7 @@ class SpikeNeighborhoods(torch.nn.Module):
         deduplicate=False,
         features=None,
         channel_index=None,
+        name=None,
     ):
         if neighborhood_ids is not None:
             assert neighborhoods is not None
@@ -610,6 +616,7 @@ class SpikeNeighborhoods(torch.nn.Module):
                 deduplicate=deduplicate,
                 features=features,
                 channel_index=channel_index,
+                name=name,
             )
         if device is not None:
             channels = channels.to(device)
@@ -623,6 +630,7 @@ class SpikeNeighborhoods(torch.nn.Module):
             features=features,
             device=channels.device,
             channel_index=channel_index,
+            name=name,
         )
 
     @classmethod
@@ -636,6 +644,7 @@ class SpikeNeighborhoods(torch.nn.Module):
         deduplicate=False,
         features=None,
         channel_index=None,
+        name=None,
     ):
         neighborhoods = torch.asarray(neighborhoods)
         if device is not None:
@@ -656,6 +665,7 @@ class SpikeNeighborhoods(torch.nn.Module):
             features=features,
             device=device,
             channel_index=channel_index,
+            name=name,
         )
 
     def has_feature_cache(self):
@@ -667,6 +677,9 @@ class SpikeNeighborhoods(torch.nn.Module):
     def neighborhood_channels(self, id):
         nhc = self.neighborhoods[id]
         return nhc[nhc < self.n_channels]
+
+    def missing_channels(self, id):
+        return self.chans_arange[self.indicators[:, id] == 0]
 
     def neighborhood_members(self, id):
         return self._neighborhood_members[self.neighborhood_members_slices[id]]
