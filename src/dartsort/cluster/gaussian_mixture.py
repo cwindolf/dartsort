@@ -334,17 +334,18 @@ class SpikeMixtureModel(torch.nn.Module):
         show_progress=True,
         final_e_step=True,
         final_split="kept",
-        n_threads=0,
+        n_threads=2,
+        batch_size=1024,
     ):
         # TODO: hang on to this and update it in place
         tmm = truncated_mixture.SpikeTruncatedMixtureModel(
-            self.data, self.noise, self.ppca_rank, n_threads=n_threads
+            self.data, self.noise, self.ppca_rank, n_threads=n_threads, batch_size=batch_size
         )
 
         n_iter = self.n_em_iters if n_iter is None else n_iter
         step_progress = False
         if show_progress:
-            its = trange(n_iter, desc="EM", **tqdm_kw)
+            its = trange(n_iter, desc="tEM", **tqdm_kw)
             step_progress = bool(max(0, int(show_progress) - 1))
         else:
             its = range(n_iter)
@@ -353,7 +354,7 @@ class SpikeMixtureModel(torch.nn.Module):
         missing_ids = self.missing_ids()
         if len(missing_ids):
             self.m_step(show_progress=step_progress, fit_ids=missing_ids)
-            self.cleanup(min_count=1)
+        self.cleanup()
 
         # update from my stack
         ids, means, covs, logdets = self.stack_units()
@@ -2432,6 +2433,7 @@ class GaussianUnit(torch.nn.Module):
         noise: noise_util.EmbeddedNoise,
         mean,
         basis=None,
+        channels_amp=0.25,
     ):
         M = 0 if basis is None else basis.shape[-1]
         # TODO: pick channels somehow...
@@ -2446,7 +2448,8 @@ class GaussianUnit(torch.nn.Module):
         self.register_buffer("mean", mean)
         if basis is not None:
             self.register_buffer("W", basis)
-        self.register_buffer("channels", torch.arange(self.n_channels))
+        channels, = (mean.square().sum(dim=0).sqrt() > channels_amp).nonzero(as_tuple=True)
+        self.register_buffer("channels", channels)
         # TODO: neeed for vis. figure it out.
         self.snr = torch.ones(self.n_channels)
         return self
