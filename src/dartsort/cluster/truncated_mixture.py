@@ -33,6 +33,7 @@ class SpikeTruncatedMixtureModel(torch.nn.Module):
         n_explore: int = 2,
         random_seed=0,
         n_threads: int = 0,
+        batch_size=2048,
     ):
         super().__init__()
         self.data = data
@@ -47,6 +48,7 @@ class SpikeTruncatedMixtureModel(torch.nn.Module):
             n_candidates=n_candidates,
             random_seed=random_seed,
             n_threads=n_threads,
+            batch_size=batch_size,
         )
         self.candidates = CandidateSet(
             neighborhoods=self.train_neighborhoods,
@@ -146,7 +148,7 @@ class TruncatedExpectationProcessor(torch.nn.Module):
         neighborhoods: SpikeNeighborhoods,
         features: torch.Tensor,
         n_candidates: int,
-        batch_size: int = 2**12,
+        batch_size: int = 2**10,
         n_threads: int = 0,
         random_seed: int = 0,
         precompute_invx=True,
@@ -166,6 +168,7 @@ class TruncatedExpectationProcessor(torch.nn.Module):
             self.precompute_invx()
         self.batch_size = batch_size
         self.n_candidates = n_candidates
+        print(f"{self.device=}")
 
         # M is updated by self.update() when a basis is assigned here.
         self.M = 0
@@ -356,6 +359,7 @@ class TruncatedExpectationProcessor(torch.nn.Module):
             )
             for ni in range(neighborhoods.n_neighborhoods)
         ]
+        device = Coo[0].device
         Com = [
             noise.offdiag_covariance(
                 channels_left=neighborhoods.neighborhood_channels(ni),
@@ -367,7 +371,7 @@ class TruncatedExpectationProcessor(torch.nn.Module):
         # Get choleskys. linear_operator will jitter to help
         # with numerics for us if we do everything via chol.
         Coo = [operators.CholLinearOperator(C.cholesky()) for C in Coo]
-        Coo_logdet = torch.tensor([C.logdet() for C in Coo])
+        Coo_logdet = torch.tensor([C.logdet() for C in Coo], device=device)
         Coo_inv = [C.inverse().to_dense() for C in Coo]
         Cooinv_Com = [Co @ Cm for Co, Cm in zip(Coo_inv, Com)]
 
@@ -380,10 +384,10 @@ class TruncatedExpectationProcessor(torch.nn.Module):
         # these arrays are used to scatter into D-shaped dims.
         # actually... maybe into D+1-shaped dims, so that we can use
         # D as the invalid indicator
-        self.register_buffer("obs_ix", neighborhoods.neighborhoods)
+        self.register_buffer("obs_ix", neighborhoods.neighborhoods.to(device))
         self.register_buffer(
             "miss_ix",
-            torch.full((neighborhoods.n_neighborhoods, ncm), fill_value=nc),
+            torch.full((neighborhoods.n_neighborhoods, ncm), fill_value=nc, device=device),
         )
         for ni in range(neighborhoods.n_neighborhoods):
             neighb_missing = neighborhoods.missing_channels(ni)
@@ -391,14 +395,16 @@ class TruncatedExpectationProcessor(torch.nn.Module):
 
         # allocate buffers
         self.register_buffer("Coo_logdet", Coo_logdet)
+        print(f"{self.Coo_logdet.device=}")
+        print(f"{self.device=}")
         self.register_buffer("nobs", R * nc_obs)
         self.register_buffer(
             "Coo_inv",
-            torch.zeros(neighborhoods.n_neighborhoods, R * nco, R * nco),
+            torch.zeros(neighborhoods.n_neighborhoods, R * nco, R * nco, device=device),
         )
         self.register_buffer(
             "Cooinv_Com",
-            torch.zeros(neighborhoods.n_neighborhoods, R * nco, R * ncm),
+            torch.zeros(neighborhoods.n_neighborhoods, R * nco, R * ncm, device=device),
         )
 
         # loop to fill relevant channels of zero padded buffers
@@ -414,10 +420,10 @@ class TruncatedExpectationProcessor(torch.nn.Module):
             ncmi = mi.numel()
             # remember, adv ix brings the indexed axes to the front
             self.Coo_inv[ni].view(R, nco, R, nco)[:, oi[:, None], :, oi[None, :]] = (
-                Coo_inv[ni].view(R, ncoi, R, ncoi).permute(1, 3, 0, 2)
+                Coo_inv[ni].view(R, ncoi, R, ncoi).permute(1, 3, 0, 2).to(device)
             )
             self.Cooinv_Com[ni].view(R, nco, R, ncm)[:, oi[:, None], :, mi[None, :]] = (
-                Cooinv_Com[ni].view(R, ncoi, R, ncmi).permute(1, 3, 0, 2)
+                Cooinv_Com[ni].view(R, ncoi, R, ncmi).permute(1, 3, 0, 2).to(device)
             )
 
     def precompute_invx(self):
@@ -425,7 +431,7 @@ class TruncatedExpectationProcessor(torch.nn.Module):
         self.Cooinv_x = self.features.clone().view(len(self.features), -1)
         for ni in trange(self.n_neighborhoods, desc="invx"):
             (mask,) = (self.neighborhood_ids == ni).nonzero(as_tuple=True)
-            self.Cooinv_x[mask] @= self.Coo_inv[ni]
+            self.Cooinv_x[mask] @= self.Coo_inv[ni].to(self.Cooinv_x)
 
     def update(
         self,
@@ -451,7 +457,8 @@ class TruncatedExpectationProcessor(torch.nn.Module):
         if unit_neighborhood_counts is not None:
             # update lookup table and re-initialize storage
             res = neighb_lut(unit_neighborhood_counts)
-            self.lut, self.lut_units, self.lut_neighbs = res
+            lut, self.lut_units, self.lut_neighbs = res
+            self.lut = torch.asarray(lut, device=self.device)
         nlut = len(self.lut_units)
 
         # observed parts of W...
@@ -528,12 +535,12 @@ class TruncatedExpectationProcessor(torch.nn.Module):
         with_elbo=False,
         with_obs_elbo=False,
     ) -> TEBatchData:
-        candidates = candidates[batch_indices]
+        candidates = candidates[batch_indices].to(self.device)
         n, c = candidates.shape
-        x = self.features[batch_indices].view(n, -1)
+        x = self.features[batch_indices].view(n, -1).to(self.device)
         Cooinv_x = None
         if hasattr(self, "Cooinv_x"):
-            Cooinv_x = self.Cooinv_x[batch_indices]
+            Cooinv_x = self.Cooinv_x[batch_indices].to(self.device)
         neighborhood_ids = self.neighborhood_ids[batch_indices]
 
         # todo: index_select into buffers?

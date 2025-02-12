@@ -89,7 +89,11 @@ def refine_clustering(
             else:
                 log_liks = gmm.em()
         gmm.merge(log_liks)
-    gmm.em(final_split="full")
+
+    if refinement_config.truncated:
+        log_liks = gmm.tem(final_split="full")
+    else:
+        log_liks = gmm.em(final_split="full")
     gmm.cpu()
     sorting = gmm.to_sorting()
     return sorting

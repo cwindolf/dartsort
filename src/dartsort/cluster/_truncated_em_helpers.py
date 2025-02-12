@@ -245,7 +245,8 @@ def _te_batch(
         spiketorch.add_at_(
             ncc,
             (new_candidates[:, None, :1], orig_candidates[:, :, None]),
-            _1.broadcast_to(orig_candidates.shape),
+            # _1.broadcast_to(orig_candidates.shape),
+            1.0,
         )
         dkl = Q.new_zeros((self.n_units, self.n_units))
         top_lls_unnorm = lls_unnorm.take_along_dim(topinds[:, :1], dim=1)
@@ -266,6 +267,7 @@ def _te_batch(
         # Qn = Q_
 
     R = U = m = None
+    arange_rank = torch.arange(self.rank, device=Q.device)
     if with_stats and self.M:
         assert Qn is not None
         assert WobsT_Cooinv_xc is not None  # for pyright
@@ -288,7 +290,7 @@ def _te_batch(
             (
                 new_candidates[:, :, None, None, None],
                 torch.arange(self.M)[:, None, :, None, None],
-                torch.arange(self.rank)[:, None, None, :, None],
+                arange_rank[:, None, None, :, None],
                 bd.obs_ix[:, None, None, None, :],
             ),
             Ro.view(*Ro.shape[:3], self.rank, self.nc_obs),
@@ -299,7 +301,7 @@ def _te_batch(
             (
                 new_candidates[:, :, None, None, None],
                 torch.arange(self.M)[:, None, :, None, None],
-                torch.arange(self.rank)[:, None, None, :, None],
+                arange_rank[:, None, None, :, None],
                 bd.miss_ix[:, None, None, None, :],
             ),
             Rm.view(*Rm.shape[:3], self.rank, self.nc_miss),
@@ -315,7 +317,7 @@ def _te_batch(
             m,
             (
                 new_candidates[:, :, None, None],
-                torch.arange(self.rank)[None, None, :, None],
+                arange_rank[None, None, :, None],
                 bd.obs_ix[:, None, None, :],
             ),
             mo.view(bd.n, C, self.rank, self.nc_obs),
@@ -325,7 +327,7 @@ def _te_batch(
             m,
             (
                 new_candidates[:, :, None, None],
-                torch.arange(self.rank)[None, None, :, None],
+                arange_rank[None, None, :, None],
                 bd.miss_ix[:, None, None, :],
             ),
             mm.view(C, self.rank, self.nc_miss),
@@ -346,7 +348,7 @@ def _te_batch(
             m,
             (
                 new_candidates[:, :, None, None],
-                torch.arange(self.rank)[None, None, :, None],
+                arange_rank[None, None, :, None],
                 bd.obs_ix[:, None, None, :],
             ),
             mo,
@@ -355,7 +357,7 @@ def _te_batch(
             m,
             (
                 new_candidates[:, :, None, None],
-                torch.arange(self.rank)[None, None, :, None],
+                arange_rank[None, None, :, None],
                 bd.miss_ix[:, None, None, :],
             ),
             mm.view(bd.n, C, self.rank, self.nc_miss),
