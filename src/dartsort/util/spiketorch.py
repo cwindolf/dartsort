@@ -101,10 +101,14 @@ def add_at_(dest, ix, src, sign=1):
     elif sign != 1:
         src = sign * src
     flat_ix = ravel_multi_index(ix, dest.shape)
+    if isinstance(src, float):
+        src = torch.tensor(src, dtype=dest.dtype, device=dest.device).broadcast_to(flat_ix.numel())
+    else:
+        src = src.reshape(-1)
     dest.view(-1).scatter_add_(
         0,
         flat_ix,
-        src.reshape(-1),
+        src,
     )
 
 
