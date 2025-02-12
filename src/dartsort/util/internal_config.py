@@ -355,6 +355,7 @@ class RefinementConfig:
     em_converged_atol: float = 1e-2
     n_total_iters: int = 3
     hard_noise: bool = False
+    truncated: bool = False
 
     # if someone wants this
     split_merge_config: SplitMergeConfig | None = None
