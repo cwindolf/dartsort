@@ -152,6 +152,7 @@ class DeveloperConfig(DARTsortUserConfig):
     use_singlechan_templates: bool = False
     use_universal_templates: bool = False
     signal_rank: Annotated[int, Field(ge=0)] = 0
+    use_tem: bool = False
 
     merge_criterion_threshold: float = 0.0
     merge_criterion: Literal[
