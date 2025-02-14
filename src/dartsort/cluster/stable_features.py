@@ -205,6 +205,7 @@ class StableSpikeDataset(torch.nn.Module):
         workers=-1,
         device=None,
         random_seed=0,
+        _core_feature_splits=("train", "kept"),
     ):
         if device is None:
             device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -338,6 +339,7 @@ class StableSpikeDataset(torch.nn.Module):
             split_mask=split_mask,
             core_radius=core_radius,
             device=device,
+            _core_feature_splits=_core_feature_splits,
         )
         self.to(device)
         return self
