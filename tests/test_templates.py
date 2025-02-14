@@ -77,7 +77,7 @@ def test_drifting_templates():
     rec0.set_dummy_probe_from_locations(geom)
 
     with tempfile.TemporaryDirectory() as tdir:
-        rec1 = rec0.save_to_folder(Path(tdir) / "rec")
+        rec1 = rec0.save_to_folder(Path(tdir) / "rec", n_jobs=1)
         for rec in [rec0, rec1]:
             me = get_motion_estimate(
                 0.5 * np.arange(11), time_bin_centers_s=np.arange(11).astype(float)

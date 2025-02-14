@@ -46,7 +46,7 @@ def _test_ppca(w_init="random", normalize=False):
                             rank, nc, M = W.shape
                             W = W.reshape(-1, M)
                             WTW = W @ W.T
-                            mss = np.square(WTW).mean()
+                            mss = np.square(WTW.numpy(force=True)).mean()
                             mse = np.square(res["Werr"]).mean()
                             Wgood = mse / mss < wtw_rtol
                         assert Wgood

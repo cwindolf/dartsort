@@ -52,7 +52,7 @@ def test_localize_torch():
             for x, y, za, a, lg in zip(xs, ys, z_abss, alphas, local_geoms)
         ]
     )
-    local_geoms[:, :, 1] -= g[chans, 1][:, None]
+    local_geoms[:, :, 1] -= torch.tensor(g[chans, 1][:, None])
     pred_ampvecs = np.array(
         [
             localize_torch.point_source_amplitude_at(x, y, z, a, lg).numpy()

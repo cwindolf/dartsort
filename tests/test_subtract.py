@@ -102,7 +102,7 @@ def test_fakedata_nonn():
         ),
     )
     featconf = FeaturizationConfig(do_nn_denoise=False, n_residual_snips=8)
-    channel_index = waveform_util.make_channel_index(geom, subconf.extract_radius)
+    channel_index = waveform_util.make_channel_index(geom, featconf.extract_radius)
     assert channel_index.shape[0] == len(geom)
     assert channel_index.max() == len(geom)
     assert channel_index.min() == 0
@@ -407,7 +407,8 @@ def small_default_config(extract_radius=200):
     rec = sc.NumpyRecording(noise, 30_000)
     rec.set_dummy_probe_from_locations(geom)
 
-    cfg = SubtractionConfig(detection_threshold=10.0, extract_radius=extract_radius)
+    cfg = SubtractionConfig(detection_threshold=10.0)
+    fcfg = FeaturizationConfig(extract_radius=extract_radius)
 
     with tempfile.TemporaryDirectory() as tempdir:
         # test default config
@@ -417,6 +418,7 @@ def small_default_config(extract_radius=200):
             tempdir,
             overwrite=True,
             subtraction_config=cfg,
+            featurization_config=fcfg,
         )
         out_h5 = st.parent_h5_path
         with h5py.File(out_h5, locking=False) as h5:
@@ -434,6 +436,7 @@ def small_default_config(extract_radius=200):
             overwrite=True,
             computation_config=two_jobs_cfg,
             subtraction_config=cfg,
+            featurization_config=fcfg,
         )
         out_h5 = st.parent_h5_path
         with h5py.File(out_h5, locking=False) as h5:
