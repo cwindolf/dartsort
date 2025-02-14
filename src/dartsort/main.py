@@ -19,7 +19,7 @@ from dartsort.config import (
     default_matching_config,
     default_computation_config,
 )
-from dartsort.peel import ObjectiveUpdateTemplateMatchingPeeler, SubtractionPeeler
+from dartsort.peel import ObjectiveUpdateTemplateMatchingPeeler, SubtractionPeeler, GrabAndFeaturize
 from dartsort.templates import TemplateData
 from dartsort.util.data_util import (
     DARTsortSorting,
@@ -228,6 +228,40 @@ def match(
         chunk_starts_samples=chunk_starts_samples,
         overwrite=overwrite,
         residual_filename=residual_filename,
+        show_progress=show_progress,
+        computation_config=computation_config,
+    )
+    return sorting
+
+
+def grab(
+    recording,
+    sorting,
+    output_directory,
+    waveform_config=default_waveform_config,
+    featurization_config=default_featurization_config,
+    chunk_starts_samples=None,
+    overwrite=False,
+    show_progress=True,
+    hdf5_filename="grab.h5",
+    model_subdir="grab_models",
+    computation_config=default_computation_config,
+):
+    # instantiate peeler
+    grabber = GrabAndFeaturize.from_config(
+        sorting,
+        recording,
+        waveform_config,
+        featurization_config,
+    )
+    sorting = run_peeler(
+        grabber,
+        output_directory,
+        hdf5_filename,
+        model_subdir,
+        featurization_config,
+        chunk_starts_samples=chunk_starts_samples,
+        overwrite=overwrite,
         show_progress=show_progress,
         computation_config=computation_config,
     )

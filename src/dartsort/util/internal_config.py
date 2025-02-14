@@ -78,6 +78,7 @@ class FeaturizationConfig:
     """
 
     skip: bool = False
+    extract_radius: float = 100.0
 
     # -- denoising configuration
     do_nn_denoise: bool = False
@@ -133,7 +134,6 @@ class SubtractionConfig:
     peak_sign: str = "both"
     spatial_dedup_radius: float = 150.0
     subtract_radius: float = 200.0
-    extract_radius: float = 100.0
     n_chunks_fit: int = 100
     max_waveforms_fit: int = 50_000
     n_waveforms_fit: int = 20_000
@@ -214,7 +214,6 @@ class TemplateConfig:
 @dataclass(frozen=True, kw_only=True, slots=True)
 class MatchingConfig:
     chunk_length_samples: int = 30_000
-    extract_radius: float = 100.0
     n_chunks_fit: int = 100
     max_waveforms_fit: int = 50_000
     n_waveforms_fit: int = 20_000
@@ -458,6 +457,7 @@ def to_internal_config(cfg):
     )
     featurization_config = FeaturizationConfig(
         tpca_rank=cfg.temporal_pca_rank,
+        extract_radius=cfg.featurization_radius_um,
         input_tpca_waveform_config=tpca_waveform_config,
         localization_radius=cfg.localization_radius_um,
         tpca_fit_radius=cfg.fit_radius_um,
@@ -472,7 +472,6 @@ def to_internal_config(cfg):
         detection_threshold=cfg.initial_threshold,
         spatial_dedup_radius=cfg.deduplication_radius_um,
         subtract_radius=cfg.subtraction_radius_um,
-        extract_radius=cfg.featurization_radius_um,
         singlechan_alignment_padding_ms=cfg.alignment_ms,
         use_singlechan_templates=cfg.use_singlechan_templates,
         use_universal_templates=cfg.use_universal_templates,
@@ -513,7 +512,6 @@ def to_internal_config(cfg):
         amplitude_scaling_variance=cfg.amplitude_scaling_stddev**2,
         amplitude_scaling_boundary=cfg.amplitude_scaling_limit,
         template_temporal_upsampling_factor=cfg.temporal_upsamples,
-        extract_radius=cfg.featurization_radius_um,
         chunk_length_samples=cfg.chunk_length_samples,
     )
     computation_config = ComputationConfig(

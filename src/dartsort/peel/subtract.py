@@ -178,7 +178,7 @@ class SubtractionPeeler(BasePeeler):
         # waveform extraction channel neighborhoods
         geom = torch.tensor(recording.get_channel_locations())
         channel_index = make_channel_index(
-            geom, subtraction_config.extract_radius, to_torch=True
+            geom, featurization_config.extract_radius, to_torch=True
         )
         subtract_channel_index = make_channel_index(
             geom, subtraction_config.subtract_radius, to_torch=True

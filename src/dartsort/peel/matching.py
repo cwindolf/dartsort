@@ -394,7 +394,7 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
     ):
         geom = torch.tensor(recording.get_channel_locations())
         channel_index = make_channel_index(
-            geom, matching_config.extract_radius, to_torch=True
+            geom, featurization_config.extract_radius, to_torch=True
         )
         featurization_pipeline = WaveformPipeline.from_config(
             geom,

@@ -2,6 +2,8 @@ import torch
 from dartsort.util import spiketorch
 
 from .peel_base import BasePeeler, SpikeDataset
+from ..util.waveform_util import make_channel_index
+from ..transform import WaveformPipeline
 
 
 class GrabAndFeaturize(BasePeeler):
@@ -35,8 +37,8 @@ class GrabAndFeaturize(BasePeeler):
         )
         self.trough_offset_samples = trough_offset_samples
         self.spike_length_samples = spike_length_samples
-        self.register_buffer("times_samples", times_samples)
-        self.register_buffer("channels", channels)
+        self.register_buffer("times_samples", torch.asarray(times_samples))
+        self.register_buffer("channels", torch.asarray(channels))
 
     def out_datasets(self):
         datasets = super().out_datasets()
@@ -57,6 +59,40 @@ class GrabAndFeaturize(BasePeeler):
             return dict(n_spikes=0)
 
         return super().process_chunk(chunk_start_samples, return_residual=return_residual)
+
+    @classmethod
+    def from_config(
+        cls, sorting, recording, waveform_config, featurization_config
+    ):
+        geom = torch.tensor(recording.get_channel_locations())
+        channel_index = make_channel_index(
+            geom, featurization_config.extract_radius, to_torch=True
+        )
+        featurization_pipeline = WaveformPipeline.from_config(
+            geom,
+            channel_index,
+            featurization_config,
+            waveform_config,
+            sampling_frequency=recording.sampling_frequency,
+        )
+        trough_offset_samples = waveform_config.trough_offset_samples(
+            recording.sampling_frequency
+        )
+        spike_length_samples = waveform_config.spike_length_samples(
+            recording.sampling_frequency
+        )
+        return cls(
+            recording,
+            channel_index,
+            featurization_pipeline,
+            sorting.times_samples,
+            sorting.channels,
+            trough_offset_samples=trough_offset_samples,
+            spike_length_samples=spike_length_samples,
+            chunk_length_samples=30_000,
+            n_chunks_fit=100,
+            dtype=torch.float,
+        )
 
     def peel_chunk(
         self,
