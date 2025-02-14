@@ -111,6 +111,7 @@ def get_realigned_sorting(
     sorting,
     realign_peaks=True,
     low_rank_denoising=False,
+    reassign_channels=True,
     **kwargs,
 ):
     results = get_templates(
@@ -120,7 +121,12 @@ def get_realigned_sorting(
         low_rank_denoising=low_rank_denoising,
         **kwargs,
     )
-    return results["sorting"]
+    sorting = results["sorting"]
+    if reassign_channels:
+        max_chans = np.ptp(results["templates"], 1).argmax(1)
+        new_channels = max_chans[sorting.labels]
+        sorting = replace(sorting, channels=new_channels)
+    return sorting
 
 
 def weighted_average(unit_ids, templates, weights):
