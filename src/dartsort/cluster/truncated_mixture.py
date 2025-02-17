@@ -1,4 +1,5 @@
 from os import close
+import linear_operator
 import numpy as np
 import torch
 import threading
@@ -70,13 +71,14 @@ class SpikeTruncatedMixtureModel(torch.nn.Module):
         self.register_buffer("means", F.pad(means, (0, 1)))
 
         assert log_proportions.shape == (nu,)
-        self.register_buffer("log_proportions", log_proportions)
-        self.register_buffer("noise_log_prop", noise_log_prop)
+        self.register_buffer("log_proportions", log_proportions.clone())
+        self.register_buffer("noise_log_prop", noise_log_prop.clone())
         self.register_buffer("_N", torch.zeros(nu + 1))
 
         assert kl_divergences.shape == (nu, nu)
         self.register_buffer(
-            "kl_divergences", torch.asarray(kl_divergences, dtype=self.means.dtype)
+            "kl_divergences",
+            torch.asarray(kl_divergences, dtype=self.means.dtype, copy=True),
         )
 
         self.candidates.initialize_candidates(
@@ -86,7 +88,7 @@ class SpikeTruncatedMixtureModel(torch.nn.Module):
         self.M = 0 if bases is None else bases.shape[1]
         if self.M:
             assert bases is not None
-            assert bases.shape == (nu, self.M, self.data.rank, self.data.nc)
+            assert bases.shape == (nu, self.M, self.data.rank, self.data.n_channels)
             self.register_buffer("bases", F.pad(bases, (0, 1)))
         else:
             self.bases = None
@@ -114,7 +116,10 @@ class SpikeTruncatedMixtureModel(torch.nn.Module):
         )
         self.means[..., :-1] = result.m
         if self.bases is not None:
-            W = torch.linalg.solve(result.U, result.R)
+            assert result.R is not None
+            assert result.U is not None
+            Uc = psd_safe_cholesky(result.U)
+            W = torch.cholesky_solve(result.R.view(*result.U.shape[:-1], -1), Uc)
             self.bases[..., :-1] = W.view(self.bases[..., :-1].shape)
 
         self._N[0] = result.noise_N
@@ -168,7 +173,6 @@ class TruncatedExpectationProcessor(torch.nn.Module):
             self.precompute_invx()
         self.batch_size = batch_size
         self.n_candidates = n_candidates
-        print(f"{self.device=}")
 
         # M is updated by self.update() when a basis is assigned here.
         self.M = 0
@@ -246,7 +250,7 @@ class TruncatedExpectationProcessor(torch.nn.Module):
             if self.M:
                 assert R is not None
                 assert U is not None
-                R += (result.R - R).mul_(N_N1)
+                R += (result.R[..., :-1] - R).mul_(N_N1[..., None])
                 U += (result.U - U).mul_(N_N1)
                 # R += result.R
                 # U += result.U
@@ -387,7 +391,9 @@ class TruncatedExpectationProcessor(torch.nn.Module):
         self.register_buffer("obs_ix", neighborhoods.neighborhoods.to(device))
         self.register_buffer(
             "miss_ix",
-            torch.full((neighborhoods.n_neighborhoods, ncm), fill_value=nc, device=device),
+            torch.full(
+                (neighborhoods.n_neighborhoods, ncm), fill_value=nc, device=device
+            ),
         )
         for ni in range(neighborhoods.n_neighborhoods):
             neighb_missing = neighborhoods.missing_channels(ni)
@@ -395,8 +401,6 @@ class TruncatedExpectationProcessor(torch.nn.Module):
 
         # allocate buffers
         self.register_buffer("Coo_logdet", Coo_logdet)
-        print(f"{self.Coo_logdet.device=}")
-        print(f"{self.device=}")
         self.register_buffer("nobs", R * nc_obs)
         self.register_buffer(
             "Coo_inv",
@@ -449,7 +453,7 @@ class TruncatedExpectationProcessor(torch.nn.Module):
         self.M = 0
         self.n_units = Nu
         if bases is not None:
-            Nu_, r_, nc_, self.M = bases.shape
+            Nu_, self.M, r_, nc_ = bases.shape
             assert Nu_ == Nu
             assert r == r_
             assert nc_ == Nc
@@ -495,16 +499,17 @@ class TruncatedExpectationProcessor(torch.nn.Module):
         # load basis
         Wobs = W[self.lut_units[:, None], :, :, obs_ix].permute(0, 2, 3, 1)
         assert Wobs.shape == (nlut, self.M, r, self.nc_obs)
-        Wobs = Wobs.view(nlut, self.M, -1)
+        Wobs = Wobs.reshape(nlut, self.M, -1)
         Wmiss = W[self.lut_units[:, None], :, :, miss_ix].permute(0, 2, 3, 1)
         assert Wmiss.shape == (nlut, self.M, r, self.nc_miss)
-        Wmiss = Wmiss.view(nlut, self.M, -1)
+        Wmiss = Wmiss.reshape(nlut, self.M, -1)
 
+        self.register_buffer("Wobs", Wobs)
         self.register_buffer("Cobsinv_WobsT", torch.bmm(Cooinv, Wobs.mT))
 
         cap = torch.bmm(Wobs, self.Cobsinv_WobsT)
         cap.diagonal(dim1=-2, dim2=-1).add_(1.0)
-        assert cap.shape == (Nu, self.M, self.M)
+        assert cap.shape == (nlut, self.M, self.M)
         cap = operators.CholLinearOperator(psd_safe_cholesky(cap))
 
         # matrix determinant lemma
@@ -518,7 +523,7 @@ class TruncatedExpectationProcessor(torch.nn.Module):
 
         # gizmo matrix used in a certain part of the "imputation"
         self.register_buffer(
-            "W_WCC", Wmiss - Wobs.mT.bmm(self.Cooinv_Com[self.lut_neighbs])
+            "W_WCC", Wmiss - Wobs.bmm(self.Cooinv_Com[self.lut_neighbs])
         )
 
     # long method... putting it in another file to keep the flow
@@ -576,12 +581,6 @@ class TruncatedExpectationProcessor(torch.nn.Module):
         if hasattr(self, "noise_logliks"):
             noise_lls = self.noise_logliks[batch_indices]
 
-        # scratch arrays
-        all_lls = self.all_lls()[:n]
-        ubar = None
-        if self.M:
-            ubar = self.ubar()[:n]
-
         return TEBatchData(
             indices=batch_indices,
             n=len(x),
@@ -610,22 +609,7 @@ class TruncatedExpectationProcessor(torch.nn.Module):
             noise_lls=noise_lls,
             #
             Cooinv_x=Cooinv_x,
-            #
-            all_lls=all_lls,
-            ubar=ubar,
         )
-
-    def all_lls(self):
-        if not hasattr(self._locals, "all_lls"):
-            self._locals.all_lls = self.Coo_logdet.new_empty(
-                (self.batch_size, self.n_candidates + 1)
-            )
-        return self._locals.all_lls
-
-    def ubar(self):
-        if not hasattr(self._locals, "ubar"):
-            self._locals.ubar = self.Coo_logdet.new_empty((self.batch_size, self.M))
-        return self._locals.ubar
 
 
 class CandidateSet:

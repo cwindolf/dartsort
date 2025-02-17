@@ -120,8 +120,6 @@ class TEBatchData:
     # possible precomputed stuff / buffers
     # (n, D_obs_max)
     Cooinv_x: Optional[torch.Tensor] = None
-    all_lls: Optional[torch.Tensor] = None
-    ubar: Optional[torch.Tensor] = None
 
     if DEBUG:
         __post_init__ = __debug_init__
@@ -200,17 +198,21 @@ def _te_batch(
         assert bd.Wobs is not None
         assert bd.inv_cap is not None
         assert bd.Cooinv_WobsT is not None
-        WobsT_Cooinv_xc = bd.Wobs.mT.bmm(Cooinv_xc)
-        inner = bd.inv_cap.bmm(WobsT_Cooinv_xc)
-        inv_quad = torch.baddbmm(
-            Cooinv_xc.view(-1, Do, 1),
+        WobsT_Cooinv_xc = bd.Wobs.view(-1, self.M, Do).bmm(
+            Cooinv_xc.view(-1, Do).unsqueeze(2)
+        )
+        inner = bd.inv_cap.view(-1, self.M, self.M).bmm(WobsT_Cooinv_xc)
+        inv_quad = Cooinv_xc.view(-1, Do, 1).baddbmm_(
+            # Cooinv_xc.view(-1, Do, 1),
             bd.Cooinv_WobsT.view(-1, Do, self.M),
             inner,
             alpha=-1,
         )
+        inv_quad = inv_quad.view(bd.n, C_, Do)
+        WobsT_Cooinv_xc = WobsT_Cooinv_xc.view(bd.n, C_, self.M)
     else:
         inv_quad = Cooinv_xc
-    del Cooinv_xc  # overwritten
+    del Cooinv_xc  # overwritten in both branches
     inv_quad = inv_quad.mul_(xc).sum(dim=2)
     lls_unnorm = inv_quad.add_(bd.obs_logdets).add_(pinobs[:, None]).mul_(-0.5)
     # the proportions...
@@ -222,17 +224,38 @@ def _te_batch(
     topinds = topinds[:, : self.n_candidates]
 
     # -- compute Q
-    all_lls = torch.concatenate((toplls, noise_lls.unsqueeze(1)), dim=1, out=bd.all_lls)
+    all_lls = torch.concatenate((toplls, noise_lls.unsqueeze(1)), dim=1)
     Q = torch.softmax(all_lls, dim=1)
     Q_ = Q[:, :-1]
 
     # extract top candidate inds
     orig_candidates = bd.candidates
-    new_candidates, xc, tnu, WobsT_Cooinv_xc = take_along_candidates(
-        topinds,
-        (bd.candidates, xc, bd.tnu, WobsT_Cooinv_xc),
-        out=(None, xc, bd.tnu, WobsT_Cooinv_xc),
+    new_candidates, xc, nu, tnu, WobsT_Cooinv_xc, inv_cap, W_WCC, Wobs = (
+        take_along_candidates(
+            topinds,
+            data=(
+                bd.candidates,
+                xc,
+                bd.nu,
+                bd.tnu,
+                WobsT_Cooinv_xc,
+                bd.inv_cap,
+                bd.W_WCC,
+                bd.Wobs,
+            ),
+            out=(
+                None,
+                xc,
+                bd.nu,
+                bd.tnu,
+                None,
+                None,
+                None,
+                None,
+            ),
+        )
     )
+    assert nu is not None
     assert tnu is not None
     assert xc is not None
     assert new_candidates is not None
@@ -272,15 +295,36 @@ def _te_batch(
         assert Qn is not None
         assert WobsT_Cooinv_xc is not None  # for pyright
         assert bd.W_WCC is not None
-        assert bd.Wobs is not None
-        assert bd.inv_cap is not None
+        assert Wobs is not None
+        assert inv_cap is not None
+        arange_M = torch.arange(self.M, device=Q.device)
 
         # embedding moments
         # T low key is inv_cap. overwriting since this is the last use.
-        ubar = bd.inv_cap.bmm(WobsT_Cooinv_xc, out=bd.ubar)
-        U = bd.inv_cap.baddbmm_(ubar.unsqueeze(2), ubar.unsqueeze(1))
+        ubar = torch.bmm(
+            inv_cap.view(-1, self.M, self.M),
+            WobsT_Cooinv_xc.view(-1, self.M, 1),
+            # out=bd.ubar.view(-1, self.M, 1),
+        )[..., 0]
+        Euu = inv_cap.view(-1, self.M, self.M).baddbmm_(
+            ubar.unsqueeze(2), ubar.unsqueeze(1)
+        )
+        ubar = ubar.view(bd.n, C, self.M)
+        Euu = Euu.view(bd.n, C, self.M, self.M)
         Qu = Qn[:, :, None, None] * ubar[:, :, :, None]
-        QU = Qn[:, :, None, None] * U
+        QU = Qn[:, :, None, None] * Euu
+
+        U = Q.new_zeros((self.n_units, self.M, self.M))
+        spiketorch.add_at_(
+            U,
+            (
+                new_candidates[:, :, None, None],
+                arange_M[None, None, :, None],
+                arange_M[None, None, None, :],
+            ),
+            QU,
+        )
+
         Ro = Qu * xc[:, :, None, :]
         # this does not have an n dim. we're reducing.
         # Ro is (n, C, M, Do). R is (Ctotal, M, Do)
@@ -289,30 +333,54 @@ def _te_batch(
             R,
             (
                 new_candidates[:, :, None, None, None],
-                torch.arange(self.M)[:, None, :, None, None],
-                arange_rank[:, None, None, :, None],
+                arange_M[None, None, :, None, None],
+                arange_rank[None, None, None, :, None],
                 bd.obs_ix[:, None, None, None, :],
             ),
             Ro.view(*Ro.shape[:3], self.rank, self.nc_obs),
         )
-        Rm = QU.bmm(bd.W_WCC).baddbmm(Ro, bd.Cooinv_Com)
+        Rm = torch.bmm(
+            QU.view(-1, self.M, self.M),
+            W_WCC.view(-1, *W_WCC.shape[-2:]),
+            out=W_WCC.view(-1, *W_WCC.shape[-2:]),
+        )
+        del QU, W_WCC
+        Rm = Rm.view(bd.n, C, self.M, self.rank * self.nc_miss)
+        # don't want to materialize a big array of Cooinv_Coms.
+        for j in range(C):
+            Rm[:, j].baddbmm_(Ro[:, j], bd.Cooinv_Com)
         spiketorch.add_at_(
             R,
             (
                 new_candidates[:, :, None, None, None],
-                torch.arange(self.M)[:, None, :, None, None],
-                arange_rank[:, None, None, :, None],
+                arange_M[None, None, :, None, None],
+                arange_rank[None, None, None, :, None],
                 bd.miss_ix[:, None, None, None, :],
             ),
             Rm.view(*Rm.shape[:3], self.rank, self.nc_miss),
         )
         # E[y-Wu]
         m = Q.new_zeros((self.n_units, self.rank, self.nc + 1))
-        Wobs_ubar = torch.bmm(bd.Wobs, ubar)
-        mm = tnu.baddbmm_(bd.Cooinv_Com.mT, xc.sub_(Wobs_ubar)).mul_(Qn[:, :, None])
-        mo = Wobs_ubar.add_(bd.x[:, None]).mul_(Qn[:, :, None])
-        del Wobs_ubar  # overwritten
-        mo.baddbmm_(bd.Wobs, Qu, alpha=-1)
+        Wobs_ubar = torch.bmm(
+            Wobs.view(-1, self.M, self.rank * self.nc_obs).mT,
+            ubar.view(-1, self.M, 1),
+            # out=bd.Wobs_ubar.view(-1, self.rank * self.nc_obs, 1),
+        )
+
+        # add xs to m's observed part
+        xc = xc.view(bd.n, C, self.rank * self.nc_obs)
+        xc.sub_(Wobs_ubar.view(xc.shape))
+
+        mm = tnu + torch.matmul(xc, bd.Cooinv_Com)
+        mm.mul_(Qn.unsqueeze(2))
+        # mm = tnu.baddbmm_(
+        #     bd.Cooinv_Com.mT, xc.view(bd.n * C, self.rank * self.nc_obs)
+        # ).mul_(Qn[:, :, None])
+        del tnu
+        mo = xc.add_(nu)
+        del xc  # overwritten
+        mo.sub_(Wobs_ubar.view(mo.shape))
+        mo.mul_(Qn.unsqueeze(2))
         spiketorch.add_at_(
             m,
             (
@@ -322,7 +390,6 @@ def _te_batch(
             ),
             mo.view(bd.n, C, self.rank, self.nc_obs),
         )
-
         spiketorch.add_at_(
             m,
             (
@@ -330,7 +397,7 @@ def _te_batch(
                 arange_rank[None, None, :, None],
                 bd.miss_ix[:, None, None, :],
             ),
-            mm.view(C, self.rank, self.nc_miss),
+            mm.view(bd.n, C, self.rank, self.nc_miss),
         )
     elif with_stats:
         assert Qn is not None

@@ -357,8 +357,7 @@ class SpikeMixtureModel(torch.nn.Module):
         self.cleanup()
 
         # update from my stack
-        ids, means, covs, logdets = self.stack_units()
-
+        ids, means, covs, logdets = self.stack_units(mean_only=False)
         dkl = self.distances(kind="kl", normalization_kind="none")
 
         # try reassigning without noise unit...
