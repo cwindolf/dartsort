@@ -1,5 +1,4 @@
-from os import close
-import linear_operator
+from typing import Optional
 import numpy as np
 import torch
 import threading
@@ -11,7 +10,7 @@ from tqdm.auto import trange
 
 
 from ..util.noise_util import EmbeddedNoise
-from .stable_features import SpikeFeatures, SpikeNeighborhoods, StableSpikeDataset
+from .stable_features import SpikeNeighborhoods, StableSpikeDataset
 from ._truncated_em_helpers import (
     neighb_lut,
     TEBatchData,
@@ -20,7 +19,6 @@ from ._truncated_em_helpers import (
     _te_batch,
     units_overlapping_neighborhoods,
 )
-from ..util import spiketorch
 
 
 class SpikeTruncatedMixtureModel(torch.nn.Module):
@@ -32,6 +30,7 @@ class SpikeTruncatedMixtureModel(torch.nn.Module):
         n_candidates: int = 3,
         n_search: int = 2,
         n_explore: int = 2,
+        covariance_radius: Optional[float] = 500.0,
         random_seed=0,
         n_threads: int = 0,
         batch_size=2048,
@@ -40,6 +39,7 @@ class SpikeTruncatedMixtureModel(torch.nn.Module):
         self.data = data
         self.noise = noise
         self.M = M
+        self.covariance_radius = covariance_radius
         train_indices, self.train_neighborhoods = self.data.neighborhoods("extract")
         self.n_spikes = train_indices.numel()
         self.processor = TruncatedExpectationProcessor(
@@ -50,6 +50,8 @@ class SpikeTruncatedMixtureModel(torch.nn.Module):
             random_seed=random_seed,
             n_threads=n_threads,
             batch_size=batch_size,
+            covariance_radius=covariance_radius,
+            pgeom=data.prgeom,
         )
         self.candidates = CandidateSet(
             neighborhoods=self.train_neighborhoods,
@@ -157,11 +159,15 @@ class TruncatedExpectationProcessor(torch.nn.Module):
         n_threads: int = 0,
         random_seed: int = 0,
         precompute_invx=True,
+        covariance_radius=None,
+        pgeom=None,
     ):
         super().__init__()
 
         # initialize fixed noise-related arrays
-        self.initialize_fixed(noise, neighborhoods)
+        self.initialize_fixed(
+            noise, neighborhoods, pgeom=pgeom, covariance_radius=covariance_radius
+        )
         self.neighborhood_ids = neighborhoods.neighborhood_ids
         self.n_neighborhoods = neighborhoods.n_neighborhoods
         if features.isnan().any():
@@ -327,7 +333,9 @@ class TruncatedExpectationProcessor(torch.nn.Module):
             with_obs_elbo=with_obs_elbo,
         )
 
-    def initialize_fixed(self, noise, neighborhoods):
+    def initialize_fixed(
+        self, noise, neighborhoods, pgeom=None, covariance_radius=None
+    ):
         """Neighborhood-dependent precomputed matrices.
 
         These are:
@@ -347,6 +355,19 @@ class TruncatedExpectationProcessor(torch.nn.Module):
         self.rank = R = noise.rank
         self.nc = nc = noise.n_channels
 
+        # determine missing channels
+        missing_chans = []
+        truncate = covariance_radius and np.isfinite(covariance_radius)
+        for ni in range(neighborhoods.n_neighborhoods):
+            mix = neighborhoods.missing_channels(ni)
+            if truncate:
+                assert pgeom is not None
+                oix = neighborhoods.neighborhood_channels(ni)
+                d = torch.cdist(pgeom[:nc], pgeom[oix]).min(dim=1).values
+                assert d[oix].max() < covariance_radius
+                mix = mix[d[mix] <= covariance_radius]
+            missing_chans.append(mix)
+
         # Get Coos
         # Have to do everything as a list. That's what the
         # noise object supports, but also, we don't want to
@@ -364,13 +385,20 @@ class TruncatedExpectationProcessor(torch.nn.Module):
             for ni in range(neighborhoods.n_neighborhoods)
         ]
         device = Coo[0].device
-        Com = [
-            noise.offdiag_covariance(
+        Com = []
+        for ni in range(neighborhoods.n_neighborhoods):
+            Comi = noise.offdiag_covariance(
                 channels_left=neighborhoods.neighborhood_channels(ni),
-                channels_right=neighborhoods.missing_channels(ni),
+                channels_right=missing_chans[ni],
             ).to_dense()
-            for ni in range(neighborhoods.n_neighborhoods)
-        ]
+            if truncate:
+                assert pgeom is not None
+                oix = neighborhoods.neighborhood_channels(ni)
+                d = torch.cdist(pgeom[oix], pgeom[missing_chans[ni]])
+                mask = (d > 0).to(torch.float)[None, :, None, :]
+                mask = mask.broadcast_to((R, d.shape[0], R, d.shape[1]))
+                Comi.view(mask.shape).mul_(mask)
+            Com.append(Comi)
 
         # Get choleskys. linear_operator will jitter to help
         # with numerics for us if we do everything via chol.
@@ -382,7 +410,7 @@ class TruncatedExpectationProcessor(torch.nn.Module):
         # figure out dimensions
         nc_obs = neighborhoods.channel_counts
         self.nc_obs = nco = nc_obs.max().to(int)
-        self.nc_miss = ncm = nc - nc_obs.min().to(int)
+        self.nc_miss = ncm = max(map(len, missing_chans))
 
         # understand channel subsets
         # these arrays are used to scatter into D-shaped dims.
@@ -396,8 +424,7 @@ class TruncatedExpectationProcessor(torch.nn.Module):
             ),
         )
         for ni in range(neighborhoods.n_neighborhoods):
-            neighb_missing = neighborhoods.missing_channels(ni)
-            self.miss_ix[ni, : neighb_missing.numel()] = neighb_missing
+            self.miss_ix[ni, : missing_chans[ni].numel()] = missing_chans[ni]
 
         # allocate buffers
         self.register_buffer("Coo_logdet", Coo_logdet)
