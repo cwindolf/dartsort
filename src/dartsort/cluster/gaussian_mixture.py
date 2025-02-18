@@ -336,10 +336,11 @@ class SpikeMixtureModel(torch.nn.Module):
         final_split="kept",
         n_threads=2,
         batch_size=1024,
+        tmm_kwargs={},
     ):
         # TODO: hang on to this and update it in place
         tmm = truncated_mixture.SpikeTruncatedMixtureModel(
-            self.data, self.noise, self.ppca_rank, n_threads=n_threads, batch_size=batch_size
+            self.data, self.noise, self.ppca_rank, n_threads=n_threads, batch_size=batch_size, **tmm_kwargs
         )
 
         n_iter = self.n_em_iters if n_iter is None else n_iter
@@ -380,6 +381,7 @@ class SpikeMixtureModel(torch.nn.Module):
             msg = f"tEM[oelbo/n={res['obs_elbo']:0.2f}]"
             if show_progress:
                 its.set_description(msg)
+        print('post its', flush=True)
 
         # reupdate my GaussianUnits
         self.clear_units()
@@ -393,6 +395,12 @@ class SpikeMixtureModel(torch.nn.Module):
                 mean=tmm.means[j, :, :-1],
                 basis=basis,
             )
+        del tmm
+        import gc; gc.collect()
+        torch.cuda.empty_cache()
+        import gc; gc.collect()
+        torch.cuda.empty_cache()
+        self.cleanup()
 
         if not final_e_step:
             return
@@ -945,9 +953,16 @@ class SpikeMixtureModel(torch.nn.Module):
         transposed = False
         averaged = False
         kind_ = kind
+        noiseinv_covs = None
         if kind == "kl":
             kind_ = "reverse_kl"
             transposed = True
+        if kind == "kl" and covs is not None:
+            W = covs.reshape(len(covs), -1, covs.shape[-1])
+            noiseinv_covs = W.new_zeros(W.shape)
+            for bs in range(0, len(W), 32):
+                be = min(len(W), bs + 32)
+                noiseinv_covs[bs:be] = self.noise._full_cov.solve(W[bs:be])
         if kind == "symkl":
             kind_ = "reverse_kl"
             averaged = True
@@ -956,7 +971,7 @@ class SpikeMixtureModel(torch.nn.Module):
         @delayed
         def dist_job(j, unit):
             d = unit.divergence(
-                means, other_covs=covs, other_logdets=logdets, kind=kind_
+                means, other_covs=covs, other_logdets=logdets, kind=kind_, noiseinv_covs=noiseinv_covs
             )
             d = d.numpy(force=True).astype(dists.dtype)
             if transposed:
@@ -2732,7 +2747,7 @@ class GaussianUnit(torch.nn.Module):
         return ll
 
     def divergence(
-        self, other_means, other_covs=None, other_logdets=None, kind="noise_metric"
+        self, other_means, other_covs=None, other_logdets=None, kind="noise_metric", noiseinv_covs=None
     ):
         """Compute my distance to other units
 
@@ -2746,7 +2761,7 @@ class GaussianUnit(torch.nn.Module):
             if kind == "kl":
                 return kl1
         if kind in ("reverse_kl", "symkl"):
-            kl2 = self.reverse_kl_divergence(other_means, other_covs, other_logdets)
+            kl2 = self.reverse_kl_divergence(other_means, other_covs, other_logdets, noiseinv_covs=noiseinv_covs)
             if kind == "reverse_kl":
                 return kl2
         if kind == "symkl":
@@ -2834,7 +2849,7 @@ class GaussianUnit(torch.nn.Module):
             return dict(kl=kl, inv_quad=inv_quad, ld=ld, tr=tr, k=k)
         return kl
 
-    def reverse_kl_divergence(self, other_means, other_covs, other_logdets):
+    def reverse_kl_divergence(self, other_means, other_covs, other_logdets, noiseinv_covs=None, batch_size=32):
         """DKL(others || self)
         = 0.5 * {
             tr(Ss^-1 So)
@@ -2863,13 +2878,17 @@ class GaussianUnit(torch.nn.Module):
         if self.cov_kind == "ppca" and self.ppca_rank:
             oW = other_covs.reshape(n, k, self.ppca_rank)
             tr = other_covs.new_empty((n,))
-            for bs in range(0, n, 32):
-                be = min(n, bs + 32)
-                res = my_cov.solve(oW[bs:be])
+            for bs in range(0, n, batch_size):
+                be = min(n, bs + batch_size)
+                if noiseinv_covs is not None:
+                    Ainv_rhs = noiseinv_covs[bs:be]
+                else:
+                    Ainv_rhs = None
+                res = my_cov._solve(oW[bs:be], Ainv_rhs=Ainv_rhs)
                 res = res @ oW[bs:be].mT
                 tr[bs:be] = res.diagonal(dim1=-2, dim2=-1).sum(dim=1)
             ncov = self.noise.full_dense_cov()
-            tr += torch.trace(my_cov.solve(ncov))
+            tr += torch.trace(my_cov._solve(ncov, Ainv_rhs=self.noise.full_covinvcov()))
             ld = self_logdet - other_logdets
         return 0.5 * (inv_quad + (tr - k + ld))
 

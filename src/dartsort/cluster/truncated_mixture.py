@@ -28,14 +28,18 @@ class SpikeTruncatedMixtureModel(torch.nn.Module):
         noise: EmbeddedNoise,
         M: int = 0,
         n_candidates: int = 3,
-        n_search: int = 2,
-        n_explore: int = 2,
+        n_search: int = None,
+        n_explore: int = None,
         covariance_radius: Optional[float] = 500.0,
         random_seed=0,
         n_threads: int = 0,
         batch_size=2048,
     ):
         super().__init__()
+        if n_search is None:
+            n_search = n_candidates
+        if n_explore is None:
+            n_explore = n_search
         self.data = data
         self.noise = noise
         self.M = M
@@ -104,8 +108,11 @@ class SpikeTruncatedMixtureModel(torch.nn.Module):
         raise NotImplementedError
 
     def step(self, show_progress=False):
+        print('step a', flush=True)
         search_neighbors = self.search_sets()
+        print('step b', flush=True)
         unit_neighborhood_counts = self.candidates.propose_candidates(search_neighbors)
+        print('step c', flush=True)
         self.processor.update(
             log_proportions=self.log_proportions,
             noise_log_prop=self.noise_log_prop,
@@ -113,9 +120,11 @@ class SpikeTruncatedMixtureModel(torch.nn.Module):
             bases=self.bases,
             unit_neighborhood_counts=unit_neighborhood_counts,
         )
+        print('step d', flush=True)
         result = self.processor.truncated_e_step(
             self.candidates.candidates, show_progress=show_progress
         )
+        print('step f', flush=True)
         self.means[..., :-1] = result.m
         if self.bases is not None:
             assert result.R is not None
@@ -471,7 +480,9 @@ class TruncatedExpectationProcessor(torch.nn.Module):
         noise_log_prop,
         bases=None,
         unit_neighborhood_counts=None,
+        batch_size=1024,
     ):
+        print(f'update {means.shape=}', flush=True)
         Nu, r, Nc = means.shape
         assert Nc in (self.nc, self.nc + 1)
         assert r == self.rank
@@ -489,6 +500,7 @@ class TruncatedExpectationProcessor(torch.nn.Module):
             # update lookup table and re-initialize storage
             res = neighb_lut(unit_neighborhood_counts)
             lut, self.lut_units, self.lut_neighbs = res
+            print(f"new {lut.shape=} {self.lut_units.shape=} {self.lut_neighbs.shape=}")
             self.lut = torch.asarray(lut, device=self.device)
         nlut = len(self.lut_units)
 
@@ -513,13 +525,19 @@ class TruncatedExpectationProcessor(torch.nn.Module):
         tnu = mu[self.lut_units[:, None], :, miss_ix].permute(0, 2, 1)
         self.register_buffer("nu", nu)
         self.register_buffer("tnu", tnu)
-        Cooinv = self.Coo_inv[self.lut_neighbs]
-        self.register_buffer(
-            "Cooinv_nu", torch.bmm(Cooinv, nu.reshape(nlut, -1, 1))[..., 0]
-        )
+        Cooinv_nu = torch.empty((len(self.lut_neighbs), self.Coo_inv.shape[1], 1), device=nu.device)
+        for bs in range(0, len(self.lut_neighbs), batch_size):
+            be = min(len(self.lut_neighbs), bs + batch_size)
+            Cooinv = self.Coo_inv[self.lut_neighbs[bs:be]]
+            torch.bmm(Cooinv, nu[bs:be].reshape(be - bs, -1, 1), out=Cooinv_nu[bs:be])
+        self.register_buffer("Cooinv_nu", Cooinv_nu[..., 0])
+        # self.register_buffer(
+        #     "Cooinv_nu", torch.bmm(Cooinv, nu.reshape(nlut, -1, 1))[..., 0]
+        # )
 
         # basis stuff
         if not self.M:
+            print('update bail 0', flush=True)
             return
         assert W is not None
 
@@ -532,7 +550,13 @@ class TruncatedExpectationProcessor(torch.nn.Module):
         Wmiss = Wmiss.reshape(nlut, self.M, -1)
 
         self.register_buffer("Wobs", Wobs)
-        self.register_buffer("Cobsinv_WobsT", torch.bmm(Cooinv, Wobs.mT))
+        Cobsinv_WobsT = torch.empty((len(self.lut_neighbs), self.Coo_inv.shape[1], self.M), device=Wobs.device)
+        for bs in range(0, len(self.lut_neighbs), batch_size):
+            be = min(len(self.lut_neighbs), bs + batch_size)
+            Cooinv = self.Coo_inv[self.lut_neighbs[bs:be]]
+            torch.bmm(Cooinv, Wobs[bs:be].mT, out=Cobsinv_WobsT[bs:be])
+        self.register_buffer("Cobsinv_WobsT", Cobsinv_WobsT)
+        # self.register_buffer("Cobsinv_WobsT", torch.bmm(Cooinv, Wobs.mT))
 
         cap = torch.bmm(Wobs, self.Cobsinv_WobsT)
         cap.diagonal(dim1=-2, dim2=-1).add_(1.0)
@@ -549,9 +573,13 @@ class TruncatedExpectationProcessor(torch.nn.Module):
         self.register_buffer("inv_cap", cap.inverse().to_dense())
 
         # gizmo matrix used in a certain part of the "imputation"
-        self.register_buffer(
-            "W_WCC", Wmiss - Wobs.bmm(self.Cooinv_Com[self.lut_neighbs])
-        )
+        print(f"{self.Cooinv_Com.shape=} {Wobs.shape=}")
+        W_WCC = Wmiss
+        del Wmiss
+        for bs in range(0, len(W_WCC), batch_size):
+            be = min(len(W_WCC), bs + batch_size)
+            W_WCC[bs:be].baddbmm_(Wobs[bs:be], self.Cooinv_Com[self.lut_neighbs[bs:be]], alpha=-1)
+        self.register_buffer("W_WCC", W_WCC)
 
     # long method... putting it in another file to keep the flow
     # clear in this one. this method is the one that does all the math.
@@ -708,21 +736,14 @@ class CandidateSet:
             == self.candidates.untyped_storage().data_ptr()
         )
         target[:] = unit_search_neighbors[top]
-        # torch.take_along_dim(
-        #     input=unit_search_neighbors,
-        #     indices=top,
-        #     dim=0,
-        #     out=self.candidates[:, C : C + n_search].view(
-        #         self.n_spikes, C, self.n_search
-        #     ),
-        # )
 
         # count to determine which units are relevant to each neighborhood
+        # this is how "explore" candidates are suggested. the policy is strict:
+        # just the top unit counts for each spike. this is to keep the lut smallish,
+        # tho it is still huge, hopefully without making the search too bad...
         unit_neighborhood_counts = np.zeros((n_units, n_neighbs), dtype=int)
         np.add.at(
-            unit_neighborhood_counts,
-            (self.candidates[:, : -self.n_explore], self.neighborhood_ids[:, None]),
-            1,
+            unit_neighborhood_counts, (self.candidates[:, 0], self.neighborhood_ids), 1
         )
 
         # which to explore?
@@ -743,15 +764,14 @@ class CandidateSet:
             n_explore.numpy()[:, None], size=(self.n_spikes, self.n_explore)
         )
         targs = torch.from_numpy(targs)
-        # torch take_along_dim has an out= while np's does not, so use it.
         self.candidates[:, -self.n_explore :] = neighborhood_explore_units[
             self.neighborhood_ids[:, None], targs
         ]
 
-        # update counts for the explore units
+        # update counts for the rest of units
         np.add.at(
             unit_neighborhood_counts,
-            (self.candidates[:, -self.n_explore :], self.neighborhood_ids[:, None]),
+            (self.candidates[:, 1:], self.neighborhood_ids[:, None]),
             1,
         )
         return unit_neighborhood_counts
