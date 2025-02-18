@@ -29,13 +29,13 @@ class SpikeTruncatedMixtureModel(torch.nn.Module):
         noise: EmbeddedNoise,
         M: int = 0,
         n_candidates: int = 3,
-        n_search: int = None,
+        n_search: int = 5,
         n_explore: int = None,
         covariance_radius: Optional[float] = 500.0,
         random_seed=0,
         n_threads: int = 0,
         batch_size=2048,
-        exact_kl=False,
+        exact_kl=True,
     ):
         super().__init__()
         if n_search is None:

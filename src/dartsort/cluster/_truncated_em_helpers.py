@@ -536,8 +536,15 @@ def woodbury_kl_divergence(C, mu, W=None, out=None, batch_size=32, affine_ok=Tru
         out = mu.new_empty((n, n))
     out.fill_(0.0)
 
-    Cchol = C.cholesky().to_dense()
-    mu_ = torch.linalg.solve_triangular(Cchol, mu.unsqueeze(2), upper=False)
+    Cchol = C.cholesky()#.to_dense()
+    # Some weird issues with solve_triangular using the batched input...
+    # it seems to allocate something big?
+    # Ccholinv = torch.linalg.solve_triangular(
+    #     Cchol, torch.eye(len(Cchol), out=torch.empty_like(Cchol)), upper=False
+    # )
+    Ccholinv = Cchol.inverse()
+    # mu_ = torch.linalg.solve_triangular(Cchol, mu.unsqueeze(2), upper=False)
+    mu_ = Ccholinv @ mu.unsqueeze(2)
 
     if W is None:
         # else, better to do this later
@@ -548,7 +555,8 @@ def woodbury_kl_divergence(C, mu, W=None, out=None, batch_size=32, affine_ok=Tru
 
     M = W.shape[2]
     assert W.shape == (n, d, M)
-    U = torch.linalg.solve_triangular(Cchol, W, upper=False)
+    # U = torch.linalg.solve_triangular(Cchol, W, upper=False)
+    U = Ccholinv @ W
 
     # first part of trace
     UTU = U.mT.bmm(U)
