@@ -19,7 +19,11 @@ from dartsort.config import (
     default_matching_config,
     default_computation_config,
 )
-from dartsort.peel import ObjectiveUpdateTemplateMatchingPeeler, SubtractionPeeler, GrabAndFeaturize
+from dartsort.peel import (
+    ObjectiveUpdateTemplateMatchingPeeler,
+    SubtractionPeeler,
+    GrabAndFeaturize,
+)
 from dartsort.templates import TemplateData
 from dartsort.util.data_util import (
     DARTsortSorting,
@@ -208,6 +212,7 @@ def match(
             overwrite=overwrite,
             save_npz_name=template_npz_filename,
             computation_config=computation_config,
+            with_locs=motion_est is not None,
         )
 
     # instantiate peeler
