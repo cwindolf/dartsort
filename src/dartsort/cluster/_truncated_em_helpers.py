@@ -2,7 +2,6 @@ from dataclasses import dataclass, field, replace, fields
 from typing import Union, Optional
 import numpy as np
 import torch
-from pykeops.torch import LazyTensor
 from linear_operator.utils.cholesky import psd_safe_cholesky
 
 from ..util import spiketorch
