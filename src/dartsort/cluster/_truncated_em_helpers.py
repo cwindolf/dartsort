@@ -2,6 +2,8 @@ from dataclasses import dataclass, field, replace, fields
 from typing import Union, Optional
 import numpy as np
 import torch
+from pykeops.torch import LazyTensor
+from linear_operator.utils.cholesky import psd_safe_cholesky
 
 from ..util import spiketorch
 
@@ -461,6 +463,145 @@ def _te_batch(
         dkl=dkl,
         noise_lls=nlls if bd.noise_lls is None else None,
     )
+
+
+def woodbury_kl_divergence(C, mu, W=None, out=None, batch_size=32, affine_ok=True):
+    """KL divergence with the lemmas, up to affine constant with respect to mu and W
+
+    Here's the logic between the lines below. Variable names follow this notation.
+
+    If W is None, then
+        2 DKL_0(other || self) = (mu_self - mu_other)' C^-1 (mu_self - mu_other)
+    where d is the dimension.
+
+    To do n triangular matmuls rather than n^2 full ones, compute this via:
+        mu' = C^{-1/2} mu
+        (mu_self - mu_other)' C^-1 (mu_self - mu_other) = |mu'_self - mu'_other|^2
+
+    Otherwise,
+        2 DKL(other || self) = tr(S_self^-1 S_other)
+                               + log(|S_self| / |S_other|)
+                               + (mu_self - mu_other)' S_self^-1 (mu_self - mu_other)
+                               - d
+
+    For the log dets,
+        log|S| = log|C + WW'| = log|C| + log|I_M + W'C^-1W|
+    Forget about log|C|, even though it's precomputed. For the other part, to save
+    some matmuls, let
+        U = C^{-1/2}W
+        cap = I_M + W'C^{-1}W = I_m + U'U
+    Note that log|C| will cancel.
+
+    For the trace part, we have
+        S_self^-1 S_other = (C + Ws Ws')^-1 (C + Wo Wo')
+            = [C^-1 - C^-1 Ws caps^-1 Ws' C^-1] (C + Wo Wo')
+            = C^-1 C
+              + C^-1 Wo Wo'
+              - C^-1 Ws caps^-1 Ws'
+              - C^-1 Ws caps^-1 Ws' C^-1 Wo Wo'
+
+    tr(C^-1 C) = d, so that cancels the constant.
+
+    To save matmuls, introduce
+        Vs = Us caps^{-1/2}
+
+    Then by cyclic property, save more operations by rewriting
+        (A+) tr(C^-1 Wo Wo') = tr(Uo' Uo)
+    and
+        (B-) tr(C^-1 Ws caps^-1 Ws') = tr(Us caps^-1 Us')
+                                     = tr(Vs Vs')
+    and
+        (C-) tr(C^-1 Ws caps^-1 Ws' C^-1 Wo Wo')
+                = tr(Wo' C^{-1/2} C^{-1/2} Ws caps^{-1/2} caps^{-1/2} Ws' C^{-1/2} C^{-1/2} Wo)
+                = tr(Uo' Vs Vs' Uo)
+
+    The Mahalanobis term remains. Woodbury says
+        (mus - muo)' (C + Ws Ws')^-1 (mus - muo)
+            = (mus - muo)' [C^-1 - C^-1 Ws cap^-1 Ws' C^-1] (mus - muo)
+            = |mu's - mu'o|^2
+              - (mu's - mu'o)' C^{-1/2} Ws cap^-1 Ws' C^{-1/2} (mu's - mu'o)
+            = |mu's - mu'o|^2 - |caps^{-1/2} Ws' C^{-1/2} (mu's - mu'o)|^2
+            = |mu's - mu'o|^2 - |Vs' (mu's - mu'o)|^2
+
+    TODO: There is something wrong here.
+
+    Returns
+    -------
+    out : Tensor
+        out[i, j] = const(wrt mu,W) * (D(component i || component j) + const(wrt mu,W))
+        i = other, j = self
+    """
+    n, d = mu.shape
+    assert C.shape == (d, d)
+    if out is None:
+        out = mu.new_empty((n, n))
+    out.fill_(0.0)
+
+    Cchol = C.cholesky().to_dense()
+    mu_ = torch.linalg.solve_triangular(Cchol, mu.unsqueeze(2), upper=False)
+
+    if W is None:
+        # else, better to do this later
+        for bs in range(0, n, batch_size):
+            osl = slice(bs, min(bs + batch_size, n))
+            out[osl] = (mu_[osl, None] - mu_[None]).square_().sum(dim=(2, 3))
+        return out
+
+    M = W.shape[2]
+    assert W.shape == (n, d, M)
+    U = torch.linalg.solve_triangular(Cchol, W, upper=False)
+
+    # first part of trace
+    UTU = U.mT.bmm(U)
+    # term A: it's an other-vec
+    trA = UTU.diagonal(dim1=-2, dim2=-1).sum(dim=1)
+    # assert torch.isclose(trA, U.square().sum(dim=(1, 2))).all()
+
+    # make cap matrix and get its Cholesky
+    cap = UTU
+    del UTU
+    cap.diagonal(dim1=-2, dim2=-1).add_(1.0)
+    capchol = psd_safe_cholesky(cap)
+    # V is (n, d, M)
+    V = torch.linalg.solve_triangular(capchol, U, upper=False, left=False)
+
+    # log dets via Cholesky
+    logdet = capchol.diagonal(dim1=-2, dim2=-1).log().sum(dim=1).mul_(2.0)
+    # assert torch.isclose(logdet, cap.logdet()).all()
+
+    # trace term C: it's a matrix of Frob inner products
+    tmp = None
+    for bs in range(0, n, batch_size):
+        osl = slice(bs, min(bs + batch_size, n))
+        if tmp is not None:
+            tmp = tmp[: osl.stop - bs]
+        tmp = torch.matmul(V.mT[None], U[osl, None], out=tmp)
+        out[osl] = -tmp.square_().sum(dim=(2, 3))
+
+    # mahalanobis term
+    dmu = None
+    for bs in range(0, n, batch_size):
+        osl = slice(bs, min(bs + batch_size, n))
+        if dmu is not None:
+            dmu = dmu[: osl.stop - bs]
+        dmu = torch.sub(mu_[None], mu_[osl, None], out=dmu)
+        corr = dmu.mT @ V[None]
+        corr = corr.square_().sum(dim=(2, 3))
+        out[osl] -= corr
+        mah = dmu.square_().sum(dim=(2, 3))
+        out[osl] += mah
+
+    # trace term B: it's a self-vec
+    trB = V.square_().sum(dim=(1, 2))
+
+    # put back together
+    # remember: self dim is dim 1, other dim is dim 0
+    out += logdet[None, :]
+    out -= logdet[:, None]
+    out += trA[:, None]
+    out -= trB[None, :]
+
+    return out
 
 
 def neighb_lut(unit_neighborhood_counts):

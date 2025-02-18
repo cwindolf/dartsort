@@ -18,6 +18,7 @@ from ._truncated_em_helpers import (
     TEStepResult,
     _te_batch,
     units_overlapping_neighborhoods,
+    woodbury_kl_divergence,
 )
 
 
@@ -34,6 +35,7 @@ class SpikeTruncatedMixtureModel(torch.nn.Module):
         random_seed=0,
         n_threads: int = 0,
         batch_size=2048,
+        exact_kl=False,
     ):
         super().__init__()
         if n_search is None:
@@ -44,6 +46,7 @@ class SpikeTruncatedMixtureModel(torch.nn.Module):
         self.noise = noise
         self.M = M
         self.covariance_radius = covariance_radius
+        self.exact_kl = exact_kl
         train_indices, self.train_neighborhoods = self.data.neighborhoods("extract")
         self.n_spikes = train_indices.numel()
         self.processor = TruncatedExpectationProcessor(
@@ -108,11 +111,11 @@ class SpikeTruncatedMixtureModel(torch.nn.Module):
         raise NotImplementedError
 
     def step(self, show_progress=False):
-        print('step a', flush=True)
+        print("step a", flush=True)
         search_neighbors = self.search_sets()
-        print('step b', flush=True)
+        print("step b", flush=True)
         unit_neighborhood_counts = self.candidates.propose_candidates(search_neighbors)
-        print('step c', flush=True)
+        print("step c", flush=True)
         self.processor.update(
             log_proportions=self.log_proportions,
             noise_log_prop=self.noise_log_prop,
@@ -120,11 +123,14 @@ class SpikeTruncatedMixtureModel(torch.nn.Module):
             bases=self.bases,
             unit_neighborhood_counts=unit_neighborhood_counts,
         )
-        print('step d', flush=True)
+        print("step d", flush=True)
         result = self.processor.truncated_e_step(
-            self.candidates.candidates, show_progress=show_progress
+            self.candidates.candidates,
+            show_progress=show_progress,
+            with_kl=not self.exact_kl,
         )
-        print('step f', flush=True)
+        print(f"{result.kl=}")
+        print("step f", flush=True)
         self.means[..., :-1] = result.m
         if self.bases is not None:
             assert result.R is not None
@@ -138,9 +144,24 @@ class SpikeTruncatedMixtureModel(torch.nn.Module):
         lp = self._N.log() - self._N.sum().log()
         self.noise_log_prop.fill_(lp[0])
         self.log_proportions[:] = lp[1:]
-        self.kl_divergences[:] = result.kl
+        if self.exact_kl:
+            print("hi exact")
+            self.update_dkl()
+        else:
+            self.kl_divergences[:] = result.kl
 
         return dict(obs_elbo=result.obs_elbo)
+
+    def update_dkl(self):
+        W = self.bases
+        if W is not None:
+            W = W[..., :-1].reshape(len(W), self.M, -1).mT
+        woodbury_kl_divergence(
+            C=self.noise._full_cov,
+            mu=self.means[..., :-1].reshape(len(self.means), -1),
+            W=W,
+            out=self.kl_divergences,
+        )
 
     def search_sets(self, n_search=None):
         """Search space for evolutionary candidate updates.
@@ -207,7 +228,9 @@ class TruncatedExpectationProcessor(torch.nn.Module):
         assert hasattr(self, "Coo_logdet")
         return self.Coo_logdet.device
 
-    def truncated_e_step(self, candidates, show_progress=False) -> TEStepResult:
+    def truncated_e_step(
+        self, candidates, with_kl=True, show_progress=False
+    ) -> TEStepResult:
         """E step of truncated VEM
 
         Will update candidates[:, :self.n_candidates] in place.
@@ -218,7 +241,11 @@ class TruncatedExpectationProcessor(torch.nn.Module):
             (self.n_units, self.rank, self.nc), device=dev, dtype=torch.double
         )
         N = torch.zeros((self.n_units,), device=dev, dtype=torch.double)
-        dkl = torch.zeros((self.n_units, self.n_units), device=dev, dtype=torch.double)
+        dkl = None
+        if with_kl:
+            dkl = torch.zeros(
+                (self.n_units, self.n_units), device=dev, dtype=torch.double
+            )
         ncc = torch.zeros((self.n_units, self.n_units), device=dev, dtype=torch.double)
         noise_N = torch.tensor(0.0, device=dev, dtype=torch.double)
         obs_elbo = torch.tensor(0.0, device=dev, dtype=torch.double)
@@ -238,7 +265,7 @@ class TruncatedExpectationProcessor(torch.nn.Module):
 
         # run loop
         jobs = (
-            self._te_step_job(candidates, batchix)
+            self._te_step_job(candidates, batchix, with_kl)
             for batchix in self.batches(show_progress=show_progress)
         )
         count = 0
@@ -258,9 +285,9 @@ class TruncatedExpectationProcessor(torch.nn.Module):
             count += len(result.candidates)
             obs_elbo += (result.obs_elbo - obs_elbo) * (len(result.candidates) / count)
 
-            # welford again
-            ncc += result.ncc
-            dkl += (result.dkl - dkl).div_(ncc.clamp(min=1.0))
+            if with_kl:
+                ncc += result.ncc
+                dkl += (result.dkl - dkl).div_(ncc.clamp(min=1.0))
 
             if self.M:
                 assert R is not None
@@ -279,7 +306,8 @@ class TruncatedExpectationProcessor(torch.nn.Module):
         if first_run:
             self.register_buffer("noise_logliks", noise_logliks)
 
-        dkl[ncc < 1] = torch.inf
+        if with_kl:
+            dkl[ncc < 1] = torch.inf
 
         return TEStepResult(
             elbo=None,
@@ -293,13 +321,13 @@ class TruncatedExpectationProcessor(torch.nn.Module):
         )
 
     @joblib.delayed
-    def _te_step_job(self, candidates, batch_indices):
+    def _te_step_job(self, candidates, batch_indices, with_kl):
         return self.process_batch(
             candidates=candidates,
             batch_indices=batch_indices,
             with_stats=True,
             with_obs_elbo=True,
-            with_kl=True,
+            with_kl=with_kl,
         )
 
     def batches(self, shuffle=False, show_progress=False):
@@ -482,7 +510,7 @@ class TruncatedExpectationProcessor(torch.nn.Module):
         unit_neighborhood_counts=None,
         batch_size=1024,
     ):
-        print(f'update {means.shape=}', flush=True)
+        print(f"update {means.shape=}", flush=True)
         Nu, r, Nc = means.shape
         assert Nc in (self.nc, self.nc + 1)
         assert r == self.rank
@@ -525,7 +553,9 @@ class TruncatedExpectationProcessor(torch.nn.Module):
         tnu = mu[self.lut_units[:, None], :, miss_ix].permute(0, 2, 1)
         self.register_buffer("nu", nu)
         self.register_buffer("tnu", tnu)
-        Cooinv_nu = torch.empty((len(self.lut_neighbs), self.Coo_inv.shape[1], 1), device=nu.device)
+        Cooinv_nu = torch.empty(
+            (len(self.lut_neighbs), self.Coo_inv.shape[1], 1), device=nu.device
+        )
         for bs in range(0, len(self.lut_neighbs), batch_size):
             be = min(len(self.lut_neighbs), bs + batch_size)
             Cooinv = self.Coo_inv[self.lut_neighbs[bs:be]]
@@ -537,7 +567,7 @@ class TruncatedExpectationProcessor(torch.nn.Module):
 
         # basis stuff
         if not self.M:
-            print('update bail 0', flush=True)
+            print("update bail 0", flush=True)
             return
         assert W is not None
 
@@ -550,7 +580,9 @@ class TruncatedExpectationProcessor(torch.nn.Module):
         Wmiss = Wmiss.reshape(nlut, self.M, -1)
 
         self.register_buffer("Wobs", Wobs)
-        Cobsinv_WobsT = torch.empty((len(self.lut_neighbs), self.Coo_inv.shape[1], self.M), device=Wobs.device)
+        Cobsinv_WobsT = torch.empty(
+            (len(self.lut_neighbs), self.Coo_inv.shape[1], self.M), device=Wobs.device
+        )
         for bs in range(0, len(self.lut_neighbs), batch_size):
             be = min(len(self.lut_neighbs), bs + batch_size)
             Cooinv = self.Coo_inv[self.lut_neighbs[bs:be]]
@@ -578,7 +610,9 @@ class TruncatedExpectationProcessor(torch.nn.Module):
         del Wmiss
         for bs in range(0, len(W_WCC), batch_size):
             be = min(len(W_WCC), bs + batch_size)
-            W_WCC[bs:be].baddbmm_(Wobs[bs:be], self.Cooinv_Com[self.lut_neighbs[bs:be]], alpha=-1)
+            W_WCC[bs:be].baddbmm_(
+                Wobs[bs:be], self.Cooinv_Com[self.lut_neighbs[bs:be]], alpha=-1
+            )
         self.register_buffer("W_WCC", W_WCC)
 
     # long method... putting it in another file to keep the flow
