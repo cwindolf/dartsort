@@ -12,7 +12,7 @@ def refine_clustering(
     motion_est=None,
     refinement_config=config.default_refinement_config,
     computation_config=None,
-    store_step_labels=False,
+    return_step_labels=False,
 ):
     """Refine a clustering using the strategy specified by the config."""
     if refinement_config.refinement_stragegy == "splitmerge":
@@ -71,12 +71,14 @@ def refine_clustering(
         hard_noise=refinement_config.hard_noise,
     )
     gmm.cleanup()
-    step_labels = {}
+    step_labels = {} if return_step_labels else None
     for it in range(refinement_config.n_total_iters):
         if refinement_config.truncated:
             log_liks = gmm.tem()
         else:
             log_liks = gmm.em()
+        if return_step_labels:
+            step_labels[f"refstepaem{it}"] = gmm.labels.numpy(force=True).copy()
 
         assert log_liks is not None
         if (
@@ -90,7 +92,11 @@ def refine_clustering(
                 log_liks = gmm.tem()
             else:
                 log_liks = gmm.em()
+            if return_step_labels:
+                step_labels[f"refstepbsplit{it}"] = gmm.labels.numpy(force=True).copy()
         gmm.merge(log_liks)
+        if return_step_labels:
+            step_labels[f"refstepcmerge{it}"] = gmm.labels.numpy(force=True).copy()
 
     if refinement_config.truncated:
         log_liks = gmm.tem(final_split="full")
@@ -98,7 +104,9 @@ def refine_clustering(
         log_liks = gmm.em(final_split="full")
     gmm.cpu()
     sorting = gmm.to_sorting()
-    return sorting
+    del gmm
+    import gc; gc.collect()
+    return sorting, step_labels
 
 
 def split_merge(
