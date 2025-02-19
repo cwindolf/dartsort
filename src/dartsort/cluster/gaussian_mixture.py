@@ -365,6 +365,7 @@ class SpikeMixtureModel(torch.nn.Module):
         lls = self.log_likelihoods(with_noise_unit=True, show_progress=True)
         labels_full = loglik_reassign(lls[:-1])[1]
         self.update_proportions(lls)
+        del lls
         logprops = self.log_proportions
         print()
         tmm.set_parameters(
