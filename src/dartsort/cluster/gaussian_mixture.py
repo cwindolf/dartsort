@@ -971,13 +971,13 @@ class SpikeMixtureModel(torch.nn.Module):
             if covs is not None:
                 W = covs.reshape(n, -1, self.ppca_rank)
             dists = spiketorch.woodbury_kl_divergence(
-                C=self.noise._full_cov,
+                C=self.noise.marginal_covariance(device=means.device),
                 mu=means.reshape(n, -1),
                 W=W,
             )
         elif kind == "noise_metric":
             dists = spiketorch.woodbury_kl_divergence(
-                C=self.noise._full_cov,
+                C=self.noise.marginal_covariance(device=means.device),
                 mu=means.reshape(n, -1),
             )
         else:
@@ -987,7 +987,7 @@ class SpikeMixtureModel(torch.nn.Module):
             dists = dists.T
         if kind == "symkl":
             dists *= 0.5
-            dists += dists.T
+            dists = dists + dists.T
 
         dists = dists.numpy(force=True)
 
