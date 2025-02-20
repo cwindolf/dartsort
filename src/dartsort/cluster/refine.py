@@ -74,7 +74,7 @@ def refine_clustering(
     step_labels = {} if return_step_labels else None
     for it in range(refinement_config.n_total_iters):
         if refinement_config.truncated:
-            log_liks = gmm.tem()
+            log_liks, _ = gmm.tem()
         else:
             log_liks = gmm.em()
         if return_step_labels:
@@ -89,7 +89,7 @@ def refine_clustering(
         else:
             gmm.split()
             if refinement_config.truncated:
-                log_liks = gmm.tem()
+                log_liks, _ = gmm.tem()
             else:
                 log_liks = gmm.em()
             if return_step_labels:
@@ -105,7 +105,9 @@ def refine_clustering(
     gmm.cpu()
     sorting = gmm.to_sorting()
     del gmm
-    import gc; gc.collect()
+    import gc
+
+    gc.collect()
     return sorting, step_labels
 
 
