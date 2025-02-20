@@ -357,6 +357,7 @@ class SpikeMixtureModel(torch.nn.Module):
         )
 
         n_iter = self.n_em_iters if n_iter is None else n_iter
+        assert n_iter > 0
         step_progress = show_progress and bool(max(0, int(show_progress) - 1))
 
         # initialize me
@@ -375,7 +376,7 @@ class SpikeMixtureModel(torch.nn.Module):
         self.update_proportions(lls)
         del lls
         logprops = self.log_proportions
-        print()
+        assert logprops is not None
         tmm.set_parameters(
             labels=torch.from_numpy(labels_full),
             means=means[ids],
@@ -392,16 +393,20 @@ class SpikeMixtureModel(torch.nn.Module):
 
         records = []
         for j in its:
-            res = tmm.step(show_progress=step_progress)
+            is_final = j == n_iter - 1
+            res = tmm.step(show_progress=step_progress, hard_label=is_final)
             records.append(res)
             msg = f"tEM[oelbo/n={res['obs_elbo']:0.2f}]"
             if show_progress:
-                its.set_description(msg)
+                its.set_description(msg)  # pyright: ignore
+
         print("post its", flush=True)
+        labels = res["labels"]  # pyright: ignore [reportPossiblyUnboundVariable]
+        assert labels is not None
 
         # reupdate my GaussianUnits
         self.clear_units()
-        self.labels[self.data.split_indices["train"]] = tmm.candidates.candidates[:, 0]
+        self.labels[self.data.split_indices["train"]] = labels
         for j in range(len(tmm.means)):
             basis = None
             if tmm.bases is not None:

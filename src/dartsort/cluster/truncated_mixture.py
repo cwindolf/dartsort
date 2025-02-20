@@ -114,7 +114,7 @@ class SpikeTruncatedMixtureModel(torch.nn.Module):
         # then storing?
         raise NotImplementedError
 
-    def step(self, show_progress=False):
+    def step(self, show_progress=False, hard_label=False):
         search_neighbors = self.search_sets()
         unit_neighborhood_counts = self.candidates.propose_candidates(search_neighbors)
         self.processor.update(
@@ -128,6 +128,7 @@ class SpikeTruncatedMixtureModel(torch.nn.Module):
             self.candidates.candidates,
             show_progress=show_progress,
             with_kl=not self.exact_kl,
+            with_hard_labels=hard_label,
         )
         self.means[..., :-1] = result.m
         if self.bases is not None:
@@ -147,7 +148,7 @@ class SpikeTruncatedMixtureModel(torch.nn.Module):
         else:
             self.kl_divergences[:] = result.kl
 
-        return dict(obs_elbo=result.obs_elbo)
+        return dict(obs_elbo=result.obs_elbo, labels=result.hard_labels)
 
     def update_dkl(self):
         W = self.bases
@@ -222,7 +223,7 @@ class TruncatedExpectationProcessor(torch.nn.Module):
         return self.Coo_logdet.device
 
     def truncated_e_step(
-        self, candidates, with_kl=True, show_progress=False
+        self, candidates, with_kl=False, show_progress=False, with_hard_labels=False
     ) -> TEStepResult:
         """E step of truncated VEM
 
@@ -249,6 +250,7 @@ class TruncatedExpectationProcessor(torch.nn.Module):
 
         # will be updated...
         top_candidates = candidates[:, : self.n_candidates]
+        hard_labels = torch.empty_like(top_candidates[:, 0])
 
         # do we need to initialize the noise log likelihoods?
         first_run = not hasattr(self, "noise_logliks")
@@ -258,7 +260,7 @@ class TruncatedExpectationProcessor(torch.nn.Module):
 
         # run loop
         jobs = (
-            self._te_step_job(candidates, batchix, with_kl)
+            self._te_step_job(candidates, batchix, with_kl, with_hard_labels)
             for batchix in self.batches(show_progress=show_progress)
         )
         count = 0
@@ -293,6 +295,10 @@ class TruncatedExpectationProcessor(torch.nn.Module):
             if noise_logliks is not None:
                 noise_logliks[result.indices] = result.noise_lls
 
+            if with_hard_labels:
+                assert result.hard_labels is not None
+                hard_labels[result.indices] = result.hard_labels
+
         if first_run:
             self.register_buffer("noise_logliks", noise_logliks)
 
@@ -309,16 +315,18 @@ class TruncatedExpectationProcessor(torch.nn.Module):
             U=U,
             m=m,
             kl=dkl,
+            hard_labels=hard_labels,
         )
 
     @joblib.delayed
-    def _te_step_job(self, candidates, batch_indices, with_kl):
+    def _te_step_job(self, candidates, batch_indices, with_kl, with_hard_labels):
         return self.process_batch(
             candidates=candidates,
             batch_indices=batch_indices,
             with_stats=True,
             with_obs_elbo=True,
             with_kl=with_kl,
+            with_hard_labels=with_hard_labels,
         )
 
     def batches(self, shuffle=False, show_progress=False):
@@ -350,6 +358,7 @@ class TruncatedExpectationProcessor(torch.nn.Module):
         with_kl=False,
         with_elbo=False,
         with_obs_elbo=False,
+        with_hard_labels=False,
     ) -> TEBatchResult:
         assert not (with_grads or with_elbo)  # not implemented yet
         candidates = candidates[batch_indices]
@@ -378,6 +387,12 @@ class TruncatedExpectationProcessor(torch.nn.Module):
         oelbo = None
         if with_obs_elbo:
             oelbo = obs_elbo(Q, eres["log_liks"])
+
+        hard_labels = None
+        if with_hard_labels:
+            hard_labels = candidates[:, 0].clone()
+            is_noise = (Q[:, -1:] > Q[:, :-1]).all(dim=1)
+            hard_labels[is_noise] = -1
 
         noise_N = N = None
         mres = {}
@@ -409,6 +424,7 @@ class TruncatedExpectationProcessor(torch.nn.Module):
             U=mres.get("U"),
             ncc=eres["ncc"],
             dkl=eres["dkl"],
+            hard_labels=hard_labels,
         )
 
     def initialize_fixed(
@@ -480,14 +496,12 @@ class TruncatedExpectationProcessor(torch.nn.Module):
 
         # Get choleskys. linear_operator will jitter to help
         # with numerics for us if we do everything via chol.
-        print(f"{Coo[0].cholesky()}")
         Coo_chol = [C.cholesky() for C in Coo]
-        Coo_invsqrt = [C.inverse().to_dense() for C in Coo_chol]
-        Coo_chol = [L.to_dense() for L in Coo_chol]
+        Coo_invsqrt = [L.inverse().to_dense() for L in Coo_chol]
         Coo_inv = [Li.T @ Li for Li in Coo_invsqrt]
-        Coo_logdet = [2 * L.diagonal().log().sum() for L in Coo_chol]
+        Coo_logdet = [2 * L.to_dense().diagonal().log().sum() for L in Coo_chol]
         Coo_logdet = torch.tensor(Coo_logdet, device=device)
-        Cooinv_Com = [Co @ Cm for Co, Cm in zip(Coo_inv, Com)]
+        Cooinv_Com = [Coi @ Cm for Coi, Cm in zip(Coo_inv, Com)]
 
         # figure out dimensions
         nc_obs = neighborhoods.channel_counts
@@ -540,13 +554,17 @@ class TruncatedExpectationProcessor(torch.nn.Module):
     def precompute_invx(self):
         # precomputed Cooinv_x and whitenedx
         # TODO: need both??
-        self.Cooinv_x = self.features.clone().view(len(self.features), -1)
-        self.whitenedx = self.features.clone().view(len(self.features), -1)
+        n = len(self.features)
+        X = self.features.view(n, -1)
+        self.Cooinv_x = X.clone()
+        self.whitenedx = X.clone()
+        self.Cmo_Cooinv_x = self.whitenedx.new_empty(n, self.rank * self.nc_miss)
         for ni in trange(self.n_neighborhoods, desc="invx"):
             (mask,) = (self.neighborhood_ids == ni).nonzero(as_tuple=True)
             self.Cooinv_x[mask] @= self.Coo_inv[ni].to(self.Cooinv_x)
             # !note the transpose! x @=y is x = x@y, not y@x
-            self.whitenedx[mask] @= self.Coo_invsqrt[ni].T.to(self.Cooinv_x)
+            self.whitenedx[mask] @= self.Coo_invsqrt[ni].T.to(self.whitenedx)
+            self.Cmo_Cooinv_x[mask] = X[mask] @ self.Cooinv_Com[ni]
 
     def update(
         self,
@@ -600,19 +618,23 @@ class TruncatedExpectationProcessor(torch.nn.Module):
         # whitened means
         self.register_buffer("nu", nu)
         self.register_buffer("tnu", tnu)
-        shp = (len(self.lut_neighbs), self.Coo_inv.shape[1], 1)
+        shp = (nlut, self.rank * self.nc_obs, 1)
         Cooinv_nu = torch.empty(shp, device=nu.device)
+        Cmo_Cooinv_nu = Cooinv_nu.new_empty((nlut, self.rank * self.nc_miss))
         whitenednu = torch.empty_like(Cooinv_nu)
         for bs in range(0, len(self.lut_neighbs), batch_size):
             be = min(len(self.lut_neighbs), bs + batch_size)
-            lutbatch = self.lut_neighbs[bs:be]
-            Cooinvbatch = self.Coo_inv[lutbatch]
-            Cooinvsqrtbatch = self.Coo_invsqrt[lutbatch]
+            nbatch = self.lut_neighbs[bs:be]
+            Cooinvbatch = self.Coo_inv[nbatch]
+            Cooinvsqrtbatch = self.Coo_invsqrt[nbatch]
+            Cooinv_Combatch = self.Cooinv_Com[nbatch]
             nubatch = nu[bs:be].reshape(be - bs, -1, 1)
             torch.bmm(Cooinvbatch, nubatch, out=Cooinv_nu[bs:be])
             torch.bmm(Cooinvsqrtbatch, nubatch, out=whitenednu[bs:be])
+            Cmo_Cooinv_nu[bs:be] = Cooinv_Combatch.mT.bmm(nubatch).squeeze()
         self.register_buffer("Cooinv_nu", Cooinv_nu[..., 0])
         self.register_buffer("whitenednu", whitenednu[..., 0])
+        self.register_buffer("Cmo_Cooinv_nu", Cmo_Cooinv_nu)
 
         # basis stuff
         if not self.M:
@@ -725,9 +747,12 @@ class TruncatedExpectationProcessor(torch.nn.Module):
             x=self.features[batch_indices].view(n, -1).to(self.device),
             nu=self.nu[lut_ixs].reshape(n, C, -1),
             tnu=self.tnu[lut_ixs].reshape(n, C, -1),
-            Cooinv_Com=self.Cooinv_Com[neighborhood_ids],
         )
         if not self.M:
+            data.update(
+                Cmo_Cooinv_x=self.Cmo_Cooinv_x[batch_indices],
+                Cmo_Cooinv_nu=self.Cmo_Cooinv_nu[lut_ixs],
+            )
             return data
 
         # rank>0 args
@@ -738,6 +763,7 @@ class TruncatedExpectationProcessor(torch.nn.Module):
             inv_cap_Wobs=self.inv_cap_Wobs[lut_ixs],
             W_WCC=self.W_WCC[lut_ixs],
             Wobs=self.Wobs[lut_ixs],
+            Cooinv_Com=self.Cooinv_Com[neighborhood_ids],
         )
         return data
 

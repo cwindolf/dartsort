@@ -42,6 +42,8 @@ class TEStepResult:
 
     kl: Optional[torch.Tensor] = None
 
+    hard_labels: Optional[torch.Tensor] = None
+
     if DEBUG:
         __post_init__ = __debug_init__
 
@@ -66,6 +68,8 @@ class TEBatchResult:
 
     ncc: Optional[torch.Tensor] = None
     dkl: Optional[torch.Tensor] = None
+
+    hard_labels: Optional[torch.Tensor] = None
 
     if DEBUG:
         __post_init__ = __debug_init__
@@ -247,7 +251,9 @@ def _te_batch_m_rank0(
     x,
     nu,
     tnu,
-    Cooinv_Com,
+    # ,
+    Cmo_Cooinv_x,
+    Cmo_Cooinv_nu,
 ):
     """Rank (M) 0 case of part 2/2 of the M step within the E step"""
 
@@ -258,9 +264,11 @@ def _te_batch_m_rank0(
     xc = torch.sub(x[:, None], nu, out=nu)
     del nu
 
-    # TODO: store xCooinvCom and subtract here?
-    mm = tnu.baddbmm_(xc, Cooinv_Com).mul_(Qn.unsqueeze(2))
+    mm = tnu
     del tnu
+    mm += Cmo_Cooinv_x[:, None]
+    mm -= Cmo_Cooinv_nu
+    mm.mul_(Qn.unsqueeze(2))
     out = xc.view(n, C, rank, nc_obs)
     del xc
     mo = torch.mul(Qn[:, :, None, None], x.view(n, 1, rank, nc_obs), out=out)
