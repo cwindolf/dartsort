@@ -311,12 +311,12 @@ def _te_batch_m_ppca(
     x,
     nu,
     tnu,
-    Cooinv_Com,
+    Cmo_Cooinv_x,
+    Cmo_Cooinv_nu,
     # M>0 only args
-    Cooinv_x,
-    Cooinv_nu,
     inv_cap,
-    inv_cap_Wobs,
+    inv_cap_Wobs_Cooinv,
+    Cmo_Cooinv_WobsT,
     W_WCC,
     Wobs,
 ):
@@ -327,16 +327,19 @@ def _te_batch_m_ppca(
     M = inv_cap.shape[-1]
     arange_M = torch.arange(M, device=Q.device)
 
-    xc = x[:, None] - nu
-    Cooinv_xc = Cooinv_x[:, None] - Cooinv_nu
+    xc = torch.sub(x[:, None], nu, out=nu)
+    del nu
+    Cmo_Cooinv_xc = torch.sub(Cmo_Cooinv_x[:, None], Cmo_Cooinv_nu, out=Cmo_Cooinv_nu)
+    del Cmo_Cooinv_nu
 
     # TODO: it would be great to... not do this?
-    ubar = torch.einsum("ncpj,ncj->ncp", inv_cap_Wobs, Cooinv_xc)
+    ubar = torch.einsum("ncpj,ncj->ncp", inv_cap_Wobs_Cooinv, xc)
     EuuT = inv_cap
     del inv_cap
     EuuT += ubar.unsqueeze(2) * ubar.unsqueeze(3)
 
-    Wobs_ubar = torch.einsum("ncpk,ncp->nck", Wobs, ubar)
+    WobsT_ubar = torch.einsum("ncpk,ncp->nck", Wobs, ubar)
+    Cmo_Cooinv_WobsT_ubar = torch.einsum("nckp,ncp->nck", Cmo_Cooinv_WobsT, ubar)
 
     # TODO: can do fewer matmuls by breaking up the cooinv_com stuff.
     # use cooinv_x etc? and below, use Cooinv_WObsT to do the Wobs_ubar
@@ -345,16 +348,13 @@ def _te_batch_m_ppca(
     # whitener into other things? that's not clear at all.
 
     R_observed = ubar[:, :, :, None] * xc[:, :, None, :]
-    R_missing0 = torch.einsum("ncpq,ncqk->ncpk", EuuT, W_WCC)
-    R_missing1 = torch.einsum("ncp,ncj,njk->ncpk", ubar, xc, Cooinv_Com)
-    R_missing = R_missing0 + R_missing1
+    R_missing = torch.einsum("ncpq,ncqk->ncpk", EuuT, W_WCC)
+    R_missing += ubar.unsqueeze(3) * Cmo_Cooinv_xc.unsqueeze(2)
 
-    xcc = xc.sub_(Wobs_ubar)
-    del xc
-    m_missing = tnu.add_(torch.einsum("ncj,njk->nck", xcc, Cooinv_Com))
+    m_missing = tnu.add_(Cmo_Cooinv_xc).sub_(Cmo_Cooinv_WobsT_ubar)
     del tnu
-    m_observed = xcc.add_(nu)
-    del xcc
+    m_observed = torch.sub(x[:, None], WobsT_ubar, out=WobsT_ubar)
+    del WobsT_ubar
 
     QU = EuuT.mul_(Qn[:, :, None, None])
     QRo = R_observed.mul_(Qn[:, :, None, None])

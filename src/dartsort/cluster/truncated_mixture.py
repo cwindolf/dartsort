@@ -556,12 +556,12 @@ class TruncatedExpectationProcessor(torch.nn.Module):
         # TODO: need both??
         n = len(self.features)
         X = self.features.view(n, -1)
-        self.Cooinv_x = X.clone()
+        # self.Cooinv_x = X.clone()
         self.whitenedx = X.clone()
         self.Cmo_Cooinv_x = self.whitenedx.new_empty(n, self.rank * self.nc_miss)
         for ni in trange(self.n_neighborhoods, desc="invx"):
             (mask,) = (self.neighborhood_ids == ni).nonzero(as_tuple=True)
-            self.Cooinv_x[mask] @= self.Coo_inv[ni].to(self.Cooinv_x)
+            # self.Cooinv_x[mask] @= self.Coo_inv[ni].to(self.Cooinv_x)
             # !note the transpose! x @=y is x = x@y, not y@x
             self.whitenedx[mask] @= self.Coo_invsqrt[ni].T.to(self.whitenedx)
             self.Cmo_Cooinv_x[mask] = X[mask] @ self.Cooinv_Com[ni]
@@ -619,9 +619,9 @@ class TruncatedExpectationProcessor(torch.nn.Module):
         self.register_buffer("nu", nu)
         self.register_buffer("tnu", tnu)
         shp = (nlut, self.rank * self.nc_obs, 1)
-        Cooinv_nu = torch.empty(shp, device=nu.device)
-        Cmo_Cooinv_nu = Cooinv_nu.new_empty((nlut, self.rank * self.nc_miss))
-        whitenednu = torch.empty_like(Cooinv_nu)
+        # Cooinv_nu = torch.empty(shp, device=nu.device)
+        Cmo_Cooinv_nu = nu.new_empty((nlut, self.rank * self.nc_miss))
+        whitenednu = nu.new_empty(shp)
         for bs in range(0, len(self.lut_neighbs), batch_size):
             be = min(len(self.lut_neighbs), bs + batch_size)
             nbatch = self.lut_neighbs[bs:be]
@@ -629,10 +629,10 @@ class TruncatedExpectationProcessor(torch.nn.Module):
             Cooinvsqrtbatch = self.Coo_invsqrt[nbatch]
             Cooinv_Combatch = self.Cooinv_Com[nbatch]
             nubatch = nu[bs:be].reshape(be - bs, -1, 1)
-            torch.bmm(Cooinvbatch, nubatch, out=Cooinv_nu[bs:be])
+            # torch.bmm(Cooinvbatch, nubatch, out=Cooinv_nu[bs:be])
             torch.bmm(Cooinvsqrtbatch, nubatch, out=whitenednu[bs:be])
             Cmo_Cooinv_nu[bs:be] = Cooinv_Combatch.mT.bmm(nubatch).squeeze()
-        self.register_buffer("Cooinv_nu", Cooinv_nu[..., 0])
+        # self.register_buffer("Cooinv_nu", Cooinv_nu[..., 0])
         self.register_buffer("whitenednu", whitenednu[..., 0])
         self.register_buffer("Cmo_Cooinv_nu", Cmo_Cooinv_nu)
 
@@ -651,13 +651,19 @@ class TruncatedExpectationProcessor(torch.nn.Module):
         self.register_buffer("Wobs", Wobs)
 
         Cooinv_WobsT = torch.empty(
-            (len(self.lut_neighbs), self.Coo_inv.shape[1], self.M), device=Wobs.device
+            (nlut, self.rank * self.nc_obs, self.M), device=Wobs.device
+        )
+        Cmo_Cooinv_WobsT = torch.empty(
+            (nlut, self.rank * self.nc_miss, self.M), device=Wobs.device
         )
         for bs in range(0, len(self.lut_neighbs), batch_size):
             be = min(len(self.lut_neighbs), bs + batch_size)
             Cooinvbatch = self.Coo_inv[self.lut_neighbs[bs:be]]
             torch.bmm(Cooinvbatch, Wobs[bs:be].mT, out=Cooinv_WobsT[bs:be])
+            Cmo_Cooinv_batch = self.Cooinv_Com[self.lut_neighbs[bs:be]].mT
+            torch.bmm(Cmo_Cooinv_batch, Wobs[bs:be].mT, out=Cmo_Cooinv_WobsT[bs:be])
         self.register_buffer("Cooinv_WobsT", Cooinv_WobsT)
+        self.register_buffer("Cmo_Cooinv_WobsT", Cmo_Cooinv_WobsT)
 
         cap = torch.bmm(Wobs, self.Cooinv_WobsT)
         cap.diagonal(dim1=-2, dim2=-1).add_(1.0)
@@ -678,16 +684,17 @@ class TruncatedExpectationProcessor(torch.nn.Module):
         # covariance of the ppca embedding (usually I call that T).
 
         wburyroot = torch.empty_like(Cooinv_WobsT)
-        inv_cap_Wobs = torch.empty_like(wburyroot.mT)
+        inv_cap_Wobs_Cooinv = torch.empty_like(wburyroot.mT)
         for bs in range(0, len(self.lut_neighbs), batch_size):
             be = min(len(self.lut_neighbs), bs + batch_size)
+            Cooinv = self.Coo_inv[self.lut_neighbs[bs:be]]
             Cooinvsqrt = self.Coo_invsqrt[self.lut_neighbs[bs:be]]
             coeft = Wobs[bs:be].mT.bmm(cap_invsqrt[bs:be].mT)
             torch.bmm(Cooinvsqrt, coeft, out=wburyroot[bs:be])
 
-            inv_cap_Wobs[bs:be] = cap_inv[bs:be].bmm(Wobs[bs:be])
+            inv_cap_Wobs_Cooinv[bs:be] = cap_inv[bs:be].bmm(Wobs[bs:be]).bmm(Cooinv)
         self.register_buffer("wburyroot", wburyroot)
-        self.register_buffer("inv_cap_Wobs", inv_cap_Wobs)
+        self.register_buffer("inv_cap_Wobs_Cooinv", inv_cap_Wobs_Cooinv)
 
         # gizmo matrix used in a certain part of the "imputation"
         W_WCC = Wmiss
@@ -747,23 +754,19 @@ class TruncatedExpectationProcessor(torch.nn.Module):
             x=self.features[batch_indices].view(n, -1).to(self.device),
             nu=self.nu[lut_ixs].reshape(n, C, -1),
             tnu=self.tnu[lut_ixs].reshape(n, C, -1),
+            Cmo_Cooinv_x=self.Cmo_Cooinv_x[batch_indices],
+            Cmo_Cooinv_nu=self.Cmo_Cooinv_nu[lut_ixs],
         )
         if not self.M:
-            data.update(
-                Cmo_Cooinv_x=self.Cmo_Cooinv_x[batch_indices],
-                Cmo_Cooinv_nu=self.Cmo_Cooinv_nu[lut_ixs],
-            )
             return data
 
         # rank>0 args
         data.update(
-            Cooinv_x=self.Cooinv_x[batch_indices].to(self.device),
-            Cooinv_nu=self.Cooinv_nu[lut_ixs],
             inv_cap=self.inv_cap[lut_ixs],
-            inv_cap_Wobs=self.inv_cap_Wobs[lut_ixs],
+            inv_cap_Wobs_Cooinv=self.inv_cap_Wobs_Cooinv[lut_ixs],
             W_WCC=self.W_WCC[lut_ixs],
             Wobs=self.Wobs[lut_ixs],
-            Cooinv_Com=self.Cooinv_Com[neighborhood_ids],
+            Cmo_Cooinv_WobsT=self.Cmo_Cooinv_WobsT[lut_ixs],
         )
         return data
 
