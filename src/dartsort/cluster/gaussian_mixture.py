@@ -42,6 +42,14 @@ logger = logging.getLogger(__name__)
 
 # -- main class
 
+"""
+Thanks for checking in about that! I guess I hadn't been thinking about
+it very formally yet. I do feel that I'm interested in driving the project
+and being in charge of the vision, at least for the unsupervised denoising
+part of it, and I do have a medium-term roadmap for getting that model up
+and running and starting to evaluate it. That said, I'm definitely 
+"""
+
 
 class SpikeMixtureModel(torch.nn.Module):
     """Business logic class
@@ -340,16 +348,16 @@ class SpikeMixtureModel(torch.nn.Module):
     ):
         # TODO: hang on to this and update it in place
         tmm = truncated_mixture.SpikeTruncatedMixtureModel(
-            self.data, self.noise, self.ppca_rank, n_threads=n_threads, batch_size=batch_size, **tmm_kwargs
+            self.data,
+            self.noise,
+            self.ppca_rank,
+            n_threads=n_threads,
+            batch_size=batch_size,
+            **tmm_kwargs,
         )
 
         n_iter = self.n_em_iters if n_iter is None else n_iter
-        step_progress = False
-        if show_progress:
-            its = trange(n_iter, desc="tEM", **tqdm_kw)
-            step_progress = bool(max(0, int(show_progress) - 1))
-        else:
-            its = range(n_iter)
+        step_progress = show_progress and bool(max(0, int(show_progress) - 1))
 
         # initialize me
         missing_ids = self.missing_ids()
@@ -377,12 +385,19 @@ class SpikeMixtureModel(torch.nn.Module):
             kl_divergences=dkl,
         )
 
+        if show_progress:
+            its = trange(n_iter, desc="tEM", **tqdm_kw)
+        else:
+            its = range(n_iter)
+
+        records = []
         for j in its:
             res = tmm.step(show_progress=step_progress)
+            records.append(res)
             msg = f"tEM[oelbo/n={res['obs_elbo']:0.2f}]"
             if show_progress:
                 its.set_description(msg)
-        print('post its', flush=True)
+        print("post its", flush=True)
 
         # reupdate my GaussianUnits
         self.clear_units()
@@ -397,9 +412,13 @@ class SpikeMixtureModel(torch.nn.Module):
                 basis=basis,
             )
         del tmm
-        import gc; gc.collect()
+        import gc
+
+        gc.collect()
         torch.cuda.empty_cache()
-        import gc; gc.collect()
+        import gc
+
+        gc.collect()
         torch.cuda.empty_cache()
         self.cleanup()
 
@@ -411,7 +430,7 @@ class SpikeMixtureModel(torch.nn.Module):
             show_progress=step_progress, split=final_split
         )
         log_liks, _ = self.cleanup(log_liks, relabel_split=final_split)
-        return log_liks
+        return log_liks, records
 
     def em(
         self, n_iter=None, show_progress=True, final_e_step=True, final_split="kept"
@@ -945,57 +964,33 @@ class SpikeMixtureModel(torch.nn.Module):
         ids, means, covs, logdets = self.stack_units(
             nu=len(ids), ids=ids, units=units, mean_only=mean_only
         )
+        n = len(ids)
 
-        # output will land here
-        dists = np.full((nu, nu), np.inf, dtype=np.float32)
-        np.fill_diagonal(dists, 0.0)
+        if kind in ("kl", "reverse_kl", "symkl"):
+            W = None
+            if covs is not None:
+                W = covs.reshape(n, -1, self.ppca_rank)
+            dists = spiketorch.woodbury_kl_divergence(
+                C=self.noise._full_cov,
+                mu=means.reshape(n, -1),
+                W=W,
+            )
+        elif kind == "noise_metric":
+            dists = spiketorch.woodbury_kl_divergence(
+                C=self.noise._full_cov,
+                mu=means.reshape(n, -1),
+            )
+        else:
+            assert False
 
-        # reverse KL is faster since there is only one cov to solve with
-        transposed = False
-        averaged = False
-        kind_ = kind
-        noiseinv_covs = None
-        if kind == "kl":
-            kind_ = "reverse_kl"
-            transposed = True
-        if kind == "kl" and covs is not None:
-            W = covs.reshape(len(covs), -1, covs.shape[-1])
-            noiseinv_covs = W.new_zeros(W.shape)
-            for bs in range(0, len(W), 32):
-                be = min(len(W), bs + 32)
-                noiseinv_covs[bs:be] = self.noise._full_cov.solve(W[bs:be])
+        if kind == "reverse_kl":
+            dists = dists.T
         if kind == "symkl":
-            kind_ = "reverse_kl"
-            averaged = True
-
-        # worker fn for parallelization
-        @delayed
-        def dist_job(j, unit):
-            d = unit.divergence(
-                means, other_covs=covs, other_logdets=logdets, kind=kind_, noiseinv_covs=noiseinv_covs
-            )
-            d = d.numpy(force=True).astype(dists.dtype)
-            if transposed:
-                dists[ids, j] = d
-            else:
-                dists[j, ids] = d
-
-        pool = Parallel(
-            self.n_threads, backend="threading", return_as="generator_unordered"
-        )
-        results = pool(dist_job(j, u) for j, u in zip(ids, units))
-        if show_progress:
-            results = tqdm(
-                results, desc="Distances", total=len(ids), unit="unit", **tqdm_kw
-            )
-        for _ in results:
-            pass
-
-        if averaged:
             dists *= 0.5
             dists += dists.T
 
-        # normalize by dividing by the divergence under the noise unit
+        dists = dists.numpy(force=True)
+
         if normalization_kind == "noise":
             denom = self.noise_unit.divergence(
                 means, other_covs=covs, other_logdets=logdets, kind=kind
@@ -2463,7 +2458,9 @@ class GaussianUnit(torch.nn.Module):
         self.register_buffer("mean", mean)
         if basis is not None:
             self.register_buffer("W", basis)
-        channels, = (mean.square().sum(dim=0).sqrt() > channels_amp).nonzero(as_tuple=True)
+        (channels,) = (mean.square().sum(dim=0).sqrt() > channels_amp).nonzero(
+            as_tuple=True
+        )
         self.register_buffer("channels", channels)
         # TODO: neeed for vis. figure it out.
         self.snr = torch.ones(self.n_channels)
@@ -2748,7 +2745,12 @@ class GaussianUnit(torch.nn.Module):
         return ll
 
     def divergence(
-        self, other_means, other_covs=None, other_logdets=None, kind="noise_metric", noiseinv_covs=None
+        self,
+        other_means,
+        other_covs=None,
+        other_logdets=None,
+        kind="noise_metric",
+        noiseinv_covs=None,
     ):
         """Compute my distance to other units
 
@@ -2762,7 +2764,9 @@ class GaussianUnit(torch.nn.Module):
             if kind == "kl":
                 return kl1
         if kind in ("reverse_kl", "symkl"):
-            kl2 = self.reverse_kl_divergence(other_means, other_covs, other_logdets, noiseinv_covs=noiseinv_covs)
+            kl2 = self.reverse_kl_divergence(
+                other_means, other_covs, other_logdets, noiseinv_covs=noiseinv_covs
+            )
             if kind == "reverse_kl":
                 return kl2
         if kind == "symkl":
@@ -2850,7 +2854,9 @@ class GaussianUnit(torch.nn.Module):
             return dict(kl=kl, inv_quad=inv_quad, ld=ld, tr=tr, k=k)
         return kl
 
-    def reverse_kl_divergence(self, other_means, other_covs, other_logdets, noiseinv_covs=None, batch_size=32):
+    def reverse_kl_divergence(
+        self, other_means, other_covs, other_logdets, noiseinv_covs=None, batch_size=32
+    ):
         """DKL(others || self)
         = 0.5 * {
             tr(Ss^-1 So)
@@ -3493,7 +3499,10 @@ def _quick_indices(n_active, counts_so_far, reordered_labels, indices, max_sizes
 
 def warn_with_traceback(message, category, filename, lineno, file=None, line=None):
     import sys
-    log = file if hasattr(file,'write') else sys.stderr
+
+    log = file if hasattr(file, "write") else sys.stderr
     traceback.print_stack(file=log)
     log.write(warnings.formatwarning(message, category, filename, lineno, line))
+
+
 warnings.showwarning = warn_with_traceback
