@@ -2,6 +2,7 @@ import math
 import warnings
 
 import linear_operator
+from linear_operator.utils.cholesky import psd_safe_cholesky
 import numpy as np
 import torch
 import torch.nn.functional as F
@@ -74,15 +75,22 @@ def ravel_multi_index(multi_index, dims):
 
     assert len(multi_index) == len(dims)
 
-    # collect multi indices
     multi_index = torch.broadcast_tensors(*multi_index)
-    multi_index = torch.stack(multi_index)
-    # stride along each axis
-    strides = multi_index.new_tensor([1, *reversed(dims[1:])]).cumprod(0).flip(0)
-    # apply strides (along first axis) and reshape
-    strides = strides.view(-1, *([1] * (multi_index.ndim - 1)))
-    raveled_indices = (strides * multi_index).sum(0)
-    return raveled_indices.view(-1)
+    strides = torch.tensor([1, *reversed(dims[1:])]).cumprod(0).flip(0)
+    out = torch.zeros_like(multi_index[0])
+    for j, s in enumerate(strides):
+        out += s * multi_index[j]
+    return out.view(-1)
+
+    # collect multi indices
+    # multi_index = torch.broadcast_tensors(*multi_index)
+    # multi_index = torch.stack(multi_index)
+    # # stride along each axis
+    # strides = multi_index.new_tensor([1, *reversed(dims[1:])]).cumprod(0).flip(0)
+    # # apply strides (along first axis) and reshape
+    # strides = strides.view(-1, *([1] * (multi_index.ndim - 1)))
+    # raveled_indices = (strides * multi_index).sum(0)
+    # return raveled_indices.view(-1)
 
 
 def add_at_(dest, ix, src, sign=1):
@@ -102,7 +110,9 @@ def add_at_(dest, ix, src, sign=1):
         src = sign * src
     flat_ix = ravel_multi_index(ix, dest.shape)
     if isinstance(src, float):
-        src = torch.tensor(src, dtype=dest.dtype, device=dest.device).broadcast_to(flat_ix.numel())
+        src = torch.tensor(src, dtype=dest.dtype, device=dest.device).broadcast_to(
+            flat_ix.numel()
+        )
     else:
         src = src.reshape(-1)
     dest.view(-1).scatter_add_(
@@ -357,6 +367,155 @@ def nancov(
     if return_nobs:
         return cov, nobs
     return cov
+
+
+def woodbury_kl_divergence(C, mu, W=None, out=None, batch_size=32):
+    """KL divergence with the lemmas, up to affine constant with respect to mu and W
+
+    Here's the logic between the lines below. Variable names follow this notation.
+
+    If W is None, then
+        2 DKL_0(other || self) = (mu_self - mu_other)' C^-1 (mu_self - mu_other)
+    where d is the dimension.
+
+    To do n triangular matmuls rather than n^2 full ones, compute this via:
+        mu' = C^{-1/2} mu
+        (mu_self - mu_other)' C^-1 (mu_self - mu_other) = |mu'_self - mu'_other|^2
+
+    Otherwise,
+        2 DKL(other || self) = tr(S_self^-1 S_other)
+                               + log(|S_self| / |S_other|)
+                               + (mu_self - mu_other)' S_self^-1 (mu_self - mu_other)
+                               - d
+
+    For the log dets,
+        log|S| = log|C + WW'| = log|C| + log|I_M + W'C^-1W|
+    Forget about log|C|, even though it's precomputed. For the other part, to save
+    some matmuls, let
+        U = C^{-1/2}W
+        cap = I_M + W'C^{-1}W = I_m + U'U
+    Note that log|C| will cancel.
+
+    For the trace part, we have
+        S_self^-1 S_other = (C + Ws Ws')^-1 (C + Wo Wo')
+            = [C^-1 - C^-1 Ws caps^-1 Ws' C^-1] (C + Wo Wo')
+            = C^-1 C
+              + C^-1 Wo Wo'
+              - C^-1 Ws caps^-1 Ws'
+              - C^-1 Ws caps^-1 Ws' C^-1 Wo Wo'
+
+    tr(C^-1 C) = d, so that cancels the constant.
+
+    To save matmuls, introduce
+        Vs = Us caps^{-1/2}
+
+    Then by cyclic property, save more operations by rewriting
+        (A+) tr(C^-1 Wo Wo') = tr(Uo' Uo)
+    and
+        (B-) tr(C^-1 Ws caps^-1 Ws') = tr(Us caps^-1 Us')
+                                     = tr(Vs Vs')
+    and
+        (C-) tr(C^-1 Ws caps^-1 Ws' C^-1 Wo Wo')
+                = tr(Wo' C^{-1/2} C^{-1/2} Ws caps^{-1/2} caps^{-1/2} Ws' C^{-1/2} C^{-1/2} Wo)
+                = tr(Uo' Vs Vs' Uo)
+
+    The Mahalanobis term remains. Woodbury says
+        (mus - muo)' (C + Ws Ws')^-1 (mus - muo)
+            = (mus - muo)' [C^-1 - C^-1 Ws cap^-1 Ws' C^-1] (mus - muo)
+            = |mu's - mu'o|^2
+              - (mu's - mu'o)' C^{-1/2} Ws cap^-1 Ws' C^{-1/2} (mu's - mu'o)
+            = |mu's - mu'o|^2 - |caps^{-1/2} Ws' C^{-1/2} (mu's - mu'o)|^2
+            = |mu's - mu'o|^2 - |Vs' (mu's - mu'o)|^2
+
+    TODO: There is something wrong here.
+
+    Returns
+    -------
+    out : Tensor
+        out[i, j] = const(wrt mu,W) * (D(component i || component j) + const(wrt mu,W))
+        i = other, j = self
+    """
+    n, d = mu.shape
+    assert C.shape == (d, d)
+    if out is None:
+        out = mu.new_empty((n, n))
+
+    Cchol = C.cholesky()  # .to_dense()
+    # Some weird issues with solve_triangular using the batched input...
+    # it seems to allocate something big?
+    # Ccholinv = torch.linalg.solve_triangular(
+    #     Cchol, torch.eye(len(Cchol), out=torch.empty_like(Cchol)), upper=False
+    # )
+    Ccholinv = Cchol.inverse().to_dense()[None].broadcast_to((n, *Cchol.shape))
+    # mu_ = torch.linalg.solve_triangular(Cchol, mu.unsqueeze(2), upper=False)
+    mu_ = Ccholinv.bmm(mu.unsqueeze(2))
+
+    if W is None:
+        # else, better to do this later
+        for bs in range(0, n, batch_size):
+            osl = slice(bs, min(bs + batch_size, n))
+            out[osl] = (mu_[osl, None] - mu_[None]).square_().sum(dim=(2, 3))
+        out *= 0.5
+        return out
+
+    M = W.shape[2]
+    assert W.shape == (n, d, M)
+    # U = torch.linalg.solve_triangular(Cchol, W, upper=False)
+    U = Ccholinv.bmm(W)
+
+    # first part of trace
+    UTU = U.mT.bmm(U)
+    # term A: it's an other-vec
+    trA = UTU.diagonal(dim1=-2, dim2=-1).sum(dim=1)
+    # assert torch.isclose(trA, U.square().sum(dim=(1, 2))).all()
+
+    # make capacitance matrix and get its Cholesky
+    cap = UTU
+    del UTU
+    cap.diagonal(dim1=-2, dim2=-1).add_(1.0)
+    capchol = psd_safe_cholesky(cap)
+    # V is (n, d, M)
+    V = torch.linalg.solve_triangular(capchol.mT, U, upper=True, left=False)
+
+    # log dets via Cholesky
+    logdet = capchol.diagonal(dim1=-2, dim2=-1).log().sum(dim=1).mul_(2.0)
+    # assert torch.isclose(logdet, cap.logdet()).all()
+
+    # trace term C: it's a matrix of Frob inner products
+    tmp = None
+    for bs in range(0, n, batch_size):
+        osl = slice(bs, min(bs + batch_size, n))
+        if tmp is not None:
+            tmp = tmp[: osl.stop - bs]
+        tmp = torch.matmul(V.mT[None], U[osl, None], out=tmp)
+        out[osl] = -tmp.square_().sum(dim=(2, 3))
+
+    # mahalanobis term
+    dmu = None
+    for bs in range(0, n, batch_size):
+        osl = slice(bs, min(bs + batch_size, n))
+        if dmu is not None:
+            dmu = dmu[: osl.stop - bs]
+        dmu = torch.sub(mu_[None], mu_[osl, None], out=dmu)
+        corr = dmu.mT @ V[None]
+        corr = corr.square_().sum(dim=(2, 3))
+        out[osl] -= corr
+        mah = dmu.square_().sum(dim=(2, 3))
+        out[osl] += mah
+
+    # trace term B: it's a self-vec
+    trB = V.square_().sum(dim=(1, 2))
+
+    # put back together
+    # remember: self dim is dim 1, other dim is dim 0
+    out += logdet[None, :]
+    out -= logdet[:, None]
+    out += trA[:, None]
+    out -= trB[None, :]
+
+    out *= 0.5
+
+    return out
 
 
 def real_resample(x, num, dim=0):
