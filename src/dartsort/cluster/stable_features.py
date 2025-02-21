@@ -200,7 +200,7 @@ class StableSpikeDataset(torch.nn.Module):
         features_dataset_name="collisioncleaned_tpca_features",
         split_names=("train", "val"),
         split_proportions=(0.75, 0.25),
-        show_progress=False,
+        show_progress=True,
         store_on_device=False,
         workers=-1,
         device=None,

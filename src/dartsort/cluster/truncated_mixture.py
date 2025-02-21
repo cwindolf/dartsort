@@ -34,10 +34,10 @@ class SpikeTruncatedMixtureModel(torch.nn.Module):
         n_candidates: int = 3,
         n_search: int = 5,
         n_explore: int = None,
-        covariance_radius: Optional[float] = 500.0,
+        covariance_radius: Optional[float] = 250.0,
         random_seed=0,
         n_threads: int = 0,
-        batch_size=2048,
+        batch_size=2**14,
         exact_kl=True,
     ):
         super().__init__()
@@ -77,7 +77,7 @@ class SpikeTruncatedMixtureModel(torch.nn.Module):
         self, labels, means, log_proportions, noise_log_prop, kl_divergences, bases=None
     ):
         """Parameters are stored padded with an extra channel."""
-        nu = means.shape[0]
+        self.n_units = nu = means.shape[0]
         assert means.shape == (nu, self.noise.rank, self.noise.n_channels)
         self.register_buffer("means", F.pad(means, (0, 1)))
 
@@ -146,7 +146,10 @@ class SpikeTruncatedMixtureModel(torch.nn.Module):
         else:
             self.kl_divergences[:] = result.kl
 
-        return dict(obs_elbo=result.obs_elbo, labels=result.hard_labels)
+        return dict(
+            obs_elbo=result.obs_elbo.numpy(force=True),
+            labels=result.hard_labels,
+        )
 
     def update_dkl(self):
         W = self.bases
@@ -173,6 +176,23 @@ class SpikeTruncatedMixtureModel(torch.nn.Module):
         _, topkinds = torch.topk(self.kl_divergences, k=n_search, dim=1, largest=False)
         return topkinds
 
+    def channel_occupancy(self, labels):
+        shp = self.n_units, self.train_neighborhoods.n_neighborhoods
+        unit_neighborhood_counts = np.zeros(shp, dtype=int)
+        valid = np.flatnonzero(labels >= 0)
+        vneighbs = self.candidates.neighborhood_ids[valid]
+        np.add.at(
+            unit_neighborhood_counts, (labels[valid], vneighbs), 1
+        )
+        # nu x nneighb
+        neighb_occupancy = (unit_neighborhood_counts > 0).astype(float)
+        # nneighb x nchans
+        neighb_to_chans = self.train_neighborhoods.indicators.T.numpy(force=True)
+        channel_occupancy = neighb_occupancy @ neighb_to_chans
+
+        channels = [np.flatnonzero(row) for row in channel_occupancy]
+        return channels
+
 
 class TruncatedExpectationProcessor(torch.nn.Module):
     def __init__(
@@ -181,7 +201,7 @@ class TruncatedExpectationProcessor(torch.nn.Module):
         neighborhoods: SpikeNeighborhoods,
         features: torch.Tensor,
         n_candidates: int,
-        batch_size: int = 2**10,
+        batch_size: int = 2**14,
         n_threads: int = 0,
         random_seed: int = 0,
         precompute_invx=True,

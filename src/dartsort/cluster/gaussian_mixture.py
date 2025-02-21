@@ -342,7 +342,7 @@ class SpikeMixtureModel(torch.nn.Module):
         show_progress=True,
         final_e_step=True,
         final_split="kept",
-        n_threads=2,
+        n_threads=1,
         batch_size=1024,
         tmm_kwargs={},
     ):
@@ -399,6 +399,8 @@ class SpikeMixtureModel(torch.nn.Module):
             msg = f"tEM[oelbo/n={res['obs_elbo']:0.2f}]"
             if show_progress:
                 its.set_description(msg)  # pyright: ignore
+        print(f"{np.any(np.diff([r['obs_elbo'] for r in records])<0)=}")
+        print(f"{[r['obs_elbo'] for r in records]=}")
 
         print("post its", flush=True)
         labels = res["labels"]  # pyright: ignore [reportPossiblyUnboundVariable]
@@ -407,6 +409,7 @@ class SpikeMixtureModel(torch.nn.Module):
         # reupdate my GaussianUnits
         self.clear_units()
         self.labels[self.data.split_indices["train"]] = labels
+        channels = tmm.channel_occupancy(labels)
         for j in range(len(tmm.means)):
             basis = None
             if tmm.bases is not None:
@@ -415,9 +418,11 @@ class SpikeMixtureModel(torch.nn.Module):
                 self.noise,
                 mean=tmm.means[j, :, :-1],
                 basis=basis,
+                channels=channels[j],
             )
         del tmm
         import gc
+        print(f"done setting units")
 
         gc.collect()
         torch.cuda.empty_cache()
@@ -2448,6 +2453,7 @@ class GaussianUnit(torch.nn.Module):
         noise: noise_util.EmbeddedNoise,
         mean,
         basis=None,
+        channels=None,
         channels_amp=0.25,
     ):
         M = 0 if basis is None else basis.shape[-1]
@@ -2463,10 +2469,12 @@ class GaussianUnit(torch.nn.Module):
         self.register_buffer("mean", mean)
         if basis is not None:
             self.register_buffer("W", basis)
-        (channels,) = (mean.square().sum(dim=0).sqrt() > channels_amp).nonzero(
-            as_tuple=True
-        )
-        self.register_buffer("channels", channels)
+        if channels is not None:
+            channels = torch.asarray(channels)
+        else:
+            channels = (mean.square().sum(dim=0).sqrt() > channels_amp)
+            (channels,) = channels.nonzero(as_tuple=True)
+        self.register_buffer("channels", channels.to(mean.device))
         # TODO: neeed for vis. figure it out.
         self.snr = torch.ones(self.n_channels)
         return self
