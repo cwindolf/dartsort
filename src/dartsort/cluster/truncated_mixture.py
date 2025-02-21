@@ -13,7 +13,6 @@ from ..util.noise_util import EmbeddedNoise
 from .stable_features import SpikeNeighborhoods, StableSpikeDataset
 from ._truncated_em_helpers import (
     neighb_lut,
-    TEBatchData,
     TEBatchResult,
     TEStepResult,
     _te_batch_e,
