@@ -194,6 +194,7 @@ class TruncatedExpectationProcessor(torch.nn.Module):
         self.initialize_fixed(
             noise, neighborhoods, pgeom=pgeom, covariance_radius=covariance_radius
         )
+        self.neighborhoods = neighborhoods
         self.neighborhood_ids = neighborhoods.neighborhood_ids
         self.n_neighborhoods = neighborhoods.n_neighborhoods
         if features.isnan().any():
@@ -359,7 +360,7 @@ class TruncatedExpectationProcessor(torch.nn.Module):
         with_hard_labels=False,
     ) -> TEBatchResult:
         assert not (with_grads or with_elbo)  # not implemented yet
-        candidates = candidates[batch_indices]
+        candidates = candidates[batch_indices].to(self.device)
         n = len(candidates)
 
         # "E step" within the E step.
@@ -556,10 +557,10 @@ class TruncatedExpectationProcessor(torch.nn.Module):
         self.whitenedx = X.clone()
         self.Cmo_Cooinv_x = self.whitenedx.new_empty(n, self.rank * self.nc_miss)
         for ni in trange(self.n_neighborhoods, desc="invx"):
-            (mask,) = (self.neighborhood_ids == ni).nonzero(as_tuple=True)
+            mask = self.neighborhoods.neighborhood_members(ni)
             # !note the transpose! x @=y is x = x@y, not y@x
-            self.whitenedx[mask] @= self.Coo_invsqrt[ni].T.to(self.whitenedx)
-            self.Cmo_Cooinv_x[mask] = X[mask] @ self.Cooinv_Com[ni]
+            self.whitenedx[mask] @= self.Coo_invsqrt[ni].T.to(X)
+            self.Cmo_Cooinv_x[mask] = X[mask] @ self.Cooinv_Com[ni].to(X)
 
     def update(
         self,
@@ -748,7 +749,7 @@ class TruncatedExpectationProcessor(torch.nn.Module):
             x=self.features[batch_indices].view(n, -1).to(self.device),
             nu=self.nu[lut_ixs].reshape(n, C, -1),
             tnu=self.tnu[lut_ixs].reshape(n, C, -1),
-            Cmo_Cooinv_x=self.Cmo_Cooinv_x[batch_indices],
+            Cmo_Cooinv_x=self.Cmo_Cooinv_x[batch_indices].to(self.device),
             Cmo_Cooinv_nu=self.Cmo_Cooinv_nu[lut_ixs],
         )
         if not self.M:
