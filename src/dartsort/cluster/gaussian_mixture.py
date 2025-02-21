@@ -426,10 +426,7 @@ class SpikeMixtureModel(torch.nn.Module):
 
         gc.collect()
         torch.cuda.empty_cache()
-        import gc
 
-        gc.collect()
-        torch.cuda.empty_cache()
         self.cleanup()
 
         if not final_e_step:

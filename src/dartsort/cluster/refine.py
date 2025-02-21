@@ -89,6 +89,7 @@ def refine_clustering(
         ):
             print(f"{log_liks.shape=}, skipping split.")
         else:
+            del log_liks; import gc; gc.collect()
             gmm.split()
             if refinement_config.truncated:
                 log_liks, _ = gmm.tem(final_split=intermediate_split)
@@ -97,6 +98,7 @@ def refine_clustering(
             if return_step_labels:
                 step_labels[f"refstepbsplit{it}"] = gmm.labels.numpy(force=True).copy()
         gmm.merge(log_liks)
+        del log_liks; import gc; gc.collect()
         if return_step_labels:
             step_labels[f"refstepcmerge{it}"] = gmm.labels.numpy(force=True).copy()
 
@@ -104,6 +106,7 @@ def refine_clustering(
         log_liks = gmm.tem(final_split="full")
     else:
         log_liks = gmm.em(final_split="full")
+    del log_liks; import gc; gc.collect()
     gmm.cpu()
     sorting = gmm.to_sorting()
     del gmm
