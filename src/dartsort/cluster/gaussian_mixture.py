@@ -422,6 +422,7 @@ class SpikeMixtureModel(torch.nn.Module):
             )
         del tmm
         import gc
+
         print(f"done setting units")
 
         gc.collect()
@@ -1894,7 +1895,7 @@ class SpikeMixtureModel(torch.nn.Module):
 
                 data = full_logliks_sp.values()
                 full_logliks = data.new_full(full_logliks_sp.shape, -torch.inf)
-                full_logliks[*full_logliks_sp.indices()] = data
+                full_logliks[full_logliks_sp.indices()] = data
                 full_logliks = full_logliks[unit_ids].sub_(prop_correction)
 
                 lik_weights = torch.sparse.softmax(full_logliks_sp, dim=dim_units)
@@ -2079,7 +2080,7 @@ class SpikeMixtureModel(torch.nn.Module):
             inds = liks.indices()
             data = liks.values()
             liks = data.new_full(liks.shape, -torch.inf)
-            liks[*inds] = data
+            liks[inds] = data
 
         return liks
 
@@ -2469,7 +2470,7 @@ class GaussianUnit(torch.nn.Module):
         if channels is not None:
             channels = torch.asarray(channels)
         else:
-            channels = (mean.square().sum(dim=0).sqrt() > channels_amp)
+            channels = mean.square().sum(dim=0).sqrt() > channels_amp
             (channels,) = channels.nonzero(as_tuple=True)
         self.register_buffer("channels", channels.to(mean.device))
         # TODO: neeed for vis. figure it out.
