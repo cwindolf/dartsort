@@ -249,7 +249,9 @@ class TruncatedExpectationProcessor(torch.nn.Module):
 
         # will be updated...
         top_candidates = candidates[:, : self.n_candidates]
-        hard_labels = torch.empty_like(top_candidates[:, 0])
+        hard_labels = None
+        if with_hard_labels:
+            hard_labels = torch.empty_like(top_candidates[:, 0])
 
         # do we need to initialize the noise log likelihoods?
         first_run = not hasattr(self, "noise_logliks")
