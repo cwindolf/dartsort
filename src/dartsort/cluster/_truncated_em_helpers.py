@@ -317,6 +317,7 @@ def _te_batch_m_ppca(
     inv_cap,
     inv_cap_Wobs_Cooinv,
     Cmo_Cooinv_WobsT,
+    inv_cap_W_WCC,
     W_WCC,
     Wobs,
 ):
@@ -332,7 +333,6 @@ def _te_batch_m_ppca(
     Cmo_Cooinv_xc = torch.sub(Cmo_Cooinv_x[:, None], Cmo_Cooinv_nu, out=Cmo_Cooinv_nu)
     del Cmo_Cooinv_nu
 
-    # TODO: it would be great to... not do this?
     ubar = torch.einsum("ncpj,ncj->ncp", inv_cap_Wobs_Cooinv, xc)
     EuuT = inv_cap
     del inv_cap
@@ -341,14 +341,10 @@ def _te_batch_m_ppca(
     WobsT_ubar = torch.einsum("ncpk,ncp->nck", Wobs, ubar)
     Cmo_Cooinv_WobsT_ubar = torch.einsum("nckp,ncp->nck", Cmo_Cooinv_WobsT, ubar)
 
-    # TODO: can do fewer matmuls by breaking up the cooinv_com stuff.
-    # use cooinv_x etc? and below, use Cooinv_WObsT to do the Wobs_ubar
-    # part, does that help??
-    # lastly... could we refactor to use whitenedx and absorb a
-    # whitener into other things? that's not clear at all.
-
     R_observed = ubar[:, :, :, None] * xc[:, :, None, :]
-    R_missing = torch.einsum("ncpq,ncqk->ncpk", EuuT, W_WCC)
+    R_missing = inv_cap_W_WCC
+    del inv_cap_W_WCC
+    R_missing += torch.einsum("ncpk,ncp,ncq->ncqk", W_WCC, ubar, ubar)
     R_missing += ubar.unsqueeze(3) * Cmo_Cooinv_xc.unsqueeze(2)
 
     m_missing = tnu.add_(Cmo_Cooinv_xc).sub_(Cmo_Cooinv_WobsT_ubar)
