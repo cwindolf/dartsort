@@ -54,7 +54,17 @@ def amp_double_scatter(gmm, indices, panel, unit_id=None, labels=None, viol_ms=N
             ax_dist.hist(amps[labels == j], color=glasbey1024[j], label="unit", **histk)
 
 
-def plot_means(panel, prgeom, tpca, chans, units, labels, title="nearest neighbors"):
+def plot_means(
+    panel,
+    prgeom,
+    tpca,
+    chans,
+    units,
+    labels,
+    title="nearest neighbors",
+    do_legend=True,
+    linewidths=None,
+):
     ax = panel.subplots()
 
     means = []
@@ -62,7 +72,7 @@ def plot_means(panel, prgeom, tpca, chans, units, labels, title="nearest neighbo
         mean = unit.mean[:, chans]
         means.append(tpca.force_reconstruct(mean).numpy(force=True))
 
-    colors = glasbey1024[labels]
+    colors = [glasbey1024[l] if l >= 0 else "k" for l in labels]
     geomplot(
         np.stack(means, axis=0),
         channels=chans[None].broadcast_to(len(means), *chans.shape).numpy(force=True),
@@ -72,20 +82,22 @@ def plot_means(panel, prgeom, tpca, chans, units, labels, title="nearest neighbo
         ax=ax,
         zlim=None,
         subar=True,
+        linewidths=linewidths,
     )
-    panel.legend(
-        handles=[Line2D([0, 1], [0, 0], color=c) for c in colors],
-        labels=labels.tolist(),
-        loc="outside upper center",
-        frameon=False,
-        ncols=4,
-        title=title,
-        fontsize="small",
-        borderpad=0,
-        labelspacing=0.25,
-        handlelength=1.0,
-        handletextpad=0.4,
-        borderaxespad=0.0,
-        columnspacing=1.0,
-    )
+    if do_legend:
+        panel.legend(
+            handles=[Line2D([0, 1], [0, 0], color=c) for c in colors],
+            labels=list(labels),
+            loc="outside upper center",
+            frameon=False,
+            ncols=4,
+            title=title,
+            fontsize="small",
+            borderpad=0,
+            labelspacing=0.25,
+            handlelength=1.0,
+            handletextpad=0.4,
+            borderaxespad=0.0,
+            columnspacing=1.0,
+        )
     ax.axis("off")
