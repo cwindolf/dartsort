@@ -236,7 +236,7 @@ class TemplateData:
 
         # handle superresolved templates
         if template_config.superres_templates:
-            unit_ids, superres_sort = superres_sorting(
+            unit_ids, sorting = superres_sorting(
                 sorting,
                 sorting.times_seconds,
                 spike_depths_um,
@@ -248,11 +248,9 @@ class TemplateData:
                 spike_x_um=spike_x_um,
                 adaptive_bin_size=template_config.adaptive_bin_size,
             )
-        else:
-            superres_sort = sorting
 
         # main!
-        results = get_templates(recording, superres_sort, n_jobs=computation_config.actual_n_jobs(), **kwargs)
+        results = get_templates(recording, sorting, n_jobs=computation_config.actual_n_jobs(), **kwargs)
 
         # handle registered templates
         if template_config.registered_templates and motion_est is not None:

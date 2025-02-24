@@ -39,7 +39,7 @@ class SpikeTruncatedMixtureModel(torch.nn.Module):
         n_threads: int = 0,
         batch_size=2**14,
         exact_kl=True,
-        fixed_noise_proportion=False,
+        fixed_noise_proportion=0.5,
     ):
         super().__init__()
         if n_search is None:

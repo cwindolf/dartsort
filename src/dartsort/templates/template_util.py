@@ -111,7 +111,7 @@ def get_realigned_sorting(
     sorting,
     realign_peaks=True,
     low_rank_denoising=False,
-    reassign_channels=True,
+    reassign_channels=False,
     **kwargs,
 ):
     results = get_templates(

@@ -314,23 +314,58 @@ def greedy_match(gt_coords, test_coords, max_val=1.0, dx=1./30, workers=-1, p=2.
     return assignments
 
 
-def sorting_from_times_labels(times, labels, recording=None, motion_est=None, sampling_frequency=None, determine_channels=True, template_config=unshifted_raw_template_config, n_jobs=0, spikes_per_unit=50):
+def sorting_from_times_labels(
+    times_samples,
+    labels,
+    recording=None,
+    motion_est=None,
+    sampling_frequency=None,
+    determine_channels=True,
+    template_config=unshifted_raw_template_config,
+    n_jobs=0,
+    spikes_per_unit=50,
+):
     channels = np.zeros_like(labels)
     if sampling_frequency is None:
         if recording is not None:
             sampling_frequency = recording.sampling_frequency
-    sorting = DARTsortSorting(times_samples=times, channels=channels, labels=labels, sampling_frequency=sampling_frequency)
+    sorting = DARTsortSorting(
+        times_samples=times_samples, channels=channels, labels=labels, sampling_frequency=sampling_frequency
+    )
 
     if not determine_channels:
         return sorting
 
+    assert recording is not None
+
     _, labels_flat = np.unique(labels, return_inverse=True)
-    sorting = DARTsortSorting(times_samples=times, channels=channels, labels=labels_flat, sampling_frequency=sorting.sampling_frequency)
+    sorting = DARTsortSorting(
+        times_samples=times_samples, channels=channels, labels=labels_flat, sampling_frequency=sorting.sampling_frequency
+    )
     template_config = dataclasses.replace(template_config, spikes_per_unit=spikes_per_unit)
     comp_cfg = ComputationConfig(n_jobs_cpu=n_jobs, n_jobs_gpu=n_jobs)
     td = TemplateData.from_config(recording, sorting, template_config, with_locs=False, computation_config=comp_cfg)
+
     channels = np.nan_to_num(np.ptp(td.coarsen().templates, 1)).argmax(1)[labels_flat]
-    sorting = DARTsortSorting(times_samples=times, channels=channels, labels=labels_flat, sampling_frequency=sorting.sampling_frequency)
+    if motion_est is not None:
+        from scipy.spatial import KDTree
+
+        rgeom = td.registered_geom
+        guess_pos = rgeom[channels]
+        times_seconds = recording.sample_index_to_time(times_samples)
+        # anti-correct these already stable positions so that they start movin
+        guess_pos[:, 1] += motion_est.disp_at_s(times_seconds, depth_um=guess_pos[:, 1])
+
+        gkdt = KDTree(recording.get_channel_locations())
+        # closest original channels to shifted positions
+        # these positions can drift off the probe if the main channel does! so in that case
+        # we can't really upper bound the distance query. i guess it would be, like, the
+        # largest distance that a unit would ever extend, or something, but let's not worry.
+        d, channels = gkdt.query(guess_pos, workers=n_jobs)
+
+    sorting = DARTsortSorting(
+        times_samples=times_samples, channels=channels, labels=labels_flat, sampling_frequency=sorting.sampling_frequency
+    )
     return sorting, td
 
 

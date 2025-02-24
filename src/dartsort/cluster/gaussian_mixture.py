@@ -1567,7 +1567,7 @@ class SpikeMixtureModel(torch.nn.Module):
             lls = spike_data.features.new_full(
                 (len(units), len(spike_data)), -torch.inf
             )
-            log_props = torch.tensor(lps)
+            log_props = torch.tensor(lps, device=lls.device)
             for j, unit in enumerate(units):
                 lls_ = self.unit_log_likelihoods(
                     unit=unit,
@@ -2572,7 +2572,7 @@ class GaussianUnit(torch.nn.Module):
         if channels is not None:
             assert channel_counts is not None
             channels = torch.asarray(channels)
-            snr = snr * torch.asarray(channel_counts).sqrt()
+            snr = snr * torch.asarray(channel_counts, device=snr.device).sqrt()
         else:
             channels = snr > channels_amp
             (channels,) = channels.nonzero(as_tuple=True)

@@ -83,14 +83,17 @@ def refine_clustering(
             step_labels[f"refstepaem{it}"] = gmm.labels.numpy(force=True).copy()
 
         assert log_liks is not None
+        # TODO: if split is self-consistent enough, we don't need this.
         if (
             log_liks.shape[0]
             > refinement_config.max_avg_units * recording.get_num_channels()
         ):
             print(f"{log_liks.shape=}, skipping split.")
         else:
-            del log_liks; import gc; gc.collect()
+            # TODO: not this.
+            gmm.log_liks = log_liks
             gmm.split()
+            del log_liks; gmm.log_liks = None; import gc; gc.collect()
             if refinement_config.truncated:
                 log_liks, _ = gmm.tem(final_split=intermediate_split)
             else:
