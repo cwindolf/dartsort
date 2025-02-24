@@ -1758,12 +1758,10 @@ class SpikeMixtureModel(torch.nn.Module):
             fit_weights = F.softmax(likelihoods + log_proportions[:, None], dim=0)
         for i, (pa, pb, dist, nab) in its:
             if not np.isfinite(dist) or dist > max_distance:
-                print("bail 0")
                 continue
 
             pleaves = clusters.get(pa, [int(pa)]) + clusters.get(pb, [int(pb)])
             if len(pleaves) > max_group_size:
-                print("bail 1")
                 continue
 
             # did we already merge a cluster containing this one?
@@ -1771,7 +1769,6 @@ class SpikeMixtureModel(torch.nn.Module):
             if any(contained):
                 assert all(contained)
                 improvements[i] = np.inf
-                print("bail 2")
                 continue
 
             # check if should merge
