@@ -81,13 +81,12 @@ def get_smoothed_densities(
     extents = np.c_[np.floor(infeats.min(0)), np.ceil(infeats.max(0))]
     dextents = np.ptp(extents, 1)
     if not (dextents > 0).all():
-        raise ValueError(f"Issue in KDE. {dextents=} {infeats.shape=} {sigmas=} {bin_sizes=}.")
+        raise ValueError(
+            f"Issue in KDE. {dextents=} {infeats.shape=} {sigmas=} {bin_sizes=}."
+        )
     nbins = np.ceil(dextents / bin_sizes).astype(int)
     nbins = nbins.clip(min_n_bins, max_n_bins)
-    bin_edges = [
-        np.linspace(e[0], e[1], num=nb + 1)
-        for e, nb in zip(extents, nbins)
-    ]
+    bin_edges = [np.linspace(e[0], e[1], num=nb + 1) for e, nb in zip(extents, nbins)]
 
     # compute histogram and figure out how big the bins actually were
     raw_histogram, bin_edges = np.histogramdd(infeats, bins=bin_edges, weights=weights)
@@ -207,6 +206,38 @@ def decrumb(labels, min_size=5):
     return units[labels]
 
 
+def guess_mode(
+    X,
+    sigma="rule_of_thumb",
+    outlier_neighbor_count=10,
+    outlier_sigma=3.0,
+    kdtree=None,
+    workers=1,
+):
+    """Use a KDE to guess the highest density point."""
+    n = len(X)
+    sigma0 = np.sqrt(X.var(axis=0).sum())
+    inliers, kdtree = kdtree_inliers(
+        X,
+        kdtree=kdtree,
+        n_neighbors=outlier_neighbor_count,
+        distance_upper_bound=outlier_sigma * sigma0,
+        workers=workers,
+    )
+
+    if sigma == "rule_of_thumb":
+        sigma = (
+            1.06
+            * np.linalg.norm(np.std(X[inliers], axis=0))
+            * np.power(inliers.sum(), -0.2)
+        )
+
+    density = get_smoothed_densities(X, inliers=inliers, sigmas=sigma)
+    assert density.shape == (n,)
+
+    return np.argmax(density)
+
+
 def density_peaks(
     X,
     kdtree=None,
@@ -284,8 +315,12 @@ def density_peaks(
     )
 
 
-def nearest_neighbor_assign(kdtree, tree_labels, X_other, radius_search=5.0, workers=-1):
-    dists, inds = kdtree.query(X_other, k=1, distance_upper_bound=radius_search, workers=workers)
+def nearest_neighbor_assign(
+    kdtree, tree_labels, X_other, radius_search=5.0, workers=-1
+):
+    dists, inds = kdtree.query(
+        X_other, k=1, distance_upper_bound=radius_search, workers=workers
+    )
     found = np.flatnonzero(inds < kdtree.n)
     other_labels = np.full(len(X_other), -1, dtype=tree_labels.dtype)
     other_labels[found] = tree_labels[inds[found]]
@@ -353,7 +388,7 @@ def density_peaks_fancy(
         all_med_z_spread = []
         all_med_x_spread = []
         num_spikes = []
-        for k in np.unique(labels_sort)[np.unique(labels_sort)>-1]:
+        for k in np.unique(labels_sort)[np.unique(labels_sort) > -1]:
             all_med_ptp.append(np.median(amps[to_cluster[labels_sort == k]]))
             all_med_x_spread.append(xyza[to_cluster[labels_sort == k], 0].std())
             all_med_z_spread.append(z[labels_sort == k].std())
@@ -365,15 +400,30 @@ def density_peaks_fancy(
         num_spikes = np.array(num_spikes)
 
         # ramp from ptp 2 to 6 with n spikes from 60 to 10 per minute!
-        idx_low = np.flatnonzero(np.logical_and(
-            np.isin(labels_sort, np.flatnonzero(num_spikes<=(chunk_time_range_s[1]-chunk_time_range_s[0])/60*(ramp_num_spikes[1] - (all_med_ptp - ramp_ptp[0])/(ramp_ptp[1]-ramp_ptp[0])*(ramp_num_spikes[1]-ramp_num_spikes[0])))),
-            np.isin(labels_sort, np.flatnonzero(all_med_ptp<=ramp_ptp[1]))
-        ))
+        idx_low = np.flatnonzero(
+            np.logical_and(
+                np.isin(
+                    labels_sort,
+                    np.flatnonzero(
+                        num_spikes
+                        <= (chunk_time_range_s[1] - chunk_time_range_s[0])
+                        / 60
+                        * (
+                            ramp_num_spikes[1]
+                            - (all_med_ptp - ramp_ptp[0])
+                            / (ramp_ptp[1] - ramp_ptp[0])
+                            * (ramp_num_spikes[1] - ramp_num_spikes[0])
+                        )
+                    ),
+                ),
+                np.isin(labels_sort, np.flatnonzero(all_med_ptp <= ramp_ptp[1])),
+            )
+        )
         if clustering_config.attach_density_feature:
             res["labels"][idx_low] = -1
         else:
             res[idx_low] = -1
-    return res    
+    return res
 
 
 def density_peaks_clustering(
@@ -661,6 +711,7 @@ def density_peaks_clustering(
         nhdn=nhdn_all,
         labels=labels_all,
     )
+
 
 def mad(x, axis=0):
     x = x - np.median(x, axis=axis, keepdims=True)

@@ -182,7 +182,6 @@ def _te_batch_m_rank0(
     x,
     nu,
     tnu,
-    # ,
     Cmo_Cooinv_x,
     Cmo_Cooinv_nu,
 ):

@@ -1,9 +1,10 @@
 import numpy as np
 import torch
 import torch.nn.functional as F
+from .density import guess_mode
 
 
-def kmeanspp(X, n_components=10, random_state=0, kmeanspp_initial="mean"):
+def kmeanspp(X, n_components=10, random_state=0, kmeanspp_initial="mean", mode_dim=2):
     """K-means++ initialization
 
     Start at a random point (kmeanspp_initial=='random') or at the point
@@ -17,6 +18,12 @@ def kmeanspp(X, n_components=10, random_state=0, kmeanspp_initial="mean"):
     elif kmeanspp_initial == "mean":
         closest = torch.cdist(X, X.mean(0, keepdim=True)).argmax()
         centroid_ixs = [closest.item()]
+    elif kmeanspp_initial == "mode":
+        Xm = X
+        if Xm.shape[1] > mode_dim:
+            u, s, v = torch.pca_lowrank(Xm, q=mode_dim + 10, niter=7)
+            Xm = u[:, :mode_dim].mul_(s[:mode_dim])
+        centroid_ixs = [guess_mode(Xm.numpy(force=True))]
     else:
         assert False
 

@@ -39,6 +39,7 @@ class SpikeTruncatedMixtureModel(torch.nn.Module):
         n_threads: int = 0,
         batch_size=2**14,
         exact_kl=True,
+        fixed_noise_proportion=False,
     ):
         super().__init__()
         if n_search is None:
@@ -49,6 +50,7 @@ class SpikeTruncatedMixtureModel(torch.nn.Module):
         self.noise = noise
         self.M = M
         self.covariance_radius = covariance_radius
+        self.fixed_noise_proportion = fixed_noise_proportion
         self.exact_kl = exact_kl
         train_indices, self.train_neighborhoods = self.data.neighborhoods("extract")
         self.n_spikes = train_indices.numel()
@@ -82,9 +84,24 @@ class SpikeTruncatedMixtureModel(torch.nn.Module):
         self.register_buffer("means", F.pad(means, (0, 1)))
 
         assert log_proportions.shape == (nu,)
-        self.register_buffer("log_proportions", log_proportions.clone())
-        self.register_buffer("noise_log_prop", noise_log_prop.clone())
         self.register_buffer("_N", torch.zeros(nu + 1))
+        if self.fixed_noise_proportion:
+            noise_log_prop = torch.log(torch.tensor(self.fixed_noise_proportion))
+            inv_noise_log_prop = torch.log(
+                torch.tensor(1.0 - self.fixed_noise_proportion)
+            )
+
+            # self._N[0] = noise_log_prop
+            # self._N[1:] = torch.log_softmax(log_proportions, dim=0) + inv_noise_log_prop
+            # lp = torch.log_softmax(self._N, dim=0)
+            self.register_buffer("noise_log_prop", noise_log_prop)
+            self.register_buffer(
+                "log_proportions",
+                torch.log_softmax(log_proportions, dim=0) + inv_noise_log_prop,
+            )
+        else:
+            self.register_buffer("log_proportions", log_proportions.clone())
+            self.register_buffer("noise_log_prop", noise_log_prop.clone())
 
         assert kl_divergences.shape == (nu, nu)
         self.register_buffer(
@@ -132,15 +149,34 @@ class SpikeTruncatedMixtureModel(torch.nn.Module):
         if self.bases is not None:
             assert result.R is not None
             assert result.U is not None
+            blank = torch.all(result.U.diagonal(dim1=-2, dim2=-1) == 0, dim=1)
+            if blank.any():
+                # just to avoid numerical issues when a unit dies
+                result.U[blank] += torch.eye(self.M, device=result.U.device)
             Uc = psd_safe_cholesky(result.U)
             W = torch.cholesky_solve(result.R.view(*result.U.shape[:-1], -1), Uc)
             self.bases[..., :-1] = W.view(self.bases[..., :-1].shape)
 
-        self._N[0] = result.noise_N
-        self._N[1:] = result.N
-        lp = self._N.log() - self._N.sum().log()
-        self.noise_log_prop.fill_(lp[0])
-        self.log_proportions[:] = lp[1:]
+        if self.fixed_noise_proportion:
+            noise_log_prop = torch.log(torch.tensor(self.fixed_noise_proportion))
+            inv_noise_log_prop = torch.log(
+                torch.tensor(1.0 - self.fixed_noise_proportion)
+            )
+
+            self._N[0] = noise_log_prop
+            self._N[1:] = torch.log_softmax(result.N.log(), dim=0) + inv_noise_log_prop
+            # lp = torch.log_softmax(self._N, dim=0)
+            self.noise_log_prop.fill_(noise_log_prop)
+            self.log_proportions[:] = (
+                torch.log_softmax(result.N.log(), dim=0) + inv_noise_log_prop
+            )
+        else:
+            self._N[0] = result.noise_N
+            self._N[1:] = result.N
+            lp = torch.log_softmax(self._N.log(), dim=0)
+            self.noise_log_prop.fill_(lp[0])
+            self.log_proportions[:] = lp[1:]
+
         if self.exact_kl:
             self.update_dkl()
         else:
@@ -148,6 +184,7 @@ class SpikeTruncatedMixtureModel(torch.nn.Module):
 
         return dict(
             obs_elbo=result.obs_elbo.numpy(force=True),
+            noise_lp=self.noise_log_prop.numpy(force=True).copy(),
             labels=result.hard_labels,
         )
 
@@ -181,17 +218,15 @@ class SpikeTruncatedMixtureModel(torch.nn.Module):
         unit_neighborhood_counts = np.zeros(shp, dtype=int)
         valid = np.flatnonzero(labels >= 0)
         vneighbs = self.candidates.neighborhood_ids[valid]
-        np.add.at(
-            unit_neighborhood_counts, (labels[valid], vneighbs), 1
-        )
+        np.add.at(unit_neighborhood_counts, (labels[valid], vneighbs), 1)
         # nu x nneighb
-        neighb_occupancy = (unit_neighborhood_counts > 0).astype(float)
+        neighb_occupancy = unit_neighborhood_counts.astype(float)
         # nneighb x nchans
         neighb_to_chans = self.train_neighborhoods.indicators.T.numpy(force=True)
-        channel_occupancy = neighb_occupancy @ neighb_to_chans
+        counts = neighb_occupancy @ neighb_to_chans
 
-        channels = [np.flatnonzero(row) for row in channel_occupancy]
-        return channels
+        channels = [np.flatnonzero(row) for row in counts]
+        return channels, counts
 
 
 class TruncatedExpectationProcessor(torch.nn.Module):

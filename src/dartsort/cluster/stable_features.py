@@ -745,20 +745,27 @@ class SpikeNeighborhoods(torch.nn.Module):
         In this case, the returned neighborhood_member_indices keys are relative:
         spike_indices[neighborhood_member_indices] are the actual indices.
         """
-        spike_ids = neighborhood_ids
-        if spike_ids is None:
-            spike_ids = self.neighborhood_ids[spike_indices]
-        assert spike_ids is not None
-        covered_ids = torch.unique(spike_ids)
+        if neighborhood_ids is None:
+            assert spike_indices is not None
+            neighborhood_ids = self.neighborhood_ids[spike_indices]
+        assert neighborhood_ids is not None
+
+        covered_ids = torch.unique(neighborhood_ids)
         if min_coverage:
             covered_ids = covered_ids.to(self.indicators.device)
             inds = self.indicators[channels][:, covered_ids]
             coverage = inds.sum(0) / self.channel_counts[covered_ids]
             covered = coverage >= min_coverage
             covered_ids = covered_ids[covered].cpu()
-            spike_ids = spike_ids.cpu()
+            neighborhood_ids = neighborhood_ids.cpu()
+
         neighborhood_info = [
-            (j, self.neighborhoods[j], *(spike_ids == j).nonzero(as_tuple=True), None)
+            (
+                j,
+                self.neighborhoods[j],
+                *(neighborhood_ids == j).nonzero(as_tuple=True),
+                None,
+            )
             for j in covered_ids
         ]
         n_spikes = self.popcounts[covered_ids].sum()
@@ -834,7 +841,7 @@ def interp_to_chans(
             sigma=interpolation_sigma,
             allow_destroy=False,
             interpolation_method=interpolation_method,
-            out=output[sl]
+            out=output[sl],
         )
     return output
 

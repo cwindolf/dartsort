@@ -973,6 +973,8 @@ def make_all_gmm_summaries(
     if not overwrite and all_summaries_done(unit_ids, save_folder, ext=image_ext):
         return
 
+    assert hasattr(gmm, "log_liks")
+
     save_folder.mkdir(exist_ok=True)
 
     global_params = dict(
