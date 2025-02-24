@@ -109,7 +109,7 @@ def add_at_(dest, ix, src, sign=1):
     elif sign != 1:
         src = sign * src
     flat_ix = ravel_multi_index(ix, dest.shape)
-    if isinstance(src, float):
+    if isinstance(src, (float, int)):
         src = torch.tensor(src, dtype=dest.dtype, device=dest.device).broadcast_to(
             flat_ix.numel()
         )
