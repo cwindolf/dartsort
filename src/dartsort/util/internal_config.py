@@ -499,6 +499,7 @@ def to_internal_config(cfg):
         merge_criterion_threshold=cfg.merge_criterion_threshold,
         merge_bimodality_threshold=cfg.merge_bimodality_threshold,
         n_total_iters=cfg.n_refinement_iters,
+        n_em_iters=cfg.n_em_iters,
         max_n_spikes=cfg.gmm_max_spikes,
         val_proportion=cfg.gmm_val_proportion,
         channels_strategy=cfg.channels_strategy,
