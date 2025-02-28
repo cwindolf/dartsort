@@ -19,7 +19,11 @@ from dartsort.config import (
     default_matching_config,
     default_computation_config,
 )
-from dartsort.peel import ObjectiveUpdateTemplateMatchingPeeler, SubtractionPeeler, GrabAndFeaturize
+from dartsort.peel import (
+    ObjectiveUpdateTemplateMatchingPeeler,
+    SubtractionPeeler,
+    GrabAndFeaturize,
+)
 from dartsort.templates import TemplateData
 from dartsort.util.data_util import (
     DARTsortSorting,
@@ -57,8 +61,6 @@ def dartsort(
         computation_config=cfg.computation_config,
         overwrite=overwrite,
     )
-    if return_extra:
-        ret["initial_detection"] = sorting
 
     if cfg.subtract_only:
         ret["sorting"] = sorting
@@ -79,60 +81,69 @@ def dartsort(
         ret["sorting"] = sorting
         return ret
 
-    # clustering
-    sorting = initial_clustering(
-        recording,
-        sorting=sorting,
-        motion_est=motion_est,
-        clustering_config=cfg.clustering_config,
-        computation_config=cfg.computation_config,
-    )
-    if return_extra:
-        ret["initial_labels"] = sorting.labels.copy()
-    sorting = refine_clustering(
-        recording=recording,
-        sorting=sorting,
-        motion_est=motion_est,
-        refinement_config=cfg.refinement_config,
-        computation_config=cfg.computation_config,
-    )
-    if return_extra:
-        ret["refined0_labels"] = sorting.labels.copy()
-
-    # alternate matching with
-    for step in range(1, cfg.matching_iterations + 1):
-        is_final = step == cfg.matching_iterations
-        prop = 1.0 if is_final else cfg.intermediate_matching_subsampling
-
-        sorting = match(
+    try:
+        # clustering
+        sorting = initial_clustering(
             recording,
-            sorting,
-            output_directory,
+            sorting=sorting,
             motion_est=motion_est,
-            template_config=cfg.template_config,
-            waveform_config=cfg.waveform_config,
-            featurization_config=cfg.featurization_config,
-            matching_config=cfg.matching_config,
-            overwrite=overwrite,
+            clustering_config=cfg.clustering_config,
             computation_config=cfg.computation_config,
-            hdf5_filename=f"matching{step}.h5",
-            model_subdir=f"matching{step}_models",
         )
         if return_extra:
-            ret[f"matching{step}"] = sorting
+            ret["initial_labels"] = sorting.labels.copy()
+        sorting, info = refine_clustering(
+            recording=recording,
+            sorting=sorting,
+            motion_est=motion_est,
+            refinement_config=cfg.refinement_config,
+            computation_config=cfg.computation_config,
+            return_step_labels=return_extra,
+        )
+        if return_extra:
+            ret.update({f"refined0{k}_labels": v for k, v in info.items()})
+            ret["refined0_labels"] = sorting.labels.copy()
 
-        if (not is_final) or cfg.final_refinement:
-            sorting = refine_clustering(
-                recording=recording,
-                sorting=sorting,
+        for step in range(1, cfg.matching_iterations + 1):
+            is_final = step == cfg.matching_iterations
+            #TODO
+            prop = 1.0 if is_final else cfg.intermediate_matching_subsampling
+
+            sorting = match(
+                recording,
+                sorting,
+                output_directory,
                 motion_est=motion_est,
-                refinement_config=cfg.refinement_config,
+                template_config=cfg.template_config,
+                waveform_config=cfg.waveform_config,
+                featurization_config=cfg.featurization_config,
+                matching_config=cfg.matching_config,
+                overwrite=overwrite,
                 computation_config=cfg.computation_config,
+                hdf5_filename=f"matching{step}.h5",
+                model_subdir=f"matching{step}_models",
             )
             if return_extra:
-                ret[f"refined{step}_labels"] = sorting.labels
+                ret[f"matching{step}_labels"] = sorting.labels
 
-    # done~
+            if (not is_final) or cfg.final_refinement:
+                sorting, info = refine_clustering(
+                    recording=recording,
+                    sorting=sorting,
+                    motion_est=motion_est,
+                    refinement_config=cfg.refinement_config,
+                    computation_config=cfg.computation_config,
+                    return_step_labels=return_extra,
+                )
+                if return_extra:
+                    ret.update({f"refined{step}{k}_labels": v for k, v in info.items()})
+                    ret[f"refined{step}_labels"] = sorting.labels
+    except Exception:
+        # TODO: remove this.
+        import traceback
+        print("traceback...")
+        print(traceback.format_exc())
+
     sorting.save(output_directory / "dartsort_sorting.npz")
     ret["sorting"] = sorting
     return ret
@@ -208,6 +219,7 @@ def match(
             overwrite=overwrite,
             save_npz_name=template_npz_filename,
             computation_config=computation_config,
+            with_locs=motion_est is not None,
         )
 
     # instantiate peeler

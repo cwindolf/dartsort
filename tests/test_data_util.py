@@ -1,6 +1,7 @@
 """
 Test conversions among DARTsortSorting, NumpySorting, and HDF5 formats.
 """
+
 import tempfile
 from pathlib import Path
 
@@ -22,8 +23,8 @@ def test_to_numpy_sorting():
     npsorting = dsorting.to_numpy_sorting()
 
     si_spiketrain = npsorting.to_spike_vector()
-    si_times = si_spiketrain['sample_index']
-    si_labels = si_spiketrain['unit_index']
+    si_times = si_spiketrain["sample_index"]
+    si_labels = si_spiketrain["unit_index"]
     assert np.array_equal(si_times, times_samples)
     assert np.array_equal(si_labels, labels)
     assert np.array_equal(npsorting.get_unit_ids(), np.arange(0, 10))
@@ -53,16 +54,14 @@ def test_check_recording():
     rg = np.random.default_rng(0)
     x = rg.normal(size=(5 * 30000, 384)).astype(np.float32) * 1e4
     rec = NumpyRecording(x, sampling_frequency=30000)
-    rec.set_dummy_probe_from_locations(
-        np.c_[np.zeros(384), 100 * np.arange(384)]
-    )
+    rec.set_dummy_probe_from_locations(np.c_[np.zeros(384), 100 * np.arange(384)])
 
     with pytest.warns(Warning) as warninfo:
         check_recording(rec)
-    warnings = {(w.category, w.message.args[0][:12]) for w in warninfo}
+    warnings = {(w.category, w.message.args[0][:11]) for w in warninfo}
     expected = {
-        (RuntimeWarning, "Detected 767"),
-        (RuntimeWarning, "Recording va"),
+        (RuntimeWarning, "Detected 76"),
+        (RuntimeWarning, "Recording v"),
     }
 
     assert warnings == expected

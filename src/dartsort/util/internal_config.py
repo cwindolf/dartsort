@@ -324,7 +324,7 @@ class RefinementConfig:
     interpolation_sigma: float = 20.0
     val_proportion: float = 0.25
     max_n_spikes: float | int = argfield(default=4_000_000, arg_type=int_or_inf)
-    max_avg_units: int = 8
+    max_avg_units: int = 3
 
     # model params
     channels_strategy: str = "count"
@@ -499,6 +499,7 @@ def to_internal_config(cfg):
         merge_criterion_threshold=cfg.merge_criterion_threshold,
         merge_bimodality_threshold=cfg.merge_bimodality_threshold,
         n_total_iters=cfg.n_refinement_iters,
+        n_em_iters=cfg.n_em_iters,
         max_n_spikes=cfg.gmm_max_spikes,
         val_proportion=cfg.gmm_val_proportion,
         channels_strategy=cfg.channels_strategy,

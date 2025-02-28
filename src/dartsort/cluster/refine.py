@@ -12,6 +12,7 @@ def refine_clustering(
     motion_est=None,
     refinement_config=config.default_refinement_config,
     computation_config=None,
+    return_step_labels=False,
 ):
     """Refine a clustering using the strategy specified by the config."""
     if refinement_config.refinement_stragegy == "splitmerge":
@@ -70,33 +71,52 @@ def refine_clustering(
         hard_noise=refinement_config.hard_noise,
     )
     gmm.cleanup()
+    # these are for benchmarking
+    step_labels = {} if return_step_labels else None
+    intermediate_split = "full" if return_step_labels else "kept"
     for it in range(refinement_config.n_total_iters):
         if refinement_config.truncated:
-            log_liks = gmm.tem()
+            log_liks, _ = gmm.tem(final_split=intermediate_split)
         else:
-            log_liks = gmm.em()
+            log_liks = gmm.em(final_split=intermediate_split)
+        if return_step_labels:
+            step_labels[f"refstepaem{it}"] = gmm.labels.numpy(force=True).copy()
 
         assert log_liks is not None
+        # TODO: if split is self-consistent enough, we don't need this.
         if (
             log_liks.shape[0]
             > refinement_config.max_avg_units * recording.get_num_channels()
         ):
             print(f"{log_liks.shape=}, skipping split.")
         else:
+            # TODO: not this.
+            gmm.log_liks = log_liks
             gmm.split()
+            del log_liks; gmm.log_liks = None; import gc; gc.collect()
             if refinement_config.truncated:
-                log_liks = gmm.tem()
+                log_liks, _ = gmm.tem(final_split=intermediate_split)
             else:
-                log_liks = gmm.em()
+                log_liks = gmm.em(final_split=intermediate_split)
+            if return_step_labels:
+                step_labels[f"refstepbsplit{it}"] = gmm.labels.numpy(force=True).copy()
         gmm.merge(log_liks)
+        del log_liks; import gc; gc.collect()
+        if return_step_labels:
+            step_labels[f"refstepcmerge{it}"] = gmm.labels.numpy(force=True).copy()
 
     if refinement_config.truncated:
         log_liks = gmm.tem(final_split="full")
     else:
         log_liks = gmm.em(final_split="full")
+    del log_liks; import gc; gc.collect()
     gmm.cpu()
     sorting = gmm.to_sorting()
-    return sorting
+    del gmm
+    import gc
+
+    gc.collect()
+    return sorting, step_labels
 
 
 def split_merge(

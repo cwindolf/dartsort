@@ -2,7 +2,6 @@
 from pathlib import Path
 from dataclasses import MISSING, fields, field, asdict
 from argparse import ArgumentParser, BooleanOptionalAction, _StoreAction
-import tomllib
 import typing
 from annotated_types import Gt, Ge, Lt, Le
 
@@ -133,6 +132,8 @@ def dataclass_to_argparse(cls, parser=None, prefix="", skipnames=None):
 
 
 def dataclass_from_toml(clss, toml_path):
+    import tomllib  # TODO: can hold off on py3.11 for now
+
     with open(toml_path, "rb") as toml:
         for cls in clss:
             try:

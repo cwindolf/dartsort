@@ -49,6 +49,14 @@ class LowRankRootSumLinearOperator(SumLinearOperator):
 
         return chol_cap_mat
 
+    @property
+    @cached(name="capinv_V")
+    def capinv_V(self):
+        V = self._root_op.root.mT.to_dense()
+        chol_cap_mat = self.chol_cap_mat
+        capinv_V = torch.cholesky_solve(V, chol_cap_mat)
+        return capinv_V
+
     def _mul_constant(
         self: Float[LinearOperator, "*batch M N"], other: Union[float, torch.Tensor]
     ) -> Float[LinearOperator, "*batch M N"]:
@@ -77,6 +85,7 @@ class LowRankRootSumLinearOperator(SumLinearOperator):
             Callable[[Float[torch.Tensor, "... N C"]], Float[torch.Tensor, "... N C"]]
         ] = None,
         num_tridiag: Optional[int] = 0,
+        Ainv_rhs=None,
     ) -> Union[
         Float[torch.Tensor, "... N C"],
         Tuple[
@@ -91,9 +100,11 @@ class LowRankRootSumLinearOperator(SumLinearOperator):
         V = self._root_op.root.mT
         chol_cap_mat = self.chol_cap_mat
 
-        Ainv_rhs = A.solve(rhs)
+        if Ainv_rhs is None:
+            Ainv_rhs = A.solve(rhs)
         res = V.matmul(Ainv_rhs)
         res = torch.cholesky_solve(res, chol_cap_mat)
+        # res = self.capinv_V.matmul(Ainv_rhs)
         solve = Ainv_rhs.sub_(AinvU.matmul(res))
 
         return solve

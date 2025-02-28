@@ -517,6 +517,11 @@ class KMeansSplit(GMMPlot):
             subm = gmm.data.tpca._inverse_transform_in_probe(subm[None])[0]
             ax_mycentroids.plot(subm.numpy(force=True), color=glasbey1024[subid])
 
+        subm = gmm[unit_id].mean[:, mainchan]
+        subm = gmm.data.tpca._inverse_transform_in_probe(subm[None])[0]
+        ax_centroids.plot(subm.numpy(force=True), color="k", lw=0.5)
+        ax_mycentroids.plot(subm.numpy(force=True), color="k", lw=0.5)
+
         # subunit multichan means
         if self.neighborhood == "core":
             chans = torch.cdist(gmm.data.prgeom[mainchan[None]], gmm.data.prgeom)
@@ -535,9 +540,10 @@ class KMeansSplit(GMMPlot):
                     gmm.data.prgeom,
                     gmm.data.tpca,
                     chans,
-                    split_info["units"],
-                    split_ids,
+                    split_info["units"] + [gmm[unit_id]],
+                    list(split_ids) + [-1],
                     title=None,
+                    linewidths=[1] * len(split_ids) + [0.5],
                 )
             except Exception:
                 pass
@@ -550,7 +556,7 @@ class KMeansSplit(GMMPlot):
         for j in split_ids:
             uc = split_info["sp"].channels[split_labels == j].cpu()
             unit_chans.append(uc[uc < gmm.data.n_channels])
-        ax_chans = fig_chans.subplots()
+        ax_pca, ax_chans = fig_chans.subplots(nrows=2)
         ax_chans.hist(
             unit_chans,
             histtype="bar",
@@ -560,6 +566,14 @@ class KMeansSplit(GMMPlot):
         )
         ax_chans.set_xlabel("channel")
         ax_chans.set_ylabel("chan count in subunit")
+
+        ax_pca.axis("off")
+        if "X" in split_info:
+            u, s, v = torch.pca_lowrank(split_info["X"].view(len(split_labels), -1))
+            Xp = u[:, :2] * s[:2]
+            ax_pca.scatter(*Xp.T, c=glasbey1024[split_labels], s=2, lw=0)
+            ax_pca.axhline(0, lw=0.8, color="k")
+            ax_pca.axvline(0, lw=0.8, color="k")
 
 
 # -- merge-oriented plots
@@ -852,7 +866,6 @@ class NeighborTreeMerge(GMMPlot):
             likelihoods=gmm.log_liks,
             criterion=criterion,
             threshold=self.threshold,
-            normalization_kind=criterion_normalization_kind,
         )
 
         # make vis
@@ -972,6 +985,8 @@ def make_all_gmm_summaries(
         unit_ids = rg.choice(unit_ids, size=n_units, replace=False)
     if not overwrite and all_summaries_done(unit_ids, save_folder, ext=image_ext):
         return
+
+    assert hasattr(gmm, "log_liks")
 
     save_folder.mkdir(exist_ok=True)
 

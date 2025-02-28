@@ -16,3 +16,4 @@ dependencies:
   - linear_operator
   - numba
   - pydantic
+  - opt-einsum

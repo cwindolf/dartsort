@@ -31,6 +31,7 @@ def geomplot(
     colors=None,
     return_chans=False,
     linestyles=None,
+    linewidths=None,
     **plot_kwargs,
 ):
     """Plot waveforms according to geometry using channel index"""
@@ -53,7 +54,9 @@ def geomplot(
         assert geom.shape == (n_channels, 2)
         T = waveforms.shape[1]
         if waveforms.shape != (*max_channels.shape, T, C):
-            raise ValueError(f"Bad shapes: {waveforms.shape=}, {max_channels.shape=}, {C=}")
+            raise ValueError(
+                f"Bad shapes: {waveforms.shape=}, {max_channels.shape=}, {C=}"
+            )
         channels = channel_index[max_channels]
     else:
         n_channels = geom[np.isfinite(geom).all(1)].shape[0]
@@ -89,7 +92,10 @@ def geomplot(
     xmin, xmax = np.inf, -np.inf
     if linestyles is not None:
         ls = []
-        plot_kwargs['linestyles'] = ls
+        plot_kwargs["linestyles"] = ls
+    if linewidths is not None:
+        lw = []
+        plot_kwargs["linewidths"] = lw
     for j, (wf, chans) in enumerate(zip(waveforms, channels)):
         for i, cc in enumerate(chans):
             if cc == n_channels:
@@ -104,10 +110,12 @@ def geomplot(
             elif color is not None:
                 draw_colors.append(to_rgba(color))
             elif c is not None:
-                cj = c[j] if (hasattr(c, '__len__') and len(c)>1) else c
+                cj = c[j] if (hasattr(c, "__len__") and len(c) > 1) else c
                 draw_colors.append(to_rgba(cj))
             if linestyles is not None:
                 ls.append(linestyles[j])
+            if linewidths is not None:
+                lw.append(linewidths[j])
     dx = xmax - xmin
     xpad = dx / 2 - xlim_factor * dx / 2
     ax.set_xlim([xmin + xpad, xmax - xpad])

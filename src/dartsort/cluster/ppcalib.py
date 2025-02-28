@@ -291,7 +291,7 @@ def ppca_e_step(
         # take weighted averages
         if yes_pca:
             e_u += wubar.sum(0)
-            wuubar = nd.w_norm @ uubar.view(nd.neighb_n_spikes, -1)
+            wuubar = nd.w_norm @ uubar.reshape(nd.neighb_n_spikes, -1)
             wuubar = wuubar.view(M, M)
             e_uu += wuubar
 
