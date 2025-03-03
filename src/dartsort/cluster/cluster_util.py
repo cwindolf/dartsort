@@ -47,6 +47,7 @@ def leafsets(Z, max_distance=np.inf):
         leavesa = leaves.get(pa, [int(pa)])
         leavesb = leaves.get(pb, [int(pb)])
         leaves[n + i] = leavesa + leavesb
+        leaves[n + i].sort()
     return leaves
 
 

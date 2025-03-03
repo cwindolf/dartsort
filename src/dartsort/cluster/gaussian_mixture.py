@@ -1,9 +1,10 @@
 import logging
 import threading
 from dataclasses import replace
-from typing import Literal, Optional
+from typing import Literal, Optional, Any
 import warnings
 import traceback
+import time
 
 import numba
 import numpy as np
@@ -25,6 +26,9 @@ from ..util.sparse_util import (
     csc_sparse_mask_rows,
     coo_sparse_mask_rows,
     csc_sparse_getrow,
+    sparse_topk,
+    sparse_reassign,
+    torch_coo_to_dense,
 )
 from .cluster_util import agglomerate, combine_distances, leafsets
 from .kmeans import kmeans
@@ -102,14 +106,16 @@ class SpikeMixtureModel(torch.nn.Module):
         merge_criterion_threshold: float | None = 0.0,
         merge_criterion: Literal[
             "heldout_loglik",
-            "heldout_ccl",
-            "loglik",
-            "ccl",
-            "aic",
-            "bic",
-            "icl",
-            "bimodality",
-        ] = "heldout_ccl",
+            "heldout_elbo",
+            "old_heldout_loglik",
+            "old_heldout_ccl",
+            "old_loglik",
+            "old_ccl",
+            "old_aic",
+            "old_bic",
+            "old_icl",
+            "old_bimodality",
+        ] = "heldout_loglik",
         split_bimodality_threshold: float = 0.1,
         merge_bimodality_cut: float = 0.0,
         merge_bimodality_overlap: float = 0.80,
@@ -336,7 +342,7 @@ class SpikeMixtureModel(torch.nn.Module):
         labels = self.labels.numpy(force=False).copy()
         return replace(self.data.original_sorting, labels=labels)
 
-    def tem(
+    def tvi(
         self,
         n_iter=None,
         show_progress=True,
@@ -345,6 +351,10 @@ class SpikeMixtureModel(torch.nn.Module):
         n_threads=1,
         batch_size=1024,
         tmm_kwargs={},
+        algorithm="em",
+        scheduler=None,
+        sgd_lr=0.1,
+        initialization="topk",
     ):
         # TODO: hang on to this and update it in place
         tmm = truncated_mixture.SpikeTruncatedMixtureModel(
@@ -368,17 +378,29 @@ class SpikeMixtureModel(torch.nn.Module):
 
         # update from my stack
         ids, means, covs, logdets = self.stack_units(mean_only=False)
-        dkl = self.distances(kind="kl", normalization_kind="none")
+        ids_, dkl = self.distances(kind="kl", normalization_kind="none")
+        assert torch.equal(torch.asarray(ids), torch.asarray(ids_))
 
         # try reassigning without noise unit...
         lls = self.log_likelihoods(with_noise_unit=True, show_progress=True)
-        labels_full = loglik_reassign(lls[:-1])[1]
+        # labels_full = loglik_reassign(lls[:-1])[1]
         self.update_proportions(lls)
+
+        if initialization == "topk":
+            labels = sparse_topk(
+                lls[:-1],
+                log_proportions=self.log_proportions[:-1].numpy(force=True),
+                k=tmm.n_candidates,
+            )
+        elif initialization == "nearest":
+            labels = loglik_reassign(lls[:-1])[1]
+        else:
+            assert False
         del lls
         logprops = self.log_proportions
         assert logprops is not None
         tmm.set_parameters(
-            labels=torch.from_numpy(labels_full),
+            labels=torch.from_numpy(labels),
             means=means[ids],
             bases=covs[ids].permute(0, 3, 1, 2) if covs is not None else None,
             log_proportions=logprops[:-1],
@@ -387,23 +409,62 @@ class SpikeMixtureModel(torch.nn.Module):
         )
 
         if show_progress:
-            its = trange(n_iter, desc="tEM", **tqdm_kw)
+            its = trange(n_iter, desc=f"t{algorithm}", **tqdm_kw)
         else:
             its = range(n_iter)
 
+        if algorithm == "adam":
+            opt = torch.optim.Adam(
+                tmm.parameters(),
+                lr=sgd_lr,
+                maximize=True,
+            )
+        elif algorithm == "sgd":
+            opt = torch.optim.SGD(
+                tmm.parameters(),
+                lr=sgd_lr,
+                maximize=True,
+            )
+        else:
+            assert algorithm == "em"
+
+        if algorithm != "em" and scheduler == "cosine":
+            sched = torch.optim.lr_scheduler.CosineAnnealingLR(opt, n_iter - 1)
+        else:
+            assert algorithm == "em" or scheduler is None
+
         records = []
+        train_records = []
+        tic = time.perf_counter()
         for j in its:
             is_final = j == n_iter - 1
-            res = tmm.step(show_progress=step_progress, hard_label=is_final)
-            records.append(res)
-            msg = f"tEM[oelbo/n={res['obs_elbo']:0.2f}]"
+            if is_final or algorithm == "em":
+                res = tmm.step(
+                    show_progress=step_progress, hard_label=is_final, tic=tic
+                )
+                labels = res.pop("labels", None)
+                records.append(res)
+            elif algorithm in ("sgd", "adam"):
+                res = tmm.sgd_epoch(opt, show_progress=step_progress, tic=tic)
+                if scheduler is not None:
+                    sched.step()
+                train_records.extend(res["train_records"])
+                records.append(
+                    dict(
+                        obs_elbo=res["obs_elbo"],
+                        noise_lp=res["noise_lp"],
+                        wall=res["wall"],
+                    )
+                )
+            else:
+                assert False
+            msg = f"t{algorithm}[oelbo/n={res['obs_elbo']:0.2f}]"
             if show_progress:
                 its.set_description(msg)  # pyright: ignore
         print(f"{np.any(np.diff([r['obs_elbo'] for r in records])<0)=}")
         print(f"{[r['obs_elbo'] for r in records]=}")
 
         print("post its", flush=True)
-        labels = res["labels"]  # pyright: ignore [reportPossiblyUnboundVariable]
         assert labels is not None
 
         # reupdate my GaussianUnits
@@ -443,7 +504,12 @@ class SpikeMixtureModel(torch.nn.Module):
             show_progress=step_progress, split=final_split
         )
         log_liks, _ = self.cleanup(log_liks, relabel_split=final_split)
-        return log_liks, records
+        result = dict(
+            log_liks=log_liks,
+            records=records,
+            train_records=train_records,
+        )
+        return result
 
     def em(
         self, n_iter=None, show_progress=True, final_e_step=True, final_split="kept"
@@ -754,12 +820,7 @@ class SpikeMixtureModel(torch.nn.Module):
         # have to jump through some hoops because torch sparse tensors
         # don't implement .mean() yet??
         spike_ixs = self.data.split_indices["train"].numpy()
-        if spike_ixs.shape[0] > self.proportions_sample_size:
-            sample = self.rg.choice(
-                spike_ixs.shape[0], size=self.proportions_sample_size, replace=False
-            )
-            sample.sort()
-            spike_ixs = spike_ixs[sample]
+        spike_ixs, _ = shrinkfit(spike_ixs, self.proportions_sample_size, self.rg)
         log_liks = log_liks[:, spike_ixs]
         log_liks = log_liks.tocoo()
         log_liks = coo_to_torch(log_liks, torch.float, copy_data=True)
@@ -1015,7 +1076,7 @@ class SpikeMixtureModel(torch.nn.Module):
         elif normalization_kind == "channels":
             dists /= self.data.n_channels
 
-        return dists
+        return ids, dists
 
     def bimodalities(
         self,
@@ -1106,16 +1167,10 @@ class SpikeMixtureModel(torch.nn.Module):
             split_indices_full = indices_full
             indices_full = self.data.split_indices[split_name][indices_full]
 
-        n_full = indices_full.numel()
         split_indices = split_indices_full
-        indices = indices_full
-        if max_size and n_full > max_size:
-            choices = self.rg.choice(n_full, size=max_size, replace=False)
-            choices.sort()
-            choices = torch.asarray(choices, device=indices_full.device)
-            if split_name is not None:
-                split_indices = split_indices[choices]
-            indices = indices[choices]
+        indices, choices = shrinkfit(indices_full, max_size, self.rg)
+        if split_name is not None:
+            split_indices = split_indices[choices]
 
         return indices_full, indices, split_indices
 
@@ -1204,7 +1259,7 @@ class SpikeMixtureModel(torch.nn.Module):
             _, core_neighborhoods = self.data.neighborhoods()
             core_ids = core_neighborhoods.neighborhood_ids[features.split_indices]
 
-        if warm_start and unit_id in self:
+        if unit_id is not None and warm_start and unit_id in self:
             unit = self[unit_id]
             unit.fit(
                 features,
@@ -1378,7 +1433,12 @@ class SpikeMixtureModel(torch.nn.Module):
             return self._noise_log_likelihoods[indices]
         return self._noise_log_likelihoods
 
-    def kmeans_split_unit(self, unit_id, debug=False):
+    def kmeans_split_unit(
+        self, unit_id, debug=False, merge_kind=None, merge_criterion=None
+    ):
+        if merge_criterion is None:
+            merge_criterion = self.merge_criterion
+
         # get spike data and use interpolation to fill it out to the
         # unit's channel set
         result = dict(parent_id=unit_id, new_ids=[unit_id], clear_ids=[])
@@ -1422,14 +1482,24 @@ class SpikeMixtureModel(torch.nn.Module):
         responsibilities = responsibilities[:, split_ids]
 
         # avoid oversplitting by doing a mini merge here
-        split_labels = self.mini_merge(
-            sp,
-            split_labels,
-            unit_id,
-            weights=responsibilities.T,
-            debug=debug,
-            debug_info=result,
-        )
+        if merge_criterion.startswith("old_"):
+            split_labels = self.mini_merge(
+                sp,
+                split_labels,
+                unit_id,
+                weights=responsibilities.T,
+                debug=debug,
+                debug_info=result,
+                merge_kind=merge_kind,
+                merge_criterion=merge_criterion,
+            )
+        else:
+            split_labels = self.tree_split(
+                unit_id,
+                hyp_fit_spikes=sp,
+                hyp_fit_resps=responsibilities.T,
+                merge_criterion=merge_criterion,
+            )
         if split_labels is None:
             return result
         split_ids, split_counts = np.unique(split_labels, return_counts=True)
@@ -1502,6 +1572,8 @@ class SpikeMixtureModel(torch.nn.Module):
         debug=False,
         debug_info=None,
         n_em_iter=None,
+        merge_kind=None,
+        merge_criterion=None,
     ):
         """Given labels for a small bag of data, fit and merge."""
         if n_em_iter is None:
@@ -1614,6 +1686,8 @@ class SpikeMixtureModel(torch.nn.Module):
             log_proportions=log_props[ids],
             spike_data=spike_data,
             debug_info=debug_info,
+            merge_kind=merge_kind,
+            merge_criterion=merge_criterion,
         )
 
         return new_labels
@@ -1661,8 +1735,8 @@ class SpikeMixtureModel(torch.nn.Module):
             ina = ina[(getdt(times_b, times_a) <= dt_s).cpu()]
             inb = inb[(getdt(times_a, times_b) <= dt_s).cpu()]
 
-        ina = shrinkfit(ina, max_spikes, self.rg)
-        inb = shrinkfit(inb, max_spikes, self.rg)
+        ina, _ = shrinkfit(ina, max_spikes, self.rg)
+        inb, _ = shrinkfit(inb, max_spikes, self.rg)
 
         in_pair = torch.concatenate((ina, inb))
         is_b = torch.zeros(in_pair.shape, dtype=bool)
@@ -1704,6 +1778,226 @@ class SpikeMixtureModel(torch.nn.Module):
     def tree_merge(
         self,
         distances,
+        current_log_liks,
+        unit_ids=None,
+        max_distance=1e6,
+        threshold=None,
+        criterion="heldout_loglik",
+        sym_function=np.minimum,
+        max_group_size=8,
+        min_overlap=0.8,
+        show_progress=False,
+    ):
+        r"""Tree merge
+
+        The final decision is a group of leaf and non-leaf nodes whose descendants
+        partition the leaves. Each leaf is assigned to its highest-value major
+        ancestor, where an ancestor is major if it has higher value than all
+        of its descendants.
+        """
+        if threshold is None:
+            threshold = self.merge_criterion_threshold
+
+        if distances.shape[0] == 1:
+            return None, None, None, None
+
+        # heuristic unit groupings to investigate
+        distances = sym_function(distances, distances.T)
+        distances = distances[np.triu_indices(len(distances), k=1)]
+        finite = np.isfinite(distances)
+        if not finite.any():
+            return None, None, None, None
+        if not finite.all():
+            big = max(0, distances[finite].max()) + max_distance + 1
+            distances[np.logical_not(finite)] = big
+        Z = linkage(distances)
+        n_units = len(Z) + 1
+        n_branches = n_units - 1
+        assert n_units == current_log_liks.shape[0] - 1
+
+        if unit_ids is None:
+            unit_ids = np.arange(n_units)
+        else:
+            unit_ids = np.asarray(unit_ids)
+            assert len(unit_ids) == n_units
+        # figure out the leaf nodes in each cluster in the hierarchy
+        # up to max_distance
+        leaf_descendants = leafsets(Z)
+
+        # walk up from the leaves
+        its = enumerate(Z)
+        if show_progress:
+            its = tqdm(its, desc="Tree", total=n_branches, **tqdm_kw)
+
+        # and build this set of data:
+        # improvements: for a branch, how much does the model improve by
+        # merging the corresponding subtree?
+        improvements = np.full(n_branches, -np.inf)
+        # overlaps: for a branch, the proportion of spikes which the merge
+        # unit overlapped with
+        overlaps = np.full(n_branches, -np.inf)
+        # leaf scores: the CURRENT BEST improvement for an ancestor branch
+        # of each leaf node. initialized to zero because the leaves don't
+        # change the model.
+        leaf_scores = np.zeros(n_units, dtype=bool)
+        # group IDs: the CURRENT BEST group label for each leaf node.
+        # if we encounter a new best score for all leaves in a subtree,
+        # we update the leaf scores and the group id is set to the
+        group_ids = np.arange(n_units)
+
+        for i, (pa, pb, dist, nab) in its:
+            if not np.isfinite(dist) or dist > max_distance:
+                continue
+
+            # check if should merge
+            leaves = leaf_descendants[n_units + i]
+            if len(leaves) > max_group_size:
+                continue
+            cluster_ids = unit_ids[leaves]
+
+            crit = self.validation_criterion(
+                current_log_liks, current_unit_ids=cluster_ids
+            )
+
+            overlaps[i] = crit["overlap"]
+            if overlaps[i] >= min_overlap:
+                improvements[i] = crit["improvements"][criterion]
+
+            if improvements[i] >= leaf_scores[leaves].max():
+                leaf_scores[leaves] = improvements[i]
+                group_ids[leaves] = n_units + i
+
+        return Z, group_ids, improvements, overlaps
+
+    def tree_split(
+        self,
+        unit_id,
+        hyp_fit_spikes,
+        hyp_fit_resps,
+        merge_criterion=None,
+        sym_function=np.minimum,
+        max_distance=None,
+        debug_info=None,
+    ):
+        debug = debug_info is not None
+        current_unit_ids = set(unit_id)
+        if merge_criterion is None:
+            merge_criterion = self.merge_criterion
+        if max_distance is None:
+            max_distance = self.merge_distance_threshold
+
+        # -- fit the full expanded model
+        _, train_extract_neighborhoods = self.data.neighborhoods(neighborhood="extract")
+        units = []
+        resps = []
+        fit_channels = self[unit_id].channels.clone()
+        for w in hyp_fit_resps:
+            unit = GaussianUnit.from_features(
+                hyp_fit_spikes,
+                weights=w,
+                neighborhoods=train_extract_neighborhoods,
+                channels=fit_channels,
+                **self.split_unit_args,
+            )
+            if unit.channels.numel():
+                units.append(unit)
+                resps.append(w)
+        n_units = len(units)
+        if n_units <= 1:
+            return None
+        hyp_fit_resps = torch.stack(resps, dim=0)
+        n_fit = hyp_fit_resps.shape[1]
+
+        # -- evaluate full model
+        full_info = self.validation_criterion(
+            self.log_liks,
+            current_unit_ids=current_unit_ids,
+            hyp_units=units,
+        )
+        best_improvement = full_info["improvements"][merge_criterion]
+        best_labels = full_info["labels"]
+        if debug:
+            debug_info["reas_labels"] = best_labels
+            debug_info["units"] = units
+
+        # -- make linkage and leafsets
+        _, distances = self.distances(units=units, show_progress=False)
+        assert distances.shape == (n_units, n_units)
+        if debug:
+            debug_info["distances"] = distances
+        distances = sym_function(distances, distances.T)
+        distances = distances[np.triu_indices(n_units, k=1)]
+        finite = np.isfinite(distances)
+        if not finite.any():
+            return None
+        if not finite.all():
+            big = max(0, distances[finite].max()) + max_distance + 1
+            distances[np.logical_not(finite)] = big
+        Z = linkage(distances)
+        assert n_units == len(Z) + 1
+        n_branches = n_units - 1
+        leaf_descendants = leafsets(Z)
+
+        # -- evaluate submodels
+        # group IDs: the CURRENT group label for each leaf node.
+        group_ids = np.arange(n_units)
+        # best group IDs: the current BEST group label for each leaf node.
+        best_group_ids = group_ids.copy()
+        if debug:
+            debug_info["Z"] = Z
+            debug_info["improvements"] = np.full(n_branches, -np.inf)
+            debug_info["overlaps"] = np.full(n_branches, -np.inf)
+
+        for i, (pa, pb, dist, nab) in enumerate(Z):
+            if not np.isfinite(dist) or dist > max_distance:
+                continue
+
+            # the partition at this level is...
+            leaves = leaf_descendants[n_units + i]
+            group_ids[leaves] = n_units + i
+
+            # combine the resps to match the partition
+            cur_ids = np.unique(group_ids)
+            level_resps = hyp_fit_resps.new_zeros((len(cur_ids), n_fit))
+            for j, cid in enumerate(cur_ids):
+                in_cid = cur_ids == cid
+                level_resps[j] = hyp_fit_resps[in_cid].sum(0)
+
+            # evaluate the corresponding model
+            crit = self.validation_criterion(
+                self.log_liks,
+                current_unit_ids=current_unit_ids,
+                hyp_fit_spikes=hyp_fit_spikes,
+                hyp_fit_resps=level_resps,
+                hyp_fit_channels=fit_channels.clone(),
+            )
+            improvement = crit["improvements"][merge_criterion]
+
+            # store it as best if it was
+            if improvement > best_improvement:
+                best_group_ids = group_ids.copy()
+                best_improvement = improvement
+                best_labels = crit["labels"]
+            if debug:
+                debug_info["improvements"][i] = improvement
+                debug_info["overlaps"][i] = crit["overlap"]
+
+        # -- check if best was good enough
+        assert np.isfinite(best_improvement)
+        if best_improvement <= 0:
+            return None
+
+        # -- organize labels...
+        group_ids = torch.asarray(best_group_ids)
+        _, new_ids = group_ids.unique(return_inverse=True)
+        labels = torch.asarray(best_labels).clone()
+        (kept,) = (labels >= 0).nonzero(as_tuple=True)
+        labels[kept] = new_ids[labels[kept]]
+        return labels
+
+    def old_tree_merge(
+        self,
+        distances,
         unit_ids=None,
         units=None,
         labels=None,
@@ -1711,7 +2005,7 @@ class SpikeMixtureModel(torch.nn.Module):
         spikes_extract=None,
         max_distance=1.0,
         threshold=None,
-        criterion="heldout_ccl",
+        criterion="heldout_loglik",
         likelihoods=None,
         log_proportions=None,
         spikes_per_subunit=4096,
@@ -1747,8 +2041,14 @@ class SpikeMixtureModel(torch.nn.Module):
         overlaps = np.full(n_units - 1, -np.inf)
         group_ids = np.arange(n_units)
         its = reversed(list(enumerate(Z)))
+
+        # TODO: remove after testing change
+        old = criterion.startswith("old_")
+        assert old
+        criterion = criterion.removeprefix("old_")
         in_bag = not criterion.startswith("heldout_")
         criterion = criterion.removeprefix("heldout_")
+
         if show_progress:
             its = tqdm(its, desc="Tree", total=n_units - 1, **tqdm_kw)
         if torch.is_tensor(likelihoods):
@@ -1796,7 +2096,7 @@ class SpikeMixtureModel(torch.nn.Module):
                     dim=0,
                 )
 
-            crit, olap = self.merge_criteria(
+            crit, olap = self.old_merge_criteria(
                 unit_ids=cluster_ids,
                 units=level_units,
                 spikes_extract=level_spe,
@@ -1808,6 +2108,7 @@ class SpikeMixtureModel(torch.nn.Module):
                 spikes_per_subunit=spikes_per_subunit,
                 override_unit_id=override_unit_id,
             )
+
             if crit is not None:
                 improvements[i] = crit[criterion]
                 overlaps[i] = olap
@@ -1819,7 +2120,195 @@ class SpikeMixtureModel(torch.nn.Module):
 
         return Z, group_ids, improvements, overlaps
 
-    def merge_criteria(
+    def validation_criterion(
+        self,
+        current_log_liks,
+        current_unit_ids,
+        hyp_units=None,
+        hyp_fit_spikes=None,
+        hyp_fit_resps=None,
+        hyp_fit_channels=None,
+        fit_spikes_per_current_unit=None,
+        fit_max_factor=2,
+    ) -> dict[Literal["improvements", "overlap", "labels"], Any]:
+        """Validation criteria to choose between current or hypothetical model
+
+        This code handles two cases: splitting and merging.
+
+        In both cases, a validation statistic is computed for the current
+        model and for a hypothetical model: V_C and V_H.
+
+        In the split case, current_unit_ids contains a single ID, and
+        hypothetical resps indicate how to divide up its responsibilities
+        when fitting split subunits. Then the split should be accepted if
+        V_H>V_C.
+
+        In the merge case, current_unit_ids contains several IDs, and
+        hypothetical resps are implicitly 1s (set to None), so that the
+        merged unit to be fit gathers responsibilities from all the
+        current_unit_ids. Then the merge should be accepted if V_H>V_C.
+
+        Arguments
+        ---------
+        current_log_liks : csr_array
+            Sparse array of log likelihoods for the current set of units
+        current_unit_ids : list[int]
+            IDs of current units on the chopping block
+        hyp_fit_spikes : SpikeFeatures
+            Spikes to use to fit hypothetical units. This is even needed
+            in the split case! That's because during the split we consider
+            merging subsets of the split units. So splits are kinda merges
+            themselves...
+            If None, these are chosen at random, and hyp_fit_resps better
+            be None too.
+        hyp_fit_resps : Tensor (n_spikes_fit, n_hyp_units)
+            n_fit_units units will be fit using these weights to the
+            spikes above. Weights will be determined by dividing the
+            sum of current unit responsibilities among the hyp units
+            using these responsibilities.
+            If None, these are assumed to be ones, and the resulting
+            responsibility is the sum of current units' resps.
+        """
+        # -- validate args
+        fit_unset = hyp_fit_spikes is None
+        assert (hyp_fit_resps is None) == fit_unset
+        current_unit_ids = set(current_unit_ids)
+        n_cur = len(current_unit_ids)
+        irrix = set(range(len(current_log_liks))) - current_unit_ids
+
+        # -- fit hypothetical units
+        # pick spikes to fit (if necessary)
+        if hyp_fit_spikes is None:
+            ixs = []
+            splitixs = []
+            for u in current_unit_ids:
+                _, ix, splitix = self.random_indices(
+                    u, max_size=fit_spikes_per_current_unit
+                )
+                ixs.append(ix)
+                splitixs.append(splitix)
+            ixs = torch.cat(ixs)
+            fit_max_count = fit_max_factor * self.n_spikes_fit
+            ixs, choices = shrinkfit(ixs, fit_max_count, self.rg)
+            ixs, order = torch.sort(ixs)
+            splitixs = torch.cat(splitixs)[choices][order]
+            hyp_fit_spikes = self.data.spike_data(
+                ixs, split_indices=splitixs, with_neighborhood_ids=True
+            )
+
+        # get total current responsibility for fit spikes
+        if hyp_units is None:
+            cur_fit_liks = self.get_log_likelihoods(
+                hyp_fit_spikes.indices, current_log_liks
+            )
+            cur_fit_weights = torch.sparse.softmax(cur_fit_liks, dim=0)
+            cur_resp = cur_fit_weights[current_unit_ids].sum(dim=0)
+
+            # fit weights for hypothetical units
+            hyp_fit_weights = cur_resp.unsqueeze(0)
+            if hyp_fit_resps is not None:
+                hyp_fit_weights = hyp_fit_weights * hyp_fit_resps
+            n_hyp, n_fit = hyp_fit_weights.shape
+            assert n_fit == len(hyp_fit_spikes)
+
+            # fit them...
+            hyp_units = [
+                self.fit_unit(
+                    features=hyp_fit_spikes, weights=w, channels=hyp_fit_channels
+                )
+                for w in hyp_fit_weights
+            ]
+        n_hyp = len(hyp_units)
+
+        # what are the log props?
+        cur_log_prop = self.log_proportions[current_unit_ids].logsumexp(dim=0)
+        if hyp_fit_resps is not None:
+            hyp_rel_log_props = hyp_fit_resps.mean(1).log_()
+            hyp_rel_log_props = torch.log_softmax(hyp_rel_log_props, dim=0)
+            hyp_log_props = cur_log_prop + hyp_rel_log_props
+        else:
+            hyp_log_props = cur_log_prop
+
+        # -- grab heldout spikes from within current units
+        spikes = self.random_spike_data(
+            unit_ids=current_unit_ids,
+            split_name="val",
+            neighborhood="core",
+            with_neighborhood_ids=True,
+        )
+
+        # -- evaluate heldout log likelihoods
+        cur_liks_full = self.get_log_likelihoods(spikes.indices, current_log_liks)
+        cur_liks_full = torch_coo_to_dense(cur_liks_full, -torch.inf)
+        irr_liks = cur_liks_full[irrix]
+
+        # current chop block units and irrelevant units
+        # note -- these don't really make sense on their own. they need to be
+        # combined with logsumexp.
+        cur_logliks = cur_liks_full.logsumexp(dim=0)
+
+        # hypothetical units
+        hyp_liks = cur_liks_full.new_full((n_hyp, len(spikes)), -torch.inf)
+        for j, hu in enumerate(hyp_units):
+            hull = self.unit_log_likelihoods(unit=hu, spikes=spikes)
+            if hull is not None:
+                hyp_liks[j] = hyp_log_props[j] + hull
+        hyp_liks_full = torch.concatenate((irr_liks, hyp_liks), dim=0)
+        hyp_logliks = hyp_liks_full.logsumexp(dim=0).mean()
+
+        # we can only work on this subset...
+        valid = torch.logical_and(cur_logliks.isfinite(), hyp_logliks.isfinite())
+        (vix,) = valid.nonzero(as_tuple=True)
+        cur_loglik = cur_logliks[vix].mean()
+        hyp_loglik = hyp_logliks[vix].mean()
+
+        # -- evaluate heldout elbos
+        Qcur = cur_liks_full[:, vix].softmax(dim=0)
+        Qhyp = hyp_liks_full[:, vix].softmax(dim=0)
+        cur_elbo = spiketorch.elbo(Qcur, cur_liks_full[:, vix], reduce_mean=True)
+        hyp_elbo = spiketorch.elbo(Qhyp, hyp_liks_full[:, vix], reduce_mean=True)
+
+        # -- compute final class weighted metrics
+        hyp_single = n_hyp == 1
+        cur_single = n_cur == 1
+        assert hyp_single or cur_single
+        if hyp_single:
+            cur_liks = cur_liks_full[current_unit_ids]
+            labels = cur_liks.argmax(0)
+        else:
+            labels = hyp_liks.argmax(0)
+
+        # always hyp-cur
+        # d_loglik = class_balance(labels, hyp_loglik, cur_loglik)
+        # d_elbo = class_balance(labels, hyp_elbo, cur_elbo)
+
+        improvements = dict(
+            heldout_loglik=hyp_loglik - cur_loglik,
+            heldout_elbo=hyp_elbo - cur_elbo,
+        )
+        hyp_criteria = dict(heldout_loglik=hyp_loglik, heldout_elbo=hyp_elbo)
+        cur_criteria = dict(heldout_loglik=cur_loglik, heldout_elbo=cur_elbo)
+        merged_criteria = hyp_criteria if hyp_single else cur_criteria
+        full_criteria = cur_criteria if hyp_single else hyp_criteria
+
+        # -- compute overlap for the caller
+        # caller may not want to shrink the model if one of the classes
+        # was poorly covered when computing the metrics
+        ids, ixs, counts = labels.unique(return_inverse=True, return_counts=True)
+        props = hyp_liks.new_zeros(ids.shape)
+        spiketorch.add_at_(props, ixs[vix], 1.0)
+        props /= counts
+        overlap = props.min()
+
+        return dict(
+            improvements=improvements,
+            merged_criteria=merged_criteria,
+            full_criteria=full_criteria,
+            overlap=overlap,
+            labels=labels,
+        )
+
+    def old_merge_criteria(
         self,
         unit_ids,
         units=None,
@@ -2339,12 +2828,14 @@ class SpikeMixtureModel(torch.nn.Module):
         self,
         units=None,
         override_unit_id=None,
+        hyp_fit_resps=None,
         likelihoods=None,
         log_proportions=None,
         spike_data=None,
         labels=None,
         show_progress=False,
         merge_kind=None,
+        merge_criterion=None,
         debug_info=None,
     ):
         """Unit merging logic
@@ -2363,14 +2854,18 @@ class SpikeMixtureModel(torch.nn.Module):
 
         # merge behavior is either a hierarchical merge or this tree-based
         # idea, depending on the value of a parameter
+        if merge_criterion is None:
+            merge_criterion = self.merge_criterion
         if merge_kind is None:
-            if self.merge_criterion == "bimodality":
+            if merge_criterion == "bimodality":
                 merge_kind = "hierarchical"
+            elif merge_criterion.startswith("old_"):
+                merge_kind = "old_tree"
             else:
                 merge_kind = "tree"
 
         # distances are needed by both methods
-        distances = self.distances(units=units, show_progress=show_progress)
+        unit_ids, distances = self.distances(units=units, show_progress=show_progress)
         if debug_info is not None:
             debug_info["distances"] = distances
         if distances.shape[0] == 1:
@@ -2389,6 +2884,25 @@ class SpikeMixtureModel(torch.nn.Module):
             )
         elif merge_kind == "tree":
             Z, group_ids, improvements, overlaps = self.tree_merge(
+                distances,
+                self.log_liks,  # TODO: not this.
+                unit_ids=unit_ids,
+                max_distance=self.merge_distance_threshold,
+                criterion=self.merge_criterion,
+                sym_function=self.merge_sym_function,
+                show_progress=show_progress,
+            )
+            if debug_info is not None:
+                debug_info["Z"] = Z
+                debug_info["improvements"] = improvements
+                debug_info["overlaps"] = overlaps
+            group_ids = torch.asarray(group_ids)
+            _, new_ids = group_ids.unique(return_inverse=True)
+            new_labels = torch.asarray(labels).clone()
+            (kept,) = (new_labels >= 0).nonzero(as_tuple=True)
+            new_labels[kept] = new_ids[new_labels[kept]]
+        elif merge_kind == "old_tree":
+            Z, group_ids, improvements, overlaps = self.old_tree_merge(
                 distances,
                 labels=labels,
                 units=units,
@@ -3187,131 +3701,6 @@ def logmeanexp(x_csr):
     return log_mean_exp
 
 
-def sparse_reassign(liks, proportions=None, log_proportions=None, hard_noise=False):
-    """Reassign spikes to units with largest likelihood
-
-    liks is (n_units, n_spikes). This computes the argmax for each column,
-    treating sparse 0s as -infs rather than as 0s.
-
-    Turns out that scipy's sparse argmin/max have a slow python inner loop,
-    this uses a numba replacement, but I'd like to upstream a cython version.
-    """
-    if not liks.nnz:
-        return (
-            np.arange(0),
-            liks,
-            np.full(liks.shape[1], -1),
-            np.full(liks.shape[1], -np.inf),
-        )
-
-    # csc is needed here for this to be fast
-    liks = liks.tocsc()
-    nz_lines = np.flatnonzero(np.diff(liks.indptr))
-    nnz = len(nz_lines)
-
-    # see scipy csc argmin/argmax for reference here. this is just numba-ing
-    # a special case of that code which has a python hot loop.
-    assignments = np.full(nnz, -1)
-    # these will be filled with logsumexps
-    likelihoods = np.full(nnz, -np.inf, dtype=np.float32)
-
-    # get log proportions, either given logs or otherwise...
-    if log_proportions is None:
-        if proportions is None:
-            log_proportions = np.full(nnz, -np.log(liks.shape[0]), dtype=np.float32)
-        elif torch.is_tensor(proportions):
-            log_proportions = proportions.log().numpy(force=True)
-        else:
-            log_proportions = np.log(proportions)
-    else:
-        if torch.is_tensor(log_proportions):
-            log_proportions = log_proportions.numpy(force=True)
-    log_proportions = log_proportions.astype(np.float32)
-
-    # this loop ignores sparse zeros. so, no sweat for negative inputs.
-    if hard_noise:
-        log_proportions = log_proportions[:-1] - logsumexp(log_proportions[:-1])
-        hard_noise_argmax_loop(
-            assignments,
-            likelihoods,
-            nz_lines,
-            liks.indptr,
-            liks.data,
-            liks.indices,
-            log_proportions,
-        )
-    else:
-        hot_argmax_loop(
-            assignments,
-            likelihoods,
-            nz_lines,
-            liks.indptr,
-            liks.data,
-            liks.indices,
-            log_proportions,
-        )
-
-    return nz_lines, liks, assignments, likelihoods
-
-
-# csc can have int32 or 64 coos on dif platforms? is this an intp? :P
-sigs = [
-    "void(i8[::1], f4[::1], i8[::1], i4[::1], f4[::1], i4[::1], f4[::1])",
-    "void(i8[::1], f4[::1], i8[::1], i8[::1], f4[::1], i8[::1], f4[::1])",
-]
-
-
-@numba.njit(
-    sigs,
-    error_model="numpy",
-    nogil=True,
-    parallel=True,
-)
-def hot_argmax_loop(
-    assignments, scores, nz_lines, indptr, data, indices, log_proportions
-):
-    # for i in nz_lines:
-    for j in numba.prange(nz_lines.shape[0]):
-        i = nz_lines[j]
-        p = indptr[i]
-        q = indptr[i + 1]
-        ix = indices[p:q]
-        dx = data[p:q] + log_proportions[ix]
-        best = dx.argmax()
-        assignments[j] = ix[best]
-        mx = dx.max()
-        scores[j] = mx + np.log(np.exp(dx - mx).sum())
-
-
-@numba.njit(
-    sigs,
-    error_model="numpy",
-    nogil=True,
-    parallel=True,
-)
-def hard_noise_argmax_loop(
-    assignments, scores, nz_lines, indptr, data, indices, log_proportions
-):
-    # noise_ix = log_proportions.shape[0]
-    # for i in nz_lines:
-    for j in numba.prange(nz_lines.shape[0]):
-        i = nz_lines[j]
-        p = indptr[i]
-        q = indptr[i + 1] - 1  # skip the noise
-        ix = indices[p:q]
-        dx = data[p:q] + log_proportions[ix]
-        mx = dx.max()
-        score = mx + np.log(np.exp(dx - mx).sum())
-        noise_score = data[q]  # indptr[i+1]-1 is the noise ix
-        if score > noise_score:
-            scores[j] = score
-            best = dx.argmax()
-            assignments[j] = ix[best]
-        else:
-            scores[j] = noise_score
-            # best = noise_ix
-
-
 def bimodalities_dense(
     log_liks,
     labels,
@@ -3410,14 +3799,18 @@ def getdt(times_i, times_j):
 
 
 def shrinkfit(x, max_size, rg):
-    n = x.numel()
-    if n <= max_size:
-        return x
+    """Randomly subsample to fit x in max_size."""
+    n = len(x)
+    if max_size is None or n <= max_size:
+        return x, slice(None)
 
     choices = rg.choice(n, size=max_size, replace=False)
     choices.sort()
-    choices = torch.from_numpy(choices)
-    return x[choices.to(x.device)]
+    if torch.is_tensor(x):
+        choices = torch.from_numpy(choices)
+        return x[choices.to(x.device)], choices
+    else:
+        return x[choices], choices
 
 
 def get_diff_sparse(sparse_arr, i, j, cols, return_extra=False):
@@ -3489,60 +3882,6 @@ def noise_whiten(
     if with_whitened_means:
         return spw, nu
     return spw
-
-
-def template_scale_map(
-    xw,
-    nu,
-    weights,
-    alpha=1.0,
-    beta=1.0,
-    allow_destroy=False,
-    xtol=1e-2,
-    n_iter=2000,
-    lr=1e-1,
-):
-    n = len(xw)
-    ztnu = xw if allow_destroy else xw.clone()
-    nuw = nu if allow_destroy else nu.clone()
-    del xw, nu
-
-    nuw.mul_(weights.unsqueeze(1))
-    ztnusq = ztnu.mul_(nuw).sum(dim=(1, 2)).square_()
-    nutnu = nuw.square_().sum(dim=(1, 2))
-    del nuw
-    alpha_Non2_1 = alpha + n / 2 - 1.0
-    # init = torch.sum(ztnusq / (1.0 + nutnu))
-    init = torch.tensor(1.0)
-
-    with torch.enable_grad():
-        log_lambd = torch.log(init)
-        log_lambd.requires_grad_(True)
-
-        opt = torch.optim.Adam([log_lambd], lr)
-        for j in range(n_iter):
-            opt.zero_grad()
-            lambd = log_lambd.exp()
-            nutnu_p_lambd = lambd + nutnu
-            logp = (
-                alpha_Non2_1 * log_lambd
-                - beta * lambd
-                - 0.5 * nutnu_p_lambd.log().sum()
-                + 0.5 * (ztnusq / nutnu_p_lambd).sum()
-            )
-            loss = -logp
-            loss.backward()
-            opt.step()
-
-            if j <= 8:
-                continue
-
-            new_lambd = log_lambd.exp()
-            if torch.abs(new_lambd - lambd) < xtol:
-                break
-
-    final = log_lambd.clone().detach().exp_()
-    return 1.0 / final.sqrt()
 
 
 def quick_indices(rg, unit_ids, labels, split_indices=None, max_sizes=4096):

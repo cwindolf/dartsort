@@ -3,6 +3,8 @@ import torch
 import numba
 from scipy.sparse import coo_array, csc_array
 
+from scipy.special import logsumexp
+
 
 def get_coo_storage(ns_total, storage, use_storage):
     if not use_storage:
@@ -26,6 +28,13 @@ def get_coo_storage(ns_total, storage, use_storage):
 
     # return storage.coo_uix, storage.coo_six, storage.coo_data
     return storage.coo_six, storage.coo_data
+
+
+def torch_coo_to_dense(coo_array, fill_value):
+    data = coo_array.data()
+    out = data.new_full(coo_array.shape, fill_value)
+    out[coo_array.indices()] = data
+    return out
 
 
 def coo_to_torch(coo_array, dtype, transpose=False, is_coalesced=True, copy_data=False):
@@ -187,7 +196,13 @@ def csc_sparse_getrow(csc, row, rowcount):
     columns_out = np.empty(rowcount, dtype=rowix_dtype)
     data_out = np.empty(rowcount, dtype=csc.data.dtype)
     _csc_sparse_getrow(
-        csc.indices, csc.indptr, csc.data, columns_out, data_out, rowix_dtype.type(row), rowcount
+        csc.indices,
+        csc.indptr,
+        csc.data,
+        columns_out,
+        data_out,
+        rowix_dtype.type(row),
+        rowcount,
     )
 
     return columns_out, data_out
@@ -222,27 +237,180 @@ def _csc_sparse_getrow(indices, indptr, data, columns_out, data_out, the_row, co
             return
 
 
-# @numba.njit(sigs, error_model="numpy", nogil=True)
-# def _csc_sparse_mask_rows(indices, indptr, data, oldrow_to_newrow, keep_mask):
-#     write_ix = 0
+def sparse_topk(liks, log_proportions=None, k=3):
+    """Top k units for each spike"""
+    # csc is needed here for this to be fast
+    liks = liks.tocsc()
+    nz_lines = np.flatnonzero(np.diff(liks.indptr))
+    nnz = len(nz_lines)
 
-#     column_start = indptr[0]
-#     for column in range(len(indptr) - 1):
-#         column_kept_count = 0
-#         column_end = indptr[column + 1]
+    # see scipy csc argmin/argmax for reference here. this is just numba-ing
+    # a special case of that code which has a python hot loop.
+    topk = np.full((nnz, k), -1)
+    if log_proportions is None:
+        log_proportions = np.zeros(len(liks), dtype=np.float32)
+    else:
+        log_proportions = log_proportions.astype(np.float32)
 
-#         for read_ix in range(column_start, column_end):
-#             row = indices[read_ix]
-#             if not keep_mask[row]:
-#                 continue
+    # this loop ignores sparse zeros. so, no sweat for negative inputs.
+    topk_loop(
+        topk,
+        nz_lines,
+        liks.indptr,
+        liks.data,
+        liks.indices,
+        log_proportions,
+    )
 
-#             indices[write_ix] = oldrow_to_newrow[row]
-#             data[write_ix] = data[read_ix]
-#             column_kept_count += 1
-#             write_ix += 1
+    return topk
 
-#         # indptr[column] is not column_start.
-#         indptr[column + 1] = indptr[column] + column_kept_count
-#         column_start = column_end
 
-#     return write_ix
+sigs = [
+    "void(i8[:, ::1], i8[::1], i4[::1], f4[::1], i4[::1], f4[::1])",
+    "void(i8[:, ::1], i8[::1], i8[::1], f4[::1], i8[::1], f4[::1])",
+]
+
+
+@numba.njit(
+    sigs,
+    error_model="numpy",
+    nogil=True,
+    parallel=True,
+)
+def topk_loop(topk, nz_lines, indptr, data, indices, log_proportions):
+    # for i in nz_lines:
+    k = topk.shape[1]
+    for j in numba.prange(nz_lines.shape[0]):
+        i = nz_lines[j]
+        p = indptr[i]
+        q = indptr[i + 1]
+        ix = indices[p:q]
+        dx = data[p:q] + log_proportions[ix]
+        kj = min(k, q - p)
+        top = dx.argsort()[-kj:]
+        topk[j, :kj] = ix[top[::-1]]
+
+
+def sparse_reassign(liks, proportions=None, log_proportions=None, hard_noise=False):
+    """Reassign spikes to units with largest likelihood
+
+    liks is (n_units, n_spikes). This computes the argmax for each column,
+    treating sparse 0s as -infs rather than as 0s.
+
+    Turns out that scipy's sparse argmin/max have a slow python inner loop,
+    this uses a numba replacement, but I'd like to upstream a cython version.
+    """
+    if not liks.nnz:
+        return (
+            np.arange(0),
+            liks,
+            np.full(liks.shape[1], -1),
+            np.full(liks.shape[1], -np.inf),
+        )
+
+    # csc is needed here for this to be fast
+    liks = liks.tocsc()
+    nz_lines = np.flatnonzero(np.diff(liks.indptr))
+    nnz = len(nz_lines)
+
+    # see scipy csc argmin/argmax for reference here. this is just numba-ing
+    # a special case of that code which has a python hot loop.
+    assignments = np.full(nnz, -1)
+    # these will be filled with logsumexps
+    likelihoods = np.full(nnz, -np.inf, dtype=np.float32)
+
+    # get log proportions, either given logs or otherwise...
+    if log_proportions is None:
+        if proportions is None:
+            log_proportions = np.full(nnz, -np.log(liks.shape[0]), dtype=np.float32)
+        elif torch.is_tensor(proportions):
+            log_proportions = proportions.log().numpy(force=True)
+        else:
+            log_proportions = np.log(proportions)
+    else:
+        if torch.is_tensor(log_proportions):
+            log_proportions = log_proportions.numpy(force=True)
+    log_proportions = log_proportions.astype(np.float32)
+
+    # this loop ignores sparse zeros. so, no sweat for negative inputs.
+    if hard_noise:
+        log_proportions = log_proportions[:-1] - logsumexp(log_proportions[:-1])
+        hard_noise_argmax_loop(
+            assignments,
+            likelihoods,
+            nz_lines,
+            liks.indptr,
+            liks.data,
+            liks.indices,
+            log_proportions,
+        )
+    else:
+        hot_argmax_loop(
+            assignments,
+            likelihoods,
+            nz_lines,
+            liks.indptr,
+            liks.data,
+            liks.indices,
+            log_proportions,
+        )
+
+    return nz_lines, liks, assignments, likelihoods
+
+
+# csc can have int32 or 64 coos on dif platforms? is this an intp? :P
+sigs = [
+    "void(i8[::1], f4[::1], i8[::1], i4[::1], f4[::1], i4[::1], f4[::1])",
+    "void(i8[::1], f4[::1], i8[::1], i8[::1], f4[::1], i8[::1], f4[::1])",
+]
+
+
+@numba.njit(
+    sigs,
+    error_model="numpy",
+    nogil=True,
+    parallel=True,
+)
+def hot_argmax_loop(
+    assignments, scores, nz_lines, indptr, data, indices, log_proportions
+):
+    # for i in nz_lines:
+    for j in numba.prange(nz_lines.shape[0]):
+        i = nz_lines[j]
+        p = indptr[i]
+        q = indptr[i + 1]
+        ix = indices[p:q]
+        dx = data[p:q] + log_proportions[ix]
+        best = dx.argmax()
+        assignments[j] = ix[best]
+        mx = dx.max()
+        scores[j] = mx + np.log(np.exp(dx - mx).sum())
+
+
+@numba.njit(
+    sigs,
+    error_model="numpy",
+    nogil=True,
+    parallel=True,
+)
+def hard_noise_argmax_loop(
+    assignments, scores, nz_lines, indptr, data, indices, log_proportions
+):
+    # noise_ix = log_proportions.shape[0]
+    # for i in nz_lines:
+    for j in numba.prange(nz_lines.shape[0]):
+        i = nz_lines[j]
+        p = indptr[i]
+        q = indptr[i + 1] - 1  # skip the noise
+        ix = indices[p:q]
+        dx = data[p:q] + log_proportions[ix]
+        mx = dx.max()
+        score = mx + np.log(np.exp(dx - mx).sum())
+        noise_score = data[q]  # indptr[i+1]-1 is the noise ix
+        if score > noise_score:
+            scores[j] = score
+            best = dx.argmax()
+            assignments[j] = ix[best]
+        else:
+            scores[j] = noise_score
+            # best = noise_ix

@@ -409,13 +409,16 @@ class KMeansSplit(GMMPlot):
     width = 6.5
     height = 9
 
-    def __init__(self, layout="vert", neighborhood="core"):
+    def __init__(self, merge_criterion=None, layout="vert", neighborhood="core"):
         self.layout = layout
         self.neighborhood = neighborhood
+        self.merge_criterion = merge_criterion
 
     def draw(self, panel, gmm, unit_id, split_info=None):
         if split_info is None:
-            split_info = gmm.kmeans_split_unit(unit_id, debug=True)
+            split_info = gmm.kmeans_split_unit(
+                unit_id, debug=True, merge_criterion=merge_criterion
+            )
         failed0 = not split_info
         failed1 = "reas_labels" not in split_info
         failed = failed0 or failed1

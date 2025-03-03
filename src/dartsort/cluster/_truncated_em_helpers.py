@@ -6,7 +6,6 @@ import torch
 from ..util import spiketorch
 
 log2pi = torch.log(torch.tensor(2 * np.pi))
-_1 = torch.tensor(1.0)
 
 
 DEBUG = False
@@ -62,13 +61,15 @@ class TEBatchResult:
     U: Optional[torch.Tensor] = None
     m: Optional[torch.Tensor] = None
 
-    ddW: Optional[torch.Tensor] = None
+    ddlogpi: Optional[torch.Tensor] = None
+    ddlognoisep: Optional[torch.Tensor] = None
     ddm: Optional[torch.Tensor] = None
-    noise_lls: Optional[torch.Tensor] = None
+    ddW: Optional[torch.Tensor] = None
 
     ncc: Optional[torch.Tensor] = None
     dkl: Optional[torch.Tensor] = None
 
+    noise_lls: Optional[torch.Tensor] = None
     hard_labels: Optional[torch.Tensor] = None
 
     if DEBUG:
@@ -349,11 +350,41 @@ def _te_batch_m_ppca(
     return dict(m=m, R=R, U=U)
 
 
-def obs_elbo(Q, log_liks):
-    logQ = torch.where(Q > 0, Q, _1).log()
-    log_liks = torch.where(Q > 0, log_liks, torch.tensor(0.0))
-    oelbo = torch.sum(Q * (log_liks + logQ), dim=1).mean()
-    return oelbo
+def _grad_counts(noise_N, N, log_pi, log_noise_prop):
+    """Gradient of the ELBO with respect to the log proportions
+
+    In EM, the update is derived with Lagrange multipliers. Here
+    we work by reparameterizing -- backprop thru softmax.
+
+    I'm dividing by batch size here (Q sums to batch size).
+    """
+    Ntot = N.sum() + noise_N
+    delbo_dlogpi = N / Ntot - log_pi.exp()
+    delbo_dlognoiseprop = noise_N / Ntot - log_noise_prop.exp()
+    return Ntot, delbo_dlogpi, delbo_dlognoiseprop
+
+
+#
+# in next 2 fns, note that suff stats m, R, U are already /= Ntot.
+#
+
+
+def _grad_mean(Ntot, N, m, mu, active=slice(None), Cinv=None):
+    N = N / Ntot
+    d = m.reshape(mu.shape) - mu
+    d.mul_(N[:, None])
+    if Cinv is not None and (active == slice(None) or active.numel()):
+        d[active] = d[active] @ Cinv.T
+    return d
+
+
+def _grad_basis(Ntot, N, R, W, U, active=slice(None), Cinv=None):
+    N = N / Ntot
+    d = torch.baddbmm(R.reshape(W.shape), U, W, alpha=-1)
+    d.mul_(N[:, None, None])
+    if Cinv is not None and (active == slice(None) or active.numel()):
+        d[active] = torch.einsum("ij,npj->npi", Cinv, d[active])
+    return d.view(R.shape)
 
 
 def woodbury_inv_quad(whitenedx, whitenednu, wburyroot=None, overwrite_nu=False):
