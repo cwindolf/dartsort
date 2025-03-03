@@ -151,6 +151,7 @@ class DARTsortSorting:
         labels_dataset="labels",
         load_simple_features=True,
         simple_feature_names=None,
+        simple_feature_maxshape=1000,
         labels=None,
     ):
         channels = None
@@ -180,6 +181,7 @@ class DARTsortSorting:
                         k not in loaded
                         and 1 <= h5[k].ndim <= 2
                         and h5[k].shape[0] == n_spikes
+                        and (h5[k].ndim < 2 or h5[k].shape[1] < simple_feature_maxshape)
                     ):
                         extra_features[k] = h5[k][:]
                     elif (k not in loaded and (k.endswith("channel_index") or k == 'geom')):

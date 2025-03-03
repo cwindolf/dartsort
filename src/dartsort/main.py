@@ -61,8 +61,6 @@ def dartsort(
         computation_config=cfg.computation_config,
         overwrite=overwrite,
     )
-    if return_extra:
-        ret["initial_detection"] = sorting
 
     if cfg.subtract_only:
         ret["sorting"] = sorting
@@ -106,9 +104,9 @@ def dartsort(
             ret.update({f"refined0{k}_labels": v for k, v in info.items()})
             ret["refined0_labels"] = sorting.labels.copy()
 
-        # alternate matching with
         for step in range(1, cfg.matching_iterations + 1):
             is_final = step == cfg.matching_iterations
+            #TODO
             prop = 1.0 if is_final else cfg.intermediate_matching_subsampling
 
             sorting = match(
@@ -126,7 +124,7 @@ def dartsort(
                 model_subdir=f"matching{step}_models",
             )
             if return_extra:
-                ret[f"matching{step}"] = sorting
+                ret[f"matching{step}_labels"] = sorting.labels
 
             if (not is_final) or cfg.final_refinement:
                 sorting, info = refine_clustering(
@@ -146,7 +144,6 @@ def dartsort(
         print("traceback...")
         print(traceback.format_exc())
 
-    # done~
     sorting.save(output_directory / "dartsort_sorting.npz")
     ret["sorting"] = sorting
     return ret

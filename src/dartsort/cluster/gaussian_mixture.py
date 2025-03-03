@@ -938,7 +938,7 @@ class SpikeMixtureModel(torch.nn.Module):
         if self.next_round_annotations:
             next_round_annotations = {}
             for j, nra in self.next_round_annotations.items():
-                if keep[j]:
+                if j in old2new:
                     next_round_annotations[old2new[j]] = nra
             self.next_round_annotations = next_round_annotations
 
@@ -1616,18 +1616,22 @@ class SpikeMixtureModel(torch.nn.Module):
                 #     core_neighborhood_ids = core_neighborhoods.neighborhood_ids[
                 #         spike_data.split_indices
                 #     ]
-                unit = GaussianUnit.from_features(
-                    features,
-                    weights=weights[j],  # [in_label],
-                    neighborhoods=train_extract_neighborhoods,
-                    # core_neighborhoods=core_neighborhoods,
-                    # core_neighborhood_ids=core_neighborhood_ids,
-                    channels=self[unit_id].channels.clone(),
-                    **self.split_unit_args,
-                )
-                if unit.channels.numel():
-                    units.append(unit)
-                    lps.append(log_props[j])
+                try:
+                    unit = GaussianUnit.from_features(
+                        features,
+                        weights=weights[j],  # [in_label],
+                        neighborhoods=train_extract_neighborhoods,
+                        # core_neighborhoods=core_neighborhoods,
+                        # core_neighborhood_ids=core_neighborhood_ids,
+                        channels=self[unit_id].channels.clone(),
+                        **self.split_unit_args,
+                    )
+                    if unit.channels.numel():
+                        units.append(unit)
+                        lps.append(log_props[j])
+                except Exception as e:
+                    warnings.warn("Error in mini_merge unit fit. Traceback on the way")
+                    traceback.print_exception(e)
 
             if len(units) <= 1:
                 if debug:

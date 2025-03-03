@@ -62,7 +62,7 @@ class DARTsortUserConfig:
         "peaks or troughs larger than this value will be grabbed.",
     )
     matching_threshold: Annotated[float, Field(gt=0)] = argfield(
-        default=10.0,
+        default=15.0,
         doc="Template matching threshold. If subtracting a template leads "
         "to at least this great of a decrease in the norm of the residual, "
         "that match will be used.",
@@ -167,6 +167,7 @@ class DeveloperConfig(DARTsortUserConfig):
     ] = "heldout_ccl"
     merge_bimodality_threshold: float = 0.05
     n_refinement_iters: int = 3
+    n_em_iters: int = 50
     channels_strategy: str = "count_fuzzcore"
     hard_noise: bool = False
 
