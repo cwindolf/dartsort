@@ -38,10 +38,10 @@ def ptp(waveforms, dim=1):
     return waveforms.max(dim=dim).values - waveforms.min(dim=dim).values
 
 
-def elbo(Q, log_liks, reduce_mean=True):
+def elbo(Q, log_liks, reduce_mean=True, dim=1):
     logQ = torch.where(Q > 0, Q, _1).log_()
     log_liks = torch.where(Q > 0, log_liks, _0)
-    oelbo = torch.sum(Q * (log_liks + logQ), dim=1)
+    oelbo = torch.sum(Q * (log_liks + logQ), dim=dim)
     if reduce_mean:
         oelbo = oelbo.mean()
     return oelbo
@@ -380,7 +380,7 @@ def nancov(
     return cov
 
 
-def woodbury_kl_divergence(C, mu, W=None, out=None, batch_size=32):
+def woodbury_kl_divergence(C, mu, W=None, mus=None, Ws=None, out=None, batch_size=32):
     """KL divergence with the lemmas, up to affine constant with respect to mu and W
 
     Here's the logic between the lines below. Variable names follow this notation.

@@ -481,6 +481,7 @@ class KMeansSplit(GMMPlot):
             )
             ax_bimod.set_title("bimodality", fontsize="small")
         elif "Z" in split_info:
+            assert "improvements" in split_info
             ax_bimod = fig_bimods.subplots()
             improvements = split_info["improvements"]
             olaps = np.floor(split_info["overlaps"] * 100)
@@ -887,9 +888,11 @@ class NeighborTreeMerge(GMMPlot):
 
         # make vis
         olaps = 0.0 if overlaps is None else np.floor(overlaps * 100)
-        annotations = {
-            j: f"{imp:.2f} {olaps[j]:g}" for j, imp in enumerate(improvements)
-        }
+        annotations = None
+        if improvements is not None:
+            annotations = {
+                j: f"{imp:.2f} {olaps[j]:g}" for j, imp in enumerate(improvements)
+            }
         ax = panel.subplots()
         try:
             analysis_plots.annotated_dendro(

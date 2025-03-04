@@ -576,7 +576,7 @@ class TruncatedExpectationProcessor(torch.nn.Module):
 
         oelbo = None
         if with_obs_elbo:
-            oelbo = spiketorch.elbo(Q, eres["log_liks"])
+            oelbo = spiketorch.elbo(Q, eres["log_liks"], dim=1)
 
         hard_labels = None
         if with_hard_labels:

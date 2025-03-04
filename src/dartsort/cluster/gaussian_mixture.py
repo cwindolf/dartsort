@@ -101,7 +101,7 @@ class SpikeMixtureModel(torch.nn.Module):
         distance_normalization_kind: Literal["none", "noise", "channels"] = "noise",
         criterion_normalization_kind: Literal["none", "noise", "channels"] = "none",
         merge_linkage: str = "single",
-        merge_distance_threshold: float = 1.5,
+        merge_distance_threshold: float = 3.0,
         merge_bimodality_threshold: float = 0.1,
         merge_criterion_threshold: float | None = 0.0,
         merge_criterion: Literal[
@@ -493,19 +493,16 @@ class SpikeMixtureModel(torch.nn.Module):
 
         self.cleanup()
 
+        result = dict(records=records, train_records=train_records)
         if not final_e_step:
-            return
+            return result
 
         # final e step for caller
         unit_churn, reas_count, log_liks, spike_logliks = self.e_step(
             show_progress=step_progress, split=final_split
         )
         log_liks, _ = self.cleanup(log_liks, relabel_split=final_split)
-        result = dict(
-            log_liks=log_liks,
-            records=records,
-            train_records=train_records,
-        )
+        result["log_liks"] = log_liks
         return result
 
     def em(
@@ -1500,25 +1497,27 @@ class SpikeMixtureModel(torch.nn.Module):
             )
         if split_labels is None:
             return result
-        split_ids, split_counts = np.unique(split_labels, return_counts=True)
-        valid = split_ids >= 0
-        if not valid.any():
+        # flatten the label space
+        kept = np.flatnonzero(split_labels >= 0)
+        if not kept.size:
             return result
-        split_ids = split_ids[valid]
-        if not np.array_equal(split_ids, np.arange(len(split_ids))):
-            raise ValueError(f"Bad {split_ids=}")
+        split_ids, flat_labels, split_counts = np.unique(
+            split_labels[kept], return_inverse=True, return_counts=True
+        )
+        n_new_units = split_ids.size - 1
+        del split_ids  # just making this clear, because those ids changed anyway
+        split_labels[kept] = torch.from_numpy(flat_labels)
 
         if debug:
             result["merge_labels"] = split_labels
             return result
 
         split_labels = torch.asarray(split_labels, device=self.labels.device)
-        n_new_units = split_ids.size - 1
         if n_new_units <= 1:
             # quick case
             with self.labels_lock:
                 self.labels[indices_full] = -1
-                self.labels[sp.indices[split_labels >= 0]] = unit_id
+                self.labels[sp.indices[kept]] = unit_id
             return result
 
         # else, tack new units onto the end
@@ -1539,7 +1538,6 @@ class SpikeMixtureModel(torch.nn.Module):
                 return
 
             # each sub-unit's prop is its fraction of assigns * orig unit prop
-            split_counts = split_counts[valid]
             new_log_props = np.log(split_counts) - np.log(split_counts.sum())
             new_log_props = torch.from_numpy(new_log_props).to(self.log_proportions)
             new_log_props += self.log_proportions[unit_id]
@@ -2173,21 +2171,9 @@ class SpikeMixtureModel(torch.nn.Module):
         # -- fit hypothetical units
         # pick spikes to fit (if necessary)
         if hyp_fit_spikes is None:
-            ixs = []
-            splitixs = []
-            for u in current_unit_ids:
-                _, ix, splitix = self.random_indices(
-                    u, max_size=fit_spikes_per_current_unit
-                )
-                ixs.append(ix)
-                splitixs.append(splitix)
-            ixs = torch.cat(ixs)
-            fit_max_count = fit_max_factor * self.n_spikes_fit
-            ixs, choices = shrinkfit(ixs, fit_max_count, self.rg)
-            ixs, order = torch.sort(ixs)
-            splitixs = torch.cat(splitixs)[choices][order]
-            hyp_fit_spikes = self.data.spike_data(
-                ixs, split_indices=splitixs, with_neighborhood_ids=True
+            fit_max_count = min(fit_max_factor, n_cur) * self.n_spikes_fit
+            hyp_fit_spikes = self.random_spike_data(
+                unit_ids=current_unit_ids, with_neighborhood_ids=True
             )
 
         # get total current responsibility for fit spikes
@@ -2207,12 +2193,9 @@ class SpikeMixtureModel(torch.nn.Module):
             assert n_fit == len(hyp_fit_spikes)
 
             # fit them...
-            _, tens = self.data.neighborhoods(neighborhood="extract")
             hyp_units = [
                 self.fit_unit(
-                    features=hyp_fit_spikes,
-                    weights=w,
-                    channels=hyp_fit_channels,
+                    features=hyp_fit_spikes, weights=w, channels=hyp_fit_channels
                 )
                 for w in hyp_fit_weights
             ]
@@ -2254,11 +2237,6 @@ class SpikeMixtureModel(torch.nn.Module):
         cur_liks_full = self.get_log_likelihoods(
             spikes.indices, current_log_liks, dense=True
         )
-        irr_liks = cur_liks_full[irrix]
-
-        # current chop block units and irrelevant units
-        # note -- these don't really make sense on their own. they need to be
-        # combined with logsumexp.
         cur_logliks = cur_liks_full.logsumexp(dim=0)
 
         # hypothetical units
@@ -2269,20 +2247,22 @@ class SpikeMixtureModel(torch.nn.Module):
             )
             if hull is not None:
                 hyp_liks[j] = hyp_log_props[j] + hull
-        hyp_liks_full = torch.concatenate((irr_liks, hyp_liks), dim=0)
+        hyp_liks_full = torch.concatenate((cur_liks_full[irrix], hyp_liks), dim=0)
         hyp_logliks = hyp_liks_full.logsumexp(dim=0)
 
         # we can only work on this subset...
         valid = torch.logical_and(cur_logliks.isfinite(), hyp_logliks.isfinite())
         (vix,) = valid.nonzero(as_tuple=True)
+        if vix.numel() == len(spikes):
+            vix = slice(None)
         cur_loglik = cur_logliks[vix].mean()
         hyp_loglik = hyp_logliks[vix].mean()
 
         # -- evaluate heldout elbos
         Qcur = cur_liks_full[:, vix].softmax(dim=0)
         Qhyp = hyp_liks_full[:, vix].softmax(dim=0)
-        cur_elbo = spiketorch.elbo(Qcur, cur_liks_full[:, vix], reduce_mean=True)
-        hyp_elbo = spiketorch.elbo(Qhyp, hyp_liks_full[:, vix], reduce_mean=True)
+        cur_elbo = spiketorch.elbo(Qcur, cur_liks_full[:, vix], dim=0, reduce_mean=True)
+        hyp_elbo = spiketorch.elbo(Qhyp, hyp_liks_full[:, vix], dim=0, reduce_mean=True)
 
         # -- compute final class weighted metrics
         hyp_single = n_hyp == 1
@@ -3403,7 +3383,6 @@ class GaussianUnit(torch.nn.Module):
         other_covs=None,
         other_logdets=None,
         kind="noise_metric",
-        noiseinv_covs=None,
     ):
         """Compute my distance to other units
 
@@ -3417,9 +3396,7 @@ class GaussianUnit(torch.nn.Module):
             if kind == "kl":
                 return kl1
         if kind in ("reverse_kl", "symkl"):
-            kl2 = self.reverse_kl_divergence(
-                other_means, other_covs, other_logdets, noiseinv_covs=noiseinv_covs
-            )
+            kl2 = self.reverse_kl_divergence(other_means, other_covs, other_logdets)
             if kind == "reverse_kl":
                 return kl2
         if kind == "symkl":
@@ -3508,7 +3485,7 @@ class GaussianUnit(torch.nn.Module):
         return kl
 
     def reverse_kl_divergence(
-        self, other_means, other_covs, other_logdets, noiseinv_covs=None, batch_size=32
+        self, other_means, other_covs, other_logdets, batch_size=32
     ):
         """DKL(others || self)
         = 0.5 * {
@@ -3540,15 +3517,11 @@ class GaussianUnit(torch.nn.Module):
             tr = other_covs.new_empty((n,))
             for bs in range(0, n, batch_size):
                 be = min(n, bs + batch_size)
-                if noiseinv_covs is not None:
-                    Ainv_rhs = noiseinv_covs[bs:be]
-                else:
-                    Ainv_rhs = None
-                res = my_cov._solve(oW[bs:be], Ainv_rhs=Ainv_rhs)
+                res = my_cov.solve(oW[bs:be])
                 res = res @ oW[bs:be].mT
                 tr[bs:be] = res.diagonal(dim1=-2, dim2=-1).sum(dim=1)
             ncov = self.noise.full_dense_cov()
-            tr += torch.trace(my_cov._solve(ncov, Ainv_rhs=self.noise.full_covinvcov()))
+            tr += torch.trace(my_cov.solve(ncov))
             ld = self_logdet - other_logdets
         return 0.5 * (inv_quad + (tr - k + ld))
 
