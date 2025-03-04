@@ -461,10 +461,7 @@ class SpikeMixtureModel(torch.nn.Module):
             msg = f"t{algorithm}[oelbo/n={res['obs_elbo']:0.2f}]"
             if show_progress:
                 its.set_description(msg)  # pyright: ignore
-        print(f"{np.any(np.diff([r['obs_elbo'] for r in records])<0)=}")
-        print(f"{[r['obs_elbo'] for r in records]=}")
 
-        print("post its", flush=True)
         assert labels is not None
 
         # reupdate my GaussianUnits
@@ -1499,6 +1496,7 @@ class SpikeMixtureModel(torch.nn.Module):
                 hyp_fit_spikes=sp,
                 hyp_fit_resps=responsibilities.T,
                 merge_criterion=merge_criterion,
+                debug_info=result if debug else None,
             )
         if split_labels is None:
             return result
@@ -1817,7 +1815,6 @@ class SpikeMixtureModel(torch.nn.Module):
         Z = linkage(distances)
         n_units = len(Z) + 1
         n_branches = n_units - 1
-        assert n_units == current_log_liks.shape[0] - 1
 
         if unit_ids is None:
             unit_ids = np.arange(n_units)
@@ -1884,49 +1881,38 @@ class SpikeMixtureModel(torch.nn.Module):
         debug_info=None,
     ):
         debug = debug_info is not None
-        current_unit_ids = set(unit_id)
+        current_unit_ids = [unit_id]
         if merge_criterion is None:
             merge_criterion = self.merge_criterion
         if max_distance is None:
             max_distance = self.merge_distance_threshold
 
-        # -- fit the full expanded model
-        _, train_extract_neighborhoods = self.data.neighborhoods(neighborhood="extract")
-        units = []
-        resps = []
-        fit_channels = self[unit_id].channels.clone()
-        for w in hyp_fit_resps:
-            unit = GaussianUnit.from_features(
-                hyp_fit_spikes,
-                weights=w,
-                neighborhoods=train_extract_neighborhoods,
-                channels=fit_channels,
-                **self.split_unit_args,
-            )
-            if unit.channels.numel():
-                units.append(unit)
-                resps.append(w)
-        n_units = len(units)
-        if n_units <= 1:
-            return None
-        hyp_fit_resps = torch.stack(resps, dim=0)
-        n_fit = hyp_fit_resps.shape[1]
-
         # -- evaluate full model
+        fit_channels = self[unit_id].channels.clone()
+        n_fit = hyp_fit_resps.shape[1]
         full_info = self.validation_criterion(
             self.log_liks,
             current_unit_ids=current_unit_ids,
-            hyp_units=units,
+            hyp_fit_resps=hyp_fit_resps,
+            hyp_fit_spikes=hyp_fit_spikes,
+            hyp_fit_channels=fit_channels,
+            label_fit_spikes=True,
         )
         best_improvement = full_info["improvements"][merge_criterion]
         best_labels = full_info["labels"]
+        units = full_info["hyp_units"]
+        n_units = len(units)
         if debug:
             debug_info["reas_labels"] = best_labels
             debug_info["units"] = units
+        if n_units <= 1:
+            if debug:
+                debug_info["bail"] = f" since {n_units=} {hyp_fit_resps.shape=}"
+            return None
 
         # -- make linkage and leafsets
         _, distances = self.distances(units=units, show_progress=False)
-        assert distances.shape == (n_units, n_units)
+        assert distances.shape == (n_units, n_units)  # pyright: ignore
         if debug:
             debug_info["distances"] = distances
         distances = sym_function(distances, distances.T)
@@ -1964,7 +1950,7 @@ class SpikeMixtureModel(torch.nn.Module):
             cur_ids = np.unique(group_ids)
             level_resps = hyp_fit_resps.new_zeros((len(cur_ids), n_fit))
             for j, cid in enumerate(cur_ids):
-                in_cid = cur_ids == cid
+                in_cid = group_ids == cid
                 level_resps[j] = hyp_fit_resps[in_cid].sum(0)
 
             # evaluate the corresponding model
@@ -1974,6 +1960,7 @@ class SpikeMixtureModel(torch.nn.Module):
                 hyp_fit_spikes=hyp_fit_spikes,
                 hyp_fit_resps=level_resps,
                 hyp_fit_channels=fit_channels.clone(),
+                label_fit_spikes=True,
             )
             improvement = crit["improvements"][merge_criterion]
 
@@ -2132,9 +2119,12 @@ class SpikeMixtureModel(torch.nn.Module):
         hyp_fit_spikes=None,
         hyp_fit_resps=None,
         hyp_fit_channels=None,
+        label_fit_spikes=False,
         fit_spikes_per_current_unit=None,
         fit_max_factor=2,
-    ) -> dict[Literal["improvements", "overlap", "labels"], Any]:
+    ) -> dict[
+        Literal["improvements", "overlap", "hyp_units", "labels", "heldout_labels"], Any
+    ]:
         """Validation criteria to choose between current or hypothetical model
 
         This code handles two cases: splitting and merging.
@@ -2174,11 +2164,11 @@ class SpikeMixtureModel(torch.nn.Module):
             responsibility is the sum of current units' resps.
         """
         # -- validate args
-        fit_unset = hyp_fit_spikes is None
-        assert (hyp_fit_resps is None) == fit_unset
         current_unit_ids = set(current_unit_ids)
         n_cur = len(current_unit_ids)
-        irrix = set(range(len(current_log_liks))) - current_unit_ids
+        irrix = set(range(current_log_liks.shape[0])) - current_unit_ids
+        current_unit_ids = torch.tensor(list(current_unit_ids), dtype=torch.long)
+        irrix = torch.tensor(list(irrix))
 
         # -- fit hypothetical units
         # pick spikes to fit (if necessary)
@@ -2205,8 +2195,9 @@ class SpikeMixtureModel(torch.nn.Module):
             cur_fit_liks = self.get_log_likelihoods(
                 hyp_fit_spikes.indices, current_log_liks
             )
-            cur_fit_weights = torch.sparse.softmax(cur_fit_liks, dim=0)
-            cur_resp = cur_fit_weights[current_unit_ids].sum(dim=0)
+            cur_resp = torch.sparse.softmax(cur_fit_liks, dim=0)
+            cur_resp = cur_resp.index_select(dim=0, index=current_unit_ids)
+            cur_resp = cur_resp.sum(dim=0).to_dense()
 
             # fit weights for hypothetical units
             hyp_fit_weights = cur_resp.unsqueeze(0)
@@ -2216,22 +2207,40 @@ class SpikeMixtureModel(torch.nn.Module):
             assert n_fit == len(hyp_fit_spikes)
 
             # fit them...
+            _, tens = self.data.neighborhoods(neighborhood="extract")
             hyp_units = [
                 self.fit_unit(
-                    features=hyp_fit_spikes, weights=w, channels=hyp_fit_channels
+                    features=hyp_fit_spikes,
+                    weights=w,
+                    channels=hyp_fit_channels,
                 )
                 for w in hyp_fit_weights
             ]
         n_hyp = len(hyp_units)
 
         # what are the log props?
-        cur_log_prop = self.log_proportions[current_unit_ids].logsumexp(dim=0)
+        cur_log_prop = self.log_proportions[current_unit_ids].logsumexp(
+            dim=0, keepdim=True
+        )
         if hyp_fit_resps is not None:
             hyp_rel_log_props = hyp_fit_resps.mean(1).log_()
             hyp_rel_log_props = torch.log_softmax(hyp_rel_log_props, dim=0)
             hyp_log_props = cur_log_prop + hyp_rel_log_props
         else:
-            hyp_log_props = cur_log_prop
+            hyp_log_props = cur_log_prop.broadcast_to(n_hyp)
+
+        # -- in the split step, we want hyp labels for the fit spikes
+        labels = None
+        if label_fit_spikes:
+            fit_liks = hyp_fit_resps.new_full((n_hyp, len(hyp_fit_spikes)), -torch.inf)
+            for j, hu in enumerate(hyp_units):
+                fll = self.unit_log_likelihoods(
+                    unit=hu, spikes=hyp_fit_spikes, ignore_channels=True
+                )
+                if fll is not None:
+                    fit_liks[j] = hyp_log_props[j] + fll
+            vals, labels = fit_liks.max(dim=0)
+            labels = torch.where(vals.isfinite(), labels, -1)
 
         # -- grab heldout spikes from within current units
         spikes = self.random_spike_data(
@@ -2242,8 +2251,9 @@ class SpikeMixtureModel(torch.nn.Module):
         )
 
         # -- evaluate heldout log likelihoods
-        cur_liks_full = self.get_log_likelihoods(spikes.indices, current_log_liks)
-        cur_liks_full = torch_coo_to_dense(cur_liks_full, -torch.inf)
+        cur_liks_full = self.get_log_likelihoods(
+            spikes.indices, current_log_liks, dense=True
+        )
         irr_liks = cur_liks_full[irrix]
 
         # current chop block units and irrelevant units
@@ -2254,11 +2264,13 @@ class SpikeMixtureModel(torch.nn.Module):
         # hypothetical units
         hyp_liks = cur_liks_full.new_full((n_hyp, len(spikes)), -torch.inf)
         for j, hu in enumerate(hyp_units):
-            hull = self.unit_log_likelihoods(unit=hu, spikes=spikes)
+            hull = self.unit_log_likelihoods(
+                unit=hu, spikes=spikes, ignore_channels=True
+            )
             if hull is not None:
                 hyp_liks[j] = hyp_log_props[j] + hull
         hyp_liks_full = torch.concatenate((irr_liks, hyp_liks), dim=0)
-        hyp_logliks = hyp_liks_full.logsumexp(dim=0).mean()
+        hyp_logliks = hyp_liks_full.logsumexp(dim=0)
 
         # we can only work on this subset...
         valid = torch.logical_and(cur_logliks.isfinite(), hyp_logliks.isfinite())
@@ -2278,13 +2290,18 @@ class SpikeMixtureModel(torch.nn.Module):
         assert hyp_single or cur_single
         if hyp_single:
             cur_liks = cur_liks_full[current_unit_ids]
-            labels = cur_liks.argmax(0)
+            heldout_labels = cur_liks.argmax(0)
         else:
-            labels = hyp_liks.argmax(0)
+            heldout_labels = hyp_liks.argmax(0)
+
+        # reweight by proportion
+        prop = cur_log_prop.exp() * len(self.log_proportions)
+        cur_loglik = prop * cur_loglik
+        hyp_loglik = prop * hyp_loglik
+        cur_elbo = prop * cur_elbo
+        hyp_elbo = prop * hyp_elbo
 
         # always hyp-cur
-        # d_loglik = class_balance(labels, hyp_loglik, cur_loglik)
-        # d_elbo = class_balance(labels, hyp_elbo, cur_elbo)
 
         improvements = dict(
             heldout_loglik=hyp_loglik - cur_loglik,
@@ -2298,7 +2315,9 @@ class SpikeMixtureModel(torch.nn.Module):
         # -- compute overlap for the caller
         # caller may not want to shrink the model if one of the classes
         # was poorly covered when computing the metrics
-        ids, ixs, counts = labels.unique(return_inverse=True, return_counts=True)
+        ids, ixs, counts = heldout_labels.unique(
+            return_inverse=True, return_counts=True
+        )
         props = hyp_liks.new_zeros(ids.shape)
         spiketorch.add_at_(props, ixs[vix], 1.0)
         props /= counts
@@ -2310,6 +2329,8 @@ class SpikeMixtureModel(torch.nn.Module):
             full_criteria=full_criteria,
             overlap=overlap,
             labels=labels,
+            hyp_units=hyp_units,
+            heldout_labels=heldout_labels,
         )
 
     def old_merge_criteria(
@@ -2889,10 +2910,10 @@ class SpikeMixtureModel(torch.nn.Module):
         elif merge_kind == "tree":
             Z, group_ids, improvements, overlaps = self.tree_merge(
                 distances,
-                self.log_liks,  # TODO: not this.
+                current_log_liks=self.log_liks,  # TODO: not this.
                 unit_ids=unit_ids,
                 max_distance=self.merge_distance_threshold,
-                criterion=self.merge_criterion,
+                criterion=merge_criterion,
                 sym_function=self.merge_sym_function,
                 show_progress=show_progress,
             )
@@ -2913,7 +2934,7 @@ class SpikeMixtureModel(torch.nn.Module):
                 override_unit_id=override_unit_id,
                 spikes_extract=spike_data,
                 max_distance=self.merge_distance_threshold,
-                criterion=self.merge_criterion,
+                criterion=merge_criterion,
                 likelihoods=likelihoods,
                 log_proportions=log_proportions,
                 sym_function=self.merge_sym_function,

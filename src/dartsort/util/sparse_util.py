@@ -37,7 +37,9 @@ def torch_coo_to_dense(coo_array, fill_value):
     return out
 
 
-def coo_to_torch(coo_array, dtype, transpose=False, is_coalesced=True, copy_data=False):
+def coo_to_torch(
+    coo_array, dtype, transpose=False, is_coalesced=False, copy_data=False
+):
     coo = (
         torch.from_numpy(coo_array.coords[int(transpose)]),
         torch.from_numpy(coo_array.coords[1 - int(transpose)]),
@@ -51,6 +53,8 @@ def coo_to_torch(coo_array, dtype, transpose=False, is_coalesced=True, copy_data
         size=(s0, s1),
         is_coalesced=is_coalesced,
     )
+    if not is_coalesced:
+        res = res.coalesce()
     return res
 
 

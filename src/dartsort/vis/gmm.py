@@ -409,15 +409,19 @@ class KMeansSplit(GMMPlot):
     width = 6.5
     height = 9
 
-    def __init__(self, merge_criterion=None, layout="vert", neighborhood="core"):
+    def __init__(self, criterion=None, layout="vert", neighborhood="core"):
         self.layout = layout
         self.neighborhood = neighborhood
-        self.merge_criterion = merge_criterion
+        self.criterion = criterion
 
     def draw(self, panel, gmm, unit_id, split_info=None):
+        criterion = self.criterion
+        if criterion is None:
+            criterion = gmm.merge_criterion
+
         if split_info is None:
             split_info = gmm.kmeans_split_unit(
-                unit_id, debug=True, merge_criterion=merge_criterion
+                unit_id, debug=True, merge_criterion=criterion
             )
         failed0 = not split_info
         failed1 = "reas_labels" not in split_info
@@ -432,7 +436,7 @@ class KMeansSplit(GMMPlot):
             ax.axis("off")
             return
 
-        split_labels = split_info["reas_labels"]
+        split_labels = split_info["split_labels"]
         split_ids = np.unique(split_labels)
 
         kw = dict(nrows=4, height_ratios=[1, 1, 2, 2])
@@ -491,7 +495,7 @@ class KMeansSplit(GMMPlot):
                 annotations_offset_by_n=False,
             )
             ax_bimod.set_title(
-                f"tree {gmm.distance_metric} {gmm.merge_criterion}-{gmm.criterion_normalization_kind}",
+                f"tree {gmm.distance_metric} {criterion}-{gmm.criterion_normalization_kind}",
                 fontsize="small",
             )
             sns.despine(ax=ax_bimod, left=True, right=True, top=True)
@@ -627,7 +631,7 @@ class NeighborDistances(GMMPlot):
         normalization_kind = self.normalization_kind
         if normalization_kind is None:
             normalization_kind = gmm.distance_normalization_kind
-        distances = gmm.distances(
+        ids, distances = gmm.distances(
             units=[gmm[u] for u in neighbors],
             show_progress=False,
             kind=metric,
@@ -855,24 +859,34 @@ class NeighborTreeMerge(GMMPlot):
         if criterion_normalization_kind is None:
             criterion_normalization_kind = gmm.criterion_normalization_kind
 
-        distances = gmm.distances(
+        ids, distances = gmm.distances(
             units=[gmm[u] for u in neighbors],
             show_progress=False,
             kind=metric,
             normalization_kind=distance_normalization_kind,
         )
 
-        Z, group_ids, improvements, overlaps = gmm.tree_merge(
-            distances,
-            neighbors,
-            max_distance=self.max_distance,
-            likelihoods=gmm.log_liks,
-            criterion=criterion,
-            threshold=self.threshold,
-        )
+        if criterion.startswith("old"):
+            Z, group_ids, improvements, overlaps = gmm.old_tree_merge(
+                distances,
+                neighbors,
+                max_distance=self.max_distance,
+                likelihoods=gmm.log_liks,
+                criterion=criterion,
+                threshold=self.threshold,
+            )
+        else:
+            Z, group_ids, improvements, overlaps = gmm.tree_merge(
+                distances,
+                unit_ids=neighbors,
+                current_log_liks=gmm.log_liks,
+                max_distance=self.max_distance,
+                criterion=criterion,
+                threshold=self.threshold,
+            )
 
         # make vis
-        olaps = np.floor(overlaps * 100)
+        olaps = 0.0 if overlaps is None else np.floor(overlaps * 100)
         annotations = {
             j: f"{imp:.2f} {olaps[j]:g}" for j, imp in enumerate(improvements)
         }
