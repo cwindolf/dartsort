@@ -1,3 +1,5 @@
+import gc
+
 from .. import config
 from ..util import job_util, noise_util
 from .split import split_clusters
@@ -76,7 +78,8 @@ def refine_clustering(
     intermediate_split = "full" if return_step_labels else "kept"
     for it in range(refinement_config.n_total_iters):
         if refinement_config.truncated:
-            log_liks, _ = gmm.tem(final_split=intermediate_split)
+            res = gmm.tvi(final_split=intermediate_split)
+            log_liks = res["log_liks"]
         else:
             log_liks = gmm.em(final_split=intermediate_split)
         if return_step_labels:
@@ -93,27 +96,35 @@ def refine_clustering(
             # TODO: not this.
             gmm.log_liks = log_liks
             gmm.split()
-            del log_liks; gmm.log_liks = None; import gc; gc.collect()
+            del log_liks
+            gmm.log_liks = None
+
+            gc.collect()
             if refinement_config.truncated:
-                log_liks, _ = gmm.tem(final_split=intermediate_split)
+                res = gmm.tvi(final_split=intermediate_split)
+                log_liks = res["log_liks"]
             else:
                 log_liks = gmm.em(final_split=intermediate_split)
             if return_step_labels:
                 step_labels[f"refstepbsplit{it}"] = gmm.labels.numpy(force=True).copy()
         gmm.merge(log_liks)
-        del log_liks; import gc; gc.collect()
+        del log_liks
+
+        gc.collect()
         if return_step_labels:
             step_labels[f"refstepcmerge{it}"] = gmm.labels.numpy(force=True).copy()
 
     if refinement_config.truncated:
-        log_liks = gmm.tem(final_split="full")
+        res = gmm.tvi(final_split="full")
+        log_liks = res  # not actually! but just to del it later.
     else:
         log_liks = gmm.em(final_split="full")
-    del log_liks; import gc; gc.collect()
+    del log_liks
+
+    gc.collect()
     gmm.cpu()
     sorting = gmm.to_sorting()
     del gmm
-    import gc
 
     gc.collect()
     return sorting, step_labels

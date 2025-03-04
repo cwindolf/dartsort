@@ -339,14 +339,16 @@ class RefinementConfig:
     merge_criterion_threshold: float | None = 0.0
     merge_criterion: Literal[
         "heldout_loglik",
-        "heldout_ccl",
-        "loglik",
-        "ccl",
-        "aic",
-        "bic",
-        "icl",
+        "heldout_elbo",
+        "old_heldout_loglik",
+        "old_heldout_ccl",
+        "old_loglik",
+        "old_ccl",
+        "old_aic",
+        "old_bic",
+        "old_icl",
         "bimodality",
-    ] = "heldout_ccl"
+    ] = "heldout_elbo"
     merge_bimodality_threshold: float = 0.05
     n_em_iters: int = 25
     em_converged_prop: float = 0.02
