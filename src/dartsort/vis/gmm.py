@@ -500,6 +500,8 @@ class KMeansSplit(GMMPlot):
                 fontsize="small",
             )
             sns.despine(ax=ax_bimod, left=True, right=True, top=True)
+            if "full_improvement" in split_info:
+                ax_bimod.set_xlabel(f"full split: {split_info['full_improvement']:.3f}")
         else:
             ax_bimod = fig_bimods.subplots()
             ax_bimod.text(

@@ -1903,6 +1903,7 @@ class SpikeMixtureModel(torch.nn.Module):
         if debug:
             debug_info["reas_labels"] = best_labels
             debug_info["units"] = units
+            debug_info["full_improvement"] = best_improvement.numpy(force=True).item()
         if n_units <= 1:
             if debug:
                 debug_info["bail"] = f" since {n_units=} {hyp_fit_resps.shape=}"
