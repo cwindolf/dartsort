@@ -130,10 +130,10 @@ class DARTsortSorting:
         feat_str = ""
         if self.extra_features:
             feat_str = ", ".join(self.extra_features.keys())
-            feat_str = f" extra features: {feat_str}."
+            feat_str = f" Extras: {feat_str}."
         h5_str = ""
         if self.parent_h5_path:
-            h5_str = f" from parent h5 file {self.parent_h5_path}."
+            h5_str = f" From HDF5 file {self.parent_h5_path}."
         return f"{name}: {ns} spikes, {unit_str}.{feat_str}{h5_str}"
 
     def __repr__(self):

@@ -1,7 +1,7 @@
 from typing import Optional
 import numpy as np
 import torch
-import threading
+import logging
 import joblib
 from linear_operator import operators
 from linear_operator.utils.cholesky import psd_safe_cholesky
@@ -23,6 +23,8 @@ from ._truncated_em_helpers import (
     units_overlapping_neighborhoods,
 )
 from ..util import spiketorch
+
+logger = logging.getLogger(__name__)
 
 
 class SpikeTruncatedMixtureModel(torch.nn.Module):
@@ -46,6 +48,7 @@ class SpikeTruncatedMixtureModel(torch.nn.Module):
             n_search = n_candidates
         if n_explore is None:
             n_explore = n_search
+        logger.dartsortdebug(f"Making a TMM with {data.n_spikes=} {data.n_spikes_kept=} {M=}")
         self.data = data
         self.noise = noise
         self.M = M
@@ -54,6 +57,7 @@ class SpikeTruncatedMixtureModel(torch.nn.Module):
         self.exact_kl = exact_kl
         train_indices, self.train_neighborhoods = self.data.neighborhoods("extract")
         self.n_spikes = train_indices.numel()
+        logger.dartsortdebug(f"TMM will fit to {train_indices.shape=}")
         self.processor = TruncatedExpectationProcessor(
             noise=noise,
             neighborhoods=self.train_neighborhoods,
@@ -82,6 +86,7 @@ class SpikeTruncatedMixtureModel(torch.nn.Module):
         self.n_units = nu = means.shape[0]
         assert means.shape == (nu, self.noise.rank, self.noise.n_channels)
         self.register_buffer("means", F.pad(means, (0, 1)))
+        logger.dartsortdebug(f"Setting TMM parameters {labels.shape=} {means.shape=}")
 
         assert log_proportions.shape == (nu,)
         self.register_buffer("_N", torch.zeros(nu + 1))
@@ -853,7 +858,7 @@ class CandidateSet:
         self.n_candidates = n_candidates
         self.n_search = n_search
         self.n_explore = n_explore
-        n_total = self.n_candidates * (self.n_search + 1) + self.n_explore
+        n_total = self.n_candidates * self.n_search + self.n_explore
 
         can_pin = device is not None and device.type == "cuda"
         self.candidates = torch.empty(
@@ -863,6 +868,8 @@ class CandidateSet:
 
     def initialize_candidates(self, labels, closest_neighbors):
         """Imposes invariant 1, or at least tries to start off well."""
+        assert labels.shape[0] == self.n_spikes
+        assert closest_neighbors.shape[1] == self.n_candidates
         torch.index_select(
             closest_neighbors,
             dim=0,

@@ -14,6 +14,8 @@ from linear_operator import operators
 from scipy.cluster.hierarchy import linkage
 from scipy.sparse import coo_array, csc_array
 from scipy.special import logsumexp
+from scipy.spatial import KDTree
+from scipy.spatial.distance import pdist
 from tqdm.auto import tqdm, trange
 
 from ..util import more_operators, noise_util, spiketorch
@@ -41,14 +43,6 @@ from . import truncated_mixture
 logger = logging.getLogger(__name__)
 
 # -- main class
-
-"""
-Thanks for checking in about that! I guess I hadn't been thinking about
-it very formally yet. I do feel that I'm interested in driving the project
-and being in charge of the vision, at least for the unsupervised denoising
-part of it, and I do have a medium-term roadmap for getting that model up
-and running and starting to evaluate it. That said, I'm definitely 
-"""
 
 
 class SpikeMixtureModel(torch.nn.Module):
@@ -347,6 +341,7 @@ class SpikeMixtureModel(torch.nn.Module):
         tmm_kwargs={},
     ):
         # TODO: hang on to this and update it in place
+        logger.dartsortdebug(f"TEM with {self.data.n_spikes=} {self.data.n_spikes_kept=}")
         tmm = truncated_mixture.SpikeTruncatedMixtureModel(
             self.data,
             self.noise,
@@ -372,8 +367,20 @@ class SpikeMixtureModel(torch.nn.Module):
 
         # try reassigning without noise unit...
         lls = self.log_likelihoods(with_noise_unit=True, show_progress=True)
-        labels_full = loglik_reassign(lls[:-1])[1]
         self.update_proportions(lls)
+        lls = lls[:, self.data.split_indices["train"]]
+        labels_full = loglik_reassign(lls[:-1])[1]
+        unmatched = labels_full < 0
+        if unmatched.any():
+            g = self.data.prgeom[:-1]
+            coms = np.array([self[j].com(g).numpy(force=True).item() for j in ids])
+            uix = self.data.split_indices["train"][unmatched]
+            ux = g[self.data.original_sorting.channels[uix]].numpy(force=True)
+            coms = KDTree(coms)
+            _, closest = coms.query(ux, workers=-1)
+            assert (closest < coms.n).all()
+            labels_full[unmatched] = closest
+
         del lls
         logprops = self.log_proportions
         assert logprops is not None
@@ -404,9 +411,11 @@ class SpikeMixtureModel(torch.nn.Module):
 
         print("post its", flush=True)
         labels = res["labels"]  # pyright: ignore [reportPossiblyUnboundVariable]
+        print(f"{np.unique(labels, return_counts=True)=}")
         assert labels is not None
 
         # reupdate my GaussianUnits
+        print(f"reset units", flush=True)
         self.clear_units()
         # not needed. we'll do e step.
         # self.labels[self.data.split_indices["train"]] = labels
@@ -435,14 +444,20 @@ class SpikeMixtureModel(torch.nn.Module):
 
         self.cleanup()
 
+        gc.collect()
+        torch.cuda.empty_cache()
+
         if not final_e_step:
             return
 
         # final e step for caller
+        print(f"final E", flush=True)
         unit_churn, reas_count, log_liks, spike_logliks = self.e_step(
             show_progress=step_progress, split=final_split
         )
+        print(f"final E done", flush=True)
         log_liks, _ = self.cleanup(log_liks, relabel_split=final_split)
+        print(f"ret", flush=True)
         return log_liks, records
 
     def em(
@@ -670,6 +685,7 @@ class SpikeMixtureModel(torch.nn.Module):
                 covered_neighbs = unit.annotations["covered_neighbs"]
             core_overlaps[covered_neighbs] += 1
             nnz += ns_unit
+        print(f"log likelihoods {nnz=}")
 
         # how many units does each spike overlap with? needed to write csc
         # embed the split indices in the global space
@@ -1573,14 +1589,18 @@ class SpikeMixtureModel(torch.nn.Module):
             )
             log_props = torch.tensor(lps, device=lls.device)
             for j, unit in enumerate(units):
-                lls_ = self.unit_log_likelihoods(
-                    unit=unit,
-                    spike_indices=spike_data.indices,
-                    spike_split_indices=spike_data.split_indices,
-                    ignore_channels=True,
-                )
-                if lls_ is not None:
-                    lls[j] = lls_
+                try:
+                    lls_ = self.unit_log_likelihoods(
+                        unit=unit,
+                        spike_indices=spike_data.indices,
+                        spike_split_indices=spike_data.split_indices,
+                        ignore_channels=True,
+                    )
+                    if lls_ is not None:
+                        lls[j] = lls_
+                except Exception as e:
+                    warnings.warn("Error in mini_merge unit lls. Traceback on the way")
+                    traceback.print_exception(e)
             nlls = lls + log_props.unsqueeze(1)
             best_liks, labels = nlls.max(dim=0)
             labels[torch.isinf(best_liks)] = -1
@@ -2811,6 +2831,10 @@ class GaussianUnit(torch.nn.Module):
             return
 
         assert False
+
+    def com(self, geom):
+        w = self.snr / self.snr.sum()
+        return (w.unsqueeze(1) * geom).sum(0)
 
     def marginal_covariance(
         self, channels=None, cache_key=None, device=None, signal_only=False

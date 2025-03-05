@@ -1,5 +1,6 @@
 from dataclasses import asdict
 from pathlib import Path
+from logging import getLogger
 
 import numpy as np
 
@@ -34,6 +35,9 @@ from dartsort.util.peel_util import run_peeler
 from dartsort.util.registration_util import estimate_motion
 
 
+logger = getLogger(__name__)
+
+
 def dartsort(
     recording,
     output_directory,
@@ -61,6 +65,7 @@ def dartsort(
         computation_config=cfg.computation_config,
         overwrite=overwrite,
     )
+    logger.info(f"Initial detection: {sorting}")
 
     if cfg.subtract_only:
         ret["sorting"] = sorting
@@ -90,6 +95,7 @@ def dartsort(
             clustering_config=cfg.clustering_config,
             computation_config=cfg.computation_config,
         )
+        logger.info(f"Initial clustering: {sorting}")
         if return_extra:
             ret["initial_labels"] = sorting.labels.copy()
         sorting, info = refine_clustering(
@@ -100,6 +106,7 @@ def dartsort(
             computation_config=cfg.computation_config,
             return_step_labels=return_extra,
         )
+        logger.info(f"Initial refinement: {sorting}")
         if return_extra:
             ret.update({f"refined0{k}_labels": v for k, v in info.items()})
             ret["refined0_labels"] = sorting.labels.copy()
@@ -118,11 +125,12 @@ def dartsort(
                 waveform_config=cfg.waveform_config,
                 featurization_config=cfg.featurization_config,
                 matching_config=cfg.matching_config,
-                overwrite=overwrite,
+                overwrite=overwrite or cfg.overwrite_matching,
                 computation_config=cfg.computation_config,
                 hdf5_filename=f"matching{step}.h5",
                 model_subdir=f"matching{step}_models",
             )
+            logger.info(f"Matching step {step}: {sorting}")
             if return_extra:
                 ret[f"matching{step}_labels"] = sorting.labels
 
@@ -135,6 +143,7 @@ def dartsort(
                     computation_config=cfg.computation_config,
                     return_step_labels=return_extra,
                 )
+                logger.info(f"Refinement step {step}: {sorting}")
                 if return_extra:
                     ret.update({f"refined{step}{k}_labels": v for k, v in info.items()})
                     ret[f"refined{step}_labels"] = sorting.labels

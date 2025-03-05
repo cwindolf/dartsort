@@ -1,5 +1,7 @@
 import importlib.metadata
 
+from .util import logging_util
+
 from . import detect, util, cluster
 from .cluster import cluster_util, density, kmeans, merge, postprocess, ppcalib
 from .cluster.gaussian_mixture import GaussianUnit, SpikeMixtureModel

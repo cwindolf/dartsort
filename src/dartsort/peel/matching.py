@@ -49,7 +49,7 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
         conv_ignore_threshold=5.0,
         coarse_approx_error_threshold=0.0,
         trough_offset_samples=42,
-        threshold=50.0,
+        threshold=100.0,
         chunk_length_samples=30_000,
         n_chunks_fit=40,
         max_waveforms_fit=50_000,
@@ -406,6 +406,7 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
         trough_offset_samples = waveform_config.trough_offset_samples(
             recording.sampling_frequency
         )
+        threshold = matching_config.threshold ** 2
         return cls(
             recording,
             template_data,
@@ -421,7 +422,7 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
             conv_ignore_threshold=matching_config.conv_ignore_threshold,
             coarse_approx_error_threshold=matching_config.coarse_approx_error_threshold,
             trough_offset_samples=trough_offset_samples,
-            threshold=matching_config.threshold,
+            threshold=threshold,
             chunk_length_samples=matching_config.chunk_length_samples,
             n_chunks_fit=matching_config.n_chunks_fit,
             max_waveforms_fit=matching_config.max_waveforms_fit,

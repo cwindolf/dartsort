@@ -221,7 +221,7 @@ class MatchingConfig:
     fit_sampling: str = "random"
 
     # template matching parameters
-    threshold: float = 150.0
+    threshold: float = 15.0  # norm, not normsq
     template_svd_compression_rank: int = 10
     template_temporal_upsampling_factor: int = 8
     template_min_channel_amplitude: float = 1.0
@@ -411,6 +411,7 @@ class DARTsortInternalConfig:
     final_refinement: bool = True
     matching_iterations: int = 1
     intermediate_matching_subsampling: float = 1.0
+    overwrite_matching: bool = False
 
 
 default_waveform_config = WaveformConfig()
@@ -534,4 +535,5 @@ def to_internal_config(cfg):
         computation_config=computation_config,
         dredge_only=cfg.dredge_only,
         matching_iterations=cfg.matching_iterations,
+        overwrite_matching=cfg.overwrite_matching,
     )

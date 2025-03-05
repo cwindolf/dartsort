@@ -1,5 +1,6 @@
 import argparse
 import spikeinterface.core as sc
+import logging
 
 from .util import cli_util
 from . import config, main
@@ -37,6 +38,12 @@ def dartsort_cli():
         "command line will override their values in the TOML file.",
     )
     ap.add_argument("--overwrite", action="store_true")
+    ap.add_argument(
+        "--loglevel",
+        default="WARNING",
+        type=str.upper,
+        choices=logging._nameToLevel.keys(),
+    )
     # user-facing API
     cli_util.dataclass_to_argparse(config.DARTsortUserConfig, parser=ap)
 
@@ -50,6 +57,9 @@ def dartsort_cli():
 
     # -- parse args
     args = ap.parse_args()
+
+    # set up logging
+    logging.basicConfig(level=args.loglevel)
 
     # check if we have config file
     config_toml = None

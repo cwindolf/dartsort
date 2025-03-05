@@ -1,9 +1,13 @@
+from logging import getLogger
 from .. import config
 from ..util import job_util, noise_util
 from .split import split_clusters
 from .merge import merge_templates
 from .stable_features import StableSpikeDataset
 from .gaussian_mixture import SpikeMixtureModel
+
+
+logger = getLogger(__name__)
 
 
 def refine_clustering(
@@ -29,6 +33,8 @@ def refine_clustering(
     assert refinement_config.refinement_stragegy == "gmm"
     if computation_config is None:
         computation_config = job_util.get_global_computation_config()
+
+    logger.dartsortdebug(f"Refine clustering from {sorting.parent_h5_path}")
 
     noise = noise_util.EmbeddedNoise.estimate_from_hdf5(
         sorting.parent_h5_path,
@@ -88,7 +94,7 @@ def refine_clustering(
             log_liks.shape[0]
             > refinement_config.max_avg_units * recording.get_num_channels()
         ):
-            print(f"{log_liks.shape=}, skipping split.")
+            logger.dartsortdebug(f"{log_liks.shape=}, skipping split.")
         else:
             # TODO: not this.
             gmm.log_liks = log_liks
