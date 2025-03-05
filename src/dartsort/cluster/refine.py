@@ -113,6 +113,7 @@ def refine_clustering(
                 log_liks = gmm.em(final_split=intermediate_split)
             if return_step_labels:
                 step_labels[f"refstepbsplit{it}"] = gmm.labels.numpy(force=True).copy()
+        assert log_liks is not None
         gmm.merge(log_liks)
         del log_liks
 

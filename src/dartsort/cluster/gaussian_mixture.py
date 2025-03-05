@@ -444,6 +444,7 @@ class SpikeMixtureModel(torch.nn.Module):
         records = []
         train_records = []
         tic = time.perf_counter()
+        labels = None
         for j in its:
             is_final = j == n_iter - 1
             if is_final or algorithm == "em":
@@ -471,7 +472,6 @@ class SpikeMixtureModel(torch.nn.Module):
                 its.set_description(msg)  # pyright: ignore
 
         print("post its", flush=True)
-        labels = res["labels"]  # pyright: ignore [reportPossiblyUnboundVariable]
         print(f"{np.unique(labels, return_counts=True)=}")
         assert labels is not None
 
@@ -2001,9 +2001,9 @@ class SpikeMixtureModel(torch.nn.Module):
             return None
 
         # -- organize labels...
-        group_ids = torch.asarray(best_group_ids)
+        group_ids = torch.asarray(best_group_ids).cpu()
         _, new_ids = group_ids.unique(return_inverse=True)
-        labels = torch.asarray(best_labels).clone()
+        labels = torch.asarray(best_labels).clone().cpu()
         (kept,) = (labels >= 0).nonzero(as_tuple=True)
         labels[kept] = new_ids[labels[kept]]
         return labels
@@ -2206,7 +2206,7 @@ class SpikeMixtureModel(torch.nn.Module):
                 hyp_fit_spikes.indices, current_log_liks
             )
             cur_resp = torch.sparse.softmax(cur_fit_liks, dim=0)
-            cur_resp = cur_resp.index_select(dim=0, index=current_unit_ids)
+            cur_resp = cur_resp.index_select(dim=0, index=current_unit_ids.to(cur_resp.device))
             cur_resp = cur_resp.sum(dim=0).to_dense()
 
             # fit weights for hypothetical units
@@ -2251,18 +2251,18 @@ class SpikeMixtureModel(torch.nn.Module):
 
         # -- grab heldout spikes from within current units
         split_indices = []
-        heldout_coefts = []
+        curw = []
         for uid in current_unit_ids:
             ixs_full, ixs, split_ixs = self.random_indices(uid, split_name="val")
             # heldout_cur_labels.append(ixs.new_full(ixs.shape, uid))
             coeft = self.log_proportions[uid].exp().broadcast_to(ixs.shape)
             coeft = coeft / ixs.numel()
-            heldout_coefts.append(coeft)
+            curw.append(coeft)
             split_indices.append(split_ixs)
         split_indices = torch.concatenate(split_indices)
         split_indices, order = split_indices.sort()
         # heldout_cur_labels = torch.concatenate(heldout_cur_labels)[order]
-        heldout_coefts = torch.concatenate(heldout_coefts)[order]
+        curw = torch.concatenate(curw)[order]
         spikes = self.random_spike_data(
             split_indices=split_indices,
             split_name="val",
@@ -2318,10 +2318,10 @@ class SpikeMixtureModel(torch.nn.Module):
         # reweight by proportion
         # prop = cur_log_prop.exp() * len(self.log_proportions)
         nu = len(self.log_proportions)
-        cur_loglik = (heldout_coefts * cur_loglik).sum() * nu
-        hyp_loglik = (heldout_coefts * hyp_loglik).sum() * nu
-        cur_elbo = (heldout_coefts * cur_elbo).sum() * nu
-        hyp_elbo = (heldout_coefts * hyp_elbo).sum() * nu
+        cur_loglik = (curw * cur_loglik).sum().numpy(force=True).item() * nu
+        hyp_loglik = (curw * hyp_loglik).sum().numpy(force=True).item() * nu
+        cur_elbo = (curw * cur_elbo).sum().numpy(force=True).item() * nu
+        hyp_elbo = (curw * hyp_elbo).sum().numpy(force=True).item() * nu
 
         # always hyp-cur
 
@@ -2932,7 +2932,7 @@ class SpikeMixtureModel(torch.nn.Module):
         elif merge_kind == "tree":
             Z, group_ids, improvements, overlaps = self.tree_merge(
                 distances,
-                current_log_liks=self.log_liks,  # TODO: not this.
+                current_log_liks=likelihoods,
                 unit_ids=unit_ids,
                 max_distance=self.merge_distance_threshold,
                 criterion=merge_criterion,
