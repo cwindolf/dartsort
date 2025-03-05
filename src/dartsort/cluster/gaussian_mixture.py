@@ -2227,8 +2227,21 @@ class SpikeMixtureModel(torch.nn.Module):
             labels = torch.where(vals.isfinite(), labels, -1)
 
         # -- grab heldout spikes from within current units
+        split_indices = []
+        heldout_coefts = []
+        for uid in current_unit_ids:
+            ixs_full, ixs, split_ixs = self.random_indices(uid, split_name="val")
+            # heldout_cur_labels.append(ixs.new_full(ixs.shape, uid))
+            coeft = self.log_proportions[uid].exp().broadcast_to(ixs.shape)
+            coeft = coeft / ixs.numel()
+            heldout_coefts.append(coeft)
+            split_indices.append(split_ixs)
+        split_indices = torch.concatenate(split_indices)
+        split_indices, order = split_indices.sort()
+        # heldout_cur_labels = torch.concatenate(heldout_cur_labels)[order]
+        heldout_coefts = torch.concatenate(heldout_coefts)[order]
         spikes = self.random_spike_data(
-            unit_ids=current_unit_ids,
+            split_indices=split_indices,
             split_name="val",
             neighborhood="core",
             with_neighborhood_ids=True,
@@ -2256,14 +2269,18 @@ class SpikeMixtureModel(torch.nn.Module):
         (vix,) = valid.nonzero(as_tuple=True)
         if vix.numel() == len(spikes):
             vix = slice(None)
-        cur_loglik = cur_logliks[vix].mean()
-        hyp_loglik = hyp_logliks[vix].mean()
+        cur_loglik = cur_logliks[vix]  # .mean()
+        hyp_loglik = hyp_logliks[vix]  # .mean()
 
         # -- evaluate heldout elbos
         Qcur = cur_liks_full[:, vix].softmax(dim=0)
         Qhyp = hyp_liks_full[:, vix].softmax(dim=0)
-        cur_elbo = spiketorch.elbo(Qcur, cur_liks_full[:, vix], dim=0, reduce_mean=True)
-        hyp_elbo = spiketorch.elbo(Qhyp, hyp_liks_full[:, vix], dim=0, reduce_mean=True)
+        cur_elbo = spiketorch.elbo(
+            Qcur, cur_liks_full[:, vix], dim=0, reduce_mean=False
+        )
+        hyp_elbo = spiketorch.elbo(
+            Qhyp, hyp_liks_full[:, vix], dim=0, reduce_mean=False
+        )
 
         # -- compute final class weighted metrics
         hyp_single = n_hyp == 1
@@ -2276,11 +2293,12 @@ class SpikeMixtureModel(torch.nn.Module):
             heldout_labels = hyp_liks.argmax(0)
 
         # reweight by proportion
-        prop = cur_log_prop.exp() * len(self.log_proportions)
-        cur_loglik = prop * cur_loglik
-        hyp_loglik = prop * hyp_loglik
-        cur_elbo = prop * cur_elbo
-        hyp_elbo = prop * hyp_elbo
+        # prop = cur_log_prop.exp() * len(self.log_proportions)
+        nu = len(self.log_proportions)
+        cur_loglik = (heldout_coefts * cur_loglik).sum() * nu
+        hyp_loglik = (heldout_coefts * hyp_loglik).sum() * nu
+        cur_elbo = (heldout_coefts * cur_elbo).sum() * nu
+        hyp_elbo = (heldout_coefts * hyp_elbo).sum() * nu
 
         # always hyp-cur
 
