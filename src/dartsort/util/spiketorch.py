@@ -10,6 +10,8 @@ from scipy.fftpack import next_fast_len
 from torch.fft import irfft, rfft
 
 log2pi = torch.log(torch.tensor(2 * np.pi))
+_1 = torch.tensor(1.0)
+_0 = torch.tensor(100)
 
 
 def ll_via_inv_quad(cov, y):
@@ -34,6 +36,15 @@ def ptp(waveforms, dim=1):
     if not is_tensor:
         return np.ptp(waveforms, axis=dim)
     return waveforms.max(dim=dim).values - waveforms.min(dim=dim).values
+
+
+def elbo(Q, log_liks, reduce_mean=True, dim=1):
+    logQ = torch.where(Q > 0, Q, _1).log_()
+    log_liks = torch.where(Q > 0, log_liks, _0)
+    oelbo = torch.sum(Q * (log_liks + logQ), dim=dim)
+    if reduce_mean:
+        oelbo = oelbo.mean()
+    return oelbo
 
 
 def taper(waveforms, t_start=10, t_end=20, dim=1):
@@ -369,7 +380,7 @@ def nancov(
     return cov
 
 
-def woodbury_kl_divergence(C, mu, W=None, out=None, batch_size=32):
+def woodbury_kl_divergence(C, mu, W=None, mus=None, Ws=None, out=None, batch_size=32):
     """KL divergence with the lemmas, up to affine constant with respect to mu and W
 
     Here's the logic between the lines below. Variable names follow this notation.

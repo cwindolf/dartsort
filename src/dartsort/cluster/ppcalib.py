@@ -32,7 +32,7 @@ def ppca_em(
     mean_prior_pseudocount=0.0,
     show_progress=False,
     W_initialization="svd",
-    normalize=True,
+    normalize=False,
     em_converged_atol=1e-4,
     prior_var=1.0,
     cache_global_direct=True,
@@ -367,12 +367,15 @@ def embed(
         T, info = torch.linalg.inv_ex(T_inv)
         u_proj = nd.C_oo_inv @ (W_o @ T)
         torch.mm(xc, u_proj, out=_ubar[nd.u_slice])
-        torch.baddbmm(
-            T,
-            _ubar[nd.u_slice].unsqueeze(2),
-            _ubar[nd.u_slice].unsqueeze(1),
-            out=_uubar[nd.u_slice],
-        )
+        if normalize:
+            _uubar[nd.u_slice] = T
+        else:
+            torch.baddbmm(
+                T,
+                _ubar[nd.u_slice].unsqueeze(2),
+                _ubar[nd.u_slice].unsqueeze(1),
+                out=_uubar[nd.u_slice],
+            )
 
     if normalize:
         active_cov = noise.marginal_covariance(channels=active_channels).to_dense()
@@ -384,7 +387,10 @@ def embed(
         weights = weights / ess
         um = weights @ _ubar
         _ubar -= um
-        _uubar.addcmul_(um[:, None], um)
+        active_mean += W @ um
+        _uubar.baddbmm_(_ubar.unsqueeze(2), _ubar.unsqueeze(1))
+
+        # _uubar.addcmul_(um[:, None], um)
 
         # -- whitening
         # decompose Euu
@@ -415,7 +421,6 @@ def embed(
         W = W @ W_tf
         _ubar = _ubar @ u_tf
         _uubar = torch.einsum("nij,ip,jq->npq", _uubar, u_tf, u_tf)
-        active_mean += W @ um
 
     return _ubar, _uubar, W, active_mean
 
