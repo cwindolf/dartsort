@@ -351,7 +351,9 @@ class SpikeMixtureModel(torch.nn.Module):
         initialization="topk",
     ):
         # TODO: hang on to this and update it in place
-        logger.dartsortdebug(f"TEM with {self.data.n_spikes=} {self.data.n_spikes_kept=}")
+        logger.dartsortdebug(
+            f"TEM with {self.data.n_spikes=} {self.data.n_spikes_kept=}"
+        )
         tmm = truncated_mixture.SpikeTruncatedMixtureModel(
             self.data,
             self.noise,
@@ -748,7 +750,7 @@ class SpikeMixtureModel(torch.nn.Module):
                 covered_neighbs = unit.annotations["covered_neighbs"]
             core_overlaps[covered_neighbs] += 1
             nnz += ns_unit
-        print(f"log likelihoods {nnz=}")
+        print(f"log likelihoods {nnz=} {len(unit_ids)=} {nnz/len(unit_ids)=}")
 
         # how many units does each spike overlap with? needed to write csc
         # embed the split indices in the global space
@@ -2251,18 +2253,15 @@ class SpikeMixtureModel(torch.nn.Module):
 
         # -- grab heldout spikes from within current units
         split_indices = []
-        heldout_coefts = []
+        heldout_cur_labels = []
         for uid in current_unit_ids:
             ixs_full, ixs, split_ixs = self.random_indices(uid, split_name="val")
-            # heldout_cur_labels.append(ixs.new_full(ixs.shape, uid))
-            coeft = self.log_proportions[uid].exp().broadcast_to(ixs.shape)
-            coeft = coeft / ixs.numel()
-            heldout_coefts.append(coeft)
+            heldout_cur_labels.append(ixs.new_full(ixs.shape, uid))
+            # coeft = self.log_proportions[uid].exp().broadcast_to(ixs.shape)
             split_indices.append(split_ixs)
         split_indices = torch.concatenate(split_indices)
         split_indices, order = split_indices.sort()
-        # heldout_cur_labels = torch.concatenate(heldout_cur_labels)[order]
-        heldout_coefts = torch.concatenate(heldout_coefts)[order]
+        heldout_cur_labels = torch.concatenate(heldout_cur_labels)[order]
         spikes = self.random_spike_data(
             split_indices=split_indices,
             split_name="val",
@@ -2271,9 +2270,21 @@ class SpikeMixtureModel(torch.nn.Module):
         )
 
         # -- evaluate heldout log likelihoods
-        cur_liks_full = self.get_log_likelihoods(
+        # never ignore current non-irrelevant units
+        cur_liks_0 = self.get_log_likelihoods(
             spikes.indices, current_log_liks, dense=True
         )
+        irr_liks = cur_liks_0[irrix]
+        cur_liks = cur_liks_0[current_unit_ids]
+        # cur_liks = cur_liks_0.new_full((n_cur, len(spikes)), -torch.inf)
+        # for j, uid in enumerate(current_unit_ids):
+        #     hull = self.unit_log_likelihoods(
+        #         unit_id=uid, spikes=spikes, ignore_channels=True
+        #     )
+        #     if hull is not None:
+        #         cur_liks[j] = self.log_proportions[uid] + hull
+
+        cur_liks_full = torch.concatenate((irr_liks, cur_liks), dim=0)
         cur_logliks = cur_liks_full.logsumexp(dim=0)
 
         # hypothetical units
@@ -2284,11 +2295,14 @@ class SpikeMixtureModel(torch.nn.Module):
             )
             if hull is not None:
                 hyp_liks[j] = hyp_log_props[j] + hull
-        hyp_liks_full = torch.concatenate((cur_liks_full[irrix], hyp_liks), dim=0)
+        hyp_liks_full = torch.concatenate((irr_liks, hyp_liks), dim=0)
         hyp_logliks = hyp_liks_full.logsumexp(dim=0)
 
         # we can only work on this subset...
-        valid = torch.logical_and(cur_logliks.isfinite(), hyp_logliks.isfinite())
+        # valid = torch.logical_and(cur_logliks.isfinite(), hyp_logliks.isfinite())
+        valid = torch.logical_and(
+            cur_liks.isfinite().all(dim=0), hyp_logliks.isfinite()
+        )
         (vix,) = valid.nonzero(as_tuple=True)
         if vix.numel() == len(spikes):
             vix = slice(None)
@@ -2311,17 +2325,20 @@ class SpikeMixtureModel(torch.nn.Module):
         assert hyp_single or cur_single
         if hyp_single:
             cur_liks = cur_liks_full[current_unit_ids]
-            heldout_labels = cur_liks.argmax(0)
+            heldout_labels = heldout_cur_labels
         else:
             heldout_labels = hyp_liks.argmax(0)
 
         # reweight by proportion
         # prop = cur_log_prop.exp() * len(self.log_proportions)
         nu = len(self.log_proportions)
-        cur_loglik = (heldout_coefts * cur_loglik).sum() * nu
-        hyp_loglik = (heldout_coefts * hyp_loglik).sum() * nu
-        cur_elbo = (heldout_coefts * cur_elbo).sum() * nu
-        hyp_elbo = (heldout_coefts * hyp_elbo).sum() * nu
+        l = heldout_cur_labels[vix]
+        _, ix, ct = l.unique(return_inverse=True, return_counts=True)
+        w = self.log_proportions[l].exp() / ct[ix]
+        cur_loglik = (w * cur_loglik).sum() * nu
+        hyp_loglik = (w * hyp_loglik).sum() * nu
+        cur_elbo = (w * cur_elbo).sum() * nu
+        hyp_elbo = (w * hyp_elbo).sum() * nu
 
         # always hyp-cur
 
@@ -2335,6 +2352,7 @@ class SpikeMixtureModel(torch.nn.Module):
         full_criteria = cur_criteria if hyp_single else hyp_criteria
 
         # -- compute overlap for the caller
+        # TODO return early?
         # caller may not want to shrink the model if one of the classes
         # was poorly covered when computing the metrics
         ids, ixs, counts = heldout_labels.unique(
@@ -2372,6 +2390,7 @@ class SpikeMixtureModel(torch.nn.Module):
         allow_empty=None,
         include_noise_unit=False,
         overall_log_proportion=None,
+        ignore_channels=True,
     ):
         """See if a single unit explains a group
 
@@ -2489,7 +2508,9 @@ class SpikeMixtureModel(torch.nn.Module):
                 (len(units) + include_noise_unit, len(spikes_core)), -torch.inf
             )
             for j, unit in enumerate(units):
-                ull = self.unit_log_likelihoods(unit=unit, spikes=spikes_core)
+                ull = self.unit_log_likelihoods(
+                    unit=unit, spikes=spikes_core, ignore_channels=ignore_channels
+                )
                 ullf = ull[ull.isfinite()]
                 if ull is not None:
                     full_logliks[j] = ull
@@ -2538,7 +2559,9 @@ class SpikeMixtureModel(torch.nn.Module):
         full_logliks = torch.logsumexp(full_logliks, dim=dim_units)
 
         # merged model's likelihood
-        merged_logliks = self.unit_log_likelihoods(unit=merged_unit, spikes=spikes_core)
+        merged_logliks = self.unit_log_likelihoods(
+            unit=merged_unit, spikes=spikes_core, ignore_channels=ignore_channels
+        )
         if include_noise_unit:
             merged_lp = torch.tensor([overall_log_proportion, self.log_proportions[-1]])
             merged_lp = torch.log_softmax(merged_lp, dim=0)

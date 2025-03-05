@@ -889,39 +889,40 @@ class NeighborTreeMerge(GMMPlot):
             )
 
         # make vis
-        olaps = 0.0 if overlaps is None else np.floor(overlaps * 100)
-        annotations = None
-        if improvements is not None:
-            annotations = {
-                j: f"{imp:.2f} {olaps[j]:g}" for j, imp in enumerate(improvements)
-            }
         ax = panel.subplots()
-        try:
-            analysis_plots.annotated_dendro(
-                ax,
-                Z,
-                annotations,
-                threshold=self.max_distance,
-                leaf_labels=neighbors,
-                annotations_offset_by_n=False,
-            )
-            nstr = ""
-            if distance_normalization_kind != "none":
-                nstr += f"dnm={distance_normalization_kind}"
-            if criterion_normalization_kind != "none":
-                nstr += f"cnm={criterion_normalization_kind}"
-            ax.set_title(f"{metric} {criterion} {nstr}", fontsize="small")
-            sns.despine(ax=ax, left=True, right=True, top=True)
-        except ValueError as e:
-            ax.text(
-                0.5,
-                0.5,
-                str(e),
-                fontsize="small",
-                ha="center",
-                va="center",
-                transform=ax.transAxes,
-            )
+        if Z is not None:
+            olaps = 0.0 if overlaps is None else np.floor(overlaps * 100)
+            annotations = None
+            if improvements is not None:
+                annotations = {
+                    j: f"{imp:.2f} {olaps[j]:g}" for j, imp in enumerate(improvements)
+                }
+            try:
+                analysis_plots.annotated_dendro(
+                    ax,
+                    Z,
+                    annotations,
+                    threshold=self.max_distance,
+                    leaf_labels=neighbors,
+                    annotations_offset_by_n=False,
+                )
+                nstr = ""
+                if distance_normalization_kind != "none":
+                    nstr += f"dnm={distance_normalization_kind}"
+                if criterion_normalization_kind != "none":
+                    nstr += f"cnm={criterion_normalization_kind}"
+                ax.set_title(f"{metric} {criterion} {nstr}", fontsize="small")
+                sns.despine(ax=ax, left=True, right=True, top=True)
+            except ValueError as e:
+                ax.text(
+                    0.5,
+                    0.5,
+                    str(e),
+                    fontsize="small",
+                    ha="center",
+                    va="center",
+                    transform=ax.transAxes,
+                )
 
 
 # -- main api
