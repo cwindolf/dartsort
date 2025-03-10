@@ -6,4 +6,5 @@ from .unit import *
 from .vismain import *
 from .waveforms import *
 from .gt import *
+from .colors import *
 from . import gmm

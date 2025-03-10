@@ -113,7 +113,7 @@ def dartsort(
 
         for step in range(1, cfg.matching_iterations + 1):
             is_final = step == cfg.matching_iterations
-            #TODO
+            # TODO
             prop = 1.0 if is_final else cfg.intermediate_matching_subsampling
 
             sorting = match(
@@ -150,6 +150,7 @@ def dartsort(
     except Exception:
         # TODO: remove this.
         import traceback
+
         print("traceback...")
         print(traceback.format_exc())
 
