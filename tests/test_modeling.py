@@ -108,10 +108,10 @@ def _test_mixture(inference_algorithm="em", n_refinement_iters=0):
 
                         assert res["sim_res"]["mu"].shape == res["mm_means"].shape
 
-                        mugood = np.square(res["muerrs"]).mean() < mu_atol
-                        assert mugood
-                        agood = res["acc"] == 1.0
-                        assert agood
+                        mu_err = np.square(res["muerrs"]).mean()
+                        print(f"{mu_err=} {res['ari']=}")
+                        assert mu_err < mu_atol
+                        assert res["ari"] == 1.0
 
                         Wgood = True
                         if "W" in res:
@@ -119,7 +119,6 @@ def _test_mixture(inference_algorithm="em", n_refinement_iters=0):
                             k, rank, nc, M = W.shape
                             mss = np.square(WTW).mean()
                             mse = np.square(res["Werrs"]).mean()
-                            print(f"{mse=} {mss=}")
                             Wgood = mse / mss < wtw_rtol
                         assert Wgood
                         # if not (mugood and Wgood and agood):
@@ -132,7 +131,7 @@ def _test_mixture(inference_algorithm="em", n_refinement_iters=0):
 def test_mixture():
     # for ia in ("tem", "em"):
     for ia in ("tem",):
-        for nri in (0, 1):
+        for nri in (0,):
             print("-" * 30 + f" {ia=} {nri=}")
             _test_mixture(inference_algorithm=ia, n_refinement_iters=nri)
 

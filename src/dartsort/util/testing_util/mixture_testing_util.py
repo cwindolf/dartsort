@@ -67,7 +67,6 @@ def simulate_moppca(
 
     labels = torch.asarray(labels)
     cov = noise.marginal_covariance()
-    print(f"{cov.logdet()=}")
     u = torch.asarray(u, dtype=torch.float)
     eps = torch.asarray(eps, dtype=torch.float)
     mu = torch.asarray(mu, dtype=torch.float)
@@ -265,7 +264,6 @@ def fit_ppca(
     from dartsort.cluster import ppcalib
 
     nc = neighborhoods.n_channels
-    print(f"{nc=}")
     res = ppcalib.ppca_em(
         data.spike_data(
             indices=slice(None), split_indices=slice(None), with_neighborhood_ids=True
@@ -514,10 +512,6 @@ def test_moppcas(
     ari = adjusted_rand_score(sim_res["labels"], mm.labels)
     print(f"ari: {ari}")
     ids, means, covs, logdets = mm.stack_units()
-    print(f"{ids.shape=}")
-    print(f"{means.shape=}")
-    if covs is not None:
-        print(f"{covs.shape=}")
 
     muerrs = []
     Werrs = []
@@ -532,8 +526,6 @@ def test_moppcas(
                 figsize=figsize,
                 title=f"{t_mu=} {t_cov=} {t_w=} {t_missing=} | {k=}",
             )
-            print(f"{muerr=}")
-            print(f"{werr=}")
             muerrs.append(muerr)
             Werrs.append(werr)
             if make_vis:
