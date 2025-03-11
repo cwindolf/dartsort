@@ -385,7 +385,7 @@ class SpikeMixtureModel(torch.nn.Module):
         # try reassigning without noise unit...
         lls = self.log_likelihoods(with_noise_unit=True, show_progress=True)
         self.update_proportions(lls)
-        lls = lls[:, self.data.split_indices["train"]]
+        lls = lls[:, self.data.split_indices["train"].numpy()]
         print(f"{self.log_proportions.shape=}")
         print(f"{means.shape=}")
         print(f"{ids.shape=}")
