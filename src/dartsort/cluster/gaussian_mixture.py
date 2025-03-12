@@ -360,14 +360,6 @@ class SpikeMixtureModel(torch.nn.Module):
         )
         if n_threads is None:
             n_threads = self.n_threads
-        tmm = truncated_mixture.SpikeTruncatedMixtureModel(
-            self.data,
-            self.noise,
-            self.ppca_rank,
-            n_threads=n_threads,
-            batch_size=batch_size,
-            **tmm_kwargs,
-        )
 
         n_iter = self.n_em_iters if n_iter is None else n_iter
         assert n_iter > 0
@@ -384,26 +376,44 @@ class SpikeMixtureModel(torch.nn.Module):
         ids_, dkl = self.distances(kind="kl", normalization_kind="none")
         assert torch.equal(torch.asarray(ids), torch.asarray(ids_))
 
+        tmm = truncated_mixture.SpikeTruncatedMixtureModel(
+            self.data,
+            self.noise,
+            self.ppca_rank,
+            n_threads=n_threads,
+            batch_size=batch_size,
+            n_units=len(ids),
+            **tmm_kwargs,
+        )
+
         # try reassigning without noise unit...
         lls = self.log_likelihoods(with_noise_unit=True, show_progress=True)
         self.update_proportions(lls)
+        print(f"{self.data.split_indices['train'].numpy().shape=}")
         lls = lls[:, self.data.split_indices["train"].numpy()]
         print(f"{self.log_proportions.shape=}")
         print(f"{means.shape=}")
         print(f"{ids.shape=}")
+        print(f"{lls.shape=}")
         assert self.with_noise_unit
 
         if initialization == "topk":
-            init = sparse_topk(
+            nz_lines, init_ = sparse_topk(
                 lls[:-1],
                 log_proportions=self.log_proportions[:-1].numpy(force=True),
                 k=tmm.n_candidates,
             )
+            init = self.rg.integers(len(ids), size=(lls.shape[1], init_.shape[1]))
+            init[nz_lines] = init_
             labels = init[:, 0]
         elif initialization == "nearest":
-            labels = init = loglik_reassign(lls[:-1])[1]
+            nz_lines, init_, *_ = loglik_reassign(lls[:-1])
+            init = self.rg.integers(len(ids), size=lls.shape[1])
+            init[nz_lines] = init_
+            labels = init 
         else:
             assert False
+        print(f"XXX {labels.shape=} {init.shape=} {loglik_reassign(lls[:-1])[1].shape=}")
 
         unmatched = labels < 0
         if unmatched.any():
@@ -2268,6 +2278,7 @@ class SpikeMixtureModel(torch.nn.Module):
             assert False
 
         # -- check if best was good enough
+        best_improvement = best_improvement
         assert np.isfinite(best_improvement)
         if best_improvement <= 0:
             return None
@@ -2583,7 +2594,7 @@ class SpikeMixtureModel(torch.nn.Module):
         valid = torch.logical_and(
             cur_liks.isfinite().all(dim=0), hyp_logliks.isfinite()
         )
-        (vix,) = valid.nonzero(as_tuple=True)
+        (vix,) = valid.cpu().nonzero(as_tuple=True)
         if vix.numel() == len(spikes):
             vix = slice(None)
         cur_loglik = cur_logliks[vix]  # .mean()
@@ -2612,13 +2623,17 @@ class SpikeMixtureModel(torch.nn.Module):
         nu = len(self.log_proportions)
         l = heldout_cur_labels[vix]
         _, ix, ct = l.unique(return_inverse=True, return_counts=True)
-        w = self.log_proportions[l].exp() / ct[ix]
+        w = self.log_proportions[l].exp() / ct[ix].to(self.log_proportions)
         cur_loglik = (w * cur_loglik).sum() * nu
         hyp_loglik = (w * hyp_loglik).sum() * nu
         cur_elbo = (w * cur_elbo).sum() * nu
         hyp_elbo = (w * hyp_elbo).sum() * nu
 
         # always hyp-cur
+        cur_loglik = cur_loglik.cpu().item()
+        hyp_loglik = hyp_loglik.cpu().item()
+        cur_elbo = cur_elbo.cpu().item()
+        hyp_elbo = hyp_elbo.cpu().item()
 
         improvements = dict(
             heldout_loglik=hyp_loglik - cur_loglik,
@@ -2634,7 +2649,7 @@ class SpikeMixtureModel(torch.nn.Module):
         ids, ixs, counts = heldout_labels.unique(
             return_inverse=True, return_counts=True
         )
-        props = hyp_liks.new_zeros(ids.shape)
+        props = ixs.new_zeros(ids.shape, dtype=torch.float)
         spiketorch.add_at_(props, ixs[vix], 1.0)
         props /= counts
         overlap = props.min()
@@ -3106,6 +3121,7 @@ class SpikeMixtureModel(torch.nn.Module):
             label_indices = original[kept]
         else:
             label_indices = torch.searchsorted(old_labels, original, right=True) - 1
+            print(f"{old_labels.shape=} {original.shape=} {label_indices=} {original=}")
             kept = old_labels[label_indices] == original
             label_indices = label_indices[kept]
 

@@ -86,54 +86,54 @@ def dartsort(
         ret["sorting"] = sorting
         return ret
 
-    try:
-        # clustering
-        sorting = initial_clustering(
+    # clustering
+    sorting = initial_clustering(
+        recording,
+        sorting=sorting,
+        motion_est=motion_est,
+        clustering_config=cfg.clustering_config,
+        computation_config=cfg.computation_config,
+    )
+    logger.info(f"Initial clustering: {sorting}")
+    if return_extra:
+        ret["initial_labels"] = sorting.labels.copy()
+    sorting, info = refine_clustering(
+        recording=recording,
+        sorting=sorting,
+        motion_est=motion_est,
+        refinement_config=cfg.refinement_config,
+        computation_config=cfg.computation_config,
+        return_step_labels=return_extra,
+    )
+    logger.info(f"Initial refinement: {sorting}")
+    if return_extra:
+        ret.update({f"refined0{k}_labels": v for k, v in info.items()})
+        ret["refined0_labels"] = sorting.labels.copy()
+
+    for step in range(1, cfg.matching_iterations + 1):
+        is_final = step == cfg.matching_iterations
+        # TODO
+        prop = 1.0 if is_final else cfg.intermediate_matching_subsampling
+
+        sorting = match(
             recording,
-            sorting=sorting,
+            sorting,
+            output_directory,
             motion_est=motion_est,
-            clustering_config=cfg.clustering_config,
+            template_config=cfg.template_config,
+            waveform_config=cfg.waveform_config,
+            featurization_config=cfg.featurization_config,
+            matching_config=cfg.matching_config,
+            overwrite=overwrite or cfg.overwrite_matching,
             computation_config=cfg.computation_config,
+            hdf5_filename=f"matching{step}.h5",
+            model_subdir=f"matching{step}_models",
         )
-        logger.info(f"Initial clustering: {sorting}")
+        logger.info(f"Matching step {step}: {sorting}")
         if return_extra:
-            ret["initial_labels"] = sorting.labels.copy()
-        sorting, info = refine_clustering(
-            recording=recording,
-            sorting=sorting,
-            motion_est=motion_est,
-            refinement_config=cfg.refinement_config,
-            computation_config=cfg.computation_config,
-            return_step_labels=return_extra,
-        )
-        logger.info(f"Initial refinement: {sorting}")
-        if return_extra:
-            ret.update({f"refined0{k}_labels": v for k, v in info.items()})
-            ret["refined0_labels"] = sorting.labels.copy()
+            ret[f"matching{step}_labels"] = sorting.labels
 
-        for step in range(1, cfg.matching_iterations + 1):
-            is_final = step == cfg.matching_iterations
-            # TODO
-            prop = 1.0 if is_final else cfg.intermediate_matching_subsampling
-
-            sorting = match(
-                recording,
-                sorting,
-                output_directory,
-                motion_est=motion_est,
-                template_config=cfg.template_config,
-                waveform_config=cfg.waveform_config,
-                featurization_config=cfg.featurization_config,
-                matching_config=cfg.matching_config,
-                overwrite=overwrite or cfg.overwrite_matching,
-                computation_config=cfg.computation_config,
-                hdf5_filename=f"matching{step}.h5",
-                model_subdir=f"matching{step}_models",
-            )
-            logger.info(f"Matching step {step}: {sorting}")
-            if return_extra:
-                ret[f"matching{step}_labels"] = sorting.labels
-
+        try:
             if (not is_final) or cfg.final_refinement:
                 sorting, info = refine_clustering(
                     recording=recording,
@@ -147,12 +147,11 @@ def dartsort(
                 if return_extra:
                     ret.update({f"refined{step}{k}_labels": v for k, v in info.items()})
                     ret[f"refined{step}_labels"] = sorting.labels
-    except Exception:
-        # TODO: remove this.
-        import traceback
-
-        print("traceback...")
-        print(traceback.format_exc())
+        except Exception as e:
+            print("exc in final refinement", e)
+            import traceback
+            traceback.print_exception(e)
+            break
 
     sorting.save(output_directory / "dartsort_sorting.npz")
     ret["sorting"] = sorting

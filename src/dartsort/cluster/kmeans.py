@@ -21,7 +21,8 @@ def kmeanspp(X, n_components=10, random_state=0, kmeanspp_initial="mean", mode_d
     elif kmeanspp_initial == "mode":
         Xm = X
         if Xm.shape[1] > mode_dim:
-            u, s, v = torch.pca_lowrank(Xm, q=mode_dim + 10, niter=7)
+            q = min(mode_dim + 10, *Xm.shape)
+            u, s, v = torch.pca_lowrank(Xm, q=q, niter=7)
             Xm = u[:, :mode_dim].mul_(s[:mode_dim])
         centroid_ixs = [guess_mode(Xm.numpy(force=True))]
     else:

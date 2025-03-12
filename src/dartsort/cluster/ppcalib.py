@@ -152,7 +152,6 @@ def ppca_em(
             iters.set_description(f"PPCA[{dmu=:.2g}, {dW=:.2g}]")
         if max(dmu, dW) < em_converged_atol:
             break
-    # print(f"{i=} {dmu=} {dW=}")
 
     if normalize and any_missing and state["W"] is not None:
         _, _, state["W"], state["mu"] = embed(
@@ -474,7 +473,8 @@ def get_neighborhood_data(
         neighb_valid = neighborhoods.valid_mask(nid)
         # subset of neighborhood's chans which are active
         # needs to be subset of full neighborhood channel set, not just the ones <NC
-        neighb_subset = spiketorch.isin_sorted(neighb_chans, active_channels)
+        # neighb_subset = spiketorch.isin_sorted(neighb_chans, active_channels)
+        neighb_subset = torch.isin(neighb_chans, active_channels)
         can_cache_by_neighborhood = torch.equal(neighb_subset, neighb_valid)
         del neighb_valid
         # neighb_subset = neighb_valid  # assume those are the same. tested by assert blo.
@@ -486,9 +486,10 @@ def get_neighborhood_data(
         if not neighb_chans.numel():
             discard[neighb_members] = True
             continue
-        assert spiketorch.isin_sorted(neighb_chans, active_channels).all()
+        # assert spiketorch.isin_sorted(neighb_chans, active_channels).all()
         # subset of active chans which are in the neighborhood
-        active_subset = spiketorch.isin_sorted(active_channels, neighb_chans)
+        # active_subset = spiketorch.isin_sorted(active_channels, neighb_chans)
+        active_subset = torch.isin(active_channels, neighb_chans)
 
         x = sp.features[neighb_members][:, :, neighb_subset]
 

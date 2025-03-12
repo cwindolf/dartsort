@@ -266,7 +266,7 @@ def sparse_topk(liks, log_proportions=None, k=3):
         log_proportions,
     )
 
-    return topk
+    return nz_lines, topk
 
 
 sigs = [

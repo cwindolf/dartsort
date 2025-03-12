@@ -96,7 +96,7 @@ def test_fakedata():
             motion_estimation_config=dartsort.MotionEstimationConfig(
                 do_motion_estimation=False
             ),
-            matching_iterations=0,
+            matching_iterations=1,
         )
         res = dartsort.dartsort(rec, output_directory=tempdir, cfg=cfg)
 

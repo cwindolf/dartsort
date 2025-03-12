@@ -250,6 +250,7 @@ class StableSpikeDataset(torch.nn.Module):
         with h5py.File(sorting.parent_h5_path, "r", locking=False) as h5:
             geom = h5["geom"][:]
             extract_channel_index = h5["channel_index"][:]
+            assert np.all(np.diff(extract_channel_index) >= 0)
             if motion_est is None:
                 registered_geom = geom
             else:

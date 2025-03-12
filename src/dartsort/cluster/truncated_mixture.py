@@ -41,6 +41,7 @@ class SpikeTruncatedMixtureModel(nn.Module):
         n_candidates: int = 3,
         n_search: int = 5,
         n_explore: int = None,
+        n_units = None,
         covariance_radius: Optional[float] = 250.0,
         random_seed=0,
         n_threads: int = 0,
@@ -58,6 +59,10 @@ class SpikeTruncatedMixtureModel(nn.Module):
         logger.dartsortdebug(
             f"Making a TMM with {data.n_spikes=} {data.n_spikes_kept=} {M=}"
         )
+        if n_units is not None:
+            n_candidates = min(n_units, n_candidates)
+            n_search = max(0, min(n_units - n_candidates, n_search))
+            n_explore = max(0, min(n_units - n_candidates * (n_search + 1), n_explore))
         self.n_candidates = n_candidates
         self.data = data
         self.noise = noise
@@ -1024,7 +1029,7 @@ class CandidateSet:
         self.neighborhood_ids = neighborhoods.neighborhood_ids
         self.n_neighborhoods = neighborhoods.n_neighborhoods
         self.n_spikes = self.neighborhood_ids.numel()
-        logger.dartsortdebug("Initialize CandidateSet with {self.n_spikes=}")
+        logger.dartsortdebug(f"Initialize CandidateSet with {self.n_spikes=}")
         self.n_candidates = n_candidates
         self.n_search = n_search
         self.n_explore = n_explore
@@ -1039,7 +1044,9 @@ class CandidateSet:
     def initialize_candidates(self, labels, closest_neighbors):
         """Imposes invariant 1, or at least tries to start off well."""
         assert labels.shape[0] == self.n_spikes
-        assert closest_neighbors.shape[1] == self.n_candidates
+        assert closest_neighbors.shape[1] <= self.n_candidates
+        print(f"{labels.shape=}")
+        print(f"{self.n_spikes=}")
 
         if labels.ndim == 1:
             torch.index_select(
@@ -1053,9 +1060,20 @@ class CandidateSet:
             self.candidates[:, : self.n_candidates] = labels
             invalid = labels < 0
             invalid_i, invalid_j = invalid.nonzero(as_tuple=True)
-            self.candidates[invalid_i, invalid_j] = closest_neighbors[
-                invalid_i, invalid_j
-            ]
+            needs_replacement = self.candidates[invalid_i, invalid_j]
+            invalid_labels = labels[invalid_i, 0]
+            if closest_neighbors.numel():
+                replacements = closest_neighbors[invalid_labels, invalid_j.clip(max=closest_neighbors.shape[1])]
+            else:
+                replacements = invalid_labels
+            eq = needs_replacement == replacements
+            if eq.any():
+                replacements[eq] = torch.from_numpy(
+                    self.rg.integers(len(closest_neighbors), size=eq.sum().numpy(force=True)),
+                    device=replacements.device,
+                    dtype=replacements.dtype,
+                )
+            self.candidates[invalid_i, invalid_j] = replacements
 
     def propose_candidates(self, unit_search_neighbors, indices=None):
         """Assumes invariant 1 and does not mess it up.
@@ -1087,12 +1105,13 @@ class CandidateSet:
         top = candidates[:, :C]
 
         # write the search units in place, if not batching
-        target = candidates[:, search_slice].view(n_spikes, C, n_search)
-        assert (
-            target.untyped_storage().data_ptr()
-            == candidates.untyped_storage().data_ptr()
-        )
-        target[:] = unit_search_neighbors[top]
+        if n_search:
+            target = candidates[:, search_slice].view(n_spikes, C, n_search)
+            assert (
+                target.untyped_storage().data_ptr()
+                == candidates.untyped_storage().data_ptr()
+            )
+            target[:] = unit_search_neighbors[top]
 
         # count to determine which units are relevant to each neighborhood
         # this is how "explore" candidates are suggested. the policy is strict:
@@ -1111,17 +1130,19 @@ class CandidateSet:
         # explore units are chosen per neighborhood. we start by figuring out how many
         # such units there are in each neighborhood.
         n_units_ = torch.tensor(n_units)[None].broadcast_to(n_neighbs, 1).contiguous()
-        n_explore = torch.searchsorted(neighborhood_explore_units, n_units_).view(
-            n_neighbs
-        )
-        n_explore = n_explore[neighb_ids]
-        targs = self.rg.integers(
-            n_explore.numpy()[:, None], size=(n_spikes, self.n_explore)
-        )
-        targs = torch.from_numpy(targs)
-        explore = neighborhood_explore_units[neighb_ids[:, None], targs]
-        candidates[:, explore_slice] = explore
+        if self.n_explore:
+            n_explore = torch.searchsorted(neighborhood_explore_units, n_units_).view(
+                n_neighbs
+            )
+            n_explore = n_explore[neighb_ids]
+            targs = self.rg.integers(
+                n_explore.numpy()[:, None], size=(n_spikes, self.n_explore)
+            )
+            targs = torch.from_numpy(targs)
+            explore = neighborhood_explore_units[neighb_ids[:, None], targs]
+            candidates[:, explore_slice] = explore
 
         # update counts for the rest of units
-        np.add.at(unit_neighborhood_counts, (candidates[:, 1:], neighb_ids[:, None]), 1)
+        if candidates.shape[1] > 1:
+            np.add.at(unit_neighborhood_counts, (candidates[:, 1:], neighb_ids[:, None]), 1)
         return candidates, unit_neighborhood_counts
