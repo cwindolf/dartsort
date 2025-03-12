@@ -152,7 +152,7 @@ class DeveloperConfig(DARTsortUserConfig):
     use_singlechan_templates: bool = False
     use_universal_templates: bool = False
     signal_rank: Annotated[int, Field(ge=0)] = 0
-    use_tem: bool = False
+    truncated: bool = True
     overwrite_matching: bool = False
 
     merge_criterion_threshold: float = 0.0
@@ -176,6 +176,7 @@ class DeveloperConfig(DARTsortUserConfig):
 
     gmm_max_spikes: Annotated[int, Field(gt=0)] = 4_000_000
     gmm_val_proportion: Annotated[float, Field(gt=0)] = 0.25
+    gmm_decision_algorithm: str = "brute"
 
     # flags for dev tasks run by main.run_dev_tasks
     save_intermediate_labels: bool = False

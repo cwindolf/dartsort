@@ -530,6 +530,7 @@ class KMeansSplit(GMMPlot):
                 f"{self.decision_algorithm} | {criterion}\n"
                 f"{split_info['ids_part']}\n"
                 f"imp:{imp:0.3f}\n"
+                f"olap:{split_info['overlap']:0.3f}\n"
                 f"full imp: {split_info['full_improvement']:0.3f}\n",
                 ha="center",
                 va="center",
@@ -614,23 +615,42 @@ class KMeansSplit(GMMPlot):
 
         ax_pca.axis("off")
         if "X" in split_info:
-            u, s, v = torch.pca_lowrank(split_info["X"].view(len(split_labels), -1))
+            show_whiten = False and gmm.split_whiten
+            key = "X" + "w" * show_whiten
+
+            u, s, v = torch.pca_lowrank(split_info[key].view(len(split_labels), -1))
             Xp = u[:, :2] * s[:2]
+            tv = v[:, :2]
+            center = split_info["X"].mean(0)
+
             ax_pca.scatter(*Xp.T, c=glasbey1024[split_labels], s=2, lw=0)
             ax_pca.axhline(0, lw=0.8, color="k")
             ax_pca.axvline(0, lw=0.8, color="k")
+            if "units" in split_info:
+                for j, u in enumerate(split_info["units"]):
+                    gmm_helpers.unit_pca_ellipse(
+                        ax=ax_pca,
+                        center=center,
+                        v=tv,
+                        noise=gmm.noise,
+                        channels=gmm[unit_id].channels,
+                        unit=u,
+                        color=glasbey1024[j],
+                        whiten=show_whiten,
+                        lw=2,
+                    )
             if "level_units" in split_info:
-                center = split_info["X"].mean(dim=0)
                 for level, units in reversed(split_info["level_units"].items()):
                     for u in units:
                         gmm_helpers.unit_pca_ellipse(
                             ax=ax_pca,
                             center=center,
-                            v=v,
+                            v=tv,
                             noise=gmm.noise,
                             channels=gmm[unit_id].channels,
                             unit=u,
                             color=glasbey1024[len(split_ids) + level],
+                            whiten=show_whiten,
                         )
 
 
@@ -998,13 +1018,11 @@ default_gmm_plots = (
     NeighborMeans(),
     NeighborDistances(metric="noise_metric"),
     NeighborDistances(metric="symkl"),
-    NeighborTreeMerge(metric=None, criterion="heldout_ccl"),
+    NeighborTreeMerge(metric=None, criterion="heldout_elbo"),
     NeighborTreeMerge(metric=None, criterion="heldout_loglik"),
-    NeighborTreeMerge(metric=None, criterion="loglik"),
-    NeighborTreeMerge(metric=None, criterion="icl"),
     NeighborBimodalities(),
-    NeighborInfoCriteria(in_bag=False),
-    NeighborInfoCriteria(in_bag=True),
+    # NeighborInfoCriteria(in_bag=False),
+    # NeighborInfoCriteria(in_bag=True),
     # NeighborInfoCriteria(fit_type="avg_preexisting"),
 )
 

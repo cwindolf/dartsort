@@ -357,6 +357,7 @@ class RefinementConfig:
     n_total_iters: int = 3
     hard_noise: bool = False
     truncated: bool = False
+    decision_algorithm: str = "brute"
 
     # if someone wants this
     split_merge_config: SplitMergeConfig | None = None
@@ -506,7 +507,8 @@ def to_internal_config(cfg):
         max_n_spikes=cfg.gmm_max_spikes,
         val_proportion=cfg.gmm_val_proportion,
         channels_strategy=cfg.channels_strategy,
-        truncated=cfg.use_tem,
+        truncated=cfg.truncated,
+        decision_algorithm=cfg.gmm_decision_algorithm,
     )
     motion_estimation_config = MotionEstimationConfig(
         **{k.name: getattr(cfg, k.name) for k in fields(MotionEstimationConfig)}
