@@ -77,45 +77,45 @@ def refine_clustering(
         em_converged_atol=refinement_config.em_converged_atol,
         channels_strategy=refinement_config.channels_strategy,
         hard_noise=refinement_config.hard_noise,
+        decision_algorithm=refinement_config.decision_algorithm,
     )
     gmm.cleanup()
     # these are for benchmarking
     step_labels = {} if return_step_labels else None
     intermediate_split = "full" if return_step_labels else "kept"
+    gmm.log_liks = None  # TODO
     for it in range(refinement_config.n_total_iters):
         if refinement_config.truncated:
             res = gmm.tvi(final_split=intermediate_split)
-            log_liks = res["log_liks"]
+            gmm.log_liks = res["log_liks"]
         else:
-            log_liks = gmm.em(final_split=intermediate_split)
+            gmm.log_liks = gmm.em(final_split=intermediate_split)
         if return_step_labels:
             step_labels[f"refstepaem{it}"] = gmm.labels.numpy(force=True).copy()
 
-        assert log_liks is not None
+        assert gmm.log_liks is not None
         # TODO: if split is self-consistent enough, we don't need this.
         if (
-            log_liks.shape[0]
+            gmm.log_liks.shape[0]
             > refinement_config.max_avg_units * recording.get_num_channels()
         ):
-            logger.dartsortdebug(f"{log_liks.shape=}, skipping split.")
+            logger.dartsortdebug(f"{gmm.log_liks.shape=}, skipping split.")
         else:
             # TODO: not this.
-            gmm.log_liks = log_liks
             gmm.split()
-            del log_liks
             gmm.log_liks = None
 
             gc.collect()
             if refinement_config.truncated:
                 res = gmm.tvi(final_split=intermediate_split)
-                log_liks = res["log_liks"]
+                gmm.log_liks = res["log_liks"]
             else:
-                log_liks = gmm.em(final_split=intermediate_split)
+                gmm.log_liks = gmm.em(final_split=intermediate_split)
             if return_step_labels:
                 step_labels[f"refstepbsplit{it}"] = gmm.labels.numpy(force=True).copy()
-        assert log_liks is not None
-        gmm.merge(log_liks)
-        del log_liks
+        assert gmm.log_liks is not None
+        gmm.merge(gmm.log_liks)
+        gmm.log_liks = None
 
         gc.collect()
         if return_step_labels:
@@ -123,10 +123,10 @@ def refine_clustering(
 
     if refinement_config.truncated:
         res = gmm.tvi(final_split="full")
-        log_liks = res  # not actually! but just to del it later.
+        gmm.log_liks = res  # not actually! but just to del it later.
     else:
-        log_liks = gmm.em(final_split="full")
-    del log_liks
+        gmm.log_liks = gmm.em(final_split="full")
+    gmm.log_liks = None
 
     gc.collect()
     gmm.cpu()

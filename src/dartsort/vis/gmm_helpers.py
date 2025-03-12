@@ -105,13 +105,15 @@ def plot_means(
     ax.axis("off")
 
 
-def unit_pca_ellipse(ax, channels, unit, v, center, noise, color, lw=1):
+def unit_pca_ellipse(ax, channels, unit, v, center, noise, color, lw=1, whiten=True):
     # get the whitened pca basis on those channels
-    whitener = noise.whitener(channels=channels)
-    wv = whitener @ v[:, :2]
+    wv = v[:, :2]
+    if whiten:
+        whitener = noise.whitener(channels=channels)
+        wv = whitener.T @ wv
 
     # center and project mean and cov into whitened pca basis
-    mean = (unit.mean[:, channels].view(-1) - center) @ wv
+    mean = (unit.mean[:, channels] - center).view(-1) @ wv
     cov = unit.marginal_covariance(channels=channels).to_dense()
     cov = wv.T @ cov @ wv
     rho = cov[0, 1] / np.sqrt(np.diagonal(cov).prod())
