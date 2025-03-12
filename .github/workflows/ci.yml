@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - main
+      - develop
   pull_request:
     branches:
       - "*"
@@ -52,4 +53,4 @@ jobs:
 
       - name: Pytest
         run: |
-          pytest dartsort/tests/
+          pytest --log-level=15 dartsort/tests/

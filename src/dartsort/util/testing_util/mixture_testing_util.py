@@ -2,12 +2,14 @@
 
 from typing import Literal
 
+from numba.extending import infer
 import numpy as np
 import torch
+from sklearn.metrics import adjusted_rand_score
 
 
 def simulate_moppca(
-    N=2**14,
+    N=2**15,
     rank=4,
     nc=8,
     M=3,
@@ -65,7 +67,6 @@ def simulate_moppca(
 
     labels = torch.asarray(labels)
     cov = noise.marginal_covariance()
-    print(f"{cov.logdet()=}")
     u = torch.asarray(u, dtype=torch.float)
     eps = torch.asarray(eps, dtype=torch.float)
     mu = torch.asarray(mu, dtype=torch.float)
@@ -121,8 +122,10 @@ def simulate_moppca(
 
     init_labels = labels.clone()
     if init_label_corruption:
-        to_corrupt = rg.binomial(1, init_label_corruption, size=N)
-        init_labels[to_corrupt] = rg.integers(K, size=to_corrupt.sum())
+        to_corrupt = rg.binomial(1, init_label_corruption, size=N).astype(bool)
+        init_labels[to_corrupt] = torch.from_numpy(
+            rg.integers(K, size=to_corrupt.sum())
+        )
 
     init_sorting = dartsort.DARTsortSorting(
         times_samples=torch.arange(N),
@@ -136,6 +139,7 @@ def simulate_moppca(
         channel_index=torch.zeros(nc, nc - n_missing, dtype=int),
         rank=rank,
     )
+    splits = rg.binomial(1, p=0.3, size=N)
     data = dartsort.StableSpikeDataset(
         original_sorting=init_sorting,
         kept_indices=np.arange(N),
@@ -144,9 +148,9 @@ def simulate_moppca(
         extract_channels=channels,
         core_channels=channels,
         core_features=x,
-        train_extract_features=x,
-        split_names=["train"],
-        split_mask=torch.zeros(len(x), dtype=int),
+        train_extract_features=x[splits == 0],
+        split_names=["train", "val"],
+        split_mask=torch.from_numpy(splits),
     )
     return dict(
         data=data,
@@ -159,6 +163,7 @@ def simulate_moppca(
         W=W,
         labels=labels,
         cov=cov,
+        x=x,
     )
 
 
@@ -168,10 +173,14 @@ def fit_moppcas(
     M=3,
     cov_kind="zero",
     inner_em_iter=100,
+    n_em_iters=50,
     em_converged_atol=0.05,
     with_noise_unit=True,
     return_before_fit=False,
     channels_strategy="count",
+    inference_algorithm="em",
+    n_refinement_iters=0,
+    gmm_kw={},
 ):
     import dartsort
 
@@ -190,12 +199,52 @@ def fit_moppcas(
         em_converged_atol=1e-6,
         em_converged_prop=1e-6,
         n_threads=1,
+        n_em_iters=n_em_iters,
         with_noise_unit=with_noise_unit,
         channels_strategy=channels_strategy,
+        **gmm_kw,
     )
     torch.manual_seed(0)
-    if not return_before_fit:
-        mm.em()
+    if return_before_fit:
+        return mm
+
+    if inference_algorithm == "em":
+        mm.log_liks = mm.em()
+    elif inference_algorithm == "tem":
+        res = mm.tvi()
+        mm.log_liks = res["log_liks"]
+    elif inference_algorithm == "tsgd":
+        res = mm.tvi(algorithm="adam")
+        mm.log_liks = res["log_liks"]
+    else:
+        assert False
+
+    for j in range(n_refinement_iters):
+        mm.split()
+
+        if inference_algorithm == "em":
+            mm.log_liks = mm.em()
+        elif inference_algorithm == "tem":
+            res = mm.tvi()
+            mm.log_liks = res["log_liks"]
+        elif inference_algorithm == "tsgd":
+            res = mm.tvi(algorithm="adam")
+            mm.log_liks = res["log_liks"]
+        else:
+            assert False
+
+        mm.merge(mm.log_liks)
+
+        if inference_algorithm == "em":
+            mm.log_liks = mm.em()
+        elif inference_algorithm == "tem":
+            res = mm.tvi()
+            mm.log_liks = res["log_liks"]
+        elif inference_algorithm == "tsgd":
+            res = mm.tvi(algorithm="adam")
+            mm.log_liks = res["log_liks"]
+        else:
+            assert False
 
     return mm
 
@@ -215,7 +264,6 @@ def fit_ppca(
     from dartsort.cluster import ppcalib
 
     nc = neighborhoods.n_channels
-    print(f"{nc=}")
     res = ppcalib.ppca_em(
         data.spike_data(
             indices=slice(None), split_indices=slice(None), with_neighborhood_ids=True
@@ -258,7 +306,9 @@ def compare_subspaces(
         W = W.numpy()
 
     if umu is None:
-        unit = gmm[k]
+        unit = {}
+        if k in gmm:
+            unit = gmm[k]
         uW = getattr(unit, "W", np.zeros_like(W))
         umu = getattr(unit, "mean", np.zeros_like(mu))
     M = 0
@@ -417,6 +467,11 @@ def test_moppcas(
     channels_strategy="count",
     snr=10.0,
     rg=0,
+    inference_algorithm="em",
+    n_refinement_iters=0,
+    n_em_iters=50,
+    do_comparison=True,
+    gmm_kw={},
 ):
     rg = np.random.default_rng(rg)
     sim_res = simulate_moppca(
@@ -438,39 +493,59 @@ def test_moppcas(
         sim_res["data"],
         sim_res["noise"],
         M=M,
+        n_em_iters=n_em_iters,
         cov_kind="zero" if t_w == "zero" else "ppca",
         inner_em_iter=inner_em_iter,
         em_converged_atol=em_converged_atol,
         with_noise_unit=with_noise_unit,
         return_before_fit=return_before_fit,
         channels_strategy=channels_strategy,
+        inference_algorithm=inference_algorithm,
+        n_refinement_iters=n_refinement_iters,
+        gmm_kw=gmm_kw,
     )
     if return_before_fit:
         return dict(sim_res=sim_res, gmm=mm)
 
-    acc = (mm.labels == sim_res["init_sorting"].labels).sum() / N
+    acc = (mm.labels == sim_res["labels"]).sum() / N
     print(f"accuracy: {acc}")
+    ari = adjusted_rand_score(sim_res["labels"], mm.labels)
+    print(f"ari: {ari}")
+    ids, means, covs, logdets = mm.stack_units()
 
     muerrs = []
     Werrs = []
-    for k in range(K):
-        muerr, werr, panel = compare_subspaces(
-            sim_res["mu"],
-            sim_res["W"],
-            gmm=mm,
-            k=k,
-            make_vis=make_vis,
-            figsize=figsize,
-            title=f"{t_mu=} {t_cov=} {t_w=} {t_missing=} | {k=}",
-        )
-        muerrs.append(muerr)
-        Werrs.append(werr)
-        if make_vis:
-            import matplotlib.pyplot as plt
+    if do_comparison:
+        for k in range(K):
+            muerr, werr, panel = compare_subspaces(
+                sim_res["mu"],
+                sim_res["W"],
+                gmm=mm,
+                k=k,
+                make_vis=make_vis,
+                figsize=figsize,
+                title=f"{t_mu=} {t_cov=} {t_w=} {t_missing=} | {k=}",
+            )
+            muerrs.append(muerr)
+            Werrs.append(werr)
+            if make_vis:
+                import matplotlib.pyplot as plt
 
-            panel.show()
-            plt.close(panel)
-    muerrs = np.stack(muerrs, axis=0)
-    Werrs = np.stack(Werrs, axis=0)
-    results = dict(sim_res=sim_res, gmm=mm, acc=acc, muerrs=muerrs, Werrs=Werrs)
+                panel.show()
+                plt.close(panel)
+        muerrs = np.stack(muerrs, axis=0)
+        Werrs = np.stack(Werrs, axis=0)
+    results = dict(
+        sim_res=sim_res,
+        gmm=mm,
+        acc=acc,
+        muerrs=muerrs,
+        Werrs=Werrs,
+        mm_means=means,
+        mm_W=covs,
+        mm_logdets=logdets,
+        init_label_corruption=init_label_corruption,
+        M=M,
+        ari=ari,
+    )
     return results

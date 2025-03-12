@@ -1,6 +1,8 @@
 import numpy as np
 import torch
 from matplotlib.lines import Line2D
+from matplotlib.patches import Ellipse
+from matplotlib.transforms import Affine2D
 
 from .colors import glasbey1024
 from .waveforms import geomplot
@@ -101,3 +103,30 @@ def plot_means(
             columnspacing=1.0,
         )
     ax.axis("off")
+
+
+def unit_pca_ellipse(ax, channels, unit, v, center, noise, color, lw=1):
+    # get the whitened pca basis on those channels
+    whitener = noise.whitener(channels=channels)
+    wv = whitener @ v[:, :2]
+
+    # center and project mean and cov into whitened pca basis
+    mean = (unit.mean[:, channels].view(-1) - center) @ wv
+    cov = unit.marginal_covariance(channels=channels).to_dense()
+    cov = wv.T @ cov @ wv
+    rho = cov[0, 1] / np.sqrt(np.diagonal(cov).prod())
+
+    # draw ellipses
+    ax.scatter(*mean.T, marker="s", fc=color, ec="k", lw=1, s=5)
+    ell = Ellipse(
+        (0, 0),
+        width=np.sqrt(1 + rho) * 2,
+        height=np.sqrt(1 - rho) * 2,
+        facecolor="none",
+        edgecolor=color,
+        lw=lw,
+    )
+    sx, sy = 2 * np.sqrt(np.diagonal(cov))
+    tfx = Affine2D().rotate_deg(45).scale(sx, sy).translate(*mean.squeeze())
+    ell.set_transform(tfx + ax.transData)
+    ax.add_patch(ell)

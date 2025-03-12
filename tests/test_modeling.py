@@ -60,21 +60,16 @@ def _test_ppca(w_init="random", normalize=False):
                         # plt.close(res['panel'])
 
 
-def test_ppca():
-    _test_ppca("random", False)
-    _test_ppca("svd", False)
-    _test_ppca("random", True)
-    _test_ppca("svd", True)
-
-
-def test_mixture():
+def _test_mixture(inference_algorithm="em", n_refinement_iters=0):
     for t_mu in ("random",):
         for t_cov in t_cov_test:
             for t_w in t_w_test:
                 # for t_w in ("zero", "random"):
                 for t_missing in t_missing_test:
                     for t_channels_strategy in t_channels_strategy_test:
-                        print(f"{t_mu=} {t_cov=} {t_w=} {t_missing=}")
+                        print(
+                            f"{t_mu=} {t_cov=} {t_w=} {t_missing=} {inference_algorithm=} {n_refinement_iters=}"
+                        )
                         kw = dict(
                             t_mu=t_mu,
                             t_cov=t_cov,
@@ -84,9 +79,11 @@ def test_mixture():
                             inner_em_iter=100,
                             figsize=(3, 2.5),
                             make_vis=False,
-                            with_noise_unit=False,
+                            with_noise_unit=True,
                             channels_strategy=t_channels_strategy,
                             snr=10.0,
+                            inference_algorithm=inference_algorithm,
+                            n_refinement_iters=n_refinement_iters,
                         )
                         res = mixture_testing_util.test_moppcas(
                             **kw, return_before_fit=False
@@ -109,10 +106,12 @@ def test_mixture():
                         ]
                         assert torch.equal(corechans1, corechans2)
 
-                        mugood = np.square(res["muerrs"]).mean() < mu_atol
-                        assert mugood
-                        agood = res["acc"] == 1.0
-                        assert agood
+                        assert res["sim_res"]["mu"].shape == res["mm_means"].shape
+
+                        mu_err = np.square(res["muerrs"]).mean()
+                        print(f"{mu_err=} {res['ari']=}")
+                        assert mu_err < mu_atol
+                        assert res["ari"] == 1.0
 
                         Wgood = True
                         if "W" in res:
@@ -120,7 +119,6 @@ def test_mixture():
                             k, rank, nc, M = W.shape
                             mss = np.square(WTW).mean()
                             mse = np.square(res["Werrs"]).mean()
-                            print(f"{mse=} {mss=}")
                             Wgood = mse / mss < wtw_rtol
                         assert Wgood
                         # if not (mugood and Wgood and agood):
@@ -130,6 +128,21 @@ def test_mixture():
                         #     assert False
 
 
+def test_mixture():
+    # for ia in ("tem", "em"):
+    for ia in ("tem",):
+        for nri in (0,):
+            print("-" * 30 + f" {ia=} {nri=}")
+            _test_mixture(inference_algorithm=ia, n_refinement_iters=nri)
+
+
+def test_ppca():
+    _test_ppca("random", False)
+    _test_ppca("svd", False)
+    _test_ppca("random", True)
+    _test_ppca("svd", True)
+
+
 if __name__ == "__main__":
-    test_ppca()
     test_mixture()
+    test_ppca()

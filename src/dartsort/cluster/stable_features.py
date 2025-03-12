@@ -128,6 +128,7 @@ class StableSpikeDataset(torch.nn.Module):
         self.tpca = tpca
 
         # neighborhoods module, for querying spikes by channel group
+        self.not_train_indices = torch.tensor([], dtype=int)
         if self.has_splits and "train" in self.split_indices:
             train_ixs = self.split_indices["train"]
             self.n_spikes_train = len(train_ixs)
@@ -143,6 +144,9 @@ class StableSpikeDataset(torch.nn.Module):
                 name="extract",
             )
             self._train_extract_channels = extract_channels.cpu()[train_ixs]
+            self.not_train_indices = torch.from_numpy(
+                np.setdiff1d(np.arange(self.n_spikes), train_ixs)
+            )
         core_channel_index = waveform_util.make_channel_index(
             prgeom, core_radius, to_torch=True
         )

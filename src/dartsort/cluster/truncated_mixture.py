@@ -55,7 +55,9 @@ class SpikeTruncatedMixtureModel(nn.Module):
             n_search = n_candidates
         if n_explore is None:
             n_explore = n_search
-        logger.dartsortdebug(f"Making a TMM with {data.n_spikes=} {data.n_spikes_kept=} {M=}")
+        logger.dartsortdebug(
+            f"Making a TMM with {data.n_spikes=} {data.n_spikes_kept=} {M=}"
+        )
         self.n_candidates = n_candidates
         self.data = data
         self.noise = noise
@@ -336,7 +338,8 @@ class SpikeTruncatedMixtureModel(nn.Module):
         if n_search is None:
             n_search = self.candidates.n_search
         self.kl_divergences.diagonal().fill_(torch.inf)
-        _, topkinds = torch.topk(self.kl_divergences, k=n_search, dim=1, largest=False)
+        k = min(n_search, self.kl_divergences.shape[0] - 1)
+        _, topkinds = torch.topk(self.kl_divergences, k=k, dim=1, largest=False)
         return topkinds
 
     def channel_occupancy(self, labels):
@@ -1025,7 +1028,7 @@ class CandidateSet:
         self.n_candidates = n_candidates
         self.n_search = n_search
         self.n_explore = n_explore
-        n_total = self.n_candidates * self.n_search + self.n_explore
+        n_total = self.n_candidates + self.n_candidates * self.n_search + self.n_explore
 
         can_pin = device is not None and device.type == "cuda"
         self.candidates = torch.empty(
@@ -1061,19 +1064,22 @@ class CandidateSet:
         ---------
         unit_search_neighbors: LongTensor (n_units, n_search)
         """
-        assert unit_search_neighbors.shape[1] == self.n_search
+        assert unit_search_neighbors.shape[1] <= self.n_search
+        n_search = unit_search_neighbors.shape[1]
 
         full = indices is None
         if full:
             indices = slice(None)
         C = self.n_candidates
-        n_search = C * self.n_search
+        n_search_total = C * n_search
+        search_slice = slice(C, C + n_search_total)
+        total = C + n_search_total + self.n_explore
+        explore_slice = slice(C + n_search_total, total)
         n_neighbs = self.n_neighborhoods
         n_units = len(unit_search_neighbors)
 
         # if `full`, then this is all done in place.
-        # otherwise, caller must use the return value.
-        candidates = self.candidates[indices]
+        candidates = self.candidates[indices, :total]
         neighb_ids = self.neighborhood_ids[indices]
         del indices
         n_spikes = len(candidates)
@@ -1081,7 +1087,7 @@ class CandidateSet:
         top = candidates[:, :C]
 
         # write the search units in place, if not batching
-        target = candidates[:, C : C + n_search].view(n_spikes, C, self.n_search)
+        target = candidates[:, search_slice].view(n_spikes, C, n_search)
         assert (
             target.untyped_storage().data_ptr()
             == candidates.untyped_storage().data_ptr()
@@ -1114,7 +1120,7 @@ class CandidateSet:
         )
         targs = torch.from_numpy(targs)
         explore = neighborhood_explore_units[neighb_ids[:, None], targs]
-        candidates[:, -self.n_explore :] = explore
+        candidates[:, explore_slice] = explore
 
         # update counts for the rest of units
         np.add.at(unit_neighborhood_counts, (candidates[:, 1:], neighb_ids[:, None]), 1)

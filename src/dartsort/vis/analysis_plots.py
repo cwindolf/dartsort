@@ -6,6 +6,7 @@ from matplotlib.colors import to_hex
 from scipy.cluster.hierarchy import dendrogram, fcluster, linkage
 
 from .colors import glasbey1024
+from ..cluster.cluster_util import leafsets
 
 
 def scatter_max_channel_waveforms(
@@ -49,6 +50,9 @@ def annotated_dendro(
     ax,
     Z,
     annotations,
+    brute_indicator=None,
+    group_ids=None,
+    cluster_ids=None,
     threshold=1.0,
     above_threshold_color=0.0,
     leaf_labels=None,
@@ -66,6 +70,8 @@ def annotated_dendro(
     )
     dcoords = np.array(res["dcoord"])[:, 1]
     depth_order = np.argsort(dcoords)
+    if brute_indicator is not None:
+        leaf_descendants = leafsets(Z)
 
     lines = np.zeros((len(Z), 4, 2))
     colors = np.zeros((len(Z), 3))
@@ -93,10 +99,31 @@ def annotated_dendro(
     for jj, (ic, dc) in enumerate(zip(res["icoord"], res["dcoord"])):
         j = depth_order[jj]
         cluix = n + j if annotations_offset_by_n else j
-        if cluix in annotations:
-            top = np.mean(ic[1:3]), np.mean(dc[1:3])
-            fc = colors[j]
-            lc = invert(fc)
+        isbrute = brute_indicator is not None and brute_indicator[j]
+        top = np.mean(ic[1:3]), np.mean(dc[1:3])
+        fc = colors[j]
+        lc = invert(fc)
+        if isbrute:
+            leaves = leaf_descendants[n + j]
+            gids = group_ids[leaves]
+            groups = []
+            for gid in np.unique(gids):
+                groups.append(
+                    [leaf_labels[leaves[ii]] for ii in np.flatnonzero(gids == gid)]
+                )
+            annot = f"brute {groups} {annotations[cluix]}"
+            ax.text(
+                *top,
+                annot,
+                fontsize="medium",
+                color=lc,
+                va="center",
+                ha="center",
+                rotation=rotation,
+                rotation_mode="anchor",
+                bbox=dict(fc=fc, ec="none", boxstyle="square,pad=0."),
+            )
+        elif cluix in annotations:
             ax.text(
                 *top,
                 annotations[cluix],

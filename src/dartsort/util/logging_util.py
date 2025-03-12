@@ -1,4 +1,14 @@
-from logging import getLoggerClass, addLevelName, setLoggerClass, NOTSET, DEBUG
+import os
+from logging import (
+    getLoggerClass,
+    addLevelName,
+    setLoggerClass,
+    NOTSET,
+    DEBUG,
+    getLogger,
+    getLevelNamesMapping,
+    basicConfig,
+)
 
 DARTSORTDEBUG = DEBUG + 5
 addLevelName(DARTSORTDEBUG, "DARTSORTDEBUG")
@@ -14,3 +24,15 @@ class DARTsortLogger(getLoggerClass()):
 
 
 setLoggerClass(DARTsortLogger)
+
+if "LOG_LEVEL" in os.environ:
+    level = os.environ["LOG_LEVEL"]
+    try:
+        basicConfig(level=level)
+    except ValueError:
+        ilevel = int(level)
+        basicConfig(level=ilevel)
+    else:
+        ilevel = getLevelNamesMapping()[level]
+    logger = getLogger()
+    logger.log(ilevel, f"Log level set to {level} ({ilevel}).")

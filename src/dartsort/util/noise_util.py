@@ -400,6 +400,13 @@ class EmbeddedNoise(torch.nn.Module):
             return self.mean
         assert False
 
+    def whitener(self, channels=slice(None)):
+        cov = self.marginal_covariance(channels=channels)
+        chol = cov.cholesky()
+        chans_eye = torch.eye(cov.shape[0], dtype=cov.dtype, device=cov.device)
+        whitener = torch.linalg.solve_triangular(chol, chans_eye, upper=False)
+        return whitener.reshape(cov.shape)
+
     def whiten(self, data, channels=slice(None)):
         assert self.mean_kind == "zero"
         cov = self.marginal_covariance(channels=channels)
