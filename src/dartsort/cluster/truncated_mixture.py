@@ -46,7 +46,7 @@ class SpikeTruncatedMixtureModel(nn.Module):
         n_threads: int = 0,
         batch_size=2**14,
         exact_kl=True,
-        fixed_noise_proportion=0.5,
+        fixed_noise_proportion=None,
         sgd_batch_size=None,
         Cinv_in_grad=True,
     ):
@@ -66,7 +66,7 @@ class SpikeTruncatedMixtureModel(nn.Module):
         self.sgd_batch_size = sgd_batch_size
         train_indices, self.train_neighborhoods = self.data.neighborhoods("extract")
         self.n_spikes = train_indices.numel()
-        logger.dartsortdebug(f"TMM will fit to {train_indices.shape=}")
+        logger.dartsortdebug(f"TMM will fit to {train_indices.shape=} {self.n_spikes=}")
         self.processor = TruncatedExpectationProcessor(
             noise=noise,
             neighborhoods=self.train_neighborhoods,
@@ -1021,6 +1021,7 @@ class CandidateSet:
         self.neighborhood_ids = neighborhoods.neighborhood_ids
         self.n_neighborhoods = neighborhoods.n_neighborhoods
         self.n_spikes = self.neighborhood_ids.numel()
+        logger.dartsortdebug("Initialize CandidateSet with {self.n_spikes=}")
         self.n_candidates = n_candidates
         self.n_search = n_search
         self.n_explore = n_explore
