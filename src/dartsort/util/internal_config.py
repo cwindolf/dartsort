@@ -416,6 +416,9 @@ class DARTsortInternalConfig:
     intermediate_matching_subsampling: float = 1.0
     overwrite_matching: bool = False
 
+    # development / debugging flags
+    save_intermediate_labels: bool = False
+
 
 default_waveform_config = WaveformConfig()
 default_featurization_config = FeaturizationConfig()
@@ -540,4 +543,5 @@ def to_internal_config(cfg):
         dredge_only=cfg.dredge_only,
         matching_iterations=cfg.matching_iterations,
         overwrite_matching=cfg.overwrite_matching,
+        save_intermediate_labels=cfg.save_intermediate_labels,
     )

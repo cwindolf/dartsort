@@ -953,7 +953,9 @@ class SpikeMixtureModel(torch.nn.Module):
         label_ids = label_ids[label_ids >= 0]
         big_enough = counts >= min_count
 
-        n_units = max(label_ids.max().item() + 1, len(self._units))
+        n_units = 0
+        if label_ids.numel():
+            n_units = max(label_ids.max().item() + 1, len(self._units))
         keep = torch.zeros(n_units, dtype=bool)
         keep[label_ids] = big_enough
         self._stack = None
@@ -3131,7 +3133,6 @@ class SpikeMixtureModel(torch.nn.Module):
             label_indices = original[kept]
         else:
             label_indices = torch.searchsorted(old_labels, original, right=True) - 1
-            print(f"{old_labels.shape=} {original.shape=} {label_indices=} {original=}")
             kept = old_labels[label_indices] == original
             label_indices = label_indices[kept]
 
