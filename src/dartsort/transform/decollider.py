@@ -11,6 +11,7 @@ from torch.utils.data import (BatchSampler, DataLoader, Dataset, RandomSampler,
 from tqdm.auto import trange
 
 from .transform_base import BaseWaveformDenoiser
+from torch.utils.data import random_split
 
 
 class Decollider(BaseWaveformDenoiser):
@@ -21,12 +22,12 @@ class Decollider(BaseWaveformDenoiser):
         channel_index,
         geom,
         hidden_dims=(256, 256),
-        norm_kind="batchnorm",
+        norm_kind="layernorm",
         name=None,
         name_prefix="",
         exz_estimator="n3n",
         inference_kind="amortized",
-        batch_size=32,
+        batch_size=32, #####
         learning_rate=1e-3,
         n_epochs=50,
         channelwise_dropout_p=0.2,
@@ -35,9 +36,14 @@ class Decollider(BaseWaveformDenoiser):
         with_conv_fullheight=False,
         sample_weighting=None,
         detach_amortizer=True,
-        eyz_net_residual=True,
-        e_exz_y_net_residual=True,
+        eyz_net_residual="none",   ##### 
+        e_exz_y_net_residual="none",   #########
+        emz_res_type = "none",
         pretrained_path=None,
+        val_split_p=0.1,    
+        min_epochs=10,    
+        convergence_eps=0.01,
+        random_seed=0, 
     ):
         assert exz_estimator in ("n2n", "2n2", "n3n", "3n3")
         assert inference_kind in ("raw", "exz", "exz_fromz", "amortized", "exy_fake")
@@ -63,6 +69,7 @@ class Decollider(BaseWaveformDenoiser):
         self.detach_amortizer = detach_amortizer
         self.eyz_net_residual = eyz_net_residual
         self.e_exz_y_net_residual = e_exz_y_net_residual
+        self.emz_res_type = emz_res_type
 
         self.model_channel_index_np = regularize_channel_index(
             geom=self.geom, channel_index=channel_index
@@ -79,12 +86,21 @@ class Decollider(BaseWaveformDenoiser):
             "irrelative_index",
             get_relative_index(self.model_channel_index, self.channel_index),
         )
-        self._needs_fit = True
+        self._needs_fit = True # 
+        self.val_split_p = val_split_p
+        self.min_epochs = min_epochs
+        self.convergence_eps = convergence_eps
+        self.rg = np.random.default_rng(random_seed) # 
+
+
+    @property
+    def device(self):
+        return self.channel_index.device
 
     def needs_fit(self):
         return self._needs_fit
 
-    def get_mlp(self, residual=False):
+    def get_mlp(self, residual=False, res_type="none"):
         return nn_util.get_waveform_mlp(
             self.spike_length_samples,
             self.model_channel_index.shape[1],
@@ -97,7 +113,10 @@ class Decollider(BaseWaveformDenoiser):
             initial_conv_fullheight=self.with_conv_fullheight,
             final_conv_fullheight=self.with_conv_fullheight,
             residual=residual,
+            residual_blocks=False,
+            res_type=res_type
         )
+
 
     def initialize_nets(self, spike_length_samples):
         self.spike_length_samples = spike_length_samples
@@ -106,15 +125,17 @@ class Decollider(BaseWaveformDenoiser):
         )
 
         if self.exz_estimator in ("n2n", "n3n"):
-            self.eyz = self.get_mlp(residual=self.eyz_net_residual)
+            # self.eyz = self.get_mlp(residual=self.eyz_net_residual)
+            self.eyz = self.get_mlp(res_type = self.eyz_net_residual)
         if self.exz_estimator in ("n3n", "2n2", "3n3"):
-            self.emz = self.get_mlp()
+            self.emz = self.get_mlp(res_type = self.emz_res_type)
         if self.inference_kind == "amortized":
-            self.inf_net = self.get_mlp(residual=self.e_exz_y_net_residual)
+            # self.inf_net = self.get_mlp(residual=self.e_exz_y_net_residual)
+            self.inf_net = self.get_mlp(res_type = self.e_exz_y_net_residual)
+
         self.to(self.relative_index.device)
 
     def fit(self, waveforms, max_channels, recording):
-        waveforms = reindex(max_channels, waveforms, self.relative_index, pad_value=0.0)
         with torch.enable_grad():
             self._fit(waveforms, max_channels, recording)
         self._needs_fit = False
@@ -235,53 +256,136 @@ class Decollider(BaseWaveformDenoiser):
             loss_dict["e_exz_y"] = F.mse_loss(mask * to_amortize, mask * e_exz_y)
         return loss_dict
 
+    # def _fit(self, waveforms, channels, recording):
+    #     self.initialize_nets(waveforms.shape[1])
+    #     waveforms = waveforms.cpu()
+    #     channels = channels.cpu()
+    #     main_dataset = TensorDataset(waveforms, channels)
+    #     noise_dataset = SameChannelNoiseDataset(
+    #         recording,
+    #         channels.numpy(force=True),
+    #         self.model_channel_index_np,
+    #         spike_length_samples=self.spike_length_samples,
+    #     )
+    #     dataset = StackDataset(main_dataset, noise_dataset)
+    #     if self.sample_weighting is None:
+    #         sampler = RandomSampler(dataset)
+    #     elif self.sample_weighting == "kmeans":
+    #         main_traces = grab_main_channels(waveforms, channels, self.model_channel_index_np)
+    #         main_traces = main_traces.to(self.relative_index.device)
+    #         densities = kmeanspp_density_estimate(main_traces, rg=0)
+    #         sampler = WeightedRandomSampler(1.0 / densities, num_samples=len(dataset))
+    #     else:
+    #         assert False
+    #     dataloader = DataLoader(
+    #         dataset,
+    #         sampler=BatchSampler(
+    #             sampler,
+    #             batch_size=self.batch_size,
+    #             drop_last=True,
+    #         ),
+    #         num_workers=self.n_data_workers,
+    #         persistent_workers=bool(self.n_data_workers),
+    #     )
+    #     optimizer = torch.optim.Adam(self.parameters(), lr=self.learning_rate)
+
+    #     with trange(self.n_epochs, desc="Epochs", unit="epoch") as pbar:
+    #         for epoch in pbar:
+    #             epoch_losses = {}
+    #             for (waveform_batch, channels_batch), noise_batch in dataloader:
+    #                 # for whatever reason, batch sampler adds an empty dim
+    #                 waveform_batch = waveform_batch[0].to(self.device)
+    #                 channels_batch = channels_batch[0].to(self.device)
+    #                 noise_batch = noise_batch[0].to(self.device)
+    #                 waveform_batch = reindex(channels_batch, waveform_batch, self.relative_index, pad_value=0.0)
+
+    #                 optimizer.zero_grad()
+
+    #                 # get a batch of noise samples
+    #                 # m = self.get_noise(channels_batch).to(waveform_batch)
+    #                 waveform_batch = waveform_batch.to(self.relative_index.device)
+    #                 m = noise_batch.to(waveform_batch)
+    #                 mask = self.get_masks(channels_batch).to(waveform_batch)
+    #                 exz, eyz, emz, e_exz_y = self.train_forward(waveform_batch, m, mask)
+    #                 loss_dict = self.loss(mask, waveform_batch, m, exz, eyz, emz, e_exz_y)
+    #                 loss = sum(loss_dict.values())
+    #                 loss.backward()
+    #                 optimizer.step()
+
+    #                 for k, v in loss_dict.items():
+    #                     epoch_losses[k] = v.item() + epoch_losses.get(k, 0.0)
+
+    #             epoch_losses = {k: v / len(dataloader) for k, v in epoch_losses.items()}
+    #             loss_str = ", ".join(f"{k}: {v:.3f}" for k, v in epoch_losses.items())
+    #             pbar.set_description(f"Epochs [{loss_str}]")
+
+    
     def _fit(self, waveforms, channels, recording):
         self.initialize_nets(waveforms.shape[1])
         waveforms = waveforms.cpu()
         channels = channels.cpu()
-        main_dataset = TensorDataset(waveforms, channels)
-        noise_dataset = SameChannelNoiseDataset(
+    
+        num_samples = len(waveforms)
+        val_size = int(self.val_split_p * num_samples)
+        train_size = num_samples - val_size
+        train_indices = self.rg.choice(num_samples, size=train_size, replace=False)
+        val_indices = np.setdiff1d(np.arange(num_samples), train_indices)
+    
+        train_waveforms, val_waveforms = waveforms[train_indices], waveforms[val_indices]
+        train_channels, val_channels = channels[train_indices], channels[val_indices]
+    
+        train_dataset = TensorDataset(train_waveforms, train_channels)
+        val_dataset = TensorDataset(val_waveforms, val_channels)
+    
+        noise_train_dataset = SameChannelNoiseDataset(
             recording,
-            channels.numpy(force=True),
+            train_channels.numpy(force=True),
             self.model_channel_index_np,
             spike_length_samples=self.spike_length_samples,
         )
-        dataset = StackDataset(main_dataset, noise_dataset)
-        if self.sample_weighting is None:
-            sampler = RandomSampler(dataset)
-        elif self.sample_weighting == "kmeans":
-            main_traces = grab_main_channels(waveforms, channels, self.model_channel_index_np)
-            main_traces = main_traces.to(self.relative_index.device)
-            densities = kmeanspp_density_estimate(main_traces, rg=0)
-            sampler = WeightedRandomSampler(1.0 / densities, num_samples=len(dataset))
-        else:
-            assert False
-        dataloader = DataLoader(
-            dataset,
-            sampler=BatchSampler(
-                sampler,
-                batch_size=self.batch_size,
-                drop_last=True,
-            ),
+        noise_val_dataset = SameChannelNoiseDataset(
+            recording,
+            val_channels.numpy(force=True),
+            self.model_channel_index_np,
+            spike_length_samples=self.spike_length_samples,
+        )
+    
+        train_stack_dataset = StackDataset(train_dataset, noise_train_dataset)
+        val_stack_dataset = StackDataset(val_dataset, noise_val_dataset)
+    
+        train_sampler = RandomSampler(train_stack_dataset)
+        val_sampler = RandomSampler(val_stack_dataset)
+    
+        train_loader = DataLoader(
+            train_stack_dataset,
+            sampler=BatchSampler(train_sampler, batch_size=self.batch_size, drop_last=True),
             num_workers=self.n_data_workers,
             persistent_workers=bool(self.n_data_workers),
         )
+        val_loader = DataLoader(
+            val_stack_dataset,
+            sampler=BatchSampler(val_sampler, batch_size=self.batch_size, drop_last=False),
+            num_workers=self.n_data_workers,
+            persistent_workers=bool(self.n_data_workers),
+        )
+    
         optimizer = torch.optim.Adam(self.parameters(), lr=self.learning_rate)
-
+    
+        best_val_loss = float('inf')
+        last_val_loss = None
         with trange(self.n_epochs, desc="Epochs", unit="epoch") as pbar:
             for epoch in pbar:
-                epoch_losses = {}
-                for (waveform_batch, channels_batch), noise_batch in dataloader:
-                    # for whatever reason, batch sampler adds an empty dim
-                    waveform_batch = waveform_batch[0]
-                    channels_batch = channels_batch[0]
-                    noise_batch = noise_batch[0]
-
+                # Training phase
+                self.train()
+                train_losses = {}
+                for (waveform_batch, channels_batch), noise_batch in train_loader:
+                    waveform_batch = waveform_batch[0].to(self.device)
+                    channels_batch = channels_batch[0].to(self.device)
+                    noise_batch = noise_batch[0].to(self.device)
+                    waveform_batch = reindex(channels_batch, waveform_batch, self.relative_index, pad_value=0.0)
+    
                     optimizer.zero_grad()
-
-                    # get a batch of noise samples
-                    # m = self.get_noise(channels_batch).to(waveform_batch)
-                    waveform_batch = waveform_batch.to(self.relative_index.device)
+    
                     m = noise_batch.to(waveform_batch)
                     mask = self.get_masks(channels_batch).to(waveform_batch)
                     exz, eyz, emz, e_exz_y = self.train_forward(waveform_batch, m, mask)
@@ -289,13 +393,44 @@ class Decollider(BaseWaveformDenoiser):
                     loss = sum(loss_dict.values())
                     loss.backward()
                     optimizer.step()
-
+    
                     for k, v in loss_dict.items():
-                        epoch_losses[k] = v.item() + epoch_losses.get(k, 0.0)
-
-                epoch_losses = {k: v / len(dataloader) for k, v in epoch_losses.items()}
-                loss_str = ", ".join(f"{k}: {v:.3f}" for k, v in epoch_losses.items())
+                        train_losses[k] = v.item() + train_losses.get(k, 0.0)
+    
+                train_losses = {k: v / len(train_loader) for k, v in train_losses.items()}
+    
+                self.eval()
+                val_losses = {}
+                with torch.no_grad():
+                    for (waveform_batch, channels_batch), noise_batch in val_loader:
+                        waveform_batch = waveform_batch[0].to(self.device)
+                        channels_batch = channels_batch[0].to(self.device)
+                        noise_batch = noise_batch[0].to(self.device)
+                        waveform_batch = reindex(channels_batch, waveform_batch, self.relative_index, pad_value=0.0)
+    
+                        m = noise_batch.to(waveform_batch)
+                        mask = self.get_masks(channels_batch).to(waveform_batch)
+                        exz, eyz, emz, e_exz_y = self.train_forward(waveform_batch, m, mask)
+                        loss_dict = self.loss(mask, waveform_batch, m, exz, eyz, emz, e_exz_y)
+                        for k, v in loss_dict.items():
+                            val_losses[k] = v.item() + val_losses.get(k, 0.0)
+    
+                val_losses = {k: v / len(val_loader) for k, v in val_losses.items()}
+                val_loss = sum(val_losses.values())
+    
+                if last_val_loss is not None and abs(last_val_loss - val_loss) < self.convergence_eps:
+                    if epoch >= self.min_epochs:
+                        print(f"Early stopping after {epoch} epochs.")
+                        break
+    
+                last_val_loss = val_loss
+                if val_loss < best_val_loss:
+                    best_val_loss = val_loss
+    
+                # loss_str = ", ".join(f"{k}: {v:.3f}" for k, v in {**train_losses, **val_losses}.items())
+                loss_str = " | ".join([f"Train {k}: {v:.3f}" for k, v in train_losses.items()] +[f"Val {k}:{v:.3f}" for k, v in val_losses.items()])
                 pbar.set_description(f"Epochs [{loss_str}]")
+
 
 
 def get_noise(recording, channels, channel_index, spike_length_samples=121, rg=0):
