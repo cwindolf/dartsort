@@ -555,7 +555,7 @@ def test_fakedata_nonn():
             st = main.match(
                 rec,
                 sorting=gts,
-                output_directory=Path(tdir) / "match",
+                output_dir=Path(tdir) / "match",
                 motion_est=None,
                 template_config=tempconf,
                 featurization_config=featconf,
