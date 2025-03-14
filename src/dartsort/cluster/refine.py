@@ -23,13 +23,14 @@ def refine_clustering(
     """Refine a clustering using the strategy specified by the config."""
     if refinement_config.refinement_stragegy == "splitmerge":
         assert refinement_config.split_merge_config is not None
-        return split_merge(
+        ref = split_merge(
             recording,
             sorting,
             motion_est=motion_est,
             split_merge_config=refinement_config.split_merge_config,
             computation_config=computation_config,
         )
+        return ref, {}
 
     # below is all gmm stuff
     assert refinement_config.refinement_stragegy == "gmm"
@@ -81,7 +82,7 @@ def refine_clustering(
     )
     gmm.cleanup()
     # these are for benchmarking
-    step_labels = {} if return_step_labels else None
+    step_labels = {}
     intermediate_split = "full" if return_step_labels else "kept"
     gmm.log_liks = None  # TODO
     for it in range(refinement_config.n_total_iters):

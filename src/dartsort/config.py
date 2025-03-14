@@ -180,7 +180,3 @@ class DeveloperConfig(DARTsortUserConfig):
 
     # flags for dev tasks run by main.run_dev_tasks
     save_intermediate_labels: bool = False
-
-    @property
-    def needs_extra(self):
-        return self.save_intermediate_labels

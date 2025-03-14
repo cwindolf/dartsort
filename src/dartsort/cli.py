@@ -23,11 +23,11 @@ def dartsort_cli():
     )
     ap.add_argument("recording", help="Path to SpikeInterface RecordingExtractor.")
     ap.add_argument(
-        "output_directory",
+        "output_dir",
         nargs="?",
         help="Folder where outputs will be saved. If this is unset, then "
         "--config-toml must be supplied, and the output folder will be the one where "
-        "that configuration lives. If both are supplied, output_directory will be "
+        "that configuration lives. If both are supplied, output_dir will be "
         "used (not the config file's parent dir).",
     )
     ap.add_argument(
@@ -67,13 +67,13 @@ def dartsort_cli():
         config_toml = cli_util.ensurepath(args.config_toml)
 
     # determine output directory
-    if args.output_directory:
-        output_directory = cli_util.ensurepath(args.output_directory, strict=False)
+    if args.output_dir:
+        output_dir = cli_util.ensurepath(args.output_dir, strict=False)
     elif config_toml is None:
         print(f"No output directory given, exiting. See `{ap.prog} -h`.")
         return 1
     else:
-        output_directory = config_toml.parent
+        output_dir = config_toml.parent
 
     # determine the config from the command line args
     cfg = cli_util.combine_toml_and_argv(
@@ -102,9 +102,7 @@ def dartsort_cli():
     # TODO: maybe this script should dump to Phy?
     ret = main.dartsort(
         rec,
-        output_directory,
+        output_dir,
         cfg=cfg,
         overwrite=args.overwrite,
-        return_extra=cfg.needs_extra,
     )
-    main.run_dev_tasks(ret, output_directory, cfg)

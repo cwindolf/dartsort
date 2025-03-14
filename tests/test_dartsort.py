@@ -97,8 +97,10 @@ def test_fakedata():
                 do_motion_estimation=False
             ),
             matching_iterations=1,
+            # test the dev tasks pipeline
+            save_intermediate_labels=True,
         )
-        res = dartsort.dartsort(rec, output_directory=tempdir, cfg=cfg)
+        res = dartsort.dartsort(rec, output_dir=tempdir, cfg=cfg)
 
     for do_motion_estimation in (False, True):
         with tempfile.TemporaryDirectory() as tempdir:
@@ -115,11 +117,7 @@ def test_fakedata():
                     rigid=True,
                 ),
             )
-            cfg0 = dartsort.DeveloperConfig(save_intermediate_labels=True)
-            res = dartsort.dartsort(
-                rec, output_directory=tempdir, cfg=cfg, return_extra=cfg0.needs_extra
-            )
-            dartsort.run_dev_tasks(res, tempdir, cfg0)
+            res = dartsort.dartsort(rec, output_dir=tempdir, cfg=cfg)
 
 
 def test_cli_help():
