@@ -410,10 +410,12 @@ class SpikeMixtureModel(torch.nn.Module):
             nz_lines, init_, *_ = loglik_reassign(lls[:-1])
             init = self.rg.integers(len(ids), size=lls.shape[1])
             init[nz_lines] = init_
-            labels = init 
+            labels = init
         else:
             assert False
-        print(f"XXX {labels.shape=} {init.shape=} {loglik_reassign(lls[:-1])[1].shape=}")
+        print(
+            f"XXX {labels.shape=} {init.shape=} {loglik_reassign(lls[:-1])[1].shape=}"
+        )
 
         unmatched = labels < 0
         if unmatched.any():
@@ -1491,9 +1493,13 @@ class SpikeMixtureModel(torch.nn.Module):
         merge_kind=None,
         merge_criterion=None,
         decision_algorithm=None,
+        ignore_channels=False,
+        kmeans_n_iter=None,
     ):
         if merge_criterion is None:
             merge_criterion = self.merge_criterion
+        if kmeans_n_iter is None:
+            kmeans_n_iter = self.kmeans_n_iter
 
         # get spike data and use interpolation to fill it out to the
         # unit's channel set
@@ -1523,7 +1529,7 @@ class SpikeMixtureModel(torch.nn.Module):
         # run kmeans with kmeans++ initialization
         split_labels, responsibilities = kmeans(
             X.view(len(X), -1),
-            n_iter=self.kmeans_n_iter,
+            n_iter=kmeans_n_iter,
             n_components=self.kmeans_k,
             random_state=self.rg,
             kmeanspp_initial=self.kmeans_kmeanspp_initial,
@@ -1533,6 +1539,7 @@ class SpikeMixtureModel(torch.nn.Module):
         if debug:
             result["split_labels"] = split_labels
             result["responsibilities"] = responsibilities
+
         split_labels = split_labels.cpu()
         split_ids, split_labels = split_labels.unique(return_inverse=True)
         assert split_ids.min() >= 0
@@ -1560,6 +1567,7 @@ class SpikeMixtureModel(torch.nn.Module):
                 merge_criterion=merge_criterion,
                 debug_info=result if debug else None,
                 decision_algorithm=decision_algorithm,
+                ignore_channels=ignore_channels,
             )
         if split_labels is None:
             return result
@@ -2099,6 +2107,8 @@ class SpikeMixtureModel(torch.nn.Module):
         # -- evaluate full model
         fit_channels = self[unit_id].channels.clone() if ignore_channels else None
         n_fit = hyp_fit_resps.shape[1]
+        if n_fit < self.min_count:
+            return None
         assert len(hyp_fit_spikes) == n_fit
         full_info = self.validation_criterion(
             self.log_liks,
@@ -2119,7 +2129,7 @@ class SpikeMixtureModel(torch.nn.Module):
         if debug:
             debug_info["reas_labels"] = best_labels
             debug_info["units"] = units
-            debug_info["full_improvement"] = best_improvement.numpy(force=True).item()
+            debug_info["full_improvement"] = best_improvement
         if n_units <= 1:
             if debug:
                 debug_info["bail"] = f" since {n_units=} {hyp_fit_resps.shape=}"

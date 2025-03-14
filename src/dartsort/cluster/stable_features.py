@@ -170,7 +170,7 @@ class StableSpikeDataset(torch.nn.Module):
 
         # channel neighborhoods and features
         # if not self.features_on_device, .spike_data() will .to(self.device)
-        times_s = torch.asarray(self.original_sorting.times_seconds[kept_indices])
+        times_s = torch.asarray(self.original_sorting.times_seconds)
         self.core_features = core_features
         if self.features_on_device:
             self.register_buffer("_train_extract_features", train_extract_features)

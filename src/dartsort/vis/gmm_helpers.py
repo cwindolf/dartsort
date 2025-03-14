@@ -114,12 +114,14 @@ def unit_pca_ellipse(ax, channels, unit, v, center, noise, color, lw=1, whiten=T
 
     # center and project mean and cov into whitened pca basis
     mean = (unit.mean[:, channels] - center).view(-1) @ wv
+    mean = mean.view(-1).numpy(force=True)
+    assert mean.shape == (2,)
     cov = unit.marginal_covariance(channels=channels).to_dense()
     cov = wv.T @ cov @ wv
     rho = cov[0, 1] / np.sqrt(np.diagonal(cov).prod())
 
     # draw ellipses
-    ax.scatter(*mean.T, marker="s", fc=color, ec="k", lw=1, s=5)
+    ax.scatter(*mean, marker="s", fc=color, ec="k", lw=1, s=5)
     ell = Ellipse(
         (0, 0),
         width=np.sqrt(1 + rho) * 2,
@@ -129,6 +131,6 @@ def unit_pca_ellipse(ax, channels, unit, v, center, noise, color, lw=1, whiten=T
         lw=lw,
     )
     sx, sy = 2 * np.sqrt(np.diagonal(cov))
-    tfx = Affine2D().rotate_deg(45).scale(sx, sy).translate(*mean.squeeze())
+    tfx = Affine2D().rotate_deg(45).scale(sx, sy).translate(*mean)
     ell.set_transform(tfx + ax.transData)
     ax.add_patch(ell)

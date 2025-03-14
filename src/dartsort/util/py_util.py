@@ -1,6 +1,15 @@
 import signal
 import time
 import logging
+from importlib.metadata import Distribution
+import sys
+import json
+
+
+# check if we are installed in editable mode
+pkgname = sys.modules[__name__].__name__.split(".")[0]
+durl = Distribution.from_name(pkgname).read_text("direct_url.json")
+EDITABLE = json.loads(durl).get("dir_info", {}).get("editable", False)
 
 
 class timer:

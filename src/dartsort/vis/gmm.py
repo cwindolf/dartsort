@@ -416,17 +416,24 @@ class KMeansSplit(GMMPlot):
         neighborhood="core",
         with_means=True,
         decision_algorithm=None,
+        ignore_channels=None,
+        kmeans_n_iter=None,
     ):
         self.layout = layout
         self.neighborhood = neighborhood
         self.criterion = criterion
         self.with_means = with_means
         self.decision_algorithm = decision_algorithm
+        self.ignore_channels = ignore_channels
+        self.kmeans_n_iter = kmeans_n_iter
 
     def draw(self, panel, gmm, unit_id, split_info=None):
         criterion = self.criterion
         if criterion is None:
             criterion = gmm.merge_criterion
+        ickw = {}
+        if self.ignore_channels is not None:
+            ickw["ignore_channels"] = self.ignore_channels
 
         if split_info is None:
             split_info = gmm.kmeans_split_unit(
@@ -434,6 +441,8 @@ class KMeansSplit(GMMPlot):
                 debug=True,
                 merge_criterion=criterion,
                 decision_algorithm=self.decision_algorithm,
+                kmeans_n_iter=self.kmeans_n_iter,
+                **ickw,
             )
         failed0 = not split_info
         failed1 = "reas_labels" not in split_info
@@ -740,13 +749,12 @@ class NeighborBimodalities(GMMPlot):
             log_liks = gmm.log_liks[neighbors_plus_noiseunit]
         else:
             log_liks = gmm.log_likelihoods(unit_ids=neighbors)
-        nz_lines, labels, spikells, log_liks = gaussian_mixture.loglik_reassign(
+        nz_lines, labels_, spikells, log_liks = gaussian_mixture.loglik_reassign(
             log_liks, has_noise_unit=True
         )
-        kept = nz_lines[np.logical_and(labels >= 0, labels < len(neighbors))]
-        labels_ = np.full_like(labels, -1)
-        labels_[kept] = neighbors[labels[kept]]
-        labels = labels_
+        kept = np.flatnonzero(np.logical_and(labels_ >= 0, labels_ < len(neighbors)))
+        labels = np.full(log_liks.shape[1], -1)
+        labels[nz_lines[kept]] = neighbors[labels_[kept]]
 
         others = neighbors[1:]
         axes = panel.subplots(nrows=len(others), ncols=2)
