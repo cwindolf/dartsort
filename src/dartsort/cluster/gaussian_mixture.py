@@ -130,6 +130,7 @@ class SpikeMixtureModel(torch.nn.Module):
         em_converged_churn: float = 0.01,
         em_converged_atol: float = 1e-2,
         em_converged_logpx_tol: float = 1e-5,
+        min_overlap: float = 0.0,
         hard_noise=False,
         random_seed: int = 0,
     ):
@@ -176,6 +177,7 @@ class SpikeMixtureModel(torch.nn.Module):
         self.hard_noise = hard_noise
         self.proportions_sample_size = proportions_sample_size
         self.decision_algorithm = decision_algorithm
+        self.min_overlap = min_overlap
 
         # store labels on cpu since we're always nonzeroing / writing np data
         assert self.data.original_sorting.labels is not None
@@ -514,7 +516,7 @@ class SpikeMixtureModel(torch.nn.Module):
         logger.dartsortdebug(f"elbos: {es.tolist()}")
 
         print("post its", flush=True)
-        print(f"{np.unique(labels, return_counts=True)=}")
+        print(f"{np.unique(labels).shape=}")
         assert labels is not None
 
         # reupdate my GaussianUnits
