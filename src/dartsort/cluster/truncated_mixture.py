@@ -1063,13 +1063,16 @@ class CandidateSet:
             needs_replacement = self.candidates[invalid_i, invalid_j]
             invalid_labels = labels[invalid_i, 0]
             if closest_neighbors.numel():
-                replacements = closest_neighbors[invalid_labels, invalid_j.clip(max=closest_neighbors.shape[1])]
+                inv_j = invalid_j.clip(max=closest_neighbors.shape[1] - 1)
+                replacements = closest_neighbors[invalid_labels, inv_j]
             else:
                 replacements = invalid_labels
             eq = needs_replacement == replacements
             if eq.any():
-                replacements[eq] = torch.from_numpy(
-                    self.rg.integers(len(closest_neighbors), size=eq.sum().numpy(force=True)),
+                # TODO: this is not perfect. there can still be dups.
+                neq = eq.sum().numpy(force=True)
+                replacements[eq] = torch.asarray(
+                    self.rg.integers(len(closest_neighbors), size=neq),
                     device=replacements.device,
                     dtype=replacements.dtype,
                 )
@@ -1144,5 +1147,7 @@ class CandidateSet:
 
         # update counts for the rest of units
         if candidates.shape[1] > 1:
-            np.add.at(unit_neighborhood_counts, (candidates[:, 1:], neighb_ids[:, None]), 1)
+            np.add.at(
+                unit_neighborhood_counts, (candidates[:, 1:], neighb_ids[:, None]), 1
+            )
         return candidates, unit_neighborhood_counts
