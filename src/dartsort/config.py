@@ -176,6 +176,7 @@ class DeveloperConfig(DARTsortUserConfig):
 
     gmm_max_spikes: Annotated[int, Field(gt=0)] = 4_000_000
     gmm_val_proportion: Annotated[float, Field(gt=0)] = 0.25
-    gmm_decision_algorithm: str = "brute"
+    gmm_split_decision_algorithm: str = "tree"
+    gmm_merge_decision_algorithm: str = "brute"
 
     save_intermediate_labels: bool = False

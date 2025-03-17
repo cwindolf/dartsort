@@ -359,7 +359,8 @@ class RefinementConfig:
     n_total_iters: int = 3
     hard_noise: bool = False
     truncated: bool = True
-    decision_algorithm: str = "brute"
+    split_decision_algorithm: str = "tree"
+    merge_decision_algorithm: str = "brute"
 
     # if someone wants this
     split_merge_config: SplitMergeConfig | None = None
@@ -513,7 +514,8 @@ def to_internal_config(cfg):
         val_proportion=cfg.gmm_val_proportion,
         channels_strategy=cfg.channels_strategy,
         truncated=cfg.truncated,
-        decision_algorithm=cfg.gmm_decision_algorithm,
+        split_decision_algorithm=cfg.gmm_split_decision_algorithm,
+        merge_decision_algorithm=cfg.gmm_merge_decision_algorithm,
     )
     motion_estimation_config = MotionEstimationConfig(
         **{k.name: getattr(cfg, k.name) for k in fields(MotionEstimationConfig)}

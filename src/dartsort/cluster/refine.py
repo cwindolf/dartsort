@@ -78,7 +78,8 @@ def refine_clustering(
         em_converged_atol=refinement_config.em_converged_atol,
         channels_strategy=refinement_config.channels_strategy,
         hard_noise=refinement_config.hard_noise,
-        decision_algorithm=refinement_config.decision_algorithm,
+        split_decision_algorithm=refinement_config.split_decision_algorithm,
+        merge_decision_algorithm=refinement_config.merge_decision_algorithm,
     )
     gmm.cleanup()
     # these are for benchmarking
