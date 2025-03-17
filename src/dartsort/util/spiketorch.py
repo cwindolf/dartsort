@@ -438,8 +438,6 @@ def woodbury_kl_divergence(C, mu, W=None, mus=None, Ws=None, out=None, batch_siz
             = |mu's - mu'o|^2 - |caps^{-1/2} Ws' C^{-1/2} (mu's - mu'o)|^2
             = |mu's - mu'o|^2 - |Vs' (mu's - mu'o)|^2
 
-    TODO: There is something wrong here.
-
     Returns
     -------
     out : Tensor
@@ -457,22 +455,22 @@ def woodbury_kl_divergence(C, mu, W=None, mus=None, Ws=None, out=None, batch_siz
     # Ccholinv = torch.linalg.solve_triangular(
     #     Cchol, torch.eye(len(Cchol), out=torch.empty_like(Cchol)), upper=False
     # )
-    Ccholinv = Cchol.inverse().to_dense()[None].broadcast_to((n, *Cchol.shape))
+    Ccholinv = Cchol.inverse().to_dense()
     # mu_ = torch.linalg.solve_triangular(Cchol, mu.unsqueeze(2), upper=False)
-    mu_ = Ccholinv.bmm(mu.unsqueeze(2))
+    mu_ = mu @ Ccholinv.T
 
     if W is None:
         # else, better to do this later
         for bs in range(0, n, batch_size):
             osl = slice(bs, min(bs + batch_size, n))
-            out[osl] = (mu_[osl, None] - mu_[None]).square_().sum(dim=(2, 3))
+            out[osl] = (mu_[osl, None] - mu_[None]).square_().sum(dim=2)
         out *= 0.5
         return out
 
     M = W.shape[2]
     assert W.shape == (n, d, M)
     # U = torch.linalg.solve_triangular(Cchol, W, upper=False)
-    U = Ccholinv.bmm(W)
+    U = torch.einsum("de,ndm->nem", Ccholinv, W)
 
     # first part of trace
     UTU = U.mT.bmm(U)
@@ -508,10 +506,10 @@ def woodbury_kl_divergence(C, mu, W=None, mus=None, Ws=None, out=None, batch_siz
         if dmu is not None:
             dmu = dmu[: osl.stop - bs]
         dmu = torch.sub(mu_[None], mu_[osl, None], out=dmu)
-        corr = dmu.mT @ V[None]
-        corr = corr.square_().sum(dim=(2, 3))
+        corr = torch.einsum("osd,sdm->osm", dmu, V)
+        corr = corr.square_().sum(dim=2)
         out[osl] -= corr
-        mah = dmu.square_().sum(dim=(2, 3))
+        mah = dmu.square_().sum(dim=2)
         out[osl] += mah
 
     # trace term B: it's a self-vec
