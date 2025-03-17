@@ -118,7 +118,8 @@ class SpikeMixtureModel(torch.nn.Module):
             "old_icl",
             "old_bimodality",
         ] = "heldout_elbo",
-        decision_algorithm="tree",
+        merge_decision_algorithm="brute",
+        split_decision_algorithm="tree",
         split_bimodality_threshold: float = 0.1,
         merge_bimodality_cut: float = 0.0,
         merge_bimodality_overlap: float = 0.80,
@@ -176,7 +177,8 @@ class SpikeMixtureModel(torch.nn.Module):
         self.use_proportions = use_proportions
         self.hard_noise = hard_noise
         self.proportions_sample_size = proportions_sample_size
-        self.decision_algorithm = decision_algorithm
+        self.merge_decision_algorithm = merge_decision_algorithm
+        self.split_decision_algorithm = split_decision_algorithm
         self.min_overlap = min_overlap
 
         # store labels on cpu since we're always nonzeroing / writing np data
@@ -1941,7 +1943,7 @@ class SpikeMixtureModel(torch.nn.Module):
         if threshold is None:
             threshold = self.merge_criterion_threshold
         if decision_algorithm is None:
-            decision_algorithm = self.decision_algorithm
+            decision_algorithm = self.merge_decision_algorithm
         if min_overlap is None:
             min_overlap = self.min_overlap
 
@@ -2127,7 +2129,7 @@ class SpikeMixtureModel(torch.nn.Module):
         if max_distance is None:
             max_distance = self.merge_distance_threshold
         if decision_algorithm is None:
-            decision_algorithm = self.decision_algorithm
+            decision_algorithm = self.split_decision_algorithm
         if min_overlap is None:
             min_overlap = self.min_overlap
         if distance_metric is None:
