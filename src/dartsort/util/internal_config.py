@@ -331,10 +331,12 @@ class RefinementConfig:
     min_count: int = 50
     signal_rank: int = 0
     n_spikes_fit: int = 4096
-    ppca_inner_em_iter: int = 10
-    distance_metric: Literal["noise_metric", "kl", "reverse_kl", "symkl"] = "symkl"
+    ppca_inner_em_iter: int = 5
+    distance_metric: Literal["noise_metric", "kl", "reverse_kl", "symkl"] = (
+        "noise_metric"
+    )
     distance_normalization_kind: Literal["none", "noise", "channels"] = "noise"
-    merge_distance_threshold: float = 1.5
+    merge_distance_threshold: float = 2.0
     # if None, switches to bimodality
     merge_criterion_threshold: float | None = 0.0
     merge_criterion: Literal[

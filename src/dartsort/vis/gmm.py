@@ -345,7 +345,7 @@ class Likelihoods(GMMPlot):
         if not in_unit.numel():
             return
         if hasattr(gmm, "log_liks"):
-            liks_ = gmm.log_liks[:, in_unit][[unit_id]].tocoo()
+            liks_ = gmm.log_liks[:, in_unit.numpy(force=True)][[unit_id]].tocoo()
             inds_ = None
             if liks_.nnz:
                 inds_ = in_unit
@@ -418,6 +418,9 @@ class KMeansSplit(GMMPlot):
         decision_algorithm=None,
         ignore_channels=None,
         kmeans_n_iter=None,
+        min_overlap=None,
+        metric=None,
+        distance_normalization_kind=None,
     ):
         self.layout = layout
         self.neighborhood = neighborhood
@@ -426,14 +429,20 @@ class KMeansSplit(GMMPlot):
         self.decision_algorithm = decision_algorithm
         self.ignore_channels = ignore_channels
         self.kmeans_n_iter = kmeans_n_iter
+        self.min_overlap = min_overlap
+        self.metric = metric
+        self.distance_normalization_kind = distance_normalization_kind
 
     def draw(self, panel, gmm, unit_id, split_info=None):
-        criterion = self.criterion
-        if criterion is None:
-            criterion = gmm.merge_criterion
+        criterion = self.criterion or gmm.merge_criterion
         ickw = {}
         if self.ignore_channels is not None:
             ickw["ignore_channels"] = self.ignore_channels
+        min_overlap = self.min_overlap
+        if min_overlap is None:
+            min_overlap = gmm.min_overlap
+        metric = self.metric or gmm.distance_metric
+        normkind = self.distance_normalization_kind or gmm.distance_normalization_kind
 
         if split_info is None:
             split_info = gmm.kmeans_split_unit(
@@ -442,6 +451,9 @@ class KMeansSplit(GMMPlot):
                 merge_criterion=criterion,
                 decision_algorithm=self.decision_algorithm,
                 kmeans_n_iter=self.kmeans_n_iter,
+                min_overlap=min_overlap,
+                distance_metric=metric,
+                distance_normalization_kind=normkind,
                 **ickw,
             )
         failed0 = not split_info
@@ -491,8 +503,8 @@ class KMeansSplit(GMMPlot):
                 image_cmap=distance_cmap,
                 show_values=True,
             )
-            normstr = f"norm={gmm.distance_normalization_kind}"
-            ax_dist.set_title(f"{gmm.distance_metric}, {normstr}", fontsize="small")
+            normstr = f"norm={normkind}"
+            ax_dist.set_title(f"{metric}, {normstr}", fontsize="small")
 
         if "bimodalities" in split_info:
             # bimodality matrix
@@ -910,6 +922,7 @@ class NeighborTreeMerge(GMMPlot):
         distance_normalization_kind=None,
         threshold=-np.inf,
         decision_algorithm=None,
+        min_overlap=None,
     ):
         self.n_neighbors = n_neighbors
         self.metric = metric
@@ -919,6 +932,7 @@ class NeighborTreeMerge(GMMPlot):
         self.distance_normalization_kind = distance_normalization_kind
         self.threshold = threshold
         self.decision_algorithm = decision_algorithm
+        self.min_overlap = min_overlap
 
     def draw(self, panel, gmm, unit_id):
         neighbors = gmm_helpers.get_neighbors(gmm, unit_id)
@@ -931,6 +945,10 @@ class NeighborTreeMerge(GMMPlot):
         metric = self.metric
         if metric is None:
             metric = gmm.distance_metric
+
+        min_overlap = self.min_overlap
+        if min_overlap is None:
+            min_overlap = gmm.min_overlap
 
         decision_algorithm = self.decision_algorithm
         if decision_algorithm is None:
@@ -959,6 +977,7 @@ class NeighborTreeMerge(GMMPlot):
                 likelihoods=gmm.log_liks,
                 criterion=criterion,
                 threshold=self.threshold,
+                min_overlap=self.min_overlap,
             )
             brute_indicator = None
         else:
@@ -970,6 +989,7 @@ class NeighborTreeMerge(GMMPlot):
                 criterion=criterion,
                 threshold=self.threshold,
                 decision_algorithm=decision_algorithm,
+                min_overlap=self.min_overlap,
             )
 
         # make vis
@@ -997,7 +1017,10 @@ class NeighborTreeMerge(GMMPlot):
                     nstr += f"dnm={distance_normalization_kind}"
                 if criterion_normalization_kind != "none":
                     nstr += f"cnm={criterion_normalization_kind}"
-                ax.set_title(f"{metric} {criterion} {nstr}", fontsize="small")
+                ax.set_title(
+                    f"{decision_algorithm} {metric} {criterion} {nstr} mo={min_overlap}",
+                    fontsize="small",
+                )
                 sns.despine(ax=ax, left=True, right=True, top=True)
             except ValueError as e:
                 ax.text(

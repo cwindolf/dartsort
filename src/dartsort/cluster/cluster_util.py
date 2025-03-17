@@ -51,6 +51,23 @@ def leafsets(Z, max_distance=np.inf):
     return leaves
 
 
+def is_largest_set_smaller_than(Z, leaf_descendants, max_size=5):
+    n_branches = len(Z)
+    n_units = n_branches + 1
+    indicator = np.zeros(n_branches, dtype=bool)
+    for i, (pa, pb, dist, nab) in enumerate(Z):
+        sz = len(leaf_descendants[n_units + i])
+        if sz <= max_size:
+            pa = int(pa)
+            pb = int(pb)
+            indicator[i] = True
+            if pa >= n_units:
+                indicator[pa - n_units] = False
+            if pb >= n_units:
+                indicator[pb - n_units] = False
+    return indicator
+
+
 def combine_distances(
     distances,
     thresholds,

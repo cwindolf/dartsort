@@ -178,5 +178,4 @@ class DeveloperConfig(DARTsortUserConfig):
     gmm_val_proportion: Annotated[float, Field(gt=0)] = 0.25
     gmm_decision_algorithm: str = "brute"
 
-    # flags for dev tasks run by main.run_dev_tasks
     save_intermediate_labels: bool = False
