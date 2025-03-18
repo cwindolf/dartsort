@@ -184,7 +184,9 @@ class DARTsortSorting:
                         and (h5[k].ndim < 2 or h5[k].shape[1] < simple_feature_maxshape)
                     ):
                         extra_features[k] = h5[k][:]
-                    elif (k not in loaded and (k.endswith("channel_index") or k == 'geom')):
+                    elif k not in loaded and (
+                        k.endswith("channel_index") or k == "geom"
+                    ):
                         extra_features[k] = h5[k][:]
 
         return cls(
@@ -218,6 +220,16 @@ def get_tpca(sorting):
         print("Looking for a TPCA featurizer, but there aren't any.")
     tpca = tpcas[0]
     return tpca
+
+
+def get_labels(h5_path):
+    with h5py.File(h5_path, "r") as h5:
+        return h5["labels"][:]
+
+
+def get_residual_snips(h5_path):
+    with h5py.File(h5_path, "r") as h5:
+        return h5["residual"][:]
 
 
 def keep_only_most_recent_spikes(

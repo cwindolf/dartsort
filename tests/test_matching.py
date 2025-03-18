@@ -102,7 +102,6 @@ def test_tiny(tmp_path):
                 torch.square(res["residual"]).mean(),
                 0.0,
             )
-            print(f"A {torch.square(res['conv']).mean()=}")
             assert np.isclose(
                 torch.square(res["conv"]).mean(),
                 0.0,
@@ -126,8 +125,6 @@ def test_tiny(tmp_path):
                 return_residual=True,
                 return_conv=True,
             )
-            print(f'tiny {torch.square(res["residual"]).mean()=}')
-            print(f'tiny {torch.square(res["conv"]).mean()=}')
             assert res["n_spikes"] == len(times)
             assert np.array_equal(res["times_samples"], times)
             assert np.array_equal(res["labels"], labels)
@@ -136,22 +133,18 @@ def test_tiny(tmp_path):
                 torch.square(res["residual"]).mean(),
                 0.0,
             )
-            print(f"B {torch.square(res['conv']).mean()=}")
             assert np.isclose(
                 torch.square(res["conv"]).mean(),
                 0.0,
                 atol=1e-4,
             )
-            print(f"{res['scores']=}")
             assert torch.all(res["scores"] > 0)
 
 
 def test_tiny_up(tmp_path, up_factor=8):
     recording_length_samples = 2000
     n_channels = 2
-    geom = np.c_[np.zeros(2), np.arange(2)]
-    geom
-
+    geom = np.c_[np.zeros(n_channels), np.arange(n_channels)]
     # template main channel traces
     trace0 = 50 * np.exp(
         -(((np.arange(spike_length_samples) - trough_offset_samples) / 10) ** 2)
@@ -460,7 +453,7 @@ def test_static_up(tmp_path):
     static_tester(tmp_path, up_factor=8)
 
 
-def test_fakedata_nonn():
+def _test_fakedata_nonn(threshold):
     print("test_fakedata_nonn")
     # generate fake neuropixels data with artificial templates
     T_s = 9.5
@@ -516,7 +509,6 @@ def test_fakedata_nonn():
             st.sort()
             ref = np.diff(st).min()
             if ref > 15:
-                print(f"{ref=}")
                 sts.append(st)
                 break
         labels.append(np.full((spikes_per_unit,), i))
@@ -547,6 +539,8 @@ def test_fakedata_nonn():
         superres_templates=False,
         registered_templates=False,
     )
+    matchconf = config.MatchingConfig(threshold=threshold)
+    matchconf_fp = config.MatchingConfig(threshold="fp_control")
 
     with tempfile.TemporaryDirectory() as tdir:
         rec1 = rec0.save_to_folder(Path(tdir) / "rec")
@@ -559,32 +553,48 @@ def test_fakedata_nonn():
                 motion_est=None,
                 template_config=tempconf,
                 featurization_config=featconf,
+                matching_config=matchconf,
             )
             assert np.all(st.scores > 0)
+
+            (Path(tdir) / "match2").mkdir()
+            st2 = main.match(
+                rec,
+                sorting=st,
+                output_dir=Path(tdir) / "match2",
+                motion_est=None,
+                template_config=tempconf,
+                featurization_config=featconf,
+                matching_config=matchconf_fp,
+            )
+            assert np.all(st.scores > 0)
+
+            print(f"{st=}")
+            print(f"{st2=}")
+
             shutil.rmtree(Path(tdir) / "match")
+            shutil.rmtree(Path(tdir) / "match2")
+
+
+def test_fakedata_nonn():
+    _test_fakedata_nonn(7.0)
 
 
 if __name__ == "__main__":
     test_fakedata_nonn()
 
-    print("\n" * 5)
-    print("test tiny")
+    print("\n\ntest tiny")
     with tempfile.TemporaryDirectory() as tdir:
         test_tiny(Path(tdir))
 
-    print("\n" * 5)
-    print("test tiny_up")
+    print("\n\ntest tiny_up")
     with tempfile.TemporaryDirectory() as tdir:
         test_tiny_up(Path(tdir))
 
-    print()
-    print("\n" * 5)
-    print("test test_static_noup")
+    print("\n\ntest test_static_noup")
     with tempfile.TemporaryDirectory() as tdir:
         test_static_noup(Path(tdir))
 
-    print()
-    print("\n" * 5)
-    print("test test_static_up")
+    print("\n\ntest test_static_up")
     with tempfile.TemporaryDirectory() as tdir:
         test_static_up(Path(tdir))

@@ -1,6 +1,5 @@
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Optional
 
 import numpy as np
 
@@ -29,19 +28,26 @@ class TemplateData:
     # (n_templates,) spike count for each template
     spike_counts: np.ndarray
     # (n_templates, n_registered_channels or n_channels) spike count for each channel
-    spike_counts_by_channel: Optional[np.ndarray] = None
+    spike_counts_by_channel: np.ndarray | None = None
     # (n_templates, spike_length_samples, n_registered_channels or n_channels)
-    raw_std_dev: Optional[np.ndarray] = None
+    raw_std_dev: np.ndarray | None = None
 
-    registered_geom: Optional[np.ndarray] = None
-    registered_template_depths_um: Optional[np.ndarray] = None
+    registered_geom: np.ndarray | None = None
+    registered_template_depths_um: np.ndarray | None = None
     localization_radius_um: float = 100.0
     trough_offset_samples: int = 42
     spike_length_samples: int = 121
 
+    # always set if initialized from a sorting which has one
+    parent_sorting_hdf5_path: str | None = None
+
     @classmethod
     def from_npz(cls, npz_path):
         with np.load(npz_path) as data:
+            parent_sorting_hdf5_path = data.pop("parent_sorting_hdf5_path", None)
+            if parent_sorting_hdf5_path is not None:
+                parent_sorting_hdf5_path = parent_sorting_hdf5_path.item()
+            data["parent_sorting_hdf5_path"] = parent_sorting_hdf5_path
             return cls(**data)
 
     def to_npz(self, npz_path):
@@ -60,6 +66,10 @@ class TemplateData:
             to_save["spike_counts_by_channel"] = self.spike_counts_by_channel
         if self.raw_std_dev is not None:
             to_save["raw_std_dev"] = self.raw_std_dev
+        if self.parent_sorting_hdf5_path is not None:
+            to_save["parent_sorting_hdf5_path"] = np.array(
+                [self.parent_sorting_hdf5_path]
+            )
         if not npz_path.parent.exists():
             npz_path.parent.mkdir()
         np.savez(npz_path, **to_save)
@@ -170,6 +180,8 @@ class TemplateData:
                 "TemplateData.from_config needs sorting!=None when its .npz file does not exist."
             )
 
+        parent_sorting_hdf5_path = sorting.parent_h5_path
+
         fs = recording.sampling_frequency
         trough_offset_samples = waveform_config.trough_offset_samples(fs)
         spike_length_samples = waveform_config.spike_length_samples(fs)
@@ -250,7 +262,9 @@ class TemplateData:
             )
 
         # main!
-        results = get_templates(recording, sorting, n_jobs=computation_config.actual_n_jobs(), **kwargs)
+        results = get_templates(
+            recording, sorting, n_jobs=computation_config.actual_n_jobs(), **kwargs
+        )
 
         # handle registered templates
         if template_config.registered_templates and motion_est is not None:
@@ -271,6 +285,7 @@ class TemplateData:
                 localization_radius_um=template_config.registered_template_localization_radius_um,
                 trough_offset_samples=trough_offset_samples,
                 spike_length_samples=spike_length_samples,
+                parent_sorting_hdf5_path=parent_sorting_hdf5_path,
             )
         else:
             geom = depths_um = None
@@ -291,6 +306,7 @@ class TemplateData:
                 localization_radius_um=template_config.registered_template_localization_radius_um,
                 trough_offset_samples=trough_offset_samples,
                 spike_length_samples=spike_length_samples,
+                parent_sorting_hdf5_path=parent_sorting_hdf5_path,
             )
         if save_folder is not None:
             obj.to_npz(npz_path)

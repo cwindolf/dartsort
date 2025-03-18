@@ -221,7 +221,7 @@ class MatchingConfig:
     fit_sampling: str = "random"
 
     # template matching parameters
-    threshold: float = 15.0  # norm, not normsq
+    threshold: float | Literal["fp_control"] = 15.0  # norm, not normsq
     template_svd_compression_rank: int = 10
     template_temporal_upsampling_factor: int = 8
     template_min_channel_amplitude: float = 1.0

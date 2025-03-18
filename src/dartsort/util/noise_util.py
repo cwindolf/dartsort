@@ -175,7 +175,6 @@ class StationaryFactorizedNoise(torch.nn.Module):
         # need extra room at the edges to do valid convolution
         t_padded = t + self.t - 1
         noise = torch.randn(size * c, t_padded, generator=generator, device=device)
-        print(f"{noise.shape=}")
         noise = spiketorch.single_inv_oaconv1d(
             noise,
             s2=self.t,
@@ -238,8 +237,35 @@ class StationaryFactorizedNoise(torch.nn.Module):
         generator=None,
         size=100,
         t=4096,
-        unit_batch_size=32,
     ):
+        """Run template detection in noise residual to check for false positives
+
+        Given a collection of (SVD factorized) templates, compute their template
+        matching objective in simulated recording snippets drawn according to
+        this noise object's distribution. Then, detect peaks (with a refractory
+        condition) to estimate the false positive count.
+
+        Arguments
+        ---------
+        low_rank_templates : LowRankTemplates
+        min_threshold : float
+            The bare minimum deconv objective
+        radius : int
+            Refractory period
+        generator : torch.Generator
+            For reproducibility.
+        size : int
+            Number of recording snipppets
+        t : int
+            Length of each recording snippet
+
+        Returns
+        -------
+        total_samples : int
+            Total number of valid temporal samples
+        fp_dataframe : pd.DataFrame
+            With columns `units` and `scores`
+        """
         from ..detect import detect_and_deduplicate
 
         singular = torch.asarray(
@@ -258,21 +284,27 @@ class StationaryFactorizedNoise(torch.nn.Module):
             device=self.spatial_std.device,
             dtype=self.spatial_std.dtype,
         )
-        negnormsq = spatial_singular.square().sum((1, 2)).neg_().unsqueeze(1)
+        normsq = spatial_singular.square().sum((1, 2))
+        negnormsq = normsq.neg().unsqueeze(1)
         nu, nt = temporal.shape[:2]
         obj = None  # var for reusing buffers
         units = []
         scores = []
         for j in trange(size, desc="False positives"):
+            # note: simulating with padding so that the valid conv has length t.
             sample = self.simulate(t=t + nt - 1, generator=generator)[0].T
+            assert sample.isfinite().all()
             obj = spiketorch.convolve_lowrank(
                 sample,
                 spatial_singular,
                 temporal,
                 out=obj,
+                padding=0,
             )
+            assert obj.isfinite().all()
             assert obj.shape == (nu, t)
             obj = torch.add(negnormsq, obj, alpha=2.0, out=obj)
+            assert obj.isfinite().all()
 
             # find peaks...
             peak_times, peak_units, peak_energies = detect_and_deduplicate(
@@ -282,18 +314,19 @@ class StationaryFactorizedNoise(torch.nn.Module):
                 dedup_temporal_radius=radius,
                 return_energies=True,
             )
+            assert peak_energies.isfinite().all()
             units.append(peak_units.numpy(force=True))
             scores.append(peak_energies.numpy(force=True))
 
         total_samples = size * t
-        df = pd.DataFrame(
-            dict(
-                units=np.concatenate(units),
-                scores=np.concatenate(scores),
-            )
-        )
+        data = dict(units=np.concatenate(units), scores=np.concatenate(scores))
+        fp_dataframe = pd.DataFrame(data)
 
-        return total_samples, df
+        return dict(
+            total_samples=total_samples,
+            fp_dataframe=fp_dataframe,
+            normsq=normsq.numpy(force=True),
+        )
 
 
 class EmbeddedNoise(torch.nn.Module):
@@ -823,6 +856,112 @@ def interpolate_residual_snippets(
     snippets_full.scatter_(2, targ_inds.to(snippets.device), snippets)
 
     return snippets_full
+
+
+def fp_control_threshold(
+    fp_dataframe,
+    fp_num_frames,
+    labels,
+    clustering_num_frames,
+    template_normsqs,
+    clustering_subsampling_rate=1.0,
+    max_fp_per_input_spike=1.0,
+    resolution=1.0,
+    min_threshold_factor=0.5,
+):
+    """Global threshold for template matching to control the false positive rate
+
+    For each unit, as a function of the threshold, we can estimate the number
+    of false positives per frame using `fp_dataframe` and `fp_num_frames`. We
+    can also estimate the true positive rate using `labels` and
+    `clustering_num_frames`.
+
+    Then, for each unit, we can find the largest threshold such that the false
+    positive rate divided by the true positive rate is <max_fp_per_input_spike.
+    This controls the FPR after deconv per unit to be
+    <max_fp_per_input_spike/2*max_fp_per_input_spike.
+    We can then take the max over units to get a global threshold.
+
+    Arguments
+    ---------
+    fp_dataframe: pd.DataFrame
+    fp_num_frames : int
+        Above two as returned by .unit_false_positives()
+    labels : np.array
+        Clustering labels
+    clustering_num_frames : int
+        Number of valid recording frames used during clustering
+    clustering_subsampling_rate : float
+        If the full set of detected spikes from the whole `clustering_num_frames`
+        frame collection was subsampled, then we should calculate rates per frame
+        by dividing by clustering_subsampling_rate * clustering_num_frames
+    max_fp_per_input_spike : float
+        The control parameter described above.
+    resolution : float
+        The rates as a function of threshold will be estimated as a function of
+        (squared) deconv threshold at this resolution.
+
+    Returns
+    -------
+    threshold : float
+        Note: this is in squared objective units.
+    """
+    tp_units, tp_counts = np.unique(labels, return_counts=True)
+    tp_counts = tp_counts[tp_units >= 0]
+    tp_units = tp_units[tp_units >= 0]
+    fp_units = np.unique(fp_dataframe.units)
+    assert np.isin(fp_units, tp_units).all()
+    has_fp = np.isin(tp_units, fp_units)
+
+    # initialize the threshold with a min factor
+    threshold = min_threshold_factor * template_normsqs.min()
+    if not len(fp_dataframe):
+        return threshold
+
+    # resolution-spaced grid which will be used for searches below
+    start = resolution * (threshold // resolution)
+    end = resolution * (fp_dataframe.scores.max() // resolution)
+    domain = np.arange(start, end + resolution, resolution)
+    domaini = 0
+
+    # account for different time ranges
+    fp_per_tp = fp_num_frames / (clustering_subsampling_rate * clustering_num_frames)
+
+    for uid, tp in zip(tp_units[has_fp], tp_counts[has_fp]):
+        in_uid = fp_dataframe.units == uid
+        if not in_uid.any():
+            continue
+
+        # does the unit even have any fps at this threshold?
+        fp_scores = fp_dataframe[in_uid].scores.values
+        if threshold > fp_scores.max():
+            continue
+
+        # largest number of false positives we can allow in this unit
+        max_fp = max_fp_per_input_spike * tp * fp_per_tp
+
+        # check if we are already under the limit
+        if fp_scores.size <= max_fp:
+            continue
+
+        # pick the smallest threshold such that the estimated fp is < max_fp
+        fp_scores.sort()
+        fp_ix = 0
+        for i, x in enumerate(domain[domaini:]):
+            rel_ix = np.searchsorted(fp_scores[fp_ix:], x, side="left")
+            if rel_ix == 0:
+                continue
+            fp_ix += rel_ix
+            n_fp = fp_scores.size - fp_ix
+            if n_fp <= max_fp:
+                domaini = i
+                threshold = x
+                break
+        else:
+            # a break should always be hit thanks to the continues above
+            assert False
+
+    return threshold
 
 
 def get_discovery_control(

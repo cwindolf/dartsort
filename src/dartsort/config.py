@@ -61,11 +61,13 @@ class DARTsortUserConfig:
         doc="Threshold in standardized voltage units for initial detection; "
         "peaks or troughs larger than this value will be grabbed.",
     )
-    matching_threshold: Annotated[float, Field(gt=0)] = argfield(
-        default=15.0,
-        doc="Template matching threshold. If subtracting a template leads "
-        "to at least this great of a decrease in the norm of the residual, "
-        "that match will be used.",
+    matching_threshold: Annotated[float, Field(gt=0)] | Literal["fp_control"] = (
+        argfield(
+            default=15.0,
+            doc="Template matching threshold. If subtracting a template leads "
+            "to at least this great of a decrease in the norm of the residual, "
+            "that match will be used.",
+        )
     )
     denoiser_badness_factor: Annotated[float, Field(gt=0, lt=1)] = argfield(
         default=0.1,
