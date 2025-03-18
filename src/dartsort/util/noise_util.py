@@ -868,6 +868,7 @@ def fp_control_threshold(
     max_fp_per_input_spike=1.0,
     resolution=1.0,
     min_threshold_factor=0.5,
+    min_threshold=5.0,
 ):
     """Global threshold for template matching to control the false positive rate
 
@@ -914,7 +915,7 @@ def fp_control_threshold(
     has_fp = np.isin(tp_units, fp_units)
 
     # initialize the threshold with a min factor
-    threshold = min_threshold_factor * template_normsqs.min()
+    threshold = max(min_threshold, min_threshold_factor * template_normsqs.min())
     if not len(fp_dataframe):
         return threshold
 
@@ -962,53 +963,3 @@ def fp_control_threshold(
             assert False
 
     return threshold
-
-
-def get_discovery_control(
-    units,
-    tp_scores,
-    tp_labels,
-    fp_scores,
-    fp_labels,
-    fp_num_frames,
-    rec_total_frames,
-):
-    """Pick thresholds for deconvolution
-
-    TP scores are the deconv thresholds at which "true positive" (well,
-    at least from our best guess) spikes would be matched during deconv.
-    FP scores are the deconv thresholds at which false positive (according
-    to our noise estimate) events would be detected. Note that some units
-    will have no false positives -- they're just that good.
-
-    Then:
-      - (unit_tp_scores < thresh).mean() is an estimate of the false negative
-        rate for that unit. If the clustering was 'unbiased', it's a good estimate.
-
-        If clustering was conservative (biased to high scoring spikes), it
-        underestimates the FNR. If we pick largest thresh s.t. this
-        underest < maxfnr, then we picked a threshold that was too big.
-
-      - (unit_fp_scores > thresh).sum() * (rec_total_frames / fp_num_frames) * n_spikes_unit
-        estimates the number of false positive spikes per real spike for that unit.
-
-    fnr control options. max fnr = alpha.
-      - per-unit alpha: pick thresh = alpha qtile per unit. (max thresh s.t. fnr est < alpha)
-      - worst-unit alpha: min of above.
-          (why should we choose to miss any spikes in big units? it won't even cost FPs.)
-      - fudged per unit: fudge_factor * per-unit alpha
-          (account for conservative clustering bias. but how to pick fudge_factor?)
-      - worst-unit fudged.
-
-    fp control options: max fp per input spike = K, say 2.5 or 5?
-      - per-unit: thresh = min thresh s.t. fp/spk est < K
-      - worst-unit: max of above
-
-    I think a reasonable goal is to do the best we can to control FNR while not
-    blowing up the spike count. In other words, the threshold we choose is
-        max(count_control_threshold, fnr_control_threshold).
-
-    This can be done globally or per unit. If global, we do...
-        max(count_control_thresholds.max(), fnr_control_thresholds.min()).
-    """
-    pass
