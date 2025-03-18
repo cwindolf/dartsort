@@ -43,7 +43,8 @@ class TemplateData:
 
     @classmethod
     def from_npz(cls, npz_path):
-        with np.load(npz_path) as data:
+        with np.load(npz_path, allow_pickle=True) as data:
+            data = dict(**data)
             parent_sorting_hdf5_path = data.pop("parent_sorting_hdf5_path", None)
             if parent_sorting_hdf5_path is not None:
                 parent_sorting_hdf5_path = parent_sorting_hdf5_path.item()

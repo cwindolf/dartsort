@@ -1,3 +1,5 @@
+from logging import getLogger
+
 import h5py
 import linear_operator
 import numpy as np
@@ -8,6 +10,8 @@ from scipy.fftpack import next_fast_len
 from tqdm.auto import trange
 
 from ..util import drift_util, more_operators, spiketorch
+
+logger = getLogger(__name__)
 
 
 class FullNoise(torch.nn.Module):
@@ -284,7 +288,7 @@ class StationaryFactorizedNoise(torch.nn.Module):
             device=self.spatial_std.device,
             dtype=self.spatial_std.dtype,
         )
-        normsq = spatial_singular.square().sum((1, 2))
+        normsq = singular.square().sum(1)
         negnormsq = normsq.neg().unsqueeze(1)
         nu, nt = temporal.shape[:2]
         obj = None  # var for reusing buffers
@@ -861,7 +865,8 @@ def interpolate_residual_snippets(
 def fp_control_threshold(
     fp_dataframe,
     fp_num_frames,
-    labels,
+    tp_unit_ids,
+    tp_counts,
     clustering_num_frames,
     template_normsqs,
     clustering_subsampling_rate=1.0,
@@ -888,8 +893,8 @@ def fp_control_threshold(
     fp_dataframe: pd.DataFrame
     fp_num_frames : int
         Above two as returned by .unit_false_positives()
-    labels : np.array
-        Clustering labels
+    tp_unit_ids, tp_counts : np.array
+        Unique of clustering labels
     clustering_num_frames : int
         Number of valid recording frames used during clustering
     clustering_subsampling_rate : float
@@ -907,15 +912,16 @@ def fp_control_threshold(
     threshold : float
         Note: this is in squared objective units.
     """
-    tp_units, tp_counts = np.unique(labels, return_counts=True)
-    tp_counts = tp_counts[tp_units >= 0]
-    tp_units = tp_units[tp_units >= 0]
+    tp_counts = tp_counts[tp_unit_ids >= 0]
+    tp_unit_ids = tp_unit_ids[tp_unit_ids >= 0]
     fp_units = np.unique(fp_dataframe.units)
-    assert np.isin(fp_units, tp_units).all()
-    has_fp = np.isin(tp_units, fp_units)
+    assert np.isin(fp_units, tp_unit_ids).all()
+    has_fp = np.isin(tp_unit_ids, fp_units)
+    logger.dartsortdebug(f"{has_fp.mean()*100:.1f}% of units had FPs")
 
     # initialize the threshold with a min factor
     threshold = max(min_threshold, min_threshold_factor * template_normsqs.min())
+    logger.dartsortdebug(f"fp control: min possible {threshold=}")
     if not len(fp_dataframe):
         return threshold
 
@@ -928,7 +934,7 @@ def fp_control_threshold(
     # account for different time ranges
     fp_per_tp = fp_num_frames / (clustering_subsampling_rate * clustering_num_frames)
 
-    for uid, tp in zip(tp_units[has_fp], tp_counts[has_fp]):
+    for uid, tp in zip(tp_unit_ids[has_fp], tp_counts[has_fp]):
         in_uid = fp_dataframe.units == uid
         if not in_uid.any():
             continue
@@ -955,8 +961,10 @@ def fp_control_threshold(
             fp_ix += rel_ix
             n_fp = fp_scores.size - fp_ix
             if n_fp <= max_fp:
-                domaini = i
+                assert x >= threshold
+                domaini += i
                 threshold = x
+                logger.dartsortdebug(f"fp control: new {threshold=}")
                 break
         else:
             # a break should always be hit thanks to the continues above

@@ -19,7 +19,7 @@ from dartsort.util.waveform_util import make_channel_index
 
 from .peel_base import BasePeeler
 
-logger = getLogger()
+logger = getLogger(__name__)
 
 
 class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
@@ -134,6 +134,7 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
             return
 
         assert self.threshold == "fp_control"
+        assert self.low_rank_templates is not None
         from ..util import noise_util
 
         # fit noise to residuals from the previous detection step
@@ -147,16 +148,24 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
         generator = torch.Generator()
         generator.manual_seed(int.from_bytes(rg.bytes(8)))
 
+        # restrict my low rank templates to usual geom...
+        # TODO: this is not a very logical way to handle drift here...
+        best_lrts = self.low_rank_templates.shift_to_best_channels(
+            self.recording.get_channel_locations(), self.registered_geom
+        )
+
         # simulate fps
         fp_res = noise.unit_false_positives(
-            self.low_rank_templates,
+            best_lrts,
             radius=self.refractory_radius_frames,
             generator=generator,
         )
+        ctd = self.template_data.coarsen()
         self.threshold = noise_util.fp_control_threshold(
             fp_res["fp_dataframe"],
             fp_res["total_samples"],
-            labels=get_labels(self.template_data.parent_sorting_hdf5_path),
+            tp_unit_ids=ctd.unit_ids,
+            tp_counts=ctd.spike_counts,
             clustering_num_frames=self.recording.get_num_samples(),
             template_normsqs=fp_res["normsq"],
             # TODO: if subsampling, indicate that here...
