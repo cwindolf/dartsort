@@ -96,6 +96,7 @@ def test_fakedata():
             motion_estimation_config=dartsort.MotionEstimationConfig(
                 do_motion_estimation=False
             ),
+            threshold="fp_control",
             matching_iterations=1,
             # test the dev tasks pipeline
             save_intermediate_labels=True,
