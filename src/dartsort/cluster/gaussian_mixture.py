@@ -3747,7 +3747,7 @@ class GaussianUnit(torch.nn.Module):
         )
         if zero_signal:
             return ncov
-        if self.cov_kind == "ppca" and self.ppca_rank:
+        if self.cov_kind == "ppca" and self.ppca_rank and hasattr(self, "W"):
             root = self.W[:, channels_].reshape(-1, self.ppca_rank)
             root = operators.LowRankRootLinearOperator(root)
             if signal_only:
@@ -3766,7 +3766,7 @@ class GaussianUnit(torch.nn.Module):
         if not len(features):
             return features.new_zeros((0,))
         mean = self.noise.mean_full[:, channels]
-        if self.mean_kind == "full":
+        if self.mean_kind == "full" and hasattr(self, "mean"):
             mean = mean + self.mean[:, channels]
         features = features - mean
 
