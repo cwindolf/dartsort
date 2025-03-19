@@ -354,6 +354,7 @@ class SpikeMixtureModel(torch.nn.Module):
         self,
         n_iter=None,
         show_progress=True,
+        lls=None,
         final_e_step=True,
         final_split="kept",
         n_threads=None,
@@ -398,8 +399,9 @@ class SpikeMixtureModel(torch.nn.Module):
         )
 
         # try reassigning without noise unit...
-        lls = self.log_likelihoods(with_noise_unit=True, show_progress=True)
-        self.update_proportions(lls)
+        if lls is None:
+            lls = self.log_likelihoods(with_noise_unit=True, show_progress=True)
+            self.update_proportions(lls)
         print(f"{self.data.split_indices['train'].numpy().shape=}")
         lls = lls[:, self.data.split_indices["train"].numpy()]
         print(f"{self.log_proportions.shape=}")
@@ -565,7 +567,7 @@ class SpikeMixtureModel(torch.nn.Module):
         )
         print(f"final E done", flush=True)
         log_liks, _ = self.cleanup(log_liks, relabel_split=final_split)
-        print(f"ret", flush=True)
+        print(f"ret {log_liks.shape=}", flush=True)
         result["log_liks"] = log_liks
         return result
 
@@ -1544,7 +1546,7 @@ class SpikeMixtureModel(torch.nn.Module):
         merge_kind=None,
         merge_criterion=None,
         decision_algorithm=None,
-        ignore_channels=False,
+        ignore_channels=True,
         kmeans_n_iter=None,
         min_overlap=None,
         distance_metric=None,
@@ -1627,16 +1629,20 @@ class SpikeMixtureModel(torch.nn.Module):
                 distance_normalization_kind=distance_normalization_kind,
             )
         if split_labels is None:
+            logger.dartsortdebug(f"Split {unit_id} bailed.")
             return result
         # flatten the label space
         kept = np.flatnonzero(split_labels >= 0)
         if not kept.size:
+            logger.dartsortdebug(f"Split {unit_id} threw away all spikes.")
             return result
         split_ids, flat_labels, split_counts = np.unique(
             split_labels[kept], return_inverse=True, return_counts=True
         )
         logger.dartsortdebug(
-            f"Split {unit_id} into {split_ids.size} / {split_counts.tolist()}"
+            f"Split {unit_id} into {split_ids.size} / {split_counts.tolist()}, "
+            f"with {split_labels.numel() - kept.size} -1s; original had "
+            f"{indices_full.numel()} train spikes in full, split ran on {len(sp)}."
         )
         n_new_units = split_ids.size - 1
         del split_ids  # just making this clear, because those ids changed anyway
@@ -1667,6 +1673,8 @@ class SpikeMixtureModel(torch.nn.Module):
 
             # new indices are already >= 1, so subtract 1
             split_labels[split_labels >= 1] += next_label - 1
+            logger.dartsortdebug(f"Split {unit_id}: my new labels are {split_labels}.")
+
             # unit 0 takes the place of the current unit
             split_labels[split_labels == 0] = unit_id
             self.labels[all_indices_full] = -1
@@ -1977,7 +1985,9 @@ class SpikeMixtureModel(torch.nn.Module):
         # walk up from the leaves
         its = enumerate(Z)
         if show_progress:
-            its = tqdm(its, desc="Tree", total=n_branches, **tqdm_kw)
+            its = tqdm(
+                its, desc=f"Merge: {decision_algorithm}", total=n_branches, **tqdm_kw
+            )
 
         # and build this set of data:
         # improvements: for a branch, how much does the model improve by
@@ -2046,6 +2056,10 @@ class SpikeMixtureModel(torch.nn.Module):
                     group_ids[leaves] = result_group_ids
                     overlaps[i] = brute_overlap
                     leaf_scores[leaves] = brute_improvement
+
+        logger.dartsortdebug(
+            f"Post merge: {group_ids.shape=} {np.unique(group_ids).shape=}"
+        )
 
         return Z, group_ids, improvements, overlaps, brute_indicator
 
@@ -2307,12 +2321,7 @@ class SpikeMixtureModel(torch.nn.Module):
             return None
 
         # -- organize labels...
-        group_ids = torch.asarray(best_group_ids).cpu()
-        _, new_ids = group_ids.unique(return_inverse=True)
-        labels = torch.asarray(best_labels).clone().cpu()
-        (kept,) = (labels >= 0).nonzero(as_tuple=True)
-        labels[kept] = new_ids[labels[kept]]
-        return labels
+        return best_labels
 
     def old_tree_merge(
         self,

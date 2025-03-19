@@ -952,7 +952,7 @@ class NeighborTreeMerge(GMMPlot):
 
         decision_algorithm = self.decision_algorithm
         if decision_algorithm is None:
-            decision_algorithm = gmm.decision_algorithm
+            decision_algorithm = gmm.merge_decision_algorithm
 
         distance_normalization_kind = self.distance_normalization_kind
         if distance_normalization_kind is None:
@@ -1049,9 +1049,9 @@ default_gmm_plots = (
     NeighborMeans(),
     NeighborDistances(metric="noise_metric"),
     NeighborDistances(metric="symkl"),
-    NeighborTreeMerge(metric=None, criterion="heldout_elbo"),
-    NeighborTreeMerge(metric=None, criterion="heldout_loglik"),
-    NeighborBimodalities(),
+    NeighborTreeMerge(metric=None, criterion=None),
+    # NeighborTreeMerge(metric=None, criterion="heldout_loglik"),
+    # NeighborBimodalities(),
     # NeighborInfoCriteria(in_bag=False),
     # NeighborInfoCriteria(in_bag=True),
     # NeighborInfoCriteria(fit_type="avg_preexisting"),

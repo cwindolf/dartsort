@@ -252,8 +252,9 @@ def sparse_topk(liks, log_proportions=None, k=3):
     # a special case of that code which has a python hot loop.
     topk = np.full((nnz, k), -1)
     if log_proportions is None:
-        log_proportions = np.zeros(len(liks), dtype=np.float32)
+        log_proportions = np.zeros(liks.shape[0], dtype=np.float32)
     else:
+        assert liks.shape[0] == len(log_proportions)
         log_proportions = log_proportions.astype(np.float32)
 
     # this loop ignores sparse zeros. so, no sweat for negative inputs.

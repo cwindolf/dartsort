@@ -3,7 +3,7 @@ from dataclasses import dataclass, replace
 
 import numpy as np
 from scipy.spatial import KDTree
-from threadpoolctl import register
+import torch
 
 from dartsort.localize.localize_util import localize_waveforms
 from dartsort.util import drift_util, waveform_util
@@ -241,15 +241,18 @@ class LowRankTemplates:
         nlow = int(-low // pitch)
         nhigh = int(high // pitch)
 
+        spatial_components = self.spatial_components
+        if torch.is_tensor(spatial_components):
+            spatial_components = spatial_components.numpy(force=True)
         scores = np.full(len(self.spatial_components), -np.inf)
-        best_spatial = self.spatial_components[:, :, : len(geom)].copy()
+        best_spatial = spatial_components[:, :, : len(geom)] + 0.0
 
         for j in range(-nlow, nhigh + 1):
             gshift = geom + [0, j * pitch]
             d, regchans = rgkdt.query(gshift)
             assert np.all(regchans < rgkdt.n)
 
-            spatial = self.spatial_components[:, :, regchans]
+            spatial = spatial_components[:, :, regchans]
             new_scores = np.square(spatial).sum((1, 2))
             better = np.flatnonzero(new_scores > scores)
             best_spatial[better] = spatial[better]

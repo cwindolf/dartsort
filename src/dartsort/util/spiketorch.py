@@ -41,7 +41,8 @@ def ptp(waveforms, dim=1):
 def elbo(Q, log_liks, reduce_mean=True, dim=1):
     logQ = torch.where(Q > 0, Q, _1).log_()
     log_liks = torch.where(Q > 0, log_liks, _0)
-    oelbo = torch.sum(Q * (log_liks + logQ), dim=dim)
+    oelbo = log_liks.add_(logQ).mul_(Q).sum(dim=dim)
+    # oelbo = torch.sum(Q * (log_liks + logQ), dim=dim)
     if reduce_mean:
         oelbo = oelbo.mean()
     return oelbo

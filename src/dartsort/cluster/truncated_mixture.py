@@ -39,8 +39,8 @@ class SpikeTruncatedMixtureModel(nn.Module):
         noise: EmbeddedNoise,
         M: int = 0,
         n_candidates: int = 3,
-        n_search: int = 5,
-        n_explore: int = None,
+        n_search: int | None = 5,
+        n_explore: int | None = None,
         n_units: int | None = None,
         covariance_radius: float | None = 250.0,
         random_seed=0,
@@ -57,7 +57,7 @@ class SpikeTruncatedMixtureModel(nn.Module):
         if n_explore is None:
             n_explore = n_search
         logger.dartsortdebug(
-            f"Making a TMM with {data.n_spikes=} {data.n_spikes_kept=} {M=}"
+            f"Making a TMM with {n_units=} {data.n_spikes=} {data.n_spikes_kept=} {M=}"
         )
         if n_units is not None:
             n_candidates = min(n_units, n_candidates)
@@ -1059,24 +1059,45 @@ class CandidateSet:
             assert labels.shape == (self.n_spikes, self.n_candidates)
             self.candidates[:, : self.n_candidates] = labels
             invalid = labels < 0
-            invalid_i, invalid_j = invalid.nonzero(as_tuple=True)
-            needs_replacement = self.candidates[invalid_i, invalid_j]
-            invalid_labels = labels[invalid_i, 0]
-            if closest_neighbors.numel():
-                inv_j = invalid_j.clip(max=closest_neighbors.shape[1] - 1)
-                replacements = closest_neighbors[invalid_labels, inv_j]
-            else:
-                replacements = invalid_labels
-            eq = needs_replacement == replacements
-            if eq.any():
-                # TODO: this is not perfect. there can still be dups.
-                neq = eq.sum().numpy(force=True)
-                replacements[eq] = torch.asarray(
-                    self.rg.integers(len(closest_neighbors), size=neq),
-                    device=replacements.device,
-                    dtype=replacements.dtype,
-                )
-            self.candidates[invalid_i, invalid_j] = replacements
+            logger.dartsortdebug(f"Candiate init had {invalid.sum()=} {invalid.shape=}")
+            logger.dartsortdebug(
+                f"And I assure you that {torch.all(self.candidates[:, :self.n_candidates].sort(dim=1).values.diff(dim=1)>0)=}"
+            )
+            if invalid.any():
+                invalid_i, invalid_j = invalid.nonzero(as_tuple=True)
+                invalid_labels = labels[invalid_i, 0]
+                invalid_invalid = invalid_labels < 0
+                if invalid_invalid.any():
+                    logger.dartsortdebug(f"Candiate init had {invalid_invalid.sum()=}")
+                    reps = self.rg.integers(
+                        len(closest_neighbors),
+                        size=invalid_invalid.sum().numpy(force=True),
+                    )
+                    invalid_labels[invalid_invalid] = reps
+
+                originals = self.candidates[invalid_i, invalid_j]
+                if closest_neighbors.numel():
+                    inv_j = invalid_j.clip(max=closest_neighbors.shape[1] - 1)
+                    replacements = closest_neighbors[invalid_labels, inv_j]
+                else:
+                    replacements = invalid_labels
+
+                eq = originals == replacements
+                if eq.any():
+                    # TODO: this is not perfect. there can still be dups.
+                    neq = eq.sum().numpy(force=True)
+                    logger.dartsortdebug(
+                        f"Some duplicate candidates: {neq=} {eq.shape=}"
+                    )
+                    rep_eqs = torch.asarray(
+                        self.rg.integers(len(closest_neighbors), size=neq),
+                        device=replacements.device,
+                        dtype=replacements.dtype,
+                    )
+                    eqi, eqj = eq.nonzero(as_tuple=True)
+                    rep_eqs = closest_neighbors[invalid_labels[eqi], rep_eqs]
+
+                self.candidates[invalid_i, invalid_j] = replacements
 
     def propose_candidates(self, unit_search_neighbors, indices=None):
         """Assumes invariant 1 and does not mess it up.
