@@ -1,5 +1,7 @@
-from dataclasses import dataclass, field, replace, fields
+from dataclasses import dataclass, fields
 from typing import Union, Optional
+
+import numba
 import numpy as np
 import torch
 
@@ -122,6 +124,7 @@ def _te_batch_e(
     del whitenednu
     lls_unnorm = inv_quad.add_(obs_logdets).add_(pinobs[:, None]).mul_(-0.5)
     lls = lls_unnorm + log_proportions
+    lls = torch.where(candidates >= 0, lls, -torch.inf)
 
     # -- update K_ns
     toplls, topinds = lls.sort(dim=1, descending=True)

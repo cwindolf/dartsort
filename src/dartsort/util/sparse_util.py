@@ -419,3 +419,56 @@ def hard_noise_argmax_loop(
         else:
             scores[j] = noise_score
             # best = noise_ix
+
+
+def integers_without_inner_replacement(rg, high, size):
+    assert len(size) == 2
+    out = np.empty(size, dtype=np.int64)
+    out_write = out.reshape((-1, size[-1]))
+
+    if isinstance(high, np.ndarray):
+        assert high.shape == size[:-1]
+        _fisher_yates_loop_vec(rg, high.ravel(), out_write)
+    else:
+        assert isinstance(high, int) or high.shape == ()
+        _fisher_yates_loop_scalar(rg, high, out_write)
+    return out
+
+
+@numba.njit
+def _fisher_yates_loop_scalar(rg, high, out):
+    """I think this is FY? At least it is uniform..."""
+    k = out.shape[1]
+    for i in range(out.shape[0]):
+        for j in range(k):
+            out[i, j] = rg.integers(0, high - j)
+        for j in range(k - 1, -1, -1):
+            for jj in range(j - 1, -1, -1):
+                if out[i, j] == out[i, jj]:
+                    out[i, j] = high - jj - 1
+
+
+@numba.njit
+def _fisher_yates_loop_vec(rg, high, out):
+    """I think this is FY? At least it is uniform..."""
+    k = out.shape[1]
+    for i in range(out.shape[0]):
+        h = high[i]
+        for j in range(k):
+            out[i, j] = rg.integers(0, h - j)
+        for j in range(k - 1, -1, -1):
+            for jj in range(j - 1, -1, -1):
+                if out[i, j] == out[i, jj]:
+                    out[i, j] = h - jj - 1
+
+
+@numba.njit(parallel=True)
+def erase_dups(arr):
+    for i in numba.prange(arr.shape[0]):
+        x = arr[i]
+        for j, xx in enumerate(x):
+            if xx == -1:
+                continue
+            for k in range(j + 1, x.shape[0]):
+                if x[k] == xx:
+                    x[k] = -1

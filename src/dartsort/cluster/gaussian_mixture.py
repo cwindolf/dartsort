@@ -31,7 +31,7 @@ from ..util.sparse_util import (
     csc_sparse_getrow,
     sparse_topk,
     sparse_reassign,
-    torch_coo_to_dense,
+    integers_without_inner_replacement,
 )
 from .cluster_util import (
     agglomerate,
@@ -399,25 +399,24 @@ class SpikeMixtureModel(torch.nn.Module):
         )
 
         # try reassigning without noise unit...
-        if lls is None:
-            lls = self.log_likelihoods(with_noise_unit=True, show_progress=True)
-            self.update_proportions(lls)
-        print(f"{self.data.split_indices['train'].numpy().shape=}")
+        lls = self.log_likelihoods(with_noise_unit=True, show_progress=True)
+        self.update_proportions(lls)
         lls = lls[:, self.data.split_indices["train"].numpy()]
-        print(f"{self.log_proportions.shape=}")
-        print(f"{means.shape=}")
-        print(f"{ids.shape=}")
-        print(f"{lls.shape=}")
         assert self.with_noise_unit
 
         if initialization == "topk":
-            nz_lines, init_ = sparse_topk(
+            nz_lines, nz_init = sparse_topk(
                 lls[:-1],
                 log_proportions=self.log_proportions[:-1].numpy(force=True),
                 k=tmm.n_candidates,
             )
-            init = self.rg.integers(len(ids), size=(lls.shape[1], init_.shape[1]))
-            init[nz_lines] = init_
+            init = np.empty((lls.shape[1], tmm.n_candidates), dtype=int)
+            z_lines = np.setdiff1d(np.arange(lls.shape[1]), nz_lines)
+            z_init = integers_without_inner_replacement(
+                self.rg, high=lls.shape[0] - 1, size=(len(z_lines), init.shape[1])
+            )
+            init[z_lines] = z_init
+            init[nz_lines] = nz_init
             labels = init[:, 0]
         elif initialization == "nearest":
             nz_lines, init_, *_ = loglik_reassign(lls[:-1])
@@ -987,11 +986,7 @@ class SpikeMixtureModel(torch.nn.Module):
         self._relabel(kept_ids, split=relabel_split)
 
         if self.log_proportions is not None:
-            lps = self.log_proportions.numpy(force=True)
-            lps = lps[keep_noise.numpy(force=True)]
-            # logsumexp to 0 (sumexp to 1) again
-            lps -= logsumexp(lps)
-            self.log_proportions = self.log_proportions.new_tensor(lps)
+            self.log_proportions = self.log_proportions[keep_noise].log_softmax(0)
 
         if not self.empty():
             keep_units = {ni: self[oi] for oi, ni in zip(kept_ids, new_ids)}
@@ -1060,6 +1055,8 @@ class SpikeMixtureModel(torch.nn.Module):
             self.log_proportions = torch.asarray(
                 new_log_props, device=self.log_proportions.device
             )
+
+        self.log_liks = None
 
     def split(self, show_progress=True):
         pool = Parallel(
@@ -1583,6 +1580,7 @@ class SpikeMixtureModel(torch.nn.Module):
             del Xo
 
         # run kmeans with kmeans++ initialization
+        k = min(self.kmeans_k, len(X) // (self.min_count / 2))
         split_labels, responsibilities = kmeans(
             X.view(len(X), -1),
             n_iter=kmeans_n_iter,
@@ -1673,10 +1671,12 @@ class SpikeMixtureModel(torch.nn.Module):
 
             # new indices are already >= 1, so subtract 1
             split_labels[split_labels >= 1] += next_label - 1
-            logger.dartsortdebug(f"Split {unit_id}: my new labels are {split_labels}.")
+            split_labels[split_labels == 0] = unit_id
+            logger.dartsortdebug(
+                f"Split {unit_id}: my new labels are {split_labels.unique()}."
+            )
 
             # unit 0 takes the place of the current unit
-            split_labels[split_labels == 0] = unit_id
             self.labels[all_indices_full] = -1
             self.labels[sp.indices] = split_labels
 
@@ -1684,14 +1684,13 @@ class SpikeMixtureModel(torch.nn.Module):
                 return
 
             # each sub-unit's prop is its fraction of assigns * orig unit prop
-            new_log_props = np.log(split_counts) - np.log(split_counts.sum())
-            new_log_props = torch.from_numpy(new_log_props).to(self.log_proportions)
-            new_log_props += self.log_proportions[unit_id]
+            new_log_props = torch.asarray(np.log(split_counts))
+            new_log_props = new_log_props.to(self.log_proportions)
+            new_log_props = new_log_props.log_softmax(0) + self.log_proportions[unit_id]
             assert new_log_props.numel() == n_new_units + 1
 
             cur_len_with_noise = self.log_proportions.numel()
             noise_log_prop = self.log_proportions[-1]
-            # self.log_proportions.resize_(cur_len_with_noise + n_new_units)
             self.log_proportions = torch.cat(
                 (self.log_proportions, self.log_proportions.new_empty(n_new_units)),
                 dim=0,
@@ -2163,18 +2162,15 @@ class SpikeMixtureModel(torch.nn.Module):
             hyp_fit_resps=hyp_fit_resps,
             hyp_fit_spikes=hyp_fit_spikes,
             hyp_fit_channels=fit_channels,
-            label_fit_spikes=True,
             ignore_channels=ignore_channels,
         )
-        fit_liks = full_info["fit_liks"]
-        assert fit_liks.shape == hyp_fit_resps.shape
         best_improvement = full_info["improvements"][merge_criterion]
-        best_labels = full_info["fit_labels"]
         units = full_info["hyp_units"]
         n_units = len(units)
         best_group_ids = np.arange(n_units)
+        full_labels = hyp_fit_resps.argmax(0)
         if debug:
-            debug_info["reas_labels"] = best_labels
+            debug_info["reas_labels"] = full_labels
             debug_info["units"] = units
             debug_info["full_improvement"] = best_improvement
         if n_units <= 1:
@@ -2251,7 +2247,6 @@ class SpikeMixtureModel(torch.nn.Module):
                     hyp_fit_resps=level_resps,
                     hyp_fit_channels=fit_channels,
                     cur_resp=cur_resp,
-                    label_fit_spikes=True,
                     ignore_channels=ignore_channels,
                 )
                 improvement = crit["improvements"][merge_criterion]
@@ -2261,7 +2256,6 @@ class SpikeMixtureModel(torch.nn.Module):
                 if olap >= min_overlap and improvement > best_improvement:
                     best_group_ids = group_ids.copy()
                     best_improvement = improvement
-                    best_labels = crit["fit_labels"]
                 if debug:
                     debug_info["improvements"][i] = improvement
                     debug_info["overlaps"][i] = crit["overlap"]
@@ -2291,7 +2285,6 @@ class SpikeMixtureModel(torch.nn.Module):
                     hyp_fit_resps=level_resps,
                     hyp_fit_channels=fit_channels,
                     cur_resp=cur_resp,
-                    label_fit_spikes=True,
                     ignore_channels=ignore_channels,
                 )
                 improvement = crit["improvements"][merge_criterion]
@@ -2305,7 +2298,6 @@ class SpikeMixtureModel(torch.nn.Module):
                 if improvement > best_improvement:
                     best_group_ids = group_ids
                     best_improvement = improvement
-                    best_labels = crit["fit_labels"]
                     if debug:
                         debug_info["level_units"] = {0: [u for u in crit["hyp_units"]]}
                         debug_info["improvements"] = [improvement]
@@ -2321,7 +2313,10 @@ class SpikeMixtureModel(torch.nn.Module):
             return None
 
         # -- organize labels...
-        return best_labels
+        best_group_ids = torch.asarray(best_group_ids)
+        labels = best_group_ids[full_labels.cpu()]
+        _, labels = labels.unique(return_inverse=True)
+        return labels
 
     def old_tree_merge(
         self,
@@ -2575,15 +2570,12 @@ class SpikeMixtureModel(torch.nn.Module):
         # -- in the split step, we want hyp labels for the fit spikes
         fit_labels = fit_liks = None
         if label_fit_spikes:
-            fit_liks = hyp_fit_spikes.features.new_full(
-                (n_hyp, len(hyp_fit_spikes)), -torch.inf
+            fit_liks = self.dense_log_likelihoods(
+                hyp_fit_spikes,
+                units=hyp_units,
+                log_proportions=hyp_log_props,
+                ignore_channels=ignore_channels,
             )
-            for j, hu in enumerate(hyp_units):
-                fll = self.unit_log_likelihoods(
-                    unit=hu, spikes=hyp_fit_spikes, ignore_channels=ignore_channels
-                )
-                if fll is not None:
-                    fit_liks[j] = hyp_log_props[j] + fll
             vals, fit_labels = fit_liks.max(dim=0)
             fit_labels = torch.where(vals.isfinite(), fit_labels, -1)
 

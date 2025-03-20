@@ -13,6 +13,7 @@ from tqdm.auto import trange
 
 
 from ..util.noise_util import EmbeddedNoise
+from ..util.sparse_util import integers_without_inner_replacement, erase_dups
 from .stable_features import SpikeNeighborhoods, StableSpikeDataset
 from ._truncated_em_helpers import (
     neighb_lut,
@@ -102,7 +103,9 @@ class SpikeTruncatedMixtureModel(nn.Module):
         """Parameters are stored padded with an extra channel."""
         self.n_units = nu = means.shape[0]
         assert means.shape == (nu, self.noise.rank, self.noise.n_channels)
-        logger.dartsortdebug(f"Setting TMM parameters {labels.shape=} {means.shape=}")
+        logger.dartsortdebug(
+            f"Setting TMM parameters {labels.shape=} {means.shape=} {log_proportions.shape=} {kl_divergences.shape=}"
+        )
         self.means = nn.Parameter(F.pad(means, (0, 1)), requires_grad=False)
 
         assert log_proportions.shape == (nu,)
@@ -944,6 +947,7 @@ class TruncatedExpectationProcessor(torch.nn.Module):
         n, C = candidates.shape
         neighborhood_ids = self.neighborhood_ids[batch_indices]
         lut_ixs = self.lut[candidates, neighborhood_ids[:, None]]
+        lut_ixs[lut_ixs == np.prod(self.lut.shape)] = 0
 
         # some things are only needed in the first pass when computing noise lls
         Coo_logdet = None
@@ -977,6 +981,7 @@ class TruncatedExpectationProcessor(torch.nn.Module):
     def load_batch_m(self, batch_indices, candidates, neighborhood_ids):
         n, C = candidates.shape
         lut_ixs = self.lut[candidates, neighborhood_ids[:, None]]
+        lut_ixs[lut_ixs == np.prod(self.lut.shape)] = 0
 
         # common args
         data = dict(
@@ -1045,8 +1050,6 @@ class CandidateSet:
         """Imposes invariant 1, or at least tries to start off well."""
         assert labels.shape[0] == self.n_spikes
         assert closest_neighbors.shape[1] <= self.n_candidates
-        print(f"{labels.shape=}")
-        print(f"{self.n_spikes=}")
 
         if labels.ndim == 1:
             torch.index_select(
@@ -1060,44 +1063,20 @@ class CandidateSet:
             self.candidates[:, : self.n_candidates] = labels
             invalid = labels < 0
             logger.dartsortdebug(f"Candiate init had {invalid.sum()=} {invalid.shape=}")
-            logger.dartsortdebug(
-                f"And I assure you that {torch.all(self.candidates[:, :self.n_candidates].sort(dim=1).values.diff(dim=1)>0)=}"
-            )
             if invalid.any():
                 invalid_i, invalid_j = invalid.nonzero(as_tuple=True)
-                invalid_labels = labels[invalid_i, 0]
-                invalid_invalid = invalid_labels < 0
-                if invalid_invalid.any():
-                    logger.dartsortdebug(f"Candiate init had {invalid_invalid.sum()=}")
-                    reps = self.rg.integers(
-                        len(closest_neighbors),
-                        size=invalid_invalid.sum().numpy(force=True),
-                    )
-                    invalid_labels[invalid_invalid] = reps
-
-                originals = self.candidates[invalid_i, invalid_j]
-                if closest_neighbors.numel():
-                    inv_j = invalid_j.clip(max=closest_neighbors.shape[1] - 1)
-                    replacements = closest_neighbors[invalid_labels, inv_j]
-                else:
-                    replacements = invalid_labels
-
-                eq = originals == replacements
-                if eq.any():
-                    # TODO: this is not perfect. there can still be dups.
-                    neq = eq.sum().numpy(force=True)
-                    logger.dartsortdebug(
-                        f"Some duplicate candidates: {neq=} {eq.shape=}"
-                    )
-                    rep_eqs = torch.asarray(
-                        self.rg.integers(len(closest_neighbors), size=neq),
-                        device=replacements.device,
-                        dtype=replacements.dtype,
-                    )
-                    eqi, eqj = eq.nonzero(as_tuple=True)
-                    rep_eqs = closest_neighbors[invalid_labels[eqi], rep_eqs]
-
-                self.candidates[invalid_i, invalid_j] = replacements
+                inv_lines, inv_i = invalid_i.unique(return_inverse=True)
+                replacements = integers_without_inner_replacement(
+                    self.rg,
+                    len(closest_neighbors),
+                    size=(inv_lines.numel(), self.n_candidates),
+                )
+                replacements = torch.from_numpy(replacements)
+                self.candidates[invalid_i, invalid_j] = replacements[inv_i, invalid_j]
+            logger.dartsortdebug(
+                f"Still I assure you that {torch.all(self.candidates[:, :self.n_candidates]>=0)=} and"
+                f"{torch.all(self.candidates[:, :self.n_candidates].sort(dim=1).values.diff(dim=1)>0)=}"
+            )
 
     def propose_candidates(self, unit_search_neighbors, indices=None):
         """Assumes invariant 1 and does not mess it up.
@@ -1159,8 +1138,8 @@ class CandidateSet:
                 n_neighbs
             )
             n_explore = n_explore[neighb_ids]
-            targs = self.rg.integers(
-                n_explore.numpy()[:, None], size=(n_spikes, self.n_explore)
+            targs = integers_without_inner_replacement(
+                self.rg, n_explore.numpy(), size=(n_spikes, self.n_explore)
             )
             targs = torch.from_numpy(targs)
             explore = neighborhood_explore_units[neighb_ids[:, None], targs]
@@ -1171,4 +1150,12 @@ class CandidateSet:
             np.add.at(
                 unit_neighborhood_counts, (candidates[:, 1:], neighb_ids[:, None]), 1
             )
+
+        # replace duplicates with -1. TODO: replace quadratic algorithm with -1.
+        erase_dups(candidates.numpy())
+        logger.dartsortdebug(
+            f"I have maintained that {torch.all(self.candidates[:, :self.n_candidates]>=0)=} and"
+            f"{torch.all(self.candidates[:, :self.n_candidates].sort(dim=1).values.diff(dim=1)>0)=}"
+        )
+
         return candidates, unit_neighborhood_counts
