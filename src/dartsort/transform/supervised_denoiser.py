@@ -9,6 +9,8 @@ from torch.utils.data import (BatchSampler, DataLoader, Dataset, RandomSampler,
                               StackDataset, TensorDataset,
                               WeightedRandomSampler)
 from tqdm.auto import trange
+import matplotlib.pyplot as plt
+
 
 
 from torch.optim.lr_scheduler import CosineAnnealingWarmRestarts
@@ -134,7 +136,7 @@ class SupervisedDenoiser(BaseWaveformDenoiser):
         loss_dict = dict(mse=F.mse_loss(mask * gt_waveforms, mask * pred))
         return loss_dict
 
-            
+
     def _fit(self, waveforms, gt_waveforms, channels, recording):
         self.initialize_nets(waveforms.shape[1])
         waveforms = waveforms.cpu()
@@ -142,10 +144,11 @@ class SupervisedDenoiser(BaseWaveformDenoiser):
         channels = channels.cpu()
         print(self.res_type)
         num_samples = len(waveforms)
-        train_size = num_samples 
-    
-        train_dataset = TensorDataset(waveforms, gt_waveforms, channels)
-    
+        
+        train_size = int(num_samples * (1 - self.val_split_p))
+        val_size = num_samples - train_size
+        train_dataset, val_dataset = random_split(TensorDataset(waveforms, gt_waveforms, channels), [train_size, val_size])
+        
         train_loader = DataLoader(
             train_dataset,
             batch_size=self.batch_size,
@@ -153,55 +156,152 @@ class SupervisedDenoiser(BaseWaveformDenoiser):
             num_workers=self.n_data_workers,
             persistent_workers=bool(self.n_data_workers),
         )
-    
+        
+        val_loader = DataLoader(
+            val_dataset,
+            batch_size=self.batch_size,
+            shuffle=False,
+            num_workers=self.n_data_workers,
+            persistent_workers=bool(self.n_data_workers),
+        )
+        
         optimizer = torch.optim.Adam(self.parameters(), lr=self.learning_rate)
         scheduler = CosineAnnealingWarmRestarts(optimizer, T_0=10, T_mult=2, eta_min=1e-6)
-
+        
+        train_losses_per_epoch = []
+        val_losses_per_epoch = []
         
         with trange(self.n_epochs, desc="Epochs", unit="epoch") as pbar:
             for epoch in pbar:
                 self.train()
-                train_losses = {}
-    
+                train_loss_sum = 0.0
                 for waveform_batch, gt_waveform_batch, channels_batch in train_loader:
                     waveform_batch = waveform_batch.to(self.device)
                     gt_waveform_batch = gt_waveform_batch.to(self.device)
                     channels_batch = channels_batch.to(self.device)
-               
-       
-
-
-                    waveform_batch = reindex(channels_batch, waveform_batch, self.relative_index, pad_value=0.0)
+                    
+                    # waveform_batch = reindex(channels_batch, waveform_batch, self.relative_index, pad_value=0.0)
                     gt_waveform_batch = reindex(channels_batch, gt_waveform_batch, self.relative_index, pad_value=0.0)
-                                       
-
-    
+                    
                     optimizer.zero_grad()
-    
                     mask = self.get_masks(channels_batch).to(waveform_batch)
                     pred = self.forward(waveform_batch, channels_batch)
-
                     pred = reindex(channels_batch, pred, self.relative_index, pad_value=0.0)
-
-
-                    # print("waveform_batch shape:", waveform_batch.shape) 
-                    # print("gt_waveform_batch shape", gt_waveform_batch.shape)
-                    # print("pred shape", pred.shape)
-
                     
                     loss_dict = self.loss(mask, gt_waveform_batch, pred)
                     loss = sum(loss_dict.values())
                     loss.backward()
                     optimizer.step()
-    
-                    for k, v in loss_dict.items():
-                        train_losses[k] = v.item() + train_losses.get(k, 0.0)
-    
-                train_losses = {k: v / len(train_loader) for k, v in train_losses.items()}
-    
-                loss_str = " | ".join([f"Train {k}: {v:.3f}" for k, v in train_losses.items()])
+                    
+                    train_loss_sum += loss.item()
+                
+                avg_train_loss = train_loss_sum / len(train_loader)
+                train_losses_per_epoch.append(avg_train_loss)
+                
+                self.eval()
+                val_loss_sum = 0.0
+                with torch.no_grad():
+                    for waveform_batch, gt_waveform_batch, channels_batch in val_loader:
+                        waveform_batch = waveform_batch.to(self.device)
+                        gt_waveform_batch = gt_waveform_batch.to(self.device)
+                        channels_batch = channels_batch.to(self.device)
+                        
+                        # waveform_batch = reindex(channels_batch, waveform_batch, self.relative_index, pad_value=0.0)
+                        gt_waveform_batch = reindex(channels_batch, gt_waveform_batch, self.relative_index, pad_value=0.0)
+                        
+                        mask = self.get_masks(channels_batch).to(waveform_batch)
+                        pred = self.forward(waveform_batch, channels_batch)
+                        pred = reindex(channels_batch, pred, self.relative_index, pad_value=0.0)
+                        
+                        loss_dict = self.loss(mask, gt_waveform_batch, pred)
+                        loss = sum(loss_dict.values())
+                        val_loss_sum += loss.item()
+                
+                avg_val_loss = val_loss_sum / len(val_loader)
+                val_losses_per_epoch.append(avg_val_loss)
+                
+                loss_str = f"Train Loss: {avg_train_loss:.3f} | Val Loss: {avg_val_loss:.3f}"
                 pbar.set_description(f"Epochs [{loss_str}]")
+                
                 scheduler.step(epoch + 1)
+        
+        plt.figure(figsize=(10, 5))
+        plt.plot(range(1, self.n_epochs + 1), train_losses_per_epoch, label='Train Loss')
+        plt.plot(range(1, self.n_epochs + 1), val_losses_per_epoch, label='Val Loss')
+        plt.xlabel("Epoch")
+        plt.ylabel("Loss")
+        plt.legend()
+        plt.show()
+
+
+        
+    # def _fit(self, waveforms, gt_waveforms, channels, recording):
+    #     self.initialize_nets(waveforms.shape[1])
+    #     waveforms = waveforms.cpu()
+    #     gt_waveforms = gt_waveforms.cpu()
+    #     channels = channels.cpu()
+    #     print(self.res_type)
+    #     num_samples = len(waveforms)
+    #     train_size = num_samples 
+    
+    #     train_dataset = TensorDataset(waveforms, gt_waveforms, channels)
+    
+    #     train_loader = DataLoader(
+    #         train_dataset,
+    #         batch_size=self.batch_size,
+    #         shuffle=True,
+    #         num_workers=self.n_data_workers,
+    #         persistent_workers=bool(self.n_data_workers),
+    #     )
+    
+    #     optimizer = torch.optim.Adam(self.parameters(), lr=self.learning_rate)
+    #     scheduler = CosineAnnealingWarmRestarts(optimizer, T_0=10, T_mult=2, eta_min=1e-6)
+
+        
+    #     with trange(self.n_epochs, desc="Epochs", unit="epoch") as pbar:
+    #         for epoch in pbar:
+    #             self.train()
+    #             train_losses = {}
+    
+    #             for waveform_batch, gt_waveform_batch, channels_batch in train_loader:
+    #                 waveform_batch = waveform_batch.to(self.device)
+    #                 gt_waveform_batch = gt_waveform_batch.to(self.device)
+    #                 channels_batch = channels_batch.to(self.device)
+               
+       
+
+
+    #                 waveform_batch = reindex(channels_batch, waveform_batch, self.relative_index, pad_value=0.0)
+    #                 gt_waveform_batch = reindex(channels_batch, gt_waveform_batch, self.relative_index, pad_value=0.0)
+                                       
+
+    
+    #                 optimizer.zero_grad()
+    
+    #                 mask = self.get_masks(channels_batch).to(waveform_batch)
+    #                 pred = self.forward(waveform_batch, channels_batch)
+
+    #                 pred = reindex(channels_batch, pred, self.relative_index, pad_value=0.0)
+
+
+    #                 # print("waveform_batch shape:", waveform_batch.shape) 
+    #                 # print("gt_waveform_batch shape", gt_waveform_batch.shape)
+    #                 # print("pred shape", pred.shape)
+
+                    
+    #                 loss_dict = self.loss(mask, gt_waveform_batch, pred)
+    #                 loss = sum(loss_dict.values())
+    #                 loss.backward()
+    #                 optimizer.step()
+    
+    #                 for k, v in loss_dict.items():
+    #                     train_losses[k] = v.item() + train_losses.get(k, 0.0)
+    
+    #             train_losses = {k: v / len(train_loader) for k, v in train_losses.items()}
+    
+    #             loss_str = " | ".join([f"Train {k}: {v:.3f}" for k, v in train_losses.items()])
+    #             pbar.set_description(f"Epochs [{loss_str}]")
+    #             scheduler.step(epoch + 1)
 
 
         
