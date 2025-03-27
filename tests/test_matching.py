@@ -135,12 +135,12 @@ def _test_tiny(tmp_path, scaling=0.0):
             assert torch.all(res["scores"] > 0)
 
 
-def test_tiny_unscaled(path):
-    _test_tiny(path)
+def test_tiny_unscaled(tmp_path):
+    _test_tiny(tmp_path)
 
 
-def test_tiny_scaled(path):
-    _test_tiny(path, scaling=0.01)
+def test_tiny_scaled(tmp_path):
+    _test_tiny(tmp_path, scaling=0.01)
 
 
 def _test_tiny_up(tmp_path, up_factor=1, scaling=0.0):
@@ -287,19 +287,19 @@ def _test_tiny_up(tmp_path, up_factor=1, scaling=0.0):
             assert torch.all(res["scores"] > 0)
 
 
-def test_tiny_up_1_0():
+def test_tiny_up_1_0(tmp_path):
     _test_tiny_up(tmp_path, up_factor=1, scaling=0.0)
 
 
-def test_tiny_up_8_0():
+def test_tiny_up_8_0(tmp_path):
     _test_tiny_up(tmp_path, up_factor=8, scaling=0.0)
 
 
-def test_tiny_up_1_001():
+def test_tiny_up_1_001(tmp_path):
     _test_tiny_up(tmp_path, up_factor=1, scaling=0.01)
 
 
-def test_tiny_up_8_001():
+def test_tiny_up_8_001(tmp_path):
     _test_tiny_up(tmp_path, up_factor=8, scaling=0.01)
 
 
