@@ -431,11 +431,12 @@ def integers_without_inner_replacement(rg, high, size):
         _fisher_yates_loop_vec(rg, high.ravel(), out_write)
     else:
         assert isinstance(high, int) or high.shape == ()
+        assert high >= size[-1]
         _fisher_yates_loop_scalar(rg, high, out_write)
     return out
 
 
-@numba.njit
+@numba.njit(error_model="numpy")
 def _fisher_yates_loop_scalar(rg, high, out):
     """I think this is FY? At least it is uniform..."""
     k = out.shape[1]
@@ -448,12 +449,16 @@ def _fisher_yates_loop_scalar(rg, high, out):
                     out[i, j] = high - jj - 1
 
 
-@numba.njit
+@numba.njit(error_model="numpy")
 def _fisher_yates_loop_vec(rg, high, out):
-    """I think this is FY? At least it is uniform..."""
+    """In rows where high[i] < output shape, we put everything and negatives."""
     k = out.shape[1]
     for i in range(out.shape[0]):
         h = high[i]
+        if h <= k:
+            for j in range(k):
+                out[i, j] = max(-1, h - 1 - j)
+            continue
         for j in range(k):
             out[i, j] = rg.integers(0, h - j)
         for j in range(k - 1, -1, -1):
@@ -462,7 +467,29 @@ def _fisher_yates_loop_vec(rg, high, out):
                     out[i, j] = h - jj - 1
 
 
-@numba.njit(parallel=True)
+def fisher_yates_replace(rg, high, data):
+    """Replace -1s with FY shuffle
+
+    NEEDS descending sorted input along last axis. (FY sampling.)
+    Maintains already existing guys in the set.
+    """
+    _fisher_yates_replace(rg, high, data.reshape((-1, data.shape[-1])))
+
+
+@numba.njit(error_model="numpy")
+def _fisher_yates_replace(rg, h, out):
+    k = out.shape[1]
+    for i in range(out.shape[0]):
+        for j in range(k):
+            if out[i, j] < 0:
+                out[i, j] = rg.integers(0, h - j)
+        for j in range(k - 1, -1, -1):
+            for jj in range(j - 1, -1, -1):
+                if out[i, j] == out[i, jj]:
+                    out[i, j] = h - jj - 1
+
+
+@numba.njit(parallel=True, error_model="numpy")
 def erase_dups(arr):
     for i in numba.prange(arr.shape[0]):
         x = arr[i]

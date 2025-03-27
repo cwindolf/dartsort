@@ -1,9 +1,7 @@
-from typing import Optional
 import numpy as np
 import torch
-import logging
+from logging import getLogger
 from torch import nn
-import threading
 import time
 import joblib
 from linear_operator import operators
@@ -13,7 +11,11 @@ from tqdm.auto import trange
 
 
 from ..util.noise_util import EmbeddedNoise
-from ..util.sparse_util import integers_without_inner_replacement, erase_dups
+from ..util.sparse_util import (
+    integers_without_inner_replacement,
+    erase_dups,
+    fisher_yates_replace,
+)
 from .stable_features import SpikeNeighborhoods, StableSpikeDataset
 from ._truncated_em_helpers import (
     neighb_lut,
@@ -29,8 +31,9 @@ from ._truncated_em_helpers import (
     _grad_basis,
 )
 from ..util import spiketorch
+from ..util.logging_util import DARTSORTDEBUG
 
-logger = logging.getLogger(__name__)
+logger = getLogger(__name__)
 
 
 class SpikeTruncatedMixtureModel(nn.Module):
@@ -62,8 +65,10 @@ class SpikeTruncatedMixtureModel(nn.Module):
         )
         if n_units is not None:
             n_candidates = min(n_units, n_candidates)
-            n_search = max(0, min(n_units - n_candidates, n_search))
-            n_explore = max(0, min(n_units - n_candidates * (n_search + 1), n_explore))
+            remainder = n_units - n_candidates
+            n_search = max(0, min(remainder // n_candidates, n_search))
+            remainder -= n_candidates * n_search
+            n_explore = max(0, min(remainder, n_explore))
         self.n_candidates = n_candidates
         self.data = data
         self.noise = noise
@@ -103,12 +108,17 @@ class SpikeTruncatedMixtureModel(nn.Module):
         """Parameters are stored padded with an extra channel."""
         self.n_units = nu = means.shape[0]
         assert means.shape == (nu, self.noise.rank, self.noise.n_channels)
+        assert log_proportions.shape == (nu,)
+        assert kl_divergences.shape == (nu, nu)
+        assert means.isfinite().all()
+        assert log_proportions.isfinite().all()
+        assert noise_log_prop.isfinite()
+
         logger.dartsortdebug(
             f"Setting TMM parameters {labels.shape=} {means.shape=} {log_proportions.shape=} {kl_divergences.shape=}"
         )
         self.means = nn.Parameter(F.pad(means, (0, 1)), requires_grad=False)
 
-        assert log_proportions.shape == (nu,)
         self.register_buffer("_N", torch.zeros(nu + 1))
         if self.fixed_noise_proportion:
             noise_log_prop = torch.log(torch.tensor(self.fixed_noise_proportion))
@@ -128,7 +138,6 @@ class SpikeTruncatedMixtureModel(nn.Module):
                 noise_log_prop.clone(), requires_grad=False
             )
 
-        assert kl_divergences.shape == (nu, nu)
         self.register_buffer(
             "kl_divergences",
             torch.asarray(kl_divergences, dtype=self.means.dtype, copy=True),
@@ -254,6 +263,8 @@ class SpikeTruncatedMixtureModel(nn.Module):
 
             # metrics
             boelbo = batch_result.obs_elbo
+            if not boelbo.isfinite():
+                raise ValueError(f"batch elbo diverged! {boelbo=}")
             bn = len(batch_result.candidates)
             record = dict(obs_elbo=boelbo.numpy(force=True).item())
             if tic is not None:
@@ -261,6 +272,10 @@ class SpikeTruncatedMixtureModel(nn.Module):
             records.append(record)
             count += bn
             obs_elbo += (boelbo - obs_elbo) * (bn / count)
+            if not obs_elbo.isfinite():
+                raise ValueError(
+                    f"running elbo diverged! {boelbo=} {count=} {bn=} {obs_elbo=}"
+                )
 
         # per-epoch updates
         self.update_dkl()
@@ -385,6 +400,11 @@ class TruncatedExpectationProcessor(torch.nn.Module):
 
         # initialize fixed noise-related arrays
         self.noise = noise
+        if features.isnan().any():
+            print("Yeah. nans. Guess not possible to do in place?")
+            self.features = features.nan_to_num()
+        else:
+            self.features = features.clone()
         self.initialize_fixed(
             noise, neighborhoods, pgeom=pgeom, covariance_radius=covariance_radius
         )
@@ -392,11 +412,6 @@ class TruncatedExpectationProcessor(torch.nn.Module):
         self.neighborhood_ids = neighborhoods.neighborhood_ids
         self.n_neighborhoods = neighborhoods.n_neighborhoods
         self.Cinv_in_grad = Cinv_in_grad
-        if features.isnan().any():
-            print("Yeah. nans. Guess not possible to do in place?")
-            self.features = features.nan_to_num()
-        else:
-            self.features = features.clone()
         if precompute_invx:
             self.precompute_invx()
         self.batch_size = batch_size
@@ -474,7 +489,16 @@ class TruncatedExpectationProcessor(torch.nn.Module):
 
             # running avg for elbo/n
             count += len(result.candidates)
+            if not result.obs_elbo.isfinite():
+                raise ValueError(
+                    f"batch elbo diverged! {result.obs_elbo=} {len(result.candidates)=}"
+                )
             obs_elbo += (result.obs_elbo - obs_elbo) * (len(result.candidates) / count)
+            if not obs_elbo.isfinite():
+                raise ValueError(
+                    f"running elbo diverged! {obs_elbo=} {result.obs_elbo=}"
+                    f"{count=} {len(result.candidates)=}"
+                )
 
             if with_kl:
                 ncc += result.ncc
@@ -579,7 +603,6 @@ class TruncatedExpectationProcessor(torch.nn.Module):
             n_units=self.n_units,
             n_candidates=self.n_candidates,
             noise_log_prop=self.noise_log_prop,
-            n=n,
             candidates=candidates,
             with_kl=with_kl,
             **edata,
@@ -733,6 +756,10 @@ class TruncatedExpectationProcessor(torch.nn.Module):
         # with numerics for us if we do everything via chol.
         Coo_chol = [C.cholesky() for C in Coo]
         Coo_invsqrt = [L.inverse().to_dense() for L in Coo_chol]
+        if logger.isEnabledFor(DARTSORTDEBUG):
+            logger.dartsortdebug(
+                f"Are Coo_invsqrts finite? {all(c.isfinite().all() for c in Coo_invsqrt)}"
+            )
         Coo_inv = [Li.T @ Li for Li in Coo_invsqrt]
         Coo_logdet = [2 * L.to_dense().diagonal().log().sum() for L in Coo_chol]
         Coo_logdet = torch.tensor(Coo_logdet, device=device)
@@ -740,7 +767,9 @@ class TruncatedExpectationProcessor(torch.nn.Module):
 
         # figure out dimensions
         nc_obs = neighborhoods.channel_counts
-        self.nc_obs = nco = nc_obs.max().to(int)
+        # self.nc_obs = nco = nc_obs.max().to(int)
+        self.nc_obs = nco = self.features.shape[2]
+        assert nco == neighborhoods.neighborhoods.shape[1]
         self.nc_miss = ncm = max(map(len, missing_chans))
 
         # understand channel subsets
@@ -1034,7 +1063,9 @@ class CandidateSet:
         self.neighborhood_ids = neighborhoods.neighborhood_ids
         self.n_neighborhoods = neighborhoods.n_neighborhoods
         self.n_spikes = self.neighborhood_ids.numel()
-        logger.dartsortdebug(f"Initialize CandidateSet with {self.n_spikes=}")
+        logger.doublecheck(
+            f"Initialize CandidateSet with {self.n_spikes=} {n_candidates=} {n_search=} {n_explore=}"
+        )
         self.n_candidates = n_candidates
         self.n_search = n_search
         self.n_explore = n_explore
@@ -1062,21 +1093,27 @@ class CandidateSet:
             assert labels.shape == (self.n_spikes, self.n_candidates)
             self.candidates[:, : self.n_candidates] = labels
             invalid = labels < 0
-            logger.dartsortdebug(f"Candiate init had {invalid.sum()=} {invalid.shape=}")
             if invalid.any():
-                invalid_i, invalid_j = invalid.nonzero(as_tuple=True)
-                inv_lines, inv_i = invalid_i.unique(return_inverse=True)
-                replacements = integers_without_inner_replacement(
+                (inv_i,) = invalid.any(dim=1).nonzero(as_tuple=True)
+                self.candidates[:, : self.n_candidates][invalid] = -1
+                self.candidates[inv_i, : self.n_candidates] = (
+                    self.candidates[inv_i, : self.n_candidates]
+                    .sort(descending=True)
+                    .values
+                )
+                fisher_yates_replace(
                     self.rg,
                     len(closest_neighbors),
-                    size=(inv_lines.numel(), self.n_candidates),
+                    self.candidates[:, : self.n_candidates].numpy(),
                 )
-                replacements = torch.from_numpy(replacements)
-                self.candidates[invalid_i, invalid_j] = replacements[inv_i, invalid_j]
-            logger.dartsortdebug(
-                f"Still I assure you that {torch.all(self.candidates[:, :self.n_candidates]>=0)=} and"
-                f"{torch.all(self.candidates[:, :self.n_candidates].sort(dim=1).values.diff(dim=1)>0)=}"
-            )
+            if logger.isEnabledFor(DARTSORTDEBUG):
+                logger.dartsortdebug(
+                    f"Candiate init had {invalid.sum()=} {invalid.shape=}"
+                )
+                logger.dartsortdebug(
+                    f"Still I assure you that {torch.all(self.candidates[:, :self.n_candidates]>=0)=} and "
+                    f"{torch.all(self.candidates[:, :self.n_candidates].sort(dim=1).values.diff(dim=1)>0)=}"
+                )
 
     def propose_candidates(self, unit_search_neighbors, indices=None):
         """Assumes invariant 1 and does not mess it up.
@@ -1141,8 +1178,13 @@ class CandidateSet:
             targs = integers_without_inner_replacement(
                 self.rg, n_explore.numpy(), size=(n_spikes, self.n_explore)
             )
+            if logger.isEnabledFor(DARTSORTDEBUG):
+                logger.dartsortdebug(
+                    f"{n_explore.min()=} {n_explore.max()=} {targs.min()=} {targs.max()=}"
+                )
             targs = torch.from_numpy(targs)
             explore = neighborhood_explore_units[neighb_ids[:, None], targs]
+            explore[targs < 0] = -1
             candidates[:, explore_slice] = explore
 
         # update counts for the rest of units
@@ -1153,9 +1195,10 @@ class CandidateSet:
 
         # replace duplicates with -1. TODO: replace quadratic algorithm with -1.
         erase_dups(candidates.numpy())
-        logger.dartsortdebug(
-            f"I have maintained that {torch.all(self.candidates[:, :self.n_candidates]>=0)=} and"
-            f"{torch.all(self.candidates[:, :self.n_candidates].sort(dim=1).values.diff(dim=1)>0)=}"
-        )
+        if logger.isEnabledFor(DARTSORTDEBUG):
+            logger.dartsortdebug(
+                f"I have maintained that {torch.all(self.candidates[:, :self.n_candidates]>=0)=} and"
+                f"{torch.all(self.candidates[:, :self.n_candidates].sort(dim=1).values.diff(dim=1)>0)=}"
+            )
 
         return candidates, unit_neighborhood_counts

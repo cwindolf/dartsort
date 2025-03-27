@@ -1,33 +1,33 @@
+from logging import getLogger
 from dataclasses import dataclass, fields
 from typing import Union, Optional
 
-import numba
 import numpy as np
 import torch
 
 from ..util import spiketorch
+from ..util.logging_util import DARTSORTVERBOSE
 
 log2pi = torch.log(torch.tensor(2 * np.pi))
+logger = getLogger(__name__)
 
 
-DEBUG = False
-FRZ = False
+ds_verbose = logger.isEnabledFor(DARTSORTVERBOSE)
+FRZ = not ds_verbose
 
 
 def __debug_init__(self):
-    print("-" * 40, self.__class__.__name__)
+    msg = "-" * 40 + " " + self.__class__.__name__ + "\n"
     res = {}
     for f in fields(self):
         v = getattr(self, f.name)
         if torch.is_tensor(v):
             res[f.name] = v.isnan().any().item()
-            print(
-                f" - {f.name}: {v.shape} min={v.min().item():g} mean={v.to(torch.float).mean().item():g} max={v.max().item():g} sum={v.sum().item():g}"
-            )
+            msg += f" - {f.name}: {v.shape} min={v.min().item():g} mean={v.to(torch.float).mean().item():g} max={v.max().item():g} sum={v.sum().item():g}\n"
     if any(res.values()):
-        msg = f"NaNs in {self.__class__.__name__}: {res}"
-        raise ValueError(msg)
-    print("//" + "-" * 38)
+        raise ValueError(f"NaNs in {self.__class__.__name__}: {res}")
+    msg += "//" + "-" * 38
+    logger.dartsortverbose("->\n" + msg)
 
 
 @dataclass(slots=FRZ, kw_only=FRZ, frozen=FRZ)
@@ -45,7 +45,7 @@ class TEStepResult:
 
     hard_labels: Optional[torch.Tensor] = None
 
-    if DEBUG:
+    if ds_verbose:
         __post_init__ = __debug_init__
 
 
@@ -74,7 +74,7 @@ class TEBatchResult:
     noise_lls: Optional[torch.Tensor] = None
     hard_labels: Optional[torch.Tensor] = None
 
-    if DEBUG:
+    if ds_verbose:
         __post_init__ = __debug_init__
 
 
@@ -94,7 +94,6 @@ def _te_batch_e(
     n_units,
     n_candidates,
     noise_log_prop,
-    n,
     candidates,
     whitenedx,
     whitenednu,
@@ -118,13 +117,31 @@ def _te_batch_e(
     noise_lls = nlls + noise_log_prop
 
     # observed log likelihoods
+    if ds_verbose:
+        logger.dartsortverbose(f"{whitenednu.isfinite().all()=}")
     inv_quad = woodbury_inv_quad(
         whitenedx, whitenednu, wburyroot=wburyroot, overwrite_nu=True
     )
     del whitenednu
     lls_unnorm = inv_quad.add_(obs_logdets).add_(pinobs[:, None]).mul_(-0.5)
     lls = lls_unnorm + log_proportions
-    lls = torch.where(candidates >= 0, lls, -torch.inf)
+
+    if ds_verbose:
+        llsfinite = lls.isfinite()
+        if not llsfinite.all():
+            llsinf = torch.logical_not(llsfinite)
+            infspk = llsinf.any(1)
+            infcands = candidates[torch.logical_not(llsfinite)].unique()
+            logger.dartsortverbose(
+                f"_te_batch_e: {lls.shape=} {llsfinite.sum()=} {lls[llsinf]=} {inv_quad[llsinf]=}"
+                f"{infcands=} {obs_logdets[infcands]=} {log_proportions[infcands]=} "
+                f"{pinobs[infcands]=} {whitenedx[infspk]} {whitenedx.isfinite().all()=}"
+            )
+            if wburyroot is not None:
+                logger.dartsortverbose(f"{wburyroot[infcands]=}")
+
+    cvalid = candidates >= 0
+    lls = torch.where(cvalid, lls, -torch.inf)
 
     # -- update K_ns
     toplls, topinds = lls.sort(dim=1, descending=True)
@@ -135,21 +152,25 @@ def _te_batch_e(
     all_lls = torch.concatenate((toplls, noise_lls.unsqueeze(1)), dim=1)
     Q = torch.softmax(all_lls, dim=1)
     new_candidates = candidates.take_along_dim(topinds, 1)
+    assert (new_candidates >= 0).all()
 
     ncc = dkl = None
     if with_kl:
+        # todo: this is probably broken after the candidate masking was
+        # implemented. leaving it for now because unused.
+        cvalid = cvalid.to(torch.float)
         ncc = Q.new_zeros((n_units, n_units))
         spiketorch.add_at_(
             ncc,
             (new_candidates[:, None, :1], candidates[:, :, None]),
-            1.0,
+            cvalid[:, :, None],
         )
         dkl = Q.new_zeros((n_units, n_units))
         top_lls_unnorm = lls_unnorm.take_along_dim(topinds[:, :1], dim=1)
         spiketorch.add_at_(
             dkl,
             (new_candidates[:, :1], candidates),
-            top_lls_unnorm - lls_unnorm,
+            (top_lls_unnorm - lls_unnorm) * cvalid,
         )
 
     return dict(
@@ -417,8 +438,10 @@ def woodbury_inv_quad(whitenedx, whitenednu, wburyroot=None, overwrite_nu=False)
     wdxz = torch.sub(
         whitenedx.unsqueeze(1),
         whitenednu,
-        out=out,
+        # out=out,
     )
+    if ds_verbose:
+        logger.dartsortverbose(f"{wdxz.isfinite().all()=}")
     if wburyroot is None:
         return wdxz.square_().sum(dim=2)
     term_b = torch.einsum("ncj,ncjp->ncp", wdxz, wburyroot)
