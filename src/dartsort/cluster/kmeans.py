@@ -40,30 +40,39 @@ def kmeanspp(X, n_components=10, random_state=0, kmeanspp_initial="mean", mode_d
         dists[closer] = newdists[closer]
 
     centroid_ixs = torch.tensor(centroid_ixs).to(assignments)
+    phi = dists.sum()
 
-    return centroid_ixs, assignments, dists
+    return centroid_ixs, assignments, dists, phi
 
 
 def kmeans(
     X,
+    n_kmeanspp_tries=5,
     n_iter=100,
     n_components=10,
     random_state=0,
     kmeanspp_initial="mean",
     with_proportions=False,
     drop_prop=0.025,
+    drop_sum=5.0,
     return_centroids=False,
 ):
     """A bit more than K-means
 
     Supports a proportion vector, as well as automatically dropping tiny clusters.
     """
-    centroid_ixs, labels, dists = kmeanspp(
-        X,
-        n_components=n_components,
-        random_state=random_state,
-        kmeanspp_initial=kmeanspp_initial,
-    )
+    best_phi = torch.inf
+    centroid_ixs = labels = None
+    for _ in range(n_kmeanspp_tries):
+        _centroid_ixs, _labels, _, phi = kmeanspp(
+            X,
+            n_components=n_components,
+            random_state=random_state,
+            kmeanspp_initial=kmeanspp_initial,
+        )
+        if phi < best_phi:
+            centroid_ixs = _centroid_ixs
+            labels = _labels
 
     centroids = X[centroid_ixs]
     dists = torch.cdist(X, centroids).square_()
@@ -77,10 +86,18 @@ def kmeans(
     proportions = e.mean(0)
 
     for j in range(n_iter):
+        keep = None
         if drop_prop:
             keep = proportions > drop_prop
             e = e[:, keep]
             proportions = proportions[keep]
+        if drop_sum:
+            totals = e.sum(0)
+            keep = totals > drop_sum
+            e = e[:, keep]
+            proportions = proportions[keep]
+        if keep is not None and (not keep.numel() or not keep.any()):
+            return torch.full_like(labels, 0), None
 
         # update centroids
         w = e / e.sum(0)
@@ -92,6 +109,7 @@ def kmeans(
             e = F.softmax(-0.5 * dists + proportions.log(), dim=1)
         else:
             e = F.softmax(-0.5 * dists, dim=1)
+        proportions = e.mean(0)
 
     assignments = torch.argmin(dists, 1)
     if return_centroids:
