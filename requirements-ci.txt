@@ -4,6 +4,7 @@ hdbscan
 matplotlib
 numpy < 2.0
 pytest
+pytest-cov
 torch >= 2.0
 scipy >= 1.13
 scikit-learn
