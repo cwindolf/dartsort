@@ -53,7 +53,7 @@ jobs:
 
       - name: Pytest
         run: |
-          pytest --log-level=15 --cov=dartsort/src/dartsort --cov-report lcov --cov-report term dartsort/tests/
+          pytest --log-level=15 --cov=dartsort/src/dartsort  --cov-config=dartsort/pyproject.toml --cov-report lcov --cov-report term dartsort/tests/
 
       - name: Coveralls
         uses: coverallsapp/github-action@master
