@@ -1,9 +1,9 @@
 import signal
 import time
-import logging
 from importlib.metadata import Distribution
 import sys
 import json
+from pathlib import Path
 
 
 # check if we are installed in editable mode
@@ -62,3 +62,11 @@ def int_or_inf(s):
     if np.isfinite(s):
         return int(s)
     return s
+
+
+def resolve_path(p: str | Path, strict=False) -> Path:
+    p = Path(p)
+    p = p.expanduser()
+    p = p.absolute()
+    p = p.resolve(strict=strict)
+    return p

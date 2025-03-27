@@ -1,5 +1,4 @@
 from dataclasses import asdict
-from pathlib import Path
 from logging import getLogger
 
 import numpy as np
@@ -33,6 +32,7 @@ from dartsort.util.data_util import (
 )
 from dartsort.util.peel_util import run_peeler
 from dartsort.util.registration_util import estimate_motion
+from dartsort.util.py_util import resolve_path
 
 
 logger = getLogger(__name__)
@@ -48,7 +48,7 @@ def dartsort(
     overwrite=False,
 ):
     """TODO: fast forward."""
-    output_dir = Path(output_dir)
+    output_dir = resolve_path(output_dir)
     output_dir.mkdir(exist_ok=True)
     cfg = to_internal_config(cfg)
 
@@ -208,7 +208,7 @@ def match(
     computation_config=default_computation_config,
 ):
     assert output_dir is not None
-    model_dir = Path(output_dir) / model_subdir
+    model_dir = resolve_path(output_dir) / model_subdir
 
     # compute templates
     if template_data is None:
@@ -362,7 +362,7 @@ def match_chunked(
 
 
 def ds_tasks(step_name, step_sorting, output_dir, cfg, step_labels=None):
-    output_dir = Path(output_dir).resolve(strict=True)
+    output_dir = resolve_path(output_dir, strict=True)
 
     if cfg.save_intermediate_labels:
         step_labels_npy = output_dir / f"{step_name}_labels.npy"
