@@ -7,7 +7,7 @@ import torch
 
 from dartsort.templates.templates import TemplateData
 
-from .noise_util import StationaryFactorizedNoise
+from .noise_util import StationaryFactorizedNoise, WhiteNoise
 from .data_util import DARTsortSorting
 
 
@@ -325,17 +325,16 @@ class PointSource3ExpSimulator:
 class StaticSimulatedRecording:
     def __init__(
         self,
-        geom,
         template_simulator,
         noise,
         firing_rates,
         jitter=1,
         seed: int | np.random.Generator = 0,
     ):
-        self.geom = geom
         self.template_simulator = template_simulator
+        self.geom = template_simulator.geom
         self.noise = noise
-        self.firing_rates = firing_rates
+        self.firing_rates = np.asarray(firing_rates)
         self.rg = np.random.default_rng(seed)
         self.torch_rg = spawn_torch_rg(self.rg)
 
