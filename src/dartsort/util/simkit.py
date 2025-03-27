@@ -188,15 +188,15 @@ class PointSource3ExpSimulator:
         peak_rel_max=0.5,
         # pos/amplitude params
         pos_margin_um=40.0,
-        orthdist_min_um=10.0,
-        orthdist_max_um=100.0,
-        alpha_mean=500.0,
-        alpha_var=25.0,
+        orthdist_min_um=20.0,
+        orthdist_max_um=30.0,
+        alpha_mean=8000.0,
+        alpha_var=400.0,
         # config
         ms_before=1.4,
         ms_after=2.6,
         fs=30_000.0,
-        decay_model="pointsource",
+        decay_model="squared",
         seed: int | np.random.Generator = 0,
         dtype=np.float32,
     ):
