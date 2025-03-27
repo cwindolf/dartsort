@@ -53,9 +53,9 @@ jobs:
 
       - name: Pytest
         run: |
-          pytest --log-level=15 --cov=dartsort --cov-report xml dartsort/tests/
+          pytest --log-level=15 --cov=dartsort/src/dartsort --cov-report lcov dartsort/tests/
 
       - name: Coveralls
         uses: coverallsapp/github-action@master
         with:
-          path-to-lcov: coverage.xml
+          path-to-lcov: coverage.lcov
