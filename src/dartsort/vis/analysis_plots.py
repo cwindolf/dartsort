@@ -15,13 +15,17 @@ def scatter_max_channel_waveforms(
     waveform_height=0.05,
     waveform_width=0.95,
     show_geom=True,
+    geom=None,
     geom_scatter_kwargs={"marker": "s", "lw": 0, "s": 3},
     lw=1,
     colors=glasbey1024,
     **plot_kwargs,
 ):
-    dx = np.ptp(waveform_width * template_data.registered_geom[:, 0])
-    dz = np.ptp(template_data.registered_geom[:, 1])
+    rgeom = template_data.registered_geom
+    if rgeom is None:
+        rgeom = geom
+    dx = np.ptp(waveform_width * rgeom[:, 0])
+    dz = np.ptp(rgeom[:, 1])
     max_abs_amp = np.abs(template_data.templates).max()
     zscale = dz * waveform_height / max_abs_amp
 
@@ -31,7 +35,7 @@ def scatter_max_channel_waveforms(
     locsz = locs["z_abs"]
 
     if show_geom:
-        axis.scatter(*template_data.registered_geom.T, **geom_scatter_kwargs)
+        axis.scatter(*rgeom.T, **geom_scatter_kwargs)
 
     for j, (u, temp) in enumerate(zip(template_data.unit_ids, template_data.templates)):
         ptpvec = np.ptp(temp, 0)

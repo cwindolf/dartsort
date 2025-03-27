@@ -22,7 +22,7 @@ from ..config import raw_template_config
 from ..util.analysis import DARTsortAnalysis
 from ..util.multiprocessing_util import CloudpicklePoolExecutor, get_pool, cloudpickle
 from . import layout
-from .analysis_plots import isi_hist, correlogram, plot_correlogram, bar;
+from .analysis_plots import isi_hist, correlogram, plot_correlogram, bar
 from .colors import glasbey1024
 from .waveforms import geomplot
 
@@ -51,7 +51,7 @@ class UnitTextInfo(UnitPlot):
         axis.axis("off")
         msg = f"unit {unit_id}\n"
 
-        if getattr(sorting_analysis, 'hdf5_path', None):
+        if getattr(sorting_analysis, "hdf5_path", None):
             msg += f"feature source: {sorting_analysis.hdf5_path.name}\n"
 
         nspikes = sorting_analysis.spike_counts[
@@ -108,7 +108,14 @@ class ISIHistogram(UnitPlot):
         times_s = sorting_analysis.times_seconds(
             which=sorting_analysis.in_unit(unit_id)
         )
-        isi_hist(times_s, axis, bin_ms=self.bin_ms, max_ms=self.max_ms, color=color, label=label)
+        isi_hist(
+            times_s,
+            axis,
+            bin_ms=self.bin_ms,
+            max_ms=self.max_ms,
+            color=color,
+            label=label,
+        )
 
 
 class XZScatter(UnitPlot):
@@ -727,7 +734,9 @@ class NeighborCCGPlot(UnitPlot):
             for nid in neighbor_ids
         ]
 
-        axes = panel.subplots(nrows=2, sharey="row", sharex=True, squeeze=False, ncols=len(neighb_sts))
+        axes = panel.subplots(
+            nrows=2, sharey="row", sharex=True, squeeze=False, ncols=len(neighb_sts)
+        )
         for j in range(len(neighb_sts)):
             clags, ccg = correlogram(my_st, neighb_sts[j], max_lag=self.max_lag)
             merged_st = np.concatenate((my_st, neighb_sts[j]))
@@ -1025,9 +1034,7 @@ def make_all_summaries(
     if n_units is not None and n_units < len(unit_ids):
         rg = np.random.default_rng(seed)
         unit_ids = rg.choice(unit_ids, size=n_units, replace=False)
-    if not overwrite and all_summaries_done(
-        unit_ids, save_folder, ext=image_ext
-    ):
+    if not overwrite and all_summaries_done(unit_ids, save_folder, ext=image_ext):
         return
 
     save_folder.mkdir(exist_ok=True)

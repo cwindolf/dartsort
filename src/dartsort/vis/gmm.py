@@ -448,7 +448,7 @@ class KMeansSplit(GMMPlot):
             split_info = gmm.kmeans_split_unit(
                 unit_id,
                 debug=True,
-                merge_criterion=criterion,
+                criterion=criterion,
                 decision_algorithm=self.decision_algorithm,
                 kmeans_n_iter=self.kmeans_n_iter,
                 min_overlap=min_overlap,
@@ -916,7 +916,7 @@ class NeighborTreeMerge(GMMPlot):
         self,
         n_neighbors=5,
         metric=None,
-        criterion="heldout_loglik",
+        criterion=None,
         max_distance=1e10,
         criterion_normalization_kind=None,
         distance_normalization_kind=None,
@@ -968,6 +968,7 @@ class NeighborTreeMerge(GMMPlot):
             kind=metric,
             normalization_kind=distance_normalization_kind,
         )
+        _, cosines = gmm.distances(show_progress=False, kind="cosine")
 
         if criterion.startswith("old"):
             Z, group_ids, improvements, overlaps = gmm.old_tree_merge(
@@ -989,6 +990,7 @@ class NeighborTreeMerge(GMMPlot):
                 criterion=criterion,
                 threshold=self.threshold,
                 decision_algorithm=decision_algorithm,
+                cosines=cosines,
                 min_overlap=self.min_overlap,
             )
 
@@ -1050,12 +1052,28 @@ default_gmm_plots = (
     NeighborDistances(metric="noise_metric"),
     NeighborDistances(metric="symkl"),
     NeighborTreeMerge(metric=None, criterion=None),
-    # NeighborTreeMerge(metric=None, criterion="heldout_loglik"),
-    # NeighborBimodalities(),
-    # NeighborInfoCriteria(in_bag=False),
-    # NeighborInfoCriteria(in_bag=True),
-    # NeighborInfoCriteria(fit_type="avg_preexisting"),
 )
+
+
+def criterion_comparison_plots(*criteria):
+    splits = [KMeansSplit(criterion=k) for k in criteria]
+    merges = [NeighborTreeMerge(criterion=k) for k in criteria]
+    return (
+        TextInfo(),
+        ISIHistogram(),
+        ISIHistogram(bin_ms=1, max_ms=50),
+        ChansHeatmap(),
+        MStep(),
+        CovarianceResidual(),
+        Likelihoods(),
+        Amplitudes(),
+        *splits,
+        NeighborMeans(),
+        NeighborDistances(metric="noise_metric"),
+        NeighborDistances(metric="symkl"),
+        *merges,
+    )
+
 
 figsize = (17, 10)
 
