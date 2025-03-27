@@ -1,4 +1,5 @@
-![example branch parameter](https://github.com/cwindolf/dartsort/actions/workflows/ci.yml/badge.svg?branch=main)
+[![badge](https://github.com/cwindolf/dartsort/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/cwindolf/dartsort/actions/)
+[![cov](https://coveralls.io/repos/cwindolf/dartsort/badge.png?branch=main)](https://coveralls.io/repos/cwindolf/dartsort/)
 
 # dartsort
 
