@@ -1,32 +1,33 @@
-from dataclasses import dataclass, field, replace, fields
+from logging import getLogger
+from dataclasses import dataclass, fields
 from typing import Union, Optional
+
 import numpy as np
 import torch
 
 from ..util import spiketorch
+from ..util.logging_util import DARTSORTVERBOSE
 
 log2pi = torch.log(torch.tensor(2 * np.pi))
-_1 = torch.tensor(1.0)
+logger = getLogger(__name__)
 
 
-DEBUG = False
-FRZ = False
+ds_verbose = logger.isEnabledFor(DARTSORTVERBOSE)
+FRZ = not ds_verbose
 
 
 def __debug_init__(self):
-    print("-" * 40, self.__class__.__name__)
+    msg = "-" * 40 + " " + self.__class__.__name__ + "\n"
     res = {}
     for f in fields(self):
         v = getattr(self, f.name)
         if torch.is_tensor(v):
             res[f.name] = v.isnan().any().item()
-            print(
-                f" - {f.name}: {v.shape} min={v.min().item():g} mean={v.to(torch.float).mean().item():g} max={v.max().item():g} sum={v.sum().item():g}"
-            )
+            msg += f" - {f.name}: {v.shape} min={v.min().item():g} mean={v.to(torch.float).mean().item():g} max={v.max().item():g} sum={v.sum().item():g}\n"
     if any(res.values()):
-        msg = f"NaNs in {self.__class__.__name__}: {res}"
-        raise ValueError(msg)
-    print("//" + "-" * 38)
+        raise ValueError(f"NaNs in {self.__class__.__name__}: {res}")
+    msg += "//" + "-" * 38
+    logger.dartsortverbose("->\n" + msg)
 
 
 @dataclass(slots=FRZ, kw_only=FRZ, frozen=FRZ)
@@ -44,7 +45,7 @@ class TEStepResult:
 
     hard_labels: Optional[torch.Tensor] = None
 
-    if DEBUG:
+    if ds_verbose:
         __post_init__ = __debug_init__
 
 
@@ -62,16 +63,18 @@ class TEBatchResult:
     U: Optional[torch.Tensor] = None
     m: Optional[torch.Tensor] = None
 
-    ddW: Optional[torch.Tensor] = None
+    ddlogpi: Optional[torch.Tensor] = None
+    ddlognoisep: Optional[torch.Tensor] = None
     ddm: Optional[torch.Tensor] = None
-    noise_lls: Optional[torch.Tensor] = None
+    ddW: Optional[torch.Tensor] = None
 
     ncc: Optional[torch.Tensor] = None
     dkl: Optional[torch.Tensor] = None
 
+    noise_lls: Optional[torch.Tensor] = None
     hard_labels: Optional[torch.Tensor] = None
 
-    if DEBUG:
+    if ds_verbose:
         __post_init__ = __debug_init__
 
 
@@ -91,7 +94,6 @@ def _te_batch_e(
     n_units,
     n_candidates,
     noise_log_prop,
-    n,
     candidates,
     whitenedx,
     whitenednu,
@@ -115,12 +117,31 @@ def _te_batch_e(
     noise_lls = nlls + noise_log_prop
 
     # observed log likelihoods
+    if ds_verbose:
+        logger.dartsortverbose(f"{whitenednu.isfinite().all()=}")
     inv_quad = woodbury_inv_quad(
         whitenedx, whitenednu, wburyroot=wburyroot, overwrite_nu=True
     )
     del whitenednu
     lls_unnorm = inv_quad.add_(obs_logdets).add_(pinobs[:, None]).mul_(-0.5)
     lls = lls_unnorm + log_proportions
+
+    if ds_verbose:
+        llsfinite = lls.isfinite()
+        if not llsfinite.all():
+            llsinf = torch.logical_not(llsfinite)
+            infspk = llsinf.any(1)
+            infcands = candidates[torch.logical_not(llsfinite)].unique()
+            logger.dartsortverbose(
+                f"_te_batch_e: {lls.shape=} {llsfinite.sum()=} {lls[llsinf]=} {inv_quad[llsinf]=}"
+                f"{infcands=} {obs_logdets[infcands]=} {log_proportions[infcands]=} "
+                f"{pinobs[infcands]=} {whitenedx[infspk]} {whitenedx.isfinite().all()=}"
+            )
+            if wburyroot is not None:
+                logger.dartsortverbose(f"{wburyroot[infcands]=}")
+
+    cvalid = candidates >= 0
+    lls = torch.where(cvalid, lls, -torch.inf)
 
     # -- update K_ns
     toplls, topinds = lls.sort(dim=1, descending=True)
@@ -131,21 +152,25 @@ def _te_batch_e(
     all_lls = torch.concatenate((toplls, noise_lls.unsqueeze(1)), dim=1)
     Q = torch.softmax(all_lls, dim=1)
     new_candidates = candidates.take_along_dim(topinds, 1)
+    assert (new_candidates >= 0).all()
 
     ncc = dkl = None
     if with_kl:
+        # todo: this is probably broken after the candidate masking was
+        # implemented. leaving it for now because unused.
+        cvalid = cvalid.to(torch.float)
         ncc = Q.new_zeros((n_units, n_units))
         spiketorch.add_at_(
             ncc,
             (new_candidates[:, None, :1], candidates[:, :, None]),
-            1.0,
+            cvalid[:, :, None],
         )
         dkl = Q.new_zeros((n_units, n_units))
         top_lls_unnorm = lls_unnorm.take_along_dim(topinds[:, :1], dim=1)
         spiketorch.add_at_(
             dkl,
             (new_candidates[:, :1], candidates),
-            top_lls_unnorm - lls_unnorm,
+            (top_lls_unnorm - lls_unnorm) * cvalid,
         )
 
     return dict(
@@ -349,11 +374,41 @@ def _te_batch_m_ppca(
     return dict(m=m, R=R, U=U)
 
 
-def obs_elbo(Q, log_liks):
-    logQ = torch.where(Q > 0, Q, _1).log()
-    log_liks = torch.where(Q > 0, log_liks, torch.tensor(0.0))
-    oelbo = torch.sum(Q * (log_liks + logQ), dim=1).mean()
-    return oelbo
+def _grad_counts(noise_N, N, log_pi, log_noise_prop):
+    """Gradient of the ELBO with respect to the log proportions
+
+    In EM, the update is derived with Lagrange multipliers. Here
+    we work by reparameterizing -- backprop thru softmax.
+
+    I'm dividing by batch size here (Q sums to batch size).
+    """
+    Ntot = N.sum() + noise_N
+    delbo_dlogpi = N / Ntot - log_pi.exp()
+    delbo_dlognoiseprop = noise_N / Ntot - log_noise_prop.exp()
+    return Ntot, delbo_dlogpi, delbo_dlognoiseprop
+
+
+#
+# in next 2 fns, note that suff stats m, R, U are already /= Ntot.
+#
+
+
+def _grad_mean(Ntot, N, m, mu, active=slice(None), Cinv=None):
+    N = N / Ntot
+    d = m.reshape(mu.shape) - mu
+    d.mul_(N[:, None])
+    if Cinv is not None and (active == slice(None) or active.numel()):
+        d[active] = d[active] @ Cinv.T
+    return d
+
+
+def _grad_basis(Ntot, N, R, W, U, active=slice(None), Cinv=None):
+    N = N / Ntot
+    d = torch.baddbmm(R.reshape(W.shape), U, W, alpha=-1)
+    d.mul_(N[:, None, None])
+    if Cinv is not None and (active == slice(None) or active.numel()):
+        d[active] = torch.einsum("ij,npj->npi", Cinv, d[active])
+    return d.view(R.shape)
 
 
 def woodbury_inv_quad(whitenedx, whitenednu, wburyroot=None, overwrite_nu=False):
@@ -383,8 +438,10 @@ def woodbury_inv_quad(whitenedx, whitenednu, wburyroot=None, overwrite_nu=False)
     wdxz = torch.sub(
         whitenedx.unsqueeze(1),
         whitenednu,
-        out=out,
+        # out=out,
     )
+    if ds_verbose:
+        logger.dartsortverbose(f"{wdxz.isfinite().all()=}")
     if wburyroot is None:
         return wdxz.square_().sum(dim=2)
     term_b = torch.einsum("ncj,ncjp->ncp", wdxz, wburyroot)

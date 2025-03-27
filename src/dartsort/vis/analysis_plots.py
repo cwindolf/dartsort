@@ -6,6 +6,7 @@ from matplotlib.colors import to_hex
 from scipy.cluster.hierarchy import dendrogram, fcluster, linkage
 
 from .colors import glasbey1024
+from ..cluster.cluster_util import leafsets
 
 
 def scatter_max_channel_waveforms(
@@ -14,13 +15,17 @@ def scatter_max_channel_waveforms(
     waveform_height=0.05,
     waveform_width=0.95,
     show_geom=True,
+    geom=None,
     geom_scatter_kwargs={"marker": "s", "lw": 0, "s": 3},
     lw=1,
     colors=glasbey1024,
     **plot_kwargs,
 ):
-    dx = np.ptp(waveform_width * template_data.registered_geom[:, 0])
-    dz = np.ptp(template_data.registered_geom[:, 1])
+    rgeom = template_data.registered_geom
+    if rgeom is None:
+        rgeom = geom
+    dx = np.ptp(waveform_width * rgeom[:, 0])
+    dz = np.ptp(rgeom[:, 1])
     max_abs_amp = np.abs(template_data.templates).max()
     zscale = dz * waveform_height / max_abs_amp
 
@@ -30,7 +35,7 @@ def scatter_max_channel_waveforms(
     locsz = locs["z_abs"]
 
     if show_geom:
-        axis.scatter(*template_data.registered_geom.T, **geom_scatter_kwargs)
+        axis.scatter(*rgeom.T, **geom_scatter_kwargs)
 
     for j, (u, temp) in enumerate(zip(template_data.unit_ids, template_data.templates)):
         ptpvec = np.ptp(temp, 0)
@@ -49,6 +54,9 @@ def annotated_dendro(
     ax,
     Z,
     annotations,
+    brute_indicator=None,
+    group_ids=None,
+    cluster_ids=None,
     threshold=1.0,
     above_threshold_color=0.0,
     leaf_labels=None,
@@ -66,6 +74,8 @@ def annotated_dendro(
     )
     dcoords = np.array(res["dcoord"])[:, 1]
     depth_order = np.argsort(dcoords)
+    if brute_indicator is not None:
+        leaf_descendants = leafsets(Z)
 
     lines = np.zeros((len(Z), 4, 2))
     colors = np.zeros((len(Z), 3))
@@ -93,10 +103,31 @@ def annotated_dendro(
     for jj, (ic, dc) in enumerate(zip(res["icoord"], res["dcoord"])):
         j = depth_order[jj]
         cluix = n + j if annotations_offset_by_n else j
-        if cluix in annotations:
-            top = np.mean(ic[1:3]), np.mean(dc[1:3])
-            fc = colors[j]
-            lc = invert(fc)
+        isbrute = brute_indicator is not None and brute_indicator[j]
+        top = np.mean(ic[1:3]), np.mean(dc[1:3])
+        fc = colors[j]
+        lc = invert(fc)
+        if isbrute:
+            leaves = leaf_descendants[n + j]
+            gids = group_ids[leaves]
+            groups = []
+            for gid in np.unique(gids):
+                groups.append(
+                    [leaf_labels[leaves[ii]] for ii in np.flatnonzero(gids == gid)]
+                )
+            annot = f"brute {groups} {annotations[cluix]}"
+            ax.text(
+                *top,
+                annot,
+                fontsize="medium",
+                color=lc,
+                va="center",
+                ha="center",
+                rotation=rotation,
+                rotation_mode="anchor",
+                bbox=dict(fc=fc, ec="none", boxstyle="square,pad=0."),
+            )
+        elif cluix in annotations:
             ax.text(
                 *top,
                 annotations[cluix],

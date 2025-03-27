@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - main
+      - develop
   pull_request:
     branches:
       - "*"
@@ -48,8 +49,13 @@ jobs:
 
       - name: Install DARTsort
         run: |
-          pip install dartsort/
+          pip install -e dartsort/
 
       - name: Pytest
         run: |
-          pytest dartsort/tests/
+          pytest --log-level=15 --cov=dartsort/src/dartsort --cov-report lcov --cov-report term dartsort/tests/
+
+      - name: Coveralls
+        uses: coverallsapp/github-action@master
+        with:
+          path-to-lcov: coverage.lcov

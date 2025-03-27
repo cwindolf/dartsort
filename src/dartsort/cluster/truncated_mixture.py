@@ -1,7 +1,8 @@
-from typing import Optional
 import numpy as np
 import torch
-import threading
+from logging import getLogger
+from torch import nn
+import time
 import joblib
 from linear_operator import operators
 from linear_operator.utils.cholesky import psd_safe_cholesky
@@ -10,6 +11,11 @@ from tqdm.auto import trange
 
 
 from ..util.noise_util import EmbeddedNoise
+from ..util.sparse_util import (
+    integers_without_inner_replacement,
+    erase_dups,
+    fisher_yates_replace,
+)
 from .stable_features import SpikeNeighborhoods, StableSpikeDataset
 from ._truncated_em_helpers import (
     neighb_lut,
@@ -19,41 +25,61 @@ from ._truncated_em_helpers import (
     _te_batch_m_counts,
     _te_batch_m_rank0,
     _te_batch_m_ppca,
-    obs_elbo,
     units_overlapping_neighborhoods,
+    _grad_counts,
+    _grad_mean,
+    _grad_basis,
 )
 from ..util import spiketorch
+from ..util.logging_util import DARTSORTDEBUG
+
+logger = getLogger(__name__)
 
 
-class SpikeTruncatedMixtureModel(torch.nn.Module):
+class SpikeTruncatedMixtureModel(nn.Module):
     def __init__(
         self,
         data: StableSpikeDataset,
         noise: EmbeddedNoise,
         M: int = 0,
         n_candidates: int = 3,
-        n_search: int = 5,
-        n_explore: int = None,
-        covariance_radius: Optional[float] = 250.0,
+        n_search: int | None = 5,
+        n_explore: int | None = None,
+        n_units: int | None = None,
+        covariance_radius: float | None = 250.0,
         random_seed=0,
         n_threads: int = 0,
         batch_size=2**14,
         exact_kl=True,
-        fixed_noise_proportion=0.5,
+        fixed_noise_proportion=None,
+        sgd_batch_size=None,
+        Cinv_in_grad=True,
     ):
         super().__init__()
         if n_search is None:
             n_search = n_candidates
         if n_explore is None:
             n_explore = n_search
+        logger.dartsortdebug(
+            f"Making a TMM with {n_units=} {data.n_spikes=} {data.n_spikes_kept=} {M=}"
+        )
+        if n_units is not None:
+            n_candidates = min(n_units, n_candidates)
+            remainder = n_units - n_candidates
+            n_search = max(0, min(remainder // n_candidates, n_search))
+            remainder -= n_candidates * n_search
+            n_explore = max(0, min(remainder, n_explore))
+        self.n_candidates = n_candidates
         self.data = data
         self.noise = noise
         self.M = M
         self.covariance_radius = covariance_radius
         self.fixed_noise_proportion = fixed_noise_proportion
         self.exact_kl = exact_kl
+        self.sgd_batch_size = sgd_batch_size
         train_indices, self.train_neighborhoods = self.data.neighborhoods("extract")
         self.n_spikes = train_indices.numel()
+        logger.dartsortdebug(f"TMM will fit to {train_indices.shape=} {self.n_spikes=}")
         self.processor = TruncatedExpectationProcessor(
             noise=noise,
             neighborhoods=self.train_neighborhoods,
@@ -64,6 +90,7 @@ class SpikeTruncatedMixtureModel(torch.nn.Module):
             batch_size=batch_size,
             covariance_radius=covariance_radius,
             pgeom=data.prgeom,
+            Cinv_in_grad=Cinv_in_grad,
         )
         self.candidates = CandidateSet(
             neighborhoods=self.train_neighborhoods,
@@ -81,29 +108,36 @@ class SpikeTruncatedMixtureModel(torch.nn.Module):
         """Parameters are stored padded with an extra channel."""
         self.n_units = nu = means.shape[0]
         assert means.shape == (nu, self.noise.rank, self.noise.n_channels)
-        self.register_buffer("means", F.pad(means, (0, 1)))
-
         assert log_proportions.shape == (nu,)
+        assert kl_divergences.shape == (nu, nu)
+        assert means.isfinite().all()
+        assert log_proportions.isfinite().all()
+        assert noise_log_prop.isfinite()
+
+        logger.dartsortdebug(
+            f"Setting TMM parameters {labels.shape=} {means.shape=} {log_proportions.shape=} {kl_divergences.shape=}"
+        )
+        self.means = nn.Parameter(F.pad(means, (0, 1)), requires_grad=False)
+
         self.register_buffer("_N", torch.zeros(nu + 1))
         if self.fixed_noise_proportion:
             noise_log_prop = torch.log(torch.tensor(self.fixed_noise_proportion))
             inv_noise_log_prop = torch.log(
                 torch.tensor(1.0 - self.fixed_noise_proportion)
             )
-
-            # self._N[0] = noise_log_prop
-            # self._N[1:] = torch.log_softmax(log_proportions, dim=0) + inv_noise_log_prop
-            # lp = torch.log_softmax(self._N, dim=0)
             self.register_buffer("noise_log_prop", noise_log_prop)
-            self.register_buffer(
-                "log_proportions",
+            self.log_proportions = nn.Parameter(
                 torch.log_softmax(log_proportions, dim=0) + inv_noise_log_prop,
+                requires_grad=False,
             )
         else:
-            self.register_buffer("log_proportions", log_proportions.clone())
-            self.register_buffer("noise_log_prop", noise_log_prop.clone())
+            self.log_proportions = nn.Parameter(
+                log_proportions.clone(), requires_grad=False
+            )
+            self.noise_log_prop = nn.Parameter(
+                noise_log_prop.clone(), requires_grad=False
+            )
 
-        assert kl_divergences.shape == (nu, nu)
         self.register_buffer(
             "kl_divergences",
             torch.asarray(kl_divergences, dtype=self.means.dtype, copy=True),
@@ -117,7 +151,7 @@ class SpikeTruncatedMixtureModel(torch.nn.Module):
         if self.M:
             assert bases is not None
             assert bases.shape == (nu, self.M, self.data.rank, self.data.n_channels)
-            self.register_buffer("bases", F.pad(bases, (0, 1)))
+            self.bases = nn.Parameter(F.pad(bases, (0, 1)), requires_grad=False)
         else:
             self.bases = None
         self.to(means.device)
@@ -129,9 +163,11 @@ class SpikeTruncatedMixtureModel(torch.nn.Module):
         # then storing?
         raise NotImplementedError
 
-    def step(self, show_progress=False, hard_label=False):
+    def step(self, show_progress=False, hard_label=False, tic=None):
         search_neighbors = self.search_sets()
-        unit_neighborhood_counts = self.candidates.propose_candidates(search_neighbors)
+        candidates, unit_neighborhood_counts = self.candidates.propose_candidates(
+            search_neighbors
+        )
         self.processor.update(
             log_proportions=self.log_proportions,
             noise_log_prop=self.noise_log_prop,
@@ -140,7 +176,7 @@ class SpikeTruncatedMixtureModel(torch.nn.Module):
             unit_neighborhood_counts=unit_neighborhood_counts,
         )
         result = self.processor.truncated_e_step(
-            self.candidates.candidates,
+            candidates,
             show_progress=show_progress,
             with_kl=not self.exact_kl,
             with_hard_labels=hard_label,
@@ -163,8 +199,8 @@ class SpikeTruncatedMixtureModel(torch.nn.Module):
                 torch.tensor(1.0 - self.fixed_noise_proportion)
             )
 
-            self._N[0] = noise_log_prop
-            self._N[1:] = torch.log_softmax(result.N.log(), dim=0) + inv_noise_log_prop
+            # self._N[0] = noise_log_prop
+            # self._N[1:] = torch.log_softmax(result.N.log(), dim=0) + inv_noise_log_prop
             # lp = torch.log_softmax(self._N, dim=0)
             self.noise_log_prop.fill_(noise_log_prop)
             self.log_proportions[:] = (
@@ -182,11 +218,126 @@ class SpikeTruncatedMixtureModel(torch.nn.Module):
         else:
             self.kl_divergences[:] = result.kl
 
-        return dict(
-            obs_elbo=result.obs_elbo.numpy(force=True),
+        result = dict(
+            obs_elbo=result.obs_elbo.numpy(force=True).item(),
             noise_lp=self.noise_log_prop.numpy(force=True).copy(),
             labels=result.hard_labels,
         )
+        if tic is not None:
+            result["wall"] = time.perf_counter() - tic
+        return result
+
+    def sgd_epoch(
+        self,
+        opt,
+        show_progress=False,
+        tic=None,
+    ):
+        """"""
+
+        # things that don't change...
+        search_neighbors = self.search_sets()
+
+        # metrics
+        count = 0
+        records = []
+        dev = self.means.device
+        obs_elbo = torch.tensor(0.0, device=dev, dtype=torch.double)
+
+        for batch in self.processor.batches(shuffle=True, show_progress=show_progress):
+            opt.zero_grad()
+            batch_result = self.sgd_batch(batch, search_neighbors)
+            self.set_grads(
+                ddlogpi=batch_result.ddlogpi,
+                ddlognoisep=batch_result.ddlognoisep,
+                ddm=batch_result.ddm,
+                ddW=batch_result.ddW,
+            )
+            opt.step()
+            self.project_noise_prop()
+
+            # update candidate set for batch spikes
+            self.candidates.candidates[batch, : self.candidates.n_candidates] = (
+                batch_result.candidates
+            )
+
+            # metrics
+            boelbo = batch_result.obs_elbo
+            if not boelbo.isfinite():
+                raise ValueError(f"batch elbo diverged! {boelbo=}")
+            bn = len(batch_result.candidates)
+            record = dict(obs_elbo=boelbo.numpy(force=True).item())
+            if tic is not None:
+                record["wall"] = time.perf_counter() - tic
+            records.append(record)
+            count += bn
+            obs_elbo += (boelbo - obs_elbo) * (bn / count)
+            if not obs_elbo.isfinite():
+                raise ValueError(
+                    f"running elbo diverged! {boelbo=} {count=} {bn=} {obs_elbo=}"
+                )
+
+        # per-epoch updates
+        self.update_dkl()
+
+        result = dict(
+            obs_elbo=obs_elbo.numpy(force=True).item(),
+            noise_lp=self.noise_log_prop.numpy(force=True).copy(),
+            train_records=records,
+        )
+        if tic is not None:
+            result["wall"] = time.perf_counter() - tic
+        return result
+
+    def sgd_batch(self, batch_indices, search_neighbors):
+        # mini-update of search sets and local parameters
+        batch_candidates, unit_neighborhood_counts = self.candidates.propose_candidates(
+            search_neighbors, indices=batch_indices
+        )
+        self.processor.update(
+            log_proportions=self.log_proportions.clone().detach(),
+            noise_log_prop=self.noise_log_prop.clone().detach(),
+            means=self.means.clone().detach(),
+            bases=self.bases.clone().detach() if self.bases is not None else None,
+            unit_neighborhood_counts=unit_neighborhood_counts,
+        )
+
+        # get the batch elbo and gradients
+        result = self.processor.process_batch(
+            batch_indices=batch_indices,
+            candidates=batch_candidates,
+            with_obs_elbo=True,
+            with_grads=True,
+        )
+
+        return result
+
+    def set_grads(self, ddlogpi, ddlognoisep, ddm, ddW):
+        self.log_proportions.grad = ddlogpi
+        if not self.fixed_noise_proportion:
+            self.noise_log_prop.grad = ddlognoisep
+        ddm = ddm.view(*self.means.shape[:2], -1)
+        self.means.grad = F.pad(ddm, (0, 1))
+        if self.M:
+            assert self.bases is not None
+            self.bases.grad = F.pad(ddW, (0, 1))
+
+    def project_noise_prop(self):
+        if self.fixed_noise_proportion:
+            noise_log_prop = torch.log(torch.tensor(self.fixed_noise_proportion))
+            inv_noise_log_prop = torch.log(
+                torch.tensor(1.0 - self.fixed_noise_proportion)
+            )
+            self.noise_log_prop.fill_(noise_log_prop)
+            self.log_proportions[:] = (
+                torch.log_softmax(self.log_proportions, dim=0) + inv_noise_log_prop
+            )
+        else:
+            self._N[0] = self.noise_log_prop
+            self._N[1:] = self.log_proportions
+            lp = torch.log_softmax(self._N, dim=0)
+            self.noise_log_prop.fill_(lp[0])
+            self.log_proportions[:] = lp[1:]
 
     def update_dkl(self):
         W = self.bases
@@ -210,7 +361,8 @@ class SpikeTruncatedMixtureModel(torch.nn.Module):
         if n_search is None:
             n_search = self.candidates.n_search
         self.kl_divergences.diagonal().fill_(torch.inf)
-        _, topkinds = torch.topk(self.kl_divergences, k=n_search, dim=1, largest=False)
+        k = min(n_search, self.kl_divergences.shape[0] - 1)
+        _, topkinds = torch.topk(self.kl_divergences, k=k, dim=1, largest=False)
         return topkinds
 
     def channel_occupancy(self, labels):
@@ -241,22 +393,25 @@ class TruncatedExpectationProcessor(torch.nn.Module):
         random_seed: int = 0,
         precompute_invx=True,
         covariance_radius=None,
+        Cinv_in_grad=True,
         pgeom=None,
     ):
         super().__init__()
 
         # initialize fixed noise-related arrays
+        self.noise = noise
+        if features.isnan().any():
+            print("Yeah. nans. Guess not possible to do in place?")
+            self.features = features.nan_to_num()
+        else:
+            self.features = features.clone()
         self.initialize_fixed(
             noise, neighborhoods, pgeom=pgeom, covariance_radius=covariance_radius
         )
         self.neighborhoods = neighborhoods
         self.neighborhood_ids = neighborhoods.neighborhood_ids
         self.n_neighborhoods = neighborhoods.n_neighborhoods
-        if features.isnan().any():
-            print("Yeah. nans. Guess not possible to do in place?")
-            self.features = features.nan_to_num()
-        else:
-            self.features = features.clone()
+        self.Cinv_in_grad = Cinv_in_grad
         if precompute_invx:
             self.precompute_invx()
         self.batch_size = batch_size
@@ -334,7 +489,16 @@ class TruncatedExpectationProcessor(torch.nn.Module):
 
             # running avg for elbo/n
             count += len(result.candidates)
+            if not result.obs_elbo.isfinite():
+                raise ValueError(
+                    f"batch elbo diverged! {result.obs_elbo=} {len(result.candidates)=}"
+                )
             obs_elbo += (result.obs_elbo - obs_elbo) * (len(result.candidates) / count)
+            if not obs_elbo.isfinite():
+                raise ValueError(
+                    f"running elbo diverged! {obs_elbo=} {result.obs_elbo=}"
+                    f"{count=} {len(result.candidates)=}"
+                )
 
             if with_kl:
                 ncc += result.ncc
@@ -385,24 +549,26 @@ class TruncatedExpectationProcessor(torch.nn.Module):
             with_hard_labels=with_hard_labels,
         )
 
-    def batches(self, shuffle=False, show_progress=False):
+    def batches(self, shuffle=False, show_progress=False, batch_size=None):
         n = len(self.features)
+        if batch_size is None:
+            batch_size = self.batch_size
         if shuffle:
-            shuf = self._rg.permutation(n)
-            for sl in self.batches(show_progress=show_progress):
+            shuf = torch.from_numpy(self._rg.permutation(n))
+            for sl in self.batches(show_progress=show_progress, batch_size=batch_size):
                 ix = shuf[sl]
                 ix.sort()
                 yield ix
         else:
             if show_progress:
                 starts = trange(
-                    0, n, self.batch_size, desc="Batches", smoothing=0, mininterval=0.2
+                    0, n, batch_size, desc="Batches", smoothing=0, mininterval=0.2
                 )
             else:
-                starts = range(0, n, self.batch_size)
+                starts = range(0, n, batch_size)
 
             for batch_start in starts:
-                batch_end = min(n, batch_start + self.batch_size)
+                batch_end = min(n, batch_start + batch_size)
                 yield slice(batch_start, batch_end)
 
     def process_batch(
@@ -416,9 +582,18 @@ class TruncatedExpectationProcessor(torch.nn.Module):
         with_obs_elbo=False,
         with_hard_labels=False,
     ) -> TEBatchResult:
-        assert not (with_grads or with_elbo)  # not implemented yet
-        candidates = candidates[batch_indices].to(self.device)
-        n = len(candidates)
+        assert not with_elbo  # not implemented yet
+        if torch.is_tensor(batch_indices):
+            n = batch_indices.numel()
+        elif isinstance(batch_indices, slice):
+            n = batch_indices.stop - batch_indices.start
+        else:
+            assert False
+        if candidates.shape[0] > n:
+            candidates = candidates[batch_indices]
+        else:
+            assert candidates.shape[0] == n
+        candidates = candidates.to(self.device)
 
         # "E step" within the E step.
         neighb_ids, edata = self.load_batch_e(
@@ -428,7 +603,6 @@ class TruncatedExpectationProcessor(torch.nn.Module):
             n_units=self.n_units,
             n_candidates=self.n_candidates,
             noise_log_prop=self.noise_log_prop,
-            n=n,
             candidates=candidates,
             with_kl=with_kl,
             **edata,
@@ -442,7 +616,7 @@ class TruncatedExpectationProcessor(torch.nn.Module):
 
         oelbo = None
         if with_obs_elbo:
-            oelbo = obs_elbo(Q, eres["log_liks"])
+            oelbo = spiketorch.elbo(Q, eres["log_liks"], dim=1)
 
         hard_labels = None
         if with_hard_labels:
@@ -452,7 +626,7 @@ class TruncatedExpectationProcessor(torch.nn.Module):
 
         noise_N = N = None
         mres = {}
-        if with_stats:
+        if with_grads or with_stats:
             mdata = self.load_batch_m(batch_indices, candidates, neighb_ids)
             noise_N, N = _te_batch_m_counts(self.n_units, candidates, Q)
             shapekw = dict(
@@ -468,18 +642,46 @@ class TruncatedExpectationProcessor(torch.nn.Module):
             else:
                 mres = _te_batch_m_rank0(**shapekw, **ekw, **mdata)
 
+        ddlogpi = ddlognoisep = ddm = ddW = None
+        if with_grads:
+            Ntot, ddlogpi, ddlognoisep = _grad_counts(
+                noise_N, N, self.log_proportions, self.noise_log_prop
+            )
+            active = slice(None)
+            Cinv = None
+            if self.Cinv_in_grad:
+                # (active,) = N.nonzero(as_tuple=True)
+                Cinv = self.noise.full_inverse(device=self.device)
+            ddm = _grad_mean(
+                Ntot, N, mres["m"][..., :-1], self.means, Cinv=Cinv, active=active
+            )
+            if self.M:
+                ddW = _grad_basis(
+                    Ntot,
+                    N,
+                    mres["R"][..., :-1],
+                    self.bases,
+                    mres["U"],
+                    Cinv=Cinv,
+                    active=active,
+                )
+
         return TEBatchResult(
             indices=batch_indices,
             candidates=candidates,
             obs_elbo=oelbo,
             noise_N=noise_N,
-            noise_lls=eres["noise_lls"],
             N=N,
             m=mres.get("m"),
             R=mres.get("R"),
             U=mres.get("U"),
+            ddlogpi=ddlogpi,
+            ddlognoisep=ddlognoisep,
+            ddm=ddm,
+            ddW=ddW,
             ncc=eres["ncc"],
             dkl=eres["dkl"],
+            noise_lls=eres["noise_lls"],
             hard_labels=hard_labels,
         )
 
@@ -554,6 +756,10 @@ class TruncatedExpectationProcessor(torch.nn.Module):
         # with numerics for us if we do everything via chol.
         Coo_chol = [C.cholesky() for C in Coo]
         Coo_invsqrt = [L.inverse().to_dense() for L in Coo_chol]
+        if logger.isEnabledFor(DARTSORTDEBUG):
+            logger.dartsortdebug(
+                f"Are Coo_invsqrts finite? {all(c.isfinite().all() for c in Coo_invsqrt)}"
+            )
         Coo_inv = [Li.T @ Li for Li in Coo_invsqrt]
         Coo_logdet = [2 * L.to_dense().diagonal().log().sum() for L in Coo_chol]
         Coo_logdet = torch.tensor(Coo_logdet, device=device)
@@ -561,7 +767,9 @@ class TruncatedExpectationProcessor(torch.nn.Module):
 
         # figure out dimensions
         nc_obs = neighborhoods.channel_counts
-        self.nc_obs = nco = nc_obs.max().to(int)
+        # self.nc_obs = nco = nc_obs.max().to(int)
+        self.nc_obs = nco = self.features.shape[2]
+        assert nco == neighborhoods.neighborhoods.shape[1]
         self.nc_miss = ncm = max(map(len, missing_chans))
 
         # understand channel subsets
@@ -663,6 +871,9 @@ class TruncatedExpectationProcessor(torch.nn.Module):
         # proportions stuff
         self.register_buffer("noise_log_prop", noise_log_prop)
         self.register_buffer("log_proportions", log_proportions)
+        self.register_buffer("means", mu[..., :-1].reshape(Nu, -1))
+        if self.M:
+            self.register_buffer("bases", W[..., :-1].reshape(Nu, self.M, -1))
 
         # mean obs/hid parts
         nu = mu[self.lut_units[:, None], :, obs_ix].permute(0, 2, 1)
@@ -765,6 +976,7 @@ class TruncatedExpectationProcessor(torch.nn.Module):
         n, C = candidates.shape
         neighborhood_ids = self.neighborhood_ids[batch_indices]
         lut_ixs = self.lut[candidates, neighborhood_ids[:, None]]
+        lut_ixs[lut_ixs == np.prod(self.lut.shape)] = 0
 
         # some things are only needed in the first pass when computing noise lls
         Coo_logdet = None
@@ -798,6 +1010,7 @@ class TruncatedExpectationProcessor(torch.nn.Module):
     def load_batch_m(self, batch_indices, candidates, neighborhood_ids):
         n, C = candidates.shape
         lut_ixs = self.lut[candidates, neighborhood_ids[:, None]]
+        lut_ixs[lut_ixs == np.prod(self.lut.shape)] = 0
 
         # common args
         data = dict(
@@ -850,10 +1063,13 @@ class CandidateSet:
         self.neighborhood_ids = neighborhoods.neighborhood_ids
         self.n_neighborhoods = neighborhoods.n_neighborhoods
         self.n_spikes = self.neighborhood_ids.numel()
+        logger.doublecheck(
+            f"Initialize CandidateSet with {self.n_spikes=} {n_candidates=} {n_search=} {n_explore=}"
+        )
         self.n_candidates = n_candidates
         self.n_search = n_search
         self.n_explore = n_explore
-        n_total = self.n_candidates * (self.n_search + 1) + self.n_explore
+        n_total = self.n_candidates + self.n_candidates * self.n_search + self.n_explore
 
         can_pin = device is not None and device.type == "cuda"
         self.candidates = torch.empty(
@@ -863,45 +1079,86 @@ class CandidateSet:
 
     def initialize_candidates(self, labels, closest_neighbors):
         """Imposes invariant 1, or at least tries to start off well."""
-        torch.index_select(
-            closest_neighbors,
-            dim=0,
-            index=labels,
-            out=self.candidates[:, : self.n_candidates],
-        )
+        assert labels.shape[0] == self.n_spikes
+        assert closest_neighbors.shape[1] <= self.n_candidates
 
-    def propose_candidates(self, unit_search_neighbors):
+        if labels.ndim == 1:
+            torch.index_select(
+                closest_neighbors,
+                dim=0,
+                index=labels,
+                out=self.candidates[:, : self.n_candidates],
+            )
+        else:
+            assert labels.shape == (self.n_spikes, self.n_candidates)
+            self.candidates[:, : self.n_candidates] = labels
+            invalid = labels < 0
+            if invalid.any():
+                (inv_i,) = invalid.any(dim=1).nonzero(as_tuple=True)
+                self.candidates[:, : self.n_candidates][invalid] = -1
+                self.candidates[inv_i, : self.n_candidates] = (
+                    self.candidates[inv_i, : self.n_candidates]
+                    .sort(descending=True)
+                    .values
+                )
+                fisher_yates_replace(
+                    self.rg,
+                    len(closest_neighbors),
+                    self.candidates[:, : self.n_candidates].numpy(),
+                )
+            if logger.isEnabledFor(DARTSORTDEBUG):
+                logger.dartsortdebug(
+                    f"Candiate init had {invalid.sum()=} {invalid.shape=}"
+                )
+                logger.dartsortdebug(
+                    f"Still I assure you that {torch.all(self.candidates[:, :self.n_candidates]>=0)=} and "
+                    f"{torch.all(self.candidates[:, :self.n_candidates].sort(dim=1).values.diff(dim=1)>0)=}"
+                )
+
+    def propose_candidates(self, unit_search_neighbors, indices=None):
         """Assumes invariant 1 and does not mess it up.
 
         Arguments
         ---------
         unit_search_neighbors: LongTensor (n_units, n_search)
         """
+        assert unit_search_neighbors.shape[1] <= self.n_search
+        n_search = unit_search_neighbors.shape[1]
+
+        full = indices is None
+        if full:
+            indices = slice(None)
         C = self.n_candidates
-        n_search = C * self.n_search
+        n_search_total = C * n_search
+        search_slice = slice(C, C + n_search_total)
+        total = C + n_search_total + self.n_explore
+        explore_slice = slice(C + n_search_total, total)
         n_neighbs = self.n_neighborhoods
         n_units = len(unit_search_neighbors)
 
-        top = self.candidates[:, :C]
+        # if `full`, then this is all done in place.
+        candidates = self.candidates[indices, :total]
+        neighb_ids = self.neighborhood_ids[indices]
+        del indices
+        n_spikes = len(candidates)
 
-        # write the search units in place
-        target = self.candidates[:, C : C + n_search].view(
-            self.n_spikes, C, self.n_search
-        )
-        assert (
-            target.untyped_storage().data_ptr()
-            == self.candidates.untyped_storage().data_ptr()
-        )
-        target[:] = unit_search_neighbors[top]
+        top = candidates[:, :C]
+
+        # write the search units in place, if not batching
+        if n_search:
+            target = candidates[:, search_slice].view(n_spikes, C, n_search)
+            assert (
+                target.untyped_storage().data_ptr()
+                == candidates.untyped_storage().data_ptr()
+            )
+            target[:] = unit_search_neighbors[top]
 
         # count to determine which units are relevant to each neighborhood
         # this is how "explore" candidates are suggested. the policy is strict:
         # just the top unit counts for each spike. this is to keep the lut smallish,
         # tho it is still huge, hopefully without making the search too bad...
         unit_neighborhood_counts = np.zeros((n_units, n_neighbs), dtype=int)
-        np.add.at(
-            unit_neighborhood_counts, (self.candidates[:, 0], self.neighborhood_ids), 1
-        )
+        np.add.at(unit_neighborhood_counts, (top[:, 0], neighb_ids), 1)
 
         # which to explore?
         neighborhood_explore_units = units_overlapping_neighborhoods(
@@ -913,22 +1170,35 @@ class CandidateSet:
         # explore units are chosen per neighborhood. we start by figuring out how many
         # such units there are in each neighborhood.
         n_units_ = torch.tensor(n_units)[None].broadcast_to(n_neighbs, 1).contiguous()
-        n_explore = torch.searchsorted(neighborhood_explore_units, n_units_).view(
-            n_neighbs
-        )
-        n_explore = n_explore[self.neighborhood_ids]
-        targs = self.rg.integers(
-            n_explore.numpy()[:, None], size=(self.n_spikes, self.n_explore)
-        )
-        targs = torch.from_numpy(targs)
-        self.candidates[:, -self.n_explore :] = neighborhood_explore_units[
-            self.neighborhood_ids[:, None], targs
-        ]
+        if self.n_explore:
+            n_explore = torch.searchsorted(neighborhood_explore_units, n_units_).view(
+                n_neighbs
+            )
+            n_explore = n_explore[neighb_ids]
+            targs = integers_without_inner_replacement(
+                self.rg, n_explore.numpy(), size=(n_spikes, self.n_explore)
+            )
+            if logger.isEnabledFor(DARTSORTDEBUG):
+                logger.dartsortdebug(
+                    f"{n_explore.min()=} {n_explore.max()=} {targs.min()=} {targs.max()=}"
+                )
+            targs = torch.from_numpy(targs)
+            explore = neighborhood_explore_units[neighb_ids[:, None], targs]
+            explore[targs < 0] = -1
+            candidates[:, explore_slice] = explore
 
         # update counts for the rest of units
-        np.add.at(
-            unit_neighborhood_counts,
-            (self.candidates[:, 1:], self.neighborhood_ids[:, None]),
-            1,
-        )
-        return unit_neighborhood_counts
+        if candidates.shape[1] > 1:
+            np.add.at(
+                unit_neighborhood_counts, (candidates[:, 1:], neighb_ids[:, None]), 1
+            )
+
+        # replace duplicates with -1. TODO: replace quadratic algorithm with -1.
+        erase_dups(candidates.numpy())
+        if logger.isEnabledFor(DARTSORTDEBUG):
+            logger.dartsortdebug(
+                f"I have maintained that {torch.all(self.candidates[:, :self.n_candidates]>=0)=} and"
+                f"{torch.all(self.candidates[:, :self.n_candidates].sort(dim=1).values.diff(dim=1)>0)=}"
+            )
+
+        return candidates, unit_neighborhood_counts

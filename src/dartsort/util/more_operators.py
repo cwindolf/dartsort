@@ -5,12 +5,11 @@ from jaxtyping import Float
 from linear_operator.operators import to_dense
 from linear_operator.operators._linear_operator import LinearOperator
 from linear_operator.operators.block_linear_operator import BlockLinearOperator
-from linear_operator.operators.diag_linear_operator import \
-    ConstantDiagLinearOperator
-from linear_operator.operators.low_rank_root_linear_operator import \
-    LowRankRootLinearOperator
-from linear_operator.operators.sum_batch_linear_operator import \
-    SumBatchLinearOperator
+from linear_operator.operators.diag_linear_operator import ConstantDiagLinearOperator
+from linear_operator.operators.low_rank_root_linear_operator import (
+    LowRankRootLinearOperator,
+)
+from linear_operator.operators.sum_batch_linear_operator import SumBatchLinearOperator
 from linear_operator.operators.sum_linear_operator import SumLinearOperator
 from linear_operator.utils.cholesky import psd_safe_cholesky
 from linear_operator.utils.memoize import cached
@@ -252,7 +251,8 @@ class NonSquareBlockLinearOperator(BlockLinearOperator):
         return torch.Size(shape)
 
     def _add_batch_dim(
-        self: Float[LinearOperator, "*batch1 M P"], other: Float[torch.Tensor, "*batch2 N C"]
+        self: Float[LinearOperator, "*batch1 M P"],
+        other: Float[torch.Tensor, "*batch2 N C"],
     ) -> Float[torch.Tensor, "batch2 ... C"]:
         *batch_shape, num_rows, num_cols = other.shape
         batch_shape = list(batch_shape)

@@ -577,7 +577,7 @@ def _full_probe_shifting_fast(
     ] = waveforms
     return static_waveforms[:, :, : target_kdtree.n]
 
-
+#TODO make sure thoroughly unit tested
 def static_channel_neighborhoods(
     geom,
     main_channels,

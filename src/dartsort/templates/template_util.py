@@ -2,6 +2,9 @@ import math
 from dataclasses import dataclass, replace
 
 import numpy as np
+from scipy.spatial import KDTree
+import torch
+
 from dartsort.localize.localize_util import localize_waveforms
 from dartsort.util import drift_util, waveform_util
 from dartsort.util.data_util import DARTsortSorting
@@ -215,6 +218,7 @@ def spatially_mask_templates(template_data, radius_um=0.0):
 
     return replace(template_data, templates=tt)
 
+
 # -- template numerical processing
 
 
@@ -224,6 +228,37 @@ class LowRankTemplates:
     singular_values: np.ndarray
     spatial_components: np.ndarray
     spike_counts_by_channel: np.ndarray
+
+    def shift_to_best_channels(self, geom, registered_geom=None) -> "LowRankTemplates":
+        if registered_geom is None or registered_geom.shape == geom.shape:
+            return self
+
+        pitch = waveform_util.get_pitch(geom)
+        rgkdt = KDTree(registered_geom)
+        low = registered_geom[:, 1].min() - geom[:, 1].min()
+        high = registered_geom[:, 1].max() - geom[:, 1].max()
+        assert low <= 0 <= high
+        nlow = int(-low // pitch)
+        nhigh = int(high // pitch)
+
+        spatial_components = self.spatial_components
+        if torch.is_tensor(spatial_components):
+            spatial_components = spatial_components.numpy(force=True)
+        scores = np.full(len(self.spatial_components), -np.inf)
+        best_spatial = spatial_components[:, :, : len(geom)] + 0.0
+
+        for j in range(-nlow, nhigh + 1):
+            gshift = geom + [0, j * pitch]
+            d, regchans = rgkdt.query(gshift)
+            assert np.all(regchans < rgkdt.n)
+
+            spatial = spatial_components[:, :, regchans]
+            new_scores = np.square(spatial).sum((1, 2))
+            better = np.flatnonzero(new_scores > scores)
+            best_spatial[better] = spatial[better]
+            scores[better] = new_scores[better]
+
+        return replace(self, spatial_components=best_spatial)
 
 
 def svd_compress_templates(
@@ -274,7 +309,9 @@ def svd_compress_templates(
         singular_values[i, :k] = s[:rank]
         spatial_components[i, :k, mask] = Vh[:rank].T
 
-    return LowRankTemplates(temporal_components, singular_values, spatial_components, counts)
+    return LowRankTemplates(
+        temporal_components, singular_values, spatial_components, counts
+    )
 
 
 def temporally_upsample_templates(
@@ -388,9 +425,9 @@ def compressed_upsampled_templates(
     )
     template_indices = np.array(template_indices)
     upsampling_indices = np.array(upsampling_indices)
-    compressed_upsampling_index[
-        compressed_upsampling_index < 0
-    ] = current_compressed_index
+    compressed_upsampling_index[compressed_upsampling_index < 0] = (
+        current_compressed_index
+    )
 
     # get the upsampled templates
     all_upsampled_templates = temporally_upsample_templates(

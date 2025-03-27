@@ -1,4 +1,5 @@
 import math
+from logging import getLogger
 import warnings
 
 import linear_operator
@@ -9,7 +10,10 @@ import torch.nn.functional as F
 from scipy.fftpack import next_fast_len
 from torch.fft import irfft, rfft
 
+logger = getLogger(__name__)
 log2pi = torch.log(torch.tensor(2 * np.pi))
+_1 = torch.tensor(1.0)
+_0 = torch.tensor(100)
 
 
 def ll_via_inv_quad(cov, y):
@@ -34,6 +38,16 @@ def ptp(waveforms, dim=1):
     if not is_tensor:
         return np.ptp(waveforms, axis=dim)
     return waveforms.max(dim=dim).values - waveforms.min(dim=dim).values
+
+
+def elbo(Q, log_liks, reduce_mean=True, dim=1):
+    logQ = torch.where(Q > 0, Q, _1).log_()
+    log_liks = torch.where(Q > 0, log_liks, _0)
+    oelbo = log_liks.add_(logQ).mul_(Q).sum(dim=dim)
+    # oelbo = torch.sum(Q * (log_liks + logQ), dim=dim)
+    if reduce_mean:
+        oelbo = oelbo.mean()
+    return oelbo
 
 
 def taper(waveforms, t_start=10, t_end=20, dim=1):
@@ -362,14 +376,19 @@ def nancov(
             good = vals > 0
             cov = (vecs[:, good] * vals[good]) @ vecs[:, good].T
         except Exception as e:
-            warnings.warn(f"Error in nancov eigh: {e}")
+            if not cov.isfinite().all():
+                raise e
+            else:
+                warnings.warn(
+                    f"Error in nancov's eigh, shown below, was ignored because the covariance remained finite. {e}"
+                )
 
     if return_nobs:
         return cov, nobs
     return cov
 
 
-def woodbury_kl_divergence(C, mu, W=None, out=None, batch_size=32):
+def woodbury_kl_divergence(C, mu, W=None, mus=None, Ws=None, out=None, batch_size=32):
     """KL divergence with the lemmas, up to affine constant with respect to mu and W
 
     Here's the logic between the lines below. Variable names follow this notation.
@@ -427,8 +446,6 @@ def woodbury_kl_divergence(C, mu, W=None, out=None, batch_size=32):
             = |mu's - mu'o|^2 - |caps^{-1/2} Ws' C^{-1/2} (mu's - mu'o)|^2
             = |mu's - mu'o|^2 - |Vs' (mu's - mu'o)|^2
 
-    TODO: There is something wrong here.
-
     Returns
     -------
     out : Tensor
@@ -446,22 +463,22 @@ def woodbury_kl_divergence(C, mu, W=None, out=None, batch_size=32):
     # Ccholinv = torch.linalg.solve_triangular(
     #     Cchol, torch.eye(len(Cchol), out=torch.empty_like(Cchol)), upper=False
     # )
-    Ccholinv = Cchol.inverse().to_dense()[None].broadcast_to((n, *Cchol.shape))
+    Ccholinv = Cchol.inverse().to_dense()
     # mu_ = torch.linalg.solve_triangular(Cchol, mu.unsqueeze(2), upper=False)
-    mu_ = Ccholinv.bmm(mu.unsqueeze(2))
+    mu_ = mu @ Ccholinv.T
 
     if W is None:
         # else, better to do this later
         for bs in range(0, n, batch_size):
             osl = slice(bs, min(bs + batch_size, n))
-            out[osl] = (mu_[osl, None] - mu_[None]).square_().sum(dim=(2, 3))
+            out[osl] = (mu_[osl, None] - mu_[None]).square_().sum(dim=2)
         out *= 0.5
         return out
 
     M = W.shape[2]
     assert W.shape == (n, d, M)
     # U = torch.linalg.solve_triangular(Cchol, W, upper=False)
-    U = Ccholinv.bmm(W)
+    U = torch.einsum("de,ndm->nem", Ccholinv, W)
 
     # first part of trace
     UTU = U.mT.bmm(U)
@@ -497,10 +514,10 @@ def woodbury_kl_divergence(C, mu, W=None, out=None, batch_size=32):
         if dmu is not None:
             dmu = dmu[: osl.stop - bs]
         dmu = torch.sub(mu_[None], mu_[osl, None], out=dmu)
-        corr = dmu.mT @ V[None]
-        corr = corr.square_().sum(dim=(2, 3))
+        corr = torch.einsum("osd,sdm->osm", dmu, V)
+        corr = corr.square_().sum(dim=2)
         out[osl] -= corr
-        mah = dmu.square_().sum(dim=(2, 3))
+        mah = dmu.square_().sum(dim=2)
         out[osl] += mah
 
     # trace term B: it's a self-vec

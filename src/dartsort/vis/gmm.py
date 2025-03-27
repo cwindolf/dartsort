@@ -345,7 +345,7 @@ class Likelihoods(GMMPlot):
         if not in_unit.numel():
             return
         if hasattr(gmm, "log_liks"):
-            liks_ = gmm.log_liks[:, in_unit][[unit_id]].tocoo()
+            liks_ = gmm.log_liks[:, in_unit.numpy(force=True)][[unit_id]].tocoo()
             inds_ = None
             if liks_.nnz:
                 inds_ = in_unit
@@ -409,13 +409,53 @@ class KMeansSplit(GMMPlot):
     width = 6.5
     height = 9
 
-    def __init__(self, layout="vert", neighborhood="core"):
+    def __init__(
+        self,
+        criterion=None,
+        layout="vert",
+        neighborhood="core",
+        with_means=True,
+        decision_algorithm=None,
+        ignore_channels=None,
+        kmeans_n_iter=None,
+        min_overlap=None,
+        metric=None,
+        distance_normalization_kind=None,
+    ):
         self.layout = layout
         self.neighborhood = neighborhood
+        self.criterion = criterion
+        self.with_means = with_means
+        self.decision_algorithm = decision_algorithm
+        self.ignore_channels = ignore_channels
+        self.kmeans_n_iter = kmeans_n_iter
+        self.min_overlap = min_overlap
+        self.metric = metric
+        self.distance_normalization_kind = distance_normalization_kind
 
     def draw(self, panel, gmm, unit_id, split_info=None):
+        criterion = self.criterion or gmm.merge_criterion
+        ickw = {}
+        if self.ignore_channels is not None:
+            ickw["ignore_channels"] = self.ignore_channels
+        min_overlap = self.min_overlap
+        if min_overlap is None:
+            min_overlap = gmm.min_overlap
+        metric = self.metric or gmm.distance_metric
+        normkind = self.distance_normalization_kind or gmm.distance_normalization_kind
+
         if split_info is None:
-            split_info = gmm.kmeans_split_unit(unit_id, debug=True)
+            split_info = gmm.kmeans_split_unit(
+                unit_id,
+                debug=True,
+                criterion=criterion,
+                decision_algorithm=self.decision_algorithm,
+                kmeans_n_iter=self.kmeans_n_iter,
+                min_overlap=min_overlap,
+                distance_metric=metric,
+                distance_normalization_kind=normkind,
+                **ickw,
+            )
         failed0 = not split_info
         failed1 = "reas_labels" not in split_info
         failed = failed0 or failed1
@@ -429,13 +469,19 @@ class KMeansSplit(GMMPlot):
             ax.axis("off")
             return
 
-        split_labels = split_info["reas_labels"]
+        split_labels = split_info["split_labels"]
         split_ids = np.unique(split_labels)
+        if self.with_means:
+            kw = dict(nrows=4, height_ratios=[1, 1, 2, 2])
+            if self.layout == "horz":
+                kw = dict(ncols=4, width_ratios=[1, 1, 1, 1])
+            amps_row, centroids_row, mcmeans_row, modes_row = panel.subfigures(**kw)
+        else:
+            kw = dict(nrows=2, height_ratios=[1, 2])
+            if self.layout == "horz":
+                kw = dict(ncols=2)
+            amps_row, modes_row = panel.subfigures(**kw)
 
-        kw = dict(nrows=4, height_ratios=[1, 1, 2, 2])
-        if self.layout == "horz":
-            kw = dict(ncols=4, width_ratios=[1, 1, 1, 1])
-        amps_row, centroids_row, mcmeans_row, modes_row = panel.subfigures(**kw)
         fig_chans, fig_dists = modes_row.subfigures(ncols=2)
         fig_dist, fig_bimods = fig_dists.subfigures(nrows=2)
         panel.suptitle("kmeans split info")
@@ -457,8 +503,8 @@ class KMeansSplit(GMMPlot):
                 image_cmap=distance_cmap,
                 show_values=True,
             )
-            normstr = f"norm={gmm.distance_normalization_kind}"
-            ax_dist.set_title(f"{gmm.distance_metric}, {normstr}", fontsize="small")
+            normstr = f"norm={normkind}"
+            ax_dist.set_title(f"{metric}, {normstr}", fontsize="small")
 
         if "bimodalities" in split_info:
             # bimodality matrix
@@ -474,6 +520,7 @@ class KMeansSplit(GMMPlot):
             )
             ax_bimod.set_title("bimodality", fontsize="small")
         elif "Z" in split_info:
+            assert "improvements" in split_info
             ax_bimod = fig_bimods.subplots()
             improvements = split_info["improvements"]
             olaps = np.floor(split_info["overlaps"] * 100)
@@ -488,10 +535,29 @@ class KMeansSplit(GMMPlot):
                 annotations_offset_by_n=False,
             )
             ax_bimod.set_title(
-                f"tree {gmm.distance_metric} {gmm.merge_criterion}-{gmm.criterion_normalization_kind}",
+                f"tree {gmm.distance_metric} {criterion}-{gmm.criterion_normalization_kind}",
                 fontsize="small",
             )
             sns.despine(ax=ax_bimod, left=True, right=True, top=True)
+            if "full_improvement" in split_info:
+                ax_bimod.set_xlabel(f"full split: {split_info['full_improvement']:.3f}")
+        elif "ids_part" in split_info:
+            ax_bimod = fig_bimods.subplots()
+            ax_bimod.axis("off")
+            imp = split_info["improvements"][0]
+            ax_bimod.text(
+                0.5,
+                0.5,
+                f"{self.decision_algorithm} | {criterion}\n"
+                f"{split_info['ids_part']}\n"
+                f"imp:{imp:0.3f}\n"
+                f"olap:{split_info['overlap']:0.3f}\n"
+                f"full imp: {split_info['full_improvement']:0.3f}\n",
+                ha="center",
+                va="center",
+                fontsize=6,
+                transform=ax_bimod.transAxes,
+            )
         else:
             ax_bimod = fig_bimods.subplots()
             ax_bimod.text(
@@ -500,53 +566,54 @@ class KMeansSplit(GMMPlot):
             ax_bimod.axis("off")
 
         # subunit means on the unit main channel, where possible
-        ax_centroids, ax_mycentroids = centroids_row.subplots(ncols=2, sharey=True)
-        ax_centroids.set_ylabel("orig unit main chan")
-        ax_mycentroids.set_ylabel("split unit main chan")
-        for ax in (ax_centroids, ax_mycentroids):
-            ax.set_xticks([])
-            ax.axhline(0, color="k", lw=0.8)
-            sns.despine(ax=ax, left=False, right=True, bottom=True, top=True)
-        mainchan = gmm[unit_id].snr.argmax()
-        for subid, subunit in zip(split_ids, split_info["units"]):
-            subm = subunit.mean[:, mainchan]
+        if self.with_means:
+            ax_centroids, ax_mycentroids = centroids_row.subplots(ncols=2, sharey=True)
+            ax_centroids.set_ylabel("orig unit main chan")
+            ax_mycentroids.set_ylabel("split unit main chan")
+            for ax in (ax_centroids, ax_mycentroids):
+                ax.set_xticks([])
+                ax.axhline(0, color="k", lw=0.8)
+                sns.despine(ax=ax, left=False, right=True, bottom=True, top=True)
+            mainchan = gmm[unit_id].snr.argmax()
+            for subid, subunit in zip(split_ids, split_info["units"]):
+                subm = subunit.mean[:, mainchan]
+                subm = gmm.data.tpca._inverse_transform_in_probe(subm[None])[0]
+                ax_centroids.plot(subm.numpy(force=True), color=glasbey1024[subid])
+
+                subm = subunit.mean[:, subunit.snr.argmax()]
+                subm = gmm.data.tpca._inverse_transform_in_probe(subm[None])[0]
+                ax_mycentroids.plot(subm.numpy(force=True), color=glasbey1024[subid])
+
+            subm = gmm[unit_id].mean[:, mainchan]
             subm = gmm.data.tpca._inverse_transform_in_probe(subm[None])[0]
-            ax_centroids.plot(subm.numpy(force=True), color=glasbey1024[subid])
+            ax_centroids.plot(subm.numpy(force=True), color="k", lw=0.5)
+            ax_mycentroids.plot(subm.numpy(force=True), color="k", lw=0.5)
 
-            subm = subunit.mean[:, subunit.snr.argmax()]
-            subm = gmm.data.tpca._inverse_transform_in_probe(subm[None])[0]
-            ax_mycentroids.plot(subm.numpy(force=True), color=glasbey1024[subid])
-
-        subm = gmm[unit_id].mean[:, mainchan]
-        subm = gmm.data.tpca._inverse_transform_in_probe(subm[None])[0]
-        ax_centroids.plot(subm.numpy(force=True), color="k", lw=0.5)
-        ax_mycentroids.plot(subm.numpy(force=True), color="k", lw=0.5)
-
-        # subunit multichan means
-        if self.neighborhood == "core":
-            chans = torch.cdist(gmm.data.prgeom[mainchan[None]], gmm.data.prgeom)
-            chans = chans.view(-1)
-            (chans,) = torch.nonzero(chans <= gmm.data.core_radius, as_tuple=True)
-        elif self.neighborhood == "unit":
-            chans = gmm[unit_id].channels
-        else:
-            assert False
-        if len(split_ids) < len(split_info["units"]):
-            split_info["units"] = [split_info["units"][j] for j in split_ids]
-        if "units" in split_info:
-            try:
-                gmm_helpers.plot_means(
-                    mcmeans_row,
-                    gmm.data.prgeom,
-                    gmm.data.tpca,
-                    chans,
-                    split_info["units"] + [gmm[unit_id]],
-                    list(split_ids) + [-1],
-                    title=None,
-                    linewidths=[1] * len(split_ids) + [0.5],
-                )
-            except Exception:
-                pass
+            # subunit multichan means
+            if self.neighborhood == "core":
+                chans = torch.cdist(gmm.data.prgeom[mainchan[None]], gmm.data.prgeom)
+                chans = chans.view(-1)
+                (chans,) = torch.nonzero(chans <= gmm.data.core_radius, as_tuple=True)
+            elif self.neighborhood == "unit":
+                chans = gmm[unit_id].channels
+            else:
+                assert False
+            if len(split_ids) < len(split_info["units"]):
+                split_info["units"] = [split_info["units"][j] for j in split_ids]
+            if "units" in split_info:
+                try:
+                    gmm_helpers.plot_means(
+                        mcmeans_row,
+                        gmm.data.prgeom,
+                        gmm.data.tpca,
+                        chans,
+                        split_info["units"] + [gmm[unit_id]],
+                        list(split_ids) + [-1],
+                        title=None,
+                        linewidths=[1] * len(split_ids) + [0.5],
+                    )
+                except Exception:
+                    pass
 
         # subunit channels histogram
         chan_bins = torch.unique(split_info["sp"].channels)
@@ -569,11 +636,43 @@ class KMeansSplit(GMMPlot):
 
         ax_pca.axis("off")
         if "X" in split_info:
-            u, s, v = torch.pca_lowrank(split_info["X"].view(len(split_labels), -1))
+            show_whiten = False and gmm.split_whiten
+            key = "X" + "w" * show_whiten
+
+            u, s, v = torch.pca_lowrank(split_info[key].view(len(split_labels), -1))
             Xp = u[:, :2] * s[:2]
+            tv = v[:, :2]
+            center = split_info["X"].mean(0)
+
             ax_pca.scatter(*Xp.T, c=glasbey1024[split_labels], s=2, lw=0)
             ax_pca.axhline(0, lw=0.8, color="k")
             ax_pca.axvline(0, lw=0.8, color="k")
+            if "units" in split_info:
+                for j, u in enumerate(split_info["units"]):
+                    gmm_helpers.unit_pca_ellipse(
+                        ax=ax_pca,
+                        center=center,
+                        v=tv,
+                        noise=gmm.noise,
+                        channels=gmm[unit_id].channels,
+                        unit=u,
+                        color=glasbey1024[j],
+                        whiten=show_whiten,
+                        lw=2,
+                    )
+            if "level_units" in split_info:
+                for level, units in reversed(split_info["level_units"].items()):
+                    for u in units:
+                        gmm_helpers.unit_pca_ellipse(
+                            ax=ax_pca,
+                            center=center,
+                            v=tv,
+                            noise=gmm.noise,
+                            channels=gmm[unit_id].channels,
+                            unit=u,
+                            color=glasbey1024[len(split_ids) + level],
+                            whiten=show_whiten,
+                        )
 
 
 # -- merge-oriented plots
@@ -624,7 +723,7 @@ class NeighborDistances(GMMPlot):
         normalization_kind = self.normalization_kind
         if normalization_kind is None:
             normalization_kind = gmm.distance_normalization_kind
-        distances = gmm.distances(
+        ids, distances = gmm.distances(
             units=[gmm[u] for u in neighbors],
             show_progress=False,
             kind=metric,
@@ -662,13 +761,12 @@ class NeighborBimodalities(GMMPlot):
             log_liks = gmm.log_liks[neighbors_plus_noiseunit]
         else:
             log_liks = gmm.log_likelihoods(unit_ids=neighbors)
-        nz_lines, labels, spikells, log_liks = gaussian_mixture.loglik_reassign(
+        nz_lines, labels_, spikells, log_liks = gaussian_mixture.loglik_reassign(
             log_liks, has_noise_unit=True
         )
-        kept = nz_lines[np.logical_and(labels >= 0, labels < len(neighbors))]
-        labels_ = np.full_like(labels, -1)
-        labels_[kept] = neighbors[labels[kept]]
-        labels = labels_
+        kept = np.flatnonzero(np.logical_and(labels_ >= 0, labels_ < len(neighbors)))
+        labels = np.full(log_liks.shape[1], -1)
+        labels[nz_lines[kept]] = neighbors[labels_[kept]]
 
         others = neighbors[1:]
         axes = panel.subplots(nrows=len(others), ncols=2)
@@ -818,11 +916,13 @@ class NeighborTreeMerge(GMMPlot):
         self,
         n_neighbors=5,
         metric=None,
-        criterion="heldout_loglik",
+        criterion=None,
         max_distance=1e10,
         criterion_normalization_kind=None,
         distance_normalization_kind=None,
         threshold=-np.inf,
+        decision_algorithm=None,
+        min_overlap=None,
     ):
         self.n_neighbors = n_neighbors
         self.metric = metric
@@ -831,6 +931,8 @@ class NeighborTreeMerge(GMMPlot):
         self.criterion_normalization_kind = criterion_normalization_kind
         self.distance_normalization_kind = distance_normalization_kind
         self.threshold = threshold
+        self.decision_algorithm = decision_algorithm
+        self.min_overlap = min_overlap
 
     def draw(self, panel, gmm, unit_id):
         neighbors = gmm_helpers.get_neighbors(gmm, unit_id)
@@ -844,6 +946,14 @@ class NeighborTreeMerge(GMMPlot):
         if metric is None:
             metric = gmm.distance_metric
 
+        min_overlap = self.min_overlap
+        if min_overlap is None:
+            min_overlap = gmm.min_overlap
+
+        decision_algorithm = self.decision_algorithm
+        if decision_algorithm is None:
+            decision_algorithm = gmm.merge_decision_algorithm
+
         distance_normalization_kind = self.distance_normalization_kind
         if distance_normalization_kind is None:
             distance_normalization_kind = gmm.distance_normalization_kind
@@ -852,54 +962,78 @@ class NeighborTreeMerge(GMMPlot):
         if criterion_normalization_kind is None:
             criterion_normalization_kind = gmm.criterion_normalization_kind
 
-        distances = gmm.distances(
+        ids, distances = gmm.distances(
             units=[gmm[u] for u in neighbors],
             show_progress=False,
             kind=metric,
             normalization_kind=distance_normalization_kind,
         )
+        _, cosines = gmm.distances(show_progress=False, kind="cosine")
 
-        Z, group_ids, improvements, overlaps = gmm.tree_merge(
-            distances,
-            neighbors,
-            max_distance=self.max_distance,
-            likelihoods=gmm.log_liks,
-            criterion=criterion,
-            threshold=self.threshold,
-        )
+        if criterion.startswith("old"):
+            Z, group_ids, improvements, overlaps = gmm.old_tree_merge(
+                distances,
+                neighbors,
+                max_distance=self.max_distance,
+                likelihoods=gmm.log_liks,
+                criterion=criterion,
+                threshold=self.threshold,
+                min_overlap=self.min_overlap,
+            )
+            brute_indicator = None
+        else:
+            Z, group_ids, improvements, overlaps, brute_indicator = gmm.tree_merge(
+                distances,
+                unit_ids=neighbors,
+                current_log_liks=gmm.log_liks,
+                max_distance=self.max_distance,
+                criterion=criterion,
+                threshold=self.threshold,
+                decision_algorithm=decision_algorithm,
+                cosines=cosines,
+                min_overlap=self.min_overlap,
+            )
 
         # make vis
-        olaps = np.floor(overlaps * 100)
-        annotations = {
-            j: f"{imp:.2f} {olaps[j]:g}" for j, imp in enumerate(improvements)
-        }
         ax = panel.subplots()
-        try:
-            analysis_plots.annotated_dendro(
-                ax,
-                Z,
-                annotations,
-                threshold=self.max_distance,
-                leaf_labels=neighbors,
-                annotations_offset_by_n=False,
-            )
-            nstr = ""
-            if distance_normalization_kind != "none":
-                nstr += f"dnm={distance_normalization_kind}"
-            if criterion_normalization_kind != "none":
-                nstr += f"cnm={criterion_normalization_kind}"
-            ax.set_title(f"{metric} {criterion} {nstr}", fontsize="small")
-            sns.despine(ax=ax, left=True, right=True, top=True)
-        except ValueError as e:
-            ax.text(
-                0.5,
-                0.5,
-                str(e),
-                fontsize="small",
-                ha="center",
-                va="center",
-                transform=ax.transAxes,
-            )
+        if Z is not None:
+            olaps = 0.0 if overlaps is None else np.floor(overlaps * 100)
+            annotations = None
+            if improvements is not None:
+                annotations = {
+                    j: f"{imp:.2f} {olaps[j]:g}" for j, imp in enumerate(improvements)
+                }
+            try:
+                analysis_plots.annotated_dendro(
+                    ax,
+                    Z,
+                    annotations,
+                    group_ids=group_ids,
+                    brute_indicator=brute_indicator,
+                    threshold=self.max_distance,
+                    leaf_labels=neighbors,
+                    annotations_offset_by_n=False,
+                )
+                nstr = ""
+                if distance_normalization_kind != "none":
+                    nstr += f"dnm={distance_normalization_kind}"
+                if criterion_normalization_kind != "none":
+                    nstr += f"cnm={criterion_normalization_kind}"
+                ax.set_title(
+                    f"{decision_algorithm} {metric} {criterion} {nstr} mo={min_overlap}",
+                    fontsize="small",
+                )
+                sns.despine(ax=ax, left=True, right=True, top=True)
+            except ValueError as e:
+                ax.text(
+                    0.5,
+                    0.5,
+                    str(e),
+                    fontsize="small",
+                    ha="center",
+                    va="center",
+                    transform=ax.transAxes,
+                )
 
 
 # -- main api
@@ -917,15 +1051,29 @@ default_gmm_plots = (
     NeighborMeans(),
     NeighborDistances(metric="noise_metric"),
     NeighborDistances(metric="symkl"),
-    NeighborTreeMerge(metric=None, criterion="heldout_ccl"),
-    NeighborTreeMerge(metric=None, criterion="heldout_loglik"),
-    NeighborTreeMerge(metric=None, criterion="loglik"),
-    NeighborTreeMerge(metric=None, criterion="icl"),
-    NeighborBimodalities(),
-    NeighborInfoCriteria(in_bag=False),
-    NeighborInfoCriteria(in_bag=True),
-    # NeighborInfoCriteria(fit_type="avg_preexisting"),
+    NeighborTreeMerge(metric=None, criterion=None),
 )
+
+
+def criterion_comparison_plots(*criteria):
+    splits = [KMeansSplit(criterion=k) for k in criteria]
+    merges = [NeighborTreeMerge(criterion=k) for k in criteria]
+    return (
+        TextInfo(),
+        ISIHistogram(),
+        ISIHistogram(bin_ms=1, max_ms=50),
+        ChansHeatmap(),
+        MStep(),
+        CovarianceResidual(),
+        Likelihoods(),
+        Amplitudes(),
+        *splits,
+        NeighborMeans(),
+        NeighborDistances(metric="noise_metric"),
+        NeighborDistances(metric="symkl"),
+        *merges,
+    )
+
 
 figsize = (17, 10)
 

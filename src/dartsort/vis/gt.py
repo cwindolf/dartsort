@@ -51,8 +51,17 @@ class MatchIsiComparison(UnitComparisonPlot):
 
     def _draw(self, panel, comparison, unit_id, tested_unit_id):
         axis = panel.subplots()
-        self.unit_isi.draw(panel, comparison.gt_analysis, unit_id, axis=axis, label=comparison.gt_name)
-        self.unit_isi.draw(panel, comparison.tested_analysis, tested_unit_id, color=glasbey1024[tested_unit_id], axis=axis, label=comparison.tested_name)
+        self.unit_isi.draw(
+            panel, comparison.gt_analysis, unit_id, axis=axis, label=comparison.gt_name
+        )
+        self.unit_isi.draw(
+            panel,
+            comparison.tested_analysis,
+            tested_unit_id,
+            color=glasbey1024[tested_unit_id],
+            axis=axis,
+            label=comparison.tested_name,
+        )
         axis.set_ylabel("count")
         axis.legend(loc="upper left")
 
@@ -78,7 +87,9 @@ class GTUnitTextInfo(UnitComparisonPlot):
         msg += f"{tested_nspikes} spikes in matched unit\n"
 
         gt_temp = comparison.gt_analysis.coarse_template_data.unit_templates(unit_id)
-        tested_temp = comparison.tested_analysis.coarse_template_data.unit_templates(tested_unit_id)
+        tested_temp = comparison.tested_analysis.coarse_template_data.unit_templates(
+            tested_unit_id
+        )
         gt_ptp = np.ptp(gt_temp, 1).max(1).squeeze()
         assert gt_ptp.size == 1
         tested_ptp = np.ptp(tested_temp, 1).max(1).squeeze()
@@ -87,9 +98,9 @@ class GTUnitTextInfo(UnitComparisonPlot):
         msg += f"{tested_nspikes} spikes in matched unit\n"
 
         inds = comparison.get_spikes_by_category(unit_id)
-        tp = inds['matched_gt_indices'].size
-        fn = inds['only_gt_indices'].size
-        fp = inds['only_tested_indices'].size
+        tp = inds["matched_gt_indices"].size
+        fn = inds["only_gt_indices"].size
+        fp = inds["only_tested_indices"].size
         acc = tp / (tp + fn + fp)
         rec = tp / (tp + fn)
         prec = tp / (tp + fp)
@@ -114,26 +125,41 @@ class MatchVennPlot(UnitComparisonPlot):
 
     def _draw(self, panel, comparison, unit_id, tested_unit_id):
         import matplotlib_venn
+
         inds = comparison.get_spikes_by_category(unit_id)
-        tp = inds['matched_gt_indices'].size
-        fn = inds['only_gt_indices'].size
-        fp = inds['only_tested_indices'].size
-        sizes = {'11': tp, '10': fn, '01': fp}
+        tp = inds["matched_gt_indices"].size
+        fn = inds["only_gt_indices"].size
+        fp = inds["only_tested_indices"].size
+        sizes = {"11": tp, "10": fn, "01": fp}
 
         ax = panel.subplots()
         v = matplotlib_venn.venn2(
             sizes,
             set_colors=(self.gt_color, self.tested_color),
-            set_labels=(f"{comparison.gt_name}#{unit_id}", f"{comparison.tested_name}#{inds['tested_unit']}"),
+            set_labels=(
+                f"{comparison.gt_name}#{unit_id}",
+                f"{comparison.tested_name}#{inds['tested_unit']}",
+            ),
             ax=ax,
         )
-        v.get_patch_by_id('11').set_color(self.matched_color)
+        v.get_patch_by_id("11").set_color(self.matched_color)
 
 
 class MatchWaveformsPlot(UnitComparisonPlot):
     kind = "waveforms"
 
-    def __init__(self, gt_color="r", alpha=0.25, matched_color="gold", tested_color="b", channel_show_radius_um=25, count=50, width=3, height=3, single=False):
+    def __init__(
+        self,
+        gt_color="r",
+        alpha=0.25,
+        matched_color="gold",
+        tested_color="b",
+        channel_show_radius_um=25,
+        count=50,
+        width=3,
+        height=3,
+        single=False,
+    ):
         self.colors = dict(tp=matched_color, fp=tested_color, fn=gt_color)
         self.channel_show_radius_um = channel_show_radius_um
         self.count = count
@@ -164,14 +190,14 @@ class MatchWaveformsPlot(UnitComparisonPlot):
             colors.append(np.broadcast_to([color], w[kind].shape[:1]))
         waveforms = np.concatenate(waveforms)
         colors = np.concatenate(colors)
-        max_channels = np.broadcast_to([w['max_chan']], colors.shape)
+        max_channels = np.broadcast_to([w["max_chan"]], colors.shape)
 
         ax = panel.subplots()
         geomplot(
             waveforms,
             max_channels=max_channels,
-            channel_index=w['channel_index'],
-            geom=w['geom'],
+            channel_index=w["channel_index"],
+            geom=w["geom"],
             ax=ax,
             show_zero=False,
             max_abs_amp=None,
@@ -182,6 +208,7 @@ class MatchWaveformsPlot(UnitComparisonPlot):
         )
         ax.axis("off")
 
+
 class TemplateDistanceHistogram(UnitComparisonPlot):
     """All tested units' distances to a GT unit's template"""
 
@@ -189,14 +216,16 @@ class TemplateDistanceHistogram(UnitComparisonPlot):
 
     def draw(self, panel, comparison, unit_id):
         ax = panel.subplots()
-        ax.hist(comparison.template_distances[unit_id], histtype='step')
+        ax.hist(comparison.template_distances[unit_id], histtype="step")
         ax.set_xlabel("tested unit's template distance to GT template")
 
 
 class NearbyTemplates(UnitComparisonPlot):
     kind = "waveforms"
 
-    def __init__(self, channel_show_radius_um=25, n_neighbors=5, width=3, height=3, single=False):
+    def __init__(
+        self, channel_show_radius_um=25, n_neighbors=5, width=3, height=3, single=False
+    ):
         self.width = width
         self.height = height
         self.channel_show_radius_um = channel_show_radius_um
@@ -204,8 +233,8 @@ class NearbyTemplates(UnitComparisonPlot):
         self.n_neighbors = n_neighbors
 
     def draw(self, panel, comparison, unit_id):
-        neighb_ids, neighb_dists, neighb_coarse_templates = comparison.nearby_tested_templates(
-            unit_id, n_neighbors=self.n_neighbors
+        neighb_ids, neighb_dists, neighb_coarse_templates = (
+            comparison.nearby_tested_templates(unit_id, n_neighbors=self.n_neighbors)
         )
         max_chan = comparison.gt_analysis.unit_max_channel(unit_id)
         geom = comparison.gt_analysis.show_geom
@@ -216,10 +245,16 @@ class NearbyTemplates(UnitComparisonPlot):
         channels = channel_index[max_chan]
         channels = channels[channels < len(geom)]
 
-        gt_template = comparison.gt_analysis.coarse_template_data.unit_templates(unit_id)
+        gt_template = comparison.gt_analysis.coarse_template_data.unit_templates(
+            unit_id
+        )
 
-        templates_vis = np.concatenate((neighb_coarse_templates, gt_template))[..., channels]
-        colors_vis = np.concatenate((glasbey1024[neighb_ids % len(glasbey1024)], np.zeros_like(glasbey1024[:1])))
+        templates_vis = np.concatenate((neighb_coarse_templates, gt_template))[
+            ..., channels
+        ]
+        colors_vis = np.concatenate(
+            (glasbey1024[neighb_ids % len(glasbey1024)], np.zeros_like(glasbey1024[:1]))
+        )
         channels_vis = np.broadcast_to(channels[None], (len(colors_vis), channels.size))
 
         ax = panel.subplots()
@@ -246,11 +281,13 @@ class NearbyTemplatesDistanceMatrix(UnitComparisonPlot):
         self.cmap = cmap
 
     def draw(self, panel, comparison, unit_id):
-        gt_neighb_ids, gt_neighb_dists, gt_neighb_coarse_templates = comparison.gt_analysis.nearby_coarse_templates(
-            unit_id, n_neighbors=self.n_neighbors
+        gt_neighb_ids, gt_neighb_dists, gt_neighb_coarse_templates = (
+            comparison.gt_analysis.nearby_coarse_templates(
+                unit_id, n_neighbors=self.n_neighbors
+            )
         )
-        tested_neighb_ids, tested_neighb_dists, tested_neighb_coarse_templates = comparison.nearby_tested_templates(
-            unit_id, n_neighbors=self.n_neighbors
+        tested_neighb_ids, tested_neighb_dists, tested_neighb_coarse_templates = (
+            comparison.nearby_tested_templates(unit_id, n_neighbors=self.n_neighbors)
         )
         dists = comparison.template_distances[gt_neighb_ids][:, tested_neighb_ids]
         ax = panel.subplots()
@@ -276,19 +313,27 @@ class NearbyTemplatesConfusionMatrix(UnitComparisonPlot):
         self.cmap = cmap
 
     def draw(self, panel, comparison, unit_id):
-        gt_neighb_ids, gt_neighb_dists, gt_neighb_coarse_templates = comparison.gt_analysis.nearby_coarse_templates(
-            unit_id, n_neighbors=self.n_neighbors
+        gt_neighb_ids, gt_neighb_dists, gt_neighb_coarse_templates = (
+            comparison.gt_analysis.nearby_coarse_templates(
+                unit_id, n_neighbors=self.n_neighbors
+            )
         )
-        tested_neighb_ids, tested_neighb_dists, tested_neighb_coarse_templates = comparison.nearby_tested_templates(
-            unit_id, n_neighbors=self.n_neighbors
+        tested_neighb_ids, tested_neighb_dists, tested_neighb_coarse_templates = (
+            comparison.nearby_tested_templates(unit_id, n_neighbors=self.n_neighbors)
         )
         conf = comparison.comparison.get_confusion_matrix()
-        conf_row_labels = np.array([int(c) if c != 'FP' else 1_000_000 for c in conf.index])
+        conf_row_labels = np.array(
+            [int(c) if c != "FP" else 1_000_000 for c in conf.index]
+        )
         conf_rows = np.searchsorted(conf_row_labels, gt_neighb_ids)
         assert np.array_equal(conf.index[conf_rows], gt_neighb_ids)
-        conf_col_labels = np.array([int(c) if c != 'FN' else 1_000_000 for c in conf.columns])
+        conf_col_labels = np.array(
+            [int(c) if c != "FN" else 1_000_000 for c in conf.columns]
+        )
         col_order = np.argsort(conf_col_labels)
-        conf_cols = np.searchsorted(conf_col_labels, tested_neighb_ids, sorter=col_order)
+        conf_cols = np.searchsorted(
+            conf_col_labels, tested_neighb_ids, sorter=col_order
+        )
         conf_cols = col_order[conf_cols]
         assert np.array_equal(conf_col_labels[conf_cols], tested_neighb_ids)
         conf = conf.values[conf_rows][:, conf_cols]
@@ -358,7 +403,9 @@ def make_all_unit_comparisons(
     **other_global_params,
 ):
     return make_all_summaries(
-        comparison, save_folder, plots=plots,
+        comparison,
+        save_folder,
+        plots=plots,
         max_height=max_height,
         figsize=figsize,
         hspace=hspace,
@@ -408,7 +455,7 @@ class TrimmedAgreementMatrix(ComparisonPlot):
     def draw(self, panel, comparison):
         agreement = comparison.comparison.get_ordered_agreement_scores()
         ax = panel.subplots()
-        im = ax.imshow(agreement.values[:, :agreement.shape[0]], vmin=0, vmax=1)
+        im = ax.imshow(agreement.values[:, : agreement.shape[0]], vmin=0, vmax=1)
         plt.colorbar(im, ax=ax, shrink=0.3)
         ax.set_title("Hung. match agreements")
         ax.set_ylabel(f"{comparison.gt_name} unit")
@@ -452,7 +499,14 @@ class MetricRegPlot(ComparisonPlot):
 class MetricDistribution(ComparisonPlot):
     kind = "wide"
 
-    def __init__(self, xs=("recall", "accuracy", "temp_dist", "precision"), colors=("r", "b", "orange", "g"), flavor="hist", width=3, height=2):
+    def __init__(
+        self,
+        xs=("recall", "accuracy", "precision"),
+        colors=("r", "b", "g"),
+        flavor="hist",
+        width=3,
+        height=2,
+    ):
         self.xs = list(xs)
         self.colors = colors
         self.flavor = flavor
@@ -465,24 +519,24 @@ class MetricDistribution(ComparisonPlot):
         keep = [x in df for x in self.xs]
         xs = [x for i, x in enumerate(self.xs) if keep[i]]
         colors = [c for i, c in enumerate(self.colors) if keep[i]]
-        df = df[xs].melt(value_vars=xs, var_name='metric')
+        df = df[xs].melt(value_vars=xs, var_name="metric")
         if self.flavor == "hist":
             sns.histplot(
                 data=df,
-                x='value',
-                hue='metric',
+                x="value",
+                hue="metric",
                 palette=list(colors),
-                element='step',
+                element="step",
                 ax=ax,
                 bins=np.linspace(0, 1, 21),
             )
-            sns.move_legend(ax, 'upper left', frameon=False)
+            sns.move_legend(ax, "upper left", frameon=False)
         elif self.flavor == "box":
             sns.boxplot(
                 data=df,
-                x='metric',
-                y='value',
-                hue='metric',
+                x="metric",
+                y="value",
+                hue="metric",
                 palette=list(colors),
                 ax=ax,
                 legend=False,
@@ -536,6 +590,7 @@ class TrimmedTemplateDistanceMatrix(ComparisonPlot):
         ax.set_ylabel(f"{comparison.gt_name} unit")
         ax.set_xlabel(f"{comparison.tested_name} unit")
 
+
 box = MetricDistribution(flavor="box", width=2, height=3.5)
 box.kind = "gtmetric"
 gt_overview_plots = (
@@ -548,7 +603,9 @@ gt_overview_plots = (
     MetricRegPlot(x="temp_dist", y="precision", color="g", log_x=True),
     MetricRegPlot(x="gt_ptp_amplitude", y="temp_dist", color="orange", log_x=True),
     MetricRegPlot(x="gt_firing_rate", y="temp_dist", color="orange"),
-    MetricRegPlot(x="gt_ptp_amplitude", y="unsorted_recall", color="purple", log_x=True),
+    MetricRegPlot(
+        x="gt_ptp_amplitude", y="unsorted_recall", color="purple", log_x=True
+    ),
     box,
     MetricDistribution(),
     TrimmedAgreementMatrix(),
@@ -562,9 +619,11 @@ gt_overview_plots_no_temp_dist = (
     MetricRegPlot(x="gt_firing_rate", y="accuracy"),
     MetricRegPlot(x="gt_firing_rate", y="recall", color="r"),
     MetricRegPlot(x="gt_firing_rate", y="precision", color="g"),
-    MetricRegPlot(x="gt_ptp_amplitude", y="unsorted_recall", color="purple", log_x=True),
+    MetricRegPlot(
+        x="gt_ptp_amplitude", y="unsorted_recall", color="purple", log_x=True
+    ),
     box,
-    MetricDistribution(xs=("recall", "accuracy", "temp_dist", "precision")),
+    MetricDistribution(),
     TrimmedAgreementMatrix(),
 )
 

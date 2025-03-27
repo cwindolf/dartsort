@@ -283,10 +283,10 @@ class BasePeeler(torch.nn.Module):
 
         raise NotImplementedError
 
-    def peeling_needs_fit(self):
+    def peeling_needs_fit(self) -> bool:
         return False
 
-    def peeling_needs_precompute(self):
+    def peeling_needs_precompute(self) -> bool:
         return False
 
     def precompute_peeling_data(

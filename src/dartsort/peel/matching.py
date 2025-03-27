@@ -1,14 +1,8 @@
-"""A simple residual updating template matcher
-
-Interesting code details to revisit:
- - Peak criterion is peak>(conv width) neighbors. What if
-   we used smaller number of neighbors and deduplicated?
- - Why did the old code have this refractory thing inside
-   high_res_peak? I think that was how they handled dedup?
-"""
+"""A simple residual updating template matcher."""
 
 from dataclasses import dataclass
 from typing import Optional
+from logging import getLogger
 
 import numpy as np
 import torch
@@ -19,11 +13,13 @@ from scipy.spatial.distance import pdist
 from dartsort.templates import template_util
 from dartsort.templates.pairwise import CompressedPairwiseConv
 from dartsort.transform import WaveformPipeline
-from dartsort.util import drift_util, spiketorch
-from dartsort.util.data_util import SpikeDataset
+from dartsort.util import drift_util, spiketorch, simkit
+from dartsort.util.data_util import SpikeDataset, get_residual_snips, get_labels
 from dartsort.util.waveform_util import make_channel_index
 
 from .peel_base import BasePeeler
+
+logger = getLogger(__name__)
 
 
 class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
@@ -49,7 +45,7 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
         conv_ignore_threshold=5.0,
         coarse_approx_error_threshold=0.0,
         trough_offset_samples=42,
-        threshold=50.0,
+        threshold=100.0,
         chunk_length_samples=30_000,
         n_chunks_fit=40,
         max_waveforms_fit=50_000,
@@ -133,6 +129,51 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
     def peeling_needs_fit(self):
         return self._needs_precompute
 
+    def pick_threshold(self):
+        if isinstance(self.threshold, float):
+            return
+
+        assert self.threshold == "fp_control"
+        assert self.low_rank_templates is not None
+        from ..util import noise_util
+
+        # fit noise to residuals from the previous detection step
+        assert self.template_data.parent_sorting_hdf5_path is not None
+        resids = get_residual_snips(self.template_data.parent_sorting_hdf5_path)
+        noise = noise_util.StationaryFactorizedNoise.estimate(resids)
+
+        # be reproducible
+        rg = np.random.default_rng(self.fit_subsampling_random_state)
+        self.fit_subsampling_random_state = rg
+        generator = simkit.spawn_torch_rg(rg)
+
+        # restrict my low rank templates to usual geom...
+        # TODO: this is not a very logical way to handle drift here...
+        best_lrts = self.low_rank_templates.shift_to_best_channels(
+            self.recording.get_channel_locations(), self.registered_geom
+        )
+
+        # simulate fps
+        fp_res = noise.unit_false_positives(
+            best_lrts,
+            radius=self.refractory_radius_frames,
+            generator=generator,
+        )
+        ctd = self.template_data.coarsen()
+        self.threshold = noise_util.fp_control_threshold(
+            fp_res["fp_dataframe"],
+            fp_res["total_samples"],
+            tp_unit_ids=ctd.unit_ids,
+            tp_counts=ctd.spike_counts,
+            clustering_num_frames=self.recording.get_num_samples(),
+            template_normsqs=fp_res["normsq"],
+            # TODO: if subsampling, indicate that here...
+            # clustering_subsampling_rate=1.0,
+        )
+        logger.info(
+            f"Matcher picked threshold {self.threshold} for strategy fp_control."
+        )
+
     def precompute_peeling_data(
         self, save_folder, overwrite=False, computation_config=None
     ):
@@ -146,6 +187,7 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
             overwrite=overwrite,
             computation_config=computation_config,
         )
+        self.pick_threshold()
         # couple more torch buffers
         self.register_buffer(
             "_refrac_ix",
@@ -406,6 +448,12 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
         trough_offset_samples = waveform_config.trough_offset_samples(
             recording.sampling_frequency
         )
+        threshold = matching_config.threshold
+        if threshold == "fp_control":
+            pass
+        else:
+            threshold = threshold**2
+
         return cls(
             recording,
             template_data,
@@ -421,7 +469,7 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
             conv_ignore_threshold=matching_config.conv_ignore_threshold,
             coarse_approx_error_threshold=matching_config.coarse_approx_error_threshold,
             trough_offset_samples=trough_offset_samples,
-            threshold=matching_config.threshold,
+            threshold=threshold,
             chunk_length_samples=matching_config.chunk_length_samples,
             n_chunks_fit=matching_config.n_chunks_fit,
             max_waveforms_fit=matching_config.max_waveforms_fit,

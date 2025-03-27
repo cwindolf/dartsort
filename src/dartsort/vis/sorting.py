@@ -52,6 +52,7 @@ class CoarseTemplateMaxChannelsPlot(OverviewPlot):
         analysis_plots.scatter_max_channel_waveforms(
             axis,
             sorting_analysis.coarse_template_data,
+            geom=sorting_analysis.recording.get_channel_locations(),
             waveform_height=0.05,
             waveform_width=0.75,
             show_geom=True,

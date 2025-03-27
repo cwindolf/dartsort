@@ -1,12 +1,6 @@
-# TODO:
-# parenthesization: combine the reductions?
-# rotation? W convergence?
-
-import warnings
 from typing import Optional
 
 import linear_operator
-from linear_operator import operators
 from linear_operator.operators import CholLinearOperator
 import torch
 import torch.nn.functional as F
@@ -15,7 +9,6 @@ from dataclasses import dataclass
 
 from ..util.noise_util import EmbeddedNoise
 from .stable_features import SpikeFeatures, SpikeNeighborhoods
-from ..util import spiketorch, more_operators
 
 
 def ppca_em(
@@ -32,7 +25,7 @@ def ppca_em(
     mean_prior_pseudocount=0.0,
     show_progress=False,
     W_initialization="svd",
-    normalize=True,
+    normalize=False,
     em_converged_atol=1e-4,
     prior_var=1.0,
     cache_global_direct=True,
@@ -152,7 +145,6 @@ def ppca_em(
             iters.set_description(f"PPCA[{dmu=:.2g}, {dW=:.2g}]")
         if max(dmu, dW) < em_converged_atol:
             break
-    # print(f"{i=} {dmu=} {dW=}")
 
     if normalize and any_missing and state["W"] is not None:
         _, _, state["W"], state["mu"] = embed(
@@ -367,12 +359,15 @@ def embed(
         T, info = torch.linalg.inv_ex(T_inv)
         u_proj = nd.C_oo_inv @ (W_o @ T)
         torch.mm(xc, u_proj, out=_ubar[nd.u_slice])
-        torch.baddbmm(
-            T,
-            _ubar[nd.u_slice].unsqueeze(2),
-            _ubar[nd.u_slice].unsqueeze(1),
-            out=_uubar[nd.u_slice],
-        )
+        if normalize:
+            _uubar[nd.u_slice] = T
+        else:
+            torch.baddbmm(
+                T,
+                _ubar[nd.u_slice].unsqueeze(2),
+                _ubar[nd.u_slice].unsqueeze(1),
+                out=_uubar[nd.u_slice],
+            )
 
     if normalize:
         active_cov = noise.marginal_covariance(channels=active_channels).to_dense()
@@ -384,7 +379,10 @@ def embed(
         weights = weights / ess
         um = weights @ _ubar
         _ubar -= um
-        _uubar.addcmul_(um[:, None], um)
+        active_mean += W @ um
+        _uubar.baddbmm_(_ubar.unsqueeze(2), _ubar.unsqueeze(1))
+
+        # _uubar.addcmul_(um[:, None], um)
 
         # -- whitening
         # decompose Euu
@@ -415,7 +413,6 @@ def embed(
         W = W @ W_tf
         _ubar = _ubar @ u_tf
         _uubar = torch.einsum("nij,ip,jq->npq", _uubar, u_tf, u_tf)
-        active_mean += W @ um
 
     return _ubar, _uubar, W, active_mean
 
@@ -469,7 +466,8 @@ def get_neighborhood_data(
         neighb_valid = neighborhoods.valid_mask(nid)
         # subset of neighborhood's chans which are active
         # needs to be subset of full neighborhood channel set, not just the ones <NC
-        neighb_subset = spiketorch.isin_sorted(neighb_chans, active_channels)
+        # neighb_subset = spiketorch.isin_sorted(neighb_chans, active_channels)
+        neighb_subset = torch.isin(neighb_chans, active_channels)
         can_cache_by_neighborhood = torch.equal(neighb_subset, neighb_valid)
         del neighb_valid
         # neighb_subset = neighb_valid  # assume those are the same. tested by assert blo.
@@ -481,9 +479,10 @@ def get_neighborhood_data(
         if not neighb_chans.numel():
             discard[neighb_members] = True
             continue
-        assert spiketorch.isin_sorted(neighb_chans, active_channels).all()
+        # assert spiketorch.isin_sorted(neighb_chans, active_channels).all()
         # subset of active chans which are in the neighborhood
-        active_subset = spiketorch.isin_sorted(active_channels, neighb_chans)
+        # active_subset = spiketorch.isin_sorted(active_channels, neighb_chans)
+        active_subset = torch.isin(active_channels, neighb_chans)
 
         x = sp.features[neighb_members][:, :, neighb_subset]
 

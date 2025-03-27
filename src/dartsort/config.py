@@ -61,11 +61,13 @@ class DARTsortUserConfig:
         doc="Threshold in standardized voltage units for initial detection; "
         "peaks or troughs larger than this value will be grabbed.",
     )
-    matching_threshold: Annotated[float, Field(gt=0)] = argfield(
-        default=15.0,
-        doc="Template matching threshold. If subtracting a template leads "
-        "to at least this great of a decrease in the norm of the residual, "
-        "that match will be used.",
+    matching_threshold: Annotated[float, Field(gt=0)] | Literal["fp_control"] = (
+        argfield(
+            default=15.0,
+            doc="Template matching threshold. If subtracting a template leads "
+            "to at least this great of a decrease in the norm of the residual, "
+            "that match will be used.",
+        )
     )
     denoiser_badness_factor: Annotated[float, Field(gt=0, lt=1)] = argfield(
         default=0.1,
@@ -152,31 +154,33 @@ class DeveloperConfig(DARTsortUserConfig):
     use_singlechan_templates: bool = False
     use_universal_templates: bool = False
     signal_rank: Annotated[int, Field(ge=0)] = 0
-    use_tem: bool = False
+    truncated: bool = True
+    overwrite_matching: bool = False
 
     merge_criterion_threshold: float = 0.0
     merge_criterion: Literal[
         "heldout_loglik",
-        "heldout_ccl",
+        "heldout_elbo",
         "loglik",
-        "ccl",
-        "aic",
-        "bic",
-        "icl",
+        "elbo",
+        "old_heldout_loglik",
+        "old_heldout_ccl",
+        "old_loglik",
+        "old_ccl",
+        "old_aic",
+        "old_bic",
+        "old_icl",
         "bimodality",
-    ] = "heldout_ccl"
+    ] = "heldout_elbo"
     merge_bimodality_threshold: float = 0.05
     n_refinement_iters: int = 3
     n_em_iters: int = 50
-    channels_strategy: str = "count_fuzzcore"
+    channels_strategy: str = "count"
     hard_noise: bool = False
 
     gmm_max_spikes: Annotated[int, Field(gt=0)] = 4_000_000
     gmm_val_proportion: Annotated[float, Field(gt=0)] = 0.25
+    gmm_split_decision_algorithm: str = "tree"
+    gmm_merge_decision_algorithm: str = "brute"
 
-    # flags for dev tasks run by main.run_dev_tasks
     save_intermediate_labels: bool = False
-
-    @property
-    def needs_extra(self):
-        return self.save_intermediate_labels

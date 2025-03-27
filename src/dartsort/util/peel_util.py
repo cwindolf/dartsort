@@ -1,5 +1,3 @@
-from pathlib import Path
-
 import h5py
 import numpy as np
 import torch
@@ -7,6 +5,7 @@ import torch
 from ..localize.localize_util import check_resume_or_overwrite, localize_hdf5
 from .data_util import DARTsortSorting, batched_h5_read
 from . import job_util
+from .py_util import resolve_path
 
 
 def run_peeler(
@@ -22,7 +21,7 @@ def run_peeler(
     show_progress=True,
     localization_dataset_name="point_source_localizations",
 ):
-    output_directory = Path(output_directory)
+    output_directory = resolve_path(output_directory)
     output_directory.mkdir(exist_ok=True)
     model_dir = output_directory / model_subdir
     output_hdf5_filename = output_directory / hdf5_filename

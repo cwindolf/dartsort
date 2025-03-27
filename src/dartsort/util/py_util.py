@@ -1,5 +1,15 @@
 import signal
 import time
+from importlib.metadata import Distribution
+import sys
+import json
+from pathlib import Path
+
+
+# check if we are installed in editable mode
+pkgname = sys.modules[__name__].__name__.split(".")[0]
+durl = Distribution.from_name(pkgname).read_text("direct_url.json")
+EDITABLE = json.loads(durl).get("dir_info", {}).get("editable", False)
 
 
 class timer:
@@ -52,3 +62,11 @@ def int_or_inf(s):
     if np.isfinite(s):
         return int(s)
     return s
+
+
+def resolve_path(p: str | Path, strict=False) -> Path:
+    p = Path(p)
+    p = p.expanduser()
+    p = p.absolute()
+    p = p.resolve(strict=strict)
+    return p

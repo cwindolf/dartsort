@@ -128,6 +128,7 @@ class StableSpikeDataset(torch.nn.Module):
         self.tpca = tpca
 
         # neighborhoods module, for querying spikes by channel group
+        self.not_train_indices = torch.tensor([], dtype=int)
         if self.has_splits and "train" in self.split_indices:
             train_ixs = self.split_indices["train"]
             self.n_spikes_train = len(train_ixs)
@@ -143,6 +144,9 @@ class StableSpikeDataset(torch.nn.Module):
                 name="extract",
             )
             self._train_extract_channels = extract_channels.cpu()[train_ixs]
+            self.not_train_indices = torch.from_numpy(
+                np.setdiff1d(np.arange(self.n_spikes), train_ixs)
+            )
         core_channel_index = waveform_util.make_channel_index(
             prgeom, core_radius, to_torch=True
         )
@@ -166,7 +170,7 @@ class StableSpikeDataset(torch.nn.Module):
 
         # channel neighborhoods and features
         # if not self.features_on_device, .spike_data() will .to(self.device)
-        times_s = torch.asarray(self.original_sorting.times_seconds[kept_indices])
+        times_s = torch.asarray(self.original_sorting.times_seconds)
         self.core_features = core_features
         if self.features_on_device:
             self.register_buffer("_train_extract_features", train_extract_features)
@@ -246,6 +250,7 @@ class StableSpikeDataset(torch.nn.Module):
         with h5py.File(sorting.parent_h5_path, "r", locking=False) as h5:
             geom = h5["geom"][:]
             extract_channel_index = h5["channel_index"][:]
+            assert np.all(np.diff(extract_channel_index) >= 0)
             if motion_est is None:
                 registered_geom = geom
             else:

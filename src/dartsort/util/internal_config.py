@@ -1,10 +1,11 @@
-from dataclasses import MISSING, field, fields
 import dataclasses
-from typing import Literal, Annotated
+from dataclasses import field, fields
+import math
+from typing import Literal
 
 import numpy as np
-import torch
 from pydantic.dataclasses import dataclass
+import torch
 
 from .py_util import int_or_inf
 from .cli_util import argfield
@@ -139,11 +140,11 @@ class SubtractionConfig:
     n_waveforms_fit: int = 20_000
     fit_subsampling_random_state: int = 0
     fit_sampling: str = "random"
-    residnorm_decrease_threshold: float = 3.162  # sqrt(10)
+    residnorm_decrease_threshold: float = math.sqrt(0.1 * 15**2)  # sqrt(10)
     use_singlechan_templates: bool = False
     singlechan_threshold: float = 50.0
     n_singlechan_templates: int = 10
-    singlechan_alignment_padding_ms: float = 0.7
+    singlechan_alignment_padding_ms: float = 1.0
     use_universal_templates: bool = False
     universal_threshold: float = 50.0
 
@@ -204,7 +205,7 @@ class TemplateConfig:
 
     # realignment
     realign_peaks: bool = True
-    realign_shift_ms: float = 0.7
+    realign_shift_ms: float = 1.0
 
     # track template over time
     time_tracking: bool = False
@@ -221,13 +222,13 @@ class MatchingConfig:
     fit_sampling: str = "random"
 
     # template matching parameters
-    threshold: float = 150.0
+    threshold: float | Literal["fp_control"] = 15.0  # norm, not normsq
     template_svd_compression_rank: int = 10
-    template_temporal_upsampling_factor: int = 8
+    template_temporal_upsampling_factor: int = 4
     template_min_channel_amplitude: float = 1.0
     refractory_radius_frames: int = 10
-    amplitude_scaling_variance: float = 0.0
-    amplitude_scaling_boundary: float = 0.5
+    amplitude_scaling_variance: float = 0.1**2
+    amplitude_scaling_boundary: float = 1.0
     max_iter: int = 1000
     conv_ignore_threshold: float = 5.0
     coarse_approx_error_threshold: float = 0.0
@@ -331,30 +332,38 @@ class RefinementConfig:
     min_count: int = 50
     signal_rank: int = 0
     n_spikes_fit: int = 4096
-    ppca_inner_em_iter: int = 10
-    distance_metric: Literal["noise_metric", "kl", "reverse_kl", "symkl"] = "symkl"
+    ppca_inner_em_iter: int = 5
+    distance_metric: Literal["noise_metric", "kl", "reverse_kl", "symkl"] = (
+        "noise_metric"
+    )
     distance_normalization_kind: Literal["none", "noise", "channels"] = "noise"
-    merge_distance_threshold: float = 1.5
+    merge_distance_threshold: float = 2.0
     # if None, switches to bimodality
     merge_criterion_threshold: float | None = 0.0
     merge_criterion: Literal[
         "heldout_loglik",
-        "heldout_ccl",
+        "heldout_elbo",
         "loglik",
-        "ccl",
-        "aic",
-        "bic",
-        "icl",
+        "elbo",
+        "old_heldout_loglik",
+        "old_heldout_ccl",
+        "old_loglik",
+        "old_ccl",
+        "old_aic",
+        "old_bic",
+        "old_icl",
         "bimodality",
-    ] = "heldout_ccl"
+    ] = "heldout_elbo"
     merge_bimodality_threshold: float = 0.05
-    n_em_iters: int = 25
+    n_em_iters: int = 50
     em_converged_prop: float = 0.02
     em_converged_churn: float = 0.01
     em_converged_atol: float = 1e-2
     n_total_iters: int = 3
     hard_noise: bool = False
-    truncated: bool = False
+    truncated: bool = True
+    split_decision_algorithm: str = "tree"
+    merge_decision_algorithm: str = "brute"
 
     # if someone wants this
     split_merge_config: SplitMergeConfig | None = None
@@ -411,6 +420,10 @@ class DARTsortInternalConfig:
     final_refinement: bool = True
     matching_iterations: int = 1
     intermediate_matching_subsampling: float = 1.0
+    overwrite_matching: bool = False
+
+    # development / debugging flags
+    save_intermediate_labels: bool = False
 
 
 default_waveform_config = WaveformConfig()
@@ -467,6 +480,8 @@ def to_internal_config(cfg):
         do_nn_denoise=cfg.use_nn_in_subtraction,
         tpca_rank=cfg.temporal_pca_rank,
         tpca_fit_radius=cfg.fit_radius_um,
+        input_waveforms_name="raw",
+        output_waveforms_name="subtracted",
     )
     subtraction_config = SubtractionConfig(
         detection_threshold=cfg.initial_threshold,
@@ -503,7 +518,9 @@ def to_internal_config(cfg):
         max_n_spikes=cfg.gmm_max_spikes,
         val_proportion=cfg.gmm_val_proportion,
         channels_strategy=cfg.channels_strategy,
-        truncated=cfg.use_tem,
+        truncated=cfg.truncated,
+        split_decision_algorithm=cfg.gmm_split_decision_algorithm,
+        merge_decision_algorithm=cfg.gmm_merge_decision_algorithm,
     )
     motion_estimation_config = MotionEstimationConfig(
         **{k.name: getattr(cfg, k.name) for k in fields(MotionEstimationConfig)}
@@ -534,4 +551,6 @@ def to_internal_config(cfg):
         computation_config=computation_config,
         dredge_only=cfg.dredge_only,
         matching_iterations=cfg.matching_iterations,
+        overwrite_matching=cfg.overwrite_matching,
+        save_intermediate_labels=cfg.save_intermediate_labels,
     )
