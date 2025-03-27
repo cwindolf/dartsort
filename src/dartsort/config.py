@@ -161,6 +161,8 @@ class DeveloperConfig(DARTsortUserConfig):
     merge_criterion: Literal[
         "heldout_loglik",
         "heldout_elbo",
+        "loglik",
+        "elbo",
         "old_heldout_loglik",
         "old_heldout_ccl",
         "old_loglik",
@@ -173,7 +175,7 @@ class DeveloperConfig(DARTsortUserConfig):
     merge_bimodality_threshold: float = 0.05
     n_refinement_iters: int = 3
     n_em_iters: int = 50
-    channels_strategy: str = "count_fuzzcore"
+    channels_strategy: str = "count"
     hard_noise: bool = False
 
     gmm_max_spikes: Annotated[int, Field(gt=0)] = 4_000_000
