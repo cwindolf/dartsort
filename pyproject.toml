@@ -26,3 +26,7 @@ classifiers = [
 
 [project.scripts]
 "dartsort" = "dartsort.cli:dartsort_cli"
+
+[tool.coverage.run]
+source = ["dartsort"]
+omit = ["*/vis/*"]
