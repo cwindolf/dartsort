@@ -289,9 +289,9 @@ class TemplateData:
                 parent_sorting_hdf5_path=parent_sorting_hdf5_path,
             )
         else:
-            geom = depths_um = None
+            geom = recording.get_channel_locations()
+            depths_um = None
             if with_locs:
-                geom = recording.get_channel_locations()
                 depths_um = get_template_depths(
                     results["templates"],
                     geom,
