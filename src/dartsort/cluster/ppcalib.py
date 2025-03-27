@@ -1,12 +1,6 @@
-# TODO:
-# parenthesization: combine the reductions?
-# rotation? W convergence?
-
-import warnings
 from typing import Optional
 
 import linear_operator
-from linear_operator import operators
 from linear_operator.operators import CholLinearOperator
 import torch
 import torch.nn.functional as F
@@ -15,7 +9,6 @@ from dataclasses import dataclass
 
 from ..util.noise_util import EmbeddedNoise
 from .stable_features import SpikeFeatures, SpikeNeighborhoods
-from ..util import spiketorch, more_operators
 
 
 def ppca_em(

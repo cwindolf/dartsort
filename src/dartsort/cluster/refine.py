@@ -81,7 +81,7 @@ def refine_clustering(
         split_decision_algorithm=refinement_config.split_decision_algorithm,
         merge_decision_algorithm=refinement_config.merge_decision_algorithm,
     )
-    gmm.cleanup()
+
     # these are for benchmarking
     step_labels = {}
     intermediate_split = "full" if return_step_labels else "kept"
