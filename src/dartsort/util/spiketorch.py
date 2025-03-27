@@ -1,4 +1,5 @@
 import math
+from logging import getLogger
 import warnings
 
 import linear_operator
@@ -9,6 +10,7 @@ import torch.nn.functional as F
 from scipy.fftpack import next_fast_len
 from torch.fft import irfft, rfft
 
+logger = getLogger(__name__)
 log2pi = torch.log(torch.tensor(2 * np.pi))
 _1 = torch.tensor(1.0)
 _0 = torch.tensor(100)
@@ -374,7 +376,12 @@ def nancov(
             good = vals > 0
             cov = (vecs[:, good] * vals[good]) @ vecs[:, good].T
         except Exception as e:
-            warnings.warn(f"Error in nancov eigh: {e}")
+            if not cov.isfinite().all():
+                raise e
+            else:
+                warnings.warn(
+                    f"Error in nancov's eigh, shown below, was ignored because the covariance remained finite. {e}"
+                )
 
     if return_nobs:
         return cov, nobs
