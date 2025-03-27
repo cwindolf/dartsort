@@ -1,5 +1,4 @@
 import numpy as np
-import spikeinterface.core as sc
 import tempfile
 import subprocess
 
@@ -35,7 +34,6 @@ def test_fakedata():
                 do_motion_estimation=False
             ),
             matching_config=dartsort.MatchingConfig(threshold="fp_control"),
-            matching_iterations=1,
             # test the dev tasks pipeline
             save_intermediate_labels=True,
         )
