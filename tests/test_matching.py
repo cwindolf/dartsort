@@ -17,13 +17,17 @@ nofeatcfg = config.FeaturizationConfig(
     do_tpca_denoise=False,
     do_enforce_decrease=False,
     denoise_only=True,
+    n_residual_snips=0,
 )
 
 spike_length_samples = 121
 trough_offset_samples = 42
 
+RES_ATOL = 1e-5
+CONV_ATOL = 0.1
 
-def test_tiny(tmp_path):
+
+def _test_tiny(tmp_path, scaling=0.0):
     recording_length_samples = 200
     n_channels = 2
     geom = np.c_[np.zeros(2), np.arange(2)]
@@ -75,7 +79,7 @@ def test_tiny(tmp_path):
                 rec,
                 config.default_waveform_config,
                 config.MatchingConfig(
-                    amplitude_scaling_variance=0.0,
+                    amplitude_scaling_variance=scaling,
                     threshold=0.01,
                     template_temporal_upsampling_factor=1,
                 ),
@@ -99,8 +103,8 @@ def test_tiny(tmp_path):
             assert res["n_spikes"] == len(times)
             assert np.array_equal(res["times_samples"], times)
             assert np.array_equal(res["labels"], labels)
-            assert np.isclose(torch.square(res["residual"]).mean(), 0.0, atol=1e-5)
-            assert np.isclose(torch.square(res["conv"]).mean(), 0.0, atol=1e-4)
+            assert np.isclose(torch.square(res["residual"]).mean(), 0.0, atol=RES_ATOL)
+            assert np.isclose(torch.square(res["conv"]).mean(), 0.0, atol=CONV_ATOL)
 
             matcher = main.ObjectiveUpdateTemplateMatchingPeeler.from_config(
                 rec,
@@ -125,13 +129,21 @@ def test_tiny(tmp_path):
             assert np.array_equal(res["labels"], labels)
             assert np.array_equal(res["upsampling_indices"], [0, 0])
             print(f'{torch.square(res["residual"]).mean()=}')
-            assert np.isclose(torch.square(res["residual"]).mean(), 0.0, atol=1e-5)
+            assert np.isclose(torch.square(res["residual"]).mean(), 0.0, atol=RES_ATOL)
             print(f'{torch.square(res["conv"]).mean()=}')
-            assert np.isclose(torch.square(res["conv"]).mean(), 0.0, atol=1e-4)
+            assert np.isclose(torch.square(res["conv"]).mean(), 0.0, atol=CONV_ATOL)
             assert torch.all(res["scores"] > 0)
 
 
-def test_tiny_up(tmp_path, up_factor=8):
+def test_tiny_unscaled(path):
+    _test_tiny(path)
+
+
+def test_tiny_scaled(path):
+    _test_tiny(path, scaling=0.01)
+
+
+def _test_tiny_up(tmp_path, up_factor=1, scaling=0.0):
     recording_length_samples = 2000
     n_channels = 2
     geom = np.c_[np.zeros(n_channels), np.arange(n_channels)]
@@ -154,7 +166,7 @@ def test_tiny_up(tmp_path, up_factor=8):
     # tclu = []
     # for i in range(up_factor):
     #     tclu.extend((start + 200 * i, 0, 0, i))
-    tclu = [50, 0, 0, 7]
+    tclu = [50, 0, 0, up_factor - 1]
     # fmt: on
     times, channels, labels, upsampling_indices = np.array(tclu).reshape(-1, 4).T
     rec0 = np.zeros((recording_length_samples, n_channels), dtype="float32")
@@ -189,7 +201,7 @@ def test_tiny_up(tmp_path, up_factor=8):
                 config.default_waveform_config,
                 config.MatchingConfig(
                     threshold=0.01,
-                    amplitude_scaling_variance=0.0,
+                    amplitude_scaling_variance=scaling,
                     template_temporal_upsampling_factor=up_factor,
                 ),
                 nofeatcfg,
@@ -268,9 +280,27 @@ def test_tiny_up(tmp_path, up_factor=8):
             assert res["n_spikes"] == len(times)
             assert np.array_equal(res["times_samples"], times)
             assert np.array_equal(res["labels"], labels)
-            assert np.isclose(torch.square(res["residual"]).mean(), 0.0, atol=1e-5)
-            assert np.isclose(torch.square(res["conv"]).mean(), 0.0, atol=1e-4)
+            print(f'{torch.square(res["residual"]).mean()=}')
+            assert np.isclose(torch.square(res["residual"]).mean(), 0.0, atol=RES_ATOL)
+            print(f'{torch.square(res["conv"]).mean()=}')
+            assert np.isclose(torch.square(res["conv"]).mean(), 0.0, atol=CONV_ATOL)
             assert torch.all(res["scores"] > 0)
+
+
+def test_tiny_up_1_0():
+    _test_tiny_up(tmp_path, up_factor=1, scaling=0.0)
+
+
+def test_tiny_up_8_0():
+    _test_tiny_up(tmp_path, up_factor=8, scaling=0.0)
+
+
+def test_tiny_up_1_001():
+    _test_tiny_up(tmp_path, up_factor=1, scaling=0.01)
+
+
+def test_tiny_up_8_001():
+    _test_tiny_up(tmp_path, up_factor=8, scaling=0.01)
 
 
 def static_tester(tmp_path, up_factor=1):
@@ -562,13 +592,19 @@ def test_fakedata_nonn():
 if __name__ == "__main__":
     test_fakedata_nonn()
 
-    print("\n\ntest tiny")
+    print("\n\ntest tiny unscaled")
     with tempfile.TemporaryDirectory() as tdir:
-        test_tiny(Path(tdir))
+        test_tiny_unscaled(Path(tdir))
 
-    print("\n\ntest tiny_up")
+    print("\n\ntest tiny scaled")
     with tempfile.TemporaryDirectory() as tdir:
-        test_tiny_up(Path(tdir))
+        test_tiny_scaled(Path(tdir))
+
+    for up in (1, 8):
+        for sc in (0.0, 0.01):
+            print(f"\n\ntest tiny_up {up=} {sc=}")
+            with tempfile.TemporaryDirectory() as tdir:
+                _test_tiny_up(Path(tdir), up_factor=up, scaling=sc)
 
     print("\n\ntest test_static_noup")
     with tempfile.TemporaryDirectory() as tdir:
