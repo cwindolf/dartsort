@@ -1,5 +1,5 @@
 [![badge](https://github.com/cwindolf/dartsort/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/cwindolf/dartsort/actions/)
-[![cov](https://coveralls.io/github/cwindolf/dartsort/badge.png?branch=main)](https://coveralls.io/github/cwindolf/dartsort/)
+[![coveralls](https://coveralls.io/repos/github/cwindolf/dartsort/badge.svg?branch=develop)](https://coveralls.io/github/cwindolf/dartsort?branch=develop)
 
 # dartsort
 
