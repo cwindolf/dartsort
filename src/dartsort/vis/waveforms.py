@@ -138,8 +138,8 @@ def geomplot(
     )
     lines = ax.add_collection(lines)
     if annotate_z:
-        unique_z = np.unique(geom[list(unique_chans)])
-        unique_zp = np.unique(geom_plot[list(unique_chans)])
+        unique_z = np.unique(geom[:, 1][list(unique_chans)])
+        unique_zp = np.unique(geom_plot[:, 1][list(unique_chans)])
         for z, zp in zip(unique_z, unique_zp):
             ax.text(
                 xmin,
