@@ -140,6 +140,21 @@ class FactorizedNoise(torch.nn.Module):
         return cls(spatial_std, vt_spatial, temporal_std, vt_temporal)
 
 
+class WhiteNoise(torch.nn.Module):
+    """White noise to mimic the StationaryFactorizedNoise for use in sims."""
+
+    def __init__(self, n_channels, scale=1.0):
+        self.n_channels = n_channels
+        self.scale = scale
+
+    def simulate(self, size=1, t=None, generator=None):
+        assert t is not None
+        x = torch.randn(size, t, self.n_channels, generator=generator)
+        if self.scale != 1.0:
+            x *= self.scale
+        return x
+
+
 class StationaryFactorizedNoise(torch.nn.Module):
     def __init__(self, spatial_std, vt_spatial, kernel_fft, block_size, t):
         super().__init__()

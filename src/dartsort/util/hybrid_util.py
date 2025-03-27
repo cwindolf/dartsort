@@ -3,14 +3,18 @@ import numpy as np
 from tqdm.auto import tqdm
 import warnings
 from spikeinterface.extractors import NumpySorting
-from spikeinterface.generation.drift_tools import InjectDriftingTemplatesRecording, DriftingTemplates, move_dense_templates
+from spikeinterface.generation.drift_tools import (
+    InjectDriftingTemplatesRecording,
+    DriftingTemplates,
+    move_dense_templates,
+)
 from probeinterface import Probe
 from scipy.spatial import KDTree
-from scipy.sparse import csgraph, coo_array
 
 from ..templates import TemplateData
 from .data_util import DARTsortSorting
 from ..config import unshifted_raw_template_config, ComputationConfig
+from . import simkit
 
 
 def get_drifty_hybrid_recording(
@@ -23,7 +27,7 @@ def get_drifty_hybrid_recording(
     firing_rates=None,
     peak_channels=None,
     amplitude_scale_std=0.1,
-    amplitude_factor=None
+    amplitude_factor=None,
 ):
     """
     :param: recording
@@ -39,28 +43,35 @@ def get_drifty_hybrid_recording(
     rg = np.random.default_rng(seed=seed)
 
     if peak_channels is None:
-        (central_disp_index,) = np.flatnonzero(
-            np.all(templates.displacements == 0, 1)
-        )
+        (central_disp_index,) = np.flatnonzero(np.all(templates.displacements == 0, 1))
         central_templates = templates.templates_array_moved[central_disp_index]
         peak_channels = np.ptp(central_templates, 1).argmax(1)
 
     if sorting is None:
-        sorting = get_sorting(num_units, recording, firing_rates=firing_rates, rg=rg, spike_length_samples=templates.num_samples)
+        sorting = simkit.simulate_sorting(
+            num_units,
+            recording.get_num_samples(),
+            firing_rates=firing_rates,
+            rg=rg,
+            spike_length_samples=templates.num_samples,
+            sampling_frequency=recording.sampling_frequency,
+        )
     n_spikes = sorting.count_total_num_spikes()
 
     # Default amplitude scalings for spikes drawn from gamma
     if amplitude_factor is None:
         if amplitude_scale_std:
-            shape = 1. / (amplitude_scale_std ** 1.5)
-            amplitude_factor = rg.gamma(shape, scale=1./(shape-1), size=n_spikes)
+            shape = 1.0 / (amplitude_scale_std**1.5)
+            amplitude_factor = rg.gamma(shape, scale=1.0 / (shape - 1), size=n_spikes)
         else:
             amplitude_factor = np.ones(n_spikes)
 
     depths = recording.get_probe().contact_positions[:, 1][peak_channels]
     t_start = recording.sample_index_to_time(0)
     t_end = recording.sample_index_to_time(recording.get_num_samples() - 1)
-    motion_times_s = np.arange(t_start, t_end, step=1.0 / displacement_sampling_frequency)
+    motion_times_s = np.arange(
+        t_start, t_end, step=1.0 / displacement_sampling_frequency
+    )
 
     disp_y = motion_estimate.disp_at_s(motion_times_s, depths, grid=True)
 
@@ -69,8 +80,10 @@ def get_drifty_hybrid_recording(
     # this tricks SI into using one displacement per unit
     displacement_unit_factor = np.eye(num_units)
 
-    if not sorting.check_serializability(type='json'):
-        warnings.warn("Your sorting is not serializable, which could lead to problems later.")
+    if not sorting.check_serializability(type="json"):
+        warnings.warn(
+            "Your sorting is not serializable, which could lead to problems later."
+        )
 
     rec = InjectDriftingTemplatesRecording(
         sorting=sorting,
@@ -83,143 +96,6 @@ def get_drifty_hybrid_recording(
     )
     rec.annotate(peak_channel=peak_channels.tolist())
     return rec
-
-
-def get_sorting(num_units, recording, firing_rates=None, rg=0, nbefore=42, spike_length_samples=128):
-    rg = np.random.default_rng(rg)
-
-    # Default firing rates drawn uniformly from 1-10Hz
-    if firing_rates is not None:
-        assert firing_rates.shape[0] == num_units, "Number of firing rates must match number of units in templates."
-    else:
-        firing_rates = rg.uniform(1.0, 10.0, num_units)
-
-    spike_trains = [
-        refractory_poisson_spike_train(
-            firing_rates[i], 
-            recording.get_num_samples(), 
-            trough_offset_samples=nbefore,
-            spike_length_samples=spike_length_samples,
-            seed=rg,
-        ) for i in range(num_units)
-    ]
-
-    spike_labels = np.repeat(np.arange(num_units) + 1, np.array([spike_trains[i].shape[0] for i in range(num_units)]))
-
-    sorting = NumpySorting.from_times_labels(
-        [np.concatenate(spike_trains)], 
-        [spike_labels], 
-        sampling_frequency=recording.sampling_frequency,
-    )
-
-    return sorting
-
-
-def simulate_spike_trains(
-    n_units,
-    duration_samples,
-    spike_rates_range_hz=(1.0, 10.0),
-    refractory_samples=40,
-    trough_offset_samples=42,
-    spike_length_samples=121,
-    sampling_frequency=30000.0,
-    rg=0,
-):
-    rg = np.random.default_rng(rg)
-
-    labels = []
-    times_samples = []
-    for u in range(n_units):
-        rate_hz = rg.uniform(*spike_rates_range_hz)
-        st = refractory_poisson_spike_train(
-            rate_hz,
-            duration_samples,
-            rg=rg,
-            refractory_samples=refractory_samples,
-            trough_offset_samples=trough_offset_samples,
-            spike_length_samples=spike_length_samples,
-            sampling_frequency=sampling_frequency,
-        )
-        labels.append(np.broadcast_to([u], st.size))
-        times_samples.append(st)
-
-    times_samples = np.concatenate(times_samples)
-    order = np.argsort(times_samples)
-    times_samples = times_samples[order]
-    labels = np.concatenate(labels)[order]
-
-    return times_samples, labels
-
-
-def refractory_poisson_spike_train(
-    rate_hz,
-    duration_samples,
-    seed=0,
-    refractory_samples=40,
-    trough_offset_samples=42,
-    spike_length_samples=121,
-    sampling_frequency=30000.0,
-    overestimation=1.5,
-):
-    """Sample a refractory Poisson spike train
-
-    Arguments
-    ---------
-    rate : float
-        Spikes / second, well, except it'll be slower due to refractoriness.
-    duration : float
-    """
-    rg = np.random.default_rng(seed)
-
-    seconds_per_sample = 1.0 / sampling_frequency
-    refractory_s = refractory_samples * seconds_per_sample
-    duration_s = duration_samples * seconds_per_sample
-
-    # overestimate the number of spikes needed
-    mean_interval_s = 1.0 / rate_hz
-    estimated_spike_count = int((duration_s / mean_interval_s) * overestimation)
-
-    # generate interspike intervals
-    intervals = rg.exponential(
-        scale=mean_interval_s, size=estimated_spike_count
-    )
-    intervals += refractory_s
-    intervals_samples = np.floor(intervals * sampling_frequency).astype(int)
-
-    # determine spike times and restrict to ones which we can actually
-    # add into / read from a recording with this duration and trough offset
-    spike_samples = np.cumsum(intervals_samples)
-    max_spike_time = duration_samples - (
-        spike_length_samples - trough_offset_samples
-    )
-    # check that we overestimated enough
-    assert spike_samples.max() > max_spike_time
-    valid = spike_samples == spike_samples.clip(
-        trough_offset_samples, max_spike_time
-    )
-    spike_samples = spike_samples[valid]
-    assert spike_samples.size
-
-    return spike_samples
-
-
-def piecewise_refractory_poisson_spike_train(rates, bins, binsize_samples, **kwargs):
-    """
-    Returns a spike train with variable firing rate using refractory_poisson_spike_train().
-
-    :param rates: list of firing rates in Hz
-    :param bins: bin starting samples (same shape as rates)
-    :param binsize_samples: number of samples per bin
-    :param **kwargs: kwargs to feed to refractory_poisson_spike_train()
-    """
-    st = []
-    for rate, bin in zip(rates, bins):
-        if rate < 0.1:
-            continue
-        binst = refractory_poisson_spike_train(rate, binsize_samples, **kwargs)
-        st.append(bin + binst)
-    st = np.concatenate(st)
-    return st
 
 
 def precompute_displaced_registered_templates(
@@ -254,7 +130,9 @@ def precompute_displaced_registered_templates(
     return ret
 
 
-def closest_clustering(gt_st, peel_st, geom=None, match_dt_ms=0.1, match_radius_um=0.0, p=2.0):
+def closest_clustering(
+    gt_st, peel_st, geom=None, match_dt_ms=0.1, match_radius_um=0.0, p=2.0
+):
     frames_per_ms = gt_st.sampling_frequency / 1000
     delta_frames = match_dt_ms * frames_per_ms
     rescale = [delta_frames]
@@ -275,7 +153,7 @@ def closest_clustering(gt_st, peel_st, geom=None, match_dt_ms=0.1, match_radius_
     return dataclasses.replace(peel_st, labels=labels)
 
 
-def greedy_match(gt_coords, test_coords, max_val=1.0, dx=1./30, workers=-1, p=2.0):
+def greedy_match(gt_coords, test_coords, max_val=1.0, dx=1.0 / 30, workers=-1, p=2.0):
     assignments = np.full(len(test_coords), -1)
     gt_unmatched = np.ones(len(gt_coords), dtype=bool)
 
@@ -330,7 +208,10 @@ def sorting_from_times_labels(
         if recording is not None:
             sampling_frequency = recording.sampling_frequency
     sorting = DARTsortSorting(
-        times_samples=times_samples, channels=channels, labels=labels, sampling_frequency=sampling_frequency
+        times_samples=times_samples,
+        channels=channels,
+        labels=labels,
+        sampling_frequency=sampling_frequency,
     )
 
     if not determine_channels:
@@ -340,11 +221,22 @@ def sorting_from_times_labels(
 
     _, labels_flat = np.unique(labels, return_inverse=True)
     sorting = DARTsortSorting(
-        times_samples=times_samples, channels=channels, labels=labels_flat, sampling_frequency=sorting.sampling_frequency
+        times_samples=times_samples,
+        channels=channels,
+        labels=labels_flat,
+        sampling_frequency=sorting.sampling_frequency,
     )
-    template_config = dataclasses.replace(template_config, spikes_per_unit=spikes_per_unit)
+    template_config = dataclasses.replace(
+        template_config, spikes_per_unit=spikes_per_unit
+    )
     comp_cfg = ComputationConfig(n_jobs_cpu=n_jobs, n_jobs_gpu=n_jobs)
-    td = TemplateData.from_config(recording, sorting, template_config, with_locs=False, computation_config=comp_cfg)
+    td = TemplateData.from_config(
+        recording,
+        sorting,
+        template_config,
+        with_locs=False,
+        computation_config=comp_cfg,
+    )
 
     channels = np.nan_to_num(np.ptp(td.coarsen().templates, 1)).argmax(1)[labels_flat]
     if motion_est is not None:
@@ -364,7 +256,10 @@ def sorting_from_times_labels(
         d, channels = gkdt.query(guess_pos, workers=n_jobs)
 
     sorting = DARTsortSorting(
-        times_samples=times_samples, channels=channels, labels=labels_flat, sampling_frequency=sorting.sampling_frequency
+        times_samples=times_samples,
+        channels=channels,
+        labels=labels_flat,
+        sampling_frequency=sorting.sampling_frequency,
     )
     return sorting, td
 
@@ -378,5 +273,11 @@ def sorting_from_spikeinterface(
 ):
     sv = sorting.to_spike_vector()
     return sorting_from_times_labels(
-        sv['sample_index'], sv['unit_index'], sampling_frequency=sorting.sampling_frequency, recording=recording, determine_channels=determine_channels, template_config=template_config, n_jobs=n_jobs
+        sv["sample_index"],
+        sv["unit_index"],
+        sampling_frequency=sorting.sampling_frequency,
+        recording=recording,
+        determine_channels=determine_channels,
+        template_config=template_config,
+        n_jobs=n_jobs,
     )
