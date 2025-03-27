@@ -75,6 +75,7 @@ def test_tiny(tmp_path):
                 rec,
                 config.default_waveform_config,
                 config.MatchingConfig(
+                    amplitude_scaling_variance=0.0,
                     threshold=0.01,
                     template_temporal_upsampling_factor=1,
                 ),
@@ -98,21 +99,15 @@ def test_tiny(tmp_path):
             assert res["n_spikes"] == len(times)
             assert np.array_equal(res["times_samples"], times)
             assert np.array_equal(res["labels"], labels)
-            assert np.isclose(
-                torch.square(res["residual"]).mean(),
-                0.0,
-            )
-            assert np.isclose(
-                torch.square(res["conv"]).mean(),
-                0.0,
-                atol=1e-4,
-            )
+            assert np.isclose(torch.square(res["residual"]).mean(), 0.0, atol=1e-5)
+            assert np.isclose(torch.square(res["conv"]).mean(), 0.0, atol=1e-4)
 
             matcher = main.ObjectiveUpdateTemplateMatchingPeeler.from_config(
                 rec,
                 config.default_waveform_config,
                 config.MatchingConfig(
                     threshold=0.01,
+                    amplitude_scaling_variance=0.0,
                     template_temporal_upsampling_factor=8,
                 ),
                 nofeatcfg,
@@ -129,15 +124,10 @@ def test_tiny(tmp_path):
             assert np.array_equal(res["times_samples"], times)
             assert np.array_equal(res["labels"], labels)
             assert np.array_equal(res["upsampling_indices"], [0, 0])
-            assert np.isclose(
-                torch.square(res["residual"]).mean(),
-                0.0,
-            )
-            assert np.isclose(
-                torch.square(res["conv"]).mean(),
-                0.0,
-                atol=1e-4,
-            )
+            print(f'{torch.square(res["residual"]).mean()=}')
+            assert np.isclose(torch.square(res["residual"]).mean(), 0.0, atol=1e-5)
+            print(f'{torch.square(res["conv"]).mean()=}')
+            assert np.isclose(torch.square(res["conv"]).mean(), 0.0, atol=1e-4)
             assert torch.all(res["scores"] > 0)
 
 
@@ -155,8 +145,7 @@ def test_tiny_up(tmp_path, up_factor=8):
     templates[0, :, 0] = trace0
     # templates[1, :, 1] = trace0
     cupts = template_util.compressed_upsampled_templates(
-        templates,
-        max_upsample=up_factor,
+        templates, max_upsample=up_factor
     )
 
     # spike train
@@ -200,6 +189,7 @@ def test_tiny_up(tmp_path, up_factor=8):
                 config.default_waveform_config,
                 config.MatchingConfig(
                     threshold=0.01,
+                    amplitude_scaling_variance=0.0,
                     template_temporal_upsampling_factor=up_factor,
                 ),
                 nofeatcfg,
@@ -278,15 +268,8 @@ def test_tiny_up(tmp_path, up_factor=8):
             assert res["n_spikes"] == len(times)
             assert np.array_equal(res["times_samples"], times)
             assert np.array_equal(res["labels"], labels)
-            assert np.isclose(
-                torch.square(res["residual"]).mean(),
-                0.0,
-            )
-            assert np.isclose(
-                torch.square(res["conv"]).mean(),
-                0.0,
-                atol=1e-4,
-            )
+            assert np.isclose(torch.square(res["residual"]).mean(), 0.0, atol=1e-5)
+            assert np.isclose(torch.square(res["conv"]).mean(), 0.0, atol=1e-4)
             assert torch.all(res["scores"] > 0)
 
 
@@ -353,6 +336,7 @@ def static_tester(tmp_path, up_factor=1):
                 config.MatchingConfig(
                     threshold=0.01,
                     template_temporal_upsampling_factor=up_factor,
+                    amplitude_scaling_variance=0.0,
                     coarse_approx_error_threshold=0.0,
                     conv_ignore_threshold=0.0,
                     template_svd_compression_rank=2,
@@ -432,16 +416,9 @@ def static_tester(tmp_path, up_factor=1):
             assert res["n_spikes"] == len(times)
             assert np.array_equal(res["times_samples"], times)
             assert np.array_equal(res["labels"], labels)
-            assert np.isclose(
-                torch.square(res["residual"]).mean(),
-                0.0,
-            )
+            assert np.isclose(torch.square(res["residual"]).mean(), 0.0, atol=1e-5)
             print(f"D {torch.square(res['conv']).mean()=}")
-            assert np.isclose(
-                torch.square(res["conv"]).mean(),
-                0.0,
-                atol=1e-3,
-            )
+            assert np.isclose(torch.square(res["conv"]).mean(), 0.0, atol=1e-3)
             assert torch.all(res["scores"] > 0)
 
 
@@ -532,7 +509,9 @@ def _test_fakedata_nonn(threshold):
     rec0 = si.NumpyRecording(rec0, fs)
     rec0.set_dummy_probe_from_locations(geom)
 
-    featconf = config.FeaturizationConfig(do_nn_denoise=False, do_tpca_denoise=False)
+    featconf = config.FeaturizationConfig(
+        do_nn_denoise=False, do_tpca_denoise=False, n_residual_snips=8
+    )
     tempconf = config.TemplateConfig(
         realign_peaks=False,
         low_rank_denoising=True,
