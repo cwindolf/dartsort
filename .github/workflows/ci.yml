@@ -49,7 +49,7 @@ jobs:
 
       - name: Install DARTsort
         run: |
-          pip install dartsort/
+          pip install -e dartsort/
 
       - name: Pytest
         run: |
