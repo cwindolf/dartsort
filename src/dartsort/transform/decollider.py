@@ -1,9 +1,9 @@
+from logging import getLogger
+
 import numpy as np
+import pandas as pd
 import torch
 import torch.nn.functional as F
-from dartsort.util import spikeio
-from dartsort.util.spiketorch import reindex, spawn_torch_rg
-import pandas as pd
 from torch.utils.data import (
     BatchSampler,
     DataLoader,
@@ -15,7 +15,12 @@ from torch.utils.data import (
 )
 from tqdm.auto import trange
 
+from ..util import spikeio
+from ..util.spiketorch import reindex, spawn_torch_rg
 from ._base_nn_denoiser import BaseMultichannelDenoiser
+
+
+logger = getLogger(__name__)
 
 
 class Decollider(BaseMultichannelDenoiser):
@@ -89,6 +94,9 @@ class Decollider(BaseMultichannelDenoiser):
         self.val_noise_random_seed = val_noise_random_seed
 
     def initialize_nets(self, spike_length_samples):
+        if hasattr(self, 'inf_net'):
+            logger.dartsortdebug('Already initialized.')
+            return
         self.initialize_shapes(spike_length_samples)
         if self.exz_estimator in ("n2n", "n3n"):
             self.eyz = self.get_mlp(res_type=self.eyz_res_type)
@@ -168,7 +176,7 @@ class Decollider(BaseMultichannelDenoiser):
         else:
             assert False
 
-        pred = self.to_orig_channels(waveforms, max_channels)
+        pred = self.to_orig_channels(pred, max_channels)
 
         return pred
 

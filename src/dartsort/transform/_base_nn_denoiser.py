@@ -1,3 +1,5 @@
+from logging import getLogger
+
 import torch
 import numpy as np
 
@@ -5,6 +7,9 @@ from .transform_base import BaseWaveformDenoiser
 from ..util.waveform_util import regularize_channel_index
 from ..util.spiketorch import get_relative_index, reindex, spawn_torch_rg
 from ..util import nn_util
+
+
+logger = getLogger(__name__)
 
 
 class BaseMultichannelDenoiser(BaseWaveformDenoiser):
@@ -73,6 +78,7 @@ class BaseMultichannelDenoiser(BaseWaveformDenoiser):
         self.res_type = res_type
 
     def initialize_shapes(self, spike_length_samples):
+        logger.dartsortdebug(f'Initialize {self.__class__.__name__} with {spike_length_samples=}.')
         # we don't know these dimensions til we see a spike
         self.spike_length_samples = spike_length_samples
         self.wf_dim = spike_length_samples * self.model_channel_index.shape[1]
