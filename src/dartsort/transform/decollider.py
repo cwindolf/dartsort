@@ -257,31 +257,24 @@ class Decollider(BaseMultichannelDenoiser):
         )
 
         # initialize validation datasets only if val_split_p > 0
-        noise_val_dataset = None  # for pyright
         if val_size > 0:
-            val_waveforms, val_channels = waveforms[val_indices], channels[val_indices]
-            val_dataset = TensorDataset(val_waveforms, val_channels)
-            noise_val_dataset = SameChannelNoiseDataset(
+            val_waveforms = waveforms[val_indices]
+            val_channels = channels[val_indices]
+            val_noise = get_noise(
                 recording,
                 val_channels.numpy(force=True),
                 self.model_channel_index_np,
                 spike_length_samples=self.spike_length_samples,
-                # NB: we re-seed this guy's generator before every validation below
-                # so that the noise is always the same!
-                generator=spawn_torch_rg(self.val_noise_random_seed),
+                rg=self.rg,
             )
-            val_stack_dataset = StackDataset(val_dataset, noise_val_dataset)
+            val_dataset = TensorDataset(val_waveforms, val_channels, val_noise)
 
             # val set does not need shuffling
-            val_sampler = SequentialSampler(val_stack_dataset)
             val_loader = DataLoader(
-                val_stack_dataset,
-                sampler=BatchSampler(
-                    val_sampler, batch_size=self.batch_size, drop_last=False
-                ),
+                val_dataset,
                 num_workers=self.n_data_workers,
                 persistent_workers=bool(self.n_data_workers),
-                batch_size=None,
+                batch_size=self.batch_size,
             )
         else:
             print("Skipping validation as val_split_p=0")
@@ -335,12 +328,10 @@ class Decollider(BaseMultichannelDenoiser):
                 # Validation phase (only if val_loader is not None)
                 val_losses = {}
                 if val_loader:
-                    assert noise_val_dataset is not None
-                    noise_val_dataset.generator.manual_seed(self.val_noise_random_seed)
                     self.eval()
                     val_losses = {}
                     with torch.no_grad():
-                        for (waveform_batch, channels_batch), noise_batch in val_loader:
+                        for waveform_batch, channels_batch, noise_batch in val_loader:
                             waveform_batch = waveform_batch.to(self.device)
                             channels_batch = channels_batch.to(self.device)
                             noise_batch = noise_batch.to(self.device)
