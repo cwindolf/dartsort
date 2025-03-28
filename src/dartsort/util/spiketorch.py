@@ -16,6 +16,15 @@ _1 = torch.tensor(1.0)
 _0 = torch.tensor(100)
 
 
+def spawn_torch_rg(seed: int | np.random.Generator = 0):
+    nprg = np.random.default_rng(seed)
+    seeder = nprg.spawn(1)[0]
+    seed = int.from_bytes(seeder.bytes(8))
+    generator = torch.Generator()
+    generator.manual_seed(seed)
+    return generator
+
+
 def ll_via_inv_quad(cov, y):
     inv_quad, logdet = linear_operator.inv_quad_logdet(
         cov, y.T, logdet=True, reduce_inv_quad=False

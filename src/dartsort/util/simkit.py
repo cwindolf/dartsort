@@ -9,18 +9,7 @@ from dartsort.templates.templates import TemplateData
 
 from .noise_util import StationaryFactorizedNoise, WhiteNoise
 from .data_util import DARTsortSorting
-
-
-# -- core utils
-
-
-def spawn_torch_rg(seed: int | np.random.Generator = 0):
-    nprg = np.random.default_rng(seed)
-    seeder = nprg.spawn(1)[0]
-    seed = int.from_bytes(seeder.bytes(8))
-    generator = torch.Generator()
-    generator.manual_seed(seed)
-    return generator
+from .spiketorch import spawn_torch_rg
 
 
 # -- spike train sims
