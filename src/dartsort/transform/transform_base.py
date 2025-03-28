@@ -27,10 +27,10 @@ class BaseWaveformModule(torch.nn.Module):
     def fit(self, waveforms, max_channels, recording=None):
         pass
 
-    def needs_fit(self):
+    def needs_fit(self) -> bool:
         return False
 
-    def needs_precompute(self):
+    def needs_precompute(self) -> bool:
         return False
 
     def precompute(self):
