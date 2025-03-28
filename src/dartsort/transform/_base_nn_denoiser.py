@@ -19,11 +19,12 @@ class BaseMultichannelDenoiser(BaseWaveformDenoiser):
         name_prefix="",
         batch_size=32,
         learning_rate=1e-3,
+        weight_decay=0,
         n_epochs=50,
         channelwise_dropout_p=0.0,
         with_conv_fullheight=False,
         pretrained_path=None,
-        val_split_p=0.2,
+        val_split_p=0.0,
         min_epochs=10,
         earlystop_eps=None,
         random_seed=0,
@@ -46,6 +47,7 @@ class BaseMultichannelDenoiser(BaseWaveformDenoiser):
         self.with_conv_fullheight = with_conv_fullheight
         self.lr_schedule = lr_schedule
         self.lr_schedule_kwargs = lr_schedule_kwargs
+        self.weight_decay = weight_decay
 
         self.model_channel_index_np = regularize_channel_index(
             geom=self.geom, channel_index=channel_index
@@ -75,6 +77,9 @@ class BaseMultichannelDenoiser(BaseWaveformDenoiser):
         self.spike_length_samples = spike_length_samples
         self.wf_dim = spike_length_samples * self.model_channel_index.shape[1]
         self.output_dim = self.wf_dim
+
+    def get_optimizer(self):
+        return torch.optim.Adam(self.parameters(), lr=self.learning_rate, weight_decay=self.weight_decay)
 
     @property
     def device(self):

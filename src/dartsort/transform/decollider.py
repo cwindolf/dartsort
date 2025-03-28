@@ -31,13 +31,14 @@ class Decollider(BaseMultichannelDenoiser):
         name_prefix="",
         batch_size=32,
         learning_rate=1e-3,
+        weight_decay=0,
         n_epochs=50,
-        channelwise_dropout_p=0.2,
+        channelwise_dropout_p=0.0,
         with_conv_fullheight=False,
         pretrained_path=None,
-        val_split_p=0.1,
-        min_epochs=5,
-        earlystop_eps=0.01,
+        val_split_p=0.0,
+        min_epochs=10,
+        earlystop_eps=None,
         random_seed=0,
         res_type="none",
         # my args. todo: port over common ones.
@@ -46,8 +47,8 @@ class Decollider(BaseMultichannelDenoiser):
         detach_amortizer=True,
         exz_estimator="n3n",
         inference_kind="amortized",
-        eyz_net_residual="none",
-        e_exz_y_net_residual="none",
+        eyz_res_type="none",
+        e_exz_y_res_type="none",
         emz_res_type="none",
         n_data_workers=4,
         val_noise_random_seed=0,
@@ -64,6 +65,7 @@ class Decollider(BaseMultichannelDenoiser):
             norm_kind=norm_kind,
             batch_size=batch_size,
             learning_rate=learning_rate,
+            weight_decay=weight_decay,
             n_epochs=n_epochs,
             channelwise_dropout_p=channelwise_dropout_p,
             with_conv_fullheight=with_conv_fullheight,
@@ -80,8 +82,8 @@ class Decollider(BaseMultichannelDenoiser):
         self.detach_amortizer = detach_amortizer
         self.exz_estimator = exz_estimator
         self.inference_kind = inference_kind
-        self.eyz_net_residual = eyz_net_residual
-        self.e_exz_y_net_residual = e_exz_y_net_residual
+        self.eyz_res_type = eyz_res_type
+        self.e_exz_y_res_type = e_exz_y_res_type
         self.emz_res_type = emz_res_type
         self.n_data_workers = n_data_workers
         self.val_noise_random_seed = val_noise_random_seed
@@ -89,13 +91,11 @@ class Decollider(BaseMultichannelDenoiser):
     def initialize_nets(self, spike_length_samples):
         self.initialize_shapes(spike_length_samples)
         if self.exz_estimator in ("n2n", "n3n"):
-            # self.eyz = self.get_mlp(residual=self.eyz_net_residual)
-            self.eyz = self.get_mlp(res_type=self.eyz_net_residual)
+            self.eyz = self.get_mlp(res_type=self.eyz_res_type)
         if self.exz_estimator in ("n3n", "2n2", "3n3"):
             self.emz = self.get_mlp(res_type=self.emz_res_type)
         if self.inference_kind == "amortized":
-            # self.inf_net = self.get_mlp(residual=self.e_exz_y_net_residual)
-            self.inf_net = self.get_mlp(res_type=self.e_exz_y_net_residual)
+            self.inf_net = self.get_mlp(res_type=self.e_exz_y_res_type)
         self.to(self.device)
 
     def fit(self, waveforms, max_channels, recording):
@@ -287,7 +287,7 @@ class Decollider(BaseMultichannelDenoiser):
             print("Skipping validation as val_split_p=0")
             val_loader = None
 
-        optimizer = torch.optim.Adam(self.parameters(), lr=self.learning_rate)
+        optimizer = self.get_optimizer()
 
         last_val_loss = None
         train_records = []
@@ -330,7 +330,7 @@ class Decollider(BaseMultichannelDenoiser):
                 train_losses = {
                     k: v / len(train_loader) for k, v in train_losses.items()
                 }
-                train_records.append(train_losses)
+                train_records.append({**train_losses})
 
                 # Validation phase (only if val_loader is not None)
                 val_losses = {}
@@ -365,11 +365,12 @@ class Decollider(BaseMultichannelDenoiser):
                     if (
                         self.earlystop_eps is not None
                         and last_val_loss is not None
-                        and abs(last_val_loss - val_loss) < self.earlystop_eps
+                        and val_loss - last_val_loss > self.earlystop_eps
                     ):
                         if epoch >= self.min_epochs:
                             print(f"Early stopping after {epoch} epochs.")
                             break
+                    last_val_loss = val_loss
 
                 # Print loss summary
                 loss_str = " | ".join(

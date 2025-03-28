@@ -17,12 +17,13 @@ class SupervisedDenoiser(BaseMultichannelDenoiser):
         self.exy = self.get_mlp(res_type=self.res_type)
         self.to(self.device)
 
-    def forward(self, waveforms, max_channels):
+    def forward(self, waveforms, max_channels, to_orig_channels=True):
         """Called only at inference time."""
         waveforms, masks = self.to_nn_channels(waveforms, max_channels)
         net_input = waveforms, masks.unsqueeze(1)
         pred = self.exy(net_input)
-        pred = self.to_orig_channels(pred, max_channels)
+        if to_orig_channels:
+            pred = self.to_orig_channels(pred, max_channels)
         return pred
 
     def fit(self, waveforms, gt_waveforms, max_channels):
@@ -62,11 +63,12 @@ class SupervisedDenoiser(BaseMultichannelDenoiser):
             train_dataset, batch_size=self.batch_size, shuffle=True
         )
 
-        optimizer = torch.optim.Adam(self.parameters(), lr=self.learning_rate)
+        optimizer = self.get_optimizer()
         scheduler = self.get_scheduler(optimizer)
 
         train_losses_per_epoch = []
         val_losses_per_epoch = []
+        last_val_loss = None
 
         with trange(self.n_epochs, desc="Epochs", unit="epoch") as pbar:
             for epoch in pbar:
@@ -82,7 +84,7 @@ class SupervisedDenoiser(BaseMultichannelDenoiser):
                     gt_waveform_batch, mask = self.to_nn_channels(
                         gt_waveform_batch, channels_batch
                     )
-                    pred = self.forward(waveform_batch, channels_batch)
+                    pred = self.forward(waveform_batch, channels_batch, to_orig_channels=False)
 
                     loss_dict = self.loss(mask, gt_waveform_batch, pred)
                     loss = sum(loss_dict.values())
@@ -94,11 +96,11 @@ class SupervisedDenoiser(BaseMultichannelDenoiser):
                 avg_train_loss = train_loss_sum / len(train_loader)
                 train_losses_per_epoch.append(avg_train_loss)
 
-                self.eval()
-                avg_val_loss = val_loss_sum = 0.0
+                avg_val_loss = None
                 if val_size:
                     assert val_loader is not None
                     self.eval()
+                    val_loss_sum = 0.0
                     with torch.no_grad():
                         for (
                             waveform_batch,
@@ -112,7 +114,7 @@ class SupervisedDenoiser(BaseMultichannelDenoiser):
                             gt_waveform_batch, mask = self.to_nn_channels(
                                 gt_waveform_batch, channels_batch
                             )
-                            pred = self.forward(waveform_batch, channels_batch)
+                            pred = self.forward(waveform_batch, channels_batch, to_orig_channels=False)
 
                             loss_dict = self.loss(mask, gt_waveform_batch, pred)
                             loss = sum(loss_dict.values())
@@ -121,9 +123,19 @@ class SupervisedDenoiser(BaseMultichannelDenoiser):
                     avg_val_loss = val_loss_sum / len(val_loader)
                     val_losses_per_epoch.append(avg_val_loss)
 
-                loss_str = (
-                    f"Train Loss: {avg_train_loss:.3f} | Val Loss: {avg_val_loss:.3f}"
-                )
+                    if (
+                        self.earlystop_eps is not None
+                        and last_val_loss is not None
+                        and avg_val_loss - last_val_loss > self.earlystop_eps
+                    ):
+                        if epoch >= self.min_epochs:
+                            print(f"Early stopping after {epoch} epochs.")
+                            break
+                    last_val_loss = avg_val_loss
+
+                loss_str = f"Train loss: {avg_train_loss:3g}"
+                if val_size:
+                    loss_str += f" | Val loss: {avg_val_loss:3g}"
                 pbar.set_description(f"Epochs [{loss_str}]")
 
                 if scheduler is not None:
