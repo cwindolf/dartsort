@@ -409,7 +409,7 @@ class SpikeMixtureModel(torch.nn.Module):
         assert self.with_noise_unit
 
         assert self.log_proportions is not None
-        keep_mask = self.log_proportions[ids].isfinite()
+        keep_mask = self.log_proportions[ids].isfinite().cpu()
         (keep_ids,) = keep_mask.nonzero(as_tuple=True)
         ids = ids[keep_ids]
         keep_mask_nonoise = torch.concatenate(
@@ -994,9 +994,9 @@ class SpikeMixtureModel(torch.nn.Module):
                 units=[self.get(i) for i in label_ids],
                 mean_only=True,
             )
-            m = means.view(len(ids), -1)
-            blank = ids[torch.logical_not(m.isfinite().all(dim=1))]
-            keep[blank] = False
+            infs = torch.logical_not(means.view(len(ids), -1).isfinite().all(dim=1))
+            infs = ids[infs.to(ids.device)]
+            keep[infs] = False
         self._stack = None
 
         if logger.isEnabledFor(DARTSORTVERBOSE):
