@@ -7,8 +7,12 @@ import torch
 
 from dartsort.templates.templates import TemplateData
 
+from dredge import motion_util
+from tqdm.auto import tqdm
+
 from .noise_util import StationaryFactorizedNoise, WhiteNoise
 from .data_util import DARTsortSorting
+from .drift_util import registered_geometry
 
 
 # -- core utils
@@ -136,6 +140,27 @@ def simulate_sorting(
     return sorting
 
 
+# -- temporal utils
+
+
+def upsample_singlechan(singlechan_templates, time_domain, temporal_jitter=1):
+    if temporal_jitter == 1:
+        return singlechan_templates[:, None]
+
+    n, t = singlechan_templates.shape
+    erp = CubicSpline(time_domain, singlechan_templates, axis=-1)
+    dt_ms = np.diff(time_domain).mean()
+    t_up = np.stack(
+        [time_domain + dt_ms * (j / temporal_jitter) for j in range(temporal_jitter)],
+        axis=1,
+    )
+    t_up = t_up.ravel()
+    erp_y_up = erp(t_up)
+    erp_y_up = erp_y_up.reshape(n, t, temporal_jitter)
+    singlechan_templates_up = erp_y_up.transpose(0, 2, 1)
+    return singlechan_templates_up
+
+
 # -- spatial utils
 
 
@@ -162,6 +187,19 @@ def generate_geom(
 def rbf_kernel(geom, bandwidth=35.0):
     d = cdist(geom, geom, metric="sqeuclidean")
     return np.exp(-d / (2 * bandwidth))
+
+
+def singlechan_to_probe(pos, alpha, waveforms, geom3, decay_model="squared"):
+    dtype = waveforms.dtype
+    if decay_model == "pointsource":
+        amp = alpha / cdist(pos, geom3).astype(dtype)
+    elif decay_model == "squared":
+        amp = alpha * (cdist(pos, geom3).astype(dtype) ** -2)
+    else:
+        assert False
+    n_dims_expand = waveforms.ndim - 1
+    templates = waveforms[..., :, None] * amp[..., *([None] * n_dims_expand), :]
+    return templates
 
 
 # -- template sims
@@ -306,13 +344,9 @@ class PointSource3ExpSimulator:
     def simulate_template(self, size=None):
         pos, alpha = self.simulate_location(size=size)
         t, waveforms = self.simulate_singlechan(size=size)
-        if self.decay_model == "pointsource":
-            amp = alpha / cdist(pos, self.geom3).astype(self.dtype)
-        elif self.decay_model == "squared":
-            amp = alpha * (cdist(pos, self.geom3).astype(self.dtype) ** -2)
-        else:
-            assert False
-        templates = waveforms[..., :, None] * amp[..., None, :]
+        templates = singlechan_to_probe(
+            pos, alpha, waveforms, self.geom3, decay_model=self.decay_model
+        )
         if size is None:
             assert templates.shape[0] == 1
             templates = templates[0]
@@ -327,40 +361,149 @@ class StaticSimulatedRecording:
         self,
         template_simulator,
         noise,
-        firing_rates,
-        jitter=1,
+        n_units,
+        duration_samples,
+        min_fr_hz=1.0,
+        max_fr_hz=10.0,
+        drift_speed=None,
+        temporal_jitter=1,
+        amplitude_jitter=0.0,
         seed: int | np.random.Generator = 0,
     ):
+        self.n_units = n_units
+        self.duration_samples = duration_samples
         self.template_simulator = template_simulator
         self.geom = template_simulator.geom
         self.noise = noise
-        self.firing_rates = np.asarray(firing_rates)
+
         self.rg = np.random.default_rng(seed)
         self.torch_rg = spawn_torch_rg(self.rg)
 
-        self.n_units = len(self.firing_rates)
-        self.templates = self.template_simulator.simulate_template(size=self.n_units)
-        self.jitter = jitter
-        self.templates_up = self.templates[:, None]
-        if jitter > 1:
-            n, t, c = self.templates.shape
-            erp_y = self.templates.transpose(0, 2, 1).reshape(n * c, t)
-            x = self.template_simulator.time_domain_ms()
-            erp = CubicSpline(x, erp_y, axis=-1)
-            dt_ms = np.diff(x).mean()
-            t_up = np.stack([x + dt_ms * (j / jitter) for j in range(jitter)], axis=1)
-            t_up = t_up.ravel()
-            erp_y_up = erp(t_up)
-            erp_y_up = erp_y_up.reshape(n, c, t, jitter)
-            self.templates_up = erp_y_up.transpose(0, 3, 2, 1)
+        self.amplitude_jitter = amplitude_jitter
+        self.temporal_jitter = temporal_jitter
+        self.min_fr_hz = min_fr_hz
+        self.max_fr_hz = max_fr_hz
+        self.drift_speed = drift_speed
 
-    @property
+        # -- deterministic stuff
+        pos, alpha = template_simulator.simulate_location(size=n_units)
+        self.template_pos = pos
+        self.template_alpha = alpha
+        _, self.singlechan_templates = template_simulator.simulate_singlechan(
+            size=n_units
+        )
+        # n, temporal_jitter, t
+        self.singlechan_templates_up = upsample_singlechan(
+            self.singlechan_templates,
+            self.template_simulator.time_domain_ms(),
+            temporal_jitter=temporal_jitter,
+        )
+
+        # -- random stuff
+        # simulate spike trains
+        self.firing_rates = self.rg.uniform(min_fr_hz, max_fr_hz, size=n_units)
+        self.sorting = simulate_sorting(
+            n_units,
+            duration_samples,
+            firing_rates=self.firing_rates,
+            rg=self.rg,
+            nbefore=self.template_simulator.trough_offset_samples(),
+            spike_length_samples=self.template_simulator.spike_length_samples(),
+            sampling_frequency=self.template_simulator.fs,
+        )
+        self.n_spikes = self.sorting.count_total_num_spikes()
+
+        if amplitude_jitter:
+            alpha = 1 / amplitude_jitter**2
+            theta = amplitude_jitter**2
+            self.scalings = self.rg.gamma(shape=alpha, scale=theta, size=self.n_spikes)
+        else:
+            self.scalings = np.ones(1)
+            self.scalings = np.broadcast_to(self.scalings, (self.n_spikes,))
+
+        if temporal_jitter > 1:
+            self.jitter_ix = self.rg.integers(temporal_jitter, size=self.n_spikes)
+        else:
+            self.jitter_ix = np.ones(1, dtype=int)
+            self.jitter_ix = np.broadcast_to(self.jitter_ix, (self.n_spikes,))
+
+    def drift(self, t_samples):
+        if not self.drift_speed:
+            return np.zeros_like(t_samples)
+        t_center = self.duration_samples / 2
+        dt = (t_samples - t_center) / self.template_simulator.fs
+        return dt * self.drift_speed
+
+    def motion_estimate(self):
+        if not self.drift_speed:
+            return None
+        duration_s = np.ceil(self.duration_samples / self.template_simulator.fs)
+        t = np.arange(duration_s)
+        time_bin_centers = t + 0.5
+        tbc_samples = time_bin_centers * self.template_simulator.fs
+        displacement = self.drift(tbc_samples)
+        return motion_util.get_motion_estimate(
+            displacement=displacement, time_bin_centers_s=time_bin_centers
+        )
+
+    def registered_geom(self):
+        me = self.motion_estimate()
+        geom = self.template_simulator.geom
+        rgeom = registered_geometry(geom, motion_est=me)
+        matches = np.square(geom[None] - rgeom[:, None]).sum(2).argmin(1)
+        return rgeom, matches
+
+    def templates(self, t_samples=None, up=False):
+        if t_samples is None:
+            drift = 0
+            pos = self.template_pos
+        else:
+            drift = self.drift(t_samples)
+            pos = self.template_pos + [0, drift, 0]
+
+        templates = singlechan_to_probe(
+            pos,
+            self.template_alpha,
+            self.singlechan_templates_up if up else self.singlechan_templates,
+            self.template_simulator.geom3,
+            decay_model=self.template_simulator.decay_model,
+        )
+        if up:
+            assert templates.shape == (
+                self.n_units,
+                self.temporal_jitter,
+                self.template_simulator.spike_length_samples(),
+                len(self.template_simulator.geom),
+            )
+        else:
+            assert templates.shape == (
+                self.n_units,
+                self.template_simulator.spike_length_samples(),
+                len(self.template_simulator.geom),
+            )
+
+        return templates
+
     def template_data(self):
+        if not self.drift_speed:
+            return TemplateData(
+                templates=self.templates(),
+                unit_ids=np.arange(self.n_units),
+                spike_counts=np.ones(self.n_units),
+                registered_geom=self.geom,
+                trough_offset_samples=self.template_simulator.trough_offset_samples(),
+                spike_length_samples=self.template_simulator.spike_length_samples(),
+            )
+
+        rgeom, matches = self.registered_geom()
+        templates = self.templates()
+        rtemplates = np.zeros((len(rgeom), *templates.shape[1:]), dtype=templates.dtype)
+        rtemplates[:, :, matches] = templates
         return TemplateData(
-            templates=self.templates,
-            unit_ids=np.arange(len(self.templates)),
-            spike_counts=np.ones(len(self.templates)),
-            registered_geom=self.geom,
+            templates=rtemplates,
+            unit_ids=np.arange(self.n_units),
+            spike_counts=np.ones(self.n_units),
+            registered_geom=rgeom,
             trough_offset_samples=self.template_simulator.trough_offset_samples(),
             spike_length_samples=self.template_simulator.spike_length_samples(),
         )
@@ -378,43 +521,46 @@ class StaticSimulatedRecording:
             extra_features=dict(times_seconds=times / self.template_simulator.fs),
         )
 
-    def simulate(self, t_samples, batch_size=1024):
+    def simulate(self):
         """
         Returns
         -------
         recording : NumpyRecording
         sorting : NumpySorting
         """
-        x = self.noise.simulate(size=1, t=t_samples, generator=self.torch_rg)
-        assert x.shape == (1, t_samples, len(self.geom))
-        x = x[0].numpy(force=True).astype(self.templates.dtype)
-
-        sorting = simulate_sorting(
-            self.n_units,
-            t_samples,
-            firing_rates=self.firing_rates,
-            rg=self.rg,
-            nbefore=self.template_simulator.trough_offset_samples(),
-            spike_length_samples=self.template_simulator.spike_length_samples(),
-            sampling_frequency=self.template_simulator.fs,
+        print("Simulate noise...")
+        x = self.noise.simulate(
+            size=1, t=self.duration_samples, generator=self.torch_rg
         )
+        assert x.shape == (1, self.duration_samples, len(self.geom))
+        x = x[0].numpy(force=True).astype(self.singlechan_templates.dtype)
 
         t_rel_ix = np.arange(self.template_simulator.spike_length_samples())
         t_rel_ix -= self.template_simulator.trough_offset_samples()
         chan_ix = np.arange(len(self.geom))
 
-        sv = sorting.to_spike_vector()
+        sv = self.sorting.to_spike_vector()
         times = sv["sample_index"]
         labels = sv["unit_index"]
-        for bs in range(0, len(times), batch_size):
-            be = bs + batch_size
-            bt = times[bs:be]
-            bl = labels[bs:be]
-            jitter_ix = self.rg.integers(0, high=self.jitter, size=bl.shape)
+
+        chunks = (times // self.template_simulator.fs).astype(np.int32)
+        the_chunks = np.unique(chunks)
+
+        for chunk in tqdm(the_chunks, "Adding templates..."):
+            batch = np.flatnonzero(chunks == chunk)
+            bt = times[batch]
+            bl = labels[batch]
+            bjitter = self.jitter_ix[batch]
             tix = bt[:, None, None] + t_rel_ix[None, :, None]
-            np.add.at(x, (tix, chan_ix[None, None]), self.templates_up[bl, jitter_ix])
+
+            temps = self.templates(
+                t_samples=(chunk + 0.5) * self.template_simulator.fs, up=True
+            )
+
+            btemps = self.scalings[batch, None, None] * temps[bl, bjitter]
+            np.add.at(x, (tix, chan_ix[None, None]), btemps)
 
         recording = NumpyRecording(x, sampling_frequency=self.template_simulator.fs)
         recording.set_dummy_probe_from_locations(self.geom)
 
-        return recording, sorting
+        return recording

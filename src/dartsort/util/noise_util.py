@@ -164,6 +164,10 @@ class StationaryFactorizedNoise(torch.nn.Module):
         self.block_size = block_size
         self.t = t
 
+    def spatial_cov(self):
+        rt = self.spatial_std * self.vt_spatial.T
+        return rt @ rt.T
+
     def whiten(self, snippet):
         wsnip = snippet @ (self.vt_spatial / self.spatial_std[:, None])
         wsnip = spiketorch.single_inv_oaconv1d(
