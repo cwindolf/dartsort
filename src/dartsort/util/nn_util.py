@@ -83,6 +83,28 @@ class ConcatResidualBlock(nn.Module):
         return projected
 
 
+class LinearResidualBlock(nn.Module):
+    def __init__(self, input_dim, hidden_dim, norm_kind=None):
+        super().__init__()
+        self.input_dim = input_dim
+        self.hidden_dim = hidden_dim
+        self.norm_kind = norm_kind
+
+        self.linear1 = nn.Linear(input_dim, hidden_dim)
+        self.linear2 = nn.Linear(hidden_dim, input_dim)
+        self.norm = get_norm(hidden_dim, norm_kind)
+
+        self.relu = nn.ReLU()
+
+    def forward(self, x):
+        out = self.linear1(x)
+        if self.norm is not None:
+            out = self.norm(out)
+        out = self.relu(out)
+        out = self.linear2(out)
+        return out + x
+
+
 def get_mlp(
     input_dim,
     hidden_dims,
@@ -111,6 +133,14 @@ def get_mlp(
                 layers.append(AttentionBlock(outd, num_heads=num_heads))
         final_dim = hidden_dims[-1] if hidden_dims else input_dim
         layers.append(nn.Linear(final_dim, output_dim))
+
+    elif res_type == "blocks_linear":
+        assert len(hidden_dims) > 1
+        compression_dim = hidden_dims[0]
+        layers.append(nn.Linear(input_dim, compression_dim))
+        for hd in hidden_dims[1:]:
+            layers.append(LinearResidualBlock(compression_dim, hd, norm_kind=norm_kind))
+        layers.append(nn.Linear(compression_dim, output_dim))
 
     elif res_type in ("none", "outer"):
         # res_type == "none" is handled in get_waveform_mlp
