@@ -167,8 +167,9 @@ def subsample_waveforms(
     voltages_dataset_name="collisioncleaned_voltages",
     waveforms_dataset_name="collisioncleaned_waveforms",
     fit_max_reweighting=20.0,
+    log_voltages=True,
+    replace=True,
 ):
-    from ..cluster.density import get_smoothed_densities
 
     random_state = np.random.default_rng(random_state)
 
@@ -176,26 +177,24 @@ def subsample_waveforms(
         channels = h5["channels"][:]
         n_wf = channels.size
         if n_wf > n_waveforms_fit:
-            if fit_sampling == "random":
-                choices = random_state.choice(n_wf, size=n_waveforms_fit, replace=False)
-            elif fit_sampling == "amp_reweighted":
-                volts = h5[voltages_dataset_name][:]
-                sigma = 1.06 * volts.std() * np.power(len(volts), -0.2)
-                sample_p = get_smoothed_densities(volts[:, None], sigmas=sigma)
-                sample_p = sample_p.mean() / sample_p
-                sample_p = sample_p.clip(
-                    1.0 / fit_max_reweighting,
-                    fit_max_reweighting,
-                )
-                sample_p /= sample_p.sum()
-                choices = random_state.choice(
-                    n_wf, p=sample_p, size=n_waveforms_fit, replace=False
-                )
+            sample_p = fit_reweighting(
+                h5=h5,
+                log_voltages=log_voltages,
+                fit_sampling=fit_sampling,
+                fit_max_reweighting=fit_max_reweighting,
+                voltages_dataset_name=voltages_dataset_name,
+            )
+            choices = random_state.choice(
+                n_wf, p=sample_p, size=n_waveforms_fit, replace=replace
+            )
+            if not replace:
+                choices.sort()
+                channels = channels[choices]
+                waveforms = batched_h5_read(h5[waveforms_dataset_name], choices)
             else:
-                assert False
-            choices.sort()
-            channels = channels[choices]
-            waveforms = batched_h5_read(h5[waveforms_dataset_name], choices)
+                uchoices, ichoices = np.unique(choices, return_inverse=True)
+                channels = channels[uchoices][ichoices]
+                waveforms = batched_h5_read(h5[waveforms_dataset_name], uchoices)[ichoices]
         else:
             waveforms = h5[waveforms_dataset_name][:]
 
@@ -203,3 +202,40 @@ def subsample_waveforms(
     channels = torch.from_numpy(channels)
 
     return channels, waveforms
+
+
+def fit_reweighting(
+    voltages=None,
+    h5=None,
+    hdf5_path=None,
+    log_voltages=True,
+    fit_sampling="random",
+    fit_max_reweighting=20.0,
+    voltages_dataset_name="voltages",
+):
+    if fit_sampling == "random":
+        return None
+    assert fit_sampling == "amp_reweighted"
+
+    if voltages is None:
+        if h5 is not None:
+            voltages = h5[voltages_dataset_name][:]
+        elif hdf5_path is not None:
+            with h5py.File(hdf5_path) as h5:
+                voltages = h5[voltages_dataset_name][:]
+        else:
+            assert False
+
+    from ..cluster.density import get_smoothed_densities
+    if log_voltages:
+        sign = voltages / np.abs(voltages)
+        voltages = sign * np.log(np.abs(voltages))
+    sigma = 1.06 * voltages.std() * np.power(len(voltages), -0.2)
+    dens = get_smoothed_densities(voltages[:, None], sigmas=sigma)
+    sample_p = dens.mean() / dens
+    sample_p = sample_p.clip(
+        1.0 / fit_max_reweighting, fit_max_reweighting
+    )
+    sample_p = sample_p.astype(float)  # ensure double before normalizing
+    sample_p /= sample_p.sum()
+    return sample_p
