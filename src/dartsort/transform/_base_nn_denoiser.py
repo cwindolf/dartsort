@@ -18,14 +18,14 @@ class BaseMultichannelDenoiser(BaseWaveformDenoiser):
         self,
         channel_index,
         geom,
-        hidden_dims=(256, 256, 256),
-        norm_kind="layernorm",
+        hidden_dims=(1024, 1024),
+        norm_kind="none",
         name=None,
         name_prefix="",
-        batch_size=32,
-        learning_rate=1e-3,
-        weight_decay=0,
-        n_epochs=50,
+        batch_size=256,
+        learning_rate=2.5e-4,
+        weight_decay=8e-5,
+        n_epochs=20,
         channelwise_dropout_p=0.0,
         with_conv_fullheight=False,
         pretrained_path=None,
@@ -36,6 +36,9 @@ class BaseMultichannelDenoiser(BaseWaveformDenoiser):
         res_type="none",
         lr_schedule=None,
         lr_schedule_kwargs=None,
+        inference_batch_size=1024,
+        optimizer=None,
+        optimizer_kwargs=None,
     ):
         assert pretrained_path is None, "Need to implement loading."
         super().__init__(
@@ -53,6 +56,8 @@ class BaseMultichannelDenoiser(BaseWaveformDenoiser):
         self.lr_schedule = lr_schedule
         self.lr_schedule_kwargs = lr_schedule_kwargs
         self.weight_decay = weight_decay
+        self.optimizer = optimizer
+        self.optimizer_kwargs = optimizer_kwargs
 
         self.model_channel_index_np = regularize_channel_index(
             geom=self.geom, channel_index=channel_index
@@ -76,6 +81,22 @@ class BaseMultichannelDenoiser(BaseWaveformDenoiser):
         self.rg = np.random.default_rng(random_seed)
         self.generator = spawn_torch_rg(self.rg)
         self.res_type = res_type
+        self.inference_batch_size = inference_batch_size
+
+    def forward(self, waveforms, max_channels):
+        out = torch.empty_like(waveforms)
+        odev = waveforms.device
+        idev = self.device
+
+        for bs in range(0, len(waveforms), self.inference_batch_size):
+            be = min(bs + self.inference_batch_size, len(waveforms))
+            pred = self.forward_unbatched(
+                waveforms[bs:be].to(idev),
+                max_channels[bs:be].to(idev)
+            )
+            out[bs:be] = pred.to(odev)
+
+        return out
 
     def initialize_shapes(self, spike_length_samples):
         logger.dartsortdebug(f'Initialize {self.__class__.__name__} with {spike_length_samples=}.')
@@ -85,7 +106,13 @@ class BaseMultichannelDenoiser(BaseWaveformDenoiser):
         self.output_dim = self.wf_dim
 
     def get_optimizer(self):
-        return torch.optim.Adam(self.parameters(), lr=self.learning_rate, weight_decay=self.weight_decay)
+        opt = self.optimizer
+        okw = self.optimizer_kwargs
+        if opt is None:
+            opt = torch.optim.AdamW
+        if okw is None:
+            okw = {}
+        return opt(self.parameters(), lr=self.learning_rate, weight_decay=self.weight_decay, **okw)
 
     @property
     def device(self):
@@ -94,7 +121,9 @@ class BaseMultichannelDenoiser(BaseWaveformDenoiser):
     def needs_fit(self):
         return self._needs_fit
 
-    def get_mlp(self, res_type="none"):
+    def get_mlp(self, res_type="none", hidden_dims=None):
+        if hidden_dims is None:
+            hidden_dims = self.hidden_dims
         return nn_util.get_waveform_mlp(
             self.spike_length_samples,
             self.model_channel_index.shape[1],
@@ -115,7 +144,7 @@ class BaseMultichannelDenoiser(BaseWaveformDenoiser):
 
         sched_kw = self.lr_schedule_kwargs or {}
         if issubclass(self.lr_schedule, torch.optim.lr_scheduler.LRScheduler):
-            return self.lr_schedule(optimizer, **sched_kw)
+            return self.lr_schedule(optimizer, T_max=self.n_epochs, **sched_kw)
 
         assert False
 

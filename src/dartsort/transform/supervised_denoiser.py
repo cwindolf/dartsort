@@ -17,7 +17,7 @@ class SupervisedDenoiser(BaseMultichannelDenoiser):
         self.exy = self.get_mlp(res_type=self.res_type)
         self.to(self.device)
 
-    def forward(self, waveforms, max_channels, to_orig_channels=True):
+    def forward_unbatched(self, waveforms, max_channels, to_orig_channels=True):
         """Called only at inference time."""
         waveforms, masks = self.to_nn_channels(waveforms, max_channels)
         net_input = waveforms, masks.unsqueeze(1)
@@ -84,7 +84,7 @@ class SupervisedDenoiser(BaseMultichannelDenoiser):
                     gt_waveform_batch, mask = self.to_nn_channels(
                         gt_waveform_batch, channels_batch
                     )
-                    pred = self.forward(waveform_batch, channels_batch, to_orig_channels=False)
+                    pred = self.forward_unbatched(waveform_batch, channels_batch, to_orig_channels=False)
 
                     loss_dict = self.loss(mask, gt_waveform_batch, pred)
                     loss = sum(loss_dict.values())
@@ -114,7 +114,7 @@ class SupervisedDenoiser(BaseMultichannelDenoiser):
                             gt_waveform_batch, mask = self.to_nn_channels(
                                 gt_waveform_batch, channels_batch
                             )
-                            pred = self.forward(waveform_batch, channels_batch, to_orig_channels=False)
+                            pred = self.forward_unbatched(waveform_batch, channels_batch, to_orig_channels=False)
 
                             loss_dict = self.loss(mask, gt_waveform_batch, pred)
                             loss = sum(loss_dict.values())
@@ -139,7 +139,7 @@ class SupervisedDenoiser(BaseMultichannelDenoiser):
                 pbar.set_description(f"Epochs [{loss_str}]")
 
                 if scheduler is not None:
-                    scheduler.step(epoch + 1)
+                    scheduler.step()
 
         return dict(
             train_losses=train_losses_per_epoch,
