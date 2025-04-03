@@ -476,6 +476,7 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
             fit_subsampling_random_state=matching_config.fit_subsampling_random_state,
             n_waveforms_fit=matching_config.n_waveforms_fit,
             fit_sampling=matching_config.fit_sampling,
+            fit_max_reweighting=matching_config.fit_max_reweighting,
             max_iter=matching_config.max_iter,
         )
 
@@ -487,6 +488,7 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
         right_margin=0,
         return_residual=False,
         return_conv=False,
+        return_waveforms=True,
     ):
         # get current template set
         chunk_center_samples = chunk_start_samples + self.chunk_length_samples // 2

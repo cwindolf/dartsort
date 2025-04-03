@@ -101,6 +101,7 @@ class GrabAndFeaturize(BasePeeler):
         left_margin=0,
         right_margin=0,
         return_residual=False,
+        return_waveforms=True,
     ):
         assert not return_residual
 
@@ -119,16 +120,18 @@ class GrabAndFeaturize(BasePeeler):
         times_rel = self.times_samples[in_chunk] - chunk_left
         channels = self.channels[in_chunk]
 
-        waveforms = spiketorch.grab_spikes(
-            traces,
-            times_rel,
-            channels,
-            self.channel_index,
-            trough_offset=self.trough_offset_samples,
-            spike_length_samples=self.spike_length_samples,
-            already_padded=False,
-            pad_value=torch.nan,
-        )
+        waveforms = None
+        if return_waveforms:
+            waveforms = spiketorch.grab_spikes(
+                traces,
+                times_rel,
+                channels,
+                self.channel_index,
+                trough_offset=self.trough_offset_samples,
+                spike_length_samples=self.spike_length_samples,
+                already_padded=False,
+                pad_value=torch.nan,
+            )
 
         return dict(
             n_spikes=in_chunk.numel(),

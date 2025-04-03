@@ -1,6 +1,6 @@
 import tempfile
 from concurrent.futures import CancelledError
-from threading import local
+from threading import local, Lock
 from contextlib import contextmanager
 from pathlib import Path
 
@@ -16,6 +16,9 @@ from dartsort.util.data_util import SpikeDataset
 from dartsort.util.multiprocessing_util import pool_from_cfg
 from dartsort.util.py_util import delay_keyboard_interrupt
 from dartsort.util import job_util
+
+
+_lock = Lock()
 
 
 class BasePeeler(torch.nn.Module):
@@ -83,6 +86,8 @@ class BasePeeler(torch.nn.Module):
             self.fixed_output_data.append(
                 ("channel_index", self.channel_index.numpy(force=True).copy()),
             )
+
+        self._rgs = local()
 
     # -- main functions for users to call
     # in practice users will interact with the functions `subtract(...)` in
@@ -267,6 +272,7 @@ class BasePeeler(torch.nn.Module):
         left_margin=0,
         right_margin=0,
         return_residual=False,
+        return_waveforms=True,
     ):
         # subclasses should implement this method
 
@@ -327,7 +333,7 @@ class BasePeeler(torch.nn.Module):
     def featurize_collisioncleaned_waveforms(
         self, collisioncleaned_waveforms, max_channels
     ):
-        if self.featurization_pipeline is None:
+        if not self.featurization_pipeline:
             return {}
 
         waveforms, features = self.featurization_pipeline(
@@ -367,6 +373,7 @@ class BasePeeler(torch.nn.Module):
             left_margin=left_margin,
             right_margin=right_margin,
             return_residual=return_residual,
+            return_waveforms=not skip_features and self.featurization_pipeline,
         )
 
         if peel_result["n_spikes"] > 0 and not skip_features:
@@ -748,6 +755,24 @@ class BasePeeler(torch.nn.Module):
             output_h5.close()
             if save_residual:
                 residual_file.close()
+
+    # -- thread-local rngs. they're not thread safe, and locals can't be pickled
+
+    def __getstate__(self):
+        state = self.__dict__.copy()
+        del state['_rgs']
+        return state
+
+    def __setstate__(self, state):
+        self.__dict__.update(state)
+        self._rgs = local()
+
+    @property
+    def rg(self):
+        if not hasattr(self._rgs, "rg"):
+            with _lock:
+                self._rgs.rg = self.fit_subsampling_random_state.spawn(1)[0]
+        return self._rgs.rg
 
 
 # -- helper functions and objects for parallelism
