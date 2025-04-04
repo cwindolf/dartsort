@@ -36,8 +36,8 @@ class Decollider(BaseMultichannelDenoiser):
         name_prefix="",
         batch_size=256,
         learning_rate=2.5e-4,
-        weight_decay=8e-5,
-        n_epochs=20,
+        weight_decay=0.0,
+        n_epochs=10,
         channelwise_dropout_p=0.0,
         with_conv_fullheight=False,
         pretrained_path=None,
@@ -46,7 +46,7 @@ class Decollider(BaseMultichannelDenoiser):
         earlystop_eps=None,
         random_seed=0,
         res_type="none",
-        lr_schedule=None,
+        lr_schedule='CosineAnnealingLR',
         lr_schedule_kwargs=None,
         optimizer=None,
         optimizer_kwargs=None,
@@ -61,7 +61,10 @@ class Decollider(BaseMultichannelDenoiser):
         emz_res_type="none",
         n_data_workers=4,
         l4_alpha=0,
-        output_l1_alpha=0,
+        output_l1_alpha=5e-4,
+        cycle_loss_alpha=1.0,
+        separate_cycle_net=False,
+        detach_cycle_loss=False,
         val_noise_random_seed=0,
         inf_net_hidden_dims=None,
         eyz_net_hidden_dims=None,
@@ -110,6 +113,11 @@ class Decollider(BaseMultichannelDenoiser):
         self.eyz_net_hidden_dims = eyz_net_hidden_dims
         self.l4_alpha = l4_alpha
         self.output_l1_alpha = output_l1_alpha
+        self.cycle_loss_alpha = cycle_loss_alpha
+        self.separate_cycle_net = separate_cycle_net
+        self.detach_cycle_loss = detach_cycle_loss
+        if separate_cycle_net:
+            assert cycle_loss_alpha > 0
 
     def initialize_nets(self, spike_length_samples):
         if hasattr(self, 'inf_net'):
@@ -122,6 +130,10 @@ class Decollider(BaseMultichannelDenoiser):
             self.emz = self.get_mlp(res_type=self.emz_res_type)
         if self.inference_kind == "amortized":
             self.inf_net = self.get_mlp(res_type=self.e_exz_y_res_type, hidden_dims=self.inf_net_hidden_dims)
+        if self.separate_cycle_net:
+            self.den_net = self.get_mlp(res_type=self.e_exz_y_res_type, hidden_dims=self.inf_net_hidden_dims)
+        else:
+            self.den_net = self.inf_net
         self.to(self.device)
 
     def fit(self, waveforms, max_channels, recording, weights=None):
@@ -137,7 +149,7 @@ class Decollider(BaseMultichannelDenoiser):
         net_input = waveforms, masks.unsqueeze(1)
 
         if self.inference_kind == "amortized":
-            pred = self.inf_net(net_input)
+            pred = self.den_net(net_input)
         elif self.inference_kind == "raw":
             if hasattr(self, "emz"):
                 emz = self.emz(net_input)
@@ -198,12 +210,12 @@ class Decollider(BaseMultichannelDenoiser):
 
         return pred
 
-    def train_forward(self, y, m, mask):
+    def train_forward(self, y, m, ell, mask):
         z = y + m
 
         # predictions given z
         # TODO: variance given z and put it in the loss
-        exz = eyz = emz = e_exz_y = None
+        exz = eyz = emz = e_exz_y = cycle_output = None
         net_input = z, mask.unsqueeze(1)
         if self.exz_estimator == "n2n":
             eyz = self.eyz(net_input)
@@ -225,11 +237,29 @@ class Decollider(BaseMultichannelDenoiser):
         if self.inference_kind == "amortized":
             e_exz_y = self.inf_net((y, mask.unsqueeze(1)))
 
-        return exz, eyz, emz, e_exz_y
+        if self.cycle_loss_alpha:
+            cycle_targ = e_exz_y.detach() if self.detach_cycle_loss else e_exz_y
+            cycle_input = cycle_targ + ell
+            cycle_output = self.den_net((cycle_input, mask.unsqueeze(1)))
 
-    def loss(self, mask, waveforms, m, exz, eyz=None, emz=None, e_exz_y=None, l4_alpha=None, output_l1_alpha=None):
+        return dict(
+            exz=exz,
+            eyz=eyz,
+            emz=emz,
+            e_exz_y=e_exz_y,
+            cycle_output=cycle_output,
+        )
+
+    def loss(self, mask, waveforms, m, net_outputs, l4_alpha=None, output_l1_alpha=None):
         loss_dict = {}
         mask = mask.unsqueeze(1)
+
+        exz = net_outputs['exz']
+        eyz = net_outputs['eyz']
+        emz = net_outputs['emz']
+        e_exz_y = net_outputs['e_exz_y']
+        cycle_output = net_outputs['cycle_output']
+
         if eyz is not None:
             eyz_mask = mask * eyz
             loss_dict["eyz"] = F.mse_loss(eyz_mask, mask * waveforms)
@@ -252,6 +282,10 @@ class Decollider(BaseMultichannelDenoiser):
                 loss_dict["e_exz_y_l4"] = l4_alpha * ((to_amortize - e_exz_y).mul_(mask) ** 4).mean()
             if output_l1_alpha:
                 loss_dict["e_exz_y_l1"] = output_l1_alpha * am_mask.abs().mean()
+        if cycle_output is not None:
+            coef = 1 if self.separate_cycle_net else self.cycle_loss_alpha
+            cycle_targ = e_exz_y.detach() if self.detach_cycle_loss else e_exz_y
+            loss_dict["cycle"] = coef * F.mse_loss(mask * cycle_targ, mask * cycle_output)
         return loss_dict
 
     def get_losses(self, waveforms, channels, recording):
@@ -289,7 +323,11 @@ class Decollider(BaseMultichannelDenoiser):
                 )
                 m = noise_batch.to(waveform_batch)
                 mask = self.get_masks(channels_batch).to(waveform_batch)
-                exz, eyz, emz, e_exz_y = self.train_forward(waveform_batch, m, mask)
+                fres = self.train_forward(waveform_batch, m, mask)
+
+                eyz = fres['eyz']
+                emz = fres['emz']
+                e_exz_y = fres['e_exz_y']
 
                 mask = mask.unsqueeze(1)
                 if eyz is not None:
@@ -330,7 +368,17 @@ class Decollider(BaseMultichannelDenoiser):
             spike_length_samples=self.spike_length_samples,
             generator=spawn_torch_rg(self.rg),
         )
-        train_stack_dataset = StackDataset(train_dataset, noise_train_dataset)
+        if self.cycle_loss_alpha:
+            cycle_noise_dataset = SameChannelNoiseDataset(
+                recording,
+                train_channels.numpy(force=True),
+                self.model_channel_index_np,
+                spike_length_samples=self.spike_length_samples,
+                generator=spawn_torch_rg(self.rg),
+            )
+        else:
+            cycle_noise_dataset = NoneDataset(len(train_channels))
+        train_stack_dataset = StackDataset(train_dataset, noise_train_dataset, cycle_noise_dataset)
         if weights is None:
             train_sampler = RandomSampler(
                 train_stack_dataset, generator=spawn_torch_rg(self.rg)
@@ -388,10 +436,9 @@ class Decollider(BaseMultichannelDenoiser):
                 self.train()
                 train_losses = {}
                 examples_this_epoch = 0
-                for (waveform_batch, channels_batch), noise_batch in train_loader:
+                for (waveform_batch, channels_batch), noise_batch, cnoise_batch in train_loader:
                     waveform_batch = waveform_batch.to(self.device)
                     channels_batch = channels_batch.to(self.device)
-                    noise_batch = noise_batch.to(self.device)
                     waveform_batch = reindex(
                         channels_batch,
                         waveform_batch,
@@ -401,16 +448,16 @@ class Decollider(BaseMultichannelDenoiser):
 
                     optimizer.zero_grad()
                     m = noise_batch.to(waveform_batch)
+                    ell = None
+                    if cnoise_batch is not None:
+                        ell = cnoise_batch.to(waveform_batch)
                     mask = self.get_masks(channels_batch).to(waveform_batch)
-                    exz, eyz, emz, e_exz_y = self.train_forward(waveform_batch, m, mask)
+                    fres = self.train_forward(waveform_batch, m, ell, mask)
                     loss_dict = self.loss(
                         mask,
                         waveform_batch,
                         m,
-                        exz,
-                        eyz,
-                        emz,
-                        e_exz_y,
+                        fres,
                         l4_alpha=self.l4_alpha,
                         output_l1_alpha=self.output_l1_alpha,
                     )
@@ -531,6 +578,18 @@ def get_noise(
     noise_waveforms = noise_waveforms[inv_order]
 
     return torch.from_numpy(noise_waveforms)
+
+
+class NoneDataset(Dataset):
+    def __init__(self, n):
+        super().__init__()
+        self.n = n
+
+    def __len__(self):
+        return self.n
+
+    def __getitem__(self, index):
+        return None
 
 
 class SameChannelNoiseDataset(Dataset):
