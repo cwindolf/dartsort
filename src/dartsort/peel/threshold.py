@@ -247,6 +247,7 @@ def threshold_chunk(
             voltages=energies,
             waveforms=energies.view(-1, spike_length_samples, n_index),
         )
+
     orig_times_rel = times_rel
     orig_channels = channels
     keep, times_rel, channels = perturb_detections(
@@ -269,6 +270,9 @@ def threshold_chunk(
     valid = (orig_times_rel >= min_time) & (orig_times_rel < max_time)
     orig_times_rel = orig_times_rel[valid]
     times_rel = times_rel[valid]
+    channels = channels[valid]
+    orig_channels = orig_channels[valid]
+    voltages = traces[orig_times_rel, orig_channels]
     n_detect = times_rel.numel()
     if not n_detect:
         return dict(
@@ -276,11 +280,10 @@ def threshold_chunk(
             times_rel=times_rel,
             channels=channels,
             voltages=energies,
+            orig_times_rel=orig_times_rel,
+            orig_channels=orig_channels,
             waveforms=energies.view(-1, spike_length_samples, n_index),
         )
-    channels = channels[valid]
-    orig_channels = orig_channels[valid]
-    voltages = traces[orig_times_rel, orig_channels]
 
     if max_spikes_per_chunk is not None:
         if n_detect > max_spikes_per_chunk and not quiet:
