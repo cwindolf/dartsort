@@ -24,8 +24,8 @@ class BaseMultichannelDenoiser(BaseWaveformDenoiser):
         name_prefix="",
         batch_size=256,
         learning_rate=2.5e-4,
-        weight_decay=8e-5,
-        n_epochs=20,
+        weight_decay=1e-5,
+        n_epochs=10,
         channelwise_dropout_p=0.0,
         with_conv_fullheight=False,
         pretrained_path=None,
@@ -108,11 +108,26 @@ class BaseMultichannelDenoiser(BaseWaveformDenoiser):
     def get_optimizer(self):
         opt = self.optimizer
         okw = self.optimizer_kwargs
+        if isinstance(opt, str):
+            opt = getattr(torch.optim, opt)
         if opt is None:
             opt = torch.optim.AdamW
+        assert issubclass(opt, torch.optim.Optimizer)
         if okw is None:
             okw = {}
         return opt(self.parameters(), lr=self.learning_rate, weight_decay=self.weight_decay, **okw)
+
+    def get_scheduler(self, optimizer):
+        if self.lr_schedule in (None, "none"):
+            return None
+
+        lr_schedule = self.lr_schedule
+        if isinstance(lr_schedule, str):
+            lr_schedule = getattr(torch.optim.lr_scheduler, lr_schedule)
+
+        sched_kw = self.lr_schedule_kwargs or {}
+        assert issubclass(lr_schedule, torch.optim.lr_scheduler.LRScheduler)
+        return lr_schedule(optimizer, T_max=self.n_epochs, **sched_kw)
 
     @property
     def device(self):
@@ -137,16 +152,6 @@ class BaseMultichannelDenoiser(BaseWaveformDenoiser):
             final_conv_fullheight=self.with_conv_fullheight,
             res_type=res_type,
         )
-
-    def get_scheduler(self, optimizer):
-        if self.lr_schedule in (None, "none"):
-            return None
-
-        sched_kw = self.lr_schedule_kwargs or {}
-        if issubclass(self.lr_schedule, torch.optim.lr_scheduler.LRScheduler):
-            return self.lr_schedule(optimizer, T_max=self.n_epochs, **sched_kw)
-
-        assert False
 
     def to_nn_channels(self, waveforms, max_channels):
         waveforms = reindex(max_channels, waveforms, self.relative_index, pad_value=0.0)
