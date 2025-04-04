@@ -227,6 +227,8 @@ def fit_reweighting(
             assert False
 
     from ..cluster.density import get_smoothed_densities
+    if torch.is_tensor(voltages):
+        voltages = voltages.numpy(force=True)
     if log_voltages:
         sign = voltages / np.abs(voltages)
         voltages = sign * np.log(np.abs(voltages))
