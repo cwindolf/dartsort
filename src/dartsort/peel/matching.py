@@ -697,14 +697,13 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
         # extract collision-cleaned waveforms on small neighborhoods
         channels = waveforms = None
         if return_collisioncleaned_waveforms:
-            channels, waveforms = (
-                compressed_template_data.get_collisioncleaned_waveforms(
-                    residual_padded,
-                    peaks,
-                    self.channel_index,
-                    spike_length_samples=self.spike_length_samples,
-                )
+            cc = compressed_template_data.get_collisioncleaned_waveforms(
+                residual_padded,
+                peaks,
+                self.channel_index,
+                spike_length_samples=self.spike_length_samples,
             )
+            channels, waveforms = cc
 
         res = dict(
             n_spikes=peaks.n_spikes,

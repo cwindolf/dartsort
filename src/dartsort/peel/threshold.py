@@ -64,9 +64,7 @@ class ThresholdAndFeaturize(BasePeeler):
 
     def out_datasets(self):
         datasets = super().out_datasets()
-        datasets.append(
-            SpikeDataset(name="voltages", shape_per_spike=(), dtype=float)
-        )
+        datasets.append(SpikeDataset(name="voltages", shape_per_spike=(), dtype=float))
         return datasets
 
     def peel_chunk(
@@ -94,14 +92,14 @@ class ThresholdAndFeaturize(BasePeeler):
         )
 
         # get absolute times
-        times_samples = threshold_res['times_rel'] + chunk_start_samples
+        times_samples = threshold_res["times_rel"] + chunk_start_samples
 
         peel_result = dict(
-            n_spikes=threshold_res['n_spikes'],
+            n_spikes=threshold_res["n_spikes"],
             times_samples=times_samples,
-            channels=threshold_res['channels'],
-            voltages=threshold_res['voltages'],
-            collisioncleaned_waveforms=threshold_res['waveforms'],
+            channels=threshold_res["channels"],
+            voltages=threshold_res["voltages"],
+            collisioncleaned_waveforms=threshold_res["waveforms"],
         )
         return peel_result
 

@@ -1,14 +1,16 @@
+import warnings
+
 import numpy as np
+import probeinterface
 from spikeinterface.core import NumpySorting, NumpyRecording
 from scipy.spatial.distance import cdist
 from scipy.interpolate import CubicSpline
-import probeinterface
 import torch
+from tqdm.auto import tqdm
 
 from dartsort.templates.templates import TemplateData
 
 from dredge import motion_util
-from tqdm.auto import tqdm
 
 from .noise_util import StationaryFactorizedNoise, WhiteNoise
 from .data_util import DARTsortSorting
@@ -55,11 +57,11 @@ def refractory_poisson_spike_train(
     duration_s = duration_samples * seconds_per_sample
 
     # overestimate the number of spikes needed
-    mean_interval_s = 1.0 / rate_hz
-    estimated_spike_count = int((duration_s / mean_interval_s) * overestimation)
+    overest_count = int(duration_s * rate_hz * overestimation)
+    overest_count = max(10, overest_count)
 
     # generate interspike intervals
-    intervals = rg.exponential(scale=mean_interval_s, size=estimated_spike_count)
+    intervals = rg.exponential(scale=1.0 / rate_hz, size=overest_count)
     intervals += refractory_s
     intervals_samples = np.floor(intervals * sampling_frequency).astype(int)
 
@@ -103,38 +105,53 @@ def simulate_sorting(
     nbefore: int = 42,
     spike_length_samples: int = 128,
     sampling_frequency=30_000.0,
+    globally_refractory=False,
+    refractory_samples=40,
 ):
     rg = np.random.default_rng(rg)
 
     # Default firing rates drawn uniformly from 1-10Hz
     if firing_rates is not None:
-        assert (
-            firing_rates.shape[0] == num_units
-        ), "Number of firing rates must match number of units in templates."
+        assert firing_rates.shape[0] == num_units
     else:
         firing_rates = rg.uniform(1.0, 10.0, num_units)
 
-    spike_trains = [
-        refractory_poisson_spike_train(
-            firing_rates[i],
+    if not globally_refractory:
+        spike_trains = [
+            refractory_poisson_spike_train(
+                firing_rates[i],
+                n_samples,
+                trough_offset_samples=nbefore,
+                spike_length_samples=spike_length_samples,
+                seed=rg,
+                refractory_samples=refractory_samples,
+            )
+            for i in range(num_units)
+        ]
+        spike_times = np.concatenate(spike_trains)
+        spike_labels = np.repeat(
+            np.arange(num_units),
+            np.array([spike_trains[i].shape[0] for i in range(num_units)]),
+        )
+    else:
+        global_rate = np.sum(firing_rates)
+        spike_times = refractory_poisson_spike_train(
+            global_rate,
             n_samples,
             trough_offset_samples=nbefore,
             spike_length_samples=spike_length_samples,
             seed=rg,
+            refractory_samples=refractory_samples,
         )
-        for i in range(num_units)
-    ]
-    spike_train = np.concatenate(spike_trains)
-    spike_labels = np.repeat(
-        np.arange(num_units),
-        np.array([spike_trains[i].shape[0] for i in range(num_units)]),
-    )
+        unit_proportions = firing_rates / global_rate
+        spike_labels = rg.choice(num_units, p=unit_proportions, size=spike_times.size)
+
     # order = np.argsort(spike_train)
     # spike_train = spike_train[order]
     # spike_labels = spike_labels[order]
 
     sorting = NumpySorting.from_times_labels(
-        [spike_train], [spike_labels], sampling_frequency=sampling_frequency
+        [spike_times], [spike_labels], sampling_frequency=sampling_frequency
     )
 
     return sorting
@@ -368,6 +385,8 @@ class StaticSimulatedRecording:
         drift_speed=None,
         temporal_jitter=1,
         amplitude_jitter=0.0,
+        refractory_samples=40,
+        globally_refractory=False,
         seed: int | np.random.Generator = 0,
     ):
         self.n_units = n_units
@@ -410,8 +429,11 @@ class StaticSimulatedRecording:
             nbefore=self.template_simulator.trough_offset_samples(),
             spike_length_samples=self.template_simulator.spike_length_samples(),
             sampling_frequency=self.template_simulator.fs,
+            refractory_samples=refractory_samples,
+            globally_refractory=globally_refractory,
         )
         self.n_spikes = self.sorting.count_total_num_spikes()
+        self.maxchans = np.full((self.n_spikes), -1)  # populated during simulate
 
         if amplitude_jitter:
             alpha = 1 / amplitude_jitter**2
@@ -424,7 +446,7 @@ class StaticSimulatedRecording:
         if temporal_jitter > 1:
             self.jitter_ix = self.rg.integers(temporal_jitter, size=self.n_spikes)
         else:
-            self.jitter_ix = np.ones(1, dtype=int)
+            self.jitter_ix = np.zeros(1, dtype=int)
             self.jitter_ix = np.broadcast_to(self.jitter_ix, (self.n_spikes,))
 
     def drift(self, t_samples):
@@ -450,7 +472,7 @@ class StaticSimulatedRecording:
         me = self.motion_estimate()
         geom = self.template_simulator.geom
         rgeom = registered_geometry(geom, motion_est=me)
-        matches = np.square(geom[None] - rgeom[:, None]).sum(2).argmin(1)
+        matches = np.square(geom[None] - rgeom[:, None]).sum(2).argmin(0)
         return rgeom, matches
 
     def templates(self, t_samples=None, up=False):
@@ -497,8 +519,11 @@ class StaticSimulatedRecording:
 
         rgeom, matches = self.registered_geom()
         templates = self.templates()
-        rtemplates = np.zeros((len(rgeom), *templates.shape[1:]), dtype=templates.dtype)
+        rtemplates = np.zeros(
+            (*templates.shape[:-1], len(rgeom)), dtype=templates.dtype
+        )
         rtemplates[:, :, matches] = templates
+        pos = rgeom[np.ptp(rtemplates, axis=1).argmax(1), 1]
         return TemplateData(
             templates=rtemplates,
             unit_ids=np.arange(self.n_units),
@@ -506,18 +531,19 @@ class StaticSimulatedRecording:
             registered_geom=rgeom,
             trough_offset_samples=self.template_simulator.trough_offset_samples(),
             spike_length_samples=self.template_simulator.spike_length_samples(),
+            registered_template_depths_um=pos,
         )
 
-    def to_dartsort_sorting(self, sorting):
+    def to_dartsort_sorting(self, sorting=None):
+        if sorting is None:
+            sorting = self.sorting
         sv = sorting.to_spike_vector()
         times = sv["sample_index"]
         labels = sv["unit_index"]
-        maxchans = self.templates.ptp(1).argmax(1)
-        channels = maxchans[labels]
         return DARTsortSorting(
             times_samples=times,
             labels=labels,
-            channels=channels,
+            channels=self.maxchans,
             extra_features=dict(times_seconds=times / self.template_simulator.fs),
         )
 
@@ -530,7 +556,10 @@ class StaticSimulatedRecording:
         """
         print("Simulate noise...")
         x = self.noise.simulate(
-            size=1, t=self.duration_samples, generator=self.torch_rg
+            size=1,
+            t=self.duration_samples,
+            generator=self.torch_rg,
+            chunk_t=int(self.template_simulator.fs),
         )
         assert x.shape == (1, self.duration_samples, len(self.geom))
         x = x[0].numpy(force=True).astype(self.singlechan_templates.dtype)
@@ -558,6 +587,7 @@ class StaticSimulatedRecording:
             )
 
             btemps = self.scalings[batch, None, None] * temps[bl, bjitter]
+            self.maxchans[batch] = btemps.ptp(1).argmax(1)
             np.add.at(x, (tix, chan_ix[None, None]), btemps)
 
         recording = NumpyRecording(x, sampling_frequency=self.template_simulator.fs)

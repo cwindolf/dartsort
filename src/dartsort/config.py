@@ -122,7 +122,7 @@ class DARTsortUserConfig:
     # -- matching parameters
     amplitude_scaling_stddev: Annotated[float, Field(ge=0)] = 0.1
     amplitude_scaling_limit: Annotated[float, Field(ge=0)] = 1.0
-    temporal_upsamples: Annotated[int, Field(gt=1)] = 4
+    temporal_upsamples: Annotated[int, Field(ge=1)] = 4
 
     # -- motion estimation parameters
     do_motion_estimation: bool = argfield(
