@@ -91,15 +91,16 @@ class BaseMultichannelDenoiser(BaseWaveformDenoiser):
         for bs in range(0, len(waveforms), self.inference_batch_size):
             be = min(bs + self.inference_batch_size, len(waveforms))
             pred = self.forward_unbatched(
-                waveforms[bs:be].to(idev),
-                max_channels[bs:be].to(idev)
+                waveforms[bs:be].to(idev), max_channels[bs:be].to(idev)
             )
             out[bs:be] = pred.to(odev)
 
         return out
 
     def initialize_shapes(self, spike_length_samples):
-        logger.dartsortdebug(f'Initialize {self.__class__.__name__} with {spike_length_samples=}.')
+        logger.dartsortdebug(
+            f"Initialize {self.__class__.__name__} with {spike_length_samples=}."
+        )
         # we don't know these dimensions til we see a spike
         self.spike_length_samples = spike_length_samples
         self.wf_dim = spike_length_samples * self.model_channel_index.shape[1]
@@ -115,7 +116,12 @@ class BaseMultichannelDenoiser(BaseWaveformDenoiser):
         assert issubclass(opt, torch.optim.Optimizer)
         if okw is None:
             okw = {}
-        return opt(self.parameters(), lr=self.learning_rate, weight_decay=self.weight_decay, **okw)
+        return opt(
+            self.parameters(),
+            lr=self.learning_rate,
+            weight_decay=self.weight_decay,
+            **okw,
+        )
 
     def get_scheduler(self, optimizer):
         if self.lr_schedule in (None, "none"):
@@ -136,7 +142,7 @@ class BaseMultichannelDenoiser(BaseWaveformDenoiser):
     def needs_fit(self):
         return self._needs_fit
 
-    def get_mlp(self, res_type="none", hidden_dims=None):
+    def get_mlp(self, res_type="none", hidden_dims=None, output_layer="linear"):
         if hidden_dims is None:
             hidden_dims = self.hidden_dims
         return nn_util.get_waveform_mlp(
@@ -150,6 +156,7 @@ class BaseMultichannelDenoiser(BaseWaveformDenoiser):
             return_initial_shape=True,
             initial_conv_fullheight=self.with_conv_fullheight,
             final_conv_fullheight=self.with_conv_fullheight,
+            output_layer=output_layer,
             res_type=res_type,
         )
 

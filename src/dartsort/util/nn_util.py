@@ -111,6 +111,7 @@ def get_mlp(
     output_dim,
     norm_kind="batchnorm",
     res_type="none",
+    output_layer="linear",
     attention_layer=False,
     num_heads=4,
 ):
@@ -123,7 +124,7 @@ def get_mlp(
             current_dim = out_dim
             if attention_layer:
                 layers.append(AttentionBlock(current_dim, num_heads=num_heads))
-        layers.append(nn.Linear(current_dim, output_dim))
+        final_dim = current_dim
 
     elif res_type == "blocks_add":
         input_dims = [input_dim, *hidden_dims[:-1]]
@@ -132,7 +133,6 @@ def get_mlp(
             if attention_layer:
                 layers.append(AttentionBlock(outd, num_heads=num_heads))
         final_dim = hidden_dims[-1] if hidden_dims else input_dim
-        layers.append(nn.Linear(final_dim, output_dim))
 
     elif res_type == "blocks_linear":
         assert len(hidden_dims) > 1
@@ -140,7 +140,7 @@ def get_mlp(
         layers.append(nn.Linear(input_dim, compression_dim))
         for hd in hidden_dims[1:]:
             layers.append(LinearResidualBlock(compression_dim, hd, norm_kind=norm_kind))
-        layers.append(nn.Linear(compression_dim, output_dim))
+        final_dim = compression_dim
 
     elif res_type in ("none", "outer"):
         # res_type == "none" is handled in get_waveform_mlp
@@ -155,10 +155,18 @@ def get_mlp(
             current_dim = out_dim
             if attention_layer:
                 layers.append(AttentionBlock(current_dim, num_heads=num_heads))
-        layers.append(nn.Linear(current_dim, output_dim))
+        final_dim = current_dim
 
     else:
         raise ValueError(f"Unsupported res_type: {res_type}")
+
+    if output_layer == "linear":
+        layers.append(nn.Linear(final_dim, output_dim))
+    elif output_layer == "gated_linear":
+        layers.append(nn.Linear(final_dim, 2 * output_dim))
+        layers.append(nn.GLU())
+    else:
+        assert False
 
     return nn.Sequential(*layers)
 
@@ -176,6 +184,7 @@ def get_waveform_mlp(
     final_conv_fullheight=False,
     return_initial_shape=False,
     res_type="none",
+    output_layer="linear",
     attention_layer=False,
     num_heads=4,
 ):
@@ -208,6 +217,7 @@ def get_waveform_mlp(
         norm_kind=norm_kind,
         res_type=res_type,
         attention_layer=attention_layer,
+        output_layer=output_layer,
         num_heads=num_heads,
     )
     layers.append(mlp)

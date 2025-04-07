@@ -46,7 +46,7 @@ class Decollider(BaseMultichannelDenoiser):
         earlystop_eps=None,
         random_seed=0,
         res_type="none",
-        lr_schedule='CosineAnnealingLR',
+        lr_schedule="CosineAnnealingLR",
         lr_schedule_kwargs=None,
         optimizer=None,
         optimizer_kwargs=None,
@@ -68,6 +68,7 @@ class Decollider(BaseMultichannelDenoiser):
         val_noise_random_seed=0,
         inf_net_hidden_dims=None,
         eyz_net_hidden_dims=None,
+        signal_gates=False,
         step_callback=None,
     ):
         assert exz_estimator in ("n2n", "2n2", "n3n", "3n3")
@@ -116,22 +117,38 @@ class Decollider(BaseMultichannelDenoiser):
         self.cycle_loss_alpha = cycle_loss_alpha
         self.separate_cycle_net = separate_cycle_net
         self.detach_cycle_loss = detach_cycle_loss
+        self.signal_gates = signal_gates
         if separate_cycle_net:
             assert cycle_loss_alpha > 0
 
     def initialize_nets(self, spike_length_samples):
-        if hasattr(self, 'inf_net'):
-            logger.dartsortdebug('Already initialized.')
+        if hasattr(self, "inf_net"):
+            logger.dartsortdebug("Already initialized.")
             return
         self.initialize_shapes(spike_length_samples)
+        signal_output_type = "gated_linear" if self.signal_gates else "linear"
         if self.exz_estimator in ("n2n", "n3n"):
-            self.eyz = self.get_mlp(res_type=self.eyz_res_type, hidden_dims=self.eyz_net_hidden_dims)
+            self.eyz = self.get_mlp(
+                res_type=self.eyz_res_type,
+                hidden_dims=self.eyz_net_hidden_dims,
+                output_layer=signal_output_type,
+            )
         if self.exz_estimator in ("n3n", "2n2", "3n3"):
-            self.emz = self.get_mlp(res_type=self.emz_res_type)
+            self.emz = self.get_mlp(
+                res_type=self.emz_res_type, hidden_dims=self.eyz_net_hidden_dims
+            )
         if self.inference_kind == "amortized":
-            self.inf_net = self.get_mlp(res_type=self.e_exz_y_res_type, hidden_dims=self.inf_net_hidden_dims)
+            self.inf_net = self.get_mlp(
+                res_type=self.e_exz_y_res_type,
+                hidden_dims=self.inf_net_hidden_dims,
+                output_layer=signal_output_type,
+            )
         if self.separate_cycle_net:
-            self.den_net = self.get_mlp(res_type=self.e_exz_y_res_type, hidden_dims=self.inf_net_hidden_dims)
+            self.den_net = self.get_mlp(
+                res_type=self.e_exz_y_res_type,
+                hidden_dims=self.inf_net_hidden_dims,
+                output_layer=signal_output_type,
+            )
         else:
             self.den_net = self.inf_net
         self.to(self.device)
@@ -250,21 +267,25 @@ class Decollider(BaseMultichannelDenoiser):
             cycle_output=cycle_output,
         )
 
-    def loss(self, mask, waveforms, m, net_outputs, l4_alpha=None, output_l1_alpha=None):
+    def loss(
+        self, mask, waveforms, m, net_outputs, l4_alpha=None, output_l1_alpha=None
+    ):
         loss_dict = {}
         mask = mask.unsqueeze(1)
 
-        exz = net_outputs['exz']
-        eyz = net_outputs['eyz']
-        emz = net_outputs['emz']
-        e_exz_y = net_outputs['e_exz_y']
-        cycle_output = net_outputs['cycle_output']
+        exz = net_outputs["exz"]
+        eyz = net_outputs["eyz"]
+        emz = net_outputs["emz"]
+        e_exz_y = net_outputs["e_exz_y"]
+        cycle_output = net_outputs["cycle_output"]
 
         if eyz is not None:
             eyz_mask = mask * eyz
             loss_dict["eyz"] = F.mse_loss(eyz_mask, mask * waveforms)
             if l4_alpha:
-                loss_dict["eyz_l4"] = l4_alpha * ((eyz - waveforms).mul_(mask) ** 4).mean()
+                loss_dict["eyz_l4"] = (
+                    l4_alpha * ((eyz - waveforms).mul_(mask) ** 4).mean()
+                )
             if output_l1_alpha:
                 loss_dict["eyz_l1"] = output_l1_alpha * eyz_mask.abs().mean()
         if emz is not None:
@@ -279,13 +300,17 @@ class Decollider(BaseMultichannelDenoiser):
             am_mask = mask * to_amortize
             loss_dict["e_exz_y"] = F.mse_loss(am_mask, mask * e_exz_y)
             if l4_alpha:
-                loss_dict["e_exz_y_l4"] = l4_alpha * ((to_amortize - e_exz_y).mul_(mask) ** 4).mean()
+                loss_dict["e_exz_y_l4"] = (
+                    l4_alpha * ((to_amortize - e_exz_y).mul_(mask) ** 4).mean()
+                )
             if output_l1_alpha:
                 loss_dict["e_exz_y_l1"] = output_l1_alpha * am_mask.abs().mean()
         if cycle_output is not None:
             coef = 1 if self.separate_cycle_net else self.cycle_loss_alpha
             cycle_targ = e_exz_y.detach() if self.detach_cycle_loss else e_exz_y
-            loss_dict["cycle"] = coef * F.mse_loss(mask * cycle_targ, mask * cycle_output)
+            loss_dict["cycle"] = coef * F.mse_loss(
+                mask * cycle_targ, mask * cycle_output
+            )
         return loss_dict
 
     def get_losses(self, waveforms, channels, recording):
@@ -301,9 +326,9 @@ class Decollider(BaseMultichannelDenoiser):
         loader = DataLoader(dataset, batch_size=self.inference_batch_size)
 
         losses = {
-            'eyz': np.zeros(n, dtype=np.float32),
-            'emz': np.zeros(n, dtype=np.float32),
-            'e_exz_y': np.zeros(n, dtype=np.float32),
+            "eyz": np.zeros(n, dtype=np.float32),
+            "emz": np.zeros(n, dtype=np.float32),
+            "e_exz_y": np.zeros(n, dtype=np.float32),
         }
 
         bs = 0
@@ -325,19 +350,19 @@ class Decollider(BaseMultichannelDenoiser):
                 mask = self.get_masks(channels_batch).to(waveform_batch)
                 fres = self.train_forward(waveform_batch, m, mask)
 
-                eyz = fres['eyz']
-                emz = fres['emz']
-                e_exz_y = fres['e_exz_y']
+                eyz = fres["eyz"]
+                emz = fres["emz"]
+                e_exz_y = fres["e_exz_y"]
 
                 mask = mask.unsqueeze(1)
                 if eyz is not None:
-                    ll = F.mse_loss(mask * eyz, mask * waveform_batch, reduction='none')
+                    ll = F.mse_loss(mask * eyz, mask * waveform_batch, reduction="none")
                     losses["eyz"][bs:be] = ll.mean(dim=(1, 2)).numpy(force=True)
                 if emz is not None:
-                    ll = F.mse_loss(mask * emz, mask * m, reduction='none')
+                    ll = F.mse_loss(mask * emz, mask * m, reduction="none")
                     losses["emz"][bs:be] = ll.mean(dim=(1, 2)).numpy(force=True)
                 if e_exz_y is not None:
-                    ll = F.mse_loss(mask * exz, mask * e_exz_y, reduction='none')
+                    ll = F.mse_loss(mask * exz, mask * e_exz_y, reduction="none")
                     losses["e_exz_y"][bs:be] = ll.mean(dim=(1, 2)).numpy(force=True)
                 bs = be
         return losses
@@ -378,7 +403,9 @@ class Decollider(BaseMultichannelDenoiser):
             )
         else:
             cycle_noise_dataset = NoneDataset(len(train_channels))
-        train_stack_dataset = StackDataset(train_dataset, noise_train_dataset, cycle_noise_dataset)
+        train_stack_dataset = StackDataset(
+            train_dataset, noise_train_dataset, cycle_noise_dataset
+        )
         if weights is None:
             train_sampler = RandomSampler(
                 train_stack_dataset, generator=spawn_torch_rg(self.rg)
@@ -436,7 +463,11 @@ class Decollider(BaseMultichannelDenoiser):
                 self.train()
                 train_losses = {}
                 examples_this_epoch = 0
-                for (waveform_batch, channels_batch), noise_batch, cnoise_batch in train_loader:
+                for (
+                    (waveform_batch, channels_batch),
+                    noise_batch,
+                    cnoise_batch,
+                ) in train_loader:
                     waveform_batch = waveform_batch.to(self.device)
                     channels_batch = channels_batch.to(self.device)
                     waveform_batch = reindex(
