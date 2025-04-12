@@ -16,7 +16,7 @@ def test_fakedata():
         noise=simkit.WhiteNoise(len(geom)),
         min_fr_hz=20.0,
         max_fr_hz=31.0,
-        jitter=4,
+        temporal_jitter=4,
     )
     rec = rec_sim.simulate()
 
