@@ -317,14 +317,31 @@ def check_recording(
     return failed, avg_detections_per_second, max_abs
 
 
-def subset_sorting_by_spike_count(sorting, min_spikes=0):
+def subset_sorting_by_spike_count(sorting, min_spikes=0, max_spikes=np.inf):
     if not min_spikes:
         return sorting
 
     units, counts = np.unique(sorting.labels, return_counts=True)
-    small_units = units[counts < min_spikes]
+    invalid = np.logical_or(counts < min_spikes, counts > max_spikes)
+    bad_units = units[invalid]
 
-    new_labels = np.where(np.isin(sorting.labels, small_units), -1, sorting.labels)
+    new_labels = np.where(np.isin(sorting.labels, bad_units), -1, sorting.labels)
+
+    return replace(sorting, labels=new_labels)
+
+
+def subsample_to_max_count(sorting, max_spikes=256, seed=0):
+    units, counts = np.unique(sorting.labels, return_counts=True)
+    if counts.max() <= max_spikes:
+        return sorting
+
+    rg = np.random.default_rng(seed)
+    new_labels = sorting.labels.copy()
+    for u in units[counts > max_spikes]:
+        in_u = np.flatnonzero(sorting.labels == u)
+        new_labels[in_u] = -1
+        in_u = rg.choice(in_u, size=max_spikes, replace=False)
+        new_labels[in_u] = u
 
     return replace(sorting, labels=new_labels)
 
