@@ -820,7 +820,7 @@ def _peeler_process_init(
 
 
 def _peeler_process_job(chunk_start_samples__n_resid_snips):
-    chunk_starts_samples, n_resid_snips = chunk_start_samples__n_resid_snips
+    chunk_start_samples, n_resid_snips = chunk_start_samples__n_resid_snips
     # by returning here, we are implicitly relying on pickle
     # TODO: replace with manual np.saves
     with torch.no_grad():
