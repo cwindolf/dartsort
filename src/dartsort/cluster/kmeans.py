@@ -4,7 +4,7 @@ import torch.nn.functional as F
 from .density import guess_mode
 
 
-def kmeanspp(X, n_components=10, random_state=0, kmeanspp_initial="mean", mode_dim=2):
+def kmeanspp(X, n_components=10, random_state=0, kmeanspp_initial="random", mode_dim=2):
     """K-means++ initialization
 
     Start at a random point (kmeanspp_initial=='random') or at the point
@@ -45,17 +45,16 @@ def kmeanspp(X, n_components=10, random_state=0, kmeanspp_initial="mean", mode_d
     return centroid_ixs, assignments, dists, phi
 
 
-def kmeans(
+def kmeans_inner(
     X,
-    n_kmeanspp_tries=5,
+    n_kmeanspp_tries=10,
     n_iter=100,
     n_components=10,
     random_state=0,
-    kmeanspp_initial="mean",
+    kmeanspp_initial="random",
     with_proportions=False,
     drop_prop=0.025,
     drop_sum=5.0,
-    return_centroids=False,
 ):
     """A bit more than K-means
 
@@ -63,6 +62,7 @@ def kmeans(
     """
     best_phi = torch.inf
     centroid_ixs = labels = None
+    random_state = np.random.default_rng(random_state)
     for _ in range(n_kmeanspp_tries):
         _centroid_ixs, _labels, _, phi = kmeanspp(
             X,
@@ -79,9 +79,7 @@ def kmeans(
     # responsibilities, sum to 1 over centroids
     e = F.softmax(-0.5 * dists, dim=1)
     if not n_iter:
-        if return_centroids:
-            return labels, e, centroids
-        return labels, e
+        return labels, e, centroids, dists
 
     proportions = e.mean(0)
 
@@ -97,7 +95,7 @@ def kmeans(
             e = e[:, keep]
             proportions = proportions[keep]
         if keep is not None and (not keep.numel() or not keep.any()):
-            return torch.full_like(labels, 0), None
+            return torch.full_like(labels, 0), None, None, None
 
         # update centroids
         w = e / e.sum(0)
@@ -112,6 +110,46 @@ def kmeans(
         proportions = e.mean(0)
 
     assignments = torch.argmin(dists, 1)
+    return assignments, e, centroids, dists
+
+
+def kmeans(
+    X,
+    n_kmeans_tries=5,
+    n_kmeanspp_tries=5,
+    n_iter=100,
+    n_components=10,
+    random_state=0,
+    kmeanspp_initial="random",
+    with_proportions=False,
+    drop_prop=0.025,
+    drop_sum=5.0,
+    return_centroids=False,
+):
+    best_phi = np.inf
+    random_state = np.random.default_rng(random_state)
+    assignments = torch.zeros(len(X), dtype=int)
+    e = centroids = None
+    for j in range(n_kmeans_tries):
+        aa, ee, cc, dists = kmeans_inner(
+            X,
+            n_kmeanspp_tries=n_kmeanspp_tries,
+            n_iter=n_iter,
+            n_components=n_components,
+            random_state=random_state,
+            kmeanspp_initial=kmeanspp_initial,
+            with_proportions=with_proportions,
+            drop_prop=drop_prop,
+            drop_sum=drop_sum,
+        )
+        if dists is None:
+            continue
+        phi = (ee * dists).sum(1).mean().numpy(force=True)
+        if phi < best_phi:
+            best_phi = phi
+            assignments = aa
+            e = ee
+            centroids = cc
     if return_centroids:
         return assignments, e, centroids
     return assignments, e
