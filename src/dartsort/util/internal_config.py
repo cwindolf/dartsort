@@ -413,6 +413,10 @@ class ComputationConfig:
     executor: str = "threading_unless_multigpu"
     device: str | None = argfield(default=None, arg_type=str)
 
+    @classmethod
+    def from_n_jobs(cls, n_jobs):
+        return cls(n_jobs_cpu=n_jobs, n_jobs_gpu=n_jobs)
+
     def actual_device(self):
         if self.device is None:
             have_cuda = torch.cuda.is_available()
@@ -488,6 +492,18 @@ default_motion_estimation_config = MotionEstimationConfig()
 default_computation_config = ComputationConfig()
 default_dartsort_config = DARTsortInternalConfig()
 default_refinement_config = RefinementConfig()
+
+waveforms_only_featurization_config = FeaturizationConfig(
+    do_tpca_denoise=False,
+    do_enforce_decrease=False,
+    n_residual_snips=0,
+    save_input_tpca_projs=False,
+    save_amplitudes=False,
+    do_localization=False,
+    input_waveforms_name="raw",
+    save_input_voltages=True,
+    save_input_waveforms=True,
+)
 
 
 def to_internal_config(cfg):
