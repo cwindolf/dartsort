@@ -1,15 +1,16 @@
 import dataclasses
-import numpy as np
-from tqdm.auto import tqdm
 import warnings
-from spikeinterface.extractors import NumpySorting
+
+import numpy as np
+from probeinterface import Probe
+from scipy.spatial import KDTree
 from spikeinterface.generation.drift_tools import (
     InjectDriftingTemplatesRecording,
     DriftingTemplates,
     move_dense_templates,
 )
-from probeinterface import Probe
-from scipy.spatial import KDTree
+import torch
+from tqdm.auto import tqdm
 
 from ..templates import TemplateData
 from .data_util import DARTsortSorting
@@ -147,10 +148,14 @@ def closest_clustering(
         peel_pos = peel_pos.astype(float)
     gt_pos /= rescale
     peel_pos /= rescale
-    labels = greedy_match(gt_pos, peel_pos, dx=1.0 / frames_per_ms)
+    peelix2gtix = greedy_match(gt_pos, peel_pos, dx=1.0 / frames_per_ms)
+    labels = peelix2gtix.copy()
     labels[labels >= 0] = gt_st.labels[labels[labels >= 0]]
 
-    return dataclasses.replace(peel_st, labels=labels)
+    extra_features = peel_st.extra_features or {}
+    extra_features = extra_features.copy()
+    extra_features['match_ix'] = torch.from_numpy(peelix2gtix)
+    return dataclasses.replace(peel_st, labels=labels, extra_features=extra_features)
 
 
 def greedy_match(gt_coords, test_coords, max_val=1.0, dx=1.0 / 30, workers=-1, p=2.0):

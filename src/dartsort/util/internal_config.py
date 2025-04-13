@@ -23,7 +23,7 @@ default_pretrained_path = default_pretrained_path.joinpath("single_chan_denoiser
 default_pretrained_path = str(default_pretrained_path)
 
 
-@dataclass(frozen=True, kw_only=True, slots=True)
+@dataclass(frozen=True, kw_only=True)
 class WaveformConfig:
     """Defaults yield 42 sample trough offset and 121 total at 30kHz."""
 
@@ -65,7 +65,7 @@ class WaveformConfig:
         return slice(start_offset, other_len - end_offset)
 
 
-@dataclass(frozen=True, kw_only=True, slots=True)
+@dataclass(frozen=True, kw_only=True)
 class FeaturizationConfig:
     """Featurization and denoising configuration
 
@@ -136,18 +136,22 @@ class FeaturizationConfig:
     output_waveforms_name: str = "denoised"
 
 
-@dataclass(frozen=True, kw_only=True, slots=True)
+@dataclass(frozen=True, kw_only=True)
 class SubtractionConfig:
-    detection_threshold: float = 4.0
+    # peeling common
     chunk_length_samples: int = 30_000
-    peak_sign: str = "both"
-    spatial_dedup_radius: float = 150.0
-    subtract_radius: float = 200.0
     n_chunks_fit: int = 100
     max_waveforms_fit: int = 50_000
     n_waveforms_fit: int = 20_000
     fit_subsampling_random_state: int = 0
     fit_sampling: str = "random"
+    fit_max_reweighting: float = 20.0
+
+    # subtraction
+    detection_threshold: float = 4.0
+    peak_sign: Literal["pos", "neg", "both"] = "both"
+    spatial_dedup_radius: float | None = 150.0
+    subtract_radius: float = 200.0
     residnorm_decrease_threshold: float = math.sqrt(0.1 * 15**2)  # sqrt(10)
     use_singlechan_templates: bool = False
     singlechan_threshold: float = 50.0
@@ -166,7 +170,55 @@ class SubtractionConfig:
     )
 
 
-@dataclass(frozen=True, kw_only=True, slots=True)
+@dataclass(frozen=True, kw_only=True)
+class MatchingConfig:
+    # peeling common
+    chunk_length_samples: int = 30_000
+    n_chunks_fit: int = 100
+    max_waveforms_fit: int = 50_000
+    n_waveforms_fit: int = 20_000
+    fit_subsampling_random_state: int = 0
+    fit_sampling: str = "random"
+    fit_max_reweighting: float = 20.0
+
+    # template matching parameters
+    threshold: float | Literal["fp_control"] = 15.0  # norm, not normsq
+    template_svd_compression_rank: int = 10
+    template_temporal_upsampling_factor: int = 4
+    template_min_channel_amplitude: float = 1.0
+    refractory_radius_frames: int = 10
+    amplitude_scaling_variance: float = 0.1**2
+    amplitude_scaling_boundary: float = 1.0
+    max_iter: int = 1000
+    conv_ignore_threshold: float = 5.0
+    coarse_approx_error_threshold: float = 0.0
+    coarse_objective: bool = True
+
+
+@dataclass(frozen=True, kw_only=True)
+class ThresholdingConfig:
+    # peeling common
+    chunk_length_samples: int = 30_000
+    n_chunks_fit: int = 100
+    max_waveforms_fit: int = 50_000
+    n_waveforms_fit: int = 20_000
+    fit_subsampling_random_state: int = 0
+    fit_sampling: str = "random"
+    fit_max_reweighting: float = 20.0
+
+    # thresholding
+    detection_threshold: float = 5.0
+    max_spikes_per_chunk: int | None = None
+    peak_sign: Literal["pos", "neg", "both"] = "both"
+    spatial_dedup_radius: float = 150.0
+    relative_peak_radius_samples: int = 5
+    dedup_temporal_radius_samples: int = 7
+    thinning: float = 0.0
+    time_jitter: int = 0
+    spatial_jitter_radius: float = 0.0
+
+
+@dataclass(frozen=True, kw_only=True)
 class MotionEstimationConfig:
     """Configure motion estimation."""
 
@@ -189,7 +241,7 @@ class MotionEstimationConfig:
     rigid: bool = False
 
 
-@dataclass(frozen=True, kw_only=True, slots=True)
+@dataclass(frozen=True, kw_only=True)
 class TemplateConfig:
     spikes_per_unit: int = 500
 
@@ -219,31 +271,7 @@ class TemplateConfig:
     time_tracking: bool = False
     chunk_size_s: int = 300
 
-
-@dataclass(frozen=True, kw_only=True, slots=True)
-class MatchingConfig:
-    chunk_length_samples: int = 30_000
-    n_chunks_fit: int = 100
-    max_waveforms_fit: int = 50_000
-    n_waveforms_fit: int = 20_000
-    fit_subsampling_random_state: int = 0
-    fit_sampling: str = "random"
-
-    # template matching parameters
-    threshold: float | Literal["fp_control"] = 15.0  # norm, not normsq
-    template_svd_compression_rank: int = 10
-    template_temporal_upsampling_factor: int = 4
-    template_min_channel_amplitude: float = 1.0
-    refractory_radius_frames: int = 10
-    amplitude_scaling_variance: float = 0.1**2
-    amplitude_scaling_boundary: float = 1.0
-    max_iter: int = 1000
-    conv_ignore_threshold: float = 5.0
-    coarse_approx_error_threshold: float = 0.0
-    coarse_objective: bool = True
-
-
-@dataclass(frozen=True, kw_only=True, slots=True)
+@dataclass(frozen=True, kw_only=True)
 class SplitMergeConfig:
     # -- split
     split_strategy: str = "FeatureSplit"
@@ -260,7 +288,7 @@ class SplitMergeConfig:
     min_spatial_cosine: float = 0.0
 
 
-@dataclass(frozen=True, kw_only=True, slots=True)
+@dataclass(frozen=True, kw_only=True)
 class ClusteringConfig:
     # -- initial clustering
     cluster_strategy: str = "dpc"
@@ -320,7 +348,7 @@ class ClusteringConfig:
     split_merge_ensemble_config: SplitMergeConfig | None = None
 
 
-@dataclass(frozen=True, kw_only=True, slots=True)
+@dataclass(frozen=True, kw_only=True)
 class RefinementConfig:
     refinement_stragegy: Literal["gmm", "splitmerge"] = "gmm"
 
@@ -377,7 +405,7 @@ class RefinementConfig:
     split_merge_config: SplitMergeConfig | None = None
 
 
-@dataclass(frozen=True, kw_only=True, slots=True)
+@dataclass(frozen=True, kw_only=True)
 class ComputationConfig:
     n_jobs_cpu: int = 0
     n_jobs_gpu: int = 0
@@ -408,7 +436,7 @@ class ComputationConfig:
         return torch.cuda.device_count() > 1
 
 
-@dataclass(frozen=True, kw_only=True, slots=True)
+@dataclass(frozen=True, kw_only=True)
 class DARTsortInternalConfig:
     """This is an internal object. Make a DARTsortUserConfig, not one of these."""
 
@@ -437,6 +465,7 @@ class DARTsortInternalConfig:
 default_waveform_config = WaveformConfig()
 default_featurization_config = FeaturizationConfig()
 default_subtraction_config = SubtractionConfig()
+default_thresholding_config = ThresholdingConfig()
 default_template_config = TemplateConfig()
 default_clustering_config = ClusteringConfig()
 default_split_merge_config = SplitMergeConfig()

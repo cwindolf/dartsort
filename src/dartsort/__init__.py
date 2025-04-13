@@ -1,6 +1,6 @@
 import importlib.metadata
 
-from .util import logging_util
+from .util import logging_util, hybrid_util
 
 from . import detect, util, cluster
 from .cluster import cluster_util, density, kmeans, merge, postprocess, ppcalib
@@ -28,6 +28,7 @@ from .main import (
     run_peeler,
     subtract,
     grab,
+    threshold,
 )
 from .peel.grab import GrabAndFeaturize
 from .templates import TemplateData

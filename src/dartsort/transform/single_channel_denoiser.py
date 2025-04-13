@@ -43,18 +43,24 @@ class SingleChannelWaveformDenoiser(BaseWaveformDenoiser):
             denoiser = dnclss[clsname]().load(pretrained_path)
         self.denoiser = denoiser
 
+    @property
+    def device(self):
+        return self.denoiser.conv1[0].weight.device
+
     def forward(self, waveforms, max_channels=None):
+        odev = waveforms.device
         (
             channels_in_probe,
             waveforms_in_probe,
-        ) = get_channels_in_probe(waveforms, max_channels, self.channel_index)
+        ) = get_channels_in_probe(waveforms, max_channels, self.channel_index.to(odev))
 
         n_in_probe = len(waveforms_in_probe)
+        dev = self.device
         for batch_start in range(0, n_in_probe, self.batch_size):
             batch_end = min(batch_start + self.batch_size, n_in_probe)
             waveforms_in_probe[batch_start:batch_end] = self.denoiser(
-                waveforms_in_probe[batch_start:batch_end]
-            )
+                waveforms_in_probe[batch_start:batch_end].to(dev)
+            ).to(odev)
 
         waveforms = set_channels_in_probe(
             waveforms_in_probe,

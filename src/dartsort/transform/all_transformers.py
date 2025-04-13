@@ -3,6 +3,7 @@ import torch
 from .amortized_localization import AmortizedLocalization
 from .amplitudes import AmplitudeFeatures, AmplitudeVector, MaxAmplitude, Voltage
 from .decollider import Decollider
+from .supervised_denoiser import SupervisedDenoiser
 from .enforce_decrease import EnforceDecrease
 from .localize import Localization, PointSourceLocalization
 from .pipeline import WaveformPipeline
@@ -35,6 +36,7 @@ all_transformers = [
     AmplitudeFeatures,
     Voltage,
     Decollider,
+    SupervisedDenoiser,
     Passthrough,
     SingleChannelTemplates,
 ]

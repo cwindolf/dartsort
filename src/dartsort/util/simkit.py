@@ -14,19 +14,8 @@ from dredge import motion_util
 
 from .noise_util import StationaryFactorizedNoise, WhiteNoise
 from .data_util import DARTsortSorting
+from .spiketorch import spawn_torch_rg
 from .drift_util import registered_geometry
-
-
-# -- core utils
-
-
-def spawn_torch_rg(seed: int | np.random.Generator = 0):
-    nprg = np.random.default_rng(seed)
-    seeder = nprg.spawn(1)[0]
-    seed = int.from_bytes(seeder.bytes(8))
-    generator = torch.Generator()
-    generator.manual_seed(seed)
-    return generator
 
 
 # -- spike train sims
