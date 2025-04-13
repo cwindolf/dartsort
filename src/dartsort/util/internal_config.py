@@ -28,7 +28,15 @@ class WaveformConfig:
     """Defaults yield 42 sample trough offset and 121 total at 30kHz."""
 
     ms_before: float = 1.4
-    ms_after: float = 2.6
+    ms_after: float = 2.6 + 0.1 / 3
+
+    @classmethod
+    def from_samples(cls, samples_before, samples_after, sampling_frequency=30_000.0):
+        samples_per_ms = sampling_frequency / 1000
+        return cls(
+            ms_before=samples_before / samples_per_ms,
+            ms_after=samples_after / samples_per_ms,
+        )
 
     def trough_offset_samples(self, sampling_frequency=30_000):
         sampling_frequency = np.round(sampling_frequency)

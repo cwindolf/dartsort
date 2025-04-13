@@ -46,7 +46,7 @@ class DARTsortUserConfig:
         "Default value corresponds to 42 samples at 30kHz.",
     )
     ms_after: Annotated[float, Field(gt=0)] = argfield(
-        default=2.6,
+        default=2.6 + 0.1 / 3,
         doc="Length of time (ms) after trough (or peak) in waveform snippets. "
         "Default value corresponds to 79 samples at 30kHz.",
     )

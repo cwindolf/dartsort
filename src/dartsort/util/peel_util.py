@@ -27,7 +27,7 @@ def run_peeler(
     output_hdf5_filename = output_directory / hdf5_filename
     if residual_filename is not None:
         residual_filename = output_directory / residual_filename
-    do_localization = (
+    do_localization_later = (
         not featurization_config.denoise_only
         and featurization_config.do_localization
         and not featurization_config.nn_localization
@@ -40,7 +40,7 @@ def run_peeler(
         output_hdf5_filename,
         overwrite=overwrite,
         chunk_starts_samples=chunk_starts_samples,
-        do_localization=do_localization,
+        do_localization=do_localization_later,
         localization_dataset_name=localization_dataset_name,
     ):
         return DARTsortSorting.from_peeling_hdf5(output_hdf5_filename)
@@ -58,11 +58,12 @@ def run_peeler(
         residual_filename=residual_filename,
         show_progress=show_progress,
         computation_config=computation_config,
+        total_residual_snips=featurization_config.n_residual_snips,
     )
     _gc(computation_config.actual_n_jobs(), computation_config.actual_device())
 
     # do localization
-    if do_localization:
+    if do_localization_later:
         wf_name = featurization_config.output_waveforms_name
         loc_amp_type = featurization_config.localization_amplitude_type
         localize_hdf5(
@@ -76,21 +77,6 @@ def run_peeler(
             localization_model=featurization_config.localization_model,
         )
         _gc(computation_config.actual_n_jobs(), computation_config.actual_device())
-
-    if featurization_config.n_residual_snips:
-        peeler.run_subsampled_peeling(
-            output_hdf5_filename,
-            chunk_length_samples=peeler.spike_length_samples,
-            residual_to_h5=True,
-            skip_features=True,
-            ignore_resuming=True,
-            computation_config=computation_config,
-            n_chunks=featurization_config.n_residual_snips,
-            task_name="Residual snips",
-            overwrite=False,
-            ordered=True,
-            skip_last=True,
-        )
 
     return DARTsortSorting.from_peeling_hdf5(output_hdf5_filename)
 

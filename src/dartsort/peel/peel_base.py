@@ -5,7 +5,6 @@ from contextlib import contextmanager
 from pathlib import Path
 from itertools import repeat
 
-from annotated_types import IsInfinite
 import h5py
 import numpy as np
 import torch
@@ -125,6 +124,7 @@ class BasePeeler(torch.nn.Module):
         output_hdf5_filename,
         chunk_starts_samples=None,
         chunk_length_samples=None,
+        total_residual_snips=None,
         residual_snips_per_chunk=None,
         stop_after_n_waveforms=None,
         overwrite=False,
@@ -150,8 +150,9 @@ class BasePeeler(torch.nn.Module):
         # this is -1 if we haven't started yet
         if ignore_resuming:
             last_chunk_start = -1
+            resids_so_far = 0
         else:
-            last_chunk_start = self.check_resuming(
+            last_chunk_start, resids_so_far = self.check_resuming(
                 output_hdf5_filename,
                 overwrite=overwrite,
             )
@@ -164,6 +165,22 @@ class BasePeeler(torch.nn.Module):
         chunks_to_do = [
             start for start in chunk_starts_samples if start > last_chunk_start
         ]
+
+        if total_residual_snips is not None:
+            assert residual_snips_per_chunk is None
+            resids_remaining = total_residual_snips - resids_so_far
+            residual_snips_per_chunk = np.zeros(len(chunks_to_do), dtype=int)
+            n_even_split = resids_remaining // len(chunks_to_do)
+            residual_snips_per_chunk += n_even_split
+            resids_remaining -= len(chunks_to_do) * n_even_split
+            choices = self.fit_subsampling_random_state.choice(
+                len(chunks_to_do), size=resids_remaining
+            )
+            np.add.at(residual_snips_per_chunk, choices, 1)
+            assert (
+                residual_snips_per_chunk.sum() == total_residual_snips - resids_so_far
+            )
+
         if residual_snips_per_chunk is None:
             residual_snips_per_chunk = repeat(None)
         elif isinstance(residual_snips_per_chunk, int):
@@ -227,7 +244,8 @@ class BasePeeler(torch.nn.Module):
                     residual_filename=residual_filename,
                     overwrite=overwrite,
                     skip_features=skip_features,
-                    residual_to_h5=residual_to_h5,
+                    residual_to_h5=residual_to_h5
+                    or residual_snips_per_chunk is not None,
                 ) as (
                     output_h5,
                     h5_spike_datasets,
@@ -401,6 +419,10 @@ class BasePeeler(torch.nn.Module):
             for k, v in chunk_result.items()
         }
 
+        if "residual" in peel_result:
+            if torch.is_tensor(peel_result["residual"]):
+                peel_result["residual"] = peel_result["residual"].numpy(force=True)
+
         # add times in seconds
         segment = self.recording._recording_segments[0]
         chunk_result["chunk_start_seconds"] = segment.sample_index_to_time(
@@ -413,8 +435,16 @@ class BasePeeler(torch.nn.Module):
 
         if n_resid_snips:
             # todo: implement after merging thread-local rg commit
-            chunk_result["resid_snips"] = extract_random_snips(
-                self.rg, peel_result["residual"], n_resid_snips
+            chunk_result["resid_snips"], resid_times_samples = extract_random_snips(
+                self.rg,
+                peel_result["residual"],
+                n_resid_snips,
+                self.spike_length_samples,
+            )
+            chunk_result["residual_times_seconds"] = (
+                self.recording.sample_index_to_time(
+                    chunk_start_samples + resid_times_samples
+                )
             )
 
         return chunk_result
@@ -448,6 +478,19 @@ class BasePeeler(torch.nn.Module):
                 output_h5["residual_times_seconds"].resize(n_residuals + 1, axis=0)
                 output_h5["residual_times_seconds"][n_residuals:] = chunk_result[
                     "chunk_start_seconds"
+                ]
+
+            if "resid_snips" in chunk_result:
+                n_residuals = len(output_h5["residual"])
+                n_new_res = len(chunk_result["resid_snips"])
+                assert chunk_result["residual_times_seconds"].shape == (n_new_res,)
+                output_h5["residual"].resize(n_residuals + n_new_res, axis=0)
+                output_h5["residual"][n_residuals:] = chunk_result["resid_snips"]
+                output_h5["residual_times_seconds"].resize(
+                    n_residuals + n_new_res, axis=0
+                )
+                output_h5["residual_times_seconds"][n_residuals:] = chunk_result[
+                    "residual_times_seconds"
                 ]
 
             if skip_features:
@@ -665,14 +708,18 @@ class BasePeeler(torch.nn.Module):
         if feats_pt.exists():
             self.featurization_pipeline = torch.load(feats_pt, weights_only=True)
 
-    def check_resuming(self, output_hdf5_filename, overwrite=False) -> int:
+    def check_resuming(self, output_hdf5_filename, overwrite=False) -> tuple[int, int]:
         output_hdf5_filename = Path(output_hdf5_filename)
         exists = output_hdf5_filename.exists()
         last_chunk_start = -1
+        residual_snips_so_far = 0
         if exists and not overwrite:
             with h5py.File(output_hdf5_filename, "r", locking=False) as h5:
                 last_chunk_start = h5["last_chunk_start"][()]
-        return last_chunk_start
+                residual_snips_so_far = 0
+                if "residual" in h5:
+                    residual_snips_so_far = len(h5["residual"])
+        return last_chunk_start, residual_snips_so_far
 
     @contextmanager
     def initialize_files(
@@ -834,3 +881,16 @@ def _peeler_process_job(chunk_start_samples__n_resid_snips):
             return_residual=_peeler_process_context.ctx.compute_residual,
             skip_features=_peeler_process_context.ctx.skip_features,
         )
+
+
+# -- specific utils
+
+
+def extract_random_snips(rg, chunk, n, sniplen):
+    if sniplen * n > chunk.shape[0]:
+        raise ValueError("Can't extract this many non-overlapping snips.")
+    empty_len = chunk.shape[0] - sniplen * n
+    times = rg.choice(empty_len, size=n, replace=False)
+    times += np.arange(n) * sniplen
+    tixs = times[:, None] + np.arange(sniplen)
+    return chunk[tixs], times

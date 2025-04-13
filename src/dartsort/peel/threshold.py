@@ -101,6 +101,11 @@ class ThresholdAndFeaturize(BasePeeler):
             voltages=threshold_res["voltages"],
             collisioncleaned_waveforms=threshold_res["waveforms"],
         )
+        if return_residual:
+            # note, this is same as the input.
+            peel_result["residual"] = traces[
+                left_margin : traces.shape[0] - right_margin
+            ]
         return peel_result
 
 
