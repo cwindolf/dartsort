@@ -32,6 +32,7 @@ def run_peeler(
         and featurization_config.do_localization
         and not featurization_config.nn_localization
     )
+    n_residual_snips = featurization_config.n_residual_snips
     if computation_config is None:
         computation_config = job_util.get_global_computation_config()
 
@@ -117,7 +118,7 @@ def peeler_is_done(
         )
         return done
 
-    last_chunk_start = peeler.check_resuming(
+    last_chunk_start, n_residual_snips = peeler.check_resuming(
         output_hdf5_filename,
         overwrite=False,
     )
@@ -180,7 +181,9 @@ def subsample_waveforms(
             else:
                 uchoices, ichoices = np.unique(choices, return_inverse=True)
                 channels = channels[uchoices][ichoices]
-                waveforms = batched_h5_read(h5[waveforms_dataset_name], uchoices)[ichoices]
+                waveforms = batched_h5_read(h5[waveforms_dataset_name], uchoices)[
+                    ichoices
+                ]
         else:
             waveforms = h5[waveforms_dataset_name][:]
 
@@ -213,6 +216,7 @@ def fit_reweighting(
             assert False
 
     from ..cluster.density import get_smoothed_densities
+
     if torch.is_tensor(voltages):
         voltages = voltages.numpy(force=True)
     if log_voltages:
@@ -221,9 +225,7 @@ def fit_reweighting(
     sigma = 1.06 * voltages.std() * np.power(len(voltages), -0.2)
     dens = get_smoothed_densities(voltages[:, None], sigmas=sigma)
     sample_p = dens.mean() / dens
-    sample_p = sample_p.clip(
-        1.0 / fit_max_reweighting, fit_max_reweighting
-    )
+    sample_p = sample_p.clip(1.0 / fit_max_reweighting, fit_max_reweighting)
     sample_p = sample_p.astype(float)  # ensure double before normalizing
     sample_p /= sample_p.sum()
     return sample_p

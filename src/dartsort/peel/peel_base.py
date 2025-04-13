@@ -191,7 +191,7 @@ class BasePeeler(torch.nn.Module):
         elif isinstance(residual_snips_per_chunk, int):
             residual_snips_per_chunk = repeat(residual_snips_per_chunk)
         else:
-            assert len(residual_snips_per_chunk) == len(chunk_starts_samples)
+            assert len(residual_snips_per_chunk) == len(chunks_to_do)
 
         jobs = list(zip(chunks_to_do, residual_snips_per_chunk))
 
@@ -374,10 +374,10 @@ class BasePeeler(torch.nn.Module):
     def process_chunk(
         self,
         chunk_start_samples,
-        n_resid_snips=None,
         chunk_end_samples=None,
         return_residual=False,
         skip_features=False,
+        n_resid_snips=None,
     ):
         """Grab, peel, and featurize a chunk, returning a dict of numpy arrays
 
@@ -441,7 +441,6 @@ class BasePeeler(torch.nn.Module):
             )
 
         if n_resid_snips:
-            # todo: implement after merging thread-local rg commit
             chunk_result["resid_snips"], resid_times_samples = extract_random_snips(
                 self.rg,
                 peel_result["residual"],

@@ -489,8 +489,8 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
         left_margin=0,
         right_margin=0,
         return_residual=False,
-        return_conv=False,
         return_waveforms=True,
+        return_conv=False,
     ):
         # get current template set
         chunk_center_samples = chunk_start_samples + self.chunk_length_samples // 2
