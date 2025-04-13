@@ -3,7 +3,9 @@ from concurrent.futures import CancelledError
 from threading import local
 from contextlib import contextmanager
 from pathlib import Path
+from itertools import repeat
 
+from annotated_types import IsInfinite
 import h5py
 import numpy as np
 import torch
@@ -147,7 +149,7 @@ class BasePeeler(torch.nn.Module):
 
         # this is -1 if we haven't started yet
         if ignore_resuming:
-            last_chunk_start = 0
+            last_chunk_start = -1
         else:
             last_chunk_start = self.check_resuming(
                 output_hdf5_filename,
@@ -159,20 +161,17 @@ class BasePeeler(torch.nn.Module):
             chunk_starts_samples=chunk_starts_samples,
         )
         n_chunks_orig = len(chunk_starts_samples)
-
-        if residual_snips_per_chunk is not None:
-            assert len(residual_snips_per_chunk) == len(chunk_starts_samples)
-            chunks_to_do = [
-                (start, rs)
-                for start, rs in zip(chunk_starts_samples, residual_snips_per_chunk)
-                if start > last_chunk_start
-            ]
+        chunks_to_do = [
+            start for start in chunk_starts_samples if start > last_chunk_start
+        ]
+        if residual_snips_per_chunk is None:
+            residual_snips_per_chunk = repeat(None)
+        elif isinstance(residual_snips_per_chunk, int):
+            residual_snips_per_chunk = repeat(residual_snips_per_chunk)
         else:
-            chunks_to_do = [
-                (start, None)
-                for start in chunk_starts_samples
-                if start > last_chunk_start
-            ]
+            assert len(residual_snips_per_chunk) == len(chunk_starts_samples)
+
+        jobs = list(zip(chunks_to_do, residual_snips_per_chunk))
 
         if not chunks_to_do:
             return output_hdf5_filename
@@ -208,7 +207,7 @@ class BasePeeler(torch.nn.Module):
                     self.to(computation_config.actual_device())
 
                 # launch the jobs and wrap in a progress bar
-                results = pool.map(_peeler_process_job, chunks_to_do)
+                results = pool.map(_peeler_process_job, jobs)
                 if show_progress:
                     n_sec_chunk = (
                         chunk_length_samples / self.recording.get_sampling_frequency()
@@ -833,4 +832,5 @@ def _peeler_process_job(chunk_start_samples__n_resid_snips):
             n_resid_snips=n_resid_snips,
             chunk_end_samples=chunk_end_samples,
             return_residual=_peeler_process_context.ctx.compute_residual,
+            skip_features=_peeler_process_context.ctx.skip_features,
         )
