@@ -44,7 +44,7 @@ class BasePeeler(torch.nn.Module):
         n_chunks_fit=40,
         max_waveforms_fit=50_000,
         n_waveforms_fit=20_000,
-        fit_max_reweighting=20.0,
+        fit_max_reweighting=4.0,
         fit_sampling="random",
         fit_subsampling_random_state=0,
         trough_offset_samples=42,
@@ -827,7 +827,7 @@ class BasePeeler(torch.nn.Module):
 
     def __getstate__(self):
         state = self.__dict__.copy()
-        del state['_rgs']
+        del state["_rgs"]
         return state
 
     def __setstate__(self, state):

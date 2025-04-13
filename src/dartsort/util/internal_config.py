@@ -145,7 +145,7 @@ class SubtractionConfig:
     n_waveforms_fit: int = 20_000
     fit_subsampling_random_state: int = 0
     fit_sampling: str = "random"
-    fit_max_reweighting: float = 20.0
+    fit_max_reweighting: float = 4.0
 
     # subtraction
     detection_threshold: float = 4.0
@@ -179,7 +179,7 @@ class MatchingConfig:
     n_waveforms_fit: int = 20_000
     fit_subsampling_random_state: int = 0
     fit_sampling: str = "random"
-    fit_max_reweighting: float = 20.0
+    fit_max_reweighting: float = 4.0
 
     # template matching parameters
     threshold: float | Literal["fp_control"] = 15.0  # norm, not normsq
@@ -204,7 +204,7 @@ class ThresholdingConfig:
     n_waveforms_fit: int = 20_000
     fit_subsampling_random_state: int = 0
     fit_sampling: str = "random"
-    fit_max_reweighting: float = 20.0
+    fit_max_reweighting: float = 4.0
 
     # thresholding
     detection_threshold: float = 5.0
@@ -270,6 +270,7 @@ class TemplateConfig:
     # track template over time
     time_tracking: bool = False
     chunk_size_s: int = 300
+
 
 @dataclass(frozen=True, kw_only=True)
 class SplitMergeConfig:
