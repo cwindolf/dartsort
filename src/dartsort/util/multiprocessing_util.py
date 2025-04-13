@@ -3,12 +3,7 @@ from concurrent.futures import CancelledError, ProcessPoolExecutor
 from concurrent.futures import ThreadPoolExecutor as _ThreadPoolExecutor
 from multiprocessing import get_context
 
-import torch
-import torch.multiprocessing as torchmp
-
 from . import job_util
-
-# TODO: torch.multiprocessing?
 
 have_cloudpickle = False
 cloudpickle = None
@@ -185,10 +180,7 @@ def get_pool(
 
     Executor = cls if do_parallel else MockPoolExecutor
     is_local = cls in (MockPoolExecutor, ThreadPoolExecutor)
-    if context == "torchspawn":
-        context = torchmp.get_context("spawn")
-    else:
-        context = get_context(context)
+    context = get_context(context)
 
     if with_rank_queue:
         if do_parallel:

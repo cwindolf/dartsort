@@ -112,10 +112,14 @@ def get_mlp(
     norm_kind="batchnorm",
     res_type="none",
     output_layer="linear",
+    nonlinearity="ReLU",
     attention_layer=False,
     num_heads=4,
 ):
     layers = []
+    if isinstance(nonlinearity, str):
+        nonlinearity = getattr(torch.nn, nonlinearity)
+    gated = nonlinearity == torch.nn.GLU
 
     if res_type == "blocks_concat":
         current_dim = input_dim
@@ -147,11 +151,11 @@ def get_mlp(
         # res_type in get_mlp is the *inner* residual type in each block
         current_dim = input_dim
         for out_dim in hidden_dims:
-            layers.append(nn.Linear(current_dim, out_dim))
-            norm = get_norm(out_dim, norm_kind)
+            layers.append(nn.Linear(current_dim, (1 + gated) * out_dim))
+            norm = get_norm((1 + gated) * out_dim, norm_kind)
             if norm is not None:
                 layers.append(norm)
-            layers.append(nn.ReLU())
+            layers.append(nonlinearity())
             current_dim = out_dim
             if attention_layer:
                 layers.append(AttentionBlock(current_dim, num_heads=num_heads))
@@ -178,6 +182,8 @@ def get_waveform_mlp(
     output_dim,
     input_includes_mask=True,
     norm_kind="batchnorm",
+    scaling=None,
+    log_transform=False,
     channelwise_dropout_p=0.0,
     separated_mask_input=False,
     initial_conv_fullheight=False,
@@ -185,12 +191,15 @@ def get_waveform_mlp(
     return_initial_shape=False,
     res_type="none",
     output_layer="linear",
+    nonlinearity="ReLU",
     attention_layer=False,
     num_heads=4,
 ):
     input_dim = n_input_channels * (spike_length_samples + input_includes_mask)
-
     layers = []
+    if log_transform:
+        layers.append(WaveformOnly(LogTransform()))
+    
     if initial_conv_fullheight:
         # what Conv1d considers channels is actually time (conv1d is ncl).
         # so this is matmul over time, and kernel size is 1 to be separate over chans
@@ -216,6 +225,7 @@ def get_waveform_mlp(
         output_dim,
         norm_kind=norm_kind,
         res_type=res_type,
+        nonlinearity=nonlinearity,
         attention_layer=attention_layer,
         output_layer=output_layer,
         num_heads=num_heads,
@@ -234,8 +244,14 @@ def get_waveform_mlp(
 
     net = nn.Sequential(*layers)
 
+    if scaling not in (None, "none"):
+        net = Rescaling(net, scaling, waveform_only=True)
+
     if res_type == "outer":
         net = WaveformOnlyResidualForm(net)
+
+    if log_transform:
+        layers.append(WaveformOnly(ExpTransform()))
 
     return net
 
@@ -258,6 +274,44 @@ class ResidualForm(nn.Module):
     def forward(self, input):
         output = self.module(input)
         return input + output
+
+
+class Rescaling(nn.Module):
+    def __init__(self, module, scale_kind="std", waveform_only=False):
+        super().__init__()
+        self.scale_kind = scale_kind
+        self.module = module
+        self.waveform_only = waveform_only
+
+    def forward(self, input):
+        if self.waveform_only:
+            input, masks = input
+        dim = tuple(range(1, input.ndim))
+        if self.scale_kind == "max":
+            scales = input.abs().amax(dim=dim, keepdim=True)
+        elif self.scale_kind == "std":
+            scales = input.std(dim=dim, keepdim=True)
+        else:
+            assert False
+        if self.waveform_only:
+            output = self.module((input / scales, masks))
+        else:
+            output = self.module(input / scales)
+        return output * scales
+
+
+class LogTransform(nn.Module):
+    def forward(self, input):
+        sgn = torch.sign(input)
+        log = torch.log1p(input.abs())
+        return log * sgn
+
+
+class ExpTransform(nn.Module):
+    def forward(self, input):
+        sgn = torch.sign(input)
+        exp = torch.expm1(input.abs())
+        return exp * sgn
 
 
 class WaveformOnlyResidualForm(nn.Module):

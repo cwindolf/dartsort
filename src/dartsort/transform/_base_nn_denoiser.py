@@ -39,6 +39,8 @@ class BaseMultichannelDenoiser(BaseWaveformDenoiser):
         inference_batch_size=1024,
         optimizer=None,
         optimizer_kwargs=None,
+        nonlinearity="ReLU",
+        scaling=None,
     ):
         assert pretrained_path is None, "Need to implement loading."
         super().__init__(
@@ -58,6 +60,8 @@ class BaseMultichannelDenoiser(BaseWaveformDenoiser):
         self.weight_decay = weight_decay
         self.optimizer = optimizer
         self.optimizer_kwargs = optimizer_kwargs
+        self.nonlinearity = nonlinearity
+        self.scaling = scaling
 
         self.model_channel_index_np = regularize_channel_index(
             geom=self.geom, channel_index=channel_index
@@ -131,9 +135,9 @@ class BaseMultichannelDenoiser(BaseWaveformDenoiser):
         if isinstance(lr_schedule, str):
             lr_schedule = getattr(torch.optim.lr_scheduler, lr_schedule)
 
-        sched_kw = self.lr_schedule_kwargs or {}
+        sched_kw = self.lr_schedule_kwargs or dict(T_max=self.n_epochs)
         assert issubclass(lr_schedule, torch.optim.lr_scheduler.LRScheduler)
-        return lr_schedule(optimizer, T_max=self.n_epochs, **sched_kw)
+        return lr_schedule(optimizer, **sched_kw)
 
     @property
     def device(self):
@@ -142,7 +146,7 @@ class BaseMultichannelDenoiser(BaseWaveformDenoiser):
     def needs_fit(self):
         return self._needs_fit
 
-    def get_mlp(self, res_type="none", hidden_dims=None, output_layer="linear"):
+    def get_mlp(self, res_type="none", hidden_dims=None, output_layer="linear", log_transform=False):
         if hidden_dims is None:
             hidden_dims = self.hidden_dims
         return nn_util.get_waveform_mlp(
@@ -158,6 +162,9 @@ class BaseMultichannelDenoiser(BaseWaveformDenoiser):
             final_conv_fullheight=self.with_conv_fullheight,
             output_layer=output_layer,
             res_type=res_type,
+            nonlinearity=self.nonlinearity,
+            log_transform=log_transform,
+            scaling=self.scaling,
         )
 
     def to_nn_channels(self, waveforms, max_channels):

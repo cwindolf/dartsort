@@ -210,7 +210,7 @@ def fit_reweighting(
     hdf5_path=None,
     log_voltages=True,
     fit_sampling="random",
-    fit_max_reweighting=20.0,
+    fit_max_reweighting=4.0,
     voltages_dataset_name="voltages",
 ):
     if fit_sampling == "random":
