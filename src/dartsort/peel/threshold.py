@@ -194,14 +194,14 @@ class ThresholdAndFeaturize(BasePeeler):
         )
 
         # get absolute times
-        times_samples = threshold_res['times_rel'] + chunk_start_samples
+        times_samples = threshold_res["times_rel"] + chunk_start_samples
 
         peel_result = dict(
-            n_spikes=threshold_res['n_spikes'],
+            n_spikes=threshold_res["n_spikes"],
             times_samples=times_samples,
-            channels=threshold_res['channels'],
-            voltages=threshold_res['voltages'],
-            collisioncleaned_waveforms=threshold_res['waveforms'],
+            channels=threshold_res["channels"],
+            voltages=threshold_res["voltages"],
+            collisioncleaned_waveforms=threshold_res["waveforms"],
         )
         if self.is_random:
             peel_result['orig_times_samples'] = threshold_res['orig_times_rel'] + chunk_start_samples

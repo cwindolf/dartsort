@@ -86,10 +86,14 @@ class DARTsortSorting:
         if self.parent_h5_path:
             data["parent_h5_path"] = np.array(str(self.parent_h5_path))
             data["feature_keys"] = np.array(list(self.extra_features.keys()))
+        elif self.extra_features:
+            data.update(self.extra_features)
+            data["feature_keys"] = np.array(list(self.extra_features.keys()))
         np.savez(sorting_npz, **data)
 
     @classmethod
     def load(cls, sorting_npz):
+        extra_features = None
         with np.load(sorting_npz) as data:
             times_samples = data["times_samples"]
             channels = data["channels"]
@@ -99,8 +103,10 @@ class DARTsortSorting:
             if "parent_h5_path" in data:
                 parent_h5_path = str(data["parent_h5_path"])
                 feature_keys = list(map(str, data["feature_keys"]))
+            elif "feature_keys" in data:
+                feature_keys = list(map(str, data["feature_keys"]))
+                extra_features = {k: data[k] for k in feature_keys}
 
-        extra_features = None
         if parent_h5_path:
             with h5py.File(parent_h5_path, "r", libver="latest", locking=False) as h5:
                 extra_features = {k: h5[k][()] for k in feature_keys}
@@ -317,14 +323,34 @@ def check_recording(
     return failed, avg_detections_per_second, max_abs
 
 
-def subset_sorting_by_spike_count(sorting, min_spikes=0):
+def subset_sorting_by_spike_count(sorting, min_spikes=0, max_spikes=np.inf):
     if not min_spikes:
         return sorting
 
     units, counts = np.unique(sorting.labels, return_counts=True)
-    small_units = units[counts < min_spikes]
+    invalid = np.logical_or(counts < min_spikes, counts > max_spikes)
+    bad_units = units[invalid]
 
-    new_labels = np.where(np.isin(sorting.labels, small_units), -1, sorting.labels)
+    new_labels = np.where(np.isin(sorting.labels, bad_units), -1, sorting.labels)
+
+    extra_features = (sorting.extra_features or {}).copy()
+    extra_features["original_labels"] = sorting.labels
+
+    return replace(sorting, labels=new_labels, extra_features=extra_features)
+
+
+def subsample_to_max_count(sorting, max_spikes=256, seed=0):
+    units, counts = np.unique(sorting.labels, return_counts=True)
+    if counts.max() <= max_spikes:
+        return sorting
+
+    rg = np.random.default_rng(seed)
+    new_labels = sorting.labels.copy()
+    for u in units[counts > max_spikes]:
+        in_u = np.flatnonzero(sorting.labels == u)
+        new_labels[in_u] = -1
+        in_u = rg.choice(in_u, size=max_spikes, replace=False)
+        new_labels[in_u] = u
 
     return replace(sorting, labels=new_labels)
 

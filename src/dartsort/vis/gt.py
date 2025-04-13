@@ -452,14 +452,27 @@ class TrimmedAgreementMatrix(ComparisonPlot):
     width = 3
     height = 2
 
+    def __init__(self, trim_kind="auto", ordered=True, cmap="managua"):
+        self.trim_kind = trim_kind
+        self.ordered = ordered
+        self.cmap = cmap
+
     def draw(self, panel, comparison):
-        agreement = comparison.comparison.get_ordered_agreement_scores()
+        if self.ordered:
+            agreement = comparison.comparison.get_ordered_agreement_scores()
+        else:
+            agreement = comparison.comparison.agreement_scores
+        if self.trim_kind == "auto" and agreement.shape[1] < 4 * agreement.shape[0]:
+            pass
+        else:
+            assert self.ordered
+            agreement.values[:, : agreement.shape[0]]
         ax = panel.subplots()
-        im = ax.imshow(agreement.values[:, : agreement.shape[0]], vmin=0, vmax=1)
+        im = ax.imshow(agreement.T, vmin=0, vmax=1, cmap=self.cmap)
         plt.colorbar(im, ax=ax, shrink=0.3)
         ax.set_title("Hung. match agreements")
-        ax.set_ylabel(f"{comparison.gt_name} unit")
-        ax.set_xlabel(f"{comparison.tested_name} unit")
+        ax.set_xlabel(f"{comparison.gt_name} unit" + ("(ord)" * self.ordered))
+        ax.set_ylabel(f"{comparison.tested_name} unit" + ("(ord)" * self.ordered))
 
 
 class MetricRegPlot(ComparisonPlot):
@@ -625,6 +638,7 @@ gt_overview_plots_no_temp_dist = (
     box,
     MetricDistribution(),
     TrimmedAgreementMatrix(),
+    TrimmedAgreementMatrix(ordered=False),
 )
 
 # multi comparisons stuff
@@ -635,7 +649,7 @@ def make_gt_overview_summary(
     comparison,
     plots=gt_overview_plots_no_temp_dist,
     max_height=6,
-    figsize=(11, 8.5),
+    figsize=(6, 5),
     figure=None,
     suptitle=True,
     same_width_flow=True,

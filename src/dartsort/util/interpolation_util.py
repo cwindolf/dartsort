@@ -4,8 +4,10 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 from dartsort.util.data_util import yield_masked_chunks
-from dartsort.util.drift_util import (get_spike_pitch_shifts,
-                                      static_channel_neighborhoods)
+from dartsort.util.drift_util import (
+    get_spike_pitch_shifts,
+    static_channel_neighborhoods,
+)
 
 interp_kinds = (
     "nearest",
@@ -100,7 +102,9 @@ def interpolate_by_chunk(
     skis = None
     do_skis = interpolation_method.startswith("kriging")
     if do_skis:
-        source_kernel_invs = get_source_kernel_pinvs(source_geom, channel_index, sigma=sigma)
+        source_kernel_invs = get_source_kernel_pinvs(
+            source_geom, channel_index, sigma=sigma
+        )
 
     for ixs, chunk_features in yield_masked_chunks(
         mask, dataset, show_progress=show_progress, desc_prefix="Interpolating"
@@ -138,7 +142,9 @@ def interpolate_by_chunk(
     return out
 
 
-def get_source_kernel_pinvs(source_geom, channel_index=None, sigma=20.0, atol=1e-5, rtol=1e-5):
+def get_source_kernel_pinvs(
+    source_geom, channel_index=None, sigma=20.0, atol=1e-5, rtol=1e-5
+):
     """channel_index None means we'll make one inv of the full probe."""
     if channel_index is None:
         source_pos = source_geom[None]

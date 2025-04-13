@@ -3,7 +3,9 @@ from concurrent.futures import CancelledError
 from threading import local, Lock
 from contextlib import contextmanager
 from pathlib import Path
+from itertools import repeat
 
+from annotated_types import IsInfinite
 import h5py
 import numpy as np
 import torch
@@ -128,6 +130,7 @@ class BasePeeler(torch.nn.Module):
         output_hdf5_filename,
         chunk_starts_samples=None,
         chunk_length_samples=None,
+        residual_snips_per_chunk=None,
         stop_after_n_waveforms=None,
         overwrite=False,
         residual_filename=None,
@@ -151,7 +154,7 @@ class BasePeeler(torch.nn.Module):
 
         # this is -1 if we haven't started yet
         if ignore_resuming:
-            last_chunk_start = 0
+            last_chunk_start = -1
         else:
             last_chunk_start = self.check_resuming(
                 output_hdf5_filename,
@@ -166,6 +169,15 @@ class BasePeeler(torch.nn.Module):
         chunks_to_do = [
             start for start in chunk_starts_samples if start > last_chunk_start
         ]
+        if residual_snips_per_chunk is None:
+            residual_snips_per_chunk = repeat(None)
+        elif isinstance(residual_snips_per_chunk, int):
+            residual_snips_per_chunk = repeat(residual_snips_per_chunk)
+        else:
+            assert len(residual_snips_per_chunk) == len(chunk_starts_samples)
+
+        jobs = list(zip(chunks_to_do, residual_snips_per_chunk))
+
         if not chunks_to_do:
             return output_hdf5_filename
         save_residual = residual_filename is not None
@@ -200,7 +212,7 @@ class BasePeeler(torch.nn.Module):
                     self.to(computation_config.actual_device())
 
                 # launch the jobs and wrap in a progress bar
-                results = pool.map(_peeler_process_job, chunks_to_do)
+                results = pool.map(_peeler_process_job, jobs)
                 if show_progress:
                     n_sec_chunk = (
                         chunk_length_samples / self.recording.get_sampling_frequency()
@@ -344,6 +356,7 @@ class BasePeeler(torch.nn.Module):
     def process_chunk(
         self,
         chunk_start_samples,
+        n_resid_snips=None,
         chunk_end_samples=None,
         return_residual=False,
         skip_features=False,
@@ -372,8 +385,8 @@ class BasePeeler(torch.nn.Module):
             chunk_start_samples=chunk_start_samples,
             left_margin=left_margin,
             right_margin=right_margin,
-            return_residual=return_residual,
             return_waveforms=not skip_features and self.featurization_pipeline,
+            return_residual=return_residual or n_resid_snips,
         )
 
         if peel_result["n_spikes"] > 0 and not skip_features:
@@ -404,6 +417,13 @@ class BasePeeler(torch.nn.Module):
             chunk_result["times_seconds"] = segment.sample_index_to_time(
                 chunk_result["times_samples"]
             )
+
+        if n_resid_snips:
+            # todo: implement after merging thread-local rg commit
+            chunk_result["resid_snips"] = extract_random_snips(
+                self.rg, peel_result["residual"], n_resid_snips
+            )
+
         return chunk_result
 
     def gather_chunk_result(
@@ -652,7 +672,7 @@ class BasePeeler(torch.nn.Module):
         if feats_pt.exists():
             self.featurization_pipeline = torch.load(feats_pt, weights_only=True)
 
-    def check_resuming(self, output_hdf5_filename, overwrite=False):
+    def check_resuming(self, output_hdf5_filename, overwrite=False) -> int:
         output_hdf5_filename = Path(output_hdf5_filename)
         exists = output_hdf5_filename.exists()
         last_chunk_start = -1
@@ -823,7 +843,8 @@ def _peeler_process_init(
     )
 
 
-def _peeler_process_job(chunk_start_samples):
+def _peeler_process_job(chunk_start_samples__n_resid_snips):
+    chunk_start_samples, n_resid_snips = chunk_start_samples__n_resid_snips
     # by returning here, we are implicitly relying on pickle
     # TODO: replace with manual np.saves
     with torch.no_grad():
@@ -833,6 +854,8 @@ def _peeler_process_job(chunk_start_samples):
             chunk_end_samples = chunk_start_samples + chlen
         return _peeler_process_context.ctx.peeler.process_chunk(
             chunk_start_samples,
+            n_resid_snips=n_resid_snips,
             chunk_end_samples=chunk_end_samples,
             return_residual=_peeler_process_context.ctx.compute_residual,
+            skip_features=_peeler_process_context.ctx.skip_features,
         )
