@@ -184,6 +184,7 @@ class SpikeMixtureModel(torch.nn.Module):
         self.split_decision_algorithm = split_decision_algorithm
         self.min_overlap = min_overlap
         self.min_log_prop = min_log_prop
+        self.prior_pseudocount = prior_pseudocount
 
         # store labels on cpu since we're always nonzeroing / writing np data
         assert self.data.original_sorting.labels is not None
@@ -427,6 +428,7 @@ class SpikeMixtureModel(torch.nn.Module):
             n_threads=n_threads,
             batch_size=batch_size,
             n_units=n_units,
+            prior_pseudocount=self.prior_pseudocount,
             **tmm_kwargs,
         )
 
@@ -2127,6 +2129,7 @@ class SpikeMixtureModel(torch.nn.Module):
         min_overlap=0.8,
         criterion=None,
         cosines=None,
+        min_cosine=0.5,
         reevaluate_cur_liks=True,
     ):
         if criterion is None:
@@ -2148,9 +2151,19 @@ class SpikeMixtureModel(torch.nn.Module):
             if not len(level_current_ids):
                 continue
 
+            min_conn = np.inf
             for ip in level_ids_part:
                 if ip not in units_memo:
-                    units_memo[ip] = self.fit_unit(unit_ids=torch.tensor(ip))
+                    try:
+                        units_memo[ip] = self.fit_unit(unit_ids=torch.tensor(ip))
+                    except ValueError as e:
+                        raise ValueError(f"Couldn't fit {ip=} in merge.") from e
+                if len(ip) > 1 and cosines is not None:
+                    ip = np.array(ip)
+                    conn = cos_connectivity(cosines[ip][:, ip])
+                    min_conn = min(conn, min_conn)
+            if min_conn < min_cosine:
+                continue
 
             level_units = [units_memo[ip] for ip in level_ids_part]
             level_lp = [
@@ -2158,18 +2171,11 @@ class SpikeMixtureModel(torch.nn.Module):
             ]
             level_lp = torch.tensor(level_lp).to(self.log_proportions)
 
-            level_cosines = None
-            if cosines is not None:
-                level_cosines = cosines[list(level_current_ids)]
-                level_cosines = level_cosines[:, list(level_current_ids)]
-
             crit = self.validation_criterion(
                 log_likelihoods,
                 current_unit_ids=level_current_ids,
                 hyp_units=level_units,
                 hyp_log_props=level_lp,
-                label_fit_spikes=True,
-                cosines=level_cosines,
                 reevaluate_cur_liks=reevaluate_cur_liks,
                 in_bag=not criterion.startswith("heldout_"),
             )
@@ -2200,7 +2206,7 @@ class SpikeMixtureModel(torch.nn.Module):
         fit_same_channels=False,
         min_overlap=None,
         distance_metric=None,
-        min_cosine=0.1,
+        min_cosine=0.5,
         distance_normalization_kind=None,
     ):
         debug = debug_info is not None
@@ -2555,7 +2561,7 @@ class SpikeMixtureModel(torch.nn.Module):
         reevaluate_cur_liks=True,
         refit_cur_units=False,
         cosines=None,
-        min_cosine=0.1,
+        min_cosine=0.5,
         in_bag=False,
     ) -> dict[
         Literal[
@@ -3578,9 +3584,6 @@ class GaussianUnit(torch.nn.Module):
         self.channels_count_min = channels_count_min
         self.channels_snr_amp = channels_snr_amp
         self.cov_kind = cov_kind
-        self.scale_mean = scale_mean
-        self.scale_alpha = float(prior_pseudocount)
-        self.scale_beta = float(prior_pseudocount) / scale_mean
         self.ppca_rank = ppca_rank
         self.ppca_inner_em_iter = ppca_inner_em_iter
         self.ppca_initial_em_iter = ppca_initial_em_iter
@@ -3730,8 +3733,9 @@ class GaussianUnit(torch.nn.Module):
             achans, achan_counts = occupied_chans(
                 features, self.n_channels, neighborhoods=neighborhoods
             )
-            print(f"{achan_counts=}")
-            achans = achans[spiketorch.isin_sorted(achans, achans_full)]
+            vachans = spiketorch.isin_sorted(achans, achans_full)
+            achans = achans[vachans]
+            achan_counts = achan_counts[vachans]
             needs_direct = True
         elif self.channels_strategy.endswith("fuzzcore"):
             achans_full, achan_counts = occupied_chans(
@@ -3763,7 +3767,9 @@ class GaussianUnit(torch.nn.Module):
             achans, achan_counts = occupied_chans(
                 features, self.n_channels, neighborhoods=neighborhoods, weights=weights
             )
-            achans = achans[achan_counts >= self.channels_count_min]
+            vachans = achan_counts >= self.channels_count_min
+            achans = achans[vachans]
+            achan_counts = achan_counts[vachans]
             needs_direct = False
 
         # achans = achans.cpu()
@@ -3824,7 +3830,13 @@ class GaussianUnit(torch.nn.Module):
             W_full = new_zeros((self.noise.rank, self.noise.n_channels, self.ppca_rank))
 
         if je_suis:
-            assert res["mu"].isfinite().all()
+            if not res["mu"].isfinite().all():
+                mu = res["mu"]
+                raise ValueError(
+                    f"Fit exploded, with {mu.shape=} {mu.isnan().any()=} "
+                    f"{mu.isinf().any()=} {mu.isfinite().sum()/mu.numel()=} "
+                    f"{achan_counts=}."
+                )
             mean_full[:, achans] = res["mu"]
             if res.get("W", None) is not None:
                 assert res["W"].isfinite().all()

@@ -54,6 +54,7 @@ class SpikeTruncatedMixtureModel(nn.Module):
         fixed_noise_proportion=None,
         sgd_batch_size=None,
         Cinv_in_grad=True,
+        prior_pseudocount=0,
     ):
         super().__init__()
         if n_search is None:
@@ -77,6 +78,7 @@ class SpikeTruncatedMixtureModel(nn.Module):
         self.fixed_noise_proportion = fixed_noise_proportion
         self.exact_kl = exact_kl
         self.sgd_batch_size = sgd_batch_size
+        self.prior_pseudocount = prior_pseudocount
         train_indices, self.train_neighborhoods = self.data.neighborhoods("extract")
         self.n_spikes = train_indices.numel()
         logger.dartsortdebug(f"TMM will fit to {train_indices.shape=} {self.n_spikes=}")
@@ -181,6 +183,9 @@ class SpikeTruncatedMixtureModel(nn.Module):
             with_kl=not self.exact_kl,
             with_hard_labels=hard_label,
         )
+        if self.prior_pseudocount:
+            sc = result.N / (result.N + self.prior_pseudocount)
+            result.m.mul_(sc[:, None, None])
         self.means[..., :-1] = result.m
         if self.bases is not None:
             assert result.R is not None
@@ -189,6 +194,8 @@ class SpikeTruncatedMixtureModel(nn.Module):
             if blank.any():
                 # just to avoid numerical issues when a unit dies
                 result.U[blank] += torch.eye(self.M, device=result.U.device)
+            if self.prior_pseudocount:
+                result.U.diagonal(dim1=-2, dim2=-1).add_(self.prior_pseudocount)
             Uc = psd_safe_cholesky(result.U)
             W = torch.cholesky_solve(result.R.view(*result.U.shape[:-1], -1), Uc)
             self.bases[..., :-1] = W.view(self.bases[..., :-1].shape)

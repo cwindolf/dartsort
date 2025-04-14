@@ -403,6 +403,7 @@ class RefinementConfig:
     truncated: bool = True
     split_decision_algorithm: str = "tree"
     merge_decision_algorithm: str = "brute"
+    prior_pseudocount: float = 0.0
 
     # if someone wants this
     split_merge_config: SplitMergeConfig | None = None
@@ -577,6 +578,7 @@ def to_internal_config(cfg):
         truncated=cfg.truncated,
         split_decision_algorithm=cfg.gmm_split_decision_algorithm,
         merge_decision_algorithm=cfg.gmm_merge_decision_algorithm,
+        prior_pseudocount=cfg.prior_pseudocount,
     )
     motion_estimation_config = MotionEstimationConfig(
         **{k.name: getattr(cfg, k.name) for k in fields(MotionEstimationConfig)}

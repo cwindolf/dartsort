@@ -182,5 +182,6 @@ class DeveloperConfig(DARTsortUserConfig):
     gmm_val_proportion: Annotated[float, Field(gt=0)] = 0.25
     gmm_split_decision_algorithm: str = "tree"
     gmm_merge_decision_algorithm: str = "brute"
+    prior_pseudocount: float = 0.0
 
     save_intermediate_labels: bool = False
