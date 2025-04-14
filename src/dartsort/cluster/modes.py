@@ -7,8 +7,6 @@ from . import density
 try:
     from isosplit import up_down_isotonic_regression, jisotonic5
 except ImportError:
-    import warnings
-    warnings.warn("No isosplit...")
     pass
 
 # todo: replace all isosplit stuff with things based on scipy's isotonic regression.
@@ -38,8 +36,10 @@ def fit_unimodal_right(x, f, weights=None, cut=0, hard=False):
     )
 
     # impose continuity with a large penalty
-    f_left = np.concatenate((f[:cuti_left], out[cuti_right:cuti_right+1]))
-    w_left = np.concatenate((weights[:cuti_left], 1e6 + 10 * weights.sum(keepdims=True)))
+    f_left = np.concatenate((f[:cuti_left], out[cuti_right : cuti_right + 1]))
+    w_left = np.concatenate(
+        (weights[:cuti_left], 1e6 + 10 * weights.sum(keepdims=True))
+    )
     out[:cuti_left] = jisotonic5.jisotonic5(f_left, w_left)[0][:-1]
 
     return out
@@ -54,7 +54,7 @@ def fit_truncnorm_right(x, f, weights=None, cut=0, hard=False, n_iter=10):
     cuti_left = np.searchsorted(x, cut)
     if cuti_left >= len(x) - 2:
         # everything is to the left... return uniform
-        return np.full_like(f, 1/len(f))
+        return np.full_like(f, 1 / len(f))
     cuti_right = np.searchsorted(x, cut, side="right") - 1
     if cuti_right <= 1:
         # everything is to the right... fit normal!
@@ -85,15 +85,20 @@ def fit_truncnorm_right(x, f, weights=None, cut=0, hard=False, n_iter=10):
 
 def fit_bimodal_at(x, f, weights=None, cut=0):
     from isosplit import up_down_isotonic_regression
+
     if weights is None:
         weights = np.ones_like(f)
     which_right = x > cut
     which_left = np.logical_not(which_right)
     out = np.empty_like(f)
     if which_left.any():
-        out[which_left] = up_down_isotonic_regression(f[which_left], weights=weights[which_left])
+        out[which_left] = up_down_isotonic_regression(
+            f[which_left], weights=weights[which_left]
+        )
     if which_right.any():
-        out[which_right] = up_down_isotonic_regression(f[which_right], weights=weights[which_right])
+        out[which_right] = up_down_isotonic_regression(
+            f[which_right], weights=weights[which_right]
+        )
     return out
 
 
@@ -115,7 +120,7 @@ def smoothed_dipscore_at(
         sample_weights = np.ones_like(samples)
     densities = density.get_smoothed_densities(
         samples[:, None],
-        sigmas=0.5 * 1.06 * samples.std() * (samples.size ** -0.2),
+        sigmas=0.5 * 1.06 * samples.std() * (samples.size**-0.2),
         bin_size_ratio=20.0,
         min_bin_size=0.025,
         max_n_bins=512,
@@ -123,7 +128,9 @@ def smoothed_dipscore_at(
         weights=sample_weights,
     )
     spacings = np.diff(samples)
-    spacings = np.concatenate((spacings[:1], 0.5 * (spacings[1:] + spacings[:-1]), spacings[-1:]))
+    spacings = np.concatenate(
+        (spacings[:1], 0.5 * (spacings[1:] + spacings[:-1]), spacings[-1:])
+    )
     with np.errstate(all="raise"):
         densities /= (densities * spacings).sum()
 
@@ -168,11 +175,15 @@ def smoothed_dipscore_at(
             d = np.ascontiguousarray(densities[order])
             w = np.ascontiguousarray(sample_weights[order])
             if null in ("isotoniconeside", "isotoniconesideunnormed"):
-                dens = fit_unimodal_right(sign * s, d, weights=w, cut=sign * cut, hard=hard)
+                dens = fit_unimodal_right(
+                    sign * s, d, weights=w, cut=sign * cut, hard=hard
+                )
             elif null == "isotonic":
                 dens = up_down_isotonic_regression(d, weights=w)
             elif null == "truncnorm":
-                dens = fit_truncnorm_right(sign * s, d, weights=w, cut=sign * cut, hard=hard)
+                dens = fit_truncnorm_right(
+                    sign * s, d, weights=w, cut=sign * cut, hard=hard
+                )
             else:
                 assert False
 
