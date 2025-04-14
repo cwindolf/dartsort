@@ -30,6 +30,7 @@ from .main import (
     grab,
     threshold,
 )
+from .util.internal_config import *
 from .peel.grab import GrabAndFeaturize
 from .templates import TemplateData
 from .transform import WaveformPipeline
@@ -40,5 +41,6 @@ from .util.data_util import DARTsortSorting
 from .util.drift_util import registered_geometry
 from .util.noise_util import EmbeddedNoise
 from .util.waveform_util import make_channel_index
+from .util.py_util import resolve_path
 
 __version__ = importlib.metadata.version("dartsort")

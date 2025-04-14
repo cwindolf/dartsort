@@ -4,6 +4,7 @@ from threading import local, Lock
 from contextlib import contextmanager
 from pathlib import Path
 from itertools import repeat
+import warnings
 
 import h5py
 import numpy as np
@@ -132,6 +133,7 @@ class BasePeeler(torch.nn.Module):
         total_residual_snips=None,
         residual_snips_per_chunk=None,
         stop_after_n_waveforms=None,
+        shuffle=False,
         overwrite=False,
         residual_filename=None,
         show_progress=True,
@@ -166,6 +168,10 @@ class BasePeeler(torch.nn.Module):
         chunk_starts_samples = self.get_chunk_starts(
             chunk_starts_samples=chunk_starts_samples,
         )
+        chunk_starts_samples = np.asarray(chunk_starts_samples, dtype=int)
+        if shuffle:
+            assert overwrite or last_chunk_start < 0
+            self.fit_subsampling_random_state.shuffle(chunk_starts_samples)
         n_chunks_orig = len(chunk_starts_samples)
         chunks_to_do = [
             start for start in chunk_starts_samples if start > last_chunk_start
@@ -912,9 +918,12 @@ def _peeler_process_job(chunk_start_samples__n_resid_snips):
 
 def extract_random_snips(rg, chunk, n, sniplen):
     if sniplen * n > chunk.shape[0]:
-        raise ValueError("Can't extract this many non-overlapping snips.")
-    empty_len = chunk.shape[0] - sniplen * n
-    times = rg.choice(empty_len, size=n, replace=False)
-    times += np.arange(n) * sniplen
+        warnings.warn("Can't extract this many non-overlapping snips.")
+        times = rg.choice(chunk.shape[0] - sniplen, size=n, replace=False)
+        times.sort()
+    else:
+        empty_len = chunk.shape[0] - sniplen * n
+        times = rg.choice(empty_len, size=n, replace=False)
+        times += np.arange(n) * sniplen
     tixs = times[:, None] + np.arange(sniplen)
     return chunk[tixs], times

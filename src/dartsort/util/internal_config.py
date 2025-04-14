@@ -88,6 +88,8 @@ class FeaturizationConfig:
 
     skip: bool = False
     extract_radius: float = 100.0
+    stop_after_n: int | None = None
+    shuffle: bool = False
 
     # -- denoising configuration
     do_nn_denoise: bool = False
