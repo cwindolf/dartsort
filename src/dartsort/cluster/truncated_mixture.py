@@ -49,7 +49,7 @@ class SpikeTruncatedMixtureModel(nn.Module):
         covariance_radius: float | None = 250.0,
         random_seed=0,
         n_threads: int = 0,
-        batch_size=2**14,
+        batch_size=2**12,
         exact_kl=True,
         fixed_noise_proportion=None,
         sgd_batch_size=None,
