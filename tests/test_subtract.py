@@ -408,7 +408,7 @@ def small_default_config(extract_radius=200):
     rec.set_dummy_probe_from_locations(geom)
 
     cfg = SubtractionConfig(detection_threshold=10.0)
-    fcfg = FeaturizationConfig(extract_radius=extract_radius)
+    fcfg = FeaturizationConfig(extract_radius=extract_radius, n_residual_snips=8)
 
     with tempfile.TemporaryDirectory() as tempdir:
         # test default config

@@ -1,6 +1,6 @@
 import importlib.metadata
 
-from .util import logging_util
+from .util import logging_util, hybrid_util
 
 from . import detect, util, cluster
 from .cluster import cluster_util, density, kmeans, merge, postprocess, ppcalib
@@ -28,7 +28,9 @@ from .main import (
     run_peeler,
     subtract,
     grab,
+    threshold,
 )
+from .util.internal_config import *
 from .peel.grab import GrabAndFeaturize
 from .templates import TemplateData
 from .transform import WaveformPipeline
@@ -39,5 +41,6 @@ from .util.data_util import DARTsortSorting
 from .util.drift_util import registered_geometry
 from .util.noise_util import EmbeddedNoise
 from .util.waveform_util import make_channel_index
+from .util.py_util import resolve_path
 
 __version__ = importlib.metadata.version("dartsort")

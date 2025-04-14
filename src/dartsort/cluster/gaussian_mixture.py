@@ -89,11 +89,11 @@ class SpikeMixtureModel(torch.nn.Module):
         n_threads: int = 4,
         min_count: int = 50,
         n_em_iters: int = 25,
-        kmeans_k: int = 5,
+        kmeans_k: int = 4,
         kmeans_n_iter: int = 100,
         kmeans_drop_prop: float = 0.025,
         kmeans_with_proportions: bool = False,
-        kmeans_kmeanspp_initial: str = "mode",
+        kmeans_kmeanspp_initial: str = "random",
         split_em_iter: int = 0,
         split_whiten: bool = True,
         ppca_in_split: bool = True,
@@ -1353,15 +1353,12 @@ class SpikeMixtureModel(torch.nn.Module):
                 with_neighborhood_ids=True,
                 allow_buffer=True,
             )
-        logger.dartsortverbose(f"Fit {unit_id=} {features=}")
         if weights is None and likelihoods is not None:
             weights = self.get_fit_weights(unit_id, features.indices, likelihoods)
             (valid,) = weights.nonzero(as_tuple=True)
             valid = valid.cpu()
             weights = weights[valid]
             features = features[valid]
-        if logger.isEnabledFor(DARTSORTVERBOSE) and weights is not None:
-            logger.info(f"{weights.sum()=} {weights.min()=} {weights.max()=}")
         unit_args = self.unit_args | unit_args
 
         _, train_extract_neighborhoods = self.data.neighborhoods(neighborhood="extract")
@@ -1600,6 +1597,10 @@ class SpikeMixtureModel(torch.nn.Module):
             criterion = self.merge_criterion
         if kmeans_n_iter is None:
             kmeans_n_iter = self.kmeans_n_iter
+        logger.dartsortverbose(
+            f"Split {unit_id}: {criterion=} {decision_algorithm=} {ignore_channels=} "
+            f"{min_overlap=} {distance_metric=} {kmeans_n_iter=}."
+        )
 
         # get spike data and use interpolation to fill it out to the
         # unit's channel set
@@ -2196,6 +2197,7 @@ class SpikeMixtureModel(torch.nn.Module):
         debug_info=None,
         decision_algorithm=None,
         ignore_channels=True,
+        fit_same_channels=False,
         min_overlap=None,
         distance_metric=None,
         min_cosine=0.1,
@@ -2217,7 +2219,7 @@ class SpikeMixtureModel(torch.nn.Module):
             distance_normalization_kind = self.distance_normalization_kind
 
         # -- evaluate full model
-        fit_channels = self[unit_id].channels.clone() if ignore_channels else None
+        fit_channels = self[unit_id].channels.clone() if fit_same_channels else None
         n_fit = hyp_fit_resps.shape[1]
         if n_fit < self.min_count:
             return None
@@ -2257,6 +2259,8 @@ class SpikeMixtureModel(torch.nn.Module):
             show_progress=False,
             kind="cosine",
         )
+
+        full_conn = cos_connectivity(cosines)
 
         if decision_algorithm == "tree" or debug:
             # -- make linkage and leafsets
@@ -2308,6 +2312,7 @@ class SpikeMixtureModel(torch.nn.Module):
                 # combine the resps to match the partition
                 cur_ids = np.unique(group_ids)
                 level_resps = hyp_fit_resps.new_zeros((len(cur_ids), n_fit))
+                min_conn = np.inf
                 for j, cid in enumerate(cur_ids):
                     in_cid = group_ids == cid
                     in_cid = np.flatnonzero(in_cid)
@@ -2315,8 +2320,9 @@ class SpikeMixtureModel(torch.nn.Module):
 
                     if len(in_cid) > 1:
                         conn = cos_connectivity(cosines[in_cid][:, in_cid])
-                        if conn < min_cosine:
-                            continue
+                        min_conn = min(conn, min_conn)
+                if min_conn < min_cosine:
+                    continue
 
                 # evaluate the corresponding model
                 crit = self.validation_criterion(
@@ -2351,6 +2357,7 @@ class SpikeMixtureModel(torch.nn.Module):
                 level_resps = hyp_fit_resps.new_empty((len(part), n_fit))
                 level_units = [None] * len(part)
                 olap = 1.0
+                min_conn = np.inf
                 for j, p in enumerate(part):
                     k = ids_part[j]
                     lresps = hyp_fit_resps[p]
@@ -2358,10 +2365,12 @@ class SpikeMixtureModel(torch.nn.Module):
                     if tuple(ids_part[j]) in merged_unit_memo:
                         level_units[j] = merged_unit_memo[tuple(ids_part[j])]
 
-                    if len(ids_part) > 1:
-                        conn = cos_connectivity(cosines[ids_part][:, ids_part])
-                        if conn < min_cosine:
-                            continue
+                    if len(ids_part[j]) > 1:
+                        ipj = np.array(ids_part[j])
+                        conn = cos_connectivity(cosines[ipj][:, ipj])
+                        min_conn = min(conn, min_conn)
+                if min_conn < min_cosine:
+                    continue
 
                 crit = self.validation_criterion(
                     self.log_liks,
@@ -2374,6 +2383,7 @@ class SpikeMixtureModel(torch.nn.Module):
                     in_bag=not criterion.startswith("heldout_"),
                 )
                 improvement = crit["improvements"][criterion.removeprefix("heldout_")]
+                print(f"{unit_id=} {part=} {improvement=}")
 
                 # memoize
                 for j, hu in enumerate(crit["hyp_units"]):
@@ -3720,6 +3730,7 @@ class GaussianUnit(torch.nn.Module):
             achans, achan_counts = occupied_chans(
                 features, self.n_channels, neighborhoods=neighborhoods
             )
+            print(f"{achan_counts=}")
             achans = achans[spiketorch.isin_sorted(achans, achans_full)]
             needs_direct = True
         elif self.channels_strategy.endswith("fuzzcore"):

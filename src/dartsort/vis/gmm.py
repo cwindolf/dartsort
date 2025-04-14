@@ -424,6 +424,9 @@ class KMeansSplit(GMMPlot):
     ):
         self.layout = layout
         self.neighborhood = neighborhood
+        if criterion and criterion.startswith("brute_"):
+            decision_algorithm = "brute"
+            criterion = criterion.removeprefix("brute_")
         self.criterion = criterion
         self.with_means = with_means
         self.decision_algorithm = decision_algorithm
@@ -626,10 +629,11 @@ class KMeansSplit(GMMPlot):
         ax_pca, ax_chans = fig_chans.subplots(nrows=2)
         ax_chans.hist(
             unit_chans,
-            histtype="bar",
+            histtype="step",
             bins=chan_bins,
             color=glasbey1024[split_ids],
-            stacked=True,
+            log=True,
+            # stacked=True,
         )
         ax_chans.set_xlabel("channel")
         ax_chans.set_ylabel("chan count in subunit")
@@ -926,6 +930,9 @@ class NeighborTreeMerge(GMMPlot):
     ):
         self.n_neighbors = n_neighbors
         self.metric = metric
+        if criterion and criterion.startswith("brute_"):
+            decision_algorithm = "brute"
+            criterion = criterion.removeprefix("brute_")
         self.criterion = criterion
         self.max_distance = max_distance
         self.criterion_normalization_kind = criterion_normalization_kind

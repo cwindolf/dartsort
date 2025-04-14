@@ -30,7 +30,9 @@ class GrabAndFeaturize(BasePeeler):
             channel_index=channel_index,
             featurization_pipeline=featurization_pipeline,
             chunk_length_samples=chunk_length_samples,
-            chunk_margin_samples=max(trough_offset_samples, spike_length_samples - trough_offset_samples),
+            chunk_margin_samples=max(
+                trough_offset_samples, spike_length_samples - trough_offset_samples
+            ),
             n_chunks_fit=n_chunks_fit,
             fit_subsampling_random_state=fit_subsampling_random_state,
             dtype=dtype,
@@ -42,28 +44,39 @@ class GrabAndFeaturize(BasePeeler):
 
     def out_datasets(self):
         datasets = super().out_datasets()
-        datasets.append(
-            SpikeDataset(name="indices", shape_per_spike=(), dtype=int)
-        )
+        datasets.append(SpikeDataset(name="indices", shape_per_spike=(), dtype=int))
         return datasets
 
-    def process_chunk(self, chunk_start_samples, chunk_end_samples=None, return_residual=False):
+    def process_chunk(
+        self,
+        chunk_start_samples,
+        n_resid_snips=None,
+        chunk_end_samples=None,
+        return_residual=False,
+        skip_features=False,
+    ):
         """Override process_chunk to skip empties."""
         if chunk_end_samples is None:
             chunk_end_samples = min(
                 self.recording.get_num_samples(),
                 chunk_start_samples + self.chunk_length_samples,
             )
-        in_chunk = self.times_samples == self.times_samples.clip(chunk_start_samples, chunk_end_samples - 1)
+        in_chunk = self.times_samples == self.times_samples.clip(
+            chunk_start_samples, chunk_end_samples - 1
+        )
         if not in_chunk.any():
             return dict(n_spikes=0)
 
-        return super().process_chunk(chunk_start_samples, return_residual=return_residual)
+        return super().process_chunk(
+            chunk_start_samples,
+            n_resid_snips=n_resid_snips,
+            chunk_end_samples=chunk_end_samples,
+            return_residual=return_residual,
+            skip_features=skip_features,
+        )
 
     @classmethod
-    def from_config(
-        cls, sorting, recording, waveform_config, featurization_config
-    ):
+    def from_config(cls, sorting, recording, waveform_config, featurization_config):
         geom = torch.tensor(recording.get_channel_locations())
         channel_index = make_channel_index(
             geom, featurization_config.extract_radius, to_torch=True
@@ -101,15 +114,13 @@ class GrabAndFeaturize(BasePeeler):
         left_margin=0,
         right_margin=0,
         return_residual=False,
+        return_waveforms=True,
     ):
         assert not return_residual
 
         in_chunk = torch.nonzero(
             (self.times_samples >= chunk_start_samples)
-            & (
-                self.times_samples
-                < chunk_start_samples + self.chunk_length_samples
-            )
+            & (self.times_samples < chunk_start_samples + self.chunk_length_samples)
         ).squeeze()
 
         if not in_chunk.numel():
@@ -119,16 +130,18 @@ class GrabAndFeaturize(BasePeeler):
         times_rel = self.times_samples[in_chunk] - chunk_left
         channels = self.channels[in_chunk]
 
-        waveforms = spiketorch.grab_spikes(
-            traces,
-            times_rel,
-            channels,
-            self.channel_index,
-            trough_offset=self.trough_offset_samples,
-            spike_length_samples=self.spike_length_samples,
-            already_padded=False,
-            pad_value=torch.nan,
-        )
+        waveforms = None
+        if return_waveforms:
+            waveforms = spiketorch.grab_spikes(
+                traces,
+                times_rel,
+                channels,
+                self.channel_index,
+                trough_offset=self.trough_offset_samples,
+                spike_length_samples=self.spike_length_samples,
+                already_padded=False,
+                pad_value=torch.nan,
+            )
 
         return dict(
             n_spikes=in_chunk.numel(),

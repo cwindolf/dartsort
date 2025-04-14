@@ -17,12 +17,14 @@ from dartsort.config import (
     default_featurization_config,
     default_subtraction_config,
     default_matching_config,
+    default_thresholding_config,
     default_computation_config,
 )
 from dartsort.peel import (
     ObjectiveUpdateTemplateMatchingPeeler,
     SubtractionPeeler,
     GrabAndFeaturize,
+    ThresholdAndFeaturize,
 )
 from dartsort.templates import TemplateData
 from dartsort.util.data_util import (
@@ -165,7 +167,7 @@ def subtract(
     show_progress=True,
     hdf5_filename="subtraction.h5",
     model_subdir="subtraction_models",
-):
+) -> DARTsortSorting:
     check_recording(recording)
     subtraction_peeler = SubtractionPeeler.from_config(
         recording,
@@ -206,7 +208,7 @@ def match(
     template_data=None,
     template_npz_filename="template_data.npz",
     computation_config=default_computation_config,
-):
+) -> DARTsortSorting:
     assert output_dir is not None
     model_dir = resolve_path(output_dir) / model_subdir
 
@@ -261,8 +263,7 @@ def grab(
     hdf5_filename="grab.h5",
     model_subdir="grab_models",
     computation_config=default_computation_config,
-):
-    # instantiate peeler
+) -> DARTsortSorting:
     grabber = GrabAndFeaturize.from_config(
         sorting,
         recording,
@@ -271,6 +272,36 @@ def grab(
     )
     sorting = run_peeler(
         grabber,
+        output_dir,
+        hdf5_filename,
+        model_subdir,
+        featurization_config,
+        chunk_starts_samples=chunk_starts_samples,
+        overwrite=overwrite,
+        show_progress=show_progress,
+        computation_config=computation_config,
+    )
+    return sorting
+
+
+def threshold(
+    recording,
+    output_dir,
+    waveform_config=default_waveform_config,
+    thresholding_config=default_thresholding_config,
+    featurization_config=default_featurization_config,
+    chunk_starts_samples=None,
+    overwrite=False,
+    show_progress=True,
+    hdf5_filename="threshold.h5",
+    model_subdir="threshold_models",
+    computation_config=default_computation_config,
+) -> DARTsortSorting:
+    thresholder = ThresholdAndFeaturize.from_config(
+        recording, waveform_config, thresholding_config, featurization_config
+    )
+    sorting = run_peeler(
+        thresholder,
         output_dir,
         hdf5_filename,
         model_subdir,

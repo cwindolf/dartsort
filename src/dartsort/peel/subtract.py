@@ -6,18 +6,18 @@ from pathlib import Path
 import torch
 import torch.nn.functional as F
 
-from dartsort.detect import (
+from ..detect import (
     detect_and_deduplicate,
     singlechan_template_detect_and_deduplicate,
 )
-from dartsort.transform import (
+from ..transform import (
     SingleChannelTemplates,
     Voltage,
     Waveform,
     WaveformPipeline,
 )
-from dartsort.util import peel_util, spiketorch, job_util
-from dartsort.util.waveform_util import (
+from ..util import peel_util, spiketorch, job_util
+from ..util.waveform_util import (
     get_relative_subset,
     make_channel_index,
     relative_channel_subset_index,
@@ -48,6 +48,7 @@ class SubtractionPeeler(BasePeeler):
         n_waveforms_fit=20_000,
         fit_subsampling_random_state=0,
         fit_sampling="random",
+        fit_max_reweighting=4.0,
         residnorm_decrease_threshold=3.162,
         use_singlechan_templates=False,
         n_singlechan_templates=10,
@@ -65,6 +66,7 @@ class SubtractionPeeler(BasePeeler):
             max_waveforms_fit=max_waveforms_fit,
             fit_subsampling_random_state=fit_subsampling_random_state,
             n_waveforms_fit=n_waveforms_fit,
+            fit_max_reweighting=fit_max_reweighting,
             fit_sampling=fit_sampling,
             trough_offset_samples=trough_offset_samples,
             spike_length_samples=spike_length_samples,
@@ -238,6 +240,7 @@ class SubtractionPeeler(BasePeeler):
             n_chunks_fit=subtraction_config.n_chunks_fit,
             max_waveforms_fit=subtraction_config.max_waveforms_fit,
             fit_sampling=subtraction_config.fit_sampling,
+            fit_max_reweighting=subtraction_config.fit_max_reweighting,
             n_waveforms_fit=subtraction_config.n_waveforms_fit,
             fit_subsampling_random_state=subtraction_config.fit_subsampling_random_state,
             residnorm_decrease_threshold=subtraction_config.residnorm_decrease_threshold,
@@ -254,6 +257,7 @@ class SubtractionPeeler(BasePeeler):
         left_margin=0,
         right_margin=0,
         return_residual=False,
+        return_waveforms=True,
     ):
         extract_index = None if self.extract_subtract_same else self.channel_index
         traces = traces.to(self.dtype)

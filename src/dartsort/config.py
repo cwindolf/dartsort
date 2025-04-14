@@ -46,7 +46,7 @@ class DARTsortUserConfig:
         "Default value corresponds to 42 samples at 30kHz.",
     )
     ms_after: Annotated[float, Field(gt=0)] = argfield(
-        default=2.6,
+        default=2.6 + 0.1 / 3,
         doc="Length of time (ms) after trough (or peak) in waveform snippets. "
         "Default value corresponds to 79 samples at 30kHz.",
     )
@@ -122,7 +122,7 @@ class DARTsortUserConfig:
     # -- matching parameters
     amplitude_scaling_stddev: Annotated[float, Field(ge=0)] = 0.1
     amplitude_scaling_limit: Annotated[float, Field(ge=0)] = 1.0
-    temporal_upsamples: Annotated[int, Field(gt=1)] = 4
+    temporal_upsamples: Annotated[int, Field(ge=1)] = 4
 
     # -- motion estimation parameters
     do_motion_estimation: bool = argfield(

@@ -10,12 +10,15 @@ from dartsort.util import simkit
 def test_fakedata():
     geom = simkit.generate_geom()
     rec_sim = simkit.StaticSimulatedRecording(
+        duration_samples=10 * 30_000,
+        n_units=40,
         template_simulator=simkit.PointSource3ExpSimulator(geom),
         noise=simkit.WhiteNoise(len(geom)),
-        firing_rates=np.arange(20.0, 31.0),
-        jitter=4,
+        min_fr_hz=20.0,
+        max_fr_hz=31.0,
+        temporal_jitter=4,
     )
-    rec, gt_sorting = rec_sim.simulate(t_samples=10 * 30_000)
+    rec = rec_sim.simulate()
 
     with tempfile.TemporaryDirectory() as tempdir:
         cfg = dartsort.DARTsortInternalConfig(

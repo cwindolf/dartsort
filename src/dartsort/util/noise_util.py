@@ -147,7 +147,7 @@ class WhiteNoise(torch.nn.Module):
         self.n_channels = n_channels
         self.scale = scale
 
-    def simulate(self, size=1, t=None, generator=None):
+    def simulate(self, size=1, t=None, generator=None, chunk_t=None):
         assert t is not None
         x = torch.randn(size, t, self.n_channels, generator=generator)
         if self.scale != 1.0:
@@ -164,6 +164,10 @@ class StationaryFactorizedNoise(torch.nn.Module):
         self.block_size = block_size
         self.t = t
 
+    def spatial_cov(self):
+        rt = self.spatial_std * self.vt_spatial.T
+        return rt @ rt.T
+
     def whiten(self, snippet):
         wsnip = snippet @ (self.vt_spatial / self.spatial_std[:, None])
         wsnip = spiketorch.single_inv_oaconv1d(
@@ -177,7 +181,7 @@ class StationaryFactorizedNoise(torch.nn.Module):
         wsnip = wsnip.T @ self.vt_spatial.T
         return wsnip
 
-    def simulate(self, size=1, t=None, generator=None):
+    def simulate(self, size=1, t=None, generator=None, chunk_t=None):
         """Simulate stationary factorized noise
 
         White noise is the same in FFT space or not. So we start there,
@@ -190,6 +194,17 @@ class StationaryFactorizedNoise(torch.nn.Module):
         assert t >= self.t
         c = self.spatial_std.numel()
         device = self.spatial_std.device
+
+        if chunk_t:
+            out = torch.zeros((t + self.t, c))
+            taper = torch.linspace(0.0, 1.0, steps=self.t)
+            for bs in trange(0, t, chunk_t):
+                chunk = self.simulate(t=chunk_t + self.t, generator=generator)[0]
+                if bs > 0:
+                    chunk[: self.t] *= taper[:, None]
+                chunk[-self.t :] *= (1 - taper)[:, None]
+                out[bs : bs + chunk_t + self.t] += chunk.cpu()
+            return out[None, : -self.t]
 
         # need extra room at the edges to do valid convolution
         t_padded = t + self.t - 1

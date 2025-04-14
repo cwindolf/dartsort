@@ -50,6 +50,7 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
         n_chunks_fit=40,
         max_waveforms_fit=50_000,
         n_waveforms_fit=20_000,
+        fit_max_reweighting=4.0,
         fit_subsampling_random_state=0,
         fit_sampling="random",
         max_iter=1000,
@@ -67,6 +68,7 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
             fit_subsampling_random_state=fit_subsampling_random_state,
             fit_sampling=fit_sampling,
             n_waveforms_fit=n_waveforms_fit,
+            fit_max_reweighting=fit_max_reweighting,
             trough_offset_samples=trough_offset_samples,
             spike_length_samples=spike_length_samples,
             dtype=dtype,
@@ -476,6 +478,7 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
             fit_subsampling_random_state=matching_config.fit_subsampling_random_state,
             n_waveforms_fit=matching_config.n_waveforms_fit,
             fit_sampling=matching_config.fit_sampling,
+            fit_max_reweighting=matching_config.fit_max_reweighting,
             max_iter=matching_config.max_iter,
         )
 
@@ -486,6 +489,7 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
         left_margin=0,
         right_margin=0,
         return_residual=False,
+        return_waveforms=True,
         return_conv=False,
     ):
         # get current template set
@@ -691,20 +695,20 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
 
         # subset to peaks inside the margin and sort for the caller
         max_time = traces.shape[0] - right_margin - 1
-        valid = peaks.times == peaks.times.clamp(left_margin, max_time)
+        times_offset = peaks.times + self.trough_offset_samples
+        valid = times_offset == times_offset.clamp(left_margin, max_time)
         peaks.subset(*torch.nonzero(valid, as_tuple=True), sort=True)
 
         # extract collision-cleaned waveforms on small neighborhoods
         channels = waveforms = None
         if return_collisioncleaned_waveforms:
-            channels, waveforms = (
-                compressed_template_data.get_collisioncleaned_waveforms(
-                    residual_padded,
-                    peaks,
-                    self.channel_index,
-                    spike_length_samples=self.spike_length_samples,
-                )
+            cc = compressed_template_data.get_collisioncleaned_waveforms(
+                residual_padded,
+                peaks,
+                self.channel_index,
+                spike_length_samples=self.spike_length_samples,
             )
+            channels, waveforms = cc
 
         res = dict(
             n_spikes=peaks.n_spikes,
@@ -1033,7 +1037,7 @@ class MatchingTemplateData:
         convs = torch.linalg.vecdot(snips[dup_ix].view(len(temps), -1), temps)
         convs_prev = torch.linalg.vecdot(snips_prev[dup_ix].view(len(temps), -1), temps)
 
-        better = convs >= convs_prev
+        better = convs > convs_prev
         convs = torch.maximum(convs, convs_prev)
 
         norms = norms[dup_ix]

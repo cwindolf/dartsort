@@ -10,6 +10,13 @@ class WaveformPipeline(torch.nn.Module):
         check_unique_feature_names(transformers)
         self.transformers = torch.nn.ModuleList(transformers)
 
+    def __len__(self):
+        return len(self.transformers)
+
+    def __bool__(self):
+        # if I am False, I return empty dicts always.
+        return bool(len(self.transformers))
+
     @classmethod
     def from_class_names_and_kwargs(cls, geom, channel_index, class_names_and_kwargs):
         from .all_transformers import transformers_by_class_name
