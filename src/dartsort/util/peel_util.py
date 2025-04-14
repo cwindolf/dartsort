@@ -59,7 +59,7 @@ def run_peeler(
         show_progress=show_progress,
         computation_config=computation_config,
         total_residual_snips=featurization_config.n_residual_snips,
-        stop_after_n=featurization_config.stop_after_n,
+        stop_after_n_waveforms=featurization_config.stop_after_n,
         shuffle=featurization_config.shuffle,
     )
     _gc(computation_config.actual_n_jobs(), computation_config.actual_device())
