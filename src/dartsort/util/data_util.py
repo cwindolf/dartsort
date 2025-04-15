@@ -70,8 +70,8 @@ class DARTsortSorting:
                 self.__dict__[k] = v
 
     def to_numpy_sorting(self):
-        return NumpySorting.from_times_labels(
-            times_list=self.times_samples,
+        return NumpySorting.from_samples_and_labels(
+            samples_list=self.times_samples,
             labels_list=self.labels,
             sampling_frequency=self.sampling_frequency,
         )

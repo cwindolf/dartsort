@@ -136,7 +136,7 @@ def test_channel_subsetting():
     )
     assert (small_channel_index < len(geom)).sum(1).min() >= 1
     assert np.array_equal(
-        np.isnan(waveforms_small[:, 0, :]),
+        np.isnan(waveforms_small[:, 0, :].numpy(force=True)),
         small_channel_index[max_channels] == len(geom),
     )
 
@@ -167,7 +167,7 @@ def test_channel_subsetting():
         )
         assert (small_channel_index < len(geom)).sum(1).min() >= 1
         assert np.array_equal(
-            np.isnan(waveforms_small.cpu()[:, 0, :]),
+            np.isnan(waveforms_small.cpu()[:, 0, :].numpy(force=True)),
             small_channel_index[max_channels].cpu() == len(geom),
         )
 

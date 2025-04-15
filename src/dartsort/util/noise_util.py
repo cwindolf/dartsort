@@ -746,7 +746,7 @@ class EmbeddedNoise(torch.nn.Module):
                 fullcovq[validq[:, None] & validq[None, :]] = covq.view(-1)
                 if glasso_alpha:
                     res = graphical_lasso(
-                        fullcovq.numpy(force=True), alpha=glasso_alpha, mode="lars"
+                        fullcovq.numpy(force=True), alpha=glasso_alpha, mode="lars", max_iter=256
                     )
                     fullcovq = torch.from_numpy(res[0]).to(fullcovq)
                 qeig, qv = torch.linalg.eigh(fullcovq)
@@ -762,7 +762,7 @@ class EmbeddedNoise(torch.nn.Module):
             cov_spatial[valid[:, None] & valid[None, :]] = cov.view(-1)
             if glasso_alpha:
                 res = graphical_lasso(
-                    cov_spatial.numpy(force=True), alpha=glasso_alpha, mode="lars"
+                    cov_spatial.numpy(force=True), alpha=glasso_alpha, mode="lars", max_iter=256
                 )
                 cov_spatial = torch.from_numpy(res[0]).to(cov_spatial)
             channel_eig, channel_v = torch.linalg.eigh(cov_spatial)

@@ -5,7 +5,6 @@ import probeinterface
 from spikeinterface.core import NumpySorting, NumpyRecording
 from scipy.spatial.distance import cdist
 from scipy.interpolate import CubicSpline
-import torch
 from tqdm.auto import tqdm
 
 from dartsort.templates.templates import TemplateData
@@ -14,7 +13,7 @@ from dredge import motion_util
 
 from .noise_util import StationaryFactorizedNoise, WhiteNoise
 from .data_util import DARTsortSorting
-from .spiketorch import spawn_torch_rg
+from .spiketorch import spawn_torch_rg, ptp
 from .drift_util import registered_geometry
 
 
@@ -139,7 +138,7 @@ def simulate_sorting(
     # spike_train = spike_train[order]
     # spike_labels = spike_labels[order]
 
-    sorting = NumpySorting.from_times_labels(
+    sorting = NumpySorting.from_samples_and_labels(
         [spike_times], [spike_labels], sampling_frequency=sampling_frequency
     )
 
@@ -576,7 +575,7 @@ class StaticSimulatedRecording:
             )
 
             btemps = self.scalings[batch, None, None] * temps[bl, bjitter]
-            self.maxchans[batch] = btemps.ptp(1).argmax(1)
+            self.maxchans[batch] = ptp(btemps).argmax(1)
             np.add.at(x, (tix, chan_ix[None, None]), btemps)
 
         recording = NumpyRecording(x, sampling_frequency=self.template_simulator.fs)
