@@ -8,6 +8,7 @@ import torch
 from linear_operator import operators
 from scipy.fftpack import next_fast_len
 from tqdm.auto import trange
+from sklearn.covariance import graphical_lasso
 
 from ..util import drift_util, more_operators, spiketorch
 
@@ -479,7 +480,7 @@ class EmbeddedNoise(torch.nn.Module):
         cov = self.marginal_covariance(channels=channels)
         assert data.ndim == 3
         data = data.reshape(len(data), -1)
-        chol = cov.cholesky()
+        chol = cov.cholesky().to_dense()
         res = torch.linalg.solve_triangular(chol, data.T, upper=False)
         res = res.T.unsqueeze(2)
 
@@ -597,7 +598,7 @@ class EmbeddedNoise(torch.nn.Module):
             marg_cov = marg_cov.reshape(r * ncl, r * nc)
             return linear_operator.to_linear_operator(marg_cov)
 
-        if self.cov_kind == "factorized":
+        if self.cov_kind in "factorized":
             rank_root = self.rank_vt.T * self.rank_std
             rank_cov = rank_root @ rank_root.T
             chan_root = self.channel_vt.T[channels] * self.channel_std
@@ -634,7 +635,7 @@ class EmbeddedNoise(torch.nn.Module):
         assert False
 
     @classmethod
-    def estimate(cls, snippets, mean_kind="zero", cov_kind="scalar"):
+    def estimate(cls, snippets, mean_kind="zero", cov_kind="scalar", glasso_alpha=0.01):
         """Factory method to estimate noise model from TPCA snippets
 
         Arguments
@@ -743,6 +744,11 @@ class EmbeddedNoise(torch.nn.Module):
                 covq = spiketorch.nancov(xq[:, validq])
                 fullcovq = torch.eye(xq.shape[1], dtype=covq.dtype, device=covq.device)
                 fullcovq[validq[:, None] & validq[None, :]] = covq.view(-1)
+                if glasso_alpha:
+                    res = graphical_lasso(
+                        fullcovq.numpy(force=True), alpha=glasso_alpha, mode="lars"
+                    )
+                    fullcovq = torch.from_numpy(res[0]).to(fullcovq)
                 qeig, qv = torch.linalg.eigh(fullcovq)
                 channel_std[q] = qeig.sqrt()
                 channel_vt[q] = qv.T
@@ -754,6 +760,11 @@ class EmbeddedNoise(torch.nn.Module):
                 x_spatial.shape[1], dtype=cov.dtype, device=cov.device
             )
             cov_spatial[valid[:, None] & valid[None, :]] = cov.view(-1)
+            if glasso_alpha:
+                res = graphical_lasso(
+                    cov_spatial.numpy(force=True), alpha=glasso_alpha, mode="lars"
+                )
+                cov_spatial = torch.from_numpy(res[0]).to(cov_spatial)
             channel_eig, channel_v = torch.linalg.eigh(cov_spatial)
             channel_std = channel_eig.sqrt()
             channel_vt = channel_v.T.contiguous()
@@ -778,6 +789,7 @@ class EmbeddedNoise(torch.nn.Module):
         interpolation_method="kriging",
         sigma=20.0,
         device=None,
+        glasso_alpha=0.01,
     ):
         from dartsort.util.drift_util import registered_geometry
 
@@ -795,7 +807,9 @@ class EmbeddedNoise(torch.nn.Module):
             interpolation_method=interpolation_method,
             device=device,
         )
-        return cls.estimate(snippets, mean_kind=mean_kind, cov_kind=cov_kind)
+        return cls.estimate(
+            snippets, mean_kind=mean_kind, cov_kind=cov_kind, glasso_alpha=glasso_alpha
+        )
 
 
 def interpolate_residual_snippets(
