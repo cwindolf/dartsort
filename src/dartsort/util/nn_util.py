@@ -105,6 +105,70 @@ class LinearResidualBlock(nn.Module):
         return out + x
 
 
+class UNetLinear(nn.Module):
+    def __init__(
+        self,
+        input_dim,
+        half_hidden_dims,
+        nonlinearity,
+        norm_kind=None,
+    ):
+        self.blocks_in = nn.ModuleList()
+        self.blocks_out = nn.ModuleList()
+
+        inner_gated = nonlinearity = torch.nn.GLU
+
+        *in_dims, middle_dim = half_hidden_dims
+        out_dims = in_dims[::-1]
+
+        current_dim = input_dim
+        out_dims_in = []
+        for out_dim in half_hiddden_dims:
+            block_layers = []
+            block_layers.append(nn.Linear(current_dim, (1 + inner_gated) * out_dim))
+            norm = get_norm((1 + inner_gated) * out_dim, norm_kind)
+            if norm is not None:
+                block_layers.append(norm)
+            block_layers.append(nonlinearity())
+            self.blocks_in.append(nn.Sequential(*block_layers))
+            current_dim = out_dim
+            out_dims_in.append(out_dim)
+
+        block_layers = []
+        block_layers.append(nn.Linear(current_dim, (1 + inner_gated) * middle_dim))
+        norm = get_norm((1 + inner_gated) * middle_dim, norm_kind)
+        if norm is not None:
+            block_layers.append(norm)
+        block_layers.append(nonlinearity())
+        self.middle_block = nn.Sequential(*block_layers)
+        current_dim = middle_dim
+
+        for out_dim in out_dims:
+            cat_dim = out_dims_in.pop()
+            current_dim = current_dim + cat_dim
+
+            block_layers = [Cat()]
+            block_layers.append(nn.Linear(current_dim, (1 + inner_gated) * out_dim))
+            norm = get_norm((1 + inner_gated) * out_dim, norm_kind)
+            if norm is not None:
+                block_layers.append(norm)
+            block_layers.append(nonlinearity())
+            self.blocks_out.append(nn.Sequential(*block_layers))
+            current_dim = out_dim
+        self.final_dim = current_dim
+        assert not out_dims_in
+
+    def forward(self, x):
+        stack = []
+        for b in self.blocks_in:
+            x = b(x)
+            stack.append(x)
+        x = self.middle_block(x)
+        for b in self.blocks_out:
+            x = b((x, stack.pop()))
+        return x
+
+
 def get_mlp(
     input_dim,
     hidden_dims,
@@ -145,6 +209,12 @@ def get_mlp(
         for hd in hidden_dims[1:]:
             layers.append(LinearResidualBlock(compression_dim, hd, norm_kind=norm_kind))
         final_dim = compression_dim
+
+    elif res_type == "unet_linear":
+        layers.append(
+            UNetLinear(input_dim, hidden_dims, out_dim, nonlinearity)
+        )
+        final_dim = layers[-1].final_dim
 
     elif res_type in ("none", "outer"):
         # res_type == "none" is handled in get_waveform_mlp
