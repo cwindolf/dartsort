@@ -244,7 +244,9 @@ def threshold_chunk(
     if not times_rel.numel():
         return dict(
             n_spikes=0,
+            orig_times_rel=times_rel,
             times_rel=times_rel,
+            orig_channels=channels,
             channels=channels,
             voltages=energies,
             waveforms=energies.view(-1, spike_length_samples, n_index),
@@ -284,7 +286,7 @@ def threshold_chunk(
             voltages=energies,
             orig_times_rel=orig_times_rel,
             orig_channels=orig_channels,
-            waveforms=energies.view(-1, spike_length_samples, n_index),
+            waveforms=None,
         )
 
     if max_spikes_per_chunk is not None:

@@ -139,6 +139,7 @@ def featurization_config_to_class_names_and_kwargs(
 
     class_names_and_kwargs = []
     do_feats = not fc.denoise_only
+    sls_kw = dict(spike_length_samples=waveform_config.spike_length_samples(sampling_frequency))
 
     if do_feats and fc.save_input_voltages:
         class_names_and_kwargs.append(
@@ -146,7 +147,7 @@ def featurization_config_to_class_names_and_kwargs(
         )
     if do_feats and fc.save_input_waveforms:
         class_names_and_kwargs.append(
-            ("Waveform", {"name_prefix": fc.input_waveforms_name})
+            ("Waveform", {"name_prefix": fc.input_waveforms_name, **sls_kw})
         )
     if fc.learn_cleaned_tpca_basis:
         class_names_and_kwargs.append(
@@ -191,7 +192,7 @@ def featurization_config_to_class_names_and_kwargs(
         class_names_and_kwargs.append(("EnforceDecrease", {}))
     if do_feats and fc.save_output_waveforms:
         class_names_and_kwargs.append(
-            ("Waveform", {"name_prefix": fc.output_waveforms_name})
+            ("Waveform", {"name_prefix": fc.output_waveforms_name, **sls_kw})
         )
 
     if do_feats and fc.save_output_tpca_projs:

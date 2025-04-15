@@ -51,6 +51,7 @@ def run_peeler(
     )
 
     # run main
+    n_resid_now = featurization_config.n_residual_snips * int(not featurization_config.residual_later)
     peeler.peel(
         output_hdf5_filename,
         chunk_starts_samples=chunk_starts_samples,
@@ -58,11 +59,26 @@ def run_peeler(
         residual_filename=residual_filename,
         show_progress=show_progress,
         computation_config=computation_config,
-        total_residual_snips=featurization_config.n_residual_snips,
+        total_residual_snips=n_resid_now,
         stop_after_n_waveforms=featurization_config.stop_after_n,
         shuffle=featurization_config.shuffle,
     )
     _gc(computation_config.actual_n_jobs(), computation_config.actual_device())
+
+    if featurization_config.residual_later:
+        peeler.run_subsampled_peeling(
+            output_hdf5_filename,
+            chunk_length_samples=peeler.spike_length_samples,
+            residual_to_h5=True,
+            skip_features=True,
+            ignore_resuming=True,
+            computation_config=computation_config,
+            n_chunks=featurization_config.n_residual_snips,
+            task_name="Residual snips",
+            overwrite=False,
+            ordered=True,
+            skip_last=True,
+        )
 
     # do localization
     if do_localization_later:

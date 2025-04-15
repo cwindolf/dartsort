@@ -100,6 +100,7 @@ class FeaturizationConfig:
 
     # -- residual snips
     n_residual_snips: int = 4096
+    residual_later: bool = False
 
     # -- featurization configuration
     save_input_voltages: bool = False

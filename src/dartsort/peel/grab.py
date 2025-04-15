@@ -33,14 +33,16 @@ class GrabAndFeaturize(BasePeeler):
             chunk_margin_samples=max(
                 trough_offset_samples, spike_length_samples - trough_offset_samples
             ),
+            trough_offset_samples=trough_offset_samples,
+            spike_length_samples=spike_length_samples,
             n_chunks_fit=n_chunks_fit,
             fit_subsampling_random_state=fit_subsampling_random_state,
             dtype=dtype,
         )
-        self.trough_offset_samples = trough_offset_samples
-        self.spike_length_samples = spike_length_samples
         self.register_buffer("times_samples", torch.asarray(times_samples))
         self.register_buffer("channels", torch.asarray(channels))
+        assert self.times_samples.ndim == 1
+        assert self.times_samples.shape == self.channels.shape
 
     def out_datasets(self):
         datasets = super().out_datasets()
@@ -118,10 +120,9 @@ class GrabAndFeaturize(BasePeeler):
     ):
         assert not return_residual
 
-        in_chunk = torch.nonzero(
-            (self.times_samples >= chunk_start_samples)
-            & (self.times_samples < chunk_start_samples + self.chunk_length_samples)
-        ).squeeze()
+        max_t = chunk_start_samples + self.chunk_length_samples - 1
+        in_chunk = self.times_samples == self.times_samples.clip(chunk_start_samples, max_t)
+        (in_chunk,) = in_chunk.nonzero(as_tuple=True)
 
         if not in_chunk.numel():
             return dict(n_spikes=0)
@@ -129,6 +130,9 @@ class GrabAndFeaturize(BasePeeler):
         chunk_left = chunk_start_samples - left_margin
         times_rel = self.times_samples[in_chunk] - chunk_left
         channels = self.channels[in_chunk]
+
+        assert times_rel.ndim == 1
+        assert channels.ndim == 1
 
         waveforms = None
         if return_waveforms:
