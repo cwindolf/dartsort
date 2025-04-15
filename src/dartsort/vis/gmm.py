@@ -318,6 +318,7 @@ class CovarianceResidual(GMMPlot):
 
         for ax in axes.flat[len(covs) :]:
             ax.axis("off")
+        ax_eig.set_xlim([-0.05, 25.05])
         ax_eig.set_xlabel("eig index")
         ax_eig.set_ylabel("eigenvalues")
         ax_eig.axhline(0, color="k", lw=0.8)

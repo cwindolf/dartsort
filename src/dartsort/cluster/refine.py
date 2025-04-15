@@ -45,6 +45,7 @@ def refine_clustering(
         motion_est=motion_est,
         sigma=refinement_config.interpolation_sigma,
         device=computation_config.actual_device(),
+        glasso_alpha=refinement_config.glasso_alpha,
     )
     data = StableSpikeDataset.from_sorting(
         sorting,
@@ -80,6 +81,7 @@ def refine_clustering(
         hard_noise=refinement_config.hard_noise,
         split_decision_algorithm=refinement_config.split_decision_algorithm,
         merge_decision_algorithm=refinement_config.merge_decision_algorithm,
+        prior_pseudocount=refinement_config.prior_pseudocount,
     )
 
     # these are for benchmarking

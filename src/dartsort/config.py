@@ -8,7 +8,7 @@ from pydantic.dataclasses import dataclass
 from .util.internal_config import *
 
 
-@dataclass(frozen=True, kw_only=True, slots=True)
+@dataclass(frozen=True, kw_only=True)
 class DARTsortUserConfig:
     """User-facing configuration options"""
 
@@ -146,7 +146,7 @@ class DARTsortUserConfig:
     min_amplitude: float | None = argfield(default=None, arg_type=float)
 
 
-@dataclass(frozen=True, kw_only=True, slots=True)
+@dataclass(frozen=True, kw_only=True)
 class DeveloperConfig(DARTsortUserConfig):
     """Additional parameters for experiments. This API will never be stable."""
 
@@ -182,5 +182,8 @@ class DeveloperConfig(DARTsortUserConfig):
     gmm_val_proportion: Annotated[float, Field(gt=0)] = 0.25
     gmm_split_decision_algorithm: str = "tree"
     gmm_merge_decision_algorithm: str = "brute"
+    prior_pseudocount: float = 5.0
+    cov_kind: str = "factorized"
+    glasso_alpha: float = 0.01
 
     save_intermediate_labels: bool = False

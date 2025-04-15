@@ -289,8 +289,12 @@ def ppca_e_step(
 
         # wx = nd.w_norm @ nd.x
         if nd.have_missing:
-            e_y[:, nd.active_subset] += (nd.w_norm @ nd.x).view(rank, -1)
-            e_y[:, nd.missing_subset] += (nd.w_norm @ xbar_m).view(rank, -1)
+            e_y[:, nd.active_subset] += (
+                (nd.w_norm[:, None] * nd.x).sum(0).view(rank, -1)
+            )
+            e_y[:, nd.missing_subset] += (
+                (nd.w_norm[:, None] * xbar_m).sum(0).view(rank, -1)
+            )
         else:
             e_y.view(1, -1).addmm_(nd.w_norm[None], nd.x)
 
