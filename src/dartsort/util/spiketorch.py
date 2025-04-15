@@ -25,10 +25,12 @@ def spawn_torch_rg(seed: int | np.random.Generator = 0):
     return generator
 
 
-def ll_via_inv_quad(cov, y):
+def ll_via_inv_quad(cov, y, inv_quad_only=False):
     inv_quad, logdet = linear_operator.inv_quad_logdet(
         cov, y.T, logdet=True, reduce_inv_quad=False
     )
+    if inv_quad_only:
+        return inv_quad
     ll = -0.5 * (inv_quad + logdet + log2pi * y.shape[1])
     return ll
 
