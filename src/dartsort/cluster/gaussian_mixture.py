@@ -3671,7 +3671,7 @@ class GaussianUnit(torch.nn.Module):
             noise,
             cov_kind="ppca",
             ppca_rank=M,
-            channels_strategy="all",
+            channels_strategy="count",
         )
         self.register_buffer("mean", mean)
         if basis is not None:
@@ -3681,7 +3681,9 @@ class GaussianUnit(torch.nn.Module):
         if channels is not None:
             assert channel_counts is not None
             channels = torch.asarray(channels)
-            snr = snr * torch.asarray(channel_counts, device=snr.device).sqrt()
+            channel_counts = torch.asarray(channel_counts)
+            snr = snr * channel_counts.to(snr.device).sqrt()
+            channels = channels[channel_counts >= self.channels_count_min]
         else:
             channels = snr > channels_amp
             (channels,) = channels.nonzero(as_tuple=True)
