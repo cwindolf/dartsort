@@ -91,6 +91,17 @@ class DARTsortSorting:
             data["feature_keys"] = np.array(list(self.extra_features.keys()))
         np.savez(sorting_npz, **data)
 
+    def drop_missing(self):
+        valid = np.flatnonzero(self.labels >= 0)
+        return replace(
+            self,
+            times_samples=self.times_samples[valid],
+            channels=self.channels[valid],
+            labels=self.labels[valid],
+            parent_h5_path=None,
+            extra_features=None,
+        )
+
     @classmethod
     def load(cls, sorting_npz):
         extra_features = None
