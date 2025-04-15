@@ -45,6 +45,7 @@ def refine_clustering(
         motion_est=motion_est,
         sigma=refinement_config.interpolation_sigma,
         device=computation_config.actual_device(),
+        glasso_alpha=refinement_config.glasso_alpha,
     )
     data = StableSpikeDataset.from_sorting(
         sorting,

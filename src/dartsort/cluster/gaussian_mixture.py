@@ -80,7 +80,7 @@ class SpikeMixtureModel(torch.nn.Module):
         channels_count_min: float = 25.0,
         channels_snr_amp: float = 1.0,
         with_noise_unit: bool = True,
-        prior_pseudocount: float = 0.0,
+        prior_pseudocount: float = 5.0,
         ppca_rank: int = 0,
         ppca_initial_em_iter: int = 5,
         ppca_inner_em_iter: int = 3,
@@ -97,6 +97,7 @@ class SpikeMixtureModel(torch.nn.Module):
         split_em_iter: int = 0,
         split_whiten: bool = True,
         ppca_in_split: bool = True,
+        truncated_noise: bool = False,
         distance_metric: Literal[
             "noise_metric", "kl", "reverse_kl", "symkl"
         ] = "noise_metric",
@@ -185,6 +186,7 @@ class SpikeMixtureModel(torch.nn.Module):
         self.min_overlap = min_overlap
         self.min_log_prop = min_log_prop
         self.prior_pseudocount = prior_pseudocount
+        self.truncated_noise = truncated_noise
 
         # store labels on cpu since we're always nonzeroing / writing np data
         assert self.data.original_sorting.labels is not None
@@ -1578,6 +1580,19 @@ class SpikeMixtureModel(torch.nn.Module):
             )
             del _noise_six  # noise overlaps with all, ignore.
             self._noise_log_likelihoods = _noise_log_likelihoods.numpy(force=True)
+        self.core_noise_truncation_factors = None
+        self.train_extract_noise_truncation_factors = None
+        if self.truncated_noise:
+            self.core_noise_truncation_factors = self.noise_mahal_chi_survival(
+                split="full", neighborhood="core"
+            )
+            self.train_extract_noise_truncation_factors = self.noise_mahal_chi_survival(
+                split="train", neighborhood="extract"
+            )
+            nb_core_full = self.data.neighborhoods(split="full", neighborhood="core")[1]
+            self._noise_log_likelihoods += self.core_noise_truncation_factors[
+                nb_core_full.neighborhood_ids
+            ].numpy(force=True)
         if indices is not None:
             return self._noise_log_likelihoods[indices]
         return self._noise_log_likelihoods
@@ -2389,7 +2404,7 @@ class SpikeMixtureModel(torch.nn.Module):
                     in_bag=not criterion.startswith("heldout_"),
                 )
                 improvement = crit["improvements"][criterion.removeprefix("heldout_")]
-                print(f"{unit_id=} {part=} {improvement=}")
+                logger.dartsortverbose(f"Split {unit_id}: {ids_part=} {improvement=}.")
 
                 # memoize
                 for j, hu in enumerate(crit["hyp_units"]):
@@ -2408,13 +2423,9 @@ class SpikeMixtureModel(torch.nn.Module):
         else:
             assert False
 
-        # -- check if best was good enough
+        # -- organize labels...
         best_improvement = best_improvement
         assert np.isfinite(best_improvement)
-        if best_improvement <= 0:
-            return None
-
-        # -- organize labels...
         best_group_ids = torch.asarray(best_group_ids)
         labels = best_group_ids[full_labels.cpu()]
         _, labels = labels.unique(return_inverse=True)
@@ -3213,6 +3224,57 @@ class SpikeMixtureModel(torch.nn.Module):
         weights = weights[unit_id].to_dense()
         return weights
 
+    def noise_mahal_chi_survival(self, split="full", neighborhood="core"):
+        split_indices, spike_neighborhoods = self.data.neighborhoods(split=split)
+        cn, neighborhood_info, ns = spike_neighborhoods.subset_neighborhoods(
+            torch.arange(self.data.n_channels), batch_size=self.likelihood_batch_size
+        )
+        mahals = torch.full((len(neighborhood_info),), torch.inf)
+        dfs = torch.zeros((len(neighborhood_info),), dtype=torch.long)
+
+        for (
+            neighb_id,
+            neighb_chans,
+            neighb_member_ixs,
+            batch_start,
+        ) in neighborhood_info:
+            chans_valid = spike_neighborhoods.valid_mask(neighb_id)
+            neighb_chans = neighb_chans[chans_valid]
+
+            if spike_neighborhoods.has_feature_cache():
+                features = spike_neighborhoods.neighborhood_features(
+                    neighb_id,
+                    batch_start=batch_start,
+                    batch_size=self.likelihood_batch_size,
+                )
+                features = features.to(self.data.device)
+            else:
+                # full split case
+                assert split_indices == slice(None)
+
+                sp = self.data.spike_data(
+                    neighb_member_ixs, with_channels=False, neighborhood="core"
+                )
+                features = sp.features
+                features = features[..., chans_valid]
+
+            my_mahals = self.noise_unit.log_likelihood(
+                features, neighb_chans, neighborhood_id=neighb_id, inv_quad_only=True
+            )
+            my_min_mahal = my_mahals.min().cpu()
+            mahals[neighb_id] = min(mahals[neighb_id], my_min_mahal)
+            dfs[neighb_id] = np.prod(features.shape[1:])
+
+        # what is p(mahal<=min obs)?
+        chi2 = torch.distributions.chi2.Chi2(df=dfs)
+        chi2_cdfs = chi2.cdf(mahals)
+
+        # how would we renormalize our noise ll to the volume with the
+        # ball cut out? that's log(1/(1-cdf)).
+        log_factor = -torch.log1p(-chi2_cdfs)
+
+        return log_factor
+
     # -- gizmos
 
     def __getstate__(self):
@@ -3917,7 +3979,9 @@ class GaussianUnit(torch.nn.Module):
     def logdet(self, channels=None):
         return self.marginal_covariance(channels).logdet()
 
-    def log_likelihood(self, features, channels, neighborhood_id=None) -> torch.Tensor:
+    def log_likelihood(
+        self, features, channels, neighborhood_id=None, inv_quad_only=False
+    ) -> torch.Tensor:
         """Log likelihood for spike features living on the same channels."""
         if not len(features):
             return features.new_zeros((0,))
@@ -3930,7 +3994,7 @@ class GaussianUnit(torch.nn.Module):
             channels, cache_key=neighborhood_id, device=features.device
         )
         y = features.view(len(features), -1)
-        ll = spiketorch.ll_via_inv_quad(cov, y)
+        ll = spiketorch.ll_via_inv_quad(cov, y, inv_quad_only=inv_quad_only)
         return ll
 
     def divergence(

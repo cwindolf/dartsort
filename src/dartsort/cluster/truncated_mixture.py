@@ -31,7 +31,7 @@ from ._truncated_em_helpers import (
     _grad_basis,
 )
 from ..util import spiketorch
-from ..util.logging_util import DARTSORTDEBUG
+from ..util.logging_util import DARTSORTDEBUG, DARTSORTVERBOSE
 
 logger = getLogger(__name__)
 
@@ -47,6 +47,7 @@ class SpikeTruncatedMixtureModel(nn.Module):
         n_explore: int | None = None,
         n_units: int | None = None,
         covariance_radius: float | None = 250.0,
+        noise_trunc_factors: torch.Tensor | None = None,
         random_seed=0,
         n_threads: int = 0,
         batch_size=2**12,
@@ -54,7 +55,7 @@ class SpikeTruncatedMixtureModel(nn.Module):
         fixed_noise_proportion=None,
         sgd_batch_size=None,
         Cinv_in_grad=True,
-        prior_pseudocount=0,
+        prior_pseudocount=5,
     ):
         super().__init__()
         if n_search is None:
@@ -93,6 +94,7 @@ class SpikeTruncatedMixtureModel(nn.Module):
             covariance_radius=covariance_radius,
             pgeom=data.prgeom,
             Cinv_in_grad=Cinv_in_grad,
+            noise_trunc_factors=noise_trunc_factors,
         )
         self.candidates = CandidateSet(
             neighborhoods=self.train_neighborhoods,
@@ -185,6 +187,8 @@ class SpikeTruncatedMixtureModel(nn.Module):
         )
         if self.prior_pseudocount:
             sc = result.N / (result.N + self.prior_pseudocount)
+            if logger.isEnabledFor(DARTSORTVERBOSE):
+                logger.dartsortverbose(f"TVI mean {sc=}")
             result.m.mul_(sc[:, None, None])
         self.means[..., :-1] = result.m
         if self.bases is not None:
@@ -195,7 +199,10 @@ class SpikeTruncatedMixtureModel(nn.Module):
                 # just to avoid numerical issues when a unit dies
                 result.U[blank] += torch.eye(self.M, device=result.U.device)
             if self.prior_pseudocount:
-                result.U.diagonal(dim1=-2, dim2=-1).add_(self.prior_pseudocount)
+                tikh = self.prior_pseudocount / result.N.clamp(min=1.0)
+                if logger.isEnabledFor(DARTSORTVERBOSE):
+                    logger.dartsortverbose(f"TVI basis {tikh=}")
+                result.U.diagonal(dim1=-2, dim2=-1).add_(tikh[:, None])
             Uc = psd_safe_cholesky(result.U)
             W = torch.cholesky_solve(result.R.view(*result.U.shape[:-1], -1), Uc)
             self.bases[..., :-1] = W.view(self.bases[..., :-1].shape)
@@ -401,6 +408,7 @@ class TruncatedExpectationProcessor(torch.nn.Module):
         precompute_invx=True,
         covariance_radius=None,
         Cinv_in_grad=True,
+        noise_trunc_factors=None,
         pgeom=None,
     ):
         super().__init__()
@@ -408,10 +416,14 @@ class TruncatedExpectationProcessor(torch.nn.Module):
         # initialize fixed noise-related arrays
         self.noise = noise
         if features.isnan().any():
-            print("Yeah. nans. Guess not possible to do in place?")
+            # TODO: something about this...?
             self.features = features.nan_to_num()
         else:
             self.features = features.clone()
+        if noise_trunc_factors is not None:
+            self.register_buffer("noise_trunc_factors", noise_trunc_factors)
+        else:
+            self.noise_trunc_factors = None
         self.initialize_fixed(
             noise, neighborhoods, pgeom=pgeom, covariance_radius=covariance_radius
         )
@@ -743,6 +755,8 @@ class TruncatedExpectationProcessor(torch.nn.Module):
             )
             for ni in range(neighborhoods.n_neighborhoods)
         ]
+        if self.noise_trunc_factors is not None:
+            assert len(noise_trunc_factors) == len(Coo)
         device = Coo[0].device
         Com = []
         for ni in range(neighborhoods.n_neighborhoods):
@@ -991,6 +1005,9 @@ class TruncatedExpectationProcessor(torch.nn.Module):
             noise_lls = self.noise_logliks[batch_indices]
         else:
             noise_lls = None
+        noise_trunc_factors = None
+        if self.noise_trunc_factors is not None and noise_lls is None:
+            noise_trunc_factors = self.noise_trunc_factors[neighborhood_ids]
         if not hasattr(self, "noise_logliks") or not self.M:
             Coo_logdet = self.Coo_logdet[neighborhood_ids]
 
@@ -1011,6 +1028,7 @@ class TruncatedExpectationProcessor(torch.nn.Module):
             Coo_logdet=Coo_logdet,
             log_proportions=self.log_proportions[candidates],
             noise_lls=noise_lls,
+            noise_trunc_factors=noise_trunc_factors,
             wburyroot=wburyroot,
         )
 
@@ -1113,11 +1131,11 @@ class CandidateSet:
                     len(closest_neighbors),
                     self.candidates[:, : self.n_candidates].numpy(),
                 )
-            if logger.isEnabledFor(DARTSORTDEBUG):
-                logger.dartsortdebug(
+            if logger.isEnabledFor(DARTSORTVERBOSE):
+                logger.dartsortverbose(
                     f"Candiate init had {invalid.sum()=} {invalid.shape=}"
                 )
-                logger.dartsortdebug(
+                logger.dartsortverbose(
                     f"Still I assure you that {torch.all(self.candidates[:, :self.n_candidates]>=0)=} and "
                     f"{torch.all(self.candidates[:, :self.n_candidates].sort(dim=1).values.diff(dim=1)>0)=}"
                 )
@@ -1185,8 +1203,8 @@ class CandidateSet:
             targs = integers_without_inner_replacement(
                 self.rg, n_explore.numpy(), size=(n_spikes, self.n_explore)
             )
-            if logger.isEnabledFor(DARTSORTDEBUG):
-                logger.dartsortdebug(
+            if logger.isEnabledFor(DARTSORTVERBOSE):
+                logger.dartsortverbose(
                     f"{n_explore.min()=} {n_explore.max()=} {targs.min()=} {targs.max()=}"
                 )
             targs = torch.from_numpy(targs)
@@ -1202,8 +1220,8 @@ class CandidateSet:
 
         # replace duplicates with -1. TODO: replace quadratic algorithm with -1.
         erase_dups(candidates.numpy())
-        if logger.isEnabledFor(DARTSORTDEBUG):
-            logger.dartsortdebug(
+        if logger.isEnabledFor(DARTSORTVERBOSE):
+            logger.dartsortverbose(
                 f"I have maintained that {torch.all(self.candidates[:, :self.n_candidates]>=0)=} and"
                 f"{torch.all(self.candidates[:, :self.n_candidates].sort(dim=1).values.diff(dim=1)>0)=}"
             )

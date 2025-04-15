@@ -357,7 +357,8 @@ class RefinementConfig:
 
     # -- gmm parameters
     # noise params
-    cov_kind = "full"
+    cov_kind = "factorized"
+    glasso_alpha: float = 0.01
 
     # feature params
     core_radius: float = 35.0
@@ -403,7 +404,7 @@ class RefinementConfig:
     truncated: bool = True
     split_decision_algorithm: str = "tree"
     merge_decision_algorithm: str = "brute"
-    prior_pseudocount: float = 0.0
+    prior_pseudocount: float = 5.0
 
     # if someone wants this
     split_merge_config: SplitMergeConfig | None = None
@@ -579,6 +580,8 @@ def to_internal_config(cfg):
         split_decision_algorithm=cfg.gmm_split_decision_algorithm,
         merge_decision_algorithm=cfg.gmm_merge_decision_algorithm,
         prior_pseudocount=cfg.prior_pseudocount,
+        cov_kind=cfg.cov_kind,
+        glasso_alpha=cfg.glasso_alpha,
     )
     motion_estimation_config = MotionEstimationConfig(
         **{k.name: getattr(cfg, k.name) for k in fields(MotionEstimationConfig)}
