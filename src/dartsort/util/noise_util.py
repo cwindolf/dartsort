@@ -11,6 +11,7 @@ from tqdm.auto import trange
 from sklearn.covariance import graphical_lasso
 
 from ..util import drift_util, more_operators, spiketorch
+from ..util.logging_util import DARTSORTDEBUG
 
 logger = getLogger(__name__)
 
@@ -635,7 +636,7 @@ class EmbeddedNoise(torch.nn.Module):
         assert False
 
     @classmethod
-    def estimate(cls, snippets, mean_kind="zero", cov_kind="scalar", glasso_alpha=0.01):
+    def estimate(cls, snippets, mean_kind="zero", cov_kind="scalar", glasso_alpha=0.01, eps=1e-4):
         """Factory method to estimate noise model from TPCA snippets
 
         Arguments
@@ -746,7 +747,11 @@ class EmbeddedNoise(torch.nn.Module):
                 fullcovq[validq[:, None] & validq[None, :]] = covq.view(-1)
                 if glasso_alpha:
                     res = graphical_lasso(
-                        fullcovq.numpy(force=True), alpha=glasso_alpha, mode="lars", max_iter=256
+                        fullcovq.numpy(force=True),
+                        alpha=glasso_alpha,
+                        mode="cd",
+                        max_iter=100,
+                        verbose=logger.isEnabledFor(DARTSORTDEBUG),
                     )
                     fullcovq = torch.from_numpy(res[0]).to(fullcovq)
                 qeig, qv = torch.linalg.eigh(fullcovq)
@@ -755,16 +760,24 @@ class EmbeddedNoise(torch.nn.Module):
         else:
             x_spatial = x_spatial.reshape(n * rank, n_channels)
             valid = x_spatial.isfinite().any(0)
-            cov = spiketorch.nancov(x_spatial[:, valid])
-            cov_spatial = torch.eye(
-                x_spatial.shape[1], dtype=cov.dtype, device=cov.device
-            )
-            cov_spatial[valid[:, None] & valid[None, :]] = cov.view(-1)
+            cov = spiketorch.nancov(x_spatial[:, valid].double(), force_posdef=True)
+            cov.diagonal().add_(eps)
+
             if glasso_alpha:
+                logger.dartsortdebug(f"Run glasso on {cov.shape=}")
                 res = graphical_lasso(
-                    cov_spatial.numpy(force=True), alpha=glasso_alpha, mode="lars", max_iter=256
+                    cov.numpy(force=True),
+                    alpha=glasso_alpha,
+                    mode="cd",
+                    max_iter=100,
+                    verbose=logger.isEnabledFor(DARTSORTDEBUG),
                 )
-                cov_spatial = torch.from_numpy(res[0]).to(cov_spatial)
+                cov = torch.from_numpy(res[0]).to(cov)
+
+            cov_spatial = torch.eye(
+                x_spatial.shape[1], dtype=x_spatial.dtype, device=x_spatial.device
+            )
+            cov_spatial[valid[:, None] & valid[None, :]] = cov.to(x_spatial).view(-1)
             channel_eig, channel_v = torch.linalg.eigh(cov_spatial)
             channel_std = channel_eig.sqrt()
             channel_vt = channel_v.T.contiguous()
@@ -784,7 +797,7 @@ class EmbeddedNoise(torch.nn.Module):
         cls,
         hdf5_path,
         mean_kind="zero",
-        cov_kind="factorized_by_rank_rank_diag",
+        cov_kind="factorized",
         motion_est=None,
         interpolation_method="kriging",
         sigma=20.0,
@@ -792,6 +805,9 @@ class EmbeddedNoise(torch.nn.Module):
         glasso_alpha=0.01,
     ):
         from dartsort.util.drift_util import registered_geometry
+        logger.dartsortdebug(
+            f"Estimate embedded noise with {mean_kind=} {cov_kind=} {motion_est is None=} {glasso_alpha=}"
+        )
 
         with h5py.File(hdf5_path, "r", locking=False) as h5:
             geom = h5["geom"][:]

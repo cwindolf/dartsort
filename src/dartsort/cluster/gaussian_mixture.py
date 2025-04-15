@@ -555,7 +555,7 @@ class SpikeMixtureModel(torch.nn.Module):
         self.clear_units()
         # not needed. we'll do e step.
         # self.labels[self.data.split_indices["train"]] = labels
-        channels, counts = tmm.channel_occupancy(labels)
+        channels, counts = tmm.channel_occupancy(labels, min_count=self.channels_count_min, min_prop=0.33)
         for j in range(len(tmm.means)):
             basis = None
             if tmm.bases is not None:
@@ -582,7 +582,7 @@ class SpikeMixtureModel(torch.nn.Module):
 
         # final e step for caller
         unit_churn, reas_count, log_liks, spike_logliks = self.e_step(
-            show_progress=step_progress, split=final_split
+            show_progress=show_progress, split=final_split
         )
         log_liks, _ = self.cleanup(log_liks, relabel_split=final_split)
         result["log_liks"] = log_liks
@@ -3683,7 +3683,7 @@ class GaussianUnit(torch.nn.Module):
             channels = torch.asarray(channels)
             channel_counts = torch.asarray(channel_counts)
             snr = snr * channel_counts.to(snr.device).sqrt()
-            channels = channels[channel_counts >= self.channels_count_min]
+            channels = channels[channel_counts[channels] >= self.channels_count_min]
         else:
             channels = snr > channels_amp
             (channels,) = channels.nonzero(as_tuple=True)
@@ -3776,9 +3776,9 @@ class GaussianUnit(torch.nn.Module):
     ):
         if features is None or len(features) < self.channels_count_min:
             if features is None:
-                logger.dartsortdebug(f"Tried to fit a unit with {features=}.")
+                logger.dartsortverbose(f"Tried to fit a unit with {features=}.")
             else:
-                logger.dartsortdebug(
+                logger.dartsortverbose(
                     f"Unit had too few spikes ({len(features)}) for min "
                     f"count {self.channels_count_min}."
                 )

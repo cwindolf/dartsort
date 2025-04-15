@@ -379,7 +379,7 @@ class SpikeTruncatedMixtureModel(nn.Module):
         _, topkinds = torch.topk(self.kl_divergences, k=k, dim=1, largest=False)
         return topkinds
 
-    def channel_occupancy(self, labels):
+    def channel_occupancy(self, labels, min_count=0, min_prop=0):
         shp = self.n_units, self.train_neighborhoods.n_neighborhoods
         unit_neighborhood_counts = np.zeros(shp, dtype=int)
         valid = np.flatnonzero(labels >= 0)
@@ -390,8 +390,11 @@ class SpikeTruncatedMixtureModel(nn.Module):
         # nneighb x nchans
         neighb_to_chans = self.train_neighborhoods.indicators.T.numpy(force=True)
         counts = neighb_occupancy @ neighb_to_chans
-
-        channels = [np.flatnonzero(row) for row in counts]
+        props = [row / max(1, row.max()) for row in counts]
+        channels = [
+            np.flatnonzero(np.logical_and(row >= min_count, prop >= min_prop))
+            for row, prop in zip(counts, props)
+        ]
         return channels, counts
 
 
