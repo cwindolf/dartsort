@@ -61,7 +61,7 @@ class DARTsortUserConfig:
         doc="Threshold in standardized voltage units for initial detection; "
         "peaks or troughs larger than this value will be grabbed.",
     )
-    matching_threshold: Annotated[float, Field(gt=0)] | Literal["fp_control"] = (
+    matching_threshold: Annotated[float, Field(gt=0)] = (
         argfield(
             default=15.0,
             doc="Template matching threshold. If subtracting a template leads "
@@ -69,6 +69,7 @@ class DARTsortUserConfig:
             "that match will be used.",
         )
     )
+    matching_fp_control : bool = False
     denoiser_badness_factor: Annotated[float, Field(gt=0, lt=1)] = argfield(
         default=0.1,
         doc="In initial detection, subtracting clean waveforms inferred "
@@ -180,10 +181,10 @@ class DeveloperConfig(DARTsortUserConfig):
 
     gmm_max_spikes: Annotated[int, Field(gt=0)] = 4_000_000
     gmm_val_proportion: Annotated[float, Field(gt=0)] = 0.25
-    gmm_split_decision_algorithm: str = "tree"
+    gmm_split_decision_algorithm: str = "brute"
     gmm_merge_decision_algorithm: str = "brute"
     prior_pseudocount: float = 5.0
     cov_kind: str = "factorized"
-    glasso_alpha: float = 0.01
+    glasso_alpha: float | int = argfield(default=5, arg_type=int_or_float)
 
     save_intermediate_labels: bool = False

@@ -1,4 +1,5 @@
 from logging import getLogger
+import warnings
 
 import h5py
 import linear_operator
@@ -8,10 +9,11 @@ import torch
 from linear_operator import operators
 from scipy.fftpack import next_fast_len
 from tqdm.auto import trange
-from sklearn.covariance import graphical_lasso
+from sklearn.covariance import graphical_lasso, GraphicalLassoCV
+from sklearn.exceptions import ConvergenceWarning
 
 from ..util import drift_util, more_operators, spiketorch
-from ..util.logging_util import DARTSORTDEBUG
+from ..util.logging_util import DARTSORTDEBUG, DARTSORTVERBOSE
 
 logger = getLogger(__name__)
 
@@ -760,10 +762,31 @@ class EmbeddedNoise(torch.nn.Module):
         else:
             x_spatial = x_spatial.reshape(n * rank, n_channels)
             valid = x_spatial.isfinite().any(0)
+
             cov = spiketorch.nancov(x_spatial[:, valid].double(), force_posdef=True)
             cov.diagonal().add_(eps)
 
-            if glasso_alpha:
+            if isinstance(glasso_alpha, int):
+                logger.dartsortdebug(f"Run glasso cv on {x_spatial.shape=} {cov.abs().max()=}")
+                # todo: clean up, propagate, ...
+                glasso = GraphicalLassoCV(
+                    alphas=glasso_alpha,
+                    n_jobs=4,
+                    verbose=logger.isEnabledFor(DARTSORTDEBUG),
+                    assume_centered=True,
+                    eps=eps,
+                )
+                xx = x_spatial[:, valid].double().numpy(force=True)
+                invalid = np.isnan(xx)
+                xx[invalid] = np.random.default_rng(0).normal(size=invalid.sum())
+                with warnings.catch_warnings(action="ignore"):
+                    print('hi3', logger.isEnabledFor(DARTSORTVERBOSE))
+                    glasso.fit(xx)
+                print(f"Best alpha was {glasso.alpha_=}")
+                logger.dartsortdebug(f"Best alpha was {glasso.alpha_=}")
+                glasso_alpha = glasso.alpha_
+
+            if isinstance(glasso_alpha, float):
                 logger.dartsortdebug(f"Run glasso on {cov.shape=}")
                 res = graphical_lasso(
                     cov.numpy(force=True),

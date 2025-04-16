@@ -7,7 +7,7 @@ import numpy as np
 from pydantic.dataclasses import dataclass
 import torch
 
-from .py_util import int_or_inf
+from .py_util import int_or_inf, int_or_float, float_or_str
 from .cli_util import argfield
 
 try:
@@ -359,7 +359,7 @@ class RefinementConfig:
     # -- gmm parameters
     # noise params
     cov_kind = "factorized"
-    glasso_alpha: float = 0.01
+    glasso_alpha: float | int = 5
 
     # feature params
     core_radius: float = 35.0
@@ -403,7 +403,7 @@ class RefinementConfig:
     n_total_iters: int = 3
     hard_noise: bool = False
     truncated: bool = True
-    split_decision_algorithm: str = "tree"
+    split_decision_algorithm: str = "brute"
     merge_decision_algorithm: str = "brute"
     prior_pseudocount: float = 5.0
 
@@ -588,7 +588,7 @@ def to_internal_config(cfg):
         **{k.name: getattr(cfg, k.name) for k in fields(MotionEstimationConfig)}
     )
     matching_config = MatchingConfig(
-        threshold=cfg.matching_threshold,
+        threshold="fp_control" if cfg.matching_fp_control else cfg.matching_threshold,
         amplitude_scaling_variance=cfg.amplitude_scaling_stddev**2,
         amplitude_scaling_boundary=cfg.amplitude_scaling_limit,
         template_temporal_upsampling_factor=cfg.temporal_upsamples,

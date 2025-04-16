@@ -75,7 +75,7 @@ class SpikeMixtureModel(torch.nn.Module):
         cov_kind="ppca",
         use_proportions: bool = True,
         proportions_sample_size: int = 2**16,
-        likelihood_batch_size: int = 2**16,
+        likelihood_batch_size: int = 2**15,
         channels_strategy: Literal["all", "snr", "count", "count_core"] = "count",
         channels_count_min: float = 25.0,
         channels_snr_amp: float = 1.0,
@@ -555,7 +555,13 @@ class SpikeMixtureModel(torch.nn.Module):
         self.clear_units()
         # not needed. we'll do e step.
         # self.labels[self.data.split_indices["train"]] = labels
-        channels, counts = tmm.channel_occupancy(labels, min_count=self.channels_count_min, min_prop=0.33)
+        channels, counts = tmm.channel_occupancy(
+            labels,
+            min_count=self.channels_count_min,
+            # min_prop=0.25,
+            count_per_unit=self.n_spikes_fit,
+            rg=self.rg,
+        )
         for j in range(len(tmm.means)):
             basis = None
             if tmm.bases is not None:
@@ -2380,12 +2386,10 @@ class SpikeMixtureModel(torch.nn.Module):
                 olap = 1.0
                 min_conn = np.inf
                 for j, p in enumerate(part):
-                    k = ids_part[j]
                     lresps = hyp_fit_resps[p]
                     level_resps[j] = lresps.sum(0)
                     if tuple(ids_part[j]) in merged_unit_memo:
                         level_units[j] = merged_unit_memo[tuple(ids_part[j])]
-
                     if len(ids_part[j]) > 1:
                         ipj = np.array(ids_part[j])
                         conn = cos_connectivity(cosines[ipj][:, ipj])
@@ -2424,8 +2428,9 @@ class SpikeMixtureModel(torch.nn.Module):
             assert False
 
         # -- organize labels...
-        best_improvement = best_improvement
         assert np.isfinite(best_improvement)
+        if best_improvement < 0:
+            return None
         best_group_ids = torch.asarray(best_group_ids)
         labels = best_group_ids[full_labels.cpu()]
         _, labels = labels.unique(return_inverse=True)

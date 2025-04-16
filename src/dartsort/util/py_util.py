@@ -64,6 +64,20 @@ def int_or_inf(s):
     return s
 
 
+def int_or_float(s):
+    s = s.strip()
+    if not s.strip("0123456789"):
+        return int(s)
+    return float(s)
+
+
+def float_or_str(s):
+    try:
+        return float(s)
+    except ValueError:
+        return s
+
+
 def resolve_path(p: str | Path, strict=False) -> Path:
     p = Path(p)
     p = p.expanduser()

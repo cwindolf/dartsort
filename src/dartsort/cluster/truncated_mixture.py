@@ -379,17 +379,39 @@ class SpikeTruncatedMixtureModel(nn.Module):
         _, topkinds = torch.topk(self.kl_divergences, k=k, dim=1, largest=False)
         return topkinds
 
-    def channel_occupancy(self, labels, min_count=0, min_prop=0):
+    def channel_occupancy(self, labels, min_count=0, min_prop=0, count_per_unit=4096, rg=0):
         shp = self.n_units, self.train_neighborhoods.n_neighborhoods
         unit_neighborhood_counts = np.zeros(shp, dtype=int)
+
+        labels = labels.numpy(force=True).copy()
+        units = np.unique(labels)
+        rg = np.random.default_rng(rg)
+        for u in units[units >= 0]:
+            inu = np.flatnonzero(labels == u)
+            if inu.size > count_per_unit:
+                labels[inu] = -1
+                labels[rg.choice(inu, size=count_per_unit, replace=False)] = u
+        print(f"{np.unique(labels, return_counts=True)=}")
+
         valid = np.flatnonzero(labels >= 0)
         vneighbs = self.candidates.neighborhood_ids[valid]
         np.add.at(unit_neighborhood_counts, (labels[valid], vneighbs), 1)
+        print(f"{unit_neighborhood_counts=} {unit_neighborhood_counts.shape=}")
+        print(f"{unit_neighborhood_counts.min(0)=}")
+        print(f"{unit_neighborhood_counts.max(0)=}")
+        print(f"{unit_neighborhood_counts.min(1)=}")
+        print(f"{unit_neighborhood_counts.max(1)=}")
         # nu x nneighb
         neighb_occupancy = unit_neighborhood_counts.astype(float)
         # nneighb x nchans
         neighb_to_chans = self.train_neighborhoods.indicators.T.numpy(force=True)
+        print(f"{neighb_to_chans.shape=} {neighb_to_chans.min()=} {neighb_to_chans.max()=}")
         counts = neighb_occupancy @ neighb_to_chans
+        print(f"{counts=} {counts.shape=}")
+        print(f"{counts.min(0)=}")
+        print(f"{counts.max(0)=}")
+        print(f"{counts.min(1)=}")
+        print(f"{counts.max(1)=}")
         props = [row / max(1, row.max()) for row in counts]
         channels = [
             np.flatnonzero(np.logical_and(row >= min_count, prop >= min_prop))
@@ -507,7 +529,7 @@ class TruncatedExpectationProcessor(torch.nn.Module):
             n1_n01 = result.N.div(N.clamp(min=1.0))[:, None, None]
 
             # welford for the mean
-            m += (result.m[:, :, :-1] - m).mul_(n1_n01)
+            m += result.m[:, :, :-1].sub_(m).mul_(n1_n01)
 
             # running avg for elbo/n
             count += len(result.candidates)
@@ -529,8 +551,8 @@ class TruncatedExpectationProcessor(torch.nn.Module):
             if self.M:
                 assert R is not None
                 assert U is not None
-                R += (result.R[..., :-1] - R).mul_(n1_n01[..., None])
-                U += (result.U - U).mul_(n1_n01)
+                R += result.R[..., :-1].sub_(R).mul_(n1_n01[..., None])
+                U += result.U.sub_(U).mul_(n1_n01)
 
             # could do these in the threads? unless shuffled.
             top_candidates[result.indices] = result.candidates
