@@ -46,7 +46,6 @@ class DARTsortGroundTruthComparison:
             match_score=self.match_score,
             well_detected_score=self.well_detected_score,
             exhaustive_gt=self.exhaustive_gt,
-            n_jobs=self.n_jobs,
             match_mode=self.match_mode,
             verbose=self.verbose,
             compute_labels=self.compute_labels,
@@ -70,15 +69,15 @@ class DARTsortGroundTruthComparison:
         firing_rates = self.gt_analysis.firing_rates()
         df = self.comparison.get_performance()
         df = df.astype(float)  # not sure what the problem was...
-        df['gt_ptp_amplitude'] = amplitudes
-        df['gt_firing_rate'] = firing_rates
+        df["gt_ptp_amplitude"] = amplitudes
+        df["gt_firing_rate"] = firing_rates
         if self.has_templates and (force_distances or self.compute_distances):
             dist = np.diagonal(self.template_distances)
-            df['temp_dist'] = dist
+            df["temp_dist"] = dist
         rec = []
         for uid in df.index:
             rec.append(self.unsorted_detection[self.gt_analysis.in_unit(uid)].mean())
-        df['unsorted_recall'] = rec
+        df["unsorted_recall"] = rec
         return df
 
     @property
@@ -121,17 +120,21 @@ class DARTsortGroundTruthComparison:
         matches = matches[matched]
         tested_td = self.tested_analysis.coarse_template_data[matches]
 
-        dists, shifts, snrs_a, snrs_b, a_mask, b_mask = merge.cross_match_distance_matrix(
-            gt_td,
-            tested_td,
-            sym_function=np.maximum,
-            n_jobs=1,
-            svd_compression_rank=10,
-            device="cpu",
-            min_spatial_cosine=0.1,
+        dists, shifts, snrs_a, snrs_b, a_mask, b_mask = (
+            merge.cross_match_distance_matrix(
+                gt_td,
+                tested_td,
+                sym_function=np.maximum,
+                n_jobs=1,
+                svd_compression_rank=10,
+                device="cpu",
+                min_spatial_cosine=0.1,
+            )
         )
         self._template_distances = np.full((nugt, nugt), 5.0)
-        self._template_distances[np.arange(nugt)[a_mask][:, None], matched[b_mask][None, :]] = dists
+        self._template_distances[
+            np.arange(nugt)[a_mask][:, None], matched[b_mask][None, :]
+        ] = dists
 
     def _calculate_unsorted_detection(self):
         if self._unsorted_detection is not None:
@@ -157,7 +160,9 @@ class DARTsortGroundTruthComparison:
         assert np.array_equal(self.gt_analysis.geom, self.tested_analysis.geom)
 
         tested_kdtree = KDTree(tested_coord)
-        d, i = tested_kdtree.query(gt_coord, p=4, distance_upper_bound=1 + 1e-6, workers=4)
+        d, i = tested_kdtree.query(
+            gt_coord, p=4, distance_upper_bound=1 + 1e-6, workers=4
+        )
         has_match = i < tested_kdtree.n
         self._unsorted_detection = has_match
 
@@ -171,12 +176,12 @@ class DARTsortGroundTruthComparison:
 
         # convert to global index space
         in_gt_unit = self.gt_analysis.in_unit(gt_unit)
-        matched_gt_mask = gt_spike_labels == 'TP'
+        matched_gt_mask = gt_spike_labels == "TP"
         matched_gt_indices = in_gt_unit[matched_gt_mask]
         only_gt_indices = in_gt_unit[np.logical_not(matched_gt_mask)]
 
         in_tested_unit = self.tested_analysis.in_unit(tested_unit)
-        matched_tested_mask = tested_spike_labels == 'TP'
+        matched_tested_mask = tested_spike_labels == "TP"
         matched_tested_indices = in_tested_unit[matched_tested_mask]
         only_tested_indices = in_tested_unit[np.logical_not(matched_tested_mask)]
 
@@ -203,7 +208,7 @@ class DARTsortGroundTruthComparison:
     ):
         rg = np.random.default_rng(random_seed)
         ind_groups = self.get_spikes_by_category(gt_unit, tested_unit=tested_unit)
-        tested_unit = ind_groups['tested_unit']
+        tested_unit = ind_groups["tested_unit"]
 
         # waveforms are read at GT unit max channel
         gt_max_chan = self.gt_analysis.unit_max_channel(gt_unit)
@@ -222,25 +227,27 @@ class DARTsortGroundTruthComparison:
 
         # load TP waveforms
         # which, waveforms, max_chan, show_geom, show_channel_index
-        w['which_tp'], w['tp'], _, w['geom'], w['channel_index'] = self.gt_analysis.unit_raw_waveforms(
-            gt_unit,
-            which=ind_groups['matched_gt_indices'],
-            **waveform_kw,
+        w["which_tp"], w["tp"], _, w["geom"], w["channel_index"] = (
+            self.gt_analysis.unit_raw_waveforms(
+                gt_unit,
+                which=ind_groups["matched_gt_indices"],
+                **waveform_kw,
+            )
         )
 
         # load FN waveforms
         # which, waveforms, max_chan, show_geom, show_channel_index
-        w['which_fn'], w['fn'], *_ = self.gt_analysis.unit_raw_waveforms(
+        w["which_fn"], w["fn"], *_ = self.gt_analysis.unit_raw_waveforms(
             gt_unit,
-            which=ind_groups['only_gt_indices'],
+            which=ind_groups["only_gt_indices"],
             **waveform_kw,
         )
 
         # load FP waveforms
         # which, waveforms, max_chan, show_geom, show_channel_index
-        w['which_fp'], w['fp'], *_ = self.tested_analysis.unit_raw_waveforms(
+        w["which_fp"], w["fp"], *_ = self.tested_analysis.unit_raw_waveforms(
             tested_unit,
-            which=ind_groups['only_tested_indices'],
+            which=ind_groups["only_tested_indices"],
             **waveform_kw,
         )
 

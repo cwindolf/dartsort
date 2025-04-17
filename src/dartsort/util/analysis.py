@@ -101,13 +101,15 @@ class DARTsortAnalysis:
         """
         assert hasattr(sorting, "parent_h5_path")
         hdf5_path = sorting.parent_h5_path
-        model_dir = hdf5_path.parent / f"{hdf5_path.stem}_models"
-        assert model_dir.exists()
+        featurization_pipeline = None
+        if hdf5_path:
+            model_dir = hdf5_path.parent / f"{hdf5_path.stem}_models"
+            assert model_dir.exists()
 
-        featurization_pipeline = torch.load(
-            model_dir / "featurization_pipeline.pt",
-            weights_only=True,
-        )
+            featurization_pipeline = torch.load(
+                model_dir / "featurization_pipeline.pt",
+                weights_only=True,
+            )
 
         have_templates = False
         template_data = None
