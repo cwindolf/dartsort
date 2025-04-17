@@ -545,6 +545,12 @@ def get_main_channel_pcs(
     mask[which] = True
     channels = sorting.channels[which]
 
+    features = getattr(sorting, "collisioncleaned_tpca_features", None)
+    channel_index = getattr(sorting, "channel_index", None)
+    if features is not None and channel_index is not None:
+        features = features[which]
+        return waveform_util.grab_main_channels(features, channels, channel_index)
+
     features = np.empty((mask.sum(), rank), dtype=np.float32)
     with h5py.File(sorting.parent_h5_path, "r", locking=False) as h5:
         feats_dset = h5[dataset_name]
