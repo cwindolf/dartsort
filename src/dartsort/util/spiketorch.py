@@ -353,7 +353,13 @@ def convolve_lowrank(
 
 
 def nancov(
-    x, weights=None, correction=1, nan_free=False, return_nobs=False, force_posdef=False
+    x,
+    weights=None,
+    correction=1,
+    nan_free=False,
+    return_nobs=False,
+    force_posdef=False,
+    eps=0,
 ):
     """Pairwise covariance estimate
 
@@ -383,6 +389,8 @@ def nancov(
 
     if force_posdef:
         try:
+            if eps:
+                np.fill_diagonal(cov, np.diagonal(cov) + eps)
             vals, vecs = torch.linalg.eigh(cov)
             good = vals > 0
             cov = (vecs[:, good] * vals[good]) @ vecs[:, good].T
