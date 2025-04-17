@@ -1,6 +1,5 @@
 from logging import getLogger
 from dataclasses import dataclass, fields
-from typing import Union, Optional
 
 import numpy as np
 import torch
@@ -32,18 +31,19 @@ def __debug_init__(self):
 
 @dataclass(slots=FRZ, kw_only=FRZ, frozen=FRZ)
 class TEStepResult:
-    elbo: Optional[torch.Tensor] = None
-    obs_elbo: Optional[torch.Tensor] = None
+    elbo: torch.Tensor | None = None
+    obs_elbo: torch.Tensor | None = None
 
-    noise_N: Optional[torch.Tensor] = None
-    N: Optional[torch.Tensor] = None
-    R: Optional[torch.Tensor] = None
-    U: Optional[torch.Tensor] = None
-    m: Optional[torch.Tensor] = None
+    noise_N: torch.Tensor | None = None
+    N: torch.Tensor | None = None
+    R: torch.Tensor | None = None
+    U: torch.Tensor | None = None
+    m: torch.Tensor | None = None
 
-    kl: Optional[torch.Tensor] = None
+    kl: torch.Tensor | None = None
 
-    hard_labels: Optional[torch.Tensor] = None
+    hard_labels: torch.Tensor | None = None
+    count: int | None = None
 
     if ds_verbose:
         __post_init__ = __debug_init__
@@ -51,28 +51,28 @@ class TEStepResult:
 
 @dataclass(slots=FRZ, kw_only=FRZ, frozen=FRZ)
 class TEBatchResult:
-    indices: Union[slice, torch.Tensor]
+    indices: slice | torch.Tensor
     candidates: torch.Tensor
 
-    elbo: Optional[torch.Tensor] = None
-    obs_elbo: Optional[torch.Tensor] = None
+    elbo: torch.Tensor | None = None
+    obs_elbo: torch.Tensor | None = None
 
-    noise_N: Optional[torch.Tensor] = None
-    N: Optional[torch.Tensor] = None
-    R: Optional[torch.Tensor] = None
-    U: Optional[torch.Tensor] = None
-    m: Optional[torch.Tensor] = None
+    noise_N: torch.Tensor | None = None
+    N: torch.Tensor | None = None
+    R: torch.Tensor | None = None
+    U: torch.Tensor | None = None
+    m: torch.Tensor | None = None
 
-    ddlogpi: Optional[torch.Tensor] = None
-    ddlognoisep: Optional[torch.Tensor] = None
-    ddm: Optional[torch.Tensor] = None
-    ddW: Optional[torch.Tensor] = None
+    ddlogpi: torch.Tensor | None = None
+    ddlognoisep: torch.Tensor | None = None
+    ddm: torch.Tensor | None = None
+    ddW: torch.Tensor | None = None
 
-    ncc: Optional[torch.Tensor] = None
-    dkl: Optional[torch.Tensor] = None
+    ncc: torch.Tensor | None = None
+    dkl: torch.Tensor | None = None
 
-    noise_lls: Optional[torch.Tensor] = None
-    hard_labels: Optional[torch.Tensor] = None
+    noise_lls: torch.Tensor | None = None
+    hard_labels: torch.Tensor | None = None
 
     if ds_verbose:
         __post_init__ = __debug_init__
@@ -81,13 +81,13 @@ class TEBatchResult:
 @dataclass(slots=FRZ, kw_only=FRZ, frozen=FRZ)
 class TEBatchEData:
     n: int
-    indices: Union[slice, torch.Tensor]
+    indices: slice | torch.Tensor
     whitenedx: torch.Tensor
     whitenednu: torch.Tensor
     Coo_logdet: torch.Tensor
     nobs: torch.Tensor
-    wburyroot: Optional[torch.Tensor]
-    noise_lls: Optional[torch.Tensor]
+    wburyroot: torch.Tensor | None
+    noise_lls: torch.Tensor | None
 
 
 def _te_batch_e(
@@ -412,6 +412,14 @@ def _grad_basis(Ntot, N, R, W, U, active=slice(None), Cinv=None):
     if Cinv is not None and (active == slice(None) or active.numel()):
         d[active] = torch.einsum("ij,npj->npi", Cinv, d[active])
     return d.view(R.shape)
+
+
+def _elbo_prior_correction(prior_pseudocount, total_count, mu, W, Cinv):
+    mu_term = torch.einsum("ki,ij,kj->", mu, Cinv, mu).double()
+    W_term = 0
+    if W is not None:
+        W_term = torch.einsum("kli,ij,klj->", W, Cinv, W).double()
+    return (-0.5 * (prior_pseudocount / total_count)) * (mu_term + W_term)
 
 
 def woodbury_inv_quad(whitenedx, whitenednu, wburyroot=None, overwrite_nu=False):

@@ -639,7 +639,7 @@ class EmbeddedNoise(torch.nn.Module):
 
     @classmethod
     def estimate(
-        cls, snippets, mean_kind="zero", cov_kind="scalar", glasso_alpha=0.01, eps=1e-4
+        cls, snippets, mean_kind="zero", cov_kind="scalar", glasso_alpha=0, eps=1e-4
     ):
         """Factory method to estimate noise model from TPCA snippets
 
@@ -836,12 +836,12 @@ class EmbeddedNoise(torch.nn.Module):
         cls,
         hdf5_path,
         mean_kind="zero",
-        cov_kind="factorized",
+        cov_kind="factorizednoise",
         motion_est=None,
         interpolation_method="kriging",
         sigma=20.0,
         device=None,
-        glasso_alpha=0.01,
+        glasso_alpha=0,
     ):
         from dartsort.util.drift_util import registered_geometry
 

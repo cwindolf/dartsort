@@ -29,6 +29,7 @@ from ._truncated_em_helpers import (
     _grad_counts,
     _grad_mean,
     _grad_basis,
+    _elbo_prior_correction,
 )
 from ..util import spiketorch
 from ..util.logging_util import DARTSORTDEBUG, DARTSORTVERBOSE
@@ -185,12 +186,17 @@ class SpikeTruncatedMixtureModel(nn.Module):
             with_kl=not self.exact_kl,
             with_hard_labels=hard_label,
         )
+        assert result.obs_elbo is not None
+        assert result.N is not None
+        assert result.m is not None
+
         if self.prior_pseudocount:
             sc = result.N / (result.N + self.prior_pseudocount)
             if logger.isEnabledFor(DARTSORTVERBOSE):
                 logger.dartsortverbose(f"TVI mean {sc=}")
             result.m.mul_(sc[:, None, None])
         self.means[..., :-1] = result.m
+        W = None
         if self.bases is not None:
             assert result.R is not None
             assert result.U is not None
@@ -231,6 +237,16 @@ class SpikeTruncatedMixtureModel(nn.Module):
             self.update_dkl()
         else:
             self.kl_divergences[:] = result.kl
+
+        if self.prior_pseudocount:
+            # update elbo
+            result.obs_elbo += _elbo_prior_correction(
+                self.prior_pseudocount,
+                result.count,
+                self.means[..., :-1].reshape(self.n_units, -1),
+                W,
+                self.noise.full_inverse(),
+            )
 
         result = dict(
             obs_elbo=result.obs_elbo.numpy(force=True).item(),
@@ -379,7 +395,9 @@ class SpikeTruncatedMixtureModel(nn.Module):
         _, topkinds = torch.topk(self.kl_divergences, k=k, dim=1, largest=False)
         return topkinds
 
-    def channel_occupancy(self, labels, min_count=0, min_prop=0, count_per_unit=4096, rg=0):
+    def channel_occupancy(
+        self, labels, min_count=0, min_prop=0, count_per_unit=4096, rg=0
+    ):
         shp = self.n_units, self.train_neighborhoods.n_neighborhoods
         unit_neighborhood_counts = np.zeros(shp, dtype=int)
 
@@ -405,7 +423,9 @@ class SpikeTruncatedMixtureModel(nn.Module):
         neighb_occupancy = unit_neighborhood_counts.astype(float)
         # nneighb x nchans
         neighb_to_chans = self.train_neighborhoods.indicators.T.numpy(force=True)
-        print(f"{neighb_to_chans.shape=} {neighb_to_chans.min()=} {neighb_to_chans.max()=}")
+        print(
+            f"{neighb_to_chans.shape=} {neighb_to_chans.min()=} {neighb_to_chans.max()=}"
+        )
         counts = neighb_occupancy @ neighb_to_chans
         print(f"{counts=} {counts.shape=}")
         print(f"{counts.min(0)=}")
@@ -580,6 +600,7 @@ class TruncatedExpectationProcessor(torch.nn.Module):
             m=m,
             kl=dkl,
             hard_labels=hard_labels,
+            count=count,
         )
 
     @joblib.delayed
