@@ -906,7 +906,7 @@ def get_channel_reindexer(channels, n_channels):
     return reindexer
 
 
-def get_shift_info(sorting, motion_est, geom, motion_depth_mode):
+def get_shift_info(sorting, motion_est, geom, motion_depth_mode, channels_mode="round"):
     """
     shifts = reg_depths - depths
     reg_depths = depths + shifts
@@ -926,7 +926,6 @@ def get_shift_info(sorting, motion_est, geom, motion_depth_mode):
     rdepths = depths
     if motion_est is not None:
         rdepths = motion_est.correct_s(times_s, depths)
-        print(f"{rdepths=}")
     shifts = rdepths - depths
 
     if motion_est is None:
@@ -938,7 +937,7 @@ def get_shift_info(sorting, motion_est, geom, motion_depth_mode):
             motion_est=motion_est,
             times_s=times_s,
             registered_depths_um=rdepths,
-            mode="round",
+            mode=channels_mode,
         )
 
     # pitch = drift_util.get_pitch(geom)

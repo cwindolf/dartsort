@@ -638,7 +638,9 @@ class EmbeddedNoise(torch.nn.Module):
         assert False
 
     @classmethod
-    def estimate(cls, snippets, mean_kind="zero", cov_kind="scalar", glasso_alpha=0.01, eps=1e-4):
+    def estimate(
+        cls, snippets, mean_kind="zero", cov_kind="scalar", glasso_alpha=0.01, eps=1e-4
+    ):
         """Factory method to estimate noise model from TPCA snippets
 
         Arguments
@@ -701,7 +703,7 @@ class EmbeddedNoise(torch.nn.Module):
             x = x.view(n, rank * n_channels)
             present = torch.isfinite(x).any(dim=0)
             cov = torch.eye(x.shape[1], device=x.device, dtype=x.dtype)
-            vcov = spiketorch.nancov(x[:, present], force_posdef=True)
+            vcov = spiketorch.nancov(x[:, present], force_posdef=True, eps=eps)
             cov[present[:, None] & present[None, :]] = vcov.view(-1)
             cov = cov.reshape(rank, n_channels, rank, n_channels)
             return cls(mean=mean, global_std=global_std, full_cov=cov, **init_kw)
@@ -763,15 +765,27 @@ class EmbeddedNoise(torch.nn.Module):
             x_spatial = x_spatial.reshape(n * rank, n_channels)
             valid = x_spatial.isfinite().any(0)
 
+            if "noise" in cov_kind:
+                xx = x_spatial.numpy(force=True)
+                invalid = np.isnan(xx)
+                xx[invalid] = (
+                    np.random.default_rng(0).normal(size=invalid.sum()).astype(xx.dtype)
+                )
+                x_spatial = torch.from_numpy(xx).to(x_spatial)
+                valid = slice(None)
+                init_kw["cov_kind"] = cov_kind.removesuffix("noise")
+
             cov = spiketorch.nancov(x_spatial[:, valid].double(), force_posdef=True)
             cov.diagonal().add_(eps)
 
-            if isinstance(glasso_alpha, int):
-                logger.dartsortdebug(f"Run glasso cv on {x_spatial.shape=} {cov.abs().max()=}")
+            if glasso_alpha and isinstance(glasso_alpha, int):
+                logger.dartsortdebug(
+                    f"Run glasso cv on {x_spatial.shape=} {cov.abs().max()=}"
+                )
                 # todo: clean up, propagate, ...
                 glasso = GraphicalLassoCV(
                     alphas=glasso_alpha,
-                    n_jobs=4,
+                    n_jobs=1,
                     verbose=logger.isEnabledFor(DARTSORTDEBUG),
                     assume_centered=True,
                     eps=eps,
@@ -780,7 +794,7 @@ class EmbeddedNoise(torch.nn.Module):
                 invalid = np.isnan(xx)
                 xx[invalid] = np.random.default_rng(0).normal(size=invalid.sum())
                 with warnings.catch_warnings(action="ignore"):
-                    print('hi3', logger.isEnabledFor(DARTSORTVERBOSE))
+                    print("hi3", logger.isEnabledFor(DARTSORTVERBOSE))
                     glasso.fit(xx)
                 print(f"Best alpha was {glasso.alpha_=}")
                 logger.dartsortdebug(f"Best alpha was {glasso.alpha_=}")
@@ -797,10 +811,12 @@ class EmbeddedNoise(torch.nn.Module):
                 )
                 cov = torch.from_numpy(res[0]).to(cov)
 
-            cov_spatial = torch.eye(
-                x_spatial.shape[1], dtype=x_spatial.dtype, device=x_spatial.device
-            )
-            cov_spatial[valid[:, None] & valid[None, :]] = cov.to(x_spatial).view(-1)
+            cov_spatial = cov = cov.to(x_spatial)
+            if valid != slice(None):
+                cov_spatial = torch.eye(
+                    x_spatial.shape[1], dtype=x_spatial.dtype, device=x_spatial.device
+                )
+                cov_spatial[valid[:, None] & valid[None, :]] = cov.view(-1)
             channel_eig, channel_v = torch.linalg.eigh(cov_spatial)
             channel_std = channel_eig.sqrt()
             channel_vt = channel_v.T.contiguous()
@@ -828,6 +844,7 @@ class EmbeddedNoise(torch.nn.Module):
         glasso_alpha=0.01,
     ):
         from dartsort.util.drift_util import registered_geometry
+
         logger.dartsortdebug(
             f"Estimate embedded noise with {mean_kind=} {cov_kind=} {motion_est is None=} {glasso_alpha=}"
         )
@@ -865,7 +882,10 @@ def interpolate_residual_snippets(
     device=None,
 ):
     """PCA-embed and interpolate residual snippets to the registered probe"""
-    from dartsort.util import interpolation_util, data_util
+    from dartsort.util import interpolation_util, data_util, drift_util
+
+    assert geom.shape[1] == 2, "Haven't implemented 3d probes here."
+    assert channels_mode == "round"
 
     if device is None:
         device = "cuda" if torch.cuda.is_available() else None
@@ -890,33 +910,66 @@ def interpolate_residual_snippets(
     snippets = snippets.reshape(n, c, -1).permute(0, 2, 1)
 
     # -- interpolate
-    # source positions
+    # fill in the registered probe with residual snippets using interpolation,
+    # with possible missing values
     source_geom = torch.asarray(geom).to(snippets)
-    psc, psd = source_geom.shape
-    source_pos = source_geom[None].broadcast_to(n, psc, psd).contiguous()
+    source_pos = source_geom[None].broadcast_to(n, *geom.shape).contiguous()
+    target_geom = torch.asarray(registered_geom).to(snippets)
+
+    if motion_est is None:
+        # no drift case, no missing values, but still interpolate to avoid
+        # statistical differences between drifty/no drift versions of the sorter
+        assert torch.equal(source_geom, target_geom)
+        target_pos = target_geom[None].broadcast_to(n, *geom.shape).contiguous()
+
+        skis = None
+        if interpolation_method.startswith("kriging"):
+            skis = interpolation_util.get_source_kernel_pinvs(
+                source_geom, None, sigma=sigma
+            )
+            skis = skis.broadcast_to((len(snippets), *skis.shape[1:]))
+
+        snippets = interpolation_util.kernel_interpolate(
+            snippets,
+            source_pos,
+            target_pos,
+            source_kernel_invs=skis,
+            sigma=sigma,
+            allow_destroy=True,
+            interpolation_method=interpolation_method,
+        )
+        return snippets
+
+    # goal
+    # - determine what registered channels the shifting source positions
+    #   would land on
+    # - interpolate residual snippets from the shifted source position
+    #   to the target positions
+    # except that's slow, because kriging interpolator would require
+    # inverting a matrix for each shifted source geom. so instead,
+    # let's shift the targets inversely and use the same source geom,
+    # even if that has a bit of a different meaning.
+
+    # determine each channel's drift over time
     source_depths = source_pos[:, :, 1].reshape(-1)
     source_t = times_s[:, None].broadcast_to(source_pos[:, :, 1].shape).reshape(-1)
-    source_shifts = 0
-    if motion_est is not None:
-        source_reg_depths = motion_est.correct_s(source_t.cpu(), source_depths.cpu())
-        source_reg_depths = torch.asarray(source_reg_depths).to(snippets)
-        source_shifts = source_reg_depths - source_depths
-        source_shifts = source_shifts.reshape(source_pos[:, :, 1].shape)
+    source_shifts = motion_est.disp_at_s(source_t.cpu(), source_depths.cpu())
+    source_shifts = source_shifts.reshape(source_pos[:, :, 1].shape).astype("float32")
+    source_shifts_xy = np.stack([np.zeros_like(source_shifts), source_shifts], axis=-1)
+    source_pos_shifted = source_pos + source_shifts_xy
 
-    # target positions
-    # we'll query the target geom for the closest source pos, within reason
+    # query the target geom for the closest source pos, within reason
     kdtree = drift_util.KDTree(registered_geom)
-    prgeom = interpolation_util.pad_geom(registered_geom)
-    match_distance = drift_util.pdist(geom).min() / 2
+    match_distance = drift_util.pdist(geom).min()
     _, targ_inds = kdtree.query(
-        source_pos.reshape(-1, psd).numpy(force=True),
+        source_pos_shifted.reshape(-1, geom.shape[1]).numpy(force=True),
         distance_upper_bound=match_distance,
         workers=workers or -1,
     )
     targ_inds = torch.from_numpy(targ_inds).reshape(source_pos.shape[:2])
-    target_pos = prgeom[targ_inds].to(snippets)
-    if motion_est is not None:
-        target_pos[:, :, 1] = target_pos[:, :, 1] - source_shifts
+    assert (targ_inds < kdtree.n).all()
+    target_pos = target_geom[targ_inds].to(snippets)
+    target_pos_shifted = target_pos - source_shifts_xy
 
     # if kriging, we need a pseudoinverse
     skis = None
@@ -930,7 +983,7 @@ def interpolate_residual_snippets(
     snippets = interpolation_util.kernel_interpolate(
         snippets,
         source_pos,
-        target_pos,
+        target_pos_shifted,
         source_kernel_invs=skis,
         sigma=sigma,
         allow_destroy=True,

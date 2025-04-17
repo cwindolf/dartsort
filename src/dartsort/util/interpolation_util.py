@@ -15,6 +15,7 @@ interp_kinds = (
     "normalized",
     "kriging",
     "kriging_normalized",
+    "idw",
 )
 
 
@@ -32,6 +33,7 @@ def interpolate_by_chunk(
     device=None,
     store_on_device=False,
     show_progress=True,
+    shift_dim=1,
 ):
     """Interpolate data living in an HDF5 file
 
@@ -72,6 +74,8 @@ def interpolate_by_chunk(
     """
     # devices, dtypes, shapes
     assert interpolation_method in interp_kinds
+    assert geom.shape[1] == 2, "Haven't implemented 3d."
+
     if device is None:
         device = "cuda" if torch.cuda.is_available() else "cpu"
     device = torch.device(device)
@@ -115,7 +119,17 @@ def interpolate_by_chunk(
         if source_shifts.ndim == 1:
             # allows per-channel shifts
             source_shifts = source_shifts.unsqueeze(1)
-        source_shifts = source_shifts.unsqueeze(-1)
+        if shift_dim == 0:
+            source_shifts = torch.stack(
+                [source_shifts, torch.zeros_like(source_shifts)], dim=-1
+            )
+        elif shift_dim == 1:
+            source_shifts = torch.stack(
+                [torch.zeros_like(source_shifts), source_shifts], dim=-1
+            )
+        else:
+            assert False
+
         # used to shift the source, but for kriging it's better to shift targets
         # so that we can cache source kernel choleskys
         source_pos = source_geom[source_channels]  # + source_shifts
@@ -150,9 +164,16 @@ def get_source_kernel_pinvs(
         source_pos = source_geom[None]
     else:
         source_pos = source_geom[channel_index]
-    source_kernels = log_rbf(source_pos, sigma=sigma).exp_().nan_to_num_()
-    pinvs = torch.linalg.pinv(source_kernels, atol=atol, rtol=rtol, hermitian=True)
-    return pinvs
+    source_kernels = log_rbf(source_pos, sigma=sigma)
+    invs = torch.zeros_like(source_kernels)
+    for j, sk in enumerate(source_kernels):
+        (m,) = sk[0].isfinite().nonzero(as_tuple=True)
+        sk = sk[m[:, None], m[None, :]].exp()
+        sk.diagonal(dim1=-2, dim2=-1).add(1.0)
+        invs[j, m[:, None], m[None, :]] = torch.linalg.inv(sk)
+
+    # pinvs = torch.linalg.pinv(source_kernels, atol=atol, rtol=rtol, hermitian=True)
+    return invs
 
 
 def pad_geom(geom, dtype=torch.float, device=None):
@@ -214,6 +235,9 @@ def kernel_interpolate(
         if interpolation_method == "normalized":
             kernel = F.softmax(kernel, dim=1)
             kernel.nan_to_num_()
+        elif interpolation_method == "idw":
+            kernel = -kernel.reciprocal_().nan_to_num_()
+            kernel /= kernel.sum(1, keepdim=True)
         elif interpolation_method.startswith("kriging"):
             kernel = kernel.exp_()
             if source_kernel_invs is None:
@@ -260,10 +284,13 @@ def log_rbf(source_pos, target_pos=None, sigma=None):
     kernel : torch.tensor
         n by m
     """
+    source_pos = source_pos / sigma
     if target_pos is None:
         target_pos = source_pos
+    else:
+        target_pos = target_pos / sigma
     kernel = source_pos[:, :, None] - target_pos[:, None, :]
-    kernel = kernel.square_().sum(dim=3).mul_(-1.0 / (2 * sigma**2))
+    kernel = kernel.square_().sum(dim=3).div_(-2.0)
     kernel = kernel.nan_to_num_(nan=-torch.inf)
     # kernel = torch.cdist(source_pos, target_pos)
     # kernel = kernel.square_().mul_(-1.0 / (2 * sigma**2))
