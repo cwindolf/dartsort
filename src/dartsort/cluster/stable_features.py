@@ -104,7 +104,8 @@ class StableSpikeDataset(torch.nn.Module):
         self.n_channels_extract = extract_channels.shape[1]
         self.n_channels_core = core_channels.shape[1]
         self.n_spikes = len(original_sorting)
-        self.n_spikes_kept = len(kept_indices)
+        # train is modified below if there is a train split.
+        self.n_spikes_train = self.n_spikes_kept = len(kept_indices)
         self.interpolation_method = interpolation_method
         self.interpolation_sigma = interpolation_sigma
         self.core_radius = core_radius

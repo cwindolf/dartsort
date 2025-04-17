@@ -47,6 +47,7 @@ from .stable_features import (
     StableSpikeDataset,
     occupied_chans,
 )
+from ._truncated_em_helpers import _elbo_prior_correction
 from . import truncated_mixture
 from ..util.logging_util import DARTSORTDEBUG, DARTSORTVERBOSE
 
@@ -129,6 +130,7 @@ class SpikeMixtureModel(torch.nn.Module):
         merge_bimodality_weighted: bool = True,
         merge_bimodality_score_kind: str = "tv",
         merge_bimodality_masked: bool = False,
+        well_connected_distance: float = 0.1,
         merge_sym_function: np.ufunc = np.minimum,
         em_converged_prop: float = 0.001,
         em_converged_churn: float = 0.01,
@@ -187,6 +189,7 @@ class SpikeMixtureModel(torch.nn.Module):
         self.min_log_prop = min_log_prop
         self.prior_pseudocount = prior_pseudocount
         self.truncated_noise = truncated_noise
+        self.well_connected_distance = well_connected_distance
 
         # store labels on cpu since we're always nonzeroing / writing np data
         assert self.data.original_sorting.labels is not None
@@ -2057,9 +2060,10 @@ class SpikeMixtureModel(torch.nn.Module):
         # walk up from the leaves
         its = enumerate(Z)
         if show_progress:
-            its = tqdm(
-                its, desc=f"Merge: {decision_algorithm}", total=n_branches, **tqdm_kw
-            )
+            step = decision_algorithm
+            if step == "brute":
+                step = "brute step 1/2"
+            its = tqdm(its, desc=f"Merge: {step}", total=n_branches, **tqdm_kw)
 
         # and build this set of data:
         # improvements: for a branch, how much does the model improve by
@@ -2081,6 +2085,15 @@ class SpikeMixtureModel(torch.nn.Module):
             Z,
             leaf_descendants,
             max_size=brute_size if decision_algorithm == "brute" else -1,
+        )
+
+        brute_jobs = []
+        shared_args = (
+            current_log_liks,
+            cosines,
+            min_overlap,
+            criterion,
+            reevaluate_cur_liks,
         )
 
         for i, (pa, pb, dist, nab) in its:
@@ -2117,14 +2130,28 @@ class SpikeMixtureModel(torch.nn.Module):
                     group_ids[leaves] = n_units + i
 
             elif brute_indicator[i]:
-                brute_group_ids, brute_improvement, brute_overlap = self.brute_merge(
-                    current_log_liks,
-                    cluster_ids,
-                    cosines=cosines,
-                    min_overlap=min_overlap,
-                    criterion=criterion,
-                    reevaluate_cur_liks=reevaluate_cur_liks,
+                # the brute force thing is slow, so let's do it in parallel.
+                brute_jobs.append(
+                    delayed(self._brute_merge_job)(i, leaves, cluster_ids, *shared_args)
                 )
+
+        if decision_algorithm == "brute":
+            n_jobs = min(self.n_threads, len(brute_jobs))
+            pool = Parallel(n_jobs, backend="threading", return_as="generator")
+            results = pool(brute_jobs)
+            if show_progress:
+                desc = "Merge: brute step 2/2"
+                results = tqdm(
+                    results, desc=desc, unit="branch", total=len(brute_jobs), **tqdm_kw
+                )
+            for (
+                i,
+                leaves,
+                cluster_ids,
+                brute_group_ids,
+                brute_improvement,
+                brute_overlap,
+            ) in results:
                 improvements[i] = brute_improvement
                 if brute_improvement > 0:
                     result_group_ids = []
@@ -2142,6 +2169,27 @@ class SpikeMixtureModel(torch.nn.Module):
         )
 
         return Z, group_ids, improvements, overlaps, brute_indicator
+
+    def _brute_merge_job(
+        self,
+        i,
+        leaves,
+        cluster_ids,
+        current_log_liks,
+        cosines,
+        min_overlap,
+        criterion,
+        reevaluate_cur_liks,
+    ):
+        brute_group_ids, brute_improvement, brute_overlap = self.brute_merge(
+            current_log_liks,
+            cluster_ids,
+            cosines=cosines,
+            min_overlap=min_overlap,
+            criterion=criterion,
+            reevaluate_cur_liks=reevaluate_cur_liks,
+        )
+        return i, leaves, cluster_ids, brute_group_ids, brute_improvement, brute_overlap
 
     def brute_merge(
         self,
@@ -2742,6 +2790,7 @@ class SpikeMixtureModel(torch.nn.Module):
             spikes.indices, current_log_liks, dense=True
         )
         irr_liks = cur_liks_full[irrix]
+        cur_units = [self[j] for j in current_unit_ids]
         if reevaluate_cur_liks:
             if refit_cur_units:
                 cur_units = []
@@ -2823,6 +2872,35 @@ class SpikeMixtureModel(torch.nn.Module):
         hyp_loglik = hyp_loglik.cpu().item()
         cur_elbo = cur_elbo.cpu().item()
         hyp_elbo = hyp_elbo.cpu().item()
+
+        if self.prior_pseudocount:
+            # in an ideal world, i would run tem here to get the new units
+            # and N would be the train set size...
+            _, cm, cw, _ = self.stack_units(units=cur_units, mean_only=False)
+            if cw is not None:
+                cw = cw.permute(0, 3, 1, 2).reshape(len(cw), self.ppca_rank, -1)
+            cec = _elbo_prior_correction(
+                self.prior_pseudocount,
+                self.data.n_spikes_train,
+                cm.reshape(len(cm), -1),
+                cw,
+                self.noise.full_inverse(),
+            )
+            _, hm, hw, _ = self.stack_units(units=hyp_units, mean_only=False)
+            if hw is not None:
+                hw = hw.permute(0, 3, 1, 2).reshape(len(hw), self.ppca_rank, -1)
+            hec = _elbo_prior_correction(
+                self.prior_pseudocount,
+                self.data.n_spikes_train,
+                hm.reshape(len(hm), -1),
+                hw,
+                self.noise.full_inverse(),
+            )
+            # rescale from main likelihood units to nu/n scale
+            cur_elbo += (nu / self.data.n_spikes_train) * cec
+            cur_loglik += (nu / self.data.n_spikes_train) * cec
+            hyp_elbo += (nu / self.data.n_spikes_train) * hec
+            hyp_loglik += (nu / self.data.n_spikes_train) * hec
 
         improvements = dict(loglik=hyp_loglik - cur_loglik, elbo=hyp_elbo - cur_elbo)
         hyp_criteria = dict(loglik=hyp_loglik, elbo=hyp_elbo)

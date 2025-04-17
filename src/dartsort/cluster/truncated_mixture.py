@@ -238,9 +238,10 @@ class SpikeTruncatedMixtureModel(nn.Module):
         else:
             self.kl_divergences[:] = result.kl
 
+        obs_elbo = result.obs_elbo
         if self.prior_pseudocount:
             # update elbo
-            result.obs_elbo += _elbo_prior_correction(
+            obs_elbo += _elbo_prior_correction(
                 self.prior_pseudocount,
                 result.count,
                 self.means[..., :-1].reshape(self.n_units, -1),
@@ -249,7 +250,7 @@ class SpikeTruncatedMixtureModel(nn.Module):
             )
 
         result = dict(
-            obs_elbo=result.obs_elbo.numpy(force=True).item(),
+            obs_elbo=obs_elbo.numpy(force=True).item(),
             noise_lp=self.noise_log_prop.numpy(force=True).copy(),
             labels=result.hard_labels,
         )
