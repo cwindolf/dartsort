@@ -627,6 +627,8 @@ def ppca_m_step(
             L = active_cov_chol_factor
         yc = yc.view(n, rank * nc)
         ycw = torch.linalg.solve_triangular(L, yc.T, upper=False).T
+        if mean_prior_pseudocount:
+            ycw *= ess / (ess + mean_prior_pseudocount)
         assert ycw.shape == (n, rank * nc)
 
         try:
@@ -653,6 +655,9 @@ def ppca_m_step(
 
     if e_u is None:
         return dict(mu=mu, W=None)
+
+    if mean_prior_pseudocount:
+        e_uu.diagonal(dim1=-2, dim2=-1).add_(mean_prior_pseudocount / ess)
 
     if rescale:
         scales = e_uu.diagonal().sqrt()

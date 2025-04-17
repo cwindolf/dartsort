@@ -259,21 +259,17 @@ class StableSpikeDataset(torch.nn.Module):
                 )
             prgeom = interpolation_util.pad_geom(registered_geom)
 
-            times_s, channels, depths, rdepths, shifts = get_shift_info(
-                sorting, motion_est, geom, motion_depth_mode
-            )
+            res = get_shift_info(sorting, motion_est, geom, motion_depth_mode)
+            channels, shifts, n_pitches_shift = res
 
             # determine channel occupancy of core/extract stable features
             extract_channels, core_channels, *neighb_info = get_stable_channels(
                 geom,
-                depths,
-                rdepths,
-                times_s,
                 channels,
                 extract_channel_index,
                 registered_geom,
-                motion_est,
                 core_radius,
+                n_pitches_shift,
                 workers=workers,
                 device=device,
             )
@@ -930,29 +926,8 @@ def get_shift_info(sorting, motion_est, geom, motion_depth_mode):
     rdepths = depths
     if motion_est is not None:
         rdepths = motion_est.correct_s(times_s, depths)
+        print(f"{rdepths=}")
     shifts = rdepths - depths
-
-    return times_s, channels, depths, rdepths, shifts
-
-
-def get_stable_channels(
-    geom,
-    depths,
-    rdepths,
-    times_s,
-    channels,
-    channel_index,
-    registered_geom,
-    motion_est,
-    core_radius,
-    workers=-1,
-    device=None,
-):
-    core_channel_index = waveform_util.make_channel_index(geom, core_radius)
-
-    pitch = drift_util.get_pitch(geom)
-    registered_kdtree = drift_util.KDTree(registered_geom)
-    match_distance = drift_util.pdist(geom).min() / 2
 
     if motion_est is None:
         n_pitches_shift = np.zeros(len(depths), dtype=int)
@@ -965,6 +940,28 @@ def get_stable_channels(
             registered_depths_um=rdepths,
             mode="round",
         )
+
+    # pitch = drift_util.get_pitch(geom)
+    # remaining_shift = shifts - pitch * n_pitches_shift
+
+    return channels, shifts, n_pitches_shift
+
+
+def get_stable_channels(
+    geom,
+    channels,
+    channel_index,
+    registered_geom,
+    core_radius,
+    n_pitches_shift,
+    workers=-1,
+    device=None,
+):
+    core_channel_index = waveform_util.make_channel_index(geom, core_radius)
+
+    pitch = drift_util.get_pitch(geom)
+    registered_kdtree = drift_util.KDTree(registered_geom)
+    match_distance = drift_util.pdist(geom).min() / 2
 
     # extract the main unique chans computation
     c = torch.asarray(channels, dtype=torch.int32)
