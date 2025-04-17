@@ -556,14 +556,11 @@ def subtract_chunk(
             times_samples, channels = detect_and_deduplicate(
                 residual[:, :-1],
                 detection_threshold,
-                # dedup_channel_index=spatial_dedup_channel_index,
                 dedup_channel_index=channel_index,
                 peak_sign=peak_sign,
                 detection_mask=detection_mask[:, :-1],
                 relative_peak_radius=relative_peak_radius,
                 dedup_temporal_radius=spike_length_samples,
-                # relative_peak_radius=spike_length_samples,
-                # dedup_temporal_radius=None,
             )
         else:
             times_samples, channels = singlechan_template_detect_and_deduplicate(
