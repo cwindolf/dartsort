@@ -571,7 +571,14 @@ class KMeansSplit(GMMPlot):
 
         # subunit means on the unit main channel, where possible
         if self.with_means:
-            ax_centroids, ax_mycentroids = centroids_row.subplots(ncols=2, sharey=True)
+            if layout == "vert":
+                ax_centroids, ax_mycentroids = centroids_row.subplots(
+                    ncols=2, sharey=True
+                )
+            else:
+                ax_centroids, ax_mycentroids = centroids_row.subplots(
+                    nrows=2, sharex=True, sharey=True
+                )
             ax_centroids.set_ylabel("orig unit main chan")
             ax_mycentroids.set_ylabel("split unit main chan")
             for ax in (ax_centroids, ax_mycentroids):
