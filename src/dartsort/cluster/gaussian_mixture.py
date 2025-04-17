@@ -2896,11 +2896,14 @@ class SpikeMixtureModel(torch.nn.Module):
                 hw,
                 self.noise.full_inverse(),
             )
+            logger.info(f"{cec=} {hec=}")
+            logger.info(f"{(nu * cec)=}")
+            logger.info(f"{(nu * hec)=}")
             # rescale from main likelihood units to nu/n scale
-            cur_elbo += (nu / self.data.n_spikes_train) * cec
-            cur_loglik += (nu / self.data.n_spikes_train) * cec
-            hyp_elbo += (nu / self.data.n_spikes_train) * hec
-            hyp_loglik += (nu / self.data.n_spikes_train) * hec
+            cur_elbo += nu * cec
+            cur_loglik += nu * cec
+            hyp_elbo += nu * hec
+            hyp_loglik += nu * hec
 
         improvements = dict(loglik=hyp_loglik - cur_loglik, elbo=hyp_elbo - cur_elbo)
         hyp_criteria = dict(loglik=hyp_loglik, elbo=hyp_elbo)
