@@ -358,8 +358,8 @@ class RefinementConfig:
 
     # -- gmm parameters
     # noise params
-    cov_kind = "factorized"
-    glasso_alpha: float | int = 5
+    cov_kind = "factorizednoise"
+    glasso_alpha: float | int = 0
 
     # feature params
     core_radius: float = 35.0
