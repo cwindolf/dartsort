@@ -302,7 +302,7 @@ class ClusteringConfig:
     amp_log_c: float = 5.0
     amp_scale: float = 50.0
     n_main_channel_pcs: int = 0
-    pc_scale: float = 10.0
+    pc_scale: float = 1.0
     adaptive_feature_scales: bool = False
 
     # density peaks parameters
@@ -399,7 +399,7 @@ class RefinementConfig:
     n_em_iters: int = 50
     em_converged_prop: float = 0.02
     em_converged_churn: float = 0.01
-    em_converged_atol: float = 1e-2
+    em_converged_atol: float = 1e-4
     n_total_iters: int = 3
     hard_noise: bool = False
     truncated: bool = True
@@ -565,6 +565,8 @@ def to_internal_config(cfg):
         sigma_regional=5 * cfg.density_bandwidth,
         outlier_radius=cfg.density_bandwidth,
         radius_search=cfg.density_bandwidth,
+        use_amplitude=cfg.initial_amp_feat,
+        n_main_channel_pcs=cfg.initial_pc_feats,
     )
     refinement_config = RefinementConfig(
         signal_rank=cfg.signal_rank,

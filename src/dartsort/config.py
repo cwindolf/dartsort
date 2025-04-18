@@ -177,6 +177,9 @@ class DeveloperConfig(DARTsortUserConfig):
     channels_strategy: str = "count"
     hard_noise: bool = False
 
+    initial_amp_feat: bool = True
+    initial_pc_feats: int = 0
+
     gmm_max_spikes: Annotated[int, Field(gt=0)] = 4_000_000
     gmm_val_proportion: Annotated[float, Field(gt=0)] = 0.25
     gmm_split_decision_algorithm: str = "brute"
