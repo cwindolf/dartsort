@@ -58,6 +58,13 @@ def scatter_spike_features(
         figure = plt.gcf()
     if extra_features is None:
         extra_features = {}
+    else:
+        if len(width_ratios) != 3 + len(extra_features):
+            width_ratios = (
+                *width_ratios[:2],
+                *([1] * len(extra_features)),
+                width_ratios[-1],
+            )
     if axes is None:
         axes = figure.subplots(
             ncols=3 + len(extra_features),
@@ -78,9 +85,7 @@ def scatter_spike_features(
         if hdf5_filename is None:
             hdf5_filename = sorting.parent_h5_path
 
-    needs_load = any(
-        v is None for v in (times_s, x, depths_um, amplitudes, geom)
-    )
+    needs_load = any(v is None for v in (times_s, x, depths_um, amplitudes, geom))
     if needs_load and hdf5_filename is not None:
         with h5py.File(hdf5_filename, "r", locking=False) as h5:
             if times_s is None:
@@ -627,9 +632,7 @@ def add_ellipses(
     unit_ids = unit_ids[unit_ids >= 0]
     if pad_to_max and max_n_labels:
         n_pad = max_n_labels - unit_ids.size
-        unit_ids = np.concatenate(
-            (unit_ids, unit_ids.max() + 10 + np.arange(n_pad))
-        )
+        unit_ids = np.concatenate((unit_ids, unit_ids.max() + 10 + np.arange(n_pad)))
     if ellip is None:
         ellip = {}
     for uid in unit_ids:
@@ -645,9 +648,7 @@ def add_ellipses(
         if not bad:
             # remove outliers to stabilize [co]variance
             kdt = KDTree(np.c_[f[valid], d[valid]])
-            dd, ii = kdt.query(
-                np.c_[f[valid], d[valid]], distance_upper_bound=10.0
-            )
+            dd, ii = kdt.query(np.c_[f[valid], d[valid]], distance_upper_bound=10.0)
             valid = valid[ii < kdt.n]
             bad = valid.size <= 2
         if not bad:
