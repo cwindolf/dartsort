@@ -47,7 +47,7 @@ def kmeanspp(X, n_components=10, random_state=0, kmeanspp_initial="random", mode
 
 def kmeans_inner(
     X,
-    n_kmeanspp_tries=10,
+    n_kmeanspp_tries=5,
     n_iter=100,
     n_components=10,
     random_state=0,
@@ -115,8 +115,8 @@ def kmeans_inner(
 
 def kmeans(
     X,
-    n_kmeans_tries=10,
-    n_kmeanspp_tries=10,
+    n_kmeans_tries=5,
+    n_kmeanspp_tries=5,
     n_iter=100,
     n_components=10,
     random_state=0,

@@ -2476,6 +2476,7 @@ class SpikeMixtureModel(torch.nn.Module):
             assert False
 
         # -- organize labels...
+        best_improvement = best_improvement
         assert np.isfinite(best_improvement)
         if best_improvement < 0:
             return None
@@ -2885,7 +2886,7 @@ class SpikeMixtureModel(torch.nn.Module):
                 cm.reshape(len(cm), -1),
                 cw,
                 self.noise.full_inverse(),
-            )
+            ).cpu().item()
             _, hm, hw, _ = self.stack_units(units=hyp_units, mean_only=False)
             if hw is not None:
                 hw = hw.permute(0, 3, 1, 2).reshape(len(hw), self.ppca_rank, -1)
@@ -2895,10 +2896,7 @@ class SpikeMixtureModel(torch.nn.Module):
                 hm.reshape(len(hm), -1),
                 hw,
                 self.noise.full_inverse(),
-            )
-            logger.info(f"{cec=} {hec=}")
-            logger.info(f"{(nu * cec)=}")
-            logger.info(f"{(nu * hec)=}")
+            ).cpu().item()
             # rescale from main likelihood units to nu/n scale
             cur_elbo += nu * cec
             cur_loglik += nu * cec

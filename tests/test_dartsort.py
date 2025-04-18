@@ -27,6 +27,10 @@ def test_fakedata():
                     denoise_only=True, do_nn_denoise=False
                 )
             ),
+            # pc based clust
+            clustering_config=dartsort.ClusteringConfig(
+                initial_amp_feat=False, initial_pc_feats=1
+            ),
             refinement_config=dartsort.RefinementConfig(
                 min_count=10, channels_strategy="count", n_total_iters=1
             ),

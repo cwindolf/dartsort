@@ -410,29 +410,15 @@ class SpikeTruncatedMixtureModel(nn.Module):
             if inu.size > count_per_unit:
                 labels[inu] = -1
                 labels[rg.choice(inu, size=count_per_unit, replace=False)] = u
-        print(f"{np.unique(labels, return_counts=True)=}")
 
         valid = np.flatnonzero(labels >= 0)
         vneighbs = self.candidates.neighborhood_ids[valid]
         np.add.at(unit_neighborhood_counts, (labels[valid], vneighbs), 1)
-        print(f"{unit_neighborhood_counts=} {unit_neighborhood_counts.shape=}")
-        print(f"{unit_neighborhood_counts.min(0)=}")
-        print(f"{unit_neighborhood_counts.max(0)=}")
-        print(f"{unit_neighborhood_counts.min(1)=}")
-        print(f"{unit_neighborhood_counts.max(1)=}")
         # nu x nneighb
         neighb_occupancy = unit_neighborhood_counts.astype(float)
         # nneighb x nchans
         neighb_to_chans = self.train_neighborhoods.indicators.T.numpy(force=True)
-        print(
-            f"{neighb_to_chans.shape=} {neighb_to_chans.min()=} {neighb_to_chans.max()=}"
-        )
         counts = neighb_occupancy @ neighb_to_chans
-        print(f"{counts=} {counts.shape=}")
-        print(f"{counts.min(0)=}")
-        print(f"{counts.max(0)=}")
-        print(f"{counts.min(1)=}")
-        print(f"{counts.max(1)=}")
         props = [row / max(1, row.max()) for row in counts]
         channels = [
             np.flatnonzero(np.logical_and(row >= min_count, prop >= min_prop))

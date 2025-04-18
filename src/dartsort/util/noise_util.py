@@ -914,11 +914,11 @@ def interpolate_residual_snippets(
     # with possible missing values
     source_geom = torch.asarray(geom).to(snippets)
     source_pos = source_geom[None].broadcast_to(n, *geom.shape).contiguous()
-    target_geom = torch.asarray(registered_geom).to(snippets)
 
     if motion_est is None:
         # no drift case, no missing values, but still interpolate to avoid
         # statistical differences between drifty/no drift versions of the sorter
+        target_geom = torch.asarray(registered_geom).to(snippets)
         assert torch.equal(source_geom, target_geom)
         target_pos = target_geom[None].broadcast_to(n, *geom.shape).contiguous()
 
@@ -956,20 +956,21 @@ def interpolate_residual_snippets(
     source_shifts = motion_est.disp_at_s(source_t.cpu(), source_depths.cpu())
     source_shifts = source_shifts.reshape(source_pos[:, :, 1].shape).astype("float32")
     source_shifts_xy = np.stack([np.zeros_like(source_shifts), source_shifts], axis=-1)
-    source_pos_shifted = source_pos + source_shifts_xy
+    source_pos_shifted = source_pos.numpy(force=True) + source_shifts_xy
 
     # query the target geom for the closest source pos, within reason
     kdtree = drift_util.KDTree(registered_geom)
     match_distance = drift_util.pdist(geom).min()
     _, targ_inds = kdtree.query(
-        source_pos_shifted.reshape(-1, geom.shape[1]).numpy(force=True),
+        source_pos_shifted.reshape(-1, geom.shape[1]),
         distance_upper_bound=match_distance,
         workers=workers or -1,
     )
     targ_inds = torch.from_numpy(targ_inds).reshape(source_pos.shape[:2])
     assert (targ_inds < kdtree.n).all()
-    target_pos = target_geom[targ_inds].to(snippets)
+    target_pos = registered_geom[targ_inds]
     target_pos_shifted = target_pos - source_shifts_xy
+    target_pos_shifted = torch.asarray(target_pos_shifted).to(snippets)
 
     # if kriging, we need a pseudoinverse
     skis = None
@@ -978,6 +979,7 @@ def interpolate_residual_snippets(
             source_geom, None, sigma=sigma
         )
         skis = skis.broadcast_to((len(snippets), *skis.shape[1:]))
+        skis = skis.to(snippets)
 
     # allocate output storage with an extra channel of NaN needed later
     snippets = interpolation_util.kernel_interpolate(
