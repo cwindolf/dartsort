@@ -561,8 +561,9 @@ class SpikeMixtureModel(torch.nn.Module):
         channels, counts = tmm.channel_occupancy(
             labels,
             min_count=self.channels_count_min,
-            # min_prop=0.25,
-            count_per_unit=self.n_spikes_fit,
+            # min_prop=0.05,
+            # count_per_unit=self.n_spikes_fit,
+            # neighborhoods=self.data.neighborhoods(neighborhood="core")[1],
             rg=self.rg,
         )
         for j in range(len(tmm.means)):
@@ -2012,7 +2013,7 @@ class SpikeMixtureModel(torch.nn.Module):
         min_overlap=None,
         show_progress=False,
         decision_algorithm=None,
-        brute_size=5,
+        brute_size=4,
         cosines=None,
         reevaluate_cur_liks=True,
     ):
@@ -2107,7 +2108,7 @@ class SpikeMixtureModel(torch.nn.Module):
             cluster_ids = unit_ids[leaves]
 
             if not brute_indicator[i] and (
-                decision_algorithm == "tree" or len(leaves) >= brute_size
+                decision_algorithm == "tree" or len(leaves) > brute_size
             ):
                 # groups larger than brute_size are handled by tree case
                 level_cosines = None
@@ -2137,7 +2138,7 @@ class SpikeMixtureModel(torch.nn.Module):
 
         if decision_algorithm == "brute":
             n_jobs = min(self.n_threads, len(brute_jobs))
-            pool = Parallel(n_jobs, backend="threading", return_as="generator")
+            pool = Parallel(n_jobs, backend="threading", return_as="generator_unordered")
             results = pool(brute_jobs)
             if show_progress:
                 desc = "Merge: brute step 2/2"
