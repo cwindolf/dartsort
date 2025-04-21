@@ -49,6 +49,52 @@ def test_csc_insert():
     assert np.array_equal(x1.data, x0.data)
 
 
+def test_topk_sparse():
+    rg = np.random.default_rng(0)
+    ncols = 10
+    k = 3
+    nrows = 10
+
+    # we'll only ever insert on half the columns just for fun
+    cols_valid = np.arange(0, ncols, 2)
+
+    # allocate topk sparse array
+    topk = sparse_util.allocate_topk(ncols, k)
+
+    # insert 5 big rows
+    for j in range(5):
+        rowdata = 100 + rg.normal(size=cols_valid.size).astype("float32")
+        sparse_util.topk_sparse_insert(j, cols_valid, rowdata, topk)
+
+        # check it now...
+        csc = sparse_util.topk_sparse_tocsc(topk, nrows)
+        assert csc.shape == (ncols, nrows)
+        assert csc.nnz == min(k, (j + 1)) * cols_valid.size
+        # this one below is stochastic but should succeed whp
+        assert np.array_equal(np.unique(csc.indices), np.arange(j + 1))
+        counts = np.zeros(ncols, dtype=int)
+        counts[cols_valid] = min(k, j + 1)
+        assert np.array_equal(csc.indptr, np.concatenate([[0], np.cumsum(counts)]))
+    csc_last = csc
+
+    # insert a small row and check it did nothing
+    rowdata = -100 + rg.normal(size=cols_valid.size).astype("float32")
+    sparse_util.topk_sparse_insert(8, cols_valid, rowdata, topk)
+    csc = sparse_util.topk_sparse_tocsc(topk, nrows)
+
+    assert np.array_equal(csc_last.data, csc.data)
+    assert np.array_equal(csc_last.indptr, csc.indptr)
+    assert csc_last.nnz == csc.nnz
+
+    assert csc.shape == (ncols, nrows)
+    assert csc.nnz == k * cols_valid.size
+    # this one below is stochastic but should succeed whp
+    assert np.array_equal(np.unique(csc.indices), np.arange(j + 1))
+    counts = np.zeros(ncols, dtype=int)
+    counts[cols_valid] = k
+    assert np.array_equal(csc.indptr, np.concatenate([[0], np.cumsum(counts)]))
+
+
 def test_csc_mask():
     rg = np.random.default_rng(10)
     ij = rg.integers(low=((0, 0),), high=(shape,), size=(nnz, 2))
