@@ -75,11 +75,14 @@ def cluster_chunk(
     )
     to_cluster = np.setdiff1d(to_cluster, np.flatnonzero(sorting.labels < -1))
     labels = np.full_like(sorting.labels, -1)
-    extra_features = sorting.extra_features
+    extra_features = sorting.extra_features.copy()
     z_reg = z_reg[to_cluster]
     xyza = xyza[to_cluster]
     amps = amps[to_cluster]
     t_s = sorting.times_seconds[to_cluster]
+    # unclustered = np.ones(len(sorting), dtype=bool)
+    # unclustered[to_cluster] = False
+    # extra_features['unclustered'] = unclustered
 
     if clustering_config.cluster_strategy == "closest_registered_channels":
         labels[to_cluster] = cluster_util.closest_registered_channels(
@@ -118,16 +121,16 @@ def cluster_chunk(
         )
     elif clustering_config.cluster_strategy == "dpc":
         # build feature set
-        features = (xyza[:, 0], z_reg)
+        features = [xyza[:, 0], z_reg]
         if clustering_config.use_amplitude:
             ampfeat = np.log(clustering_config.amp_log_c + amps)
             ampfeat *= clustering_config.amp_scale
-            features = (*features, ampfeat)
+            features.append(ampfeat)
         if clustering_config.n_main_channel_pcs:
             pcs = cluster_util.get_main_channel_pcs(
                 sorting, which=to_cluster, rank=clustering_config.n_main_channel_pcs
             )
-            features = (*features, clustering_config.pc_scale * pcs)
+            features.append(clustering_config.pc_scale * pcs)
         X = np.column_stack(features)
 
         # subsample if requested
