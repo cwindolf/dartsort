@@ -302,7 +302,7 @@ class ClusteringConfig:
     amp_log_c: float = 5.0
     amp_scale: float = 50.0
     n_main_channel_pcs: int = 0
-    pc_scale: float = 1.0
+    pc_scale: float = 2.5
     adaptive_feature_scales: bool = False
 
     # density peaks parameters
