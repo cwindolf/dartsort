@@ -169,14 +169,15 @@ def _topk_sparse_insert(row, row_column_indices, row_data, topk_row_indices, top
             continue
 
         # otherwise everyone shimmies down
+        row_ins = row
         for i in range(k):
             entry = topk_data[col_ix, i]
+            entry_row = topk_row_indices[col_ix, i]
             if datum > entry:
                 topk_data[col_ix, i] = datum
-                new_row = topk_row_indices[col_ix, i]
-                topk_row_indices[col_ix, i] = row
-                row = new_row
+                topk_row_indices[col_ix, i] = row_ins
                 datum = entry
+                row_ins = entry_row
 
 
 def topk_sparse_tocsc(topk, max_row_index, extra_row=None):
@@ -200,7 +201,7 @@ def topk_sparse_tocsc(topk, max_row_index, extra_row=None):
         assert extra_row.shape == (n,)
         nnz += n
 
-    shape = (n, max_row_index + (extra_row is not None))
+    shape = (max_row_index + (extra_row is not None), n)
     dtype = topk_data.dtype
     data_storage = np.empty((nnz,), dtype=dtype)
     index_storage = np.empty((nnz,), dtype=int)

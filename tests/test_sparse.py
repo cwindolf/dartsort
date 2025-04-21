@@ -51,9 +51,9 @@ def test_csc_insert():
 
 def test_topk_sparse():
     rg = np.random.default_rng(0)
-    ncols = 10
-    k = 3
+    ncols = 100
     nrows = 10
+    k = nrows // 2
 
     # we'll only ever insert on half the columns just for fun
     cols_valid = np.arange(0, ncols, 2)
@@ -61,17 +61,21 @@ def test_topk_sparse():
     # allocate topk sparse array
     topk = sparse_util.allocate_topk(ncols, k)
 
+    csc = sparse_util.topk_sparse_tocsc(topk, nrows)
+    assert (csc.todense() == 0.0).all()
+
     # insert 5 big rows
-    for j in range(5):
+    for j in range(nrows // 2 + 1):
         rowdata = 100 + rg.normal(size=cols_valid.size).astype("float32")
         sparse_util.topk_sparse_insert(j, cols_valid, rowdata, topk)
 
         # check it now...
         csc = sparse_util.topk_sparse_tocsc(topk, nrows)
-        assert csc.shape == (ncols, nrows)
+        assert csc.shape == (nrows, ncols)
         assert csc.nnz == min(k, (j + 1)) * cols_valid.size
         # this one below is stochastic but should succeed whp
-        assert np.array_equal(np.unique(csc.indices), np.arange(j + 1))
+        if ncols > 80:
+            assert np.array_equal(np.unique(csc.indices), np.arange(j + 1))
         counts = np.zeros(ncols, dtype=int)
         counts[cols_valid] = min(k, j + 1)
         assert np.array_equal(csc.indptr, np.concatenate([[0], np.cumsum(counts)]))
@@ -79,20 +83,40 @@ def test_topk_sparse():
 
     # insert a small row and check it did nothing
     rowdata = -100 + rg.normal(size=cols_valid.size).astype("float32")
-    sparse_util.topk_sparse_insert(8, cols_valid, rowdata, topk)
+    sparse_util.topk_sparse_insert(nrows - 1, cols_valid, rowdata, topk)
     csc = sparse_util.topk_sparse_tocsc(topk, nrows)
 
     assert np.array_equal(csc_last.data, csc.data)
     assert np.array_equal(csc_last.indptr, csc.indptr)
     assert csc_last.nnz == csc.nnz
 
-    assert csc.shape == (ncols, nrows)
+    assert csc.shape == (nrows, ncols)
     assert csc.nnz == k * cols_valid.size
     # this one below is stochastic but should succeed whp
-    assert np.array_equal(np.unique(csc.indices), np.arange(j + 1))
+    if ncols > 80:
+        assert np.array_equal(np.unique(csc.indices), np.arange(j + 1))
     counts = np.zeros(ncols, dtype=int)
     counts[cols_valid] = k
     assert np.array_equal(csc.indptr, np.concatenate([[0], np.cumsum(counts)]))
+
+    # insert the extra row
+    extra_row = np.full((ncols,), 1000.0, dtype="float32")
+    csc = sparse_util.topk_sparse_tocsc(topk, nrows, extra_row)
+    assert csc.shape == (nrows + 1, ncols)
+    assert csc.nnz == k * cols_valid.size + ncols
+    # this one below is stochastic but should succeed whp
+    if ncols > 80:
+        assert np.array_equal(
+            np.unique(csc.indices), np.concatenate([np.arange(j + 1), [nrows]])
+        )
+    counts = np.ones(ncols, dtype=int)
+    counts[cols_valid] += k
+    assert np.array_equal(csc.indptr, np.concatenate([[0], np.cumsum(counts)]))
+    dns = csc.todense()
+    assert np.all(dns.max(axis=0) == 1000.0)
+    assert dns.max(1)[-1] == 1000.0
+    assert np.all(dns.max(1)[:-1] < 150.0)
+    assert dns.min(1)[-1] == 1000.0
 
 
 def test_csc_mask():
@@ -147,6 +171,7 @@ def test_csc_getrow():
 
 
 if __name__ == "__main__":
-    test_csc_getrow()
-    test_csc_insert()
-    test_csc_mask()
+    test_topk_sparse()
+    # test_csc_getrow()
+    # test_csc_insert()
+    # test_csc_mask()
