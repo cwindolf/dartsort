@@ -397,19 +397,22 @@ class SpikeTruncatedMixtureModel(nn.Module):
         return topkinds
 
     def channel_occupancy(
-        self, labels, min_count=0, min_prop=0, count_per_unit=4096, rg=0
+        self, labels, min_count=0, min_prop=0, count_per_unit=None, neighborhoods=None, rg=0
     ):
-        shp = self.n_units, self.train_neighborhoods.n_neighborhoods
+        if neighborhoods is None:
+            neighborhoods = self.train_neighborhoods
+        shp = self.n_units, neighborhoods.n_neighborhoods
         unit_neighborhood_counts = np.zeros(shp, dtype=int)
 
         labels = labels.numpy(force=True).copy()
-        units = np.unique(labels)
-        rg = np.random.default_rng(rg)
-        for u in units[units >= 0]:
-            inu = np.flatnonzero(labels == u)
-            if inu.size > count_per_unit:
-                labels[inu] = -1
-                labels[rg.choice(inu, size=count_per_unit, replace=False)] = u
+        if count_per_unit:
+            units = np.unique(labels)
+            rg = np.random.default_rng(rg)
+            for u in units[units >= 0]:
+                inu = np.flatnonzero(labels == u)
+                if inu.size > count_per_unit:
+                    labels[inu] = -1
+                    labels[rg.choice(inu, size=count_per_unit, replace=False)] = u
 
         valid = np.flatnonzero(labels >= 0)
         vneighbs = self.candidates.neighborhood_ids[valid]
@@ -417,7 +420,7 @@ class SpikeTruncatedMixtureModel(nn.Module):
         # nu x nneighb
         neighb_occupancy = unit_neighborhood_counts.astype(float)
         # nneighb x nchans
-        neighb_to_chans = self.train_neighborhoods.indicators.T.numpy(force=True)
+        neighb_to_chans = neighborhoods.indicators.T.numpy(force=True)
         counts = neighb_occupancy @ neighb_to_chans
         props = [row / max(1, row.max()) for row in counts]
         channels = [
