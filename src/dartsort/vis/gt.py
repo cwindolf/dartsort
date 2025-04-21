@@ -11,6 +11,15 @@ from .unit import UnitPlot, make_all_summaries, make_unit_summary
 from .waveforms import geomplot
 
 
+
+table_cmap = ['managua', 'cividis']
+for table_cmap in table_cmap:
+    if table_cmap in plt.colormaps:
+        break
+else:
+    assert False
+
+
 # -- single-unit
 
 
@@ -452,7 +461,7 @@ class TrimmedAgreementMatrix(ComparisonPlot):
     width = 3
     height = 2
 
-    def __init__(self, trim_kind="auto", ordered=True, cmap="managua"):
+    def __init__(self, trim_kind="auto", ordered=True, cmap=table_cmap):
         self.trim_kind = trim_kind
         self.ordered = ordered
         self.cmap = cmap
@@ -462,7 +471,7 @@ class TrimmedAgreementMatrix(ComparisonPlot):
             agreement = comparison.comparison.get_ordered_agreement_scores()
         else:
             agreement = comparison.comparison.agreement_scores
-        if self.trim_kind == "auto" and agreement.shape[1] < 4 * agreement.shape[0]:
+        if self.trim_kind == "auto":
             pass
         else:
             assert self.ordered
