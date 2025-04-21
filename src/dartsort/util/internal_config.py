@@ -567,6 +567,7 @@ def to_internal_config(cfg):
         radius_search=cfg.density_bandwidth,
         use_amplitude=cfg.initial_amp_feat,
         n_main_channel_pcs=cfg.initial_pc_feats,
+        pc_scale=cfg.initial_pc_scale,
     )
     refinement_config = RefinementConfig(
         signal_rank=cfg.signal_rank,

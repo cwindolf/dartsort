@@ -179,6 +179,7 @@ class DeveloperConfig(DARTsortUserConfig):
 
     initial_amp_feat: bool = True
     initial_pc_feats: int = 0
+    initial_pc_scale: float = 2.5
 
     gmm_max_spikes: Annotated[int, Field(gt=0)] = 4_000_000
     gmm_val_proportion: Annotated[float, Field(gt=0)] = 0.25
