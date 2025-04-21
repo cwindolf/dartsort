@@ -55,16 +55,26 @@ def is_largest_set_smaller_than(Z, leaf_descendants, max_size=5):
     n_branches = len(Z)
     n_units = n_branches + 1
     indicator = np.zeros(n_branches, dtype=bool)
+    # this walks up from the leaves
+    # at each branch, if #descendents<size, branch gets true and
+    # its parents are set to false. that way only one ancestor
+    # is true for each leaf.
     for i, (pa, pb, dist, nab) in enumerate(Z):
         sz = len(leaf_descendants[n_units + i])
-        if sz <= max_size:
-            pa = int(pa)
-            pb = int(pb)
-            indicator[i] = True
-            if pa >= n_units:
-                indicator[pa - n_units] = False
-            if pb >= n_units:
-                indicator[pb - n_units] = False
+        if sz > max_size:
+            continue
+        pa = int(pa)
+        pb = int(pb)
+        indicator[i] = True
+        if pa >= n_units:
+            indicator[pa - n_units] = False
+        if pb >= n_units:
+            indicator[pb - n_units] = False
+    # assert that at most one ancestor is true for each leaf
+    counts = np.zeros(n_units, dtype=int)
+    for i, ind in enumerate(indicator):
+        counts[leaf_descendants[n_units + i]] += ind
+    assert counts.max() <= 1
     return indicator
 
 
