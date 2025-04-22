@@ -120,6 +120,188 @@ def csc_insert(row, write_offsets, inds, csc_indices, csc_data, liks):
         write_offsets[ind] += 1
 
 
+def allocate_topk(n_columns, k):
+    data = np.full((n_columns, k), -np.inf, dtype="float32")
+    row_indices = np.full((n_columns, k), -1, dtype=int)
+    return row_indices, data
+
+
+def topk_sparse_insert(row, row_column_indices, row_data, topk):
+    """topk sparse array builder
+
+    A topk sparse array is something close to a CSC array. It is a tuple
+    (data, row_indices), where data is n_columns x k and row_indices is
+    n_columns x k, and these should be contiguous on the inner axis.
+
+    It has the following invariants:
+     - data is sorted in decreasing order on the inner (1th) axis
+       (the k dimension)
+     - row_indices can be <0, in which case the corresponding entry of
+       data is -inf
+     - -infs don't count, they always have row_indices[.,.] == -1
+
+    This function inserts "a new row" into the array, maintaining those invariants.
+    So, if one of the elements of the row you're inserting is -inf or smaller than
+    all of the entries in the corresponding column of data, that's a no-op.
+    """
+    assert isinstance(topk, tuple)
+    topk_row_indices, topk_data = topk
+    assert row_column_indices.shape == row_data.shape
+    assert topk_row_indices.shape == topk_data.shape
+    assert len(row_column_indices) <= len(topk_data)
+    _topk_sparse_insert(row, row_column_indices, row_data, topk_row_indices, topk_data)
+
+
+@numba.njit(
+    "i8,i8[::1],f4[::1],i8[:,::1],f4[:,::1]",
+    error_model="numpy",
+    nogil=True,
+    parallel=True,
+)
+def _topk_sparse_insert(row, row_column_indices, row_data, topk_row_indices, topk_data):
+    k = topk_data.shape[1]
+    for j in numba.prange(row_column_indices.shape[0]):
+        col_ix = row_column_indices[j]
+        datum = row_data[j]
+
+        # optimize for case where datum won't be inserted
+        if not datum > topk_data[col_ix, -1]:
+            continue
+
+        # otherwise everyone shimmies down
+        row_ins = row
+        for i in range(k):
+            entry = topk_data[col_ix, i]
+            entry_row = topk_row_indices[col_ix, i]
+            if datum > entry:
+                topk_data[col_ix, i] = datum
+                topk_row_indices[col_ix, i] = row_ins
+                datum = entry
+                row_ins = entry_row
+
+
+def topk_sparse_tocsc(
+    topk, n_rows, extra_row=None, column_support=None, n_columns_full=None
+):
+    """Convert a topk sparse array to CSC.
+
+    For noise unit purposes, allows inserting an extra row at the last minute.
+    n_rows should NOT include the extra row.
+    """
+    assert isinstance(topk, tuple)
+    topk_row_indices, topk_data = topk
+    n, k = topk_data.shape
+    assert topk_row_indices.shape == (n, k)
+
+    order = topk_row_indices.argsort(axis=1)
+    data = np.take_along_axis(topk_data, order, axis=1)
+    row_inds = np.take_along_axis(topk_row_indices, order, axis=1)
+
+    start = searchsorted_along_columns(row_inds, 0)
+    nnz = row_inds.size - start.sum()
+    if extra_row is not None:
+        assert extra_row.shape == (n,)
+        nnz += n
+
+    ncols = n
+    if column_support is not None:
+        assert n_columns_full
+        ncols = n_columns_full
+
+    shape = (n_rows + (extra_row is not None), ncols)
+    dtype = topk_data.dtype
+    data_storage = np.empty((nnz,), dtype=dtype)
+    index_storage = np.empty((nnz,), dtype=int)
+
+    if (
+        column_support is None
+        or isinstance(column_support, slice)
+        and column_support == slice(None)
+    ):
+        indptr = np.full((n + 1,), k + (extra_row is not None), dtype=int)
+        indptr[0] = 0
+        indptr[1:] -= start
+        np.cumsum(indptr[1:], out=indptr[1:])
+    else:
+        indptr = np.zeros((ncols + 1,), dtype=int)
+        indptr[1 + column_support] = k + (extra_row is not None)
+        indptr[1 + column_support] -= start
+        np.cumsum(indptr, out=indptr)
+
+    if extra_row is None:
+        _topk_pack(index_storage, data_storage, start, data, row_inds)
+    else:
+        _topk_pack_extra(
+            index_storage,
+            data_storage,
+            start,
+            data,
+            row_inds,
+            extra_row,
+            n_rows,
+        )
+
+    a = csc_array((data_storage, index_storage, indptr), shape=shape)
+    a._has_sorted_indices = True
+    a._has_canonical_format = True
+    return a
+
+
+@numba.njit(
+    "i8[::1],f4[::1],i8[::1],f4[:,::1],i8[:,::1]",
+    error_model="numpy",
+    nogil=True,
+)
+def _topk_pack(istorage, dstorage, start, topk_data, topk_inds):
+    nzix = 0
+    k = topk_data.shape[1]
+    for j in range(start.shape[0]):
+        for i in range(start[j], k):
+            dstorage[nzix] = topk_data[j, i]
+            istorage[nzix] = topk_inds[j, i]
+            nzix += 1
+
+
+@numba.njit(
+    "i8[::1],f4[::1],i8[::1],f4[:,::1],i8[:,::1],f4[::1],i8",
+    error_model="numpy",
+    nogil=True,
+)
+def _topk_pack_extra(
+    istorage, dstorage, start, topk_data, topk_inds, extra_row, extra_row_ind
+):
+    nzix = 0
+    k = topk_data.shape[1]
+    for j in range(start.shape[0]):
+        s = start[j]
+        for i in range(s, k):
+            dstorage[nzix] = topk_data[j, i]
+            istorage[nzix] = topk_inds[j, i]
+            nzix += 1
+        dstorage[nzix] = extra_row[j]
+        istorage[nzix] = extra_row_ind
+        nzix += 1
+
+
+def double_searchsorted(a, v):
+    i0 = np.searchsorted(a, v[0])
+    assert a[i0] == v[0]
+    out = np.empty(v.shape, dtype=int)
+    out[0] = i0
+    _double_searchsorted(a, v, out)
+    return out
+
+
+@numba.njit("i8[::1],i8[::1],i8[::1]", error_model="numpy", nogil=True)
+def _double_searchsorted(a, v, out):
+    i = out[0]
+    for vix in range(1, v.shape[0]):
+        val = v[vix]
+        while val > a[i]:
+            i += 1
+        out[vix] = i
+
+
 def coo_sparse_mask_rows(coo, keep_mask):
     """Row indexing with a boolean mask."""
     if keep_mask.all():
@@ -419,6 +601,27 @@ def hard_noise_argmax_loop(
         else:
             scores[j] = noise_score
             # best = noise_ix
+
+
+def searchsorted_along_columns(arr, value):
+    out = np.empty((arr.shape[0],), dtype=int)
+    _searchsorted_along_columns(out, arr, value)
+    return out
+
+
+@numba.njit(
+    "i8[::1],i8[:,::1],i8",
+    error_model="numpy",
+    nogil=True,
+    parallel=True,
+)
+def _searchsorted_along_columns(out, arr, value):
+    k = arr.shape[1]
+    for j in numba.prange(out.shape[0]):
+        i = 0
+        while i < k and value > arr[j, i]:
+            i += 1
+        out[j] = i
 
 
 def integers_without_inner_replacement(rg, high, size):

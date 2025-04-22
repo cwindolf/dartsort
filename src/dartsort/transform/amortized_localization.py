@@ -2,9 +2,15 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 from dartsort.util import nn_util
-from dartsort.util.spiketorch import get_relative_index, ptp, reindex
+from dartsort.util.spiketorch import get_relative_index, ptp, reindex, spawn_torch_rg
 from dartsort.util.waveform_util import make_regular_channel_index
-from torch.utils.data import DataLoader, TensorDataset, RandomSampler, BatchSampler
+from torch.utils.data import (
+    DataLoader,
+    TensorDataset,
+    RandomSampler,
+    BatchSampler,
+    WeightedRandomSampler,
+)
 from tqdm.auto import trange
 
 from .transform_base import BaseWaveformFeaturizer
@@ -38,7 +44,7 @@ class AmortizedLocalization(BaseWaveformFeaturizer):
         convergence_eps=0.01,
         min_epochs=10,
         scale_loss_by_mean=True,
-        reference='main_channel',
+        reference="main_channel",
         channelwise_dropout_p=0.00,
         examples_per_epoch=50_000,
         val_split_p=0.3,
@@ -46,7 +52,7 @@ class AmortizedLocalization(BaseWaveformFeaturizer):
     ):
         assert localization_model in ("pointsource", "dipole")
         assert amplitude_kind in ("peak", "ptp")
-        assert reference in ('main_channel', 'com')
+        assert reference in ("main_channel", "com")
         super().__init__(
             geom=geom, channel_index=channel_index, name=name, name_prefix=name_prefix
         )
@@ -65,7 +71,9 @@ class AmortizedLocalization(BaseWaveformFeaturizer):
         self.hidden_dims = hidden_dims
         self.alpha_closed_form = alpha_closed_form
         self.variational = prior_variance is not None
-        self.prior_variance = torch.tensor(prior_variance) if prior_variance is not None else None
+        self.prior_variance = (
+            torch.tensor(prior_variance) if prior_variance is not None else None
+        )
         self.convergence_eps = convergence_eps
         self.min_epochs = min_epochs
         self.scale_loss_by_mean = scale_loss_by_mean
@@ -93,9 +101,9 @@ class AmortizedLocalization(BaseWaveformFeaturizer):
     def needs_fit(self):
         return self._needs_fit
 
-    def fit(self, waveforms, max_channels, recording=None):
+    def fit(self, waveforms, max_channels, recording=None, weights=None):
         with torch.enable_grad():
-            self._fit(waveforms, max_channels)
+            self._fit(waveforms, max_channels, weights=weights)
         self.eval()
         self._needs_fit = False
 
@@ -125,9 +133,9 @@ class AmortizedLocalization(BaseWaveformFeaturizer):
         return mu + eps * std
 
     def get_reference_points(self, channels, obs_amps=None, neighborhoods=None):
-        if self.reference == 'main_channel':
+        if self.reference == "main_channel":
             return self.padded_geom[channels]
-        elif self.reference == 'com':
+        elif self.reference == "com":
             if neighborhoods is None:
                 neighborhoods = self.padded_geom[self.model_channel_index[channels]]
             w = obs_amps / obs_amps.sum(1, keepdims=True)
@@ -139,7 +147,9 @@ class AmortizedLocalization(BaseWaveformFeaturizer):
     def local_distances(self, z, channels, obs_amps=None):
         """Return distances from each z to its local geom centered at channels."""
         neighbors = self.padded_geom[self.model_channel_index[channels]]
-        centers = self.get_reference_points(channels, obs_amps=obs_amps, neighborhoods=neighbors)
+        centers = self.get_reference_points(
+            channels, obs_amps=obs_amps, neighborhoods=neighbors
+        )
         local_geom = neighbors - centers.unsqueeze(1)
         dx = z[:, 0, None] - local_geom[:, :, 0]
         dz = z[:, 2, None] - local_geom[:, :, 1]
@@ -170,7 +180,9 @@ class AmortizedLocalization(BaseWaveformFeaturizer):
 
     def dipole_model(self, z, obs_amps, masks, channels):
         neighbors = self.padded_geom[self.model_channel_index[channels]]
-        centers = self.get_reference_points(channels, obs_amps=obs_amps, neighborhoods=neighbors)
+        centers = self.get_reference_points(
+            channels, obs_amps=obs_amps, neighborhoods=neighbors
+        )
         local_geom = neighbors - centers.unsqueeze(1)
 
         # displacements from probe
@@ -226,15 +238,20 @@ class AmortizedLocalization(BaseWaveformFeaturizer):
         mse = F.mse_loss(recon_x_masked, x_masked, reduction="sum") / self.batch_size
         kld = 0.0
         if self.variational:
-            kld = 0.5 * (
-                + torch.log(self.prior_variance / var)
-                + mu.pow(2) / self.prior_variance
-                - 1
-            ).sum() / self.batch_size
+            kld = (
+                0.5
+                * (
+                    +torch.log(self.prior_variance / var)
+                    + mu.pow(2) / self.prior_variance
+                    - 1
+                ).sum()
+                / self.batch_size
+            )
         return mse, kld
 
-    def _fit(self, waveforms, channels):
+    def _fit(self, waveforms, channels, weights=None):
         # apply channel reindexing before any fitting...
+        amps = None
         if waveforms.ndim == 2:
             assert self.amplitudes_only
             waveforms = waveforms.unsqueeze(1)
@@ -254,6 +271,7 @@ class AmortizedLocalization(BaseWaveformFeaturizer):
                 amps = ptp(waveforms)
             elif self.amplitude_kind == "peak":
                 amps = waveforms.abs().max(dim=1).values
+        assert amps is not None
 
         # make a validation set for early stopping
         if self.val_split_p:
@@ -267,6 +285,7 @@ class AmortizedLocalization(BaseWaveformFeaturizer):
             waveforms = waveforms[istrain]
             amps = amps[istrain]
             channels = channels[istrain]
+            weights = weights[istrain] if weights is not None else None
         else:
             # early stopping will just be done on the train wfs
             val_waveforms = waveforms
@@ -276,7 +295,15 @@ class AmortizedLocalization(BaseWaveformFeaturizer):
         self.initialize_net(waveforms.shape[1])
 
         dataset = TensorDataset(waveforms, amps, channels)
-        sampler = RandomSampler(dataset)
+        if weights is None:
+            sampler = RandomSampler(dataset, generator=spawn_torch_rg(self.random_seed))
+        else:
+            assert len(weights) == len(dataset)
+            sampler = WeightedRandomSampler(
+                weights,
+                num_samples=len(dataset),
+                generator=spawn_torch_rg(self.random_seed),
+            )
         sampler = BatchSampler(sampler, batch_size=self.batch_size, drop_last=True)
         dataloader = DataLoader(dataset, sampler=sampler)
         optimizer = torch.optim.Adam(self.parameters(), lr=self.learning_rate)
@@ -297,7 +324,12 @@ class AmortizedLocalization(BaseWaveformFeaturizer):
                     waveform_batch = waveform_batch[0]
                     amps_batch = amps_batch[0]
                     chans_batch = chans_batch[0]
-                    assert self.batch_size == len(waveform_batch) == len(amps_batch) == len(chans_batch)
+                    assert (
+                        self.batch_size
+                        == len(waveform_batch)
+                        == len(amps_batch)
+                        == len(chans_batch)
+                    )
 
                     optimizer.zero_grad()
                     channels_mask = self.model_channel_index[chans_batch] < len(
@@ -345,7 +377,7 @@ class AmortizedLocalization(BaseWaveformFeaturizer):
                         valbatch += 1
                     self.train()
 
-                nbatch = (n_examples / self.batch_size)
+                nbatch = n_examples / self.batch_size
                 loss = total_loss / nbatch
                 mse = total_mse / nbatch
                 val_loss = val_loss / valbatch
@@ -381,7 +413,7 @@ class AmortizedLocalization(BaseWaveformFeaturizer):
         waveforms = reindex(max_channels, waveforms, self.relative_index, pad_value=0.0)
         if self.amplitudes_only:
             obs_amps = waveforms[:, 0]
-        elif return_extra or self.reference == 'com':
+        elif return_extra or self.reference == "com":
             if self.amplitude_kind == "ptp":
                 obs_amps = ptp(waveforms)
             elif self.amplitude_kind == "peak":
@@ -410,13 +442,7 @@ class AmortizedLocalization(BaseWaveformFeaturizer):
 
         if return_extra:
             alphas, pred_amps = self.decode(mu, max_channels, obs_amps, mask)
-            return dict(
-                locs=locs,
-                obs_amps=obs_amps,
-                pred_amps=pred_amps,
-                mx=mx,
-                mz=mz
-            )
+            return dict(locs=locs, obs_amps=obs_amps, pred_amps=pred_amps, mx=mx, mz=mz)
 
         return locs
 

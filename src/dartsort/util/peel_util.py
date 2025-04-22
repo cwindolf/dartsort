@@ -51,7 +51,9 @@ def run_peeler(
     )
 
     # run main
-    n_resid_now = featurization_config.n_residual_snips * int(not featurization_config.residual_later)
+    n_resid_now = featurization_config.n_residual_snips * int(
+        not featurization_config.residual_later
+    )
     peeler.peel(
         output_hdf5_filename,
         chunk_starts_samples=chunk_starts_samples,
@@ -170,8 +172,9 @@ def subsample_waveforms(
     n_waveforms_fit=10_000,
     voltages_dataset_name="collisioncleaned_voltages",
     waveforms_dataset_name="collisioncleaned_waveforms",
-    fit_max_reweighting=20.0,
+    fit_max_reweighting=4.0,
     log_voltages=True,
+    subsample_by_weighting=False,
     replace=True,
 ):
 
@@ -180,16 +183,16 @@ def subsample_waveforms(
     with h5py.File(hdf5_filename) as h5:
         channels = h5["channels"][:]
         n_wf = channels.size
-        if n_wf > n_waveforms_fit:
-            sample_p = fit_reweighting(
-                h5=h5,
-                log_voltages=log_voltages,
-                fit_sampling=fit_sampling,
-                fit_max_reweighting=fit_max_reweighting,
-                voltages_dataset_name=voltages_dataset_name,
-            )
+        weights = fit_reweighting(
+            h5=h5,
+            log_voltages=log_voltages,
+            fit_sampling=fit_sampling,
+            fit_max_reweighting=fit_max_reweighting,
+            voltages_dataset_name=voltages_dataset_name,
+        )
+        if n_wf > n_waveforms_fit and not subsample_by_weighting:
             choices = random_state.choice(
-                n_wf, p=sample_p, size=n_waveforms_fit, replace=replace
+                n_wf, p=weights, size=n_waveforms_fit, replace=replace
             )
             if not replace:
                 choices.sort()
@@ -206,8 +209,9 @@ def subsample_waveforms(
 
     waveforms = torch.from_numpy(waveforms)
     channels = torch.from_numpy(channels)
+    weights = torch.from_numpy(weights) if subsample_by_weighting else None
 
-    return channels, waveforms
+    return channels, waveforms, weights
 
 
 def fit_reweighting(

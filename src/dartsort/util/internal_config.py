@@ -121,8 +121,9 @@ class FeaturizationConfig:
     # -- further info about denoising
     # in the future we may add multi-channel or other nns
     nn_denoiser_class_name: str = "SingleChannelWaveformDenoiser"
-    nn_denoiser_pretrained_path: str = default_pretrained_path
-    nn_denoiser_train_epochs: int = 50
+    nn_denoiser_pretrained_path: str | None = default_pretrained_path
+    nn_denoiser_train_epochs: int = 100
+    nn_denoiser_epoch_size: int = 200 * 256
     nn_denoiser_extra_kwargs: dict | None = argfield(None, cli=False)
 
     # optionally restrict how many channels TPCA are fit on
@@ -133,6 +134,7 @@ class FeaturizationConfig:
     input_tpca_waveform_config: WaveformConfig | None = WaveformConfig(
         ms_before=0.75, ms_after=1.25
     )
+    tpca_max_waveforms: int = 20_000
 
     # used when naming datasets saved to h5 files
     input_waveforms_name: str = "collisioncleaned"
@@ -147,7 +149,7 @@ class SubtractionConfig:
     max_waveforms_fit: int = 50_000
     n_waveforms_fit: int = 20_000
     fit_subsampling_random_state: int = 0
-    fit_sampling: str = "random"
+    fit_sampling: str = "amp_reweighted"
     fit_max_reweighting: float = 4.0
 
     # subtraction
@@ -171,6 +173,12 @@ class SubtractionConfig:
         input_waveforms_name="raw",
         output_waveforms_name="subtracted",
     )
+
+    # initial denoiser fitting parameters
+    first_denoiser_max_waveforms_fit: int = 250_000
+    first_denoiser_thinning: float = 0.5
+    first_denoiser_temporal_jitter: int = 3
+    first_denoiser_spatial_jitter: float = 35.0
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -533,6 +541,7 @@ def to_internal_config(cfg):
         input_tpca_waveform_config=tpca_waveform_config,
         localization_radius=cfg.localization_radius_um,
         tpca_fit_radius=cfg.fit_radius_um,
+        tpca_max_waveforms=cfg.n_waveforms_fit,
     )
     subtraction_denoising_config = FeaturizationConfig(
         denoise_only=True,
@@ -554,6 +563,7 @@ def to_internal_config(cfg):
             cfg.denoiser_badness_factor * cfg.matching_threshold**2
         ),
         chunk_length_samples=cfg.chunk_length_samples,
+        first_denoiser_thinning=cfg.first_denoiser_thinning,
     )
     template_config = TemplateConfig(
         registered_template_localization_radius_um=cfg.localization_radius_um,

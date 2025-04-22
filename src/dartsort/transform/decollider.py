@@ -38,9 +38,9 @@ class Decollider(BaseMultichannelDenoiser):
         name=None,
         name_prefix="",
         batch_size=256,
-        learning_rate=2.5e-4,
+        learning_rate=4e-4,
         weight_decay=0.0,
-        n_epochs=10,
+        n_epochs=75,
         channelwise_dropout_p=0.0,
         with_conv_fullheight=False,
         pretrained_path=None,
@@ -53,10 +53,10 @@ class Decollider(BaseMultichannelDenoiser):
         lr_schedule_kwargs=None,
         optimizer="Adam",
         optimizer_kwargs=None,
-        nonlinearity="ReLU",
-        scaling="none",
+        nonlinearity="ELU",
+        scaling="max",
         # my args. todo: port over common ones.
-        examples_per_epoch=200*256,
+        epoch_size=200 * 256,
         inference_z_samples=10,
         detach_amortizer=True,
         exz_estimator="n3n",
@@ -74,7 +74,7 @@ class Decollider(BaseMultichannelDenoiser):
         inf_net_hidden_dims=None,
         eyz_net_hidden_dims=None,
         log_signal=False,
-        signal_gates=False,
+        signal_gates=True,
         step_callback=None,
     ):
         assert exz_estimator in ("n2n", "2n2", "n3n", "3n3")
@@ -107,7 +107,7 @@ class Decollider(BaseMultichannelDenoiser):
             scaling=scaling,
         )
 
-        self.examples_per_epoch = examples_per_epoch
+        self.epoch_size = epoch_size
         self.inference_z_samples = inference_z_samples
         self.detach_amortizer = detach_amortizer
         self.exz_estimator = exz_estimator
@@ -278,7 +278,14 @@ class Decollider(BaseMultichannelDenoiser):
         )
 
     def loss(
-        self, mask, waveforms, m, net_outputs, l1_alpha=None, l4_alpha=None, output_l1_alpha=None
+        self,
+        mask,
+        waveforms,
+        m,
+        net_outputs,
+        l1_alpha=None,
+        l4_alpha=None,
+        output_l1_alpha=None,
     ):
         loss_dict = {}
         mask = mask.unsqueeze(1)
@@ -438,7 +445,7 @@ class Decollider(BaseMultichannelDenoiser):
             replacement=train_weights is not None,
             batch_size=self.batch_size,
             generator=spawn_torch_rg(self.rg),
-            examples_per_epoch=self.examples_per_epoch,
+            epoch_size=self.epoch_size,
         )
         train_loader = DataLoader(
             train_stack_dataset,
@@ -552,7 +559,11 @@ class Decollider(BaseMultichannelDenoiser):
                     self.eval()
                     val_losses = {}
                     with torch.no_grad():
-                        for (waveform_batch, channels_batch, noise_batch), ell_batch in val_loader:
+                        for (
+                            waveform_batch,
+                            channels_batch,
+                            noise_batch,
+                        ), ell_batch in val_loader:
                             waveform_batch = waveform_batch.to(self.device)
                             channels_batch = channels_batch.to(self.device)
                             noise_batch = noise_batch.to(self.device)
@@ -712,7 +723,7 @@ class AOTIndicesWeightedRandomBatchSampler(Sampler):
         replacement=True,
         batch_size=None,
         generator=None,
-        examples_per_epoch=None,
+        epoch_size=None,
     ):
         super().__init__()
 
@@ -725,13 +736,13 @@ class AOTIndicesWeightedRandomBatchSampler(Sampler):
         self.weights = weights
         self.replacement = replacement
         self.generator = generator
-        self.examples_per_epoch = examples_per_epoch
+        self.epoch_size = epoch_size
 
         self.indices = None
         self.batch_size = batch_size
 
     def __len__(self):
-        n = self.examples_per_epoch or self.n_examples
+        n = self.epoch_size or self.n_examples
         if self.batch_size is None:
             return n
         return (n + self.batch_size - 1) // self.batch_size
@@ -740,7 +751,7 @@ class AOTIndicesWeightedRandomBatchSampler(Sampler):
         if self.batch_size is None:
             yield from self.indices
         else:
-            n = self.examples_per_epoch or self.n_examples
+            n = self.epoch_size or self.n_examples
             for bs in range(0, n, self.batch_size):
                 be = min(n, bs + self.batch_size)
                 yield self.indices[bs:be]
@@ -753,15 +764,20 @@ class AOTIndicesWeightedRandomBatchSampler(Sampler):
         else:
             generator = self.generator
 
-        n_draws = self.examples_per_epoch or self.n_examples
+        n_draws = self.epoch_size or self.n_examples
 
         if self.weights is None:
             if self.replacement:
                 self.indices = torch.randint(
-                    high=self.n_examples, size=(n_draws,), dtype=torch.int64, generator=generator
+                    high=self.n_examples,
+                    size=(n_draws,),
+                    dtype=torch.int64,
+                    generator=generator,
                 )
             else:
-                self.indices = torch.randperm(self.n_examples, generator=generator)[:n_draws]
+                self.indices = torch.randperm(self.n_examples, generator=generator)[
+                    :n_draws
+                ]
         else:
             self.indices = torch.multinomial(
                 self.weights, n_draws, self.replacement, generator=generator

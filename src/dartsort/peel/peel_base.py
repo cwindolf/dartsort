@@ -597,7 +597,7 @@ class BasePeeler(torch.nn.Module):
                 # fit featurization pipeline and reassign
                 # work in a try finally so we can delete the temp file
                 # in case of an issue or a keyboard interrupt
-                channels, waveforms = peel_util.subsample_waveforms(
+                channels, waveforms, weights = peel_util.subsample_waveforms(
                     temp_hdf5_filename,
                     fit_sampling=self.fit_sampling,
                     random_state=self.fit_subsampling_random_state,
@@ -611,7 +611,10 @@ class BasePeeler(torch.nn.Module):
                 waveforms = torch.as_tensor(waveforms, device=device)
                 featurization_pipeline = featurization_pipeline.to(device)
                 featurization_pipeline.fit(
-                    waveforms, max_channels=channels, recording=self.recording
+                    waveforms,
+                    max_channels=channels,
+                    recording=self.recording,
+                    weights=weights,
                 )
                 featurization_pipeline = featurization_pipeline.to("cpu")
                 self.featurization_pipeline = featurization_pipeline

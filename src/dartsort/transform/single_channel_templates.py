@@ -21,11 +21,12 @@ class SingleChannelTemplates(BaseWaveformModule):
         trough_offset_samples=42,
         dtype=torch.float,
         alignment_padding=20,
-        random_seed=0,
+        random_state=0,
         kmeanspp_initial="random",
         taper=True,
         name=None,
         name_prefix=None,
+        max_waveforms=None,
     ):
         super().__init__(
             channel_index=channel_index, name=name, name_prefix=name_prefix
@@ -36,6 +37,7 @@ class SingleChannelTemplates(BaseWaveformModule):
         self.alignment_padding = alignment_padding
         self.taper = taper
         self.pca_rank = pca_rank
+        self.max_waveforms = max_waveforms
 
         # input waveform details
         self.channel_index = channel_index
@@ -47,14 +49,26 @@ class SingleChannelTemplates(BaseWaveformModule):
         self.template_trough = trough_offset_samples - alignment_padding
 
         # gizmos
-        self.random_seed = random_seed
+        self.random_state = random_state
         self.kmeanspp_initial = kmeanspp_initial
         self._needs_fit = True
 
     def needs_fit(self):
         return self._needs_fit
 
-    def fit(self, waveforms, max_channels, recording=None):
+    def fit(self, waveforms, max_channels, recording=None, weights=None):
+        if weights is not None:
+            self.random_state = np.random.default_rng(self.random_state)
+            weights = weights.numpy(force=True) if torch.is_tensor(weights) else weights
+            weights = weights.astype(np.float64)
+            weights = weights / weights.sum()
+            choices = self.random_state.choice(
+                len(weights), p=weights, size=self.max_waveforms
+            )
+            choices.sort()
+            choices = torch.from_numpy(choices)
+            waveforms = waveforms[choices]
+            max_channels = max_channels[choices]
         singlechan_waveforms = waveform_util.grab_main_channels_torch(
             waveforms, max_channels, self.channel_index
         )
@@ -72,7 +86,7 @@ class SingleChannelTemplates(BaseWaveformModule):
             taper_start=self.alignment_padding // 2,
             taper_end=self.alignment_padding,
             kmeanspp_initial=self.kmeanspp_initial,
-            random_seed=self.random_seed,
+            random_seed=self.random_state,
         )
         self.register_buffer("templates", templates)
         self._needs_fit = False

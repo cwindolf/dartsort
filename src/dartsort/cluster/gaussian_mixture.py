@@ -31,6 +31,10 @@ from ..util.sparse_util import (
     sparse_topk,
     sparse_reassign,
     integers_without_inner_replacement,
+    allocate_topk,
+    topk_sparse_insert,
+    topk_sparse_tocsc,
+    double_searchsorted,
 )
 from .cluster_util import (
     agglomerate,
@@ -140,6 +144,8 @@ class SpikeMixtureModel(torch.nn.Module):
         hard_noise=False,
         min_log_prop=-16.0,
         random_seed: int = 0,
+        # TODO debug this topk thing.
+        lls_keep_k: int | None = None,
     ):
         super().__init__()
 
@@ -190,6 +196,7 @@ class SpikeMixtureModel(torch.nn.Module):
         self.prior_pseudocount = prior_pseudocount
         self.truncated_noise = truncated_noise
         self.well_connected_distance = well_connected_distance
+        self.lls_keep_k = lls_keep_k
 
         # store labels on cpu since we're always nonzeroing / writing np data
         assert self.data.original_sorting.labels is not None
@@ -789,6 +796,8 @@ class SpikeMixtureModel(torch.nn.Module):
         if unit_ids is None:
             unit_ids = self.unit_ids()
 
+        topk_sparse = bool(self.lls_keep_k)
+
         # get the core neighborhood structure corresponding to this split
         split_indices, spike_neighborhoods = self.data.neighborhoods(split=split)
         _, full_core_neighborhoods = self.data.neighborhoods(split="full")
@@ -810,11 +819,12 @@ class SpikeMixtureModel(torch.nn.Module):
                 covered_neighbs, neighbs, ns_unit = (
                     spike_neighborhoods.subset_neighborhoods(
                         unit.channels,
-                        add_to_overlaps=core_overlaps,
+                        add_to_overlaps=None if topk_sparse else core_overlaps,
                         batch_size=self.likelihood_batch_size,
                     )
                 )
-                unit.annotations["covered_neighbs"] = covered_neighbs
+                if not topk_sparse:
+                    unit.annotations["covered_neighbs"] = covered_neighbs
                 unit_neighb_info.append((j, neighbs, ns_unit))
             else:
                 assert previous_logliks is not None
@@ -823,7 +833,8 @@ class SpikeMixtureModel(torch.nn.Module):
                 ns_unit = previous_logliks.row_nnz[j]
                 unit_neighb_info.append((j, ns_unit))
                 covered_neighbs = unit.annotations["covered_neighbs"]
-            core_overlaps[covered_neighbs] += 1
+            if not topk_sparse:
+                core_overlaps[covered_neighbs] += 1
             nnz += ns_unit
 
         logger.dartsortdebug(
@@ -847,8 +858,7 @@ class SpikeMixtureModel(torch.nn.Module):
         def _ll_job(args):
             if len(args) == 2:
                 j, ns = args
-                six, data = csc_sparse_getrow(previous_logliks, j, ns)
-                return j, six, data
+                ix, ll = csc_sparse_getrow(previous_logliks, j, ns)
             else:
                 assert len(args) == 3
                 j, neighbs, ns = args
@@ -862,20 +872,32 @@ class SpikeMixtureModel(torch.nn.Module):
                 if ix is not None:
                     ix = ix.numpy(force=True)
                     ll = ll.numpy(force=True)
-                return j, ix, ll
+            split_ix = None
+            if topk_sparse and split != "full" and ix is not None:
+                # find split indices
+                split_ix = double_searchsorted(split_indices.numpy(force=True), ix)
+            return j, ix, ll, split_ix
 
-        # get the big nnz-length csc buffers. these can be huge so we cache them.
-        csc_indices, csc_data = get_csc_storage(nnz, self.storage, use_storage)
-        # csc compressed indptr. spikes are columns.
+        if not topk_sparse:
+            # get the big nnz-length csc buffers. these can be huge so we cache them.
+            csc_indices, csc_data = get_csc_storage(nnz, self.storage, use_storage)
+            # csc compressed indptr. spikes are columns.
+            indptr = np.concatenate(([0], np.cumsum(spike_overlaps, dtype=int)))
+            del spike_overlaps
+            # each spike starts at writing at its indptr. as we gather more units for each
+            # spike, we increment the spike's "write head". idea is to directly make csc
+            write_offsets = indptr[:-1].copy()
+            row_nnz = np.zeros(max(unit_ids) + 1, dtype=int)
+        else:
+            ncols = (
+                self.data.n_spikes
+                if split_indices == slice(None)
+                else len(split_indices)
+            )
+            topk_arr = allocate_topk(ncols, min(max(unit_ids) + 1, self.lls_keep_k))
 
-        indptr = np.concatenate(([0], np.cumsum(spike_overlaps, dtype=int)))
-        del spike_overlaps
-        # each spike starts at writing at its indptr. as we gather more units for each
-        # spike, we increment the spike's "write head". idea is to directly make csc
-        write_offsets = indptr[:-1].copy()
         pool = Parallel(self.n_threads, backend="threading", return_as="generator")
         results = pool(_ll_job(ninfo) for ninfo in unit_neighb_info)
-        row_nnz = np.zeros(max(unit_ids) + 1, dtype=int)
         if show_progress:
             results = tqdm(
                 results,
@@ -885,24 +907,47 @@ class SpikeMixtureModel(torch.nn.Module):
                 **tqdm_kw,
             )
         j = -1
-        for j, inds, liks in results:
+        for j, inds, liks, split_inds in results:
             if inds is None:
                 continue
-            row_nnz[j] = len(liks)
-            csc_insert(j, write_offsets, inds, csc_indices, csc_data, liks)
+            if topk_sparse:
+                ins_inds = split_inds if split_inds is not None else inds
+                topk_sparse_insert(j, ins_inds, liks, topk_arr)
+            else:
+                row_nnz[j] = len(liks)
+                csc_insert(j, write_offsets, inds, csc_indices, csc_data, liks)
 
-        if with_noise_unit:
-            liks = self.noise_log_likelihoods(indices=split_indices)
-            data_ixs = write_offsets[split_indices]
-            # assert np.array_equal(data_ixs, ccol_indices[1:] - 1)  # just fyi
-            csc_indices[data_ixs] = j + 1
-            csc_data[data_ixs] = liks
+        if topk_sparse:
+            nlls = None
+            if with_noise_unit:
+                nlls = self.noise_log_likelihoods(indices=split_indices)
+                # j += 1
+                # topk_sparse_insert(j, np.arange(len(split_indi)), nlls, topk_arr)
+            log_liks = topk_sparse_tocsc(
+                topk_arr,
+                j + 1,
+                extra_row=nlls,
+                column_support=split_indices,
+                n_columns_full=self.data.n_spikes,
+            )
+            assert log_liks.shape[0] == j + 1 + with_noise_unit
+            rows, counts = np.unique(log_liks.indices, return_counts=True)
+            row_nnz = np.zeros(log_liks.shape[0], dtype=int)
+            row_nnz[rows] = counts
+            log_liks.row_nnz = row_nnz[: log_liks.shape[0] - with_noise_unit]
+        else:
+            if with_noise_unit:
+                liks = self.noise_log_likelihoods(indices=split_indices)
+                data_ixs = write_offsets[split_indices]
+                # assert np.array_equal(data_ixs, ccol_indices[1:] - 1)  # just fyi
+                csc_indices[data_ixs] = j + 1
+                csc_data[data_ixs] = liks
 
-        nrows = j + 1 + with_noise_unit
-        shape = (nrows, self.data.n_spikes)
-        log_liks = csc_array((csc_data, csc_indices, indptr), shape=shape)
-        log_liks.has_canonical_format = True
-        log_liks.row_nnz = row_nnz
+            nrows = j + 1 + with_noise_unit
+            shape = (nrows, self.data.n_spikes)
+            log_liks = csc_array((csc_data, csc_indices, indptr), shape=shape)
+            log_liks.has_canonical_format = True
+            log_liks.row_nnz = row_nnz
 
         return log_liks
 
@@ -2138,7 +2183,9 @@ class SpikeMixtureModel(torch.nn.Module):
 
         if decision_algorithm == "brute":
             n_jobs = min(self.n_threads, len(brute_jobs))
-            pool = Parallel(n_jobs, backend="threading", return_as="generator_unordered")
+            pool = Parallel(
+                n_jobs, backend="threading", return_as="generator_unordered"
+            )
             results = pool(brute_jobs)
             if show_progress:
                 desc = "Merge: brute step 2/2"
@@ -2881,23 +2928,31 @@ class SpikeMixtureModel(torch.nn.Module):
             _, cm, cw, _ = self.stack_units(units=cur_units, mean_only=False)
             if cw is not None:
                 cw = cw.permute(0, 3, 1, 2).reshape(len(cw), self.ppca_rank, -1)
-            cec = _elbo_prior_correction(
-                self.prior_pseudocount,
-                self.data.n_spikes_train,
-                cm.reshape(len(cm), -1),
-                cw,
-                self.noise.full_inverse(),
-            ).cpu().item()
+            cec = (
+                _elbo_prior_correction(
+                    self.prior_pseudocount,
+                    self.data.n_spikes_train,
+                    cm.reshape(len(cm), -1),
+                    cw,
+                    self.noise.full_inverse(),
+                )
+                .cpu()
+                .item()
+            )
             _, hm, hw, _ = self.stack_units(units=hyp_units, mean_only=False)
             if hw is not None:
                 hw = hw.permute(0, 3, 1, 2).reshape(len(hw), self.ppca_rank, -1)
-            hec = _elbo_prior_correction(
-                self.prior_pseudocount,
-                self.data.n_spikes_train,
-                hm.reshape(len(hm), -1),
-                hw,
-                self.noise.full_inverse(),
-            ).cpu().item()
+            hec = (
+                _elbo_prior_correction(
+                    self.prior_pseudocount,
+                    self.data.n_spikes_train,
+                    hm.reshape(len(hm), -1),
+                    hw,
+                    self.noise.full_inverse(),
+                )
+                .cpu()
+                .item()
+            )
             # rescale from main likelihood units to nu/n scale
             cur_elbo += nu * cec
             cur_loglik += nu * cec

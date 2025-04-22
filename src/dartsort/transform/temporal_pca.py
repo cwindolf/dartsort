@@ -30,6 +30,7 @@ class BaseTemporalPCA(BaseWaveformModule):
         name_prefix="",
         temporal_slice=None,
         n_oversamples=10,
+        max_waveforms=20_000,
     ):
         if fit_radius is not None:
             if geom is None or channel_index is None:
@@ -49,8 +50,21 @@ class BaseTemporalPCA(BaseWaveformModule):
         self.whiten = whiten
         self.temporal_slice = temporal_slice
         self.n_oversamples = n_oversamples
+        self.max_waveforms = max_waveforms
 
-    def fit(self, waveforms, max_channels, recording=None):
+    def fit(self, waveforms, max_channels, recording=None, weights=None):
+        if weights is not None:
+            self.random_state = np.random.default_rng(self.random_state)
+            weights = weights.numpy(force=True) if torch.is_tensor(weights) else weights
+            weights = weights.astype(np.float64)
+            weights = weights / weights.sum()
+            choices = self.random_state.choice(
+                len(weights), p=weights, size=self.max_waveforms
+            )
+            choices.sort()
+            choices = torch.from_numpy(choices)
+            waveforms = waveforms[choices]
+            max_channels = max_channels[choices]
         waveforms = self._temporal_slice(waveforms)
         self.dtype = waveforms.dtype
         train_channel_index = self.channel_index
