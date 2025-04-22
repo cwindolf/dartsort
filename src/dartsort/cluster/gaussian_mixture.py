@@ -34,6 +34,7 @@ from ..util.sparse_util import (
     allocate_topk,
     topk_sparse_insert,
     topk_sparse_tocsc,
+    double_searchsorted,
 )
 from .cluster_util import (
     agglomerate,
@@ -856,8 +857,7 @@ class SpikeMixtureModel(torch.nn.Module):
         def _ll_job(args):
             if len(args) == 2:
                 j, ns = args
-                six, data = csc_sparse_getrow(previous_logliks, j, ns)
-                return j, six, data
+                ix, ll = csc_sparse_getrow(previous_logliks, j, ns)
             else:
                 assert len(args) == 3
                 j, neighbs, ns = args
@@ -871,7 +871,11 @@ class SpikeMixtureModel(torch.nn.Module):
                 if ix is not None:
                     ix = ix.numpy(force=True)
                     ll = ll.numpy(force=True)
-                return j, ix, ll
+            split_ix = None
+            if topk_sparse and split != "full" and ix is not None:
+                # find split indices
+                split_ix = double_searchsorted(split_indices.numpy(force=True), ix)
+            return j, ix, ll, split_ix
 
         if not topk_sparse:
             # get the big nnz-length csc buffers. these can be huge so we cache them.
@@ -884,7 +888,12 @@ class SpikeMixtureModel(torch.nn.Module):
             write_offsets = indptr[:-1].copy()
             row_nnz = np.zeros(max(unit_ids) + 1, dtype=int)
         else:
-            topk_arr = allocate_topk(self.data.n_spikes, self.lls_keep_k)
+            ncols = (
+                self.data.n_spikes
+                if split_indices == slice(None)
+                else len(split_indices)
+            )
+            topk_arr = allocate_topk(ncols, self.lls_keep_k)
 
         pool = Parallel(self.n_threads, backend="threading", return_as="generator")
         results = pool(_ll_job(ninfo) for ninfo in unit_neighb_info)
@@ -897,24 +906,34 @@ class SpikeMixtureModel(torch.nn.Module):
                 **tqdm_kw,
             )
         j = -1
-        for j, inds, liks in results:
+        for j, inds, liks, split_inds in results:
             if inds is None:
                 continue
-            row_nnz[j] = len(liks)
             if topk_sparse:
-                topk_sparse_insert(j, inds, liks, topk_arr)
+                ins_inds = split_inds if split_inds is not None else inds
+                topk_sparse_insert(j, ins_inds, liks, topk_arr)
             else:
+                row_nnz[j] = len(liks)
                 csc_insert(j, write_offsets, inds, csc_indices, csc_data, liks)
 
         if topk_sparse:
             nlls = None
             if with_noise_unit:
                 nlls = self.noise_log_likelihoods(indices=split_indices)
-            log_liks = topk_sparse_tocsc(topk, j + 1, extra_row=nlls)
+                # j += 1
+                # topk_sparse_insert(j, np.arange(len(split_indi)), nlls, topk_arr)
+            log_liks = topk_sparse_tocsc(
+                topk_arr,
+                j + 1,
+                extra_row=nlls,
+                column_support=split_indices,
+                n_columns_full=self.data.n_spikes,
+            )
+            assert log_liks.shape[0] == j + 1 + with_noise_unit
             rows, counts = np.unique(log_liks.indices, return_counts=True)
             row_nnz = np.zeros(log_liks.shape[0], dtype=int)
             row_nnz[rows] = counts
-            log_liks.row_nnz = row_nnz
+            log_liks.row_nnz = row_nnz[: log_liks.shape[0] - with_noise_unit]
         else:
             if with_noise_unit:
                 liks = self.noise_log_likelihoods(indices=split_indices)

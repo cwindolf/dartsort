@@ -180,11 +180,13 @@ def _topk_sparse_insert(row, row_column_indices, row_data, topk_row_indices, top
                 row_ins = entry_row
 
 
-def topk_sparse_tocsc(topk, max_row_index, extra_row=None):
+def topk_sparse_tocsc(
+    topk, n_rows, extra_row=None, column_support=None, n_columns_full=None
+):
     """Convert a topk sparse array to CSC.
 
     For noise unit purposes, allows inserting an extra row at the last minute.
-    max_row_index should NOT include the extra row.
+    n_rows should NOT include the extra row.
     """
     assert isinstance(topk, tuple)
     topk_row_indices, topk_data = topk
@@ -195,20 +197,36 @@ def topk_sparse_tocsc(topk, max_row_index, extra_row=None):
     data = np.take_along_axis(topk_data, order, axis=1)
     row_inds = np.take_along_axis(topk_row_indices, order, axis=1)
 
-    start = searchsorted_along_columns(row_inds, 0)
+    start = searchsorted_along_columns_decreasing(row_inds, 0)
     nnz = row_inds.size - start.sum()
     if extra_row is not None:
         assert extra_row.shape == (n,)
         nnz += n
 
-    shape = (max_row_index + (extra_row is not None), n)
+    ncols = n
+    if column_support is not None:
+        assert n_columns_full
+        ncols = n_columns_full
+
+    shape = (n_rows + (extra_row is not None), ncols)
     dtype = topk_data.dtype
     data_storage = np.empty((nnz,), dtype=dtype)
     index_storage = np.empty((nnz,), dtype=int)
-    indptr = np.full((n + 1,), k + (extra_row is not None), dtype=int)
-    indptr[0] = 0
-    indptr[1:] -= start
-    np.cumsum(indptr[1:], out=indptr[1:])
+
+    if (
+        column_support is None
+        or isinstance(column_support, slice)
+        and column_support == slice(None)
+    ):
+        indptr = np.full((n + 1,), k + (extra_row is not None), dtype=int)
+        indptr[0] = 0
+        indptr[1:] -= start
+        np.cumsum(indptr[1:], out=indptr[1:])
+    else:
+        indptr = np.zeros((ncols + 1,), dtype=int)
+        indptr[1 + column_support] = k + (extra_row is not None)
+        indptr[1 + column_support] -= start
+        np.cumsum(indptr, out=indptr)
 
     if extra_row is None:
         _topk_pack(index_storage, data_storage, start, data, row_inds)
@@ -220,7 +238,7 @@ def topk_sparse_tocsc(topk, max_row_index, extra_row=None):
             data,
             row_inds,
             extra_row,
-            max_row_index,
+            n_rows,
         )
 
     a = csc_array((data_storage, index_storage, indptr), shape=shape)
@@ -263,6 +281,25 @@ def _topk_pack_extra(
         dstorage[nzix] = extra_row[j]
         istorage[nzix] = extra_row_ind
         nzix += 1
+
+
+def double_searchsorted(a, v):
+    i0 = np.searchsorted(a, v[0])
+    assert a[i0] == v[0]
+    out = np.empty(v.shape, dtype=int)
+    out[0] = i0
+    _double_searchsorted(a, v, out)
+    return out
+
+
+@numba.njit("i8[::1],i8[::1],i8[::1]", error_model="numpy", nogil=True)
+def _double_searchsorted(a, v, out):
+    i = out[0]
+    for vix in range(1, v.shape[0]):
+        val = v[vix]
+        while val > a[i]:
+            i += 1
+        out[vix] = i
 
 
 def coo_sparse_mask_rows(coo, keep_mask):
@@ -566,9 +603,9 @@ def hard_noise_argmax_loop(
             # best = noise_ix
 
 
-def searchsorted_along_columns(arr, value):
+def searchsorted_along_columns_decreasing(arr, value):
     out = np.empty((arr.shape[0],), dtype=int)
-    _searchsorted_along_columns(out, arr, value)
+    _searchsorted_along_columns_decreasing(out, arr, value)
     return out
 
 
@@ -578,7 +615,7 @@ def searchsorted_along_columns(arr, value):
     nogil=True,
     parallel=True,
 )
-def _searchsorted_along_columns(out, arr, value):
+def _searchsorted_along_columns_decreasing(out, arr, value):
     k = arr.shape[1]
     for j in numba.prange(out.shape[0]):
         i = 0
