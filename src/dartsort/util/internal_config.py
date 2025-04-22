@@ -550,6 +550,8 @@ def to_internal_config(cfg):
         tpca_fit_radius=cfg.fit_radius_um,
         input_waveforms_name="raw",
         output_waveforms_name="subtracted",
+        nn_denoiser_class_name=cfg.nn_denoiser_class_name,
+        nn_denoiser_pretrained_path=cfg.nn_denoiser_pretrained_path,
     )
     subtraction_config = SubtractionConfig(
         detection_threshold=cfg.initial_threshold,
@@ -564,6 +566,7 @@ def to_internal_config(cfg):
         ),
         chunk_length_samples=cfg.chunk_length_samples,
         first_denoiser_thinning=cfg.first_denoiser_thinning,
+        first_denoiser_max_waveforms_fit=cfg.nn_denoiser_max_waveforms_fit,
     )
     template_config = TemplateConfig(
         registered_template_localization_radius_um=cfg.localization_radius_um,
