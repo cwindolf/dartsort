@@ -111,6 +111,10 @@ def scatter_spike_features(
             & (x[to_show] > geom[:, 0].min() - probe_margin_um)
             & (x[to_show] < geom[:, 0].max() + probe_margin_um)
         ]
+    if len(times_s) > max_spikes_plot:
+        np.random.default_rng(random_seed).shuffle(to_show)
+        to_show = to_show[:max_spikes_plot]
+        to_show.sort()
     if remove_outliers:
         a = 50 * np.log(amplitudes + 5)
         inliers, kdtree = kdtree_inliers(np.c_[depths_um, x, a][to_show])
