@@ -82,6 +82,7 @@ def test_fakedata_nonn():
         labels.append(np.full((spikes_per_unit,), i))
     times = np.concatenate(sts)
     labels = np.concatenate(labels)
+    gt_times = np.sort(times) + 42
 
     # inject the spikes into a noise background
     rec = 0.1 * rg.normal(size=(T_samples, len(geom))).astype(np.float32)
@@ -398,16 +399,22 @@ def small_default_config(extract_radius=200):
     # add a spike every so often samples
     so_often = 501
     template = 20 * np.exp(-(((np.arange(121) - 42) / 10) ** 2))
+    gt_times = []
+    gt_channels = []
     for t in range(0, T_samples - 121, so_often):
         random_channel = rg.integers(n_channels)
         noise[t : t + 121, random_channel] += template
+        gt_times.append(t + 42)
+        gt_channels.append(random_channel)
+    gt_times = np.array(gt_times)
+    gt_channels = np.array(gt_channels)
 
     h = dense_layout()
     geom = np.c_[h["x"], h["y"]][:n_channels]
     rec = sc.NumpyRecording(noise, 30_000)
     rec.set_dummy_probe_from_locations(geom)
 
-    cfg = SubtractionConfig(detection_threshold=10.0)
+    cfg = SubtractionConfig(detection_threshold=15.0)
     fcfg = FeaturizationConfig(extract_radius=extract_radius, n_residual_snips=8)
 
     with tempfile.TemporaryDirectory() as tempdir:
@@ -426,7 +433,10 @@ def small_default_config(extract_radius=200):
             for k in h5.keys():
                 if k not in fixedlenkeys and h5[k].ndim >= 1:
                     lens.append(h5[k].shape[0])
+            assert np.isclose(h5["times_samples"][:], gt_times, atol=3, rtol=0).all()
+            assert np.array_equal(h5["channels"][:], gt_channels)
             assert np.unique(lens).size == 1
+            assert lens[0] == len(gt_times)
 
         # test default config
         print("test_small_default_config second")
@@ -444,7 +454,10 @@ def small_default_config(extract_radius=200):
             for k in h5.keys():
                 if k not in fixedlenkeys and h5[k].ndim >= 1:
                     lens.append(h5[k].shape[0])
+            assert np.isclose(h5["times_samples"][:], gt_times, atol=3, rtol=0).all()
             assert np.unique(lens).size == 1
+            assert np.array_equal(h5["channels"][:], gt_channels)
+            assert lens[0] == len(gt_times)
 
 
 def test_small_default_config():
@@ -456,7 +469,7 @@ def test_small_default_config_subex():
 
 
 if __name__ == "__main__":
-    test_fakedata_nonn()
-    test_small_nonn()
+    # test_fakedata_nonn()
+    # test_small_nonn()
     test_small_default_config()
     test_small_default_config_subex()
